@@ -10,6 +10,7 @@ add_executable(kb_editor WIN32
     src/app/EditorApplicationMessageLoop.cpp
     src/app/EditorApplicationWindowProc.cpp
     src/app/EditorSelfTest.cpp
+    src/app/EditorHeadlessAutomation.cpp
     src/app/EditorEditCommandPolicy.cpp
     src/app/EditorEditCommandInputHandler.cpp
     src/app/EditorAssetBrowserContextCommandExecutor.cpp
@@ -317,6 +318,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorPlayModeSceneSession.hpp
     src/private/app/EditorSceneLifecycleGuard.hpp
     src/private/app/EditorSelfTest.hpp
+    src/private/app/EditorHeadlessAutomation.hpp
     src/private/app/EditorShellInteractionState.hpp
     src/private/app/EditorPointerDragInteraction.hpp
     src/private/app/EditorPointerDragState.hpp

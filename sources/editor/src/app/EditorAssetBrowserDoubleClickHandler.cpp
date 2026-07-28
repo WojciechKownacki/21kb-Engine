@@ -8,6 +8,7 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/scene/TimelineAssetIO.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "scene/EditorSceneContext.hpp"
 
@@ -71,7 +72,8 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::Handle
                 : EditorAssetBrowserDoubleClickResult::None;
         }
         if (metadata->type == kb::scene::kAnimationClipAssetType ||
-            metadata->type == kb::scene::kAnimatorControllerAssetType) {
+            metadata->type == kb::scene::kAnimatorControllerAssetType ||
+            metadata->type == kb::scene::kTimelineAssetType) {
             return sceneContext.OpenAnimationAsset(metadata->id)
                 ? EditorAssetBrowserDoubleClickResult::ScriptEditorOpened
                 : EditorAssetBrowserDoubleClickResult::None;

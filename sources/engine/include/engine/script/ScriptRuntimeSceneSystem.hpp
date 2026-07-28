@@ -129,6 +129,8 @@ private:
     // marker ids remain typed Hash payload data and are never invoked as
     // reflected method names.
     void DispatchPendingAnimationEvents(kb::scene::Scene& scene, float deltaSeconds);
+    void DispatchPendingTimelineMarkerEvents(
+        kb::scene::Scene& scene, float deltaSeconds);
     void SyncBehaviourLifecycles(kb::scene::Scene& scene, float deltaSeconds);
     void ShutdownTrackedBehaviours(kb::scene::Scene& scene, float deltaSeconds);
     void DispatchDeactivateAndDestroyInOrder(kb::scene::Scene& scene, std::vector<BehaviourLifecycleRecord>& records, float deltaSeconds);

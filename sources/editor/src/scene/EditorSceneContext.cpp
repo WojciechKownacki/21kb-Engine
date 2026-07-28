@@ -16,6 +16,7 @@
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/AnimationAssets.hpp"
+#include "engine/scene/TimelineAssetIO.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
@@ -7999,8 +8000,9 @@ bool EditorSceneContext::OpenAnimationAsset(kb::assets::AssetId id) {
     const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(id);
     if (metadata == nullptr ||
         (metadata->type != kb::scene::kAnimationClipAssetType &&
-         metadata->type != kb::scene::kAnimatorControllerAssetType)) {
-        console_.Error("Animator", "Animation asset metadata was not found or has the wrong type.");
+         metadata->type != kb::scene::kAnimatorControllerAssetType &&
+         metadata->type != kb::scene::kTimelineAssetType)) {
+        console_.Error("Asset Editor", "Animation/timeline asset metadata was not found or has the wrong type.");
         return false;
     }
     std::filesystem::path path = metadata->physicalPath;
@@ -8009,7 +8011,7 @@ bool EditorSceneContext::OpenAnimationAsset(kb::assets::AssetId id) {
         path = *mounted;
     }
     scriptEditor_.Open(path, id, metadata->virtualPath.filename().string());
-    console_.Info("Animator", "Opened typed animation asset: " + metadata->virtualPath.generic_string());
+    console_.Info("Asset Editor", "Opened typed animation/timeline asset: " + metadata->virtualPath.generic_string());
     return true;
 }
 

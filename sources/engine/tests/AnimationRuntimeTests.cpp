@@ -15,6 +15,9 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/ScenePrefab.hpp"
+#include "engine/scene/ScenePrefabInstance.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -430,11 +433,74 @@ end
                     1.0F),
             "Animator kept writing a stale entity binding after hierarchy replacement");
 
+        const kb::scene::SceneObject prefabAuthor =
+            scene.Entities().CreateObject({ .name = "Prefab Animator" });
+        const kb::scene::SceneObject prefabAuthorArm =
+            scene.Entities().CreateObject({ .name = "Left Arm" });
+        Require(prefabAuthorArm.SetParent(prefabAuthor),
+            "Animator prefab author hierarchy could not be created");
+        scene.Components().Animators().Set(
+            prefabAuthor.Entity(), kb::scene::Animator{
+                .controllerAssetId = metadata->id.value,
+                .speed = 1.0F,
+                .enabled = true,
+            });
+        const kb::scene::ScenePrefab animatorPrefab =
+            scene.Prefabs().Capture(prefabAuthor);
+        Require(animatorPrefab.NodeCount() == 2U,
+            "Animator prefab capture lost its hierarchy or component");
+        scene.Components().Animators().Remove(prefabAuthor.Entity());
+        kb::scene::TransformComponent* authorArmTransform =
+            scene.Transforms().TryGet(prefabAuthorArm.Entity());
+        Require(authorArmTransform != nullptr,
+            "Animator prefab author lost its Transform");
+        authorArmTransform->localPosition.x = -123.0F;
+        scene.Transforms().MarkModified(prefabAuthorArm.Entity());
+
+        const kb::scene::ScenePrefabInstance animatorInstance =
+            scene.Prefabs().Instantiate(animatorPrefab);
+        Require(!animatorInstance.Empty() &&
+                animatorInstance.ObjectCount() == 2U,
+            "Animator prefab did not instantiate through ScenePrefabs");
+        const kb::scene::SceneObject prefabRoot =
+            animatorInstance.RootObject();
+        const kb::scene::SceneObject prefabArm =
+            animatorInstance.ObjectAt(1U);
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        Require(scene.Animators().Exists(prefabRoot.Entity()) &&
+                scene.Animators().Play(
+                    prefabRoot.Entity(), "Root Layer", "Walk State", 0.0F),
+            "Instantiated Animator did not attach its controller runtime");
+        static_cast<void>(scene.Runtime().Update(0.2F));
+        const float prefabArmBeforeUnload =
+            scene.Transforms().Get(prefabArm.Entity()).localPosition.x;
+        Require(prefabArmBeforeUnload > 0.0F &&
+                NearlyEqual(
+                    scene.Transforms().Get(prefabAuthorArm.Entity())
+                        .localPosition.x,
+                    -123.0F),
+            "Prefab Animator reused the author's stale entity binding");
+
         const auto* runMetadata =
             scene.Assets().Manager().Registry().FindByPath(
                 "/Game/Animation/Run Fast.kbanim");
         Require(runMetadata != nullptr,
             "Blend-tree child clip metadata was not discovered");
+        const auto* moveMetadata =
+            scene.Assets().Manager().Registry().FindByPath(
+                "/Game/Animation/Move.kbanim");
+        Require(moveMetadata != nullptr &&
+                scene.Assets().Manager().Unload(moveMetadata->id) &&
+                scene.Assets().Manager().Unload(metadata->id),
+            "Live prefab Animator clip/controller could not be unloaded");
+        static_cast<void>(scene.Runtime().Update(0.2F));
+        Require(scene.Animators().Exists(prefabRoot.Entity()) &&
+                scene.Animators().State(
+                    prefabRoot.Entity(), "Root Layer").has_value() &&
+                scene.Transforms().Get(prefabArm.Entity()).localPosition.x >
+                    prefabArmBeforeUnload,
+            "Live prefab Animator did not reload clip/controller and preserve its bound runtime");
+
         kb::scene::AnimationClip editedRunClip = runClip;
         editedRunClip.tracks[0].keyframes[1].transform.position.x = 50.0F;
         editedRunClip.tracks[1].keyframes[1].transform.position.x = 60.0F;

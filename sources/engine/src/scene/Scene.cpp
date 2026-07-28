@@ -12,6 +12,7 @@
 #include "engine/modules/EngineModuleHost.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/ParticleEffectAssetLoader.hpp"
+#include "engine/scene/TimelineAssetLoader.hpp"
 #include "engine/scene/AnimationAssetLoaders.hpp"
 #include "engine/scene/PhysicsLayersAssetLoader.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -26,6 +27,7 @@
 #include "scene/assets/SceneAssetLoader.hpp"
 #include "scene/assets/ScenePrefabAssetLoader.hpp"
 #include "scene/systems/AnimatorSceneSystem.hpp"
+#include "scene/systems/TimelineSceneSystem.hpp"
 
 #include <array>
 #include <atomic>
@@ -82,6 +84,7 @@ Scene::Scene(
     const bool registeredParticleEffectLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::ParticleEffectAssetLoader>());
     const bool registeredAnimationClipLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AnimationClipAssetLoader>());
     const bool registeredAnimatorControllerLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AnimatorControllerAssetLoader>());
+    const bool registeredTimelineLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::TimelineAssetLoader>());
     static_cast<void>(registeredPrefabLoader);
     static_cast<void>(registeredSceneLoader);
     static_cast<void>(registeredLuaScriptLoader);
@@ -96,6 +99,7 @@ Scene::Scene(
     static_cast<void>(registeredParticleEffectLoader);
     static_cast<void>(registeredAnimationClipLoader);
     static_cast<void>(registeredAnimatorControllerLoader);
+    static_cast<void>(registeredTimelineLoader);
 
     if (mode == SceneMode::PrefabPrivate) {
         return;
@@ -115,6 +119,7 @@ Scene::Scene(
     moduleHost_->Load(state_->world);
     moduleHost_->AttachScene(*this);
     state_->sceneSystemScheduler.Add(std::make_unique<AnimatorSceneSystem>(), *this);
+    state_->sceneSystemScheduler.Add(std::make_unique<TimelineSceneSystem>(), *this);
 }
 
 Scene::~Scene() {

@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserDoubleClickHandler.hpp"
 #include "app/EditorEditCommandPolicy.hpp"
+#include "app/EditorHeadlessAutomation.hpp"
 #include "app/plugins/EditorPluginsPointerController.hpp"
 #include "app/project_settings/EditorProjectSettingsPointerController.hpp"
 #include "assets/EditorAssetBrowserHitPayloadResolver.hpp"
@@ -43,6 +44,7 @@
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
+#include "engine/scene/TimelineAssetIO.hpp"
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -75,6 +77,7 @@
 #include <cwchar>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -87,6 +90,18 @@
 
 namespace kb::editor {
 namespace {
+
+std::filesystem::path gSelfTestArtifactRoot;
+std::filesystem::path gCurrentSuiteArtifactRoot;
+std::size_t gSuiteCount = 0U;
+
+[[nodiscard]] std::filesystem::path ArtifactPath(
+    const std::filesystem::path& relative) {
+    return (gCurrentSuiteArtifactRoot.empty()
+            ? gSelfTestArtifactRoot
+            : gCurrentSuiteArtifactRoot) /
+        relative;
+}
 
 // Accumulates pass/fail lines so the whole suite runs even after a failure and
 // the agent gets a complete picture in one report.
@@ -101,6 +116,7 @@ public:
 
     [[nodiscard]] bool Ok() const noexcept { return ok_; }
     [[nodiscard]] const std::vector<std::string>& Lines() const noexcept { return lines_; }
+    [[nodiscard]] std::size_t Size() const noexcept { return lines_.size(); }
 
 private:
     std::vector<std::string> lines_;
@@ -112,7 +128,8 @@ private:
 // other's assets.
 [[nodiscard]] std::filesystem::path PrepareScratchProjectDir(const std::string& leaf) {
     std::error_code error;
-    const std::filesystem::path dir = std::filesystem::temp_directory_path(error) / "21kb_selftest" / leaf;
+    const std::filesystem::path dir =
+        gSelfTestArtifactRoot / "workspaces" / leaf;
     std::filesystem::remove_all(dir, error);
     std::filesystem::create_directories(dir, error);
     return dir;
@@ -550,6 +567,169 @@ void RunGameplayLoopSuite(Report& report) {
     report.Check(std::abs(settledX - movedX) < 0.01F, "Releasing W stops the actor (no drift)");
 }
 
+// Drives the exact workflow expected from an agent: resolve and click the live
+// Add Component control, search and select results through the overlay
+// hit-tester, edit a real Inspector field, enter the real play-mode scene
+// session, inject D at the InputDeviceState boundary, step deterministically,
+// and persist screenshots/tree/console/trace artifacts.
+void RunHeadlessAutomationWorkflowSuite(Report& report) {
+    EditorSceneContext context;
+    const kb::scene::SceneEntity actor =
+        context.CreateHierarchyObject();
+    report.Check(actor.IsValid(), "Automation creates Player entity");
+    context.Scene().Entities().SetName(actor, "Player");
+    context.SelectEntity(actor);
+
+    EditorHeadlessAutomation automation{
+        context, ArtifactPath("automation") };
+    report.Check(
+        automation.CaptureInspector("01-selected-player"),
+        "Automation captures selected Player Inspector");
+    report.Check(
+        automation.SnapshotInspectorTree("01-selected-player"),
+        "Automation serializes live Inspector control tree");
+
+    report.Check(
+        automation.AddComponent("Rigidbody"),
+        "Automation clicks Add Component, searches and selects Rigidbody");
+    report.Check(
+        context.Scene().Components().Rigidbodies().Has(actor),
+        "Rigidbody exists after routed UI interaction");
+    report.Check(
+        automation.CaptureInspector("02-rigidbody-added"),
+        "Automation captures Inspector after Rigidbody add");
+    report.Check(
+        automation.SetPhysicsFloat(
+            PhysicsComponentKind::Rigidbody, 1, 2.5F),
+        "Automation edits Rigidbody Mass through pointer/text handlers");
+    const kb::scene::RigidbodyComponent* rigidbody =
+        context.Scene().Components().Rigidbodies().TryGet(actor);
+    report.Check(
+        rigidbody != nullptr &&
+            std::abs(rigidbody->mass - 2.5F) <= 0.001F,
+        "Rigidbody Mass mutation reached the authored component");
+    report.Check(
+        automation.AddComponent("Collider"),
+        "Automation adds Collider through the same Add Component UI");
+    report.Check(
+        context.Scene().Components().Colliders().Has(actor),
+        "Collider exists after routed UI interaction");
+
+    report.Check(
+        context.CreateInputActionAsset("/Game"),
+        "Automation creates Move Input Action");
+    const kb::assets::AssetId moveAction =
+        FindAssetId(context, [](const kb::assets::AssetMetadata& metadata) {
+            return metadata.type == "InputAction";
+        });
+    report.Check(
+        moveAction.IsValid() &&
+            context.SetInputActionName(moveAction, "Move") &&
+            context.CycleInputActionValueType(moveAction),
+        "Automation configures Move as Axis1D");
+    report.Check(
+        context.CreateInputMappingContextAsset("/Game"),
+        "Automation creates Input Mapping Context");
+    const kb::assets::AssetId mapping =
+        FindAssetId(context, [](const kb::assets::AssetMetadata& metadata) {
+            return metadata.type == "InputMappingContext";
+        });
+    report.Check(
+        mapping.IsValid() && context.AddInputMapping(mapping) &&
+            context.SetInputMappingKey(
+                mapping, 0U, kb::input::InputKey::D) &&
+            context.CycleInputMappingAction(mapping, 0U) &&
+            context.SetInputMappingScale(mapping, 0U, 1.0F),
+        "Automation maps physical D to Move");
+
+    const std::filesystem::path scriptPath =
+        EditorProjectPaths::AssetsRoot() /
+        "AutomationMove.lua";
+    {
+        std::error_code error;
+        std::filesystem::create_directories(
+            scriptPath.parent_path(), error);
+        std::ofstream script{
+            scriptPath, std::ios::binary | std::ios::trunc };
+        script <<
+            "function Tick(self, dt)\n"
+            "  local v = CallFunction(\"GetActionValue\", { action = \"Move\" })\n"
+            "  if v ~= 0 then\n"
+            "    Physics.SetVelocity(self.entity, v * 4.0, 0.0, 0.0)\n"
+            "    if not GetShared(\"automationLogged\") then\n"
+            "      Log(\"Automation D input moved Player\")\n"
+            "      SetShared(\"automationLogged\", true)\n"
+            "    end\n"
+            "  end\n"
+            "end\n";
+    }
+    static_cast<void>(context.Scene().Assets().Discover());
+    const kb::assets::AssetId behaviour =
+        FindAssetId(context, [](const kb::assets::AssetMetadata& metadata) {
+            return metadata.virtualPath.filename() ==
+                "AutomationMove.lua";
+        });
+    report.Check(
+        behaviour.IsValid() &&
+            context.AddBehaviourAssetToEntity(behaviour, actor),
+        "Automation attaches production Lua behaviour");
+    const std::vector<std::string> mappingOptions =
+        context.ProjectInputMappingContextOptions();
+    report.Check(
+        mappingOptions.size() == 2U &&
+            context.SetProjectInputMappingContext(mappingOptions[1]),
+        "Automation activates authored Input Mapping Context");
+
+    const float authoredStartX = ActorX(context, actor, 0.0F);
+    report.Check(
+        context.BeginPlayModeSceneSession(),
+        "Automation enters real editor Play Mode scene session");
+    report.Check(
+        automation.CaptureInspector("03-play-started"),
+        "Automation captures Play Mode Inspector");
+    report.Check(
+        automation.SetGameplayKey(kb::input::InputKey::D, true) &&
+            automation.StepRuntime(60U, 1.0F / 60.0F) &&
+            automation.SetGameplayKey(kb::input::InputKey::D, false) &&
+            automation.StepRuntime(5U, 1.0F / 60.0F),
+        "Automation injects D and advances deterministic runtime");
+    const float runtimeX = ActorX(context, actor, authoredStartX);
+    report.Check(
+        runtimeX > authoredStartX + 1.0F,
+        "D traverses Input -> Lua -> Transform in Play Mode");
+    const bool logObserved = std::any_of(
+        context.Console().Entries().begin(),
+        context.Console().Entries().end(),
+        [](const EditorConsoleEntry& entry) {
+            return entry.message.find(
+                       "Automation D input moved Player") !=
+                std::string::npos;
+        });
+    report.Check(
+        logObserved,
+        "Runtime Log reaches the real editor Console");
+    automation.SnapshotConsole("04-after-input");
+    report.Check(
+        automation.CaptureInspector("04-after-input"),
+        "Automation captures runtime result");
+    report.Check(
+        automation.SnapshotInspectorTree("04-after-input"),
+        "Automation snapshots post-runtime UI tree");
+    report.Check(
+        context.Scene().Runtime().DrainSceneSystemErrors().empty(),
+        "Automation runtime reports no SceneSystem errors");
+    report.Check(
+        context.RestorePlayModeSceneSession(),
+        "Automation stops Play and restores authoring scene");
+    report.Check(
+        std::abs(ActorX(context, actor, authoredStartX) -
+                 authoredStartX) <= 0.001F,
+        "Play Mode mutation does not leak into authoring scene");
+    report.Check(
+        automation.CaptureInspector("05-play-stopped"),
+        "Automation captures restored authoring state");
+}
+
 // Proves the Lua script editor model + file gateway: create a .lua asset, open
 // it, and round-trip an edit on disk (what the editable control persists).
 void RunScriptEditorSuite(Report& report) {
@@ -719,6 +899,21 @@ void RunInspectorComponentAffordancesSuite(Report& report) {
             context.ScriptEditor().IsOpen() &&
             context.ScriptEditor().AssetId() == controllerId,
         "Animator Controller opens in the editor's writable animation-asset surface");
+    const kb::assets::AssetId timelineId{ 0xA111U };
+    report.Check(context.Scene().Assets().Manager().RegisterAsset(
+                     kb::assets::AssetMetadata{
+                         .id = timelineId,
+                         .type = std::string{ kb::scene::kTimelineAssetType },
+                         .name = "SelfTestTimeline",
+                         .virtualPath =
+                             "/Game/Cinematics/SelfTest.kbtimeline",
+                         .runtimeLoadable = true,
+                     }),
+        "Register Timeline for the editor asset surface");
+    report.Check(context.OpenAnimationAsset(timelineId) &&
+            context.ScriptEditor().IsOpen() &&
+            context.ScriptEditor().AssetId() == timelineId,
+        "Timeline opens in the editor's writable typed-asset surface");
     report.Check(context.SetAnimatorControllerAsset(actor, controllerId), "Assign Animator Controller through Inspector drop/edit path");
     report.Check(context.SetAnimatorSpeed(actor, 1.75F), "Edit Animator speed through undoable Inspector command");
     report.Check(context.ToggleAnimatorEnabled(actor), "Toggle Animator enabled through Inspector");
@@ -1936,7 +2131,7 @@ void RunMaterialGraphTextureNodeSuite(Report& report) {
     std::vector<kb::assets::AssetId> pickerTextureIds;
     bool pickerTexturesRegistered = true;
     const std::filesystem::path pickerTextureRoot =
-        std::filesystem::temp_directory_path() / "21kb_selftest" / "material_graph_picker_textures";
+        ArtifactPath("material_graph_picker_textures");
     std::error_code pickerDirectoryError;
     std::filesystem::create_directories(pickerTextureRoot, pickerDirectoryError);
     report.Check(!pickerDirectoryError, "Create structural texture metadata fixtures for texture picker self-test");
@@ -2162,7 +2357,7 @@ void RunMaterialGraphTextureNodeSuite(Report& report) {
     context.MaterialEditor().MarkSaved();
     const kb::assets::AssetId rawGraphId{ 0x7E5F0U };
     const std::filesystem::path rawGraphPath =
-        std::filesystem::temp_directory_path() / "21kb_selftest" / "RawOpenGraph.kbmaterialgraph";
+        ArtifactPath("RawOpenGraph.kbmaterialgraph");
     const kb::render::RenderMaterialGraphDocument rawGraph = kb::render::MakeDefaultRenderMaterialGraphDocument();
     report.Check(kb::render::RenderMaterialGraphAssetLoader::SaveGraph(rawGraphPath, rawGraph),
         "P1.9 create standalone raw Material Graph fixture");
@@ -2462,7 +2657,7 @@ void RunMaterialGraphVisualRedesignSuite(Report& report) {
     renderer.Paint(memoryDc, RECT{ 0, 0, width, height }, EditorTheme{}, context);
 
     const std::filesystem::path outputPath =
-        std::filesystem::temp_directory_path(error) / "21kb_selftest" / "_materialEditorNodeRedesignCurrent.bmp";
+        ArtifactPath("screenshots/material-editor-node-redesign.bmp");
     std::filesystem::create_directories(outputPath.parent_path(), error);
     const std::optional<CLSID> bmpEncoder = GdiplusEncoderClsid(L"image/bmp");
     report.Check(bmpEncoder.has_value(), "Resolve BMP encoder for material node visual redesign capture");
@@ -2501,7 +2696,7 @@ void RunMaterialGraphVisualRedesignSuite(Report& report) {
     HGDIOBJ narrowPrevious = SelectObject(memoryDc, narrowBitmap);
     renderer.Paint(memoryDc, narrowContent, EditorTheme{}, context);
     const std::filesystem::path narrowOutputPath =
-        std::filesystem::temp_directory_path(error) / "21kb_selftest" / "_materialEditorResponsiveNarrow.bmp";
+        ArtifactPath("screenshots/material-editor-responsive-narrow.bmp");
     if (bmpEncoder.has_value()) {
         Gdiplus::Bitmap narrowImage(narrowBitmap, nullptr);
         report.Check(narrowImage.Save(narrowOutputPath.wstring().c_str(), &*bmpEncoder, nullptr) == Gdiplus::Ok,
@@ -2581,7 +2776,7 @@ void RunMaterialGraphFirstNodeVisualCheckpointSuite(Report& report) {
     renderer.Paint(memoryDc, content, EditorTheme{}, context);
 
     const std::filesystem::path outputPath =
-        std::filesystem::temp_directory_path(error) / "21kb_selftest" / "_materialEditorFirstNodeCheckpoint.bmp";
+        ArtifactPath("screenshots/material-editor-first-node.bmp");
     std::filesystem::create_directories(outputPath.parent_path(), error);
     const std::optional<CLSID> bmpEncoder = GdiplusEncoderClsid(L"image/bmp");
     report.Check(bmpEncoder.has_value(), "Resolve BMP encoder for first material node checkpoint capture");
@@ -3546,7 +3741,7 @@ void RunMaterialThumbnailImagePipelineSuite(Report& report) {
         Gdiplus::Bitmap bitmap(image.width, image.height, image.width * 4,
             PixelFormat32bppARGB, reinterpret_cast<BYTE*>(image.bgra.data()));
         const std::filesystem::path path =
-            std::filesystem::temp_directory_path() / "21kb_selftest" / "_materialThumbnailPipeline.bmp";
+        ArtifactPath("screenshots/material-thumbnail-pipeline.bmp");
         static_cast<void>(bitmap.Save(path.wstring().c_str(), &*encoder, nullptr));
     }
 }
@@ -5176,7 +5371,7 @@ void RunMaterialGraphInteractionLifecycleSuite(Report& report) {
         .collapsed = true, .name = "Collapsed", .nodeIds = { 2U, 3U },
     });
     const std::filesystem::path viewStateRoot =
-        std::filesystem::temp_directory_path() / "21kb_selftest" / "material_graph_view_state";
+        ArtifactPath("material_graph_view_state");
     const std::filesystem::path firstGraphPath = viewStateRoot / "First.kbmaterialgraph";
     const std::filesystem::path secondGraphPath = viewStateRoot / "Second.kbmaterialgraph";
     const bool firstViewFixtureSaved =
@@ -5447,7 +5642,7 @@ void RunMaterialGraphInteractionLifecycleSuite(Report& report) {
             incompatibleRingRendered = incompatibleFeedbackPixelCount >= 8;
             if (const std::optional<CLSID> encoder = GdiplusEncoderClsid(L"image/bmp")) {
                 const std::filesystem::path feedbackPath =
-                    std::filesystem::temp_directory_path() / "21kb_selftest" / "_materialGraphPinFeedback.bmp";
+                    ArtifactPath("screenshots/material-graph-pin-feedback.bmp");
                 Gdiplus::Bitmap feedbackImage(bitmap, nullptr);
                 static_cast<void>(feedbackImage.Save(feedbackPath.wstring().c_str(), &*encoder, nullptr));
             }
@@ -5523,6 +5718,16 @@ void RunMaterialGraphInteractionLifecycleSuite(Report& report) {
 // Runs one suite in its own freshly-created scratch project (cwd-based bootstrap),
 // then restores the previous working directory.
 void RunSuiteInScratch(Report& report, const std::string& leaf, void (*suite)(Report&)) {
+    ++gSuiteCount;
+    std::ostringstream numbered;
+    numbered << "TEST-" << std::setw(3) << std::setfill('0')
+             << gSuiteCount << '-' << leaf;
+    gCurrentSuiteArtifactRoot =
+        gSelfTestArtifactRoot / "tests" / numbered.str();
+    std::error_code artifactError;
+    std::filesystem::create_directories(
+        gCurrentSuiteArtifactRoot / "screenshots", artifactError);
+    const std::size_t firstLine = report.Size();
     const std::filesystem::path scratch = PrepareScratchProjectDir(leaf);
     const std::filesystem::path previous = std::filesystem::current_path();
     std::error_code error;
@@ -5531,8 +5736,43 @@ void RunSuiteInScratch(Report& report, const std::string& leaf, void (*suite)(Re
         report.Check(false, "Enter isolated scratch project directory for " + leaf);
         return;
     }
+    const std::filesystem::path previousProjectFile =
+        EditorProjectPaths::ProjectFile();
+    EditorProjectPaths::SetProjectFile(
+        scratch / "Project.21kbproject");
     suite(report);
+    EditorProjectPaths::SetProjectFile(previousProjectFile);
     std::filesystem::current_path(previous, error);
+    const bool suitePassed = std::none_of(
+        report.Lines().begin() +
+            static_cast<std::ptrdiff_t>(firstLine),
+        report.Lines().end(),
+        [](const std::string& line) {
+            return line.starts_with("[FAIL]");
+        });
+
+    std::ofstream suiteLog{
+        gCurrentSuiteArtifactRoot / "result.log",
+        std::ios::binary | std::ios::trunc };
+    if (suiteLog) {
+        suiteLog << "suite=" << leaf << '\n';
+        for (std::size_t index = firstLine;
+             index < report.Lines().size(); ++index) {
+            suiteLog << report.Lines()[index] << '\n';
+        }
+        suiteLog << "result=" << (suitePassed ? "PASS" : "FAIL")
+                 << '\n';
+    }
+    std::ofstream trace{
+        gCurrentSuiteArtifactRoot / "trace.jsonl",
+        std::ios::binary | std::ios::trunc };
+    if (trace) {
+        trace << "{\"event\":\"suite\",\"name\":\"" << leaf
+              << "\",\"checks\":" << (report.Size() - firstLine)
+              << ",\"result\":\""
+              << (suitePassed ? "PASS" : "FAIL")
+              << "\"}\n";
+    }
 }
 
 void WriteReport(const std::filesystem::path& reportPath, const Report& report) {
@@ -5543,7 +5783,8 @@ void WriteReport(const std::filesystem::path& reportPath, const Report& report) 
         return;
     }
     out << "21kb editor headless self-test\n";
-    out << "Suites: Project Settings + Project physics layers runtime + Plugins + Gameplay loop + Script editor/attach/log + Hierarchy commands + Selection transform + Prefab placement + Material graph context menu + Material graph panel canvas hit-test + Material graph color watcher + Material graph texture nodes + Material graph dense node layout + Material graph visual redesign + Material graph canvas clipping\n";
+    out << "Suites: " << gSuiteCount
+        << " isolated production editor/runtime scenarios\n";
     out << "================================================\n";
     for (const std::string& line : report.Lines()) {
         out << line << '\n';
@@ -5554,11 +5795,34 @@ void WriteReport(const std::filesystem::path& reportPath, const Report& report) 
 
 } // namespace
 
-int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
+int EditorSelfTest::Run(
+    const std::filesystem::path& reportPath,
+    const std::filesystem::path& artifactRoot) {
+    gSelfTestArtifactRoot = std::filesystem::absolute(artifactRoot);
+    gCurrentSuiteArtifactRoot.clear();
+    gSuiteCount = 0U;
+    std::error_code artifactError;
+    std::filesystem::remove_all(
+        gSelfTestArtifactRoot, artifactError);
+    if (artifactError) {
+        return 1;
+    }
+    artifactError.clear();
+    std::filesystem::create_directories(
+        gSelfTestArtifactRoot / "tests", artifactError);
+    if (artifactError) {
+        return 1;
+    }
+    std::filesystem::create_directories(
+        gSelfTestArtifactRoot / "workspaces", artifactError);
+    if (artifactError) {
+        return 1;
+    }
     Report report;
     RunSuiteInScratch(report, "project_settings", &RunProjectSettingsSuite);
     RunSuiteInScratch(report, "project_physics_layers_runtime", &RunProjectPhysicsLayersRuntimeSuite);
     RunSuiteInScratch(report, "gameplay", &RunGameplayLoopSuite);
+    RunSuiteInScratch(report, "headless_editor_automation", &RunHeadlessAutomationWorkflowSuite);
     RunSuiteInScratch(report, "script_editor", &RunScriptEditorSuite);
     RunSuiteInScratch(report, "script_attach", &RunScriptAttachSuite);
     RunSuiteInScratch(report, "script_inspector_schema_refresh", &RunScriptInspectorSchemaRefreshSuite);
@@ -5602,7 +5866,19 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "prefab_placement", &RunPrefabPlacementSuite);
     RunSuiteInScratch(report, "script_log", &RunScriptLogSuite);
     RunSuiteInScratch(report, "plugins", &RunPluginsPanelSuite);
+    gCurrentSuiteArtifactRoot.clear();
     WriteReport(reportPath, report);
+    std::ofstream manifest{
+        gSelfTestArtifactRoot / "manifest.txt",
+        std::ios::binary | std::ios::trunc };
+    if (manifest) {
+        manifest << "task=" << gSelfTestArtifactRoot.filename().string()
+                 << '\n';
+        manifest << "result=" << (report.Ok() ? "PASS" : "FAIL")
+                 << '\n';
+        manifest << "testDirectories=" << gSuiteCount << '\n';
+        manifest << "report=" << reportPath.filename().string() << '\n';
+    }
     return report.Ok() ? 0 : 1;
 }
 
