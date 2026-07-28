@@ -17,6 +17,7 @@
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
+#include "engine/scene/UIAssets.hpp"
 
 #include <string_view>
 
@@ -100,7 +101,8 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , tagsComponentId_(RegisterSceneComponent<TagsComponent>(world, "kb.scene.TagsComponent"))
     , audioSourceComponentId_(RegisterSceneComponent<AudioSourceComponent>(world, "kb.scene.AudioSourceComponent"))
     , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, "kb.scene.AudioListenerComponent"))
-    , animatorComponentId_(RegisterSceneComponent<Animator>(world, "kb.scene.AnimatorComponent")) {
+    , animatorComponentId_(RegisterSceneComponent<Animator>(world, "kb.scene.AnimatorComponent"))
+    , uiDocumentComponentId_(RegisterSceneComponent<UIDocumentComponent>(world, "kb.scene.UIDocumentComponent")) {
     RegisterPhysicsReflection(world);
     RegisterAudioReflection(world);
 }
@@ -162,5 +164,6 @@ std::uint64_t SceneComponentRegistry::AudioListenerComponentId() const noexcept 
 }
 
 std::uint64_t SceneComponentRegistry::AnimatorComponentId() const noexcept { return animatorComponentId_; }
+std::uint64_t SceneComponentRegistry::UIDocumentComponentId() const noexcept { return uiDocumentComponentId_; }
 
 } // namespace kb::scene

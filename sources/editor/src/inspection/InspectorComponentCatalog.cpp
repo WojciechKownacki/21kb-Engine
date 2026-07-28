@@ -14,6 +14,7 @@ namespace {
         InspectorComponentTile{ .id = "AudioSource", .category = "Audio", .label = "Audio Source", .icon = HeroIconKind::SpeakerWave },
         InspectorComponentTile{ .id = "AudioListener", .category = "Audio", .label = "Audio Listener", .icon = HeroIconKind::SpeakerWave },
         InspectorComponentTile{ .id = "Animator", .category = "Animation", .label = "Animator", .icon = HeroIconKind::Play },
+        InspectorComponentTile{ .id = "UIDocument", .category = "UI", .label = "UI Document", .icon = HeroIconKind::DocumentText },
         InspectorComponentTile{ .id = "Rigidbody", .category = "Physics", .label = "Rigidbody", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "Collider", .category = "Physics", .label = "Collider", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "CharacterController", .category = "Physics", .label = "Character Controller", .icon = HeroIconKind::Gamepad2 },

@@ -72,6 +72,9 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const Animator* animator = sceneComponents.Animators().TryGet(entity)) {
         components.animator = *animator;
     }
+    if (const UIDocumentComponent* uiDocument = sceneComponents.UIDocuments().TryGet(entity)) {
+        components.uiDocument = *uiDocument;
+    }
 
     return components;
 }

@@ -19,7 +19,8 @@ SceneComponentStorage::SceneComponentStorage(kb::ecs::World& world, const SceneC
     , tags_(world, components.TagsComponentId())
     , audioSources_(world, components.AudioSourceComponentId())
     , audioListeners_(world, components.AudioListenerComponentId())
-    , animators_(world, components.AnimatorComponentId()) {}
+    , animators_(world, components.AnimatorComponentId())
+    , uiDocuments_(world, components.UIDocumentComponentId()) {}
 
 void SceneComponentStorage::SetDefaults(SceneEntity entity, const TransformComponent& transform, const VisibilityComponent& visibility) {
     transforms_.Set(entity, transform);
@@ -140,5 +141,7 @@ SceneAudioListenerComponentStore& SceneComponentStorage::AudioListeners() noexce
 
 const SceneAnimatorComponentStore& SceneComponentStorage::Animators() const noexcept { return animators_; }
 SceneAnimatorComponentStore& SceneComponentStorage::Animators() noexcept { return animators_; }
+const SceneUIDocumentComponentStore& SceneComponentStorage::UIDocuments() const noexcept { return uiDocuments_; }
+SceneUIDocumentComponentStore& SceneComponentStorage::UIDocuments() noexcept { return uiDocuments_; }
 
 } // namespace kb::scene
