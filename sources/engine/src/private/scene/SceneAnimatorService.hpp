@@ -11,6 +11,8 @@ public:
     [[nodiscard]] static bool Exists(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static std::uint64_t Controller(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static std::span<const AnimatorParameterValue> Parameters(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static std::uint64_t RuntimeBindingGeneration(
+        const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool Play(Scene& scene, SceneEntity entity, std::string_view layer, std::string_view state, float normalizedTime) noexcept;
     [[nodiscard]] static bool CrossFade(Scene& scene, SceneEntity entity, std::string_view layer, std::string_view state, float durationSeconds, float normalizedTime) noexcept;
     [[nodiscard]] static bool SetSpeed(Scene& scene, SceneEntity entity, float speed) noexcept;

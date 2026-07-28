@@ -9,6 +9,7 @@ bool SceneAnimatorQueries::Exists(SceneEntity entity) const noexcept { return Sc
 std::uint64_t SceneAnimatorQueries::Controller(SceneEntity entity) const noexcept { return SceneAnimatorService::Controller(scene_, entity); }
 std::span<const AnimatorParameterValue> SceneAnimatorQueries::Parameters(SceneEntity entity) const noexcept { return SceneAnimatorService::Parameters(scene_, entity); }
 float SceneAnimatorQueries::Speed(SceneEntity entity) const noexcept { return SceneAnimatorService::Speed(scene_, entity); }
+std::uint64_t SceneAnimatorQueries::RuntimeBindingGeneration(SceneEntity entity) const noexcept { return SceneAnimatorService::RuntimeBindingGeneration(scene_, entity); }
 std::optional<AnimatorStateInfo> SceneAnimatorQueries::State(SceneEntity entity, std::string_view layer) const { return SceneAnimatorService::State(scene_, entity, layer); }
 
 SceneAnimators::SceneAnimators(Scene& scene) noexcept : scene_(scene) {}
@@ -19,6 +20,7 @@ bool SceneAnimators::Play(SceneEntity entity, std::string_view layer, std::strin
 bool SceneAnimators::CrossFade(SceneEntity entity, std::string_view layer, std::string_view state, float durationSeconds, float normalizedTime) noexcept { return SceneAnimatorService::CrossFade(scene_, entity, layer, state, durationSeconds, normalizedTime); }
 bool SceneAnimators::SetSpeed(SceneEntity entity, float speed) noexcept { return SceneAnimatorService::SetSpeed(scene_, entity, speed); }
 float SceneAnimators::Speed(SceneEntity entity) const noexcept { return SceneAnimatorService::Speed(scene_, entity); }
+std::uint64_t SceneAnimators::RuntimeBindingGeneration(SceneEntity entity) const noexcept { return SceneAnimatorService::RuntimeBindingGeneration(scene_, entity); }
 bool SceneAnimators::SetBool(SceneEntity entity, std::string_view name, bool value) noexcept { return SceneAnimatorService::SetBool(scene_, entity, name, value); }
 bool SceneAnimators::SetInt(SceneEntity entity, std::string_view name, std::int32_t value) noexcept { return SceneAnimatorService::SetInt(scene_, entity, name, value); }
 bool SceneAnimators::SetFloat(SceneEntity entity, std::string_view name, float value) noexcept { return SceneAnimatorService::SetFloat(scene_, entity, name, value); }

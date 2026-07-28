@@ -64,6 +64,90 @@ SceneEntity ResolveTarget(Scene& scene, SceneEntity owner, std::string_view path
     return current;
 }
 
+[[nodiscard]] bool RuntimeAssetsAreCurrent(
+    const kb::assets::AssetManager& manager,
+    const AnimatorRuntimeRecord& record) {
+    for (const AnimatorRuntimeLayer& runtimeLayer : record.layers) {
+        for (const AnimatorRuntimeState& runtimeState : runtimeLayer.states) {
+            for (const AnimatorRuntimeState::Motion& motion :
+                 runtimeState.motions) {
+                if (motion.clipLoadGeneration !=
+                    manager.LoadGeneration(motion.clip.Id())) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool RuntimeBindingsMatchCanonicalHierarchy(
+    Scene& scene, const AnimatorRuntimeRecord& record) {
+    if (record.layers.size() != record.controller->layers.size()) return false;
+    for (std::size_t layerIndex = 0U;
+         layerIndex < record.layers.size();
+         ++layerIndex) {
+        const AnimatorRuntimeLayer& runtimeLayer = record.layers[layerIndex];
+        const AnimatorControllerLayer& definitionLayer =
+            record.controller->layers[layerIndex];
+        if (runtimeLayer.states.size() != definitionLayer.states.size()) {
+            return false;
+        }
+        for (std::size_t stateIndex = 0U;
+             stateIndex < runtimeLayer.states.size();
+             ++stateIndex) {
+            const AnimatorRuntimeState& runtimeState =
+                runtimeLayer.states[stateIndex];
+            for (const AnimatorRuntimeState::Motion& motion :
+                 runtimeState.motions) {
+                if (motion.targetIndices.size() !=
+                    motion.clip->tracks.size()) {
+                    return false;
+                }
+                for (std::size_t trackIndex = 0U;
+                     trackIndex < motion.clip->tracks.size();
+                     ++trackIndex) {
+                    const std::size_t bindingIndex =
+                        motion.targetIndices[trackIndex];
+                    if (bindingIndex >= record.bindings.size() ||
+                        ResolveTarget(
+                            scene, record.entity,
+                            motion.clip->tracks[trackIndex].targetPath) !=
+                            record.bindings[bindingIndex].target) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    if (record.rigConstraints.size() !=
+        record.controller->rigConstraints.size()) {
+        return false;
+    }
+    for (const AnimatorRuntimeConstraint& constraint :
+         record.rigConstraints) {
+        if (constraint.definitionIndex >=
+            record.controller->rigConstraints.size()) {
+            return false;
+        }
+        const AnimatorRigConstraint& definition =
+            record.controller->rigConstraints[constraint.definitionIndex];
+        if (ResolveTarget(
+                scene, record.entity, definition.constrainedPath) !=
+            constraint.constrained) {
+            return false;
+        }
+        if (definition.type == AnimatorRigConstraintType::TwoBoneIK &&
+            (ResolveTarget(scene, record.entity, definition.midPath) !=
+                 constraint.mid ||
+             ResolveTarget(scene, record.entity, definition.tipPath) !=
+                 constraint.tip)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 LocalTransform Sample(const AnimationTransformTrack& track, float time) {
     if (time <= track.keyframes.front().timeSeconds) return track.keyframes.front().transform;
     if (time >= track.keyframes.back().timeSeconds) return track.keyframes.back().transform;
@@ -773,6 +857,16 @@ bool SceneAnimatorService::Attach(Scene& scene, SceneEntity entity, std::uint64_
     candidate.controller = controller;
     candidate.controllerLoadGeneration =
         manager.LoadGeneration(kb::assets::AssetId{ controllerAssetId });
+    SceneState& sceneState = SceneAccess::State(scene);
+    if (sceneState.nextAnimatorRuntimeBindingGeneration ==
+        std::numeric_limits<std::uint64_t>::max()) {
+        throw std::overflow_error(
+            "Animator runtime binding generation exhausted");
+    }
+    candidate.runtimeBindingGeneration =
+        sceneState.nextAnimatorRuntimeBindingGeneration++;
+    candidate.observedHierarchyTopologyVersion =
+        sceneState.hierarchyTopologyVersion;
     candidate.parameters.reserve(controller->parameters.size());
     for (const auto& definition : controller->parameters) {
         candidate.parameters.push_back(AnimatorParameterValue{
@@ -809,6 +903,8 @@ bool SceneAnimatorService::Attach(Scene& scene, SceneEntity entity, std::uint64_
                 }
                 AnimatorRuntimeState::Motion motion{};
                 motion.clip = std::move(clip);
+                motion.clipLoadGeneration =
+                    manager.LoadGeneration(motion.clip.Id());
                 motion.targetIndices.reserve(motion.clip->tracks.size());
                 for (const AnimationTransformTrack& track : motion.clip->tracks) {
                     const SceneEntity target =
@@ -891,6 +987,13 @@ std::uint64_t SceneAnimatorService::Controller(const Scene& scene, SceneEntity e
 std::span<const AnimatorParameterValue> SceneAnimatorService::Parameters(const Scene& scene, SceneEntity entity) noexcept {
     const auto* record = Find(SceneAccess::State(scene), entity);
     return record == nullptr ? std::span<const AnimatorParameterValue>{} : std::span<const AnimatorParameterValue>{ record->parameters };
+}
+
+std::uint64_t SceneAnimatorService::RuntimeBindingGeneration(
+    const Scene& scene, SceneEntity entity) noexcept {
+    const AnimatorRuntimeRecord* record =
+        Find(SceneAccess::State(scene), entity);
+    return record == nullptr ? 0U : record->runtimeBindingGeneration;
 }
 
 bool SceneAnimatorService::Play(Scene& scene, SceneEntity entity, std::string_view layerName, std::string_view stateName, float normalizedTime) noexcept {
@@ -1045,23 +1148,54 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
         }
         retained[value.entity.Id()] = true;
         AnimatorRuntimeRecord* record = Find(SceneAccess::State(scene), value.entity);
+        SceneState& state = SceneAccess::State(scene);
         const kb::assets::AssetId controllerAssetId{
             value.animator.controllerAssetId
         };
-        if (record == nullptr ||
+        const bool controllerChanged =
+            record == nullptr ||
             record->controller.Id() != controllerAssetId ||
             record->controllerLoadGeneration !=
-                scene.Assets().Manager().LoadGeneration(controllerAssetId)) {
+                scene.Assets().Manager().LoadGeneration(controllerAssetId);
+        const bool clipChanged =
+            record != nullptr &&
+            !RuntimeAssetsAreCurrent(scene.Assets().Manager(), *record);
+        const bool hierarchyChanged =
+            record != nullptr &&
+            record->observedHierarchyTopologyVersion !=
+                state.hierarchyTopologyVersion;
+        const bool hierarchyBindingsChanged =
+            hierarchyChanged &&
+            !RuntimeBindingsMatchCanonicalHierarchy(scene, *record);
+        if (controllerChanged || clipChanged || hierarchyBindingsChanged) {
+            // Once a canonical source or binding is stale, the old derived
+            // record must not remain queryable or feed a physics queue if the
+            // replacement asset fails to load.
+            state.animators.erase(value.entity.Id());
             if (!Attach(scene, value.entity, value.animator.controllerAssetId)) {
                 throw std::runtime_error("Animator component could not load its controller or bind the authored hierarchy");
             }
             record = Find(SceneAccess::State(scene), value.entity);
             record->lastAppliedComponentSpeed = value.animator.speed;
             record->speed = value.animator.speed;
+        } else if (hierarchyChanged) {
+            record->observedHierarchyTopologyVersion =
+                state.hierarchyTopologyVersion;
         }
         if (record->lastAppliedComponentSpeed != value.animator.speed) {
             record->lastAppliedComponentSpeed = value.animator.speed;
             record->speed = value.animator.speed;
+        }
+        if (!state.isPlaying) {
+            for (AnimatorRuntimeBinding& binding : record->bindings) {
+                const TransformComponent* transform =
+                    scene.Transforms().TryGet(binding.target);
+                if (transform == nullptr) {
+                    throw std::runtime_error(
+                        "Animator binding lost its Transform while playback was paused");
+                }
+                binding.bindTransform = transform->LocalPayload();
+            }
         }
     }
     SceneState& state = SceneAccess::State(scene);

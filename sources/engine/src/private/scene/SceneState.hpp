@@ -62,6 +62,7 @@ class IPhysicsBackend;
 struct AnimatorRuntimeState {
     struct Motion {
         kb::assets::AssetHandle<AnimationClip> clip;
+        std::uint64_t clipLoadGeneration = 0U;
         std::vector<std::size_t> targetIndices;
     };
     std::vector<Motion> motions;
@@ -101,6 +102,10 @@ struct AnimatorRuntimeRecord {
     SceneEntity entity{};
     kb::assets::AssetHandle<AnimatorController> controller;
     std::uint64_t controllerLoadGeneration = 0U;
+    // Monotonic identity of this derived attachment. Physics queues observe it
+    // to discard deltas produced before any controller/clip/hierarchy rebind.
+    std::uint64_t runtimeBindingGeneration = 0U;
+    std::uint64_t observedHierarchyTopologyVersion = 0U;
     std::vector<AnimatorRuntimeLayer> layers;
     std::vector<AnimatorRuntimeBinding> bindings;
     std::vector<AnimatorParameterValue> parameters;
@@ -369,6 +374,7 @@ public:
     std::vector<std::size_t> prefabHierarchyChildrenPerNodeScratch;
     std::vector<std::vector<SceneEntity>> transformTopologicalBatches;
     std::uint64_t hierarchyTopologyVersion = 1;
+    std::uint64_t nextAnimatorRuntimeBindingGeneration = 1U;
     std::uint64_t transformTopologicalBatchesVersion = 0;
     std::uint64_t transformTopologicalBatchBuildCount = 0;
     std::uint64_t transformPropagationCursorVersion = 0;

@@ -408,6 +408,58 @@ end
                     scene.Transforms().Get(blendedOwner.Entity()).localPosition.x,
                     4.0F),
             "1D blend tree did not blend both retained clips through root-motion runtime");
+        const float formerArmPosition =
+            scene.Transforms().Get(blendedArm.Entity()).localPosition.x;
+        blendedArm.SetName("Former Left Arm");
+        const kb::scene::SceneObject replacementArm =
+            scene.Entities().CreateObject({ .name = "Left Arm" });
+        Require(replacementArm.SetParent(blendedOwner),
+            "Replacement animation binding could not enter the authored hierarchy");
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        Require(scene.Animators().SetFloat(
+                    blendedOwner.Entity(), "Speed", 5.0F) &&
+                scene.Animators().Play(
+                    blendedOwner.Entity(), "Root Layer", "Blend State", 0.0F),
+            "Animator did not rebind after the canonical scene hierarchy changed");
+        static_cast<void>(scene.Runtime().Update(0.1F));
+        Require(NearlyEqual(
+                    scene.Transforms().Get(blendedArm.Entity()).localPosition.x,
+                    formerArmPosition) &&
+                NearlyEqual(
+                    scene.Transforms().Get(replacementArm.Entity()).localPosition.x,
+                    1.0F),
+            "Animator kept writing a stale entity binding after hierarchy replacement");
+
+        const auto* runMetadata =
+            scene.Assets().Manager().Registry().FindByPath(
+                "/Game/Animation/Run Fast.kbanim");
+        Require(runMetadata != nullptr,
+            "Blend-tree child clip metadata was not discovered");
+        kb::scene::AnimationClip editedRunClip = runClip;
+        editedRunClip.tracks[0].keyframes[1].transform.position.x = 50.0F;
+        editedRunClip.tracks[1].keyframes[1].transform.position.x = 60.0F;
+        Require(kb::scene::AnimationAssetIO::SaveClip(
+                    runClipPath, editedRunClip) &&
+                scene.Assets().Manager().Unload(runMetadata->id),
+            "Edited blend-tree child clip could not invalidate its retained runtime asset");
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        Require(scene.Animators().SetFloat(
+                    blendedOwner.Entity(), "Speed", 5.0F) &&
+                scene.Animators().Play(
+                    blendedOwner.Entity(), "Root Layer", "Blend State", 0.0F),
+            "Blend tree could not restart after child-clip reload");
+        const float beforeReloadedClip =
+            scene.Transforms().Get(blendedOwner.Entity()).localPosition.x;
+        static_cast<void>(scene.Runtime().Update(0.2F));
+        Require(NearlyEqual(
+                    scene.Transforms().Get(blendedOwner.Entity()).localPosition.x -
+                        beforeReloadedClip,
+                    6.0F),
+            "Animator retained the pre-save blend child after canonical clip invalidation");
+        Require(kb::scene::AnimationAssetIO::SaveClip(runClipPath, runClip) &&
+                scene.Assets().Manager().Unload(runMetadata->id),
+            "Blend-tree child fixture could not be restored after reload verification");
+        static_cast<void>(scene.Runtime().Update(0.0F));
 
         const auto* rigMetadata =
             scene.Assets().Manager().Registry().FindByPath(
@@ -753,6 +805,27 @@ end
                     scene.Transforms().Get(slicedBody.Entity()).localPosition.x -
                     (1.0F / 6.0F)) <= 0.02F,
             "Rigidbody root motion burst the full variable-frame delta into one fixed substep");
+        const auto* moveMetadata =
+            scene.Assets().Manager().Registry().FindByPath(
+                "/Game/Animation/Move.kbanim");
+        Require(moveMetadata != nullptr,
+            "Physics-owned root-motion clip metadata was not found");
+        kb::scene::AnimationClip editedMoveClip = clip;
+        editedMoveClip.tracks[0].keyframes[1].transform.position.x = 50.0F;
+        Require(kb::scene::AnimationAssetIO::SaveClip(
+                    clipPath, editedMoveClip) &&
+                scene.Assets().Manager().Unload(moveMetadata->id),
+            "Physics-owned root-motion clip could not be invalidated");
+        const float slicedBeforeClipReload =
+            scene.Transforms().Get(slicedBody.Entity()).localPosition.x;
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        Require(std::abs(
+                    scene.Transforms().Get(slicedBody.Entity()).localPosition.x -
+                    slicedBeforeClipReload - (50.0F / 60.0F)) <= 0.03F,
+            "Jolt consumed queued root motion from the pre-save clip source");
+        Require(kb::scene::AnimationAssetIO::SaveClip(clipPath, clip) &&
+                scene.Assets().Manager().Unload(moveMetadata->id),
+            "Physics-owned root-motion fixture could not be restored");
         const float slicedBeforeOwnerChange =
             scene.Transforms().Get(slicedBody.Entity()).localPosition.x;
         scene.Entities().SetActive(slicedBody.Entity(), false);
