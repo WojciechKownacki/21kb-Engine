@@ -9,8 +9,11 @@
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 
+#include <algorithm>
 #include <map>
+#include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace kb::scene {
 namespace {
@@ -18,6 +21,94 @@ namespace {
 const UIDocumentRuntimeRecord* Find(const SceneState& state, SceneEntity entity) {
     const auto it = state.uiDocuments.find(entity.Id());
     return it != state.uiDocuments.end() && it->second.entity == entity ? &it->second : nullptr;
+}
+
+UIDocumentRuntimeRecord* FindMutable(SceneState& state, SceneEntity entity) {
+    const auto it = state.uiDocuments.find(entity.Id());
+    return it != state.uiDocuments.end() && it->second.entity == entity ? &it->second : nullptr;
+}
+
+constexpr std::size_t kMaxPendingUICommands = 4096U;
+
+bool HasQueuedDestroy(const SceneState& state, SceneEntity entity, UIElementId element) noexcept {
+    for (const UIRuntimeCommand& command : state.pendingUICommands) {
+        if (command.entity == entity && command.kind == UIRuntimeCommandKind::Destroy && command.elementId == element) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool HasPendingCreate(const SceneState& state, SceneEntity entity, UIElementId element) noexcept {
+    for (const UIRuntimeCommand& command : state.pendingUICommands) {
+        if (command.entity == entity && command.kind == UIRuntimeCommandKind::Create && command.elementId == element) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool IsPendingDestroyAncestor(const SceneState& state, const UIDocumentRuntimeRecord& record,
+    SceneEntity entity, UIElementId element) noexcept {
+    UIElementId current = element;
+    while (current != 0U) {
+        if (HasQueuedDestroy(state, entity, current)) return true;
+        const auto found = record.elements.find(current);
+        if (found == record.elements.end() || current == record.root) return false;
+        current = found->second.parentId;
+    }
+    return false;
+}
+
+void DiscardCommands(SceneState& state, SceneEntity entity) {
+    const auto first = std::remove_if(state.pendingUICommands.begin(), state.pendingUICommands.end(), [entity](const UIRuntimeCommand& command) {
+        return command.entity == entity;
+    });
+    state.pendingUICommands.erase(first, state.pendingUICommands.end());
+}
+
+void DestroySubtree(UIDocumentRuntimeRecord& record, UIElementId element) {
+    std::vector<UIElementId> children;
+    for (const auto& [id, candidate] : record.elements) {
+        if (candidate.parentId == element) children.push_back(id);
+    }
+    for (const UIElementId child : children) DestroySubtree(record, child);
+    record.elements.erase(element);
+}
+
+void ApplyCommands(SceneState& state) {
+    std::vector<UIRuntimeCommand> commands;
+    commands.swap(state.pendingUICommands);
+    for (const UIRuntimeCommand& command : commands) {
+        UIDocumentRuntimeRecord* record = FindMutable(state, command.entity);
+        if (record == nullptr) continue;
+        switch (command.kind) {
+        case UIRuntimeCommandKind::Create: {
+            if (command.create.parentId == 0U || record->elements.contains(command.elementId) ||
+                !record->elements.contains(command.create.parentId)) {
+                continue;
+            }
+            record->elements.emplace(command.elementId, UIDocumentElement{
+                .id = command.elementId,
+                .parentId = command.create.parentId,
+                .name = command.create.name,
+                .styleClass = command.create.styleClass,
+                .visible = command.create.visible,
+            });
+            break;
+        }
+        case UIRuntimeCommandKind::Destroy:
+            if (command.elementId != record->root && record->elements.contains(command.elementId)) {
+                DestroySubtree(*record, command.elementId);
+            }
+            break;
+        case UIRuntimeCommandKind::SetVisible: {
+            const auto element = record->elements.find(command.elementId);
+            if (element != record->elements.end()) element->second.visible = command.visible;
+            break;
+        }
+        }
+    }
 }
 
 bool Attach(Scene& scene, SceneEntity entity, std::uint64_t assetId) {
@@ -31,6 +122,8 @@ bool Attach(Scene& scene, SceneEntity entity, std::uint64_t assetId) {
     for (const UIDocumentElement& element : record.document->elements) {
         record.elements.emplace(element.id, element);
         if (element.parentId == 0U) record.root = element.id;
+        if (element.id == std::numeric_limits<UIElementId>::max()) return false;
+        record.nextRuntimeElementId = std::max(record.nextRuntimeElementId, element.id + 1U);
     }
     if (record.document->styleAssetId != 0U) {
         record.style = scene.Assets().Manager().Load<UIStyleAsset>(kb::assets::AssetId{ record.document->styleAssetId });
@@ -56,6 +149,12 @@ bool SceneUIDocumentService::HasElement(const Scene& scene, SceneEntity entity, 
     const auto* record = Find(SceneAccess::State(scene), entity);
     return record != nullptr && record->elements.contains(element);
 }
+bool SceneUIDocumentService::Visible(const Scene& scene, SceneEntity entity, UIElementId element) noexcept {
+    const auto* record = Find(SceneAccess::State(scene), entity);
+    if (record == nullptr) return false;
+    const auto current = record->elements.find(element);
+    return current != record->elements.end() && current->second.visible;
+}
 bool SceneUIDocumentService::StyleIsResolved(const Scene& scene, SceneEntity entity) noexcept {
     const auto* record = Find(SceneAccess::State(scene), entity);
     return record != nullptr && (record->document->styleAssetId == 0U || record->style.IsLoaded());
@@ -65,10 +164,52 @@ std::size_t SceneUIDocumentService::ElementCount(const Scene& scene, SceneEntity
     return record != nullptr ? record->elements.size() : 0U;
 }
 
+std::optional<UIElementId> SceneUIDocumentService::QueueCreate(Scene& scene, SceneEntity entity, const UIRuntimeElementDesc& desc) {
+    if (desc.name.empty() || desc.parentId == 0U) return std::nullopt;
+    SceneState& state = SceneAccess::State(scene);
+    UIDocumentRuntimeRecord* record = FindMutable(state, entity);
+    if (record == nullptr || state.pendingUICommands.size() >= kMaxPendingUICommands ||
+        IsPendingDestroyAncestor(state, *record, entity, desc.parentId) ||
+        (!record->elements.contains(desc.parentId) && !HasPendingCreate(state, entity, desc.parentId))) return std::nullopt;
+    if (record->nextRuntimeElementId == 0U) return std::nullopt;
+    const UIElementId id = record->nextRuntimeElementId;
+    if (id == std::numeric_limits<UIElementId>::max()) {
+        record->nextRuntimeElementId = 0U;
+    } else {
+        ++record->nextRuntimeElementId;
+    }
+    state.pendingUICommands.push_back(UIRuntimeCommand{
+        .kind = UIRuntimeCommandKind::Create,
+        .entity = entity,
+        .elementId = id,
+        .create = desc,
+    });
+    return id;
+}
+
+bool SceneUIDocumentService::QueueDestroy(Scene& scene, SceneEntity entity, UIElementId element) noexcept {
+    SceneState& state = SceneAccess::State(scene);
+    UIDocumentRuntimeRecord* record = FindMutable(state, entity);
+    if (record == nullptr || element == record->root || !record->elements.contains(element) ||
+        IsPendingDestroyAncestor(state, *record, entity, element) || state.pendingUICommands.size() >= kMaxPendingUICommands) return false;
+    state.pendingUICommands.push_back(UIRuntimeCommand{ .kind = UIRuntimeCommandKind::Destroy, .entity = entity, .elementId = element });
+    return true;
+}
+
+bool SceneUIDocumentService::QueueVisibility(Scene& scene, SceneEntity entity, UIElementId element, bool visible) noexcept {
+    SceneState& state = SceneAccess::State(scene);
+    UIDocumentRuntimeRecord* record = FindMutable(state, entity);
+    if (record == nullptr || !record->elements.contains(element) || IsPendingDestroyAncestor(state, *record, entity, element) ||
+        state.pendingUICommands.size() >= kMaxPendingUICommands) return false;
+    state.pendingUICommands.push_back(UIRuntimeCommand{ .kind = UIRuntimeCommandKind::SetVisible, .entity = entity, .elementId = element, .visible = visible });
+    return true;
+}
+
 void SceneUIDocumentService::SyncComponents(Scene& scene) {
     SceneState& state = SceneAccess::State(scene);
     if (state.mode == SceneMode::PrefabPrivate) {
         state.uiDocuments.clear();
+        state.pendingUICommands.clear();
         return;
     }
     std::map<std::uint64_t, std::pair<SceneEntity, UIDocumentComponent>> authored;
@@ -93,6 +234,7 @@ void SceneUIDocumentService::SyncComponents(Scene& scene) {
             current->documentLoadGeneration != scene.Assets().Manager().LoadGeneration(current->document.Id()) ||
             (current->document->styleAssetId != 0U && current->styleLoadGeneration != scene.Assets().Manager().LoadGeneration(current->style.Id()));
         if (stale) {
+            DiscardCommands(state, entity);
             state.uiDocuments.erase(id);
             if (!Attach(scene, entity, component.documentAssetId)) {
                 throw std::runtime_error("Enabled UIDocument component could not load its document or style asset");
@@ -102,9 +244,13 @@ void SceneUIDocumentService::SyncComponents(Scene& scene) {
     for (auto it = state.uiDocuments.begin(); it != state.uiDocuments.end();) {
         const UIDocumentComponent* component = scene.Components().UIDocuments().TryGet(it->second.entity);
         if (!scene.Entities().IsAlive(it->second.entity) || component == nullptr || !component->enabled ||
-            !authored.contains(it->first)) it = state.uiDocuments.erase(it);
+            !authored.contains(it->first)) {
+            DiscardCommands(state, it->second.entity);
+            it = state.uiDocuments.erase(it);
+        }
         else ++it;
     }
+    ApplyCommands(state);
 }
 
 } // namespace kb::scene

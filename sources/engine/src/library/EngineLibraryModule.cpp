@@ -4,6 +4,7 @@
 #include "engine/library/EngineLibraryModuleValidation.hpp"
 #include "engine/script/ScriptAssetsApi.hpp"
 #include "engine/script/ScriptAnimatorApi.hpp"
+#include "engine/script/ScriptUIApi.hpp"
 #include "engine/script/ScriptTimelineApi.hpp"
 #include "engine/script/ScriptCollectionsApi.hpp"
 #include "engine/script/ScriptEventsApi.hpp"
@@ -203,6 +204,11 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "Timeline",
             .ownerRuntime = "kb::scene::SceneTimelines",
             .Register = &kb::script::ScriptTimelineApi::Register,
+        },
+        LibraryModuleDesc{
+            .name = "UI",
+            .ownerRuntime = "kb::scene::SceneUIDocuments",
+            .Register = &kb::script::ScriptUIApi::Register,
         },
         // LIB-144: Renderer.IsVisible/GetBounds/TestFrustum/HasFrame - reads the CPU-side
         // per-entity visibility/bounds feedback frame (kb::scene::SceneRenderFeedback) the

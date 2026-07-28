@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 namespace kb::scene {
 
@@ -39,6 +40,7 @@ public:
     [[nodiscard]] std::uint64_t Asset(SceneEntity entity) const noexcept;
     [[nodiscard]] UIElementId Root(SceneEntity entity) const noexcept;
     [[nodiscard]] bool HasElement(SceneEntity entity, UIElementId element) const noexcept;
+    [[nodiscard]] bool Visible(SceneEntity entity, UIElementId element) const noexcept;
     [[nodiscard]] bool StyleIsResolved(SceneEntity entity) const noexcept;
     [[nodiscard]] std::size_t ElementCount(SceneEntity entity) const noexcept;
 private:
@@ -52,8 +54,17 @@ public:
     [[nodiscard]] std::uint64_t Asset(SceneEntity entity) const noexcept;
     [[nodiscard]] UIElementId Root(SceneEntity entity) const noexcept;
     [[nodiscard]] bool HasElement(SceneEntity entity, UIElementId element) const noexcept;
+    [[nodiscard]] bool Visible(SceneEntity entity, UIElementId element) const noexcept;
     [[nodiscard]] bool StyleIsResolved(SceneEntity entity) const noexcept;
     [[nodiscard]] std::size_t ElementCount(SceneEntity entity) const noexcept;
+    // Commands are appended in call order and are applied once by
+    // UIDocumentSceneSystem at the next frame boundary. A returned ID is
+    // reserved immediately and remains unique for this runtime attachment;
+    // it becomes queryable only after the queue is drained.
+    [[nodiscard]] std::optional<UIElementId> QueueCreate(SceneEntity entity, const UIRuntimeElementDesc& desc);
+    [[nodiscard]] bool QueueDestroy(SceneEntity entity, UIElementId element) noexcept;
+    [[nodiscard]] bool QueueShow(SceneEntity entity, UIElementId element) noexcept;
+    [[nodiscard]] bool QueueHide(SceneEntity entity, UIElementId element) noexcept;
 private:
     Scene& scene_;
 };
