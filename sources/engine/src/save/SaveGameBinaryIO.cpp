@@ -113,12 +113,34 @@ void SaveGameBinaryIO::WriteString(std::vector<std::uint8_t>& out, std::string_v
     WriteRaw(out, value.data(), value.size());
 }
 
-bool SaveGameBinaryIO::ReadAllBytes(const std::filesystem::path& path, std::vector<std::uint8_t>& out) {
-    std::ifstream input{ path, std::ios::binary };
+bool SaveGameBinaryIO::ReadAllBytes(
+    const std::filesystem::path& path,
+    std::vector<std::uint8_t>& out,
+    std::size_t maxBytes,
+    bool& tooLarge) {
+    tooLarge = false;
+    std::ifstream input{ path, std::ios::binary | std::ios::ate };
     if (!input.is_open()) {
         return false;
     }
-    out.assign(std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{});
+    const std::streampos end = input.tellg();
+    if (end < 0) {
+        return false;
+    }
+    const std::uintmax_t size = static_cast<std::uintmax_t>(end);
+    if (size > maxBytes) {
+        tooLarge = true;
+        return false;
+    }
+    out.resize(static_cast<std::size_t>(size));
+    input.seekg(0, std::ios::beg);
+    if (!out.empty()) {
+        input.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(out.size()));
+        if (input.gcount() != static_cast<std::streamsize>(out.size())) {
+            out.clear();
+            return false;
+        }
+    }
     return true;
 }
 

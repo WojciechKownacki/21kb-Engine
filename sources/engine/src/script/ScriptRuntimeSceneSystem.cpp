@@ -1,9 +1,12 @@
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
+#include "engine/script/ScriptAssetsApi.hpp"
+#include "engine/script/ScriptWorldApi.hpp"
 
 #include "engine/scene/BehaviourExecutionOrder.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -221,6 +224,9 @@ const ScriptRuntimeAssetPrepareResult& ScriptRuntimeSceneSystem::LastPrepareResu
 }
 
 void ScriptRuntimeSceneSystem::PrepareScene(kb::scene::Scene& scene) {
+    scene.Assets().Manager().PumpAsyncLoads();
+    ScriptAssetsApi::ReleaseDeadOwnerHandles(scene);
+    ScriptWorldApi::ReleaseDeadPrefabParameterSets(scene);
     // LIB-093: stamp the scene with THIS system's script FixedTick delta so
     // Time.FixedDelta (ScriptTimeApi) reports the step a script's FixedTick
     // actually runs at — frameSettings_.fixedDeltaSeconds — rather than the

@@ -36,13 +36,49 @@ bool SaveGameService::Save(const std::filesystem::path& path, const SaveGame& sa
         return false;
     }
     const std::vector<std::uint8_t> bytes = SaveGameCodec::Encode(save, SaveGameFormat::kCurrentSchemaVersion, domain);
+    if (bytes.size() > SaveGameFormat::kMaxSerializedBytes) {
+        return false;
+    }
     return SaveGameBinaryIO::WriteBytesAtomically(path, bytes);
 }
 
 SaveGameLoadResult SaveGameService::Load(const std::filesystem::path& path, SaveDomain expectedDomain) {
+    std::error_code sizeError;
+    const std::uintmax_t fileSize = std::filesystem::file_size(path, sizeError);
+    if (!sizeError && fileSize > SaveGameFormat::kMaxSerializedBytes) {
+        return SaveGameLoadResult{
+            .status = SaveGameLoadStatus::TooLarge,
+            .save = {},
+            .diagnostic = "save file exceeds the 16 MiB serialized-size limit",
+        };
+    }
     std::vector<std::uint8_t> bytes;
-    if (!SaveGameBinaryIO::ReadAllBytes(path, bytes)) {
-        return SaveGameLoadResult{ .status = SaveGameLoadStatus::FileNotFound, .save = {} };
+    bool tooLarge = false;
+    if (!SaveGameBinaryIO::ReadAllBytes(path, bytes, SaveGameFormat::kMaxSerializedBytes, tooLarge)) {
+        if (tooLarge) {
+            return SaveGameLoadResult{
+                .status = SaveGameLoadStatus::TooLarge,
+                .save = {},
+                .diagnostic = "save file exceeds the 16 MiB serialized-size limit",
+            };
+        }
+        return SaveGameLoadResult{ .status = SaveGameLoadStatus::FileNotFound, .save = {}, .diagnostic = "save file could not be opened" };
+    }
+    if (bytes.size() > SaveGameFormat::kMaxSerializedBytes) {
+        return SaveGameLoadResult{
+            .status = SaveGameLoadStatus::TooLarge,
+            .save = {},
+            .diagnostic = "save file exceeds the 16 MiB serialized-size limit",
+        };
+    }
+    std::error_code finalSizeError;
+    const std::uintmax_t finalFileSize = std::filesystem::file_size(path, finalSizeError);
+    if (!finalSizeError && finalFileSize != bytes.size()) {
+        return SaveGameLoadResult{
+            .status = SaveGameLoadStatus::Corrupt,
+            .save = {},
+            .diagnostic = "save file changed while it was being read",
+        };
     }
     return SaveGameCodec::Decode(bytes, SaveGameFormat::kCurrentSchemaVersion, expectedDomain, BuiltInSaveGameMigrations());
 }

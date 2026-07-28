@@ -12,6 +12,7 @@ std::shared_ptr<void> AssetRuntimeLoadService::LoadUntyped(
     const AssetMountTable& mounts,
     const std::vector<std::unique_ptr<IAssetLoader>>& loaders,
     std::unordered_map<std::uint64_t, AssetManager::CachedAsset>& cache,
+    std::mutex& loaderExecutionMutex,
     std::string& errorMessage) {
     errorMessage.clear();
     if (!id.IsValid()) {
@@ -61,7 +62,11 @@ std::shared_ptr<void> AssetRuntimeLoadService::LoadUntyped(
         return {};
     }
 
-    AssetLoadResult result = loader->Load(AssetLoadRequest{ .metadata = *metadata, .resolvedPath = resolvedPath });
+    AssetLoadResult result;
+    {
+        std::scoped_lock lock{ loaderExecutionMutex };
+        result = loader->Load(AssetLoadRequest{ .metadata = *metadata, .resolvedPath = resolvedPath });
+    }
     if (!result.Succeeded()) {
         errorMessage = result.error.empty() ? "Asset loader failed" : std::move(result.error);
         return {};

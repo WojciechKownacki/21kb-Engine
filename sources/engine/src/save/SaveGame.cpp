@@ -44,6 +44,10 @@ void SaveGame::SetString(std::string key, std::string value) {
     entries_[std::move(key)] = SaveValue::MakeString(std::move(value));
 }
 
+void SaveGame::SetAssetRef(std::string key, kb::assets::AssetId value) {
+    entries_[std::move(key)] = SaveValue::MakeAssetRef(value.value);
+}
+
 bool SaveGame::GetBool(std::string_view key, bool& out) const {
     const SaveValue* value = FindTyped(entries_, key, SaveValueType::Bool);
     if (value == nullptr) {
@@ -77,6 +81,15 @@ bool SaveGame::GetString(std::string_view key, std::string& out) const {
         return false;
     }
     out = value->stringValue;
+    return true;
+}
+
+bool SaveGame::GetAssetRef(std::string_view key, kb::assets::AssetId& out) const {
+    const SaveValue* value = FindTyped(entries_, key, SaveValueType::AssetRef);
+    if (value == nullptr) {
+        return false;
+    }
+    out = kb::assets::AssetId{ value->assetIdValue };
     return true;
 }
 

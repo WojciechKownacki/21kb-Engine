@@ -4,11 +4,13 @@
 #include "engine/save/SaveGame.hpp"
 #include "engine/save/SaveGameMigration.hpp"
 #include "engine/save/SaveGameService.hpp"
+#include "engine/library/EngineLibraryAssetRef.hpp"
 
 #include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -43,7 +45,26 @@ void RunSaveGameRoundTripTest() {
     save.SetInt("score", 4242);
     save.SetFloat("volume", 0.75);
     save.SetString("name", "Player One");
-    kb::tests::Require(save.Count() == 4, "SaveGame must hold every set entry");
+    const kb::library::SceneRef sceneRef{ kb::assets::AssetId{ 101U }, std::shared_ptr<const kb::scene::SceneDocument>{} };
+    const kb::library::PrefabRef prefabRef{ kb::assets::AssetId{ 102U }, std::shared_ptr<const kb::scene::ScenePrefab>{} };
+    const kb::library::GraphRef graphRef{ kb::assets::AssetId{ 103U }, std::shared_ptr<const kb::visual::VisualGraphAsset>{} };
+    const kb::library::AudioClipRef audioRef{ kb::assets::AssetId{ 104U }, std::shared_ptr<const kb::audio::AudioClipAsset>{} };
+    const kb::library::AnimationRef animationRef{ kb::assets::AssetId{ 105U }, std::shared_ptr<const kb::assets::ImportedAsset>{} };
+    const kb::library::InputActionRef actionRef{ kb::assets::AssetId{ 106U }, std::shared_ptr<const kb::input::InputActionAsset>{} };
+    const kb::library::InputMapRef mapRef{ kb::assets::AssetId{ 107U }, std::shared_ptr<const kb::input::InputMappingContextAsset>{} };
+    const std::array namedRefs{
+        std::pair{ "sceneRef", sceneRef.Id() },
+        std::pair{ "prefabRef", prefabRef.Id() },
+        std::pair{ "graphRef", graphRef.Id() },
+        std::pair{ "audioRef", audioRef.Id() },
+        std::pair{ "animationRef", animationRef.Id() },
+        std::pair{ "inputActionRef", actionRef.Id() },
+        std::pair{ "inputMapRef", mapRef.Id() },
+    };
+    for (const auto& [key, id] : namedRefs) {
+        save.SetAssetRef(key, id);
+    }
+    kb::tests::Require(save.Count() == 4U + namedRefs.size(), "SaveGame must hold every public scalar and asset-reference value");
 
     // A typed getter is an honest miss for a wrong-type or absent key.
     std::int64_t asInt = 0;
@@ -54,7 +75,7 @@ void RunSaveGameRoundTripTest() {
 
     const kb::save::SaveGameLoadResult loaded = kb::save::SaveGameService::Load(path);
     kb::tests::Require(loaded.Succeeded() && loaded.status == kb::save::SaveGameLoadStatus::Ok, "SaveGameService::Load must succeed for a just-written save");
-    kb::tests::Require(loaded.save.Count() == 4, "A loaded save must carry every entry");
+    kb::tests::Require(loaded.save.Count() == 4U + namedRefs.size(), "A loaded save must carry every scalar and typed asset reference");
 
     bool flag = false;
     std::int64_t score = 0;
@@ -64,6 +85,11 @@ void RunSaveGameRoundTripTest() {
     kb::tests::Require(loaded.save.GetInt("score", score) && score == 4242, "Round-tripped int must survive exactly");
     kb::tests::Require(loaded.save.GetFloat("volume", volume) && kb::tests::NearlyEqual(static_cast<float>(volume), 0.75F), "Round-tripped float must survive");
     kb::tests::Require(loaded.save.GetString("name", name) && name == "Player One", "Round-tripped string must survive");
+    for (const auto& [key, expected] : namedRefs) {
+        kb::assets::AssetId actual;
+        kb::tests::Require(loaded.save.GetAssetRef(key, actual) && actual == expected,
+            "Round-tripped typed asset reference must preserve its stable AssetId");
+    }
 }
 
 // LIB-162: the write is atomic — no ".tmp" is left behind, and overwriting an
@@ -104,7 +130,8 @@ void RunSaveGameCorruptionTest() {
     ResetSaveTestRoot();
 
     // Missing file.
-    kb::tests::Require(kb::save::SaveGameService::Load(SaveTestRoot() / "does_not_exist.kbsave").status == kb::save::SaveGameLoadStatus::FileNotFound,
+    const kb::save::SaveGameLoadResult missing = kb::save::SaveGameService::Load(SaveTestRoot() / "does_not_exist.kbsave");
+    kb::tests::Require(missing.status == kb::save::SaveGameLoadStatus::FileNotFound && !missing.diagnostic.empty(),
         "Loading a missing file must report FileNotFound");
 
     // The format magic (a contract constant): "21KBSAV\0".
@@ -118,7 +145,9 @@ void RunSaveGameCorruptionTest() {
     // Wrong magic.
     const std::filesystem::path badMagicPath = SaveTestRoot() / "badmagic.kbsave";
     WriteRawFile(badMagicPath, std::vector<std::uint8_t>{ 'N', 'O', 'P', 'E', 'N', 'O', 'P', 'E', 1, 0, 0, 0 });
-    kb::tests::Require(kb::save::SaveGameService::Load(badMagicPath).status == kb::save::SaveGameLoadStatus::BadMagic, "A file with the wrong magic must report BadMagic");
+    const kb::save::SaveGameLoadResult badMagic = kb::save::SaveGameService::Load(badMagicPath);
+    kb::tests::Require(badMagic.status == kb::save::SaveGameLoadStatus::BadMagic && badMagic.diagnostic.find("magic") != std::string::npos,
+        "A file with the wrong magic must report BadMagic with a readable diagnostic");
 
     // Version 0 (reserved / invalid).
     std::vector<std::uint8_t> versionZero{ magic.begin(), magic.end() };
@@ -157,6 +186,34 @@ void RunSaveGameCorruptionTest() {
     WriteRawFile(garbageDomainPath, garbageDomain);
     kb::tests::Require(kb::save::SaveGameService::Load(garbageDomainPath, kb::save::SaveDomain::SaveGame).status == kb::save::SaveGameLoadStatus::WrongDomain,
         "A file with an unrecognized domain byte must be rejected as WrongDomain");
+
+    // Current v2 files carry both the declared payload size and a deterministic
+    // integrity hash. A same-size byte edit must be distinguished from a
+    // structurally truncated payload.
+    const std::filesystem::path integrityPath = SaveTestRoot() / "integrity.kbsave";
+    kb::save::SaveGame integritySave;
+    integritySave.SetString("hero", "Ada");
+    kb::tests::Require(kb::save::SaveGameService::Save(integrityPath, integritySave), "Integrity fixture could not be saved");
+    std::ifstream integrityInput{ integrityPath, std::ios::binary };
+    std::vector<std::uint8_t> integrityBytes{ std::istreambuf_iterator<char>{ integrityInput }, std::istreambuf_iterator<char>{} };
+    kb::tests::Require(integrityBytes.size() > 28U, "Integrity fixture is missing the v2 envelope");
+    integrityBytes.back() ^= 0x5AU;
+    WriteRawFile(integrityPath, integrityBytes);
+    const kb::save::SaveGameLoadResult integrityFailure = kb::save::SaveGameService::Load(integrityPath);
+    kb::tests::Require(integrityFailure.status == kb::save::SaveGameLoadStatus::IntegrityMismatch &&
+            integrityFailure.diagnostic.find("hash") != std::string::npos,
+        "A modified payload must report IntegrityMismatch with a hash diagnostic");
+
+    const std::filesystem::path tooLargePath = SaveTestRoot() / "too_large.kbsave";
+    {
+        std::ofstream oversized{ tooLargePath, std::ios::binary | std::ios::trunc };
+        oversized.seekp(static_cast<std::streamoff>(kb::save::SaveGameService::MaxSerializedBytes));
+        oversized.put('\0');
+    }
+    const kb::save::SaveGameLoadResult tooLarge = kb::save::SaveGameService::Load(tooLargePath);
+    kb::tests::Require(tooLarge.status == kb::save::SaveGameLoadStatus::TooLarge &&
+            tooLarge.diagnostic.find("16 MiB") != std::string::npos,
+        "An oversized save must be rejected before allocation with a readable size-limit diagnostic");
 }
 
 // LIB-163: the persistence domains are separated — a file written for one

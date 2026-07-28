@@ -16,9 +16,10 @@ public:
     SaveGameCodec() = delete;
 
     // Serializes `save` at `schemaVersion` for `domain`: magic + schemaVersion
-    // + domain + entry count + [key, typeTag, scalar]... Keys are emitted in
-    // sorted order so the byte output is deterministic (identical save ->
-    // identical bytes), which a later integrity hash (LIB-164) depends on.
+    // + payload byte count + integrity hash + domain + entry count +
+    // [key, typeTag, value]... Keys are emitted in sorted order so identical
+    // saves produce identical bytes and hashes. Encoding schema v1 preserves
+    // its legacy envelope for compatibility tests.
     // `schemaVersion` is a parameter (not hard-wired) so a test can produce an
     // older-version file to exercise the Decode migration path; production
     // Save always passes SaveGameFormat::kCurrentSchemaVersion.
@@ -32,12 +33,8 @@ public:
     [[nodiscard]] static SaveGameLoadResult Decode(std::span<const std::uint8_t> bytes, std::uint32_t targetVersion, SaveDomain expectedDomain, std::span<const SaveGameMigration> migrations);
 };
 
-// The schema migrations THIS build ships. Empty today: SaveGame schema v1 is
-// the first version, so no save can predate it. When kCurrentSchemaVersion is
-// bumped, add the step(s) bridging the previous version here and old saves
-// upgrade automatically on Load. The migration MECHANISM itself
-// (ApplySaveGameMigrations / Decode) is proven independently by
-// RunSaveGameMigrationTest, so it is ready the moment a real step is added.
+// The schema migrations THIS build ships. v1 -> v2 is a data no-op because v2
+// adds the size/hash envelope without changing entry meanings.
 [[nodiscard]] std::span<const SaveGameMigration> BuiltInSaveGameMigrations();
 
 } // namespace kb::save

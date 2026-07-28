@@ -22,13 +22,9 @@ struct AssetMetadata;
 // ScriptMeshRendererApi already uses), so this header pulls in ZERO
 // kb_render dependency and works in a headless kb_engine build.
 //
-// "animation" from LIB-157's kind list is INTENTIONALLY ABSENT: no
-// animation asset type/loader exists anywhere in the engine yet (only an
-// AssetImportCategory label), so a typed AnimationRef would be an orphan
-// API — it is deferred to the animation work in section 14 of the backlog,
-// not fabricated here. "input map" is realised as the two real registered
-// input asset types: InputAction (a single action asset) and InputMap (a
-// mapping-context asset).
+// Animation is the existing loadable ImportedAsset payload classified with
+// importCategory "Animation"; playback-specific clip/controller types remain
+// the responsibility of the animation subsystem.
 enum class AssetKind : std::uint8_t {
     Mesh,
     Material,
@@ -36,12 +32,13 @@ enum class AssetKind : std::uint8_t {
     Audio,
     Prefab,
     Scene,
+    Animation,
     Graph,
     InputAction,
     InputMap,
 };
 
-inline constexpr std::size_t kAssetKindCount = 9;
+inline constexpr std::size_t kAssetKindCount = 10;
 
 // The friendly, front-end-facing kind name (e.g. "Mesh", "InputMap"), the
 // exact token TryParseAssetKind accepts and the script Assets.KindOf output

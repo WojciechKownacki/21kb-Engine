@@ -6,6 +6,7 @@
 #include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/input/InputPollingSystem.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/library/EngineLibraryAssetRef.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -32,10 +33,12 @@ void InputModule::OnSceneAttach(kb::scene::Scene& scene) {
     kb::assets::AssetManager& assetManager = scene.Assets().Manager();
     input.SetResolvers(
         [&assetManager](std::uint64_t id) {
-            return assetManager.Load<InputActionAsset>(kb::assets::AssetId{ id }).Shared();
+            const kb::library::InputActionRef action = assetManager.Load<InputActionAsset>(kb::assets::AssetId{ id });
+            return action.Shared();
         },
         [&assetManager](std::uint64_t id) {
-            return assetManager.Load<InputMappingContextAsset>(kb::assets::AssetId{ id }).Shared();
+            const kb::library::InputMapRef mapping = assetManager.Load<InputMappingContextAsset>(kb::assets::AssetId{ id });
+            return mapping.Shared();
         });
     scene.Runtime().AddSceneSystem(std::make_unique<InputPollingSystem>());
 }

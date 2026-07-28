@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetHandle.hpp"
 #include "engine/assets/AssetId.hpp"
+#include "engine/assets/ImportedAsset.hpp"
 #include "engine/audio/AudioClipAsset.hpp"
 #include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
@@ -48,19 +49,12 @@ using SceneRef = AssetRef<kb::scene::SceneDocument>;
 using PrefabRef = AssetRef<kb::scene::ScenePrefab>;
 using GraphRef = AssetRef<kb::visual::VisualGraphAsset>;
 using AudioClipRef = AssetRef<kb::audio::AudioClipAsset>;
+using AnimationRef = AssetRef<kb::assets::ImportedAsset>;
 using InputActionRef = AssetRef<kb::input::InputActionAsset>;
 using InputMapRef = AssetRef<kb::input::InputMappingContextAsset>;
 
-// The mesh/material/texture kinds (kb_render's RenderMesh/RenderMaterial/
-// RenderTexture payloads) DELIBERATELY have no typed alias here: their C++
-// payload types live in the separate kb_render module, which kb_engine does
-// not link, so `AssetRef<kb::render::RenderMeshAssetData>` cannot be named
-// from here without inverting the module dependency. They are still fully
-// first-class typed references — reached by AssetKind + AssetId at the
-// engine/script layer (Assets.FindTyped(reference, "Mesh"), etc.), and a
-// kb_render-linked native consumer forms
-// `kb::library::AssetRef<kb::render::RenderMeshAssetData>` itself with the
-// same generic template. Fabricating an alias kb_engine cannot compile
-// would be a stub, not a contract.
+// Renderer-owned MeshRef/MaterialRef/TextureRef aliases live in
+// kb/render/resources/RenderAssetRefs.hpp, preserving the module boundary
+// while still using this exact AssetRef<T> ownership model.
 
 } // namespace kb::library

@@ -6,11 +6,15 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTasks.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
+#include "scene/SceneAccess.hpp"
+#include "scene/SceneState.hpp"
 
 #include <cstdint>
+#include <algorithm>
 #include <filesystem>
 #include <span>
 #include <string>
@@ -33,6 +37,47 @@ const ScriptValue* FindArg(std::span<const ScriptFunctionArgument> arguments, st
 [[nodiscard]] std::string ReferenceArg(std::span<const ScriptFunctionArgument> arguments) {
     const ScriptValue* value = FindArg(arguments, "reference");
     return value == nullptr ? std::string{} : value->AsString();
+}
+
+[[nodiscard]] std::uint64_t OwnerKey(const ScriptFunctionCallContext& context) noexcept {
+    return context.caller.IsValid() ? context.caller.Id() : 0U;
+}
+
+void StoreOwnedAsset(kb::scene::Scene& scene, std::uint64_t owner, kb::assets::AssetOpaqueHandle handle) {
+    if (handle.IsLoaded()) {
+        kb::scene::SceneAccess::State(scene).scriptOwnedAssets[owner].insert_or_assign(handle.Id().value, std::move(handle));
+    }
+}
+
+[[nodiscard]] bool AnyScriptOwnerHolds(const kb::scene::SceneState& state, std::uint64_t assetId) {
+    for (const auto& [owner, assets] : state.scriptOwnedAssets) {
+        static_cast<void>(owner);
+        if (assets.contains(assetId)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] bool AnyScriptOwnerRequests(const kb::scene::SceneState& state, std::uint64_t assetId) {
+    for (const auto& [owner, assets] : state.scriptPendingAssets) {
+        static_cast<void>(owner);
+        if (assets.contains(assetId)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void RemovePendingAsset(kb::scene::SceneState& state, std::uint64_t owner, std::uint64_t assetId) {
+    const auto ownerIterator = state.scriptPendingAssets.find(owner);
+    if (ownerIterator == state.scriptPendingAssets.end()) {
+        return;
+    }
+    ownerIterator->second.erase(assetId);
+    if (ownerIterator->second.empty()) {
+        state.scriptPendingAssets.erase(ownerIterator);
+    }
 }
 
 ScriptFunctionCallResult NoScene() {
@@ -161,26 +206,20 @@ ScriptFunctionCallResult IsLoaded(const ScriptFunctionCallContext& context, std:
     };
 }
 
-// AssetManager::LoadOpaque forces the asset into AssetManager's own cache
-// through whatever loader is registered for its metadata.type, reached
-// without a compile-time T — the returned `asset` Hash is the id a later
-// Assets.IsLoaded/Assets.Unload call (or a typed component setter like
-// MeshRenderer.SetMesh) resolves the SAME cache entry through. This is
-// DELIBERATELY NOT the same guarantee as a native AssetHandle<T>: a native
-// handle holds its own shared_ptr copy, so the payload survives an unrelated
-// Unload(id) elsewhere (EngineLibraryOwnership.hpp's Shared semantics). The
-// script-facing Hash is a bare cache-membership token with no refcount —
-// AssetManager::Unload (AssetManager.cpp) is an unconditional cache erase,
-// so ANY caller's Assets.Unload on the same reference evicts it for every
-// other script that called Assets.Load on it too, with no notification.
-// Real per-holder refcounting/weak-reference policy for the script surface
-// is LIB-158's explicit, separately-scoped job — not fabricated here.
+// The returned Hash is stable identity; SceneState retains the type-erased
+// strong payload per caller. Unload releases only that caller's ownership and
+// evicts the cache after the last script owner/request disappears.
 ScriptFunctionCallResult Load(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
     }
     const kb::assets::AssetId id = ResolveReference(*context.scene, ReferenceArg(arguments));
-    const bool success = id.IsValid() && context.scene->Assets().Manager().LoadOpaque(id);
+    kb::assets::AssetOpaqueHandle handle =
+        id.IsValid() ? context.scene->Assets().Manager().LoadOpaqueHandle(id) : kb::assets::AssetOpaqueHandle{};
+    const bool success = handle.IsLoaded();
+    if (success) {
+        StoreOwnedAsset(*context.scene, OwnerKey(context), std::move(handle));
+    }
     return ScriptFunctionCallResult{
         .executed = true,
         .outputs = {
@@ -191,23 +230,9 @@ ScriptFunctionCallResult Load(const ScriptFunctionCallContext& context, std::spa
     };
 }
 
-// LIB-155's LoadAsync<T>, honestly: AssetManager::LoadOpaque (like Load<T>
-// before it) is fully synchronous — this engine has no background-streaming
-// or threading infrastructure anywhere near assets (the same finding
-// SceneTasks.hpp's own LIB-098 doc comment already made, which explicitly
-// anticipates exactly this shape: "a plain
-// `[](float){ return TaskPollResult::Completed; }` closure already covers
-// it"). The task started here therefore always resolves (Completed or
-// Failed) on its very first poll — one Update tick after this call, never
-// synchronously within it — giving script the SAME Task.IsRunning/
-// TaskCompleted/TaskFailed contract every other async-shaped operation in
-// this engine uses, without pretending to background-stream the asset. Real
-// multi-frame streaming would need asynchronous AssetManager support that
-// does not exist anywhere in this engine (see SceneTasks.hpp/
-// EngineLibraryTaskFactories.hpp) — not fabricated here. `owner` is
-// context.caller directly (SceneTasks::Start treats an invalid owner as
-// "broadcast," not an error, mirroring ParentEntity/TargetEntity elsewhere —
-// no special-case guard needed).
+// Loader I/O/decode runs on AssetManager's bounded worker queue. The SceneTask only
+// polls and commits a ready result on the owner thread, then transfers a
+// strong type-erased handle into the caller's scene-owned lifetime table.
 ScriptFunctionCallResult LoadAsync(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
@@ -225,11 +250,51 @@ ScriptFunctionCallResult LoadAsync(const ScriptFunctionCallContext& context, std
     }
 
     kb::scene::Scene* scene = context.scene;
+    kb::assets::AssetManager& manager = scene->Assets().Manager();
+    if (!manager.RequestLoadAsync(id)) {
+        return ScriptFunctionCallResult{
+            .executed = true,
+            .outputs = {
+                ScriptFunctionArgument{ "started", ScriptValue{ false } },
+                ScriptFunctionArgument{ "task", ScriptValue{ std::uint64_t{ 0U }, ScriptValueType::Hash } },
+            },
+            .errors = {},
+        };
+    }
+    const std::uint64_t owner = OwnerKey(context);
+    kb::scene::SceneAccess::State(*scene).scriptPendingAssets[owner].insert(id.value);
     const std::uint64_t taskId = scene->Tasks().Start(
-        [scene, id](float) -> kb::scene::TaskPollResult {
-            return scene->Assets().Manager().LoadOpaque(id) ? kb::scene::TaskPollResult::Completed : kb::scene::TaskPollResult::Failed;
+        [scene, id, owner](float) -> kb::scene::TaskPollResult {
+            kb::assets::AssetManager& assets = scene->Assets().Manager();
+            assets.PumpAsyncLoads();
+            switch (assets.AsyncLoadStatus(id)) {
+            case kb::assets::AsyncAssetLoadStatus::Pending:
+                return kb::scene::TaskPollResult::Running;
+            case kb::assets::AsyncAssetLoadStatus::Completed: {
+                kb::assets::AssetOpaqueHandle handle = assets.AcquireOpaqueHandle(id);
+                if (!handle.IsLoaded()) {
+                    RemovePendingAsset(kb::scene::SceneAccess::State(*scene), owner, id.value);
+                    return kb::scene::TaskPollResult::Failed;
+                }
+                StoreOwnedAsset(*scene, owner, std::move(handle));
+                RemovePendingAsset(kb::scene::SceneAccess::State(*scene), owner, id.value);
+                return kb::scene::TaskPollResult::Completed;
+            }
+            case kb::assets::AsyncAssetLoadStatus::Failed:
+            case kb::assets::AsyncAssetLoadStatus::NotRequested:
+            default:
+                RemovePendingAsset(kb::scene::SceneAccess::State(*scene), owner, id.value);
+                return kb::scene::TaskPollResult::Failed;
+            }
         },
         context.caller);
+    if (taskId == 0U) {
+        kb::scene::SceneState& state = kb::scene::SceneAccess::State(*scene);
+        RemovePendingAsset(state, owner, id.value);
+        if (!AnyScriptOwnerHolds(state, id.value) && !AnyScriptOwnerRequests(state, id.value)) {
+            static_cast<void>(manager.Unload(id));
+        }
+    }
     return ScriptFunctionCallResult{
         .executed = true,
         .outputs = {
@@ -245,7 +310,28 @@ ScriptFunctionCallResult Unload(const ScriptFunctionCallContext& context, std::s
         return NoScene();
     }
     const kb::assets::AssetId id = ResolveReference(*context.scene, ReferenceArg(arguments));
-    const bool unloaded = id.IsValid() && context.scene->Assets().Manager().Unload(id);
+    bool unloaded = false;
+    if (id.IsValid()) {
+        kb::scene::SceneState& state = kb::scene::SceneAccess::State(*context.scene);
+        const std::uint64_t owner = OwnerKey(context);
+        const auto ownerIterator = state.scriptOwnedAssets.find(OwnerKey(context));
+        if (ownerIterator != state.scriptOwnedAssets.end()) {
+            unloaded = ownerIterator->second.erase(id.value) > 0U;
+            if (ownerIterator->second.empty()) {
+                state.scriptOwnedAssets.erase(ownerIterator);
+            }
+        }
+        const auto pendingOwner = state.scriptPendingAssets.find(owner);
+        if (pendingOwner != state.scriptPendingAssets.end()) {
+            unloaded = pendingOwner->second.erase(id.value) > 0U || unloaded;
+            if (pendingOwner->second.empty()) {
+                state.scriptPendingAssets.erase(pendingOwner);
+            }
+        }
+        if (unloaded && !AnyScriptOwnerHolds(state, id.value) && !AnyScriptOwnerRequests(state, id.value)) {
+            static_cast<void>(context.scene->Assets().Manager().Unload(id));
+        }
+    }
     return ScriptFunctionCallResult{
         .executed = true,
         .outputs = { ScriptFunctionArgument{ "unloaded", ScriptValue{ unloaded } } },
@@ -255,11 +341,10 @@ ScriptFunctionCallResult Unload(const ScriptFunctionCallContext& context, std::s
 
 // LIB-158: the number of live strong holders (native AssetHandle/AssetRef)
 // of a cached asset — 0 when the asset is not cached or its payload was
-// released. A script has no shared_ptr, so it never contributes to this
-// count itself; it observes how many NATIVE consumers still hold the asset,
-// e.g. to decide whether an Unload/ReleaseWhenUnreferenced would actually
-// free memory. (A script's own "weak reference" to an asset is simply the
-// reference string plus Assets.IsLoaded — the id owns nothing.)
+// released. Assets.Load/LoadAsync retain a type-erased strong handle for
+// each script caller, so those owners and native AssetHandle/AssetRef owners
+// are all reflected in this count. A script's bare reference string or Hash
+// remains non-owning.
 ScriptFunctionCallResult RefCount(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     if (context.scene == nullptr) {
         return NoScene();
@@ -492,6 +577,39 @@ bool ScriptAssetsApi::Register(ScriptRuntimeHost& host) {
               { ScriptFunctionPin{ "found", ScriptValueType::Bool, true }, ScriptFunctionPin{ "value", ScriptValueType::String, true } }, &GetProperty)
         && ok;
     return ok;
+}
+
+void ScriptAssetsApi::ReleaseDeadOwnerHandles(kb::scene::Scene& scene) {
+    kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);
+    std::vector<std::uint64_t> releasedAssets;
+    for (auto ownerIterator = state.scriptOwnedAssets.begin(); ownerIterator != state.scriptOwnedAssets.end();) {
+        const std::uint64_t owner = ownerIterator->first;
+        if (owner == 0U || scene.Entities().IsAlive(kb::scene::SceneEntity{ owner })) {
+            ++ownerIterator;
+            continue;
+        }
+        for (const auto& [assetId, handle] : ownerIterator->second) {
+            static_cast<void>(handle);
+            releasedAssets.push_back(assetId);
+        }
+        ownerIterator = state.scriptOwnedAssets.erase(ownerIterator);
+    }
+    for (auto ownerIterator = state.scriptPendingAssets.begin(); ownerIterator != state.scriptPendingAssets.end();) {
+        const std::uint64_t owner = ownerIterator->first;
+        if (owner == 0U || scene.Entities().IsAlive(kb::scene::SceneEntity{ owner })) {
+            ++ownerIterator;
+            continue;
+        }
+        releasedAssets.insert(releasedAssets.end(), ownerIterator->second.begin(), ownerIterator->second.end());
+        ownerIterator = state.scriptPendingAssets.erase(ownerIterator);
+    }
+    std::ranges::sort(releasedAssets);
+    releasedAssets.erase(std::unique(releasedAssets.begin(), releasedAssets.end()), releasedAssets.end());
+    for (const std::uint64_t assetId : releasedAssets) {
+        if (!AnyScriptOwnerHolds(state, assetId) && !AnyScriptOwnerRequests(state, assetId)) {
+            static_cast<void>(scene.Assets().Manager().Unload(kb::assets::AssetId{ assetId }));
+        }
+    }
 }
 
 std::span<const ScriptSceneComponentPropertyDesc> ScriptAssetsApi::AssetProperties() noexcept {

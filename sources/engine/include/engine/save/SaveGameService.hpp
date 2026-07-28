@@ -4,9 +4,13 @@
 #include "engine/save/SaveGame.hpp"
 
 #include <cstdint>
+#include <cstddef>
 #include <filesystem>
+#include <string>
 
 namespace kb::save {
+
+inline constexpr std::size_t kMaxSaveGameSerializedBytes = 16U << 20U;
 
 // LIB-162: why a SaveGame could not be loaded. Ok is the only success value;
 // every other value names a distinct, non-silent failure a caller can react
@@ -19,11 +23,14 @@ enum class SaveGameLoadStatus : std::uint8_t {
     Corrupt,            // truncated / malformed payload past a valid header
     MigrationFailed,    // the schema version is old but no migration chain reaches current
     WrongDomain,        // LIB-163: a valid file, but of a different domain than requested
+    TooLarge,           // file exceeds the production save-size budget
+    IntegrityMismatch,  // payload does not match its stored integrity hash
 };
 
 struct SaveGameLoadResult {
     SaveGameLoadStatus status = SaveGameLoadStatus::FileNotFound;
     SaveGame save;
+    std::string diagnostic;
 
     [[nodiscard]] bool Succeeded() const noexcept {
         return status == SaveGameLoadStatus::Ok;
@@ -33,6 +40,7 @@ struct SaveGameLoadResult {
 class SaveGameService {
 public:
     SaveGameService() = delete;
+    static constexpr std::size_t MaxSerializedBytes = kMaxSaveGameSerializedBytes;
 
     // Serializes `save` at the current schema version, stamped with `domain`
     // (LIB-163), and writes it to `path` ATOMICALLY (write to a temp file,

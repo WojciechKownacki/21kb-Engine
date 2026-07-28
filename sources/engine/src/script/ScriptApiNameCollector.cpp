@@ -2,6 +2,7 @@
 
 #include "engine/script/ScriptApiDeclarationParser.hpp"
 #include "engine/script/ScriptAsset.hpp"
+#include "engine/library/EngineLibraryAssetRef.hpp"
 #include "engine/visual/VisualGraphTypes.hpp"
 
 #include <array>
@@ -331,7 +332,7 @@ ScriptApiNameCollectionResult ScriptApiNameCollector::CollectProjectAssets(kb::a
             continue;
         }
         if (metadata.type == "VisualGraph") {
-            const kb::assets::AssetHandle<kb::visual::VisualGraphAsset> graph = assets.Load<kb::visual::VisualGraphAsset>(metadata.id);
+            const kb::library::GraphRef graph = assets.Load<kb::visual::VisualGraphAsset>(metadata.id);
             if (!graph.IsLoaded()) {
                 AddCollectionError(result, assets.LastError().empty() ? "Visual graph could not be loaded for API name collection" : assets.LastError());
                 continue;
