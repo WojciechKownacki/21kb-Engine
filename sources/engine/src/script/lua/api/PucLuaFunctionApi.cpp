@@ -2561,6 +2561,157 @@ int LuaInputStopVibration(lua_State* state) {
     return 1;
 }
 
+int LuaTimelineCreate(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::size_t length = 0U;
+    const char* asset = luaL_checklstring(state, 1, &length);
+    std::vector<ScriptFunctionArgument> arguments{
+        Arg("asset", ScriptValue{ std::string{ asset, length } }),
+    };
+    if (lua_gettop(state) >= 2 && lua_isnil(state, 2) == 0) {
+        arguments.push_back(Arg(
+            "entity",
+            ScriptValue{
+                static_cast<std::uint64_t>(luaL_checkinteger(state, 2)),
+                ScriptValueType::Entity }));
+    }
+    const ScriptFunctionCallResult result =
+        context->CallFunction("Timeline.Create", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "timeline create failed");
+    }
+    PucLuaValueBridge::Push(
+        state,
+        result.Output("instance").value_or(
+            ScriptValue{ 0U, ScriptValueType::Hash }));
+    return 1;
+}
+
+int LuaTimelineAppliedCall(
+    lua_State* state, const char* function,
+    std::vector<ScriptFunctionArgument> arguments) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result =
+        context->CallFunction(function, arguments);
+    lua_pushboolean(
+        state,
+        result.Output("applied").value_or(ScriptValue{ false }).AsBool()
+            ? 1
+            : 0);
+    return 1;
+}
+
+int LuaTimelineRelease(lua_State* state) {
+    return LuaTimelineAppliedCall(state, "Timeline.Release", {
+        Arg("instance", ScriptValue{
+            static_cast<std::uint64_t>(luaL_checkinteger(state, 1)),
+            ScriptValueType::Hash }),
+    });
+}
+
+int LuaTimelinePlay(lua_State* state) {
+    return LuaTimelineAppliedCall(state, "Timeline.Play", {
+        Arg("instance", ScriptValue{
+            static_cast<std::uint64_t>(luaL_checkinteger(state, 1)),
+            ScriptValueType::Hash }),
+    });
+}
+
+int LuaTimelinePause(lua_State* state) {
+    return LuaTimelineAppliedCall(state, "Timeline.Pause", {
+        Arg("instance", ScriptValue{
+            static_cast<std::uint64_t>(luaL_checkinteger(state, 1)),
+            ScriptValueType::Hash }),
+    });
+}
+
+int LuaTimelineSeek(lua_State* state) {
+    return LuaTimelineAppliedCall(state, "Timeline.Seek", {
+        Arg("instance", ScriptValue{
+            static_cast<std::uint64_t>(luaL_checkinteger(state, 1)),
+            ScriptValueType::Hash }),
+        Arg("time", ScriptValue{
+            static_cast<float>(luaL_checknumber(state, 2)) }),
+    });
+}
+
+int LuaTimelineSkip(lua_State* state) {
+    return LuaTimelineAppliedCall(state, "Timeline.Skip", {
+        Arg("instance", ScriptValue{
+            static_cast<std::uint64_t>(luaL_checkinteger(state, 1)),
+            ScriptValueType::Hash }),
+        Arg("time", ScriptValue{
+            static_cast<float>(luaL_checknumber(state, 2)) }),
+        Arg("emitMarkers", ScriptValue{ lua_toboolean(state, 3) != 0 }),
+    });
+}
+
+int LuaTimelineBind(lua_State* state) {
+    return LuaTimelineAppliedCall(state, "Timeline.Bind", {
+        Arg("instance", ScriptValue{
+            static_cast<std::uint64_t>(luaL_checkinteger(state, 1)),
+            ScriptValueType::Hash }),
+        Arg("binding", ScriptValue{ std::string{
+            luaL_checkstring(state, 2) } }),
+        Arg("entity", ScriptValue{
+            static_cast<std::uint64_t>(luaL_checkinteger(state, 3)),
+            ScriptValueType::Entity }),
+    });
+}
+
+int LuaTimelineIsPlaying(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("instance", ScriptValue{
+            static_cast<std::uint64_t>(luaL_checkinteger(state, 1)),
+            ScriptValueType::Hash }),
+    };
+    const ScriptFunctionCallResult result =
+        context->CallFunction("Timeline.IsPlaying", arguments);
+    lua_pushboolean(
+        state,
+        result.Output("playing").value_or(ScriptValue{ false }).AsBool()
+            ? 1
+            : 0);
+    return 1;
+}
+
+int LuaTimelineTime(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("instance", ScriptValue{
+            static_cast<std::uint64_t>(luaL_checkinteger(state, 1)),
+            ScriptValueType::Hash }),
+    };
+    const ScriptFunctionCallResult result =
+        context->CallFunction("Timeline.Time", arguments);
+    if (!result.Succeeded()) {
+        return PushCallError(state, result, "timeline query failed");
+    }
+    lua_pushnumber(
+        state,
+        result.Output("time").value_or(ScriptValue{ 0.0F }).AsFloat());
+    return 1;
+}
+
 // LIB-010: SetClosure's `function` is a runtime value (123 call sites each
 // pass a different one), so it cannot become PucLuaSafeCall's compile-time
 // template parameter without touching every call site. Instead this
@@ -2764,6 +2915,18 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "SetUserVibration", &LuaInputSetUserVibration, context);
     SetClosure(state, "StopVibration", &LuaInputStopVibration, context);
     lua_setfield(state, environmentIndex, "Input");
+
+    lua_createtable(state, 0, 9);
+    SetClosure(state, "Create", &LuaTimelineCreate, context);
+    SetClosure(state, "Release", &LuaTimelineRelease, context);
+    SetClosure(state, "Play", &LuaTimelinePlay, context);
+    SetClosure(state, "Pause", &LuaTimelinePause, context);
+    SetClosure(state, "Seek", &LuaTimelineSeek, context);
+    SetClosure(state, "Skip", &LuaTimelineSkip, context);
+    SetClosure(state, "Bind", &LuaTimelineBind, context);
+    SetClosure(state, "IsPlaying", &LuaTimelineIsPlaying, context);
+    SetClosure(state, "Time", &LuaTimelineTime, context);
+    lua_setfield(state, environmentIndex, "Timeline");
 
     lua_createtable(state, 0, 5);
     SetClosure(state, "Position", &LuaPointerPosition, context);

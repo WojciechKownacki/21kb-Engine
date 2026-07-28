@@ -1,4 +1,5 @@
 #include "engine/library/EngineLibraryEventSchema.hpp"
+#include "engine/scene/SceneTimelines.hpp"
 
 #include <algorithm>
 
@@ -146,6 +147,24 @@ const std::vector<LibraryEventDesc>& EngineLibraryEventRegistry::Catalog() {
                 ScriptFunctionPin{ "layer", ScriptValueType::String, true },
                 ScriptFunctionPin{ "state", ScriptValueType::String, true },
                 ScriptFunctionPin{ "normalizedTime", ScriptValueType::Float, true },
+            },
+        },
+        LibraryEventDesc{
+            .name = "OnTimelineMarker",
+            .id = kb::script::ComputeEventId("OnTimelineMarker"),
+            .version = {
+                static_cast<std::uint16_t>(
+                    kb::scene::TimelineMarkerEvent::kSchemaMajor),
+                static_cast<std::uint16_t>(
+                    kb::scene::TimelineMarkerEvent::kSchemaMinor),
+            },
+            .arguments = {
+                ScriptFunctionPin{ "schemaMajor", ScriptValueType::Int, true },
+                ScriptFunctionPin{ "schemaMinor", ScriptValueType::Int, true },
+                ScriptFunctionPin{ "instance", ScriptValueType::Hash, true },
+                ScriptFunctionPin{ "asset", ScriptValueType::Hash, true },
+                ScriptFunctionPin{ "marker", ScriptValueType::Hash, true },
+                ScriptFunctionPin{ "time", ScriptValueType::Float, true },
             },
         },
     };
