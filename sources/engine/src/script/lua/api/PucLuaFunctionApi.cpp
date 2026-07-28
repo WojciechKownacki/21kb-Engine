@@ -2758,6 +2758,34 @@ int LuaUIDestroy(lua_State* state) { return LuaUIApplied(state, "UI.Destroy"); }
 int LuaUIShow(lua_State* state) { return LuaUIApplied(state, "UI.Show"); }
 int LuaUIHide(lua_State* state) { return LuaUIApplied(state, "UI.Hide"); }
 
+int LuaUIFind(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments{
+        Arg("name", ScriptValue{ std::string{ luaL_checkstring(state, 1) } }),
+    };
+    if (lua_gettop(state) >= 2 && lua_isnoneornil(state, 2) == 0) {
+        const lua_Integer entity = luaL_checkinteger(state, 2);
+        if (entity < 0) {
+            lua_pushnil(state);
+            return 1;
+        }
+        arguments.push_back(Arg("entity", ScriptValue{ static_cast<std::uint64_t>(entity), ScriptValueType::Entity }));
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("UI.Find", arguments);
+    if (!result.Succeeded()) return PushCallError(state, result, "UI setup lookup failed");
+    if (!result.Output("found").value_or(ScriptValue{ false }).AsBool()) {
+        lua_pushnil(state);
+        return 1;
+    }
+    PucLuaValueBridge::Push(state, result.Output("element").value_or(ScriptValue{ 0U, ScriptValueType::Hash }));
+    return 1;
+}
+
 enum class LuaUIValueKind : std::uint8_t { String, Hash, Bool, Float };
 
 int LuaUISetValue(lua_State* state, const char* function, const char* field, LuaUIValueKind kind) {
@@ -3048,11 +3076,12 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "Time", &LuaTimelineTime, context);
     lua_setfield(state, environmentIndex, "Timeline");
 
-    lua_createtable(state, 0, 12);
+    lua_createtable(state, 0, 19);
     SetClosure(state, "Create", &LuaUICreate, context);
     SetClosure(state, "Destroy", &LuaUIDestroy, context);
     SetClosure(state, "Show", &LuaUIShow, context);
     SetClosure(state, "Hide", &LuaUIHide, context);
+    SetClosure(state, "Find", &LuaUIFind, context);
     SetClosure(state, "SetText", &LuaUISetText, context);
     SetClosure(state, "SetImage", &LuaUISetImage, context);
     SetClosure(state, "SetToggle", &LuaUISetToggle, context);
