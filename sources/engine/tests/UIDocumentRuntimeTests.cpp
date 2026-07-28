@@ -9,8 +9,10 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneUIDocuments.hpp"
 #include "engine/scene/UIAssetIO.hpp"
+#include "engine/script/ScriptRuntimeHost.hpp"
 
 #include <filesystem>
+#include <fstream>
 
 namespace kb::tests {
 
@@ -65,11 +67,72 @@ void RunUIDocumentRuntimeTests() {
             scene.UIDocuments().StyleIsResolved(owner.Entity()),
         "Scene runtime did not derive the UI tree from UIDocument and UIStyle assets");
 
+    const auto transientPanel = scene.UIDocuments().QueueCreate(owner.Entity(), kb::scene::UIRuntimeElementDesc{
+        .parentId = 2U,
+        .name = "TransientPanel",
+        .styleClass = "hud",
+        .visible = true,
+    });
+    Require(transientPanel.has_value() && !scene.UIDocuments().HasElement(owner.Entity(), *transientPanel) &&
+            scene.UIDocuments().QueueHide(owner.Entity(), 2U),
+        "UI mutations were not accepted through the deferred runtime queue");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(scene.UIDocuments().HasElement(owner.Entity(), *transientPanel) &&
+            scene.UIDocuments().ElementCount(owner.Entity()) == 3U &&
+            !scene.UIDocuments().Visible(owner.Entity(), 2U),
+        "UI command FIFO did not apply create/hide at its frame boundary");
+    Require(scene.UIDocuments().QueueDestroy(owner.Entity(), *transientPanel) &&
+            scene.UIDocuments().QueueShow(owner.Entity(), 2U),
+        "UI destroy/show commands were not accepted for a live runtime element");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(!scene.UIDocuments().HasElement(owner.Entity(), *transientPanel) &&
+            scene.UIDocuments().ElementCount(owner.Entity()) == 2U &&
+            scene.UIDocuments().Visible(owner.Entity(), 2U),
+        "UI command FIFO did not apply destroy/show at its frame boundary");
+
+    const std::filesystem::path luaPath = root / "Assets" / "Logic" / "UIQueue.lua";
+    std::filesystem::create_directories(luaPath.parent_path());
+    std::ofstream luaFile{ luaPath, std::ios::binary | std::ios::trunc };
+    luaFile << R"(
+local phase = 0
+local element = 0
+
+function Tick(self, dt)
+    if phase == 0 then
+        element = UI.Create(1, "LuaPanel", { styleClass = "hud", visible = true })
+        UI.Hide(2)
+        phase = 1
+    elseif phase == 1 then
+        UI.Destroy(element)
+        UI.Show(2)
+        phase = 2
+    end
+end
+)";
+    luaFile.close();
+    Require(luaFile.good() && scene.Assets().Discover() == 3U, "UI queue Lua behaviour was not discovered as a production script asset");
+    const auto* luaMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/UIQueue.lua");
+    Require(luaMetadata != nullptr, "UI queue Lua behaviour was not registered by the project asset registry");
+    scene.Components().Behaviours().Set(owner.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaMetadata->id.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    kb::script::ScriptRuntimeHost scriptHost{ scene };
+    Require(scriptHost.Succeeded() && scriptHost.InstallSceneSystem(), "UI script runtime host could not install the UI library module");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(scene.UIDocuments().ElementCount(owner.Entity()) == 3U && !scene.UIDocuments().Visible(owner.Entity(), 2U),
+        "Lua UI.Create/UI.Hide did not reach the queued scene runtime tree");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(scene.UIDocuments().ElementCount(owner.Entity()) == 2U && scene.UIDocuments().Visible(owner.Entity(), 2U),
+        "Lua UI.Destroy/UI.Show did not reach the queued scene runtime tree");
+
     const std::filesystem::path scenePath = root / "UIDocument.21kbscene";
     Require(kb::scene::SceneDocumentService::Save(scene, scenePath, "UIDocument"),
         "Scene document with UIDocument component could not be saved");
     kb::scene::Scene loaded;
-    Require(loaded.Assets().MountProject(root) && loaded.Assets().Discover() == 2U &&
+    Require(loaded.Assets().MountProject(root) && loaded.Assets().Discover() == 3U &&
             kb::scene::SceneDocumentService::LoadFileIntoScene(loaded, scenePath),
         "Scene document with UIDocument component could not be reloaded");
     static_cast<void>(loaded.Runtime().Update(0.0F));

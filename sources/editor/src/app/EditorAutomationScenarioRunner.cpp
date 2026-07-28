@@ -17,6 +17,7 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneUIDocuments.hpp"
 #include "engine/script/ScriptSceneComponentApi.hpp"
 #include "engine/script/ScriptValue.hpp"
 #include "project/EditorProjectPaths.hpp"
@@ -955,6 +956,28 @@ ReadScriptValue(
         return {
             found == expected,
             std::string{ found ? "present" : "absent" } };
+    }
+
+    if (*operation == "assert_ui_element") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto elementValue = NumberMember(step, "element", error);
+        if (!alias || !elementValue) return { false, error };
+        if (*elementValue < 1.0 || *elementValue > static_cast<double>(std::numeric_limits<kb::scene::UIElementId>::max()) ||
+            std::floor(*elementValue) != *elementValue) {
+            return { false, "'element' must be a positive integral UI element id" };
+        }
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        const kb::scene::UIElementId element = static_cast<kb::scene::UIElementId>(*elementValue);
+        const bool present = state.context.Scene().UIDocuments().HasElement(entity, element);
+        const bool expectedPresent = BoolMember(step, "exists", error, false).value_or(true);
+        if (present != expectedPresent) {
+            return { false, std::string{ present ? "present" : "absent" } };
+        }
+        const auto expectedVisible = BoolMember(step, "visible", error, false);
+        if (!expectedVisible.has_value()) return { true, present ? "present" : "absent" };
+        if (!present) return { false, "cannot assert visibility of an absent UI element" };
+        const bool visible = state.context.Scene().UIDocuments().Visible(entity, element);
+        return { visible == *expectedVisible, visible ? "visible" : "hidden" };
     }
 
     if (*operation == "assert_parent") {

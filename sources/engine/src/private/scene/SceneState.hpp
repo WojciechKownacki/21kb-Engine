@@ -144,6 +144,21 @@ struct UIDocumentRuntimeRecord {
     std::uint64_t styleLoadGeneration = 0U;
     UIElementId root = 0U;
     std::map<UIElementId, UIDocumentElement> elements;
+    UIElementId nextRuntimeElementId = 1U;
+};
+
+enum class UIRuntimeCommandKind : std::uint8_t {
+    Create,
+    Destroy,
+    SetVisible,
+};
+
+struct UIRuntimeCommand {
+    UIRuntimeCommandKind kind = UIRuntimeCommandKind::Create;
+    SceneEntity entity{};
+    UIElementId elementId = 0U;
+    UIRuntimeElementDesc create{};
+    bool visible = true;
 };
 
 struct SceneTransformValueCacheEntry {
@@ -188,6 +203,10 @@ public:
     std::vector<AnimationEventRecord> pendingAnimationEvents;
     std::map<std::uint64_t, TimelineRuntimeRecord> timelines;
     std::map<std::uint64_t, UIDocumentRuntimeRecord> uiDocuments;
+    // LIB-174: sole mutable UI write boundary. It is FIFO and drained by the
+    // UI scene system, never by callers, so runtime tree iteration cannot be
+    // invalidated by script/API mutations mid-frame.
+    std::vector<UIRuntimeCommand> pendingUICommands;
     std::vector<TimelineMarkerEvent> pendingTimelineMarkerEvents;
     std::uint64_t nextTimelineInstanceId = 1U;
     kb::input::InputSubsystem inputSubsystem;

@@ -11,8 +11,12 @@ public:
     [[nodiscard]] static std::uint64_t Asset(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static UIElementId Root(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasElement(const Scene& scene, SceneEntity entity, UIElementId element) noexcept;
+    [[nodiscard]] static bool Visible(const Scene& scene, SceneEntity entity, UIElementId element) noexcept;
     [[nodiscard]] static bool StyleIsResolved(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static std::size_t ElementCount(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static std::optional<UIElementId> QueueCreate(Scene& scene, SceneEntity entity, const UIRuntimeElementDesc& desc);
+    [[nodiscard]] static bool QueueDestroy(Scene& scene, SceneEntity entity, UIElementId element) noexcept;
+    [[nodiscard]] static bool QueueVisibility(Scene& scene, SceneEntity entity, UIElementId element, bool visible) noexcept;
     static void SyncComponents(Scene& scene);
 };
 
