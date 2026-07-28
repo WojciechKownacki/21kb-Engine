@@ -14,6 +14,7 @@ add_executable(kb_editor WIN32
     src/app/EditorEditCommandInputHandler.cpp
     src/app/EditorAssetBrowserContextCommandExecutor.cpp
     src/app/EditorAudioAssetInspectorDropHandler.cpp
+    src/app/EditorAnimatorAssetInspectorDropHandler.cpp
     src/app/EditorAssetBrowserContextMenuPointerHandler.cpp
     src/app/EditorAssetBrowserDeleteConfirmPointerHandler.cpp
     src/app/EditorAssetBrowserDoubleClickHandler.cpp
@@ -294,6 +295,7 @@ add_executable(kb_editor WIN32
     src/private/app/docking/EditorMainDockSplitterPointerController.hpp
     src/private/app/EditorAssetFolderProjectFilesDropHandler.hpp
     src/private/app/EditorAudioAssetInspectorDropHandler.hpp
+    src/private/app/EditorAnimatorAssetInspectorDropHandler.hpp
     src/private/app/EditorBehaviourAssetHierarchyDropHandler.hpp
     src/private/app/EditorBehaviourAssetInspectorDropHandler.hpp
     src/private/app/EditorBehaviourAssetSceneDropHandler.hpp

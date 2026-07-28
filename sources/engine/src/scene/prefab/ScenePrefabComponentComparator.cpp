@@ -106,6 +106,12 @@ namespace {
         && lhs.enabled == rhs.enabled;
 }
 
+[[nodiscard]] bool Equal(const Animator& lhs, const Animator& rhs) noexcept {
+    return lhs.controllerAssetId == rhs.controllerAssetId &&
+        lhs.speed == rhs.speed && lhs.enabled == rhs.enabled &&
+        lhs.rootMotionOwner == rhs.rootMotionOwner;
+}
+
 template <typename T>
 [[nodiscard]] bool EqualOptionalComponent(const T* actual, const std::optional<T>& expected) noexcept {
     if (actual == nullptr) {
@@ -147,6 +153,9 @@ ScenePrefabOverrideFlag ScenePrefabComponentComparator::Compare(SceneComponents 
     }
     if (!EqualOptionalComponent(components.AudioListeners().TryGet(entity), expected.audioListener)) {
         flags |= ScenePrefabOverrideFlag::AudioListener;
+    }
+    if (!EqualOptionalComponent(components.Animators().TryGet(entity), expected.animator)) {
+        flags |= ScenePrefabOverrideFlag::Animator;
     }
     return flags;
 }

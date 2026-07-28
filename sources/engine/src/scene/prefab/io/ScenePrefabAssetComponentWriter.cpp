@@ -160,6 +160,13 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "audioListener.primary=" << (components.audioListener->primary ? 1 : 0) << '\n';
         output << "audioListener.enabled=" << (components.audioListener->enabled ? 1 : 0) << '\n';
     }
+    output << "animator=" << (components.animator.has_value() ? 1 : 0) << '\n';
+    if (components.animator.has_value()) {
+        output << "animator.controllerAssetId=" << components.animator->controllerAssetId << '\n';
+        output << "animator.speed=" << components.animator->speed << '\n';
+        output << "animator.enabled=" << (components.animator->enabled ? 1 : 0) << '\n';
+        output << "animator.rootMotionOwner=" << static_cast<int>(components.animator->rootMotionOwner) << '\n';
+    }
 }
 
 } // namespace kb::scene

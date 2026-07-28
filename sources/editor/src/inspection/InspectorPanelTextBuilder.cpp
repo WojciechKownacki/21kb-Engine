@@ -181,6 +181,11 @@ std::optional<std::string> InspectorPanelTextBuilder::Build(const EditorSceneCon
     if (const kb::scene::AudioListenerComponent* audioListener = sceneContext.Scene().Components().AudioListeners().TryGet(selected); audioListener != nullptr) {
         InspectorAudioListenerTextBuilder{}.Append(text, *audioListener);
     }
+    if (const kb::scene::Animator* animator = sceneContext.Scene().Components().Animators().TryGet(selected); animator != nullptr) {
+        text += "\n\nAnimator\nController: " + std::to_string(animator->controllerAssetId) +
+            "\nSpeed: " + std::to_string(animator->speed) +
+            "\nEnabled: " + std::string{ animator->enabled ? "true" : "false" };
+    }
 
     if (const kb::scene::RigidbodyComponent* rigidbody = sceneContext.Scene().Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
         InspectorRigidbodyTextBuilder{}.Append(text, *rigidbody);

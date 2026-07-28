@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "app/EditorAssetFolderProjectFilesDropHandler.hpp"
 #include "app/EditorAudioAssetInspectorDropHandler.hpp"
+#include "app/EditorAnimatorAssetInspectorDropHandler.hpp"
 #include "app/EditorBehaviourAssetHierarchyDropHandler.hpp"
 #include "app/EditorBehaviourAssetInspectorDropHandler.hpp"
 #include "app/EditorBehaviourAssetSceneDropHandler.hpp"
@@ -341,6 +342,7 @@ bool EditorPointerDropHandler::Drop(
             || (drag.assetAddsBehaviour && EditorBehaviourAssetSceneDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetAddsBehaviour && EditorBehaviourAssetInspectorDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetAssignsAudioClip && EditorAudioAssetInspectorDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
+            || EditorAnimatorAssetInspectorDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId)
             || (drag.assetAssignsTexture && DropTextureOnMaterialEditor(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetAssignsMaterial && EditorMaterialAssetSceneDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetAssignsMaterial && EditorMaterialAssetInspectorDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))

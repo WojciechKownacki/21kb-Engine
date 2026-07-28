@@ -23,6 +23,9 @@ void CopyOptionalComponents(Scene& scene, SceneObject source, SceneObject target
     if (const LightComponent* light = components.Lights().TryGet(sourceEntity)) {
         components.Lights().Set(targetEntity, *light);
     }
+    if (const Animator* animator = components.Animators().TryGet(sourceEntity)) {
+        components.Animators().Set(targetEntity, *animator);
+    }
 }
 
 SceneObject DuplicateBranch(Scene& scene, SceneObject source, SceneObject parent) {

@@ -2,6 +2,7 @@
 
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
+#include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
@@ -56,6 +57,7 @@ struct ScenePrefabNodeComponents {
     std::optional<BehaviourComponent> behaviour;
     std::optional<AudioSourceComponent> audioSource;
     std::optional<AudioListenerComponent> audioListener;
+    std::optional<Animator> animator;
 };
 
 struct ScenePrefabNodeDesc {

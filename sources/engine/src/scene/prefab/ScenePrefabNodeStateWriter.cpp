@@ -101,6 +101,12 @@ namespace {
     return lhs.primary == rhs.primary && lhs.enabled == rhs.enabled;
 }
 
+[[nodiscard]] bool Equals(const Animator& lhs, const Animator& rhs) noexcept {
+    return lhs.controllerAssetId == rhs.controllerAssetId &&
+        lhs.speed == rhs.speed && lhs.enabled == rhs.enabled &&
+        lhs.rootMotionOwner == rhs.rootMotionOwner;
+}
+
 template <typename T, typename Components>
 void WriteOptionalComponent(Components components, SceneEntity entity, const std::optional<T>& component) {
     if (component.has_value()) {
@@ -159,7 +165,8 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , tags(scene.Components().Tags())
     , behaviours(scene.Components().Behaviours())
     , audioSources(scene.Components().AudioSources())
-    , audioListeners(scene.Components().AudioListeners()) {
+    , audioListeners(scene.Components().AudioListeners())
+    , animators(scene.Components().Animators()) {
     state.suppressPrefabDirtyTracking = true;
 }
 
@@ -222,6 +229,9 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     }
     if (!componentMask.available || !componentMask.matches || node.components.audioListener.has_value()) {
         WriteOptionalComponent(context.audioListeners, entity, node.components.audioListener);
+    }
+    if (!componentMask.available || !componentMask.matches || node.components.animator.has_value()) {
+        WriteOptionalComponent(context.animators, entity, node.components.animator);
     }
 }
 

@@ -42,6 +42,9 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.audioListener.has_value()) {
         sceneComponents.AudioListeners().Set(entity, *components.audioListener);
     }
+    if (components.animator.has_value()) {
+        sceneComponents.Animators().Set(entity, *components.animator);
+    }
 }
 
 } // namespace kb::scene

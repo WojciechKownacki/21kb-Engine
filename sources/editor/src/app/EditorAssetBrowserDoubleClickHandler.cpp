@@ -7,6 +7,7 @@
 #include "assets/EditorAssetBrowserState.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/AnimationAssetIO.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "scene/EditorSceneContext.hpp"
 
@@ -66,6 +67,12 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::Handle
         }
         if (metadata->type == "LuaScript") {
             return sceneContext.OpenLuaScript(metadata->id)
+                ? EditorAssetBrowserDoubleClickResult::ScriptEditorOpened
+                : EditorAssetBrowserDoubleClickResult::None;
+        }
+        if (metadata->type == kb::scene::kAnimationClipAssetType ||
+            metadata->type == kb::scene::kAnimatorControllerAssetType) {
+            return sceneContext.OpenAnimationAsset(metadata->id)
                 ? EditorAssetBrowserDoubleClickResult::ScriptEditorOpened
                 : EditorAssetBrowserDoubleClickResult::None;
         }

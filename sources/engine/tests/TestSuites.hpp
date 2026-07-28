@@ -16,5 +16,6 @@ void RunInputTests();
 void RunEngineModuleTests();
 void RunEngineLibraryTests();
 void RunEngineMathTests();
+void RunAnimationRuntimeTests();
 
 } // namespace kb::tests

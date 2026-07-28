@@ -11,6 +11,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
+#include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SceneParticleSystems.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -116,6 +117,7 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     DispatchPendingCollisionEvents(scene, clampedDeltaSeconds);
     DispatchPendingAudioMarkerEvents(scene, clampedDeltaSeconds);
     DispatchPendingPrefabInstantiatedEvents(scene, clampedDeltaSeconds);
+    DispatchPendingAnimationEvents(scene, clampedDeltaSeconds);
     DispatchDeferredEvents(scene);
     SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
     // LIB-094: explicit FixedTick-during-pause rule — while the scene is
@@ -166,6 +168,7 @@ void ScriptRuntimeSceneSystem::BeginFrame(kb::scene::Scene& scene, float deltaSe
     AdvanceParticleSystems(scene, clampedDeltaSeconds);
     DispatchPendingAudioMarkerEvents(scene, clampedDeltaSeconds);
     DispatchPendingPrefabInstantiatedEvents(scene, clampedDeltaSeconds);
+    DispatchPendingAnimationEvents(scene, clampedDeltaSeconds);
     DispatchDeferredEvents(scene);
     SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
 }
@@ -184,6 +187,7 @@ void ScriptRuntimeSceneSystem::ExecuteVariableFrame(kb::scene::Scene& scene, flo
     // Physics contact events are queued during the Simulation phase. The
     // post-fixed script update drains them before Tick in the same frame.
     DispatchPendingCollisionEvents(scene, clampedDeltaSeconds);
+    DispatchPendingAnimationEvents(scene, clampedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::Tick, clampedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::LateTick, clampedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::BeforeRender, clampedDeltaSeconds);
@@ -403,6 +407,26 @@ void ScriptRuntimeSceneSystem::DispatchPendingPrefabInstantiatedEvents(kb::scene
         event.arguments.push_back(ScriptEventArgument{ .name = "root", .value = ScriptValue{ pending.root.Id(), ScriptValueType::Entity } });
         event.arguments.push_back(ScriptEventArgument{ .name = "count", .value = ScriptValue{ pending.count } });
         MergeResult(lastResult_, runtime_.DispatchEventAndDrain(scene, event, deltaSeconds));
+    }
+}
+
+void ScriptRuntimeSceneSystem::DispatchPendingAnimationEvents(kb::scene::Scene& scene, float deltaSeconds) {
+    static_cast<void>(deltaSeconds);
+    for (kb::scene::AnimationEventRecord& pending : scene.Animators().DrainEvents()) {
+        ScriptEvent event;
+        event.name = "OnAnimationEvent";
+        event.target = pending.target;
+        event.arguments.push_back(ScriptEventArgument{ .name = "schemaMajor", .value = ScriptValue{ pending.schemaMajor } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "schemaMinor", .value = ScriptValue{ pending.schemaMinor } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "event", .value = ScriptValue{ pending.eventId, ScriptValueType::Hash } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "clip", .value = ScriptValue{ pending.clipAssetId, ScriptValueType::Hash } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "layer", .value = ScriptValue{ std::move(pending.layer) } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "state", .value = ScriptValue{ std::move(pending.state) } });
+        event.arguments.push_back(ScriptEventArgument{ .name = "normalizedTime", .value = ScriptValue{ pending.normalizedTime } });
+        const ScriptEventDeliveryResult delivery = runtime_.Events().Emit(scene, event, pending.target);
+        for (const std::string& error : delivery.errors) {
+            lastResult_.diagnostics.push_back(ScriptDiagnostic{ .message = error });
+        }
     }
 }
 

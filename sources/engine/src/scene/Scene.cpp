@@ -12,6 +12,7 @@
 #include "engine/modules/EngineModuleHost.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/ParticleEffectAssetLoader.hpp"
+#include "engine/scene/AnimationAssetLoaders.hpp"
 #include "engine/scene/PhysicsLayersAssetLoader.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
@@ -24,6 +25,7 @@
 #include "scene/SceneState.hpp"
 #include "scene/assets/SceneAssetLoader.hpp"
 #include "scene/assets/ScenePrefabAssetLoader.hpp"
+#include "scene/systems/AnimatorSceneSystem.hpp"
 
 #include <array>
 #include <atomic>
@@ -78,6 +80,8 @@ Scene::Scene(
     const bool registeredImportedAssetLoader = state_->assets.RegisterLoader(std::make_unique<kb::assets::ImportedAssetLoader>());
     const bool registeredPhysicsLayersLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::PhysicsLayersAssetLoader>());
     const bool registeredParticleEffectLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::ParticleEffectAssetLoader>());
+    const bool registeredAnimationClipLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AnimationClipAssetLoader>());
+    const bool registeredAnimatorControllerLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AnimatorControllerAssetLoader>());
     static_cast<void>(registeredPrefabLoader);
     static_cast<void>(registeredSceneLoader);
     static_cast<void>(registeredLuaScriptLoader);
@@ -90,6 +94,8 @@ Scene::Scene(
     static_cast<void>(registeredImportedAssetLoader);
     static_cast<void>(registeredPhysicsLayersLoader);
     static_cast<void>(registeredParticleEffectLoader);
+    static_cast<void>(registeredAnimationClipLoader);
+    static_cast<void>(registeredAnimatorControllerLoader);
 
     if (mode == SceneMode::PrefabPrivate) {
         return;
@@ -108,6 +114,7 @@ Scene::Scene(
     }
     moduleHost_->Load(state_->world);
     moduleHost_->AttachScene(*this);
+    state_->sceneSystemScheduler.Add(std::make_unique<AnimatorSceneSystem>(), *this);
 }
 
 Scene::~Scene() {

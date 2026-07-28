@@ -237,6 +237,12 @@ void RunPrefabAssetRoundTripTest() {
                 .primary = false,
                 .enabled = false,
             },
+            .animator = kb::scene::Animator{
+                .controllerAssetId = 606,
+                .speed = 1.5F,
+                .enabled = false,
+                .rootMotionOwner = kb::scene::AnimatorRootMotionOwner::Rigidbody,
+            },
         },
     });
     prefab.TryGetMutableNode(rootNode)->components.joint = kb::scene::ScenePrefabJointComponent{
@@ -284,6 +290,7 @@ void RunPrefabAssetRoundTripTest() {
     const kb::scene::BehaviourComponent* behaviour = target.Components().Behaviours().TryGet(instance.ObjectAt(childNode).Entity());
     const kb::scene::AudioSourceComponent* audioSource = target.Components().AudioSources().TryGet(instance.ObjectAt(childNode).Entity());
     const kb::scene::AudioListenerComponent* audioListener = target.Components().AudioListeners().TryGet(instance.ObjectAt(childNode).Entity());
+    const kb::scene::Animator* animator = target.Components().Animators().TryGet(instance.ObjectAt(childNode).Entity());
     kb::tests::Require(meshRenderer != nullptr && meshRenderer->meshAssetId == 101 && !meshRenderer->castsShadow, "Loaded prefab mesh renderer was not preserved");
     kb::tests::Require(input != nullptr && input->mappingContextAssetId == 303 && input->priority == -4 && !input->enabled, "Loaded prefab input component was not preserved");
     kb::tests::Require(rigidbody != nullptr && rigidbody->bodyType == kb::scene::RigidbodyBodyType::Kinematic && kb::tests::NearlyEqual(rigidbody->mass, 8.0F) && kb::tests::NearlyEqual(rigidbody->linearVelocity.z, 3.0F) && !rigidbody->useGravity && rigidbody->lockRotation, "Loaded prefab rigidbody was not preserved");
@@ -298,6 +305,10 @@ void RunPrefabAssetRoundTripTest() {
     kb::tests::Require(behaviour != nullptr && behaviour->behaviourAssetId == 404 && behaviour->backend == kb::scene::BehaviourBackend::Lua && !behaviour->enabled && behaviour->tickGroup == kb::scene::BehaviourTickGroup::Physics && behaviour->executionOrder == -12, "Loaded prefab behaviour was not preserved");
     kb::tests::Require(audioSource != nullptr && audioSource->clipAssetId == 505 && kb::tests::NearlyEqual(audioSource->volume, 0.35F) && kb::tests::NearlyEqual(audioSource->pitch, 1.25F) && audioSource->loop && !audioSource->spatial && audioSource->autoplay && !audioSource->enabled && audioSource->mute && audioSource->attenuationModel == kb::audio::AudioAttenuationModel::Linear && kb::tests::NearlyEqual(audioSource->maxDistance, 80.0F) && kb::scene::AudioSourceOutputBus(*audioSource) == "Ambience", "Loaded prefab audio source was not preserved");
     kb::tests::Require(audioListener != nullptr && !audioListener->primary && !audioListener->enabled, "Loaded prefab audio listener was not preserved");
+    kb::tests::Require(animator != nullptr && animator->controllerAssetId == 606 &&
+            kb::tests::NearlyEqual(animator->speed, 1.5F) && !animator->enabled &&
+            animator->rootMotionOwner == kb::scene::AnimatorRootMotionOwner::Rigidbody,
+        "Loaded prefab Animator was not preserved");
 
     [[maybe_unused]] const bool progressed = target.Runtime().Update(0.016F);
     const kb::scene::TransformComponent childTransform = target.Transforms().Get(instance.ObjectAt(childNode));

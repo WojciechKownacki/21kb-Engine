@@ -972,6 +972,31 @@ template <typename Integer>
     return true;
 }
 
+[[nodiscard]] bool HandleAnimatorClick(
+    EditorSceneContext& sceneContext,
+    kb::scene::SceneEntity entity,
+    const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::Animator* animator = sceneContext.Scene().Components().Animators().TryGet(entity);
+    if (animator == nullptr) return false;
+    if (hit.property == InspectorPropertyId::AnimatorEnabled) {
+        sceneContext.Inspector().EndTextEdit();
+        return sceneContext.ToggleAnimatorEnabled(entity);
+    }
+    if (hit.property == InspectorPropertyId::AnimatorController) {
+        sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(animator->controllerAssetId));
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::AnimatorSpeed) {
+        sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(animator->speed));
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::AnimatorRootMotionOwner) {
+        sceneContext.Inspector().EndTextEdit();
+        return sceneContext.CycleAnimatorRootMotionOwner(entity);
+    }
+    return true;
+}
+
 [[nodiscard]] bool ToggleAudioProperty(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property) {
     if (!sceneContext.BeginSceneEditTransaction("Edit Audio Component")) {
         return true;
@@ -1280,6 +1305,8 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                 static_cast<void>(sceneContext.RemoveMeshRendererFromEntity(entity));
             } else if (hit.section == InspectorSectionId::Camera) {
                 static_cast<void>(RemoveCameraComponent(sceneContext, entity));
+            } else if (hit.section == InspectorSectionId::Animator) {
+                static_cast<void>(sceneContext.RemoveAnimatorFromEntity(entity));
             } else if (const std::optional<PhysicsComponentKind> kind = PhysicsKindForSection(hit.section); kind.has_value()) {
                 static_cast<void>(sceneContext.RemovePhysicsComponent(entity, *kind));
             }
@@ -1335,6 +1362,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::Camera) {
         return HandleCameraClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::Animator) {
+        return HandleAnimatorClick(sceneContext, entity, hit);
     }
     if (hit.section == InspectorSectionId::Light) {
         return HandleLightClick(sceneContext, entity, hit);
@@ -1567,6 +1597,26 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             return true;
         }
         const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            inspector.EditedProperty() == InspectorPropertyId::AnimatorSpeed) {
+            float value = 0.0F;
+            if (ParseFloat(inspector.EditBuffer(), value)) {
+                static_cast<void>(sceneContext.SetAnimatorSpeed(entity, value));
+            }
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            inspector.EditedProperty() == InspectorPropertyId::AnimatorController) {
+            std::uint64_t value = 0U;
+            const std::string_view text = inspector.EditBuffer();
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+            if (parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size()) {
+                static_cast<void>(sceneContext.SetAnimatorControllerAsset(entity, kb::assets::AssetId{ value }));
+            }
+            inspector.EndTextEdit();
+            return true;
+        }
         if (sceneContext.Scene().Entities().IsAlive(entity) &&
             IsCameraFloatProperty(inspector.EditedProperty())) {
             const InspectorPropertyId property = inspector.EditedProperty();

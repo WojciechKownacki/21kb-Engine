@@ -40,6 +40,8 @@ class SaveGame;
 namespace kb::scene {
 
 class SceneAssets;
+class SceneAnimatorQueries;
+class SceneAnimators;
 class SceneComponentQueries;
 class SceneComponents;
 class SceneEntities;
@@ -112,6 +114,8 @@ public:
     [[nodiscard]] SceneMaterialInstanceQueries MaterialInstances() const noexcept;
     [[nodiscard]] SceneParticleSystems Particles() noexcept;
     [[nodiscard]] SceneParticleSystemQueries Particles() const noexcept;
+    [[nodiscard]] SceneAnimators Animators() noexcept;
+    [[nodiscard]] SceneAnimatorQueries Animators() const noexcept;
     // LIB-162: the scene's ambient SaveGame buffer the script Save.* surface
     // reads/mutates and serializes to disk.
     [[nodiscard]] kb::save::SaveGame& AmbientSave() noexcept;
