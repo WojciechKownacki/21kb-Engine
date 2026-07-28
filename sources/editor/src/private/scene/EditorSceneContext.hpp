@@ -743,10 +743,13 @@ public:
     [[nodiscard]] bool AddComponentToEntity(kb::scene::SceneEntity entity, std::string_view componentId);
     [[nodiscard]] bool SetAudioSourceClipAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
     [[nodiscard]] bool SetAnimatorControllerAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
+    [[nodiscard]] bool SetUIDocumentAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
     [[nodiscard]] bool SetAnimatorSpeed(kb::scene::SceneEntity entity, float speed);
     [[nodiscard]] bool ToggleAnimatorEnabled(kb::scene::SceneEntity entity);
     [[nodiscard]] bool CycleAnimatorRootMotionOwner(kb::scene::SceneEntity entity);
     [[nodiscard]] bool RemoveAnimatorFromEntity(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool ToggleUIDocumentEnabled(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool RemoveUIDocumentFromEntity(kb::scene::SceneEntity entity);
     [[nodiscard]] bool BeginSelectedTransformEdit(std::string label);
     [[nodiscard]] bool ApplyActiveTransformEditPrimaryPosition(kb::scene::Vec3 position);
     [[nodiscard]] bool ApplyActiveTransformEditPrimaryRotation(kb::scene::Vec3 rotation);

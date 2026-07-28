@@ -419,6 +419,15 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
         Ensure(node.components.animator).rootMotionOwner = static_cast<AnimatorRootMotionOwner>(owner);
         return true;
     }
+    if (property.propertyPath == "uiDocument") {
+        return ApplyComponentPresence(property.value, node.components.uiDocument);
+    }
+    if (property.propertyPath == "uiDocument.documentAssetId") {
+        return ParseNumber(property.value, Ensure(node.components.uiDocument).documentAssetId);
+    }
+    if (property.propertyPath == "uiDocument.enabled") {
+        return ParseBool(property.value, Ensure(node.components.uiDocument).enabled);
+    }
     return false;
 }
 

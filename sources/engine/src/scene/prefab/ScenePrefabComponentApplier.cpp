@@ -45,6 +45,9 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.animator.has_value()) {
         sceneComponents.Animators().Set(entity, *components.animator);
     }
+    if (components.uiDocument.has_value()) {
+        sceneComponents.UIDocuments().Set(entity, *components.uiDocument);
+    }
 }
 
 } // namespace kb::scene

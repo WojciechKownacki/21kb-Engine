@@ -27,6 +27,7 @@ enum SceneNodeComponentBits : std::uint32_t {
     CharacterControllerBit = 1U << 10U,
     JointBit = 1U << 11U,
     AnimatorBit = 1U << 12U,
+    UIDocumentBit = 1U << 13U,
 };
 
 constexpr std::uint32_t KnownComponentBits = CameraBit |
@@ -41,7 +42,8 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     TagsBit |
     CharacterControllerBit |
     JointBit |
-    AnimatorBit;
+    AnimatorBit |
+    UIDocumentBit;
 
 [[nodiscard]] std::uint32_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint32_t componentBits = 0;
@@ -58,6 +60,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     componentBits |= components.characterController.has_value() ? CharacterControllerBit : 0U;
     componentBits |= components.joint.has_value() ? JointBit : 0U;
     componentBits |= components.animator.has_value() ? AnimatorBit : 0U;
+    componentBits |= components.uiDocument.has_value() ? UIDocumentBit : 0U;
     return componentBits;
 }
 
@@ -171,6 +174,12 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         }
         output.animator = animator;
     }
+    if ((componentBits & UIDocumentBit) != 0U) {
+        if (fileVersion < 7U) return false;
+        UIDocumentComponent uiDocument{};
+        if (!input.ReadUInt64(uiDocument.documentAssetId) || !input.ReadBool(uiDocument.enabled)) return false;
+        output.uiDocument = uiDocument;
+    }
     return true;
 }
 
@@ -217,6 +226,10 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteFloat(output, components.animator->speed);
         SceneAssetBinaryIO::WriteBool(output, components.animator->enabled);
         SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(components.animator->rootMotionOwner));
+    }
+    if (components.uiDocument.has_value()) {
+        SceneAssetBinaryIO::WriteUInt64(output, components.uiDocument->documentAssetId);
+        SceneAssetBinaryIO::WriteBool(output, components.uiDocument->enabled);
     }
 }
 

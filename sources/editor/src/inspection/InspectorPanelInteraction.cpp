@@ -997,6 +997,23 @@ template <typename Integer>
     return true;
 }
 
+[[nodiscard]] bool HandleUIDocumentClick(
+    EditorSceneContext& sceneContext,
+    kb::scene::SceneEntity entity,
+    const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::UIDocumentComponent* document = sceneContext.Scene().Components().UIDocuments().TryGet(entity);
+    if (document == nullptr) return false;
+    if (hit.property == InspectorPropertyId::UIDocumentEnabled) {
+        sceneContext.Inspector().EndTextEdit();
+        return sceneContext.ToggleUIDocumentEnabled(entity);
+    }
+    if (hit.property == InspectorPropertyId::UIDocumentAsset) {
+        sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(document->documentAssetId));
+        return true;
+    }
+    return true;
+}
+
 [[nodiscard]] bool ToggleAudioProperty(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property) {
     if (!sceneContext.BeginSceneEditTransaction("Edit Audio Component")) {
         return true;
@@ -1307,6 +1324,8 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                 static_cast<void>(RemoveCameraComponent(sceneContext, entity));
             } else if (hit.section == InspectorSectionId::Animator) {
                 static_cast<void>(sceneContext.RemoveAnimatorFromEntity(entity));
+            } else if (hit.section == InspectorSectionId::UIDocument) {
+                static_cast<void>(sceneContext.RemoveUIDocumentFromEntity(entity));
             } else if (const std::optional<PhysicsComponentKind> kind = PhysicsKindForSection(hit.section); kind.has_value()) {
                 static_cast<void>(sceneContext.RemovePhysicsComponent(entity, *kind));
             }
@@ -1365,6 +1384,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::Animator) {
         return HandleAnimatorClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::UIDocument) {
+        return HandleUIDocumentClick(sceneContext, entity, hit);
     }
     if (hit.section == InspectorSectionId::Light) {
         return HandleLightClick(sceneContext, entity, hit);
@@ -1613,6 +1635,17 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
             if (parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size()) {
                 static_cast<void>(sceneContext.SetAnimatorControllerAsset(entity, kb::assets::AssetId{ value }));
+            }
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            inspector.EditedProperty() == InspectorPropertyId::UIDocumentAsset) {
+            std::uint64_t value = 0U;
+            const std::string_view text = inspector.EditBuffer();
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+            if (parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size()) {
+                static_cast<void>(sceneContext.SetUIDocumentAsset(entity, kb::assets::AssetId{ value }));
             }
             inspector.EndTextEdit();
             return true;

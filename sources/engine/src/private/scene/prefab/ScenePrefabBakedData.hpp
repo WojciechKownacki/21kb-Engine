@@ -22,6 +22,7 @@ enum class ScenePrefabBakedComponentMask : std::uint16_t {
     CharacterController = 1U << 10U,
     Joint = 1U << 11U,
     Animator = 1U << 12U,
+    UIDocument = 1U << 13U,
 };
 
 [[nodiscard]] constexpr std::uint16_t ScenePrefabBakedMask(ScenePrefabBakedComponentMask mask) noexcept {
@@ -50,6 +51,7 @@ struct ScenePrefabBakedArchetype {
     std::vector<AudioSourceComponent> audioSources;
     std::vector<AudioListenerComponent> audioListeners;
     std::vector<Animator> animators;
+    std::vector<UIDocumentComponent> uiDocuments;
 };
 
 class ScenePrefabBakedData {

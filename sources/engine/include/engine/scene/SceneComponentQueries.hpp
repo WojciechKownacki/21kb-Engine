@@ -15,6 +15,7 @@
 #include "engine/scene/SceneRigidbodyComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
+#include "engine/scene/SceneUIDocuments.hpp"
 
 namespace kb::scene {
 
@@ -38,6 +39,7 @@ public:
     [[nodiscard]] SceneAudioSourceComponentQueries AudioSources() const noexcept;
     [[nodiscard]] SceneAudioListenerComponentQueries AudioListeners() const noexcept;
     [[nodiscard]] SceneAnimatorComponentQueries Animators() const noexcept;
+    [[nodiscard]] SceneUIDocumentComponentQueries UIDocuments() const noexcept;
     [[nodiscard]] SceneComponentVisitors Visitors() const noexcept;
 
 private:

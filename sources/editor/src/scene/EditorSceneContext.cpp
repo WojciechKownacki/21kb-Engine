@@ -36,6 +36,7 @@
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneInputActivation.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/UIAssetIO.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
@@ -7946,6 +7947,16 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
             return true;
         });
     }
+    if (componentId == "UIDocument") {
+        if (scene_->Components().UIDocuments().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a UI Document component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add UI Document Component", [this, entity]() {
+            scene_->Components().UIDocuments().Set(entity, kb::scene::UIDocumentComponent{});
+            return true;
+        });
+    }
     if (componentId == "Rigidbody") {
         if (scene_->Components().Rigidbodies().Has(entity)) {
             console_.Warning("Inspector", "Entity already has a Rigidbody component.");
@@ -8059,6 +8070,22 @@ bool EditorSceneContext::SetAnimatorControllerAsset(kb::scene::SceneEntity entit
     });
 }
 
+bool EditorSceneContext::SetUIDocumentAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
+    if (!entity.IsValid() || metadata == nullptr || metadata->type != kb::scene::kUIDocumentAssetType ||
+        !scene_->Components().UIDocuments().Has(entity)) {
+        console_.Warning("UI", "Only UI Document assets can be assigned to a UI Document component.");
+        return false;
+    }
+    return ExecuteSceneCommand("Assign UI Document", [this, entity, assetId]() {
+        kb::scene::UIDocumentComponent* document = scene_->Components().UIDocuments().TryGet(entity);
+        if (document == nullptr) return false;
+        document->documentAssetId = assetId.value;
+        scene_->Components().UIDocuments().MarkModified(entity);
+        return true;
+    });
+}
+
 bool EditorSceneContext::SetAnimatorSpeed(kb::scene::SceneEntity entity, float speed) {
     if (!std::isfinite(speed) || speed < 0.0F) return false;
     return ExecuteSceneCommand("Edit Animator Speed", [this, entity, speed]() {
@@ -8137,6 +8164,24 @@ bool EditorSceneContext::RemoveAnimatorFromEntity(kb::scene::SceneEntity entity)
     if (!scene_->Components().Animators().Has(entity)) return false;
     return ExecuteSceneCommand("Remove Animator", [this, entity]() {
         scene_->Components().Animators().Remove(entity);
+        return true;
+    });
+}
+
+bool EditorSceneContext::ToggleUIDocumentEnabled(kb::scene::SceneEntity entity) {
+    return ExecuteSceneCommand("Toggle UI Document Enabled", [this, entity]() {
+        kb::scene::UIDocumentComponent* document = scene_->Components().UIDocuments().TryGet(entity);
+        if (document == nullptr) return false;
+        document->enabled = !document->enabled;
+        scene_->Components().UIDocuments().MarkModified(entity);
+        return true;
+    });
+}
+
+bool EditorSceneContext::RemoveUIDocumentFromEntity(kb::scene::SceneEntity entity) {
+    if (!scene_->Components().UIDocuments().Has(entity)) return false;
+    return ExecuteSceneCommand("Remove UI Document", [this, entity]() {
+        scene_->Components().UIDocuments().Remove(entity);
         return true;
     });
 }

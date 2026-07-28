@@ -179,6 +179,11 @@ constexpr std::array<InspectorRowDefinition, 4> kAnimatorRows{ {
     { InspectorPropertyId::AnimatorRootMotionOwner, InspectorRowValueKind::Text },
 } };
 
+constexpr std::array<InspectorRowDefinition, 2> kUIDocumentRows{ {
+    { InspectorPropertyId::UIDocumentAsset, InspectorRowValueKind::Text },
+    { InspectorPropertyId::UIDocumentEnabled, InspectorRowValueKind::Bool },
+} };
+
 [[nodiscard]] COLORREF Color(EditorColor color) {
     return GdiDrawing::ToColorRef(color);
 }
@@ -1439,6 +1444,21 @@ void PaintAnimatorSection(
     y = section.Bottom() + kSectionGap;
 }
 
+void PaintUIDocumentSection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const EditorSceneContext& sceneContext,
+    const kb::scene::UIDocumentComponent& document) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
+        InspectorSectionId::UIDocument, HeroIconKind::DocumentText, "UI Document");
+    section.Field("Document", AssetDisplayName(sceneContext, document.documentAssetId), InspectorPropertyId::UIDocumentAsset);
+    section.Bool("Enabled", document.enabled, InspectorPropertyId::UIDocumentEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
 constexpr int kCameraSectionRows = 8;
 
 void PaintCameraSection(
@@ -1820,6 +1840,14 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             y += h + kSectionGap;
         }
     }
+    if (const kb::scene::UIDocumentComponent* document = scene.Components().UIDocuments().TryGet(selected); document != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::UIDocument, 2);
+        if (sectionVisible(y, h)) {
+            PaintUIDocumentSection(dc, content, y, theme, inspector, sceneContext, *document);
+        } else {
+            y += h + kSectionGap;
+        }
+    }
     if (const kb::scene::RigidbodyComponent* rigidbody = scene.Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
         const int h = SectionHeight(inspector, InspectorSectionId::Rigidbody, static_cast<int>(InspectorPhysicsModel::Fields(*rigidbody).size()));
         if (sectionVisible(y, h)) {
@@ -1972,6 +2000,9 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     }
     if (scene.Components().Animators().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::Animator, 4) + kSectionGap;
+    }
+    if (scene.Components().UIDocuments().TryGet(selected) != nullptr) {
+        height += SectionHeight(inspector, InspectorSectionId::UIDocument, 2) + kSectionGap;
     }
     if (const kb::scene::RigidbodyComponent* rigidbody = scene.Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::Rigidbody, static_cast<int>(InspectorPhysicsModel::Fields(*rigidbody).size())) + kSectionGap;
@@ -3020,6 +3051,18 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         }
         if (!state.IsCollapsed(InspectorSectionId::Animator)) {
             if (InspectorPanelRenderer::Hit hit = HitRows(viewport, y, InspectorSectionId::Animator, kAnimatorRows, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+        }
+        y += kSectionGap;
+    }
+
+    if (sceneContext.Scene().Components().UIDocuments().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::UIDocument, x, scrolledY); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::UIDocument)) {
+            if (InspectorPanelRenderer::Hit hit = HitRows(viewport, y, InspectorSectionId::UIDocument, kUIDocumentRows, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
         }

@@ -15,6 +15,7 @@
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
+#include "engine/scene/UIAssets.hpp"
 
 namespace kb::scene {
 
@@ -64,6 +65,8 @@ public:
     [[nodiscard]] static const AudioListenerComponent* TryGetAudioListener(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasAnimator(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const Animator* TryGetAnimator(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasUIDocument(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const UIDocumentComponent* TryGetUIDocument(const Scene& scene, SceneEntity entity) noexcept;
 };
 
 } // namespace kb::scene

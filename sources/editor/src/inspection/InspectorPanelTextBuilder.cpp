@@ -186,6 +186,10 @@ std::optional<std::string> InspectorPanelTextBuilder::Build(const EditorSceneCon
             "\nSpeed: " + std::to_string(animator->speed) +
             "\nEnabled: " + std::string{ animator->enabled ? "true" : "false" };
     }
+    if (const kb::scene::UIDocumentComponent* document = sceneContext.Scene().Components().UIDocuments().TryGet(selected); document != nullptr) {
+        text += "\n\nUI Document\nDocument: " + std::to_string(document->documentAssetId) +
+            "\nEnabled: " + std::string{ document->enabled ? "true" : "false" };
+    }
 
     if (const kb::scene::RigidbodyComponent* rigidbody = sceneContext.Scene().Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
         InspectorRigidbodyTextBuilder{}.Append(text, *rigidbody);
