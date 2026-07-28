@@ -9,6 +9,7 @@ namespace kb::scene {
 
 using UIElementId = std::uint64_t;
 inline constexpr std::size_t kMaxUIListItems = 4096U;
+inline constexpr std::size_t kMaxUIEventTextBytes = 4096U;
 
 // UI documents are retained assets.  The scene component only names a document;
 // the derived runtime tree is owned by SceneState and is never serialized beside it.
@@ -65,6 +66,40 @@ struct UIControlState {
     std::vector<std::string> listItems;
     float scrollOffset = 0.0F;
     bool modalOpen = false;
+};
+
+// LIB-176: input routing (LIB-180) produces these data-only records.  The
+// scene owns their FIFO queue; ScriptRuntimeSceneSystem is the sole consumer
+// that translates them into ScriptEventBus events, so controls never retain
+// callbacks or script state.
+enum class UIRuntimeEventKind : std::uint8_t {
+    Click,
+    Pointer,
+    Submit,
+    Changed,
+    Focus,
+    Navigation,
+};
+
+enum class UINavigationDirection : std::uint8_t {
+    None,
+    Next,
+    Previous,
+    Up,
+    Down,
+    Left,
+    Right,
+};
+
+struct UIRuntimeEvent {
+    UIRuntimeEventKind kind = UIRuntimeEventKind::Click;
+    UIElementId elementId = 0U;
+    float pointerX = 0.0F;
+    float pointerY = 0.0F;
+    float value = 0.0F;
+    std::string text;
+    bool focused = false;
+    UINavigationDirection navigation = UINavigationDirection::None;
 };
 
 struct UIDocumentElement {

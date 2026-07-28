@@ -33,6 +33,20 @@ using kb::script::ScriptValueType;
     };
 }
 
+[[nodiscard]] std::vector<LibraryEventArgumentDesc> UIElementArguments() {
+    return {
+        ScriptFunctionPin{ "owner", ScriptValueType::Entity, true },
+        ScriptFunctionPin{ "element", ScriptValueType::Hash, true },
+    };
+}
+
+[[nodiscard]] std::vector<LibraryEventArgumentDesc> UIPointerArguments() {
+    std::vector<LibraryEventArgumentDesc> arguments = UIElementArguments();
+    arguments.push_back(ScriptFunctionPin{ "x", ScriptValueType::Float, true });
+    arguments.push_back(ScriptFunctionPin{ "y", ScriptValueType::Float, true });
+    return arguments;
+}
+
 } // namespace
 
 const std::vector<LibraryEventDesc>& EngineLibraryEventRegistry::Catalog() {
@@ -165,6 +179,56 @@ const std::vector<LibraryEventDesc>& EngineLibraryEventRegistry::Catalog() {
                 ScriptFunctionPin{ "asset", ScriptValueType::Hash, true },
                 ScriptFunctionPin{ "marker", ScriptValueType::Hash, true },
                 ScriptFunctionPin{ "time", ScriptValueType::Float, true },
+            },
+        },
+        // LIB-176: UI interactions are engine-emitted ScriptEventBus events.
+        // `owner` is the UIDocument component entity; it is also the event
+        // sender/target, while callback lifetime remains Events.Subscribe's
+        // explicit owner and unsubscribe contract.
+        LibraryEventDesc{
+            .name = "UI.Click",
+            .id = kb::script::ComputeEventId("UI.Click"),
+            .arguments = UIPointerArguments(),
+        },
+        LibraryEventDesc{
+            .name = "UI.Pointer",
+            .id = kb::script::ComputeEventId("UI.Pointer"),
+            .arguments = UIPointerArguments(),
+        },
+        LibraryEventDesc{
+            .name = "UI.Submit",
+            .id = kb::script::ComputeEventId("UI.Submit"),
+            .arguments = {
+                ScriptFunctionPin{ "owner", ScriptValueType::Entity, true },
+                ScriptFunctionPin{ "element", ScriptValueType::Hash, true },
+                ScriptFunctionPin{ "text", ScriptValueType::String, true },
+            },
+        },
+        LibraryEventDesc{
+            .name = "UI.Changed",
+            .id = kb::script::ComputeEventId("UI.Changed"),
+            .arguments = {
+                ScriptFunctionPin{ "owner", ScriptValueType::Entity, true },
+                ScriptFunctionPin{ "element", ScriptValueType::Hash, true },
+                ScriptFunctionPin{ "value", ScriptValueType::Float, true },
+            },
+        },
+        LibraryEventDesc{
+            .name = "UI.Focus",
+            .id = kb::script::ComputeEventId("UI.Focus"),
+            .arguments = {
+                ScriptFunctionPin{ "owner", ScriptValueType::Entity, true },
+                ScriptFunctionPin{ "element", ScriptValueType::Hash, true },
+                ScriptFunctionPin{ "focused", ScriptValueType::Bool, true },
+            },
+        },
+        LibraryEventDesc{
+            .name = "UI.Navigation",
+            .id = kb::script::ComputeEventId("UI.Navigation"),
+            .arguments = {
+                ScriptFunctionPin{ "owner", ScriptValueType::Entity, true },
+                ScriptFunctionPin{ "element", ScriptValueType::Hash, true },
+                ScriptFunctionPin{ "direction", ScriptValueType::String, true },
             },
         },
     };

@@ -47,6 +47,16 @@ std::optional<kb::scene::UIControlKind> ControlKind(std::string_view value) {
     return std::nullopt;
 }
 
+std::optional<kb::scene::UINavigationDirection> NavigationDirection(std::string_view value) {
+    if (value == "Next") return kb::scene::UINavigationDirection::Next;
+    if (value == "Previous") return kb::scene::UINavigationDirection::Previous;
+    if (value == "Up") return kb::scene::UINavigationDirection::Up;
+    if (value == "Down") return kb::scene::UINavigationDirection::Down;
+    if (value == "Left") return kb::scene::UINavigationDirection::Left;
+    if (value == "Right") return kb::scene::UINavigationDirection::Right;
+    return std::nullopt;
+}
+
 std::optional<kb::scene::UIControlState> ExistingControl(const ScriptFunctionCallContext& context,
     std::span<const ScriptFunctionArgument> arguments, std::string& error) {
     if (context.scene == nullptr) {
@@ -183,6 +193,60 @@ ScriptFunctionCallResult SetModalOpen(const ScriptFunctionCallContext& context, 
     return QueueControl(context, arguments, std::move(*control), { kb::scene::UIControlKind::ModalDialog }, "UI.SetModalOpen requires a ModalDialog element");
 }
 
+ScriptFunctionCallResult QueueEvent(const ScriptFunctionCallContext& context,
+    std::span<const ScriptFunctionArgument> arguments, kb::scene::UIRuntimeEvent event) {
+    if (context.scene == nullptr) return Error("UI event API requires an active scene");
+    event.elementId = Arg(arguments, "element")->AsUInt64();
+    return Applied(context.scene->UIDocuments().QueueEvent(Target(context, arguments), event),
+        "UI event requires a visible live UI element and valid event data");
+}
+
+ScriptFunctionCallResult EmitClick(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return QueueEvent(context, arguments, kb::scene::UIRuntimeEvent{
+        .kind = kb::scene::UIRuntimeEventKind::Click,
+        .pointerX = Arg(arguments, "x")->AsFloat(),
+        .pointerY = Arg(arguments, "y")->AsFloat(),
+    });
+}
+
+ScriptFunctionCallResult EmitPointer(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return QueueEvent(context, arguments, kb::scene::UIRuntimeEvent{
+        .kind = kb::scene::UIRuntimeEventKind::Pointer,
+        .pointerX = Arg(arguments, "x")->AsFloat(),
+        .pointerY = Arg(arguments, "y")->AsFloat(),
+    });
+}
+
+ScriptFunctionCallResult EmitSubmit(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return QueueEvent(context, arguments, kb::scene::UIRuntimeEvent{
+        .kind = kb::scene::UIRuntimeEventKind::Submit,
+        .text = Arg(arguments, "text")->AsString(),
+    });
+}
+
+ScriptFunctionCallResult EmitChanged(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return QueueEvent(context, arguments, kb::scene::UIRuntimeEvent{
+        .kind = kb::scene::UIRuntimeEventKind::Changed,
+        .value = Arg(arguments, "value")->AsFloat(),
+    });
+}
+
+ScriptFunctionCallResult EmitFocus(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return QueueEvent(context, arguments, kb::scene::UIRuntimeEvent{
+        .kind = kb::scene::UIRuntimeEventKind::Focus,
+        .focused = Arg(arguments, "focused")->AsBool(),
+    });
+}
+
+ScriptFunctionCallResult EmitNavigation(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    const auto direction = NavigationDirection(Arg(arguments, "direction")->AsString());
+    if (!direction.has_value()) return Error("UI.EmitNavigation direction must be Next, Previous, Up, Down, Left, or Right");
+    return QueueEvent(context, arguments, kb::scene::UIRuntimeEvent{
+        .kind = kb::scene::UIRuntimeEventKind::Navigation,
+        .navigation = *direction,
+    });
+}
+
 bool RegisterFunction(ScriptRuntimeHost& host, std::string name, std::vector<ScriptFunctionPin> inputs,
     std::vector<ScriptFunctionPin> outputs, ScriptFunctionCallback callback) {
     ScriptFunctionDesc function{};
@@ -227,7 +291,13 @@ bool ScriptUIApi::Register(ScriptRuntimeHost& host) {
         RegisterFunction(host, "UI.ListAppend", Targeted({ { "element", ScriptValueType::Hash, true }, { "item", ScriptValueType::String, true } }), applied, &ListAppend) &&
         RegisterFunction(host, "UI.ListClear", Targeted({ { "element", ScriptValueType::Hash, true } }), applied, &ListClear) &&
         RegisterFunction(host, "UI.SetScrollOffset", Targeted({ { "element", ScriptValueType::Hash, true }, { "offset", ScriptValueType::Float, true } }), applied, &SetScrollOffset) &&
-        RegisterFunction(host, "UI.SetModalOpen", Targeted({ { "element", ScriptValueType::Hash, true }, { "open", ScriptValueType::Bool, true } }), applied, &SetModalOpen);
+        RegisterFunction(host, "UI.SetModalOpen", Targeted({ { "element", ScriptValueType::Hash, true }, { "open", ScriptValueType::Bool, true } }), applied, &SetModalOpen) &&
+        RegisterFunction(host, "UI.EmitClick", Targeted({ { "element", ScriptValueType::Hash, true }, { "x", ScriptValueType::Float, true }, { "y", ScriptValueType::Float, true } }), applied, &EmitClick) &&
+        RegisterFunction(host, "UI.EmitPointer", Targeted({ { "element", ScriptValueType::Hash, true }, { "x", ScriptValueType::Float, true }, { "y", ScriptValueType::Float, true } }), applied, &EmitPointer) &&
+        RegisterFunction(host, "UI.EmitSubmit", Targeted({ { "element", ScriptValueType::Hash, true }, { "text", ScriptValueType::String, true } }), applied, &EmitSubmit) &&
+        RegisterFunction(host, "UI.EmitChanged", Targeted({ { "element", ScriptValueType::Hash, true }, { "value", ScriptValueType::Float, true } }), applied, &EmitChanged) &&
+        RegisterFunction(host, "UI.EmitFocus", Targeted({ { "element", ScriptValueType::Hash, true }, { "focused", ScriptValueType::Bool, true } }), applied, &EmitFocus) &&
+        RegisterFunction(host, "UI.EmitNavigation", Targeted({ { "element", ScriptValueType::Hash, true }, { "direction", ScriptValueType::String, true } }), applied, &EmitNavigation);
 }
 
 } // namespace kb::script

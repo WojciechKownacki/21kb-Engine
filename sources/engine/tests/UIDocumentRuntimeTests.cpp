@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 namespace kb::tests {
 
@@ -99,6 +100,7 @@ void RunUIDocumentRuntimeTests() {
     luaFile << R"(
 local phase = 0
 local element = 0
+local clickSubscription = 0
 
 function Tick(self, dt)
     if phase == 0 then
@@ -109,6 +111,18 @@ function Tick(self, dt)
         UI.Destroy(element)
         UI.Show(2)
         phase = 2
+    elseif phase == 2 then
+        clickSubscription = Events.Subscribe("UI.Click", function(event)
+            SetShared("uiClickElement", event.args.element)
+            SetShared("uiClickX", event.args.x)
+            UI.SetText(2, "Clicked")
+        end)
+        UI.EmitClick(2, 12.5, -4.0)
+        phase = 3
+    elseif phase == 3 then
+        SetShared("uiClickUnsubscribed", Events.Unsubscribe(clickSubscription))
+        UI.EmitClick(2, 0.0, 0.0)
+        phase = 4
     end
 end
 )";
@@ -123,7 +137,8 @@ end
     });
     kb::script::ScriptRuntimeHost scriptHost{ scene };
     Require(scriptHost.Succeeded() && scriptHost.InstallSceneSystem(), "UI script runtime host could not install the UI library module");
-    for (const char* const function : { "UI.SetText", "UI.SetImage", "UI.SetToggle", "UI.SetSlider", "UI.ListAppend", "UI.ListClear", "UI.SetScrollOffset", "UI.SetModalOpen" }) {
+    for (const char* const function : { "UI.SetText", "UI.SetImage", "UI.SetToggle", "UI.SetSlider", "UI.ListAppend", "UI.ListClear", "UI.SetScrollOffset", "UI.SetModalOpen",
+             "UI.EmitClick", "UI.EmitPointer", "UI.EmitSubmit", "UI.EmitChanged", "UI.EmitFocus", "UI.EmitNavigation" }) {
         Require(scriptHost.Functions().FindSignature(function) != nullptr,
             "UI control script API was not registered in the production runtime host");
     }
@@ -136,6 +151,17 @@ end
     static_cast<void>(scene.Runtime().Update(0.0F));
     Require(scene.UIDocuments().ElementCount(owner.Entity()) == 2U && scene.UIDocuments().Visible(owner.Entity(), 2U),
         "Lua UI.Destroy/UI.Show did not reach the queued scene runtime tree");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(scene.UIDocuments().Control(owner.Entity(), 2U)->text == "Clicked",
+        "Lua Events.Subscribe did not receive the queued UI.Click callback");
+    Require(scriptHost.SharedState().Get("uiClickElement").value_or(kb::script::ScriptValue{ 0 }).AsInt() == 2,
+        "Lua UI.Click did not preserve the UI element argument");
+    Require(scriptHost.SharedState().Get("uiClickX").value_or(kb::script::ScriptValue{ 0.0F }).AsFloat() == 12.5F,
+        "Lua UI.Click did not preserve the pointer coordinate");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(scriptHost.SharedState().Get("uiClickUnsubscribed").value_or(kb::script::ScriptValue{ false }).AsBool() &&
+            scene.UIDocuments().Control(owner.Entity(), 2U)->text == "Clicked",
+        "Lua Events.Unsubscribe did not prevent a later UI.Click callback");
 
     const std::array<kb::scene::UIControlState, 9U> controls{
         kb::scene::UIControlState{ .kind = kb::scene::UIControlKind::Text, .text = "Score: 42" },
@@ -179,6 +205,61 @@ end
     static_cast<void>(scene.Runtime().Update(0.0F));
     Require(scene.UIDocuments().Control(owner.Entity(), controlElements[0U])->text == "Score: 43",
         "UI control mutation command did not update the canonical runtime tree");
+
+    const std::array<kb::scene::UIRuntimeEvent, 6U> events{
+        kb::scene::UIRuntimeEvent{ .kind = kb::scene::UIRuntimeEventKind::Click, .elementId = 2U, .pointerX = 1.0F, .pointerY = 2.0F },
+        kb::scene::UIRuntimeEvent{ .kind = kb::scene::UIRuntimeEventKind::Pointer, .elementId = 2U, .pointerX = 3.0F, .pointerY = 4.0F },
+        kb::scene::UIRuntimeEvent{ .kind = kb::scene::UIRuntimeEventKind::Submit, .elementId = 2U, .text = "Ready" },
+        kb::scene::UIRuntimeEvent{ .kind = kb::scene::UIRuntimeEventKind::Changed, .elementId = 2U, .value = 0.75F },
+        kb::scene::UIRuntimeEvent{ .kind = kb::scene::UIRuntimeEventKind::Focus, .elementId = 2U, .focused = true },
+        kb::scene::UIRuntimeEvent{ .kind = kb::scene::UIRuntimeEventKind::Navigation, .elementId = 2U, .navigation = kb::scene::UINavigationDirection::Next },
+    };
+    const std::array<const char*, events.size()> eventNames{ "UI.Click", "UI.Pointer", "UI.Submit", "UI.Changed", "UI.Focus", "UI.Navigation" };
+    std::array<std::size_t, events.size()> deliveries{};
+    std::array<bool, events.size()> payloadsValid{};
+    std::vector<kb::script::EventSubscriptionHandle> subscriptions;
+    subscriptions.reserve(events.size());
+    for (std::size_t index = 0U; index < events.size(); ++index) {
+        subscriptions.push_back(scriptHost.Runtime().Events().Subscribe(eventNames[index], [&, index](const kb::script::ScriptEvent& event) {
+            ++deliveries[index];
+            payloadsValid[index] = event.sender == owner.Entity() && event.target == owner.Entity() &&
+                event.arguments.size() >= 3U && event.arguments[0U].name == "owner" &&
+                event.arguments[0U].value.AsUInt64() == owner.Entity().Id() && event.arguments[1U].name == "element" &&
+                event.arguments[1U].value.AsUInt64() == 2U;
+        }, owner.Entity()));
+        Require(subscriptions.back() != kb::script::kInvalidEventSubscriptionHandle,
+            "UI event subscription was rejected by ScriptEventBus");
+        Require(scene.UIDocuments().QueueEvent(owner.Entity(), events[index]),
+            "A valid typed UI interaction was rejected by the scene event queue");
+    }
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    for (std::size_t index = 0U; index < events.size(); ++index) {
+        Require(deliveries[index] == 1U && payloadsValid[index],
+            "A typed UI event was not delivered exactly once through ScriptEventBus with its document owner");
+        Require(scriptHost.Runtime().Events().Unsubscribe(subscriptions[index]),
+            "A UI event listener could not be explicitly unsubscribed");
+    }
+    Require(scene.UIDocuments().QueueEvent(owner.Entity(), events[0U]), "UI event setup for explicit unsubscribe verification was rejected");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(deliveries[0U] == 1U, "An explicitly unsubscribed UI listener received a later event");
+    const kb::scene::SceneObject deactivatedListener = scene.Entities().CreateObject({ .name = "Deactivated UI Listener" });
+    std::size_t deactivatedDeliveries = 0U;
+    const kb::script::EventSubscriptionHandle deactivatedHandle = scriptHost.Runtime().Events().Subscribe("UI.Click",
+        [&deactivatedDeliveries](const kb::script::ScriptEvent&) { ++deactivatedDeliveries; }, deactivatedListener.Entity());
+    scene.Entities().SetActive(deactivatedListener.Entity(), false);
+    Require(deactivatedHandle != kb::script::kInvalidEventSubscriptionHandle &&
+            scene.UIDocuments().QueueEvent(owner.Entity(), events[0U]),
+        "UI event owner-lifetime setup was rejected");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(deactivatedDeliveries == 0U && !scriptHost.Runtime().Events().Unsubscribe(deactivatedHandle),
+        "A deactivated UI event subscription owner was not automatically released");
+    scene.Entities().Destroy(deactivatedListener.Entity());
+
+    kb::scene::UIControlState restoredText = *scene.UIDocuments().Control(owner.Entity(), 2U);
+    restoredText.text = "Score: 0";
+    Require(scene.UIDocuments().QueueSetControl(owner.Entity(), 2U, restoredText),
+        "UI text restore before scene serialization was rejected");
+    static_cast<void>(scene.Runtime().Update(0.0F));
 
     const std::filesystem::path scenePath = root / "UIDocument.21kbscene";
     Require(kb::scene::SceneDocumentService::Save(scene, scenePath, "UIDocument"),

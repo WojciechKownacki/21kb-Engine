@@ -19,6 +19,7 @@
 #include "engine/scene/SceneSystemContext.hpp"
 #include "engine/scene/SceneTasks.hpp"
 #include "engine/scene/SceneTimers.hpp"
+#include "engine/scene/SceneUIDocuments.hpp"
 
 #include <algorithm>
 #include <unordered_set>
@@ -55,6 +56,31 @@ void CollectBehaviour(kb::scene::SceneEntity entity, const kb::scene::BehaviourC
         .entity = entity,
         .behaviour = behaviour,
     });
+}
+
+[[nodiscard]] const char* UIEventName(kb::scene::UIRuntimeEventKind kind) noexcept {
+    switch (kind) {
+    case kb::scene::UIRuntimeEventKind::Click: return "UI.Click";
+    case kb::scene::UIRuntimeEventKind::Pointer: return "UI.Pointer";
+    case kb::scene::UIRuntimeEventKind::Submit: return "UI.Submit";
+    case kb::scene::UIRuntimeEventKind::Changed: return "UI.Changed";
+    case kb::scene::UIRuntimeEventKind::Focus: return "UI.Focus";
+    case kb::scene::UIRuntimeEventKind::Navigation: return "UI.Navigation";
+    }
+    return "";
+}
+
+[[nodiscard]] const char* UINavigationDirectionName(kb::scene::UINavigationDirection direction) noexcept {
+    switch (direction) {
+    case kb::scene::UINavigationDirection::Next: return "Next";
+    case kb::scene::UINavigationDirection::Previous: return "Previous";
+    case kb::scene::UINavigationDirection::Up: return "Up";
+    case kb::scene::UINavigationDirection::Down: return "Down";
+    case kb::scene::UINavigationDirection::Left: return "Left";
+    case kb::scene::UINavigationDirection::Right: return "Right";
+    case kb::scene::UINavigationDirection::None: return "";
+    }
+    return "";
 }
 
 } // namespace
@@ -120,6 +146,7 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     DispatchPendingPrefabInstantiatedEvents(scene, clampedDeltaSeconds);
     DispatchPendingAnimationEvents(scene, clampedDeltaSeconds);
     DispatchPendingTimelineMarkerEvents(scene, clampedDeltaSeconds);
+    DispatchPendingUIEvents(scene);
     DispatchDeferredEvents(scene);
     SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
     // LIB-094: explicit FixedTick-during-pause rule — while the scene is
@@ -172,6 +199,7 @@ void ScriptRuntimeSceneSystem::BeginFrame(kb::scene::Scene& scene, float deltaSe
     DispatchPendingPrefabInstantiatedEvents(scene, clampedDeltaSeconds);
     DispatchPendingAnimationEvents(scene, clampedDeltaSeconds);
     DispatchPendingTimelineMarkerEvents(scene, clampedDeltaSeconds);
+    DispatchPendingUIEvents(scene);
     DispatchDeferredEvents(scene);
     SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
 }
@@ -473,6 +501,46 @@ void ScriptRuntimeSceneSystem::DispatchDeferredEvents(kb::scene::Scene& scene) {
         lastResult_.diagnostics.push_back(ScriptDiagnostic{
             .message = error,
         });
+    }
+}
+
+void ScriptRuntimeSceneSystem::DispatchPendingUIEvents(kb::scene::Scene& scene) {
+    // LIB-176: concrete input hit-testing/routing is intentionally owned by
+    // LIB-180. This is the finished, shared delivery boundary: every producer
+    // appends a typed UI event to SceneUIDocuments, and this system alone
+    // dispatches it through ScriptEventBus with the UIDocument entity as both
+    // sender and target. Subscription owner lifetime and explicit unsubscribe
+    // stay canonical in Events.Subscribe/Events.Unsubscribe.
+    for (kb::scene::UIRuntimeEventRecord& pending : scene.UIDocuments().DrainEvents()) {
+        ScriptEvent event;
+        event.name = UIEventName(pending.event.kind);
+        event.sender = pending.owner;
+        event.target = pending.owner;
+        event.arguments.push_back({ "owner", ScriptValue{ pending.owner.Id(), ScriptValueType::Entity } });
+        event.arguments.push_back({ "element", ScriptValue{ pending.event.elementId, ScriptValueType::Hash } });
+        switch (pending.event.kind) {
+        case kb::scene::UIRuntimeEventKind::Click:
+        case kb::scene::UIRuntimeEventKind::Pointer:
+            event.arguments.push_back({ "x", ScriptValue{ pending.event.pointerX } });
+            event.arguments.push_back({ "y", ScriptValue{ pending.event.pointerY } });
+            break;
+        case kb::scene::UIRuntimeEventKind::Submit:
+            event.arguments.push_back({ "text", ScriptValue{ std::move(pending.event.text) } });
+            break;
+        case kb::scene::UIRuntimeEventKind::Changed:
+            event.arguments.push_back({ "value", ScriptValue{ pending.event.value } });
+            break;
+        case kb::scene::UIRuntimeEventKind::Focus:
+            event.arguments.push_back({ "focused", ScriptValue{ pending.event.focused } });
+            break;
+        case kb::scene::UIRuntimeEventKind::Navigation:
+            event.arguments.push_back({ "direction", ScriptValue{ std::string{ UINavigationDirectionName(pending.event.navigation) } } });
+            break;
+        }
+        const ScriptEventDeliveryResult delivery = runtime_.Events().Emit(scene, event, pending.owner);
+        for (const std::string& error : delivery.errors) {
+            lastResult_.diagnostics.push_back(ScriptDiagnostic{ .message = error });
+        }
     }
 }
 
