@@ -11,8 +11,10 @@
 #include "engine/scene/UIAssetIO.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
+#include <array>
 #include <filesystem>
 #include <fstream>
+#include <string>
 
 namespace kb::tests {
 
@@ -38,7 +40,8 @@ void RunUIDocumentRuntimeTests() {
         .styleAssetId = styleAssetId.value,
         .elements = {
             { .id = 1U, .parentId = 0U, .name = "HUD", .styleClass = "hud", .visible = true },
-            { .id = 2U, .parentId = 1U, .name = "Score", .styleClass = "label", .visible = true },
+            { .id = 2U, .parentId = 1U, .name = "Score", .styleClass = "label", .visible = true,
+              .control = { .kind = kb::scene::UIControlKind::Text, .text = "Score: 0" } },
         },
         .bindings = {
             { .elementId = 2U, .property = "text", .sourcePath = "player.score",
@@ -99,7 +102,7 @@ local element = 0
 
 function Tick(self, dt)
     if phase == 0 then
-        element = UI.Create(1, "LuaPanel", { styleClass = "hud", visible = true })
+        element = UI.Create(1, "LuaPanel", { styleClass = "hud", visible = true, kind = "ModalDialog", text = "Pause", modal = true })
         UI.Hide(2)
         phase = 1
     elseif phase == 1 then
@@ -120,13 +123,62 @@ end
     });
     kb::script::ScriptRuntimeHost scriptHost{ scene };
     Require(scriptHost.Succeeded() && scriptHost.InstallSceneSystem(), "UI script runtime host could not install the UI library module");
+    for (const char* const function : { "UI.SetText", "UI.SetImage", "UI.SetToggle", "UI.SetSlider", "UI.ListAppend", "UI.ListClear", "UI.SetScrollOffset", "UI.SetModalOpen" }) {
+        Require(scriptHost.Functions().FindSignature(function) != nullptr,
+            "UI control script API was not registered in the production runtime host");
+    }
     static_cast<void>(scene.Runtime().Update(0.0F));
     static_cast<void>(scene.Runtime().Update(0.0F));
-    Require(scene.UIDocuments().ElementCount(owner.Entity()) == 3U && !scene.UIDocuments().Visible(owner.Entity(), 2U),
+    Require(scene.UIDocuments().ElementCount(owner.Entity()) == 3U && !scene.UIDocuments().Visible(owner.Entity(), 2U) &&
+            scene.UIDocuments().Control(owner.Entity(), 4U)->kind == kb::scene::UIControlKind::ModalDialog &&
+            scene.UIDocuments().Control(owner.Entity(), 4U)->modalOpen,
         "Lua UI.Create/UI.Hide did not reach the queued scene runtime tree");
     static_cast<void>(scene.Runtime().Update(0.0F));
     Require(scene.UIDocuments().ElementCount(owner.Entity()) == 2U && scene.UIDocuments().Visible(owner.Entity(), 2U),
         "Lua UI.Destroy/UI.Show did not reach the queued scene runtime tree");
+
+    const std::array<kb::scene::UIControlState, 9U> controls{
+        kb::scene::UIControlState{ .kind = kb::scene::UIControlKind::Text, .text = "Score: 42" },
+        kb::scene::UIControlState{ .kind = kb::scene::UIControlKind::Image, .imageAssetId = 17U },
+        kb::scene::UIControlState{ .kind = kb::scene::UIControlKind::Button, .text = "Continue" },
+        kb::scene::UIControlState{ .kind = kb::scene::UIControlKind::Toggle, .toggleValue = true },
+        kb::scene::UIControlState{ .kind = kb::scene::UIControlKind::Slider, .sliderValue = 5.0F, .sliderMinimum = 1.0F, .sliderMaximum = 10.0F },
+        kb::scene::UIControlState{ .kind = kb::scene::UIControlKind::List, .listItems = { "One", "Two" } },
+        kb::scene::UIControlState{ .kind = kb::scene::UIControlKind::InputField, .text = "Player" },
+        kb::scene::UIControlState{ .kind = kb::scene::UIControlKind::ScrollView, .scrollOffset = 3.0F },
+        kb::scene::UIControlState{ .kind = kb::scene::UIControlKind::ModalDialog, .modalOpen = true },
+    };
+    std::array<kb::scene::UIElementId, controls.size()> controlElements{};
+    for (std::size_t index = 0U; index < controls.size(); ++index) {
+        const auto created = scene.UIDocuments().QueueCreate(owner.Entity(), kb::scene::UIRuntimeElementDesc{
+            .parentId = 1U,
+            .name = "Control" + std::to_string(index),
+            .control = controls[index],
+        });
+        Require(created.has_value(), "Runtime UI control creation was rejected");
+        controlElements[index] = *created;
+    }
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    for (std::size_t index = 0U; index < controls.size(); ++index) {
+        const auto state = scene.UIDocuments().Control(owner.Entity(), controlElements[index]);
+        Require(state.has_value() && state->kind == controls[index].kind,
+            "Queued runtime UI control did not preserve its typed control state");
+    }
+    Require(scene.UIDocuments().Control(owner.Entity(), controlElements[0U])->text == "Score: 42" &&
+            scene.UIDocuments().Control(owner.Entity(), controlElements[1U])->imageAssetId == 17U &&
+            scene.UIDocuments().Control(owner.Entity(), controlElements[3U])->toggleValue &&
+            scene.UIDocuments().Control(owner.Entity(), controlElements[4U])->sliderValue == 5.0F &&
+            scene.UIDocuments().Control(owner.Entity(), controlElements[5U])->listItems.size() == 2U &&
+            scene.UIDocuments().Control(owner.Entity(), controlElements[7U])->scrollOffset == 3.0F &&
+            scene.UIDocuments().Control(owner.Entity(), controlElements[8U])->modalOpen,
+        "Runtime UI controls lost their type-specific values");
+    kb::scene::UIControlState changedText = *scene.UIDocuments().Control(owner.Entity(), controlElements[0U]);
+    changedText.text = "Score: 43";
+    Require(scene.UIDocuments().QueueSetControl(owner.Entity(), controlElements[0U], changedText),
+        "UI control mutation command was rejected");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(scene.UIDocuments().Control(owner.Entity(), controlElements[0U])->text == "Score: 43",
+        "UI control mutation command did not update the canonical runtime tree");
 
     const std::filesystem::path scenePath = root / "UIDocument.21kbscene";
     Require(kb::scene::SceneDocumentService::Save(scene, scenePath, "UIDocument"),
@@ -139,7 +191,9 @@ end
     const auto roots = loaded.Hierarchy().RootEntities();
     Require(roots.size() == 1U && loaded.Components().UIDocuments().TryGet(roots.front()) != nullptr &&
             loaded.UIDocuments().Exists(roots.front()) && loaded.UIDocuments().Root(roots.front()) == 1U &&
-            loaded.UIDocuments().StyleIsResolved(roots.front()),
+            loaded.UIDocuments().StyleIsResolved(roots.front()) &&
+            loaded.UIDocuments().Control(roots.front(), 2U)->kind == kb::scene::UIControlKind::Text &&
+            loaded.UIDocuments().Control(roots.front(), 2U)->text == "Score: 0",
         "Project -> scene reload -> UIDocument component -> UI runtime lost its canonical document tree");
     std::filesystem::remove_all(root);
 }

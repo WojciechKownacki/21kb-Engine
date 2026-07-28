@@ -24,6 +24,7 @@ std::uint64_t SceneUIDocumentQueries::Asset(SceneEntity entity) const noexcept {
 UIElementId SceneUIDocumentQueries::Root(SceneEntity entity) const noexcept { return SceneUIDocumentService::Root(scene_, entity); }
 bool SceneUIDocumentQueries::HasElement(SceneEntity entity, UIElementId element) const noexcept { return SceneUIDocumentService::HasElement(scene_, entity, element); }
 bool SceneUIDocumentQueries::Visible(SceneEntity entity, UIElementId element) const noexcept { return SceneUIDocumentService::Visible(scene_, entity, element); }
+std::optional<UIControlState> SceneUIDocumentQueries::Control(SceneEntity entity, UIElementId element) const { return SceneUIDocumentService::Control(scene_, entity, element); }
 bool SceneUIDocumentQueries::StyleIsResolved(SceneEntity entity) const noexcept { return SceneUIDocumentService::StyleIsResolved(scene_, entity); }
 std::size_t SceneUIDocumentQueries::ElementCount(SceneEntity entity) const noexcept { return SceneUIDocumentService::ElementCount(scene_, entity); }
 
@@ -33,11 +34,13 @@ std::uint64_t SceneUIDocuments::Asset(SceneEntity entity) const noexcept { retur
 UIElementId SceneUIDocuments::Root(SceneEntity entity) const noexcept { return SceneUIDocumentService::Root(scene_, entity); }
 bool SceneUIDocuments::HasElement(SceneEntity entity, UIElementId element) const noexcept { return SceneUIDocumentService::HasElement(scene_, entity, element); }
 bool SceneUIDocuments::Visible(SceneEntity entity, UIElementId element) const noexcept { return SceneUIDocumentService::Visible(scene_, entity, element); }
+std::optional<UIControlState> SceneUIDocuments::Control(SceneEntity entity, UIElementId element) const { return SceneUIDocumentService::Control(scene_, entity, element); }
 bool SceneUIDocuments::StyleIsResolved(SceneEntity entity) const noexcept { return SceneUIDocumentService::StyleIsResolved(scene_, entity); }
 std::size_t SceneUIDocuments::ElementCount(SceneEntity entity) const noexcept { return SceneUIDocumentService::ElementCount(scene_, entity); }
 std::optional<UIElementId> SceneUIDocuments::QueueCreate(SceneEntity entity, const UIRuntimeElementDesc& desc) { return SceneUIDocumentService::QueueCreate(scene_, entity, desc); }
 bool SceneUIDocuments::QueueDestroy(SceneEntity entity, UIElementId element) noexcept { return SceneUIDocumentService::QueueDestroy(scene_, entity, element); }
 bool SceneUIDocuments::QueueShow(SceneEntity entity, UIElementId element) noexcept { return SceneUIDocumentService::QueueVisibility(scene_, entity, element, true); }
 bool SceneUIDocuments::QueueHide(SceneEntity entity, UIElementId element) noexcept { return SceneUIDocumentService::QueueVisibility(scene_, entity, element, false); }
+bool SceneUIDocuments::QueueSetControl(SceneEntity entity, UIElementId element, const UIControlState& control) { return SceneUIDocumentService::QueueSetControl(scene_, entity, element, control); }
 
 } // namespace kb::scene
