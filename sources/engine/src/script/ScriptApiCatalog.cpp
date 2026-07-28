@@ -37,7 +37,7 @@ struct LuaBindingSpec {
 // wrapper's return shape must stay true to the callable sandbox. When a table, field, or return
 // path changes there, update this list so generated stubs stay true to what
 // scripts can actually call.
-constexpr std::array<LuaBindingSpec, 145> kLuaBindings{ {
+constexpr std::array<LuaBindingSpec, 154> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "Audio", "SetMixer", "Audio.SetMixer", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "Audio", "ActiveMixer", "Audio.ActiveMixer", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -170,6 +170,15 @@ constexpr std::array<LuaBindingSpec, 145> kLuaBindings{ {
     { "Input", "BindHapticsUser", "Input.BindHapticsUser", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "SetUserVibration", "Input.SetUserVibration", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Input", "StopVibration", "Input.StopVibration", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Timeline", "Create", "Timeline.Create", ScriptApiCatalogLuaReturnKind::SingleOutput, "instance" },
+    { "Timeline", "Release", "Timeline.Release", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Timeline", "Play", "Timeline.Play", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Timeline", "Pause", "Timeline.Pause", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Timeline", "Seek", "Timeline.Seek", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Timeline", "Skip", "Timeline.Skip", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Timeline", "Bind", "Timeline.Bind", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Timeline", "IsPlaying", "Timeline.IsPlaying", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "Timeline", "Time", "Timeline.Time", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Pointer", "Position", "Pointer.Position", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Delta", "Pointer.Delta", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Button", "Pointer.Button", ScriptApiCatalogLuaReturnKind::Default, "" },

@@ -29,13 +29,17 @@ ignored by Git.
 
 ## Operations
 
-Paths accepted by `write_file`, `save_scene`, and `open_scene` are relative to
-the isolated project and cannot escape it. Entity and asset `id` values are
+Paths accepted by `write_file`, `write_pcm_wave`, `save_scene`, and
+`open_scene` are relative to the isolated project and cannot escape it.
+`write_file` expands `{{PROJECT_ROOT}}` and `{{ARTIFACT_ROOT}}` in its content
+to forward-slash absolute paths, allowing authored scripts to persist their
+own output inside the task folder. Entity and asset `id` values are
 scenario-local aliases.
 
 | Operation | Required fields |
 | --- | --- |
 | `write_file` | `path`, `content` |
+| `write_pcm_wave` | project-relative `path`; optional `duration_ms` (1..10000), `sample_rate` (8000..48000), `frequency_hz`, `amplitude` (0..1); authors a valid mono 16-bit PCM fixture |
 | `copy_fixture` | `source` relative to the scenario directory, project-relative `destination`; copies arbitrary binary fixtures |
 | `assert_file` | project-relative `path`; optional `exists`, `min_size`, `contains` |
 | `discover_assets` | none |
@@ -86,7 +90,7 @@ scenario-local aliases.
 | `inspector_pointer` | `action` (`down`, `drag`, `up`); `x`,`y` for down/drag |
 | `inspector_text` | `text` |
 | `inspector_key` | `key` (`enter`, `escape`, `backspace`, `delete`, `left`, `right`, `home`, `end`) |
-| `capture` | `panel`, `checkpoint`; panels: `hierarchy`, `scene`, `inspector`, `assets`, `console`, `project_settings`, `script_editor`, `plugins`, `material_editor` |
+| `capture` | `panel`, `checkpoint`; panels: `hierarchy`, `scene`, `inspector`, `assets`, `console`, `project_settings`, `script_editor`, `plugins`, `material_editor`. `script_editor` captures the real child editor renderer and loaded document, not only panel chrome. |
 | `capture_runtime` | `checkpoint`; optional `require_non_uniform`; requires Play Mode and writes a PNG from the production GPU readback path |
 | `snapshot` | `kind`, `checkpoint`; kinds: `console`, `inspector_tree` |
 | `assert_console` | `contains`; optional `category`, `level`, `count_at_least` |
@@ -96,16 +100,21 @@ scenario-local aliases.
 `write_file` plus `discover_assets`, `attach_script`, `play`, input operations,
 and `step` is the universal runtime channel: the scenario may author arbitrary
 Lua and exercise the same registered library, plugins, scene systems, and
-backends as Play Mode. Editor authoring is exercised through semantic
-operations and the production Inspector pointer/text/key handlers.
+backends as Play Mode. The visible editor and the runner call the same
+`EditorSceneContext` play-mode tick for scheduler execution, system faults,
+script diagnostics, render invalidation, and quit handling. Editor authoring
+is exercised through semantic operations and the production Inspector
+pointer/text/key handlers.
 
 ## Honest boundary
 
 The runner can verify engine state, editor documents, imported binary fixtures,
 all Lua-exposed runtime APIs, plugin attachment, material graph cook, and GPU
-readback without a visible window. It does not fabricate physical hardware:
-audible speaker output, controller vibration, driver overlays, and operating
-system file/colour dialogs require the corresponding real device or the
-existing visible-host editor suites. A scenario can assert whether those live
-backends are actually present with `assert_backend`; absence is reported, not
-silently replaced by a fake backend.
+readback without a visible window. Its Play host registers the same physical
+Win32 XInput haptics backend as the visible editor; capability and actuator
+calls therefore report the attached device honestly. It does not fabricate
+physical hardware: audible speaker output, observable controller vibration,
+driver overlays, and operating system file/colour dialogs require the
+corresponding real device or the existing visible-host editor suites. A
+scenario can assert whether those live backends are actually registered with
+`assert_backend`; device capability remains a separate runtime query.
