@@ -10,6 +10,7 @@
 #include "engine/scene/PhysicsLayersAsset.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
@@ -542,7 +543,7 @@ struct RootMotionSegment {
     Vec3 localTranslation{};
     Quat localRotation{};
     float durationSeconds = 0.0F;
-    std::uint64_t controllerAssetId = 0U;
+    std::uint64_t animatorRuntimeGeneration = 0U;
 };
 
 using RootMotionQueue = std::deque<RootMotionSegment>;
@@ -572,7 +573,7 @@ using RootMotionQueue = std::deque<RootMotionSegment>;
             kb::math::Rotate(lhs.localRotation, rhs.localTranslation),
         .localRotation = kb::math::Normalize(lhs.localRotation * rhs.localRotation),
         .durationSeconds = lhs.durationSeconds + rhs.durationSeconds,
-        .controllerAssetId = rhs.controllerAssetId,
+        .animatorRuntimeGeneration = rhs.animatorRuntimeGeneration,
     };
 }
 
@@ -584,7 +585,7 @@ using RootMotionQueue = std::deque<RootMotionSegment>;
             inverse, to.localTranslation - from.localTranslation),
         .localRotation = kb::math::Normalize(inverse * to.localRotation),
         .durationSeconds = std::max(0.0F, to.durationSeconds - from.durationSeconds),
-        .controllerAssetId = to.controllerAssetId,
+        .animatorRuntimeGeneration = to.animatorRuntimeGeneration,
     };
 }
 
@@ -607,7 +608,7 @@ using RootMotionQueue = std::deque<RootMotionSegment>;
             .localTranslation = segment.localTranslation * fraction,
             .localRotation = kb::math::Slerp(Quat{}, segment.localRotation, fraction),
             .durationSeconds = remaining,
-            .controllerAssetId = segment.controllerAssetId,
+            .animatorRuntimeGeneration = segment.animatorRuntimeGeneration,
         };
         segment = RelativeRootMotion(slice, segment);
         consumed = ComposeRootMotion(consumed, slice);
@@ -1104,7 +1105,8 @@ public:
                 !context.GetScene().Entities().IsActive(entity) ||
                 animator->rootMotionOwner != kb::scene::AnimatorRootMotionOwner::Rigidbody ||
                 it->second.empty() ||
-                it->second.front().controllerAssetId != animator->controllerAssetId ||
+                it->second.front().animatorRuntimeGeneration !=
+                    context.GetScene().Animators().RuntimeBindingGeneration(entity) ||
                 context.GetScene().Components().CharacterControllers().TryGet(entity) != nullptr ||
                 rigidbody == nullptr || transform == nullptr ||
                 rigidbody->bodyType != RigidbodyBodyType::Kinematic) {
@@ -1308,7 +1310,8 @@ public:
     }
 
     bool QueueCharacterRootMotion(
-        SceneEntity entity, Vec3 localTranslation, Quat localRotation, float durationSeconds) noexcept override {
+        SceneEntity entity, Vec3 localTranslation, Quat localRotation,
+        float durationSeconds) noexcept override {
         if (scene_ == nullptr || !IsFinite(localTranslation) || !IsNormalized(localRotation) ||
             !std::isfinite(durationSeconds) || durationSeconds < 0.0F ||
             !scene_->Entities().IsActive(entity) ||
@@ -1323,11 +1326,15 @@ public:
             animator->rootMotionOwner != kb::scene::AnimatorRootMotionOwner::CharacterController) {
             return false;
         }
+        const std::uint64_t animatorRuntimeGeneration =
+            scene_->Animators().RuntimeBindingGeneration(entity);
+        if (animatorRuntimeGeneration == 0U) return false;
         const TransformComponent* transform = scene_->Transforms().TryGet(entity);
         auto queued = pendingCharacterRootMotion_.find(entity.Id());
         if (queued != pendingCharacterRootMotion_.end() &&
             !queued->second.empty() &&
-            queued->second.front().controllerAssetId != animator->controllerAssetId) {
+            queued->second.front().animatorRuntimeGeneration !=
+                animatorRuntimeGeneration) {
             queued->second.clear();
         }
         const RootMotionQueue* queue =
@@ -1352,13 +1359,14 @@ public:
             .localTranslation = localTranslation,
             .localRotation = localRotation,
             .durationSeconds = durationSeconds,
-            .controllerAssetId = animator->controllerAssetId,
+            .animatorRuntimeGeneration = animatorRuntimeGeneration,
         });
         return true;
     }
 
     bool QueueRigidbodyRootMotion(
-        SceneEntity entity, Vec3 localTranslation, Quat localRotation, float durationSeconds) noexcept override {
+        SceneEntity entity, Vec3 localTranslation, Quat localRotation,
+        float durationSeconds) noexcept override {
         if (scene_ == nullptr || !IsFinite(localTranslation) || !IsNormalized(localRotation) ||
             !std::isfinite(durationSeconds) || durationSeconds < 0.0F ||
             !scene_->Entities().IsActive(entity)) return false;
@@ -1372,10 +1380,14 @@ public:
             scene_->Components().CharacterControllers().TryGet(entity) != nullptr) {
             return false;
         }
+        const std::uint64_t animatorRuntimeGeneration =
+            scene_->Animators().RuntimeBindingGeneration(entity);
+        if (animatorRuntimeGeneration == 0U) return false;
         auto queued = pendingRigidbodyRootMotion_.find(entity.Id());
         if (queued != pendingRigidbodyRootMotion_.end() &&
             !queued->second.empty() &&
-            queued->second.front().controllerAssetId != animator->controllerAssetId) {
+            queued->second.front().animatorRuntimeGeneration !=
+                animatorRuntimeGeneration) {
             queued->second.clear();
         }
         if (durationSeconds == 0.0F) {
@@ -1392,7 +1404,7 @@ public:
             .localTranslation = localTranslation,
             .localRotation = localRotation,
             .durationSeconds = durationSeconds,
-            .controllerAssetId = animator->controllerAssetId,
+            .animatorRuntimeGeneration = animatorRuntimeGeneration,
         });
         return true;
     }
@@ -1956,8 +1968,8 @@ private:
                     animator->rootMotionOwner !=
                         kb::scene::AnimatorRootMotionOwner::CharacterController ||
                     rootMotion->second.empty() ||
-                    rootMotion->second.front().controllerAssetId !=
-                        animator->controllerAssetId ||
+                    rootMotion->second.front().animatorRuntimeGeneration !=
+                        context.GetScene().Animators().RuntimeBindingGeneration(entity) ||
                     context.GetScene().Components().Rigidbodies().TryGet(entity) != nullptr ||
                     context.GetScene().Components().Colliders().TryGet(entity) != nullptr) {
                     pendingCharacterRootMotion_.erase(rootMotion);

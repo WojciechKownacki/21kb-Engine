@@ -41,6 +41,13 @@ void SetBackendName(kb::ecs::World& world, SceneEntity entity, std::string_view 
     ecs_set_name(world.NativeHandle(), kb::ecs::FlecsEntityId(entity), ownedName.empty() ? nullptr : ownedName.c_str());
 }
 
+void MarkNameTopologyDirty(SceneState& state) noexcept {
+    ++state.hierarchyTopologyVersion;
+    if (state.hierarchyTopologyVersion == 0U) {
+        state.hierarchyTopologyVersion = 1U;
+    }
+}
+
 } // namespace
 
 std::string SceneEntityNaming::Name(const SceneState& state, SceneEntity entity) {
@@ -62,6 +69,7 @@ std::string SceneEntityNaming::Name(const SceneState& state, SceneEntity entity)
 void SceneEntityNaming::SetName(SceneState& state, SceneEntity entity, std::string_view name) {
     StoreCachedName(state, entity, name);
     SetBackendName(state.world, entity, name);
+    MarkNameTopologyDirty(state);
 }
 
 void SceneEntityNaming::SetNames(SceneState& state, std::span<const SceneEntity> entities, std::span<const std::string> names) {
@@ -74,6 +82,9 @@ void SceneEntityNaming::SetNames(SceneState& state, std::span<const SceneEntity>
             StoreCachedName(state, entities[index], name);
             SetBackendName(state.world, entities[index], name);
         }
+    }
+    if (!entities.empty()) {
+        MarkNameTopologyDirty(state);
     }
 }
 
@@ -106,6 +117,7 @@ void SceneEntityNaming::SetRepeatedNames(SceneState& state, std::span<const Scen
                 state.denseEntityNames[DenseIndex(entities[index])] = name;
             }
         }
+        MarkNameTopologyDirty(state);
         return;
     }
 
@@ -114,6 +126,9 @@ void SceneEntityNaming::SetRepeatedNames(SceneState& state, std::span<const Scen
         if (!name.empty()) {
             StoreCachedName(state, entities[index], name);
         }
+    }
+    if (!entities.empty()) {
+        MarkNameTopologyDirty(state);
     }
 }
 
@@ -156,9 +171,11 @@ void SceneEntityNaming::SetRepeatedNamesForCreatedDenseEntities(
             state.denseEntityNames[denseIndex] = name;
         }
     }
+    MarkNameTopologyDirty(state);
 }
 
 void SceneEntityNaming::ClearName(SceneState& state, SceneEntity entity) noexcept {
+    MarkNameTopologyDirty(state);
     const std::uint32_t denseIndex = DenseIndex(entity);
     if (denseIndex != kb::ecs::kInvalidGeneratedEntityIndex && denseIndex < state.denseEntityNames.size()) {
         state.denseEntityNames[denseIndex].clear();

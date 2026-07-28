@@ -20,6 +20,9 @@ public:
     [[nodiscard]] std::uint64_t Controller(SceneEntity entity) const noexcept;
     [[nodiscard]] std::span<const AnimatorParameterValue> Parameters(SceneEntity entity) const noexcept;
     [[nodiscard]] float Speed(SceneEntity entity) const noexcept;
+    // Derived attachment identity for runtime backends which retain work
+    // across frames. Zero means no valid Animator runtime is attached.
+    [[nodiscard]] std::uint64_t RuntimeBindingGeneration(SceneEntity entity) const noexcept;
     [[nodiscard]] std::optional<AnimatorStateInfo> State(SceneEntity entity, std::string_view layer) const;
 
 private:
@@ -37,6 +40,7 @@ public:
     [[nodiscard]] bool CrossFade(SceneEntity entity, std::string_view layer, std::string_view state, float durationSeconds, float normalizedTime = 0.0F) noexcept;
     [[nodiscard]] bool SetSpeed(SceneEntity entity, float speed) noexcept;
     [[nodiscard]] float Speed(SceneEntity entity) const noexcept;
+    [[nodiscard]] std::uint64_t RuntimeBindingGeneration(SceneEntity entity) const noexcept;
     [[nodiscard]] bool SetBool(SceneEntity entity, std::string_view name, bool value) noexcept;
     [[nodiscard]] bool SetInt(SceneEntity entity, std::string_view name, std::int32_t value) noexcept;
     [[nodiscard]] bool SetFloat(SceneEntity entity, std::string_view name, float value) noexcept;
