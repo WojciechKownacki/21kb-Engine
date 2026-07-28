@@ -1910,6 +1910,7 @@ void RunAssetRefTest() {
     static_assert(std::is_same_v<kb::library::PrefabRef, kb::assets::AssetHandle<kb::scene::ScenePrefab>>, "kb::library::PrefabRef must alias kb::assets::AssetHandle<ScenePrefab>");
     static_assert(std::is_same_v<kb::library::GraphRef, kb::assets::AssetHandle<kb::visual::VisualGraphAsset>>, "kb::library::GraphRef must alias kb::assets::AssetHandle<VisualGraphAsset>");
     static_assert(std::is_same_v<kb::library::AudioClipRef, kb::assets::AssetHandle<kb::audio::AudioClipAsset>>, "kb::library::AudioClipRef must alias kb::assets::AssetHandle<AudioClipAsset>");
+    static_assert(std::is_same_v<kb::library::AnimationRef, kb::assets::AssetHandle<kb::assets::ImportedAsset>>, "kb::library::AnimationRef must alias kb::assets::AssetHandle<ImportedAsset>");
     static_assert(std::is_same_v<kb::library::InputActionRef, kb::assets::AssetHandle<kb::input::InputActionAsset>>, "kb::library::InputActionRef must alias kb::assets::AssetHandle<InputActionAsset>");
     static_assert(std::is_same_v<kb::library::InputMapRef, kb::assets::AssetHandle<kb::input::InputMappingContextAsset>>, "kb::library::InputMapRef must alias kb::assets::AssetHandle<InputMappingContextAsset>");
 

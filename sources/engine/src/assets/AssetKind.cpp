@@ -40,6 +40,8 @@ std::string_view ToString(AssetKind kind) noexcept {
         return "Prefab";
     case AssetKind::Scene:
         return "Scene";
+    case AssetKind::Animation:
+        return "Animation";
     case AssetKind::Graph:
         return "Graph";
     case AssetKind::InputAction:
@@ -75,6 +77,8 @@ bool AssetMatchesKind(const AssetMetadata& metadata, AssetKind kind) noexcept {
         return metadata.type == "ScenePrefab";
     case AssetKind::Scene:
         return metadata.type == "Scene";
+    case AssetKind::Animation:
+        return metadata.type == "ImportedAsset" && metadata.importCategory == "Animation";
     case AssetKind::Graph:
         return metadata.type == "VisualGraph";
     case AssetKind::InputAction:

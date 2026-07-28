@@ -6,10 +6,14 @@
 #include "engine/assets/AssetMountTable.hpp"
 #include "engine/assets/IAssetLoader.hpp"
 
+#include <condition_variable>
+#include <deque>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <typeindex>
 #include <unordered_map>
 #include <vector>
@@ -33,6 +37,27 @@ enum class AssetUnloadPolicy : std::uint8_t {
     ReleaseWhenUnreferenced,
 };
 
+enum class AsyncAssetLoadStatus : std::uint8_t {
+    NotRequested,
+    Pending,
+    Completed,
+    Failed,
+};
+
+class AssetOpaqueHandle {
+public:
+    AssetOpaqueHandle() = default;
+    AssetOpaqueHandle(AssetId id, std::shared_ptr<void> payload) noexcept
+        : id_(id), payload_(std::move(payload)) {}
+
+    [[nodiscard]] AssetId Id() const noexcept { return id_; }
+    [[nodiscard]] bool IsLoaded() const noexcept { return id_.IsValid() && payload_ != nullptr; }
+
+private:
+    AssetId id_{};
+    std::shared_ptr<void> payload_{};
+};
+
 [[nodiscard]] std::string_view ToString(AssetUnloadPolicy policy) noexcept;
 [[nodiscard]] bool TryParseAssetUnloadPolicy(std::string_view name, AssetUnloadPolicy& out) noexcept;
 
@@ -47,6 +72,9 @@ struct AssetMoveResult {
 
 class AssetManager {
 public:
+    AssetManager() = default;
+    ~AssetManager();
+
     [[nodiscard]] AssetMountTable& Mounts() noexcept;
     [[nodiscard]] const AssetMountTable& Mounts() const noexcept;
     [[nodiscard]] AssetRegistry& Registry() noexcept;
@@ -93,6 +121,46 @@ public:
     // type with no registered loader; matches Load<T>'s existing error
     // reporting via the same LoadUntyped path.
     [[nodiscard]] bool LoadOpaque(AssetId id);
+    [[nodiscard]] AssetOpaqueHandle LoadOpaqueHandle(AssetId id);
+    [[nodiscard]] AssetOpaqueHandle AcquireOpaqueHandle(AssetId id) const;
+
+    template <typename T>
+    [[nodiscard]] bool LoadAsync(AssetId id) {
+        const AssetMetadata* metadata = registry_.Find(id);
+        IAssetLoader* loader = metadata == nullptr ? nullptr : LoaderForType(metadata->type);
+        if (loader == nullptr || loader->PayloadType() != typeid(T)) {
+            lastError_ = metadata == nullptr ? "Asset is not registered" : "Asset type does not match async load request";
+            return false;
+        }
+        return RequestLoadAsync(id);
+    }
+
+    template <typename T>
+    [[nodiscard]] bool LoadAsync(const std::filesystem::path& virtualPath) {
+        const AssetMetadata* metadata = registry_.FindByPath(virtualPath);
+        if (metadata == nullptr) {
+            lastError_ = "Asset is not registered";
+            return false;
+        }
+        return LoadAsync<T>(metadata->id);
+    }
+
+    template <typename T>
+    [[nodiscard]] AssetHandle<T> AcquireLoaded(AssetId id) const {
+        const auto cached = cache_.find(id.value);
+        if (cached == cache_.end() || cached->second.type != typeid(T)) {
+            return {};
+        }
+        std::shared_ptr<void> payload = cached->second.weak.lock();
+        return payload == nullptr
+            ? AssetHandle<T>{}
+            : AssetHandle<T>{ id, std::static_pointer_cast<const T>(std::move(payload)) };
+    }
+
+    [[nodiscard]] bool RequestLoadAsync(AssetId id);
+    void PumpAsyncLoads();
+    [[nodiscard]] AsyncAssetLoadStatus AsyncLoadStatus(AssetId id) const noexcept;
+    [[nodiscard]] std::string AsyncLoadError(AssetId id) const;
 
     [[nodiscard]] bool Unload(AssetId id) noexcept;
     [[nodiscard]] bool IsLoaded(AssetId id) const noexcept;
@@ -102,9 +170,8 @@ public:
     // of a cached asset's payload — 0 if the asset is not cached or its
     // payload has already been released. Does NOT count the cache's own
     // Retain reference, so under Retain this is "external holders" and under
-    // ReleaseWhenUnreferenced it is the full holder count. Deterministic in
-    // this single-threaded-asset engine (no background thread ever touches a
-    // payload's refcount).
+    // ReleaseWhenUnreferenced it is the full holder count. Worker results are
+    // published only by PumpAsyncLoads on the owner thread.
     [[nodiscard]] std::size_t ReferenceCount(AssetId id) const noexcept;
     // The cache retention policy for a cached asset (Retain if the asset is
     // not cached — the default a fresh Load would use).
@@ -179,6 +246,33 @@ private:
         AssetUnloadPolicy policy = AssetUnloadPolicy::Retain;
     };
 
+    struct AsyncPreparedAsset {
+        AssetLoadResult result;
+        std::type_index type = typeid(void);
+    };
+
+    struct AsyncPreparedState {
+        std::mutex mutex;
+        std::optional<AsyncPreparedAsset> prepared;
+    };
+
+    struct AsyncLoadRecord {
+        std::shared_ptr<AsyncPreparedState> state;
+        AssetUnloadPolicy policy = AssetUnloadPolicy::Retain;
+        std::uint64_t generation = 0U;
+    };
+
+    struct AsyncLoadJob {
+        IAssetLoader* loader = nullptr;
+        AssetMetadata metadata;
+        std::filesystem::path resolvedPath;
+        std::type_index type = typeid(void);
+        std::shared_ptr<AsyncPreparedState> state;
+    };
+
+    void StartAsyncWorker();
+    void StopAsyncWorker() noexcept;
+    void RunAsyncWorker() noexcept;
     [[nodiscard]] std::shared_ptr<void> LoadUntyped(AssetId id, std::type_index expectedType);
 
     template <typename T>
@@ -199,6 +293,15 @@ private:
     AssetRegistry registry_;
     std::vector<std::unique_ptr<IAssetLoader>> loaders_;
     std::unordered_map<std::uint64_t, CachedAsset> cache_;
+    mutable std::mutex loaderExecutionMutex_;
+    std::unordered_map<std::uint64_t, AsyncLoadRecord> asyncLoads_;
+    std::unordered_map<std::uint64_t, std::string> asyncLoadErrors_;
+    std::unordered_map<std::uint64_t, std::uint64_t> asyncLoadGenerations_;
+    std::mutex asyncWorkerMutex_;
+    std::condition_variable asyncWorkerWake_;
+    std::deque<AsyncLoadJob> asyncWorkerQueue_;
+    bool asyncWorkerStopping_ = false;
+    std::thread asyncWorker_;
     mutable std::string lastError_;
     std::uint64_t revision_ = 1;
     mutable std::uint64_t cachedVirtualFoldersRevision_ = 0;

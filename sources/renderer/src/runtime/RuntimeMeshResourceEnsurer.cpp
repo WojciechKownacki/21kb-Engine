@@ -7,6 +7,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/resources/BuiltInParticleQuadMesh.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
+#include "kb/render/resources/RenderAssetRefs.hpp"
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
@@ -146,7 +147,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
             meshes.erase(cacheIt);
         }
 
-        const kb::assets::AssetHandle<RenderMeshAssetData> asset = manager.Load<RenderMeshAssetData>(assetId);
+        const MeshRef asset = manager.Load<RenderMeshAssetData>(assetId);
         if (!asset.IsLoaded()) {
             context.sceneRenderer.ResourceMap().UnbindMesh(meshAssetId);
             continue;
