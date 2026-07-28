@@ -974,8 +974,29 @@ ReadScriptValue(
             return { false, std::string{ present ? "present" : "absent" } };
         }
         const auto expectedVisible = BoolMember(step, "visible", error, false);
+        const auto expectedKind = StringMember(step, "kind", error, false);
+        if (!present && (expectedVisible.has_value() || expectedKind.has_value())) {
+            return { false, "cannot assert a property of an absent UI element" };
+        }
+        if (expectedKind.has_value()) {
+            const auto control = state.context.Scene().UIDocuments().Control(entity, element);
+            const auto matchesKind = [kind = *expectedKind, &control]() {
+                if (!control.has_value()) return false;
+                if (kind == "Container") return control->kind == kb::scene::UIControlKind::Container;
+                if (kind == "Text") return control->kind == kb::scene::UIControlKind::Text;
+                if (kind == "Image") return control->kind == kb::scene::UIControlKind::Image;
+                if (kind == "Button") return control->kind == kb::scene::UIControlKind::Button;
+                if (kind == "Toggle") return control->kind == kb::scene::UIControlKind::Toggle;
+                if (kind == "Slider") return control->kind == kb::scene::UIControlKind::Slider;
+                if (kind == "List") return control->kind == kb::scene::UIControlKind::List;
+                if (kind == "InputField") return control->kind == kb::scene::UIControlKind::InputField;
+                if (kind == "ScrollView") return control->kind == kb::scene::UIControlKind::ScrollView;
+                if (kind == "ModalDialog") return control->kind == kb::scene::UIControlKind::ModalDialog;
+                return false;
+            }();
+            if (!matchesKind) return { false, "control kind mismatch" };
+        }
         if (!expectedVisible.has_value()) return { true, present ? "present" : "absent" };
-        if (!present) return { false, "cannot assert visibility of an absent UI element" };
         const bool visible = state.context.Scene().UIDocuments().Visible(entity, element);
         return { visible == *expectedVisible, visible ? "visible" : "hidden" };
     }
