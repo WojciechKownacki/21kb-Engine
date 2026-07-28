@@ -2,6 +2,7 @@
 
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
+#include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
@@ -61,6 +62,8 @@ public:
 
     [[nodiscard]] static bool HasAudioListener(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const AudioListenerComponent* TryGetAudioListener(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasAnimator(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const Animator* TryGetAnimator(const Scene& scene, SceneEntity entity) noexcept;
 };
 
 } // namespace kb::scene

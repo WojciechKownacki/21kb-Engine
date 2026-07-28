@@ -6,6 +6,7 @@
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/InputComponent.hpp"
@@ -98,7 +99,8 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , jointComponentId_(RegisterSceneComponent<JointComponent>(world, "kb.scene.JointComponent"))
     , tagsComponentId_(RegisterSceneComponent<TagsComponent>(world, "kb.scene.TagsComponent"))
     , audioSourceComponentId_(RegisterSceneComponent<AudioSourceComponent>(world, "kb.scene.AudioSourceComponent"))
-    , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, "kb.scene.AudioListenerComponent")) {
+    , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, "kb.scene.AudioListenerComponent"))
+    , animatorComponentId_(RegisterSceneComponent<Animator>(world, "kb.scene.AnimatorComponent")) {
     RegisterPhysicsReflection(world);
     RegisterAudioReflection(world);
 }
@@ -158,5 +160,7 @@ std::uint64_t SceneComponentRegistry::AudioSourceComponentId() const noexcept {
 std::uint64_t SceneComponentRegistry::AudioListenerComponentId() const noexcept {
     return audioListenerComponentId_;
 }
+
+std::uint64_t SceneComponentRegistry::AnimatorComponentId() const noexcept { return animatorComponentId_; }
 
 } // namespace kb::scene

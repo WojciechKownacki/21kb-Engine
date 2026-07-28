@@ -350,6 +350,30 @@ void AppendAudioListener(SceneComponents components, SceneEntity entity, const s
     }
 }
 
+void AppendAnimator(SceneComponents components, SceneEntity entity, const std::optional<Animator>& expected, ScenePrefabOverrideReport& report, std::uint32_t nodeIndex, SceneObject object) {
+    const Animator* actual = components.Animators().TryGet(entity);
+    const bool equal = actual == nullptr
+        ? !expected.has_value()
+        : expected.has_value() && actual->controllerAssetId == expected->controllerAssetId &&
+            actual->speed == expected->speed && actual->enabled == expected->enabled &&
+            actual->rootMotionOwner == expected->rootMotionOwner;
+    if (equal) return;
+    if (HasPresenceOverride(actual, expected, report, nodeIndex, object, "animator", ScenePrefabOverrideFlag::Animator)) return;
+    if (!expected.has_value() || actual->controllerAssetId != expected->controllerAssetId) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "animator.controllerAssetId", ScenePrefabOverrideValueFormatter::ToString(actual->controllerAssetId), ScenePrefabOverrideFlag::Animator);
+    }
+    if (!expected.has_value() || actual->speed != expected->speed) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "animator.speed", ScenePrefabOverrideValueFormatter::ToString(actual->speed), ScenePrefabOverrideFlag::Animator);
+    }
+    if (!expected.has_value() || actual->enabled != expected->enabled) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "animator.enabled", ScenePrefabOverrideValueFormatter::ToString(actual->enabled), ScenePrefabOverrideFlag::Animator);
+    }
+    if (!expected.has_value() || actual->rootMotionOwner != expected->rootMotionOwner) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "animator.rootMotionOwner",
+            ScenePrefabOverrideValueFormatter::ToString(static_cast<std::uint64_t>(actual->rootMotionOwner)), ScenePrefabOverrideFlag::Animator);
+    }
+}
+
 } // namespace
 
 void ScenePrefabComponentOverrideReporter::Append(SceneComponents components, SceneEntity entity, const ScenePrefabNodeComponents& expected, ScenePrefabOverrideReport& report, std::uint32_t nodeIndex, SceneObject object) {
@@ -363,6 +387,7 @@ void ScenePrefabComponentOverrideReporter::Append(SceneComponents components, Sc
     AppendBehaviour(components, entity, expected.behaviour, report, nodeIndex, object);
     AppendAudioSource(components, entity, expected.audioSource, report, nodeIndex, object);
     AppendAudioListener(components, entity, expected.audioListener, report, nodeIndex, object);
+    AppendAnimator(components, entity, expected.animator, report, nodeIndex, object);
 }
 
 } // namespace kb::scene

@@ -69,6 +69,9 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const AudioListenerComponent* audioListener = sceneComponents.AudioListeners().TryGet(entity)) {
         components.audioListener = *audioListener;
     }
+    if (const Animator* animator = sceneComponents.Animators().TryGet(entity)) {
+        components.animator = *animator;
+    }
 
     return components;
 }

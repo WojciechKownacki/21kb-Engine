@@ -74,6 +74,12 @@ void RevertComponentProperty(Scene& scene, SceneObject object, const ScenePrefab
         } else {
             components.AudioListeners().Remove(entity);
         }
+    } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "animator")) {
+        if (node.components.animator.has_value()) {
+            components.Animators().Set(entity, *node.components.animator);
+        } else {
+            components.Animators().Remove(entity);
+        }
     }
 }
 

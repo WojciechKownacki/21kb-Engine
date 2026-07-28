@@ -2,6 +2,7 @@
 
 #include "engine/scene/SceneAudioListenerComponents.hpp"
 #include "engine/scene/SceneAudioSourceComponents.hpp"
+#include "engine/scene/SceneAnimatorComponents.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
 #include "engine/scene/SceneCharacterControllerComponents.hpp"
@@ -36,6 +37,7 @@ public:
     [[nodiscard]] SceneTagsComponentQueries Tags() const noexcept;
     [[nodiscard]] SceneAudioSourceComponentQueries AudioSources() const noexcept;
     [[nodiscard]] SceneAudioListenerComponentQueries AudioListeners() const noexcept;
+    [[nodiscard]] SceneAnimatorComponentQueries Animators() const noexcept;
     [[nodiscard]] SceneComponentVisitors Visitors() const noexcept;
 
 private:

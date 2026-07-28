@@ -14,6 +14,8 @@
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
+#include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
@@ -7905,6 +7907,16 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
             return true;
         });
     }
+    if (componentId == "Animator") {
+        if (scene_->Components().Animators().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has an Animator component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Animator Component", [this, entity]() {
+            scene_->Components().Animators().Set(entity, kb::scene::Animator{});
+            return true;
+        });
+    }
     if (componentId == "Rigidbody") {
         if (scene_->Components().Rigidbodies().Has(entity)) {
             console_.Warning("Inspector", "Entity already has a Rigidbody component.");
@@ -7980,6 +7992,122 @@ bool EditorSceneContext::SetAudioSourceClipAsset(kb::scene::SceneEntity entity, 
     }
     return ExecuteSceneCommand("Assign Audio Clip", [this, entity, assetId]() {
         return EditorSceneAudioAssetActions::AssignAudioClip(*scene_, entity, assetId);
+    });
+}
+
+bool EditorSceneContext::OpenAnimationAsset(kb::assets::AssetId id) {
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(id);
+    if (metadata == nullptr ||
+        (metadata->type != kb::scene::kAnimationClipAssetType &&
+         metadata->type != kb::scene::kAnimatorControllerAssetType)) {
+        console_.Error("Animator", "Animation asset metadata was not found or has the wrong type.");
+        return false;
+    }
+    std::filesystem::path path = metadata->physicalPath;
+    if (const std::optional<std::filesystem::path> mounted =
+            scene_->Assets().Manager().Mounts().Resolve(metadata->virtualPath)) {
+        path = *mounted;
+    }
+    scriptEditor_.Open(path, id, metadata->virtualPath.filename().string());
+    console_.Info("Animator", "Opened typed animation asset: " + metadata->virtualPath.generic_string());
+    return true;
+}
+
+bool EditorSceneContext::SetAnimatorControllerAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
+    if (!entity.IsValid() || metadata == nullptr || metadata->type != kb::scene::kAnimatorControllerAssetType ||
+        !scene_->Components().Animators().Has(entity)) {
+        console_.Warning("Animator", "Only Animator Controller assets can be assigned to an Animator component.");
+        return false;
+    }
+    return ExecuteSceneCommand("Assign Animator Controller", [this, entity, assetId]() {
+        kb::scene::Animator* animator = scene_->Components().Animators().TryGet(entity);
+        if (animator == nullptr) return false;
+        animator->controllerAssetId = assetId.value;
+        scene_->Components().Animators().MarkModified(entity);
+        return true;
+    });
+}
+
+bool EditorSceneContext::SetAnimatorSpeed(kb::scene::SceneEntity entity, float speed) {
+    if (!std::isfinite(speed) || speed < 0.0F) return false;
+    return ExecuteSceneCommand("Edit Animator Speed", [this, entity, speed]() {
+        kb::scene::Animator* animator = scene_->Components().Animators().TryGet(entity);
+        if (animator == nullptr) return false;
+        animator->speed = speed;
+        scene_->Components().Animators().MarkModified(entity);
+        return true;
+    });
+}
+
+bool EditorSceneContext::ToggleAnimatorEnabled(kb::scene::SceneEntity entity) {
+    return ExecuteSceneCommand("Toggle Animator Enabled", [this, entity]() {
+        kb::scene::Animator* animator = scene_->Components().Animators().TryGet(entity);
+        if (animator == nullptr) return false;
+        animator->enabled = !animator->enabled;
+        scene_->Components().Animators().MarkModified(entity);
+        return true;
+    });
+}
+
+bool EditorSceneContext::CycleAnimatorRootMotionOwner(kb::scene::SceneEntity entity) {
+    const kb::scene::Animator* animator = scene_->Components().Animators().TryGet(entity);
+    if (animator == nullptr) return false;
+
+    const bool hasCharacterController = scene_->Components().CharacterControllers().Has(entity);
+    const bool hasCollider = scene_->Components().Colliders().Has(entity);
+    const kb::scene::RigidbodyComponent* rigidbody = scene_->Components().Rigidbodies().TryGet(entity);
+    const bool hasSimulatedRigidbody =
+        rigidbody != nullptr &&
+        rigidbody->bodyType != kb::scene::RigidbodyBodyType::Static &&
+        hasCollider;
+    const bool hasCompatibleAnimator =
+        !hasCharacterController && !hasSimulatedRigidbody;
+    const bool hasCompatibleCharacterController =
+        hasCharacterController && rigidbody == nullptr && !hasCollider;
+    const bool hasCompatibleRigidbody =
+        rigidbody != nullptr &&
+        rigidbody->bodyType == kb::scene::RigidbodyBodyType::Kinematic &&
+        hasCollider &&
+        !hasCharacterController;
+
+    kb::scene::AnimatorRootMotionOwner next = animator->rootMotionOwner;
+    do {
+        switch (next) {
+        case kb::scene::AnimatorRootMotionOwner::None:
+            next = kb::scene::AnimatorRootMotionOwner::Animator;
+            break;
+        case kb::scene::AnimatorRootMotionOwner::Animator:
+            next = kb::scene::AnimatorRootMotionOwner::CharacterController;
+            break;
+        case kb::scene::AnimatorRootMotionOwner::CharacterController:
+            next = kb::scene::AnimatorRootMotionOwner::Rigidbody;
+            break;
+        case kb::scene::AnimatorRootMotionOwner::Rigidbody:
+            next = kb::scene::AnimatorRootMotionOwner::None;
+            break;
+        default:
+            console_.Error("Animator", "Animator root-motion owner contains an invalid persisted value.");
+            return false;
+        }
+    } while ((next == kb::scene::AnimatorRootMotionOwner::Animator && !hasCompatibleAnimator) ||
+             (next == kb::scene::AnimatorRootMotionOwner::CharacterController && !hasCompatibleCharacterController) ||
+             (next == kb::scene::AnimatorRootMotionOwner::Rigidbody && !hasCompatibleRigidbody));
+
+    return ExecuteSceneCommand("Change Animator Root Motion Owner", [this, entity, next]() {
+        kb::scene::Animator* mutableAnimator = scene_->Components().Animators().TryGet(entity);
+        if (mutableAnimator == nullptr) return false;
+        mutableAnimator->rootMotionOwner = next;
+        scene_->Components().Animators().MarkModified(entity);
+        return true;
+    });
+}
+
+bool EditorSceneContext::RemoveAnimatorFromEntity(kb::scene::SceneEntity entity) {
+    if (!scene_->Components().Animators().Has(entity)) return false;
+    return ExecuteSceneCommand("Remove Animator", [this, entity]() {
+        scene_->Components().Animators().Remove(entity);
+        return true;
     });
 }
 

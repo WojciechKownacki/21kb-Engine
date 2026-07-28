@@ -6,6 +6,8 @@
 #include "scene/prefab/io/ScenePrefabAssetMeshRendererParser.hpp"
 #include "scene/prefab/io/ScenePrefabAssetTagsParser.hpp"
 
+#include <cmath>
+
 namespace kb::scene {
 namespace {
 
@@ -255,6 +257,24 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseAnimator(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool hasAnimator = false;
+    if (!ParseOptionalComponentFlag(fields, "animator", hasAnimator)) return false;
+    if (!hasAnimator) return true;
+    Animator animator{};
+    int rootMotionOwner = static_cast<int>(AnimatorRootMotionOwner::None);
+    if (!ParseField(fields, "animator.controllerAssetId", animator.controllerAssetId) ||
+        !ParseOptionalField(fields, "animator.speed", animator.speed) ||
+        !ParseOptionalBool(fields, "animator.enabled", animator.enabled) ||
+        !ParseOptionalField(fields, "animator.rootMotionOwner", rootMotionOwner) ||
+        !std::isfinite(animator.speed) || animator.speed < 0.0F ||
+        rootMotionOwner < static_cast<int>(AnimatorRootMotionOwner::None) ||
+        rootMotionOwner > static_cast<int>(AnimatorRootMotionOwner::Rigidbody)) return false;
+    animator.rootMotionOwner = static_cast<AnimatorRootMotionOwner>(rootMotionOwner);
+    components.animator = animator;
+    return true;
+}
+
 } // namespace
 
 bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
@@ -269,7 +289,8 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ScenePrefabAssetTagsParser::Parse(fields, components)
         && ParseBehaviour(fields, components)
         && ParseAudioSource(fields, components)
-        && ParseAudioListener(fields, components);
+        && ParseAudioListener(fields, components)
+        && ParseAnimator(fields, components);
 }
 
 } // namespace kb::scene

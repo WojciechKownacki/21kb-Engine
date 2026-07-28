@@ -8,6 +8,8 @@
 #include "scene/asset/io/components/SceneAssetRenderComponentCodec.hpp"
 #include "scene/asset/io/components/SceneAssetTagsComponentCodec.hpp"
 
+#include <cmath>
+
 namespace kb::scene {
 namespace {
 
@@ -24,6 +26,7 @@ enum SceneNodeComponentBits : std::uint32_t {
     TagsBit = 1U << 9U,
     CharacterControllerBit = 1U << 10U,
     JointBit = 1U << 11U,
+    AnimatorBit = 1U << 12U,
 };
 
 constexpr std::uint32_t KnownComponentBits = CameraBit |
@@ -37,7 +40,8 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     BehaviourBit |
     TagsBit |
     CharacterControllerBit |
-    JointBit;
+    JointBit |
+    AnimatorBit;
 
 [[nodiscard]] std::uint32_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint32_t componentBits = 0;
@@ -53,6 +57,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     componentBits |= components.tags.has_value() ? TagsBit : 0U;
     componentBits |= components.characterController.has_value() ? CharacterControllerBit : 0U;
     componentBits |= components.joint.has_value() ? JointBit : 0U;
+    componentBits |= components.animator.has_value() ? AnimatorBit : 0U;
     return componentBits;
 }
 
@@ -151,6 +156,21 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         }
         output.behaviour = behaviour;
     }
+    if ((componentBits & AnimatorBit) != 0U) {
+        if (fileVersion < 5U) return false;
+        Animator animator{};
+        if (!input.ReadUInt64(animator.controllerAssetId) ||
+            !input.ReadFloat(animator.speed) ||
+            !input.ReadBool(animator.enabled) ||
+            !std::isfinite(animator.speed) || animator.speed < 0.0F) return false;
+        if (fileVersion >= 6U) {
+            std::uint32_t rootMotionOwner = 0U;
+            if (!input.ReadUInt32(rootMotionOwner) ||
+                rootMotionOwner > static_cast<std::uint32_t>(AnimatorRootMotionOwner::Rigidbody)) return false;
+            animator.rootMotionOwner = static_cast<AnimatorRootMotionOwner>(rootMotionOwner);
+        }
+        output.animator = animator;
+    }
     return true;
 }
 
@@ -191,6 +211,12 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
     }
     if (components.behaviour.has_value()) {
         SceneAssetBehaviourComponentCodec::Write(output, *components.behaviour);
+    }
+    if (components.animator.has_value()) {
+        SceneAssetBinaryIO::WriteUInt64(output, components.animator->controllerAssetId);
+        SceneAssetBinaryIO::WriteFloat(output, components.animator->speed);
+        SceneAssetBinaryIO::WriteBool(output, components.animator->enabled);
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(components.animator->rootMotionOwner));
     }
 }
 

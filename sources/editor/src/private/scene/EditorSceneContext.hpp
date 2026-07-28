@@ -303,6 +303,7 @@ public:
     [[nodiscard]] bool ExtractEmbeddedMaterials(kb::assets::AssetId meshAssetId);
     [[nodiscard]] bool CreateLuaScriptAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
+    [[nodiscard]] bool OpenAnimationAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenMaterialEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenMaterialEditorGraphSourceAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenMaterialEditorMaterialTypeAsset(kb::assets::AssetId id);
@@ -736,6 +737,11 @@ public:
     [[nodiscard]] bool ReloadOpenScriptAsset();
     [[nodiscard]] bool AddComponentToEntity(kb::scene::SceneEntity entity, std::string_view componentId);
     [[nodiscard]] bool SetAudioSourceClipAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
+    [[nodiscard]] bool SetAnimatorControllerAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
+    [[nodiscard]] bool SetAnimatorSpeed(kb::scene::SceneEntity entity, float speed);
+    [[nodiscard]] bool ToggleAnimatorEnabled(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool CycleAnimatorRootMotionOwner(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool RemoveAnimatorFromEntity(kb::scene::SceneEntity entity);
     [[nodiscard]] bool BeginSelectedTransformEdit(std::string label);
     [[nodiscard]] bool ApplyActiveTransformEditPrimaryPosition(kb::scene::Vec3 position);
     [[nodiscard]] bool ApplyActiveTransformEditPrimaryRotation(kb::scene::Vec3 rotation);

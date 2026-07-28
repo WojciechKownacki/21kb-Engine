@@ -697,6 +697,93 @@ void RunInspectorComponentAffordancesSuite(Report& report) {
     report.Check(script.IsValid(), "Picker Lua script registered");
     report.Check(context.AttachScriptToEntity(actor, script), "Attach script for picker");
     report.Check(context.EntityScriptAssetId(actor) == script, "Script field resolves the bound Lua asset for the picker reveal");
+
+    // Animator is a real authored scene component, not a script-only runtime
+    // attachment. Exercise the same public commands the Add Component tile,
+    // Inspector fields and controller drop target call.
+    report.Check(InspectorComponentCatalog::Find("Animator") != nullptr &&
+            InspectorComponentCatalog::Find("Animator")->category == "Animation",
+        "Animator tile is catalogued under Animation");
+    report.Check(context.AddComponentToEntity(actor, "Animator"), "Add Animator component from Inspector catalog");
+    report.Check(context.Scene().Components().Animators().Has(actor), "Animator component is present after editor add");
+    const kb::assets::AssetId controllerId{ 0xA110U };
+    report.Check(context.Scene().Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                     .id = controllerId,
+                     .type = "AnimatorController",
+                     .name = "SelfTestController",
+                     .virtualPath = "/Game/Animation/SelfTest.kbanimcontroller",
+                     .runtimeLoadable = true,
+                 }),
+        "Register Animator Controller for Inspector assignment");
+    report.Check(context.SetAnimatorControllerAsset(actor, controllerId), "Assign Animator Controller through Inspector drop/edit path");
+    report.Check(context.SetAnimatorSpeed(actor, 1.75F), "Edit Animator speed through undoable Inspector command");
+    report.Check(context.ToggleAnimatorEnabled(actor), "Toggle Animator enabled through Inspector");
+    report.Check(context.CycleAnimatorRootMotionOwner(actor),
+        "Select Animator as root-motion owner through undoable Inspector command");
+    const kb::scene::Animator* animator = context.Scene().Components().Animators().TryGet(actor);
+    report.Check(animator != nullptr && animator->controllerAssetId == controllerId.value &&
+            animator->speed == 1.75F && !animator->enabled &&
+            animator->rootMotionOwner == kb::scene::AnimatorRootMotionOwner::Animator,
+        "Animator Inspector fields mutate the persistent scene component");
+    report.Check(context.AddComponentToEntity(actor, "CharacterController"),
+        "Add Character Controller required by its root-motion ownership mode");
+    report.Check(context.CycleAnimatorRootMotionOwner(actor),
+        "Cycle root-motion owner to Character Controller");
+    animator = context.Scene().Components().Animators().TryGet(actor);
+    report.Check(animator != nullptr &&
+            animator->rootMotionOwner == kb::scene::AnimatorRootMotionOwner::CharacterController,
+        "Select compatible Character Controller as root-motion owner");
+    report.Check(context.AddComponentToEntity(actor, "Rigidbody") &&
+            context.AddComponentToEntity(actor, "Collider"),
+        "Add Rigidbody and Collider required by rigidbody root-motion ownership");
+    report.Check(context.CycleAnimatorRootMotionOwner(actor),
+        "Cycle skips an incompatible dynamic Rigidbody root-motion owner");
+    animator = context.Scene().Components().Animators().TryGet(actor);
+    report.Check(animator != nullptr &&
+            animator->rootMotionOwner == kb::scene::AnimatorRootMotionOwner::None,
+        "Competing Character Controller and dynamic Rigidbody cannot become root-motion authorities");
+    report.Check(context.RemovePhysicsComponent(
+            actor, kb::editor::PhysicsComponentKind::CharacterController),
+        "Remove competing Character Controller before selecting Rigidbody ownership");
+    context.Scene().Components().Rigidbodies().TryGet(actor)->bodyType =
+        kb::scene::RigidbodyBodyType::Kinematic;
+    context.Scene().Components().Rigidbodies().MarkModified(actor);
+    report.Check(context.CycleAnimatorRootMotionOwner(actor),
+        "Cycle root-motion owner to Rigidbody");
+    animator = context.Scene().Components().Animators().TryGet(actor);
+    report.Check(animator != nullptr &&
+            animator->rootMotionOwner == kb::scene::AnimatorRootMotionOwner::Rigidbody,
+        "Select compatible Rigidbody as root-motion owner");
+    report.Check(context.CycleAnimatorRootMotionOwner(actor),
+        "Cycle root-motion owner back to None");
+    animator = context.Scene().Components().Animators().TryGet(actor);
+    report.Check(animator != nullptr &&
+            animator->rootMotionOwner == kb::scene::AnimatorRootMotionOwner::None,
+        "Cycle root-motion ownership back to None");
+    bool foundAnimatorController = false;
+    bool foundAnimatorSpeed = false;
+    bool foundAnimatorEnabled = false;
+    bool foundAnimatorRootMotionOwner = false;
+    const int animatorMaxScroll = InspectorPanelRenderer::MaxScrollOffset(kContent, context);
+    for (int scroll = 0; scroll <= animatorMaxScroll;
+         scroll += std::max<int>(1, static_cast<int>(kContent.bottom - kContent.top) - 80)) {
+        static_cast<void>(context.Inspector().SetScrollOffset(scroll, animatorMaxScroll));
+        for (int y = kContent.top; y < kContent.bottom; ++y) {
+            const InspectorPanelRenderer::Hit hit =
+                InspectorPanelRenderer::HitTest(kContent, context, kContent.left + 120, y);
+            if (hit.section != InspectorSectionId::Animator) continue;
+            foundAnimatorController |= hit.property == InspectorPropertyId::AnimatorController;
+            foundAnimatorSpeed |= hit.property == InspectorPropertyId::AnimatorSpeed;
+            foundAnimatorEnabled |= hit.property == InspectorPropertyId::AnimatorEnabled;
+            foundAnimatorRootMotionOwner |= hit.property == InspectorPropertyId::AnimatorRootMotionOwner;
+        }
+    }
+    static_cast<void>(context.Inspector().SetScrollOffset(0, animatorMaxScroll));
+    report.Check(foundAnimatorController && foundAnimatorSpeed && foundAnimatorEnabled &&
+            foundAnimatorRootMotionOwner,
+        "Animator Controller, Speed, Enabled and Root Motion are present in the live Inspector hit-test");
+    report.Check(context.RemoveAnimatorFromEntity(actor), "Animator section remove command removes the component");
+    report.Check(!context.Scene().Components().Animators().Has(actor), "Animator component is gone after editor remove");
 }
 
 // The engine has a full physics subsystem (Jolt) but the editor never exposed it.

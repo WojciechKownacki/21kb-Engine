@@ -172,6 +172,13 @@ constexpr std::array<InspectorRowDefinition, 2> kAudioListenerRows{ {
     { InspectorPropertyId::AudioListenerPrimary, InspectorRowValueKind::Bool },
 } };
 
+constexpr std::array<InspectorRowDefinition, 4> kAnimatorRows{ {
+    { InspectorPropertyId::AnimatorController, InspectorRowValueKind::Text },
+    { InspectorPropertyId::AnimatorSpeed, InspectorRowValueKind::Text },
+    { InspectorPropertyId::AnimatorEnabled, InspectorRowValueKind::Bool },
+    { InspectorPropertyId::AnimatorRootMotionOwner, InspectorRowValueKind::Text },
+} };
+
 [[nodiscard]] COLORREF Color(EditorColor color) {
     return GdiDrawing::ToColorRef(color);
 }
@@ -1407,6 +1414,31 @@ void PaintAudioListenerSection(
     y = section.Bottom() + kSectionGap;
 }
 
+void PaintAnimatorSection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const EditorSceneContext& sceneContext,
+    const kb::scene::Animator& animator) {
+    const char* rootMotionOwner = "Invalid";
+    switch (animator.rootMotionOwner) {
+    case kb::scene::AnimatorRootMotionOwner::None: rootMotionOwner = "None"; break;
+    case kb::scene::AnimatorRootMotionOwner::Animator: rootMotionOwner = "Animator"; break;
+    case kb::scene::AnimatorRootMotionOwner::CharacterController: rootMotionOwner = "Character Controller"; break;
+    case kb::scene::AnimatorRootMotionOwner::Rigidbody: rootMotionOwner = "Rigidbody"; break;
+    default: break;
+    }
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
+        InspectorSectionId::Animator, HeroIconKind::Play, "Animator");
+    section.Field("Controller", AssetDisplayName(sceneContext, animator.controllerAssetId), InspectorPropertyId::AnimatorController);
+    section.Field("Speed", FormatFloat(animator.speed, 3), InspectorPropertyId::AnimatorSpeed);
+    section.Bool("Enabled", animator.enabled, InspectorPropertyId::AnimatorEnabled);
+    section.Field("Root Motion", rootMotionOwner, InspectorPropertyId::AnimatorRootMotionOwner);
+    y = section.Bottom() + kSectionGap;
+}
+
 constexpr int kCameraSectionRows = 8;
 
 void PaintCameraSection(
@@ -1780,6 +1812,14 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             y += h + kSectionGap;
         }
     }
+    if (const kb::scene::Animator* animator = scene.Components().Animators().TryGet(selected); animator != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::Animator, 4);
+        if (sectionVisible(y, h)) {
+            PaintAnimatorSection(dc, content, y, theme, inspector, sceneContext, *animator);
+        } else {
+            y += h + kSectionGap;
+        }
+    }
     if (const kb::scene::RigidbodyComponent* rigidbody = scene.Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
         const int h = SectionHeight(inspector, InspectorSectionId::Rigidbody, static_cast<int>(InspectorPhysicsModel::Fields(*rigidbody).size()));
         if (sectionVisible(y, h)) {
@@ -1929,6 +1969,9 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     }
     if (scene.Components().AudioListeners().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::AudioListener, 2) + kSectionGap;
+    }
+    if (scene.Components().Animators().TryGet(selected) != nullptr) {
+        height += SectionHeight(inspector, InspectorSectionId::Animator, 4) + kSectionGap;
     }
     if (const kb::scene::RigidbodyComponent* rigidbody = scene.Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::Rigidbody, static_cast<int>(InspectorPhysicsModel::Fields(*rigidbody).size())) + kSectionGap;
@@ -2965,6 +3008,18 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         }
         if (!state.IsCollapsed(InspectorSectionId::AudioListener)) {
             if (InspectorPanelRenderer::Hit hit = HitRows(viewport, y, InspectorSectionId::AudioListener, kAudioListenerRows, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+        }
+        y += kSectionGap;
+    }
+
+    if (sceneContext.Scene().Components().Animators().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::Animator, x, scrolledY); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::Animator)) {
+            if (InspectorPanelRenderer::Hit hit = HitRows(viewport, y, InspectorSectionId::Animator, kAnimatorRows, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
         }

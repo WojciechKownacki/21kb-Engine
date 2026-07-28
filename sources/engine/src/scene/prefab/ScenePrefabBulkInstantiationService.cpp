@@ -144,6 +144,7 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<BehaviourComponent> behaviours;
     std::vector<AudioSourceComponent> audioSources;
     std::vector<AudioListenerComponent> audioListeners;
+    std::vector<Animator> animators;
     std::vector<kb::ecs::CommandBuffer::BulkComponentView> views;
     std::vector<kb::ecs::World::BulkComponentView> worldViews;
     std::vector<kb::ecs::Entity> createdEntities;
@@ -208,6 +209,10 @@ struct ScenePrefabArchetypeSpawnPayload {
             RepeatComponents(audioListeners, std::span<const AudioListenerComponent>{ archetype.audioListeners }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const AudioListenerComponent>{ audioListeners });
         }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Animator)) {
+            RepeatComponents(animators, std::span<const Animator>{ archetype.animators }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const Animator>{ animators });
+        }
     }
 
     void BuildPattern(const ScenePrefabBakedArchetype& archetype, std::size_t instanceCount) {
@@ -268,6 +273,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::AudioListener)) {
             AddCommandComponentPatternView(views, std::span<const AudioListenerComponent>{ archetype.audioListeners }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const AudioListenerComponent>{ archetype.audioListeners }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Animator)) {
+            AddCommandComponentPatternView(views, std::span<const Animator>{ archetype.animators }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const Animator>{ archetype.animators }, instanceCount);
         }
     }
 };
