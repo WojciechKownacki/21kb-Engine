@@ -2712,6 +2712,52 @@ int LuaTimelineTime(lua_State* state) {
     return 1;
 }
 
+int LuaUICreate(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments{
+        Arg("parent", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Hash }),
+        Arg("name", ScriptValue{ std::string{ luaL_checkstring(state, 2) } }),
+    };
+    if (lua_gettop(state) >= 3 && lua_istable(state, 3) != 0) {
+        std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 3);
+        arguments.insert(arguments.end(), options.begin(), options.end());
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("UI.Create", arguments);
+    if (!result.Succeeded()) return PushCallError(state, result, "UI element creation failed");
+    const std::optional<ScriptValue> element = result.Output("element");
+    lua_pushinteger(state, static_cast<lua_Integer>(element.has_value() ? element->AsUInt64() : 0U));
+    return 1;
+}
+
+int LuaUIApplied(lua_State* state, const char* function) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    std::vector<ScriptFunctionArgument> arguments{
+        Arg("element", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Hash }),
+    };
+    if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
+        std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
+        arguments.insert(arguments.end(), options.begin(), options.end());
+    }
+    const ScriptFunctionCallResult result = context->CallFunction(function, arguments);
+    if (!result.Succeeded()) return PushCallError(state, result, "UI command was rejected");
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaUIDestroy(lua_State* state) { return LuaUIApplied(state, "UI.Destroy"); }
+int LuaUIShow(lua_State* state) { return LuaUIApplied(state, "UI.Show"); }
+int LuaUIHide(lua_State* state) { return LuaUIApplied(state, "UI.Hide"); }
+
 // LIB-010: SetClosure's `function` is a runtime value (123 call sites each
 // pass a different one), so it cannot become PucLuaSafeCall's compile-time
 // template parameter without touching every call site. Instead this
@@ -2927,6 +2973,13 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "IsPlaying", &LuaTimelineIsPlaying, context);
     SetClosure(state, "Time", &LuaTimelineTime, context);
     lua_setfield(state, environmentIndex, "Timeline");
+
+    lua_createtable(state, 0, 4);
+    SetClosure(state, "Create", &LuaUICreate, context);
+    SetClosure(state, "Destroy", &LuaUIDestroy, context);
+    SetClosure(state, "Show", &LuaUIShow, context);
+    SetClosure(state, "Hide", &LuaUIHide, context);
+    lua_setfield(state, environmentIndex, "UI");
 
     lua_createtable(state, 0, 5);
     SetClosure(state, "Position", &LuaPointerPosition, context);

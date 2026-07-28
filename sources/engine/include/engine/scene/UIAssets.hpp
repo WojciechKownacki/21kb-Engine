@@ -44,6 +44,16 @@ struct UIDocumentElement {
     bool visible = true;
 };
 
+// Mutable runtime-only element description.  It deliberately carries only
+// structural state; LIB-175 adds control-specific values and LIB-178 owns
+// data-binding execution.
+struct UIRuntimeElementDesc {
+    UIElementId parentId = 0U;
+    std::string name;
+    std::string styleClass;
+    bool visible = true;
+};
+
 struct UIDocument {
     static constexpr std::uint32_t kSchemaVersion = 1U;
 
