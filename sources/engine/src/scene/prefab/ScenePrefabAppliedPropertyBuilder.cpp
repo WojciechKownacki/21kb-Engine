@@ -73,6 +73,9 @@ namespace {
     if (StartsWith(propertyPath, "animator")) {
         return ScenePrefabOverrideFlag::Animator;
     }
+    if (StartsWith(propertyPath, "uiDocument")) {
+        return ScenePrefabOverrideFlag::UIDocument;
+    }
     if (propertyPath == "children") {
         return ScenePrefabOverrideFlag::AddedChild;
     }
@@ -537,6 +540,22 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
         }
         if (propertyPath == "animator.rootMotionOwner") {
             property.value = std::to_string(static_cast<std::uint32_t>(animator->rootMotionOwner));
+            return true;
+        }
+    }
+    if (StartsWith(propertyPath, "uiDocument")) {
+        const UIDocumentComponent* document = components.UIDocuments().TryGet(entity);
+        if (propertyPath == "uiDocument") {
+            property.value = document == nullptr ? "null" : "present";
+            return true;
+        }
+        if (document == nullptr) return false;
+        if (propertyPath == "uiDocument.documentAssetId") {
+            property.value = std::to_string(document->documentAssetId);
+            return true;
+        }
+        if (propertyPath == "uiDocument.enabled") {
+            property.value = ToString(document->enabled);
             return true;
         }
     }

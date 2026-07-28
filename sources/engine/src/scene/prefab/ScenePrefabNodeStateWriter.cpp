@@ -107,6 +107,10 @@ namespace {
         lhs.rootMotionOwner == rhs.rootMotionOwner;
 }
 
+[[nodiscard]] bool Equals(const UIDocumentComponent& lhs, const UIDocumentComponent& rhs) noexcept {
+    return lhs.documentAssetId == rhs.documentAssetId && lhs.enabled == rhs.enabled;
+}
+
 template <typename T, typename Components>
 void WriteOptionalComponent(Components components, SceneEntity entity, const std::optional<T>& component) {
     if (component.has_value()) {
@@ -166,7 +170,8 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , behaviours(scene.Components().Behaviours())
     , audioSources(scene.Components().AudioSources())
     , audioListeners(scene.Components().AudioListeners())
-    , animators(scene.Components().Animators()) {
+    , animators(scene.Components().Animators())
+    , uiDocuments(scene.Components().UIDocuments()) {
     state.suppressPrefabDirtyTracking = true;
 }
 
@@ -232,6 +237,9 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     }
     if (!componentMask.available || !componentMask.matches || node.components.animator.has_value()) {
         WriteOptionalComponent(context.animators, entity, node.components.animator);
+    }
+    if (!componentMask.available || !componentMask.matches || node.components.uiDocument.has_value()) {
+        WriteOptionalComponent(context.uiDocuments, entity, node.components.uiDocument);
     }
 }
 

@@ -275,6 +275,17 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseUIDocument(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool hasDocument = false;
+    if (!ParseOptionalComponentFlag(fields, "uiDocument", hasDocument)) return false;
+    if (!hasDocument) return true;
+    UIDocumentComponent document{};
+    if (!ParseField(fields, "uiDocument.documentAssetId", document.documentAssetId) ||
+        !ParseOptionalBool(fields, "uiDocument.enabled", document.enabled)) return false;
+    components.uiDocument = document;
+    return true;
+}
+
 } // namespace
 
 bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
@@ -290,7 +301,8 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseBehaviour(fields, components)
         && ParseAudioSource(fields, components)
         && ParseAudioListener(fields, components)
-        && ParseAnimator(fields, components);
+        && ParseAnimator(fields, components)
+        && ParseUIDocument(fields, components);
 }
 
 } // namespace kb::scene

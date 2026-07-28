@@ -17,6 +17,7 @@
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
+#include "engine/scene/SceneUIDocuments.hpp"
 
 namespace kb::scene {
 
@@ -49,6 +50,7 @@ struct ScenePrefabNodeStateWriterContext {
     SceneAudioSourceComponents audioSources;
     SceneAudioListenerComponents audioListeners;
     SceneAnimatorComponents animators;
+    SceneUIDocumentComponents uiDocuments;
 };
 
 class ScenePrefabNodeStateWriter {

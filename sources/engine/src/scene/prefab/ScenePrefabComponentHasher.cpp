@@ -148,6 +148,11 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::Mix(hash, components.animator->enabled ? 1U : 0U);
         ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(components.animator->rootMotionOwner));
     }
+    ScenePrefabHashBuilder::Mix(hash, components.uiDocument.has_value() ? 1U : 0U);
+    if (components.uiDocument.has_value()) {
+        ScenePrefabHashBuilder::Mix(hash, components.uiDocument->documentAssetId);
+        ScenePrefabHashBuilder::Mix(hash, components.uiDocument->enabled ? 1U : 0U);
+    }
 }
 
 } // namespace kb::scene

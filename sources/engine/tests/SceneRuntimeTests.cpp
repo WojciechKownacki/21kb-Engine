@@ -43,6 +43,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunAnimationRuntimeTests();
     } else if (suite == "timeline-runtime") {
         kb::tests::RunTimelineRuntimeTests();
+    } else if (suite == "ui-document-runtime") {
+        kb::tests::RunUIDocumentRuntimeTests();
     } else {
         return false;
     }
@@ -66,6 +68,7 @@ void RunAllSuites() {
     kb::tests::RunEngineMathTests();
     kb::tests::RunAnimationRuntimeTests();
     kb::tests::RunTimelineRuntimeTests();
+    kb::tests::RunUIDocumentRuntimeTests();
 }
 
 } // namespace

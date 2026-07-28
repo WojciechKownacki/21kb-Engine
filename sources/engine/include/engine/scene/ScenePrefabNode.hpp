@@ -16,6 +16,7 @@
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
+#include "engine/scene/UIAssets.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -58,6 +59,7 @@ struct ScenePrefabNodeComponents {
     std::optional<AudioSourceComponent> audioSource;
     std::optional<AudioListenerComponent> audioListener;
     std::optional<Animator> animator;
+    std::optional<UIDocumentComponent> uiDocument;
 };
 
 struct ScenePrefabNodeDesc {

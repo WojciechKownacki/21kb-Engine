@@ -374,6 +374,20 @@ void AppendAnimator(SceneComponents components, SceneEntity entity, const std::o
     }
 }
 
+void AppendUIDocument(SceneComponents components, SceneEntity entity, const std::optional<UIDocumentComponent>& expected, ScenePrefabOverrideReport& report, std::uint32_t nodeIndex, SceneObject object) {
+    const UIDocumentComponent* actual = components.UIDocuments().TryGet(entity);
+    const bool equal = actual == nullptr ? !expected.has_value() : expected.has_value() &&
+        actual->documentAssetId == expected->documentAssetId && actual->enabled == expected->enabled;
+    if (equal) return;
+    if (HasPresenceOverride(actual, expected, report, nodeIndex, object, "uiDocument", ScenePrefabOverrideFlag::UIDocument)) return;
+    if (!expected.has_value() || actual->documentAssetId != expected->documentAssetId) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "uiDocument.documentAssetId", ScenePrefabOverrideValueFormatter::ToString(actual->documentAssetId), ScenePrefabOverrideFlag::UIDocument);
+    }
+    if (!expected.has_value() || actual->enabled != expected->enabled) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "uiDocument.enabled", ScenePrefabOverrideValueFormatter::ToString(actual->enabled), ScenePrefabOverrideFlag::UIDocument);
+    }
+}
+
 } // namespace
 
 void ScenePrefabComponentOverrideReporter::Append(SceneComponents components, SceneEntity entity, const ScenePrefabNodeComponents& expected, ScenePrefabOverrideReport& report, std::uint32_t nodeIndex, SceneObject object) {
@@ -388,6 +402,7 @@ void ScenePrefabComponentOverrideReporter::Append(SceneComponents components, Sc
     AppendAudioSource(components, entity, expected.audioSource, report, nodeIndex, object);
     AppendAudioListener(components, entity, expected.audioListener, report, nodeIndex, object);
     AppendAnimator(components, entity, expected.animator, report, nodeIndex, object);
+    AppendUIDocument(components, entity, expected.uiDocument, report, nodeIndex, object);
 }
 
 } // namespace kb::scene

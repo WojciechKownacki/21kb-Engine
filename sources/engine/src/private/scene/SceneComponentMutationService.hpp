@@ -15,6 +15,7 @@
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
+#include "engine/scene/UIAssets.hpp"
 
 namespace kb::scene {
 
@@ -91,6 +92,10 @@ public:
     static void SetAnimator(Scene& scene, SceneEntity entity, const Animator& animator);
     static void RemoveAnimator(Scene& scene, SceneEntity entity) noexcept;
     static void MarkAnimatorModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static UIDocumentComponent* TryGetUIDocument(Scene& scene, SceneEntity entity) noexcept;
+    static void SetUIDocument(Scene& scene, SceneEntity entity, const UIDocumentComponent& document);
+    static void RemoveUIDocument(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkUIDocumentModified(Scene& scene, SceneEntity entity) noexcept;
 };
 
 } // namespace kb::scene

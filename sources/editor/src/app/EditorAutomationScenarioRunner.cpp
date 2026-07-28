@@ -312,6 +312,9 @@ void WriteLittleEndian32(std::ostream& output, std::uint32_t value) {
     if (component == "Animator") {
         return scene.Components().Animators().Has(entity);
     }
+    if (component == "UIDocument") {
+        return scene.Components().UIDocuments().Has(entity);
+    }
     return kb::script::ScriptSceneComponentApi::HasComponent(
         scene, entity, component);
 }
@@ -1109,6 +1112,8 @@ ReadScriptValue(
         } else if (*role == "animator_controller") {
             assigned =
                 state.context.SetAnimatorControllerAsset(entity, id);
+        } else if (*role == "ui_document") {
+            assigned = state.context.SetUIDocumentAsset(entity, id);
         } else if (*role == "script") {
             assigned =
                 state.context.AttachScriptToEntity(entity, id);

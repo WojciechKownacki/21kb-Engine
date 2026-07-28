@@ -14,6 +14,7 @@
 #include "engine/scene/ParticleEffectAssetLoader.hpp"
 #include "engine/scene/TimelineAssetLoader.hpp"
 #include "engine/scene/AnimationAssetLoaders.hpp"
+#include "engine/scene/UIAssetLoaders.hpp"
 #include "engine/scene/PhysicsLayersAssetLoader.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
@@ -28,6 +29,7 @@
 #include "scene/assets/ScenePrefabAssetLoader.hpp"
 #include "scene/systems/AnimatorSceneSystem.hpp"
 #include "scene/systems/TimelineSceneSystem.hpp"
+#include "scene/systems/UIDocumentSceneSystem.hpp"
 
 #include <array>
 #include <atomic>
@@ -85,6 +87,8 @@ Scene::Scene(
     const bool registeredAnimationClipLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AnimationClipAssetLoader>());
     const bool registeredAnimatorControllerLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::AnimatorControllerAssetLoader>());
     const bool registeredTimelineLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::TimelineAssetLoader>());
+    const bool registeredUIDocumentLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::UIDocumentAssetLoader>());
+    const bool registeredUIStyleLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::UIStyleAssetLoader>());
     static_cast<void>(registeredPrefabLoader);
     static_cast<void>(registeredSceneLoader);
     static_cast<void>(registeredLuaScriptLoader);
@@ -100,6 +104,8 @@ Scene::Scene(
     static_cast<void>(registeredAnimationClipLoader);
     static_cast<void>(registeredAnimatorControllerLoader);
     static_cast<void>(registeredTimelineLoader);
+    static_cast<void>(registeredUIDocumentLoader);
+    static_cast<void>(registeredUIStyleLoader);
 
     if (mode == SceneMode::PrefabPrivate) {
         return;
@@ -120,6 +126,7 @@ Scene::Scene(
     moduleHost_->AttachScene(*this);
     state_->sceneSystemScheduler.Add(std::make_unique<AnimatorSceneSystem>(), *this);
     state_->sceneSystemScheduler.Add(std::make_unique<TimelineSceneSystem>(), *this);
+    state_->sceneSystemScheduler.Add(std::make_unique<UIDocumentSceneSystem>(), *this);
 }
 
 Scene::~Scene() {

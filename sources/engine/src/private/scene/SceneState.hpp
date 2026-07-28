@@ -24,6 +24,7 @@
 #include "engine/scene/SceneTasks.hpp"
 #include "engine/scene/SceneTimelines.hpp"
 #include "engine/scene/TimelineAsset.hpp"
+#include "engine/scene/UIAssets.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorage.hpp"
 #include "scene/history/SceneHistoryStack.hpp"
@@ -135,6 +136,16 @@ struct TimelineRuntimeRecord {
     bool playing = false;
 };
 
+struct UIDocumentRuntimeRecord {
+    SceneEntity entity{};
+    kb::assets::AssetHandle<UIDocument> document;
+    kb::assets::AssetHandle<UIStyleAsset> style;
+    std::uint64_t documentLoadGeneration = 0U;
+    std::uint64_t styleLoadGeneration = 0U;
+    UIElementId root = 0U;
+    std::map<UIElementId, UIDocumentElement> elements;
+};
+
 struct SceneTransformValueCacheEntry {
     SceneEntity entity;
     TransformComponent transform{};
@@ -176,6 +187,7 @@ public:
     std::map<std::uint64_t, AnimatorRuntimeRecord> animators;
     std::vector<AnimationEventRecord> pendingAnimationEvents;
     std::map<std::uint64_t, TimelineRuntimeRecord> timelines;
+    std::map<std::uint64_t, UIDocumentRuntimeRecord> uiDocuments;
     std::vector<TimelineMarkerEvent> pendingTimelineMarkerEvents;
     std::uint64_t nextTimelineInstanceId = 1U;
     kb::input::InputSubsystem inputSubsystem;

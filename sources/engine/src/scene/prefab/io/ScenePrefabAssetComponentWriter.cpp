@@ -167,6 +167,11 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "animator.enabled=" << (components.animator->enabled ? 1 : 0) << '\n';
         output << "animator.rootMotionOwner=" << static_cast<int>(components.animator->rootMotionOwner) << '\n';
     }
+    output << "uiDocument=" << (components.uiDocument.has_value() ? 1 : 0) << '\n';
+    if (components.uiDocument.has_value()) {
+        output << "uiDocument.documentAssetId=" << components.uiDocument->documentAssetId << '\n';
+        output << "uiDocument.enabled=" << (components.uiDocument->enabled ? 1 : 0) << '\n';
+    }
 }
 
 } // namespace kb::scene

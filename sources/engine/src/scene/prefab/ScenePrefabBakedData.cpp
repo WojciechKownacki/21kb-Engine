@@ -7,7 +7,7 @@
 namespace kb::scene {
 namespace {
 
-inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 13U;
+inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 14U;
 
 [[nodiscard]] std::uint16_t ComponentMask(const ScenePrefabNodeComponents& components) noexcept {
     std::uint16_t mask = 0U;
@@ -49,6 +49,9 @@ inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 13U;
     }
     if (components.animator.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Animator);
+    }
+    if (components.uiDocument.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::UIDocument);
     }
     return mask;
 }
@@ -131,6 +134,9 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         }
         if (node.components.animator.has_value()) {
             archetype.animators.push_back(*node.components.animator);
+        }
+        if (node.components.uiDocument.has_value()) {
+            archetype.uiDocuments.push_back(*node.components.uiDocument);
         }
     }
 
