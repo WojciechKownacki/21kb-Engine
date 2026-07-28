@@ -55,7 +55,8 @@ public:
     [[nodiscard]] bool CapturePanel(
         std::string_view panel, std::string_view checkpoint);
     [[nodiscard]] bool CaptureRuntime(
-        std::string_view checkpoint);
+        std::string_view checkpoint,
+        bool requireNonUniform = false);
     [[nodiscard]] bool SnapshotInspectorTree(
         std::string_view checkpoint);
     void SnapshotConsole(std::string_view checkpoint);

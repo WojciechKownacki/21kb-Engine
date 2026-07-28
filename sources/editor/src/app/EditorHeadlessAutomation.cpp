@@ -558,7 +558,8 @@ bool EditorHeadlessAutomation::StepRuntime(
 }
 
 bool EditorHeadlessAutomation::CaptureRuntime(
-    std::string_view checkpoint) {
+    std::string_view checkpoint,
+    bool requireNonUniform) {
     if (!context_.HasPlayModeSceneSession()) {
         Trace("capture_runtime", false, "play-mode-required");
         return false;
@@ -582,12 +583,38 @@ bool EditorHeadlessAutomation::CaptureRuntime(
             kb::scene::SceneRenderFeedback::ScreenCaptureStatus(
                 context_.Scene(), capture);
         if (status == kb::scene::SceneScreenCaptureStatus::Completed) {
-            const bool exists =
-                std::filesystem::is_regular_file(output);
+            bool valid = std::filesystem::is_regular_file(output);
+            if (valid && requireNonUniform) {
+                HeroIconGdiplusRuntime::EnsureStarted();
+                Gdiplus::Bitmap image(output.wstring().c_str());
+                valid = image.GetLastStatus() == Gdiplus::Ok &&
+                    image.GetWidth() > 0U && image.GetHeight() > 0U;
+                Gdiplus::Color first{};
+                bool firstSet = false;
+                bool varied = false;
+                for (UINT y = 0U; valid && !varied &&
+                     y < image.GetHeight(); ++y) {
+                    for (UINT x = 0U; x < image.GetWidth(); ++x) {
+                        Gdiplus::Color pixel{};
+                        if (image.GetPixel(x, y, &pixel) != Gdiplus::Ok) {
+                            valid = false;
+                            break;
+                        }
+                        if (!firstSet) {
+                            first = pixel;
+                            firstSet = true;
+                        } else if (pixel.GetValue() != first.GetValue()) {
+                            varied = true;
+                            break;
+                        }
+                    }
+                }
+                valid = valid && varied;
+            }
             Trace(
-                "capture_runtime", exists,
+                "capture_runtime", valid,
                 output.filename().string());
-            return exists;
+            return valid;
         }
         if (status == kb::scene::SceneScreenCaptureStatus::Failed) {
             Trace("capture_runtime", false, "capture-failed");

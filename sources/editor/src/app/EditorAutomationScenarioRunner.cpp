@@ -4,23 +4,31 @@
 #include "app/EditorHeadlessAutomation.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/audio/AudioPlayback.hpp"
 #include "engine/core/JsonValue.hpp"
 #include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputDeviceState.hpp"
+#include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputKey.hpp"
+#include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/script/ScriptSceneComponentApi.hpp"
 #include "engine/script/ScriptValue.hpp"
 #include "project/EditorProjectPaths.hpp"
+#include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 
 #include <Windows.h>
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -31,6 +39,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -56,14 +65,18 @@ struct EntityAlias {
 struct ScenarioState {
     explicit ScenarioState(
         EditorSceneContext& sceneContext,
-        const std::filesystem::path& artifacts)
+        const std::filesystem::path& artifacts,
+        std::filesystem::path fixtures)
         : context(sceneContext)
-        , automation(sceneContext, artifacts / "automation") {}
+        , automation(sceneContext, artifacts / "automation")
+        , fixtureRoot(std::move(fixtures)) {}
 
     EditorSceneContext& context;
     EditorHeadlessAutomation automation;
+    std::filesystem::path fixtureRoot;
     std::unordered_map<std::string, EntityAlias> entities;
     std::unordered_map<std::string, kb::assets::AssetId> assets;
+    std::unordered_map<std::string, std::uint32_t> materialNodes;
 };
 
 class ScopedProjectFile final {
@@ -396,6 +409,82 @@ ReadScriptValue(
         return { true, resolved->string() };
     }
 
+    if (*operation == "copy_fixture") {
+        const auto source = StringMember(step, "source", error);
+        const auto destination =
+            StringMember(step, "destination", error);
+        if (!source || !destination) return { false, error };
+        const std::filesystem::path relativeSource{ *source };
+        if (relativeSource.empty() || relativeSource.is_absolute()) {
+            return { false, "fixture source must be relative" };
+        }
+        const std::filesystem::path resolvedSource =
+            std::filesystem::absolute(
+                state.fixtureRoot / relativeSource).lexically_normal();
+        if (!IsInside(state.fixtureRoot, resolvedSource) ||
+            !std::filesystem::is_regular_file(resolvedSource)) {
+            return { false, "fixture source escapes its root or is absent" };
+        }
+        const auto resolvedDestination =
+            ResolveProjectPath(*destination, error);
+        if (!resolvedDestination) return { false, error };
+        std::error_code copyError;
+        std::filesystem::create_directories(
+            resolvedDestination->parent_path(), copyError);
+        if (!copyError) {
+            std::filesystem::copy_file(
+                resolvedSource, *resolvedDestination,
+                std::filesystem::copy_options::overwrite_existing,
+                copyError);
+        }
+        return {
+            !copyError,
+            copyError ? copyError.message()
+                      : resolvedDestination->string() };
+    }
+
+    if (*operation == "assert_file") {
+        const auto path = StringMember(step, "path", error);
+        if (!path) return { false, error };
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved) return { false, error };
+        const bool expected =
+            BoolMember(step, "exists", error, false).value_or(true);
+        const auto minimum =
+            NumberMember(step, "min_size", error, false).value_or(0.0);
+        const auto contains =
+            StringMember(step, "contains", error, false);
+        if (!error.empty() || minimum < 0.0 ||
+            std::floor(minimum) != minimum) {
+            return { false, error.empty()
+                ? "min_size must be a non-negative integer" : error };
+        }
+        const bool exists =
+            std::filesystem::is_regular_file(*resolved);
+        if (exists != expected) {
+            return {
+                false, exists ? "unexpected file" : "file is absent" };
+        }
+        if (!exists) return { true, "absent" };
+        std::error_code sizeError;
+        const std::uintmax_t size =
+            std::filesystem::file_size(*resolved, sizeError);
+        if (sizeError ||
+            size < static_cast<std::uintmax_t>(minimum)) {
+            return { false, "file is smaller than expected" };
+        }
+        if (contains.has_value()) {
+            std::string readError;
+            const std::string text = ReadText(*resolved, readError);
+            if (!readError.empty() ||
+                text.find(*contains) == std::string::npos) {
+                return { false, readError.empty()
+                    ? "file text was not found" : readError };
+            }
+        }
+        return { true, std::to_string(size) + " byte(s)" };
+    }
+
     if (*operation == "discover_assets") {
         const std::size_t count =
             state.context.Scene().Assets().Discover();
@@ -463,6 +552,164 @@ ReadScriptValue(
                 .entity = entity,
                 .name = state.context.Scene().Entities().Name(entity) });
         return { true, *alias + '=' + std::to_string(entity.Id()) };
+    }
+
+    if (*operation == "duplicate_entity") {
+        const auto sourceAlias =
+            StringMember(step, "entity", error);
+        const auto resultAlias = StringMember(step, "id", error);
+        const auto name = StringMember(step, "name", error, false);
+        if (!sourceAlias || !resultAlias) return { false, error };
+        if (state.entities.contains(*resultAlias)) {
+            return { false, "entity alias already exists" };
+        }
+        const kb::scene::SceneEntity source =
+            ResolveEntity(state, *sourceAlias);
+        if (!state.context.Scene().Entities().IsAlive(source)) {
+            return { false, "source entity alias is not alive" };
+        }
+        state.context.SelectEntity(source);
+        if (!state.context.DuplicateSelectedHierarchyEntities()) {
+            return { false, "entity duplication failed" };
+        }
+        const kb::scene::SceneEntity entity =
+            state.context.SelectedEntity();
+        if (!state.context.Scene().Entities().IsAlive(entity) ||
+            entity == source) {
+            return { false, "duplicated entity was not selected" };
+        }
+        if (name.has_value()) {
+            state.context.Scene().Entities().SetName(entity, *name);
+        }
+        state.entities.emplace(
+            *resultAlias,
+            EntityAlias{
+                .entity = entity,
+                .name = state.context.Scene().Entities().Name(entity) });
+        return { true, *resultAlias };
+    }
+
+    if (*operation == "delete_entity") {
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return { false, error };
+        const kb::scene::SceneEntity entity =
+            ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(entity)) {
+            return { false, "entity alias is not alive" };
+        }
+        state.context.SelectEntity(entity);
+        return {
+            state.context.DeleteSelectedHierarchyEntity(),
+            *alias };
+    }
+
+    if (*operation == "rename_entity") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto name = StringMember(step, "name", error);
+        if (!alias || !name || name->empty()) return { false, error };
+        const kb::scene::SceneEntity entity =
+            ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(entity)) {
+            return { false, "entity alias is not alive" };
+        }
+        state.context.SelectEntity(entity);
+        if (!state.context.BeginHierarchyRename()) {
+            return { false, "hierarchy rename did not begin" };
+        }
+        state.context.SetHierarchyRenameText(*name);
+        if (!state.context.CommitHierarchyRename()) {
+            state.context.CancelHierarchyRename();
+            return { false, "hierarchy rename failed" };
+        }
+        state.entities.at(*alias).entity = entity;
+        state.entities.at(*alias).name = *name;
+        return { true, *name };
+    }
+
+    if (*operation == "reparent_entity") {
+        const auto childAlias =
+            StringMember(step, "entity", error);
+        const auto parentAlias =
+            StringMember(step, "parent", error);
+        if (!childAlias || !parentAlias) return { false, error };
+        const kb::scene::SceneEntity child =
+            ResolveEntity(state, *childAlias);
+        const kb::scene::SceneEntity parent =
+            ResolveEntity(state, *parentAlias);
+        return {
+            state.context.ReparentEntity(child, parent),
+            *childAlias + " -> " + *parentAlias };
+    }
+
+    if (*operation == "create_prefab") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto path = StringMember(step, "path", error);
+        if (!alias || !path) return { false, error };
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved) return { false, error };
+        return {
+            state.context.CreatePrefabAsset(
+                ResolveEntity(state, *alias), *resolved),
+            resolved->string() };
+    }
+
+    if (*operation == "instantiate_prefab") {
+        const auto resultAlias = StringMember(step, "id", error);
+        const auto path = StringMember(step, "path", error);
+        const auto virtualPath =
+            StringMember(step, "virtual_path", error);
+        const auto name = StringMember(step, "name", error, false);
+        if (!resultAlias || !path || !virtualPath) {
+            return { false, error };
+        }
+        if (state.entities.contains(*resultAlias)) {
+            return { false, "entity alias already exists" };
+        }
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved) return { false, error };
+        const auto x = NumberMember(step, "x", error, false);
+        const auto y = NumberMember(step, "y", error, false);
+        const auto z = NumberMember(step, "z", error, false);
+        if (!error.empty() ||
+            (x.has_value() != y.has_value()) ||
+            (x.has_value() != z.has_value())) {
+            return { false, error.empty()
+                ? "x, y and z must be supplied together" : error };
+        }
+        bool instantiated = false;
+        if (x.has_value()) {
+            instantiated = state.context.InstantiatePrefabAssetAt(
+                *resolved, std::filesystem::path{ *virtualPath },
+                kb::scene::Vec3{
+                    static_cast<float>(*x),
+                    static_cast<float>(*y),
+                    static_cast<float>(*z) });
+        } else {
+            const auto parentAlias =
+                StringMember(step, "parent", error, false);
+            const kb::scene::SceneEntity parent =
+                parentAlias.has_value()
+                ? ResolveEntity(state, *parentAlias)
+                : kb::scene::SceneEntity{};
+            instantiated = state.context.InstantiatePrefabAsset(
+                *resolved, std::filesystem::path{ *virtualPath },
+                parent);
+        }
+        const kb::scene::SceneEntity entity =
+            state.context.SelectedEntity();
+        if (!instantiated ||
+            !state.context.Scene().Entities().IsAlive(entity)) {
+            return { false, "prefab instantiation failed" };
+        }
+        if (name.has_value()) {
+            state.context.Scene().Entities().SetName(entity, *name);
+        }
+        state.entities.emplace(
+            *resultAlias,
+            EntityAlias{
+                .entity = entity,
+                .name = state.context.Scene().Entities().Name(entity) });
+        return { true, *resultAlias };
     }
 
     if (*operation == "select_entity") {
@@ -574,6 +821,43 @@ ReadScriptValue(
             std::string{ found ? "present" : "absent" } };
     }
 
+    if (*operation == "assert_parent") {
+        const auto childAlias =
+            StringMember(step, "entity", error);
+        const auto parentAlias =
+            StringMember(step, "parent", error);
+        if (!childAlias || !parentAlias) return { false, error };
+        const kb::scene::SceneEntity child =
+            ResolveEntity(state, *childAlias);
+        const kb::scene::SceneEntity parent =
+            ResolveEntity(state, *parentAlias);
+        const bool matched =
+            state.context.Scene().Entities().IsAlive(child) &&
+            state.context.Scene().Entities().IsAlive(parent) &&
+            state.context.Scene().Hierarchy().Parent(child) == parent;
+        return { matched, matched ? "matched" : "parent mismatch" };
+    }
+
+    if (*operation == "assert_asset") {
+        const auto path = StringMember(step, "path", error);
+        const auto type = StringMember(step, "type", error, false);
+        if (!path) return { false, error };
+        const kb::assets::AssetMetadata* metadata =
+            state.context.Scene().Assets().Manager().Registry()
+                .FindByPath(std::filesystem::path{ *path });
+        const bool expected =
+            BoolMember(step, "exists", error, false).value_or(true);
+        if (!error.empty()) return { false, error };
+        const bool matched =
+            expected
+            ? metadata != nullptr &&
+                (!type.has_value() || metadata->type == *type)
+            : metadata == nullptr;
+        return {
+            matched,
+            metadata == nullptr ? "absent" : metadata->type };
+    }
+
     if (*operation == "create_asset") {
         const auto alias = StringMember(step, "id", error);
         const auto type = StringMember(step, "type", error);
@@ -638,6 +922,362 @@ ReadScriptValue(
         return { true, *alias + '=' + std::to_string(createdId.value) };
     }
 
+    if (*operation == "copy_asset" ||
+        *operation == "move_asset") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto destination =
+            StringMember(step, "destination", error);
+        if (!asset || !destination) return { false, error };
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        if (!id.IsValid()) return { false, "asset was not found" };
+        const bool succeeded =
+            *operation == "copy_asset"
+            ? state.context.CopyAssetToFolder(
+                id, std::filesystem::path{ *destination })
+            : state.context.MoveAssetToFolder(
+                id, std::filesystem::path{ *destination });
+        return { succeeded, *destination };
+    }
+
+    if (*operation == "delete_asset") {
+        const auto asset = StringMember(step, "asset", error);
+        if (!asset) return { false, error };
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        return {
+            id.IsValid() && state.context.DeleteAssetBrowserItem(id),
+            *asset };
+    }
+
+    if (*operation == "assign_asset") {
+        const auto entityAlias =
+            StringMember(step, "entity", error);
+        const auto asset = StringMember(step, "asset", error);
+        const auto role = StringMember(step, "role", error);
+        if (!entityAlias || !asset || !role) {
+            return { false, error };
+        }
+        const kb::scene::SceneEntity entity =
+            ResolveEntity(state, *entityAlias);
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        if (!state.context.Scene().Entities().IsAlive(entity) ||
+            !id.IsValid()) {
+            return { false, "entity or asset was not found" };
+        }
+        bool assigned = false;
+        if (*role == "mesh") {
+            assigned =
+                state.context.SetMeshRendererMeshAsset(entity, id);
+        } else if (*role == "material") {
+            assigned =
+                state.context.SetMeshRendererMaterialAsset(entity, id);
+        } else if (*role == "audio_clip") {
+            assigned =
+                state.context.SetAudioSourceClipAsset(entity, id);
+        } else if (*role == "animator_controller") {
+            assigned =
+                state.context.SetAnimatorControllerAsset(entity, id);
+        } else if (*role == "script") {
+            assigned =
+                state.context.AttachScriptToEntity(entity, id);
+        } else {
+            return { false, "unknown asset role" };
+        }
+        return { assigned, *role };
+    }
+
+    if (*operation == "set_material" ||
+        *operation == "assert_material") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto property =
+            StringMember(step, "property", error);
+        const JsonValue* value = step.Find("value");
+        if (!asset || !property || value == nullptr) {
+            return { false, error.empty() ? "missing 'value'" : error };
+        }
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        if (!id.IsValid()) return { false, "material was not found" };
+        const auto current =
+            state.context.ReadMaterialDocumentAsset(id);
+        if (!current.has_value()) {
+            return { false, "material document is unavailable" };
+        }
+        bool succeeded = false;
+        std::string actual;
+        if (*property == "double_sided") {
+            if (value->GetKind() != JsonValue::Kind::Bool) {
+                return { false, "double_sided requires a bool" };
+            }
+            const bool expected = value->AsBool();
+            if (*operation == "set_material" &&
+                current->desc.doubleSided != expected) {
+                succeeded = state.context.ToggleMaterialDoubleSided(id);
+            } else {
+                succeeded = current->desc.doubleSided == expected;
+            }
+            const auto updated =
+                state.context.ReadMaterialDocumentAsset(id);
+            succeeded = succeeded && updated.has_value() &&
+                updated->desc.doubleSided == expected;
+            actual = expected ? "true" : "false";
+        } else if (*property == "alpha_mode") {
+            if (value->GetKind() != JsonValue::Kind::String) {
+                return { false, "alpha_mode requires a string" };
+            }
+            kb::render::RenderMaterialAlphaMode expected{};
+            if (value->AsString() == "opaque") {
+                expected = kb::render::RenderMaterialAlphaMode::Opaque;
+            } else if (value->AsString() == "mask") {
+                expected = kb::render::RenderMaterialAlphaMode::Mask;
+            } else if (value->AsString() == "blend") {
+                expected = kb::render::RenderMaterialAlphaMode::Blend;
+            } else {
+                return { false, "invalid alpha mode" };
+            }
+            succeeded =
+                *operation == "set_material"
+                ? state.context.SetMaterialAlphaMode(id, expected)
+                : current->desc.alphaMode == expected;
+            const auto updated =
+                state.context.ReadMaterialDocumentAsset(id);
+            succeeded = succeeded && updated.has_value() &&
+                updated->desc.alphaMode == expected;
+            actual = value->AsString();
+        } else {
+            if (value->GetKind() != JsonValue::Kind::Number ||
+                !std::isfinite(value->AsNumber())) {
+                return { false, "material property requires a number" };
+            }
+            const float expected =
+                static_cast<float>(value->AsNumber());
+            const auto getValue = [&property](
+                const kb::render::RenderMaterialAssetData& material) {
+                if (*property == "metallic") {
+                    return material.desc.metallicFactor;
+                }
+                if (*property == "roughness") {
+                    return material.desc.roughnessFactor;
+                }
+                if (*property == "normal_scale") {
+                    return material.desc.normalScale;
+                }
+                if (*property == "occlusion_strength") {
+                    return material.desc.occlusionStrength;
+                }
+                if (*property == "emissive_strength") {
+                    return material.desc.emissiveStrength;
+                }
+                if (*property == "alpha_cutoff") {
+                    return material.desc.alphaCutoff;
+                }
+                return std::numeric_limits<float>::quiet_NaN();
+            };
+            if (!std::isfinite(getValue(*current))) {
+                return { false, "unknown material property" };
+            }
+            if (*operation == "set_material") {
+                if (*property == "metallic") {
+                    succeeded =
+                        state.context.SetMaterialMetallicFactor(id, expected);
+                } else if (*property == "roughness") {
+                    succeeded =
+                        state.context.SetMaterialRoughnessFactor(id, expected);
+                } else if (*property == "normal_scale") {
+                    succeeded =
+                        state.context.SetMaterialNormalScale(id, expected);
+                } else if (*property == "occlusion_strength") {
+                    succeeded =
+                        state.context.SetMaterialOcclusionStrength(id, expected);
+                } else if (*property == "emissive_strength") {
+                    succeeded =
+                        state.context.SetMaterialEmissiveStrength(id, expected);
+                } else if (*property == "alpha_cutoff") {
+                    succeeded =
+                        state.context.SetMaterialAlphaCutoff(id, expected);
+                }
+            } else {
+                succeeded =
+                    std::abs(getValue(*current) - expected) <= 0.0001F;
+            }
+            const auto updated =
+                state.context.ReadMaterialDocumentAsset(id);
+            succeeded = succeeded && updated.has_value() &&
+                std::abs(getValue(*updated) - expected) <= 0.0001F;
+            actual = std::to_string(
+                updated.has_value() ? getValue(*updated) : 0.0F);
+        }
+        return { succeeded, actual };
+    }
+
+    if (*operation == "save_material") {
+        const auto asset = StringMember(step, "asset", error);
+        if (!asset) return { false, error };
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        return {
+            id.IsValid() &&
+                state.context.SaveMaterialEditorAsset(id),
+            *asset };
+    }
+
+    if (*operation == "find_material_node" ||
+        *operation == "add_material_node") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto alias = StringMember(step, "id", error);
+        const auto kindText = StringMember(step, "kind", error);
+        if (!asset || !alias || !kindText) return { false, error };
+        if (state.materialNodes.contains(*alias)) {
+            return { false, "material node alias already exists" };
+        }
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        const auto kind =
+            kb::render::ParseRenderMaterialGraphNodeKind(*kindText);
+        if (!id.IsValid() || !kind.has_value()) {
+            return { false, "asset or node kind is invalid" };
+        }
+        auto document = state.context.ReadMaterialDocumentAsset(id);
+        if (!document.has_value()) {
+            return { false, "material graph document is unavailable" };
+        }
+        std::uint32_t nodeId = 0U;
+        if (*operation == "find_material_node") {
+            for (const auto& node : document->graph.nodes) {
+                if (node.kind != *kind) continue;
+                if (nodeId != 0U) {
+                    return { false, "material node kind is ambiguous" };
+                }
+                nodeId = node.id;
+            }
+        } else {
+            const auto x = NumberMember(step, "x", error);
+            const auto y = NumberMember(step, "y", error);
+            if (!x || !y ||
+                *x < std::numeric_limits<int>::min() ||
+                *x > std::numeric_limits<int>::max() ||
+                *y < std::numeric_limits<int>::min() ||
+                *y > std::numeric_limits<int>::max() ||
+                std::floor(*x) != *x || std::floor(*y) != *y) {
+                return { false, error.empty()
+                    ? "node coordinates must be integers" : error };
+            }
+            std::vector<std::uint32_t> before;
+            before.reserve(document->graph.nodes.size());
+            for (const auto& node : document->graph.nodes) {
+                before.push_back(node.id);
+            }
+            if (!state.context.AddMaterialGraphNode(
+                    id, *kind, static_cast<int>(*x),
+                    static_cast<int>(*y))) {
+                return { false, "material node creation failed" };
+            }
+            document = state.context.ReadMaterialDocumentAsset(id);
+            if (document.has_value()) {
+                for (const auto& node : document->graph.nodes) {
+                    if (node.kind == *kind &&
+                        std::ranges::find(before, node.id) ==
+                            before.end()) {
+                        nodeId = node.id;
+                        break;
+                    }
+                }
+            }
+        }
+        if (nodeId == 0U) {
+            return { false, "material node was not resolved" };
+        }
+        state.materialNodes.emplace(*alias, nodeId);
+        return { true, *alias + '=' + std::to_string(nodeId) };
+    }
+
+    if (*operation == "connect_material_nodes") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto from = StringMember(step, "from", error);
+        const auto fromPin = StringMember(step, "from_pin", error);
+        const auto to = StringMember(step, "to", error);
+        const auto toPin = StringMember(step, "to_pin", error);
+        if (!asset || !from || !fromPin || !to || !toPin) {
+            return { false, error };
+        }
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        const auto fromNode = state.materialNodes.find(*from);
+        const auto toNode = state.materialNodes.find(*to);
+        if (!id.IsValid() ||
+            fromNode == state.materialNodes.end() ||
+            toNode == state.materialNodes.end()) {
+            return { false, "material node alias was not found" };
+        }
+        const bool connected =
+            state.context.BeginMaterialGraphPinConnection(
+                id, fromNode->second, *fromPin) &&
+            state.context.CompleteMaterialGraphPinConnection(
+                id, toNode->second, *toPin);
+        const auto document =
+            state.context.ReadMaterialDocumentAsset(id);
+        const bool persisted =
+            connected && document.has_value() &&
+            std::ranges::any_of(
+                document->graph.links,
+                [&fromNode, &toNode, &fromPin, &toPin](const auto& link) {
+                    return link.fromNodeId == fromNode->second &&
+                        link.fromPin == *fromPin &&
+                        link.toNodeId == toNode->second &&
+                        link.toPin == *toPin;
+                });
+        return { persisted, persisted ? "connected" : "connection failed" };
+    }
+
+    if (*operation == "wait_material_cook") {
+        const auto timeout =
+            NumberMember(step, "timeout_ms", error, false)
+                .value_or(30000.0);
+        if (!error.empty() || timeout < 1.0 ||
+            timeout > 120000.0 || std::floor(timeout) != timeout) {
+            return { false, error.empty()
+                ? "timeout_ms must be an integer from 1 to 120000"
+                : error };
+        }
+        const auto deadline =
+            std::chrono::steady_clock::now() +
+            std::chrono::milliseconds{
+                static_cast<std::int64_t>(timeout) };
+        EditorMaterialGraphCookResult result =
+            state.context.OpenMaterialGraphCookResult();
+        while (std::chrono::steady_clock::now() < deadline) {
+            static_cast<void>(
+                state.context.PumpMaterialGraphCookResults());
+            result = state.context.OpenMaterialGraphCookResult();
+            if (result.status ==
+                    EditorMaterialGraphCookStatus::Ready ||
+                result.status ==
+                    EditorMaterialGraphCookStatus::UpToDate) {
+                return {
+                    true,
+                    std::string{
+                        EditorMaterialGraphCookStatusName(result.status) } +
+                        " passes=" +
+                        std::to_string(result.passes.size()) };
+            }
+            if (result.status ==
+                    EditorMaterialGraphCookStatus::Failed ||
+                result.status ==
+                    EditorMaterialGraphCookStatus::CookUnavailable ||
+                result.status ==
+                    EditorMaterialGraphCookStatus::Stale) {
+                return {
+                    false,
+                    result.diagnostics.empty()
+                    ? std::string{
+                        EditorMaterialGraphCookStatusName(result.status) }
+                    : result.diagnostics.front() };
+            }
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds{ 10 });
+        }
+        return {
+            false,
+            "material cook timed out in state " +
+                std::string{
+                    EditorMaterialGraphCookStatusName(result.status) } };
+    }
+
     if (*operation == "configure_input_action") {
         const auto alias = StringMember(step, "asset", error);
         const auto name = StringMember(step, "name", error);
@@ -685,8 +1325,13 @@ ReadScriptValue(
             configured =
                 state.context.AddInputMapping(contextId);
             if (!configured) break;
-            if (state.context.ReadInputMappingContextAsset(contextId)
-                    ->mappings.size() > index) {
+            const auto expanded =
+                state.context.ReadInputMappingContextAsset(contextId);
+            if (!expanded.has_value()) {
+                configured = false;
+                break;
+            }
+            if (expanded->mappings.size() > index) {
                 break;
             }
         }
@@ -712,6 +1357,75 @@ ReadScriptValue(
             state.context.SetProjectInputMappingContext(
                 metadata->virtualPath.generic_string());
         return { activated, activated ? *alias : "activation failed" };
+    }
+
+    if (*operation == "set_project_input_enabled") {
+        const auto enabled = BoolMember(step, "enabled", error);
+        if (!enabled) return { false, error };
+        if (state.context.Project().inputEnabled != *enabled &&
+            !state.context.ToggleProjectInputEnabled()) {
+            return { false, "project input toggle failed" };
+        }
+        return {
+            state.context.Project().inputEnabled == *enabled,
+            *enabled ? "enabled" : "disabled" };
+    }
+
+    if (*operation == "set_plugin" ||
+        *operation == "assert_plugin") {
+        const auto id = StringMember(step, "id", error);
+        const auto enabled = BoolMember(step, "enabled", error);
+        if (!id || !enabled) return { false, error };
+        std::optional<std::size_t> index;
+        for (std::size_t candidate = 0U;
+             candidate < EditorPluginCatalog::Count(); ++candidate) {
+            const EditorPluginDescriptor* descriptor =
+                EditorPluginCatalog::At(candidate);
+            if (descriptor != nullptr && descriptor->id == *id) {
+                index = candidate;
+                break;
+            }
+        }
+        if (!index.has_value()) {
+            return { false, "plugin is not in the editor catalog" };
+        }
+        if (*operation == "set_plugin" &&
+            state.context.IsProjectPluginEnabled(*id) != *enabled &&
+            !state.context.ToggleProjectPlugin(*index)) {
+            return { false, "plugin toggle failed" };
+        }
+        const bool matched =
+            state.context.IsProjectPluginEnabled(*id) == *enabled;
+        return {
+            matched,
+            matched ? (*enabled ? "enabled" : "disabled")
+                    : "plugin state mismatch" };
+    }
+
+    if (*operation == "assert_backend") {
+        const auto backend = StringMember(step, "backend", error);
+        const auto expected = BoolMember(step, "available", error);
+        if (!backend || !expected) return { false, error };
+        bool available = false;
+        if (*backend == "physics") {
+            available = kb::scene::PhysicsBackend::HasBackend(
+                state.context.Scene());
+        } else if (*backend == "audio") {
+            available = kb::audio::AudioPlayback::HasBackend(
+                state.context.Scene());
+        } else if (*backend == "haptics") {
+            available = kb::input::InputHaptics::HasBackend(
+                state.context.Scene());
+        } else if (*backend == "basic_lighting") {
+            available =
+                kb::scene::SceneLightingAccess::BasicLightingEnabled(
+                    state.context.Scene());
+        } else {
+            return { false, "unknown backend" };
+        }
+        return {
+            available == *expected,
+            available ? "available" : "unavailable" };
     }
 
     if (*operation == "attach_script") {
@@ -785,6 +1499,12 @@ ReadScriptValue(
             state.context.OpenScene(
                 *resolved, EditorDirtySceneResolution::Discard),
             resolved->string() };
+    }
+
+    if (*operation == "reload_scene") {
+        return {
+            state.context.ReloadSceneFromProject(),
+            "project scene reloaded" };
     }
 
     if (*operation == "undo") {
@@ -1006,8 +1726,14 @@ ReadScriptValue(
         const auto checkpoint =
             StringMember(step, "checkpoint", error);
         if (!checkpoint) return { false, error };
+        const bool requireNonUniform =
+            BoolMember(
+                step, "require_non_uniform", error, false)
+                .value_or(false);
+        if (!error.empty()) return { false, error };
         return {
-            state.automation.CaptureRuntime(*checkpoint),
+            state.automation.CaptureRuntime(
+                *checkpoint, requireNonUniform),
             *checkpoint };
     }
 
@@ -1032,13 +1758,52 @@ ReadScriptValue(
         const auto contains =
             StringMember(step, "contains", error);
         if (!contains) return { false, error };
-        const bool found = std::ranges::any_of(
+        const auto category =
+            StringMember(step, "category", error, false);
+        const auto level =
+            StringMember(step, "level", error, false);
+        const auto minimum =
+            NumberMember(step, "count_at_least", error, false)
+                .value_or(1.0);
+        if (!error.empty() || minimum < 1.0 ||
+            std::floor(minimum) != minimum) {
+            return { false, error.empty()
+                ? "count_at_least must be a positive integer" : error };
+        }
+        std::optional<EditorConsoleLevel> expectedLevel;
+        if (level.has_value()) {
+            if (*level == "info") {
+                expectedLevel = EditorConsoleLevel::Info;
+            } else if (*level == "warning") {
+                expectedLevel = EditorConsoleLevel::Warning;
+            } else if (*level == "error") {
+                expectedLevel = EditorConsoleLevel::Error;
+            } else {
+                return { false, "invalid console level" };
+            }
+        }
+        const std::size_t count = std::ranges::count_if(
             state.context.Console().Entries(),
-            [&contains](const EditorConsoleEntry& entry) {
+            [&contains, &category, &expectedLevel](
+                const EditorConsoleEntry& entry) {
                 return entry.message.find(*contains) !=
-                    std::string::npos;
+                        std::string::npos &&
+                    (!category.has_value() ||
+                        entry.category == *category) &&
+                    (!expectedLevel.has_value() ||
+                        entry.level == *expectedLevel);
             });
-        return { found, found ? *contains : "text not found" };
+        const bool found =
+            count >= static_cast<std::size_t>(minimum);
+        return {
+            found,
+            found ? std::to_string(count) + " match(es)"
+                  : "matching console entry not found" };
+    }
+
+    if (*operation == "clear_console") {
+        state.context.Console().Clear();
+        return { true, "console cleared" };
     }
 
     if (*operation == "assert_no_errors") {
@@ -1139,7 +1904,10 @@ int EditorAutomationScenarioRunner::Run(
     bool passed = true;
     {
         EditorSceneContext context;
-        ScenarioState state{ context, absoluteArtifacts };
+        ScenarioState state{
+            context, absoluteArtifacts,
+            std::filesystem::absolute(scenarioPath)
+                .parent_path().lexically_normal() };
         for (std::size_t index = 0U; index < steps->Size(); ++index) {
             const JsonValue* step = steps->At(index);
             const StepOutcome outcome =
