@@ -4116,6 +4116,10 @@ void RunGameInstanceLifetimeTest() {
     kb::tests::Require(game.Mode().CanAcceptPlayer(3U, true) && !game.Mode().CanAcceptPlayer(4U, false) &&
             !kb::gameplay::GameMode{}.CanAcceptPlayer(0U, true),
         "GameMode authority rules were not owned by GameInstance or did not enforce admission policy");
+    kb::tests::Require(game.State().SetMatchInProgress(true) && game.State().Advance(1.5F) && game.State().SetScore(1U, 2) &&
+            !game.State().ApplyReplication(kb::gameplay::GameStateSnapshot{ .revision = 1U }) &&
+            game.State().ApplyReplication(game.State().Snapshot()) && game.State().Snapshot().scores[1] == 2,
+        "GameState did not reject stale replication or retain authoritative match state");
 }
 
 void RunEngineLibraryTests() {

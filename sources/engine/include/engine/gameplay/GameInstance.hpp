@@ -2,6 +2,7 @@
 
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/gameplay/GameMode.hpp"
+#include "engine/gameplay/GameState.hpp"
 #include "engine/save/SaveGame.hpp"
 #include "engine/scene/SceneMode.hpp"
 
@@ -45,12 +46,15 @@ public:
     void SetGameMode(GameMode mode) noexcept { mode_ = mode; }
     [[nodiscard]] GameMode& Mode() noexcept { return mode_; }
     [[nodiscard]] const GameMode& Mode() const noexcept { return mode_; }
+    [[nodiscard]] GameState& State() noexcept { return state_; }
+    [[nodiscard]] const GameState& State() const noexcept { return state_; }
 
 private:
     struct Entry { GameSceneId id = 0U; std::unique_ptr<kb::scene::Scene> scene; };
     kb::project::ProjectDescriptor project_;
     GameInstanceServices services_;
     GameMode mode_;
+    GameState state_;
     std::vector<Entry> scenes_;
     GameSceneId nextSceneId_ = 1U;
     GameSceneId activeScene_ = 0U;
