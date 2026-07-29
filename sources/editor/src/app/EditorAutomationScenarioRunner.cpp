@@ -13,6 +13,7 @@
 #include "engine/gameplay/GameInstance.hpp"
 #include "engine/network/NetworkModel.hpp"
 #include "engine/network/NetworkObject.hpp"
+#include "engine/network/Rpc.hpp"
 #include "engine/network/NetworkSession.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
@@ -611,6 +612,32 @@ ReadScriptValue(
             valid,
             valid ? "versioned schema, quantization and delta"
                   : "replication schema contract rejected" };
+    }
+
+    if (*operation == "assert_rpc_contract") {
+        kb::network::NetworkObjects objects;
+        const bool valid =
+            objects.Spawn({ .id = 8U, .owner = 20U,
+                .role = kb::network::NetworkRole::Authority }) &&
+            kb::network::ValidateRpc(objects, { .object = 8U, .sender = 20U,
+                .reliability = kb::network::RpcReliability::Reliable,
+                .direction = kb::network::RpcDirection::ClientToServer }) &&
+            kb::network::ValidateRpc(objects, { .object = 8U, .sender = 20U,
+                .reliability = kb::network::RpcReliability::Unreliable,
+                .direction = kb::network::RpcDirection::ClientToServer }) &&
+            !kb::network::ValidateRpc(objects, { .object = 8U, .sender = 21U,
+                .direction = kb::network::RpcDirection::ClientToServer }) &&
+            objects.Spawn({ .id = 9U, .owner = 1U,
+                .role = kb::network::NetworkRole::Proxy }) &&
+            kb::network::ValidateRpc(objects, { .object = 9U, .sender = 1U,
+                .reliability = kb::network::RpcReliability::Reliable,
+                .direction = kb::network::RpcDirection::ServerToClient }) &&
+            !kb::network::ValidateRpc(objects, { .object = 9U, .sender = 2U,
+                .direction = kb::network::RpcDirection::ServerToClient });
+        return {
+            valid,
+            valid ? "reliable/unreliable RPC ownership directions"
+                  : "RPC ownership contract rejected" };
     }
 
     if (*operation == "assert_game_flow") {
