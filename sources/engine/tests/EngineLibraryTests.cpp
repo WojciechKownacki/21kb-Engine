@@ -55,6 +55,7 @@
 #include "engine/platform/UserStorage.hpp"
 #include "engine/platform/SettingsTransaction.hpp"
 #include "engine/platform/PlatformAdapters.hpp"
+#include "engine/platform/PlatformLocale.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -4125,6 +4126,7 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    constexpr kb::platform::SafeDateTime date{ .unixSeconds = 1000 }; const kb::platform::PlatformLocale locale{ .language="pl", .region="PL", .utcOffsetMinutes=120 }; kb::tests::Require(locale.IsValid()&&date.ToLocalSeconds(locale)==8200, "Platform locale and safe date-time contract is invalid");
     TestPlatformAdapter adapter; kb::tests::Require(adapter.IsAvailable(kb::platform::OptionalPlatformService::Achievements)&&!adapter.IsAvailable(kb::platform::OptionalPlatformService::CloudSave)&&adapter.UnlockAchievement("first"), "Optional platform adapter did not expose capability availability");
     kb::platform::SettingsTransaction settings{ kb::platform::RuntimeSettings{} }; settings.Pending().vibration=true; kb::tests::Require(!settings.Apply({}) && (settings.Revert(),!settings.Pending().vibration) && (settings.Pending().masterVolume=0.5F,settings.Apply({})) && settings.Current().masterVolume==0.5F, "Settings transaction did not validate capability and revert pending state");
     const std::filesystem::path storageRoot = std::filesystem::temp_directory_path() / "21kb-user-storage-test";
