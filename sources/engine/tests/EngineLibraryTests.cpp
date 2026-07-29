@@ -4326,6 +4326,22 @@ void RunNavigationFoundationContractTest() {
         steeringAgent, {}, { 0.0F, 7.0F, 0.0F }, 0.25F);
     kb::tests::Require(!steering.arrived && steering.desiredVelocity.x == 0.5F && steering.desiredVelocity.y == 0.0F,
         "Navigation steering must accelerate horizontally without injecting vertical physics velocity");
+    const std::array avoidanceNeighbours{
+        kb::scene::NavAvoidanceNeighbor{ .position = { 0.5F, 20.0F, 0.0F }, .radius = 0.5F },
+        kb::scene::NavAvoidanceNeighbor{ .position = { 8.0F, 0.0F, 0.0F }, .radius = 0.5F },
+    };
+    const kb::math::Vec3 avoidedVelocity = kb::scene::ComputeNavAvoidance(
+        steeringAgent, {}, steering.desiredVelocity, avoidanceNeighbours);
+    kb::tests::Require(avoidedVelocity.x < steering.desiredVelocity.x && avoidedVelocity.y == 0.0F &&
+            std::sqrt(avoidedVelocity.x * avoidedVelocity.x + avoidedVelocity.z * avoidedVelocity.z) <= steeringAgent.maxSpeed,
+        "Navigation avoidance must apply deterministic horizontal separation without exceeding agent speed");
+    const std::array coincidentNeighbours{
+        kb::scene::NavAvoidanceNeighbor{ .position = {}, .radius = 0.5F },
+    };
+    const kb::math::Vec3 coincidentVelocity = kb::scene::ComputeNavAvoidance(
+        steeringAgent, {}, steering.desiredVelocity, coincidentNeighbours);
+    kb::tests::Require(coincidentVelocity.x < 0.0F && coincidentVelocity.y == 0.0F,
+        "Navigation avoidance must provide deterministic separation for coincident agents");
     steeringAgent.destination = { 0.25F, 0.0F, 0.0F };
     kb::tests::Require(kb::scene::ComputeNavSteering(steeringAgent, {}, {}, 0.25F).arrived,
         "Navigation steering did not stop inside the agent stopping distance");
