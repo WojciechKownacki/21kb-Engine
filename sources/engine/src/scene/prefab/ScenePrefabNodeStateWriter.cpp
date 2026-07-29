@@ -111,6 +111,18 @@ namespace {
     return lhs.documentAssetId == rhs.documentAssetId && lhs.enabled == rhs.enabled;
 }
 
+[[nodiscard]] bool Equals(const NavAgent& lhs, const NavAgent& rhs) noexcept {
+    return lhs.radius == rhs.radius && lhs.height == rhs.height && lhs.maxSpeed == rhs.maxSpeed && lhs.acceleration == rhs.acceleration &&
+        lhs.angularSpeedDegrees == rhs.angularSpeedDegrees && lhs.stoppingDistance == rhs.stoppingDistance && lhs.areaMask == rhs.areaMask &&
+        Equals(lhs.destination, rhs.destination) && Equals(lhs.velocity, rhs.velocity) && lhs.remainingDistance == rhs.remainingDistance &&
+        lhs.pathStatus == rhs.pathStatus && lhs.enabled == rhs.enabled;
+}
+
+[[nodiscard]] bool Equals(const NavObstacle& lhs, const NavObstacle& rhs) noexcept {
+    return lhs.shape == rhs.shape && Equals(lhs.center, rhs.center) && Equals(lhs.size, rhs.size) && lhs.radius == rhs.radius &&
+        lhs.height == rhs.height && lhs.area == rhs.area && lhs.carve == rhs.carve && lhs.enabled == rhs.enabled;
+}
+
 template <typename T, typename Components>
 void WriteOptionalComponent(Components components, SceneEntity entity, const std::optional<T>& component) {
     if (component.has_value()) {
@@ -171,7 +183,9 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , audioSources(scene.Components().AudioSources())
     , audioListeners(scene.Components().AudioListeners())
     , animators(scene.Components().Animators())
-    , uiDocuments(scene.Components().UIDocuments()) {
+    , uiDocuments(scene.Components().UIDocuments())
+    , navAgents(scene.Components().NavAgents())
+    , navObstacles(scene.Components().NavObstacles()) {
     state.suppressPrefabDirtyTracking = true;
 }
 
@@ -241,6 +255,8 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     if (!componentMask.available || !componentMask.matches || node.components.uiDocument.has_value()) {
         WriteOptionalComponent(context.uiDocuments, entity, node.components.uiDocument);
     }
+    WriteOptionalComponent(context.navAgents, entity, node.components.navAgent);
+    WriteOptionalComponent(context.navObstacles, entity, node.components.navObstacle);
 }
 
 } // namespace kb::scene
