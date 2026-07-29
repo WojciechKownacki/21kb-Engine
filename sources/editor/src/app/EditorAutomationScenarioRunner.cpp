@@ -13,6 +13,7 @@
 #include "engine/gameplay/GameInstance.hpp"
 #include "engine/network/NetworkModel.hpp"
 #include "engine/network/NetworkObject.hpp"
+#include "engine/network/NetworkVariable.hpp"
 #include "engine/network/Rpc.hpp"
 #include "engine/network/NetworkSession.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
@@ -638,6 +639,27 @@ ReadScriptValue(
             valid,
             valid ? "reliable/unreliable RPC ownership directions"
                   : "RPC ownership contract rejected" };
+    }
+
+    if (*operation == "assert_network_variable") {
+        std::int32_t delta = 0;
+        kb::network::NetworkVariable<std::int32_t> value{ 2 };
+        value.SetChangedCallback(
+            [](void* context, std::int32_t previous,
+                std::int32_t current) noexcept {
+                *static_cast<std::int32_t*>(context) = current - previous;
+            },
+            &delta);
+        kb::network::NetworkVariable<std::int32_t> saturated{ 1 };
+        const bool valid = value.Set(5) && value.Revision() == 1U &&
+            delta == 3 && !value.Apply(7, 1U) && value.Apply(7, 2U) &&
+            value.Value() == 7 && delta == 2 &&
+            saturated.Apply(2, std::numeric_limits<std::uint64_t>::max()) &&
+            !saturated.Set(3) && saturated.Value() == 2;
+        return {
+            valid,
+            valid ? "typed revision, callback and stale update rejection"
+                  : "network variable contract rejected" };
     }
 
     if (*operation == "assert_game_flow") {
