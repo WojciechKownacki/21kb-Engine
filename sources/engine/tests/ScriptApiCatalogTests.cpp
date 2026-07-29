@@ -217,6 +217,7 @@ void RunAgentProjectFilesTest() {
     kb::tests::Require(std::filesystem::exists(TestRoot() / ".kb" / "api" / "kb.lua"), "Lua stubs were not created");
     kb::tests::Require(std::filesystem::exists(TestRoot() / ".kb" / "api" / "script_api.md"), "API markdown was not created");
     kb::tests::Require(std::filesystem::exists(TestRoot() / ".kb" / "api" / "script_api.json"), "API JSON was not created");
+    kb::tests::Require(std::filesystem::exists(TestRoot() / ".kb" / "api" / "manifest.json"), "API manifest was not created");
 
     const kb::script::ScriptAgentProjectFilesResult second = kb::script::ScriptAgentProjectFiles::Write(TestRoot(), catalog);
     kb::tests::Require(second.succeeded, "Agent project files rewrite failed");

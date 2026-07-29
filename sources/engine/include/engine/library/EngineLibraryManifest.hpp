@@ -27,6 +27,9 @@ struct ApiManifest {
     LibraryApiVersion version{};
     std::string manifestHash;
     std::vector<LibraryApiSurfaceManifestEntry> specialApis;
+    // The catalog snapshot from which this manifest hash was derived. API
+    // reference generators consume it instead of querying a second source.
+    kb::script::ScriptApiCatalog catalog;
 };
 
 [[nodiscard]] ApiManifest BuildApiManifest(const kb::script::ScriptApiCatalog& catalog);
@@ -35,5 +38,10 @@ struct ApiManifest {
 // ".kb/api/manifest.json" (see ScriptAgentProjectFiles' build artifact
 // directory): {"version":"major.minor.patch","hash":"..."}.
 [[nodiscard]] std::string ToJson(const ApiManifest& manifest);
+
+// Renders the human-readable API reference from the catalog snapshot carried
+// by the manifest, keeping reference generation and manifest validation on a
+// single source of truth.
+[[nodiscard]] std::string ToReferenceMarkdown(const ApiManifest& manifest);
 
 } // namespace kb::library

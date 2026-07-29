@@ -43,6 +43,7 @@ ApiManifest BuildApiManifest(const kb::script::ScriptApiCatalog& catalog) {
     ApiManifest manifest{
         .version = kEngineLibraryApiVersion,
         .specialApis = { kLibrarySpecialApiSurfaces.begin(), kLibrarySpecialApiSurfaces.end() },
+        .catalog = catalog,
     };
     std::string hashContent = kb::script::ScriptApiExport::ToJson(catalog);
     AppendSpecialApisJson(hashContent, manifest.specialApis);
@@ -55,6 +56,21 @@ std::string ToJson(const ApiManifest& manifest) {
     AppendSpecialApisJson(json, manifest.specialApis);
     json += "}\n";
     return json;
+}
+
+std::string ToReferenceMarkdown(const ApiManifest& manifest) {
+    std::string markdown = kb::script::ScriptApiExport::ToMarkdown(manifest.catalog);
+    markdown += "## API manifest\n\n";
+    markdown += "- Version: `" + ToString(manifest.version) + "`\n";
+    markdown += "- Hash: `" + manifest.manifestHash + "`\n";
+    if (!manifest.specialApis.empty()) {
+        markdown += "- Restricted APIs:\n";
+        for (const LibraryApiSurfaceManifestEntry& api : manifest.specialApis) {
+            markdown += "  - `" + std::string{ api.canonicalName } + "` — " + std::string{ api.description } + "\n";
+        }
+    }
+    markdown += '\n';
+    return markdown;
 }
 
 } // namespace kb::library

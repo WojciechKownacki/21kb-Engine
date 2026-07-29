@@ -4,6 +4,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/library/EngineLibraryManifest.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
@@ -288,10 +289,13 @@ ScriptAgentProjectFilesResult ScriptAgentProjectFiles::Write(
         bool isProjectAsset = false;
     };
 
+    const kb::library::ApiManifest manifest = kb::library::BuildApiManifest(catalog);
+
     const GeneratedFile files[] = {
         { apiRoot / "kb.lua", ScriptApiExport::ToLuaStubs(catalog), true, false },
-        { apiRoot / "script_api.md", ScriptApiExport::ToMarkdown(catalog), true, false },
+        { apiRoot / "script_api.md", kb::library::ToReferenceMarkdown(manifest), true, false },
         { apiRoot / "script_api.json", ScriptApiExport::ToJson(catalog), true, false },
+        { apiRoot / "manifest.json", kb::library::ToJson(manifest), true, false },
         { projectRoot / "AGENTS.md", std::string{ kAgentsTemplate }, false, false },
         { projectRoot / ".luarc.json", std::string{ kLuarcTemplate }, false, false },
         // Write-once like AGENTS.md/.luarc.json: a game author's edits to
