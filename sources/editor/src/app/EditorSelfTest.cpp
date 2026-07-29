@@ -196,6 +196,7 @@ constexpr RECT kContent{ 0, 0, 900, 560 };
 struct ProjectSettingsClickPoints {
     POINT inputCategory{};    // First sidebar category ("Inputs").
     POINT graphicsCategory{}; // Second sidebar category ("Graphics").
+    POINT physicsCategory{};  // Third sidebar category ("Physics").
     POINT field{};      // Mapping Context selector box.
     POINT optionRow1{}; // First named option inside the open dropdown.
     POINT checkbox{};   // Enabled checkbox.
@@ -216,6 +217,7 @@ struct ProjectSettingsClickPoints {
     return ProjectSettingsClickPoints{
         .inputCategory = Center(ProjectSettingsPanelLayout::CategoryRow(rects.sidebar, 0)),
         .graphicsCategory = Center(ProjectSettingsPanelLayout::CategoryRow(rects.sidebar, 1)),
+        .physicsCategory = Center(ProjectSettingsPanelLayout::CategoryRow(rects.sidebar, 2)),
         .field = Center(fieldBox),
         .optionRow1 = Center(ProjectSettingsPanelLayout::OptionRow(fieldBox, 1)),
         .checkbox = Center(rects.enabledCheckbox),
@@ -397,6 +399,37 @@ void RunProjectPhysicsLayersRuntimeSuite(Report& report) {
             kb::scene::PhysicsBackend::LayerBit(context.Scene(), "EditorSolid") == 4U &&
             kb::scene::PhysicsBackend::LayerBit(context.Scene(), "EditorQuery") == 8U,
         "LIB-129 editor startup applies named layers after mount and discovery");
+
+    const ProjectSettingsClickPoints projectSettingsClick = ResolveClickPoints();
+    EditorProjectSettingsPointerController projectSettingsController{ context };
+    const std::vector<std::string> physicsOptions = context.ProjectPhysicsLayersAssetOptions();
+    report.Check(
+        physicsOptions.size() == 2U && physicsOptions[1] == kLayersVirtualPath,
+        "LIB-129 project settings lists the discovered Physics Layers asset");
+    report.Check(
+        projectSettingsController.HandlePointerDown(kContent, projectSettingsClick.physicsCategory.x, projectSettingsClick.physicsCategory.y),
+        "LIB-129 clicking Physics project-settings category is handled");
+    report.Check(
+        context.ProjectSettings().SelectedCategory() == static_cast<int>(ProjectSettingsCategory::Physics),
+        "LIB-129 Physics project-settings category becomes active");
+    report.Check(
+        HitKindAt(context, projectSettingsClick.field) == ProjectSettingsHitKind::PhysicsLayersField,
+        "LIB-129 collision layers selector hit-tests as PhysicsLayersField");
+    report.Check(
+        projectSettingsController.HandlePointerDown(kContent, projectSettingsClick.field.x, projectSettingsClick.field.y),
+        "LIB-129 opening collision layers selector is handled");
+    report.Check(
+        context.ProjectSettings().IsPhysicsLayersDropdownOpen(),
+        "LIB-129 collision layers selector opens");
+    report.Check(
+        HitKindAt(context, projectSettingsClick.optionRow1) == ProjectSettingsHitKind::PhysicsLayersOption,
+        "LIB-129 authored collision layers asset hit-tests as PhysicsLayersOption");
+    report.Check(
+        projectSettingsController.HandlePointerDown(kContent, projectSettingsClick.optionRow1.x, projectSettingsClick.optionRow1.y),
+        "LIB-129 selecting collision layers asset through project settings is handled");
+    report.Check(
+        !context.ProjectSettings().IsPhysicsLayersDropdownOpen() && context.Project().physicsLayersAsset == kLayersVirtualPath,
+        "LIB-129 Physics project setting retains the selected collision layers asset");
 
     const auto createMatrixBody = [&context](
                                       const char* name,
@@ -1054,7 +1087,7 @@ void RunCameraInspectorSuite(Report& report) {
         actorRow != cameraRows.end() && actorRow->hasCamera,
         "LIB-135 Camera entity exposes the camera icon in Hierarchy");
 
-    const std::array<InspectorPropertyId, 8> properties{
+    const std::array<InspectorPropertyId, 13> properties{
         InspectorPropertyId::CameraProjection,
         InspectorPropertyId::CameraVerticalFov,
         InspectorPropertyId::CameraOrthographicHeight,
@@ -1063,6 +1096,11 @@ void RunCameraInspectorSuite(Report& report) {
         InspectorPropertyId::CameraPrimary,
         InspectorPropertyId::CameraViewportId,
         InspectorPropertyId::CameraPriority,
+        InspectorPropertyId::CameraCullingMask,
+        InspectorPropertyId::CameraClearMode,
+        InspectorPropertyId::CameraClearColorR,
+        InspectorPropertyId::CameraClearColorG,
+        InspectorPropertyId::CameraClearColorB,
     };
     std::array<InspectorPanelRenderer::Hit, properties.size()> hits{};
     const auto expectedKind = [](InspectorPropertyId property) {
@@ -1071,6 +1109,9 @@ void RunCameraInspectorSuite(Report& report) {
         case InspectorPropertyId::CameraOrthographicHeight:
         case InspectorPropertyId::CameraNearClip:
         case InspectorPropertyId::CameraFarClip:
+        case InspectorPropertyId::CameraClearColorR:
+        case InspectorPropertyId::CameraClearColorG:
+        case InspectorPropertyId::CameraClearColorB:
             return InspectorHitKind::FloatField;
         case InspectorPropertyId::CameraPrimary:
             return InspectorHitKind::BoolField;
@@ -1082,7 +1123,7 @@ void RunCameraInspectorSuite(Report& report) {
         InspectorPanelRenderer::MaxScrollOffset(kContent, context);
     const int scrollStep =
         std::max(1, static_cast<int>(kContent.bottom - kContent.top) - 80);
-    for (int scroll = 0; scroll <= maxScroll; scroll += scrollStep) {
+    for (int scroll = 0;;) {
         static_cast<void>(
             context.Inspector().SetScrollOffset(scroll, maxScroll));
         for (int y = kContent.top; y < kContent.bottom; ++y) {
@@ -1101,6 +1142,10 @@ void RunCameraInspectorSuite(Report& report) {
                 }
             }
         }
+        if (scroll >= maxScroll) {
+            break;
+        }
+        scroll = std::min(scroll + scrollStep, maxScroll);
     }
     static_cast<void>(context.Inspector().SetScrollOffset(0, maxScroll));
     for (const InspectorPanelRenderer::Hit& hit : hits) {
@@ -1186,6 +1231,30 @@ void RunCameraInspectorSuite(Report& report) {
     report.Check(
         camera() != nullptr && camera()->priority == 42,
         "LIB-135 Camera priority reaches the live component");
+    report.Check(
+        editText(
+            hitFor(InspectorPropertyId::CameraCullingMask), "3", false),
+        "LIB-136 Camera culling-mask edit is committed");
+    report.Check(
+        selectionStayedOnActor(),
+        "LIB-136 Camera culling-mask edit preserves hierarchy selection");
+    report.Check(
+        camera() != nullptr && camera()->cullingMask == 3U,
+        "LIB-136 Camera culling mask reaches the live component");
+    report.Check(
+        click(hitFor(InspectorPropertyId::CameraClearMode)),
+        "LIB-136 Camera clear-mode click is handled");
+    report.Check(
+        camera() != nullptr &&
+            camera()->clearMode == kb::scene::CameraClearMode::DepthOnly,
+        "LIB-136 Camera clear mode reaches the live component");
+    report.Check(
+        editText(
+            hitFor(InspectorPropertyId::CameraClearColorG), "0.25", true),
+        "LIB-136 Camera clear-color edit is committed");
+    report.Check(
+        camera() != nullptr && std::abs(camera()->clearColor.y - 0.25F) < 0.001F,
+        "LIB-136 Camera clear color reaches the live component");
     report.Check(
         editText(
             hitFor(InspectorPropertyId::CameraVerticalFov), "47.5", true),

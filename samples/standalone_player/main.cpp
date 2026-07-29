@@ -1266,7 +1266,6 @@ struct StandaloneProjectRuntimeConfig {
     }
 
     options.projectPath = packageRoot;
-    options.rendererType = bgfx::RendererType::Direct3D11;
     options.expectedGraphGpuCount = 1U;
     std::fprintf(stdout,
         "kb_standalone_player: camera_runtime_package=%s mesh=%llx material=%llx\n",
@@ -1281,7 +1280,8 @@ struct StandaloneProjectRuntimeConfig {
     kb::scene::Scene& scene,
     const kb::render::Renderer& renderer,
     const kb::script::ScriptRuntimeHost* scriptHost,
-    const std::filesystem::path& capturePath) {
+    const std::filesystem::path& capturePath,
+    const bool expectsUnsupportedNoopCapture) {
     const kb::scene::SceneRenderCameraRay ray =
         kb::scene::SceneRenderFeedback::ScreenPointToRay(
             scene, kb::input::kPrimaryLocalUser, 32.0F, 32.0F);
@@ -1540,8 +1540,13 @@ struct StandaloneProjectRuntimeConfig {
         sharedFloat("runtimeRayDirectionZ") > 0.99F &&
         sharedBool("runtimeScreenToWorldValid") &&
         std::fabs(sharedFloat("runtimeScreenToWorldZ") + 2.0F) < 0.01F;
+    // bgfx's Noop renderer executes scene submission and feedback but cannot read
+    // back a framebuffer. The headless CTest requires that limitation to be
+    // reported explicitly, while every rendering backend must still produce PNG.
     const bool scriptCaptureValid =
-        captureStatus == "completed" && capturePngValid;
+        (captureStatus == "completed" && capturePngValid) ||
+        (expectsUnsupportedNoopCapture && captureStatus == "failed" &&
+            !capturePngValid);
     const kb::assets::AssetMetadata* activeMixerMetadata =
         scene.Assets().Manager().Registry().FindByPath(
             "/Game/runtime.kbmixer");
@@ -2190,7 +2195,8 @@ int main(int argc, char** argv) {
                 scene,
                 renderer,
                 scriptModule->Host(),
-                cameraRuntimePackageRoot / "runtime_capture.png"));
+                cameraRuntimePackageRoot / "runtime_capture.png",
+                options.rendererType == bgfx::RendererType::Noop));
     const bool audioLifecycleValid =
         !options.cameraRuntimeSelfTest ||
         (cameraRuntimeValid && ValidateAudioLifecycleRuntime(scene));
