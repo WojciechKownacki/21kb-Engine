@@ -52,6 +52,7 @@
 #include "engine/network/NetworkSimulation.hpp"
 #include "engine/network/NetworkSession.hpp"
 #include "engine/platform/PlatformCapabilities.hpp"
+#include "engine/platform/UserStorage.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -4121,6 +4122,7 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    kb::tests::Require(kb::platform::IsSandboxStorageKey("saves/profile.bin") && !kb::platform::IsSandboxStorageKey("../outside") && !kb::platform::IsSandboxStorageKey("C:\\outside") && !kb::platform::IsSandboxStorageKey("/outside"), "User storage sandbox accepted a filesystem escape");
     constexpr kb::platform::PlatformCapabilities platformCapabilities{ .flags = static_cast<std::uint32_t>(kb::platform::PlatformCapability::Locale) | static_cast<std::uint32_t>(kb::platform::PlatformCapability::UserDataPath) };
     static_assert(platformCapabilities.Has(kb::platform::PlatformCapability::Locale));
     kb::tests::Require(platformCapabilities.Has(kb::platform::PlatformCapability::UserDataPath) && !platformCapabilities.Has(kb::platform::PlatformCapability::Clipboard), "Platform capabilities did not fail closed for unavailable services");
