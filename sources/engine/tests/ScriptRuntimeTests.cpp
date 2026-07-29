@@ -12207,6 +12207,9 @@ void RunScriptSaveApiTest() {
     constexpr std::uint64_t kSavedAssetId = 0xA55157U;
     kb::tests::Require(call("Save.SetAsset", { keyArg("prefab"), kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ kSavedAssetId, kb::script::ScriptValueType::Hash } } }).Output("set")->AsBool(),
         "Save.SetAsset must set a stable asset reference");
+    constexpr std::uint64_t kLuaRoundTripAssetId = 0xF1234567U;
+    kb::tests::Require(call("Save.SetAsset", { keyArg("luaAsset"), kb::script::ScriptFunctionArgument{ .name = "value", .value = kb::script::ScriptValue{ kLuaRoundTripAssetId, kb::script::ScriptValueType::Entity } } }).Output("set")->AsBool(),
+        "Save.SetAsset must accept the large Hash representation returned to Lua");
 
     // Read each back through the script boundary.
     const kb::script::ScriptFunctionCallResult getBool = call("Save.GetBool", { keyArg("flag") });
@@ -12220,6 +12223,8 @@ void RunScriptSaveApiTest() {
     const kb::script::ScriptFunctionCallResult getAsset = call("Save.GetAsset", { keyArg("prefab") });
     kb::tests::Require(getAsset.Output("found")->AsBool() && getAsset.Output("value")->AsUInt64() == kSavedAssetId,
         "Save.GetAsset must round-trip the stored stable asset reference");
+    kb::tests::Require(call("Save.GetAsset", { keyArg("luaAsset") }).Output("value")->AsUInt64() == kLuaRoundTripAssetId,
+        "Save.GetAsset must retain a large Lua-bridged asset reference");
 
     // Typed miss (asking for the wrong type) and absent key are honest false.
     kb::tests::Require(!call("Save.GetInt", { keyArg("name") }).Output("found")->AsBool(), "Save.GetInt on a String key must honestly miss");
