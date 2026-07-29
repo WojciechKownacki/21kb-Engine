@@ -12,6 +12,7 @@
 #include "engine/scene/SceneJointComponents.hpp"
 #include "engine/scene/SceneLightComponents.hpp"
 #include "engine/scene/SceneMeshRendererComponents.hpp"
+#include "engine/scene/SceneNavigationComponents.hpp"
 #include "engine/scene/SceneRigidbodyComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -40,6 +41,8 @@ public:
     [[nodiscard]] SceneAudioListenerComponents AudioListeners() const noexcept;
     [[nodiscard]] SceneAnimatorComponents Animators() const noexcept;
     [[nodiscard]] SceneUIDocumentComponents UIDocuments() const noexcept;
+    [[nodiscard]] SceneNavAgentComponents NavAgents() const noexcept;
+    [[nodiscard]] SceneNavObstacleComponents NavObstacles() const noexcept;
     [[nodiscard]] SceneComponentVisitors Visitors() const noexcept;
 
 private:

@@ -67,6 +67,8 @@ SceneAnimatorComponentQueries SceneComponentQueries::Animators() const noexcept 
 SceneUIDocumentComponentQueries SceneComponentQueries::UIDocuments() const noexcept {
     return SceneUIDocumentComponentQueries{ scene_ };
 }
+SceneNavAgentComponentQueries SceneComponentQueries::NavAgents() const noexcept { return SceneNavAgentComponentQueries{ scene_ }; }
+SceneNavObstacleComponentQueries SceneComponentQueries::NavObstacles() const noexcept { return SceneNavObstacleComponentQueries{ scene_ }; }
 
 SceneComponentVisitors SceneComponentQueries::Visitors() const noexcept {
     return SceneComponentVisitors{ scene_ };
@@ -130,6 +132,8 @@ SceneAnimatorComponents SceneComponents::Animators() const noexcept {
 SceneUIDocumentComponents SceneComponents::UIDocuments() const noexcept {
     return SceneUIDocumentComponents{ scene_ };
 }
+SceneNavAgentComponents SceneComponents::NavAgents() const noexcept { return SceneNavAgentComponents{ scene_ }; }
+SceneNavObstacleComponents SceneComponents::NavObstacles() const noexcept { return SceneNavObstacleComponents{ scene_ }; }
 
 SceneComponentVisitors SceneComponents::Visitors() const noexcept {
     return SceneComponentVisitors{ scene_ };
