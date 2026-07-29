@@ -509,6 +509,31 @@ end
             loaded.UIDocuments().Control(roots.front(), 2U)->kind == kb::scene::UIControlKind::Text &&
             loaded.UIDocuments().Control(roots.front(), 2U)->text == "Score: 0",
         "Project -> scene reload -> UIDocument component -> UI runtime lost its canonical document tree");
+
+    // LIB-182: an event may be queued while its element is alive, but it
+    // must not be delivered after that element is removed at the next UI
+    // command boundary. This uses a reloaded production document so it also
+    // covers runtime state reconstructed from a scene asset.
+    const auto eventTarget = loaded.UIDocuments().QueueCreate(roots.front(), kb::scene::UIRuntimeElementDesc{
+        .parentId = 1U,
+        .name = "EventTarget",
+        .styleClass = "hud",
+        .visible = true,
+    });
+    Require(eventTarget.has_value(), "UI event/destroy regression fixture target could not be queued");
+    static_cast<void>(loaded.Runtime().Update(0.0F));
+    Require(loaded.UIDocuments().QueueEvent(roots.front(), kb::scene::UIRuntimeEvent{
+                .kind = kb::scene::UIRuntimeEventKind::Click,
+                .elementId = *eventTarget,
+                .pointerX = 12.5F,
+                .pointerY = -4.0F,
+            }) &&
+            loaded.UIDocuments().QueueDestroy(roots.front(), *eventTarget),
+        "UI event/destroy regression fixture was not accepted for a live element");
+    static_cast<void>(loaded.Runtime().Update(0.0F));
+    Require(!loaded.UIDocuments().HasElement(roots.front(), *eventTarget) &&
+            loaded.UIDocuments().DrainEvents().empty(),
+        "A UI event queued before its element was destroyed escaped the frame boundary");
     std::filesystem::remove_all(root);
 }
 
