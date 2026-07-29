@@ -40,6 +40,7 @@
 #include "engine/gameplay/Damage.hpp"
 #include "engine/gameplay/GameplayModules.hpp"
 #include "engine/gameplay/GameplayAbilities.hpp"
+#include "engine/gameplay/GameplaySamples.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -4107,6 +4108,8 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    constexpr auto sampleProfiles = kb::gameplay::GameplaySampleProfiles();
+    kb::tests::Require(sampleProfiles[0].kind == kb::gameplay::GameplaySampleKind::ThirdPerson && sampleProfiles[0].usesJump && sampleProfiles[1].movement == kb::gameplay::GameplaySampleMovement::ScreenPlane && sampleProfiles[2].movement == kb::gameplay::GameplaySampleMovement::SideScroll && sampleProfiles[3].cameraPolicy == kb::gameplay::CameraPolicy::Possess && sampleProfiles[3].usesCombat, "Gameplay samples did not provide the four documented controller profiles");
     kb::gameplay::GameInstance flowGame;
     const kb::gameplay::GameSceneId firstScene = flowGame.CreateScene();
     const kb::gameplay::GameSceneId secondScene = flowGame.CreateScene();
