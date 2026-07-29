@@ -14,6 +14,7 @@
 #include "engine/core/EngineLog.hpp"
 #include "engine/core/EngineAssertions.hpp"
 #include "engine/core/DebugDraw.hpp"
+#include "engine/core/ProfilerCounters.hpp"
 #include "engine/network/NetworkModel.hpp"
 #include "engine/network/NetworkBudget.hpp"
 #include "engine/network/NetworkObject.hpp"
@@ -949,6 +950,17 @@ ReadScriptValue(
         draw.Advance(1.0F);
         return { valid && draw.Commands().empty(), valid ? "debug draw primitives, duration and channel"
                                                            : "debug draw contract rejected" };
+    }
+
+    if (*operation == "assert_profiler") {
+        kb::core::ProfilerCounters profiler;
+        { auto scope = profiler.BeginScope("tick"); profiler.Counter("entities", 42U); profiler.Allocation(); }
+        const bool valid = kb::core::ProfilerCounters::Enabled() && profiler.scopes == 1U &&
+            profiler.timelineEvents == 1U && profiler.allocations == 1U &&
+            profiler.Counters().size() == 1U && profiler.Counters().front().value == 42U &&
+            profiler.TimelineEvents().size() == 1U;
+        return { valid, valid ? "debug-only profiler scopes, counters, timeline and allocations"
+                              : "profiler contract rejected" };
     }
 
     if (*operation == "assert_user_storage") {
