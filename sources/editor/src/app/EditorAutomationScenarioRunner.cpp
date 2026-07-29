@@ -25,6 +25,7 @@
 #include "project/EditorProjectPaths.hpp"
 #include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "scene/EditorSceneMaterialAssetActions.hpp"
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 
 #include <Windows.h>
@@ -1286,6 +1287,38 @@ ReadScriptValue(
             return { false, "unknown asset role" };
         }
         return { assigned, *role };
+    }
+
+    if (*operation == "assign_material_slot" ||
+        *operation == "assert_material_slot") {
+        const auto entityAlias = StringMember(step, "entity", error);
+        const auto asset = StringMember(step, "asset", error);
+        const auto slotValue = NumberMember(step, "slot", error);
+        if (!entityAlias || !asset || !slotValue) {
+            return { false, error };
+        }
+        if (*slotValue < 0.0 || *slotValue > static_cast<double>(std::numeric_limits<std::uint32_t>::max()) ||
+            std::floor(*slotValue) != *slotValue) {
+            return { false, "slot must be a uint32" };
+        }
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *entityAlias);
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        const std::uint32_t slot = static_cast<std::uint32_t>(*slotValue);
+        if (!state.context.Scene().Entities().IsAlive(entity) || !id.IsValid()) {
+            return { false, "entity or material asset was not found" };
+        }
+        if (*operation == "assign_material_slot") {
+            return {
+                EditorSceneMaterialAssetActions::AssignMaterialSlotOverride(
+                    state.context.Scene(), entity, slot, id),
+                std::to_string(slot) };
+        }
+        const kb::scene::MeshRendererComponent* renderer =
+            state.context.Scene().Components().MeshRenderers().TryGet(entity);
+        const bool assigned = renderer != nullptr &&
+            slot < renderer->materialSlotOverrideCount &&
+            renderer->materialSlotAssetIds[slot] == id.value;
+        return { assigned, std::to_string(slot) };
     }
 
     if (*operation == "set_material" ||
