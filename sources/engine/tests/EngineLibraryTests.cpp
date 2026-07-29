@@ -3988,10 +3988,16 @@ void RunAiBehaviourAssetRuntimeTest() {
     };
     kb::tests::Require(kb::scene::ValidateAiBehaviourAsset(sequenceAsset).valid, "AI behaviour tree asset validation rejected a valid sequence");
     kb::scene::AiBehaviourRuntimeState sequenceState;
-    kb::tests::Require(kb::scene::AiBehaviourRuntime::Initialize(sequenceAsset, sequenceState), "AI behaviour runtime could not initialize a valid tree asset");
+    kb::tests::Require(kb::scene::AiBehaviourRuntime::Initialize(sequenceAsset, sequenceState, 77U), "AI behaviour runtime could not initialize a valid tree asset");
     kb::tests::Require(kb::scene::AiBehaviourRuntime::Tick(sequenceAsset, sequenceState, callbacks) == kb::scene::AiExecutionStatus::Running &&
             kb::scene::AiBehaviourRuntime::Tick(sequenceAsset, sequenceState, callbacks) == kb::scene::AiExecutionStatus::Success && context.actionCalls == 2U,
         "AI behaviour runtime did not resume a running action synchronously on the next owner tick");
+    const kb::math::RandomStreamUInt32Result firstRandom = kb::scene::AiBehaviourRuntime::NextRandom(sequenceState);
+    const kb::scene::AiDecisionSnapshot decision = kb::scene::AiBehaviourRuntime::Snapshot(sequenceState);
+    kb::tests::Require(firstRandom.value == kb::math::NextUInt32(kb::math::MakeRandomStream(77U)).value &&
+            decision.tick == 2U && decision.root == 1U && decision.status == kb::scene::AiExecutionStatus::Success &&
+            decision.randomSeed == 77U && decision.randomCounter == 1U,
+        "AI runtime seed or decision snapshot was not deterministic");
 
     const kb::scene::AiBehaviourAsset utilityAsset{
         .nodes = {

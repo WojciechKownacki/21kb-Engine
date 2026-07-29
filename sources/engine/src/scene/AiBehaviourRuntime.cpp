@@ -149,7 +149,7 @@ AiAssetValidationResult ValidateAiBehaviourAsset(const AiBehaviourAsset& asset) 
     return { .valid = true, .error = {} };
 }
 
-bool AiBehaviourRuntime::Initialize(const AiBehaviourAsset& asset, AiBehaviourRuntimeState& state) {
+bool AiBehaviourRuntime::Initialize(const AiBehaviourAsset& asset, AiBehaviourRuntimeState& state, std::uint32_t seed) {
     if (!ValidateAiBehaviourAsset(asset).valid) {
         state = {};
         return false;
@@ -161,6 +161,10 @@ bool AiBehaviourRuntime::Initialize(const AiBehaviourAsset& asset, AiBehaviourRu
         return false;
     }
     state.activeState = asset.states.empty() ? 0U : asset.initialState;
+    state.random = kb::math::MakeRandomStream(seed);
+    state.decisionTick = 0U;
+    state.lastStatus = AiExecutionStatus::Invalid;
+    state.lastRoot = 0U;
     state.initialized = true;
     return true;
 }
@@ -184,13 +188,37 @@ AiExecutionStatus AiBehaviourRuntime::Tick(
         }
         root = asset.states[state.activeState].rootNode;
     }
-    return EvaluateNode(asset, state, callbacks, root);
+    const AiExecutionStatus status = EvaluateNode(asset, state, callbacks, root);
+    ++state.decisionTick;
+    state.lastStatus = status;
+    state.lastRoot = asset.nodes[root].id;
+    return status;
+}
+
+kb::math::RandomStreamUInt32Result AiBehaviourRuntime::NextRandom(AiBehaviourRuntimeState& state) noexcept {
+    const kb::math::RandomStreamUInt32Result result = kb::math::NextUInt32(state.random);
+    state.random = result.stream;
+    return result;
+}
+
+AiDecisionSnapshot AiBehaviourRuntime::Snapshot(const AiBehaviourRuntimeState& state) noexcept {
+    return AiDecisionSnapshot{
+        .tick = state.decisionTick,
+        .activeState = state.activeState,
+        .root = state.lastRoot,
+        .status = state.lastStatus,
+        .randomSeed = state.random.seed,
+        .randomCounter = state.random.counter,
+    };
 }
 
 void AiBehaviourRuntime::Reset(const AiBehaviourAsset& asset, AiBehaviourRuntimeState& state) noexcept {
     if (!state.initialized || state.childCursors.size() != asset.nodes.size()) return;
     std::fill(state.childCursors.begin(), state.childCursors.end(), 0U);
     state.activeState = asset.states.empty() ? 0U : asset.initialState;
+    state.decisionTick = 0U;
+    state.lastStatus = AiExecutionStatus::Invalid;
+    state.lastRoot = 0U;
 }
 
 } // namespace kb::scene
