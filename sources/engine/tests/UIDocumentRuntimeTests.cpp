@@ -1,5 +1,7 @@
 #include "TestSupport.hpp"
 
+#include "engine/input/InputKey.hpp"
+#include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -146,7 +148,7 @@ end
     });
     kb::script::ScriptRuntimeHost scriptHost{ scene };
     Require(scriptHost.Succeeded() && scriptHost.InstallSceneSystem(), "UI script runtime host could not install the UI library module");
-    for (const char* const function : { "UI.Find", "UI.SetText", "UI.SetImage", "UI.SetToggle", "UI.SetSlider", "UI.ListAppend", "UI.ListClear", "UI.SetScrollOffset", "UI.SetModalOpen",
+    for (const char* const function : { "UI.Find", "UI.Focus", "UI.SetText", "UI.SetImage", "UI.SetToggle", "UI.SetSlider", "UI.ListAppend", "UI.ListClear", "UI.SetScrollOffset", "UI.SetModalOpen",
              "UI.EmitClick", "UI.EmitPointer", "UI.EmitSubmit", "UI.EmitChanged", "UI.EmitFocus", "UI.EmitNavigation" }) {
         Require(scriptHost.Functions().FindSignature(function) != nullptr,
             "UI control script API was not registered in the production runtime host");
@@ -313,6 +315,61 @@ end
     Require(deactivatedDeliveries == 0U && !scriptHost.Runtime().Events().Unsubscribe(deactivatedHandle),
         "A deactivated UI event subscription owner was not automatically released");
     scene.Entities().Destroy(deactivatedListener.Entity());
+
+    // LIB-180: physical device state is routed by UIDocumentSceneSystem into
+    // the existing UI event queue. There is no geometry in UIDocument yet, so
+    // pointer activation intentionally targets the canonical focused element.
+    std::size_t routedFocus = 0U;
+    std::size_t routedNavigation = 0U;
+    std::size_t routedClick = 0U;
+    std::size_t routedSubmit = 0U;
+    const kb::script::EventSubscriptionHandle focusRoute = scriptHost.Runtime().Events().Subscribe("UI.Focus",
+        [&routedFocus](const kb::script::ScriptEvent&) { ++routedFocus; }, owner.Entity());
+    const kb::script::EventSubscriptionHandle navigationRoute = scriptHost.Runtime().Events().Subscribe("UI.Navigation",
+        [&routedNavigation](const kb::script::ScriptEvent&) { ++routedNavigation; }, owner.Entity());
+    const kb::script::EventSubscriptionHandle clickRoute = scriptHost.Runtime().Events().Subscribe("UI.Click",
+        [&routedClick](const kb::script::ScriptEvent&) { ++routedClick; }, owner.Entity());
+    const kb::script::EventSubscriptionHandle submitRoute = scriptHost.Runtime().Events().Subscribe("UI.Submit",
+        [&routedSubmit](const kb::script::ScriptEvent&) { ++routedSubmit; }, owner.Entity());
+    Require(focusRoute != kb::script::kInvalidEventSubscriptionHandle && navigationRoute != kb::script::kInvalidEventSubscriptionHandle &&
+            clickRoute != kb::script::kInvalidEventSubscriptionHandle && submitRoute != kb::script::kInvalidEventSubscriptionHandle,
+        "UI input-route subscriptions were rejected");
+    auto& device = scene.Input().MutableDeviceState();
+    device.SetHasFocus(true);
+    Require(scene.UIDocuments().QueueFocus(owner.Entity(), 2U), "Explicit UI focus was rejected");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(scene.UIDocuments().Focused(owner.Entity()) == 2U && routedFocus == 1U,
+        "UI focus did not become canonical or emit its accessibility-visible event");
+    device.SetKeyDown(kb::input::InputKey::GamepadDPadDown, true);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(scene.Input().GameplayInputConsumed(),
+        "UI navigation did not claim the physical input for gameplay routing");
+    device.SetKeyDown(kb::input::InputKey::GamepadDPadDown, false);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(!scene.Input().GameplayInputConsumed(),
+        "UI input consumption leaked beyond the routed interaction frame");
+    Require(scene.UIDocuments().Focused(owner.Entity()) != 0U && routedNavigation == 1U && routedFocus >= 2U,
+        "Gamepad D-pad did not route deterministic UI navigation and focus");
+    device.SetPointerPosition(17.0F, 29.0F);
+    device.SetKeyDown(kb::input::InputKey::MouseLeft, true);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    device.SetKeyDown(kb::input::InputKey::MouseLeft, false);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    device.SetKeyDown(kb::input::InputKey::GamepadFaceBottom, true);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    device.SetKeyDown(kb::input::InputKey::GamepadFaceBottom, false);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(routedClick == 1U && routedSubmit == 1U,
+        "Pointer and gamepad submit were not routed through the shared UI event queue");
+    device.SetHasFocus(false);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(scene.UIDocuments().Focused(owner.Entity()) == 0U && routedFocus >= 3U,
+        "Losing window focus did not clear focused UI state");
+    static_cast<void>(scriptHost.Runtime().Events().Unsubscribe(focusRoute));
+    static_cast<void>(scriptHost.Runtime().Events().Unsubscribe(navigationRoute));
+    static_cast<void>(scriptHost.Runtime().Events().Unsubscribe(clickRoute));
+    static_cast<void>(scriptHost.Runtime().Events().Unsubscribe(submitRoute));
 
     // LIB-178: a second retained document exercises the production bridge
     // ScriptSharedState -> ScriptRuntimeSceneSystem -> SceneUIDocuments. The
