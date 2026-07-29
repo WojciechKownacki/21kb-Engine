@@ -75,6 +75,7 @@ scenario-local aliases.
 | `assert_function_execution_affinity` | Verifies the active Play Mode script host exports an explicit execution-affinity policy for every live callable. |
 | `assert_deterministic_library_profile` | Verifies the active engine profile declares random streams, timer delta, execution order, input replay, and fixed simulation. |
 | `assert_nondeterministic_library_metadata` | Verifies metadata marks wall time, platform, async I/O and rendering APIs as non-deterministic. |
+| `assert_restricted_api_surfaces` | Verifies authoring-only and server-only API metadata exists and is excluded from Lua and Visual Graph frontends. |
 | `assert_runtime_snapshot_queue` | Enqueues a time-scale command from a worker, drains it through the production runtime frame boundary, and verifies immutable before/after snapshots. |
 | `assert_platform_capabilities` | Verifies capability-gated locale, user-data path, clipboard, URL and vibration access, including unavailable-service rejection. |
 | `assert_user_storage` | Verifies sandboxed atomic read/write/delete/list, quota enforcement and asynchronous write without arbitrary filesystem paths. |
