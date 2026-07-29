@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <optional>
 #include <stdexcept>
 
 namespace kb::scene {
@@ -64,6 +65,10 @@ SceneEntity ResolveTarget(Scene& scene, SceneEntity owner, std::string_view path
     return current;
 }
 
+[[nodiscard]] const AnimationClip& ReferenceClip(
+    const AnimatorRuntimeState& state);
+double StateTime(float normalizedTime, const AnimationClip& clip);
+
 [[nodiscard]] bool RuntimeAssetsAreCurrent(
     const kb::assets::AssetManager& manager,
     const AnimatorRuntimeRecord& record) {
@@ -79,6 +84,92 @@ SceneEntity ResolveTarget(Scene& scene, SceneEntity owner, std::string_view path
         }
     }
     return true;
+}
+
+void RestoreCompatibleRuntimeState(
+    const AnimatorRuntimeRecord& previous,
+    AnimatorRuntimeRecord& reloaded) {
+    reloaded.speed = previous.speed;
+    reloaded.lastAppliedComponentSpeed = previous.lastAppliedComponentSpeed;
+    reloaded.ikTargets = previous.ikTargets;
+
+    for (std::size_t reloadedIndex = 0U;
+         reloadedIndex < reloaded.controller->parameters.size();
+         ++reloadedIndex) {
+        const AnimatorParameterDefinition& target =
+            reloaded.controller->parameters[reloadedIndex];
+        for (std::size_t previousIndex = 0U;
+             previousIndex < previous.controller->parameters.size();
+             ++previousIndex) {
+            const AnimatorParameterDefinition& source =
+                previous.controller->parameters[previousIndex];
+            if (source.name == target.name && source.type == target.type) {
+                reloaded.parameters[reloadedIndex] =
+                    previous.parameters[previousIndex];
+                break;
+            }
+        }
+    }
+
+    const auto transferTime = [](double time,
+                                 const AnimatorRuntimeState& source,
+                                 const AnimatorRuntimeState& target) {
+        const float sourceDuration = ReferenceClip(source).durationSeconds;
+        const float targetDuration = ReferenceClip(target).durationSeconds;
+        if (!std::isfinite(time) || sourceDuration <= 0.0F ||
+            targetDuration <= 0.0F) {
+            return 0.0;
+        }
+        const float normalized = std::clamp(
+            static_cast<float>(time / static_cast<double>(sourceDuration)),
+            0.0F, 1.0F);
+        return StateTime(normalized, ReferenceClip(target));
+    };
+
+    for (std::size_t reloadedLayerIndex = 0U;
+         reloadedLayerIndex < reloaded.controller->layers.size();
+         ++reloadedLayerIndex) {
+        const AnimatorControllerLayer& targetDefinition =
+            reloaded.controller->layers[reloadedLayerIndex];
+        const AnimatorRuntimeLayer* sourceLayer = nullptr;
+        for (std::size_t previousLayerIndex = 0U;
+             previousLayerIndex < previous.controller->layers.size();
+             ++previousLayerIndex) {
+            if (previous.controller->layers[previousLayerIndex].name ==
+                targetDefinition.name) {
+                sourceLayer = &previous.layers[previousLayerIndex];
+                break;
+            }
+        }
+        if (sourceLayer == nullptr) continue;
+
+        const AnimatorControllerLayer& sourceDefinition =
+            previous.controller->layers[static_cast<std::size_t>(
+                sourceLayer - previous.layers.data())];
+        const std::string& sourceStateName =
+            sourceDefinition.states[sourceLayer->currentState].name;
+        AnimatorRuntimeLayer& targetLayer =
+            reloaded.layers[reloadedLayerIndex];
+        for (std::size_t targetStateIndex = 0U;
+             targetStateIndex < targetDefinition.states.size();
+             ++targetStateIndex) {
+            if (targetDefinition.states[targetStateIndex].name !=
+                sourceStateName) {
+                continue;
+            }
+            targetLayer.currentState = targetStateIndex;
+            targetLayer.currentTimeSeconds = transferTime(
+                sourceLayer->currentTimeSeconds,
+                sourceLayer->states[sourceLayer->currentState],
+                targetLayer.states[targetStateIndex]);
+            targetLayer.previousState = targetStateIndex;
+            targetLayer.previousTimeSeconds = targetLayer.currentTimeSeconds;
+            targetLayer.transitioning = false;
+            targetLayer.transitionElapsedSeconds = 0.0;
+            targetLayer.transitionDurationSeconds = 0.0;
+            break;
+        }
+    }
 }
 
 [[nodiscard]] bool RuntimeBindingsMatchCanonicalHierarchy(
@@ -1157,6 +1248,11 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
             record->controller.Id() != controllerAssetId ||
             record->controllerLoadGeneration !=
                 scene.Assets().Manager().LoadGeneration(controllerAssetId);
+        const bool controllerReloaded =
+            record != nullptr &&
+            record->controller.Id() == controllerAssetId &&
+            record->controllerLoadGeneration !=
+                scene.Assets().Manager().LoadGeneration(controllerAssetId);
         const bool clipChanged =
             record != nullptr &&
             !RuntimeAssetsAreCurrent(scene.Assets().Manager(), *record);
@@ -1171,11 +1267,19 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
             // Once a canonical source or binding is stale, the old derived
             // record must not remain queryable or feed a physics queue if the
             // replacement asset fails to load.
+            std::optional<AnimatorRuntimeRecord> previous;
+            if (record != nullptr) {
+                previous.emplace(std::move(*record));
+            }
             state.animators.erase(value.entity.Id());
             if (!Attach(scene, value.entity, value.animator.controllerAssetId)) {
                 throw std::runtime_error("Animator component could not load its controller or bind the authored hierarchy");
             }
             record = Find(SceneAccess::State(scene), value.entity);
+            if (previous.has_value() &&
+                (controllerReloaded || clipChanged)) {
+                RestoreCompatibleRuntimeState(*previous, *record);
+            }
             record->lastAppliedComponentSpeed = value.animator.speed;
             record->speed = value.animator.speed;
         } else if (hierarchyChanged) {
