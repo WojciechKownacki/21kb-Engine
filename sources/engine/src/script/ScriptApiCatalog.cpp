@@ -37,7 +37,7 @@ struct LuaBindingSpec {
 // wrapper's return shape must stay true to the callable sandbox. When a table, field, or return
 // path changes there, update this list so generated stubs stay true to what
 // scripts can actually call.
-constexpr std::array<LuaBindingSpec, 173> kLuaBindings{ {
+constexpr std::array<LuaBindingSpec, 175> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "Audio", "SetMixer", "Audio.SetMixer", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "Audio", "ActiveMixer", "Audio.ActiveMixer", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -190,6 +190,8 @@ constexpr std::array<LuaBindingSpec, 173> kLuaBindings{ {
     { "UI", "SetSlider", "UI.SetSlider", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "UI", "ListAppend", "UI.ListAppend", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "UI", "ListClear", "UI.ListClear", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "UI", "ConfigureList", "UI.ConfigureList", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "UI", "ListScrollTo", "UI.ListScrollTo", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "UI", "SetScrollOffset", "UI.SetScrollOffset", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "UI", "SetModalOpen", "UI.SetModalOpen", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "UI", "EmitClick", "UI.EmitClick", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },

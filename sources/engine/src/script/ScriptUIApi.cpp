@@ -192,6 +192,20 @@ ScriptFunctionCallResult ListClear(const ScriptFunctionCallContext& context, std
     return QueueControl(context, arguments, std::move(*control), { kb::scene::UIControlKind::List }, "UI.ListClear requires a List element");
 }
 
+ScriptFunctionCallResult ConfigureList(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) return Error("UI.ConfigureList requires an active scene");
+    return Applied(context.scene->UIDocuments().QueueConfigureVirtualList(Target(context, arguments), Arg(arguments, "element")->AsUInt64(),
+        Arg(arguments, "viewportItems")->AsUInt32(), Arg(arguments, "overscan")->AsUInt32()),
+        "UI.ConfigureList requires a live List, viewportItems in 1..512, and overscan in 0..128");
+}
+
+ScriptFunctionCallResult ScrollListTo(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) return Error("UI.ListScrollTo requires an active scene");
+    return Applied(context.scene->UIDocuments().QueueScrollVirtualListTo(Target(context, arguments), Arg(arguments, "element")->AsUInt64(),
+        Arg(arguments, "firstVisibleIndex")->AsUInt32()),
+        "UI.ListScrollTo requires a configured live virtual List");
+}
+
 ScriptFunctionCallResult SetScrollOffset(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     std::string error;
     auto control = ExistingControl(context, arguments, error);
@@ -307,6 +321,8 @@ bool ScriptUIApi::Register(ScriptRuntimeHost& host) {
         RegisterFunction(host, "UI.SetSlider", Targeted({ { "element", ScriptValueType::Hash, true }, { "value", ScriptValueType::Float, true }, { "minimum", ScriptValueType::Float, false }, { "maximum", ScriptValueType::Float, false } }), applied, &SetSlider) &&
         RegisterFunction(host, "UI.ListAppend", Targeted({ { "element", ScriptValueType::Hash, true }, { "item", ScriptValueType::String, true } }), applied, &ListAppend) &&
         RegisterFunction(host, "UI.ListClear", Targeted({ { "element", ScriptValueType::Hash, true } }), applied, &ListClear) &&
+        RegisterFunction(host, "UI.ConfigureList", Targeted({ { "element", ScriptValueType::Hash, true }, { "viewportItems", ScriptValueType::UInt32, true }, { "overscan", ScriptValueType::UInt32, true } }), applied, &ConfigureList) &&
+        RegisterFunction(host, "UI.ListScrollTo", Targeted({ { "element", ScriptValueType::Hash, true }, { "firstVisibleIndex", ScriptValueType::UInt32, true } }), applied, &ScrollListTo) &&
         RegisterFunction(host, "UI.SetScrollOffset", Targeted({ { "element", ScriptValueType::Hash, true }, { "offset", ScriptValueType::Float, true } }), applied, &SetScrollOffset) &&
         RegisterFunction(host, "UI.SetModalOpen", Targeted({ { "element", ScriptValueType::Hash, true }, { "open", ScriptValueType::Bool, true } }), applied, &SetModalOpen) &&
         RegisterFunction(host, "UI.EmitClick", Targeted({ { "element", ScriptValueType::Hash, true }, { "x", ScriptValueType::Float, true }, { "y", ScriptValueType::Float, true } }), applied, &EmitClick) &&

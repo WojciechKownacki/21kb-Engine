@@ -49,6 +49,7 @@ public:
     [[nodiscard]] bool HasElement(SceneEntity entity, UIElementId element) const noexcept;
     [[nodiscard]] bool Visible(SceneEntity entity, UIElementId element) const noexcept;
     [[nodiscard]] std::optional<UIControlState> Control(SceneEntity entity, UIElementId element) const;
+    [[nodiscard]] std::optional<UIVirtualListView> VirtualList(SceneEntity entity, UIElementId element) const noexcept;
     [[nodiscard]] std::optional<UIElementId> Find(SceneEntity entity, std::string_view name) const noexcept;
     [[nodiscard]] bool StyleIsResolved(SceneEntity entity) const noexcept;
     [[nodiscard]] std::size_t ElementCount(SceneEntity entity) const noexcept;
@@ -79,6 +80,11 @@ public:
     [[nodiscard]] bool QueueShow(SceneEntity entity, UIElementId element) noexcept;
     [[nodiscard]] bool QueueHide(SceneEntity entity, UIElementId element) noexcept;
     [[nodiscard]] bool QueueSetControl(SceneEntity entity, UIElementId element, const UIControlState& control);
+    // Configures a fixed-capacity visible-item pool for a List. Item text
+    // stays in the retained List control; scrolling only rebinds pool slots.
+    [[nodiscard]] bool QueueConfigureVirtualList(SceneEntity entity, UIElementId element, std::uint32_t viewportItems, std::uint32_t overscan) noexcept;
+    [[nodiscard]] bool QueueScrollVirtualListTo(SceneEntity entity, UIElementId element, std::uint32_t firstVisibleIndex) noexcept;
+    [[nodiscard]] std::optional<UIVirtualListView> VirtualList(SceneEntity entity, UIElementId element) const noexcept;
     // Applies retained document bindings against an explicit typed data source.
     // Source-to-UI writes remain queued and become visible at the normal UI
     // frame boundary; two-way writes are loop-suppressed by runtime state.
