@@ -12,6 +12,7 @@
 #include "engine/input/InputKey.hpp"
 #include "engine/gameplay/GameInstance.hpp"
 #include "engine/network/NetworkModel.hpp"
+#include "engine/network/NetworkBudget.hpp"
 #include "engine/network/NetworkObject.hpp"
 #include "engine/network/NetworkPrediction.hpp"
 #include "engine/network/NetworkVariable.hpp"
@@ -702,6 +703,28 @@ ReadScriptValue(
             valid,
             valid ? "input, snapshots, interpolation and reconciliation"
                   : "network prediction contract rejected" };
+    }
+
+    if (*operation == "assert_network_budget") {
+        constexpr kb::network::NetworkBudget budget{};
+        kb::network::NetworkTickClock clock{ budget };
+        kb::network::NetworkTickClock invalidClock{ { .tickRate = 1U } };
+        const bool valid = kb::network::IsValidNetworkBudget(budget) &&
+            kb::network::AcceptsPacket(budget, 0U, budget.packetBytes) &&
+            kb::network::AcceptsPacket(
+                budget, budget.maxQueuedBytes - budget.packetBytes,
+                budget.packetBytes) &&
+            !kb::network::AcceptsPacket(
+                budget, budget.maxQueuedBytes - budget.packetBytes + 1U,
+                budget.packetBytes) &&
+            clock.Advance(33333U) == 0U && clock.Advance(1U) == 1U &&
+            clock.Tick() == 1U && clock.Advance(1'000'000U) == 30U &&
+            clock.Tick() == 31U && clock.RemainderMicroticks() == 20U &&
+            invalidClock.Advance(1'000'000U) == 0U;
+        return {
+            valid,
+            valid ? "tick clock, packet budget and backpressure"
+                  : "network budget contract rejected" };
     }
 
     if (*operation == "assert_game_flow") {
