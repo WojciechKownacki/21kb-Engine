@@ -1259,6 +1259,9 @@ void EditorSceneContext::SurfaceScriptLibraryStartupReport() {
 
     const kb::script::ScriptApiCatalog catalog =
         kb::script::ScriptApiCatalog::Build(host, scene_->Assets().Manager());
+    if (!HasCompleteScriptExecutionAffinity()) {
+        console_.Error("Library", "A registered script function has no execution-affinity policy.");
+    }
     const kb::library::ApiManifest manifest = kb::library::BuildApiManifest(catalog);
     std::vector<std::pair<std::uint64_t, std::string>> crashAssets;
     for (const kb::assets::AssetMetadata& asset : scene_->Assets().Manager().Registry().All()) {
@@ -1357,6 +1360,19 @@ kb::scene::Scene& EditorSceneContext::Scene() noexcept {
 
 const kb::scene::Scene& EditorSceneContext::Scene() const noexcept {
     return *scene_;
+}
+
+bool EditorSceneContext::HasCompleteScriptExecutionAffinity() const noexcept {
+    if (scriptModule_ == nullptr || scriptModule_->Host() == nullptr) {
+        return false;
+    }
+    const std::vector<kb::script::ScriptFunctionDesc>& functions =
+        scriptModule_->Host()->Functions().Functions();
+    return !functions.empty() && std::ranges::all_of(functions,
+        [](const kb::script::ScriptFunctionDesc& function) {
+            return function.signature.executionAffinity ==
+                kb::core::ExecutionAffinity::MainThread;
+        });
 }
 
 EditorAssetBrowserState& EditorSceneContext::AssetBrowser() noexcept {
