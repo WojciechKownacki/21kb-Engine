@@ -1414,6 +1414,13 @@ if(BUILD_TESTING)
             kb_engine
     )
 
+    add_test(NAME kb_library_benchmarks COMMAND $<TARGET_FILE:kb_library_benchmarks>)
+    set_tests_properties(kb_library_benchmarks PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "library;performance"
+        TIMEOUT 180
+    )
+
     kb_apply_quality_gates(kb_library_benchmarks)
 
     add_executable(kb_library_safety_tests

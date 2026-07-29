@@ -30,6 +30,19 @@ struct BenchmarkResult {
     double physicsCallMilliseconds = 0.0;
 };
 
+// Debug builds are deliberately included: these budgets leave headroom for
+// shared CI workers while still rejecting an order-of-magnitude regression in
+// the engine-library hot paths. Functional correctness belongs to
+// kb_engine_library_tests; this executable is the dedicated performance gate.
+struct PerformanceBudget {
+    std::size_t entityCount = 0U;
+    double maxSpawnMilliseconds = 0.0;
+    double maxQueryMilliseconds = 0.0;
+    double maxTransformReadMilliseconds = 0.0;
+    double maxEventEmitMilliseconds = 0.0;
+    double maxPhysicsCallMilliseconds = 0.0;
+};
+
 [[nodiscard]] double ElapsedMilliseconds(Clock::time_point startedAt) noexcept {
     return std::chrono::duration<double, std::milli>(Clock::now() - startedAt).count();
 }
@@ -105,11 +118,27 @@ void PrintResult(const BenchmarkResult& result) {
               << " physics-call=" << result.physicsCallMilliseconds << "ms\n";
 }
 
+void RequireWithinBudget(const BenchmarkResult& result, const PerformanceBudget& budget) {
+    kb::tests::Require(result.entityCount == budget.entityCount, "Library performance budget used the wrong workload size");
+    kb::tests::Require(result.spawnMilliseconds <= budget.maxSpawnMilliseconds, "Library spawn performance regressed beyond its CI budget");
+    kb::tests::Require(result.queryMilliseconds <= budget.maxQueryMilliseconds, "Library query performance regressed beyond its CI budget");
+    kb::tests::Require(result.transformReadMilliseconds <= budget.maxTransformReadMilliseconds, "Library transform-read performance regressed beyond its CI budget");
+    kb::tests::Require(result.eventEmitMilliseconds <= budget.maxEventEmitMilliseconds, "Library event-emit performance regressed beyond its CI budget");
+    kb::tests::Require(result.physicsCallMilliseconds <= budget.maxPhysicsCallMilliseconds, "Library physics-call performance regressed beyond its CI budget");
+}
+
 } // namespace
 
 int main() {
-    for (const std::size_t entityCount : std::array<std::size_t, 3U>{ 1'000U, 10'000U, 100'000U }) {
-        PrintResult(RunBenchmark(entityCount));
+    constexpr std::array<PerformanceBudget, 3U> kRegressionBudgets{
+        PerformanceBudget{ .entityCount = 1'000U, .maxSpawnMilliseconds = 500.0, .maxQueryMilliseconds = 20.0, .maxTransformReadMilliseconds = 30.0, .maxEventEmitMilliseconds = 20.0, .maxPhysicsCallMilliseconds = 50.0 },
+        PerformanceBudget{ .entityCount = 10'000U, .maxSpawnMilliseconds = 3'000.0, .maxQueryMilliseconds = 50.0, .maxTransformReadMilliseconds = 100.0, .maxEventEmitMilliseconds = 80.0, .maxPhysicsCallMilliseconds = 200.0 },
+        PerformanceBudget{ .entityCount = 100'000U, .maxSpawnMilliseconds = 60'000.0, .maxQueryMilliseconds = 250.0, .maxTransformReadMilliseconds = 1'000.0, .maxEventEmitMilliseconds = 750.0, .maxPhysicsCallMilliseconds = 2'000.0 },
+    };
+    for (const PerformanceBudget& budget : kRegressionBudgets) {
+        const BenchmarkResult result = RunBenchmark(budget.entityCount);
+        PrintResult(result);
+        RequireWithinBudget(result, budget);
     }
     return 0;
 }
