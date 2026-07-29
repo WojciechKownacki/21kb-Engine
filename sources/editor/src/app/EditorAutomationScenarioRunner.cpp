@@ -897,6 +897,23 @@ ReadScriptValue(
                               : "engine log contract rejected" };
     }
 
+    if (*operation == "assert_structured_log_fields") {
+        kb::core::EngineLog log{ 1U };
+        const kb::core::LogRecord record{ .category = "Combat",
+            .message = "damage applied", .entity = 7U, .world = 9U,
+            .fields = {{ "target", std::uint64_t{ 11U } },
+                { "damage", 12.5 }, { "critical", true }} };
+        const bool written = log.Info(record, 1U, 1U);
+        const auto& fields = log.Records().front().fields;
+        const bool valid = written && fields.size() == 3U &&
+            fields[0U].key == "target" &&
+            std::get<std::uint64_t>(fields[0U].value) == 11U &&
+            std::get<double>(fields[1U].value) == 12.5 &&
+            std::get<bool>(fields[2U].value);
+        return { valid, valid ? "typed structured log fields"
+                              : "structured log field contract rejected" };
+    }
+
     if (*operation == "assert_user_storage") {
         const std::filesystem::path root =
             EditorProjectPaths::ProjectRoot() / "UserStorageProbe";
