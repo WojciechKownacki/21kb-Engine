@@ -12,28 +12,33 @@ namespace {
 }
 
 [[nodiscard]] ScriptValue ToScriptValue(const kb::visual::VisualGraphRuntimeValue& value, ScriptValueType expectedType) {
+    const std::optional<kb::visual::VisualGraphRuntimeValue> converted = value.ConvertLosslessly(ToGraphType(expectedType));
+    if (!converted.has_value()) {
+        return ScriptValue{};
+    }
+    const kb::visual::VisualGraphRuntimeValue& convertedValue = *converted;
     switch (expectedType) {
     case ScriptValueType::Bool:
-        return ScriptValue{ value.AsBool() };
+        return ScriptValue{ convertedValue.AsBool() };
     case ScriptValueType::Int:
-        return ScriptValue{ value.AsInt() };
+        return ScriptValue{ convertedValue.AsInt() };
     case ScriptValueType::Float:
-        return ScriptValue{ value.AsFloat() };
+        return ScriptValue{ convertedValue.AsFloat() };
     case ScriptValueType::String:
-        return ScriptValue{ value.AsString() };
+        return ScriptValue{ convertedValue.AsString() };
     case ScriptValueType::Entity:
     case ScriptValueType::Component:
     case ScriptValueType::Hash:
-        return ScriptValue{ value.AsUInt64(), expectedType };
+        return ScriptValue{ convertedValue.AsUInt64(), expectedType };
     case ScriptValueType::UInt32:
-        return ScriptValue{ static_cast<std::uint32_t>(value.AsUInt64()) };
+        return ScriptValue{ static_cast<std::uint32_t>(convertedValue.AsUInt64()) };
     case ScriptValueType::Int64:
-        return ScriptValue{ value.AsInt64() };
+        return ScriptValue{ convertedValue.AsInt64() };
     case ScriptValueType::Double:
-        return ScriptValue{ value.AsDouble() };
+        return ScriptValue{ convertedValue.AsDouble() };
     case ScriptValueType::Name:
     case ScriptValueType::Guid:
-        return ScriptValue{ value.AsString(), expectedType };
+        return ScriptValue{ convertedValue.AsString(), expectedType };
     case ScriptValueType::Void:
         break;
     }

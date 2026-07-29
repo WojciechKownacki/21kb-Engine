@@ -3,6 +3,7 @@
 #include "engine/visual/VisualGraphTypes.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <variant>
 
@@ -34,6 +35,7 @@ public:
     [[nodiscard]] std::int64_t AsInt64(std::int64_t fallback = 0) const noexcept;
     [[nodiscard]] const std::string& AsString() const noexcept;
     [[nodiscard]] std::uint64_t AsUInt64(std::uint64_t fallback = 0U) const noexcept;
+    [[nodiscard]] std::optional<VisualGraphRuntimeValue> ConvertLosslessly(VisualGraphValueType target) const noexcept;
 
 private:
     Storage value_{};

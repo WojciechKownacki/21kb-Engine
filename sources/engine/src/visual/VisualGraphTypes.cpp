@@ -141,6 +141,26 @@ const char* ToString(VisualGraphEdgeKind kind) noexcept {
     return "Execution";
 }
 
+VisualGraphValueConversion ClassifyVisualGraphValueConversion(VisualGraphValueType source, VisualGraphValueType target) noexcept {
+    if (source == target) {
+        return VisualGraphValueConversion::Identity;
+    }
+    if (source == VisualGraphValueType::Void || target == VisualGraphValueType::Void) {
+        return VisualGraphValueConversion::Incompatible;
+    }
+    if ((source == VisualGraphValueType::Int && (target == VisualGraphValueType::Int64 || target == VisualGraphValueType::Double)) ||
+        (source == VisualGraphValueType::UInt32 && (target == VisualGraphValueType::Int64 || target == VisualGraphValueType::Double)) ||
+        (source == VisualGraphValueType::Float && target == VisualGraphValueType::Double)) {
+        return VisualGraphValueConversion::Lossless;
+    }
+    return VisualGraphValueConversion::Lossy;
+}
+
+bool IsImplicitVisualGraphValueConversion(VisualGraphValueType source, VisualGraphValueType target) noexcept {
+    const VisualGraphValueConversion conversion = ClassifyVisualGraphValueConversion(source, target);
+    return conversion == VisualGraphValueConversion::Identity || conversion == VisualGraphValueConversion::Lossless;
+}
+
 bool TryParseVisualGraphValueType(std::string_view text, VisualGraphValueType& output) noexcept {
     static constexpr std::array values{
         std::pair<std::string_view, VisualGraphValueType>{"Void", VisualGraphValueType::Void},

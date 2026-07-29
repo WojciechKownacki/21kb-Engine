@@ -83,6 +83,9 @@
 #include "engine/scene/Perception.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/visual/VisualGraphNodeCatalog.hpp"
+#include "engine/visual/VisualGraphDocument.hpp"
+#include "engine/visual/VisualGraphRuntimeExecutionContext.hpp"
+#include "engine/visual/VisualGraphValidator.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptEvent.hpp"
@@ -3650,6 +3653,51 @@ void RunVisualGraphCatalogSignatureParityTest() {
     }
 }
 
+void RunVisualGraphLosslessConversionTest() {
+    using kb::visual::VisualGraphValueType;
+    kb::tests::Require(
+        kb::visual::ClassifyVisualGraphValueConversion(VisualGraphValueType::Int, VisualGraphValueType::Int64) == kb::visual::VisualGraphValueConversion::Lossless &&
+            kb::visual::ClassifyVisualGraphValueConversion(VisualGraphValueType::UInt32, VisualGraphValueType::Double) == kb::visual::VisualGraphValueConversion::Lossless &&
+            kb::visual::ClassifyVisualGraphValueConversion(VisualGraphValueType::Float, VisualGraphValueType::Double) == kb::visual::VisualGraphValueConversion::Lossless &&
+            kb::visual::ClassifyVisualGraphValueConversion(VisualGraphValueType::Int64, VisualGraphValueType::Int) == kb::visual::VisualGraphValueConversion::Lossy,
+        "Engine21kbLibrary Visual Graph conversion policy misclassified a numeric conversion");
+
+    kb::visual::VisualGraphAsset graph{
+        .name = "LosslessConversions",
+        .nodes = {
+            { .id = 1U, .kind = kb::visual::VisualGraphNodeKind::Event },
+            { .id = 2U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Source" },
+            { .id = 3U, .kind = kb::visual::VisualGraphNodeKind::CallNative, .symbol = "Target" },
+        },
+        .pins = {
+            { .nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "value", .type = VisualGraphValueType::Int },
+            { .nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "value", .type = VisualGraphValueType::Int64 },
+        },
+        .edges = {
+            { .fromNode = 2U, .fromPin = "value", .toNode = 3U, .toPin = "value", .kind = kb::visual::VisualGraphEdgeKind::Data },
+        },
+    };
+    kb::tests::Require(kb::visual::VisualGraphValidator::Validate(graph).Succeeded(), "Engine21kbLibrary Visual Graph rejected a lossless Int-to-Int64 edge");
+    kb::visual::VisualGraphAsset editableGraph = graph;
+    editableGraph.edges.clear();
+    kb::visual::VisualGraphDocument document{ std::move(editableGraph) };
+    kb::tests::Require(document.ConnectData(2U, "value", 3U, "value"), "Engine21kbLibrary Visual Graph document rejected a lossless Int-to-Int64 edge");
+
+    graph.pins[0].type = VisualGraphValueType::Int64;
+    graph.pins[1].type = VisualGraphValueType::Int;
+    const kb::visual::VisualGraphValidationResult lossy = kb::visual::VisualGraphValidator::Validate(graph);
+    kb::tests::Require(!lossy.Succeeded() && !lossy.errors.empty() && lossy.errors.front().find("explicit lossy conversion node") != std::string::npos,
+        "Engine21kbLibrary Visual Graph did not clearly reject a lossy Int64-to-Int edge");
+
+    kb::visual::VisualGraphRuntimeExecutionContext context;
+    context.Store(1U, "int", kb::visual::VisualGraphRuntimeValue{ 42 });
+    context.Store(1U, "float", kb::visual::VisualGraphRuntimeValue{ 1.25F });
+    context.Store(1U, "uint", kb::visual::VisualGraphRuntimeValue{ 17U, VisualGraphValueType::UInt32 });
+    kb::tests::Require(
+        context.ReadInt64(1U, "int", -1) == 42 && context.ReadDouble(1U, "float", -1.0) == 1.25 && context.ReadDouble(1U, "uint", -1.0) == 17.0,
+        "Engine21kbLibrary Visual Graph runtime did not execute approved lossless conversions");
+}
+
 // LIB-031: every kb::library handle type must classify to exactly the
 // LibraryOwnership its lifetime contract already documents (EntityHandle:
 // Borrowed, since the Scene owns the entity; AssetRef<T>: Shared, since it
@@ -4503,6 +4551,7 @@ void RunEngineLibraryTests() {
     RunLibraryQueryAliasingEntityDestroyedAndCommandFlushBoundaryTest();
     RunCatalogFunctionFrontendAndDocumentationComplianceTest();
     RunVisualGraphCatalogSignatureParityTest();
+    RunVisualGraphLosslessConversionTest();
     RunOwnershipTest();
     RunNoPointersCrossScriptBoundaryTest();
     RunErrorCodeTest();

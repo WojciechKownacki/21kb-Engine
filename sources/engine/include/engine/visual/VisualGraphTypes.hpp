@@ -64,6 +64,16 @@ enum class VisualGraphEdgeKind : std::uint8_t {
     Data,
 };
 
+// Data edges may use only conversions which preserve every source value.
+// Lossy conversions require an explicit authoring node so a graph cannot hide
+// truncation or rounding behind an ordinary wire.
+enum class VisualGraphValueConversion : std::uint8_t {
+    Identity,
+    Lossless,
+    Lossy,
+    Incompatible,
+};
+
 struct VisualGraphVariable {
     std::string name;
     VisualGraphValueType type = VisualGraphValueType::Void;
@@ -111,6 +121,8 @@ struct VisualGraphAsset {
 [[nodiscard]] const char* ToString(VisualGraphNodeKind kind) noexcept;
 [[nodiscard]] const char* ToString(VisualGraphPinDirection direction) noexcept;
 [[nodiscard]] const char* ToString(VisualGraphEdgeKind kind) noexcept;
+[[nodiscard]] VisualGraphValueConversion ClassifyVisualGraphValueConversion(VisualGraphValueType source, VisualGraphValueType target) noexcept;
+[[nodiscard]] bool IsImplicitVisualGraphValueConversion(VisualGraphValueType source, VisualGraphValueType target) noexcept;
 [[nodiscard]] bool TryParseVisualGraphValueType(std::string_view text, VisualGraphValueType& output) noexcept;
 [[nodiscard]] bool TryParseVisualGraphLifecycleEvent(std::string_view text, VisualGraphLifecycleEvent& output) noexcept;
 [[nodiscard]] bool TryParseVisualGraphNodeKind(std::string_view text, VisualGraphNodeKind& output) noexcept;

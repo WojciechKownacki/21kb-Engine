@@ -1,5 +1,6 @@
 #include "engine/visual/VisualGraphRuntimeValue.hpp"
 
+#include <limits>
 #include <utility>
 
 namespace kb::visual {
@@ -78,6 +79,46 @@ const std::string& VisualGraphRuntimeValue::AsString() const noexcept {
 std::uint64_t VisualGraphRuntimeValue::AsUInt64(std::uint64_t fallback) const noexcept {
     const std::uint64_t* value = std::get_if<std::uint64_t>(&value_);
     return value == nullptr ? fallback : *value;
+}
+
+std::optional<VisualGraphRuntimeValue> VisualGraphRuntimeValue::ConvertLosslessly(VisualGraphValueType target) const noexcept {
+    if (Type() == target) {
+        return *this;
+    }
+    if (!IsImplicitVisualGraphValueConversion(Type(), target)) {
+        return std::nullopt;
+    }
+
+    switch (target) {
+    case VisualGraphValueType::Int64:
+        if (Type() == VisualGraphValueType::Int) {
+            return VisualGraphRuntimeValue{ static_cast<std::int64_t>(AsInt()) };
+        }
+        if (Type() == VisualGraphValueType::UInt32) {
+            const std::uint64_t value = AsUInt64();
+            if (value <= static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max())) {
+                return VisualGraphRuntimeValue{ static_cast<std::int64_t>(value) };
+            }
+        }
+        break;
+    case VisualGraphValueType::Double:
+        if (Type() == VisualGraphValueType::Int) {
+            return VisualGraphRuntimeValue{ static_cast<double>(AsInt()) };
+        }
+        if (Type() == VisualGraphValueType::UInt32) {
+            const std::uint64_t value = AsUInt64();
+            if (value <= static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max())) {
+                return VisualGraphRuntimeValue{ static_cast<double>(value) };
+            }
+        }
+        if (Type() == VisualGraphValueType::Float) {
+            return VisualGraphRuntimeValue{ static_cast<double>(AsFloat()) };
+        }
+        break;
+    default:
+        break;
+    }
+    return std::nullopt;
 }
 
 } // namespace kb::visual
