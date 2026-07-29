@@ -12,6 +12,7 @@
 #include "engine/library/EngineLibraryComponentDesc.hpp"
 #include "engine/library/EngineLibraryComponentInspectorDesc.hpp"
 #include "engine/library/EngineLibraryDeprecation.hpp"
+#include "engine/library/EngineLibraryDeterminism.hpp"
 #include "engine/library/EngineLibraryContext.hpp"
 #include "engine/library/EngineLibraryEntityHandle.hpp"
 #include "engine/library/EngineLibraryScriptComponentAccess.hpp"
@@ -3819,6 +3820,22 @@ void RunExpandedValueTypesTest() {
 // LIB-109: kb::library::Signal<Args...> — the native-only, per-instance,
 // compile-time-typed observer list (no global registry, no string names,
 // no ScriptValue boxing — contrast with kb::script::ScriptEventBus/LIB-105).
+void RunDeterministicLibraryProfileTest() {
+    constexpr std::array expectedFeatures{
+        kb::library::DeterministicLibraryFeature::RandomStreams,
+        kb::library::DeterministicLibraryFeature::Timers,
+        kb::library::DeterministicLibraryFeature::ExecutionOrder,
+        kb::library::DeterministicLibraryFeature::InputReplay,
+        kb::library::DeterministicLibraryFeature::FixedSimulation,
+    };
+    kb::tests::Require(kb::library::kDeterministicLibraryFeatures.size() == expectedFeatures.size(),
+        "Deterministic library profile must cover every replay prerequisite");
+    for (const kb::library::DeterministicLibraryFeature feature : expectedFeatures) {
+        kb::tests::Require(kb::library::IsDeterministicLibraryFeature(feature),
+            "Deterministic library profile is missing a replay prerequisite");
+    }
+}
+
 void RunEngineLibrarySignalTest() {
     // Basic connect/emit, connection order, multi-arg.
     {
@@ -4368,6 +4385,7 @@ void RunEngineLibraryTests() {
     RunErrorCodeTest();
     RunInputLimitsTest();
     RunExpandedValueTypesTest();
+    RunDeterministicLibraryProfileTest();
     RunEngineLibrarySignalTest();
     RunNonAllocTransformReadTest();
     RunNavigationFoundationContractTest();
