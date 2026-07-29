@@ -345,6 +345,9 @@ void AppendStubResultClasses(std::string& out, const ScriptApiCatalog& catalog) 
 }
 
 void AppendFunctionExamples(std::string& out, const ScriptApiCatalogFunction& function) {
+    out += "<a id=\"";
+    out += ScriptApiDocumentationAnchor(function.name);
+    out += "\"></a>\n\n";
     out += "#### `";
     out += function.name;
     out += "` examples\n\n**C++**\n\n```cpp\ncontext.CallFunction(\"";
@@ -666,6 +669,26 @@ std::string ScriptApiExport::ToJson(const ScriptApiCatalog& catalog) {
         AppendJsonString(out, ToString(binding.returnKind));
         out += ",\"returnPin\":";
         AppendJsonString(out, binding.returnPin);
+        out += '}';
+    }
+    out += "],\"sourceMap\":[";
+    for (std::size_t index = 0; index < catalog.sourceMap.size(); ++index) {
+        const ScriptApiCatalogSourceMapEntry& entry = catalog.sourceMap[index];
+        if (index != 0U) {
+            out += ',';
+        }
+        out += "{\"visualGraphNodeId\":";
+        AppendJsonString(out, entry.visualGraphNodeId);
+        out += ",\"visualGraphPin\":";
+        AppendJsonString(out, entry.visualGraphPinName);
+        out += ",\"visualGraphPinDirection\":";
+        AppendJsonString(out, entry.visualGraphPinDirection);
+        out += ",\"function\":";
+        AppendJsonString(out, entry.functionName);
+        out += ",\"runtimeBindingSymbol\":";
+        AppendJsonString(out, entry.runtimeBindingSymbol);
+        out += ",\"documentationAnchor\":";
+        AppendJsonString(out, entry.documentationAnchor);
         out += '}';
     }
     out += "],\"components\":[";
