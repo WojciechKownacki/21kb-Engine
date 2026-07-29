@@ -3574,6 +3574,82 @@ void RunCatalogFunctionFrontendAndDocumentationComplianceTest() {
     }
 }
 
+// LIB-243: Visual Graph's node palette is generated from the exact function
+// signatures registered by the C++ runtime.  Check every data pin, including
+// its optionality, rather than merely checking that a matching node exists.
+void RunVisualGraphCatalogSignatureParityTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Engine21kbLibrary Visual Graph signature parity host setup failed");
+    const kb::visual::VisualGraphNodeCatalog nodeCatalog = host.CreateVisualGraphNodeCatalog();
+
+    const auto requireBindingPins = [](const std::vector<kb::visual::VisualGraphPinSignature>& actual,
+                                       const std::vector<kb::script::ScriptFunctionPin>& expected,
+                                       std::string_view functionName, std::string_view bindingKind) {
+        const std::string countMessage = "Engine21kbLibrary " + std::string{ bindingKind } + " Visual Graph binding pin count drifted from " + std::string{ functionName };
+        kb::tests::Require(actual.size() == expected.size(), countMessage.c_str());
+        for (std::size_t index = 0; index < expected.size(); ++index) {
+            const kb::visual::VisualGraphPinSignature& actualPin = actual[index];
+            const kb::script::ScriptFunctionPin& expectedPin = expected[index];
+            const std::string pinMessage = "Engine21kbLibrary " + std::string{ bindingKind } + " Visual Graph pin drifted from " + std::string{ functionName } + "." + expectedPin.name;
+            kb::tests::Require(
+                actualPin.name == expectedPin.name && actualPin.type == kb::script::ToVisualGraphValueType(expectedPin.type) && actualPin.required == expectedPin.required,
+                pinMessage.c_str());
+        }
+    };
+
+    for (const kb::script::ScriptFunctionDesc& function : host.Functions().Functions()) {
+        const std::string symbol = "Function." + function.signature.name;
+        const kb::visual::VisualGraphNativeBinding* nativeBinding =
+            host.VisualGraphNativeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, symbol);
+        const kb::visual::VisualGraphRuntimeBinding* runtimeBinding =
+            host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, symbol);
+        const std::string missingBindingMessage = "Engine21kbLibrary Visual Graph bindings are missing for " + function.signature.name;
+        kb::tests::Require(nativeBinding != nullptr && runtimeBinding != nullptr, missingBindingMessage.c_str());
+
+        requireBindingPins(nativeBinding->inputs, function.signature.inputs, function.signature.name, "native input");
+        requireBindingPins(nativeBinding->outputs, function.signature.outputs, function.signature.name, "native output");
+        requireBindingPins(runtimeBinding->inputs, function.signature.inputs, function.signature.name, "runtime input");
+        requireBindingPins(runtimeBinding->outputs, function.signature.outputs, function.signature.name, "runtime output");
+
+        const kb::visual::VisualGraphNodeCatalogEntry* node =
+            nodeCatalog.Find("NativeBinding:CallNative:" + symbol);
+        const std::string missingNodeMessage = "Engine21kbLibrary Visual Graph node catalog is missing " + symbol;
+        kb::tests::Require(node != nullptr, missingNodeMessage.c_str());
+        const std::size_t expectedPinCount = function.signature.inputs.size() + function.signature.outputs.size() + 2U;
+        const std::string nodeCountMessage = "Engine21kbLibrary Visual Graph node pin count drifted from " + function.signature.name;
+        kb::tests::Require(node->pins.size() == expectedPinCount, nodeCountMessage.c_str());
+        kb::tests::Require(
+            node->pins.front().direction == kb::visual::VisualGraphPinDirection::Input && node->pins.front().name == "exec" &&
+                node->pins.front().type == kb::visual::VisualGraphValueType::Void,
+            "Engine21kbLibrary Visual Graph CallNative node is missing its exec pin");
+
+        for (std::size_t index = 0; index < function.signature.inputs.size(); ++index) {
+            const kb::visual::VisualGraphPinTemplate& nodePin = node->pins[index + 1U];
+            const kb::script::ScriptFunctionPin& signaturePin = function.signature.inputs[index];
+            const std::string pinMessage = "Engine21kbLibrary Visual Graph node input drifted from " + function.signature.name + "." + signaturePin.name;
+            kb::tests::Require(
+                nodePin.direction == kb::visual::VisualGraphPinDirection::Input && nodePin.name == signaturePin.name &&
+                    nodePin.type == kb::script::ToVisualGraphValueType(signaturePin.type) && nodePin.required == signaturePin.required,
+                pinMessage.c_str());
+        }
+        const std::size_t outputOffset = function.signature.inputs.size() + 1U;
+        for (std::size_t index = 0; index < function.signature.outputs.size(); ++index) {
+            const kb::visual::VisualGraphPinTemplate& nodePin = node->pins[outputOffset + index];
+            const kb::script::ScriptFunctionPin& signaturePin = function.signature.outputs[index];
+            const std::string pinMessage = "Engine21kbLibrary Visual Graph node output drifted from " + function.signature.name + "." + signaturePin.name;
+            kb::tests::Require(
+                nodePin.direction == kb::visual::VisualGraphPinDirection::Output && nodePin.name == signaturePin.name &&
+                    nodePin.type == kb::script::ToVisualGraphValueType(signaturePin.type) && nodePin.required == signaturePin.required,
+                pinMessage.c_str());
+        }
+        const kb::visual::VisualGraphPinTemplate& thenPin = node->pins.back();
+        kb::tests::Require(
+            thenPin.direction == kb::visual::VisualGraphPinDirection::Output && thenPin.name == "then" && thenPin.type == kb::visual::VisualGraphValueType::Void,
+            "Engine21kbLibrary Visual Graph CallNative node is missing its then pin");
+    }
+}
+
 // LIB-031: every kb::library handle type must classify to exactly the
 // LibraryOwnership its lifetime contract already documents (EntityHandle:
 // Borrowed, since the Scene owns the entity; AssetRef<T>: Shared, since it
@@ -4426,6 +4502,7 @@ void RunEngineLibraryTests() {
     RunTransformChangeTrackerTest();
     RunLibraryQueryAliasingEntityDestroyedAndCommandFlushBoundaryTest();
     RunCatalogFunctionFrontendAndDocumentationComplianceTest();
+    RunVisualGraphCatalogSignatureParityTest();
     RunOwnershipTest();
     RunNoPointersCrossScriptBoundaryTest();
     RunErrorCodeTest();

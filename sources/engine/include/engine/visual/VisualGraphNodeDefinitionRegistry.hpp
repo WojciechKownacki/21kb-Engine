@@ -12,6 +12,7 @@ struct VisualGraphPinTemplate {
     VisualGraphPinDirection direction = VisualGraphPinDirection::Input;
     std::string name;
     VisualGraphValueType type = VisualGraphValueType::Void;
+    bool required = true;
 };
 
 struct VisualGraphNodeDefinition {

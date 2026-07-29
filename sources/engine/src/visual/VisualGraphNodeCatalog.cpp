@@ -55,6 +55,7 @@ void AppendBindingPins(
             .direction = VisualGraphPinDirection::Input,
             .name = input.name,
             .type = input.type,
+            .required = input.required,
         });
     }
     for (const VisualGraphPinSignature& output : outputs) {
@@ -62,6 +63,7 @@ void AppendBindingPins(
             .direction = VisualGraphPinDirection::Output,
             .name = output.name,
             .type = output.type,
+            .required = output.required,
         });
     }
 
