@@ -13,6 +13,7 @@ extern "C" {
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -2828,6 +2829,49 @@ int LuaUISetToggle(lua_State* state) { return LuaUISetValue(state, "UI.SetToggle
 int LuaUISetSlider(lua_State* state) { return LuaUISetValue(state, "UI.SetSlider", "value", LuaUIValueKind::Float); }
 int LuaUIListAppend(lua_State* state) { return LuaUISetValue(state, "UI.ListAppend", "item", LuaUIValueKind::String); }
 int LuaUIListClear(lua_State* state) { return LuaUIApplied(state, "UI.ListClear"); }
+int LuaUIConfigureList(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    const lua_Integer viewport = luaL_checkinteger(state, 2);
+    const lua_Integer overscan = luaL_checkinteger(state, 3);
+    if (viewport < 0 || overscan < 0 || viewport > static_cast<lua_Integer>(std::numeric_limits<std::uint32_t>::max()) ||
+        overscan > static_cast<lua_Integer>(std::numeric_limits<std::uint32_t>::max())) {
+        return luaL_error(state, "UI.ConfigureList viewport and overscan must be unsigned integers");
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("element", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Hash }),
+        Arg("viewportItems", ScriptValue{ static_cast<std::uint32_t>(viewport) }),
+        Arg("overscan", ScriptValue{ static_cast<std::uint32_t>(overscan) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("UI.ConfigureList", arguments);
+    if (!result.Succeeded()) return PushCallError(state, result, "UI virtual list configuration was rejected");
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+int LuaUIListScrollTo(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    const lua_Integer index = luaL_checkinteger(state, 2);
+    if (index < 0 || index > static_cast<lua_Integer>(std::numeric_limits<std::uint32_t>::max())) {
+        return luaL_error(state, "UI.ListScrollTo index must be an unsigned integer");
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("element", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Hash }),
+        Arg("firstVisibleIndex", ScriptValue{ static_cast<std::uint32_t>(index) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("UI.ListScrollTo", arguments);
+    if (!result.Succeeded()) return PushCallError(state, result, "UI virtual list scroll was rejected");
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
 int LuaUISetScrollOffset(lua_State* state) { return LuaUISetValue(state, "UI.SetScrollOffset", "offset", LuaUIValueKind::Float); }
 int LuaUISetModalOpen(lua_State* state) { return LuaUISetValue(state, "UI.SetModalOpen", "open", LuaUIValueKind::Bool); }
 
@@ -3076,7 +3120,7 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "Time", &LuaTimelineTime, context);
     lua_setfield(state, environmentIndex, "Timeline");
 
-    lua_createtable(state, 0, 19);
+    lua_createtable(state, 0, 21);
     SetClosure(state, "Create", &LuaUICreate, context);
     SetClosure(state, "Destroy", &LuaUIDestroy, context);
     SetClosure(state, "Show", &LuaUIShow, context);
@@ -3088,6 +3132,8 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "SetSlider", &LuaUISetSlider, context);
     SetClosure(state, "ListAppend", &LuaUIListAppend, context);
     SetClosure(state, "ListClear", &LuaUIListClear, context);
+    SetClosure(state, "ConfigureList", &LuaUIConfigureList, context);
+    SetClosure(state, "ListScrollTo", &LuaUIListScrollTo, context);
     SetClosure(state, "SetScrollOffset", &LuaUISetScrollOffset, context);
     SetClosure(state, "SetModalOpen", &LuaUISetModalOpen, context);
     SetClosure(state, "EmitClick", &LuaUIEmitClick, context);

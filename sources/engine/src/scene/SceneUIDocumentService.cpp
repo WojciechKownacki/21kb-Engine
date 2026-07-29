@@ -185,6 +185,36 @@ void DestroySubtree(UIDocumentRuntimeRecord& record, UIElementId element) {
     record.elements.erase(element);
 }
 
+void RefreshVirtualLists(UIDocumentRuntimeRecord& record) {
+    for (auto it = record.virtualLists.begin(); it != record.virtualLists.end();) {
+        const auto element = record.elements.find(it->first);
+        if (element == record.elements.end() || element->second.control.kind != UIControlKind::List) {
+            it = record.virtualLists.erase(it);
+            continue;
+        }
+        UIDocumentRuntimeRecord::VirtualListState& state = it->second;
+        const std::uint32_t total = static_cast<std::uint32_t>(element->second.control.listItems.size());
+        if (total == 0U) {
+            state.firstVisibleIndex = 0U;
+            state.activeItemCount = 0U;
+            ++it;
+            continue;
+        }
+        state.firstVisibleIndex = std::min(state.firstVisibleIndex, total - 1U);
+        const std::uint32_t firstPooled = state.firstVisibleIndex > state.overscan ? state.firstVisibleIndex - state.overscan : 0U;
+        const std::uint32_t afterVisible = std::min(total, state.firstVisibleIndex + state.viewportItems);
+        const std::uint32_t afterPooled = std::min(total, afterVisible + state.overscan);
+        const std::uint32_t active = afterPooled - firstPooled;
+        if (state.pool.size() < active) state.pool.resize(active);
+        for (std::uint32_t slot = 0U; slot < active; ++slot) {
+            const std::uint32_t index = firstPooled + slot;
+            state.pool[slot] = UIVirtualListItem{ .index = index, .text = element->second.control.listItems[index] };
+        }
+        state.activeItemCount = active;
+        ++it;
+    }
+}
+
 void ApplyCommands(SceneState& state) {
     std::vector<UIRuntimeCommand> commands;
     commands.swap(state.pendingUICommands);
@@ -222,7 +252,26 @@ void ApplyCommands(SceneState& state) {
             if (element != record->elements.end()) element->second.control = command.control;
             break;
         }
+        case UIRuntimeCommandKind::ConfigureVirtualList: {
+            const auto element = record->elements.find(command.elementId);
+            if (element != record->elements.end() && element->second.control.kind == UIControlKind::List) {
+                record->virtualLists.insert_or_assign(command.elementId, UIDocumentRuntimeRecord::VirtualListState{
+                    .viewportItems = command.viewportItems,
+                    .overscan = command.overscan,
+                });
+            }
+            break;
         }
+        case UIRuntimeCommandKind::ScrollVirtualList: {
+            const auto list = record->virtualLists.find(command.elementId);
+            if (list != record->virtualLists.end()) list->second.firstVisibleIndex = command.firstVisibleIndex;
+            break;
+        }
+        }
+    }
+    for (auto& [id, record] : state.uiDocuments) {
+        static_cast<void>(id);
+        RefreshVirtualLists(record);
     }
 }
 
@@ -286,6 +335,18 @@ std::optional<UIControlState> SceneUIDocumentService::Control(const Scene& scene
     if (record == nullptr) return std::nullopt;
     const auto current = record->elements.find(element);
     return current == record->elements.end() ? std::nullopt : std::optional<UIControlState>{ current->second.control };
+}
+std::optional<UIVirtualListView> SceneUIDocumentService::VirtualList(const Scene& scene, SceneEntity entity, UIElementId element) noexcept {
+    const auto* record = FindRecord(SceneAccess::State(scene), entity);
+    if (record == nullptr) return std::nullopt;
+    const auto list = record->virtualLists.find(element);
+    const auto control = record->elements.find(element);
+    if (list == record->virtualLists.end() || control == record->elements.end() || control->second.control.kind != UIControlKind::List) return std::nullopt;
+    return UIVirtualListView{
+        .totalItemCount = static_cast<std::uint32_t>(control->second.control.listItems.size()),
+        .firstVisibleIndex = list->second.firstVisibleIndex,
+        .pooledItems = std::span<const UIVirtualListItem>{ list->second.pool.data(), list->second.activeItemCount },
+    };
 }
 std::optional<UIElementId> SceneUIDocumentService::Find(const Scene& scene, SceneEntity entity, std::string_view name) noexcept {
     // LIB-177: no name index by design. This deterministic O(n) setup scan
@@ -363,6 +424,40 @@ bool SceneUIDocumentService::QueueSetControl(Scene& scene, SceneEntity entity, U
         .entity = entity,
         .elementId = element,
         .control = control,
+    });
+    return true;
+}
+
+bool SceneUIDocumentService::QueueConfigureVirtualList(Scene& scene, SceneEntity entity, UIElementId element,
+    std::uint32_t viewportItems, std::uint32_t overscan) noexcept {
+    if (viewportItems == 0U || viewportItems > kMaxUIVirtualListViewportItems || overscan > kMaxUIVirtualListOverscanItems) return false;
+    SceneState& state = SceneAccess::State(scene);
+    UIDocumentRuntimeRecord* record = FindMutable(state, entity);
+    if (record == nullptr) return false;
+    const auto current = record->elements.find(element);
+    if (current == record->elements.end() || current->second.control.kind != UIControlKind::List ||
+        IsPendingDestroyAncestor(state, *record, entity, element) || state.pendingUICommands.size() >= kMaxPendingUICommands) return false;
+    state.pendingUICommands.push_back(UIRuntimeCommand{
+        .kind = UIRuntimeCommandKind::ConfigureVirtualList,
+        .entity = entity,
+        .elementId = element,
+        .viewportItems = viewportItems,
+        .overscan = overscan,
+    });
+    return true;
+}
+
+bool SceneUIDocumentService::QueueScrollVirtualListTo(Scene& scene, SceneEntity entity, UIElementId element,
+    std::uint32_t firstVisibleIndex) noexcept {
+    SceneState& state = SceneAccess::State(scene);
+    UIDocumentRuntimeRecord* record = FindMutable(state, entity);
+    if (record == nullptr || !record->virtualLists.contains(element) || IsPendingDestroyAncestor(state, *record, entity, element) ||
+        state.pendingUICommands.size() >= kMaxPendingUICommands) return false;
+    state.pendingUICommands.push_back(UIRuntimeCommand{
+        .kind = UIRuntimeCommandKind::ScrollVirtualList,
+        .entity = entity,
+        .elementId = element,
+        .firstVisibleIndex = firstVisibleIndex,
     });
     return true;
 }

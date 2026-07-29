@@ -207,6 +207,41 @@ end
             scene.UIDocuments().Control(owner.Entity(), controlElements[7U])->scrollOffset == 3.0F &&
             scene.UIDocuments().Control(owner.Entity(), controlElements[8U])->modalOpen,
         "Runtime UI controls lost their type-specific values");
+    kb::scene::UIControlState virtualizedList = *scene.UIDocuments().Control(owner.Entity(), controlElements[5U]);
+    virtualizedList.listItems.clear();
+    virtualizedList.listItems.reserve(100U);
+    for (std::uint32_t index = 0U; index < 100U; ++index) {
+        virtualizedList.listItems.push_back("Item " + std::to_string(index));
+    }
+    const std::size_t treeCountBeforeVirtualization = scene.UIDocuments().ElementCount(owner.Entity());
+    Require(scene.UIDocuments().QueueSetControl(owner.Entity(), controlElements[5U], virtualizedList) &&
+            scene.UIDocuments().QueueConfigureVirtualList(owner.Entity(), controlElements[5U], 3U, 1U),
+        "Virtual List setup was rejected by the canonical UI command queue");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    const auto initialVirtualList = scene.UIDocuments().VirtualList(owner.Entity(), controlElements[5U]);
+    Require(initialVirtualList.has_value() && initialVirtualList->totalItemCount == 100U &&
+            initialVirtualList->firstVisibleIndex == 0U && initialVirtualList->pooledItems.size() == 4U &&
+            initialVirtualList->pooledItems[0U].index == 0U && initialVirtualList->pooledItems[3U].index == 3U &&
+            scene.UIDocuments().ElementCount(owner.Entity()) == treeCountBeforeVirtualization,
+        "Virtual List created UI tree elements instead of a bounded initial slot pool");
+    Require(scene.UIDocuments().QueueScrollVirtualListTo(owner.Entity(), controlElements[5U], 50U),
+        "Virtual List viewport scroll command was rejected");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    const auto scrolledVirtualList = scene.UIDocuments().VirtualList(owner.Entity(), controlElements[5U]);
+    Require(scrolledVirtualList.has_value() && scrolledVirtualList->firstVisibleIndex == 50U &&
+            scrolledVirtualList->pooledItems.size() == 5U && scrolledVirtualList->pooledItems[0U].index == 49U &&
+            scrolledVirtualList->pooledItems[4U].index == 53U && scrolledVirtualList->pooledItems[0U].text == "Item 49",
+        "Virtual List did not rebind the expected visible range after scrolling");
+    const kb::scene::UIVirtualListItem* const pooledSlots = scrolledVirtualList->pooledItems.data();
+    for (std::uint32_t index = 51U; index < 90U; ++index) {
+        Require(scene.UIDocuments().QueueScrollVirtualListTo(owner.Entity(), controlElements[5U], index),
+            "Repeated Virtual List scroll was rejected");
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const auto view = scene.UIDocuments().VirtualList(owner.Entity(), controlElements[5U]);
+        Require(view.has_value() && view->pooledItems.data() == pooledSlots &&
+                scene.UIDocuments().ElementCount(owner.Entity()) == treeCountBeforeVirtualization,
+            "Virtual List scroll allocated a new pool or created UI elements in the hot path");
+    }
     kb::scene::UIControlState changedText = *scene.UIDocuments().Control(owner.Entity(), controlElements[0U]);
     changedText.text = "Score: 43";
     Require(scene.UIDocuments().QueueSetControl(owner.Entity(), controlElements[0U], changedText),

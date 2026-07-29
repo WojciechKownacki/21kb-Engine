@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -11,6 +12,8 @@ namespace kb::scene {
 
 using UIElementId = std::uint64_t;
 inline constexpr std::size_t kMaxUIListItems = 4096U;
+inline constexpr std::uint32_t kMaxUIVirtualListViewportItems = 512U;
+inline constexpr std::uint32_t kMaxUIVirtualListOverscanItems = 128U;
 inline constexpr std::size_t kMaxUIEventTextBytes = 4096U;
 
 // UI documents are retained assets.  The scene component only names a document;
@@ -92,6 +95,20 @@ struct UIControlState {
     std::vector<std::string> listItems;
     float scrollOffset = 0.0F;
     bool modalOpen = false;
+};
+
+// A slot is a lightweight view into a retained List control's item data, not
+// a UI tree element. Its text view remains valid until the next UI queue
+// boundary affecting that list.
+struct UIVirtualListItem {
+    std::uint32_t index = 0U;
+    std::string_view text;
+};
+
+struct UIVirtualListView {
+    std::uint32_t totalItemCount = 0U;
+    std::uint32_t firstVisibleIndex = 0U;
+    std::span<const UIVirtualListItem> pooledItems;
 };
 
 // LIB-176: input routing (LIB-180) produces these data-only records.  The
