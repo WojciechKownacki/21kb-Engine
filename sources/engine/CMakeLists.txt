@@ -341,6 +341,7 @@ add_library(kb_engine STATIC
     include/engine/library/EngineLibraryManifestComparison.hpp
     include/engine/library/EngineLibraryModule.hpp
     include/engine/library/EngineLibraryModuleDesc.hpp
+    include/engine/library/EngineLibraryModuleNames.hpp
     include/engine/library/EngineLibraryModuleValidation.hpp
     include/engine/library/EngineLibraryOwnership.hpp
     include/engine/library/EngineLibraryParsing.hpp
