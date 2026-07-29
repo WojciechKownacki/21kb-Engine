@@ -1,5 +1,6 @@
 #include "script/lua/api/PucLuaTaskApi.hpp"
 
+#include "engine/script/ScriptApiCatalog.hpp"
 #include "script/lua/PucLuaStateUtilities.hpp"
 
 extern "C" {
@@ -7,6 +8,7 @@ extern "C" {
 #include <lua.h>
 }
 
+#include <string>
 #include <string_view>
 
 namespace kb::script {
@@ -32,41 +34,29 @@ local function awaitTask(name, arguments)
 end
 
 return {
-    WaitSeconds = function(seconds, owner)
+    ["Task.WaitSeconds"] = function(seconds, owner)
         return awaitTask("Task.WaitSeconds", { seconds = seconds, owner = owner })
     end,
-    WaitFixedSteps = function(steps, owner)
+    ["Task.WaitFixedSteps"] = function(steps, owner)
         return awaitTask("Task.WaitFixedSteps", { steps = steps, owner = owner })
     end,
-    WaitEvent = function(eventName, owner)
+    ["Task.WaitEvent"] = function(eventName, owner)
         return awaitTask("Task.WaitEvent", { event = eventName, owner = owner })
     end,
-    WaitAsset = function(reference, owner)
+    ["Task.WaitAsset"] = function(reference, owner)
         return awaitTask("Task.WaitAsset", { reference = reference, owner = owner })
     end,
-    WaitScene = function(sceneName, owner)
+    ["Task.WaitScene"] = function(sceneName, owner)
         return awaitTask("Task.WaitScene", { scene = sceneName, owner = owner })
     end,
-    IsRunning = function(task)
+    ["Task.IsRunning"] = function(task)
         return callOrError("Task.IsRunning", { task = task }, 2)
     end,
-    Cancel = function(task)
+    ["Task.Cancel"] = function(task)
         return callOrError("Task.Cancel", { task = task }, 2)
     end,
 }
 )lua";
-
-void CopyTable(lua_State* state, int sourceIndex) {
-    const int absoluteSource = lua_absindex(state, sourceIndex);
-    lua_newtable(state);
-    const int destination = lua_gettop(state);
-    lua_pushnil(state);
-    while (lua_next(state, absoluteSource) != 0) {
-        lua_pushvalue(state, -2);
-        lua_insert(state, -2);
-        lua_settable(state, destination);
-    }
-}
 
 } // namespace
 
@@ -96,7 +86,20 @@ std::optional<std::string> PucLuaTaskApi::Attach(lua_State* state, int environme
         lua_setfield(state, absoluteEnvironment, kTaskApiStorage.data());
     }
 
-    CopyTable(state, -1);
+    const int taskFactories = lua_absindex(state, -1);
+    lua_newtable(state);
+    const int taskTable = lua_gettop(state);
+    for (const ScriptApiCatalogLuaBindingDefinition& binding : ScriptApiCatalog::LuaBindingDefinitions()) {
+        if (binding.tableName != "Task") {
+            continue;
+        }
+        lua_getfield(state, taskFactories, binding.functionName.data());
+        if (lua_isfunction(state, -1) == 0) {
+            lua_pop(state, 3);
+            return std::string{ "Engine21kbLibrary.Task initializer is missing " } + std::string{ binding.functionName };
+        }
+        lua_setfield(state, taskTable, binding.luaName.data());
+    }
     lua_setfield(state, absoluteEnvironment, "Task");
     lua_pop(state, 1);
     return std::nullopt;
