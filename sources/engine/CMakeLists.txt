@@ -1389,6 +1389,24 @@ if(BUILD_TESTING)
 
     kb_apply_quality_gates(kb_library_benchmarks)
 
+    add_executable(kb_library_safety_tests
+        tests/LibrarySafetyTests.cpp
+        tests/TestSupport.hpp
+    )
+
+    target_link_libraries(kb_library_safety_tests
+        PRIVATE
+            kb_engine
+    )
+
+    add_test(NAME kb_library_safety_tests COMMAND $<TARGET_FILE:kb_library_safety_tests>)
+    set_tests_properties(kb_library_safety_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "library;safety;asan"
+    )
+
+    kb_apply_quality_gates(kb_library_safety_tests)
+
     function(kb_add_ecs_test_target target_name)
         add_executable(${target_name}
             ${ARGN}
