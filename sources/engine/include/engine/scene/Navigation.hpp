@@ -3,8 +3,14 @@
 #include "engine/math/EngineMath.hpp"
 
 #include <array>
+#include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <limits>
+#include <queue>
+#include <mutex>
+#include <thread>
+#include <vector>
 
 namespace kb::scene {
 
@@ -25,8 +31,16 @@ inline constexpr NavAreaMask kAllNavAreas = std::numeric_limits<NavAreaMask>::ma
     return IsValidNavArea(area) ? (NavAreaMask{ 1U } << area) : 0U;
 }
 
-// Data-only description of a baked navigation surface. Geometry ownership and
-// path requests stay outside this type: LIB-184 supplies the query runtime.
+struct NavMeshNode {
+    kb::math::Vec3 position{};
+    NavAreaId area = kDefaultNavArea;
+    // Baked, directed neighbour indices. Authoring/import must keep these in
+    // ascending order; FindPath preserves that order when costs tie.
+    std::vector<std::uint32_t> neighbours;
+};
+
+// Baked navigation graph. Nodes are immutable while a path query is running,
+// so a worker can safely receive a copy in LIB-184's asynchronous request.
 struct NavMesh {
     float agentRadius = 0.5F;
     float agentHeight = 2.0F;
@@ -34,6 +48,16 @@ struct NavMesh {
     float agentMaxSlopeDegrees = 45.0F;
     float cellSize = 0.2F;
     float cellHeight = 0.1F;
+    std::vector<NavMeshNode> nodes;
+};
+
+enum class NavPathStatus : std::uint8_t { Invalid, Pending, Complete, Partial, Failed, Cancelled };
+
+struct NavPath {
+    NavPathStatus status = NavPathStatus::Invalid;
+    std::vector<kb::math::Vec3> corners;
+    float totalCost = 0.0F;
+    [[nodiscard]] bool Succeeded() const noexcept { return status == NavPathStatus::Complete || status == NavPathStatus::Partial; }
 };
 
 struct NavAgent {
@@ -44,6 +68,10 @@ struct NavAgent {
     float angularSpeedDegrees = 360.0F;
     float stoppingDistance = 0.1F;
     NavAreaMask areaMask = kAllNavAreas;
+    kb::math::Vec3 destination{};
+    kb::math::Vec3 velocity{};
+    float remainingDistance = 0.0F;
+    NavPathStatus pathStatus = NavPathStatus::Invalid;
     bool enabled = true;
 };
 
@@ -91,6 +119,85 @@ private:
     NavAreaMask includedAreas_ = kAllNavAreas;
     NavAreaMask excludedAreas_ = 0U;
     std::array<float, kNavAreaCount> areaCosts_{};
+};
+
+// LIB-184 synchronous graph query. Start/goal are node indices rather than
+// arbitrary world positions because projection onto authored polygons belongs
+// to the NavMesh baking/import layer. Dijkstra (rather than an unchecked
+// heuristic) makes area-cost routing deterministic and exact.
+[[nodiscard]] inline NavPath FindNavPath(const NavMesh& mesh, std::uint32_t start, std::uint32_t goal, const NavQueryFilter& filter) {
+    if (start >= mesh.nodes.size() || goal >= mesh.nodes.size() || !filter.Allows(mesh.nodes[start].area) || !filter.Allows(mesh.nodes[goal].area)) return {};
+    const std::size_t count = mesh.nodes.size();
+    const float infinity = std::numeric_limits<float>::infinity();
+    std::vector<float> distances(count, infinity);
+    std::vector<std::uint32_t> previous(count, std::numeric_limits<std::uint32_t>::max());
+    using QueueItem = std::pair<float, std::uint32_t>;
+    std::priority_queue<QueueItem, std::vector<QueueItem>, std::greater<QueueItem>> open;
+    distances[start] = 0.0F;
+    open.emplace(0.0F, start);
+    while (!open.empty()) {
+        const auto [cost, current] = open.top(); open.pop();
+        if (cost != distances[current]) continue;
+        if (current == goal) break;
+        for (const std::uint32_t next : mesh.nodes[current].neighbours) {
+            if (next >= count || !filter.Allows(mesh.nodes[next].area)) continue;
+            const float edge = kb::math::Distance(mesh.nodes[current].position, mesh.nodes[next].position) * filter.AreaCost(mesh.nodes[next].area);
+            const float candidate = cost + edge;
+            if (candidate < distances[next] || (candidate == distances[next] && current < previous[next])) {
+                distances[next] = candidate; previous[next] = current; open.emplace(candidate, next);
+            }
+        }
+    }
+    if (distances[goal] == infinity) return NavPath{ .status = NavPathStatus::Failed };
+    NavPath result{ .status = NavPathStatus::Complete, .totalCost = distances[goal] };
+    for (std::uint32_t node = goal;; node = previous[node]) { result.corners.push_back(mesh.nodes[node].position); if (node == start) break; }
+    std::reverse(result.corners.begin(), result.corners.end());
+    return result;
+}
+
+// Owns one worker request. The worker receives value snapshots, never a Scene
+// reference; Poll is the only owner-thread observation point. Cancellation is
+// cooperative at publication time: an already-running graph walk may finish,
+// but its result is discarded and can never revive a cancelled request.
+class NavPathAsyncRequest final {
+public:
+    NavPathAsyncRequest() = default;
+    NavPathAsyncRequest(const NavPathAsyncRequest&) = delete;
+    NavPathAsyncRequest& operator=(const NavPathAsyncRequest&) = delete;
+    ~NavPathAsyncRequest() { static_cast<void>(Cancel()); Join(); }
+
+    [[nodiscard]] bool Start(NavMesh mesh, std::uint32_t start, std::uint32_t goal, NavQueryFilter filter) {
+        if (status_.load(std::memory_order_acquire) == NavPathStatus::Pending) return false;
+        Join();
+        { std::scoped_lock lock(resultMutex_); result_ = {}; }
+        status_.store(NavPathStatus::Pending, std::memory_order_release);
+        worker_ = std::thread([this, mesh = std::move(mesh), start, goal, filter = std::move(filter)]() mutable {
+            NavPath result = FindNavPath(mesh, start, goal, filter);
+            { std::scoped_lock lock(resultMutex_); result_ = std::move(result); }
+            NavPathStatus expected = NavPathStatus::Pending;
+            static_cast<void>(status_.compare_exchange_strong(expected, result_.status, std::memory_order_release, std::memory_order_acquire));
+        });
+        return true;
+    }
+    [[nodiscard]] NavPathStatus Status() const noexcept { return status_.load(std::memory_order_acquire); }
+    [[nodiscard]] bool Cancel() noexcept {
+        if (Status() != NavPathStatus::Pending) return false;
+        status_.store(NavPathStatus::Cancelled, std::memory_order_release);
+        return true;
+    }
+    [[nodiscard]] NavPath Poll() {
+        if (Status() == NavPathStatus::Pending) return NavPath{ .status = NavPathStatus::Pending };
+        Join();
+        std::scoped_lock lock(resultMutex_);
+        return Status() == NavPathStatus::Cancelled ? NavPath{ .status = NavPathStatus::Cancelled } : result_;
+    }
+
+private:
+    void Join() { if (worker_.joinable()) worker_.join(); }
+    std::atomic<NavPathStatus> status_{ NavPathStatus::Invalid };
+    std::mutex resultMutex_;
+    NavPath result_{};
+    std::thread worker_;
 };
 
 } // namespace kb::scene
