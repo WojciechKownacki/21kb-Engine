@@ -54,6 +54,7 @@
 #include "engine/platform/PlatformCapabilities.hpp"
 #include "engine/platform/UserStorage.hpp"
 #include "engine/platform/SettingsTransaction.hpp"
+#include "engine/platform/PlatformAdapters.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -96,6 +97,7 @@
 namespace {
 
 void RecordNetworkVariableChange(void* context, std::int32_t previous, std::int32_t current) noexcept { *static_cast<std::int32_t*>(context) = current - previous; }
+class TestPlatformAdapter final : public kb::platform::IPlatformAdapter { public: [[nodiscard]] bool IsAvailable(kb::platform::OptionalPlatformService service) const noexcept override{return service==kb::platform::OptionalPlatformService::Achievements;} [[nodiscard]] bool UnlockAchievement(std::string_view id) override{return IsAvailable(kb::platform::OptionalPlatformService::Achievements)&&!id.empty();} };
 
 int g_moduleInstallSkipCallCount = 0;
 bool RecordModuleInstallCall(kb::script::ScriptRuntimeHost&) {
@@ -4123,6 +4125,7 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    TestPlatformAdapter adapter; kb::tests::Require(adapter.IsAvailable(kb::platform::OptionalPlatformService::Achievements)&&!adapter.IsAvailable(kb::platform::OptionalPlatformService::CloudSave)&&adapter.UnlockAchievement("first"), "Optional platform adapter did not expose capability availability");
     kb::platform::SettingsTransaction settings{ kb::platform::RuntimeSettings{} }; settings.Pending().vibration=true; kb::tests::Require(!settings.Apply({}) && (settings.Revert(),!settings.Pending().vibration) && (settings.Pending().masterVolume=0.5F,settings.Apply({})) && settings.Current().masterVolume==0.5F, "Settings transaction did not validate capability and revert pending state");
     const std::filesystem::path storageRoot = std::filesystem::temp_directory_path() / "21kb-user-storage-test";
     std::error_code storageError;
