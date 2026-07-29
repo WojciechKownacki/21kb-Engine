@@ -50,6 +50,7 @@ scenario-local aliases.
 | `copy_fixture` | `source` relative to the scenario directory, project-relative `destination`; copies arbitrary binary fixtures |
 | `assert_file` | project-relative `path`; optional `exists`, `min_size`, `contains` |
 | `discover_assets` | none |
+| `unload_asset` | asset alias or virtual path; force-loads then unloads the live `AssetManager` entry so a running system must reacquire it |
 | `import_asset` | `source` project-relative path, `destination` virtual folder |
 | `create_entity` | `id`; optional `name` |
 | `create_mesh_entity` | `id`, `asset` alias or virtual path |
