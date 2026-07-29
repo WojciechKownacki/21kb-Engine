@@ -1,5 +1,6 @@
 #include "engine/visual/VisualGraphRuntimeExecutionContext.hpp"
 
+#include <optional>
 #include <utility>
 
 namespace kb::visual {
@@ -36,12 +37,14 @@ float VisualGraphRuntimeExecutionContext::ReadFloat(std::uint32_t nodeId, std::s
 
 double VisualGraphRuntimeExecutionContext::ReadDouble(std::uint32_t nodeId, std::string_view pin, double fallback) const {
     const VisualGraphRuntimeValue* value = TryRead(nodeId, pin);
-    return value == nullptr ? fallback : value->AsDouble(fallback);
+    const std::optional<VisualGraphRuntimeValue> converted = value == nullptr ? std::nullopt : value->ConvertLosslessly(VisualGraphValueType::Double);
+    return converted.has_value() ? converted->AsDouble(fallback) : fallback;
 }
 
 std::int64_t VisualGraphRuntimeExecutionContext::ReadInt64(std::uint32_t nodeId, std::string_view pin, std::int64_t fallback) const {
     const VisualGraphRuntimeValue* value = TryRead(nodeId, pin);
-    return value == nullptr ? fallback : value->AsInt64(fallback);
+    const std::optional<VisualGraphRuntimeValue> converted = value == nullptr ? std::nullopt : value->ConvertLosslessly(VisualGraphValueType::Int64);
+    return converted.has_value() ? converted->AsInt64(fallback) : fallback;
 }
 
 std::string VisualGraphRuntimeExecutionContext::ReadString(std::uint32_t nodeId, std::string_view pin) const {
