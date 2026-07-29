@@ -228,6 +228,7 @@ int LuaEventsSubscribe(lua_State* state) {
         [invocation](const ScriptEvent& event) { InvokeSubscriber(invocation, event); },
         owner,
         channel);
+    runtime->TrackEventSubscription(context->Self(), context->Asset(), handle);
     // On failure `invocation` falls out of scope here and releases the ref
     // exactly once. Do not unref manually as well.
     lua_pushinteger(state, static_cast<lua_Integer>(handle));

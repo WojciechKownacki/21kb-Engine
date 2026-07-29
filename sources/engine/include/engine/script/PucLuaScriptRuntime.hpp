@@ -4,6 +4,7 @@
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/script/LuaScriptBackend.hpp"
 #include "engine/script/ScriptApiNameRegistry.hpp"
+#include "engine/script/ScriptEventBus.hpp"
 #include "engine/script/ScriptValue.hpp"
 
 #include <cstddef>
@@ -121,6 +122,11 @@ public:
     [[nodiscard]] const PucLuaDebugPauseSnapshot& LastDebugPause() const noexcept;
     void ClearDebugPause() noexcept;
     [[nodiscard]] bool PushModuleForImport(std::string_view name, std::string& error);
+    void ResetAssetForHotReload(kb::assets::AssetId assetId, ScriptEventBus& events) noexcept override;
+    void TrackEventSubscription(
+        kb::scene::SceneEntity entity,
+        kb::assets::AssetId assetId,
+        EventSubscriptionHandle handle);
 
     [[nodiscard]] ScriptBackendExecutionResult ExecuteLifecycle(
         const kb::scene::BehaviourComponent& behaviour,
@@ -188,6 +194,9 @@ private:
 
     void ClearCoroutines(const InstanceKey& instanceKey) noexcept;
     void ClearCoroutinesForAsset(kb::assets::AssetId assetId) noexcept;
+    void TrackEventSubscription(const InstanceKey& instanceKey, EventSubscriptionHandle handle);
+    void ClearEventSubscriptions(const InstanceKey& instanceKey, ScriptEventBus& events) noexcept;
+    void ClearEventSubscriptionsForAsset(kb::assets::AssetId assetId, ScriptEventBus& events) noexcept;
 
     lua_State* state_ = nullptr;
     std::unordered_map<std::uint64_t, ScriptRecord> scripts_;
@@ -198,6 +207,7 @@ private:
     // scoped to one behaviour instance and entry function, so yielding Tick
     // never suspends another entity or lifecycle callback.
     std::unordered_map<InstanceKey, std::unordered_map<std::string, int>, InstanceKeyHasher> coroutineRefs_;
+    std::unordered_map<InstanceKey, std::vector<EventSubscriptionHandle>, InstanceKeyHasher> eventSubscriptionHandles_;
     PucLuaDebugSettings debugSettings_;
     PucLuaDebugPauseSnapshot lastDebugPause_;
     DebugStepMode debugStepMode_ = DebugStepMode::Run;

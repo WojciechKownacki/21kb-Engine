@@ -56,6 +56,17 @@ public:
         static_cast<void>(name);
         static_cast<void>(value);
     }
+
+    // Lua implementations with retained event callbacks release every
+    // callback owned by this asset before the scene system performs its
+    // explicit hot-reload restart. Default no-op keeps lightweight test
+    // runtimes and non-retaining implementations source-compatible.
+    virtual void ResetAssetForHotReload(
+        kb::assets::AssetId assetId,
+        ScriptEventBus& events) noexcept {
+        static_cast<void>(assetId);
+        static_cast<void>(events);
+    }
 };
 
 class LuaScriptBackend final : public IScriptBackend {
@@ -69,6 +80,7 @@ public:
         kb::scene::SceneEntity entity,
         const kb::scene::BehaviourComponent& behaviour,
         std::span<const kb::scene::BehaviourVariableOverride> overrides) override;
+    void ResetAssetForHotReload(kb::assets::AssetId assetId, ScriptEventBus& events) noexcept override;
 
 private:
     ILuaScriptRuntime& runtime_;

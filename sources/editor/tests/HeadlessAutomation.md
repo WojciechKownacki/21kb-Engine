@@ -69,6 +69,7 @@ scenario-local aliases.
 | `assert_profiler` | Verifies debug-only RAII scopes, named counters, timeline events and allocation counters. |
 | `assert_console_command` | Verifies typed command arguments, permissions and help generated from its command manifest. |
 | `assert_runtime_inspector` | Verifies a read-only runtime snapshot contains entity, component, timer, subscription and graph-execution state. |
+| `assert_script_hot_reload` | Verifies Lua replacement keeps the last valid program on a failed update and Visual Graph execution state is explicitly released before its lifecycle restart. |
 | `assert_platform_capabilities` | Verifies capability-gated locale, user-data path, clipboard, URL and vibration access, including unavailable-service rejection. |
 | `assert_user_storage` | Verifies sandboxed atomic read/write/delete/list, quota enforcement and asynchronous write without arbitrary filesystem paths. |
 | `assert_user_storage_failures` | Verifies sandbox-escape and quota rejection, preservation after a staged atomic-write failure, and unavailable platform capabilities. |

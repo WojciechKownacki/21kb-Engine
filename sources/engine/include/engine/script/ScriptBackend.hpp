@@ -13,6 +13,8 @@
 
 namespace kb::script {
 
+class ScriptEventBus;
+
 // LIB-036: module/function/lifecyclePhase are optional (empty string /
 // nullopt) because most diagnostics today are produced deep inside a
 // backend that only knows entity/asset/backend — callers with the fuller
@@ -73,6 +75,18 @@ public:
         static_cast<void>(entity);
         static_cast<void>(behaviour);
         static_cast<void>(overrides);
+    }
+
+    // Releases state owned by live instances of one behaviour asset after a
+    // successful source/artifact replacement. Hot reload intentionally does
+    // not invoke Deactivated/Destroyed: those callbacks would execute the new
+    // implementation against state created by the old one. The scene system
+    // then enters Created/Activated/Ready at its next synchronization point.
+    virtual void ResetAssetForHotReload(
+        kb::assets::AssetId assetId,
+        ScriptEventBus& events) noexcept {
+        static_cast<void>(assetId);
+        static_cast<void>(events);
     }
 };
 

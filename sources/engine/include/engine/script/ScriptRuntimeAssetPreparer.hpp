@@ -30,6 +30,10 @@ struct ScriptRuntimeAssetPrepareDiagnostic {
 struct ScriptRuntimeAssetPrepareResult {
     std::size_t visitedAssets = 0;
     std::size_t preparedAssets = 0;
+    // Assets whose live implementation was successfully replaced during this
+    // preparation pass. The scene system restarts only those behaviours at a
+    // safe lifecycle synchronization boundary.
+    std::vector<kb::assets::AssetId> reloadedAssets;
     std::vector<ScriptRuntimeAssetPrepareDiagnostic> diagnostics;
 
     [[nodiscard]] bool Succeeded() const noexcept {
