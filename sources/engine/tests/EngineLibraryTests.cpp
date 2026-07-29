@@ -43,6 +43,7 @@
 #include "engine/gameplay/GameplaySamples.hpp"
 #include "engine/network/NetworkModel.hpp"
 #include "engine/network/NetworkObject.hpp"
+#include "engine/network/ReplicationSchema.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -4110,6 +4111,9 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    const kb::network::ReplicationSchema replicationSchema{ .version = 1U, .fields = { { .id = 1U, .name = "health", .type = kb::network::ReplicatedFieldType::QuantizedFloat, .minimum = 0.0F, .maximum = 100.0F, .quantizationBits = 10U }, { .id = 2U, .name = "alive", .type = kb::network::ReplicatedFieldType::Boolean } } };
+    const auto healthQuantized = kb::network::QuantizeFloat(replicationSchema.fields[0], 50.0F);
+    kb::tests::Require(kb::network::ValidateReplicationSchema(replicationSchema) && healthQuantized.has_value() && kb::network::DequantizeFloat(replicationSchema.fields[0], *healthQuantized).has_value() && kb::network::ComputeDeltaFields(replicationSchema, { 1U, 0U }, { 1U, 1U }) == std::vector<std::uint16_t>{ 2U }, "Replication schema did not validate versioned fields, quantization, and deltas");
     kb::network::NetworkObjects networkObjects;
     kb::tests::Require(networkObjects.Spawn({ .id = 7U, .owner = 11U, .role = kb::network::NetworkRole::Authority }) && networkObjects.CanAcceptOwnerCommand(7U, 11U) && !networkObjects.CanAcceptOwnerCommand(7U, 12U) && networkObjects.AssignOwner(7U, 12U) && networkObjects.Find(7U)->owner == 12U && networkObjects.Despawn(7U) && !networkObjects.Find(7U).has_value(), "Network object lifecycle did not validate spawn, owner authority, and despawn");
     static_assert(kb::network::kFirstReleaseNetwork.model == kb::network::NetworkModel::OfflineOnly);
