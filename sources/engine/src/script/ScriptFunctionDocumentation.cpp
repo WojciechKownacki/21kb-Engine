@@ -299,6 +299,8 @@ constexpr auto kFunctionDocumentation = std::to_array<FunctionDocumentation>({
     { "UI.SetSlider", "Queues the value and optional range of a Slider UI element." },
     { "UI.ListAppend", "Queues one non-empty item at the end of a List UI element." },
     { "UI.ListClear", "Queues removal of all items from a List UI element." },
+    { "UI.ConfigureList", "Configures a bounded virtual-list pool; scrolling rebinds slots without creating UI elements." },
+    { "UI.ListScrollTo", "Queues a virtual List viewport index; out-of-range indices clamp to the retained item range." },
     { "UI.SetScrollOffset", "Queues a non-negative scroll offset for a ScrollView UI element." },
     { "UI.SetModalOpen", "Queues the open state of a ModalDialog UI element." },
     { "UI.EmitClick", "Queues a UI.Click event with pointer coordinates for a visible UI element." },

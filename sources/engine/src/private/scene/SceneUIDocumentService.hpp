@@ -13,6 +13,7 @@ public:
     [[nodiscard]] static bool HasElement(const Scene& scene, SceneEntity entity, UIElementId element) noexcept;
     [[nodiscard]] static bool Visible(const Scene& scene, SceneEntity entity, UIElementId element) noexcept;
     [[nodiscard]] static std::optional<UIControlState> Control(const Scene& scene, SceneEntity entity, UIElementId element);
+    [[nodiscard]] static std::optional<UIVirtualListView> VirtualList(const Scene& scene, SceneEntity entity, UIElementId element) noexcept;
     [[nodiscard]] static std::optional<UIElementId> Find(const Scene& scene, SceneEntity entity, std::string_view name) noexcept;
     [[nodiscard]] static bool StyleIsResolved(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static std::size_t ElementCount(const Scene& scene, SceneEntity entity) noexcept;
@@ -20,6 +21,8 @@ public:
     [[nodiscard]] static bool QueueDestroy(Scene& scene, SceneEntity entity, UIElementId element) noexcept;
     [[nodiscard]] static bool QueueVisibility(Scene& scene, SceneEntity entity, UIElementId element, bool visible) noexcept;
     [[nodiscard]] static bool QueueSetControl(Scene& scene, SceneEntity entity, UIElementId element, const UIControlState& control);
+    [[nodiscard]] static bool QueueConfigureVirtualList(Scene& scene, SceneEntity entity, UIElementId element, std::uint32_t viewportItems, std::uint32_t overscan) noexcept;
+    [[nodiscard]] static bool QueueScrollVirtualListTo(Scene& scene, SceneEntity entity, UIElementId element, std::uint32_t firstVisibleIndex) noexcept;
     static void SynchronizeBindings(Scene& scene, UIBindingDataSource& source);
     [[nodiscard]] static bool QueueEvent(Scene& scene, SceneEntity entity, const UIRuntimeEvent& event);
     [[nodiscard]] static std::vector<UIRuntimeEventRecord> DrainEvents(Scene& scene);
