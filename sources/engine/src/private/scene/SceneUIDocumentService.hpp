@@ -20,6 +20,7 @@ public:
     [[nodiscard]] static bool QueueDestroy(Scene& scene, SceneEntity entity, UIElementId element) noexcept;
     [[nodiscard]] static bool QueueVisibility(Scene& scene, SceneEntity entity, UIElementId element, bool visible) noexcept;
     [[nodiscard]] static bool QueueSetControl(Scene& scene, SceneEntity entity, UIElementId element, const UIControlState& control);
+    static void SynchronizeBindings(Scene& scene, UIBindingDataSource& source);
     [[nodiscard]] static bool QueueEvent(Scene& scene, SceneEntity entity, const UIRuntimeEvent& event);
     [[nodiscard]] static std::vector<UIRuntimeEventRecord> DrainEvents(Scene& scene);
     static void SyncComponents(Scene& scene);

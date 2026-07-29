@@ -111,6 +111,26 @@ bool ParseDirection(std::string_view text, UIBindingDirection& direction) {
     return true;
 }
 
+bool ValidBindingTarget(const UIDocumentElement& element, const UIBindingDeclaration& binding) {
+    if (binding.property == "text") {
+        return element.control.kind == UIControlKind::Text || element.control.kind == UIControlKind::Button ||
+            element.control.kind == UIControlKind::InputField;
+    }
+    if (binding.property == "toggle") {
+        return binding.valueType == UIDataValueType::Boolean && element.control.kind == UIControlKind::Toggle;
+    }
+    if (binding.property == "value") {
+        return binding.valueType == UIDataValueType::Number && element.control.kind == UIControlKind::Slider;
+    }
+    if (binding.property == "scroll") {
+        return binding.valueType == UIDataValueType::Number && element.control.kind == UIControlKind::ScrollView;
+    }
+    if (binding.property == "modal") {
+        return binding.valueType == UIDataValueType::Boolean && element.control.kind == UIControlKind::ModalDialog;
+    }
+    return false;
+}
+
 bool ValidateDocument(const UIDocument& document) {
     if (document.schemaVersion != UIDocument::kSchemaVersion || document.elements.empty()) return false;
     std::unordered_map<UIElementId, UIElementId> parents;
@@ -133,7 +153,11 @@ bool ValidateDocument(const UIDocument& document) {
     }
     std::unordered_set<std::string> bindingTargets;
     for (const UIBindingDeclaration& binding : document.bindings) {
-        if (!ids.contains(binding.elementId) || binding.property.empty() || binding.sourcePath.empty() ||
+        const auto element = std::find_if(document.elements.begin(), document.elements.end(), [&binding](const UIDocumentElement& value) {
+            return value.id == binding.elementId;
+        });
+        if (element == document.elements.end() || binding.property.empty() || binding.sourcePath.empty() ||
+            !ValidBindingTarget(*element, binding) ||
             !bindingTargets.insert(std::to_string(binding.elementId) + '\x1f' + binding.property).second) return false;
     }
     return true;

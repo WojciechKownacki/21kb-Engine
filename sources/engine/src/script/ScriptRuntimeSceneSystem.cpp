@@ -22,6 +22,8 @@
 #include "engine/scene/SceneUIDocuments.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <unordered_set>
 #include <utility>
 
@@ -48,6 +50,57 @@ struct RawBehaviourRecord {
 
 struct BehaviourCollectContext {
     std::vector<RawBehaviourRecord>* records = nullptr;
+};
+
+class ScriptSharedUIBindingDataSource final : public kb::scene::UIBindingDataSource {
+public:
+    explicit ScriptSharedUIBindingDataSource(ScriptSharedState& state) noexcept
+        : state_(state) {}
+
+    [[nodiscard]] std::optional<kb::scene::UIBindingValue> Read(
+        std::string_view sourcePath, kb::scene::UIDataValueType type) const override {
+        const std::optional<ScriptValue> source = state_.Get(sourcePath);
+        if (!source.has_value()) return std::nullopt;
+        kb::scene::UIBindingValue value{ .type = type };
+        switch (type) {
+        case kb::scene::UIDataValueType::Boolean:
+            if (source->Type() != ScriptValueType::Bool) return std::nullopt;
+            value.boolean = source->AsBool();
+            return value;
+        case kb::scene::UIDataValueType::String:
+            if (source->Type() != ScriptValueType::String) return std::nullopt;
+            value.string = source->AsString();
+            return value;
+        case kb::scene::UIDataValueType::Number:
+            switch (source->Type()) {
+            case ScriptValueType::Int: value.number = source->AsInt(); break;
+            case ScriptValueType::Int64: value.number = static_cast<double>(source->AsInt64()); break;
+            case ScriptValueType::UInt32: value.number = source->AsUInt32(); break;
+            case ScriptValueType::Float: value.number = source->AsFloat(); break;
+            case ScriptValueType::Double: value.number = source->AsDouble(); break;
+            default: return std::nullopt;
+            }
+            return std::isfinite(value.number) ? std::optional<kb::scene::UIBindingValue>{ std::move(value) } : std::nullopt;
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] bool Write(std::string_view sourcePath, const kb::scene::UIBindingValue& value) override {
+        switch (value.type) {
+        case kb::scene::UIDataValueType::Boolean:
+            return state_.Set(std::string{ sourcePath }, ScriptValue{ value.boolean });
+        case kb::scene::UIDataValueType::String:
+            return state_.Set(std::string{ sourcePath }, ScriptValue{ value.string });
+        case kb::scene::UIDataValueType::Number:
+            if (!std::isfinite(value.number) || value.number < -std::numeric_limits<float>::max() ||
+                value.number > std::numeric_limits<float>::max()) return false;
+            return state_.Set(std::string{ sourcePath }, ScriptValue{ static_cast<float>(value.number) });
+        }
+        return false;
+    }
+
+private:
+    ScriptSharedState& state_;
 };
 
 void CollectBehaviour(kb::scene::SceneEntity entity, const kb::scene::BehaviourComponent& behaviour, void* rawContext) {
@@ -180,6 +233,7 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::LateTick, clampedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::BeforeRender, clampedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::AfterRender, clampedDeltaSeconds);
+    SynchronizeUIBindings(scene);
     // LIB-067: frame playback point — apply every World.Destroy(deferred=true)
     // queued during this frame's behaviour phases now that all iteration is
     // done, so no behaviour ran against storage a deferred destroy will pull.
@@ -211,6 +265,7 @@ void ScriptRuntimeSceneSystem::ExecuteFixedStep(kb::scene::Scene& scene, float f
     scene.Runtime().SetScriptFixedDeltaSeconds(fixedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::FixedTick, fixedDeltaSeconds);
     DispatchCompletedFixedStepTasks(scene, 1U, fixedDeltaSeconds);
+    SynchronizeUIBindings(scene);
 }
 
 void ScriptRuntimeSceneSystem::ExecuteVariableFrame(kb::scene::Scene& scene, float deltaSeconds) {
@@ -224,6 +279,7 @@ void ScriptRuntimeSceneSystem::ExecuteVariableFrame(kb::scene::Scene& scene, flo
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::LateTick, clampedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::BeforeRender, clampedDeltaSeconds);
     ExecuteTrackedBehaviourPhase(scene, ScriptLifecycleEvent::AfterRender, clampedDeltaSeconds);
+    SynchronizeUIBindings(scene);
     static_cast<void>(scene.Entities().DrainDeferredDestroys());
 }
 
@@ -236,6 +292,7 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteShutdown(kb
 const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecutePhase(kb::scene::Scene& scene, ScriptLifecycleEvent event, float deltaSeconds) {
     PrepareScene(scene);
     lastResult_ = runtime_.ExecuteLifecycleAndDispatchEvents(scene, event, deltaSeconds);
+    SynchronizeUIBindings(scene);
     return lastResult_;
 }
 
@@ -276,6 +333,11 @@ void ScriptRuntimeSceneSystem::PrepareScene(kb::scene::Scene& scene) {
         : frameSettings_.fixedDeltaSeconds;
     scene.Runtime().SetScriptFixedDeltaSeconds(fixedDeltaSeconds);
     lastPrepareResult_ = assetPreparer_ == nullptr ? ScriptRuntimeAssetPrepareResult{} : assetPreparer_->PrepareSceneBehaviours(scene);
+}
+
+void ScriptRuntimeSceneSystem::SynchronizeUIBindings(kb::scene::Scene& scene) {
+    ScriptSharedUIBindingDataSource source{ runtime_.SharedState() };
+    scene.UIDocuments().SynchronizeBindings(source);
 }
 
 void ScriptRuntimeSceneSystem::ExecuteTrackedBehaviourPhase(
