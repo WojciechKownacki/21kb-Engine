@@ -46,6 +46,7 @@
 #include "engine/network/ReplicationSchema.hpp"
 #include "engine/network/Rpc.hpp"
 #include "engine/network/NetworkVariable.hpp"
+#include "engine/network/NetworkPrediction.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -4115,6 +4116,10 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    const kb::network::NetworkSnapshot predicted{ .tick = 5U, .acknowledgedInput = 3U, .position = { 0.0F, 0.0F, 0.0F } };
+    const kb::network::NetworkSnapshot authoritative{ .tick = 5U, .acknowledgedInput = 3U, .position = { 4.0F, 0.0F, 0.0F } };
+    const auto interpolated = kb::network::Interpolate({ .previous = predicted, .next = authoritative }, 0.5F);
+    kb::tests::Require(kb::network::IsValidInputCommand({ .tick = 5U, .sequence = 3U, .moveX = 1.0F }) && interpolated.has_value() && interpolated->position.x == 2.0F && kb::network::RequiresReconciliation(predicted, authoritative, 1.0F), "Network input, snapshot, interpolation, prediction, and reconciliation contract is invalid");
     std::int32_t variableDelta = 0;
     kb::network::NetworkVariable<std::int32_t> networkScore{ 2 };
     networkScore.SetChangedCallback(&RecordNetworkVariableChange, &variableDelta);
