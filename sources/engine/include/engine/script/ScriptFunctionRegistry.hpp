@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/assets/AssetId.hpp"
+#include "engine/core/ExecutionAffinity.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntity.hpp"
@@ -37,6 +38,12 @@ struct ScriptFunctionSignature {
     std::string description;
     std::vector<ScriptFunctionPin> inputs;
     std::vector<ScriptFunctionPin> outputs;
+    // Explicit for every registry entry. All current engine callables are
+    // MainThread because they own scene/runtime state; this default is the
+    // production policy assigned at registration, not an undocumented
+    // assumption in a frontend.
+    kb::core::ExecutionAffinity executionAffinity =
+        kb::core::ExecutionAffinity::MainThread;
     // LIB-025: empty when the function is not deprecated. Set via
     // ScriptFunctionRegistry::MarkDeprecated (never at Register() time —
     // deprecation is authored as kb::library::LibraryFunctionDesc::
@@ -54,6 +61,8 @@ struct ScriptFunctionCallContext {
     kb::assets::AssetId callerAsset{};
     kb::scene::BehaviourBackend callerBackend = kb::scene::BehaviourBackend::Native;
     ScriptLifecycleEvent lifecycle = ScriptLifecycleEvent::Tick;
+    kb::core::ExecutionAffinity executionAffinity =
+        kb::core::ExecutionAffinity::MainThread;
     float deltaSeconds = 0.0F;
 };
 

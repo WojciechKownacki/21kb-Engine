@@ -110,6 +110,18 @@ ScriptFunctionCallResult ScriptFunctionRegistry::Call(
         };
     }
 
+    if (!kb::core::MayCall(context.executionAffinity,
+                           { iter->signature.executionAffinity })) {
+        return ScriptFunctionCallResult{
+            .errors = { "script function '" + std::string{ name } +
+                "' is forbidden from " +
+                std::string{ kb::core::ToString(context.executionAffinity) } +
+                " execution context (requires " +
+                std::string{ kb::core::ToString(iter->signature.executionAffinity) } +
+                ")" },
+        };
+    }
+
     std::vector<ScriptFunctionArgument> normalized;
     std::vector<std::string> errors;
     ValidateInputs(iter->signature, arguments, normalized, errors);

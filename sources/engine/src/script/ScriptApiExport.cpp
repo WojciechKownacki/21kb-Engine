@@ -647,6 +647,8 @@ std::string ScriptApiExport::ToJson(const ScriptApiCatalog& catalog) {
         AppendJsonString(out, function.name);
         out += ",\"description\":";
         AppendJsonString(out, function.description);
+        out += ",\"executionAffinity\":";
+        AppendJsonString(out, kb::core::ToString(function.executionAffinity));
         out += ",\"inputs\":";
         AppendJsonPins(out, function.inputs);
         out += ",\"outputs\":";

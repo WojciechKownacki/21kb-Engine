@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/script/ScriptApiNameRegistry.hpp"
+#include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptValue.hpp"
 
 #include <cstdint>
@@ -20,6 +21,8 @@ class ScriptRuntimeHost;
 struct ScriptApiCatalogFunction {
     std::string name;
     std::string description;
+    kb::core::ExecutionAffinity executionAffinity =
+        kb::core::ExecutionAffinity::MainThread;
     std::vector<ScriptApiPin> inputs;
     std::vector<ScriptApiPin> outputs;
 };

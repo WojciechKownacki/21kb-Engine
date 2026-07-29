@@ -96,6 +96,7 @@
 #include "engine/visual/VisualGraphValidator.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
+#include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptEvent.hpp"
 #include "engine/script/ScriptEventBus.hpp"
 #include "engine/script/ScriptAssetsApi.hpp"
@@ -359,6 +360,26 @@ void RunModuleInstallStartupReportTest() {
 // the 2026-07-17 audit found unfulfilled: recording pins that are never
 // cross-checked against the registry would be no better than prose.
 void RunFunctionDescCatalogResolvesTest() {
+    kb::script::ScriptFunctionRegistry forbiddenRegistry;
+    bool forbiddenCallbackRan = false;
+    kb::tests::Require(forbiddenRegistry.Register(kb::script::ScriptFunctionDesc{
+            .signature = {
+                .name = "Tests.ForbiddenInPhase",
+                .description = "Rejects unavailable execution contexts.",
+                .executionAffinity = kb::core::ExecutionAffinity::Forbidden,
+            },
+            .callback = [&forbiddenCallbackRan](
+                const kb::script::ScriptFunctionCallContext&,
+                std::span<const kb::script::ScriptFunctionArgument>) {
+                forbiddenCallbackRan = true;
+                return kb::script::ScriptFunctionCallResult{ .executed = true };
+            },
+        }), "Engine21kbLibrary forbidden execution-context fixture failed to register");
+    const kb::script::ScriptFunctionCallResult forbiddenResult =
+        forbiddenRegistry.Call("Tests.ForbiddenInPhase", {}, {});
+    kb::tests::Require(!forbiddenResult.Succeeded() && !forbiddenCallbackRan,
+        "Engine21kbLibrary forbidden-in-phase function must be rejected before its callback runs");
+
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };
     kb::tests::Require(host.Succeeded(), "Engine21kbLibrary function desc test host setup failed");
@@ -3685,6 +3706,23 @@ void RunCatalogFunctionFrontendAndDocumentationComplianceTest() {
     kb::script::ScriptRuntimeHost host{ scene };
     kb::tests::Require(host.Succeeded(), "Engine21kbLibrary catalog binding test host setup failed");
     const kb::script::ScriptApiCatalog catalog = kb::script::ScriptApiCatalog::Build(host);
+
+    kb::tests::Require(!host.Functions().Functions().empty(),
+        "Engine21kbLibrary production function registry must not be empty");
+    kb::tests::Require(
+        std::ranges::all_of(host.Functions().Functions(),
+            [](const kb::script::ScriptFunctionDesc& function) {
+                return function.signature.executionAffinity ==
+                    kb::core::ExecutionAffinity::MainThread;
+            }),
+        "Engine21kbLibrary every current production function must explicitly be MainThread until a worker or render command path exists");
+    kb::tests::Require(
+        std::ranges::all_of(catalog.functions,
+            [](const kb::script::ScriptApiCatalogFunction& function) {
+                return function.executionAffinity ==
+                    kb::core::ExecutionAffinity::MainThread;
+            }),
+        "Engine21kbLibrary exported catalog must retain every function's execution affinity");
     kb::tests::Require(!catalog.functions.empty(), "Engine21kbLibrary catalog binding test fixture must have at least one function");
     const std::string markdown = kb::script::ScriptApiExport::ToMarkdown(catalog);
 
