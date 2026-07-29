@@ -231,6 +231,18 @@ const ScriptApiCatalogFunction* ScriptApiCatalog::FindFunction(std::string_view 
     return nullptr;
 }
 
+std::string ScriptApiDocumentationAnchor(std::string_view functionName) {
+    constexpr std::array<char, 16> kHexDigits{ '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };
+
+    std::string anchor = "api-function-";
+    anchor.reserve(anchor.size() + functionName.size() * 2U);
+    for (const unsigned char character : functionName) {
+        anchor += kHexDigits[character >> 4U];
+        anchor += kHexDigits[character & 0x0FU];
+    }
+    return anchor;
+}
+
 std::span<const ScriptApiCatalogLuaBindingDefinition> ScriptApiCatalog::LuaBindingDefinitions() noexcept {
     return kLuaBindings;
 }
@@ -252,6 +264,33 @@ ScriptApiCatalog ScriptApiCatalog::Build(const ScriptRuntimeHost& host) {
             .inputs = ToApiPins(function.signature.inputs),
             .outputs = ToApiPins(function.signature.outputs),
         });
+    }
+
+    // The palette entry is generated from the native binding while execution
+    // is dispatched by the runtime binding. Record both real registrations so
+    // an exported source map cannot describe a node that the host cannot run.
+    const kb::visual::VisualGraphNodeCatalog nodeCatalog = host.CreateVisualGraphNodeCatalog();
+    for (const ScriptApiCatalogFunction& function : catalog.functions) {
+        const std::string symbol = "Function." + function.name;
+        const kb::visual::VisualGraphRuntimeBinding* runtimeBinding =
+            host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, symbol);
+        const kb::visual::VisualGraphNodeCatalogEntry* node =
+            nodeCatalog.Find("NativeBinding:CallNative:" + symbol);
+        if (runtimeBinding == nullptr || node == nullptr) {
+            continue;
+        }
+
+        const std::string documentationAnchor = ScriptApiDocumentationAnchor(function.name);
+        for (const kb::visual::VisualGraphPinTemplate& pin : node->pins) {
+            catalog.sourceMap.push_back(ScriptApiCatalogSourceMapEntry{
+                .visualGraphNodeId = node->id,
+                .visualGraphPinName = pin.name,
+                .visualGraphPinDirection = kb::visual::ToString(pin.direction),
+                .functionName = function.name,
+                .runtimeBindingSymbol = runtimeBinding->symbol,
+                .documentationAnchor = documentationAnchor,
+            });
+        }
     }
 
     for (const std::string_view componentName : ScriptSceneComponentApi::ComponentNames()) {
