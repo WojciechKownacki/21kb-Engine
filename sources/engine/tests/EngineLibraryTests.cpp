@@ -4246,6 +4246,8 @@ void RunNavigationFoundationContractTest() {
     const kb::scene::NavAgent agent{};
     const kb::scene::NavObstacle obstacle{};
     kb::tests::Require(mesh.agentRadius > 0.0F && agent.radius > 0.0F && agent.maxSpeed > 0.0F &&
+            agent.velocity.x == 0.0F && agent.velocity.y == 0.0F && agent.velocity.z == 0.0F &&
+            agent.remainingDistance == 0.0F && agent.pathStatus == kb::scene::NavPathStatus::Invalid &&
             obstacle.area == kb::scene::kDefaultNavArea && obstacle.carve,
         "Navigation foundation defaults must define a usable walkable mesh, agent and obstacle");
 
@@ -4327,6 +4329,12 @@ void RunNavigationFoundationContractTest() {
     steeringAgent.destination = { 0.25F, 0.0F, 0.0F };
     kb::tests::Require(kb::scene::ComputeNavSteering(steeringAgent, {}, {}, 0.25F).arrived,
         "Navigation steering did not stop inside the agent stopping distance");
+    steeringAgent.velocity = { 1.0F, 0.0F, 0.0F };
+    steeringAgent.remainingDistance = 4.5F;
+    steeringAgent.pathStatus = kb::scene::NavPathStatus::Pending;
+    kb::tests::Require(steeringAgent.destination.x == 0.25F && steeringAgent.velocity.x == 1.0F &&
+            steeringAgent.remainingDistance == 4.5F && steeringAgent.pathStatus == kb::scene::NavPathStatus::Pending,
+        "Navigation agent runtime state must expose destination, velocity, remaining distance and path status without moving physics state");
     kb::scene::PerceptionFilter perception{ .observerTeam = 1U, .maxResults = 8U, .range = 12.0F };
     kb::tests::Require(perception.IsValid() && !perception.AcceptsTeam(1U) && perception.AcceptsTeam(2U),
         "Perception filter did not bound results or exclude the observer team");
