@@ -18,6 +18,7 @@ public:
     [[nodiscard]] TransformComponent Get(SceneObject object) const;
     [[nodiscard]] TransformComponent Get(SceneEntity entity) const;
     [[nodiscard]] const TransformComponent* TryGet(SceneEntity entity) const noexcept;
+    [[nodiscard]] bool ReadNonAlloc(std::span<const SceneEntity> entities, std::span<TransformComponent> transforms) const noexcept;
     void ForEach(ConstTransformVisitor visitor, void* context = nullptr) const;
 
 private:
@@ -32,6 +33,7 @@ public:
     [[nodiscard]] TransformComponent Get(SceneEntity entity) const;
     [[nodiscard]] const TransformComponent* TryGet(SceneEntity entity) const noexcept;
     [[nodiscard]] TransformComponent* TryGet(SceneEntity entity) noexcept;
+    [[nodiscard]] bool ReadNonAlloc(std::span<const SceneEntity> entities, std::span<TransformComponent> transforms) const noexcept;
     void Set(SceneObject object, const TransformComponent& transform);
     void Set(SceneEntity entity, const TransformComponent& transform);
     void MarkModified(SceneEntity entity) noexcept;
