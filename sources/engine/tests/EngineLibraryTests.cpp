@@ -62,6 +62,7 @@
 #include "engine/core/ProfilerCounters.hpp"
 #include "engine/core/ConsoleCommands.hpp"
 #include "engine/core/CrashReport.hpp"
+#include "engine/core/ExecutionAffinity.hpp"
 #include "engine/core/RuntimeInspector.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -4133,6 +4134,7 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    kb::tests::Require(kb::core::MayCall(kb::core::ExecutionAffinity::MainThread,{kb::core::ExecutionAffinity::MainThread})&&kb::core::MayCall(kb::core::ExecutionAffinity::WorkerSafe,{kb::core::ExecutionAffinity::WorkerSafe})&&!kb::core::MayCall(kb::core::ExecutionAffinity::MainThread,{kb::core::ExecutionAffinity::Forbidden}),"Execution affinity contract did not fail closed");
     const auto crash=kb::core::MakeCrashReport(1U,{7U},"failure",{"a","b","c"},2U);kb::tests::Require(crash.apiVersion==1U&&crash.assetIds==std::vector<std::uint64_t>{7U}&&crash.recentEvents==std::vector<std::string>({"b","c"}),"Crash report did not bound diagnostic events");
     kb::core::RuntimeInspector inspector; inspector.Publish({.entity=4U,.components=2U,.timers=1U}); kb::tests::Require(inspector.Snapshot().entity==4U&&inspector.Snapshot().timers==1U,"Runtime inspector did not retain read-only snapshot");
     const kb::core::ConsoleCommand command{.name="world.pause",.help="Pause world",.argumentTypes={"bool"},.permission=kb::core::ConsolePermission::Developer};kb::tests::Require(kb::core::CanExecute(command,kb::core::ConsolePermission::Developer,1U)&&!kb::core::CanExecute(command,kb::core::ConsolePermission::User,1U)&&!kb::core::CanExecute(command,kb::core::ConsolePermission::Admin,0U),"Console command did not validate permission and typed arity");
