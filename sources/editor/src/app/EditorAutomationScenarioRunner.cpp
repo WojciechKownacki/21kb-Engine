@@ -12,6 +12,7 @@
 #include "engine/input/InputKey.hpp"
 #include "engine/gameplay/GameInstance.hpp"
 #include "engine/network/NetworkModel.hpp"
+#include "engine/network/NetworkObject.hpp"
 #include "engine/network/NetworkSession.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
@@ -551,6 +552,28 @@ ReadScriptValue(
             offline,
             offline ? "offline-only; no transport or script API"
                     : "first-release network contract is open" };
+    }
+
+    if (*operation == "assert_network_object_lifecycle") {
+        kb::network::NetworkObjects objects;
+        const bool lifecycle =
+            !objects.Spawn({}) &&
+            objects.Spawn({ .id = 7U, .owner = 11U,
+                .role = kb::network::NetworkRole::Authority }) &&
+            !objects.Spawn({ .id = 7U, .owner = 12U,
+                .role = kb::network::NetworkRole::Authority }) &&
+            objects.CanAcceptOwnerCommand(7U, 11U) &&
+            !objects.CanAcceptOwnerCommand(7U, 12U) &&
+            objects.AssignOwner(7U, 12U) &&
+            objects.Spawn({ .id = 8U, .owner = 12U,
+                .role = kb::network::NetworkRole::Proxy }) &&
+            !objects.AssignOwner(8U, 13U) && objects.Despawn(7U) &&
+            !objects.Find(7U).has_value() &&
+            !objects.CanAcceptOwnerCommand(7U, 12U) && !objects.Despawn(7U);
+        return {
+            lifecycle,
+            lifecycle ? "authority, ownership, spawn and despawn"
+                      : "network object lifecycle rejected" };
     }
 
     if (*operation == "assert_game_flow") {
