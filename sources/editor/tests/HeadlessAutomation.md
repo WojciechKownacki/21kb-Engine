@@ -65,6 +65,7 @@ scenario-local aliases.
 | `assert_engine_log` | Verifies Trace/Debug/Info/Warn/Error records retain category, entity and world context while duplicate keys are rate-limited per tick. |
 | `assert_structured_log_fields` | Verifies log field values retain numeric and boolean types instead of being preformatted into a message string. |
 | `assert_assertion_policy` | Verifies development/release Assert policy, always-fatal Require, nonfatal SoftFail and retained script stack frames. |
+| `assert_debug_draw` | Verifies debug-only line, ray, box, sphere and text commands retain duration and channel, then expire deterministically. |
 | `assert_platform_capabilities` | Verifies capability-gated locale, user-data path, clipboard, URL and vibration access, including unavailable-service rejection. |
 | `assert_user_storage` | Verifies sandboxed atomic read/write/delete/list, quota enforcement and asynchronous write without arbitrary filesystem paths. |
 | `assert_user_storage_failures` | Verifies sandbox-escape and quota rejection, preservation after a staged atomic-write failure, and unavailable platform capabilities. |
