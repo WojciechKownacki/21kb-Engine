@@ -121,6 +121,23 @@ ScriptBackendExecutionResult VisualGraphScriptBackend::ExecuteEvent(const kb::sc
     return ToScriptResult(result, behaviour, context.Self());
 }
 
+void VisualGraphScriptBackend::ResetAssetForHotReload(kb::assets::AssetId assetId, ScriptEventBus& events) noexcept {
+    // Subscription callbacks hold the old graph context by key. Remove them
+    // before discarding contexts so queued events cannot resume an obsolete
+    // graph after a freshly compiled artifact has replaced it.
+    for (auto iterator = eventBridgeSubscriptions_.begin(); iterator != eventBridgeSubscriptions_.end();) {
+        if (iterator->first.assetId != assetId.value) {
+            ++iterator;
+            continue;
+        }
+        for (const EventSubscriptionHandle handle : iterator->second) {
+            static_cast<void>(events.Unsubscribe(handle));
+        }
+        iterator = eventBridgeSubscriptions_.erase(iterator);
+    }
+    instances_.RemoveAsset(assetId);
+}
+
 kb::visual::VisualGraphRuntimeExecutionContext& VisualGraphScriptBackend::ContextFor(const kb::scene::BehaviourComponent& behaviour, kb::scene::SceneEntity entity) {
     return instances_.FindOrCreate(entity, kb::assets::AssetId{behaviour.behaviourAssetId}).context;
 }

@@ -28,6 +28,10 @@ struct ScenePrepareContext {
 void MergePrepareResult(ScriptRuntimeAssetPrepareResult& target, ScriptRuntimeAssetPrepareResult source) {
     target.visitedAssets += source.visitedAssets;
     target.preparedAssets += source.preparedAssets;
+    target.reloadedAssets.reserve(target.reloadedAssets.size() + source.reloadedAssets.size());
+    for (kb::assets::AssetId assetId : source.reloadedAssets) {
+        target.reloadedAssets.push_back(assetId);
+    }
     target.diagnostics.reserve(target.diagnostics.size() + source.diagnostics.size());
     for (ScriptRuntimeAssetPrepareDiagnostic& diagnostic : source.diagnostics) {
         target.diagnostics.push_back(std::move(diagnostic));
@@ -177,6 +181,7 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareLuaAsset(cons
         return result;
     }
 
+    result.reloadedAssets.push_back(metadata.id);
     ++result.preparedAssets;
     return result;
 }
@@ -347,6 +352,7 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareVisualGraphAs
     }
 
     preparedVisualGraphAssetHashes_[metadata.id.value] = metadata.contentHash;
+    result.reloadedAssets.push_back(metadata.id);
     ++result.preparedAssets;
     return result;
 }

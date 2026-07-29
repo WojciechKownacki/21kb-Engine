@@ -70,6 +70,7 @@ private:
     void ExecuteFixedStep(kb::scene::Scene& scene, float fixedDeltaSeconds);
     void ConfigureSceneFixedStep(kb::scene::Scene& scene) noexcept;
     void PrepareScene(kb::scene::Scene& scene);
+    void RestartReloadedBehaviours(kb::scene::Scene& scene);
     // Binds retained UIDocument declarations to the ScriptSharedState after
     // script phases. The UI service owns the loop-suppression state; this
     // system is only the typed script-data adapter and scheduling boundary.
