@@ -111,6 +111,7 @@ add_library(kb_engine STATIC
     include/engine/scene/AudioListenerComponent.hpp
     include/engine/gameplay/GameInstance.hpp
     include/engine/gameplay/GameMode.hpp
+    include/engine/gameplay/GameFlow.hpp
     include/engine/gameplay/GameState.hpp
     include/engine/gameplay/Players.hpp
     include/engine/gameplay/CameraManager.hpp
@@ -476,6 +477,7 @@ add_library(kb_engine STATIC
     src/ecs/SerializedWorldWriter.cpp
     src/scene/Scene.cpp
     src/gameplay/GameInstance.cpp
+    src/gameplay/GameFlow.cpp
     src/gameplay/GameMode.cpp
     src/gameplay/GameState.cpp
     src/gameplay/Players.cpp
