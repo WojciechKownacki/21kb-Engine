@@ -18,6 +18,7 @@
 #include "engine/core/ProfilerCounters.hpp"
 #include "engine/core/ConsoleCommands.hpp"
 #include "engine/core/RuntimeInspector.hpp"
+#include "engine/library/EngineLibraryManifest.hpp"
 #include "engine/library/EngineLibraryDeterminism.hpp"
 #include "engine/network/NetworkModel.hpp"
 #include "engine/network/NetworkBudget.hpp"
@@ -2974,6 +2975,33 @@ ReadScriptValue(
         return { classified,
             classified ? "nondeterministic API metadata covers wall time, platform, async I/O and rendering"
                        : "nondeterministic API metadata is incomplete" };
+    }
+
+    if (*operation == "assert_restricted_api_surfaces") {
+        kb::script::ScriptRuntimeHost host{ state.context.Scene() };
+        if (!host.Succeeded()) {
+            return { false, "script runtime host could not be created" };
+        }
+        const kb::script::ScriptApiCatalog catalog =
+            kb::script::ScriptApiCatalog::Build(host);
+        const kb::library::ApiManifest manifest = kb::library::BuildApiManifest(catalog);
+        const auto find = [&manifest](std::string_view name) -> const kb::library::LibraryApiSurfaceManifestEntry* {
+            const auto found = std::ranges::find_if(manifest.specialApis, [name](const kb::library::LibraryApiSurfaceManifestEntry& api) {
+                return api.canonicalName == name;
+            });
+            return found == manifest.specialApis.end() ? nullptr : &*found;
+        };
+        const kb::library::LibraryApiSurfaceManifestEntry* authoring = find("ScriptAgentProjectFiles.Write");
+        const kb::library::LibraryApiSurfaceManifestEntry* server = find("NetworkObjects.AssignOwner");
+        const bool restricted =
+            authoring != nullptr && server != nullptr &&
+            authoring->availability == kb::library::ToMask(kb::library::LibraryApiSurface::Authoring) &&
+            server->availability == kb::library::ToMask(kb::library::LibraryApiSurface::Server) &&
+            !kb::library::IsAvailableOnSurface(authoring->availability, kb::library::LibraryApiSurface::Lua) &&
+            !kb::library::IsAvailableOnSurface(server->availability, kb::library::LibraryApiSurface::VisualGraph);
+        return { restricted,
+            restricted ? "authoring-only and server-only APIs are excluded from script frontends"
+                       : "restricted API surface metadata is incomplete" };
     }
 
     if (*operation == "assert_runtime_snapshot_queue") {
