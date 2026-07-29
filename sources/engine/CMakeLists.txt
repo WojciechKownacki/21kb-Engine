@@ -326,6 +326,7 @@ add_library(kb_engine STATIC
     include/engine/library/EngineLibraryComponentDesc.hpp
     include/engine/library/EngineLibraryComponentInspectorDesc.hpp
     include/engine/library/EngineLibraryDeprecation.hpp
+    include/engine/library/EngineLibraryDeterminism.hpp
     include/engine/library/EngineLibraryContext.hpp
     include/engine/library/EngineLibraryEntityHandle.hpp
     include/engine/library/EngineLibraryError.hpp
