@@ -8,6 +8,7 @@
 #include "engine/script/ScriptApiExport.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <span>
 #include <string>
@@ -48,8 +49,35 @@ void RunCatalogBuildTest() {
         vector2->description == "Reads the current two-dimensional value of the named input action.",
         "Script API catalog did not preserve the authored Input.Vector2 description");
     kb::tests::Require(vector2->outputs.size() == 2U, "Script API catalog Input.Vector2 output contract is wrong");
+    const kb::visual::VisualGraphNodeCatalog nodeCatalog = host.CreateVisualGraphNodeCatalog();
     for (const kb::script::ScriptApiCatalogFunction& function : catalog.functions) {
         kb::tests::Require(!function.description.empty(), "Script API catalog exposed a function without documentation");
+        const std::string bindingSymbol = "Function." + function.name;
+        const std::string nodeId = "NativeBinding:CallNative:" + bindingSymbol;
+        const std::string documentationAnchor = kb::script::ScriptApiDocumentationAnchor(function.name);
+        bool foundInput = false;
+        bool foundOutput = false;
+        const kb::visual::VisualGraphNodeCatalogEntry* node = nodeCatalog.Find(nodeId);
+        kb::tests::Require(node != nullptr, "Script API source map function has no Visual Graph palette node");
+        for (const kb::script::ScriptApiCatalogSourceMapEntry& entry : catalog.sourceMap) {
+            if (entry.functionName != function.name) {
+                continue;
+            }
+            kb::tests::Require(
+                entry.visualGraphNodeId == nodeId && entry.runtimeBindingSymbol == bindingSymbol &&
+                    entry.documentationAnchor == documentationAnchor,
+                "Script API source map drifted from its live Visual Graph runtime binding");
+            foundInput = foundInput || entry.visualGraphPinDirection == "Input";
+            foundOutput = foundOutput || entry.visualGraphPinDirection == "Output";
+        }
+        kb::tests::Require(foundInput && foundOutput, "Script API source map did not cover the Visual Graph node pins");
+        for (const kb::visual::VisualGraphPinTemplate& pin : node->pins) {
+            const auto mappedPin = std::find_if(catalog.sourceMap.begin(), catalog.sourceMap.end(), [&function, &nodeId, &pin](const kb::script::ScriptApiCatalogSourceMapEntry& entry) {
+                return entry.functionName == function.name && entry.visualGraphNodeId == nodeId && entry.visualGraphPinName == pin.name &&
+                    entry.visualGraphPinDirection == kb::visual::ToString(pin.direction);
+            });
+            kb::tests::Require(mappedPin != catalog.sourceMap.end(), "Script API source map omitted a Visual Graph node pin");
+        }
     }
 
     bool foundTransform = false;
@@ -110,6 +138,12 @@ void RunCatalogExportTest() {
         Contains(json, "\"description\":\"Reads the current two-dimensional value of the named input action.\""),
         "Script API JSON is missing authored function descriptions");
     kb::tests::Require(Contains(json, "\"lifecycleEvents\""), "Script API JSON is missing lifecycle events");
+    kb::tests::Require(
+        Contains(json, "\"sourceMap\"") && Contains(json, "\"runtimeBindingSymbol\"") && Contains(json, "\"documentationAnchor\""),
+        "Script API JSON is missing the Visual Graph to runtime documentation source map");
+    kb::tests::Require(
+        Contains(markdown, "<a id=\"" + kb::script::ScriptApiDocumentationAnchor("Input.Vector2") + "\"></a>"),
+        "Script API markdown is missing stable function documentation anchors");
 
     const std::string stubs = kb::script::ScriptApiExport::ToLuaStubs(catalog);
     kb::tests::Require(Contains(stubs, "---@meta"), "Script API stubs are missing the meta marker");
