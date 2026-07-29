@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cmath>
 #include <limits>
 #include <queue>
 #include <mutex>
@@ -90,6 +91,30 @@ struct NavObstacle {
     bool carve = true;
     bool enabled = true;
 };
+
+struct NavSteeringResult {
+    kb::math::Vec3 desiredVelocity{};
+    bool arrived = false;
+};
+
+// Produces only horizontal input for PhysicsBackend::CharacterMove. It never
+// writes Transform, Rigidbody or CharacterController state: the live physics
+// backend remains the exclusive collision/grounding authority.
+[[nodiscard]] inline NavSteeringResult ComputeNavSteering(
+    const NavAgent& agent, const kb::math::Vec3& position, const kb::math::Vec3& currentVelocity, float deltaSeconds) noexcept {
+    const float dx = agent.destination.x - position.x;
+    const float dz = agent.destination.z - position.z;
+    const float distance = std::sqrt(dx * dx + dz * dz);
+    if (!agent.enabled || distance <= agent.stoppingDistance) return NavSteeringResult{ .arrived = true };
+    const float invDistance = 1.0F / distance;
+    const float desiredSpeed = agent.maxSpeed * std::min(1.0F, (distance - agent.stoppingDistance) / std::max(agent.stoppingDistance, 0.001F));
+    const float targetX = dx * invDistance * desiredSpeed;
+    const float targetZ = dz * invDistance * desiredSpeed;
+    const float maxDelta = std::max(0.0F, agent.acceleration * std::max(0.0F, deltaSeconds));
+    const float changeX = std::clamp(targetX - currentVelocity.x, -maxDelta, maxDelta);
+    const float changeZ = std::clamp(targetZ - currentVelocity.z, -maxDelta, maxDelta);
+    return NavSteeringResult{ .desiredVelocity = { currentVelocity.x + changeX, 0.0F, currentVelocity.z + changeZ } };
+}
 
 // Immutable-by-convention value passed to a navigation query. Excluded areas
 // win over included ones, and non-positive/non-finite costs are rejected by
