@@ -45,6 +45,7 @@
 #include "engine/network/NetworkObject.hpp"
 #include "engine/network/ReplicationSchema.hpp"
 #include "engine/network/Rpc.hpp"
+#include "engine/network/NetworkVariable.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -85,6 +86,8 @@
 #include <vector>
 
 namespace {
+
+void RecordNetworkVariableChange(void* context, std::int32_t previous, std::int32_t current) noexcept { *static_cast<std::int32_t*>(context) = current - previous; }
 
 int g_moduleInstallSkipCallCount = 0;
 bool RecordModuleInstallCall(kb::script::ScriptRuntimeHost&) {
@@ -4112,6 +4115,10 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    std::int32_t variableDelta = 0;
+    kb::network::NetworkVariable<std::int32_t> networkScore{ 2 };
+    networkScore.SetChangedCallback(&RecordNetworkVariableChange, &variableDelta);
+    kb::tests::Require(networkScore.Set(5) && networkScore.Revision() == 1U && variableDelta == 3 && !networkScore.Apply(7, 1U) && networkScore.Apply(7, 2U) && networkScore.Value() == 7 && variableDelta == 2, "Network variable did not provide typed revisions and change hooks");
     kb::network::NetworkObjects rpcObjects;
     kb::tests::Require(rpcObjects.Spawn({ .id = 8U, .owner = 20U, .role = kb::network::NetworkRole::Authority }) && kb::network::ValidateRpc(rpcObjects, { .object = 8U, .sender = 20U, .reliability = kb::network::RpcReliability::Unreliable, .direction = kb::network::RpcDirection::ClientToServer }) && !kb::network::ValidateRpc(rpcObjects, { .object = 8U, .sender = 21U, .direction = kb::network::RpcDirection::ClientToServer }) && rpcObjects.Spawn({ .id = 9U, .owner = 1U, .role = kb::network::NetworkRole::Proxy }) && kb::network::ValidateRpc(rpcObjects, { .object = 9U, .sender = 1U, .direction = kb::network::RpcDirection::ServerToClient }), "RPC validation did not enforce direction, reliability contract, and ownership");
     const kb::network::ReplicationSchema replicationSchema{ .version = 1U, .fields = { { .id = 1U, .name = "health", .type = kb::network::ReplicatedFieldType::QuantizedFloat, .minimum = 0.0F, .maximum = 100.0F, .quantizationBits = 10U }, { .id = 2U, .name = "alive", .type = kb::network::ReplicatedFieldType::Boolean } } };
