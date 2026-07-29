@@ -1380,6 +1380,30 @@ if(BUILD_TESTING)
 
     kb_apply_quality_gates(kb_engine_tests)
 
+    # LIB-251: a focused library gate must not pull the editor/UI target into
+    # its dependency graph. Keep the executable deliberately limited to the
+    # production engine and the library test suite.
+    add_executable(kb_engine_library_tests
+        tests/EngineLibraryTestMain.cpp
+        tests/EngineLibraryTests.cpp
+        tests/TestSuites.hpp
+        tests/TestSupport.hpp
+    )
+
+    target_link_libraries(kb_engine_library_tests
+        PRIVATE
+            kb_engine
+            flecs::flecs_static
+    )
+
+    add_test(NAME kb_engine_library_tests COMMAND $<TARGET_FILE:kb_engine_library_tests>)
+    set_tests_properties(kb_engine_library_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "library"
+    )
+
+    kb_apply_quality_gates(kb_engine_library_tests)
+
     add_executable(kb_library_benchmarks
         tests/LibraryPerformanceBenchmarks.cpp
         tests/TestSupport.hpp
