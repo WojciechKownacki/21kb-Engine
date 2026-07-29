@@ -3900,6 +3900,18 @@ void RunNavigationFoundationContractTest() {
     kb::tests::Require(asynchronousPath.Succeeded() && asynchronousPath.corners.size() == excludedPath.corners.size() &&
             asynchronousPath.corners.size() == 3U && asynchronousPath.corners[1].z == excludedPath.corners[1].z,
         "Navigation async path request did not publish the same filtered result as synchronous pathfinding");
+    kb::scene::NavAgent steeringAgent;
+    steeringAgent.destination = { 10.0F, 5.0F, 0.0F };
+    steeringAgent.maxSpeed = 4.0F;
+    steeringAgent.acceleration = 2.0F;
+    steeringAgent.stoppingDistance = 0.5F;
+    const kb::scene::NavSteeringResult steering = kb::scene::ComputeNavSteering(
+        steeringAgent, {}, { 0.0F, 7.0F, 0.0F }, 0.25F);
+    kb::tests::Require(!steering.arrived && steering.desiredVelocity.x == 0.5F && steering.desiredVelocity.y == 0.0F,
+        "Navigation steering must accelerate horizontally without injecting vertical physics velocity");
+    steeringAgent.destination = { 0.25F, 0.0F, 0.0F };
+    kb::tests::Require(kb::scene::ComputeNavSteering(steeringAgent, {}, {}, 0.25F).arrived,
+        "Navigation steering did not stop inside the agent stopping distance");
 }
 
 void RunEngineLibraryTests() {
