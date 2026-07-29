@@ -50,7 +50,24 @@ jobs:
           GIT_CONFIG_KEY_0: advice.defaultBranchName
           GIT_CONFIG_VALUE_0: "false"
         with:
-          submodules: recursive
+            submodules: recursive
+            fetch-depth: 0
+
+      - name: Validate changed patch whitespace
+        shell: pwsh
+        run: |
+          $base = "${{ github.event.before }}"
+          if ("${{ github.event_name }}" -eq "pull_request") {
+            $base = "${{ github.event.pull_request.base.sha }}"
+          }
+          if ($base -and $base -ne "0000000000000000000000000000000000000000" -and (git cat-file -e "$base^{commit}" 2>$null)) {
+            git diff --check $base HEAD
+          } else {
+            git diff --check HEAD^ HEAD
+          }
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
 
       - name: Configure
         shell: pwsh
