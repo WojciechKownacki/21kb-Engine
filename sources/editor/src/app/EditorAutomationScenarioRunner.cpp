@@ -13,6 +13,7 @@
 #include "engine/gameplay/GameInstance.hpp"
 #include "engine/network/NetworkModel.hpp"
 #include "engine/network/NetworkObject.hpp"
+#include "engine/network/NetworkPrediction.hpp"
 #include "engine/network/NetworkVariable.hpp"
 #include "engine/network/Rpc.hpp"
 #include "engine/network/NetworkSession.hpp"
@@ -660,6 +661,47 @@ ReadScriptValue(
             valid,
             valid ? "typed revision, callback and stale update rejection"
                   : "network variable contract rejected" };
+    }
+
+    if (*operation == "assert_network_prediction") {
+        const kb::network::NetworkSnapshot predicted{
+            .tick = 5U, .acknowledgedInput = 3U,
+            .position = { 0.0F, 0.0F, 0.0F } };
+        const kb::network::NetworkSnapshot authoritative{
+            .tick = 5U, .acknowledgedInput = 3U,
+            .position = { 4.0F, 0.0F, 0.0F } };
+        const kb::network::NetworkSnapshot interpolationNext{
+            .tick = 6U, .acknowledgedInput = 3U,
+            .position = { 4.0F, 0.0F, 0.0F } };
+        const kb::network::NetworkSnapshot mismatchedAcknowledgement{
+            .tick = 5U, .acknowledgedInput = 4U };
+        const kb::network::NetworkSnapshot mismatchedVelocity{
+            .tick = 5U, .acknowledgedInput = 3U,
+            .velocity = { 2.0F, 0.0F, 0.0F } };
+        const std::optional<kb::network::NetworkSnapshot> interpolated =
+            kb::network::Interpolate(
+                { .previous = predicted, .next = interpolationNext }, 0.5F);
+        const bool valid =
+            kb::network::IsValidInputCommand(
+                { .tick = 5U, .sequence = 3U, .moveX = 1.0F }) &&
+            kb::network::IsValidInputCommand(
+                { .tick = 5U, .sequence = 0U, .moveX = 1.0F }) &&
+            !kb::network::IsValidInputCommand(
+                { .tick = 0U, .sequence = 3U, .moveX = 1.0F }) &&
+            interpolated.has_value() && interpolated->position.x == 2.0F &&
+            !kb::network::Interpolate(
+                 { .previous = predicted, .next = predicted }, 0.5F)
+                 .has_value() &&
+            kb::network::RequiresReconciliation(
+                predicted, authoritative, 1.0F) &&
+            kb::network::RequiresReconciliation(
+                predicted, mismatchedAcknowledgement, 1.0F) &&
+            kb::network::RequiresReconciliation(
+                predicted, mismatchedVelocity, 1.0F);
+        return {
+            valid,
+            valid ? "input, snapshots, interpolation and reconciliation"
+                  : "network prediction contract rejected" };
     }
 
     if (*operation == "assert_game_flow") {
