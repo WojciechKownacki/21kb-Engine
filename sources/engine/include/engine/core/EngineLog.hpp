@@ -6,14 +6,18 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <variant>
 
 namespace kb::core {
 
 enum class LogLevel : std::uint8_t { Trace, Debug, Info, Warn, Error };
 
+using LogFieldValue = std::variant<bool, std::int64_t, std::uint64_t, double,
+    std::string>;
+
 struct LogField {
     std::string key;
-    std::string value;
+    LogFieldValue value;
 };
 
 struct LogRecord {
