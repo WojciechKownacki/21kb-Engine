@@ -2,7 +2,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace kb::scene {
@@ -37,6 +39,30 @@ struct UIBindingDeclaration {
     std::string sourcePath;
     UIDataValueType valueType = UIDataValueType::String;
     UIBindingDirection direction = UIBindingDirection::OneWay;
+};
+
+// Typed scalar exchanged across the UI data-binding boundary. The document
+// only names a source path; the host supplies the actual data source, so UI
+// assets never retain or serialize game/script state.
+struct UIBindingValue {
+    UIDataValueType type = UIDataValueType::String;
+    bool boolean = false;
+    double number = 0.0;
+    std::string string;
+
+    [[nodiscard]] bool operator==(const UIBindingValue& other) const noexcept {
+        return type == other.type && boolean == other.boolean && number == other.number && string == other.string;
+    }
+};
+
+// A runtime supplies this narrow boundary when it synchronizes retained UI
+// binding declarations. Read/Write are deliberately typed: a bad source type
+// is rejected instead of being implicitly converted or silently clamped.
+class UIBindingDataSource {
+public:
+    virtual ~UIBindingDataSource() = default;
+    [[nodiscard]] virtual std::optional<UIBindingValue> Read(std::string_view sourcePath, UIDataValueType type) const = 0;
+    [[nodiscard]] virtual bool Write(std::string_view sourcePath, const UIBindingValue& value) = 0;
 };
 
 // The control category and its value state are deliberately data-only. Input,
