@@ -36,6 +36,7 @@
 #include "engine/library/EngineLibraryTypeDesc.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/gameplay/GameInstance.hpp"
+#include "engine/gameplay/GameplayIdentity.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -4103,6 +4104,10 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    constexpr kb::gameplay::GameplayIdentity blue{ .team = 1U, .faction = 7U, .layers = 0x2U, .tag = kb::gameplay::GameplayTag("player") };
+    constexpr kb::gameplay::GameplayIdentity blueOther{ .team = 1U, .faction = 7U, .layers = 0x2U, .tag = kb::gameplay::GameplayTag("player") };
+    kb::tests::Require(kb::gameplay::IsFriendly(blue, blueOther) && kb::gameplay::SharesLayer(blue, blueOther) &&
+            kb::gameplay::GameplayTag("player") == kb::gameplay::GameplayTag("player"), "Gameplay identity did not provide stable unified team/layer/tag filters");
     kb::gameplay::GameInstance game;
     const kb::gameplay::GameSceneId first = game.CreateScene();
     const kb::gameplay::GameSceneId second = game.CreateScene(kb::scene::SceneMode::PrefabPrivate);
