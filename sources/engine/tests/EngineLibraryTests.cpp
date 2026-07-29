@@ -47,6 +47,7 @@
 #include "engine/network/Rpc.hpp"
 #include "engine/network/NetworkVariable.hpp"
 #include "engine/network/NetworkPrediction.hpp"
+#include "engine/network/NetworkBudget.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -4116,6 +4117,9 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    constexpr kb::network::NetworkBudget networkBudget{};
+    static_assert(kb::network::IsValidNetworkBudget(networkBudget));
+    kb::tests::Require(kb::network::AcceptsPacket(networkBudget, 0U, 1200U) && !kb::network::AcceptsPacket(networkBudget, networkBudget.maxQueuedBytes, 1U) && kb::network::TickDurationMicroseconds(networkBudget) == 33333U, "Network tick and packet budget did not apply backpressure");
     const kb::network::NetworkSnapshot predicted{ .tick = 5U, .acknowledgedInput = 3U, .position = { 0.0F, 0.0F, 0.0F } };
     const kb::network::NetworkSnapshot authoritative{ .tick = 5U, .acknowledgedInput = 3U, .position = { 4.0F, 0.0F, 0.0F } };
     const auto interpolated = kb::network::Interpolate({ .previous = predicted, .next = authoritative }, 0.5F);
