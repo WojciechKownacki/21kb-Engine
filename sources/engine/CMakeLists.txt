@@ -120,6 +120,7 @@ add_library(kb_engine STATIC
     include/engine/gameplay/Damage.hpp
     include/engine/gameplay/GameplayModules.hpp
     include/engine/gameplay/GameplayAbilities.hpp
+    include/engine/gameplay/GameplaySamples.hpp
     include/engine/scene/AudioSourceComponent.hpp
     include/engine/scene/CameraComponent.hpp
     include/engine/scene/CharacterControllerComponent.hpp
