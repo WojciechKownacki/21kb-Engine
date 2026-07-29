@@ -51,6 +51,7 @@
 #include "engine/network/NetworkSecurity.hpp"
 #include "engine/network/NetworkSimulation.hpp"
 #include "engine/network/NetworkSession.hpp"
+#include "engine/platform/PlatformCapabilities.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -4120,6 +4121,9 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    constexpr kb::platform::PlatformCapabilities platformCapabilities{ .flags = static_cast<std::uint32_t>(kb::platform::PlatformCapability::Locale) | static_cast<std::uint32_t>(kb::platform::PlatformCapability::UserDataPath) };
+    static_assert(platformCapabilities.Has(kb::platform::PlatformCapability::Locale));
+    kb::tests::Require(platformCapabilities.Has(kb::platform::PlatformCapability::UserDataPath) && !platformCapabilities.Has(kb::platform::PlatformCapability::Clipboard), "Platform capabilities did not fail closed for unavailable services");
     const kb::network::ReplicationSchema sessionSchema{ .version = 1U, .fields = { { .id = 1U, .name = "state", .type = kb::network::ReplicatedFieldType::Boolean } } };
     const kb::network::ReplicationSchema mismatchSchema{ .version = 2U, .fields = { { .id = 1U, .name = "state", .type = kb::network::ReplicatedFieldType::Boolean } } };
     kb::tests::Require(!kb::network::CanOpenNetworkSession(kb::network::kFirstReleaseNetwork) && kb::network::AreSchemasCompatible(sessionSchema, sessionSchema) && !kb::network::AreSchemasCompatible(sessionSchema, mismatchSchema), "Network session lifecycle did not fail closed for offline mode or schema mismatch");

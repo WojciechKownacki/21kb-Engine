@@ -36,6 +36,7 @@ add_library(kb_engine STATIC
     include/engine/network/NetworkSimulation.hpp
     include/engine/network/NetworkSession.hpp
     include/engine/project/ProjectDescriptor.hpp
+    include/engine/platform/PlatformCapabilities.hpp
     include/engine/project/ProjectDescriptorMeta.hpp
     include/engine/project/ProjectDescriptorReader.hpp
     include/engine/project/ProjectDescriptorWriter.hpp
