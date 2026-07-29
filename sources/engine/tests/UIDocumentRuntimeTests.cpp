@@ -279,6 +279,123 @@ end
         "A deactivated UI event subscription owner was not automatically released");
     scene.Entities().Destroy(deactivatedListener.Entity());
 
+    // LIB-178: a second retained document exercises the production bridge
+    // ScriptSharedState -> ScriptRuntimeSceneSystem -> SceneUIDocuments. The
+    // source-to-control direction remains queued, while control-to-source
+    // writes are observed after the next UI frame boundary.
+    const std::filesystem::path bindingPath = root / "Assets" / "UI" / "Bindings.kbui";
+    const kb::scene::UIDocument bindingDocument{
+        .elements = {
+            { .id = 1U, .parentId = 0U, .name = "BindingRoot", .visible = true },
+            { .id = 2U, .parentId = 1U, .name = "BoundScore", .visible = true,
+              .control = { .kind = kb::scene::UIControlKind::Text, .text = "0" } },
+            { .id = 3U, .parentId = 1U, .name = "BoundName", .visible = true,
+              .control = { .kind = kb::scene::UIControlKind::InputField, .text = "guest" } },
+            { .id = 4U, .parentId = 1U, .name = "BoundEnabled", .visible = true,
+              .control = { .kind = kb::scene::UIControlKind::Toggle, .toggleValue = false } },
+            { .id = 5U, .parentId = 1U, .name = "BoundVolume", .visible = true,
+              .control = { .kind = kb::scene::UIControlKind::Slider, .sliderValue = 0.0F, .sliderMinimum = 0.0F, .sliderMaximum = 10.0F } },
+            { .id = 6U, .parentId = 1U, .name = "BoundScroll", .visible = true,
+              .control = { .kind = kb::scene::UIControlKind::ScrollView, .scrollOffset = 0.0F } },
+            { .id = 7U, .parentId = 1U, .name = "BoundModal", .visible = true,
+              .control = { .kind = kb::scene::UIControlKind::ModalDialog, .modalOpen = false } },
+        },
+        .bindings = {
+            { .elementId = 2U, .property = "text", .sourcePath = "bind.score", .valueType = kb::scene::UIDataValueType::Number,
+              .direction = kb::scene::UIBindingDirection::OneWay },
+            { .elementId = 3U, .property = "text", .sourcePath = "bind.name", .valueType = kb::scene::UIDataValueType::String,
+              .direction = kb::scene::UIBindingDirection::TwoWay },
+            { .elementId = 4U, .property = "toggle", .sourcePath = "bind.enabled", .valueType = kb::scene::UIDataValueType::Boolean,
+              .direction = kb::scene::UIBindingDirection::TwoWay },
+            { .elementId = 5U, .property = "value", .sourcePath = "bind.volume", .valueType = kb::scene::UIDataValueType::Number,
+              .direction = kb::scene::UIBindingDirection::OneWay },
+            { .elementId = 6U, .property = "scroll", .sourcePath = "bind.scroll", .valueType = kb::scene::UIDataValueType::Number,
+              .direction = kb::scene::UIBindingDirection::TwoWay },
+            { .elementId = 7U, .property = "modal", .sourcePath = "bind.modal", .valueType = kb::scene::UIDataValueType::Boolean,
+              .direction = kb::scene::UIBindingDirection::TwoWay },
+        },
+    };
+    Require(kb::scene::UIAssetIO::SaveDocument(bindingPath, bindingDocument),
+        "Typed one-way/two-way UI binding document was rejected by the production asset writer");
+    const kb::scene::UIDocument invalidBindingDocument{
+        .elements = {
+            { .id = 1U, .parentId = 0U, .name = "Root", .visible = true },
+            { .id = 2U, .parentId = 1U, .name = "Text", .visible = true,
+              .control = { .kind = kb::scene::UIControlKind::Text } },
+        },
+        .bindings = {
+            { .elementId = 2U, .property = "toggle", .sourcePath = "bad", .valueType = kb::scene::UIDataValueType::Boolean,
+              .direction = kb::scene::UIBindingDirection::TwoWay },
+        },
+    };
+    Require(!kb::scene::UIAssetIO::SaveDocument(root / "Assets" / "UI" / "InvalidBindings.kbui", invalidBindingDocument),
+        "UI asset writer accepted a binding whose property does not match its typed control");
+    Require(scene.Assets().Discover() == 4U, "UI binding document was not discovered by the production asset registry");
+    const auto* bindingMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/UI/Bindings.kbui");
+    Require(bindingMetadata != nullptr && bindingMetadata->type == kb::scene::kUIDocumentAssetType,
+        "UI binding document was not classified as a production UIDocument asset");
+    Require(scriptHost.SharedState().Set("bind.score", kb::script::ScriptValue{ 12 }) &&
+            scriptHost.SharedState().Set("bind.name", kb::script::ScriptValue{ std::string{ "model" } }) &&
+            scriptHost.SharedState().Set("bind.enabled", kb::script::ScriptValue{ true }) &&
+            scriptHost.SharedState().Set("bind.volume", kb::script::ScriptValue{ 7.5F }) &&
+            scriptHost.SharedState().Set("bind.scroll", kb::script::ScriptValue{ 3.0F }) &&
+            scriptHost.SharedState().Set("bind.modal", kb::script::ScriptValue{ true }),
+        "UI binding setup could not seed the canonical shared state");
+    const kb::scene::SceneObject bindingOwner = scene.Entities().CreateObject({ .name = "Binding Owner" });
+    scene.Components().UIDocuments().Set(bindingOwner.Entity(), kb::scene::UIDocumentComponent{
+        .documentAssetId = bindingMetadata->id.value,
+        .enabled = true,
+    });
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(scene.UIDocuments().Control(bindingOwner.Entity(), 2U)->text == "12" &&
+            scene.UIDocuments().Control(bindingOwner.Entity(), 3U)->text == "model" &&
+            scene.UIDocuments().Control(bindingOwner.Entity(), 4U)->toggleValue &&
+            scene.UIDocuments().Control(bindingOwner.Entity(), 5U)->sliderValue == 7.5F &&
+            scene.UIDocuments().Control(bindingOwner.Entity(), 6U)->scrollOffset == 3.0F &&
+            scene.UIDocuments().Control(bindingOwner.Entity(), 7U)->modalOpen,
+        "Shared-state source values did not reach typed UI bindings through the queued runtime boundary");
+
+    kb::scene::UIControlState editedName = *scene.UIDocuments().Control(bindingOwner.Entity(), 3U);
+    kb::scene::UIControlState editedToggle = *scene.UIDocuments().Control(bindingOwner.Entity(), 4U);
+    editedName.text = "player";
+    editedToggle.toggleValue = false;
+    Require(scene.UIDocuments().QueueSetControl(bindingOwner.Entity(), 3U, editedName) &&
+            scene.UIDocuments().QueueSetControl(bindingOwner.Entity(), 4U, editedToggle),
+        "Two-way UI binding edit was rejected by the canonical runtime queue");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(scriptHost.SharedState().Get("bind.name").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == "player" &&
+            !scriptHost.SharedState().Get("bind.enabled").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Two-way UI bindings did not write typed control edits back to shared state");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(scene.UIDocuments().Control(bindingOwner.Entity(), 3U)->text == "player" &&
+            !scene.UIDocuments().Control(bindingOwner.Entity(), 4U)->toggleValue,
+        "A two-way UI binding reflected its own control write back as a feedback loop");
+
+    editedName = *scene.UIDocuments().Control(bindingOwner.Entity(), 3U);
+    editedName.text = "stale-control";
+    Require(scene.UIDocuments().QueueSetControl(bindingOwner.Entity(), 3U, editedName) &&
+            scriptHost.SharedState().Set("bind.name", kb::script::ScriptValue{ std::string{ "authoritative-model" } }),
+        "Concurrent UI/model binding conflict setup failed");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(scene.UIDocuments().Control(bindingOwner.Entity(), 3U)->text == "authoritative-model" &&
+            scriptHost.SharedState().Get("bind.name").value_or(kb::script::ScriptValue{ std::string{} }).AsString() == "authoritative-model",
+        "Two-way UI binding did not give the concurrently changed model deterministic precedence");
+    Require(scriptHost.SharedState().Set("bind.score", kb::script::ScriptValue{ 99 }),
+        "One-way UI binding source update was rejected");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(scene.UIDocuments().Control(bindingOwner.Entity(), 2U)->text == "99",
+        "One-way UI binding did not refresh after a typed source change");
+    Require(scriptHost.SharedState().Set("bind.score", kb::script::ScriptValue{ std::string{ "wrong-type" } }),
+        "Invalid-source binding setup was rejected before the typed binding boundary");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(scene.UIDocuments().Control(bindingOwner.Entity(), 2U)->text == "99",
+        "A UI binding silently coerced a mismatched shared-state type");
+    scene.Entities().Destroy(bindingOwner.Entity());
+    static_cast<void>(scene.Runtime().Update(0.0F));
+
     kb::scene::UIControlState restoredText = *scene.UIDocuments().Control(owner.Entity(), 2U);
     restoredText.text = "Score: 0";
     Require(scene.UIDocuments().QueueSetControl(owner.Entity(), 2U, restoredText),
@@ -289,7 +406,7 @@ end
     Require(kb::scene::SceneDocumentService::Save(scene, scenePath, "UIDocument"),
         "Scene document with UIDocument component could not be saved");
     kb::scene::Scene loaded;
-    Require(loaded.Assets().MountProject(root) && loaded.Assets().Discover() == 3U &&
+    Require(loaded.Assets().MountProject(root) && loaded.Assets().Discover() == 4U &&
             kb::scene::SceneDocumentService::LoadFileIntoScene(loaded, scenePath),
         "Scene document with UIDocument component could not be reloaded");
     static_cast<void>(loaded.Runtime().Update(0.0F));

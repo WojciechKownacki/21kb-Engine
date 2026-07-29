@@ -10,6 +10,7 @@
 #include "scene/SceneState.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <map>
 #include <limits>
@@ -40,6 +41,90 @@ bool ValidControl(const UIControlState& control) noexcept {
     if (control.listItems.size() > kMaxUIListItems) return false;
     for (const std::string& item : control.listItems) if (item.empty()) return false;
     return control.kind <= UIControlKind::ModalDialog;
+}
+
+bool SameValue(const std::optional<UIBindingValue>& lhs, const std::optional<UIBindingValue>& rhs) noexcept {
+    return lhs.has_value() == rhs.has_value() && (!lhs.has_value() || *lhs == *rhs);
+}
+
+std::optional<UIBindingValue> ReadBoundControl(const UIDocumentElement& element, const UIBindingDeclaration& binding) {
+    UIBindingValue value{ .type = binding.valueType };
+    const UIControlState& control = element.control;
+    if (binding.property == "text" &&
+        (control.kind == UIControlKind::Text || control.kind == UIControlKind::Button || control.kind == UIControlKind::InputField)) {
+        if (binding.valueType == UIDataValueType::String) {
+            value.string = control.text;
+            return value;
+        }
+        if (binding.valueType == UIDataValueType::Boolean) {
+            if (control.text == "true") value.boolean = true;
+            else if (control.text == "false") value.boolean = false;
+            else return std::nullopt;
+            return value;
+        }
+        const char* first = control.text.data();
+        const char* const last = first + control.text.size();
+        const auto parsed = std::from_chars(first, last, value.number, std::chars_format::general);
+        if (parsed.ec != std::errc{} || parsed.ptr != last || !std::isfinite(value.number)) return std::nullopt;
+        return value;
+    }
+    if (binding.property == "toggle" && binding.valueType == UIDataValueType::Boolean && control.kind == UIControlKind::Toggle) {
+        value.boolean = control.toggleValue;
+        return value;
+    }
+    if (binding.property == "value" && binding.valueType == UIDataValueType::Number && control.kind == UIControlKind::Slider) {
+        value.number = control.sliderValue;
+        return value;
+    }
+    if (binding.property == "scroll" && binding.valueType == UIDataValueType::Number && control.kind == UIControlKind::ScrollView) {
+        value.number = control.scrollOffset;
+        return value;
+    }
+    if (binding.property == "modal" && binding.valueType == UIDataValueType::Boolean && control.kind == UIControlKind::ModalDialog) {
+        value.boolean = control.modalOpen;
+        return value;
+    }
+    return std::nullopt;
+}
+
+bool ApplyBoundValue(const UIBindingDeclaration& binding, const UIBindingValue& value, UIControlState& control) {
+    if (value.type != binding.valueType) return false;
+    if (binding.property == "text" &&
+        (control.kind == UIControlKind::Text || control.kind == UIControlKind::Button || control.kind == UIControlKind::InputField)) {
+        if (value.type == UIDataValueType::String) {
+            control.text = value.string;
+            return true;
+        }
+        if (value.type == UIDataValueType::Boolean) {
+            control.text = value.boolean ? "true" : "false";
+            return true;
+        }
+        if (!std::isfinite(value.number)) return false;
+        char buffer[64]{};
+        const auto written = std::to_chars(std::begin(buffer), std::end(buffer), value.number, std::chars_format::general);
+        if (written.ec != std::errc{}) return false;
+        control.text.assign(buffer, written.ptr);
+        return true;
+    }
+    if (binding.property == "toggle" && value.type == UIDataValueType::Boolean && control.kind == UIControlKind::Toggle) {
+        control.toggleValue = value.boolean;
+        return true;
+    }
+    if (binding.property == "value" && value.type == UIDataValueType::Number && control.kind == UIControlKind::Slider &&
+        std::isfinite(value.number) && value.number >= control.sliderMinimum && value.number <= control.sliderMaximum) {
+        control.sliderValue = static_cast<float>(value.number);
+        return true;
+    }
+    if (binding.property == "scroll" && value.type == UIDataValueType::Number && control.kind == UIControlKind::ScrollView &&
+        std::isfinite(value.number) && value.number >= 0.0) {
+        control.scrollOffset = static_cast<float>(value.number);
+        return true;
+    }
+    if (binding.property == "modal" && value.type == UIDataValueType::Boolean && control.kind == UIControlKind::ModalDialog) {
+        control.modalOpen = value.boolean;
+        return true;
+    }
+    return false;
 }
 
 bool ValidEvent(const UIRuntimeEvent& event) noexcept {
@@ -154,6 +239,10 @@ bool Attach(Scene& scene, SceneEntity entity, std::uint64_t assetId) {
         if (element.parentId == 0U) record.root = element.id;
         if (element.id == std::numeric_limits<UIElementId>::max()) return false;
         record.nextRuntimeElementId = std::max(record.nextRuntimeElementId, element.id + 1U);
+    }
+    record.bindings.reserve(record.document->bindings.size());
+    for (const UIBindingDeclaration& binding : record.document->bindings) {
+        record.bindings.push_back(UIDocumentRuntimeRecord::BindingState{ .declaration = binding });
     }
     if (record.document->styleAssetId != 0U) {
         record.style = scene.Assets().Manager().Load<UIStyleAsset>(kb::assets::AssetId{ record.document->styleAssetId });
@@ -276,6 +365,63 @@ bool SceneUIDocumentService::QueueSetControl(Scene& scene, SceneEntity entity, U
         .control = control,
     });
     return true;
+}
+
+void SceneUIDocumentService::SynchronizeBindings(Scene& scene, UIBindingDataSource& source) {
+    SceneState& state = SceneAccess::State(scene);
+    for (auto& [id, record] : state.uiDocuments) {
+        static_cast<void>(id);
+        for (UIDocumentRuntimeRecord::BindingState& binding : record.bindings) {
+            const auto element = record.elements.find(binding.declaration.elementId);
+            if (element == record.elements.end()) continue;
+            const std::optional<UIBindingValue> controlValue = ReadBoundControl(element->second, binding.declaration);
+            if (!controlValue.has_value()) continue;
+            const std::optional<UIBindingValue> sourceValue = source.Read(binding.declaration.sourcePath, binding.declaration.valueType);
+
+            const auto queueSourceToControl = [&]() {
+                if (!sourceValue.has_value()) return false;
+                UIControlState updated = element->second.control;
+                if (!ApplyBoundValue(binding.declaration, *sourceValue, updated)) return false;
+                return *controlValue == *sourceValue || QueueSetControl(scene, record.entity, binding.declaration.elementId, updated);
+            };
+
+            if (!binding.initialized) {
+                if (sourceValue.has_value()) {
+                    if (!queueSourceToControl()) continue;
+                    binding.lastSourceValue = sourceValue;
+                    binding.lastControlValue = sourceValue;
+                } else {
+                    binding.lastSourceValue.reset();
+                    binding.lastControlValue = controlValue;
+                    if (binding.declaration.direction == UIBindingDirection::TwoWay && source.Write(binding.declaration.sourcePath, *controlValue)) {
+                        binding.lastSourceValue = controlValue;
+                    }
+                }
+                binding.initialized = true;
+                continue;
+            }
+
+            if (sourceValue.has_value() && !SameValue(sourceValue, binding.lastSourceValue)) {
+                // Model changes win if both sides changed before the same sync.
+                // Record the desired control value before its queued write reaches
+                // the next UI boundary, preventing the write from reflecting back.
+                if (!queueSourceToControl()) continue;
+                binding.lastSourceValue = sourceValue;
+                binding.lastControlValue = sourceValue;
+                continue;
+            }
+
+            if (!sourceValue.has_value()) {
+                binding.lastSourceValue.reset();
+            }
+            if (binding.declaration.direction == UIBindingDirection::TwoWay &&
+                !SameValue(controlValue, binding.lastControlValue) &&
+                source.Write(binding.declaration.sourcePath, *controlValue)) {
+                binding.lastSourceValue = controlValue;
+                binding.lastControlValue = controlValue;
+            }
+        }
+    }
 }
 
 bool SceneUIDocumentService::QueueEvent(Scene& scene, SceneEntity entity, const UIRuntimeEvent& event) {

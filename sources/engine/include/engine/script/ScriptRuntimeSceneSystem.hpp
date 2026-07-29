@@ -70,6 +70,10 @@ private:
     void ExecuteFixedStep(kb::scene::Scene& scene, float fixedDeltaSeconds);
     void ConfigureSceneFixedStep(kb::scene::Scene& scene) noexcept;
     void PrepareScene(kb::scene::Scene& scene);
+    // Binds retained UIDocument declarations to the ScriptSharedState after
+    // script phases. The UI service owns the loop-suppression state; this
+    // system is only the typed script-data adapter and scheduling boundary.
+    void SynchronizeUIBindings(kb::scene::Scene& scene);
     void ExecuteTrackedBehaviourPhase(kb::scene::Scene& scene, ScriptLifecycleEvent event, float deltaSeconds);
     // LIB-073: drains kb::scene::SceneLoadedContent's pending
     // SceneLoading/SceneLoaded/SceneActivated/SceneUnloading/SceneUnloaded
