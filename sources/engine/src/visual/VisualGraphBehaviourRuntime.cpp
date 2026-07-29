@@ -9,6 +9,7 @@ namespace {
     const VisualGraphRuntimeRegistry& artifacts,
     const VisualGraphRuntimeBindingRegistry& bindings,
     VisualGraphRuntimeExecutionContext& context,
+    VisualGraphDebugSession* debugger,
     auto execute) {
     VisualGraphBehaviourExecutionResult result{};
     if (!behaviour.enabled || behaviour.backend != kb::scene::BehaviourBackend::VisualGraph) {
@@ -28,7 +29,7 @@ namespace {
     }
 
     context.Store(0U, "self", VisualGraphRuntimeValue{entity.Id(), VisualGraphValueType::Entity});
-    const VisualGraphRuntimeExecutor executor{bindings};
+    const VisualGraphRuntimeExecutor executor{bindings, debugger};
     result.runtime = execute(executor, *artifact, context);
     result.diagnostics = result.runtime.diagnostics.empty() ? VisualGraphDiagnostics::FromErrors(VisualGraphDiagnosticStage::Runtime, result.runtime.errors)
                                                             : result.runtime.diagnostics;
@@ -43,8 +44,9 @@ VisualGraphBehaviourExecutionResult VisualGraphBehaviourRuntime::Execute(
     VisualGraphLifecycleEvent event,
     const VisualGraphRuntimeRegistry& artifacts,
     const VisualGraphRuntimeBindingRegistry& bindings,
-    VisualGraphRuntimeExecutionContext& context) {
-    return ExecuteBehaviour(behaviour, entity, artifacts, bindings, context, [event](const VisualGraphRuntimeExecutor& executor, const VisualGraphRuntimeArtifact& artifact, VisualGraphRuntimeExecutionContext& runtimeContext) {
+    VisualGraphRuntimeExecutionContext& context,
+    VisualGraphDebugSession* debugger) {
+    return ExecuteBehaviour(behaviour, entity, artifacts, bindings, context, debugger, [event](const VisualGraphRuntimeExecutor& executor, const VisualGraphRuntimeArtifact& artifact, VisualGraphRuntimeExecutionContext& runtimeContext) {
         return executor.Execute(artifact, event, runtimeContext);
     });
 }
@@ -55,8 +57,9 @@ VisualGraphBehaviourExecutionResult VisualGraphBehaviourRuntime::ExecuteCustomEv
     std::string_view eventName,
     const VisualGraphRuntimeRegistry& artifacts,
     const VisualGraphRuntimeBindingRegistry& bindings,
-    VisualGraphRuntimeExecutionContext& context) {
-    return ExecuteCustomEvent(behaviour, entity, eventName, std::span<const VisualGraphCustomEventArgument>{}, artifacts, bindings, context);
+    VisualGraphRuntimeExecutionContext& context,
+    VisualGraphDebugSession* debugger) {
+    return ExecuteCustomEvent(behaviour, entity, eventName, std::span<const VisualGraphCustomEventArgument>{}, artifacts, bindings, context, debugger);
 }
 
 VisualGraphBehaviourExecutionResult VisualGraphBehaviourRuntime::ExecuteCustomEvent(
@@ -66,8 +69,9 @@ VisualGraphBehaviourExecutionResult VisualGraphBehaviourRuntime::ExecuteCustomEv
     std::span<const VisualGraphCustomEventArgument> arguments,
     const VisualGraphRuntimeRegistry& artifacts,
     const VisualGraphRuntimeBindingRegistry& bindings,
-    VisualGraphRuntimeExecutionContext& context) {
-    return ExecuteBehaviour(behaviour, entity, artifacts, bindings, context, [eventName, arguments](const VisualGraphRuntimeExecutor& executor, const VisualGraphRuntimeArtifact& artifact, VisualGraphRuntimeExecutionContext& runtimeContext) {
+    VisualGraphRuntimeExecutionContext& context,
+    VisualGraphDebugSession* debugger) {
+    return ExecuteBehaviour(behaviour, entity, artifacts, bindings, context, debugger, [eventName, arguments](const VisualGraphRuntimeExecutor& executor, const VisualGraphRuntimeArtifact& artifact, VisualGraphRuntimeExecutionContext& runtimeContext) {
         return executor.ExecuteCustomEvent(artifact, eventName, arguments, runtimeContext);
     });
 }
