@@ -56,14 +56,14 @@ void AppendContextErrors(
 
 } // namespace
 
-VisualGraphRuntimeExecutor::VisualGraphRuntimeExecutor(const VisualGraphRuntimeBindingRegistry& bindings) noexcept
-    : bindings_(bindings) {}
+VisualGraphRuntimeExecutor::VisualGraphRuntimeExecutor(const VisualGraphRuntimeBindingRegistry& bindings, VisualGraphDebugSession* debugger) noexcept
+    : bindings_(bindings), debugger_(debugger) {}
 
 VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::Execute(
     const VisualGraphRuntimeArtifact& artifact,
     VisualGraphLifecycleEvent event,
     VisualGraphRuntimeExecutionContext& context) const {
-    return ExecuteFunction(FindLifecycleFunction(artifact, event), context);
+    return ExecuteFunction(FindLifecycleFunction(artifact, event), context, artifact.assetId);
 }
 
 VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteCustomEvent(
@@ -87,10 +87,10 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteCustomEvent
     if (!argumentResult.Succeeded()) {
         return argumentResult;
     }
-    return ExecuteFunction(function, context);
+    return ExecuteFunction(function, context, artifact.assetId);
 }
 
-VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteFunction(const VisualGraphIrFunction* function, VisualGraphRuntimeExecutionContext& context) const {
+VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteFunction(const VisualGraphIrFunction* function, VisualGraphRuntimeExecutionContext& context, kb::assets::AssetId assetId) const {
     VisualGraphRuntimeExecutionResult result{};
     if (function == nullptr) {
         context.BeginExecutionPass();
@@ -108,7 +108,7 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteFunction(co
     std::size_t stepBudget = kMaxVisualGraphExecutionSteps;
     const std::uint32_t continuation = context.TakeContinuation(function->eventNodeId);
     const std::uint32_t startNodeId = continuation != 0U ? continuation : function->entryNodeId;
-    VisualGraphRuntimeExecutionResult executed = ExecuteNode(instructions, startNodeId, context, executing, evaluatedNodes, true, stepBudget, function->eventNodeId, 0U);
+    VisualGraphRuntimeExecutionResult executed = ExecuteNode(instructions, startNodeId, context, executing, evaluatedNodes, true, stepBudget, assetId, function->eventNodeId, 0U);
     executed.executed = true;
     return executed;
 }
@@ -121,6 +121,7 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
     NodeSet& evaluatedNodes,
     bool followExecution,
     std::size_t& stepBudget,
+    kb::assets::AssetId assetId,
     std::uint32_t continuationEventNodeId,
     std::size_t depth) const {
     VisualGraphRuntimeExecutionResult result{};
@@ -158,6 +159,11 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
     // forward flow now is; not fabricated as fully solved here.
     while (true) {
         if (nodeId == 0U) {
+            return result;
+        }
+        if (debugger_ != nullptr && debugger_->ShouldPause(assetId, continuationEventNodeId, nodeId)) {
+            context.Suspend(continuationEventNodeId, nodeId);
+            result.suspended = true;
             return result;
         }
         // LIB-101: catches the control-flow-loop gap the `executing` cycle
@@ -213,7 +219,7 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
                             continue;
                         }
                     }
-                    AppendErrors(nodeResult, ExecuteNode(instructions, input.sourceNodeId, context, executing, evaluatedNodes, false, stepBudget, continuationEventNodeId, depth + 1U));
+                    AppendErrors(nodeResult, ExecuteNode(instructions, input.sourceNodeId, context, executing, evaluatedNodes, false, stepBudget, assetId, continuationEventNodeId, depth + 1U));
                     if (!nodeResult.Succeeded()) {
                         executing.erase(nodeId);
                         AppendErrors(result, std::move(nodeResult));

@@ -51,6 +51,7 @@
 #include "engine/visual/VisualGraphBehaviourInstanceRegistry.hpp"
 #include "engine/visual/VisualGraphRuntimeBindingRegistry.hpp"
 #include "engine/visual/VisualGraphRuntimeRegistry.hpp"
+#include "engine/visual/VisualGraphDebugSession.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -1022,6 +1023,25 @@ ReadScriptValue(
         const bool valid = luaLoaded && luaReloaded && invalidReplacementRetained && graphStateReleased;
         return { valid, valid ? "Lua replacement preserves the last valid program and Visual Graph state is explicitly restarted"
                               : "script hot reload contract rejected" };
+    }
+
+    if (*operation == "assert_visual_graph_debugger") {
+        constexpr kb::assets::AssetId assetId{ 229U };
+        kb::visual::VisualGraphDebugSession debugger;
+        debugger.SetBreakpoints({ { .assetId = assetId, .nodeId = 7U } });
+        const bool broke = debugger.ShouldPause(assetId, 3U, 7U) &&
+            debugger.LastPause().valid && debugger.LastPause().eventNodeId == 3U;
+        debugger.Resume();
+        const bool resumed = !debugger.ShouldPause(assetId, 3U, 7U);
+        debugger.ClearPause();
+        debugger.SetBreakpoints({});
+        debugger.RequestStepInto();
+        const bool stepped = !debugger.ShouldPause(assetId, 3U, 1U) &&
+            debugger.ShouldPause(assetId, 3U, 2U) &&
+            debugger.LastPause().reason == kb::visual::VisualGraphDebugPauseReason::Step;
+        const bool valid = broke && resumed && stepped;
+        return { valid, valid ? "Visual Graph breakpoint, resume and single-node step preserve source location"
+                              : "Visual Graph debugger contract rejected" };
     }
 
     if (*operation == "assert_user_storage") {

@@ -6,6 +6,7 @@
 #include "engine/visual/VisualGraphRuntimeBindingRegistry.hpp"
 #include "engine/visual/VisualGraphRuntimeExecutor.hpp"
 #include "engine/visual/VisualGraphRuntimeRegistry.hpp"
+#include "engine/visual/VisualGraphDebugSession.hpp"
 
 #include <cstdint>
 #include <map>
@@ -18,7 +19,8 @@ public:
     VisualGraphScriptBackend(
         const kb::visual::VisualGraphRuntimeRegistry& artifacts,
         const kb::visual::VisualGraphRuntimeBindingRegistry& bindings,
-        kb::visual::VisualGraphBehaviourInstanceRegistry& instances) noexcept;
+        kb::visual::VisualGraphBehaviourInstanceRegistry& instances,
+        kb::visual::VisualGraphDebugSession* debugger = nullptr) noexcept;
 
     [[nodiscard]] kb::scene::BehaviourBackend Backend() const noexcept override;
     [[nodiscard]] ScriptBackendExecutionResult ExecuteLifecycle(const kb::scene::BehaviourComponent& behaviour, ScriptExecutionContext& context) override;
@@ -61,6 +63,7 @@ private:
     const kb::visual::VisualGraphRuntimeRegistry& artifacts_;
     const kb::visual::VisualGraphRuntimeBindingRegistry& bindings_;
     kb::visual::VisualGraphBehaviourInstanceRegistry& instances_;
+    kb::visual::VisualGraphDebugSession* debugger_ = nullptr;
     // LIB-112: one entry per (entity, asset) behaviour instance that has
     // ANY CustomEvent node — populated on Created, erased on Destroyed.
     // std::map (not unordered_map) because this is Created/Destroyed-rate
