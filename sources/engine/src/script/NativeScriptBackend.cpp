@@ -14,7 +14,13 @@ namespace {
 // keeps that loop resilient, the same way ScriptFunctionRegistry::Call does
 // for function calls.
 template <typename Invoke>
-void InvokeNativeCallback(Invoke&& invoke, ScriptExecutionContext& context, kb::assets::AssetId assetId, ScriptBackendExecutionResult& result) {
+void InvokeNativeCallback(
+    Invoke&& invoke,
+    ScriptExecutionContext& context,
+    kb::assets::AssetId assetId,
+    std::string_view module,
+    std::string_view function,
+    ScriptBackendExecutionResult& result) {
     try {
         invoke();
         result.executed = true;
@@ -23,6 +29,8 @@ void InvokeNativeCallback(Invoke&& invoke, ScriptExecutionContext& context, kb::
             .entity = context.Self(),
             .assetId = assetId,
             .backend = context.Backend(),
+            .module = std::string{ module },
+            .function = std::string{ function },
             .lifecyclePhase = context.Lifecycle(),
             .message = std::string{ "native script callback threw an exception: " } + exception.what(),
         });
@@ -31,6 +39,8 @@ void InvokeNativeCallback(Invoke&& invoke, ScriptExecutionContext& context, kb::
             .entity = context.Self(),
             .assetId = assetId,
             .backend = context.Backend(),
+            .module = std::string{ module },
+            .function = std::string{ function },
             .lifecyclePhase = context.Lifecycle(),
             .message = "native script callback threw a non-standard exception",
         });
@@ -148,9 +158,11 @@ void NativeScriptBackend::Clear() noexcept {
 ScriptBackendExecutionResult NativeScriptBackend::ExecuteLifecycle(const kb::scene::BehaviourComponent& behaviour, ScriptExecutionContext& context) {
     ScriptBackendExecutionResult result{};
     const kb::assets::AssetId assetId{behaviour.behaviourAssetId};
+    const auto symbolIter = assetSymbols_.find(assetId.value);
+    const std::string_view module = symbolIter == assetSymbols_.end() ? "Native" : std::string_view{ symbolIter->second };
+    const std::string_view function = ToString(context.Lifecycle());
     const auto iter = lifecycleCallbacks_.find(LifecycleKey{.assetId = assetId.value, .event = context.Lifecycle()});
     if (iter == lifecycleCallbacks_.end()) {
-        const auto symbolIter = assetSymbols_.find(assetId.value);
         if (symbolIter == assetSymbols_.end()) {
             return result;
         }
@@ -158,19 +170,20 @@ ScriptBackendExecutionResult NativeScriptBackend::ExecuteLifecycle(const kb::sce
         if (symbolCallback == symbolLifecycleCallbacks_.end()) {
             return result;
         }
-        InvokeNativeCallback([&] { symbolCallback->second(context); }, context, assetId, result);
+        InvokeNativeCallback([&] { symbolCallback->second(context); }, context, assetId, module, function, result);
         return result;
     }
-    InvokeNativeCallback([&] { iter->second(context); }, context, assetId, result);
+    InvokeNativeCallback([&] { iter->second(context); }, context, assetId, module, function, result);
     return result;
 }
 
 ScriptBackendExecutionResult NativeScriptBackend::ExecuteEvent(const kb::scene::BehaviourComponent& behaviour, const ScriptEvent& event, EventId eventId, ScriptExecutionContext& context) {
     ScriptBackendExecutionResult result{};
     const kb::assets::AssetId assetId{behaviour.behaviourAssetId};
+    const auto symbolIter = assetSymbols_.find(assetId.value);
+    const std::string_view module = symbolIter == assetSymbols_.end() ? "Native" : std::string_view{ symbolIter->second };
     const auto iter = eventCallbacks_.find(EventKey{ .assetId = assetId.value, .eventId = eventId });
     if (iter == eventCallbacks_.end()) {
-        const auto symbolIter = assetSymbols_.find(assetId.value);
         if (symbolIter == assetSymbols_.end()) {
             return result;
         }
@@ -178,10 +191,10 @@ ScriptBackendExecutionResult NativeScriptBackend::ExecuteEvent(const kb::scene::
         if (symbolCallback == symbolEventCallbacks_.end()) {
             return result;
         }
-        InvokeNativeCallback([&] { symbolCallback->second(context, event); }, context, assetId, result);
+        InvokeNativeCallback([&] { symbolCallback->second(context, event); }, context, assetId, module, event.name, result);
         return result;
     }
-    InvokeNativeCallback([&] { iter->second(context, event); }, context, assetId, result);
+    InvokeNativeCallback([&] { iter->second(context, event); }, context, assetId, module, event.name, result);
     return result;
 }
 
