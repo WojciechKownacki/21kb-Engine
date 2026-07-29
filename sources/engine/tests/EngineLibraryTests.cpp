@@ -43,6 +43,7 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/AiBehaviourAssetIO.hpp"
 #include "engine/scene/AiBehaviourRuntime.hpp"
+#include "engine/scene/AiBlackboard.hpp"
 #include "engine/scene/Navigation.hpp"
 #include "engine/scene/Perception.hpp"
 #include "engine/scene/SceneTransforms.hpp"
@@ -4025,6 +4026,27 @@ void RunAiBehaviourAssetRuntimeTest() {
     kb::tests::Require(!kb::scene::ValidateAiBehaviourAsset(invalidAsset).valid, "AI asset validation accepted a leaf node with children");
 }
 
+void RunAiBlackboardTest() {
+    kb::scene::AiBlackboard board;
+    const kb::scene::AiBlackboardKey score{ .name = "score", .type = kb::save::SaveValueType::Int };
+    const kb::scene::AiBlackboardKey target{ .name = "target", .type = kb::save::SaveValueType::AssetRef };
+    kb::tests::Require(board.Set(kb::scene::AiBlackboardScope::World, 0U, score, kb::save::SaveValue::MakeInt(7)) &&
+            board.Set(kb::scene::AiBlackboardScope::Team, 2U, score, kb::save::SaveValue::MakeInt(9)) &&
+            board.Set(kb::scene::AiBlackboardScope::Entity, 42U, target, kb::save::SaveValue::MakeAssetRef(123U)) &&
+            !board.Set(kb::scene::AiBlackboardScope::Entity, 0U, score, kb::save::SaveValue::MakeInt(1)) &&
+            !board.Set(kb::scene::AiBlackboardScope::World, 0U, score, kb::save::SaveValue::MakeString("wrong")),
+        "AI blackboard did not enforce scope owner and typed-key contracts");
+    kb::tests::Require(board.Get(kb::scene::AiBlackboardScope::World, 77U, score)->intValue == 7 &&
+            board.Get(kb::scene::AiBlackboardScope::Team, 2U, score)->intValue == 9 &&
+            !board.Get(kb::scene::AiBlackboardScope::Entity, 42U, score).has_value(),
+        "AI blackboard scopes leaked values or accepted a mismatched typed read");
+    const std::vector<std::uint8_t> first = board.Serialize();
+    kb::scene::AiBlackboard restored;
+    kb::tests::Require(restored.Deserialize(first) && first == restored.Serialize() &&
+            restored.Get(kb::scene::AiBlackboardScope::Entity, 42U, target)->assetIdValue == 123U,
+        "AI blackboard serialization did not round-trip deterministically");
+}
+
 void RunEngineLibraryTests() {
     RunVersionValueTest();
     RunVersionOrderingTest();
@@ -4094,6 +4116,7 @@ void RunEngineLibraryTests() {
     RunEngineLibrarySignalTest();
     RunNavigationFoundationContractTest();
     RunAiBehaviourAssetRuntimeTest();
+    RunAiBlackboardTest();
 }
 
 } // namespace kb::tests
