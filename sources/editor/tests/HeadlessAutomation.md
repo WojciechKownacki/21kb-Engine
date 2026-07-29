@@ -63,6 +63,7 @@ scenario-local aliases.
 | `add_component` | `entity`, `component` |
 | `set_property`, `assert_property` | `entity`, `component`, `property`, `value`; assertion optionally `tolerance` |
 | `assert_entity` | `entity`; optional `exists` |
+| `assert_name` | `entity`, expected string `value`; verifies the live entity name |
 | `assert_component` | `entity`, `component`; optional `exists` |
 | `assert_ui_element` | `entity`, numeric `element`; optional `exists`, `visible`, `kind`; queries the live runtime UI tree in Play Mode |
 | `assert_parent` | `entity`, `parent` |
