@@ -1882,6 +1882,54 @@ void RunParsingTest() {
     kb::tests::Require(!kb::library::TryParseDate("2023-02-29", date), "TryParseDate must reject February 29th in a non-leap year");
 }
 
+// LIB-256: deterministic hostile-input coverage for every public parser. A
+// failed TryParse call must reject the bytes without partially changing its
+// output object; this is especially important for editor/import callers that
+// reuse a parsed value after reporting an invalid text field.
+void RunParsingFuzzTest() {
+    std::uint64_t state = 0x9e3779b97f4a7c15ULL;
+    const auto next = [&state]() {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        return state;
+    };
+    for (std::size_t iteration = 0U; iteration < 4096U; ++iteration) {
+        std::string text;
+        const std::size_t length = static_cast<std::size_t>(next() % 64U);
+        text.reserve(length);
+        for (std::size_t index = 0U; index < length; ++index) {
+            text += static_cast<char>(next() >> 56U);
+        }
+
+        std::int64_t signedValue = 0x123456789LL;
+        const std::int64_t signedSentinel = signedValue;
+        const bool signedParsed = kb::library::TryParseInt64(text, signedValue);
+        kb::tests::Require(signedParsed || signedValue == signedSentinel, "TryParseInt64 fuzz failure partially changed its output");
+
+        std::uint64_t unsignedValue = 0xabcdef1234567890ULL;
+        const std::uint64_t unsignedSentinel = unsignedValue;
+        const bool unsignedParsed = kb::library::TryParseUInt64(text, unsignedValue);
+        kb::tests::Require(unsignedParsed || unsignedValue == unsignedSentinel, "TryParseUInt64 fuzz failure partially changed its output");
+
+        double doubleValue = 1234.5;
+        const double doubleSentinel = doubleValue;
+        const bool doubleParsed = kb::library::TryParseDouble(text, doubleValue);
+        kb::tests::Require(doubleParsed || doubleValue == doubleSentinel, "TryParseDouble fuzz failure partially changed its output");
+
+        kb::math::Color color{ .r = 0.1F, .g = 0.2F, .b = 0.3F, .a = 0.4F };
+        const kb::math::Color colorSentinel = color;
+        const bool colorParsed = kb::library::TryParseColor(text, color);
+        kb::tests::Require(colorParsed || (color.r == colorSentinel.r && color.g == colorSentinel.g && color.b == colorSentinel.b && color.a == colorSentinel.a),
+            "TryParseColor fuzz failure partially changed its output");
+
+        std::chrono::year_month_day date{ std::chrono::year{ 2001 }, std::chrono::month{ 2 }, std::chrono::day{ 3 } };
+        const std::chrono::year_month_day dateSentinel = date;
+        const bool dateParsed = kb::library::TryParseDate(text, date);
+        kb::tests::Require(dateParsed || date == dateSentinel, "TryParseDate fuzz failure partially changed its output");
+
+        static_cast<void>(kb::library::TryParseGuid(text));
+    }
+}
+
 // LIB-064: IsValidUtf8 must accept every well-formed encoding length (1
 // through 4 bytes) and reject the specific malformed byte patterns real
 // UTF-8 decoders are expected to catch: overlong encodings, truncated
@@ -4617,6 +4665,7 @@ void RunEngineLibraryTests() {
     RunCollectionsDeterministicIterationTest();
     RunTextFormatBufferTest();
     RunParsingTest();
+    RunParsingFuzzTest();
     RunUtf8ValidationTest();
     RunAssetRefTest();
     RunResultTest();
