@@ -4397,6 +4397,21 @@ void RunNavigationFoundationContractTest() {
         observer, perceptionTargets, perceptionStimuli, { .test = lineOfSight }, perceptionEvents);
     kb::tests::Require(limitedPerceptionResult.emitted == 2U && limitedPerceptionResult.limitReached && perceptionEvents.Count() == 2U,
         "Perception evaluation did not enforce the configured event bound");
+    observer.filter.useGameplayIdentityFilter = true;
+    observer.filter.observerIdentity = { .team = 1U, .layers = 0x2U };
+    observer.filter.gameplayIdentityFilter = { .layerMask = 0x4U, .relation = kb::gameplay::GameplayRelation::Hostile };
+    const std::array identityTargets{
+        kb::scene::PerceptionTarget{ .entity = kb::scene::SceneEntity{ 40U }, .position = { 0.0F, 0.0F, 3.0F }, .team = 2U,
+            .identity = { .team = 2U, .layers = 0x4U }, .hasGameplayIdentity = true },
+        kb::scene::PerceptionTarget{ .entity = kb::scene::SceneEntity{ 41U }, .position = { 0.0F, 0.0F, 3.0F }, .team = 2U,
+            .identity = { .team = 2U, .layers = 0x2U }, .hasGameplayIdentity = true },
+    };
+    observer.filter.maxResults = 8U;
+    const kb::scene::PerceptionEvaluationResult identityPerceptionResult = kb::scene::EvaluatePerception(
+        observer, identityTargets, {}, { .test = lineOfSight }, perceptionEvents);
+    kb::tests::Require(identityPerceptionResult.emitted == 2U && perceptionEvents.GetAt(0U)->subject.Id() == 40U &&
+            perceptionEvents.GetAt(1U)->subject.Id() == 40U,
+        "Perception did not apply the shared gameplay identity filter before emitting AI events");
 }
 
 void RunNonAllocTransformReadTest() {
@@ -4861,7 +4876,15 @@ void RunGameInstanceLifetimeTest() {
     constexpr kb::gameplay::GameplayIdentity blue{ .team = 1U, .faction = 7U, .layers = 0x2U, .tag = kb::gameplay::GameplayTag("player") };
     constexpr kb::gameplay::GameplayIdentity blueOther{ .team = 1U, .faction = 7U, .layers = 0x2U, .tag = kb::gameplay::GameplayTag("player") };
     kb::tests::Require(kb::gameplay::IsFriendly(blue, blueOther) && kb::gameplay::SharesLayer(blue, blueOther) &&
-            kb::gameplay::GameplayTag("player") == kb::gameplay::GameplayTag("player"), "Gameplay identity did not provide stable unified team/layer/tag filters");
+        kb::gameplay::GameplayTag("player") == kb::gameplay::GameplayTag("player"), "Gameplay identity did not provide stable unified team/layer/tag filters");
+    constexpr kb::gameplay::GameplayIdentity red{ .team = 2U, .faction = 9U, .layers = 0x4U, .tag = kb::gameplay::GameplayTag("enemy") };
+    constexpr kb::gameplay::GameplayIdentityFilter hostileEnemyFilter{
+        .requiredFaction = 9U, .layerMask = 0x4U, .requiredTag = kb::gameplay::GameplayTag("enemy"), .relation = kb::gameplay::GameplayRelation::Hostile };
+    kb::tests::Require(hostileEnemyFilter.Accepts(blue, red) && !hostileEnemyFilter.Accepts(blue, blueOther) &&
+            hostileEnemyFilter.PhysicsQueryMask() == 0x4U && hostileEnemyFilter.RenderCullingMask() == 0x4U &&
+            kb::gameplay::ResolveDamage(hit, resistances, blue, red, hostileEnemyFilter).has_value() &&
+            !kb::gameplay::ResolveDamage(hit, resistances, blue, blueOther, hostileEnemyFilter).has_value(),
+        "Gameplay identity filter did not provide one shared AI/physics/render/damage policy");
     kb::gameplay::GameInstance game;
     const kb::gameplay::GameSceneId first = game.CreateScene();
     const kb::gameplay::GameSceneId second = game.CreateScene(kb::scene::SceneMode::PrefabPrivate);

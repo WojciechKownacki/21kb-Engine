@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/gameplay/GameplayIdentity.hpp"
 #include "engine/scene/SceneEntity.hpp"
 
 #include <array>
@@ -69,5 +70,17 @@ struct DamageResolution {
         .event = event,
         .healthDelta = event.type == DamageType::Healing ? magnitude : -magnitude,
     };
+}
+
+// Gameplay systems use this overload when damage must share the exact target
+// policy used by AI perception, physics queries and render culling.
+[[nodiscard]] inline std::optional<DamageResolution> ResolveDamage(
+    const DamageEvent& event,
+    const DamageResistances& resistances,
+    GameplayIdentity source,
+    GameplayIdentity target,
+    const GameplayIdentityFilter& targetFilter) noexcept {
+    if (!targetFilter.Accepts(source, target)) return std::nullopt;
+    return ResolveDamage(event, resistances);
 }
 } // namespace kb::gameplay
