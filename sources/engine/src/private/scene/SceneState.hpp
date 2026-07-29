@@ -145,6 +145,13 @@ struct UIDocumentRuntimeRecord {
     UIElementId root = 0U;
     std::map<UIElementId, UIDocumentElement> elements;
     UIElementId nextRuntimeElementId = 1U;
+    struct BindingState {
+        UIBindingDeclaration declaration;
+        std::optional<UIBindingValue> lastSourceValue;
+        std::optional<UIBindingValue> lastControlValue;
+        bool initialized = false;
+    };
+    std::vector<BindingState> bindings;
 };
 
 enum class UIRuntimeCommandKind : std::uint8_t {

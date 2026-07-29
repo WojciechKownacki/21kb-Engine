@@ -79,6 +79,10 @@ public:
     [[nodiscard]] bool QueueShow(SceneEntity entity, UIElementId element) noexcept;
     [[nodiscard]] bool QueueHide(SceneEntity entity, UIElementId element) noexcept;
     [[nodiscard]] bool QueueSetControl(SceneEntity entity, UIElementId element, const UIControlState& control);
+    // Applies retained document bindings against an explicit typed data source.
+    // Source-to-UI writes remain queued and become visible at the normal UI
+    // frame boundary; two-way writes are loop-suppressed by runtime state.
+    void SynchronizeBindings(UIBindingDataSource& source);
     // Enqueues a validated interaction emitted by the UI input layer. The
     // event is delivered in FIFO order by ScriptRuntimeSceneSystem through
     // ScriptEventBus at the next script frame boundary.
