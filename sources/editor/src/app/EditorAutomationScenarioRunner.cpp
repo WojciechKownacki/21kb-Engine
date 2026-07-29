@@ -976,6 +976,18 @@ ReadScriptValue(
         return { true, *alias };
     }
 
+    if (*operation == "assert_name") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto expected = StringMember(step, "value", error);
+        if (!alias || !expected) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(entity)) {
+            return { false, "entity alias is not alive" };
+        }
+        const std::string actual = state.context.Scene().Entities().Name(entity);
+        return { actual == *expected, "actual=" + actual + " expected=" + *expected };
+    }
+
     if (*operation == "add_component") {
         const auto alias = StringMember(step, "entity", error);
         const auto component =
