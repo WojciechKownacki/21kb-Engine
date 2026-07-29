@@ -40,6 +40,7 @@ add_library(kb_engine STATIC
     include/engine/platform/UserStorage.hpp
     include/engine/platform/SettingsTransaction.hpp
     include/engine/platform/PlatformAdapters.hpp
+    include/engine/platform/PlatformLocale.hpp
     include/engine/project/ProjectDescriptorMeta.hpp
     include/engine/project/ProjectDescriptorReader.hpp
     include/engine/project/ProjectDescriptorWriter.hpp
