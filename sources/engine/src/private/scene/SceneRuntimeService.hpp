@@ -41,7 +41,9 @@ public:
     [[nodiscard]] static bool IsPlaying(const Scene& scene) noexcept;
     static void SetPlaying(Scene& scene, bool playing) noexcept;
     [[nodiscard]] static float TimeScale(const Scene& scene) noexcept;
+    [[nodiscard]] static std::shared_ptr<const SceneRuntimeReadSnapshot> ReadSnapshot(const Scene& scene);
     static void SetTimeScale(Scene& scene, float scale) noexcept;
+    [[nodiscard]] static bool EnqueueCommand(Scene& scene, SceneRuntimeCommand command);
     static void SetEcsProfilerEnabled(Scene& scene, bool enabled) noexcept;
     [[nodiscard]] static bool EcsProfilerEnabled(const Scene& scene) noexcept;
     [[nodiscard]] static const kb::ecs::SystemSchedulerTrace& LastEcsProfilerTrace(const Scene& scene) noexcept;
