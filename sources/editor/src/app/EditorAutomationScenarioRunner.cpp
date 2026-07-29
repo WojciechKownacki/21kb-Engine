@@ -21,6 +21,9 @@
 #include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneUIDocuments.hpp"
+#include "engine/script/ScriptAgentProjectFiles.hpp"
+#include "engine/script/ScriptApiCatalog.hpp"
+#include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptSceneComponentApi.hpp"
 #include "engine/script/ScriptValue.hpp"
 #include "project/EditorProjectPaths.hpp"
@@ -505,6 +508,23 @@ ReadScriptValue(
     }
     const auto operation = StringMember(step, "op", error);
     if (!operation.has_value()) return { false, error };
+
+    if (*operation == "init_agent_project") {
+        kb::script::ScriptRuntimeHost host{ state.context.Scene() };
+        if (!host.Succeeded()) {
+            return { false, "script runtime host could not be created" };
+        }
+        const kb::script::ScriptApiCatalog catalog =
+            kb::script::ScriptApiCatalog::Build(host);
+        const kb::script::ScriptAgentProjectFilesResult provisioned =
+            kb::script::ScriptAgentProjectFiles::Write(
+                state.context.ProjectFile().parent_path(), catalog);
+        return {
+            provisioned.succeeded,
+            provisioned.succeeded
+                ? "agent project provisioned"
+                : provisioned.error };
+    }
 
     if (*operation == "assert_game_flow") {
         kb::gameplay::GameInstance game{ state.context.Project() };
