@@ -49,6 +49,7 @@
 #include "engine/network/NetworkPrediction.hpp"
 #include "engine/network/NetworkBudget.hpp"
 #include "engine/network/NetworkSecurity.hpp"
+#include "engine/network/NetworkSimulation.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -4118,6 +4119,9 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    constexpr kb::network::NetworkSimulationConfig simulation{ .latencyMilliseconds = 40U, .jitterMilliseconds = 5U, .lossPermille = 1000U, .disconnectAtTick = 10U, .seed = 8U };
+    static_assert(kb::network::IsValidNetworkSimulation(simulation));
+    kb::tests::Require(kb::network::ShouldDrop(simulation, 1U, 2U) && kb::network::ShouldDisconnect(simulation, 10U) && !kb::network::ShouldDisconnect(simulation, 9U) && kb::network::NetworkSimulationRandom(simulation, 2U, 3U) == kb::network::NetworkSimulationRandom(simulation, 2U, 3U), "Network simulation was not deterministic for loss and disconnect");
     kb::network::NetworkObjects secureObjects;
     constexpr kb::network::NetworkSecurityLimits securityLimits{};
     kb::tests::Require(secureObjects.Spawn({ .id = 31U, .owner = 41U, .role = kb::network::NetworkRole::Authority }) && kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 41U, 10U, 0U, 10U) && !kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 42U, 10U, 0U, 10U) && !kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 41U, 10U, securityLimits.maxMessagesPerTick, 10U) && !kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 41U, 10U, 0U, 11U), "Network message validation did not reject spoofing, rate, and deserialization violations");
