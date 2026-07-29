@@ -60,8 +60,9 @@ scenario-local aliases.
 | `create_prefab` | `entity`, project-relative `path` |
 | `instantiate_prefab` | result `id`, project-relative `path`, `virtual_path`; optional `parent` or complete `x`,`y`,`z`, and optional `name` |
 | `select_entity` | `entity` |
-| `add_component` | `entity`, `component` |
-| `set_property`, `assert_property` | `entity`, `component`, `property`, `value`; assertion optionally `tolerance` |
+  | `add_component` | `entity`, `component` |
+  | `set_animator_root_motion_owner`, `assert_animator_root_motion_owner` | Animator `entity`, owner: `none`, `animator`, `character_controller`, or `rigidbody`; setter uses the production Inspector command and rejects incompatible ownership |
+  | `set_property`, `assert_property` | `entity`, `component`, `property`, `value`; assertion optionally `tolerance` |
 | `assert_entity` | `entity`; optional `exists` |
 | `assert_name` | `entity`, expected string `value`; verifies the live entity name |
 | `assert_component` | `entity`, `component`; optional `exists` |
