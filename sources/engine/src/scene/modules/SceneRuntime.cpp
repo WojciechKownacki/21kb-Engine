@@ -87,6 +87,10 @@ float SceneRuntimeQueries::TimeScale() const noexcept {
     return SceneRuntimeService::TimeScale(scene_);
 }
 
+std::shared_ptr<const SceneRuntimeReadSnapshot> SceneRuntimeQueries::ReadSnapshot() const {
+    return SceneRuntimeService::ReadSnapshot(scene_);
+}
+
 SceneRuntime::SceneRuntime(Scene& scene) noexcept
     : scene_(scene) {}
 
@@ -212,6 +216,10 @@ float SceneRuntime::TimeScale() const noexcept {
 
 void SceneRuntime::SetTimeScale(float scale) noexcept {
     SceneRuntimeService::SetTimeScale(scene_, scale);
+}
+
+bool SceneRuntime::EnqueueCommand(SceneRuntimeCommand command) {
+    return SceneRuntimeService::EnqueueCommand(scene_, command);
 }
 
 } // namespace kb::scene
