@@ -143,7 +143,9 @@ void ScriptRuntimeHostSceneSystem::CollectDiagnostics() {
         // fix, instead of a bare, un-actionable message.
         push("behaviour error: " + diagnostic.message
             + " (entity #" + std::to_string(diagnostic.entity.Id())
-            + ", script asset #" + std::to_string(diagnostic.assetId.value) + ")");
+            + ", script asset #" + std::to_string(diagnostic.assetId.value) + ")"
+            + (diagnostic.stackTrace.empty() ? std::string{}
+                : "\n" + diagnostic.stackTrace));
     }
     for (const ScriptRuntimeAssetPrepareDiagnostic& diagnostic : system_.LastPrepareResult().diagnostics) {
         push("behaviour could not load/compile: " + diagnostic.message
