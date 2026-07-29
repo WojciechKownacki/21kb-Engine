@@ -152,6 +152,7 @@ struct UIDocumentRuntimeRecord {
         bool initialized = false;
     };
     std::vector<BindingState> bindings;
+    UIElementId focusedElement = 0U;
     struct VirtualListState {
         std::uint32_t viewportItems = 0U;
         std::uint32_t overscan = 0U;
@@ -238,6 +239,14 @@ public:
     // here; ScriptRuntimeSceneSystem drains this FIFO after UI commands have
     // reached their frame boundary and emits through ScriptEventBus.
     std::vector<PendingUIRuntimeEvent> pendingUIEvents;
+    // Exactly one retained document receives physical UI input. Its focus
+    // remains document-local so independent documents can expose their own
+    // accessibility state without receiving each other's interactions.
+    SceneEntity activeUIDocument{};
+    bool uiPointerWasDown = false;
+    bool uiSubmitWasDown = false;
+    bool uiNextWasDown = false;
+    bool uiPreviousWasDown = false;
     std::vector<TimelineMarkerEvent> pendingTimelineMarkerEvents;
     std::uint64_t nextTimelineInstanceId = 1U;
     kb::input::InputSubsystem inputSubsystem;

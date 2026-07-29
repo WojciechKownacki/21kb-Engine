@@ -56,6 +56,7 @@ void InputSubsystem::EvaluateWithDeviceState(const InputDeviceState& device, flo
     }
     actionStates_.clear();
     frameEvents_.clear();
+    gameplayInputConsumed_ = false;
 
     // Keyed by (key, gamepadIndex) - the SAME InputKey value on two different
     // gamepads is a different physical control, so consumption must not alias
@@ -205,31 +206,37 @@ const InputActionState* InputSubsystem::FindState(std::string_view action) const
 }
 
 bool InputSubsystem::IsActionPressed(std::string_view action) const {
+    if (gameplayInputConsumed_) return false;
     const InputActionState* state = FindState(action);
     return state != nullptr && state->combined == TriggerState::Triggered;
 }
 
 InputValue InputSubsystem::GetActionValue(std::string_view action) const {
+    if (gameplayInputConsumed_) return {};
     const InputActionState* state = FindState(action);
     return state != nullptr ? state->value : InputValue{};
 }
 
 bool InputSubsystem::WasActionStarted(std::string_view action) const {
+    if (gameplayInputConsumed_) return false;
     const InputActionState* state = FindState(action);
     return state != nullptr && state->started;
 }
 
 bool InputSubsystem::WasActionTriggered(std::string_view action) const {
+    if (gameplayInputConsumed_) return false;
     const InputActionState* state = FindState(action);
     return state != nullptr && state->triggered;
 }
 
 bool InputSubsystem::WasActionCompleted(std::string_view action) const {
+    if (gameplayInputConsumed_) return false;
     const InputActionState* state = FindState(action);
     return state != nullptr && state->completed;
 }
 
 bool InputSubsystem::WasActionReleased(std::string_view action) const {
+    if (gameplayInputConsumed_) return false;
     const InputActionState* state = FindState(action);
     return state != nullptr && (state->completed || state->canceled);
 }

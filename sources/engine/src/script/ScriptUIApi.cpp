@@ -126,6 +126,12 @@ ScriptFunctionCallResult SetVisible(const ScriptFunctionCallContext& context, st
 ScriptFunctionCallResult Show(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) { return SetVisible(context, arguments, true); }
 ScriptFunctionCallResult Hide(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) { return SetVisible(context, arguments, false); }
 
+ScriptFunctionCallResult Focus(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) return Error("UI.Focus requires an active scene");
+    return Applied(context.scene->UIDocuments().QueueFocus(Target(context, arguments), Arg(arguments, "element")->AsUInt64()),
+        "UI.Focus requires a visible, focusable UI element and event queue capacity");
+}
+
 // LIB-177: a deliberately setup-only O(n) name scan. The result is a typed
 // UIElementId handle (ScriptValueType::Hash) that callers retain and pass to
 // the mutation/event APIs; no per-frame lookup cache is hidden in the API.
@@ -313,6 +319,7 @@ bool ScriptUIApi::Register(ScriptRuntimeHost& host) {
         RegisterFunction(host, "UI.Destroy", Targeted({ { "element", ScriptValueType::Hash, true } }), applied, &Destroy) &&
         RegisterFunction(host, "UI.Show", Targeted({ { "element", ScriptValueType::Hash, true } }), applied, &Show) &&
         RegisterFunction(host, "UI.Hide", Targeted({ { "element", ScriptValueType::Hash, true } }), applied, &Hide) &&
+        RegisterFunction(host, "UI.Focus", Targeted({ { "element", ScriptValueType::Hash, true } }), applied, &Focus) &&
         RegisterFunction(host, "UI.Find", Targeted({ { "name", ScriptValueType::String, true } }),
             { { "element", ScriptValueType::Hash, true }, { "found", ScriptValueType::Bool, true } }, &Find) &&
         RegisterFunction(host, "UI.SetText", Targeted({ { "element", ScriptValueType::Hash, true }, { "text", ScriptValueType::String, true } }), applied, &SetText) &&

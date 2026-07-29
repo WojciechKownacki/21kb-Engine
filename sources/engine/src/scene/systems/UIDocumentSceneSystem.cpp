@@ -7,6 +7,7 @@ namespace kb::scene {
 
 void UIDocumentSceneSystem::OnUpdate(SceneSystemContext& context) {
     SceneUIDocumentService::SyncComponents(context.GetScene());
+    SceneUIDocumentService::RouteInput(context.GetScene());
 }
 
 } // namespace kb::scene
