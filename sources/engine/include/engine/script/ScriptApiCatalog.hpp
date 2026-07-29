@@ -70,11 +70,25 @@ struct ScriptApiCatalogLuaBindingDefinition {
     std::string_view returnPin;
 };
 
+// A generated trace from a Visual Graph node pin to the callable catalog
+// function, the live runtime binding which implements it, and the stable
+// anchor in the generated API reference. One entry exists for every pin,
+// including the execution pins added around CallNative nodes.
+struct ScriptApiCatalogSourceMapEntry {
+    std::string visualGraphNodeId;
+    std::string visualGraphPinName;
+    std::string visualGraphPinDirection;
+    std::string functionName;
+    std::string runtimeBindingSymbol;
+    std::string documentationAnchor;
+};
+
 struct ScriptApiCatalog {
     std::vector<std::string> lifecycleEvents;
     std::vector<ScriptApiCatalogFunction> functions;
     std::vector<ScriptApiCatalogComponent> components;
     std::vector<ScriptApiCatalogLuaBinding> luaBindings;
+    std::vector<ScriptApiCatalogSourceMapEntry> sourceMap;
     std::vector<ScriptApiNameEntry> projectEntries;
 
     [[nodiscard]] const ScriptApiCatalogFunction* FindFunction(std::string_view name) const noexcept;
@@ -85,5 +99,9 @@ struct ScriptApiCatalog {
 };
 
 [[nodiscard]] const char* ToString(ScriptApiCatalogLuaReturnKind kind) noexcept;
+// Produces the HTML id emitted for a catalog function's generated reference
+// section. Function names are encoded so plugin-provided names are always
+// safe to place in the documentation artifact.
+[[nodiscard]] std::string ScriptApiDocumentationAnchor(std::string_view functionName);
 
 } // namespace kb::script
