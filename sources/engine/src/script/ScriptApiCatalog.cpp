@@ -37,7 +37,7 @@ struct LuaBindingSpec {
 // wrapper's return shape must stay true to the callable sandbox. When a table, field, or return
 // path changes there, update this list so generated stubs stay true to what
 // scripts can actually call.
-constexpr std::array<LuaBindingSpec, 176> kLuaBindings{ {
+constexpr std::array<LuaBindingSpec, 181> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "Audio", "SetMixer", "Audio.SetMixer", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "Audio", "ActiveMixer", "Audio.ActiveMixer", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -201,6 +201,11 @@ constexpr std::array<LuaBindingSpec, 176> kLuaBindings{ {
     { "UI", "EmitChanged", "UI.EmitChanged", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "UI", "EmitFocus", "UI.EmitFocus", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "UI", "EmitNavigation", "UI.EmitNavigation", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "Localization", "SetCatalog", "Localization.SetCatalog", ScriptApiCatalogLuaReturnKind::SingleOutput, "set" },
+    { "Localization", "SetLanguage", "Localization.SetLanguage", ScriptApiCatalogLuaReturnKind::SingleOutput, "set" },
+    { "Localization", "Language", "Localization.Language", ScriptApiCatalogLuaReturnKind::SingleOutput, "language" },
+    { "Localization", "Translate", "Localization.Translate", ScriptApiCatalogLuaReturnKind::SingleOutput, "text" },
+    { "Localization", "FormatPlural", "Localization.FormatPlural", ScriptApiCatalogLuaReturnKind::SingleOutput, "text" },
     { "Pointer", "Position", "Pointer.Position", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Delta", "Pointer.Delta", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Pointer", "Button", "Pointer.Button", ScriptApiCatalogLuaReturnKind::Default, "" },

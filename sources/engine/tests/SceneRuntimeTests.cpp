@@ -45,6 +45,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunTimelineRuntimeTests();
     } else if (suite == "ui-document-runtime") {
         kb::tests::RunUIDocumentRuntimeTests();
+    } else if (suite == "localization") {
+        kb::tests::RunLocalizationTests();
     } else {
         return false;
     }
@@ -69,6 +71,7 @@ void RunAllSuites() {
     kb::tests::RunAnimationRuntimeTests();
     kb::tests::RunTimelineRuntimeTests();
     kb::tests::RunUIDocumentRuntimeTests();
+    kb::tests::RunLocalizationTests();
 }
 
 } // namespace
