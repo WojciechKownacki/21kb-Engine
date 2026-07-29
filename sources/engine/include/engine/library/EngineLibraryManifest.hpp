@@ -32,6 +32,12 @@ struct ApiManifest {
     kb::script::ScriptApiCatalog catalog;
 };
 
+struct ApiReferenceValidationResult {
+    std::vector<std::string> errors;
+
+    [[nodiscard]] bool Succeeded() const noexcept { return errors.empty(); }
+};
+
 [[nodiscard]] ApiManifest BuildApiManifest(const kb::script::ScriptApiCatalog& catalog);
 
 // Renders the manifest as the small JSON object kb-cli writes to
@@ -43,5 +49,8 @@ struct ApiManifest {
 // by the manifest, keeping reference generation and manifest validation on a
 // single source of truth.
 [[nodiscard]] std::string ToReferenceMarkdown(const ApiManifest& manifest);
+// Checks that a rendered reference exposes every manifest function with its
+// exact name, pin signature, authored semantics, and documentation anchor.
+[[nodiscard]] ApiReferenceValidationResult ValidateReferenceMarkdown(const ApiManifest& manifest, std::string_view markdown);
 
 } // namespace kb::library
