@@ -8,6 +8,7 @@
 #include "engine/ecs/World.hpp"
 #include "engine/input/InputLocalUser.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/localization/LocalizationCatalog.hpp"
 #include "engine/scene/BehaviourVariableOverride.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
@@ -227,6 +228,9 @@ public:
     bool suppressPrefabDirtyTracking = false;
     SceneMode mode = SceneMode::Runtime;
     kb::assets::AssetManager assets;
+    kb::assets::AssetHandle<kb::localization::LocalizationCatalog> localizationCatalog;
+    std::uint64_t localizationCatalogGeneration = 0U;
+    std::string localizationLanguage;
     std::map<std::uint64_t, AnimatorRuntimeRecord> animators;
     std::vector<AnimationEventRecord> pendingAnimationEvents;
     std::map<std::uint64_t, TimelineRuntimeRecord> timelines;

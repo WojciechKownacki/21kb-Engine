@@ -2905,6 +2905,71 @@ int LuaUIEmitChanged(lua_State* state) { return LuaUISetValue(state, "UI.EmitCha
 int LuaUIEmitFocus(lua_State* state) { return LuaUISetValue(state, "UI.EmitFocus", "focused", LuaUIValueKind::Bool); }
 int LuaUIEmitNavigation(lua_State* state) { return LuaUISetValue(state, "UI.EmitNavigation", "direction", LuaUIValueKind::String); }
 
+ScriptFunctionCallResult CallLocalization(ScriptExecutionContext& context, const char* function,
+    std::vector<ScriptFunctionArgument> arguments) {
+    return context.CallFunction(function, arguments);
+}
+
+int LuaLocalizationSetCatalog(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
+    const lua_Integer catalog = luaL_checkinteger(state, 1);
+    if (catalog < 0) return luaL_error(state, "Localization.SetCatalog requires a non-negative asset id");
+    const ScriptFunctionCallResult result = CallLocalization(*context, "Localization.SetCatalog", {
+        Arg("catalog", ScriptValue{ static_cast<std::uint64_t>(catalog), ScriptValueType::Hash }),
+    });
+    if (!result.Succeeded()) return PushCallError(state, result, "Localization catalog was rejected");
+    lua_pushboolean(state, result.Output("set").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaLocalizationSetLanguage(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
+    const ScriptFunctionCallResult result = CallLocalization(*context, "Localization.SetLanguage", {
+        Arg("language", ScriptValue{ std::string{ luaL_checkstring(state, 1) } }),
+    });
+    if (!result.Succeeded()) return PushCallError(state, result, "Localization language was rejected");
+    lua_pushboolean(state, result.Output("set").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaLocalizationLanguage(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
+    const ScriptFunctionCallResult result = context->CallFunction("Localization.Language", {});
+    if (!result.Succeeded()) return PushCallError(state, result, "Localization language query failed");
+    PucLuaValueBridge::Push(state, result.Output("language").value_or(ScriptValue{ std::string{} }));
+    return 1;
+}
+
+int LuaLocalizationTranslate(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
+    const ScriptFunctionCallResult result = CallLocalization(*context, "Localization.Translate", {
+        Arg("key", ScriptValue{ std::string{ luaL_checkstring(state, 1) } }),
+    });
+    if (!result.Succeeded()) return PushCallError(state, result, "Localization translation failed");
+    PucLuaValueBridge::Push(state, result.Output("text").value_or(ScriptValue{ std::string{} }));
+    return 1;
+}
+
+int LuaLocalizationFormatPlural(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) return luaL_error(state, "lua script execution context is not available");
+    const lua_Integer count = luaL_checkinteger(state, 2);
+    if (count < static_cast<lua_Integer>(std::numeric_limits<int>::min()) || count > static_cast<lua_Integer>(std::numeric_limits<int>::max())) {
+        return luaL_error(state, "Localization.FormatPlural count must fit an Int");
+    }
+    const ScriptFunctionCallResult result = CallLocalization(*context, "Localization.FormatPlural", {
+        Arg("key", ScriptValue{ std::string{ luaL_checkstring(state, 1) } }),
+        Arg("count", ScriptValue{ static_cast<int>(count) }),
+    });
+    if (!result.Succeeded()) return PushCallError(state, result, "Localization plural formatting failed");
+    PucLuaValueBridge::Push(state, result.Output("text").value_or(ScriptValue{ std::string{} }));
+    return 1;
+}
+
 // LIB-010: SetClosure's `function` is a runtime value (123 call sites each
 // pass a different one), so it cannot become PucLuaSafeCall's compile-time
 // template parameter without touching every call site. Instead this
@@ -3145,6 +3210,14 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "EmitFocus", &LuaUIEmitFocus, context);
     SetClosure(state, "EmitNavigation", &LuaUIEmitNavigation, context);
     lua_setfield(state, environmentIndex, "UI");
+
+    lua_createtable(state, 0, 5);
+    SetClosure(state, "SetCatalog", &LuaLocalizationSetCatalog, context);
+    SetClosure(state, "SetLanguage", &LuaLocalizationSetLanguage, context);
+    SetClosure(state, "Language", &LuaLocalizationLanguage, context);
+    SetClosure(state, "Translate", &LuaLocalizationTranslate, context);
+    SetClosure(state, "FormatPlural", &LuaLocalizationFormatPlural, context);
+    lua_setfield(state, environmentIndex, "Localization");
 
     lua_createtable(state, 0, 5);
     SetClosure(state, "Position", &LuaPointerPosition, context);
