@@ -88,6 +88,17 @@ public:
     // independent mapping-context stack and action results.
     void EvaluateWithDeviceState(const InputDeviceState& device, float deltaSeconds);
 
+    // UI routing claims gameplay actions for the remainder of the current
+    // frame after it handles a physical UI interaction.  The flag is reset by
+    // the next Evaluate call, so a UI action cannot leak into gameplay on the
+    // same frame while normal gameplay resumes without a delayed release.
+    void SetGameplayInputConsumed(bool consumed = true) noexcept {
+        gameplayInputConsumed_ = consumed;
+    }
+    [[nodiscard]] bool GameplayInputConsumed() const noexcept {
+        return gameplayInputConsumed_;
+    }
+
     // --- Queries ---
     [[nodiscard]] bool IsActionPressed(std::string_view action) const;
     [[nodiscard]] InputValue GetActionValue(std::string_view action) const;
@@ -108,6 +119,7 @@ private:
     std::unordered_map<std::string, InputActionState> actionStates_;
     std::unordered_map<std::string, TriggerState> previousCombined_;
     std::vector<InputActionEvent> frameEvents_;
+    bool gameplayInputConsumed_ = false;
 };
 
 } // namespace kb::input

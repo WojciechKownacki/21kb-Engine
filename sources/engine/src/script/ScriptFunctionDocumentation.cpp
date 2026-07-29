@@ -292,6 +292,7 @@ constexpr auto kFunctionDocumentation = std::to_array<FunctionDocumentation>({
     { "UI.Destroy", "Queues destruction of a non-root UI element and its descendants." },
     { "UI.Show", "Queues visibility of a live UI element." },
     { "UI.Hide", "Queues hiding of a live UI element." },
+    { "UI.Focus", "Moves keyboard/gamepad focus to a visible focusable UI element and emits UI.Focus hooks." },
     { "UI.Find", "Setup-only O(n) lookup of one uniquely named UI element; cache the returned handle for hot paths." },
     { "UI.SetText", "Queues text for a Text, Button, or InputField UI element." },
     { "UI.SetImage", "Queues an image asset reference for an Image UI element." },
