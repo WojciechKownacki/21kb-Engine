@@ -11,6 +11,8 @@
 #include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/gameplay/GameInstance.hpp"
+#include "engine/network/NetworkModel.hpp"
+#include "engine/network/NetworkSession.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
@@ -524,6 +526,31 @@ ReadScriptValue(
             provisioned.succeeded
                 ? "agent project provisioned"
                 : provisioned.error };
+    }
+
+    if (*operation == "assert_first_release_network_model") {
+        kb::script::ScriptRuntimeHost host{ state.context.Scene() };
+        if (!host.Succeeded()) {
+            return { false, "script runtime host could not be created" };
+        }
+        const kb::script::ScriptApiCatalog catalog =
+            kb::script::ScriptApiCatalog::Build(host);
+        const bool exposesNetworkApi = std::ranges::any_of(
+            catalog.functions,
+            [](const kb::script::ScriptApiCatalogFunction& function) {
+                return function.name.starts_with("Network.");
+            });
+        const bool offline =
+            kb::network::kFirstReleaseNetwork.model ==
+                kb::network::NetworkModel::OfflineOnly &&
+            !kb::network::kFirstReleaseNetwork.HasTransport() &&
+            !kb::network::CanOpenNetworkSession(
+                kb::network::kFirstReleaseNetwork) &&
+            !exposesNetworkApi;
+        return {
+            offline,
+            offline ? "offline-only; no transport or script API"
+                    : "first-release network contract is open" };
     }
 
     if (*operation == "assert_game_flow") {
