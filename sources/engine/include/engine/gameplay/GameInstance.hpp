@@ -4,6 +4,7 @@
 #include "engine/gameplay/GameMode.hpp"
 #include "engine/gameplay/GameState.hpp"
 #include "engine/gameplay/Players.hpp"
+#include "engine/gameplay/CameraManager.hpp"
 #include "engine/save/SaveGame.hpp"
 #include "engine/scene/SceneMode.hpp"
 
@@ -51,6 +52,7 @@ public:
     [[nodiscard]] const GameState& State() const noexcept { return state_; }
     [[nodiscard]] Players& PlayerRegistry() noexcept { return players_; }
     [[nodiscard]] const Players& PlayerRegistry() const noexcept { return players_; }
+    [[nodiscard]] CameraManager& Cameras() noexcept { return cameras_; }
 
 private:
     struct Entry { GameSceneId id = 0U; std::unique_ptr<kb::scene::Scene> scene; };
@@ -59,6 +61,7 @@ private:
     GameMode mode_;
     GameState state_;
     Players players_;
+    CameraManager cameras_;
     std::vector<Entry> scenes_;
     GameSceneId nextSceneId_ = 1U;
     GameSceneId activeScene_ = 0U;

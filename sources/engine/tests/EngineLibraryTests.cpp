@@ -4124,6 +4124,9 @@ void RunGameInstanceLifetimeTest() {
             game.PlayerRegistry().Possess(10U, kb::scene::SceneEntity{ 42U }) && game.PlayerRegistry().Find(10U)->controller.pawn.Id() == 42U &&
             game.PlayerRegistry().Leave(10U) && game.PlayerRegistry().Find(10U) == nullptr,
         "Player lifecycle did not own controller possession and release it on leave");
+    kb::tests::Require(game.Cameras().SetView(10U, { .camera = kb::scene::SceneEntity{ 100U }, .target = kb::scene::SceneEntity{ 42U }, .policy = kb::gameplay::CameraPolicy::Spectate }) &&
+            game.Cameras().FindView(10U)->policy == kb::gameplay::CameraPolicy::Spectate && game.Cameras().ClearView(10U),
+        "CameraManager did not retain explicit player possession/follow/spectate policy");
 }
 
 void RunEngineLibraryTests() {
