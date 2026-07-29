@@ -904,6 +904,22 @@ ReadScriptValue(
                   : "user storage contract rejected" };
     }
 
+    if (*operation == "assert_platform_locale") {
+        const kb::platform::PlatformLocale locale{
+            .language = "pl", .region = "PL", .utcOffsetMinutes = 120 };
+        const kb::platform::PlatformLocale invalidLocale{
+            .language = "p1", .region = "P1", .utcOffsetMinutes = 900 };
+        constexpr kb::platform::SafeDateTime date{ .unixSeconds = 1000 };
+        constexpr kb::platform::SafeDateTime maximumDate{
+            .unixSeconds = std::numeric_limits<std::int64_t>::max() };
+        const bool valid = locale.IsValid() &&
+            date.ToLocalSeconds(locale) == std::optional<std::int64_t>{ 8200 } &&
+            !invalidLocale.IsValid() && !date.ToLocalSeconds(invalidLocale).has_value() &&
+            !maximumDate.ToLocalSeconds(locale).has_value();
+        return { valid, valid ? "bounded locale, UTC offset and safe date-time"
+                              : "platform locale contract rejected" };
+    }
+
     if (*operation == "assert_runtime_settings") {
         kb::platform::SettingsTransaction settings{
             kb::platform::RuntimeSettings{} };
