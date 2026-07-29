@@ -316,6 +316,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptWorldApi.hpp
     include/engine/script/VisualGraphScriptBackend.hpp
     include/engine/library/EngineLibrary.hpp
+    include/engine/library/EngineLibraryAuthoringHints.hpp
     include/engine/library/EngineLibraryArrayView.hpp
     include/engine/library/EngineLibraryAssetRef.hpp
     include/engine/library/EngineLibraryAsyncResult.hpp
@@ -873,6 +874,7 @@ add_library(kb_engine STATIC
     src/script/ScriptWorldApi.cpp
     src/script/VisualGraphScriptBackend.cpp
     src/library/EngineLibrary.cpp
+    src/library/EngineLibraryAuthoringHints.cpp
     src/library/EngineLibraryComponentDesc.cpp
     src/library/EngineLibraryComponentInspectorDesc.cpp
     src/library/EngineLibraryDeprecation.cpp
