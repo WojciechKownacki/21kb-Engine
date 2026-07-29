@@ -1,5 +1,6 @@
 add_library(kb_engine STATIC
     include/engine/core/JsonValue.hpp
+    include/engine/core/EngineLog.hpp
     include/engine/audio/AudioClipAsset.hpp
     include/engine/audio/AudioClipAssetLoader.hpp
     include/engine/audio/AudioMixerAsset.hpp
