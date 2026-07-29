@@ -272,6 +272,9 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     case InspectorPropertyId::CameraOrthographicHeight:
     case InspectorPropertyId::CameraNearClip:
     case InspectorPropertyId::CameraFarClip:
+    case InspectorPropertyId::CameraClearColorR:
+    case InspectorPropertyId::CameraClearColorG:
+    case InspectorPropertyId::CameraClearColorB:
         return true;
     default:
         return false;
@@ -294,6 +297,15 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
         return true;
     case InspectorPropertyId::CameraFarClip:
         value = camera.farClip;
+        return true;
+    case InspectorPropertyId::CameraClearColorR:
+        value = camera.clearColor.x;
+        return true;
+    case InspectorPropertyId::CameraClearColorG:
+        value = camera.clearColor.y;
+        return true;
+    case InspectorPropertyId::CameraClearColorB:
+        value = camera.clearColor.z;
         return true;
     default:
         return false;
@@ -332,6 +344,15 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
             return false;
         }
         destination = &camera.farClip;
+        break;
+    case InspectorPropertyId::CameraClearColorR:
+        destination = &camera.clearColor.x;
+        break;
+    case InspectorPropertyId::CameraClearColorG:
+        destination = &camera.clearColor.y;
+        break;
+    case InspectorPropertyId::CameraClearColorB:
+        destination = &camera.clearColor.z;
         break;
     default:
         return false;
@@ -904,6 +925,22 @@ template <typename Integer>
                     return true;
                 });
     }
+    if (property == InspectorPropertyId::CameraCullingMask) {
+        const std::optional<std::uint32_t> value =
+            ParseInteger<std::uint32_t>(text);
+        return value.has_value() &&
+            MutateCameraComponent(
+                sceneContext,
+                entity,
+                "Edit Camera Culling Mask",
+                [value](kb::scene::CameraComponent& camera) {
+                    if (camera.cullingMask == *value) {
+                        return false;
+                    }
+                    camera.cullingMask = *value;
+                    return true;
+                });
+    }
     return false;
 }
 
@@ -934,6 +971,29 @@ template <typename Integer>
             }));
         return true;
     }
+    if (hit.kind == InspectorHitKind::TextField &&
+        hit.property == InspectorPropertyId::CameraClearMode) {
+        sceneContext.Inspector().EndTextEdit();
+        static_cast<void>(MutateCameraComponent(
+            sceneContext,
+            entity,
+            "Edit Camera Clear Mode",
+            [](kb::scene::CameraComponent& mutableCamera) {
+                switch (mutableCamera.clearMode) {
+                case kb::scene::CameraClearMode::SolidColor:
+                    mutableCamera.clearMode = kb::scene::CameraClearMode::DepthOnly;
+                    break;
+                case kb::scene::CameraClearMode::DepthOnly:
+                    mutableCamera.clearMode = kb::scene::CameraClearMode::DontClear;
+                    break;
+                case kb::scene::CameraClearMode::DontClear:
+                    mutableCamera.clearMode = kb::scene::CameraClearMode::SolidColor;
+                    break;
+                }
+                return true;
+            }));
+        return true;
+    }
     if (hit.kind == InspectorHitKind::BoolField &&
         hit.property == InspectorPropertyId::CameraPrimary) {
         sceneContext.Inspector().EndTextEdit();
@@ -957,9 +1017,13 @@ template <typename Integer>
         return true;
     }
     if (hit.kind == InspectorHitKind::TextField &&
-        hit.property == InspectorPropertyId::CameraViewportId) {
+        (hit.property == InspectorPropertyId::CameraViewportId ||
+            hit.property == InspectorPropertyId::CameraCullingMask)) {
         sceneContext.Inspector().BeginTextEdit(
-            hit.property, std::to_string(camera->viewportId));
+            hit.property,
+            hit.property == InspectorPropertyId::CameraViewportId
+                ? std::to_string(camera->viewportId)
+                : std::to_string(camera->cullingMask));
         return true;
     }
     if (hit.kind == InspectorHitKind::TextField &&
@@ -1673,7 +1737,9 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             (inspector.EditedProperty() ==
                     InspectorPropertyId::CameraViewportId ||
                 inspector.EditedProperty() ==
-                    InspectorPropertyId::CameraPriority)) {
+                    InspectorPropertyId::CameraPriority ||
+                inspector.EditedProperty() ==
+                    InspectorPropertyId::CameraCullingMask)) {
             static_cast<void>(ApplyCameraInteger(
                 sceneContext,
                 entity,
