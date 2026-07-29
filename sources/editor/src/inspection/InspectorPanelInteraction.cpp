@@ -260,6 +260,7 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     case InspectorPropertyId::LightAreaHeight:
     case InspectorPropertyId::LightContactShadowLength:
     case InspectorPropertyId::LightVolumetricScattering:
+    case InspectorPropertyId::LightColorTemperatureKelvin:
         return true;
     default:
         return false;
@@ -399,6 +400,9 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     case InspectorPropertyId::LightVolumetricScattering:
         value = light.volumetricScattering;
         return true;
+    case InspectorPropertyId::LightColorTemperatureKelvin:
+        value = light.colorTemperatureKelvin;
+        return true;
     default:
         return false;
     }
@@ -442,6 +446,12 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
         return true;
     case InspectorPropertyId::LightVolumetricScattering:
         light.volumetricScattering = std::max(0.0F, value);
+        return true;
+    case InspectorPropertyId::LightColorTemperatureKelvin:
+        if (!std::isfinite(value)) {
+            return false;
+        }
+        light.colorTemperatureKelvin = std::clamp(value, 1000.0F, 40000.0F);
         return true;
     default:
         return false;
@@ -792,6 +802,31 @@ template <typename Mutator>
     return true;
 }
 
+[[nodiscard]] bool ApplyLightLayerMask(
+    EditorSceneContext& sceneContext,
+    kb::scene::SceneEntity entity,
+    std::string_view text) {
+    text = Trim(text);
+    std::uint32_t value = 0U;
+    const std::from_chars_result parsed =
+        std::from_chars(text.data(), text.data() + text.size(), value);
+    if (text.empty() || parsed.ec != std::errc{} ||
+        parsed.ptr != text.data() + text.size()) {
+        return false;
+    }
+    return MutateLightComponent(
+        sceneContext,
+        entity,
+        "Edit Light Layer Mask",
+        [value](kb::scene::LightComponent& light) {
+            if (light.layerMask == value) {
+                return false;
+            }
+            light.layerMask = value;
+            return true;
+        });
+}
+
 [[nodiscard]] bool HandleLightClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::LightKind) {
         sceneContext.Inspector().EndTextEdit();
@@ -805,12 +840,24 @@ template <typename Mutator>
             light.castsShadow = !light.castsShadow;
         });
     }
+    if (hit.kind == InspectorHitKind::BoolField && hit.property == InspectorPropertyId::LightUseColorTemperature) {
+        sceneContext.Inspector().EndTextEdit();
+        return MutateLightComponent(sceneContext, entity, "Edit Light Color Temperature", [](kb::scene::LightComponent& light) {
+            light.useColorTemperature = !light.useColorTemperature;
+        });
+    }
     if (hit.kind == InspectorHitKind::FloatField && IsLightFloatProperty(hit.property)) {
         if (const kb::scene::LightComponent* light = sceneContext.Scene().Components().Lights().TryGet(entity); light != nullptr) {
             float value = 0.0F;
             if (ReadLightFloat(*light, hit.property, value)) {
                 sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(value));
             }
+        }
+        return true;
+    }
+    if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::LightLayerMask) {
+        if (const kb::scene::LightComponent* light = sceneContext.Scene().Components().Lights().TryGet(entity); light != nullptr) {
+            sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(light->layerMask));
         }
         return true;
     }
@@ -1744,6 +1791,15 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
                 sceneContext,
                 entity,
                 inspector.EditedProperty(),
+                inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            inspector.EditedProperty() == InspectorPropertyId::LightLayerMask) {
+            static_cast<void>(ApplyLightLayerMask(
+                sceneContext,
+                entity,
                 inspector.EditBuffer()));
             inspector.EndTextEdit();
             return true;
