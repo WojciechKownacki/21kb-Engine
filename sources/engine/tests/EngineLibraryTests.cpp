@@ -35,6 +35,7 @@
 #include "engine/library/EngineLibraryTextFormat.hpp"
 #include "engine/library/EngineLibraryTypeDesc.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/gameplay/GameInstance.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -4101,6 +4102,18 @@ void RunGoapBenchmarkDecisionTest() {
         "GOAP benchmark did not exercise the entire configured state space");
 }
 
+void RunGameInstanceLifetimeTest() {
+    kb::gameplay::GameInstance game;
+    const kb::gameplay::GameSceneId first = game.CreateScene();
+    const kb::gameplay::GameSceneId second = game.CreateScene(kb::scene::SceneMode::PrefabPrivate);
+    game.Services().progression.SetInt("campaign.chapter", 3);
+    std::int64_t chapter = 0;
+    kb::tests::Require(game.SceneCount() == 2U && game.ActiveSceneId() == first && game.SetActiveScene(second) &&
+            game.ActiveScene() != nullptr && game.DestroyScene(second) && game.ActiveSceneId() == first &&
+            game.Services().progression.GetInt("campaign.chapter", chapter) && chapter == 3,
+        "GameInstance did not retain global services while managing scene lifetime");
+}
+
 void RunEngineLibraryTests() {
     RunVersionValueTest();
     RunVersionOrderingTest();
@@ -4172,6 +4185,7 @@ void RunEngineLibraryTests() {
     RunAiBehaviourAssetRuntimeTest();
     RunAiBlackboardTest();
     RunGoapBenchmarkDecisionTest();
+    RunGameInstanceLifetimeTest();
 }
 
 } // namespace kb::tests
