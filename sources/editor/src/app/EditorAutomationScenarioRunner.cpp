@@ -601,6 +601,44 @@ ReadScriptValue(
         return { true, *category };
     }
 
+    if (*operation == "set_joint_connection" || *operation == "assert_joint_connection") {
+        const auto owner = StringMember(step, "entity", error);
+        const auto connected = StringMember(step, "connected_entity", error);
+        if (!owner || !connected) return { false, error };
+        const kb::scene::SceneEntity ownerEntity = ResolveEntity(state, *owner);
+        const kb::scene::SceneEntity connectedEntity = ResolveEntity(state, *connected);
+        if (!ownerEntity.IsValid() || !connectedEntity.IsValid()) {
+            return { false, "joint entity alias was not found" };
+        }
+        kb::scene::JointComponent* joint = state.context.Scene().Components().Joints().TryGet(ownerEntity);
+        if (joint == nullptr) {
+            return { false, "owner does not have a Joint component" };
+        }
+        if (*operation == "assert_joint_connection") {
+            const bool connectedToExpected = joint->connectedEntity == connectedEntity;
+            return { connectedToExpected, connectedToExpected ? "connected" : "joint target differs" };
+        }
+        joint->connectedEntity = connectedEntity;
+        state.context.Scene().Components().Joints().MarkModified(ownerEntity);
+        return { true, *owner + " -> " + *connected };
+    }
+
+    if (*operation == "set_inspector_scroll") {
+        const auto position = StringMember(step, "position", error);
+        if (!position) return { false, error };
+        if (*position == "top") {
+            static_cast<void>(state.context.Inspector().SetScrollOffset(0, 0));
+            return { true, *position };
+        }
+        if (*position == "bottom") {
+            static_cast<void>(state.context.Inspector().SetScrollOffset(
+                std::numeric_limits<int>::max(),
+                std::numeric_limits<int>::max()));
+            return { true, *position };
+        }
+        return { false, "unknown inspector scroll position" };
+    }
+
     if (*operation == "copy_fixture") {
         const auto source = StringMember(step, "source", error);
         const auto destination =
