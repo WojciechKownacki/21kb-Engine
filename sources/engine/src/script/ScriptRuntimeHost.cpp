@@ -76,6 +76,7 @@ struct ScriptRuntimeHostState final {
     std::unique_ptr<NativeScriptPluginManager> nativePlugins;
     ScriptRuntimeAssetPreparer assetPreparer;
     ScriptRuntimeFrameSettings frameSettings;
+    ScriptExecutionBudgetSettings executionBudgetSettings;
     NativeScriptBackend* nativeBackend = nullptr;
     LuaScriptBackend* luaBackend = nullptr;
     VisualGraphScriptBackend* visualGraphBackend = nullptr;
@@ -162,6 +163,8 @@ ScriptRuntimeHost::ScriptRuntimeHost(kb::scene::Scene& scene, ScriptRuntimeHostO
         options.visualGraphPrepareSettings.nativeBindings = &state_->visualGraphNativeBindings;
     }
     state_->frameSettings = options.frameSettings;
+    state_->executionBudgetSettings = options.executionBudgetSettings;
+    state_->luaRuntime.SetExecutionBudgetSettings(options.executionBudgetSettings);
     state_->assetPreparer.SetVisualGraphSettings(std::move(options.visualGraphPrepareSettings));
     state_->assetPreparer.SetNativeSettings(std::move(options.nativePrepareSettings));
     RegisterDefaultBackends();
@@ -403,7 +406,12 @@ void ScriptRuntimeHost::RegisterDefaultBackends() {
         AddDiagnostic("VisualGraph script function native bindings could not be registered");
     }
 
-    auto visualGraphBackend = std::make_unique<VisualGraphScriptBackend>(state_->visualGraphs, state_->visualGraphRuntimeBindings, state_->visualGraphInstances, &state_->visualGraphDebugger);
+    auto visualGraphBackend = std::make_unique<VisualGraphScriptBackend>(
+        state_->visualGraphs,
+        state_->visualGraphRuntimeBindings,
+        state_->visualGraphInstances,
+        &state_->visualGraphDebugger,
+        state_->executionBudgetSettings);
     state_->visualGraphBackend = visualGraphBackend.get();
     if (!state_->runtime.RegisterBackend(std::move(visualGraphBackend))) {
         AddDiagnostic("VisualGraph script backend could not be registered");

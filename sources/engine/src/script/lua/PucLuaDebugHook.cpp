@@ -109,6 +109,15 @@ void HookImpl(lua_State* state, lua_Debug* debug) {
     if (runtime == nullptr || debug == nullptr) {
         return;
     }
+    if (debug->event == LUA_HOOKCOUNT &&
+        !runtime->ConsumeLuaInstructions(100U)) {
+        if (runtime->ExecutionBudgetPolicy() ==
+            kb::core::BudgetExceededPolicy::Suspend && lua_isyieldable(state) != 0) {
+            static_cast<void>(lua_yieldk(state, 0, 0, nullptr));
+            return;
+        }
+        luaL_error(state, "lua execution budget exceeded");
+    }
     lua_getinfo(state, "Sl", debug);
     const std::string chunk = PucLuaErrorReporter::ChunkFromDebug(*debug);
     const PucLuaDebugSettings& settings = runtime->DebugSettings();
@@ -166,8 +175,15 @@ void Hook(lua_State* state, lua_Debug* debug) {
 } // namespace
 
 void PucLuaDebugHook::Install(lua_State* state, const PucLuaScriptRuntime& runtime) {
-    if (runtime.NeedsDebugHook()) {
-        lua_sethook(state, &Hook, LUA_MASKLINE, 0);
+    if (runtime.NeedsDebugLineHook()) {
+        const bool budgetActive = runtime.HasActiveExecutionBudget();
+        lua_sethook(
+            state,
+            &Hook,
+            budgetActive ? LUA_MASKLINE | LUA_MASKCOUNT : LUA_MASKLINE,
+            budgetActive ? 100 : 0);
+    } else if (runtime.HasActiveExecutionBudget()) {
+        lua_sethook(state, &Hook, LUA_MASKCOUNT, 100);
     }
 }
 

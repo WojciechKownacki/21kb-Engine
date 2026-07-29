@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/core/ExecutionBudget.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/visual/VisualGraphRuntimeBindingRegistry.hpp"
 #include "engine/visual/VisualGraphDebugSession.hpp"
@@ -29,7 +30,11 @@ struct VisualGraphRuntimeExecutionResult {
 
 class VisualGraphRuntimeExecutor final {
 public:
-    explicit VisualGraphRuntimeExecutor(const VisualGraphRuntimeBindingRegistry& bindings, VisualGraphDebugSession* debugger = nullptr) noexcept;
+    explicit VisualGraphRuntimeExecutor(
+        const VisualGraphRuntimeBindingRegistry& bindings,
+        VisualGraphDebugSession* debugger = nullptr,
+        std::size_t maximumSteps = 4096U,
+        kb::core::BudgetExceededPolicy budgetExceededPolicy = kb::core::BudgetExceededPolicy::Fail) noexcept;
 
     [[nodiscard]] VisualGraphRuntimeExecutionResult Execute(
         const VisualGraphRuntimeArtifact& artifact,
@@ -102,6 +107,8 @@ private:
 
     const VisualGraphRuntimeBindingRegistry& bindings_;
     VisualGraphDebugSession* debugger_ = nullptr;
+    std::size_t maximumSteps_ = 4096U;
+    kb::core::BudgetExceededPolicy budgetExceededPolicy_ = kb::core::BudgetExceededPolicy::Fail;
 };
 
 } // namespace kb::visual

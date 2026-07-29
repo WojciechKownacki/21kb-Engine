@@ -5,6 +5,7 @@
 #include "engine/script/LuaScriptBackend.hpp"
 #include "engine/script/ScriptApiNameRegistry.hpp"
 #include "engine/script/ScriptEventBus.hpp"
+#include "engine/script/ScriptExecutionBudget.hpp"
 #include "engine/script/ScriptValue.hpp"
 
 #include <cstddef>
@@ -112,12 +113,20 @@ public:
     void SetInstanceVariableOverride(kb::scene::SceneEntity entity, kb::assets::AssetId assetId, std::string_view name, ScriptValue value) override;
 
     void SetDebugSettings(PucLuaDebugSettings settings);
+    void SetExecutionBudgetSettings(ScriptExecutionBudgetSettings settings) noexcept;
+    void BeginExecutionBudget() noexcept;
+    void EndExecutionBudget() noexcept;
+    [[nodiscard]] bool ConsumeLuaInstructions(std::size_t count) noexcept;
+    [[nodiscard]] kb::core::BudgetExceededPolicy ExecutionBudgetPolicy() const noexcept;
+    [[nodiscard]] bool IsExecutionBudgetEnabled() const noexcept;
+    [[nodiscard]] bool HasActiveExecutionBudget() const noexcept;
     [[nodiscard]] const PucLuaDebugSettings& DebugSettings() const noexcept;
     void RequestBreakOnNextLine() noexcept;
     void RequestStepInto() noexcept;
     void ResumeDebugExecution() noexcept;
     void RecordDebugPause(PucLuaDebugPauseSnapshot snapshot);
     [[nodiscard]] std::optional<PucLuaDebugPauseReason> ConsumeRequestedDebugPause() noexcept;
+    [[nodiscard]] bool NeedsDebugLineHook() const noexcept;
     [[nodiscard]] bool NeedsDebugHook() const noexcept;
     [[nodiscard]] const PucLuaDebugPauseSnapshot& LastDebugPause() const noexcept;
     void ClearDebugPause() noexcept;
@@ -211,6 +220,9 @@ private:
     PucLuaDebugSettings debugSettings_;
     PucLuaDebugPauseSnapshot lastDebugPause_;
     DebugStepMode debugStepMode_ = DebugStepMode::Run;
+    ScriptExecutionBudgetSettings executionBudgetSettings_;
+    std::size_t remainingLuaInstructions_ = 0U;
+    bool executionBudgetActive_ = false;
     std::uint64_t generation_ = 1U;
 };
 
