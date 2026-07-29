@@ -23,6 +23,7 @@
 #include <span>
 #include <memory>
 #include <optional>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -568,6 +569,57 @@ void RunSceneRuntimeFrameAndPlayStateTest() {
     kb::tests::Require(scene.Runtime().FixedStepIndex() == 6U, "FixedStepIndex must accumulate the 4 capped fixed steps on top of the previous 2, never resetting like LastFixedStepCount does");
 }
 
+void RunSceneRuntimeReadSnapshotAndCommandQueueTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneRuntimeQueries workerView =
+        static_cast<const kb::scene::Scene&>(scene).Runtime();
+    const std::shared_ptr<const kb::scene::SceneRuntimeReadSnapshot> before =
+        workerView.ReadSnapshot();
+    kb::tests::Require(before != nullptr && before->revision == 0U &&
+            before->playing && kb::tests::NearlyEqual(before->timeScale, 1.0F),
+        "A fresh runtime must expose an immutable initial read snapshot");
+
+    const bool invalidAccepted = scene.Runtime().EnqueueCommand(
+        kb::scene::SceneRuntimeCommand{
+            .kind = kb::scene::SceneRuntimeCommandKind::SetTimeScale,
+            .timeScale = -1.0F,
+        });
+    kb::tests::Require(!invalidAccepted,
+        "Runtime command queue must reject an invalid time scale before enqueueing it");
+
+    bool enqueued = false;
+    std::thread worker{ [&scene, &enqueued] {
+        enqueued = scene.Runtime().EnqueueCommand(
+                kb::scene::SceneRuntimeCommand{
+                    .kind = kb::scene::SceneRuntimeCommandKind::SetPlaying,
+                    .playing = false,
+                }) && scene.Runtime().EnqueueCommand(
+                kb::scene::SceneRuntimeCommand{
+                    .kind = kb::scene::SceneRuntimeCommandKind::SetTimeScale,
+                    .timeScale = 0.25F,
+                }) && scene.Runtime().EnqueueCommand(
+                kb::scene::SceneRuntimeCommand{
+                    .kind = kb::scene::SceneRuntimeCommandKind::RequestQuit,
+                });
+    } };
+    worker.join();
+    kb::tests::Require(enqueued, "Worker failed to enqueue runtime commands");
+
+    kb::tests::Require(scene.Runtime().IsPlaying() && !scene.Runtime().ShouldQuit(),
+        "Queued commands must not mutate scene-owned state before Update drains them");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+
+    const std::shared_ptr<const kb::scene::SceneRuntimeReadSnapshot> after =
+        workerView.ReadSnapshot();
+    kb::tests::Require(after != nullptr && after->revision > before->revision &&
+            after->frameIndex == 1U && !after->playing && after->shouldQuit &&
+            kb::tests::NearlyEqual(after->timeScale, 0.25F),
+        "Runtime must publish the post-drain state as a new immutable snapshot");
+    kb::tests::Require(before->revision == 0U && before->playing &&
+            kb::tests::NearlyEqual(before->timeScale, 1.0F),
+        "A worker-held older snapshot must remain immutable after the next publish");
+}
+
 void RunSceneRuntimeFixedInterpolationTest() {
     kb::scene::Scene scene;
     scene.Runtime().SetFixedStepSettings(kb::scene::SceneRuntimeFixedStepSettings{
@@ -1028,6 +1080,7 @@ void RunSceneSystemTransformSyncTests() {
     RunFixedTickAndPhysicsShareSceneAccumulatorTest();
     RunSceneRuntimeFixedStepTest();
     RunSceneRuntimeFrameAndPlayStateTest();
+    RunSceneRuntimeReadSnapshotAndCommandQueueTest();
     RunSceneRuntimeFixedInterpolationTest();
     RunSceneRuntimeTransformHotPathReportTest();
     RunSceneRuntimeRootTransformFastPathCorrectnessTest();

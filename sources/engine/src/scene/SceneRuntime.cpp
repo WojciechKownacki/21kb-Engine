@@ -24,6 +24,34 @@ void SynchronizeTransformHierarchy(SceneState& state) {
     SceneTransformHierarchySystem{}.Update(state);
 }
 
+void PublishRuntimeSnapshot(SceneState& state) {
+    SceneRuntimeReadSnapshot snapshot;
+    snapshot.revision = ++state.runtimeSnapshotRevision;
+    snapshot.frameIndex = state.frameIndex;
+    snapshot.fixedStepIndex = state.fixedStepIndex;
+    snapshot.elapsedSeconds = state.elapsedSeconds;
+    snapshot.playing = state.isPlaying;
+    snapshot.shouldQuit = state.world.ShouldQuit();
+    snapshot.timeScale = state.timeScale;
+    state.runtimeSnapshots.Publish(std::move(snapshot));
+}
+
+void ApplyRuntimeCommands(SceneState& state) {
+    for (const SceneRuntimeCommand& command : state.runtimeCommands.Drain()) {
+        switch (command.kind) {
+        case SceneRuntimeCommandKind::SetPlaying:
+            state.isPlaying = command.playing;
+            break;
+        case SceneRuntimeCommandKind::SetTimeScale:
+            state.timeScale = command.timeScale;
+            break;
+        case SceneRuntimeCommandKind::RequestQuit:
+            state.world.RequestQuit();
+            break;
+        }
+    }
+}
+
 [[nodiscard]] std::size_t HierarchyTrackedSlotCount(const SceneState& state) noexcept {
     return std::max(state.hierarchyOrder.size(), state.denseHierarchyOrder.size());
 }
@@ -189,6 +217,19 @@ float SceneRuntimeService::TimeScale(const Scene& scene) noexcept {
     return SceneAccess::State(scene).timeScale;
 }
 
+std::shared_ptr<const SceneRuntimeReadSnapshot> SceneRuntimeService::ReadSnapshot(const Scene& scene) {
+    return SceneAccess::State(scene).runtimeSnapshots.Read();
+}
+
+bool SceneRuntimeService::EnqueueCommand(Scene& scene, SceneRuntimeCommand command) {
+    if (command.kind == SceneRuntimeCommandKind::SetTimeScale &&
+        (!std::isfinite(command.timeScale) || command.timeScale < 0.0F)) {
+        return false;
+    }
+    SceneAccess::State(scene).runtimeCommands.Enqueue(command);
+    return true;
+}
+
 void SceneRuntimeService::SetTimeScale(Scene& scene, float scale) noexcept {
     // Defensive clamp only — the script-facing Time.SetScale (ScriptTimeApi.cpp)
     // is the actual validation boundary and rejects negative input with an
@@ -286,6 +327,7 @@ std::span<const SceneEntity> SceneRuntimeService::MeshRendererRenderProxyUpdateE
 
 bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     SceneState& state = SceneAccess::State(scene);
+    ApplyRuntimeCommands(state);
     // LIB-065: counts every Update() call, unconditionally (including
     // PrefabPrivate scenes below) — "how many times has this scene been
     // stepped" is well-defined regardless of mode.
@@ -305,6 +347,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
         state.meshRendererRenderProxyUpdateEntities.clear();
         state.lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
         SynchronizeTransformHierarchy(state);
+        PublishRuntimeSnapshot(state);
         return false;
     }
 
@@ -369,6 +412,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     state.systemScheduler.Update(state.world, deltaSeconds);
     const bool progressed = state.world.Progress(deltaSeconds);
     SynchronizeTransformHierarchy(state);
+    PublishRuntimeSnapshot(state);
     return progressed;
 }
 

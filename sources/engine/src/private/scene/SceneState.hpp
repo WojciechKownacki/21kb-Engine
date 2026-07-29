@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/assets/AssetManager.hpp"
+#include "engine/core/ReadSnapshotQueue.hpp"
 #include "engine/scene/AnimationAssets.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/ecs/SystemScheduler.hpp"
@@ -307,6 +308,9 @@ public:
     // >= 0 (SetTimeScale rejects negative values rather than clamping them
     // away silently). Default 1.0 = unscaled, matching today's behavior.
     float timeScale = 1.0F;
+    std::uint64_t runtimeSnapshotRevision = 0U;
+    kb::core::ReadSnapshotPublisher<SceneRuntimeReadSnapshot> runtimeSnapshots;
+    kb::core::CommandQueue<SceneRuntimeCommand> runtimeCommands;
     // LIB-095: one scheduled Timer.Once/Timer.Repeat entry. `owner` invalid
     // (default SceneEntity{}) means "no owner" — TimerFired broadcasts to
     // every enabled behaviour (LIB-073's untargeted-broadcast convention)
