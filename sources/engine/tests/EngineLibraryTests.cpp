@@ -53,6 +53,7 @@
 #include "engine/network/NetworkSession.hpp"
 #include "engine/platform/PlatformCapabilities.hpp"
 #include "engine/platform/UserStorage.hpp"
+#include "engine/platform/SettingsTransaction.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -4122,6 +4123,7 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    kb::platform::SettingsTransaction settings{ kb::platform::RuntimeSettings{} }; settings.Pending().vibration=true; kb::tests::Require(!settings.Apply({}) && (settings.Revert(),!settings.Pending().vibration) && (settings.Pending().masterVolume=0.5F,settings.Apply({})) && settings.Current().masterVolume==0.5F, "Settings transaction did not validate capability and revert pending state");
     const std::filesystem::path storageRoot = std::filesystem::temp_directory_path() / "21kb-user-storage-test";
     std::error_code storageError;
     std::filesystem::remove_all(storageRoot, storageError);
