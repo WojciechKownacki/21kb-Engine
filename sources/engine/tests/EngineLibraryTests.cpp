@@ -63,6 +63,7 @@
 #include "engine/core/ConsoleCommands.hpp"
 #include "engine/core/CrashReport.hpp"
 #include "engine/core/ExecutionAffinity.hpp"
+#include "engine/core/ReadSnapshotQueue.hpp"
 #include "engine/core/RuntimeInspector.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -4134,6 +4135,7 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    kb::core::CommandQueue queue;queue.Enqueue({.target=2U,.kind=3U});const auto commands=queue.Drain();kb::tests::Require(commands.size()==1U&&commands.front().target==2U&&queue.Drain().empty(),"Command queue did not transfer mutation ownership");
     kb::tests::Require(kb::core::MayCall(kb::core::ExecutionAffinity::MainThread,{kb::core::ExecutionAffinity::MainThread})&&kb::core::MayCall(kb::core::ExecutionAffinity::WorkerSafe,{kb::core::ExecutionAffinity::WorkerSafe})&&!kb::core::MayCall(kb::core::ExecutionAffinity::MainThread,{kb::core::ExecutionAffinity::Forbidden}),"Execution affinity contract did not fail closed");
     const auto crash=kb::core::MakeCrashReport(1U,{7U},"failure",{"a","b","c"},2U);kb::tests::Require(crash.apiVersion==1U&&crash.assetIds==std::vector<std::uint64_t>{7U}&&crash.recentEvents==std::vector<std::string>({"b","c"}),"Crash report did not bound diagnostic events");
     kb::core::RuntimeInspector inspector; inspector.Publish({.entity=4U,.components=2U,.timers=1U}); kb::tests::Require(inspector.Snapshot().entity==4U&&inspector.Snapshot().timers==1U,"Runtime inspector did not retain read-only snapshot");
