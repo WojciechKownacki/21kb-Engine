@@ -168,6 +168,10 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
             return result;
         }
         --stepBudget;
+        if (!context.ContinueAtNode(nodeId)) {
+            result.suspended = true;
+            return result;
+        }
         if (!executing.insert(nodeId).second) {
             AddRuntimeError(result, nodeId, "visual graph runtime cycle detected at node " + std::to_string(nodeId));
             return result;
