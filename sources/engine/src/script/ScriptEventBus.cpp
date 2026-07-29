@@ -387,6 +387,21 @@ ScriptEventDeliveryResult ScriptEventBus::Broadcast(kb::scene::Scene& scene, con
     return Emit(scene, event, kb::scene::SceneEntity{}, filter);
 }
 
+void ScriptEventBus::EmitBatch(
+    kb::scene::Scene& scene,
+    std::span<const ScriptEvent> events,
+    ScriptEventDeliveryResult& result,
+    const EventRecipientFilter& filter,
+    ScriptEventBusAudience audience) {
+    for (const ScriptEvent& event : events) {
+        ScriptEventDeliveryResult current = Emit(scene, event, {}, filter, audience);
+        result.delivered += current.delivered;
+        result.errors.insert(result.errors.end(),
+            std::make_move_iterator(current.errors.begin()),
+            std::make_move_iterator(current.errors.end()));
+    }
+}
+
 bool ScriptEventBus::EmitDeferred(ScriptEvent event, kb::scene::SceneEntity target, EventRecipientFilter filter) {
     if (event.name.empty()) {
         ++telemetry_.invalidEventCount;

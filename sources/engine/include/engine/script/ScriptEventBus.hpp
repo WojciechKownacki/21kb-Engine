@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -285,6 +286,17 @@ public:
     // full stop" explicit rather than relying on a default argument.
     // `filter` (LIB-106) applies exactly as it does on Emit.
     ScriptEventDeliveryResult Broadcast(kb::scene::Scene& scene, const ScriptEvent& event, const EventRecipientFilter& filter = {});
+
+    // Batch entry point for a caller-owned contiguous event buffer. Events
+    // retain Emit's exact synchronous ordering and validation; the bus does
+    // not construct or retain an input collection. Errors are appended to
+    // the supplied result so callers may reserve its storage up front.
+    void EmitBatch(
+        kb::scene::Scene& scene,
+        std::span<const ScriptEvent> events,
+        ScriptEventDeliveryResult& result,
+        const EventRecipientFilter& filter = {},
+        ScriptEventBusAudience audience = ScriptEventBusAudience::AllSubscribers);
 
     // Queues `event` for delivery at the next DrainDeferred() call instead
     // of firing inline — DrainDeferred is called once per frame by
