@@ -2938,6 +2938,13 @@ ReadScriptValue(
                 : "crash report is incomplete or contains breadcrumb data" };
     }
 
+    if (*operation == "assert_function_execution_affinity") {
+        const bool complete = state.context.HasCompleteScriptExecutionAffinity();
+        return { complete,
+            complete ? "all live functions are explicitly main_thread"
+                     : "a live function has no audited execution affinity" };
+    }
+
     if (*operation == "assert_no_errors") {
         const auto errors =
             state.context.Scene().Runtime().DrainSceneSystemErrors();
