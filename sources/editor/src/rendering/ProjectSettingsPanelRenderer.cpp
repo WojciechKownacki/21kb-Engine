@@ -26,6 +26,8 @@ constexpr int kTooltipPaddingY = 10;
         return "Inputs";
     case ProjectSettingsCategory::Graphics:
         return "Graphics";
+    case ProjectSettingsCategory::Physics:
+        return "Physics";
     case ProjectSettingsCategory::Count:
     default:
         return "";
@@ -126,6 +128,11 @@ struct TooltipContent {
         return TooltipContent{
             "Mapping Context",
             "Selects the project-wide input mapping asset used by the runtime input system.",
+        };
+    case ProjectSettingsTooltipKind::PhysicsLayers:
+        return TooltipContent{
+            "Collision Layers Asset",
+            "Selects the project-wide Physics Layers asset used to configure collision and query interactions at runtime.",
         };
     case ProjectSettingsTooltipKind::InputEnabled:
         return TooltipContent{
@@ -294,6 +301,20 @@ void DrawGraphicsPage(
     DrawCheckbox(dc, rects.gpuDrivenCheckbox, renderBackendSettings.GpuDrivenEnabled());
 }
 
+void DrawPhysicsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorSceneContext& sceneContext) {
+    const kb::project::ProjectDescriptor& project = sceneContext.Project();
+    const bool dropdownOpen = sceneContext.ProjectSettings().IsPhysicsLayersDropdownOpen();
+
+    GdiDrawing::FillRectColor(dc, rects.sectionHeader, RGB(34, 37, 42));
+    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom }, "PHYSICS", RGB(150, 158, 168), 11, FW_SEMIBOLD);
+    DrawText(dc, RECT{ rects.mappingLabel.left, rects.mappingLabel.top, rects.mappingLabel.right - 8, rects.mappingLabel.bottom }, "Collision Layers Asset", RGB(196, 205, 214), 12);
+    const RECT fieldBox = ProjectSettingsPanelLayout::MappingFieldBox(rects);
+    DrawSelectorBox(dc, fieldBox, MappingContextDisplayName(project.physicsLayersAsset), project.physicsLayersAsset.empty(), dropdownOpen);
+    if (dropdownOpen) {
+        DrawDropdownList(dc, fieldBox, sceneContext.ProjectPhysicsLayersAssetOptions(), project.physicsLayersAsset, sceneContext.ProjectSettings().HoveredOption());
+    }
+}
+
 } // namespace
 
 void ProjectSettingsPanelRenderer::Paint(
@@ -321,6 +342,9 @@ void ProjectSettingsPanelRenderer::Paint(
         break;
     case ProjectSettingsCategory::Graphics:
         DrawGraphicsPage(dc, rects, sceneContext, renderBackendSettings);
+        break;
+    case ProjectSettingsCategory::Physics:
+        DrawPhysicsPage(dc, rects, sceneContext);
         break;
     case ProjectSettingsCategory::Count:
     default:
@@ -377,7 +401,24 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
         return Hit{};
     }
 
-    // Right pane controls only exist for the Inputs category.
+    if (category == ProjectSettingsCategory::Physics) {
+        const RECT fieldBox = ProjectSettingsPanelLayout::MappingFieldBox(rects);
+        if (sceneContext.ProjectSettings().IsPhysicsLayersDropdownOpen()) {
+            const std::vector<std::string> options = sceneContext.ProjectPhysicsLayersAssetOptions();
+            for (std::size_t index = 0; index < options.size(); ++index) {
+                const RECT row = ProjectSettingsPanelLayout::OptionRow(fieldBox, static_cast<int>(index));
+                if (PointInRect(row, x, y)) {
+                    return Hit{ .kind = ProjectSettingsHitKind::PhysicsLayersOption, .index = static_cast<int>(index), .rect = row };
+                }
+            }
+        }
+        if (PointInRect(fieldBox, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::PhysicsLayersField, .index = -1, .rect = fieldBox };
+        }
+        return Hit{};
+    }
+
+    // Remaining right pane controls belong to the Inputs category.
     if (category != ProjectSettingsCategory::Inputs) {
         return Hit{};
     }
@@ -404,7 +445,7 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
 
 ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::TooltipHitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y) {
     const Hit direct = HitTest(content, sceneContext, x, y);
-    if (direct.kind != ProjectSettingsHitKind::None && direct.kind != ProjectSettingsHitKind::CategoryItem && direct.kind != ProjectSettingsHitKind::MappingContextOption) {
+    if (direct.kind != ProjectSettingsHitKind::None && direct.kind != ProjectSettingsHitKind::CategoryItem && direct.kind != ProjectSettingsHitKind::MappingContextOption && direct.kind != ProjectSettingsHitKind::PhysicsLayersOption) {
         return direct;
     }
 
@@ -433,6 +474,10 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::TooltipHitTest(c
         if (PointInRect(rects.msaaLabel, x, y)) {
             return Hit{ .kind = ProjectSettingsHitKind::MsaaOption, .index = -1, .rect = rects.msaaLabel };
         }
+    }
+
+    if (category == ProjectSettingsCategory::Physics && (PointInRect(rects.mappingLabel, x, y) || PointInRect(rects.mappingField, x, y))) {
+        return Hit{ .kind = ProjectSettingsHitKind::PhysicsLayersField, .index = -1, .rect = rects.mappingField };
     }
 
     return direct;

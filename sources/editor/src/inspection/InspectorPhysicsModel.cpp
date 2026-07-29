@@ -1,6 +1,7 @@
 #include "inspection/InspectorPhysicsModel.hpp"
 
 #include <array>
+#include <cmath>
 #include <cstdio>
 
 namespace kb::editor {
@@ -159,6 +160,7 @@ std::vector<PhysicsField> InspectorPhysicsModel::Fields(const kb::scene::Collide
         BoolField("Is Trigger", c.trigger),
         FloatField("Friction", c.friction),
         FloatField("Restitution", c.restitution),
+        FloatField("Layer", static_cast<float>(c.layer)),
     };
 }
 
@@ -174,6 +176,7 @@ bool InspectorPhysicsModel::ReadFloat(const kb::scene::ColliderComponent& c, int
     case 8: out = c.height; return true;
     case 10: out = c.friction; return true;
     case 11: out = c.restitution; return true;
+    case 12: out = static_cast<float>(c.layer); return true;
     default: return false;
     }
 }
@@ -190,6 +193,12 @@ bool InspectorPhysicsModel::ApplyFloat(kb::scene::ColliderComponent& c, int inde
     case 8: c.height = v; return true;
     case 10: c.friction = v; return true;
     case 11: c.restitution = v; return true;
+    case 12:
+        if (!std::isfinite(v) || std::floor(v) != v || v < 0.0F || v >= 32.0F) {
+            return false;
+        }
+        c.layer = static_cast<std::uint32_t>(v);
+        return true;
     default: return false;
     }
 }

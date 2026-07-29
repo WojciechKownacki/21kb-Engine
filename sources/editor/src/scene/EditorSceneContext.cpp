@@ -7078,6 +7078,25 @@ bool EditorSceneContext::SetProjectSceneLightingPath(kb::project::ProjectSceneLi
     return saved;
 }
 
+std::vector<std::string> EditorSceneContext::ProjectPhysicsLayersAssetOptions() const {
+    std::vector<std::string> options{ std::string{} };
+    for (const kb::assets::AssetMetadata& metadata : scene_->Assets().Manager().Registry().All()) {
+        if (metadata.type == "PhysicsLayers") {
+            options.push_back(kb::assets::NormalizeAssetPath(metadata.virtualPath));
+        }
+    }
+    std::sort(options.begin() + 1, options.end());
+    return options;
+}
+
+bool EditorSceneContext::SetProjectPhysicsLayersAsset(std::string virtualPath) {
+    if (project_.physicsLayersAsset == virtualPath) {
+        return false;
+    }
+    project_.physicsLayersAsset = std::move(virtualPath);
+    return SaveProjectDescriptor();
+}
+
 bool EditorSceneContext::CloseProjectSettingsDropdowns() noexcept {
     return projectSettings_.CloseDropdowns();
 }
