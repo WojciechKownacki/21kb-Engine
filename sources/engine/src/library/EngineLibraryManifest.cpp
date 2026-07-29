@@ -11,6 +11,28 @@
 namespace kb::library {
 namespace {
 
+[[nodiscard]] std::string MarkdownPinList(const std::vector<kb::script::ScriptApiPin>& pins) {
+    if (pins.empty()) {
+        return "—";
+    }
+    std::string text;
+    for (const kb::script::ScriptApiPin& pin : pins) {
+        if (!text.empty()) {
+            text += ", ";
+        }
+        text += pin.name + ": " + kb::script::ToString(pin.type);
+        if (!pin.required) {
+            text += '?';
+        }
+    }
+    return text;
+}
+
+[[nodiscard]] std::string MarkdownFunctionRow(const kb::script::ScriptApiCatalogFunction& function) {
+    return "| `" + function.name + "` | " + function.description + " | " + MarkdownPinList(function.inputs) + " | " +
+        MarkdownPinList(function.outputs) + " |";
+}
+
 void AppendSpecialApisJson(std::string& json, const std::vector<LibraryApiSurfaceManifestEntry>& apis) {
     json += "\"specialApis\":[";
     for (std::size_t index = 0; index < apis.size(); ++index) {
@@ -71,6 +93,28 @@ std::string ToReferenceMarkdown(const ApiManifest& manifest) {
     }
     markdown += '\n';
     return markdown;
+}
+
+ApiReferenceValidationResult ValidateReferenceMarkdown(const ApiManifest& manifest, std::string_view markdown) {
+    ApiReferenceValidationResult result;
+    const std::string manifestVersion = "- Version: `" + ToString(manifest.version) + "`";
+    if (markdown.find(manifestVersion) == std::string_view::npos) {
+        result.errors.push_back("reference is missing the manifest API version");
+    }
+    const std::string manifestHash = "- Hash: `" + manifest.manifestHash + "`";
+    if (markdown.find(manifestHash) == std::string_view::npos) {
+        result.errors.push_back("reference is missing the manifest hash");
+    }
+    for (const kb::script::ScriptApiCatalogFunction& function : manifest.catalog.functions) {
+        if (markdown.find(MarkdownFunctionRow(function)) == std::string_view::npos) {
+            result.errors.push_back("reference function row diverged from manifest: " + function.name);
+        }
+        const std::string anchor = "<a id=\"" + kb::script::ScriptApiDocumentationAnchor(function.name) + "\"></a>";
+        if (markdown.find(anchor) == std::string_view::npos) {
+            result.errors.push_back("reference function anchor diverged from manifest: " + function.name);
+        }
+    }
+    return result;
 }
 
 } // namespace kb::library
