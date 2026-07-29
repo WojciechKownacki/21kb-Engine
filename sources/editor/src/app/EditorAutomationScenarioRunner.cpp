@@ -576,6 +576,43 @@ ReadScriptValue(
                       : "network object lifecycle rejected" };
     }
 
+    if (*operation == "assert_replication_schema") {
+        const kb::network::ReplicationSchema schema{
+            .version = 1U,
+            .fields = {
+                { .id = 1U, .name = "health",
+                    .type = kb::network::ReplicatedFieldType::QuantizedFloat,
+                    .minimum = 0.0F, .maximum = 100.0F,
+                    .quantizationBits = 10U },
+                { .id = 2U, .name = "alive",
+                    .type = kb::network::ReplicatedFieldType::Boolean },
+            } };
+        const kb::network::ReplicationSchema incompatible{
+            .version = 1U,
+            .fields = {
+                { .id = 1U, .name = "health",
+                    .type = kb::network::ReplicatedFieldType::UnsignedInteger },
+                { .id = 2U, .name = "alive",
+                    .type = kb::network::ReplicatedFieldType::Boolean },
+            } };
+        const std::optional<std::uint32_t> quantized =
+            kb::network::QuantizeFloat(schema.fields.front(), 50.0F);
+        const std::optional<float> restored = quantized.has_value()
+            ? kb::network::DequantizeFloat(schema.fields.front(), *quantized)
+            : std::nullopt;
+        const bool valid = kb::network::ValidateReplicationSchema(schema) &&
+            quantized.has_value() && restored.has_value() &&
+            std::abs(*restored - 50.0F) <= 0.1F &&
+            kb::network::ComputeDeltaFields(schema, { 1U, 0U }, { 1U, 1U }) ==
+                std::vector<std::uint16_t>{ 2U } &&
+            kb::network::AreSchemasCompatible(schema, schema) &&
+            !kb::network::AreSchemasCompatible(schema, incompatible);
+        return {
+            valid,
+            valid ? "versioned schema, quantization and delta"
+                  : "replication schema contract rejected" };
+    }
+
     if (*operation == "assert_game_flow") {
         kb::gameplay::GameInstance game{ state.context.Project() };
         const kb::gameplay::GameSceneId checkpointScene = game.CreateScene();
