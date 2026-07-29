@@ -29,6 +29,7 @@ add_library(kb_engine STATIC
     include/engine/network/NetworkObject.hpp
     include/engine/network/ReplicationSchema.hpp
     include/engine/network/Rpc.hpp
+    include/engine/network/NetworkVariable.hpp
     include/engine/project/ProjectDescriptor.hpp
     include/engine/project/ProjectDescriptorMeta.hpp
     include/engine/project/ProjectDescriptorReader.hpp
