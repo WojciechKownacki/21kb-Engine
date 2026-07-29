@@ -132,6 +132,8 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     switch (hit.kind) {
     case ProjectSettingsHitKind::MappingContextField:
         return ProjectSettingsTooltipKind::MappingContext;
+    case ProjectSettingsHitKind::PhysicsLayersField:
+        return ProjectSettingsTooltipKind::PhysicsLayers;
     case ProjectSettingsHitKind::EnabledCheckbox:
         return ProjectSettingsTooltipKind::InputEnabled;
     case ProjectSettingsHitKind::RenderBackendOption:
@@ -147,6 +149,7 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
     case ProjectSettingsHitKind::None:
     case ProjectSettingsHitKind::CategoryItem:
     case ProjectSettingsHitKind::MappingContextOption:
+    case ProjectSettingsHitKind::PhysicsLayersOption:
     default:
         return ProjectSettingsTooltipKind::None;
     }
@@ -174,6 +177,17 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
                              sceneContext.SetProjectInputMappingContext(options[static_cast<std::size_t>(hit.index)]);
         static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
         // Always repaint to dismiss the list, even when the selection was unchanged.
+        static_cast<void>(changed);
+        return true;
+    }
+    case ProjectSettingsHitKind::PhysicsLayersField:
+        sceneContext.ProjectSettings().TogglePhysicsLayersDropdown();
+        return true;
+    case ProjectSettingsHitKind::PhysicsLayersOption: {
+        const std::vector<std::string> options = sceneContext.ProjectPhysicsLayersAssetOptions();
+        const bool changed = hit.index >= 0 && static_cast<std::size_t>(hit.index) < options.size() &&
+                             sceneContext.SetProjectPhysicsLayersAsset(options[static_cast<std::size_t>(hit.index)]);
+        static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
         static_cast<void>(changed);
         return true;
     }
@@ -294,10 +308,10 @@ bool EditorProjectSettingsPointerController::UpdateHover(const RECT& content, in
     bool changed = false;
     const ProjectSettingsPanelRenderer::Hit hit = ProjectSettingsPanelRenderer::TooltipHitTest(content, sceneContext_, x, y);
     changed = sceneContext_.ProjectSettings().SetTooltip(TooltipKindForHit(hit), x, y) || changed;
-    if (!sceneContext_.ProjectSettings().IsMappingContextDropdownOpen()) {
+    if (!sceneContext_.ProjectSettings().IsMappingContextDropdownOpen() && !sceneContext_.ProjectSettings().IsPhysicsLayersDropdownOpen()) {
         return sceneContext_.ProjectSettings().SetHoveredOption(-1) || changed;
     }
-    const int hovered = hit.kind == ProjectSettingsHitKind::MappingContextOption ? hit.index : -1;
+    const int hovered = (hit.kind == ProjectSettingsHitKind::MappingContextOption || hit.kind == ProjectSettingsHitKind::PhysicsLayersOption) ? hit.index : -1;
     return sceneContext_.ProjectSettings().SetHoveredOption(hovered) || changed;
 }
 

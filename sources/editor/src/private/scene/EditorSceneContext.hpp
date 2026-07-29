@@ -653,9 +653,11 @@ public:
     [[nodiscard]] bool HasActiveMaterialAssetEdit() const noexcept;
 
     [[nodiscard]] std::vector<std::string> ProjectInputMappingContextOptions() const;
+    [[nodiscard]] std::vector<std::string> ProjectPhysicsLayersAssetOptions() const;
     [[nodiscard]] bool SetProjectInputMappingContext(std::string virtualPath);
     [[nodiscard]] bool ToggleProjectInputEnabled();
     [[nodiscard]] bool SetProjectSceneLightingPath(kb::project::ProjectSceneLightingPath path);
+    [[nodiscard]] bool SetProjectPhysicsLayersAsset(std::string virtualPath);
     bool CloseProjectSettingsDropdowns() noexcept;
     [[nodiscard]] bool IsProjectPluginEnabled(std::string_view pluginId) const noexcept;
     [[nodiscard]] std::string ProjectPluginBinaryPath(std::string_view pluginId) const;

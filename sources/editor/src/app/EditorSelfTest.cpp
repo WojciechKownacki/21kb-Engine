@@ -196,6 +196,7 @@ constexpr RECT kContent{ 0, 0, 900, 560 };
 struct ProjectSettingsClickPoints {
     POINT inputCategory{};    // First sidebar category ("Inputs").
     POINT graphicsCategory{}; // Second sidebar category ("Graphics").
+    POINT physicsCategory{};  // Third sidebar category ("Physics").
     POINT field{};      // Mapping Context selector box.
     POINT optionRow1{}; // First named option inside the open dropdown.
     POINT checkbox{};   // Enabled checkbox.
@@ -216,6 +217,7 @@ struct ProjectSettingsClickPoints {
     return ProjectSettingsClickPoints{
         .inputCategory = Center(ProjectSettingsPanelLayout::CategoryRow(rects.sidebar, 0)),
         .graphicsCategory = Center(ProjectSettingsPanelLayout::CategoryRow(rects.sidebar, 1)),
+        .physicsCategory = Center(ProjectSettingsPanelLayout::CategoryRow(rects.sidebar, 2)),
         .field = Center(fieldBox),
         .optionRow1 = Center(ProjectSettingsPanelLayout::OptionRow(fieldBox, 1)),
         .checkbox = Center(rects.enabledCheckbox),
@@ -397,6 +399,37 @@ void RunProjectPhysicsLayersRuntimeSuite(Report& report) {
             kb::scene::PhysicsBackend::LayerBit(context.Scene(), "EditorSolid") == 4U &&
             kb::scene::PhysicsBackend::LayerBit(context.Scene(), "EditorQuery") == 8U,
         "LIB-129 editor startup applies named layers after mount and discovery");
+
+    const ProjectSettingsClickPoints projectSettingsClick = ResolveClickPoints();
+    EditorProjectSettingsPointerController projectSettingsController{ context };
+    const std::vector<std::string> physicsOptions = context.ProjectPhysicsLayersAssetOptions();
+    report.Check(
+        physicsOptions.size() == 2U && physicsOptions[1] == kLayersVirtualPath,
+        "LIB-129 project settings lists the discovered Physics Layers asset");
+    report.Check(
+        projectSettingsController.HandlePointerDown(kContent, projectSettingsClick.physicsCategory.x, projectSettingsClick.physicsCategory.y),
+        "LIB-129 clicking Physics project-settings category is handled");
+    report.Check(
+        context.ProjectSettings().SelectedCategory() == static_cast<int>(ProjectSettingsCategory::Physics),
+        "LIB-129 Physics project-settings category becomes active");
+    report.Check(
+        HitKindAt(context, projectSettingsClick.field) == ProjectSettingsHitKind::PhysicsLayersField,
+        "LIB-129 collision layers selector hit-tests as PhysicsLayersField");
+    report.Check(
+        projectSettingsController.HandlePointerDown(kContent, projectSettingsClick.field.x, projectSettingsClick.field.y),
+        "LIB-129 opening collision layers selector is handled");
+    report.Check(
+        context.ProjectSettings().IsPhysicsLayersDropdownOpen(),
+        "LIB-129 collision layers selector opens");
+    report.Check(
+        HitKindAt(context, projectSettingsClick.optionRow1) == ProjectSettingsHitKind::PhysicsLayersOption,
+        "LIB-129 authored collision layers asset hit-tests as PhysicsLayersOption");
+    report.Check(
+        projectSettingsController.HandlePointerDown(kContent, projectSettingsClick.optionRow1.x, projectSettingsClick.optionRow1.y),
+        "LIB-129 selecting collision layers asset through project settings is handled");
+    report.Check(
+        !context.ProjectSettings().IsPhysicsLayersDropdownOpen() && context.Project().physicsLayersAsset == kLayersVirtualPath,
+        "LIB-129 Physics project setting retains the selected collision layers asset");
 
     const auto createMatrixBody = [&context](
                                       const char* name,
