@@ -56,8 +56,15 @@ void AppendContextErrors(
 
 } // namespace
 
-VisualGraphRuntimeExecutor::VisualGraphRuntimeExecutor(const VisualGraphRuntimeBindingRegistry& bindings, VisualGraphDebugSession* debugger) noexcept
-    : bindings_(bindings), debugger_(debugger) {}
+VisualGraphRuntimeExecutor::VisualGraphRuntimeExecutor(
+    const VisualGraphRuntimeBindingRegistry& bindings,
+    VisualGraphDebugSession* debugger,
+    std::size_t maximumSteps,
+    kb::core::BudgetExceededPolicy budgetExceededPolicy) noexcept
+    : bindings_(bindings)
+    , debugger_(debugger)
+    , maximumSteps_(maximumSteps)
+    , budgetExceededPolicy_(budgetExceededPolicy) {}
 
 VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::Execute(
     const VisualGraphRuntimeArtifact& artifact,
@@ -105,7 +112,7 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteFunction(co
     const InstructionMap instructions = BuildInstructionMap(*function);
     NodeSet executing;
     NodeSet evaluatedNodes;
-    std::size_t stepBudget = kMaxVisualGraphExecutionSteps;
+    std::size_t stepBudget = maximumSteps_;
     const std::uint32_t continuation = context.TakeContinuation(function->eventNodeId);
     const std::uint32_t startNodeId = continuation != 0U ? continuation : function->entryNodeId;
     VisualGraphRuntimeExecutionResult executed = ExecuteNode(instructions, startNodeId, context, executing, evaluatedNodes, true, stepBudget, assetId, function->eventNodeId, 0U);
@@ -170,6 +177,11 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
         // guard just below cannot — see this function's doc comment above
         // and in the header for the full reasoning.
         if (stepBudget == 0U) {
+            if (budgetExceededPolicy_ == kb::core::BudgetExceededPolicy::Suspend) {
+                context.Suspend(continuationEventNodeId, nodeId);
+                result.suspended = true;
+                return result;
+            }
             AddRuntimeError(result, nodeId, "visual graph runtime exceeded its maximum step budget (kMaxVisualGraphExecutionSteps=" + std::to_string(kMaxVisualGraphExecutionSteps) + ") — likely an infinite control-flow loop (a Branch/Sequence wired back to an already-executed ancestor)");
             return result;
         }

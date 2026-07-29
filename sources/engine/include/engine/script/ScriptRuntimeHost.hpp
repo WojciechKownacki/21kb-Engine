@@ -6,6 +6,7 @@
 #include "engine/script/NativeScriptBackend.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
 #include "engine/script/ScriptApiNameRegistry.hpp"
+#include "engine/script/ScriptExecutionBudget.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntime.hpp"
 #include "engine/script/ScriptRuntimeAssetPreparer.hpp"
@@ -29,6 +30,7 @@ struct ScriptRuntimeHostOptions {
     ScriptRuntimeVisualGraphPrepareSettings visualGraphPrepareSettings{};
     ScriptRuntimeNativePrepareSettings nativePrepareSettings{};
     ScriptRuntimeFrameSettings frameSettings{};
+    ScriptExecutionBudgetSettings executionBudgetSettings{};
     bool installSceneSystem = false;
 };
 

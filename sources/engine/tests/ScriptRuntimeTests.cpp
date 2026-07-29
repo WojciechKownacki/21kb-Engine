@@ -703,6 +703,7 @@ void RunLuaScriptRuntimeDispatchTest() {
 
 void RunPucLuaScriptRuntimeDispatchTest() {
     kb::script::PucLuaScriptRuntime luaRuntime;
+    kb::tests::Require(!luaRuntime.IsExecutionBudgetEnabled(), "Default PUC Lua execution budget must remain disabled");
     constexpr kb::assets::AssetId kLuaAsset{3101U};
     const kb::script::PucLuaLoadResult loaded = luaRuntime.LoadScript(kLuaAsset, R"(
 function Tick(self, dt)
@@ -882,6 +883,76 @@ void RunPucLuaCatalogModuleBindingTest() {
         "Lua catalog module binding backend registration failed");
     const kb::script::ScriptRuntimeExecutionResult tick = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
     kb::tests::Require(tick.Succeeded(), "Lua runtime is missing a catalog-generated module binding");
+}
+
+void RunPucLuaExecutionBudgetPolicyTest() {
+    constexpr kb::assets::AssetId kLuaAsset{ 3200U };
+    const char* source = R"(
+function Tick(self, dt)
+    local total = 0
+    for index = 1, 10000 do
+        total = total + index
+    end
+    SetShared("lua.executionBudget.finished", total)
+end
+)";
+
+    kb::script::PucLuaScriptRuntime suspendedRuntime;
+    suspendedRuntime.SetExecutionBudgetSettings({
+        .luaInstructionsPerBehaviour = 100U,
+        .visualGraphStepsPerBehaviour = 1024U,
+        .policy = kb::core::BudgetExceededPolicy::Suspend,
+    });
+    kb::tests::Require(suspendedRuntime.LoadScript(kLuaAsset, source, "LuaExecutionBudget.lua").succeeded,
+        "Lua Suspend execution budget test script did not load");
+    kb::scene::Scene suspendedScene;
+    const kb::scene::SceneObject suspendedObject = suspendedScene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Budget Suspend" });
+    suspendedScene.Components().Behaviours().Set(suspendedObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    kb::script::ScriptRuntime suspendedDispatcher;
+    kb::tests::Require(suspendedDispatcher.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(suspendedRuntime)),
+        "Lua Suspend execution budget backend registration failed");
+    const kb::script::ScriptRuntimeExecutionResult suspended =
+        suspendedDispatcher.ExecuteLifecycle(suspendedScene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(suspended.Succeeded() && suspendedRuntime.SuspendedCoroutineCount() == 1U &&
+            !suspendedDispatcher.SharedState().Get("lua.executionBudget.finished").has_value(),
+        "Lua Suspend execution budget policy did not yield the live behaviour safely");
+    suspendedRuntime.SetExecutionBudgetSettings({
+        .luaInstructionsPerBehaviour = 100U,
+        .visualGraphStepsPerBehaviour = 1024U,
+        .policy = kb::core::BudgetExceededPolicy::Fail,
+    });
+    const kb::script::ScriptRuntimeExecutionResult released =
+        suspendedDispatcher.ExecuteLifecycle(suspendedScene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(!released.Succeeded() && suspendedRuntime.SuspendedCoroutineCount() == 0U,
+        "Lua execution budget failure did not release the suspended behaviour coroutine");
+
+    kb::script::PucLuaScriptRuntime failingRuntime;
+    failingRuntime.SetExecutionBudgetSettings({
+        .luaInstructionsPerBehaviour = 100U,
+        .visualGraphStepsPerBehaviour = 1024U,
+        .policy = kb::core::BudgetExceededPolicy::Fail,
+    });
+    kb::tests::Require(failingRuntime.LoadScript(kLuaAsset, source, "LuaExecutionBudgetFail.lua").succeeded,
+        "Lua Fail execution budget test script did not load");
+    kb::scene::Scene failingScene;
+    const kb::scene::SceneObject failingObject = failingScene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Budget Fail" });
+    failingScene.Components().Behaviours().Set(failingObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    kb::script::ScriptRuntime failingDispatcher;
+    kb::tests::Require(failingDispatcher.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(failingRuntime)),
+        "Lua Fail execution budget backend registration failed");
+    const kb::script::ScriptRuntimeExecutionResult failed =
+        failingDispatcher.ExecuteLifecycle(failingScene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(!failed.Succeeded() && failed.diagnostics.size() == 1U &&
+            failed.diagnostics.front().message.find("execution budget exceeded") != std::string::npos,
+        "Lua Fail execution budget policy did not produce an explicit diagnostic");
 }
 
 void RunPucLuaScriptRuntimeModulesReloadAndDiagnosticsTest() {
@@ -14774,6 +14845,7 @@ void RunScriptRuntimeTests() {
     RunPucLuaScriptRuntimeDispatchTest();
     RunPucLuaCatalogModuleBindingTest();
     RunPucLuaCoroutineGeneratorTest();
+    RunPucLuaExecutionBudgetPolicyTest();
     RunPucLuaDestroyedYieldCleanupTest();
     RunPucLuaScriptRuntimeModulesReloadAndDiagnosticsTest();
     RunLuaExposedVariablesRuntimeTest();
