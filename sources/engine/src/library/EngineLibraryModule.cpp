@@ -12,6 +12,7 @@
 #include "engine/script/ScriptAudioApi.hpp"
 #include "engine/script/ScriptSaveApi.hpp"
 #include "engine/script/ScriptInputApi.hpp"
+#include "engine/script/ScriptLocalizationApi.hpp"
 #include "engine/script/ScriptMaterialInstanceApi.hpp"
 #include "engine/script/ScriptMathApi.hpp"
 #include "engine/script/ScriptMeshRendererApi.hpp"
@@ -209,6 +210,11 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .name = "UI",
             .ownerRuntime = "kb::scene::SceneUIDocuments",
             .Register = &kb::script::ScriptUIApi::Register,
+        },
+        LibraryModuleDesc{
+            .name = "Localization",
+            .ownerRuntime = "kb::scene::SceneLocalization",
+            .Register = &kb::script::ScriptLocalizationApi::Register,
         },
         // LIB-144: Renderer.IsVisible/GetBounds/TestFrustum/HasFrame - reads the CPU-side
         // per-entity visibility/bounds feedback frame (kb::scene::SceneRenderFeedback) the

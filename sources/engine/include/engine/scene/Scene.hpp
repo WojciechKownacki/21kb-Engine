@@ -51,6 +51,7 @@ class SceneHierarchyQueries;
 class SceneHistory;
 class SceneLoadedContent;
 class SceneLoadedContentQueries;
+class SceneLocalization;
 class SceneMaterialInstanceQueries;
 class SceneMaterialInstances;
 class SceneParticleSystemQueries;
@@ -112,6 +113,8 @@ public:
     [[nodiscard]] SceneRuntimeQueries Runtime() const noexcept;
     [[nodiscard]] SceneLoadedContent LoadedContent() noexcept;
     [[nodiscard]] SceneLoadedContentQueries LoadedContent() const noexcept;
+    [[nodiscard]] SceneLocalization Localization() noexcept;
+    [[nodiscard]] SceneLocalization Localization() const noexcept;
     [[nodiscard]] SceneTimers Timers() noexcept;
     [[nodiscard]] SceneTasks Tasks() noexcept;
     [[nodiscard]] SceneMaterialInstances MaterialInstances() noexcept;
