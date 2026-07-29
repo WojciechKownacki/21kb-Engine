@@ -71,6 +71,7 @@ scenario-local aliases.
 | `assert_runtime_inspector` | Verifies a read-only runtime snapshot contains entity, component, timer, subscription and graph-execution state. |
 | `assert_visual_graph_debugger` | Verifies Visual Graph breakpoint, resume and single-node step state with asset/event/node source location. |
 | `assert_script_hot_reload` | Verifies Lua replacement keeps the last valid program on a failed update and Visual Graph execution state is explicitly released before its lifecycle restart. |
+| `assert_crash_report` | Writes the privacy-safe production crash report after Play Mode, verifies the technical error identifier, live API/asset metadata and recent event categories, and proves a breadcrumb message containing a private path is excluded. |
 | `assert_platform_capabilities` | Verifies capability-gated locale, user-data path, clipboard, URL and vibration access, including unavailable-service rejection. |
 | `assert_user_storage` | Verifies sandboxed atomic read/write/delete/list, quota enforcement and asynchronous write without arbitrary filesystem paths. |
 | `assert_user_storage_failures` | Verifies sandbox-escape and quota rejection, preservation after a staged atomic-write failure, and unavailable platform capabilities. |

@@ -1260,6 +1260,12 @@ void EditorSceneContext::SurfaceScriptLibraryStartupReport() {
     const kb::script::ScriptApiCatalog catalog =
         kb::script::ScriptApiCatalog::Build(host, scene_->Assets().Manager());
     const kb::library::ApiManifest manifest = kb::library::BuildApiManifest(catalog);
+    std::vector<std::pair<std::uint64_t, std::string>> crashAssets;
+    for (const kb::assets::AssetMetadata& asset : scene_->Assets().Manager().Registry().All()) {
+        crashAssets.emplace_back(asset.id.value, asset.type);
+    }
+    EditorCrashBreadcrumbs::ConfigureCrashReport(
+        kb::library::ToString(manifest.version), manifest.manifestHash, std::move(crashAssets));
     const kb::visual::VisualGraphNodeCatalog visualGraphCatalog = host.CreateVisualGraphNodeCatalog();
     const std::size_t missingDescriptionCount =
         static_cast<std::size_t>(std::count_if(
