@@ -21,6 +21,7 @@
 #include "engine/network/Rpc.hpp"
 #include "engine/network/NetworkSession.hpp"
 #include "engine/platform/PlatformServices.hpp"
+#include "engine/platform/PlatformAdapters.hpp"
 #include "engine/platform/SettingsTransaction.hpp"
 #include "engine/platform/UserStorage.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
@@ -933,6 +934,27 @@ ReadScriptValue(
             settings.Pending().mouseSensitivity == 2.0F;
         return { valid, valid ? "audio, video and input settings transaction"
                               : "runtime settings contract rejected" };
+    }
+
+    if (*operation == "assert_optional_platform_adapter") {
+        class Adapter final : public kb::platform::IPlatformAdapter {
+        public:
+            [[nodiscard]] bool IsAvailable(
+                kb::platform::OptionalPlatformService service) const noexcept override {
+                return service == kb::platform::OptionalPlatformService::Achievements;
+            }
+            [[nodiscard]] bool UnlockAchievement(std::string_view id) override {
+                return IsAvailable(kb::platform::OptionalPlatformService::Achievements) && !id.empty();
+            }
+        } adapter;
+        const bool valid =
+            adapter.IsAvailable(kb::platform::OptionalPlatformService::Achievements) &&
+            !adapter.IsAvailable(kb::platform::OptionalPlatformService::CloudSave) &&
+            !adapter.IsAvailable(kb::platform::OptionalPlatformService::Dlc) &&
+            !adapter.IsAvailable(kb::platform::OptionalPlatformService::User) &&
+            adapter.UnlockAchievement("first") && !adapter.UnlockAchievement("");
+        return { valid, valid ? "optional achievements, cloud, DLC and user adapter"
+                              : "optional platform adapter contract rejected" };
     }
 
     if (*operation == "assert_game_flow") {
