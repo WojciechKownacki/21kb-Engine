@@ -78,6 +78,7 @@ struct ScriptApiCatalogSourceMapEntry {
     std::string visualGraphNodeId;
     std::string visualGraphPinName;
     std::string visualGraphPinDirection;
+    std::string visualGraphNodeCategory;
     std::string functionName;
     std::string runtimeBindingSymbol;
     std::string documentationAnchor;

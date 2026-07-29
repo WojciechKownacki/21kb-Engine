@@ -1,6 +1,7 @@
 #include "TestSupport.hpp"
 
 #include "engine/library/EngineLibrary.hpp"
+#include "engine/library/EngineLibraryAuthoringHints.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/library/EngineLibraryArrayView.hpp"
 #include "engine/library/EngineLibraryAssetRef.hpp"
@@ -2218,6 +2219,28 @@ void RunApiManifestTest() {
     kb::tests::Require(
         kb::library::ToReferenceMarkdown(changedManifest).find("Manifest-owned reference description.") != std::string::npos,
         "Engine21kbLibrary reference generator did not use the manifest catalog snapshot");
+    const std::vector<kb::library::LibraryLuaCompletion> luaCompletions = kb::library::BuildLuaAutocomplete(manifest, "input vector");
+    const auto luaVector2 = std::ranges::find_if(luaCompletions, [](const kb::library::LibraryLuaCompletion& completion) {
+        return completion.label == "Input.Vector2";
+    });
+    kb::tests::Require(
+        luaVector2 != luaCompletions.end() && !luaVector2->description.empty() && luaVector2->category == "Lua/Input" &&
+            !luaVector2->example.empty() && luaVector2->version == manifest.version,
+        "Engine21kbLibrary Lua autocomplete omitted manifest description, category, example, or version");
+    const std::vector<kb::library::LibraryVisualGraphNodeSearchHint> nodeHints =
+        kb::library::BuildVisualGraphNodeSearchHints(manifest, "input vector");
+    const auto nodeVector2 = std::ranges::find_if(nodeHints, [](const kb::library::LibraryVisualGraphNodeSearchHint& hint) {
+        return hint.displayName == "Function.Input.Vector2";
+    });
+    kb::tests::Require(
+        nodeVector2 != nodeHints.end() && !nodeVector2->description.empty() && nodeVector2->category == "Native/CallNative" &&
+            !nodeVector2->example.empty() && nodeVector2->version == manifest.version,
+        "Engine21kbLibrary Visual Graph node search omitted manifest description, category, example, or version");
+    const std::string authoringHintsJson = kb::library::ToAuthoringHintsJson(manifest);
+    kb::tests::Require(
+        authoringHintsJson.find("\"luaCompletions\"") != std::string::npos && authoringHintsJson.find("\"visualGraphNodes\"") != std::string::npos &&
+            authoringHintsJson.find("\"version\":\"" + kb::library::ToString(manifest.version) + "\"") != std::string::npos,
+        "Engine21kbLibrary authoring hints JSON is missing Lua, node, or version metadata");
     const std::string luaStubs = kb::script::ScriptApiExport::ToLuaStubs(catalog);
     const kb::visual::VisualGraphNodeCatalog graphCatalog = host.CreateVisualGraphNodeCatalog();
     kb::tests::Require(

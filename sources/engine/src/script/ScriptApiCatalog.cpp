@@ -286,6 +286,7 @@ ScriptApiCatalog ScriptApiCatalog::Build(const ScriptRuntimeHost& host) {
                 .visualGraphNodeId = node->id,
                 .visualGraphPinName = pin.name,
                 .visualGraphPinDirection = kb::visual::ToString(pin.direction),
+                .visualGraphNodeCategory = node->category,
                 .functionName = function.name,
                 .runtimeBindingSymbol = runtimeBinding->symbol,
                 .documentationAnchor = documentationAnchor,

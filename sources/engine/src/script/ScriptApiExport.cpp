@@ -683,6 +683,8 @@ std::string ScriptApiExport::ToJson(const ScriptApiCatalog& catalog) {
         AppendJsonString(out, entry.visualGraphPinName);
         out += ",\"visualGraphPinDirection\":";
         AppendJsonString(out, entry.visualGraphPinDirection);
+        out += ",\"visualGraphNodeCategory\":";
+        AppendJsonString(out, entry.visualGraphNodeCategory);
         out += ",\"function\":";
         AppendJsonString(out, entry.functionName);
         out += ",\"runtimeBindingSymbol\":";

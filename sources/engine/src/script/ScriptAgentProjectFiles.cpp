@@ -4,6 +4,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/library/EngineLibraryAuthoringHints.hpp"
 #include "engine/library/EngineLibraryManifest.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
@@ -296,6 +297,7 @@ ScriptAgentProjectFilesResult ScriptAgentProjectFiles::Write(
         { apiRoot / "script_api.md", kb::library::ToReferenceMarkdown(manifest), true, false },
         { apiRoot / "script_api.json", ScriptApiExport::ToJson(catalog), true, false },
         { apiRoot / "manifest.json", kb::library::ToJson(manifest), true, false },
+        { apiRoot / "authoring_hints.json", kb::library::ToAuthoringHintsJson(manifest), true, false },
         { projectRoot / "AGENTS.md", std::string{ kAgentsTemplate }, false, false },
         { projectRoot / ".luarc.json", std::string{ kLuarcTemplate }, false, false },
         // Write-once like AGENTS.md/.luarc.json: a game author's edits to
