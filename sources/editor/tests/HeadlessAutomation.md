@@ -78,6 +78,7 @@ scenario-local aliases.
 | `assert_restricted_api_surfaces` | Verifies authoring-only and server-only API metadata exists and is excluded from Lua and Visual Graph frontends. |
 | `assert_api_source_map` | Verifies every live Visual Graph node pin maps to its catalog function, runtime binding symbol and generated documentation anchor. |
 | `assert_manifest_reference` | Generates the Markdown reference from the live manifest and verifies its hash, sections and function contracts do not drift. |
+| `assert_authoring_hints` | Verifies Lua autocomplete and Visual Graph node search expose manifest description, category, examples and version. |
 | `assert_runtime_snapshot_queue` | Enqueues a time-scale command from a worker, drains it through the production runtime frame boundary, and verifies immutable before/after snapshots. |
 | `assert_platform_capabilities` | Verifies capability-gated locale, user-data path, clipboard, URL and vibration access, including unavailable-service rejection. |
 | `assert_user_storage` | Verifies sandboxed atomic read/write/delete/list, quota enforcement and asynchronous write without arbitrary filesystem paths. |

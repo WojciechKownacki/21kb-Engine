@@ -19,6 +19,7 @@
 #include "engine/core/ConsoleCommands.hpp"
 #include "engine/core/RuntimeInspector.hpp"
 #include "engine/library/EngineLibraryManifest.hpp"
+#include "engine/library/EngineLibraryAuthoringHints.hpp"
 #include "engine/library/EngineLibraryDeterminism.hpp"
 #include "engine/network/NetworkModel.hpp"
 #include "engine/network/NetworkBudget.hpp"
@@ -3059,6 +3060,32 @@ ReadScriptValue(
         return { generated,
             generated ? "generated Markdown reference matches the live API manifest"
                       : "generated Markdown reference drifted from the live API manifest" };
+    }
+
+    if (*operation == "assert_authoring_hints") {
+        kb::script::ScriptRuntimeHost host{ state.context.Scene() };
+        if (!host.Succeeded()) {
+            return { false, "script runtime host could not be created" };
+        }
+        const kb::library::ApiManifest manifest =
+            kb::library::BuildApiManifest(kb::script::ScriptApiCatalog::Build(host));
+        const std::vector<kb::library::LibraryLuaCompletion> lua =
+            kb::library::BuildLuaAutocomplete(manifest, "input vector");
+        const std::vector<kb::library::LibraryVisualGraphNodeSearchHint> nodes =
+            kb::library::BuildVisualGraphNodeSearchHints(manifest, "input vector");
+        const auto luaHint = std::ranges::find_if(lua, [](const kb::library::LibraryLuaCompletion& hint) {
+            return hint.label == "Input.Vector2";
+        });
+        const auto nodeHint = std::ranges::find_if(nodes, [](const kb::library::LibraryVisualGraphNodeSearchHint& hint) {
+            return hint.displayName == "Function.Input.Vector2";
+        });
+        const bool complete =
+            luaHint != lua.end() && nodeHint != nodes.end() &&
+            !luaHint->description.empty() && !luaHint->category.empty() && !luaHint->example.empty() && luaHint->version == manifest.version &&
+            !nodeHint->description.empty() && !nodeHint->category.empty() && !nodeHint->example.empty() && nodeHint->version == manifest.version;
+        return { complete,
+            complete ? "Lua autocomplete and Visual Graph search expose manifest documentation, category, examples and version"
+                     : "authoring hints are incomplete" };
     }
 
     if (*operation == "assert_runtime_snapshot_queue") {
