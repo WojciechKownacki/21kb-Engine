@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/gameplay/GameplayIdentity.hpp"
 #include "engine/library/EngineLibraryCollections.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 
@@ -33,6 +34,11 @@ struct PerceptionFilter {
     float range = 20.0F;
     bool requireLineOfSight = false;
     bool includeSameTeam = false;
+    // Opt-in bridge to the shared gameplay filter. Existing scene-only
+    // perception snapshots retain their established team/layer contract.
+    bool useGameplayIdentityFilter = false;
+    kb::gameplay::GameplayIdentity observerIdentity{};
+    kb::gameplay::GameplayIdentityFilter gameplayIdentityFilter{};
 
     [[nodiscard]] bool AcceptsTeam(PerceptionTeamId targetTeam) const noexcept {
         if (requiredTargetTeam != kNoPerceptionTeam && targetTeam != requiredTargetTeam) return false;
@@ -40,7 +46,8 @@ struct PerceptionFilter {
     }
 
     [[nodiscard]] bool IsValid() const noexcept {
-        return maxResults != 0U && range > 0.0F && std::isfinite(range) && layerMask != 0U;
+        return maxResults != 0U && range > 0.0F && std::isfinite(range) && layerMask != 0U &&
+            (!useGameplayIdentityFilter || gameplayIdentityFilter.IsValid());
     }
 };
 
@@ -59,6 +66,8 @@ struct PerceptionTarget {
     Vec3 position{};
     PerceptionTeamId team = kNoPerceptionTeam;
     std::uint32_t layerMask = kPhysicsAllLayers;
+    kb::gameplay::GameplayIdentity identity{};
+    bool hasGameplayIdentity = false;
 };
 
 // A hearing producer emits this once (for example on a weapon/fire/impact).
@@ -71,6 +80,8 @@ struct PerceptionStimulus {
     std::uint32_t layerMask = kPhysicsAllLayers;
     float radius = 10.0F;
     float strength = 1.0F;
+    kb::gameplay::GameplayIdentity identity{};
+    bool hasGameplayIdentity = false;
 };
 
 struct PerceptionEvent {
@@ -134,7 +145,9 @@ namespace detail {
 
 [[nodiscard]] inline bool AcceptsTarget(const PerceptionObserver& observer, const PerceptionTarget& target, float& distance) noexcept {
     if (!target.entity.IsValid() || target.entity == observer.entity || !IsFinite(target.position) ||
-        !observer.filter.AcceptsTeam(target.team) || !SharesLayer(observer.filter.layerMask, target.layerMask)) return false;
+        !observer.filter.AcceptsTeam(target.team) || !SharesLayer(observer.filter.layerMask, target.layerMask) ||
+        (observer.filter.useGameplayIdentityFilter &&
+            (!target.hasGameplayIdentity || !observer.filter.gameplayIdentityFilter.Accepts(observer.filter.observerIdentity, target.identity))) ) return false;
     const float distanceSquared = DistanceSquared(observer.position, target.position);
     const float rangeSquared = observer.filter.range * observer.filter.range;
     if (!std::isfinite(distanceSquared) || distanceSquared > rangeSquared) return false;
@@ -195,7 +208,9 @@ inline PerceptionEvaluationResult EvaluatePerception(
         for (const PerceptionStimulus& stimulus : stimuli) {
             if (!stimulus.source.IsValid() || stimulus.source == observer.entity || !detail::IsFinite(stimulus.position) ||
                 !std::isfinite(stimulus.radius) || !std::isfinite(stimulus.strength) || stimulus.radius <= 0.0F || stimulus.strength < 0.0F ||
-                !observer.filter.AcceptsTeam(stimulus.team) || !detail::SharesLayer(observer.filter.layerMask, stimulus.layerMask)) continue;
+                !observer.filter.AcceptsTeam(stimulus.team) || !detail::SharesLayer(observer.filter.layerMask, stimulus.layerMask) ||
+                (observer.filter.useGameplayIdentityFilter &&
+                    (!stimulus.hasGameplayIdentity || !observer.filter.gameplayIdentityFilter.Accepts(observer.filter.observerIdentity, stimulus.identity)))) continue;
             const float distanceSquared = detail::DistanceSquared(observer.position, stimulus.position);
             const float hearingRange = std::min(observer.filter.range, stimulus.radius);
             if (!std::isfinite(distanceSquared) || distanceSquared > hearingRange * hearingRange) continue;
