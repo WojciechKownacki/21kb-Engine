@@ -2213,6 +2213,30 @@ void RunApiManifestTest() {
         reference.find("## API manifest") != std::string::npos && reference.find("`" + manifest.manifestHash + "`") != std::string::npos &&
             reference.find("`EntityHandle`") != std::string::npos,
         "Engine21kbLibrary manifest reference is missing manifest metadata");
+    kb::tests::Require(
+        kb::library::ValidateReferenceMarkdown(manifest, reference).Succeeded(),
+        "Engine21kbLibrary reference name, signature, or semantics diverged from the build manifest");
+    const std::string inputVector2Row =
+        "| `Input.Vector2` | Reads the current two-dimensional value of the named input action. | action: String, player: Int? | x: Float, y: Float |";
+    kb::tests::Require(reference.find(inputVector2Row) != std::string::npos, "Engine21kbLibrary reference validation fixture is missing Input.Vector2");
+    std::string wrongNameReference = reference;
+    wrongNameReference.replace(wrongNameReference.find("`Input.Vector2`"), std::string{"`Input.Vector2`"}.size(), "`Input.VectorX`");
+    kb::tests::Require(
+        !kb::library::ValidateReferenceMarkdown(manifest, wrongNameReference).Succeeded(),
+        "Engine21kbLibrary reference validation accepted a mismatched documented function name");
+    std::string wrongSignatureReference = reference;
+    wrongSignatureReference.replace(wrongSignatureReference.find("action: String, player: Int?"), std::string{"action: String, player: Int?"}.size(), "action: Bool");
+    kb::tests::Require(
+        !kb::library::ValidateReferenceMarkdown(manifest, wrongSignatureReference).Succeeded(),
+        "Engine21kbLibrary reference validation accepted a mismatched documented signature");
+    std::string wrongSemanticsReference = reference;
+    wrongSemanticsReference.replace(
+        wrongSemanticsReference.find("Reads the current two-dimensional value of the named input action."),
+        std::string{"Reads the current two-dimensional value of the named input action."}.size(),
+        "Returns an unrelated value.");
+    kb::tests::Require(
+        !kb::library::ValidateReferenceMarkdown(manifest, wrongSemanticsReference).Succeeded(),
+        "Engine21kbLibrary reference validation accepted mismatched documented semantics");
     kb::library::ApiManifest changedManifest = manifest;
     kb::tests::Require(!changedManifest.catalog.functions.empty(), "Engine21kbLibrary manifest reference test needs a catalog function");
     changedManifest.catalog.functions.front().description = "Manifest-owned reference description.";
