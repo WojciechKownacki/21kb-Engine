@@ -1196,6 +1196,9 @@ template <typename Store, typename Op>
         sceneContext.Inspector().EndTextEdit();
         static_cast<void>(CyclePhysicsEnum(sceneContext, entity, kind, index));
         return true;
+    case PhysicsFieldKind::ReadOnly:
+        sceneContext.Inspector().EndTextEdit();
+        return true;
     case PhysicsFieldKind::Float: {
         float value = 0.0F;
         if (ReadPhysicsFloat(sceneContext, entity, kind, index, value)) {
