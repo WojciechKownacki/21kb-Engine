@@ -2207,6 +2207,17 @@ void RunApiManifestTest() {
     kb::tests::Require(
         json.find("\"specialApis\"") != std::string::npos && json.find("\"name\":\"EntityHandle\"") != std::string::npos,
         "Engine21kbLibrary manifest JSON is missing the native-only API surface");
+    const std::string reference = kb::library::ToReferenceMarkdown(manifest);
+    kb::tests::Require(
+        reference.find("## API manifest") != std::string::npos && reference.find("`" + manifest.manifestHash + "`") != std::string::npos &&
+            reference.find("`EntityHandle`") != std::string::npos,
+        "Engine21kbLibrary manifest reference is missing manifest metadata");
+    kb::library::ApiManifest changedManifest = manifest;
+    kb::tests::Require(!changedManifest.catalog.functions.empty(), "Engine21kbLibrary manifest reference test needs a catalog function");
+    changedManifest.catalog.functions.front().description = "Manifest-owned reference description.";
+    kb::tests::Require(
+        kb::library::ToReferenceMarkdown(changedManifest).find("Manifest-owned reference description.") != std::string::npos,
+        "Engine21kbLibrary reference generator did not use the manifest catalog snapshot");
     const std::string luaStubs = kb::script::ScriptApiExport::ToLuaStubs(catalog);
     const kb::visual::VisualGraphNodeCatalog graphCatalog = host.CreateVisualGraphNodeCatalog();
     kb::tests::Require(
