@@ -16,6 +16,7 @@
 #include "engine/core/DebugDraw.hpp"
 #include "engine/core/ProfilerCounters.hpp"
 #include "engine/core/ConsoleCommands.hpp"
+#include "engine/core/RuntimeInspector.hpp"
 #include "engine/network/NetworkModel.hpp"
 #include "engine/network/NetworkBudget.hpp"
 #include "engine/network/NetworkObject.hpp"
@@ -978,6 +979,18 @@ ReadScriptValue(
                 "world.pause <paused:bool> <frames:int> — Pause world";
         return { valid, valid ? "typed command, permissions and manifest help"
                               : "console command contract rejected" };
+    }
+
+    if (*operation == "assert_runtime_inspector") {
+        kb::core::RuntimeInspector inspector;
+        inspector.Publish({ .entity = 7U, .components = 3U, .timers = 2U,
+            .subscriptions = 4U, .graphFrames = 5U });
+        const kb::core::RuntimeInspection& snapshot = inspector.Snapshot();
+        const bool valid = snapshot.entity == 7U && snapshot.components == 3U &&
+            snapshot.timers == 2U && snapshot.subscriptions == 4U &&
+            snapshot.graphFrames == 5U;
+        return { valid, valid ? "read-only runtime entity, component, timer, subscription and graph snapshot"
+                              : "runtime inspector contract rejected" };
     }
 
     if (*operation == "assert_user_storage") {
