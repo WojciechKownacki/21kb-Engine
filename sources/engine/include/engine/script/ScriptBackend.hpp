@@ -27,6 +27,7 @@ struct ScriptDiagnostic {
     std::string function;
     std::optional<ScriptLifecycleEvent> lifecyclePhase;
     std::string message;
+    std::string stackTrace;
 };
 
 struct ScriptBackendExecutionResult {
