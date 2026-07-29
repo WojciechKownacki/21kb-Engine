@@ -265,6 +265,7 @@ void RunModuleCatalogTest() {
         kb::tests::Require(catalog[index].Register != nullptr, "Engine21kbLibrary module catalog entry is missing its Register function");
         kb::tests::Require(!catalog[index].ownerRuntime.empty(), "Engine21kbLibrary module catalog entry is missing its owner runtime label");
         kb::tests::Require(catalog[index].capability, "Engine21kbLibrary module catalog entry must have capability=true when its backend is compiled in");
+        kb::tests::Require(catalog[index].registrationAllocationBudgetBytes != 0U, "Engine21kbLibrary module catalog entry has no registration allocation budget");
     }
 }
 
@@ -4815,7 +4816,7 @@ void RunGameInstanceLifetimeTest() {
             && bindings.Find("Missing") == kb::core::kInvalidBindingId
             && bindings.Register("") == kb::core::kInvalidBindingId,
         "Binding cache did not provide stable, allocation-free lookup ids");
-    kb::core::AllocationTelemetry allocation{.budget=4U};kb::tests::Require(allocation.Reserve(4U)&&!allocation.Reserve(1U)&&(allocation.Release(2U),allocation.used==2U),"Allocation telemetry did not enforce module budget");
+    kb::core::AllocationTelemetry allocation{.budget=4U};kb::tests::Require(allocation.Reserve(4U)&&!allocation.Reserve(1U)&&(allocation.Release(2U),allocation.used==2U)&&allocation.peak==4U&&allocation.allocationCount==1U&&allocation.rejectedAllocationCount==1U&&allocation.rejectedBytes==1U,"Allocation telemetry did not enforce or record module budget");
     kb::core::ExecutionBudget budget{1U,kb::core::BudgetExceededPolicy::Suspend};kb::tests::Require(budget.Consume()&&!budget.Consume()&&budget.Policy()==kb::core::BudgetExceededPolicy::Suspend,"Execution budget did not enforce policy");
     kb::core::CommandQueue queue;queue.Enqueue({.target=2U,.kind=3U});const auto commands=queue.Drain();kb::tests::Require(commands.size()==1U&&commands.front().target==2U&&queue.Drain().empty(),"Command queue did not transfer mutation ownership");
     kb::tests::Require(kb::core::MayCall(kb::core::ExecutionAffinity::MainThread,{kb::core::ExecutionAffinity::MainThread})&&kb::core::MayCall(kb::core::ExecutionAffinity::WorkerSafe,{kb::core::ExecutionAffinity::WorkerSafe})&&!kb::core::MayCall(kb::core::ExecutionAffinity::MainThread,{kb::core::ExecutionAffinity::Forbidden}),"Execution affinity contract did not fail closed");

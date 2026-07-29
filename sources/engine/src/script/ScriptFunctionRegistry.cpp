@@ -71,6 +71,16 @@ bool ScriptFunctionRegistry::Register(ScriptFunctionDesc function) {
     if (!HasValidPins(function.signature.inputs) || !HasValidPins(function.signature.outputs)) {
         return false;
     }
+    if (functions_.size() == functions_.capacity()) {
+        const std::size_t previousCapacity = functions_.capacity();
+        const std::size_t requestedCapacity = previousCapacity == 0U ? 1U : previousCapacity * 2U;
+        const std::size_t allocationBytes = (requestedCapacity - previousCapacity) * sizeof(ScriptFunctionDesc);
+        if (registrationAllocationTelemetry_ != nullptr &&
+            !registrationAllocationTelemetry_->Reserve(allocationBytes)) {
+            return false;
+        }
+        functions_.reserve(requestedCapacity);
+    }
     functions_.push_back(std::move(function));
     return true;
 }
@@ -187,6 +197,10 @@ void ScriptFunctionRegistry::Lock() noexcept {
 
 bool ScriptFunctionRegistry::IsLocked() const noexcept {
     return locked_;
+}
+
+void ScriptFunctionRegistry::SetRegistrationAllocationTelemetry(kb::core::AllocationTelemetry* telemetry) noexcept {
+    registrationAllocationTelemetry_ = telemetry;
 }
 
 bool ScriptFunctionRegistry::HasValidPins(const std::vector<ScriptFunctionPin>& pins) {

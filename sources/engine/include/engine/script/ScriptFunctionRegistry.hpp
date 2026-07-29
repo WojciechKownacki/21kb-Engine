@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/assets/AssetId.hpp"
+#include "engine/core/AllocationBudget.hpp"
 #include "engine/core/ExecutionAffinity.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/Scene.hpp"
@@ -125,6 +126,9 @@ public:
     // call every dispatch.
     void Lock() noexcept;
     [[nodiscard]] bool IsLocked() const noexcept;
+    // Scoped by EngineLibraryModule while one module registers. The pointer
+    // is non-owning and must be cleared before the module report is moved.
+    void SetRegistrationAllocationTelemetry(kb::core::AllocationTelemetry* telemetry) noexcept;
 
 private:
     [[nodiscard]] static bool HasValidPins(const std::vector<ScriptFunctionPin>& pins);
@@ -152,6 +156,7 @@ private:
     // does not mutate the registered function set) but must track depth
     // across the possibly-reentrant call it makes into a callback.
     mutable std::size_t callDepth_ = 0;
+    kb::core::AllocationTelemetry* registrationAllocationTelemetry_ = nullptr;
 };
 
 } // namespace kb::script

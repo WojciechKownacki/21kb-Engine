@@ -25,6 +25,7 @@ struct EngineLibraryModuleReportEntry {
     bool capability = true;
     bool installed = false;
     std::string reason;
+    kb::core::AllocationTelemetry registrationAllocationTelemetry;
 };
 
 // Outcome of installing the Engine21kbLibrary domain modules onto a
