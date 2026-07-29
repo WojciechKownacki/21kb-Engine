@@ -8,6 +8,7 @@ add_library(kb_engine STATIC
     include/engine/core/CrashReport.hpp
     include/engine/core/ExecutionAffinity.hpp
     include/engine/core/ExecutionBudget.hpp
+    include/engine/core/AllocationBudget.hpp
     include/engine/core/ReadSnapshotQueue.hpp
     include/engine/core/RuntimeInspector.hpp
     include/engine/audio/AudioClipAsset.hpp
