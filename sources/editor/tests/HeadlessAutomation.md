@@ -61,6 +61,7 @@ scenario-local aliases.
 | `assert_network_budget` | Verifies deterministic tick accumulation, invalid-rate rejection, exact queue capacity and packet backpressure. |
 | `assert_network_security` | Verifies server ownership validation, spoofing rejection, payload and rate limits, and declared-length deserialization bounds. |
 | `assert_network_simulation` | Verifies deterministic latency and jitter, loss, reorder, disconnect, and invalid-configuration rejection. |
+| `assert_offline_network_sessions` | Verifies that the offline-only release rejects host/client, late join and reconnect, while despawned RPCs and schema mismatches remain invalid. |
 | `discover_assets` | none |
 | `unload_asset` | asset alias or virtual path; force-loads then unloads the live `AssetManager` entry so a running system must reacquire it |
 | `import_asset` | `source` project-relative path, `destination` virtual folder |
