@@ -65,6 +65,7 @@
 #include "engine/core/ExecutionAffinity.hpp"
 #include "engine/core/ExecutionBudget.hpp"
 #include "engine/core/AllocationBudget.hpp"
+#include "engine/core/BindingCache.hpp"
 #include "engine/core/ReadSnapshotQueue.hpp"
 #include "engine/core/RuntimeInspector.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -4137,6 +4138,15 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    kb::core::BindingCache bindings{ 2U };
+    const kb::core::BindingId transformBinding = bindings.Register("Transform");
+    kb::tests::Require(
+        transformBinding != kb::core::kInvalidBindingId
+            && transformBinding == bindings.Register("Transform")
+            && bindings.Find("Transform") == transformBinding
+            && bindings.Find("Missing") == kb::core::kInvalidBindingId
+            && bindings.Register("") == kb::core::kInvalidBindingId,
+        "Binding cache did not provide stable, allocation-free lookup ids");
     kb::core::AllocationTelemetry allocation{.budget=4U};kb::tests::Require(allocation.Reserve(4U)&&!allocation.Reserve(1U)&&(allocation.Release(2U),allocation.used==2U),"Allocation telemetry did not enforce module budget");
     kb::core::ExecutionBudget budget{1U,kb::core::BudgetExceededPolicy::Suspend};kb::tests::Require(budget.Consume()&&!budget.Consume()&&budget.Policy()==kb::core::BudgetExceededPolicy::Suspend,"Execution budget did not enforce policy");
     kb::core::CommandQueue queue;queue.Enqueue({.target=2U,.kind=3U});const auto commands=queue.Drain();kb::tests::Require(commands.size()==1U&&commands.front().target==2U&&queue.Drain().empty(),"Command queue did not transfer mutation ownership");
