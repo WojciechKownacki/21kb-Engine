@@ -3043,6 +3043,24 @@ ReadScriptValue(
                      : "API source map is incomplete or drifted from the live Visual Graph catalog" };
     }
 
+    if (*operation == "assert_manifest_reference") {
+        kb::script::ScriptRuntimeHost host{ state.context.Scene() };
+        if (!host.Succeeded()) {
+            return { false, "script runtime host could not be created" };
+        }
+        const kb::library::ApiManifest manifest =
+            kb::library::BuildApiManifest(kb::script::ScriptApiCatalog::Build(host));
+        const std::string reference = kb::library::ToReferenceMarkdown(manifest);
+        const kb::library::ApiReferenceValidationResult validation =
+            kb::library::ValidateReferenceMarkdown(manifest, reference);
+        const bool generated = validation.Succeeded() &&
+            reference.find("## API manifest") != std::string::npos &&
+            reference.find("`" + manifest.manifestHash + "`") != std::string::npos;
+        return { generated,
+            generated ? "generated Markdown reference matches the live API manifest"
+                      : "generated Markdown reference drifted from the live API manifest" };
+    }
+
     if (*operation == "assert_runtime_snapshot_queue") {
         const kb::scene::SceneRuntimeQueries workerView =
             static_cast<const kb::scene::Scene&>(state.context.Scene()).Runtime();
