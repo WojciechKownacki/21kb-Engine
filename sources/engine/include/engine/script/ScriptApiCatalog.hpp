@@ -4,6 +4,7 @@
 #include "engine/script/ScriptValue.hpp"
 
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -58,6 +59,17 @@ struct ScriptApiCatalogLuaBinding {
     std::string returnPin;
 };
 
+// The authored Lua surface.  Runtime table installation and the exported API
+// catalog both consume these definitions so the spelling and grouping of Lua
+// module fields has one source of truth.
+struct ScriptApiCatalogLuaBindingDefinition {
+    std::string_view tableName;
+    std::string_view luaName;
+    std::string_view functionName;
+    ScriptApiCatalogLuaReturnKind returnKind = ScriptApiCatalogLuaReturnKind::Default;
+    std::string_view returnPin;
+};
+
 struct ScriptApiCatalog {
     std::vector<std::string> lifecycleEvents;
     std::vector<ScriptApiCatalogFunction> functions;
@@ -69,6 +81,7 @@ struct ScriptApiCatalog {
 
     [[nodiscard]] static ScriptApiCatalog Build(const ScriptRuntimeHost& host);
     [[nodiscard]] static ScriptApiCatalog Build(const ScriptRuntimeHost& host, kb::assets::AssetManager& assets);
+    [[nodiscard]] static std::span<const ScriptApiCatalogLuaBindingDefinition> LuaBindingDefinitions() noexcept;
 };
 
 [[nodiscard]] const char* ToString(ScriptApiCatalogLuaReturnKind kind) noexcept;
