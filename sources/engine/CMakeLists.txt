@@ -109,6 +109,7 @@ add_library(kb_engine STATIC
     include/engine/ecs/world/WorldRuntimeApi.inl
     include/engine/ecs/world/WorldSerializationApi.inl
     include/engine/scene/AudioListenerComponent.hpp
+    include/engine/gameplay/GameInstance.hpp
     include/engine/scene/AudioSourceComponent.hpp
     include/engine/scene/CameraComponent.hpp
     include/engine/scene/CharacterControllerComponent.hpp
@@ -465,6 +466,7 @@ add_library(kb_engine STATIC
     src/ecs/SerializedWorldRestoreMap.cpp
     src/ecs/SerializedWorldWriter.cpp
     src/scene/Scene.cpp
+    src/gameplay/GameInstance.cpp
     src/scene/AiBehaviourRuntime.cpp
     src/scene/AiBehaviourAssetIO.cpp
     src/scene/AiBehaviourAssetLoader.cpp
