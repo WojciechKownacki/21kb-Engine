@@ -31,7 +31,8 @@ ignored by Git.
 
 Paths accepted by `write_file`, `write_pcm_wave`, `save_scene`, and
 `open_scene` are relative to the isolated project and cannot escape it.
-`write_file` expands `{{PROJECT_ROOT}}` and `{{ARTIFACT_ROOT}}` in its content
+`write_file` expands `{{PROJECT_ROOT}}`, `{{ARTIFACT_ROOT}}` and
+`{{ASSET_ID:/Game/path.asset}}` (an already discovered asset) in its content
 to forward-slash absolute paths, allowing authored scripts to persist their
 own output inside the task folder. Entity and asset `id` values are
 scenario-local aliases.
