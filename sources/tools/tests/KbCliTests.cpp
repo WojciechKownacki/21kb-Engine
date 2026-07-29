@@ -1994,6 +1994,13 @@ void RunApiCommandTests() {
         "init-agent did not write the Projectile.lua template (LIB-014)");
     Require(std::filesystem::exists(TestRoot() / "Assets" / "Prefabs" / "Projectile.kbprefab"),
         "init-agent did not write the Projectile.kbprefab artifact (LIB-014)");
+    for (const std::string_view sample : { "ThirdPersonController.lua", "TopDownController.lua", "PlatformerController.lua", "SimpleShooterController.lua" }) {
+        const std::filesystem::path samplePath = TestRoot() / "Assets" / "Samples" / sample;
+        Require(std::filesystem::exists(samplePath), "init-agent did not write a LIB-203 gameplay sample");
+        std::ifstream sampleStream{ samplePath, std::ios::binary };
+        const std::string source{ std::istreambuf_iterator<char>{ sampleStream }, std::istreambuf_iterator<char>{} };
+        Require(Contains(source, "function Tick(self, dt)"), "LIB-203 gameplay sample was not a runnable Tick behaviour");
+    }
 
     // LIB-013 regression: init-agent internally rebuilds its catalog and
     // calls ScriptAgentProjectFiles::Write() a second time whenever the
