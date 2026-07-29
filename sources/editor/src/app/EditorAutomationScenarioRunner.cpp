@@ -10,6 +10,7 @@
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputKey.hpp"
+#include "engine/gameplay/GameInstance.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
@@ -504,6 +505,30 @@ ReadScriptValue(
     }
     const auto operation = StringMember(step, "op", error);
     if (!operation.has_value()) return { false, error };
+
+    if (*operation == "assert_game_flow") {
+        kb::gameplay::GameInstance game{ state.context.Project() };
+        const kb::gameplay::GameSceneId checkpointScene = game.CreateScene();
+        const kb::gameplay::GameSceneId destinationScene = game.CreateScene();
+        const bool succeeded =
+            checkpointScene != 0U && destinationScene != 0U &&
+            !game.SetCheckpoint(0U) && !game.TransitionToScene(999U) &&
+            game.Flow().State() == kb::gameplay::GameFlowState::Playing &&
+            !game.Flow().PendingTransition().has_value() &&
+            game.SetCheckpoint(checkpointScene) && game.Pause() &&
+            !game.TransitionToScene(destinationScene) && game.Resume() &&
+            game.TransitionToScene(destinationScene) &&
+            game.ActiveSceneId() == destinationScene && game.Win() &&
+            !game.TransitionToScene(checkpointScene) &&
+            game.RestartFromCheckpoint() &&
+            game.ActiveSceneId() == checkpointScene && game.Lose() &&
+            game.DestroyScene(checkpointScene) &&
+            !game.Flow().Checkpoint().has_value() &&
+            !game.RestartFromCheckpoint();
+        return {
+            succeeded,
+            succeeded ? "checkpoint, pause, transition, outcome, restart" : "game flow lifecycle rejected" };
+    }
 
     if (*operation == "write_file") {
         const auto path = StringMember(step, "path", error);

@@ -4834,11 +4834,14 @@ void RunGameInstanceLifetimeTest() {
     const kb::gameplay::GameSceneId firstScene = flowGame.CreateScene();
     const kb::gameplay::GameSceneId secondScene = flowGame.CreateScene();
     kb::tests::Require(
-        flowGame.Flow().SetCheckpoint(firstScene) && flowGame.Flow().Pause() && flowGame.Flow().Resume() &&
+        !flowGame.SetCheckpoint(0U) && !flowGame.TransitionToScene(999U) &&
+            flowGame.Flow().State() == kb::gameplay::GameFlowState::Playing && !flowGame.Flow().PendingTransition().has_value() &&
+            flowGame.SetCheckpoint(firstScene) && flowGame.Pause() && !flowGame.TransitionToScene(secondScene) && flowGame.Resume() &&
             flowGame.TransitionToScene(secondScene) && flowGame.ActiveSceneId() == secondScene &&
-            flowGame.Flow().Win() && flowGame.Flow().Restart() == firstScene && flowGame.TransitionToScene(firstScene) &&
-            flowGame.Flow().Lose() && flowGame.DestroyScene(firstScene) && !flowGame.Flow().Checkpoint().has_value(),
-        "Game flow did not enforce checkpoint, pause, restart, outcome, and scene transition lifecycle");
+            flowGame.Win() && !flowGame.TransitionToScene(firstScene) && flowGame.RestartFromCheckpoint() &&
+            flowGame.ActiveSceneId() == firstScene && flowGame.Lose() && flowGame.DestroyScene(firstScene) &&
+            !flowGame.Flow().Checkpoint().has_value() && !flowGame.RestartFromCheckpoint(),
+        "Game flow did not enforce valid checkpoint, pause, restart, outcome, and scene transition lifecycle");
     kb::gameplay::GameplayAbilities abilities;
     kb::gameplay::GameplayModules modules;
     const kb::scene::SceneEntity target{2U};

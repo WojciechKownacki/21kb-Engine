@@ -40,6 +40,12 @@ public:
     [[nodiscard]] const kb::scene::Scene* FindScene(GameSceneId id) const noexcept;
     [[nodiscard]] bool SetActiveScene(GameSceneId id) noexcept;
     [[nodiscard]] bool TransitionToScene(GameSceneId id) noexcept;
+    [[nodiscard]] bool SetCheckpoint(GameSceneId id) noexcept;
+    [[nodiscard]] bool Pause() noexcept;
+    [[nodiscard]] bool Resume() noexcept;
+    [[nodiscard]] bool Win() noexcept;
+    [[nodiscard]] bool Lose() noexcept;
+    [[nodiscard]] bool RestartFromCheckpoint() noexcept;
     [[nodiscard]] GameSceneId ActiveSceneId() const noexcept;
     [[nodiscard]] kb::scene::Scene* ActiveScene() noexcept;
     [[nodiscard]] const kb::scene::Scene* ActiveScene() const noexcept;
@@ -55,7 +61,6 @@ public:
     [[nodiscard]] const Players& PlayerRegistry() const noexcept { return players_; }
     [[nodiscard]] CameraManager& Cameras() noexcept { return cameras_; }
     [[nodiscard]] MatchRuntime& Match() noexcept { return match_; }
-    [[nodiscard]] GameFlow& Flow() noexcept { return flow_; }
     [[nodiscard]] const GameFlow& Flow() const noexcept { return flow_; }
 
 private:
