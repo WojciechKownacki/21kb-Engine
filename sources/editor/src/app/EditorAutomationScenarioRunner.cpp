@@ -20,6 +20,7 @@
 #include "engine/network/NetworkVariable.hpp"
 #include "engine/network/Rpc.hpp"
 #include "engine/network/NetworkSession.hpp"
+#include "engine/platform/PlatformServices.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
@@ -812,6 +813,69 @@ ReadScriptValue(
             valid,
             valid ? "offline host/client, despawned RPC and schema mismatch"
                   : "offline network-session contract rejected" };
+    }
+
+    if (*operation == "assert_platform_capabilities") {
+        struct Probe {
+            bool clipboard = false;
+            bool url = false;
+            bool vibration = false;
+            [[nodiscard]] static bool Clipboard(void* context,
+                std::string_view text) noexcept {
+                auto& probe = *static_cast<Probe*>(context);
+                probe.clipboard = text == "copied";
+                return probe.clipboard;
+            }
+            [[nodiscard]] static bool Url(void* context,
+                std::string_view value) noexcept {
+                auto& probe = *static_cast<Probe*>(context);
+                probe.url = value == "https://21kb.dev";
+                return probe.url;
+            }
+            [[nodiscard]] static bool Vibration(void* context, float low,
+                float high) noexcept {
+                auto& probe = *static_cast<Probe*>(context);
+                probe.vibration = low == 0.25F && high == 0.75F;
+                return probe.vibration;
+            }
+        };
+        constexpr kb::platform::PlatformCapabilities allCapabilities{
+            .flags = static_cast<std::uint32_t>(
+                         kb::platform::PlatformCapability::Locale) |
+                static_cast<std::uint32_t>(
+                    kb::platform::PlatformCapability::UserDataPath) |
+                static_cast<std::uint32_t>(
+                    kb::platform::PlatformCapability::Clipboard) |
+                static_cast<std::uint32_t>(
+                    kb::platform::PlatformCapability::OpenUrl) |
+                static_cast<std::uint32_t>(
+                    kb::platform::PlatformCapability::Vibration) };
+        Probe probe;
+        kb::platform::PlatformServices services{ allCapabilities,
+            { .language = "pl", .region = "PL", .utcOffsetMinutes = 120 },
+            "UserData", { .clipboard = &Probe::Clipboard, .openUrl = &Probe::Url,
+                              .vibration = &Probe::Vibration,
+                              .context = &probe } };
+        kb::platform::PlatformServices restricted{ {},
+            { .language = "pl", .region = "PL", .utcOffsetMinutes = 120 },
+            "UserData" };
+        const std::optional<kb::platform::PlatformLocale> locale =
+            services.Locale();
+        const bool valid = locale.has_value() && locale->language == "pl" &&
+            locale->region == "PL" && services.UserDataPath().has_value() &&
+            services.SetClipboardText("copied") &&
+            services.OpenUrl("https://21kb.dev") &&
+            !services.OpenUrl("file:///outside") &&
+            services.SetVibration(0.25F, 0.75F) && probe.clipboard && probe.url &&
+            probe.vibration && !restricted.Locale().has_value() &&
+            !restricted.UserDataPath().has_value() &&
+            !restricted.SetClipboardText("blocked") &&
+            !restricted.OpenUrl("https://21kb.dev") &&
+            !restricted.SetVibration(0.25F, 0.75F);
+        return {
+            valid,
+            valid ? "capability-gated platform data and actions"
+                  : "platform capability contract rejected" };
     }
 
     if (*operation == "assert_game_flow") {
