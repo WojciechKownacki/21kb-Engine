@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/project/ProjectDescriptor.hpp"
+#include "engine/gameplay/GameMode.hpp"
 #include "engine/save/SaveGame.hpp"
 #include "engine/scene/SceneMode.hpp"
 
@@ -41,11 +42,15 @@ public:
     [[nodiscard]] std::size_t SceneCount() const noexcept;
     [[nodiscard]] GameInstanceServices& Services() noexcept { return services_; }
     [[nodiscard]] const GameInstanceServices& Services() const noexcept { return services_; }
+    void SetGameMode(GameMode mode) noexcept { mode_ = mode; }
+    [[nodiscard]] GameMode& Mode() noexcept { return mode_; }
+    [[nodiscard]] const GameMode& Mode() const noexcept { return mode_; }
 
 private:
     struct Entry { GameSceneId id = 0U; std::unique_ptr<kb::scene::Scene> scene; };
     kb::project::ProjectDescriptor project_;
     GameInstanceServices services_;
+    GameMode mode_;
     std::vector<Entry> scenes_;
     GameSceneId nextSceneId_ = 1U;
     GameSceneId activeScene_ = 0U;
