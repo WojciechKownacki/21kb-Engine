@@ -1,6 +1,7 @@
 #include "app/EditorAutomationScenarioRunner.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorCrashBreadcrumbs.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
@@ -2897,6 +2898,44 @@ ReadScriptValue(
     if (*operation == "clear_console") {
         state.context.Console().Clear();
         return { true, "console cleared" };
+    }
+
+    if (*operation == "assert_crash_report") {
+        // Exercise the report after the production Play Mode host has populated
+        // the live API manifest and asset registry. Breadcrumb messages can
+        // contain project paths, so this deliberately supplies one and proves
+        // that the report retains only the event category.
+        constexpr std::string_view kPrivateValue =
+            "C:\\Users\\private\\secret.asset";
+        EditorCrashBreadcrumbs::Write("crash_report_probe", kPrivateValue);
+        EditorCrashBreadcrumbs::WriteCrashReport("headless_probe");
+
+        std::string reportError;
+        const std::string report = ReadText(
+            std::filesystem::current_path() / "Saved" / "Crashes" /
+                "editor-crash-report.json",
+            reportError);
+        if (!reportError.empty()) return { false, reportError };
+        const bool structured =
+            report.find("\"schema\":\"21kb.crash-report/v1\"") != std::string::npos &&
+            report.find("\"error\":\"headless_probe\"") != std::string::npos &&
+            report.find("\"api\":{\"version\":\"") != std::string::npos &&
+            report.find("\"assets\":[") != std::string::npos &&
+            report.find("\"recentEvents\":[") != std::string::npos &&
+            report.find("\"crash_report_probe\"") != std::string::npos;
+        const bool privateDataExcluded =
+            report.find(kPrivateValue) == std::string::npos &&
+            report.find("secret.asset") == std::string::npos &&
+            report.find(std::filesystem::absolute(
+                EditorProjectPaths::ProjectRoot()).generic_string()) ==
+                std::string::npos &&
+            report.find("/Game/Logic/CrashReportProbe.lua") ==
+                std::string::npos;
+        return {
+            structured && privateDataExcluded,
+            structured && privateDataExcluded
+                ? "privacy-safe crash report contains live runtime metadata"
+                : "crash report is incomplete or contains breadcrumb data" };
     }
 
     if (*operation == "assert_no_errors") {
