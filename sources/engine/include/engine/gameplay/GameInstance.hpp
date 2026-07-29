@@ -2,6 +2,7 @@
 
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/gameplay/GameMode.hpp"
+#include "engine/gameplay/GameFlow.hpp"
 #include "engine/gameplay/GameState.hpp"
 #include "engine/gameplay/Players.hpp"
 #include "engine/gameplay/CameraManager.hpp"
@@ -17,8 +18,6 @@
 namespace kb::scene { class Scene; }
 
 namespace kb::gameplay {
-
-using GameSceneId = std::uint64_t;
 
 // Owns services whose lifetime is deliberately longer than every individual
 // Scene. Scene-local assets, input and module hosts remain owned by Scene;
@@ -40,6 +39,7 @@ public:
     [[nodiscard]] kb::scene::Scene* FindScene(GameSceneId id) noexcept;
     [[nodiscard]] const kb::scene::Scene* FindScene(GameSceneId id) const noexcept;
     [[nodiscard]] bool SetActiveScene(GameSceneId id) noexcept;
+    [[nodiscard]] bool TransitionToScene(GameSceneId id) noexcept;
     [[nodiscard]] GameSceneId ActiveSceneId() const noexcept;
     [[nodiscard]] kb::scene::Scene* ActiveScene() noexcept;
     [[nodiscard]] const kb::scene::Scene* ActiveScene() const noexcept;
@@ -55,6 +55,8 @@ public:
     [[nodiscard]] const Players& PlayerRegistry() const noexcept { return players_; }
     [[nodiscard]] CameraManager& Cameras() noexcept { return cameras_; }
     [[nodiscard]] MatchRuntime& Match() noexcept { return match_; }
+    [[nodiscard]] GameFlow& Flow() noexcept { return flow_; }
+    [[nodiscard]] const GameFlow& Flow() const noexcept { return flow_; }
 
 private:
     struct Entry { GameSceneId id = 0U; std::unique_ptr<kb::scene::Scene> scene; };
@@ -65,6 +67,7 @@ private:
     Players players_;
     CameraManager cameras_;
     MatchRuntime match_;
+    GameFlow flow_;
     std::vector<Entry> scenes_;
     GameSceneId nextSceneId_ = 1U;
     GameSceneId activeScene_ = 0U;
