@@ -18,6 +18,7 @@
 #include "engine/core/ProfilerCounters.hpp"
 #include "engine/core/ConsoleCommands.hpp"
 #include "engine/core/RuntimeInspector.hpp"
+#include "engine/library/EngineLibraryDeterminism.hpp"
 #include "engine/network/NetworkModel.hpp"
 #include "engine/network/NetworkBudget.hpp"
 #include "engine/network/NetworkObject.hpp"
@@ -67,6 +68,7 @@
 
 #include <algorithm>
 #include <array>
+#include <ranges>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -2944,6 +2946,23 @@ ReadScriptValue(
         return { complete,
             complete ? "all live functions are explicitly main_thread"
                      : "a live function has no audited execution affinity" };
+    }
+
+    if (*operation == "assert_deterministic_library_profile") {
+        constexpr std::array expected{
+            kb::library::DeterministicLibraryFeature::RandomStreams,
+            kb::library::DeterministicLibraryFeature::Timers,
+            kb::library::DeterministicLibraryFeature::ExecutionOrder,
+            kb::library::DeterministicLibraryFeature::InputReplay,
+            kb::library::DeterministicLibraryFeature::FixedSimulation,
+        };
+        const bool complete = kb::library::kDeterministicLibraryFeatures.size() == expected.size() &&
+            std::ranges::all_of(expected, [](kb::library::DeterministicLibraryFeature feature) {
+                return kb::library::IsDeterministicLibraryFeature(feature);
+            });
+        return { complete,
+            complete ? "deterministic library profile covers replay prerequisites"
+                     : "deterministic library profile is incomplete" };
     }
 
     if (*operation == "assert_runtime_snapshot_queue") {
