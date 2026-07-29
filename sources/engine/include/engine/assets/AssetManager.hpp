@@ -157,7 +157,7 @@ public:
             : AssetHandle<T>{ id, std::static_pointer_cast<const T>(std::move(payload)) };
     }
 
-    [[nodiscard]] bool RequestLoadAsync(AssetId id);
+    [[nodiscard]] bool RequestLoadAsync(AssetId id, AssetUnloadPolicy policy = AssetUnloadPolicy::Retain);
     void PumpAsyncLoads();
     [[nodiscard]] AsyncAssetLoadStatus AsyncLoadStatus(AssetId id) const noexcept;
     [[nodiscard]] std::string AsyncLoadError(AssetId id) const;
@@ -276,6 +276,7 @@ private:
 
     void StartAsyncWorker();
     void StopAsyncWorker() noexcept;
+    void RestartAsyncLoads();
     void RunAsyncWorker() noexcept;
     [[nodiscard]] std::shared_ptr<void> LoadUntyped(AssetId id, std::type_index expectedType);
 
