@@ -52,6 +52,7 @@ scenario-local aliases.
 | `assert_file` | project-relative `path`; optional `exists`, `min_size`, `contains` |
 | `assert_game_flow` | Exercises the production `GameInstance` checkpoint, pause/resume, valid/invalid scene transitions, win/lose and restart lifecycle against the active project descriptor. |
 | `init_agent_project` | Runs the production `kb_cli init-agent` provisioning path for the active project, including loadable starter and sample gameplay assets. |
+| `assert_first_release_network_model` | Verifies the compiled first-release network contract is offline-only, rejects session opening and exposes no `Network.*` script API. |
 | `discover_assets` | none |
 | `unload_asset` | asset alias or virtual path; force-loads then unloads the live `AssetManager` entry so a running system must reacquire it |
 | `import_asset` | `source` project-relative path, `destination` virtual folder |
