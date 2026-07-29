@@ -37,6 +37,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/gameplay/GameInstance.hpp"
 #include "engine/gameplay/GameplayIdentity.hpp"
+#include "engine/gameplay/Damage.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -4104,6 +4105,18 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    const kb::gameplay::DamageEvent hit{ .source = kb::scene::SceneEntity{1U}, .instigator = kb::scene::SceneEntity{1U}, .target = kb::scene::SceneEntity{2U}, .hitEntity = kb::scene::SceneEntity{2U}, .type = kb::gameplay::DamageType::Fire, .amount = 10.0F };
+    const kb::gameplay::DamageResistances resistances{ .multipliers = { 1.0F, 0.5F, 1.0F } };
+    const std::optional<kb::gameplay::DamageResolution> resolvedHit = kb::gameplay::ResolveDamage(hit, resistances);
+    const std::optional<kb::gameplay::DamageResolution> resolvedHealing = kb::gameplay::ResolveDamage(
+        kb::gameplay::DamageEvent{ .target = kb::scene::SceneEntity{2U}, .type = kb::gameplay::DamageType::Healing, .amount = 4.0F },
+        resistances);
+    kb::tests::Require(
+        resolvedHit.has_value() && resolvedHit->event.source == hit.source && resolvedHit->event.instigator == hit.instigator &&
+            resolvedHit->event.hitEntity == hit.hitEntity && resolvedHit->healthDelta == -5.0F &&
+            resolvedHealing.has_value() && resolvedHealing->healthDelta == 4.0F &&
+            !kb::gameplay::ResolveDamage(kb::gameplay::DamageEvent{}, resistances).has_value(),
+        "Damage resolution did not preserve typed context, resistances, or damage/heal direction");
     constexpr kb::gameplay::GameplayIdentity blue{ .team = 1U, .faction = 7U, .layers = 0x2U, .tag = kb::gameplay::GameplayTag("player") };
     constexpr kb::gameplay::GameplayIdentity blueOther{ .team = 1U, .faction = 7U, .layers = 0x2U, .tag = kb::gameplay::GameplayTag("player") };
     kb::tests::Require(kb::gameplay::IsFriendly(blue, blueOther) && kb::gameplay::SharesLayer(blue, blueOther) &&
