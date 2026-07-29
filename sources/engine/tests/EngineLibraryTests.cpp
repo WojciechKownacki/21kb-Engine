@@ -57,6 +57,7 @@
 #include "engine/platform/PlatformAdapters.hpp"
 #include "engine/platform/PlatformLocale.hpp"
 #include "engine/core/EngineLog.hpp"
+#include "engine/core/EngineAssertions.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -4127,6 +4128,7 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    kb::tests::Require(kb::core::EvaluateAssertion(false,kb::core::AssertionPolicy::Development,"x").fatal&&!kb::core::EvaluateAssertion(false,kb::core::AssertionPolicy::Release,"x").fatal, "Assertion policy did not distinguish development and release failures");
     kb::core::EngineLog engineLog{ 2U }; kb::tests::Require(engineLog.Write({ .level=kb::core::LogLevel::Warn, .category="AI", .message="event", .entity=1U, .world=2U, .fields={{"state","alert"}} }, 5U, 1U) && !engineLog.Write({}, 5U, 1U) && engineLog.Records().front().entity==1U && engineLog.Records().front().fields.front().key=="state", "Engine log did not retain structured context or rate limit duplicate key");
     constexpr kb::platform::SafeDateTime date{ .unixSeconds = 1000 }; const kb::platform::PlatformLocale locale{ .language="pl", .region="PL", .utcOffsetMinutes=120 }; kb::tests::Require(locale.IsValid()&&date.ToLocalSeconds(locale)==8200, "Platform locale and safe date-time contract is invalid");
     TestPlatformAdapter adapter; kb::tests::Require(adapter.IsAvailable(kb::platform::OptionalPlatformService::Achievements)&&!adapter.IsAvailable(kb::platform::OptionalPlatformService::CloudSave)&&adapter.UnlockAchievement("first"), "Optional platform adapter did not expose capability availability");
