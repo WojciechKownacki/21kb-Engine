@@ -12,6 +12,7 @@
 #include "engine/input/InputKey.hpp"
 #include "engine/gameplay/GameInstance.hpp"
 #include "engine/core/EngineLog.hpp"
+#include "engine/core/EngineAssertions.hpp"
 #include "engine/network/NetworkModel.hpp"
 #include "engine/network/NetworkBudget.hpp"
 #include "engine/network/NetworkObject.hpp"
@@ -912,6 +913,22 @@ ReadScriptValue(
             std::get<bool>(fields[2U].value);
         return { valid, valid ? "typed structured log fields"
                               : "structured log field contract rejected" };
+    }
+
+    if (*operation == "assert_assertion_policy") {
+        const auto development = kb::core::Assert(false,
+            kb::core::AssertionPolicy::Development, "broken", { "script.lua:12" });
+        const auto release = kb::core::Assert(false,
+            kb::core::AssertionPolicy::Release, "broken");
+        const auto required = kb::core::Require(false,
+            kb::core::AssertionPolicy::Release, "broken");
+        const auto soft = kb::core::SoftFail(false,
+            kb::core::AssertionPolicy::Development, "broken");
+        const bool valid = development.fatal && !release.fatal && required.fatal &&
+            !soft.fatal && development.scriptStackTrace ==
+                std::vector<std::string>{ "script.lua:12" };
+        return { valid, valid ? "assert, require, soft-fail and script stack trace"
+                              : "assertion policy contract rejected" };
     }
 
     if (*operation == "assert_user_storage") {

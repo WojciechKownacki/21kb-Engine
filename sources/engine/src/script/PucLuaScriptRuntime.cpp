@@ -616,11 +616,14 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
         luaL_unref(state_, LUA_REGISTRYINDEX, coroutineRef);
     }
     if (status != LUA_OK) {
+        const std::size_t traceOffset = coroutineError.find("\nstack traceback:");
         result.diagnostics.push_back(ScriptDiagnostic{
             .entity = context.Self(),
             .assetId = assetId,
             .backend = behaviour.backend,
-            .message = coroutineError,
+            .message = coroutineError.substr(0U, traceOffset),
+            .stackTrace = traceOffset == std::string::npos ? std::string{}
+                : coroutineError.substr(traceOffset + 1U),
         });
         eraseDestroyedInstanceState();
         return result;
