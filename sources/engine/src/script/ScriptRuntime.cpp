@@ -3,6 +3,7 @@
 #include "engine/scene/BehaviourExecutionOrder.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -113,6 +114,9 @@ void DispatchSceneBehaviours(kb::scene::Scene& scene, DispatchContext& context) 
     scene.Components().Behaviours().ForEach(&CollectBehaviour, &behaviours);
     std::ranges::sort(behaviours, &ComesBefore);
     for (const BehaviourDispatchRecord& record : behaviours) {
+        if (!scene.Entities().IsActive(record.entity)) {
+            continue;
+        }
         if (context.event != nullptr && context.event->target.IsValid() && record.entity != context.event->target) {
             continue;
         }
