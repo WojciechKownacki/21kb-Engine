@@ -59,6 +59,7 @@
 #include "engine/core/EngineLog.hpp"
 #include "engine/core/EngineAssertions.hpp"
 #include "engine/core/DebugDraw.hpp"
+#include "engine/core/ProfilerCounters.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -4129,6 +4130,7 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    kb::core::ProfilerCounters profiler;profiler.Scope("tick");profiler.Timeline("step");profiler.Allocation();kb::tests::Require(profiler.scopes==1U&&profiler.timelineEvents==1U&&profiler.allocations==1U,"Profiler counters did not record scope, timeline, allocation");
     kb::core::DebugDrawBuffer draw{1U}; kb::tests::Require(draw.Add({.kind=kb::core::DebugDrawKind::Line,.duration=1.0F,.channel=3U})&&!draw.Add({}) ,"Debug draw buffer did not enforce bounded commands");
     kb::tests::Require(kb::core::EvaluateAssertion(false,kb::core::AssertionPolicy::Development,"x").fatal&&!kb::core::EvaluateAssertion(false,kb::core::AssertionPolicy::Release,"x").fatal, "Assertion policy did not distinguish development and release failures");
     kb::core::EngineLog engineLog{ 2U }; kb::tests::Require(engineLog.Write({ .level=kb::core::LogLevel::Warn, .category="AI", .message="event", .entity=1U, .world=2U, .fields={{"state","alert"}} }, 5U, 1U) && !engineLog.Write({}, 5U, 1U) && engineLog.Records().front().entity==1U && engineLog.Records().front().fields.front().key=="state", "Engine log did not retain structured context or rate limit duplicate key");
