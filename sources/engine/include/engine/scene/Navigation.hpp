@@ -5,11 +5,13 @@
 #include <array>
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <cmath>
 #include <limits>
 #include <queue>
 #include <mutex>
+#include <span>
 #include <thread>
 #include <vector>
 
@@ -102,6 +104,71 @@ struct NavSteeringResult {
     kb::math::Vec3 desiredVelocity{};
     bool arrived = false;
 };
+
+// Snapshot supplied by the owner of a navigation crowd query. Ordering is
+// significant: callers must provide a deterministic entity-id order, so the
+// accumulated correction is replayable across machines.
+struct NavAvoidanceNeighbor {
+    kb::math::Vec3 position{};
+    float radius = 0.5F;
+    bool enabled = true;
+};
+
+// Local horizontal avoidance is deliberately only a velocity recommendation.
+// It neither queries nor writes physics state: CharacterMove/physics remains
+// responsible for collision, grounding, gravity and the final movement.
+[[nodiscard]] inline kb::math::Vec3 ComputeNavAvoidance(
+    const NavAgent& agent,
+    const kb::math::Vec3& position,
+    const kb::math::Vec3& desiredVelocity,
+    std::span<const NavAvoidanceNeighbor> neighbours) noexcept {
+    float correctionX = 0.0F;
+    float correctionZ = 0.0F;
+    std::size_t neighbourIndex = 0U;
+    for (const NavAvoidanceNeighbor& neighbour : neighbours) {
+        if (!neighbour.enabled || !(neighbour.radius > 0.0F)) continue;
+        const float dx = position.x - neighbour.position.x;
+        const float dz = position.z - neighbour.position.z;
+        const float distanceSquared = dx * dx + dz * dz;
+        const float separation = agent.radius + neighbour.radius;
+        if (!(separation > 0.0F) || distanceSquared >= separation * separation) continue;
+
+        float normalX = 0.0F;
+        float normalZ = 0.0F;
+        float weight = 1.0F;
+        if (distanceSquared > 0.0F) {
+            const float distance = std::sqrt(distanceSquared);
+            normalX = dx / distance;
+            normalZ = dz / distance;
+            weight = (separation - distance) / separation;
+        } else {
+            const float desiredMagnitudeSquared =
+                desiredVelocity.x * desiredVelocity.x + desiredVelocity.z * desiredVelocity.z;
+            if (desiredMagnitudeSquared > 0.0F) {
+                const float inverseMagnitude = 1.0F / std::sqrt(desiredMagnitudeSquared);
+                normalX = -desiredVelocity.x * inverseMagnitude;
+                normalZ = -desiredVelocity.z * inverseMagnitude;
+            } else if ((neighbourIndex & 1U) == 0U) {
+                normalX = 1.0F;
+            } else {
+                normalZ = 1.0F;
+            }
+        }
+        correctionX += normalX * agent.maxSpeed * weight;
+        correctionZ += normalZ * agent.maxSpeed * weight;
+        ++neighbourIndex;
+    }
+    float velocityX = desiredVelocity.x + correctionX;
+    float velocityZ = desiredVelocity.z + correctionZ;
+    const float magnitudeSquared = velocityX * velocityX + velocityZ * velocityZ;
+    const float maxSpeedSquared = agent.maxSpeed * agent.maxSpeed;
+    if (magnitudeSquared > maxSpeedSquared && magnitudeSquared > 0.0F) {
+        const float scale = agent.maxSpeed / std::sqrt(magnitudeSquared);
+        velocityX *= scale;
+        velocityZ *= scale;
+    }
+    return { velocityX, 0.0F, velocityZ };
+}
 
 // Produces only horizontal input for PhysicsBackend::CharacterMove. It never
 // writes Transform, Rigidbody or CharacterController state: the live physics

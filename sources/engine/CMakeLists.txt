@@ -49,6 +49,7 @@ add_library(kb_engine STATIC
     include/engine/network/NetworkSession.hpp
     include/engine/project/ProjectDescriptor.hpp
     include/engine/platform/PlatformCapabilities.hpp
+    include/engine/platform/PlatformServices.hpp
     include/engine/platform/UserStorage.hpp
     include/engine/platform/SettingsTransaction.hpp
     include/engine/platform/PlatformAdapters.hpp
@@ -585,6 +586,8 @@ add_library(kb_engine STATIC
     src/scene/components/SceneAnimatorApi.cpp
     src/scene/components/SceneAnimatorStorage.cpp
     src/scene/components/SceneUIDocumentStorage.cpp
+    src/scene/components/SceneNavigationApi.cpp
+    src/scene/components/SceneNavigationStorage.cpp
     src/scene/components/SceneComponentAccess.cpp
     src/scene/components/SceneComponentRegistry.cpp
     src/scene/components/SceneComponentStorage.cpp
@@ -653,6 +656,7 @@ add_library(kb_engine STATIC
     src/scene/modules/components/SceneBehaviourModule.cpp
     src/scene/modules/components/SceneComponentIterationModule.cpp
     src/scene/modules/components/SceneComponentModule.cpp
+    src/scene/modules/components/SceneNavigationModule.cpp
     src/scene/modules/components/SceneInputModule.cpp
     src/scene/modules/components/SceneLightModule.cpp
     src/scene/modules/components/SceneColliderModule.cpp

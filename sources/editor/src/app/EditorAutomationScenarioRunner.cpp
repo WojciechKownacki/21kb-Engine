@@ -1,6 +1,7 @@
 #include "app/EditorAutomationScenarioRunner.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorCrashBreadcrumbs.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
@@ -10,6 +11,26 @@
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputKey.hpp"
+#include "engine/gameplay/GameInstance.hpp"
+#include "engine/core/EngineLog.hpp"
+#include "engine/core/EngineAssertions.hpp"
+#include "engine/core/DebugDraw.hpp"
+#include "engine/core/ProfilerCounters.hpp"
+#include "engine/core/ConsoleCommands.hpp"
+#include "engine/core/RuntimeInspector.hpp"
+#include "engine/network/NetworkModel.hpp"
+#include "engine/network/NetworkBudget.hpp"
+#include "engine/network/NetworkObject.hpp"
+#include "engine/network/NetworkPrediction.hpp"
+#include "engine/network/NetworkSecurity.hpp"
+#include "engine/network/NetworkSimulation.hpp"
+#include "engine/network/NetworkVariable.hpp"
+#include "engine/network/Rpc.hpp"
+#include "engine/network/NetworkSession.hpp"
+#include "engine/platform/PlatformServices.hpp"
+#include "engine/platform/PlatformAdapters.hpp"
+#include "engine/platform/SettingsTransaction.hpp"
+#include "engine/platform/UserStorage.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
@@ -20,8 +41,18 @@
 #include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneUIDocuments.hpp"
+#include "engine/script/ScriptAgentProjectFiles.hpp"
+#include "engine/script/ScriptApiCatalog.hpp"
+#include "engine/script/PucLuaScriptRuntime.hpp"
+#include "engine/script/ScriptEventBus.hpp"
+#include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptSceneComponentApi.hpp"
 #include "engine/script/ScriptValue.hpp"
+#include "engine/script/VisualGraphScriptBackend.hpp"
+#include "engine/visual/VisualGraphBehaviourInstanceRegistry.hpp"
+#include "engine/visual/VisualGraphRuntimeBindingRegistry.hpp"
+#include "engine/visual/VisualGraphRuntimeRegistry.hpp"
+#include "engine/visual/VisualGraphDebugSession.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -29,6 +60,10 @@
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 
 #include <Windows.h>
+
+#ifdef DrawText
+#undef DrawText
+#endif
 
 #include <algorithm>
 #include <array>
@@ -38,6 +73,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -504,6 +540,653 @@ ReadScriptValue(
     }
     const auto operation = StringMember(step, "op", error);
     if (!operation.has_value()) return { false, error };
+
+    if (*operation == "init_agent_project") {
+        kb::script::ScriptRuntimeHost host{ state.context.Scene() };
+        if (!host.Succeeded()) {
+            return { false, "script runtime host could not be created" };
+        }
+        const kb::script::ScriptApiCatalog catalog =
+            kb::script::ScriptApiCatalog::Build(host);
+        const kb::script::ScriptAgentProjectFilesResult provisioned =
+            kb::script::ScriptAgentProjectFiles::Write(
+                state.context.ProjectFile().parent_path(), catalog);
+        return {
+            provisioned.succeeded,
+            provisioned.succeeded
+                ? "agent project provisioned"
+                : provisioned.error };
+    }
+
+    if (*operation == "assert_first_release_network_model") {
+        kb::script::ScriptRuntimeHost host{ state.context.Scene() };
+        if (!host.Succeeded()) {
+            return { false, "script runtime host could not be created" };
+        }
+        const kb::script::ScriptApiCatalog catalog =
+            kb::script::ScriptApiCatalog::Build(host);
+        const bool exposesNetworkApi = std::ranges::any_of(
+            catalog.functions,
+            [](const kb::script::ScriptApiCatalogFunction& function) {
+                return function.name.starts_with("Network.");
+            });
+        const bool offline =
+            kb::network::kFirstReleaseNetwork.model ==
+                kb::network::NetworkModel::OfflineOnly &&
+            !kb::network::kFirstReleaseNetwork.HasTransport() &&
+            !kb::network::CanOpenNetworkSession(
+                kb::network::kFirstReleaseNetwork) &&
+            !exposesNetworkApi;
+        return {
+            offline,
+            offline ? "offline-only; no transport or script API"
+                    : "first-release network contract is open" };
+    }
+
+    if (*operation == "assert_network_object_lifecycle") {
+        kb::network::NetworkObjects objects;
+        const bool lifecycle =
+            !objects.Spawn({}) &&
+            objects.Spawn({ .id = 7U, .owner = 11U,
+                .role = kb::network::NetworkRole::Authority }) &&
+            !objects.Spawn({ .id = 7U, .owner = 12U,
+                .role = kb::network::NetworkRole::Authority }) &&
+            objects.CanAcceptOwnerCommand(7U, 11U) &&
+            !objects.CanAcceptOwnerCommand(7U, 12U) &&
+            objects.AssignOwner(7U, 12U) &&
+            objects.Spawn({ .id = 8U, .owner = 12U,
+                .role = kb::network::NetworkRole::Proxy }) &&
+            !objects.AssignOwner(8U, 13U) && objects.Despawn(7U) &&
+            !objects.Find(7U).has_value() &&
+            !objects.CanAcceptOwnerCommand(7U, 12U) && !objects.Despawn(7U);
+        return {
+            lifecycle,
+            lifecycle ? "authority, ownership, spawn and despawn"
+                      : "network object lifecycle rejected" };
+    }
+
+    if (*operation == "assert_replication_schema") {
+        const kb::network::ReplicationSchema schema{
+            .version = 1U,
+            .fields = {
+                { .id = 1U, .name = "health",
+                    .type = kb::network::ReplicatedFieldType::QuantizedFloat,
+                    .minimum = 0.0F, .maximum = 100.0F,
+                    .quantizationBits = 10U },
+                { .id = 2U, .name = "alive",
+                    .type = kb::network::ReplicatedFieldType::Boolean },
+            } };
+        const kb::network::ReplicationSchema incompatible{
+            .version = 1U,
+            .fields = {
+                { .id = 1U, .name = "health",
+                    .type = kb::network::ReplicatedFieldType::UnsignedInteger },
+                { .id = 2U, .name = "alive",
+                    .type = kb::network::ReplicatedFieldType::Boolean },
+            } };
+        const std::optional<std::uint32_t> quantized =
+            kb::network::QuantizeFloat(schema.fields.front(), 50.0F);
+        const std::optional<float> restored = quantized.has_value()
+            ? kb::network::DequantizeFloat(schema.fields.front(), *quantized)
+            : std::nullopt;
+        const bool valid = kb::network::ValidateReplicationSchema(schema) &&
+            quantized.has_value() && restored.has_value() &&
+            std::abs(*restored - 50.0F) <= 0.1F &&
+            kb::network::ComputeDeltaFields(schema, { 1U, 0U }, { 1U, 1U }) ==
+                std::vector<std::uint16_t>{ 2U } &&
+            kb::network::AreSchemasCompatible(schema, schema) &&
+            !kb::network::AreSchemasCompatible(schema, incompatible);
+        return {
+            valid,
+            valid ? "versioned schema, quantization and delta"
+                  : "replication schema contract rejected" };
+    }
+
+    if (*operation == "assert_rpc_contract") {
+        kb::network::NetworkObjects objects;
+        const bool valid =
+            objects.Spawn({ .id = 8U, .owner = 20U,
+                .role = kb::network::NetworkRole::Authority }) &&
+            kb::network::ValidateRpc(objects, { .object = 8U, .sender = 20U,
+                .reliability = kb::network::RpcReliability::Reliable,
+                .direction = kb::network::RpcDirection::ClientToServer }) &&
+            kb::network::ValidateRpc(objects, { .object = 8U, .sender = 20U,
+                .reliability = kb::network::RpcReliability::Unreliable,
+                .direction = kb::network::RpcDirection::ClientToServer }) &&
+            !kb::network::ValidateRpc(objects, { .object = 8U, .sender = 21U,
+                .direction = kb::network::RpcDirection::ClientToServer }) &&
+            objects.Spawn({ .id = 9U, .owner = 1U,
+                .role = kb::network::NetworkRole::Proxy }) &&
+            kb::network::ValidateRpc(objects, { .object = 9U, .sender = 1U,
+                .reliability = kb::network::RpcReliability::Reliable,
+                .direction = kb::network::RpcDirection::ServerToClient }) &&
+            !kb::network::ValidateRpc(objects, { .object = 9U, .sender = 2U,
+                .direction = kb::network::RpcDirection::ServerToClient });
+        return {
+            valid,
+            valid ? "reliable/unreliable RPC ownership directions"
+                  : "RPC ownership contract rejected" };
+    }
+
+    if (*operation == "assert_network_variable") {
+        std::int32_t delta = 0;
+        kb::network::NetworkVariable<std::int32_t> value{ 2 };
+        value.SetChangedCallback(
+            [](void* context, std::int32_t previous,
+                std::int32_t current) noexcept {
+                *static_cast<std::int32_t*>(context) = current - previous;
+            },
+            &delta);
+        kb::network::NetworkVariable<std::int32_t> saturated{ 1 };
+        const bool valid = value.Set(5) && value.Revision() == 1U &&
+            delta == 3 && !value.Apply(7, 1U) && value.Apply(7, 2U) &&
+            value.Value() == 7 && delta == 2 &&
+            saturated.Apply(2, std::numeric_limits<std::uint64_t>::max()) &&
+            !saturated.Set(3) && saturated.Value() == 2;
+        return {
+            valid,
+            valid ? "typed revision, callback and stale update rejection"
+                  : "network variable contract rejected" };
+    }
+
+    if (*operation == "assert_network_prediction") {
+        const kb::network::NetworkSnapshot predicted{
+            .tick = 5U, .acknowledgedInput = 3U,
+            .position = { 0.0F, 0.0F, 0.0F } };
+        const kb::network::NetworkSnapshot authoritative{
+            .tick = 5U, .acknowledgedInput = 3U,
+            .position = { 4.0F, 0.0F, 0.0F } };
+        const kb::network::NetworkSnapshot interpolationNext{
+            .tick = 6U, .acknowledgedInput = 3U,
+            .position = { 4.0F, 0.0F, 0.0F } };
+        const kb::network::NetworkSnapshot mismatchedAcknowledgement{
+            .tick = 5U, .acknowledgedInput = 4U };
+        const kb::network::NetworkSnapshot mismatchedVelocity{
+            .tick = 5U, .acknowledgedInput = 3U,
+            .velocity = { 2.0F, 0.0F, 0.0F } };
+        const std::optional<kb::network::NetworkSnapshot> interpolated =
+            kb::network::Interpolate(
+                { .previous = predicted, .next = interpolationNext }, 0.5F);
+        const bool valid =
+            kb::network::IsValidInputCommand(
+                { .tick = 5U, .sequence = 3U, .moveX = 1.0F }) &&
+            kb::network::IsValidInputCommand(
+                { .tick = 5U, .sequence = 0U, .moveX = 1.0F }) &&
+            !kb::network::IsValidInputCommand(
+                { .tick = 0U, .sequence = 3U, .moveX = 1.0F }) &&
+            interpolated.has_value() && interpolated->position.x == 2.0F &&
+            !kb::network::Interpolate(
+                 { .previous = predicted, .next = predicted }, 0.5F)
+                 .has_value() &&
+            kb::network::RequiresReconciliation(
+                predicted, authoritative, 1.0F) &&
+            kb::network::RequiresReconciliation(
+                predicted, mismatchedAcknowledgement, 1.0F) &&
+            kb::network::RequiresReconciliation(
+                predicted, mismatchedVelocity, 1.0F);
+        return {
+            valid,
+            valid ? "input, snapshots, interpolation and reconciliation"
+                  : "network prediction contract rejected" };
+    }
+
+    if (*operation == "assert_network_budget") {
+        constexpr kb::network::NetworkBudget budget{};
+        kb::network::NetworkTickClock clock{ budget };
+        kb::network::NetworkTickClock invalidClock{ { .tickRate = 1U } };
+        const bool valid = kb::network::IsValidNetworkBudget(budget) &&
+            kb::network::AcceptsPacket(budget, 0U, budget.packetBytes) &&
+            kb::network::AcceptsPacket(
+                budget, budget.maxQueuedBytes - budget.packetBytes,
+                budget.packetBytes) &&
+            !kb::network::AcceptsPacket(
+                budget, budget.maxQueuedBytes - budget.packetBytes + 1U,
+                budget.packetBytes) &&
+            clock.Advance(33333U) == 0U && clock.Advance(1U) == 1U &&
+            clock.Tick() == 1U && clock.Advance(1'000'000U) == 30U &&
+            clock.Tick() == 31U && clock.RemainderMicroticks() == 20U &&
+            invalidClock.Advance(1'000'000U) == 0U;
+        return {
+            valid,
+            valid ? "tick clock, packet budget and backpressure"
+                  : "network budget contract rejected" };
+    }
+
+    if (*operation == "assert_network_security") {
+        kb::network::NetworkObjects objects;
+        constexpr kb::network::NetworkSecurityLimits limits{};
+        const bool valid =
+            objects.Spawn({ .id = 31U, .owner = 41U,
+                .role = kb::network::NetworkRole::Authority }) &&
+            kb::network::ValidateIncomingMessage(
+                objects, limits, 31U, 41U, 10U, 0U, 10U) &&
+            !kb::network::ValidateIncomingMessage(
+                objects, limits, 0U, 41U, 10U, 0U, 10U) &&
+            !kb::network::ValidateIncomingMessage(
+                objects, limits, 31U, 0U, 10U, 0U, 10U) &&
+            !kb::network::ValidateIncomingMessage(
+                objects, limits, 31U, 42U, 10U, 0U, 10U) &&
+            !kb::network::ValidateIncomingMessage(
+                objects, limits, 31U, 41U, limits.maxPayloadBytes + 1U,
+                0U, limits.maxPayloadBytes + 1U) &&
+            !kb::network::ValidateIncomingMessage(
+                objects, limits, 31U, 41U, 10U,
+                limits.maxMessagesPerTick, 10U) &&
+            !kb::network::ValidateIncomingMessage(
+                objects, limits, 31U, 41U, 10U, 0U, 11U);
+        return {
+            valid,
+            valid ? "server validation, rate and deserialization bounds"
+                  : "network security contract rejected" };
+    }
+
+    if (*operation == "assert_network_simulation") {
+        constexpr kb::network::NetworkSimulationConfig reordered{
+            .latencyMilliseconds = 40U, .jitterMilliseconds = 5U,
+            .reorderPermille = 1000U, .seed = 8U };
+        constexpr kb::network::NetworkSimulationConfig lossAndDisconnect{
+            .latencyMilliseconds = 40U, .jitterMilliseconds = 5U,
+            .lossPermille = 1000U, .disconnectAtTick = 10U, .seed = 8U };
+        const std::optional<kb::network::NetworkSimulationDecision> delayed =
+            kb::network::SimulateNetworkPacket(reordered, 2U, 3U);
+        const std::optional<kb::network::NetworkSimulationDecision> dropped =
+            kb::network::SimulateNetworkPacket(lossAndDisconnect, 2U, 3U);
+        const std::optional<kb::network::NetworkSimulationDecision> disconnected =
+            kb::network::SimulateNetworkPacket(lossAndDisconnect, 10U, 3U);
+        const bool valid = delayed.has_value() && dropped.has_value() &&
+            disconnected.has_value() && delayed->reordered &&
+            !delayed->dropped && delayed->deliveryDelayMilliseconds >= 35U &&
+            delayed->deliveryDelayMilliseconds <= 45U && dropped->dropped &&
+            dropped->deliveryDelayMilliseconds == 0U &&
+            disconnected->disconnected && !disconnected->dropped &&
+            kb::network::NetworkSimulationRandom(reordered, 2U, 3U) ==
+                kb::network::NetworkSimulationRandom(reordered, 2U, 3U) &&
+            !kb::network::SimulatedDeliveryDelayMilliseconds(
+                 { .latencyMilliseconds = 5U, .jitterMilliseconds = 6U },
+                 1U, 1U)
+                 .has_value();
+        return {
+            valid,
+            valid ? "latency, jitter, loss, reorder and disconnect"
+                  : "network simulation contract rejected" };
+    }
+
+    if (*operation == "assert_offline_network_sessions") {
+        const kb::network::ReplicationSchema schema{
+            .version = 1U,
+            .fields = { { .id = 1U, .name = "state",
+                .type = kb::network::ReplicatedFieldType::Boolean } } };
+        const kb::network::ReplicationSchema mismatch{
+            .version = 2U,
+            .fields = { { .id = 1U, .name = "state",
+                .type = kb::network::ReplicatedFieldType::Boolean } } };
+        kb::network::NetworkObjects objects;
+        const bool valid =
+            !kb::network::CanOpenNetworkSession(
+                kb::network::kFirstReleaseNetwork) &&
+            objects.Spawn({ .id = 71U, .owner = 81U,
+                .role = kb::network::NetworkRole::Authority }) &&
+            objects.Despawn(71U) &&
+            !kb::network::ValidateRpc(objects, { .object = 71U,
+                .sender = 81U,
+                .direction = kb::network::RpcDirection::ClientToServer }) &&
+            !kb::network::AreSchemasCompatible(schema, mismatch);
+        return {
+            valid,
+            valid ? "offline host/client, despawned RPC and schema mismatch"
+                  : "offline network-session contract rejected" };
+    }
+
+    if (*operation == "assert_platform_capabilities") {
+        struct Probe {
+            bool clipboard = false;
+            bool url = false;
+            bool vibration = false;
+            [[nodiscard]] static bool Clipboard(void* context,
+                std::string_view text) noexcept {
+                auto& probe = *static_cast<Probe*>(context);
+                probe.clipboard = text == "copied";
+                return probe.clipboard;
+            }
+            [[nodiscard]] static bool Url(void* context,
+                std::string_view value) noexcept {
+                auto& probe = *static_cast<Probe*>(context);
+                probe.url = value == "https://21kb.dev";
+                return probe.url;
+            }
+            [[nodiscard]] static bool Vibration(void* context, float low,
+                float high) noexcept {
+                auto& probe = *static_cast<Probe*>(context);
+                probe.vibration = low == 0.25F && high == 0.75F;
+                return probe.vibration;
+            }
+        };
+        constexpr kb::platform::PlatformCapabilities allCapabilities{
+            .flags = static_cast<std::uint32_t>(
+                         kb::platform::PlatformCapability::Locale) |
+                static_cast<std::uint32_t>(
+                    kb::platform::PlatformCapability::UserDataPath) |
+                static_cast<std::uint32_t>(
+                    kb::platform::PlatformCapability::Clipboard) |
+                static_cast<std::uint32_t>(
+                    kb::platform::PlatformCapability::OpenUrl) |
+                static_cast<std::uint32_t>(
+                    kb::platform::PlatformCapability::Vibration) };
+        Probe probe;
+        kb::platform::PlatformServices services{ allCapabilities,
+            { .language = "pl", .region = "PL", .utcOffsetMinutes = 120 },
+            "UserData", { .clipboard = &Probe::Clipboard, .openUrl = &Probe::Url,
+                              .vibration = &Probe::Vibration,
+                              .context = &probe } };
+        kb::platform::PlatformServices restricted{ {},
+            { .language = "pl", .region = "PL", .utcOffsetMinutes = 120 },
+            "UserData" };
+        const std::optional<kb::platform::PlatformLocale> locale =
+            services.Locale();
+        const bool valid = locale.has_value() && locale->language == "pl" &&
+            locale->region == "PL" && services.UserDataPath().has_value() &&
+            services.SetClipboardText("copied") &&
+            services.OpenUrl("https://21kb.dev") &&
+            !services.OpenUrl("file:///outside") &&
+            services.SetVibration(0.25F, 0.75F) && probe.clipboard && probe.url &&
+            probe.vibration && !restricted.Locale().has_value() &&
+            !restricted.UserDataPath().has_value() &&
+            !restricted.SetClipboardText("blocked") &&
+            !restricted.OpenUrl("https://21kb.dev") &&
+            !restricted.SetVibration(0.25F, 0.75F);
+        return {
+            valid,
+            valid ? "capability-gated platform data and actions"
+                  : "platform capability contract rejected" };
+    }
+
+    if (*operation == "assert_engine_log") {
+        kb::core::EngineLog log{ 5U };
+        const kb::core::LogRecord record{ .category = "AI", .message = "event",
+            .entity = 1U, .world = 2U, .fields = {{ "state", "alert" }} };
+        const bool valid = log.Trace(record, 1U, 1U) &&
+            log.Debug(record, 2U, 1U) && log.Info(record, 3U, 1U) &&
+            log.Warn(record, 4U, 1U) && log.Error(record, 5U, 1U) &&
+            !log.Warn(record, 4U, 1U) && log.Records().size() == 5U &&
+            log.Records().front().level == kb::core::LogLevel::Trace &&
+            log.Records().back().level == kb::core::LogLevel::Error &&
+            log.Records().front().entity == 1U && log.Records().front().world == 2U;
+        return { valid, valid ? "five log levels with context and rate limiting"
+                              : "engine log contract rejected" };
+    }
+
+    if (*operation == "assert_structured_log_fields") {
+        kb::core::EngineLog log{ 1U };
+        const kb::core::LogRecord record{ .category = "Combat",
+            .message = "damage applied", .entity = 7U, .world = 9U,
+            .fields = {{ "target", std::uint64_t{ 11U } },
+                { "damage", 12.5 }, { "critical", true }} };
+        const bool written = log.Info(record, 1U, 1U);
+        const auto& fields = log.Records().front().fields;
+        const bool valid = written && fields.size() == 3U &&
+            fields[0U].key == "target" &&
+            std::get<std::uint64_t>(fields[0U].value) == 11U &&
+            std::get<double>(fields[1U].value) == 12.5 &&
+            std::get<bool>(fields[2U].value);
+        return { valid, valid ? "typed structured log fields"
+                              : "structured log field contract rejected" };
+    }
+
+    if (*operation == "assert_assertion_policy") {
+        const auto development = kb::core::Assert(false,
+            kb::core::AssertionPolicy::Development, "broken", { "script.lua:12" });
+        const auto release = kb::core::Assert(false,
+            kb::core::AssertionPolicy::Release, "broken");
+        const auto required = kb::core::Require(false,
+            kb::core::AssertionPolicy::Release, "broken");
+        const auto soft = kb::core::SoftFail(false,
+            kb::core::AssertionPolicy::Development, "broken");
+        const bool valid = development.fatal && !release.fatal && required.fatal &&
+            !soft.fatal && development.scriptStackTrace ==
+                std::vector<std::string>{ "script.lua:12" };
+        return { valid, valid ? "assert, require, soft-fail and script stack trace"
+                              : "assertion policy contract rejected" };
+    }
+
+    if (*operation == "assert_debug_draw") {
+        kb::core::DebugDrawBuffer draw{ 5U };
+        const bool added = draw.DrawLine({}, { 1.0F, 0.0F, 0.0F }, 1.0F, 3U) &&
+            draw.DrawRay({}, { 0.0F, 1.0F, 0.0F }, 1.0F, 3U) &&
+            draw.DrawBox({}, { 1.0F, 1.0F, 1.0F }, 1.0F, 3U) &&
+            draw.DrawSphere({}, 1.0F, 1.0F, 3U) &&
+            draw.DrawText({}, "probe", 1.0F, 3U);
+        const bool valid = kb::core::DebugDrawBuffer::Enabled() && added &&
+            draw.Commands().size() == 5U && draw.Commands().back().text == "probe" &&
+            draw.Commands().front().channel == 3U;
+        draw.Advance(1.0F);
+        return { valid && draw.Commands().empty(), valid ? "debug draw primitives, duration and channel"
+                                                           : "debug draw contract rejected" };
+    }
+
+    if (*operation == "assert_profiler") {
+        kb::core::ProfilerCounters profiler;
+        { auto scope = profiler.BeginScope("tick"); profiler.Counter("entities", 42U); profiler.Allocation(); }
+        const bool valid = kb::core::ProfilerCounters::Enabled() && profiler.scopes == 1U &&
+            profiler.timelineEvents == 1U && profiler.allocations == 1U &&
+            profiler.Counters().size() == 1U && profiler.Counters().front().value == 42U &&
+            profiler.TimelineEvents().size() == 1U;
+        return { valid, valid ? "debug-only profiler scopes, counters, timeline and allocations"
+                              : "profiler contract rejected" };
+    }
+
+    if (*operation == "assert_console_command") {
+        const kb::core::ConsoleCommand command{ .name = "world.pause",
+            .help = "Pause world", .arguments = {{ "paused", kb::core::ConsoleArgumentType::Bool },
+                { "frames", kb::core::ConsoleArgumentType::Integer }},
+            .permission = kb::core::ConsolePermission::Developer };
+        const bool valid = kb::core::CanExecute(command,
+            kb::core::ConsolePermission::Developer, { "true", "2" }) &&
+            !kb::core::CanExecute(command, kb::core::ConsolePermission::User,
+                { "true", "2" }) && !kb::core::CanExecute(command,
+                kb::core::ConsolePermission::Admin, { "yes", "2" }) &&
+            kb::core::HelpFromManifest(command) ==
+                "world.pause <paused:bool> <frames:int> — Pause world";
+        return { valid, valid ? "typed command, permissions and manifest help"
+                              : "console command contract rejected" };
+    }
+
+    if (*operation == "assert_runtime_inspector") {
+        kb::core::RuntimeInspector inspector;
+        inspector.Publish({ .entity = 7U, .components = 3U, .timers = 2U,
+            .subscriptions = 4U, .graphFrames = 5U });
+        const kb::core::RuntimeInspection& snapshot = inspector.Snapshot();
+        const bool valid = snapshot.entity == 7U && snapshot.components == 3U &&
+            snapshot.timers == 2U && snapshot.subscriptions == 4U &&
+            snapshot.graphFrames == 5U;
+        return { valid, valid ? "read-only runtime entity, component, timer, subscription and graph snapshot"
+                              : "runtime inspector contract rejected" };
+    }
+
+    if (*operation == "assert_script_hot_reload") {
+        constexpr kb::assets::AssetId assetId{ 228U };
+        kb::script::PucLuaScriptRuntime lua;
+        const bool luaLoaded = lua.LoadScript(assetId,
+            "function Tick(self, dt) return 1 end", "HotReload.lua", 1U).succeeded;
+        const bool luaReloaded = lua.ReloadScript(assetId,
+            "function Tick(self, dt) return 2 end", "HotReload.lua", 2U).succeeded &&
+            lua.IsScriptCurrent(assetId, 2U);
+        const bool invalidReplacementRetained = !lua.ReloadScript(assetId,
+            "function Tick(", "HotReload.lua", 3U).succeeded && lua.IsScriptCurrent(assetId, 2U);
+
+        kb::visual::VisualGraphRuntimeRegistry artifacts;
+        kb::visual::VisualGraphRuntimeBindingRegistry bindings;
+        kb::visual::VisualGraphBehaviourInstanceRegistry instances;
+        kb::script::VisualGraphScriptBackend graph{ artifacts, bindings, instances };
+        static_cast<void>(instances.FindOrCreate(kb::scene::SceneEntity{ 7U }, assetId));
+        kb::script::ScriptEventBus events;
+        graph.ResetAssetForHotReload(assetId, events);
+        const bool graphStateReleased = instances.Count() == 0U;
+
+        const bool valid = luaLoaded && luaReloaded && invalidReplacementRetained && graphStateReleased;
+        return { valid, valid ? "Lua replacement preserves the last valid program and Visual Graph state is explicitly restarted"
+                              : "script hot reload contract rejected" };
+    }
+
+    if (*operation == "assert_visual_graph_debugger") {
+        constexpr kb::assets::AssetId assetId{ 229U };
+        kb::visual::VisualGraphDebugSession debugger;
+        debugger.SetBreakpoints({ { .assetId = assetId, .nodeId = 7U } });
+        const bool broke = debugger.ShouldPause(assetId, 3U, 7U) &&
+            debugger.LastPause().valid && debugger.LastPause().eventNodeId == 3U;
+        debugger.Resume();
+        const bool resumed = !debugger.ShouldPause(assetId, 3U, 7U);
+        debugger.ClearPause();
+        debugger.SetBreakpoints({});
+        debugger.RequestStepInto();
+        const bool stepped = !debugger.ShouldPause(assetId, 3U, 1U) &&
+            debugger.ShouldPause(assetId, 3U, 2U) &&
+            debugger.LastPause().reason == kb::visual::VisualGraphDebugPauseReason::Step;
+        const bool valid = broke && resumed && stepped;
+        return { valid, valid ? "Visual Graph breakpoint, resume and single-node step preserve source location"
+                              : "Visual Graph debugger contract rejected" };
+    }
+
+    if (*operation == "assert_user_storage") {
+        const std::filesystem::path root =
+            EditorProjectPaths::ProjectRoot() / "UserStorageProbe";
+        std::error_code storageError;
+        std::filesystem::remove_all(root, storageError);
+        kb::platform::UserStorage storage{ root, 8U };
+        const bool valid = storage.Write("save/a", "data") &&
+            storage.Read("save/a") == std::optional<std::string>{ "data" } &&
+            storage.Write("save/a", "new") &&
+            storage.Read("save/a") == std::optional<std::string>{ "new" } &&
+            storage.WriteAsync("save/b", "ok").get() &&
+            storage.List() == std::vector<std::string>{ "save/a", "save/b" } &&
+            storage.Delete("save/a") && !storage.Write("../outside", "bad") &&
+            !storage.Write("C:\\outside", "bad") &&
+            !storage.Write("save/c", "too-large") &&
+            storage.Read("save/b") == std::optional<std::string>{ "ok" };
+        std::filesystem::remove_all(root, storageError);
+        return {
+            valid,
+            valid ? "sandboxed atomic user storage with quota"
+                  : "user storage contract rejected" };
+    }
+
+    if (*operation == "assert_user_storage_failures") {
+        const std::filesystem::path root =
+            EditorProjectPaths::ProjectRoot() / "UserStorageFailureProbe";
+        std::error_code storageError;
+        std::filesystem::remove_all(root, storageError);
+        kb::platform::UserStorage storage{ root, 8U };
+        const bool sandboxRejected = !storage.Write("../outside", "bad") &&
+            !storage.Write("C:\\outside", "bad");
+        const bool quotaRejected = !storage.Write("save/too-large", "too-large");
+        const bool atomicFailurePreserved = storage.Write("save/atomic", "old") &&
+            std::filesystem::create_directories(root / "save/atomic.tmp", storageError) &&
+            !storage.Write("save/atomic", "new") &&
+            storage.Read("save/atomic") == std::optional<std::string>{ "old" };
+        kb::platform::PlatformServices unavailable{ {},
+            { .language = "pl", .region = "PL", .utcOffsetMinutes = 120 },
+            "UserData" };
+        const bool capabilityRejected = !unavailable.Locale().has_value() &&
+            !unavailable.UserDataPath().has_value() &&
+            !unavailable.SetClipboardText("blocked");
+        std::filesystem::remove_all(root, storageError);
+        const bool valid = sandboxRejected && quotaRejected &&
+            atomicFailurePreserved && capabilityRejected;
+        return { valid, valid ? "sandbox, quota, atomic failure and unavailable capability"
+                              : "platform failure contract rejected" };
+    }
+
+    if (*operation == "assert_platform_locale") {
+        const kb::platform::PlatformLocale locale{
+            .language = "pl", .region = "PL", .utcOffsetMinutes = 120 };
+        const kb::platform::PlatformLocale invalidLocale{
+            .language = "p1", .region = "P1", .utcOffsetMinutes = 900 };
+        constexpr kb::platform::SafeDateTime date{ .unixSeconds = 1000 };
+        constexpr kb::platform::SafeDateTime maximumDate{
+            .unixSeconds = std::numeric_limits<std::int64_t>::max() };
+        const bool valid = locale.IsValid() &&
+            date.ToLocalSeconds(locale) == std::optional<std::int64_t>{ 8200 } &&
+            !invalidLocale.IsValid() && !date.ToLocalSeconds(invalidLocale).has_value() &&
+            !maximumDate.ToLocalSeconds(locale).has_value();
+        return { valid, valid ? "bounded locale, UTC offset and safe date-time"
+                              : "platform locale contract rejected" };
+    }
+
+    if (*operation == "assert_runtime_settings") {
+        kb::platform::SettingsTransaction settings{
+            kb::platform::RuntimeSettings{} };
+        settings.Pending().vibration = true;
+        const bool rejectedVibration = !settings.Apply({});
+        settings.Revert();
+        settings.Pending().masterVolume = 0.5F;
+        settings.Pending().videoWidth = 1920U;
+        settings.Pending().videoHeight = 1080U;
+        settings.Pending().fullscreen = true;
+        settings.Pending().mouseSensitivity = 2.0F;
+        const bool applied = settings.Apply(
+            { .flags = static_cast<std::uint32_t>(
+                kb::platform::PlatformCapability::Vibration) },
+            { .maximumVideoWidth = 1920U, .maximumVideoHeight = 1080U,
+                .fullscreen = true });
+        settings.Pending().videoWidth = 2560U;
+        const bool rejectedVideo = !settings.Apply(
+            {}, { .maximumVideoWidth = 1920U, .maximumVideoHeight = 1080U });
+        settings.Revert();
+        settings.Pending().mouseSensitivity = 0.0F;
+        const bool rejectedInput = !settings.Apply({});
+        settings.Revert();
+        const bool valid = rejectedVibration && applied && rejectedVideo &&
+            rejectedInput && settings.Current().masterVolume == 0.5F &&
+            settings.Current().videoWidth == 1920U &&
+            settings.Current().fullscreen &&
+            settings.Pending().mouseSensitivity == 2.0F;
+        return { valid, valid ? "audio, video and input settings transaction"
+                              : "runtime settings contract rejected" };
+    }
+
+    if (*operation == "assert_optional_platform_adapter") {
+        class Adapter final : public kb::platform::IPlatformAdapter {
+        public:
+            [[nodiscard]] bool IsAvailable(
+                kb::platform::OptionalPlatformService service) const noexcept override {
+                return service == kb::platform::OptionalPlatformService::Achievements;
+            }
+            [[nodiscard]] bool UnlockAchievement(std::string_view id) override {
+                return IsAvailable(kb::platform::OptionalPlatformService::Achievements) && !id.empty();
+            }
+        } adapter;
+        const bool valid =
+            adapter.IsAvailable(kb::platform::OptionalPlatformService::Achievements) &&
+            !adapter.IsAvailable(kb::platform::OptionalPlatformService::CloudSave) &&
+            !adapter.IsAvailable(kb::platform::OptionalPlatformService::Dlc) &&
+            !adapter.IsAvailable(kb::platform::OptionalPlatformService::User) &&
+            adapter.UnlockAchievement("first") && !adapter.UnlockAchievement("");
+        return { valid, valid ? "optional achievements, cloud, DLC and user adapter"
+                              : "optional platform adapter contract rejected" };
+    }
+
+    if (*operation == "assert_game_flow") {
+        kb::gameplay::GameInstance game{ state.context.Project() };
+        const kb::gameplay::GameSceneId checkpointScene = game.CreateScene();
+        const kb::gameplay::GameSceneId destinationScene = game.CreateScene();
+        const bool succeeded =
+            checkpointScene != 0U && destinationScene != 0U &&
+            !game.SetCheckpoint(0U) && !game.TransitionToScene(999U) &&
+            game.Flow().State() == kb::gameplay::GameFlowState::Playing &&
+            !game.Flow().PendingTransition().has_value() &&
+            game.SetCheckpoint(checkpointScene) && game.Pause() &&
+            !game.TransitionToScene(destinationScene) && game.Resume() &&
+            game.TransitionToScene(destinationScene) &&
+            game.ActiveSceneId() == destinationScene && game.Win() &&
+            !game.TransitionToScene(checkpointScene) &&
+            game.RestartFromCheckpoint() &&
+            game.ActiveSceneId() == checkpointScene && game.Lose() &&
+            game.DestroyScene(checkpointScene) &&
+            !game.Flow().Checkpoint().has_value() &&
+            !game.RestartFromCheckpoint();
+        return {
+            succeeded,
+            succeeded ? "checkpoint, pause, transition, outcome, restart" : "game flow lifecycle rejected" };
+    }
 
     if (*operation == "write_file") {
         const auto path = StringMember(step, "path", error);
@@ -2216,6 +2899,79 @@ ReadScriptValue(
     if (*operation == "clear_console") {
         state.context.Console().Clear();
         return { true, "console cleared" };
+    }
+
+    if (*operation == "assert_crash_report") {
+        // Exercise the report after the production Play Mode host has populated
+        // the live API manifest and asset registry. Breadcrumb messages can
+        // contain project paths, so this deliberately supplies one and proves
+        // that the report retains only the event category.
+        constexpr std::string_view kPrivateValue =
+            "C:\\Users\\private\\secret.asset";
+        EditorCrashBreadcrumbs::Write("crash_report_probe", kPrivateValue);
+        EditorCrashBreadcrumbs::WriteCrashReport("headless_probe");
+
+        std::string reportError;
+        const std::string report = ReadText(
+            std::filesystem::current_path() / "Saved" / "Crashes" /
+                "editor-crash-report.json",
+            reportError);
+        if (!reportError.empty()) return { false, reportError };
+        const bool structured =
+            report.find("\"schema\":\"21kb.crash-report/v1\"") != std::string::npos &&
+            report.find("\"error\":\"headless_probe\"") != std::string::npos &&
+            report.find("\"api\":{\"version\":\"") != std::string::npos &&
+            report.find("\"assets\":[") != std::string::npos &&
+            report.find("\"recentEvents\":[") != std::string::npos &&
+            report.find("\"crash_report_probe\"") != std::string::npos;
+        const bool privateDataExcluded =
+            report.find(kPrivateValue) == std::string::npos &&
+            report.find("secret.asset") == std::string::npos &&
+            report.find(std::filesystem::absolute(
+                EditorProjectPaths::ProjectRoot()).generic_string()) ==
+                std::string::npos &&
+            report.find("/Game/Logic/CrashReportProbe.lua") ==
+                std::string::npos;
+        return {
+            structured && privateDataExcluded,
+            structured && privateDataExcluded
+                ? "privacy-safe crash report contains live runtime metadata"
+                : "crash report is incomplete or contains breadcrumb data" };
+    }
+
+    if (*operation == "assert_function_execution_affinity") {
+        const bool complete = state.context.HasCompleteScriptExecutionAffinity();
+        return { complete,
+            complete ? "all live functions are explicitly main_thread"
+                     : "a live function has no audited execution affinity" };
+    }
+
+    if (*operation == "assert_runtime_snapshot_queue") {
+        const kb::scene::SceneRuntimeQueries workerView =
+            static_cast<const kb::scene::Scene&>(state.context.Scene()).Runtime();
+        const std::shared_ptr<const kb::scene::SceneRuntimeReadSnapshot> before =
+            workerView.ReadSnapshot();
+        bool queued = false;
+        std::thread worker{ [&state, &queued] {
+            queued = state.context.Scene().Runtime().EnqueueCommand(
+                kb::scene::SceneRuntimeCommand{
+                    .kind = kb::scene::SceneRuntimeCommandKind::SetTimeScale,
+                    .timeScale = 0.5F,
+                });
+        } };
+        worker.join();
+        if (!queued || before == nullptr) {
+            return { false, "worker could not enqueue runtime command" };
+        }
+        static_cast<void>(state.context.Scene().Runtime().Update(1.0F / 60.0F));
+        const std::shared_ptr<const kb::scene::SceneRuntimeReadSnapshot> after =
+            workerView.ReadSnapshot();
+        const bool valid = after != nullptr && after->revision > before->revision &&
+            std::abs(after->timeScale - 0.5F) <= 0.0001F &&
+            std::abs(before->timeScale - 1.0F) <= 0.0001F;
+        return { valid,
+            valid ? "worker command produced an immutable runtime snapshot"
+                  : "runtime snapshot or command boundary is invalid" };
     }
 
     if (*operation == "assert_no_errors") {

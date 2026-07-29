@@ -1125,6 +1125,153 @@ template <typename Integer>
     return true;
 }
 
+[[nodiscard]] bool IsNavAgentProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::NavAgentRadius && property <= InspectorPropertyId::NavAgentEnabled;
+}
+
+[[nodiscard]] bool IsNavObstacleProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::NavObstacleShape && property <= InspectorPropertyId::NavObstacleEnabled;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditNavAgent(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::NavAgent* agent = sceneContext.Scene().Components().NavAgents().TryGet(entity);
+    if (agent == nullptr || !mutator(*agent)) {
+        sceneContext.CancelSceneEditTransaction();
+        return false;
+    }
+    sceneContext.Scene().Components().NavAgents().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditNavObstacle(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::NavObstacle* obstacle = sceneContext.Scene().Components().NavObstacles().TryGet(entity);
+    if (obstacle == nullptr || !mutator(*obstacle)) {
+        sceneContext.CancelSceneEditTransaction();
+        return false;
+    }
+    sceneContext.Scene().Components().NavObstacles().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+[[nodiscard]] std::string NavAgentFieldValue(const kb::scene::NavAgent& agent, InspectorPropertyId property) {
+    switch (property) {
+    case InspectorPropertyId::NavAgentRadius: return FormatCompactFloat(agent.radius);
+    case InspectorPropertyId::NavAgentHeight: return FormatCompactFloat(agent.height);
+    case InspectorPropertyId::NavAgentMaxSpeed: return FormatCompactFloat(agent.maxSpeed);
+    case InspectorPropertyId::NavAgentAcceleration: return FormatCompactFloat(agent.acceleration);
+    case InspectorPropertyId::NavAgentAngularSpeed: return FormatCompactFloat(agent.angularSpeedDegrees);
+    case InspectorPropertyId::NavAgentStoppingDistance: return FormatCompactFloat(agent.stoppingDistance);
+    case InspectorPropertyId::NavAgentAreaMask: return std::to_string(agent.areaMask);
+    case InspectorPropertyId::NavAgentDestinationX: return FormatCompactFloat(agent.destination.x);
+    case InspectorPropertyId::NavAgentDestinationY: return FormatCompactFloat(agent.destination.y);
+    case InspectorPropertyId::NavAgentDestinationZ: return FormatCompactFloat(agent.destination.z);
+    default: return {};
+    }
+}
+
+[[nodiscard]] std::string NavObstacleFieldValue(const kb::scene::NavObstacle& obstacle, InspectorPropertyId property) {
+    switch (property) {
+    case InspectorPropertyId::NavObstacleRadius: return FormatCompactFloat(obstacle.radius);
+    case InspectorPropertyId::NavObstacleHeight: return FormatCompactFloat(obstacle.height);
+    case InspectorPropertyId::NavObstacleArea: return std::to_string(obstacle.area);
+    case InspectorPropertyId::NavObstacleCenterX: return FormatCompactFloat(obstacle.center.x);
+    case InspectorPropertyId::NavObstacleCenterY: return FormatCompactFloat(obstacle.center.y);
+    case InspectorPropertyId::NavObstacleCenterZ: return FormatCompactFloat(obstacle.center.z);
+    case InspectorPropertyId::NavObstacleSizeX: return FormatCompactFloat(obstacle.size.x);
+    case InspectorPropertyId::NavObstacleSizeY: return FormatCompactFloat(obstacle.size.y);
+    case InspectorPropertyId::NavObstacleSizeZ: return FormatCompactFloat(obstacle.size.z);
+    default: return {};
+    }
+}
+
+[[nodiscard]] bool HandleNavAgentClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::NavAgent* agent = sceneContext.Scene().Components().NavAgents().TryGet(entity);
+    if (agent == nullptr) return false;
+    if (hit.property == InspectorPropertyId::NavAgentEnabled) {
+        return EditNavAgent(sceneContext, entity, "Toggle Nav Agent", [](kb::scene::NavAgent& value) { value.enabled = !value.enabled; return true; });
+    }
+    if (IsNavAgentProperty(hit.property)) {
+        sceneContext.Inspector().BeginTextEdit(hit.property, NavAgentFieldValue(*agent, hit.property));
+    }
+    return true;
+}
+
+[[nodiscard]] bool HandleNavObstacleClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::NavObstacle* obstacle = sceneContext.Scene().Components().NavObstacles().TryGet(entity);
+    if (obstacle == nullptr) return false;
+    if (hit.property == InspectorPropertyId::NavObstacleCarve) {
+        return EditNavObstacle(sceneContext, entity, "Toggle Nav Obstacle Carve", [](kb::scene::NavObstacle& value) { value.carve = !value.carve; return true; });
+    }
+    if (hit.property == InspectorPropertyId::NavObstacleEnabled) {
+        return EditNavObstacle(sceneContext, entity, "Toggle Nav Obstacle", [](kb::scene::NavObstacle& value) { value.enabled = !value.enabled; return true; });
+    }
+    if (hit.property == InspectorPropertyId::NavObstacleShape) {
+        return EditNavObstacle(sceneContext, entity, "Change Nav Obstacle Shape", [](kb::scene::NavObstacle& value) {
+            value.shape = value.shape == kb::scene::NavObstacleShape::Box ? kb::scene::NavObstacleShape::Cylinder : kb::scene::NavObstacleShape::Box;
+            return true;
+        });
+    }
+    if (IsNavObstacleProperty(hit.property)) {
+        sceneContext.Inspector().BeginTextEdit(hit.property, NavObstacleFieldValue(*obstacle, hit.property));
+    }
+    return true;
+}
+
+[[nodiscard]] bool ApplyNavAgentText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    float value = 0.0F;
+    if (property == InspectorPropertyId::NavAgentAreaMask) {
+        std::uint32_t mask = 0U;
+        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), mask);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) return false;
+        return EditNavAgent(sceneContext, entity, "Edit Nav Agent Area Mask", [mask](kb::scene::NavAgent& agent) { agent.areaMask = static_cast<kb::scene::NavAreaMask>(mask); return true; });
+    }
+    if (!ParseFloat(text, value) || !std::isfinite(value)) return false;
+    return EditNavAgent(sceneContext, entity, "Edit Nav Agent", [property, value](kb::scene::NavAgent& agent) {
+        switch (property) {
+        case InspectorPropertyId::NavAgentRadius: if (value <= 0.0F) return false; agent.radius = value; return true;
+        case InspectorPropertyId::NavAgentHeight: if (value <= 0.0F) return false; agent.height = value; return true;
+        case InspectorPropertyId::NavAgentMaxSpeed: if (value < 0.0F) return false; agent.maxSpeed = value; return true;
+        case InspectorPropertyId::NavAgentAcceleration: if (value < 0.0F) return false; agent.acceleration = value; return true;
+        case InspectorPropertyId::NavAgentAngularSpeed: if (value < 0.0F) return false; agent.angularSpeedDegrees = value; return true;
+        case InspectorPropertyId::NavAgentStoppingDistance: if (value < 0.0F) return false; agent.stoppingDistance = value; return true;
+        case InspectorPropertyId::NavAgentDestinationX: agent.destination.x = value; return true;
+        case InspectorPropertyId::NavAgentDestinationY: agent.destination.y = value; return true;
+        case InspectorPropertyId::NavAgentDestinationZ: agent.destination.z = value; return true;
+        default: return false;
+        }
+    });
+}
+
+[[nodiscard]] bool ApplyNavObstacleText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    if (property == InspectorPropertyId::NavObstacleArea) {
+        unsigned int area = 0U;
+        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), area);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() || area > 255U) return false;
+        return EditNavObstacle(sceneContext, entity, "Edit Nav Obstacle Area", [area](kb::scene::NavObstacle& obstacle) { obstacle.area = static_cast<kb::scene::NavAreaId>(area); return true; });
+    }
+    float value = 0.0F;
+    if (!ParseFloat(text, value) || !std::isfinite(value)) return false;
+    return EditNavObstacle(sceneContext, entity, "Edit Nav Obstacle", [property, value](kb::scene::NavObstacle& obstacle) {
+        switch (property) {
+        case InspectorPropertyId::NavObstacleRadius: if (value <= 0.0F) return false; obstacle.radius = value; return true;
+        case InspectorPropertyId::NavObstacleHeight: if (value <= 0.0F) return false; obstacle.height = value; return true;
+        case InspectorPropertyId::NavObstacleCenterX: obstacle.center.x = value; return true;
+        case InspectorPropertyId::NavObstacleCenterY: obstacle.center.y = value; return true;
+        case InspectorPropertyId::NavObstacleCenterZ: obstacle.center.z = value; return true;
+        case InspectorPropertyId::NavObstacleSizeX: if (value <= 0.0F) return false; obstacle.size.x = value; return true;
+        case InspectorPropertyId::NavObstacleSizeY: if (value <= 0.0F) return false; obstacle.size.y = value; return true;
+        case InspectorPropertyId::NavObstacleSizeZ: if (value <= 0.0F) return false; obstacle.size.z = value; return true;
+        default: return false;
+        }
+    });
+}
+
 [[nodiscard]] bool ToggleAudioProperty(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property) {
     if (!sceneContext.BeginSceneEditTransaction("Edit Audio Component")) {
         return true;
@@ -1440,6 +1587,16 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                 static_cast<void>(sceneContext.RemoveAnimatorFromEntity(entity));
             } else if (hit.section == InspectorSectionId::UIDocument) {
                 static_cast<void>(sceneContext.RemoveUIDocumentFromEntity(entity));
+            } else if (hit.section == InspectorSectionId::NavAgent && sceneContext.Scene().Components().NavAgents().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Nav Agent")) {
+                    sceneContext.Scene().Components().NavAgents().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
+            } else if (hit.section == InspectorSectionId::NavObstacle && sceneContext.Scene().Components().NavObstacles().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Nav Obstacle")) {
+                    sceneContext.Scene().Components().NavObstacles().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
             } else if (const std::optional<PhysicsComponentKind> kind = PhysicsKindForSection(hit.section); kind.has_value()) {
                 static_cast<void>(sceneContext.RemovePhysicsComponent(entity, *kind));
             }
@@ -1501,6 +1658,12 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::UIDocument) {
         return HandleUIDocumentClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::NavAgent) {
+        return HandleNavAgentClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::NavObstacle) {
+        return HandleNavObstacleClick(sceneContext, entity, hit);
     }
     if (hit.section == InspectorSectionId::Light) {
         return HandleLightClick(sceneContext, entity, hit);
@@ -1733,6 +1896,18 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             return true;
         }
         const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            IsNavAgentProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyNavAgentText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            IsNavObstacleProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyNavObstacleText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
         if (sceneContext.Scene().Entities().IsAlive(entity) &&
             inspector.EditedProperty() == InspectorPropertyId::AnimatorSpeed) {
             float value = 0.0F;

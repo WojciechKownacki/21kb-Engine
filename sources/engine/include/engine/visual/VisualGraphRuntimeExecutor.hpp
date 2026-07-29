@@ -2,6 +2,7 @@
 
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/visual/VisualGraphRuntimeBindingRegistry.hpp"
+#include "engine/visual/VisualGraphDebugSession.hpp"
 #include "engine/visual/VisualGraphRuntimeRegistry.hpp"
 
 #include <cstddef>
@@ -28,7 +29,7 @@ struct VisualGraphRuntimeExecutionResult {
 
 class VisualGraphRuntimeExecutor final {
 public:
-    explicit VisualGraphRuntimeExecutor(const VisualGraphRuntimeBindingRegistry& bindings) noexcept;
+    explicit VisualGraphRuntimeExecutor(const VisualGraphRuntimeBindingRegistry& bindings, VisualGraphDebugSession* debugger = nullptr) noexcept;
 
     [[nodiscard]] VisualGraphRuntimeExecutionResult Execute(
         const VisualGraphRuntimeArtifact& artifact,
@@ -48,7 +49,7 @@ private:
     using InstructionMap = std::unordered_map<std::uint32_t, const VisualGraphIrInstruction*>;
     using NodeSet = std::unordered_set<std::uint32_t>;
 
-    [[nodiscard]] VisualGraphRuntimeExecutionResult ExecuteFunction(const VisualGraphIrFunction* function, VisualGraphRuntimeExecutionContext& context) const;
+    [[nodiscard]] VisualGraphRuntimeExecutionResult ExecuteFunction(const VisualGraphIrFunction* function, VisualGraphRuntimeExecutionContext& context, kb::assets::AssetId assetId) const;
     // LIB-101: `stepBudget` is decremented once per ExecuteNode call
     // (regardless of whether it's a forward-flow or input-dependency
     // recursion) and shared by reference across the whole recursive walk —
@@ -67,6 +68,7 @@ private:
         NodeSet& evaluatedNodes,
         bool followExecution,
         std::size_t& stepBudget,
+        kb::assets::AssetId assetId,
         std::uint32_t continuationEventNodeId,
         // LIB-101: C++ recursion depth of the DATA-INPUT resolution chain
         // (incremented only on the input-dependency recursion, NOT on the
@@ -99,6 +101,7 @@ private:
     [[nodiscard]] static InstructionMap BuildInstructionMap(const VisualGraphIrFunction& function);
 
     const VisualGraphRuntimeBindingRegistry& bindings_;
+    VisualGraphDebugSession* debugger_ = nullptr;
 };
 
 } // namespace kb::visual

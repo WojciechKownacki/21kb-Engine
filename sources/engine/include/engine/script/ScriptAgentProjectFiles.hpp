@@ -14,7 +14,8 @@ struct ScriptAgentProjectFilesResult {
     std::vector<std::filesystem::path> skippedFiles;
     std::string error;
     // LIB-013: true if this call wrote a file under projectRoot/Assets/
-    // (currently only Assets/Logic/PlayerController.lua, on a project's
+    // (currently starter scripts, the projectile prefab, and gameplay
+    // samples on a project's
     // first run — it is write-once). Such a file becomes a newly
     // discoverable project asset, which the catalog THIS call already
     // wrote kb.lua/script_api.md/script_api.json/manifest.json from does

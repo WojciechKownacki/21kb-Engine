@@ -333,6 +333,42 @@ void ScriptRuntimeSceneSystem::PrepareScene(kb::scene::Scene& scene) {
         : frameSettings_.fixedDeltaSeconds;
     scene.Runtime().SetScriptFixedDeltaSeconds(fixedDeltaSeconds);
     lastPrepareResult_ = assetPreparer_ == nullptr ? ScriptRuntimeAssetPrepareResult{} : assetPreparer_->PrepareSceneBehaviours(scene);
+    RestartReloadedBehaviours(scene);
+}
+
+void ScriptRuntimeSceneSystem::RestartReloadedBehaviours(kb::scene::Scene& scene) {
+    static_cast<void>(scene);
+    if (lastPrepareResult_.reloadedAssets.empty()) {
+        return;
+    }
+
+    std::unordered_set<std::uint64_t> reloadedAssetIds;
+    reloadedAssetIds.reserve(lastPrepareResult_.reloadedAssets.size());
+    for (const kb::assets::AssetId assetId : lastPrepareResult_.reloadedAssets) {
+        reloadedAssetIds.insert(assetId.value);
+    }
+
+    // Dispose backend-owned state before lifecycle records are forgotten. In
+    // particular, Visual Graph event-bridge subscriptions must not survive a
+    // new compiled artifact. Lua ReloadScript already releases suspended
+    // coroutine references atomically with its new environment installation.
+    for (const kb::assets::AssetId assetId : lastPrepareResult_.reloadedAssets) {
+        for (const kb::scene::BehaviourBackend backendKind : {
+                 kb::scene::BehaviourBackend::Lua,
+                 kb::scene::BehaviourBackend::VisualGraph }) {
+            if (IScriptBackend* backend = runtime_.FindBackend(backendKind); backend != nullptr) {
+                backend->ResetAssetForHotReload(assetId, runtime_.Events());
+            }
+        }
+    }
+
+    // A hot-reloaded instance is an explicit restart, not a cross-version
+    // state migration. Do not execute Destroyed here: it would run replacement
+    // code against an old instance. SyncBehaviourLifecycles recreates the
+    // unchanged scene behaviour and invokes Created/Activated/Ready normally.
+    std::erase_if(lifecycleRecords_, [&reloadedAssetIds](const auto& entry) {
+        return reloadedAssetIds.contains(entry.second.behaviour.behaviourAssetId);
+    });
 }
 
 void ScriptRuntimeSceneSystem::SynchronizeUIBindings(kb::scene::Scene& scene) {

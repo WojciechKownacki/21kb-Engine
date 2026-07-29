@@ -125,6 +125,7 @@ public:
 
     [[nodiscard]] kb::scene::Scene& Scene() noexcept;
     [[nodiscard]] const kb::scene::Scene& Scene() const noexcept;
+    [[nodiscard]] bool HasCompleteScriptExecutionAffinity() const noexcept;
     [[nodiscard]] EditorAssetBrowserState& AssetBrowser() noexcept;
     [[nodiscard]] const EditorAssetBrowserState& AssetBrowser() const noexcept;
     [[nodiscard]] EditorViewportPreviewState& ViewportPreview() noexcept;

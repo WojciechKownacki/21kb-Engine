@@ -1259,7 +1259,16 @@ void EditorSceneContext::SurfaceScriptLibraryStartupReport() {
 
     const kb::script::ScriptApiCatalog catalog =
         kb::script::ScriptApiCatalog::Build(host, scene_->Assets().Manager());
+    if (!HasCompleteScriptExecutionAffinity()) {
+        console_.Error("Library", "A registered script function has no execution-affinity policy.");
+    }
     const kb::library::ApiManifest manifest = kb::library::BuildApiManifest(catalog);
+    std::vector<std::pair<std::uint64_t, std::string>> crashAssets;
+    for (const kb::assets::AssetMetadata& asset : scene_->Assets().Manager().Registry().All()) {
+        crashAssets.emplace_back(asset.id.value, asset.type);
+    }
+    EditorCrashBreadcrumbs::ConfigureCrashReport(
+        kb::library::ToString(manifest.version), manifest.manifestHash, std::move(crashAssets));
     const kb::visual::VisualGraphNodeCatalog visualGraphCatalog = host.CreateVisualGraphNodeCatalog();
     const std::size_t missingDescriptionCount =
         static_cast<std::size_t>(std::count_if(
@@ -1351,6 +1360,19 @@ kb::scene::Scene& EditorSceneContext::Scene() noexcept {
 
 const kb::scene::Scene& EditorSceneContext::Scene() const noexcept {
     return *scene_;
+}
+
+bool EditorSceneContext::HasCompleteScriptExecutionAffinity() const noexcept {
+    if (scriptModule_ == nullptr || scriptModule_->Host() == nullptr) {
+        return false;
+    }
+    const std::vector<kb::script::ScriptFunctionDesc>& functions =
+        scriptModule_->Host()->Functions().Functions();
+    return !functions.empty() && std::ranges::all_of(functions,
+        [](const kb::script::ScriptFunctionDesc& function) {
+            return function.signature.executionAffinity ==
+                kb::core::ExecutionAffinity::MainThread;
+        });
 }
 
 EditorAssetBrowserState& EditorSceneContext::AssetBrowser() noexcept {
@@ -8028,6 +8050,26 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
         }
         return ExecuteSceneCommand("Add Joint Component", [this, entity]() {
             scene_->Components().Joints().Set(entity, kb::scene::JointComponent{});
+            return true;
+        });
+    }
+    if (componentId == "NavAgent") {
+        if (scene_->Components().NavAgents().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Nav Agent component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Nav Agent Component", [this, entity]() {
+            scene_->Components().NavAgents().Set(entity, kb::scene::NavAgent{});
+            return true;
+        });
+    }
+    if (componentId == "NavObstacle") {
+        if (scene_->Components().NavObstacles().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Nav Obstacle component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Nav Obstacle Component", [this, entity]() {
+            scene_->Components().NavObstacles().Set(entity, kb::scene::NavObstacle{});
             return true;
         });
     }

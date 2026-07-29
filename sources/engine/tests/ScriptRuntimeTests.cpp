@@ -10519,6 +10519,60 @@ edge exec 1 then 2 exec
     }
     kb::tests::Require(sawLuaEvent, "Script scene system did not emit Lua Tick event");
     kb::tests::Require(sawGraphEvent, "Script scene system did not emit graph Tick event");
+
+    // LIB-228: asset preparation has always replaced the live Lua chunk and
+    // Visual Graph artifact, but a tracked behaviour used to continue with its
+    // old instance lifecycle/context. A successful replacement is now a
+    // controlled explicit restart: no cross-version Destroyed callback, then
+    // Created/Activated/Ready of the replacement on the same safe frame sync.
+    WriteTextFile(assetsRoot / "Logic" / "SceneLua.lua", R"(
+function Created(self, dt)
+    Emit("SceneSystemLuaReloadCreated")
+end
+function Tick(self, dt)
+    Emit("SceneSystemLuaReloadTick")
+end
+)");
+    WriteTextFile(assetsRoot / "Logic" / "SceneGraph.kbgraph", R"(kbgraph 1
+name SceneGraphReloaded
+node 1 Event Created
+pin 1 Output then Void
+node 2 EmitEvent SceneSystemGraphReloadCreated
+pin 2 Input exec Void
+pin 2 Output then Void
+node 3 Event Tick
+pin 3 Output then Void
+node 4 EmitEvent SceneSystemGraphReloadTick
+pin 4 Input exec Void
+pin 4 Output then Void
+edge exec 1 then 2 exec
+edge exec 3 then 4 exec
+)");
+    kb::tests::Require(scene.Assets().Discover() == 2U, "Script scene system hot reload rediscovery failed");
+    static_cast<void>(scene.Runtime().Update(0.25F));
+    const kb::script::ScriptRuntimeExecutionResult& reloadedTick = systemView->LastResult();
+    kb::tests::Require(reloadedTick.Succeeded(), "Script scene system hot reload produced diagnostics");
+    kb::tests::Require(systemView->LastPrepareResult().reloadedAssets.size() == 2U,
+        "Script scene system hot reload did not report both replaced behaviour assets");
+
+    bool sawLuaReloadCreated = false;
+    bool sawLuaReloadTick = false;
+    bool sawGraphReloadCreated = false;
+    bool sawGraphReloadTick = false;
+    bool sawOldLuaTick = false;
+    bool sawOldGraphTick = false;
+    for (const kb::script::ScriptEvent& event : reloadedTick.emittedEvents) {
+        sawLuaReloadCreated = sawLuaReloadCreated || event.name == "SceneSystemLuaReloadCreated";
+        sawLuaReloadTick = sawLuaReloadTick || event.name == "SceneSystemLuaReloadTick";
+        sawGraphReloadCreated = sawGraphReloadCreated || event.name == "SceneSystemGraphReloadCreated";
+        sawGraphReloadTick = sawGraphReloadTick || event.name == "SceneSystemGraphReloadTick";
+        sawOldLuaTick = sawOldLuaTick || event.name == "SceneSystemLuaTick";
+        sawOldGraphTick = sawOldGraphTick || event.name == "SceneSystemGraphTick";
+    }
+    kb::tests::Require(sawLuaReloadCreated && sawLuaReloadTick && sawGraphReloadCreated && sawGraphReloadTick,
+        "Script scene system hot reload did not recreate Lua and Visual Graph behaviour lifecycles");
+    kb::tests::Require(!sawOldLuaTick && !sawOldGraphTick,
+        "Script scene system hot reload resumed an obsolete Lua or Visual Graph implementation");
 }
 
 void RunScriptRuntimeHostBackendRegistrationTest() {
