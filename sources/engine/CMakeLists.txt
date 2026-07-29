@@ -491,6 +491,7 @@ add_library(kb_engine STATIC
     src/scene/Scene.cpp
     src/gameplay/GameInstance.cpp
     src/network/NetworkObject.cpp
+    src/platform/UserStorage.cpp
     src/network/ReplicationSchema.cpp
     src/network/Rpc.cpp
     src/gameplay/GameFlow.cpp
