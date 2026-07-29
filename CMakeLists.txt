@@ -31,6 +31,7 @@ option(KB_ENABLE_SANITIZERS "Build project targets with AddressSanitizer and Und
 option(KB_ENGINE_ENABLE_NATIVE_AVX2 "Opt in to AVX2 code generation for engine targets and consumers; produced binaries require AVX2-capable CPUs" OFF)
 option(KB_GENERATE_RENDERER_SHADERS "Generate renderer shaders with bgfx shaderc instead of staging prebuilt shaders" OFF)
 option(KB_BUILD_GRAPH_SHADERC "Build bgfx shaderc for the Material Editor graph cooker" ${KB_BUILD_EDITOR})
+option(KB_STRICT_OWN_WARNINGS "Treat warnings from first-party targets as build errors" ON)
 set(KB_DXCOMPILER_RUNTIME "" CACHE FILEPATH "Path to dxcompiler.dll copied next to shaderc for DXIL graph cooking")
 option(KB_BUILD_PROVIDER_MODULES_AS_DLL "Build provider engine modules as hot-reloadable DLL/shared libraries instead of static libraries" ON)
 
@@ -110,10 +111,16 @@ function(kb_add_bgfx_subdirectory)
 endfunction()
 
 function(kb_apply_quality_gates target_name)
-    if(MSVC)
-        target_compile_options(${target_name} PRIVATE /W4 /WX /FS /external:anglebrackets /external:W0)
-    else()
-        target_compile_options(${target_name} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wno-missing-field-initializers)
+    # This function is called only by first-party kb_* targets. Vendor projects
+    # are added separately and intentionally do not inherit these flags: their
+    # pre-existing diagnostics must stay visible without blocking a clean build
+    # of engine-owned code.
+    if(KB_STRICT_OWN_WARNINGS)
+        if(MSVC)
+            target_compile_options(${target_name} PRIVATE /W4 /WX /FS /external:anglebrackets /external:W0)
+        else()
+            target_compile_options(${target_name} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wno-missing-field-initializers)
+        endif()
     endif()
 
     if(KB_ENABLE_SANITIZERS)
