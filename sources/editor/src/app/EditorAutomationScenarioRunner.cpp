@@ -16,6 +16,7 @@
 #include "engine/network/NetworkObject.hpp"
 #include "engine/network/NetworkPrediction.hpp"
 #include "engine/network/NetworkSecurity.hpp"
+#include "engine/network/NetworkSimulation.hpp"
 #include "engine/network/NetworkVariable.hpp"
 #include "engine/network/Rpc.hpp"
 #include "engine/network/NetworkSession.hpp"
@@ -754,6 +755,37 @@ ReadScriptValue(
             valid,
             valid ? "server validation, rate and deserialization bounds"
                   : "network security contract rejected" };
+    }
+
+    if (*operation == "assert_network_simulation") {
+        constexpr kb::network::NetworkSimulationConfig reordered{
+            .latencyMilliseconds = 40U, .jitterMilliseconds = 5U,
+            .reorderPermille = 1000U, .seed = 8U };
+        constexpr kb::network::NetworkSimulationConfig lossAndDisconnect{
+            .latencyMilliseconds = 40U, .jitterMilliseconds = 5U,
+            .lossPermille = 1000U, .disconnectAtTick = 10U, .seed = 8U };
+        const std::optional<kb::network::NetworkSimulationDecision> delayed =
+            kb::network::SimulateNetworkPacket(reordered, 2U, 3U);
+        const std::optional<kb::network::NetworkSimulationDecision> dropped =
+            kb::network::SimulateNetworkPacket(lossAndDisconnect, 2U, 3U);
+        const std::optional<kb::network::NetworkSimulationDecision> disconnected =
+            kb::network::SimulateNetworkPacket(lossAndDisconnect, 10U, 3U);
+        const bool valid = delayed.has_value() && dropped.has_value() &&
+            disconnected.has_value() && delayed->reordered &&
+            !delayed->dropped && delayed->deliveryDelayMilliseconds >= 35U &&
+            delayed->deliveryDelayMilliseconds <= 45U && dropped->dropped &&
+            dropped->deliveryDelayMilliseconds == 0U &&
+            disconnected->disconnected && !disconnected->dropped &&
+            kb::network::NetworkSimulationRandom(reordered, 2U, 3U) ==
+                kb::network::NetworkSimulationRandom(reordered, 2U, 3U) &&
+            !kb::network::SimulatedDeliveryDelayMilliseconds(
+                 { .latencyMilliseconds = 5U, .jitterMilliseconds = 6U },
+                 1U, 1U)
+                 .has_value();
+        return {
+            valid,
+            valid ? "latency, jitter, loss, reorder and disconnect"
+                  : "network simulation contract rejected" };
     }
 
     if (*operation == "assert_game_flow") {
