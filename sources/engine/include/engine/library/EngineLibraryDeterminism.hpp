@@ -14,6 +14,19 @@ enum class DeterministicLibraryFeature : std::uint8_t {
     FixedSimulation,
 };
 
+enum class LibraryNonDeterminismReason : std::uint8_t {
+    None,
+    WallTime,
+    Platform,
+    AsyncIo,
+    Rendering,
+};
+
+struct LibraryFunctionDeterminismInfo {
+    bool deterministic = true;
+    LibraryNonDeterminismReason reason = LibraryNonDeterminismReason::None;
+};
+
 struct DeterministicLibraryFeatureDesc {
     DeterministicLibraryFeature feature;
     std::string_view name;
@@ -38,6 +51,22 @@ inline constexpr std::array<DeterministicLibraryFeatureDesc, 5U> kDeterministicL
         }
     }
     return false;
+}
+
+[[nodiscard]] constexpr LibraryFunctionDeterminismInfo ClassifyLibraryFunctionDeterminism(std::string_view canonicalName) noexcept {
+    if (canonicalName == "Time.Delta" || canonicalName == "Time.UnscaledDelta" || canonicalName == "Time.Elapsed" || canonicalName == "Time.FrameIndex") {
+        return { .deterministic = false, .reason = LibraryNonDeterminismReason::WallTime };
+    }
+    if (canonicalName.starts_with("Input.") || canonicalName.starts_with("Audio.")) {
+        return { .deterministic = false, .reason = LibraryNonDeterminismReason::Platform };
+    }
+    if (canonicalName.starts_with("Assets.")) {
+        return { .deterministic = false, .reason = LibraryNonDeterminismReason::AsyncIo };
+    }
+    if (canonicalName.starts_with("Renderer.")) {
+        return { .deterministic = false, .reason = LibraryNonDeterminismReason::Rendering };
+    }
+    return {};
 }
 
 } // namespace kb::library

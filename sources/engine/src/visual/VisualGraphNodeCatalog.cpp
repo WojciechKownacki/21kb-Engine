@@ -82,6 +82,7 @@ void AppendBindingPins(
         .kind = NodeKindFor(binding.opcode),
         .symbol = binding.symbol,
         .source = VisualGraphNodeCatalogSource::NativeBinding,
+        .determinism = kb::library::ClassifyLibraryFunctionDeterminism(binding.symbol),
     };
     AppendBindingPins(entry.pins, binding.opcode, binding.inputs, binding.outputs);
     return entry;
@@ -95,6 +96,7 @@ void AppendBindingPins(
         .kind = NodeKindFor(binding.opcode),
         .symbol = binding.symbol,
         .source = VisualGraphNodeCatalogSource::RuntimeBinding,
+        .determinism = kb::library::ClassifyLibraryFunctionDeterminism(binding.symbol),
     };
     AppendBindingPins(entry.pins, binding.opcode, binding.inputs, binding.outputs);
     return entry;
