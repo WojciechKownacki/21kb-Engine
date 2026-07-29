@@ -2758,6 +2758,7 @@ int LuaUIApplied(lua_State* state, const char* function) {
 int LuaUIDestroy(lua_State* state) { return LuaUIApplied(state, "UI.Destroy"); }
 int LuaUIShow(lua_State* state) { return LuaUIApplied(state, "UI.Show"); }
 int LuaUIHide(lua_State* state) { return LuaUIApplied(state, "UI.Hide"); }
+int LuaUIFocus(lua_State* state) { return LuaUIApplied(state, "UI.Focus"); }
 
 int LuaUIFind(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
@@ -3120,11 +3121,12 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     SetClosure(state, "Time", &LuaTimelineTime, context);
     lua_setfield(state, environmentIndex, "Timeline");
 
-    lua_createtable(state, 0, 21);
+    lua_createtable(state, 0, 22);
     SetClosure(state, "Create", &LuaUICreate, context);
     SetClosure(state, "Destroy", &LuaUIDestroy, context);
     SetClosure(state, "Show", &LuaUIShow, context);
     SetClosure(state, "Hide", &LuaUIHide, context);
+    SetClosure(state, "Focus", &LuaUIFocus, context);
     SetClosure(state, "Find", &LuaUIFind, context);
     SetClosure(state, "SetText", &LuaUISetText, context);
     SetClosure(state, "SetImage", &LuaUISetImage, context);

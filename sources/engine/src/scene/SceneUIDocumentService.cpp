@@ -1,6 +1,7 @@
 #include "scene/SceneUIDocumentService.hpp"
 
 #include "engine/assets/AssetId.hpp"
+#include "engine/input/InputKey.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -137,6 +138,53 @@ bool ValidEvent(const UIRuntimeEvent& event) noexcept {
         return event.navigation > UINavigationDirection::None && event.navigation <= UINavigationDirection::Right;
     }
     return event.navigation == UINavigationDirection::None;
+}
+
+bool Focusable(const UIDocumentElement& element) noexcept {
+    return element.visible && element.control.kind != UIControlKind::Container;
+}
+
+UIElementId FirstFocusable(const UIDocumentRuntimeRecord& record) noexcept {
+    for (const auto& [id, element] : record.elements) {
+        if (Focusable(element)) return id;
+    }
+    return 0U;
+}
+
+UIElementId NavigateFocusable(const UIDocumentRuntimeRecord& record, UIElementId current, bool forward) noexcept {
+    if (record.elements.empty()) return 0U;
+    if (forward) {
+        auto currentIt = record.elements.upper_bound(current);
+        for (auto it = currentIt; it != record.elements.end(); ++it) if (Focusable(it->second)) return it->first;
+        for (auto it = record.elements.begin(); it != currentIt; ++it) if (Focusable(it->second)) return it->first;
+    } else {
+        auto currentIt = record.elements.lower_bound(current);
+        while (currentIt != record.elements.begin()) {
+            --currentIt;
+            if (Focusable(currentIt->second)) return currentIt->first;
+        }
+        for (auto it = record.elements.rbegin(); it != record.elements.rend(); ++it) {
+            if (it->first < current) break;
+            if (Focusable(it->second)) return it->first;
+        }
+    }
+    return FirstFocusable(record);
+}
+
+bool QueueFocusChange(SceneState& state, UIDocumentRuntimeRecord& record, UIElementId focused) {
+    if (record.focusedElement == focused) return true;
+    const std::size_t eventCount = (record.focusedElement != 0U ? 1U : 0U) + (focused != 0U ? 1U : 0U);
+    if (state.pendingUIEvents.size() > kMaxPendingUIEvents - eventCount) return false;
+    if (record.focusedElement != 0U) {
+        state.pendingUIEvents.push_back(PendingUIRuntimeEvent{ .entity = record.entity,
+            .event = UIRuntimeEvent{ .kind = UIRuntimeEventKind::Focus, .elementId = record.focusedElement, .focused = false } });
+    }
+    record.focusedElement = focused;
+    if (focused != 0U) {
+        state.pendingUIEvents.push_back(PendingUIRuntimeEvent{ .entity = record.entity,
+            .event = UIRuntimeEvent{ .kind = UIRuntimeEventKind::Focus, .elementId = focused, .focused = true } });
+    }
+    return true;
 }
 
 bool HasQueuedDestroy(const SceneState& state, SceneEntity entity, UIElementId element) noexcept {
@@ -336,6 +384,10 @@ std::optional<UIControlState> SceneUIDocumentService::Control(const Scene& scene
     const auto current = record->elements.find(element);
     return current == record->elements.end() ? std::nullopt : std::optional<UIControlState>{ current->second.control };
 }
+UIElementId SceneUIDocumentService::Focused(const Scene& scene, SceneEntity entity) noexcept {
+    const auto* record = FindRecord(SceneAccess::State(scene), entity);
+    return record != nullptr ? record->focusedElement : 0U;
+}
 std::optional<UIVirtualListView> SceneUIDocumentService::VirtualList(const Scene& scene, SceneEntity entity, UIElementId element) noexcept {
     const auto* record = FindRecord(SceneAccess::State(scene), entity);
     if (record == nullptr) return std::nullopt;
@@ -425,6 +477,17 @@ bool SceneUIDocumentService::QueueSetControl(Scene& scene, SceneEntity entity, U
         .elementId = element,
         .control = control,
     });
+    return true;
+}
+
+bool SceneUIDocumentService::QueueFocus(Scene& scene, SceneEntity entity, UIElementId element) noexcept {
+    SceneState& state = SceneAccess::State(scene);
+    UIDocumentRuntimeRecord* record = FindMutable(state, entity);
+    if (record == nullptr) return false;
+    const auto target = record->elements.find(element);
+    if (target == record->elements.end() || !Focusable(target->second) || IsPendingDestroyAncestor(state, *record, entity, element)) return false;
+    if (!QueueFocusChange(state, *record, element)) return false;
+    state.activeUIDocument = entity;
     return true;
 }
 
@@ -599,6 +662,61 @@ void SceneUIDocumentService::SyncComponents(Scene& scene) {
         else ++it;
     }
     ApplyCommands(state);
+}
+
+void SceneUIDocumentService::RouteInput(Scene& scene) {
+    SceneState& state = SceneAccess::State(scene);
+    const kb::input::InputDeviceState& device = scene.Input().DeviceState();
+    const bool pointerDown = device.IsKeyDown(kb::input::InputKey::MouseLeft);
+    const bool submitDown = device.IsKeyDown(kb::input::InputKey::GamepadFaceBottom);
+    const bool nextDown = device.IsKeyDown(kb::input::InputKey::GamepadDPadDown) || device.IsKeyDown(kb::input::InputKey::GamepadDPadRight);
+    const bool previousDown = device.IsKeyDown(kb::input::InputKey::GamepadDPadUp) || device.IsKeyDown(kb::input::InputKey::GamepadDPadLeft);
+    bool consumedByUI = false;
+    if (!device.HasFocus()) {
+        for (auto& [id, record] : state.uiDocuments) {
+            static_cast<void>(id);
+            static_cast<void>(QueueFocusChange(state, record, 0U));
+        }
+    } else {
+        UIDocumentRuntimeRecord* record = FindMutable(state, state.activeUIDocument);
+        if (record == nullptr && !state.uiDocuments.empty()) {
+            record = &state.uiDocuments.begin()->second;
+            state.activeUIDocument = record->entity;
+        }
+        if (record != nullptr) {
+            const auto focused = record->elements.find(record->focusedElement);
+            if (focused == record->elements.end() || !Focusable(focused->second)) {
+                static_cast<void>(QueueFocusChange(state, *record, FirstFocusable(*record)));
+            }
+            if (record->focusedElement != 0U) {
+                const auto queueNavigation = [&](bool forward, UINavigationDirection direction) {
+                    const UIElementId target = NavigateFocusable(*record, record->focusedElement, forward);
+                    if (target == 0U || !QueueFocusChange(state, *record, target) || state.pendingUIEvents.size() >= kMaxPendingUIEvents) return;
+                    state.pendingUIEvents.push_back(PendingUIRuntimeEvent{ .entity = record->entity,
+                        .event = UIRuntimeEvent{ .kind = UIRuntimeEventKind::Navigation, .elementId = target, .navigation = direction } });
+                    consumedByUI = true;
+                };
+                if (!state.uiNextWasDown && nextDown) queueNavigation(true, UINavigationDirection::Next);
+                if (!state.uiPreviousWasDown && previousDown) queueNavigation(false, UINavigationDirection::Previous);
+                if (!state.uiPointerWasDown && pointerDown && state.pendingUIEvents.size() < kMaxPendingUIEvents) {
+                    state.pendingUIEvents.push_back(PendingUIRuntimeEvent{ .entity = record->entity,
+                        .event = UIRuntimeEvent{ .kind = UIRuntimeEventKind::Click, .elementId = record->focusedElement,
+                            .pointerX = device.PointerX(), .pointerY = device.PointerY() } });
+                    consumedByUI = true;
+                }
+                if (!state.uiSubmitWasDown && submitDown && state.pendingUIEvents.size() < kMaxPendingUIEvents) {
+                    state.pendingUIEvents.push_back(PendingUIRuntimeEvent{ .entity = record->entity,
+                        .event = UIRuntimeEvent{ .kind = UIRuntimeEventKind::Submit, .elementId = record->focusedElement } });
+                    consumedByUI = true;
+                }
+            }
+        }
+    }
+    scene.Input().SetGameplayInputConsumed(consumedByUI);
+    state.uiPointerWasDown = pointerDown;
+    state.uiSubmitWasDown = submitDown;
+    state.uiNextWasDown = nextDown;
+    state.uiPreviousWasDown = previousDown;
 }
 
 } // namespace kb::scene
