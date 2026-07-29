@@ -21,6 +21,7 @@
 #include "engine/network/Rpc.hpp"
 #include "engine/network/NetworkSession.hpp"
 #include "engine/platform/PlatformServices.hpp"
+#include "engine/platform/UserStorage.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
@@ -876,6 +877,29 @@ ReadScriptValue(
             valid,
             valid ? "capability-gated platform data and actions"
                   : "platform capability contract rejected" };
+    }
+
+    if (*operation == "assert_user_storage") {
+        const std::filesystem::path root =
+            EditorProjectPaths::ProjectRoot() / "UserStorageProbe";
+        std::error_code storageError;
+        std::filesystem::remove_all(root, storageError);
+        kb::platform::UserStorage storage{ root, 8U };
+        const bool valid = storage.Write("save/a", "data") &&
+            storage.Read("save/a") == std::optional<std::string>{ "data" } &&
+            storage.Write("save/a", "new") &&
+            storage.Read("save/a") == std::optional<std::string>{ "new" } &&
+            storage.WriteAsync("save/b", "ok").get() &&
+            storage.List() == std::vector<std::string>{ "save/a", "save/b" } &&
+            storage.Delete("save/a") && !storage.Write("../outside", "bad") &&
+            !storage.Write("C:\\outside", "bad") &&
+            !storage.Write("save/c", "too-large") &&
+            storage.Read("save/b") == std::optional<std::string>{ "ok" };
+        std::filesystem::remove_all(root, storageError);
+        return {
+            valid,
+            valid ? "sandboxed atomic user storage with quota"
+                  : "user storage contract rejected" };
     }
 
     if (*operation == "assert_game_flow") {
