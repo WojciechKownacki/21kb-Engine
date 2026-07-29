@@ -3,10 +3,28 @@
 #include "engine/script/ScriptApiExport.hpp"
 
 #include <cstdint>
+#include <cstddef>
 #include <iomanip>
 #include <sstream>
+#include <string>
 
 namespace kb::library {
+namespace {
+
+void AppendSpecialApisJson(std::string& json, const std::vector<LibraryApiSurfaceManifestEntry>& apis) {
+    json += "\"specialApis\":[";
+    for (std::size_t index = 0; index < apis.size(); ++index) {
+        const LibraryApiSurfaceManifestEntry& api = apis[index];
+        if (index != 0U) {
+            json += ',';
+        }
+        json += "{\"name\":\"" + std::string{ api.canonicalName } + "\",\"availability\":" + std::to_string(api.availability) +
+            ",\"description\":\"" + std::string{ api.description } + "\"}";
+    }
+    json += ']';
+}
+
+} // namespace
 
 std::string ComputeApiManifestHash(std::string_view content) noexcept {
     // FNV-1a 64-bit: simple, dependency-free, deterministic across
@@ -22,14 +40,21 @@ std::string ComputeApiManifestHash(std::string_view content) noexcept {
 }
 
 ApiManifest BuildApiManifest(const kb::script::ScriptApiCatalog& catalog) {
-    return ApiManifest{
+    ApiManifest manifest{
         .version = kEngineLibraryApiVersion,
-        .manifestHash = ComputeApiManifestHash(kb::script::ScriptApiExport::ToJson(catalog)),
+        .specialApis = { kLibrarySpecialApiSurfaces.begin(), kLibrarySpecialApiSurfaces.end() },
     };
+    std::string hashContent = kb::script::ScriptApiExport::ToJson(catalog);
+    AppendSpecialApisJson(hashContent, manifest.specialApis);
+    manifest.manifestHash = ComputeApiManifestHash(hashContent);
+    return manifest;
 }
 
 std::string ToJson(const ApiManifest& manifest) {
-    return "{\"version\":\"" + ToString(manifest.version) + "\",\"hash\":\"" + manifest.manifestHash + "\"}\n";
+    std::string json = "{\"version\":\"" + ToString(manifest.version) + "\",\"hash\":\"" + manifest.manifestHash + "\",";
+    AppendSpecialApisJson(json, manifest.specialApis);
+    json += "}\n";
+    return json;
 }
 
 } // namespace kb::library

@@ -1,10 +1,12 @@
 #pragma once
 
 #include "engine/library/EngineLibrary.hpp"
+#include "engine/library/EngineLibraryApiSurface.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace kb::library {
 
@@ -24,6 +26,7 @@ namespace kb::library {
 struct ApiManifest {
     LibraryApiVersion version{};
     std::string manifestHash;
+    std::vector<LibraryApiSurfaceManifestEntry> specialApis;
 };
 
 [[nodiscard]] ApiManifest BuildApiManifest(const kb::script::ScriptApiCatalog& catalog);

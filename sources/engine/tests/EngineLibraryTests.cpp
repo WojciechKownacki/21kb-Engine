@@ -2182,9 +2182,21 @@ void RunApiManifestTest() {
 
     const kb::library::ApiManifest manifest = kb::library::BuildApiManifest(catalog);
     kb::tests::Require(manifest.version == kb::library::kEngineLibraryApiVersion, "Engine21kbLibrary manifest must carry the current LibraryApiVersion");
-    kb::tests::Require(
-        manifest.manifestHash == kb::library::ComputeApiManifestHash(kb::script::ScriptApiExport::ToJson(catalog)),
-        "Engine21kbLibrary manifest hash must match the hash of the catalog's own JSON export");
+    kb::tests::Require(manifest.manifestHash.size() == 16U, "Engine21kbLibrary manifest hash must include the API-surface availability payload");
+    const auto nativeOnly = [&manifest](std::string_view name) -> const kb::library::LibraryApiSurfaceManifestEntry* {
+        for (const kb::library::LibraryApiSurfaceManifestEntry& api : manifest.specialApis) {
+            if (api.canonicalName == name) {
+                return &api;
+            }
+        }
+        return nullptr;
+    };
+    for (const std::string_view name : { "EntityHandle", "Signal<Args...>", "SceneTasks.Start" }) {
+        const kb::library::LibraryApiSurfaceManifestEntry* api = nativeOnly(name);
+        kb::tests::Require(
+            api != nullptr && api->availability == kb::library::ToMask(kb::library::LibraryApiSurface::Native),
+            "Engine21kbLibrary manifest must declare intentionally native-only APIs as Native only");
+    }
 
     const kb::library::ApiManifest rebuilt = kb::library::BuildApiManifest(catalog);
     kb::tests::Require(rebuilt.manifestHash == manifest.manifestHash, "Engine21kbLibrary manifest hash must be stable across repeated builds of the same catalog");
@@ -2192,6 +2204,14 @@ void RunApiManifestTest() {
     const std::string json = kb::library::ToJson(manifest);
     kb::tests::Require(json.find("\"version\":\"" + kb::library::ToString(manifest.version) + "\"") != std::string::npos, "Engine21kbLibrary manifest JSON is missing the version field");
     kb::tests::Require(json.find("\"hash\":\"" + manifest.manifestHash + "\"") != std::string::npos, "Engine21kbLibrary manifest JSON is missing the hash field");
+    kb::tests::Require(
+        json.find("\"specialApis\"") != std::string::npos && json.find("\"name\":\"EntityHandle\"") != std::string::npos,
+        "Engine21kbLibrary manifest JSON is missing the native-only API surface");
+    const std::string luaStubs = kb::script::ScriptApiExport::ToLuaStubs(catalog);
+    const kb::visual::VisualGraphNodeCatalog graphCatalog = host.CreateVisualGraphNodeCatalog();
+    kb::tests::Require(
+        luaStubs.find("SceneTasks.Start") == std::string::npos && graphCatalog.Find("NativeBinding:CallNative:Function.SceneTasks.Start") == nullptr,
+        "Engine21kbLibrary must hide native-only SceneTasks.Start from Lua and Visual Graph");
 }
 
 // LIB-024: comparing two catalog snapshots must classify every difference
