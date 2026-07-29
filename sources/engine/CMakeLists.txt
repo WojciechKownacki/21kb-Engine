@@ -120,6 +120,7 @@ add_library(kb_engine STATIC
     include/engine/scene/AiBehaviourAssetIO.hpp
     include/engine/scene/AiBehaviourAssetLoader.hpp
     include/engine/scene/AiBehaviourRuntime.hpp
+    include/engine/scene/AiBlackboard.hpp
     include/engine/scene/Navigation.hpp
     include/engine/scene/Perception.hpp
     include/engine/scene/RigidbodyComponent.hpp
@@ -467,6 +468,7 @@ add_library(kb_engine STATIC
     src/scene/AiBehaviourRuntime.cpp
     src/scene/AiBehaviourAssetIO.cpp
     src/scene/AiBehaviourAssetLoader.cpp
+    src/scene/AiBlackboard.cpp
     src/scene/PhysicsBackend.cpp
     src/scene/PhysicsDebugDraw.cpp
     src/scene/PhysicsGeometryQueries.cpp
