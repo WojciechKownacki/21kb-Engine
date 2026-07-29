@@ -55,6 +55,7 @@
 #include "engine/network/NetworkSimulation.hpp"
 #include "engine/network/NetworkSession.hpp"
 #include "engine/platform/PlatformCapabilities.hpp"
+#include "engine/platform/PlatformServices.hpp"
 #include "engine/platform/UserStorage.hpp"
 #include "engine/platform/SettingsTransaction.hpp"
 #include "engine/platform/PlatformAdapters.hpp"
@@ -126,6 +127,7 @@ namespace {
 
 void RecordNetworkVariableChange(void* context, std::int32_t previous, std::int32_t current) noexcept { *static_cast<std::int32_t*>(context) = current - previous; }
 class TestPlatformAdapter final : public kb::platform::IPlatformAdapter { public: [[nodiscard]] bool IsAvailable(kb::platform::OptionalPlatformService service) const noexcept override{return service==kb::platform::OptionalPlatformService::Achievements;} [[nodiscard]] bool UnlockAchievement(std::string_view id) override{return IsAvailable(kb::platform::OptionalPlatformService::Achievements)&&!id.empty();} };
+struct PlatformServiceProbe { bool clipboard = false; bool url = false; bool vibration = false; [[nodiscard]] static bool WriteClipboard(void* context, std::string_view text) noexcept { auto& probe=*static_cast<PlatformServiceProbe*>(context); probe.clipboard=text=="copied"; return probe.clipboard; } [[nodiscard]] static bool OpenUrl(void* context, std::string_view url) noexcept { auto& probe=*static_cast<PlatformServiceProbe*>(context); probe.url=url=="https://21kb.dev"; return probe.url; } [[nodiscard]] static bool SetVibration(void* context, float low, float high) noexcept { auto& probe=*static_cast<PlatformServiceProbe*>(context); probe.vibration=low==0.25F&&high==0.75F; return probe.vibration; } };
 
 int g_moduleInstallSkipCallCount = 0;
 bool RecordModuleInstallCall(kb::script::ScriptRuntimeHost&) {
@@ -4799,6 +4801,12 @@ void RunGameInstanceLifetimeTest() {
     constexpr kb::platform::PlatformCapabilities platformCapabilities{ .flags = static_cast<std::uint32_t>(kb::platform::PlatformCapability::Locale) | static_cast<std::uint32_t>(kb::platform::PlatformCapability::UserDataPath) };
     static_assert(platformCapabilities.Has(kb::platform::PlatformCapability::Locale));
     kb::tests::Require(platformCapabilities.Has(kb::platform::PlatformCapability::UserDataPath) && !platformCapabilities.Has(kb::platform::PlatformCapability::Clipboard), "Platform capabilities did not fail closed for unavailable services");
+    PlatformServiceProbe platformProbe;
+    constexpr kb::platform::PlatformCapabilities fullPlatformCapabilities{ .flags = static_cast<std::uint32_t>(kb::platform::PlatformCapability::Locale) | static_cast<std::uint32_t>(kb::platform::PlatformCapability::UserDataPath) | static_cast<std::uint32_t>(kb::platform::PlatformCapability::Clipboard) | static_cast<std::uint32_t>(kb::platform::PlatformCapability::OpenUrl) | static_cast<std::uint32_t>(kb::platform::PlatformCapability::Vibration) };
+    kb::platform::PlatformServices platformServices{ fullPlatformCapabilities, locale, "UserData", { .clipboard = &PlatformServiceProbe::WriteClipboard, .openUrl = &PlatformServiceProbe::OpenUrl, .vibration = &PlatformServiceProbe::SetVibration, .context = &platformProbe } };
+    kb::platform::PlatformServices restrictedPlatformServices{ {}, locale, "UserData" };
+    const std::optional<kb::platform::PlatformLocale> exposedLocale = platformServices.Locale();
+    kb::tests::Require(exposedLocale.has_value() && exposedLocale->language == "pl" && exposedLocale->region == "PL" && platformServices.UserDataPath() == std::optional<std::filesystem::path>{ "UserData" } && platformServices.SetClipboardText("copied") && platformServices.OpenUrl("https://21kb.dev") && !platformServices.OpenUrl("file:///outside") && platformServices.SetVibration(0.25F, 0.75F) && platformProbe.clipboard && platformProbe.url && platformProbe.vibration && !restrictedPlatformServices.Locale().has_value() && !restrictedPlatformServices.UserDataPath().has_value() && !restrictedPlatformServices.SetClipboardText("blocked") && !restrictedPlatformServices.OpenUrl("https://21kb.dev") && !restrictedPlatformServices.SetVibration(0.25F, 0.75F), "Platform services did not enforce capability boundaries");
     const kb::network::ReplicationSchema sessionSchema{ .version = 1U, .fields = { { .id = 1U, .name = "state", .type = kb::network::ReplicatedFieldType::Boolean } } };
     const kb::network::ReplicationSchema mismatchSchema{ .version = 2U, .fields = { { .id = 1U, .name = "state", .type = kb::network::ReplicatedFieldType::Boolean } } };
     const kb::network::ReplicationSchema incompatibleWireSchema{ .version = 1U, .fields = { { .id = 1U, .name = "state", .type = kb::network::ReplicatedFieldType::UnsignedInteger } } };
