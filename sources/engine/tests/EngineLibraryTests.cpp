@@ -4127,6 +4127,8 @@ void RunGameInstanceLifetimeTest() {
     kb::tests::Require(game.Cameras().SetView(10U, { .camera = kb::scene::SceneEntity{ 100U }, .target = kb::scene::SceneEntity{ 42U }, .policy = kb::gameplay::CameraPolicy::Spectate }) &&
             game.Cameras().FindView(10U)->policy == kb::gameplay::CameraPolicy::Spectate && game.Cameras().ClearView(10U),
         "CameraManager did not retain explicit player possession/follow/spectate policy");
+    kb::gameplay::MatchRuntime match{ { .spawnPoints = { { .position = { 1.0F, 0.0F, 0.0F }, .team = 1U } } } };
+    kb::tests::Require(match.SetPhase(kb::gameplay::MatchPhase::Playing) && match.SelectSpawn(1U) != nullptr, "Match config did not expose phase and team spawn policy");
 }
 
 void RunEngineLibraryTests() {
