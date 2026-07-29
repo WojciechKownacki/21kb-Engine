@@ -41,6 +41,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/Navigation.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
@@ -3849,6 +3850,30 @@ void RunEngineLibrarySignalTest() {
     }
 }
 
+void RunNavigationFoundationContractTest() {
+    kb::scene::NavQueryFilter filter;
+    kb::tests::Require(filter.Allows(kb::scene::kDefaultNavArea) && filter.AreaCost(kb::scene::kDefaultNavArea) == 1.0F,
+        "Navigation filter must admit the default area at unit cost");
+    constexpr kb::scene::NavAreaId kMudArea = 3U;
+    filter.SetIncludedAreas(kb::scene::NavAreaBit(kMudArea));
+    kb::tests::Require(!filter.Allows(kb::scene::kDefaultNavArea) && filter.Allows(kMudArea),
+        "Navigation filter included-area mask did not constrain traversal");
+    kb::tests::Require(filter.SetAreaCost(kMudArea, 2.5F) && filter.AreaCost(kMudArea) == 2.5F,
+        "Navigation filter did not retain a positive area cost");
+    filter.SetExcludedAreas(kb::scene::NavAreaBit(kMudArea));
+    kb::tests::Require(!filter.Allows(kMudArea), "Navigation filter exclusion must override inclusion");
+    kb::tests::Require(!filter.SetAreaCost(kb::scene::NavAreaId{ 32U }, 1.0F) &&
+            !filter.SetAreaCost(kMudArea, 0.0F) && !filter.SetAreaCost(kMudArea, std::numeric_limits<float>::infinity()),
+        "Navigation filter accepted an invalid area id or invalid traversal cost");
+
+    const kb::scene::NavMesh mesh{};
+    const kb::scene::NavAgent agent{};
+    const kb::scene::NavObstacle obstacle{};
+    kb::tests::Require(mesh.agentRadius > 0.0F && agent.radius > 0.0F && agent.maxSpeed > 0.0F &&
+            obstacle.area == kb::scene::kDefaultNavArea && obstacle.carve,
+        "Navigation foundation defaults must define a usable walkable mesh, agent and obstacle");
+}
+
 void RunEngineLibraryTests() {
     RunVersionValueTest();
     RunVersionOrderingTest();
@@ -3916,6 +3941,7 @@ void RunEngineLibraryTests() {
     RunInputLimitsTest();
     RunExpandedValueTypesTest();
     RunEngineLibrarySignalTest();
+    RunNavigationFoundationContractTest();
 }
 
 } // namespace kb::tests
