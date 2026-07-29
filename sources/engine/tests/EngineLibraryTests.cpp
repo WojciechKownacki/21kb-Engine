@@ -77,6 +77,9 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneSystem.hpp"
+#include "engine/scene/SceneSystemContext.hpp"
 #include "engine/scene/AiBehaviourAssetIO.hpp"
 #include "engine/scene/AiBehaviourRuntime.hpp"
 #include "engine/scene/AiBlackboard.hpp"
@@ -105,6 +108,7 @@
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -4483,6 +4487,129 @@ void RunGoapBenchmarkDecisionTest() {
         "GOAP benchmark did not exercise the entire configured state space");
 }
 
+struct MinimalGameplayReplaySnapshot {
+    kb::gameplay::GameStateSnapshot gameState;
+    kb::scene::TransformComponent playerTransform;
+    float playerHealth = 0.0F;
+    std::uint64_t frameIndex = 0U;
+    std::uint64_t fixedStepIndex = 0U;
+    std::size_t entityCount = 0U;
+};
+
+struct RecordedGameplayInput {
+    float moveX = 0.0F;
+    float damage = 0.0F;
+    std::int32_t teamOneScore = 0;
+};
+
+class RecordedGameplayReplaySystem final : public kb::scene::SceneSystem {
+public:
+    RecordedGameplayReplaySystem(
+        kb::gameplay::GameState& gameState,
+        kb::gameplay::GameplayModules& modules,
+        kb::scene::SceneEntity player,
+        kb::scene::SceneEntity enemy,
+        std::span<const RecordedGameplayInput> inputs) noexcept
+        : gameState_(gameState), modules_(modules), player_(player), enemy_(enemy), inputs_(inputs) {}
+
+    void OnFixedUpdate(kb::scene::SceneSystemContext& context) override {
+        if (nextInput_ >= inputs_.size()) return;
+        const RecordedGameplayInput input = inputs_[nextInput_++];
+        kb::scene::TransformComponent transform = context.Transforms().Get(player_);
+        transform.localPosition.x += input.moveX;
+        context.Transforms().Set(player_, transform);
+        kb::tests::Require(
+            gameState_.Advance(context.DeltaSeconds()) &&
+                (gameState_.Snapshot().scores[1] == input.teamOneScore || gameState_.SetScore(1U, input.teamOneScore)),
+            "Gameplay replay could not advance authoritative match state");
+        if (input.damage > 0.0F) {
+            const auto resolution = kb::gameplay::ResolveDamage(
+                { .source = enemy_, .instigator = enemy_, .target = player_, .hitEntity = player_, .type = kb::gameplay::DamageType::Physical, .amount = input.damage },
+                {});
+            kb::tests::Require(resolution.has_value() && modules_.ApplyDamage(*resolution),
+                "Gameplay replay could not apply recorded damage");
+        }
+    }
+
+    [[nodiscard]] bool RequiresFixedStep() const override { return true; }
+
+private:
+    kb::gameplay::GameState& gameState_;
+    kb::gameplay::GameplayModules& modules_;
+    kb::scene::SceneEntity player_{};
+    kb::scene::SceneEntity enemy_{};
+    std::span<const RecordedGameplayInput> inputs_;
+    std::size_t nextInput_ = 0U;
+};
+
+[[nodiscard]] MinimalGameplayReplaySnapshot ReplayMinimalGameplayScene() {
+    constexpr std::array<RecordedGameplayInput, 6U> kRecordedInputs{
+        RecordedGameplayInput{ .moveX = 1.0F, .damage = 0.0F, .teamOneScore = 0 },
+        RecordedGameplayInput{ .moveX = 1.0F, .damage = 2.0F, .teamOneScore = 0 },
+        RecordedGameplayInput{ .moveX = -0.5F, .damage = 0.0F, .teamOneScore = 1 },
+        RecordedGameplayInput{ .moveX = 0.25F, .damage = 3.0F, .teamOneScore = 1 },
+        RecordedGameplayInput{ .moveX = 0.0F, .damage = 0.0F, .teamOneScore = 2 },
+        RecordedGameplayInput{ .moveX = -0.75F, .damage = 1.0F, .teamOneScore = 2 },
+    };
+    constexpr float kFixedDeltaSeconds = 1.0F / 60.0F;
+
+    kb::gameplay::GameInstance game;
+    const kb::gameplay::GameSceneId sceneId = game.CreateScene();
+    kb::scene::Scene* const scene = game.FindScene(sceneId);
+    kb::tests::Require(scene != nullptr, "Gameplay replay could not create its runtime scene");
+    scene->Runtime().SetFixedStepSettings({ .fixedDeltaSeconds = kFixedDeltaSeconds, .maxFrameDeltaSeconds = kFixedDeltaSeconds, .maxFixedStepsPerFrame = 1U });
+
+    const kb::scene::SceneObject player = scene->Entities().CreateObject({ .name = "ReplayPlayer" });
+    const kb::scene::SceneObject enemy = scene->Entities().CreateObject({ .name = "ReplayEnemy" });
+    kb::gameplay::GameplayModules modules;
+    kb::tests::Require(
+        game.State().SetMatchInProgress(true) &&
+            game.PlayerRegistry().Join({ .id = 1U, .state = { .displayName = "ReplayPlayer", .team = 1U } }) &&
+            game.PlayerRegistry().Possess(1U, player.Entity()) &&
+            modules.AddHealth(player.Entity(), { .current = 10.0F, .maximum = 10.0F }),
+        "Gameplay replay could not initialize deterministic player state");
+    scene->Runtime().AddSceneSystem(std::make_unique<RecordedGameplayReplaySystem>(
+        game.State(), modules, player.Entity(), enemy.Entity(), kRecordedInputs));
+
+    for (std::size_t index = 0U; index < kRecordedInputs.size(); ++index) {
+        kb::tests::Require(scene->Runtime().Update(kFixedDeltaSeconds), "Gameplay replay runtime requested termination");
+    }
+
+    const auto health = modules.Health(player.Entity());
+    kb::tests::Require(health.has_value(), "Gameplay replay lost its player health state");
+    return {
+        .gameState = game.State().Snapshot(),
+        .playerTransform = scene->Transforms().Get(player.Entity()),
+        .playerHealth = health->current,
+        .frameIndex = scene->Runtime().FrameIndex(),
+        .fixedStepIndex = scene->Runtime().FixedStepIndex(),
+        .entityCount = scene->Entities().Count(),
+    };
+}
+
+void RunMinimalGameplaySceneReplayTest() {
+    const MinimalGameplayReplaySnapshot recorded = ReplayMinimalGameplayScene();
+    const MinimalGameplayReplaySnapshot replayed = ReplayMinimalGameplayScene();
+    kb::tests::Require(
+        recorded.gameState.revision == replayed.gameState.revision &&
+            recorded.gameState.elapsedSeconds == replayed.gameState.elapsedSeconds &&
+            recorded.gameState.scores == replayed.gameState.scores &&
+            recorded.gameState.matchInProgress == replayed.gameState.matchInProgress &&
+            recorded.playerTransform.localPosition.x == replayed.playerTransform.localPosition.x &&
+            recorded.playerTransform.worldPosition.x == replayed.playerTransform.worldPosition.x &&
+            recorded.playerHealth == replayed.playerHealth &&
+            recorded.frameIndex == replayed.frameIndex &&
+            recorded.fixedStepIndex == replayed.fixedStepIndex &&
+            recorded.entityCount == replayed.entityCount,
+        "Minimal gameplay scene replay produced a different authoritative state");
+    kb::tests::Require(
+        recorded.gameState.elapsedSeconds > 0.099F && recorded.gameState.elapsedSeconds < 0.101F &&
+            recorded.gameState.scores[1] == 2 && recorded.playerTransform.localPosition.x == 1.0F &&
+            recorded.playerHealth == 4.0F && recorded.frameIndex == 6U && recorded.fixedStepIndex == 6U &&
+            recorded.entityCount == 2U,
+        "Minimal gameplay scene replay fixture did not execute its recorded gameplay inputs");
+}
+
 void RunGameInstanceLifetimeTest() {
     kb::core::BindingCache bindings{ 2U };
     const kb::core::BindingId transformBinding = bindings.Register("Transform");
@@ -4700,6 +4827,7 @@ void RunEngineLibraryTests() {
     RunAiBehaviourAssetRuntimeTest();
     RunAiBlackboardTest();
     RunGoapBenchmarkDecisionTest();
+    RunMinimalGameplaySceneReplayTest();
     RunGameInstanceLifetimeTest();
 }
 
