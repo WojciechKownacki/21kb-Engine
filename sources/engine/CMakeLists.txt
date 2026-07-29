@@ -113,6 +113,7 @@ add_library(kb_engine STATIC
     include/engine/gameplay/GameMode.hpp
     include/engine/gameplay/GameState.hpp
     include/engine/gameplay/Players.hpp
+    include/engine/gameplay/CameraManager.hpp
     include/engine/scene/AudioSourceComponent.hpp
     include/engine/scene/CameraComponent.hpp
     include/engine/scene/CharacterControllerComponent.hpp
@@ -473,6 +474,7 @@ add_library(kb_engine STATIC
     src/gameplay/GameMode.cpp
     src/gameplay/GameState.cpp
     src/gameplay/Players.cpp
+    src/gameplay/CameraManager.cpp
     src/scene/AiBehaviourRuntime.cpp
     src/scene/AiBehaviourAssetIO.cpp
     src/scene/AiBehaviourAssetLoader.cpp
