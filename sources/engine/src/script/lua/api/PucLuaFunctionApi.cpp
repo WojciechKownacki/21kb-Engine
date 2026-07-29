@@ -2,6 +2,7 @@
 
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/script/PucLuaSafeCall.hpp"
+#include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptExecutionContext.hpp"
 #include "engine/script/ScriptValue.hpp"
 #include "script/lua/PucLuaValueBridge.hpp"
@@ -11,8 +12,10 @@ extern "C" {
 #include <lua.h>
 }
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <optional>
 #include <string>
@@ -2991,6 +2994,228 @@ void SetClosure(lua_State* state, const char* name, lua_CFunction function, Scri
     lua_setfield(state, -2, name);
 }
 
+// These adapters retain the hand-written Lua argument and return-shape
+// marshalling.  Their position follows ScriptApiCatalog::LuaBindingDefinitions
+// excluding Task and global bindings; table and Lua field names deliberately
+// live only in that catalog.
+constexpr std::array<lua_CFunction, 173> kCatalogBindingAdapters{ {
+    &LuaAudioPlay,
+    &LuaAudioSetMixer,
+    &LuaAudioActiveMixer,
+    &LuaAudioSetSnapshot,
+    &LuaAudioActiveSnapshot,
+    &LuaAudioStop,
+    &LuaAudioPause,
+    &LuaAudioResume,
+    &LuaAudioSeek,
+    &LuaAudioSetVolume,
+    &LuaAudioSetPitch,
+    &LuaAudioSetLoop,
+    &LuaAudioIsPlaying,
+    &LuaAudioSetBusVolume,
+    &LuaAudioClearBusVolume,
+    &LuaAudioTransitionToSnapshot,
+    &LuaAudioConfigureOcclusion,
+    &LuaAudioOcclusionEnabled,
+    &LuaAudioGetPosition,
+    &LuaAudioAddMarker,
+    &LuaMeshRendererSetMesh,
+    &LuaMeshRendererSetMaterial,
+    &LuaMeshRendererSetMaterialSlot,
+    &LuaMeshRendererGetMaterialSlot,
+    &LuaMeshRendererClearMaterialSlot,
+    &LuaMeshRendererSetMaterialInstance,
+    &LuaMeshRendererClearMaterialInstance,
+    &LuaMaterialInstanceCreate,
+    &LuaMaterialInstanceRelease,
+    &LuaMaterialInstanceExists,
+    &LuaMaterialInstanceParent,
+    &LuaMaterialInstanceSetParameterScalar,
+    &LuaMaterialInstanceSetParameterBool,
+    &LuaMaterialInstanceClearParameter,
+    &LuaPostProcessSetProfile,
+    &LuaPostProcessClearProfile,
+    &LuaPostProcessActiveProfile,
+    &LuaParticlesCreate,
+    &LuaParticlesRelease,
+    &LuaParticlesExists,
+    &LuaParticlesPlay,
+    &LuaParticlesStop,
+    &LuaParticlesIsPlaying,
+    &LuaParticlesSetSeed,
+    &LuaParticlesSetParameterScalar,
+    &LuaParticlesClearParameter,
+    &LuaParticlesEmit,
+    &LuaParticlesLiveCount,
+    &LuaRendererIsVisible,
+    &LuaRendererGetBounds,
+    &LuaRendererTestFrustum,
+    &LuaRendererHasFrame,
+    &LuaRendererWorldToScreen,
+    &LuaRendererScreenPointToRay,
+    &LuaRendererScreenToWorld,
+    &LuaRendererCaptureScreen,
+    &LuaRendererCaptureStatus,
+    &LuaWorldFindByName,
+    &LuaWorldFindByTag,
+    &LuaWorldExists,
+    &LuaWorldName,
+    &LuaWorldSpawn,
+    &LuaWorldDestroy,
+    &LuaWorldSetTag,
+    &LuaWorldHasTag,
+    &LuaWorldSetParent,
+    &LuaWorldInstantiatePrefab,
+    &LuaSceneLoad,
+    &LuaSceneUnload,
+    &LuaSceneSetActive,
+    &LuaSceneGetActive,
+    &LuaSceneFind,
+    &LuaSceneLoadProgress,
+    &LuaTimeDelta,
+    &LuaTransformGetPosition,
+    &LuaTransformSetPosition,
+    &LuaTransformTranslate,
+    &LuaPhysicsRaycast,
+    &LuaPhysicsAddForce,
+    &LuaPhysicsAddImpulse,
+    &LuaPhysicsSetVelocity,
+    &LuaPhysicsGetVelocity,
+    &LuaPhysicsSetAngularVelocity,
+    &LuaPhysicsGetAngularVelocity,
+    &LuaPhysicsMoveKinematic,
+    &LuaPhysicsSleep,
+    &LuaPhysicsWake,
+    &LuaPhysicsIsSleeping,
+    &LuaPhysicsSphereCast,
+    &LuaPhysicsBoxCast,
+    &LuaPhysicsCapsuleCast,
+    &LuaPhysicsOverlapSphere,
+    &LuaPhysicsOverlapBox,
+    &LuaPhysicsOverlapCapsule,
+    &LuaPhysicsClosestPoint,
+    &LuaPhysicsLayerBit,
+    &LuaPhysicsCharacterMove,
+    &LuaPhysicsCharacterJump,
+    &LuaPhysicsCharacterVelocity,
+    &LuaPhysicsCharacterIsGrounded,
+    &LuaPhysicsCharacterGroundNormal,
+    &LuaPhysicsCharacterGroundVelocity,
+    &LuaPhysicsSetDebugDrawEnabled,
+    &LuaPhysicsIsDebugDrawEnabled,
+    &LuaInputIsPressed,
+    &LuaInputWasPressed,
+    &LuaInputWasReleased,
+    &LuaInputValue,
+    &LuaInputVector2,
+    &LuaInputVector3,
+    &LuaInputAddMappingContext,
+    &LuaInputRemoveMappingContext,
+    &LuaInputRebind,
+    &LuaInputSaveRebindProfile,
+    &LuaInputLoadRebindProfile,
+    &LuaInputActionBool,
+    &LuaInputActionFloat,
+    &LuaInputAction2D,
+    &LuaInputPressed,
+    &LuaInputReleased,
+    &LuaInputHeld,
+    &LuaInputPriorityGameplay,
+    &LuaInputPriorityUI,
+    &LuaInputPriorityConsole,
+    &LuaInputPriorityDebugOverlay,
+    &LuaInputHasFocus,
+    &LuaInputIsGamepadConnected,
+    &LuaInputHasHaptics,
+    &LuaInputSetVibration,
+    &LuaInputBindHapticsUser,
+    &LuaInputSetUserVibration,
+    &LuaInputStopVibration,
+    &LuaTimelineCreate,
+    &LuaTimelineRelease,
+    &LuaTimelinePlay,
+    &LuaTimelinePause,
+    &LuaTimelineSeek,
+    &LuaTimelineSkip,
+    &LuaTimelineBind,
+    &LuaTimelineIsPlaying,
+    &LuaTimelineTime,
+    &LuaUICreate,
+    &LuaUIDestroy,
+    &LuaUIShow,
+    &LuaUIHide,
+    &LuaUIFocus,
+    &LuaUIFind,
+    &LuaUISetText,
+    &LuaUISetImage,
+    &LuaUISetToggle,
+    &LuaUISetSlider,
+    &LuaUIListAppend,
+    &LuaUIListClear,
+    &LuaUIConfigureList,
+    &LuaUIListScrollTo,
+    &LuaUISetScrollOffset,
+    &LuaUISetModalOpen,
+    &LuaUIEmitClick,
+    &LuaUIEmitPointer,
+    &LuaUIEmitSubmit,
+    &LuaUIEmitChanged,
+    &LuaUIEmitFocus,
+    &LuaUIEmitNavigation,
+    &LuaLocalizationSetCatalog,
+    &LuaLocalizationSetLanguage,
+    &LuaLocalizationLanguage,
+    &LuaLocalizationTranslate,
+    &LuaLocalizationFormatPlural,
+    &LuaPointerPosition,
+    &LuaPointerDelta,
+    &LuaPointerButton,
+    &LuaPointerScroll,
+    &LuaPointerRay,
+} };
+
+[[nodiscard]] std::size_t CountCatalogTableBindings(std::string_view tableName) noexcept {
+    std::size_t count = 0;
+    for (const ScriptApiCatalogLuaBindingDefinition& binding : ScriptApiCatalog::LuaBindingDefinitions()) {
+        if (binding.tableName == tableName) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+void AttachCatalogModuleTables(lua_State* state, int environmentIndex, ScriptExecutionContext& context) {
+    std::size_t adapterIndex = 0;
+    std::string_view currentTable;
+
+    for (const ScriptApiCatalogLuaBindingDefinition& binding : ScriptApiCatalog::LuaBindingDefinitions()) {
+        if (binding.tableName.empty() || binding.tableName == "Task") {
+            continue;
+        }
+
+        if (binding.tableName != currentTable) {
+            if (!currentTable.empty()) {
+                lua_setfield(state, environmentIndex, currentTable.data());
+            }
+            currentTable = binding.tableName;
+            lua_createtable(state, 0, static_cast<int>(CountCatalogTableBindings(currentTable)));
+        }
+
+        if (adapterIndex >= kCatalogBindingAdapters.size()) {
+            std::terminate();
+        }
+        SetClosure(state, binding.luaName.data(), kCatalogBindingAdapters[adapterIndex], context);
+        ++adapterIndex;
+    }
+
+    if (adapterIndex != kCatalogBindingAdapters.size()) {
+        std::terminate();
+    }
+    if (!currentTable.empty()) {
+        lua_setfield(state, environmentIndex, currentTable.data());
+    }
+}
+
 } // namespace
 
 void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExecutionContext& context) {
@@ -3002,230 +3227,8 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     lua_pushcclosure(state, &PucLuaSafeCall<&LuaLog>, 1);
     lua_setfield(state, environmentIndex, "Log");
 
-    lua_createtable(state, 0, 23);
-    lua_pushlightuserdata(state, &context);
-    lua_pushcclosure(state, &PucLuaSafeCall<&LuaAudioPlay>, 1);
-    lua_setfield(state, -2, "Play");
-    SetClosure(state, "SetMixer", &LuaAudioSetMixer, context);
-    SetClosure(state, "ActiveMixer", &LuaAudioActiveMixer, context);
-    SetClosure(state, "SetSnapshot", &LuaAudioSetSnapshot, context);
-    SetClosure(state, "ActiveSnapshot", &LuaAudioActiveSnapshot, context);
-    SetClosure(state, "Stop", &LuaAudioStop, context);
-    SetClosure(state, "Pause", &LuaAudioPause, context);
-    SetClosure(state, "Resume", &LuaAudioResume, context);
-    SetClosure(state, "Seek", &LuaAudioSeek, context);
-    SetClosure(state, "SetVolume", &LuaAudioSetVolume, context);
-    SetClosure(state, "SetPitch", &LuaAudioSetPitch, context);
-    SetClosure(state, "SetLoop", &LuaAudioSetLoop, context);
-    SetClosure(state, "IsPlaying", &LuaAudioIsPlaying, context);
-    SetClosure(state, "SetBusVolume", &LuaAudioSetBusVolume, context);
-    SetClosure(state, "ClearBusVolume", &LuaAudioClearBusVolume, context);
-    SetClosure(state, "TransitionToSnapshot", &LuaAudioTransitionToSnapshot, context);
-    SetClosure(state, "ConfigureOcclusion", &LuaAudioConfigureOcclusion, context);
-    SetClosure(state, "OcclusionEnabled", &LuaAudioOcclusionEnabled, context);
-    SetClosure(state, "GetPosition", &LuaAudioGetPosition, context);
-    SetClosure(state, "AddMarker", &LuaAudioAddMarker, context);
-    lua_setfield(state, environmentIndex, "Audio");
+    AttachCatalogModuleTables(state, environmentIndex, context);
 
-    lua_createtable(state, 0, 7);
-    SetClosure(state, "SetMesh", &LuaMeshRendererSetMesh, context);
-    SetClosure(state, "SetMaterial", &LuaMeshRendererSetMaterial, context);
-    SetClosure(state, "SetMaterialSlot", &LuaMeshRendererSetMaterialSlot, context);
-    SetClosure(state, "GetMaterialSlot", &LuaMeshRendererGetMaterialSlot, context);
-    SetClosure(state, "ClearMaterialSlot", &LuaMeshRendererClearMaterialSlot, context);
-    SetClosure(state, "SetMaterialInstance", &LuaMeshRendererSetMaterialInstance, context);
-    SetClosure(state, "ClearMaterialInstance", &LuaMeshRendererClearMaterialInstance, context);
-    lua_setfield(state, environmentIndex, "MeshRenderer");
-
-    lua_createtable(state, 0, 7);
-    SetClosure(state, "Create", &LuaMaterialInstanceCreate, context);
-    SetClosure(state, "Release", &LuaMaterialInstanceRelease, context);
-    SetClosure(state, "Exists", &LuaMaterialInstanceExists, context);
-    SetClosure(state, "Parent", &LuaMaterialInstanceParent, context);
-    SetClosure(state, "SetParameterScalar", &LuaMaterialInstanceSetParameterScalar, context);
-    SetClosure(state, "SetParameterBool", &LuaMaterialInstanceSetParameterBool, context);
-    SetClosure(state, "ClearParameter", &LuaMaterialInstanceClearParameter, context);
-    lua_setfield(state, environmentIndex, "MaterialInstance");
-
-    lua_createtable(state, 0, 3);
-    SetClosure(state, "SetProfile", &LuaPostProcessSetProfile, context);
-    SetClosure(state, "ClearProfile", &LuaPostProcessClearProfile, context);
-    SetClosure(state, "ActiveProfile", &LuaPostProcessActiveProfile, context);
-    lua_setfield(state, environmentIndex, "PostProcess");
-
-    lua_createtable(state, 0, 11);
-    SetClosure(state, "Create", &LuaParticlesCreate, context);
-    SetClosure(state, "Release", &LuaParticlesRelease, context);
-    SetClosure(state, "Exists", &LuaParticlesExists, context);
-    SetClosure(state, "Play", &LuaParticlesPlay, context);
-    SetClosure(state, "Stop", &LuaParticlesStop, context);
-    SetClosure(state, "IsPlaying", &LuaParticlesIsPlaying, context);
-    SetClosure(state, "SetSeed", &LuaParticlesSetSeed, context);
-    SetClosure(state, "SetParameterScalar", &LuaParticlesSetParameterScalar, context);
-    SetClosure(state, "ClearParameter", &LuaParticlesClearParameter, context);
-    SetClosure(state, "Emit", &LuaParticlesEmit, context);
-    SetClosure(state, "LiveCount", &LuaParticlesLiveCount, context);
-    lua_setfield(state, environmentIndex, "Particles");
-
-    lua_createtable(state, 0, 9);
-    SetClosure(state, "IsVisible", &LuaRendererIsVisible, context);
-    SetClosure(state, "GetBounds", &LuaRendererGetBounds, context);
-    SetClosure(state, "TestFrustum", &LuaRendererTestFrustum, context);
-    SetClosure(state, "HasFrame", &LuaRendererHasFrame, context);
-    SetClosure(state, "WorldToScreen", &LuaRendererWorldToScreen, context);
-    SetClosure(state, "ScreenPointToRay", &LuaRendererScreenPointToRay, context);
-    SetClosure(state, "ScreenToWorld", &LuaRendererScreenToWorld, context);
-    SetClosure(state, "CaptureScreen", &LuaRendererCaptureScreen, context);
-    SetClosure(state, "CaptureStatus", &LuaRendererCaptureStatus, context);
-    lua_setfield(state, environmentIndex, "Renderer");
-
-    lua_createtable(state, 0, 10);
-    SetClosure(state, "FindByName", &LuaWorldFindByName, context);
-    SetClosure(state, "FindByTag", &LuaWorldFindByTag, context);
-    SetClosure(state, "Exists", &LuaWorldExists, context);
-    SetClosure(state, "Name", &LuaWorldName, context);
-    SetClosure(state, "Spawn", &LuaWorldSpawn, context);
-    SetClosure(state, "Destroy", &LuaWorldDestroy, context);
-    SetClosure(state, "SetTag", &LuaWorldSetTag, context);
-    SetClosure(state, "HasTag", &LuaWorldHasTag, context);
-    SetClosure(state, "SetParent", &LuaWorldSetParent, context);
-    SetClosure(state, "InstantiatePrefab", &LuaWorldInstantiatePrefab, context);
-    lua_setfield(state, environmentIndex, "World");
-
-    lua_createtable(state, 0, 6);
-    SetClosure(state, "Load", &LuaSceneLoad, context);
-    SetClosure(state, "Unload", &LuaSceneUnload, context);
-    SetClosure(state, "SetActive", &LuaSceneSetActive, context);
-    SetClosure(state, "GetActive", &LuaSceneGetActive, context);
-    SetClosure(state, "Find", &LuaSceneFind, context);
-    SetClosure(state, "LoadProgress", &LuaSceneLoadProgress, context);
-    lua_setfield(state, environmentIndex, "Scene");
-
-    lua_createtable(state, 0, 1);
-    SetClosure(state, "delta", &LuaTimeDelta, context);
-    lua_setfield(state, environmentIndex, "Time");
-
-    lua_createtable(state, 0, 3);
-    SetClosure(state, "GetPosition", &LuaTransformGetPosition, context);
-    SetClosure(state, "SetPosition", &LuaTransformSetPosition, context);
-    SetClosure(state, "Translate", &LuaTransformTranslate, context);
-    lua_setfield(state, environmentIndex, "Transform");
-
-    lua_createtable(state, 0, 27);
-    SetClosure(state, "Raycast", &LuaPhysicsRaycast, context);
-    SetClosure(state, "AddForce", &LuaPhysicsAddForce, context);
-    SetClosure(state, "AddImpulse", &LuaPhysicsAddImpulse, context);
-    SetClosure(state, "SetVelocity", &LuaPhysicsSetVelocity, context);
-    SetClosure(state, "GetVelocity", &LuaPhysicsGetVelocity, context);
-    SetClosure(state, "SetAngularVelocity", &LuaPhysicsSetAngularVelocity, context);
-    SetClosure(state, "GetAngularVelocity", &LuaPhysicsGetAngularVelocity, context);
-    SetClosure(state, "MoveKinematic", &LuaPhysicsMoveKinematic, context);
-    SetClosure(state, "Sleep", &LuaPhysicsSleep, context);
-    SetClosure(state, "Wake", &LuaPhysicsWake, context);
-    SetClosure(state, "IsSleeping", &LuaPhysicsIsSleeping, context);
-    SetClosure(state, "SphereCast", &LuaPhysicsSphereCast, context);
-    SetClosure(state, "BoxCast", &LuaPhysicsBoxCast, context);
-    SetClosure(state, "CapsuleCast", &LuaPhysicsCapsuleCast, context);
-    SetClosure(state, "OverlapSphere", &LuaPhysicsOverlapSphere, context);
-    SetClosure(state, "OverlapBox", &LuaPhysicsOverlapBox, context);
-    SetClosure(state, "OverlapCapsule", &LuaPhysicsOverlapCapsule, context);
-    SetClosure(state, "ClosestPoint", &LuaPhysicsClosestPoint, context);
-    SetClosure(state, "LayerBit", &LuaPhysicsLayerBit, context);
-    SetClosure(state, "CharacterMove", &LuaPhysicsCharacterMove, context);
-    SetClosure(state, "CharacterJump", &LuaPhysicsCharacterJump, context);
-    SetClosure(state, "CharacterVelocity", &LuaPhysicsCharacterVelocity, context);
-    SetClosure(state, "CharacterIsGrounded", &LuaPhysicsCharacterIsGrounded, context);
-    SetClosure(state, "CharacterGroundNormal", &LuaPhysicsCharacterGroundNormal, context);
-    SetClosure(state, "CharacterGroundVelocity", &LuaPhysicsCharacterGroundVelocity, context);
-    SetClosure(state, "SetDebugDrawEnabled", &LuaPhysicsSetDebugDrawEnabled, context);
-    SetClosure(state, "IsDebugDrawEnabled", &LuaPhysicsIsDebugDrawEnabled, context);
-    lua_setfield(state, environmentIndex, "Physics");
-
-    lua_createtable(state, 0, 20);
-    SetClosure(state, "IsPressed", &LuaInputIsPressed, context);
-    SetClosure(state, "WasPressed", &LuaInputWasPressed, context);
-    SetClosure(state, "WasReleased", &LuaInputWasReleased, context);
-    SetClosure(state, "Value", &LuaInputValue, context);
-    SetClosure(state, "Vector2", &LuaInputVector2, context);
-    SetClosure(state, "Vector3", &LuaInputVector3, context);
-    SetClosure(state, "AddMappingContext", &LuaInputAddMappingContext, context);
-    SetClosure(state, "RemoveMappingContext", &LuaInputRemoveMappingContext, context);
-    SetClosure(state, "Rebind", &LuaInputRebind, context);
-    SetClosure(
-        state, "SaveRebindProfile", &LuaInputSaveRebindProfile, context);
-    SetClosure(
-        state, "LoadRebindProfile", &LuaInputLoadRebindProfile, context);
-    SetClosure(state, "ActionBool", &LuaInputActionBool, context);
-    SetClosure(state, "ActionFloat", &LuaInputActionFloat, context);
-    SetClosure(state, "Action2D", &LuaInputAction2D, context);
-    SetClosure(state, "Pressed", &LuaInputPressed, context);
-    SetClosure(state, "Released", &LuaInputReleased, context);
-    SetClosure(state, "Held", &LuaInputHeld, context);
-    SetClosure(state, "PriorityGameplay", &LuaInputPriorityGameplay, context);
-    SetClosure(state, "PriorityUI", &LuaInputPriorityUI, context);
-    SetClosure(state, "PriorityConsole", &LuaInputPriorityConsole, context);
-    SetClosure(state, "PriorityDebugOverlay", &LuaInputPriorityDebugOverlay, context);
-    SetClosure(state, "HasFocus", &LuaInputHasFocus, context);
-    SetClosure(state, "IsGamepadConnected", &LuaInputIsGamepadConnected, context);
-    SetClosure(state, "HasHaptics", &LuaInputHasHaptics, context);
-    SetClosure(state, "SetVibration", &LuaInputSetVibration, context);
-    SetClosure(state, "BindHapticsUser", &LuaInputBindHapticsUser, context);
-    SetClosure(state, "SetUserVibration", &LuaInputSetUserVibration, context);
-    SetClosure(state, "StopVibration", &LuaInputStopVibration, context);
-    lua_setfield(state, environmentIndex, "Input");
-
-    lua_createtable(state, 0, 9);
-    SetClosure(state, "Create", &LuaTimelineCreate, context);
-    SetClosure(state, "Release", &LuaTimelineRelease, context);
-    SetClosure(state, "Play", &LuaTimelinePlay, context);
-    SetClosure(state, "Pause", &LuaTimelinePause, context);
-    SetClosure(state, "Seek", &LuaTimelineSeek, context);
-    SetClosure(state, "Skip", &LuaTimelineSkip, context);
-    SetClosure(state, "Bind", &LuaTimelineBind, context);
-    SetClosure(state, "IsPlaying", &LuaTimelineIsPlaying, context);
-    SetClosure(state, "Time", &LuaTimelineTime, context);
-    lua_setfield(state, environmentIndex, "Timeline");
-
-    lua_createtable(state, 0, 22);
-    SetClosure(state, "Create", &LuaUICreate, context);
-    SetClosure(state, "Destroy", &LuaUIDestroy, context);
-    SetClosure(state, "Show", &LuaUIShow, context);
-    SetClosure(state, "Hide", &LuaUIHide, context);
-    SetClosure(state, "Focus", &LuaUIFocus, context);
-    SetClosure(state, "Find", &LuaUIFind, context);
-    SetClosure(state, "SetText", &LuaUISetText, context);
-    SetClosure(state, "SetImage", &LuaUISetImage, context);
-    SetClosure(state, "SetToggle", &LuaUISetToggle, context);
-    SetClosure(state, "SetSlider", &LuaUISetSlider, context);
-    SetClosure(state, "ListAppend", &LuaUIListAppend, context);
-    SetClosure(state, "ListClear", &LuaUIListClear, context);
-    SetClosure(state, "ConfigureList", &LuaUIConfigureList, context);
-    SetClosure(state, "ListScrollTo", &LuaUIListScrollTo, context);
-    SetClosure(state, "SetScrollOffset", &LuaUISetScrollOffset, context);
-    SetClosure(state, "SetModalOpen", &LuaUISetModalOpen, context);
-    SetClosure(state, "EmitClick", &LuaUIEmitClick, context);
-    SetClosure(state, "EmitPointer", &LuaUIEmitPointer, context);
-    SetClosure(state, "EmitSubmit", &LuaUIEmitSubmit, context);
-    SetClosure(state, "EmitChanged", &LuaUIEmitChanged, context);
-    SetClosure(state, "EmitFocus", &LuaUIEmitFocus, context);
-    SetClosure(state, "EmitNavigation", &LuaUIEmitNavigation, context);
-    lua_setfield(state, environmentIndex, "UI");
-
-    lua_createtable(state, 0, 5);
-    SetClosure(state, "SetCatalog", &LuaLocalizationSetCatalog, context);
-    SetClosure(state, "SetLanguage", &LuaLocalizationSetLanguage, context);
-    SetClosure(state, "Language", &LuaLocalizationLanguage, context);
-    SetClosure(state, "Translate", &LuaLocalizationTranslate, context);
-    SetClosure(state, "FormatPlural", &LuaLocalizationFormatPlural, context);
-    lua_setfield(state, environmentIndex, "Localization");
-
-    lua_createtable(state, 0, 5);
-    SetClosure(state, "Position", &LuaPointerPosition, context);
-    SetClosure(state, "Delta", &LuaPointerDelta, context);
-    SetClosure(state, "Button", &LuaPointerButton, context);
-    SetClosure(state, "Scroll", &LuaPointerScroll, context);
-    SetClosure(state, "Ray", &LuaPointerRay, context);
-    lua_setfield(state, environmentIndex, "Pointer");
 }
 
 } // namespace kb::script

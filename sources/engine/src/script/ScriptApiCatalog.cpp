@@ -24,20 +24,10 @@ constexpr std::array kLifecycleEvents{
     ScriptLifecycleEvent::Destroyed,
 };
 
-struct LuaBindingSpec {
-    std::string_view tableName;
-    std::string_view luaName;
-    std::string_view functionName;
-    ScriptApiCatalogLuaReturnKind returnKind = ScriptApiCatalogLuaReturnKind::Default;
-    std::string_view returnPin;
-};
-
-// Mirrors the sandbox surface installed by PucLuaFunctionApi::Attach — both
-// PucLuaTaskApi::Attach adds the Task entries below. The names and each
-// wrapper's return shape must stay true to the callable sandbox. When a table, field, or return
-// path changes there, update this list so generated stubs stay true to what
-// scripts can actually call.
-constexpr std::array<LuaBindingSpec, 181> kLuaBindings{ {
+// PucLuaFunctionApi and PucLuaTaskApi install module tables directly from this
+// list.  The names and each wrapper's return shape therefore stay true to the
+// callable sandbox and generated stubs cannot drift from it.
+constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 181> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "Audio", "SetMixer", "Audio.SetMixer", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "Audio", "ActiveMixer", "Audio.ActiveMixer", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -241,6 +231,10 @@ const ScriptApiCatalogFunction* ScriptApiCatalog::FindFunction(std::string_view 
     return nullptr;
 }
 
+std::span<const ScriptApiCatalogLuaBindingDefinition> ScriptApiCatalog::LuaBindingDefinitions() noexcept {
+    return kLuaBindings;
+}
+
 ScriptApiCatalog ScriptApiCatalog::Build(const ScriptRuntimeHost& host) {
     ScriptApiCatalog catalog;
 
@@ -274,7 +268,7 @@ ScriptApiCatalog ScriptApiCatalog::Build(const ScriptRuntimeHost& host) {
     }
 
     catalog.luaBindings.reserve(kLuaBindings.size());
-    for (const LuaBindingSpec& binding : kLuaBindings) {
+    for (const ScriptApiCatalogLuaBindingDefinition& binding : LuaBindingDefinitions()) {
         catalog.luaBindings.push_back(ScriptApiCatalogLuaBinding{
             .tableName = std::string{ binding.tableName },
             .luaName = std::string{ binding.luaName },

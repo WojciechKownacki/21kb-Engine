@@ -839,6 +839,51 @@ end
         "Lua coroutine did not resume the suspended generator instead of restarting Tick");
 }
 
+void RunPucLuaCatalogModuleBindingTest() {
+    std::string source{ "function Tick(self, dt)\n" };
+    for (const kb::script::ScriptApiCatalogLuaBindingDefinition& binding : kb::script::ScriptApiCatalog::LuaBindingDefinitions()) {
+        if (binding.tableName.empty()) {
+            source += "    assert(type(";
+            source += binding.luaName;
+            source += ") == 'function', 'missing Lua global ";
+            source += binding.luaName;
+            source += "')\n";
+            continue;
+        }
+
+        source += "    assert(type(";
+        source += binding.tableName;
+        source += ".";
+        source += binding.luaName;
+        source += ") == 'function', 'missing Lua binding ";
+        source += binding.tableName;
+        source += ".";
+        source += binding.luaName;
+        source += "')\n";
+    }
+    source += "end\n";
+
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    constexpr kb::assets::AssetId kLuaAsset{ 3104U };
+    const kb::script::PucLuaLoadResult loaded = luaRuntime.LoadScript(kLuaAsset, source, "CatalogBindings.lua");
+    kb::tests::Require(loaded.succeeded, "Lua catalog module binding test script did not load");
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Catalog Bindings" });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kLuaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(
+        runtime.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(luaRuntime)),
+        "Lua catalog module binding backend registration failed");
+    const kb::script::ScriptRuntimeExecutionResult tick = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(tick.Succeeded(), "Lua runtime is missing a catalog-generated module binding");
+}
+
 void RunPucLuaScriptRuntimeModulesReloadAndDiagnosticsTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Runtime Advanced" });
@@ -14626,6 +14671,7 @@ void RunScriptRuntimeTests() {
     RunScriptRuntimeExecutionOrderTest();
     RunLuaScriptRuntimeDispatchTest();
     RunPucLuaScriptRuntimeDispatchTest();
+    RunPucLuaCatalogModuleBindingTest();
     RunPucLuaCoroutineGeneratorTest();
     RunPucLuaDestroyedYieldCleanupTest();
     RunPucLuaScriptRuntimeModulesReloadAndDiagnosticsTest();
