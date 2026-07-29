@@ -217,8 +217,8 @@ void ReplaceAll(
     }
 }
 
-[[nodiscard]] std::string ExpandContentTokens(
-    const ScenarioState& state, std::string content) {
+[[nodiscard]] std::optional<std::string> ExpandContentTokens(
+    const ScenarioState& state, std::string content, std::string& error) {
     const std::string projectRoot =
         std::filesystem::absolute(EditorProjectPaths::ProjectRoot())
             .lexically_normal()
@@ -229,6 +229,27 @@ void ReplaceAll(
             .generic_string();
     ReplaceAll(content, "{{PROJECT_ROOT}}", projectRoot);
     ReplaceAll(content, "{{ARTIFACT_ROOT}}", artifactRoot);
+    constexpr std::string_view prefix = "{{ASSET_ID:";
+    std::size_t position = 0U;
+    while ((position = content.find(prefix, position)) != std::string::npos) {
+        const std::size_t end = content.find("}}", position + prefix.size());
+        if (end == std::string::npos) {
+            error = "unterminated ASSET_ID token";
+            return std::nullopt;
+        }
+        const std::string path = content.substr(
+            position + prefix.size(), end - position - prefix.size());
+        const kb::assets::AssetMetadata* metadata =
+            state.context.Scene().Assets().Manager().Registry().FindByPath(
+                std::filesystem::path{ path });
+        if (metadata == nullptr) {
+            error = "ASSET_ID token references an undiscovered asset";
+            return std::nullopt;
+        }
+        const std::string id = std::to_string(metadata->id.value);
+        content.replace(position, end + 2U - position, id);
+        position += id.size();
+    }
     return content;
 }
 
@@ -488,8 +509,8 @@ ReadScriptValue(
         const auto path = StringMember(step, "path", error);
         const auto content = StringMember(step, "content", error);
         if (!path || !content) return { false, error };
-        const std::string expanded =
-            ExpandContentTokens(state, *content);
+        const auto expanded = ExpandContentTokens(state, *content, error);
+        if (!expanded.has_value()) return { false, error };
         const auto resolved = ResolveProjectPath(*path, error);
         if (!resolved) return { false, error };
         std::error_code directoryError;
@@ -501,8 +522,8 @@ ReadScriptValue(
         std::ofstream output(
             *resolved, std::ios::binary | std::ios::trunc);
         output.write(
-            expanded.data(),
-            static_cast<std::streamsize>(expanded.size()));
+            expanded->data(),
+            static_cast<std::streamsize>(expanded->size()));
         if (!output.good()) {
             return { false, "file write failed" };
         }
