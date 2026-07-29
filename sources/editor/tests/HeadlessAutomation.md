@@ -62,6 +62,7 @@ scenario-local aliases.
 | `assert_network_security` | Verifies server ownership validation, spoofing rejection, payload and rate limits, and declared-length deserialization bounds. |
 | `assert_network_simulation` | Verifies deterministic latency and jitter, loss, reorder, disconnect, and invalid-configuration rejection. |
 | `assert_offline_network_sessions` | Verifies that the offline-only release rejects host/client, late join and reconnect, while despawned RPCs and schema mismatches remain invalid. |
+| `assert_engine_log` | Verifies Trace/Debug/Info/Warn/Error records retain category, entity and world context while duplicate keys are rate-limited per tick. |
 | `assert_platform_capabilities` | Verifies capability-gated locale, user-data path, clipboard, URL and vibration access, including unavailable-service rejection. |
 | `assert_user_storage` | Verifies sandboxed atomic read/write/delete/list, quota enforcement and asynchronous write without arbitrary filesystem paths. |
 | `assert_user_storage_failures` | Verifies sandbox-escape and quota rejection, preservation after a staged atomic-write failure, and unavailable platform capabilities. |
