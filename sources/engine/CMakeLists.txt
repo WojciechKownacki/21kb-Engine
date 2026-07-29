@@ -5,6 +5,7 @@ add_library(kb_engine STATIC
     include/engine/core/DebugDraw.hpp
     include/engine/core/ProfilerCounters.hpp
     include/engine/core/ConsoleCommands.hpp
+    include/engine/core/RuntimeInspector.hpp
     include/engine/audio/AudioClipAsset.hpp
     include/engine/audio/AudioClipAssetLoader.hpp
     include/engine/audio/AudioMixerAsset.hpp
