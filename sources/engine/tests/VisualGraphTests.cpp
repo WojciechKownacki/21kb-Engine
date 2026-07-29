@@ -1617,6 +1617,48 @@ void RunVisualGraphWaitContinuationTest() {
         "Visual graph native code did not preserve task-aware Wait state across resumptions");
 }
 
+void RunVisualGraphDebuggerTest() {
+    kb::visual::VisualGraphRuntimeArtifact artifact{};
+    artifact.assetId = kb::assets::AssetId{ 229U };
+    artifact.module.functions = { kb::visual::VisualGraphIrFunction{
+        .event = kb::visual::VisualGraphLifecycleEvent::Tick,
+        .eventNodeId = 1U,
+        .entryNodeId = 1U,
+        .instructions = {
+            { .opcode = kb::visual::VisualGraphIrOpcode::Sequence, .sourceNodeId = 1U, .nextNodeId = 2U },
+            { .opcode = kb::visual::VisualGraphIrOpcode::EmitEvent, .sourceNodeId = 2U, .symbol = "DebugReached" },
+        },
+    } };
+    const kb::visual::VisualGraphRuntimeBindingRegistry bindings;
+    kb::visual::VisualGraphDebugSession debugger;
+    debugger.SetBreakpoints({ { .assetId = artifact.assetId, .nodeId = 2U } });
+    const kb::visual::VisualGraphRuntimeExecutor executor{ bindings, &debugger };
+    kb::visual::VisualGraphRuntimeExecutionContext context;
+
+    const kb::visual::VisualGraphRuntimeExecutionResult paused = executor.Execute(artifact, kb::visual::VisualGraphLifecycleEvent::Tick, context);
+    kb::tests::Require(paused.Succeeded() && paused.suspended && context.EmittedEvents().empty(),
+        "Visual graph breakpoint did not suspend before the configured node");
+    const kb::visual::VisualGraphDebugPauseSnapshot& breakpoint = debugger.LastPause();
+    kb::tests::Require(breakpoint.valid && breakpoint.reason == kb::visual::VisualGraphDebugPauseReason::Breakpoint &&
+            breakpoint.assetId == artifact.assetId && breakpoint.eventNodeId == 1U && breakpoint.nodeId == 2U,
+        "Visual graph breakpoint did not retain asset, event and node source location");
+
+    debugger.Resume();
+    const kb::visual::VisualGraphRuntimeExecutionResult resumed = executor.Execute(artifact, kb::visual::VisualGraphLifecycleEvent::Tick, context);
+    kb::tests::Require(resumed.Succeeded() && !resumed.suspended && context.EmittedEvents().size() == 1U &&
+            context.EmittedEvents().front() == "DebugReached",
+        "Visual graph debugger resume did not continue from the paused node exactly once");
+
+    debugger.SetBreakpoints({});
+    debugger.ClearPause();
+    debugger.RequestStepInto();
+    kb::visual::VisualGraphRuntimeExecutionContext stepContext;
+    const kb::visual::VisualGraphRuntimeExecutionResult stepped = executor.Execute(artifact, kb::visual::VisualGraphLifecycleEvent::Tick, stepContext);
+    kb::tests::Require(stepped.Succeeded() && stepped.suspended && debugger.LastPause().reason == kb::visual::VisualGraphDebugPauseReason::Step &&
+            debugger.LastPause().nodeId == 2U && stepContext.EmittedEvents().empty(),
+        "Visual graph step did not execute one node and pause at the following node");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -1641,6 +1683,7 @@ void RunVisualGraphTests() {
     RunVisualGraphNodeCatalogTest();
     RunVisualGraphDocumentEditingTest();
     RunVisualGraphWaitContinuationTest();
+    RunVisualGraphDebuggerTest();
     RunBehaviourComponentSceneApiTest();
 }
 
