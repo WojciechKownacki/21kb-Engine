@@ -42,6 +42,7 @@
 #include "engine/gameplay/GameplayAbilities.hpp"
 #include "engine/gameplay/GameplaySamples.hpp"
 #include "engine/network/NetworkModel.hpp"
+#include "engine/network/NetworkObject.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -4109,6 +4110,8 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    kb::network::NetworkObjects networkObjects;
+    kb::tests::Require(networkObjects.Spawn({ .id = 7U, .owner = 11U, .role = kb::network::NetworkRole::Authority }) && networkObjects.CanAcceptOwnerCommand(7U, 11U) && !networkObjects.CanAcceptOwnerCommand(7U, 12U) && networkObjects.AssignOwner(7U, 12U) && networkObjects.Find(7U)->owner == 12U && networkObjects.Despawn(7U) && !networkObjects.Find(7U).has_value(), "Network object lifecycle did not validate spawn, owner authority, and despawn");
     static_assert(kb::network::kFirstReleaseNetwork.model == kb::network::NetworkModel::OfflineOnly);
     kb::tests::Require(!kb::network::kFirstReleaseNetwork.HasTransport(), "First-release network model must not imply unsupported multiplayer transport");
     constexpr auto sampleProfiles = kb::gameplay::GameplaySampleProfiles();
