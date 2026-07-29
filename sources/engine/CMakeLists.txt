@@ -25,6 +25,7 @@ add_library(kb_engine STATIC
     include/engine/assets/ImportedAssetLoader.hpp
     include/engine/assets/IAssetLoader.hpp
     include/engine/math/EngineMath.hpp
+    include/engine/network/NetworkModel.hpp
     include/engine/project/ProjectDescriptor.hpp
     include/engine/project/ProjectDescriptorMeta.hpp
     include/engine/project/ProjectDescriptorReader.hpp
