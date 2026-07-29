@@ -76,10 +76,13 @@
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystem.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
+#include "engine/modules/IEngineModule.hpp"
+#include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/AiBehaviourAssetIO.hpp"
 #include "engine/scene/AiBehaviourRuntime.hpp"
 #include "engine/scene/AiBlackboard.hpp"
@@ -93,6 +96,7 @@
 #include "engine/script/NativeScriptBackend.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptEvent.hpp"
+#include "engine/script/ScriptEventBus.hpp"
 #include "engine/script/ScriptAssetsApi.hpp"
 #include "engine/script/ScriptSceneComponentApi.hpp"
 #include "engine/script/ScriptApiExport.hpp"
@@ -4496,6 +4500,32 @@ struct MinimalGameplayReplaySnapshot {
     std::size_t entityCount = 0U;
 };
 
+struct SoakReloadCounter {
+    std::size_t enabled = 0U;
+    std::size_t attached = 0U;
+    std::size_t detached = 0U;
+    std::size_t disabled = 0U;
+    std::size_t unloaded = 0U;
+};
+
+class SoakReloadModule final : public kb::modules::IEngineModule {
+public:
+    explicit SoakReloadModule(SoakReloadCounter& counter) noexcept : counter_(counter) {}
+
+    [[nodiscard]] kb::modules::EngineModuleMetadata Metadata() const override {
+        return { .name = "Soak.Reload" };
+    }
+
+    void OnEnable() override { ++counter_.enabled; }
+    void OnSceneAttach(kb::scene::Scene&) override { ++counter_.attached; }
+    void OnSceneDetach(kb::scene::Scene&) override { ++counter_.detached; }
+    void OnDisable() override { ++counter_.disabled; }
+    void OnUnload() override { ++counter_.unloaded; }
+
+private:
+    SoakReloadCounter& counter_;
+};
+
 struct RecordedGameplayInput {
     float moveX = 0.0F;
     float damage = 0.0F;
@@ -4608,6 +4638,72 @@ void RunMinimalGameplaySceneReplayTest() {
             recorded.playerHealth == 4.0F && recorded.frameIndex == 6U && recorded.fixedStepIndex == 6U &&
             recorded.entityCount == 2U,
         "Minimal gameplay scene replay fixture did not execute its recorded gameplay inputs");
+}
+
+void RunLifecycleSoakTest() {
+    constexpr std::size_t kSpawnDestroyCycles = 256U;
+    constexpr std::size_t kLoadUnloadCycles = 64U;
+    constexpr std::size_t kSubscriptionCycles = 256U;
+    constexpr std::size_t kHotReloadCycles = 32U;
+
+    kb::scene::Scene scene;
+    for (std::size_t index = 0U; index < kSpawnDestroyCycles; ++index) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject({ .name = "SoakSpawn" });
+        kb::tests::Require(scene.Entities().IsAlive(object), "Soak spawn did not create a live scene object");
+        scene.Entities().Destroy(object);
+        kb::tests::Require(!scene.Entities().IsAlive(object) && scene.Entities().Count() == 0U,
+            "Soak spawn/destroy leaked a scene object");
+    }
+
+    kb::script::ScriptEventBus bus;
+    std::size_t deliveries = 0U;
+    for (std::size_t index = 0U; index < kSubscriptionCycles; ++index) {
+        const kb::script::EventSubscriptionHandle handle = bus.Subscribe("Soak", [&deliveries](const kb::script::ScriptEvent&) { ++deliveries; });
+        kb::tests::Require(
+            handle != kb::script::kInvalidEventSubscriptionHandle &&
+                bus.Emit(scene, { .name = "Soak" }).delivered == 1U && bus.Unsubscribe(handle) &&
+                bus.SubscriptionCount() == 0U,
+            "Soak subscribe/unsubscribe left a live listener or missed a delivery");
+    }
+    kb::tests::Require(deliveries == kSubscriptionCycles, "Soak subscribe/unsubscribe delivery count drifted");
+
+    const std::filesystem::path scenePath = std::filesystem::temp_directory_path() / "21kb-library-soak-scene.21kbscene";
+    std::error_code sceneFileError;
+    std::filesystem::remove(scenePath, sceneFileError);
+    {
+        kb::scene::Scene source;
+        static_cast<void>(source.Entities().CreateObject({ .name = "SoakLoadedRoot" }));
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(source, scenePath, "SoakLoadedScene"),
+            "Soak load/unload could not write its scene fixture");
+    }
+    {
+        kb::scene::Scene loadedScene;
+        for (std::size_t index = 0U; index < kLoadUnloadCycles; ++index) {
+            const std::uint64_t loadedId = loadedScene.LoadedContent().Load(scenePath, true);
+            kb::tests::Require(
+                loadedId != 0U && loadedScene.LoadedContent().Exists(loadedId) &&
+                    loadedScene.LoadedContent().Progress(loadedId) == 1.0F && loadedScene.LoadedContent().Unload(loadedId) &&
+                    !loadedScene.LoadedContent().Exists(loadedId) && loadedScene.Entities().Count() == 0U,
+                "Soak load/unload leaked loaded scene content");
+        }
+    }
+    std::filesystem::remove(scenePath, sceneFileError);
+
+    SoakReloadCounter reloadCounter;
+    kb::project::ProjectDescriptor reloadProject;
+    reloadProject.disableEnginePluginsByDefault = true;
+    reloadProject.plugins.push_back({ .name = "Soak.Reload", .enabled = true });
+    std::vector<std::unique_ptr<kb::modules::IEngineModule>> reloadModules;
+    reloadModules.push_back(std::make_unique<SoakReloadModule>(reloadCounter));
+    kb::scene::Scene reloadScene{ std::move(reloadProject), std::move(reloadModules) };
+    for (std::size_t index = 0U; index < kHotReloadCycles; ++index) {
+        reloadScene.ReloadModules();
+    }
+    kb::tests::Require(
+        reloadCounter.enabled == kHotReloadCycles + 1U && reloadCounter.attached == kHotReloadCycles + 1U &&
+            reloadCounter.detached == kHotReloadCycles && reloadCounter.disabled == kHotReloadCycles &&
+            reloadCounter.unloaded == kHotReloadCycles && reloadScene.IsModuleActive("Soak.Reload"),
+        "Soak hot reload did not preserve one active module across lifecycle cycles");
 }
 
 void RunGameInstanceLifetimeTest() {
@@ -4828,6 +4924,7 @@ void RunEngineLibraryTests() {
     RunAiBlackboardTest();
     RunGoapBenchmarkDecisionTest();
     RunMinimalGameplaySceneReplayTest();
+    RunLifecycleSoakTest();
     RunGameInstanceLifetimeTest();
 }
 
