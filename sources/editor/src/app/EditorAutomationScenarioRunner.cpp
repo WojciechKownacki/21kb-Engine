@@ -42,9 +42,15 @@
 #include "engine/scene/SceneUIDocuments.hpp"
 #include "engine/script/ScriptAgentProjectFiles.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
+#include "engine/script/PucLuaScriptRuntime.hpp"
+#include "engine/script/ScriptEventBus.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptSceneComponentApi.hpp"
 #include "engine/script/ScriptValue.hpp"
+#include "engine/script/VisualGraphScriptBackend.hpp"
+#include "engine/visual/VisualGraphBehaviourInstanceRegistry.hpp"
+#include "engine/visual/VisualGraphRuntimeBindingRegistry.hpp"
+#include "engine/visual/VisualGraphRuntimeRegistry.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -991,6 +997,31 @@ ReadScriptValue(
             snapshot.graphFrames == 5U;
         return { valid, valid ? "read-only runtime entity, component, timer, subscription and graph snapshot"
                               : "runtime inspector contract rejected" };
+    }
+
+    if (*operation == "assert_script_hot_reload") {
+        constexpr kb::assets::AssetId assetId{ 228U };
+        kb::script::PucLuaScriptRuntime lua;
+        const bool luaLoaded = lua.LoadScript(assetId,
+            "function Tick(self, dt) return 1 end", "HotReload.lua", 1U).succeeded;
+        const bool luaReloaded = lua.ReloadScript(assetId,
+            "function Tick(self, dt) return 2 end", "HotReload.lua", 2U).succeeded &&
+            lua.IsScriptCurrent(assetId, 2U);
+        const bool invalidReplacementRetained = !lua.ReloadScript(assetId,
+            "function Tick(", "HotReload.lua", 3U).succeeded && lua.IsScriptCurrent(assetId, 2U);
+
+        kb::visual::VisualGraphRuntimeRegistry artifacts;
+        kb::visual::VisualGraphRuntimeBindingRegistry bindings;
+        kb::visual::VisualGraphBehaviourInstanceRegistry instances;
+        kb::script::VisualGraphScriptBackend graph{ artifacts, bindings, instances };
+        static_cast<void>(instances.FindOrCreate(kb::scene::SceneEntity{ 7U }, assetId));
+        kb::script::ScriptEventBus events;
+        graph.ResetAssetForHotReload(assetId, events);
+        const bool graphStateReleased = instances.Count() == 0U;
+
+        const bool valid = luaLoaded && luaReloaded && invalidReplacementRetained && graphStateReleased;
+        return { valid, valid ? "Lua replacement preserves the last valid program and Visual Graph state is explicitly restarted"
+                              : "script hot reload contract rejected" };
     }
 
     if (*operation == "assert_user_storage") {
