@@ -788,6 +788,32 @@ ReadScriptValue(
                   : "network simulation contract rejected" };
     }
 
+    if (*operation == "assert_offline_network_sessions") {
+        const kb::network::ReplicationSchema schema{
+            .version = 1U,
+            .fields = { { .id = 1U, .name = "state",
+                .type = kb::network::ReplicatedFieldType::Boolean } } };
+        const kb::network::ReplicationSchema mismatch{
+            .version = 2U,
+            .fields = { { .id = 1U, .name = "state",
+                .type = kb::network::ReplicatedFieldType::Boolean } } };
+        kb::network::NetworkObjects objects;
+        const bool valid =
+            !kb::network::CanOpenNetworkSession(
+                kb::network::kFirstReleaseNetwork) &&
+            objects.Spawn({ .id = 71U, .owner = 81U,
+                .role = kb::network::NetworkRole::Authority }) &&
+            objects.Despawn(71U) &&
+            !kb::network::ValidateRpc(objects, { .object = 71U,
+                .sender = 81U,
+                .direction = kb::network::RpcDirection::ClientToServer }) &&
+            !kb::network::AreSchemasCompatible(schema, mismatch);
+        return {
+            valid,
+            valid ? "offline host/client, despawned RPC and schema mismatch"
+                  : "offline network-session contract rejected" };
+    }
+
     if (*operation == "assert_game_flow") {
         kb::gameplay::GameInstance game{ state.context.Project() };
         const kb::gameplay::GameSceneId checkpointScene = game.CreateScene();
