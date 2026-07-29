@@ -39,6 +39,7 @@
 #include "engine/gameplay/GameplayIdentity.hpp"
 #include "engine/gameplay/Damage.hpp"
 #include "engine/gameplay/GameplayModules.hpp"
+#include "engine/gameplay/GameplayAbilities.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -4106,18 +4107,25 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    kb::gameplay::GameplayAbilities abilities;
     kb::gameplay::GameplayModules modules;
     const kb::scene::SceneEntity target{2U};
     const kb::scene::SceneEntity pickup{3U};
+    const kb::scene::SceneEntity enemy{4U};
     const kb::gameplay::GameplayTagId strength = kb::gameplay::GameplayTag("strength");
     const kb::gameplay::GameplayTagId weaponSlot = kb::gameplay::GameplayTag("weapon");
     kb::tests::Require(
         modules.AddHealth(target, { .current = 10.0F, .maximum = 10.0F }) &&
             modules.SetAttribute(target, strength, { .current = 4.0F, .minimum = 0.0F, .maximum = 10.0F }) &&
+            modules.SetAttribute(enemy, strength, { .current = 6.0F, .minimum = 0.0F, .maximum = 10.0F }) &&
             modules.RegisterPickup(pickup, { .item = 9U, .quantity = 2U }) && modules.CollectPickup(pickup, target) &&
             modules.Equip(target, weaponSlot, 9U) && modules.ItemCount(target, 9U) == 2U &&
             modules.Attribute(target, strength)->current == 4.0F && modules.Equipped(target, weaponSlot) == 9U,
         "Optional gameplay modules did not retain health, attributes, inventory, equipment, and pickup state");
+    const kb::gameplay::GameplayAbilityDefinition strike{ .id = kb::gameplay::GameplayTag("strike"), .cooldownSeconds = 2.0F, .costAttribute = strength, .cost = 1.0F, .targetRule = kb::gameplay::AbilityTargetRule::Hostile, .effect = { .attribute = strength, .delta = -2.0F } };
+    const kb::gameplay::GameplayIdentity blueIdentity{ .team = 1U };
+    const kb::gameplay::GameplayIdentity redIdentity{ .team = 2U };
+    kb::tests::Require(abilities.Activate(strike, target, blueIdentity, enemy, redIdentity, modules) && abilities.IsActive(target) && modules.Attribute(target, strength)->current == 3.0F && modules.Attribute(enemy, strength)->current == 4.0F && !abilities.Activate(strike, target, blueIdentity, enemy, redIdentity, modules) && abilities.Cancel(target) && !abilities.IsActive(target) && !abilities.Activate(strike, target, blueIdentity, enemy, redIdentity, modules) && (abilities.Advance(2.0F), abilities.Activate(strike, target, blueIdentity, enemy, redIdentity, modules)), "Gameplay ability did not enforce target rule, cost, cooldown, or cancellation");
     const kb::gameplay::DamageEvent hit{ .source = kb::scene::SceneEntity{1U}, .instigator = kb::scene::SceneEntity{1U}, .target = kb::scene::SceneEntity{2U}, .hitEntity = kb::scene::SceneEntity{2U}, .type = kb::gameplay::DamageType::Fire, .amount = 10.0F };
     const kb::gameplay::DamageResistances resistances{ .multipliers = { 1.0F, 0.5F, 1.0F } };
     const std::optional<kb::gameplay::DamageResolution> resolvedHit = kb::gameplay::ResolveDamage(hit, resistances);

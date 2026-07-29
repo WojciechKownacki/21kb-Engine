@@ -25,6 +25,7 @@ public:
     [[nodiscard]] bool ApplyDamage(const DamageResolution& resolution) noexcept;
     [[nodiscard]] bool SetAttribute(kb::scene::SceneEntity entity, AttributeId id, AttributeState state);
     [[nodiscard]] std::optional<AttributeState> Attribute(kb::scene::SceneEntity entity, AttributeId id) const noexcept;
+    [[nodiscard]] bool SpendAttribute(kb::scene::SceneEntity entity, AttributeId id, float amount) noexcept;
     [[nodiscard]] bool AddItems(kb::scene::SceneEntity entity, GameplayItemId item, std::uint32_t quantity);
     [[nodiscard]] std::uint32_t ItemCount(kb::scene::SceneEntity entity, GameplayItemId item) const noexcept;
     [[nodiscard]] bool Equip(kb::scene::SceneEntity entity, GameplayTagId slot, GameplayItemId item);
