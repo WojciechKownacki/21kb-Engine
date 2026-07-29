@@ -104,7 +104,8 @@ bool VisualGraphDocument::CanConnect(std::uint32_t fromNode, std::string_view fr
         return outputPin->type == VisualGraphValueType::Void && inputPin->type == VisualGraphValueType::Void && !HasExecutionOutputConnection(fromNode, fromPin);
     }
 
-    return outputPin->type != VisualGraphValueType::Void && inputPin->type != VisualGraphValueType::Void && outputPin->type == inputPin->type;
+    return outputPin->type != VisualGraphValueType::Void && inputPin->type != VisualGraphValueType::Void &&
+        IsImplicitVisualGraphValueConversion(outputPin->type, inputPin->type);
 }
 
 bool VisualGraphDocument::HasExecutionOutputConnection(std::uint32_t fromNode, std::string_view fromPin) const noexcept {
