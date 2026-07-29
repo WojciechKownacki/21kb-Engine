@@ -7166,6 +7166,38 @@ void RunWorldActiveStateTest() {
     kb::tests::Require(deadEntitySet.Succeeded() && !deadEntitySet.Output("set")->AsBool(), "World.SetActive must report set=false (not throw) when targeting a destroyed entity");
 }
 
+// LIB-068: entity activity is a runtime execution gate, not merely a flag
+// exposed by World.IsActive. An inactive entity must receive no lifecycle
+// callbacks; restoring activity must make the same behaviour eligible again.
+void RunWorldActiveBehaviourDispatchTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "InactiveBehaviour" });
+    constexpr kb::assets::AssetId kAsset{ 7068U };
+    scene.Components().Behaviours().Set(entity, kb::scene::BehaviourComponent{
+        .behaviourAssetId = kAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+    });
+
+    int tickCount = 0;
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::script::NativeScriptBackend* native = nativeBackend.get();
+    kb::tests::Require(native->RegisterLifecycle(kAsset, kb::script::ScriptLifecycleEvent::Tick, [&tickCount](kb::script::ScriptExecutionContext&) { ++tickCount; }),
+        "LIB-068 native lifecycle registration failed");
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "LIB-068 native backend registration failed");
+
+    scene.Entities().SetActive(entity, false);
+    const kb::script::ScriptRuntimeExecutionResult inactiveTick = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(inactiveTick.Succeeded() && tickCount == 0,
+        "LIB-068 an inactive entity must not receive Tick callbacks");
+
+    scene.Entities().SetActive(entity, true);
+    const kb::script::ScriptRuntimeExecutionResult activeTick = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+    kb::tests::Require(activeTick.Succeeded() && tickCount == 1,
+        "LIB-068 reactivating an entity must restore its Tick callbacks");
+}
+
 // LIB-069: World.FindAllByTag — own fresh Scene/host, same reasoning as
 // the LIB-067/068 tests above.
 void RunWorldFindAllByTagTest() {
@@ -14780,6 +14812,7 @@ void RunScriptRuntimeTests() {
     RunExposedVariableOverrideSeedingTest();
     RunInspectorTableRuntimeTest();
     RunWorldActiveStateTest();
+    RunWorldActiveBehaviourDispatchTest();
     RunWorldFindAllByTagTest();
     RunWorldSetPropertyTest();
     RunWorldSetPropertyPhysicsComponentsTest();
