@@ -45,6 +45,8 @@ scenario-local aliases.
 | `set_joint_connection` | `entity` (a Joint owner) and `connected_entity`; assigns the Joint's referenced entity and marks it modified for scene persistence |
 | `assert_joint_connection` | `entity` and `connected_entity`; verifies the Joint still targets that entity, including after scene reload |
 | `set_inspector_scroll` | `position`: `top` or `bottom`; moves the Inspector to the requested end before a capture |
+| `set_physics_debug_draw` | `enabled`; toggles the scene's physics debug wireframes before a Scene panel capture |
+| `assert_physics_debug_line_count` | `count`; verifies the exact production wireframe line count currently emitted by the scene |
 | `copy_fixture` | `source` relative to the scenario directory, project-relative `destination`; copies arbitrary binary fixtures |
 | `assert_file` | project-relative `path`; optional `exists`, `min_size`, `contains` |
 | `discover_assets` | none |

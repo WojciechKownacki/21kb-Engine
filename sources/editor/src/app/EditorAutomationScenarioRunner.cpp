@@ -11,6 +11,7 @@
 #include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
+#include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -637,6 +638,26 @@ ReadScriptValue(
             return { true, *position };
         }
         return { false, "unknown inspector scroll position" };
+    }
+
+    if (*operation == "set_physics_debug_draw") {
+        const auto enabled = BoolMember(step, "enabled", error);
+        if (!enabled) return { false, error };
+        kb::scene::PhysicsDebugDraw::SetEnabled(state.context.Scene(), *enabled);
+        const bool applied = kb::scene::PhysicsDebugDraw::IsEnabled(state.context.Scene()) == *enabled;
+        return { applied, *enabled ? "enabled" : "disabled" };
+    }
+
+    if (*operation == "assert_physics_debug_line_count") {
+        const auto expected = NumberMember(step, "count", error);
+        if (!expected || !error.empty() || *expected < 0.0 ||
+            std::floor(*expected) != *expected) {
+            return { false, error.empty() ? "count must be a non-negative integer" : error };
+        }
+        const std::size_t actual =
+            kb::scene::PhysicsDebugDraw::CollectLines(state.context.Scene()).size();
+        const bool matched = actual == static_cast<std::size_t>(*expected);
+        return { matched, "actual=" + std::to_string(actual) + " expected=" + std::to_string(static_cast<std::size_t>(*expected)) };
     }
 
     if (*operation == "copy_fixture") {
