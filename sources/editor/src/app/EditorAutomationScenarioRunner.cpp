@@ -15,6 +15,7 @@
 #include "engine/network/NetworkBudget.hpp"
 #include "engine/network/NetworkObject.hpp"
 #include "engine/network/NetworkPrediction.hpp"
+#include "engine/network/NetworkSecurity.hpp"
 #include "engine/network/NetworkVariable.hpp"
 #include "engine/network/Rpc.hpp"
 #include "engine/network/NetworkSession.hpp"
@@ -725,6 +726,34 @@ ReadScriptValue(
             valid,
             valid ? "tick clock, packet budget and backpressure"
                   : "network budget contract rejected" };
+    }
+
+    if (*operation == "assert_network_security") {
+        kb::network::NetworkObjects objects;
+        constexpr kb::network::NetworkSecurityLimits limits{};
+        const bool valid =
+            objects.Spawn({ .id = 31U, .owner = 41U,
+                .role = kb::network::NetworkRole::Authority }) &&
+            kb::network::ValidateIncomingMessage(
+                objects, limits, 31U, 41U, 10U, 0U, 10U) &&
+            !kb::network::ValidateIncomingMessage(
+                objects, limits, 0U, 41U, 10U, 0U, 10U) &&
+            !kb::network::ValidateIncomingMessage(
+                objects, limits, 31U, 0U, 10U, 0U, 10U) &&
+            !kb::network::ValidateIncomingMessage(
+                objects, limits, 31U, 42U, 10U, 0U, 10U) &&
+            !kb::network::ValidateIncomingMessage(
+                objects, limits, 31U, 41U, limits.maxPayloadBytes + 1U,
+                0U, limits.maxPayloadBytes + 1U) &&
+            !kb::network::ValidateIncomingMessage(
+                objects, limits, 31U, 41U, 10U,
+                limits.maxMessagesPerTick, 10U) &&
+            !kb::network::ValidateIncomingMessage(
+                objects, limits, 31U, 41U, 10U, 0U, 11U);
+        return {
+            valid,
+            valid ? "server validation, rate and deserialization bounds"
+                  : "network security contract rejected" };
     }
 
     if (*operation == "assert_game_flow") {

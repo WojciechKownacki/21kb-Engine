@@ -59,6 +59,7 @@ scenario-local aliases.
 | `assert_network_variable` | Verifies typed network-variable callbacks, monotonic revisions, stale update rejection and saturated-revision safety without automatic object replication. |
 | `assert_network_prediction` | Verifies input commands, ordered snapshot interpolation, and reconciliation on position, velocity, or acknowledgement divergence. |
 | `assert_network_budget` | Verifies deterministic tick accumulation, invalid-rate rejection, exact queue capacity and packet backpressure. |
+| `assert_network_security` | Verifies server ownership validation, spoofing rejection, payload and rate limits, and declared-length deserialization bounds. |
 | `discover_assets` | none |
 | `unload_asset` | asset alias or virtual path; force-loads then unloads the live `AssetManager` entry so a running system must reacquire it |
 | `import_asset` | `source` project-relative path, `destination` virtual folder |
