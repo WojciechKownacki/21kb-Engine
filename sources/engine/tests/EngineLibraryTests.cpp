@@ -4825,7 +4825,17 @@ void RunGameInstanceLifetimeTest() {
     const auto healthQuantized = kb::network::QuantizeFloat(replicationSchema.fields[0], 50.0F);
     kb::tests::Require(kb::network::ValidateReplicationSchema(replicationSchema) && healthQuantized.has_value() && kb::network::DequantizeFloat(replicationSchema.fields[0], *healthQuantized).has_value() && kb::network::ComputeDeltaFields(replicationSchema, { 1U, 0U }, { 1U, 1U }) == std::vector<std::uint16_t>{ 2U }, "Replication schema did not validate versioned fields, quantization, and deltas");
     kb::network::NetworkObjects networkObjects;
-    kb::tests::Require(networkObjects.Spawn({ .id = 7U, .owner = 11U, .role = kb::network::NetworkRole::Authority }) && networkObjects.CanAcceptOwnerCommand(7U, 11U) && !networkObjects.CanAcceptOwnerCommand(7U, 12U) && networkObjects.AssignOwner(7U, 12U) && networkObjects.Find(7U)->owner == 12U && networkObjects.Despawn(7U) && !networkObjects.Find(7U).has_value(), "Network object lifecycle did not validate spawn, owner authority, and despawn");
+    kb::tests::Require(
+        !networkObjects.Spawn({}) &&
+            networkObjects.Spawn({ .id = 7U, .owner = 11U, .role = kb::network::NetworkRole::Authority }) &&
+            !networkObjects.Spawn({ .id = 7U, .owner = 12U, .role = kb::network::NetworkRole::Authority }) &&
+            networkObjects.CanAcceptOwnerCommand(7U, 11U) && !networkObjects.CanAcceptOwnerCommand(7U, 12U) &&
+            networkObjects.AssignOwner(7U, 12U) && networkObjects.Find(7U)->owner == 12U &&
+            networkObjects.Spawn({ .id = 8U, .owner = 12U, .role = kb::network::NetworkRole::Proxy }) &&
+            !networkObjects.AssignOwner(8U, 13U) && networkObjects.Despawn(7U) &&
+            !networkObjects.Find(7U).has_value() && !networkObjects.CanAcceptOwnerCommand(7U, 12U) &&
+            !networkObjects.Despawn(7U),
+        "Network object lifecycle did not reject invalid spawn, ownership, duplicate, or despawn state");
     static_assert(kb::network::kFirstReleaseNetwork.model == kb::network::NetworkModel::OfflineOnly);
     kb::tests::Require(!kb::network::kFirstReleaseNetwork.HasTransport(), "First-release network model must not imply unsupported multiplayer transport");
     constexpr auto sampleProfiles = kb::gameplay::GameplaySampleProfiles();
