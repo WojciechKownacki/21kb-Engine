@@ -152,6 +152,14 @@ struct UIDocumentRuntimeRecord {
         bool initialized = false;
     };
     std::vector<BindingState> bindings;
+    struct VirtualListState {
+        std::uint32_t viewportItems = 0U;
+        std::uint32_t overscan = 0U;
+        std::uint32_t firstVisibleIndex = 0U;
+        std::uint32_t activeItemCount = 0U;
+        std::vector<UIVirtualListItem> pool;
+    };
+    std::map<UIElementId, VirtualListState> virtualLists;
 };
 
 enum class UIRuntimeCommandKind : std::uint8_t {
@@ -159,6 +167,8 @@ enum class UIRuntimeCommandKind : std::uint8_t {
     Destroy,
     SetVisible,
     SetControl,
+    ConfigureVirtualList,
+    ScrollVirtualList,
 };
 
 struct UIRuntimeCommand {
@@ -168,6 +178,9 @@ struct UIRuntimeCommand {
     UIRuntimeElementDesc create{};
     bool visible = true;
     UIControlState control;
+    std::uint32_t viewportItems = 0U;
+    std::uint32_t overscan = 0U;
+    std::uint32_t firstVisibleIndex = 0U;
 };
 
 struct PendingUIRuntimeEvent {
