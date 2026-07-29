@@ -73,6 +73,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -2943,6 +2944,34 @@ ReadScriptValue(
         return { complete,
             complete ? "all live functions are explicitly main_thread"
                      : "a live function has no audited execution affinity" };
+    }
+
+    if (*operation == "assert_runtime_snapshot_queue") {
+        const kb::scene::SceneRuntimeQueries workerView =
+            static_cast<const kb::scene::Scene&>(state.context.Scene()).Runtime();
+        const std::shared_ptr<const kb::scene::SceneRuntimeReadSnapshot> before =
+            workerView.ReadSnapshot();
+        bool queued = false;
+        std::thread worker{ [&state, &queued] {
+            queued = state.context.Scene().Runtime().EnqueueCommand(
+                kb::scene::SceneRuntimeCommand{
+                    .kind = kb::scene::SceneRuntimeCommandKind::SetTimeScale,
+                    .timeScale = 0.5F,
+                });
+        } };
+        worker.join();
+        if (!queued || before == nullptr) {
+            return { false, "worker could not enqueue runtime command" };
+        }
+        static_cast<void>(state.context.Scene().Runtime().Update(1.0F / 60.0F));
+        const std::shared_ptr<const kb::scene::SceneRuntimeReadSnapshot> after =
+            workerView.ReadSnapshot();
+        const bool valid = after != nullptr && after->revision > before->revision &&
+            std::abs(after->timeScale - 0.5F) <= 0.0001F &&
+            std::abs(before->timeScale - 1.0F) <= 0.0001F;
+        return { valid,
+            valid ? "worker command produced an immutable runtime snapshot"
+                  : "runtime snapshot or command boundary is invalid" };
     }
 
     if (*operation == "assert_no_errors") {

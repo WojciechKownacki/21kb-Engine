@@ -1,4 +1,5 @@
 #include "ScenePrefabTestSuites.hpp"
+#include "SceneSystemTestSuites.hpp"
 #include "TestSuites.hpp"
 
 #include <cstdlib>
@@ -17,6 +18,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSceneHierarchyTests();
     } else if (suite == "scene-system") {
         kb::tests::RunSceneSystemTests();
+    } else if (suite == "scene-runtime") {
+        kb::tests::RunSceneSystemTransformSyncTests();
     } else if (suite == "scene-prefab") {
         kb::tests::RunScenePrefabTests();
     } else if (suite == "scene-prefab-instantiation") {

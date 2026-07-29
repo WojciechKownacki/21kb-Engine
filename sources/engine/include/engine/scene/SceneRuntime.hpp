@@ -2,6 +2,7 @@
 
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TransformComponent.hpp"
+#include "engine/core/ReadSnapshotQueue.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -81,6 +82,27 @@ struct SceneRuntimeHotPathReport {
     bool transformHierarchyBudgetExhausted = false;
 };
 
+struct SceneRuntimeReadSnapshot final : kb::core::ReadSnapshot {
+    std::uint64_t frameIndex = 0U;
+    std::uint64_t fixedStepIndex = 0U;
+    double elapsedSeconds = 0.0;
+    bool playing = true;
+    bool shouldQuit = false;
+    float timeScale = 1.0F;
+};
+
+enum class SceneRuntimeCommandKind : std::uint8_t {
+    SetPlaying,
+    SetTimeScale,
+    RequestQuit,
+};
+
+struct SceneRuntimeCommand final {
+    SceneRuntimeCommandKind kind = SceneRuntimeCommandKind::SetPlaying;
+    bool playing = true;
+    float timeScale = 1.0F;
+};
+
 class SceneRuntimeQueries {
 public:
     explicit SceneRuntimeQueries(const Scene& scene) noexcept;
@@ -115,6 +137,7 @@ public:
     // own doc comment for the exact scope (applied only at the Time.Delta
     // boundary, never to engine/physics simulation time).
     [[nodiscard]] float TimeScale() const noexcept;
+    [[nodiscard]] std::shared_ptr<const SceneRuntimeReadSnapshot> ReadSnapshot() const;
 
 private:
     const Scene& scene_;
@@ -209,6 +232,7 @@ public:
     void SetPlaying(bool playing) noexcept;
     [[nodiscard]] float TimeScale() const noexcept;
     void SetTimeScale(float scale) noexcept;
+    [[nodiscard]] bool EnqueueCommand(SceneRuntimeCommand command);
 
 private:
     Scene& scene_;
