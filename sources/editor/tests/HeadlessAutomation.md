@@ -71,6 +71,7 @@ scenario-local aliases.
 | `copy_asset`, `move_asset` | `asset`, destination virtual folder |
 | `delete_asset` | `asset` |
 | `assign_asset` | `entity`, `asset`, `role`; roles: `mesh`, `material`, `audio_clip`, `animator_controller`, `script` |
+| `assign_material_slot`, `assert_material_slot` | Mesh Renderer `entity`, material `asset`, integer `slot`; assigns or verifies the production per-slot material override |
 | `set_material`, `assert_material` | `asset`, `property`, `value`; numeric factors plus `double_sided` and `alpha_mode` |
 | `save_material` | `asset` |
 | `find_material_node` | graph `asset`, node alias `id`, serialized node `kind` |
