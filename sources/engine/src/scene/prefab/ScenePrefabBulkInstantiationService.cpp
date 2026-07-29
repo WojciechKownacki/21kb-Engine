@@ -146,6 +146,8 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<AudioListenerComponent> audioListeners;
     std::vector<Animator> animators;
     std::vector<UIDocumentComponent> uiDocuments;
+    std::vector<NavAgent> navAgents;
+    std::vector<NavObstacle> navObstacles;
     std::vector<kb::ecs::CommandBuffer::BulkComponentView> views;
     std::vector<kb::ecs::World::BulkComponentView> worldViews;
     std::vector<kb::ecs::Entity> createdEntities;
@@ -218,6 +220,14 @@ struct ScenePrefabArchetypeSpawnPayload {
             RepeatComponents(uiDocuments, std::span<const UIDocumentComponent>{ archetype.uiDocuments }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const UIDocumentComponent>{ uiDocuments });
         }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::NavAgent)) {
+            RepeatComponents(navAgents, std::span<const NavAgent>{ archetype.navAgents }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const NavAgent>{ navAgents });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::NavObstacle)) {
+            RepeatComponents(navObstacles, std::span<const NavObstacle>{ archetype.navObstacles }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const NavObstacle>{ navObstacles });
+        }
     }
 
     void BuildPattern(const ScenePrefabBakedArchetype& archetype, std::size_t instanceCount) {
@@ -286,6 +296,14 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::UIDocument)) {
             AddCommandComponentPatternView(views, std::span<const UIDocumentComponent>{ archetype.uiDocuments }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const UIDocumentComponent>{ archetype.uiDocuments }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::NavAgent)) {
+            AddCommandComponentPatternView(views, std::span<const NavAgent>{ archetype.navAgents }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const NavAgent>{ archetype.navAgents }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::NavObstacle)) {
+            AddCommandComponentPatternView(views, std::span<const NavObstacle>{ archetype.navObstacles }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const NavObstacle>{ archetype.navObstacles }, instanceCount);
         }
     }
 };

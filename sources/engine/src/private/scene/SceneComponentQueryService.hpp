@@ -11,6 +11,7 @@
 #include "engine/scene/JointComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/Navigation.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TagsComponent.hpp"
@@ -67,6 +68,10 @@ public:
     [[nodiscard]] static const Animator* TryGetAnimator(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasUIDocument(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const UIDocumentComponent* TryGetUIDocument(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasNavAgent(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const NavAgent* TryGetNavAgent(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasNavObstacle(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const NavObstacle* TryGetNavObstacle(const Scene& scene, SceneEntity entity) noexcept;
 };
 
 } // namespace kb::scene

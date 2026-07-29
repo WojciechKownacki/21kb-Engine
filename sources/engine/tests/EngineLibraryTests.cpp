@@ -2913,11 +2913,10 @@ void RunComponentInspectorDescCatalogTest() {
     // 84 to 86.
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
-    // 86 to 92.
-    // LIB-141: Light grew five more fields (areaWidth/areaHeight - a pre-existing reflection
-    // gap closed here - plus useColorTemperature/colorTemperatureKelvin/layerMask), so the
-    // total climbs from 92 to 97.
-    kb::tests::Require(fieldsChecked == 97U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (97) across all 10 components");
+    // LIB-183 adds 11 NavAgent fields and 9 NavObstacle fields to the prior
+    // 97-field contract, bringing the library/editor scripting surface to
+    // 117 described fields across 12 components.
+    kb::tests::Require(fieldsChecked == 117U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (117) across all 12 components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
@@ -4249,6 +4248,27 @@ void RunNavigationFoundationContractTest() {
     kb::tests::Require(mesh.agentRadius > 0.0F && agent.radius > 0.0F && agent.maxSpeed > 0.0F &&
             obstacle.area == kb::scene::kDefaultNavArea && obstacle.carve,
         "Navigation foundation defaults must define a usable walkable mesh, agent and obstacle");
+
+    kb::scene::Scene authoredNavigationScene;
+    const kb::scene::SceneObject authoredAgent = authoredNavigationScene.Entities().CreateObject({ .name = "NavigationAgent" });
+    const kb::scene::SceneObject authoredObstacle = authoredNavigationScene.Entities().CreateObject({ .name = "NavigationObstacle" });
+    kb::scene::NavObstacle authoredObstacleValue;
+    authoredObstacleValue.radius = 1.25F;
+    authoredObstacleValue.size = { 3.0F, 1.0F, 1.0F };
+    authoredNavigationScene.Components().NavAgents().Set(
+        authoredAgent.Entity(),
+        kb::scene::NavAgent{ .radius = 0.75F, .maxSpeed = 5.0F, .areaMask = 9U });
+    authoredNavigationScene.Components().NavObstacles().Set(
+        authoredObstacle.Entity(),
+        authoredObstacleValue);
+    const kb::scene::Scene& queriedNavigationScene = authoredNavigationScene;
+    const kb::scene::NavAgent* authoredAgentComponent = queriedNavigationScene.Components().NavAgents().TryGet(authoredAgent.Entity());
+    const kb::scene::NavObstacle* authoredObstacleComponent = queriedNavigationScene.Components().NavObstacles().TryGet(authoredObstacle.Entity());
+    kb::tests::Require(authoredAgentComponent != nullptr && authoredAgentComponent->radius == 0.75F &&
+            authoredAgentComponent->maxSpeed == 5.0F && authoredAgentComponent->areaMask == 9U &&
+            authoredObstacleComponent != nullptr && authoredObstacleComponent->radius == 1.25F &&
+            authoredObstacleComponent->size.x == 3.0F,
+        "Navigation ECS components must be readable through the const scene query facade");
 
     kb::scene::NavMesh graph;
     graph.nodes = {

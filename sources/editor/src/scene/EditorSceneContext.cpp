@@ -8031,6 +8031,26 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
             return true;
         });
     }
+    if (componentId == "NavAgent") {
+        if (scene_->Components().NavAgents().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Nav Agent component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Nav Agent Component", [this, entity]() {
+            scene_->Components().NavAgents().Set(entity, kb::scene::NavAgent{});
+            return true;
+        });
+    }
+    if (componentId == "NavObstacle") {
+        if (scene_->Components().NavObstacles().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Nav Obstacle component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Nav Obstacle Component", [this, entity]() {
+            scene_->Components().NavObstacles().Set(entity, kb::scene::NavObstacle{});
+            return true;
+        });
+    }
 
     console_.Warning("Inspector", "Unknown component: " + std::string{ componentId });
     return false;

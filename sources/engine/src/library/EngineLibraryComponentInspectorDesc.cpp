@@ -178,6 +178,40 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "enableLimit", "Enable Limit", "Whether minLimit/maxLimit are enforced." },
             },
         },
+        LibraryComponentInspectorDesc{
+            .componentName = "NavAgent",
+            .displayName = "Nav Agent",
+            .category = "Navigation",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "radius", "Radius", "Agent radius used for navigation clearance." },
+                LibraryComponentInspectorFieldDesc{ "height", "Height", "Agent height used for navigation clearance." },
+                LibraryComponentInspectorFieldDesc{ "maxSpeed", "Max Speed", "Maximum horizontal movement speed." },
+                LibraryComponentInspectorFieldDesc{ "acceleration", "Acceleration", "Maximum horizontal velocity change per second." },
+                LibraryComponentInspectorFieldDesc{ "angularSpeedDegrees", "Angular Speed", "Maximum turning speed in degrees per second." },
+                LibraryComponentInspectorFieldDesc{ "stoppingDistance", "Stopping Distance", "Distance from destination at which steering stops." },
+                LibraryComponentInspectorFieldDesc{ "areaMask", "Area Mask", "Navigation areas this agent may traverse." },
+                LibraryComponentInspectorFieldDesc{ "destination.x", "Destination X", "World destination X coordinate." },
+                LibraryComponentInspectorFieldDesc{ "destination.y", "Destination Y", "World destination Y coordinate." },
+                LibraryComponentInspectorFieldDesc{ "destination.z", "Destination Z", "World destination Z coordinate." },
+                LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether navigation steering is active." },
+            },
+        },
+        LibraryComponentInspectorDesc{
+            .componentName = "NavObstacle",
+            .displayName = "Nav Obstacle",
+            .category = "Navigation",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "center.x", "Center X", "Local obstacle center X coordinate." },
+                LibraryComponentInspectorFieldDesc{ "center.y", "Center Y", "Local obstacle center Y coordinate." },
+                LibraryComponentInspectorFieldDesc{ "center.z", "Center Z", "Local obstacle center Z coordinate." },
+                LibraryComponentInspectorFieldDesc{ "size.x", "Size X", "Obstacle box extent along X." },
+                LibraryComponentInspectorFieldDesc{ "size.y", "Size Y", "Obstacle box extent along Y." },
+                LibraryComponentInspectorFieldDesc{ "size.z", "Size Z", "Obstacle box extent along Z." },
+                LibraryComponentInspectorFieldDesc{ "radius", "Radius", "Obstacle cylinder radius." },
+                LibraryComponentInspectorFieldDesc{ "height", "Height", "Obstacle cylinder height." },
+                LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether this obstacle participates in navigation." },
+            },
+        },
     };
     return kCatalog;
 }

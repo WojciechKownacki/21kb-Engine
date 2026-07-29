@@ -10,6 +10,7 @@
 #include "engine/scene/JointComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/Navigation.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
@@ -19,6 +20,7 @@
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SceneLightComponents.hpp"
 #include "engine/scene/SceneMeshRendererComponents.hpp"
+#include "engine/scene/SceneNavigationComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
 #include "engine/scene/TransformComponent.hpp"
@@ -262,6 +264,30 @@ struct ScriptComponentAccess<kb::scene::JointComponent> {
             return false;
         }
         scene.Components().Joints().Remove(entity);
+        return true;
+    }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::NavAgent> {
+    [[nodiscard]] static const kb::scene::NavAgent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().NavAgents().TryGet(entity); }
+    [[nodiscard]] static kb::scene::NavAgent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().NavAgents().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::NavAgent& value) { scene.Components().NavAgents().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().NavAgents().Has(entity)) return false;
+        scene.Components().NavAgents().Remove(entity);
+        return true;
+    }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::NavObstacle> {
+    [[nodiscard]] static const kb::scene::NavObstacle* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().NavObstacles().TryGet(entity); }
+    [[nodiscard]] static kb::scene::NavObstacle* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().NavObstacles().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::NavObstacle& value) { scene.Components().NavObstacles().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().NavObstacles().Has(entity)) return false;
+        scene.Components().NavObstacles().Remove(entity);
         return true;
     }
 };

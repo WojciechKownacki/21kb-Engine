@@ -11,6 +11,7 @@
 #include "engine/scene/JointComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/Navigation.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/ScenePrefabOverrides.hpp"
 #include "engine/scene/TagsComponent.hpp"
@@ -60,6 +61,8 @@ struct ScenePrefabNodeComponents {
     std::optional<AudioListenerComponent> audioListener;
     std::optional<Animator> animator;
     std::optional<UIDocumentComponent> uiDocument;
+    std::optional<NavAgent> navAgent;
+    std::optional<NavObstacle> navObstacle;
 };
 
 struct ScenePrefabNodeDesc {

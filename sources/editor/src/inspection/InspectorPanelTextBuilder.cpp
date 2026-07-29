@@ -190,6 +190,17 @@ std::optional<std::string> InspectorPanelTextBuilder::Build(const EditorSceneCon
         text += "\n\nUI Document\nDocument: " + std::to_string(document->documentAssetId) +
             "\nEnabled: " + std::string{ document->enabled ? "true" : "false" };
     }
+    if (const kb::scene::NavAgent* agent = sceneContext.Scene().Components().NavAgents().TryGet(selected); agent != nullptr) {
+        text += "\n\nNav Agent\nRadius: " + std::to_string(agent->radius) +
+            "\nMax Speed: " + std::to_string(agent->maxSpeed) +
+            "\nArea Mask: " + std::to_string(agent->areaMask) +
+            "\nEnabled: " + std::string{ agent->enabled ? "true" : "false" };
+    }
+    if (const kb::scene::NavObstacle* obstacle = sceneContext.Scene().Components().NavObstacles().TryGet(selected); obstacle != nullptr) {
+        text += "\n\nNav Obstacle\nRadius: " + std::to_string(obstacle->radius) +
+            "\nArea: " + std::to_string(obstacle->area) +
+            "\nCarve: " + std::string{ obstacle->carve ? "true" : "false" };
+    }
 
     if (const kb::scene::RigidbodyComponent* rigidbody = sceneContext.Scene().Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
         InspectorRigidbodyTextBuilder{}.Append(text, *rigidbody);

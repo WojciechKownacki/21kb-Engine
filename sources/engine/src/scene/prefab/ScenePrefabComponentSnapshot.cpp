@@ -75,6 +75,12 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const UIDocumentComponent* uiDocument = sceneComponents.UIDocuments().TryGet(entity)) {
         components.uiDocument = *uiDocument;
     }
+    if (const NavAgent* navAgent = sceneComponents.NavAgents().TryGet(entity)) {
+        components.navAgent = *navAgent;
+    }
+    if (const NavObstacle* navObstacle = sceneComponents.NavObstacles().TryGet(entity)) {
+        components.navObstacle = *navObstacle;
+    }
 
     return components;
 }
