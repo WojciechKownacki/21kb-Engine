@@ -3872,6 +3872,34 @@ void RunNavigationFoundationContractTest() {
     kb::tests::Require(mesh.agentRadius > 0.0F && agent.radius > 0.0F && agent.maxSpeed > 0.0F &&
             obstacle.area == kb::scene::kDefaultNavArea && obstacle.carve,
         "Navigation foundation defaults must define a usable walkable mesh, agent and obstacle");
+
+    kb::scene::NavMesh graph;
+    graph.nodes = {
+        { .position = { 0.0F, 0.0F, 0.0F }, .area = kb::scene::kDefaultNavArea, .neighbours = { 1U, 2U } },
+        { .position = { 1.0F, 0.0F, 0.0F }, .area = kMudArea, .neighbours = { 3U } },
+        { .position = { 0.0F, 0.0F, 3.0F }, .area = kb::scene::kDefaultNavArea, .neighbours = { 3U } },
+        { .position = { 2.0F, 0.0F, 0.0F }, .area = kb::scene::kDefaultNavArea, .neighbours = {} },
+    };
+    kb::scene::NavQueryFilter routing;
+    kb::tests::Require(routing.SetAreaCost(kMudArea, 10.0F), "Navigation routing fixture could not configure mud cost");
+    const kb::scene::NavPath path = kb::scene::FindNavPath(graph, 0U, 3U, routing);
+    kb::tests::Require(path.status == kb::scene::NavPathStatus::Complete && path.corners.size() == 3U &&
+            path.corners[1].z == 3.0F, "Navigation path query did not choose the lower-cost area route");
+    routing.SetExcludedAreas(kb::scene::NavAreaBit(kMudArea));
+    const kb::scene::NavPath excludedPath = kb::scene::FindNavPath(graph, 0U, 3U, routing);
+    kb::tests::Require(excludedPath.Succeeded() && excludedPath.corners[1].z == 3.0F,
+        "Navigation path query did not respect excluded areas");
+    kb::scene::NavPathAsyncRequest asynchronous;
+    kb::tests::Require(asynchronous.Start(graph, 0U, 3U, routing), "Navigation async path request did not start");
+    kb::scene::NavPath asynchronousPath;
+    for (std::size_t attempt = 0U; attempt < 1000U; ++attempt) {
+        asynchronousPath = asynchronous.Poll();
+        if (asynchronousPath.status != kb::scene::NavPathStatus::Pending) break;
+        std::this_thread::yield();
+    }
+    kb::tests::Require(asynchronousPath.Succeeded() && asynchronousPath.corners.size() == excludedPath.corners.size() &&
+            asynchronousPath.corners.size() == 3U && asynchronousPath.corners[1].z == excludedPath.corners[1].z,
+        "Navigation async path request did not publish the same filtered result as synchronous pathfinding");
 }
 
 void RunEngineLibraryTests() {
