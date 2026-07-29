@@ -4112,6 +4112,10 @@ void RunGameInstanceLifetimeTest() {
             game.ActiveScene() != nullptr && game.DestroyScene(second) && game.ActiveSceneId() == first &&
             game.Services().progression.GetInt("campaign.chapter", chapter) && chapter == 3,
         "GameInstance did not retain global services while managing scene lifetime");
+    game.SetGameMode(kb::gameplay::GameMode{ { .authority = kb::gameplay::GameAuthority::Server, .maxPlayers = 4U, .allowJoinInProgress = true } });
+    kb::tests::Require(game.Mode().CanAcceptPlayer(3U, true) && !game.Mode().CanAcceptPlayer(4U, false) &&
+            !kb::gameplay::GameMode{}.CanAcceptPlayer(0U, true),
+        "GameMode authority rules were not owned by GameInstance or did not enforce admission policy");
 }
 
 void RunEngineLibraryTests() {
