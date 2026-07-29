@@ -52,6 +52,7 @@
 #include "engine/script/ScriptValue.hpp"
 #include "engine/script/VisualGraphScriptBackend.hpp"
 #include "engine/visual/VisualGraphBehaviourInstanceRegistry.hpp"
+#include "engine/visual/VisualGraphNodeCatalog.hpp"
 #include "engine/visual/VisualGraphRuntimeBindingRegistry.hpp"
 #include "engine/visual/VisualGraphRuntimeRegistry.hpp"
 #include "engine/visual/VisualGraphDebugSession.hpp"
@@ -3002,6 +3003,44 @@ ReadScriptValue(
         return { restricted,
             restricted ? "authoring-only and server-only APIs are excluded from script frontends"
                        : "restricted API surface metadata is incomplete" };
+    }
+
+    if (*operation == "assert_api_source_map") {
+        kb::script::ScriptRuntimeHost host{ state.context.Scene() };
+        if (!host.Succeeded()) {
+            return { false, "script runtime host could not be created" };
+        }
+        const kb::script::ScriptApiCatalog catalog = kb::script::ScriptApiCatalog::Build(host);
+        const kb::visual::VisualGraphNodeCatalog nodes = host.CreateVisualGraphNodeCatalog();
+        bool complete = !catalog.functions.empty() && !catalog.sourceMap.empty();
+        for (const kb::script::ScriptApiCatalogFunction& function : catalog.functions) {
+            const std::string symbol = "Function." + function.name;
+            const std::string nodeId = "NativeBinding:CallNative:" + symbol;
+            const kb::visual::VisualGraphNodeCatalogEntry* node = nodes.Find(nodeId);
+            if (node == nullptr) {
+                complete = false;
+                break;
+            }
+            const std::string anchor = kb::script::ScriptApiDocumentationAnchor(function.name);
+            for (const kb::visual::VisualGraphPinTemplate& pin : node->pins) {
+                const bool mapped = std::ranges::any_of(catalog.sourceMap, [&function, &nodeId, &symbol, &anchor, &pin](const kb::script::ScriptApiCatalogSourceMapEntry& entry) {
+                    return entry.functionName == function.name && entry.visualGraphNodeId == nodeId &&
+                        entry.visualGraphPinName == pin.name &&
+                        entry.visualGraphPinDirection == kb::visual::ToString(pin.direction) &&
+                        entry.runtimeBindingSymbol == symbol && entry.documentationAnchor == anchor;
+                });
+                if (!mapped) {
+                    complete = false;
+                    break;
+                }
+            }
+            if (!complete) {
+                break;
+            }
+        }
+        return { complete,
+            complete ? "every Visual Graph node pin maps to its catalog function, runtime binding and documentation"
+                     : "API source map is incomplete or drifted from the live Visual Graph catalog" };
     }
 
     if (*operation == "assert_runtime_snapshot_queue") {
