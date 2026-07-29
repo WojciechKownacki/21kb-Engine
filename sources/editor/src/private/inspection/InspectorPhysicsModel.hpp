@@ -30,12 +30,13 @@ enum class PhysicsFieldKind {
     Float, // inline text edit, parsed as a number
     Bool,  // checkbox toggle
     Enum,  // click cycles to the next enumerator
+    ReadOnly,
 };
 
 struct PhysicsField {
     std::string label;
     PhysicsFieldKind kind = PhysicsFieldKind::Float;
-    std::string value;      // display text (formatted number, enum name, or unused for Bool)
+    std::string value;      // display text (formatted value, enum name, or unused for Bool)
     bool boolValue = false; // meaningful only when kind == Bool
 };
 
