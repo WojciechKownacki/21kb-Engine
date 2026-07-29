@@ -95,10 +95,7 @@ FindInspectorHit(
     InspectorSectionId section,
     InspectorPropertyId property,
     int index = -1) {
-    for (int scroll = 0;
-         scroll <= InspectorPanelRenderer::MaxScrollOffset(
-             kInspectorContent, context);
-         scroll += 520) {
+    for (int scroll = 0;;) {
         const int maxScroll = InspectorPanelRenderer::MaxScrollOffset(
             kInspectorContent, context);
         static_cast<void>(
@@ -119,7 +116,10 @@ FindInspectorHit(
                 }
             }
         }
-        if (scroll >= maxScroll) break;
+        if (scroll >= maxScroll) {
+            break;
+        }
+        scroll = std::min(scroll + 520, maxScroll);
     }
     return std::nullopt;
 }

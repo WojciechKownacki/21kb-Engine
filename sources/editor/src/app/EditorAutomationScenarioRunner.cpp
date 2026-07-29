@@ -11,6 +11,8 @@
 #include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
+#include "engine/scene/PhysicsDebugDraw.hpp"
+#include "engine/scene/PhysicsLayersAssetIO.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -23,6 +25,7 @@
 #include "project/EditorProjectPaths.hpp"
 #include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "scene/EditorSceneMaterialAssetActions.hpp"
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 
 #include <Windows.h>
@@ -544,6 +547,118 @@ ReadScriptValue(
         return {
             written,
             written ? resolved->string() : "wave write failed" };
+    }
+
+    if (*operation == "configure_physics_layers") {
+        const auto path = StringMember(step, "path", error);
+        const auto firstLayer = NumberMember(step, "first_layer", error);
+        const auto firstName = StringMember(step, "first_name", error);
+        const auto secondLayer = NumberMember(step, "second_layer", error);
+        const auto secondName = StringMember(step, "second_name", error);
+        const auto interact = BoolMember(step, "interact", error);
+        if (!path || !firstLayer || !firstName || !secondLayer || !secondName || !interact) {
+            return { false, error };
+        }
+        const auto validLayer = [](double value) {
+            return value >= 0.0 && value < 32.0 && std::floor(value) == value;
+        };
+        if (!validLayer(*firstLayer) || !validLayer(*secondLayer) ||
+            *firstLayer == *secondLayer || firstName->empty() || secondName->empty()) {
+            return { false, "invalid physics layer configuration" };
+        }
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved) return { false, error };
+        kb::scene::PhysicsLayersAsset asset;
+        const std::uint32_t first = static_cast<std::uint32_t>(*firstLayer);
+        const std::uint32_t second = static_cast<std::uint32_t>(*secondLayer);
+        asset.layerNames[first] = *firstName;
+        asset.layerNames[second] = *secondName;
+        asset.SetLayersInteract(first, second, *interact);
+        std::error_code directoryError;
+        std::filesystem::create_directories(resolved->parent_path(), directoryError);
+        const bool written = !directoryError && kb::scene::WritePhysicsLayersAsset(*resolved, asset);
+        if (!written) return { false, "physics layers asset write failed" };
+        const std::filesystem::path virtualPath =
+            std::filesystem::path{ "/Game" } /
+            resolved->lexically_relative(EditorProjectPaths::AssetsRoot());
+        const bool configured = state.context.SetProjectPhysicsLayersAsset(
+            kb::assets::NormalizeAssetPath(virtualPath));
+        return { configured, configured ? virtualPath.generic_string() : "physics layers project setting failed" };
+    }
+
+    if (*operation == "select_project_settings_category") {
+        const auto category = StringMember(step, "category", error);
+        if (!category) return { false, error };
+        int index = -1;
+        if (*category == "inputs") {
+            index = 0;
+        } else if (*category == "graphics") {
+            index = 1;
+        } else if (*category == "physics") {
+            index = 2;
+        } else {
+            return { false, "unknown project settings category" };
+        }
+        static_cast<void>(state.context.ProjectSettings().SelectCategory(index));
+        return { true, *category };
+    }
+
+    if (*operation == "set_joint_connection" || *operation == "assert_joint_connection") {
+        const auto owner = StringMember(step, "entity", error);
+        const auto connected = StringMember(step, "connected_entity", error);
+        if (!owner || !connected) return { false, error };
+        const kb::scene::SceneEntity ownerEntity = ResolveEntity(state, *owner);
+        const kb::scene::SceneEntity connectedEntity = ResolveEntity(state, *connected);
+        if (!ownerEntity.IsValid() || !connectedEntity.IsValid()) {
+            return { false, "joint entity alias was not found" };
+        }
+        kb::scene::JointComponent* joint = state.context.Scene().Components().Joints().TryGet(ownerEntity);
+        if (joint == nullptr) {
+            return { false, "owner does not have a Joint component" };
+        }
+        if (*operation == "assert_joint_connection") {
+            const bool connectedToExpected = joint->connectedEntity == connectedEntity;
+            return { connectedToExpected, connectedToExpected ? "connected" : "joint target differs" };
+        }
+        joint->connectedEntity = connectedEntity;
+        state.context.Scene().Components().Joints().MarkModified(ownerEntity);
+        return { true, *owner + " -> " + *connected };
+    }
+
+    if (*operation == "set_inspector_scroll") {
+        const auto position = StringMember(step, "position", error);
+        if (!position) return { false, error };
+        if (*position == "top") {
+            static_cast<void>(state.context.Inspector().SetScrollOffset(0, 0));
+            return { true, *position };
+        }
+        if (*position == "bottom") {
+            static_cast<void>(state.context.Inspector().SetScrollOffset(
+                std::numeric_limits<int>::max(),
+                std::numeric_limits<int>::max()));
+            return { true, *position };
+        }
+        return { false, "unknown inspector scroll position" };
+    }
+
+    if (*operation == "set_physics_debug_draw") {
+        const auto enabled = BoolMember(step, "enabled", error);
+        if (!enabled) return { false, error };
+        kb::scene::PhysicsDebugDraw::SetEnabled(state.context.Scene(), *enabled);
+        const bool applied = kb::scene::PhysicsDebugDraw::IsEnabled(state.context.Scene()) == *enabled;
+        return { applied, *enabled ? "enabled" : "disabled" };
+    }
+
+    if (*operation == "assert_physics_debug_line_count") {
+        const auto expected = NumberMember(step, "count", error);
+        if (!expected || !error.empty() || *expected < 0.0 ||
+            std::floor(*expected) != *expected) {
+            return { false, error.empty() ? "count must be a non-negative integer" : error };
+        }
+        const std::size_t actual =
+            kb::scene::PhysicsDebugDraw::CollectLines(state.context.Scene()).size();
+        const bool matched = actual == static_cast<std::size_t>(*expected);
+        return { matched, "actual=" + std::to_string(actual) + " expected=" + std::to_string(static_cast<std::size_t>(*expected)) };
     }
 
     if (*operation == "copy_fixture") {
@@ -1172,6 +1287,38 @@ ReadScriptValue(
             return { false, "unknown asset role" };
         }
         return { assigned, *role };
+    }
+
+    if (*operation == "assign_material_slot" ||
+        *operation == "assert_material_slot") {
+        const auto entityAlias = StringMember(step, "entity", error);
+        const auto asset = StringMember(step, "asset", error);
+        const auto slotValue = NumberMember(step, "slot", error);
+        if (!entityAlias || !asset || !slotValue) {
+            return { false, error };
+        }
+        if (*slotValue < 0.0 || *slotValue > static_cast<double>(std::numeric_limits<std::uint32_t>::max()) ||
+            std::floor(*slotValue) != *slotValue) {
+            return { false, "slot must be a uint32" };
+        }
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *entityAlias);
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        const std::uint32_t slot = static_cast<std::uint32_t>(*slotValue);
+        if (!state.context.Scene().Entities().IsAlive(entity) || !id.IsValid()) {
+            return { false, "entity or material asset was not found" };
+        }
+        if (*operation == "assign_material_slot") {
+            return {
+                EditorSceneMaterialAssetActions::AssignMaterialSlotOverride(
+                    state.context.Scene(), entity, slot, id),
+                std::to_string(slot) };
+        }
+        const kb::scene::MeshRendererComponent* renderer =
+            state.context.Scene().Components().MeshRenderers().TryGet(entity);
+        const bool assigned = renderer != nullptr &&
+            slot < renderer->materialSlotOverrideCount &&
+            renderer->materialSlotAssetIds[slot] == id.value;
+        return { assigned, std::to_string(slot) };
     }
 
     if (*operation == "set_material" ||

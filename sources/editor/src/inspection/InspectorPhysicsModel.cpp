@@ -33,6 +33,10 @@ namespace {
     return PhysicsField{ .label = std::move(label), .kind = PhysicsFieldKind::Enum, .value = std::move(value) };
 }
 
+[[nodiscard]] PhysicsField ReadOnlyField(std::string label, std::string value) {
+    return PhysicsField{ .label = std::move(label), .kind = PhysicsFieldKind::ReadOnly, .value = std::move(value) };
+}
+
 [[nodiscard]] const char* BodyTypeName(kb::scene::RigidbodyBodyType type) noexcept {
     switch (type) {
     case kb::scene::RigidbodyBodyType::Static:
@@ -159,6 +163,7 @@ std::vector<PhysicsField> InspectorPhysicsModel::Fields(const kb::scene::Collide
         BoolField("Is Trigger", c.trigger),
         FloatField("Friction", c.friction),
         FloatField("Restitution", c.restitution),
+        ReadOnlyField("Layer Mask", std::to_string(c.layer)),
     };
 }
 

@@ -7,6 +7,7 @@ namespace kb::editor {
 enum class ProjectSettingsTooltipKind : std::uint8_t {
     None,
     MappingContext,
+    PhysicsLayers,
     InputEnabled,
     RenderBackend,
     LightingPath,
@@ -35,6 +36,7 @@ public:
         }
         selectedCategory_ = category;
         mappingContextDropdownOpen_ = false; // Closing a stale dropdown on switch.
+        physicsLayersDropdownOpen_ = false;
         hoveredOption_ = -1;
         tooltipKind_ = ProjectSettingsTooltipKind::None;
         return true;
@@ -46,13 +48,25 @@ public:
 
     void ToggleMappingContextDropdown() noexcept {
         mappingContextDropdownOpen_ = !mappingContextDropdownOpen_;
+        physicsLayersDropdownOpen_ = false;
+        hoveredOption_ = -1;
+    }
+
+    [[nodiscard]] bool IsPhysicsLayersDropdownOpen() const noexcept {
+        return physicsLayersDropdownOpen_;
+    }
+
+    void TogglePhysicsLayersDropdown() noexcept {
+        physicsLayersDropdownOpen_ = !physicsLayersDropdownOpen_;
+        mappingContextDropdownOpen_ = false;
         hoveredOption_ = -1;
     }
 
     // Returns true when a dropdown was actually open (so the caller can repaint).
     bool CloseDropdowns() noexcept {
-        const bool wasOpen = mappingContextDropdownOpen_;
+        const bool wasOpen = mappingContextDropdownOpen_ || physicsLayersDropdownOpen_;
         mappingContextDropdownOpen_ = false;
+        physicsLayersDropdownOpen_ = false;
         hoveredOption_ = -1;
         return wasOpen;
     }
@@ -100,6 +114,7 @@ public:
 private:
     int selectedCategory_ = 0;
     bool mappingContextDropdownOpen_ = false;
+    bool physicsLayersDropdownOpen_ = false;
     int hoveredOption_ = -1;
     ProjectSettingsTooltipKind tooltipKind_ = ProjectSettingsTooltipKind::None;
     int tooltipX_ = 0;

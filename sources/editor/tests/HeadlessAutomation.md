@@ -40,6 +40,13 @@ scenario-local aliases.
 | --- | --- |
 | `write_file` | `path`, `content` |
 | `write_pcm_wave` | project-relative `path`; optional `duration_ms` (1..10000), `sample_rate` (8000..48000), `frequency_hz`, `amplitude` (0..1); authors a valid mono 16-bit PCM fixture |
+| `configure_physics_layers` | project-relative `path`, two distinct indices/names (`first_layer`, `first_name`, `second_layer`, `second_name`) and `interact`; writes the binary asset and sets the project-wide physics-layers reference; use `reload_scene` before Play Mode |
+| `select_project_settings_category` | `category`: `inputs`, `graphics`, or `physics`; selects the visible Project Settings page before a panel capture |
+| `set_joint_connection` | `entity` (a Joint owner) and `connected_entity`; assigns the Joint's referenced entity and marks it modified for scene persistence |
+| `assert_joint_connection` | `entity` and `connected_entity`; verifies the Joint still targets that entity, including after scene reload |
+| `set_inspector_scroll` | `position`: `top` or `bottom`; moves the Inspector to the requested end before a capture |
+| `set_physics_debug_draw` | `enabled`; toggles the scene's physics debug wireframes before a Scene panel capture |
+| `assert_physics_debug_line_count` | `count`; verifies the exact production wireframe line count currently emitted by the scene |
 | `copy_fixture` | `source` relative to the scenario directory, project-relative `destination`; copies arbitrary binary fixtures |
 | `assert_file` | project-relative `path`; optional `exists`, `min_size`, `contains` |
 | `discover_assets` | none |
@@ -64,6 +71,7 @@ scenario-local aliases.
 | `copy_asset`, `move_asset` | `asset`, destination virtual folder |
 | `delete_asset` | `asset` |
 | `assign_asset` | `entity`, `asset`, `role`; roles: `mesh`, `material`, `audio_clip`, `animator_controller`, `script` |
+| `assign_material_slot`, `assert_material_slot` | Mesh Renderer `entity`, material `asset`, integer `slot`; assigns or verifies the production per-slot material override |
 | `set_material`, `assert_material` | `asset`, `property`, `value`; numeric factors plus `double_sided` and `alpha_mode` |
 | `save_material` | `asset` |
 | `find_material_node` | graph `asset`, node alias `id`, serialized node `kind` |
