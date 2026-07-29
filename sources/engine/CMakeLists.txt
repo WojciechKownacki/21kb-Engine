@@ -49,6 +49,7 @@ add_library(kb_engine STATIC
     include/engine/network/NetworkSession.hpp
     include/engine/project/ProjectDescriptor.hpp
     include/engine/platform/PlatformCapabilities.hpp
+    include/engine/platform/PlatformServices.hpp
     include/engine/platform/UserStorage.hpp
     include/engine/platform/SettingsTransaction.hpp
     include/engine/platform/PlatformAdapters.hpp
