@@ -1542,7 +1542,7 @@ void PaintCameraSection(
 }
 
 [[nodiscard]] int LightSectionRows(const kb::scene::LightComponent& light) noexcept {
-    int rows = 8;
+    int rows = 11;
     if (LightUsesRange(light.kind)) {
         ++rows;
     }
@@ -1582,6 +1582,9 @@ void PaintLightSection(
     section.Float("Contact Shadow", FormatFloat(light.contactShadowLength, 2), InspectorPropertyId::LightContactShadowLength);
     section.Float("Volumetric", FormatFloat(light.volumetricScattering, 2), InspectorPropertyId::LightVolumetricScattering);
     section.Bool("Casts Shadow", light.castsShadow, InspectorPropertyId::LightCastsShadow);
+    section.Bool("Use Color Temperature", light.useColorTemperature, InspectorPropertyId::LightUseColorTemperature);
+    section.Float("Color Temperature (K)", FormatFloat(light.colorTemperatureKelvin, 0), InspectorPropertyId::LightColorTemperatureKelvin);
+    section.Field("Layer Mask", std::to_string(light.layerMask), InspectorPropertyId::LightLayerMask);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -2507,6 +2510,17 @@ void AdvanceRow(int& y) noexcept {
         return hit;
     }
     if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(content, y), InspectorSectionId::Light, InspectorPropertyId::LightCastsShadow, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    AdvanceRow(y);
+    if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(content, y), InspectorSectionId::Light, InspectorPropertyId::LightUseColorTemperature, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    AdvanceRow(y);
+    if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightColorTemperatureKelvin, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Light, InspectorPropertyId::LightLayerMask, x, yPoint); hit.kind != InspectorHitKind::None) {
         return hit;
     }
     AdvanceRow(y);
