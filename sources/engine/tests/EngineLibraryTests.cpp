@@ -3551,6 +3551,7 @@ void RunCatalogFunctionFrontendAndDocumentationComplianceTest() {
     kb::tests::Require(host.Succeeded(), "Engine21kbLibrary catalog binding test host setup failed");
     const kb::script::ScriptApiCatalog catalog = kb::script::ScriptApiCatalog::Build(host);
     kb::tests::Require(!catalog.functions.empty(), "Engine21kbLibrary catalog binding test fixture must have at least one function");
+    const std::string markdown = kb::script::ScriptApiExport::ToMarkdown(catalog);
 
     for (const kb::script::ScriptApiCatalogFunction& function : catalog.functions) {
         const std::string missingDescriptionMessage =
@@ -3574,6 +3575,14 @@ void RunCatalogFunctionFrontendAndDocumentationComplianceTest() {
         kb::tests::Require(
             registrySignature->description == function.description,
             mismatchedDescriptionMessage.c_str());
+        const std::string exampleHeading = "#### `" + function.name + "` examples";
+        const std::string missingExampleMessage = "Engine21kbLibrary function '" + function.name + "' is missing generated frontend examples";
+        kb::tests::Require(
+            markdown.find(exampleHeading) != std::string::npos &&
+                markdown.find("context.CallFunction(\"" + function.name + "\"") != std::string::npos &&
+                markdown.find("local result = CallFunction(\"" + function.name + "\"") != std::string::npos &&
+                markdown.find("`Function." + function.name + "` CallNative node") != std::string::npos,
+            missingExampleMessage.c_str());
     }
 }
 

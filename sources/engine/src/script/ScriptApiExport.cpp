@@ -293,6 +293,94 @@ void AppendStubResultClasses(std::string& out, const ScriptApiCatalog& catalog) 
     return "table { " + PinList(function->outputs) + " }";
 }
 
+[[nodiscard]] std::string CppExampleValue(ScriptValueType type) {
+    switch (type) {
+    case ScriptValueType::Bool:
+        return "false";
+    case ScriptValueType::Int:
+        return "int{0}";
+    case ScriptValueType::Float:
+        return "0.0F";
+    case ScriptValueType::String:
+    case ScriptValueType::Name:
+    case ScriptValueType::Guid:
+        return "std::string{}";
+    case ScriptValueType::Entity:
+    case ScriptValueType::Component:
+    case ScriptValueType::Hash:
+        return "std::uint64_t{0}";
+    case ScriptValueType::UInt32:
+        return "std::uint32_t{0}";
+    case ScriptValueType::Int64:
+        return "std::int64_t{0}";
+    case ScriptValueType::Double:
+        return "0.0";
+    case ScriptValueType::Void:
+        break;
+    }
+    return "{}";
+}
+
+[[nodiscard]] std::string LuaExampleValue(ScriptValueType type) {
+    switch (type) {
+    case ScriptValueType::Bool:
+        return "false";
+    case ScriptValueType::Int:
+    case ScriptValueType::Float:
+    case ScriptValueType::Entity:
+    case ScriptValueType::Component:
+    case ScriptValueType::Int64:
+    case ScriptValueType::UInt32:
+    case ScriptValueType::Double:
+    case ScriptValueType::Hash:
+        return "0";
+    case ScriptValueType::String:
+    case ScriptValueType::Name:
+    case ScriptValueType::Guid:
+        return "\"\"";
+    case ScriptValueType::Void:
+        break;
+    }
+    return "nil";
+}
+
+void AppendFunctionExamples(std::string& out, const ScriptApiCatalogFunction& function) {
+    out += "#### `";
+    out += function.name;
+    out += "` examples\n\n**C++**\n\n```cpp\ncontext.CallFunction(\"";
+    out += function.name;
+    out += "\", {\n";
+    for (const ScriptApiPin& pin : function.inputs) {
+        out += "    { \"";
+        out += pin.name;
+        out += "\", kb::script::ScriptValue{ ";
+        out += CppExampleValue(pin.type);
+        if (pin.type == ScriptValueType::Entity || pin.type == ScriptValueType::Component || pin.type == ScriptValueType::Hash ||
+            pin.type == ScriptValueType::Name || pin.type == ScriptValueType::Guid) {
+            out += ", kb::script::ScriptValueType::";
+            out += ToString(pin.type);
+        }
+        out += " } },\n";
+    }
+    out += "});\n```\n\n**Lua**\n\n```lua\nlocal result = CallFunction(\"";
+    out += function.name;
+    out += "\", {\n";
+    for (const ScriptApiPin& pin : function.inputs) {
+        out += "    ";
+        out += pin.name;
+        out += " = ";
+        out += LuaExampleValue(pin.type);
+        out += ",\n";
+    }
+    out += "})\n```\n\n**Visual Graph**\n\nUse the `Function.";
+    out += function.name;
+    out += "` CallNative node with inputs `";
+    out += PinList(function.inputs);
+    out += "` and outputs `";
+    out += PinList(function.outputs);
+    out += "`.\n\n";
+}
+
 } // namespace
 
 std::string ScriptApiExport::ToMarkdown(const ScriptApiCatalog& catalog) {
@@ -355,6 +443,9 @@ std::string ScriptApiExport::ToMarkdown(const ScriptApiCatalog& catalog) {
             out += " |\n";
         }
         out += '\n';
+        for (const ScriptApiCatalogFunction* function : functions) {
+            AppendFunctionExamples(out, *function);
+        }
     }
 
     out += "## Lua convenience bindings\n\n";
