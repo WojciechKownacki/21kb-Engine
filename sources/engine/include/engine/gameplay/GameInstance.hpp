@@ -3,6 +3,7 @@
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/gameplay/GameMode.hpp"
 #include "engine/gameplay/GameState.hpp"
+#include "engine/gameplay/Players.hpp"
 #include "engine/save/SaveGame.hpp"
 #include "engine/scene/SceneMode.hpp"
 
@@ -48,6 +49,8 @@ public:
     [[nodiscard]] const GameMode& Mode() const noexcept { return mode_; }
     [[nodiscard]] GameState& State() noexcept { return state_; }
     [[nodiscard]] const GameState& State() const noexcept { return state_; }
+    [[nodiscard]] Players& PlayerRegistry() noexcept { return players_; }
+    [[nodiscard]] const Players& PlayerRegistry() const noexcept { return players_; }
 
 private:
     struct Entry { GameSceneId id = 0U; std::unique_ptr<kb::scene::Scene> scene; };
@@ -55,6 +58,7 @@ private:
     GameInstanceServices services_;
     GameMode mode_;
     GameState state_;
+    Players players_;
     std::vector<Entry> scenes_;
     GameSceneId nextSceneId_ = 1U;
     GameSceneId activeScene_ = 0U;
