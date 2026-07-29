@@ -71,8 +71,11 @@ bool AssetManager::RegisterLoader(std::unique_ptr<IAssetLoader> loader) {
     // loader. Cached payloads are invalid after changing loader code.
     StopAsyncWorker();
     ClearRuntimeCache();
-    asyncLoads_.clear();
-    return AssetLoaderRegistry::Register(loaders_, std::move(loader));
+    const bool registered = AssetLoaderRegistry::Register(loaders_, std::move(loader));
+    if (registered) {
+        RestartAsyncLoads();
+    }
+    return registered;
 }
 
 bool AssetManager::RegisterAsset(AssetMetadata metadata) {
@@ -287,7 +290,7 @@ AssetOpaqueHandle AssetManager::AcquireOpaqueHandle(AssetId id) const {
     return payload == nullptr ? AssetOpaqueHandle{} : AssetOpaqueHandle{ id, std::move(payload) };
 }
 
-bool AssetManager::RequestLoadAsync(AssetId id) {
+bool AssetManager::RequestLoadAsync(AssetId id, AssetUnloadPolicy policy) {
     lastError_.clear();
     if (!id.IsValid()) {
         lastError_ = "Invalid asset id";
@@ -321,7 +324,6 @@ bool AssetManager::RequestLoadAsync(AssetId id) {
 
     const std::uint64_t generation = asyncLoadGenerations_[id.value];
     const std::type_index payloadType = loader->PayloadType();
-    const AssetUnloadPolicy policy = UnloadPolicy(id);
     auto state = std::make_shared<AsyncPreparedState>();
     asyncLoadErrors_.erase(id.value);
     StartAsyncWorker();
@@ -371,6 +373,52 @@ void AssetManager::StopAsyncWorker() noexcept {
         asyncWorker_.join();
     }
     asyncWorkerStopping_ = false;
+}
+
+void AssetManager::RestartAsyncLoads() {
+    auto pendingLoads = std::move(asyncLoads_);
+    for (auto& [assetValue, record] : pendingLoads) {
+        const AssetId id{ assetValue };
+        const AssetMetadata* metadata = registry_.Find(id);
+        IAssetLoader* loader = metadata == nullptr ? nullptr : LoaderForType(metadata->type);
+        if (metadata == nullptr || loader == nullptr) {
+            asyncLoadErrors_[assetValue] = metadata == nullptr
+                ? "Asset is not registered"
+                : "No loader registered for asset type: " + metadata->type;
+            continue;
+        }
+
+        const std::filesystem::path resolvedPath = ResolvePhysicalPath(*metadata);
+        if (resolvedPath.empty()) {
+            asyncLoadErrors_[assetValue] = "Asset path is not mounted";
+            continue;
+        }
+
+        record.state = std::make_shared<AsyncPreparedState>();
+        // ClearRuntimeCache invalidates the old worker result by advancing
+        // this generation. The replacement job is the same caller request,
+        // now bound to the newly registered loader, so it must publish under
+        // the current generation.
+        record.generation = LoadGeneration(id);
+        const std::type_index type = loader->PayloadType();
+        const std::shared_ptr<AsyncPreparedState> state = record.state;
+        asyncLoads_.emplace(assetValue, std::move(record));
+        StartAsyncWorker();
+        try {
+            std::scoped_lock lock{ asyncWorkerMutex_ };
+            asyncWorkerQueue_.push_back(AsyncLoadJob{
+                .loader = loader,
+                .metadata = *metadata,
+                .resolvedPath = resolvedPath,
+                .type = type,
+                .state = state,
+            });
+        } catch (...) {
+            asyncLoads_.erase(assetValue);
+            throw;
+        }
+        asyncWorkerWake_.notify_one();
+    }
 }
 
 void AssetManager::RunAsyncWorker() noexcept {
@@ -617,10 +665,6 @@ std::string AssetManager::LastError() const {
 }
 
 void AssetManager::ClearRuntimeCache() noexcept {
-    for (const auto& [assetId, record] : asyncLoads_) {
-        static_cast<void>(record);
-        ++asyncLoadGenerations_[assetId];
-    }
     cache_.clear();
     asyncLoadErrors_.clear();
 }

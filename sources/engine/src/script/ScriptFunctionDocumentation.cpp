@@ -340,6 +340,7 @@ constexpr auto kFunctionDocumentation = std::to_array<FunctionDocumentation>({
     { "Assets.IsLoaded", "Returns whether an asset reference currently has a loaded payload." },
     { "Assets.Load", "Loads an asset payload synchronously and acquires a shared runtime reference." },
     { "Assets.LoadAsync", "Starts non-blocking asset loading and returns a runtime task handle." },
+    { "Assets.AsyncStatus", "Returns the current asynchronous load state and its diagnostic without mutating the request." },
     { "Assets.Unload", "Releases one runtime reference to a loaded asset." },
     { "Assets.RefCount", "Returns the runtime reference count held for an asset." },
     { "Assets.SetUnloadPolicy", "Sets the runtime unload policy for an asset." },
