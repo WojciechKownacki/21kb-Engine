@@ -743,6 +743,20 @@ ReadScriptValue(
         return { true, std::to_string(count) + " asset(s)" };
     }
 
+    if (*operation == "unload_asset") {
+        const auto asset = StringMember(step, "asset", error);
+        if (!asset) return { false, error };
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        if (!id.IsValid()) return { false, "asset was not found" };
+        kb::assets::AssetManager& manager =
+            state.context.Scene().Assets().Manager();
+        if (!manager.LoadOpaque(id)) {
+            return { false, manager.LastError() };
+        }
+        const bool unloaded = manager.Unload(id);
+        return { unloaded, *asset };
+    }
+
     if (*operation == "import_asset") {
         const auto source = StringMember(step, "source", error);
         const auto destination =
