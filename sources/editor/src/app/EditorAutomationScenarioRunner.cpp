@@ -2965,6 +2965,17 @@ ReadScriptValue(
                      : "deterministic library profile is incomplete" };
     }
 
+    if (*operation == "assert_nondeterministic_library_metadata") {
+        const bool classified =
+            kb::library::ClassifyLibraryFunctionDeterminism("Time.Elapsed").reason == kb::library::LibraryNonDeterminismReason::WallTime &&
+            kb::library::ClassifyLibraryFunctionDeterminism("Input.Action").reason == kb::library::LibraryNonDeterminismReason::Platform &&
+            kb::library::ClassifyLibraryFunctionDeterminism("Assets.LoadAsync").reason == kb::library::LibraryNonDeterminismReason::AsyncIo &&
+            kb::library::ClassifyLibraryFunctionDeterminism("Renderer.IsVisible").reason == kb::library::LibraryNonDeterminismReason::Rendering;
+        return { classified,
+            classified ? "nondeterministic API metadata covers wall time, platform, async I/O and rendering"
+                       : "nondeterministic API metadata is incomplete" };
+    }
+
     if (*operation == "assert_runtime_snapshot_queue") {
         const kb::scene::SceneRuntimeQueries workerView =
             static_cast<const kb::scene::Scene&>(state.context.Scene()).Runtime();
