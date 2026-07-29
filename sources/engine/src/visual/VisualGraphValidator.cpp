@@ -94,8 +94,11 @@ void ValidateEdgePins(const VisualGraphAsset& graph, const VisualGraphEdge& edge
     if (edge.kind == VisualGraphEdgeKind::Data && outputPin != nullptr && inputPin != nullptr) {
         if (outputPin->type == VisualGraphValueType::Void || inputPin->type == VisualGraphValueType::Void) {
             AddValidationError(result, edge.toNode, edge.toPin, "data edge from node " + std::to_string(edge.fromNode) + " to node " + std::to_string(edge.toNode) + " cannot use Void pins");
-        } else if (outputPin->type != inputPin->type) {
-            AddValidationError(result, edge.toNode, edge.toPin, "data edge type mismatch from " + std::string{ToString(outputPin->type)} + " to " + ToString(inputPin->type));
+        } else if (!IsImplicitVisualGraphValueConversion(outputPin->type, inputPin->type)) {
+            const VisualGraphValueConversion conversion = ClassifyVisualGraphValueConversion(outputPin->type, inputPin->type);
+            const char* reason = conversion == VisualGraphValueConversion::Lossy ? "requires an explicit lossy conversion node" : "uses incompatible types";
+            AddValidationError(result, edge.toNode, edge.toPin,
+                "data edge from " + std::string{ToString(outputPin->type)} + " to " + ToString(inputPin->type) + " " + reason);
         }
     }
     if (edge.kind == VisualGraphEdgeKind::Execution) {
