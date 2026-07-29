@@ -64,6 +64,7 @@ scenario-local aliases.
 | `assert_offline_network_sessions` | Verifies that the offline-only release rejects host/client, late join and reconnect, while despawned RPCs and schema mismatches remain invalid. |
 | `assert_platform_capabilities` | Verifies capability-gated locale, user-data path, clipboard, URL and vibration access, including unavailable-service rejection. |
 | `assert_user_storage` | Verifies sandboxed atomic read/write/delete/list, quota enforcement and asynchronous write without arbitrary filesystem paths. |
+| `assert_user_storage_failures` | Verifies sandbox-escape and quota rejection, preservation after a staged atomic-write failure, and unavailable platform capabilities. |
 | `assert_platform_locale` | Verifies the game-facing locale, bounded UTC offset and overflow-safe local-time conversion without system-clock access. |
 | `assert_runtime_settings` | Verifies transactional audio, video and input settings with device-capability validation and revert semantics. |
 | `assert_optional_platform_adapter` | Verifies achievements, cloud save, DLC and user services remain capability-gated and unavailable services fail closed. |
