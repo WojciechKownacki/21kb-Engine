@@ -41,6 +41,8 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/AiBehaviourAssetIO.hpp"
+#include "engine/scene/AiBehaviourRuntime.hpp"
 #include "engine/scene/Navigation.hpp"
 #include "engine/scene/Perception.hpp"
 #include "engine/scene/SceneTransforms.hpp"
@@ -3961,6 +3963,68 @@ void RunNavigationFoundationContractTest() {
         "Perception evaluation did not enforce the configured event bound");
 }
 
+void RunAiBehaviourAssetRuntimeTest() {
+    struct TestContext {
+        std::uint32_t actionCalls = 0U;
+        kb::scene::AiNodeId lastAction = 0U;
+    } context;
+    const auto condition = [](void*, kb::scene::AiNodeId id) noexcept { return id == 10U || id == 99U; };
+    const auto action = [](void* opaque, kb::scene::AiNodeId id) noexcept {
+        auto& state = *static_cast<TestContext*>(opaque);
+        state.lastAction = id;
+        ++state.actionCalls;
+        return id == 11U && state.actionCalls == 1U ? kb::scene::AiExecutionStatus::Running : kb::scene::AiExecutionStatus::Success;
+    };
+    const auto utility = [](void*, kb::scene::AiNodeId id) noexcept { return id == 31U ? 1.0F : (id == 32U ? 2.0F : -1.0F); };
+    const kb::scene::AiBehaviourCallbacks callbacks{ .context = &context, .condition = condition, .action = action, .utility = utility };
+
+    const kb::scene::AiBehaviourAsset sequenceAsset{
+        .nodes = {
+            { .id = 1U, .kind = kb::scene::AiNodeKind::Sequence, .firstChild = 1U, .childCount = 2U },
+            { .id = 10U, .kind = kb::scene::AiNodeKind::Condition },
+            { .id = 11U, .kind = kb::scene::AiNodeKind::Action },
+        },
+    };
+    kb::tests::Require(kb::scene::ValidateAiBehaviourAsset(sequenceAsset).valid, "AI behaviour tree asset validation rejected a valid sequence");
+    kb::scene::AiBehaviourRuntimeState sequenceState;
+    kb::tests::Require(kb::scene::AiBehaviourRuntime::Initialize(sequenceAsset, sequenceState), "AI behaviour runtime could not initialize a valid tree asset");
+    kb::tests::Require(kb::scene::AiBehaviourRuntime::Tick(sequenceAsset, sequenceState, callbacks) == kb::scene::AiExecutionStatus::Running &&
+            kb::scene::AiBehaviourRuntime::Tick(sequenceAsset, sequenceState, callbacks) == kb::scene::AiExecutionStatus::Success && context.actionCalls == 2U,
+        "AI behaviour runtime did not resume a running action synchronously on the next owner tick");
+
+    const kb::scene::AiBehaviourAsset utilityAsset{
+        .nodes = {
+            { .id = 20U, .kind = kb::scene::AiNodeKind::UtilitySelector, .firstChild = 1U, .childCount = 2U },
+            { .id = 31U, .kind = kb::scene::AiNodeKind::Action },
+            { .id = 32U, .kind = kb::scene::AiNodeKind::Action },
+        },
+    };
+    kb::scene::AiBehaviourRuntimeState utilityState;
+    context.lastAction = 0U;
+    kb::tests::Require(kb::scene::AiBehaviourRuntime::Initialize(utilityAsset, utilityState) &&
+            kb::scene::AiBehaviourRuntime::Tick(utilityAsset, utilityState, callbacks) == kb::scene::AiExecutionStatus::Success && context.lastAction == 32U,
+        "AI utility selector did not choose the highest scored child deterministically");
+
+    const kb::scene::AiBehaviourAsset stateAsset{
+        .nodes = {
+            { .id = 41U, .kind = kb::scene::AiNodeKind::Action },
+            { .id = 42U, .kind = kb::scene::AiNodeKind::Action },
+        },
+        .states = {
+            { .name = "Idle", .rootNode = 0U, .transitions = { { .targetState = 1U, .condition = 99U } } },
+            { .name = "Alert", .rootNode = 1U },
+        },
+    };
+    kb::scene::AiBehaviourRuntimeState stateMachineState;
+    context.lastAction = 0U;
+    kb::tests::Require(kb::scene::AiBehaviourRuntime::Initialize(stateAsset, stateMachineState) &&
+            kb::scene::AiBehaviourRuntime::Tick(stateAsset, stateMachineState, callbacks) == kb::scene::AiExecutionStatus::Success &&
+            stateMachineState.activeState == 1U && context.lastAction == 42U,
+        "AI state machine did not apply its authored transition before ticking the destination state");
+    const kb::scene::AiBehaviourAsset invalidAsset{ .nodes = { { .id = 50U, .kind = kb::scene::AiNodeKind::Action, .childCount = 1U } } };
+    kb::tests::Require(!kb::scene::ValidateAiBehaviourAsset(invalidAsset).valid, "AI asset validation accepted a leaf node with children");
+}
+
 void RunEngineLibraryTests() {
     RunVersionValueTest();
     RunVersionOrderingTest();
@@ -4029,6 +4093,7 @@ void RunEngineLibraryTests() {
     RunExpandedValueTypesTest();
     RunEngineLibrarySignalTest();
     RunNavigationFoundationContractTest();
+    RunAiBehaviourAssetRuntimeTest();
 }
 
 } // namespace kb::tests
