@@ -27,4 +27,8 @@ void LuaScriptBackend::ApplyExposedVariableOverrides(
     }
 }
 
+void LuaScriptBackend::ResetAssetForHotReload(kb::assets::AssetId assetId, ScriptEventBus& events) noexcept {
+    runtime_.ResetAssetForHotReload(assetId, events);
+}
+
 } // namespace kb::script

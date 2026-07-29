@@ -23,6 +23,7 @@ public:
     [[nodiscard]] kb::scene::BehaviourBackend Backend() const noexcept override;
     [[nodiscard]] ScriptBackendExecutionResult ExecuteLifecycle(const kb::scene::BehaviourComponent& behaviour, ScriptExecutionContext& context) override;
     [[nodiscard]] ScriptBackendExecutionResult ExecuteEvent(const kb::scene::BehaviourComponent& behaviour, const ScriptEvent& event, EventId eventId, ScriptExecutionContext& context) override;
+    void ResetAssetForHotReload(kb::assets::AssetId assetId, ScriptEventBus& events) noexcept override;
 
 private:
     [[nodiscard]] kb::visual::VisualGraphRuntimeExecutionContext& ContextFor(const kb::scene::BehaviourComponent& behaviour, kb::scene::SceneEntity entity);
