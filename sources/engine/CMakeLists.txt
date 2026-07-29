@@ -117,6 +117,7 @@ add_library(kb_engine STATIC
     include/engine/scene/LightComponent.hpp
     include/engine/scene/MeshRendererComponent.hpp
     include/engine/scene/Navigation.hpp
+    include/engine/scene/Perception.hpp
     include/engine/scene/RigidbodyComponent.hpp
     include/engine/scene/Scene.hpp
     include/engine/scene/SceneAudioListenerComponents.hpp

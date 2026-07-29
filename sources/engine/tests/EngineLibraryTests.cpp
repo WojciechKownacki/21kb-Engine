@@ -42,6 +42,7 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/Navigation.hpp"
+#include "engine/scene/Perception.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
@@ -3912,6 +3913,52 @@ void RunNavigationFoundationContractTest() {
     steeringAgent.destination = { 0.25F, 0.0F, 0.0F };
     kb::tests::Require(kb::scene::ComputeNavSteering(steeringAgent, {}, {}, 0.25F).arrived,
         "Navigation steering did not stop inside the agent stopping distance");
+    kb::scene::PerceptionFilter perception{ .observerTeam = 1U, .maxResults = 8U, .range = 12.0F };
+    kb::tests::Require(perception.IsValid() && !perception.AcceptsTeam(1U) && perception.AcceptsTeam(2U),
+        "Perception filter did not bound results or exclude the observer team");
+    perception.requiredTargetTeam = 2U;
+    kb::tests::Require(perception.AcceptsTeam(2U) && !perception.AcceptsTeam(3U),
+        "Perception filter did not enforce the explicit target team");
+
+    const auto lineOfSight = [](void*, const kb::scene::PerceptionObserver&, const kb::scene::PerceptionTarget& target) noexcept {
+        return target.entity.Id() != 20U;
+    };
+    kb::scene::PerceptionObserver observer{
+          .entity = kb::scene::SceneEntity{ 1U },
+          .position = {},
+          .forward = { 0.0F, 0.0F, 1.0F },
+          .sightHalfAngleDegrees = 75.0F,
+          .filter = { .observerTeam = 1U, .maxResults = 8U, .range = 12.0F, .requireLineOfSight = true },
+    };
+    const std::array perceptionTargets{
+          kb::scene::PerceptionTarget{ .entity = kb::scene::SceneEntity{ 20U }, .position = { 0.0F, 0.0F, 5.0F }, .team = 2U },
+          kb::scene::PerceptionTarget{ .entity = kb::scene::SceneEntity{ 10U }, .position = { 0.0F, 0.0F, 4.0F }, .team = 2U },
+          kb::scene::PerceptionTarget{ .entity = kb::scene::SceneEntity{ 30U }, .position = { 0.0F, 0.0F, 3.0F }, .team = 1U },
+    };
+    const std::array perceptionStimuli{
+          kb::scene::PerceptionStimulus{ .source = kb::scene::SceneEntity{ 15U }, .position = { 0.0F, 0.0F, 2.0F }, .team = 2U, .radius = 8.0F, .strength = 0.75F },
+    };
+    std::array<kb::scene::PerceptionEvent, 8U> perceptionStorage{};
+    kb::library::ArrayNonAlloc<kb::scene::PerceptionEvent> perceptionEvents{ perceptionStorage };
+    const kb::scene::PerceptionEvaluationResult perceptionResult = kb::scene::EvaluatePerception(
+        observer, perceptionTargets, perceptionStimuli, { .test = lineOfSight }, perceptionEvents);
+    kb::tests::Require(perceptionResult.emitted == 4U && !perceptionResult.limitReached && perceptionEvents.Count() == 4U,
+        "Perception evaluation did not emit the expected bounded sight, hearing and proximity events");
+    const auto* firstPerceptionEvent = perceptionEvents.GetAt(0U);
+    const auto* secondPerceptionEvent = perceptionEvents.GetAt(1U);
+    const auto* thirdPerceptionEvent = perceptionEvents.GetAt(2U);
+    const auto* fourthPerceptionEvent = perceptionEvents.GetAt(3U);
+    kb::tests::Require(firstPerceptionEvent != nullptr && secondPerceptionEvent != nullptr && thirdPerceptionEvent != nullptr && fourthPerceptionEvent != nullptr &&
+            firstPerceptionEvent->subject.Id() == 10U && firstPerceptionEvent->sense == kb::scene::PerceptionSense::Sight &&
+            secondPerceptionEvent->subject.Id() == 10U && secondPerceptionEvent->sense == kb::scene::PerceptionSense::Proximity &&
+            thirdPerceptionEvent->subject.Id() == 15U && thirdPerceptionEvent->sense == kb::scene::PerceptionSense::Hearing && thirdPerceptionEvent->strength == 0.75F &&
+            fourthPerceptionEvent->subject.Id() == 20U && fourthPerceptionEvent->sense == kb::scene::PerceptionSense::Proximity,
+        "Perception event order must be deterministic and sight must honour line-of-sight before emitting");
+    observer.filter.maxResults = 2U;
+    const kb::scene::PerceptionEvaluationResult limitedPerceptionResult = kb::scene::EvaluatePerception(
+        observer, perceptionTargets, perceptionStimuli, { .test = lineOfSight }, perceptionEvents);
+    kb::tests::Require(limitedPerceptionResult.emitted == 2U && limitedPerceptionResult.limitReached && perceptionEvents.Count() == 2U,
+        "Perception evaluation did not enforce the configured event bound");
 }
 
 void RunEngineLibraryTests() {
