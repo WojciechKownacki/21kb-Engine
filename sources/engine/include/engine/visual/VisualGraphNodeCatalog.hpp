@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/library/EngineLibraryDeterminism.hpp"
 #include "engine/visual/VisualGraphNativeBindingRegistry.hpp"
 #include "engine/visual/VisualGraphNodeDefinitionRegistry.hpp"
 #include "engine/visual/VisualGraphRuntimeBindingRegistry.hpp"
@@ -24,6 +25,7 @@ struct VisualGraphNodeCatalogEntry {
     VisualGraphLifecycleEvent lifecycle = VisualGraphLifecycleEvent::Tick;
     std::string symbol;
     VisualGraphNodeCatalogSource source = VisualGraphNodeCatalogSource::BuiltIn;
+    kb::library::LibraryFunctionDeterminismInfo determinism;
     std::vector<VisualGraphPinTemplate> pins;
 };
 

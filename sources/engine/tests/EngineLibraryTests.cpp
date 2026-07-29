@@ -81,6 +81,7 @@
 #include "engine/scene/Navigation.hpp"
 #include "engine/scene/Perception.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/visual/VisualGraphNodeCatalog.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptEvent.hpp"
@@ -3834,6 +3835,26 @@ void RunDeterministicLibraryProfileTest() {
         kb::tests::Require(kb::library::IsDeterministicLibraryFeature(feature),
             "Deterministic library profile is missing a replay prerequisite");
     }
+    kb::tests::Require(
+        kb::library::ClassifyLibraryFunctionDeterminism("Time.Elapsed").reason == kb::library::LibraryNonDeterminismReason::WallTime
+            && kb::library::ClassifyLibraryFunctionDeterminism("Input.Action").reason == kb::library::LibraryNonDeterminismReason::Platform
+            && kb::library::ClassifyLibraryFunctionDeterminism("Assets.LoadAsync").reason == kb::library::LibraryNonDeterminismReason::AsyncIo
+            && kb::library::ClassifyLibraryFunctionDeterminism("Renderer.IsVisible").reason == kb::library::LibraryNonDeterminismReason::Rendering
+            && kb::library::ClassifyLibraryFunctionDeterminism("Math.RandomNextUInt32").deterministic,
+        "Library determinism metadata did not classify external-state APIs");
+
+    kb::visual::VisualGraphRuntimeBindingRegistry bindings;
+    kb::tests::Require(bindings.Register({
+            .symbol = "Renderer.IsVisible",
+            .callback = [](kb::visual::VisualGraphRuntimeExecutionContext&, const kb::visual::VisualGraphIrInstruction&) {},
+        }),
+        "Visual Graph test binding registration failed");
+    kb::visual::VisualGraphNodeCatalog catalog;
+    catalog.RegisterRuntimeBindings(bindings);
+    const kb::visual::VisualGraphNodeCatalogEntry* rendererNode = catalog.Find("RuntimeBinding:CallNative:Renderer.IsVisible");
+    kb::tests::Require(rendererNode != nullptr && !rendererNode->determinism.deterministic
+            && rendererNode->determinism.reason == kb::library::LibraryNonDeterminismReason::Rendering,
+        "Visual Graph node catalog did not propagate function determinism metadata");
 }
 
 void RunEngineLibrarySignalTest() {
