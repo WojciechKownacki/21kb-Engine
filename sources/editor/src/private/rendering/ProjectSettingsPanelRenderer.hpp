@@ -23,6 +23,8 @@ enum class ProjectSettingsHitKind : std::uint8_t {
     CategoryItem,         // A row in the left category sidebar (see Hit::index).
     MappingContextField,  // The closed selector box (click toggles the dropdown).
     MappingContextOption, // A row inside the open dropdown list (see Hit::index).
+    PhysicsLayersField,
+    PhysicsLayersOption,
     EnabledCheckbox,
     RenderBackendOption,
     LightingPathOption,
@@ -36,6 +38,7 @@ enum class ProjectSettingsHitKind : std::uint8_t {
 enum class ProjectSettingsCategory : int {
     Inputs = 0,
     Graphics,
+    Physics,
     Count,
 };
 #endif
