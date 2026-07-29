@@ -13,6 +13,7 @@
 #include "engine/gameplay/GameInstance.hpp"
 #include "engine/core/EngineLog.hpp"
 #include "engine/core/EngineAssertions.hpp"
+#include "engine/core/DebugDraw.hpp"
 #include "engine/network/NetworkModel.hpp"
 #include "engine/network/NetworkBudget.hpp"
 #include "engine/network/NetworkObject.hpp"
@@ -48,6 +49,10 @@
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 
 #include <Windows.h>
+
+#ifdef DrawText
+#undef DrawText
+#endif
 
 #include <algorithm>
 #include <array>
@@ -929,6 +934,21 @@ ReadScriptValue(
                 std::vector<std::string>{ "script.lua:12" };
         return { valid, valid ? "assert, require, soft-fail and script stack trace"
                               : "assertion policy contract rejected" };
+    }
+
+    if (*operation == "assert_debug_draw") {
+        kb::core::DebugDrawBuffer draw{ 5U };
+        const bool added = draw.DrawLine({}, { 1.0F, 0.0F, 0.0F }, 1.0F, 3U) &&
+            draw.DrawRay({}, { 0.0F, 1.0F, 0.0F }, 1.0F, 3U) &&
+            draw.DrawBox({}, { 1.0F, 1.0F, 1.0F }, 1.0F, 3U) &&
+            draw.DrawSphere({}, 1.0F, 1.0F, 3U) &&
+            draw.DrawText({}, "probe", 1.0F, 3U);
+        const bool valid = kb::core::DebugDrawBuffer::Enabled() && added &&
+            draw.Commands().size() == 5U && draw.Commands().back().text == "probe" &&
+            draw.Commands().front().channel == 3U;
+        draw.Advance(1.0F);
+        return { valid && draw.Commands().empty(), valid ? "debug draw primitives, duration and channel"
+                                                           : "debug draw contract rejected" };
     }
 
     if (*operation == "assert_user_storage") {
