@@ -15,6 +15,7 @@
 #include "engine/core/EngineAssertions.hpp"
 #include "engine/core/DebugDraw.hpp"
 #include "engine/core/ProfilerCounters.hpp"
+#include "engine/core/ConsoleCommands.hpp"
 #include "engine/network/NetworkModel.hpp"
 #include "engine/network/NetworkBudget.hpp"
 #include "engine/network/NetworkObject.hpp"
@@ -961,6 +962,22 @@ ReadScriptValue(
             profiler.TimelineEvents().size() == 1U;
         return { valid, valid ? "debug-only profiler scopes, counters, timeline and allocations"
                               : "profiler contract rejected" };
+    }
+
+    if (*operation == "assert_console_command") {
+        const kb::core::ConsoleCommand command{ .name = "world.pause",
+            .help = "Pause world", .arguments = {{ "paused", kb::core::ConsoleArgumentType::Bool },
+                { "frames", kb::core::ConsoleArgumentType::Integer }},
+            .permission = kb::core::ConsolePermission::Developer };
+        const bool valid = kb::core::CanExecute(command,
+            kb::core::ConsolePermission::Developer, { "true", "2" }) &&
+            !kb::core::CanExecute(command, kb::core::ConsolePermission::User,
+                { "true", "2" }) && !kb::core::CanExecute(command,
+                kb::core::ConsolePermission::Admin, { "yes", "2" }) &&
+            kb::core::HelpFromManifest(command) ==
+                "world.pause <paused:bool> <frames:int> — Pause world";
+        return { valid, valid ? "typed command, permissions and manifest help"
+                              : "console command contract rejected" };
     }
 
     if (*operation == "assert_user_storage") {
