@@ -13,7 +13,13 @@ bool GameInstance::DestroyScene(GameSceneId id) noexcept { const auto it = std::
 kb::scene::Scene* GameInstance::FindScene(GameSceneId id) noexcept { const auto it = std::find_if(scenes_.begin(), scenes_.end(), [id](const Entry& entry){ return entry.id == id; }); return it == scenes_.end() ? nullptr : it->scene.get(); }
 const kb::scene::Scene* GameInstance::FindScene(GameSceneId id) const noexcept { return const_cast<GameInstance*>(this)->FindScene(id); }
 bool GameInstance::SetActiveScene(GameSceneId id) noexcept { if (FindScene(id) == nullptr) return false; activeScene_ = id; return true; }
-bool GameInstance::TransitionToScene(GameSceneId id) noexcept { if(!flow_.PendingTransition().has_value() && !flow_.BeginTransition(id))return false; return flow_.PendingTransition()==id && SetActiveScene(id) && flow_.CompleteTransition(); }
+bool GameInstance::TransitionToScene(GameSceneId id) noexcept { if (FindScene(id) == nullptr) return false; if(!flow_.PendingTransition().has_value() && !flow_.BeginTransition(id))return false; return flow_.PendingTransition()==id && SetActiveScene(id) && flow_.CompleteTransition(); }
+bool GameInstance::SetCheckpoint(GameSceneId id) noexcept { return FindScene(id) != nullptr && flow_.SetCheckpoint(id); }
+bool GameInstance::Pause() noexcept { return flow_.Pause(); }
+bool GameInstance::Resume() noexcept { return flow_.Resume(); }
+bool GameInstance::Win() noexcept { return flow_.Win(); }
+bool GameInstance::Lose() noexcept { return flow_.Lose(); }
+bool GameInstance::RestartFromCheckpoint() noexcept { const std::optional<GameSceneId> checkpoint = flow_.Restart(); return checkpoint.has_value() && TransitionToScene(*checkpoint); }
 GameSceneId GameInstance::ActiveSceneId() const noexcept { return activeScene_; }
 kb::scene::Scene* GameInstance::ActiveScene() noexcept { return FindScene(activeScene_); }
 const kb::scene::Scene* GameInstance::ActiveScene() const noexcept { return FindScene(activeScene_); }
