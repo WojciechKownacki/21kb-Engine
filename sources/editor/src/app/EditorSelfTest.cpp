@@ -1087,7 +1087,7 @@ void RunCameraInspectorSuite(Report& report) {
         actorRow != cameraRows.end() && actorRow->hasCamera,
         "LIB-135 Camera entity exposes the camera icon in Hierarchy");
 
-    const std::array<InspectorPropertyId, 8> properties{
+    const std::array<InspectorPropertyId, 13> properties{
         InspectorPropertyId::CameraProjection,
         InspectorPropertyId::CameraVerticalFov,
         InspectorPropertyId::CameraOrthographicHeight,
@@ -1096,6 +1096,11 @@ void RunCameraInspectorSuite(Report& report) {
         InspectorPropertyId::CameraPrimary,
         InspectorPropertyId::CameraViewportId,
         InspectorPropertyId::CameraPriority,
+        InspectorPropertyId::CameraCullingMask,
+        InspectorPropertyId::CameraClearMode,
+        InspectorPropertyId::CameraClearColorR,
+        InspectorPropertyId::CameraClearColorG,
+        InspectorPropertyId::CameraClearColorB,
     };
     std::array<InspectorPanelRenderer::Hit, properties.size()> hits{};
     const auto expectedKind = [](InspectorPropertyId property) {
@@ -1104,6 +1109,9 @@ void RunCameraInspectorSuite(Report& report) {
         case InspectorPropertyId::CameraOrthographicHeight:
         case InspectorPropertyId::CameraNearClip:
         case InspectorPropertyId::CameraFarClip:
+        case InspectorPropertyId::CameraClearColorR:
+        case InspectorPropertyId::CameraClearColorG:
+        case InspectorPropertyId::CameraClearColorB:
             return InspectorHitKind::FloatField;
         case InspectorPropertyId::CameraPrimary:
             return InspectorHitKind::BoolField;
@@ -1115,7 +1123,7 @@ void RunCameraInspectorSuite(Report& report) {
         InspectorPanelRenderer::MaxScrollOffset(kContent, context);
     const int scrollStep =
         std::max(1, static_cast<int>(kContent.bottom - kContent.top) - 80);
-    for (int scroll = 0; scroll <= maxScroll; scroll += scrollStep) {
+    for (int scroll = 0;;) {
         static_cast<void>(
             context.Inspector().SetScrollOffset(scroll, maxScroll));
         for (int y = kContent.top; y < kContent.bottom; ++y) {
@@ -1134,6 +1142,10 @@ void RunCameraInspectorSuite(Report& report) {
                 }
             }
         }
+        if (scroll >= maxScroll) {
+            break;
+        }
+        scroll = std::min(scroll + scrollStep, maxScroll);
     }
     static_cast<void>(context.Inspector().SetScrollOffset(0, maxScroll));
     for (const InspectorPanelRenderer::Hit& hit : hits) {
@@ -1219,6 +1231,30 @@ void RunCameraInspectorSuite(Report& report) {
     report.Check(
         camera() != nullptr && camera()->priority == 42,
         "LIB-135 Camera priority reaches the live component");
+    report.Check(
+        editText(
+            hitFor(InspectorPropertyId::CameraCullingMask), "3", false),
+        "LIB-136 Camera culling-mask edit is committed");
+    report.Check(
+        selectionStayedOnActor(),
+        "LIB-136 Camera culling-mask edit preserves hierarchy selection");
+    report.Check(
+        camera() != nullptr && camera()->cullingMask == 3U,
+        "LIB-136 Camera culling mask reaches the live component");
+    report.Check(
+        click(hitFor(InspectorPropertyId::CameraClearMode)),
+        "LIB-136 Camera clear-mode click is handled");
+    report.Check(
+        camera() != nullptr &&
+            camera()->clearMode == kb::scene::CameraClearMode::DepthOnly,
+        "LIB-136 Camera clear mode reaches the live component");
+    report.Check(
+        editText(
+            hitFor(InspectorPropertyId::CameraClearColorG), "0.25", true),
+        "LIB-136 Camera clear-color edit is committed");
+    report.Check(
+        camera() != nullptr && std::abs(camera()->clearColor.y - 0.25F) < 0.001F,
+        "LIB-136 Camera clear color reaches the live component");
     report.Check(
         editText(
             hitFor(InspectorPropertyId::CameraVerticalFov), "47.5", true),
