@@ -27,6 +27,7 @@ struct VisualGraphEmittedEvent {
 class VisualGraphRuntimeExecutionContext final {
 public:
     using TaskIsRunningQuery = bool (*)(const void* userData, std::uint64_t taskId) noexcept;
+    using DebugNodeVisitor = bool (*)(void* userData, std::uint32_t nodeId) noexcept;
 
     void Store(std::uint32_t nodeId, std::string_view pin, VisualGraphRuntimeValue value);
     [[nodiscard]] const VisualGraphRuntimeValue* TryRead(std::uint32_t nodeId, std::string_view pin) const;
@@ -56,6 +57,8 @@ public:
     [[nodiscard]] std::uint32_t TakeContinuation(std::uint32_t eventNodeId);
     void ClearContinuation(std::uint32_t eventNodeId) noexcept;
     void SetTaskIsRunningQuery(const void* userData, TaskIsRunningQuery query) noexcept;
+    void SetDebugNodeVisitor(void* userData, DebugNodeVisitor visitor) noexcept { debugNodeUserData_ = userData; debugNodeVisitor_ = visitor; }
+    [[nodiscard]] bool ContinueAtNode(std::uint32_t nodeId) const noexcept { return debugNodeVisitor_ == nullptr || debugNodeVisitor_(debugNodeUserData_, nodeId); }
     [[nodiscard]] bool HasTaskIsRunningQuery() const noexcept;
     [[nodiscard]] bool IsTaskRunning(std::uint64_t taskId) const noexcept;
     void SetWaitTask(std::uint32_t nodeId, std::uint64_t taskId);
@@ -77,6 +80,8 @@ private:
     std::unordered_map<std::uint32_t, std::uint64_t> waitTasks_;
     const void* taskQueryUserData_ = nullptr;
     TaskIsRunningQuery taskIsRunningQuery_ = nullptr;
+    void* debugNodeUserData_ = nullptr;
+    DebugNodeVisitor debugNodeVisitor_ = nullptr;
 };
 
 } // namespace kb::visual
