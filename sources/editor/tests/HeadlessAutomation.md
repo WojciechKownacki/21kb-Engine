@@ -54,6 +54,7 @@ scenario-local aliases.
 | `init_agent_project` | Runs the production `kb_cli init-agent` provisioning path for the active project, including loadable starter and sample gameplay assets. |
 | `assert_first_release_network_model` | Verifies the compiled first-release network contract is offline-only, rejects session opening and exposes no `Network.*` script API. |
 | `assert_network_object_lifecycle` | Verifies authority ownership, duplicate rejection and spawn/despawn lifecycle through the production `NetworkObjects` owner. |
+| `assert_replication_schema` | Verifies a versioned replication wire contract, quantization/dequantization, delta selection and rejection of an incompatible same-version schema. |
 | `discover_assets` | none |
 | `unload_asset` | asset alias or virtual path; force-loads then unloads the live `AssetManager` entry so a running system must reacquire it |
 | `import_asset` | `source` project-relative path, `destination` virtual folder |
