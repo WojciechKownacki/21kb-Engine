@@ -116,6 +116,7 @@ add_library(kb_engine STATIC
     include/engine/gameplay/CameraManager.hpp
     include/engine/gameplay/MatchConfig.hpp
     include/engine/gameplay/GameplayIdentity.hpp
+    include/engine/gameplay/Damage.hpp
     include/engine/scene/AudioSourceComponent.hpp
     include/engine/scene/CameraComponent.hpp
     include/engine/scene/CharacterControllerComponent.hpp
