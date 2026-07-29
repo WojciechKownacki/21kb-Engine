@@ -50,6 +50,7 @@
 #include "engine/network/NetworkBudget.hpp"
 #include "engine/network/NetworkSecurity.hpp"
 #include "engine/network/NetworkSimulation.hpp"
+#include "engine/network/NetworkSession.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -4119,6 +4120,9 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    const kb::network::ReplicationSchema sessionSchema{ .version = 1U, .fields = { { .id = 1U, .name = "state", .type = kb::network::ReplicatedFieldType::Boolean } } };
+    const kb::network::ReplicationSchema mismatchSchema{ .version = 2U, .fields = { { .id = 1U, .name = "state", .type = kb::network::ReplicatedFieldType::Boolean } } };
+    kb::tests::Require(!kb::network::CanOpenNetworkSession(kb::network::kFirstReleaseNetwork) && kb::network::AreSchemasCompatible(sessionSchema, sessionSchema) && !kb::network::AreSchemasCompatible(sessionSchema, mismatchSchema), "Network session lifecycle did not fail closed for offline mode or schema mismatch");
     constexpr kb::network::NetworkSimulationConfig simulation{ .latencyMilliseconds = 40U, .jitterMilliseconds = 5U, .lossPermille = 1000U, .disconnectAtTick = 10U, .seed = 8U };
     static_assert(kb::network::IsValidNetworkSimulation(simulation));
     kb::tests::Require(kb::network::ShouldDrop(simulation, 1U, 2U) && kb::network::ShouldDisconnect(simulation, 10U) && !kb::network::ShouldDisconnect(simulation, 9U) && kb::network::NetworkSimulationRandom(simulation, 2U, 3U) == kb::network::NetworkSimulationRandom(simulation, 2U, 3U), "Network simulation was not deterministic for loss and disconnect");
