@@ -319,6 +319,39 @@ void PucLuaScriptRuntime::SetDebugSettings(PucLuaDebugSettings settings) {
     debugSettings_ = std::move(settings);
 }
 
+void PucLuaScriptRuntime::SetExecutionBudgetSettings(ScriptExecutionBudgetSettings settings) noexcept {
+    executionBudgetSettings_ = settings;
+}
+
+void PucLuaScriptRuntime::BeginExecutionBudget() noexcept {
+    remainingLuaInstructions_ = executionBudgetSettings_.luaInstructionsPerBehaviour;
+    executionBudgetActive_ = true;
+}
+
+void PucLuaScriptRuntime::EndExecutionBudget() noexcept {
+    remainingLuaInstructions_ = 0U;
+    executionBudgetActive_ = false;
+}
+
+bool PucLuaScriptRuntime::ConsumeLuaInstructions(std::size_t count) noexcept {
+    if (!executionBudgetActive_) return true;
+    if (count > remainingLuaInstructions_) return false;
+    remainingLuaInstructions_ -= count;
+    return true;
+}
+
+kb::core::BudgetExceededPolicy PucLuaScriptRuntime::ExecutionBudgetPolicy() const noexcept {
+    return executionBudgetSettings_.policy;
+}
+
+bool PucLuaScriptRuntime::IsExecutionBudgetEnabled() const noexcept {
+    return executionBudgetSettings_.luaInstructionsPerBehaviour != 0U;
+}
+
+bool PucLuaScriptRuntime::HasActiveExecutionBudget() const noexcept {
+    return executionBudgetActive_ && IsExecutionBudgetEnabled();
+}
+
 const PucLuaDebugSettings& PucLuaScriptRuntime::DebugSettings() const noexcept {
     return debugSettings_;
 }
@@ -353,10 +386,14 @@ std::optional<PucLuaDebugPauseReason> PucLuaScriptRuntime::ConsumeRequestedDebug
     return std::nullopt;
 }
 
-bool PucLuaScriptRuntime::NeedsDebugHook() const noexcept {
+bool PucLuaScriptRuntime::NeedsDebugLineHook() const noexcept {
     return debugStepMode_ == DebugStepMode::BreakOnNextLine ||
            debugStepMode_ == DebugStepMode::StepInto ||
            (debugSettings_.enableBreakpoints && !debugSettings_.breakpoints.empty());
+}
+
+bool PucLuaScriptRuntime::NeedsDebugHook() const noexcept {
+    return NeedsDebugLineHook() || HasActiveExecutionBudget();
 }
 
 const PucLuaDebugPauseSnapshot& PucLuaScriptRuntime::LastDebugPause() const noexcept {
@@ -582,9 +619,23 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
     lua_xmove(state_, coroutine, argumentCount);
 
     int resultCount = 0;
+    const bool executionBudgetEnabled = IsExecutionBudgetEnabled();
+    if (executionBudgetEnabled) {
+        BeginExecutionBudget();
+    }
     PucLuaDebugHook::Install(coroutine, *this);
     const int status = lua_resume(coroutine, state_, argumentCount, &resultCount);
+    std::string coroutineError =
+        status == LUA_OK ? std::string{} : PucLuaErrorReporter::ErrorWithTracebackFromTop(coroutine);
+    if (status != LUA_OK && coroutineError.find("stack traceback") == std::string::npos) {
+        const auto script = scripts_.find(assetId.value);
+        const std::string_view chunkName = script == scripts_.end() ? std::string_view{ "<unknown>" } : std::string_view{ script->second.chunkName };
+        coroutineError += "\nstack traceback:\n\t[entry " + std::string{ functionName } + " in " + std::string{ chunkName } + "]";
+    }
     PucLuaDebugHook::Clear(coroutine);
+    if (executionBudgetEnabled) {
+        EndExecutionBudget();
+    }
     if (status == LUA_YIELD) {
         coroutineRefs_[instanceKey][std::string{functionName}] = coroutineRef;
         result.executed = true;
@@ -602,9 +653,6 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
         }
         return result;
     }
-
-    const std::string coroutineError =
-        status == LUA_OK ? std::string{} : PucLuaErrorReporter::ErrorWithTracebackFromTop(coroutine);
 
     if (const auto instance = coroutineRefs_.find(instanceKey); instance != coroutineRefs_.end()) {
         if (const auto suspended = instance->second.find(std::string{functionName}); suspended != instance->second.end()) {
@@ -625,7 +673,7 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
             .entity = context.Self(),
             .assetId = assetId,
             .backend = behaviour.backend,
-            .message = coroutineError.substr(0U, traceOffset),
+            .message = coroutineError,
             .stackTrace = traceOffset == std::string::npos ? std::string{}
                 : coroutineError.substr(traceOffset + 1U),
         });

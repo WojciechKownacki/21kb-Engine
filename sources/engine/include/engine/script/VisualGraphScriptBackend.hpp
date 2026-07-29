@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/script/ScriptBackend.hpp"
+#include "engine/script/ScriptExecutionBudget.hpp"
 #include "engine/visual/VisualGraphBehaviourInstanceRegistry.hpp"
 #include "engine/visual/VisualGraphBehaviourRuntime.hpp"
 #include "engine/visual/VisualGraphRuntimeBindingRegistry.hpp"
@@ -20,7 +21,8 @@ public:
         const kb::visual::VisualGraphRuntimeRegistry& artifacts,
         const kb::visual::VisualGraphRuntimeBindingRegistry& bindings,
         kb::visual::VisualGraphBehaviourInstanceRegistry& instances,
-        kb::visual::VisualGraphDebugSession* debugger = nullptr) noexcept;
+        kb::visual::VisualGraphDebugSession* debugger = nullptr,
+        ScriptExecutionBudgetSettings executionBudgetSettings = {}) noexcept;
 
     [[nodiscard]] kb::scene::BehaviourBackend Backend() const noexcept override;
     [[nodiscard]] ScriptBackendExecutionResult ExecuteLifecycle(const kb::scene::BehaviourComponent& behaviour, ScriptExecutionContext& context) override;
@@ -64,6 +66,7 @@ private:
     const kb::visual::VisualGraphRuntimeBindingRegistry& bindings_;
     kb::visual::VisualGraphBehaviourInstanceRegistry& instances_;
     kb::visual::VisualGraphDebugSession* debugger_ = nullptr;
+    ScriptExecutionBudgetSettings executionBudgetSettings_;
     // LIB-112: one entry per (entity, asset) behaviour instance that has
     // ANY CustomEvent node — populated on Created, erased on Destroyed.
     // std::map (not unordered_map) because this is Created/Destroyed-rate
