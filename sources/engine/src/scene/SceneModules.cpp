@@ -11,6 +11,7 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneHistory.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
+#include "engine/scene/SceneLocalization.hpp"
 #include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/scene/SceneParticleSystems.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
@@ -81,6 +82,14 @@ SceneLoadedContent Scene::LoadedContent() noexcept {
 
 SceneLoadedContentQueries Scene::LoadedContent() const noexcept {
     return SceneLoadedContentQueries{ *this };
+}
+
+SceneLocalization Scene::Localization() noexcept {
+    return SceneLocalization{ *this };
+}
+
+SceneLocalization Scene::Localization() const noexcept {
+    return SceneLocalization{ const_cast<Scene&>(*this) };
 }
 
 SceneTimers Scene::Timers() noexcept {

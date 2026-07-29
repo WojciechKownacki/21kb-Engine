@@ -187,7 +187,7 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 
     const kb::library::EngineLibraryModuleResult second = kb::library::EngineLibraryModule::Install(host);
     kb::tests::Require(!second.succeeded, "Engine21kbLibrary module install must fail when every function name already exists");
-    kb::tests::Require(second.diagnostics.size() == 23U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
+    kb::tests::Require(second.diagnostics.size() == 24U, "Engine21kbLibrary module install must report one diagnostic per failed domain module");
 }
 
 // LIB-016: the module catalog EngineLibraryModule::Install() walks must
@@ -199,8 +199,8 @@ void RunModuleInstallReportsDuplicateDiagnosticsTest() {
 // into this build).
 void RunModuleCatalogTest() {
     const std::vector<kb::library::LibraryModuleDesc>& catalog = kb::library::EngineLibraryModule::Catalog();
-    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Timeline", "UI", "Renderer", "Assets", "Save", "Collections", "Text" };
-    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly twenty-three domain modules");
+    const std::vector<std::string> expectedNames{ "Input", "Audio", "World", "Time", "Timer", "Task", "Events", "Physics", "Transform", "Math", "Scene", "MeshRenderer", "MaterialInstance", "PostProcess", "Particles", "Animator", "Timeline", "UI", "Localization", "Renderer", "Assets", "Save", "Collections", "Text" };
+    kb::tests::Require(catalog.size() == expectedNames.size(), "Engine21kbLibrary module catalog must have exactly twenty-four domain modules");
     for (std::size_t index = 0; index < catalog.size(); ++index) {
         kb::tests::Require(catalog[index].name == expectedNames[index], "Engine21kbLibrary module catalog order/name drifted from the historical registration order");
         kb::tests::Require(catalog[index].Register != nullptr, "Engine21kbLibrary module catalog entry is missing its Register function");

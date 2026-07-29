@@ -19,5 +19,6 @@ void RunEngineMathTests();
 void RunAnimationRuntimeTests();
 void RunTimelineRuntimeTests();
 void RunUIDocumentRuntimeTests();
+void RunLocalizationTests();
 
 } // namespace kb::tests

@@ -174,6 +174,10 @@ add_library(kb_engine STATIC
     include/engine/scene/UIAssets.hpp
     include/engine/scene/UIAssetIO.hpp
     include/engine/scene/UIAssetLoaders.hpp
+    include/engine/scene/SceneLocalization.hpp
+    include/engine/localization/LocalizationCatalog.hpp
+    include/engine/localization/LocalizationCatalogIO.hpp
+    include/engine/localization/LocalizationCatalogAssetLoader.hpp
     include/engine/scene/SceneAnimators.hpp
     include/engine/scene/TimelineAsset.hpp
     include/engine/scene/TimelineAssetIO.hpp
@@ -235,6 +239,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptFunctionRegistry.hpp
     include/engine/script/ScriptFunctionVisualGraphBindings.hpp
     include/engine/script/ScriptInputApi.hpp
+    include/engine/script/ScriptLocalizationApi.hpp
     include/engine/script/ScriptMaterialInstanceApi.hpp
     include/engine/script/ScriptMathApi.hpp
     include/engine/script/ScriptMeshRendererApi.hpp
@@ -476,6 +481,10 @@ add_library(kb_engine STATIC
     src/scene/SceneUIDocumentService.cpp
     src/scene/UIAssetIO.cpp
     src/scene/UIAssetLoaders.cpp
+    src/scene/SceneLocalizationService.cpp
+    src/scene/modules/SceneLocalization.cpp
+    src/localization/LocalizationCatalogIO.cpp
+    src/localization/LocalizationCatalogAssetLoader.cpp
     src/scene/ParticleEffectAssetIO.cpp
     src/scene/ParticleEffectAssetLoader.cpp
     src/scene/SceneParticleSystemService.cpp
@@ -769,6 +778,7 @@ add_library(kb_engine STATIC
     src/private/script/ScriptFunctionDocumentation.hpp
     src/script/ScriptFunctionVisualGraphBindings.cpp
     src/script/ScriptInputApi.cpp
+    src/script/ScriptLocalizationApi.cpp
     src/script/ScriptMaterialInstanceApi.cpp
     src/script/ScriptMathApi.cpp
     src/script/ScriptMeshRendererApi.cpp
@@ -1265,6 +1275,7 @@ if(BUILD_TESTING)
         tests/AnimationRuntimeTests.cpp
         tests/TimelineRuntimeTests.cpp
         tests/UIDocumentRuntimeTests.cpp
+        tests/LocalizationTests.cpp
         tests/SceneHierarchyTests.cpp
         tests/ScenePrefabCaptureTests.cpp
         tests/ScenePrefabInstantiationTests.cpp

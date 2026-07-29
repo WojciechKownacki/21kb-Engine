@@ -8,6 +8,7 @@
 #include "engine/input/InputAssetLoaders.hpp"
 #include "engine/input/InputLocalUser.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
+#include "engine/localization/LocalizationCatalogAssetLoader.hpp"
 #include "engine/input/InputModule.hpp"
 #include "engine/modules/EngineModuleHost.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
@@ -89,6 +90,7 @@ Scene::Scene(
     const bool registeredTimelineLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::TimelineAssetLoader>());
     const bool registeredUIDocumentLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::UIDocumentAssetLoader>());
     const bool registeredUIStyleLoader = state_->assets.RegisterLoader(std::make_unique<kb::scene::UIStyleAssetLoader>());
+    const bool registeredLocalizationLoader = state_->assets.RegisterLoader(std::make_unique<kb::localization::LocalizationCatalogAssetLoader>());
     static_cast<void>(registeredPrefabLoader);
     static_cast<void>(registeredSceneLoader);
     static_cast<void>(registeredLuaScriptLoader);
@@ -106,6 +108,7 @@ Scene::Scene(
     static_cast<void>(registeredTimelineLoader);
     static_cast<void>(registeredUIDocumentLoader);
     static_cast<void>(registeredUIStyleLoader);
+    static_cast<void>(registeredLocalizationLoader);
 
     if (mode == SceneMode::PrefabPrivate) {
         return;
