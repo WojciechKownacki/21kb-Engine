@@ -247,7 +247,11 @@ ScriptFunctionArgument ScriptFunctionRegistry::CoerceArgument(const ScriptFuncti
          argument.value.Type() == ScriptValueType::Entity)) {
         return ScriptFunctionArgument{
             .name = argument.name,
-            .value = ScriptValue{ argument.value.AsUInt64(), ScriptValueType::Hash },
+            .value = ScriptValue{
+                argument.value.Type() == ScriptValueType::Int
+                    ? static_cast<std::uint64_t>(argument.value.AsInt())
+                    : argument.value.AsUInt64(),
+                ScriptValueType::Hash },
         };
     }
     // LIB-041: complete the coercions for the remaining expanded value types
