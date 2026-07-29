@@ -4120,6 +4120,10 @@ void RunGameInstanceLifetimeTest() {
             !game.State().ApplyReplication(kb::gameplay::GameStateSnapshot{ .revision = 1U }) &&
             game.State().ApplyReplication(game.State().Snapshot()) && game.State().Snapshot().scores[1] == 2,
         "GameState did not reject stale replication or retain authoritative match state");
+    kb::tests::Require(game.PlayerRegistry().Join({ .id = 10U, .state = { .displayName = "Player" } }) &&
+            game.PlayerRegistry().Possess(10U, kb::scene::SceneEntity{ 42U }) && game.PlayerRegistry().Find(10U)->controller.pawn.Id() == 42U &&
+            game.PlayerRegistry().Leave(10U) && game.PlayerRegistry().Find(10U) == nullptr,
+        "Player lifecycle did not own controller possession and release it on leave");
 }
 
 void RunEngineLibraryTests() {
