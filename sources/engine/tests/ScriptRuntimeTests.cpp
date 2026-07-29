@@ -2008,6 +2008,10 @@ void RunNativeScriptBackendExceptionSafetyTest() {
     kb::script::NativeScriptBackend* native = nativeBackend.get();
 
     kb::tests::Require(
+        native->BindAssetSymbol(kThrowingAsset, "Tests.ExceptionSafety"),
+        "Native exception safety did not bind a diagnostic module name for the throwing behaviour");
+
+    kb::tests::Require(
         native->RegisterLifecycle(kThrowingAsset, kb::script::ScriptLifecycleEvent::Tick, [](kb::script::ScriptExecutionContext&) -> void {
             throw std::runtime_error("native boom");
         }),
@@ -2029,12 +2033,18 @@ void RunNativeScriptBackendExceptionSafetyTest() {
     kb::tests::Require(survivorTicks == 1, "Native exception safety must still dispatch the behaviour after the one that threw");
     bool sawExceptionMessage = false;
     bool sawLifecyclePhase = false;
+    bool sawCompleteDiagnosticContext = false;
     for (const kb::script::ScriptDiagnostic& diagnostic : result.diagnostics) {
         sawExceptionMessage = sawExceptionMessage || diagnostic.message.find("native boom") != std::string::npos;
         sawLifecyclePhase = sawLifecyclePhase || (diagnostic.lifecyclePhase.has_value() && *diagnostic.lifecyclePhase == kb::script::ScriptLifecycleEvent::Tick);
+        sawCompleteDiagnosticContext = sawCompleteDiagnosticContext ||
+            (diagnostic.entity == throwingObject.Entity() && diagnostic.assetId == kThrowingAsset &&
+                diagnostic.module == "Tests.ExceptionSafety" && diagnostic.function == "Tick" &&
+                diagnostic.lifecyclePhase.has_value() && *diagnostic.lifecyclePhase == kb::script::ScriptLifecycleEvent::Tick);
     }
     kb::tests::Require(sawExceptionMessage, "Native exception safety did not surface the exception's message in the diagnostics");
     kb::tests::Require(sawLifecyclePhase, "Native exception safety diagnostic must carry the lifecycle phase it failed in (LIB-036)");
+    kb::tests::Require(sawCompleteDiagnosticContext, "Native exception safety diagnostic must carry module, function, entity, asset, and lifecycle phase (LIB-036)");
 }
 
 // LIB-021: once the world has dispatched its first lifecycle phase, further
