@@ -11,6 +11,7 @@
 #include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
+#include "engine/scene/PhysicsLayersAssetIO.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -544,6 +545,60 @@ ReadScriptValue(
         return {
             written,
             written ? resolved->string() : "wave write failed" };
+    }
+
+    if (*operation == "configure_physics_layers") {
+        const auto path = StringMember(step, "path", error);
+        const auto firstLayer = NumberMember(step, "first_layer", error);
+        const auto firstName = StringMember(step, "first_name", error);
+        const auto secondLayer = NumberMember(step, "second_layer", error);
+        const auto secondName = StringMember(step, "second_name", error);
+        const auto interact = BoolMember(step, "interact", error);
+        if (!path || !firstLayer || !firstName || !secondLayer || !secondName || !interact) {
+            return { false, error };
+        }
+        const auto validLayer = [](double value) {
+            return value >= 0.0 && value < 32.0 && std::floor(value) == value;
+        };
+        if (!validLayer(*firstLayer) || !validLayer(*secondLayer) ||
+            *firstLayer == *secondLayer || firstName->empty() || secondName->empty()) {
+            return { false, "invalid physics layer configuration" };
+        }
+        const auto resolved = ResolveProjectPath(*path, error);
+        if (!resolved) return { false, error };
+        kb::scene::PhysicsLayersAsset asset;
+        const std::uint32_t first = static_cast<std::uint32_t>(*firstLayer);
+        const std::uint32_t second = static_cast<std::uint32_t>(*secondLayer);
+        asset.layerNames[first] = *firstName;
+        asset.layerNames[second] = *secondName;
+        asset.SetLayersInteract(first, second, *interact);
+        std::error_code directoryError;
+        std::filesystem::create_directories(resolved->parent_path(), directoryError);
+        const bool written = !directoryError && kb::scene::WritePhysicsLayersAsset(*resolved, asset);
+        if (!written) return { false, "physics layers asset write failed" };
+        const std::filesystem::path virtualPath =
+            std::filesystem::path{ "/Game" } /
+            resolved->lexically_relative(EditorProjectPaths::AssetsRoot());
+        const bool configured = state.context.SetProjectPhysicsLayersAsset(
+            kb::assets::NormalizeAssetPath(virtualPath));
+        return { configured, configured ? virtualPath.generic_string() : "physics layers project setting failed" };
+    }
+
+    if (*operation == "select_project_settings_category") {
+        const auto category = StringMember(step, "category", error);
+        if (!category) return { false, error };
+        int index = -1;
+        if (*category == "inputs") {
+            index = 0;
+        } else if (*category == "graphics") {
+            index = 1;
+        } else if (*category == "physics") {
+            index = 2;
+        } else {
+            return { false, "unknown project settings category" };
+        }
+        static_cast<void>(state.context.ProjectSettings().SelectCategory(index));
+        return { true, *category };
     }
 
     if (*operation == "copy_fixture") {
