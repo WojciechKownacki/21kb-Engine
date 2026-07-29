@@ -251,7 +251,10 @@ ScriptFunctionCallResult LoadAsync(const ScriptFunctionCallContext& context, std
 
     kb::scene::Scene* scene = context.scene;
     kb::assets::AssetManager& manager = scene->Assets().Manager();
-    if (!manager.RequestLoadAsync(id)) {
+    // A script request promises an ownership handle on completion. Retain the
+    // decoded payload until this task transfers that handle, even when an
+    // editor thumbnail previously left this asset's cache entry weak-only.
+    if (!manager.RequestLoadAsync(id, kb::assets::AssetUnloadPolicy::Retain)) {
         return ScriptFunctionCallResult{
             .executed = true,
             .outputs = {
@@ -264,7 +267,7 @@ ScriptFunctionCallResult LoadAsync(const ScriptFunctionCallContext& context, std
     const std::uint64_t owner = OwnerKey(context);
     kb::scene::SceneAccess::State(*scene).scriptPendingAssets[owner].insert(id.value);
     const std::uint64_t taskId = scene->Tasks().Start(
-        [scene, id, owner](float) -> kb::scene::TaskPollResult {
+        [scene, id, owner, retryIssued = false](float) mutable -> kb::scene::TaskPollResult {
             kb::assets::AssetManager& assets = scene->Assets().Manager();
             assets.PumpAsyncLoads();
             switch (assets.AsyncLoadStatus(id)) {
@@ -281,7 +284,20 @@ ScriptFunctionCallResult LoadAsync(const ScriptFunctionCallContext& context, std
                 return kb::scene::TaskPollResult::Completed;
             }
             case kb::assets::AsyncAssetLoadStatus::Failed:
+                RemovePendingAsset(kb::scene::SceneAccess::State(*scene), owner, id.value);
+                return kb::scene::TaskPollResult::Failed;
             case kb::assets::AsyncAssetLoadStatus::NotRequested:
+                // Cache refreshes and loader hot-reloads can invalidate a queued
+                // request before its result reaches the owner thread. Recover once
+                // while the caller still explicitly owns the pending request; a
+                // caller-side Unload removes that ownership and cannot restart it.
+                if (!retryIssued && AnyScriptOwnerRequests(kb::scene::SceneAccess::State(*scene), id.value) &&
+                    assets.RequestLoadAsync(id, kb::assets::AssetUnloadPolicy::Retain)) {
+                    retryIssued = true;
+                    return kb::scene::TaskPollResult::Running;
+                }
+                RemovePendingAsset(kb::scene::SceneAccess::State(*scene), owner, id.value);
+                return kb::scene::TaskPollResult::Failed;
             default:
                 RemovePendingAsset(kb::scene::SceneAccess::State(*scene), owner, id.value);
                 return kb::scene::TaskPollResult::Failed;
@@ -300,6 +316,42 @@ ScriptFunctionCallResult LoadAsync(const ScriptFunctionCallContext& context, std
         .outputs = {
             ScriptFunctionArgument{ "started", ScriptValue{ taskId != 0U } },
             ScriptFunctionArgument{ "task", ScriptValue{ taskId, ScriptValueType::Hash } },
+        },
+        .errors = {},
+    };
+}
+
+// Async requests finish through TaskCompleted/TaskFailed, but gameplay also needs an
+// honest diagnostic when a task fails.  This exposes the AssetManager's recorded
+// state without starting, retrying, loading or otherwise mutating the request.
+ScriptFunctionCallResult AsyncStatus(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const kb::assets::AssetId id = ResolveReference(*context.scene, ReferenceArg(arguments));
+    if (!id.IsValid()) {
+        return ScriptFunctionCallResult{
+            .executed = true,
+            .outputs = {
+                ScriptFunctionArgument{ "status", ScriptValue{ std::string{ "NotRequested" } } },
+                ScriptFunctionArgument{ "error", ScriptValue{ std::string{ "asset reference could not be resolved" } } },
+            },
+            .errors = {},
+        };
+    }
+    const kb::assets::AssetManager& manager = context.scene->Assets().Manager();
+    std::string status;
+    switch (manager.AsyncLoadStatus(id)) {
+    case kb::assets::AsyncAssetLoadStatus::Pending: status = "Pending"; break;
+    case kb::assets::AsyncAssetLoadStatus::Completed: status = "Completed"; break;
+    case kb::assets::AsyncAssetLoadStatus::Failed: status = "Failed"; break;
+    case kb::assets::AsyncAssetLoadStatus::NotRequested: status = "NotRequested"; break;
+    }
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "status", ScriptValue{ std::move(status) } },
+            ScriptFunctionArgument{ "error", ScriptValue{ manager.AsyncLoadError(id) } },
         },
         .errors = {},
     };
@@ -547,6 +599,10 @@ bool ScriptAssetsApi::Register(ScriptRuntimeHost& host) {
     ok = RegisterFunction(host, "Assets.LoadAsync",
               { ScriptFunctionPin{ "reference", ScriptValueType::String, true } },
               { ScriptFunctionPin{ "started", ScriptValueType::Bool, true }, ScriptFunctionPin{ "task", ScriptValueType::Hash, true } }, &LoadAsync)
+        && ok;
+    ok = RegisterFunction(host, "Assets.AsyncStatus",
+              { ScriptFunctionPin{ "reference", ScriptValueType::String, true } },
+              { ScriptFunctionPin{ "status", ScriptValueType::String, true }, ScriptFunctionPin{ "error", ScriptValueType::String, true } }, &AsyncStatus)
         && ok;
     ok = RegisterFunction(host, "Assets.Unload",
               { ScriptFunctionPin{ "reference", ScriptValueType::String, true } },

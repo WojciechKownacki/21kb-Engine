@@ -313,6 +313,35 @@ void RunAssetManagerTrueAsyncLoadTest() {
         "Unload during an async request must invalidate the worker result before owner-thread commit");
 }
 
+void RunAssetManagerAsyncLoaderReplacementTest() {
+    ResetTestRoot();
+    const std::filesystem::path assetsRoot = TestRoot() / "LoaderReplacementProject" / "Assets";
+    WriteTextFile(assetsRoot / "Text" / "Reloaded.txt", "replacement payload");
+
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<TextAssetLoader>()), "Initial replacement-test loader registration failed");
+    kb::tests::Require(manager.Mounts().Mount("Game", assetsRoot), "Replacement-test project mount failed");
+    kb::tests::Require(manager.DiscoverMountedAssets() == 1U, "Replacement-test asset discovery failed");
+    const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath("/Game/Text/Reloaded.txt");
+    kb::tests::Require(metadata != nullptr, "Replacement-test asset metadata was not registered");
+    const kb::assets::AssetId id = metadata->id;
+
+    kb::tests::Require(manager.RequestLoadAsync(id), "Replacement-test async request was rejected");
+    kb::tests::Require(manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Pending,
+        "Replacement-test async request was not pending before loader replacement");
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<TextAssetLoader>()),
+        "Replacement-test same-type loader registration failed");
+    for (std::size_t spin = 0; spin < 1000000U && manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Pending; ++spin) {
+        manager.PumpAsyncLoads();
+        std::this_thread::yield();
+    }
+    kb::tests::Require(manager.AsyncLoadStatus(id) == kb::assets::AsyncAssetLoadStatus::Completed,
+        "Replacing a loader discarded an active async request instead of restarting it");
+    const kb::assets::AssetHandle<std::string> loaded = manager.AcquireLoaded<std::string>(id);
+    kb::tests::Require(loaded.IsLoaded() && *loaded == "replacement payload",
+        "Restarted async request did not publish the replacement loader payload");
+}
+
 // LIB-157: kb::assets::AssetKind — the single source of truth mapping each
 // typed-reference kind to its concrete AssetMetadata::type string(s). Pure
 // value-type test, no scene needed. Proves ToString/TryParseAssetKind round
@@ -923,6 +952,7 @@ void RunAssetRuntimeTests() {
     RunAssetManagerDiscoveryCacheAndManifestTest();
     RunAssetManagerLoadOpaqueTest();
     RunAssetManagerTrueAsyncLoadTest();
+    RunAssetManagerAsyncLoaderReplacementTest();
     RunAssetCacheReferenceAndPolicyTest();
     RunAssetCompatibilityValidationTest();
     RunAssetKindClassificationTest();
