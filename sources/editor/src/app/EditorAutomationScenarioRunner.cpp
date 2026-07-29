@@ -217,8 +217,8 @@ void ReplaceAll(
     }
 }
 
-[[nodiscard]] std::string ExpandContentTokens(
-    const ScenarioState& state, std::string content) {
+[[nodiscard]] std::optional<std::string> ExpandContentTokens(
+    const ScenarioState& state, std::string content, std::string& error) {
     const std::string projectRoot =
         std::filesystem::absolute(EditorProjectPaths::ProjectRoot())
             .lexically_normal()
@@ -229,6 +229,27 @@ void ReplaceAll(
             .generic_string();
     ReplaceAll(content, "{{PROJECT_ROOT}}", projectRoot);
     ReplaceAll(content, "{{ARTIFACT_ROOT}}", artifactRoot);
+    constexpr std::string_view prefix = "{{ASSET_ID:";
+    std::size_t position = 0U;
+    while ((position = content.find(prefix, position)) != std::string::npos) {
+        const std::size_t end = content.find("}}", position + prefix.size());
+        if (end == std::string::npos) {
+            error = "unterminated ASSET_ID token";
+            return std::nullopt;
+        }
+        const std::string path = content.substr(
+            position + prefix.size(), end - position - prefix.size());
+        const kb::assets::AssetMetadata* metadata =
+            state.context.Scene().Assets().Manager().Registry().FindByPath(
+                std::filesystem::path{ path });
+        if (metadata == nullptr) {
+            error = "ASSET_ID token references an undiscovered asset";
+            return std::nullopt;
+        }
+        const std::string id = std::to_string(metadata->id.value);
+        content.replace(position, end + 2U - position, id);
+        position += id.size();
+    }
     return content;
 }
 
@@ -488,8 +509,8 @@ ReadScriptValue(
         const auto path = StringMember(step, "path", error);
         const auto content = StringMember(step, "content", error);
         if (!path || !content) return { false, error };
-        const std::string expanded =
-            ExpandContentTokens(state, *content);
+        const auto expanded = ExpandContentTokens(state, *content, error);
+        if (!expanded.has_value()) return { false, error };
         const auto resolved = ResolveProjectPath(*path, error);
         if (!resolved) return { false, error };
         std::error_code directoryError;
@@ -501,8 +522,8 @@ ReadScriptValue(
         std::ofstream output(
             *resolved, std::ios::binary | std::ios::trunc);
         output.write(
-            expanded.data(),
-            static_cast<std::streamsize>(expanded.size()));
+            expanded->data(),
+            static_cast<std::streamsize>(expanded->size()));
         if (!output.good()) {
             return { false, "file write failed" };
         }
@@ -743,6 +764,20 @@ ReadScriptValue(
         return { true, std::to_string(count) + " asset(s)" };
     }
 
+    if (*operation == "unload_asset") {
+        const auto asset = StringMember(step, "asset", error);
+        if (!asset) return { false, error };
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        if (!id.IsValid()) return { false, "asset was not found" };
+        kb::assets::AssetManager& manager =
+            state.context.Scene().Assets().Manager();
+        if (!manager.LoadOpaque(id)) {
+            return { false, manager.LastError() };
+        }
+        const bool unloaded = manager.Unload(id);
+        return { unloaded, *asset };
+    }
+
     if (*operation == "import_asset") {
         const auto source = StringMember(step, "source", error);
         const auto destination =
@@ -976,6 +1011,18 @@ ReadScriptValue(
         return { true, *alias };
     }
 
+    if (*operation == "assert_name") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto expected = StringMember(step, "value", error);
+        if (!alias || !expected) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(entity)) {
+            return { false, "entity alias is not alive" };
+        }
+        const std::string actual = state.context.Scene().Entities().Name(entity);
+        return { actual == *expected, "actual=" + actual + " expected=" + *expected };
+    }
+
     if (*operation == "add_component") {
         const auto alias = StringMember(step, "entity", error);
         const auto component =
@@ -990,6 +1037,35 @@ ReadScriptValue(
         return {
             state.automation.AddComponent(*component),
             *component + " on " + *alias };
+    }
+
+    if (*operation == "set_animator_root_motion_owner" ||
+        *operation == "assert_animator_root_motion_owner") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto owner = StringMember(step, "owner", error);
+        if (!alias || !owner) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        const auto expected = [&]() -> std::optional<kb::scene::AnimatorRootMotionOwner> {
+            if (*owner == "none") return kb::scene::AnimatorRootMotionOwner::None;
+            if (*owner == "animator") return kb::scene::AnimatorRootMotionOwner::Animator;
+            if (*owner == "character_controller") return kb::scene::AnimatorRootMotionOwner::CharacterController;
+            if (*owner == "rigidbody") return kb::scene::AnimatorRootMotionOwner::Rigidbody;
+            return std::nullopt;
+        }();
+        if (!expected) return { false, "unknown animator root-motion owner" };
+        kb::scene::Animator* animator = state.context.Scene().Components().Animators().TryGet(entity);
+        if (animator == nullptr) return { false, "entity has no Animator component" };
+        if (*operation == "set_animator_root_motion_owner") {
+            for (std::size_t attempts = 0U; animator->rootMotionOwner != *expected && attempts < 4U; ++attempts) {
+                if (!state.context.CycleAnimatorRootMotionOwner(entity)) {
+                    return { false, "editor rejected incompatible root-motion owner" };
+                }
+                animator = state.context.Scene().Components().Animators().TryGet(entity);
+                if (animator == nullptr) return { false, "Animator component disappeared" };
+            }
+        }
+        const bool matched = animator->rootMotionOwner == *expected;
+        return { matched, matched ? *owner : "root-motion owner mismatch" };
     }
 
     if (*operation == "set_property" ||

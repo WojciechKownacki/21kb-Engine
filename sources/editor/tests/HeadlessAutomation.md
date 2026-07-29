@@ -31,7 +31,8 @@ ignored by Git.
 
 Paths accepted by `write_file`, `write_pcm_wave`, `save_scene`, and
 `open_scene` are relative to the isolated project and cannot escape it.
-`write_file` expands `{{PROJECT_ROOT}}` and `{{ARTIFACT_ROOT}}` in its content
+`write_file` expands `{{PROJECT_ROOT}}`, `{{ARTIFACT_ROOT}}` and
+`{{ASSET_ID:/Game/path.asset}}` (an already discovered asset) in its content
 to forward-slash absolute paths, allowing authored scripts to persist their
 own output inside the task folder. Entity and asset `id` values are
 scenario-local aliases.
@@ -50,6 +51,7 @@ scenario-local aliases.
 | `copy_fixture` | `source` relative to the scenario directory, project-relative `destination`; copies arbitrary binary fixtures |
 | `assert_file` | project-relative `path`; optional `exists`, `min_size`, `contains` |
 | `discover_assets` | none |
+| `unload_asset` | asset alias or virtual path; force-loads then unloads the live `AssetManager` entry so a running system must reacquire it |
 | `import_asset` | `source` project-relative path, `destination` virtual folder |
 | `create_entity` | `id`; optional `name` |
 | `create_mesh_entity` | `id`, `asset` alias or virtual path |
@@ -60,9 +62,11 @@ scenario-local aliases.
 | `create_prefab` | `entity`, project-relative `path` |
 | `instantiate_prefab` | result `id`, project-relative `path`, `virtual_path`; optional `parent` or complete `x`,`y`,`z`, and optional `name` |
 | `select_entity` | `entity` |
-| `add_component` | `entity`, `component` |
-| `set_property`, `assert_property` | `entity`, `component`, `property`, `value`; assertion optionally `tolerance` |
+  | `add_component` | `entity`, `component` |
+  | `set_animator_root_motion_owner`, `assert_animator_root_motion_owner` | Animator `entity`, owner: `none`, `animator`, `character_controller`, or `rigidbody`; setter uses the production Inspector command and rejects incompatible ownership |
+  | `set_property`, `assert_property` | `entity`, `component`, `property`, `value`; assertion optionally `tolerance` |
 | `assert_entity` | `entity`; optional `exists` |
+| `assert_name` | `entity`, expected string `value`; verifies the live entity name |
 | `assert_component` | `entity`, `component`; optional `exists` |
 | `assert_ui_element` | `entity`, numeric `element`; optional `exists`, `visible`, `kind`; queries the live runtime UI tree in Play Mode |
 | `assert_parent` | `entity`, `parent` |

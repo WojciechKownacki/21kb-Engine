@@ -240,10 +240,18 @@ ScriptFunctionArgument ScriptFunctionRegistry::CoerceArgument(const ScriptFuncti
     // would otherwise be rejected on the round trip Create -> handle ->
     // Push. Same non-negative rule and lossless-widening reasoning as the
     // Entity/Component coercion above (all three share the uint64 storage).
-    if (expectedType == ScriptValueType::Hash && argument.value.Type() == ScriptValueType::Int && argument.value.AsInt() >= 0) {
+    // A hash above INT_MAX comes back from Lua tagged Entity; preserve its
+    // uint64 payload and restore the requested Hash tag below.
+    if (expectedType == ScriptValueType::Hash &&
+        ((argument.value.Type() == ScriptValueType::Int && argument.value.AsInt() >= 0) ||
+         argument.value.Type() == ScriptValueType::Entity)) {
         return ScriptFunctionArgument{
             .name = argument.name,
-            .value = ScriptValue{ static_cast<std::uint64_t>(argument.value.AsInt()), ScriptValueType::Hash },
+            .value = ScriptValue{
+                argument.value.Type() == ScriptValueType::Int
+                    ? static_cast<std::uint64_t>(argument.value.AsInt())
+                    : argument.value.AsUInt64(),
+                ScriptValueType::Hash },
         };
     }
     // LIB-041: complete the coercions for the remaining expanded value types
@@ -283,7 +291,10 @@ bool ScriptFunctionRegistry::IsCompatible(ScriptValue value, ScriptValueType exp
            (expectedType == ScriptValueType::UInt32 && value.Type() == ScriptValueType::Int && value.AsInt() >= 0) ||
            // LIB-058: a non-negative Int satisfies a Hash pin (an opaque
            // collection handle marshalled from Lua as Int).
-           (expectedType == ScriptValueType::Hash && value.Type() == ScriptValueType::Int && value.AsInt() >= 0) ||
+           // Large Lua hashes have Entity's uint64 representation and are
+           // losslessly retagged by CoerceArgument.
+           (expectedType == ScriptValueType::Hash &&
+               ((value.Type() == ScriptValueType::Int && value.AsInt() >= 0) || value.Type() == ScriptValueType::Entity)) ||
            // LIB-041: the remaining expanded value types accept the Int/Float/
            // String a Lua caller actually produces (see CoerceArgument). All
            // lossless widenings; String->Name/Guid re-tags the text.
