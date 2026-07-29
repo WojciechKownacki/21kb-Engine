@@ -3062,6 +3062,39 @@ ReadScriptValue(
                       : "generated Markdown reference drifted from the live API manifest" };
     }
 
+    if (*operation == "assert_manifest_reference_validation") {
+        kb::script::ScriptRuntimeHost host{ state.context.Scene() };
+        if (!host.Succeeded()) {
+            return { false, "script runtime host could not be created" };
+        }
+        const kb::library::ApiManifest manifest =
+            kb::library::BuildApiManifest(kb::script::ScriptApiCatalog::Build(host));
+        const std::string reference = kb::library::ToReferenceMarkdown(manifest);
+        std::string wrongName = reference;
+        std::string wrongSignature = reference;
+        std::string wrongSemantics = reference;
+        const auto replace = [](std::string& text, std::string_view from, std::string_view to) {
+            const std::size_t position = text.find(from);
+            if (position == std::string::npos) {
+                return false;
+            }
+            text.replace(position, from.size(), to);
+            return true;
+        };
+        const bool mutated =
+            replace(wrongName, "`Input.Vector2`", "`Input.VectorX`") &&
+            replace(wrongSignature, "action: String, player: Int?", "action: Bool") &&
+            replace(wrongSemantics, "Reads the current two-dimensional value of the named input action.", "Returns an unrelated value.");
+        const bool validated = mutated &&
+            kb::library::ValidateReferenceMarkdown(manifest, reference).Succeeded() &&
+            !kb::library::ValidateReferenceMarkdown(manifest, wrongName).Succeeded() &&
+            !kb::library::ValidateReferenceMarkdown(manifest, wrongSignature).Succeeded() &&
+            !kb::library::ValidateReferenceMarkdown(manifest, wrongSemantics).Succeeded();
+        return { validated,
+            validated ? "manifest validation rejects documentation name, signature and semantic drift"
+                      : "manifest validation did not reject every documentation drift" };
+    }
+
     if (*operation == "assert_authoring_hints") {
         kb::script::ScriptRuntimeHost host{ state.context.Scene() };
         if (!host.Succeeded()) {
