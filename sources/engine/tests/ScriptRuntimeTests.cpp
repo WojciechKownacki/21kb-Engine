@@ -9339,6 +9339,14 @@ void RunScriptPointerApiTest() {
             kb::tests::NearlyEqual(
                 secondaryRay.Output("originX")->AsFloat(), 5.0F),
         "Pointer.Ray(player) did not select that local player's camera");
+    const kb::script::ScriptFunctionCallResult primaryRayAfterSecondaryPublish =
+        host.Functions().Call("Pointer.Ray", {}, callContext);
+    kb::tests::Require(
+        primaryRayAfterSecondaryPublish.Succeeded() &&
+            primaryRayAfterSecondaryPublish.Output("valid")->AsBool() &&
+            kb::tests::NearlyEqual(
+                primaryRayAfterSecondaryPublish.Output("originX")->AsFloat(), 0.0F),
+        "Publishing player 2's viewport overwrote player 1's retained camera frame");
 
     const kb::assets::AssetId luaAsset{ 8822U };
     const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Pointer Caller" });
@@ -12402,6 +12410,9 @@ void RunTaskWaitReasonsRuntimeIntegrationTest() {
         "Task.WaitAsset fixture's external asset load failed");
     kb::tests::Require(scene.LoadedContent().Load(sceneFile, true) != 0U,
         "Task.WaitScene fixture's external scene load failed");
+    kb::tests::Require(scene.Tasks().Exists(sceneTask) &&
+            std::ranges::find(completedTasks, sceneTask) == completedTasks.end(),
+        "Task.WaitScene completed synchronously inside the scene transition instead of at the next frame boundary");
     static_cast<void>(system.ExecuteFrame(scene, 0.02F));
 
     for (const std::uint64_t taskId : taskIds) {

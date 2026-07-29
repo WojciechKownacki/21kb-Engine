@@ -606,7 +606,13 @@ std::vector<UIRuntimeEventRecord> SceneUIDocumentService::DrainEvents(Scene& sce
         const UIDocumentRuntimeRecord* record = FindRecord(state, queued.entity);
         if (record == nullptr) continue;
         const auto element = record->elements.find(queued.event.elementId);
-        if (element != record->elements.end() && element->second.visible) {
+        // ScriptRuntimeSceneSystem drains UI events before the UI scene
+        // system reaches its command boundary. A Destroy queued in the same
+        // prior script frame must therefore suppress the event here as well:
+        // otherwise a callback can observe an element that is already
+        // scheduled to die later in this frame.
+        if (element != record->elements.end() && element->second.visible &&
+            !IsPendingDestroyAncestor(state, *record, queued.entity, queued.event.elementId)) {
             drained.push_back(UIRuntimeEventRecord{ .owner = queued.entity, .event = std::move(queued.event) });
         }
     }
