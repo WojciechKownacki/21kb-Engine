@@ -4122,6 +4122,12 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    const std::filesystem::path storageRoot = std::filesystem::temp_directory_path() / "21kb-user-storage-test";
+    std::error_code storageError;
+    std::filesystem::remove_all(storageRoot, storageError);
+    kb::platform::UserStorage storage{ storageRoot, 8U };
+    kb::tests::Require(storage.Write("save/a", "data") && storage.Read("save/a") == std::optional<std::string>{ "data" } && storage.WriteAsync("save/b", "ok").get() && storage.List().size() == 2U && storage.Delete("save/a") && !storage.Write("save/c", "too-large"), "User storage did not enforce atomic sandboxed quota operations");
+    std::filesystem::remove_all(storageRoot, storageError);
     kb::tests::Require(kb::platform::IsSandboxStorageKey("saves/profile.bin") && !kb::platform::IsSandboxStorageKey("../outside") && !kb::platform::IsSandboxStorageKey("C:\\outside") && !kb::platform::IsSandboxStorageKey("/outside"), "User storage sandbox accepted a filesystem escape");
     constexpr kb::platform::PlatformCapabilities platformCapabilities{ .flags = static_cast<std::uint32_t>(kb::platform::PlatformCapability::Locale) | static_cast<std::uint32_t>(kb::platform::PlatformCapability::UserDataPath) };
     static_assert(platformCapabilities.Has(kb::platform::PlatformCapability::Locale));
