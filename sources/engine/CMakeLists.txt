@@ -1377,6 +1377,18 @@ if(BUILD_TESTING)
 
     kb_apply_quality_gates(kb_engine_tests)
 
+    add_executable(kb_library_benchmarks
+        tests/LibraryPerformanceBenchmarks.cpp
+        tests/TestSupport.hpp
+    )
+
+    target_link_libraries(kb_library_benchmarks
+        PRIVATE
+            kb_engine
+    )
+
+    kb_apply_quality_gates(kb_library_benchmarks)
+
     function(kb_add_ecs_test_target target_name)
         add_executable(${target_name}
             ${ARGN}
