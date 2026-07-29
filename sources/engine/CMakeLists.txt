@@ -27,6 +27,7 @@ add_library(kb_engine STATIC
     include/engine/math/EngineMath.hpp
     include/engine/network/NetworkModel.hpp
     include/engine/network/NetworkObject.hpp
+    include/engine/network/ReplicationSchema.hpp
     include/engine/project/ProjectDescriptor.hpp
     include/engine/project/ProjectDescriptorMeta.hpp
     include/engine/project/ProjectDescriptorReader.hpp
@@ -481,6 +482,7 @@ add_library(kb_engine STATIC
     src/scene/Scene.cpp
     src/gameplay/GameInstance.cpp
     src/network/NetworkObject.cpp
+    src/network/ReplicationSchema.cpp
     src/gameplay/GameFlow.cpp
     src/gameplay/GameMode.cpp
     src/gameplay/GameState.cpp
