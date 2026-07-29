@@ -1459,7 +1459,7 @@ void PaintUIDocumentSection(
     y = section.Bottom() + kSectionGap;
 }
 
-constexpr int kCameraSectionRows = 8;
+constexpr int kCameraSectionRows = 13;
 
 void PaintCameraSection(
     HDC dc,
@@ -1506,6 +1506,26 @@ void PaintCameraSection(
         "Priority",
         std::to_string(camera.priority),
         InspectorPropertyId::CameraPriority);
+    section.Field(
+        "Culling Mask",
+        std::to_string(camera.cullingMask),
+        InspectorPropertyId::CameraCullingMask);
+    section.Field(
+        "Clear Mode",
+        InspectorComponentLabelFormatter::CameraClearModeName(camera.clearMode),
+        InspectorPropertyId::CameraClearMode);
+    section.Float(
+        "Clear Color R",
+        FormatFloat(camera.clearColor.x, 3),
+        InspectorPropertyId::CameraClearColorR);
+    section.Float(
+        "Clear Color G",
+        FormatFloat(camera.clearColor.y, 3),
+        InspectorPropertyId::CameraClearColorG);
+    section.Float(
+        "Clear Color B",
+        FormatFloat(camera.clearColor.z, 3),
+        InspectorPropertyId::CameraClearColorB);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -2394,9 +2414,28 @@ void AdvanceRow(int& y) noexcept {
     for (const InspectorPropertyId property : {
              InspectorPropertyId::CameraViewportId,
              InspectorPropertyId::CameraPriority,
+             InspectorPropertyId::CameraCullingMask,
+             InspectorPropertyId::CameraClearMode,
          }) {
         if (InspectorPanelRenderer::Hit hit =
                 HitTextRow(
+                    RowRect(content, y),
+                    InspectorSectionId::Camera,
+                    property,
+                    x,
+                    yPoint);
+            hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        AdvanceRow(y);
+    }
+    for (const InspectorPropertyId property : {
+             InspectorPropertyId::CameraClearColorR,
+             InspectorPropertyId::CameraClearColorG,
+             InspectorPropertyId::CameraClearColorB,
+         }) {
+        if (InspectorPanelRenderer::Hit hit =
+                HitFloatRow(
                     RowRect(content, y),
                     InspectorSectionId::Camera,
                     property,
