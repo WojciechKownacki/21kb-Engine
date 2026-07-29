@@ -48,6 +48,7 @@
 #include "engine/network/NetworkVariable.hpp"
 #include "engine/network/NetworkPrediction.hpp"
 #include "engine/network/NetworkBudget.hpp"
+#include "engine/network/NetworkSecurity.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -4117,6 +4118,9 @@ void RunGoapBenchmarkDecisionTest() {
 }
 
 void RunGameInstanceLifetimeTest() {
+    kb::network::NetworkObjects secureObjects;
+    constexpr kb::network::NetworkSecurityLimits securityLimits{};
+    kb::tests::Require(secureObjects.Spawn({ .id = 31U, .owner = 41U, .role = kb::network::NetworkRole::Authority }) && kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 41U, 10U, 0U, 10U) && !kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 42U, 10U, 0U, 10U) && !kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 41U, 10U, securityLimits.maxMessagesPerTick, 10U) && !kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 41U, 10U, 0U, 11U), "Network message validation did not reject spoofing, rate, and deserialization violations");
     constexpr kb::network::NetworkBudget networkBudget{};
     static_assert(kb::network::IsValidNetworkBudget(networkBudget));
     kb::tests::Require(kb::network::AcceptsPacket(networkBudget, 0U, 1200U) && !kb::network::AcceptsPacket(networkBudget, networkBudget.maxQueuedBytes, 1U) && kb::network::TickDurationMicroseconds(networkBudget) == 33333U, "Network tick and packet budget did not apply backpressure");
