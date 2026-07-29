@@ -34,6 +34,33 @@ option(KB_BUILD_GRAPH_SHADERC "Build bgfx shaderc for the Material Editor graph 
 set(KB_DXCOMPILER_RUNTIME "" CACHE FILEPATH "Path to dxcompiler.dll copied next to shaderc for DXIL graph cooking")
 option(KB_BUILD_PROVIDER_MODULES_AS_DLL "Build provider engine modules as hot-reloadable DLL/shared libraries instead of static libraries" ON)
 
+set(KB_MSVC_ASAN_RUNTIME_DIR "" CACHE PATH "Directory containing the MSVC-compatible LLVM AddressSanitizer runtime")
+set(KB_MSVC_STL_ASAN_RUNTIME_DIR "" CACHE PATH "Directory containing the MSVC AddressSanitizer STL runtime")
+
+if(MSVC AND KB_ENABLE_SANITIZERS AND NOT KB_MSVC_ASAN_RUNTIME_DIR)
+    file(GLOB _kb_msvc_asan_runtime_candidates
+        "C:/Program Files/Microsoft Visual Studio/*/*/VC/Tools/Llvm/x64/lib/clang/*/lib/windows"
+    )
+    foreach(_kb_msvc_asan_runtime_candidate IN LISTS _kb_msvc_asan_runtime_candidates)
+        if(EXISTS "${_kb_msvc_asan_runtime_candidate}/clang_rt.asan_dynamic_runtime_thunk-x86_64.lib")
+            set(KB_MSVC_ASAN_RUNTIME_DIR "${_kb_msvc_asan_runtime_candidate}" CACHE PATH "Directory containing the MSVC-compatible LLVM AddressSanitizer runtime" FORCE)
+            break()
+        endif()
+    endforeach()
+endif()
+
+if(MSVC AND KB_ENABLE_SANITIZERS AND NOT KB_MSVC_STL_ASAN_RUNTIME_DIR)
+    file(GLOB _kb_msvc_stl_asan_runtime_candidates
+        "C:/Program Files/Microsoft Visual Studio/*/*/VC/Tools/MSVC/*/lib/x64"
+    )
+    foreach(_kb_msvc_stl_asan_runtime_candidate IN LISTS _kb_msvc_stl_asan_runtime_candidates)
+        if(EXISTS "${_kb_msvc_stl_asan_runtime_candidate}/stl_asan.lib")
+            set(KB_MSVC_STL_ASAN_RUNTIME_DIR "${_kb_msvc_stl_asan_runtime_candidate}" CACHE PATH "Directory containing the MSVC AddressSanitizer STL runtime" FORCE)
+            break()
+        endif()
+    endforeach()
+endif()
+
 if(WIN32 AND NOT KB_DXCOMPILER_RUNTIME AND DEFINED ENV{VULKAN_SDK})
     set(_kb_vulkan_sdk_dxcompiler "$ENV{VULKAN_SDK}/Bin/dxcompiler.dll")
     if(EXISTS "${_kb_vulkan_sdk_dxcompiler}")
@@ -93,6 +120,22 @@ function(kb_apply_quality_gates target_name)
         if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
             target_compile_options(${target_name} PRIVATE -fsanitize=address,undefined -fno-sanitize=vptr -fno-omit-frame-pointer)
             target_link_options(${target_name} PRIVATE -fsanitize=address,undefined -fno-sanitize=vptr)
+        elseif(MSVC)
+            if(NOT EXISTS "${KB_MSVC_ASAN_RUNTIME_DIR}/clang_rt.asan_dynamic_runtime_thunk-x86_64.lib" OR
+                NOT EXISTS "${KB_MSVC_STL_ASAN_RUNTIME_DIR}/stl_asan.lib")
+                message(FATAL_ERROR "KB_ENABLE_SANITIZERS requires LLVM and STL AddressSanitizer runtimes; set KB_MSVC_ASAN_RUNTIME_DIR and KB_MSVC_STL_ASAN_RUNTIME_DIR.")
+            endif()
+            target_compile_options(${target_name} PRIVATE /fsanitize=address /Zi)
+            target_link_options(${target_name} PRIVATE /INCREMENTAL:NO)
+            target_link_directories(${target_name} PRIVATE "${KB_MSVC_ASAN_RUNTIME_DIR}")
+            target_link_directories(${target_name} PRIVATE "${KB_MSVC_STL_ASAN_RUNTIME_DIR}")
+            if(EXISTS "${KB_MSVC_ASAN_RUNTIME_DIR}/clang_rt.asan_dynamic-x86_64.dll")
+                add_custom_command(TARGET ${target_name} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${KB_MSVC_ASAN_RUNTIME_DIR}/clang_rt.asan_dynamic-x86_64.dll"
+                        "$<TARGET_FILE_DIR:${target_name}>"
+                )
+            endif()
         else()
             message(WARNING "KB_ENABLE_SANITIZERS is not configured for ${CMAKE_CXX_COMPILER_ID}; continuing without sanitizer flags.")
         endif()
