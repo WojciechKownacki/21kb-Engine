@@ -79,6 +79,15 @@ kb_cli scene-list   --project . --scene Assets/Scenes/Main.21kbscene
 kb_cli scene-attach --project . --scene Assets/Scenes/Main.21kbscene --node Player --script /Game/Logic/PlayerController.lua
 ```
 
+## Shipped gameplay samples
+
+`kb_cli init-agent` also provisions four runnable scripts under
+`Assets/Samples/`: `ThirdPersonController.lua`, `TopDownController.lua`,
+`PlatformerController.lua`, and `SimpleShooterController.lua`. They use the
+same Input, Physics, Transform, World, and prefab APIs as ordinary gameplay
+scripts. Add the documented components, attach one script to a player entity,
+and bind its named input actions before entering Play Mode.
+
 ## Verifying your work (always do this before finishing)
 
 ```
@@ -174,6 +183,65 @@ end
 function OnCollisionEnter(self, event)
     Log("projectile hit " .. tostring(event.args.other))
     World.Destroy(self.entity)
+end
+)lua";
+
+// LIB-203: runnable project assets provisioned by the same production path as
+// the existing starter scripts. They rely only on registered Input, Physics,
+// Transform and World APIs, so the editor and CLI load them as ordinary assets.
+constexpr std::string_view kThirdPersonControllerLuaTemplate = R"lua(-- ThirdPersonController.lua
+-- Requires: CharacterController. Input: Move (Axis2D), Jump (Bool).
+local speed = 5.0
+local jumpSpeed = 5.5
+
+function Tick(self, dt)
+    local move = Input.Vector2("Move")
+    Physics.CharacterMove(self.entity, (move.x or 0.0) * speed, (move.y or 0.0) * speed)
+    if Input.Pressed("Jump") then
+        Physics.CharacterJump(self.entity, jumpSpeed)
+    end
+end
+)lua";
+
+constexpr std::string_view kTopDownControllerLuaTemplate = R"lua(-- TopDownController.lua
+-- Requires: Transform. Input: Move (Axis2D).
+-- Screen-plane movement deliberately writes X/Y, not the 3D character backend.
+local speed = 6.0
+
+function Tick(self, dt)
+    local move = Input.Vector2("Move")
+    Transform.Translate(self.entity, (move.x or 0.0) * speed * dt, (move.y or 0.0) * speed * dt, 0.0)
+end
+)lua";
+
+constexpr std::string_view kPlatformerControllerLuaTemplate = R"lua(-- PlatformerController.lua
+-- Requires: CharacterController. Input: Move (Axis2D), Jump (Bool).
+local speed = 5.0
+local jumpSpeed = 6.0
+
+function Tick(self, dt)
+    local move = Input.Vector2("Move")
+    Physics.CharacterMove(self.entity, (move.x or 0.0) * speed, 0.0)
+    if Input.Pressed("Jump") then
+        Physics.CharacterJump(self.entity, jumpSpeed)
+    end
+end
+)lua";
+
+constexpr std::string_view kSimpleShooterControllerLuaTemplate = R"lua(-- SimpleShooterController.lua
+-- Requires: CharacterController and the shipped Projectile.kbprefab.
+-- Input: Move (Axis2D), Fire (Bool).
+local speed = 5.0
+
+function Tick(self, dt)
+    local move = Input.Vector2("Move")
+    Physics.CharacterMove(self.entity, (move.x or 0.0) * speed, (move.y or 0.0) * speed)
+    if Input.Pressed("Fire") then
+        local position = Transform.GetPosition(self.entity)
+        if position ~= nil then
+            World.InstantiatePrefab({ prefab = "/Game/Prefabs/Projectile.kbprefab", x = position.x, y = position.y, z = position.z })
+        end
+    end
 end
 )lua";
 
@@ -281,6 +349,12 @@ ScriptAgentProjectFilesResult ScriptAgentProjectFiles::Write(
         result.error = "could not create directory: " + logicRoot.string();
         return result;
     }
+    const std::filesystem::path sampleRoot = projectRoot / "Assets" / "Samples";
+    std::filesystem::create_directories(sampleRoot, errorCode);
+    if (errorCode) {
+        result.error = "could not create directory: " + sampleRoot.string();
+        return result;
+    }
 
     struct GeneratedFile {
         std::filesystem::path path;
@@ -316,6 +390,10 @@ ScriptAgentProjectFilesResult ScriptAgentProjectFiles::Write(
         // LIB-014: same write-once/isProjectAsset treatment as
         // PlayerController.lua above.
         { logicRoot / "Projectile.lua", std::string{ kProjectileLuaTemplate }, false, true },
+        { sampleRoot / "ThirdPersonController.lua", std::string{ kThirdPersonControllerLuaTemplate }, false, true },
+        { sampleRoot / "TopDownController.lua", std::string{ kTopDownControllerLuaTemplate }, false, true },
+        { sampleRoot / "PlatformerController.lua", std::string{ kPlatformerControllerLuaTemplate }, false, true },
+        { sampleRoot / "SimpleShooterController.lua", std::string{ kSimpleShooterControllerLuaTemplate }, false, true },
     };
 
     for (const GeneratedFile& file : files) {
