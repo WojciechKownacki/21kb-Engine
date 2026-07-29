@@ -3,6 +3,7 @@ add_library(kb_engine STATIC
     include/engine/core/EngineLog.hpp
     include/engine/core/EngineAssertions.hpp
     include/engine/core/DebugDraw.hpp
+    include/engine/core/ProfilerCounters.hpp
     include/engine/audio/AudioClipAsset.hpp
     include/engine/audio/AudioClipAssetLoader.hpp
     include/engine/audio/AudioMixerAsset.hpp
