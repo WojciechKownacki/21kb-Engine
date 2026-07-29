@@ -11,6 +11,7 @@
 #include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/gameplay/GameInstance.hpp"
+#include "engine/core/EngineLog.hpp"
 #include "engine/network/NetworkModel.hpp"
 #include "engine/network/NetworkBudget.hpp"
 #include "engine/network/NetworkObject.hpp"
@@ -879,6 +880,21 @@ ReadScriptValue(
             valid,
             valid ? "capability-gated platform data and actions"
                   : "platform capability contract rejected" };
+    }
+
+    if (*operation == "assert_engine_log") {
+        kb::core::EngineLog log{ 5U };
+        const kb::core::LogRecord record{ .category = "AI", .message = "event",
+            .entity = 1U, .world = 2U, .fields = {{ "state", "alert" }} };
+        const bool valid = log.Trace(record, 1U, 1U) &&
+            log.Debug(record, 2U, 1U) && log.Info(record, 3U, 1U) &&
+            log.Warn(record, 4U, 1U) && log.Error(record, 5U, 1U) &&
+            !log.Warn(record, 4U, 1U) && log.Records().size() == 5U &&
+            log.Records().front().level == kb::core::LogLevel::Trace &&
+            log.Records().back().level == kb::core::LogLevel::Error &&
+            log.Records().front().entity == 1U && log.Records().front().world == 2U;
+        return { valid, valid ? "five log levels with context and rate limiting"
+                              : "engine log contract rejected" };
     }
 
     if (*operation == "assert_user_storage") {
