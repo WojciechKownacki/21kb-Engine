@@ -904,6 +904,32 @@ ReadScriptValue(
                   : "user storage contract rejected" };
     }
 
+    if (*operation == "assert_user_storage_failures") {
+        const std::filesystem::path root =
+            EditorProjectPaths::ProjectRoot() / "UserStorageFailureProbe";
+        std::error_code storageError;
+        std::filesystem::remove_all(root, storageError);
+        kb::platform::UserStorage storage{ root, 8U };
+        const bool sandboxRejected = !storage.Write("../outside", "bad") &&
+            !storage.Write("C:\\outside", "bad");
+        const bool quotaRejected = !storage.Write("save/too-large", "too-large");
+        const bool atomicFailurePreserved = storage.Write("save/atomic", "old") &&
+            std::filesystem::create_directories(root / "save/atomic.tmp", storageError) &&
+            !storage.Write("save/atomic", "new") &&
+            storage.Read("save/atomic") == std::optional<std::string>{ "old" };
+        kb::platform::PlatformServices unavailable{ {},
+            { .language = "pl", .region = "PL", .utcOffsetMinutes = 120 },
+            "UserData" };
+        const bool capabilityRejected = !unavailable.Locale().has_value() &&
+            !unavailable.UserDataPath().has_value() &&
+            !unavailable.SetClipboardText("blocked");
+        std::filesystem::remove_all(root, storageError);
+        const bool valid = sandboxRejected && quotaRejected &&
+            atomicFailurePreserved && capabilityRejected;
+        return { valid, valid ? "sandbox, quota, atomic failure and unavailable capability"
+                              : "platform failure contract rejected" };
+    }
+
     if (*operation == "assert_platform_locale") {
         const kb::platform::PlatformLocale locale{
             .language = "pl", .region = "PL", .utcOffsetMinutes = 120 };
