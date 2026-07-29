@@ -50,6 +50,36 @@ scenario-local aliases.
 | `assert_physics_debug_line_count` | `count`; verifies the exact production wireframe line count currently emitted by the scene |
 | `copy_fixture` | `source` relative to the scenario directory, project-relative `destination`; copies arbitrary binary fixtures |
 | `assert_file` | project-relative `path`; optional `exists`, `min_size`, `contains` |
+| `assert_game_flow` | Exercises the production `GameInstance` checkpoint, pause/resume, valid/invalid scene transitions, win/lose and restart lifecycle against the active project descriptor. |
+| `init_agent_project` | Runs the production `kb_cli init-agent` provisioning path for the active project, including loadable starter and sample gameplay assets. |
+| `assert_first_release_network_model` | Verifies the compiled first-release network contract is offline-only, rejects session opening and exposes no `Network.*` script API. |
+| `assert_network_object_lifecycle` | Verifies authority ownership, duplicate rejection and spawn/despawn lifecycle through the production `NetworkObjects` owner. |
+| `assert_replication_schema` | Verifies a versioned replication wire contract, quantization/dequantization, delta selection and rejection of an incompatible same-version schema. |
+| `assert_rpc_contract` | Verifies reliable/unreliable RPC ownership for client-to-server and server-to-client directions, including spoofing rejection. |
+| `assert_network_variable` | Verifies typed network-variable callbacks, monotonic revisions, stale update rejection and saturated-revision safety without automatic object replication. |
+| `assert_network_prediction` | Verifies input commands, ordered snapshot interpolation, and reconciliation on position, velocity, or acknowledgement divergence. |
+| `assert_network_budget` | Verifies deterministic tick accumulation, invalid-rate rejection, exact queue capacity and packet backpressure. |
+| `assert_network_security` | Verifies server ownership validation, spoofing rejection, payload and rate limits, and declared-length deserialization bounds. |
+| `assert_network_simulation` | Verifies deterministic latency and jitter, loss, reorder, disconnect, and invalid-configuration rejection. |
+| `assert_offline_network_sessions` | Verifies that the offline-only release rejects host/client, late join and reconnect, while despawned RPCs and schema mismatches remain invalid. |
+| `assert_engine_log` | Verifies Trace/Debug/Info/Warn/Error records retain category, entity and world context while duplicate keys are rate-limited per tick. |
+| `assert_structured_log_fields` | Verifies log field values retain numeric and boolean types instead of being preformatted into a message string. |
+| `assert_assertion_policy` | Verifies development/release Assert policy, always-fatal Require, nonfatal SoftFail and retained script stack frames. |
+| `assert_debug_draw` | Verifies debug-only line, ray, box, sphere and text commands retain duration and channel, then expire deterministically. |
+| `assert_profiler` | Verifies debug-only RAII scopes, named counters, timeline events and allocation counters. |
+| `assert_console_command` | Verifies typed command arguments, permissions and help generated from its command manifest. |
+| `assert_runtime_inspector` | Verifies a read-only runtime snapshot contains entity, component, timer, subscription and graph-execution state. |
+| `assert_visual_graph_debugger` | Verifies Visual Graph breakpoint, resume and single-node step state with asset/event/node source location. |
+| `assert_script_hot_reload` | Verifies Lua replacement keeps the last valid program on a failed update and Visual Graph execution state is explicitly released before its lifecycle restart. |
+| `assert_crash_report` | Writes the privacy-safe production crash report after Play Mode, verifies the technical error identifier, live API/asset metadata and recent event categories, and proves a breadcrumb message containing a private path is excluded. |
+| `assert_function_execution_affinity` | Verifies the active Play Mode script host exports an explicit execution-affinity policy for every live callable. |
+| `assert_runtime_snapshot_queue` | Enqueues a time-scale command from a worker, drains it through the production runtime frame boundary, and verifies immutable before/after snapshots. |
+| `assert_platform_capabilities` | Verifies capability-gated locale, user-data path, clipboard, URL and vibration access, including unavailable-service rejection. |
+| `assert_user_storage` | Verifies sandboxed atomic read/write/delete/list, quota enforcement and asynchronous write without arbitrary filesystem paths. |
+| `assert_user_storage_failures` | Verifies sandbox-escape and quota rejection, preservation after a staged atomic-write failure, and unavailable platform capabilities. |
+| `assert_platform_locale` | Verifies the game-facing locale, bounded UTC offset and overflow-safe local-time conversion without system-clock access. |
+| `assert_runtime_settings` | Verifies transactional audio, video and input settings with device-capability validation and revert semantics. |
+| `assert_optional_platform_adapter` | Verifies achievements, cloud save, DLC and user services remain capability-gated and unavailable services fail closed. |
 | `discover_assets` | none |
 | `unload_asset` | asset alias or virtual path; force-loads then unloads the live `AssetManager` entry so a running system must reacquire it |
 | `import_asset` | `source` project-relative path, `destination` virtual folder |

@@ -48,6 +48,12 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.uiDocument.has_value()) {
         sceneComponents.UIDocuments().Set(entity, *components.uiDocument);
     }
+    if (components.navAgent.has_value()) {
+        sceneComponents.NavAgents().Set(entity, *components.navAgent);
+    }
+    if (components.navObstacle.has_value()) {
+        sceneComponents.NavObstacles().Set(entity, *components.navObstacle);
+    }
 }
 
 } // namespace kb::scene

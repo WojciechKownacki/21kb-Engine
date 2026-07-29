@@ -70,6 +70,7 @@ struct ScriptRuntimeHostState final {
     kb::visual::VisualGraphRuntimeBindingRegistry visualGraphRuntimeBindings;
     kb::visual::VisualGraphNativeBindingRegistry visualGraphNativeBindings;
     kb::visual::VisualGraphBehaviourInstanceRegistry visualGraphInstances;
+    kb::visual::VisualGraphDebugSession visualGraphDebugger;
     ScriptRuntime runtime;
     ScriptApiNameRegistry apiNames;
     std::unique_ptr<NativeScriptPluginManager> nativePlugins;
@@ -143,7 +144,9 @@ void ScriptRuntimeHostSceneSystem::CollectDiagnostics() {
         // fix, instead of a bare, un-actionable message.
         push("behaviour error: " + diagnostic.message
             + " (entity #" + std::to_string(diagnostic.entity.Id())
-            + ", script asset #" + std::to_string(diagnostic.assetId.value) + ")");
+            + ", script asset #" + std::to_string(diagnostic.assetId.value) + ")"
+            + (diagnostic.stackTrace.empty() ? std::string{}
+                : "\n" + diagnostic.stackTrace));
     }
     for (const ScriptRuntimeAssetPrepareDiagnostic& diagnostic : system_.LastPrepareResult().diagnostics) {
         push("behaviour could not load/compile: " + diagnostic.message
@@ -356,6 +359,14 @@ const kb::visual::VisualGraphBehaviourInstanceRegistry& ScriptRuntimeHost::Visua
     return state_->visualGraphInstances;
 }
 
+kb::visual::VisualGraphDebugSession& ScriptRuntimeHost::VisualGraphDebugger() noexcept {
+    return state_->visualGraphDebugger;
+}
+
+const kb::visual::VisualGraphDebugSession& ScriptRuntimeHost::VisualGraphDebugger() const noexcept {
+    return state_->visualGraphDebugger;
+}
+
 void ScriptRuntimeHost::RegisterDefaultBackends() {
     auto nativeBackend = std::make_unique<NativeScriptBackend>();
     state_->nativeBackend = nativeBackend.get();
@@ -392,7 +403,7 @@ void ScriptRuntimeHost::RegisterDefaultBackends() {
         AddDiagnostic("VisualGraph script function native bindings could not be registered");
     }
 
-    auto visualGraphBackend = std::make_unique<VisualGraphScriptBackend>(state_->visualGraphs, state_->visualGraphRuntimeBindings, state_->visualGraphInstances);
+    auto visualGraphBackend = std::make_unique<VisualGraphScriptBackend>(state_->visualGraphs, state_->visualGraphRuntimeBindings, state_->visualGraphInstances, &state_->visualGraphDebugger);
     state_->visualGraphBackend = visualGraphBackend.get();
     if (!state_->runtime.RegisterBackend(std::move(visualGraphBackend))) {
         AddDiagnostic("VisualGraph script backend could not be registered");

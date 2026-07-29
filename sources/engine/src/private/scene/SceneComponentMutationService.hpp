@@ -11,6 +11,7 @@
 #include "engine/scene/JointComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/Navigation.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TagsComponent.hpp"
@@ -96,6 +97,14 @@ public:
     static void SetUIDocument(Scene& scene, SceneEntity entity, const UIDocumentComponent& document);
     static void RemoveUIDocument(Scene& scene, SceneEntity entity) noexcept;
     static void MarkUIDocumentModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static NavAgent* TryGetNavAgent(Scene& scene, SceneEntity entity) noexcept;
+    static void SetNavAgent(Scene& scene, SceneEntity entity, const NavAgent& component);
+    static void RemoveNavAgent(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkNavAgentModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static NavObstacle* TryGetNavObstacle(Scene& scene, SceneEntity entity) noexcept;
+    static void SetNavObstacle(Scene& scene, SceneEntity entity, const NavObstacle& component);
+    static void RemoveNavObstacle(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkNavObstacleModified(Scene& scene, SceneEntity entity) noexcept;
 };
 
 } // namespace kb::scene

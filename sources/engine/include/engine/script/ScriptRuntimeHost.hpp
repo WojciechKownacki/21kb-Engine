@@ -94,6 +94,8 @@ public:
     [[nodiscard]] const kb::visual::VisualGraphNativeBindingRegistry& VisualGraphNativeBindings() const noexcept;
     [[nodiscard]] kb::visual::VisualGraphBehaviourInstanceRegistry& VisualGraphInstances() noexcept;
     [[nodiscard]] const kb::visual::VisualGraphBehaviourInstanceRegistry& VisualGraphInstances() const noexcept;
+    [[nodiscard]] kb::visual::VisualGraphDebugSession& VisualGraphDebugger() noexcept;
+    [[nodiscard]] const kb::visual::VisualGraphDebugSession& VisualGraphDebugger() const noexcept;
 
 private:
     void RegisterDefaultBackends();

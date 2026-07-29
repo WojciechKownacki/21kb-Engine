@@ -141,6 +141,7 @@ void PucLuaScriptRuntime::Clear() noexcept {
     exposedVariables_.clear();
     instanceVariables_.clear();
     coroutineRefs_.clear();
+    eventSubscriptionHandles_.clear();
     lastDebugPause_ = {};
     debugStepMode_ = DebugStepMode::Run;
 }
@@ -449,6 +450,9 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
         if (context.Lifecycle() == ScriptLifecycleEvent::Destroyed) {
             instanceVariables_.erase(instanceKey);
             ClearCoroutines(instanceKey);
+            if (ScriptEventBus* events = context.Events(); events != nullptr) {
+                ClearEventSubscriptions(instanceKey, *events);
+            }
         }
     };
     const int environmentRef = FindScriptEnvironment(assetId);
@@ -616,11 +620,14 @@ ScriptBackendExecutionResult PucLuaScriptRuntime::ExecuteFunction(
         luaL_unref(state_, LUA_REGISTRYINDEX, coroutineRef);
     }
     if (status != LUA_OK) {
+        const std::size_t traceOffset = coroutineError.find("\nstack traceback:");
         result.diagnostics.push_back(ScriptDiagnostic{
             .entity = context.Self(),
             .assetId = assetId,
             .backend = behaviour.backend,
-            .message = coroutineError,
+            .message = coroutineError.substr(0U, traceOffset),
+            .stackTrace = traceOffset == std::string::npos ? std::string{}
+                : coroutineError.substr(traceOffset + 1U),
         });
         eraseDestroyedInstanceState();
         return result;
@@ -661,6 +668,50 @@ void PucLuaScriptRuntime::ClearCoroutinesForAsset(kb::assets::AssetId assetId) n
     for (const InstanceKey& key : keys) {
         ClearCoroutines(key);
     }
+}
+
+void PucLuaScriptRuntime::TrackEventSubscription(const InstanceKey& instanceKey, EventSubscriptionHandle handle) {
+    if (handle != kInvalidEventSubscriptionHandle) {
+        eventSubscriptionHandles_[instanceKey].push_back(handle);
+    }
+}
+
+void PucLuaScriptRuntime::TrackEventSubscription(
+    kb::scene::SceneEntity entity,
+    kb::assets::AssetId assetId,
+    EventSubscriptionHandle handle) {
+    TrackEventSubscription(InstanceKey{
+        .entityId = entity.Id(),
+        .assetId = assetId.value,
+    }, handle);
+}
+
+void PucLuaScriptRuntime::ClearEventSubscriptions(const InstanceKey& instanceKey, ScriptEventBus& events) noexcept {
+    const auto iterator = eventSubscriptionHandles_.find(instanceKey);
+    if (iterator == eventSubscriptionHandles_.end()) {
+        return;
+    }
+    for (const EventSubscriptionHandle handle : iterator->second) {
+        static_cast<void>(events.Unsubscribe(handle));
+    }
+    eventSubscriptionHandles_.erase(iterator);
+}
+
+void PucLuaScriptRuntime::ClearEventSubscriptionsForAsset(kb::assets::AssetId assetId, ScriptEventBus& events) noexcept {
+    std::vector<InstanceKey> keys;
+    for (const auto& [key, handles] : eventSubscriptionHandles_) {
+        static_cast<void>(handles);
+        if (key.assetId == assetId.value) {
+            keys.push_back(key);
+        }
+    }
+    for (const InstanceKey& key : keys) {
+        ClearEventSubscriptions(key, events);
+    }
+}
+
+void PucLuaScriptRuntime::ResetAssetForHotReload(kb::assets::AssetId assetId, ScriptEventBus& events) noexcept {
+    ClearEventSubscriptionsForAsset(assetId, events);
 }
 
 } // namespace kb::script

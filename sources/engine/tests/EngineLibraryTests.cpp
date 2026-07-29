@@ -55,6 +55,7 @@
 #include "engine/network/NetworkSimulation.hpp"
 #include "engine/network/NetworkSession.hpp"
 #include "engine/platform/PlatformCapabilities.hpp"
+#include "engine/platform/PlatformServices.hpp"
 #include "engine/platform/UserStorage.hpp"
 #include "engine/platform/SettingsTransaction.hpp"
 #include "engine/platform/PlatformAdapters.hpp"
@@ -95,6 +96,7 @@
 #include "engine/visual/VisualGraphValidator.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
+#include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptEvent.hpp"
 #include "engine/script/ScriptEventBus.hpp"
 #include "engine/script/ScriptAssetsApi.hpp"
@@ -126,6 +128,7 @@ namespace {
 
 void RecordNetworkVariableChange(void* context, std::int32_t previous, std::int32_t current) noexcept { *static_cast<std::int32_t*>(context) = current - previous; }
 class TestPlatformAdapter final : public kb::platform::IPlatformAdapter { public: [[nodiscard]] bool IsAvailable(kb::platform::OptionalPlatformService service) const noexcept override{return service==kb::platform::OptionalPlatformService::Achievements;} [[nodiscard]] bool UnlockAchievement(std::string_view id) override{return IsAvailable(kb::platform::OptionalPlatformService::Achievements)&&!id.empty();} };
+struct PlatformServiceProbe { bool clipboard = false; bool url = false; bool vibration = false; [[nodiscard]] static bool WriteClipboard(void* context, std::string_view text) noexcept { auto& probe=*static_cast<PlatformServiceProbe*>(context); probe.clipboard=text=="copied"; return probe.clipboard; } [[nodiscard]] static bool OpenUrl(void* context, std::string_view url) noexcept { auto& probe=*static_cast<PlatformServiceProbe*>(context); probe.url=url=="https://21kb.dev"; return probe.url; } [[nodiscard]] static bool SetVibration(void* context, float low, float high) noexcept { auto& probe=*static_cast<PlatformServiceProbe*>(context); probe.vibration=low==0.25F&&high==0.75F; return probe.vibration; } };
 
 int g_moduleInstallSkipCallCount = 0;
 bool RecordModuleInstallCall(kb::script::ScriptRuntimeHost&) {
@@ -357,6 +360,26 @@ void RunModuleInstallStartupReportTest() {
 // the 2026-07-17 audit found unfulfilled: recording pins that are never
 // cross-checked against the registry would be no better than prose.
 void RunFunctionDescCatalogResolvesTest() {
+    kb::script::ScriptFunctionRegistry forbiddenRegistry;
+    bool forbiddenCallbackRan = false;
+    kb::tests::Require(forbiddenRegistry.Register(kb::script::ScriptFunctionDesc{
+            .signature = {
+                .name = "Tests.ForbiddenInPhase",
+                .description = "Rejects unavailable execution contexts.",
+                .executionAffinity = kb::core::ExecutionAffinity::Forbidden,
+            },
+            .callback = [&forbiddenCallbackRan](
+                const kb::script::ScriptFunctionCallContext&,
+                std::span<const kb::script::ScriptFunctionArgument>) {
+                forbiddenCallbackRan = true;
+                return kb::script::ScriptFunctionCallResult{ .executed = true };
+            },
+        }), "Engine21kbLibrary forbidden execution-context fixture failed to register");
+    const kb::script::ScriptFunctionCallResult forbiddenResult =
+        forbiddenRegistry.Call("Tests.ForbiddenInPhase", {}, {});
+    kb::tests::Require(!forbiddenResult.Succeeded() && !forbiddenCallbackRan,
+        "Engine21kbLibrary forbidden-in-phase function must be rejected before its callback runs");
+
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };
     kb::tests::Require(host.Succeeded(), "Engine21kbLibrary function desc test host setup failed");
@@ -2913,11 +2936,10 @@ void RunComponentInspectorDescCatalogTest() {
     // 84 to 86.
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
-    // 86 to 92.
-    // LIB-141: Light grew five more fields (areaWidth/areaHeight - a pre-existing reflection
-    // gap closed here - plus useColorTemperature/colorTemperatureKelvin/layerMask), so the
-    // total climbs from 92 to 97.
-    kb::tests::Require(fieldsChecked == 97U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (97) across all 10 components");
+    // LIB-183 adds 11 NavAgent fields and 9 NavObstacle fields to the prior
+    // 97-field contract, bringing the library/editor scripting surface to
+    // 117 described fields across 12 components.
+    kb::tests::Require(fieldsChecked == 117U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (117) across all 12 components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
@@ -3684,6 +3706,23 @@ void RunCatalogFunctionFrontendAndDocumentationComplianceTest() {
     kb::script::ScriptRuntimeHost host{ scene };
     kb::tests::Require(host.Succeeded(), "Engine21kbLibrary catalog binding test host setup failed");
     const kb::script::ScriptApiCatalog catalog = kb::script::ScriptApiCatalog::Build(host);
+
+    kb::tests::Require(!host.Functions().Functions().empty(),
+        "Engine21kbLibrary production function registry must not be empty");
+    kb::tests::Require(
+        std::ranges::all_of(host.Functions().Functions(),
+            [](const kb::script::ScriptFunctionDesc& function) {
+                return function.signature.executionAffinity ==
+                    kb::core::ExecutionAffinity::MainThread;
+            }),
+        "Engine21kbLibrary every current production function must explicitly be MainThread until a worker or render command path exists");
+    kb::tests::Require(
+        std::ranges::all_of(catalog.functions,
+            [](const kb::script::ScriptApiCatalogFunction& function) {
+                return function.executionAffinity ==
+                    kb::core::ExecutionAffinity::MainThread;
+            }),
+        "Engine21kbLibrary exported catalog must retain every function's execution affinity");
     kb::tests::Require(!catalog.functions.empty(), "Engine21kbLibrary catalog binding test fixture must have at least one function");
     const std::string markdown = kb::script::ScriptApiExport::ToMarkdown(catalog);
 
@@ -4247,8 +4286,31 @@ void RunNavigationFoundationContractTest() {
     const kb::scene::NavAgent agent{};
     const kb::scene::NavObstacle obstacle{};
     kb::tests::Require(mesh.agentRadius > 0.0F && agent.radius > 0.0F && agent.maxSpeed > 0.0F &&
+            agent.velocity.x == 0.0F && agent.velocity.y == 0.0F && agent.velocity.z == 0.0F &&
+            agent.remainingDistance == 0.0F && agent.pathStatus == kb::scene::NavPathStatus::Invalid &&
             obstacle.area == kb::scene::kDefaultNavArea && obstacle.carve,
         "Navigation foundation defaults must define a usable walkable mesh, agent and obstacle");
+
+    kb::scene::Scene authoredNavigationScene;
+    const kb::scene::SceneObject authoredAgent = authoredNavigationScene.Entities().CreateObject({ .name = "NavigationAgent" });
+    const kb::scene::SceneObject authoredObstacle = authoredNavigationScene.Entities().CreateObject({ .name = "NavigationObstacle" });
+    kb::scene::NavObstacle authoredObstacleValue;
+    authoredObstacleValue.radius = 1.25F;
+    authoredObstacleValue.size = { 3.0F, 1.0F, 1.0F };
+    authoredNavigationScene.Components().NavAgents().Set(
+        authoredAgent.Entity(),
+        kb::scene::NavAgent{ .radius = 0.75F, .maxSpeed = 5.0F, .areaMask = 9U });
+    authoredNavigationScene.Components().NavObstacles().Set(
+        authoredObstacle.Entity(),
+        authoredObstacleValue);
+    const kb::scene::Scene& queriedNavigationScene = authoredNavigationScene;
+    const kb::scene::NavAgent* authoredAgentComponent = queriedNavigationScene.Components().NavAgents().TryGet(authoredAgent.Entity());
+    const kb::scene::NavObstacle* authoredObstacleComponent = queriedNavigationScene.Components().NavObstacles().TryGet(authoredObstacle.Entity());
+    kb::tests::Require(authoredAgentComponent != nullptr && authoredAgentComponent->radius == 0.75F &&
+            authoredAgentComponent->maxSpeed == 5.0F && authoredAgentComponent->areaMask == 9U &&
+            authoredObstacleComponent != nullptr && authoredObstacleComponent->radius == 1.25F &&
+            authoredObstacleComponent->size.x == 3.0F,
+        "Navigation ECS components must be readable through the const scene query facade");
 
     kb::scene::NavMesh graph;
     graph.nodes = {
@@ -4304,9 +4366,31 @@ void RunNavigationFoundationContractTest() {
         steeringAgent, {}, { 0.0F, 7.0F, 0.0F }, 0.25F);
     kb::tests::Require(!steering.arrived && steering.desiredVelocity.x == 0.5F && steering.desiredVelocity.y == 0.0F,
         "Navigation steering must accelerate horizontally without injecting vertical physics velocity");
+    const std::array avoidanceNeighbours{
+        kb::scene::NavAvoidanceNeighbor{ .position = { 0.5F, 20.0F, 0.0F }, .radius = 0.5F },
+        kb::scene::NavAvoidanceNeighbor{ .position = { 8.0F, 0.0F, 0.0F }, .radius = 0.5F },
+    };
+    const kb::math::Vec3 avoidedVelocity = kb::scene::ComputeNavAvoidance(
+        steeringAgent, {}, steering.desiredVelocity, avoidanceNeighbours);
+    kb::tests::Require(avoidedVelocity.x < steering.desiredVelocity.x && avoidedVelocity.y == 0.0F &&
+            std::sqrt(avoidedVelocity.x * avoidedVelocity.x + avoidedVelocity.z * avoidedVelocity.z) <= steeringAgent.maxSpeed,
+        "Navigation avoidance must apply deterministic horizontal separation without exceeding agent speed");
+    const std::array coincidentNeighbours{
+        kb::scene::NavAvoidanceNeighbor{ .position = {}, .radius = 0.5F },
+    };
+    const kb::math::Vec3 coincidentVelocity = kb::scene::ComputeNavAvoidance(
+        steeringAgent, {}, steering.desiredVelocity, coincidentNeighbours);
+    kb::tests::Require(coincidentVelocity.x < 0.0F && coincidentVelocity.y == 0.0F,
+        "Navigation avoidance must provide deterministic separation for coincident agents");
     steeringAgent.destination = { 0.25F, 0.0F, 0.0F };
     kb::tests::Require(kb::scene::ComputeNavSteering(steeringAgent, {}, {}, 0.25F).arrived,
         "Navigation steering did not stop inside the agent stopping distance");
+    steeringAgent.velocity = { 1.0F, 0.0F, 0.0F };
+    steeringAgent.remainingDistance = 4.5F;
+    steeringAgent.pathStatus = kb::scene::NavPathStatus::Pending;
+    kb::tests::Require(steeringAgent.destination.x == 0.25F && steeringAgent.velocity.x == 1.0F &&
+            steeringAgent.remainingDistance == 4.5F && steeringAgent.pathStatus == kb::scene::NavPathStatus::Pending,
+        "Navigation agent runtime state must expose destination, velocity, remaining distance and path status without moving physics state");
     kb::scene::PerceptionFilter perception{ .observerTeam = 1U, .maxResults = 8U, .range = 12.0F };
     kb::tests::Require(perception.IsValid() && !perception.AcceptsTeam(1U) && perception.AcceptsTeam(2U),
         "Perception filter did not bound results or exclude the observer team");
@@ -4353,6 +4437,21 @@ void RunNavigationFoundationContractTest() {
         observer, perceptionTargets, perceptionStimuli, { .test = lineOfSight }, perceptionEvents);
     kb::tests::Require(limitedPerceptionResult.emitted == 2U && limitedPerceptionResult.limitReached && perceptionEvents.Count() == 2U,
         "Perception evaluation did not enforce the configured event bound");
+    observer.filter.useGameplayIdentityFilter = true;
+    observer.filter.observerIdentity = { .team = 1U, .layers = 0x2U };
+    observer.filter.gameplayIdentityFilter = { .layerMask = 0x4U, .relation = kb::gameplay::GameplayRelation::Hostile };
+    const std::array identityTargets{
+        kb::scene::PerceptionTarget{ .entity = kb::scene::SceneEntity{ 40U }, .position = { 0.0F, 0.0F, 3.0F }, .team = 2U,
+            .identity = { .team = 2U, .layers = 0x4U }, .hasGameplayIdentity = true },
+        kb::scene::PerceptionTarget{ .entity = kb::scene::SceneEntity{ 41U }, .position = { 0.0F, 0.0F, 3.0F }, .team = 2U,
+            .identity = { .team = 2U, .layers = 0x2U }, .hasGameplayIdentity = true },
+    };
+    observer.filter.maxResults = 8U;
+    const kb::scene::PerceptionEvaluationResult identityPerceptionResult = kb::scene::EvaluatePerception(
+        observer, identityTargets, {}, { .test = lineOfSight }, perceptionEvents);
+    kb::tests::Require(identityPerceptionResult.emitted == 2U && perceptionEvents.GetAt(0U)->subject.Id() == 40U &&
+            perceptionEvents.GetAt(1U)->subject.Id() == 40U,
+        "Perception did not apply the shared gameplay identity filter before emitting AI events");
 }
 
 void RunNonAllocTransformReadTest() {
@@ -4722,51 +4821,81 @@ void RunGameInstanceLifetimeTest() {
     kb::tests::Require(kb::core::MayCall(kb::core::ExecutionAffinity::MainThread,{kb::core::ExecutionAffinity::MainThread})&&kb::core::MayCall(kb::core::ExecutionAffinity::WorkerSafe,{kb::core::ExecutionAffinity::WorkerSafe})&&!kb::core::MayCall(kb::core::ExecutionAffinity::MainThread,{kb::core::ExecutionAffinity::Forbidden}),"Execution affinity contract did not fail closed");
     const auto crash=kb::core::MakeCrashReport(1U,{7U},"failure",{"a","b","c"},2U);kb::tests::Require(crash.apiVersion==1U&&crash.assetIds==std::vector<std::uint64_t>{7U}&&crash.recentEvents==std::vector<std::string>({"b","c"}),"Crash report did not bound diagnostic events");
     kb::core::RuntimeInspector inspector; inspector.Publish({.entity=4U,.components=2U,.timers=1U}); kb::tests::Require(inspector.Snapshot().entity==4U&&inspector.Snapshot().timers==1U,"Runtime inspector did not retain read-only snapshot");
-    const kb::core::ConsoleCommand command{.name="world.pause",.help="Pause world",.argumentTypes={"bool"},.permission=kb::core::ConsolePermission::Developer};kb::tests::Require(kb::core::CanExecute(command,kb::core::ConsolePermission::Developer,1U)&&!kb::core::CanExecute(command,kb::core::ConsolePermission::User,1U)&&!kb::core::CanExecute(command,kb::core::ConsolePermission::Admin,0U),"Console command did not validate permission and typed arity");
+    const kb::core::ConsoleCommand command{.name="world.pause",.help="Pause world",.arguments={{"paused",kb::core::ConsoleArgumentType::Bool},{"frames",kb::core::ConsoleArgumentType::Integer}},.permission=kb::core::ConsolePermission::Developer};kb::tests::Require(kb::core::CanExecute(command,kb::core::ConsolePermission::Developer,{"true","2"})&&!kb::core::CanExecute(command,kb::core::ConsolePermission::User,{"true","2"})&&!kb::core::CanExecute(command,kb::core::ConsolePermission::Admin,{"yes","2"})&&kb::core::HelpFromManifest(command)=="world.pause <paused:bool> <frames:int> — Pause world","Console command did not validate typed arguments, permissions or manifest help");
     kb::core::ProfilerCounters profiler;profiler.Scope("tick");profiler.Timeline("step");profiler.Allocation();kb::tests::Require(profiler.scopes==1U&&profiler.timelineEvents==1U&&profiler.allocations==1U,"Profiler counters did not record scope, timeline, allocation");
-    kb::core::DebugDrawBuffer draw{1U}; kb::tests::Require(draw.Add({.kind=kb::core::DebugDrawKind::Line,.duration=1.0F,.channel=3U})&&!draw.Add({}) ,"Debug draw buffer did not enforce bounded commands");
-    kb::tests::Require(kb::core::EvaluateAssertion(false,kb::core::AssertionPolicy::Development,"x").fatal&&!kb::core::EvaluateAssertion(false,kb::core::AssertionPolicy::Release,"x").fatal, "Assertion policy did not distinguish development and release failures");
-    kb::core::EngineLog engineLog{ 2U }; kb::tests::Require(engineLog.Write({ .level=kb::core::LogLevel::Warn, .category="AI", .message="event", .entity=1U, .world=2U, .fields={{"state","alert"}} }, 5U, 1U) && !engineLog.Write({}, 5U, 1U) && engineLog.Records().front().entity==1U && engineLog.Records().front().fields.front().key=="state", "Engine log did not retain structured context or rate limit duplicate key");
-    constexpr kb::platform::SafeDateTime date{ .unixSeconds = 1000 }; const kb::platform::PlatformLocale locale{ .language="pl", .region="PL", .utcOffsetMinutes=120 }; kb::tests::Require(locale.IsValid()&&date.ToLocalSeconds(locale)==8200, "Platform locale and safe date-time contract is invalid");
-    TestPlatformAdapter adapter; kb::tests::Require(adapter.IsAvailable(kb::platform::OptionalPlatformService::Achievements)&&!adapter.IsAvailable(kb::platform::OptionalPlatformService::CloudSave)&&adapter.UnlockAchievement("first"), "Optional platform adapter did not expose capability availability");
-    kb::platform::SettingsTransaction settings{ kb::platform::RuntimeSettings{} }; settings.Pending().vibration=true; kb::tests::Require(!settings.Apply({}) && (settings.Revert(),!settings.Pending().vibration) && (settings.Pending().masterVolume=0.5F,settings.Apply({})) && settings.Current().masterVolume==0.5F, "Settings transaction did not validate capability and revert pending state");
+    kb::core::DebugDrawBuffer draw{5U}; kb::tests::Require(draw.DrawLine({},{1.0F,0.0F,0.0F},1.0F,3U)&&draw.DrawRay({},{0.0F,1.0F,0.0F},1.0F,3U)&&draw.DrawBox({},{1.0F,1.0F,1.0F},1.0F,3U)&&draw.DrawSphere({},1.0F,1.0F,3U)&&draw.DrawText({},"probe",1.0F,3U)&&draw.Commands().size()==5U&&draw.Commands().back().text=="probe"&&!draw.DrawLine({},{},1.0F,3U),"Debug draw buffer did not retain bounded commands"); draw.Advance(1.0F); kb::tests::Require(draw.Commands().empty(),"Debug draw duration did not expire commands");
+    kb::tests::Require(kb::core::Assert(false,kb::core::AssertionPolicy::Development,"x",{"lua:1"}).fatal&&!kb::core::Assert(false,kb::core::AssertionPolicy::Release,"x").fatal&&kb::core::Require(false,kb::core::AssertionPolicy::Release,"x").fatal&&!kb::core::SoftFail(false,kb::core::AssertionPolicy::Development,"x").fatal&&kb::core::Assert(false,kb::core::AssertionPolicy::Development,"x",{"lua:1"}).scriptStackTrace==std::vector<std::string>{"lua:1"}, "Assertion policy did not distinguish assert, require, soft-fail, or script stack traces");
+    kb::core::EngineLog engineLog{ 5U }; const kb::core::LogRecord logRecord{ .category="AI", .message="event", .entity=1U, .world=2U, .fields={{"state",std::string{"alert"}},{"attempt",std::int64_t{3}},{"visible",true}} }; kb::tests::Require(engineLog.Trace(logRecord, 1U, 1U) && engineLog.Debug(logRecord, 2U, 1U) && engineLog.Info(logRecord, 3U, 1U) && engineLog.Warn(logRecord, 4U, 1U) && engineLog.Error(logRecord, 5U, 1U) && !engineLog.Warn(logRecord, 4U, 1U) && engineLog.Records().size()==5U && engineLog.Records().front().level==kb::core::LogLevel::Trace && engineLog.Records().back().level==kb::core::LogLevel::Error && engineLog.Records().front().entity==1U && engineLog.Records().front().world==2U && engineLog.Records().front().fields.front().key=="state" && std::get<std::int64_t>(engineLog.Records().front().fields[1U].value)==3 && std::get<bool>(engineLog.Records().front().fields[2U].value) && !kb::core::EngineLog{0U}.Info(logRecord,1U,1U), "Engine log did not retain levels, typed structured context or rate limit duplicate keys");
+    constexpr kb::platform::SafeDateTime date{ .unixSeconds = 1000 }; const kb::platform::PlatformLocale locale{ .language="pl", .region="PL", .utcOffsetMinutes=120 }; const kb::platform::PlatformLocale invalidLocale{ .language="p1", .region="P1", .utcOffsetMinutes=900 }; constexpr kb::platform::SafeDateTime maximumDate{ .unixSeconds=std::numeric_limits<std::int64_t>::max() }; kb::tests::Require(locale.IsValid()&&date.ToLocalSeconds(locale)==std::optional<std::int64_t>{8200}&&!invalidLocale.IsValid()&&!date.ToLocalSeconds(invalidLocale).has_value()&&!maximumDate.ToLocalSeconds(locale).has_value(), "Platform locale and safe date-time contract is invalid");
+    TestPlatformAdapter adapter; kb::tests::Require(adapter.IsAvailable(kb::platform::OptionalPlatformService::Achievements)&&!adapter.IsAvailable(kb::platform::OptionalPlatformService::CloudSave)&&!adapter.IsAvailable(kb::platform::OptionalPlatformService::Dlc)&&!adapter.IsAvailable(kb::platform::OptionalPlatformService::User)&&adapter.UnlockAchievement("first")&&!adapter.UnlockAchievement(""), "Optional platform adapter did not expose capability availability");
+    kb::platform::SettingsTransaction settings{ kb::platform::RuntimeSettings{} }; settings.Pending().vibration=true; kb::tests::Require(!settings.Apply({}) && (settings.Revert(),!settings.Pending().vibration) && (settings.Pending().masterVolume=0.5F,settings.Pending().videoWidth=1920U,settings.Pending().videoHeight=1080U,settings.Pending().fullscreen=true,settings.Pending().mouseSensitivity=2.0F,settings.Apply({ .flags=static_cast<std::uint32_t>(kb::platform::PlatformCapability::Vibration) }, { .maximumVideoWidth=1920U,.maximumVideoHeight=1080U,.fullscreen=true })) && settings.Current().masterVolume==0.5F && settings.Current().videoWidth==1920U && settings.Current().fullscreen && (settings.Pending().videoWidth=2560U,!settings.Apply({}, { .maximumVideoWidth=1920U,.maximumVideoHeight=1080U })) && (settings.Revert(),settings.Pending().videoWidth==1920U) && (settings.Pending().mouseSensitivity=0.0F,!settings.Apply({})) && (settings.Revert(),settings.Pending().mouseSensitivity==2.0F), "Settings transaction did not validate audio, video, input and device capabilities");
     const std::filesystem::path storageRoot = std::filesystem::temp_directory_path() / "21kb-user-storage-test";
     std::error_code storageError;
     std::filesystem::remove_all(storageRoot, storageError);
     kb::platform::UserStorage storage{ storageRoot, 8U };
-    kb::tests::Require(storage.Write("save/a", "data") && storage.Read("save/a") == std::optional<std::string>{ "data" } && storage.WriteAsync("save/b", "ok").get() && storage.List().size() == 2U && storage.Delete("save/a") && !storage.Write("save/c", "too-large") && storage.Read("save/b") == std::optional<std::string>{ "ok" }, "User storage did not enforce atomic sandboxed quota operations");
+    kb::tests::Require(storage.Write("save/a", "data") && storage.Read("save/a") == std::optional<std::string>{ "data" } && storage.Write("save/a", "new") && storage.Read("save/a") == std::optional<std::string>{ "new" } && storage.WriteAsync("save/b", "ok").get() && storage.List() == std::vector<std::string>{ "save/a", "save/b" } && storage.Delete("save/a") && !storage.Write("../save/c", "bad") && !storage.Delete("C:\\outside") && !storage.Write("save/c", "too-large") && storage.Read("save/b") == std::optional<std::string>{ "ok" }, "User storage did not enforce atomic sandboxed quota operations");
+    kb::tests::Require(storage.Write("save/atomic", "old") && std::filesystem::create_directories(storageRoot / "save/atomic.tmp", storageError) && !storage.Write("save/atomic", "new") && storage.Read("save/atomic") == std::optional<std::string>{ "old" }, "Atomic user storage write failure modified the prior value");
     std::filesystem::remove_all(storageRoot, storageError);
     kb::tests::Require(kb::platform::IsSandboxStorageKey("saves/profile.bin") && !kb::platform::IsSandboxStorageKey("../outside") && !kb::platform::IsSandboxStorageKey("C:\\outside") && !kb::platform::IsSandboxStorageKey("/outside"), "User storage sandbox accepted a filesystem escape");
     constexpr kb::platform::PlatformCapabilities platformCapabilities{ .flags = static_cast<std::uint32_t>(kb::platform::PlatformCapability::Locale) | static_cast<std::uint32_t>(kb::platform::PlatformCapability::UserDataPath) };
     static_assert(platformCapabilities.Has(kb::platform::PlatformCapability::Locale));
     kb::tests::Require(platformCapabilities.Has(kb::platform::PlatformCapability::UserDataPath) && !platformCapabilities.Has(kb::platform::PlatformCapability::Clipboard), "Platform capabilities did not fail closed for unavailable services");
+    PlatformServiceProbe platformProbe;
+    constexpr kb::platform::PlatformCapabilities fullPlatformCapabilities{ .flags = static_cast<std::uint32_t>(kb::platform::PlatformCapability::Locale) | static_cast<std::uint32_t>(kb::platform::PlatformCapability::UserDataPath) | static_cast<std::uint32_t>(kb::platform::PlatformCapability::Clipboard) | static_cast<std::uint32_t>(kb::platform::PlatformCapability::OpenUrl) | static_cast<std::uint32_t>(kb::platform::PlatformCapability::Vibration) };
+    kb::platform::PlatformServices platformServices{ fullPlatformCapabilities, locale, "UserData", { .clipboard = &PlatformServiceProbe::WriteClipboard, .openUrl = &PlatformServiceProbe::OpenUrl, .vibration = &PlatformServiceProbe::SetVibration, .context = &platformProbe } };
+    kb::platform::PlatformServices restrictedPlatformServices{ {}, locale, "UserData" };
+    const std::optional<kb::platform::PlatformLocale> exposedLocale = platformServices.Locale();
+    kb::tests::Require(exposedLocale.has_value() && exposedLocale->language == "pl" && exposedLocale->region == "PL" && platformServices.UserDataPath() == std::optional<std::filesystem::path>{ "UserData" } && platformServices.SetClipboardText("copied") && platformServices.OpenUrl("https://21kb.dev") && !platformServices.OpenUrl("file:///outside") && platformServices.SetVibration(0.25F, 0.75F) && platformProbe.clipboard && platformProbe.url && platformProbe.vibration && !restrictedPlatformServices.Locale().has_value() && !restrictedPlatformServices.UserDataPath().has_value() && !restrictedPlatformServices.SetClipboardText("blocked") && !restrictedPlatformServices.OpenUrl("https://21kb.dev") && !restrictedPlatformServices.SetVibration(0.25F, 0.75F), "Platform services did not enforce capability boundaries");
     const kb::network::ReplicationSchema sessionSchema{ .version = 1U, .fields = { { .id = 1U, .name = "state", .type = kb::network::ReplicatedFieldType::Boolean } } };
     const kb::network::ReplicationSchema mismatchSchema{ .version = 2U, .fields = { { .id = 1U, .name = "state", .type = kb::network::ReplicatedFieldType::Boolean } } };
-    kb::tests::Require(!kb::network::CanOpenNetworkSession(kb::network::kFirstReleaseNetwork) && kb::network::AreSchemasCompatible(sessionSchema, sessionSchema) && !kb::network::AreSchemasCompatible(sessionSchema, mismatchSchema), "Network session lifecycle did not fail closed for offline mode or schema mismatch");
+    const kb::network::ReplicationSchema incompatibleWireSchema{ .version = 1U, .fields = { { .id = 1U, .name = "state", .type = kb::network::ReplicatedFieldType::UnsignedInteger } } };
+    kb::tests::Require(!kb::network::CanOpenNetworkSession(kb::network::kFirstReleaseNetwork) && kb::network::AreSchemasCompatible(sessionSchema, sessionSchema) && !kb::network::AreSchemasCompatible(sessionSchema, mismatchSchema) && !kb::network::AreSchemasCompatible(sessionSchema, incompatibleWireSchema), "Network session lifecycle did not fail closed for offline mode or incompatible schema wire contract");
+    kb::network::NetworkObjects sessionObjects;
+    kb::tests::Require(!kb::network::CanOpenNetworkSession(kb::network::kFirstReleaseNetwork) && sessionObjects.Spawn({ .id = 71U, .owner = 81U, .role = kb::network::NetworkRole::Authority }) && sessionObjects.Despawn(71U) && !kb::network::ValidateRpc(sessionObjects, { .object = 71U, .sender = 81U, .direction = kb::network::RpcDirection::ClientToServer }) && !kb::network::AreSchemasCompatible(sessionSchema, mismatchSchema), "Offline network session tests did not reject host/client, late join, reconnect, despawned RPC, or schema mismatch");
     constexpr kb::network::NetworkSimulationConfig simulation{ .latencyMilliseconds = 40U, .jitterMilliseconds = 5U, .lossPermille = 1000U, .disconnectAtTick = 10U, .seed = 8U };
+    constexpr kb::network::NetworkSimulationConfig reorderedSimulation{ .latencyMilliseconds = 40U, .jitterMilliseconds = 5U, .reorderPermille = 1000U, .seed = 8U };
     static_assert(kb::network::IsValidNetworkSimulation(simulation));
-    kb::tests::Require(kb::network::ShouldDrop(simulation, 1U, 2U) && kb::network::ShouldDisconnect(simulation, 10U) && !kb::network::ShouldDisconnect(simulation, 9U) && kb::network::NetworkSimulationRandom(simulation, 2U, 3U) == kb::network::NetworkSimulationRandom(simulation, 2U, 3U), "Network simulation was not deterministic for loss and disconnect");
+    const auto delayedPacket = kb::network::SimulateNetworkPacket(reorderedSimulation, 2U, 3U);
+    const auto droppedPacket = kb::network::SimulateNetworkPacket(simulation, 2U, 3U);
+    const auto disconnectedPacket = kb::network::SimulateNetworkPacket(simulation, 10U, 3U);
+    kb::tests::Require(kb::network::ShouldDrop(simulation, 1U, 2U) && kb::network::ShouldDisconnect(simulation, 10U) && !kb::network::ShouldDisconnect(simulation, 9U) && kb::network::NetworkSimulationRandom(simulation, 2U, 3U) == kb::network::NetworkSimulationRandom(simulation, 2U, 3U) && kb::network::ShouldReorder(reorderedSimulation, 2U, 3U) && delayedPacket.has_value() && delayedPacket->reordered && !delayedPacket->dropped && delayedPacket->deliveryDelayMilliseconds>=35U && delayedPacket->deliveryDelayMilliseconds<=45U && droppedPacket.has_value() && droppedPacket->dropped && droppedPacket->deliveryDelayMilliseconds==0U && disconnectedPacket.has_value() && disconnectedPacket->disconnected && !disconnectedPacket->dropped && !kb::network::SimulatedDeliveryDelayMilliseconds({ .latencyMilliseconds = 5U, .jitterMilliseconds = 6U }, 1U, 1U).has_value(), "Network simulation was not deterministic for latency, jitter, loss, reorder, and disconnect");
     kb::network::NetworkObjects secureObjects;
     constexpr kb::network::NetworkSecurityLimits securityLimits{};
-    kb::tests::Require(secureObjects.Spawn({ .id = 31U, .owner = 41U, .role = kb::network::NetworkRole::Authority }) && kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 41U, 10U, 0U, 10U) && !kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 42U, 10U, 0U, 10U) && !kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 41U, 10U, securityLimits.maxMessagesPerTick, 10U) && !kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 41U, 10U, 0U, 11U), "Network message validation did not reject spoofing, rate, and deserialization violations");
+    kb::tests::Require(secureObjects.Spawn({ .id = 31U, .owner = 41U, .role = kb::network::NetworkRole::Authority }) && kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 41U, 10U, 0U, 10U) && !kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 0U, 41U, 10U, 0U, 10U) && !kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 0U, 10U, 0U, 10U) && !kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 42U, 10U, 0U, 10U) && !kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 41U, securityLimits.maxPayloadBytes + 1U, 0U, securityLimits.maxPayloadBytes + 1U) && !kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 41U, 10U, securityLimits.maxMessagesPerTick, 10U) && !kb::network::ValidateIncomingMessage(secureObjects, securityLimits, 31U, 41U, 10U, 0U, 11U), "Network message validation did not reject spoofing, rate, and deserialization violations");
     constexpr kb::network::NetworkBudget networkBudget{};
     static_assert(kb::network::IsValidNetworkBudget(networkBudget));
-    kb::tests::Require(kb::network::AcceptsPacket(networkBudget, 0U, 1200U) && !kb::network::AcceptsPacket(networkBudget, networkBudget.maxQueuedBytes, 1U) && kb::network::TickDurationMicroseconds(networkBudget) == 33333U, "Network tick and packet budget did not apply backpressure");
+    kb::network::NetworkTickClock networkClock{ networkBudget };
+    kb::network::NetworkTickClock invalidNetworkClock{ { .tickRate = 1U } };
+    kb::tests::Require(kb::network::AcceptsPacket(networkBudget, 0U, 1200U) && kb::network::AcceptsPacket(networkBudget, networkBudget.maxQueuedBytes - 1200U, 1200U) && !kb::network::AcceptsPacket(networkBudget, networkBudget.maxQueuedBytes - 1199U, 1200U) && !kb::network::AcceptsPacket(networkBudget, networkBudget.maxQueuedBytes, 1U) && kb::network::TickDurationMicroseconds(networkBudget) == 33333U && networkClock.Advance(33333U) == 0U && networkClock.Advance(1U) == 1U && networkClock.Tick() == 1U && networkClock.Advance(1'000'000U) == 30U && networkClock.Tick() == 31U && networkClock.RemainderMicroticks() == 20U && invalidNetworkClock.Advance(1'000'000U) == 0U, "Network tick and packet budget did not apply backpressure");
     const kb::network::NetworkSnapshot predicted{ .tick = 5U, .acknowledgedInput = 3U, .position = { 0.0F, 0.0F, 0.0F } };
     const kb::network::NetworkSnapshot authoritative{ .tick = 5U, .acknowledgedInput = 3U, .position = { 4.0F, 0.0F, 0.0F } };
-    const auto interpolated = kb::network::Interpolate({ .previous = predicted, .next = authoritative }, 0.5F);
-    kb::tests::Require(kb::network::IsValidInputCommand({ .tick = 5U, .sequence = 3U, .moveX = 1.0F }) && interpolated.has_value() && interpolated->position.x == 2.0F && kb::network::RequiresReconciliation(predicted, authoritative, 1.0F), "Network input, snapshot, interpolation, prediction, and reconciliation contract is invalid");
+    const kb::network::NetworkSnapshot interpolationNext{ .tick = 6U, .acknowledgedInput = 3U, .position = { 4.0F, 0.0F, 0.0F } };
+    const kb::network::NetworkSnapshot mismatchedAcknowledgement{ .tick = 5U, .acknowledgedInput = 4U };
+    const kb::network::NetworkSnapshot mismatchedVelocity{ .tick = 5U, .acknowledgedInput = 3U, .velocity = { 2.0F, 0.0F, 0.0F } };
+    const auto interpolated = kb::network::Interpolate({ .previous = predicted, .next = interpolationNext }, 0.5F);
+    kb::tests::Require(kb::network::IsValidInputCommand({ .tick = 5U, .sequence = 3U, .moveX = 1.0F }) && kb::network::IsValidInputCommand({ .tick = 5U, .sequence = 0U, .moveX = 1.0F }) && !kb::network::IsValidInputCommand({ .tick = 0U, .sequence = 3U, .moveX = 1.0F }) && interpolated.has_value() && interpolated->position.x == 2.0F && !kb::network::Interpolate({ .previous = predicted, .next = predicted }, 0.5F).has_value() && kb::network::RequiresReconciliation(predicted, authoritative, 1.0F) && kb::network::RequiresReconciliation(predicted, mismatchedAcknowledgement, 1.0F) && kb::network::RequiresReconciliation(predicted, mismatchedVelocity, 1.0F), "Network input, snapshot, interpolation, prediction, and reconciliation contract is invalid");
     std::int32_t variableDelta = 0;
     kb::network::NetworkVariable<std::int32_t> networkScore{ 2 };
     networkScore.SetChangedCallback(&RecordNetworkVariableChange, &variableDelta);
-    kb::tests::Require(networkScore.Set(5) && networkScore.Revision() == 1U && variableDelta == 3 && !networkScore.Apply(7, 1U) && networkScore.Apply(7, 2U) && networkScore.Value() == 7 && variableDelta == 2, "Network variable did not provide typed revisions and change hooks");
+    kb::network::NetworkVariable<std::int32_t> saturatedNetworkScore{ 1 };
+    kb::tests::Require(networkScore.Set(5) && networkScore.Revision() == 1U && variableDelta == 3 && !networkScore.Apply(7, 1U) && networkScore.Apply(7, 2U) && networkScore.Value() == 7 && variableDelta == 2 && saturatedNetworkScore.Apply(2, std::numeric_limits<std::uint64_t>::max()) && !saturatedNetworkScore.Set(3) && saturatedNetworkScore.Value() == 2, "Network variable did not provide typed revisions and change hooks");
     kb::network::NetworkObjects rpcObjects;
-    kb::tests::Require(rpcObjects.Spawn({ .id = 8U, .owner = 20U, .role = kb::network::NetworkRole::Authority }) && kb::network::ValidateRpc(rpcObjects, { .object = 8U, .sender = 20U, .reliability = kb::network::RpcReliability::Unreliable, .direction = kb::network::RpcDirection::ClientToServer }) && !kb::network::ValidateRpc(rpcObjects, { .object = 8U, .sender = 21U, .direction = kb::network::RpcDirection::ClientToServer }) && rpcObjects.Spawn({ .id = 9U, .owner = 1U, .role = kb::network::NetworkRole::Proxy }) && kb::network::ValidateRpc(rpcObjects, { .object = 9U, .sender = 1U, .direction = kb::network::RpcDirection::ServerToClient }), "RPC validation did not enforce direction, reliability contract, and ownership");
+    kb::tests::Require(rpcObjects.Spawn({ .id = 8U, .owner = 20U, .role = kb::network::NetworkRole::Authority }) && kb::network::ValidateRpc(rpcObjects, { .object = 8U, .sender = 20U, .reliability = kb::network::RpcReliability::Unreliable, .direction = kb::network::RpcDirection::ClientToServer }) && !kb::network::ValidateRpc(rpcObjects, { .object = 8U, .sender = 21U, .direction = kb::network::RpcDirection::ClientToServer }) && rpcObjects.Spawn({ .id = 9U, .owner = 1U, .role = kb::network::NetworkRole::Proxy }) && kb::network::ValidateRpc(rpcObjects, { .object = 9U, .sender = 1U, .direction = kb::network::RpcDirection::ServerToClient }) && !kb::network::ValidateRpc(rpcObjects, { .object = 9U, .sender = 2U, .direction = kb::network::RpcDirection::ServerToClient }), "RPC validation did not enforce direction, reliability contract, and ownership");
     const kb::network::ReplicationSchema replicationSchema{ .version = 1U, .fields = { { .id = 1U, .name = "health", .type = kb::network::ReplicatedFieldType::QuantizedFloat, .minimum = 0.0F, .maximum = 100.0F, .quantizationBits = 10U }, { .id = 2U, .name = "alive", .type = kb::network::ReplicatedFieldType::Boolean } } };
     const auto healthQuantized = kb::network::QuantizeFloat(replicationSchema.fields[0], 50.0F);
     kb::tests::Require(kb::network::ValidateReplicationSchema(replicationSchema) && healthQuantized.has_value() && kb::network::DequantizeFloat(replicationSchema.fields[0], *healthQuantized).has_value() && kb::network::ComputeDeltaFields(replicationSchema, { 1U, 0U }, { 1U, 1U }) == std::vector<std::uint16_t>{ 2U }, "Replication schema did not validate versioned fields, quantization, and deltas");
     kb::network::NetworkObjects networkObjects;
-    kb::tests::Require(networkObjects.Spawn({ .id = 7U, .owner = 11U, .role = kb::network::NetworkRole::Authority }) && networkObjects.CanAcceptOwnerCommand(7U, 11U) && !networkObjects.CanAcceptOwnerCommand(7U, 12U) && networkObjects.AssignOwner(7U, 12U) && networkObjects.Find(7U)->owner == 12U && networkObjects.Despawn(7U) && !networkObjects.Find(7U).has_value(), "Network object lifecycle did not validate spawn, owner authority, and despawn");
+    kb::tests::Require(
+        !networkObjects.Spawn({}) &&
+            networkObjects.Spawn({ .id = 7U, .owner = 11U, .role = kb::network::NetworkRole::Authority }) &&
+            !networkObjects.Spawn({ .id = 7U, .owner = 12U, .role = kb::network::NetworkRole::Authority }) &&
+            networkObjects.CanAcceptOwnerCommand(7U, 11U) && !networkObjects.CanAcceptOwnerCommand(7U, 12U) &&
+            networkObjects.AssignOwner(7U, 12U) && networkObjects.Find(7U)->owner == 12U &&
+            networkObjects.Spawn({ .id = 8U, .owner = 12U, .role = kb::network::NetworkRole::Proxy }) &&
+            !networkObjects.AssignOwner(8U, 13U) && networkObjects.Despawn(7U) &&
+            !networkObjects.Find(7U).has_value() && !networkObjects.CanAcceptOwnerCommand(7U, 12U) &&
+            !networkObjects.Despawn(7U),
+        "Network object lifecycle did not reject invalid spawn, ownership, duplicate, or despawn state");
     static_assert(kb::network::kFirstReleaseNetwork.model == kb::network::NetworkModel::OfflineOnly);
     kb::tests::Require(!kb::network::kFirstReleaseNetwork.HasTransport(), "First-release network model must not imply unsupported multiplayer transport");
     constexpr auto sampleProfiles = kb::gameplay::GameplaySampleProfiles();
@@ -4775,11 +4904,14 @@ void RunGameInstanceLifetimeTest() {
     const kb::gameplay::GameSceneId firstScene = flowGame.CreateScene();
     const kb::gameplay::GameSceneId secondScene = flowGame.CreateScene();
     kb::tests::Require(
-        flowGame.Flow().SetCheckpoint(firstScene) && flowGame.Flow().Pause() && flowGame.Flow().Resume() &&
+        !flowGame.SetCheckpoint(0U) && !flowGame.TransitionToScene(999U) &&
+            flowGame.Flow().State() == kb::gameplay::GameFlowState::Playing && !flowGame.Flow().PendingTransition().has_value() &&
+            flowGame.SetCheckpoint(firstScene) && flowGame.Pause() && !flowGame.TransitionToScene(secondScene) && flowGame.Resume() &&
             flowGame.TransitionToScene(secondScene) && flowGame.ActiveSceneId() == secondScene &&
-            flowGame.Flow().Win() && flowGame.Flow().Restart() == firstScene && flowGame.TransitionToScene(firstScene) &&
-            flowGame.Flow().Lose() && flowGame.DestroyScene(firstScene) && !flowGame.Flow().Checkpoint().has_value(),
-        "Game flow did not enforce checkpoint, pause, restart, outcome, and scene transition lifecycle");
+            flowGame.Win() && !flowGame.TransitionToScene(firstScene) && flowGame.RestartFromCheckpoint() &&
+            flowGame.ActiveSceneId() == firstScene && flowGame.Lose() && flowGame.DestroyScene(firstScene) &&
+            !flowGame.Flow().Checkpoint().has_value() && !flowGame.RestartFromCheckpoint(),
+        "Game flow did not enforce valid checkpoint, pause, restart, outcome, and scene transition lifecycle");
     kb::gameplay::GameplayAbilities abilities;
     kb::gameplay::GameplayModules modules;
     const kb::scene::SceneEntity target{2U};
@@ -4817,7 +4949,15 @@ void RunGameInstanceLifetimeTest() {
     constexpr kb::gameplay::GameplayIdentity blue{ .team = 1U, .faction = 7U, .layers = 0x2U, .tag = kb::gameplay::GameplayTag("player") };
     constexpr kb::gameplay::GameplayIdentity blueOther{ .team = 1U, .faction = 7U, .layers = 0x2U, .tag = kb::gameplay::GameplayTag("player") };
     kb::tests::Require(kb::gameplay::IsFriendly(blue, blueOther) && kb::gameplay::SharesLayer(blue, blueOther) &&
-            kb::gameplay::GameplayTag("player") == kb::gameplay::GameplayTag("player"), "Gameplay identity did not provide stable unified team/layer/tag filters");
+        kb::gameplay::GameplayTag("player") == kb::gameplay::GameplayTag("player"), "Gameplay identity did not provide stable unified team/layer/tag filters");
+    constexpr kb::gameplay::GameplayIdentity red{ .team = 2U, .faction = 9U, .layers = 0x4U, .tag = kb::gameplay::GameplayTag("enemy") };
+    constexpr kb::gameplay::GameplayIdentityFilter hostileEnemyFilter{
+        .requiredFaction = 9U, .layerMask = 0x4U, .requiredTag = kb::gameplay::GameplayTag("enemy"), .relation = kb::gameplay::GameplayRelation::Hostile };
+    kb::tests::Require(hostileEnemyFilter.Accepts(blue, red) && !hostileEnemyFilter.Accepts(blue, blueOther) &&
+            hostileEnemyFilter.PhysicsQueryMask() == 0x4U && hostileEnemyFilter.RenderCullingMask() == 0x4U &&
+            kb::gameplay::ResolveDamage(hit, resistances, blue, red, hostileEnemyFilter).has_value() &&
+            !kb::gameplay::ResolveDamage(hit, resistances, blue, blueOther, hostileEnemyFilter).has_value(),
+        "Gameplay identity filter did not provide one shared AI/physics/render/damage policy");
     kb::gameplay::GameInstance game;
     const kb::gameplay::GameSceneId first = game.CreateScene();
     const kb::gameplay::GameSceneId second = game.CreateScene(kb::scene::SceneMode::PrefabPrivate);

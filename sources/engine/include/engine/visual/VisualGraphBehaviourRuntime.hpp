@@ -31,14 +31,16 @@ public:
         VisualGraphLifecycleEvent event,
         const VisualGraphRuntimeRegistry& artifacts,
         const VisualGraphRuntimeBindingRegistry& bindings,
-        VisualGraphRuntimeExecutionContext& context);
+        VisualGraphRuntimeExecutionContext& context,
+        VisualGraphDebugSession* debugger = nullptr);
     [[nodiscard]] static VisualGraphBehaviourExecutionResult ExecuteCustomEvent(
         const kb::scene::BehaviourComponent& behaviour,
         kb::scene::SceneEntity entity,
         std::string_view eventName,
         const VisualGraphRuntimeRegistry& artifacts,
         const VisualGraphRuntimeBindingRegistry& bindings,
-        VisualGraphRuntimeExecutionContext& context);
+        VisualGraphRuntimeExecutionContext& context,
+        VisualGraphDebugSession* debugger = nullptr);
     [[nodiscard]] static VisualGraphBehaviourExecutionResult ExecuteCustomEvent(
         const kb::scene::BehaviourComponent& behaviour,
         kb::scene::SceneEntity entity,
@@ -46,7 +48,8 @@ public:
         std::span<const VisualGraphCustomEventArgument> arguments,
         const VisualGraphRuntimeRegistry& artifacts,
         const VisualGraphRuntimeBindingRegistry& bindings,
-        VisualGraphRuntimeExecutionContext& context);
+        VisualGraphRuntimeExecutionContext& context,
+        VisualGraphDebugSession* debugger = nullptr);
 };
 
 } // namespace kb::visual
