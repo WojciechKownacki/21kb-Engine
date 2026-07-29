@@ -4047,6 +4047,36 @@ void RunAiBlackboardTest() {
         "AI blackboard serialization did not round-trip deterministically");
 }
 
+void RunGoapBenchmarkDecisionTest() {
+    // A deliberately standalone GOAP workload: 12 independent facts/actions,
+    // uniform action cost and an exact all-facts goal. It must not share the
+    // behaviour-tree runtime or its state, otherwise this benchmark would hide
+    // the very MVP coupling LIB-189 prohibits.
+    constexpr std::uint32_t kFacts = 12U;
+    constexpr std::uint32_t kGoal = (1U << kFacts) - 1U;
+    constexpr std::uint32_t kIterations = 10'000U;
+    std::uint64_t expandedStates = 0U;
+    const auto started = std::chrono::steady_clock::now();
+    for (std::uint32_t iteration = 0U; iteration < kIterations; ++iteration) {
+        std::array<std::uint16_t, 1U << kFacts> cost{};
+        cost.fill(std::numeric_limits<std::uint16_t>::max());
+        cost[0] = 0U;
+        for (std::uint32_t state = 0U; state <= kGoal; ++state) {
+            if (cost[state] == std::numeric_limits<std::uint16_t>::max()) continue;
+            ++expandedStates;
+            for (std::uint32_t fact = 0U; fact < kFacts; ++fact) {
+                const std::uint32_t next = state | (1U << fact);
+                if (next != state && cost[next] > cost[state] + 1U) cost[next] = static_cast<std::uint16_t>(cost[state] + 1U);
+            }
+        }
+        kb::tests::Require(cost[kGoal] == kFacts, "GOAP benchmark fixture did not find the minimal plan");
+    }
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+    std::cout << "LIB-189 GOAP benchmark: " << expandedStates << " expanded states in " << elapsed << " ms\n";
+    kb::tests::Require(expandedStates == static_cast<std::uint64_t>(kIterations) * (1U << kFacts),
+        "GOAP benchmark did not exercise the entire configured state space");
+}
+
 void RunEngineLibraryTests() {
     RunVersionValueTest();
     RunVersionOrderingTest();
@@ -4117,6 +4147,7 @@ void RunEngineLibraryTests() {
     RunNavigationFoundationContractTest();
     RunAiBehaviourAssetRuntimeTest();
     RunAiBlackboardTest();
+    RunGoapBenchmarkDecisionTest();
 }
 
 } // namespace kb::tests
