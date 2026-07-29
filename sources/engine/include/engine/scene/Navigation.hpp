@@ -43,6 +43,10 @@ struct NavMeshNode {
 // Baked navigation graph. Nodes are immutable while a path query is running,
 // so a worker can safely receive a copy in LIB-184's asynchronous request.
 struct NavMesh {
+    // Bumping revision after a bake/reload invalidates every retained path
+    // built from the older topology. The mesh remains value-owned so a live
+    // async request can still complete safely during scene unload.
+    std::uint64_t revision = 1U;
     float agentRadius = 0.5F;
     float agentHeight = 2.0F;
     float agentMaxClimb = 0.4F;
@@ -58,7 +62,9 @@ struct NavPath {
     NavPathStatus status = NavPathStatus::Invalid;
     std::vector<kb::math::Vec3> corners;
     float totalCost = 0.0F;
+    std::uint64_t meshRevision = 0U;
     [[nodiscard]] bool Succeeded() const noexcept { return status == NavPathStatus::Complete || status == NavPathStatus::Partial; }
+    [[nodiscard]] bool IsCurrent(const NavMesh& mesh) const noexcept { return Succeeded() && meshRevision == mesh.revision; }
 };
 
 struct NavAgent {
@@ -174,7 +180,7 @@ private:
         }
     }
     if (distances[goal] == infinity) return NavPath{ .status = NavPathStatus::Failed };
-    NavPath result{ .status = NavPathStatus::Complete, .totalCost = distances[goal] };
+    NavPath result{ .status = NavPathStatus::Complete, .totalCost = distances[goal], .meshRevision = mesh.revision };
     for (std::uint32_t node = goal;; node = previous[node]) { result.corners.push_back(mesh.nodes[node].position); if (node == start) break; }
     std::reverse(result.corners.begin(), result.corners.end());
     return result;

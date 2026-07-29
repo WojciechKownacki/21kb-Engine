@@ -3904,6 +3904,24 @@ void RunNavigationFoundationContractTest() {
     kb::tests::Require(asynchronousPath.Succeeded() && asynchronousPath.corners.size() == excludedPath.corners.size() &&
             asynchronousPath.corners.size() == 3U && asynchronousPath.corners[1].z == excludedPath.corners[1].z,
         "Navigation async path request did not publish the same filtered result as synchronous pathfinding");
+    kb::tests::Require(path.IsCurrent(graph), "Navigation path was not current for the graph revision that produced it");
+    ++graph.revision;
+    kb::tests::Require(!path.IsCurrent(graph), "Navigation path was not invalidated after navmesh topology revision changed");
+    kb::scene::NavPathAsyncRequest targetDestroyedRequest;
+    kb::tests::Require(targetDestroyedRequest.Start(graph, 0U, 3U, routing) && targetDestroyedRequest.Cancel() &&
+            targetDestroyedRequest.Poll().status == kb::scene::NavPathStatus::Cancelled,
+        "Navigation request was not cancelled when its owner reports target destruction");
+    kb::scene::NavMesh unloadMesh = graph;
+    kb::scene::NavPathAsyncRequest unloadRequest;
+    kb::tests::Require(unloadRequest.Start(unloadMesh, 0U, 3U, routing), "Navigation request could not start before scene unload");
+    unloadMesh = {};
+    kb::scene::NavPath unloadedPath;
+    for (std::size_t attempt = 0U; attempt < 1000U; ++attempt) {
+        unloadedPath = unloadRequest.Poll();
+        if (unloadedPath.status != kb::scene::NavPathStatus::Pending) break;
+        std::this_thread::yield();
+    }
+    kb::tests::Require(unloadedPath.Succeeded(), "Navigation request did not retain a safe navmesh snapshot across scene unload");
     kb::scene::NavAgent steeringAgent;
     steeringAgent.destination = { 10.0F, 5.0F, 0.0F };
     steeringAgent.maxSpeed = 4.0F;
