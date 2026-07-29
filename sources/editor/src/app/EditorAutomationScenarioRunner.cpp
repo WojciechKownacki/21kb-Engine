@@ -1004,6 +1004,35 @@ ReadScriptValue(
             *component + " on " + *alias };
     }
 
+    if (*operation == "set_animator_root_motion_owner" ||
+        *operation == "assert_animator_root_motion_owner") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto owner = StringMember(step, "owner", error);
+        if (!alias || !owner) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        const auto expected = [&]() -> std::optional<kb::scene::AnimatorRootMotionOwner> {
+            if (*owner == "none") return kb::scene::AnimatorRootMotionOwner::None;
+            if (*owner == "animator") return kb::scene::AnimatorRootMotionOwner::Animator;
+            if (*owner == "character_controller") return kb::scene::AnimatorRootMotionOwner::CharacterController;
+            if (*owner == "rigidbody") return kb::scene::AnimatorRootMotionOwner::Rigidbody;
+            return std::nullopt;
+        }();
+        if (!expected) return { false, "unknown animator root-motion owner" };
+        kb::scene::Animator* animator = state.context.Scene().Components().Animators().TryGet(entity);
+        if (animator == nullptr) return { false, "entity has no Animator component" };
+        if (*operation == "set_animator_root_motion_owner") {
+            for (std::size_t attempts = 0U; animator->rootMotionOwner != *expected && attempts < 4U; ++attempts) {
+                if (!state.context.CycleAnimatorRootMotionOwner(entity)) {
+                    return { false, "editor rejected incompatible root-motion owner" };
+                }
+                animator = state.context.Scene().Components().Animators().TryGet(entity);
+                if (animator == nullptr) return { false, "Animator component disappeared" };
+            }
+        }
+        const bool matched = animator->rootMotionOwner == *expected;
+        return { matched, matched ? *owner : "root-motion owner mismatch" };
+    }
+
     if (*operation == "set_property" ||
         *operation == "assert_property") {
         const auto alias = StringMember(step, "entity", error);
