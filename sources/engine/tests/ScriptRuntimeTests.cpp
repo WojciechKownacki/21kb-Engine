@@ -14162,6 +14162,17 @@ void RunScriptEventBusTelemetryTest() {
         static_cast<void>(bus.Emit(scene, kb::script::ScriptEvent{ .name = "Telemetry" }));
         const kb::script::ScriptEventBusTelemetrySnapshot afterEmit = bus.Telemetry();
         kb::tests::Require(afterEmit.emitCalls == 1U && afterEmit.deliveredCount == 2U, "Telemetry must count exactly one Emit call and two real subscriber deliveries");
+
+        const std::array<kb::script::ScriptEvent, 2U> batch{
+            kb::script::ScriptEvent{ .name = "Telemetry" },
+            kb::script::ScriptEvent{ .name = "Telemetry" },
+        };
+        kb::script::ScriptEventDeliveryResult batchResult;
+        batchResult.errors.reserve(1U);
+        bus.EmitBatch(scene, batch, batchResult);
+        kb::tests::Require(batchResult.delivered == 4U && batchResult.errors.empty() &&
+                bus.Telemetry().emitCalls == 3U && bus.Telemetry().deliveredCount == 6U,
+            "EmitBatch did not preserve synchronous per-event delivery and telemetry");
     }
 
     // --- dispatch duration, measured against a deliberately slow subscriber
