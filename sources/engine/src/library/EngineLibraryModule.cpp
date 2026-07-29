@@ -1,6 +1,7 @@
 #include "engine/library/EngineLibraryModule.hpp"
 
 #include "engine/library/EngineLibraryDeprecation.hpp"
+#include "engine/library/EngineLibraryModuleNames.hpp"
 #include "engine/library/EngineLibraryModuleValidation.hpp"
 #include "engine/script/ScriptAssetsApi.hpp"
 #include "engine/script/ScriptAnimatorApi.hpp"
@@ -56,17 +57,17 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
     // Register() is compiled into this build.
     static const std::vector<LibraryModuleDesc> kCatalog{
         LibraryModuleDesc{
-            .name = "Input",
+            .name = std::string{ ToString(LibraryModuleName::Input) },
             .ownerRuntime = "kb::input::InputSubsystem",
             .Register = &kb::script::ScriptInputApi::Register,
         },
         LibraryModuleDesc{
-            .name = "Audio",
+            .name = std::string{ ToString(LibraryModuleName::Audio) },
             .ownerRuntime = "kb::audio::AudioPlayback",
             .Register = &kb::script::ScriptAudioApi::Register,
         },
         LibraryModuleDesc{
-            .name = "World",
+            .name = std::string{ ToString(LibraryModuleName::World) },
             .ownerRuntime = "kb::scene::SceneEntities",
             .Register = &kb::script::ScriptWorldApi::Register,
             // Pilots for LIB-017: World.Exists and World.IsActive
@@ -102,7 +103,7 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             },
         },
         LibraryModuleDesc{
-            .name = "Time",
+            .name = std::string{ ToString(LibraryModuleName::Time) },
             .ownerRuntime = "kb::script::ScriptExecutionContext",
             .Register = &kb::script::ScriptTimeApi::Register,
         },
@@ -130,17 +131,17 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
             .Register = &kb::script::ScriptEventsApi::Register,
         },
         LibraryModuleDesc{
-            .name = "Physics",
+            .name = std::string{ ToString(LibraryModuleName::Physics) },
             .ownerRuntime = "kb::scene::SceneTransforms",
             .Register = &kb::script::ScriptPhysicsApi::Register,
         },
         LibraryModuleDesc{
-            .name = "Transform",
+            .name = std::string{ ToString(LibraryModuleName::Transform) },
             .ownerRuntime = "kb::scene::SceneTransforms",
             .Register = &kb::script::ScriptTransformApi::Register,
         },
         LibraryModuleDesc{
-            .name = "Math",
+            .name = std::string{ ToString(LibraryModuleName::Math) },
             .ownerRuntime = "kb::math (stateless — pure functions, no backing runtime subsystem)",
             .Register = &kb::script::ScriptMathApi::Register,
         },
@@ -251,7 +252,7 @@ const std::vector<LibraryModuleDesc>& EngineLibraryModule::Catalog() {
         // table (mirrors Task/Timer/Scene/Math, which also rely on the
         // generic CallFunction escape hatch).
         LibraryModuleDesc{
-            .name = "Assets",
+            .name = std::string{ ToString(LibraryModuleName::Assets) },
             .ownerRuntime = "kb::assets::AssetManager",
             .Register = &kb::script::ScriptAssetsApi::Register,
         },

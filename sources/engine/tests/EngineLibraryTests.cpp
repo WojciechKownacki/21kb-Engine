@@ -25,6 +25,7 @@
 #include "engine/library/EngineLibraryManifest.hpp"
 #include "engine/library/EngineLibraryManifestComparison.hpp"
 #include "engine/library/EngineLibraryModule.hpp"
+#include "engine/library/EngineLibraryModuleNames.hpp"
 #include "engine/library/EngineLibraryModuleValidation.hpp"
 #include "engine/library/EngineLibraryOwnership.hpp"
 #include "engine/library/EngineLibraryPropertyDesc.hpp"
@@ -2710,6 +2711,29 @@ void RunEngineLibraryEventSchemaRegistryTest() {
         "UI Submit, Changed, Focus, and Navigation schemas must match their fixed runtime payloads");
 }
 
+void RunCanonicalModuleNamesTest() {
+    constexpr std::array expectedNames{
+        "World", "Entity", "Transform", "Time", "Math", "Input", "Physics", "Audio", "Assets",
+    };
+    kb::tests::Require(kb::library::kCanonicalLibraryModuleNames.size() == expectedNames.size(),
+        "Canonical module name catalog has an invalid size");
+    for (const char* name : expectedNames) {
+        kb::tests::Require(kb::library::IsCanonicalLibraryModuleName(name),
+            "Canonical module name catalog omitted a required public name");
+    }
+
+    const std::vector<kb::library::LibraryModuleDesc>& catalog = kb::library::EngineLibraryModule::Catalog();
+    for (const kb::library::LibraryModuleNameDesc& desc : kb::library::kCanonicalLibraryModuleNames) {
+        if (!desc.scriptNamespace) {
+            continue;
+        }
+        const auto found = std::find_if(catalog.begin(), catalog.end(), [&desc](const kb::library::LibraryModuleDesc& module) {
+            return module.name == desc.name;
+        });
+        kb::tests::Require(found != catalog.end(), "Canonical script module name is not backed by the module catalog");
+    }
+}
+
 // LIB-084: kb::library::EngineLibraryComponentInspectorRegistry — proves the
 // new UI-facing metadata catalog (displayName/category per component,
 // displayName/tooltip per field) exactly matches the two existing sources
@@ -4347,6 +4371,7 @@ void RunEngineLibraryTests() {
     RunModuleInstallCoversAllDomainsTest();
     RunModuleInstallReportsDuplicateDiagnosticsTest();
     RunModuleCatalogTest();
+    RunCanonicalModuleNamesTest();
     RunModuleInstallSkipsUnavailableCapabilityTest();
     RunModuleInstallStartupReportTest();
     RunFunctionDescCatalogResolvesTest();
