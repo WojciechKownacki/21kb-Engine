@@ -291,10 +291,17 @@ ScriptAgentProjectFilesResult ScriptAgentProjectFiles::Write(
     };
 
     const kb::library::ApiManifest manifest = kb::library::BuildApiManifest(catalog);
+    const std::string referenceMarkdown = kb::library::ToReferenceMarkdown(manifest);
+    const kb::library::ApiReferenceValidationResult referenceValidation =
+        kb::library::ValidateReferenceMarkdown(manifest, referenceMarkdown);
+    if (!referenceValidation.Succeeded()) {
+        result.error = "generated API reference diverged from its manifest: " + referenceValidation.errors.front();
+        return result;
+    }
 
     const GeneratedFile files[] = {
         { apiRoot / "kb.lua", ScriptApiExport::ToLuaStubs(catalog), true, false },
-        { apiRoot / "script_api.md", kb::library::ToReferenceMarkdown(manifest), true, false },
+        { apiRoot / "script_api.md", referenceMarkdown, true, false },
         { apiRoot / "script_api.json", ScriptApiExport::ToJson(catalog), true, false },
         { apiRoot / "manifest.json", kb::library::ToJson(manifest), true, false },
         { apiRoot / "authoring_hints.json", kb::library::ToAuthoringHintsJson(manifest), true, false },
