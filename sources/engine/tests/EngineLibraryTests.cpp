@@ -3839,6 +3839,14 @@ void RunEngineLibrarySignalTest() {
         kb::tests::Require(order.size() == 2U && order[0] == "first:7:hello" && order[1] == "second:7:hello",
             "Emit must invoke every connected slot, in connection order, with the exact arguments given");
 
+        std::array<kb::library::Signal<int, std::string>::SlotId, 2U> dispatchScratch{};
+        kb::tests::Require(signal.EmitNonAlloc(dispatchScratch, 8, "hot")
+                && order.size() == 4U && order[2] == "first:8:hot" && order[3] == "second:8:hot",
+            "EmitNonAlloc must dispatch every slot using caller-provided scratch storage");
+        std::array<kb::library::Signal<int, std::string>::SlotId, 1U> undersizedScratch{};
+        kb::tests::Require(!signal.EmitNonAlloc(undersizedScratch, 9, "ignored") && order.size() == 4U,
+            "EmitNonAlloc must reject undersized scratch without partial delivery");
+
         kb::tests::Require(signal.Connect(nullptr) == 0U, "Connect with an empty/null slot must return the invalid id (0) and not add a slot");
         kb::tests::Require(signal.SlotCount() == 2U, "Connect with an empty slot must not increase SlotCount");
     }
@@ -4016,6 +4024,23 @@ void RunNavigationFoundationContractTest() {
         observer, perceptionTargets, perceptionStimuli, { .test = lineOfSight }, perceptionEvents);
     kb::tests::Require(limitedPerceptionResult.emitted == 2U && limitedPerceptionResult.limitReached && perceptionEvents.Count() == 2U,
         "Perception evaluation did not enforce the configured event bound");
+}
+
+void RunNonAllocTransformReadTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity();
+    kb::scene::TransformComponent transform{};
+    transform.localPosition.x = 42.0F;
+    scene.Transforms().Set(entity, transform);
+
+    const std::array<kb::scene::SceneEntity, 2U> entities{ entity, {} };
+    std::array<kb::scene::TransformComponent, 2U> transforms{};
+    kb::tests::Require(!scene.Transforms().ReadNonAlloc(entities, transforms)
+            && transforms[0].localPosition.x == 42.0F && transforms[1].localPosition.x == 0.0F,
+        "Non-alloc transform read must fill valid results and clear missing entries");
+    const std::array<kb::scene::SceneEntity, 1U> validEntities{ entity };
+    kb::tests::Require(!scene.Transforms().ReadNonAlloc(validEntities, std::span<kb::scene::TransformComponent>{}),
+        "Non-alloc transform read must reject insufficient output storage");
 }
 
 void RunAiBehaviourAssetRuntimeTest() {
@@ -4344,6 +4369,7 @@ void RunEngineLibraryTests() {
     RunInputLimitsTest();
     RunExpandedValueTypesTest();
     RunEngineLibrarySignalTest();
+    RunNonAllocTransformReadTest();
     RunNavigationFoundationContractTest();
     RunAiBehaviourAssetRuntimeTest();
     RunAiBlackboardTest();

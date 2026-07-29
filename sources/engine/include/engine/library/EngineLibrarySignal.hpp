@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <functional>
+#include <memory>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -57,7 +59,7 @@ public:
             return kInvalidSlotId;
         }
         const SlotId id = nextId_++;
-        slots_.push_back(Connection{ .id = id, .slot = std::move(slot) });
+        slots_.push_back(Connection{ .id = id, .slot = std::make_shared<SlotFunction>(std::move(slot)) });
         return id;
     }
 
@@ -96,9 +98,32 @@ public:
             // through a dangling reference into freed memory the very
             // instant the callback's own body (if small-buffer-optimized
             // inline in the vector element) is still executing.
-            const SlotFunction slot = iterator->slot;
-            slot(args...);
+            const std::shared_ptr<SlotFunction> slot = iterator->slot;
+            (*slot)(args...);
         }
+    }
+
+    // Caller-owned scratch preserves Emit's reentrancy semantics without
+    // allocating during dispatch. A too-small buffer leaves the signal
+    // untouched, so delivery is never partially and silently dropped.
+    [[nodiscard]] bool EmitNonAlloc(std::span<SlotId> matching, Args... args) const {
+        if (matching.size() < slots_.size()) {
+            return false;
+        }
+
+        const std::size_t matchingCount = slots_.size();
+        for (std::size_t index = 0U; index < matchingCount; ++index) {
+            matching[index] = slots_[index].id;
+        }
+        for (const SlotId id : matching.first(matchingCount)) {
+            const auto iterator = std::find_if(slots_.begin(), slots_.end(), [id](const Connection& connection) { return connection.id == id; });
+            if (iterator == slots_.end()) {
+                continue;
+            }
+            const std::shared_ptr<SlotFunction> slot = iterator->slot;
+            (*slot)(args...);
+        }
+        return true;
     }
 
     [[nodiscard]] std::size_t SlotCount() const noexcept {
@@ -108,7 +133,7 @@ public:
 private:
     struct Connection {
         SlotId id = kInvalidSlotId;
-        SlotFunction slot;
+        std::shared_ptr<SlotFunction> slot;
     };
 
     std::vector<Connection> slots_;
