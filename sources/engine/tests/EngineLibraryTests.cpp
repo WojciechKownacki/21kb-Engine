@@ -2624,6 +2624,14 @@ void RunFunctionIdTest() {
     const kb::library::LibraryFunctionId idFromA = kb::library::ComputeLibraryFunctionId("World.Exists");
     const kb::library::LibraryFunctionId idFromB = kb::library::ComputeLibraryFunctionId("World.Exists");
     kb::tests::Require(idFromA == idFromB, "Engine21kbLibrary function id must be identical across independently constructed hosts");
+    // LIB-235: lookup repeatedly through the live registry after all module
+    // registrations. The registry's stable-ID bucket must still resolve the
+    // original function, rather than relying on its vector position.
+    for (std::size_t repeat = 0U; repeat < 1024U; ++repeat) {
+        const kb::script::ScriptFunctionSignature* signature = hostA.Functions().FindSignature("World.Exists");
+        kb::tests::Require(signature != nullptr && signature->name == "World.Exists",
+            "Engine21kbLibrary stable function-id cache lost a registered callable");
+    }
 }
 
 // LIB-076: the component registry — proves it does not silently drift from

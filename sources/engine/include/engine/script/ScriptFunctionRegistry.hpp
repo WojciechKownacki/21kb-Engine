@@ -3,6 +3,7 @@
 #include "engine/assets/AssetId.hpp"
 #include "engine/core/AllocationBudget.hpp"
 #include "engine/core/ExecutionAffinity.hpp"
+#include "engine/library/EngineLibraryFunctionId.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntity.hpp"
@@ -15,6 +16,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace kb::script {
@@ -147,6 +149,7 @@ private:
         std::vector<std::string>& errors);
 
     std::vector<ScriptFunctionDesc> functions_;
+    std::unordered_map<kb::library::LibraryFunctionId, std::vector<std::size_t>> functionsById_;
     bool locked_ = false;
     // LIB-038: reentrancy guard. A callback that (directly, or through a
     // chain of other functions) calls back into Call() on the same
