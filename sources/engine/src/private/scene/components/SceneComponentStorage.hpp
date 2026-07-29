@@ -14,6 +14,7 @@
 #include "scene/components/SceneJointComponentStore.hpp"
 #include "scene/components/SceneLightComponentStore.hpp"
 #include "scene/components/SceneMeshRendererComponentStore.hpp"
+#include "scene/components/SceneNavigationComponentStore.hpp"
 #include "scene/components/SceneRigidbodyComponentStore.hpp"
 #include "scene/components/SceneTagsComponentStore.hpp"
 #include "scene/components/SceneTransformComponentStore.hpp"
@@ -68,6 +69,8 @@ public:
     [[nodiscard]] SceneAnimatorComponentStore& Animators() noexcept;
     [[nodiscard]] const SceneUIDocumentComponentStore& UIDocuments() const noexcept;
     [[nodiscard]] SceneUIDocumentComponentStore& UIDocuments() noexcept;
+    [[nodiscard]] const SceneNavigationComponentStore& Navigation() const noexcept;
+    [[nodiscard]] SceneNavigationComponentStore& Navigation() noexcept;
 
 private:
     SceneTransformComponentStore transforms_;
@@ -86,6 +89,7 @@ private:
     SceneAudioListenerComponentStore audioListeners_;
     SceneAnimatorComponentStore animators_;
     SceneUIDocumentComponentStore uiDocuments_;
+    SceneNavigationComponentStore navigation_;
 };
 
 } // namespace kb::scene

@@ -12,6 +12,7 @@
 #include "engine/scene/SceneInputComponents.hpp"
 #include "engine/scene/SceneLightComponents.hpp"
 #include "engine/scene/SceneMeshRendererComponents.hpp"
+#include "engine/scene/SceneNavigationComponents.hpp"
 #include "engine/scene/ScenePrefabNode.hpp"
 #include "engine/scene/SceneRigidbodyComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
@@ -51,6 +52,8 @@ struct ScenePrefabNodeStateWriterContext {
     SceneAudioListenerComponents audioListeners;
     SceneAnimatorComponents animators;
     SceneUIDocumentComponents uiDocuments;
+    SceneNavAgentComponents navAgents;
+    SceneNavObstacleComponents navObstacles;
 };
 
 class ScenePrefabNodeStateWriter {

@@ -98,6 +98,16 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .id = ComputeLibraryComponentId("Joint"),
             .serializable = true,
         },
+        LibraryComponentDesc{
+            .name = "NavAgent",
+            .id = ComputeLibraryComponentId("NavAgent"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "NavObstacle",
+            .id = ComputeLibraryComponentId("NavObstacle"),
+            .serializable = true,
+        },
     };
     return kCatalog;
 }

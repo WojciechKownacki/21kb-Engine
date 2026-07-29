@@ -7,7 +7,7 @@
 namespace kb::scene {
 namespace {
 
-inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 14U;
+inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 16U;
 
 [[nodiscard]] std::uint16_t ComponentMask(const ScenePrefabNodeComponents& components) noexcept {
     std::uint16_t mask = 0U;
@@ -53,6 +53,8 @@ inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 14U;
     if (components.uiDocument.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::UIDocument);
     }
+    if (components.navAgent.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::NavAgent);
+    if (components.navObstacle.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::NavObstacle);
     return mask;
 }
 
@@ -138,6 +140,8 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         if (node.components.uiDocument.has_value()) {
             archetype.uiDocuments.push_back(*node.components.uiDocument);
         }
+        if (node.components.navAgent.has_value()) archetype.navAgents.push_back(*node.components.navAgent);
+        if (node.components.navObstacle.has_value()) archetype.navObstacles.push_back(*node.components.navObstacle);
     }
 
     return data;

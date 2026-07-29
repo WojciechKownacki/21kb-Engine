@@ -7,6 +7,7 @@
 #include "engine/scene/JointComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/Navigation.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
@@ -17,6 +18,7 @@
 #include "engine/scene/SceneJointComponents.hpp"
 #include "engine/scene/SceneLightComponents.hpp"
 #include "engine/scene/SceneMeshRendererComponents.hpp"
+#include "engine/scene/SceneNavigationComponents.hpp"
 #include "engine/scene/SceneRigidbodyComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -208,7 +210,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 10> kComponentNames{
+constexpr std::array<std::string_view, 12> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
@@ -219,6 +221,8 @@ constexpr std::array<std::string_view, 10> kComponentNames{
     "Collider",
     "CharacterController",
     "Joint",
+    "NavAgent",
+    "NavObstacle",
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kTransformPropertyDescs{
@@ -360,6 +364,32 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kJointPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "enableLimit", ScriptValueType::Bool },
 };
 
+constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kNavAgentPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "radius", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "height", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "maxSpeed", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "acceleration", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "angularSpeedDegrees", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "stoppingDistance", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "areaMask", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "destination.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "destination.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "destination.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 9> kNavObstaclePropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "center.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "center.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "center.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "size.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "size.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "size.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "radius", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "height", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+
 constexpr std::array<FieldBinding, 13> kTransformFields{
     KB_NESTED_FLOAT(kb::scene::TransformComponent, localPosition, x),
     KB_NESTED_FLOAT(kb::scene::TransformComponent, localPosition, y),
@@ -487,6 +517,32 @@ constexpr std::array<FieldBinding, 13> kJointFields{
     KB_BOOL(kb::scene::JointComponent, enableLimit),
 };
 
+constexpr std::array<FieldBinding, 11> kNavAgentFields{
+    KB_FLOAT(kb::scene::NavAgent, radius),
+    KB_FLOAT(kb::scene::NavAgent, height),
+    KB_FLOAT(kb::scene::NavAgent, maxSpeed),
+    KB_FLOAT(kb::scene::NavAgent, acceleration),
+    KB_FLOAT(kb::scene::NavAgent, angularSpeedDegrees),
+    KB_FLOAT(kb::scene::NavAgent, stoppingDistance),
+    KB_UINT32(kb::scene::NavAgent, areaMask),
+    KB_NESTED_FLOAT(kb::scene::NavAgent, destination, x),
+    KB_NESTED_FLOAT(kb::scene::NavAgent, destination, y),
+    KB_NESTED_FLOAT(kb::scene::NavAgent, destination, z),
+    KB_BOOL(kb::scene::NavAgent, enabled),
+};
+
+constexpr std::array<FieldBinding, 9> kNavObstacleFields{
+    KB_NESTED_FLOAT(kb::scene::NavObstacle, center, x),
+    KB_NESTED_FLOAT(kb::scene::NavObstacle, center, y),
+    KB_NESTED_FLOAT(kb::scene::NavObstacle, center, z),
+    KB_NESTED_FLOAT(kb::scene::NavObstacle, size, x),
+    KB_NESTED_FLOAT(kb::scene::NavObstacle, size, y),
+    KB_NESTED_FLOAT(kb::scene::NavObstacle, size, z),
+    KB_FLOAT(kb::scene::NavObstacle, radius),
+    KB_FLOAT(kb::scene::NavObstacle, height),
+    KB_BOOL(kb::scene::NavObstacle, enabled),
+};
+
 #undef KB_BOOL
 #undef KB_INT
 #undef KB_UINT32
@@ -557,6 +613,8 @@ void MarkCharacterControllerModified(kb::scene::Scene& scene, kb::scene::SceneEn
 void MarkJointModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
     scene.Components().Joints().MarkModified(entity);
 }
+void MarkNavAgentModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().NavAgents().MarkModified(entity); }
+void MarkNavObstacleModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().NavObstacles().MarkModified(entity); }
 
 [[nodiscard]] ComponentAccess AccessComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
     if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
@@ -602,6 +660,14 @@ void MarkJointModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) n
         kb::scene::JointComponent* component = scene.Components().Joints().TryGet(entity);
         return ComponentAccess{ component, component, kJointFields, &MarkJointModified };
     }
+    if (componentName == "NavAgent") {
+        kb::scene::NavAgent* component = scene.Components().NavAgents().TryGet(entity);
+        return ComponentAccess{ component, component, kNavAgentFields, &MarkNavAgentModified };
+    }
+    if (componentName == "NavObstacle") {
+        kb::scene::NavObstacle* component = scene.Components().NavObstacles().TryGet(entity);
+        return ComponentAccess{ component, component, kNavObstacleFields, &MarkNavObstacleModified };
+    }
     return {};
 }
 
@@ -642,6 +708,8 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "Joint") {
         return kJointPropertyDescs;
     }
+    if (componentName == "NavAgent") return kNavAgentPropertyDescs;
+    if (componentName == "NavObstacle") return kNavObstaclePropertyDescs;
     return {};
 }
 
