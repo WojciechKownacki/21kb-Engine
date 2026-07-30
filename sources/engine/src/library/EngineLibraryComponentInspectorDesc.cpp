@@ -212,6 +212,14 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether this obstacle participates in navigation." },
             },
         },
+        LibraryComponentInspectorDesc{
+            .componentName = "Tags",
+            .displayName = "Object Classification",
+            .category = "Scene",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "text", "Tags", "Comma- or semicolon-separated semantic labels used to classify this object." },
+            },
+        },
     };
     return kCatalog;
 }

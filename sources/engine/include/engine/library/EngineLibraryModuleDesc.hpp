@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/core/AllocationBudget.hpp"
 #include "engine/library/EngineLibraryFunctionDesc.hpp"
 
 #include <compare>
@@ -66,6 +67,11 @@ struct LibraryModuleDesc {
     // audited incrementally — see LibraryFunctionDesc's own comment for
     // what an empty list means.
     std::vector<LibraryFunctionDesc> functions;
+    // Budget for allocations made while this module materializes its public
+    // functions in ScriptFunctionRegistry. The registry charges capacity
+    // growth to the active module before allocating, so the failing function
+    // is rejected before the registry grows past its declared budget.
+    std::size_t registrationAllocationBudgetBytes = 64U * 1024U;
 };
 
 } // namespace kb::library

@@ -1,7 +1,9 @@
 #pragma once
 
 #include "engine/assets/AssetId.hpp"
+#include "engine/core/AllocationBudget.hpp"
 #include "engine/core/ExecutionAffinity.hpp"
+#include "engine/library/EngineLibraryFunctionId.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntity.hpp"
@@ -14,6 +16,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace kb::script {
@@ -125,6 +128,9 @@ public:
     // call every dispatch.
     void Lock() noexcept;
     [[nodiscard]] bool IsLocked() const noexcept;
+    // Scoped by EngineLibraryModule while one module registers. The pointer
+    // is non-owning and must be cleared before the module report is moved.
+    void SetRegistrationAllocationTelemetry(kb::core::AllocationTelemetry* telemetry) noexcept;
 
 private:
     [[nodiscard]] static bool HasValidPins(const std::vector<ScriptFunctionPin>& pins);
@@ -143,6 +149,7 @@ private:
         std::vector<std::string>& errors);
 
     std::vector<ScriptFunctionDesc> functions_;
+    std::unordered_map<kb::library::LibraryFunctionId, std::vector<std::size_t>> functionsById_;
     bool locked_ = false;
     // LIB-038: reentrancy guard. A callback that (directly, or through a
     // chain of other functions) calls back into Call() on the same
@@ -152,6 +159,7 @@ private:
     // does not mutate the registered function set) but must track depth
     // across the possibly-reentrant call it makes into a callback.
     mutable std::size_t callDepth_ = 0;
+    kb::core::AllocationTelemetry* registrationAllocationTelemetry_ = nullptr;
 };
 
 } // namespace kb::script

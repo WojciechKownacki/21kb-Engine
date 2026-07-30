@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/core/ExecutionBudget.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/visual/VisualGraphDiagnostic.hpp"
@@ -32,7 +33,9 @@ public:
         const VisualGraphRuntimeRegistry& artifacts,
         const VisualGraphRuntimeBindingRegistry& bindings,
         VisualGraphRuntimeExecutionContext& context,
-        VisualGraphDebugSession* debugger = nullptr);
+        VisualGraphDebugSession* debugger = nullptr,
+        std::size_t maximumSteps = 4096U,
+        kb::core::BudgetExceededPolicy budgetExceededPolicy = kb::core::BudgetExceededPolicy::Fail);
     [[nodiscard]] static VisualGraphBehaviourExecutionResult ExecuteCustomEvent(
         const kb::scene::BehaviourComponent& behaviour,
         kb::scene::SceneEntity entity,
@@ -40,7 +43,9 @@ public:
         const VisualGraphRuntimeRegistry& artifacts,
         const VisualGraphRuntimeBindingRegistry& bindings,
         VisualGraphRuntimeExecutionContext& context,
-        VisualGraphDebugSession* debugger = nullptr);
+        VisualGraphDebugSession* debugger = nullptr,
+        std::size_t maximumSteps = 4096U,
+        kb::core::BudgetExceededPolicy budgetExceededPolicy = kb::core::BudgetExceededPolicy::Fail);
     [[nodiscard]] static VisualGraphBehaviourExecutionResult ExecuteCustomEvent(
         const kb::scene::BehaviourComponent& behaviour,
         kb::scene::SceneEntity entity,
@@ -49,7 +54,9 @@ public:
         const VisualGraphRuntimeRegistry& artifacts,
         const VisualGraphRuntimeBindingRegistry& bindings,
         VisualGraphRuntimeExecutionContext& context,
-        VisualGraphDebugSession* debugger = nullptr);
+        VisualGraphDebugSession* debugger = nullptr,
+        std::size_t maximumSteps = 4096U,
+        kb::core::BudgetExceededPolicy budgetExceededPolicy = kb::core::BudgetExceededPolicy::Fail);
 };
 
 } // namespace kb::visual

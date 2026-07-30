@@ -1617,6 +1617,40 @@ void RunVisualGraphWaitContinuationTest() {
         "Visual graph native code did not preserve task-aware Wait state across resumptions");
 }
 
+void RunVisualGraphExecutionBudgetPolicyTest() {
+    kb::visual::VisualGraphRuntimeArtifact artifact{};
+    artifact.module.functions = { kb::visual::VisualGraphIrFunction{
+        .event = kb::visual::VisualGraphLifecycleEvent::Tick,
+        .eventNodeId = 41U,
+        .entryNodeId = 1U,
+        .instructions = {
+            { .opcode = kb::visual::VisualGraphIrOpcode::Sequence, .sourceNodeId = 1U, .nextNodeId = 2U },
+            { .opcode = kb::visual::VisualGraphIrOpcode::EmitEvent, .sourceNodeId = 2U, .symbol = "BudgetReached" },
+        },
+    } };
+    const kb::visual::VisualGraphRuntimeBindingRegistry bindings;
+
+    kb::visual::VisualGraphRuntimeExecutionContext suspendedContext;
+    const kb::visual::VisualGraphRuntimeExecutor suspendExecutor{
+        bindings, nullptr, 1U, kb::core::BudgetExceededPolicy::Suspend };
+    const kb::visual::VisualGraphRuntimeExecutionResult suspended =
+        suspendExecutor.Execute(artifact, kb::visual::VisualGraphLifecycleEvent::Tick, suspendedContext);
+    kb::tests::Require(suspended.Succeeded() && suspended.suspended && suspendedContext.EmittedEvents().empty(),
+        "Visual graph Suspend execution budget policy did not preserve a resumable continuation");
+    const kb::visual::VisualGraphRuntimeExecutionResult resumed =
+        suspendExecutor.Execute(artifact, kb::visual::VisualGraphLifecycleEvent::Tick, suspendedContext);
+    kb::tests::Require(resumed.Succeeded() && !resumed.suspended && suspendedContext.EmittedEvents() == std::vector<std::string>{ "BudgetReached" },
+        "Visual graph execution budget continuation did not resume at the exact next node");
+
+    kb::visual::VisualGraphRuntimeExecutionContext failedContext;
+    const kb::visual::VisualGraphRuntimeExecutor failExecutor{
+        bindings, nullptr, 1U, kb::core::BudgetExceededPolicy::Fail };
+    const kb::visual::VisualGraphRuntimeExecutionResult failed =
+        failExecutor.Execute(artifact, kb::visual::VisualGraphLifecycleEvent::Tick, failedContext);
+    kb::tests::Require(!failed.Succeeded() && !failed.suspended && !failed.diagnostics.empty(),
+        "Visual graph Fail execution budget policy did not return a structured runtime error");
+}
+
 void RunVisualGraphDebuggerTest() {
     kb::visual::VisualGraphRuntimeArtifact artifact{};
     artifact.assetId = kb::assets::AssetId{ 229U };
@@ -1675,6 +1709,7 @@ void RunVisualGraphTests() {
     RunVisualGraphCompilerRejectsInvalidDataPinsTest();
     RunVisualGraphCompilerRejectsCyclesTest();
     RunVisualGraphRuntimeControlFlowLoopWatchdogTest();
+    RunVisualGraphExecutionBudgetPolicyTest();
     RunVisualGraphRuntimeDataInputDepthWatchdogTest();
     RunVisualGraphCompilerBranchTargetsTest();
     RunVisualGraphRuntimeDataDependencyDoesNotFollowExecutionTest();

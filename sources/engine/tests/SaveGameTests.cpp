@@ -243,6 +243,57 @@ void RunSaveGameDomainSeparationTest() {
         "Loading a UserSettings file as SaveGame must be rejected as WrongDomain");
 }
 
+// LIB-256: deterministic property coverage for the production save envelope.
+// Each generated save carries every public value class, including the stable
+// AssetId reference used by the asset runtime.  The only oracle is a complete
+// disk round trip through SaveGameService; no test-side serializer mirrors the
+// production format.
+void RunSaveGamePropertyFuzzTest() {
+    ResetSaveTestRoot();
+    std::uint64_t state = 0x21B256U;
+    const auto next = [&state]() noexcept {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        return state;
+    };
+
+    const std::filesystem::path path = SaveTestRoot() / "property_fuzz.kbsave";
+    for (std::size_t iteration = 0U; iteration < 256U; ++iteration) {
+        const bool expectedBool = (next() & 1U) != 0U;
+        const std::int64_t expectedInt = static_cast<std::int64_t>(next());
+        const double expectedFloat = static_cast<double>(next() % 1000000U) / 1000.0 - 500.0;
+        std::string expectedString;
+        const std::size_t length = static_cast<std::size_t>(next() % 48U);
+        expectedString.reserve(length);
+        for (std::size_t index = 0U; index < length; ++index) {
+            expectedString += static_cast<char>('!' + (next() % 90U));
+        }
+        const kb::assets::AssetId expectedAsset{ next() | 1U };
+
+        kb::save::SaveGame save;
+        save.SetBool("bool", expectedBool);
+        save.SetInt("int", expectedInt);
+        save.SetFloat("float", expectedFloat);
+        save.SetString("string", expectedString);
+        save.SetAssetRef("asset", expectedAsset);
+        kb::tests::Require(kb::save::SaveGameService::Save(path, save),
+            "SaveGame property fuzz could not write a generated save");
+
+        const kb::save::SaveGameLoadResult loaded = kb::save::SaveGameService::Load(path);
+        bool actualBool = false;
+        std::int64_t actualInt = 0;
+        double actualFloat = 0.0;
+        std::string actualString;
+        kb::assets::AssetId actualAsset;
+        kb::tests::Require(loaded.Succeeded() && loaded.save.Count() == 5U &&
+                loaded.save.GetBool("bool", actualBool) && actualBool == expectedBool &&
+                loaded.save.GetInt("int", actualInt) && actualInt == expectedInt &&
+                loaded.save.GetFloat("float", actualFloat) && actualFloat == expectedFloat &&
+                loaded.save.GetString("string", actualString) && actualString == expectedString &&
+                loaded.save.GetAssetRef("asset", actualAsset) && actualAsset == expectedAsset,
+            "SaveGame property fuzz round trip changed a generated value");
+    }
+}
+
 // LIB-162: the schema migration mechanism, exercised directly with real steps
 // (the shipped built-in table is empty because v1 is the first schema).
 void RunSaveGameMigrationTest() {
@@ -311,6 +362,7 @@ void RunSaveGameTests() {
     RunSaveGameCorruptionTest();
     RunSaveGameMigrationTest();
     RunSaveGameDomainSeparationTest();
+    RunSaveGamePropertyFuzzTest();
 }
 
 } // namespace kb::tests

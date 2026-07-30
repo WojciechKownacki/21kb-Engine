@@ -23,6 +23,7 @@
 #include "engine/scene/SceneNavigationComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
+#include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 
@@ -288,6 +289,18 @@ struct ScriptComponentAccess<kb::scene::NavObstacle> {
     [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
         if (!scene.Components().NavObstacles().Has(entity)) return false;
         scene.Components().NavObstacles().Remove(entity);
+        return true;
+    }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::TagsComponent> {
+    [[nodiscard]] static const kb::scene::TagsComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Tags().TryGet(entity); }
+    [[nodiscard]] static kb::scene::TagsComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().Tags().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::TagsComponent& value) { scene.Components().Tags().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().Tags().Has(entity)) return false;
+        scene.Components().Tags().Remove(entity);
         return true;
     }
 };
