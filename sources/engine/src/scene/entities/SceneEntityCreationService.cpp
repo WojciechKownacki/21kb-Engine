@@ -31,8 +31,16 @@ SceneEntity SceneEntityCreationService::CreateEntity(Scene& scene, SceneObjectDe
     }
     SceneHierarchyCache::AssignOrder(state, entity);
     SceneHierarchyCache::AddRoot(state, entity);
-    state.componentStorage.SetDefaults(entity, desc.transform, desc.visibility);
-    if (!desc.visibility.visible) {
+    VisibilityComponent visibility = desc.visibility;
+    if (!IsVisibilityModeValid(visibility.mode)) {
+        visibility.mode = visibility.visible ? VisibilityMode::Visible : VisibilityMode::Hidden;
+    }
+    if (!visibility.visible) {
+        visibility.mode = VisibilityMode::Hidden;
+    }
+    visibility.visible = visibility.mode != VisibilityMode::Hidden;
+    state.componentStorage.SetDefaults(entity, desc.transform, visibility);
+    if (visibility.mode == VisibilityMode::Hidden) {
         SetSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Hidden);
     }
 

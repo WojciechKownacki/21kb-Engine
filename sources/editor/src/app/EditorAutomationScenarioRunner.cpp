@@ -44,6 +44,8 @@
 #include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneUIDocuments.hpp"
+#include "engine/scene/SceneVisibilityResolution.hpp"
+#include "engine/scene/VisibilityComponent.hpp"
 #include "engine/script/ScriptAgentProjectFiles.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
@@ -212,6 +214,19 @@ private:
         object, name, JsonValue::Kind::Bool, error, required);
     if (value == nullptr) return std::nullopt;
     return value->AsBool();
+}
+
+[[nodiscard]] std::optional<std::uint32_t> UInt32Member(
+    const JsonValue& object, std::string_view name,
+    std::string& error, bool required = true) {
+    const auto number = NumberMember(object, name, error, required);
+    if (!number.has_value()) return std::nullopt;
+    if (*number < 0.0 || *number > static_cast<double>(std::numeric_limits<std::uint32_t>::max()) ||
+        std::trunc(*number) != *number) {
+        error = "'" + std::string{ name } + "' must be an unsigned 32-bit integer";
+        return std::nullopt;
+    }
+    return static_cast<std::uint32_t>(*number);
 }
 
 [[nodiscard]] bool IsInside(
@@ -436,6 +451,16 @@ ReadScriptValue(
         }
         break;
     }
+    case ScriptValueType::UInt32: {
+        if (value.GetKind() != JsonValue::Kind::Number) break;
+        const double number = value.AsNumber();
+        if (std::isfinite(number) && std::floor(number) == number &&
+            number >= 0.0 &&
+            number <= static_cast<double>(std::numeric_limits<std::uint32_t>::max())) {
+            return ScriptValue{ static_cast<std::uint32_t>(number) };
+        }
+        break;
+    }
     case ScriptValueType::Float:
         if (value.GetKind() == JsonValue::Kind::Number &&
             std::isfinite(value.AsNumber())) {
@@ -494,6 +519,8 @@ ReadScriptValue(
         return value.AsBool() ? "true" : "false";
     case kb::script::ScriptValueType::Int:
         return std::to_string(value.AsInt());
+    case kb::script::ScriptValueType::UInt32:
+        return std::to_string(value.AsUInt32());
     case kb::script::ScriptValueType::Float:
         return std::to_string(value.AsFloat());
     case kb::script::ScriptValueType::String:
@@ -1754,6 +1781,58 @@ ReadScriptValue(
         }
         const bool matched = animator->rootMotionOwner == *expected;
         return { matched, matched ? *owner : "root-motion owner mismatch" };
+    }
+
+    if (*operation == "set_visibility_mode" ||
+        *operation == "assert_resolved_visibility") {
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(entity)) {
+            return { false, "entity alias is not alive" };
+        }
+
+        if (*operation == "set_visibility_mode") {
+            const auto modeText = StringMember(step, "mode", error);
+            if (!modeText) return { false, error };
+            const auto desired = *modeText == "inherit" ? kb::scene::VisibilityMode::Inherit
+                : *modeText == "visible" ? kb::scene::VisibilityMode::Visible
+                : *modeText == "hidden" ? kb::scene::VisibilityMode::Hidden
+                : static_cast<kb::scene::VisibilityMode>(255U);
+            if (!kb::scene::IsVisibilityModeValid(desired)) {
+                return { false, "unknown visibility mode" };
+            }
+            for (std::size_t attempts = 0U; attempts < 3U; ++attempts) {
+                const kb::scene::VisibilityComponent visibility = state.context.Scene().Components().Visibility().Get(entity);
+                if (visibility.mode == desired) {
+                    return { true, *modeText };
+                }
+                if (!state.context.CycleEntityVisibilityMode(entity)) {
+                    return { false, "editor rejected visibility mode change" };
+                }
+            }
+            return { false, "visibility mode did not reach requested state" };
+        }
+
+        const auto expectedVisible = BoolMember(step, "visible", error);
+        const auto expectedMask = UInt32Member(step, "mask", error);
+        if (!expectedVisible || !expectedMask) return { false, error };
+        const kb::scene::ResolvedVisibility resolved = kb::scene::ResolveVisibility(state.context.Scene(), entity);
+        const bool matched = resolved.visible == *expectedVisible && resolved.mask == *expectedMask;
+        return { matched, matched ? "resolved visibility" : "resolved visibility mismatch" };
+    }
+
+    if (*operation == "set_visibility_mask") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto mask = UInt32Member(step, "mask", error);
+        if (!alias || !mask) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(entity)) {
+            return { false, "entity alias is not alive" };
+        }
+        const bool changed = state.context.SetEntityVisibilityMask(entity, *mask);
+        const kb::scene::VisibilityComponent visibility = state.context.Scene().Components().Visibility().Get(entity);
+        return { changed || visibility.mask == *mask, changed ? "visibility mask changed" : "visibility mask already set" };
     }
 
     if (*operation == "set_property" ||

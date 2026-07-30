@@ -289,6 +289,8 @@ public:
 
     [[nodiscard]] bool ToggleHierarchyRowExpanded(std::size_t rowIndex);
     [[nodiscard]] bool ToggleEntityVisibility(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool CycleEntityVisibilityMode(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool SetEntityVisibilityMask(kb::scene::SceneEntity entity, std::uint32_t mask);
     [[nodiscard]] kb::scene::SceneEntity CreateHierarchyObject();
     [[nodiscard]] kb::scene::SceneEntity CreateLightObject(kb::scene::LightKind kind);
     [[nodiscard]] bool ReparentEntity(kb::scene::SceneEntity child, kb::scene::SceneEntity parent);

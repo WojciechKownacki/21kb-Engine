@@ -54,6 +54,8 @@ struct ScenePrefabAssetFormat {
     static constexpr std::string_view LocalRotationKey = "localRotation";
     static constexpr std::string_view LocalScaleKey = "localScale";
     static constexpr std::string_view VisibleKey = "visible";
+    static constexpr std::string_view VisibilityModeKey = "visibilityMode";
+    static constexpr std::string_view VisibilityMaskKey = "visibilityMask";
 
     static constexpr std::string_view NodeMarker = "node";
     static constexpr std::string_view EndNodeMarker = "endnode";

@@ -19,7 +19,7 @@ std::string InspectorEntitySummaryTextBuilder::Build(const EditorSceneContext& s
         "Entity: %s\nId: %llu\nVisible: %s\n\nTransform\nPosition: %.2f, %.2f, %.2f\nRotation: %.2f, %.2f, %.2f, %.2f\nScale: %.2f, %.2f, %.2f",
         sceneContext.Scene().Entities().Name(entity).c_str(),
         static_cast<unsigned long long>(entity.Id()),
-        visibility.visible ? "true" : "false",
+        visibility.mode != kb::scene::VisibilityMode::Hidden ? "true" : "false",
         transform.localPosition.x,
         transform.localPosition.y,
         transform.localPosition.z,

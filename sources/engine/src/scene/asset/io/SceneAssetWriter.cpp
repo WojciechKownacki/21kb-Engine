@@ -58,7 +58,9 @@ void WriteNode(std::vector<std::uint8_t>& output, const ScenePrefabNodeDesc& nod
     SceneAssetPrimitiveCodec::WriteVec3(output, node.transform.localPosition);
     SceneAssetPrimitiveCodec::WriteQuat(output, node.transform.localRotation);
     SceneAssetPrimitiveCodec::WriteVec3(output, node.transform.localScale);
-    WriteUInt8(output, node.visibility.visible ? 1U : 0U);
+    WriteUInt8(output, node.visibility.mode != VisibilityMode::Hidden ? 1U : 0U);
+    WriteUInt8(output, static_cast<std::uint8_t>(node.visibility.mode));
+    WriteUInt32(output, node.visibility.mask);
     SceneAssetComponentCodec::Write(output, node.components);
 }
 

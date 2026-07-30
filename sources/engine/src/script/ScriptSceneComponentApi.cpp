@@ -249,7 +249,9 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kTransformPropertyDes
     ScriptSceneComponentPropertyDesc{ "worldPosition.z", ScriptValueType::Float, false },
 };
 
-constexpr std::array<ScriptSceneComponentPropertyDesc, 1> kVisibilityPropertyDescs{
+constexpr std::array<ScriptSceneComponentPropertyDesc, 3> kVisibilityPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "mode", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "mask", ScriptValueType::UInt32 },
     ScriptSceneComponentPropertyDesc{ "visible", ScriptValueType::Bool },
 };
 
@@ -414,8 +416,44 @@ constexpr std::array<FieldBinding, 13> kTransformFields{
     KB_NESTED_FLOAT(kb::scene::TransformComponent, worldPosition, z),
 };
 
-constexpr std::array<FieldBinding, 1> kVisibilityFields{
-    KB_BOOL(kb::scene::VisibilityComponent, visible),
+constexpr std::array<FieldBinding, 3> kVisibilityFields{
+    FieldBinding{ "mode",
+        [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::VisibilityComponent*>(component)->mode) }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool {
+            if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > 2) return false;
+            auto& visibility = *static_cast<kb::scene::VisibilityComponent*>(component);
+            visibility.mode = static_cast<kb::scene::VisibilityMode>(value.AsInt());
+            visibility.visible = visibility.mode != kb::scene::VisibilityMode::Hidden;
+            return true;
+        } },
+    FieldBinding{ "mask",
+        [](const void* component) noexcept -> ScriptValue {
+            return ScriptValue{ static_cast<const kb::scene::VisibilityComponent*>(component)->mask };
+        },
+        [](void* component, const ScriptValue& value) noexcept -> bool {
+            auto& visibility = *static_cast<kb::scene::VisibilityComponent*>(component);
+            if (value.Type() == ScriptValueType::UInt32) {
+                visibility.mask = value.AsUInt32();
+                return true;
+            }
+            if (value.Type() == ScriptValueType::Int && value.AsInt() >= 0) {
+                visibility.mask = static_cast<std::uint32_t>(value.AsInt());
+                return true;
+            }
+            return false;
+        } },
+    FieldBinding{ "visible",
+        [](const void* component) noexcept -> ScriptValue {
+            const auto& visibility = *static_cast<const kb::scene::VisibilityComponent*>(component);
+            return ScriptValue{ visibility.mode != kb::scene::VisibilityMode::Hidden && visibility.visible };
+        },
+        [](void* component, const ScriptValue& value) noexcept -> bool {
+            if (value.Type() != ScriptValueType::Bool) return false;
+            auto& visibility = *static_cast<kb::scene::VisibilityComponent*>(component);
+            visibility.mode = value.AsBool() ? kb::scene::VisibilityMode::Visible : kb::scene::VisibilityMode::Hidden;
+            visibility.visible = value.AsBool();
+            return true;
+        } },
 };
 
 constexpr std::array<FieldBinding, 13> kCameraFields{

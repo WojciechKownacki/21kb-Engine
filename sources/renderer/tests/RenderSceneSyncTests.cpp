@@ -202,6 +202,44 @@ void RunEcsSyncPropagatesCullingMaskAndClearSettingsTest() {
     Require(builtCamera.clearMode == SceneRenderCameraClearMode::DepthOnly, "RenderSceneCameraBuilder::Build did not carry clearMode into the resolved SceneRenderCamera");
 }
 
+void RunEcsSyncResolvesVisibilityGateHierarchyAndMaskTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity parent = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Visibility Parent" });
+    const kb::scene::SceneEntity child = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Visibility Child" });
+    Require(scene.Hierarchy().SetParent(child, parent), "Visibility-gate test setup did not parent the child");
+    scene.Components().MeshRenderers().Set(child, kb::scene::MeshRendererComponent{
+        .meshAssetId = 5U,
+        .materialAssetId = 9U,
+        .layer = 0x000000FFU,
+    });
+    scene.Components().Visibility().Set(parent, kb::scene::VisibilityComponent{
+        .mode = kb::scene::VisibilityMode::Hidden,
+        .mask = 0x0000000FU,
+        .visible = false,
+    });
+    scene.Components().Visibility().Set(child, kb::scene::VisibilityComponent{
+        .mode = kb::scene::VisibilityMode::Inherit,
+        .mask = 0x00000003U,
+    });
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+    const MeshRenderProxy* proxy = renderScene.FindMeshByEntity(child.Id());
+    Require(proxy != nullptr && !proxy->desc.visible,
+        "EcsRenderSceneSynchronizer did not inherit a hidden Visibility Gate from the parent");
+    Require(proxy->desc.layer == 0x00000003U,
+        "EcsRenderSceneSynchronizer did not intersect the hierarchy Visibility Mask with the mesh layer");
+
+    scene.Components().Visibility().Set(child, kb::scene::VisibilityComponent{
+        .mode = kb::scene::VisibilityMode::Visible,
+        .mask = 0x00000003U,
+    });
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+    proxy = renderScene.FindMeshByEntity(child.Id());
+    Require(proxy != nullptr && proxy->desc.visible,
+        "EcsRenderSceneSynchronizer did not let the child's explicit Visible mode override the parent gate");
+}
+
 // LIB-139/LIB-140: proves EcsRenderSceneSynchronizer::SyncMesh actually resolves a live
 // materialInstanceHandle - winning over the authored materialAssetId - and honestly falls
 // back to "no material" (0) once the instance is Release()d - not a crash, not silently
@@ -2347,6 +2385,7 @@ void RunRenderSceneSyncTests() {
     RunCreatesStableRenderProxiesTest();
     RunRenderScenePrimaryCameraSelectionRespectsViewportAndPriorityTest();
     RunEcsSyncPropagatesCullingMaskAndClearSettingsTest();
+    RunEcsSyncResolvesVisibilityGateHierarchyAndMaskTest();
     RunEcsSyncResolvesMaterialInstanceHandleTest();
     RunRenderSceneSyncsLightPipelineFieldsTest();
     RunRenderSceneIgnoresLightsWithoutBasicLightingProviderTest();
