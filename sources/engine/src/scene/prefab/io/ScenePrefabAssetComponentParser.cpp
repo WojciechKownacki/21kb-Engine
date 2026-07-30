@@ -133,6 +133,27 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseGuideCurve(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool hasGuideCurve = false;
+    if (!ParseOptionalComponentFlag(fields, "guideCurve", hasGuideCurve)) return false;
+    if (!hasGuideCurve) return true;
+    GuideCurveComponent guideCurve{};
+    int interpolation = 0;
+    if (!ParseField(fields, "guideCurve.controlPointCount", guideCurve.controlPointCount)
+        || !IsGuideCurveControlPointCountValid(guideCurve.controlPointCount)
+        || !ParseField(fields, "guideCurve.interpolation", interpolation)
+        || interpolation < static_cast<int>(GuideCurveInterpolation::Linear)
+        || interpolation > static_cast<int>(GuideCurveInterpolation::CatmullRom)
+        || !ParseOptionalBool(fields, "guideCurve.closed", guideCurve.closed)
+        || !ParseOptionalBool(fields, "guideCurve.enabled", guideCurve.enabled)) return false;
+    for (std::uint32_t index = 0U; index < guideCurve.controlPointCount; ++index) {
+        if (!ScenePrefabAssetFieldParser::ParseVec3(fields, "guideCurve.point" + std::to_string(index), guideCurve.controlPoints[index])) return false;
+    }
+    guideCurve.interpolation = static_cast<GuideCurveInterpolation>(interpolation);
+    components.guideCurve = guideCurve;
+    return true;
+}
+
 [[nodiscard]] bool ParseCharacterController(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool hasCharacterController = false;
     if (!ParseOptionalComponentFlag(fields, "characterController", hasCharacterController)) {
@@ -315,6 +336,7 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseRigidbody(fields, components)
         && ParseCollider(fields, components)
         && ParseRegionShape(fields, components)
+        && ParseGuideCurve(fields, components)
         && ParseCharacterController(fields, components)
         && ParseJoint(fields, components)
         && ScenePrefabAssetTagsParser::Parse(fields, components)

@@ -142,6 +142,7 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<JointComponent> joints;
     std::vector<TagsComponent> tags;
     std::vector<RegionShapeComponent> regionShapes;
+    std::vector<GuideCurveComponent> guideCurves;
     std::vector<BehaviourComponent> behaviours;
     std::vector<AudioSourceComponent> audioSources;
     std::vector<AudioListenerComponent> audioListeners;
@@ -204,6 +205,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::RegionShape)) {
             RepeatComponents(regionShapes, std::span<const RegionShapeComponent>{ archetype.regionShapes }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const RegionShapeComponent>{ regionShapes });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::GuideCurve)) {
+            RepeatComponents(guideCurves, std::span<const GuideCurveComponent>{ archetype.guideCurves }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const GuideCurveComponent>{ guideCurves });
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Behaviour)) {
             RepeatComponents(behaviours, std::span<const BehaviourComponent>{ archetype.behaviours }, instanceCount);
@@ -285,6 +290,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::RegionShape)) {
             AddCommandComponentPatternView(views, std::span<const RegionShapeComponent>{ archetype.regionShapes }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const RegionShapeComponent>{ archetype.regionShapes }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::GuideCurve)) {
+            AddCommandComponentPatternView(views, std::span<const GuideCurveComponent>{ archetype.guideCurves }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const GuideCurveComponent>{ archetype.guideCurves }, instanceCount);
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Behaviour)) {
             AddCommandComponentPatternView(views, std::span<const BehaviourComponent>{ archetype.behaviours }, instanceCount);

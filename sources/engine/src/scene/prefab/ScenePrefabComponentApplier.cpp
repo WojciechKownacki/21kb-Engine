@@ -36,6 +36,9 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.regionShape.has_value()) {
         sceneComponents.RegionShapes().Set(entity, *components.regionShape);
     }
+    if (components.guideCurve.has_value()) {
+        sceneComponents.GuideCurves().Set(entity, *components.guideCurve);
+    }
     if (components.behaviour.has_value()) {
         sceneComponents.Behaviours().Set(entity, *components.behaviour);
     }

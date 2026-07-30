@@ -118,6 +118,11 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .id = ComputeLibraryComponentId("RegionShape"),
             .serializable = true,
         },
+        LibraryComponentDesc{
+            .name = "GuideCurve",
+            .id = ComputeLibraryComponentId("GuideCurve"),
+            .serializable = true,
+        },
     };
     return kCatalog;
 }
