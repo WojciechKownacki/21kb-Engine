@@ -89,7 +89,7 @@ void RegisterAudioReflection(kb::ecs::World& world) {
 
 SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     : transformComponentId_(RegisterSceneComponent<TransformComponent>(world, "kb.scene.TransformComponent"))
-    , visibilityComponentId_(RegisterSceneComponent<VisibilityComponent>(world, "kb.scene.VisibilityComponent"))
+    , visibilityComponentId_(RegisterSceneComponent<VisibilityComponent>(world, VisibilityComponent::StableId))
     , behaviourComponentId_(RegisterSceneComponent<BehaviourComponent>(world, "kb.scene.BehaviourComponent"))
     , cameraComponentId_(RegisterSceneComponent<CameraComponent>(world, "kb.scene.CameraComponent"))
     , meshRendererComponentId_(RegisterSceneComponent<MeshRendererComponent>(world, "kb.scene.MeshRendererComponent"))

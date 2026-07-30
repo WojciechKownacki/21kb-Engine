@@ -30,7 +30,7 @@ bool ScenePrefabPropertyApplier::Apply(Scene& scene, ScenePrefabNodeDesc& node, 
         }
         return true;
     }
-    if (propertyPath == "visibility.visible") {
+    if (ScenePrefabPropertyPath::StartsWith(propertyPath, "visibility.")) {
         node.visibility = scene.Components().Visibility().Get(object.Entity());
         return true;
     }

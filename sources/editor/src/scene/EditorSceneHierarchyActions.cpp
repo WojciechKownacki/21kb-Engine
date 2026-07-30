@@ -14,7 +14,9 @@ bool EditorSceneHierarchyActions::ToggleVisibility(kb::scene::Scene& scene, kb::
     }
 
     kb::scene::VisibilityComponent visibility = scene.Components().Visibility().Get(entity);
-    visibility.visible = !visibility.visible;
+    visibility.mode = visibility.mode == kb::scene::VisibilityMode::Hidden
+        ? kb::scene::VisibilityMode::Visible
+        : kb::scene::VisibilityMode::Hidden;
     scene.Components().Visibility().Set(entity, visibility);
     return true;
 }

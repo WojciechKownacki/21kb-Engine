@@ -45,6 +45,9 @@ scenario-local aliases.
 | `select_project_settings_category` | `category`: `inputs`, `graphics`, or `physics`; selects the visible Project Settings page before a panel capture |
 | `set_joint_connection` | `entity` (a Joint owner) and `connected_entity`; assigns the Joint's referenced entity and marks it modified for scene persistence |
 | `assert_joint_connection` | `entity` and `connected_entity`; verifies the Joint still targets that entity, including after scene reload |
+| `set_visibility_mode` | `entity`, authoring `mode`: `inherit`, `visible`, or `hidden`; uses the production Inspector command and its undo stack |
+| `set_visibility_mask` | `entity`, unsigned 32-bit `mask`; uses the production Inspector command |
+| `assert_resolved_visibility` | `entity`, effective boolean `visible` and unsigned 32-bit `mask`; verifies the hierarchy-resolved runtime gate |
 | `set_inspector_scroll` | `position`: `top` or `bottom`; moves the Inspector to the requested end before a capture |
 | `set_physics_debug_draw` | `enabled`; toggles the scene's physics debug wireframes before a Scene panel capture |
 | `assert_physics_debug_line_count` | `count`; verifies the exact production wireframe line count currently emitted by the scene |

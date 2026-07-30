@@ -77,6 +77,7 @@
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneVisibilityResolution.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -2707,7 +2708,7 @@ void RunEngineLibraryComponentRegistryTest() {
     // Save+Load with its real field values and cross-entity references.
     kb::scene::Scene source;
     const kb::scene::SceneObject object = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ComponentRegistrySubject" });
-    source.Components().Visibility().Set(object.Entity(), kb::scene::VisibilityComponent{ .visible = false });
+    source.Components().Visibility().Set(object.Entity(), kb::scene::VisibilityComponent{ .mask = 0x0000000FU, .visible = false });
     source.Components().Cameras().Set(object.Entity(), kb::scene::CameraComponent{ .verticalFovDegrees = 55.0F });
     source.Components().Lights().Set(object.Entity(), kb::scene::LightComponent{ .intensity = 3.0F });
     source.Components().MeshRenderers().Set(object.Entity(), kb::scene::MeshRendererComponent{ .meshAssetId = 77U });
@@ -2757,8 +2758,9 @@ void RunEngineLibraryComponentRegistryTest() {
     // both routes genuinely persist the data, so the non-default
     // visible=false set on the source must survive too.
     const kb::scene::VisibilityComponent* restoredVisibility = target.Components().Visibility().TryGet(restored);
-    kb::tests::Require(restoredVisibility != nullptr && !restoredVisibility->visible,
-        "Engine21kbLibrary component registry: Visibility is marked serializable=true and must survive a save/load round trip (baked unconditionally per prefab node)");
+    kb::tests::Require(restoredVisibility != nullptr && restoredVisibility->mode == kb::scene::VisibilityMode::Hidden &&
+                            !restoredVisibility->visible && restoredVisibility->mask == 0x0000000FU,
+        "Engine21kbLibrary component registry: Visibility mode and mask must survive a save/load round trip (baked unconditionally per prefab node)");
 
     // LIB-123: Rigidbody/Collider/CharacterController are marked
     // serializable=true and must actually round-trip, field values included
@@ -2987,7 +2989,7 @@ void RunComponentInspectorDescCatalogTest() {
     // LIB-183 adds 11 NavAgent fields and 9 NavObstacle fields to the prior
     // 97-field contract, bringing the library/editor scripting surface to
     // 117 described fields across 12 components.
-    kb::tests::Require(fieldsChecked == 118U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (118) across all components");
+    kb::tests::Require(fieldsChecked == 120U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (120) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
@@ -5034,6 +5036,33 @@ void RunGameInstanceLifetimeTest() {
     kb::tests::Require(match.SetPhase(kb::gameplay::MatchPhase::Playing) && match.SelectSpawn(1U) != nullptr, "Match config did not expose phase and team spawn policy");
 }
 
+void RunVisibilityGateResolutionTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Visibility Parent" });
+    const kb::scene::SceneObject child = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Visibility Child" });
+    kb::tests::Require(scene.Hierarchy().SetParent(child, parent), "Visibility gate test could not parent the child entity");
+
+    scene.Components().Visibility().Set(parent.Entity(), kb::scene::VisibilityComponent{
+        .mode = kb::scene::VisibilityMode::Hidden, .mask = 0x0FU, .visible = false });
+    scene.Components().Visibility().Set(child.Entity(), kb::scene::VisibilityComponent{
+        .mode = kb::scene::VisibilityMode::Inherit, .mask = 0x03U });
+    kb::scene::ResolvedVisibility resolved = kb::scene::ResolveVisibility(scene, child.Entity());
+    kb::tests::Require(!resolved.visible && resolved.mask == 0x03U,
+        "Inherited visibility must use the nearest parent gate and intersect parent and child masks");
+
+    scene.Components().Visibility().Set(child.Entity(), kb::scene::VisibilityComponent{
+        .mode = kb::scene::VisibilityMode::Visible, .mask = 0x03U });
+    resolved = kb::scene::ResolveVisibility(scene, child.Entity());
+    kb::tests::Require(resolved.visible && resolved.mask == 0x03U,
+        "An explicit child visible gate must override a hidden parent while retaining hierarchical mask restriction");
+
+    scene.Components().Visibility().Set(child.Entity(), kb::scene::VisibilityComponent{
+        .mode = kb::scene::VisibilityMode::Hidden, .mask = 0x03U, .visible = false });
+    resolved = kb::scene::ResolveVisibility(scene, child.Entity());
+    kb::tests::Require(!resolved.visible,
+        "An explicit hidden child gate must resolve hidden regardless of its parent");
+}
+
 void RunEngineLibraryTests() {
     RunVersionValueTest();
     RunVersionOrderingTest();
@@ -5087,6 +5116,7 @@ void RunEngineLibraryTests() {
     RunFunctionDeprecationWiringTest();
     RunFunctionIdTest();
     RunEngineLibraryComponentRegistryTest();
+    RunVisibilityGateResolutionTest();
     RunEngineLibraryEventSchemaRegistryTest();
     RunComponentInspectorDescCatalogTest();
     RunLibraryQueryPhaseGateTest();

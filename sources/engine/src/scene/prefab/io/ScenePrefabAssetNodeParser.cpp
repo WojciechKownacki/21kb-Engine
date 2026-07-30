@@ -32,7 +32,18 @@ bool ScenePrefabAssetNodeParser::Parse(const ScenePrefabAssetFieldMap& fields, S
 
     node.stableId = stableId;
     node.parentNode = parent < 0 ? ScenePrefabNodeDesc::NoParent : static_cast<std::uint32_t>(parent);
-    node.visibility.visible = visible;
+    node.visibility.mode = visible ? VisibilityMode::Visible : VisibilityMode::Hidden;
+    if (const auto mode = fields.find(std::string{ ScenePrefabAssetFormat::VisibilityModeKey }); mode != fields.end()) {
+        std::uint32_t rawMode = 0U;
+        if (!ScenePrefabAssetFieldParser::ParseNumber(mode->second, rawMode)) return false;
+        node.visibility.mode = static_cast<VisibilityMode>(rawMode);
+        if (!IsVisibilityModeValid(node.visibility.mode)) return false;
+    }
+    if (const auto mask = fields.find(std::string{ ScenePrefabAssetFormat::VisibilityMaskKey }); mask != fields.end() &&
+        !ScenePrefabAssetFieldParser::ParseNumber(mask->second, node.visibility.mask)) {
+        return false;
+    }
+    node.visibility.visible = node.visibility.mode != VisibilityMode::Hidden;
     return true;
 }
 
