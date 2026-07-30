@@ -67,6 +67,8 @@ enum class InspectorPropertyId : std::uint8_t {
     None,
     EntityName,
     EntityVisible,
+    EntityVisibilityMode,
+    EntityVisibilityMask,
     PositionX,
     PositionY,
     PositionZ,

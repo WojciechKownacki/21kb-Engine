@@ -12,6 +12,7 @@
 #include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SceneVisibilityResolution.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "kb/render/scene/RenderScene.hpp"
@@ -44,11 +45,6 @@ namespace {
         overrides[index] = renderer.materialSlotAssetIds[index];
     }
     return count;
-}
-
-[[nodiscard]] bool IsVisible(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
-    const kb::scene::VisibilityComponent* visibility = scene.Components().Visibility().TryGet(entity);
-    return visibility == nullptr || visibility->visible;
 }
 
 [[nodiscard]] std::array<float, 3> PositionOf(const kb::scene::TransformComponent& transform) noexcept {
@@ -137,7 +133,7 @@ void SyncCamera(kb::scene::SceneEntity entity, const kb::scene::TransformCompone
         .nearClip = camera.nearClip,
         .farClip = camera.farClip,
         .primary = camera.primary,
-        .visible = IsVisible(*sync->scene, entity),
+        .visible = kb::scene::ResolveVisibility(*sync->scene, entity).visible,
         .viewportId = camera.viewportId,
         .priority = camera.priority,
         .cullingMask = camera.cullingMask,
@@ -174,6 +170,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
     std::array<std::uint64_t, kMaxSceneMaterialSlotOverrides> materialSlotAssetIds{};
     const std::uint32_t materialSlotOverrideCount = CopyMaterialSlotOverrides(renderer, materialSlotAssetIds);
     sync->meshes->push_back(entity.Id());
+    const kb::scene::ResolvedVisibility visibility = kb::scene::ResolveVisibility(*sync->scene, entity);
     static_cast<void>(sync->renderScene->UpsertMesh(MeshRenderProxyDesc{
         .entityId = entity.Id(),
         .meshAssetId = renderer.meshAssetId,
@@ -182,10 +179,10 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
         .materialSlotOverrideCount = materialSlotOverrideCount,
         .model = SceneTransformMatrices::Model(renderTransform),
         .color = NeutralInstanceColor(),
-        .visible = IsVisible(*sync->scene, entity),
+        .visible = visibility.visible,
         .castsShadow = renderer.castsShadow,
         .receivesShadow = renderer.receivesShadow,
-        .layer = renderer.layer,
+        .layer = renderer.layer & visibility.mask,
     }));
     static_cast<void>(transform);
 }
@@ -209,7 +206,7 @@ void SyncLight(kb::scene::SceneEntity entity, const kb::scene::TransformComponen
         .contactShadowLength = light.contactShadowLength,
         .volumetricScattering = light.volumetricScattering,
         .castsShadow = light.castsShadow,
-        .visible = IsVisible(*sync->scene, entity),
+        .visible = kb::scene::ResolveVisibility(*sync->scene, entity).visible,
         .layer = light.layerMask,
     }));
     static_cast<void>(transform);

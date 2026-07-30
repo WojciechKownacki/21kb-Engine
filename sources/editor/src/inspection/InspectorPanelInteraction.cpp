@@ -1690,6 +1690,16 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         sceneContext.Inspector().BeginTextEdit(InspectorPropertyId::EntityName, sceneContext.Scene().Entities().Name(entity));
         return true;
     }
+    if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::EntityVisibilityMode) {
+        sceneContext.Inspector().EndTextEdit();
+        return sceneContext.CycleEntityVisibilityMode(entity);
+    }
+    if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::EntityVisibilityMask) {
+        if (const kb::scene::VisibilityComponent* visibility = sceneContext.Scene().Components().Visibility().TryGet(entity); visibility != nullptr) {
+            sceneContext.Inspector().BeginTextEdit(InspectorPropertyId::EntityVisibilityMask, std::to_string(visibility->mask));
+        }
+        return true;
+    }
     if (hit.kind == InspectorHitKind::BoolField) {
         sceneContext.Inspector().EndTextEdit();
         if (hit.property == InspectorPropertyId::EntityVisible) {
@@ -2040,6 +2050,13 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
                     } else {
                         sceneContext.CancelActiveTransformEdit();
                     }
+                }
+            } else if (property == InspectorPropertyId::EntityVisibilityMask) {
+                std::uint32_t mask = 0U;
+                const std::string& text = inspector.EditBuffer();
+                const std::from_chars_result parsed = std::from_chars(text.data(), text.data() + text.size(), mask);
+                if (parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size()) {
+                    static_cast<void>(sceneContext.SetEntityVisibilityMask(entity, mask));
                 }
             }
         }

@@ -36,6 +36,8 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
             .displayName = "Visibility",
             .category = "Rendering",
             .fields = {
+                LibraryComponentInspectorFieldDesc{ "mode", "Visibility Mode", "Explicit visible, hidden, or inherited state in the parent hierarchy." },
+                LibraryComponentInspectorFieldDesc{ "mask", "Visibility Mask", "Render visibility bits checked against a camera mask." },
                 LibraryComponentInspectorFieldDesc{ "visible", "Visible", "Whether this entity is rendered." },
             },
         },

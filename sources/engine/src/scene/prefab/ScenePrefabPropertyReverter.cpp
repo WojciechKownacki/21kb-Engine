@@ -113,7 +113,7 @@ bool ScenePrefabPropertyReverter::Revert(Scene& scene, const ScenePrefabInstance
         scene.Transforms().Set(object, transform);
         return true;
     }
-    if (propertyPath == "visibility.visible") {
+    if (ScenePrefabPropertyPath::StartsWith(propertyPath, "visibility.")) {
         scene.Components().Visibility().Set(object.Entity(), node.visibility);
         return true;
     }

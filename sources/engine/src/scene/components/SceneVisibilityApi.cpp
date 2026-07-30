@@ -24,8 +24,16 @@ VisibilityComponent* SceneComponentMutationService::TryGetVisibility(Scene& scen
 void SceneComponentMutationService::SetVisibility(Scene& scene, SceneEntity entity, const VisibilityComponent& visibility) {
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
-        state.componentStorage.Visibility().Set(entity, visibility);
-        if (visibility.visible) {
+        VisibilityComponent normalized = visibility;
+        if (!IsVisibilityModeValid(normalized.mode)) {
+            normalized.mode = normalized.visible ? VisibilityMode::Visible : VisibilityMode::Hidden;
+        }
+        if (!normalized.visible) {
+            normalized.mode = VisibilityMode::Hidden;
+        }
+        normalized.visible = normalized.mode != VisibilityMode::Hidden;
+        state.componentStorage.Visibility().Set(entity, normalized);
+        if (normalized.mode != VisibilityMode::Hidden) {
             ClearSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Hidden);
         } else {
             SetSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Hidden);
@@ -37,6 +45,22 @@ void SceneComponentMutationService::SetVisibility(Scene& scene, SceneEntity enti
 void SceneComponentMutationService::MarkVisibilityModified(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
+        VisibilityComponent* visibility = state.componentStorage.Visibility().TryGet(entity);
+        if (visibility == nullptr) {
+            return;
+        }
+        if (!IsVisibilityModeValid(visibility->mode)) {
+            visibility->mode = visibility->visible ? VisibilityMode::Visible : VisibilityMode::Hidden;
+        }
+        if (!visibility->visible) {
+            visibility->mode = VisibilityMode::Hidden;
+        }
+        visibility->visible = visibility->mode != VisibilityMode::Hidden;
+        if (visibility->mode != VisibilityMode::Hidden) {
+            ClearSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Hidden);
+        } else {
+            SetSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Hidden);
+        }
         state.componentStorage.Visibility().MarkModified(entity);
         MarkScenePrefabNodeDirty(state, entity);
     }
