@@ -79,6 +79,7 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneVisibilityResolution.hpp"
 #include "engine/scene/SceneRegionShapeQueries.hpp"
+#include "engine/scene/SceneGuideCurveQueries.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -2728,6 +2729,14 @@ void RunEngineLibraryComponentRegistryTest() {
         .height = 2.5F,
         .enabled = false,
     });
+    kb::scene::GuideCurveComponent guideCurve{};
+    guideCurve.controlPointCount = 3U;
+    guideCurve.interpolation = kb::scene::GuideCurveInterpolation::Linear;
+    guideCurve.closed = true;
+    guideCurve.controlPoints[0] = { 1.0F, 0.0F, 0.0F };
+    guideCurve.controlPoints[1] = { 2.0F, 3.0F, 0.0F };
+    guideCurve.controlPoints[2] = { 4.0F, 0.0F, 5.0F };
+    source.Components().GuideCurves().Set(object.Entity(), guideCurve);
     const kb::scene::SceneObject jointTarget = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ComponentRegistryJointTarget" });
     source.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{ .type = kb::scene::JointType::Hinge, .connectedEntity = jointTarget.Entity(), .minLimit = -45.0F, .maxLimit = 45.0F, .enableLimit = true });
 
@@ -2803,6 +2812,12 @@ void RunEngineLibraryComponentRegistryTest() {
                             kb::tests::NearlyEqual(restoredRegionShape->radius, 0.75F) &&
                             kb::tests::NearlyEqual(restoredRegionShape->height, 2.5F) && !restoredRegionShape->enabled,
         "Engine21kbLibrary component registry: Region Shape must survive a real save/load round trip with all authored fields");
+    const kb::scene::GuideCurveComponent* restoredGuideCurve = target.Components().GuideCurves().TryGet(restored);
+    kb::tests::Require(restoredGuideCurve != nullptr && restoredGuideCurve->controlPointCount == 3U &&
+                            restoredGuideCurve->interpolation == kb::scene::GuideCurveInterpolation::Linear && restoredGuideCurve->closed &&
+                            kb::tests::NearlyEqual(restoredGuideCurve->controlPoints[1].y, 3.0F) &&
+                            kb::tests::NearlyEqual(restoredGuideCurve->controlPoints[2].z, 5.0F),
+        "Engine21kbLibrary component registry: Guide Curve must survive a real save/load round trip with all authored points");
     // Joint stores a prefab-local stable target id and resolves it to this
     // loaded scene's live entity only after every node has been created.
     const kb::scene::JointComponent* restoredJoint = target.Components().Joints().TryGet(restored);
@@ -3005,7 +3020,7 @@ void RunComponentInspectorDescCatalogTest() {
     // LIB-183 adds 11 NavAgent fields and 9 NavObstacle fields to the prior
     // 97-field contract, bringing the library/editor scripting surface to
     // 117 described fields across 12 components.
-    kb::tests::Require(fieldsChecked == 130U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (130) across all components");
+    kb::tests::Require(fieldsChecked == 134U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (134) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
@@ -5105,6 +5120,31 @@ void RunRegionShapeContainmentTest() {
         "Disabled Region Shape must not participate in containment queries");
 }
 
+void RunGuideCurveEvaluationTest() {
+    kb::scene::GuideCurveComponent curve{};
+    curve.interpolation = kb::scene::GuideCurveInterpolation::Linear;
+    curve.controlPointCount = 3U;
+    curve.controlPoints[0] = { 0.0F, 0.0F, 0.0F };
+    curve.controlPoints[1] = { 2.0F, 0.0F, 0.0F };
+    curve.controlPoints[2] = { 2.0F, 2.0F, 0.0F };
+    kb::scene::Vec3 position{};
+    kb::scene::Vec3 tangent{};
+    kb::tests::Require(kb::scene::GuideCurveEvaluateLocal(curve, 0.25F, position, tangent) &&
+            kb::tests::NearlyEqual(position.x, 1.0F) && kb::tests::NearlyEqual(position.y, 0.0F) &&
+            kb::tests::NearlyEqual(tangent.x, 1.0F),
+        "Guide Curve must evaluate normalized linear segments deterministically");
+    kb::tests::Require(kb::scene::GuideCurveEvaluateLocal(curve, 1.0F, position, tangent) &&
+            kb::tests::NearlyEqual(position.x, 2.0F) && kb::tests::NearlyEqual(position.y, 2.0F),
+        "Open Guide Curve must preserve its endpoint");
+    curve.closed = true;
+    kb::tests::Require(kb::scene::GuideCurveEvaluateLocal(curve, 1.25F, position, tangent) &&
+            kb::tests::NearlyEqual(position.x, 1.5F) && kb::tests::NearlyEqual(position.y, 0.0F),
+        "Closed Guide Curve must wrap its normalized parameter");
+    curve.enabled = false;
+    kb::tests::Require(!kb::scene::GuideCurveEvaluateLocal(curve, 0.0F, position, tangent),
+        "Disabled Guide Curve must not be evaluated");
+}
+
 void RunEngineLibraryTests() {
     RunVersionValueTest();
     RunVersionOrderingTest();
@@ -5160,6 +5200,7 @@ void RunEngineLibraryTests() {
     RunEngineLibraryComponentRegistryTest();
     RunVisibilityGateResolutionTest();
     RunRegionShapeContainmentTest();
+    RunGuideCurveEvaluationTest();
     RunEngineLibraryEventSchemaRegistryTest();
     RunComponentInspectorDescCatalogTest();
     RunLibraryQueryPhaseGateTest();

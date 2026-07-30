@@ -239,6 +239,17 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether queries include this region." },
             },
         },
+        LibraryComponentInspectorDesc{
+            .componentName = "GuideCurve",
+            .displayName = "Guide Curve",
+            .category = "Scene",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "controlPointCount", "Control Points", "Number of authored local control points." },
+                LibraryComponentInspectorFieldDesc{ "interpolation", "Interpolation", "Linear segments or a smooth Catmull-Rom curve." },
+                LibraryComponentInspectorFieldDesc{ "closed", "Closed", "Whether the last point connects back to the first." },
+                LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether runtime systems can evaluate this curve." },
+            },
+        },
     };
     return kCatalog;
 }

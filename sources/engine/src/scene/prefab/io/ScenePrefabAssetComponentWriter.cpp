@@ -132,6 +132,19 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "regionShape.enabled=" << (components.regionShape->enabled ? 1 : 0) << '\n';
     }
 
+    output << "guideCurve=" << (components.guideCurve.has_value() ? 1 : 0) << '\n';
+    if (components.guideCurve.has_value()) {
+        const GuideCurveComponent& guideCurve = *components.guideCurve;
+        output << "guideCurve.controlPointCount=" << guideCurve.controlPointCount << '\n';
+        output << "guideCurve.interpolation=" << static_cast<int>(guideCurve.interpolation) << '\n';
+        output << "guideCurve.closed=" << (guideCurve.closed ? 1 : 0) << '\n';
+        output << "guideCurve.enabled=" << (guideCurve.enabled ? 1 : 0) << '\n';
+        for (std::uint32_t index = 0U; index < guideCurve.controlPointCount; ++index) {
+            const std::string key = "guideCurve.point" + std::to_string(index);
+            WriteVec3(output, key.c_str(), guideCurve.controlPoints[index]);
+        }
+    }
+
     output << "behaviour=" << (components.behaviour.has_value() ? 1 : 0) << '\n';
     if (components.behaviour.has_value()) {
         output << "behaviour.behaviourAssetId=" << components.behaviour->behaviourAssetId << '\n';

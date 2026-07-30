@@ -6,7 +6,7 @@
 namespace kb::scene {
 namespace {
 
-inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 17U;
+inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 18U;
 
 [[nodiscard]] std::uint32_t ComponentMask(const ScenePrefabNodeComponents& components) noexcept {
     std::uint32_t mask = 0U;
@@ -39,6 +39,9 @@ inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 17U;
     }
     if (components.regionShape.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::RegionShape);
+    }
+    if (components.guideCurve.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::GuideCurve);
     }
     if (components.behaviour.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Behaviour);
@@ -131,6 +134,9 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         }
         if (node.components.regionShape.has_value()) {
             archetype.regionShapes.push_back(*node.components.regionShape);
+        }
+        if (node.components.guideCurve.has_value()) {
+            archetype.guideCurves.push_back(*node.components.guideCurve);
         }
         if (node.components.behaviour.has_value()) {
             archetype.behaviours.push_back(*node.components.behaviour);

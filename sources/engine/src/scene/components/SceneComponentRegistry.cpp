@@ -17,6 +17,7 @@
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
+#include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
@@ -99,6 +100,17 @@ void RegisterRegionShapeReflection(kb::ecs::World& world) {
         }));
 }
 
+void RegisterGuideCurveReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<GuideCurveComponent>(
+        "kb.scene.GuideCurveComponent",
+        {
+            KB_ECS_FIELD(GuideCurveComponent, controlPointCount, kb::ecs::ComponentFieldType::UInt32),
+            KB_ECS_FIELD(GuideCurveComponent, interpolation, kb::ecs::ComponentFieldType::Enum32),
+            KB_ECS_FIELD(GuideCurveComponent, closed, kb::ecs::ComponentFieldType::Bool),
+            KB_ECS_FIELD(GuideCurveComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+        }));
+}
+
 } // namespace
 
 SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
@@ -115,6 +127,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , jointComponentId_(RegisterSceneComponent<JointComponent>(world, "kb.scene.JointComponent"))
     , tagsComponentId_(RegisterSceneComponent<TagsComponent>(world, TagsComponent::StableId))
     , regionShapeComponentId_(RegisterSceneComponent<RegionShapeComponent>(world, RegionShapeComponent::StableId))
+    , guideCurveComponentId_(RegisterSceneComponent<GuideCurveComponent>(world, GuideCurveComponent::StableId))
     , audioSourceComponentId_(RegisterSceneComponent<AudioSourceComponent>(world, "kb.scene.AudioSourceComponent"))
     , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, "kb.scene.AudioListenerComponent"))
     , animatorComponentId_(RegisterSceneComponent<Animator>(world, "kb.scene.AnimatorComponent"))
@@ -124,6 +137,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     RegisterPhysicsReflection(world);
     RegisterAudioReflection(world);
     RegisterRegionShapeReflection(world);
+    RegisterGuideCurveReflection(world);
 }
 
 std::uint64_t SceneComponentRegistry::TransformComponentId() const noexcept {
@@ -177,6 +191,7 @@ std::uint64_t SceneComponentRegistry::TagsComponentId() const noexcept {
 std::uint64_t SceneComponentRegistry::RegionShapeComponentId() const noexcept {
     return regionShapeComponentId_;
 }
+std::uint64_t SceneComponentRegistry::GuideCurveComponentId() const noexcept { return guideCurveComponentId_; }
 
 std::uint64_t SceneComponentRegistry::AudioSourceComponentId() const noexcept {
     return audioSourceComponentId_;

@@ -10,6 +10,7 @@
 #include "engine/scene/Navigation.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
+#include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
 #include "engine/scene/SceneCharacterControllerComponents.hpp"
@@ -22,6 +23,7 @@
 #include "engine/scene/SceneNavigationComponents.hpp"
 #include "engine/scene/SceneRigidbodyComponents.hpp"
 #include "engine/scene/SceneRegionShapeComponents.hpp"
+#include "engine/scene/SceneGuideCurveComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -215,7 +217,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 14> kComponentNames{
+constexpr std::array<std::string_view, 15> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
@@ -230,6 +232,7 @@ constexpr std::array<std::string_view, 14> kComponentNames{
     "NavObstacle",
     "Tags",
     "RegionShape",
+    "GuideCurve",
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kRegionShapePropertyDescs{
@@ -242,6 +245,13 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kRegionShapePropertyD
     ScriptSceneComponentPropertyDesc{ "size.z", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "radius", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "height", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kGuideCurvePropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "controlPointCount", ScriptValueType::UInt32 },
+    ScriptSceneComponentPropertyDesc{ "interpolation", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "closed", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
@@ -639,6 +649,15 @@ constexpr std::array<FieldBinding, 10> kRegionShapeFields{
     KB_BOOL(kb::scene::RegionShapeComponent, enabled),
 };
 
+constexpr std::array<FieldBinding, 4> kGuideCurveFields{
+    FieldBinding{ "controlPointCount", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<std::uint32_t>(static_cast<const kb::scene::GuideCurveComponent*>(component)->controlPointCount) }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::UInt32 || !kb::scene::IsGuideCurveControlPointCountValid(value.AsUInt32())) return false; static_cast<kb::scene::GuideCurveComponent*>(component)->controlPointCount = value.AsUInt32(); return true; } },
+    FieldBinding{ "interpolation", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::GuideCurveComponent*>(component)->interpolation) }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Int) return false; const auto interpolation=static_cast<kb::scene::GuideCurveInterpolation>(value.AsInt()); if (!kb::scene::IsGuideCurveInterpolationValid(interpolation)) return false; static_cast<kb::scene::GuideCurveComponent*>(component)->interpolation=interpolation; return true; } },
+    KB_BOOL(kb::scene::GuideCurveComponent, closed),
+    KB_BOOL(kb::scene::GuideCurveComponent, enabled),
+};
+
 #undef KB_BOOL
 #undef KB_INT
 #undef KB_UINT32
@@ -713,6 +732,7 @@ void MarkNavAgentModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity
 void MarkNavObstacleModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().NavObstacles().MarkModified(entity); }
 void MarkTagsModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Tags().MarkModified(entity); }
 void MarkRegionShapeModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().RegionShapes().MarkModified(entity); }
+void MarkGuideCurveModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().GuideCurves().MarkModified(entity); }
 
 [[nodiscard]] ComponentAccess AccessComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
     if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
@@ -774,6 +794,10 @@ void MarkRegionShapeModified(kb::scene::Scene& scene, kb::scene::SceneEntity ent
         kb::scene::RegionShapeComponent* component = scene.Components().RegionShapes().TryGet(entity);
         return ComponentAccess{ component, component, kRegionShapeFields, &MarkRegionShapeModified };
     }
+    if (componentName == "GuideCurve") {
+        kb::scene::GuideCurveComponent* component = scene.Components().GuideCurves().TryGet(entity);
+        return ComponentAccess{ component, component, kGuideCurveFields, &MarkGuideCurveModified };
+    }
     return {};
 }
 
@@ -793,6 +817,7 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "RegionShape") {
         return kRegionShapePropertyDescs;
     }
+    if (componentName == "GuideCurve") return kGuideCurvePropertyDescs;
     if (componentName == "Camera") {
         return kCameraPropertyDescs;
     }
