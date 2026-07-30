@@ -1829,11 +1829,15 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
 
     const kb::scene::VisibilityComponent visibility = scene.Components().Visibility().Get(selected);
     {
-        const int h = SectionHeight(inspector, InspectorSectionId::General, 2);
+        const int h = SectionHeight(inspector, InspectorSectionId::General, 4);
         if (sectionVisible(y, h)) {
             SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::General, HeroIconKind::AdjustmentsHorizontal, "General");
             section.Field("Name", scene.Entities().Name(selected), InspectorPropertyId::EntityName);
-            section.Bool("Visible", visibility.visible, InspectorPropertyId::EntityVisible);
+            section.Bool("Visible", visibility.mode != kb::scene::VisibilityMode::Hidden, InspectorPropertyId::EntityVisible);
+            const char* mode = visibility.mode == kb::scene::VisibilityMode::Inherit ? "Inherit"
+                : visibility.mode == kb::scene::VisibilityMode::Visible ? "Visible" : "Hidden";
+            section.Field("Visibility Mode", mode, InspectorPropertyId::EntityVisibilityMode);
+            section.Field("Visibility Mask", std::to_string(visibility.mask), InspectorPropertyId::EntityVisibilityMask);
         }
         y += h + kSectionGap;
     }
@@ -2085,7 +2089,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     const InspectorPanelState& inspector = sceneContext.Inspector();
     const kb::scene::Scene& scene = sceneContext.Scene();
     int height = kHeaderHeight + kPanelPadTop;
-    height += SectionHeight(inspector, InspectorSectionId::General, 2) + kSectionGap;
+    height += SectionHeight(inspector, InspectorSectionId::General, 4) + kSectionGap;
     height += SectionHeight(inspector, InspectorSectionId::Transform, 3) + kSectionGap;
     if (scene.Components().Tags().Has(selected)) {
         height += SectionHeight(inspector, InspectorSectionId::Tags, 1) + kSectionGap;
@@ -3025,6 +3029,14 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         }
         AdvanceRow(y);
         if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::General, InspectorPropertyId::EntityVisible, x, scrolledY); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        AdvanceRow(y);
+        if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::General, InspectorPropertyId::EntityVisibilityMode, x, scrolledY); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        AdvanceRow(y);
+        if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::General, InspectorPropertyId::EntityVisibilityMask, x, scrolledY); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         AdvanceRow(y);
