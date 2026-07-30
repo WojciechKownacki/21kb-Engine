@@ -188,6 +188,16 @@ void RunAudioComponentCatalogTest() {
     kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::Find("AudioListener") != nullptr, "Audio Listener component id should resolve");
 }
 
+void RunObjectClassificationCatalogTest() {
+    const std::vector<const kb::editor::InspectorComponentTile*> tiles = kb::editor::InspectorComponentCatalog::Search("object classification");
+    kb::editor::tests::Require(tiles.size() == 1U, "Add Component catalog should find Object Classification by its author-facing name");
+    kb::editor::tests::Require(tiles.front() != nullptr && tiles.front()->id == "Tags" && tiles.front()->category == "Scene",
+        "Object Classification catalog entry should resolve to the runtime Tags component in the Scene category");
+    const kb::editor::InspectorComponentTile* tile = kb::editor::InspectorComponentCatalog::Find("Tags");
+    kb::editor::tests::Require(tile != nullptr && tile->label == "Object Classification",
+        "The technical Tags id must be presented to authors as Object Classification");
+}
+
 void RunAudioInspectorTextTest() {
     std::string text = "Entity";
     kb::scene::AudioSourceComponent source{
@@ -2300,6 +2310,7 @@ void RunEditorInspectorTests() {
     RunAddComponentBrowserModelTest();
     RunInspectorTextEditDirtyStateTest();
     RunAudioComponentCatalogTest();
+    RunObjectClassificationCatalogTest();
     RunAudioInspectorTextTest();
     RunMaterialTextureSlotDiagnosticTest();
     RunAudioAssetAssignmentTest();

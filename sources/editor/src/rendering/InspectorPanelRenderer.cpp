@@ -14,6 +14,7 @@
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/TagsComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
 #include "inspection/InspectorComponentLabelFormatter.hpp"
@@ -1500,6 +1501,26 @@ void PaintNavObstacleSection(
     y = section.Bottom() + kSectionGap;
 }
 
+void PaintTagsSection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const kb::scene::TagsComponent& tags) {
+    SectionWriter section(
+        dc,
+        Rect(content.left, y, content.right, content.bottom),
+        theme,
+        inspector,
+        InspectorSectionId::Tags,
+        HeroIconKind::AdjustmentsHorizontal,
+        "Object Classification",
+        true);
+    section.Field("Tags", std::string{ kb::scene::TagsText(tags) }, InspectorPropertyId::TagsText);
+    y = section.Bottom() + kSectionGap;
+}
+
 constexpr int kCameraSectionRows = 13;
 
 void PaintCameraSection(
@@ -1829,6 +1850,15 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         y += h + kSectionGap;
     }
 
+    if (const kb::scene::TagsComponent* tags = scene.Components().Tags().TryGet(selected); tags != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::Tags, 1);
+        if (sectionVisible(y, h)) {
+            PaintTagsSection(dc, content, y, theme, inspector, *tags);
+        } else {
+            y += h + kSectionGap;
+        }
+    }
+
     if (sceneContext.HasEntityScript(selected)) {
         const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);
         const int h = SectionHeight(inspector, InspectorSectionId::Script, 2 + static_cast<int>(scriptVariables.size()));
@@ -2057,6 +2087,9 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     int height = kHeaderHeight + kPanelPadTop;
     height += SectionHeight(inspector, InspectorSectionId::General, 2) + kSectionGap;
     height += SectionHeight(inspector, InspectorSectionId::Transform, 3) + kSectionGap;
+    if (scene.Components().Tags().Has(selected)) {
+        height += SectionHeight(inspector, InspectorSectionId::Tags, 1) + kSectionGap;
+    }
     if (sceneContext.HasEntityScript(selected)) {
         const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariables(selected).size());
         height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
@@ -3016,6 +3049,19 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         AdvanceRow(y);
     }
     y += kSectionGap;
+
+    if (sceneContext.Scene().Components().Tags().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::Tags, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::Tags)) {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::Tags, InspectorPropertyId::TagsText, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+        }
+        y += kSectionGap;
+    }
 
     if (sceneContext.HasEntityScript(selected)) {
         if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::Script, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
