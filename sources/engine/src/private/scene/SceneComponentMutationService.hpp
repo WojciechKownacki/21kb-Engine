@@ -16,6 +16,7 @@
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
+#include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
 
@@ -85,6 +86,10 @@ public:
     static void SetRegionShape(Scene& scene, SceneEntity entity, const RegionShapeComponent& shape);
     static void RemoveRegionShape(Scene& scene, SceneEntity entity) noexcept;
     static void MarkRegionShapeModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static GuideCurveComponent* TryGetGuideCurve(Scene& scene, SceneEntity entity) noexcept;
+    static void SetGuideCurve(Scene& scene, SceneEntity entity, const GuideCurveComponent& curve);
+    static void RemoveGuideCurve(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkGuideCurveModified(Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static AudioSourceComponent* TryGetAudioSource(Scene& scene, SceneEntity entity) noexcept;
     static void SetAudioSource(Scene& scene, SceneEntity entity, const AudioSourceComponent& audioSource);

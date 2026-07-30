@@ -16,6 +16,7 @@
 #include "engine/scene/ScenePrefabNode.hpp"
 #include "engine/scene/SceneRigidbodyComponents.hpp"
 #include "engine/scene/SceneRegionShapeComponents.hpp"
+#include "engine/scene/SceneGuideCurveComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -49,6 +50,7 @@ struct ScenePrefabNodeStateWriterContext {
     SceneCharacterControllerComponents characterControllers;
     SceneTagsComponents tags;
     SceneRegionShapeComponents regionShapes;
+    SceneGuideCurveComponents guideCurves;
     SceneBehaviourComponents behaviours;
     SceneAudioSourceComponents audioSources;
     SceneAudioListenerComponents audioListeners;

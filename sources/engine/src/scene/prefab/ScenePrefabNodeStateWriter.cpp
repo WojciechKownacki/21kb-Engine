@@ -89,6 +89,12 @@ namespace {
         && lhs.radius == rhs.radius && lhs.height == rhs.height && lhs.enabled == rhs.enabled;
 }
 
+[[nodiscard]] bool Equals(const GuideCurveComponent& lhs, const GuideCurveComponent& rhs) noexcept {
+    if (lhs.controlPointCount != rhs.controlPointCount || lhs.interpolation != rhs.interpolation || lhs.closed != rhs.closed || lhs.enabled != rhs.enabled) return false;
+    for (std::uint32_t index = 0U; index < lhs.controlPointCount; ++index) if (!Equals(lhs.controlPoints[index], rhs.controlPoints[index])) return false;
+    return true;
+}
+
 [[nodiscard]] bool Equals(const BehaviourComponent& lhs, const BehaviourComponent& rhs) noexcept {
     return lhs.behaviourAssetId == rhs.behaviourAssetId && lhs.backend == rhs.backend && lhs.enabled == rhs.enabled && lhs.tickGroup == rhs.tickGroup
         && lhs.executionOrder == rhs.executionOrder;
@@ -185,6 +191,7 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , characterControllers(scene.Components().CharacterControllers())
     , tags(scene.Components().Tags())
     , regionShapes(scene.Components().RegionShapes())
+    , guideCurves(scene.Components().GuideCurves())
     , behaviours(scene.Components().Behaviours())
     , audioSources(scene.Components().AudioSources())
     , audioListeners(scene.Components().AudioListeners())
@@ -249,6 +256,7 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     if (!componentMask.available || !componentMask.matches || node.components.regionShape.has_value()) {
         WriteOptionalComponent(context.regionShapes, entity, node.components.regionShape);
     }
+    WriteOptionalComponent(context.guideCurves, entity, node.components.guideCurve);
     if (!componentMask.available || !componentMask.matches || node.components.behaviour.has_value()) {
         WriteOptionalComponent(context.behaviours, entity, node.components.behaviour);
     }
