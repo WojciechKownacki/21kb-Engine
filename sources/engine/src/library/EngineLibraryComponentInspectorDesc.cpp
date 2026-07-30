@@ -222,6 +222,23 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "text", "Tags", "Comma- or semicolon-separated semantic labels used to classify this object." },
             },
         },
+        LibraryComponentInspectorDesc{
+            .componentName = "RegionShape",
+            .displayName = "Region Shape",
+            .category = "Scene",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "kind", "Shape", "Circle 2D, Rectangle 2D, Sphere, Box or Capsule." },
+                LibraryComponentInspectorFieldDesc{ "center.x", "Center X", "Local region center X coordinate." },
+                LibraryComponentInspectorFieldDesc{ "center.y", "Center Y", "Local region center Y coordinate." },
+                LibraryComponentInspectorFieldDesc{ "center.z", "Center Z", "Local region center Z coordinate." },
+                LibraryComponentInspectorFieldDesc{ "size.x", "Size X", "Full local extent along X." },
+                LibraryComponentInspectorFieldDesc{ "size.y", "Size Y", "Full local extent along Y." },
+                LibraryComponentInspectorFieldDesc{ "size.z", "Size Z", "Full local extent along Z." },
+                LibraryComponentInspectorFieldDesc{ "radius", "Radius", "Radius of circular, spherical and capsule regions." },
+                LibraryComponentInspectorFieldDesc{ "height", "Height", "Capsule height including hemispherical caps." },
+                LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether queries include this region." },
+            },
+        },
     };
     return kCatalog;
 }

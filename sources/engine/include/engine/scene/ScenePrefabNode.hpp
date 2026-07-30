@@ -13,6 +13,7 @@
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/Navigation.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
+#include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/ScenePrefabOverrides.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
@@ -56,6 +57,7 @@ struct ScenePrefabNodeComponents {
     std::optional<CharacterControllerComponent> characterController;
     std::optional<ScenePrefabJointComponent> joint;
     std::optional<TagsComponent> tags;
+    std::optional<RegionShapeComponent> regionShape;
     std::optional<BehaviourComponent> behaviour;
     std::optional<AudioSourceComponent> audioSource;
     std::optional<AudioListenerComponent> audioListener;

@@ -8,6 +8,7 @@
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
+#include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -1134,6 +1135,10 @@ template <typename Integer>
     return property >= InspectorPropertyId::NavObstacleShape && property <= InspectorPropertyId::NavObstacleEnabled;
 }
 
+[[nodiscard]] bool IsRegionShapeProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::RegionShapeKind && property <= InspectorPropertyId::RegionShapeEnabled;
+}
+
 template <typename Mutator>
 [[nodiscard]] bool EditNavAgent(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
     if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
@@ -1156,6 +1161,19 @@ template <typename Mutator>
         return false;
     }
     sceneContext.Scene().Components().NavObstacles().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditRegionShape(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::RegionShapeComponent* shape = sceneContext.Scene().Components().RegionShapes().TryGet(entity);
+    if (shape == nullptr || !mutator(*shape)) {
+        sceneContext.CancelSceneEditTransaction();
+        return false;
+    }
+    sceneContext.Scene().Components().RegionShapes().MarkModified(entity);
     static_cast<void>(sceneContext.CommitSceneEditTransaction());
     return true;
 }
@@ -1191,6 +1209,20 @@ template <typename Mutator>
     }
 }
 
+[[nodiscard]] std::string RegionShapeFieldValue(const kb::scene::RegionShapeComponent& shape, InspectorPropertyId property) {
+    switch (property) {
+    case InspectorPropertyId::RegionShapeCenterX: return FormatCompactFloat(shape.center.x);
+    case InspectorPropertyId::RegionShapeCenterY: return FormatCompactFloat(shape.center.y);
+    case InspectorPropertyId::RegionShapeCenterZ: return FormatCompactFloat(shape.center.z);
+    case InspectorPropertyId::RegionShapeSizeX: return FormatCompactFloat(shape.size.x);
+    case InspectorPropertyId::RegionShapeSizeY: return FormatCompactFloat(shape.size.y);
+    case InspectorPropertyId::RegionShapeSizeZ: return FormatCompactFloat(shape.size.z);
+    case InspectorPropertyId::RegionShapeRadius: return FormatCompactFloat(shape.radius);
+    case InspectorPropertyId::RegionShapeHeight: return FormatCompactFloat(shape.height);
+    default: return {};
+    }
+}
+
 [[nodiscard]] bool HandleNavAgentClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     const kb::scene::NavAgent* agent = sceneContext.Scene().Components().NavAgents().TryGet(entity);
     if (agent == nullptr) return false;
@@ -1220,6 +1252,26 @@ template <typename Mutator>
     }
     if (IsNavObstacleProperty(hit.property)) {
         sceneContext.Inspector().BeginTextEdit(hit.property, NavObstacleFieldValue(*obstacle, hit.property));
+    }
+    return true;
+}
+
+[[nodiscard]] bool HandleRegionShapeClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::RegionShapeComponent* shape = sceneContext.Scene().Components().RegionShapes().TryGet(entity);
+    if (shape == nullptr) return false;
+    if (hit.property == InspectorPropertyId::RegionShapeEnabled) {
+        return EditRegionShape(sceneContext, entity, "Toggle Region Shape", [](kb::scene::RegionShapeComponent& value) { value.enabled = !value.enabled; return true; });
+    }
+    if (hit.property == InspectorPropertyId::RegionShapeKind) {
+        return EditRegionShape(sceneContext, entity, "Change Region Shape", [](kb::scene::RegionShapeComponent& value) {
+            const auto next = static_cast<std::uint8_t>(value.kind) + 1U;
+            value.kind = next > static_cast<std::uint8_t>(kb::scene::RegionShapeKind::Capsule)
+                ? kb::scene::RegionShapeKind::Circle2D : static_cast<kb::scene::RegionShapeKind>(next);
+            return true;
+        });
+    }
+    if (IsRegionShapeProperty(hit.property)) {
+        sceneContext.Inspector().BeginTextEdit(hit.property, RegionShapeFieldValue(*shape, hit.property));
     }
     return true;
 }
@@ -1268,6 +1320,24 @@ template <typename Mutator>
         case InspectorPropertyId::NavObstacleSizeX: if (value <= 0.0F) return false; obstacle.size.x = value; return true;
         case InspectorPropertyId::NavObstacleSizeY: if (value <= 0.0F) return false; obstacle.size.y = value; return true;
         case InspectorPropertyId::NavObstacleSizeZ: if (value <= 0.0F) return false; obstacle.size.z = value; return true;
+        default: return false;
+        }
+    });
+}
+
+[[nodiscard]] bool ApplyRegionShapeText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    float value = 0.0F;
+    if (!ParseFloat(text, value) || !std::isfinite(value)) return false;
+    return EditRegionShape(sceneContext, entity, "Edit Region Shape", [property, value](kb::scene::RegionShapeComponent& shape) {
+        switch (property) {
+        case InspectorPropertyId::RegionShapeCenterX: shape.center.x = value; return true;
+        case InspectorPropertyId::RegionShapeCenterY: shape.center.y = value; return true;
+        case InspectorPropertyId::RegionShapeCenterZ: shape.center.z = value; return true;
+        case InspectorPropertyId::RegionShapeSizeX: if (value <= 0.0F) return false; shape.size.x = value; return true;
+        case InspectorPropertyId::RegionShapeSizeY: if (value <= 0.0F) return false; shape.size.y = value; return true;
+        case InspectorPropertyId::RegionShapeSizeZ: if (value <= 0.0F) return false; shape.size.z = value; return true;
+        case InspectorPropertyId::RegionShapeRadius: if (value <= 0.0F) return false; shape.radius = value; return true;
+        case InspectorPropertyId::RegionShapeHeight: if (value <= 0.0F) return false; shape.height = value; return true;
         default: return false;
         }
     });
@@ -1668,6 +1738,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     if (hit.section == InspectorSectionId::NavObstacle) {
         return HandleNavObstacleClick(sceneContext, entity, hit);
     }
+    if (hit.section == InspectorSectionId::RegionShape) {
+        return HandleRegionShapeClick(sceneContext, entity, hit);
+    }
     if (hit.section == InspectorSectionId::Tags &&
         hit.kind == InspectorHitKind::TextField &&
         hit.property == InspectorPropertyId::TagsText) {
@@ -1932,6 +2005,12 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         if (sceneContext.Scene().Entities().IsAlive(entity) &&
             IsNavObstacleProperty(inspector.EditedProperty())) {
             static_cast<void>(ApplyNavObstacleText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            IsRegionShapeProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyRegionShapeText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
             inspector.EndTextEdit();
             return true;
         }

@@ -113,6 +113,11 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .id = ComputeLibraryComponentId("Tags"),
             .serializable = true,
         },
+        LibraryComponentDesc{
+            .name = "RegionShape",
+            .id = ComputeLibraryComponentId("RegionShape"),
+            .serializable = true,
+        },
     };
     return kCatalog;
 }
