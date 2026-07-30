@@ -5,6 +5,7 @@
 #include "engine/scene/VisibilityComponent.hpp"
 #include "scene/components/SceneRegionShapeComponentStore.hpp"
 #include "scene/components/SceneGuideCurveComponentStore.hpp"
+#include "scene/components/SceneContentInstanceComponentStore.hpp"
 #include "scene/components/SceneAudioListenerComponentStore.hpp"
 #include "scene/components/SceneAudioSourceComponentStore.hpp"
 #include "scene/components/SceneAnimatorComponentStore.hpp"
@@ -67,6 +68,8 @@ public:
     [[nodiscard]] SceneRegionShapeComponentStore& RegionShapes() noexcept;
     [[nodiscard]] const SceneGuideCurveComponentStore& GuideCurves() const noexcept;
     [[nodiscard]] SceneGuideCurveComponentStore& GuideCurves() noexcept;
+    [[nodiscard]] const SceneContentInstanceComponentStore& ContentInstances() const noexcept;
+    [[nodiscard]] SceneContentInstanceComponentStore& ContentInstances() noexcept;
     [[nodiscard]] const SceneAudioSourceComponentStore& AudioSources() const noexcept;
     [[nodiscard]] SceneAudioSourceComponentStore& AudioSources() noexcept;
     [[nodiscard]] const SceneAudioListenerComponentStore& AudioListeners() const noexcept;
@@ -93,6 +96,7 @@ private:
     SceneTagsComponentStore tags_;
     SceneRegionShapeComponentStore regionShapes_;
     SceneGuideCurveComponentStore guideCurves_;
+    SceneContentInstanceComponentStore contentInstances_;
     SceneAudioSourceComponentStore audioSources_;
     SceneAudioListenerComponentStore audioListeners_;
     SceneAnimatorComponentStore animators_;

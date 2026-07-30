@@ -14,6 +14,7 @@
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
+#include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
@@ -325,6 +326,14 @@ struct ScriptComponentAccess<kb::scene::GuideCurveComponent> {
     [[nodiscard]] static kb::scene::GuideCurveComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().GuideCurves().TryGet(entity); }
     static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::GuideCurveComponent& value) { scene.Components().GuideCurves().Set(entity, value); }
     [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().GuideCurves().Has(entity)) return false; scene.Components().GuideCurves().Remove(entity); return true; }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::ContentInstanceComponent> {
+    [[nodiscard]] static const kb::scene::ContentInstanceComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().ContentInstances().TryGet(entity); }
+    [[nodiscard]] static kb::scene::ContentInstanceComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().ContentInstances().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::ContentInstanceComponent& value) { scene.Components().ContentInstances().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().ContentInstances().Has(entity)) return false; scene.Components().ContentInstances().Remove(entity); return true; }
 };
 
 template <typename Component>

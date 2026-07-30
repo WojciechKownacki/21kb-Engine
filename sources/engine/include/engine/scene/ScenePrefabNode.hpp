@@ -15,6 +15,7 @@
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
+#include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/ScenePrefabOverrides.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
@@ -60,6 +61,7 @@ struct ScenePrefabNodeComponents {
     std::optional<TagsComponent> tags;
     std::optional<RegionShapeComponent> regionShape;
     std::optional<GuideCurveComponent> guideCurve;
+    std::optional<ContentInstanceComponent> contentInstance;
     std::optional<BehaviourComponent> behaviour;
     std::optional<AudioSourceComponent> audioSource;
     std::optional<AudioListenerComponent> audioListener;

@@ -145,6 +145,15 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         }
     }
 
+    output << "contentInstance=" << (components.contentInstance.has_value() ? 1 : 0) << '\n';
+    if (components.contentInstance.has_value()) {
+        const ContentInstanceComponent& content = *components.contentInstance;
+        output << "contentInstance.assetId=" << content.assetId << '\n';
+        output << "contentInstance.kind=" << static_cast<int>(content.kind) << '\n';
+        output << "contentInstance.lifetime=" << static_cast<int>(content.lifetime) << '\n';
+        output << "contentInstance.active=" << (content.active ? 1 : 0) << '\n';
+    }
+
     output << "behaviour=" << (components.behaviour.has_value() ? 1 : 0) << '\n';
     if (components.behaviour.has_value()) {
         output << "behaviour.behaviourAssetId=" << components.behaviour->behaviourAssetId << '\n';

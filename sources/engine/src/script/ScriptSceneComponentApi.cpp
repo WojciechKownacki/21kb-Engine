@@ -11,6 +11,7 @@
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
+#include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
 #include "engine/scene/SceneCharacterControllerComponents.hpp"
@@ -24,6 +25,7 @@
 #include "engine/scene/SceneRigidbodyComponents.hpp"
 #include "engine/scene/SceneRegionShapeComponents.hpp"
 #include "engine/scene/SceneGuideCurveComponents.hpp"
+#include "engine/scene/SceneContentInstanceComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -217,7 +219,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 15> kComponentNames{
+constexpr std::array<std::string_view, 16> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
@@ -233,6 +235,7 @@ constexpr std::array<std::string_view, 15> kComponentNames{
     "Tags",
     "RegionShape",
     "GuideCurve",
+    "ContentInstance",
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kRegionShapePropertyDescs{
@@ -253,6 +256,13 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kGuideCurvePropertyDes
     ScriptSceneComponentPropertyDesc{ "interpolation", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "closed", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kContentInstancePropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "assetId", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "kind", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "lifetime", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "active", ScriptValueType::Bool },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 1> kTagsPropertyDescs{
@@ -658,6 +668,16 @@ constexpr std::array<FieldBinding, 4> kGuideCurveFields{
     KB_BOOL(kb::scene::GuideCurveComponent, enabled),
 };
 
+constexpr std::array<FieldBinding, 4> kContentInstanceFields{
+    FieldBinding{ "assetId", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::ContentInstanceComponent*>(component)->assetId, ScriptValueType::Hash }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::ContentInstanceComponent*>(component)->assetId = value.AsUInt64(); return true; } },
+    FieldBinding{ "kind", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::ContentInstanceComponent*>(component)->kind) }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Int) return false; const auto kind = static_cast<kb::scene::ContentInstanceKind>(value.AsInt()); if (!kb::scene::IsContentInstanceKindValid(kind)) return false; static_cast<kb::scene::ContentInstanceComponent*>(component)->kind = kind; return true; } },
+    FieldBinding{ "lifetime", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::ContentInstanceComponent*>(component)->lifetime) }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Int) return false; const auto lifetime = static_cast<kb::scene::ContentInstanceLifetime>(value.AsInt()); if (!kb::scene::IsContentInstanceLifetimeValid(lifetime)) return false; static_cast<kb::scene::ContentInstanceComponent*>(component)->lifetime = lifetime; return true; } },
+    KB_BOOL(kb::scene::ContentInstanceComponent, active),
+};
+
 #undef KB_BOOL
 #undef KB_INT
 #undef KB_UINT32
@@ -733,6 +753,7 @@ void MarkNavObstacleModified(kb::scene::Scene& scene, kb::scene::SceneEntity ent
 void MarkTagsModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Tags().MarkModified(entity); }
 void MarkRegionShapeModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().RegionShapes().MarkModified(entity); }
 void MarkGuideCurveModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().GuideCurves().MarkModified(entity); }
+void MarkContentInstanceModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().ContentInstances().MarkModified(entity); }
 
 [[nodiscard]] ComponentAccess AccessComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
     if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
@@ -798,6 +819,10 @@ void MarkGuideCurveModified(kb::scene::Scene& scene, kb::scene::SceneEntity enti
         kb::scene::GuideCurveComponent* component = scene.Components().GuideCurves().TryGet(entity);
         return ComponentAccess{ component, component, kGuideCurveFields, &MarkGuideCurveModified };
     }
+    if (componentName == "ContentInstance") {
+        kb::scene::ContentInstanceComponent* component = scene.Components().ContentInstances().TryGet(entity);
+        return ComponentAccess{ component, component, kContentInstanceFields, &MarkContentInstanceModified };
+    }
     return {};
 }
 
@@ -818,6 +843,7 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
         return kRegionShapePropertyDescs;
     }
     if (componentName == "GuideCurve") return kGuideCurvePropertyDescs;
+    if (componentName == "ContentInstance") return kContentInstancePropertyDescs;
     if (componentName == "Camera") {
         return kCameraPropertyDescs;
     }

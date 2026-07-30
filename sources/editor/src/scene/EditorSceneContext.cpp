@@ -8109,6 +8109,16 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
             return true;
         });
     }
+    if (componentId == "ContentInstance") {
+        if (scene_->Components().ContentInstances().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Content Instance component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Content Instance Component", [this, entity]() {
+            scene_->Components().ContentInstances().Set(entity, kb::scene::ContentInstanceComponent{});
+            return true;
+        });
+    }
     if (componentId == "NavAgent") {
         if (scene_->Components().NavAgents().Has(entity)) {
             console_.Warning("Inspector", "Entity already has a Nav Agent component.");

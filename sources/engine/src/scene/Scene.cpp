@@ -32,6 +32,7 @@
 #include "scene/systems/AnimatorSceneSystem.hpp"
 #include "scene/systems/TimelineSceneSystem.hpp"
 #include "scene/systems/UIDocumentSceneSystem.hpp"
+#include "scene/systems/ContentInstanceSceneSystem.hpp"
 
 #include <array>
 #include <atomic>
@@ -133,6 +134,7 @@ Scene::Scene(
     state_->sceneSystemScheduler.Add(std::make_unique<AnimatorSceneSystem>(), *this);
     state_->sceneSystemScheduler.Add(std::make_unique<TimelineSceneSystem>(), *this);
     state_->sceneSystemScheduler.Add(std::make_unique<UIDocumentSceneSystem>(), *this);
+    state_->sceneSystemScheduler.Add(std::make_unique<ContentInstanceSceneSystem>(), *this);
 }
 
 Scene::~Scene() {
