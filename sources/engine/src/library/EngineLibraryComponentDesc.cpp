@@ -123,6 +123,11 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .id = ComputeLibraryComponentId("GuideCurve"),
             .serializable = true,
         },
+        LibraryComponentDesc{
+            .name = "ContentInstance",
+            .id = ComputeLibraryComponentId("ContentInstance"),
+            .serializable = true,
+        },
     };
     return kCatalog;
 }

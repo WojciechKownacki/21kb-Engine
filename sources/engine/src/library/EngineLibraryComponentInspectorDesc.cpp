@@ -250,6 +250,17 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether runtime systems can evaluate this curve." },
             },
         },
+        LibraryComponentInspectorDesc{
+            .componentName = "ContentInstance",
+            .displayName = "Content Instance",
+            .category = "Scene",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "assetId", "Asset ID", "Stable asset reference for the content source." },
+                LibraryComponentInspectorFieldDesc{ "kind", "Source Type", "Prefab, subscene or world fragment source." },
+                LibraryComponentInspectorFieldDesc{ "lifetime", "Lifetime", "Release with owner or preserve when owner is destroyed." },
+                LibraryComponentInspectorFieldDesc{ "active", "Active", "Whether runtime creates the configured content." },
+            },
+        },
     };
     return kCatalog;
 }

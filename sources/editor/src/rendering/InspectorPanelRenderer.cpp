@@ -16,6 +16,7 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
+#include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
@@ -1568,6 +1569,17 @@ void PaintGuideCurveSection(HDC dc, RECT content, int& y, const EditorTheme& the
     y = section.Bottom() + kSectionGap;
 }
 
+void PaintContentInstanceSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::ContentInstanceComponent& instance) {
+    const char* kind = instance.kind == kb::scene::ContentInstanceKind::Prefab ? "Prefab" : instance.kind == kb::scene::ContentInstanceKind::Subscene ? "Subscene" : "World Fragment";
+    const char* lifetime = instance.lifetime == kb::scene::ContentInstanceLifetime::Owner ? "Owner" : "Persistent";
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::ContentInstance, HeroIconKind::Cube, "Content Instance", true);
+    section.Field("Asset ID", std::to_string(instance.assetId), InspectorPropertyId::ContentInstanceAssetId);
+    section.Field("Source Type", kind, InspectorPropertyId::ContentInstanceKind);
+    section.Field("Lifetime", lifetime, InspectorPropertyId::ContentInstanceLifetime);
+    section.Bool("Active", instance.active, InspectorPropertyId::ContentInstanceActive);
+    y = section.Bottom() + kSectionGap;
+}
+
 constexpr int kCameraSectionRows = 13;
 
 void PaintCameraSection(
@@ -1922,6 +1934,10 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         const int h = SectionHeight(inspector, InspectorSectionId::GuideCurve, 4);
         if (y < content.bottom && y + h > content.top) PaintGuideCurveSection(dc, content, y, theme, inspector, *guideCurve); else y += h + kSectionGap;
     }
+    if (const kb::scene::ContentInstanceComponent* contentInstance = scene.Components().ContentInstances().TryGet(selected); contentInstance != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::ContentInstance, 4);
+        if (y < content.bottom && y + h > content.top) PaintContentInstanceSection(dc, content, y, theme, inspector, *contentInstance); else y += h + kSectionGap;
+    }
 
     if (sceneContext.HasEntityScript(selected)) {
         const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);
@@ -2158,6 +2174,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         height += SectionHeight(inspector, InspectorSectionId::RegionShape, 6) + kSectionGap;
     }
     if (scene.Components().GuideCurves().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::GuideCurve, 4) + kSectionGap;
+    if (scene.Components().ContentInstances().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::ContentInstance, 4) + kSectionGap;
     if (sceneContext.HasEntityScript(selected)) {
         const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariables(selected).size());
         height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
@@ -3166,6 +3183,15 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::GuideCurve, InspectorPropertyId::GuideCurveInterpolation, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
             if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::GuideCurve, InspectorPropertyId::GuideCurveClosed, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
             if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::GuideCurve, InspectorPropertyId::GuideCurveEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+        }
+    }
+    if (sceneContext.Scene().Components().ContentInstances().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::ContentInstance, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::ContentInstance)) {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::ContentInstance, InspectorPropertyId::ContentInstanceAssetId, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::ContentInstance, InspectorPropertyId::ContentInstanceKind, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::ContentInstance, InspectorPropertyId::ContentInstanceLifetime, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::ContentInstance, InspectorPropertyId::ContentInstanceActive, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
         }
     }
 

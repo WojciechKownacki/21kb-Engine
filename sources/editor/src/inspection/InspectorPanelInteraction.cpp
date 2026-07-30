@@ -7,6 +7,7 @@
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -1139,6 +1140,10 @@ template <typename Integer>
     return property >= InspectorPropertyId::RegionShapeKind && property <= InspectorPropertyId::RegionShapeEnabled;
 }
 
+[[nodiscard]] bool IsContentInstanceProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::ContentInstanceAssetId && property <= InspectorPropertyId::ContentInstanceActive;
+}
+
 template <typename Mutator>
 [[nodiscard]] bool EditNavAgent(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
     if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
@@ -1174,6 +1179,19 @@ template <typename Mutator>
         return false;
     }
     sceneContext.Scene().Components().RegionShapes().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditContentInstance(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::ContentInstanceComponent* instance = sceneContext.Scene().Components().ContentInstances().TryGet(entity);
+    if (instance == nullptr || !mutator(*instance)) {
+        sceneContext.CancelSceneEditTransaction();
+        return false;
+    }
+    sceneContext.Scene().Components().ContentInstances().MarkModified(entity);
     static_cast<void>(sceneContext.CommitSceneEditTransaction());
     return true;
 }
@@ -1276,6 +1294,33 @@ template <typename Mutator>
     return true;
 }
 
+[[nodiscard]] bool HandleContentInstanceClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::ContentInstanceComponent* instance = sceneContext.Scene().Components().ContentInstances().TryGet(entity);
+    if (instance == nullptr) return false;
+    if (hit.property == InspectorPropertyId::ContentInstanceActive) {
+        return EditContentInstance(sceneContext, entity, "Toggle Content Instance", [](kb::scene::ContentInstanceComponent& value) { value.active = !value.active; return true; });
+    }
+    if (hit.property == InspectorPropertyId::ContentInstanceKind) {
+        return EditContentInstance(sceneContext, entity, "Change Content Instance Source Type", [](kb::scene::ContentInstanceComponent& value) {
+            const auto next = static_cast<std::uint8_t>(value.kind) + 1U;
+            value.kind = next > static_cast<std::uint8_t>(kb::scene::ContentInstanceKind::WorldFragment)
+                ? kb::scene::ContentInstanceKind::Prefab : static_cast<kb::scene::ContentInstanceKind>(next);
+            return true;
+        });
+    }
+    if (hit.property == InspectorPropertyId::ContentInstanceLifetime) {
+        return EditContentInstance(sceneContext, entity, "Change Content Instance Lifetime", [](kb::scene::ContentInstanceComponent& value) {
+            value.lifetime = value.lifetime == kb::scene::ContentInstanceLifetime::Owner
+                ? kb::scene::ContentInstanceLifetime::Persistent : kb::scene::ContentInstanceLifetime::Owner;
+            return true;
+        });
+    }
+    if (hit.property == InspectorPropertyId::ContentInstanceAssetId) {
+        sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(instance->assetId));
+    }
+    return true;
+}
+
 [[nodiscard]] bool ApplyNavAgentText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
     float value = 0.0F;
     if (property == InspectorPropertyId::NavAgentAreaMask) {
@@ -1340,6 +1385,17 @@ template <typename Mutator>
         case InspectorPropertyId::RegionShapeHeight: if (value <= 0.0F) return false; shape.height = value; return true;
         default: return false;
         }
+    });
+}
+
+[[nodiscard]] bool ApplyContentInstanceText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    if (property != InspectorPropertyId::ContentInstanceAssetId) return false;
+    std::uint64_t assetId = 0U;
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), assetId);
+    if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) return false;
+    return EditContentInstance(sceneContext, entity, "Edit Content Instance Asset", [assetId](kb::scene::ContentInstanceComponent& value) {
+        value.assetId = assetId;
+        return true;
     });
 }
 
@@ -1741,6 +1797,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     if (hit.section == InspectorSectionId::RegionShape) {
         return HandleRegionShapeClick(sceneContext, entity, hit);
     }
+    if (hit.section == InspectorSectionId::ContentInstance) {
+        return HandleContentInstanceClick(sceneContext, entity, hit);
+    }
     if (hit.section == InspectorSectionId::Tags &&
         hit.kind == InspectorHitKind::TextField &&
         hit.property == InspectorPropertyId::TagsText) {
@@ -2011,6 +2070,12 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         if (sceneContext.Scene().Entities().IsAlive(entity) &&
             IsRegionShapeProperty(inspector.EditedProperty())) {
             static_cast<void>(ApplyRegionShapeText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            IsContentInstanceProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyContentInstanceText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
             inspector.EndTextEdit();
             return true;
         }

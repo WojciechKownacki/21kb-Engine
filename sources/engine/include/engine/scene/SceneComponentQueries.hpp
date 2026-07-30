@@ -16,6 +16,7 @@
 #include "engine/scene/SceneRigidbodyComponents.hpp"
 #include "engine/scene/SceneRegionShapeComponents.hpp"
 #include "engine/scene/SceneGuideCurveComponents.hpp"
+#include "engine/scene/SceneContentInstanceComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
 #include "engine/scene/SceneUIDocuments.hpp"
@@ -41,6 +42,7 @@ public:
     [[nodiscard]] SceneTagsComponentQueries Tags() const noexcept;
     [[nodiscard]] SceneRegionShapeComponentQueries RegionShapes() const noexcept;
     [[nodiscard]] SceneGuideCurveComponentQueries GuideCurves() const noexcept;
+    [[nodiscard]] SceneContentInstanceComponentQueries ContentInstances() const noexcept;
     [[nodiscard]] SceneAudioSourceComponentQueries AudioSources() const noexcept;
     [[nodiscard]] SceneAudioListenerComponentQueries AudioListeners() const noexcept;
     [[nodiscard]] SceneAnimatorComponentQueries Animators() const noexcept;
