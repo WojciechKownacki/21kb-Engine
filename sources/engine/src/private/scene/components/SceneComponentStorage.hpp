@@ -6,6 +6,7 @@
 #include "scene/components/SceneRegionShapeComponentStore.hpp"
 #include "scene/components/SceneGuideCurveComponentStore.hpp"
 #include "scene/components/SceneContentInstanceComponentStore.hpp"
+#include "scene/components/SceneStreamFocusComponentStore.hpp"
 #include "scene/components/SceneAudioListenerComponentStore.hpp"
 #include "scene/components/SceneAudioSourceComponentStore.hpp"
 #include "scene/components/SceneAnimatorComponentStore.hpp"
@@ -70,6 +71,8 @@ public:
     [[nodiscard]] SceneGuideCurveComponentStore& GuideCurves() noexcept;
     [[nodiscard]] const SceneContentInstanceComponentStore& ContentInstances() const noexcept;
     [[nodiscard]] SceneContentInstanceComponentStore& ContentInstances() noexcept;
+    [[nodiscard]] const SceneStreamFocusComponentStore& StreamFocuses() const noexcept;
+    [[nodiscard]] SceneStreamFocusComponentStore& StreamFocuses() noexcept;
     [[nodiscard]] const SceneAudioSourceComponentStore& AudioSources() const noexcept;
     [[nodiscard]] SceneAudioSourceComponentStore& AudioSources() noexcept;
     [[nodiscard]] const SceneAudioListenerComponentStore& AudioListeners() const noexcept;
@@ -97,6 +100,7 @@ private:
     SceneRegionShapeComponentStore regionShapes_;
     SceneGuideCurveComponentStore guideCurves_;
     SceneContentInstanceComponentStore contentInstances_;
+    SceneStreamFocusComponentStore streamFocuses_;
     SceneAudioSourceComponentStore audioSources_;
     SceneAudioListenerComponentStore audioListeners_;
     SceneAnimatorComponentStore animators_;

@@ -12,6 +12,7 @@
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
+#include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
 #include "engine/scene/SceneCharacterControllerComponents.hpp"
@@ -26,6 +27,7 @@
 #include "engine/scene/SceneRegionShapeComponents.hpp"
 #include "engine/scene/SceneGuideCurveComponents.hpp"
 #include "engine/scene/SceneContentInstanceComponents.hpp"
+#include "engine/scene/SceneStreamFocusComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -36,6 +38,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
 #include <string>
 #include <type_traits>
 
@@ -219,7 +222,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 16> kComponentNames{
+constexpr std::array<std::string_view, 17> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
@@ -236,6 +239,7 @@ constexpr std::array<std::string_view, 16> kComponentNames{
     "RegionShape",
     "GuideCurve",
     "ContentInstance",
+    "StreamFocus",
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kRegionShapePropertyDescs{
@@ -263,6 +267,14 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kContentInstanceProper
     ScriptSceneComponentPropertyDesc{ "kind", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "lifetime", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "active", ScriptValueType::Bool },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 5> kStreamFocusPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "innerRadius", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "outerRadius", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "priority", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "loadMask", ScriptValueType::UInt32 },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 1> kTagsPropertyDescs{
@@ -678,6 +690,18 @@ constexpr std::array<FieldBinding, 4> kContentInstanceFields{
     KB_BOOL(kb::scene::ContentInstanceComponent, active),
 };
 
+constexpr std::array<FieldBinding, 5> kStreamFocusFields{
+    FieldBinding{ "innerRadius", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::StreamFocusComponent*>(component)->innerRadius }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat()) || value.AsFloat() < 0.0F) return false; auto& focus = *static_cast<kb::scene::StreamFocusComponent*>(component); if (value.AsFloat() > focus.outerRadius) return false; focus.innerRadius = value.AsFloat(); return true; } },
+    FieldBinding{ "outerRadius", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::StreamFocusComponent*>(component)->outerRadius }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat())) return false; auto& focus = *static_cast<kb::scene::StreamFocusComponent*>(component); if (value.AsFloat() < focus.innerRadius) return false; focus.outerRadius = value.AsFloat(); return true; } },
+    FieldBinding{ "priority", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::StreamFocusComponent*>(component)->priority) }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Int) return false; static_cast<kb::scene::StreamFocusComponent*>(component)->priority = value.AsInt(); return true; } },
+    FieldBinding{ "loadMask", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<std::uint32_t>(static_cast<const kb::scene::StreamFocusComponent*>(component)->loadMask) }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::UInt32) return false; const auto mask = static_cast<kb::scene::StreamLoadMask>(value.AsUInt32()); if (!kb::scene::IsStreamLoadMaskValid(mask)) return false; static_cast<kb::scene::StreamFocusComponent*>(component)->loadMask = mask; return true; } },
+    KB_BOOL(kb::scene::StreamFocusComponent, enabled),
+};
+
 #undef KB_BOOL
 #undef KB_INT
 #undef KB_UINT32
@@ -754,6 +778,7 @@ void MarkTagsModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) no
 void MarkRegionShapeModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().RegionShapes().MarkModified(entity); }
 void MarkGuideCurveModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().GuideCurves().MarkModified(entity); }
 void MarkContentInstanceModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().ContentInstances().MarkModified(entity); }
+void MarkStreamFocusModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().StreamFocuses().MarkModified(entity); }
 
 [[nodiscard]] ComponentAccess AccessComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
     if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
@@ -823,6 +848,10 @@ void MarkContentInstanceModified(kb::scene::Scene& scene, kb::scene::SceneEntity
         kb::scene::ContentInstanceComponent* component = scene.Components().ContentInstances().TryGet(entity);
         return ComponentAccess{ component, component, kContentInstanceFields, &MarkContentInstanceModified };
     }
+    if (componentName == "StreamFocus") {
+        kb::scene::StreamFocusComponent* component = scene.Components().StreamFocuses().TryGet(entity);
+        return ComponentAccess{ component, component, kStreamFocusFields, &MarkStreamFocusModified };
+    }
     return {};
 }
 
@@ -844,6 +873,7 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     }
     if (componentName == "GuideCurve") return kGuideCurvePropertyDescs;
     if (componentName == "ContentInstance") return kContentInstancePropertyDescs;
+    if (componentName == "StreamFocus") return kStreamFocusPropertyDescs;
     if (componentName == "Camera") {
         return kCameraPropertyDescs;
     }

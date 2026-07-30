@@ -258,8 +258,10 @@ add_library(kb_engine STATIC
       include/engine/scene/SceneGuideCurveComponents.hpp
       include/engine/scene/SceneGuideCurveQueries.hpp
       include/engine/scene/GuideCurveComponent.hpp
-      include/engine/scene/ContentInstanceComponent.hpp
-      include/engine/scene/SceneContentInstanceComponents.hpp
+        include/engine/scene/ContentInstanceComponent.hpp
+        include/engine/scene/SceneContentInstanceComponents.hpp
+        include/engine/scene/StreamFocusComponent.hpp
+        include/engine/scene/SceneStreamFocusComponents.hpp
     include/engine/scene/SceneVisibilityComponents.hpp
     include/engine/scene/VisibilityComponent.hpp
     include/engine/render/postfx/PostProcessPipeline.hpp
@@ -634,8 +636,10 @@ add_library(kb_engine STATIC
       src/scene/components/SceneGuideCurveApi.cpp
       src/scene/components/SceneGuideCurveQueries.cpp
       src/scene/components/SceneGuideCurveStorage.cpp
-      src/scene/components/SceneContentInstanceApi.cpp
-      src/scene/components/SceneContentInstanceStorage.cpp
+        src/scene/components/SceneContentInstanceApi.cpp
+        src/scene/components/SceneContentInstanceStorage.cpp
+        src/scene/components/SceneStreamFocusApi.cpp
+        src/scene/components/SceneStreamFocusStorage.cpp
       src/scene/SceneContentInstanceService.cpp
     src/scene/components/SceneTransformApi.cpp
     src/scene/components/SceneTransformStorage.cpp
@@ -686,7 +690,8 @@ add_library(kb_engine STATIC
       src/scene/modules/components/SceneTagsModule.cpp
       src/scene/modules/components/SceneRegionShapeModule.cpp
       src/scene/modules/components/SceneGuideCurveModule.cpp
-      src/scene/modules/components/SceneContentInstanceModule.cpp
+        src/scene/modules/components/SceneContentInstanceModule.cpp
+        src/scene/modules/components/SceneStreamFocusModule.cpp
       src/scene/systems/ContentInstanceSceneSystem.cpp
     src/scene/modules/components/SceneVisibilityModule.cpp
     src/scene/modules/ScenePrefabAssetModule.cpp
@@ -967,7 +972,8 @@ add_library(kb_engine STATIC
       src/private/scene/components/SceneTagsComponentStore.hpp
       src/private/scene/components/SceneRegionShapeComponentStore.hpp
       src/private/scene/components/SceneGuideCurveComponentStore.hpp
-      src/private/scene/components/SceneContentInstanceComponentStore.hpp
+        src/private/scene/components/SceneContentInstanceComponentStore.hpp
+        src/private/scene/components/SceneStreamFocusComponentStore.hpp
       src/private/scene/SceneContentInstanceService.hpp
       src/private/scene/systems/ContentInstanceSceneSystem.hpp
     src/private/scene/components/SceneTransformComponentStore.hpp

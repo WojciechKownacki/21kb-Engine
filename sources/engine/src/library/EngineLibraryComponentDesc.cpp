@@ -128,6 +128,11 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .id = ComputeLibraryComponentId("ContentInstance"),
             .serializable = true,
         },
+        LibraryComponentDesc{
+            .name = "StreamFocus",
+            .id = ComputeLibraryComponentId("StreamFocus"),
+            .serializable = true,
+        },
     };
     return kCatalog;
 }

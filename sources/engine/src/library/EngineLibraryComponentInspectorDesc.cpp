@@ -261,6 +261,18 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "active", "Active", "Whether runtime creates the configured content." },
             },
         },
+        LibraryComponentInspectorDesc{
+            .componentName = "StreamFocus",
+            .displayName = "Stream Focus",
+            .category = "Scene",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "innerRadius", "Inner Radius", "Distance at which eligible content begins loading." },
+                LibraryComponentInspectorFieldDesc{ "outerRadius", "Outer Radius", "Distance at which already-loaded content is released." },
+                LibraryComponentInspectorFieldDesc{ "priority", "Priority", "Tie-break priority for eligible content." },
+                LibraryComponentInspectorFieldDesc{ "loadMask", "Load Mask", "Content source kinds this focus may activate." },
+                LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether this focus participates in streaming." },
+            },
+        },
     };
     return kCatalog;
 }

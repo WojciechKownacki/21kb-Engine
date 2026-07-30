@@ -80,6 +80,7 @@
 #include "engine/scene/SceneVisibilityResolution.hpp"
 #include "engine/scene/SceneRegionShapeQueries.hpp"
 #include "engine/scene/SceneGuideCurveQueries.hpp"
+#include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -2743,6 +2744,13 @@ void RunEngineLibraryComponentRegistryTest() {
         .lifetime = kb::scene::ContentInstanceLifetime::Persistent,
         .active = false,
     });
+    source.Components().StreamFocuses().Set(object.Entity(), kb::scene::StreamFocusComponent{
+        .innerRadius = 12.5F,
+        .outerRadius = 24.0F,
+        .priority = 7,
+        .loadMask = kb::scene::StreamLoadMask::Subscene | kb::scene::StreamLoadMask::WorldFragment,
+        .enabled = false,
+    });
     const kb::scene::SceneObject jointTarget = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ComponentRegistryJointTarget" });
     source.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{ .type = kb::scene::JointType::Hinge, .connectedEntity = jointTarget.Entity(), .minLimit = -45.0F, .maxLimit = 45.0F, .enableLimit = true });
 
@@ -2829,6 +2837,11 @@ void RunEngineLibraryComponentRegistryTest() {
                             restoredContentInstance->kind == kb::scene::ContentInstanceKind::WorldFragment &&
                             restoredContentInstance->lifetime == kb::scene::ContentInstanceLifetime::Persistent && !restoredContentInstance->active,
         "Engine21kbLibrary component registry: Content Instance must survive a real save/load round trip with its source and lifetime policy");
+    const kb::scene::StreamFocusComponent* restoredStreamFocus = target.Components().StreamFocuses().TryGet(restored);
+    kb::tests::Require(restoredStreamFocus != nullptr && kb::tests::NearlyEqual(restoredStreamFocus->innerRadius, 12.5F) &&
+                            kb::tests::NearlyEqual(restoredStreamFocus->outerRadius, 24.0F) && restoredStreamFocus->priority == 7 &&
+                            restoredStreamFocus->loadMask == (kb::scene::StreamLoadMask::Subscene | kb::scene::StreamLoadMask::WorldFragment) && !restoredStreamFocus->enabled,
+        "Engine21kbLibrary component registry: Stream Focus must survive a real save/load round trip with all stream policy fields");
     // Joint stores a prefab-local stable target id and resolves it to this
     // loaded scene's live entity only after every node has been created.
     const kb::scene::JointComponent* restoredJoint = target.Components().Joints().TryGet(restored);
@@ -2903,6 +2916,77 @@ void RunContentInstanceRuntimeTest() {
         "Persistent Content Instance must survive destruction of its ECS owner without duplicating the loaded-content source of truth");
     kb::tests::Require(scene.LoadedContent().Unload(persistentLoadId),
         "Content Instance persistent runtime fixture could not clean up shared loaded content");
+    std::filesystem::remove_all(testRoot, error);
+}
+
+void RunStreamFocusRuntimeTest() {
+    const std::filesystem::path testRoot = std::filesystem::temp_directory_path() / "21kb-stream-focus-runtime";
+    std::error_code error;
+    std::filesystem::remove_all(testRoot, error);
+    const std::filesystem::path projectRoot = testRoot / "Project";
+    const std::filesystem::path scenePath = projectRoot / "Assets" / "Scenes" / "StreamFocusFixture.21kbscene";
+    {
+        kb::scene::Scene source;
+        static_cast<void>(source.Entities().CreateObject({ .name = "Stream Focus Loaded Root" }));
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(source, scenePath, "StreamFocusFixture"),
+            "Stream Focus runtime fixture scene was not saved");
+    }
+
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot) && scene.Assets().Discover() == 1U,
+        "Stream Focus runtime fixture project was not mounted and discovered");
+    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Scenes/StreamFocusFixture.21kbscene");
+    kb::tests::Require(metadata != nullptr && metadata->id.IsValid(), "Stream Focus runtime fixture asset metadata is missing");
+
+    const kb::scene::SceneObject focusObject = scene.Entities().CreateObject({ .name = "Stream Focus" });
+    scene.Components().StreamFocuses().Set(focusObject.Entity(), kb::scene::StreamFocusComponent{
+        .innerRadius = 10.0F,
+        .outerRadius = 20.0F,
+        .priority = 5,
+        .loadMask = kb::scene::StreamLoadMask::Subscene,
+        .enabled = true,
+    });
+    const kb::scene::SceneObject owner = scene.Entities().CreateObject({ .name = "Stream Focus Content Owner" });
+    kb::scene::TransformComponent ownerTransform = scene.Transforms().Get(owner.Entity());
+    ownerTransform.localPosition = { 5.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(owner.Entity(), ownerTransform);
+    scene.Components().ContentInstances().Set(owner.Entity(), kb::scene::ContentInstanceComponent{
+        .assetId = metadata->id.value,
+        .kind = kb::scene::ContentInstanceKind::Subscene,
+        .lifetime = kb::scene::ContentInstanceLifetime::Owner,
+        .active = true,
+    });
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    std::uint64_t loadId = scene.LoadedContent().Find("StreamFocusFixture");
+    kb::tests::Require(loadId != 0U && scene.LoadedContent().Exists(loadId),
+        "Stream Focus must load eligible shared content inside its inner radius");
+
+    ownerTransform.localPosition = { 15.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(owner.Entity(), ownerTransform);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    kb::tests::Require(scene.LoadedContent().Exists(loadId),
+        "Stream Focus must retain loaded content until its outer radius to avoid stream thrashing");
+
+    ownerTransform.localPosition = { 25.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(owner.Entity(), ownerTransform);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    kb::tests::Require(!scene.LoadedContent().Exists(loadId),
+        "Stream Focus must release content outside its outer radius through the shared content service");
+
+    ownerTransform.localPosition = { 5.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(owner.Entity(), ownerTransform);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    loadId = scene.LoadedContent().Find("StreamFocusFixture");
+    kb::tests::Require(loadId != 0U && scene.LoadedContent().Exists(loadId),
+        "Stream Focus must activate released content again after it returns inside the inner radius");
+
+    kb::scene::StreamFocusComponent* focus = scene.Components().StreamFocuses().TryGet(focusObject.Entity());
+    kb::tests::Require(focus != nullptr, "Stream Focus runtime fixture lost its authored ECS component");
+    focus->loadMask = kb::scene::StreamLoadMask::Prefab;
+    scene.Components().StreamFocuses().MarkModified(focusObject.Entity());
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    kb::tests::Require(!scene.LoadedContent().Exists(loadId),
+        "Stream Focus load mask must prevent unsupported content kinds from entering the shared runtime flow");
     std::filesystem::remove_all(testRoot, error);
 }
 
@@ -3088,7 +3172,7 @@ void RunComponentInspectorDescCatalogTest() {
     // LIB-183 adds 11 NavAgent fields and 9 NavObstacle fields to the prior
     // 97-field contract, bringing the library/editor scripting surface to
     // 117 described fields across 12 components.
-    kb::tests::Require(fieldsChecked == 138U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (138) across all components");
+    kb::tests::Require(fieldsChecked == 143U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (143) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
@@ -5270,6 +5354,7 @@ void RunEngineLibraryTests() {
     RunRegionShapeContainmentTest();
     RunGuideCurveEvaluationTest();
     RunContentInstanceRuntimeTest();
+    RunStreamFocusRuntimeTest();
     RunEngineLibraryEventSchemaRegistryTest();
     RunComponentInspectorDescCatalogTest();
     RunLibraryQueryPhaseGateTest();
