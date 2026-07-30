@@ -99,6 +99,11 @@ namespace {
     return lhs.assetId == rhs.assetId && lhs.kind == rhs.kind && lhs.lifetime == rhs.lifetime && lhs.active == rhs.active;
 }
 
+[[nodiscard]] bool Equals(const StreamFocusComponent& lhs, const StreamFocusComponent& rhs) noexcept {
+    return lhs.innerRadius == rhs.innerRadius && lhs.outerRadius == rhs.outerRadius && lhs.priority == rhs.priority
+        && lhs.loadMask == rhs.loadMask && lhs.enabled == rhs.enabled;
+}
+
 [[nodiscard]] bool Equals(const BehaviourComponent& lhs, const BehaviourComponent& rhs) noexcept {
     return lhs.behaviourAssetId == rhs.behaviourAssetId && lhs.backend == rhs.backend && lhs.enabled == rhs.enabled && lhs.tickGroup == rhs.tickGroup
         && lhs.executionOrder == rhs.executionOrder;
@@ -197,6 +202,7 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , regionShapes(scene.Components().RegionShapes())
     , guideCurves(scene.Components().GuideCurves())
     , contentInstances(scene.Components().ContentInstances())
+    , streamFocuses(scene.Components().StreamFocuses())
     , behaviours(scene.Components().Behaviours())
     , audioSources(scene.Components().AudioSources())
     , audioListeners(scene.Components().AudioListeners())
@@ -263,6 +269,7 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     }
     WriteOptionalComponent(context.guideCurves, entity, node.components.guideCurve);
     WriteOptionalComponent(context.contentInstances, entity, node.components.contentInstance);
+    WriteOptionalComponent(context.streamFocuses, entity, node.components.streamFocus);
     if (!componentMask.available || !componentMask.matches || node.components.behaviour.has_value()) {
         WriteOptionalComponent(context.behaviours, entity, node.components.behaviour);
     }

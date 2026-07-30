@@ -153,6 +153,15 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "contentInstance.lifetime=" << static_cast<int>(content.lifetime) << '\n';
         output << "contentInstance.active=" << (content.active ? 1 : 0) << '\n';
     }
+    output << "streamFocus=" << (components.streamFocus.has_value() ? 1 : 0) << '\n';
+    if (components.streamFocus.has_value()) {
+        const StreamFocusComponent& focus = *components.streamFocus;
+        output << "streamFocus.innerRadius=" << focus.innerRadius << '\n';
+        output << "streamFocus.outerRadius=" << focus.outerRadius << '\n';
+        output << "streamFocus.priority=" << focus.priority << '\n';
+        output << "streamFocus.loadMask=" << static_cast<std::uint32_t>(focus.loadMask) << '\n';
+        output << "streamFocus.enabled=" << (focus.enabled ? 1 : 0) << '\n';
+    }
 
     output << "behaviour=" << (components.behaviour.has_value() ? 1 : 0) << '\n';
     if (components.behaviour.has_value()) {
