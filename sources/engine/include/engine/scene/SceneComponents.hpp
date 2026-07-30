@@ -14,6 +14,7 @@
 #include "engine/scene/SceneMeshRendererComponents.hpp"
 #include "engine/scene/SceneNavigationComponents.hpp"
 #include "engine/scene/SceneRigidbodyComponents.hpp"
+#include "engine/scene/SceneRegionShapeComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
 #include "engine/scene/SceneUIDocuments.hpp"
@@ -37,6 +38,7 @@ public:
     [[nodiscard]] SceneCharacterControllerComponents CharacterControllers() const noexcept;
     [[nodiscard]] SceneJointComponents Joints() const noexcept;
     [[nodiscard]] SceneTagsComponents Tags() const noexcept;
+    [[nodiscard]] SceneRegionShapeComponents RegionShapes() const noexcept;
     [[nodiscard]] SceneAudioSourceComponents AudioSources() const noexcept;
     [[nodiscard]] SceneAudioListenerComponents AudioListeners() const noexcept;
     [[nodiscard]] SceneAnimatorComponents Animators() const noexcept;

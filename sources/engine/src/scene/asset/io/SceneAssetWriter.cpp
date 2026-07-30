@@ -58,8 +58,14 @@ void WriteNode(std::vector<std::uint8_t>& output, const ScenePrefabNodeDesc& nod
     SceneAssetPrimitiveCodec::WriteVec3(output, node.transform.localPosition);
     SceneAssetPrimitiveCodec::WriteQuat(output, node.transform.localRotation);
     SceneAssetPrimitiveCodec::WriteVec3(output, node.transform.localScale);
-    WriteUInt8(output, node.visibility.mode != VisibilityMode::Hidden ? 1U : 0U);
-    WriteUInt8(output, static_cast<std::uint8_t>(node.visibility.mode));
+    // Prefab descriptors authored against the pre-v2 visibility API can
+    // still set only `visible = false`. Serialize that compatibility value
+    // canonically as the v2 Hidden gate; otherwise a default Visible mode
+    // would revive hidden legacy content after a save/load round trip.
+    const VisibilityMode visibilityMode = node.visibility.visible
+        ? node.visibility.mode : VisibilityMode::Hidden;
+    WriteUInt8(output, visibilityMode != VisibilityMode::Hidden ? 1U : 0U);
+    WriteUInt8(output, static_cast<std::uint8_t>(visibilityMode));
     WriteUInt32(output, node.visibility.mask);
     SceneAssetComponentCodec::Write(output, node.components);
 }

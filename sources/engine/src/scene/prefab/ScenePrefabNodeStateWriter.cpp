@@ -39,7 +39,7 @@ namespace {
 }
 
 [[nodiscard]] bool Equals(const VisibilityComponent& lhs, const VisibilityComponent& rhs) noexcept {
-    return lhs.visible == rhs.visible;
+    return lhs.mode == rhs.mode && lhs.mask == rhs.mask && lhs.visible == rhs.visible;
 }
 
 [[nodiscard]] bool Equals(const CameraComponent& lhs, const CameraComponent& rhs) noexcept {
@@ -82,6 +82,11 @@ namespace {
 
 [[nodiscard]] bool Equals(const TagsComponent& lhs, const TagsComponent& rhs) noexcept {
     return TagsText(lhs) == TagsText(rhs);
+}
+
+[[nodiscard]] bool Equals(const RegionShapeComponent& lhs, const RegionShapeComponent& rhs) noexcept {
+    return lhs.kind == rhs.kind && Equals(lhs.center, rhs.center) && Equals(lhs.size, rhs.size)
+        && lhs.radius == rhs.radius && lhs.height == rhs.height && lhs.enabled == rhs.enabled;
 }
 
 [[nodiscard]] bool Equals(const BehaviourComponent& lhs, const BehaviourComponent& rhs) noexcept {
@@ -179,6 +184,7 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , colliders(scene.Components().Colliders())
     , characterControllers(scene.Components().CharacterControllers())
     , tags(scene.Components().Tags())
+    , regionShapes(scene.Components().RegionShapes())
     , behaviours(scene.Components().Behaviours())
     , audioSources(scene.Components().AudioSources())
     , audioListeners(scene.Components().AudioListeners())
@@ -239,6 +245,9 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     }
     if (!componentMask.available || !componentMask.matches || node.components.tags.has_value()) {
         WriteOptionalComponent(context.tags, entity, node.components.tags);
+    }
+    if (!componentMask.available || !componentMask.matches || node.components.regionShape.has_value()) {
+        WriteOptionalComponent(context.regionShapes, entity, node.components.regionShape);
     }
     if (!componentMask.available || !componentMask.matches || node.components.behaviour.has_value()) {
         WriteOptionalComponent(context.behaviours, entity, node.components.behaviour);

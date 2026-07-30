@@ -3,6 +3,7 @@
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
+#include "scene/components/SceneRegionShapeComponentStore.hpp"
 #include "scene/components/SceneAudioListenerComponentStore.hpp"
 #include "scene/components/SceneAudioSourceComponentStore.hpp"
 #include "scene/components/SceneAnimatorComponentStore.hpp"
@@ -61,6 +62,8 @@ public:
     [[nodiscard]] SceneJointComponentStore& Joints() noexcept;
     [[nodiscard]] const SceneTagsComponentStore& Tags() const noexcept;
     [[nodiscard]] SceneTagsComponentStore& Tags() noexcept;
+    [[nodiscard]] const SceneRegionShapeComponentStore& RegionShapes() const noexcept;
+    [[nodiscard]] SceneRegionShapeComponentStore& RegionShapes() noexcept;
     [[nodiscard]] const SceneAudioSourceComponentStore& AudioSources() const noexcept;
     [[nodiscard]] SceneAudioSourceComponentStore& AudioSources() noexcept;
     [[nodiscard]] const SceneAudioListenerComponentStore& AudioListeners() const noexcept;
@@ -85,6 +88,7 @@ private:
     SceneCharacterControllerComponentStore characterControllers_;
     SceneJointComponentStore joints_;
     SceneTagsComponentStore tags_;
+    SceneRegionShapeComponentStore regionShapes_;
     SceneAudioSourceComponentStore audioSources_;
     SceneAudioListenerComponentStore audioListeners_;
     SceneAnimatorComponentStore animators_;

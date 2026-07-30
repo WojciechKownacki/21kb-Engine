@@ -251,7 +251,10 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneVisitorTypes.hpp
     include/engine/scene/SceneVisitors.hpp
     include/engine/scene/TransformComponent.hpp
-    include/engine/scene/SceneTagsComponents.hpp
+      include/engine/scene/SceneTagsComponents.hpp
+      include/engine/scene/SceneRegionShapeComponents.hpp
+      include/engine/scene/SceneRegionShapeQueries.hpp
+      include/engine/scene/RegionShapeComponent.hpp
     include/engine/scene/SceneVisibilityComponents.hpp
     include/engine/scene/VisibilityComponent.hpp
     include/engine/render/postfx/PostProcessPipeline.hpp
@@ -618,8 +621,11 @@ add_library(kb_engine STATIC
     src/scene/components/ScenePhysicsBodyIteration.cpp
     src/scene/components/SceneRigidbodyApi.cpp
     src/scene/components/SceneRigidbodyStorage.cpp
-    src/scene/components/SceneTagsApi.cpp
-    src/scene/components/SceneTagsStorage.cpp
+      src/scene/components/SceneTagsApi.cpp
+      src/scene/components/SceneTagsStorage.cpp
+      src/scene/components/SceneRegionShapeApi.cpp
+      src/scene/components/SceneRegionShapeQueries.cpp
+      src/scene/components/SceneRegionShapeStorage.cpp
     src/scene/components/SceneTransformApi.cpp
     src/scene/components/SceneTransformStorage.cpp
     src/scene/components/SceneTransformIteration.cpp
@@ -666,7 +672,8 @@ add_library(kb_engine STATIC
     src/scene/modules/components/SceneJointModule.cpp
     src/scene/modules/components/SceneMeshRendererModule.cpp
     src/scene/modules/components/SceneRigidbodyModule.cpp
-    src/scene/modules/components/SceneTagsModule.cpp
+      src/scene/modules/components/SceneTagsModule.cpp
+      src/scene/modules/components/SceneRegionShapeModule.cpp
     src/scene/modules/components/SceneVisibilityModule.cpp
     src/scene/modules/ScenePrefabAssetModule.cpp
     src/scene/modules/SceneAssets.cpp
@@ -943,7 +950,8 @@ add_library(kb_engine STATIC
     src/private/scene/components/SceneJointComponentStore.hpp
     src/private/scene/components/SceneMeshRendererComponentStore.hpp
     src/private/scene/components/SceneRigidbodyComponentStore.hpp
-    src/private/scene/components/SceneTagsComponentStore.hpp
+      src/private/scene/components/SceneTagsComponentStore.hpp
+      src/private/scene/components/SceneRegionShapeComponentStore.hpp
     src/private/scene/components/SceneTransformComponentStore.hpp
     src/private/scene/components/SceneVisibilityComponentStore.hpp
     src/private/scene/entities/SceneEntityCounter.hpp

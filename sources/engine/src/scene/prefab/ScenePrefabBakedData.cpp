@@ -1,16 +1,15 @@
 #include "scene/prefab/ScenePrefabBakedData.hpp"
 
-#include <array>
 #include <limits>
 #include <stdexcept>
 
 namespace kb::scene {
 namespace {
 
-inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 16U;
+inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 17U;
 
-[[nodiscard]] std::uint16_t ComponentMask(const ScenePrefabNodeComponents& components) noexcept {
-    std::uint16_t mask = 0U;
+[[nodiscard]] std::uint32_t ComponentMask(const ScenePrefabNodeComponents& components) noexcept {
+    std::uint32_t mask = 0U;
     if (components.camera.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Camera);
     }
@@ -37,6 +36,9 @@ inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 16U;
     }
     if (components.tags.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Tags);
+    }
+    if (components.regionShape.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::RegionShape);
     }
     if (components.behaviour.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Behaviour);
@@ -69,12 +71,14 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
     data.nodeCount_ = nodes.size();
     data.archetypes_.reserve(nodes.size());
 
-    std::array<std::size_t, kScenePrefabBakedMaskCount> archetypeByMask{};
-    archetypeByMask.fill(std::numeric_limits<std::size_t>::max());
+    // The optional-component mask now exceeds the safe per-thread stack budget.
+    // Keep this direct index table (the hot bake lookup remains O(1)) but own it
+    // on the heap with ScenePrefabBakedData's other variable-size work buffers.
+    std::vector<std::size_t> archetypeByMask(kScenePrefabBakedMaskCount, std::numeric_limits<std::size_t>::max());
 
     for (std::size_t nodeIndex = 0; nodeIndex < nodes.size(); ++nodeIndex) {
         const ScenePrefabNodeDesc& node = nodes[nodeIndex];
-        const std::uint16_t mask = ComponentMask(node.components);
+        const std::uint32_t mask = ComponentMask(node.components);
         std::size_t archetypeIndex = archetypeByMask[mask];
         if (archetypeIndex == std::numeric_limits<std::size_t>::max()) {
             archetypeIndex = data.archetypes_.size();
@@ -124,6 +128,9 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         }
         if (node.components.tags.has_value()) {
             archetype.tags.push_back(*node.components.tags);
+        }
+        if (node.components.regionShape.has_value()) {
+            archetype.regionShapes.push_back(*node.components.regionShape);
         }
         if (node.components.behaviour.has_value()) {
             archetype.behaviours.push_back(*node.components.behaviour);

@@ -9,6 +9,7 @@
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/Navigation.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
+#include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
 #include "engine/scene/SceneCharacterControllerComponents.hpp"
@@ -20,6 +21,7 @@
 #include "engine/scene/SceneMeshRendererComponents.hpp"
 #include "engine/scene/SceneNavigationComponents.hpp"
 #include "engine/scene/SceneRigidbodyComponents.hpp"
+#include "engine/scene/SceneRegionShapeComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -213,7 +215,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 13> kComponentNames{
+constexpr std::array<std::string_view, 14> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
@@ -227,6 +229,20 @@ constexpr std::array<std::string_view, 13> kComponentNames{
     "NavAgent",
     "NavObstacle",
     "Tags",
+    "RegionShape",
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kRegionShapePropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "kind", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "center.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "center.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "center.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "size.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "size.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "size.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "radius", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "height", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 1> kTagsPropertyDescs{
@@ -603,6 +619,26 @@ constexpr std::array<FieldBinding, 1> kTagsFields{
         } },
 };
 
+constexpr std::array<FieldBinding, 10> kRegionShapeFields{
+    FieldBinding{ "kind", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::RegionShapeComponent*>(component)->kind) }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool {
+            if (value.Type() != ScriptValueType::Int || value.AsInt() < static_cast<int>(kb::scene::RegionShapeKind::Circle2D) || value.AsInt() > static_cast<int>(kb::scene::RegionShapeKind::Capsule)) return false;
+            const auto kind = static_cast<kb::scene::RegionShapeKind>(value.AsInt());
+            if (!kb::scene::IsRegionShapeKindValid(kind)) return false;
+            static_cast<kb::scene::RegionShapeComponent*>(component)->kind = kind;
+            return true;
+        } },
+    KB_NESTED_FLOAT(kb::scene::RegionShapeComponent, center, x),
+    KB_NESTED_FLOAT(kb::scene::RegionShapeComponent, center, y),
+    KB_NESTED_FLOAT(kb::scene::RegionShapeComponent, center, z),
+    KB_NESTED_FLOAT(kb::scene::RegionShapeComponent, size, x),
+    KB_NESTED_FLOAT(kb::scene::RegionShapeComponent, size, y),
+    KB_NESTED_FLOAT(kb::scene::RegionShapeComponent, size, z),
+    KB_FLOAT(kb::scene::RegionShapeComponent, radius),
+    KB_FLOAT(kb::scene::RegionShapeComponent, height),
+    KB_BOOL(kb::scene::RegionShapeComponent, enabled),
+};
+
 #undef KB_BOOL
 #undef KB_INT
 #undef KB_UINT32
@@ -676,6 +712,7 @@ void MarkJointModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) n
 void MarkNavAgentModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().NavAgents().MarkModified(entity); }
 void MarkNavObstacleModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().NavObstacles().MarkModified(entity); }
 void MarkTagsModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Tags().MarkModified(entity); }
+void MarkRegionShapeModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().RegionShapes().MarkModified(entity); }
 
 [[nodiscard]] ComponentAccess AccessComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
     if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
@@ -733,6 +770,10 @@ void MarkTagsModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) no
         kb::scene::TagsComponent* component = scene.Components().Tags().TryGet(entity);
         return ComponentAccess{ component, component, kTagsFields, &MarkTagsModified };
     }
+    if (componentName == "RegionShape") {
+        kb::scene::RegionShapeComponent* component = scene.Components().RegionShapes().TryGet(entity);
+        return ComponentAccess{ component, component, kRegionShapeFields, &MarkRegionShapeModified };
+    }
     return {};
 }
 
@@ -748,6 +789,9 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     }
     if (componentName == "Visibility") {
         return kVisibilityPropertyDescs;
+    }
+    if (componentName == "RegionShape") {
+        return kRegionShapePropertyDescs;
     }
     if (componentName == "Camera") {
         return kCameraPropertyDescs;

@@ -57,6 +57,9 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const TagsComponent* tags = sceneComponents.Tags().TryGet(entity)) {
         components.tags = *tags;
     }
+    if (const RegionShapeComponent* regionShape = sceneComponents.RegionShapes().TryGet(entity)) {
+        components.regionShape = *regionShape;
+    }
 
     if (const BehaviourComponent* behaviour = sceneComponents.Behaviours().TryGet(entity)) {
         components.behaviour = *behaviour;
