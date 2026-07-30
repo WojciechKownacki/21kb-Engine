@@ -10,6 +10,7 @@
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneVisitors.hpp"
 #include "engine/scene/TransformComponent.hpp"
+#include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
@@ -7098,6 +7099,31 @@ bool EditorSceneContext::SetProjectSceneLightingPath(kb::project::ProjectSceneLi
         MarkSceneRenderDirty();
     }
     return saved;
+}
+
+bool EditorSceneContext::CycleEntityVisibilityMode(kb::scene::SceneEntity entity) {
+    return ExecuteSceneCommand("Edit Visibility Mode", [this, entity]() {
+        kb::scene::VisibilityComponent* visibility = scene_->Components().Visibility().TryGet(entity);
+        if (visibility == nullptr) return false;
+        switch (visibility->mode) {
+        case kb::scene::VisibilityMode::Inherit: visibility->mode = kb::scene::VisibilityMode::Visible; break;
+        case kb::scene::VisibilityMode::Visible: visibility->mode = kb::scene::VisibilityMode::Hidden; break;
+        case kb::scene::VisibilityMode::Hidden: visibility->mode = kb::scene::VisibilityMode::Inherit; break;
+        }
+        visibility->visible = visibility->mode != kb::scene::VisibilityMode::Hidden;
+        scene_->Components().Visibility().MarkModified(entity);
+        return true;
+    });
+}
+
+bool EditorSceneContext::SetEntityVisibilityMask(kb::scene::SceneEntity entity, std::uint32_t mask) {
+    return ExecuteSceneCommand("Edit Visibility Mask", [this, entity, mask]() {
+        kb::scene::VisibilityComponent* visibility = scene_->Components().Visibility().TryGet(entity);
+        if (visibility == nullptr || visibility->mask == mask) return false;
+        visibility->mask = mask;
+        scene_->Components().Visibility().MarkModified(entity);
+        return true;
+    });
 }
 
 std::vector<std::string> EditorSceneContext::ProjectPhysicsLayersAssetOptions() const {

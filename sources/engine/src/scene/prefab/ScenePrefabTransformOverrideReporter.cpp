@@ -6,6 +6,9 @@
 #include "scene/prefab/ScenePrefabOverridePropertyReporter.hpp"
 #include "scene/prefab/ScenePrefabOverrideValueFormatter.hpp"
 
+#include <cstdint>
+#include <string>
+
 namespace kb::scene {
 
 void ScenePrefabTransformOverrideReporter::Append(Scene& scene, const ScenePrefabNodeDesc& node, std::uint32_t nodeIndex, SceneObject object, ScenePrefabOverrideReport& report) {
@@ -22,8 +25,12 @@ void ScenePrefabTransformOverrideReporter::Append(Scene& scene, const ScenePrefa
     }
 
     const VisibilityComponent visibility = scene.Components().Visibility().Get(entity);
-    if (visibility.visible != node.visibility.visible) {
-        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "visibility.visible", ScenePrefabOverrideValueFormatter::ToString(visibility.visible), ScenePrefabOverrideFlag::Visibility);
+    if (visibility.mode != node.visibility.mode) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "visibility.visible", ScenePrefabOverrideValueFormatter::ToString(visibility.mode != VisibilityMode::Hidden), ScenePrefabOverrideFlag::Visibility);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "visibility.mode", std::to_string(static_cast<std::uint32_t>(visibility.mode)), ScenePrefabOverrideFlag::Visibility);
+    }
+    if (visibility.mask != node.visibility.mask) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "visibility.mask", std::to_string(visibility.mask), ScenePrefabOverrideFlag::Visibility);
     }
 }
 

@@ -37,7 +37,7 @@ namespace {
     if (StartsWith(propertyPath, "transform.")) {
         return ScenePrefabOverrideFlag::Transform;
     }
-    if (propertyPath == "visibility.visible") {
+    if (StartsWith(propertyPath, "visibility.")) {
         return ScenePrefabOverrideFlag::Visibility;
     }
     if (StartsWith(propertyPath, "camera")) {
@@ -118,7 +118,15 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
         }
     }
     if (propertyPath == "visibility.visible") {
-        property.value = ToString(scene.Components().Visibility().Get(object.Entity()).visible);
+        property.value = ToString(scene.Components().Visibility().Get(object.Entity()).mode != VisibilityMode::Hidden);
+        return true;
+    }
+    if (propertyPath == "visibility.mode") {
+        property.value = std::to_string(static_cast<std::uint32_t>(scene.Components().Visibility().Get(object.Entity()).mode));
+        return true;
+    }
+    if (propertyPath == "visibility.mask") {
+        property.value = std::to_string(scene.Components().Visibility().Get(object.Entity()).mask);
         return true;
     }
     SceneComponents components = scene.Components();

@@ -50,6 +50,9 @@ using SceneAssetBinaryIO::ReadAllBytes;
 
 [[nodiscard]] bool ReadNode(ByteReader& input, std::uint32_t fileVersion, ScenePrefabNodeDesc& output) {
     std::uint32_t nestedOverrideCount = 0;
+    bool visible = true;
+    std::uint8_t rawMode = static_cast<std::uint8_t>(VisibilityMode::Visible);
+    std::uint32_t mask = VisibilityComponent::AllMask;
     if ((fileVersion >= 4U && !input.ReadUInt64(output.stableId)) ||
         !input.ReadString(output.name) ||
         !input.ReadString(output.nestedPrefabGuid) ||
@@ -71,10 +74,17 @@ using SceneAssetBinaryIO::ReadAllBytes;
         !SceneAssetPrimitiveCodec::ReadVec3(input, output.transform.localPosition) ||
         !SceneAssetPrimitiveCodec::ReadQuat(input, output.transform.localRotation) ||
         !SceneAssetPrimitiveCodec::ReadVec3(input, output.transform.localScale) ||
-        !input.ReadBool(output.visibility.visible) ||
+        !input.ReadBool(visible) ||
+        (fileVersion >= 9U && (!input.ReadUInt8(rawMode) || !input.ReadUInt32(mask))) ||
         !SceneAssetComponentCodec::Read(input, fileVersion, output.components)) {
         return false;
     }
+    output.visibility.mode = fileVersion >= 9U
+        ? static_cast<VisibilityMode>(rawMode)
+        : (visible ? VisibilityMode::Visible : VisibilityMode::Hidden);
+    if (!IsVisibilityModeValid(output.visibility.mode)) return false;
+    output.visibility.mask = mask;
+    output.visibility.visible = output.visibility.mode != VisibilityMode::Hidden;
     return true;
 }
 
