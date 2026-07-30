@@ -1530,6 +1530,20 @@ void RunEntityHandlePhysicsComponentAccessTest() {
     kb::tests::Require(handle.Remove<kb::scene::JointComponent>(scene), "Engine21kbLibrary EntityHandle::Remove<JointComponent> must report true when the component was actually present");
 }
 
+void RunEntityHandleTagsComponentAccessTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ClassificationComponentAccessSubject" });
+    const kb::library::EntityHandle handle{ object.Entity(), scene.Id() };
+    kb::tests::Require(!handle.Has<kb::scene::TagsComponent>(scene), "EntityHandle Tags query must be false before Object Classification is added");
+
+    kb::scene::TagsComponent classification;
+    kb::scene::SetTagsText(classification, "Enemy, Boss");
+    kb::tests::Require(handle.Add<kb::scene::TagsComponent>(scene, classification), "EntityHandle must add Object Classification to a live entity");
+    const kb::scene::TagsComponent* stored = handle.TryGet<kb::scene::TagsComponent>(scene);
+    kb::tests::Require(stored != nullptr && kb::scene::TagsText(*stored) == "Enemy, Boss", "EntityHandle must return the authored Object Classification value");
+    kb::tests::Require(handle.Remove<kb::scene::TagsComponent>(scene), "EntityHandle must remove Object Classification when present");
+}
+
 // LIB-009: AssetRef<T>/SceneRef must be the real kb::assets::AssetHandle<T>
 // (no parallel cache/refcount model), and the identifier behind it must be a
 // deterministic hash of the asset's logical path — not the OS physical path.
@@ -2701,6 +2715,9 @@ void RunEngineLibraryComponentRegistryTest() {
     source.Components().Rigidbodies().Set(object.Entity(), kb::scene::RigidbodyComponent{ .mass = 12.5F });
     source.Components().Colliders().Set(object.Entity(), kb::scene::ColliderComponent{ .radius = 0.75F, .friction = 0.6F, .restitution = 0.2F });
     source.Components().CharacterControllers().Set(object.Entity(), kb::scene::CharacterControllerComponent{ .radius = 0.4F, .height = 1.8F, .slopeLimitDegrees = 40.0F, .stepOffset = 0.3F, .gravityScale = 1.5F, .useGravity = false });
+    kb::scene::TagsComponent classification;
+    kb::scene::SetTagsText(classification, "Enemy, Boss");
+    source.Components().Tags().Set(object.Entity(), classification);
     const kb::scene::SceneObject jointTarget = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ComponentRegistryJointTarget" });
     source.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{ .type = kb::scene::JointType::Hinge, .connectedEntity = jointTarget.Entity(), .minLimit = -45.0F, .maxLimit = 45.0F, .enableLimit = true });
 
@@ -2765,6 +2782,9 @@ void RunEngineLibraryComponentRegistryTest() {
                             kb::tests::NearlyEqual(restoredCharacterController->gravityScale, 1.5F) &&
                             !restoredCharacterController->useGravity,
         "Engine21kbLibrary component registry: CharacterController's slopeLimitDegrees/stepOffset/gravityScale/useGravity must survive a save/load round trip");
+    const kb::scene::TagsComponent* restoredClassification = target.Components().Tags().TryGet(restored);
+    kb::tests::Require(restoredClassification != nullptr && kb::scene::TagsText(*restoredClassification) == "Enemy, Boss",
+        "Engine21kbLibrary component registry: Tags is marked serializable=true and must survive a save/load round trip");
     // Joint stores a prefab-local stable target id and resolves it to this
     // loaded scene's live entity only after every node has been created.
     const kb::scene::JointComponent* restoredJoint = target.Components().Joints().TryGet(restored);
@@ -2967,7 +2987,7 @@ void RunComponentInspectorDescCatalogTest() {
     // LIB-183 adds 11 NavAgent fields and 9 NavObstacle fields to the prior
     // 97-field contract, bringing the library/editor scripting surface to
     // 117 described fields across 12 components.
-    kb::tests::Require(fieldsChecked == 117U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (117) across all 12 components");
+    kb::tests::Require(fieldsChecked == 118U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (118) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
@@ -5048,6 +5068,7 @@ void RunEngineLibraryTests() {
     RunEntityHandleScriptComponentAccessTest();
     RunEntityHandleMeshRendererComponentAccessTest();
     RunEntityHandlePhysicsComponentAccessTest();
+    RunEntityHandleTagsComponentAccessTest();
     RunArrayViewTest();
     RunCollectionsScalarTest();
     RunCollectionsScriptValueTest();
