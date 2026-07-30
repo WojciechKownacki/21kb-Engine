@@ -15,6 +15,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
+#include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
@@ -1558,6 +1559,15 @@ void PaintRegionShapeSection(
     y = section.Bottom() + kSectionGap;
 }
 
+void PaintGuideCurveSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::GuideCurveComponent& curve) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::GuideCurve, HeroIconKind::Cube, "Guide Curve", true);
+    section.Field("Control Points", std::to_string(curve.controlPointCount), InspectorPropertyId::GuideCurveControlPointCount);
+    section.Field("Interpolation", curve.interpolation == kb::scene::GuideCurveInterpolation::Linear ? "Linear" : "Catmull-Rom", InspectorPropertyId::GuideCurveInterpolation);
+    section.Bool("Closed", curve.closed, InspectorPropertyId::GuideCurveClosed);
+    section.Bool("Enabled", curve.enabled, InspectorPropertyId::GuideCurveEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
 constexpr int kCameraSectionRows = 13;
 
 void PaintCameraSection(
@@ -1908,6 +1918,10 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             y += h + kSectionGap;
         }
     }
+    if (const kb::scene::GuideCurveComponent* guideCurve = scene.Components().GuideCurves().TryGet(selected); guideCurve != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::GuideCurve, 4);
+        if (y < content.bottom && y + h > content.top) PaintGuideCurveSection(dc, content, y, theme, inspector, *guideCurve); else y += h + kSectionGap;
+    }
 
     if (sceneContext.HasEntityScript(selected)) {
         const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);
@@ -2143,6 +2157,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (scene.Components().RegionShapes().Has(selected)) {
         height += SectionHeight(inspector, InspectorSectionId::RegionShape, 6) + kSectionGap;
     }
+    if (scene.Components().GuideCurves().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::GuideCurve, 4) + kSectionGap;
     if (sceneContext.HasEntityScript(selected)) {
         const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariables(selected).size());
         height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
@@ -3143,6 +3158,15 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             AdvanceRow(y);
         }
         y += kSectionGap;
+    }
+    if (sceneContext.Scene().Components().GuideCurves().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::GuideCurve, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::GuideCurve)) {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::GuideCurve, InspectorPropertyId::GuideCurveControlPointCount, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::GuideCurve, InspectorPropertyId::GuideCurveInterpolation, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::GuideCurve, InspectorPropertyId::GuideCurveClosed, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::GuideCurve, InspectorPropertyId::GuideCurveEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+        }
     }
 
     if (sceneContext.HasEntityScript(selected)) {

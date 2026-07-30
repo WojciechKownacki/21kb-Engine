@@ -33,6 +33,7 @@ enum SceneNodeComponentBits : std::uint32_t {
     NavAgentBit = 1U << 14U,
     NavObstacleBit = 1U << 15U,
     RegionShapeBit = 1U << 16U,
+    GuideCurveBit = 1U << 17U,
 };
 
 constexpr std::uint32_t KnownComponentBits = CameraBit |
@@ -51,7 +52,8 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     UIDocumentBit |
     NavAgentBit |
     NavObstacleBit |
-    RegionShapeBit;
+    RegionShapeBit |
+    GuideCurveBit;
 
 [[nodiscard]] std::uint32_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint32_t componentBits = 0;
@@ -72,6 +74,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     componentBits |= components.navAgent.has_value() ? NavAgentBit : 0U;
     componentBits |= components.navObstacle.has_value() ? NavObstacleBit : 0U;
     componentBits |= components.regionShape.has_value() ? RegionShapeBit : 0U;
+    componentBits |= components.guideCurve.has_value() ? GuideCurveBit : 0U;
     return componentBits;
 }
 
@@ -236,6 +239,18 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         regionShape.kind = static_cast<RegionShapeKind>(kind);
         output.regionShape = regionShape;
     }
+    if ((componentBits & GuideCurveBit) != 0U) {
+        if (fileVersion < 11U) return false;
+        GuideCurveComponent guideCurve{};
+        std::uint32_t interpolation = 0U;
+        if (!input.ReadUInt32(guideCurve.controlPointCount) || !input.ReadUInt32(interpolation) || !input.ReadBool(guideCurve.closed) || !input.ReadBool(guideCurve.enabled) ||
+            !IsGuideCurveControlPointCountValid(guideCurve.controlPointCount) || interpolation > static_cast<std::uint32_t>(GuideCurveInterpolation::CatmullRom)) return false;
+        guideCurve.interpolation = static_cast<GuideCurveInterpolation>(interpolation);
+        for (std::uint32_t index = 0U; index < guideCurve.controlPointCount; ++index) {
+            if (!SceneAssetPrimitiveCodec::ReadVec3(input, guideCurve.controlPoints[index]) || !std::isfinite(guideCurve.controlPoints[index].x) || !std::isfinite(guideCurve.controlPoints[index].y) || !std::isfinite(guideCurve.controlPoints[index].z)) return false;
+        }
+        output.guideCurve = guideCurve;
+    }
     return true;
 }
 
@@ -321,6 +336,14 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteFloat(output, regionShape.radius);
         SceneAssetBinaryIO::WriteFloat(output, regionShape.height);
         SceneAssetBinaryIO::WriteBool(output, regionShape.enabled);
+    }
+    if (components.guideCurve.has_value()) {
+        const GuideCurveComponent& guideCurve = *components.guideCurve;
+        SceneAssetBinaryIO::WriteUInt32(output, guideCurve.controlPointCount);
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(guideCurve.interpolation));
+        SceneAssetBinaryIO::WriteBool(output, guideCurve.closed);
+        SceneAssetBinaryIO::WriteBool(output, guideCurve.enabled);
+        for (std::uint32_t index = 0U; index < guideCurve.controlPointCount; ++index) SceneAssetPrimitiveCodec::WriteVec3(output, guideCurve.controlPoints[index]);
     }
 }
 

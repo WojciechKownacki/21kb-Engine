@@ -8099,6 +8099,16 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
             return true;
         });
     }
+    if (componentId == "GuideCurve") {
+        if (scene_->Components().GuideCurves().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Guide Curve component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Guide Curve Component", [this, entity]() {
+            scene_->Components().GuideCurves().Set(entity, kb::scene::GuideCurveComponent{});
+            return true;
+        });
+    }
     if (componentId == "NavAgent") {
         if (scene_->Components().NavAgents().Has(entity)) {
             console_.Warning("Inspector", "Entity already has a Nav Agent component.");
