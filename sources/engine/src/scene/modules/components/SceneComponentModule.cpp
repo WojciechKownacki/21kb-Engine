@@ -53,6 +53,10 @@ SceneTagsComponentQueries SceneComponentQueries::Tags() const noexcept {
     return SceneTagsComponentQueries{ scene_ };
 }
 
+SceneRegionShapeComponentQueries SceneComponentQueries::RegionShapes() const noexcept {
+    return SceneRegionShapeComponentQueries{ scene_ };
+}
+
 SceneAudioSourceComponentQueries SceneComponentQueries::AudioSources() const noexcept {
     return SceneAudioSourceComponentQueries{ scene_ };
 }
@@ -116,6 +120,10 @@ SceneJointComponents SceneComponents::Joints() const noexcept {
 
 SceneTagsComponents SceneComponents::Tags() const noexcept {
     return SceneTagsComponents{ scene_ };
+}
+
+SceneRegionShapeComponents SceneComponents::RegionShapes() const noexcept {
+    return SceneRegionShapeComponents{ scene_ };
 }
 
 SceneAudioSourceComponents SceneComponents::AudioSources() const noexcept {

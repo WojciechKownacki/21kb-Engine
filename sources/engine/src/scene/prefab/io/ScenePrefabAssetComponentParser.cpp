@@ -114,6 +114,25 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseRegionShape(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool hasRegionShape = false;
+    if (!ParseOptionalComponentFlag(fields, "regionShape", hasRegionShape)) return false;
+    if (!hasRegionShape) return true;
+    int kind = 0;
+    RegionShapeComponent regionShape{};
+    if (!ParseField(fields, "regionShape.kind", kind)
+        || kind < static_cast<int>(RegionShapeKind::Circle2D)
+        || kind > static_cast<int>(RegionShapeKind::Capsule)
+        || !ScenePrefabAssetFieldParser::ParseVec3(fields, "regionShape.center", regionShape.center)
+        || !ScenePrefabAssetFieldParser::ParseVec3(fields, "regionShape.size", regionShape.size)
+        || !ParseField(fields, "regionShape.radius", regionShape.radius)
+        || !ParseField(fields, "regionShape.height", regionShape.height)
+        || !ParseOptionalBool(fields, "regionShape.enabled", regionShape.enabled)) return false;
+    regionShape.kind = static_cast<RegionShapeKind>(kind);
+    components.regionShape = regionShape;
+    return true;
+}
+
 [[nodiscard]] bool ParseCharacterController(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool hasCharacterController = false;
     if (!ParseOptionalComponentFlag(fields, "characterController", hasCharacterController)) {
@@ -295,6 +314,7 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ScenePrefabAssetInputParser::Parse(fields, components)
         && ParseRigidbody(fields, components)
         && ParseCollider(fields, components)
+        && ParseRegionShape(fields, components)
         && ParseCharacterController(fields, components)
         && ParseJoint(fields, components)
         && ScenePrefabAssetTagsParser::Parse(fields, components)

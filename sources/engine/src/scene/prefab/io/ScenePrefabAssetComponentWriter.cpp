@@ -122,6 +122,16 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "tags.value=" << TagsText(*components.tags) << '\n';
     }
 
+    output << "regionShape=" << (components.regionShape.has_value() ? 1 : 0) << '\n';
+    if (components.regionShape.has_value()) {
+        output << "regionShape.kind=" << static_cast<int>(components.regionShape->kind) << '\n';
+        WriteVec3(output, "regionShape.center", components.regionShape->center);
+        WriteVec3(output, "regionShape.size", components.regionShape->size);
+        output << "regionShape.radius=" << components.regionShape->radius << '\n';
+        output << "regionShape.height=" << components.regionShape->height << '\n';
+        output << "regionShape.enabled=" << (components.regionShape->enabled ? 1 : 0) << '\n';
+    }
+
     output << "behaviour=" << (components.behaviour.has_value() ? 1 : 0) << '\n';
     if (components.behaviour.has_value()) {
         output << "behaviour.behaviourAssetId=" << components.behaviour->behaviourAssetId << '\n';

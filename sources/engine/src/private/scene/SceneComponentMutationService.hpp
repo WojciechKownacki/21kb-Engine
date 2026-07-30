@@ -15,6 +15,7 @@
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TagsComponent.hpp"
+#include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
 
@@ -79,6 +80,11 @@ public:
     static void SetTags(Scene& scene, SceneEntity entity, const TagsComponent& tags);
     static void RemoveTags(Scene& scene, SceneEntity entity) noexcept;
     static void MarkTagsModified(Scene& scene, SceneEntity entity) noexcept;
+
+    [[nodiscard]] static RegionShapeComponent* TryGetRegionShape(Scene& scene, SceneEntity entity) noexcept;
+    static void SetRegionShape(Scene& scene, SceneEntity entity, const RegionShapeComponent& shape);
+    static void RemoveRegionShape(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkRegionShapeModified(Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static AudioSourceComponent* TryGetAudioSource(Scene& scene, SceneEntity entity) noexcept;
     static void SetAudioSource(Scene& scene, SceneEntity entity, const AudioSourceComponent& audioSource);

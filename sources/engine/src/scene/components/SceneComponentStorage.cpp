@@ -17,6 +17,7 @@ SceneComponentStorage::SceneComponentStorage(kb::ecs::World& world, const SceneC
     , characterControllers_(world, components.CharacterControllerComponentId())
     , joints_(world, components.JointComponentId())
     , tags_(world, components.TagsComponentId())
+    , regionShapes_(world, components.RegionShapeComponentId())
     , audioSources_(world, components.AudioSourceComponentId())
     , audioListeners_(world, components.AudioListenerComponentId())
     , animators_(world, components.AnimatorComponentId())
@@ -122,6 +123,14 @@ const SceneTagsComponentStore& SceneComponentStorage::Tags() const noexcept {
 
 SceneTagsComponentStore& SceneComponentStorage::Tags() noexcept {
     return tags_;
+}
+
+const SceneRegionShapeComponentStore& SceneComponentStorage::RegionShapes() const noexcept {
+    return regionShapes_;
+}
+
+SceneRegionShapeComponentStore& SceneComponentStorage::RegionShapes() noexcept {
+    return regionShapes_;
 }
 
 const SceneAudioSourceComponentStore& SceneComponentStorage::AudioSources() const noexcept {

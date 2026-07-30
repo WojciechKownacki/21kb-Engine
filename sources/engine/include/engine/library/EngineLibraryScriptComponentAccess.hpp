@@ -12,6 +12,7 @@
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/Navigation.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
+#include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
@@ -301,6 +302,18 @@ struct ScriptComponentAccess<kb::scene::TagsComponent> {
     [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
         if (!scene.Components().Tags().Has(entity)) return false;
         scene.Components().Tags().Remove(entity);
+        return true;
+    }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::RegionShapeComponent> {
+    [[nodiscard]] static const kb::scene::RegionShapeComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().RegionShapes().TryGet(entity); }
+    [[nodiscard]] static kb::scene::RegionShapeComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().RegionShapes().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::RegionShapeComponent& value) { scene.Components().RegionShapes().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+        if (!scene.Components().RegionShapes().Has(entity)) return false;
+        scene.Components().RegionShapes().Remove(entity);
         return true;
     }
 };

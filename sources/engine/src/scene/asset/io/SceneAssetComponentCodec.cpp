@@ -32,6 +32,7 @@ enum SceneNodeComponentBits : std::uint32_t {
     UIDocumentBit = 1U << 13U,
     NavAgentBit = 1U << 14U,
     NavObstacleBit = 1U << 15U,
+    RegionShapeBit = 1U << 16U,
 };
 
 constexpr std::uint32_t KnownComponentBits = CameraBit |
@@ -49,7 +50,8 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     AnimatorBit |
     UIDocumentBit |
     NavAgentBit |
-    NavObstacleBit;
+    NavObstacleBit |
+    RegionShapeBit;
 
 [[nodiscard]] std::uint32_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint32_t componentBits = 0;
@@ -69,6 +71,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     componentBits |= components.uiDocument.has_value() ? UIDocumentBit : 0U;
     componentBits |= components.navAgent.has_value() ? NavAgentBit : 0U;
     componentBits |= components.navObstacle.has_value() ? NavObstacleBit : 0U;
+    componentBits |= components.regionShape.has_value() ? RegionShapeBit : 0U;
     return componentBits;
 }
 
@@ -219,6 +222,20 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         obstacle.area = static_cast<NavAreaId>(area);
         output.navObstacle = obstacle;
     }
+    if ((componentBits & RegionShapeBit) != 0U) {
+        if (fileVersion < 10U) return false;
+        RegionShapeComponent regionShape{};
+        std::uint32_t kind = 0U;
+        if (!input.ReadUInt32(kind) || !SceneAssetPrimitiveCodec::ReadVec3(input, regionShape.center) ||
+            !SceneAssetPrimitiveCodec::ReadVec3(input, regionShape.size) || !input.ReadFloat(regionShape.radius) ||
+            !input.ReadFloat(regionShape.height) || !input.ReadBool(regionShape.enabled) ||
+            kind > static_cast<std::uint32_t>(RegionShapeKind::Capsule) ||
+            !std::isfinite(regionShape.center.x) || !std::isfinite(regionShape.center.y) || !std::isfinite(regionShape.center.z) ||
+            !std::isfinite(regionShape.size.x) || !std::isfinite(regionShape.size.y) || !std::isfinite(regionShape.size.z) ||
+            !(regionShape.radius > 0.0F) || !(regionShape.height > 0.0F) || !std::isfinite(regionShape.radius) || !std::isfinite(regionShape.height)) return false;
+        regionShape.kind = static_cast<RegionShapeKind>(kind);
+        output.regionShape = regionShape;
+    }
     return true;
 }
 
@@ -295,6 +312,15 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteUInt32(output, obstacle.area);
         SceneAssetBinaryIO::WriteBool(output, obstacle.carve);
         SceneAssetBinaryIO::WriteBool(output, obstacle.enabled);
+    }
+    if (components.regionShape.has_value()) {
+        const RegionShapeComponent& regionShape = *components.regionShape;
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(regionShape.kind));
+        SceneAssetPrimitiveCodec::WriteVec3(output, regionShape.center);
+        SceneAssetPrimitiveCodec::WriteVec3(output, regionShape.size);
+        SceneAssetBinaryIO::WriteFloat(output, regionShape.radius);
+        SceneAssetBinaryIO::WriteFloat(output, regionShape.height);
+        SceneAssetBinaryIO::WriteBool(output, regionShape.enabled);
     }
 }
 

@@ -16,6 +16,7 @@
 #include "engine/scene/Navigation.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/TagsComponent.hpp"
+#include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
@@ -85,6 +86,19 @@ void RegisterAudioReflection(kb::ecs::World& world) {
         }));
 }
 
+void RegisterRegionShapeReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<RegionShapeComponent>(
+        "kb.scene.RegionShapeComponent",
+        {
+            KB_ECS_FIELD(RegionShapeComponent, kind, kb::ecs::ComponentFieldType::Enum32),
+            KB_ECS_FIELD(RegionShapeComponent, center, kb::ecs::ComponentFieldType::Vec3Float32),
+            KB_ECS_FIELD(RegionShapeComponent, size, kb::ecs::ComponentFieldType::Vec3Float32),
+            KB_ECS_FIELD(RegionShapeComponent, radius, kb::ecs::ComponentFieldType::Float32),
+            KB_ECS_FIELD(RegionShapeComponent, height, kb::ecs::ComponentFieldType::Float32),
+            KB_ECS_FIELD(RegionShapeComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+        }));
+}
+
 } // namespace
 
 SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
@@ -100,6 +114,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , characterControllerComponentId_(RegisterSceneComponent<CharacterControllerComponent>(world, "kb.scene.CharacterControllerComponent"))
     , jointComponentId_(RegisterSceneComponent<JointComponent>(world, "kb.scene.JointComponent"))
     , tagsComponentId_(RegisterSceneComponent<TagsComponent>(world, TagsComponent::StableId))
+    , regionShapeComponentId_(RegisterSceneComponent<RegionShapeComponent>(world, RegionShapeComponent::StableId))
     , audioSourceComponentId_(RegisterSceneComponent<AudioSourceComponent>(world, "kb.scene.AudioSourceComponent"))
     , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, "kb.scene.AudioListenerComponent"))
     , animatorComponentId_(RegisterSceneComponent<Animator>(world, "kb.scene.AnimatorComponent"))
@@ -108,6 +123,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , navObstacleComponentId_(RegisterSceneComponent<NavObstacle>(world, "kb.scene.NavObstacle")) {
     RegisterPhysicsReflection(world);
     RegisterAudioReflection(world);
+    RegisterRegionShapeReflection(world);
 }
 
 std::uint64_t SceneComponentRegistry::TransformComponentId() const noexcept {
@@ -156,6 +172,10 @@ std::uint64_t SceneComponentRegistry::JointComponentId() const noexcept {
 
 std::uint64_t SceneComponentRegistry::TagsComponentId() const noexcept {
     return tagsComponentId_;
+}
+
+std::uint64_t SceneComponentRegistry::RegionShapeComponentId() const noexcept {
+    return regionShapeComponentId_;
 }
 
 std::uint64_t SceneComponentRegistry::AudioSourceComponentId() const noexcept {

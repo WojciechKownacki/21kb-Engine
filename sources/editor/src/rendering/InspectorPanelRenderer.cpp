@@ -14,6 +14,7 @@
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
@@ -1521,6 +1522,42 @@ void PaintTagsSection(
     y = section.Bottom() + kSectionGap;
 }
 
+[[nodiscard]] const char* RegionShapeKindLabel(kb::scene::RegionShapeKind kind) noexcept {
+    switch (kind) {
+    case kb::scene::RegionShapeKind::Circle2D: return "Circle 2D";
+    case kb::scene::RegionShapeKind::Rectangle2D: return "Rectangle 2D";
+    case kb::scene::RegionShapeKind::Sphere: return "Sphere";
+    case kb::scene::RegionShapeKind::Box: return "Box";
+    case kb::scene::RegionShapeKind::Capsule: return "Capsule";
+    }
+    return "Invalid";
+}
+
+void PaintRegionShapeSection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const kb::scene::RegionShapeComponent& shape) {
+    SectionWriter section(
+        dc,
+        Rect(content.left, y, content.right, content.bottom),
+        theme,
+        inspector,
+        InspectorSectionId::RegionShape,
+        HeroIconKind::Cube,
+        "Region Shape",
+        true);
+    section.Field("Shape", RegionShapeKindLabel(shape.kind), InspectorPropertyId::RegionShapeKind);
+    section.Vec3("Center", shape.center, InspectorPropertyId::RegionShapeCenterX, InspectorPropertyId::RegionShapeCenterY, InspectorPropertyId::RegionShapeCenterZ);
+    section.Vec3("Size", shape.size, InspectorPropertyId::RegionShapeSizeX, InspectorPropertyId::RegionShapeSizeY, InspectorPropertyId::RegionShapeSizeZ);
+    section.Field("Radius", FormatFloat(shape.radius, 3), InspectorPropertyId::RegionShapeRadius);
+    section.Field("Height", FormatFloat(shape.height, 3), InspectorPropertyId::RegionShapeHeight);
+    section.Bool("Enabled", shape.enabled, InspectorPropertyId::RegionShapeEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
 constexpr int kCameraSectionRows = 13;
 
 void PaintCameraSection(
@@ -1863,6 +1900,15 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         }
     }
 
+    if (const kb::scene::RegionShapeComponent* regionShape = scene.Components().RegionShapes().TryGet(selected); regionShape != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::RegionShape, 6);
+        if (sectionVisible(y, h)) {
+            PaintRegionShapeSection(dc, content, y, theme, inspector, *regionShape);
+        } else {
+            y += h + kSectionGap;
+        }
+    }
+
     if (sceneContext.HasEntityScript(selected)) {
         const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);
         const int h = SectionHeight(inspector, InspectorSectionId::Script, 2 + static_cast<int>(scriptVariables.size()));
@@ -2093,6 +2139,9 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     height += SectionHeight(inspector, InspectorSectionId::Transform, 3) + kSectionGap;
     if (scene.Components().Tags().Has(selected)) {
         height += SectionHeight(inspector, InspectorSectionId::Tags, 1) + kSectionGap;
+    }
+    if (scene.Components().RegionShapes().Has(selected)) {
+        height += SectionHeight(inspector, InspectorSectionId::RegionShape, 6) + kSectionGap;
     }
     if (sceneContext.HasEntityScript(selected)) {
         const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariables(selected).size());
@@ -3070,6 +3119,27 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::Tags, InspectorPropertyId::TagsText, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
+            AdvanceRow(y);
+        }
+        y += kSectionGap;
+    }
+
+    if (sceneContext.Scene().Components().RegionShapes().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::RegionShape, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::RegionShape)) {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::RegionShape, InspectorPropertyId::RegionShapeKind, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(viewport, y), InspectorSectionId::RegionShape, InspectorPropertyId::RegionShapeCenterX, InspectorPropertyId::RegionShapeCenterY, InspectorPropertyId::RegionShapeCenterZ, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(viewport, y), InspectorSectionId::RegionShape, InspectorPropertyId::RegionShapeSizeX, InspectorPropertyId::RegionShapeSizeY, InspectorPropertyId::RegionShapeSizeZ, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::RegionShape, InspectorPropertyId::RegionShapeRadius, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::RegionShape, InspectorPropertyId::RegionShapeHeight, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::RegionShape, InspectorPropertyId::RegionShapeEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
             AdvanceRow(y);
         }
         y += kSectionGap;

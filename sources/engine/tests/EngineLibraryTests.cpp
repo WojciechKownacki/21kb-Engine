@@ -78,6 +78,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneVisibilityResolution.hpp"
+#include "engine/scene/SceneRegionShapeQueries.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -2719,6 +2720,14 @@ void RunEngineLibraryComponentRegistryTest() {
     kb::scene::TagsComponent classification;
     kb::scene::SetTagsText(classification, "Enemy, Boss");
     source.Components().Tags().Set(object.Entity(), classification);
+    source.Components().RegionShapes().Set(object.Entity(), kb::scene::RegionShapeComponent{
+        .kind = kb::scene::RegionShapeKind::Capsule,
+        .center = { 1.0F, 2.0F, 3.0F },
+        .size = { 4.0F, 5.0F, 6.0F },
+        .radius = 0.75F,
+        .height = 2.5F,
+        .enabled = false,
+    });
     const kb::scene::SceneObject jointTarget = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ComponentRegistryJointTarget" });
     source.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{ .type = kb::scene::JointType::Hinge, .connectedEntity = jointTarget.Entity(), .minLimit = -45.0F, .maxLimit = 45.0F, .enableLimit = true });
 
@@ -2787,6 +2796,13 @@ void RunEngineLibraryComponentRegistryTest() {
     const kb::scene::TagsComponent* restoredClassification = target.Components().Tags().TryGet(restored);
     kb::tests::Require(restoredClassification != nullptr && kb::scene::TagsText(*restoredClassification) == "Enemy, Boss",
         "Engine21kbLibrary component registry: Tags is marked serializable=true and must survive a save/load round trip");
+    const kb::scene::RegionShapeComponent* restoredRegionShape = target.Components().RegionShapes().TryGet(restored);
+    kb::tests::Require(restoredRegionShape != nullptr && restoredRegionShape->kind == kb::scene::RegionShapeKind::Capsule &&
+                            kb::tests::NearlyEqual(restoredRegionShape->center.x, 1.0F) &&
+                            kb::tests::NearlyEqual(restoredRegionShape->size.z, 6.0F) &&
+                            kb::tests::NearlyEqual(restoredRegionShape->radius, 0.75F) &&
+                            kb::tests::NearlyEqual(restoredRegionShape->height, 2.5F) && !restoredRegionShape->enabled,
+        "Engine21kbLibrary component registry: Region Shape must survive a real save/load round trip with all authored fields");
     // Joint stores a prefab-local stable target id and resolves it to this
     // loaded scene's live entity only after every node has been created.
     const kb::scene::JointComponent* restoredJoint = target.Components().Joints().TryGet(restored);
@@ -2989,7 +3005,7 @@ void RunComponentInspectorDescCatalogTest() {
     // LIB-183 adds 11 NavAgent fields and 9 NavObstacle fields to the prior
     // 97-field contract, bringing the library/editor scripting surface to
     // 117 described fields across 12 components.
-    kb::tests::Require(fieldsChecked == 120U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (120) across all components");
+    kb::tests::Require(fieldsChecked == 130U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (130) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
@@ -5063,6 +5079,32 @@ void RunVisibilityGateResolutionTest() {
         "An explicit hidden child gate must resolve hidden regardless of its parent");
 }
 
+void RunRegionShapeContainmentTest() {
+    kb::scene::RegionShapeComponent shape{};
+    shape.kind = kb::scene::RegionShapeKind::Circle2D;
+    shape.radius = 2.0F;
+    kb::tests::Require(kb::scene::RegionShapeContainsLocal(shape, { 1.0F, 1.0F, 999.0F }) &&
+            !kb::scene::RegionShapeContainsLocal(shape, { 2.1F, 0.0F, 0.0F }),
+        "Region Shape Circle 2D must contain only local XY points inside its radius");
+
+    shape.kind = kb::scene::RegionShapeKind::Box;
+    shape.size = { 2.0F, 4.0F, 6.0F };
+    kb::tests::Require(kb::scene::RegionShapeContainsLocal(shape, { 1.0F, -2.0F, 3.0F }) &&
+            !kb::scene::RegionShapeContainsLocal(shape, { 1.01F, 0.0F, 0.0F }),
+        "Region Shape Box must use full authored extents and include boundaries deterministically");
+
+    shape.kind = kb::scene::RegionShapeKind::Capsule;
+    shape.radius = 0.5F;
+    shape.height = 3.0F;
+    kb::tests::Require(kb::scene::RegionShapeContainsLocal(shape, { 0.0F, 1.5F, 0.0F }) &&
+            !kb::scene::RegionShapeContainsLocal(shape, { 0.0F, 1.51F, 0.0F }),
+        "Region Shape Capsule must include hemispherical caps and reject points beyond them");
+
+    shape.enabled = false;
+    kb::tests::Require(!kb::scene::RegionShapeContainsLocal(shape, {}),
+        "Disabled Region Shape must not participate in containment queries");
+}
+
 void RunEngineLibraryTests() {
     RunVersionValueTest();
     RunVersionOrderingTest();
@@ -5117,6 +5159,7 @@ void RunEngineLibraryTests() {
     RunFunctionIdTest();
     RunEngineLibraryComponentRegistryTest();
     RunVisibilityGateResolutionTest();
+    RunRegionShapeContainmentTest();
     RunEngineLibraryEventSchemaRegistryTest();
     RunComponentInspectorDescCatalogTest();
     RunLibraryQueryPhaseGateTest();

@@ -8,7 +8,7 @@
 
 namespace kb::scene {
 
-enum class ScenePrefabBakedComponentMask : std::uint16_t {
+enum class ScenePrefabBakedComponentMask : std::uint32_t {
     Camera = 1U << 0U,
     MeshRenderer = 1U << 1U,
     Light = 1U << 2U,
@@ -25,18 +25,19 @@ enum class ScenePrefabBakedComponentMask : std::uint16_t {
     UIDocument = 1U << 13U,
     NavAgent = 1U << 14U,
     NavObstacle = 1U << 15U,
+    RegionShape = 1U << 16U,
 };
 
-[[nodiscard]] constexpr std::uint16_t ScenePrefabBakedMask(ScenePrefabBakedComponentMask mask) noexcept {
-    return static_cast<std::uint16_t>(mask);
+[[nodiscard]] constexpr std::uint32_t ScenePrefabBakedMask(ScenePrefabBakedComponentMask mask) noexcept {
+    return static_cast<std::uint32_t>(mask);
 }
 
-[[nodiscard]] constexpr bool ScenePrefabBakedMaskHas(std::uint16_t mask, ScenePrefabBakedComponentMask component) noexcept {
+[[nodiscard]] constexpr bool ScenePrefabBakedMaskHas(std::uint32_t mask, ScenePrefabBakedComponentMask component) noexcept {
     return (mask & ScenePrefabBakedMask(component)) != 0U;
 }
 
 struct ScenePrefabBakedArchetype {
-    std::uint16_t componentMask = 0U;
+    std::uint32_t componentMask = 0U;
     std::vector<std::uint32_t> nodeIndices;
     std::vector<TransformComponent> transforms;
     std::vector<VisibilityComponent> visibility;
@@ -49,6 +50,7 @@ struct ScenePrefabBakedArchetype {
     std::vector<CharacterControllerComponent> characterControllers;
     std::vector<JointComponent> joints;
     std::vector<TagsComponent> tags;
+    std::vector<RegionShapeComponent> regionShapes;
     std::vector<BehaviourComponent> behaviours;
     std::vector<AudioSourceComponent> audioSources;
     std::vector<AudioListenerComponent> audioListeners;
