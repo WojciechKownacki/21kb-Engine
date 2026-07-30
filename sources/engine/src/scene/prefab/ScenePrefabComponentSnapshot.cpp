@@ -63,6 +63,9 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const GuideCurveComponent* guideCurve = sceneComponents.GuideCurves().TryGet(entity)) {
         components.guideCurve = *guideCurve;
     }
+    if (const ContentInstanceComponent* content = sceneComponents.ContentInstances().TryGet(entity)) {
+        components.contentInstance = *content;
+    }
 
     if (const BehaviourComponent* behaviour = sceneComponents.Behaviours().TryGet(entity)) {
         components.behaviour = *behaviour;

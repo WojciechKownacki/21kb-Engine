@@ -17,6 +17,7 @@
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
+#include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
 
@@ -90,6 +91,10 @@ public:
     static void SetGuideCurve(Scene& scene, SceneEntity entity, const GuideCurveComponent& curve);
     static void RemoveGuideCurve(Scene& scene, SceneEntity entity) noexcept;
     static void MarkGuideCurveModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static ContentInstanceComponent* TryGetContentInstance(Scene& scene, SceneEntity entity) noexcept;
+    static void SetContentInstance(Scene& scene, SceneEntity entity, const ContentInstanceComponent& component);
+    static void RemoveContentInstance(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkContentInstanceModified(Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static AudioSourceComponent* TryGetAudioSource(Scene& scene, SceneEntity entity) noexcept;
     static void SetAudioSource(Scene& scene, SceneEntity entity, const AudioSourceComponent& audioSource);

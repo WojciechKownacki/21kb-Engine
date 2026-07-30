@@ -17,6 +17,7 @@
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
+#include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
 
@@ -65,6 +66,8 @@ public:
     [[nodiscard]] static const RegionShapeComponent* TryGetRegionShape(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasGuideCurve(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const GuideCurveComponent* TryGetGuideCurve(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasContentInstance(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const ContentInstanceComponent* TryGetContentInstance(const Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static bool HasAudioSource(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const AudioSourceComponent* TryGetAudioSource(const Scene& scene, SceneEntity entity) noexcept;
