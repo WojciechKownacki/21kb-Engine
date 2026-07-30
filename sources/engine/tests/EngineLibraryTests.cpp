@@ -2737,6 +2737,12 @@ void RunEngineLibraryComponentRegistryTest() {
     guideCurve.controlPoints[1] = { 2.0F, 3.0F, 0.0F };
     guideCurve.controlPoints[2] = { 4.0F, 0.0F, 5.0F };
     source.Components().GuideCurves().Set(object.Entity(), guideCurve);
+    source.Components().ContentInstances().Set(object.Entity(), kb::scene::ContentInstanceComponent{
+        .assetId = 491U,
+        .kind = kb::scene::ContentInstanceKind::WorldFragment,
+        .lifetime = kb::scene::ContentInstanceLifetime::Persistent,
+        .active = false,
+    });
     const kb::scene::SceneObject jointTarget = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ComponentRegistryJointTarget" });
     source.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{ .type = kb::scene::JointType::Hinge, .connectedEntity = jointTarget.Entity(), .minLimit = -45.0F, .maxLimit = 45.0F, .enableLimit = true });
 
@@ -2818,6 +2824,11 @@ void RunEngineLibraryComponentRegistryTest() {
                             kb::tests::NearlyEqual(restoredGuideCurve->controlPoints[1].y, 3.0F) &&
                             kb::tests::NearlyEqual(restoredGuideCurve->controlPoints[2].z, 5.0F),
         "Engine21kbLibrary component registry: Guide Curve must survive a real save/load round trip with all authored points");
+    const kb::scene::ContentInstanceComponent* restoredContentInstance = target.Components().ContentInstances().TryGet(restored);
+    kb::tests::Require(restoredContentInstance != nullptr && restoredContentInstance->assetId == 491U &&
+                            restoredContentInstance->kind == kb::scene::ContentInstanceKind::WorldFragment &&
+                            restoredContentInstance->lifetime == kb::scene::ContentInstanceLifetime::Persistent && !restoredContentInstance->active,
+        "Engine21kbLibrary component registry: Content Instance must survive a real save/load round trip with its source and lifetime policy");
     // Joint stores a prefab-local stable target id and resolves it to this
     // loaded scene's live entity only after every node has been created.
     const kb::scene::JointComponent* restoredJoint = target.Components().Joints().TryGet(restored);
@@ -2838,6 +2849,63 @@ void RunEngineLibraryComponentRegistryTest() {
 // matching kb::script::ComputeEventId, all starting at version 1.0, no
 // duplicate names) and that Find() honestly reports an unregistered name as
 // absent rather than fabricating an entry.
+void RunContentInstanceRuntimeTest() {
+    const std::filesystem::path testRoot = std::filesystem::temp_directory_path() / "21kb-content-instance-runtime";
+    std::error_code error;
+    std::filesystem::remove_all(testRoot, error);
+    const std::filesystem::path projectRoot = testRoot / "Project";
+    const std::filesystem::path scenePath = projectRoot / "Assets" / "Scenes" / "ContentInstanceFixture.21kbscene";
+    {
+        kb::scene::Scene source;
+        static_cast<void>(source.Entities().CreateObject({ .name = "Content Instance Loaded Root" }));
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(source, scenePath, "ContentInstanceFixture"),
+            "Content Instance runtime fixture scene was not saved");
+    }
+
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot) && scene.Assets().Discover() == 1U,
+        "Content Instance runtime fixture project was not mounted and discovered");
+    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Scenes/ContentInstanceFixture.21kbscene");
+    kb::tests::Require(metadata != nullptr && metadata->id.IsValid(), "Content Instance runtime fixture asset metadata is missing");
+
+    const kb::scene::SceneObject owner = scene.Entities().CreateObject({ .name = "Content Instance Owner" });
+    scene.Components().ContentInstances().Set(owner.Entity(), kb::scene::ContentInstanceComponent{
+        .assetId = metadata->id.value,
+        .kind = kb::scene::ContentInstanceKind::Subscene,
+        .lifetime = kb::scene::ContentInstanceLifetime::Owner,
+        .active = true,
+    });
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    const std::uint64_t ownerLoadId = scene.LoadedContent().Find("ContentInstanceFixture");
+    const kb::scene::SceneEntity ownerLoadedRoot = scene.LoadedContent().ActiveSceneRoot();
+    kb::tests::Require(ownerLoadId != 0U && scene.LoadedContent().Exists(ownerLoadId) &&
+                            ownerLoadedRoot.IsValid() && scene.Hierarchy().Parent(ownerLoadedRoot) == owner.Entity(),
+        "Content Instance must load an active owner-lifetime subscene through the shared runtime content flow");
+
+    kb::scene::ContentInstanceComponent* instance = scene.Components().ContentInstances().TryGet(owner.Entity());
+    kb::tests::Require(instance != nullptr, "Content Instance runtime fixture lost its authored ECS component");
+    instance->active = false;
+    scene.Components().ContentInstances().MarkModified(owner.Entity());
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    kb::tests::Require(!scene.LoadedContent().Exists(ownerLoadId) && scene.Hierarchy().ChildCount(owner.Entity()) == 0U,
+        "Deactivating Content Instance must unload its owner-lifetime subscene through SceneLoadedContent");
+
+    instance->active = true;
+    instance->lifetime = kb::scene::ContentInstanceLifetime::Persistent;
+    scene.Components().ContentInstances().MarkModified(owner.Entity());
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    const std::uint64_t persistentLoadId = scene.LoadedContent().Find("ContentInstanceFixture");
+    kb::tests::Require(persistentLoadId != 0U && scene.LoadedContent().Exists(persistentLoadId),
+        "Content Instance must load persistent subscene content through the shared runtime content flow");
+    scene.Entities().Destroy(owner);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    kb::tests::Require(scene.LoadedContent().Exists(persistentLoadId),
+        "Persistent Content Instance must survive destruction of its ECS owner without duplicating the loaded-content source of truth");
+    kb::tests::Require(scene.LoadedContent().Unload(persistentLoadId),
+        "Content Instance persistent runtime fixture could not clean up shared loaded content");
+    std::filesystem::remove_all(testRoot, error);
+}
+
 void RunEngineLibraryEventSchemaRegistryTest() {
     const std::vector<kb::library::LibraryEventDesc>& catalog = kb::library::EngineLibraryEventRegistry::Catalog();
     kb::tests::Require(catalog.size() == 24U, "Engine21kbLibrary event schema registry must catalog exactly the 24 built-in events this engine emits today");
@@ -3020,7 +3088,7 @@ void RunComponentInspectorDescCatalogTest() {
     // LIB-183 adds 11 NavAgent fields and 9 NavObstacle fields to the prior
     // 97-field contract, bringing the library/editor scripting surface to
     // 117 described fields across 12 components.
-    kb::tests::Require(fieldsChecked == 134U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (134) across all components");
+    kb::tests::Require(fieldsChecked == 138U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (138) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
@@ -5201,6 +5269,7 @@ void RunEngineLibraryTests() {
     RunVisibilityGateResolutionTest();
     RunRegionShapeContainmentTest();
     RunGuideCurveEvaluationTest();
+    RunContentInstanceRuntimeTest();
     RunEngineLibraryEventSchemaRegistryTest();
     RunComponentInspectorDescCatalogTest();
     RunLibraryQueryPhaseGateTest();

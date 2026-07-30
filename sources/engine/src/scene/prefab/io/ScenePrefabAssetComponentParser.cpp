@@ -154,6 +154,25 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseContentInstance(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool hasContent = false;
+    if (!ParseOptionalComponentFlag(fields, "contentInstance", hasContent)) return false;
+    if (!hasContent) return true;
+    ContentInstanceComponent content{};
+    int kind = 0;
+    int lifetime = 0;
+    if (!ParseField(fields, "contentInstance.assetId", content.assetId) ||
+        !ParseField(fields, "contentInstance.kind", kind) ||
+        !ParseField(fields, "contentInstance.lifetime", lifetime) ||
+        !ParseOptionalBool(fields, "contentInstance.active", content.active) ||
+        kind < static_cast<int>(ContentInstanceKind::Prefab) || kind > static_cast<int>(ContentInstanceKind::WorldFragment) ||
+        lifetime < static_cast<int>(ContentInstanceLifetime::Owner) || lifetime > static_cast<int>(ContentInstanceLifetime::Persistent)) return false;
+    content.kind = static_cast<ContentInstanceKind>(kind);
+    content.lifetime = static_cast<ContentInstanceLifetime>(lifetime);
+    components.contentInstance = content;
+    return true;
+}
+
 [[nodiscard]] bool ParseCharacterController(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool hasCharacterController = false;
     if (!ParseOptionalComponentFlag(fields, "characterController", hasCharacterController)) {
@@ -337,6 +356,7 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseCollider(fields, components)
         && ParseRegionShape(fields, components)
         && ParseGuideCurve(fields, components)
+        && ParseContentInstance(fields, components)
         && ParseCharacterController(fields, components)
         && ParseJoint(fields, components)
         && ScenePrefabAssetTagsParser::Parse(fields, components)

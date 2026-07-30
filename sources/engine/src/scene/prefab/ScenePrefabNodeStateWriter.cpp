@@ -95,6 +95,10 @@ namespace {
     return true;
 }
 
+[[nodiscard]] bool Equals(const ContentInstanceComponent& lhs, const ContentInstanceComponent& rhs) noexcept {
+    return lhs.assetId == rhs.assetId && lhs.kind == rhs.kind && lhs.lifetime == rhs.lifetime && lhs.active == rhs.active;
+}
+
 [[nodiscard]] bool Equals(const BehaviourComponent& lhs, const BehaviourComponent& rhs) noexcept {
     return lhs.behaviourAssetId == rhs.behaviourAssetId && lhs.backend == rhs.backend && lhs.enabled == rhs.enabled && lhs.tickGroup == rhs.tickGroup
         && lhs.executionOrder == rhs.executionOrder;
@@ -192,6 +196,7 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , tags(scene.Components().Tags())
     , regionShapes(scene.Components().RegionShapes())
     , guideCurves(scene.Components().GuideCurves())
+    , contentInstances(scene.Components().ContentInstances())
     , behaviours(scene.Components().Behaviours())
     , audioSources(scene.Components().AudioSources())
     , audioListeners(scene.Components().AudioListeners())
@@ -257,6 +262,7 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
         WriteOptionalComponent(context.regionShapes, entity, node.components.regionShape);
     }
     WriteOptionalComponent(context.guideCurves, entity, node.components.guideCurve);
+    WriteOptionalComponent(context.contentInstances, entity, node.components.contentInstance);
     if (!componentMask.available || !componentMask.matches || node.components.behaviour.has_value()) {
         WriteOptionalComponent(context.behaviours, entity, node.components.behaviour);
     }

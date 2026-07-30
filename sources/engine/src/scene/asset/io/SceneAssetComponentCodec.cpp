@@ -34,6 +34,7 @@ enum SceneNodeComponentBits : std::uint32_t {
     NavObstacleBit = 1U << 15U,
     RegionShapeBit = 1U << 16U,
     GuideCurveBit = 1U << 17U,
+    ContentInstanceBit = 1U << 18U,
 };
 
 constexpr std::uint32_t KnownComponentBits = CameraBit |
@@ -53,7 +54,8 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     NavAgentBit |
     NavObstacleBit |
     RegionShapeBit |
-    GuideCurveBit;
+    GuideCurveBit |
+    ContentInstanceBit;
 
 [[nodiscard]] std::uint32_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint32_t componentBits = 0;
@@ -75,6 +77,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     componentBits |= components.navObstacle.has_value() ? NavObstacleBit : 0U;
     componentBits |= components.regionShape.has_value() ? RegionShapeBit : 0U;
     componentBits |= components.guideCurve.has_value() ? GuideCurveBit : 0U;
+    componentBits |= components.contentInstance.has_value() ? ContentInstanceBit : 0U;
     return componentBits;
 }
 
@@ -251,6 +254,17 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         }
         output.guideCurve = guideCurve;
     }
+    if ((componentBits & ContentInstanceBit) != 0U) {
+        if (fileVersion < 12U) return false;
+        ContentInstanceComponent content{};
+        std::uint32_t kind = 0U;
+        std::uint32_t lifetime = 0U;
+        if (!input.ReadUInt64(content.assetId) || !input.ReadUInt32(kind) || !input.ReadUInt32(lifetime) || !input.ReadBool(content.active) ||
+            kind > static_cast<std::uint32_t>(ContentInstanceKind::WorldFragment) || lifetime > static_cast<std::uint32_t>(ContentInstanceLifetime::Persistent)) return false;
+        content.kind = static_cast<ContentInstanceKind>(kind);
+        content.lifetime = static_cast<ContentInstanceLifetime>(lifetime);
+        output.contentInstance = content;
+    }
     return true;
 }
 
@@ -344,6 +358,13 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteBool(output, guideCurve.closed);
         SceneAssetBinaryIO::WriteBool(output, guideCurve.enabled);
         for (std::uint32_t index = 0U; index < guideCurve.controlPointCount; ++index) SceneAssetPrimitiveCodec::WriteVec3(output, guideCurve.controlPoints[index]);
+    }
+    if (components.contentInstance.has_value()) {
+        const ContentInstanceComponent& content = *components.contentInstance;
+        SceneAssetBinaryIO::WriteUInt64(output, content.assetId);
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(content.kind));
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(content.lifetime));
+        SceneAssetBinaryIO::WriteBool(output, content.active);
     }
 }
 
