@@ -33,8 +33,9 @@ enum SceneNodeComponentBits : std::uint32_t {
     NavAgentBit = 1U << 14U,
     NavObstacleBit = 1U << 15U,
     RegionShapeBit = 1U << 16U,
-    GuideCurveBit = 1U << 17U,
-    ContentInstanceBit = 1U << 18U,
+      GuideCurveBit = 1U << 17U,
+      ContentInstanceBit = 1U << 18U,
+      StreamFocusBit = 1U << 19U,
 };
 
 constexpr std::uint32_t KnownComponentBits = CameraBit |
@@ -55,7 +56,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-    ContentInstanceBit;
+      ContentInstanceBit | StreamFocusBit;
 
 [[nodiscard]] std::uint32_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint32_t componentBits = 0;
@@ -77,7 +78,8 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     componentBits |= components.navObstacle.has_value() ? NavObstacleBit : 0U;
     componentBits |= components.regionShape.has_value() ? RegionShapeBit : 0U;
     componentBits |= components.guideCurve.has_value() ? GuideCurveBit : 0U;
-    componentBits |= components.contentInstance.has_value() ? ContentInstanceBit : 0U;
+      componentBits |= components.contentInstance.has_value() ? ContentInstanceBit : 0U;
+      componentBits |= components.streamFocus.has_value() ? StreamFocusBit : 0U;
     return componentBits;
 }
 
@@ -265,6 +267,15 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         content.lifetime = static_cast<ContentInstanceLifetime>(lifetime);
         output.contentInstance = content;
     }
+    if ((componentBits & StreamFocusBit) != 0U) {
+        if (fileVersion < 13U) return false;
+        StreamFocusComponent focus{};
+        std::uint32_t mask = 0U;
+        if (!input.ReadFloat(focus.innerRadius) || !input.ReadFloat(focus.outerRadius) || !input.ReadInt32(focus.priority) || !input.ReadUInt32(mask) || !input.ReadBool(focus.enabled)) return false;
+        focus.loadMask = static_cast<StreamLoadMask>(mask);
+        if (!IsStreamFocusValid(focus)) return false;
+        output.streamFocus = focus;
+    }
     return true;
 }
 
@@ -365,6 +376,14 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(content.kind));
         SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(content.lifetime));
         SceneAssetBinaryIO::WriteBool(output, content.active);
+    }
+    if (components.streamFocus.has_value()) {
+        const StreamFocusComponent& focus = *components.streamFocus;
+        SceneAssetBinaryIO::WriteFloat(output, focus.innerRadius);
+        SceneAssetBinaryIO::WriteFloat(output, focus.outerRadius);
+        SceneAssetBinaryIO::WriteInt32(output, focus.priority);
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(focus.loadMask));
+        SceneAssetBinaryIO::WriteBool(output, focus.enabled);
     }
 }
 

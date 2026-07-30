@@ -15,8 +15,8 @@ struct SceneDocument {
     // v5 (LIB-167): Animator is a persisted scene/prefab component.
     // v4 (LIB-123): JointComponent is persisted with a stable prefab-node reference.
     // v3 (LIB-147): AudioSourceComponent gained the outputBus mixer-routing token.
-    // v12: ContentInstanceComponent persists source, activation and lifetime policy.
-    static constexpr std::uint32_t CurrentFileVersion = 12U;
+    // v13: StreamFocusComponent persists stream policy.
+    static constexpr std::uint32_t CurrentFileVersion = 13U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

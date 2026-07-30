@@ -9,10 +9,14 @@
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/StreamFocusComponent.hpp"
+#include "engine/scene/TransformComponent.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <vector>
 
 namespace kb::scene {
@@ -21,7 +25,62 @@ namespace {
 struct AuthoredContentInstance {
     SceneEntity entity{};
     ContentInstanceComponent component{};
+    std::int32_t streamPriority = 0;
 };
+
+struct ActiveStreamFocus {
+    SceneEntity entity{};
+    StreamFocusComponent component{};
+    kb::math::Vec3 position{};
+};
+
+[[nodiscard]] StreamLoadMask MaskFor(ContentInstanceKind kind) noexcept {
+    switch (kind) {
+    case ContentInstanceKind::Prefab: return StreamLoadMask::Prefab;
+    case ContentInstanceKind::Subscene: return StreamLoadMask::Subscene;
+    case ContentInstanceKind::WorldFragment: return StreamLoadMask::WorldFragment;
+    }
+    return StreamLoadMask::None;
+}
+
+[[nodiscard]] std::vector<ActiveStreamFocus> CollectStreamFocuses(const Scene& scene) {
+    std::vector<ActiveStreamFocus> output;
+    kb::ecs::Query<StreamFocusComponent, TransformComponent> query = const_cast<Scene&>(scene).Runtime().EcsWorld().CreateQuery<StreamFocusComponent, TransformComponent>();
+    kb::ecs::UnsafeHotReadQuery<StreamFocusComponent, TransformComponent> hot;
+    kb::ecs::QueryExecutionSettings settings{};
+    settings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
+    if (!query.IsValid() || !hot.Rebuild(query, settings)) return output;
+    hot.ForEachRange(settings.maxBatchSize, [&output](const auto& batch) {
+        const StreamFocusComponent* focuses = batch.template Components<0>();
+        const TransformComponent* transforms = batch.template Components<1>();
+        for (std::size_t index = 0U; index < batch.Count(); ++index) {
+            if (batch.EntityAt(index).IsValid() && focuses[index].enabled && IsStreamFocusValid(focuses[index])) {
+                output.push_back({ batch.EntityAt(index), focuses[index], transforms[index].worldPosition });
+            }
+        }
+    });
+    return output;
+}
+
+[[nodiscard]] std::optional<std::int32_t> StreamPriority(
+    const std::vector<ActiveStreamFocus>& focuses,
+    kb::math::Vec3 position,
+    ContentInstanceKind kind,
+    bool retain) noexcept {
+    if (focuses.empty()) return 0;
+    const StreamLoadMask kindMask = MaskFor(kind);
+    std::optional<std::int32_t> result;
+    for (const ActiveStreamFocus& focus : focuses) {
+        if (!ContainsStreamLoadMask(focus.component.loadMask, kindMask)) continue;
+        const float dx = position.x - focus.position.x;
+        const float dy = position.y - focus.position.y;
+        const float dz = position.z - focus.position.z;
+        const float radius = retain ? focus.component.outerRadius : focus.component.innerRadius;
+        if (dx * dx + dy * dy + dz * dz <= radius * radius &&
+            (!result.has_value() || focus.component.priority > *result)) result = focus.component.priority;
+    }
+    return result;
+}
 
 [[nodiscard]] bool Matches(const ContentInstanceRuntimeRecord& runtime, const ContentInstanceComponent& component) noexcept {
     return runtime.assetId == component.assetId && runtime.kind == component.kind && runtime.lifetime == component.lifetime;
@@ -86,21 +145,30 @@ void Release(Scene& scene, ContentInstanceRuntimeRecord& runtime, bool preserve)
     return ActivateScene(scene, owner, component, runtime);
 }
 
-[[nodiscard]] std::vector<AuthoredContentInstance> Collect(const Scene& scene) {
+[[nodiscard]] std::vector<AuthoredContentInstance> Collect(const Scene& scene, const SceneState& state) {
     std::vector<AuthoredContentInstance> output;
+    const std::vector<ActiveStreamFocus> focuses = CollectStreamFocuses(scene);
     kb::ecs::Query<ContentInstanceComponent> query = const_cast<Scene&>(scene).Runtime().EcsWorld().CreateQuery<ContentInstanceComponent>();
     if (!query.IsValid()) return output;
     kb::ecs::QueryExecutionSettings settings{};
     settings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
     kb::ecs::UnsafeHotReadQuery<ContentInstanceComponent> hot;
     if (!hot.Rebuild(query, settings)) return output;
-    hot.ForEachRange(settings.maxBatchSize, [&output](const auto& batch) {
+    hot.ForEachRange(settings.maxBatchSize, [&output, &scene, &state, &focuses](const auto& batch) {
         const ContentInstanceComponent* components = batch.template Components<0>();
         for (std::size_t index = 0U; index < batch.Count(); ++index) {
             const SceneEntity entity = batch.EntityAt(index);
             const ContentInstanceComponent& component = components[index];
-            if (entity.IsValid() && component.active && component.assetId != 0U && IsContentInstanceKindValid(component.kind) && IsContentInstanceLifetimeValid(component.lifetime)) output.push_back({ entity, component });
+            if (!entity.IsValid() || !component.active || component.assetId == 0U || !IsContentInstanceKindValid(component.kind) || !IsContentInstanceLifetimeValid(component.lifetime)) continue;
+            const TransformComponent* transform = scene.Transforms().TryGet(entity);
+            if (transform == nullptr) continue;
+            const bool retain = state.contentInstances.contains(entity.Id());
+            const std::optional<std::int32_t> priority = StreamPriority(focuses, transform->worldPosition, component.kind, retain);
+            if (priority.has_value()) output.push_back({ entity, component, *priority });
         }
+    });
+    std::ranges::sort(output, [](const AuthoredContentInstance& left, const AuthoredContentInstance& right) {
+        return left.streamPriority != right.streamPriority ? left.streamPriority > right.streamPriority : left.entity.Id() < right.entity.Id();
     });
     return output;
 }
@@ -113,7 +181,7 @@ void SceneContentInstanceService::Synchronize(Scene& scene) {
         Shutdown(scene);
         return;
     }
-    const std::vector<AuthoredContentInstance> authored = Collect(scene);
+    const std::vector<AuthoredContentInstance> authored = Collect(scene, state);
     for (auto it = state.contentInstances.begin(); it != state.contentInstances.end();) {
         const auto current = std::ranges::find_if(authored, [entity = it->second.owner](const AuthoredContentInstance& candidate) { return candidate.entity == entity; });
         const bool ownerAlive = scene.Entities().IsAlive(it->second.owner);

@@ -17,6 +17,7 @@
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
+#include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
@@ -1580,6 +1581,16 @@ void PaintContentInstanceSection(HDC dc, RECT content, int& y, const EditorTheme
     y = section.Bottom() + kSectionGap;
 }
 
+void PaintStreamFocusSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::StreamFocusComponent& focus) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::StreamFocus, HeroIconKind::Cube, "Stream Focus", true);
+    section.Field("Inner Radius", FormatFloat(focus.innerRadius, 3), InspectorPropertyId::StreamFocusInnerRadius);
+    section.Field("Outer Radius", FormatFloat(focus.outerRadius, 3), InspectorPropertyId::StreamFocusOuterRadius);
+    section.Field("Priority", std::to_string(focus.priority), InspectorPropertyId::StreamFocusPriority);
+    section.Field("Load Mask", std::to_string(static_cast<std::uint32_t>(focus.loadMask)), InspectorPropertyId::StreamFocusLoadMask);
+    section.Bool("Enabled", focus.enabled, InspectorPropertyId::StreamFocusEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
 constexpr int kCameraSectionRows = 13;
 
 void PaintCameraSection(
@@ -1938,6 +1949,10 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         const int h = SectionHeight(inspector, InspectorSectionId::ContentInstance, 4);
         if (y < content.bottom && y + h > content.top) PaintContentInstanceSection(dc, content, y, theme, inspector, *contentInstance); else y += h + kSectionGap;
     }
+    if (const kb::scene::StreamFocusComponent* streamFocus = scene.Components().StreamFocuses().TryGet(selected); streamFocus != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::StreamFocus, 5);
+        if (y < content.bottom && y + h > content.top) PaintStreamFocusSection(dc, content, y, theme, inspector, *streamFocus); else y += h + kSectionGap;
+    }
 
     if (sceneContext.HasEntityScript(selected)) {
         const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);
@@ -2175,6 +2190,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     }
     if (scene.Components().GuideCurves().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::GuideCurve, 4) + kSectionGap;
     if (scene.Components().ContentInstances().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::ContentInstance, 4) + kSectionGap;
+    if (scene.Components().StreamFocuses().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::StreamFocus, 5) + kSectionGap;
     if (sceneContext.HasEntityScript(selected)) {
         const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariables(selected).size());
         height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
@@ -3192,6 +3208,16 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::ContentInstance, InspectorPropertyId::ContentInstanceKind, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
             if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::ContentInstance, InspectorPropertyId::ContentInstanceLifetime, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
             if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::ContentInstance, InspectorPropertyId::ContentInstanceActive, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+        }
+    }
+    if (sceneContext.Scene().Components().StreamFocuses().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::StreamFocus, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::StreamFocus)) {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::StreamFocus, InspectorPropertyId::StreamFocusInnerRadius, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::StreamFocus, InspectorPropertyId::StreamFocusOuterRadius, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::StreamFocus, InspectorPropertyId::StreamFocusPriority, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::StreamFocus, InspectorPropertyId::StreamFocusLoadMask, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::StreamFocus, InspectorPropertyId::StreamFocusEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
         }
     }
 

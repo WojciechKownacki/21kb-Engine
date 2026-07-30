@@ -42,6 +42,9 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.contentInstance.has_value()) {
         sceneComponents.ContentInstances().Set(entity, *components.contentInstance);
     }
+    if (components.streamFocus.has_value()) {
+        sceneComponents.StreamFocuses().Set(entity, *components.streamFocus);
+    }
     if (components.behaviour.has_value()) {
         sceneComponents.Behaviours().Set(entity, *components.behaviour);
     }

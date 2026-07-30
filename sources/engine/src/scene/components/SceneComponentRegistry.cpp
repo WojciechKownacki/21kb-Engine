@@ -19,6 +19,7 @@
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
+#include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
@@ -121,6 +122,16 @@ void RegisterContentInstanceReflection(kb::ecs::World& world) {
     }));
 }
 
+void RegisterStreamFocusReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<StreamFocusComponent>("kb.scene.StreamFocusComponent", {
+        KB_ECS_FIELD(StreamFocusComponent, innerRadius, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(StreamFocusComponent, outerRadius, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(StreamFocusComponent, priority, kb::ecs::ComponentFieldType::Int32),
+        KB_ECS_FIELD(StreamFocusComponent, loadMask, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(StreamFocusComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
 } // namespace
 
 SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
@@ -139,6 +150,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , regionShapeComponentId_(RegisterSceneComponent<RegionShapeComponent>(world, RegionShapeComponent::StableId))
     , guideCurveComponentId_(RegisterSceneComponent<GuideCurveComponent>(world, GuideCurveComponent::StableId))
     , contentInstanceComponentId_(RegisterSceneComponent<ContentInstanceComponent>(world, ContentInstanceComponent::StableId))
+    , streamFocusComponentId_(RegisterSceneComponent<StreamFocusComponent>(world, StreamFocusComponent::StableId))
     , audioSourceComponentId_(RegisterSceneComponent<AudioSourceComponent>(world, "kb.scene.AudioSourceComponent"))
     , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, "kb.scene.AudioListenerComponent"))
     , animatorComponentId_(RegisterSceneComponent<Animator>(world, "kb.scene.AnimatorComponent"))
@@ -150,6 +162,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     RegisterRegionShapeReflection(world);
     RegisterGuideCurveReflection(world);
     RegisterContentInstanceReflection(world);
+    RegisterStreamFocusReflection(world);
 }
 
 std::uint64_t SceneComponentRegistry::TransformComponentId() const noexcept {
@@ -205,6 +218,7 @@ std::uint64_t SceneComponentRegistry::RegionShapeComponentId() const noexcept {
 }
 std::uint64_t SceneComponentRegistry::GuideCurveComponentId() const noexcept { return guideCurveComponentId_; }
 std::uint64_t SceneComponentRegistry::ContentInstanceComponentId() const noexcept { return contentInstanceComponentId_; }
+std::uint64_t SceneComponentRegistry::StreamFocusComponentId() const noexcept { return streamFocusComponentId_; }
 
 std::uint64_t SceneComponentRegistry::AudioSourceComponentId() const noexcept {
     return audioSourceComponentId_;
