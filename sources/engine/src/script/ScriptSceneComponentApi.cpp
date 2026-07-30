@@ -20,14 +20,17 @@
 #include "engine/scene/SceneMeshRendererComponents.hpp"
 #include "engine/scene/SceneNavigationComponents.hpp"
 #include "engine/scene/SceneRigidbodyComponents.hpp"
+#include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
 #include "engine/scene/TransformComponent.hpp"
+#include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <type_traits>
 
 namespace kb::script {
@@ -210,7 +213,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 12> kComponentNames{
+constexpr std::array<std::string_view, 13> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
@@ -223,6 +226,11 @@ constexpr std::array<std::string_view, 12> kComponentNames{
     "Joint",
     "NavAgent",
     "NavObstacle",
+    "Tags",
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 1> kTagsPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "text", ScriptValueType::String },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kTransformPropertyDescs{
@@ -543,6 +551,20 @@ constexpr std::array<FieldBinding, 9> kNavObstacleFields{
     KB_BOOL(kb::scene::NavObstacle, enabled),
 };
 
+constexpr std::array<FieldBinding, 1> kTagsFields{
+    FieldBinding{
+        "text",
+        [](const void* component) noexcept -> ScriptValue {
+            return ScriptValue{ std::string{ kb::scene::TagsText(*static_cast<const kb::scene::TagsComponent*>(component)) } };
+        },
+        [](void* component, const ScriptValue& value) noexcept -> bool {
+            if (value.Type() != ScriptValueType::String) {
+                return false;
+            }
+            return kb::scene::TrySetTagsText(*static_cast<kb::scene::TagsComponent*>(component), value.AsString());
+        } },
+};
+
 #undef KB_BOOL
 #undef KB_INT
 #undef KB_UINT32
@@ -615,6 +637,7 @@ void MarkJointModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) n
 }
 void MarkNavAgentModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().NavAgents().MarkModified(entity); }
 void MarkNavObstacleModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().NavObstacles().MarkModified(entity); }
+void MarkTagsModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().Tags().MarkModified(entity); }
 
 [[nodiscard]] ComponentAccess AccessComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
     if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
@@ -668,6 +691,10 @@ void MarkNavObstacleModified(kb::scene::Scene& scene, kb::scene::SceneEntity ent
         kb::scene::NavObstacle* component = scene.Components().NavObstacles().TryGet(entity);
         return ComponentAccess{ component, component, kNavObstacleFields, &MarkNavObstacleModified };
     }
+    if (componentName == "Tags") {
+        kb::scene::TagsComponent* component = scene.Components().Tags().TryGet(entity);
+        return ComponentAccess{ component, component, kTagsFields, &MarkTagsModified };
+    }
     return {};
 }
 
@@ -710,6 +737,7 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     }
     if (componentName == "NavAgent") return kNavAgentPropertyDescs;
     if (componentName == "NavObstacle") return kNavObstaclePropertyDescs;
+    if (componentName == "Tags") return kTagsPropertyDescs;
     return {};
 }
 

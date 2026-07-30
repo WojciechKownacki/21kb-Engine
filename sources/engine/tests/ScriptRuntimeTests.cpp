@@ -43,6 +43,7 @@
 #include "engine/scene/SceneTasks.hpp"
 #include "engine/scene/SceneTimers.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/TagsComponent.hpp"
 #include "engine/script/LuaScriptBackend.hpp"
 #include "engine/script/NativeScriptBuildPipeline.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
@@ -10871,10 +10872,12 @@ void RunScriptSceneComponentApiTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Script Api Object" });
     scene.Components().Cameras().Set(object.Entity(), kb::scene::CameraComponent{});
+    scene.Components().Tags().Set(object.Entity(), kb::scene::TagsComponent{});
 
     kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Transform"), "Script component API did not see Transform");
     kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Visibility"), "Script component API did not see Visibility");
     kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Camera"), "Script component API did not see Camera");
+    kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Tags"), "Script component API did not see Tags");
     kb::tests::Require(!kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Light"), "Script component API reported missing Light as present");
     const std::span<const kb::script::ScriptSceneComponentPropertyDesc> transformProperties = kb::script::ScriptSceneComponentApi::ComponentProperties("Transform");
     kb::tests::Require(transformProperties.size() == 13U, "Script component API did not expose Transform property reflection");
@@ -10918,6 +10921,33 @@ void RunScriptSceneComponentApiTest() {
         "Visibility",
         "visible");
     kb::tests::Require(getVisible.succeeded && !getVisible.value.AsBool(true), "Script component API did not read Visibility.visible");
+
+    const kb::script::ScriptSceneComponentMutationResult setTags = kb::script::ScriptSceneComponentApi::SetProperty(
+        scene,
+        object.Entity(),
+        "Tags",
+        "text",
+        kb::script::ScriptValue{ std::string{ "Enemy, Boss" } });
+    kb::tests::Require(setTags.succeeded, "Script component API did not set Tags.text");
+    const kb::script::ScriptSceneComponentPropertyResult getTags = kb::script::ScriptSceneComponentApi::GetProperty(
+        scene,
+        object.Entity(),
+        "Tags",
+        "text");
+    kb::tests::Require(getTags.succeeded && getTags.value.AsString() == "Enemy, Boss", "Script component API did not read Tags.text");
+    const kb::script::ScriptSceneComponentMutationResult oversizedTags = kb::script::ScriptSceneComponentApi::SetProperty(
+        scene,
+        object.Entity(),
+        "Tags",
+        "text",
+        kb::script::ScriptValue{ std::string(kb::scene::TagsComponent::MaxBytes + 1U, 'x') });
+    kb::tests::Require(!oversizedTags.succeeded, "Script component API accepted an oversized Object Classification value");
+    const kb::script::ScriptSceneComponentPropertyResult preservedTags = kb::script::ScriptSceneComponentApi::GetProperty(
+        scene,
+        object.Entity(),
+        "Tags",
+        "text");
+    kb::tests::Require(preservedTags.succeeded && preservedTags.value.AsString() == "Enemy, Boss", "Rejected Object Classification text must leave the stored value unchanged");
 
     const kb::script::ScriptSceneComponentMutationResult setFov = kb::script::ScriptSceneComponentApi::SetProperty(
         scene,
@@ -10995,6 +11025,9 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     scene.Components().Colliders().Set(object.Entity(), kb::scene::ColliderComponent{});
     scene.Components().CharacterControllers().Set(object.Entity(), kb::scene::CharacterControllerComponent{});
     scene.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{});
+    scene.Components().NavAgents().Set(object.Entity(), kb::scene::NavAgent{});
+    scene.Components().NavObstacles().Set(object.Entity(), kb::scene::NavObstacle{});
+    scene.Components().Tags().Set(object.Entity(), kb::scene::TagsComponent{});
 
     std::size_t fieldsChecked = 0U;
     for (const std::string_view componentName : kb::script::ScriptSceneComponentApi::ComponentNames()) {
@@ -11008,8 +11041,11 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
             // rejected for every field, regardless of the field's own
             // type, proving the generated write accessor actually checks
             // ScriptValue::Type() before touching the real field.
+            const kb::script::ScriptValue mismatchedValue = property.type == kb::script::ScriptValueType::String
+                ? kb::script::ScriptValue{ false }
+                : kb::script::ScriptValue{ std::string{ "wrong type" } };
             const kb::script::ScriptSceneComponentMutationResult mismatched = kb::script::ScriptSceneComponentApi::SetProperty(
-                scene, object.Entity(), componentName, property.name, kb::script::ScriptValue{ std::string{ "wrong type" } });
+                scene, object.Entity(), componentName, property.name, mismatchedValue);
             kb::tests::Require(!mismatched.succeeded, ("Script component API accepted a mismatched value type for " + fieldLabel).c_str());
 
             if (!property.writable) {
@@ -11031,6 +11067,9 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
             case kb::script::ScriptValueType::Float:
                 validValue = kb::script::ScriptValue{ 2.5F };
                 break;
+            case kb::script::ScriptValueType::String:
+                validValue = kb::script::ScriptValue{ std::string{ "Enemy, Boss" } };
+                break;
             default:
                 kb::tests::Require(false, "Script component API generated accessor coverage test found a property type it does not know how to exercise");
                 break;
@@ -11047,6 +11086,8 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
                 kb::tests::Require(get.value.AsInt() == 2, ("Script component API did not round-trip " + fieldLabel).c_str());
             } else if (property.type == kb::script::ScriptValueType::Bool) {
                 kb::tests::Require(get.value.AsBool(), ("Script component API did not round-trip " + fieldLabel).c_str());
+            } else if (property.type == kb::script::ScriptValueType::String) {
+                kb::tests::Require(get.value.AsString() == "Enemy, Boss", ("Script component API did not round-trip " + fieldLabel).c_str());
             }
         }
     }
@@ -11062,7 +11103,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // LIB-141: Light grew five more fields (areaWidth/areaHeight - a pre-existing reflection
     // gap closed here - plus useColorTemperature/colorTemperatureKelvin/layerMask), so the
     // total climbs from 92 to 97.
-    kb::tests::Require(fieldsChecked == 97U, "Script component API generated accessor coverage test did not exercise the expected total field count (97) across all 10 components");
+    kb::tests::Require(fieldsChecked == 118U, "Script component API generated accessor coverage test did not exercise the expected total field count (118) across all components");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -11075,7 +11116,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
 // encode a raw pointer's bit pattern — unlike Bool/Int/Float, which are all
 // narrower than a pointer on every platform this engine targets. This test
 // walks every registered component property and asserts its declared
-// ScriptValueType stays within the closed set {Bool, Int, Float} this
+// ScriptValueType stays within the closed set {Bool, Int, Float, String} this
 // system is actually allowed to expose to Lua/VisualGraph today, so adding
 // a wider type to any component's property table requires a conscious,
 // reviewed change to this allowlist rather than a silent widening of the
@@ -11091,6 +11132,9 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     scene.Components().Colliders().Set(object.Entity(), kb::scene::ColliderComponent{});
     scene.Components().CharacterControllers().Set(object.Entity(), kb::scene::CharacterControllerComponent{});
     scene.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{});
+    scene.Components().NavAgents().Set(object.Entity(), kb::scene::NavAgent{});
+    scene.Components().NavObstacles().Set(object.Entity(), kb::scene::NavObstacle{});
+    scene.Components().Tags().Set(object.Entity(), kb::scene::TagsComponent{});
 
     std::size_t propertiesChecked = 0U;
     for (const std::string_view componentName : kb::script::ScriptSceneComponentApi::ComponentNames()) {
@@ -11099,7 +11143,8 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
             const std::string fieldLabel = std::string{ componentName } + "." + std::string{ property.name };
             const bool isNarrowValueType = property.type == kb::script::ScriptValueType::Bool ||
                 property.type == kb::script::ScriptValueType::Int ||
-                property.type == kb::script::ScriptValueType::Float;
+                property.type == kb::script::ScriptValueType::Float ||
+                property.type == kb::script::ScriptValueType::String;
             kb::tests::Require(isNarrowValueType, ("Script component property " + fieldLabel + " uses a ScriptValueType wide enough to carry a raw pointer's bit pattern — LIB-082 requires component fields to stay within Bool/Int/Float").c_str());
 
             const kb::script::ScriptSceneComponentPropertyResult get = kb::script::ScriptSceneComponentApi::GetProperty(scene, object.Entity(), componentName, property.name);
@@ -11119,7 +11164,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-141: Light grew five more fields (areaWidth/areaHeight - a pre-existing reflection
     // gap closed here - plus useColorTemperature/colorTemperatureKelvin/layerMask), so the
     // total climbs from 92 to 97.
-    kb::tests::Require(propertiesChecked == 97U, "LIB-082 raw-pointer audit did not exercise the expected total field count (97) across all 10 components");
+    kb::tests::Require(propertiesChecked == 118U, "LIB-082 raw-pointer audit did not exercise the expected total field count (118) across all components");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {
