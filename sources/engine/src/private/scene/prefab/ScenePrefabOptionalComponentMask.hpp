@@ -19,8 +19,8 @@ struct ScenePrefabOptionalComponentMaskMatch {
     bool matches = false;
 };
 
-[[nodiscard]] inline std::uint16_t ScenePrefabOptionalComponentMask(const ScenePrefabNodeComponents& components) noexcept {
-    std::uint16_t mask = 0U;
+[[nodiscard]] inline std::uint32_t ScenePrefabOptionalComponentMask(const ScenePrefabNodeComponents& components) noexcept {
+    std::uint32_t mask = 0U;
     if (components.camera.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Camera);
     }
@@ -63,11 +63,20 @@ struct ScenePrefabOptionalComponentMaskMatch {
     if (components.uiDocument.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::UIDocument);
     }
+    if (components.navAgent.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::NavAgent);
+    }
+    if (components.navObstacle.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::NavObstacle);
+    }
+    if (components.regionShape.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::RegionShape);
+    }
     return mask;
 }
 
-[[nodiscard]] inline std::array<kb::ecs::ComponentId, 14U> ScenePrefabOptionalComponentIds(const SceneComponentRegistry& registry) noexcept {
-    return std::array<kb::ecs::ComponentId, 14U>{
+[[nodiscard]] inline std::array<kb::ecs::ComponentId, 17U> ScenePrefabOptionalComponentIds(const SceneComponentRegistry& registry) noexcept {
+    return std::array<kb::ecs::ComponentId, 17U>{
         registry.CameraComponentId(),
         registry.MeshRendererComponentId(),
         registry.LightComponentId(),
@@ -82,6 +91,9 @@ struct ScenePrefabOptionalComponentMaskMatch {
         registry.JointComponentId(),
         registry.AnimatorComponentId(),
         registry.UIDocumentComponentId(),
+        registry.NavAgentComponentId(),
+        registry.NavObstacleComponentId(),
+        registry.RegionShapeComponentId(),
     };
 }
 
@@ -94,8 +106,8 @@ struct ScenePrefabOptionalComponentMaskMatch {
         return {};
     }
 
-    const std::uint16_t expectedMask = ScenePrefabOptionalComponentMask(expected);
-    const std::array<kb::ecs::ComponentId, 14U> componentIds = ScenePrefabOptionalComponentIds(state.components);
+    const std::uint32_t expectedMask = ScenePrefabOptionalComponentMask(expected);
+    const std::array<kb::ecs::ComponentId, 17U> componentIds = ScenePrefabOptionalComponentIds(state.components);
     std::array<kb::ecs::ComponentId, componentIds.size()> required{};
     std::array<kb::ecs::ComponentId, componentIds.size()> excluded{};
     std::size_t requiredCount = 0U;
@@ -105,7 +117,7 @@ struct ScenePrefabOptionalComponentMaskMatch {
         if (componentId == 0U) {
             return {};
         }
-        const std::uint16_t bit = static_cast<std::uint16_t>(1U << index);
+        const std::uint32_t bit = static_cast<std::uint32_t>(1U << index);
         if ((expectedMask & bit) != 0U) {
             required[requiredCount++] = componentId;
         } else {

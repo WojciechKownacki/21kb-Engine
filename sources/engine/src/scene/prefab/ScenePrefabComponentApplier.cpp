@@ -33,6 +33,9 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.tags.has_value()) {
         sceneComponents.Tags().Set(entity, *components.tags);
     }
+    if (components.regionShape.has_value()) {
+        sceneComponents.RegionShapes().Set(entity, *components.regionShape);
+    }
     if (components.behaviour.has_value()) {
         sceneComponents.Behaviours().Set(entity, *components.behaviour);
     }
