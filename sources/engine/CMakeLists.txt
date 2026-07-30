@@ -624,6 +624,7 @@ add_library(kb_engine STATIC
     src/scene/components/SceneTransformStorage.cpp
     src/scene/components/SceneTransformIteration.cpp
     src/scene/components/SceneVisibilityApi.cpp
+    src/scene/components/SceneVisibilityResolution.cpp
     src/scene/components/SceneVisibilityStorage.cpp
     src/scene/entities/SceneEntityCounter.cpp
     src/scene/entities/SceneEntityCreationService.cpp

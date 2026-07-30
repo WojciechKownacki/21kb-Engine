@@ -37,7 +37,7 @@ EditorHierarchyRow EditorHierarchyRowFactory::Make(
         .componentCount = inspection.components.size(),
         .hasChildren = hasChildren,
         .expanded = hasChildren && !IsCollapsed(collapsedEntities, entity),
-        .visible = visibility.visible,
+        .visible = visibility.mode != kb::scene::VisibilityMode::Hidden,
         .prefabRoot = prefabRoot,
         .hasCamera = scene.Components().Cameras().Has(entity),
     };

@@ -27,7 +27,8 @@ std::uint64_t ScenePrefabHasher::Hash(const ScenePrefab& prefab) noexcept {
         }
         ScenePrefabHashBuilder::Mix(hash, node.parentNode);
         ScenePrefabHashBuilder::MixTransform(hash, node.transform);
-        ScenePrefabHashBuilder::Mix(hash, node.visibility.visible ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(node.visibility.mode));
+        ScenePrefabHashBuilder::Mix(hash, node.visibility.mask);
         ScenePrefabComponentHasher::Mix(hash, node.components);
     }
     return hash;

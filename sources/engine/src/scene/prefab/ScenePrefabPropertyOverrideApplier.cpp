@@ -88,7 +88,23 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
         return ParseVec3(property.value, node.transform.localScale);
     }
     if (property.propertyPath == "visibility.visible") {
-        return ParseBool(property.value, node.visibility.visible);
+        bool visible = true;
+        if (!ParseBool(property.value, visible)) return false;
+        node.visibility.mode = visible ? VisibilityMode::Visible : VisibilityMode::Hidden;
+        node.visibility.visible = visible;
+        return true;
+    }
+    if (property.propertyPath == "visibility.mode") {
+        std::uint32_t value = 0;
+        if (!ParseNumber(property.value, value) || !IsVisibilityModeValid(static_cast<VisibilityMode>(value))) {
+            return false;
+        }
+        node.visibility.mode = static_cast<VisibilityMode>(value);
+        node.visibility.visible = node.visibility.mode != VisibilityMode::Hidden;
+        return true;
+    }
+    if (property.propertyPath == "visibility.mask") {
+        return ParseNumber(property.value, node.visibility.mask);
     }
     if (property.propertyPath == "camera") {
         return ApplyComponentPresence(property.value, node.components.camera);
