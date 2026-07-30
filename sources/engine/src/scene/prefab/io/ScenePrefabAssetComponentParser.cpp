@@ -173,6 +173,19 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseStreamFocus(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "streamFocus", present)) return false;
+    if (!present) return true;
+    StreamFocusComponent focus{};
+    std::uint32_t mask = 0U;
+    if (!ParseField(fields, "streamFocus.innerRadius", focus.innerRadius) || !ParseField(fields, "streamFocus.outerRadius", focus.outerRadius) || !ParseField(fields, "streamFocus.priority", focus.priority) || !ParseField(fields, "streamFocus.loadMask", mask) || !ParseOptionalBool(fields, "streamFocus.enabled", focus.enabled)) return false;
+    focus.loadMask = static_cast<StreamLoadMask>(mask);
+    if (!IsStreamFocusValid(focus)) return false;
+    components.streamFocus = focus;
+    return true;
+}
+
 [[nodiscard]] bool ParseCharacterController(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool hasCharacterController = false;
     if (!ParseOptionalComponentFlag(fields, "characterController", hasCharacterController)) {
@@ -357,6 +370,7 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseRegionShape(fields, components)
         && ParseGuideCurve(fields, components)
         && ParseContentInstance(fields, components)
+        && ParseStreamFocus(fields, components)
         && ParseCharacterController(fields, components)
         && ParseJoint(fields, components)
         && ScenePrefabAssetTagsParser::Parse(fields, components)

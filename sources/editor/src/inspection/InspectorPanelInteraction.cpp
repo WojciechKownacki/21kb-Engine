@@ -8,6 +8,7 @@
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
+#include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -1144,6 +1145,10 @@ template <typename Integer>
     return property >= InspectorPropertyId::ContentInstanceAssetId && property <= InspectorPropertyId::ContentInstanceActive;
 }
 
+[[nodiscard]] bool IsStreamFocusProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::StreamFocusInnerRadius && property <= InspectorPropertyId::StreamFocusEnabled;
+}
+
 template <typename Mutator>
 [[nodiscard]] bool EditNavAgent(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
     if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
@@ -1192,6 +1197,19 @@ template <typename Mutator>
         return false;
     }
     sceneContext.Scene().Components().ContentInstances().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditStreamFocus(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::StreamFocusComponent* focus = sceneContext.Scene().Components().StreamFocuses().TryGet(entity);
+    if (focus == nullptr || !mutator(*focus)) {
+        sceneContext.CancelSceneEditTransaction();
+        return false;
+    }
+    sceneContext.Scene().Components().StreamFocuses().MarkModified(entity);
     static_cast<void>(sceneContext.CommitSceneEditTransaction());
     return true;
 }
@@ -1321,6 +1339,24 @@ template <typename Mutator>
     return true;
 }
 
+[[nodiscard]] bool HandleStreamFocusClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::StreamFocusComponent* focus = sceneContext.Scene().Components().StreamFocuses().TryGet(entity);
+    if (focus == nullptr) return false;
+    if (hit.property == InspectorPropertyId::StreamFocusEnabled) {
+        return EditStreamFocus(sceneContext, entity, "Toggle Stream Focus", [](kb::scene::StreamFocusComponent& value) { value.enabled = !value.enabled; return true; });
+    }
+    if (IsStreamFocusProperty(hit.property)) {
+        switch (hit.property) {
+        case InspectorPropertyId::StreamFocusInnerRadius: sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(focus->innerRadius)); break;
+        case InspectorPropertyId::StreamFocusOuterRadius: sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(focus->outerRadius)); break;
+        case InspectorPropertyId::StreamFocusPriority: sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(focus->priority)); break;
+        case InspectorPropertyId::StreamFocusLoadMask: sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(static_cast<std::uint32_t>(focus->loadMask))); break;
+        default: break;
+        }
+    }
+    return true;
+}
+
 [[nodiscard]] bool ApplyNavAgentText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
     float value = 0.0F;
     if (property == InspectorPropertyId::NavAgentAreaMask) {
@@ -1396,6 +1432,28 @@ template <typename Mutator>
     return EditContentInstance(sceneContext, entity, "Edit Content Instance Asset", [assetId](kb::scene::ContentInstanceComponent& value) {
         value.assetId = assetId;
         return true;
+    });
+}
+
+[[nodiscard]] bool ApplyStreamFocusText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    if (property == InspectorPropertyId::StreamFocusPriority) {
+        std::int32_t priority = 0;
+        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), priority);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) return false;
+        return EditStreamFocus(sceneContext, entity, "Edit Stream Focus Priority", [priority](kb::scene::StreamFocusComponent& value) { value.priority = priority; return true; });
+    }
+    if (property == InspectorPropertyId::StreamFocusLoadMask) {
+        std::uint32_t mask = 0U;
+        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), mask);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() || !kb::scene::IsStreamLoadMaskValid(static_cast<kb::scene::StreamLoadMask>(mask))) return false;
+        return EditStreamFocus(sceneContext, entity, "Edit Stream Focus Load Mask", [mask](kb::scene::StreamFocusComponent& value) { value.loadMask = static_cast<kb::scene::StreamLoadMask>(mask); return true; });
+    }
+    float radius = 0.0F;
+    if (!ParseFloat(text, radius) || !std::isfinite(radius)) return false;
+    return EditStreamFocus(sceneContext, entity, "Edit Stream Focus Radius", [property, radius](kb::scene::StreamFocusComponent& value) {
+        if (property == InspectorPropertyId::StreamFocusInnerRadius && radius >= 0.0F && radius <= value.outerRadius) { value.innerRadius = radius; return true; }
+        if (property == InspectorPropertyId::StreamFocusOuterRadius && radius >= value.innerRadius) { value.outerRadius = radius; return true; }
+        return false;
     });
 }
 
@@ -1800,6 +1858,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     if (hit.section == InspectorSectionId::ContentInstance) {
         return HandleContentInstanceClick(sceneContext, entity, hit);
     }
+    if (hit.section == InspectorSectionId::StreamFocus) {
+        return HandleStreamFocusClick(sceneContext, entity, hit);
+    }
     if (hit.section == InspectorSectionId::Tags &&
         hit.kind == InspectorHitKind::TextField &&
         hit.property == InspectorPropertyId::TagsText) {
@@ -2076,6 +2137,12 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         if (sceneContext.Scene().Entities().IsAlive(entity) &&
             IsContentInstanceProperty(inspector.EditedProperty())) {
             static_cast<void>(ApplyContentInstanceText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            IsStreamFocusProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyStreamFocusText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
             inspector.EndTextEdit();
             return true;
         }

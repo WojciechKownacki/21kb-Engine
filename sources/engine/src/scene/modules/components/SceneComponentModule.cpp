@@ -58,6 +58,7 @@ SceneRegionShapeComponentQueries SceneComponentQueries::RegionShapes() const noe
 }
 SceneGuideCurveComponentQueries SceneComponentQueries::GuideCurves() const noexcept { return SceneGuideCurveComponentQueries{ scene_ }; }
 SceneContentInstanceComponentQueries SceneComponentQueries::ContentInstances() const noexcept { return SceneContentInstanceComponentQueries{ scene_ }; }
+SceneStreamFocusComponentQueries SceneComponentQueries::StreamFocuses() const noexcept { return SceneStreamFocusComponentQueries{ scene_ }; }
 
 SceneAudioSourceComponentQueries SceneComponentQueries::AudioSources() const noexcept {
     return SceneAudioSourceComponentQueries{ scene_ };
@@ -129,6 +130,7 @@ SceneRegionShapeComponents SceneComponents::RegionShapes() const noexcept {
 }
 SceneGuideCurveComponents SceneComponents::GuideCurves() const noexcept { return SceneGuideCurveComponents{ scene_ }; }
 SceneContentInstanceComponents SceneComponents::ContentInstances() const noexcept { return SceneContentInstanceComponents{ scene_ }; }
+SceneStreamFocusComponents SceneComponents::StreamFocuses() const noexcept { return SceneStreamFocusComponents{ scene_ }; }
 
 SceneAudioSourceComponents SceneComponents::AudioSources() const noexcept {
     return SceneAudioSourceComponents{ scene_ };

@@ -12,6 +12,7 @@
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
@@ -8116,6 +8117,16 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
         }
         return ExecuteSceneCommand("Add Content Instance Component", [this, entity]() {
             scene_->Components().ContentInstances().Set(entity, kb::scene::ContentInstanceComponent{});
+            return true;
+        });
+    }
+    if (componentId == "StreamFocus") {
+        if (scene_->Components().StreamFocuses().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Stream Focus component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Stream Focus Component", [this, entity]() {
+            scene_->Components().StreamFocuses().Set(entity, kb::scene::StreamFocusComponent{});
             return true;
         });
     }

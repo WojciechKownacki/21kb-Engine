@@ -144,6 +144,7 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<RegionShapeComponent> regionShapes;
     std::vector<GuideCurveComponent> guideCurves;
     std::vector<ContentInstanceComponent> contentInstances;
+    std::vector<StreamFocusComponent> streamFocuses;
     std::vector<BehaviourComponent> behaviours;
     std::vector<AudioSourceComponent> audioSources;
     std::vector<AudioListenerComponent> audioListeners;
@@ -160,9 +161,9 @@ struct ScenePrefabArchetypeSpawnPayload {
         RepeatComponents(visibility, std::span<const VisibilityComponent>{ archetype.visibility }, instanceCount);
 
         views.clear();
-        views.reserve(13U);
+        views.reserve(22U);
         worldViews.clear();
-        worldViews.reserve(13U);
+        worldViews.reserve(22U);
         AddComponentViews(views, worldViews, std::span<const TransformComponent>{ transforms });
         AddComponentViews(views, worldViews, std::span<const VisibilityComponent>{ visibility });
 
@@ -215,6 +216,10 @@ struct ScenePrefabArchetypeSpawnPayload {
             RepeatComponents(contentInstances, std::span<const ContentInstanceComponent>{ archetype.contentInstances }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const ContentInstanceComponent>{ contentInstances });
         }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::StreamFocus)) {
+            RepeatComponents(streamFocuses, std::span<const StreamFocusComponent>{ archetype.streamFocuses }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const StreamFocusComponent>{ streamFocuses });
+        }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Behaviour)) {
             RepeatComponents(behaviours, std::span<const BehaviourComponent>{ archetype.behaviours }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const BehaviourComponent>{ behaviours });
@@ -247,9 +252,9 @@ struct ScenePrefabArchetypeSpawnPayload {
 
     void BuildPattern(const ScenePrefabBakedArchetype& archetype, std::size_t instanceCount) {
         views.clear();
-        views.reserve(13U);
+        views.reserve(22U);
         worldViews.clear();
-        worldViews.reserve(13U);
+        worldViews.reserve(22U);
         AddCommandComponentPatternView(views, std::span<const TransformComponent>{ archetype.transforms }, instanceCount);
         AddWorldComponentPatternView(worldViews, std::span<const TransformComponent>{ archetype.transforms }, instanceCount);
         AddCommandComponentPatternView(views, std::span<const VisibilityComponent>{ archetype.visibility }, instanceCount);
@@ -303,6 +308,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::ContentInstance)) {
             AddCommandComponentPatternView(views, std::span<const ContentInstanceComponent>{ archetype.contentInstances }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const ContentInstanceComponent>{ archetype.contentInstances }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::StreamFocus)) {
+            AddCommandComponentPatternView(views, std::span<const StreamFocusComponent>{ archetype.streamFocuses }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const StreamFocusComponent>{ archetype.streamFocuses }, instanceCount);
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Behaviour)) {
             AddCommandComponentPatternView(views, std::span<const BehaviourComponent>{ archetype.behaviours }, instanceCount);

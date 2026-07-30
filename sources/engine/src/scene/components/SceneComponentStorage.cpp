@@ -20,6 +20,7 @@ SceneComponentStorage::SceneComponentStorage(kb::ecs::World& world, const SceneC
     , regionShapes_(world, components.RegionShapeComponentId())
     , guideCurves_(world, components.GuideCurveComponentId())
     , contentInstances_(world, components.ContentInstanceComponentId())
+    , streamFocuses_(world, components.StreamFocusComponentId())
     , audioSources_(world, components.AudioSourceComponentId())
     , audioListeners_(world, components.AudioListenerComponentId())
     , animators_(world, components.AnimatorComponentId())
@@ -138,6 +139,8 @@ const SceneGuideCurveComponentStore& SceneComponentStorage::GuideCurves() const 
 SceneGuideCurveComponentStore& SceneComponentStorage::GuideCurves() noexcept { return guideCurves_; }
 const SceneContentInstanceComponentStore& SceneComponentStorage::ContentInstances() const noexcept { return contentInstances_; }
 SceneContentInstanceComponentStore& SceneComponentStorage::ContentInstances() noexcept { return contentInstances_; }
+const SceneStreamFocusComponentStore& SceneComponentStorage::StreamFocuses() const noexcept { return streamFocuses_; }
+SceneStreamFocusComponentStore& SceneComponentStorage::StreamFocuses() noexcept { return streamFocuses_; }
 
 const SceneAudioSourceComponentStore& SceneComponentStorage::AudioSources() const noexcept {
     return audioSources_;
