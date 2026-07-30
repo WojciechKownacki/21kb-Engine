@@ -36,6 +36,7 @@
 #include <fstream>
 #include <iomanip>
 #include <optional>
+#include <ranges>
 #include <set>
 #include <sstream>
 #include <string>
@@ -323,8 +324,14 @@ EditorHeadlessAutomation::~EditorHeadlessAutomation() = default;
 
 bool EditorHeadlessAutomation::AddComponent(
     std::string_view componentId) {
-    const InspectorComponentTile* tile =
-        InspectorComponentCatalog::Find(componentId);
+    const InspectorComponentTile* tile = InspectorComponentCatalog::Find(componentId);
+    if (tile == nullptr) {
+        const std::span<const InspectorComponentTile> tiles = InspectorComponentCatalog::Tiles();
+        const auto byLabel = std::ranges::find_if(tiles, [componentId](const InspectorComponentTile& candidate) {
+            return candidate.label == componentId;
+        });
+        tile = byLabel == tiles.end() ? nullptr : &*byLabel;
+    }
     if (tile == nullptr ||
         !context_.Scene().Entities().IsAlive(
             context_.SelectedEntity())) {
@@ -371,7 +378,7 @@ bool EditorHeadlessAutomation::AddComponent(
     static_cast<void>(
         InspectorPanelInteraction::HandlePointerDown(
             context_, search, searchPoint.x, searchPoint.y));
-    for (const char character : componentId) {
+    for (const char character : tile->label) {
         static_cast<void>(InspectorPanelInteraction::HandleChar(
             context_, static_cast<wchar_t>(character)));
     }
@@ -404,7 +411,7 @@ bool EditorHeadlessAutomation::AddComponent(
     const bool routed =
         InspectorPanelInteraction::HandlePointerDown(
             context_, option, optionPoint.x, optionPoint.y);
-    Trace("add_component", routed, componentId);
+    Trace("add_component", routed, tile->label);
     return routed;
 }
 

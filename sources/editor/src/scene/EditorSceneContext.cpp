@@ -8053,6 +8053,16 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
             return true;
         });
     }
+    if (componentId == "Tags") {
+        if (scene_->Components().Tags().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has an Object Classification component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Object Classification", [this, entity]() {
+            scene_->Components().Tags().Set(entity, kb::scene::TagsComponent{});
+            return true;
+        });
+    }
     if (componentId == "NavAgent") {
         if (scene_->Components().NavAgents().Has(entity)) {
             console_.Warning("Inspector", "Entity already has a Nav Agent component.");
@@ -8076,6 +8086,31 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
 
     console_.Warning("Inspector", "Unknown component: " + std::string{ componentId });
     return false;
+}
+
+bool EditorSceneContext::SetTagsText(kb::scene::SceneEntity entity, std::string_view text) {
+    if (!entity.IsValid() || !scene_->Components().Tags().Has(entity) || !kb::scene::TagsTextIsValid(text)) {
+        return false;
+    }
+    const std::string authoredText{ text };
+    return ExecuteSceneCommand("Edit Object Classification", [this, entity, authoredText]() {
+        kb::scene::TagsComponent* tags = scene_->Components().Tags().TryGet(entity);
+        if (tags == nullptr || !kb::scene::TrySetTagsText(*tags, authoredText)) {
+            return false;
+        }
+        scene_->Components().Tags().MarkModified(entity);
+        return true;
+    });
+}
+
+bool EditorSceneContext::RemoveTagsFromEntity(kb::scene::SceneEntity entity) {
+    if (!entity.IsValid() || !scene_->Components().Tags().Has(entity)) {
+        return false;
+    }
+    return ExecuteSceneCommand("Remove Object Classification", [this, entity]() {
+        scene_->Components().Tags().Remove(entity);
+        return true;
+    });
 }
 
 bool EditorSceneContext::SetAudioSourceClipAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {

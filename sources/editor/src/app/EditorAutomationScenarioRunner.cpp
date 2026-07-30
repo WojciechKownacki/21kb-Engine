@@ -18,6 +18,9 @@
 #include "engine/core/ProfilerCounters.hpp"
 #include "engine/core/ConsoleCommands.hpp"
 #include "engine/core/RuntimeInspector.hpp"
+#include "engine/library/EngineLibraryManifest.hpp"
+#include "engine/library/EngineLibraryAuthoringHints.hpp"
+#include "engine/library/EngineLibraryDeterminism.hpp"
 #include "engine/network/NetworkModel.hpp"
 #include "engine/network/NetworkBudget.hpp"
 #include "engine/network/NetworkObject.hpp"
@@ -50,6 +53,7 @@
 #include "engine/script/ScriptValue.hpp"
 #include "engine/script/VisualGraphScriptBackend.hpp"
 #include "engine/visual/VisualGraphBehaviourInstanceRegistry.hpp"
+#include "engine/visual/VisualGraphNodeCatalog.hpp"
 #include "engine/visual/VisualGraphRuntimeBindingRegistry.hpp"
 #include "engine/visual/VisualGraphRuntimeRegistry.hpp"
 #include "engine/visual/VisualGraphDebugSession.hpp"
@@ -67,6 +71,7 @@
 
 #include <algorithm>
 #include <array>
+#include <ranges>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -2944,6 +2949,176 @@ ReadScriptValue(
         return { complete,
             complete ? "all live functions are explicitly main_thread"
                      : "a live function has no audited execution affinity" };
+    }
+
+    if (*operation == "assert_deterministic_library_profile") {
+        constexpr std::array expected{
+            kb::library::DeterministicLibraryFeature::RandomStreams,
+            kb::library::DeterministicLibraryFeature::Timers,
+            kb::library::DeterministicLibraryFeature::ExecutionOrder,
+            kb::library::DeterministicLibraryFeature::InputReplay,
+            kb::library::DeterministicLibraryFeature::FixedSimulation,
+        };
+        const bool complete = kb::library::kDeterministicLibraryFeatures.size() == expected.size() &&
+            std::ranges::all_of(expected, [](kb::library::DeterministicLibraryFeature feature) {
+                return kb::library::IsDeterministicLibraryFeature(feature);
+            });
+        return { complete,
+            complete ? "deterministic library profile covers replay prerequisites"
+                     : "deterministic library profile is incomplete" };
+    }
+
+    if (*operation == "assert_nondeterministic_library_metadata") {
+        const bool classified =
+            kb::library::ClassifyLibraryFunctionDeterminism("Time.Elapsed").reason == kb::library::LibraryNonDeterminismReason::WallTime &&
+            kb::library::ClassifyLibraryFunctionDeterminism("Input.Action").reason == kb::library::LibraryNonDeterminismReason::Platform &&
+            kb::library::ClassifyLibraryFunctionDeterminism("Assets.LoadAsync").reason == kb::library::LibraryNonDeterminismReason::AsyncIo &&
+            kb::library::ClassifyLibraryFunctionDeterminism("Renderer.IsVisible").reason == kb::library::LibraryNonDeterminismReason::Rendering;
+        return { classified,
+            classified ? "nondeterministic API metadata covers wall time, platform, async I/O and rendering"
+                       : "nondeterministic API metadata is incomplete" };
+    }
+
+    if (*operation == "assert_restricted_api_surfaces") {
+        kb::script::ScriptRuntimeHost host{ state.context.Scene() };
+        if (!host.Succeeded()) {
+            return { false, "script runtime host could not be created" };
+        }
+        const kb::script::ScriptApiCatalog catalog =
+            kb::script::ScriptApiCatalog::Build(host);
+        const kb::library::ApiManifest manifest = kb::library::BuildApiManifest(catalog);
+        const auto find = [&manifest](std::string_view name) -> const kb::library::LibraryApiSurfaceManifestEntry* {
+            const auto found = std::ranges::find_if(manifest.specialApis, [name](const kb::library::LibraryApiSurfaceManifestEntry& api) {
+                return api.canonicalName == name;
+            });
+            return found == manifest.specialApis.end() ? nullptr : &*found;
+        };
+        const kb::library::LibraryApiSurfaceManifestEntry* authoring = find("ScriptAgentProjectFiles.Write");
+        const kb::library::LibraryApiSurfaceManifestEntry* server = find("NetworkObjects.AssignOwner");
+        const bool restricted =
+            authoring != nullptr && server != nullptr &&
+            authoring->availability == kb::library::ToMask(kb::library::LibraryApiSurface::Authoring) &&
+            server->availability == kb::library::ToMask(kb::library::LibraryApiSurface::Server) &&
+            !kb::library::IsAvailableOnSurface(authoring->availability, kb::library::LibraryApiSurface::Lua) &&
+            !kb::library::IsAvailableOnSurface(server->availability, kb::library::LibraryApiSurface::VisualGraph);
+        return { restricted,
+            restricted ? "authoring-only and server-only APIs are excluded from script frontends"
+                       : "restricted API surface metadata is incomplete" };
+    }
+
+    if (*operation == "assert_api_source_map") {
+        kb::script::ScriptRuntimeHost host{ state.context.Scene() };
+        if (!host.Succeeded()) {
+            return { false, "script runtime host could not be created" };
+        }
+        const kb::script::ScriptApiCatalog catalog = kb::script::ScriptApiCatalog::Build(host);
+        const kb::visual::VisualGraphNodeCatalog nodes = host.CreateVisualGraphNodeCatalog();
+        bool complete = !catalog.functions.empty() && !catalog.sourceMap.empty();
+        for (const kb::script::ScriptApiCatalogFunction& function : catalog.functions) {
+            const std::string symbol = "Function." + function.name;
+            const std::string nodeId = "NativeBinding:CallNative:" + symbol;
+            const kb::visual::VisualGraphNodeCatalogEntry* node = nodes.Find(nodeId);
+            if (node == nullptr) {
+                complete = false;
+                break;
+            }
+            const std::string anchor = kb::script::ScriptApiDocumentationAnchor(function.name);
+            for (const kb::visual::VisualGraphPinTemplate& pin : node->pins) {
+                const bool mapped = std::ranges::any_of(catalog.sourceMap, [&function, &nodeId, &symbol, &anchor, &pin](const kb::script::ScriptApiCatalogSourceMapEntry& entry) {
+                    return entry.functionName == function.name && entry.visualGraphNodeId == nodeId &&
+                        entry.visualGraphPinName == pin.name &&
+                        entry.visualGraphPinDirection == kb::visual::ToString(pin.direction) &&
+                        entry.runtimeBindingSymbol == symbol && entry.documentationAnchor == anchor;
+                });
+                if (!mapped) {
+                    complete = false;
+                    break;
+                }
+            }
+            if (!complete) {
+                break;
+            }
+        }
+        return { complete,
+            complete ? "every Visual Graph node pin maps to its catalog function, runtime binding and documentation"
+                     : "API source map is incomplete or drifted from the live Visual Graph catalog" };
+    }
+
+    if (*operation == "assert_manifest_reference") {
+        kb::script::ScriptRuntimeHost host{ state.context.Scene() };
+        if (!host.Succeeded()) {
+            return { false, "script runtime host could not be created" };
+        }
+        const kb::library::ApiManifest manifest =
+            kb::library::BuildApiManifest(kb::script::ScriptApiCatalog::Build(host));
+        const std::string reference = kb::library::ToReferenceMarkdown(manifest);
+        const kb::library::ApiReferenceValidationResult validation =
+            kb::library::ValidateReferenceMarkdown(manifest, reference);
+        const bool generated = validation.Succeeded() &&
+            reference.find("## API manifest") != std::string::npos &&
+            reference.find("`" + manifest.manifestHash + "`") != std::string::npos;
+        return { generated,
+            generated ? "generated Markdown reference matches the live API manifest"
+                      : "generated Markdown reference drifted from the live API manifest" };
+    }
+
+    if (*operation == "assert_manifest_reference_validation") {
+        kb::script::ScriptRuntimeHost host{ state.context.Scene() };
+        if (!host.Succeeded()) {
+            return { false, "script runtime host could not be created" };
+        }
+        const kb::library::ApiManifest manifest =
+            kb::library::BuildApiManifest(kb::script::ScriptApiCatalog::Build(host));
+        const std::string reference = kb::library::ToReferenceMarkdown(manifest);
+        std::string wrongName = reference;
+        std::string wrongSignature = reference;
+        std::string wrongSemantics = reference;
+        const auto replace = [](std::string& text, std::string_view from, std::string_view to) {
+            const std::size_t position = text.find(from);
+            if (position == std::string::npos) {
+                return false;
+            }
+            text.replace(position, from.size(), to);
+            return true;
+        };
+        const bool mutated =
+            replace(wrongName, "`Input.Vector2`", "`Input.VectorX`") &&
+            replace(wrongSignature, "action: String, player: Int?", "action: Bool") &&
+            replace(wrongSemantics, "Reads the current two-dimensional value of the named input action.", "Returns an unrelated value.");
+        const bool validated = mutated &&
+            kb::library::ValidateReferenceMarkdown(manifest, reference).Succeeded() &&
+            !kb::library::ValidateReferenceMarkdown(manifest, wrongName).Succeeded() &&
+            !kb::library::ValidateReferenceMarkdown(manifest, wrongSignature).Succeeded() &&
+            !kb::library::ValidateReferenceMarkdown(manifest, wrongSemantics).Succeeded();
+        return { validated,
+            validated ? "manifest validation rejects documentation name, signature and semantic drift"
+                      : "manifest validation did not reject every documentation drift" };
+    }
+
+    if (*operation == "assert_authoring_hints") {
+        kb::script::ScriptRuntimeHost host{ state.context.Scene() };
+        if (!host.Succeeded()) {
+            return { false, "script runtime host could not be created" };
+        }
+        const kb::library::ApiManifest manifest =
+            kb::library::BuildApiManifest(kb::script::ScriptApiCatalog::Build(host));
+        const std::vector<kb::library::LibraryLuaCompletion> lua =
+            kb::library::BuildLuaAutocomplete(manifest, "input vector");
+        const std::vector<kb::library::LibraryVisualGraphNodeSearchHint> nodes =
+            kb::library::BuildVisualGraphNodeSearchHints(manifest, "input vector");
+        const auto luaHint = std::ranges::find_if(lua, [](const kb::library::LibraryLuaCompletion& hint) {
+            return hint.label == "Input.Vector2";
+        });
+        const auto nodeHint = std::ranges::find_if(nodes, [](const kb::library::LibraryVisualGraphNodeSearchHint& hint) {
+            return hint.displayName == "Function.Input.Vector2";
+        });
+        const bool complete =
+            luaHint != lua.end() && nodeHint != nodes.end() &&
+            !luaHint->description.empty() && !luaHint->category.empty() && !luaHint->example.empty() && luaHint->version == manifest.version &&
+            !nodeHint->description.empty() && !nodeHint->category.empty() && !nodeHint->example.empty() && nodeHint->version == manifest.version;
+        return { complete,
+            complete ? "Lua autocomplete and Visual Graph search expose manifest documentation, category, examples and version"
+                     : "authoring hints are incomplete" };
     }
 
     if (*operation == "assert_runtime_snapshot_queue") {

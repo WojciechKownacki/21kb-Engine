@@ -11,6 +11,7 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
@@ -1587,6 +1588,8 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                 static_cast<void>(sceneContext.RemoveAnimatorFromEntity(entity));
             } else if (hit.section == InspectorSectionId::UIDocument) {
                 static_cast<void>(sceneContext.RemoveUIDocumentFromEntity(entity));
+            } else if (hit.section == InspectorSectionId::Tags) {
+                static_cast<void>(sceneContext.RemoveTagsFromEntity(entity));
             } else if (hit.section == InspectorSectionId::NavAgent && sceneContext.Scene().Components().NavAgents().Has(entity)) {
                 if (sceneContext.BeginSceneEditTransaction("Remove Nav Agent")) {
                     sceneContext.Scene().Components().NavAgents().Remove(entity);
@@ -1664,6 +1667,14 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::NavObstacle) {
         return HandleNavObstacleClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::Tags &&
+        hit.kind == InspectorHitKind::TextField &&
+        hit.property == InspectorPropertyId::TagsText) {
+        if (const kb::scene::TagsComponent* tags = sceneContext.Scene().Components().Tags().TryGet(entity); tags != nullptr) {
+            sceneContext.Inspector().BeginTextEdit(InspectorPropertyId::TagsText, std::string{ kb::scene::TagsText(*tags) });
+        }
+        return true;
     }
     if (hit.section == InspectorSectionId::Light) {
         return HandleLightClick(sceneContext, entity, hit);
@@ -1896,6 +1907,12 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             return true;
         }
         const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            inspector.EditedProperty() == InspectorPropertyId::TagsText) {
+            static_cast<void>(sceneContext.SetTagsText(entity, inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
         if (sceneContext.Scene().Entities().IsAlive(entity) &&
             IsNavAgentProperty(inspector.EditedProperty())) {
             static_cast<void>(ApplyNavAgentText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));

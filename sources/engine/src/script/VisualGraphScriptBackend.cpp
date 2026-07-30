@@ -62,11 +62,13 @@ VisualGraphScriptBackend::VisualGraphScriptBackend(
     const kb::visual::VisualGraphRuntimeRegistry& artifacts,
     const kb::visual::VisualGraphRuntimeBindingRegistry& bindings,
     kb::visual::VisualGraphBehaviourInstanceRegistry& instances,
-    kb::visual::VisualGraphDebugSession* debugger) noexcept
+    kb::visual::VisualGraphDebugSession* debugger,
+    ScriptExecutionBudgetSettings executionBudgetSettings) noexcept
     : artifacts_(artifacts)
     , bindings_(bindings)
     , instances_(instances)
-    , debugger_(debugger) {}
+    , debugger_(debugger)
+    , executionBudgetSettings_(executionBudgetSettings) {}
 
 kb::scene::BehaviourBackend VisualGraphScriptBackend::Backend() const noexcept {
     return kb::scene::BehaviourBackend::VisualGraph;
@@ -81,7 +83,7 @@ ScriptBackendExecutionResult VisualGraphScriptBackend::ExecuteLifecycle(const kb
         ToVisualGraphLifecycleEvent(context.Lifecycle()),
         artifacts_,
         bindings_,
-        graphContext, debugger_);
+        graphContext, debugger_, executionBudgetSettings_.visualGraphStepsPerBehaviour, executionBudgetSettings_.policy);
     AppendEmittedEvents(graphContext, context, context.Self(), kb::assets::AssetId{behaviour.behaviourAssetId});
     // LIB-112: the gameplay event bridge's RECEIVE side is wired to the
     // SAME lifecycle boundaries every other owned resource in this engine
@@ -118,7 +120,7 @@ ScriptBackendExecutionResult VisualGraphScriptBackend::ExecuteEvent(const kb::sc
         arguments,
         artifacts_,
         bindings_,
-        graphContext, debugger_);
+        graphContext, debugger_, executionBudgetSettings_.visualGraphStepsPerBehaviour, executionBudgetSettings_.policy);
     AppendEmittedEvents(graphContext, context, context.Self(), kb::assets::AssetId{behaviour.behaviourAssetId});
     return ToScriptResult(result, behaviour, context.Self());
 }
@@ -297,7 +299,7 @@ void VisualGraphScriptBackend::SubscribeCustomEventsToBus(const kb::scene::Behav
                 const std::vector<kb::visual::VisualGraphCustomEventArgument> arguments = ToVisualGraphArguments(event);
                 const kb::visual::VisualGraphBehaviourExecutionResult execution =
                     kb::visual::VisualGraphBehaviourRuntime::ExecuteCustomEvent(
-                    *liveBehaviour, entity, event.name, arguments, artifacts_, bindings_, instance->context, debugger_);
+                    *liveBehaviour, entity, event.name, arguments, artifacts_, bindings_, instance->context, debugger_, executionBudgetSettings_.visualGraphStepsPerBehaviour, executionBudgetSettings_.policy);
                 if (!execution.Succeeded()) {
                     std::string message = "visual graph event bridge failed for \"" + event.name + "\"";
                     for (const kb::visual::VisualGraphDiagnostic& diagnostic : execution.diagnostics) {

@@ -73,6 +73,13 @@ scenario-local aliases.
 | `assert_script_hot_reload` | Verifies Lua replacement keeps the last valid program on a failed update and Visual Graph execution state is explicitly released before its lifecycle restart. |
 | `assert_crash_report` | Writes the privacy-safe production crash report after Play Mode, verifies the technical error identifier, live API/asset metadata and recent event categories, and proves a breadcrumb message containing a private path is excluded. |
 | `assert_function_execution_affinity` | Verifies the active Play Mode script host exports an explicit execution-affinity policy for every live callable. |
+| `assert_deterministic_library_profile` | Verifies the active engine profile declares random streams, timer delta, execution order, input replay, and fixed simulation. |
+| `assert_nondeterministic_library_metadata` | Verifies metadata marks wall time, platform, async I/O and rendering APIs as non-deterministic. |
+| `assert_restricted_api_surfaces` | Verifies authoring-only and server-only API metadata exists and is excluded from Lua and Visual Graph frontends. |
+| `assert_api_source_map` | Verifies every live Visual Graph node pin maps to its catalog function, runtime binding symbol and generated documentation anchor. |
+| `assert_manifest_reference` | Generates the Markdown reference from the live manifest and verifies its hash, sections and function contracts do not drift. |
+| `assert_manifest_reference_validation` | Verifies the manifest validator rejects documentation drift in a function name, pin signature and authored semantics. |
+| `assert_authoring_hints` | Verifies Lua autocomplete and Visual Graph node search expose manifest description, category, examples and version. |
 | `assert_runtime_snapshot_queue` | Enqueues a time-scale command from a worker, drains it through the production runtime frame boundary, and verifies immutable before/after snapshots. |
 | `assert_platform_capabilities` | Verifies capability-gated locale, user-data path, clipboard, URL and vibration access, including unavailable-service rejection. |
 | `assert_user_storage` | Verifies sandboxed atomic read/write/delete/list, quota enforcement and asynchronous write without arbitrary filesystem paths. |

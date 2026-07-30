@@ -10,6 +10,8 @@ namespace {
     const VisualGraphRuntimeBindingRegistry& bindings,
     VisualGraphRuntimeExecutionContext& context,
     VisualGraphDebugSession* debugger,
+    std::size_t maximumSteps,
+    kb::core::BudgetExceededPolicy budgetExceededPolicy,
     auto execute) {
     VisualGraphBehaviourExecutionResult result{};
     if (!behaviour.enabled || behaviour.backend != kb::scene::BehaviourBackend::VisualGraph) {
@@ -29,7 +31,7 @@ namespace {
     }
 
     context.Store(0U, "self", VisualGraphRuntimeValue{entity.Id(), VisualGraphValueType::Entity});
-    const VisualGraphRuntimeExecutor executor{bindings, debugger};
+    const VisualGraphRuntimeExecutor executor{bindings, debugger, maximumSteps, budgetExceededPolicy};
     result.runtime = execute(executor, *artifact, context);
     result.diagnostics = result.runtime.diagnostics.empty() ? VisualGraphDiagnostics::FromErrors(VisualGraphDiagnosticStage::Runtime, result.runtime.errors)
                                                             : result.runtime.diagnostics;
@@ -45,8 +47,10 @@ VisualGraphBehaviourExecutionResult VisualGraphBehaviourRuntime::Execute(
     const VisualGraphRuntimeRegistry& artifacts,
     const VisualGraphRuntimeBindingRegistry& bindings,
     VisualGraphRuntimeExecutionContext& context,
-    VisualGraphDebugSession* debugger) {
-    return ExecuteBehaviour(behaviour, entity, artifacts, bindings, context, debugger, [event](const VisualGraphRuntimeExecutor& executor, const VisualGraphRuntimeArtifact& artifact, VisualGraphRuntimeExecutionContext& runtimeContext) {
+    VisualGraphDebugSession* debugger,
+    std::size_t maximumSteps,
+    kb::core::BudgetExceededPolicy budgetExceededPolicy) {
+    return ExecuteBehaviour(behaviour, entity, artifacts, bindings, context, debugger, maximumSteps, budgetExceededPolicy, [event](const VisualGraphRuntimeExecutor& executor, const VisualGraphRuntimeArtifact& artifact, VisualGraphRuntimeExecutionContext& runtimeContext) {
         return executor.Execute(artifact, event, runtimeContext);
     });
 }
@@ -58,8 +62,10 @@ VisualGraphBehaviourExecutionResult VisualGraphBehaviourRuntime::ExecuteCustomEv
     const VisualGraphRuntimeRegistry& artifacts,
     const VisualGraphRuntimeBindingRegistry& bindings,
     VisualGraphRuntimeExecutionContext& context,
-    VisualGraphDebugSession* debugger) {
-    return ExecuteCustomEvent(behaviour, entity, eventName, std::span<const VisualGraphCustomEventArgument>{}, artifacts, bindings, context, debugger);
+    VisualGraphDebugSession* debugger,
+    std::size_t maximumSteps,
+    kb::core::BudgetExceededPolicy budgetExceededPolicy) {
+    return ExecuteCustomEvent(behaviour, entity, eventName, std::span<const VisualGraphCustomEventArgument>{}, artifacts, bindings, context, debugger, maximumSteps, budgetExceededPolicy);
 }
 
 VisualGraphBehaviourExecutionResult VisualGraphBehaviourRuntime::ExecuteCustomEvent(
@@ -70,8 +76,10 @@ VisualGraphBehaviourExecutionResult VisualGraphBehaviourRuntime::ExecuteCustomEv
     const VisualGraphRuntimeRegistry& artifacts,
     const VisualGraphRuntimeBindingRegistry& bindings,
     VisualGraphRuntimeExecutionContext& context,
-    VisualGraphDebugSession* debugger) {
-    return ExecuteBehaviour(behaviour, entity, artifacts, bindings, context, debugger, [eventName, arguments](const VisualGraphRuntimeExecutor& executor, const VisualGraphRuntimeArtifact& artifact, VisualGraphRuntimeExecutionContext& runtimeContext) {
+    VisualGraphDebugSession* debugger,
+    std::size_t maximumSteps,
+    kb::core::BudgetExceededPolicy budgetExceededPolicy) {
+    return ExecuteBehaviour(behaviour, entity, artifacts, bindings, context, debugger, maximumSteps, budgetExceededPolicy, [eventName, arguments](const VisualGraphRuntimeExecutor& executor, const VisualGraphRuntimeArtifact& artifact, VisualGraphRuntimeExecutionContext& runtimeContext) {
         return executor.ExecuteCustomEvent(artifact, eventName, arguments, runtimeContext);
     });
 }

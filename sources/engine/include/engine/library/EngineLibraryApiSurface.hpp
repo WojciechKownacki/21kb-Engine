@@ -37,10 +37,12 @@ struct LibraryApiSurfaceManifestEntry {
 // APIs intentionally outside ScriptFunctionRegistry.  Keeping them here
 // makes their absence from Lua stubs and Visual Graph nodes an audited policy,
 // rather than an undocumented side effect of their C++ implementation shape.
-inline constexpr std::array<LibraryApiSurfaceManifestEntry, 3U> kLibrarySpecialApiSurfaces{{
+inline constexpr std::array<LibraryApiSurfaceManifestEntry, 5U> kLibrarySpecialApiSurfaces{{
     { "EntityHandle", ToMask(LibraryApiSurface::Native), "C++ scene identity handle; scripts use World functions instead." },
     { "Signal<Args...>", ToMask(LibraryApiSurface::Native), "Typed in-process observer list whose C++ callback type cannot cross a script boundary." },
     { "SceneTasks.Start", ToMask(LibraryApiSurface::Native), "Starts a callback-backed scene task; scripts may only observe or cancel task handles." },
+    { "ScriptAgentProjectFiles.Write", ToMask(LibraryApiSurface::Authoring), "Generates project-local API artifacts and starter files for editor and coding-agent tooling." },
+    { "NetworkObjects.AssignOwner", ToMask(LibraryApiSurface::Server), "Changes authority-owned network object ownership; only an authoritative server may perform it." },
 }};
 
 } // namespace kb::library

@@ -71,25 +71,50 @@ bool ScriptFunctionRegistry::Register(ScriptFunctionDesc function) {
     if (!HasValidPins(function.signature.inputs) || !HasValidPins(function.signature.outputs)) {
         return false;
     }
+    if (functions_.size() == functions_.capacity()) {
+        const std::size_t previousCapacity = functions_.capacity();
+        const std::size_t requestedCapacity = previousCapacity == 0U ? 1U : previousCapacity * 2U;
+        const std::size_t allocationBytes = (requestedCapacity - previousCapacity) * sizeof(ScriptFunctionDesc);
+        if (registrationAllocationTelemetry_ != nullptr &&
+            !registrationAllocationTelemetry_->Reserve(allocationBytes)) {
+            return false;
+        }
+        functions_.reserve(requestedCapacity);
+    }
     functions_.push_back(std::move(function));
+    functionsById_[kb::library::ComputeLibraryFunctionId(functions_.back().signature.name)].push_back(functions_.size() - 1U);
     return true;
 }
 
 const ScriptFunctionSignature* ScriptFunctionRegistry::FindSignature(std::string_view name) const noexcept {
-    const auto iter = std::ranges::find_if(functions_, [name](const ScriptFunctionDesc& function) {
-        return function.signature.name == name;
-    });
-    return iter == functions_.end() ? nullptr : &iter->signature;
+    const auto bucket = functionsById_.find(kb::library::ComputeLibraryFunctionId(name));
+    if (bucket == functionsById_.end()) {
+        return nullptr;
+    }
+    for (const std::size_t index : bucket->second) {
+        const ScriptFunctionDesc& function = functions_[index];
+        if (function.signature.name == name) {
+            return &function.signature;
+        }
+    }
+    return nullptr;
 }
 
 bool ScriptFunctionRegistry::MarkDeprecated(std::string_view name, std::string message) noexcept {
-    const auto iter = std::ranges::find_if(functions_, [name](const ScriptFunctionDesc& function) {
-        return function.signature.name == name;
-    });
-    if (iter == functions_.end()) {
+    const auto bucket = functionsById_.find(kb::library::ComputeLibraryFunctionId(name));
+    ScriptFunctionDesc* function = nullptr;
+    if (bucket != functionsById_.end()) {
+        for (const std::size_t index : bucket->second) {
+            if (functions_[index].signature.name == name) {
+                function = &functions_[index];
+                break;
+            }
+        }
+    }
+    if (function == nullptr) {
         return false;
     }
-    iter->signature.deprecationMessage = std::move(message);
+    function->signature.deprecationMessage = std::move(message);
     return true;
 }
 
@@ -101,30 +126,37 @@ ScriptFunctionCallResult ScriptFunctionRegistry::Call(
     std::string_view name,
     std::span<const ScriptFunctionArgument> arguments,
     const ScriptFunctionCallContext& context) const {
-    const auto iter = std::ranges::find_if(functions_, [name](const ScriptFunctionDesc& function) {
-        return function.signature.name == name;
-    });
-    if (iter == functions_.end()) {
+    const auto bucket = functionsById_.find(kb::library::ComputeLibraryFunctionId(name));
+    const ScriptFunctionDesc* function = nullptr;
+    if (bucket != functionsById_.end()) {
+        for (const std::size_t index : bucket->second) {
+            if (functions_[index].signature.name == name) {
+                function = &functions_[index];
+                break;
+            }
+        }
+    }
+    if (function == nullptr) {
         return ScriptFunctionCallResult{
             .errors = {"script function '" + std::string{name} + "' is not registered"},
         };
     }
 
     if (!kb::core::MayCall(context.executionAffinity,
-                           { iter->signature.executionAffinity })) {
+                           { function->signature.executionAffinity })) {
         return ScriptFunctionCallResult{
             .errors = { "script function '" + std::string{ name } +
                 "' is forbidden from " +
                 std::string{ kb::core::ToString(context.executionAffinity) } +
                 " execution context (requires " +
-                std::string{ kb::core::ToString(iter->signature.executionAffinity) } +
+                std::string{ kb::core::ToString(function->signature.executionAffinity) } +
                 ")" },
         };
     }
 
     std::vector<ScriptFunctionArgument> normalized;
     std::vector<std::string> errors;
-    ValidateInputs(iter->signature, arguments, normalized, errors);
+    ValidateInputs(function->signature, arguments, normalized, errors);
     if (!errors.empty()) {
         return ScriptFunctionCallResult{ .errors = std::move(errors) };
     }
@@ -153,7 +185,7 @@ ScriptFunctionCallResult ScriptFunctionRegistry::Call(
     ScriptFunctionCallResult result;
     try {
         const CallDepthGuard depthGuard{ callDepth_ };
-        result = iter->callback(context, normalized);
+        result = function->callback(context, normalized);
     } catch (const std::exception& exception) {
         return ScriptFunctionCallResult{
             .errors = { "script function '" + std::string{ name } + "' threw an exception: " + exception.what() },
@@ -169,15 +201,15 @@ ScriptFunctionCallResult ScriptFunctionRegistry::Call(
     // way. A call rejected before this point (unknown name, bad input
     // type, reentrancy limit) never reaches here, so it never warns - there
     // was no real invocation to warn about.
-    if (!iter->signature.deprecationMessage.empty()) {
-        result.warnings.push_back(iter->signature.deprecationMessage);
+    if (!function->signature.deprecationMessage.empty()) {
+        result.warnings.push_back(function->signature.deprecationMessage);
     }
 
     if (!result.Succeeded()) {
         return result;
     }
 
-    ValidateOutputs(iter->signature, result, result.errors);
+    ValidateOutputs(function->signature, result, result.errors);
     return result;
 }
 
@@ -187,6 +219,10 @@ void ScriptFunctionRegistry::Lock() noexcept {
 
 bool ScriptFunctionRegistry::IsLocked() const noexcept {
     return locked_;
+}
+
+void ScriptFunctionRegistry::SetRegistrationAllocationTelemetry(kb::core::AllocationTelemetry* telemetry) noexcept {
+    registrationAllocationTelemetry_ = telemetry;
 }
 
 bool ScriptFunctionRegistry::HasValidPins(const std::vector<ScriptFunctionPin>& pins) {

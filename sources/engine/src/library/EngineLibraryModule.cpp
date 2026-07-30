@@ -342,6 +342,9 @@ EngineLibraryModuleResult EngineLibraryModule::InstallModules(kb::script::Script
             .version = module.version,
             .ownerRuntime = module.ownerRuntime,
             .capability = module.capability,
+            .registrationAllocationTelemetry = kb::core::AllocationTelemetry{
+                .budget = module.registrationAllocationBudgetBytes,
+            },
         };
         if (!module.capability) {
             entry.installed = false;
@@ -349,7 +352,10 @@ EngineLibraryModuleResult EngineLibraryModule::InstallModules(kb::script::Script
             result.report.push_back(std::move(entry));
             continue;
         }
-        if (module.Register == nullptr || !module.Register(host)) {
+        host.Functions().SetRegistrationAllocationTelemetry(&entry.registrationAllocationTelemetry);
+        const bool registered = module.Register != nullptr && module.Register(host);
+        host.Functions().SetRegistrationAllocationTelemetry(nullptr);
+        if (!registered) {
             entry.installed = false;
             entry.reason = "script API could not be fully registered";
             result.succeeded = false;
@@ -397,6 +403,14 @@ std::string FormatStartupReport(const std::vector<EngineLibraryModuleReportEntry
         text += " (";
         text += entry.ownerRuntime;
         text += ')';
+        text += " alloc=";
+        text += std::to_string(entry.registrationAllocationTelemetry.used);
+        text += '/';
+        text += std::to_string(entry.registrationAllocationTelemetry.budget);
+        text += " peak=";
+        text += std::to_string(entry.registrationAllocationTelemetry.peak);
+        text += " rejected=";
+        text += std::to_string(entry.registrationAllocationTelemetry.rejectedAllocationCount);
         if (!entry.installed) {
             text += " — ";
             text += entry.reason;
