@@ -11,6 +11,7 @@ namespace {
         InspectorComponentTile{ .id = "Camera", .category = "Rendering", .label = "Camera", .icon = HeroIconKind::Eye },
         InspectorComponentTile{ .id = "Light", .category = "Rendering", .label = "Light", .icon = HeroIconKind::Bolt },
         InspectorComponentTile{ .id = "MeshRenderer", .category = "Rendering", .label = "Mesh Renderer", .icon = HeroIconKind::Cube },
+        InspectorComponentTile{ .id = "WorldBackdrop", .category = "Rendering", .label = "World Backdrop", .icon = HeroIconKind::Eye },
         InspectorComponentTile{ .id = "Tags", .category = "Scene", .label = "Object Classification", .icon = HeroIconKind::AdjustmentsHorizontal },
         InspectorComponentTile{ .id = "RegionShape", .category = "Scene", .label = "Region Shape", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "GuideCurve", .category = "Scene", .label = "Guide Curve", .icon = HeroIconKind::Cube },

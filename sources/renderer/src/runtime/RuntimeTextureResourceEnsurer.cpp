@@ -185,6 +185,14 @@ void RuntimeTextureResourceEnsurer::Ensure(
             ensureTexture(graphTexture.textureAssetId, graphTexture.colorSpace, graphTexture.dimension);
         }
     }
+    // Some renderer features, such as the World Backdrop environment map, consume a
+    // texture without an intervening material. They still go through the same cache,
+    // validation and lifetime path as material textures.
+    for (const RuntimeTextureAssetKey textureKey : context.frameReferences.Textures()) {
+        if (textureKey.sceneId == context.scene.Id()) {
+            ensureTexture(textureKey.assetId, textureKey.colorSpace, RenderTextureDimension::Texture2D);
+        }
+    }
 }
 
 } // namespace kb::render

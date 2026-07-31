@@ -9,6 +9,7 @@
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -1149,6 +1150,10 @@ template <typename Integer>
     return property >= InspectorPropertyId::StreamFocusInnerRadius && property <= InspectorPropertyId::StreamFocusEnabled;
 }
 
+[[nodiscard]] bool IsWorldBackdropProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::WorldBackdropMode && property <= InspectorPropertyId::WorldBackdropEnabled;
+}
+
 template <typename Mutator>
 [[nodiscard]] bool EditNavAgent(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
     if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
@@ -1210,6 +1215,19 @@ template <typename Mutator>
         return false;
     }
     sceneContext.Scene().Components().StreamFocuses().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditWorldBackdrop(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::WorldBackdropComponent* backdrop = sceneContext.Scene().Components().WorldBackdrops().TryGet(entity);
+    if (backdrop == nullptr || !mutator(*backdrop)) {
+        sceneContext.CancelSceneEditTransaction();
+        return false;
+    }
+    sceneContext.Scene().Components().WorldBackdrops().MarkModified(entity);
     static_cast<void>(sceneContext.CommitSceneEditTransaction());
     return true;
 }
@@ -1357,6 +1375,54 @@ template <typename Mutator>
     return true;
 }
 
+[[nodiscard]] std::string WorldBackdropFieldText(const kb::scene::WorldBackdropComponent& value, InspectorPropertyId property) {
+    switch (property) {
+    case InspectorPropertyId::WorldBackdropMode: return std::to_string(static_cast<int>(value.mode));
+    case InspectorPropertyId::WorldBackdropColorR: return FormatCompactFloat(value.color.x);
+    case InspectorPropertyId::WorldBackdropColorG: return FormatCompactFloat(value.color.y);
+    case InspectorPropertyId::WorldBackdropColorB: return FormatCompactFloat(value.color.z);
+    case InspectorPropertyId::WorldBackdropHorizonColorR: return FormatCompactFloat(value.horizonColor.x);
+    case InspectorPropertyId::WorldBackdropHorizonColorG: return FormatCompactFloat(value.horizonColor.y);
+    case InspectorPropertyId::WorldBackdropHorizonColorB: return FormatCompactFloat(value.horizonColor.z);
+    case InspectorPropertyId::WorldBackdropZenithColorR: return FormatCompactFloat(value.zenithColor.x);
+    case InspectorPropertyId::WorldBackdropZenithColorG: return FormatCompactFloat(value.zenithColor.y);
+    case InspectorPropertyId::WorldBackdropZenithColorB: return FormatCompactFloat(value.zenithColor.z);
+    case InspectorPropertyId::WorldBackdropEnvironmentAssetId: return std::to_string(value.environmentAssetId);
+    case InspectorPropertyId::WorldBackdropHorizonHeight: return FormatCompactFloat(value.horizonHeight);
+    case InspectorPropertyId::WorldBackdropGradientExponent: return FormatCompactFloat(value.gradientExponent);
+    case InspectorPropertyId::WorldBackdropPriority: return std::to_string(value.priority);
+    default: return {};
+    }
+}
+
+[[nodiscard]] kb::scene::WorldBackdropMode NextWorldBackdropMode(kb::scene::WorldBackdropMode mode) noexcept {
+    switch (mode) {
+    case kb::scene::WorldBackdropMode::SolidColor: return kb::scene::WorldBackdropMode::VerticalGradient;
+    case kb::scene::WorldBackdropMode::VerticalGradient: return kb::scene::WorldBackdropMode::EnvironmentMap;
+    case kb::scene::WorldBackdropMode::EnvironmentMap: return kb::scene::WorldBackdropMode::ProceduralSky;
+    case kb::scene::WorldBackdropMode::ProceduralSky: return kb::scene::WorldBackdropMode::SolidColor;
+    }
+    return kb::scene::WorldBackdropMode::SolidColor;
+}
+
+[[nodiscard]] bool HandleWorldBackdropClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::WorldBackdropComponent* backdrop = sceneContext.Scene().Components().WorldBackdrops().TryGet(entity);
+    if (backdrop == nullptr) return false;
+    if (hit.property == InspectorPropertyId::WorldBackdropEnabled) {
+        return EditWorldBackdrop(sceneContext, entity, "Toggle World Backdrop", [](kb::scene::WorldBackdropComponent& value) { value.enabled = !value.enabled; return true; });
+    }
+    if (hit.property == InspectorPropertyId::WorldBackdropMode) {
+        return EditWorldBackdrop(sceneContext, entity, "Set World Backdrop Mode", [](kb::scene::WorldBackdropComponent& value) {
+            value.mode = NextWorldBackdropMode(value.mode);
+            return true;
+        });
+    }
+    if (IsWorldBackdropProperty(hit.property)) {
+        sceneContext.Inspector().BeginTextEdit(hit.property, WorldBackdropFieldText(*backdrop, hit.property));
+    }
+    return true;
+}
+
 [[nodiscard]] bool ApplyNavAgentText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
     float value = 0.0F;
     if (property == InspectorPropertyId::NavAgentAreaMask) {
@@ -1454,6 +1520,50 @@ template <typename Mutator>
         if (property == InspectorPropertyId::StreamFocusInnerRadius && radius >= 0.0F && radius <= value.outerRadius) { value.innerRadius = radius; return true; }
         if (property == InspectorPropertyId::StreamFocusOuterRadius && radius >= value.innerRadius) { value.outerRadius = radius; return true; }
         return false;
+    });
+}
+
+[[nodiscard]] bool ApplyWorldBackdropText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    if (property == InspectorPropertyId::WorldBackdropMode || property == InspectorPropertyId::WorldBackdropPriority) {
+        std::int32_t integer = 0;
+        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), integer);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) return false;
+        return EditWorldBackdrop(sceneContext, entity, "Edit World Backdrop", [property, integer](kb::scene::WorldBackdropComponent& value) {
+            kb::scene::WorldBackdropComponent candidate = value;
+            if (property == InspectorPropertyId::WorldBackdropMode) candidate.mode = static_cast<kb::scene::WorldBackdropMode>(integer);
+            else candidate.priority = integer;
+            if (!kb::scene::IsWorldBackdropComponentValid(candidate)) return false;
+            value = candidate;
+            return true;
+        });
+    }
+    if (property == InspectorPropertyId::WorldBackdropEnvironmentAssetId) {
+        std::uint64_t assetId = 0U;
+        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), assetId);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) return false;
+        return EditWorldBackdrop(sceneContext, entity, "Edit World Backdrop Environment", [assetId](kb::scene::WorldBackdropComponent& value) { value.environmentAssetId = assetId; return true; });
+    }
+    float number = 0.0F;
+    if (!ParseFloat(text, number) || !std::isfinite(number)) return false;
+    return EditWorldBackdrop(sceneContext, entity, "Edit World Backdrop", [property, number](kb::scene::WorldBackdropComponent& value) {
+        kb::scene::WorldBackdropComponent candidate = value;
+        switch (property) {
+        case InspectorPropertyId::WorldBackdropColorR: candidate.color.x = number; break;
+        case InspectorPropertyId::WorldBackdropColorG: candidate.color.y = number; break;
+        case InspectorPropertyId::WorldBackdropColorB: candidate.color.z = number; break;
+        case InspectorPropertyId::WorldBackdropHorizonColorR: candidate.horizonColor.x = number; break;
+        case InspectorPropertyId::WorldBackdropHorizonColorG: candidate.horizonColor.y = number; break;
+        case InspectorPropertyId::WorldBackdropHorizonColorB: candidate.horizonColor.z = number; break;
+        case InspectorPropertyId::WorldBackdropZenithColorR: candidate.zenithColor.x = number; break;
+        case InspectorPropertyId::WorldBackdropZenithColorG: candidate.zenithColor.y = number; break;
+        case InspectorPropertyId::WorldBackdropZenithColorB: candidate.zenithColor.z = number; break;
+        case InspectorPropertyId::WorldBackdropHorizonHeight: candidate.horizonHeight = number; break;
+        case InspectorPropertyId::WorldBackdropGradientExponent: candidate.gradientExponent = number; break;
+        default: return false;
+        }
+        if (!kb::scene::IsWorldBackdropComponentValid(candidate)) return false;
+        value = candidate;
+        return true;
     });
 }
 
@@ -1784,6 +1894,11 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                     sceneContext.Scene().Components().NavObstacles().Remove(entity);
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
+            } else if (hit.section == InspectorSectionId::WorldBackdrop && sceneContext.Scene().Components().WorldBackdrops().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove World Backdrop")) {
+                    sceneContext.Scene().Components().WorldBackdrops().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
             } else if (const std::optional<PhysicsComponentKind> kind = PhysicsKindForSection(hit.section); kind.has_value()) {
                 static_cast<void>(sceneContext.RemovePhysicsComponent(entity, *kind));
             }
@@ -1860,6 +1975,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::StreamFocus) {
         return HandleStreamFocusClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::WorldBackdrop) {
+        return HandleWorldBackdropClick(sceneContext, entity, hit);
     }
     if (hit.section == InspectorSectionId::Tags &&
         hit.kind == InspectorHitKind::TextField &&
@@ -2143,6 +2261,12 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         if (sceneContext.Scene().Entities().IsAlive(entity) &&
             IsStreamFocusProperty(inspector.EditedProperty())) {
             static_cast<void>(ApplyStreamFocusText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            IsWorldBackdropProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyWorldBackdropText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
             inspector.EndTextEdit();
             return true;
         }

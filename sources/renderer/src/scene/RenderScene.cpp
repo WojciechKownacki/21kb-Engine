@@ -101,6 +101,14 @@ RenderProxyId RenderScene::UpsertLight(const LightRenderProxyDesc& desc) {
     return proxy.id;
 }
 
+void RenderScene::SetWorldBackdrop(std::optional<SceneRenderWorldBackdrop> backdrop) noexcept {
+    worldBackdrop_ = std::move(backdrop);
+}
+
+const std::optional<SceneRenderWorldBackdrop>& RenderScene::WorldBackdrop() const noexcept {
+    return worldBackdrop_;
+}
+
 bool RenderScene::RemoveMesh(std::uint64_t entityId) noexcept {
     const bool removed = meshes_.erase(entityId) != 0U;
     if (removed) {

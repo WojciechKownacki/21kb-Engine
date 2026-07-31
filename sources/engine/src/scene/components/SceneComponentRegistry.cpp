@@ -20,6 +20,7 @@
 #include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
@@ -132,6 +133,20 @@ void RegisterStreamFocusReflection(kb::ecs::World& world) {
     }));
 }
 
+void RegisterWorldBackdropReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<WorldBackdropComponent>(WorldBackdropComponent::StableId, {
+        KB_ECS_FIELD(WorldBackdropComponent, mode, kb::ecs::ComponentFieldType::Enum32),
+        KB_ECS_FIELD(WorldBackdropComponent, color, kb::ecs::ComponentFieldType::Vec3Float32),
+        KB_ECS_FIELD(WorldBackdropComponent, horizonColor, kb::ecs::ComponentFieldType::Vec3Float32),
+        KB_ECS_FIELD(WorldBackdropComponent, zenithColor, kb::ecs::ComponentFieldType::Vec3Float32),
+        KB_ECS_FIELD(WorldBackdropComponent, environmentAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(WorldBackdropComponent, horizonHeight, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(WorldBackdropComponent, gradientExponent, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(WorldBackdropComponent, priority, kb::ecs::ComponentFieldType::Int32),
+        KB_ECS_FIELD(WorldBackdropComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
 } // namespace
 
 SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
@@ -151,6 +166,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , guideCurveComponentId_(RegisterSceneComponent<GuideCurveComponent>(world, GuideCurveComponent::StableId))
     , contentInstanceComponentId_(RegisterSceneComponent<ContentInstanceComponent>(world, ContentInstanceComponent::StableId))
     , streamFocusComponentId_(RegisterSceneComponent<StreamFocusComponent>(world, StreamFocusComponent::StableId))
+    , worldBackdropComponentId_(RegisterSceneComponent<WorldBackdropComponent>(world, WorldBackdropComponent::StableId))
     , audioSourceComponentId_(RegisterSceneComponent<AudioSourceComponent>(world, "kb.scene.AudioSourceComponent"))
     , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, "kb.scene.AudioListenerComponent"))
     , animatorComponentId_(RegisterSceneComponent<Animator>(world, "kb.scene.AnimatorComponent"))
@@ -163,6 +179,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     RegisterGuideCurveReflection(world);
     RegisterContentInstanceReflection(world);
     RegisterStreamFocusReflection(world);
+    RegisterWorldBackdropReflection(world);
 }
 
 std::uint64_t SceneComponentRegistry::TransformComponentId() const noexcept {
@@ -219,6 +236,7 @@ std::uint64_t SceneComponentRegistry::RegionShapeComponentId() const noexcept {
 std::uint64_t SceneComponentRegistry::GuideCurveComponentId() const noexcept { return guideCurveComponentId_; }
 std::uint64_t SceneComponentRegistry::ContentInstanceComponentId() const noexcept { return contentInstanceComponentId_; }
 std::uint64_t SceneComponentRegistry::StreamFocusComponentId() const noexcept { return streamFocusComponentId_; }
+std::uint64_t SceneComponentRegistry::WorldBackdropComponentId() const noexcept { return worldBackdropComponentId_; }
 
 std::uint64_t SceneComponentRegistry::AudioSourceComponentId() const noexcept {
     return audioSourceComponentId_;

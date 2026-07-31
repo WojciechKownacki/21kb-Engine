@@ -82,6 +82,7 @@
 #include "engine/scene/SceneRegionShapeQueries.hpp"
 #include "engine/scene/SceneGuideCurveQueries.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -2752,6 +2753,16 @@ void RunEngineLibraryComponentRegistryTest() {
         .loadMask = kb::scene::StreamLoadMask::Subscene | kb::scene::StreamLoadMask::WorldFragment,
         .enabled = false,
     });
+    kb::scene::WorldBackdropComponent backdrop{};
+    backdrop.mode = kb::scene::WorldBackdropMode::EnvironmentMap;
+    backdrop.color = { 0.11F, 0.22F, 0.33F };
+    backdrop.horizonColor = { 0.05F, 0.10F, 0.20F };
+    backdrop.zenithColor = { 0.60F, 0.70F, 0.80F };
+    backdrop.environmentAssetId = 808U;
+    backdrop.horizonHeight = -0.15F;
+    backdrop.gradientExponent = 1.75F;
+    backdrop.priority = 9;
+    source.Components().WorldBackdrops().Set(object.Entity(), backdrop);
     const kb::scene::SceneObject jointTarget = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ComponentRegistryJointTarget" });
     source.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{ .type = kb::scene::JointType::Hinge, .connectedEntity = jointTarget.Entity(), .minLimit = -45.0F, .maxLimit = 45.0F, .enableLimit = true });
 
@@ -2843,6 +2854,14 @@ void RunEngineLibraryComponentRegistryTest() {
                             kb::tests::NearlyEqual(restoredStreamFocus->outerRadius, 24.0F) && restoredStreamFocus->priority == 7 &&
                             restoredStreamFocus->loadMask == (kb::scene::StreamLoadMask::Subscene | kb::scene::StreamLoadMask::WorldFragment) && !restoredStreamFocus->enabled,
         "Engine21kbLibrary component registry: Stream Focus must survive a real save/load round trip with all stream policy fields");
+    const kb::scene::WorldBackdropComponent* restoredBackdrop = target.Components().WorldBackdrops().TryGet(restored);
+    kb::tests::Require(restoredBackdrop != nullptr &&
+                            restoredBackdrop->mode == kb::scene::WorldBackdropMode::EnvironmentMap &&
+                            restoredBackdrop->environmentAssetId == 808U &&
+                            kb::tests::NearlyEqual(restoredBackdrop->horizonHeight, -0.15F) &&
+                            kb::tests::NearlyEqual(restoredBackdrop->gradientExponent, 1.75F) &&
+                            restoredBackdrop->priority == 9,
+        "Engine21kbLibrary component registry: World Backdrop must survive a real save/load round trip with its rendering policy");
     // Joint stores a prefab-local stable target id and resolves it to this
     // loaded scene's live entity only after every node has been created.
     const kb::scene::JointComponent* restoredJoint = target.Components().Joints().TryGet(restored);
@@ -3173,7 +3192,7 @@ void RunComponentInspectorDescCatalogTest() {
     // LIB-183 adds 11 NavAgent fields and 9 NavObstacle fields to the prior
     // 97-field contract, bringing the library/editor scripting surface to
     // 117 described fields across 12 components.
-    kb::tests::Require(fieldsChecked == 143U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (143) across all components");
+    kb::tests::Require(fieldsChecked == 158U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (158) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

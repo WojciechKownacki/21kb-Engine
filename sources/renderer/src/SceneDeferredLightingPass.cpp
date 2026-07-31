@@ -50,6 +50,12 @@ struct PosTexVertex {
     return bgfx::createTexture2D(1U, 1U, false, 1U, bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_NONE, memory);
 }
 
+[[nodiscard]] bgfx::TextureHandle CreateFallbackBlackTexture() {
+    constexpr std::uint32_t black = 0x0000'00FFU;
+    const bgfx::Memory* memory = bgfx::copy(&black, sizeof(black));
+    return bgfx::createTexture2D(1U, 1U, false, 1U, bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_NONE, memory);
+}
+
 [[nodiscard]] std::array<float, 16> ZeroMatrix() noexcept {
     return std::array<float, 16>{};
 }
@@ -109,7 +115,12 @@ bool SceneDeferredLightingPass::Initialize() {
     shadowMapSampler_ = bgfx::createUniform("s_deferredShadowMap", bgfx::UniformType::Sampler);
     shadowViewProjUniform_ = bgfx::createUniform("u_deferredShadowViewProj", bgfx::UniformType::Mat4);
     shadowParamsUniform_ = bgfx::createUniform("u_deferredShadowParams", bgfx::UniformType::Vec4);
+    backdropHorizonUniform_ = bgfx::createUniform("u_deferredBackdropHorizon", bgfx::UniformType::Vec4);
+    backdropZenithUniform_ = bgfx::createUniform("u_deferredBackdropZenith", bgfx::UniformType::Vec4);
+    backdropParamsUniform_ = bgfx::createUniform("u_deferredBackdropParams", bgfx::UniformType::Vec4);
+    backdropEnvironmentSampler_ = bgfx::createUniform("s_deferredBackdropEnvironment", bgfx::UniformType::Sampler);
     fallbackShadowTexture_ = CreateFallbackWhiteTexture();
+    fallbackBackdropEnvironmentTexture_ = CreateFallbackBlackTexture();
     {
         std::ostringstream message;
         message << "Initialize handles program=" << HandleValue(program_)
@@ -143,9 +154,29 @@ void SceneDeferredLightingPass::Shutdown() noexcept {
                 << " depthSampler=" << HandleValue(depthSampler_);
         WriteRendererDebugLog("deferred_lighting", message.str());
     }
+    if (bgfx::isValid(backdropParamsUniform_)) {
+        bgfx::destroy(backdropParamsUniform_);
+        backdropParamsUniform_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(backdropEnvironmentSampler_)) {
+        bgfx::destroy(backdropEnvironmentSampler_);
+        backdropEnvironmentSampler_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(backdropZenithUniform_)) {
+        bgfx::destroy(backdropZenithUniform_);
+        backdropZenithUniform_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(backdropHorizonUniform_)) {
+        bgfx::destroy(backdropHorizonUniform_);
+        backdropHorizonUniform_ = BGFX_INVALID_HANDLE;
+    }
     if (bgfx::isValid(fallbackShadowTexture_)) {
         bgfx::destroy(fallbackShadowTexture_);
         fallbackShadowTexture_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(fallbackBackdropEnvironmentTexture_)) {
+        bgfx::destroy(fallbackBackdropEnvironmentTexture_);
+        fallbackBackdropEnvironmentTexture_ = BGFX_INVALID_HANDLE;
     }
     if (bgfx::isValid(shadowParamsUniform_)) {
         bgfx::destroy(shadowParamsUniform_);
@@ -350,9 +381,28 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     const std::array<float, 16> inverseViewProjection = RendererMatrixMath::Inverse(viewProjection);
     const std::array<float, 4> cameraPosition = SceneLightingPacker::CameraPosition(desc.camera);
     const std::array<float, 4> depthParams{ SceneDepthPolicy::HomogeneousDepth() ? 1.0F : 0.0F, 0.0F, 0.0F, 0.0F };
+    const bool gradientBackdrop = desc.worldBackdrop != nullptr &&
+        (desc.worldBackdrop->mode == SceneRenderWorldBackdropMode::VerticalGradient ||
+         desc.worldBackdrop->mode == SceneRenderWorldBackdropMode::ProceduralSky);
+    const bool environmentBackdrop = desc.worldBackdrop != nullptr &&
+        desc.worldBackdrop->mode == SceneRenderWorldBackdropMode::EnvironmentMap &&
+        bgfx::isValid(desc.worldBackdropEnvironment);
+    const std::array<float, 4> backdropHorizon = gradientBackdrop
+        ? std::array<float, 4>{ desc.worldBackdrop->horizonColor[0], desc.worldBackdrop->horizonColor[1], desc.worldBackdrop->horizonColor[2], 1.0F }
+        : std::array<float, 4>{};
+    const std::array<float, 4> backdropZenith = gradientBackdrop
+        ? std::array<float, 4>{ desc.worldBackdrop->zenithColor[0], desc.worldBackdrop->zenithColor[1], desc.worldBackdrop->zenithColor[2], 1.0F }
+        : std::array<float, 4>{};
+    const std::array<float, 4> backdropParams = gradientBackdrop
+        ? std::array<float, 4>{ 1.0F, desc.worldBackdrop->horizonHeight, desc.worldBackdrop->gradientExponent,
+              desc.worldBackdrop->mode == SceneRenderWorldBackdropMode::ProceduralSky ? 1.0F : 0.0F }
+        : environmentBackdrop ? std::array<float, 4>{ 2.0F, 0.0F, 0.0F, 0.0F } : std::array<float, 4>{};
     bgfx::setUniform(cameraPositionUniform_, cameraPosition.data());
     bgfx::setUniform(inverseViewProjectionUniform_, inverseViewProjection.data());
     bgfx::setUniform(depthParamsUniform_, depthParams.data());
+    bgfx::setUniform(backdropHorizonUniform_, backdropHorizon.data());
+    bgfx::setUniform(backdropZenithUniform_, backdropZenith.data());
+    bgfx::setUniform(backdropParamsUniform_, backdropParams.data());
     // Deferred's key light used to be applied at full strength everywhere, with no shadow term at
     // all, while the forward opaque pass darkens light index 0 by a sampled shadow map -- same light,
     // same scene, but deferred came out visibly brighter/flatter. Feed the same shadow binding used
@@ -372,6 +422,10 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
                 << " depthTex=" << HandleValue(desc.gbuffer->DepthTexture())
                 << " shadowValid=" << (shadowValid ? "true" : "false")
                 << " shadowTex=" << HandleValue(shadowValid ? desc.shadowMap->depthTexture : fallbackShadowTexture_)
+                << " backdropMode=" << (desc.worldBackdrop != nullptr ? static_cast<int>(desc.worldBackdrop->mode) : -1)
+                << " gradientBackdrop=" << (gradientBackdrop ? "true" : "false")
+                << " environmentBackdrop=" << (environmentBackdrop ? "true" : "false")
+                << " backdropParams=(" << backdropParams[0] << ',' << backdropParams[1] << ',' << backdropParams[2] << ',' << backdropParams[3] << ')'
                 << " camera=(" << cameraPosition[0] << ',' << cameraPosition[1] << ',' << cameraPosition[2] << ',' << cameraPosition[3] << ')'
                 << " depthHomogeneous=" << (SceneDepthPolicy::HomogeneousDepth() ? "true" : "false");
         WriteRendererMaterialGraphDebugLog("deferred", message.str());
@@ -382,6 +436,7 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     bgfx::setTexture(3U, surfaceSampler_, desc.gbuffer->SurfaceTexture());
     bgfx::setTexture(4U, depthSampler_, desc.gbuffer->DepthTexture());
     bgfx::setTexture(5U, shadowMapSampler_, shadowValid ? desc.shadowMap->depthTexture : fallbackShadowTexture_);
+    bgfx::setTexture(6U, backdropEnvironmentSampler_, environmentBackdrop ? desc.worldBackdropEnvironment : fallbackBackdropEnvironmentTexture_);
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
     bgfx::setVertexBuffer(0, &vertices);
     bgfx::submit(desc.viewId, program_);
@@ -409,7 +464,9 @@ bool SceneDeferredLightingPass::IsInitialized() const noexcept {
         bgfx::isValid(environmentParamsUniform_) && bgfx::isValid(cameraPositionUniform_) &&
         bgfx::isValid(inverseViewProjectionUniform_) && bgfx::isValid(depthParamsUniform_) &&
         bgfx::isValid(shadowMapSampler_) && bgfx::isValid(shadowViewProjUniform_) && bgfx::isValid(shadowParamsUniform_) &&
-        bgfx::isValid(fallbackShadowTexture_);
+        bgfx::isValid(backdropHorizonUniform_) && bgfx::isValid(backdropZenithUniform_) && bgfx::isValid(backdropParamsUniform_) &&
+        bgfx::isValid(backdropEnvironmentSampler_) && bgfx::isValid(fallbackShadowTexture_) &&
+        bgfx::isValid(fallbackBackdropEnvironmentTexture_);
 }
 
 } // namespace kb::render

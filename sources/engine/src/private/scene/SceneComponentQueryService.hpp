@@ -19,6 +19,7 @@
 #include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
 
@@ -71,6 +72,8 @@ public:
     [[nodiscard]] static const ContentInstanceComponent* TryGetContentInstance(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasStreamFocus(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const StreamFocusComponent* TryGetStreamFocus(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasWorldBackdrop(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const WorldBackdropComponent* TryGetWorldBackdrop(const Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static bool HasAudioSource(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const AudioSourceComponent* TryGetAudioSource(const Scene& scene, SceneEntity entity) noexcept;

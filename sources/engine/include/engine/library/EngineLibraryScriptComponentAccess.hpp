@@ -16,6 +16,7 @@
 #include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
@@ -343,6 +344,14 @@ struct ScriptComponentAccess<kb::scene::StreamFocusComponent> {
     [[nodiscard]] static kb::scene::StreamFocusComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().StreamFocuses().TryGet(entity); }
     static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::StreamFocusComponent& value) { scene.Components().StreamFocuses().Set(entity, value); }
     [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().StreamFocuses().Has(entity)) return false; scene.Components().StreamFocuses().Remove(entity); return true; }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::WorldBackdropComponent> {
+    [[nodiscard]] static const kb::scene::WorldBackdropComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().WorldBackdrops().TryGet(entity); }
+    [[nodiscard]] static kb::scene::WorldBackdropComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().WorldBackdrops().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::WorldBackdropComponent& value) { scene.Components().WorldBackdrops().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().WorldBackdrops().Has(entity)) return false; scene.Components().WorldBackdrops().Remove(entity); return true; }
 };
 
 template <typename Component>

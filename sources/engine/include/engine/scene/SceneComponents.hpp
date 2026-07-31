@@ -18,6 +18,7 @@
 #include "engine/scene/SceneGuideCurveComponents.hpp"
 #include "engine/scene/SceneContentInstanceComponents.hpp"
 #include "engine/scene/SceneStreamFocusComponents.hpp"
+#include "engine/scene/SceneWorldBackdropComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
 #include "engine/scene/SceneUIDocuments.hpp"
@@ -45,6 +46,7 @@ public:
     [[nodiscard]] SceneGuideCurveComponents GuideCurves() const noexcept;
     [[nodiscard]] SceneContentInstanceComponents ContentInstances() const noexcept;
     [[nodiscard]] SceneStreamFocusComponents StreamFocuses() const noexcept;
+    [[nodiscard]] SceneWorldBackdropComponents WorldBackdrops() const noexcept;
     [[nodiscard]] SceneAudioSourceComponents AudioSources() const noexcept;
     [[nodiscard]] SceneAudioListenerComponents AudioListeners() const noexcept;
     [[nodiscard]] SceneAnimatorComponents Animators() const noexcept;

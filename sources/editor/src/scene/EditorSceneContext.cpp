@@ -13,6 +13,7 @@
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
@@ -8127,6 +8128,16 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
         }
         return ExecuteSceneCommand("Add Stream Focus Component", [this, entity]() {
             scene_->Components().StreamFocuses().Set(entity, kb::scene::StreamFocusComponent{});
+            return true;
+        });
+    }
+    if (componentId == "WorldBackdrop") {
+        if (scene_->Components().WorldBackdrops().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a World Backdrop component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add World Backdrop Component", [this, entity]() {
+            scene_->Components().WorldBackdrops().Set(entity, kb::scene::WorldBackdropComponent{});
             return true;
         });
     }

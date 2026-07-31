@@ -162,6 +162,19 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "streamFocus.loadMask=" << static_cast<std::uint32_t>(focus.loadMask) << '\n';
         output << "streamFocus.enabled=" << (focus.enabled ? 1 : 0) << '\n';
     }
+    output << "worldBackdrop=" << (components.worldBackdrop.has_value() ? 1 : 0) << '\n';
+    if (components.worldBackdrop.has_value()) {
+        const WorldBackdropComponent& backdrop = *components.worldBackdrop;
+        output << "worldBackdrop.mode=" << static_cast<std::uint32_t>(backdrop.mode) << '\n';
+        WriteVec3(output, "worldBackdrop.color", backdrop.color);
+        WriteVec3(output, "worldBackdrop.horizonColor", backdrop.horizonColor);
+        WriteVec3(output, "worldBackdrop.zenithColor", backdrop.zenithColor);
+        output << "worldBackdrop.environmentAssetId=" << backdrop.environmentAssetId << '\n';
+        output << "worldBackdrop.horizonHeight=" << backdrop.horizonHeight << '\n';
+        output << "worldBackdrop.gradientExponent=" << backdrop.gradientExponent << '\n';
+        output << "worldBackdrop.priority=" << backdrop.priority << '\n';
+        output << "worldBackdrop.enabled=" << (backdrop.enabled ? 1 : 0) << '\n';
+    }
 
     output << "behaviour=" << (components.behaviour.has_value() ? 1 : 0) << '\n';
     if (components.behaviour.has_value()) {
