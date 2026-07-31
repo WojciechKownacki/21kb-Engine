@@ -56,7 +56,7 @@ bool SceneAssetRenderComponentCodec::ReadLight(SceneAssetBinaryIO::ByteReader& i
     output.kind = static_cast<LightKind>(kind);
     output.castsShadow = castsShadow;
     output.useColorTemperature = useColorTemperature;
-    return true;
+    return IsLightComponentValid(output);
 }
 
 void SceneAssetRenderComponentCodec::WriteLight(std::vector<std::uint8_t>& output, const LightComponent& light) {

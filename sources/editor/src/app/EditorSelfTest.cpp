@@ -5107,6 +5107,15 @@ void RunInspectorLightComponentSuite(Report& report) {
         report.Check(InspectorPanelInteraction::HandlePointerDown(context, typeHit, point.x, point.y), "Clicking Light type cycles the component kind");
         const kb::scene::LightComponent* light = context.Scene().Components().Lights().TryGet(lightEntity);
         report.Check(light != nullptr && light->kind == kb::scene::LightKind::Spot, "Point Light cycles to Spot Light through the Inspector");
+        report.Check(InspectorPanelInteraction::HandlePointerDown(context, typeHit, point.x, point.y) &&
+                context.Scene().Components().Lights().TryGet(lightEntity)->kind == kb::scene::LightKind::AreaRect,
+            "3D Radiance Emitter cycles to rectangular area light through the Inspector");
+        report.Check(InspectorPanelInteraction::HandlePointerDown(context, typeHit, point.x, point.y) &&
+                context.Scene().Components().Lights().TryGet(lightEntity)->kind == kb::scene::LightKind::AreaDisk,
+            "3D Radiance Emitter cycles to disk area light through the Inspector");
+        report.Check(InspectorPanelInteraction::HandlePointerDown(context, typeHit, point.x, point.y) &&
+                context.Scene().Components().Lights().TryGet(lightEntity)->kind == kb::scene::LightKind::Tube,
+            "3D Radiance Emitter cycles to tube area light through the Inspector");
     }
 }
 

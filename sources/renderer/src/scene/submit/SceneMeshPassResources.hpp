@@ -140,6 +140,7 @@ private:
     bgfx::UniformHandle lightPositionRangeUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightColorIntensityUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightSpotUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle lightAreaRightUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle ambientColorUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle environmentZenithUniform_ = BGFX_INVALID_HANDLE;

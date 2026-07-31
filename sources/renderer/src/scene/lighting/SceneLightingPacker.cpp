@@ -13,6 +13,9 @@ namespace kb::render {
 namespace {
 
 struct Basis {
+    float xx = 1.0F;
+    float xy = 0.0F;
+    float xz = 0.0F;
     float zx = 0.0F;
     float zy = 0.0F;
     float zz = 1.0F;
@@ -33,13 +36,19 @@ struct Basis {
     const float y2 = y + y;
     const float z2 = z + z;
     const float xz = x * z2;
+    const float xy = x * y2;
     const float yy = y * y2;
+    const float zz = z * z2;
     const float yz = y * z2;
     const float wx = w * x2;
     const float wy = w * y2;
+    const float wz = w * z2;
     const float xx = x * x2;
 
     return Basis{
+        .xx = 1.0F - (yy + zz),
+        .xy = xy + wz,
+        .xz = xz - wy,
         .zx = xz + wy,
         .zy = yz - wx,
         .zz = 1.0F - (xx + yy),
@@ -104,8 +113,11 @@ bool PackLight(const LightRenderProxyDesc& light, std::uint32_t slot, PackedScen
     const float outerCos = std::cos(DegreesToRadians(light.outerConeDegrees));
     lighting.spot[offset + 0U] = std::max(innerCos, outerCos);
     lighting.spot[offset + 1U] = std::min(innerCos, outerCos);
-    lighting.spot[offset + 2U] = 0.0F;
-    lighting.spot[offset + 3U] = 0.0F;
+    lighting.spot[offset + 2U] = std::max(light.areaWidth, 0.0F);
+    lighting.spot[offset + 3U] = std::max(light.areaHeight, 0.0F);
+    lighting.areaRight[offset + 0U] = basis.xx;
+    lighting.areaRight[offset + 1U] = basis.xy;
+    lighting.areaRight[offset + 2U] = basis.xz;
     return true;
 }
 

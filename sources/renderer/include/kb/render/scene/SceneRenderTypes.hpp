@@ -146,6 +146,7 @@ struct SceneRenderLight {
     RenderLightKind kind = RenderLightKind::Point;
     float position[3]{};
     float direction[3]{ 0.0F, 0.0F, 1.0F };
+    float right[3]{ 1.0F, 0.0F, 0.0F };
     float color[3]{ 1.0F, 1.0F, 1.0F };
     float intensity = 1.0F;
     float range = 10.0F;

@@ -13,6 +13,9 @@ struct PackedSceneLighting {
     std::array<float, kMaxSceneForwardPlusLights * 4U> positionRange{};
     std::array<float, kMaxSceneForwardPlusLights * 4U> colorIntensity{};
     std::array<float, kMaxSceneForwardPlusLights * 4U> spot{};
+    // World-space local X axis of surface emitters. Spot values z/w carry
+    // their authored width/height; this preserves the ECS transform's roll.
+    std::array<float, kMaxSceneForwardPlusLights * 4U> areaRight{};
     std::array<float, 4U> params{};
     std::array<float, 4U> ambient{ 0.18F, 0.20F, 0.23F, 1.0F };
     std::array<float, 4U> environmentZenith{ 0.36F, 0.42F, 0.52F, 1.0F };

@@ -12,7 +12,7 @@ void InspectorLightTextBuilder::Append(std::string& text, const kb::scene::Light
     std::snprintf(
         component,
         sizeof(component),
-        "\n\nLight\nKind: %s\nIntensity: %.2f\nRange: %.2f\nColor Temperature: %s\nLayer Mask: 0x%08X",
+        "\n\n3D Radiance Emitter\nKind: %s\nIntensity: %.2f\nRange: %.2f\nColor Temperature: %s\nLayer Mask: 0x%08X",
         InspectorComponentLabelFormatter::LightKindName(light.kind),
         light.intensity,
         light.range,
