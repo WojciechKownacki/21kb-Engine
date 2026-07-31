@@ -57,6 +57,7 @@ enum class ScenePrefabOverrideFlag : std::uint32_t {
     AuxFrame = 1U << 18U,
     GeometrySwarm = 1U << 19U,
     SurfaceCast = 1U << 20U,
+    FacingPanel = 1U << 21U,
 };
 
 [[nodiscard]] constexpr ScenePrefabOverrideFlag operator|(ScenePrefabOverrideFlag lhs, ScenePrefabOverrideFlag rhs) noexcept {

@@ -183,6 +183,11 @@ void DestroyRemovedObjects(Scene& scene, std::span<const SceneObject> oldObjects
         } else {
             components.SurfaceCasts().Remove(owner.Entity());
         }
+        if (nodes[nodeIndex].components.facingPanel.has_value()) {
+            components.FacingPanels().Set(owner.Entity(), *nodes[nodeIndex].components.facingPanel);
+        } else {
+            components.FacingPanels().Remove(owner.Entity());
+        }
         const std::optional<ScenePrefabJointComponent>& prefabJoint = nodes[nodeIndex].components.joint;
         if (!prefabJoint.has_value()) {
             components.Joints().Remove(owner.Entity());
