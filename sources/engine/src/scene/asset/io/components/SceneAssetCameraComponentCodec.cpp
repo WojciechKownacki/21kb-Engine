@@ -26,7 +26,7 @@ bool SceneAssetCameraComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input,
     output.projection = static_cast<CameraProjection>(projection);
     output.primary = primary;
     output.clearMode = static_cast<CameraClearMode>(clearMode);
-    return true;
+    return IsCameraComponentValid(output);
 }
 
 void SceneAssetCameraComponentCodec::Write(std::vector<std::uint8_t>& output, const CameraComponent& camera) {
