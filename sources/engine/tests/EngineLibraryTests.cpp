@@ -73,6 +73,7 @@
 #include "engine/core/ReadSnapshotQueue.hpp"
 #include "engine/core/RuntimeInspector.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -5297,6 +5298,19 @@ void RunGuideCurveEvaluationTest() {
         "Disabled Guide Curve must not be evaluated");
 }
 
+void RunCameraComponentValidationTest() {
+    kb::scene::CameraComponent camera{};
+    kb::tests::Require(kb::scene::IsCameraComponentValid(camera),
+        "Camera defaults must form a valid view-frame configuration");
+    camera.farClip = camera.nearClip;
+    kb::tests::Require(!kb::scene::IsCameraComponentValid(camera),
+        "Camera validation must reject a non-positive depth interval");
+    camera = {};
+    camera.verticalFovDegrees = 180.0F;
+    kb::tests::Require(!kb::scene::IsCameraComponentValid(camera),
+        "Camera validation must reject a non-projectable perspective field of view");
+}
+
 void RunEngineLibraryTests() {
     RunVersionValueTest();
     RunVersionOrderingTest();
@@ -5353,6 +5367,7 @@ void RunEngineLibraryTests() {
     RunVisibilityGateResolutionTest();
     RunRegionShapeContainmentTest();
     RunGuideCurveEvaluationTest();
+    RunCameraComponentValidationTest();
     RunContentInstanceRuntimeTest();
     RunStreamFocusRuntimeTest();
     RunEngineLibraryEventSchemaRegistryTest();
