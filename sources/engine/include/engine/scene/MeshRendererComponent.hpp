@@ -2,12 +2,16 @@
 
 #include <array>
 #include <cstdint>
+#include <string_view>
 
 namespace kb::scene {
 
 inline constexpr std::uint32_t kMaxMeshRendererMaterialSlotOverrides = 8U;
 
 struct MeshRendererComponent {
+    static constexpr std::string_view StableId = "kb21.draw.d3.solid-geometry";
+    static constexpr std::uint32_t SchemaVersion = 1U;
+
     std::uint64_t meshAssetId = 0;
     std::uint64_t materialAssetId = 0;
     std::array<std::uint64_t, kMaxMeshRendererMaterialSlotOverrides> materialSlotAssetIds{};
@@ -34,5 +38,9 @@ struct MeshRendererComponent {
     // see EcsRenderSceneSynchronizer::SyncMesh's resolution order.
     std::uint64_t materialInstanceHandle = 0U;
 };
+
+[[nodiscard]] constexpr bool IsMeshRendererComponentValid(const MeshRendererComponent& value) noexcept {
+    return value.materialSlotOverrideCount <= kMaxMeshRendererMaterialSlotOverrides;
+}
 
 } // namespace kb::scene
