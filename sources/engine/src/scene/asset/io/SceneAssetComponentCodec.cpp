@@ -43,6 +43,7 @@ enum SceneNodeComponentBits : std::uint32_t {
       VisibilityCellBit = 1U << 24U,
       RegionPortalBit = 1U << 25U,
       AuxFrameBit = 1U << 26U,
+      GeometrySwarmBit = 1U << 27U,
 };
 
 constexpr std::uint32_t KnownComponentBits = CameraBit |
@@ -63,7 +64,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit;
 
 [[nodiscard]] std::uint32_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint32_t componentBits = 0;
@@ -94,6 +95,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
       componentBits |= components.visibilityCell.has_value() ? VisibilityCellBit : 0U;
       componentBits |= components.regionPortal.has_value() ? RegionPortalBit : 0U;
       componentBits |= components.auxFrame.has_value() ? AuxFrameBit : 0U;
+      componentBits |= components.geometrySwarm.has_value() ? GeometrySwarmBit : 0U;
     return componentBits;
 }
 
@@ -368,6 +370,18 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         if (!IsAuxFrameComponentPersistable(frame)) return false;
         output.auxFrame = frame;
     }
+    if ((componentBits & GeometrySwarmBit) != 0U) {
+        if (fileVersion < 21U) return false;
+        GeometrySwarmComponent swarm{};
+        std::uint32_t columns = 0U, rows = 0U, layers = 0U;
+        if (!input.ReadUInt64(swarm.meshAssetId) || !input.ReadUInt64(swarm.materialAssetId) || !input.ReadUInt32(swarm.instanceCount) ||
+            !input.ReadUInt32(columns) || !input.ReadUInt32(rows) || !input.ReadUInt32(layers) || !SceneAssetPrimitiveCodec::ReadVec3(input, swarm.spacing) ||
+            !input.ReadFloat(swarm.instanceScale) || !input.ReadUInt32(swarm.layer) || !input.ReadBool(swarm.castsShadow) ||
+            !input.ReadBool(swarm.receivesShadow) || !input.ReadBool(swarm.enabled) || columns == 0U || columns > UINT16_MAX || rows == 0U || rows > UINT16_MAX || layers == 0U || layers > UINT16_MAX) return false;
+        swarm.columns = static_cast<std::uint16_t>(columns); swarm.rows = static_cast<std::uint16_t>(rows); swarm.layers = static_cast<std::uint16_t>(layers);
+        if (!IsGeometrySwarmComponentPersistable(swarm)) return false;
+        output.geometrySwarm = swarm;
+    }
     return true;
 }
 
@@ -540,6 +554,21 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetPrimitiveCodec::WriteVec3(output, frame.mirrorPlaneNormal);
         SceneAssetBinaryIO::WriteFloat(output, frame.mirrorPlaneOffset);
         SceneAssetBinaryIO::WriteBool(output, frame.enabled);
+    }
+    if (components.geometrySwarm.has_value()) {
+        const GeometrySwarmComponent& swarm = *components.geometrySwarm;
+        SceneAssetBinaryIO::WriteUInt64(output, swarm.meshAssetId);
+        SceneAssetBinaryIO::WriteUInt64(output, swarm.materialAssetId);
+        SceneAssetBinaryIO::WriteUInt32(output, swarm.instanceCount);
+        SceneAssetBinaryIO::WriteUInt32(output, swarm.columns);
+        SceneAssetBinaryIO::WriteUInt32(output, swarm.rows);
+        SceneAssetBinaryIO::WriteUInt32(output, swarm.layers);
+        SceneAssetPrimitiveCodec::WriteVec3(output, swarm.spacing);
+        SceneAssetBinaryIO::WriteFloat(output, swarm.instanceScale);
+        SceneAssetBinaryIO::WriteUInt32(output, swarm.layer);
+        SceneAssetBinaryIO::WriteBool(output, swarm.castsShadow);
+        SceneAssetBinaryIO::WriteBool(output, swarm.receivesShadow);
+        SceneAssetBinaryIO::WriteBool(output, swarm.enabled);
     }
 }
 
