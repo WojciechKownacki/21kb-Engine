@@ -72,6 +72,7 @@ struct ScenePrefabNodeStateWriterContext {
     SceneAuxFrameComponents auxFrames;
     SceneGeometrySwarmComponents geometrySwarms;
     SceneSurfaceCastComponents surfaceCasts;
+    SceneFacingPanelComponents facingPanels;
     SceneBehaviourComponents behaviours;
     SceneAudioSourceComponents audioSources;
     SceneAudioListenerComponents audioListeners;

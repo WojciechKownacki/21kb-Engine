@@ -26,6 +26,7 @@
 #include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/SurfaceCastComponent.hpp"
+#include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/ScenePrefabOverrides.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
@@ -92,6 +93,7 @@ struct ScenePrefabNodeComponents {
     std::optional<AuxFrameComponent> auxFrame;
     std::optional<GeometrySwarmComponent> geometrySwarm;
     std::optional<SurfaceCastComponent> surfaceCast;
+    std::optional<FacingPanelComponent> facingPanel;
     std::optional<BehaviourComponent> behaviour;
     std::optional<AudioSourceComponent> audioSource;
     std::optional<AudioListenerComponent> audioListener;

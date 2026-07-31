@@ -20,6 +20,7 @@ namespace {
         InspectorComponentTile{ .id = "Secondary Frame", .category = "Rendering", .label = "Secondary Frame", .icon = HeroIconKind::Eye },
         InspectorComponentTile{ .id = "Geometry Swarm", .category = "Rendering", .label = "Geometry Swarm", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "Surface Cast", .category = "Rendering", .label = "Surface Cast", .icon = HeroIconKind::Cube },
+        InspectorComponentTile{ .id = "Facing Panel", .category = "Rendering", .label = "Facing Panel", .icon = HeroIconKind::Eye },
         InspectorComponentTile{ .id = "Tags", .category = "Scene", .label = "Object Classification", .icon = HeroIconKind::AdjustmentsHorizontal },
         InspectorComponentTile{ .id = "RegionShape", .category = "Scene", .label = "Region Shape", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "GuideCurve", .category = "Scene", .label = "Guide Curve", .icon = HeroIconKind::Cube },

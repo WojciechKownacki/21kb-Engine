@@ -30,6 +30,7 @@ SceneComponentStorage::SceneComponentStorage(kb::ecs::World& world, const SceneC
     , auxFrames_(world, components.AuxFrameComponentId())
     , geometrySwarms_(world, components.GeometrySwarmComponentId())
     , surfaceCasts_(world, components.SurfaceCastComponentId())
+    , facingPanels_(world, components.FacingPanelComponentId())
     , audioSources_(world, components.AudioSourceComponentId())
     , audioListeners_(world, components.AudioListenerComponentId())
     , animators_(world, components.AnimatorComponentId())
@@ -168,6 +169,8 @@ const SceneGeometrySwarmComponentStore& SceneComponentStorage::GeometrySwarms() 
 SceneGeometrySwarmComponentStore& SceneComponentStorage::GeometrySwarms() noexcept { return geometrySwarms_; }
 const SceneSurfaceCastComponentStore& SceneComponentStorage::SurfaceCasts() const noexcept { return surfaceCasts_; }
 SceneSurfaceCastComponentStore& SceneComponentStorage::SurfaceCasts() noexcept { return surfaceCasts_; }
+const SceneFacingPanelComponentStore& SceneComponentStorage::FacingPanels() const noexcept { return facingPanels_; }
+SceneFacingPanelComponentStore& SceneComponentStorage::FacingPanels() noexcept { return facingPanels_; }
 
 const SceneAudioSourceComponentStore& SceneComponentStorage::AudioSources() const noexcept {
     return audioSources_;

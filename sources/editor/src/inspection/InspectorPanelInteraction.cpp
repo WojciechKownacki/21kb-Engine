@@ -18,6 +18,7 @@
 #include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/SurfaceCastComponent.hpp"
+#include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -1195,6 +1196,9 @@ template <typename Integer>
 [[nodiscard]] bool IsSurfaceCastProperty(InspectorPropertyId property) noexcept {
     return property >= InspectorPropertyId::SurfaceCastMaterialAssetId && property <= InspectorPropertyId::SurfaceCastEnabled;
 }
+[[nodiscard]] bool IsFacingPanelProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::FacingPanelMode && property <= InspectorPropertyId::FacingPanelEnabled;
+}
 
 template <typename Mutator>
 [[nodiscard]] bool EditNavAgent(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
@@ -1349,6 +1353,15 @@ template <typename Mutator>
     kb::scene::SurfaceCastComponent* surfaceCast = sceneContext.Scene().Components().SurfaceCasts().TryGet(entity);
     if (surfaceCast == nullptr || !mutator(*surfaceCast)) { sceneContext.CancelSceneEditTransaction(); return false; }
     sceneContext.Scene().Components().SurfaceCasts().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+template <typename Mutator>
+[[nodiscard]] bool EditFacingPanel(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::FacingPanelComponent* panel = sceneContext.Scene().Components().FacingPanels().TryGet(entity);
+    if (panel == nullptr || !mutator(*panel)) { sceneContext.CancelSceneEditTransaction(); return false; }
+    sceneContext.Scene().Components().FacingPanels().MarkModified(entity);
     static_cast<void>(sceneContext.CommitSceneEditTransaction());
     return true;
 }
@@ -1735,6 +1748,28 @@ template <typename Mutator>
     }
     return false;
 }
+[[nodiscard]] bool HandleFacingPanelClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::FacingPanelComponent* panel = sceneContext.Scene().Components().FacingPanels().TryGet(entity);
+    if (panel == nullptr) return false;
+    if (hit.property == InspectorPropertyId::FacingPanelEnabled) return EditFacingPanel(sceneContext, entity, "Toggle Facing Panel", [](auto& value) { value.enabled = !value.enabled; return kb::scene::IsFacingPanelComponentPersistable(value); });
+    if (hit.property == InspectorPropertyId::FacingPanelMode) return EditFacingPanel(sceneContext, entity, "Change Facing Panel Mode", [](auto& value) { value.mode = static_cast<kb::scene::FacingPanelMode>((static_cast<std::uint32_t>(value.mode) + 1U) % 4U); return true; });
+    if (!IsFacingPanelProperty(hit.property)) return false;
+    float value = 0.0F;
+    switch (hit.property) {
+    case InspectorPropertyId::FacingPanelTargetX: value = panel->targetPoint.x; break;
+    case InspectorPropertyId::FacingPanelTargetY: value = panel->targetPoint.y; break;
+    case InspectorPropertyId::FacingPanelTargetZ: value = panel->targetPoint.z; break;
+    case InspectorPropertyId::FacingPanelAxisX: value = panel->axis.x; break;
+    case InspectorPropertyId::FacingPanelAxisY: value = panel->axis.y; break;
+    case InspectorPropertyId::FacingPanelAxisZ: value = panel->axis.z; break;
+    case InspectorPropertyId::FacingPanelUpX: value = panel->up.x; break;
+    case InspectorPropertyId::FacingPanelUpY: value = panel->up.y; break;
+    case InspectorPropertyId::FacingPanelUpZ: value = panel->up.z; break;
+    default: return false;
+    }
+    sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(value));
+    return true;
+}
 
 [[nodiscard]] bool ApplyNavAgentText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
     float value = 0.0F;
@@ -2073,6 +2108,28 @@ template <typename Mutator>
         default: return false;
         }
         if (!kb::scene::IsSurfaceCastComponentPersistable(candidate)) return false;
+        value = candidate;
+        return true;
+    });
+}
+[[nodiscard]] bool ApplyFacingPanelText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    float parsed = 0.0F;
+    if (!ParseFloat(text, parsed) || !std::isfinite(parsed)) return false;
+    return EditFacingPanel(sceneContext, entity, "Edit Facing Panel", [property, parsed](kb::scene::FacingPanelComponent& value) {
+        kb::scene::FacingPanelComponent candidate = value;
+        switch (property) {
+        case InspectorPropertyId::FacingPanelTargetX: candidate.targetPoint.x = parsed; break;
+        case InspectorPropertyId::FacingPanelTargetY: candidate.targetPoint.y = parsed; break;
+        case InspectorPropertyId::FacingPanelTargetZ: candidate.targetPoint.z = parsed; break;
+        case InspectorPropertyId::FacingPanelAxisX: candidate.axis.x = parsed; break;
+        case InspectorPropertyId::FacingPanelAxisY: candidate.axis.y = parsed; break;
+        case InspectorPropertyId::FacingPanelAxisZ: candidate.axis.z = parsed; break;
+        case InspectorPropertyId::FacingPanelUpX: candidate.up.x = parsed; break;
+        case InspectorPropertyId::FacingPanelUpY: candidate.up.y = parsed; break;
+        case InspectorPropertyId::FacingPanelUpZ: candidate.up.z = parsed; break;
+        default: return false;
+        }
+        if (!kb::scene::IsFacingPanelComponentPersistable(candidate)) return false;
         value = candidate;
         return true;
     });
@@ -2450,6 +2507,11 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                     sceneContext.Scene().Components().SurfaceCasts().Remove(entity);
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
+            } else if (hit.section == InspectorSectionId::FacingPanel && sceneContext.Scene().Components().FacingPanels().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Facing Panel")) {
+                    sceneContext.Scene().Components().FacingPanels().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
             } else if (const std::optional<PhysicsComponentKind> kind = PhysicsKindForSection(hit.section); kind.has_value()) {
                 static_cast<void>(sceneContext.RemovePhysicsComponent(entity, *kind));
             }
@@ -2544,6 +2606,7 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     if (hit.section == InspectorSectionId::SecondaryFrame) return HandleSecondaryFrameClick(sceneContext, entity, hit);
     if (hit.section == InspectorSectionId::GeometrySwarm) return HandleGeometrySwarmClick(sceneContext, entity, hit);
     if (hit.section == InspectorSectionId::SurfaceCast) return HandleSurfaceCastClick(sceneContext, entity, hit);
+    if (hit.section == InspectorSectionId::FacingPanel) return HandleFacingPanelClick(sceneContext, entity, hit);
     if (hit.section == InspectorSectionId::Tags &&
         hit.kind == InspectorHitKind::TextField &&
         hit.property == InspectorPropertyId::TagsText) {
@@ -2875,6 +2938,11 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         }
         if (sceneContext.Scene().Entities().IsAlive(entity) && IsSurfaceCastProperty(inspector.EditedProperty())) {
             static_cast<void>(ApplySurfaceCastText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) && IsFacingPanelProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyFacingPanelText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
             inspector.EndTextEdit();
             return true;
         }

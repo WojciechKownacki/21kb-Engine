@@ -24,6 +24,7 @@
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/SurfaceCastComponent.hpp"
+#include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
@@ -98,6 +99,8 @@ public:
     [[nodiscard]] static const GeometrySwarmComponent* TryGetGeometrySwarm(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasSurfaceCast(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const SurfaceCastComponent* TryGetSurfaceCast(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasFacingPanel(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const FacingPanelComponent* TryGetFacingPanel(const Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static bool HasAudioSource(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const AudioSourceComponent* TryGetAudioSource(const Scene& scene, SceneEntity entity) noexcept;
