@@ -146,6 +146,44 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::MixVec3(hash, panel.up);
         ScenePrefabHashBuilder::Mix(hash, panel.enabled ? 1U : 0U);
     }
+    ScenePrefabHashBuilder::Mix(hash, components.spaceStroke.has_value() ? 1U : 0U);
+    if (components.spaceStroke.has_value()) {
+        const SpaceStrokeComponent& stroke = *components.spaceStroke;
+        ScenePrefabHashBuilder::Mix(hash, stroke.meshAssetId);
+        ScenePrefabHashBuilder::Mix(hash, stroke.materialAssetId);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(stroke.mode));
+        ScenePrefabHashBuilder::MixFloat(hash, stroke.width);
+        ScenePrefabHashBuilder::MixFloat(hash, stroke.cableSag);
+        ScenePrefabHashBuilder::Mix(hash, stroke.splineSegments);
+        ScenePrefabHashBuilder::Mix(hash, stroke.layer);
+        ScenePrefabHashBuilder::Mix(hash, stroke.castsShadow ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, stroke.receivesShadow ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, stroke.enabled ? 1U : 0U);
+    }
+    ScenePrefabHashBuilder::Mix(hash, components.historyRibbon.has_value() ? 1U : 0U);
+    if (components.historyRibbon.has_value()) {
+        const HistoryRibbonComponent& ribbon = *components.historyRibbon;
+        ScenePrefabHashBuilder::Mix(hash, ribbon.meshAssetId);
+        ScenePrefabHashBuilder::Mix(hash, ribbon.materialAssetId);
+        ScenePrefabHashBuilder::MixFloat(hash, ribbon.lifetimeSeconds);
+        ScenePrefabHashBuilder::MixFloat(hash, ribbon.width);
+        ScenePrefabHashBuilder::MixFloat(hash, ribbon.sampleIntervalSeconds);
+        ScenePrefabHashBuilder::Mix(hash, ribbon.layer);
+        ScenePrefabHashBuilder::Mix(hash, ribbon.castsShadow ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, ribbon.receivesShadow ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, ribbon.enabled ? 1U : 0U);
+    }
+    ScenePrefabHashBuilder::Mix(hash, components.lensEcho.has_value() ? 1U : 0U);
+    if (components.lensEcho.has_value()) {
+        const ScenePrefabLensEchoComponent& echo = *components.lensEcho;
+        ScenePrefabHashBuilder::Mix(hash, echo.sourceNodeStableId);
+        ScenePrefabHashBuilder::Mix(hash, echo.profileMaterialAssetId);
+        ScenePrefabHashBuilder::MixFloat(hash, echo.intensity);
+        ScenePrefabHashBuilder::MixFloat(hash, echo.size);
+        ScenePrefabHashBuilder::Mix(hash, echo.layer);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(echo.occlusionRule));
+        ScenePrefabHashBuilder::Mix(hash, echo.enabled ? 1U : 0U);
+    }
 
     ScenePrefabHashBuilder::Mix(hash, components.tags.has_value() ? 1U : 0U);
     if (components.tags.has_value()) {

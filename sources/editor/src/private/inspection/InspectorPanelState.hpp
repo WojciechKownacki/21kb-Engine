@@ -39,6 +39,8 @@ enum class InspectorSectionId : std::uint8_t {
     GeometrySwarm,
     SurfaceCast,
     FacingPanel,
+    SpaceStroke,
+    HistoryRibbon,
     Asset,
     Details,
     Folder,
@@ -67,6 +69,7 @@ enum class InspectorHitKind : std::uint8_t {
     ScrollbarTrack,
     ScrollbarThumb,
     ValueTypeOption,
+    TagOption,
 };
 
 // Animated disclosure groups are shared Inspector UI state. Add a value here
@@ -237,6 +240,7 @@ enum class InspectorPropertyId : std::uint16_t {
     NavObstacleCarve,
     NavObstacleEnabled,
     TagsText,
+    TagsRemove,
     RegionShapeKind,
     RegionShapeCenterX,
     RegionShapeCenterY,
@@ -351,6 +355,25 @@ enum class InspectorPropertyId : std::uint16_t {
     FacingPanelUpY,
     FacingPanelUpZ,
     FacingPanelEnabled,
+    SpaceStrokeMeshAssetId,
+    SpaceStrokeMaterialAssetId,
+    SpaceStrokeMode,
+    SpaceStrokeWidth,
+    SpaceStrokeCableSag,
+    SpaceStrokeSplineSegments,
+    SpaceStrokeLayer,
+    SpaceStrokeCastsShadow,
+    SpaceStrokeReceivesShadow,
+    SpaceStrokeEnabled,
+    HistoryRibbonMeshAssetId,
+    HistoryRibbonMaterialAssetId,
+    HistoryRibbonLifetimeSeconds,
+    HistoryRibbonWidth,
+    HistoryRibbonSampleIntervalSeconds,
+    HistoryRibbonLayer,
+    HistoryRibbonCastsShadow,
+    HistoryRibbonReceivesShadow,
+    HistoryRibbonEnabled,
     ComponentRemove,
     AddComponentButton,
     AddComponentSearch,
@@ -430,6 +453,11 @@ struct InspectorPanelState {
     [[nodiscard]] bool IsValueTypeDropdownOpen() const noexcept;
     void SetValueTypeDropdownHover(int index) noexcept;
     [[nodiscard]] int ValueTypeDropdownHover() const noexcept;
+    void ToggleTagsDropdown() noexcept;
+    void CloseTagsDropdown() noexcept;
+    [[nodiscard]] bool IsTagsDropdownOpen() const noexcept;
+    void SetTagsDropdownHover(int index) noexcept;
+    [[nodiscard]] int TagsDropdownHover() const noexcept;
     [[nodiscard]] bool IsDraggingFloat() const noexcept;
     [[nodiscard]] InspectorPropertyId DraggedProperty() const noexcept;
     [[nodiscard]] float DragStartValue() const noexcept;
@@ -494,6 +522,8 @@ private:
     int editIndex_ = -1;
     bool valueTypeDropdownOpen_ = false;
     int valueTypeDropdownHover_ = -1;
+    bool tagsDropdownOpen_ = false;
+    int tagsDropdownHover_ = -1;
     bool editSelectingAll_ = false;
     bool listeningForKey_ = false;
     int keyCaptureMappingIndex_ = -1;

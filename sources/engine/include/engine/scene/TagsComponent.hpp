@@ -27,7 +27,7 @@ inline bool TagsTextIsValid(std::string_view tags) noexcept {
     }
     for (const char character : tags) {
         const unsigned char byte = static_cast<unsigned char>(character);
-        if (byte == 0U || byte < 0x20U || byte == 0x7FU) {
+        if (byte == 0U || byte < 0x20U || byte == 0x7FU || character == ',' || character == ';') {
             return false;
         }
     }

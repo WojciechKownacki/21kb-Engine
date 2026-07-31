@@ -5,6 +5,9 @@
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
+#include "engine/scene/SceneTagCatalog.hpp"
+#include "engine/scene/Scene.hpp"
+
 namespace kb::scene {
 
 bool SceneComponentQueryService::HasTags(const Scene& scene, SceneEntity entity) noexcept {
@@ -23,6 +26,7 @@ void SceneComponentMutationService::SetTags(Scene& scene, SceneEntity entity, co
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.Tags().Set(entity, tags);
+        scene.Tags().RegisterAssignedTags(entity);
         MarkScenePrefabNodeDirty(state, entity);
     }
 }
@@ -39,6 +43,7 @@ void SceneComponentMutationService::MarkTagsModified(Scene& scene, SceneEntity e
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.Tags().MarkModified(entity);
+        scene.Tags().RegisterAssignedTags(entity);
         MarkScenePrefabNodeDirty(state, entity);
     }
 }

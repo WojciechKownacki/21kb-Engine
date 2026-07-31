@@ -238,6 +238,9 @@ public:
     kb::ecs::World world;
     SceneComponentRegistry components;
     SceneComponentStorage componentStorage;
+    // Single source of truth for authorable/runtime tag definitions. Entity
+    // TagsComponent instances only reference values from this list.
+    std::vector<std::string> tagDefinitions{ "Player", "Enemy", "Monster", "AI", "NPC", "Collision" };
     ScenePrefabRegistry prefabs;
     ScenePrefabInstanceRegistry prefabInstances;
     ScenePrefabInstantiationStats lastPrefabInstantiationStats;

@@ -64,6 +64,8 @@ namespace {
     if (components.geometrySwarm.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::GeometrySwarm);
     if (components.surfaceCast.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::SurfaceCast);
     if (components.facingPanel.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::FacingPanel);
+    if (components.spaceStroke.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::SpaceStroke);
+    if (components.historyRibbon.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::HistoryRibbon);
     if (components.behaviour.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Behaviour);
     }
@@ -188,6 +190,8 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         if (node.components.geometrySwarm.has_value()) archetype.geometrySwarms.push_back(*node.components.geometrySwarm);
         if (node.components.surfaceCast.has_value()) archetype.surfaceCasts.push_back(*node.components.surfaceCast);
         if (node.components.facingPanel.has_value()) archetype.facingPanels.push_back(*node.components.facingPanel);
+        if (node.components.spaceStroke.has_value()) archetype.spaceStrokes.push_back(*node.components.spaceStroke);
+        if (node.components.historyRibbon.has_value()) archetype.historyRibbons.push_back(*node.components.historyRibbon);
         if (node.components.behaviour.has_value()) {
             archetype.behaviours.push_back(*node.components.behaviour);
         }

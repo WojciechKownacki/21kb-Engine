@@ -23,12 +23,16 @@
 #include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
+#include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/HistoryRibbonComponent.hpp"
+#include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
 #include "engine/scene/SceneCharacterControllerComponents.hpp"
 #include "engine/scene/SceneColliderComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
 #include "engine/scene/SceneJointComponents.hpp"
 #include "engine/scene/SceneLightComponents.hpp"
 #include "engine/scene/SceneMeshRendererComponents.hpp"
@@ -48,6 +52,9 @@
 #include "engine/scene/SceneGeometrySwarmComponents.hpp"
 #include "engine/scene/SceneSurfaceCastComponents.hpp"
 #include "engine/scene/SceneFacingPanelComponents.hpp"
+#include "engine/scene/SceneSpaceStrokeComponents.hpp"
+#include "engine/scene/SceneHistoryRibbonComponents.hpp"
+#include "engine/scene/SceneLensEchoComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -244,7 +251,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 27> kComponentNames{
+constexpr std::array<std::string_view, 30> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
@@ -272,6 +279,9 @@ constexpr std::array<std::string_view, 27> kComponentNames{
     "Geometry Swarm",
     "Surface Cast",
     "Facing Panel",
+    "Kreska przestrzenna",
+    "Wst\xC4\x99" "ga historii",
+    "Echo soczewki",
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kRegionShapePropertyDescs{
@@ -383,6 +393,26 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kFacingPanelPropertyD
     ScriptSceneComponentPropertyDesc{ "targetPoint.x", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "targetPoint.y", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "targetPoint.z", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "axis.x", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "axis.y", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "axis.z", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "up.x", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "up.y", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "up.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kSpaceStrokePropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "meshAssetId", ScriptValueType::Hash }, ScriptSceneComponentPropertyDesc{ "materialAssetId", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "mode", ScriptValueType::Int }, ScriptSceneComponentPropertyDesc{ "width", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "cableSag", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "splineSegments", ScriptValueType::UInt32 },
+    ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::UInt32 }, ScriptSceneComponentPropertyDesc{ "castsShadow", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "receivesShadow", ScriptValueType::Bool }, ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+constexpr std::array<ScriptSceneComponentPropertyDesc, 9> kHistoryRibbonPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "meshAssetId", ScriptValueType::Hash }, ScriptSceneComponentPropertyDesc{ "materialAssetId", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "lifetimeSeconds", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "width", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "sampleIntervalSeconds", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::UInt32 },
+    ScriptSceneComponentPropertyDesc{ "castsShadow", ScriptValueType::Bool }, ScriptSceneComponentPropertyDesc{ "receivesShadow", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+constexpr std::array<ScriptSceneComponentPropertyDesc, 7> kLensEchoPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "sourceEntityId", ScriptValueType::Hash }, ScriptSceneComponentPropertyDesc{ "profileMaterialAssetId", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "intensity", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "size", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::UInt32 }, ScriptSceneComponentPropertyDesc{ "occlusionRule", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
@@ -944,6 +974,34 @@ constexpr std::array<FieldBinding, 11> kFacingPanelFields{
     FieldBinding{ "up.z", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::FacingPanelComponent*>(c)->up.z }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Float || !std::isfinite(v.AsFloat())) return false; static_cast<kb::scene::FacingPanelComponent*>(c)->up.z = v.AsFloat(); return true; } },
     KB_BOOL(kb::scene::FacingPanelComponent, enabled),
 };
+constexpr std::array<FieldBinding, 10> kSpaceStrokeFields{
+    FieldBinding{ "meshAssetId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SpaceStrokeComponent*>(c)->meshAssetId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::SpaceStrokeComponent*>(c)->meshAssetId = v.AsUInt64(); return true; } },
+    FieldBinding{ "materialAssetId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SpaceStrokeComponent*>(c)->materialAssetId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::SpaceStrokeComponent*>(c)->materialAssetId = v.AsUInt64(); return true; } },
+    FieldBinding{ "mode", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::SpaceStrokeComponent*>(c)->mode) }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() > static_cast<int>(kb::scene::SpaceStrokeMode::Cable)) return false; static_cast<kb::scene::SpaceStrokeComponent*>(c)->mode = static_cast<kb::scene::SpaceStrokeMode>(v.AsInt()); return true; } },
+    FieldBinding{ "width", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SpaceStrokeComponent*>(c)->width }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Float || !std::isfinite(v.AsFloat())) return false; static_cast<kb::scene::SpaceStrokeComponent*>(c)->width = v.AsFloat(); return true; } },
+    FieldBinding{ "cableSag", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SpaceStrokeComponent*>(c)->cableSag }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Float || !std::isfinite(v.AsFloat())) return false; static_cast<kb::scene::SpaceStrokeComponent*>(c)->cableSag = v.AsFloat(); return true; } },
+    FieldBinding{ "splineSegments", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<std::uint32_t>(static_cast<const kb::scene::SpaceStrokeComponent*>(c)->splineSegments) }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::UInt32 || v.AsUInt32() > UINT8_MAX) return false; static_cast<kb::scene::SpaceStrokeComponent*>(c)->splineSegments = static_cast<std::uint8_t>(v.AsUInt32()); return true; } },
+    FieldBinding{ "layer", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SpaceStrokeComponent*>(c)->layer }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::UInt32) return false; static_cast<kb::scene::SpaceStrokeComponent*>(c)->layer = v.AsUInt32(); return true; } },
+    KB_BOOL(kb::scene::SpaceStrokeComponent, castsShadow), KB_BOOL(kb::scene::SpaceStrokeComponent, receivesShadow), KB_BOOL(kb::scene::SpaceStrokeComponent, enabled),
+};
+constexpr std::array<FieldBinding, 9> kHistoryRibbonFields{
+    FieldBinding{ "meshAssetId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::HistoryRibbonComponent*>(c)->meshAssetId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::HistoryRibbonComponent*>(c)->meshAssetId = v.AsUInt64(); return true; } },
+    FieldBinding{ "materialAssetId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::HistoryRibbonComponent*>(c)->materialAssetId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::HistoryRibbonComponent*>(c)->materialAssetId = v.AsUInt64(); return true; } },
+    FieldBinding{ "lifetimeSeconds", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::HistoryRibbonComponent*>(c)->lifetimeSeconds }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Float || !std::isfinite(v.AsFloat())) return false; static_cast<kb::scene::HistoryRibbonComponent*>(c)->lifetimeSeconds = v.AsFloat(); return true; } },
+    FieldBinding{ "width", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::HistoryRibbonComponent*>(c)->width }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Float || !std::isfinite(v.AsFloat())) return false; static_cast<kb::scene::HistoryRibbonComponent*>(c)->width = v.AsFloat(); return true; } },
+    FieldBinding{ "sampleIntervalSeconds", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::HistoryRibbonComponent*>(c)->sampleIntervalSeconds }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Float || !std::isfinite(v.AsFloat())) return false; static_cast<kb::scene::HistoryRibbonComponent*>(c)->sampleIntervalSeconds = v.AsFloat(); return true; } },
+    FieldBinding{ "layer", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::HistoryRibbonComponent*>(c)->layer }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::UInt32) return false; static_cast<kb::scene::HistoryRibbonComponent*>(c)->layer = v.AsUInt32(); return true; } },
+    KB_BOOL(kb::scene::HistoryRibbonComponent, castsShadow), KB_BOOL(kb::scene::HistoryRibbonComponent, receivesShadow), KB_BOOL(kb::scene::HistoryRibbonComponent, enabled),
+};
+constexpr std::array<FieldBinding, 7> kLensEchoFields{
+    FieldBinding{ "sourceEntityId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::LensEchoComponent*>(c)->sourceEntityId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::LensEchoComponent*>(c)->sourceEntityId = v.AsUInt64(); return true; } },
+    FieldBinding{ "profileMaterialAssetId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::LensEchoComponent*>(c)->profileMaterialAssetId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::LensEchoComponent*>(c)->profileMaterialAssetId = v.AsUInt64(); return true; } },
+    FieldBinding{ "intensity", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::LensEchoComponent*>(c)->intensity }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Float || !std::isfinite(v.AsFloat())) return false; static_cast<kb::scene::LensEchoComponent*>(c)->intensity = v.AsFloat(); return true; } },
+    FieldBinding{ "size", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::LensEchoComponent*>(c)->size }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Float || !std::isfinite(v.AsFloat())) return false; static_cast<kb::scene::LensEchoComponent*>(c)->size = v.AsFloat(); return true; } },
+    FieldBinding{ "layer", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::LensEchoComponent*>(c)->layer }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::UInt32) return false; static_cast<kb::scene::LensEchoComponent*>(c)->layer = v.AsUInt32(); return true; } },
+    FieldBinding{ "occlusionRule", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::LensEchoComponent*>(c)->occlusionRule) }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() > static_cast<int>(kb::scene::LensEchoOcclusionRule::AlwaysVisible)) return false; static_cast<kb::scene::LensEchoComponent*>(c)->occlusionRule = static_cast<kb::scene::LensEchoOcclusionRule>(v.AsInt()); return true; } },
+    KB_BOOL(kb::scene::LensEchoComponent, enabled),
+};
 
 #undef KB_BOOL
 #undef KB_INT
@@ -1032,6 +1090,9 @@ void MarkSecondaryFrameModified(kb::scene::Scene& scene, kb::scene::SceneEntity 
 void MarkGeometrySwarmModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().GeometrySwarms().MarkModified(entity); }
 void MarkSurfaceCastModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().SurfaceCasts().MarkModified(entity); }
 void MarkFacingPanelModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().FacingPanels().MarkModified(entity); }
+void MarkSpaceStrokeModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().SpaceStrokes().MarkModified(entity); }
+void MarkHistoryRibbonModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().HistoryRibbons().MarkModified(entity); }
+void MarkLensEchoModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().LensEchoes().MarkModified(entity); }
 
 [[nodiscard]] ComponentAccess AccessComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
     if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
@@ -1145,6 +1206,18 @@ void MarkFacingPanelModified(kb::scene::Scene& scene, kb::scene::SceneEntity ent
         kb::scene::FacingPanelComponent* component = scene.Components().FacingPanels().TryGet(entity);
         return ComponentAccess{ component, component, kFacingPanelFields, &MarkFacingPanelModified };
     }
+    if (componentName == "Kreska przestrzenna") {
+        kb::scene::SpaceStrokeComponent* component = scene.Components().SpaceStrokes().TryGet(entity);
+        return ComponentAccess{ component, component, kSpaceStrokeFields, &MarkSpaceStrokeModified };
+    }
+    if (componentName == "Wst\xC4\x99" "ga historii") {
+        kb::scene::HistoryRibbonComponent* component = scene.Components().HistoryRibbons().TryGet(entity);
+        return ComponentAccess{ component, component, kHistoryRibbonFields, &MarkHistoryRibbonModified };
+    }
+    if (componentName == "Echo soczewki") {
+        kb::scene::LensEchoComponent* component = scene.Components().LensEchoes().TryGet(entity);
+        return ComponentAccess{ component, component, kLensEchoFields, &MarkLensEchoModified };
+    }
     return {};
 }
 
@@ -1177,6 +1250,9 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "Geometry Swarm") return kGeometrySwarmPropertyDescs;
     if (componentName == "Surface Cast") return kSurfaceCastPropertyDescs;
     if (componentName == "Facing Panel") return kFacingPanelPropertyDescs;
+    if (componentName == "Kreska przestrzenna") return kSpaceStrokePropertyDescs;
+    if (componentName == "Wst\xC4\x99" "ga historii") return kHistoryRibbonPropertyDescs;
+    if (componentName == "Echo soczewki") return kLensEchoPropertyDescs;
     if (componentName == "Camera") {
         return kCameraPropertyDescs;
     }
@@ -1301,9 +1377,31 @@ ScriptSceneComponentMutationResult ScriptSceneComponentApi::SetProperty(
         if (!field->write(&candidate, value)) return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
         if (!kb::scene::IsFacingPanelComponentPersistable(candidate)) return ScriptSceneComponentMutationResult{ .error = "Facing Panel values must remain valid" };
     }
+    if (componentName == "Kreska przestrzenna") {
+        const kb::scene::SpaceStrokeComponent& stroke = *static_cast<const kb::scene::SpaceStrokeComponent*>(component.immutable);
+        kb::scene::SpaceStrokeComponent candidate = stroke;
+        if (!field->write(&candidate, value)) return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
+        if (!kb::scene::IsSpaceStrokeComponentPersistable(candidate)) return ScriptSceneComponentMutationResult{ .error = "Kreska przestrzenna values must remain valid" };
+    }
+    if (componentName == "Wst\xC4\x99" "ga historii") {
+        const kb::scene::HistoryRibbonComponent& ribbon = *static_cast<const kb::scene::HistoryRibbonComponent*>(component.immutable);
+        kb::scene::HistoryRibbonComponent candidate = ribbon;
+        if (!field->write(&candidate, value)) return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
+        if (!kb::scene::IsHistoryRibbonComponentPersistable(candidate)) return ScriptSceneComponentMutationResult{ .error = "Wst\xC4\x99" "ga historii values must remain valid" };
+    }
+    if (componentName == "Echo soczewki") {
+        const kb::scene::LensEchoComponent& echo = *static_cast<const kb::scene::LensEchoComponent*>(component.immutable);
+        kb::scene::LensEchoComponent candidate = echo;
+        if (!field->write(&candidate, value)) return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
+        if (!kb::scene::IsLensEchoComponentPersistable(candidate)) return ScriptSceneComponentMutationResult{ .error = "Echo soczewki values must remain valid" };
+    }
 
     if (!field->write(component.mutableComponent, value)) {
         return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
+    }
+
+    if (componentName == "Tags" && propertyName == "text") {
+        scene.Tags().RegisterAssignedTags(entity);
     }
 
     if (component.markModified != nullptr) {

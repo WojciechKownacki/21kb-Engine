@@ -267,6 +267,44 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         WriteVec3(output, "facingPanel.up", panel.up);
         output << "facingPanel.enabled=" << (panel.enabled ? 1 : 0) << '\n';
     }
+    output << "spaceStroke=" << (components.spaceStroke.has_value() ? 1 : 0) << '\n';
+    if (components.spaceStroke.has_value()) {
+        const SpaceStrokeComponent& stroke = *components.spaceStroke;
+        output << "spaceStroke.meshAssetId=" << stroke.meshAssetId << '\n';
+        output << "spaceStroke.materialAssetId=" << stroke.materialAssetId << '\n';
+        output << "spaceStroke.mode=" << static_cast<std::uint32_t>(stroke.mode) << '\n';
+        output << "spaceStroke.width=" << stroke.width << '\n';
+        output << "spaceStroke.cableSag=" << stroke.cableSag << '\n';
+        output << "spaceStroke.splineSegments=" << static_cast<std::uint32_t>(stroke.splineSegments) << '\n';
+        output << "spaceStroke.layer=" << stroke.layer << '\n';
+        output << "spaceStroke.castsShadow=" << (stroke.castsShadow ? 1 : 0) << '\n';
+        output << "spaceStroke.receivesShadow=" << (stroke.receivesShadow ? 1 : 0) << '\n';
+        output << "spaceStroke.enabled=" << (stroke.enabled ? 1 : 0) << '\n';
+    }
+    output << "historyRibbon=" << (components.historyRibbon.has_value() ? 1 : 0) << '\n';
+    if (components.historyRibbon.has_value()) {
+        const HistoryRibbonComponent& ribbon = *components.historyRibbon;
+        output << "historyRibbon.meshAssetId=" << ribbon.meshAssetId << '\n';
+        output << "historyRibbon.materialAssetId=" << ribbon.materialAssetId << '\n';
+        output << "historyRibbon.lifetimeSeconds=" << ribbon.lifetimeSeconds << '\n';
+        output << "historyRibbon.width=" << ribbon.width << '\n';
+        output << "historyRibbon.sampleIntervalSeconds=" << ribbon.sampleIntervalSeconds << '\n';
+        output << "historyRibbon.layer=" << ribbon.layer << '\n';
+        output << "historyRibbon.castsShadow=" << (ribbon.castsShadow ? 1 : 0) << '\n';
+        output << "historyRibbon.receivesShadow=" << (ribbon.receivesShadow ? 1 : 0) << '\n';
+        output << "historyRibbon.enabled=" << (ribbon.enabled ? 1 : 0) << '\n';
+    }
+    output << "lensEcho=" << (components.lensEcho.has_value() ? 1 : 0) << '\n';
+    if (components.lensEcho.has_value()) {
+        const ScenePrefabLensEchoComponent& echo = *components.lensEcho;
+        output << "lensEcho.sourceNodeStableId=" << echo.sourceNodeStableId << '\n';
+        output << "lensEcho.profileMaterialAssetId=" << echo.profileMaterialAssetId << '\n';
+        output << "lensEcho.intensity=" << echo.intensity << '\n';
+        output << "lensEcho.size=" << echo.size << '\n';
+        output << "lensEcho.layer=" << echo.layer << '\n';
+        output << "lensEcho.occlusionRule=" << static_cast<std::uint32_t>(echo.occlusionRule) << '\n';
+        output << "lensEcho.enabled=" << (echo.enabled ? 1 : 0) << '\n';
+    }
 
     output << "behaviour=" << (components.behaviour.has_value() ? 1 : 0) << '\n';
     if (components.behaviour.has_value()) {

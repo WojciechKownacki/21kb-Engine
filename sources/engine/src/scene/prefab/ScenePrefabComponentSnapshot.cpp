@@ -98,6 +98,23 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const FacingPanelComponent* facingPanel = sceneComponents.FacingPanels().TryGet(entity)) {
         components.facingPanel = *facingPanel;
     }
+    if (const SpaceStrokeComponent* spaceStroke = sceneComponents.SpaceStrokes().TryGet(entity)) {
+        components.spaceStroke = *spaceStroke;
+    }
+    if (const HistoryRibbonComponent* historyRibbon = sceneComponents.HistoryRibbons().TryGet(entity)) {
+        components.historyRibbon = *historyRibbon;
+    }
+    if (const LensEchoComponent* lensEcho = sceneComponents.LensEchoes().TryGet(entity)) {
+        components.lensEcho = ScenePrefabLensEchoComponent{
+            .sourceNodeStableId = lensEcho->sourceEntityId,
+            .profileMaterialAssetId = lensEcho->profileMaterialAssetId,
+            .intensity = lensEcho->intensity,
+            .size = lensEcho->size,
+            .layer = lensEcho->layer,
+            .occlusionRule = lensEcho->occlusionRule,
+            .enabled = lensEcho->enabled,
+        };
+    }
 
     if (const BehaviourComponent* behaviour = sceneComponents.Behaviours().TryGet(entity)) {
         components.behaviour = *behaviour;

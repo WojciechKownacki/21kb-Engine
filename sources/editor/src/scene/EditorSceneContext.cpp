@@ -23,6 +23,11 @@
 #include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
+#include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/HistoryRibbonComponent.hpp"
+#include "engine/scene/TagsComponent.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
+#include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
@@ -8265,6 +8270,37 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
             return true;
         });
     }
+    if (componentId == "Kreska przestrzenna") {
+        if (scene_->Components().SpaceStrokes().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Kreska przestrzenna component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Kreska przestrzenna", [this, entity]() {
+            if (!scene_->Components().GuideCurves().Has(entity)) scene_->Components().GuideCurves().Set(entity, kb::scene::GuideCurveComponent{});
+            scene_->Components().SpaceStrokes().Set(entity, kb::scene::SpaceStrokeComponent{});
+            return true;
+        });
+    }
+    if (componentId == "Wst\xC4\x99" "ga historii") {
+        if (scene_->Components().HistoryRibbons().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Wst\xC4\x99" "ga historii component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Wst\xC4\x99" "ga historii", [this, entity]() {
+            scene_->Components().HistoryRibbons().Set(entity, kb::scene::HistoryRibbonComponent{});
+            return true;
+        });
+    }
+    if (componentId == "Echo soczewki") {
+        if (scene_->Components().LensEchoes().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has an Echo soczewki component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Echo soczewki", [this, entity]() {
+            scene_->Components().LensEchoes().Set(entity, kb::scene::LensEchoComponent{});
+            return true;
+        });
+    }
     if (componentId == "NavAgent") {
         if (scene_->Components().NavAgents().Has(entity)) {
             console_.Warning("Inspector", "Entity already has a Nav Agent component.");
@@ -8290,28 +8326,44 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
     return false;
 }
 
-bool EditorSceneContext::SetTagsText(kb::scene::SceneEntity entity, std::string_view text) {
-    if (!entity.IsValid() || !scene_->Components().Tags().Has(entity) || !kb::scene::TagsTextIsValid(text)) {
+std::vector<std::string> EditorSceneContext::EntityTags(kb::scene::SceneEntity entity) const {
+    std::vector<std::string> assigned;
+    for (const std::string& tag : scene_->Tags().Names()) {
+        if (scene_->Tags().IsAssigned(entity, tag)) {
+            assigned.push_back(tag);
+        }
+    }
+    return assigned;
+}
+
+std::vector<std::string> EditorSceneContext::KnownSceneTags() const {
+    const std::span<const std::string> names = scene_->Tags().Names();
+    return std::vector<std::string>{ names.begin(), names.end() };
+}
+
+bool EditorSceneContext::SetEntityTagSelected(kb::scene::SceneEntity entity, std::string_view tagText, bool selected) {
+    if (!entity.IsValid() || !scene_->Entities().IsAlive(entity)) {
         return false;
     }
-    const std::string authoredText{ text };
-    return ExecuteSceneCommand("Edit Object Classification", [this, entity, authoredText]() {
-        kb::scene::TagsComponent* tags = scene_->Components().Tags().TryGet(entity);
-        if (tags == nullptr || !kb::scene::TrySetTagsText(*tags, authoredText)) {
-            return false;
-        }
-        scene_->Components().Tags().MarkModified(entity);
-        return true;
+    const std::string tag{ tagText };
+    return ExecuteSceneCommand(selected ? "Assign Tag" : "Remove Tag", [this, entity, tag, selected]() {
+        return scene_->Tags().SetAssigned(entity, tag, selected);
     });
 }
 
 bool EditorSceneContext::RemoveTagsFromEntity(kb::scene::SceneEntity entity) {
-    if (!entity.IsValid() || !scene_->Components().Tags().Has(entity)) {
+    return ExecuteSceneCommand("Remove Tags", [this, entity]() {
+        return scene_->Tags().ClearAssignments(entity);
+    });
+}
+
+bool EditorSceneContext::DeleteSceneTag(std::string_view tagText) {
+    const std::string tag{ tagText };
+    if (tag.empty()) {
         return false;
     }
-    return ExecuteSceneCommand("Remove Object Classification", [this, entity]() {
-        scene_->Components().Tags().Remove(entity);
-        return true;
+    return ExecuteSceneCommand("Delete Tag", [this, tag]() {
+        return scene_->Tags().Undefine(tag);
     });
 }
 
