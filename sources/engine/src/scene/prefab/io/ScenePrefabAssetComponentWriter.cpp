@@ -249,6 +249,15 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "geometrySwarm.receivesShadow=" << (swarm.receivesShadow ? 1 : 0) << '\n';
         output << "geometrySwarm.enabled=" << (swarm.enabled ? 1 : 0) << '\n';
     }
+    output << "surfaceCast=" << (components.surfaceCast.has_value() ? 1 : 0) << '\n';
+    if (components.surfaceCast.has_value()) {
+        const SurfaceCastComponent& surfaceCast = *components.surfaceCast;
+        output << "surfaceCast.materialAssetId=" << surfaceCast.materialAssetId << '\n';
+        output << "surfaceCast.receiverLayerMask=" << surfaceCast.receiverLayerMask << '\n';
+        output << "surfaceCast.order=" << surfaceCast.order << '\n';
+        output << "surfaceCast.content=" << static_cast<std::uint32_t>(surfaceCast.content) << '\n';
+        output << "surfaceCast.enabled=" << (surfaceCast.enabled ? 1 : 0) << '\n';
+    }
 
     output << "behaviour=" << (components.behaviour.has_value() ? 1 : 0) << '\n';
     if (components.behaviour.has_value()) {

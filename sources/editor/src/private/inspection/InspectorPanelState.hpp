@@ -37,6 +37,7 @@ enum class InspectorSectionId : std::uint8_t {
     RegionPortal,
     SecondaryFrame,
     GeometrySwarm,
+    SurfaceCast,
     Asset,
     Details,
     Folder,
@@ -75,7 +76,7 @@ enum class InspectorDisclosureId : std::uint8_t {
     Count,
 };
 
-enum class InspectorPropertyId : std::uint8_t {
+enum class InspectorPropertyId : std::uint16_t {
     None,
     EntityName,
     EntityVisible,
@@ -333,6 +334,11 @@ enum class InspectorPropertyId : std::uint8_t {
     GeometrySwarmCastsShadow,
     GeometrySwarmReceivesShadow,
     GeometrySwarmEnabled,
+    SurfaceCastMaterialAssetId,
+    SurfaceCastReceiverLayerMask,
+    SurfaceCastOrder,
+    SurfaceCastContent,
+    SurfaceCastEnabled,
     ComponentRemove,
     AddComponentButton,
     AddComponentSearch,

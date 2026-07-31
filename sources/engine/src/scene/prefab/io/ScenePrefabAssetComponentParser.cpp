@@ -327,6 +327,22 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseSurfaceCast(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "surfaceCast", present)) return false;
+    if (!present) return true;
+    SurfaceCastComponent surfaceCast{};
+    std::uint32_t content = 0U;
+    if (!ParseField(fields, "surfaceCast.materialAssetId", surfaceCast.materialAssetId) ||
+        !ParseField(fields, "surfaceCast.receiverLayerMask", surfaceCast.receiverLayerMask) ||
+        !ParseField(fields, "surfaceCast.order", surfaceCast.order) || !ParseField(fields, "surfaceCast.content", content) ||
+        !ParseOptionalBool(fields, "surfaceCast.enabled", surfaceCast.enabled) || content > static_cast<std::uint32_t>(SurfaceCastContent::Detail)) return false;
+    surfaceCast.content = static_cast<SurfaceCastContent>(content);
+    if (!IsSurfaceCastComponentPersistable(surfaceCast)) return false;
+    components.surfaceCast = surfaceCast;
+    return true;
+}
+
 [[nodiscard]] bool ParseCharacterController(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool hasCharacterController = false;
     if (!ParseOptionalComponentFlag(fields, "characterController", hasCharacterController)) {
@@ -520,6 +536,7 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseRegionPortal(fields, components)
         && ParseAuxFrame(fields, components)
         && ParseGeometrySwarm(fields, components)
+        && ParseSurfaceCast(fields, components)
         && ParseCharacterController(fields, components)
         && ParseJoint(fields, components)
         && ScenePrefabAssetTagsParser::Parse(fields, components)

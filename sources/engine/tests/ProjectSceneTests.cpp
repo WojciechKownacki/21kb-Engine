@@ -16,6 +16,7 @@
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/GeometrySwarmComponent.hpp"
+#include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -485,6 +486,22 @@ void RunSceneGeometrySwarmReflectionSerializationTest() {
         "Geometry Swarm reflection did not roundtrip authored state");
 }
 
+void RunSceneSurfaceCastReflectionSerializationTest() {
+    kb::scene::Scene source;
+    const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Surface Cast" });
+    source.Components().SurfaceCasts().Set(sourceEntity, kb::scene::SurfaceCastComponent{ .materialAssetId = 23U, .receiverLayerMask = 6U, .order = -4, .content = kb::scene::SurfaceCastContent::Detail, .enabled = true });
+    kb::ecs::World& sourceWorld = source.Runtime().EcsWorld();
+    const kb::ecs::ComponentReflection* reflection = sourceWorld.Reflection(kb::scene::SurfaceCastComponent::StableId);
+    Require(reflection != nullptr && reflection->FindField("receiverLayerMask") != nullptr && reflection->FindField("order") != nullptr, "Surface Cast reflection was not registered under its stable id");
+    kb::ecs::SerializedComponent serialized;
+    Require(sourceWorld.SerializeComponent(sourceEntity, sourceWorld.Component<kb::scene::SurfaceCastComponent>(), serialized), "Surface Cast reflection serialization failed");
+    kb::scene::Scene target;
+    const kb::scene::SceneEntity targetEntity = target.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Surface Cast Target" });
+    Require(target.Runtime().EcsWorld().ApplySerializedComponent(targetEntity, serialized), "Surface Cast reflection apply failed");
+    const kb::scene::SurfaceCastComponent* restored = target.Components().SurfaceCasts().TryGet(targetEntity);
+    Require(restored != nullptr && restored->materialAssetId == 23U && restored->receiverLayerMask == 6U && restored->order == -4 && restored->content == kb::scene::SurfaceCastContent::Detail && restored->enabled, "Surface Cast reflection did not roundtrip authored state");
+}
+
 void RunSceneAudioSourceComponentReflectionSerializationTest() {
     kb::scene::Scene source;
     const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "AudioSource" });
@@ -720,6 +737,7 @@ void RunProjectSceneTests() {
     RunSceneVisibilityCellReflectionSerializationTest();
     RunSceneSecondaryFrameReflectionSerializationTest();
     RunSceneGeometrySwarmReflectionSerializationTest();
+    RunSceneSurfaceCastReflectionSerializationTest();
     RunSceneAudioListenerComponentReflectionSerializationTest();
     RunSceneAudioSourceComponentReflectionSerializationTest();
     RunSceneAudioListenerPrefabRoundTripTest();

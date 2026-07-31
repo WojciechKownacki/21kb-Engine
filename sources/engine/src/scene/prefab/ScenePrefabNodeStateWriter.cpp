@@ -179,6 +179,10 @@ namespace {
         lhs.columns == rhs.columns && lhs.rows == rhs.rows && lhs.layers == rhs.layers && Equals(lhs.spacing, rhs.spacing) &&
         lhs.instanceScale == rhs.instanceScale && lhs.layer == rhs.layer && lhs.castsShadow == rhs.castsShadow && lhs.receivesShadow == rhs.receivesShadow && lhs.enabled == rhs.enabled;
 }
+[[nodiscard]] bool Equals(const SurfaceCastComponent& lhs, const SurfaceCastComponent& rhs) noexcept {
+    return lhs.materialAssetId == rhs.materialAssetId && lhs.receiverLayerMask == rhs.receiverLayerMask &&
+        lhs.order == rhs.order && lhs.content == rhs.content && lhs.enabled == rhs.enabled;
+}
 
 template <typename T, typename Components>
 void WriteOptionalComponent(Components components, SceneEntity entity, const std::optional<T>& component) {
@@ -248,6 +252,7 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , regionPortals(scene.Components().RegionPortals())
     , auxFrames(scene.Components().AuxFrames())
     , geometrySwarms(scene.Components().GeometrySwarms())
+    , surfaceCasts(scene.Components().SurfaceCasts())
     , behaviours(scene.Components().Behaviours())
     , audioSources(scene.Components().AudioSources())
     , audioListeners(scene.Components().AudioListeners())
@@ -326,6 +331,7 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     if (!node.components.regionPortal.has_value()) context.regionPortals.Remove(entity);
     WriteOptionalComponent(context.auxFrames, entity, node.components.auxFrame);
     WriteOptionalComponent(context.geometrySwarms, entity, node.components.geometrySwarm);
+    WriteOptionalComponent(context.surfaceCasts, entity, node.components.surfaceCast);
     if (!componentMask.available || !componentMask.matches || node.components.behaviour.has_value()) {
         WriteOptionalComponent(context.behaviours, entity, node.components.behaviour);
     }

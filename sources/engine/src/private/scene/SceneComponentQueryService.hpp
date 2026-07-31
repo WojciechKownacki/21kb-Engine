@@ -23,6 +23,7 @@
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
+#include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
@@ -95,6 +96,8 @@ public:
     [[nodiscard]] static const AuxFrameComponent* TryGetAuxFrame(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasGeometrySwarm(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const GeometrySwarmComponent* TryGetGeometrySwarm(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasSurfaceCast(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const SurfaceCastComponent* TryGetSurfaceCast(const Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static bool HasAudioSource(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const AudioSourceComponent* TryGetAudioSource(const Scene& scene, SceneEntity entity) noexcept;

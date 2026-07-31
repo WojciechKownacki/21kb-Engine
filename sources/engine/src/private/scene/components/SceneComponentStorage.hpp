@@ -15,6 +15,7 @@
 #include "scene/components/SceneRegionPortalComponentStore.hpp"
 #include "scene/components/SceneAuxFrameComponentStore.hpp"
 #include "scene/components/SceneGeometrySwarmComponentStore.hpp"
+#include "scene/components/SceneSurfaceCastComponentStore.hpp"
 #include "scene/components/SceneAudioListenerComponentStore.hpp"
 #include "scene/components/SceneAudioSourceComponentStore.hpp"
 #include "scene/components/SceneAnimatorComponentStore.hpp"
@@ -97,6 +98,8 @@ public:
     [[nodiscard]] SceneAuxFrameComponentStore& AuxFrames() noexcept;
     [[nodiscard]] const SceneGeometrySwarmComponentStore& GeometrySwarms() const noexcept;
     [[nodiscard]] SceneGeometrySwarmComponentStore& GeometrySwarms() noexcept;
+    [[nodiscard]] const SceneSurfaceCastComponentStore& SurfaceCasts() const noexcept;
+    [[nodiscard]] SceneSurfaceCastComponentStore& SurfaceCasts() noexcept;
     [[nodiscard]] const SceneAudioSourceComponentStore& AudioSources() const noexcept;
     [[nodiscard]] SceneAudioSourceComponentStore& AudioSources() noexcept;
     [[nodiscard]] const SceneAudioListenerComponentStore& AudioListeners() const noexcept;
@@ -133,6 +136,7 @@ private:
     SceneRegionPortalComponentStore regionPortals_;
     SceneAuxFrameComponentStore auxFrames_;
     SceneGeometrySwarmComponentStore geometrySwarms_;
+    SceneSurfaceCastComponentStore surfaceCasts_;
     SceneAudioSourceComponentStore audioSources_;
     SceneAudioListenerComponentStore audioListeners_;
     SceneAnimatorComponentStore animators_;

@@ -26,6 +26,7 @@
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/GeometrySwarmComponent.hpp"
+#include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
@@ -1742,6 +1743,15 @@ void PaintGeometrySwarmSection(HDC dc, RECT content, int& y, const EditorTheme& 
     section.Bool("Enabled", swarm.enabled, InspectorPropertyId::GeometrySwarmEnabled);
     y = section.Bottom() + kSectionGap;
 }
+void PaintSurfaceCastSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::SurfaceCastComponent& surfaceCast) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::SurfaceCast, HeroIconKind::Cube, "Surface Cast", true);
+    section.Field("Material", std::to_string(surfaceCast.materialAssetId), InspectorPropertyId::SurfaceCastMaterialAssetId);
+    section.Field("Receiver Layers", std::to_string(surfaceCast.receiverLayerMask), InspectorPropertyId::SurfaceCastReceiverLayerMask);
+    section.Field("Order", std::to_string(surfaceCast.order), InspectorPropertyId::SurfaceCastOrder);
+    section.Field("Content", surfaceCast.content == kb::scene::SurfaceCastContent::Material ? "Material" : "Detail", InspectorPropertyId::SurfaceCastContent);
+    section.Bool("Enabled", surfaceCast.enabled, InspectorPropertyId::SurfaceCastEnabled);
+    y = section.Bottom() + kSectionGap;
+}
 
 constexpr int kCameraSectionRows = 13;
 
@@ -2137,6 +2147,10 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         const int h = SectionHeight(inspector, InspectorSectionId::GeometrySwarm, 14);
         if (y < content.bottom && y + h > content.top) PaintGeometrySwarmSection(dc, content, y, theme, inspector, *swarm); else y += h + kSectionGap;
     }
+    if (const kb::scene::SurfaceCastComponent* surfaceCast = scene.Components().SurfaceCasts().TryGet(selected); surfaceCast != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::SurfaceCast, 5);
+        if (y < content.bottom && y + h > content.top) PaintSurfaceCastSection(dc, content, y, theme, inspector, *surfaceCast); else y += h + kSectionGap;
+    }
 
     if (sceneContext.HasEntityScript(selected)) {
         const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);
@@ -2383,6 +2397,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (scene.Components().RegionPortals().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::RegionPortal, 4) + kSectionGap;
     if (scene.Components().AuxFrames().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::SecondaryFrame, 9) + kSectionGap;
     if (scene.Components().GeometrySwarms().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::GeometrySwarm, 14) + kSectionGap;
+    if (scene.Components().SurfaceCasts().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::SurfaceCast, 5) + kSectionGap;
     if (sceneContext.HasEntityScript(selected)) {
         const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariables(selected).size());
         height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
@@ -3515,6 +3530,19 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                 AdvanceRow(y);
             }
         }
+        y += kSectionGap;
+    }
+    if (sceneContext.Scene().Components().SurfaceCasts().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::SurfaceCast, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::SurfaceCast)) {
+            constexpr std::array<InspectorPropertyId, 5> properties{ InspectorPropertyId::SurfaceCastMaterialAssetId, InspectorPropertyId::SurfaceCastReceiverLayerMask, InspectorPropertyId::SurfaceCastOrder, InspectorPropertyId::SurfaceCastContent, InspectorPropertyId::SurfaceCastEnabled };
+            for (InspectorPropertyId property : properties) {
+                const bool isBool = property == InspectorPropertyId::SurfaceCastEnabled;
+                const InspectorPanelRenderer::Hit hit = isBool ? HitBool(RowRect(viewport, y), InspectorSectionId::SurfaceCast, property, x, scrolledY) : HitTextRow(RowRect(viewport, y), InspectorSectionId::SurfaceCast, property, x, scrolledY);
+                if (hit.kind != InspectorHitKind::None) return hit;
+                AdvanceRow(y);
+            }
+        } else y += kHeaderHeight;
         y += kSectionGap;
     }
 

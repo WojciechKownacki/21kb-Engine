@@ -28,6 +28,7 @@ struct EcsRenderSceneSynchronizerReserveDesc {
     std::uint32_t lightProxies = 0;
     std::uint32_t visibilityBlockerProxies = 0;
     std::uint32_t geometrySwarmProxies = 0;
+    std::uint32_t surfaceCastProxies = 0;
     std::uint32_t transformCacheEntries = 0;
     std::uint32_t transformResolvingEntries = 0;
     std::uint32_t transformUpdateEntities = 0;
@@ -39,11 +40,13 @@ struct EcsRenderSceneSynchronizerStats {
     std::uint32_t lightSeenCount = 0;
     std::uint32_t visibilityBlockerSeenCount = 0;
     std::uint32_t geometrySwarmSeenCount = 0;
+    std::uint32_t surfaceCastSeenCount = 0;
     std::uint32_t meshSeenCapacity = 0;
     std::uint32_t cameraSeenCapacity = 0;
     std::uint32_t lightSeenCapacity = 0;
     std::uint32_t visibilityBlockerSeenCapacity = 0;
     std::uint32_t geometrySwarmSeenCapacity = 0;
+    std::uint32_t surfaceCastSeenCapacity = 0;
     std::uint32_t transformCacheCount = 0;
     std::uint32_t transformResolvingCount = 0;
     std::uint32_t transformUpdateEntityCount = 0;
@@ -92,6 +95,7 @@ private:
     mutable std::vector<std::uint64_t> seenLights_;
     mutable std::vector<std::uint64_t> seenVisibilityBlockers_;
     mutable std::vector<std::uint64_t> seenGeometrySwarms_;
+    mutable std::vector<std::uint64_t> seenSurfaceCasts_;
     mutable std::vector<std::uint64_t> transformUpdateEntities_;
     mutable std::unordered_map<std::uint64_t, kb::scene::TransformComponent> transformCache_;
     mutable std::unordered_set<std::uint64_t> transformResolving_;

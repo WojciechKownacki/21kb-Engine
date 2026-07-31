@@ -1541,6 +1541,27 @@ void RunRenderSceneExpandsGeometrySwarmIntoExistingDrawGroupTest() {
     Require(renderScene.DrawGroups().empty(), "Geometry Swarm proxy removal left derived render instances behind");
 }
 
+void RunRenderSceneAppliesSurfaceCastByRegionLayerAndOrderTest() {
+    RenderScene renderScene;
+    const std::array<float, 16> identity{ 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F };
+    std::array<float, 16> inside = identity; inside[12] = 0.25F;
+    std::array<float, 16> outside = identity; outside[12] = 3.0F;
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{ .entityId = 1U, .meshAssetId = 7U, .materialAssetId = 10U, .model = inside, .layer = 2U }));
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{ .entityId = 2U, .meshAssetId = 7U, .materialAssetId = 10U, .model = outside, .layer = 2U }));
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{ .entityId = 3U, .meshAssetId = 7U, .materialAssetId = 10U, .model = inside, .layer = 4U }));
+    static_cast<void>(renderScene.UpsertSurfaceCast(SurfaceCastRenderProxyDesc{ .entityId = 11U, .materialAssetId = 20U, .model = identity, .size = { 2.0F, 2.0F, 2.0F }, .receiverLayerMask = 2U, .order = 1, .region = RenderSurfaceCastRegion::Box }));
+    static_cast<void>(renderScene.UpsertSurfaceCast(SurfaceCastRenderProxyDesc{ .entityId = 12U, .materialAssetId = 30U, .model = identity, .size = { 2.0F, 2.0F, 2.0F }, .receiverLayerMask = 2U, .order = 2, .region = RenderSurfaceCastRegion::Box }));
+    SceneRenderSnapshot snapshot;
+    renderScene.BuildSnapshotInto(1280U, 720U, snapshot);
+    const auto material = [&snapshot](std::uint64_t entityId) { for (const SceneRenderMeshInstance& instance : snapshot.meshes) if (instance.entityId == entityId) return instance.materialAssetId; return std::uint64_t{ 0U }; };
+    Require(material(1U) == 30U, "Surface Cast did not apply the highest-order matching material");
+    Require(material(2U) == 10U, "Surface Cast ignored its region boundary");
+    Require(material(3U) == 10U, "Surface Cast ignored its receiver-layer filter");
+    Require(renderScene.RemoveSurfaceCast(12U), "Surface Cast proxy removal failed");
+    renderScene.BuildSnapshotInto(1280U, 720U, snapshot);
+    Require(material(1U) == 20U, "Surface Cast removal did not restore the preceding ordered cast");
+}
+
 void RunRenderSceneSyncsAllSurfaceEmitterKindsTest() {
     kb::scene::Scene scene;
     kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
@@ -2621,6 +2642,7 @@ void RunRenderSceneSyncTests() {
     RunRenderSceneBuildsMeshMaterialDrawGroupsTest();
     RunRenderSceneBuildsLargeMeshMaterialDrawGroupsTest();
     RunRenderSceneExpandsGeometrySwarmIntoExistingDrawGroupTest();
+    RunRenderSceneAppliesSurfaceCastByRegionLayerAndOrderTest();
     RunRenderSceneCachesDrawGroupsUntilMeshStateChangesTest();
     RunRenderSceneReserveAndStatsExposeProxyCapacityTest();
     RunEcsSyncPropagatesMaterialSlotOverridesTest();
