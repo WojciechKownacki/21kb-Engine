@@ -7966,12 +7966,12 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
             return true;
         });
     }
-    if (componentId == "Light") {
+    if (componentId == "3D Radiance Emitter" || componentId == "Light") {
         if (scene_->Components().Lights().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Light component.");
+            console_.Warning("Inspector", "Entity already has a 3D Radiance Emitter component.");
             return false;
         }
-        return ExecuteSceneCommand("Add Light Component", [this, entity]() {
+        return ExecuteSceneCommand("Add 3D Radiance Emitter", [this, entity]() {
             scene_->Components().Lights().Set(entity, kb::scene::LightComponent{});
             return true;
         });

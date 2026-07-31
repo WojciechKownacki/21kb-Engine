@@ -185,7 +185,9 @@ struct ComponentAccess {
             return ScriptValue{ static_cast<int>(static_cast<const Component*>(component)->field) }; }, \
         [](void* component, const ScriptValue& value) noexcept -> bool { \
             if (value.Type() != ScriptValueType::Int) { return false; } \
-            static_cast<Component*>(component)->field = static_cast<kb::scene::LightKind>(value.AsInt()); \
+            const auto kind = static_cast<kb::scene::LightKind>(value.AsInt()); \
+            if (!kb::scene::IsLightKindValid(kind)) { return false; } \
+            static_cast<Component*>(component)->field = kind; \
             return true; \
         } }
 
@@ -228,7 +230,7 @@ constexpr std::array<std::string_view, 18> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
-    "Light",
+    "3D Radiance Emitter",
     "MeshRenderer",
     "Behaviour",
     "Rigidbody",
@@ -841,7 +843,7 @@ void MarkWorldBackdropModified(kb::scene::Scene& scene, kb::scene::SceneEntity e
         kb::scene::CameraComponent* component = scene.Components().Cameras().TryGet(entity);
         return ComponentAccess{ component, component, kCameraFields, &MarkCameraModified };
     }
-    if (componentName == "Light") {
+    if (componentName == "3D Radiance Emitter" || componentName == "Light") {
         kb::scene::LightComponent* component = scene.Components().Lights().TryGet(entity);
         return ComponentAccess{ component, component, kLightFields, &MarkLightModified };
     }
@@ -927,7 +929,7 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "Camera") {
         return kCameraPropertyDescs;
     }
-    if (componentName == "Light") {
+    if (componentName == "3D Radiance Emitter" || componentName == "Light") {
         return kLightPropertyDescs;
     }
     if (componentName == "MeshRenderer") {

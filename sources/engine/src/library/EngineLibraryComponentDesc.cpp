@@ -56,8 +56,8 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .serializable = true,
         },
         LibraryComponentDesc{
-            .name = "Light",
-            .id = ComputeLibraryComponentId("Light"),
+            .name = "3D Radiance Emitter",
+            .id = ComputeLibraryComponentId("3D Radiance Emitter"),
             .serializable = true,
         },
         LibraryComponentDesc{

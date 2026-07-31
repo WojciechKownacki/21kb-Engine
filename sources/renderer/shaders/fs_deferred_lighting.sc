@@ -14,6 +14,7 @@ uniform vec4 u_deferredLightDirKind[32];
 uniform vec4 u_deferredLightPositionRange[32];
 uniform vec4 u_deferredLightColorIntensity[32];
 uniform vec4 u_deferredLightSpot[32];
+uniform vec4 u_deferredLightAreaRight[32];
 uniform vec4 u_deferredLightParams;
 uniform vec4 u_deferredAmbientColor;
 uniform vec4 u_deferredEnvironmentZenith;
@@ -99,29 +100,59 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
     return diffuseEnv + specularEnv;
 }
 
+vec3 SurfaceEmitterSamplePosition(vec3 center, vec3 normal, vec3 right, float kind, vec2 dimensions, vec3 worldPos)
+{
+    if (kind < 2.5) {
+        return center;
+    }
+
+    vec3 localRight = normalize(right);
+    vec3 localUp = normalize(cross(normal, localRight));
+    vec3 fromCenter = worldPos - center;
+    if (kind < 3.5) {
+        return center + localRight * clamp(dot(fromCenter, localRight), -dimensions.x * 0.5, dimensions.x * 0.5)
+            + localUp * clamp(dot(fromCenter, localUp), -dimensions.y * 0.5, dimensions.y * 0.5);
+    }
+    if (kind < 4.5) {
+        vec3 planar = localRight * dot(fromCenter, localRight) + localUp * dot(fromCenter, localUp);
+        float planarLength = length(planar);
+        return center + planar * min(1.0, dimensions.x * 0.5 / max(planarLength, 0.0001));
+    }
+
+    vec3 axisPoint = center + localRight * clamp(dot(fromCenter, localRight), -dimensions.x * 0.5, dimensions.x * 0.5);
+    vec3 radial = worldPos - axisPoint;
+    float radialLength = length(radial);
+    return axisPoint + radial * min(1.0, dimensions.y * 0.5 / max(radialLength, 0.0001));
+}
+
 vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float specular, float occlusion)
 {
     vec4 dirKind = u_deferredLightDirKind[lightIndex];
     vec4 positionRange = u_deferredLightPositionRange[lightIndex];
     vec4 colorIntensity = u_deferredLightColorIntensity[lightIndex];
     vec4 spot = u_deferredLightSpot[lightIndex];
+    vec4 areaRight = u_deferredLightAreaRight[lightIndex];
 
     vec3 lightVector = vec3(0.0, 1.0, 0.0);
     float attenuation = 1.0;
     if (dirKind.w < 0.5) {
         lightVector = normalize(-dirKind.xyz);
     } else {
-        vec3 toLight = positionRange.xyz - worldPos;
+        vec3 emitterPosition = SurfaceEmitterSamplePosition(positionRange.xyz, dirKind.xyz, areaRight.xyz, dirKind.w, spot.zw, worldPos);
+        vec3 toLight = emitterPosition - worldPos;
         float distanceToLight = length(toLight);
         lightVector = distanceToLight > 0.0001 ? toLight / distanceToLight : vec3(0.0, 1.0, 0.0);
         float range = max(positionRange.w, 0.0001);
         float rangeAttenuation = clamp(1.0 - distanceToLight / range, 0.0, 1.0);
         attenuation = rangeAttenuation * rangeAttenuation;
-        if (dirKind.w > 1.5) {
+        if (dirKind.w > 1.5 && dirKind.w < 2.5) {
             float coneCos = dot(normalize(dirKind.xyz), normalize(-lightVector));
             float coneWidth = max(spot.x - spot.y, 0.001);
             float coneAttenuation = clamp((coneCos - spot.y) / coneWidth, 0.0, 1.0);
             attenuation *= coneAttenuation * coneAttenuation;
+        }
+        if (dirKind.w > 2.5) {
+            attenuation *= max(dot(normalize(dirKind.xyz), normalize(-lightVector)), 0.0);
         }
     }
 

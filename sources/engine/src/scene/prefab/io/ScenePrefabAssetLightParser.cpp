@@ -64,6 +64,9 @@ bool ScenePrefabAssetLightParser::Parse(const ScenePrefabAssetFieldMap& fields, 
     }
 
     light.kind = static_cast<LightKind>(kind);
+    if (!IsLightComponentValid(light)) {
+        return false;
+    }
     components.light = light;
     return true;
 }
