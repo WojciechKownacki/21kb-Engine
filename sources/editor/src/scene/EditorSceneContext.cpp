@@ -17,6 +17,7 @@
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
+#include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
@@ -8171,6 +8172,17 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
         }
         return ExecuteSceneCommand("Add Visibility Blocker Component", [this, entity]() {
             scene_->Components().VisibilityBlockers().Set(entity, kb::scene::SceneVisibilityBlockerComponent{});
+            return true;
+        });
+    }
+    if (componentId == "Visibility Cell") {
+        if (scene_->Components().VisibilityCells().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Visibility Cell component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Visibility Cell Component", [this, entity]() {
+            if (!scene_->Components().RegionShapes().Has(entity)) scene_->Components().RegionShapes().Set(entity, kb::scene::RegionShapeComponent{});
+            scene_->Components().VisibilityCells().Set(entity, kb::scene::VisibilityCellComponent{});
             return true;
         });
     }

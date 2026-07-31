@@ -153,6 +153,11 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .id = ComputeLibraryComponentId("Visibility Blocker"),
             .serializable = true,
         },
+        LibraryComponentDesc{
+            .name = "Visibility Cell",
+            .id = ComputeLibraryComponentId("Visibility Cell"),
+            .serializable = true,
+        },
     };
     return kCatalog;
 }

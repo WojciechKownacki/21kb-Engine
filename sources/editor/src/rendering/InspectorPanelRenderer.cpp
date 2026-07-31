@@ -22,6 +22,7 @@
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
+#include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
@@ -1681,6 +1682,15 @@ void PaintVisibilityBlockerSection(HDC dc, RECT content, int& y, const EditorThe
     y = section.Bottom() + kSectionGap;
 }
 
+void PaintVisibilityCellSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::VisibilityCellComponent& cell) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::VisibilityCell, HeroIconKind::Cube, "Visibility Cell", true);
+    section.Field("Membership Mask", std::to_string(cell.membershipMask), InspectorPropertyId::VisibilityCellMembershipMask);
+    section.Field("Membership", std::to_string(static_cast<int>(cell.membership)), InspectorPropertyId::VisibilityCellMembership);
+    section.Field("Visibility Override", std::to_string(static_cast<int>(cell.visibilityOverride)), InspectorPropertyId::VisibilityCellOverride);
+    section.Bool("Enabled", cell.enabled, InspectorPropertyId::VisibilityCellEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
 constexpr int kCameraSectionRows = 13;
 
 void PaintCameraSection(
@@ -2059,6 +2069,10 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         const int h = SectionHeight(inspector, InspectorSectionId::VisibilityBlocker, 7);
         if (y < content.bottom && y + h > content.top) PaintVisibilityBlockerSection(dc, content, y, theme, inspector, *blocker); else y += h + kSectionGap;
     }
+    if (const kb::scene::VisibilityCellComponent* cell = scene.Components().VisibilityCells().TryGet(selected); cell != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::VisibilityCell, 4);
+        if (y < content.bottom && y + h > content.top) PaintVisibilityCellSection(dc, content, y, theme, inspector, *cell); else y += h + kSectionGap;
+    }
 
     if (sceneContext.HasEntityScript(selected)) {
         const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);
@@ -2301,6 +2315,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (scene.Components().AmbientRadiances().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::AmbientRadiance, 16) + kSectionGap;
     if (scene.Components().DetailSwitches().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::DetailSwitch, 6) + kSectionGap;
     if (scene.Components().VisibilityBlockers().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::VisibilityBlocker, 7) + kSectionGap;
+    if (scene.Components().VisibilityCells().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::VisibilityCell, 4) + kSectionGap;
     if (sceneContext.HasEntityScript(selected)) {
         const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariables(selected).size());
         height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
@@ -3378,6 +3393,18 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             constexpr std::array<InspectorPropertyId, 7> properties{ InspectorPropertyId::VisibilityBlockerCenterX, InspectorPropertyId::VisibilityBlockerCenterY, InspectorPropertyId::VisibilityBlockerCenterZ, InspectorPropertyId::VisibilityBlockerSizeX, InspectorPropertyId::VisibilityBlockerSizeY, InspectorPropertyId::VisibilityBlockerSizeZ, InspectorPropertyId::VisibilityBlockerEnabled };
             for (InspectorPropertyId property : properties) {
                 const InspectorPanelRenderer::Hit hit = property == InspectorPropertyId::VisibilityBlockerEnabled ? HitBool(RowRect(viewport, y), InspectorSectionId::VisibilityBlocker, property, x, scrolledY) : HitTextRow(RowRect(viewport, y), InspectorSectionId::VisibilityBlocker, property, x, scrolledY);
+                if (hit.kind != InspectorHitKind::None) return hit;
+                AdvanceRow(y);
+            }
+        }
+        y += kSectionGap;
+    }
+    if (sceneContext.Scene().Components().VisibilityCells().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::VisibilityCell, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::VisibilityCell)) {
+            constexpr std::array<InspectorPropertyId, 4> properties{ InspectorPropertyId::VisibilityCellMembershipMask, InspectorPropertyId::VisibilityCellMembership, InspectorPropertyId::VisibilityCellOverride, InspectorPropertyId::VisibilityCellEnabled };
+            for (InspectorPropertyId property : properties) {
+                const InspectorPanelRenderer::Hit hit = property == InspectorPropertyId::VisibilityCellEnabled ? HitBool(RowRect(viewport, y), InspectorSectionId::VisibilityCell, property, x, scrolledY) : HitTextRow(RowRect(viewport, y), InspectorSectionId::VisibilityCell, property, x, scrolledY);
                 if (hit.kind != InspectorHitKind::None) return hit;
                 AdvanceRow(y);
             }
