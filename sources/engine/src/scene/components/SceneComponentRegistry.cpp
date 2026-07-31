@@ -22,6 +22,7 @@
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
+#include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
@@ -163,6 +164,17 @@ void RegisterAmbientRadianceReflection(kb::ecs::World& world) {
     }));
 }
 
+void RegisterDetailSwitchReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<SceneDetailSwitchComponent>(SceneDetailSwitchComponent::StableId, {
+        KB_ECS_FIELD(SceneDetailSwitchComponent, groupId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(SceneDetailSwitchComponent, minimumLod, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(SceneDetailSwitchComponent, maximumLod, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(SceneDetailSwitchComponent, promoteCoverage, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(SceneDetailSwitchComponent, demoteCoverage, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(SceneDetailSwitchComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
 void RegisterLightReflection(kb::ecs::World& world) {
     static_cast<void>(world.RegisterComponentReflection<LightComponent>(LightComponent::StableId, {
         KB_ECS_FIELD(LightComponent, kind, kb::ecs::ComponentFieldType::Enum32),
@@ -203,6 +215,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , streamFocusComponentId_(RegisterSceneComponent<StreamFocusComponent>(world, StreamFocusComponent::StableId))
     , worldBackdropComponentId_(RegisterSceneComponent<WorldBackdropComponent>(world, WorldBackdropComponent::StableId))
     , ambientRadianceComponentId_(RegisterSceneComponent<AmbientRadianceComponent>(world, AmbientRadianceComponent::StableId))
+    , detailSwitchComponentId_(RegisterSceneComponent<SceneDetailSwitchComponent>(world, SceneDetailSwitchComponent::StableId))
     , audioSourceComponentId_(RegisterSceneComponent<AudioSourceComponent>(world, "kb.scene.AudioSourceComponent"))
     , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, "kb.scene.AudioListenerComponent"))
     , animatorComponentId_(RegisterSceneComponent<Animator>(world, "kb.scene.AnimatorComponent"))
@@ -218,6 +231,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     RegisterStreamFocusReflection(world);
     RegisterWorldBackdropReflection(world);
     RegisterAmbientRadianceReflection(world);
+    RegisterDetailSwitchReflection(world);
 }
 
 std::uint64_t SceneComponentRegistry::TransformComponentId() const noexcept {
@@ -276,6 +290,7 @@ std::uint64_t SceneComponentRegistry::ContentInstanceComponentId() const noexcep
 std::uint64_t SceneComponentRegistry::StreamFocusComponentId() const noexcept { return streamFocusComponentId_; }
 std::uint64_t SceneComponentRegistry::WorldBackdropComponentId() const noexcept { return worldBackdropComponentId_; }
 std::uint64_t SceneComponentRegistry::AmbientRadianceComponentId() const noexcept { return ambientRadianceComponentId_; }
+std::uint64_t SceneComponentRegistry::DetailSwitchComponentId() const noexcept { return detailSwitchComponentId_; }
 
 std::uint64_t SceneComponentRegistry::AudioSourceComponentId() const noexcept {
     return audioSourceComponentId_;

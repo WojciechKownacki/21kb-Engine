@@ -17,7 +17,8 @@ struct SceneDocument {
     // v3 (LIB-147): AudioSourceComponent gained the outputBus mixer-routing token.
     // v14: WorldBackdropComponent persists visible world background policy.
     // v15: AmbientRadianceComponent persists authored scene-global indirect lighting.
-    static constexpr std::uint32_t CurrentFileVersion = 15U;
+    // v16: SceneDetailSwitchComponent persists coordinated mesh LOD policy.
+    static constexpr std::uint32_t CurrentFileVersion = 16U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

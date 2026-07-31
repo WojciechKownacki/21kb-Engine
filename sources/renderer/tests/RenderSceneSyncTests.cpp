@@ -21,6 +21,7 @@
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
+#include "engine/scene/DetailSwitchComponent.hpp"
 #include "kb/render/resources/BuiltInParticleQuadMesh.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 #include "kb/render/scene/SceneParticleRenderSynchronizer.hpp"
@@ -203,6 +204,22 @@ void RunEcsSyncPropagatesCullingMaskAndClearSettingsTest() {
     const SceneRenderCamera builtCamera = RenderSceneCameraBuilder::Build(cameraProxy->desc, 1280U, 720U);
     Require(builtCamera.cullingMask == 0x00000006U, "RenderSceneCameraBuilder::Build did not carry cullingMask into the resolved SceneRenderCamera");
     Require(builtCamera.clearMode == SceneRenderCameraClearMode::DepthOnly, "RenderSceneCameraBuilder::Build did not carry clearMode into the resolved SceneRenderCamera");
+}
+
+void RunEcsSyncPropagatesDetailSwitchPolicyTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity mesh = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Detail Mesh" });
+    scene.Components().MeshRenderers().Set(mesh, kb::scene::MeshRendererComponent{ .meshAssetId = 9U });
+    scene.Components().DetailSwitches().Set(mesh, kb::scene::SceneDetailSwitchComponent{
+        .groupId = 41U, .minimumLod = 1U, .maximumLod = 3U, .promoteCoverage = 0.36F, .demoteCoverage = 0.18F, .enabled = true,
+    });
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+    const MeshRenderProxy* proxy = renderScene.FindMeshByEntity(mesh.Id());
+    Require(proxy != nullptr && proxy->desc.detailSwitchEnabled && proxy->desc.detailSwitchGroupId == 41U &&
+            proxy->desc.detailSwitchMinimumLod == 1U && proxy->desc.detailSwitchMaximumLod == 3U &&
+            NearlyEqual(proxy->desc.detailSwitchPromoteCoverage, 0.36F) && NearlyEqual(proxy->desc.detailSwitchDemoteCoverage, 0.18F),
+        "ECS Detail Switch policy was not copied into the renderer-derived mesh proxy");
 }
 
 void RunEcsSyncResolvesWorldBackdropDeterministicallyTest() {
@@ -2559,6 +2576,7 @@ void RunSceneRenderVisibilityPublisherBuildsFrameTest() {
 
 void RunRenderSceneSyncTests() {
     RunCreatesStableRenderProxiesTest();
+    RunEcsSyncPropagatesDetailSwitchPolicyTest();
     RunRenderScenePrimaryCameraSelectionRespectsViewportAndPriorityTest();
     RunEcsSyncPropagatesCullingMaskAndClearSettingsTest();
     RunEcsSyncResolvesWorldBackdropDeterministicallyTest();

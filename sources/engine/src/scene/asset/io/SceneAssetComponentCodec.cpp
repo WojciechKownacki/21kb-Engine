@@ -38,6 +38,7 @@ enum SceneNodeComponentBits : std::uint32_t {
       StreamFocusBit = 1U << 19U,
       WorldBackdropBit = 1U << 20U,
       AmbientRadianceBit = 1U << 21U,
+      DetailSwitchBit = 1U << 22U,
 };
 
 constexpr std::uint32_t KnownComponentBits = CameraBit |
@@ -58,7 +59,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit;
 
 [[nodiscard]] std::uint32_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint32_t componentBits = 0;
@@ -84,6 +85,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
       componentBits |= components.streamFocus.has_value() ? StreamFocusBit : 0U;
       componentBits |= components.worldBackdrop.has_value() ? WorldBackdropBit : 0U;
       componentBits |= components.ambientRadiance.has_value() ? AmbientRadianceBit : 0U;
+      componentBits |= components.detailSwitch.has_value() ? DetailSwitchBit : 0U;
     return componentBits;
 }
 
@@ -310,6 +312,15 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         if (!IsAmbientRadianceComponentValid(ambient)) return false;
         output.ambientRadiance = ambient;
     }
+    if ((componentBits & DetailSwitchBit) != 0U) {
+        if (fileVersion < 16U) return false;
+        SceneDetailSwitchComponent detail{};
+        if (!input.ReadUInt64(detail.groupId) || !input.ReadUInt32(detail.minimumLod) ||
+            !input.ReadUInt32(detail.maximumLod) || !input.ReadFloat(detail.promoteCoverage) ||
+            !input.ReadFloat(detail.demoteCoverage) || !input.ReadBool(detail.enabled) ||
+            !IsSceneDetailSwitchComponentValid(detail)) return false;
+        output.detailSwitch = detail;
+    }
     return true;
 }
 
@@ -443,6 +454,15 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteFloat(output, ambient.specularIntensity);
         SceneAssetBinaryIO::WriteInt32(output, ambient.priority);
         SceneAssetBinaryIO::WriteBool(output, ambient.enabled);
+    }
+    if (components.detailSwitch.has_value()) {
+        const SceneDetailSwitchComponent& detail = *components.detailSwitch;
+        SceneAssetBinaryIO::WriteUInt64(output, detail.groupId);
+        SceneAssetBinaryIO::WriteUInt32(output, detail.minimumLod);
+        SceneAssetBinaryIO::WriteUInt32(output, detail.maximumLod);
+        SceneAssetBinaryIO::WriteFloat(output, detail.promoteCoverage);
+        SceneAssetBinaryIO::WriteFloat(output, detail.demoteCoverage);
+        SceneAssetBinaryIO::WriteBool(output, detail.enabled);
     }
 }
 

@@ -136,6 +136,12 @@ SceneRenderMeshInstance RenderSceneMeshInstanceBuilder::Build(const MeshRenderPr
         .castsShadow = mesh.castsShadow,
         .receivesShadow = mesh.receivesShadow,
         .layer = mesh.layer,
+        .detailSwitchGroupId = mesh.detailSwitchGroupId,
+        .detailSwitchMinimumLod = mesh.detailSwitchMinimumLod,
+        .detailSwitchMaximumLod = mesh.detailSwitchMaximumLod,
+        .detailSwitchPromoteCoverage = mesh.detailSwitchPromoteCoverage,
+        .detailSwitchDemoteCoverage = mesh.detailSwitchDemoteCoverage,
+        .detailSwitchEnabled = mesh.detailSwitchEnabled,
     };
 }
 

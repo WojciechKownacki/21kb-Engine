@@ -21,6 +21,7 @@
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
+#include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
 
@@ -110,6 +111,10 @@ public:
     static void SetAmbientRadiance(Scene& scene, SceneEntity entity, const AmbientRadianceComponent& component);
     static void RemoveAmbientRadiance(Scene& scene, SceneEntity entity) noexcept;
     static void MarkAmbientRadianceModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static SceneDetailSwitchComponent* TryGetDetailSwitch(Scene& scene, SceneEntity entity) noexcept;
+    static void SetDetailSwitch(Scene& scene, SceneEntity entity, const SceneDetailSwitchComponent& component);
+    static void RemoveDetailSwitch(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkDetailSwitchModified(Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static AudioSourceComponent* TryGetAudioSource(Scene& scene, SceneEntity entity) noexcept;
     static void SetAudioSource(Scene& scene, SceneEntity entity, const AudioSourceComponent& audioSource);

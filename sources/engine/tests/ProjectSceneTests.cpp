@@ -11,6 +11,7 @@
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
+#include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -369,6 +370,27 @@ void RunSceneAmbientRadianceReflectionSerializationTest() {
         "Ambient Radiance reflection did not roundtrip authored state");
 }
 
+void RunSceneDetailSwitchReflectionSerializationTest() {
+    kb::scene::Scene source;
+    const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Detail Switch" });
+    source.Components().DetailSwitches().Set(sourceEntity, kb::scene::SceneDetailSwitchComponent{
+        .groupId = 73U, .minimumLod = 1U, .maximumLod = 4U, .promoteCoverage = 0.42F, .demoteCoverage = 0.21F, .enabled = false,
+    });
+    kb::ecs::World& sourceWorld = source.Runtime().EcsWorld();
+    const kb::ecs::ComponentReflection* reflection = sourceWorld.Reflection(kb::scene::SceneDetailSwitchComponent::StableId);
+    Require(reflection != nullptr && reflection->FindField("groupId") != nullptr && reflection->FindField("demoteCoverage") != nullptr,
+        "Detail Switch reflection was not registered under its stable id");
+    kb::ecs::SerializedComponent serialized;
+    Require(sourceWorld.SerializeComponent(sourceEntity, sourceWorld.Component<kb::scene::SceneDetailSwitchComponent>(), serialized), "Detail Switch reflection serialization failed");
+    kb::scene::Scene target;
+    const kb::scene::SceneEntity targetEntity = target.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Detail Switch Target" });
+    Require(target.Runtime().EcsWorld().ApplySerializedComponent(targetEntity, serialized), "Detail Switch reflection apply failed");
+    const kb::scene::SceneDetailSwitchComponent* restored = target.Components().DetailSwitches().TryGet(targetEntity);
+    Require(restored != nullptr && restored->groupId == 73U && restored->minimumLod == 1U && restored->maximumLod == 4U &&
+            NearlyEqual(restored->promoteCoverage, 0.42F) && NearlyEqual(restored->demoteCoverage, 0.21F) && !restored->enabled,
+        "Detail Switch reflection did not roundtrip authored state");
+}
+
 void RunSceneAudioSourceComponentReflectionSerializationTest() {
     kb::scene::Scene source;
     const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "AudioSource" });
@@ -599,6 +621,7 @@ void RunProjectSceneTests() {
     RunSceneDocumentRoundTripTest();
     RunSceneRadianceEmitterReflectionSerializationTest();
     RunSceneAmbientRadianceReflectionSerializationTest();
+    RunSceneDetailSwitchReflectionSerializationTest();
     RunSceneAudioListenerComponentReflectionSerializationTest();
     RunSceneAudioSourceComponentReflectionSerializationTest();
     RunSceneAudioListenerPrefabRoundTripTest();

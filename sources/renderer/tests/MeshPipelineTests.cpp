@@ -1173,6 +1173,62 @@ void RunMeshPipelineSelectsLodAndCarriesMeshletRangesTest() {
     Require(result.stats.meshletSubmitCount == 0U, "MeshPipeline reported meshlet submits without a GPU pass");
 }
 
+void RunMeshPipelineCoordinatesDetailSwitchGroupsWithHysteresisTest() {
+    RenderMeshResource mesh{};
+    mesh.indexCount = 12U;
+    mesh.bounds = RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 0.1F };
+    mesh.sections = {
+        RenderMeshSection{ .indexStart = 0U, .indexCount = 6U, .bounds = mesh.bounds, .lodLevel = 0U },
+        RenderMeshSection{ .indexStart = 6U, .indexCount = 6U, .bounds = mesh.bounds, .lodLevel = 1U },
+    };
+    mesh.lods = {
+        RenderMeshLodDesc{ .firstSection = 0U, .sectionCount = 1U, .minScreenCoverage = 0.5F },
+        RenderMeshLodDesc{ .firstSection = 1U, .sectionCount = 1U, .minScreenCoverage = 0.0F },
+    };
+    const SceneRenderCamera camera{ .view = IdentityMatrix(), .projection = IdentityMatrix() };
+    std::vector<SceneRenderDrawGroup> groups{
+        SceneRenderDrawGroup{
+            .meshAssetId = 42U,
+            .instances = {
+                SceneRenderMeshInstance{
+                    .entityId = 1U, .meshAssetId = 42U, .model = TranslationMatrix(0.0F, 0.0F, 0.1F),
+                    .detailSwitchGroupId = 7U, .detailSwitchMinimumLod = 0U, .detailSwitchMaximumLod = 1U,
+                    .detailSwitchPromoteCoverage = 0.20F, .detailSwitchDemoteCoverage = 0.15F, .detailSwitchEnabled = true,
+                },
+                SceneRenderMeshInstance{
+                    .entityId = 2U, .meshAssetId = 42U, .model = TranslationMatrix(0.0F, 0.0F, 0.9F),
+                    .detailSwitchGroupId = 7U, .detailSwitchMinimumLod = 0U, .detailSwitchMaximumLod = 1U,
+                    .detailSwitchPromoteCoverage = 0.20F, .detailSwitchDemoteCoverage = 0.15F, .detailSwitchEnabled = true,
+                },
+            },
+        },
+    };
+    MeshPipelineBuildResult result;
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque, .drawGroups = &groups, .resolvedMeshResource = &mesh, .camera = &camera,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, result);
+    Require(result.commands.size() == 1U && result.commands[0].lodLevel == 0U && result.commands[0].instances.size() == 2U,
+        "Detail Switch did not force one coordinated LOD level for its group");
+
+    groups[0].instances.resize(1U);
+    groups[0].instances[0].model = TranslationMatrix(0.0F, 0.0F, 0.55F);
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque, .drawGroups = &groups, .resolvedMeshResource = &mesh, .camera = &camera,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, result);
+    Require(result.commands.size() == 1U && result.commands[0].lodLevel == 0U,
+        "Detail Switch changed LOD inside its hysteresis band");
+
+    groups[0].instances[0].model = TranslationMatrix(0.0F, 0.0F, 0.8F);
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque, .drawGroups = &groups, .resolvedMeshResource = &mesh, .camera = &camera,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, result);
+    Require(result.commands.size() == 1U && result.commands[0].lodLevel == 1U,
+        "Detail Switch did not demote after leaving its hysteresis band");
+}
+
 void RunGpuDrivenFeatureClassifierGatesByCapabilitiesTest() {
     constexpr SceneGpuDrivenFeatureRequest fullRequest{
         .gpuCullingRequested = true,
@@ -1564,6 +1620,7 @@ void RunMeshPipelineTests() {
     RunMeshPipelineKeepsBlendDisabledUntilTransparentPassIsReadyTest();
     RunMeshPipelineCpuCullsByFrustumBoundsTest();
     RunMeshPipelineSelectsLodAndCarriesMeshletRangesTest();
+    RunMeshPipelineCoordinatesDetailSwitchGroupsWithHysteresisTest();
     RunGpuDrivenFeatureClassifierGatesByCapabilitiesTest();
     RunGpuDrivenFeatureClassifierReportsIndirectFallbackTest();
     RunMeshPipelineAppliesGpuDrivenRuntimeFallbackPolicyTest();

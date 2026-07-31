@@ -20,6 +20,7 @@
 #include "engine/scene/SceneStreamFocusComponents.hpp"
 #include "engine/scene/SceneWorldBackdropComponents.hpp"
 #include "engine/scene/SceneAmbientRadianceComponents.hpp"
+#include "engine/scene/SceneDetailSwitchComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
 #include "engine/scene/SceneUIDocuments.hpp"
@@ -49,6 +50,7 @@ public:
     [[nodiscard]] SceneStreamFocusComponentQueries StreamFocuses() const noexcept;
     [[nodiscard]] SceneWorldBackdropComponentQueries WorldBackdrops() const noexcept;
     [[nodiscard]] SceneAmbientRadianceComponentQueries AmbientRadiances() const noexcept;
+    [[nodiscard]] SceneDetailSwitchComponentQueries DetailSwitches() const noexcept;
     [[nodiscard]] SceneAudioSourceComponentQueries AudioSources() const noexcept;
     [[nodiscard]] SceneAudioListenerComponentQueries AudioListeners() const noexcept;
     [[nodiscard]] SceneAnimatorComponentQueries Animators() const noexcept;

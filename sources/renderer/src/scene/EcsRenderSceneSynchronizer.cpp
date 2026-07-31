@@ -17,6 +17,7 @@
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
+#include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/ecs/Query.hpp"
 #include "engine/ecs/UnsafeHotQuery.hpp"
 #include "engine/ecs/World.hpp"
@@ -284,6 +285,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
     const std::uint32_t materialSlotOverrideCount = CopyMaterialSlotOverrides(renderer, materialSlotAssetIds);
     sync->meshes->push_back(entity.Id());
     const kb::scene::ResolvedVisibility visibility = kb::scene::ResolveVisibility(*sync->scene, entity);
+    const kb::scene::SceneDetailSwitchComponent* detailSwitch = sync->scene->Components().DetailSwitches().TryGet(entity);
     static_cast<void>(sync->renderScene->UpsertMesh(MeshRenderProxyDesc{
         .entityId = entity.Id(),
         .meshAssetId = renderer.meshAssetId,
@@ -296,6 +298,12 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
         .castsShadow = renderer.castsShadow,
         .receivesShadow = renderer.receivesShadow,
         .layer = renderer.layer & visibility.mask,
+        .detailSwitchGroupId = detailSwitch != nullptr ? detailSwitch->groupId : 0U,
+        .detailSwitchMinimumLod = detailSwitch != nullptr ? detailSwitch->minimumLod : 0U,
+        .detailSwitchMaximumLod = detailSwitch != nullptr ? detailSwitch->maximumLod : 255U,
+        .detailSwitchPromoteCoverage = detailSwitch != nullptr ? detailSwitch->promoteCoverage : 0.20F,
+        .detailSwitchDemoteCoverage = detailSwitch != nullptr ? detailSwitch->demoteCoverage : 0.15F,
+        .detailSwitchEnabled = detailSwitch != nullptr && detailSwitch->enabled && kb::scene::IsSceneDetailSwitchComponentValid(*detailSwitch),
     }));
     static_cast<void>(transform);
 }

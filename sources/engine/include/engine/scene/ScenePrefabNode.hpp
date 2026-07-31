@@ -19,6 +19,7 @@
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
+#include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/ScenePrefabOverrides.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
@@ -68,6 +69,7 @@ struct ScenePrefabNodeComponents {
     std::optional<StreamFocusComponent> streamFocus;
     std::optional<WorldBackdropComponent> worldBackdrop;
     std::optional<AmbientRadianceComponent> ambientRadiance;
+    std::optional<SceneDetailSwitchComponent> detailSwitch;
     std::optional<BehaviourComponent> behaviour;
     std::optional<AudioSourceComponent> audioSource;
     std::optional<AudioListenerComponent> audioListener;
