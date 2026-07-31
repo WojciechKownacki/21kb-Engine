@@ -69,6 +69,9 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const StreamFocusComponent* focus = sceneComponents.StreamFocuses().TryGet(entity)) {
         components.streamFocus = *focus;
     }
+    if (const WorldBackdropComponent* backdrop = sceneComponents.WorldBackdrops().TryGet(entity)) {
+        components.worldBackdrop = *backdrop;
+    }
 
     if (const BehaviourComponent* behaviour = sceneComponents.Behaviours().TryGet(entity)) {
         components.behaviour = *behaviour;

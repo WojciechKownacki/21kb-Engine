@@ -18,6 +18,7 @@
 #include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
@@ -1591,6 +1592,36 @@ void PaintStreamFocusSection(HDC dc, RECT content, int& y, const EditorTheme& th
     y = section.Bottom() + kSectionGap;
 }
 
+[[nodiscard]] const char* WorldBackdropModeName(kb::scene::WorldBackdropMode mode) noexcept {
+    switch (mode) {
+    case kb::scene::WorldBackdropMode::SolidColor: return "Solid Color";
+    case kb::scene::WorldBackdropMode::VerticalGradient: return "Vertical Gradient";
+    case kb::scene::WorldBackdropMode::EnvironmentMap: return "Environment Map (2D Equirectangular)";
+    case kb::scene::WorldBackdropMode::ProceduralSky: return "Procedural Sky";
+    }
+    return "Invalid";
+}
+
+void PaintWorldBackdropSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::WorldBackdropComponent& backdrop) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::WorldBackdrop, HeroIconKind::Eye, "World Backdrop", true);
+    section.Field("Mode", WorldBackdropModeName(backdrop.mode), InspectorPropertyId::WorldBackdropMode);
+    section.Field("Color R", FormatFloat(backdrop.color.x, 3), InspectorPropertyId::WorldBackdropColorR);
+    section.Field("Color G", FormatFloat(backdrop.color.y, 3), InspectorPropertyId::WorldBackdropColorG);
+    section.Field("Color B", FormatFloat(backdrop.color.z, 3), InspectorPropertyId::WorldBackdropColorB);
+    section.Field("Horizon R", FormatFloat(backdrop.horizonColor.x, 3), InspectorPropertyId::WorldBackdropHorizonColorR);
+    section.Field("Horizon G", FormatFloat(backdrop.horizonColor.y, 3), InspectorPropertyId::WorldBackdropHorizonColorG);
+    section.Field("Horizon B", FormatFloat(backdrop.horizonColor.z, 3), InspectorPropertyId::WorldBackdropHorizonColorB);
+    section.Field("Zenith R", FormatFloat(backdrop.zenithColor.x, 3), InspectorPropertyId::WorldBackdropZenithColorR);
+    section.Field("Zenith G", FormatFloat(backdrop.zenithColor.y, 3), InspectorPropertyId::WorldBackdropZenithColorG);
+    section.Field("Zenith B", FormatFloat(backdrop.zenithColor.z, 3), InspectorPropertyId::WorldBackdropZenithColorB);
+    section.Field("Environment Asset", std::to_string(backdrop.environmentAssetId), InspectorPropertyId::WorldBackdropEnvironmentAssetId);
+    section.Field("Horizon Height", FormatFloat(backdrop.horizonHeight, 3), InspectorPropertyId::WorldBackdropHorizonHeight);
+    section.Field("Gradient Exponent", FormatFloat(backdrop.gradientExponent, 3), InspectorPropertyId::WorldBackdropGradientExponent);
+    section.Field("Priority", std::to_string(backdrop.priority), InspectorPropertyId::WorldBackdropPriority);
+    section.Bool("Enabled", backdrop.enabled, InspectorPropertyId::WorldBackdropEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
 constexpr int kCameraSectionRows = 13;
 
 void PaintCameraSection(
@@ -1953,6 +1984,10 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         const int h = SectionHeight(inspector, InspectorSectionId::StreamFocus, 5);
         if (y < content.bottom && y + h > content.top) PaintStreamFocusSection(dc, content, y, theme, inspector, *streamFocus); else y += h + kSectionGap;
     }
+    if (const kb::scene::WorldBackdropComponent* backdrop = scene.Components().WorldBackdrops().TryGet(selected); backdrop != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::WorldBackdrop, 15);
+        if (y < content.bottom && y + h > content.top) PaintWorldBackdropSection(dc, content, y, theme, inspector, *backdrop); else y += h + kSectionGap;
+    }
 
     if (sceneContext.HasEntityScript(selected)) {
         const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);
@@ -2191,6 +2226,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (scene.Components().GuideCurves().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::GuideCurve, 4) + kSectionGap;
     if (scene.Components().ContentInstances().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::ContentInstance, 4) + kSectionGap;
     if (scene.Components().StreamFocuses().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::StreamFocus, 5) + kSectionGap;
+    if (scene.Components().WorldBackdrops().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::WorldBackdrop, 15) + kSectionGap;
     if (sceneContext.HasEntityScript(selected)) {
         const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariables(selected).size());
         height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
@@ -3219,6 +3255,20 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::StreamFocus, InspectorPropertyId::StreamFocusLoadMask, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
             if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::StreamFocus, InspectorPropertyId::StreamFocusEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
         }
+    }
+    if (sceneContext.Scene().Components().WorldBackdrops().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::WorldBackdrop, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::WorldBackdrop)) {
+            constexpr std::array<InspectorPropertyId, 15> properties{ InspectorPropertyId::WorldBackdropMode, InspectorPropertyId::WorldBackdropColorR, InspectorPropertyId::WorldBackdropColorG, InspectorPropertyId::WorldBackdropColorB, InspectorPropertyId::WorldBackdropHorizonColorR, InspectorPropertyId::WorldBackdropHorizonColorG, InspectorPropertyId::WorldBackdropHorizonColorB, InspectorPropertyId::WorldBackdropZenithColorR, InspectorPropertyId::WorldBackdropZenithColorG, InspectorPropertyId::WorldBackdropZenithColorB, InspectorPropertyId::WorldBackdropEnvironmentAssetId, InspectorPropertyId::WorldBackdropHorizonHeight, InspectorPropertyId::WorldBackdropGradientExponent, InspectorPropertyId::WorldBackdropPriority, InspectorPropertyId::WorldBackdropEnabled };
+            for (const InspectorPropertyId property : properties) {
+                const InspectorPanelRenderer::Hit hit = property == InspectorPropertyId::WorldBackdropEnabled
+                    ? HitBool(RowRect(viewport, y), InspectorSectionId::WorldBackdrop, property, x, scrolledY)
+                    : HitTextRow(RowRect(viewport, y), InspectorSectionId::WorldBackdrop, property, x, scrolledY);
+                if (hit.kind != InspectorHitKind::None) return hit;
+                AdvanceRow(y);
+            }
+        }
+        y += kSectionGap;
     }
 
     if (sceneContext.HasEntityScript(selected)) {

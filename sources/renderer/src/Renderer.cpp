@@ -58,6 +58,13 @@ void WriteRendererBreadcrumb(std::string_view category, std::string_view message
     return value ? "true" : "false";
 }
 
+[[nodiscard]] std::uint32_t PackOpaqueRgba(const std::array<float, 3>& color) noexcept {
+    const auto channel = [](float value) noexcept -> std::uint32_t {
+        return static_cast<std::uint32_t>(std::clamp(value, 0.0F, 1.0F) * 255.0F + 0.5F);
+    };
+    return (channel(color[0]) << 24U) | (channel(color[1]) << 16U) | (channel(color[2]) << 8U) | 0xFFU;
+}
+
 [[nodiscard]] const char* LightingPathName(SceneRenderLightingPath path) noexcept {
     switch (path) {
     case SceneRenderLightingPath::Forward:
@@ -671,8 +678,22 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     if (!desc.shadowPassEnabled) {
         effectiveLightingConfig.shadowsEnabled = false;
     }
+    const std::optional<SceneRenderWorldBackdrop>& worldBackdrop = renderScene.WorldBackdrop();
+    if (worldBackdrop.has_value() &&
+        worldBackdrop->mode == SceneRenderWorldBackdropMode::EnvironmentMap &&
+        worldBackdrop->environmentAssetId != 0U) {
+        frameReferences_.MarkTexture(RuntimeTextureAssetKey{
+            .sceneId = scene.Id(),
+            .assetId = worldBackdrop->environmentAssetId,
+            .colorSpace = RenderTextureColorSpace::Linear,
+        });
+    }
+    const bool backdropRequiresDeferredPass = worldBackdrop.has_value() &&
+        (worldBackdrop->mode == SceneRenderWorldBackdropMode::VerticalGradient ||
+         worldBackdrop->mode == SceneRenderWorldBackdropMode::ProceduralSky ||
+         worldBackdrop->mode == SceneRenderWorldBackdropMode::EnvironmentMap);
     const bool deferredLighting = UsesDeferredLighting(effectiveLightingConfig.lightingPath) ||
-        effectiveLightingConfig.debugView == SceneRenderDebugView::GBufferNormal;
+        effectiveLightingConfig.debugView == SceneRenderDebugView::GBufferNormal || backdropRequiresDeferredPass;
     RenderMaterialGraphBuildContext runtimeGraphContext = desc.materialGraphContext;
     runtimeGraphContext.shadingPath = deferredLighting
         ? RenderMaterialGraphShadingPath::Deferred
@@ -786,11 +807,22 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 opaqueClearFlags = BGFX_CLEAR_NONE;
                 break;
             }
-            const std::array<float, 3>& clearColor = clearCameraProxy->clearColor;
-            const auto channel = [](float value) noexcept -> std::uint32_t {
-                return static_cast<std::uint32_t>(std::clamp(value, 0.0F, 1.0F) * 255.0F + 0.5F);
-            };
-            opaqueClearRgba = (channel(clearColor[0]) << 24U) | (channel(clearColor[1]) << 16U) | (channel(clearColor[2]) << 8U) | 0xFFU;
+            opaqueClearRgba = PackOpaqueRgba(clearCameraProxy->clearColor);
+        }
+    }
+    if (worldBackdrop.has_value() && worldBackdrop->mode == SceneRenderWorldBackdropMode::SolidColor) {
+        opaqueClearRgba = PackOpaqueRgba(worldBackdrop->color);
+    }
+    bgfx::TextureHandle worldBackdropEnvironment = BGFX_INVALID_HANDLE;
+    if (worldBackdrop.has_value() &&
+        worldBackdrop->mode == SceneRenderWorldBackdropMode::EnvironmentMap &&
+        worldBackdrop->environmentAssetId != 0U) {
+        const RenderTextureHandle textureHandle = sceneRenderer_->ResourceMap().ResolveTexture(
+            worldBackdrop->environmentAssetId,
+            RenderTextureColorSpace::Linear);
+        if (const RenderTextureResource* texture = sceneRenderer_->Resources().FindTexture(textureHandle);
+            texture != nullptr && texture->dimension == RenderTextureDimension::Texture2D) {
+            worldBackdropEnvironment = texture->texture;
         }
     }
     if (deferredLighting) {
@@ -1001,8 +1033,12 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 .camera = sceneCamera,
                 .lightingConfig = effectiveLightingConfig,
                 .extent = desc.target.viewport.extent,
-                .clearRgba = desc.clearRgba,
+                .clearRgba = worldBackdrop.has_value() && worldBackdrop->mode == SceneRenderWorldBackdropMode::SolidColor
+                    ? PackOpaqueRgba(worldBackdrop->color)
+                    : desc.clearRgba,
                 .shadowMap = shadowBinding.IsValid() ? &shadowBinding : nullptr,
+                .worldBackdrop = worldBackdrop.has_value() ? &*worldBackdrop : nullptr,
+                .worldBackdropEnvironment = worldBackdropEnvironment,
             }, deferredStats)) {
             lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
                 .severity = SceneRenderDiagnosticSeverity::Error,

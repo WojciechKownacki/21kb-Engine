@@ -48,6 +48,10 @@ const std::unordered_set<RuntimeAssetKey, RuntimeAssetKeyHash>& RuntimeFrameReso
     return materials_;
 }
 
+const std::unordered_set<RuntimeTextureAssetKey, RuntimeTextureAssetKeyHash>& RuntimeFrameResourceReferences::Textures() const noexcept {
+    return textures_;
+}
+
 RuntimeFrameResourceReferenceStats RuntimeFrameResourceReferences::Stats() const noexcept {
     return RuntimeFrameResourceReferenceStats{
         .meshCount = static_cast<std::uint32_t>(meshes_.size()),

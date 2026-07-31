@@ -186,6 +186,27 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseWorldBackdrop(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "worldBackdrop", present)) return false;
+    if (!present) return true;
+    WorldBackdropComponent backdrop{};
+    std::uint32_t mode = 0U;
+    if (!ParseField(fields, "worldBackdrop.mode", mode) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "worldBackdrop.color", backdrop.color) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "worldBackdrop.horizonColor", backdrop.horizonColor) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "worldBackdrop.zenithColor", backdrop.zenithColor) ||
+        !ParseOptionalField(fields, "worldBackdrop.environmentAssetId", backdrop.environmentAssetId) ||
+        !ParseOptionalField(fields, "worldBackdrop.horizonHeight", backdrop.horizonHeight) ||
+        !ParseOptionalField(fields, "worldBackdrop.gradientExponent", backdrop.gradientExponent) ||
+        !ParseOptionalField(fields, "worldBackdrop.priority", backdrop.priority) ||
+        !ParseOptionalBool(fields, "worldBackdrop.enabled", backdrop.enabled)) return false;
+    backdrop.mode = static_cast<WorldBackdropMode>(mode);
+    if (!IsWorldBackdropComponentValid(backdrop)) return false;
+    components.worldBackdrop = backdrop;
+    return true;
+}
+
 [[nodiscard]] bool ParseCharacterController(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool hasCharacterController = false;
     if (!ParseOptionalComponentFlag(fields, "characterController", hasCharacterController)) {
@@ -371,6 +392,7 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseGuideCurve(fields, components)
         && ParseContentInstance(fields, components)
         && ParseStreamFocus(fields, components)
+        && ParseWorldBackdrop(fields, components)
         && ParseCharacterController(fields, components)
         && ParseJoint(fields, components)
         && ScenePrefabAssetTagsParser::Parse(fields, components)

@@ -36,6 +36,7 @@ enum SceneNodeComponentBits : std::uint32_t {
       GuideCurveBit = 1U << 17U,
       ContentInstanceBit = 1U << 18U,
       StreamFocusBit = 1U << 19U,
+      WorldBackdropBit = 1U << 20U,
 };
 
 constexpr std::uint32_t KnownComponentBits = CameraBit |
@@ -56,7 +57,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit;
 
 [[nodiscard]] std::uint32_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint32_t componentBits = 0;
@@ -80,6 +81,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     componentBits |= components.guideCurve.has_value() ? GuideCurveBit : 0U;
       componentBits |= components.contentInstance.has_value() ? ContentInstanceBit : 0U;
       componentBits |= components.streamFocus.has_value() ? StreamFocusBit : 0U;
+      componentBits |= components.worldBackdrop.has_value() ? WorldBackdropBit : 0U;
     return componentBits;
 }
 
@@ -276,6 +278,21 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         if (!IsStreamFocusValid(focus)) return false;
         output.streamFocus = focus;
     }
+    if ((componentBits & WorldBackdropBit) != 0U) {
+        if (fileVersion < 14U) return false;
+        WorldBackdropComponent backdrop{};
+        std::uint32_t mode = 0U;
+        if (!input.ReadUInt32(mode) ||
+            !SceneAssetPrimitiveCodec::ReadVec3(input, backdrop.color) ||
+            !SceneAssetPrimitiveCodec::ReadVec3(input, backdrop.horizonColor) ||
+            !SceneAssetPrimitiveCodec::ReadVec3(input, backdrop.zenithColor) ||
+            !input.ReadUInt64(backdrop.environmentAssetId) || !input.ReadFloat(backdrop.horizonHeight) ||
+            !input.ReadFloat(backdrop.gradientExponent) || !input.ReadInt32(backdrop.priority) ||
+            !input.ReadBool(backdrop.enabled)) return false;
+        backdrop.mode = static_cast<WorldBackdropMode>(mode);
+        if (!IsWorldBackdropComponentValid(backdrop)) return false;
+        output.worldBackdrop = backdrop;
+    }
     return true;
 }
 
@@ -384,6 +401,18 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteInt32(output, focus.priority);
         SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(focus.loadMask));
         SceneAssetBinaryIO::WriteBool(output, focus.enabled);
+    }
+    if (components.worldBackdrop.has_value()) {
+        const WorldBackdropComponent& backdrop = *components.worldBackdrop;
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(backdrop.mode));
+        SceneAssetPrimitiveCodec::WriteVec3(output, backdrop.color);
+        SceneAssetPrimitiveCodec::WriteVec3(output, backdrop.horizonColor);
+        SceneAssetPrimitiveCodec::WriteVec3(output, backdrop.zenithColor);
+        SceneAssetBinaryIO::WriteUInt64(output, backdrop.environmentAssetId);
+        SceneAssetBinaryIO::WriteFloat(output, backdrop.horizonHeight);
+        SceneAssetBinaryIO::WriteFloat(output, backdrop.gradientExponent);
+        SceneAssetBinaryIO::WriteInt32(output, backdrop.priority);
+        SceneAssetBinaryIO::WriteBool(output, backdrop.enabled);
     }
 }
 

@@ -22,6 +22,8 @@ struct SceneDeferredLightingPassDesc {
     RenderExtent extent{};
     std::uint32_t clearRgba = 0x000000FFU;
     const SceneRenderShadowMapBinding* shadowMap = nullptr;
+    const SceneRenderWorldBackdrop* worldBackdrop = nullptr;
+    bgfx::TextureHandle worldBackdropEnvironment = BGFX_INVALID_HANDLE;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };
@@ -62,7 +64,12 @@ private:
     bgfx::UniformHandle shadowMapSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle shadowViewProjUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle shadowParamsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle backdropHorizonUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle backdropZenithUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle backdropParamsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle backdropEnvironmentSampler_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle fallbackShadowTexture_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle fallbackBackdropEnvironmentTexture_ = BGFX_INVALID_HANDLE;
 };
 
 } // namespace kb::render

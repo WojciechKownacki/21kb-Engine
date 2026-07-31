@@ -273,6 +273,28 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether this focus participates in streaming." },
             },
         },
+        LibraryComponentInspectorDesc{
+            .componentName = "WorldBackdrop",
+            .displayName = "World Backdrop",
+            .category = "Rendering",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "mode", "Mode", "Solid color, gradient, environment map or procedural sky." },
+                LibraryComponentInspectorFieldDesc{ "color.x", "Color Red", "Solid background red channel." },
+                LibraryComponentInspectorFieldDesc{ "color.y", "Color Green", "Solid background green channel." },
+                LibraryComponentInspectorFieldDesc{ "color.z", "Color Blue", "Solid background blue channel." },
+                LibraryComponentInspectorFieldDesc{ "horizonColor.x", "Horizon Red", "Lower gradient or sky red channel." },
+                LibraryComponentInspectorFieldDesc{ "horizonColor.y", "Horizon Green", "Lower gradient or sky green channel." },
+                LibraryComponentInspectorFieldDesc{ "horizonColor.z", "Horizon Blue", "Lower gradient or sky blue channel." },
+                LibraryComponentInspectorFieldDesc{ "zenithColor.x", "Zenith Red", "Upper gradient or sky red channel." },
+                LibraryComponentInspectorFieldDesc{ "zenithColor.y", "Zenith Green", "Upper gradient or sky green channel." },
+                LibraryComponentInspectorFieldDesc{ "zenithColor.z", "Zenith Blue", "Upper gradient or sky blue channel." },
+                LibraryComponentInspectorFieldDesc{ "environmentAssetId", "Environment Asset", "2D equirectangular environment texture reference." },
+                LibraryComponentInspectorFieldDesc{ "horizonHeight", "Horizon Height", "Vertical horizon offset for gradient and procedural sky modes." },
+                LibraryComponentInspectorFieldDesc{ "gradientExponent", "Gradient Exponent", "Vertical blend curve for gradient and procedural sky modes." },
+                LibraryComponentInspectorFieldDesc{ "priority", "Priority", "Deterministic selection when more than one backdrop is enabled." },
+                LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether this backdrop participates in rendering." },
+            },
+        },
     };
     return kCatalog;
 }

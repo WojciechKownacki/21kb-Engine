@@ -45,6 +45,26 @@ enum class SceneRenderEnvironmentMode : std::uint8_t {
     ImageBased,
 };
 
+enum class SceneRenderWorldBackdropMode : std::uint8_t {
+    SolidColor,
+    VerticalGradient,
+    EnvironmentMap,
+    ProceduralSky,
+};
+
+// Renderer-owned, derived copy of the selected authored WorldBackdropComponent.
+// It never feeds back into scene data; ECS stays the source of truth.
+struct SceneRenderWorldBackdrop {
+    std::uint64_t entityId = 0U;
+    SceneRenderWorldBackdropMode mode = SceneRenderWorldBackdropMode::SolidColor;
+    std::array<float, 3> color{};
+    std::array<float, 3> horizonColor{};
+    std::array<float, 3> zenithColor{};
+    std::uint64_t environmentAssetId = 0U;
+    float horizonHeight = 0.0F;
+    float gradientExponent = 1.0F;
+};
+
 enum class SceneRenderLightingPath : std::uint8_t {
     Forward,
     ClusteredForwardPlus,

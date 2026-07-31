@@ -15,6 +15,10 @@
 #include "engine/scene/SceneVisibilityResolution.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
+#include "engine/ecs/Query.hpp"
+#include "engine/ecs/UnsafeHotQuery.hpp"
+#include "engine/ecs/World.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 #include "scene/EcsRenderTransformResolver.hpp"
@@ -93,6 +97,52 @@ namespace {
         return RenderLightKind::Tube;
     }
     return RenderLightKind::Point;
+}
+
+[[nodiscard]] SceneRenderWorldBackdropMode WorldBackdropModeOf(kb::scene::WorldBackdropMode mode) noexcept {
+    switch (mode) {
+    case kb::scene::WorldBackdropMode::SolidColor: return SceneRenderWorldBackdropMode::SolidColor;
+    case kb::scene::WorldBackdropMode::VerticalGradient: return SceneRenderWorldBackdropMode::VerticalGradient;
+    case kb::scene::WorldBackdropMode::EnvironmentMap: return SceneRenderWorldBackdropMode::EnvironmentMap;
+    case kb::scene::WorldBackdropMode::ProceduralSky: return SceneRenderWorldBackdropMode::ProceduralSky;
+    }
+    return SceneRenderWorldBackdropMode::SolidColor;
+}
+
+[[nodiscard]] std::optional<SceneRenderWorldBackdrop> ResolveWorldBackdrop(const kb::scene::Scene& scene) {
+    struct SelectedBackdrop {
+        SceneRenderWorldBackdrop desc{};
+        std::int32_t priority = 0;
+    };
+    std::optional<SelectedBackdrop> selected;
+    kb::ecs::Query<kb::scene::WorldBackdropComponent> query = const_cast<kb::scene::Scene&>(scene).Runtime().EcsWorld().CreateQuery<kb::scene::WorldBackdropComponent>();
+    kb::ecs::UnsafeHotReadQuery<kb::scene::WorldBackdropComponent> hot;
+    kb::ecs::QueryExecutionSettings settings{};
+    settings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
+    if (!query.IsValid() || !hot.Rebuild(query, settings)) return std::nullopt;
+    hot.ForEachRange(settings.maxBatchSize, [&selected](const auto& batch) {
+        const kb::scene::WorldBackdropComponent* backdrops = batch.template Components<0>();
+        for (std::size_t index = 0U; index < batch.Count(); ++index) {
+            const kb::scene::SceneEntity entity = batch.EntityAt(index);
+            const kb::scene::WorldBackdropComponent& backdrop = backdrops[index];
+            if (!entity.IsValid() || !backdrop.enabled || !kb::scene::IsWorldBackdropComponentValid(backdrop)) continue;
+            const SceneRenderWorldBackdrop candidate{
+                .entityId = entity.Id(),
+                .mode = WorldBackdropModeOf(backdrop.mode),
+                .color = { backdrop.color.x, backdrop.color.y, backdrop.color.z },
+                .horizonColor = { backdrop.horizonColor.x, backdrop.horizonColor.y, backdrop.horizonColor.z },
+                .zenithColor = { backdrop.zenithColor.x, backdrop.zenithColor.y, backdrop.zenithColor.z },
+                .environmentAssetId = backdrop.environmentAssetId,
+                .horizonHeight = backdrop.horizonHeight,
+                .gradientExponent = backdrop.gradientExponent,
+            };
+            if (!selected.has_value() || backdrop.priority > selected->priority ||
+                (backdrop.priority == selected->priority && candidate.entityId < selected->desc.entityId)) {
+                selected = SelectedBackdrop{ .desc = candidate, .priority = backdrop.priority };
+            }
+        }
+    });
+    return selected.has_value() ? std::optional<SceneRenderWorldBackdrop>{ selected->desc } : std::nullopt;
 }
 
 // Converts the batched transform system's column-major 3x4 world affine into the
@@ -309,6 +359,7 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
     static_cast<void>(renderScene.RemoveMeshesNotInSorted(std::span<const std::uint64_t>{ seenMeshes_ }));
     static_cast<void>(renderScene.RemoveCamerasNotInSorted(std::span<const std::uint64_t>{ seenCameras_ }));
     static_cast<void>(renderScene.RemoveLightsNotInSorted(std::span<const std::uint64_t>{ seenLights_ }));
+    renderScene.SetWorldBackdrop(ResolveWorldBackdrop(scene));
 }
 
 void EcsRenderSceneSynchronizer::SyncEntities(
@@ -339,6 +390,7 @@ void EcsRenderSceneSynchronizer::SyncEntities(
     }
     transformPrecomputedReadCount_ = worldReader.PrecomputedReadCount();
     transformResolvedFallbackCount_ = worldReader.ResolvedFallbackCount();
+    renderScene.SetWorldBackdrop(ResolveWorldBackdrop(scene));
 }
 
 void EcsRenderSceneSynchronizer::SyncMeshWorldAffines(

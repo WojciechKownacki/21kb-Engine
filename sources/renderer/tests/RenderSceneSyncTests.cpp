@@ -19,6 +19,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
 #include "kb/render/resources/BuiltInParticleQuadMesh.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 #include "kb/render/scene/SceneParticleRenderSynchronizer.hpp"
@@ -200,6 +201,40 @@ void RunEcsSyncPropagatesCullingMaskAndClearSettingsTest() {
     const SceneRenderCamera builtCamera = RenderSceneCameraBuilder::Build(cameraProxy->desc, 1280U, 720U);
     Require(builtCamera.cullingMask == 0x00000006U, "RenderSceneCameraBuilder::Build did not carry cullingMask into the resolved SceneRenderCamera");
     Require(builtCamera.clearMode == SceneRenderCameraClearMode::DepthOnly, "RenderSceneCameraBuilder::Build did not carry clearMode into the resolved SceneRenderCamera");
+}
+
+void RunEcsSyncResolvesWorldBackdropDeterministicallyTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity low = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Backdrop Low" });
+    const kb::scene::SceneEntity high = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Backdrop High" });
+    kb::scene::WorldBackdropComponent lowBackdrop{};
+    lowBackdrop.mode = kb::scene::WorldBackdropMode::SolidColor;
+    lowBackdrop.color = kb::scene::Vec3{ 0.1F, 0.2F, 0.3F };
+    lowBackdrop.priority = 2;
+    scene.Components().WorldBackdrops().Set(low, lowBackdrop);
+    kb::scene::WorldBackdropComponent highBackdrop{};
+    highBackdrop.mode = kb::scene::WorldBackdropMode::VerticalGradient;
+    highBackdrop.horizonColor = kb::scene::Vec3{ 0.2F, 0.3F, 0.4F };
+    highBackdrop.zenithColor = kb::scene::Vec3{ 0.6F, 0.7F, 0.8F };
+    highBackdrop.gradientExponent = 1.5F;
+    highBackdrop.priority = 7;
+    scene.Components().WorldBackdrops().Set(high, highBackdrop);
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+    Require(renderScene.WorldBackdrop().has_value(), "ECS sync did not derive a world backdrop render state");
+    const SceneRenderWorldBackdrop& selected = *renderScene.WorldBackdrop();
+    Require(selected.entityId == high.Id() && selected.mode == SceneRenderWorldBackdropMode::VerticalGradient,
+        "ECS world backdrop sync did not choose the highest-priority enabled backdrop");
+    Require(NearlyEqual(selected.horizonColor[0], 0.2F) && NearlyEqual(selected.zenithColor[2], 0.8F) && NearlyEqual(selected.gradientExponent, 1.5F),
+        "ECS world backdrop sync lost authored gradient fields");
+
+    highBackdrop.enabled = false;
+    highBackdrop.priority = 99;
+    scene.Components().WorldBackdrops().Set(high, highBackdrop);
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+    Require(renderScene.WorldBackdrop().has_value() && renderScene.WorldBackdrop()->entityId == low.Id(),
+        "Disabled world backdrop was not excluded from deterministic runtime selection");
 }
 
 void RunEcsSyncResolvesVisibilityGateHierarchyAndMaskTest() {
@@ -2385,6 +2420,7 @@ void RunRenderSceneSyncTests() {
     RunCreatesStableRenderProxiesTest();
     RunRenderScenePrimaryCameraSelectionRespectsViewportAndPriorityTest();
     RunEcsSyncPropagatesCullingMaskAndClearSettingsTest();
+    RunEcsSyncResolvesWorldBackdropDeterministicallyTest();
     RunEcsSyncResolvesVisibilityGateHierarchyAndMaskTest();
     RunEcsSyncResolvesMaterialInstanceHandleTest();
     RunRenderSceneSyncsLightPipelineFieldsTest();

@@ -6,7 +6,7 @@
 namespace kb::scene {
 namespace {
 
-inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 20U;
+inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 21U;
 
 [[nodiscard]] std::uint32_t ComponentMask(const ScenePrefabNodeComponents& components) noexcept {
     std::uint32_t mask = 0U;
@@ -48,6 +48,9 @@ inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 20U;
     }
     if (components.streamFocus.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::StreamFocus);
+    }
+    if (components.worldBackdrop.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::WorldBackdrop);
     }
     if (components.behaviour.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Behaviour);
@@ -149,6 +152,9 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         }
         if (node.components.streamFocus.has_value()) {
             archetype.streamFocuses.push_back(*node.components.streamFocus);
+        }
+        if (node.components.worldBackdrop.has_value()) {
+            archetype.worldBackdrops.push_back(*node.components.worldBackdrop);
         }
         if (node.components.behaviour.has_value()) {
             archetype.behaviours.push_back(*node.components.behaviour);
