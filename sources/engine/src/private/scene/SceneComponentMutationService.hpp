@@ -19,6 +19,7 @@
 #include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
 
@@ -100,6 +101,10 @@ public:
     static void SetStreamFocus(Scene& scene, SceneEntity entity, const StreamFocusComponent& component);
     static void RemoveStreamFocus(Scene& scene, SceneEntity entity) noexcept;
     static void MarkStreamFocusModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static WorldBackdropComponent* TryGetWorldBackdrop(Scene& scene, SceneEntity entity) noexcept;
+    static void SetWorldBackdrop(Scene& scene, SceneEntity entity, const WorldBackdropComponent& component);
+    static void RemoveWorldBackdrop(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkWorldBackdropModified(Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static AudioSourceComponent* TryGetAudioSource(Scene& scene, SceneEntity entity) noexcept;
     static void SetAudioSource(Scene& scene, SceneEntity entity, const AudioSourceComponent& audioSource);

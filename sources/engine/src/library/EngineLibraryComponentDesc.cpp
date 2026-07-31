@@ -133,6 +133,11 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .id = ComputeLibraryComponentId("StreamFocus"),
             .serializable = true,
         },
+        LibraryComponentDesc{
+            .name = "WorldBackdrop",
+            .id = ComputeLibraryComponentId("WorldBackdrop"),
+            .serializable = true,
+        },
     };
     return kCatalog;
 }
