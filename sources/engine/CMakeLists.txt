@@ -270,6 +270,9 @@ add_library(kb_engine STATIC
         include/engine/scene/SceneDetailSwitchComponents.hpp
         include/engine/scene/VisibilityBlockerComponent.hpp
         include/engine/scene/SceneVisibilityBlockerComponents.hpp
+        include/engine/scene/SceneVisibilityCellComponents.hpp
+        include/engine/scene/SceneVisibilityCellQueries.hpp
+        include/engine/scene/VisibilityCellComponent.hpp
     include/engine/scene/SceneVisibilityComponents.hpp
     include/engine/scene/VisibilityComponent.hpp
     include/engine/render/postfx/PostProcessPipeline.hpp
@@ -656,6 +659,8 @@ add_library(kb_engine STATIC
         src/scene/components/SceneDetailSwitchStorage.cpp
         src/scene/components/SceneVisibilityBlockerApi.cpp
         src/scene/components/SceneVisibilityBlockerStorage.cpp
+        src/scene/components/SceneVisibilityCellApi.cpp
+        src/scene/components/SceneVisibilityCellStorage.cpp
       src/scene/SceneContentInstanceService.cpp
     src/scene/components/SceneTransformApi.cpp
     src/scene/components/SceneTransformStorage.cpp
@@ -994,6 +999,7 @@ add_library(kb_engine STATIC
         src/private/scene/components/SceneAmbientRadianceComponentStore.hpp
         src/private/scene/components/SceneDetailSwitchComponentStore.hpp
         src/private/scene/components/SceneVisibilityBlockerComponentStore.hpp
+        src/private/scene/components/SceneVisibilityCellComponentStore.hpp
       src/private/scene/SceneContentInstanceService.hpp
       src/private/scene/systems/ContentInstanceSceneSystem.hpp
     src/private/scene/components/SceneTransformComponentStore.hpp

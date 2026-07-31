@@ -127,6 +127,10 @@ namespace {
     return Equals(lhs.localCenter, rhs.localCenter) && Equals(lhs.size, rhs.size) && lhs.enabled == rhs.enabled;
 }
 
+[[nodiscard]] bool Equals(const VisibilityCellComponent& lhs, const VisibilityCellComponent& rhs) noexcept {
+    return lhs.membershipMask == rhs.membershipMask && lhs.membership == rhs.membership && lhs.visibilityOverride == rhs.visibilityOverride && lhs.enabled == rhs.enabled;
+}
+
 [[nodiscard]] bool Equals(const BehaviourComponent& lhs, const BehaviourComponent& rhs) noexcept {
     return lhs.behaviourAssetId == rhs.behaviourAssetId && lhs.backend == rhs.backend && lhs.enabled == rhs.enabled && lhs.tickGroup == rhs.tickGroup
         && lhs.executionOrder == rhs.executionOrder;
@@ -230,6 +234,7 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , ambientRadiances(scene.Components().AmbientRadiances())
     , detailSwitches(scene.Components().DetailSwitches())
     , visibilityBlockers(scene.Components().VisibilityBlockers())
+    , visibilityCells(scene.Components().VisibilityCells())
     , behaviours(scene.Components().Behaviours())
     , audioSources(scene.Components().AudioSources())
     , audioListeners(scene.Components().AudioListeners())
@@ -301,6 +306,7 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     WriteOptionalComponent(context.ambientRadiances, entity, node.components.ambientRadiance);
     WriteOptionalComponent(context.detailSwitches, entity, node.components.detailSwitch);
     WriteOptionalComponent(context.visibilityBlockers, entity, node.components.visibilityBlocker);
+    WriteOptionalComponent(context.visibilityCells, entity, node.components.visibilityCell);
     if (!componentMask.available || !componentMask.matches || node.components.behaviour.has_value()) {
         WriteOptionalComponent(context.behaviours, entity, node.components.behaviour);
     }
