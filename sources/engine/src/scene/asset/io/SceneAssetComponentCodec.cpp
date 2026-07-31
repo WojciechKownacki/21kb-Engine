@@ -39,6 +39,7 @@ enum SceneNodeComponentBits : std::uint32_t {
       WorldBackdropBit = 1U << 20U,
       AmbientRadianceBit = 1U << 21U,
       DetailSwitchBit = 1U << 22U,
+      VisibilityBlockerBit = 1U << 23U,
 };
 
 constexpr std::uint32_t KnownComponentBits = CameraBit |
@@ -59,7 +60,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit;
 
 [[nodiscard]] std::uint32_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint32_t componentBits = 0;
@@ -86,6 +87,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
       componentBits |= components.worldBackdrop.has_value() ? WorldBackdropBit : 0U;
       componentBits |= components.ambientRadiance.has_value() ? AmbientRadianceBit : 0U;
       componentBits |= components.detailSwitch.has_value() ? DetailSwitchBit : 0U;
+      componentBits |= components.visibilityBlocker.has_value() ? VisibilityBlockerBit : 0U;
     return componentBits;
 }
 
@@ -321,6 +323,12 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
             !IsSceneDetailSwitchComponentValid(detail)) return false;
         output.detailSwitch = detail;
     }
+    if ((componentBits & VisibilityBlockerBit) != 0U) {
+        if (fileVersion < 17U) return false;
+        SceneVisibilityBlockerComponent blocker{};
+        if (!SceneAssetPrimitiveCodec::ReadVec3(input, blocker.localCenter) || !SceneAssetPrimitiveCodec::ReadVec3(input, blocker.size) || !input.ReadBool(blocker.enabled) || !IsSceneVisibilityBlockerComponentValid(blocker)) return false;
+        output.visibilityBlocker = blocker;
+    }
     return true;
 }
 
@@ -463,6 +471,12 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteFloat(output, detail.promoteCoverage);
         SceneAssetBinaryIO::WriteFloat(output, detail.demoteCoverage);
         SceneAssetBinaryIO::WriteBool(output, detail.enabled);
+    }
+    if (components.visibilityBlocker.has_value()) {
+        const SceneVisibilityBlockerComponent& blocker = *components.visibilityBlocker;
+        SceneAssetPrimitiveCodec::WriteVec3(output, blocker.localCenter);
+        SceneAssetPrimitiveCodec::WriteVec3(output, blocker.size);
+        SceneAssetBinaryIO::WriteBool(output, blocker.enabled);
     }
 }
 
