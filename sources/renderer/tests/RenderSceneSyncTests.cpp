@@ -20,6 +20,7 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
+#include "engine/scene/AmbientRadianceComponent.hpp"
 #include "kb/render/resources/BuiltInParticleQuadMesh.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 #include "kb/render/scene/SceneParticleRenderSynchronizer.hpp"
@@ -236,6 +237,57 @@ void RunEcsSyncResolvesWorldBackdropDeterministicallyTest() {
     EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
     Require(renderScene.WorldBackdrop().has_value() && renderScene.WorldBackdrop()->entityId == low.Id(),
         "Disabled world backdrop was not excluded from deterministic runtime selection");
+}
+
+void RunEcsSyncResolvesAmbientRadianceDeterministicallyTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity low = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Ambient Low" });
+    const kb::scene::SceneEntity high = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Ambient High" });
+    kb::scene::AmbientRadianceComponent lowAmbient{};
+    lowAmbient.mode = kb::scene::AmbientRadianceMode::Constant;
+    lowAmbient.color = kb::scene::Vec3{ 0.1F, 0.2F, 0.3F };
+    lowAmbient.priority = 2;
+    scene.Components().AmbientRadiances().Set(low, lowAmbient);
+    kb::scene::AmbientRadianceComponent highAmbient{};
+    highAmbient.mode = kb::scene::AmbientRadianceMode::EnvironmentMap;
+    highAmbient.environmentAssetId = 77U;
+    highAmbient.horizonColor = kb::scene::Vec3{ 0.2F, 0.3F, 0.4F };
+    highAmbient.zenithColor = kb::scene::Vec3{ 0.6F, 0.7F, 0.8F };
+    highAmbient.intensity = 1.5F;
+    highAmbient.diffuseIntensity = 1.25F;
+    highAmbient.specularIntensity = 0.5F;
+    highAmbient.priority = 7;
+    scene.Components().AmbientRadiances().Set(high, highAmbient);
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+    Require(renderScene.AmbientRadiance().has_value(), "ECS sync did not derive ambient radiance render state");
+    const SceneRenderAmbientRadiance& selected = *renderScene.AmbientRadiance();
+    Require(selected.entityId == high.Id() && selected.mode == SceneRenderAmbientRadianceMode::EnvironmentMap && selected.environmentAssetId == 77U,
+        "ECS ambient radiance sync did not choose highest-priority enabled component");
+    Require(NearlyEqual(selected.zenithColor[2], 0.8F) && NearlyEqual(selected.intensity, 1.5F) && NearlyEqual(selected.specularIntensity, 0.5F),
+        "ECS ambient radiance sync lost authored fields");
+
+    const kb::scene::SceneEntity backdropEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Captured Backdrop" });
+    kb::scene::WorldBackdropComponent backdrop{};
+    backdrop.mode = kb::scene::WorldBackdropMode::VerticalGradient;
+    backdrop.color = kb::scene::Vec3{ 0.12F, 0.13F, 0.14F };
+    backdrop.horizonColor = kb::scene::Vec3{ 0.21F, 0.22F, 0.23F };
+    backdrop.zenithColor = kb::scene::Vec3{ 0.71F, 0.72F, 0.73F };
+    scene.Components().WorldBackdrops().Set(backdropEntity, backdrop);
+    highAmbient.mode = kb::scene::AmbientRadianceMode::CapturedEnvironment;
+    scene.Components().AmbientRadiances().Set(high, highAmbient);
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+    Require(renderScene.AmbientRadiance().has_value() &&
+            renderScene.AmbientRadiance()->mode == SceneRenderAmbientRadianceMode::CapturedEnvironment &&
+            NearlyEqual(renderScene.AmbientRadiance()->horizonColor[1], 0.22F) &&
+            NearlyEqual(renderScene.AmbientRadiance()->zenithColor[2], 0.73F),
+        "Captured ambient radiance did not derive its frame input from the selected ECS world backdrop");
+
+    highAmbient.enabled = false;
+    scene.Components().AmbientRadiances().Set(high, highAmbient);
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+    Require(renderScene.AmbientRadiance().has_value() && renderScene.AmbientRadiance()->entityId == low.Id(),
+        "Disabled ambient radiance was not excluded from deterministic selection");
 }
 
 void RunEcsSyncResolvesVisibilityGateHierarchyAndMaskTest() {
@@ -1487,9 +1539,9 @@ void RunRenderSceneSyncsAllSurfaceEmitterKindsTest() {
         if (proxy == nullptr) {
             continue;
         }
-        Require(proxy.desc.kind == expectedKinds[index], "ECS synchronization changed a surface emitter kind");
-        Require(NearlyEqual(proxy.desc.areaWidth, 2.0F + static_cast<float>(index)) &&
-                NearlyEqual(proxy.desc.areaHeight, 1.0F + static_cast<float>(index)),
+        Require(proxy->desc.kind == expectedKinds[index], "ECS synchronization changed a surface emitter kind");
+        Require(NearlyEqual(proxy->desc.areaWidth, 2.0F + static_cast<float>(index)) &&
+                NearlyEqual(proxy->desc.areaHeight, 1.0F + static_cast<float>(index)),
             "ECS synchronization changed surface emitter dimensions");
     }
 }
@@ -2510,6 +2562,7 @@ void RunRenderSceneSyncTests() {
     RunRenderScenePrimaryCameraSelectionRespectsViewportAndPriorityTest();
     RunEcsSyncPropagatesCullingMaskAndClearSettingsTest();
     RunEcsSyncResolvesWorldBackdropDeterministicallyTest();
+    RunEcsSyncResolvesAmbientRadianceDeterministicallyTest();
     RunEcsSyncResolvesVisibilityGateHierarchyAndMaskTest();
     RunEcsSyncResolvesMaterialInstanceHandleTest();
     RunRenderSceneSyncsLightPipelineFieldsTest();

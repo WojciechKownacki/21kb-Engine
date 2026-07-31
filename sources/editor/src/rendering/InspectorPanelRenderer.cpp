@@ -19,6 +19,7 @@
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
+#include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
@@ -1622,6 +1623,39 @@ void PaintWorldBackdropSection(HDC dc, RECT content, int& y, const EditorTheme& 
     y = section.Bottom() + kSectionGap;
 }
 
+[[nodiscard]] const char* AmbientRadianceModeName(kb::scene::AmbientRadianceMode mode) noexcept {
+    switch (mode) {
+    case kb::scene::AmbientRadianceMode::Constant: return "Constant";
+    case kb::scene::AmbientRadianceMode::Gradient: return "Gradient";
+    case kb::scene::AmbientRadianceMode::EnvironmentMap: return "Environment Map (2D Equirectangular)";
+    case kb::scene::AmbientRadianceMode::ProceduralSky: return "Procedural Sky";
+    case kb::scene::AmbientRadianceMode::CapturedEnvironment: return "Captured Environment";
+    case kb::scene::AmbientRadianceMode::EstimatedEnvironment: return "Estimated Environment";
+    }
+    return "Invalid";
+}
+
+void PaintAmbientRadianceSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::AmbientRadianceComponent& ambient) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AmbientRadiance, HeroIconKind::Bolt, "Ambient Radiance", true);
+    section.Field("Mode", AmbientRadianceModeName(ambient.mode), InspectorPropertyId::AmbientRadianceMode);
+    section.Field("Color R", FormatFloat(ambient.color.x, 3), InspectorPropertyId::AmbientRadianceColorR);
+    section.Field("Color G", FormatFloat(ambient.color.y, 3), InspectorPropertyId::AmbientRadianceColorG);
+    section.Field("Color B", FormatFloat(ambient.color.z, 3), InspectorPropertyId::AmbientRadianceColorB);
+    section.Field("Horizon R", FormatFloat(ambient.horizonColor.x, 3), InspectorPropertyId::AmbientRadianceHorizonColorR);
+    section.Field("Horizon G", FormatFloat(ambient.horizonColor.y, 3), InspectorPropertyId::AmbientRadianceHorizonColorG);
+    section.Field("Horizon B", FormatFloat(ambient.horizonColor.z, 3), InspectorPropertyId::AmbientRadianceHorizonColorB);
+    section.Field("Zenith R", FormatFloat(ambient.zenithColor.x, 3), InspectorPropertyId::AmbientRadianceZenithColorR);
+    section.Field("Zenith G", FormatFloat(ambient.zenithColor.y, 3), InspectorPropertyId::AmbientRadianceZenithColorG);
+    section.Field("Zenith B", FormatFloat(ambient.zenithColor.z, 3), InspectorPropertyId::AmbientRadianceZenithColorB);
+    section.Field("Environment Asset", std::to_string(ambient.environmentAssetId), InspectorPropertyId::AmbientRadianceEnvironmentAssetId);
+    section.Field("Intensity", FormatFloat(ambient.intensity, 3), InspectorPropertyId::AmbientRadianceIntensity);
+    section.Field("Diffuse Intensity", FormatFloat(ambient.diffuseIntensity, 3), InspectorPropertyId::AmbientRadianceDiffuseIntensity);
+    section.Field("Specular Intensity", FormatFloat(ambient.specularIntensity, 3), InspectorPropertyId::AmbientRadianceSpecularIntensity);
+    section.Field("Priority", std::to_string(ambient.priority), InspectorPropertyId::AmbientRadiancePriority);
+    section.Bool("Enabled", ambient.enabled, InspectorPropertyId::AmbientRadianceEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
 constexpr int kCameraSectionRows = 13;
 
 void PaintCameraSection(
@@ -1988,6 +2022,10 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         const int h = SectionHeight(inspector, InspectorSectionId::WorldBackdrop, 15);
         if (y < content.bottom && y + h > content.top) PaintWorldBackdropSection(dc, content, y, theme, inspector, *backdrop); else y += h + kSectionGap;
     }
+    if (const kb::scene::AmbientRadianceComponent* ambient = scene.Components().AmbientRadiances().TryGet(selected); ambient != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::AmbientRadiance, 16);
+        if (y < content.bottom && y + h > content.top) PaintAmbientRadianceSection(dc, content, y, theme, inspector, *ambient); else y += h + kSectionGap;
+    }
 
     if (sceneContext.HasEntityScript(selected)) {
         const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);
@@ -2227,6 +2265,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (scene.Components().ContentInstances().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::ContentInstance, 4) + kSectionGap;
     if (scene.Components().StreamFocuses().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::StreamFocus, 5) + kSectionGap;
     if (scene.Components().WorldBackdrops().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::WorldBackdrop, 15) + kSectionGap;
+    if (scene.Components().AmbientRadiances().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::AmbientRadiance, 16) + kSectionGap;
     if (sceneContext.HasEntityScript(selected)) {
         const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariables(selected).size());
         height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
@@ -3264,6 +3303,20 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                 const InspectorPanelRenderer::Hit hit = property == InspectorPropertyId::WorldBackdropEnabled
                     ? HitBool(RowRect(viewport, y), InspectorSectionId::WorldBackdrop, property, x, scrolledY)
                     : HitTextRow(RowRect(viewport, y), InspectorSectionId::WorldBackdrop, property, x, scrolledY);
+                if (hit.kind != InspectorHitKind::None) return hit;
+                AdvanceRow(y);
+            }
+        }
+        y += kSectionGap;
+    }
+    if (sceneContext.Scene().Components().AmbientRadiances().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::AmbientRadiance, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::AmbientRadiance)) {
+            constexpr std::array<InspectorPropertyId, 16> properties{ InspectorPropertyId::AmbientRadianceMode, InspectorPropertyId::AmbientRadianceColorR, InspectorPropertyId::AmbientRadianceColorG, InspectorPropertyId::AmbientRadianceColorB, InspectorPropertyId::AmbientRadianceHorizonColorR, InspectorPropertyId::AmbientRadianceHorizonColorG, InspectorPropertyId::AmbientRadianceHorizonColorB, InspectorPropertyId::AmbientRadianceZenithColorR, InspectorPropertyId::AmbientRadianceZenithColorG, InspectorPropertyId::AmbientRadianceZenithColorB, InspectorPropertyId::AmbientRadianceEnvironmentAssetId, InspectorPropertyId::AmbientRadianceIntensity, InspectorPropertyId::AmbientRadianceDiffuseIntensity, InspectorPropertyId::AmbientRadianceSpecularIntensity, InspectorPropertyId::AmbientRadiancePriority, InspectorPropertyId::AmbientRadianceEnabled };
+            for (const InspectorPropertyId property : properties) {
+                const InspectorPanelRenderer::Hit hit = property == InspectorPropertyId::AmbientRadianceEnabled
+                    ? HitBool(RowRect(viewport, y), InspectorSectionId::AmbientRadiance, property, x, scrolledY)
+                    : HitTextRow(RowRect(viewport, y), InspectorSectionId::AmbientRadiance, property, x, scrolledY);
                 if (hit.kind != InspectorHitKind::None) return hit;
                 AdvanceRow(y);
             }

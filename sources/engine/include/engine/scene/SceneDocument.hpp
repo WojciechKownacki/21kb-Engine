@@ -16,7 +16,8 @@ struct SceneDocument {
     // v4 (LIB-123): JointComponent is persisted with a stable prefab-node reference.
     // v3 (LIB-147): AudioSourceComponent gained the outputBus mixer-routing token.
     // v14: WorldBackdropComponent persists visible world background policy.
-    static constexpr std::uint32_t CurrentFileVersion = 14U;
+    // v15: AmbientRadianceComponent persists authored scene-global indirect lighting.
+    static constexpr std::uint32_t CurrentFileVersion = 15U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

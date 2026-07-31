@@ -2,11 +2,10 @@
 
 #include <limits>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace kb::scene {
 namespace {
-
-inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 21U;
 
 [[nodiscard]] std::uint32_t ComponentMask(const ScenePrefabNodeComponents& components) noexcept {
     std::uint32_t mask = 0U;
@@ -52,6 +51,9 @@ inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 21U;
     if (components.worldBackdrop.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::WorldBackdrop);
     }
+    if (components.ambientRadiance.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::AmbientRadiance);
+    }
     if (components.behaviour.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Behaviour);
     }
@@ -83,19 +85,23 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
     data.nodeCount_ = nodes.size();
     data.archetypes_.reserve(nodes.size());
 
-    // The optional-component mask now exceeds the safe per-thread stack budget.
-    // Keep this direct index table (the hot bake lookup remains O(1)) but own it
-    // on the heap with ScenePrefabBakedData's other variable-size work buffers.
-    std::vector<std::size_t> archetypeByMask(kScenePrefabBakedMaskCount, std::numeric_limits<std::size_t>::max());
+    // A sparse expected-O(1) index avoids allocating one entry for every possible
+    // component mask. Prefab baking is data-dependent: only masks present in the
+    // authored nodes consume memory, which keeps this off the runtime hot path.
+    std::unordered_map<std::uint32_t, std::size_t> archetypeByMask;
+    archetypeByMask.reserve(nodes.size());
 
     for (std::size_t nodeIndex = 0; nodeIndex < nodes.size(); ++nodeIndex) {
         const ScenePrefabNodeDesc& node = nodes[nodeIndex];
         const std::uint32_t mask = ComponentMask(node.components);
-        std::size_t archetypeIndex = archetypeByMask[mask];
-        if (archetypeIndex == std::numeric_limits<std::size_t>::max()) {
+        const auto found = archetypeByMask.find(mask);
+        std::size_t archetypeIndex = 0U;
+        if (found == archetypeByMask.end()) {
             archetypeIndex = data.archetypes_.size();
-            archetypeByMask[mask] = archetypeIndex;
+            archetypeByMask.emplace(mask, archetypeIndex);
             data.archetypes_.push_back(ScenePrefabBakedArchetype{ .componentMask = mask });
+        } else {
+            archetypeIndex = found->second;
         }
 
         ScenePrefabBakedArchetype& archetype = data.archetypes_[archetypeIndex];
@@ -155,6 +161,9 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         }
         if (node.components.worldBackdrop.has_value()) {
             archetype.worldBackdrops.push_back(*node.components.worldBackdrop);
+        }
+        if (node.components.ambientRadiance.has_value()) {
+            archetype.ambientRadiances.push_back(*node.components.ambientRadiance);
         }
         if (node.components.behaviour.has_value()) {
             archetype.behaviours.push_back(*node.components.behaviour);

@@ -31,6 +31,7 @@ public:
     [[nodiscard]] std::uint64_t ContentInstanceComponentId() const noexcept;
     [[nodiscard]] std::uint64_t StreamFocusComponentId() const noexcept;
     [[nodiscard]] std::uint64_t WorldBackdropComponentId() const noexcept;
+    [[nodiscard]] std::uint64_t AmbientRadianceComponentId() const noexcept;
     [[nodiscard]] std::uint64_t AudioSourceComponentId() const noexcept;
     [[nodiscard]] std::uint64_t AudioListenerComponentId() const noexcept;
     [[nodiscard]] std::uint64_t AnimatorComponentId() const noexcept;
@@ -56,6 +57,7 @@ private:
     std::uint64_t contentInstanceComponentId_ = 0;
     std::uint64_t streamFocusComponentId_ = 0;
     std::uint64_t worldBackdropComponentId_ = 0;
+    std::uint64_t ambientRadianceComponentId_ = 0;
     std::uint64_t audioSourceComponentId_ = 0;
     std::uint64_t audioListenerComponentId_ = 0;
     std::uint64_t animatorComponentId_ = 0;

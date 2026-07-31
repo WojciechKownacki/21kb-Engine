@@ -20,6 +20,7 @@
 #include "engine/scene/SceneContentInstanceComponents.hpp"
 #include "engine/scene/SceneStreamFocusComponents.hpp"
 #include "engine/scene/SceneWorldBackdropComponents.hpp"
+#include "engine/scene/SceneAmbientRadianceComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -57,6 +58,7 @@ struct ScenePrefabNodeStateWriterContext {
     SceneContentInstanceComponents contentInstances;
     SceneStreamFocusComponents streamFocuses;
     SceneWorldBackdropComponents worldBackdrops;
+    SceneAmbientRadianceComponents ambientRadiances;
     SceneBehaviourComponents behaviours;
     SceneAudioSourceComponents audioSources;
     SceneAudioListenerComponents audioListeners;

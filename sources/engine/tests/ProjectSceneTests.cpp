@@ -10,6 +10,7 @@
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
+#include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -345,6 +346,29 @@ void RunSceneRadianceEmitterReflectionSerializationTest() {
         "3D Radiance Emitter reflection did not roundtrip its authored state");
 }
 
+void RunSceneAmbientRadianceReflectionSerializationTest() {
+    kb::scene::Scene source;
+    const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Ambient Radiance" });
+    source.Components().AmbientRadiances().Set(sourceEntity, kb::scene::AmbientRadianceComponent{
+        .mode = kb::scene::AmbientRadianceMode::CapturedEnvironment,
+        .color = kb::scene::Vec3{ 0.1F, 0.2F, 0.3F }, .horizonColor = kb::scene::Vec3{ 0.2F, 0.3F, 0.4F }, .zenithColor = kb::scene::Vec3{ 0.5F, 0.6F, 0.7F },
+        .environmentAssetId = 51U, .intensity = 1.4F, .diffuseIntensity = 1.2F, .specularIntensity = 0.4F, .priority = 6, .enabled = true,
+    });
+    kb::ecs::World& sourceWorld = source.Runtime().EcsWorld();
+    const kb::ecs::ComponentReflection* reflection = sourceWorld.Reflection(kb::scene::AmbientRadianceComponent::StableId);
+    Require(reflection != nullptr && reflection->FindField("environmentAssetId") != nullptr && reflection->FindField("specularIntensity") != nullptr,
+        "Ambient Radiance reflection was not registered under its stable id");
+    kb::ecs::SerializedComponent serialized;
+    Require(sourceWorld.SerializeComponent(sourceEntity, sourceWorld.Component<kb::scene::AmbientRadianceComponent>(), serialized), "Ambient Radiance reflection serialization failed");
+    kb::scene::Scene target;
+    const kb::scene::SceneEntity targetEntity = target.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Ambient Target" });
+    Require(target.Runtime().EcsWorld().ApplySerializedComponent(targetEntity, serialized), "Ambient Radiance reflection apply failed");
+    const kb::scene::AmbientRadianceComponent* restored = target.Components().AmbientRadiances().TryGet(targetEntity);
+    Require(restored != nullptr && restored->mode == kb::scene::AmbientRadianceMode::CapturedEnvironment && restored->environmentAssetId == 51U &&
+            NearlyEqual(restored->zenithColor.z, 0.7F) && NearlyEqual(restored->intensity, 1.4F) && NearlyEqual(restored->diffuseIntensity, 1.2F) && NearlyEqual(restored->specularIntensity, 0.4F) && restored->priority == 6,
+        "Ambient Radiance reflection did not roundtrip authored state");
+}
+
 void RunSceneAudioSourceComponentReflectionSerializationTest() {
     kb::scene::Scene source;
     const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "AudioSource" });
@@ -574,6 +598,7 @@ void RunProjectSceneTests() {
     RunProjectDescriptorRejectsChecksumMismatchTest();
     RunSceneDocumentRoundTripTest();
     RunSceneRadianceEmitterReflectionSerializationTest();
+    RunSceneAmbientRadianceReflectionSerializationTest();
     RunSceneAudioListenerComponentReflectionSerializationTest();
     RunSceneAudioSourceComponentReflectionSerializationTest();
     RunSceneAudioListenerPrefabRoundTripTest();
