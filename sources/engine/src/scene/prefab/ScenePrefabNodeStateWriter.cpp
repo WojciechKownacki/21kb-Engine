@@ -170,6 +170,11 @@ namespace {
         lhs.height == rhs.height && lhs.area == rhs.area && lhs.carve == rhs.carve && lhs.enabled == rhs.enabled;
 }
 
+[[nodiscard]] bool Equals(const AuxFrameComponent& lhs, const AuxFrameComponent& rhs) noexcept {
+    return lhs.mode == rhs.mode && lhs.imageTargetId == rhs.imageTargetId && lhs.width == rhs.width && lhs.height == rhs.height &&
+        Equals(lhs.mirrorPlaneNormal, rhs.mirrorPlaneNormal) && lhs.mirrorPlaneOffset == rhs.mirrorPlaneOffset && lhs.enabled == rhs.enabled;
+}
+
 template <typename T, typename Components>
 void WriteOptionalComponent(Components components, SceneEntity entity, const std::optional<T>& component) {
     if (component.has_value()) {
@@ -236,6 +241,7 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , visibilityBlockers(scene.Components().VisibilityBlockers())
     , visibilityCells(scene.Components().VisibilityCells())
     , regionPortals(scene.Components().RegionPortals())
+    , auxFrames(scene.Components().AuxFrames())
     , behaviours(scene.Components().Behaviours())
     , audioSources(scene.Components().AudioSources())
     , audioListeners(scene.Components().AudioListeners())
@@ -312,6 +318,7 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     // writer owns the removal case while the synchronizer performs that final
     // graph-wide resolution for present portals.
     if (!node.components.regionPortal.has_value()) context.regionPortals.Remove(entity);
+    WriteOptionalComponent(context.auxFrames, entity, node.components.auxFrame);
     if (!componentMask.available || !componentMask.matches || node.components.behaviour.has_value()) {
         WriteOptionalComponent(context.behaviours, entity, node.components.behaviour);
     }

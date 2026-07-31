@@ -13,6 +13,7 @@
 #include "scene/components/SceneVisibilityBlockerComponentStore.hpp"
 #include "scene/components/SceneVisibilityCellComponentStore.hpp"
 #include "scene/components/SceneRegionPortalComponentStore.hpp"
+#include "scene/components/SceneAuxFrameComponentStore.hpp"
 #include "scene/components/SceneAudioListenerComponentStore.hpp"
 #include "scene/components/SceneAudioSourceComponentStore.hpp"
 #include "scene/components/SceneAnimatorComponentStore.hpp"
@@ -91,6 +92,8 @@ public:
     [[nodiscard]] SceneVisibilityCellComponentStore& VisibilityCells() noexcept;
     [[nodiscard]] const SceneRegionPortalComponentStore& RegionPortals() const noexcept;
     [[nodiscard]] SceneRegionPortalComponentStore& RegionPortals() noexcept;
+    [[nodiscard]] const SceneAuxFrameComponentStore& AuxFrames() const noexcept;
+    [[nodiscard]] SceneAuxFrameComponentStore& AuxFrames() noexcept;
     [[nodiscard]] const SceneAudioSourceComponentStore& AudioSources() const noexcept;
     [[nodiscard]] SceneAudioSourceComponentStore& AudioSources() noexcept;
     [[nodiscard]] const SceneAudioListenerComponentStore& AudioListeners() const noexcept;
@@ -125,6 +128,7 @@ private:
     SceneVisibilityBlockerComponentStore visibilityBlockers_;
     SceneVisibilityCellComponentStore visibilityCells_;
     SceneRegionPortalComponentStore regionPortals_;
+    SceneAuxFrameComponentStore auxFrames_;
     SceneAudioSourceComponentStore audioSources_;
     SceneAudioListenerComponentStore audioListeners_;
     SceneAnimatorComponentStore animators_;

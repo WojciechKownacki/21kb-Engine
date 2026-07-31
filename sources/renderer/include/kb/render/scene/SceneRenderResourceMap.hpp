@@ -52,6 +52,11 @@ public:
 
     void BindTexture(std::uint64_t textureAssetId, RenderTextureHandle handle);
     void BindTexture(std::uint64_t textureAssetId, RenderTextureColorSpace colorSpace, RenderTextureHandle handle);
+    // Renderer-produced image targets take precedence over imported assets with
+    // the same author-selected key.  They are derived state and never mutate
+    // ECS or asset metadata.
+    void BindDynamicTexture(std::uint64_t textureAssetId, RenderTextureColorSpace colorSpace, RenderTextureHandle handle);
+    void UnbindDynamicTexture(std::uint64_t textureAssetId, RenderTextureColorSpace colorSpace) noexcept;
     void UnbindTexture(std::uint64_t textureAssetId) noexcept;
     void UnbindTexture(std::uint64_t textureAssetId, RenderTextureColorSpace colorSpace) noexcept;
     void UnbindTextureHandle(RenderTextureHandle handle) noexcept;
@@ -66,6 +71,7 @@ private:
     std::unordered_map<std::uint64_t, RenderMeshHandle> meshes_;
     std::unordered_map<std::uint64_t, RenderMaterialHandle> materials_;
     std::unordered_map<TextureBindingKey, RenderTextureHandle, TextureBindingKeyHash> textures_;
+    std::unordered_map<TextureBindingKey, RenderTextureHandle, TextureBindingKeyHash> dynamicTextures_;
 };
 
 } // namespace kb::render
