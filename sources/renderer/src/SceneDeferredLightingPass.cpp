@@ -104,6 +104,7 @@ bool SceneDeferredLightingPass::Initialize() {
     lightPositionRangeUniform_ = bgfx::createUniform("u_deferredLightPositionRange", bgfx::UniformType::Vec4, kMaxSceneForwardPlusLights);
     lightColorIntensityUniform_ = bgfx::createUniform("u_deferredLightColorIntensity", bgfx::UniformType::Vec4, kMaxSceneForwardPlusLights);
     lightSpotUniform_ = bgfx::createUniform("u_deferredLightSpot", bgfx::UniformType::Vec4, kMaxSceneForwardPlusLights);
+    lightAreaRightUniform_ = bgfx::createUniform("u_deferredLightAreaRight", bgfx::UniformType::Vec4, kMaxSceneForwardPlusLights);
     lightParamsUniform_ = bgfx::createUniform("u_deferredLightParams", bgfx::UniformType::Vec4);
     ambientColorUniform_ = bgfx::createUniform("u_deferredAmbientColor", bgfx::UniformType::Vec4);
     environmentZenithUniform_ = bgfx::createUniform("u_deferredEnvironmentZenith", bgfx::UniformType::Vec4);
@@ -225,6 +226,10 @@ void SceneDeferredLightingPass::Shutdown() noexcept {
     if (bgfx::isValid(lightSpotUniform_)) {
         bgfx::destroy(lightSpotUniform_);
         lightSpotUniform_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(lightAreaRightUniform_)) {
+        bgfx::destroy(lightAreaRightUniform_);
+        lightAreaRightUniform_ = BGFX_INVALID_HANDLE;
     }
     if (bgfx::isValid(lightColorIntensityUniform_)) {
         bgfx::destroy(lightColorIntensityUniform_);
@@ -370,6 +375,7 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
     bgfx::setUniform(lightPositionRangeUniform_, lighting.positionRange.data(), kMaxSceneForwardPlusLights);
     bgfx::setUniform(lightColorIntensityUniform_, lighting.colorIntensity.data(), kMaxSceneForwardPlusLights);
     bgfx::setUniform(lightSpotUniform_, lighting.spot.data(), kMaxSceneForwardPlusLights);
+    bgfx::setUniform(lightAreaRightUniform_, lighting.areaRight.data(), kMaxSceneForwardPlusLights);
     bgfx::setUniform(lightParamsUniform_, lighting.params.data());
     bgfx::setUniform(ambientColorUniform_, lighting.ambient.data());
     bgfx::setUniform(environmentZenithUniform_, lighting.environmentZenith.data());
@@ -458,7 +464,7 @@ bool SceneDeferredLightingPass::IsInitialized() const noexcept {
         bgfx::isValid(normalSampler_) && bgfx::isValid(materialSampler_) && bgfx::isValid(surfaceSampler_) &&
         bgfx::isValid(depthSampler_) &&
         bgfx::isValid(lightDirKindUniform_) && bgfx::isValid(lightPositionRangeUniform_) &&
-        bgfx::isValid(lightColorIntensityUniform_) && bgfx::isValid(lightSpotUniform_) &&
+        bgfx::isValid(lightColorIntensityUniform_) && bgfx::isValid(lightSpotUniform_) && bgfx::isValid(lightAreaRightUniform_) &&
         bgfx::isValid(lightParamsUniform_) && bgfx::isValid(ambientColorUniform_) &&
         bgfx::isValid(environmentZenithUniform_) && bgfx::isValid(environmentGroundUniform_) &&
         bgfx::isValid(environmentParamsUniform_) && bgfx::isValid(cameraPositionUniform_) &&

@@ -147,6 +147,25 @@ void RegisterWorldBackdropReflection(kb::ecs::World& world) {
     }));
 }
 
+void RegisterLightReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<LightComponent>(LightComponent::StableId, {
+        KB_ECS_FIELD(LightComponent, kind, kb::ecs::ComponentFieldType::Enum32),
+        KB_ECS_FIELD(LightComponent, color, kb::ecs::ComponentFieldType::Vec3Float32),
+        KB_ECS_FIELD(LightComponent, intensity, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(LightComponent, range, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(LightComponent, innerConeDegrees, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(LightComponent, outerConeDegrees, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(LightComponent, areaWidth, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(LightComponent, areaHeight, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(LightComponent, contactShadowLength, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(LightComponent, volumetricScattering, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(LightComponent, castsShadow, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(LightComponent, useColorTemperature, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(LightComponent, colorTemperatureKelvin, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(LightComponent, layerMask, kb::ecs::ComponentFieldType::UInt32),
+    }));
+}
+
 } // namespace
 
 SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
@@ -155,7 +174,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , behaviourComponentId_(RegisterSceneComponent<BehaviourComponent>(world, "kb.scene.BehaviourComponent"))
     , cameraComponentId_(RegisterSceneComponent<CameraComponent>(world, CameraComponent::StableId))
     , meshRendererComponentId_(RegisterSceneComponent<MeshRendererComponent>(world, MeshRendererComponent::StableId))
-    , lightComponentId_(RegisterSceneComponent<LightComponent>(world, "kb.scene.LightComponent"))
+    , lightComponentId_(RegisterSceneComponent<LightComponent>(world, LightComponent::StableId))
     , inputComponentId_(RegisterSceneComponent<InputComponent>(world, "kb.scene.InputComponent"))
     , rigidbodyComponentId_(RegisterSceneComponent<RigidbodyComponent>(world, "kb.scene.RigidbodyComponent"))
     , colliderComponentId_(RegisterSceneComponent<ColliderComponent>(world, "kb.scene.ColliderComponent"))
@@ -175,6 +194,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , navObstacleComponentId_(RegisterSceneComponent<NavObstacle>(world, "kb.scene.NavObstacle")) {
     RegisterPhysicsReflection(world);
     RegisterAudioReflection(world);
+    RegisterLightReflection(world);
     RegisterRegionShapeReflection(world);
     RegisterGuideCurveReflection(world);
     RegisterContentInstanceReflection(world);
