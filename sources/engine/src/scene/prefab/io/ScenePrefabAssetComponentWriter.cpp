@@ -214,6 +214,14 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "visibilityCell.visibilityOverride=" << static_cast<int>(cell.visibilityOverride) << '\n';
         output << "visibilityCell.enabled=" << (cell.enabled ? 1 : 0) << '\n';
     }
+    output << "regionPortal=" << (components.regionPortal.has_value() ? 1 : 0) << '\n';
+    if (components.regionPortal.has_value()) {
+        const ScenePrefabRegionPortalComponent& portal = *components.regionPortal;
+        output << "regionPortal.sourceCellNodeStableId=" << portal.sourceCellNodeStableId << '\n';
+        output << "regionPortal.targetCellNodeStableId=" << portal.targetCellNodeStableId << '\n';
+        output << "regionPortal.purposes=" << portal.purposes << '\n';
+        output << "regionPortal.enabled=" << (portal.enabled ? 1 : 0) << '\n';
+    }
 
     output << "behaviour=" << (components.behaviour.has_value() ? 1 : 0) << '\n';
     if (components.behaviour.has_value()) {

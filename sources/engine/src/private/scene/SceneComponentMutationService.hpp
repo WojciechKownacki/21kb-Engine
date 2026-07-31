@@ -24,6 +24,7 @@
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
+#include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
 
@@ -125,6 +126,10 @@ public:
     static void SetVisibilityCell(Scene& scene, SceneEntity entity, const VisibilityCellComponent& component);
     static void RemoveVisibilityCell(Scene& scene, SceneEntity entity) noexcept;
     static void MarkVisibilityCellModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static SceneRegionPortalComponent* TryGetRegionPortal(Scene& scene, SceneEntity entity) noexcept;
+    static void SetRegionPortal(Scene& scene, SceneEntity entity, const SceneRegionPortalComponent& component);
+    static void RemoveRegionPortal(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkRegionPortalModified(Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static AudioSourceComponent* TryGetAudioSource(Scene& scene, SceneEntity entity) noexcept;
     static void SetAudioSource(Scene& scene, SceneEntity entity, const AudioSourceComponent& audioSource);

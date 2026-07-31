@@ -59,6 +59,7 @@ namespace {
     }
     if (components.visibilityBlocker.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::VisibilityBlocker);
     if (components.visibilityCell.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::VisibilityCell);
+    if (components.regionPortal.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::RegionPortal);
     if (components.behaviour.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Behaviour);
     }
@@ -175,6 +176,10 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         }
         if (node.components.visibilityBlocker.has_value()) archetype.visibilityBlockers.push_back(*node.components.visibilityBlocker);
         if (node.components.visibilityCell.has_value()) archetype.visibilityCells.push_back(*node.components.visibilityCell);
+        if (node.components.regionPortal.has_value()) {
+            const ScenePrefabRegionPortalComponent& prefabPortal = *node.components.regionPortal;
+            archetype.regionPortals.push_back(SceneRegionPortalComponent{ .purposes = prefabPortal.purposes, .enabled = prefabPortal.enabled });
+        }
         if (node.components.behaviour.has_value()) {
             archetype.behaviours.push_back(*node.components.behaviour);
         }

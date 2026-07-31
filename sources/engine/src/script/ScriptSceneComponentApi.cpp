@@ -18,6 +18,7 @@
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
+#include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
 #include "engine/scene/SceneCharacterControllerComponents.hpp"
@@ -38,6 +39,7 @@
 #include "engine/scene/SceneDetailSwitchComponents.hpp"
 #include "engine/scene/SceneVisibilityBlockerComponents.hpp"
 #include "engine/scene/SceneVisibilityCellComponents.hpp"
+#include "engine/scene/SceneRegionPortalComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -234,7 +236,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 22> kComponentNames{
+constexpr std::array<std::string_view, 23> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
@@ -257,6 +259,7 @@ constexpr std::array<std::string_view, 22> kComponentNames{
     "Detail Switch",
     "Visibility Blocker",
     "Visibility Cell",
+    "Region Portal",
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kRegionShapePropertyDescs{
@@ -337,6 +340,11 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 7> kVisibilityBlockerProp
 constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kVisibilityCellPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "membershipMask", ScriptValueType::Int }, ScriptSceneComponentPropertyDesc{ "membership", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "visibilityOverride", ScriptValueType::Int }, ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kRegionPortalPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "sourceCell", ScriptValueType::Entity }, ScriptSceneComponentPropertyDesc{ "targetCell", ScriptValueType::Entity },
+    ScriptSceneComponentPropertyDesc{ "purposes", ScriptValueType::UInt32 }, ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 1> kTagsPropertyDescs{
@@ -831,6 +839,13 @@ constexpr std::array<FieldBinding, 4> kVisibilityCellFields{
     KB_BOOL(kb::scene::VisibilityCellComponent, enabled),
 };
 
+constexpr std::array<FieldBinding, 4> kRegionPortalFields{
+    FieldBinding{ "sourceCell", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SceneRegionPortalComponent*>(component)->sourceCell.Id(), ScriptValueType::Entity }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Entity || value.AsUInt64() == 0U) return false; static_cast<kb::scene::SceneRegionPortalComponent*>(component)->sourceCell = kb::scene::SceneEntity{ value.AsUInt64() }; return true; } },
+    FieldBinding{ "targetCell", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SceneRegionPortalComponent*>(component)->targetCell.Id(), ScriptValueType::Entity }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Entity || value.AsUInt64() == 0U) return false; static_cast<kb::scene::SceneRegionPortalComponent*>(component)->targetCell = kb::scene::SceneEntity{ value.AsUInt64() }; return true; } },
+    FieldBinding{ "purposes", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SceneRegionPortalComponent*>(component)->purposes }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::UInt32 || !kb::scene::IsRegionPortalPurposeMaskValid(value.AsUInt32())) return false; static_cast<kb::scene::SceneRegionPortalComponent*>(component)->purposes = value.AsUInt32(); return true; } },
+    KB_BOOL(kb::scene::SceneRegionPortalComponent, enabled),
+};
+
 #undef KB_BOOL
 #undef KB_INT
 #undef KB_UINT32
@@ -913,6 +928,7 @@ void MarkAmbientRadianceModified(kb::scene::Scene& scene, kb::scene::SceneEntity
 void MarkDetailSwitchModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().DetailSwitches().MarkModified(entity); }
 void MarkVisibilityBlockerModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().VisibilityBlockers().MarkModified(entity); }
 void MarkVisibilityCellModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().VisibilityCells().MarkModified(entity); }
+void MarkRegionPortalModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().RegionPortals().MarkModified(entity); }
 
 [[nodiscard]] ComponentAccess AccessComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
     if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
@@ -1006,6 +1022,10 @@ void MarkVisibilityCellModified(kb::scene::Scene& scene, kb::scene::SceneEntity 
         kb::scene::VisibilityCellComponent* component = scene.Components().VisibilityCells().TryGet(entity);
         return ComponentAccess{ component, component, kVisibilityCellFields, &MarkVisibilityCellModified };
     }
+    if (componentName == "Region Portal") {
+        kb::scene::SceneRegionPortalComponent* component = scene.Components().RegionPortals().TryGet(entity);
+        return ComponentAccess{ component, component, kRegionPortalFields, &MarkRegionPortalModified };
+    }
     return {};
 }
 
@@ -1033,6 +1053,7 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "Detail Switch") return kDetailSwitchPropertyDescs;
     if (componentName == "Visibility Blocker") return kVisibilityBlockerPropertyDescs;
     if (componentName == "Visibility Cell") return kVisibilityCellPropertyDescs;
+    if (componentName == "Region Portal") return kRegionPortalPropertyDescs;
     if (componentName == "Camera") {
         return kCameraPropertyDescs;
     }
@@ -1107,6 +1128,17 @@ ScriptSceneComponentMutationResult ScriptSceneComponentApi::SetProperty(
     const ScriptSceneComponentPropertyDesc* property = FindPropertyDesc(ComponentProperties(componentName), propertyName);
     if (property != nullptr && !property->writable) {
         return ScriptSceneComponentMutationResult{ .error = "component property is read-only for scripts" };
+    }
+
+    if (componentName == "Region Portal" && (propertyName == "sourceCell" || propertyName == "targetCell")) {
+        const kb::scene::SceneEntity cell{ value.AsUInt64() };
+        const kb::scene::SceneRegionPortalComponent& portal = *static_cast<const kb::scene::SceneRegionPortalComponent*>(component.immutable);
+        if (value.Type() != ScriptValueType::Entity || cell == entity || !scene.Entities().IsAlive(cell) ||
+            !scene.Components().VisibilityCells().Has(cell) ||
+            (propertyName == "sourceCell" && cell == portal.targetCell) ||
+            (propertyName == "targetCell" && cell == portal.sourceCell)) {
+            return ScriptSceneComponentMutationResult{ .error = "portal cell must reference a distinct live Visibility Cell" };
+        }
     }
 
     if (!field->write(component.mutableComponent, value)) {
