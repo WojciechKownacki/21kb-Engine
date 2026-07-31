@@ -15,6 +15,13 @@
 #include "engine/scene/SceneVisibilityResolution.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
+#include "engine/scene/AmbientRadianceComponent.hpp"
+#include "engine/scene/DetailSwitchComponent.hpp"
+#include "engine/scene/VisibilityBlockerComponent.hpp"
+#include "engine/ecs/Query.hpp"
+#include "engine/ecs/UnsafeHotQuery.hpp"
+#include "engine/ecs/World.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 #include "scene/EcsRenderTransformResolver.hpp"
@@ -95,6 +102,114 @@ namespace {
     return RenderLightKind::Point;
 }
 
+[[nodiscard]] SceneRenderWorldBackdropMode WorldBackdropModeOf(kb::scene::WorldBackdropMode mode) noexcept {
+    switch (mode) {
+    case kb::scene::WorldBackdropMode::SolidColor: return SceneRenderWorldBackdropMode::SolidColor;
+    case kb::scene::WorldBackdropMode::VerticalGradient: return SceneRenderWorldBackdropMode::VerticalGradient;
+    case kb::scene::WorldBackdropMode::EnvironmentMap: return SceneRenderWorldBackdropMode::EnvironmentMap;
+    case kb::scene::WorldBackdropMode::ProceduralSky: return SceneRenderWorldBackdropMode::ProceduralSky;
+    }
+    return SceneRenderWorldBackdropMode::SolidColor;
+}
+
+[[nodiscard]] std::optional<SceneRenderWorldBackdrop> ResolveWorldBackdrop(const kb::scene::Scene& scene) {
+    struct SelectedBackdrop {
+        SceneRenderWorldBackdrop desc{};
+        std::int32_t priority = 0;
+    };
+    std::optional<SelectedBackdrop> selected;
+    kb::ecs::Query<kb::scene::WorldBackdropComponent> query = const_cast<kb::scene::Scene&>(scene).Runtime().EcsWorld().CreateQuery<kb::scene::WorldBackdropComponent>();
+    kb::ecs::UnsafeHotReadQuery<kb::scene::WorldBackdropComponent> hot;
+    kb::ecs::QueryExecutionSettings settings{};
+    settings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
+    if (!query.IsValid() || !hot.Rebuild(query, settings)) return std::nullopt;
+    hot.ForEachRange(settings.maxBatchSize, [&selected](const auto& batch) {
+        const kb::scene::WorldBackdropComponent* backdrops = batch.template Components<0>();
+        for (std::size_t index = 0U; index < batch.Count(); ++index) {
+            const kb::scene::SceneEntity entity = batch.EntityAt(index);
+            const kb::scene::WorldBackdropComponent& backdrop = backdrops[index];
+            if (!entity.IsValid() || !backdrop.enabled || !kb::scene::IsWorldBackdropComponentValid(backdrop)) continue;
+            const SceneRenderWorldBackdrop candidate{
+                .entityId = entity.Id(),
+                .mode = WorldBackdropModeOf(backdrop.mode),
+                .color = { backdrop.color.x, backdrop.color.y, backdrop.color.z },
+                .horizonColor = { backdrop.horizonColor.x, backdrop.horizonColor.y, backdrop.horizonColor.z },
+                .zenithColor = { backdrop.zenithColor.x, backdrop.zenithColor.y, backdrop.zenithColor.z },
+                .environmentAssetId = backdrop.environmentAssetId,
+                .horizonHeight = backdrop.horizonHeight,
+                .gradientExponent = backdrop.gradientExponent,
+            };
+            if (!selected.has_value() || backdrop.priority > selected->priority ||
+                (backdrop.priority == selected->priority && candidate.entityId < selected->desc.entityId)) {
+                selected = SelectedBackdrop{ .desc = candidate, .priority = backdrop.priority };
+            }
+        }
+    });
+    return selected.has_value() ? std::optional<SceneRenderWorldBackdrop>{ selected->desc } : std::nullopt;
+}
+
+[[nodiscard]] SceneRenderAmbientRadianceMode AmbientRadianceModeOf(kb::scene::AmbientRadianceMode mode) noexcept {
+    switch (mode) {
+    case kb::scene::AmbientRadianceMode::Constant: return SceneRenderAmbientRadianceMode::Constant;
+    case kb::scene::AmbientRadianceMode::Gradient: return SceneRenderAmbientRadianceMode::Gradient;
+    case kb::scene::AmbientRadianceMode::EnvironmentMap: return SceneRenderAmbientRadianceMode::EnvironmentMap;
+    case kb::scene::AmbientRadianceMode::ProceduralSky: return SceneRenderAmbientRadianceMode::ProceduralSky;
+    case kb::scene::AmbientRadianceMode::CapturedEnvironment: return SceneRenderAmbientRadianceMode::CapturedEnvironment;
+    case kb::scene::AmbientRadianceMode::EstimatedEnvironment: return SceneRenderAmbientRadianceMode::EstimatedEnvironment;
+    }
+    return SceneRenderAmbientRadianceMode::Constant;
+}
+
+[[nodiscard]] std::optional<SceneRenderAmbientRadiance> ResolveAmbientRadiance(
+    const kb::scene::Scene& scene,
+    const std::optional<SceneRenderWorldBackdrop>& worldBackdrop) {
+    struct SelectedAmbient { SceneRenderAmbientRadiance desc{}; std::int32_t priority = 0; };
+    std::optional<SelectedAmbient> selected;
+    kb::ecs::Query<kb::scene::AmbientRadianceComponent> query = const_cast<kb::scene::Scene&>(scene).Runtime().EcsWorld().CreateQuery<kb::scene::AmbientRadianceComponent>();
+    kb::ecs::UnsafeHotReadQuery<kb::scene::AmbientRadianceComponent> hot;
+    kb::ecs::QueryExecutionSettings settings{};
+    settings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
+    if (!query.IsValid() || !hot.Rebuild(query, settings)) return std::nullopt;
+    hot.ForEachRange(settings.maxBatchSize, [&selected](const auto& batch) {
+        const kb::scene::AmbientRadianceComponent* components = batch.template Components<0>();
+        for (std::size_t index = 0U; index < batch.Count(); ++index) {
+            const kb::scene::SceneEntity entity = batch.EntityAt(index);
+            const kb::scene::AmbientRadianceComponent& ambient = components[index];
+            if (!entity.IsValid() || !ambient.enabled || !kb::scene::IsAmbientRadianceComponentValid(ambient)) continue;
+            const SceneRenderAmbientRadiance candidate{
+                .entityId = entity.Id(), .mode = AmbientRadianceModeOf(ambient.mode),
+                .color = { ambient.color.x, ambient.color.y, ambient.color.z },
+                .horizonColor = { ambient.horizonColor.x, ambient.horizonColor.y, ambient.horizonColor.z },
+                .zenithColor = { ambient.zenithColor.x, ambient.zenithColor.y, ambient.zenithColor.z },
+                .environmentAssetId = ambient.environmentAssetId, .intensity = ambient.intensity,
+                .diffuseIntensity = ambient.diffuseIntensity, .specularIntensity = ambient.specularIntensity,
+            };
+            if (!selected.has_value() || ambient.priority > selected->priority ||
+                (ambient.priority == selected->priority && candidate.entityId < selected->desc.entityId)) {
+                selected = SelectedAmbient{ .desc = candidate, .priority = ambient.priority };
+            }
+        }
+    });
+    if (!selected.has_value()) return std::nullopt;
+
+    // Capture and estimation are derived each synchronization from the selected
+    // authored backdrop. No copy is persisted into the ambient component, so ECS
+    // remains the single source of truth for both authoring inputs.
+    SceneRenderAmbientRadiance result = selected->desc;
+    if ((result.mode == SceneRenderAmbientRadianceMode::CapturedEnvironment ||
+         result.mode == SceneRenderAmbientRadianceMode::EstimatedEnvironment) &&
+        worldBackdrop.has_value()) {
+        const SceneRenderWorldBackdrop& backdrop = *worldBackdrop;
+        result.color = backdrop.color;
+        result.horizonColor = backdrop.horizonColor;
+        result.zenithColor = backdrop.zenithColor;
+        if (backdrop.mode == SceneRenderWorldBackdropMode::EnvironmentMap) {
+            result.environmentAssetId = backdrop.environmentAssetId;
+        }
+    }
+    return result;
+}
+
 // Converts the batched transform system's column-major 3x4 world affine into the
 // column-major 4x4 model matrix the render instance stream expects. This mapping
 // is identical, element for element, to SceneTransformMatrices::Model, so the
@@ -116,6 +231,7 @@ struct SyncContext {
     std::vector<std::uint64_t>* meshes = nullptr;
     std::vector<std::uint64_t>* cameras = nullptr;
     std::vector<std::uint64_t>* lights = nullptr;
+    std::vector<std::uint64_t>* visibilityBlockers = nullptr;
     bool basicLightingEnabled = false;
 };
 
@@ -171,6 +287,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
     const std::uint32_t materialSlotOverrideCount = CopyMaterialSlotOverrides(renderer, materialSlotAssetIds);
     sync->meshes->push_back(entity.Id());
     const kb::scene::ResolvedVisibility visibility = kb::scene::ResolveVisibility(*sync->scene, entity);
+    const kb::scene::SceneDetailSwitchComponent* detailSwitch = sync->scene->Components().DetailSwitches().TryGet(entity);
     static_cast<void>(sync->renderScene->UpsertMesh(MeshRenderProxyDesc{
         .entityId = entity.Id(),
         .meshAssetId = renderer.meshAssetId,
@@ -183,6 +300,12 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
         .castsShadow = renderer.castsShadow,
         .receivesShadow = renderer.receivesShadow,
         .layer = renderer.layer & visibility.mask,
+        .detailSwitchGroupId = detailSwitch != nullptr ? detailSwitch->groupId : 0U,
+        .detailSwitchMinimumLod = detailSwitch != nullptr ? detailSwitch->minimumLod : 0U,
+        .detailSwitchMaximumLod = detailSwitch != nullptr ? detailSwitch->maximumLod : 255U,
+        .detailSwitchPromoteCoverage = detailSwitch != nullptr ? detailSwitch->promoteCoverage : 0.20F,
+        .detailSwitchDemoteCoverage = detailSwitch != nullptr ? detailSwitch->demoteCoverage : 0.15F,
+        .detailSwitchEnabled = detailSwitch != nullptr && detailSwitch->enabled && kb::scene::IsSceneDetailSwitchComponentValid(*detailSwitch),
     }));
     static_cast<void>(transform);
 }
@@ -212,9 +335,21 @@ void SyncLight(kb::scene::SceneEntity entity, const kb::scene::TransformComponen
     static_cast<void>(transform);
 }
 
+void SyncVisibilityBlocker(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::SceneVisibilityBlockerComponent& blocker, void* context) {
+    auto* sync = static_cast<SyncContext*>(context);
+    if (!blocker.enabled || !kb::scene::IsSceneVisibilityBlockerComponentValid(blocker)) return;
+    const kb::scene::TransformComponent renderTransform = sync->worldReader->Read(entity, transform);
+    sync->visibilityBlockers->push_back(entity.Id());
+    static_cast<void>(sync->renderScene->UpsertVisibilityBlocker(VisibilityBlockerRenderProxyDesc{
+        .entityId = entity.Id(), .model = SceneTransformMatrices::Model(renderTransform),
+        .localCenter = { blocker.localCenter.x, blocker.localCenter.y, blocker.localCenter.z },
+        .size = { blocker.size.x, blocker.size.y, blocker.size.z },
+    }));
+}
+
 void SyncEntity(kb::scene::SceneEntity entity, SyncContext& context) {
     if (context.scene == nullptr || context.renderScene == nullptr || context.transforms == nullptr ||
-        context.meshes == nullptr || context.cameras == nullptr || context.lights == nullptr) {
+        context.meshes == nullptr || context.cameras == nullptr || context.lights == nullptr || context.visibilityBlockers == nullptr) {
         return;
     }
 
@@ -222,6 +357,7 @@ void SyncEntity(kb::scene::SceneEntity entity, SyncContext& context) {
         static_cast<void>(context.renderScene->RemoveMesh(entity.Id()));
         static_cast<void>(context.renderScene->RemoveCamera(entity.Id()));
         static_cast<void>(context.renderScene->RemoveLight(entity.Id()));
+        static_cast<void>(context.renderScene->RemoveVisibilityBlocker(entity.Id()));
         return;
     }
 
@@ -249,6 +385,11 @@ void SyncEntity(kb::scene::SceneEntity entity, SyncContext& context) {
     } else {
         static_cast<void>(context.renderScene->RemoveLight(entity.Id()));
     }
+    if (const kb::scene::SceneVisibilityBlockerComponent* blocker = components.VisibilityBlockers().TryGet(entity); blocker != nullptr && transform != nullptr && blocker->enabled && kb::scene::IsSceneVisibilityBlockerComponentValid(*blocker)) {
+        SyncVisibilityBlocker(entity, *transform, *blocker, &context);
+    } else {
+        static_cast<void>(context.renderScene->RemoveVisibilityBlocker(entity.Id()));
+    }
 }
 
 } // namespace
@@ -263,6 +404,7 @@ void EcsRenderSceneSynchronizer::Reserve(const EcsRenderSceneSynchronizerReserve
     if (desc.lightProxies > 0U) {
         seenLights_.reserve(desc.lightProxies);
     }
+    if (desc.visibilityBlockerProxies > 0U) seenVisibilityBlockers_.reserve(desc.visibilityBlockerProxies);
     if (desc.transformCacheEntries > 0U) {
         transformCache_.reserve(desc.transformCacheEntries);
     }
@@ -278,6 +420,7 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
     seenMeshes_.clear();
     seenCameras_.clear();
     seenLights_.clear();
+    seenVisibilityBlockers_.clear();
     transformCache_.clear();
     transformResolving_.clear();
 
@@ -291,6 +434,7 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
         .meshes = &seenMeshes_,
         .cameras = &seenCameras_,
         .lights = &seenLights_,
+        .visibilityBlockers = &seenVisibilityBlockers_,
         .basicLightingEnabled = kb::scene::SceneLightingAccess::BasicLightingEnabled(scene),
     };
 
@@ -300,15 +444,31 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
     if (context.basicLightingEnabled) {
         visitors.ForEachLight(&SyncLight, &context);
     }
+    kb::ecs::Query<kb::scene::SceneVisibilityBlockerComponent, kb::scene::TransformComponent> blockers = const_cast<kb::scene::Scene&>(scene).Runtime().EcsWorld().CreateQuery<kb::scene::SceneVisibilityBlockerComponent, kb::scene::TransformComponent>();
+    kb::ecs::UnsafeHotReadQuery<kb::scene::SceneVisibilityBlockerComponent, kb::scene::TransformComponent> hotBlockers;
+    kb::ecs::QueryExecutionSettings blockerSettings{};
+    blockerSettings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
+    if (blockers.IsValid() && hotBlockers.Rebuild(blockers, blockerSettings)) {
+        hotBlockers.ForEachRange(blockerSettings.maxBatchSize, [&context](const auto& batch) {
+            const auto* components = batch.template Components<0>();
+            const auto* transforms = batch.template Components<1>();
+            for (std::size_t index = 0U; index < batch.Count(); ++index) SyncVisibilityBlocker(batch.EntityAt(index), transforms[index], components[index], &context);
+        });
+    }
     transformPrecomputedReadCount_ = worldReader.PrecomputedReadCount();
     transformResolvedFallbackCount_ = worldReader.ResolvedFallbackCount();
 
     std::ranges::sort(seenMeshes_);
     std::ranges::sort(seenCameras_);
     std::ranges::sort(seenLights_);
+    std::ranges::sort(seenVisibilityBlockers_);
     static_cast<void>(renderScene.RemoveMeshesNotInSorted(std::span<const std::uint64_t>{ seenMeshes_ }));
     static_cast<void>(renderScene.RemoveCamerasNotInSorted(std::span<const std::uint64_t>{ seenCameras_ }));
     static_cast<void>(renderScene.RemoveLightsNotInSorted(std::span<const std::uint64_t>{ seenLights_ }));
+    static_cast<void>(renderScene.RemoveVisibilityBlockersNotInSorted(std::span<const std::uint64_t>{ seenVisibilityBlockers_ }));
+    const std::optional<SceneRenderWorldBackdrop> worldBackdrop = ResolveWorldBackdrop(scene);
+    renderScene.SetWorldBackdrop(worldBackdrop);
+    renderScene.SetAmbientRadiance(ResolveAmbientRadiance(scene, worldBackdrop));
 }
 
 void EcsRenderSceneSynchronizer::SyncEntities(
@@ -318,6 +478,7 @@ void EcsRenderSceneSynchronizer::SyncEntities(
     seenMeshes_.clear();
     seenCameras_.clear();
     seenLights_.clear();
+    seenVisibilityBlockers_.clear();
     transformCache_.clear();
     transformResolving_.clear();
 
@@ -331,6 +492,7 @@ void EcsRenderSceneSynchronizer::SyncEntities(
         .meshes = &seenMeshes_,
         .cameras = &seenCameras_,
         .lights = &seenLights_,
+        .visibilityBlockers = &seenVisibilityBlockers_,
         .basicLightingEnabled = kb::scene::SceneLightingAccess::BasicLightingEnabled(scene),
     };
 
@@ -339,6 +501,9 @@ void EcsRenderSceneSynchronizer::SyncEntities(
     }
     transformPrecomputedReadCount_ = worldReader.PrecomputedReadCount();
     transformResolvedFallbackCount_ = worldReader.ResolvedFallbackCount();
+    const std::optional<SceneRenderWorldBackdrop> worldBackdrop = ResolveWorldBackdrop(scene);
+    renderScene.SetWorldBackdrop(worldBackdrop);
+    renderScene.SetAmbientRadiance(ResolveAmbientRadiance(scene, worldBackdrop));
 }
 
 void EcsRenderSceneSynchronizer::SyncMeshWorldAffines(
@@ -351,6 +516,7 @@ void EcsRenderSceneSynchronizer::SyncMeshWorldAffines(
         // Returns false for entities without a mesh proxy (cameras, lights); those
         // are handled by the structural sync, so skipping them here is correct.
         static_cast<void>(renderScene.UpdateMeshTransform(entities[index].Id(), model));
+        static_cast<void>(renderScene.UpdateVisibilityBlockerTransform(entities[index].Id(), model));
     }
 }
 
@@ -375,6 +541,7 @@ void EcsRenderSceneSynchronizer::SyncMeshWorldAffinesParallel(
         const std::size_t end = chunk.begin + chunk.count;
         for (std::size_t index = chunk.begin; index < end; ++index) {
             const std::array<float, 16> model = ModelFromWorldAffine3x4(worldAffines[index]);
+            static_cast<void>(renderScene.UpdateVisibilityBlockerTransform(entities[index].Id(), model));
             switch (renderScene.ApplyMeshTransform(entities[index].Id(), model)) {
             case RenderScene::TransformUpdateOutcome::InPlace:
                 ++localInPlace;

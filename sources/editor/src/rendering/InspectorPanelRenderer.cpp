@@ -14,6 +14,16 @@
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/RegionShapeComponent.hpp"
+#include "engine/scene/GuideCurveComponent.hpp"
+#include "engine/scene/ContentInstanceComponent.hpp"
+#include "engine/scene/StreamFocusComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
+#include "engine/scene/AmbientRadianceComponent.hpp"
+#include "engine/scene/DetailSwitchComponent.hpp"
+#include "engine/scene/VisibilityBlockerComponent.hpp"
+#include "engine/scene/VisibilityCellComponent.hpp"
+#include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
@@ -1521,6 +1531,176 @@ void PaintTagsSection(
     y = section.Bottom() + kSectionGap;
 }
 
+[[nodiscard]] const char* RegionShapeKindLabel(kb::scene::RegionShapeKind kind) noexcept {
+    switch (kind) {
+    case kb::scene::RegionShapeKind::Circle2D: return "Circle 2D";
+    case kb::scene::RegionShapeKind::Rectangle2D: return "Rectangle 2D";
+    case kb::scene::RegionShapeKind::Sphere: return "Sphere";
+    case kb::scene::RegionShapeKind::Box: return "Box";
+    case kb::scene::RegionShapeKind::Capsule: return "Capsule";
+    }
+    return "Invalid";
+}
+
+void PaintRegionShapeSection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const kb::scene::RegionShapeComponent& shape) {
+    SectionWriter section(
+        dc,
+        Rect(content.left, y, content.right, content.bottom),
+        theme,
+        inspector,
+        InspectorSectionId::RegionShape,
+        HeroIconKind::Cube,
+        "Region Shape",
+        true);
+    section.Field("Shape", RegionShapeKindLabel(shape.kind), InspectorPropertyId::RegionShapeKind);
+    section.Vec3("Center", shape.center, InspectorPropertyId::RegionShapeCenterX, InspectorPropertyId::RegionShapeCenterY, InspectorPropertyId::RegionShapeCenterZ);
+    section.Vec3("Size", shape.size, InspectorPropertyId::RegionShapeSizeX, InspectorPropertyId::RegionShapeSizeY, InspectorPropertyId::RegionShapeSizeZ);
+    section.Field("Radius", FormatFloat(shape.radius, 3), InspectorPropertyId::RegionShapeRadius);
+    section.Field("Height", FormatFloat(shape.height, 3), InspectorPropertyId::RegionShapeHeight);
+    section.Bool("Enabled", shape.enabled, InspectorPropertyId::RegionShapeEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
+void PaintGuideCurveSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::GuideCurveComponent& curve) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::GuideCurve, HeroIconKind::Cube, "Guide Curve", true);
+    section.Field("Control Points", std::to_string(curve.controlPointCount), InspectorPropertyId::GuideCurveControlPointCount);
+    section.Field("Interpolation", curve.interpolation == kb::scene::GuideCurveInterpolation::Linear ? "Linear" : "Catmull-Rom", InspectorPropertyId::GuideCurveInterpolation);
+    section.Bool("Closed", curve.closed, InspectorPropertyId::GuideCurveClosed);
+    section.Bool("Enabled", curve.enabled, InspectorPropertyId::GuideCurveEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
+void PaintContentInstanceSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::ContentInstanceComponent& instance) {
+    const char* kind = instance.kind == kb::scene::ContentInstanceKind::Prefab ? "Prefab" : instance.kind == kb::scene::ContentInstanceKind::Subscene ? "Subscene" : "World Fragment";
+    const char* lifetime = instance.lifetime == kb::scene::ContentInstanceLifetime::Owner ? "Owner" : "Persistent";
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::ContentInstance, HeroIconKind::Cube, "Content Instance", true);
+    section.Field("Asset ID", std::to_string(instance.assetId), InspectorPropertyId::ContentInstanceAssetId);
+    section.Field("Source Type", kind, InspectorPropertyId::ContentInstanceKind);
+    section.Field("Lifetime", lifetime, InspectorPropertyId::ContentInstanceLifetime);
+    section.Bool("Active", instance.active, InspectorPropertyId::ContentInstanceActive);
+    y = section.Bottom() + kSectionGap;
+}
+
+void PaintStreamFocusSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::StreamFocusComponent& focus) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::StreamFocus, HeroIconKind::Cube, "Stream Focus", true);
+    section.Field("Inner Radius", FormatFloat(focus.innerRadius, 3), InspectorPropertyId::StreamFocusInnerRadius);
+    section.Field("Outer Radius", FormatFloat(focus.outerRadius, 3), InspectorPropertyId::StreamFocusOuterRadius);
+    section.Field("Priority", std::to_string(focus.priority), InspectorPropertyId::StreamFocusPriority);
+    section.Field("Load Mask", std::to_string(static_cast<std::uint32_t>(focus.loadMask)), InspectorPropertyId::StreamFocusLoadMask);
+    section.Bool("Enabled", focus.enabled, InspectorPropertyId::StreamFocusEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
+[[nodiscard]] const char* WorldBackdropModeName(kb::scene::WorldBackdropMode mode) noexcept {
+    switch (mode) {
+    case kb::scene::WorldBackdropMode::SolidColor: return "Solid Color";
+    case kb::scene::WorldBackdropMode::VerticalGradient: return "Vertical Gradient";
+    case kb::scene::WorldBackdropMode::EnvironmentMap: return "Environment Map (2D Equirectangular)";
+    case kb::scene::WorldBackdropMode::ProceduralSky: return "Procedural Sky";
+    }
+    return "Invalid";
+}
+
+void PaintWorldBackdropSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::WorldBackdropComponent& backdrop) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::WorldBackdrop, HeroIconKind::Eye, "World Backdrop", true);
+    section.Field("Mode", WorldBackdropModeName(backdrop.mode), InspectorPropertyId::WorldBackdropMode);
+    section.Field("Color R", FormatFloat(backdrop.color.x, 3), InspectorPropertyId::WorldBackdropColorR);
+    section.Field("Color G", FormatFloat(backdrop.color.y, 3), InspectorPropertyId::WorldBackdropColorG);
+    section.Field("Color B", FormatFloat(backdrop.color.z, 3), InspectorPropertyId::WorldBackdropColorB);
+    section.Field("Horizon R", FormatFloat(backdrop.horizonColor.x, 3), InspectorPropertyId::WorldBackdropHorizonColorR);
+    section.Field("Horizon G", FormatFloat(backdrop.horizonColor.y, 3), InspectorPropertyId::WorldBackdropHorizonColorG);
+    section.Field("Horizon B", FormatFloat(backdrop.horizonColor.z, 3), InspectorPropertyId::WorldBackdropHorizonColorB);
+    section.Field("Zenith R", FormatFloat(backdrop.zenithColor.x, 3), InspectorPropertyId::WorldBackdropZenithColorR);
+    section.Field("Zenith G", FormatFloat(backdrop.zenithColor.y, 3), InspectorPropertyId::WorldBackdropZenithColorG);
+    section.Field("Zenith B", FormatFloat(backdrop.zenithColor.z, 3), InspectorPropertyId::WorldBackdropZenithColorB);
+    section.Field("Environment Asset", std::to_string(backdrop.environmentAssetId), InspectorPropertyId::WorldBackdropEnvironmentAssetId);
+    section.Field("Horizon Height", FormatFloat(backdrop.horizonHeight, 3), InspectorPropertyId::WorldBackdropHorizonHeight);
+    section.Field("Gradient Exponent", FormatFloat(backdrop.gradientExponent, 3), InspectorPropertyId::WorldBackdropGradientExponent);
+    section.Field("Priority", std::to_string(backdrop.priority), InspectorPropertyId::WorldBackdropPriority);
+    section.Bool("Enabled", backdrop.enabled, InspectorPropertyId::WorldBackdropEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
+[[nodiscard]] const char* AmbientRadianceModeName(kb::scene::AmbientRadianceMode mode) noexcept {
+    switch (mode) {
+    case kb::scene::AmbientRadianceMode::Constant: return "Constant";
+    case kb::scene::AmbientRadianceMode::Gradient: return "Gradient";
+    case kb::scene::AmbientRadianceMode::EnvironmentMap: return "Environment Map (2D Equirectangular)";
+    case kb::scene::AmbientRadianceMode::ProceduralSky: return "Procedural Sky";
+    case kb::scene::AmbientRadianceMode::CapturedEnvironment: return "Captured Environment";
+    case kb::scene::AmbientRadianceMode::EstimatedEnvironment: return "Estimated Environment";
+    }
+    return "Invalid";
+}
+
+void PaintAmbientRadianceSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::AmbientRadianceComponent& ambient) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AmbientRadiance, HeroIconKind::Bolt, "Ambient Radiance", true);
+    section.Field("Mode", AmbientRadianceModeName(ambient.mode), InspectorPropertyId::AmbientRadianceMode);
+    section.Field("Color R", FormatFloat(ambient.color.x, 3), InspectorPropertyId::AmbientRadianceColorR);
+    section.Field("Color G", FormatFloat(ambient.color.y, 3), InspectorPropertyId::AmbientRadianceColorG);
+    section.Field("Color B", FormatFloat(ambient.color.z, 3), InspectorPropertyId::AmbientRadianceColorB);
+    section.Field("Horizon R", FormatFloat(ambient.horizonColor.x, 3), InspectorPropertyId::AmbientRadianceHorizonColorR);
+    section.Field("Horizon G", FormatFloat(ambient.horizonColor.y, 3), InspectorPropertyId::AmbientRadianceHorizonColorG);
+    section.Field("Horizon B", FormatFloat(ambient.horizonColor.z, 3), InspectorPropertyId::AmbientRadianceHorizonColorB);
+    section.Field("Zenith R", FormatFloat(ambient.zenithColor.x, 3), InspectorPropertyId::AmbientRadianceZenithColorR);
+    section.Field("Zenith G", FormatFloat(ambient.zenithColor.y, 3), InspectorPropertyId::AmbientRadianceZenithColorG);
+    section.Field("Zenith B", FormatFloat(ambient.zenithColor.z, 3), InspectorPropertyId::AmbientRadianceZenithColorB);
+    section.Field("Environment Asset", std::to_string(ambient.environmentAssetId), InspectorPropertyId::AmbientRadianceEnvironmentAssetId);
+    section.Field("Intensity", FormatFloat(ambient.intensity, 3), InspectorPropertyId::AmbientRadianceIntensity);
+    section.Field("Diffuse Intensity", FormatFloat(ambient.diffuseIntensity, 3), InspectorPropertyId::AmbientRadianceDiffuseIntensity);
+    section.Field("Specular Intensity", FormatFloat(ambient.specularIntensity, 3), InspectorPropertyId::AmbientRadianceSpecularIntensity);
+    section.Field("Priority", std::to_string(ambient.priority), InspectorPropertyId::AmbientRadiancePriority);
+    section.Bool("Enabled", ambient.enabled, InspectorPropertyId::AmbientRadianceEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
+void PaintDetailSwitchSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::SceneDetailSwitchComponent& detailSwitch) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::DetailSwitch, HeroIconKind::Cube, "Detail Switch", true);
+    section.Field("Group", std::to_string(detailSwitch.groupId), InspectorPropertyId::DetailSwitchGroupId);
+    section.Field("Minimum LOD", std::to_string(detailSwitch.minimumLod), InspectorPropertyId::DetailSwitchMinimumLod);
+    section.Field("Maximum LOD", std::to_string(detailSwitch.maximumLod), InspectorPropertyId::DetailSwitchMaximumLod);
+    section.Field("Promote Coverage", FormatFloat(detailSwitch.promoteCoverage, 3), InspectorPropertyId::DetailSwitchPromoteCoverage);
+    section.Field("Demote Coverage", FormatFloat(detailSwitch.demoteCoverage, 3), InspectorPropertyId::DetailSwitchDemoteCoverage);
+    section.Bool("Enabled", detailSwitch.enabled, InspectorPropertyId::DetailSwitchEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
+void PaintVisibilityBlockerSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::SceneVisibilityBlockerComponent& blocker) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::VisibilityBlocker, HeroIconKind::Cube, "Visibility Blocker", true);
+    section.Field("Center X", FormatFloat(blocker.localCenter.x, 3), InspectorPropertyId::VisibilityBlockerCenterX);
+    section.Field("Center Y", FormatFloat(blocker.localCenter.y, 3), InspectorPropertyId::VisibilityBlockerCenterY);
+    section.Field("Center Z", FormatFloat(blocker.localCenter.z, 3), InspectorPropertyId::VisibilityBlockerCenterZ);
+    section.Field("Size X", FormatFloat(blocker.size.x, 3), InspectorPropertyId::VisibilityBlockerSizeX);
+    section.Field("Size Y", FormatFloat(blocker.size.y, 3), InspectorPropertyId::VisibilityBlockerSizeY);
+    section.Field("Size Z", FormatFloat(blocker.size.z, 3), InspectorPropertyId::VisibilityBlockerSizeZ);
+    section.Bool("Enabled", blocker.enabled, InspectorPropertyId::VisibilityBlockerEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
+void PaintVisibilityCellSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::VisibilityCellComponent& cell) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::VisibilityCell, HeroIconKind::Cube, "Visibility Cell", true);
+    section.Field("Membership Mask", std::to_string(cell.membershipMask), InspectorPropertyId::VisibilityCellMembershipMask);
+    section.Field("Membership", std::to_string(static_cast<int>(cell.membership)), InspectorPropertyId::VisibilityCellMembership);
+    section.Field("Visibility Override", std::to_string(static_cast<int>(cell.visibilityOverride)), InspectorPropertyId::VisibilityCellOverride);
+    section.Bool("Enabled", cell.enabled, InspectorPropertyId::VisibilityCellEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
+void PaintRegionPortalSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::SceneRegionPortalComponent& portal) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::RegionPortal, HeroIconKind::Cube, "Region Portal", true);
+    section.Field("Source Cell", std::to_string(portal.sourceCell.Id()), InspectorPropertyId::RegionPortalSourceCell);
+    section.Field("Target Cell", std::to_string(portal.targetCell.Id()), InspectorPropertyId::RegionPortalTargetCell);
+    section.Field("Purposes", std::to_string(portal.purposes), InspectorPropertyId::RegionPortalPurposes);
+    section.Bool("Enabled", portal.enabled, InspectorPropertyId::RegionPortalEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
 constexpr int kCameraSectionRows = 13;
 
 void PaintCameraSection(
@@ -1624,7 +1804,7 @@ void PaintLightSection(
     const EditorTheme& theme,
     const InspectorPanelState& inspector,
     const kb::scene::LightComponent& light) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Light, HeroIconKind::Bolt, "Light");
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Light, HeroIconKind::Bolt, "3D Radiance Emitter");
     section.Field("Type", InspectorComponentLabelFormatter::LightKindName(light.kind), InspectorPropertyId::LightKind);
     section.Float("Color R", FormatFloat(light.color.x, 2), InspectorPropertyId::LightColorR);
     section.Float("Color G", FormatFloat(light.color.y, 2), InspectorPropertyId::LightColorG);
@@ -1863,6 +2043,51 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         }
     }
 
+    if (const kb::scene::RegionShapeComponent* regionShape = scene.Components().RegionShapes().TryGet(selected); regionShape != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::RegionShape, 6);
+        if (sectionVisible(y, h)) {
+            PaintRegionShapeSection(dc, content, y, theme, inspector, *regionShape);
+        } else {
+            y += h + kSectionGap;
+        }
+    }
+    if (const kb::scene::GuideCurveComponent* guideCurve = scene.Components().GuideCurves().TryGet(selected); guideCurve != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::GuideCurve, 4);
+        if (y < content.bottom && y + h > content.top) PaintGuideCurveSection(dc, content, y, theme, inspector, *guideCurve); else y += h + kSectionGap;
+    }
+    if (const kb::scene::ContentInstanceComponent* contentInstance = scene.Components().ContentInstances().TryGet(selected); contentInstance != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::ContentInstance, 4);
+        if (y < content.bottom && y + h > content.top) PaintContentInstanceSection(dc, content, y, theme, inspector, *contentInstance); else y += h + kSectionGap;
+    }
+    if (const kb::scene::StreamFocusComponent* streamFocus = scene.Components().StreamFocuses().TryGet(selected); streamFocus != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::StreamFocus, 5);
+        if (y < content.bottom && y + h > content.top) PaintStreamFocusSection(dc, content, y, theme, inspector, *streamFocus); else y += h + kSectionGap;
+    }
+    if (const kb::scene::WorldBackdropComponent* backdrop = scene.Components().WorldBackdrops().TryGet(selected); backdrop != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::WorldBackdrop, 15);
+        if (y < content.bottom && y + h > content.top) PaintWorldBackdropSection(dc, content, y, theme, inspector, *backdrop); else y += h + kSectionGap;
+    }
+    if (const kb::scene::AmbientRadianceComponent* ambient = scene.Components().AmbientRadiances().TryGet(selected); ambient != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::AmbientRadiance, 16);
+        if (y < content.bottom && y + h > content.top) PaintAmbientRadianceSection(dc, content, y, theme, inspector, *ambient); else y += h + kSectionGap;
+    }
+    if (const kb::scene::SceneDetailSwitchComponent* detailSwitch = scene.Components().DetailSwitches().TryGet(selected); detailSwitch != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::DetailSwitch, 6);
+        if (y < content.bottom && y + h > content.top) PaintDetailSwitchSection(dc, content, y, theme, inspector, *detailSwitch); else y += h + kSectionGap;
+    }
+    if (const kb::scene::SceneVisibilityBlockerComponent* blocker = scene.Components().VisibilityBlockers().TryGet(selected); blocker != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::VisibilityBlocker, 7);
+        if (y < content.bottom && y + h > content.top) PaintVisibilityBlockerSection(dc, content, y, theme, inspector, *blocker); else y += h + kSectionGap;
+    }
+    if (const kb::scene::VisibilityCellComponent* cell = scene.Components().VisibilityCells().TryGet(selected); cell != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::VisibilityCell, 4);
+        if (y < content.bottom && y + h > content.top) PaintVisibilityCellSection(dc, content, y, theme, inspector, *cell); else y += h + kSectionGap;
+    }
+    if (const kb::scene::SceneRegionPortalComponent* portal = scene.Components().RegionPortals().TryGet(selected); portal != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::RegionPortal, 4);
+        if (y < content.bottom && y + h > content.top) PaintRegionPortalSection(dc, content, y, theme, inspector, *portal); else y += h + kSectionGap;
+    }
+
     if (sceneContext.HasEntityScript(selected)) {
         const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);
         const int h = SectionHeight(inspector, InspectorSectionId::Script, 2 + static_cast<int>(scriptVariables.size()));
@@ -2094,6 +2319,18 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (scene.Components().Tags().Has(selected)) {
         height += SectionHeight(inspector, InspectorSectionId::Tags, 1) + kSectionGap;
     }
+    if (scene.Components().RegionShapes().Has(selected)) {
+        height += SectionHeight(inspector, InspectorSectionId::RegionShape, 6) + kSectionGap;
+    }
+    if (scene.Components().GuideCurves().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::GuideCurve, 4) + kSectionGap;
+    if (scene.Components().ContentInstances().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::ContentInstance, 4) + kSectionGap;
+    if (scene.Components().StreamFocuses().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::StreamFocus, 5) + kSectionGap;
+    if (scene.Components().WorldBackdrops().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::WorldBackdrop, 15) + kSectionGap;
+    if (scene.Components().AmbientRadiances().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::AmbientRadiance, 16) + kSectionGap;
+    if (scene.Components().DetailSwitches().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::DetailSwitch, 6) + kSectionGap;
+    if (scene.Components().VisibilityBlockers().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::VisibilityBlocker, 7) + kSectionGap;
+    if (scene.Components().VisibilityCells().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::VisibilityCell, 4) + kSectionGap;
+    if (scene.Components().RegionPortals().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::RegionPortal, 4) + kSectionGap;
     if (sceneContext.HasEntityScript(selected)) {
         const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariables(selected).size());
         height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
@@ -3070,6 +3307,135 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::Tags, InspectorPropertyId::TagsText, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
+            AdvanceRow(y);
+        }
+        y += kSectionGap;
+    }
+
+    if (sceneContext.Scene().Components().RegionShapes().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::RegionShape, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::RegionShape)) {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::RegionShape, InspectorPropertyId::RegionShapeKind, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(viewport, y), InspectorSectionId::RegionShape, InspectorPropertyId::RegionShapeCenterX, InspectorPropertyId::RegionShapeCenterY, InspectorPropertyId::RegionShapeCenterZ, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(viewport, y), InspectorSectionId::RegionShape, InspectorPropertyId::RegionShapeSizeX, InspectorPropertyId::RegionShapeSizeY, InspectorPropertyId::RegionShapeSizeZ, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::RegionShape, InspectorPropertyId::RegionShapeRadius, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::RegionShape, InspectorPropertyId::RegionShapeHeight, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::RegionShape, InspectorPropertyId::RegionShapeEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+        }
+        y += kSectionGap;
+    }
+    if (sceneContext.Scene().Components().GuideCurves().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::GuideCurve, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::GuideCurve)) {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::GuideCurve, InspectorPropertyId::GuideCurveControlPointCount, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::GuideCurve, InspectorPropertyId::GuideCurveInterpolation, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::GuideCurve, InspectorPropertyId::GuideCurveClosed, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::GuideCurve, InspectorPropertyId::GuideCurveEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+        }
+    }
+    if (sceneContext.Scene().Components().ContentInstances().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::ContentInstance, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::ContentInstance)) {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::ContentInstance, InspectorPropertyId::ContentInstanceAssetId, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::ContentInstance, InspectorPropertyId::ContentInstanceKind, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::ContentInstance, InspectorPropertyId::ContentInstanceLifetime, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::ContentInstance, InspectorPropertyId::ContentInstanceActive, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+        }
+    }
+    if (sceneContext.Scene().Components().StreamFocuses().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::StreamFocus, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::StreamFocus)) {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::StreamFocus, InspectorPropertyId::StreamFocusInnerRadius, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::StreamFocus, InspectorPropertyId::StreamFocusOuterRadius, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::StreamFocus, InspectorPropertyId::StreamFocusPriority, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::StreamFocus, InspectorPropertyId::StreamFocusLoadMask, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::StreamFocus, InspectorPropertyId::StreamFocusEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+        }
+    }
+    if (sceneContext.Scene().Components().WorldBackdrops().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::WorldBackdrop, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::WorldBackdrop)) {
+            constexpr std::array<InspectorPropertyId, 15> properties{ InspectorPropertyId::WorldBackdropMode, InspectorPropertyId::WorldBackdropColorR, InspectorPropertyId::WorldBackdropColorG, InspectorPropertyId::WorldBackdropColorB, InspectorPropertyId::WorldBackdropHorizonColorR, InspectorPropertyId::WorldBackdropHorizonColorG, InspectorPropertyId::WorldBackdropHorizonColorB, InspectorPropertyId::WorldBackdropZenithColorR, InspectorPropertyId::WorldBackdropZenithColorG, InspectorPropertyId::WorldBackdropZenithColorB, InspectorPropertyId::WorldBackdropEnvironmentAssetId, InspectorPropertyId::WorldBackdropHorizonHeight, InspectorPropertyId::WorldBackdropGradientExponent, InspectorPropertyId::WorldBackdropPriority, InspectorPropertyId::WorldBackdropEnabled };
+            for (const InspectorPropertyId property : properties) {
+                const InspectorPanelRenderer::Hit hit = property == InspectorPropertyId::WorldBackdropEnabled
+                    ? HitBool(RowRect(viewport, y), InspectorSectionId::WorldBackdrop, property, x, scrolledY)
+                    : HitTextRow(RowRect(viewport, y), InspectorSectionId::WorldBackdrop, property, x, scrolledY);
+                if (hit.kind != InspectorHitKind::None) return hit;
+                AdvanceRow(y);
+            }
+        }
+        y += kSectionGap;
+    }
+    if (sceneContext.Scene().Components().AmbientRadiances().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::AmbientRadiance, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::AmbientRadiance)) {
+            constexpr std::array<InspectorPropertyId, 16> properties{ InspectorPropertyId::AmbientRadianceMode, InspectorPropertyId::AmbientRadianceColorR, InspectorPropertyId::AmbientRadianceColorG, InspectorPropertyId::AmbientRadianceColorB, InspectorPropertyId::AmbientRadianceHorizonColorR, InspectorPropertyId::AmbientRadianceHorizonColorG, InspectorPropertyId::AmbientRadianceHorizonColorB, InspectorPropertyId::AmbientRadianceZenithColorR, InspectorPropertyId::AmbientRadianceZenithColorG, InspectorPropertyId::AmbientRadianceZenithColorB, InspectorPropertyId::AmbientRadianceEnvironmentAssetId, InspectorPropertyId::AmbientRadianceIntensity, InspectorPropertyId::AmbientRadianceDiffuseIntensity, InspectorPropertyId::AmbientRadianceSpecularIntensity, InspectorPropertyId::AmbientRadiancePriority, InspectorPropertyId::AmbientRadianceEnabled };
+            for (const InspectorPropertyId property : properties) {
+                const InspectorPanelRenderer::Hit hit = property == InspectorPropertyId::AmbientRadianceEnabled
+                    ? HitBool(RowRect(viewport, y), InspectorSectionId::AmbientRadiance, property, x, scrolledY)
+                    : HitTextRow(RowRect(viewport, y), InspectorSectionId::AmbientRadiance, property, x, scrolledY);
+                if (hit.kind != InspectorHitKind::None) return hit;
+                AdvanceRow(y);
+            }
+        }
+        y += kSectionGap;
+    }
+    if (sceneContext.Scene().Components().DetailSwitches().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::DetailSwitch, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::DetailSwitch)) {
+            constexpr std::array<InspectorPropertyId, 6> properties{ InspectorPropertyId::DetailSwitchGroupId, InspectorPropertyId::DetailSwitchMinimumLod, InspectorPropertyId::DetailSwitchMaximumLod, InspectorPropertyId::DetailSwitchPromoteCoverage, InspectorPropertyId::DetailSwitchDemoteCoverage, InspectorPropertyId::DetailSwitchEnabled };
+            for (const InspectorPropertyId property : properties) {
+                const InspectorPanelRenderer::Hit hit = property == InspectorPropertyId::DetailSwitchEnabled
+                    ? HitBool(RowRect(viewport, y), InspectorSectionId::DetailSwitch, property, x, scrolledY)
+                    : HitTextRow(RowRect(viewport, y), InspectorSectionId::DetailSwitch, property, x, scrolledY);
+                if (hit.kind != InspectorHitKind::None) return hit;
+                AdvanceRow(y);
+            }
+        }
+        y += kSectionGap;
+    }
+    if (sceneContext.Scene().Components().VisibilityBlockers().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::VisibilityBlocker, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::VisibilityBlocker)) {
+            constexpr std::array<InspectorPropertyId, 7> properties{ InspectorPropertyId::VisibilityBlockerCenterX, InspectorPropertyId::VisibilityBlockerCenterY, InspectorPropertyId::VisibilityBlockerCenterZ, InspectorPropertyId::VisibilityBlockerSizeX, InspectorPropertyId::VisibilityBlockerSizeY, InspectorPropertyId::VisibilityBlockerSizeZ, InspectorPropertyId::VisibilityBlockerEnabled };
+            for (InspectorPropertyId property : properties) {
+                const InspectorPanelRenderer::Hit hit = property == InspectorPropertyId::VisibilityBlockerEnabled ? HitBool(RowRect(viewport, y), InspectorSectionId::VisibilityBlocker, property, x, scrolledY) : HitTextRow(RowRect(viewport, y), InspectorSectionId::VisibilityBlocker, property, x, scrolledY);
+                if (hit.kind != InspectorHitKind::None) return hit;
+                AdvanceRow(y);
+            }
+        }
+        y += kSectionGap;
+    }
+    if (sceneContext.Scene().Components().VisibilityCells().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::VisibilityCell, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::VisibilityCell)) {
+            constexpr std::array<InspectorPropertyId, 4> properties{ InspectorPropertyId::VisibilityCellMembershipMask, InspectorPropertyId::VisibilityCellMembership, InspectorPropertyId::VisibilityCellOverride, InspectorPropertyId::VisibilityCellEnabled };
+            for (InspectorPropertyId property : properties) {
+                const InspectorPanelRenderer::Hit hit = property == InspectorPropertyId::VisibilityCellEnabled ? HitBool(RowRect(viewport, y), InspectorSectionId::VisibilityCell, property, x, scrolledY) : HitTextRow(RowRect(viewport, y), InspectorSectionId::VisibilityCell, property, x, scrolledY);
+                if (hit.kind != InspectorHitKind::None) return hit;
+                AdvanceRow(y);
+            }
+        }
+        y += kSectionGap;
+    }
+    if (sceneContext.Scene().Components().RegionPortals().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::RegionPortal, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::RegionPortal)) {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::RegionPortal, InspectorPropertyId::RegionPortalSourceCell, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::RegionPortal, InspectorPropertyId::RegionPortalTargetCell, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::RegionPortal, InspectorPropertyId::RegionPortalPurposes, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::RegionPortal, InspectorPropertyId::RegionPortalEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
             AdvanceRow(y);
         }
         y += kSectionGap;

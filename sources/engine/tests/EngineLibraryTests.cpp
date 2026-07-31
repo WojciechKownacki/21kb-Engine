@@ -73,11 +73,18 @@
 #include "engine/core/ReadSnapshotQueue.hpp"
 #include "engine/core/RuntimeInspector.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneVisibilityResolution.hpp"
+#include "engine/scene/SceneRegionShapeQueries.hpp"
+#include "engine/scene/RegionPortalComponent.hpp"
+#include "engine/scene/VisibilityCellComponent.hpp"
+#include "engine/scene/SceneGuideCurveQueries.hpp"
+#include "engine/scene/StreamFocusComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -2700,7 +2707,7 @@ void RunEngineLibraryComponentRegistryTest() {
     // Id determinism, same contract as LIB-026's function id.
     kb::tests::Require(kb::library::ComputeLibraryComponentId("Camera") == kb::library::ComputeLibraryComponentId("Camera"),
         "Engine21kbLibrary component id must be deterministic for the same name");
-    kb::tests::Require(kb::library::ComputeLibraryComponentId("Camera") != kb::library::ComputeLibraryComponentId("Light"),
+    kb::tests::Require(kb::library::ComputeLibraryComponentId("Camera") != kb::library::ComputeLibraryComponentId("3D Radiance Emitter"),
         "Engine21kbLibrary component id must differ for different names");
 
     // Honest serializable check: round-trip a scene containing every
@@ -2719,8 +2726,58 @@ void RunEngineLibraryComponentRegistryTest() {
     kb::scene::TagsComponent classification;
     kb::scene::SetTagsText(classification, "Enemy, Boss");
     source.Components().Tags().Set(object.Entity(), classification);
+    source.Components().RegionShapes().Set(object.Entity(), kb::scene::RegionShapeComponent{
+        .kind = kb::scene::RegionShapeKind::Capsule,
+        .center = { 1.0F, 2.0F, 3.0F },
+        .size = { 4.0F, 5.0F, 6.0F },
+        .radius = 0.75F,
+        .height = 2.5F,
+        .enabled = false,
+    });
+    kb::scene::GuideCurveComponent guideCurve{};
+    guideCurve.controlPointCount = 3U;
+    guideCurve.interpolation = kb::scene::GuideCurveInterpolation::Linear;
+    guideCurve.closed = true;
+    guideCurve.controlPoints[0] = { 1.0F, 0.0F, 0.0F };
+    guideCurve.controlPoints[1] = { 2.0F, 3.0F, 0.0F };
+    guideCurve.controlPoints[2] = { 4.0F, 0.0F, 5.0F };
+    source.Components().GuideCurves().Set(object.Entity(), guideCurve);
+    source.Components().ContentInstances().Set(object.Entity(), kb::scene::ContentInstanceComponent{
+        .assetId = 491U,
+        .kind = kb::scene::ContentInstanceKind::WorldFragment,
+        .lifetime = kb::scene::ContentInstanceLifetime::Persistent,
+        .active = false,
+    });
+    source.Components().StreamFocuses().Set(object.Entity(), kb::scene::StreamFocusComponent{
+        .innerRadius = 12.5F,
+        .outerRadius = 24.0F,
+        .priority = 7,
+        .loadMask = kb::scene::StreamLoadMask::Subscene | kb::scene::StreamLoadMask::WorldFragment,
+        .enabled = false,
+    });
+    kb::scene::WorldBackdropComponent backdrop{};
+    backdrop.mode = kb::scene::WorldBackdropMode::EnvironmentMap;
+    backdrop.color = { 0.11F, 0.22F, 0.33F };
+    backdrop.horizonColor = { 0.05F, 0.10F, 0.20F };
+    backdrop.zenithColor = { 0.60F, 0.70F, 0.80F };
+    backdrop.environmentAssetId = 808U;
+    backdrop.horizonHeight = -0.15F;
+    backdrop.gradientExponent = 1.75F;
+    backdrop.priority = 9;
+    source.Components().WorldBackdrops().Set(object.Entity(), backdrop);
     const kb::scene::SceneObject jointTarget = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ComponentRegistryJointTarget" });
     source.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{ .type = kb::scene::JointType::Hinge, .connectedEntity = jointTarget.Entity(), .minLimit = -45.0F, .maxLimit = 45.0F, .enableLimit = true });
+    const kb::scene::SceneObject portalSourceCell = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ComponentRegistryPortalSource" });
+    const kb::scene::SceneObject portalTargetCell = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ComponentRegistryPortalTarget" });
+    source.Components().VisibilityCells().Set(portalSourceCell.Entity(), kb::scene::VisibilityCellComponent{});
+    source.Components().VisibilityCells().Set(portalTargetCell.Entity(), kb::scene::VisibilityCellComponent{});
+    source.Components().RegionPortals().Set(object.Entity(), kb::scene::SceneRegionPortalComponent{
+        .sourceCell = portalSourceCell.Entity(),
+        .targetCell = portalTargetCell.Entity(),
+        .purposes = static_cast<kb::scene::RegionPortalPurposeMask>(kb::scene::RegionPortalPurpose::Visibility) |
+            static_cast<kb::scene::RegionPortalPurposeMask>(kb::scene::RegionPortalPurpose::Streaming),
+        .enabled = false,
+    });
 
     const std::filesystem::path testRoot = std::filesystem::temp_directory_path() / "21kb_engine_library_component_registry_tests";
     std::error_code removeError;
@@ -2734,18 +2791,24 @@ void RunEngineLibraryComponentRegistryTest() {
     kb::scene::Scene target;
     kb::tests::Require(kb::scene::SceneDocumentService::LoadFileIntoScene(target, sceneFile), "Engine21kbLibrary component registry round-trip scene was not loaded");
     const std::vector<kb::scene::SceneEntity> roots = target.Hierarchy().RootEntities();
-    kb::tests::Require(roots.size() == 2U, "Engine21kbLibrary component registry round-trip scene must restore both cross-root joint bodies");
+    kb::tests::Require(roots.size() == 4U, "Engine21kbLibrary component registry round-trip scene must restore cross-root portal cells and joint bodies");
     kb::scene::SceneEntity restored{};
     kb::scene::SceneEntity restoredJointTarget{};
+    kb::scene::SceneEntity restoredPortalSource{};
+    kb::scene::SceneEntity restoredPortalTarget{};
     for (const kb::scene::SceneEntity root : roots) {
         if (target.Entities().Name(root) == "ComponentRegistrySubject") {
             restored = root;
         } else if (target.Entities().Name(root) == "ComponentRegistryJointTarget") {
             restoredJointTarget = root;
+        } else if (target.Entities().Name(root) == "ComponentRegistryPortalSource") {
+            restoredPortalSource = root;
+        } else if (target.Entities().Name(root) == "ComponentRegistryPortalTarget") {
+            restoredPortalTarget = root;
         }
     }
-    kb::tests::Require(restored.IsValid() && restoredJointTarget.IsValid(),
-        "Engine21kbLibrary component registry round-trip must identify both joint bodies by their persisted names");
+    kb::tests::Require(restored.IsValid() && restoredJointTarget.IsValid() && restoredPortalSource.IsValid() && restoredPortalTarget.IsValid(),
+        "Engine21kbLibrary component registry round-trip must identify all cross-root references by persisted names");
 
     kb::tests::Require(target.Components().Cameras().Has(restored), "Engine21kbLibrary component registry: Camera is marked serializable=true and must survive a save/load round trip");
     kb::tests::Require(target.Components().Lights().Has(restored), "Engine21kbLibrary component registry: Light is marked serializable=true and must survive a save/load round trip");
@@ -2787,6 +2850,37 @@ void RunEngineLibraryComponentRegistryTest() {
     const kb::scene::TagsComponent* restoredClassification = target.Components().Tags().TryGet(restored);
     kb::tests::Require(restoredClassification != nullptr && kb::scene::TagsText(*restoredClassification) == "Enemy, Boss",
         "Engine21kbLibrary component registry: Tags is marked serializable=true and must survive a save/load round trip");
+    const kb::scene::RegionShapeComponent* restoredRegionShape = target.Components().RegionShapes().TryGet(restored);
+    kb::tests::Require(restoredRegionShape != nullptr && restoredRegionShape->kind == kb::scene::RegionShapeKind::Capsule &&
+                            kb::tests::NearlyEqual(restoredRegionShape->center.x, 1.0F) &&
+                            kb::tests::NearlyEqual(restoredRegionShape->size.z, 6.0F) &&
+                            kb::tests::NearlyEqual(restoredRegionShape->radius, 0.75F) &&
+                            kb::tests::NearlyEqual(restoredRegionShape->height, 2.5F) && !restoredRegionShape->enabled,
+        "Engine21kbLibrary component registry: Region Shape must survive a real save/load round trip with all authored fields");
+    const kb::scene::GuideCurveComponent* restoredGuideCurve = target.Components().GuideCurves().TryGet(restored);
+    kb::tests::Require(restoredGuideCurve != nullptr && restoredGuideCurve->controlPointCount == 3U &&
+                            restoredGuideCurve->interpolation == kb::scene::GuideCurveInterpolation::Linear && restoredGuideCurve->closed &&
+                            kb::tests::NearlyEqual(restoredGuideCurve->controlPoints[1].y, 3.0F) &&
+                            kb::tests::NearlyEqual(restoredGuideCurve->controlPoints[2].z, 5.0F),
+        "Engine21kbLibrary component registry: Guide Curve must survive a real save/load round trip with all authored points");
+    const kb::scene::ContentInstanceComponent* restoredContentInstance = target.Components().ContentInstances().TryGet(restored);
+    kb::tests::Require(restoredContentInstance != nullptr && restoredContentInstance->assetId == 491U &&
+                            restoredContentInstance->kind == kb::scene::ContentInstanceKind::WorldFragment &&
+                            restoredContentInstance->lifetime == kb::scene::ContentInstanceLifetime::Persistent && !restoredContentInstance->active,
+        "Engine21kbLibrary component registry: Content Instance must survive a real save/load round trip with its source and lifetime policy");
+    const kb::scene::StreamFocusComponent* restoredStreamFocus = target.Components().StreamFocuses().TryGet(restored);
+    kb::tests::Require(restoredStreamFocus != nullptr && kb::tests::NearlyEqual(restoredStreamFocus->innerRadius, 12.5F) &&
+                            kb::tests::NearlyEqual(restoredStreamFocus->outerRadius, 24.0F) && restoredStreamFocus->priority == 7 &&
+                            restoredStreamFocus->loadMask == (kb::scene::StreamLoadMask::Subscene | kb::scene::StreamLoadMask::WorldFragment) && !restoredStreamFocus->enabled,
+        "Engine21kbLibrary component registry: Stream Focus must survive a real save/load round trip with all stream policy fields");
+    const kb::scene::WorldBackdropComponent* restoredBackdrop = target.Components().WorldBackdrops().TryGet(restored);
+    kb::tests::Require(restoredBackdrop != nullptr &&
+                            restoredBackdrop->mode == kb::scene::WorldBackdropMode::EnvironmentMap &&
+                            restoredBackdrop->environmentAssetId == 808U &&
+                            kb::tests::NearlyEqual(restoredBackdrop->horizonHeight, -0.15F) &&
+                            kb::tests::NearlyEqual(restoredBackdrop->gradientExponent, 1.75F) &&
+                            restoredBackdrop->priority == 9,
+        "Engine21kbLibrary component registry: World Backdrop must survive a real save/load round trip with its rendering policy");
     // Joint stores a prefab-local stable target id and resolves it to this
     // loaded scene's live entity only after every node has been created.
     const kb::scene::JointComponent* restoredJoint = target.Components().Joints().TryGet(restored);
@@ -2795,6 +2889,12 @@ void RunEngineLibraryComponentRegistryTest() {
                             kb::tests::NearlyEqual(restoredJoint->minLimit, -45.0F) &&
                             kb::tests::NearlyEqual(restoredJoint->maxLimit, 45.0F) && restoredJoint->enableLimit,
         "Engine21kbLibrary component registry: Joint must survive real cross-root save/load with connectedEntity remapped to the loaded target");
+    const kb::scene::SceneRegionPortalComponent* restoredPortal = target.Components().RegionPortals().TryGet(restored);
+    kb::tests::Require(restoredPortal != nullptr && restoredPortal->sourceCell == restoredPortalSource && restoredPortal->targetCell == restoredPortalTarget &&
+                            restoredPortal->purposes == (static_cast<kb::scene::RegionPortalPurposeMask>(kb::scene::RegionPortalPurpose::Visibility) |
+                                static_cast<kb::scene::RegionPortalPurposeMask>(kb::scene::RegionPortalPurpose::Streaming)) &&
+                            !restoredPortal->enabled,
+        "Engine21kbLibrary component registry: Region Portal must survive real cross-root save/load with both cell references remapped to loaded entities");
 
     for (const kb::library::LibraryComponentDesc& desc : catalog) {
         kb::tests::Require(desc.serializable,
@@ -2807,6 +2907,134 @@ void RunEngineLibraryComponentRegistryTest() {
 // matching kb::script::ComputeEventId, all starting at version 1.0, no
 // duplicate names) and that Find() honestly reports an unregistered name as
 // absent rather than fabricating an entry.
+void RunContentInstanceRuntimeTest() {
+    const std::filesystem::path testRoot = std::filesystem::temp_directory_path() / "21kb-content-instance-runtime";
+    std::error_code error;
+    std::filesystem::remove_all(testRoot, error);
+    const std::filesystem::path projectRoot = testRoot / "Project";
+    const std::filesystem::path scenePath = projectRoot / "Assets" / "Scenes" / "ContentInstanceFixture.21kbscene";
+    {
+        kb::scene::Scene source;
+        static_cast<void>(source.Entities().CreateObject({ .name = "Content Instance Loaded Root" }));
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(source, scenePath, "ContentInstanceFixture"),
+            "Content Instance runtime fixture scene was not saved");
+    }
+
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot) && scene.Assets().Discover() == 1U,
+        "Content Instance runtime fixture project was not mounted and discovered");
+    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Scenes/ContentInstanceFixture.21kbscene");
+    kb::tests::Require(metadata != nullptr && metadata->id.IsValid(), "Content Instance runtime fixture asset metadata is missing");
+
+    const kb::scene::SceneObject owner = scene.Entities().CreateObject({ .name = "Content Instance Owner" });
+    scene.Components().ContentInstances().Set(owner.Entity(), kb::scene::ContentInstanceComponent{
+        .assetId = metadata->id.value,
+        .kind = kb::scene::ContentInstanceKind::Subscene,
+        .lifetime = kb::scene::ContentInstanceLifetime::Owner,
+        .active = true,
+    });
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    const std::uint64_t ownerLoadId = scene.LoadedContent().Find("ContentInstanceFixture");
+    const kb::scene::SceneEntity ownerLoadedRoot = scene.LoadedContent().ActiveSceneRoot();
+    kb::tests::Require(ownerLoadId != 0U && scene.LoadedContent().Exists(ownerLoadId) &&
+                            ownerLoadedRoot.IsValid() && scene.Hierarchy().Parent(ownerLoadedRoot) == owner.Entity(),
+        "Content Instance must load an active owner-lifetime subscene through the shared runtime content flow");
+
+    kb::scene::ContentInstanceComponent* instance = scene.Components().ContentInstances().TryGet(owner.Entity());
+    kb::tests::Require(instance != nullptr, "Content Instance runtime fixture lost its authored ECS component");
+    instance->active = false;
+    scene.Components().ContentInstances().MarkModified(owner.Entity());
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    kb::tests::Require(!scene.LoadedContent().Exists(ownerLoadId) && scene.Hierarchy().ChildCount(owner.Entity()) == 0U,
+        "Deactivating Content Instance must unload its owner-lifetime subscene through SceneLoadedContent");
+
+    instance->active = true;
+    instance->lifetime = kb::scene::ContentInstanceLifetime::Persistent;
+    scene.Components().ContentInstances().MarkModified(owner.Entity());
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    const std::uint64_t persistentLoadId = scene.LoadedContent().Find("ContentInstanceFixture");
+    kb::tests::Require(persistentLoadId != 0U && scene.LoadedContent().Exists(persistentLoadId),
+        "Content Instance must load persistent subscene content through the shared runtime content flow");
+    scene.Entities().Destroy(owner);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    kb::tests::Require(scene.LoadedContent().Exists(persistentLoadId),
+        "Persistent Content Instance must survive destruction of its ECS owner without duplicating the loaded-content source of truth");
+    kb::tests::Require(scene.LoadedContent().Unload(persistentLoadId),
+        "Content Instance persistent runtime fixture could not clean up shared loaded content");
+    std::filesystem::remove_all(testRoot, error);
+}
+
+void RunStreamFocusRuntimeTest() {
+    const std::filesystem::path testRoot = std::filesystem::temp_directory_path() / "21kb-stream-focus-runtime";
+    std::error_code error;
+    std::filesystem::remove_all(testRoot, error);
+    const std::filesystem::path projectRoot = testRoot / "Project";
+    const std::filesystem::path scenePath = projectRoot / "Assets" / "Scenes" / "StreamFocusFixture.21kbscene";
+    {
+        kb::scene::Scene source;
+        static_cast<void>(source.Entities().CreateObject({ .name = "Stream Focus Loaded Root" }));
+        kb::tests::Require(kb::scene::SceneDocumentService::Save(source, scenePath, "StreamFocusFixture"),
+            "Stream Focus runtime fixture scene was not saved");
+    }
+
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot) && scene.Assets().Discover() == 1U,
+        "Stream Focus runtime fixture project was not mounted and discovered");
+    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Scenes/StreamFocusFixture.21kbscene");
+    kb::tests::Require(metadata != nullptr && metadata->id.IsValid(), "Stream Focus runtime fixture asset metadata is missing");
+
+    const kb::scene::SceneObject focusObject = scene.Entities().CreateObject({ .name = "Stream Focus" });
+    scene.Components().StreamFocuses().Set(focusObject.Entity(), kb::scene::StreamFocusComponent{
+        .innerRadius = 10.0F,
+        .outerRadius = 20.0F,
+        .priority = 5,
+        .loadMask = kb::scene::StreamLoadMask::Subscene,
+        .enabled = true,
+    });
+    const kb::scene::SceneObject owner = scene.Entities().CreateObject({ .name = "Stream Focus Content Owner" });
+    kb::scene::TransformComponent ownerTransform = scene.Transforms().Get(owner.Entity());
+    ownerTransform.localPosition = { 5.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(owner.Entity(), ownerTransform);
+    scene.Components().ContentInstances().Set(owner.Entity(), kb::scene::ContentInstanceComponent{
+        .assetId = metadata->id.value,
+        .kind = kb::scene::ContentInstanceKind::Subscene,
+        .lifetime = kb::scene::ContentInstanceLifetime::Owner,
+        .active = true,
+    });
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    std::uint64_t loadId = scene.LoadedContent().Find("StreamFocusFixture");
+    kb::tests::Require(loadId != 0U && scene.LoadedContent().Exists(loadId),
+        "Stream Focus must load eligible shared content inside its inner radius");
+
+    ownerTransform.localPosition = { 15.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(owner.Entity(), ownerTransform);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    kb::tests::Require(scene.LoadedContent().Exists(loadId),
+        "Stream Focus must retain loaded content until its outer radius to avoid stream thrashing");
+
+    ownerTransform.localPosition = { 25.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(owner.Entity(), ownerTransform);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    kb::tests::Require(!scene.LoadedContent().Exists(loadId),
+        "Stream Focus must release content outside its outer radius through the shared content service");
+
+    ownerTransform.localPosition = { 5.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(owner.Entity(), ownerTransform);
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    loadId = scene.LoadedContent().Find("StreamFocusFixture");
+    kb::tests::Require(loadId != 0U && scene.LoadedContent().Exists(loadId),
+        "Stream Focus must activate released content again after it returns inside the inner radius");
+
+    kb::scene::StreamFocusComponent* focus = scene.Components().StreamFocuses().TryGet(focusObject.Entity());
+    kb::tests::Require(focus != nullptr, "Stream Focus runtime fixture lost its authored ECS component");
+    focus->loadMask = kb::scene::StreamLoadMask::Prefab;
+    scene.Components().StreamFocuses().MarkModified(focusObject.Entity());
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    kb::tests::Require(!scene.LoadedContent().Exists(loadId),
+        "Stream Focus load mask must prevent unsupported content kinds from entering the shared runtime flow");
+    std::filesystem::remove_all(testRoot, error);
+}
+
 void RunEngineLibraryEventSchemaRegistryTest() {
     const std::vector<kb::library::LibraryEventDesc>& catalog = kb::library::EngineLibraryEventRegistry::Catalog();
     kb::tests::Require(catalog.size() == 24U, "Engine21kbLibrary event schema registry must catalog exactly the 24 built-in events this engine emits today");
@@ -2989,7 +3217,7 @@ void RunComponentInspectorDescCatalogTest() {
     // LIB-183 adds 11 NavAgent fields and 9 NavObstacle fields to the prior
     // 97-field contract, bringing the library/editor scripting surface to
     // 117 described fields across 12 components.
-    kb::tests::Require(fieldsChecked == 120U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (120) across all components");
+    kb::tests::Require(fieldsChecked == 195U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (195) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
@@ -5063,6 +5291,70 @@ void RunVisibilityGateResolutionTest() {
         "An explicit hidden child gate must resolve hidden regardless of its parent");
 }
 
+void RunRegionShapeContainmentTest() {
+    kb::scene::RegionShapeComponent shape{};
+    shape.kind = kb::scene::RegionShapeKind::Circle2D;
+    shape.radius = 2.0F;
+    kb::tests::Require(kb::scene::RegionShapeContainsLocal(shape, { 1.0F, 1.0F, 999.0F }) &&
+            !kb::scene::RegionShapeContainsLocal(shape, { 2.1F, 0.0F, 0.0F }),
+        "Region Shape Circle 2D must contain only local XY points inside its radius");
+
+    shape.kind = kb::scene::RegionShapeKind::Box;
+    shape.size = { 2.0F, 4.0F, 6.0F };
+    kb::tests::Require(kb::scene::RegionShapeContainsLocal(shape, { 1.0F, -2.0F, 3.0F }) &&
+            !kb::scene::RegionShapeContainsLocal(shape, { 1.01F, 0.0F, 0.0F }),
+        "Region Shape Box must use full authored extents and include boundaries deterministically");
+
+    shape.kind = kb::scene::RegionShapeKind::Capsule;
+    shape.radius = 0.5F;
+    shape.height = 3.0F;
+    kb::tests::Require(kb::scene::RegionShapeContainsLocal(shape, { 0.0F, 1.5F, 0.0F }) &&
+            !kb::scene::RegionShapeContainsLocal(shape, { 0.0F, 1.51F, 0.0F }),
+        "Region Shape Capsule must include hemispherical caps and reject points beyond them");
+
+    shape.enabled = false;
+    kb::tests::Require(!kb::scene::RegionShapeContainsLocal(shape, {}),
+        "Disabled Region Shape must not participate in containment queries");
+}
+
+void RunGuideCurveEvaluationTest() {
+    kb::scene::GuideCurveComponent curve{};
+    curve.interpolation = kb::scene::GuideCurveInterpolation::Linear;
+    curve.controlPointCount = 3U;
+    curve.controlPoints[0] = { 0.0F, 0.0F, 0.0F };
+    curve.controlPoints[1] = { 2.0F, 0.0F, 0.0F };
+    curve.controlPoints[2] = { 2.0F, 2.0F, 0.0F };
+    kb::scene::Vec3 position{};
+    kb::scene::Vec3 tangent{};
+    kb::tests::Require(kb::scene::GuideCurveEvaluateLocal(curve, 0.25F, position, tangent) &&
+            kb::tests::NearlyEqual(position.x, 1.0F) && kb::tests::NearlyEqual(position.y, 0.0F) &&
+            kb::tests::NearlyEqual(tangent.x, 1.0F),
+        "Guide Curve must evaluate normalized linear segments deterministically");
+    kb::tests::Require(kb::scene::GuideCurveEvaluateLocal(curve, 1.0F, position, tangent) &&
+            kb::tests::NearlyEqual(position.x, 2.0F) && kb::tests::NearlyEqual(position.y, 2.0F),
+        "Open Guide Curve must preserve its endpoint");
+    curve.closed = true;
+    kb::tests::Require(kb::scene::GuideCurveEvaluateLocal(curve, 1.25F, position, tangent) &&
+            kb::tests::NearlyEqual(position.x, 1.5F) && kb::tests::NearlyEqual(position.y, 0.0F),
+        "Closed Guide Curve must wrap its normalized parameter");
+    curve.enabled = false;
+    kb::tests::Require(!kb::scene::GuideCurveEvaluateLocal(curve, 0.0F, position, tangent),
+        "Disabled Guide Curve must not be evaluated");
+}
+
+void RunCameraComponentValidationTest() {
+    kb::scene::CameraComponent camera{};
+    kb::tests::Require(kb::scene::IsCameraComponentValid(camera),
+        "Camera defaults must form a valid view-frame configuration");
+    camera.farClip = camera.nearClip;
+    kb::tests::Require(!kb::scene::IsCameraComponentValid(camera),
+        "Camera validation must reject a non-positive depth interval");
+    camera = {};
+    camera.verticalFovDegrees = 180.0F;
+    kb::tests::Require(!kb::scene::IsCameraComponentValid(camera),
+        "Camera validation must reject a non-projectable perspective field of view");
+}
+
 void RunEngineLibraryTests() {
     RunVersionValueTest();
     RunVersionOrderingTest();
@@ -5117,6 +5409,11 @@ void RunEngineLibraryTests() {
     RunFunctionIdTest();
     RunEngineLibraryComponentRegistryTest();
     RunVisibilityGateResolutionTest();
+    RunRegionShapeContainmentTest();
+    RunGuideCurveEvaluationTest();
+    RunCameraComponentValidationTest();
+    RunContentInstanceRuntimeTest();
+    RunStreamFocusRuntimeTest();
     RunEngineLibraryEventSchemaRegistryTest();
     RunComponentInspectorDescCatalogTest();
     RunLibraryQueryPhaseGateTest();

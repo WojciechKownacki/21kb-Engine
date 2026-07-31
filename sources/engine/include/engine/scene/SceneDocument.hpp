@@ -15,7 +15,13 @@ struct SceneDocument {
     // v5 (LIB-167): Animator is a persisted scene/prefab component.
     // v4 (LIB-123): JointComponent is persisted with a stable prefab-node reference.
     // v3 (LIB-147): AudioSourceComponent gained the outputBus mixer-routing token.
-    static constexpr std::uint32_t CurrentFileVersion = 9U;
+    // v14: WorldBackdropComponent persists visible world background policy.
+    // v15: AmbientRadianceComponent persists authored scene-global indirect lighting.
+    // v16: SceneDetailSwitchComponent persists coordinated mesh LOD policy.
+    // v17: SceneVisibilityBlockerComponent persists non-renderable culling geometry.
+    // v18: VisibilityCellComponent persists region-membership visibility policy.
+    // v19: SceneRegionPortalComponent persists stable source/target cell links.
+    static constexpr std::uint32_t CurrentFileVersion = 19U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

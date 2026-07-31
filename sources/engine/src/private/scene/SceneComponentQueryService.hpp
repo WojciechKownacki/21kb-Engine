@@ -15,6 +15,16 @@
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TagsComponent.hpp"
+#include "engine/scene/RegionShapeComponent.hpp"
+#include "engine/scene/GuideCurveComponent.hpp"
+#include "engine/scene/ContentInstanceComponent.hpp"
+#include "engine/scene/StreamFocusComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
+#include "engine/scene/AmbientRadianceComponent.hpp"
+#include "engine/scene/DetailSwitchComponent.hpp"
+#include "engine/scene/VisibilityBlockerComponent.hpp"
+#include "engine/scene/VisibilityCellComponent.hpp"
+#include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
 
@@ -58,6 +68,27 @@ public:
 
     [[nodiscard]] static bool HasTags(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const TagsComponent* TryGetTags(const Scene& scene, SceneEntity entity) noexcept;
+
+    [[nodiscard]] static bool HasRegionShape(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const RegionShapeComponent* TryGetRegionShape(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasGuideCurve(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const GuideCurveComponent* TryGetGuideCurve(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasContentInstance(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const ContentInstanceComponent* TryGetContentInstance(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasStreamFocus(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const StreamFocusComponent* TryGetStreamFocus(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasWorldBackdrop(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const WorldBackdropComponent* TryGetWorldBackdrop(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasAmbientRadiance(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const AmbientRadianceComponent* TryGetAmbientRadiance(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasDetailSwitch(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const SceneDetailSwitchComponent* TryGetDetailSwitch(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasVisibilityBlocker(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const SceneVisibilityBlockerComponent* TryGetVisibilityBlocker(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasVisibilityCell(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const VisibilityCellComponent* TryGetVisibilityCell(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasRegionPortal(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const SceneRegionPortalComponent* TryGetRegionPortal(const Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static bool HasAudioSource(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const AudioSourceComponent* TryGetAudioSource(const Scene& scene, SceneEntity entity) noexcept;

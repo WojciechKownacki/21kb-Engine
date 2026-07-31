@@ -32,6 +32,16 @@ enum SceneNodeComponentBits : std::uint32_t {
     UIDocumentBit = 1U << 13U,
     NavAgentBit = 1U << 14U,
     NavObstacleBit = 1U << 15U,
+    RegionShapeBit = 1U << 16U,
+      GuideCurveBit = 1U << 17U,
+      ContentInstanceBit = 1U << 18U,
+      StreamFocusBit = 1U << 19U,
+      WorldBackdropBit = 1U << 20U,
+      AmbientRadianceBit = 1U << 21U,
+      DetailSwitchBit = 1U << 22U,
+      VisibilityBlockerBit = 1U << 23U,
+      VisibilityCellBit = 1U << 24U,
+      RegionPortalBit = 1U << 25U,
 };
 
 constexpr std::uint32_t KnownComponentBits = CameraBit |
@@ -49,7 +59,10 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     AnimatorBit |
     UIDocumentBit |
     NavAgentBit |
-    NavObstacleBit;
+    NavObstacleBit |
+    RegionShapeBit |
+    GuideCurveBit |
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit;
 
 [[nodiscard]] std::uint32_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint32_t componentBits = 0;
@@ -69,6 +82,16 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     componentBits |= components.uiDocument.has_value() ? UIDocumentBit : 0U;
     componentBits |= components.navAgent.has_value() ? NavAgentBit : 0U;
     componentBits |= components.navObstacle.has_value() ? NavObstacleBit : 0U;
+    componentBits |= components.regionShape.has_value() ? RegionShapeBit : 0U;
+    componentBits |= components.guideCurve.has_value() ? GuideCurveBit : 0U;
+      componentBits |= components.contentInstance.has_value() ? ContentInstanceBit : 0U;
+      componentBits |= components.streamFocus.has_value() ? StreamFocusBit : 0U;
+      componentBits |= components.worldBackdrop.has_value() ? WorldBackdropBit : 0U;
+      componentBits |= components.ambientRadiance.has_value() ? AmbientRadianceBit : 0U;
+      componentBits |= components.detailSwitch.has_value() ? DetailSwitchBit : 0U;
+      componentBits |= components.visibilityBlocker.has_value() ? VisibilityBlockerBit : 0U;
+      componentBits |= components.visibilityCell.has_value() ? VisibilityCellBit : 0U;
+      componentBits |= components.regionPortal.has_value() ? RegionPortalBit : 0U;
     return componentBits;
 }
 
@@ -219,6 +242,115 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         obstacle.area = static_cast<NavAreaId>(area);
         output.navObstacle = obstacle;
     }
+    if ((componentBits & RegionShapeBit) != 0U) {
+        if (fileVersion < 10U) return false;
+        RegionShapeComponent regionShape{};
+        std::uint32_t kind = 0U;
+        if (!input.ReadUInt32(kind) || !SceneAssetPrimitiveCodec::ReadVec3(input, regionShape.center) ||
+            !SceneAssetPrimitiveCodec::ReadVec3(input, regionShape.size) || !input.ReadFloat(regionShape.radius) ||
+            !input.ReadFloat(regionShape.height) || !input.ReadBool(regionShape.enabled) ||
+            kind > static_cast<std::uint32_t>(RegionShapeKind::Capsule) ||
+            !std::isfinite(regionShape.center.x) || !std::isfinite(regionShape.center.y) || !std::isfinite(regionShape.center.z) ||
+            !std::isfinite(regionShape.size.x) || !std::isfinite(regionShape.size.y) || !std::isfinite(regionShape.size.z) ||
+            !(regionShape.radius > 0.0F) || !(regionShape.height > 0.0F) || !std::isfinite(regionShape.radius) || !std::isfinite(regionShape.height)) return false;
+        regionShape.kind = static_cast<RegionShapeKind>(kind);
+        output.regionShape = regionShape;
+    }
+    if ((componentBits & GuideCurveBit) != 0U) {
+        if (fileVersion < 11U) return false;
+        GuideCurveComponent guideCurve{};
+        std::uint32_t interpolation = 0U;
+        if (!input.ReadUInt32(guideCurve.controlPointCount) || !input.ReadUInt32(interpolation) || !input.ReadBool(guideCurve.closed) || !input.ReadBool(guideCurve.enabled) ||
+            !IsGuideCurveControlPointCountValid(guideCurve.controlPointCount) || interpolation > static_cast<std::uint32_t>(GuideCurveInterpolation::CatmullRom)) return false;
+        guideCurve.interpolation = static_cast<GuideCurveInterpolation>(interpolation);
+        for (std::uint32_t index = 0U; index < guideCurve.controlPointCount; ++index) {
+            if (!SceneAssetPrimitiveCodec::ReadVec3(input, guideCurve.controlPoints[index]) || !std::isfinite(guideCurve.controlPoints[index].x) || !std::isfinite(guideCurve.controlPoints[index].y) || !std::isfinite(guideCurve.controlPoints[index].z)) return false;
+        }
+        output.guideCurve = guideCurve;
+    }
+    if ((componentBits & ContentInstanceBit) != 0U) {
+        if (fileVersion < 12U) return false;
+        ContentInstanceComponent content{};
+        std::uint32_t kind = 0U;
+        std::uint32_t lifetime = 0U;
+        if (!input.ReadUInt64(content.assetId) || !input.ReadUInt32(kind) || !input.ReadUInt32(lifetime) || !input.ReadBool(content.active) ||
+            kind > static_cast<std::uint32_t>(ContentInstanceKind::WorldFragment) || lifetime > static_cast<std::uint32_t>(ContentInstanceLifetime::Persistent)) return false;
+        content.kind = static_cast<ContentInstanceKind>(kind);
+        content.lifetime = static_cast<ContentInstanceLifetime>(lifetime);
+        output.contentInstance = content;
+    }
+    if ((componentBits & StreamFocusBit) != 0U) {
+        if (fileVersion < 13U) return false;
+        StreamFocusComponent focus{};
+        std::uint32_t mask = 0U;
+        if (!input.ReadFloat(focus.innerRadius) || !input.ReadFloat(focus.outerRadius) || !input.ReadInt32(focus.priority) || !input.ReadUInt32(mask) || !input.ReadBool(focus.enabled)) return false;
+        focus.loadMask = static_cast<StreamLoadMask>(mask);
+        if (!IsStreamFocusValid(focus)) return false;
+        output.streamFocus = focus;
+    }
+    if ((componentBits & WorldBackdropBit) != 0U) {
+        if (fileVersion < 14U) return false;
+        WorldBackdropComponent backdrop{};
+        std::uint32_t mode = 0U;
+        if (!input.ReadUInt32(mode) ||
+            !SceneAssetPrimitiveCodec::ReadVec3(input, backdrop.color) ||
+            !SceneAssetPrimitiveCodec::ReadVec3(input, backdrop.horizonColor) ||
+            !SceneAssetPrimitiveCodec::ReadVec3(input, backdrop.zenithColor) ||
+            !input.ReadUInt64(backdrop.environmentAssetId) || !input.ReadFloat(backdrop.horizonHeight) ||
+            !input.ReadFloat(backdrop.gradientExponent) || !input.ReadInt32(backdrop.priority) ||
+            !input.ReadBool(backdrop.enabled)) return false;
+        backdrop.mode = static_cast<WorldBackdropMode>(mode);
+        if (!IsWorldBackdropComponentValid(backdrop)) return false;
+        output.worldBackdrop = backdrop;
+    }
+    if ((componentBits & AmbientRadianceBit) != 0U) {
+        if (fileVersion < 15U) return false;
+        AmbientRadianceComponent ambient{};
+        std::uint32_t mode = 0U;
+        if (!input.ReadUInt32(mode) ||
+            !SceneAssetPrimitiveCodec::ReadVec3(input, ambient.color) ||
+            !SceneAssetPrimitiveCodec::ReadVec3(input, ambient.horizonColor) ||
+            !SceneAssetPrimitiveCodec::ReadVec3(input, ambient.zenithColor) ||
+            !input.ReadUInt64(ambient.environmentAssetId) || !input.ReadFloat(ambient.intensity) ||
+            !input.ReadFloat(ambient.diffuseIntensity) || !input.ReadFloat(ambient.specularIntensity) ||
+            !input.ReadInt32(ambient.priority) || !input.ReadBool(ambient.enabled)) return false;
+        ambient.mode = static_cast<AmbientRadianceMode>(mode);
+        if (!IsAmbientRadianceComponentValid(ambient)) return false;
+        output.ambientRadiance = ambient;
+    }
+    if ((componentBits & DetailSwitchBit) != 0U) {
+        if (fileVersion < 16U) return false;
+        SceneDetailSwitchComponent detail{};
+        if (!input.ReadUInt64(detail.groupId) || !input.ReadUInt32(detail.minimumLod) ||
+            !input.ReadUInt32(detail.maximumLod) || !input.ReadFloat(detail.promoteCoverage) ||
+            !input.ReadFloat(detail.demoteCoverage) || !input.ReadBool(detail.enabled) ||
+            !IsSceneDetailSwitchComponentValid(detail)) return false;
+        output.detailSwitch = detail;
+    }
+    if ((componentBits & VisibilityBlockerBit) != 0U) {
+        if (fileVersion < 17U) return false;
+        SceneVisibilityBlockerComponent blocker{};
+        if (!SceneAssetPrimitiveCodec::ReadVec3(input, blocker.localCenter) || !SceneAssetPrimitiveCodec::ReadVec3(input, blocker.size) || !input.ReadBool(blocker.enabled) || !IsSceneVisibilityBlockerComponentValid(blocker)) return false;
+        output.visibilityBlocker = blocker;
+    }
+    if ((componentBits & VisibilityCellBit) != 0U) {
+        if (fileVersion < 18U) return false;
+        VisibilityCellComponent cell{};
+        std::uint32_t membership = 0U;
+        std::uint32_t visibilityOverride = 0U;
+        if (!input.ReadUInt32(cell.membershipMask) || !input.ReadUInt32(membership) || !input.ReadUInt32(visibilityOverride) || !input.ReadBool(cell.enabled) ||
+            membership > static_cast<std::uint32_t>(VisibilityCellMembership::Exclude) || visibilityOverride > static_cast<std::uint32_t>(VisibilityCellOverride::ForceHidden)) return false;
+        cell.membership = static_cast<VisibilityCellMembership>(membership);
+        cell.visibilityOverride = static_cast<VisibilityCellOverride>(visibilityOverride);
+        if (!IsVisibilityCellComponentValid(cell)) return false;
+        output.visibilityCell = cell;
+    }
+    if ((componentBits & RegionPortalBit) != 0U) {
+        if (fileVersion < 19U) return false;
+        ScenePrefabRegionPortalComponent portal{};
+        if (!input.ReadUInt64(portal.sourceCellNodeStableId) || !input.ReadUInt64(portal.targetCellNodeStableId) || !input.ReadUInt32(portal.purposes) || !input.ReadBool(portal.enabled) || !IsRegionPortalPurposeMaskValid(portal.purposes)) return false;
+        output.regionPortal = portal;
+    }
     return true;
 }
 
@@ -295,6 +427,92 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteUInt32(output, obstacle.area);
         SceneAssetBinaryIO::WriteBool(output, obstacle.carve);
         SceneAssetBinaryIO::WriteBool(output, obstacle.enabled);
+    }
+    if (components.regionShape.has_value()) {
+        const RegionShapeComponent& regionShape = *components.regionShape;
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(regionShape.kind));
+        SceneAssetPrimitiveCodec::WriteVec3(output, regionShape.center);
+        SceneAssetPrimitiveCodec::WriteVec3(output, regionShape.size);
+        SceneAssetBinaryIO::WriteFloat(output, regionShape.radius);
+        SceneAssetBinaryIO::WriteFloat(output, regionShape.height);
+        SceneAssetBinaryIO::WriteBool(output, regionShape.enabled);
+    }
+    if (components.guideCurve.has_value()) {
+        const GuideCurveComponent& guideCurve = *components.guideCurve;
+        SceneAssetBinaryIO::WriteUInt32(output, guideCurve.controlPointCount);
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(guideCurve.interpolation));
+        SceneAssetBinaryIO::WriteBool(output, guideCurve.closed);
+        SceneAssetBinaryIO::WriteBool(output, guideCurve.enabled);
+        for (std::uint32_t index = 0U; index < guideCurve.controlPointCount; ++index) SceneAssetPrimitiveCodec::WriteVec3(output, guideCurve.controlPoints[index]);
+    }
+    if (components.contentInstance.has_value()) {
+        const ContentInstanceComponent& content = *components.contentInstance;
+        SceneAssetBinaryIO::WriteUInt64(output, content.assetId);
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(content.kind));
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(content.lifetime));
+        SceneAssetBinaryIO::WriteBool(output, content.active);
+    }
+    if (components.streamFocus.has_value()) {
+        const StreamFocusComponent& focus = *components.streamFocus;
+        SceneAssetBinaryIO::WriteFloat(output, focus.innerRadius);
+        SceneAssetBinaryIO::WriteFloat(output, focus.outerRadius);
+        SceneAssetBinaryIO::WriteInt32(output, focus.priority);
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(focus.loadMask));
+        SceneAssetBinaryIO::WriteBool(output, focus.enabled);
+    }
+    if (components.worldBackdrop.has_value()) {
+        const WorldBackdropComponent& backdrop = *components.worldBackdrop;
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(backdrop.mode));
+        SceneAssetPrimitiveCodec::WriteVec3(output, backdrop.color);
+        SceneAssetPrimitiveCodec::WriteVec3(output, backdrop.horizonColor);
+        SceneAssetPrimitiveCodec::WriteVec3(output, backdrop.zenithColor);
+        SceneAssetBinaryIO::WriteUInt64(output, backdrop.environmentAssetId);
+        SceneAssetBinaryIO::WriteFloat(output, backdrop.horizonHeight);
+        SceneAssetBinaryIO::WriteFloat(output, backdrop.gradientExponent);
+        SceneAssetBinaryIO::WriteInt32(output, backdrop.priority);
+        SceneAssetBinaryIO::WriteBool(output, backdrop.enabled);
+    }
+    if (components.ambientRadiance.has_value()) {
+        const AmbientRadianceComponent& ambient = *components.ambientRadiance;
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(ambient.mode));
+        SceneAssetPrimitiveCodec::WriteVec3(output, ambient.color);
+        SceneAssetPrimitiveCodec::WriteVec3(output, ambient.horizonColor);
+        SceneAssetPrimitiveCodec::WriteVec3(output, ambient.zenithColor);
+        SceneAssetBinaryIO::WriteUInt64(output, ambient.environmentAssetId);
+        SceneAssetBinaryIO::WriteFloat(output, ambient.intensity);
+        SceneAssetBinaryIO::WriteFloat(output, ambient.diffuseIntensity);
+        SceneAssetBinaryIO::WriteFloat(output, ambient.specularIntensity);
+        SceneAssetBinaryIO::WriteInt32(output, ambient.priority);
+        SceneAssetBinaryIO::WriteBool(output, ambient.enabled);
+    }
+    if (components.detailSwitch.has_value()) {
+        const SceneDetailSwitchComponent& detail = *components.detailSwitch;
+        SceneAssetBinaryIO::WriteUInt64(output, detail.groupId);
+        SceneAssetBinaryIO::WriteUInt32(output, detail.minimumLod);
+        SceneAssetBinaryIO::WriteUInt32(output, detail.maximumLod);
+        SceneAssetBinaryIO::WriteFloat(output, detail.promoteCoverage);
+        SceneAssetBinaryIO::WriteFloat(output, detail.demoteCoverage);
+        SceneAssetBinaryIO::WriteBool(output, detail.enabled);
+    }
+    if (components.visibilityBlocker.has_value()) {
+        const SceneVisibilityBlockerComponent& blocker = *components.visibilityBlocker;
+        SceneAssetPrimitiveCodec::WriteVec3(output, blocker.localCenter);
+        SceneAssetPrimitiveCodec::WriteVec3(output, blocker.size);
+        SceneAssetBinaryIO::WriteBool(output, blocker.enabled);
+    }
+    if (components.visibilityCell.has_value()) {
+        const VisibilityCellComponent& cell = *components.visibilityCell;
+        SceneAssetBinaryIO::WriteUInt32(output, cell.membershipMask);
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(cell.membership));
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(cell.visibilityOverride));
+        SceneAssetBinaryIO::WriteBool(output, cell.enabled);
+    }
+    if (components.regionPortal.has_value()) {
+        const ScenePrefabRegionPortalComponent& portal = *components.regionPortal;
+        SceneAssetBinaryIO::WriteUInt64(output, portal.sourceCellNodeStableId);
+        SceneAssetBinaryIO::WriteUInt64(output, portal.targetCellNodeStableId);
+        SceneAssetBinaryIO::WriteUInt32(output, portal.purposes);
+        SceneAssetBinaryIO::WriteBool(output, portal.enabled);
     }
 }
 

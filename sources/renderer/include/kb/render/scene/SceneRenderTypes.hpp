@@ -21,6 +21,15 @@ inline constexpr std::uint32_t kMaxSceneForwardLights = 4U;
 inline constexpr std::uint32_t kMaxSceneForwardPlusLights = 32U;
 inline constexpr std::uint32_t kMaxSceneReflectionProbes = 8U;
 
+// Frame-local renderer input derived from a Visibility Blocker ECS component.
+// It is intentionally not a mesh and can never reach a draw-command path.
+struct SceneRenderVisibilityBlocker {
+    std::uint64_t entityId = 0U;
+    std::array<float, 16> model{};
+    std::array<float, 3> localCenter{};
+    std::array<float, 3> size{ 1.0F, 1.0F, 1.0F };
+};
+
 enum class RenderLightKind : std::uint8_t {
     Directional,
     Point,
@@ -43,6 +52,49 @@ enum class SceneRenderEnvironmentMode : std::uint8_t {
     Constant,
     Hemisphere,
     ImageBased,
+};
+
+enum class SceneRenderWorldBackdropMode : std::uint8_t {
+    SolidColor,
+    VerticalGradient,
+    EnvironmentMap,
+    ProceduralSky,
+};
+
+// Renderer-owned, derived copy of the selected authored WorldBackdropComponent.
+// It never feeds back into scene data; ECS stays the source of truth.
+struct SceneRenderWorldBackdrop {
+    std::uint64_t entityId = 0U;
+    SceneRenderWorldBackdropMode mode = SceneRenderWorldBackdropMode::SolidColor;
+    std::array<float, 3> color{};
+    std::array<float, 3> horizonColor{};
+    std::array<float, 3> zenithColor{};
+    std::uint64_t environmentAssetId = 0U;
+    float horizonHeight = 0.0F;
+    float gradientExponent = 1.0F;
+};
+
+enum class SceneRenderAmbientRadianceMode : std::uint8_t {
+    Constant,
+    Gradient,
+    EnvironmentMap,
+    ProceduralSky,
+    CapturedEnvironment,
+    EstimatedEnvironment,
+};
+
+// Renderer-owned, derived copy of the selected AmbientRadianceComponent.
+// It is frame input only and never feeds back into ECS authoring state.
+struct SceneRenderAmbientRadiance {
+    std::uint64_t entityId = 0U;
+    SceneRenderAmbientRadianceMode mode = SceneRenderAmbientRadianceMode::Constant;
+    std::array<float, 3> color{};
+    std::array<float, 3> horizonColor{};
+    std::array<float, 3> zenithColor{};
+    std::uint64_t environmentAssetId = 0U;
+    float intensity = 1.0F;
+    float diffuseIntensity = 1.0F;
+    float specularIntensity = 0.25F;
 };
 
 enum class SceneRenderLightingPath : std::uint8_t {
@@ -113,6 +165,12 @@ struct SceneRenderMeshInstance {
     // camera's SceneRenderCamera::cullingMask. Bit 0 set by default, matching
     // MeshRendererComponent::layer's default ("Default" layer).
     std::uint32_t layer = 1U;
+    std::uint64_t detailSwitchGroupId = 0U;
+    std::uint32_t detailSwitchMinimumLod = 0U;
+    std::uint32_t detailSwitchMaximumLod = 255U;
+    float detailSwitchPromoteCoverage = 0.20F;
+    float detailSwitchDemoteCoverage = 0.15F;
+    bool detailSwitchEnabled = false;
 };
 
 struct SceneRenderDrawGroup {
@@ -126,6 +184,7 @@ struct SceneRenderLight {
     RenderLightKind kind = RenderLightKind::Point;
     float position[3]{};
     float direction[3]{ 0.0F, 0.0F, 1.0F };
+    float right[3]{ 1.0F, 0.0F, 0.0F };
     float color[3]{ 1.0F, 1.0F, 1.0F };
     float intensity = 1.0F;
     float range = 10.0F;

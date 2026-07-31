@@ -36,6 +36,7 @@ public:
     [[nodiscard]] bool ContainsTexture(RuntimeTextureAssetKey key) const;
 
     [[nodiscard]] const std::unordered_set<RuntimeAssetKey, RuntimeAssetKeyHash>& Materials() const noexcept;
+    [[nodiscard]] const std::unordered_set<RuntimeTextureAssetKey, RuntimeTextureAssetKeyHash>& Textures() const noexcept;
     [[nodiscard]] RuntimeFrameResourceReferenceStats Stats() const noexcept;
 
 private:

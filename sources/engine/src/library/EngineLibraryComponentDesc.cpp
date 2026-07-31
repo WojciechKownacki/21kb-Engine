@@ -56,8 +56,8 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .serializable = true,
         },
         LibraryComponentDesc{
-            .name = "Light",
-            .id = ComputeLibraryComponentId("Light"),
+            .name = "3D Radiance Emitter",
+            .id = ComputeLibraryComponentId("3D Radiance Emitter"),
             .serializable = true,
         },
         LibraryComponentDesc{
@@ -111,6 +111,56 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
         LibraryComponentDesc{
             .name = "Tags",
             .id = ComputeLibraryComponentId("Tags"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "RegionShape",
+            .id = ComputeLibraryComponentId("RegionShape"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "GuideCurve",
+            .id = ComputeLibraryComponentId("GuideCurve"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "ContentInstance",
+            .id = ComputeLibraryComponentId("ContentInstance"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "StreamFocus",
+            .id = ComputeLibraryComponentId("StreamFocus"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "WorldBackdrop",
+            .id = ComputeLibraryComponentId("WorldBackdrop"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Ambient Radiance",
+            .id = ComputeLibraryComponentId("Ambient Radiance"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Detail Switch",
+            .id = ComputeLibraryComponentId("Detail Switch"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Visibility Blocker",
+            .id = ComputeLibraryComponentId("Visibility Blocker"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Visibility Cell",
+            .id = ComputeLibraryComponentId("Visibility Cell"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Region Portal",
+            .id = ComputeLibraryComponentId("Region Portal"),
             .serializable = true,
         },
     };

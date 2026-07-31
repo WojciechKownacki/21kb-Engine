@@ -11,6 +11,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace kb::render {
@@ -71,12 +73,90 @@ void EmitInstanceDiagnostic(
     return true;
 }
 
+[[nodiscard]] std::uint64_t DetailSwitchKey(const SceneRenderMeshInstance& instance) noexcept {
+    return instance.detailSwitchGroupId != 0U ? instance.detailSwitchGroupId : (instance.entityId ^ 0x9e3779b97f4a7c15ULL);
+}
+
+struct DetailSwitchCandidate {
+    std::uint64_t policyEntityId = UINT64_MAX;
+    float coverage = 0.0F;
+    std::uint8_t desiredLod = UINT8_MAX;
+    std::uint32_t minimumLod = 0U;
+    std::uint32_t maximumLod = 255U;
+    float promoteCoverage = 0.20F;
+    float demoteCoverage = 0.15F;
+};
+
+void ResolveDetailSwitchLevels(const MeshPassProcessorDesc& desc, MeshPipelineBuildResult& result) {
+    result.detailSwitchLevels.clear();
+    const bool advancesHistory = desc.pass == MeshPassType::BaseOpaque || desc.pass == MeshPassType::GBuffer;
+    std::unordered_map<std::uint64_t, DetailSwitchCandidate> candidates;
+    for (const SceneMeshBatch& batch : desc.meshBatches) {
+        const RenderMeshResource* mesh = nullptr;
+        if (desc.resourceValidation == MeshPipelineResourceValidation::ResolveAndValidate) {
+            const RenderMeshHandle handle = desc.resourceMap->ResolveMesh(batch.meshAssetId);
+            mesh = desc.resources->FindMesh(handle);
+        } else {
+            mesh = desc.resolvedMeshResource;
+        }
+        if (mesh == nullptr || mesh->lods.empty()) continue;
+        for (const SceneRenderMeshInstance& instance : batch.instances) {
+            if (!instance.detailSwitchEnabled) continue;
+            const std::uint64_t key = DetailSwitchKey(instance);
+            DetailSwitchCandidate& candidate = candidates[key];
+            const std::uint8_t desired = MeshPipelineVisibility::SelectLodLevel(mesh, instance, desc.camera);
+            candidate.desiredLod = std::min(candidate.desiredLod, desired);
+            const RenderBoundsSphere bounds = MeshPipelineVisibility::TransformBounds(mesh->bounds, instance.model);
+            const float depth = std::max(std::abs(MeshPipelineVisibility::ViewDepth(desc.camera, bounds)), bounds.radius);
+            candidate.coverage = std::max(candidate.coverage, std::clamp(bounds.radius / std::max(depth, 0.0001F), 0.0F, 1.0F));
+            if (instance.entityId < candidate.policyEntityId) {
+                candidate.policyEntityId = instance.entityId;
+                candidate.minimumLod = instance.detailSwitchMinimumLod;
+                candidate.maximumLod = instance.detailSwitchMaximumLod;
+                candidate.promoteCoverage = instance.detailSwitchPromoteCoverage;
+                candidate.demoteCoverage = instance.detailSwitchDemoteCoverage;
+            }
+        }
+    }
+    if (advancesHistory) {
+        std::unordered_set<std::uint64_t> activeKeys;
+        activeKeys.reserve(candidates.size());
+        for (const auto& [key, candidate] : candidates) {
+            static_cast<void>(candidate);
+            activeKeys.emplace(key);
+        }
+        for (auto previous = result.detailSwitchPreviousLevels.begin(); previous != result.detailSwitchPreviousLevels.end();) {
+            if (!activeKeys.contains(previous->first)) {
+                previous = result.detailSwitchPreviousLevels.erase(previous);
+            } else {
+                ++previous;
+            }
+        }
+    }
+    for (const auto& [key, candidate] : candidates) {
+        const std::uint8_t requested = static_cast<std::uint8_t>(std::clamp<std::uint32_t>(candidate.desiredLod, candidate.minimumLod, candidate.maximumLod));
+        std::uint8_t resolved = requested;
+        if (const auto previous = result.detailSwitchPreviousLevels.find(key); previous != result.detailSwitchPreviousLevels.end()) {
+            resolved = previous->second;
+            if (advancesHistory) {
+                if (requested < resolved && candidate.coverage >= candidate.promoteCoverage) resolved = requested;
+                if (requested > resolved && candidate.coverage < candidate.demoteCoverage) resolved = requested;
+            }
+        }
+        result.detailSwitchLevels.emplace(key, resolved);
+        if (advancesHistory) {
+            result.detailSwitchPreviousLevels.insert_or_assign(key, resolved);
+        }
+    }
+}
+
 } // namespace
 
 void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, MeshPipelineBuildResult& result) noexcept {
     const bool validateResources = desc.resourceValidation == MeshPipelineResourceValidation::ResolveAndValidate;
     const MeshPipelineFrustum frustum = MeshPipelineVisibility::BuildFrustum(desc.camera);
     const std::uint32_t cullingMask = desc.camera != nullptr ? desc.camera->cullingMask : 0xFFFFFFFFU;
+    ResolveDetailSwitchLevels(desc, result);
     result.commands.reserve(desc.meshBatches.size());
 
     std::size_t writeCommandCount = 0U;
@@ -128,7 +208,12 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 if (!MeshPipelinePassPolicy::CanEverContain(desc.pass, instance, desc.selectedEntityIds, cullingMask)) {
                     continue;
                 }
-                const std::uint8_t selectedLod = MeshPipelineVisibility::SelectLodLevel(meshResource, instance, desc.camera);
+                std::uint8_t selectedLod = MeshPipelineVisibility::SelectLodLevel(meshResource, instance, desc.camera);
+                if (instance.detailSwitchEnabled) {
+                    if (const auto selected = result.detailSwitchLevels.find(DetailSwitchKey(instance)); selected != result.detailSwitchLevels.end()) {
+                        selectedLod = static_cast<std::uint8_t>(std::min<std::uint32_t>(selected->second, meshResource == nullptr || meshResource->lods.empty() ? 0U : static_cast<std::uint32_t>(meshResource->lods.size() - 1U)));
+                    }
+                }
                 if (meshResource != nullptr && !meshResource->lods.empty()) {
                     ++result.stats.lodSelectionCount;
                 }
@@ -156,6 +241,12 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                     if (gpuDrivenCandidate) {
                         MeshPipelineGpuDrivenRecorder::Record(result, instance, UINT32_MAX, selectedLod, meshletRange, false, false);
                     }
+                    ++culledForSection;
+                    continue;
+                }
+                if (desc.pass != MeshPassType::ShadowDepth && desc.pass != MeshPassType::Gizmo &&
+                    MeshPipelineVisibility::IsOccludedByVisibilityBlockers(desc.camera, instance.worldBounds, desc.visibilityBlockers)) {
+                    if (gpuDrivenCandidate) MeshPipelineGpuDrivenRecorder::Record(result, instance, UINT32_MAX, selectedLod, meshletRange, false, false);
                     ++culledForSection;
                     continue;
                 }

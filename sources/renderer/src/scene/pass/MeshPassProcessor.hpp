@@ -16,6 +16,7 @@ struct MeshPassProcessorDesc {
     const RenderMeshResource* resolvedMeshResource = nullptr;
     const RenderMaterialResource* resolvedMaterialResource = nullptr;
     const SceneRenderCamera* camera = nullptr;
+    std::span<const SceneRenderVisibilityBlocker> visibilityBlockers{};
     SceneRenderDiagnostics* diagnostics = nullptr;
     std::uint32_t maxDrawCommands = 0;
     std::uint32_t maxVisibleInstances = 0;

@@ -13,6 +13,16 @@
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/Navigation.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
+#include "engine/scene/RegionShapeComponent.hpp"
+#include "engine/scene/GuideCurveComponent.hpp"
+#include "engine/scene/ContentInstanceComponent.hpp"
+#include "engine/scene/StreamFocusComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
+#include "engine/scene/AmbientRadianceComponent.hpp"
+#include "engine/scene/DetailSwitchComponent.hpp"
+#include "engine/scene/VisibilityBlockerComponent.hpp"
+#include "engine/scene/VisibilityCellComponent.hpp"
+#include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/ScenePrefabOverrides.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
@@ -46,6 +56,16 @@ struct ScenePrefabJointComponent {
     bool enableLimit = false;
 };
 
+struct ScenePrefabRegionPortalComponent {
+    static constexpr std::uint64_t InvalidCellNodeStableId = 0U;
+    static constexpr std::uint64_t UnresolvedCellNodeStableId = UINT64_MAX;
+
+    std::uint64_t sourceCellNodeStableId = InvalidCellNodeStableId;
+    std::uint64_t targetCellNodeStableId = InvalidCellNodeStableId;
+    RegionPortalPurposeMask purposes = kRegionPortalAllPurposes;
+    bool enabled = true;
+};
+
 struct ScenePrefabNodeComponents {
     std::optional<CameraComponent> camera;
     std::optional<MeshRendererComponent> meshRenderer;
@@ -56,6 +76,16 @@ struct ScenePrefabNodeComponents {
     std::optional<CharacterControllerComponent> characterController;
     std::optional<ScenePrefabJointComponent> joint;
     std::optional<TagsComponent> tags;
+    std::optional<RegionShapeComponent> regionShape;
+    std::optional<GuideCurveComponent> guideCurve;
+    std::optional<ContentInstanceComponent> contentInstance;
+    std::optional<StreamFocusComponent> streamFocus;
+    std::optional<WorldBackdropComponent> worldBackdrop;
+    std::optional<AmbientRadianceComponent> ambientRadiance;
+    std::optional<SceneDetailSwitchComponent> detailSwitch;
+    std::optional<SceneVisibilityBlockerComponent> visibilityBlocker;
+    std::optional<VisibilityCellComponent> visibilityCell;
+    std::optional<ScenePrefabRegionPortalComponent> regionPortal;
     std::optional<BehaviourComponent> behaviour;
     std::optional<AudioSourceComponent> audioSource;
     std::optional<AudioListenerComponent> audioListener;

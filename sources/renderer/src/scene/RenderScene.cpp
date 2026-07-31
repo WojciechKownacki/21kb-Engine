@@ -25,6 +25,7 @@ void RenderScene::Reserve(const RenderSceneReserveDesc& desc) {
     if (desc.lightProxies > 0U) {
         lights_.reserve(desc.lightProxies);
     }
+    if (desc.visibilityBlockerProxies > 0U) visibilityBlockers_.reserve(desc.visibilityBlockerProxies);
     if (desc.drawGroupKeys > 0U) {
         drawGroups_.reserve(desc.drawGroupKeys);
         drawGroupLookupScratch_.reserve(desc.drawGroupKeys);
@@ -36,9 +37,11 @@ RenderSceneStats RenderScene::Stats() const noexcept {
         .meshProxyCount = static_cast<std::uint32_t>(meshes_.size()),
         .cameraProxyCount = static_cast<std::uint32_t>(cameras_.size()),
         .lightProxyCount = static_cast<std::uint32_t>(lights_.size()),
+        .visibilityBlockerProxyCount = static_cast<std::uint32_t>(visibilityBlockers_.size()),
         .meshProxyCapacity = static_cast<std::uint32_t>(meshes_.bucket_count()),
         .cameraProxyCapacity = static_cast<std::uint32_t>(cameras_.bucket_count()),
         .lightProxyCapacity = static_cast<std::uint32_t>(lights_.bucket_count()),
+        .visibilityBlockerProxyCapacity = static_cast<std::uint32_t>(visibilityBlockers_.bucket_count()),
         .drawGroupLookupCapacity = static_cast<std::uint32_t>(drawGroupLookupScratch_.bucket_count()),
         .transformInPlaceUpdateCount = transformInPlaceUpdateCount_,
         .transformFallbackUpdateCount = transformFallbackUpdateCount_,
@@ -101,6 +104,33 @@ RenderProxyId RenderScene::UpsertLight(const LightRenderProxyDesc& desc) {
     return proxy.id;
 }
 
+RenderProxyId RenderScene::UpsertVisibilityBlocker(const VisibilityBlockerRenderProxyDesc& desc) {
+    auto [it, inserted] = visibilityBlockers_.try_emplace(desc.entityId);
+    VisibilityBlockerRenderProxy& proxy = it->second;
+    if (inserted) { proxy.id = AllocateProxyId(); proxy.desc = desc; proxy.dirty = RenderProxyDirtyFlag::All; return proxy.id; }
+    if (proxy.desc.model != desc.model || proxy.desc.localCenter != desc.localCenter || proxy.desc.size != desc.size) {
+        proxy.desc = desc;
+        proxy.dirty |= RenderProxyDirtyFlag::Transform | RenderProxyDirtyFlag::Visibility;
+    }
+    return proxy.id;
+}
+
+void RenderScene::SetWorldBackdrop(std::optional<SceneRenderWorldBackdrop> backdrop) noexcept {
+    worldBackdrop_ = std::move(backdrop);
+}
+
+const std::optional<SceneRenderWorldBackdrop>& RenderScene::WorldBackdrop() const noexcept {
+    return worldBackdrop_;
+}
+
+void RenderScene::SetAmbientRadiance(std::optional<SceneRenderAmbientRadiance> ambientRadiance) noexcept {
+    ambientRadiance_ = std::move(ambientRadiance);
+}
+
+const std::optional<SceneRenderAmbientRadiance>& RenderScene::AmbientRadiance() const noexcept {
+    return ambientRadiance_;
+}
+
 bool RenderScene::RemoveMesh(std::uint64_t entityId) noexcept {
     const bool removed = meshes_.erase(entityId) != 0U;
     if (removed) {
@@ -116,6 +146,17 @@ bool RenderScene::RemoveCamera(std::uint64_t entityId) noexcept {
 bool RenderScene::RemoveLight(std::uint64_t entityId) noexcept {
     return lights_.erase(entityId) != 0U;
 }
+
+bool RenderScene::UpdateVisibilityBlockerTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept {
+    const auto found = visibilityBlockers_.find(entityId);
+    if (found == visibilityBlockers_.end()) return false;
+    if (found->second.desc.model != model) {
+        found->second.desc.model = model;
+        found->second.dirty |= RenderProxyDirtyFlag::Transform;
+    }
+    return true;
+}
+bool RenderScene::RemoveVisibilityBlocker(std::uint64_t entityId) noexcept { return visibilityBlockers_.erase(entityId) != 0U; }
 
 const MeshRenderProxy* RenderScene::FindMeshByEntity(std::uint64_t entityId) const noexcept {
     const auto it = meshes_.find(entityId);
@@ -173,6 +214,14 @@ std::uint32_t RenderScene::RemoveLightsNotInSorted(std::span<const std::uint64_t
     }
     return removed;
 }
+std::uint32_t RenderScene::RemoveVisibilityBlockersNotInSorted(std::span<const std::uint64_t> sortedEntityIds) noexcept {
+    std::uint32_t removed = 0U;
+    for (auto it = visibilityBlockers_.begin(); it != visibilityBlockers_.end();) {
+        if (std::ranges::binary_search(sortedEntityIds, it->first)) { ++it; continue; }
+        it = visibilityBlockers_.erase(it); ++removed;
+    }
+    return removed;
+}
 
 std::size_t RenderScene::MeshProxyCount() const noexcept {
     return meshes_.size();
@@ -185,6 +234,7 @@ std::size_t RenderScene::CameraProxyCount() const noexcept {
 std::size_t RenderScene::LightProxyCount() const noexcept {
     return lights_.size();
 }
+std::size_t RenderScene::VisibilityBlockerProxyCount() const noexcept { return visibilityBlockers_.size(); }
 
 const RenderScene::MeshProxyMap& RenderScene::MeshProxies() const noexcept {
     return meshes_;
@@ -197,6 +247,7 @@ const RenderScene::CameraProxyMap& RenderScene::CameraProxies() const noexcept {
 const RenderScene::LightProxyMap& RenderScene::LightProxies() const noexcept {
     return lights_;
 }
+const RenderScene::VisibilityBlockerProxyMap& RenderScene::VisibilityBlockerProxies() const noexcept { return visibilityBlockers_; }
 
 void RenderScene::ClearDirty() noexcept {
     for (auto& [entityId, proxy] : meshes_) {
@@ -211,6 +262,7 @@ void RenderScene::ClearDirty() noexcept {
         proxy.dirty = RenderProxyDirtyFlag::None;
         static_cast<void>(entityId);
     }
+    for (auto& [entityId, proxy] : visibilityBlockers_) { proxy.dirty = RenderProxyDirtyFlag::None; static_cast<void>(entityId); }
 }
 
 const CameraRenderProxyDesc* RenderScene::FindPrimaryCameraProxy(std::uint32_t targetViewportId) const noexcept {

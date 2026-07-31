@@ -33,6 +33,8 @@
 #include "engine/platform/PlatformServices.hpp"
 #include "engine/platform/PlatformAdapters.hpp"
 #include "engine/platform/SettingsTransaction.hpp"
+#include "engine/scene/RegionPortalComponent.hpp"
+#include "engine/scene/SceneComponents.hpp"
 #include "engine/platform/UserStorage.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
@@ -451,6 +453,24 @@ ReadScriptValue(
         }
         break;
     }
+    case ScriptValueType::Hash: {
+        std::uint64_t hash = 0U;
+        if (value.GetKind() == JsonValue::Kind::String) {
+            const std::string_view text = value.AsString();
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), hash);
+            if (parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size()) {
+                return ScriptValue{ hash, ScriptValueType::Hash };
+            }
+        }
+        if (value.GetKind() == JsonValue::Kind::Number) {
+            const double number = value.AsNumber();
+            constexpr double kLargestExactlyRepresentableJsonInteger = 9007199254740991.0;
+            if (std::isfinite(number) && std::floor(number) == number && number >= 0.0 && number <= kLargestExactlyRepresentableJsonInteger) {
+                return ScriptValue{ static_cast<std::uint64_t>(number), ScriptValueType::Hash };
+            }
+        }
+        break;
+    }
     case ScriptValueType::UInt32: {
         if (value.GetKind() != JsonValue::Kind::Number) break;
         const double number = value.AsNumber();
@@ -519,6 +539,8 @@ ReadScriptValue(
         return value.AsBool() ? "true" : "false";
     case kb::script::ScriptValueType::Int:
         return std::to_string(value.AsInt());
+    case kb::script::ScriptValueType::Hash:
+        return std::to_string(value.AsUInt64());
     case kb::script::ScriptValueType::UInt32:
         return std::to_string(value.AsUInt32());
     case kb::script::ScriptValueType::Float:
@@ -1359,6 +1381,35 @@ ReadScriptValue(
         joint->connectedEntity = connectedEntity;
         state.context.Scene().Components().Joints().MarkModified(ownerEntity);
         return { true, *owner + " -> " + *connected };
+    }
+
+    if (*operation == "set_region_portal_cells" || *operation == "assert_region_portal_cells" || *operation == "assert_region_portal_unassigned") {
+        const auto owner = StringMember(step, "entity", error);
+        if (!owner) return { false, error };
+        const kb::scene::SceneEntity ownerEntity = ResolveEntity(state, *owner);
+        kb::scene::SceneRegionPortalComponent* portal = state.context.Scene().Components().RegionPortals().TryGet(ownerEntity);
+        if (!ownerEntity.IsValid() || portal == nullptr) return { false, "owner does not have a Region Portal component" };
+
+        if (*operation == "assert_region_portal_unassigned") {
+            const bool unassigned = !portal->sourceCell.IsValid() && !portal->targetCell.IsValid();
+            return { unassigned, unassigned ? "unassigned" : "portal cells remain assigned" };
+        }
+
+        const auto source = StringMember(step, "source_cell", error);
+        const auto target = StringMember(step, "target_cell", error);
+        if (!source || !target) return { false, error };
+        const kb::scene::SceneEntity sourceEntity = ResolveEntity(state, *source);
+        const kb::scene::SceneEntity targetEntity = ResolveEntity(state, *target);
+        if (!sourceEntity.IsValid() || !targetEntity.IsValid() || sourceEntity == targetEntity || sourceEntity == ownerEntity || targetEntity == ownerEntity ||
+            !state.context.Scene().Components().VisibilityCells().Has(sourceEntity) || !state.context.Scene().Components().VisibilityCells().Has(targetEntity)) {
+            return { false, "portal cells must be distinct Visibility Cell entities" };
+        }
+        if (*operation == "assert_region_portal_cells") {
+            const bool matches = portal->sourceCell == sourceEntity && portal->targetCell == targetEntity;
+            return { matches, matches ? "connected" : "portal cells differ" };
+        }
+        const bool applied = state.context.SetRegionPortalCells(ownerEntity, sourceEntity, targetEntity);
+        return { applied, applied ? *owner + ": " + *source + " -> " + *target : "could not set portal cells" };
     }
 
     if (*operation == "set_inspector_scroll") {

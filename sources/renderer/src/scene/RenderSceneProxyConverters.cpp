@@ -136,6 +136,12 @@ SceneRenderMeshInstance RenderSceneMeshInstanceBuilder::Build(const MeshRenderPr
         .castsShadow = mesh.castsShadow,
         .receivesShadow = mesh.receivesShadow,
         .layer = mesh.layer,
+        .detailSwitchGroupId = mesh.detailSwitchGroupId,
+        .detailSwitchMinimumLod = mesh.detailSwitchMinimumLod,
+        .detailSwitchMaximumLod = mesh.detailSwitchMaximumLod,
+        .detailSwitchPromoteCoverage = mesh.detailSwitchPromoteCoverage,
+        .detailSwitchDemoteCoverage = mesh.detailSwitchDemoteCoverage,
+        .detailSwitchEnabled = mesh.detailSwitchEnabled,
     };
 }
 
@@ -146,6 +152,7 @@ SceneRenderLight RenderSceneLightBuilder::Build(const LightRenderProxyDesc& ligh
         .kind = light.kind,
         .position = { light.position[0], light.position[1], light.position[2] },
         .direction = { basis.zx, basis.zy, basis.zz },
+        .right = { basis.xx, basis.xy, basis.xz },
         .color = { light.color[0], light.color[1], light.color[2] },
         .intensity = light.intensity,
         .range = light.range,

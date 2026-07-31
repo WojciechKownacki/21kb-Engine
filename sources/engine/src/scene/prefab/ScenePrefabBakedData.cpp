@@ -1,16 +1,14 @@
 #include "scene/prefab/ScenePrefabBakedData.hpp"
 
-#include <array>
 #include <limits>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace kb::scene {
 namespace {
 
-inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 16U;
-
-[[nodiscard]] std::uint16_t ComponentMask(const ScenePrefabNodeComponents& components) noexcept {
-    std::uint16_t mask = 0U;
+[[nodiscard]] std::uint32_t ComponentMask(const ScenePrefabNodeComponents& components) noexcept {
+    std::uint32_t mask = 0U;
     if (components.camera.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Camera);
     }
@@ -38,6 +36,30 @@ inline constexpr std::size_t kScenePrefabBakedMaskCount = 1U << 16U;
     if (components.tags.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Tags);
     }
+    if (components.regionShape.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::RegionShape);
+    }
+    if (components.guideCurve.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::GuideCurve);
+    }
+    if (components.contentInstance.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::ContentInstance);
+    }
+    if (components.streamFocus.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::StreamFocus);
+    }
+    if (components.worldBackdrop.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::WorldBackdrop);
+    }
+    if (components.ambientRadiance.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::AmbientRadiance);
+    }
+    if (components.detailSwitch.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::DetailSwitch);
+    }
+    if (components.visibilityBlocker.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::VisibilityBlocker);
+    if (components.visibilityCell.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::VisibilityCell);
+    if (components.regionPortal.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::RegionPortal);
     if (components.behaviour.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Behaviour);
     }
@@ -69,17 +91,23 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
     data.nodeCount_ = nodes.size();
     data.archetypes_.reserve(nodes.size());
 
-    std::array<std::size_t, kScenePrefabBakedMaskCount> archetypeByMask{};
-    archetypeByMask.fill(std::numeric_limits<std::size_t>::max());
+    // A sparse expected-O(1) index avoids allocating one entry for every possible
+    // component mask. Prefab baking is data-dependent: only masks present in the
+    // authored nodes consume memory, which keeps this off the runtime hot path.
+    std::unordered_map<std::uint32_t, std::size_t> archetypeByMask;
+    archetypeByMask.reserve(nodes.size());
 
     for (std::size_t nodeIndex = 0; nodeIndex < nodes.size(); ++nodeIndex) {
         const ScenePrefabNodeDesc& node = nodes[nodeIndex];
-        const std::uint16_t mask = ComponentMask(node.components);
-        std::size_t archetypeIndex = archetypeByMask[mask];
-        if (archetypeIndex == std::numeric_limits<std::size_t>::max()) {
+        const std::uint32_t mask = ComponentMask(node.components);
+        const auto found = archetypeByMask.find(mask);
+        std::size_t archetypeIndex = 0U;
+        if (found == archetypeByMask.end()) {
             archetypeIndex = data.archetypes_.size();
-            archetypeByMask[mask] = archetypeIndex;
+            archetypeByMask.emplace(mask, archetypeIndex);
             data.archetypes_.push_back(ScenePrefabBakedArchetype{ .componentMask = mask });
+        } else {
+            archetypeIndex = found->second;
         }
 
         ScenePrefabBakedArchetype& archetype = data.archetypes_[archetypeIndex];
@@ -124,6 +152,33 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         }
         if (node.components.tags.has_value()) {
             archetype.tags.push_back(*node.components.tags);
+        }
+        if (node.components.regionShape.has_value()) {
+            archetype.regionShapes.push_back(*node.components.regionShape);
+        }
+        if (node.components.guideCurve.has_value()) {
+            archetype.guideCurves.push_back(*node.components.guideCurve);
+        }
+        if (node.components.contentInstance.has_value()) {
+            archetype.contentInstances.push_back(*node.components.contentInstance);
+        }
+        if (node.components.streamFocus.has_value()) {
+            archetype.streamFocuses.push_back(*node.components.streamFocus);
+        }
+        if (node.components.worldBackdrop.has_value()) {
+            archetype.worldBackdrops.push_back(*node.components.worldBackdrop);
+        }
+        if (node.components.ambientRadiance.has_value()) {
+            archetype.ambientRadiances.push_back(*node.components.ambientRadiance);
+        }
+        if (node.components.detailSwitch.has_value()) {
+            archetype.detailSwitches.push_back(*node.components.detailSwitch);
+        }
+        if (node.components.visibilityBlocker.has_value()) archetype.visibilityBlockers.push_back(*node.components.visibilityBlocker);
+        if (node.components.visibilityCell.has_value()) archetype.visibilityCells.push_back(*node.components.visibilityCell);
+        if (node.components.regionPortal.has_value()) {
+            const ScenePrefabRegionPortalComponent& prefabPortal = *node.components.regionPortal;
+            archetype.regionPortals.push_back(SceneRegionPortalComponent{ .purposes = prefabPortal.purposes, .enabled = prefabPortal.enabled });
         }
         if (node.components.behaviour.has_value()) {
             archetype.behaviours.push_back(*node.components.behaviour);

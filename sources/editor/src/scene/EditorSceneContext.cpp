@@ -12,6 +12,13 @@
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/StreamFocusComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
+#include "engine/scene/AmbientRadianceComponent.hpp"
+#include "engine/scene/DetailSwitchComponent.hpp"
+#include "engine/scene/VisibilityBlockerComponent.hpp"
+#include "engine/scene/VisibilityCellComponent.hpp"
+#include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
@@ -7126,6 +7133,28 @@ bool EditorSceneContext::SetEntityVisibilityMask(kb::scene::SceneEntity entity, 
     });
 }
 
+bool EditorSceneContext::SetRegionPortalCells(
+    kb::scene::SceneEntity entity,
+    kb::scene::SceneEntity sourceCell,
+    kb::scene::SceneEntity targetCell) {
+    const bool sourceValid = sourceCell.IsValid();
+    const bool targetValid = targetCell.IsValid();
+    if (!scene_->Entities().IsAlive(entity) || !scene_->Components().RegionPortals().Has(entity) ||
+        (sourceValid && (!scene_->Entities().IsAlive(sourceCell) || !scene_->Components().VisibilityCells().Has(sourceCell))) ||
+        (targetValid && (!scene_->Entities().IsAlive(targetCell) || !scene_->Components().VisibilityCells().Has(targetCell))) ||
+        entity == sourceCell || entity == targetCell || (sourceValid && targetValid && sourceCell == targetCell)) {
+        return false;
+    }
+    return ExecuteSceneCommand("Set Region Portal Cells", [this, entity, sourceCell, targetCell]() {
+        kb::scene::SceneRegionPortalComponent* portal = scene_->Components().RegionPortals().TryGet(entity);
+        if (portal == nullptr) return false;
+        portal->sourceCell = sourceCell;
+        portal->targetCell = targetCell;
+        scene_->Components().RegionPortals().MarkModified(entity);
+        return true;
+    });
+}
+
 std::vector<std::string> EditorSceneContext::ProjectPhysicsLayersAssetOptions() const {
     std::vector<std::string> options{ std::string{} };
     for (const kb::assets::AssetMetadata& metadata : scene_->Assets().Manager().Registry().All()) {
@@ -7964,12 +7993,12 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
             return true;
         });
     }
-    if (componentId == "Light") {
+    if (componentId == "3D Radiance Emitter" || componentId == "Light") {
         if (scene_->Components().Lights().Has(entity)) {
-            console_.Warning("Inspector", "Entity already has a Light component.");
+            console_.Warning("Inspector", "Entity already has a 3D Radiance Emitter component.");
             return false;
         }
-        return ExecuteSceneCommand("Add Light Component", [this, entity]() {
+        return ExecuteSceneCommand("Add 3D Radiance Emitter", [this, entity]() {
             scene_->Components().Lights().Set(entity, kb::scene::LightComponent{});
             return true;
         });
@@ -8086,6 +8115,108 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
         }
         return ExecuteSceneCommand("Add Object Classification", [this, entity]() {
             scene_->Components().Tags().Set(entity, kb::scene::TagsComponent{});
+            return true;
+        });
+    }
+    if (componentId == "RegionShape") {
+        if (scene_->Components().RegionShapes().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Region Shape component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Region Shape Component", [this, entity]() {
+            scene_->Components().RegionShapes().Set(entity, kb::scene::RegionShapeComponent{});
+            return true;
+        });
+    }
+    if (componentId == "GuideCurve") {
+        if (scene_->Components().GuideCurves().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Guide Curve component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Guide Curve Component", [this, entity]() {
+            scene_->Components().GuideCurves().Set(entity, kb::scene::GuideCurveComponent{});
+            return true;
+        });
+    }
+    if (componentId == "ContentInstance") {
+        if (scene_->Components().ContentInstances().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Content Instance component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Content Instance Component", [this, entity]() {
+            scene_->Components().ContentInstances().Set(entity, kb::scene::ContentInstanceComponent{});
+            return true;
+        });
+    }
+    if (componentId == "StreamFocus") {
+        if (scene_->Components().StreamFocuses().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Stream Focus component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Stream Focus Component", [this, entity]() {
+            scene_->Components().StreamFocuses().Set(entity, kb::scene::StreamFocusComponent{});
+            return true;
+        });
+    }
+    if (componentId == "WorldBackdrop") {
+        if (scene_->Components().WorldBackdrops().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a World Backdrop component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add World Backdrop Component", [this, entity]() {
+            scene_->Components().WorldBackdrops().Set(entity, kb::scene::WorldBackdropComponent{});
+            return true;
+        });
+    }
+    if (componentId == "Ambient Radiance") {
+        if (scene_->Components().AmbientRadiances().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has an Ambient Radiance component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Ambient Radiance Component", [this, entity]() {
+            scene_->Components().AmbientRadiances().Set(entity, kb::scene::AmbientRadianceComponent{});
+            return true;
+        });
+    }
+    if (componentId == "Detail Switch") {
+        if (scene_->Components().DetailSwitches().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Detail Switch component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Detail Switch Component", [this, entity]() {
+            scene_->Components().DetailSwitches().Set(entity, kb::scene::SceneDetailSwitchComponent{});
+            return true;
+        });
+    }
+    if (componentId == "Visibility Blocker") {
+        if (scene_->Components().VisibilityBlockers().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Visibility Blocker component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Visibility Blocker Component", [this, entity]() {
+            scene_->Components().VisibilityBlockers().Set(entity, kb::scene::SceneVisibilityBlockerComponent{});
+            return true;
+        });
+    }
+    if (componentId == "Visibility Cell") {
+        if (scene_->Components().VisibilityCells().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Visibility Cell component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Visibility Cell Component", [this, entity]() {
+            if (!scene_->Components().RegionShapes().Has(entity)) scene_->Components().RegionShapes().Set(entity, kb::scene::RegionShapeComponent{});
+            scene_->Components().VisibilityCells().Set(entity, kb::scene::VisibilityCellComponent{});
+            return true;
+        });
+    }
+    if (componentId == "Region Portal") {
+        if (scene_->Components().RegionPortals().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Region Portal component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Region Portal Component", [this, entity]() {
+            if (!scene_->Components().RegionShapes().Has(entity)) scene_->Components().RegionShapes().Set(entity, kb::scene::RegionShapeComponent{});
+            scene_->Components().RegionPortals().Set(entity, kb::scene::SceneRegionPortalComponent{});
             return true;
         });
     }

@@ -114,6 +114,178 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseRegionShape(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool hasRegionShape = false;
+    if (!ParseOptionalComponentFlag(fields, "regionShape", hasRegionShape)) return false;
+    if (!hasRegionShape) return true;
+    int kind = 0;
+    RegionShapeComponent regionShape{};
+    if (!ParseField(fields, "regionShape.kind", kind)
+        || kind < static_cast<int>(RegionShapeKind::Circle2D)
+        || kind > static_cast<int>(RegionShapeKind::Capsule)
+        || !ScenePrefabAssetFieldParser::ParseVec3(fields, "regionShape.center", regionShape.center)
+        || !ScenePrefabAssetFieldParser::ParseVec3(fields, "regionShape.size", regionShape.size)
+        || !ParseField(fields, "regionShape.radius", regionShape.radius)
+        || !ParseField(fields, "regionShape.height", regionShape.height)
+        || !ParseOptionalBool(fields, "regionShape.enabled", regionShape.enabled)) return false;
+    regionShape.kind = static_cast<RegionShapeKind>(kind);
+    components.regionShape = regionShape;
+    return true;
+}
+
+[[nodiscard]] bool ParseGuideCurve(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool hasGuideCurve = false;
+    if (!ParseOptionalComponentFlag(fields, "guideCurve", hasGuideCurve)) return false;
+    if (!hasGuideCurve) return true;
+    GuideCurveComponent guideCurve{};
+    int interpolation = 0;
+    if (!ParseField(fields, "guideCurve.controlPointCount", guideCurve.controlPointCount)
+        || !IsGuideCurveControlPointCountValid(guideCurve.controlPointCount)
+        || !ParseField(fields, "guideCurve.interpolation", interpolation)
+        || interpolation < static_cast<int>(GuideCurveInterpolation::Linear)
+        || interpolation > static_cast<int>(GuideCurveInterpolation::CatmullRom)
+        || !ParseOptionalBool(fields, "guideCurve.closed", guideCurve.closed)
+        || !ParseOptionalBool(fields, "guideCurve.enabled", guideCurve.enabled)) return false;
+    for (std::uint32_t index = 0U; index < guideCurve.controlPointCount; ++index) {
+        if (!ScenePrefabAssetFieldParser::ParseVec3(fields, "guideCurve.point" + std::to_string(index), guideCurve.controlPoints[index])) return false;
+    }
+    guideCurve.interpolation = static_cast<GuideCurveInterpolation>(interpolation);
+    components.guideCurve = guideCurve;
+    return true;
+}
+
+[[nodiscard]] bool ParseContentInstance(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool hasContent = false;
+    if (!ParseOptionalComponentFlag(fields, "contentInstance", hasContent)) return false;
+    if (!hasContent) return true;
+    ContentInstanceComponent content{};
+    int kind = 0;
+    int lifetime = 0;
+    if (!ParseField(fields, "contentInstance.assetId", content.assetId) ||
+        !ParseField(fields, "contentInstance.kind", kind) ||
+        !ParseField(fields, "contentInstance.lifetime", lifetime) ||
+        !ParseOptionalBool(fields, "contentInstance.active", content.active) ||
+        kind < static_cast<int>(ContentInstanceKind::Prefab) || kind > static_cast<int>(ContentInstanceKind::WorldFragment) ||
+        lifetime < static_cast<int>(ContentInstanceLifetime::Owner) || lifetime > static_cast<int>(ContentInstanceLifetime::Persistent)) return false;
+    content.kind = static_cast<ContentInstanceKind>(kind);
+    content.lifetime = static_cast<ContentInstanceLifetime>(lifetime);
+    components.contentInstance = content;
+    return true;
+}
+
+[[nodiscard]] bool ParseStreamFocus(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "streamFocus", present)) return false;
+    if (!present) return true;
+    StreamFocusComponent focus{};
+    std::uint32_t mask = 0U;
+    if (!ParseField(fields, "streamFocus.innerRadius", focus.innerRadius) || !ParseField(fields, "streamFocus.outerRadius", focus.outerRadius) || !ParseField(fields, "streamFocus.priority", focus.priority) || !ParseField(fields, "streamFocus.loadMask", mask) || !ParseOptionalBool(fields, "streamFocus.enabled", focus.enabled)) return false;
+    focus.loadMask = static_cast<StreamLoadMask>(mask);
+    if (!IsStreamFocusValid(focus)) return false;
+    components.streamFocus = focus;
+    return true;
+}
+
+[[nodiscard]] bool ParseWorldBackdrop(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "worldBackdrop", present)) return false;
+    if (!present) return true;
+    WorldBackdropComponent backdrop{};
+    std::uint32_t mode = 0U;
+    if (!ParseField(fields, "worldBackdrop.mode", mode) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "worldBackdrop.color", backdrop.color) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "worldBackdrop.horizonColor", backdrop.horizonColor) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "worldBackdrop.zenithColor", backdrop.zenithColor) ||
+        !ParseOptionalField(fields, "worldBackdrop.environmentAssetId", backdrop.environmentAssetId) ||
+        !ParseOptionalField(fields, "worldBackdrop.horizonHeight", backdrop.horizonHeight) ||
+        !ParseOptionalField(fields, "worldBackdrop.gradientExponent", backdrop.gradientExponent) ||
+        !ParseOptionalField(fields, "worldBackdrop.priority", backdrop.priority) ||
+        !ParseOptionalBool(fields, "worldBackdrop.enabled", backdrop.enabled)) return false;
+    backdrop.mode = static_cast<WorldBackdropMode>(mode);
+    if (!IsWorldBackdropComponentValid(backdrop)) return false;
+    components.worldBackdrop = backdrop;
+    return true;
+}
+
+[[nodiscard]] bool ParseAmbientRadiance(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "ambientRadiance", present)) return false;
+    if (!present) return true;
+    AmbientRadianceComponent ambient{};
+    std::uint32_t mode = 0U;
+    if (!ParseField(fields, "ambientRadiance.mode", mode) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "ambientRadiance.color", ambient.color) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "ambientRadiance.horizonColor", ambient.horizonColor) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "ambientRadiance.zenithColor", ambient.zenithColor) ||
+        !ParseOptionalField(fields, "ambientRadiance.environmentAssetId", ambient.environmentAssetId) ||
+        !ParseOptionalField(fields, "ambientRadiance.intensity", ambient.intensity) ||
+        !ParseOptionalField(fields, "ambientRadiance.diffuseIntensity", ambient.diffuseIntensity) ||
+        !ParseOptionalField(fields, "ambientRadiance.specularIntensity", ambient.specularIntensity) ||
+        !ParseOptionalField(fields, "ambientRadiance.priority", ambient.priority) ||
+        !ParseOptionalBool(fields, "ambientRadiance.enabled", ambient.enabled)) return false;
+    ambient.mode = static_cast<AmbientRadianceMode>(mode);
+    if (!IsAmbientRadianceComponentValid(ambient)) return false;
+    components.ambientRadiance = ambient;
+    return true;
+}
+
+[[nodiscard]] bool ParseDetailSwitch(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "detailSwitch", present)) return false;
+    if (!present) return true;
+    SceneDetailSwitchComponent detail{};
+    if (!ParseField(fields, "detailSwitch.groupId", detail.groupId) ||
+        !ParseOptionalField(fields, "detailSwitch.minimumLod", detail.minimumLod) ||
+        !ParseOptionalField(fields, "detailSwitch.maximumLod", detail.maximumLod) ||
+        !ParseOptionalField(fields, "detailSwitch.promoteCoverage", detail.promoteCoverage) ||
+        !ParseOptionalField(fields, "detailSwitch.demoteCoverage", detail.demoteCoverage) ||
+        !ParseOptionalBool(fields, "detailSwitch.enabled", detail.enabled) ||
+        !IsSceneDetailSwitchComponentValid(detail)) return false;
+    components.detailSwitch = detail;
+    return true;
+}
+
+[[nodiscard]] bool ParseVisibilityBlocker(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "visibilityBlocker", present)) return false;
+    if (!present) return true;
+    SceneVisibilityBlockerComponent blocker{};
+    if (!ScenePrefabAssetFieldParser::ParseVec3(fields, "visibilityBlocker.localCenter", blocker.localCenter) || !ScenePrefabAssetFieldParser::ParseVec3(fields, "visibilityBlocker.size", blocker.size) || !ParseOptionalBool(fields, "visibilityBlocker.enabled", blocker.enabled) || !IsSceneVisibilityBlockerComponentValid(blocker)) return false;
+    components.visibilityBlocker = blocker;
+    return true;
+}
+
+[[nodiscard]] bool ParseVisibilityCell(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "visibilityCell", present)) return false;
+    if (!present) return true;
+    VisibilityCellComponent cell{};
+    int membership = 0;
+    int visibilityOverride = 0;
+    if (!ParseField(fields, "visibilityCell.membershipMask", cell.membershipMask) || !ParseField(fields, "visibilityCell.membership", membership) ||
+        !ParseField(fields, "visibilityCell.visibilityOverride", visibilityOverride) || !ParseOptionalBool(fields, "visibilityCell.enabled", cell.enabled) ||
+        membership < static_cast<int>(VisibilityCellMembership::Include) || membership > static_cast<int>(VisibilityCellMembership::Exclude) ||
+        visibilityOverride < static_cast<int>(VisibilityCellOverride::Automatic) || visibilityOverride > static_cast<int>(VisibilityCellOverride::ForceHidden)) return false;
+    cell.membership = static_cast<VisibilityCellMembership>(membership);
+    cell.visibilityOverride = static_cast<VisibilityCellOverride>(visibilityOverride);
+    if (!IsVisibilityCellComponentValid(cell)) return false;
+    components.visibilityCell = cell;
+    return true;
+}
+
+[[nodiscard]] bool ParseRegionPortal(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "regionPortal", present)) return false;
+    if (!present) return true;
+    ScenePrefabRegionPortalComponent portal{};
+    if (!ParseField(fields, "regionPortal.sourceCellNodeStableId", portal.sourceCellNodeStableId) ||
+        !ParseField(fields, "regionPortal.targetCellNodeStableId", portal.targetCellNodeStableId) ||
+        !ParseField(fields, "regionPortal.purposes", portal.purposes) || !ParseOptionalBool(fields, "regionPortal.enabled", portal.enabled) ||
+        !IsRegionPortalPurposeMaskValid(portal.purposes)) return false;
+    components.regionPortal = portal;
+    return true;
+}
+
 [[nodiscard]] bool ParseCharacterController(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool hasCharacterController = false;
     if (!ParseOptionalComponentFlag(fields, "characterController", hasCharacterController)) {
@@ -295,6 +467,16 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ScenePrefabAssetInputParser::Parse(fields, components)
         && ParseRigidbody(fields, components)
         && ParseCollider(fields, components)
+        && ParseRegionShape(fields, components)
+        && ParseGuideCurve(fields, components)
+        && ParseContentInstance(fields, components)
+        && ParseStreamFocus(fields, components)
+        && ParseWorldBackdrop(fields, components)
+        && ParseAmbientRadiance(fields, components)
+        && ParseDetailSwitch(fields, components)
+        && ParseVisibilityBlocker(fields, components)
+        && ParseVisibilityCell(fields, components)
+        && ParseRegionPortal(fields, components)
         && ParseCharacterController(fields, components)
         && ParseJoint(fields, components)
         && ScenePrefabAssetTagsParser::Parse(fields, components)

@@ -57,6 +57,35 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const TagsComponent* tags = sceneComponents.Tags().TryGet(entity)) {
         components.tags = *tags;
     }
+    if (const RegionShapeComponent* regionShape = sceneComponents.RegionShapes().TryGet(entity)) {
+        components.regionShape = *regionShape;
+    }
+    if (const GuideCurveComponent* guideCurve = sceneComponents.GuideCurves().TryGet(entity)) {
+        components.guideCurve = *guideCurve;
+    }
+    if (const ContentInstanceComponent* content = sceneComponents.ContentInstances().TryGet(entity)) {
+        components.contentInstance = *content;
+    }
+    if (const StreamFocusComponent* focus = sceneComponents.StreamFocuses().TryGet(entity)) {
+        components.streamFocus = *focus;
+    }
+    if (const WorldBackdropComponent* backdrop = sceneComponents.WorldBackdrops().TryGet(entity)) {
+        components.worldBackdrop = *backdrop;
+    }
+    if (const AmbientRadianceComponent* ambient = sceneComponents.AmbientRadiances().TryGet(entity)) {
+        components.ambientRadiance = *ambient;
+    }
+    if (const SceneDetailSwitchComponent* detail = sceneComponents.DetailSwitches().TryGet(entity)) {
+        components.detailSwitch = *detail;
+    }
+    if (const SceneVisibilityBlockerComponent* blocker = sceneComponents.VisibilityBlockers().TryGet(entity)) components.visibilityBlocker = *blocker;
+    if (const VisibilityCellComponent* cell = sceneComponents.VisibilityCells().TryGet(entity)) components.visibilityCell = *cell;
+    if (const SceneRegionPortalComponent* portal = sceneComponents.RegionPortals().TryGet(entity)) {
+        components.regionPortal = ScenePrefabRegionPortalComponent{
+            .sourceCellNodeStableId = portal->sourceCell.Id(), .targetCellNodeStableId = portal->targetCell.Id(),
+            .purposes = portal->purposes, .enabled = portal->enabled,
+        };
+    }
 
     if (const BehaviourComponent* behaviour = sceneComponents.Behaviours().TryGet(entity)) {
         components.behaviour = *behaviour;

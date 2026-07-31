@@ -39,7 +39,7 @@ namespace {
 }
 
 [[nodiscard]] bool Equals(const VisibilityComponent& lhs, const VisibilityComponent& rhs) noexcept {
-    return lhs.visible == rhs.visible;
+    return lhs.mode == rhs.mode && lhs.mask == rhs.mask && lhs.visible == rhs.visible;
 }
 
 [[nodiscard]] bool Equals(const CameraComponent& lhs, const CameraComponent& rhs) noexcept {
@@ -82,6 +82,53 @@ namespace {
 
 [[nodiscard]] bool Equals(const TagsComponent& lhs, const TagsComponent& rhs) noexcept {
     return TagsText(lhs) == TagsText(rhs);
+}
+
+[[nodiscard]] bool Equals(const RegionShapeComponent& lhs, const RegionShapeComponent& rhs) noexcept {
+    return lhs.kind == rhs.kind && Equals(lhs.center, rhs.center) && Equals(lhs.size, rhs.size)
+        && lhs.radius == rhs.radius && lhs.height == rhs.height && lhs.enabled == rhs.enabled;
+}
+
+[[nodiscard]] bool Equals(const GuideCurveComponent& lhs, const GuideCurveComponent& rhs) noexcept {
+    if (lhs.controlPointCount != rhs.controlPointCount || lhs.interpolation != rhs.interpolation || lhs.closed != rhs.closed || lhs.enabled != rhs.enabled) return false;
+    for (std::uint32_t index = 0U; index < lhs.controlPointCount; ++index) if (!Equals(lhs.controlPoints[index], rhs.controlPoints[index])) return false;
+    return true;
+}
+
+[[nodiscard]] bool Equals(const ContentInstanceComponent& lhs, const ContentInstanceComponent& rhs) noexcept {
+    return lhs.assetId == rhs.assetId && lhs.kind == rhs.kind && lhs.lifetime == rhs.lifetime && lhs.active == rhs.active;
+}
+
+[[nodiscard]] bool Equals(const StreamFocusComponent& lhs, const StreamFocusComponent& rhs) noexcept {
+    return lhs.innerRadius == rhs.innerRadius && lhs.outerRadius == rhs.outerRadius && lhs.priority == rhs.priority
+        && lhs.loadMask == rhs.loadMask && lhs.enabled == rhs.enabled;
+}
+
+[[nodiscard]] bool Equals(const WorldBackdropComponent& lhs, const WorldBackdropComponent& rhs) noexcept {
+    return lhs.mode == rhs.mode && Equals(lhs.color, rhs.color) && Equals(lhs.horizonColor, rhs.horizonColor) &&
+        Equals(lhs.zenithColor, rhs.zenithColor) && lhs.environmentAssetId == rhs.environmentAssetId &&
+        lhs.horizonHeight == rhs.horizonHeight && lhs.gradientExponent == rhs.gradientExponent &&
+        lhs.priority == rhs.priority && lhs.enabled == rhs.enabled;
+}
+
+[[nodiscard]] bool Equals(const AmbientRadianceComponent& lhs, const AmbientRadianceComponent& rhs) noexcept {
+    return lhs.mode == rhs.mode && Equals(lhs.color, rhs.color) && Equals(lhs.horizonColor, rhs.horizonColor) &&
+        Equals(lhs.zenithColor, rhs.zenithColor) && lhs.environmentAssetId == rhs.environmentAssetId &&
+        lhs.intensity == rhs.intensity && lhs.diffuseIntensity == rhs.diffuseIntensity &&
+        lhs.specularIntensity == rhs.specularIntensity && lhs.priority == rhs.priority && lhs.enabled == rhs.enabled;
+}
+
+[[nodiscard]] bool Equals(const SceneDetailSwitchComponent& lhs, const SceneDetailSwitchComponent& rhs) noexcept {
+    return lhs.groupId == rhs.groupId && lhs.minimumLod == rhs.minimumLod && lhs.maximumLod == rhs.maximumLod &&
+        lhs.promoteCoverage == rhs.promoteCoverage && lhs.demoteCoverage == rhs.demoteCoverage && lhs.enabled == rhs.enabled;
+}
+
+[[nodiscard]] bool Equals(const SceneVisibilityBlockerComponent& lhs, const SceneVisibilityBlockerComponent& rhs) noexcept {
+    return Equals(lhs.localCenter, rhs.localCenter) && Equals(lhs.size, rhs.size) && lhs.enabled == rhs.enabled;
+}
+
+[[nodiscard]] bool Equals(const VisibilityCellComponent& lhs, const VisibilityCellComponent& rhs) noexcept {
+    return lhs.membershipMask == rhs.membershipMask && lhs.membership == rhs.membership && lhs.visibilityOverride == rhs.visibilityOverride && lhs.enabled == rhs.enabled;
 }
 
 [[nodiscard]] bool Equals(const BehaviourComponent& lhs, const BehaviourComponent& rhs) noexcept {
@@ -179,6 +226,16 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , colliders(scene.Components().Colliders())
     , characterControllers(scene.Components().CharacterControllers())
     , tags(scene.Components().Tags())
+    , regionShapes(scene.Components().RegionShapes())
+    , guideCurves(scene.Components().GuideCurves())
+    , contentInstances(scene.Components().ContentInstances())
+    , streamFocuses(scene.Components().StreamFocuses())
+    , worldBackdrops(scene.Components().WorldBackdrops())
+    , ambientRadiances(scene.Components().AmbientRadiances())
+    , detailSwitches(scene.Components().DetailSwitches())
+    , visibilityBlockers(scene.Components().VisibilityBlockers())
+    , visibilityCells(scene.Components().VisibilityCells())
+    , regionPortals(scene.Components().RegionPortals())
     , behaviours(scene.Components().Behaviours())
     , audioSources(scene.Components().AudioSources())
     , audioListeners(scene.Components().AudioListeners())
@@ -240,6 +297,21 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     if (!componentMask.available || !componentMask.matches || node.components.tags.has_value()) {
         WriteOptionalComponent(context.tags, entity, node.components.tags);
     }
+    if (!componentMask.available || !componentMask.matches || node.components.regionShape.has_value()) {
+        WriteOptionalComponent(context.regionShapes, entity, node.components.regionShape);
+    }
+    WriteOptionalComponent(context.guideCurves, entity, node.components.guideCurve);
+    WriteOptionalComponent(context.contentInstances, entity, node.components.contentInstance);
+    WriteOptionalComponent(context.streamFocuses, entity, node.components.streamFocus);
+    WriteOptionalComponent(context.worldBackdrops, entity, node.components.worldBackdrop);
+    WriteOptionalComponent(context.ambientRadiances, entity, node.components.ambientRadiance);
+    WriteOptionalComponent(context.detailSwitches, entity, node.components.detailSwitch);
+    WriteOptionalComponent(context.visibilityBlockers, entity, node.components.visibilityBlocker);
+    WriteOptionalComponent(context.visibilityCells, entity, node.components.visibilityCell);
+    // Portal references are resolved only after all prefab nodes exist; this
+    // writer owns the removal case while the synchronizer performs that final
+    // graph-wide resolution for present portals.
+    if (!node.components.regionPortal.has_value()) context.regionPortals.Remove(entity);
     if (!componentMask.available || !componentMask.matches || node.components.behaviour.has_value()) {
         WriteOptionalComponent(context.behaviours, entity, node.components.behaviour);
     }

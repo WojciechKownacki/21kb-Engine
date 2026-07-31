@@ -33,6 +33,29 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.tags.has_value()) {
         sceneComponents.Tags().Set(entity, *components.tags);
     }
+    if (components.regionShape.has_value()) {
+        sceneComponents.RegionShapes().Set(entity, *components.regionShape);
+    }
+    if (components.guideCurve.has_value()) {
+        sceneComponents.GuideCurves().Set(entity, *components.guideCurve);
+    }
+    if (components.contentInstance.has_value()) {
+        sceneComponents.ContentInstances().Set(entity, *components.contentInstance);
+    }
+    if (components.streamFocus.has_value()) {
+        sceneComponents.StreamFocuses().Set(entity, *components.streamFocus);
+    }
+    if (components.worldBackdrop.has_value()) {
+        sceneComponents.WorldBackdrops().Set(entity, *components.worldBackdrop);
+    }
+    if (components.ambientRadiance.has_value()) {
+        sceneComponents.AmbientRadiances().Set(entity, *components.ambientRadiance);
+    }
+    if (components.detailSwitch.has_value()) {
+        sceneComponents.DetailSwitches().Set(entity, *components.detailSwitch);
+    }
+    if (components.visibilityBlocker.has_value()) sceneComponents.VisibilityBlockers().Set(entity, *components.visibilityBlocker);
+    if (components.visibilityCell.has_value()) sceneComponents.VisibilityCells().Set(entity, *components.visibilityCell);
     if (components.behaviour.has_value()) {
         sceneComponents.Behaviours().Set(entity, *components.behaviour);
     }

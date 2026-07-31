@@ -141,6 +141,16 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<CharacterControllerComponent> characterControllers;
     std::vector<JointComponent> joints;
     std::vector<TagsComponent> tags;
+    std::vector<RegionShapeComponent> regionShapes;
+    std::vector<GuideCurveComponent> guideCurves;
+    std::vector<ContentInstanceComponent> contentInstances;
+    std::vector<StreamFocusComponent> streamFocuses;
+    std::vector<WorldBackdropComponent> worldBackdrops;
+    std::vector<AmbientRadianceComponent> ambientRadiances;
+    std::vector<SceneDetailSwitchComponent> detailSwitches;
+    std::vector<SceneVisibilityBlockerComponent> visibilityBlockers;
+    std::vector<VisibilityCellComponent> visibilityCells;
+    std::vector<SceneRegionPortalComponent> regionPortals;
     std::vector<BehaviourComponent> behaviours;
     std::vector<AudioSourceComponent> audioSources;
     std::vector<AudioListenerComponent> audioListeners;
@@ -157,13 +167,13 @@ struct ScenePrefabArchetypeSpawnPayload {
         RepeatComponents(visibility, std::span<const VisibilityComponent>{ archetype.visibility }, instanceCount);
 
         views.clear();
-        views.reserve(12U);
+        views.reserve(24U);
         worldViews.clear();
-        worldViews.reserve(12U);
+        worldViews.reserve(24U);
         AddComponentViews(views, worldViews, std::span<const TransformComponent>{ transforms });
         AddComponentViews(views, worldViews, std::span<const VisibilityComponent>{ visibility });
 
-        const std::uint16_t mask = archetype.componentMask;
+        const std::uint32_t mask = archetype.componentMask;
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Camera)) {
             RepeatComponents(cameras, std::span<const CameraComponent>{ archetype.cameras }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const CameraComponent>{ cameras });
@@ -200,6 +210,46 @@ struct ScenePrefabArchetypeSpawnPayload {
             RepeatComponents(tags, std::span<const TagsComponent>{ archetype.tags }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const TagsComponent>{ tags });
         }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::RegionShape)) {
+            RepeatComponents(regionShapes, std::span<const RegionShapeComponent>{ archetype.regionShapes }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const RegionShapeComponent>{ regionShapes });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::GuideCurve)) {
+            RepeatComponents(guideCurves, std::span<const GuideCurveComponent>{ archetype.guideCurves }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const GuideCurveComponent>{ guideCurves });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::ContentInstance)) {
+            RepeatComponents(contentInstances, std::span<const ContentInstanceComponent>{ archetype.contentInstances }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const ContentInstanceComponent>{ contentInstances });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::StreamFocus)) {
+            RepeatComponents(streamFocuses, std::span<const StreamFocusComponent>{ archetype.streamFocuses }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const StreamFocusComponent>{ streamFocuses });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::WorldBackdrop)) {
+            RepeatComponents(worldBackdrops, std::span<const WorldBackdropComponent>{ archetype.worldBackdrops }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const WorldBackdropComponent>{ worldBackdrops });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::AmbientRadiance)) {
+            RepeatComponents(ambientRadiances, std::span<const AmbientRadianceComponent>{ archetype.ambientRadiances }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const AmbientRadianceComponent>{ ambientRadiances });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::DetailSwitch)) {
+            RepeatComponents(detailSwitches, std::span<const SceneDetailSwitchComponent>{ archetype.detailSwitches }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const SceneDetailSwitchComponent>{ detailSwitches });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::VisibilityBlocker)) {
+            RepeatComponents(visibilityBlockers, std::span<const SceneVisibilityBlockerComponent>{ archetype.visibilityBlockers }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const SceneVisibilityBlockerComponent>{ visibilityBlockers });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::VisibilityCell)) {
+            RepeatComponents(visibilityCells, std::span<const VisibilityCellComponent>{ archetype.visibilityCells }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const VisibilityCellComponent>{ visibilityCells });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::RegionPortal)) {
+            RepeatComponents(regionPortals, std::span<const SceneRegionPortalComponent>{ archetype.regionPortals }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const SceneRegionPortalComponent>{ regionPortals });
+        }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Behaviour)) {
             RepeatComponents(behaviours, std::span<const BehaviourComponent>{ archetype.behaviours }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const BehaviourComponent>{ behaviours });
@@ -232,15 +282,15 @@ struct ScenePrefabArchetypeSpawnPayload {
 
     void BuildPattern(const ScenePrefabBakedArchetype& archetype, std::size_t instanceCount) {
         views.clear();
-        views.reserve(12U);
+        views.reserve(24U);
         worldViews.clear();
-        worldViews.reserve(12U);
+        worldViews.reserve(24U);
         AddCommandComponentPatternView(views, std::span<const TransformComponent>{ archetype.transforms }, instanceCount);
         AddWorldComponentPatternView(worldViews, std::span<const TransformComponent>{ archetype.transforms }, instanceCount);
         AddCommandComponentPatternView(views, std::span<const VisibilityComponent>{ archetype.visibility }, instanceCount);
         AddWorldComponentPatternView(worldViews, std::span<const VisibilityComponent>{ archetype.visibility }, instanceCount);
 
-        const std::uint16_t mask = archetype.componentMask;
+        const std::uint32_t mask = archetype.componentMask;
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Camera)) {
             AddCommandComponentPatternView(views, std::span<const CameraComponent>{ archetype.cameras }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const CameraComponent>{ archetype.cameras }, instanceCount);
@@ -276,6 +326,46 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Tags)) {
             AddCommandComponentPatternView(views, std::span<const TagsComponent>{ archetype.tags }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const TagsComponent>{ archetype.tags }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::RegionShape)) {
+            AddCommandComponentPatternView(views, std::span<const RegionShapeComponent>{ archetype.regionShapes }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const RegionShapeComponent>{ archetype.regionShapes }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::GuideCurve)) {
+            AddCommandComponentPatternView(views, std::span<const GuideCurveComponent>{ archetype.guideCurves }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const GuideCurveComponent>{ archetype.guideCurves }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::ContentInstance)) {
+            AddCommandComponentPatternView(views, std::span<const ContentInstanceComponent>{ archetype.contentInstances }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const ContentInstanceComponent>{ archetype.contentInstances }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::StreamFocus)) {
+            AddCommandComponentPatternView(views, std::span<const StreamFocusComponent>{ archetype.streamFocuses }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const StreamFocusComponent>{ archetype.streamFocuses }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::WorldBackdrop)) {
+            AddCommandComponentPatternView(views, std::span<const WorldBackdropComponent>{ archetype.worldBackdrops }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const WorldBackdropComponent>{ archetype.worldBackdrops }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::AmbientRadiance)) {
+            AddCommandComponentPatternView(views, std::span<const AmbientRadianceComponent>{ archetype.ambientRadiances }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const AmbientRadianceComponent>{ archetype.ambientRadiances }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::DetailSwitch)) {
+            AddCommandComponentPatternView(views, std::span<const SceneDetailSwitchComponent>{ archetype.detailSwitches }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const SceneDetailSwitchComponent>{ archetype.detailSwitches }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::VisibilityBlocker)) {
+            AddCommandComponentPatternView(views, std::span<const SceneVisibilityBlockerComponent>{ archetype.visibilityBlockers }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const SceneVisibilityBlockerComponent>{ archetype.visibilityBlockers }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::VisibilityCell)) {
+            AddCommandComponentPatternView(views, std::span<const VisibilityCellComponent>{ archetype.visibilityCells }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const VisibilityCellComponent>{ archetype.visibilityCells }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::RegionPortal)) {
+            AddCommandComponentPatternView(views, std::span<const SceneRegionPortalComponent>{ archetype.regionPortals }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const SceneRegionPortalComponent>{ archetype.regionPortals }, instanceCount);
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Behaviour)) {
             AddCommandComponentPatternView(views, std::span<const BehaviourComponent>{ archetype.behaviours }, instanceCount);
@@ -758,6 +848,37 @@ void ResolvePrefabJointReferences(
     }
 }
 
+void ResolvePrefabRegionPortalReferences(
+    Scene& scene,
+    std::span<const ScenePrefabNodeDesc> nodes,
+    std::span<const SceneEntity> entities,
+    std::size_t instanceCount) {
+    std::unordered_map<std::uint64_t, std::size_t> nodeIndexByStableId;
+    nodeIndexByStableId.reserve(nodes.size());
+    for (std::size_t index = 0U; index < nodes.size(); ++index) nodeIndexByStableId.emplace(nodes[index].stableId, index);
+    for (std::size_t instanceIndex = 0U; instanceIndex < instanceCount; ++instanceIndex) {
+        for (std::size_t nodeIndex = 0U; nodeIndex < nodes.size(); ++nodeIndex) {
+            const std::optional<ScenePrefabRegionPortalComponent>& prefabPortal = nodes[nodeIndex].components.regionPortal;
+            if (!prefabPortal.has_value()) continue;
+            if (!prefabPortal->enabled &&
+                prefabPortal->sourceCellNodeStableId == ScenePrefabRegionPortalComponent::InvalidCellNodeStableId &&
+                prefabPortal->targetCellNodeStableId == ScenePrefabRegionPortalComponent::InvalidCellNodeStableId) {
+                continue;
+            }
+            const auto source = nodeIndexByStableId.find(prefabPortal->sourceCellNodeStableId);
+            const auto target = nodeIndexByStableId.find(prefabPortal->targetCellNodeStableId);
+            if (source == nodeIndexByStableId.end() || target == nodeIndexByStableId.end()) throw std::invalid_argument("Scene prefab region portal references a missing stable node id");
+            const SceneEntity owner = entities[EntityIndex(instanceIndex, nodeIndex, nodes.size())];
+            scene.Components().RegionPortals().Set(owner, SceneRegionPortalComponent{
+                .sourceCell = entities[EntityIndex(instanceIndex, source->second, nodes.size())],
+                .targetCell = entities[EntityIndex(instanceIndex, target->second, nodes.size())],
+                .purposes = prefabPortal->purposes,
+                .enabled = prefabPortal->enabled,
+            });
+        }
+    }
+}
+
 [[nodiscard]] std::vector<ScenePrefabInstance> BuildInstances(
     Scene& scene,
     std::span<const ScenePrefabNodeDesc> nodes,
@@ -891,6 +1012,7 @@ void ResolvePrefabJointReferences(
         const std::vector<SceneEntity> entities = CreateBakedEntitiesDirect(state.world, *baked, count, spawnPayloads, nativeOnlyBatch, createBreakdown);
         const std::uint64_t entityCreateNanoseconds = ElapsedNanoseconds(createStart, PrefabStatsClock::now());
         ResolvePrefabJointReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
+        ResolvePrefabRegionPortalReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
         const kb::ecs::NativeEcsStorageStats afterStorage = state.world.NativeStorageStats();
         std::uint64_t instanceObjectSlabNanoseconds = 0;
         std::uint64_t hierarchyRecordNanoseconds = 0;
@@ -954,6 +1076,7 @@ void ResolvePrefabJointReferences(
         resolvedEntities[index] = playback.Resolve(entities[index]);
     }
     ResolvePrefabJointReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
+    ResolvePrefabRegionPortalReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
     std::uint64_t instanceObjectSlabNanoseconds = 0;
     std::uint64_t hierarchyRecordNanoseconds = 0;
     std::uint64_t nameAssignmentNanoseconds = 0;
