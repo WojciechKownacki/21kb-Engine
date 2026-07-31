@@ -57,6 +57,7 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.visibilityBlocker.has_value()) sceneComponents.VisibilityBlockers().Set(entity, *components.visibilityBlocker);
     if (components.visibilityCell.has_value()) sceneComponents.VisibilityCells().Set(entity, *components.visibilityCell);
     if (components.auxFrame.has_value()) sceneComponents.AuxFrames().Set(entity, *components.auxFrame);
+    if (components.geometrySwarm.has_value()) sceneComponents.GeometrySwarms().Set(entity, *components.geometrySwarm);
     if (components.behaviour.has_value()) {
         sceneComponents.Behaviours().Set(entity, *components.behaviour);
     }

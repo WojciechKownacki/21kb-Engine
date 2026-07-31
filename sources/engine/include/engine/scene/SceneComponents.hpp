@@ -25,6 +25,7 @@
 #include "engine/scene/SceneVisibilityCellComponents.hpp"
 #include "engine/scene/SceneRegionPortalComponents.hpp"
 #include "engine/scene/SceneAuxFrameComponents.hpp"
+#include "engine/scene/SceneGeometrySwarmComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
 #include "engine/scene/SceneUIDocuments.hpp"
@@ -59,6 +60,7 @@ public:
     [[nodiscard]] SceneVisibilityCellComponents VisibilityCells() const noexcept;
     [[nodiscard]] SceneRegionPortalComponents RegionPortals() const noexcept;
     [[nodiscard]] SceneAuxFrameComponents AuxFrames() const noexcept;
+    [[nodiscard]] SceneGeometrySwarmComponents GeometrySwarms() const noexcept;
     [[nodiscard]] SceneAudioSourceComponents AudioSources() const noexcept;
     [[nodiscard]] SceneAudioListenerComponents AudioListeners() const noexcept;
     [[nodiscard]] SceneAnimatorComponents Animators() const noexcept;

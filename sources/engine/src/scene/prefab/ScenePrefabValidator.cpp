@@ -44,6 +44,7 @@ bool ScenePrefabValidator::IsValid(const ScenePrefab& prefab) noexcept {
                 !std::binary_search(stableIds.begin(), stableIds.end(), portal.targetCellNodeStableId)) return false;
         }
         if (node.components.auxFrame.has_value() && !IsAuxFrameComponentPersistable(*node.components.auxFrame)) return false;
+        if (node.components.geometrySwarm.has_value() && !IsGeometrySwarmComponentPersistable(*node.components.geometrySwarm)) return false;
     }
     return true;
 }
