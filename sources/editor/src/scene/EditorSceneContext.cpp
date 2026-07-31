@@ -20,6 +20,7 @@
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
+#include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
@@ -8229,6 +8230,16 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
         return ExecuteSceneCommand("Add Secondary Frame Component", [this, entity]() {
             if (!scene_->Components().Cameras().Has(entity)) scene_->Components().Cameras().Set(entity, kb::scene::CameraComponent{});
             scene_->Components().AuxFrames().Set(entity, kb::scene::AuxFrameComponent{});
+            return true;
+        });
+    }
+    if (componentId == "Geometry Swarm") {
+        if (scene_->Components().GeometrySwarms().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Geometry Swarm component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Geometry Swarm Component", [this, entity]() {
+            scene_->Components().GeometrySwarms().Set(entity, kb::scene::GeometrySwarmComponent{});
             return true;
         });
     }

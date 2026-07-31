@@ -89,6 +89,9 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const AuxFrameComponent* auxFrame = sceneComponents.AuxFrames().TryGet(entity)) {
         components.auxFrame = *auxFrame;
     }
+    if (const GeometrySwarmComponent* swarm = sceneComponents.GeometrySwarms().TryGet(entity)) {
+        components.geometrySwarm = *swarm;
+    }
 
     if (const BehaviourComponent* behaviour = sceneComponents.Behaviours().TryGet(entity)) {
         components.behaviour = *behaviour;

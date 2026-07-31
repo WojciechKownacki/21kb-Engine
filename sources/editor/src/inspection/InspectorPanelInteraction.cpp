@@ -16,6 +16,7 @@
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
+#include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -1187,6 +1188,10 @@ template <typename Integer>
     return property >= InspectorPropertyId::SecondaryFrameMode && property <= InspectorPropertyId::SecondaryFrameEnabled;
 }
 
+[[nodiscard]] bool IsGeometrySwarmProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::GeometrySwarmMeshAssetId && property <= InspectorPropertyId::GeometrySwarmEnabled;
+}
+
 template <typename Mutator>
 [[nodiscard]] bool EditNavAgent(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
     if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
@@ -1321,6 +1326,16 @@ template <typename Mutator>
     kb::scene::AuxFrameComponent* frame = sceneContext.Scene().Components().AuxFrames().TryGet(entity);
     if (frame == nullptr || !mutator(*frame)) { sceneContext.CancelSceneEditTransaction(); return false; }
     sceneContext.Scene().Components().AuxFrames().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditGeometrySwarm(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::GeometrySwarmComponent* swarm = sceneContext.Scene().Components().GeometrySwarms().TryGet(entity);
+    if (swarm == nullptr || !mutator(*swarm)) { sceneContext.CancelSceneEditTransaction(); return false; }
+    sceneContext.Scene().Components().GeometrySwarms().MarkModified(entity);
     static_cast<void>(sceneContext.CommitSceneEditTransaction());
     return true;
 }
@@ -1663,6 +1678,33 @@ template <typename Mutator>
     return true;
 }
 
+[[nodiscard]] bool HandleGeometrySwarmClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::GeometrySwarmComponent* swarm = sceneContext.Scene().Components().GeometrySwarms().TryGet(entity);
+    if (swarm == nullptr) return false;
+    if (hit.property == InspectorPropertyId::GeometrySwarmCastsShadow) return EditGeometrySwarm(sceneContext, entity, "Toggle Geometry Swarm Shadows", [](auto& value) { value.castsShadow = !value.castsShadow; return true; });
+    if (hit.property == InspectorPropertyId::GeometrySwarmReceivesShadow) return EditGeometrySwarm(sceneContext, entity, "Toggle Geometry Swarm Shadow Reception", [](auto& value) { value.receivesShadow = !value.receivesShadow; return true; });
+    if (hit.property == InspectorPropertyId::GeometrySwarmEnabled) return EditGeometrySwarm(sceneContext, entity, "Toggle Geometry Swarm", [](auto& value) { value.enabled = !value.enabled; return kb::scene::IsGeometrySwarmComponentPersistable(value); });
+    if (IsGeometrySwarmProperty(hit.property)) {
+        std::string text;
+        switch (hit.property) {
+        case InspectorPropertyId::GeometrySwarmMeshAssetId: text = std::to_string(swarm->meshAssetId); break;
+        case InspectorPropertyId::GeometrySwarmMaterialAssetId: text = std::to_string(swarm->materialAssetId); break;
+        case InspectorPropertyId::GeometrySwarmInstanceCount: text = std::to_string(swarm->instanceCount); break;
+        case InspectorPropertyId::GeometrySwarmColumns: text = std::to_string(swarm->columns); break;
+        case InspectorPropertyId::GeometrySwarmRows: text = std::to_string(swarm->rows); break;
+        case InspectorPropertyId::GeometrySwarmLayers: text = std::to_string(swarm->layers); break;
+        case InspectorPropertyId::GeometrySwarmLayer: text = std::to_string(swarm->layer); break;
+        case InspectorPropertyId::GeometrySwarmSpacingX: text = FormatCompactFloat(swarm->spacing.x); break;
+        case InspectorPropertyId::GeometrySwarmSpacingY: text = FormatCompactFloat(swarm->spacing.y); break;
+        case InspectorPropertyId::GeometrySwarmSpacingZ: text = FormatCompactFloat(swarm->spacing.z); break;
+        case InspectorPropertyId::GeometrySwarmInstanceScale: text = FormatCompactFloat(swarm->instanceScale); break;
+        default: return false;
+        }
+        sceneContext.Inspector().BeginTextEdit(hit.property, std::move(text));
+    }
+    return true;
+}
+
 [[nodiscard]] bool ApplyNavAgentText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
     float value = 0.0F;
     if (property == InspectorPropertyId::NavAgentAreaMask) {
@@ -1962,6 +2004,30 @@ template <typename Mutator>
             }
         }
         if (!kb::scene::IsAuxFrameComponentPersistable(candidate)) return false;
+        value = candidate;
+        return true;
+    });
+}
+
+[[nodiscard]] bool ApplyGeometrySwarmText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    return EditGeometrySwarm(sceneContext, entity, "Edit Geometry Swarm", [property, text](kb::scene::GeometrySwarmComponent& value) {
+        kb::scene::GeometrySwarmComponent candidate = value;
+        auto parseUnsigned = [text](auto& target) { const auto result = std::from_chars(text.data(), text.data() + text.size(), target); return result.ec == std::errc{} && result.ptr == text.data() + text.size(); };
+        switch (property) {
+        case InspectorPropertyId::GeometrySwarmMeshAssetId: if (!parseUnsigned(candidate.meshAssetId)) return false; break;
+        case InspectorPropertyId::GeometrySwarmMaterialAssetId: if (!parseUnsigned(candidate.materialAssetId)) return false; break;
+        case InspectorPropertyId::GeometrySwarmInstanceCount: if (!parseUnsigned(candidate.instanceCount)) return false; break;
+        case InspectorPropertyId::GeometrySwarmColumns: if (!parseUnsigned(candidate.columns)) return false; break;
+        case InspectorPropertyId::GeometrySwarmRows: if (!parseUnsigned(candidate.rows)) return false; break;
+        case InspectorPropertyId::GeometrySwarmLayers: if (!parseUnsigned(candidate.layers)) return false; break;
+        case InspectorPropertyId::GeometrySwarmLayer: if (!parseUnsigned(candidate.layer)) return false; break;
+        case InspectorPropertyId::GeometrySwarmSpacingX: if (!ParseFloat(text, candidate.spacing.x)) return false; break;
+        case InspectorPropertyId::GeometrySwarmSpacingY: if (!ParseFloat(text, candidate.spacing.y)) return false; break;
+        case InspectorPropertyId::GeometrySwarmSpacingZ: if (!ParseFloat(text, candidate.spacing.z)) return false; break;
+        case InspectorPropertyId::GeometrySwarmInstanceScale: if (!ParseFloat(text, candidate.instanceScale)) return false; break;
+        default: return false;
+        }
+        if (!kb::scene::IsGeometrySwarmComponentPersistable(candidate)) return false;
         value = candidate;
         return true;
     });
@@ -2329,6 +2395,11 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                     sceneContext.Scene().Components().AuxFrames().Remove(entity);
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
+            } else if (hit.section == InspectorSectionId::GeometrySwarm && sceneContext.Scene().Components().GeometrySwarms().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Geometry Swarm")) {
+                    sceneContext.Scene().Components().GeometrySwarms().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
             } else if (const std::optional<PhysicsComponentKind> kind = PhysicsKindForSection(hit.section); kind.has_value()) {
                 static_cast<void>(sceneContext.RemovePhysicsComponent(entity, *kind));
             }
@@ -2421,6 +2492,7 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     if (hit.section == InspectorSectionId::VisibilityCell) return HandleVisibilityCellClick(sceneContext, entity, hit);
     if (hit.section == InspectorSectionId::RegionPortal) return HandleRegionPortalClick(sceneContext, entity, hit);
     if (hit.section == InspectorSectionId::SecondaryFrame) return HandleSecondaryFrameClick(sceneContext, entity, hit);
+    if (hit.section == InspectorSectionId::GeometrySwarm) return HandleGeometrySwarmClick(sceneContext, entity, hit);
     if (hit.section == InspectorSectionId::Tags &&
         hit.kind == InspectorHitKind::TextField &&
         hit.property == InspectorPropertyId::TagsText) {
@@ -2742,6 +2814,11 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         }
         if (sceneContext.Scene().Entities().IsAlive(entity) && IsSecondaryFrameProperty(inspector.EditedProperty())) {
             static_cast<void>(ApplySecondaryFrameText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) && IsGeometrySwarmProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyGeometrySwarmText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
             inspector.EndTextEdit();
             return true;
         }

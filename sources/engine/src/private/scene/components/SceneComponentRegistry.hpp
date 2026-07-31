@@ -37,6 +37,7 @@ public:
     [[nodiscard]] std::uint64_t VisibilityCellComponentId() const noexcept;
     [[nodiscard]] std::uint64_t RegionPortalComponentId() const noexcept;
     [[nodiscard]] std::uint64_t AuxFrameComponentId() const noexcept;
+    [[nodiscard]] std::uint64_t GeometrySwarmComponentId() const noexcept;
     [[nodiscard]] std::uint64_t AudioSourceComponentId() const noexcept;
     [[nodiscard]] std::uint64_t AudioListenerComponentId() const noexcept;
     [[nodiscard]] std::uint64_t AnimatorComponentId() const noexcept;
@@ -68,6 +69,7 @@ private:
     std::uint64_t visibilityCellComponentId_ = 0;
     std::uint64_t regionPortalComponentId_ = 0;
     std::uint64_t auxFrameComponentId_ = 0;
+    std::uint64_t geometrySwarmComponentId_ = 0;
     std::uint64_t audioSourceComponentId_ = 0;
     std::uint64_t audioListenerComponentId_ = 0;
     std::uint64_t animatorComponentId_ = 0;

@@ -152,6 +152,7 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<VisibilityCellComponent> visibilityCells;
     std::vector<SceneRegionPortalComponent> regionPortals;
     std::vector<AuxFrameComponent> auxFrames;
+    std::vector<GeometrySwarmComponent> geometrySwarms;
     std::vector<BehaviourComponent> behaviours;
     std::vector<AudioSourceComponent> audioSources;
     std::vector<AudioListenerComponent> audioListeners;
@@ -254,6 +255,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::AuxFrame)) {
             RepeatComponents(auxFrames, std::span<const AuxFrameComponent>{ archetype.auxFrames }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const AuxFrameComponent>{ auxFrames });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::GeometrySwarm)) {
+            RepeatComponents(geometrySwarms, std::span<const GeometrySwarmComponent>{ archetype.geometrySwarms }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const GeometrySwarmComponent>{ geometrySwarms });
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Behaviour)) {
             RepeatComponents(behaviours, std::span<const BehaviourComponent>{ archetype.behaviours }, instanceCount);
@@ -375,6 +380,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::AuxFrame)) {
             AddCommandComponentPatternView(views, std::span<const AuxFrameComponent>{ archetype.auxFrames }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const AuxFrameComponent>{ archetype.auxFrames }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::GeometrySwarm)) {
+            AddCommandComponentPatternView(views, std::span<const GeometrySwarmComponent>{ archetype.geometrySwarms }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const GeometrySwarmComponent>{ archetype.geometrySwarms }, instanceCount);
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Behaviour)) {
             AddCommandComponentPatternView(views, std::span<const BehaviourComponent>{ archetype.behaviours }, instanceCount);

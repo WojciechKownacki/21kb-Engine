@@ -135,6 +135,12 @@ namespace {
     return lhs.mode == rhs.mode && lhs.imageTargetId == rhs.imageTargetId && lhs.width == rhs.width && lhs.height == rhs.height &&
         Equal(lhs.mirrorPlaneNormal, rhs.mirrorPlaneNormal) && lhs.mirrorPlaneOffset == rhs.mirrorPlaneOffset && lhs.enabled == rhs.enabled;
 }
+[[nodiscard]] bool Equal(const GeometrySwarmComponent& lhs, const GeometrySwarmComponent& rhs) noexcept {
+    return lhs.meshAssetId == rhs.meshAssetId && lhs.materialAssetId == rhs.materialAssetId && lhs.instanceCount == rhs.instanceCount &&
+        lhs.columns == rhs.columns && lhs.rows == rhs.rows && lhs.layers == rhs.layers && Equal(lhs.spacing, rhs.spacing) &&
+        lhs.instanceScale == rhs.instanceScale && lhs.layer == rhs.layer && lhs.castsShadow == rhs.castsShadow &&
+        lhs.receivesShadow == rhs.receivesShadow && lhs.enabled == rhs.enabled;
+}
 
 template <typename T>
 [[nodiscard]] bool EqualOptionalComponent(const T* actual, const std::optional<T>& expected) noexcept {
@@ -187,6 +193,7 @@ ScenePrefabOverrideFlag ScenePrefabComponentComparator::Compare(SceneComponents 
     if (!EqualOptionalComponent(components.AuxFrames().TryGet(entity), expected.auxFrame)) {
         flags |= ScenePrefabOverrideFlag::AuxFrame;
     }
+    if (!EqualOptionalComponent(components.GeometrySwarms().TryGet(entity), expected.geometrySwarm)) flags |= ScenePrefabOverrideFlag::GeometrySwarm;
     return flags;
 }
 

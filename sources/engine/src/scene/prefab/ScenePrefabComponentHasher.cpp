@@ -118,6 +118,16 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::MixFloat(hash, frame.mirrorPlaneOffset);
         ScenePrefabHashBuilder::Mix(hash, frame.enabled ? 1U : 0U);
     }
+    ScenePrefabHashBuilder::Mix(hash, components.geometrySwarm.has_value() ? 1U : 0U);
+    if (components.geometrySwarm.has_value()) {
+        const GeometrySwarmComponent& swarm = *components.geometrySwarm;
+        ScenePrefabHashBuilder::Mix(hash, swarm.meshAssetId); ScenePrefabHashBuilder::Mix(hash, swarm.materialAssetId);
+        ScenePrefabHashBuilder::Mix(hash, swarm.instanceCount); ScenePrefabHashBuilder::Mix(hash, swarm.columns);
+        ScenePrefabHashBuilder::Mix(hash, swarm.rows); ScenePrefabHashBuilder::Mix(hash, swarm.layers);
+        ScenePrefabHashBuilder::MixVec3(hash, swarm.spacing); ScenePrefabHashBuilder::MixFloat(hash, swarm.instanceScale);
+        ScenePrefabHashBuilder::Mix(hash, swarm.layer); ScenePrefabHashBuilder::Mix(hash, swarm.castsShadow ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, swarm.receivesShadow ? 1U : 0U); ScenePrefabHashBuilder::Mix(hash, swarm.enabled ? 1U : 0U);
+    }
 
     ScenePrefabHashBuilder::Mix(hash, components.tags.has_value() ? 1U : 0U);
     if (components.tags.has_value()) {

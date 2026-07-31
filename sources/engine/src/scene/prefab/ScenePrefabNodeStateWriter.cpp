@@ -174,6 +174,11 @@ namespace {
     return lhs.mode == rhs.mode && lhs.imageTargetId == rhs.imageTargetId && lhs.width == rhs.width && lhs.height == rhs.height &&
         Equals(lhs.mirrorPlaneNormal, rhs.mirrorPlaneNormal) && lhs.mirrorPlaneOffset == rhs.mirrorPlaneOffset && lhs.enabled == rhs.enabled;
 }
+[[nodiscard]] bool Equals(const GeometrySwarmComponent& lhs, const GeometrySwarmComponent& rhs) noexcept {
+    return lhs.meshAssetId == rhs.meshAssetId && lhs.materialAssetId == rhs.materialAssetId && lhs.instanceCount == rhs.instanceCount &&
+        lhs.columns == rhs.columns && lhs.rows == rhs.rows && lhs.layers == rhs.layers && Equals(lhs.spacing, rhs.spacing) &&
+        lhs.instanceScale == rhs.instanceScale && lhs.layer == rhs.layer && lhs.castsShadow == rhs.castsShadow && lhs.receivesShadow == rhs.receivesShadow && lhs.enabled == rhs.enabled;
+}
 
 template <typename T, typename Components>
 void WriteOptionalComponent(Components components, SceneEntity entity, const std::optional<T>& component) {
@@ -242,6 +247,7 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , visibilityCells(scene.Components().VisibilityCells())
     , regionPortals(scene.Components().RegionPortals())
     , auxFrames(scene.Components().AuxFrames())
+    , geometrySwarms(scene.Components().GeometrySwarms())
     , behaviours(scene.Components().Behaviours())
     , audioSources(scene.Components().AudioSources())
     , audioListeners(scene.Components().AudioListeners())
@@ -319,6 +325,7 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     // graph-wide resolution for present portals.
     if (!node.components.regionPortal.has_value()) context.regionPortals.Remove(entity);
     WriteOptionalComponent(context.auxFrames, entity, node.components.auxFrame);
+    WriteOptionalComponent(context.geometrySwarms, entity, node.components.geometrySwarm);
     if (!componentMask.available || !componentMask.matches || node.components.behaviour.has_value()) {
         WriteOptionalComponent(context.behaviours, entity, node.components.behaviour);
     }

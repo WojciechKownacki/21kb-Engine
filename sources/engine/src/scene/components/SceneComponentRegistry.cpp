@@ -27,6 +27,7 @@
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
+#include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
@@ -133,6 +134,23 @@ void RegisterAuxFrameReflection(kb::ecs::World& world) {
         KB_ECS_FIELD(AuxFrameComponent, mirrorPlaneNormal, kb::ecs::ComponentFieldType::Vec3Float32),
         KB_ECS_FIELD(AuxFrameComponent, mirrorPlaneOffset, kb::ecs::ComponentFieldType::Float32),
         KB_ECS_FIELD(AuxFrameComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
+void RegisterGeometrySwarmReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<GeometrySwarmComponent>(GeometrySwarmComponent::StableId, {
+        KB_ECS_FIELD(GeometrySwarmComponent, meshAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(GeometrySwarmComponent, materialAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(GeometrySwarmComponent, instanceCount, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(GeometrySwarmComponent, columns, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(GeometrySwarmComponent, rows, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(GeometrySwarmComponent, layers, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(GeometrySwarmComponent, spacing, kb::ecs::ComponentFieldType::Vec3Float32),
+        KB_ECS_FIELD(GeometrySwarmComponent, instanceScale, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(GeometrySwarmComponent, layer, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(GeometrySwarmComponent, castsShadow, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(GeometrySwarmComponent, receivesShadow, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(GeometrySwarmComponent, enabled, kb::ecs::ComponentFieldType::Bool),
     }));
 }
 
@@ -264,6 +282,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , visibilityCellComponentId_(RegisterSceneComponent<VisibilityCellComponent>(world, VisibilityCellComponent::StableId))
     , regionPortalComponentId_(RegisterSceneComponent<SceneRegionPortalComponent>(world, SceneRegionPortalComponent::StableId))
     , auxFrameComponentId_(RegisterSceneComponent<AuxFrameComponent>(world, AuxFrameComponent::StableId))
+    , geometrySwarmComponentId_(RegisterSceneComponent<GeometrySwarmComponent>(world, GeometrySwarmComponent::StableId))
     , audioSourceComponentId_(RegisterSceneComponent<AudioSourceComponent>(world, "kb.scene.AudioSourceComponent"))
     , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, "kb.scene.AudioListenerComponent"))
     , animatorComponentId_(RegisterSceneComponent<Animator>(world, "kb.scene.AnimatorComponent"))
@@ -284,6 +303,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     RegisterVisibilityCellReflection(world);
     RegisterRegionPortalReflection(world);
     RegisterAuxFrameReflection(world);
+    RegisterGeometrySwarmReflection(world);
 }
 
 std::uint64_t SceneComponentRegistry::TransformComponentId() const noexcept {
@@ -347,6 +367,7 @@ std::uint64_t SceneComponentRegistry::VisibilityBlockerComponentId() const noexc
 std::uint64_t SceneComponentRegistry::VisibilityCellComponentId() const noexcept { return visibilityCellComponentId_; }
 std::uint64_t SceneComponentRegistry::RegionPortalComponentId() const noexcept { return regionPortalComponentId_; }
 std::uint64_t SceneComponentRegistry::AuxFrameComponentId() const noexcept { return auxFrameComponentId_; }
+std::uint64_t SceneComponentRegistry::GeometrySwarmComponentId() const noexcept { return geometrySwarmComponentId_; }
 
 std::uint64_t SceneComponentRegistry::AudioSourceComponentId() const noexcept {
     return audioSourceComponentId_;

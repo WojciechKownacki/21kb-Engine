@@ -102,11 +102,9 @@ void RuntimeMeshResourceEnsurer::Ensure(
     RuntimeMaterialResourceMap& embeddedMaterials) {
     kb::assets::AssetManager& manager = context.scene.Assets().Manager();
 
-    for (const auto& [entityId, proxy] : context.renderScene.MeshProxies()) {
-        static_cast<void>(entityId);
-        const std::uint64_t meshAssetId = proxy.desc.meshAssetId;
+    const auto ensureMesh = [&](std::uint64_t meshAssetId) {
         if (meshAssetId == 0U) {
-            continue;
+            return;
         }
         const RuntimeAssetKey runtimeKey{
             .sceneId = context.scene.Id(),
@@ -115,7 +113,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
         context.frameReferences.MarkMesh(runtimeKey);
 
         if (EnsureBuiltInParticleQuadMesh(context, meshes, meshAssetId, runtimeKey)) {
-            continue;
+            return;
         }
 
         const kb::assets::AssetId assetId{ meshAssetId };
@@ -130,14 +128,14 @@ void RuntimeMeshResourceEnsurer::Ensure(
             } else {
                 context.sceneRenderer.ResourceMap().UnbindMesh(meshAssetId);
             }
-            continue;
+            return;
         }
 
         if (cacheIt != meshes.end() && cacheIt->second.contentHash == metadata->contentHash && context.sceneRenderer.Resources().ContainsMesh(cacheIt->second.handle)) {
             RuntimeMeshResource& cached = cacheIt->second;
             cached.lastReferencedFrame = context.currentFrame;
             context.sceneRenderer.ResourceMap().BindMesh(meshAssetId, cached.handle);
-            continue;
+            return;
         }
 
         if (cacheIt != meshes.end()) {
@@ -150,7 +148,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
         const MeshRef asset = manager.Load<RenderMeshAssetData>(assetId);
         if (!asset.IsLoaded()) {
             context.sceneRenderer.ResourceMap().UnbindMesh(meshAssetId);
-            continue;
+            return;
         }
 
         std::vector<RenderMaterialSlotDesc> materialSlots = asset->materialSlots;
@@ -214,7 +212,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
         if (!handle.IsValid()) {
             context.sceneRenderer.ResourceMap().UnbindMesh(meshAssetId);
             static_cast<void>(manager.Unload(assetId));
-            continue;
+            return;
         }
 
         meshes[runtimeKey] = RuntimeMeshResource{
@@ -223,6 +221,15 @@ void RuntimeMeshResourceEnsurer::Ensure(
             .lastReferencedFrame = context.currentFrame,
         };
         context.sceneRenderer.ResourceMap().BindMesh(meshAssetId, handle);
+    };
+
+    for (const auto& [entityId, proxy] : context.renderScene.MeshProxies()) {
+        static_cast<void>(entityId);
+        ensureMesh(proxy.desc.meshAssetId);
+    }
+    for (const auto& [entityId, proxy] : context.renderScene.GeometrySwarmProxies()) {
+        static_cast<void>(entityId);
+        ensureMesh(proxy.desc.meshAssetId);
     }
 }
 

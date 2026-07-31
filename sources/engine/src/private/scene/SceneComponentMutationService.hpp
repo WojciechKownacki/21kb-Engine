@@ -26,6 +26,7 @@
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
+#include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
 
@@ -135,6 +136,10 @@ public:
     static void SetAuxFrame(Scene& scene, SceneEntity entity, const AuxFrameComponent& component);
     static void RemoveAuxFrame(Scene& scene, SceneEntity entity) noexcept;
     static void MarkAuxFrameModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static GeometrySwarmComponent* TryGetGeometrySwarm(Scene& scene, SceneEntity entity) noexcept;
+    static void SetGeometrySwarm(Scene& scene, SceneEntity entity, const GeometrySwarmComponent& component);
+    static void RemoveGeometrySwarm(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkGeometrySwarmModified(Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static AudioSourceComponent* TryGetAudioSource(Scene& scene, SceneEntity entity) noexcept;
     static void SetAudioSource(Scene& scene, SceneEntity entity, const AudioSourceComponent& audioSource);

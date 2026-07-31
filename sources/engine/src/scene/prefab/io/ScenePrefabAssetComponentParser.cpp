@@ -308,6 +308,25 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseGeometrySwarm(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "geometrySwarm", present)) return false;
+    if (!present) return true;
+    GeometrySwarmComponent swarm{};
+    std::uint32_t columns = 0U, rows = 0U, layers = 0U;
+    if (!ParseField(fields, "geometrySwarm.meshAssetId", swarm.meshAssetId) || !ParseField(fields, "geometrySwarm.materialAssetId", swarm.materialAssetId) ||
+        !ParseField(fields, "geometrySwarm.instanceCount", swarm.instanceCount) || !ParseField(fields, "geometrySwarm.columns", columns) ||
+        !ParseField(fields, "geometrySwarm.rows", rows) || !ParseField(fields, "geometrySwarm.layers", layers) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "geometrySwarm.spacing", swarm.spacing) || !ParseField(fields, "geometrySwarm.instanceScale", swarm.instanceScale) ||
+        !ParseField(fields, "geometrySwarm.layer", swarm.layer) || !ParseOptionalBool(fields, "geometrySwarm.castsShadow", swarm.castsShadow) ||
+        !ParseOptionalBool(fields, "geometrySwarm.receivesShadow", swarm.receivesShadow) || !ParseOptionalBool(fields, "geometrySwarm.enabled", swarm.enabled) ||
+        columns == 0U || columns > UINT16_MAX || rows == 0U || rows > UINT16_MAX || layers == 0U || layers > UINT16_MAX) return false;
+    swarm.columns = static_cast<std::uint16_t>(columns); swarm.rows = static_cast<std::uint16_t>(rows); swarm.layers = static_cast<std::uint16_t>(layers);
+    if (!IsGeometrySwarmComponentPersistable(swarm)) return false;
+    components.geometrySwarm = swarm;
+    return true;
+}
+
 [[nodiscard]] bool ParseCharacterController(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool hasCharacterController = false;
     if (!ParseOptionalComponentFlag(fields, "characterController", hasCharacterController)) {
@@ -500,6 +519,7 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseVisibilityCell(fields, components)
         && ParseRegionPortal(fields, components)
         && ParseAuxFrame(fields, components)
+        && ParseGeometrySwarm(fields, components)
         && ParseCharacterController(fields, components)
         && ParseJoint(fields, components)
         && ScenePrefabAssetTagsParser::Parse(fields, components)

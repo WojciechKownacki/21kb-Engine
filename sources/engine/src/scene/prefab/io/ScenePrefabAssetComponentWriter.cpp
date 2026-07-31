@@ -233,6 +233,22 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "auxFrame.mirrorPlaneOffset=" << frame.mirrorPlaneOffset << '\n';
         output << "auxFrame.enabled=" << (frame.enabled ? 1 : 0) << '\n';
     }
+    output << "geometrySwarm=" << (components.geometrySwarm.has_value() ? 1 : 0) << '\n';
+    if (components.geometrySwarm.has_value()) {
+        const GeometrySwarmComponent& swarm = *components.geometrySwarm;
+        output << "geometrySwarm.meshAssetId=" << swarm.meshAssetId << '\n';
+        output << "geometrySwarm.materialAssetId=" << swarm.materialAssetId << '\n';
+        output << "geometrySwarm.instanceCount=" << swarm.instanceCount << '\n';
+        output << "geometrySwarm.columns=" << swarm.columns << '\n';
+        output << "geometrySwarm.rows=" << swarm.rows << '\n';
+        output << "geometrySwarm.layers=" << swarm.layers << '\n';
+        WriteVec3(output, "geometrySwarm.spacing", swarm.spacing);
+        output << "geometrySwarm.instanceScale=" << swarm.instanceScale << '\n';
+        output << "geometrySwarm.layer=" << swarm.layer << '\n';
+        output << "geometrySwarm.castsShadow=" << (swarm.castsShadow ? 1 : 0) << '\n';
+        output << "geometrySwarm.receivesShadow=" << (swarm.receivesShadow ? 1 : 0) << '\n';
+        output << "geometrySwarm.enabled=" << (swarm.enabled ? 1 : 0) << '\n';
+    }
 
     output << "behaviour=" << (components.behaviour.has_value() ? 1 : 0) << '\n';
     if (components.behaviour.has_value()) {
