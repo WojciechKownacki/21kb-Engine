@@ -149,6 +149,7 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<AmbientRadianceComponent> ambientRadiances;
     std::vector<SceneDetailSwitchComponent> detailSwitches;
     std::vector<SceneVisibilityBlockerComponent> visibilityBlockers;
+    std::vector<VisibilityCellComponent> visibilityCells;
     std::vector<BehaviourComponent> behaviours;
     std::vector<AudioSourceComponent> audioSources;
     std::vector<AudioListenerComponent> audioListeners;
@@ -239,6 +240,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::VisibilityBlocker)) {
             RepeatComponents(visibilityBlockers, std::span<const SceneVisibilityBlockerComponent>{ archetype.visibilityBlockers }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const SceneVisibilityBlockerComponent>{ visibilityBlockers });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::VisibilityCell)) {
+            RepeatComponents(visibilityCells, std::span<const VisibilityCellComponent>{ archetype.visibilityCells }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const VisibilityCellComponent>{ visibilityCells });
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Behaviour)) {
             RepeatComponents(behaviours, std::span<const BehaviourComponent>{ archetype.behaviours }, instanceCount);
@@ -348,6 +353,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::VisibilityBlocker)) {
             AddCommandComponentPatternView(views, std::span<const SceneVisibilityBlockerComponent>{ archetype.visibilityBlockers }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const SceneVisibilityBlockerComponent>{ archetype.visibilityBlockers }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::VisibilityCell)) {
+            AddCommandComponentPatternView(views, std::span<const VisibilityCellComponent>{ archetype.visibilityCells }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const VisibilityCellComponent>{ archetype.visibilityCells }, instanceCount);
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Behaviour)) {
             AddCommandComponentPatternView(views, std::span<const BehaviourComponent>{ archetype.behaviours }, instanceCount);

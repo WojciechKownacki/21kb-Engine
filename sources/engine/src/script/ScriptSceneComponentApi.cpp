@@ -17,6 +17,7 @@
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
+#include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
 #include "engine/scene/SceneCharacterControllerComponents.hpp"
@@ -36,6 +37,7 @@
 #include "engine/scene/SceneAmbientRadianceComponents.hpp"
 #include "engine/scene/SceneDetailSwitchComponents.hpp"
 #include "engine/scene/SceneVisibilityBlockerComponents.hpp"
+#include "engine/scene/SceneVisibilityCellComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -232,7 +234,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 21> kComponentNames{
+constexpr std::array<std::string_view, 22> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
@@ -254,6 +256,7 @@ constexpr std::array<std::string_view, 21> kComponentNames{
     "Ambient Radiance",
     "Detail Switch",
     "Visibility Blocker",
+    "Visibility Cell",
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kRegionShapePropertyDescs{
@@ -329,6 +332,11 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 6> kDetailSwitchPropertyD
 constexpr std::array<ScriptSceneComponentPropertyDesc, 7> kVisibilityBlockerPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "localCenter.x", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "localCenter.y", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "localCenter.z", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "size.x", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "size.y", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "size.z", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kVisibilityCellPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "membershipMask", ScriptValueType::Int }, ScriptSceneComponentPropertyDesc{ "membership", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "visibilityOverride", ScriptValueType::Int }, ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 1> kTagsPropertyDescs{
@@ -816,6 +824,13 @@ constexpr std::array<FieldBinding, 7> kVisibilityBlockerFields{
     KB_BOOL(kb::scene::SceneVisibilityBlockerComponent, enabled),
 };
 
+constexpr std::array<FieldBinding, 4> kVisibilityCellFields{
+    FieldBinding{ "membershipMask", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::VisibilityCellComponent*>(component)->membershipMask) }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Int || value.AsInt() <= 0) return false; static_cast<kb::scene::VisibilityCellComponent*>(component)->membershipMask = static_cast<std::uint32_t>(value.AsInt()); return true; } },
+    FieldBinding{ "membership", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::VisibilityCellComponent*>(component)->membership) }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::VisibilityCellMembership::Exclude)) return false; static_cast<kb::scene::VisibilityCellComponent*>(component)->membership = static_cast<kb::scene::VisibilityCellMembership>(value.AsInt()); return true; } },
+    FieldBinding{ "visibilityOverride", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::VisibilityCellComponent*>(component)->visibilityOverride) }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::VisibilityCellOverride::ForceHidden)) return false; static_cast<kb::scene::VisibilityCellComponent*>(component)->visibilityOverride = static_cast<kb::scene::VisibilityCellOverride>(value.AsInt()); return true; } },
+    KB_BOOL(kb::scene::VisibilityCellComponent, enabled),
+};
+
 #undef KB_BOOL
 #undef KB_INT
 #undef KB_UINT32
@@ -897,6 +912,7 @@ void MarkWorldBackdropModified(kb::scene::Scene& scene, kb::scene::SceneEntity e
 void MarkAmbientRadianceModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().AmbientRadiances().MarkModified(entity); }
 void MarkDetailSwitchModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().DetailSwitches().MarkModified(entity); }
 void MarkVisibilityBlockerModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().VisibilityBlockers().MarkModified(entity); }
+void MarkVisibilityCellModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().VisibilityCells().MarkModified(entity); }
 
 [[nodiscard]] ComponentAccess AccessComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
     if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
@@ -986,6 +1002,10 @@ void MarkVisibilityBlockerModified(kb::scene::Scene& scene, kb::scene::SceneEnti
         kb::scene::SceneVisibilityBlockerComponent* component = scene.Components().VisibilityBlockers().TryGet(entity);
         return ComponentAccess{ component, component, kVisibilityBlockerFields, &MarkVisibilityBlockerModified };
     }
+    if (componentName == "Visibility Cell") {
+        kb::scene::VisibilityCellComponent* component = scene.Components().VisibilityCells().TryGet(entity);
+        return ComponentAccess{ component, component, kVisibilityCellFields, &MarkVisibilityCellModified };
+    }
     return {};
 }
 
@@ -1012,6 +1032,7 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "Ambient Radiance") return kAmbientRadiancePropertyDescs;
     if (componentName == "Detail Switch") return kDetailSwitchPropertyDescs;
     if (componentName == "Visibility Blocker") return kVisibilityBlockerPropertyDescs;
+    if (componentName == "Visibility Cell") return kVisibilityCellPropertyDescs;
     if (componentName == "Camera") {
         return kCameraPropertyDescs;
     }

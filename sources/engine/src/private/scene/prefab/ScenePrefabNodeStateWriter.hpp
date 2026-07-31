@@ -22,6 +22,7 @@
 #include "engine/scene/SceneWorldBackdropComponents.hpp"
 #include "engine/scene/SceneAmbientRadianceComponents.hpp"
 #include "engine/scene/SceneVisibilityBlockerComponents.hpp"
+#include "engine/scene/SceneVisibilityCellComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -62,6 +63,7 @@ struct ScenePrefabNodeStateWriterContext {
     SceneAmbientRadianceComponents ambientRadiances;
     SceneDetailSwitchComponents detailSwitches;
     SceneVisibilityBlockerComponents visibilityBlockers;
+    SceneVisibilityCellComponents visibilityCells;
     SceneBehaviourComponents behaviours;
     SceneAudioSourceComponents audioSources;
     SceneAudioListenerComponents audioListeners;

@@ -40,6 +40,7 @@ enum SceneNodeComponentBits : std::uint32_t {
       AmbientRadianceBit = 1U << 21U,
       DetailSwitchBit = 1U << 22U,
       VisibilityBlockerBit = 1U << 23U,
+      VisibilityCellBit = 1U << 24U,
 };
 
 constexpr std::uint32_t KnownComponentBits = CameraBit |
@@ -60,7 +61,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit;
 
 [[nodiscard]] std::uint32_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint32_t componentBits = 0;
@@ -88,6 +89,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
       componentBits |= components.ambientRadiance.has_value() ? AmbientRadianceBit : 0U;
       componentBits |= components.detailSwitch.has_value() ? DetailSwitchBit : 0U;
       componentBits |= components.visibilityBlocker.has_value() ? VisibilityBlockerBit : 0U;
+      componentBits |= components.visibilityCell.has_value() ? VisibilityCellBit : 0U;
     return componentBits;
 }
 
@@ -329,6 +331,18 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         if (!SceneAssetPrimitiveCodec::ReadVec3(input, blocker.localCenter) || !SceneAssetPrimitiveCodec::ReadVec3(input, blocker.size) || !input.ReadBool(blocker.enabled) || !IsSceneVisibilityBlockerComponentValid(blocker)) return false;
         output.visibilityBlocker = blocker;
     }
+    if ((componentBits & VisibilityCellBit) != 0U) {
+        if (fileVersion < 18U) return false;
+        VisibilityCellComponent cell{};
+        std::uint32_t membership = 0U;
+        std::uint32_t visibilityOverride = 0U;
+        if (!input.ReadUInt32(cell.membershipMask) || !input.ReadUInt32(membership) || !input.ReadUInt32(visibilityOverride) || !input.ReadBool(cell.enabled) ||
+            membership > static_cast<std::uint32_t>(VisibilityCellMembership::Exclude) || visibilityOverride > static_cast<std::uint32_t>(VisibilityCellOverride::ForceHidden)) return false;
+        cell.membership = static_cast<VisibilityCellMembership>(membership);
+        cell.visibilityOverride = static_cast<VisibilityCellOverride>(visibilityOverride);
+        if (!IsVisibilityCellComponentValid(cell)) return false;
+        output.visibilityCell = cell;
+    }
     return true;
 }
 
@@ -477,6 +491,13 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetPrimitiveCodec::WriteVec3(output, blocker.localCenter);
         SceneAssetPrimitiveCodec::WriteVec3(output, blocker.size);
         SceneAssetBinaryIO::WriteBool(output, blocker.enabled);
+    }
+    if (components.visibilityCell.has_value()) {
+        const VisibilityCellComponent& cell = *components.visibilityCell;
+        SceneAssetBinaryIO::WriteUInt32(output, cell.membershipMask);
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(cell.membership));
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(cell.visibilityOverride));
+        SceneAssetBinaryIO::WriteBool(output, cell.enabled);
     }
 }
 

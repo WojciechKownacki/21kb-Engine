@@ -24,6 +24,7 @@
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
+#include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
@@ -101,6 +102,15 @@ void RegisterVisibilityBlockerReflection(kb::ecs::World& world) {
             KB_ECS_FIELD(SceneVisibilityBlockerComponent, size, kb::ecs::ComponentFieldType::Vec3Float32),
             KB_ECS_FIELD(SceneVisibilityBlockerComponent, enabled, kb::ecs::ComponentFieldType::Bool),
         }));
+}
+
+void RegisterVisibilityCellReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<VisibilityCellComponent>(VisibilityCellComponent::StableId, {
+        KB_ECS_FIELD(VisibilityCellComponent, membershipMask, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(VisibilityCellComponent, membership, kb::ecs::ComponentFieldType::Enum32),
+        KB_ECS_FIELD(VisibilityCellComponent, visibilityOverride, kb::ecs::ComponentFieldType::Enum32),
+        KB_ECS_FIELD(VisibilityCellComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
 }
 
 void RegisterRegionShapeReflection(kb::ecs::World& world) {
@@ -228,6 +238,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , ambientRadianceComponentId_(RegisterSceneComponent<AmbientRadianceComponent>(world, AmbientRadianceComponent::StableId))
     , detailSwitchComponentId_(RegisterSceneComponent<SceneDetailSwitchComponent>(world, SceneDetailSwitchComponent::StableId))
     , visibilityBlockerComponentId_(RegisterSceneComponent<SceneVisibilityBlockerComponent>(world, SceneVisibilityBlockerComponent::StableId))
+    , visibilityCellComponentId_(RegisterSceneComponent<VisibilityCellComponent>(world, VisibilityCellComponent::StableId))
     , audioSourceComponentId_(RegisterSceneComponent<AudioSourceComponent>(world, "kb.scene.AudioSourceComponent"))
     , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, "kb.scene.AudioListenerComponent"))
     , animatorComponentId_(RegisterSceneComponent<Animator>(world, "kb.scene.AnimatorComponent"))
@@ -245,6 +256,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     RegisterAmbientRadianceReflection(world);
     RegisterDetailSwitchReflection(world);
     RegisterVisibilityBlockerReflection(world);
+    RegisterVisibilityCellReflection(world);
 }
 
 std::uint64_t SceneComponentRegistry::TransformComponentId() const noexcept {
@@ -305,6 +317,7 @@ std::uint64_t SceneComponentRegistry::WorldBackdropComponentId() const noexcept 
 std::uint64_t SceneComponentRegistry::AmbientRadianceComponentId() const noexcept { return ambientRadianceComponentId_; }
 std::uint64_t SceneComponentRegistry::DetailSwitchComponentId() const noexcept { return detailSwitchComponentId_; }
 std::uint64_t SceneComponentRegistry::VisibilityBlockerComponentId() const noexcept { return visibilityBlockerComponentId_; }
+std::uint64_t SceneComponentRegistry::VisibilityCellComponentId() const noexcept { return visibilityCellComponentId_; }
 
 std::uint64_t SceneComponentRegistry::AudioSourceComponentId() const noexcept {
     return audioSourceComponentId_;

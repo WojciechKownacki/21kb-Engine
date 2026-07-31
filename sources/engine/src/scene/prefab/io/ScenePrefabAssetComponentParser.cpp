@@ -255,6 +255,24 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseVisibilityCell(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "visibilityCell", present)) return false;
+    if (!present) return true;
+    VisibilityCellComponent cell{};
+    int membership = 0;
+    int visibilityOverride = 0;
+    if (!ParseField(fields, "visibilityCell.membershipMask", cell.membershipMask) || !ParseField(fields, "visibilityCell.membership", membership) ||
+        !ParseField(fields, "visibilityCell.visibilityOverride", visibilityOverride) || !ParseOptionalBool(fields, "visibilityCell.enabled", cell.enabled) ||
+        membership < static_cast<int>(VisibilityCellMembership::Include) || membership > static_cast<int>(VisibilityCellMembership::Exclude) ||
+        visibilityOverride < static_cast<int>(VisibilityCellOverride::Automatic) || visibilityOverride > static_cast<int>(VisibilityCellOverride::ForceHidden)) return false;
+    cell.membership = static_cast<VisibilityCellMembership>(membership);
+    cell.visibilityOverride = static_cast<VisibilityCellOverride>(visibilityOverride);
+    if (!IsVisibilityCellComponentValid(cell)) return false;
+    components.visibilityCell = cell;
+    return true;
+}
+
 [[nodiscard]] bool ParseCharacterController(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool hasCharacterController = false;
     if (!ParseOptionalComponentFlag(fields, "characterController", hasCharacterController)) {
@@ -444,6 +462,7 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseAmbientRadiance(fields, components)
         && ParseDetailSwitch(fields, components)
         && ParseVisibilityBlocker(fields, components)
+        && ParseVisibilityCell(fields, components)
         && ParseCharacterController(fields, components)
         && ParseJoint(fields, components)
         && ScenePrefabAssetTagsParser::Parse(fields, components)
