@@ -28,6 +28,7 @@
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/GeometrySwarmComponent.hpp"
+#include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
@@ -151,6 +152,16 @@ void RegisterGeometrySwarmReflection(kb::ecs::World& world) {
         KB_ECS_FIELD(GeometrySwarmComponent, castsShadow, kb::ecs::ComponentFieldType::Bool),
         KB_ECS_FIELD(GeometrySwarmComponent, receivesShadow, kb::ecs::ComponentFieldType::Bool),
         KB_ECS_FIELD(GeometrySwarmComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
+void RegisterSurfaceCastReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<SurfaceCastComponent>(SurfaceCastComponent::StableId, {
+        KB_ECS_FIELD(SurfaceCastComponent, materialAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(SurfaceCastComponent, receiverLayerMask, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(SurfaceCastComponent, order, kb::ecs::ComponentFieldType::Int32),
+        KB_ECS_FIELD(SurfaceCastComponent, content, kb::ecs::ComponentFieldType::Enum32),
+        KB_ECS_FIELD(SurfaceCastComponent, enabled, kb::ecs::ComponentFieldType::Bool),
     }));
 }
 
@@ -283,6 +294,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , regionPortalComponentId_(RegisterSceneComponent<SceneRegionPortalComponent>(world, SceneRegionPortalComponent::StableId))
     , auxFrameComponentId_(RegisterSceneComponent<AuxFrameComponent>(world, AuxFrameComponent::StableId))
     , geometrySwarmComponentId_(RegisterSceneComponent<GeometrySwarmComponent>(world, GeometrySwarmComponent::StableId))
+    , surfaceCastComponentId_(RegisterSceneComponent<SurfaceCastComponent>(world, SurfaceCastComponent::StableId))
     , audioSourceComponentId_(RegisterSceneComponent<AudioSourceComponent>(world, "kb.scene.AudioSourceComponent"))
     , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, "kb.scene.AudioListenerComponent"))
     , animatorComponentId_(RegisterSceneComponent<Animator>(world, "kb.scene.AnimatorComponent"))
@@ -304,6 +316,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     RegisterRegionPortalReflection(world);
     RegisterAuxFrameReflection(world);
     RegisterGeometrySwarmReflection(world);
+    RegisterSurfaceCastReflection(world);
 }
 
 std::uint64_t SceneComponentRegistry::TransformComponentId() const noexcept {
@@ -368,6 +381,7 @@ std::uint64_t SceneComponentRegistry::VisibilityCellComponentId() const noexcept
 std::uint64_t SceneComponentRegistry::RegionPortalComponentId() const noexcept { return regionPortalComponentId_; }
 std::uint64_t SceneComponentRegistry::AuxFrameComponentId() const noexcept { return auxFrameComponentId_; }
 std::uint64_t SceneComponentRegistry::GeometrySwarmComponentId() const noexcept { return geometrySwarmComponentId_; }
+std::uint64_t SceneComponentRegistry::SurfaceCastComponentId() const noexcept { return surfaceCastComponentId_; }
 
 std::uint64_t SceneComponentRegistry::AudioSourceComponentId() const noexcept {
     return audioSourceComponentId_;

@@ -62,6 +62,7 @@ namespace {
     if (components.regionPortal.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::RegionPortal);
     if (components.auxFrame.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::AuxFrame);
     if (components.geometrySwarm.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::GeometrySwarm);
+    if (components.surfaceCast.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::SurfaceCast);
     if (components.behaviour.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Behaviour);
     }
@@ -184,6 +185,7 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         }
         if (node.components.auxFrame.has_value()) archetype.auxFrames.push_back(*node.components.auxFrame);
         if (node.components.geometrySwarm.has_value()) archetype.geometrySwarms.push_back(*node.components.geometrySwarm);
+        if (node.components.surfaceCast.has_value()) archetype.surfaceCasts.push_back(*node.components.surfaceCast);
         if (node.components.behaviour.has_value()) {
             archetype.behaviours.push_back(*node.components.behaviour);
         }

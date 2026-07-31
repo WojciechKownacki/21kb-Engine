@@ -23,6 +23,7 @@
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
+#include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
@@ -140,6 +141,10 @@ public:
     static void SetGeometrySwarm(Scene& scene, SceneEntity entity, const GeometrySwarmComponent& component);
     static void RemoveGeometrySwarm(Scene& scene, SceneEntity entity) noexcept;
     static void MarkGeometrySwarmModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static SurfaceCastComponent* TryGetSurfaceCast(Scene& scene, SceneEntity entity) noexcept;
+    static void SetSurfaceCast(Scene& scene, SceneEntity entity, const SurfaceCastComponent& component);
+    static void RemoveSurfaceCast(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkSurfaceCastModified(Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static AudioSourceComponent* TryGetAudioSource(Scene& scene, SceneEntity entity) noexcept;
     static void SetAudioSource(Scene& scene, SceneEntity entity, const AudioSourceComponent& audioSource);

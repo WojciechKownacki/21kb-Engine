@@ -26,6 +26,7 @@
 #include "engine/scene/SceneRegionPortalComponents.hpp"
 #include "engine/scene/SceneAuxFrameComponents.hpp"
 #include "engine/scene/SceneGeometrySwarmComponents.hpp"
+#include "engine/scene/SceneSurfaceCastComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
 #include "engine/scene/SceneUIDocuments.hpp"
@@ -61,6 +62,7 @@ public:
     [[nodiscard]] SceneRegionPortalComponentQueries RegionPortals() const noexcept;
     [[nodiscard]] SceneAuxFrameComponentQueries AuxFrames() const noexcept;
     [[nodiscard]] SceneGeometrySwarmComponentQueries GeometrySwarms() const noexcept;
+    [[nodiscard]] SceneSurfaceCastComponentQueries SurfaceCasts() const noexcept;
     [[nodiscard]] SceneAudioSourceComponentQueries AudioSources() const noexcept;
     [[nodiscard]] SceneAudioListenerComponentQueries AudioListeners() const noexcept;
     [[nodiscard]] SceneAnimatorComponentQueries Animators() const noexcept;

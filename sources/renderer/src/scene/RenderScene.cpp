@@ -4,6 +4,7 @@
 #include "RenderSceneProxyDirtyTracker.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <iterator>
 #include <utility>
@@ -37,6 +38,32 @@ namespace {
     value = (value ^ (value >> 30U)) * 0xbf58476d1ce4e5b9ULL;
     value = (value ^ (value >> 27U)) * 0x94d049bb133111ebULL;
     return value ^ (value >> 31U);
+}
+
+[[nodiscard]] bool SurfaceCastContains(const SurfaceCastRenderProxyDesc& cast, const std::array<float, 16>& receiver) noexcept {
+    const float px = receiver[12] - cast.model[12], py = receiver[13] - cast.model[13], pz = receiver[14] - cast.model[14];
+    const float a00 = cast.model[0], a01 = cast.model[4], a02 = cast.model[8];
+    const float a10 = cast.model[1], a11 = cast.model[5], a12 = cast.model[9];
+    const float a20 = cast.model[2], a21 = cast.model[6], a22 = cast.model[10];
+    const float determinant = a00 * (a11 * a22 - a12 * a21) - a01 * (a10 * a22 - a12 * a20) + a02 * (a10 * a21 - a11 * a20);
+    if (std::abs(determinant) <= 1.0e-8F) return false;
+    const float inverseDeterminant = 1.0F / determinant;
+    const float x = ((a11 * a22 - a12 * a21) * px + (a02 * a21 - a01 * a22) * py + (a01 * a12 - a02 * a11) * pz) * inverseDeterminant - cast.localCenter[0];
+    const float y = ((a12 * a20 - a10 * a22) * px + (a00 * a22 - a02 * a20) * py + (a02 * a10 - a00 * a12) * pz) * inverseDeterminant - cast.localCenter[1];
+    const float z = ((a10 * a21 - a11 * a20) * px + (a01 * a20 - a00 * a21) * py + (a00 * a11 - a01 * a10) * pz) * inverseDeterminant - cast.localCenter[2];
+    switch (cast.region) {
+    case RenderSurfaceCastRegion::Circle2D: return x * x + y * y <= cast.radius * cast.radius;
+    case RenderSurfaceCastRegion::Rectangle2D: return std::abs(x) <= cast.size[0] * 0.5F && std::abs(y) <= cast.size[1] * 0.5F;
+    case RenderSurfaceCastRegion::Sphere: return x * x + y * y + z * z <= cast.radius * cast.radius;
+    case RenderSurfaceCastRegion::Box: return std::abs(x) <= cast.size[0] * 0.5F && std::abs(y) <= cast.size[1] * 0.5F && std::abs(z) <= cast.size[2] * 0.5F;
+    case RenderSurfaceCastRegion::Capsule: {
+        const float halfLine = std::max(0.0F, cast.height * 0.5F - cast.radius);
+        const float clampedY = std::clamp(y, -halfLine, halfLine);
+        const float dy = y - clampedY;
+        return x * x + dy * dy + z * z <= cast.radius * cast.radius;
+    }
+    }
+    return false;
 }
 
 } // namespace
@@ -162,6 +189,18 @@ RenderProxyId RenderScene::UpsertGeometrySwarm(const GeometrySwarmRenderProxyDes
     return proxy.id;
 }
 
+RenderProxyId RenderScene::UpsertSurfaceCast(const SurfaceCastRenderProxyDesc& desc) {
+    auto [it, inserted] = surfaceCasts_.try_emplace(desc.entityId);
+    SurfaceCastRenderProxy& proxy = it->second;
+    if (inserted) { proxy.id = AllocateProxyId(); proxy.desc = desc; proxy.dirty = RenderProxyDirtyFlag::All; InvalidateDrawGroups(); return proxy.id; }
+    if (proxy.desc.materialAssetId != desc.materialAssetId || proxy.desc.model != desc.model || proxy.desc.localCenter != desc.localCenter ||
+        proxy.desc.size != desc.size || proxy.desc.radius != desc.radius || proxy.desc.height != desc.height ||
+        proxy.desc.receiverLayerMask != desc.receiverLayerMask || proxy.desc.order != desc.order || proxy.desc.region != desc.region || proxy.desc.visible != desc.visible) {
+        proxy.desc = desc; proxy.dirty |= RenderProxyDirtyFlag::All; InvalidateDrawGroups();
+    }
+    return proxy.id;
+}
+
 void RenderScene::SetWorldBackdrop(std::optional<SceneRenderWorldBackdrop> backdrop) noexcept {
     worldBackdrop_ = std::move(backdrop);
 }
@@ -219,8 +258,15 @@ bool RenderScene::UpdateGeometrySwarmTransform(std::uint64_t entityId, const std
     InvalidateDrawGroups();
     return true;
 }
+bool RenderScene::UpdateSurfaceCastTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept {
+    const auto found = surfaceCasts_.find(entityId);
+    if (found == surfaceCasts_.end()) return false;
+    if (found->second.desc.model != model) { found->second.desc.model = model; found->second.dirty |= RenderProxyDirtyFlag::Transform; InvalidateDrawGroups(); }
+    return true;
+}
 bool RenderScene::RemoveVisibilityBlocker(std::uint64_t entityId) noexcept { return visibilityBlockers_.erase(entityId) != 0U; }
 bool RenderScene::RemoveGeometrySwarm(std::uint64_t entityId) noexcept { const bool removed = geometrySwarms_.erase(entityId) != 0U; if (removed) InvalidateDrawGroups(); return removed; }
+bool RenderScene::RemoveSurfaceCast(std::uint64_t entityId) noexcept { const bool removed = surfaceCasts_.erase(entityId) != 0U; if (removed) InvalidateDrawGroups(); return removed; }
 
 const MeshRenderProxy* RenderScene::FindMeshByEntity(std::uint64_t entityId) const noexcept {
     const auto it = meshes_.find(entityId);
@@ -295,6 +341,15 @@ std::uint32_t RenderScene::RemoveGeometrySwarmsNotInSorted(std::span<const std::
     if (removed != 0U) InvalidateDrawGroups();
     return removed;
 }
+std::uint32_t RenderScene::RemoveSurfaceCastsNotInSorted(std::span<const std::uint64_t> sortedEntityIds) noexcept {
+    std::uint32_t removed = 0U;
+    for (auto it = surfaceCasts_.begin(); it != surfaceCasts_.end();) {
+        if (std::ranges::binary_search(sortedEntityIds, it->first)) { ++it; continue; }
+        it = surfaceCasts_.erase(it); ++removed;
+    }
+    if (removed != 0U) InvalidateDrawGroups();
+    return removed;
+}
 
 std::size_t RenderScene::MeshProxyCount() const noexcept {
     return meshes_.size();
@@ -309,6 +364,7 @@ std::size_t RenderScene::LightProxyCount() const noexcept {
 }
 std::size_t RenderScene::VisibilityBlockerProxyCount() const noexcept { return visibilityBlockers_.size(); }
 std::size_t RenderScene::GeometrySwarmProxyCount() const noexcept { return geometrySwarms_.size(); }
+std::size_t RenderScene::SurfaceCastProxyCount() const noexcept { return surfaceCasts_.size(); }
 
 const RenderScene::MeshProxyMap& RenderScene::MeshProxies() const noexcept {
     return meshes_;
@@ -323,6 +379,7 @@ const RenderScene::LightProxyMap& RenderScene::LightProxies() const noexcept {
 }
 const RenderScene::VisibilityBlockerProxyMap& RenderScene::VisibilityBlockerProxies() const noexcept { return visibilityBlockers_; }
 const RenderScene::GeometrySwarmProxyMap& RenderScene::GeometrySwarmProxies() const noexcept { return geometrySwarms_; }
+const RenderScene::SurfaceCastProxyMap& RenderScene::SurfaceCastProxies() const noexcept { return surfaceCasts_; }
 
 void RenderScene::ClearDirty() noexcept {
     for (auto& [entityId, proxy] : meshes_) {
@@ -339,6 +396,7 @@ void RenderScene::ClearDirty() noexcept {
     }
     for (auto& [entityId, proxy] : visibilityBlockers_) { proxy.dirty = RenderProxyDirtyFlag::None; static_cast<void>(entityId); }
     for (auto& [entityId, proxy] : geometrySwarms_) { proxy.dirty = RenderProxyDirtyFlag::None; static_cast<void>(entityId); }
+    for (auto& [entityId, proxy] : surfaceCasts_) { proxy.dirty = RenderProxyDirtyFlag::None; static_cast<void>(entityId); }
 }
 
 const CameraRenderProxyDesc* RenderScene::FindPrimaryCameraProxy(std::uint32_t targetViewportId) const noexcept {
@@ -409,7 +467,9 @@ void RenderScene::BuildSnapshotInto(std::uint32_t viewportWidth, std::uint32_t v
             static_cast<void>(entityId);
             continue;
         }
-        outSnapshot.meshes.push_back(RenderSceneMeshInstanceBuilder::Build(mesh));
+        SceneRenderMeshInstance instance = RenderSceneMeshInstanceBuilder::Build(mesh);
+        ApplySurfaceCasts(instance);
+        outSnapshot.meshes.push_back(instance);
     }
     for (const auto& [entityId, proxy] : geometrySwarms_) {
         const GeometrySwarmRenderProxyDesc& swarm = proxy.desc;
@@ -417,7 +477,7 @@ void RenderScene::BuildSnapshotInto(std::uint32_t viewportWidth, std::uint32_t v
             continue;
         }
         for (std::uint32_t index = 0U; index < swarm.instanceCount; ++index) {
-            outSnapshot.meshes.push_back(SceneRenderMeshInstance{
+            SceneRenderMeshInstance instance{
                 .entityId = GeometrySwarmInstanceId(entityId, index),
                 .meshAssetId = swarm.meshAssetId,
                 .materialAssetId = swarm.materialAssetId,
@@ -425,7 +485,9 @@ void RenderScene::BuildSnapshotInto(std::uint32_t viewportWidth, std::uint32_t v
                 .castsShadow = swarm.castsShadow,
                 .receivesShadow = swarm.receivesShadow,
                 .layer = swarm.layer,
-            });
+            };
+            ApplySurfaceCasts(instance);
+            outSnapshot.meshes.push_back(instance);
         }
     }
 
@@ -469,18 +531,17 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
             continue;
         }
 
-        const DrawGroupKey key{
-            .meshAssetId = mesh.meshAssetId,
-            .materialAssetId = mesh.materialAssetId,
-        };
+        SceneRenderMeshInstance instance = RenderSceneMeshInstanceBuilder::Build(mesh);
+        ApplySurfaceCasts(instance);
+        const DrawGroupKey key{ .meshAssetId = instance.meshAssetId, .materialAssetId = instance.materialAssetId };
         auto lookupIt = drawGroupLookupScratch_.find(key);
         if (lookupIt == drawGroupLookupScratch_.end()) {
             if (writeGroupCount == drawGroups_.size()) {
                 drawGroups_.push_back(SceneRenderDrawGroup{});
             }
             SceneRenderDrawGroup& group = drawGroups_[writeGroupCount];
-            group.meshAssetId = mesh.meshAssetId;
-            group.materialAssetId = mesh.materialAssetId;
+            group.meshAssetId = instance.meshAssetId;
+            group.materialAssetId = instance.materialAssetId;
             lookupIt = drawGroupLookupScratch_.emplace(key, writeGroupCount).first;
             ++writeGroupCount;
         }
@@ -492,7 +553,7 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
         proxy.instanceGroupIndex = static_cast<std::uint32_t>(groupIndex);
         proxy.instanceIndexInGroup = static_cast<std::uint32_t>(group.instances.size());
         proxy.instanceLocationVersion = drawGroupBuildVersion_;
-        group.instances.push_back(RenderSceneMeshInstanceBuilder::Build(mesh));
+        group.instances.push_back(instance);
     }
 
     // Geometry swarm data stays compact and canonical in ECS.  Only here, at
@@ -503,19 +564,8 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
         if (!swarm.visible || swarm.meshAssetId == 0U || swarm.instanceCount == 0U || swarm.columns == 0U || swarm.rows == 0U || swarm.layers == 0U) {
             continue;
         }
-        const DrawGroupKey key{ .meshAssetId = swarm.meshAssetId, .materialAssetId = swarm.materialAssetId };
-        auto lookupIt = drawGroupLookupScratch_.find(key);
-        if (lookupIt == drawGroupLookupScratch_.end()) {
-            if (writeGroupCount == drawGroups_.size()) drawGroups_.push_back(SceneRenderDrawGroup{});
-            SceneRenderDrawGroup& group = drawGroups_[writeGroupCount];
-            group.meshAssetId = swarm.meshAssetId;
-            group.materialAssetId = swarm.materialAssetId;
-            lookupIt = drawGroupLookupScratch_.emplace(key, writeGroupCount).first;
-            ++writeGroupCount;
-        }
-        SceneRenderDrawGroup& group = drawGroups_[lookupIt->second];
         for (std::uint32_t index = 0U; index < swarm.instanceCount; ++index) {
-            group.instances.push_back(SceneRenderMeshInstance{
+            SceneRenderMeshInstance instance{
                 .entityId = GeometrySwarmInstanceId(entityId, index),
                 .meshAssetId = swarm.meshAssetId,
                 .materialAssetId = swarm.materialAssetId,
@@ -523,12 +573,33 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
                 .castsShadow = swarm.castsShadow,
                 .receivesShadow = swarm.receivesShadow,
                 .layer = swarm.layer,
-            });
+            };
+            ApplySurfaceCasts(instance);
+            const DrawGroupKey key{ .meshAssetId = instance.meshAssetId, .materialAssetId = instance.materialAssetId };
+            auto lookupIt = drawGroupLookupScratch_.find(key);
+            if (lookupIt == drawGroupLookupScratch_.end()) {
+                if (writeGroupCount == drawGroups_.size()) drawGroups_.push_back(SceneRenderDrawGroup{});
+                SceneRenderDrawGroup& group = drawGroups_[writeGroupCount];
+                group.meshAssetId = instance.meshAssetId; group.materialAssetId = instance.materialAssetId;
+                lookupIt = drawGroupLookupScratch_.emplace(key, writeGroupCount).first; ++writeGroupCount;
+            }
+            drawGroups_[lookupIt->second].instances.push_back(instance);
         }
     }
 
     drawGroups_.resize(writeGroupCount);
     drawGroupsDirty_ = false;
+}
+
+void RenderScene::ApplySurfaceCasts(SceneRenderMeshInstance& instance) const {
+    const SurfaceCastRenderProxy* selected = nullptr;
+    for (const auto& [entityId, proxy] : surfaceCasts_) {
+        static_cast<void>(entityId);
+        const SurfaceCastRenderProxyDesc& cast = proxy.desc;
+        if (!cast.visible || cast.materialAssetId == 0U || (instance.layer & cast.receiverLayerMask) == 0U || !SurfaceCastContains(cast, instance.model)) continue;
+        if (selected == nullptr || cast.order > selected->desc.order || (cast.order == selected->desc.order && cast.entityId > selected->desc.entityId)) selected = &proxy;
+    }
+    if (selected != nullptr) instance.materialAssetId = selected->desc.materialAssetId;
 }
 
 RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_t entityId, const std::array<float, 16>& model) {
