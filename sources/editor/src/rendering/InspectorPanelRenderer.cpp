@@ -27,6 +27,7 @@
 #include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/SurfaceCastComponent.hpp"
+#include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
@@ -1752,6 +1753,22 @@ void PaintSurfaceCastSection(HDC dc, RECT content, int& y, const EditorTheme& th
     section.Bool("Enabled", surfaceCast.enabled, InspectorPropertyId::SurfaceCastEnabled);
     y = section.Bottom() + kSectionGap;
 }
+void PaintFacingPanelSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::FacingPanelComponent& panel) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::FacingPanel, HeroIconKind::Eye, "Facing Panel", true);
+    constexpr std::array<const char*, 4> modeNames{ "View", "Point", "Axis", "Fixed" };
+    section.Field("Mode", modeNames[static_cast<std::size_t>(panel.mode)], InspectorPropertyId::FacingPanelMode);
+    section.Field("Target X", FormatFloat(panel.targetPoint.x, 3), InspectorPropertyId::FacingPanelTargetX);
+    section.Field("Target Y", FormatFloat(panel.targetPoint.y, 3), InspectorPropertyId::FacingPanelTargetY);
+    section.Field("Target Z", FormatFloat(panel.targetPoint.z, 3), InspectorPropertyId::FacingPanelTargetZ);
+    section.Field("Axis X", FormatFloat(panel.axis.x, 3), InspectorPropertyId::FacingPanelAxisX);
+    section.Field("Axis Y", FormatFloat(panel.axis.y, 3), InspectorPropertyId::FacingPanelAxisY);
+    section.Field("Axis Z", FormatFloat(panel.axis.z, 3), InspectorPropertyId::FacingPanelAxisZ);
+    section.Field("Up X", FormatFloat(panel.up.x, 3), InspectorPropertyId::FacingPanelUpX);
+    section.Field("Up Y", FormatFloat(panel.up.y, 3), InspectorPropertyId::FacingPanelUpY);
+    section.Field("Up Z", FormatFloat(panel.up.z, 3), InspectorPropertyId::FacingPanelUpZ);
+    section.Bool("Enabled", panel.enabled, InspectorPropertyId::FacingPanelEnabled);
+    y = section.Bottom() + kSectionGap;
+}
 
 constexpr int kCameraSectionRows = 13;
 
@@ -2151,6 +2168,10 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         const int h = SectionHeight(inspector, InspectorSectionId::SurfaceCast, 5);
         if (y < content.bottom && y + h > content.top) PaintSurfaceCastSection(dc, content, y, theme, inspector, *surfaceCast); else y += h + kSectionGap;
     }
+    if (const kb::scene::FacingPanelComponent* panel = scene.Components().FacingPanels().TryGet(selected); panel != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::FacingPanel, 11);
+        if (y < content.bottom && y + h > content.top) PaintFacingPanelSection(dc, content, y, theme, inspector, *panel); else y += h + kSectionGap;
+    }
 
     if (sceneContext.HasEntityScript(selected)) {
         const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);
@@ -2398,6 +2419,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (scene.Components().AuxFrames().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::SecondaryFrame, 9) + kSectionGap;
     if (scene.Components().GeometrySwarms().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::GeometrySwarm, 14) + kSectionGap;
     if (scene.Components().SurfaceCasts().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::SurfaceCast, 5) + kSectionGap;
+    if (scene.Components().FacingPanels().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::FacingPanel, 11) + kSectionGap;
     if (sceneContext.HasEntityScript(selected)) {
         const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariables(selected).size());
         height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
@@ -3539,6 +3561,18 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             for (InspectorPropertyId property : properties) {
                 const bool isBool = property == InspectorPropertyId::SurfaceCastEnabled;
                 const InspectorPanelRenderer::Hit hit = isBool ? HitBool(RowRect(viewport, y), InspectorSectionId::SurfaceCast, property, x, scrolledY) : HitTextRow(RowRect(viewport, y), InspectorSectionId::SurfaceCast, property, x, scrolledY);
+                if (hit.kind != InspectorHitKind::None) return hit;
+                AdvanceRow(y);
+            }
+        } else y += kHeaderHeight;
+        y += kSectionGap;
+    }
+    if (sceneContext.Scene().Components().FacingPanels().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::FacingPanel, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::FacingPanel)) {
+            constexpr std::array<InspectorPropertyId, 11> properties{ InspectorPropertyId::FacingPanelMode, InspectorPropertyId::FacingPanelTargetX, InspectorPropertyId::FacingPanelTargetY, InspectorPropertyId::FacingPanelTargetZ, InspectorPropertyId::FacingPanelAxisX, InspectorPropertyId::FacingPanelAxisY, InspectorPropertyId::FacingPanelAxisZ, InspectorPropertyId::FacingPanelUpX, InspectorPropertyId::FacingPanelUpY, InspectorPropertyId::FacingPanelUpZ, InspectorPropertyId::FacingPanelEnabled };
+            for (InspectorPropertyId property : properties) {
+                const InspectorPanelRenderer::Hit hit = property == InspectorPropertyId::FacingPanelEnabled ? HitBool(RowRect(viewport, y), InspectorSectionId::FacingPanel, property, x, scrolledY) : HitTextRow(RowRect(viewport, y), InspectorSectionId::FacingPanel, property, x, scrolledY);
                 if (hit.kind != InspectorHitKind::None) return hit;
                 AdvanceRow(y);
             }

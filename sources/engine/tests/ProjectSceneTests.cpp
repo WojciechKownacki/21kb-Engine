@@ -17,6 +17,7 @@
 #include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/SurfaceCastComponent.hpp"
+#include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -502,6 +503,25 @@ void RunSceneSurfaceCastReflectionSerializationTest() {
     Require(restored != nullptr && restored->materialAssetId == 23U && restored->receiverLayerMask == 6U && restored->order == -4 && restored->content == kb::scene::SurfaceCastContent::Detail && restored->enabled, "Surface Cast reflection did not roundtrip authored state");
 }
 
+void RunSceneFacingPanelReflectionSerializationTest() {
+    kb::scene::Scene source;
+    const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Facing Panel" });
+    source.Components().FacingPanels().Set(sourceEntity, kb::scene::FacingPanelComponent{
+        .mode = kb::scene::FacingPanelMode::Axis,
+        .targetPoint = kb::scene::Vec3{ 1.0F, 2.0F, 3.0F }, .axis = kb::scene::Vec3{ -1.0F, 0.0F, 0.0F }, .up = kb::scene::Vec3{ 0.0F, 1.0F, 0.0F }, .enabled = true,
+    });
+    kb::ecs::World& sourceWorld = source.Runtime().EcsWorld();
+    const kb::ecs::ComponentReflection* reflection = sourceWorld.Reflection(kb::scene::FacingPanelComponent::StableId);
+    Require(reflection != nullptr && reflection->FindField("mode") != nullptr && reflection->FindField("targetPoint") != nullptr && reflection->FindField("axis") != nullptr && reflection->FindField("up") != nullptr, "Facing Panel reflection was not registered under its stable id");
+    kb::ecs::SerializedComponent serialized;
+    Require(sourceWorld.SerializeComponent(sourceEntity, sourceWorld.Component<kb::scene::FacingPanelComponent>(), serialized), "Facing Panel reflection serialization failed");
+    kb::scene::Scene target;
+    const kb::scene::SceneEntity targetEntity = target.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Facing Panel Target" });
+    Require(target.Runtime().EcsWorld().ApplySerializedComponent(targetEntity, serialized), "Facing Panel reflection apply failed");
+    const kb::scene::FacingPanelComponent* restored = target.Components().FacingPanels().TryGet(targetEntity);
+    Require(restored != nullptr && restored->mode == kb::scene::FacingPanelMode::Axis && NearlyEqual(restored->targetPoint.x, 1.0F) && NearlyEqual(restored->axis.x, -1.0F) && restored->enabled, "Facing Panel reflection did not roundtrip authored state");
+}
+
 void RunSceneAudioSourceComponentReflectionSerializationTest() {
     kb::scene::Scene source;
     const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "AudioSource" });
@@ -738,6 +758,7 @@ void RunProjectSceneTests() {
     RunSceneSecondaryFrameReflectionSerializationTest();
     RunSceneGeometrySwarmReflectionSerializationTest();
     RunSceneSurfaceCastReflectionSerializationTest();
+    RunSceneFacingPanelReflectionSerializationTest();
     RunSceneAudioListenerComponentReflectionSerializationTest();
     RunSceneAudioSourceComponentReflectionSerializationTest();
     RunSceneAudioListenerPrefabRoundTripTest();

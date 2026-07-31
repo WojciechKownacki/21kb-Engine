@@ -45,6 +45,7 @@ enum SceneNodeComponentBits : std::uint32_t {
       AuxFrameBit = 1U << 26U,
       GeometrySwarmBit = 1U << 27U,
       SurfaceCastBit = 1U << 28U,
+      FacingPanelBit = 1U << 29U,
 };
 
 constexpr std::uint32_t KnownComponentBits = CameraBit |
@@ -65,7 +66,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit;
 
 [[nodiscard]] std::uint32_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint32_t componentBits = 0;
@@ -98,6 +99,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
       componentBits |= components.auxFrame.has_value() ? AuxFrameBit : 0U;
       componentBits |= components.geometrySwarm.has_value() ? GeometrySwarmBit : 0U;
       componentBits |= components.surfaceCast.has_value() ? SurfaceCastBit : 0U;
+      componentBits |= components.facingPanel.has_value() ? FacingPanelBit : 0U;
     return componentBits;
 }
 
@@ -394,6 +396,17 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         if (!IsSurfaceCastComponentPersistable(surfaceCast)) return false;
         output.surfaceCast = surfaceCast;
     }
+    if ((componentBits & FacingPanelBit) != 0U) {
+        if (fileVersion < 23U) return false;
+        FacingPanelComponent panel{};
+        std::uint32_t mode = 0U;
+        if (!input.ReadUInt32(mode) || !SceneAssetPrimitiveCodec::ReadVec3(input, panel.targetPoint) ||
+            !SceneAssetPrimitiveCodec::ReadVec3(input, panel.axis) || !SceneAssetPrimitiveCodec::ReadVec3(input, panel.up) ||
+            !input.ReadBool(panel.enabled) || mode > static_cast<std::uint32_t>(FacingPanelMode::Fixed)) return false;
+        panel.mode = static_cast<FacingPanelMode>(mode);
+        if (!IsFacingPanelComponentPersistable(panel)) return false;
+        output.facingPanel = panel;
+    }
     return true;
 }
 
@@ -589,6 +602,14 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteInt32(output, surfaceCast.order);
         SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(surfaceCast.content));
         SceneAssetBinaryIO::WriteBool(output, surfaceCast.enabled);
+    }
+    if (components.facingPanel.has_value()) {
+        const FacingPanelComponent& panel = *components.facingPanel;
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(panel.mode));
+        SceneAssetPrimitiveCodec::WriteVec3(output, panel.targetPoint);
+        SceneAssetPrimitiveCodec::WriteVec3(output, panel.axis);
+        SceneAssetPrimitiveCodec::WriteVec3(output, panel.up);
+        SceneAssetBinaryIO::WriteBool(output, panel.enabled);
     }
 }
 

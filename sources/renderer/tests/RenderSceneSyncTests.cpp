@@ -22,6 +22,7 @@
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
+#include "engine/scene/FacingPanelComponent.hpp"
 #include "kb/render/resources/BuiltInParticleQuadMesh.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 #include "kb/render/scene/SceneParticleRenderSynchronizer.hpp"
@@ -1562,6 +1563,40 @@ void RunRenderSceneAppliesSurfaceCastByRegionLayerAndOrderTest() {
     Require(material(1U) == 20U, "Surface Cast removal did not restore the preceding ordered cast");
 }
 
+void RunRenderSceneAppliesFacingPanelModesWithoutMutatingEcsTransformTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity camera = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Camera", .transform = TransformAt(0.0F, 0.0F, -5.0F) });
+    scene.Components().Cameras().Set(camera, kb::scene::CameraComponent{ .primary = true });
+    const kb::scene::SceneEntity panelEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Panel", .transform = TransformAt(0.0F, 0.0F, 0.0F) });
+    scene.Components().MeshRenderers().Set(panelEntity, kb::scene::MeshRendererComponent{ .meshAssetId = 7U, .materialAssetId = 9U });
+    kb::scene::FacingPanelComponent panel{ .mode = kb::scene::FacingPanelMode::View, .enabled = true };
+    scene.Components().FacingPanels().Set(panelEntity, panel);
+    EcsRenderSceneSynchronizer synchronizer;
+    RenderScene renderScene;
+    synchronizer.Sync(scene, renderScene);
+    const MeshRenderProxy* proxy = renderScene.FindMeshByEntity(panelEntity.Id());
+    Require(proxy != nullptr && proxy->desc.model[10] < -0.99F, "Facing Panel view mode did not orient the flat mesh toward the primary camera");
+    panel.mode = kb::scene::FacingPanelMode::Point;
+    panel.targetPoint = kb::scene::Vec3{ 5.0F, 0.0F, 0.0F };
+    scene.Components().FacingPanels().Set(panelEntity, panel);
+    synchronizer.Sync(scene, renderScene);
+    proxy = renderScene.FindMeshByEntity(panelEntity.Id());
+    Require(proxy != nullptr && proxy->desc.model[8] > 0.99F, "Facing Panel point mode did not orient the flat mesh toward its point");
+    panel.mode = kb::scene::FacingPanelMode::Axis;
+    panel.axis = kb::scene::Vec3{ -1.0F, 0.0F, 0.0F };
+    scene.Components().FacingPanels().Set(panelEntity, panel);
+    synchronizer.Sync(scene, renderScene);
+    proxy = renderScene.FindMeshByEntity(panelEntity.Id());
+    Require(proxy != nullptr && proxy->desc.model[8] < -0.99F, "Facing Panel axis mode did not use the authored axis");
+    panel.mode = kb::scene::FacingPanelMode::Fixed;
+    scene.Components().FacingPanels().Set(panelEntity, panel);
+    synchronizer.Sync(scene, renderScene);
+    proxy = renderScene.FindMeshByEntity(panelEntity.Id());
+    Require(proxy != nullptr && proxy->desc.model[10] > 0.99F, "Facing Panel fixed mode did not preserve the authored orientation");
+    const kb::scene::TransformComponent* canonicalTransform = scene.Transforms().TryGet(panelEntity);
+    Require(canonicalTransform != nullptr && canonicalTransform->worldRotation.z == 0.0F && canonicalTransform->worldRotation.w == 1.0F, "Facing Panel renderer consumer mutated canonical ECS TransformComponent");
+}
+
 void RunRenderSceneSyncsAllSurfaceEmitterKindsTest() {
     kb::scene::Scene scene;
     kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
@@ -2643,6 +2678,7 @@ void RunRenderSceneSyncTests() {
     RunRenderSceneBuildsLargeMeshMaterialDrawGroupsTest();
     RunRenderSceneExpandsGeometrySwarmIntoExistingDrawGroupTest();
     RunRenderSceneAppliesSurfaceCastByRegionLayerAndOrderTest();
+    RunRenderSceneAppliesFacingPanelModesWithoutMutatingEcsTransformTest();
     RunRenderSceneCachesDrawGroupsUntilMeshStateChangesTest();
     RunRenderSceneReserveAndStatsExposeProxyCapacityTest();
     RunEcsSyncPropagatesMaterialSlotOverridesTest();

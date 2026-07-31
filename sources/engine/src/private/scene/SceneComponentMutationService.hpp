@@ -24,6 +24,7 @@
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/SurfaceCastComponent.hpp"
+#include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
@@ -145,6 +146,10 @@ public:
     static void SetSurfaceCast(Scene& scene, SceneEntity entity, const SurfaceCastComponent& component);
     static void RemoveSurfaceCast(Scene& scene, SceneEntity entity) noexcept;
     static void MarkSurfaceCastModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static FacingPanelComponent* TryGetFacingPanel(Scene& scene, SceneEntity entity) noexcept;
+    static void SetFacingPanel(Scene& scene, SceneEntity entity, const FacingPanelComponent& component);
+    static void RemoveFacingPanel(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkFacingPanelModified(Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static AudioSourceComponent* TryGetAudioSource(Scene& scene, SceneEntity entity) noexcept;
     static void SetAudioSource(Scene& scene, SceneEntity entity, const AudioSourceComponent& audioSource);
