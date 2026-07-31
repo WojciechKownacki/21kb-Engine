@@ -18,6 +18,7 @@
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
+#include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
@@ -361,6 +362,14 @@ struct ScriptComponentAccess<kb::scene::AmbientRadianceComponent> {
     [[nodiscard]] static kb::scene::AmbientRadianceComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().AmbientRadiances().TryGet(entity); }
     static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::AmbientRadianceComponent& value) { scene.Components().AmbientRadiances().Set(entity, value); }
     [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().AmbientRadiances().Has(entity)) return false; scene.Components().AmbientRadiances().Remove(entity); return true; }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::SceneDetailSwitchComponent> {
+    [[nodiscard]] static const kb::scene::SceneDetailSwitchComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().DetailSwitches().TryGet(entity); }
+    [[nodiscard]] static kb::scene::SceneDetailSwitchComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().DetailSwitches().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::SceneDetailSwitchComponent& value) { scene.Components().DetailSwitches().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().DetailSwitches().Has(entity)) return false; scene.Components().DetailSwitches().Remove(entity); return true; }
 };
 
 template <typename Component>

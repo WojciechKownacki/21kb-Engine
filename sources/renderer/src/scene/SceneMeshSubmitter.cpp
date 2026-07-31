@@ -47,6 +47,9 @@ void SceneMeshSubmitter::Shutdown() {
     gpuDrivenFrameResources_.Shutdown();
     gpuDrivenCullingPass_.Shutdown();
     passResources_.Shutdown();
+    pipelineScratch_.detailSwitchLevels.clear();
+    pipelineScratch_.detailSwitchPreviousLevels.clear();
+    detailSwitchScene_ = nullptr;
 }
 
 SceneRenderSubmitStats SceneMeshSubmitter::ValidateResourcesInto(
@@ -137,6 +140,11 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     SceneRenderSubmitStats lightingStats{};
     const PackedSceneLighting lighting = SceneLightingPacker::Build(renderScene, lightingStats, lightingConfig, camera);
     const std::array<float, 4> cameraPosition = SceneLightingPacker::CameraPosition(camera);
+    if (detailSwitchScene_ != &renderScene) {
+        pipelineScratch_.detailSwitchLevels.clear();
+        pipelineScratch_.detailSwitchPreviousLevels.clear();
+        detailSwitchScene_ = &renderScene;
+    }
     MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
         .pass = pass,
         .drawGroups = &drawGroups,

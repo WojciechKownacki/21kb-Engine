@@ -63,6 +63,8 @@ private:
     SceneGpuDrivenCullingPass gpuDrivenCullingPass_;
     mutable SceneGpuDrivenFrameResources gpuDrivenFrameResources_;
     mutable MeshPipelineBuildResult pipelineScratch_;
+    // Derived renderer state only. The authored detail-switch policy remains in ECS.
+    mutable const RenderScene* detailSwitchScene_ = nullptr;
 };
 
 } // namespace kb::render
