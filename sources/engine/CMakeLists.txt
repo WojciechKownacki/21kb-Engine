@@ -264,6 +264,8 @@ add_library(kb_engine STATIC
         include/engine/scene/SceneStreamFocusComponents.hpp
         include/engine/scene/WorldBackdropComponent.hpp
         include/engine/scene/SceneWorldBackdropComponents.hpp
+        include/engine/scene/AmbientRadianceComponent.hpp
+        include/engine/scene/SceneAmbientRadianceComponents.hpp
     include/engine/scene/SceneVisibilityComponents.hpp
     include/engine/scene/VisibilityComponent.hpp
     include/engine/render/postfx/PostProcessPipeline.hpp
@@ -644,6 +646,8 @@ add_library(kb_engine STATIC
         src/scene/components/SceneStreamFocusStorage.cpp
         src/scene/components/SceneWorldBackdropApi.cpp
         src/scene/components/SceneWorldBackdropStorage.cpp
+        src/scene/components/SceneAmbientRadianceApi.cpp
+        src/scene/components/SceneAmbientRadianceStorage.cpp
       src/scene/SceneContentInstanceService.cpp
     src/scene/components/SceneTransformApi.cpp
     src/scene/components/SceneTransformStorage.cpp
@@ -979,6 +983,7 @@ add_library(kb_engine STATIC
         src/private/scene/components/SceneContentInstanceComponentStore.hpp
         src/private/scene/components/SceneStreamFocusComponentStore.hpp
         src/private/scene/components/SceneWorldBackdropComponentStore.hpp
+        src/private/scene/components/SceneAmbientRadianceComponentStore.hpp
       src/private/scene/SceneContentInstanceService.hpp
       src/private/scene/systems/ContentInstanceSceneSystem.hpp
     src/private/scene/components/SceneTransformComponentStore.hpp

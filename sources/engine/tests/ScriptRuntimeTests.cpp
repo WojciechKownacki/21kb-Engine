@@ -48,6 +48,7 @@
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
+#include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/script/LuaScriptBackend.hpp"
 #include "engine/script/NativeScriptBuildPipeline.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
@@ -10882,6 +10883,7 @@ void RunScriptSceneComponentApiTest() {
     scene.Components().ContentInstances().Set(object.Entity(), kb::scene::ContentInstanceComponent{});
     scene.Components().StreamFocuses().Set(object.Entity(), kb::scene::StreamFocusComponent{});
     scene.Components().WorldBackdrops().Set(object.Entity(), kb::scene::WorldBackdropComponent{});
+    scene.Components().AmbientRadiances().Set(object.Entity(), kb::scene::AmbientRadianceComponent{});
 
     kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Transform"), "Script component API did not see Transform");
     kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Visibility"), "Script component API did not see Visibility");
@@ -11046,6 +11048,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     scene.Components().ContentInstances().Set(object.Entity(), kb::scene::ContentInstanceComponent{});
     scene.Components().StreamFocuses().Set(object.Entity(), kb::scene::StreamFocusComponent{});
     scene.Components().WorldBackdrops().Set(object.Entity(), kb::scene::WorldBackdropComponent{});
+    scene.Components().AmbientRadiances().Set(object.Entity(), kb::scene::AmbientRadianceComponent{});
 
     std::size_t fieldsChecked = 0U;
     for (const std::string_view componentName : kb::script::ScriptSceneComponentApi::ComponentNames()) {
@@ -11127,10 +11130,10 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    // The scene catalog now exposes 18 authorable component surfaces. This
+    // The scene catalog now exposes 19 authorable component surfaces. This
     // total includes the stable task components and the complete 3D Radiance
-    // Emitter schema, including its surface-emitter geometry fields.
-    kb::tests::Require(fieldsChecked == 158U, "Script component API generated accessor coverage test did not exercise the expected total field count (158) across all components");
+    // Emitter and Ambient Radiance schemas.
+    kb::tests::Require(fieldsChecked == 174U, "Script component API generated accessor coverage test did not exercise the expected total field count (174) across all components");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -11168,6 +11171,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     scene.Components().ContentInstances().Set(object.Entity(), kb::scene::ContentInstanceComponent{});
     scene.Components().StreamFocuses().Set(object.Entity(), kb::scene::StreamFocusComponent{});
     scene.Components().WorldBackdrops().Set(object.Entity(), kb::scene::WorldBackdropComponent{});
+    scene.Components().AmbientRadiances().Set(object.Entity(), kb::scene::AmbientRadianceComponent{});
 
     std::size_t propertiesChecked = 0U;
     for (const std::string_view componentName : kb::script::ScriptSceneComponentApi::ComponentNames()) {
@@ -11196,7 +11200,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 158U, "LIB-082 raw-pointer audit did not exercise the expected total field count (158) across all components");
+    kb::tests::Require(propertiesChecked == 174U, "LIB-082 raw-pointer audit did not exercise the expected total field count (174) across all components");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {

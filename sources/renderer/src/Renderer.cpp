@@ -58,6 +58,34 @@ void WriteRendererBreadcrumb(std::string_view category, std::string_view message
     return value ? "true" : "false";
 }
 
+[[nodiscard]] SceneRenderLightingConfig ApplyAmbientRadiance(
+    SceneRenderLightingConfig config,
+    const std::optional<SceneRenderAmbientRadiance>& ambientRadiance) noexcept {
+    if (!ambientRadiance.has_value()) return config;
+    const SceneRenderAmbientRadiance& ambient = *ambientRadiance;
+    config.ambientColor = ambient.color;
+    config.ambientIntensity = ambient.intensity;
+    config.environmentZenithColor = ambient.zenithColor;
+    config.environmentGroundColor = ambient.horizonColor;
+    config.environmentDiffuseIntensity = ambient.diffuseIntensity;
+    config.environmentSpecularIntensity = ambient.specularIntensity;
+    switch (ambient.mode) {
+    case SceneRenderAmbientRadianceMode::Constant:
+        config.environmentMode = SceneRenderEnvironmentMode::Constant;
+        break;
+    case SceneRenderAmbientRadianceMode::Gradient:
+    case SceneRenderAmbientRadianceMode::ProceduralSky:
+    case SceneRenderAmbientRadianceMode::CapturedEnvironment:
+    case SceneRenderAmbientRadianceMode::EstimatedEnvironment:
+        config.environmentMode = SceneRenderEnvironmentMode::Hemisphere;
+        break;
+    case SceneRenderAmbientRadianceMode::EnvironmentMap:
+        config.environmentMode = SceneRenderEnvironmentMode::ImageBased;
+        break;
+    }
+    return config;
+}
+
 [[nodiscard]] std::uint32_t PackOpaqueRgba(const std::array<float, 3>& color) noexcept {
     const auto channel = [](float value) noexcept -> std::uint32_t {
         return static_cast<std::uint32_t>(std::clamp(value, 0.0F, 1.0F) * 255.0F + 0.5F);
@@ -674,7 +702,8 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle sync begin");
     particleRenderSynchronizer_->Sync(scene, renderScene, desc.target.viewport.id.value);
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle sync end");
-    SceneRenderLightingConfig effectiveLightingConfig = RendererSceneLightingConfigResolver::Resolve(desc.lightingConfig, defaultSceneLightingConfig_);
+    SceneRenderLightingConfig effectiveLightingConfig = ApplyAmbientRadiance(
+        RendererSceneLightingConfigResolver::Resolve(desc.lightingConfig, defaultSceneLightingConfig_), renderScene.AmbientRadiance());
     if (!desc.shadowPassEnabled) {
         effectiveLightingConfig.shadowsEnabled = false;
     }
@@ -685,6 +714,16 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         frameReferences_.MarkTexture(RuntimeTextureAssetKey{
             .sceneId = scene.Id(),
             .assetId = worldBackdrop->environmentAssetId,
+            .colorSpace = RenderTextureColorSpace::Linear,
+        });
+    }
+    const std::optional<SceneRenderAmbientRadiance>& ambientRadiance = renderScene.AmbientRadiance();
+    if (ambientRadiance.has_value() &&
+        ambientRadiance->mode == SceneRenderAmbientRadianceMode::EnvironmentMap &&
+        ambientRadiance->environmentAssetId != 0U) {
+        frameReferences_.MarkTexture(RuntimeTextureAssetKey{
+            .sceneId = scene.Id(),
+            .assetId = ambientRadiance->environmentAssetId,
             .colorSpace = RenderTextureColorSpace::Linear,
         });
     }

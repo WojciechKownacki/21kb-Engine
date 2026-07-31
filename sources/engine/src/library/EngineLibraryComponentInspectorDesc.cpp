@@ -295,6 +295,29 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether this backdrop participates in rendering." },
             },
         },
+        LibraryComponentInspectorDesc{
+            .componentName = "Ambient Radiance",
+            .displayName = "Ambient Radiance",
+            .category = "Rendering",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "mode", "Mode", "Constant, gradient, image, procedural, captured or estimated ambient contribution." },
+                LibraryComponentInspectorFieldDesc{ "color.x", "Color Red", "Constant ambient red channel." },
+                LibraryComponentInspectorFieldDesc{ "color.y", "Color Green", "Constant ambient green channel." },
+                LibraryComponentInspectorFieldDesc{ "color.z", "Color Blue", "Constant ambient blue channel." },
+                LibraryComponentInspectorFieldDesc{ "horizonColor.x", "Horizon Red", "Lower environment red channel." },
+                LibraryComponentInspectorFieldDesc{ "horizonColor.y", "Horizon Green", "Lower environment green channel." },
+                LibraryComponentInspectorFieldDesc{ "horizonColor.z", "Horizon Blue", "Lower environment blue channel." },
+                LibraryComponentInspectorFieldDesc{ "zenithColor.x", "Zenith Red", "Upper environment red channel." },
+                LibraryComponentInspectorFieldDesc{ "zenithColor.y", "Zenith Green", "Upper environment green channel." },
+                LibraryComponentInspectorFieldDesc{ "zenithColor.z", "Zenith Blue", "Upper environment blue channel." },
+                LibraryComponentInspectorFieldDesc{ "environmentAssetId", "Environment Asset", "Linear 2D equirectangular environment texture reference." },
+                LibraryComponentInspectorFieldDesc{ "intensity", "Intensity", "Overall ambient radiance multiplier." },
+                LibraryComponentInspectorFieldDesc{ "diffuseIntensity", "Diffuse Intensity", "Diffuse indirect-light multiplier." },
+                LibraryComponentInspectorFieldDesc{ "specularIntensity", "Specular Intensity", "Specular indirect-light multiplier." },
+                LibraryComponentInspectorFieldDesc{ "priority", "Priority", "Deterministic selection when multiple ambient policies are enabled." },
+                LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether this policy participates in rendering." },
+            },
+        },
     };
     return kCatalog;
 }

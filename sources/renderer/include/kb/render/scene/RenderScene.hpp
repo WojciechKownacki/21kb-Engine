@@ -170,6 +170,8 @@ public:
     [[nodiscard]] RenderProxyId UpsertLight(const LightRenderProxyDesc& desc);
     void SetWorldBackdrop(std::optional<SceneRenderWorldBackdrop> backdrop) noexcept;
     [[nodiscard]] const std::optional<SceneRenderWorldBackdrop>& WorldBackdrop() const noexcept;
+    void SetAmbientRadiance(std::optional<SceneRenderAmbientRadiance> ambientRadiance) noexcept;
+    [[nodiscard]] const std::optional<SceneRenderAmbientRadiance>& AmbientRadiance() const noexcept;
 
     enum class TransformUpdateOutcome {
         NotFound,
@@ -253,6 +255,7 @@ private:
     CameraProxyMap cameras_;
     LightProxyMap lights_;
     std::optional<SceneRenderWorldBackdrop> worldBackdrop_;
+    std::optional<SceneRenderAmbientRadiance> ambientRadiance_;
     mutable std::vector<SceneRenderDrawGroup> drawGroups_;
     mutable std::unordered_map<DrawGroupKey, std::size_t, DrawGroupKeyHash> drawGroupLookupScratch_;
     std::uint64_t nextProxyId_ = 1U;
