@@ -345,6 +345,17 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether this volume participates in visibility rejection." },
             },
         },
+        LibraryComponentInspectorDesc{
+            .componentName = "Visibility Cell",
+            .displayName = "Visibility Cell",
+            .category = "Rendering",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "membershipMask", "Membership Mask", "Bit mask selecting the members and consumers to which this cell applies." },
+                LibraryComponentInspectorFieldDesc{ "membership", "Membership", "Include or exclude matching members in this region." },
+                LibraryComponentInspectorFieldDesc{ "visibilityOverride", "Visibility Override", "Automatic, forced visible or forced hidden visibility policy." },
+                LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether the cell participates in visibility resolution." },
+            },
+        },
     };
     return kCatalog;
 }

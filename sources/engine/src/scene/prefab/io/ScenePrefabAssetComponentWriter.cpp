@@ -206,6 +206,14 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         WriteVec3(output, "visibilityBlocker.size", blocker.size);
         output << "visibilityBlocker.enabled=" << (blocker.enabled ? 1 : 0) << '\n';
     }
+    output << "visibilityCell=" << (components.visibilityCell.has_value() ? 1 : 0) << '\n';
+    if (components.visibilityCell.has_value()) {
+        const VisibilityCellComponent& cell = *components.visibilityCell;
+        output << "visibilityCell.membershipMask=" << cell.membershipMask << '\n';
+        output << "visibilityCell.membership=" << static_cast<int>(cell.membership) << '\n';
+        output << "visibilityCell.visibilityOverride=" << static_cast<int>(cell.visibilityOverride) << '\n';
+        output << "visibilityCell.enabled=" << (cell.enabled ? 1 : 0) << '\n';
+    }
 
     output << "behaviour=" << (components.behaviour.has_value() ? 1 : 0) << '\n';
     if (components.behaviour.has_value()) {

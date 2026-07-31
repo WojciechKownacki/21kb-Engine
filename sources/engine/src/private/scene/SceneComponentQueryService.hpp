@@ -23,6 +23,7 @@
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
+#include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
 
@@ -83,6 +84,8 @@ public:
     [[nodiscard]] static const SceneDetailSwitchComponent* TryGetDetailSwitch(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasVisibilityBlocker(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const SceneVisibilityBlockerComponent* TryGetVisibilityBlocker(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasVisibilityCell(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const VisibilityCellComponent* TryGetVisibilityCell(const Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static bool HasAudioSource(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const AudioSourceComponent* TryGetAudioSource(const Scene& scene, SceneEntity entity) noexcept;
