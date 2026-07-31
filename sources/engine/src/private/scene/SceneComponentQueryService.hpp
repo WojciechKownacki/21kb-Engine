@@ -25,6 +25,7 @@
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
+#include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
 
@@ -89,6 +90,8 @@ public:
     [[nodiscard]] static const VisibilityCellComponent* TryGetVisibilityCell(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasRegionPortal(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const SceneRegionPortalComponent* TryGetRegionPortal(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasAuxFrame(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const AuxFrameComponent* TryGetAuxFrame(const Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static bool HasAudioSource(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const AudioSourceComponent* TryGetAudioSource(const Scene& scene, SceneEntity entity) noexcept;

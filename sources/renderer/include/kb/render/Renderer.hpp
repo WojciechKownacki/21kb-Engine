@@ -44,6 +44,7 @@ class RenderScene;
 class RenderSurface;
 class RendererScreenCapture;
 class SceneParticleRenderSynchronizer;
+class AuxFrameRenderer;
 class SceneRenderer;
 
 } // namespace kb::render
@@ -255,6 +256,7 @@ private:
     std::unique_ptr<BgfxContext> context_;
     std::unique_ptr<EcsRenderSceneSynchronizer> renderSceneSynchronizer_;
     std::unique_ptr<SceneParticleRenderSynchronizer> particleRenderSynchronizer_;
+    std::unique_ptr<AuxFrameRenderer> auxFrameRenderer_;
     // Lazily created worker pool that parallelizes the columnar render-sync (H6).
     std::unique_ptr<kb::ecs::WorkerPool> renderSyncWorkerPool_;
     RenderSceneStore renderSceneStore_;

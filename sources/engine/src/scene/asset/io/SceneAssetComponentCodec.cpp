@@ -42,6 +42,7 @@ enum SceneNodeComponentBits : std::uint32_t {
       VisibilityBlockerBit = 1U << 23U,
       VisibilityCellBit = 1U << 24U,
       RegionPortalBit = 1U << 25U,
+      AuxFrameBit = 1U << 26U,
 };
 
 constexpr std::uint32_t KnownComponentBits = CameraBit |
@@ -62,7 +63,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit;
 
 [[nodiscard]] std::uint32_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint32_t componentBits = 0;
@@ -92,6 +93,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
       componentBits |= components.visibilityBlocker.has_value() ? VisibilityBlockerBit : 0U;
       componentBits |= components.visibilityCell.has_value() ? VisibilityCellBit : 0U;
       componentBits |= components.regionPortal.has_value() ? RegionPortalBit : 0U;
+      componentBits |= components.auxFrame.has_value() ? AuxFrameBit : 0U;
     return componentBits;
 }
 
@@ -351,6 +353,21 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         if (!input.ReadUInt64(portal.sourceCellNodeStableId) || !input.ReadUInt64(portal.targetCellNodeStableId) || !input.ReadUInt32(portal.purposes) || !input.ReadBool(portal.enabled) || !IsRegionPortalPurposeMaskValid(portal.purposes)) return false;
         output.regionPortal = portal;
     }
+    if ((componentBits & AuxFrameBit) != 0U) {
+        if (fileVersion < 20U) return false;
+        AuxFrameComponent frame{};
+        std::uint32_t mode = 0U;
+        std::uint32_t width = 0U;
+        std::uint32_t height = 0U;
+        if (!input.ReadUInt32(mode) || !input.ReadUInt64(frame.imageTargetId) || !input.ReadUInt32(width) || !input.ReadUInt32(height) ||
+            !SceneAssetPrimitiveCodec::ReadVec3(input, frame.mirrorPlaneNormal) || !input.ReadFloat(frame.mirrorPlaneOffset) || !input.ReadBool(frame.enabled) ||
+            mode > static_cast<std::uint32_t>(AuxFrameMode::Panoramic) || width == 0U || width > UINT16_MAX || height == 0U || height > UINT16_MAX) return false;
+        frame.mode = static_cast<AuxFrameMode>(mode);
+        frame.width = static_cast<std::uint16_t>(width);
+        frame.height = static_cast<std::uint16_t>(height);
+        if (!IsAuxFrameComponentPersistable(frame)) return false;
+        output.auxFrame = frame;
+    }
     return true;
 }
 
@@ -513,6 +530,16 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteUInt64(output, portal.targetCellNodeStableId);
         SceneAssetBinaryIO::WriteUInt32(output, portal.purposes);
         SceneAssetBinaryIO::WriteBool(output, portal.enabled);
+    }
+    if (components.auxFrame.has_value()) {
+        const AuxFrameComponent& frame = *components.auxFrame;
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(frame.mode));
+        SceneAssetBinaryIO::WriteUInt64(output, frame.imageTargetId);
+        SceneAssetBinaryIO::WriteUInt32(output, frame.width);
+        SceneAssetBinaryIO::WriteUInt32(output, frame.height);
+        SceneAssetPrimitiveCodec::WriteVec3(output, frame.mirrorPlaneNormal);
+        SceneAssetBinaryIO::WriteFloat(output, frame.mirrorPlaneOffset);
+        SceneAssetBinaryIO::WriteBool(output, frame.enabled);
     }
 }
 

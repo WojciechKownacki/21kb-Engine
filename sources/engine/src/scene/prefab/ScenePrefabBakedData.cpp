@@ -60,6 +60,7 @@ namespace {
     if (components.visibilityBlocker.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::VisibilityBlocker);
     if (components.visibilityCell.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::VisibilityCell);
     if (components.regionPortal.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::RegionPortal);
+    if (components.auxFrame.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::AuxFrame);
     if (components.behaviour.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Behaviour);
     }
@@ -180,6 +181,7 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
             const ScenePrefabRegionPortalComponent& prefabPortal = *node.components.regionPortal;
             archetype.regionPortals.push_back(SceneRegionPortalComponent{ .purposes = prefabPortal.purposes, .enabled = prefabPortal.enabled });
         }
+        if (node.components.auxFrame.has_value()) archetype.auxFrames.push_back(*node.components.auxFrame);
         if (node.components.behaviour.has_value()) {
             archetype.behaviours.push_back(*node.components.behaviour);
         }

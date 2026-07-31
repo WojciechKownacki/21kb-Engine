@@ -26,6 +26,7 @@
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
+#include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
@@ -120,6 +121,18 @@ void RegisterRegionPortalReflection(kb::ecs::World& world) {
         KB_ECS_FIELD(SceneRegionPortalComponent, targetCell, kb::ecs::ComponentFieldType::Bytes),
         KB_ECS_FIELD(SceneRegionPortalComponent, purposes, kb::ecs::ComponentFieldType::UInt32),
         KB_ECS_FIELD(SceneRegionPortalComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
+void RegisterAuxFrameReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<AuxFrameComponent>(AuxFrameComponent::StableId, {
+        KB_ECS_FIELD(AuxFrameComponent, mode, kb::ecs::ComponentFieldType::Enum32),
+        KB_ECS_FIELD(AuxFrameComponent, imageTargetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(AuxFrameComponent, width, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(AuxFrameComponent, height, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(AuxFrameComponent, mirrorPlaneNormal, kb::ecs::ComponentFieldType::Vec3Float32),
+        KB_ECS_FIELD(AuxFrameComponent, mirrorPlaneOffset, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(AuxFrameComponent, enabled, kb::ecs::ComponentFieldType::Bool),
     }));
 }
 
@@ -250,6 +263,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , visibilityBlockerComponentId_(RegisterSceneComponent<SceneVisibilityBlockerComponent>(world, SceneVisibilityBlockerComponent::StableId))
     , visibilityCellComponentId_(RegisterSceneComponent<VisibilityCellComponent>(world, VisibilityCellComponent::StableId))
     , regionPortalComponentId_(RegisterSceneComponent<SceneRegionPortalComponent>(world, SceneRegionPortalComponent::StableId))
+    , auxFrameComponentId_(RegisterSceneComponent<AuxFrameComponent>(world, AuxFrameComponent::StableId))
     , audioSourceComponentId_(RegisterSceneComponent<AudioSourceComponent>(world, "kb.scene.AudioSourceComponent"))
     , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, "kb.scene.AudioListenerComponent"))
     , animatorComponentId_(RegisterSceneComponent<Animator>(world, "kb.scene.AnimatorComponent"))
@@ -269,6 +283,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     RegisterVisibilityBlockerReflection(world);
     RegisterVisibilityCellReflection(world);
     RegisterRegionPortalReflection(world);
+    RegisterAuxFrameReflection(world);
 }
 
 std::uint64_t SceneComponentRegistry::TransformComponentId() const noexcept {
@@ -331,6 +346,7 @@ std::uint64_t SceneComponentRegistry::DetailSwitchComponentId() const noexcept {
 std::uint64_t SceneComponentRegistry::VisibilityBlockerComponentId() const noexcept { return visibilityBlockerComponentId_; }
 std::uint64_t SceneComponentRegistry::VisibilityCellComponentId() const noexcept { return visibilityCellComponentId_; }
 std::uint64_t SceneComponentRegistry::RegionPortalComponentId() const noexcept { return regionPortalComponentId_; }
+std::uint64_t SceneComponentRegistry::AuxFrameComponentId() const noexcept { return auxFrameComponentId_; }
 
 std::uint64_t SceneComponentRegistry::AudioSourceComponentId() const noexcept {
     return audioSourceComponentId_;

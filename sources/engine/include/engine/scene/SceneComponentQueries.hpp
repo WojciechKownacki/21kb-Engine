@@ -24,6 +24,7 @@
 #include "engine/scene/SceneVisibilityBlockerComponents.hpp"
 #include "engine/scene/SceneVisibilityCellComponents.hpp"
 #include "engine/scene/SceneRegionPortalComponents.hpp"
+#include "engine/scene/SceneAuxFrameComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
 #include "engine/scene/SceneUIDocuments.hpp"
@@ -57,6 +58,7 @@ public:
     [[nodiscard]] SceneVisibilityBlockerComponentQueries VisibilityBlockers() const noexcept;
     [[nodiscard]] SceneVisibilityCellComponentQueries VisibilityCells() const noexcept;
     [[nodiscard]] SceneRegionPortalComponentQueries RegionPortals() const noexcept;
+    [[nodiscard]] SceneAuxFrameComponentQueries AuxFrames() const noexcept;
     [[nodiscard]] SceneAudioSourceComponentQueries AudioSources() const noexcept;
     [[nodiscard]] SceneAudioListenerComponentQueries AudioListeners() const noexcept;
     [[nodiscard]] SceneAnimatorComponentQueries Animators() const noexcept;

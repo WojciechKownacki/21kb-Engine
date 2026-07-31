@@ -19,6 +19,7 @@
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
+#include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
 #include "engine/scene/SceneCharacterControllerComponents.hpp"
@@ -40,6 +41,7 @@
 #include "engine/scene/SceneVisibilityBlockerComponents.hpp"
 #include "engine/scene/SceneVisibilityCellComponents.hpp"
 #include "engine/scene/SceneRegionPortalComponents.hpp"
+#include "engine/scene/SceneAuxFrameComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -236,7 +238,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 23> kComponentNames{
+constexpr std::array<std::string_view, 24> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
@@ -260,6 +262,7 @@ constexpr std::array<std::string_view, 23> kComponentNames{
     "Visibility Blocker",
     "Visibility Cell",
     "Region Portal",
+    "Secondary Frame",
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kRegionShapePropertyDescs{
@@ -345,6 +348,14 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kVisibilityCellPropert
 constexpr std::array<ScriptSceneComponentPropertyDesc, 4> kRegionPortalPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "sourceCell", ScriptValueType::Entity }, ScriptSceneComponentPropertyDesc{ "targetCell", ScriptValueType::Entity },
     ScriptSceneComponentPropertyDesc{ "purposes", ScriptValueType::UInt32 }, ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 9> kSecondaryFramePropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "mode", ScriptValueType::Int }, ScriptSceneComponentPropertyDesc{ "imageTargetId", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "width", ScriptValueType::UInt32 }, ScriptSceneComponentPropertyDesc{ "height", ScriptValueType::UInt32 },
+    ScriptSceneComponentPropertyDesc{ "mirrorPlaneNormal.x", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "mirrorPlaneNormal.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "mirrorPlaneNormal.z", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "mirrorPlaneOffset", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 1> kTagsPropertyDescs{
@@ -846,6 +857,18 @@ constexpr std::array<FieldBinding, 4> kRegionPortalFields{
     KB_BOOL(kb::scene::SceneRegionPortalComponent, enabled),
 };
 
+constexpr std::array<FieldBinding, 9> kSecondaryFrameFields{
+    FieldBinding{ "mode", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AuxFrameComponent*>(component)->mode) }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::AuxFrameMode::Panoramic)) return false; static_cast<kb::scene::AuxFrameComponent*>(component)->mode = static_cast<kb::scene::AuxFrameMode>(value.AsInt()); return true; } },
+    FieldBinding{ "imageTargetId", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AuxFrameComponent*>(component)->imageTargetId, ScriptValueType::Hash }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::AuxFrameComponent*>(component)->imageTargetId = value.AsUInt64(); return true; } },
+    FieldBinding{ "width", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<std::uint32_t>(static_cast<const kb::scene::AuxFrameComponent*>(component)->width) }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::UInt32 || value.AsUInt32() == 0U || value.AsUInt32() > UINT16_MAX) return false; static_cast<kb::scene::AuxFrameComponent*>(component)->width = static_cast<std::uint16_t>(value.AsUInt32()); return true; } },
+    FieldBinding{ "height", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<std::uint32_t>(static_cast<const kb::scene::AuxFrameComponent*>(component)->height) }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::UInt32 || value.AsUInt32() == 0U || value.AsUInt32() > UINT16_MAX) return false; static_cast<kb::scene::AuxFrameComponent*>(component)->height = static_cast<std::uint16_t>(value.AsUInt32()); return true; } },
+    FieldBinding{ "mirrorPlaneNormal.x", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AuxFrameComponent*>(component)->mirrorPlaneNormal.x }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat())) return false; static_cast<kb::scene::AuxFrameComponent*>(component)->mirrorPlaneNormal.x = value.AsFloat(); return true; } },
+    FieldBinding{ "mirrorPlaneNormal.y", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AuxFrameComponent*>(component)->mirrorPlaneNormal.y }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat())) return false; static_cast<kb::scene::AuxFrameComponent*>(component)->mirrorPlaneNormal.y = value.AsFloat(); return true; } },
+    FieldBinding{ "mirrorPlaneNormal.z", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AuxFrameComponent*>(component)->mirrorPlaneNormal.z }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat())) return false; static_cast<kb::scene::AuxFrameComponent*>(component)->mirrorPlaneNormal.z = value.AsFloat(); return true; } },
+    FieldBinding{ "mirrorPlaneOffset", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AuxFrameComponent*>(component)->mirrorPlaneOffset }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat())) return false; static_cast<kb::scene::AuxFrameComponent*>(component)->mirrorPlaneOffset = value.AsFloat(); return true; } },
+    KB_BOOL(kb::scene::AuxFrameComponent, enabled),
+};
+
 #undef KB_BOOL
 #undef KB_INT
 #undef KB_UINT32
@@ -929,6 +952,7 @@ void MarkDetailSwitchModified(kb::scene::Scene& scene, kb::scene::SceneEntity en
 void MarkVisibilityBlockerModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().VisibilityBlockers().MarkModified(entity); }
 void MarkVisibilityCellModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().VisibilityCells().MarkModified(entity); }
 void MarkRegionPortalModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().RegionPortals().MarkModified(entity); }
+void MarkSecondaryFrameModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().AuxFrames().MarkModified(entity); }
 
 [[nodiscard]] ComponentAccess AccessComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
     if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
@@ -1026,6 +1050,10 @@ void MarkRegionPortalModified(kb::scene::Scene& scene, kb::scene::SceneEntity en
         kb::scene::SceneRegionPortalComponent* component = scene.Components().RegionPortals().TryGet(entity);
         return ComponentAccess{ component, component, kRegionPortalFields, &MarkRegionPortalModified };
     }
+    if (componentName == "Secondary Frame") {
+        kb::scene::AuxFrameComponent* component = scene.Components().AuxFrames().TryGet(entity);
+        return ComponentAccess{ component, component, kSecondaryFrameFields, &MarkSecondaryFrameModified };
+    }
     return {};
 }
 
@@ -1054,6 +1082,7 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "Visibility Blocker") return kVisibilityBlockerPropertyDescs;
     if (componentName == "Visibility Cell") return kVisibilityCellPropertyDescs;
     if (componentName == "Region Portal") return kRegionPortalPropertyDescs;
+    if (componentName == "Secondary Frame") return kSecondaryFramePropertyDescs;
     if (componentName == "Camera") {
         return kCameraPropertyDescs;
     }
@@ -1138,6 +1167,18 @@ ScriptSceneComponentMutationResult ScriptSceneComponentApi::SetProperty(
             (propertyName == "sourceCell" && cell == portal.targetCell) ||
             (propertyName == "targetCell" && cell == portal.sourceCell)) {
             return ScriptSceneComponentMutationResult{ .error = "portal cell must reference a distinct live Visibility Cell" };
+        }
+    }
+
+    if (componentName == "Secondary Frame") {
+        const kb::scene::AuxFrameComponent& frame = *static_cast<const kb::scene::AuxFrameComponent*>(component.immutable);
+        kb::scene::AuxFrameComponent candidate = frame;
+        if (!field->write(&candidate, value)) {
+            return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
+        }
+        if (!kb::scene::IsAuxFrameComponentPersistable(candidate) ||
+            (candidate.enabled && !kb::scene::IsAuxFrameComponentValid(candidate))) {
+            return ScriptSceneComponentMutationResult{ .error = "Secondary Frame values must remain valid before the frame can be enabled" };
         }
     }
 

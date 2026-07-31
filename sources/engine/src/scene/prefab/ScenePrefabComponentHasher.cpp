@@ -107,6 +107,17 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::Mix(hash, components.regionPortal->purposes);
         ScenePrefabHashBuilder::Mix(hash, components.regionPortal->enabled ? 1U : 0U);
     }
+    ScenePrefabHashBuilder::Mix(hash, components.auxFrame.has_value() ? 1U : 0U);
+    if (components.auxFrame.has_value()) {
+        const AuxFrameComponent& frame = *components.auxFrame;
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(frame.mode));
+        ScenePrefabHashBuilder::Mix(hash, frame.imageTargetId);
+        ScenePrefabHashBuilder::Mix(hash, frame.width);
+        ScenePrefabHashBuilder::Mix(hash, frame.height);
+        ScenePrefabHashBuilder::MixVec3(hash, frame.mirrorPlaneNormal);
+        ScenePrefabHashBuilder::MixFloat(hash, frame.mirrorPlaneOffset);
+        ScenePrefabHashBuilder::Mix(hash, frame.enabled ? 1U : 0U);
+    }
 
     ScenePrefabHashBuilder::Mix(hash, components.tags.has_value() ? 1U : 0U);
     if (components.tags.has_value()) {
