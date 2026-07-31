@@ -20,7 +20,8 @@ struct SceneDocument {
     // v16: SceneDetailSwitchComponent persists coordinated mesh LOD policy.
     // v17: SceneVisibilityBlockerComponent persists non-renderable culling geometry.
     // v18: VisibilityCellComponent persists region-membership visibility policy.
-    static constexpr std::uint32_t CurrentFileVersion = 18U;
+    // v19: SceneRegionPortalComponent persists stable source/target cell links.
+    static constexpr std::uint32_t CurrentFileVersion = 19U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

@@ -52,6 +52,7 @@
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
+#include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/script/LuaScriptBackend.hpp"
 #include "engine/script/NativeScriptBuildPipeline.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
@@ -10890,6 +10891,11 @@ void RunScriptSceneComponentApiTest() {
     scene.Components().DetailSwitches().Set(object.Entity(), kb::scene::SceneDetailSwitchComponent{});
     scene.Components().VisibilityBlockers().Set(object.Entity(), kb::scene::SceneVisibilityBlockerComponent{});
     scene.Components().VisibilityCells().Set(object.Entity(), kb::scene::VisibilityCellComponent{});
+    const kb::scene::SceneObject sourceCell = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Script API Source Cell" });
+    const kb::scene::SceneObject targetCell = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Script API Target Cell" });
+    scene.Components().VisibilityCells().Set(sourceCell.Entity(), kb::scene::VisibilityCellComponent{});
+    scene.Components().VisibilityCells().Set(targetCell.Entity(), kb::scene::VisibilityCellComponent{});
+    scene.Components().RegionPortals().Set(object.Entity(), kb::scene::SceneRegionPortalComponent{ .sourceCell = sourceCell.Entity(), .targetCell = targetCell.Entity() });
 
     kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Transform"), "Script component API did not see Transform");
     kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Visibility"), "Script component API did not see Visibility");
@@ -10910,6 +10916,16 @@ void RunScriptSceneComponentApiTest() {
         "Script component API did not expose Visibility Blocker property reflection");
     kb::tests::Require(kb::script::ScriptSceneComponentApi::ComponentProperties("Visibility Cell").size() == 4U,
         "Script component API did not expose Visibility Cell property reflection");
+    kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Region Portal") &&
+                            kb::script::ScriptSceneComponentApi::ComponentProperties("Region Portal").size() == 4U,
+        "Script component API did not expose Region Portal property reflection");
+
+    const kb::script::ScriptSceneComponentMutationResult setPortalSource = kb::script::ScriptSceneComponentApi::SetProperty(
+        scene, object.Entity(), "Region Portal", "sourceCell", kb::script::ScriptValue{ sourceCell.Entity().Id(), kb::script::ScriptValueType::Entity });
+    kb::tests::Require(setPortalSource.succeeded, "Script component API did not set Region Portal.sourceCell");
+    const kb::script::ScriptSceneComponentMutationResult invalidPortalTarget = kb::script::ScriptSceneComponentApi::SetProperty(
+        scene, object.Entity(), "Region Portal", "targetCell", kb::script::ScriptValue{ sourceCell.Entity().Id(), kb::script::ScriptValueType::Entity });
+    kb::tests::Require(!invalidPortalTarget.succeeded, "Script component API accepted an identical Region Portal target cell");
 
     const kb::script::ScriptSceneComponentMutationResult setX = kb::script::ScriptSceneComponentApi::SetProperty(
         scene,
@@ -11062,6 +11078,11 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     scene.Components().DetailSwitches().Set(object.Entity(), kb::scene::SceneDetailSwitchComponent{});
     scene.Components().VisibilityBlockers().Set(object.Entity(), kb::scene::SceneVisibilityBlockerComponent{});
     scene.Components().VisibilityCells().Set(object.Entity(), kb::scene::VisibilityCellComponent{});
+    const kb::scene::SceneObject sourceCell = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Generated Accessor Source Cell" });
+    const kb::scene::SceneObject targetCell = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Generated Accessor Target Cell" });
+    scene.Components().VisibilityCells().Set(sourceCell.Entity(), kb::scene::VisibilityCellComponent{});
+    scene.Components().VisibilityCells().Set(targetCell.Entity(), kb::scene::VisibilityCellComponent{});
+    scene.Components().RegionPortals().Set(object.Entity(), kb::scene::SceneRegionPortalComponent{ .sourceCell = sourceCell.Entity(), .targetCell = targetCell.Entity() });
 
     std::size_t fieldsChecked = 0U;
     for (const std::string_view componentName : kb::script::ScriptSceneComponentApi::ComponentNames()) {
@@ -11102,6 +11123,11 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
                 break;
             case kb::script::ScriptValueType::Hash:
                 validValue = kb::script::ScriptValue{ std::uint64_t{ 17U }, kb::script::ScriptValueType::Hash };
+                break;
+            case kb::script::ScriptValueType::Entity:
+                validValue = kb::script::ScriptValue{
+                    property.name == "sourceCell" ? sourceCell.Entity().Id() : targetCell.Entity().Id(),
+                    kb::script::ScriptValueType::Entity };
                 break;
             case kb::script::ScriptValueType::Float:
                 if (componentName == "Detail Switch" && property.name == "promoteCoverage") {
@@ -11151,10 +11177,10 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    // The scene catalog now exposes 22 authorable component surfaces. This
+    // The scene catalog now exposes 23 authorable component surfaces. This
     // total includes the stable task components and the complete 3D Radiance
     // Emitter, Ambient Radiance and Detail Switch schemas.
-    kb::tests::Require(fieldsChecked == 191U, "Script component API generated accessor coverage test did not exercise the expected total field count (191) across all components");
+    kb::tests::Require(fieldsChecked == 195U, "Script component API generated accessor coverage test did not exercise the expected total field count (195) across all components");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -11196,6 +11222,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     scene.Components().DetailSwitches().Set(object.Entity(), kb::scene::SceneDetailSwitchComponent{});
     scene.Components().VisibilityBlockers().Set(object.Entity(), kb::scene::SceneVisibilityBlockerComponent{});
     scene.Components().VisibilityCells().Set(object.Entity(), kb::scene::VisibilityCellComponent{});
+    scene.Components().RegionPortals().Set(object.Entity(), kb::scene::SceneRegionPortalComponent{});
 
     std::size_t propertiesChecked = 0U;
     for (const std::string_view componentName : kb::script::ScriptSceneComponentApi::ComponentNames()) {
@@ -11206,6 +11233,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
                 property.type == kb::script::ScriptValueType::Int ||
                 property.type == kb::script::ScriptValueType::UInt32 ||
                 property.type == kb::script::ScriptValueType::Hash ||
+                property.type == kb::script::ScriptValueType::Entity ||
                 property.type == kb::script::ScriptValueType::Float ||
                 property.type == kb::script::ScriptValueType::String;
             kb::tests::Require(isNarrowValueType, ("Script component property " + fieldLabel + " uses a ScriptValueType wide enough to carry a raw pointer's bit pattern — LIB-082 requires component fields to stay within Bool/Int/Float").c_str());
@@ -11224,7 +11252,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 191U, "LIB-082 raw-pointer audit did not exercise the expected total field count (191) across all components");
+    kb::tests::Require(propertiesChecked == 195U, "LIB-082 raw-pointer audit did not exercise the expected total field count (195) across all components");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {

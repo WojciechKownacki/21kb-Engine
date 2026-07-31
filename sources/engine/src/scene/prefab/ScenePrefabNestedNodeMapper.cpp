@@ -38,24 +38,30 @@ ScenePrefabNestedNodeMapping ScenePrefabNestedNodeMapper::Append(ScenePrefab& ou
     // composed prefab is validated or instantiated.
     for (std::uint32_t nestedIndex = 0; nestedIndex < static_cast<std::uint32_t>(nestedNodes.size()); ++nestedIndex) {
         ScenePrefabNodeDesc* outputNode = output.TryGetMutableNode(nestedToOutput[nestedIndex]);
-        if (outputNode == nullptr || !outputNode->components.joint.has_value()) {
+        if (outputNode == nullptr) {
             continue;
         }
-        ScenePrefabJointComponent& joint = *outputNode->components.joint;
-        if (joint.connectedNodeStableId == ScenePrefabJointComponent::InvalidConnectedNodeStableId) {
-            continue;
+        if (outputNode->components.joint.has_value()) {
+            ScenePrefabJointComponent& joint = *outputNode->components.joint;
+            if (joint.connectedNodeStableId != ScenePrefabJointComponent::InvalidConnectedNodeStableId) {
+                const std::uint32_t targetNestedIndex = nestedPrefab.FindNodeIndexByStableId(joint.connectedNodeStableId);
+                if (targetNestedIndex != ScenePrefabNodeDesc::NoParent && targetNestedIndex < nestedToOutput.size()) {
+                    const ScenePrefabNodeDesc* targetNode = output.TryGetNode(nestedToOutput[targetNestedIndex]);
+                    if (targetNode != nullptr) joint.connectedNodeStableId = targetNode->stableId;
+                }
+            }
         }
-        const std::uint32_t targetNestedIndex = nestedPrefab.FindNodeIndexByStableId(joint.connectedNodeStableId);
-        if (targetNestedIndex == ScenePrefabNodeDesc::NoParent || targetNestedIndex >= nestedToOutput.size()) {
-            // Leave an invalid id intact. ScenePrefabValidator rejects the
-            // malformed asset rather than silently changing it into world.
-            continue;
+        if (outputNode->components.regionPortal.has_value()) {
+            ScenePrefabRegionPortalComponent& portal = *outputNode->components.regionPortal;
+            const std::uint32_t sourceIndex = nestedPrefab.FindNodeIndexByStableId(portal.sourceCellNodeStableId);
+            const std::uint32_t targetIndex = nestedPrefab.FindNodeIndexByStableId(portal.targetCellNodeStableId);
+            if (sourceIndex == ScenePrefabNodeDesc::NoParent || targetIndex == ScenePrefabNodeDesc::NoParent || sourceIndex >= nestedToOutput.size() || targetIndex >= nestedToOutput.size()) continue;
+            const ScenePrefabNodeDesc* sourceNode = output.TryGetNode(nestedToOutput[sourceIndex]);
+            const ScenePrefabNodeDesc* targetNode = output.TryGetNode(nestedToOutput[targetIndex]);
+            if (sourceNode == nullptr || targetNode == nullptr) continue;
+            portal.sourceCellNodeStableId = sourceNode->stableId;
+            portal.targetCellNodeStableId = targetNode->stableId;
         }
-        const ScenePrefabNodeDesc* targetNode = output.TryGetNode(nestedToOutput[targetNestedIndex]);
-        if (targetNode == nullptr) {
-            continue;
-        }
-        joint.connectedNodeStableId = targetNode->stableId;
     }
 
     return mapping;

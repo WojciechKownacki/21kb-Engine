@@ -273,6 +273,19 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseRegionPortal(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "regionPortal", present)) return false;
+    if (!present) return true;
+    ScenePrefabRegionPortalComponent portal{};
+    if (!ParseField(fields, "regionPortal.sourceCellNodeStableId", portal.sourceCellNodeStableId) ||
+        !ParseField(fields, "regionPortal.targetCellNodeStableId", portal.targetCellNodeStableId) ||
+        !ParseField(fields, "regionPortal.purposes", portal.purposes) || !ParseOptionalBool(fields, "regionPortal.enabled", portal.enabled) ||
+        !IsRegionPortalPurposeMaskValid(portal.purposes)) return false;
+    components.regionPortal = portal;
+    return true;
+}
+
 [[nodiscard]] bool ParseCharacterController(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool hasCharacterController = false;
     if (!ParseOptionalComponentFlag(fields, "characterController", hasCharacterController)) {
@@ -463,6 +476,7 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseDetailSwitch(fields, components)
         && ParseVisibilityBlocker(fields, components)
         && ParseVisibilityCell(fields, components)
+        && ParseRegionPortal(fields, components)
         && ParseCharacterController(fields, components)
         && ParseJoint(fields, components)
         && ScenePrefabAssetTagsParser::Parse(fields, components)

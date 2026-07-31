@@ -16,6 +16,7 @@ namespace {
         InspectorComponentTile{ .id = "Detail Switch", .category = "Rendering", .label = "Detail Switch", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "Visibility Blocker", .category = "Rendering", .label = "Visibility Blocker", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "Visibility Cell", .category = "Rendering", .label = "Visibility Cell", .icon = HeroIconKind::Cube },
+        InspectorComponentTile{ .id = "Region Portal", .category = "Rendering", .label = "Region Portal", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "Tags", .category = "Scene", .label = "Object Classification", .icon = HeroIconKind::AdjustmentsHorizontal },
         InspectorComponentTile{ .id = "RegionShape", .category = "Scene", .label = "Region Shape", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "GuideCurve", .category = "Scene", .label = "Guide Curve", .icon = HeroIconKind::Cube },

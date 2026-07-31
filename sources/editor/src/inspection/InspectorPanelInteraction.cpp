@@ -14,6 +14,7 @@
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
+#include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -1177,6 +1178,10 @@ template <typename Integer>
     return property >= InspectorPropertyId::VisibilityCellMembershipMask && property <= InspectorPropertyId::VisibilityCellEnabled;
 }
 
+[[nodiscard]] bool IsRegionPortalProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::RegionPortalSourceCell && property <= InspectorPropertyId::RegionPortalEnabled;
+}
+
 template <typename Mutator>
 [[nodiscard]] bool EditNavAgent(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
     if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
@@ -1291,6 +1296,16 @@ template <typename Mutator>
     kb::scene::VisibilityCellComponent* cell = sceneContext.Scene().Components().VisibilityCells().TryGet(entity);
     if (cell == nullptr || !mutator(*cell)) { sceneContext.CancelSceneEditTransaction(); return false; }
     sceneContext.Scene().Components().VisibilityCells().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditRegionPortal(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::SceneRegionPortalComponent* portal = sceneContext.Scene().Components().RegionPortals().TryGet(entity);
+    if (portal == nullptr || !mutator(*portal)) { sceneContext.CancelSceneEditTransaction(); return false; }
+    sceneContext.Scene().Components().RegionPortals().MarkModified(entity);
     static_cast<void>(sceneContext.CommitSceneEditTransaction());
     return true;
 }
@@ -1583,6 +1598,26 @@ template <typename Mutator>
     return true;
 }
 
+[[nodiscard]] bool HandleRegionPortalClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::SceneRegionPortalComponent* portal = sceneContext.Scene().Components().RegionPortals().TryGet(entity);
+    if (portal == nullptr) return false;
+    if (hit.property == InspectorPropertyId::RegionPortalEnabled) return EditRegionPortal(sceneContext, entity, "Toggle Region Portal", [](kb::scene::SceneRegionPortalComponent& value) { value.enabled = !value.enabled; return true; });
+    switch (hit.property) {
+    case InspectorPropertyId::RegionPortalSourceCell:
+        sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(portal->sourceCell.Id()));
+        break;
+    case InspectorPropertyId::RegionPortalTargetCell:
+        sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(portal->targetCell.Id()));
+        break;
+    case InspectorPropertyId::RegionPortalPurposes:
+        sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(portal->purposes));
+        break;
+    default:
+        break;
+    }
+    return true;
+}
+
 [[nodiscard]] bool ApplyNavAgentText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
     float value = 0.0F;
     if (property == InspectorPropertyId::NavAgentAreaMask) {
@@ -1831,6 +1866,27 @@ template <typename Mutator>
         value = candidate;
         return true;
     });
+}
+
+[[nodiscard]] bool ApplyRegionPortalText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    if (property == InspectorPropertyId::RegionPortalPurposes) {
+        std::uint32_t purposes = 0U;
+        const auto result = std::from_chars(text.data(), text.data() + text.size(), purposes);
+        if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || !kb::scene::IsRegionPortalPurposeMaskValid(purposes)) return false;
+        return EditRegionPortal(sceneContext, entity, "Edit Region Portal", [purposes](kb::scene::SceneRegionPortalComponent& value) { value.purposes = purposes; return true; });
+    }
+
+    if (property != InspectorPropertyId::RegionPortalSourceCell && property != InspectorPropertyId::RegionPortalTargetCell) return false;
+    std::uint64_t cellId = 0U;
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), cellId);
+    const kb::scene::SceneEntity cell{ cellId };
+    if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || cell == entity ||
+        !sceneContext.Scene().Entities().IsAlive(cell) || !sceneContext.Scene().Components().VisibilityCells().Has(cell)) return false;
+    const kb::scene::SceneRegionPortalComponent* portal = sceneContext.Scene().Components().RegionPortals().TryGet(entity);
+    if (portal == nullptr) return false;
+    return property == InspectorPropertyId::RegionPortalSourceCell
+        ? sceneContext.SetRegionPortalCells(entity, cell, portal->targetCell)
+        : sceneContext.SetRegionPortalCells(entity, portal->sourceCell, cell);
 }
 
 [[nodiscard]] bool ToggleAudioProperty(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property) {
@@ -2185,6 +2241,11 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                     sceneContext.Scene().Components().VisibilityCells().Remove(entity);
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
+            } else if (hit.section == InspectorSectionId::RegionPortal && sceneContext.Scene().Components().RegionPortals().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Region Portal")) {
+                    sceneContext.Scene().Components().RegionPortals().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
             } else if (const std::optional<PhysicsComponentKind> kind = PhysicsKindForSection(hit.section); kind.has_value()) {
                 static_cast<void>(sceneContext.RemovePhysicsComponent(entity, *kind));
             }
@@ -2275,6 +2336,7 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         return HandleVisibilityBlockerClick(sceneContext, entity, hit);
     }
     if (hit.section == InspectorSectionId::VisibilityCell) return HandleVisibilityCellClick(sceneContext, entity, hit);
+    if (hit.section == InspectorSectionId::RegionPortal) return HandleRegionPortalClick(sceneContext, entity, hit);
     if (hit.section == InspectorSectionId::Tags &&
         hit.kind == InspectorHitKind::TextField &&
         hit.property == InspectorPropertyId::TagsText) {
@@ -2586,6 +2648,11 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         }
         if (sceneContext.Scene().Entities().IsAlive(entity) && IsVisibilityCellProperty(inspector.EditedProperty())) {
             static_cast<void>(ApplyVisibilityCellText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) && IsRegionPortalProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyRegionPortalText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
             inspector.EndTextEdit();
             return true;
         }

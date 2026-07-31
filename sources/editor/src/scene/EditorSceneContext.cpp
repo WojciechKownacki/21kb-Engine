@@ -18,6 +18,7 @@
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
+#include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
@@ -7132,6 +7133,28 @@ bool EditorSceneContext::SetEntityVisibilityMask(kb::scene::SceneEntity entity, 
     });
 }
 
+bool EditorSceneContext::SetRegionPortalCells(
+    kb::scene::SceneEntity entity,
+    kb::scene::SceneEntity sourceCell,
+    kb::scene::SceneEntity targetCell) {
+    const bool sourceValid = sourceCell.IsValid();
+    const bool targetValid = targetCell.IsValid();
+    if (!scene_->Entities().IsAlive(entity) || !scene_->Components().RegionPortals().Has(entity) ||
+        (sourceValid && (!scene_->Entities().IsAlive(sourceCell) || !scene_->Components().VisibilityCells().Has(sourceCell))) ||
+        (targetValid && (!scene_->Entities().IsAlive(targetCell) || !scene_->Components().VisibilityCells().Has(targetCell))) ||
+        entity == sourceCell || entity == targetCell || (sourceValid && targetValid && sourceCell == targetCell)) {
+        return false;
+    }
+    return ExecuteSceneCommand("Set Region Portal Cells", [this, entity, sourceCell, targetCell]() {
+        kb::scene::SceneRegionPortalComponent* portal = scene_->Components().RegionPortals().TryGet(entity);
+        if (portal == nullptr) return false;
+        portal->sourceCell = sourceCell;
+        portal->targetCell = targetCell;
+        scene_->Components().RegionPortals().MarkModified(entity);
+        return true;
+    });
+}
+
 std::vector<std::string> EditorSceneContext::ProjectPhysicsLayersAssetOptions() const {
     std::vector<std::string> options{ std::string{} };
     for (const kb::assets::AssetMetadata& metadata : scene_->Assets().Manager().Registry().All()) {
@@ -8183,6 +8206,17 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
         return ExecuteSceneCommand("Add Visibility Cell Component", [this, entity]() {
             if (!scene_->Components().RegionShapes().Has(entity)) scene_->Components().RegionShapes().Set(entity, kb::scene::RegionShapeComponent{});
             scene_->Components().VisibilityCells().Set(entity, kb::scene::VisibilityCellComponent{});
+            return true;
+        });
+    }
+    if (componentId == "Region Portal") {
+        if (scene_->Components().RegionPortals().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Region Portal component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Region Portal Component", [this, entity]() {
+            if (!scene_->Components().RegionShapes().Has(entity)) scene_->Components().RegionShapes().Set(entity, kb::scene::RegionShapeComponent{});
+            scene_->Components().RegionPortals().Set(entity, kb::scene::SceneRegionPortalComponent{});
             return true;
         });
     }

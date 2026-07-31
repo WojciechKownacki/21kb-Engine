@@ -188,6 +188,7 @@ void RunAudioComponentCatalogTest() {
     kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::Find("AudioListener") != nullptr, "Audio Listener component id should resolve");
     kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::Find("Visibility Blocker") != nullptr, "Visibility Blocker component id should resolve");
     kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::Find("Visibility Cell") != nullptr, "Visibility Cell component id should resolve");
+    kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::Find("Region Portal") != nullptr, "Region Portal component id should resolve");
 }
 
 void RunObjectClassificationCatalogTest() {

@@ -80,6 +80,12 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     }
     if (const SceneVisibilityBlockerComponent* blocker = sceneComponents.VisibilityBlockers().TryGet(entity)) components.visibilityBlocker = *blocker;
     if (const VisibilityCellComponent* cell = sceneComponents.VisibilityCells().TryGet(entity)) components.visibilityCell = *cell;
+    if (const SceneRegionPortalComponent* portal = sceneComponents.RegionPortals().TryGet(entity)) {
+        components.regionPortal = ScenePrefabRegionPortalComponent{
+            .sourceCellNodeStableId = portal->sourceCell.Id(), .targetCellNodeStableId = portal->targetCell.Id(),
+            .purposes = portal->purposes, .enabled = portal->enabled,
+        };
+    }
 
     if (const BehaviourComponent* behaviour = sceneComponents.Behaviours().TryGet(entity)) {
         components.behaviour = *behaviour;

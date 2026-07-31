@@ -356,6 +356,17 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether the cell participates in visibility resolution." },
             },
         },
+        LibraryComponentInspectorDesc{
+            .componentName = "Region Portal",
+            .displayName = "Region Portal",
+            .category = "Rendering",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "sourceCell", "Source Cell", "Visibility Cell from which traversal is allowed." },
+                LibraryComponentInspectorFieldDesc{ "targetCell", "Target Cell", "Visibility Cell reached by this one-way portal." },
+                LibraryComponentInspectorFieldDesc{ "purposes", "Purposes", "Bit mask for visibility, streaming and simulation traversal." },
+                LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether the portal participates in traversal." },
+            },
+        },
     };
     return kCatalog;
 }

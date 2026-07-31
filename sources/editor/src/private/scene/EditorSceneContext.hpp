@@ -291,6 +291,10 @@ public:
     [[nodiscard]] bool ToggleEntityVisibility(kb::scene::SceneEntity entity);
     [[nodiscard]] bool CycleEntityVisibilityMode(kb::scene::SceneEntity entity);
     [[nodiscard]] bool SetEntityVisibilityMask(kb::scene::SceneEntity entity, std::uint32_t mask);
+    [[nodiscard]] bool SetRegionPortalCells(
+        kb::scene::SceneEntity entity,
+        kb::scene::SceneEntity sourceCell,
+        kb::scene::SceneEntity targetCell);
     [[nodiscard]] kb::scene::SceneEntity CreateHierarchyObject();
     [[nodiscard]] kb::scene::SceneEntity CreateLightObject(kb::scene::LightKind kind);
     [[nodiscard]] bool ReparentEntity(kb::scene::SceneEntity child, kb::scene::SceneEntity parent);

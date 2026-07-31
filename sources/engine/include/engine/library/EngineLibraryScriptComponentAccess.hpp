@@ -21,6 +21,7 @@
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
+#include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
@@ -388,6 +389,14 @@ struct ScriptComponentAccess<kb::scene::VisibilityCellComponent> {
     [[nodiscard]] static kb::scene::VisibilityCellComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().VisibilityCells().TryGet(entity); }
     static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::VisibilityCellComponent& value) { scene.Components().VisibilityCells().Set(entity, value); }
     [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().VisibilityCells().Has(entity)) return false; scene.Components().VisibilityCells().Remove(entity); return true; }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::SceneRegionPortalComponent> {
+    [[nodiscard]] static const kb::scene::SceneRegionPortalComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().RegionPortals().TryGet(entity); }
+    [[nodiscard]] static kb::scene::SceneRegionPortalComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().RegionPortals().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::SceneRegionPortalComponent& value) { scene.Components().RegionPortals().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().RegionPortals().Has(entity)) return false; scene.Components().RegionPortals().Remove(entity); return true; }
 };
 
 template <typename Component>

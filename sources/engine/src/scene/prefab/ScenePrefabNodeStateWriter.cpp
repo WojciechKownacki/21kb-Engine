@@ -235,6 +235,7 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , detailSwitches(scene.Components().DetailSwitches())
     , visibilityBlockers(scene.Components().VisibilityBlockers())
     , visibilityCells(scene.Components().VisibilityCells())
+    , regionPortals(scene.Components().RegionPortals())
     , behaviours(scene.Components().Behaviours())
     , audioSources(scene.Components().AudioSources())
     , audioListeners(scene.Components().AudioListeners())
@@ -307,6 +308,10 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     WriteOptionalComponent(context.detailSwitches, entity, node.components.detailSwitch);
     WriteOptionalComponent(context.visibilityBlockers, entity, node.components.visibilityBlocker);
     WriteOptionalComponent(context.visibilityCells, entity, node.components.visibilityCell);
+    // Portal references are resolved only after all prefab nodes exist; this
+    // writer owns the removal case while the synchronizer performs that final
+    // graph-wide resolution for present portals.
+    if (!node.components.regionPortal.has_value()) context.regionPortals.Remove(entity);
     if (!componentMask.available || !componentMask.matches || node.components.behaviour.has_value()) {
         WriteOptionalComponent(context.behaviours, entity, node.components.behaviour);
     }

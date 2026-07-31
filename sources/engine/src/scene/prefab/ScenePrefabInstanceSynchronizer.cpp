@@ -155,7 +155,7 @@ void DestroyRemovedObjects(Scene& scene, std::span<const SceneObject> oldObjects
     return stableObjects;
 }
 
-[[nodiscard]] bool ResolveJointReferences(Scene& scene, const ScenePrefab& prefab, std::span<const SceneObject> objects) {
+[[nodiscard]] bool ResolveEntityReferences(Scene& scene, const ScenePrefab& prefab, std::span<const SceneObject> objects) {
     const std::span<const ScenePrefabNodeDesc> nodes = prefab.Nodes();
     if (nodes.size() != objects.size()) {
         return false;
@@ -171,26 +171,45 @@ void DestroyRemovedObjects(Scene& scene, std::span<const SceneObject> oldObjects
         const std::optional<ScenePrefabJointComponent>& prefabJoint = nodes[nodeIndex].components.joint;
         if (!prefabJoint.has_value()) {
             components.Joints().Remove(owner.Entity());
-            continue;
+        } else {
+            SceneEntity connectedEntity{};
+            if (prefabJoint->connectedNodeStableId != ScenePrefabJointComponent::InvalidConnectedNodeStableId) {
+                const auto connected = objectsByStableId.find(prefabJoint->connectedNodeStableId);
+                if (connected == objectsByStableId.end() || !connected->second.IsValid() || !scene.Entities().IsAlive(connected->second)) {
+                    return false;
+                }
+                connectedEntity = connected->second.Entity();
+            }
+            components.Joints().Set(owner.Entity(), JointComponent{
+                .type = prefabJoint->type,
+                .connectedEntity = connectedEntity,
+                .anchor = prefabJoint->anchor,
+                .connectedAnchor = prefabJoint->connectedAnchor,
+                .axis = prefabJoint->axis,
+                .minLimit = prefabJoint->minLimit,
+                .maxLimit = prefabJoint->maxLimit,
+                .enableLimit = prefabJoint->enableLimit,
+            });
         }
 
-        SceneEntity connectedEntity{};
-        if (prefabJoint->connectedNodeStableId != ScenePrefabJointComponent::InvalidConnectedNodeStableId) {
-            const auto connected = objectsByStableId.find(prefabJoint->connectedNodeStableId);
-            if (connected == objectsByStableId.end() || !connected->second.IsValid() || !scene.Entities().IsAlive(connected->second)) {
-                return false;
-            }
-            connectedEntity = connected->second.Entity();
+        const std::optional<ScenePrefabRegionPortalComponent>& prefabPortal = nodes[nodeIndex].components.regionPortal;
+        if (!prefabPortal.has_value()) {
+            components.RegionPortals().Remove(owner.Entity());
+            continue;
         }
-        components.Joints().Set(owner.Entity(), JointComponent{
-            .type = prefabJoint->type,
-            .connectedEntity = connectedEntity,
-            .anchor = prefabJoint->anchor,
-            .connectedAnchor = prefabJoint->connectedAnchor,
-            .axis = prefabJoint->axis,
-            .minLimit = prefabJoint->minLimit,
-            .maxLimit = prefabJoint->maxLimit,
-            .enableLimit = prefabJoint->enableLimit,
+        if (!prefabPortal->enabled &&
+            prefabPortal->sourceCellNodeStableId == ScenePrefabRegionPortalComponent::InvalidCellNodeStableId &&
+            prefabPortal->targetCellNodeStableId == ScenePrefabRegionPortalComponent::InvalidCellNodeStableId) {
+            components.RegionPortals().Set(owner.Entity(), SceneRegionPortalComponent{ .purposes = prefabPortal->purposes, .enabled = false });
+            continue;
+        }
+        const auto source = objectsByStableId.find(prefabPortal->sourceCellNodeStableId);
+        const auto target = objectsByStableId.find(prefabPortal->targetCellNodeStableId);
+        if (source == objectsByStableId.end() || target == objectsByStableId.end() || !source->second.IsValid() || !target->second.IsValid() ||
+            !scene.Entities().IsAlive(source->second) || !scene.Entities().IsAlive(target->second)) return false;
+        components.RegionPortals().Set(owner.Entity(), SceneRegionPortalComponent{
+            .sourceCell = source->second.Entity(), .targetCell = target->second.Entity(),
+            .purposes = prefabPortal->purposes, .enabled = prefabPortal->enabled,
         });
     }
     return true;
@@ -228,7 +247,7 @@ void DestroyRemovedObjects(Scene& scene, std::span<const SceneObject> oldObjects
     }
 
     DestroyRemovedObjects(scene, oldObjects, rebuiltObjects);
-    if (!ResolveJointReferences(scene, nextBaseline, rebuiltObjects)) {
+    if (!ResolveEntityReferences(scene, nextBaseline, rebuiltObjects)) {
         return false;
     }
     instance.SetObjects(std::move(rebuiltObjects));

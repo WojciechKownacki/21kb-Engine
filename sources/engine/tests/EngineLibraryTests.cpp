@@ -80,6 +80,8 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneVisibilityResolution.hpp"
 #include "engine/scene/SceneRegionShapeQueries.hpp"
+#include "engine/scene/RegionPortalComponent.hpp"
+#include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/SceneGuideCurveQueries.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
@@ -2765,6 +2767,17 @@ void RunEngineLibraryComponentRegistryTest() {
     source.Components().WorldBackdrops().Set(object.Entity(), backdrop);
     const kb::scene::SceneObject jointTarget = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ComponentRegistryJointTarget" });
     source.Components().Joints().Set(object.Entity(), kb::scene::JointComponent{ .type = kb::scene::JointType::Hinge, .connectedEntity = jointTarget.Entity(), .minLimit = -45.0F, .maxLimit = 45.0F, .enableLimit = true });
+    const kb::scene::SceneObject portalSourceCell = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ComponentRegistryPortalSource" });
+    const kb::scene::SceneObject portalTargetCell = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "ComponentRegistryPortalTarget" });
+    source.Components().VisibilityCells().Set(portalSourceCell.Entity(), kb::scene::VisibilityCellComponent{});
+    source.Components().VisibilityCells().Set(portalTargetCell.Entity(), kb::scene::VisibilityCellComponent{});
+    source.Components().RegionPortals().Set(object.Entity(), kb::scene::SceneRegionPortalComponent{
+        .sourceCell = portalSourceCell.Entity(),
+        .targetCell = portalTargetCell.Entity(),
+        .purposes = static_cast<kb::scene::RegionPortalPurposeMask>(kb::scene::RegionPortalPurpose::Visibility) |
+            static_cast<kb::scene::RegionPortalPurposeMask>(kb::scene::RegionPortalPurpose::Streaming),
+        .enabled = false,
+    });
 
     const std::filesystem::path testRoot = std::filesystem::temp_directory_path() / "21kb_engine_library_component_registry_tests";
     std::error_code removeError;
@@ -2778,18 +2791,24 @@ void RunEngineLibraryComponentRegistryTest() {
     kb::scene::Scene target;
     kb::tests::Require(kb::scene::SceneDocumentService::LoadFileIntoScene(target, sceneFile), "Engine21kbLibrary component registry round-trip scene was not loaded");
     const std::vector<kb::scene::SceneEntity> roots = target.Hierarchy().RootEntities();
-    kb::tests::Require(roots.size() == 2U, "Engine21kbLibrary component registry round-trip scene must restore both cross-root joint bodies");
+    kb::tests::Require(roots.size() == 4U, "Engine21kbLibrary component registry round-trip scene must restore cross-root portal cells and joint bodies");
     kb::scene::SceneEntity restored{};
     kb::scene::SceneEntity restoredJointTarget{};
+    kb::scene::SceneEntity restoredPortalSource{};
+    kb::scene::SceneEntity restoredPortalTarget{};
     for (const kb::scene::SceneEntity root : roots) {
         if (target.Entities().Name(root) == "ComponentRegistrySubject") {
             restored = root;
         } else if (target.Entities().Name(root) == "ComponentRegistryJointTarget") {
             restoredJointTarget = root;
+        } else if (target.Entities().Name(root) == "ComponentRegistryPortalSource") {
+            restoredPortalSource = root;
+        } else if (target.Entities().Name(root) == "ComponentRegistryPortalTarget") {
+            restoredPortalTarget = root;
         }
     }
-    kb::tests::Require(restored.IsValid() && restoredJointTarget.IsValid(),
-        "Engine21kbLibrary component registry round-trip must identify both joint bodies by their persisted names");
+    kb::tests::Require(restored.IsValid() && restoredJointTarget.IsValid() && restoredPortalSource.IsValid() && restoredPortalTarget.IsValid(),
+        "Engine21kbLibrary component registry round-trip must identify all cross-root references by persisted names");
 
     kb::tests::Require(target.Components().Cameras().Has(restored), "Engine21kbLibrary component registry: Camera is marked serializable=true and must survive a save/load round trip");
     kb::tests::Require(target.Components().Lights().Has(restored), "Engine21kbLibrary component registry: Light is marked serializable=true and must survive a save/load round trip");
@@ -2870,6 +2889,12 @@ void RunEngineLibraryComponentRegistryTest() {
                             kb::tests::NearlyEqual(restoredJoint->minLimit, -45.0F) &&
                             kb::tests::NearlyEqual(restoredJoint->maxLimit, 45.0F) && restoredJoint->enableLimit,
         "Engine21kbLibrary component registry: Joint must survive real cross-root save/load with connectedEntity remapped to the loaded target");
+    const kb::scene::SceneRegionPortalComponent* restoredPortal = target.Components().RegionPortals().TryGet(restored);
+    kb::tests::Require(restoredPortal != nullptr && restoredPortal->sourceCell == restoredPortalSource && restoredPortal->targetCell == restoredPortalTarget &&
+                            restoredPortal->purposes == (static_cast<kb::scene::RegionPortalPurposeMask>(kb::scene::RegionPortalPurpose::Visibility) |
+                                static_cast<kb::scene::RegionPortalPurposeMask>(kb::scene::RegionPortalPurpose::Streaming)) &&
+                            !restoredPortal->enabled,
+        "Engine21kbLibrary component registry: Region Portal must survive real cross-root save/load with both cell references remapped to loaded entities");
 
     for (const kb::library::LibraryComponentDesc& desc : catalog) {
         kb::tests::Require(desc.serializable,
@@ -3192,7 +3217,7 @@ void RunComponentInspectorDescCatalogTest() {
     // LIB-183 adds 11 NavAgent fields and 9 NavObstacle fields to the prior
     // 97-field contract, bringing the library/editor scripting surface to
     // 117 described fields across 12 components.
-    kb::tests::Require(fieldsChecked == 191U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (191) across all components");
+    kb::tests::Require(fieldsChecked == 195U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (195) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

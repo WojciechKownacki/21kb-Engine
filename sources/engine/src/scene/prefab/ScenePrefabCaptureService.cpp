@@ -11,7 +11,7 @@ namespace kb::scene {
 
 namespace {
 
-void ResolveJointReferences(ScenePrefab& prefab, std::span<const SceneEntity> capturedEntities) {
+void ResolveEntityReferences(ScenePrefab& prefab, std::span<const SceneEntity> capturedEntities) {
     const std::span<const ScenePrefabNodeDesc> nodes = prefab.Nodes();
     std::unordered_map<SceneEntity::IdType, std::uint64_t> stableNodeIds;
     stableNodeIds.reserve(capturedEntities.size());
@@ -21,17 +21,28 @@ void ResolveJointReferences(ScenePrefab& prefab, std::span<const SceneEntity> ca
 
     for (std::uint32_t index = 0U; index < static_cast<std::uint32_t>(nodes.size()); ++index) {
         ScenePrefabNodeDesc* node = prefab.TryGetMutableNode(index);
-        if (node == nullptr || !node->components.joint.has_value()) {
+        if (node == nullptr) {
             continue;
         }
-        ScenePrefabJointComponent& joint = *node->components.joint;
-        if (joint.connectedNodeStableId == ScenePrefabJointComponent::InvalidConnectedNodeStableId) {
-            continue;
+        if (node->components.joint.has_value()) {
+            ScenePrefabJointComponent& joint = *node->components.joint;
+            if (joint.connectedNodeStableId != ScenePrefabJointComponent::InvalidConnectedNodeStableId) {
+                const auto target = stableNodeIds.find(joint.connectedNodeStableId);
+                joint.connectedNodeStableId = target == stableNodeIds.end()
+                    ? ScenePrefabJointComponent::UnresolvedConnectedNodeStableId
+                    : target->second;
+            }
         }
-        const auto target = stableNodeIds.find(joint.connectedNodeStableId);
-        joint.connectedNodeStableId = target == stableNodeIds.end()
-            ? ScenePrefabJointComponent::UnresolvedConnectedNodeStableId
-            : target->second;
+        if (!node->components.regionPortal.has_value()) continue;
+        ScenePrefabRegionPortalComponent& portal = *node->components.regionPortal;
+        if (portal.sourceCellNodeStableId != ScenePrefabRegionPortalComponent::InvalidCellNodeStableId) {
+            const auto source = stableNodeIds.find(portal.sourceCellNodeStableId);
+            portal.sourceCellNodeStableId = source == stableNodeIds.end() ? ScenePrefabRegionPortalComponent::UnresolvedCellNodeStableId : source->second;
+        }
+        if (portal.targetCellNodeStableId != ScenePrefabRegionPortalComponent::InvalidCellNodeStableId) {
+            const auto targetCell = stableNodeIds.find(portal.targetCellNodeStableId);
+            portal.targetCellNodeStableId = targetCell == stableNodeIds.end() ? ScenePrefabRegionPortalComponent::UnresolvedCellNodeStableId : targetCell->second;
+        }
     }
 }
 
@@ -52,7 +63,7 @@ ScenePrefab ScenePrefabCaptureService::CaptureRoots(Scene& scene, std::span<cons
         prefab.Reserve(prefab.NodeCount() + ScenePrefabHierarchyCounter::Count(root, settings));
         ScenePrefabCaptureTraversal::Append(scene, root, settings, prefab, ScenePrefabNodeDesc::NoParent, capturedEntities);
     }
-    ResolveJointReferences(prefab, capturedEntities);
+    ResolveEntityReferences(prefab, capturedEntities);
     return prefab;
 }
 

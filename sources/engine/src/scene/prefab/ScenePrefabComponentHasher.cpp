@@ -100,6 +100,14 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::Mix(hash, components.joint->enableLimit ? 1U : 0U);
     }
 
+    ScenePrefabHashBuilder::Mix(hash, components.regionPortal.has_value() ? 1U : 0U);
+    if (components.regionPortal.has_value()) {
+        ScenePrefabHashBuilder::Mix(hash, components.regionPortal->sourceCellNodeStableId);
+        ScenePrefabHashBuilder::Mix(hash, components.regionPortal->targetCellNodeStableId);
+        ScenePrefabHashBuilder::Mix(hash, components.regionPortal->purposes);
+        ScenePrefabHashBuilder::Mix(hash, components.regionPortal->enabled ? 1U : 0U);
+    }
+
     ScenePrefabHashBuilder::Mix(hash, components.tags.has_value() ? 1U : 0U);
     if (components.tags.has_value()) {
         for (char character : TagsText(*components.tags)) {
