@@ -25,6 +25,7 @@
 #include "engine/scene/SceneVisibilityCellComponents.hpp"
 #include "engine/scene/SceneRegionPortalComponents.hpp"
 #include "engine/scene/SceneAuxFrameComponents.hpp"
+#include "engine/scene/SceneGeometrySwarmComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -68,6 +69,7 @@ struct ScenePrefabNodeStateWriterContext {
     SceneVisibilityCellComponents visibilityCells;
     SceneRegionPortalComponents regionPortals;
     SceneAuxFrameComponents auxFrames;
+    SceneGeometrySwarmComponents geometrySwarms;
     SceneBehaviourComponents behaviours;
     SceneAudioSourceComponents audioSources;
     SceneAudioListenerComponents audioListeners;

@@ -15,6 +15,7 @@
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
+#include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -459,6 +460,31 @@ void RunSceneSecondaryFrameReflectionSerializationTest() {
         "Secondary Frame reflection did not roundtrip authored state");
 }
 
+void RunSceneGeometrySwarmReflectionSerializationTest() {
+    kb::scene::Scene source;
+    const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Geometry Swarm" });
+    source.Components().GeometrySwarms().Set(sourceEntity, kb::scene::GeometrySwarmComponent{
+        .meshAssetId = 17U, .materialAssetId = 23U, .instanceCount = 12U, .columns = 3U, .rows = 2U, .layers = 2U,
+        .spacing = kb::scene::Vec3{ 1.5F, 2.0F, 0.5F }, .instanceScale = 0.75F, .layer = 4U,
+        .castsShadow = false, .receivesShadow = true, .enabled = true,
+    });
+    kb::ecs::World& sourceWorld = source.Runtime().EcsWorld();
+    const kb::ecs::ComponentReflection* reflection = sourceWorld.Reflection(kb::scene::GeometrySwarmComponent::StableId);
+    Require(reflection != nullptr && reflection->FindField("meshAssetId") != nullptr && reflection->FindField("instanceScale") != nullptr,
+        "Geometry Swarm reflection was not registered under its stable id");
+    kb::ecs::SerializedComponent serialized;
+    Require(sourceWorld.SerializeComponent(sourceEntity, sourceWorld.Component<kb::scene::GeometrySwarmComponent>(), serialized), "Geometry Swarm reflection serialization failed");
+    kb::scene::Scene target;
+    const kb::scene::SceneEntity targetEntity = target.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Geometry Swarm Target" });
+    Require(target.Runtime().EcsWorld().ApplySerializedComponent(targetEntity, serialized), "Geometry Swarm reflection apply failed");
+    const kb::scene::GeometrySwarmComponent* restored = target.Components().GeometrySwarms().TryGet(targetEntity);
+    Require(restored != nullptr && restored->meshAssetId == 17U && restored->materialAssetId == 23U && restored->instanceCount == 12U &&
+            restored->columns == 3U && restored->rows == 2U && restored->layers == 2U && NearlyEqual(restored->spacing.x, 1.5F) &&
+            NearlyEqual(restored->spacing.y, 2.0F) && NearlyEqual(restored->spacing.z, 0.5F) && NearlyEqual(restored->instanceScale, 0.75F) &&
+            restored->layer == 4U && !restored->castsShadow && restored->receivesShadow && restored->enabled,
+        "Geometry Swarm reflection did not roundtrip authored state");
+}
+
 void RunSceneAudioSourceComponentReflectionSerializationTest() {
     kb::scene::Scene source;
     const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "AudioSource" });
@@ -693,6 +719,7 @@ void RunProjectSceneTests() {
     RunSceneVisibilityBlockerReflectionSerializationTest();
     RunSceneVisibilityCellReflectionSerializationTest();
     RunSceneSecondaryFrameReflectionSerializationTest();
+    RunSceneGeometrySwarmReflectionSerializationTest();
     RunSceneAudioListenerComponentReflectionSerializationTest();
     RunSceneAudioSourceComponentReflectionSerializationTest();
     RunSceneAudioListenerPrefabRoundTripTest();

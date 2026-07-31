@@ -279,6 +279,8 @@ add_library(kb_engine STATIC
         include/engine/scene/AuxFrameComponent.hpp
         include/engine/scene/SceneAuxFrameComponents.hpp
         include/engine/scene/SceneAuxFrameQueries.hpp
+        include/engine/scene/GeometrySwarmComponent.hpp
+        include/engine/scene/SceneGeometrySwarmComponents.hpp
     include/engine/scene/SceneVisibilityComponents.hpp
     include/engine/scene/VisibilityComponent.hpp
     include/engine/render/postfx/PostProcessPipeline.hpp
@@ -671,6 +673,8 @@ add_library(kb_engine STATIC
         src/scene/components/SceneRegionPortalStorage.cpp
         src/scene/components/SceneAuxFrameApi.cpp
         src/scene/components/SceneAuxFrameStorage.cpp
+        src/scene/components/SceneGeometrySwarmApi.cpp
+        src/scene/components/SceneGeometrySwarmStorage.cpp
       src/scene/SceneContentInstanceService.cpp
     src/scene/components/SceneTransformApi.cpp
     src/scene/components/SceneTransformStorage.cpp
@@ -1012,6 +1016,7 @@ add_library(kb_engine STATIC
         src/private/scene/components/SceneVisibilityCellComponentStore.hpp
         src/private/scene/components/SceneRegionPortalComponentStore.hpp
         src/private/scene/components/SceneAuxFrameComponentStore.hpp
+        src/private/scene/components/SceneGeometrySwarmComponentStore.hpp
       src/private/scene/SceneContentInstanceService.hpp
       src/private/scene/systems/ContentInstanceSceneSystem.hpp
     src/private/scene/components/SceneTransformComponentStore.hpp

@@ -173,6 +173,11 @@ void DestroyRemovedObjects(Scene& scene, std::span<const SceneObject> oldObjects
         } else {
             components.AuxFrames().Remove(owner.Entity());
         }
+        if (nodes[nodeIndex].components.geometrySwarm.has_value()) {
+            components.GeometrySwarms().Set(owner.Entity(), *nodes[nodeIndex].components.geometrySwarm);
+        } else {
+            components.GeometrySwarms().Remove(owner.Entity());
+        }
         const std::optional<ScenePrefabJointComponent>& prefabJoint = nodes[nodeIndex].components.joint;
         if (!prefabJoint.has_value()) {
             components.Joints().Remove(owner.Entity());

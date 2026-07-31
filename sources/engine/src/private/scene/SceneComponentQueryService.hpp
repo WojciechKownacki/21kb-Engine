@@ -26,6 +26,7 @@
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
+#include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
 
@@ -92,6 +93,8 @@ public:
     [[nodiscard]] static const SceneRegionPortalComponent* TryGetRegionPortal(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasAuxFrame(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const AuxFrameComponent* TryGetAuxFrame(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasGeometrySwarm(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const GeometrySwarmComponent* TryGetGeometrySwarm(const Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static bool HasAudioSource(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const AudioSourceComponent* TryGetAudioSource(const Scene& scene, SceneEntity entity) noexcept;

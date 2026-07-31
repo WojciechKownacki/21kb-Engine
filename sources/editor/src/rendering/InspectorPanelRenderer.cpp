@@ -25,6 +25,7 @@
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
+#include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
@@ -1723,6 +1724,25 @@ void PaintSecondaryFrameSection(HDC dc, RECT content, int& y, const EditorTheme&
     y = section.Bottom() + kSectionGap;
 }
 
+void PaintGeometrySwarmSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::GeometrySwarmComponent& swarm) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::GeometrySwarm, HeroIconKind::Cube, "Geometry Swarm", true);
+    section.Field("Mesh", std::to_string(swarm.meshAssetId), InspectorPropertyId::GeometrySwarmMeshAssetId);
+    section.Field("Material", std::to_string(swarm.materialAssetId), InspectorPropertyId::GeometrySwarmMaterialAssetId);
+    section.Field("Instances", std::to_string(swarm.instanceCount), InspectorPropertyId::GeometrySwarmInstanceCount);
+    section.Field("Columns", std::to_string(swarm.columns), InspectorPropertyId::GeometrySwarmColumns);
+    section.Field("Rows", std::to_string(swarm.rows), InspectorPropertyId::GeometrySwarmRows);
+    section.Field("Layers", std::to_string(swarm.layers), InspectorPropertyId::GeometrySwarmLayers);
+    section.Field("Spacing X", FormatFloat(swarm.spacing.x, 3), InspectorPropertyId::GeometrySwarmSpacingX);
+    section.Field("Spacing Y", FormatFloat(swarm.spacing.y, 3), InspectorPropertyId::GeometrySwarmSpacingY);
+    section.Field("Spacing Z", FormatFloat(swarm.spacing.z, 3), InspectorPropertyId::GeometrySwarmSpacingZ);
+    section.Field("Instance Scale", FormatFloat(swarm.instanceScale, 3), InspectorPropertyId::GeometrySwarmInstanceScale);
+    section.Field("Render Layer", std::to_string(swarm.layer), InspectorPropertyId::GeometrySwarmLayer);
+    section.Bool("Cast Shadows", swarm.castsShadow, InspectorPropertyId::GeometrySwarmCastsShadow);
+    section.Bool("Receive Shadows", swarm.receivesShadow, InspectorPropertyId::GeometrySwarmReceivesShadow);
+    section.Bool("Enabled", swarm.enabled, InspectorPropertyId::GeometrySwarmEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
 constexpr int kCameraSectionRows = 13;
 
 void PaintCameraSection(
@@ -2113,6 +2133,10 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         const int h = SectionHeight(inspector, InspectorSectionId::SecondaryFrame, 9);
         if (y < content.bottom && y + h > content.top) PaintSecondaryFrameSection(dc, content, y, theme, inspector, *frame); else y += h + kSectionGap;
     }
+    if (const kb::scene::GeometrySwarmComponent* swarm = scene.Components().GeometrySwarms().TryGet(selected); swarm != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::GeometrySwarm, 14);
+        if (y < content.bottom && y + h > content.top) PaintGeometrySwarmSection(dc, content, y, theme, inspector, *swarm); else y += h + kSectionGap;
+    }
 
     if (sceneContext.HasEntityScript(selected)) {
         const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);
@@ -2358,6 +2382,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (scene.Components().VisibilityCells().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::VisibilityCell, 4) + kSectionGap;
     if (scene.Components().RegionPortals().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::RegionPortal, 4) + kSectionGap;
     if (scene.Components().AuxFrames().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::SecondaryFrame, 9) + kSectionGap;
+    if (scene.Components().GeometrySwarms().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::GeometrySwarm, 14) + kSectionGap;
     if (sceneContext.HasEntityScript(selected)) {
         const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariables(selected).size());
         height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
@@ -3473,6 +3498,19 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             constexpr std::array<InspectorPropertyId, 9> properties{ InspectorPropertyId::SecondaryFrameMode, InspectorPropertyId::SecondaryFrameImageTargetId, InspectorPropertyId::SecondaryFrameWidth, InspectorPropertyId::SecondaryFrameHeight, InspectorPropertyId::SecondaryFramePlaneNormalX, InspectorPropertyId::SecondaryFramePlaneNormalY, InspectorPropertyId::SecondaryFramePlaneNormalZ, InspectorPropertyId::SecondaryFramePlaneOffset, InspectorPropertyId::SecondaryFrameEnabled };
             for (InspectorPropertyId property : properties) {
                 const InspectorPanelRenderer::Hit hit = property == InspectorPropertyId::SecondaryFrameEnabled ? HitBool(RowRect(viewport, y), InspectorSectionId::SecondaryFrame, property, x, scrolledY) : HitTextRow(RowRect(viewport, y), InspectorSectionId::SecondaryFrame, property, x, scrolledY);
+                if (hit.kind != InspectorHitKind::None) return hit;
+                AdvanceRow(y);
+            }
+        }
+        y += kSectionGap;
+    }
+    if (sceneContext.Scene().Components().GeometrySwarms().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::GeometrySwarm, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::GeometrySwarm)) {
+            constexpr std::array<InspectorPropertyId, 14> properties{ InspectorPropertyId::GeometrySwarmMeshAssetId, InspectorPropertyId::GeometrySwarmMaterialAssetId, InspectorPropertyId::GeometrySwarmInstanceCount, InspectorPropertyId::GeometrySwarmColumns, InspectorPropertyId::GeometrySwarmRows, InspectorPropertyId::GeometrySwarmLayers, InspectorPropertyId::GeometrySwarmSpacingX, InspectorPropertyId::GeometrySwarmSpacingY, InspectorPropertyId::GeometrySwarmSpacingZ, InspectorPropertyId::GeometrySwarmInstanceScale, InspectorPropertyId::GeometrySwarmLayer, InspectorPropertyId::GeometrySwarmCastsShadow, InspectorPropertyId::GeometrySwarmReceivesShadow, InspectorPropertyId::GeometrySwarmEnabled };
+            for (InspectorPropertyId property : properties) {
+                const bool isBool = property == InspectorPropertyId::GeometrySwarmCastsShadow || property == InspectorPropertyId::GeometrySwarmReceivesShadow || property == InspectorPropertyId::GeometrySwarmEnabled;
+                const InspectorPanelRenderer::Hit hit = isBool ? HitBool(RowRect(viewport, y), InspectorSectionId::GeometrySwarm, property, x, scrolledY) : HitTextRow(RowRect(viewport, y), InspectorSectionId::GeometrySwarm, property, x, scrolledY);
                 if (hit.kind != InspectorHitKind::None) return hit;
                 AdvanceRow(y);
             }

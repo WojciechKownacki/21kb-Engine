@@ -1518,6 +1518,29 @@ void RunSceneLightingPackerAddsEditorPreviewKeyLightTest() {
     Require(stats.skippedForwardLightCount == 0U, "Editor preview key light should not produce skipped scene light stats");
 }
 
+void RunRenderSceneExpandsGeometrySwarmIntoExistingDrawGroupTest() {
+    RenderScene renderScene;
+    static_cast<void>(renderScene.UpsertGeometrySwarm(GeometrySwarmRenderProxyDesc{
+        .entityId = 77U, .meshAssetId = 42U, .materialAssetId = 9U,
+        .model = { 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F },
+        .instanceCount = 4U, .columns = 2U, .rows = 2U, .layers = 1U,
+        .spacing = { 2.0F, 4.0F, 1.0F }, .instanceScale = 1.5F,
+    }));
+    const std::vector<SceneRenderDrawGroup>& groups = renderScene.DrawGroups();
+    Require(groups.size() == 1U && groups[0].instances.size() == 4U, "Geometry Swarm did not expand into the canonical mesh draw group");
+    Require(groups[0].instances[0].entityId != groups[0].instances[1].entityId, "Geometry Swarm did not generate deterministic unique per-instance identifiers");
+    Require(NearlyEqual(groups[0].instances[0].model[0], 1.5F), "Geometry Swarm did not apply per-instance scale to the generated model");
+    SceneRenderSnapshot snapshot;
+    renderScene.BuildSnapshotInto(1280U, 720U, snapshot);
+    Require(snapshot.meshes.size() == 4U, "Geometry Swarm did not reach the snapshot consumer used by the runtime renderer");
+    const float originalFirstInstanceX = groups[0].instances[0].model[12];
+    const std::array<float, 16> movedModel{ 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 6.0F, 0.0F, 0.0F, 1.0F };
+    Require(renderScene.UpdateGeometrySwarmTransform(77U, movedModel), "Geometry Swarm transform update did not update the renderer-derived proxy");
+    Require(NearlyEqual(renderScene.DrawGroups()[0].instances[0].model[12], originalFirstInstanceX + 6.0F), "Geometry Swarm transform update did not rebuild derived instances");
+    Require(renderScene.RemoveGeometrySwarm(77U), "Geometry Swarm proxy removal failed");
+    Require(renderScene.DrawGroups().empty(), "Geometry Swarm proxy removal left derived render instances behind");
+}
+
 void RunRenderSceneSyncsAllSurfaceEmitterKindsTest() {
     kb::scene::Scene scene;
     kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
@@ -2597,6 +2620,7 @@ void RunRenderSceneSyncTests() {
     RunRenderResourceMapRequiresExplicitBindingsTest();
     RunRenderSceneBuildsMeshMaterialDrawGroupsTest();
     RunRenderSceneBuildsLargeMeshMaterialDrawGroupsTest();
+    RunRenderSceneExpandsGeometrySwarmIntoExistingDrawGroupTest();
     RunRenderSceneCachesDrawGroupsUntilMeshStateChangesTest();
     RunRenderSceneReserveAndStatsExposeProxyCapacityTest();
     RunEcsSyncPropagatesMaterialSlotOverridesTest();

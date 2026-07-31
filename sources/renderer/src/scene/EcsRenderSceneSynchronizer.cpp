@@ -19,6 +19,7 @@
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
+#include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/ecs/Query.hpp"
 #include "engine/ecs/UnsafeHotQuery.hpp"
 #include "engine/ecs/World.hpp"
@@ -232,6 +233,7 @@ struct SyncContext {
     std::vector<std::uint64_t>* cameras = nullptr;
     std::vector<std::uint64_t>* lights = nullptr;
     std::vector<std::uint64_t>* visibilityBlockers = nullptr;
+    std::vector<std::uint64_t>* geometrySwarms = nullptr;
     bool basicLightingEnabled = false;
 };
 
@@ -347,9 +349,27 @@ void SyncVisibilityBlocker(kb::scene::SceneEntity entity, const kb::scene::Trans
     }));
 }
 
+void SyncGeometrySwarm(kb::scene::SceneEntity entity, const kb::scene::GeometrySwarmComponent& swarm, void* context) {
+    auto* sync = static_cast<SyncContext*>(context);
+    if (!swarm.enabled || !kb::scene::IsGeometrySwarmComponentValid(swarm)) return;
+    const kb::scene::TransformComponent* transform = sync->scene->Transforms().TryGet(entity);
+    if (transform == nullptr) return;
+    const kb::scene::TransformComponent renderTransform = sync->worldReader->Read(entity, *transform);
+    sync->geometrySwarms->push_back(entity.Id());
+    const kb::scene::ResolvedVisibility visibility = kb::scene::ResolveVisibility(*sync->scene, entity);
+    static_cast<void>(sync->renderScene->UpsertGeometrySwarm(GeometrySwarmRenderProxyDesc{
+        .entityId = entity.Id(), .meshAssetId = swarm.meshAssetId, .materialAssetId = swarm.materialAssetId,
+        .model = SceneTransformMatrices::Model(renderTransform), .instanceCount = swarm.instanceCount,
+        .columns = swarm.columns, .rows = swarm.rows, .layers = swarm.layers,
+        .spacing = { swarm.spacing.x, swarm.spacing.y, swarm.spacing.z }, .instanceScale = swarm.instanceScale,
+        .visible = visibility.visible, .castsShadow = swarm.castsShadow, .receivesShadow = swarm.receivesShadow,
+        .layer = swarm.layer & visibility.mask,
+    }));
+}
+
 void SyncEntity(kb::scene::SceneEntity entity, SyncContext& context) {
     if (context.scene == nullptr || context.renderScene == nullptr || context.transforms == nullptr ||
-        context.meshes == nullptr || context.cameras == nullptr || context.lights == nullptr || context.visibilityBlockers == nullptr) {
+        context.meshes == nullptr || context.cameras == nullptr || context.lights == nullptr || context.visibilityBlockers == nullptr || context.geometrySwarms == nullptr) {
         return;
     }
 
@@ -358,6 +378,7 @@ void SyncEntity(kb::scene::SceneEntity entity, SyncContext& context) {
         static_cast<void>(context.renderScene->RemoveCamera(entity.Id()));
         static_cast<void>(context.renderScene->RemoveLight(entity.Id()));
         static_cast<void>(context.renderScene->RemoveVisibilityBlocker(entity.Id()));
+        static_cast<void>(context.renderScene->RemoveGeometrySwarm(entity.Id()));
         return;
     }
 
@@ -385,6 +406,11 @@ void SyncEntity(kb::scene::SceneEntity entity, SyncContext& context) {
     } else {
         static_cast<void>(context.renderScene->RemoveLight(entity.Id()));
     }
+    if (const kb::scene::GeometrySwarmComponent* swarm = components.GeometrySwarms().TryGet(entity); swarm != nullptr) {
+        SyncGeometrySwarm(entity, *swarm, &context);
+    } else {
+        static_cast<void>(context.renderScene->RemoveGeometrySwarm(entity.Id()));
+    }
     if (const kb::scene::SceneVisibilityBlockerComponent* blocker = components.VisibilityBlockers().TryGet(entity); blocker != nullptr && transform != nullptr && blocker->enabled && kb::scene::IsSceneVisibilityBlockerComponentValid(*blocker)) {
         SyncVisibilityBlocker(entity, *transform, *blocker, &context);
     } else {
@@ -405,6 +431,7 @@ void EcsRenderSceneSynchronizer::Reserve(const EcsRenderSceneSynchronizerReserve
         seenLights_.reserve(desc.lightProxies);
     }
     if (desc.visibilityBlockerProxies > 0U) seenVisibilityBlockers_.reserve(desc.visibilityBlockerProxies);
+    if (desc.geometrySwarmProxies > 0U) seenGeometrySwarms_.reserve(desc.geometrySwarmProxies);
     if (desc.transformCacheEntries > 0U) {
         transformCache_.reserve(desc.transformCacheEntries);
     }
@@ -421,6 +448,7 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
     seenCameras_.clear();
     seenLights_.clear();
     seenVisibilityBlockers_.clear();
+    seenGeometrySwarms_.clear();
     transformCache_.clear();
     transformResolving_.clear();
 
@@ -435,12 +463,14 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
         .cameras = &seenCameras_,
         .lights = &seenLights_,
         .visibilityBlockers = &seenVisibilityBlockers_,
+        .geometrySwarms = &seenGeometrySwarms_,
         .basicLightingEnabled = kb::scene::SceneLightingAccess::BasicLightingEnabled(scene),
     };
 
     const kb::scene::SceneComponentVisitors visitors = scene.Components().Visitors();
     visitors.ForEachCamera(&SyncCamera, &context);
     visitors.ForEachMeshRenderer(&SyncMesh, &context);
+    scene.Components().GeometrySwarms().ForEach(&SyncGeometrySwarm, &context);
     if (context.basicLightingEnabled) {
         visitors.ForEachLight(&SyncLight, &context);
     }
@@ -462,10 +492,12 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
     std::ranges::sort(seenCameras_);
     std::ranges::sort(seenLights_);
     std::ranges::sort(seenVisibilityBlockers_);
+    std::ranges::sort(seenGeometrySwarms_);
     static_cast<void>(renderScene.RemoveMeshesNotInSorted(std::span<const std::uint64_t>{ seenMeshes_ }));
     static_cast<void>(renderScene.RemoveCamerasNotInSorted(std::span<const std::uint64_t>{ seenCameras_ }));
     static_cast<void>(renderScene.RemoveLightsNotInSorted(std::span<const std::uint64_t>{ seenLights_ }));
     static_cast<void>(renderScene.RemoveVisibilityBlockersNotInSorted(std::span<const std::uint64_t>{ seenVisibilityBlockers_ }));
+    static_cast<void>(renderScene.RemoveGeometrySwarmsNotInSorted(std::span<const std::uint64_t>{ seenGeometrySwarms_ }));
     const std::optional<SceneRenderWorldBackdrop> worldBackdrop = ResolveWorldBackdrop(scene);
     renderScene.SetWorldBackdrop(worldBackdrop);
     renderScene.SetAmbientRadiance(ResolveAmbientRadiance(scene, worldBackdrop));
@@ -479,6 +511,7 @@ void EcsRenderSceneSynchronizer::SyncEntities(
     seenCameras_.clear();
     seenLights_.clear();
     seenVisibilityBlockers_.clear();
+    seenGeometrySwarms_.clear();
     transformCache_.clear();
     transformResolving_.clear();
 
@@ -493,6 +526,7 @@ void EcsRenderSceneSynchronizer::SyncEntities(
         .cameras = &seenCameras_,
         .lights = &seenLights_,
         .visibilityBlockers = &seenVisibilityBlockers_,
+        .geometrySwarms = &seenGeometrySwarms_,
         .basicLightingEnabled = kb::scene::SceneLightingAccess::BasicLightingEnabled(scene),
     };
 
@@ -517,6 +551,7 @@ void EcsRenderSceneSynchronizer::SyncMeshWorldAffines(
         // are handled by the structural sync, so skipping them here is correct.
         static_cast<void>(renderScene.UpdateMeshTransform(entities[index].Id(), model));
         static_cast<void>(renderScene.UpdateVisibilityBlockerTransform(entities[index].Id(), model));
+        static_cast<void>(renderScene.UpdateGeometrySwarmTransform(entities[index].Id(), model));
     }
 }
 
@@ -533,8 +568,9 @@ void EcsRenderSceneSynchronizer::SyncMeshWorldAffinesParallel(
 
     std::atomic<std::uint64_t> inPlace{ 0U };
     std::atomic<std::uint64_t> fallback{ 0U };
+    std::atomic<bool> geometrySwarmChanged{ false };
     const std::size_t resolvedGrain = grainSize == 0U ? count : grainSize;
-    workerPool.ParallelForChunks(count, resolvedGrain, [&renderScene, entities, worldAffines, &inPlace, &fallback](
+    workerPool.ParallelForChunks(count, resolvedGrain, [&renderScene, entities, worldAffines, &inPlace, &fallback, &geometrySwarmChanged](
         kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
         std::uint64_t localInPlace = 0U;
         std::uint64_t localFallback = 0U;
@@ -542,6 +578,9 @@ void EcsRenderSceneSynchronizer::SyncMeshWorldAffinesParallel(
         for (std::size_t index = chunk.begin; index < end; ++index) {
             const std::array<float, 16> model = ModelFromWorldAffine3x4(worldAffines[index]);
             static_cast<void>(renderScene.UpdateVisibilityBlockerTransform(entities[index].Id(), model));
+            if (renderScene.ApplyGeometrySwarmTransform(entities[index].Id(), model)) {
+                geometrySwarmChanged.store(true, std::memory_order_relaxed);
+            }
             switch (renderScene.ApplyMeshTransform(entities[index].Id(), model)) {
             case RenderScene::TransformUpdateOutcome::InPlace:
                 ++localInPlace;
@@ -560,6 +599,9 @@ void EcsRenderSceneSynchronizer::SyncMeshWorldAffinesParallel(
     const std::uint64_t fallbackCount = fallback.load(std::memory_order_relaxed);
     renderScene.InvalidateDrawGroupsIfFallback(
         fallbackCount > 0U ? RenderScene::TransformUpdateOutcome::Fallback : RenderScene::TransformUpdateOutcome::InPlace);
+    if (geometrySwarmChanged.load(std::memory_order_relaxed)) {
+        renderScene.InvalidateDrawGroupsIfFallback(RenderScene::TransformUpdateOutcome::Fallback);
+    }
     renderScene.AddTransformUpdateCounts(inPlace.load(std::memory_order_relaxed), fallbackCount);
 }
 
@@ -588,9 +630,13 @@ EcsRenderSceneSynchronizerStats EcsRenderSceneSynchronizer::Stats() const noexce
         .meshSeenCount = static_cast<std::uint32_t>(seenMeshes_.size()),
         .cameraSeenCount = static_cast<std::uint32_t>(seenCameras_.size()),
         .lightSeenCount = static_cast<std::uint32_t>(seenLights_.size()),
+        .visibilityBlockerSeenCount = static_cast<std::uint32_t>(seenVisibilityBlockers_.size()),
+        .geometrySwarmSeenCount = static_cast<std::uint32_t>(seenGeometrySwarms_.size()),
         .meshSeenCapacity = static_cast<std::uint32_t>(seenMeshes_.capacity()),
         .cameraSeenCapacity = static_cast<std::uint32_t>(seenCameras_.capacity()),
         .lightSeenCapacity = static_cast<std::uint32_t>(seenLights_.capacity()),
+        .visibilityBlockerSeenCapacity = static_cast<std::uint32_t>(seenVisibilityBlockers_.capacity()),
+        .geometrySwarmSeenCapacity = static_cast<std::uint32_t>(seenGeometrySwarms_.capacity()),
         .transformCacheCount = static_cast<std::uint32_t>(transformCache_.size()),
         .transformResolvingCount = static_cast<std::uint32_t>(transformResolving_.size()),
         .transformUpdateEntityCount = static_cast<std::uint32_t>(transformUpdateEntities_.size()),

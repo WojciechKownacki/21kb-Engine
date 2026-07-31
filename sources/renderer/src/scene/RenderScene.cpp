@@ -9,6 +9,37 @@
 #include <utility>
 
 namespace kb::render {
+namespace {
+
+[[nodiscard]] std::array<float, 16> GeometrySwarmModel(
+    const GeometrySwarmRenderProxyDesc& swarm, std::uint32_t index) noexcept {
+    const std::uint32_t columns = swarm.columns;
+    const std::uint32_t rows = swarm.rows;
+    const std::uint32_t plane = columns * rows;
+    const std::uint32_t x = index % columns;
+    const std::uint32_t y = (index / columns) % rows;
+    const std::uint32_t z = index / plane;
+    const float localX = (static_cast<float>(x) - static_cast<float>(columns - 1U) * 0.5F) * swarm.spacing[0];
+    const float localY = (static_cast<float>(y) - static_cast<float>(rows - 1U) * 0.5F) * swarm.spacing[1];
+    const float localZ = (static_cast<float>(z) - static_cast<float>(swarm.layers - 1U) * 0.5F) * swarm.spacing[2];
+    std::array<float, 16> model = swarm.model;
+    model[12] += swarm.model[0] * localX + swarm.model[4] * localY + swarm.model[8] * localZ;
+    model[13] += swarm.model[1] * localX + swarm.model[5] * localY + swarm.model[9] * localZ;
+    model[14] += swarm.model[2] * localX + swarm.model[6] * localY + swarm.model[10] * localZ;
+    for (std::uint32_t column = 0U; column < 3U; ++column) {
+        for (std::uint32_t row = 0U; row < 3U; ++row) model[column * 4U + row] *= swarm.instanceScale;
+    }
+    return model;
+}
+
+[[nodiscard]] std::uint64_t GeometrySwarmInstanceId(std::uint64_t owner, std::uint32_t index) noexcept {
+    std::uint64_t value = owner ^ (static_cast<std::uint64_t>(index) + 0x9e3779b97f4a7c15ULL);
+    value = (value ^ (value >> 30U)) * 0xbf58476d1ce4e5b9ULL;
+    value = (value ^ (value >> 27U)) * 0x94d049bb133111ebULL;
+    return value ^ (value >> 31U);
+}
+
+} // namespace
 
 std::size_t RenderScene::DrawGroupKeyHash::operator()(DrawGroupKey key) const noexcept {
     const std::uint64_t mixed = key.meshAssetId ^ (key.materialAssetId + 0x9e3779b97f4a7c15ULL + (key.meshAssetId << 6U) + (key.meshAssetId >> 2U));
@@ -26,6 +57,7 @@ void RenderScene::Reserve(const RenderSceneReserveDesc& desc) {
         lights_.reserve(desc.lightProxies);
     }
     if (desc.visibilityBlockerProxies > 0U) visibilityBlockers_.reserve(desc.visibilityBlockerProxies);
+    if (desc.geometrySwarmProxies > 0U) geometrySwarms_.reserve(desc.geometrySwarmProxies);
     if (desc.drawGroupKeys > 0U) {
         drawGroups_.reserve(desc.drawGroupKeys);
         drawGroupLookupScratch_.reserve(desc.drawGroupKeys);
@@ -38,6 +70,7 @@ RenderSceneStats RenderScene::Stats() const noexcept {
         .cameraProxyCount = static_cast<std::uint32_t>(cameras_.size()),
         .lightProxyCount = static_cast<std::uint32_t>(lights_.size()),
         .visibilityBlockerProxyCount = static_cast<std::uint32_t>(visibilityBlockers_.size()),
+        .geometrySwarmProxyCount = static_cast<std::uint32_t>(geometrySwarms_.size()),
         .meshProxyCapacity = static_cast<std::uint32_t>(meshes_.bucket_count()),
         .cameraProxyCapacity = static_cast<std::uint32_t>(cameras_.bucket_count()),
         .lightProxyCapacity = static_cast<std::uint32_t>(lights_.bucket_count()),
@@ -115,6 +148,20 @@ RenderProxyId RenderScene::UpsertVisibilityBlocker(const VisibilityBlockerRender
     return proxy.id;
 }
 
+RenderProxyId RenderScene::UpsertGeometrySwarm(const GeometrySwarmRenderProxyDesc& desc) {
+    auto [it, inserted] = geometrySwarms_.try_emplace(desc.entityId);
+    GeometrySwarmRenderProxy& proxy = it->second;
+    if (inserted) { proxy.id = AllocateProxyId(); proxy.desc = desc; proxy.dirty = RenderProxyDirtyFlag::All; InvalidateDrawGroups(); return proxy.id; }
+    const GeometrySwarmRenderProxyDesc& previous = proxy.desc;
+    if (previous.meshAssetId != desc.meshAssetId || previous.materialAssetId != desc.materialAssetId || previous.model != desc.model ||
+        previous.instanceCount != desc.instanceCount || previous.columns != desc.columns || previous.rows != desc.rows || previous.layers != desc.layers ||
+        previous.spacing != desc.spacing || previous.instanceScale != desc.instanceScale || previous.visible != desc.visible ||
+        previous.castsShadow != desc.castsShadow || previous.receivesShadow != desc.receivesShadow || previous.layer != desc.layer) {
+        proxy.desc = desc; proxy.dirty |= RenderProxyDirtyFlag::All; InvalidateDrawGroups();
+    }
+    return proxy.id;
+}
+
 void RenderScene::SetWorldBackdrop(std::optional<SceneRenderWorldBackdrop> backdrop) noexcept {
     worldBackdrop_ = std::move(backdrop);
 }
@@ -156,7 +203,24 @@ bool RenderScene::UpdateVisibilityBlockerTransform(std::uint64_t entityId, const
     }
     return true;
 }
+bool RenderScene::ApplyGeometrySwarmTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept {
+    const auto found = geometrySwarms_.find(entityId);
+    if (found == geometrySwarms_.end()) return false;
+    GeometrySwarmRenderProxy& proxy = found->second;
+    if (proxy.desc.model != model) {
+        proxy.desc.model = model;
+        proxy.dirty |= RenderProxyDirtyFlag::Transform;
+        return true;
+    }
+    return false;
+}
+bool RenderScene::UpdateGeometrySwarmTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept {
+    if (!ApplyGeometrySwarmTransform(entityId, model)) return false;
+    InvalidateDrawGroups();
+    return true;
+}
 bool RenderScene::RemoveVisibilityBlocker(std::uint64_t entityId) noexcept { return visibilityBlockers_.erase(entityId) != 0U; }
+bool RenderScene::RemoveGeometrySwarm(std::uint64_t entityId) noexcept { const bool removed = geometrySwarms_.erase(entityId) != 0U; if (removed) InvalidateDrawGroups(); return removed; }
 
 const MeshRenderProxy* RenderScene::FindMeshByEntity(std::uint64_t entityId) const noexcept {
     const auto it = meshes_.find(entityId);
@@ -222,6 +286,15 @@ std::uint32_t RenderScene::RemoveVisibilityBlockersNotInSorted(std::span<const s
     }
     return removed;
 }
+std::uint32_t RenderScene::RemoveGeometrySwarmsNotInSorted(std::span<const std::uint64_t> sortedEntityIds) noexcept {
+    std::uint32_t removed = 0U;
+    for (auto it = geometrySwarms_.begin(); it != geometrySwarms_.end();) {
+        if (std::ranges::binary_search(sortedEntityIds, it->first)) { ++it; continue; }
+        it = geometrySwarms_.erase(it); ++removed;
+    }
+    if (removed != 0U) InvalidateDrawGroups();
+    return removed;
+}
 
 std::size_t RenderScene::MeshProxyCount() const noexcept {
     return meshes_.size();
@@ -235,6 +308,7 @@ std::size_t RenderScene::LightProxyCount() const noexcept {
     return lights_.size();
 }
 std::size_t RenderScene::VisibilityBlockerProxyCount() const noexcept { return visibilityBlockers_.size(); }
+std::size_t RenderScene::GeometrySwarmProxyCount() const noexcept { return geometrySwarms_.size(); }
 
 const RenderScene::MeshProxyMap& RenderScene::MeshProxies() const noexcept {
     return meshes_;
@@ -248,6 +322,7 @@ const RenderScene::LightProxyMap& RenderScene::LightProxies() const noexcept {
     return lights_;
 }
 const RenderScene::VisibilityBlockerProxyMap& RenderScene::VisibilityBlockerProxies() const noexcept { return visibilityBlockers_; }
+const RenderScene::GeometrySwarmProxyMap& RenderScene::GeometrySwarmProxies() const noexcept { return geometrySwarms_; }
 
 void RenderScene::ClearDirty() noexcept {
     for (auto& [entityId, proxy] : meshes_) {
@@ -263,6 +338,7 @@ void RenderScene::ClearDirty() noexcept {
         static_cast<void>(entityId);
     }
     for (auto& [entityId, proxy] : visibilityBlockers_) { proxy.dirty = RenderProxyDirtyFlag::None; static_cast<void>(entityId); }
+    for (auto& [entityId, proxy] : geometrySwarms_) { proxy.dirty = RenderProxyDirtyFlag::None; static_cast<void>(entityId); }
 }
 
 const CameraRenderProxyDesc* RenderScene::FindPrimaryCameraProxy(std::uint32_t targetViewportId) const noexcept {
@@ -321,7 +397,12 @@ void RenderScene::BuildSnapshotInto(std::uint32_t viewportWidth, std::uint32_t v
     outSnapshot.meshes.clear();
     outSnapshot.lights.clear();
 
-    outSnapshot.meshes.reserve(meshes_.size());
+    std::size_t geometrySwarmInstanceCount = 0U;
+    for (const auto& [entityId, proxy] : geometrySwarms_) {
+        static_cast<void>(entityId);
+        if (proxy.desc.visible) geometrySwarmInstanceCount += proxy.desc.instanceCount;
+    }
+    outSnapshot.meshes.reserve(meshes_.size() + geometrySwarmInstanceCount);
     for (const auto& [entityId, proxy] : meshes_) {
         const MeshRenderProxyDesc& mesh = proxy.desc;
         if (!mesh.visible) {
@@ -329,6 +410,23 @@ void RenderScene::BuildSnapshotInto(std::uint32_t viewportWidth, std::uint32_t v
             continue;
         }
         outSnapshot.meshes.push_back(RenderSceneMeshInstanceBuilder::Build(mesh));
+    }
+    for (const auto& [entityId, proxy] : geometrySwarms_) {
+        const GeometrySwarmRenderProxyDesc& swarm = proxy.desc;
+        if (!swarm.visible || swarm.meshAssetId == 0U || swarm.instanceCount == 0U || swarm.columns == 0U || swarm.rows == 0U || swarm.layers == 0U) {
+            continue;
+        }
+        for (std::uint32_t index = 0U; index < swarm.instanceCount; ++index) {
+            outSnapshot.meshes.push_back(SceneRenderMeshInstance{
+                .entityId = GeometrySwarmInstanceId(entityId, index),
+                .meshAssetId = swarm.meshAssetId,
+                .materialAssetId = swarm.materialAssetId,
+                .model = GeometrySwarmModel(swarm, index),
+                .castsShadow = swarm.castsShadow,
+                .receivesShadow = swarm.receivesShadow,
+                .layer = swarm.layer,
+            });
+        }
     }
 
     outSnapshot.lights.reserve(lights_.size());
@@ -360,7 +458,7 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
     }
 
     drawGroupLookupScratch_.clear();
-    drawGroupLookupScratch_.reserve(meshes_.size());
+    drawGroupLookupScratch_.reserve(meshes_.size() + geometrySwarms_.size());
     // A fresh build version invalidates every previously stamped instance location.
     ++drawGroupBuildVersion_;
     std::size_t writeGroupCount = 0U;
@@ -395,6 +493,38 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
         proxy.instanceIndexInGroup = static_cast<std::uint32_t>(group.instances.size());
         proxy.instanceLocationVersion = drawGroupBuildVersion_;
         group.instances.push_back(RenderSceneMeshInstanceBuilder::Build(mesh));
+    }
+
+    // Geometry swarm data stays compact and canonical in ECS.  Only here, at
+    // the existing mesh-batch boundary, it expands into the per-instance stream
+    // consumed by GPU culling and indirect submission.
+    for (const auto& [entityId, proxy] : geometrySwarms_) {
+        const GeometrySwarmRenderProxyDesc& swarm = proxy.desc;
+        if (!swarm.visible || swarm.meshAssetId == 0U || swarm.instanceCount == 0U || swarm.columns == 0U || swarm.rows == 0U || swarm.layers == 0U) {
+            continue;
+        }
+        const DrawGroupKey key{ .meshAssetId = swarm.meshAssetId, .materialAssetId = swarm.materialAssetId };
+        auto lookupIt = drawGroupLookupScratch_.find(key);
+        if (lookupIt == drawGroupLookupScratch_.end()) {
+            if (writeGroupCount == drawGroups_.size()) drawGroups_.push_back(SceneRenderDrawGroup{});
+            SceneRenderDrawGroup& group = drawGroups_[writeGroupCount];
+            group.meshAssetId = swarm.meshAssetId;
+            group.materialAssetId = swarm.materialAssetId;
+            lookupIt = drawGroupLookupScratch_.emplace(key, writeGroupCount).first;
+            ++writeGroupCount;
+        }
+        SceneRenderDrawGroup& group = drawGroups_[lookupIt->second];
+        for (std::uint32_t index = 0U; index < swarm.instanceCount; ++index) {
+            group.instances.push_back(SceneRenderMeshInstance{
+                .entityId = GeometrySwarmInstanceId(entityId, index),
+                .meshAssetId = swarm.meshAssetId,
+                .materialAssetId = swarm.materialAssetId,
+                .model = GeometrySwarmModel(swarm, index),
+                .castsShadow = swarm.castsShadow,
+                .receivesShadow = swarm.receivesShadow,
+                .layer = swarm.layer,
+            });
+        }
     }
 
     drawGroups_.resize(writeGroupCount);
