@@ -143,6 +143,11 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .id = ComputeLibraryComponentId("Ambient Radiance"),
             .serializable = true,
         },
+        LibraryComponentDesc{
+            .name = "Detail Switch",
+            .id = ComputeLibraryComponentId("Detail Switch"),
+            .serializable = true,
+        },
     };
     return kCatalog;
 }

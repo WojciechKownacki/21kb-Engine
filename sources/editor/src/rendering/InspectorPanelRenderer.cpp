@@ -20,6 +20,7 @@
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
+#include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
@@ -1656,6 +1657,17 @@ void PaintAmbientRadianceSection(HDC dc, RECT content, int& y, const EditorTheme
     y = section.Bottom() + kSectionGap;
 }
 
+void PaintDetailSwitchSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::SceneDetailSwitchComponent& detailSwitch) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::DetailSwitch, HeroIconKind::Cube, "Detail Switch", true);
+    section.Field("Group", std::to_string(detailSwitch.groupId), InspectorPropertyId::DetailSwitchGroupId);
+    section.Field("Minimum LOD", std::to_string(detailSwitch.minimumLod), InspectorPropertyId::DetailSwitchMinimumLod);
+    section.Field("Maximum LOD", std::to_string(detailSwitch.maximumLod), InspectorPropertyId::DetailSwitchMaximumLod);
+    section.Field("Promote Coverage", FormatFloat(detailSwitch.promoteCoverage, 3), InspectorPropertyId::DetailSwitchPromoteCoverage);
+    section.Field("Demote Coverage", FormatFloat(detailSwitch.demoteCoverage, 3), InspectorPropertyId::DetailSwitchDemoteCoverage);
+    section.Bool("Enabled", detailSwitch.enabled, InspectorPropertyId::DetailSwitchEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
 constexpr int kCameraSectionRows = 13;
 
 void PaintCameraSection(
@@ -2026,6 +2038,10 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         const int h = SectionHeight(inspector, InspectorSectionId::AmbientRadiance, 16);
         if (y < content.bottom && y + h > content.top) PaintAmbientRadianceSection(dc, content, y, theme, inspector, *ambient); else y += h + kSectionGap;
     }
+    if (const kb::scene::SceneDetailSwitchComponent* detailSwitch = scene.Components().DetailSwitches().TryGet(selected); detailSwitch != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::DetailSwitch, 6);
+        if (y < content.bottom && y + h > content.top) PaintDetailSwitchSection(dc, content, y, theme, inspector, *detailSwitch); else y += h + kSectionGap;
+    }
 
     if (sceneContext.HasEntityScript(selected)) {
         const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);
@@ -2266,6 +2282,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (scene.Components().StreamFocuses().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::StreamFocus, 5) + kSectionGap;
     if (scene.Components().WorldBackdrops().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::WorldBackdrop, 15) + kSectionGap;
     if (scene.Components().AmbientRadiances().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::AmbientRadiance, 16) + kSectionGap;
+    if (scene.Components().DetailSwitches().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::DetailSwitch, 6) + kSectionGap;
     if (sceneContext.HasEntityScript(selected)) {
         const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariables(selected).size());
         height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
@@ -3317,6 +3334,20 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                 const InspectorPanelRenderer::Hit hit = property == InspectorPropertyId::AmbientRadianceEnabled
                     ? HitBool(RowRect(viewport, y), InspectorSectionId::AmbientRadiance, property, x, scrolledY)
                     : HitTextRow(RowRect(viewport, y), InspectorSectionId::AmbientRadiance, property, x, scrolledY);
+                if (hit.kind != InspectorHitKind::None) return hit;
+                AdvanceRow(y);
+            }
+        }
+        y += kSectionGap;
+    }
+    if (sceneContext.Scene().Components().DetailSwitches().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::DetailSwitch, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::DetailSwitch)) {
+            constexpr std::array<InspectorPropertyId, 6> properties{ InspectorPropertyId::DetailSwitchGroupId, InspectorPropertyId::DetailSwitchMinimumLod, InspectorPropertyId::DetailSwitchMaximumLod, InspectorPropertyId::DetailSwitchPromoteCoverage, InspectorPropertyId::DetailSwitchDemoteCoverage, InspectorPropertyId::DetailSwitchEnabled };
+            for (const InspectorPropertyId property : properties) {
+                const InspectorPanelRenderer::Hit hit = property == InspectorPropertyId::DetailSwitchEnabled
+                    ? HitBool(RowRect(viewport, y), InspectorSectionId::DetailSwitch, property, x, scrolledY)
+                    : HitTextRow(RowRect(viewport, y), InspectorSectionId::DetailSwitch, property, x, scrolledY);
                 if (hit.kind != InspectorHitKind::None) return hit;
                 AdvanceRow(y);
             }

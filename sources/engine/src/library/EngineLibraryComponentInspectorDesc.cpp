@@ -318,6 +318,19 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether this policy participates in rendering." },
             },
         },
+        LibraryComponentInspectorDesc{
+            .componentName = "Detail Switch",
+            .displayName = "Detail Switch",
+            .category = "Rendering",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "groupId", "Group", "Coordinates one LOD level for every mesh in the same group; zero keeps this entity independent." },
+                LibraryComponentInspectorFieldDesc{ "minimumLod", "Minimum LOD", "Most detailed allowed mesh LOD." },
+                LibraryComponentInspectorFieldDesc{ "maximumLod", "Maximum LOD", "Least detailed allowed mesh LOD." },
+                LibraryComponentInspectorFieldDesc{ "promoteCoverage", "Promote Coverage", "Screen coverage required before switching to more detail." },
+                LibraryComponentInspectorFieldDesc{ "demoteCoverage", "Demote Coverage", "Screen coverage below which less detail is selected." },
+                LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether this entity participates in coordinated LOD selection." },
+            },
+        },
     };
     return kCatalog;
 }

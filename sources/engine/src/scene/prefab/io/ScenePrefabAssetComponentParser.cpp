@@ -229,6 +229,22 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseDetailSwitch(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "detailSwitch", present)) return false;
+    if (!present) return true;
+    SceneDetailSwitchComponent detail{};
+    if (!ParseField(fields, "detailSwitch.groupId", detail.groupId) ||
+        !ParseOptionalField(fields, "detailSwitch.minimumLod", detail.minimumLod) ||
+        !ParseOptionalField(fields, "detailSwitch.maximumLod", detail.maximumLod) ||
+        !ParseOptionalField(fields, "detailSwitch.promoteCoverage", detail.promoteCoverage) ||
+        !ParseOptionalField(fields, "detailSwitch.demoteCoverage", detail.demoteCoverage) ||
+        !ParseOptionalBool(fields, "detailSwitch.enabled", detail.enabled) ||
+        !IsSceneDetailSwitchComponentValid(detail)) return false;
+    components.detailSwitch = detail;
+    return true;
+}
+
 [[nodiscard]] bool ParseCharacterController(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool hasCharacterController = false;
     if (!ParseOptionalComponentFlag(fields, "characterController", hasCharacterController)) {
@@ -416,6 +432,7 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseStreamFocus(fields, components)
         && ParseWorldBackdrop(fields, components)
         && ParseAmbientRadiance(fields, components)
+        && ParseDetailSwitch(fields, components)
         && ParseCharacterController(fields, components)
         && ParseJoint(fields, components)
         && ScenePrefabAssetTagsParser::Parse(fields, components)

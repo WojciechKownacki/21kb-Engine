@@ -54,6 +54,9 @@ namespace {
     if (components.ambientRadiance.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::AmbientRadiance);
     }
+    if (components.detailSwitch.has_value()) {
+        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::DetailSwitch);
+    }
     if (components.behaviour.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Behaviour);
     }
@@ -164,6 +167,9 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         }
         if (node.components.ambientRadiance.has_value()) {
             archetype.ambientRadiances.push_back(*node.components.ambientRadiance);
+        }
+        if (node.components.detailSwitch.has_value()) {
+            archetype.detailSwitches.push_back(*node.components.detailSwitch);
         }
         if (node.components.behaviour.has_value()) {
             archetype.behaviours.push_back(*node.components.behaviour);

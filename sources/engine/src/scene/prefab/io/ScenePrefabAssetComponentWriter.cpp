@@ -189,6 +189,16 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "ambientRadiance.priority=" << ambient.priority << '\n';
         output << "ambientRadiance.enabled=" << (ambient.enabled ? 1 : 0) << '\n';
     }
+    output << "detailSwitch=" << (components.detailSwitch.has_value() ? 1 : 0) << '\n';
+    if (components.detailSwitch.has_value()) {
+        const SceneDetailSwitchComponent& detail = *components.detailSwitch;
+        output << "detailSwitch.groupId=" << detail.groupId << '\n';
+        output << "detailSwitch.minimumLod=" << detail.minimumLod << '\n';
+        output << "detailSwitch.maximumLod=" << detail.maximumLod << '\n';
+        output << "detailSwitch.promoteCoverage=" << detail.promoteCoverage << '\n';
+        output << "detailSwitch.demoteCoverage=" << detail.demoteCoverage << '\n';
+        output << "detailSwitch.enabled=" << (detail.enabled ? 1 : 0) << '\n';
+    }
 
     output << "behaviour=" << (components.behaviour.has_value() ? 1 : 0) << '\n';
     if (components.behaviour.has_value()) {
