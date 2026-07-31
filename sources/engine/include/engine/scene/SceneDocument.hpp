@@ -18,7 +18,8 @@ struct SceneDocument {
     // v14: WorldBackdropComponent persists visible world background policy.
     // v15: AmbientRadianceComponent persists authored scene-global indirect lighting.
     // v16: SceneDetailSwitchComponent persists coordinated mesh LOD policy.
-    static constexpr std::uint32_t CurrentFileVersion = 16U;
+    // v17: SceneVisibilityBlockerComponent persists non-renderable culling geometry.
+    static constexpr std::uint32_t CurrentFileVersion = 17U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

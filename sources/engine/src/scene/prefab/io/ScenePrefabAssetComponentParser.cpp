@@ -245,6 +245,16 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseVisibilityBlocker(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "visibilityBlocker", present)) return false;
+    if (!present) return true;
+    SceneVisibilityBlockerComponent blocker{};
+    if (!ScenePrefabAssetFieldParser::ParseVec3(fields, "visibilityBlocker.localCenter", blocker.localCenter) || !ScenePrefabAssetFieldParser::ParseVec3(fields, "visibilityBlocker.size", blocker.size) || !ParseOptionalBool(fields, "visibilityBlocker.enabled", blocker.enabled) || !IsSceneVisibilityBlockerComponentValid(blocker)) return false;
+    components.visibilityBlocker = blocker;
+    return true;
+}
+
 [[nodiscard]] bool ParseCharacterController(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool hasCharacterController = false;
     if (!ParseOptionalComponentFlag(fields, "characterController", hasCharacterController)) {
@@ -433,6 +443,7 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseWorldBackdrop(fields, components)
         && ParseAmbientRadiance(fields, components)
         && ParseDetailSwitch(fields, components)
+        && ParseVisibilityBlocker(fields, components)
         && ParseCharacterController(fields, components)
         && ParseJoint(fields, components)
         && ScenePrefabAssetTagsParser::Parse(fields, components)
