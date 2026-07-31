@@ -408,6 +408,10 @@ void RuntimeMaterialResourceEnsurer::Ensure(
             ensureMaterial(slot.defaultMaterialAssetId);
         }
     }
+    for (const auto& [entityId, proxy] : context.renderScene.SurfaceCastProxies()) {
+        static_cast<void>(entityId);
+        ensureMaterial(proxy.desc.materialAssetId);
+    }
 }
 
 } // namespace kb::render

@@ -17,6 +17,7 @@
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/GeometrySwarmComponent.hpp"
+#include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -1191,6 +1192,9 @@ template <typename Integer>
 [[nodiscard]] bool IsGeometrySwarmProperty(InspectorPropertyId property) noexcept {
     return property >= InspectorPropertyId::GeometrySwarmMeshAssetId && property <= InspectorPropertyId::GeometrySwarmEnabled;
 }
+[[nodiscard]] bool IsSurfaceCastProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::SurfaceCastMaterialAssetId && property <= InspectorPropertyId::SurfaceCastEnabled;
+}
 
 template <typename Mutator>
 [[nodiscard]] bool EditNavAgent(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
@@ -1336,6 +1340,15 @@ template <typename Mutator>
     kb::scene::GeometrySwarmComponent* swarm = sceneContext.Scene().Components().GeometrySwarms().TryGet(entity);
     if (swarm == nullptr || !mutator(*swarm)) { sceneContext.CancelSceneEditTransaction(); return false; }
     sceneContext.Scene().Components().GeometrySwarms().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+template <typename Mutator>
+[[nodiscard]] bool EditSurfaceCast(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::SurfaceCastComponent* surfaceCast = sceneContext.Scene().Components().SurfaceCasts().TryGet(entity);
+    if (surfaceCast == nullptr || !mutator(*surfaceCast)) { sceneContext.CancelSceneEditTransaction(); return false; }
+    sceneContext.Scene().Components().SurfaceCasts().MarkModified(entity);
     static_cast<void>(sceneContext.CommitSceneEditTransaction());
     return true;
 }
@@ -1704,6 +1717,24 @@ template <typename Mutator>
     }
     return true;
 }
+[[nodiscard]] bool HandleSurfaceCastClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::SurfaceCastComponent* surfaceCast = sceneContext.Scene().Components().SurfaceCasts().TryGet(entity);
+    if (surfaceCast == nullptr) return false;
+    if (hit.property == InspectorPropertyId::SurfaceCastEnabled) return EditSurfaceCast(sceneContext, entity, "Toggle Surface Cast", [](auto& value) { value.enabled = !value.enabled; return kb::scene::IsSurfaceCastComponentPersistable(value); });
+    if (hit.property == InspectorPropertyId::SurfaceCastContent) return EditSurfaceCast(sceneContext, entity, "Change Surface Cast Content", [](auto& value) { value.content = value.content == kb::scene::SurfaceCastContent::Material ? kb::scene::SurfaceCastContent::Detail : kb::scene::SurfaceCastContent::Material; return true; });
+    if (IsSurfaceCastProperty(hit.property)) {
+        std::string text;
+        switch (hit.property) {
+        case InspectorPropertyId::SurfaceCastMaterialAssetId: text = std::to_string(surfaceCast->materialAssetId); break;
+        case InspectorPropertyId::SurfaceCastReceiverLayerMask: text = std::to_string(surfaceCast->receiverLayerMask); break;
+        case InspectorPropertyId::SurfaceCastOrder: text = std::to_string(surfaceCast->order); break;
+        default: return false;
+        }
+        sceneContext.Inspector().BeginTextEdit(hit.property, std::move(text));
+        return true;
+    }
+    return false;
+}
 
 [[nodiscard]] bool ApplyNavAgentText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
     float value = 0.0F;
@@ -2028,6 +2059,20 @@ template <typename Mutator>
         default: return false;
         }
         if (!kb::scene::IsGeometrySwarmComponentPersistable(candidate)) return false;
+        value = candidate;
+        return true;
+    });
+}
+[[nodiscard]] bool ApplySurfaceCastText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    return EditSurfaceCast(sceneContext, entity, "Edit Surface Cast", [property, text](kb::scene::SurfaceCastComponent& value) {
+        kb::scene::SurfaceCastComponent candidate = value;
+        switch (property) {
+        case InspectorPropertyId::SurfaceCastMaterialAssetId: { const auto result = std::from_chars(text.data(), text.data() + text.size(), candidate.materialAssetId); if (result.ec != std::errc{} || result.ptr != text.data() + text.size()) return false; break; }
+        case InspectorPropertyId::SurfaceCastReceiverLayerMask: { const auto result = std::from_chars(text.data(), text.data() + text.size(), candidate.receiverLayerMask); if (result.ec != std::errc{} || result.ptr != text.data() + text.size()) return false; break; }
+        case InspectorPropertyId::SurfaceCastOrder: { const auto result = std::from_chars(text.data(), text.data() + text.size(), candidate.order); if (result.ec != std::errc{} || result.ptr != text.data() + text.size()) return false; break; }
+        default: return false;
+        }
+        if (!kb::scene::IsSurfaceCastComponentPersistable(candidate)) return false;
         value = candidate;
         return true;
     });
@@ -2400,6 +2445,11 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                     sceneContext.Scene().Components().GeometrySwarms().Remove(entity);
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
+            } else if (hit.section == InspectorSectionId::SurfaceCast && sceneContext.Scene().Components().SurfaceCasts().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Surface Cast")) {
+                    sceneContext.Scene().Components().SurfaceCasts().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
             } else if (const std::optional<PhysicsComponentKind> kind = PhysicsKindForSection(hit.section); kind.has_value()) {
                 static_cast<void>(sceneContext.RemovePhysicsComponent(entity, *kind));
             }
@@ -2493,6 +2543,7 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     if (hit.section == InspectorSectionId::RegionPortal) return HandleRegionPortalClick(sceneContext, entity, hit);
     if (hit.section == InspectorSectionId::SecondaryFrame) return HandleSecondaryFrameClick(sceneContext, entity, hit);
     if (hit.section == InspectorSectionId::GeometrySwarm) return HandleGeometrySwarmClick(sceneContext, entity, hit);
+    if (hit.section == InspectorSectionId::SurfaceCast) return HandleSurfaceCastClick(sceneContext, entity, hit);
     if (hit.section == InspectorSectionId::Tags &&
         hit.kind == InspectorHitKind::TextField &&
         hit.property == InspectorPropertyId::TagsText) {
@@ -2819,6 +2870,11 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         }
         if (sceneContext.Scene().Entities().IsAlive(entity) && IsGeometrySwarmProperty(inspector.EditedProperty())) {
             static_cast<void>(ApplyGeometrySwarmText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) && IsSurfaceCastProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplySurfaceCastText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
             inspector.EndTextEdit();
             return true;
         }

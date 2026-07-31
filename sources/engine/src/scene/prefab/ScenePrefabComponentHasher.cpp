@@ -128,6 +128,15 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::Mix(hash, swarm.layer); ScenePrefabHashBuilder::Mix(hash, swarm.castsShadow ? 1U : 0U);
         ScenePrefabHashBuilder::Mix(hash, swarm.receivesShadow ? 1U : 0U); ScenePrefabHashBuilder::Mix(hash, swarm.enabled ? 1U : 0U);
     }
+    ScenePrefabHashBuilder::Mix(hash, components.surfaceCast.has_value() ? 1U : 0U);
+    if (components.surfaceCast.has_value()) {
+        const SurfaceCastComponent& surfaceCast = *components.surfaceCast;
+        ScenePrefabHashBuilder::Mix(hash, surfaceCast.materialAssetId);
+        ScenePrefabHashBuilder::Mix(hash, surfaceCast.receiverLayerMask);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(surfaceCast.order)));
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(surfaceCast.content));
+        ScenePrefabHashBuilder::Mix(hash, surfaceCast.enabled ? 1U : 0U);
+    }
 
     ScenePrefabHashBuilder::Mix(hash, components.tags.has_value() ? 1U : 0U);
     if (components.tags.has_value()) {

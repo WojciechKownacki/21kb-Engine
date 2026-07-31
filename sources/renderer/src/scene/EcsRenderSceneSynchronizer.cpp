@@ -20,6 +20,8 @@
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/GeometrySwarmComponent.hpp"
+#include "engine/scene/SurfaceCastComponent.hpp"
+#include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/ecs/Query.hpp"
 #include "engine/ecs/UnsafeHotQuery.hpp"
 #include "engine/ecs/World.hpp"
@@ -234,6 +236,7 @@ struct SyncContext {
     std::vector<std::uint64_t>* lights = nullptr;
     std::vector<std::uint64_t>* visibilityBlockers = nullptr;
     std::vector<std::uint64_t>* geometrySwarms = nullptr;
+    std::vector<std::uint64_t>* surfaceCasts = nullptr;
     bool basicLightingEnabled = false;
 };
 
@@ -349,6 +352,17 @@ void SyncVisibilityBlocker(kb::scene::SceneEntity entity, const kb::scene::Trans
     }));
 }
 
+[[nodiscard]] RenderSurfaceCastRegion SurfaceCastRegionOf(kb::scene::RegionShapeKind kind) noexcept {
+    switch (kind) {
+    case kb::scene::RegionShapeKind::Circle2D: return RenderSurfaceCastRegion::Circle2D;
+    case kb::scene::RegionShapeKind::Rectangle2D: return RenderSurfaceCastRegion::Rectangle2D;
+    case kb::scene::RegionShapeKind::Sphere: return RenderSurfaceCastRegion::Sphere;
+    case kb::scene::RegionShapeKind::Box: return RenderSurfaceCastRegion::Box;
+    case kb::scene::RegionShapeKind::Capsule: return RenderSurfaceCastRegion::Capsule;
+    }
+    return RenderSurfaceCastRegion::Box;
+}
+
 void SyncGeometrySwarm(kb::scene::SceneEntity entity, const kb::scene::GeometrySwarmComponent& swarm, void* context) {
     auto* sync = static_cast<SyncContext*>(context);
     if (!swarm.enabled || !kb::scene::IsGeometrySwarmComponentValid(swarm)) return;
@@ -367,9 +381,26 @@ void SyncGeometrySwarm(kb::scene::SceneEntity entity, const kb::scene::GeometryS
     }));
 }
 
+void SyncSurfaceCast(kb::scene::SceneEntity entity, const kb::scene::SurfaceCastComponent& surfaceCast, void* context) {
+    auto* sync = static_cast<SyncContext*>(context);
+    if (!surfaceCast.enabled || !kb::scene::IsSurfaceCastComponentValid(surfaceCast)) return;
+    const kb::scene::RegionShapeComponent* shape = sync->scene->Components().RegionShapes().TryGet(entity);
+    const kb::scene::TransformComponent* transform = sync->scene->Transforms().TryGet(entity);
+    if (shape == nullptr || transform == nullptr || !shape->enabled || !kb::scene::IsRegionShapeKindValid(shape->kind)) return;
+    const kb::scene::TransformComponent renderTransform = sync->worldReader->Read(entity, *transform);
+    sync->surfaceCasts->push_back(entity.Id());
+    const kb::scene::ResolvedVisibility visibility = kb::scene::ResolveVisibility(*sync->scene, entity);
+    static_cast<void>(sync->renderScene->UpsertSurfaceCast(SurfaceCastRenderProxyDesc{
+        .entityId = entity.Id(), .materialAssetId = surfaceCast.materialAssetId, .model = SceneTransformMatrices::Model(renderTransform),
+        .localCenter = { shape->center.x, shape->center.y, shape->center.z }, .size = { shape->size.x, shape->size.y, shape->size.z },
+        .radius = shape->radius, .height = shape->height, .receiverLayerMask = surfaceCast.receiverLayerMask,
+        .order = surfaceCast.order, .region = SurfaceCastRegionOf(shape->kind), .visible = visibility.visible,
+    }));
+}
+
 void SyncEntity(kb::scene::SceneEntity entity, SyncContext& context) {
     if (context.scene == nullptr || context.renderScene == nullptr || context.transforms == nullptr ||
-        context.meshes == nullptr || context.cameras == nullptr || context.lights == nullptr || context.visibilityBlockers == nullptr || context.geometrySwarms == nullptr) {
+        context.meshes == nullptr || context.cameras == nullptr || context.lights == nullptr || context.visibilityBlockers == nullptr || context.geometrySwarms == nullptr || context.surfaceCasts == nullptr) {
         return;
     }
 
@@ -379,6 +410,7 @@ void SyncEntity(kb::scene::SceneEntity entity, SyncContext& context) {
         static_cast<void>(context.renderScene->RemoveLight(entity.Id()));
         static_cast<void>(context.renderScene->RemoveVisibilityBlocker(entity.Id()));
         static_cast<void>(context.renderScene->RemoveGeometrySwarm(entity.Id()));
+        static_cast<void>(context.renderScene->RemoveSurfaceCast(entity.Id()));
         return;
     }
 
@@ -411,6 +443,11 @@ void SyncEntity(kb::scene::SceneEntity entity, SyncContext& context) {
     } else {
         static_cast<void>(context.renderScene->RemoveGeometrySwarm(entity.Id()));
     }
+    if (const kb::scene::SurfaceCastComponent* surfaceCast = components.SurfaceCasts().TryGet(entity); surfaceCast != nullptr) {
+        SyncSurfaceCast(entity, *surfaceCast, &context);
+    } else {
+        static_cast<void>(context.renderScene->RemoveSurfaceCast(entity.Id()));
+    }
     if (const kb::scene::SceneVisibilityBlockerComponent* blocker = components.VisibilityBlockers().TryGet(entity); blocker != nullptr && transform != nullptr && blocker->enabled && kb::scene::IsSceneVisibilityBlockerComponentValid(*blocker)) {
         SyncVisibilityBlocker(entity, *transform, *blocker, &context);
     } else {
@@ -432,6 +469,7 @@ void EcsRenderSceneSynchronizer::Reserve(const EcsRenderSceneSynchronizerReserve
     }
     if (desc.visibilityBlockerProxies > 0U) seenVisibilityBlockers_.reserve(desc.visibilityBlockerProxies);
     if (desc.geometrySwarmProxies > 0U) seenGeometrySwarms_.reserve(desc.geometrySwarmProxies);
+    if (desc.surfaceCastProxies > 0U) seenSurfaceCasts_.reserve(desc.surfaceCastProxies);
     if (desc.transformCacheEntries > 0U) {
         transformCache_.reserve(desc.transformCacheEntries);
     }
@@ -449,6 +487,7 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
     seenLights_.clear();
     seenVisibilityBlockers_.clear();
     seenGeometrySwarms_.clear();
+    seenSurfaceCasts_.clear();
     transformCache_.clear();
     transformResolving_.clear();
 
@@ -464,6 +503,7 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
         .lights = &seenLights_,
         .visibilityBlockers = &seenVisibilityBlockers_,
         .geometrySwarms = &seenGeometrySwarms_,
+        .surfaceCasts = &seenSurfaceCasts_,
         .basicLightingEnabled = kb::scene::SceneLightingAccess::BasicLightingEnabled(scene),
     };
 
@@ -471,6 +511,7 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
     visitors.ForEachCamera(&SyncCamera, &context);
     visitors.ForEachMeshRenderer(&SyncMesh, &context);
     scene.Components().GeometrySwarms().ForEach(&SyncGeometrySwarm, &context);
+    scene.Components().SurfaceCasts().ForEach(&SyncSurfaceCast, &context);
     if (context.basicLightingEnabled) {
         visitors.ForEachLight(&SyncLight, &context);
     }
@@ -493,11 +534,13 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
     std::ranges::sort(seenLights_);
     std::ranges::sort(seenVisibilityBlockers_);
     std::ranges::sort(seenGeometrySwarms_);
+    std::ranges::sort(seenSurfaceCasts_);
     static_cast<void>(renderScene.RemoveMeshesNotInSorted(std::span<const std::uint64_t>{ seenMeshes_ }));
     static_cast<void>(renderScene.RemoveCamerasNotInSorted(std::span<const std::uint64_t>{ seenCameras_ }));
     static_cast<void>(renderScene.RemoveLightsNotInSorted(std::span<const std::uint64_t>{ seenLights_ }));
     static_cast<void>(renderScene.RemoveVisibilityBlockersNotInSorted(std::span<const std::uint64_t>{ seenVisibilityBlockers_ }));
     static_cast<void>(renderScene.RemoveGeometrySwarmsNotInSorted(std::span<const std::uint64_t>{ seenGeometrySwarms_ }));
+    static_cast<void>(renderScene.RemoveSurfaceCastsNotInSorted(std::span<const std::uint64_t>{ seenSurfaceCasts_ }));
     const std::optional<SceneRenderWorldBackdrop> worldBackdrop = ResolveWorldBackdrop(scene);
     renderScene.SetWorldBackdrop(worldBackdrop);
     renderScene.SetAmbientRadiance(ResolveAmbientRadiance(scene, worldBackdrop));
@@ -512,6 +555,7 @@ void EcsRenderSceneSynchronizer::SyncEntities(
     seenLights_.clear();
     seenVisibilityBlockers_.clear();
     seenGeometrySwarms_.clear();
+    seenSurfaceCasts_.clear();
     transformCache_.clear();
     transformResolving_.clear();
 
@@ -527,6 +571,7 @@ void EcsRenderSceneSynchronizer::SyncEntities(
         .lights = &seenLights_,
         .visibilityBlockers = &seenVisibilityBlockers_,
         .geometrySwarms = &seenGeometrySwarms_,
+        .surfaceCasts = &seenSurfaceCasts_,
         .basicLightingEnabled = kb::scene::SceneLightingAccess::BasicLightingEnabled(scene),
     };
 
@@ -552,6 +597,7 @@ void EcsRenderSceneSynchronizer::SyncMeshWorldAffines(
         static_cast<void>(renderScene.UpdateMeshTransform(entities[index].Id(), model));
         static_cast<void>(renderScene.UpdateVisibilityBlockerTransform(entities[index].Id(), model));
         static_cast<void>(renderScene.UpdateGeometrySwarmTransform(entities[index].Id(), model));
+        static_cast<void>(renderScene.UpdateSurfaceCastTransform(entities[index].Id(), model));
     }
 }
 
@@ -632,11 +678,13 @@ EcsRenderSceneSynchronizerStats EcsRenderSceneSynchronizer::Stats() const noexce
         .lightSeenCount = static_cast<std::uint32_t>(seenLights_.size()),
         .visibilityBlockerSeenCount = static_cast<std::uint32_t>(seenVisibilityBlockers_.size()),
         .geometrySwarmSeenCount = static_cast<std::uint32_t>(seenGeometrySwarms_.size()),
+        .surfaceCastSeenCount = static_cast<std::uint32_t>(seenSurfaceCasts_.size()),
         .meshSeenCapacity = static_cast<std::uint32_t>(seenMeshes_.capacity()),
         .cameraSeenCapacity = static_cast<std::uint32_t>(seenCameras_.capacity()),
         .lightSeenCapacity = static_cast<std::uint32_t>(seenLights_.capacity()),
         .visibilityBlockerSeenCapacity = static_cast<std::uint32_t>(seenVisibilityBlockers_.capacity()),
         .geometrySwarmSeenCapacity = static_cast<std::uint32_t>(seenGeometrySwarms_.capacity()),
+        .surfaceCastSeenCapacity = static_cast<std::uint32_t>(seenSurfaceCasts_.capacity()),
         .transformCacheCount = static_cast<std::uint32_t>(transformCache_.size()),
         .transformResolvingCount = static_cast<std::uint32_t>(transformResolving_.size()),
         .transformUpdateEntityCount = static_cast<std::uint32_t>(transformUpdateEntities_.size()),

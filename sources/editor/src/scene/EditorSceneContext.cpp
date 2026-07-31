@@ -21,6 +21,7 @@
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/GeometrySwarmComponent.hpp"
+#include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
@@ -8240,6 +8241,16 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
         }
         return ExecuteSceneCommand("Add Geometry Swarm Component", [this, entity]() {
             scene_->Components().GeometrySwarms().Set(entity, kb::scene::GeometrySwarmComponent{});
+            return true;
+        });
+    }
+    if (componentId == "Surface Cast") {
+        if (scene_->Components().SurfaceCasts().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Surface Cast component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Surface Cast Component", [this, entity]() {
+            scene_->Components().SurfaceCasts().Set(entity, kb::scene::SurfaceCastComponent{});
             return true;
         });
     }

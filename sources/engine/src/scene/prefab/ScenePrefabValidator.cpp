@@ -45,6 +45,7 @@ bool ScenePrefabValidator::IsValid(const ScenePrefab& prefab) noexcept {
         }
         if (node.components.auxFrame.has_value() && !IsAuxFrameComponentPersistable(*node.components.auxFrame)) return false;
         if (node.components.geometrySwarm.has_value() && !IsGeometrySwarmComponentPersistable(*node.components.geometrySwarm)) return false;
+        if (node.components.surfaceCast.has_value() && !IsSurfaceCastComponentPersistable(*node.components.surfaceCast)) return false;
     }
     return true;
 }

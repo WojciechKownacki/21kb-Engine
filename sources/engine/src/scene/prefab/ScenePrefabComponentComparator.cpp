@@ -141,6 +141,10 @@ namespace {
         lhs.instanceScale == rhs.instanceScale && lhs.layer == rhs.layer && lhs.castsShadow == rhs.castsShadow &&
         lhs.receivesShadow == rhs.receivesShadow && lhs.enabled == rhs.enabled;
 }
+[[nodiscard]] bool Equal(const SurfaceCastComponent& lhs, const SurfaceCastComponent& rhs) noexcept {
+    return lhs.materialAssetId == rhs.materialAssetId && lhs.receiverLayerMask == rhs.receiverLayerMask &&
+        lhs.order == rhs.order && lhs.content == rhs.content && lhs.enabled == rhs.enabled;
+}
 
 template <typename T>
 [[nodiscard]] bool EqualOptionalComponent(const T* actual, const std::optional<T>& expected) noexcept {
@@ -194,6 +198,7 @@ ScenePrefabOverrideFlag ScenePrefabComponentComparator::Compare(SceneComponents 
         flags |= ScenePrefabOverrideFlag::AuxFrame;
     }
     if (!EqualOptionalComponent(components.GeometrySwarms().TryGet(entity), expected.geometrySwarm)) flags |= ScenePrefabOverrideFlag::GeometrySwarm;
+    if (!EqualOptionalComponent(components.SurfaceCasts().TryGet(entity), expected.surfaceCast)) flags |= ScenePrefabOverrideFlag::SurfaceCast;
     return flags;
 }
 
