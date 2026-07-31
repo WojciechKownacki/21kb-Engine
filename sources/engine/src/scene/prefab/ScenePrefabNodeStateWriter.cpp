@@ -104,6 +104,13 @@ namespace {
         && lhs.loadMask == rhs.loadMask && lhs.enabled == rhs.enabled;
 }
 
+[[nodiscard]] bool Equals(const WorldBackdropComponent& lhs, const WorldBackdropComponent& rhs) noexcept {
+    return lhs.mode == rhs.mode && Equals(lhs.color, rhs.color) && Equals(lhs.horizonColor, rhs.horizonColor) &&
+        Equals(lhs.zenithColor, rhs.zenithColor) && lhs.environmentAssetId == rhs.environmentAssetId &&
+        lhs.horizonHeight == rhs.horizonHeight && lhs.gradientExponent == rhs.gradientExponent &&
+        lhs.priority == rhs.priority && lhs.enabled == rhs.enabled;
+}
+
 [[nodiscard]] bool Equals(const BehaviourComponent& lhs, const BehaviourComponent& rhs) noexcept {
     return lhs.behaviourAssetId == rhs.behaviourAssetId && lhs.backend == rhs.backend && lhs.enabled == rhs.enabled && lhs.tickGroup == rhs.tickGroup
         && lhs.executionOrder == rhs.executionOrder;
@@ -203,6 +210,7 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , guideCurves(scene.Components().GuideCurves())
     , contentInstances(scene.Components().ContentInstances())
     , streamFocuses(scene.Components().StreamFocuses())
+    , worldBackdrops(scene.Components().WorldBackdrops())
     , behaviours(scene.Components().Behaviours())
     , audioSources(scene.Components().AudioSources())
     , audioListeners(scene.Components().AudioListeners())
@@ -270,6 +278,7 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     WriteOptionalComponent(context.guideCurves, entity, node.components.guideCurve);
     WriteOptionalComponent(context.contentInstances, entity, node.components.contentInstance);
     WriteOptionalComponent(context.streamFocuses, entity, node.components.streamFocus);
+    WriteOptionalComponent(context.worldBackdrops, entity, node.components.worldBackdrop);
     if (!componentMask.available || !componentMask.matches || node.components.behaviour.has_value()) {
         WriteOptionalComponent(context.behaviours, entity, node.components.behaviour);
     }

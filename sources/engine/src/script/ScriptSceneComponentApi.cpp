@@ -13,6 +13,7 @@
 #include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
 #include "engine/scene/SceneCharacterControllerComponents.hpp"
@@ -28,6 +29,7 @@
 #include "engine/scene/SceneGuideCurveComponents.hpp"
 #include "engine/scene/SceneContentInstanceComponents.hpp"
 #include "engine/scene/SceneStreamFocusComponents.hpp"
+#include "engine/scene/SceneWorldBackdropComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -222,7 +224,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 17> kComponentNames{
+constexpr std::array<std::string_view, 18> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
@@ -240,6 +242,7 @@ constexpr std::array<std::string_view, 17> kComponentNames{
     "GuideCurve",
     "ContentInstance",
     "StreamFocus",
+    "WorldBackdrop",
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kRegionShapePropertyDescs{
@@ -274,6 +277,24 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 5> kStreamFocusPropertyDe
     ScriptSceneComponentPropertyDesc{ "outerRadius", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "priority", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "loadMask", ScriptValueType::UInt32 },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 15> kWorldBackdropPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "mode", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "color.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "color.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "color.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "horizonColor.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "horizonColor.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "horizonColor.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "zenithColor.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "zenithColor.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "zenithColor.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "environmentAssetId", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "horizonHeight", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "gradientExponent", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "priority", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
@@ -702,6 +723,29 @@ constexpr std::array<FieldBinding, 5> kStreamFocusFields{
     KB_BOOL(kb::scene::StreamFocusComponent, enabled),
 };
 
+constexpr std::array<FieldBinding, 15> kWorldBackdropFields{
+    FieldBinding{ "mode", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::WorldBackdropComponent*>(component)->mode) }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Int) return false; const auto mode = static_cast<kb::scene::WorldBackdropMode>(value.AsInt()); if (!kb::scene::IsWorldBackdropModeValid(mode)) return false; static_cast<kb::scene::WorldBackdropComponent*>(component)->mode = mode; return true; } },
+    KB_NESTED_FLOAT(kb::scene::WorldBackdropComponent, color, x),
+    KB_NESTED_FLOAT(kb::scene::WorldBackdropComponent, color, y),
+    KB_NESTED_FLOAT(kb::scene::WorldBackdropComponent, color, z),
+    KB_NESTED_FLOAT(kb::scene::WorldBackdropComponent, horizonColor, x),
+    KB_NESTED_FLOAT(kb::scene::WorldBackdropComponent, horizonColor, y),
+    KB_NESTED_FLOAT(kb::scene::WorldBackdropComponent, horizonColor, z),
+    KB_NESTED_FLOAT(kb::scene::WorldBackdropComponent, zenithColor, x),
+    KB_NESTED_FLOAT(kb::scene::WorldBackdropComponent, zenithColor, y),
+    KB_NESTED_FLOAT(kb::scene::WorldBackdropComponent, zenithColor, z),
+    FieldBinding{ "environmentAssetId", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::WorldBackdropComponent*>(component)->environmentAssetId, ScriptValueType::Hash }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::WorldBackdropComponent*>(component)->environmentAssetId = value.AsUInt64(); return true; } },
+    FieldBinding{ "horizonHeight", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::WorldBackdropComponent*>(component)->horizonHeight }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat())) return false; static_cast<kb::scene::WorldBackdropComponent*>(component)->horizonHeight = value.AsFloat(); return true; } },
+    FieldBinding{ "gradientExponent", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::WorldBackdropComponent*>(component)->gradientExponent }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat()) || value.AsFloat() <= 0.0F) return false; static_cast<kb::scene::WorldBackdropComponent*>(component)->gradientExponent = value.AsFloat(); return true; } },
+    FieldBinding{ "priority", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::WorldBackdropComponent*>(component)->priority) }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Int) return false; static_cast<kb::scene::WorldBackdropComponent*>(component)->priority = value.AsInt(); return true; } },
+    KB_BOOL(kb::scene::WorldBackdropComponent, enabled),
+};
+
 #undef KB_BOOL
 #undef KB_INT
 #undef KB_UINT32
@@ -779,6 +823,7 @@ void MarkRegionShapeModified(kb::scene::Scene& scene, kb::scene::SceneEntity ent
 void MarkGuideCurveModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().GuideCurves().MarkModified(entity); }
 void MarkContentInstanceModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().ContentInstances().MarkModified(entity); }
 void MarkStreamFocusModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().StreamFocuses().MarkModified(entity); }
+void MarkWorldBackdropModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().WorldBackdrops().MarkModified(entity); }
 
 [[nodiscard]] ComponentAccess AccessComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
     if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
@@ -852,6 +897,10 @@ void MarkStreamFocusModified(kb::scene::Scene& scene, kb::scene::SceneEntity ent
         kb::scene::StreamFocusComponent* component = scene.Components().StreamFocuses().TryGet(entity);
         return ComponentAccess{ component, component, kStreamFocusFields, &MarkStreamFocusModified };
     }
+    if (componentName == "WorldBackdrop") {
+        kb::scene::WorldBackdropComponent* component = scene.Components().WorldBackdrops().TryGet(entity);
+        return ComponentAccess{ component, component, kWorldBackdropFields, &MarkWorldBackdropModified };
+    }
     return {};
 }
 
@@ -874,6 +923,7 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "GuideCurve") return kGuideCurvePropertyDescs;
     if (componentName == "ContentInstance") return kContentInstancePropertyDescs;
     if (componentName == "StreamFocus") return kStreamFocusPropertyDescs;
+    if (componentName == "WorldBackdrop") return kWorldBackdropPropertyDescs;
     if (componentName == "Camera") {
         return kCameraPropertyDescs;
     }
