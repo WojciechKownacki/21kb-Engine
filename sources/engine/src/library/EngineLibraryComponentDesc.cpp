@@ -138,6 +138,11 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .id = ComputeLibraryComponentId("WorldBackdrop"),
             .serializable = true,
         },
+        LibraryComponentDesc{
+            .name = "Ambient Radiance",
+            .id = ComputeLibraryComponentId("Ambient Radiance"),
+            .serializable = true,
+        },
     };
     return kCatalog;
 }
