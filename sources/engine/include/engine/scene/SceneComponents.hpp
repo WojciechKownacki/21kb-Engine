@@ -23,6 +23,7 @@
 #include "engine/scene/SceneDetailSwitchComponents.hpp"
 #include "engine/scene/SceneVisibilityBlockerComponents.hpp"
 #include "engine/scene/SceneVisibilityCellComponents.hpp"
+#include "engine/scene/SceneRegionPortalComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
 #include "engine/scene/SceneUIDocuments.hpp"
@@ -55,6 +56,7 @@ public:
     [[nodiscard]] SceneDetailSwitchComponents DetailSwitches() const noexcept;
     [[nodiscard]] SceneVisibilityBlockerComponents VisibilityBlockers() const noexcept;
     [[nodiscard]] SceneVisibilityCellComponents VisibilityCells() const noexcept;
+    [[nodiscard]] SceneRegionPortalComponents RegionPortals() const noexcept;
     [[nodiscard]] SceneAudioSourceComponents AudioSources() const noexcept;
     [[nodiscard]] SceneAudioListenerComponents AudioListeners() const noexcept;
     [[nodiscard]] SceneAnimatorComponents Animators() const noexcept;

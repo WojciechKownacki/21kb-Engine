@@ -158,6 +158,11 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .id = ComputeLibraryComponentId("Visibility Cell"),
             .serializable = true,
         },
+        LibraryComponentDesc{
+            .name = "Region Portal",
+            .id = ComputeLibraryComponentId("Region Portal"),
+            .serializable = true,
+        },
     };
     return kCatalog;
 }

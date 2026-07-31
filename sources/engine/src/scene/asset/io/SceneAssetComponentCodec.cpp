@@ -41,6 +41,7 @@ enum SceneNodeComponentBits : std::uint32_t {
       DetailSwitchBit = 1U << 22U,
       VisibilityBlockerBit = 1U << 23U,
       VisibilityCellBit = 1U << 24U,
+      RegionPortalBit = 1U << 25U,
 };
 
 constexpr std::uint32_t KnownComponentBits = CameraBit |
@@ -61,7 +62,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit;
 
 [[nodiscard]] std::uint32_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint32_t componentBits = 0;
@@ -90,6 +91,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
       componentBits |= components.detailSwitch.has_value() ? DetailSwitchBit : 0U;
       componentBits |= components.visibilityBlocker.has_value() ? VisibilityBlockerBit : 0U;
       componentBits |= components.visibilityCell.has_value() ? VisibilityCellBit : 0U;
+      componentBits |= components.regionPortal.has_value() ? RegionPortalBit : 0U;
     return componentBits;
 }
 
@@ -343,6 +345,12 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         if (!IsVisibilityCellComponentValid(cell)) return false;
         output.visibilityCell = cell;
     }
+    if ((componentBits & RegionPortalBit) != 0U) {
+        if (fileVersion < 19U) return false;
+        ScenePrefabRegionPortalComponent portal{};
+        if (!input.ReadUInt64(portal.sourceCellNodeStableId) || !input.ReadUInt64(portal.targetCellNodeStableId) || !input.ReadUInt32(portal.purposes) || !input.ReadBool(portal.enabled) || !IsRegionPortalPurposeMaskValid(portal.purposes)) return false;
+        output.regionPortal = portal;
+    }
     return true;
 }
 
@@ -498,6 +506,13 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(cell.membership));
         SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(cell.visibilityOverride));
         SceneAssetBinaryIO::WriteBool(output, cell.enabled);
+    }
+    if (components.regionPortal.has_value()) {
+        const ScenePrefabRegionPortalComponent& portal = *components.regionPortal;
+        SceneAssetBinaryIO::WriteUInt64(output, portal.sourceCellNodeStableId);
+        SceneAssetBinaryIO::WriteUInt64(output, portal.targetCellNodeStableId);
+        SceneAssetBinaryIO::WriteUInt32(output, portal.purposes);
+        SceneAssetBinaryIO::WriteBool(output, portal.enabled);
     }
 }
 
