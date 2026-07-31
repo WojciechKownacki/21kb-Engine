@@ -44,6 +44,7 @@ enum SceneNodeComponentBits : std::uint32_t {
       RegionPortalBit = 1U << 25U,
       AuxFrameBit = 1U << 26U,
       GeometrySwarmBit = 1U << 27U,
+      SurfaceCastBit = 1U << 28U,
 };
 
 constexpr std::uint32_t KnownComponentBits = CameraBit |
@@ -64,7 +65,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit;
 
 [[nodiscard]] std::uint32_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint32_t componentBits = 0;
@@ -96,6 +97,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
       componentBits |= components.regionPortal.has_value() ? RegionPortalBit : 0U;
       componentBits |= components.auxFrame.has_value() ? AuxFrameBit : 0U;
       componentBits |= components.geometrySwarm.has_value() ? GeometrySwarmBit : 0U;
+      componentBits |= components.surfaceCast.has_value() ? SurfaceCastBit : 0U;
     return componentBits;
 }
 
@@ -382,6 +384,16 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         if (!IsGeometrySwarmComponentPersistable(swarm)) return false;
         output.geometrySwarm = swarm;
     }
+    if ((componentBits & SurfaceCastBit) != 0U) {
+        SurfaceCastComponent surfaceCast{};
+        std::uint32_t content = 0U;
+        if (!input.ReadUInt64(surfaceCast.materialAssetId) || !input.ReadUInt32(surfaceCast.receiverLayerMask) ||
+            !input.ReadInt32(surfaceCast.order) || !input.ReadUInt32(content) || !input.ReadBool(surfaceCast.enabled) ||
+            content > static_cast<std::uint32_t>(SurfaceCastContent::Detail)) return false;
+        surfaceCast.content = static_cast<SurfaceCastContent>(content);
+        if (!IsSurfaceCastComponentPersistable(surfaceCast)) return false;
+        output.surfaceCast = surfaceCast;
+    }
     return true;
 }
 
@@ -569,6 +581,14 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteBool(output, swarm.castsShadow);
         SceneAssetBinaryIO::WriteBool(output, swarm.receivesShadow);
         SceneAssetBinaryIO::WriteBool(output, swarm.enabled);
+    }
+    if (components.surfaceCast.has_value()) {
+        const SurfaceCastComponent& surfaceCast = *components.surfaceCast;
+        SceneAssetBinaryIO::WriteUInt64(output, surfaceCast.materialAssetId);
+        SceneAssetBinaryIO::WriteUInt32(output, surfaceCast.receiverLayerMask);
+        SceneAssetBinaryIO::WriteInt32(output, surfaceCast.order);
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(surfaceCast.content));
+        SceneAssetBinaryIO::WriteBool(output, surfaceCast.enabled);
     }
 }
 

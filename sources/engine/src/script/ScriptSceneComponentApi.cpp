@@ -21,6 +21,7 @@
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/GeometrySwarmComponent.hpp"
+#include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
 #include "engine/scene/SceneCharacterControllerComponents.hpp"
@@ -44,6 +45,7 @@
 #include "engine/scene/SceneRegionPortalComponents.hpp"
 #include "engine/scene/SceneAuxFrameComponents.hpp"
 #include "engine/scene/SceneGeometrySwarmComponents.hpp"
+#include "engine/scene/SceneSurfaceCastComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -240,7 +242,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 25> kComponentNames{
+constexpr std::array<std::string_view, 26> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
@@ -266,6 +268,7 @@ constexpr std::array<std::string_view, 25> kComponentNames{
     "Region Portal",
     "Secondary Frame",
     "Geometry Swarm",
+    "Surface Cast",
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kRegionShapePropertyDescs{
@@ -367,6 +370,10 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 14> kGeometrySwarmPropert
     ScriptSceneComponentPropertyDesc{ "spacing.x", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "spacing.y", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "spacing.z", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "instanceScale", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::UInt32 },
     ScriptSceneComponentPropertyDesc{ "castsShadow", ScriptValueType::Bool }, ScriptSceneComponentPropertyDesc{ "receivesShadow", ScriptValueType::Bool }, ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+constexpr std::array<ScriptSceneComponentPropertyDesc, 5> kSurfaceCastPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "materialAssetId", ScriptValueType::Hash }, ScriptSceneComponentPropertyDesc{ "receiverLayerMask", ScriptValueType::UInt32 },
+    ScriptSceneComponentPropertyDesc{ "order", ScriptValueType::Int }, ScriptSceneComponentPropertyDesc{ "content", ScriptValueType::Int }, ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 1> kTagsPropertyDescs{
@@ -907,6 +914,13 @@ constexpr std::array<FieldBinding, 14> kGeometrySwarmFields{
     KB_BOOL(kb::scene::GeometrySwarmComponent, receivesShadow),
     KB_BOOL(kb::scene::GeometrySwarmComponent, enabled),
 };
+constexpr std::array<FieldBinding, 5> kSurfaceCastFields{
+    FieldBinding{ "materialAssetId", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SurfaceCastComponent*>(component)->materialAssetId, ScriptValueType::Hash }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::SurfaceCastComponent*>(component)->materialAssetId = value.AsUInt64(); return true; } },
+    FieldBinding{ "receiverLayerMask", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SurfaceCastComponent*>(component)->receiverLayerMask }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::UInt32 || value.AsUInt32() == 0U) return false; static_cast<kb::scene::SurfaceCastComponent*>(component)->receiverLayerMask = value.AsUInt32(); return true; } },
+    FieldBinding{ "order", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SurfaceCastComponent*>(component)->order }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Int) return false; static_cast<kb::scene::SurfaceCastComponent*>(component)->order = value.AsInt(); return true; } },
+    FieldBinding{ "content", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::SurfaceCastComponent*>(component)->content) }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::SurfaceCastContent::Detail)) return false; static_cast<kb::scene::SurfaceCastComponent*>(component)->content = static_cast<kb::scene::SurfaceCastContent>(value.AsInt()); return true; } },
+    KB_BOOL(kb::scene::SurfaceCastComponent, enabled),
+};
 
 #undef KB_BOOL
 #undef KB_INT
@@ -993,6 +1007,7 @@ void MarkVisibilityCellModified(kb::scene::Scene& scene, kb::scene::SceneEntity 
 void MarkRegionPortalModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().RegionPortals().MarkModified(entity); }
 void MarkSecondaryFrameModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().AuxFrames().MarkModified(entity); }
 void MarkGeometrySwarmModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().GeometrySwarms().MarkModified(entity); }
+void MarkSurfaceCastModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().SurfaceCasts().MarkModified(entity); }
 
 [[nodiscard]] ComponentAccess AccessComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
     if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
@@ -1098,6 +1113,10 @@ void MarkGeometrySwarmModified(kb::scene::Scene& scene, kb::scene::SceneEntity e
         kb::scene::GeometrySwarmComponent* component = scene.Components().GeometrySwarms().TryGet(entity);
         return ComponentAccess{ component, component, kGeometrySwarmFields, &MarkGeometrySwarmModified };
     }
+    if (componentName == "Surface Cast") {
+        kb::scene::SurfaceCastComponent* component = scene.Components().SurfaceCasts().TryGet(entity);
+        return ComponentAccess{ component, component, kSurfaceCastFields, &MarkSurfaceCastModified };
+    }
     return {};
 }
 
@@ -1128,6 +1147,7 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "Region Portal") return kRegionPortalPropertyDescs;
     if (componentName == "Secondary Frame") return kSecondaryFramePropertyDescs;
     if (componentName == "Geometry Swarm") return kGeometrySwarmPropertyDescs;
+    if (componentName == "Surface Cast") return kSurfaceCastPropertyDescs;
     if (componentName == "Camera") {
         return kCameraPropertyDescs;
     }
@@ -1236,6 +1256,14 @@ ScriptSceneComponentMutationResult ScriptSceneComponentApi::SetProperty(
         if (!kb::scene::IsGeometrySwarmComponentPersistable(candidate) ||
             (candidate.enabled && !kb::scene::IsGeometrySwarmComponentValid(candidate))) {
             return ScriptSceneComponentMutationResult{ .error = "Geometry Swarm values must remain valid before the swarm can be enabled" };
+        }
+    }
+    if (componentName == "Surface Cast") {
+        const kb::scene::SurfaceCastComponent& surfaceCast = *static_cast<const kb::scene::SurfaceCastComponent*>(component.immutable);
+        kb::scene::SurfaceCastComponent candidate = surfaceCast;
+        if (!field->write(&candidate, value)) return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
+        if (!kb::scene::IsSurfaceCastComponentPersistable(candidate) || (candidate.enabled && !kb::scene::IsSurfaceCastComponentValid(candidate))) {
+            return ScriptSceneComponentMutationResult{ .error = "Surface Cast values must remain valid before it can be enabled" };
         }
     }
 
