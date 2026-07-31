@@ -175,6 +175,20 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "worldBackdrop.priority=" << backdrop.priority << '\n';
         output << "worldBackdrop.enabled=" << (backdrop.enabled ? 1 : 0) << '\n';
     }
+    output << "ambientRadiance=" << (components.ambientRadiance.has_value() ? 1 : 0) << '\n';
+    if (components.ambientRadiance.has_value()) {
+        const AmbientRadianceComponent& ambient = *components.ambientRadiance;
+        output << "ambientRadiance.mode=" << static_cast<std::uint32_t>(ambient.mode) << '\n';
+        WriteVec3(output, "ambientRadiance.color", ambient.color);
+        WriteVec3(output, "ambientRadiance.horizonColor", ambient.horizonColor);
+        WriteVec3(output, "ambientRadiance.zenithColor", ambient.zenithColor);
+        output << "ambientRadiance.environmentAssetId=" << ambient.environmentAssetId << '\n';
+        output << "ambientRadiance.intensity=" << ambient.intensity << '\n';
+        output << "ambientRadiance.diffuseIntensity=" << ambient.diffuseIntensity << '\n';
+        output << "ambientRadiance.specularIntensity=" << ambient.specularIntensity << '\n';
+        output << "ambientRadiance.priority=" << ambient.priority << '\n';
+        output << "ambientRadiance.enabled=" << (ambient.enabled ? 1 : 0) << '\n';
+    }
 
     output << "behaviour=" << (components.behaviour.has_value() ? 1 : 0) << '\n';
     if (components.behaviour.has_value()) {

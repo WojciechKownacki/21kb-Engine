@@ -10,6 +10,7 @@
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
+#include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -1157,6 +1158,10 @@ template <typename Integer>
     return property >= InspectorPropertyId::WorldBackdropMode && property <= InspectorPropertyId::WorldBackdropEnabled;
 }
 
+[[nodiscard]] bool IsAmbientRadianceProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::AmbientRadianceMode && property <= InspectorPropertyId::AmbientRadianceEnabled;
+}
+
 template <typename Mutator>
 [[nodiscard]] bool EditNavAgent(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
     if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
@@ -1231,6 +1236,16 @@ template <typename Mutator>
         return false;
     }
     sceneContext.Scene().Components().WorldBackdrops().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditAmbientRadiance(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::AmbientRadianceComponent* ambient = sceneContext.Scene().Components().AmbientRadiances().TryGet(entity);
+    if (ambient == nullptr || !mutator(*ambient)) { sceneContext.CancelSceneEditTransaction(); return false; }
+    sceneContext.Scene().Components().AmbientRadiances().MarkModified(entity);
     static_cast<void>(sceneContext.CommitSceneEditTransaction());
     return true;
 }
@@ -1426,6 +1441,45 @@ template <typename Mutator>
     return true;
 }
 
+[[nodiscard]] std::string AmbientRadianceFieldText(const kb::scene::AmbientRadianceComponent& value, InspectorPropertyId property) {
+    switch (property) {
+    case InspectorPropertyId::AmbientRadianceMode: return std::to_string(static_cast<int>(value.mode));
+    case InspectorPropertyId::AmbientRadianceColorR: return FormatCompactFloat(value.color.x);
+    case InspectorPropertyId::AmbientRadianceColorG: return FormatCompactFloat(value.color.y);
+    case InspectorPropertyId::AmbientRadianceColorB: return FormatCompactFloat(value.color.z);
+    case InspectorPropertyId::AmbientRadianceHorizonColorR: return FormatCompactFloat(value.horizonColor.x);
+    case InspectorPropertyId::AmbientRadianceHorizonColorG: return FormatCompactFloat(value.horizonColor.y);
+    case InspectorPropertyId::AmbientRadianceHorizonColorB: return FormatCompactFloat(value.horizonColor.z);
+    case InspectorPropertyId::AmbientRadianceZenithColorR: return FormatCompactFloat(value.zenithColor.x);
+    case InspectorPropertyId::AmbientRadianceZenithColorG: return FormatCompactFloat(value.zenithColor.y);
+    case InspectorPropertyId::AmbientRadianceZenithColorB: return FormatCompactFloat(value.zenithColor.z);
+    case InspectorPropertyId::AmbientRadianceEnvironmentAssetId: return std::to_string(value.environmentAssetId);
+    case InspectorPropertyId::AmbientRadianceIntensity: return FormatCompactFloat(value.intensity);
+    case InspectorPropertyId::AmbientRadianceDiffuseIntensity: return FormatCompactFloat(value.diffuseIntensity);
+    case InspectorPropertyId::AmbientRadianceSpecularIntensity: return FormatCompactFloat(value.specularIntensity);
+    case InspectorPropertyId::AmbientRadiancePriority: return std::to_string(value.priority);
+    default: return {};
+    }
+}
+
+[[nodiscard]] bool HandleAmbientRadianceClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::AmbientRadianceComponent* ambient = sceneContext.Scene().Components().AmbientRadiances().TryGet(entity);
+    if (ambient == nullptr) return false;
+    if (hit.property == InspectorPropertyId::AmbientRadianceEnabled) {
+        return EditAmbientRadiance(sceneContext, entity, "Toggle Ambient Radiance", [](kb::scene::AmbientRadianceComponent& value) { value.enabled = !value.enabled; return true; });
+    }
+    if (hit.property == InspectorPropertyId::AmbientRadianceMode) {
+        return EditAmbientRadiance(sceneContext, entity, "Set Ambient Radiance Mode", [](kb::scene::AmbientRadianceComponent& value) {
+            const auto next = static_cast<std::uint8_t>(value.mode) + 1U;
+            value.mode = next > static_cast<std::uint8_t>(kb::scene::AmbientRadianceMode::EstimatedEnvironment)
+                ? kb::scene::AmbientRadianceMode::Constant : static_cast<kb::scene::AmbientRadianceMode>(next);
+            return true;
+        });
+    }
+    if (IsAmbientRadianceProperty(hit.property)) sceneContext.Inspector().BeginTextEdit(hit.property, AmbientRadianceFieldText(*ambient, hit.property));
+    return true;
+}
+
 [[nodiscard]] bool ApplyNavAgentText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
     float value = 0.0F;
     if (property == InspectorPropertyId::NavAgentAreaMask) {
@@ -1567,6 +1621,46 @@ template <typename Mutator>
         if (!kb::scene::IsWorldBackdropComponentValid(candidate)) return false;
         value = candidate;
         return true;
+    });
+}
+
+[[nodiscard]] bool ApplyAmbientRadianceText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    if (property == InspectorPropertyId::AmbientRadianceMode || property == InspectorPropertyId::AmbientRadiancePriority) {
+        std::int32_t integer = 0; const auto parsed = std::from_chars(text.data(), text.data() + text.size(), integer);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) return false;
+        return EditAmbientRadiance(sceneContext, entity, "Edit Ambient Radiance", [property, integer](kb::scene::AmbientRadianceComponent& value) {
+            auto candidate = value;
+            if (property == InspectorPropertyId::AmbientRadianceMode) candidate.mode = static_cast<kb::scene::AmbientRadianceMode>(integer); else candidate.priority = integer;
+            if (!kb::scene::IsAmbientRadianceComponentValid(candidate)) return false;
+            value = candidate; return true;
+        });
+    }
+    if (property == InspectorPropertyId::AmbientRadianceEnvironmentAssetId) {
+        std::uint64_t assetId = 0U; const auto parsed = std::from_chars(text.data(), text.data() + text.size(), assetId);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) return false;
+        return EditAmbientRadiance(sceneContext, entity, "Edit Ambient Radiance Environment", [assetId](kb::scene::AmbientRadianceComponent& value) { value.environmentAssetId = assetId; return true; });
+    }
+    float number = 0.0F;
+    if (!ParseFloat(text, number) || !std::isfinite(number)) return false;
+    return EditAmbientRadiance(sceneContext, entity, "Edit Ambient Radiance", [property, number](kb::scene::AmbientRadianceComponent& value) {
+        auto candidate = value;
+        switch (property) {
+        case InspectorPropertyId::AmbientRadianceColorR: candidate.color.x = number; break;
+        case InspectorPropertyId::AmbientRadianceColorG: candidate.color.y = number; break;
+        case InspectorPropertyId::AmbientRadianceColorB: candidate.color.z = number; break;
+        case InspectorPropertyId::AmbientRadianceHorizonColorR: candidate.horizonColor.x = number; break;
+        case InspectorPropertyId::AmbientRadianceHorizonColorG: candidate.horizonColor.y = number; break;
+        case InspectorPropertyId::AmbientRadianceHorizonColorB: candidate.horizonColor.z = number; break;
+        case InspectorPropertyId::AmbientRadianceZenithColorR: candidate.zenithColor.x = number; break;
+        case InspectorPropertyId::AmbientRadianceZenithColorG: candidate.zenithColor.y = number; break;
+        case InspectorPropertyId::AmbientRadianceZenithColorB: candidate.zenithColor.z = number; break;
+        case InspectorPropertyId::AmbientRadianceIntensity: candidate.intensity = number; break;
+        case InspectorPropertyId::AmbientRadianceDiffuseIntensity: candidate.diffuseIntensity = number; break;
+        case InspectorPropertyId::AmbientRadianceSpecularIntensity: candidate.specularIntensity = number; break;
+        default: return false;
+        }
+        if (!kb::scene::IsAmbientRadianceComponentValid(candidate)) return false;
+        value = candidate; return true;
     });
 }
 
@@ -1902,6 +1996,11 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                     sceneContext.Scene().Components().WorldBackdrops().Remove(entity);
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
+            } else if (hit.section == InspectorSectionId::AmbientRadiance && sceneContext.Scene().Components().AmbientRadiances().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Ambient Radiance")) {
+                    sceneContext.Scene().Components().AmbientRadiances().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
             } else if (const std::optional<PhysicsComponentKind> kind = PhysicsKindForSection(hit.section); kind.has_value()) {
                 static_cast<void>(sceneContext.RemovePhysicsComponent(entity, *kind));
             }
@@ -1981,6 +2080,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::WorldBackdrop) {
         return HandleWorldBackdropClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::AmbientRadiance) {
+        return HandleAmbientRadianceClick(sceneContext, entity, hit);
     }
     if (hit.section == InspectorSectionId::Tags &&
         hit.kind == InspectorHitKind::TextField &&
@@ -2270,6 +2372,12 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         if (sceneContext.Scene().Entities().IsAlive(entity) &&
             IsWorldBackdropProperty(inspector.EditedProperty())) {
             static_cast<void>(ApplyWorldBackdropText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            IsAmbientRadianceProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyAmbientRadianceText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
             inspector.EndTextEdit();
             return true;
         }

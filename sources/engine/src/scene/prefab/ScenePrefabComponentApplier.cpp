@@ -48,6 +48,9 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.worldBackdrop.has_value()) {
         sceneComponents.WorldBackdrops().Set(entity, *components.worldBackdrop);
     }
+    if (components.ambientRadiance.has_value()) {
+        sceneComponents.AmbientRadiances().Set(entity, *components.ambientRadiance);
+    }
     if (components.behaviour.has_value()) {
         sceneComponents.Behaviours().Set(entity, *components.behaviour);
     }

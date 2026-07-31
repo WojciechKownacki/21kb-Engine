@@ -20,6 +20,7 @@
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
+#include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
 
@@ -105,6 +106,10 @@ public:
     static void SetWorldBackdrop(Scene& scene, SceneEntity entity, const WorldBackdropComponent& component);
     static void RemoveWorldBackdrop(Scene& scene, SceneEntity entity) noexcept;
     static void MarkWorldBackdropModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static AmbientRadianceComponent* TryGetAmbientRadiance(Scene& scene, SceneEntity entity) noexcept;
+    static void SetAmbientRadiance(Scene& scene, SceneEntity entity, const AmbientRadianceComponent& component);
+    static void RemoveAmbientRadiance(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkAmbientRadianceModified(Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static AudioSourceComponent* TryGetAudioSource(Scene& scene, SceneEntity entity) noexcept;
     static void SetAudioSource(Scene& scene, SceneEntity entity, const AudioSourceComponent& audioSource);

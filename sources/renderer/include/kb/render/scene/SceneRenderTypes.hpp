@@ -65,6 +65,29 @@ struct SceneRenderWorldBackdrop {
     float gradientExponent = 1.0F;
 };
 
+enum class SceneRenderAmbientRadianceMode : std::uint8_t {
+    Constant,
+    Gradient,
+    EnvironmentMap,
+    ProceduralSky,
+    CapturedEnvironment,
+    EstimatedEnvironment,
+};
+
+// Renderer-owned, derived copy of the selected AmbientRadianceComponent.
+// It is frame input only and never feeds back into ECS authoring state.
+struct SceneRenderAmbientRadiance {
+    std::uint64_t entityId = 0U;
+    SceneRenderAmbientRadianceMode mode = SceneRenderAmbientRadianceMode::Constant;
+    std::array<float, 3> color{};
+    std::array<float, 3> horizonColor{};
+    std::array<float, 3> zenithColor{};
+    std::uint64_t environmentAssetId = 0U;
+    float intensity = 1.0F;
+    float diffuseIntensity = 1.0F;
+    float specularIntensity = 0.25F;
+};
+
 enum class SceneRenderLightingPath : std::uint8_t {
     Forward,
     ClusteredForwardPlus,

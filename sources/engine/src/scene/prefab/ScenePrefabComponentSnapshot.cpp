@@ -72,6 +72,9 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const WorldBackdropComponent* backdrop = sceneComponents.WorldBackdrops().TryGet(entity)) {
         components.worldBackdrop = *backdrop;
     }
+    if (const AmbientRadianceComponent* ambient = sceneComponents.AmbientRadiances().TryGet(entity)) {
+        components.ambientRadiance = *ambient;
+    }
 
     if (const BehaviourComponent* behaviour = sceneComponents.Behaviours().TryGet(entity)) {
         components.behaviour = *behaviour;

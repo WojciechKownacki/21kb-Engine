@@ -16,6 +16,7 @@
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
+#include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/ecs/Query.hpp"
 #include "engine/ecs/UnsafeHotQuery.hpp"
 #include "engine/ecs/World.hpp"
@@ -143,6 +144,68 @@ namespace {
         }
     });
     return selected.has_value() ? std::optional<SceneRenderWorldBackdrop>{ selected->desc } : std::nullopt;
+}
+
+[[nodiscard]] SceneRenderAmbientRadianceMode AmbientRadianceModeOf(kb::scene::AmbientRadianceMode mode) noexcept {
+    switch (mode) {
+    case kb::scene::AmbientRadianceMode::Constant: return SceneRenderAmbientRadianceMode::Constant;
+    case kb::scene::AmbientRadianceMode::Gradient: return SceneRenderAmbientRadianceMode::Gradient;
+    case kb::scene::AmbientRadianceMode::EnvironmentMap: return SceneRenderAmbientRadianceMode::EnvironmentMap;
+    case kb::scene::AmbientRadianceMode::ProceduralSky: return SceneRenderAmbientRadianceMode::ProceduralSky;
+    case kb::scene::AmbientRadianceMode::CapturedEnvironment: return SceneRenderAmbientRadianceMode::CapturedEnvironment;
+    case kb::scene::AmbientRadianceMode::EstimatedEnvironment: return SceneRenderAmbientRadianceMode::EstimatedEnvironment;
+    }
+    return SceneRenderAmbientRadianceMode::Constant;
+}
+
+[[nodiscard]] std::optional<SceneRenderAmbientRadiance> ResolveAmbientRadiance(
+    const kb::scene::Scene& scene,
+    const std::optional<SceneRenderWorldBackdrop>& worldBackdrop) {
+    struct SelectedAmbient { SceneRenderAmbientRadiance desc{}; std::int32_t priority = 0; };
+    std::optional<SelectedAmbient> selected;
+    kb::ecs::Query<kb::scene::AmbientRadianceComponent> query = const_cast<kb::scene::Scene&>(scene).Runtime().EcsWorld().CreateQuery<kb::scene::AmbientRadianceComponent>();
+    kb::ecs::UnsafeHotReadQuery<kb::scene::AmbientRadianceComponent> hot;
+    kb::ecs::QueryExecutionSettings settings{};
+    settings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
+    if (!query.IsValid() || !hot.Rebuild(query, settings)) return std::nullopt;
+    hot.ForEachRange(settings.maxBatchSize, [&selected](const auto& batch) {
+        const kb::scene::AmbientRadianceComponent* components = batch.template Components<0>();
+        for (std::size_t index = 0U; index < batch.Count(); ++index) {
+            const kb::scene::SceneEntity entity = batch.EntityAt(index);
+            const kb::scene::AmbientRadianceComponent& ambient = components[index];
+            if (!entity.IsValid() || !ambient.enabled || !kb::scene::IsAmbientRadianceComponentValid(ambient)) continue;
+            const SceneRenderAmbientRadiance candidate{
+                .entityId = entity.Id(), .mode = AmbientRadianceModeOf(ambient.mode),
+                .color = { ambient.color.x, ambient.color.y, ambient.color.z },
+                .horizonColor = { ambient.horizonColor.x, ambient.horizonColor.y, ambient.horizonColor.z },
+                .zenithColor = { ambient.zenithColor.x, ambient.zenithColor.y, ambient.zenithColor.z },
+                .environmentAssetId = ambient.environmentAssetId, .intensity = ambient.intensity,
+                .diffuseIntensity = ambient.diffuseIntensity, .specularIntensity = ambient.specularIntensity,
+            };
+            if (!selected.has_value() || ambient.priority > selected->priority ||
+                (ambient.priority == selected->priority && candidate.entityId < selected->desc.entityId)) {
+                selected = SelectedAmbient{ .desc = candidate, .priority = ambient.priority };
+            }
+        }
+    });
+    if (!selected.has_value()) return std::nullopt;
+
+    // Capture and estimation are derived each synchronization from the selected
+    // authored backdrop. No copy is persisted into the ambient component, so ECS
+    // remains the single source of truth for both authoring inputs.
+    SceneRenderAmbientRadiance result = selected->desc;
+    if ((result.mode == SceneRenderAmbientRadianceMode::CapturedEnvironment ||
+         result.mode == SceneRenderAmbientRadianceMode::EstimatedEnvironment) &&
+        worldBackdrop.has_value()) {
+        const SceneRenderWorldBackdrop& backdrop = *worldBackdrop;
+        result.color = backdrop.color;
+        result.horizonColor = backdrop.horizonColor;
+        result.zenithColor = backdrop.zenithColor;
+        if (backdrop.mode == SceneRenderWorldBackdropMode::EnvironmentMap) {
+            result.environmentAssetId = backdrop.environmentAssetId;
+        }
+    }
+    return result;
 }
 
 // Converts the batched transform system's column-major 3x4 world affine into the
@@ -359,7 +422,9 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
     static_cast<void>(renderScene.RemoveMeshesNotInSorted(std::span<const std::uint64_t>{ seenMeshes_ }));
     static_cast<void>(renderScene.RemoveCamerasNotInSorted(std::span<const std::uint64_t>{ seenCameras_ }));
     static_cast<void>(renderScene.RemoveLightsNotInSorted(std::span<const std::uint64_t>{ seenLights_ }));
-    renderScene.SetWorldBackdrop(ResolveWorldBackdrop(scene));
+    const std::optional<SceneRenderWorldBackdrop> worldBackdrop = ResolveWorldBackdrop(scene);
+    renderScene.SetWorldBackdrop(worldBackdrop);
+    renderScene.SetAmbientRadiance(ResolveAmbientRadiance(scene, worldBackdrop));
 }
 
 void EcsRenderSceneSynchronizer::SyncEntities(
@@ -390,7 +455,9 @@ void EcsRenderSceneSynchronizer::SyncEntities(
     }
     transformPrecomputedReadCount_ = worldReader.PrecomputedReadCount();
     transformResolvedFallbackCount_ = worldReader.ResolvedFallbackCount();
-    renderScene.SetWorldBackdrop(ResolveWorldBackdrop(scene));
+    const std::optional<SceneRenderWorldBackdrop> worldBackdrop = ResolveWorldBackdrop(scene);
+    renderScene.SetWorldBackdrop(worldBackdrop);
+    renderScene.SetAmbientRadiance(ResolveAmbientRadiance(scene, worldBackdrop));
 }
 
 void EcsRenderSceneSynchronizer::SyncMeshWorldAffines(

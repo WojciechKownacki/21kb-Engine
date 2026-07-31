@@ -207,6 +207,28 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseAmbientRadiance(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "ambientRadiance", present)) return false;
+    if (!present) return true;
+    AmbientRadianceComponent ambient{};
+    std::uint32_t mode = 0U;
+    if (!ParseField(fields, "ambientRadiance.mode", mode) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "ambientRadiance.color", ambient.color) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "ambientRadiance.horizonColor", ambient.horizonColor) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "ambientRadiance.zenithColor", ambient.zenithColor) ||
+        !ParseOptionalField(fields, "ambientRadiance.environmentAssetId", ambient.environmentAssetId) ||
+        !ParseOptionalField(fields, "ambientRadiance.intensity", ambient.intensity) ||
+        !ParseOptionalField(fields, "ambientRadiance.diffuseIntensity", ambient.diffuseIntensity) ||
+        !ParseOptionalField(fields, "ambientRadiance.specularIntensity", ambient.specularIntensity) ||
+        !ParseOptionalField(fields, "ambientRadiance.priority", ambient.priority) ||
+        !ParseOptionalBool(fields, "ambientRadiance.enabled", ambient.enabled)) return false;
+    ambient.mode = static_cast<AmbientRadianceMode>(mode);
+    if (!IsAmbientRadianceComponentValid(ambient)) return false;
+    components.ambientRadiance = ambient;
+    return true;
+}
+
 [[nodiscard]] bool ParseCharacterController(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool hasCharacterController = false;
     if (!ParseOptionalComponentFlag(fields, "characterController", hasCharacterController)) {
@@ -393,6 +415,7 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseContentInstance(fields, components)
         && ParseStreamFocus(fields, components)
         && ParseWorldBackdrop(fields, components)
+        && ParseAmbientRadiance(fields, components)
         && ParseCharacterController(fields, components)
         && ParseJoint(fields, components)
         && ScenePrefabAssetTagsParser::Parse(fields, components)

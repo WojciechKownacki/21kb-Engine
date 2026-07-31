@@ -14,6 +14,7 @@
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
+#include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
 #include "engine/scene/SceneCharacterControllerComponents.hpp"
@@ -30,6 +31,7 @@
 #include "engine/scene/SceneContentInstanceComponents.hpp"
 #include "engine/scene/SceneStreamFocusComponents.hpp"
 #include "engine/scene/SceneWorldBackdropComponents.hpp"
+#include "engine/scene/SceneAmbientRadianceComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -226,7 +228,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 18> kComponentNames{
+constexpr std::array<std::string_view, 19> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
@@ -245,6 +247,7 @@ constexpr std::array<std::string_view, 18> kComponentNames{
     "ContentInstance",
     "StreamFocus",
     "WorldBackdrop",
+    "Ambient Radiance",
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kRegionShapePropertyDescs{
@@ -298,6 +301,14 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 15> kWorldBackdropPropert
     ScriptSceneComponentPropertyDesc{ "gradientExponent", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "priority", ScriptValueType::Int },
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 16> kAmbientRadiancePropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "mode", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "color.x", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "color.y", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "color.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "horizonColor.x", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "horizonColor.y", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "horizonColor.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "zenithColor.x", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "zenithColor.y", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "zenithColor.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "environmentAssetId", ScriptValueType::Hash }, ScriptSceneComponentPropertyDesc{ "intensity", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "diffuseIntensity", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "specularIntensity", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "priority", ScriptValueType::Int }, ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 1> kTagsPropertyDescs{
@@ -748,6 +759,19 @@ constexpr std::array<FieldBinding, 15> kWorldBackdropFields{
     KB_BOOL(kb::scene::WorldBackdropComponent, enabled),
 };
 
+constexpr std::array<FieldBinding, 16> kAmbientRadianceFields{
+    FieldBinding{ "mode", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AmbientRadianceComponent*>(component)->mode) }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Int) return false; const auto mode = static_cast<kb::scene::AmbientRadianceMode>(value.AsInt()); if (!kb::scene::IsAmbientRadianceModeValid(mode)) return false; static_cast<kb::scene::AmbientRadianceComponent*>(component)->mode = mode; return true; } },
+    KB_NESTED_FLOAT(kb::scene::AmbientRadianceComponent, color, x), KB_NESTED_FLOAT(kb::scene::AmbientRadianceComponent, color, y), KB_NESTED_FLOAT(kb::scene::AmbientRadianceComponent, color, z),
+    KB_NESTED_FLOAT(kb::scene::AmbientRadianceComponent, horizonColor, x), KB_NESTED_FLOAT(kb::scene::AmbientRadianceComponent, horizonColor, y), KB_NESTED_FLOAT(kb::scene::AmbientRadianceComponent, horizonColor, z),
+    KB_NESTED_FLOAT(kb::scene::AmbientRadianceComponent, zenithColor, x), KB_NESTED_FLOAT(kb::scene::AmbientRadianceComponent, zenithColor, y), KB_NESTED_FLOAT(kb::scene::AmbientRadianceComponent, zenithColor, z),
+    FieldBinding{ "environmentAssetId", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AmbientRadianceComponent*>(component)->environmentAssetId, ScriptValueType::Hash }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::AmbientRadianceComponent*>(component)->environmentAssetId = value.AsUInt64(); return true; } },
+    FieldBinding{ "intensity", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AmbientRadianceComponent*>(component)->intensity }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat()) || value.AsFloat() < 0.0F) return false; static_cast<kb::scene::AmbientRadianceComponent*>(component)->intensity = value.AsFloat(); return true; } },
+    FieldBinding{ "diffuseIntensity", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AmbientRadianceComponent*>(component)->diffuseIntensity }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat()) || value.AsFloat() < 0.0F) return false; static_cast<kb::scene::AmbientRadianceComponent*>(component)->diffuseIntensity = value.AsFloat(); return true; } },
+    FieldBinding{ "specularIntensity", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::AmbientRadianceComponent*>(component)->specularIntensity }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat()) || value.AsFloat() < 0.0F) return false; static_cast<kb::scene::AmbientRadianceComponent*>(component)->specularIntensity = value.AsFloat(); return true; } },
+    FieldBinding{ "priority", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::AmbientRadianceComponent*>(component)->priority) }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Int) return false; static_cast<kb::scene::AmbientRadianceComponent*>(component)->priority = value.AsInt(); return true; } },
+    KB_BOOL(kb::scene::AmbientRadianceComponent, enabled),
+};
+
 #undef KB_BOOL
 #undef KB_INT
 #undef KB_UINT32
@@ -826,6 +850,7 @@ void MarkGuideCurveModified(kb::scene::Scene& scene, kb::scene::SceneEntity enti
 void MarkContentInstanceModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().ContentInstances().MarkModified(entity); }
 void MarkStreamFocusModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().StreamFocuses().MarkModified(entity); }
 void MarkWorldBackdropModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().WorldBackdrops().MarkModified(entity); }
+void MarkAmbientRadianceModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().AmbientRadiances().MarkModified(entity); }
 
 [[nodiscard]] ComponentAccess AccessComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
     if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
@@ -903,6 +928,10 @@ void MarkWorldBackdropModified(kb::scene::Scene& scene, kb::scene::SceneEntity e
         kb::scene::WorldBackdropComponent* component = scene.Components().WorldBackdrops().TryGet(entity);
         return ComponentAccess{ component, component, kWorldBackdropFields, &MarkWorldBackdropModified };
     }
+    if (componentName == "Ambient Radiance") {
+        kb::scene::AmbientRadianceComponent* component = scene.Components().AmbientRadiances().TryGet(entity);
+        return ComponentAccess{ component, component, kAmbientRadianceFields, &MarkAmbientRadianceModified };
+    }
     return {};
 }
 
@@ -926,6 +955,7 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "ContentInstance") return kContentInstancePropertyDescs;
     if (componentName == "StreamFocus") return kStreamFocusPropertyDescs;
     if (componentName == "WorldBackdrop") return kWorldBackdropPropertyDescs;
+    if (componentName == "Ambient Radiance") return kAmbientRadiancePropertyDescs;
     if (componentName == "Camera") {
         return kCameraPropertyDescs;
     }

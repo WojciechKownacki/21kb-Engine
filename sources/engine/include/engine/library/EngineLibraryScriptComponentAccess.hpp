@@ -17,6 +17,7 @@
 #include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
+#include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
@@ -352,6 +353,14 @@ struct ScriptComponentAccess<kb::scene::WorldBackdropComponent> {
     [[nodiscard]] static kb::scene::WorldBackdropComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().WorldBackdrops().TryGet(entity); }
     static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::WorldBackdropComponent& value) { scene.Components().WorldBackdrops().Set(entity, value); }
     [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().WorldBackdrops().Has(entity)) return false; scene.Components().WorldBackdrops().Remove(entity); return true; }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::AmbientRadianceComponent> {
+    [[nodiscard]] static const kb::scene::AmbientRadianceComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().AmbientRadiances().TryGet(entity); }
+    [[nodiscard]] static kb::scene::AmbientRadianceComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().AmbientRadiances().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::AmbientRadianceComponent& value) { scene.Components().AmbientRadiances().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().AmbientRadiances().Has(entity)) return false; scene.Components().AmbientRadiances().Remove(entity); return true; }
 };
 
 template <typename Component>

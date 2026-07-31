@@ -109,6 +109,14 @@ const std::optional<SceneRenderWorldBackdrop>& RenderScene::WorldBackdrop() cons
     return worldBackdrop_;
 }
 
+void RenderScene::SetAmbientRadiance(std::optional<SceneRenderAmbientRadiance> ambientRadiance) noexcept {
+    ambientRadiance_ = std::move(ambientRadiance);
+}
+
+const std::optional<SceneRenderAmbientRadiance>& RenderScene::AmbientRadiance() const noexcept {
+    return ambientRadiance_;
+}
+
 bool RenderScene::RemoveMesh(std::uint64_t entityId) noexcept {
     const bool removed = meshes_.erase(entityId) != 0U;
     if (removed) {
