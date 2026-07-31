@@ -16,7 +16,9 @@
 #include "engine/library/EngineLibraryTaskFactories.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
+#include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsLayersAsset.hpp"
 #include "engine/scene/Scene.hpp"
@@ -44,6 +46,8 @@
 #include "engine/scene/SceneTimers.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/TagsComponent.hpp"
+#include "engine/scene/StreamFocusComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/script/LuaScriptBackend.hpp"
 #include "engine/script/NativeScriptBuildPipeline.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
@@ -10874,6 +10878,10 @@ void RunScriptSceneComponentApiTest() {
     scene.Components().Cameras().Set(object.Entity(), kb::scene::CameraComponent{});
     scene.Components().Tags().Set(object.Entity(), kb::scene::TagsComponent{});
     scene.Components().RegionShapes().Set(object.Entity(), kb::scene::RegionShapeComponent{});
+    scene.Components().GuideCurves().Set(object.Entity(), kb::scene::GuideCurveComponent{});
+    scene.Components().ContentInstances().Set(object.Entity(), kb::scene::ContentInstanceComponent{});
+    scene.Components().StreamFocuses().Set(object.Entity(), kb::scene::StreamFocusComponent{});
+    scene.Components().WorldBackdrops().Set(object.Entity(), kb::scene::WorldBackdropComponent{});
 
     kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Transform"), "Script component API did not see Transform");
     kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Visibility"), "Script component API did not see Visibility");
@@ -10881,6 +10889,7 @@ void RunScriptSceneComponentApiTest() {
     kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Tags"), "Script component API did not see Tags");
     kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "RegionShape"), "Script component API did not see Region Shape");
     kb::tests::Require(!kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Light"), "Script component API reported missing Light as present");
+    kb::tests::Require(!kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "3D Radiance Emitter"), "Script component API reported missing 3D Radiance Emitter as present");
     const std::span<const kb::script::ScriptSceneComponentPropertyDesc> transformProperties = kb::script::ScriptSceneComponentApi::ComponentProperties("Transform");
     kb::tests::Require(transformProperties.size() == 13U, "Script component API did not expose Transform property reflection");
     kb::tests::Require(transformProperties[0].name == "localPosition.x" && transformProperties[0].type == kb::script::ScriptValueType::Float && transformProperties[0].writable,
@@ -11033,6 +11042,10 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     scene.Components().NavObstacles().Set(object.Entity(), kb::scene::NavObstacle{});
     scene.Components().Tags().Set(object.Entity(), kb::scene::TagsComponent{});
     scene.Components().RegionShapes().Set(object.Entity(), kb::scene::RegionShapeComponent{});
+    scene.Components().GuideCurves().Set(object.Entity(), kb::scene::GuideCurveComponent{});
+    scene.Components().ContentInstances().Set(object.Entity(), kb::scene::ContentInstanceComponent{});
+    scene.Components().StreamFocuses().Set(object.Entity(), kb::scene::StreamFocusComponent{});
+    scene.Components().WorldBackdrops().Set(object.Entity(), kb::scene::WorldBackdropComponent{});
 
     std::size_t fieldsChecked = 0U;
     for (const std::string_view componentName : kb::script::ScriptSceneComponentApi::ComponentNames()) {
@@ -11063,14 +11076,16 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
                 validValue = kb::script::ScriptValue{ true };
                 break;
             case kb::script::ScriptValueType::Int:
-                // 2 is a safe value for every Int-typed field here,
-                // including enum-backed ones with a range check
-                // (BehaviourTickGroup::Physics == 2, well within
-                // [Input=0, Presentation=5]).
-                validValue = kb::script::ScriptValue{ 2 };
+                // 1 is shared by every currently exposed enum-backed field
+                // (including GuideCurveInterpolation, whose valid range is
+                // only [0, 1]).
+                validValue = kb::script::ScriptValue{ 1 };
                 break;
             case kb::script::ScriptValueType::UInt32:
                 validValue = kb::script::ScriptValue{ std::uint32_t{ 3U } };
+                break;
+            case kb::script::ScriptValueType::Hash:
+                validValue = kb::script::ScriptValue{ std::uint64_t{ 17U }, kb::script::ScriptValueType::Hash };
                 break;
             case kb::script::ScriptValueType::Float:
                 validValue = kb::script::ScriptValue{ 2.5F };
@@ -11091,9 +11106,11 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
             if (property.type == kb::script::ScriptValueType::Float) {
                 kb::tests::Require(kb::tests::NearlyEqual(get.value.AsFloat(), 2.5F), ("Script component API did not round-trip " + fieldLabel).c_str());
             } else if (property.type == kb::script::ScriptValueType::Int) {
-                kb::tests::Require(get.value.AsInt() == 2, ("Script component API did not round-trip " + fieldLabel).c_str());
+                kb::tests::Require(get.value.AsInt() == 1, ("Script component API did not round-trip " + fieldLabel).c_str());
             } else if (property.type == kb::script::ScriptValueType::UInt32) {
                 kb::tests::Require(get.value.AsUInt32() == 3U, ("Script component API did not round-trip " + fieldLabel).c_str());
+            } else if (property.type == kb::script::ScriptValueType::Hash) {
+                kb::tests::Require(get.value.AsUInt64() == 17U, ("Script component API did not round-trip " + fieldLabel).c_str());
             } else if (property.type == kb::script::ScriptValueType::Bool) {
                 kb::tests::Require(get.value.AsBool(), ("Script component API did not round-trip " + fieldLabel).c_str());
             } else if (property.type == kb::script::ScriptValueType::String) {
@@ -11110,10 +11127,10 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    // LIB-141: Light grew five more fields (areaWidth/areaHeight - a pre-existing reflection
-    // gap closed here - plus useColorTemperature/colorTemperatureKelvin/layerMask), so the
-    // total climbs from 92 to 97.
-    kb::tests::Require(fieldsChecked == 130U, "Script component API generated accessor coverage test did not exercise the expected total field count (130) across all components");
+    // The scene catalog now exposes 18 authorable component surfaces. This
+    // total includes the stable task components and the complete 3D Radiance
+    // Emitter schema, including its surface-emitter geometry fields.
+    kb::tests::Require(fieldsChecked == 158U, "Script component API generated accessor coverage test did not exercise the expected total field count (158) across all components");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -11147,6 +11164,10 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     scene.Components().NavObstacles().Set(object.Entity(), kb::scene::NavObstacle{});
     scene.Components().Tags().Set(object.Entity(), kb::scene::TagsComponent{});
     scene.Components().RegionShapes().Set(object.Entity(), kb::scene::RegionShapeComponent{});
+    scene.Components().GuideCurves().Set(object.Entity(), kb::scene::GuideCurveComponent{});
+    scene.Components().ContentInstances().Set(object.Entity(), kb::scene::ContentInstanceComponent{});
+    scene.Components().StreamFocuses().Set(object.Entity(), kb::scene::StreamFocusComponent{});
+    scene.Components().WorldBackdrops().Set(object.Entity(), kb::scene::WorldBackdropComponent{});
 
     std::size_t propertiesChecked = 0U;
     for (const std::string_view componentName : kb::script::ScriptSceneComponentApi::ComponentNames()) {
@@ -11156,6 +11177,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
             const bool isNarrowValueType = property.type == kb::script::ScriptValueType::Bool ||
                 property.type == kb::script::ScriptValueType::Int ||
                 property.type == kb::script::ScriptValueType::UInt32 ||
+                property.type == kb::script::ScriptValueType::Hash ||
                 property.type == kb::script::ScriptValueType::Float ||
                 property.type == kb::script::ScriptValueType::String;
             kb::tests::Require(isNarrowValueType, ("Script component property " + fieldLabel + " uses a ScriptValueType wide enough to carry a raw pointer's bit pattern — LIB-082 requires component fields to stay within Bool/Int/Float").c_str());
@@ -11174,10 +11196,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    // LIB-141: Light grew five more fields (areaWidth/areaHeight - a pre-existing reflection
-    // gap closed here - plus useColorTemperature/colorTemperatureKelvin/layerMask), so the
-    // total climbs from 92 to 97.
-    kb::tests::Require(propertiesChecked == 130U, "LIB-082 raw-pointer audit did not exercise the expected total field count (130) across all components");
+    kb::tests::Require(propertiesChecked == 158U, "LIB-082 raw-pointer audit did not exercise the expected total field count (158) across all components");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {

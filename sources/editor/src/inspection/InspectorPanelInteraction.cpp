@@ -783,8 +783,11 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     case kb::scene::LightKind::Point:
         return kb::scene::LightKind::Spot;
     case kb::scene::LightKind::Spot:
+        return kb::scene::LightKind::AreaRect;
     case kb::scene::LightKind::AreaRect:
+        return kb::scene::LightKind::AreaDisk;
     case kb::scene::LightKind::AreaDisk:
+        return kb::scene::LightKind::Tube;
     case kb::scene::LightKind::Tube:
         return kb::scene::LightKind::Directional;
     }

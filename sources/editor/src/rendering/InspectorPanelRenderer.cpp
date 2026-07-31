@@ -1725,7 +1725,7 @@ void PaintLightSection(
     const EditorTheme& theme,
     const InspectorPanelState& inspector,
     const kb::scene::LightComponent& light) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Light, HeroIconKind::Bolt, "Light");
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Light, HeroIconKind::Bolt, "3D Radiance Emitter");
     section.Field("Type", InspectorComponentLabelFormatter::LightKindName(light.kind), InspectorPropertyId::LightKind);
     section.Float("Color R", FormatFloat(light.color.x, 2), InspectorPropertyId::LightColorR);
     section.Float("Color G", FormatFloat(light.color.y, 2), InspectorPropertyId::LightColorG);

@@ -9,7 +9,7 @@ namespace {
 [[nodiscard]] std::vector<InspectorComponentTile> BuildTiles() {
     std::vector<InspectorComponentTile> tiles{
         InspectorComponentTile{ .id = "Camera", .category = "Rendering", .label = "Camera", .icon = HeroIconKind::Eye },
-        InspectorComponentTile{ .id = "Light", .category = "Rendering", .label = "Light", .icon = HeroIconKind::Bolt },
+        InspectorComponentTile{ .id = "3D Radiance Emitter", .category = "Rendering", .label = "3D Radiance Emitter", .icon = HeroIconKind::Bolt },
         InspectorComponentTile{ .id = "MeshRenderer", .category = "Rendering", .label = "Mesh Renderer", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "WorldBackdrop", .category = "Rendering", .label = "World Backdrop", .icon = HeroIconKind::Eye },
         InspectorComponentTile{ .id = "Tags", .category = "Scene", .label = "Object Classification", .icon = HeroIconKind::AdjustmentsHorizontal },

@@ -2705,7 +2705,7 @@ void RunEngineLibraryComponentRegistryTest() {
     // Id determinism, same contract as LIB-026's function id.
     kb::tests::Require(kb::library::ComputeLibraryComponentId("Camera") == kb::library::ComputeLibraryComponentId("Camera"),
         "Engine21kbLibrary component id must be deterministic for the same name");
-    kb::tests::Require(kb::library::ComputeLibraryComponentId("Camera") != kb::library::ComputeLibraryComponentId("Light"),
+    kb::tests::Require(kb::library::ComputeLibraryComponentId("Camera") != kb::library::ComputeLibraryComponentId("3D Radiance Emitter"),
         "Engine21kbLibrary component id must differ for different names");
 
     // Honest serializable check: round-trip a scene containing every
