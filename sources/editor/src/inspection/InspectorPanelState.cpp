@@ -177,6 +177,28 @@ int InspectorPanelState::ValueTypeDropdownHover() const noexcept {
     return valueTypeDropdownHover_;
 }
 
+void InspectorPanelState::ToggleTagsDropdown() noexcept {
+    tagsDropdownOpen_ = !tagsDropdownOpen_;
+    tagsDropdownHover_ = -1;
+}
+
+void InspectorPanelState::CloseTagsDropdown() noexcept {
+    tagsDropdownOpen_ = false;
+    tagsDropdownHover_ = -1;
+}
+
+bool InspectorPanelState::IsTagsDropdownOpen() const noexcept {
+    return tagsDropdownOpen_;
+}
+
+void InspectorPanelState::SetTagsDropdownHover(int index) noexcept {
+    tagsDropdownHover_ = index;
+}
+
+int InspectorPanelState::TagsDropdownHover() const noexcept {
+    return tagsDropdownHover_;
+}
+
 bool InspectorPanelState::IsHovered(InspectorHitKind kind, InspectorSectionId section, InspectorPropertyId property, int index) const noexcept {
     return hoveredKind_ == kind && hoveredSection_ == section && hoveredProperty_ == property && (index < 0 || hoveredIndex_ == index);
 }
@@ -246,12 +268,23 @@ void InspectorPanelState::BeginTextEdit(InspectorPropertyId property, std::strin
 }
 
 void InspectorPanelState::AppendText(wchar_t character) {
-    if (character >= 32 && character <= 126) {
-        if (editSelectingAll_) {
-            editBuffer_.clear();
-            editSelectingAll_ = false;
-        }
-        editBuffer_.push_back(static_cast<char>(character));
+    if (character < 32 || character == 127 || (character >= 0xD800 && character <= 0xDFFF)) {
+        return;
+    }
+    if (editSelectingAll_) {
+        editBuffer_.clear();
+        editSelectingAll_ = false;
+    }
+    const std::uint32_t codePoint = static_cast<std::uint32_t>(character);
+    if (codePoint <= 0x7FU) {
+        editBuffer_.push_back(static_cast<char>(codePoint));
+    } else if (codePoint <= 0x7FFU) {
+        editBuffer_.push_back(static_cast<char>(0xC0U | (codePoint >> 6U)));
+        editBuffer_.push_back(static_cast<char>(0x80U | (codePoint & 0x3FU)));
+    } else {
+        editBuffer_.push_back(static_cast<char>(0xE0U | (codePoint >> 12U)));
+        editBuffer_.push_back(static_cast<char>(0x80U | ((codePoint >> 6U) & 0x3FU)));
+        editBuffer_.push_back(static_cast<char>(0x80U | (codePoint & 0x3FU)));
     }
 }
 
@@ -261,7 +294,8 @@ void InspectorPanelState::InsertText(std::string_view text) {
         editSelectingAll_ = false;
     }
     for (const char character : text) {
-        if (character >= 32 && character <= 126) {
+        const unsigned char byte = static_cast<unsigned char>(character);
+        if (byte >= 32U && byte != 127U) {
             editBuffer_.push_back(character);
         }
     }

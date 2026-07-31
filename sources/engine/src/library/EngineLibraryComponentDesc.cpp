@@ -168,6 +168,36 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .id = ComputeLibraryComponentId("Secondary Frame"),
             .serializable = true,
         },
+        LibraryComponentDesc{
+            .name = "Geometry Swarm",
+            .id = ComputeLibraryComponentId("Geometry Swarm"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Surface Cast",
+            .id = ComputeLibraryComponentId("Surface Cast"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Facing Panel",
+            .id = ComputeLibraryComponentId("Facing Panel"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Kreska przestrzenna",
+            .id = ComputeLibraryComponentId("Kreska przestrzenna"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Wst\xC4\x99" "ga historii",
+            .id = ComputeLibraryComponentId("Wst\xC4\x99" "ga historii"),
+            .serializable = true,
+        },
+        LibraryComponentDesc{
+            .name = "Echo soczewki",
+            .id = ComputeLibraryComponentId("Echo soczewki"),
+            .serializable = true,
+        },
     };
     return kCatalog;
 }

@@ -27,7 +27,7 @@ constexpr std::array kLifecycleEvents{
 // PucLuaFunctionApi and PucLuaTaskApi install module tables directly from this
 // list.  The names and each wrapper's return shape therefore stay true to the
 // callable sandbox and generated stubs cannot drift from it.
-constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 181> kLuaBindings{ {
+constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 185> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "Audio", "SetMixer", "Audio.SetMixer", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "Audio", "ActiveMixer", "Audio.ActiveMixer", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -93,6 +93,10 @@ constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 181> kLuaBindings{ {
     { "World", "Destroy", "World.Destroy", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "World", "SetTag", "World.SetTag", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "World", "HasTag", "World.HasTag", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "World", "DefineTag", "World.DefineTag", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "World", "RemoveTagDefinition", "World.RemoveTagDefinition", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "World", "TagCount", "World.TagCount", ScriptApiCatalogLuaReturnKind::Default, "" },
+    { "World", "TagAt", "World.TagAt", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "World", "SetParent", "World.SetParent", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "World", "InstantiatePrefab", "World.InstantiatePrefab", ScriptApiCatalogLuaReturnKind::SingleOutput, "entity" },
     { "Scene", "Load", "Scene.Load", ScriptApiCatalogLuaReturnKind::SingleOutput, "id" },

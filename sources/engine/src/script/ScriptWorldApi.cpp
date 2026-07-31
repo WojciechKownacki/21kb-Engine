@@ -13,6 +13,7 @@
 #include "engine/scene/ScenePrefabInstance.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
@@ -141,6 +142,22 @@ ScriptFunctionCallResult BoolResult(std::string_view pin, bool value) {
     };
 }
 
+ScriptFunctionCallResult StringResult(std::string_view pin, std::string value) {
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ std::string{ pin }, ScriptValue{ std::move(value) } } },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult IntResult(std::string_view pin, std::int32_t value) {
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ std::string{ pin }, ScriptValue{ value } } },
+        .errors = {},
+    };
+}
+
 [[nodiscard]] std::string Trim(std::string_view value) {
     const std::size_t begin = value.find_first_not_of(" \t\r\n");
     if (begin == std::string_view::npos) {
@@ -148,43 +165,6 @@ ScriptFunctionCallResult BoolResult(std::string_view pin, bool value) {
     }
     const std::size_t end = value.find_last_not_of(" \t\r\n");
     return std::string{ value.substr(begin, end - begin + 1U) };
-}
-
-[[nodiscard]] std::vector<std::string> ParseTags(std::string_view tags) {
-    std::vector<std::string> parsed;
-    std::size_t tokenBegin = 0U;
-    while (tokenBegin <= tags.size()) {
-        const std::size_t tokenEnd = tags.find_first_of(",;", tokenBegin);
-        std::string tag = Trim(tags.substr(tokenBegin, tokenEnd == std::string_view::npos ? std::string_view::npos : tokenEnd - tokenBegin));
-        if (!tag.empty()) {
-            parsed.push_back(std::move(tag));
-        }
-        if (tokenEnd == std::string_view::npos) {
-            break;
-        }
-        tokenBegin = tokenEnd + 1U;
-    }
-    return parsed;
-}
-
-[[nodiscard]] std::string JoinTags(const std::vector<std::string>& tags) {
-    std::string joined;
-    for (const std::string& tag : tags) {
-        if (!joined.empty()) {
-            joined += ", ";
-        }
-        joined += tag;
-    }
-    return joined;
-}
-
-[[nodiscard]] bool HasTagValue(std::string_view tags, std::string_view tag) {
-    for (const std::string& existingTag : ParseTags(tags)) {
-        if (existingTag == tag) {
-            return true;
-        }
-    }
-    return false;
 }
 
 struct FindByNameContext {
@@ -468,33 +448,42 @@ ScriptFunctionCallResult SetTag(const ScriptFunctionCallContext& context, std::s
     const std::string tag = StringArg(arguments, "tag");
     const ScriptValue* enabledValue = FindArg(arguments, "enabled");
     const bool enabled = enabledValue == nullptr || enabledValue->AsBool(true);
-    const std::string normalizedTag = Trim(tag);
-    if (!entity.IsValid() || !context.scene->Entities().IsAlive(entity) || normalizedTag.empty()) {
+    if (!entity.IsValid() || !context.scene->Entities().IsAlive(entity)) {
         return BoolResult("tagged", false);
     }
+    return BoolResult("tagged", context.scene->Tags().SetAssigned(entity, tag, enabled));
+}
 
-    kb::scene::SceneTagsComponents tagsComponents = context.scene->Components().Tags();
-    std::vector<std::string> tags;
-    if (const kb::scene::TagsComponent* current = tagsComponents.TryGet(entity)) {
-        tags = ParseTags(kb::scene::TagsText(*current));
+ScriptFunctionCallResult DefineTag(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
     }
-    const auto existing = std::find(tags.begin(), tags.end(), normalizedTag);
-    if (enabled) {
-        if (existing == tags.end()) {
-            tags.push_back(normalizedTag);
-        }
-    } else if (existing != tags.end()) {
-        tags.erase(existing);
-    }
+    return BoolResult("defined", context.scene->Tags().Define(StringArg(arguments, "tag")));
+}
 
-    if (tags.empty()) {
-        tagsComponents.Remove(entity);
-    } else {
-        kb::scene::TagsComponent tagsComponent;
-        kb::scene::SetTagsText(tagsComponent, JoinTags(tags));
-        tagsComponents.Set(entity, tagsComponent);
+ScriptFunctionCallResult RemoveTagDefinition(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
     }
-    return BoolResult("tagged", true);
+    return BoolResult("removed", context.scene->Tags().Undefine(Trim(StringArg(arguments, "tag"))));
+}
+
+ScriptFunctionCallResult TagCount(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument>) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    return IntResult("count", static_cast<std::int32_t>(context.scene->Tags().Names().size()));
+}
+
+ScriptFunctionCallResult TagAt(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return NoScene();
+    }
+    const std::int32_t index = IntArg(arguments, "index", -1);
+    const std::span<const std::string> names = context.scene->Tags().Names();
+    return StringResult("tag", index >= 0 && static_cast<std::size_t>(index) < names.size()
+        ? names[static_cast<std::size_t>(index)]
+        : std::string{});
 }
 
 ScriptFunctionCallResult HasTag(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
@@ -503,9 +492,7 @@ ScriptFunctionCallResult HasTag(const ScriptFunctionCallContext& context, std::s
     }
     const kb::scene::SceneEntity entity = EntityArg(arguments, "entity");
     const std::string tag = Trim(StringArg(arguments, "tag"));
-    const kb::scene::TagsComponent* tags = context.scene->Components().Tags().TryGet(entity);
-    const bool tagged = tags != nullptr && HasTagValue(kb::scene::TagsText(*tags), tag);
-    return BoolResult("tagged", tagged);
+    return BoolResult("tagged", context.scene->Tags().IsAssigned(entity, tag));
 }
 
 struct FindByTagContext {
@@ -519,8 +506,7 @@ void FindByTagVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformC
     if (context == nullptr || context->scene == nullptr || context->found.IsValid()) {
         return;
     }
-    const kb::scene::TagsComponent* tags = context->scene->Components().Tags().TryGet(entity);
-    if (tags != nullptr && HasTagValue(kb::scene::TagsText(*tags), context->tag)) {
+    if (context->scene->Tags().IsAssigned(entity, context->tag)) {
         context->found = entity;
     }
 }
@@ -555,8 +541,7 @@ void FindAllByTagVisitor(kb::scene::SceneEntity entity, const kb::scene::Transfo
     if (context == nullptr || context->scene == nullptr || context->found.IsValid()) {
         return;
     }
-    const kb::scene::TagsComponent* tags = context->scene->Components().Tags().TryGet(entity);
-    if (tags == nullptr || !HasTagValue(kb::scene::TagsText(*tags), context->tag)) {
+    if (!context->scene->Tags().IsAssigned(entity, context->tag)) {
         return;
     }
     if (context->matchIndex == context->skip) {
@@ -933,6 +918,21 @@ bool ScriptWorldApi::Register(ScriptRuntimeHost& host) {
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "tag", ScriptValueType::String, true }, ScriptFunctionPin{ "enabled", ScriptValueType::Bool, false } },
         { ScriptFunctionPin{ "tagged", ScriptValueType::Bool, true } },
         &SetTag) && ok;
+    ok = RegisterFunction(host, "World.DefineTag",
+        { ScriptFunctionPin{ "tag", ScriptValueType::String, true } },
+        { ScriptFunctionPin{ "defined", ScriptValueType::Bool, true } },
+        &DefineTag) && ok;
+    ok = RegisterFunction(host, "World.RemoveTagDefinition",
+        { ScriptFunctionPin{ "tag", ScriptValueType::String, true } },
+        { ScriptFunctionPin{ "removed", ScriptValueType::Bool, true } },
+        &RemoveTagDefinition) && ok;
+    ok = RegisterFunction(host, "World.TagCount", {},
+        { ScriptFunctionPin{ "count", ScriptValueType::Int, true } },
+        &TagCount) && ok;
+    ok = RegisterFunction(host, "World.TagAt",
+        { ScriptFunctionPin{ "index", ScriptValueType::Int, true } },
+        { ScriptFunctionPin{ "tag", ScriptValueType::String, true } },
+        &TagAt) && ok;
     ok = RegisterFunction(host, "World.HasTag",
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "tag", ScriptValueType::String, true } },
         { ScriptFunctionPin{ "tagged", ScriptValueType::Bool, true } },

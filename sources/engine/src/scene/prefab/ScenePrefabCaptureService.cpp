@@ -33,15 +33,23 @@ void ResolveEntityReferences(ScenePrefab& prefab, std::span<const SceneEntity> c
                     : target->second;
             }
         }
-        if (!node->components.regionPortal.has_value()) continue;
-        ScenePrefabRegionPortalComponent& portal = *node->components.regionPortal;
-        if (portal.sourceCellNodeStableId != ScenePrefabRegionPortalComponent::InvalidCellNodeStableId) {
-            const auto source = stableNodeIds.find(portal.sourceCellNodeStableId);
-            portal.sourceCellNodeStableId = source == stableNodeIds.end() ? ScenePrefabRegionPortalComponent::UnresolvedCellNodeStableId : source->second;
+        if (node->components.regionPortal.has_value()) {
+            ScenePrefabRegionPortalComponent& portal = *node->components.regionPortal;
+            if (portal.sourceCellNodeStableId != ScenePrefabRegionPortalComponent::InvalidCellNodeStableId) {
+                const auto source = stableNodeIds.find(portal.sourceCellNodeStableId);
+                portal.sourceCellNodeStableId = source == stableNodeIds.end() ? ScenePrefabRegionPortalComponent::UnresolvedCellNodeStableId : source->second;
+            }
+            if (portal.targetCellNodeStableId != ScenePrefabRegionPortalComponent::InvalidCellNodeStableId) {
+                const auto targetCell = stableNodeIds.find(portal.targetCellNodeStableId);
+                portal.targetCellNodeStableId = targetCell == stableNodeIds.end() ? ScenePrefabRegionPortalComponent::UnresolvedCellNodeStableId : targetCell->second;
+            }
         }
-        if (portal.targetCellNodeStableId != ScenePrefabRegionPortalComponent::InvalidCellNodeStableId) {
-            const auto targetCell = stableNodeIds.find(portal.targetCellNodeStableId);
-            portal.targetCellNodeStableId = targetCell == stableNodeIds.end() ? ScenePrefabRegionPortalComponent::UnresolvedCellNodeStableId : targetCell->second;
+        if (node->components.lensEcho.has_value()) {
+            ScenePrefabLensEchoComponent& echo = *node->components.lensEcho;
+            if (echo.sourceNodeStableId != ScenePrefabLensEchoComponent::InvalidSourceNodeStableId) {
+                const auto source = stableNodeIds.find(echo.sourceNodeStableId);
+                echo.sourceNodeStableId = source == stableNodeIds.end() ? ScenePrefabLensEchoComponent::UnresolvedSourceNodeStableId : source->second;
+            }
         }
     }
 }

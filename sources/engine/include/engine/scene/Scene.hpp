@@ -61,7 +61,9 @@ class SceneRuntime;
 class SceneRuntimeQueries;
 class SceneAccess;
 class SceneState;
+class SceneTagCatalog;
 class SceneTasks;
+class SceneTagCatalogQueries;
 class SceneTimers;
 class SceneTimelineQueries;
 class SceneTimelines;
@@ -117,6 +119,8 @@ public:
     [[nodiscard]] SceneLocalization Localization() const noexcept;
     [[nodiscard]] SceneTimers Timers() noexcept;
     [[nodiscard]] SceneTasks Tasks() noexcept;
+    [[nodiscard]] SceneTagCatalog Tags() noexcept;
+    [[nodiscard]] SceneTagCatalogQueries Tags() const noexcept;
     [[nodiscard]] SceneMaterialInstances MaterialInstances() noexcept;
     [[nodiscard]] SceneMaterialInstanceQueries MaterialInstances() const noexcept;
     [[nodiscard]] SceneParticleSystems Particles() noexcept;

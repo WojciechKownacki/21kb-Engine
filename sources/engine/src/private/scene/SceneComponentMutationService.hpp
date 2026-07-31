@@ -25,6 +25,9 @@
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
+#include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/HistoryRibbonComponent.hpp"
+#include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
@@ -150,6 +153,18 @@ public:
     static void SetFacingPanel(Scene& scene, SceneEntity entity, const FacingPanelComponent& component);
     static void RemoveFacingPanel(Scene& scene, SceneEntity entity) noexcept;
     static void MarkFacingPanelModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static SpaceStrokeComponent* TryGetSpaceStroke(Scene& scene, SceneEntity entity) noexcept;
+    static void SetSpaceStroke(Scene& scene, SceneEntity entity, const SpaceStrokeComponent& component);
+    static void RemoveSpaceStroke(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkSpaceStrokeModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static HistoryRibbonComponent* TryGetHistoryRibbon(Scene& scene, SceneEntity entity) noexcept;
+    static void SetHistoryRibbon(Scene& scene, SceneEntity entity, const HistoryRibbonComponent& component);
+    static void RemoveHistoryRibbon(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkHistoryRibbonModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static LensEchoComponent* TryGetLensEcho(Scene& scene, SceneEntity entity) noexcept;
+    static void SetLensEcho(Scene& scene, SceneEntity entity, const LensEchoComponent& component);
+    static void RemoveLensEcho(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkLensEchoModified(Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static AudioSourceComponent* TryGetAudioSource(Scene& scene, SceneEntity entity) noexcept;
     static void SetAudioSource(Scene& scene, SceneEntity entity, const AudioSourceComponent& audioSource);

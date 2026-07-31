@@ -392,6 +392,7 @@ add_executable(kb_editor WIN32
     src/private/scene/material/EditorTextureAssetMetadataResolver.hpp
     src/private/platform/win32/EditorMaterialColorPickerDialog.hpp
     src/private/platform/win32/EditorMaterialParameterValueDialog.hpp
+    src/private/platform/win32/EditorTagNameDialog.hpp
     src/private/platform/win32/EditorMeshAssetPickerDialog.hpp
     src/private/platform/win32/EditorDebugLogGate.hpp
     src/private/platform/win32/EditorModalMessageLoop.hpp
@@ -598,6 +599,7 @@ add_executable(kb_editor WIN32
     src/platform/win32/EditorAssetImportDialog.cpp
     src/platform/win32/EditorMaterialColorPickerDialog.cpp
     src/platform/win32/EditorMaterialParameterValueDialog.cpp
+    src/platform/win32/EditorTagNameDialog.cpp
     src/platform/win32/EditorMeshAssetPickerDialog.cpp
     src/platform/win32/EditorSceneDirtyPrompt.cpp
     src/platform/win32/EditorSceneFileDialog.cpp
