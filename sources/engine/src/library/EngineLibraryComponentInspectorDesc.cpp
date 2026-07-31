@@ -367,6 +367,22 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether the portal participates in traversal." },
             },
         },
+        LibraryComponentInspectorDesc{
+            .componentName = "Secondary Frame",
+            .displayName = "Secondary Frame",
+            .category = "Rendering",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "mode", "Mode", "Flat, mirrored, cube or panoramic 360-degree cubemap-atlas projection." },
+                LibraryComponentInspectorFieldDesc{ "imageTargetId", "Image Target", "Runtime image target that receives the generated frame." },
+                LibraryComponentInspectorFieldDesc{ "width", "Width", "Output width in pixels." },
+                LibraryComponentInspectorFieldDesc{ "height", "Height", "Output height in pixels." },
+                LibraryComponentInspectorFieldDesc{ "mirrorPlaneNormal.x", "Mirror Plane X", "World-space X normal of the reflection plane." },
+                LibraryComponentInspectorFieldDesc{ "mirrorPlaneNormal.y", "Mirror Plane Y", "World-space Y normal of the reflection plane." },
+                LibraryComponentInspectorFieldDesc{ "mirrorPlaneNormal.z", "Mirror Plane Z", "World-space Z normal of the reflection plane." },
+                LibraryComponentInspectorFieldDesc{ "mirrorPlaneOffset", "Mirror Plane Offset", "World-space reflection-plane offset." },
+                LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether the frame is rendered to its target." },
+            },
+        },
     };
     return kCatalog;
 }

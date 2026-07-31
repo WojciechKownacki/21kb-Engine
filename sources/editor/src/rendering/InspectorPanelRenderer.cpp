@@ -24,6 +24,7 @@
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
+#include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
@@ -1701,6 +1702,27 @@ void PaintRegionPortalSection(HDC dc, RECT content, int& y, const EditorTheme& t
     y = section.Bottom() + kSectionGap;
 }
 
+void PaintSecondaryFrameSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::AuxFrameComponent& frame) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::SecondaryFrame, HeroIconKind::Eye, "Secondary Frame", true);
+    const char* modeName = "Flat";
+    switch (frame.mode) {
+    case kb::scene::AuxFrameMode::Flat: modeName = "Flat"; break;
+    case kb::scene::AuxFrameMode::Mirror: modeName = "Mirror"; break;
+    case kb::scene::AuxFrameMode::Cube: modeName = "Cube"; break;
+    case kb::scene::AuxFrameMode::Panoramic: modeName = "Panoramic 360° Atlas"; break;
+    }
+    section.Field("Mode", modeName, InspectorPropertyId::SecondaryFrameMode);
+    section.Field("Image Target", std::to_string(frame.imageTargetId), InspectorPropertyId::SecondaryFrameImageTargetId);
+    section.Field("Width", std::to_string(frame.width), InspectorPropertyId::SecondaryFrameWidth);
+    section.Field("Height", std::to_string(frame.height), InspectorPropertyId::SecondaryFrameHeight);
+    section.Field("Mirror Plane X", FormatFloat(frame.mirrorPlaneNormal.x, 3), InspectorPropertyId::SecondaryFramePlaneNormalX);
+    section.Field("Mirror Plane Y", FormatFloat(frame.mirrorPlaneNormal.y, 3), InspectorPropertyId::SecondaryFramePlaneNormalY);
+    section.Field("Mirror Plane Z", FormatFloat(frame.mirrorPlaneNormal.z, 3), InspectorPropertyId::SecondaryFramePlaneNormalZ);
+    section.Field("Mirror Offset", FormatFloat(frame.mirrorPlaneOffset, 3), InspectorPropertyId::SecondaryFramePlaneOffset);
+    section.Bool("Enabled", frame.enabled, InspectorPropertyId::SecondaryFrameEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
 constexpr int kCameraSectionRows = 13;
 
 void PaintCameraSection(
@@ -2087,6 +2109,10 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         const int h = SectionHeight(inspector, InspectorSectionId::RegionPortal, 4);
         if (y < content.bottom && y + h > content.top) PaintRegionPortalSection(dc, content, y, theme, inspector, *portal); else y += h + kSectionGap;
     }
+    if (const kb::scene::AuxFrameComponent* frame = scene.Components().AuxFrames().TryGet(selected); frame != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::SecondaryFrame, 9);
+        if (y < content.bottom && y + h > content.top) PaintSecondaryFrameSection(dc, content, y, theme, inspector, *frame); else y += h + kSectionGap;
+    }
 
     if (sceneContext.HasEntityScript(selected)) {
         const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);
@@ -2331,6 +2357,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (scene.Components().VisibilityBlockers().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::VisibilityBlocker, 7) + kSectionGap;
     if (scene.Components().VisibilityCells().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::VisibilityCell, 4) + kSectionGap;
     if (scene.Components().RegionPortals().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::RegionPortal, 4) + kSectionGap;
+    if (scene.Components().AuxFrames().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::SecondaryFrame, 9) + kSectionGap;
     if (sceneContext.HasEntityScript(selected)) {
         const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariables(selected).size());
         height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
@@ -3437,6 +3464,18 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             AdvanceRow(y);
             if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::RegionPortal, InspectorPropertyId::RegionPortalEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
             AdvanceRow(y);
+        }
+        y += kSectionGap;
+    }
+    if (sceneContext.Scene().Components().AuxFrames().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::SecondaryFrame, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::SecondaryFrame)) {
+            constexpr std::array<InspectorPropertyId, 9> properties{ InspectorPropertyId::SecondaryFrameMode, InspectorPropertyId::SecondaryFrameImageTargetId, InspectorPropertyId::SecondaryFrameWidth, InspectorPropertyId::SecondaryFrameHeight, InspectorPropertyId::SecondaryFramePlaneNormalX, InspectorPropertyId::SecondaryFramePlaneNormalY, InspectorPropertyId::SecondaryFramePlaneNormalZ, InspectorPropertyId::SecondaryFramePlaneOffset, InspectorPropertyId::SecondaryFrameEnabled };
+            for (InspectorPropertyId property : properties) {
+                const InspectorPanelRenderer::Hit hit = property == InspectorPropertyId::SecondaryFrameEnabled ? HitBool(RowRect(viewport, y), InspectorSectionId::SecondaryFrame, property, x, scrolledY) : HitTextRow(RowRect(viewport, y), InspectorSectionId::SecondaryFrame, property, x, scrolledY);
+                if (hit.kind != InspectorHitKind::None) return hit;
+                AdvanceRow(y);
+            }
         }
         y += kSectionGap;
     }

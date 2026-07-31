@@ -168,6 +168,11 @@ void DestroyRemovedObjects(Scene& scene, std::span<const SceneObject> oldObjects
         if (!owner.IsValid() || !scene.Entities().IsAlive(owner)) {
             return false;
         }
+        if (nodes[nodeIndex].components.auxFrame.has_value()) {
+            components.AuxFrames().Set(owner.Entity(), *nodes[nodeIndex].components.auxFrame);
+        } else {
+            components.AuxFrames().Remove(owner.Entity());
+        }
         const std::optional<ScenePrefabJointComponent>& prefabJoint = nodes[nodeIndex].components.joint;
         if (!prefabJoint.has_value()) {
             components.Joints().Remove(owner.Entity());

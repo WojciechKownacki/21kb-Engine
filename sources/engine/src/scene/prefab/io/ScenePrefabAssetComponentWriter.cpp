@@ -222,6 +222,17 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "regionPortal.purposes=" << portal.purposes << '\n';
         output << "regionPortal.enabled=" << (portal.enabled ? 1 : 0) << '\n';
     }
+    output << "auxFrame=" << (components.auxFrame.has_value() ? 1 : 0) << '\n';
+    if (components.auxFrame.has_value()) {
+        const AuxFrameComponent& frame = *components.auxFrame;
+        output << "auxFrame.mode=" << static_cast<int>(frame.mode) << '\n';
+        output << "auxFrame.imageTargetId=" << frame.imageTargetId << '\n';
+        output << "auxFrame.width=" << frame.width << '\n';
+        output << "auxFrame.height=" << frame.height << '\n';
+        WriteVec3(output, "auxFrame.mirrorPlaneNormal", frame.mirrorPlaneNormal);
+        output << "auxFrame.mirrorPlaneOffset=" << frame.mirrorPlaneOffset << '\n';
+        output << "auxFrame.enabled=" << (frame.enabled ? 1 : 0) << '\n';
+    }
 
     output << "behaviour=" << (components.behaviour.has_value() ? 1 : 0) << '\n';
     if (components.behaviour.has_value()) {

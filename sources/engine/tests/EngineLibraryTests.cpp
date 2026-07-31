@@ -3217,7 +3217,7 @@ void RunComponentInspectorDescCatalogTest() {
     // LIB-183 adds 11 NavAgent fields and 9 NavObstacle fields to the prior
     // 97-field contract, bringing the library/editor scripting surface to
     // 117 described fields across 12 components.
-    kb::tests::Require(fieldsChecked == 195U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (195) across all components");
+    kb::tests::Require(fieldsChecked == 204U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (204) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

@@ -286,6 +286,28 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseAuxFrame(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "auxFrame", present)) return false;
+    if (!present) return true;
+    AuxFrameComponent frame{};
+    int mode = 0;
+    std::uint32_t width = 0U;
+    std::uint32_t height = 0U;
+    if (!ParseField(fields, "auxFrame.mode", mode) || !ParseField(fields, "auxFrame.imageTargetId", frame.imageTargetId) ||
+        !ParseField(fields, "auxFrame.width", width) || !ParseField(fields, "auxFrame.height", height) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "auxFrame.mirrorPlaneNormal", frame.mirrorPlaneNormal) ||
+        !ParseField(fields, "auxFrame.mirrorPlaneOffset", frame.mirrorPlaneOffset) || !ParseOptionalBool(fields, "auxFrame.enabled", frame.enabled) ||
+        mode < static_cast<int>(AuxFrameMode::Flat) || mode > static_cast<int>(AuxFrameMode::Panoramic) ||
+        width == 0U || width > UINT16_MAX || height == 0U || height > UINT16_MAX) return false;
+    frame.mode = static_cast<AuxFrameMode>(mode);
+    frame.width = static_cast<std::uint16_t>(width);
+    frame.height = static_cast<std::uint16_t>(height);
+    if (!IsAuxFrameComponentPersistable(frame)) return false;
+    components.auxFrame = frame;
+    return true;
+}
+
 [[nodiscard]] bool ParseCharacterController(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool hasCharacterController = false;
     if (!ParseOptionalComponentFlag(fields, "characterController", hasCharacterController)) {
@@ -477,6 +499,7 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseVisibilityBlocker(fields, components)
         && ParseVisibilityCell(fields, components)
         && ParseRegionPortal(fields, components)
+        && ParseAuxFrame(fields, components)
         && ParseCharacterController(fields, components)
         && ParseJoint(fields, components)
         && ScenePrefabAssetTagsParser::Parse(fields, components)
