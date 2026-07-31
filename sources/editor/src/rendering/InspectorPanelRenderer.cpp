@@ -13,6 +13,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
@@ -28,6 +29,9 @@
 #include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
+#include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/HistoryRibbonComponent.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
@@ -314,11 +318,16 @@ constexpr std::array<InspectorRowDefinition, 2> kUIDocumentRows{ {
 }
 
 void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
+    if (text.empty()) return;
     rect.top += kTextBaselineOffsetY;
     rect.bottom += kTextBaselineOffsetY;
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
-    DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, format | DT_NOPREFIX);
+    const int wideLength = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    if (wideLength <= 0) return;
+    std::wstring wideText(static_cast<std::size_t>(wideLength), L'\0');
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), wideText.data(), wideLength) != wideLength) return;
+    DrawTextW(dc, wideText.data(), wideLength, &rect, format | DT_NOPREFIX);
 }
 
 void DrawFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border) {
@@ -1515,26 +1524,6 @@ void PaintNavObstacleSection(
     y = section.Bottom() + kSectionGap;
 }
 
-void PaintTagsSection(
-    HDC dc,
-    RECT content,
-    int& y,
-    const EditorTheme& theme,
-    const InspectorPanelState& inspector,
-    const kb::scene::TagsComponent& tags) {
-    SectionWriter section(
-        dc,
-        Rect(content.left, y, content.right, content.bottom),
-        theme,
-        inspector,
-        InspectorSectionId::Tags,
-        HeroIconKind::AdjustmentsHorizontal,
-        "Object Classification",
-        true);
-    section.Field("Tags", std::string{ kb::scene::TagsText(tags) }, InspectorPropertyId::TagsText);
-    y = section.Bottom() + kSectionGap;
-}
-
 [[nodiscard]] const char* RegionShapeKindLabel(kb::scene::RegionShapeKind kind) noexcept {
     switch (kind) {
     case kb::scene::RegionShapeKind::Circle2D: return "Circle 2D";
@@ -1767,6 +1756,35 @@ void PaintFacingPanelSection(HDC dc, RECT content, int& y, const EditorTheme& th
     section.Field("Up Y", FormatFloat(panel.up.y, 3), InspectorPropertyId::FacingPanelUpY);
     section.Field("Up Z", FormatFloat(panel.up.z, 3), InspectorPropertyId::FacingPanelUpZ);
     section.Bool("Enabled", panel.enabled, InspectorPropertyId::FacingPanelEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+void PaintSpaceStrokeSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::SpaceStrokeComponent& stroke) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::SpaceStroke, HeroIconKind::Cube, "Kreska przestrzenna", true);
+    constexpr std::array<const char*, 4> modeNames{ "Polyline", "Spline", "Beam", "Cable" };
+    section.Field("Segment Mesh", std::to_string(stroke.meshAssetId), InspectorPropertyId::SpaceStrokeMeshAssetId);
+    section.Field("Material", std::to_string(stroke.materialAssetId), InspectorPropertyId::SpaceStrokeMaterialAssetId);
+    section.Field("Mode", modeNames[static_cast<std::size_t>(stroke.mode)], InspectorPropertyId::SpaceStrokeMode);
+    section.Field("Width", FormatFloat(stroke.width, 3), InspectorPropertyId::SpaceStrokeWidth);
+    section.Field("Cable Sag", FormatFloat(stroke.cableSag, 3), InspectorPropertyId::SpaceStrokeCableSag);
+    section.Field("Spline Segments", std::to_string(stroke.splineSegments), InspectorPropertyId::SpaceStrokeSplineSegments);
+    section.Field("Render Layer", std::to_string(stroke.layer), InspectorPropertyId::SpaceStrokeLayer);
+    section.Bool("Cast Shadows", stroke.castsShadow, InspectorPropertyId::SpaceStrokeCastsShadow);
+    section.Bool("Receive Shadows", stroke.receivesShadow, InspectorPropertyId::SpaceStrokeReceivesShadow);
+    section.Bool("Enabled", stroke.enabled, InspectorPropertyId::SpaceStrokeEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
+void PaintHistoryRibbonSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::HistoryRibbonComponent& ribbon) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::HistoryRibbon, HeroIconKind::Cube, "Wst\xC4\x99" "ga historii", true);
+    section.Field("Segment Mesh", std::to_string(ribbon.meshAssetId), InspectorPropertyId::HistoryRibbonMeshAssetId);
+    section.Field("Material", std::to_string(ribbon.materialAssetId), InspectorPropertyId::HistoryRibbonMaterialAssetId);
+    section.Field("Lifetime", FormatFloat(ribbon.lifetimeSeconds, 3), InspectorPropertyId::HistoryRibbonLifetimeSeconds);
+    section.Field("Width", FormatFloat(ribbon.width, 3), InspectorPropertyId::HistoryRibbonWidth);
+    section.Field("Sample Interval", FormatFloat(ribbon.sampleIntervalSeconds, 3), InspectorPropertyId::HistoryRibbonSampleIntervalSeconds);
+    section.Field("Render Layer", std::to_string(ribbon.layer), InspectorPropertyId::HistoryRibbonLayer);
+    section.Bool("Cast Shadows", ribbon.castsShadow, InspectorPropertyId::HistoryRibbonCastsShadow);
+    section.Bool("Receive Shadows", ribbon.receivesShadow, InspectorPropertyId::HistoryRibbonReceivesShadow);
+    section.Bool("Enabled", ribbon.enabled, InspectorPropertyId::HistoryRibbonEnabled);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -2051,6 +2069,136 @@ void PaintMultiSelection(HDC dc, RECT content, const EditorTheme& theme, const E
 [[nodiscard]] int SectionHeight(const InspectorPanelState& inspector, InspectorSectionId section, int rows) noexcept;
 [[nodiscard]] int MeshRendererSectionHeight(const EditorSceneContext& sceneContext, const kb::scene::MeshRendererComponent& renderer);
 
+[[nodiscard]] RECT TagsDropdownAnchorRect(const RECT& content) noexcept {
+    const int tagsRowTop = content.top + kHeaderHeight + kPanelPadTop + kSectionHeaderHeight + kDividerHeight
+        + 2 * (kFieldRowHeight + kDividerHeight);
+    const int labelRight = content.left + ((content.right - content.left) * 36 / 100);
+    const int top = tagsRowTop + (kFieldRowHeight - kValueHeight) / 2;
+    return Rect(labelRight, top, content.right - kRowPadX, top + kValueHeight);
+}
+
+constexpr int kTagsDropdownGap = 3;
+constexpr int kTagsDropdownRowHeight = 28;
+constexpr int kTagsDropdownPadding = 3;
+
+[[nodiscard]] RECT TagsDropdownOptionRect(const RECT& anchor, int visualIndex) noexcept {
+    const int top = anchor.bottom + kTagsDropdownGap + kTagsDropdownPadding + visualIndex * kTagsDropdownRowHeight;
+    return Rect(anchor.left + kTagsDropdownPadding, top, anchor.right - kTagsDropdownPadding, top + kTagsDropdownRowHeight);
+}
+
+[[nodiscard]] RECT TagsDropdownRemoveRect(const RECT& option) noexcept {
+    constexpr int kRemoveSize = 20;
+    const int top = option.top + (option.bottom - option.top - kRemoveSize) / 2;
+    return Rect(option.right - kRemoveSize - 4, top, option.right - 4, top + kRemoveSize);
+}
+
+void DrawRoundedFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border, int radius) {
+    ScopedBrush brush(fill);
+    ScopedPen pen(1, border);
+    const ScopedGdiObject selectedBrush(dc, brush.handle);
+    const ScopedGdiObject selectedPen(dc, pen.handle);
+    RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius, radius);
+}
+
+void DrawTagsSelectionMark(HDC dc, const RECT& option, COLORREF color) {
+    const int left = option.left + 9;
+    const int middleY = option.top + (option.bottom - option.top) / 2;
+    ScopedPen pen(2, color);
+    const ScopedGdiObject selectedPen(dc, pen.handle);
+    MoveToEx(dc, left, middleY, nullptr);
+    LineTo(dc, left + 4, middleY + 4);
+    LineTo(dc, left + 11, middleY - 4);
+}
+
+void DrawTagsRemoveIcon(HDC dc, const RECT& rect, COLORREF color) {
+    const int centerX = rect.left + (rect.right - rect.left) / 2;
+    const int centerY = rect.top + (rect.bottom - rect.top) / 2;
+    constexpr int kRadius = 3;
+    ScopedPen pen(1, color);
+    const ScopedGdiObject selectedPen(dc, pen.handle);
+    MoveToEx(dc, centerX - kRadius, centerY - kRadius, nullptr);
+    LineTo(dc, centerX + kRadius + 1, centerY + kRadius + 1);
+    MoveToEx(dc, centerX + kRadius, centerY - kRadius, nullptr);
+    LineTo(dc, centerX - kRadius - 1, centerY + kRadius + 1);
+}
+
+void PaintTagsDropdown(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext, kb::scene::SceneEntity entity) {
+    const InspectorPanelState& inspector = sceneContext.Inspector();
+    if (!inspector.IsTagsDropdownOpen() || inspector.IsCollapsed(InspectorSectionId::General)) {
+        return;
+    }
+
+    const std::vector<std::string> known = sceneContext.KnownSceneTags();
+    const std::vector<std::string> selected = sceneContext.EntityTags(entity);
+    const RECT anchor = TagsDropdownAnchorRect(content);
+    const int noTagIndex = static_cast<int>(known.size());
+    const int newTagIndex = noTagIndex + 1;
+    const int optionCount = newTagIndex + 1;
+    const int menuTop = anchor.bottom + kTagsDropdownGap;
+    const RECT menu = Rect(anchor.left, menuTop, anchor.right,
+        menuTop + optionCount * kTagsDropdownRowHeight + 2 * kTagsDropdownPadding);
+    const COLORREF menuFill = BlendColor(Color(theme.strip), Color(theme.panel), 38);
+    GdiDrawing::FillRectColor(dc, Rect(menu.left + 2, menu.top + 3, menu.right + 2, menu.bottom + 3), Rgb(12, 14, 17));
+    DrawRoundedFrame(dc, menu, menuFill, BlendColor(Color(theme.borderPanel), Color(theme.chrome), 28), 5);
+
+    for (int visualIndex = 0; visualIndex < optionCount; ++visualIndex) {
+        const int actionIndex = visualIndex == 0
+            ? noTagIndex
+            : (visualIndex <= static_cast<int>(known.size()) ? visualIndex - 1 : newTagIndex);
+        const RECT option = TagsDropdownOptionRect(anchor, visualIndex);
+        const bool hovered = inspector.TagsDropdownHover() == actionIndex;
+        const bool isTag = actionIndex < static_cast<int>(known.size());
+        const bool isNoTag = actionIndex == noTagIndex;
+        const bool isNewTag = actionIndex == newTagIndex;
+        const bool isRemovableTag = isTag && !kb::scene::SceneTagCatalog::IsBuiltIn(known[static_cast<std::size_t>(actionIndex)]);
+
+        std::string_view label;
+        bool checked = false;
+        if (isTag) {
+            const std::string& tag = known[static_cast<std::size_t>(actionIndex)];
+            label = tag;
+            checked = std::find(selected.begin(), selected.end(), tag) != selected.end();
+        } else if (isNoTag) {
+            label = "None";
+            checked = selected.empty();
+        } else {
+            label = "Add Tag";
+        }
+
+        if (hovered) {
+            GdiDrawing::FillRectColor(dc, option, BlendColor(menuFill, Color(theme.textSecondary), 11));
+        }
+
+        ScopedFont optionFont(12, checked ? FW_SEMIBOLD : FW_NORMAL);
+        const ScopedGdiObject selectedFont(dc, optionFont.handle);
+        if (checked) {
+            DrawTagsSelectionMark(dc, option, Color(theme.accent));
+        }
+        const RECT remove = TagsDropdownRemoveRect(option);
+        const int textLeft = option.left + 28;
+        const int textRight = isRemovableTag ? remove.left - 6 : option.right - 10;
+        const COLORREF textColor = isNewTag
+            ? (hovered ? Color(theme.accent) : Color(theme.textSecondary))
+            : Color(theme.textPrimary);
+        Text(dc, Rect(textLeft, option.top, textRight, option.bottom), label, textColor);
+        if (isNewTag) {
+            ScopedFont addFont(13, FW_NORMAL);
+            const ScopedGdiObject selectedAddFont(dc, addFont.handle);
+            Text(dc, Rect(option.left + 7, option.top, option.left + 27, option.bottom), "+", textColor,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+        if (isRemovableTag) {
+            const bool removeHovered = inspector.IsHovered(InspectorHitKind::TagOption, InspectorSectionId::General,
+                InspectorPropertyId::TagsRemove, actionIndex);
+            DrawTagsRemoveIcon(dc, remove, removeHovered ? RGB(224, 104, 104) : Color(theme.textDisabled));
+        }
+        if (visualIndex == 0 || visualIndex == optionCount - 2) {
+            GdiDrawing::FillRectColor(dc, Rect(option.left + 7, option.bottom - 1, option.right - 7, option.bottom),
+                BlendColor(Color(theme.borderPanel), menuFill, 52));
+        }
+    }
+}
+
 void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& theme, const EditorSceneContext& sceneContext, kb::scene::SceneEntity selected) {
     const kb::scene::Scene& scene = sceneContext.Scene();
     const InspectorPanelState& inspector = sceneContext.Inspector();
@@ -2078,15 +2226,13 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
 
     const kb::scene::VisibilityComponent visibility = scene.Components().Visibility().Get(selected);
     {
-        const int h = SectionHeight(inspector, InspectorSectionId::General, 4);
+        const int h = SectionHeight(inspector, InspectorSectionId::General, 3);
         if (sectionVisible(y, h)) {
             SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::General, HeroIconKind::AdjustmentsHorizontal, "General");
             section.Field("Name", scene.Entities().Name(selected), InspectorPropertyId::EntityName);
             section.Bool("Visible", visibility.mode != kb::scene::VisibilityMode::Hidden, InspectorPropertyId::EntityVisible);
-            const char* mode = visibility.mode == kb::scene::VisibilityMode::Inherit ? "Inherit"
-                : visibility.mode == kb::scene::VisibilityMode::Visible ? "Visible" : "Hidden";
-            section.Field("Visibility Mode", mode, InspectorPropertyId::EntityVisibilityMode);
-            section.Field("Visibility Mask", std::to_string(visibility.mask), InspectorPropertyId::EntityVisibilityMask);
+            const std::vector<std::string> assignedTags = sceneContext.EntityTags(selected);
+            section.Tag("Tag", assignedTags.empty() ? std::string_view{} : std::string_view{ assignedTags.front() }, InspectorPropertyId::TagsText);
         }
         y += h + kSectionGap;
     }
@@ -2101,15 +2247,6 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             section.Vec3("Scale", transform.localScale, InspectorPropertyId::ScaleX, InspectorPropertyId::ScaleY, InspectorPropertyId::ScaleZ);
         }
         y += h + kSectionGap;
-    }
-
-    if (const kb::scene::TagsComponent* tags = scene.Components().Tags().TryGet(selected); tags != nullptr) {
-        const int h = SectionHeight(inspector, InspectorSectionId::Tags, 1);
-        if (sectionVisible(y, h)) {
-            PaintTagsSection(dc, content, y, theme, inspector, *tags);
-        } else {
-            y += h + kSectionGap;
-        }
     }
 
     if (const kb::scene::RegionShapeComponent* regionShape = scene.Components().RegionShapes().TryGet(selected); regionShape != nullptr) {
@@ -2171,6 +2308,14 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (const kb::scene::FacingPanelComponent* panel = scene.Components().FacingPanels().TryGet(selected); panel != nullptr) {
         const int h = SectionHeight(inspector, InspectorSectionId::FacingPanel, 11);
         if (y < content.bottom && y + h > content.top) PaintFacingPanelSection(dc, content, y, theme, inspector, *panel); else y += h + kSectionGap;
+    }
+    if (const kb::scene::SpaceStrokeComponent* stroke = scene.Components().SpaceStrokes().TryGet(selected); stroke != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::SpaceStroke, 10);
+        if (y < content.bottom && y + h > content.top) PaintSpaceStrokeSection(dc, content, y, theme, inspector, *stroke); else y += h + kSectionGap;
+    }
+    if (const kb::scene::HistoryRibbonComponent* ribbon = scene.Components().HistoryRibbons().TryGet(selected); ribbon != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::HistoryRibbon, 9);
+        if (y < content.bottom && y + h > content.top) PaintHistoryRibbonSection(dc, content, y, theme, inspector, *ribbon); else y += h + kSectionGap;
     }
 
     if (sceneContext.HasEntityScript(selected)) {
@@ -2308,6 +2453,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         }
     }
     DrawAddComponent(dc, content, theme, inspector, y);
+    PaintTagsDropdown(dc, content, theme, sceneContext, selected);
 }
 
 [[nodiscard]] int SectionHeight(const InspectorPanelState& inspector, InspectorSectionId section, int rows) noexcept {
@@ -2399,11 +2545,8 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     const InspectorPanelState& inspector = sceneContext.Inspector();
     const kb::scene::Scene& scene = sceneContext.Scene();
     int height = kHeaderHeight + kPanelPadTop;
-    height += SectionHeight(inspector, InspectorSectionId::General, 4) + kSectionGap;
+    height += SectionHeight(inspector, InspectorSectionId::General, 3) + kSectionGap;
     height += SectionHeight(inspector, InspectorSectionId::Transform, 3) + kSectionGap;
-    if (scene.Components().Tags().Has(selected)) {
-        height += SectionHeight(inspector, InspectorSectionId::Tags, 1) + kSectionGap;
-    }
     if (scene.Components().RegionShapes().Has(selected)) {
         height += SectionHeight(inspector, InspectorSectionId::RegionShape, 6) + kSectionGap;
     }
@@ -2420,6 +2563,8 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (scene.Components().GeometrySwarms().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::GeometrySwarm, 14) + kSectionGap;
     if (scene.Components().SurfaceCasts().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::SurfaceCast, 5) + kSectionGap;
     if (scene.Components().FacingPanels().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::FacingPanel, 11) + kSectionGap;
+    if (scene.Components().SpaceStrokes().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::SpaceStroke, 10) + kSectionGap;
+    if (scene.Components().HistoryRibbons().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::HistoryRibbon, 9) + kSectionGap;
     if (sceneContext.HasEntityScript(selected)) {
         const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariables(selected).size());
         height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
@@ -3350,6 +3495,35 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         return hit;
     }
     if (!state.IsCollapsed(InspectorSectionId::General)) {
+        if (state.IsTagsDropdownOpen()) {
+            const RECT anchor = TagsDropdownAnchorRect(viewport);
+            const std::vector<std::string> knownTags = sceneContext.KnownSceneTags();
+            const int optionCount = static_cast<int>(knownTags.size()) + 2;
+            const int noTagIndex = static_cast<int>(knownTags.size());
+            const int newTagIndex = noTagIndex + 1;
+            for (int visualIndex = 0; visualIndex < optionCount; ++visualIndex) {
+                const int actionIndex = visualIndex == 0
+                    ? noTagIndex
+                    : (visualIndex <= static_cast<int>(knownTags.size()) ? visualIndex - 1 : newTagIndex);
+                const RECT rect = TagsDropdownOptionRect(anchor, visualIndex);
+                if (Contains(rect, x, scrolledY)) {
+                    InspectorPropertyId property = InspectorPropertyId::TagsText;
+                    if (actionIndex >= 0 && actionIndex < static_cast<int>(knownTags.size())
+                        && !kb::scene::SceneTagCatalog::IsBuiltIn(knownTags[static_cast<std::size_t>(actionIndex)])) {
+                        if (Contains(TagsDropdownRemoveRect(rect), x, scrolledY)) {
+                            property = InspectorPropertyId::TagsRemove;
+                        }
+                    }
+                    return InspectorPanelRenderer::Hit{
+                        .kind = InspectorHitKind::TagOption,
+                        .section = InspectorSectionId::General,
+                        .property = property,
+                        .index = actionIndex,
+                        .rect = rect,
+                    };
+                }
+            }
+        }
         if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::General, InspectorPropertyId::EntityName, x, scrolledY); hit.kind != InspectorHitKind::None) {
             return hit;
         }
@@ -3358,11 +3532,7 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             return hit;
         }
         AdvanceRow(y);
-        if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::General, InspectorPropertyId::EntityVisibilityMode, x, scrolledY); hit.kind != InspectorHitKind::None) {
-            return hit;
-        }
-        AdvanceRow(y);
-        if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::General, InspectorPropertyId::EntityVisibilityMask, x, scrolledY); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::General, InspectorPropertyId::TagsText, x, scrolledY); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         AdvanceRow(y);
@@ -3387,19 +3557,6 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         AdvanceRow(y);
     }
     y += kSectionGap;
-
-    if (sceneContext.Scene().Components().Tags().Has(selected)) {
-        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::Tags, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
-            return hit;
-        }
-        if (!state.IsCollapsed(InspectorSectionId::Tags)) {
-            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::Tags, InspectorPropertyId::TagsText, x, scrolledY); hit.kind != InspectorHitKind::None) {
-                return hit;
-            }
-            AdvanceRow(y);
-        }
-        y += kSectionGap;
-    }
 
     if (sceneContext.Scene().Components().RegionShapes().Has(selected)) {
         if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::RegionShape, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
@@ -3573,6 +3730,32 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             constexpr std::array<InspectorPropertyId, 11> properties{ InspectorPropertyId::FacingPanelMode, InspectorPropertyId::FacingPanelTargetX, InspectorPropertyId::FacingPanelTargetY, InspectorPropertyId::FacingPanelTargetZ, InspectorPropertyId::FacingPanelAxisX, InspectorPropertyId::FacingPanelAxisY, InspectorPropertyId::FacingPanelAxisZ, InspectorPropertyId::FacingPanelUpX, InspectorPropertyId::FacingPanelUpY, InspectorPropertyId::FacingPanelUpZ, InspectorPropertyId::FacingPanelEnabled };
             for (InspectorPropertyId property : properties) {
                 const InspectorPanelRenderer::Hit hit = property == InspectorPropertyId::FacingPanelEnabled ? HitBool(RowRect(viewport, y), InspectorSectionId::FacingPanel, property, x, scrolledY) : HitTextRow(RowRect(viewport, y), InspectorSectionId::FacingPanel, property, x, scrolledY);
+                if (hit.kind != InspectorHitKind::None) return hit;
+                AdvanceRow(y);
+            }
+        } else y += kHeaderHeight;
+        y += kSectionGap;
+    }
+    if (sceneContext.Scene().Components().SpaceStrokes().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::SpaceStroke, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::SpaceStroke)) {
+            constexpr std::array<InspectorPropertyId, 10> properties{ InspectorPropertyId::SpaceStrokeMeshAssetId, InspectorPropertyId::SpaceStrokeMaterialAssetId, InspectorPropertyId::SpaceStrokeMode, InspectorPropertyId::SpaceStrokeWidth, InspectorPropertyId::SpaceStrokeCableSag, InspectorPropertyId::SpaceStrokeSplineSegments, InspectorPropertyId::SpaceStrokeLayer, InspectorPropertyId::SpaceStrokeCastsShadow, InspectorPropertyId::SpaceStrokeReceivesShadow, InspectorPropertyId::SpaceStrokeEnabled };
+            for (InspectorPropertyId property : properties) {
+                const bool isBool = property == InspectorPropertyId::SpaceStrokeCastsShadow || property == InspectorPropertyId::SpaceStrokeReceivesShadow || property == InspectorPropertyId::SpaceStrokeEnabled;
+                const InspectorPanelRenderer::Hit hit = isBool ? HitBool(RowRect(viewport, y), InspectorSectionId::SpaceStroke, property, x, scrolledY) : HitTextRow(RowRect(viewport, y), InspectorSectionId::SpaceStroke, property, x, scrolledY);
+                if (hit.kind != InspectorHitKind::None) return hit;
+                AdvanceRow(y);
+            }
+        } else y += kHeaderHeight;
+        y += kSectionGap;
+    }
+    if (sceneContext.Scene().Components().HistoryRibbons().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::HistoryRibbon, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::HistoryRibbon)) {
+            constexpr std::array<InspectorPropertyId, 9> properties{ InspectorPropertyId::HistoryRibbonMeshAssetId, InspectorPropertyId::HistoryRibbonMaterialAssetId, InspectorPropertyId::HistoryRibbonLifetimeSeconds, InspectorPropertyId::HistoryRibbonWidth, InspectorPropertyId::HistoryRibbonSampleIntervalSeconds, InspectorPropertyId::HistoryRibbonLayer, InspectorPropertyId::HistoryRibbonCastsShadow, InspectorPropertyId::HistoryRibbonReceivesShadow, InspectorPropertyId::HistoryRibbonEnabled };
+            for (InspectorPropertyId property : properties) {
+                const bool isBool = property == InspectorPropertyId::HistoryRibbonCastsShadow || property == InspectorPropertyId::HistoryRibbonReceivesShadow || property == InspectorPropertyId::HistoryRibbonEnabled;
+                const InspectorPanelRenderer::Hit hit = isBool ? HitBool(RowRect(viewport, y), InspectorSectionId::HistoryRibbon, property, x, scrolledY) : HitTextRow(RowRect(viewport, y), InspectorSectionId::HistoryRibbon, property, x, scrolledY);
                 if (hit.kind != InspectorHitKind::None) return hit;
                 AdvanceRow(y);
             }

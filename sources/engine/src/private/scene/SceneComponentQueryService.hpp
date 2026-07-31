@@ -25,6 +25,9 @@
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
+#include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/HistoryRibbonComponent.hpp"
+#include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
@@ -101,6 +104,12 @@ public:
     [[nodiscard]] static const SurfaceCastComponent* TryGetSurfaceCast(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasFacingPanel(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const FacingPanelComponent* TryGetFacingPanel(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasSpaceStroke(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const SpaceStrokeComponent* TryGetSpaceStroke(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasHistoryRibbon(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const HistoryRibbonComponent* TryGetHistoryRibbon(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasLensEcho(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const LensEchoComponent* TryGetLensEcho(const Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static bool HasAudioSource(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const AudioSourceComponent* TryGetAudioSource(const Scene& scene, SceneEntity entity) noexcept;

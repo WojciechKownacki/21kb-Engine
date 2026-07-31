@@ -11,6 +11,7 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneInputComponents.hpp"
 #include "engine/scene/SceneLightComponents.hpp"
+#include "engine/scene/SceneLensEchoComponents.hpp"
 #include "engine/scene/SceneMeshRendererComponents.hpp"
 #include "engine/scene/SceneNavigationComponents.hpp"
 #include "engine/scene/ScenePrefabNode.hpp"
@@ -73,6 +74,9 @@ struct ScenePrefabNodeStateWriterContext {
     SceneGeometrySwarmComponents geometrySwarms;
     SceneSurfaceCastComponents surfaceCasts;
     SceneFacingPanelComponents facingPanels;
+    SceneSpaceStrokeComponents spaceStrokes;
+    SceneHistoryRibbonComponents historyRibbons;
+    SceneLensEchoComponents lensEchoes;
     SceneBehaviourComponents behaviours;
     SceneAudioSourceComponents audioSources;
     SceneAudioListenerComponents audioListeners;
