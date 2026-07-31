@@ -199,6 +199,13 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "detailSwitch.demoteCoverage=" << detail.demoteCoverage << '\n';
         output << "detailSwitch.enabled=" << (detail.enabled ? 1 : 0) << '\n';
     }
+    output << "visibilityBlocker=" << (components.visibilityBlocker.has_value() ? 1 : 0) << '\n';
+    if (components.visibilityBlocker.has_value()) {
+        const SceneVisibilityBlockerComponent& blocker = *components.visibilityBlocker;
+        WriteVec3(output, "visibilityBlocker.localCenter", blocker.localCenter);
+        WriteVec3(output, "visibilityBlocker.size", blocker.size);
+        output << "visibilityBlocker.enabled=" << (blocker.enabled ? 1 : 0) << '\n';
+    }
 
     output << "behaviour=" << (components.behaviour.has_value() ? 1 : 0) << '\n';
     if (components.behaviour.has_value()) {

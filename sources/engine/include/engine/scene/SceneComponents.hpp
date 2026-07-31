@@ -21,6 +21,7 @@
 #include "engine/scene/SceneWorldBackdropComponents.hpp"
 #include "engine/scene/SceneAmbientRadianceComponents.hpp"
 #include "engine/scene/SceneDetailSwitchComponents.hpp"
+#include "engine/scene/SceneVisibilityBlockerComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
 #include "engine/scene/SceneUIDocuments.hpp"
@@ -51,6 +52,7 @@ public:
     [[nodiscard]] SceneWorldBackdropComponents WorldBackdrops() const noexcept;
     [[nodiscard]] SceneAmbientRadianceComponents AmbientRadiances() const noexcept;
     [[nodiscard]] SceneDetailSwitchComponents DetailSwitches() const noexcept;
+    [[nodiscard]] SceneVisibilityBlockerComponents VisibilityBlockers() const noexcept;
     [[nodiscard]] SceneAudioSourceComponents AudioSources() const noexcept;
     [[nodiscard]] SceneAudioListenerComponents AudioListeners() const noexcept;
     [[nodiscard]] SceneAnimatorComponents Animators() const noexcept;

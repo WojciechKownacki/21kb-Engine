@@ -1173,6 +1173,27 @@ void RunMeshPipelineSelectsLodAndCarriesMeshletRangesTest() {
     Require(result.stats.meshletSubmitCount == 0U, "MeshPipeline reported meshlet submits without a GPU pass");
 }
 
+void RunMeshPipelineCullsWithVisibilityBlockerTest() {
+    RenderMeshResource mesh{};
+    mesh.indexCount = 3U;
+    mesh.bounds = RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 0.05F };
+    mesh.sections = { RenderMeshSection{ .indexStart = 0U, .indexCount = 3U, .bounds = mesh.bounds } };
+    const SceneRenderCamera camera{ .view = IdentityMatrix(), .projection = IdentityMatrix() };
+    const std::vector<SceneRenderDrawGroup> drawGroups{ SceneRenderDrawGroup{
+        .meshAssetId = 42U,
+        .instances = { SceneRenderMeshInstance{ .entityId = 1U, .meshAssetId = 42U, .model = TranslationMatrix(0.0F, 0.0F, 0.9F) } },
+    } };
+    const std::array<SceneRenderVisibilityBlocker, 1U> blockers{{
+        SceneRenderVisibilityBlocker{ .entityId = 2U, .model = TranslationMatrix(0.0F, 0.0F, 0.5F), .size = { 0.2F, 0.2F, 0.2F } },
+    }};
+    const MeshPipelineBuildResult result = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque, .drawGroups = &drawGroups, .resolvedMeshResource = &mesh,
+        .camera = &camera, .visibilityBlockers = blockers, .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+    Require(result.commands.empty(), "Visibility Blocker emitted a draw instead of rejecting the occluded instance");
+    Require(result.stats.culledInstanceCount == 1U, "Visibility Blocker did not contribute to culling statistics");
+}
+
 void RunMeshPipelineCoordinatesDetailSwitchGroupsWithHysteresisTest() {
     RenderMeshResource mesh{};
     mesh.indexCount = 12U;
@@ -1619,6 +1640,7 @@ void RunMeshPipelineTests() {
     RunMeshPipelineCullsBackFacesForSingleSidedMeshesTest();
     RunMeshPipelineKeepsBlendDisabledUntilTransparentPassIsReadyTest();
     RunMeshPipelineCpuCullsByFrustumBoundsTest();
+    RunMeshPipelineCullsWithVisibilityBlockerTest();
     RunMeshPipelineSelectsLodAndCarriesMeshletRangesTest();
     RunMeshPipelineCoordinatesDetailSwitchGroupsWithHysteresisTest();
     RunGpuDrivenFeatureClassifierGatesByCapabilitiesTest();

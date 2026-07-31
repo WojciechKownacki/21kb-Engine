@@ -21,6 +21,7 @@
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
+#include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
@@ -1668,6 +1669,18 @@ void PaintDetailSwitchSection(HDC dc, RECT content, int& y, const EditorTheme& t
     y = section.Bottom() + kSectionGap;
 }
 
+void PaintVisibilityBlockerSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::SceneVisibilityBlockerComponent& blocker) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::VisibilityBlocker, HeroIconKind::Cube, "Visibility Blocker", true);
+    section.Field("Center X", FormatFloat(blocker.localCenter.x, 3), InspectorPropertyId::VisibilityBlockerCenterX);
+    section.Field("Center Y", FormatFloat(blocker.localCenter.y, 3), InspectorPropertyId::VisibilityBlockerCenterY);
+    section.Field("Center Z", FormatFloat(blocker.localCenter.z, 3), InspectorPropertyId::VisibilityBlockerCenterZ);
+    section.Field("Size X", FormatFloat(blocker.size.x, 3), InspectorPropertyId::VisibilityBlockerSizeX);
+    section.Field("Size Y", FormatFloat(blocker.size.y, 3), InspectorPropertyId::VisibilityBlockerSizeY);
+    section.Field("Size Z", FormatFloat(blocker.size.z, 3), InspectorPropertyId::VisibilityBlockerSizeZ);
+    section.Bool("Enabled", blocker.enabled, InspectorPropertyId::VisibilityBlockerEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
 constexpr int kCameraSectionRows = 13;
 
 void PaintCameraSection(
@@ -2042,6 +2055,10 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         const int h = SectionHeight(inspector, InspectorSectionId::DetailSwitch, 6);
         if (y < content.bottom && y + h > content.top) PaintDetailSwitchSection(dc, content, y, theme, inspector, *detailSwitch); else y += h + kSectionGap;
     }
+    if (const kb::scene::SceneVisibilityBlockerComponent* blocker = scene.Components().VisibilityBlockers().TryGet(selected); blocker != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::VisibilityBlocker, 7);
+        if (y < content.bottom && y + h > content.top) PaintVisibilityBlockerSection(dc, content, y, theme, inspector, *blocker); else y += h + kSectionGap;
+    }
 
     if (sceneContext.HasEntityScript(selected)) {
         const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);
@@ -2283,6 +2300,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (scene.Components().WorldBackdrops().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::WorldBackdrop, 15) + kSectionGap;
     if (scene.Components().AmbientRadiances().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::AmbientRadiance, 16) + kSectionGap;
     if (scene.Components().DetailSwitches().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::DetailSwitch, 6) + kSectionGap;
+    if (scene.Components().VisibilityBlockers().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::VisibilityBlocker, 7) + kSectionGap;
     if (sceneContext.HasEntityScript(selected)) {
         const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariables(selected).size());
         height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
@@ -3348,6 +3366,18 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                 const InspectorPanelRenderer::Hit hit = property == InspectorPropertyId::DetailSwitchEnabled
                     ? HitBool(RowRect(viewport, y), InspectorSectionId::DetailSwitch, property, x, scrolledY)
                     : HitTextRow(RowRect(viewport, y), InspectorSectionId::DetailSwitch, property, x, scrolledY);
+                if (hit.kind != InspectorHitKind::None) return hit;
+                AdvanceRow(y);
+            }
+        }
+        y += kSectionGap;
+    }
+    if (sceneContext.Scene().Components().VisibilityBlockers().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::VisibilityBlocker, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::VisibilityBlocker)) {
+            constexpr std::array<InspectorPropertyId, 7> properties{ InspectorPropertyId::VisibilityBlockerCenterX, InspectorPropertyId::VisibilityBlockerCenterY, InspectorPropertyId::VisibilityBlockerCenterZ, InspectorPropertyId::VisibilityBlockerSizeX, InspectorPropertyId::VisibilityBlockerSizeY, InspectorPropertyId::VisibilityBlockerSizeZ, InspectorPropertyId::VisibilityBlockerEnabled };
+            for (InspectorPropertyId property : properties) {
+                const InspectorPanelRenderer::Hit hit = property == InspectorPropertyId::VisibilityBlockerEnabled ? HitBool(RowRect(viewport, y), InspectorSectionId::VisibilityBlocker, property, x, scrolledY) : HitTextRow(RowRect(viewport, y), InspectorSectionId::VisibilityBlocker, property, x, scrolledY);
                 if (hit.kind != InspectorHitKind::None) return hit;
                 AdvanceRow(y);
             }

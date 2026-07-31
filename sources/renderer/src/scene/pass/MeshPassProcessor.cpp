@@ -244,6 +244,12 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                     ++culledForSection;
                     continue;
                 }
+                if (desc.pass != MeshPassType::ShadowDepth && desc.pass != MeshPassType::Gizmo &&
+                    MeshPipelineVisibility::IsOccludedByVisibilityBlockers(desc.camera, instance.worldBounds, desc.visibilityBlockers)) {
+                    if (gpuDrivenCandidate) MeshPipelineGpuDrivenRecorder::Record(result, instance, UINT32_MAX, selectedLod, meshletRange, false, false);
+                    ++culledForSection;
+                    continue;
+                }
                 instance.depthBucket = MeshPipelineVisibility::DepthBucket(MeshPipelineVisibility::ViewDepth(desc.camera, instance.worldBounds));
                 const MeshCommandLookupKey commandKey{
                     .materialAssetId = materialAssetId,

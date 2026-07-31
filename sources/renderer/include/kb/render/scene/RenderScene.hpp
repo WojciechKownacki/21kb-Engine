@@ -117,6 +117,15 @@ struct LightRenderProxyDesc {
     std::uint32_t layer = 1U;
 };
 
+// This proxy never produces a draw. It is a renderer-derived representation
+// of an ECS Visibility Blocker component and is consumed only by culling.
+struct VisibilityBlockerRenderProxyDesc {
+    std::uint64_t entityId = 0;
+    std::array<float, 16> model{};
+    std::array<float, 3> localCenter{};
+    std::array<float, 3> size{ 1.0F, 1.0F, 1.0F };
+};
+
 struct MeshRenderProxy {
     RenderProxyId id{};
     MeshRenderProxyDesc desc{};
@@ -142,10 +151,17 @@ struct LightRenderProxy {
     RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None;
 };
 
+struct VisibilityBlockerRenderProxy {
+    RenderProxyId id{};
+    VisibilityBlockerRenderProxyDesc desc{};
+    RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None;
+};
+
 struct RenderSceneReserveDesc {
     std::uint32_t meshProxies = 0;
     std::uint32_t cameraProxies = 0;
     std::uint32_t lightProxies = 0;
+    std::uint32_t visibilityBlockerProxies = 0;
     std::uint32_t drawGroupKeys = 0;
 };
 
@@ -153,9 +169,11 @@ struct RenderSceneStats {
     std::uint32_t meshProxyCount = 0;
     std::uint32_t cameraProxyCount = 0;
     std::uint32_t lightProxyCount = 0;
+    std::uint32_t visibilityBlockerProxyCount = 0;
     std::uint32_t meshProxyCapacity = 0;
     std::uint32_t cameraProxyCapacity = 0;
     std::uint32_t lightProxyCapacity = 0;
+    std::uint32_t visibilityBlockerProxyCapacity = 0;
     std::uint32_t drawGroupLookupCapacity = 0;
     // H2/H7 telemetry: transform-only updates that refreshed an instance in place
     // (no draw-group rebuild) versus those that fell back to a full invalidation.
@@ -168,12 +186,14 @@ public:
     using MeshProxyMap = std::unordered_map<std::uint64_t, MeshRenderProxy>;
     using CameraProxyMap = std::unordered_map<std::uint64_t, CameraRenderProxy>;
     using LightProxyMap = std::unordered_map<std::uint64_t, LightRenderProxy>;
+    using VisibilityBlockerProxyMap = std::unordered_map<std::uint64_t, VisibilityBlockerRenderProxy>;
 
     void Reserve(const RenderSceneReserveDesc& desc);
     [[nodiscard]] RenderSceneStats Stats() const noexcept;
     [[nodiscard]] RenderProxyId UpsertMesh(const MeshRenderProxyDesc& desc);
     [[nodiscard]] RenderProxyId UpsertCamera(const CameraRenderProxyDesc& desc);
     [[nodiscard]] RenderProxyId UpsertLight(const LightRenderProxyDesc& desc);
+    [[nodiscard]] RenderProxyId UpsertVisibilityBlocker(const VisibilityBlockerRenderProxyDesc& desc);
     void SetWorldBackdrop(std::optional<SceneRenderWorldBackdrop> backdrop) noexcept;
     [[nodiscard]] const std::optional<SceneRenderWorldBackdrop>& WorldBackdrop() const noexcept;
     void SetAmbientRadiance(std::optional<SceneRenderAmbientRadiance> ambientRadiance) noexcept;
@@ -190,6 +210,7 @@ public:
     // rebuild); otherwise it updates the proxy and invalidates so the next
     // rebuild picks it up. Returns false only when the entity has no mesh proxy.
     [[nodiscard]] bool UpdateMeshTransform(std::uint64_t entityId, const std::array<float, 16>& model);
+    [[nodiscard]] bool UpdateVisibilityBlockerTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
 
     // H6 - shared core for the single-entity and parallel batch paths. Updates
     // the proxy's source-of-truth model and, when the cache is clean, the cached
@@ -203,6 +224,7 @@ public:
     [[nodiscard]] bool RemoveMesh(std::uint64_t entityId) noexcept;
     [[nodiscard]] bool RemoveCamera(std::uint64_t entityId) noexcept;
     [[nodiscard]] bool RemoveLight(std::uint64_t entityId) noexcept;
+    [[nodiscard]] bool RemoveVisibilityBlocker(std::uint64_t entityId) noexcept;
 
     [[nodiscard]] const MeshRenderProxy* FindMeshByEntity(std::uint64_t entityId) const noexcept;
     [[nodiscard]] const CameraRenderProxy* FindCameraByEntity(std::uint64_t entityId) const noexcept;
@@ -211,14 +233,17 @@ public:
     [[nodiscard]] std::uint32_t RemoveMeshesNotInSorted(std::span<const std::uint64_t> sortedEntityIds) noexcept;
     [[nodiscard]] std::uint32_t RemoveCamerasNotInSorted(std::span<const std::uint64_t> sortedEntityIds) noexcept;
     [[nodiscard]] std::uint32_t RemoveLightsNotInSorted(std::span<const std::uint64_t> sortedEntityIds) noexcept;
+    [[nodiscard]] std::uint32_t RemoveVisibilityBlockersNotInSorted(std::span<const std::uint64_t> sortedEntityIds) noexcept;
 
     [[nodiscard]] std::size_t MeshProxyCount() const noexcept;
     [[nodiscard]] std::size_t CameraProxyCount() const noexcept;
     [[nodiscard]] std::size_t LightProxyCount() const noexcept;
+    [[nodiscard]] std::size_t VisibilityBlockerProxyCount() const noexcept;
 
     [[nodiscard]] const MeshProxyMap& MeshProxies() const noexcept;
     [[nodiscard]] const CameraProxyMap& CameraProxies() const noexcept;
     [[nodiscard]] const LightProxyMap& LightProxies() const noexcept;
+    [[nodiscard]] const VisibilityBlockerProxyMap& VisibilityBlockerProxies() const noexcept;
 
     void ClearDirty() noexcept;
     // LIB-135: targetViewportId selects among cameras whose viewportId either
@@ -260,6 +285,7 @@ private:
     MeshProxyMap meshes_;
     CameraProxyMap cameras_;
     LightProxyMap lights_;
+    VisibilityBlockerProxyMap visibilityBlockers_;
     std::optional<SceneRenderWorldBackdrop> worldBackdrop_;
     std::optional<SceneRenderAmbientRadiance> ambientRadiance_;
     mutable std::vector<SceneRenderDrawGroup> drawGroups_;

@@ -18,6 +18,7 @@
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
+#include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/ecs/Query.hpp"
 #include "engine/ecs/UnsafeHotQuery.hpp"
 #include "engine/ecs/World.hpp"
@@ -230,6 +231,7 @@ struct SyncContext {
     std::vector<std::uint64_t>* meshes = nullptr;
     std::vector<std::uint64_t>* cameras = nullptr;
     std::vector<std::uint64_t>* lights = nullptr;
+    std::vector<std::uint64_t>* visibilityBlockers = nullptr;
     bool basicLightingEnabled = false;
 };
 
@@ -333,9 +335,21 @@ void SyncLight(kb::scene::SceneEntity entity, const kb::scene::TransformComponen
     static_cast<void>(transform);
 }
 
+void SyncVisibilityBlocker(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::SceneVisibilityBlockerComponent& blocker, void* context) {
+    auto* sync = static_cast<SyncContext*>(context);
+    if (!blocker.enabled || !kb::scene::IsSceneVisibilityBlockerComponentValid(blocker)) return;
+    const kb::scene::TransformComponent renderTransform = sync->worldReader->Read(entity, transform);
+    sync->visibilityBlockers->push_back(entity.Id());
+    static_cast<void>(sync->renderScene->UpsertVisibilityBlocker(VisibilityBlockerRenderProxyDesc{
+        .entityId = entity.Id(), .model = SceneTransformMatrices::Model(renderTransform),
+        .localCenter = { blocker.localCenter.x, blocker.localCenter.y, blocker.localCenter.z },
+        .size = { blocker.size.x, blocker.size.y, blocker.size.z },
+    }));
+}
+
 void SyncEntity(kb::scene::SceneEntity entity, SyncContext& context) {
     if (context.scene == nullptr || context.renderScene == nullptr || context.transforms == nullptr ||
-        context.meshes == nullptr || context.cameras == nullptr || context.lights == nullptr) {
+        context.meshes == nullptr || context.cameras == nullptr || context.lights == nullptr || context.visibilityBlockers == nullptr) {
         return;
     }
 
@@ -343,6 +357,7 @@ void SyncEntity(kb::scene::SceneEntity entity, SyncContext& context) {
         static_cast<void>(context.renderScene->RemoveMesh(entity.Id()));
         static_cast<void>(context.renderScene->RemoveCamera(entity.Id()));
         static_cast<void>(context.renderScene->RemoveLight(entity.Id()));
+        static_cast<void>(context.renderScene->RemoveVisibilityBlocker(entity.Id()));
         return;
     }
 
@@ -370,6 +385,11 @@ void SyncEntity(kb::scene::SceneEntity entity, SyncContext& context) {
     } else {
         static_cast<void>(context.renderScene->RemoveLight(entity.Id()));
     }
+    if (const kb::scene::SceneVisibilityBlockerComponent* blocker = components.VisibilityBlockers().TryGet(entity); blocker != nullptr && transform != nullptr && blocker->enabled && kb::scene::IsSceneVisibilityBlockerComponentValid(*blocker)) {
+        SyncVisibilityBlocker(entity, *transform, *blocker, &context);
+    } else {
+        static_cast<void>(context.renderScene->RemoveVisibilityBlocker(entity.Id()));
+    }
 }
 
 } // namespace
@@ -384,6 +404,7 @@ void EcsRenderSceneSynchronizer::Reserve(const EcsRenderSceneSynchronizerReserve
     if (desc.lightProxies > 0U) {
         seenLights_.reserve(desc.lightProxies);
     }
+    if (desc.visibilityBlockerProxies > 0U) seenVisibilityBlockers_.reserve(desc.visibilityBlockerProxies);
     if (desc.transformCacheEntries > 0U) {
         transformCache_.reserve(desc.transformCacheEntries);
     }
@@ -399,6 +420,7 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
     seenMeshes_.clear();
     seenCameras_.clear();
     seenLights_.clear();
+    seenVisibilityBlockers_.clear();
     transformCache_.clear();
     transformResolving_.clear();
 
@@ -412,6 +434,7 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
         .meshes = &seenMeshes_,
         .cameras = &seenCameras_,
         .lights = &seenLights_,
+        .visibilityBlockers = &seenVisibilityBlockers_,
         .basicLightingEnabled = kb::scene::SceneLightingAccess::BasicLightingEnabled(scene),
     };
 
@@ -421,15 +444,28 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
     if (context.basicLightingEnabled) {
         visitors.ForEachLight(&SyncLight, &context);
     }
+    kb::ecs::Query<kb::scene::SceneVisibilityBlockerComponent, kb::scene::TransformComponent> blockers = const_cast<kb::scene::Scene&>(scene).Runtime().EcsWorld().CreateQuery<kb::scene::SceneVisibilityBlockerComponent, kb::scene::TransformComponent>();
+    kb::ecs::UnsafeHotReadQuery<kb::scene::SceneVisibilityBlockerComponent, kb::scene::TransformComponent> hotBlockers;
+    kb::ecs::QueryExecutionSettings blockerSettings{};
+    blockerSettings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
+    if (blockers.IsValid() && hotBlockers.Rebuild(blockers, blockerSettings)) {
+        hotBlockers.ForEachRange(blockerSettings.maxBatchSize, [&context](const auto& batch) {
+            const auto* components = batch.template Components<0>();
+            const auto* transforms = batch.template Components<1>();
+            for (std::size_t index = 0U; index < batch.Count(); ++index) SyncVisibilityBlocker(batch.EntityAt(index), transforms[index], components[index], &context);
+        });
+    }
     transformPrecomputedReadCount_ = worldReader.PrecomputedReadCount();
     transformResolvedFallbackCount_ = worldReader.ResolvedFallbackCount();
 
     std::ranges::sort(seenMeshes_);
     std::ranges::sort(seenCameras_);
     std::ranges::sort(seenLights_);
+    std::ranges::sort(seenVisibilityBlockers_);
     static_cast<void>(renderScene.RemoveMeshesNotInSorted(std::span<const std::uint64_t>{ seenMeshes_ }));
     static_cast<void>(renderScene.RemoveCamerasNotInSorted(std::span<const std::uint64_t>{ seenCameras_ }));
     static_cast<void>(renderScene.RemoveLightsNotInSorted(std::span<const std::uint64_t>{ seenLights_ }));
+    static_cast<void>(renderScene.RemoveVisibilityBlockersNotInSorted(std::span<const std::uint64_t>{ seenVisibilityBlockers_ }));
     const std::optional<SceneRenderWorldBackdrop> worldBackdrop = ResolveWorldBackdrop(scene);
     renderScene.SetWorldBackdrop(worldBackdrop);
     renderScene.SetAmbientRadiance(ResolveAmbientRadiance(scene, worldBackdrop));
@@ -442,6 +478,7 @@ void EcsRenderSceneSynchronizer::SyncEntities(
     seenMeshes_.clear();
     seenCameras_.clear();
     seenLights_.clear();
+    seenVisibilityBlockers_.clear();
     transformCache_.clear();
     transformResolving_.clear();
 
@@ -455,6 +492,7 @@ void EcsRenderSceneSynchronizer::SyncEntities(
         .meshes = &seenMeshes_,
         .cameras = &seenCameras_,
         .lights = &seenLights_,
+        .visibilityBlockers = &seenVisibilityBlockers_,
         .basicLightingEnabled = kb::scene::SceneLightingAccess::BasicLightingEnabled(scene),
     };
 
@@ -478,6 +516,7 @@ void EcsRenderSceneSynchronizer::SyncMeshWorldAffines(
         // Returns false for entities without a mesh proxy (cameras, lights); those
         // are handled by the structural sync, so skipping them here is correct.
         static_cast<void>(renderScene.UpdateMeshTransform(entities[index].Id(), model));
+        static_cast<void>(renderScene.UpdateVisibilityBlockerTransform(entities[index].Id(), model));
     }
 }
 
@@ -502,6 +541,7 @@ void EcsRenderSceneSynchronizer::SyncMeshWorldAffinesParallel(
         const std::size_t end = chunk.begin + chunk.count;
         for (std::size_t index = chunk.begin; index < end; ++index) {
             const std::array<float, 16> model = ModelFromWorldAffine3x4(worldAffines[index]);
+            static_cast<void>(renderScene.UpdateVisibilityBlockerTransform(entities[index].Id(), model));
             switch (renderScene.ApplyMeshTransform(entities[index].Id(), model)) {
             case RenderScene::TransformUpdateOutcome::InPlace:
                 ++localInPlace;

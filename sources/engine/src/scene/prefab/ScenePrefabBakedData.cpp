@@ -57,6 +57,7 @@ namespace {
     if (components.detailSwitch.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::DetailSwitch);
     }
+    if (components.visibilityBlocker.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::VisibilityBlocker);
     if (components.behaviour.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Behaviour);
     }
@@ -171,6 +172,7 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         if (node.components.detailSwitch.has_value()) {
             archetype.detailSwitches.push_back(*node.components.detailSwitch);
         }
+        if (node.components.visibilityBlocker.has_value()) archetype.visibilityBlockers.push_back(*node.components.visibilityBlocker);
         if (node.components.behaviour.has_value()) {
             archetype.behaviours.push_back(*node.components.behaviour);
         }

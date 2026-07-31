@@ -123,6 +123,10 @@ namespace {
         lhs.promoteCoverage == rhs.promoteCoverage && lhs.demoteCoverage == rhs.demoteCoverage && lhs.enabled == rhs.enabled;
 }
 
+[[nodiscard]] bool Equals(const SceneVisibilityBlockerComponent& lhs, const SceneVisibilityBlockerComponent& rhs) noexcept {
+    return Equals(lhs.localCenter, rhs.localCenter) && Equals(lhs.size, rhs.size) && lhs.enabled == rhs.enabled;
+}
+
 [[nodiscard]] bool Equals(const BehaviourComponent& lhs, const BehaviourComponent& rhs) noexcept {
     return lhs.behaviourAssetId == rhs.behaviourAssetId && lhs.backend == rhs.backend && lhs.enabled == rhs.enabled && lhs.tickGroup == rhs.tickGroup
         && lhs.executionOrder == rhs.executionOrder;
@@ -225,6 +229,7 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , worldBackdrops(scene.Components().WorldBackdrops())
     , ambientRadiances(scene.Components().AmbientRadiances())
     , detailSwitches(scene.Components().DetailSwitches())
+    , visibilityBlockers(scene.Components().VisibilityBlockers())
     , behaviours(scene.Components().Behaviours())
     , audioSources(scene.Components().AudioSources())
     , audioListeners(scene.Components().AudioListeners())
@@ -295,6 +300,7 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     WriteOptionalComponent(context.worldBackdrops, entity, node.components.worldBackdrop);
     WriteOptionalComponent(context.ambientRadiances, entity, node.components.ambientRadiance);
     WriteOptionalComponent(context.detailSwitches, entity, node.components.detailSwitch);
+    WriteOptionalComponent(context.visibilityBlockers, entity, node.components.visibilityBlocker);
     if (!componentMask.available || !componentMask.matches || node.components.behaviour.has_value()) {
         WriteOptionalComponent(context.behaviours, entity, node.components.behaviour);
     }

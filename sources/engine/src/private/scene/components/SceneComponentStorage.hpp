@@ -10,6 +10,7 @@
 #include "scene/components/SceneWorldBackdropComponentStore.hpp"
 #include "scene/components/SceneAmbientRadianceComponentStore.hpp"
 #include "scene/components/SceneDetailSwitchComponentStore.hpp"
+#include "scene/components/SceneVisibilityBlockerComponentStore.hpp"
 #include "scene/components/SceneAudioListenerComponentStore.hpp"
 #include "scene/components/SceneAudioSourceComponentStore.hpp"
 #include "scene/components/SceneAnimatorComponentStore.hpp"
@@ -82,6 +83,8 @@ public:
     [[nodiscard]] SceneAmbientRadianceComponentStore& AmbientRadiances() noexcept;
     [[nodiscard]] const SceneDetailSwitchComponentStore& DetailSwitches() const noexcept;
     [[nodiscard]] SceneDetailSwitchComponentStore& DetailSwitches() noexcept;
+    [[nodiscard]] const SceneVisibilityBlockerComponentStore& VisibilityBlockers() const noexcept;
+    [[nodiscard]] SceneVisibilityBlockerComponentStore& VisibilityBlockers() noexcept;
     [[nodiscard]] const SceneAudioSourceComponentStore& AudioSources() const noexcept;
     [[nodiscard]] SceneAudioSourceComponentStore& AudioSources() noexcept;
     [[nodiscard]] const SceneAudioListenerComponentStore& AudioListeners() const noexcept;
@@ -113,6 +116,7 @@ private:
     SceneWorldBackdropComponentStore worldBackdrops_;
     SceneAmbientRadianceComponentStore ambientRadiances_;
     SceneDetailSwitchComponentStore detailSwitches_;
+    SceneVisibilityBlockerComponentStore visibilityBlockers_;
     SceneAudioSourceComponentStore audioSources_;
     SceneAudioListenerComponentStore audioListeners_;
     SceneAnimatorComponentStore animators_;

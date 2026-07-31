@@ -24,6 +24,7 @@ SceneComponentStorage::SceneComponentStorage(kb::ecs::World& world, const SceneC
     , worldBackdrops_(world, components.WorldBackdropComponentId())
     , ambientRadiances_(world, components.AmbientRadianceComponentId())
     , detailSwitches_(world, components.DetailSwitchComponentId())
+    , visibilityBlockers_(world, components.VisibilityBlockerComponentId())
     , audioSources_(world, components.AudioSourceComponentId())
     , audioListeners_(world, components.AudioListenerComponentId())
     , animators_(world, components.AnimatorComponentId())
@@ -150,6 +151,8 @@ const SceneAmbientRadianceComponentStore& SceneComponentStorage::AmbientRadiance
 SceneAmbientRadianceComponentStore& SceneComponentStorage::AmbientRadiances() noexcept { return ambientRadiances_; }
 const SceneDetailSwitchComponentStore& SceneComponentStorage::DetailSwitches() const noexcept { return detailSwitches_; }
 SceneDetailSwitchComponentStore& SceneComponentStorage::DetailSwitches() noexcept { return detailSwitches_; }
+const SceneVisibilityBlockerComponentStore& SceneComponentStorage::VisibilityBlockers() const noexcept { return visibilityBlockers_; }
+SceneVisibilityBlockerComponentStore& SceneComponentStorage::VisibilityBlockers() noexcept { return visibilityBlockers_; }
 
 const SceneAudioSourceComponentStore& SceneComponentStorage::AudioSources() const noexcept {
     return audioSources_;

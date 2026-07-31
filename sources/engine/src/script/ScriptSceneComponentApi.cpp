@@ -16,6 +16,7 @@
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
+#include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
 #include "engine/scene/SceneCharacterControllerComponents.hpp"
@@ -34,6 +35,7 @@
 #include "engine/scene/SceneWorldBackdropComponents.hpp"
 #include "engine/scene/SceneAmbientRadianceComponents.hpp"
 #include "engine/scene/SceneDetailSwitchComponents.hpp"
+#include "engine/scene/SceneVisibilityBlockerComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -230,7 +232,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 20> kComponentNames{
+constexpr std::array<std::string_view, 21> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
@@ -251,6 +253,7 @@ constexpr std::array<std::string_view, 20> kComponentNames{
     "WorldBackdrop",
     "Ambient Radiance",
     "Detail Switch",
+    "Visibility Blocker",
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kRegionShapePropertyDescs{
@@ -321,6 +324,11 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 6> kDetailSwitchPropertyD
     ScriptSceneComponentPropertyDesc{ "promoteCoverage", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "demoteCoverage", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 7> kVisibilityBlockerPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "localCenter.x", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "localCenter.y", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "localCenter.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "size.x", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "size.y", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "size.z", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 1> kTagsPropertyDescs{
@@ -798,6 +806,16 @@ constexpr std::array<FieldBinding, 6> kDetailSwitchFields{
     KB_BOOL(kb::scene::SceneDetailSwitchComponent, enabled),
 };
 
+constexpr std::array<FieldBinding, 7> kVisibilityBlockerFields{
+    FieldBinding{ "localCenter.x", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SceneVisibilityBlockerComponent*>(component)->localCenter.x }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat())) return false; static_cast<kb::scene::SceneVisibilityBlockerComponent*>(component)->localCenter.x = value.AsFloat(); return true; } },
+    FieldBinding{ "localCenter.y", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SceneVisibilityBlockerComponent*>(component)->localCenter.y }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat())) return false; static_cast<kb::scene::SceneVisibilityBlockerComponent*>(component)->localCenter.y = value.AsFloat(); return true; } },
+    FieldBinding{ "localCenter.z", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SceneVisibilityBlockerComponent*>(component)->localCenter.z }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat())) return false; static_cast<kb::scene::SceneVisibilityBlockerComponent*>(component)->localCenter.z = value.AsFloat(); return true; } },
+    FieldBinding{ "size.x", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SceneVisibilityBlockerComponent*>(component)->size.x }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat()) || value.AsFloat() <= 0.0F) return false; static_cast<kb::scene::SceneVisibilityBlockerComponent*>(component)->size.x = value.AsFloat(); return true; } },
+    FieldBinding{ "size.y", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SceneVisibilityBlockerComponent*>(component)->size.y }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat()) || value.AsFloat() <= 0.0F) return false; static_cast<kb::scene::SceneVisibilityBlockerComponent*>(component)->size.y = value.AsFloat(); return true; } },
+    FieldBinding{ "size.z", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SceneVisibilityBlockerComponent*>(component)->size.z }; }, [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat()) || value.AsFloat() <= 0.0F) return false; static_cast<kb::scene::SceneVisibilityBlockerComponent*>(component)->size.z = value.AsFloat(); return true; } },
+    KB_BOOL(kb::scene::SceneVisibilityBlockerComponent, enabled),
+};
+
 #undef KB_BOOL
 #undef KB_INT
 #undef KB_UINT32
@@ -878,6 +896,7 @@ void MarkStreamFocusModified(kb::scene::Scene& scene, kb::scene::SceneEntity ent
 void MarkWorldBackdropModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().WorldBackdrops().MarkModified(entity); }
 void MarkAmbientRadianceModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().AmbientRadiances().MarkModified(entity); }
 void MarkDetailSwitchModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().DetailSwitches().MarkModified(entity); }
+void MarkVisibilityBlockerModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().VisibilityBlockers().MarkModified(entity); }
 
 [[nodiscard]] ComponentAccess AccessComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
     if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
@@ -963,6 +982,10 @@ void MarkDetailSwitchModified(kb::scene::Scene& scene, kb::scene::SceneEntity en
         kb::scene::SceneDetailSwitchComponent* component = scene.Components().DetailSwitches().TryGet(entity);
         return ComponentAccess{ component, component, kDetailSwitchFields, &MarkDetailSwitchModified };
     }
+    if (componentName == "Visibility Blocker") {
+        kb::scene::SceneVisibilityBlockerComponent* component = scene.Components().VisibilityBlockers().TryGet(entity);
+        return ComponentAccess{ component, component, kVisibilityBlockerFields, &MarkVisibilityBlockerModified };
+    }
     return {};
 }
 
@@ -988,6 +1011,7 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "WorldBackdrop") return kWorldBackdropPropertyDescs;
     if (componentName == "Ambient Radiance") return kAmbientRadiancePropertyDescs;
     if (componentName == "Detail Switch") return kDetailSwitchPropertyDescs;
+    if (componentName == "Visibility Blocker") return kVisibilityBlockerPropertyDescs;
     if (componentName == "Camera") {
         return kCameraPropertyDescs;
     }

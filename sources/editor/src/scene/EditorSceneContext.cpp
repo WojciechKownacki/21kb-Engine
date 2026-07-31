@@ -16,6 +16,7 @@
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
+#include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
@@ -8160,6 +8161,16 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
         }
         return ExecuteSceneCommand("Add Detail Switch Component", [this, entity]() {
             scene_->Components().DetailSwitches().Set(entity, kb::scene::SceneDetailSwitchComponent{});
+            return true;
+        });
+    }
+    if (componentId == "Visibility Blocker") {
+        if (scene_->Components().VisibilityBlockers().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Visibility Blocker component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Visibility Blocker Component", [this, entity]() {
+            scene_->Components().VisibilityBlockers().Set(entity, kb::scene::SceneVisibilityBlockerComponent{});
             return true;
         });
     }
