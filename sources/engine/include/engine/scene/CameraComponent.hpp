@@ -2,7 +2,9 @@
 
 #include "engine/scene/TransformComponent.hpp"
 
+#include <cmath>
 #include <cstdint>
+#include <string_view>
 
 namespace kb::scene {
 
@@ -24,6 +26,9 @@ enum class CameraClearMode {
 };
 
 struct CameraComponent {
+    static constexpr std::string_view StableId = "kb21.view.frame";
+    static constexpr std::uint32_t SchemaVersion = 1U;
+
     CameraProjection projection = CameraProjection::Perspective;
     float verticalFovDegrees = 60.0F;
     float orthographicHeight = 10.0F;
@@ -51,5 +56,22 @@ struct CameraComponent {
     CameraClearMode clearMode = CameraClearMode::SolidColor;
     Vec3 clearColor{ 0.0F, 0.0F, 0.0F };
 };
+
+[[nodiscard]] constexpr bool IsCameraProjectionValid(CameraProjection value) noexcept {
+    return value == CameraProjection::Perspective || value == CameraProjection::Orthographic;
+}
+
+[[nodiscard]] constexpr bool IsCameraClearModeValid(CameraClearMode value) noexcept {
+    return value == CameraClearMode::SolidColor || value == CameraClearMode::DepthOnly || value == CameraClearMode::DontClear;
+}
+
+[[nodiscard]] inline bool IsCameraComponentValid(const CameraComponent& value) noexcept {
+    return IsCameraProjectionValid(value.projection) && IsCameraClearModeValid(value.clearMode)
+        && std::isfinite(value.verticalFovDegrees) && value.verticalFovDegrees > 0.0F && value.verticalFovDegrees < 180.0F
+        && std::isfinite(value.orthographicHeight) && value.orthographicHeight > 0.0F
+        && std::isfinite(value.nearClip) && value.nearClip > 0.0F
+        && std::isfinite(value.farClip) && value.farClip > value.nearClip
+        && std::isfinite(value.clearColor.x) && std::isfinite(value.clearColor.y) && std::isfinite(value.clearColor.z);
+}
 
 } // namespace kb::scene

@@ -17,6 +17,16 @@ SceneComponentStorage::SceneComponentStorage(kb::ecs::World& world, const SceneC
     , characterControllers_(world, components.CharacterControllerComponentId())
     , joints_(world, components.JointComponentId())
     , tags_(world, components.TagsComponentId())
+    , regionShapes_(world, components.RegionShapeComponentId())
+    , guideCurves_(world, components.GuideCurveComponentId())
+    , contentInstances_(world, components.ContentInstanceComponentId())
+    , streamFocuses_(world, components.StreamFocusComponentId())
+    , worldBackdrops_(world, components.WorldBackdropComponentId())
+    , ambientRadiances_(world, components.AmbientRadianceComponentId())
+    , detailSwitches_(world, components.DetailSwitchComponentId())
+    , visibilityBlockers_(world, components.VisibilityBlockerComponentId())
+    , visibilityCells_(world, components.VisibilityCellComponentId())
+    , regionPortals_(world, components.RegionPortalComponentId())
     , audioSources_(world, components.AudioSourceComponentId())
     , audioListeners_(world, components.AudioListenerComponentId())
     , animators_(world, components.AnimatorComponentId())
@@ -123,6 +133,32 @@ const SceneTagsComponentStore& SceneComponentStorage::Tags() const noexcept {
 SceneTagsComponentStore& SceneComponentStorage::Tags() noexcept {
     return tags_;
 }
+
+const SceneRegionShapeComponentStore& SceneComponentStorage::RegionShapes() const noexcept {
+    return regionShapes_;
+}
+
+SceneRegionShapeComponentStore& SceneComponentStorage::RegionShapes() noexcept {
+    return regionShapes_;
+}
+const SceneGuideCurveComponentStore& SceneComponentStorage::GuideCurves() const noexcept { return guideCurves_; }
+SceneGuideCurveComponentStore& SceneComponentStorage::GuideCurves() noexcept { return guideCurves_; }
+const SceneContentInstanceComponentStore& SceneComponentStorage::ContentInstances() const noexcept { return contentInstances_; }
+SceneContentInstanceComponentStore& SceneComponentStorage::ContentInstances() noexcept { return contentInstances_; }
+const SceneStreamFocusComponentStore& SceneComponentStorage::StreamFocuses() const noexcept { return streamFocuses_; }
+SceneStreamFocusComponentStore& SceneComponentStorage::StreamFocuses() noexcept { return streamFocuses_; }
+const SceneWorldBackdropComponentStore& SceneComponentStorage::WorldBackdrops() const noexcept { return worldBackdrops_; }
+SceneWorldBackdropComponentStore& SceneComponentStorage::WorldBackdrops() noexcept { return worldBackdrops_; }
+const SceneAmbientRadianceComponentStore& SceneComponentStorage::AmbientRadiances() const noexcept { return ambientRadiances_; }
+SceneAmbientRadianceComponentStore& SceneComponentStorage::AmbientRadiances() noexcept { return ambientRadiances_; }
+const SceneDetailSwitchComponentStore& SceneComponentStorage::DetailSwitches() const noexcept { return detailSwitches_; }
+SceneDetailSwitchComponentStore& SceneComponentStorage::DetailSwitches() noexcept { return detailSwitches_; }
+const SceneVisibilityBlockerComponentStore& SceneComponentStorage::VisibilityBlockers() const noexcept { return visibilityBlockers_; }
+SceneVisibilityBlockerComponentStore& SceneComponentStorage::VisibilityBlockers() noexcept { return visibilityBlockers_; }
+const SceneVisibilityCellComponentStore& SceneComponentStorage::VisibilityCells() const noexcept { return visibilityCells_; }
+SceneVisibilityCellComponentStore& SceneComponentStorage::VisibilityCells() noexcept { return visibilityCells_; }
+const SceneRegionPortalComponentStore& SceneComponentStorage::RegionPortals() const noexcept { return regionPortals_; }
+SceneRegionPortalComponentStore& SceneComponentStorage::RegionPortals() noexcept { return regionPortals_; }
 
 const SceneAudioSourceComponentStore& SceneComponentStorage::AudioSources() const noexcept {
     return audioSources_;

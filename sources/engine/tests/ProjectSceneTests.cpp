@@ -9,6 +9,11 @@
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
+#include "engine/scene/LightComponent.hpp"
+#include "engine/scene/AmbientRadianceComponent.hpp"
+#include "engine/scene/DetailSwitchComponent.hpp"
+#include "engine/scene/VisibilityBlockerComponent.hpp"
+#include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -300,6 +305,137 @@ void RunSceneAudioListenerComponentReflectionSerializationTest() {
     Require(restored != nullptr && !restored->primary && restored->enabled, "AudioListenerComponent reflection did not roundtrip");
 }
 
+void RunSceneRadianceEmitterReflectionSerializationTest() {
+    kb::scene::Scene source;
+    const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Radiance Emitter" });
+    source.Components().Lights().Set(sourceEntity, kb::scene::LightComponent{
+        .kind = kb::scene::LightKind::Tube,
+        .color = kb::scene::Vec3{ 0.9F, 0.7F, 0.4F },
+        .intensity = 6.0F,
+        .range = 14.0F,
+        .innerConeDegrees = 18.0F,
+        .outerConeDegrees = 42.0F,
+        .areaWidth = 5.0F,
+        .areaHeight = 1.25F,
+        .contactShadowLength = 0.3F,
+        .volumetricScattering = 0.6F,
+        .castsShadow = false,
+        .useColorTemperature = true,
+        .colorTemperatureKelvin = 4200.0F,
+        .layerMask = 0x00000008U,
+    });
+
+    kb::ecs::World& sourceWorld = source.Runtime().EcsWorld();
+    const kb::ecs::ComponentReflection* reflection = sourceWorld.Reflection(kb::scene::LightComponent::StableId);
+    Require(reflection != nullptr, "3D Radiance Emitter reflection was not registered under its stable id");
+    Require(reflection != nullptr && reflection->FindField("areaWidth") != nullptr && reflection->FindField("areaHeight") != nullptr,
+        "3D Radiance Emitter reflection is missing its surface geometry fields");
+
+    kb::ecs::SerializedComponent serialized;
+    Require(sourceWorld.SerializeComponent(sourceEntity, sourceWorld.Component<kb::scene::LightComponent>(), serialized),
+        "3D Radiance Emitter reflection serialization failed");
+
+    kb::scene::Scene target;
+    const kb::scene::SceneEntity targetEntity = target.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Radiance Emitter Target" });
+    Require(target.Runtime().EcsWorld().ApplySerializedComponent(targetEntity, serialized),
+        "3D Radiance Emitter reflection apply failed");
+
+    const kb::scene::LightComponent* restored = target.Components().Lights().TryGet(targetEntity);
+    Require(restored != nullptr && restored->kind == kb::scene::LightKind::Tube &&
+            NearlyEqual(restored->areaWidth, 5.0F) && NearlyEqual(restored->areaHeight, 1.25F) &&
+            NearlyEqual(restored->contactShadowLength, 0.3F) && NearlyEqual(restored->volumetricScattering, 0.6F) &&
+            !restored->castsShadow && restored->useColorTemperature &&
+            NearlyEqual(restored->colorTemperatureKelvin, 4200.0F) && restored->layerMask == 0x00000008U,
+        "3D Radiance Emitter reflection did not roundtrip its authored state");
+}
+
+void RunSceneAmbientRadianceReflectionSerializationTest() {
+    kb::scene::Scene source;
+    const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Ambient Radiance" });
+    source.Components().AmbientRadiances().Set(sourceEntity, kb::scene::AmbientRadianceComponent{
+        .mode = kb::scene::AmbientRadianceMode::CapturedEnvironment,
+        .color = kb::scene::Vec3{ 0.1F, 0.2F, 0.3F }, .horizonColor = kb::scene::Vec3{ 0.2F, 0.3F, 0.4F }, .zenithColor = kb::scene::Vec3{ 0.5F, 0.6F, 0.7F },
+        .environmentAssetId = 51U, .intensity = 1.4F, .diffuseIntensity = 1.2F, .specularIntensity = 0.4F, .priority = 6, .enabled = true,
+    });
+    kb::ecs::World& sourceWorld = source.Runtime().EcsWorld();
+    const kb::ecs::ComponentReflection* reflection = sourceWorld.Reflection(kb::scene::AmbientRadianceComponent::StableId);
+    Require(reflection != nullptr && reflection->FindField("environmentAssetId") != nullptr && reflection->FindField("specularIntensity") != nullptr,
+        "Ambient Radiance reflection was not registered under its stable id");
+    kb::ecs::SerializedComponent serialized;
+    Require(sourceWorld.SerializeComponent(sourceEntity, sourceWorld.Component<kb::scene::AmbientRadianceComponent>(), serialized), "Ambient Radiance reflection serialization failed");
+    kb::scene::Scene target;
+    const kb::scene::SceneEntity targetEntity = target.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Ambient Target" });
+    Require(target.Runtime().EcsWorld().ApplySerializedComponent(targetEntity, serialized), "Ambient Radiance reflection apply failed");
+    const kb::scene::AmbientRadianceComponent* restored = target.Components().AmbientRadiances().TryGet(targetEntity);
+    Require(restored != nullptr && restored->mode == kb::scene::AmbientRadianceMode::CapturedEnvironment && restored->environmentAssetId == 51U &&
+            NearlyEqual(restored->zenithColor.z, 0.7F) && NearlyEqual(restored->intensity, 1.4F) && NearlyEqual(restored->diffuseIntensity, 1.2F) && NearlyEqual(restored->specularIntensity, 0.4F) && restored->priority == 6,
+        "Ambient Radiance reflection did not roundtrip authored state");
+}
+
+void RunSceneDetailSwitchReflectionSerializationTest() {
+    kb::scene::Scene source;
+    const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Detail Switch" });
+    source.Components().DetailSwitches().Set(sourceEntity, kb::scene::SceneDetailSwitchComponent{
+        .groupId = 73U, .minimumLod = 1U, .maximumLod = 4U, .promoteCoverage = 0.42F, .demoteCoverage = 0.21F, .enabled = false,
+    });
+    kb::ecs::World& sourceWorld = source.Runtime().EcsWorld();
+    const kb::ecs::ComponentReflection* reflection = sourceWorld.Reflection(kb::scene::SceneDetailSwitchComponent::StableId);
+    Require(reflection != nullptr && reflection->FindField("groupId") != nullptr && reflection->FindField("demoteCoverage") != nullptr,
+        "Detail Switch reflection was not registered under its stable id");
+    kb::ecs::SerializedComponent serialized;
+    Require(sourceWorld.SerializeComponent(sourceEntity, sourceWorld.Component<kb::scene::SceneDetailSwitchComponent>(), serialized), "Detail Switch reflection serialization failed");
+    kb::scene::Scene target;
+    const kb::scene::SceneEntity targetEntity = target.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Detail Switch Target" });
+    Require(target.Runtime().EcsWorld().ApplySerializedComponent(targetEntity, serialized), "Detail Switch reflection apply failed");
+    const kb::scene::SceneDetailSwitchComponent* restored = target.Components().DetailSwitches().TryGet(targetEntity);
+    Require(restored != nullptr && restored->groupId == 73U && restored->minimumLod == 1U && restored->maximumLod == 4U &&
+            NearlyEqual(restored->promoteCoverage, 0.42F) && NearlyEqual(restored->demoteCoverage, 0.21F) && !restored->enabled,
+        "Detail Switch reflection did not roundtrip authored state");
+}
+
+void RunSceneVisibilityBlockerReflectionSerializationTest() {
+    kb::scene::Scene source;
+    const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Visibility Blocker" });
+    source.Components().VisibilityBlockers().Set(sourceEntity, kb::scene::SceneVisibilityBlockerComponent{
+        .localCenter = kb::scene::Vec3{ 0.25F, -0.5F, 0.75F }, .size = kb::scene::Vec3{ 2.0F, 3.0F, 4.0F }, .enabled = false,
+    });
+    kb::ecs::World& sourceWorld = source.Runtime().EcsWorld();
+    const kb::ecs::ComponentReflection* reflection = sourceWorld.Reflection(kb::scene::SceneVisibilityBlockerComponent::StableId);
+    Require(reflection != nullptr && reflection->FindField("localCenter") != nullptr && reflection->FindField("size") != nullptr,
+        "Visibility Blocker reflection was not registered under its stable id");
+    kb::ecs::SerializedComponent serialized;
+    Require(sourceWorld.SerializeComponent(sourceEntity, sourceWorld.Component<kb::scene::SceneVisibilityBlockerComponent>(), serialized), "Visibility Blocker reflection serialization failed");
+    kb::scene::Scene target;
+    const kb::scene::SceneEntity targetEntity = target.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Visibility Blocker Target" });
+    Require(target.Runtime().EcsWorld().ApplySerializedComponent(targetEntity, serialized), "Visibility Blocker reflection apply failed");
+    const kb::scene::SceneVisibilityBlockerComponent* restored = target.Components().VisibilityBlockers().TryGet(targetEntity);
+    Require(restored != nullptr && NearlyEqual(restored->localCenter.x, 0.25F) && NearlyEqual(restored->localCenter.y, -0.5F) &&
+            NearlyEqual(restored->size.z, 4.0F) && !restored->enabled,
+        "Visibility Blocker reflection did not roundtrip authored state");
+}
+
+void RunSceneVisibilityCellReflectionSerializationTest() {
+    kb::scene::Scene source;
+    const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Visibility Cell" });
+    source.Components().VisibilityCells().Set(sourceEntity, kb::scene::VisibilityCellComponent{
+        .membershipMask = 5U, .membership = kb::scene::VisibilityCellMembership::Exclude,
+        .visibilityOverride = kb::scene::VisibilityCellOverride::ForceHidden, .enabled = false,
+    });
+    kb::ecs::World& sourceWorld = source.Runtime().EcsWorld();
+    const kb::ecs::ComponentReflection* reflection = sourceWorld.Reflection(kb::scene::VisibilityCellComponent::StableId);
+    Require(reflection != nullptr && reflection->FindField("membershipMask") != nullptr && reflection->FindField("visibilityOverride") != nullptr,
+        "Visibility Cell reflection was not registered under its stable id");
+    kb::ecs::SerializedComponent serialized;
+    Require(sourceWorld.SerializeComponent(sourceEntity, sourceWorld.Component<kb::scene::VisibilityCellComponent>(), serialized), "Visibility Cell reflection serialization failed");
+    kb::scene::Scene target;
+    const kb::scene::SceneEntity targetEntity = target.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Visibility Cell Target" });
+    Require(target.Runtime().EcsWorld().ApplySerializedComponent(targetEntity, serialized), "Visibility Cell reflection apply failed");
+    const kb::scene::VisibilityCellComponent* restored = target.Components().VisibilityCells().TryGet(targetEntity);
+    Require(restored != nullptr && restored->membershipMask == 5U && restored->membership == kb::scene::VisibilityCellMembership::Exclude &&
+            restored->visibilityOverride == kb::scene::VisibilityCellOverride::ForceHidden && !restored->enabled,
+        "Visibility Cell reflection did not roundtrip authored state");
+}
+
 void RunSceneAudioSourceComponentReflectionSerializationTest() {
     kb::scene::Scene source;
     const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "AudioSource" });
@@ -528,6 +664,11 @@ void RunProjectSceneTests() {
     RunProjectDescriptorRoundTripTest();
     RunProjectDescriptorRejectsChecksumMismatchTest();
     RunSceneDocumentRoundTripTest();
+    RunSceneRadianceEmitterReflectionSerializationTest();
+    RunSceneAmbientRadianceReflectionSerializationTest();
+    RunSceneDetailSwitchReflectionSerializationTest();
+    RunSceneVisibilityBlockerReflectionSerializationTest();
+    RunSceneVisibilityCellReflectionSerializationTest();
     RunSceneAudioListenerComponentReflectionSerializationTest();
     RunSceneAudioSourceComponentReflectionSerializationTest();
     RunSceneAudioListenerPrefabRoundTripTest();

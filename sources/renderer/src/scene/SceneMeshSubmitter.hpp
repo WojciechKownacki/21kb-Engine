@@ -13,6 +13,7 @@
 #include <span>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace kb::render {
 
@@ -63,6 +64,9 @@ private:
     SceneGpuDrivenCullingPass gpuDrivenCullingPass_;
     mutable SceneGpuDrivenFrameResources gpuDrivenFrameResources_;
     mutable MeshPipelineBuildResult pipelineScratch_;
+    mutable std::vector<SceneRenderVisibilityBlocker> visibilityBlockerScratch_;
+    // Derived renderer state only. The authored detail-switch policy remains in ECS.
+    mutable const RenderScene* detailSwitchScene_ = nullptr;
 };
 
 } // namespace kb::render

@@ -7,7 +7,16 @@
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/ContentInstanceComponent.hpp"
+#include "engine/scene/StreamFocusComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
+#include "engine/scene/AmbientRadianceComponent.hpp"
+#include "engine/scene/DetailSwitchComponent.hpp"
+#include "engine/scene/VisibilityBlockerComponent.hpp"
+#include "engine/scene/VisibilityCellComponent.hpp"
+#include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
+#include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -779,8 +788,11 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     case kb::scene::LightKind::Point:
         return kb::scene::LightKind::Spot;
     case kb::scene::LightKind::Spot:
+        return kb::scene::LightKind::AreaRect;
     case kb::scene::LightKind::AreaRect:
+        return kb::scene::LightKind::AreaDisk;
     case kb::scene::LightKind::AreaDisk:
+        return kb::scene::LightKind::Tube;
     case kb::scene::LightKind::Tube:
         return kb::scene::LightKind::Directional;
     }
@@ -1134,6 +1146,42 @@ template <typename Integer>
     return property >= InspectorPropertyId::NavObstacleShape && property <= InspectorPropertyId::NavObstacleEnabled;
 }
 
+[[nodiscard]] bool IsRegionShapeProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::RegionShapeKind && property <= InspectorPropertyId::RegionShapeEnabled;
+}
+
+[[nodiscard]] bool IsContentInstanceProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::ContentInstanceAssetId && property <= InspectorPropertyId::ContentInstanceActive;
+}
+
+[[nodiscard]] bool IsStreamFocusProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::StreamFocusInnerRadius && property <= InspectorPropertyId::StreamFocusEnabled;
+}
+
+[[nodiscard]] bool IsWorldBackdropProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::WorldBackdropMode && property <= InspectorPropertyId::WorldBackdropEnabled;
+}
+
+[[nodiscard]] bool IsAmbientRadianceProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::AmbientRadianceMode && property <= InspectorPropertyId::AmbientRadianceEnabled;
+}
+
+[[nodiscard]] bool IsDetailSwitchProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::DetailSwitchGroupId && property <= InspectorPropertyId::DetailSwitchEnabled;
+}
+
+[[nodiscard]] bool IsVisibilityBlockerProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::VisibilityBlockerCenterX && property <= InspectorPropertyId::VisibilityBlockerEnabled;
+}
+
+[[nodiscard]] bool IsVisibilityCellProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::VisibilityCellMembershipMask && property <= InspectorPropertyId::VisibilityCellEnabled;
+}
+
+[[nodiscard]] bool IsRegionPortalProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::RegionPortalSourceCell && property <= InspectorPropertyId::RegionPortalEnabled;
+}
+
 template <typename Mutator>
 [[nodiscard]] bool EditNavAgent(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
     if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
@@ -1156,6 +1204,108 @@ template <typename Mutator>
         return false;
     }
     sceneContext.Scene().Components().NavObstacles().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditRegionShape(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::RegionShapeComponent* shape = sceneContext.Scene().Components().RegionShapes().TryGet(entity);
+    if (shape == nullptr || !mutator(*shape)) {
+        sceneContext.CancelSceneEditTransaction();
+        return false;
+    }
+    sceneContext.Scene().Components().RegionShapes().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditContentInstance(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::ContentInstanceComponent* instance = sceneContext.Scene().Components().ContentInstances().TryGet(entity);
+    if (instance == nullptr || !mutator(*instance)) {
+        sceneContext.CancelSceneEditTransaction();
+        return false;
+    }
+    sceneContext.Scene().Components().ContentInstances().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditStreamFocus(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::StreamFocusComponent* focus = sceneContext.Scene().Components().StreamFocuses().TryGet(entity);
+    if (focus == nullptr || !mutator(*focus)) {
+        sceneContext.CancelSceneEditTransaction();
+        return false;
+    }
+    sceneContext.Scene().Components().StreamFocuses().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditWorldBackdrop(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::WorldBackdropComponent* backdrop = sceneContext.Scene().Components().WorldBackdrops().TryGet(entity);
+    if (backdrop == nullptr || !mutator(*backdrop)) {
+        sceneContext.CancelSceneEditTransaction();
+        return false;
+    }
+    sceneContext.Scene().Components().WorldBackdrops().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditAmbientRadiance(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::AmbientRadianceComponent* ambient = sceneContext.Scene().Components().AmbientRadiances().TryGet(entity);
+    if (ambient == nullptr || !mutator(*ambient)) { sceneContext.CancelSceneEditTransaction(); return false; }
+    sceneContext.Scene().Components().AmbientRadiances().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditDetailSwitch(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::SceneDetailSwitchComponent* detailSwitch = sceneContext.Scene().Components().DetailSwitches().TryGet(entity);
+    if (detailSwitch == nullptr || !mutator(*detailSwitch)) { sceneContext.CancelSceneEditTransaction(); return false; }
+    sceneContext.Scene().Components().DetailSwitches().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditVisibilityBlocker(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::SceneVisibilityBlockerComponent* blocker = sceneContext.Scene().Components().VisibilityBlockers().TryGet(entity);
+    if (blocker == nullptr || !mutator(*blocker)) { sceneContext.CancelSceneEditTransaction(); return false; }
+    sceneContext.Scene().Components().VisibilityBlockers().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditVisibilityCell(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::VisibilityCellComponent* cell = sceneContext.Scene().Components().VisibilityCells().TryGet(entity);
+    if (cell == nullptr || !mutator(*cell)) { sceneContext.CancelSceneEditTransaction(); return false; }
+    sceneContext.Scene().Components().VisibilityCells().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditRegionPortal(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::SceneRegionPortalComponent* portal = sceneContext.Scene().Components().RegionPortals().TryGet(entity);
+    if (portal == nullptr || !mutator(*portal)) { sceneContext.CancelSceneEditTransaction(); return false; }
+    sceneContext.Scene().Components().RegionPortals().MarkModified(entity);
     static_cast<void>(sceneContext.CommitSceneEditTransaction());
     return true;
 }
@@ -1191,6 +1341,20 @@ template <typename Mutator>
     }
 }
 
+[[nodiscard]] std::string RegionShapeFieldValue(const kb::scene::RegionShapeComponent& shape, InspectorPropertyId property) {
+    switch (property) {
+    case InspectorPropertyId::RegionShapeCenterX: return FormatCompactFloat(shape.center.x);
+    case InspectorPropertyId::RegionShapeCenterY: return FormatCompactFloat(shape.center.y);
+    case InspectorPropertyId::RegionShapeCenterZ: return FormatCompactFloat(shape.center.z);
+    case InspectorPropertyId::RegionShapeSizeX: return FormatCompactFloat(shape.size.x);
+    case InspectorPropertyId::RegionShapeSizeY: return FormatCompactFloat(shape.size.y);
+    case InspectorPropertyId::RegionShapeSizeZ: return FormatCompactFloat(shape.size.z);
+    case InspectorPropertyId::RegionShapeRadius: return FormatCompactFloat(shape.radius);
+    case InspectorPropertyId::RegionShapeHeight: return FormatCompactFloat(shape.height);
+    default: return {};
+    }
+}
+
 [[nodiscard]] bool HandleNavAgentClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     const kb::scene::NavAgent* agent = sceneContext.Scene().Components().NavAgents().TryGet(entity);
     if (agent == nullptr) return false;
@@ -1220,6 +1384,236 @@ template <typename Mutator>
     }
     if (IsNavObstacleProperty(hit.property)) {
         sceneContext.Inspector().BeginTextEdit(hit.property, NavObstacleFieldValue(*obstacle, hit.property));
+    }
+    return true;
+}
+
+[[nodiscard]] bool HandleRegionShapeClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::RegionShapeComponent* shape = sceneContext.Scene().Components().RegionShapes().TryGet(entity);
+    if (shape == nullptr) return false;
+    if (hit.property == InspectorPropertyId::RegionShapeEnabled) {
+        return EditRegionShape(sceneContext, entity, "Toggle Region Shape", [](kb::scene::RegionShapeComponent& value) { value.enabled = !value.enabled; return true; });
+    }
+    if (hit.property == InspectorPropertyId::RegionShapeKind) {
+        return EditRegionShape(sceneContext, entity, "Change Region Shape", [](kb::scene::RegionShapeComponent& value) {
+            const auto next = static_cast<std::uint8_t>(value.kind) + 1U;
+            value.kind = next > static_cast<std::uint8_t>(kb::scene::RegionShapeKind::Capsule)
+                ? kb::scene::RegionShapeKind::Circle2D : static_cast<kb::scene::RegionShapeKind>(next);
+            return true;
+        });
+    }
+    if (IsRegionShapeProperty(hit.property)) {
+        sceneContext.Inspector().BeginTextEdit(hit.property, RegionShapeFieldValue(*shape, hit.property));
+    }
+    return true;
+}
+
+[[nodiscard]] bool HandleContentInstanceClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::ContentInstanceComponent* instance = sceneContext.Scene().Components().ContentInstances().TryGet(entity);
+    if (instance == nullptr) return false;
+    if (hit.property == InspectorPropertyId::ContentInstanceActive) {
+        return EditContentInstance(sceneContext, entity, "Toggle Content Instance", [](kb::scene::ContentInstanceComponent& value) { value.active = !value.active; return true; });
+    }
+    if (hit.property == InspectorPropertyId::ContentInstanceKind) {
+        return EditContentInstance(sceneContext, entity, "Change Content Instance Source Type", [](kb::scene::ContentInstanceComponent& value) {
+            const auto next = static_cast<std::uint8_t>(value.kind) + 1U;
+            value.kind = next > static_cast<std::uint8_t>(kb::scene::ContentInstanceKind::WorldFragment)
+                ? kb::scene::ContentInstanceKind::Prefab : static_cast<kb::scene::ContentInstanceKind>(next);
+            return true;
+        });
+    }
+    if (hit.property == InspectorPropertyId::ContentInstanceLifetime) {
+        return EditContentInstance(sceneContext, entity, "Change Content Instance Lifetime", [](kb::scene::ContentInstanceComponent& value) {
+            value.lifetime = value.lifetime == kb::scene::ContentInstanceLifetime::Owner
+                ? kb::scene::ContentInstanceLifetime::Persistent : kb::scene::ContentInstanceLifetime::Owner;
+            return true;
+        });
+    }
+    if (hit.property == InspectorPropertyId::ContentInstanceAssetId) {
+        sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(instance->assetId));
+    }
+    return true;
+}
+
+[[nodiscard]] bool HandleStreamFocusClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::StreamFocusComponent* focus = sceneContext.Scene().Components().StreamFocuses().TryGet(entity);
+    if (focus == nullptr) return false;
+    if (hit.property == InspectorPropertyId::StreamFocusEnabled) {
+        return EditStreamFocus(sceneContext, entity, "Toggle Stream Focus", [](kb::scene::StreamFocusComponent& value) { value.enabled = !value.enabled; return true; });
+    }
+    if (IsStreamFocusProperty(hit.property)) {
+        switch (hit.property) {
+        case InspectorPropertyId::StreamFocusInnerRadius: sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(focus->innerRadius)); break;
+        case InspectorPropertyId::StreamFocusOuterRadius: sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(focus->outerRadius)); break;
+        case InspectorPropertyId::StreamFocusPriority: sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(focus->priority)); break;
+        case InspectorPropertyId::StreamFocusLoadMask: sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(static_cast<std::uint32_t>(focus->loadMask))); break;
+        default: break;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] std::string WorldBackdropFieldText(const kb::scene::WorldBackdropComponent& value, InspectorPropertyId property) {
+    switch (property) {
+    case InspectorPropertyId::WorldBackdropMode: return std::to_string(static_cast<int>(value.mode));
+    case InspectorPropertyId::WorldBackdropColorR: return FormatCompactFloat(value.color.x);
+    case InspectorPropertyId::WorldBackdropColorG: return FormatCompactFloat(value.color.y);
+    case InspectorPropertyId::WorldBackdropColorB: return FormatCompactFloat(value.color.z);
+    case InspectorPropertyId::WorldBackdropHorizonColorR: return FormatCompactFloat(value.horizonColor.x);
+    case InspectorPropertyId::WorldBackdropHorizonColorG: return FormatCompactFloat(value.horizonColor.y);
+    case InspectorPropertyId::WorldBackdropHorizonColorB: return FormatCompactFloat(value.horizonColor.z);
+    case InspectorPropertyId::WorldBackdropZenithColorR: return FormatCompactFloat(value.zenithColor.x);
+    case InspectorPropertyId::WorldBackdropZenithColorG: return FormatCompactFloat(value.zenithColor.y);
+    case InspectorPropertyId::WorldBackdropZenithColorB: return FormatCompactFloat(value.zenithColor.z);
+    case InspectorPropertyId::WorldBackdropEnvironmentAssetId: return std::to_string(value.environmentAssetId);
+    case InspectorPropertyId::WorldBackdropHorizonHeight: return FormatCompactFloat(value.horizonHeight);
+    case InspectorPropertyId::WorldBackdropGradientExponent: return FormatCompactFloat(value.gradientExponent);
+    case InspectorPropertyId::WorldBackdropPriority: return std::to_string(value.priority);
+    default: return {};
+    }
+}
+
+[[nodiscard]] kb::scene::WorldBackdropMode NextWorldBackdropMode(kb::scene::WorldBackdropMode mode) noexcept {
+    switch (mode) {
+    case kb::scene::WorldBackdropMode::SolidColor: return kb::scene::WorldBackdropMode::VerticalGradient;
+    case kb::scene::WorldBackdropMode::VerticalGradient: return kb::scene::WorldBackdropMode::EnvironmentMap;
+    case kb::scene::WorldBackdropMode::EnvironmentMap: return kb::scene::WorldBackdropMode::ProceduralSky;
+    case kb::scene::WorldBackdropMode::ProceduralSky: return kb::scene::WorldBackdropMode::SolidColor;
+    }
+    return kb::scene::WorldBackdropMode::SolidColor;
+}
+
+[[nodiscard]] bool HandleWorldBackdropClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::WorldBackdropComponent* backdrop = sceneContext.Scene().Components().WorldBackdrops().TryGet(entity);
+    if (backdrop == nullptr) return false;
+    if (hit.property == InspectorPropertyId::WorldBackdropEnabled) {
+        return EditWorldBackdrop(sceneContext, entity, "Toggle World Backdrop", [](kb::scene::WorldBackdropComponent& value) { value.enabled = !value.enabled; return true; });
+    }
+    if (hit.property == InspectorPropertyId::WorldBackdropMode) {
+        return EditWorldBackdrop(sceneContext, entity, "Set World Backdrop Mode", [](kb::scene::WorldBackdropComponent& value) {
+            value.mode = NextWorldBackdropMode(value.mode);
+            return true;
+        });
+    }
+    if (IsWorldBackdropProperty(hit.property)) {
+        sceneContext.Inspector().BeginTextEdit(hit.property, WorldBackdropFieldText(*backdrop, hit.property));
+    }
+    return true;
+}
+
+[[nodiscard]] std::string AmbientRadianceFieldText(const kb::scene::AmbientRadianceComponent& value, InspectorPropertyId property) {
+    switch (property) {
+    case InspectorPropertyId::AmbientRadianceMode: return std::to_string(static_cast<int>(value.mode));
+    case InspectorPropertyId::AmbientRadianceColorR: return FormatCompactFloat(value.color.x);
+    case InspectorPropertyId::AmbientRadianceColorG: return FormatCompactFloat(value.color.y);
+    case InspectorPropertyId::AmbientRadianceColorB: return FormatCompactFloat(value.color.z);
+    case InspectorPropertyId::AmbientRadianceHorizonColorR: return FormatCompactFloat(value.horizonColor.x);
+    case InspectorPropertyId::AmbientRadianceHorizonColorG: return FormatCompactFloat(value.horizonColor.y);
+    case InspectorPropertyId::AmbientRadianceHorizonColorB: return FormatCompactFloat(value.horizonColor.z);
+    case InspectorPropertyId::AmbientRadianceZenithColorR: return FormatCompactFloat(value.zenithColor.x);
+    case InspectorPropertyId::AmbientRadianceZenithColorG: return FormatCompactFloat(value.zenithColor.y);
+    case InspectorPropertyId::AmbientRadianceZenithColorB: return FormatCompactFloat(value.zenithColor.z);
+    case InspectorPropertyId::AmbientRadianceEnvironmentAssetId: return std::to_string(value.environmentAssetId);
+    case InspectorPropertyId::AmbientRadianceIntensity: return FormatCompactFloat(value.intensity);
+    case InspectorPropertyId::AmbientRadianceDiffuseIntensity: return FormatCompactFloat(value.diffuseIntensity);
+    case InspectorPropertyId::AmbientRadianceSpecularIntensity: return FormatCompactFloat(value.specularIntensity);
+    case InspectorPropertyId::AmbientRadiancePriority: return std::to_string(value.priority);
+    default: return {};
+    }
+}
+
+[[nodiscard]] bool HandleAmbientRadianceClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::AmbientRadianceComponent* ambient = sceneContext.Scene().Components().AmbientRadiances().TryGet(entity);
+    if (ambient == nullptr) return false;
+    if (hit.property == InspectorPropertyId::AmbientRadianceEnabled) {
+        return EditAmbientRadiance(sceneContext, entity, "Toggle Ambient Radiance", [](kb::scene::AmbientRadianceComponent& value) { value.enabled = !value.enabled; return true; });
+    }
+    if (hit.property == InspectorPropertyId::AmbientRadianceMode) {
+        return EditAmbientRadiance(sceneContext, entity, "Set Ambient Radiance Mode", [](kb::scene::AmbientRadianceComponent& value) {
+            const auto next = static_cast<std::uint8_t>(value.mode) + 1U;
+            value.mode = next > static_cast<std::uint8_t>(kb::scene::AmbientRadianceMode::EstimatedEnvironment)
+                ? kb::scene::AmbientRadianceMode::Constant : static_cast<kb::scene::AmbientRadianceMode>(next);
+            return true;
+        });
+    }
+    if (IsAmbientRadianceProperty(hit.property)) sceneContext.Inspector().BeginTextEdit(hit.property, AmbientRadianceFieldText(*ambient, hit.property));
+    return true;
+}
+
+[[nodiscard]] std::string DetailSwitchFieldText(const kb::scene::SceneDetailSwitchComponent& value, InspectorPropertyId property) {
+    switch (property) {
+    case InspectorPropertyId::DetailSwitchGroupId: return std::to_string(value.groupId);
+    case InspectorPropertyId::DetailSwitchMinimumLod: return std::to_string(value.minimumLod);
+    case InspectorPropertyId::DetailSwitchMaximumLod: return std::to_string(value.maximumLod);
+    case InspectorPropertyId::DetailSwitchPromoteCoverage: return FormatCompactFloat(value.promoteCoverage);
+    case InspectorPropertyId::DetailSwitchDemoteCoverage: return FormatCompactFloat(value.demoteCoverage);
+    default: return {};
+    }
+}
+
+[[nodiscard]] bool HandleDetailSwitchClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::SceneDetailSwitchComponent* detailSwitch = sceneContext.Scene().Components().DetailSwitches().TryGet(entity);
+    if (detailSwitch == nullptr) return false;
+    if (hit.property == InspectorPropertyId::DetailSwitchEnabled) {
+        return EditDetailSwitch(sceneContext, entity, "Toggle Detail Switch", [](kb::scene::SceneDetailSwitchComponent& value) { value.enabled = !value.enabled; return true; });
+    }
+    if (IsDetailSwitchProperty(hit.property)) sceneContext.Inspector().BeginTextEdit(hit.property, DetailSwitchFieldText(*detailSwitch, hit.property));
+    return true;
+}
+
+[[nodiscard]] std::string VisibilityBlockerFieldText(const kb::scene::SceneVisibilityBlockerComponent& value, InspectorPropertyId property) {
+    switch (property) {
+    case InspectorPropertyId::VisibilityBlockerCenterX: return FormatCompactFloat(value.localCenter.x);
+    case InspectorPropertyId::VisibilityBlockerCenterY: return FormatCompactFloat(value.localCenter.y);
+    case InspectorPropertyId::VisibilityBlockerCenterZ: return FormatCompactFloat(value.localCenter.z);
+    case InspectorPropertyId::VisibilityBlockerSizeX: return FormatCompactFloat(value.size.x);
+    case InspectorPropertyId::VisibilityBlockerSizeY: return FormatCompactFloat(value.size.y);
+    case InspectorPropertyId::VisibilityBlockerSizeZ: return FormatCompactFloat(value.size.z);
+    default: return {};
+    }
+}
+
+[[nodiscard]] bool HandleVisibilityBlockerClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::SceneVisibilityBlockerComponent* blocker = sceneContext.Scene().Components().VisibilityBlockers().TryGet(entity);
+    if (blocker == nullptr) return false;
+    if (hit.property == InspectorPropertyId::VisibilityBlockerEnabled) return EditVisibilityBlocker(sceneContext, entity, "Toggle Visibility Blocker", [](kb::scene::SceneVisibilityBlockerComponent& value) { value.enabled = !value.enabled; return true; });
+    if (IsVisibilityBlockerProperty(hit.property)) sceneContext.Inspector().BeginTextEdit(hit.property, VisibilityBlockerFieldText(*blocker, hit.property));
+    return true;
+}
+
+[[nodiscard]] std::string VisibilityCellFieldText(const kb::scene::VisibilityCellComponent& value, InspectorPropertyId property) {
+    switch (property) {
+    case InspectorPropertyId::VisibilityCellMembershipMask: return std::to_string(value.membershipMask);
+    case InspectorPropertyId::VisibilityCellMembership: return std::to_string(static_cast<int>(value.membership));
+    case InspectorPropertyId::VisibilityCellOverride: return std::to_string(static_cast<int>(value.visibilityOverride));
+    default: return {};
+    }
+}
+
+[[nodiscard]] bool HandleVisibilityCellClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::VisibilityCellComponent* cell = sceneContext.Scene().Components().VisibilityCells().TryGet(entity);
+    if (cell == nullptr) return false;
+    if (hit.property == InspectorPropertyId::VisibilityCellEnabled) return EditVisibilityCell(sceneContext, entity, "Toggle Visibility Cell", [](kb::scene::VisibilityCellComponent& value) { value.enabled = !value.enabled; return true; });
+    if (IsVisibilityCellProperty(hit.property)) sceneContext.Inspector().BeginTextEdit(hit.property, VisibilityCellFieldText(*cell, hit.property));
+    return true;
+}
+
+[[nodiscard]] bool HandleRegionPortalClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::SceneRegionPortalComponent* portal = sceneContext.Scene().Components().RegionPortals().TryGet(entity);
+    if (portal == nullptr) return false;
+    if (hit.property == InspectorPropertyId::RegionPortalEnabled) return EditRegionPortal(sceneContext, entity, "Toggle Region Portal", [](kb::scene::SceneRegionPortalComponent& value) { value.enabled = !value.enabled; return true; });
+    switch (hit.property) {
+    case InspectorPropertyId::RegionPortalSourceCell:
+        sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(portal->sourceCell.Id()));
+        break;
+    case InspectorPropertyId::RegionPortalTargetCell:
+        sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(portal->targetCell.Id()));
+        break;
+    case InspectorPropertyId::RegionPortalPurposes:
+        sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(portal->purposes));
+        break;
+    default:
+        break;
     }
     return true;
 }
@@ -1271,6 +1665,228 @@ template <typename Mutator>
         default: return false;
         }
     });
+}
+
+[[nodiscard]] bool ApplyRegionShapeText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    float value = 0.0F;
+    if (!ParseFloat(text, value) || !std::isfinite(value)) return false;
+    return EditRegionShape(sceneContext, entity, "Edit Region Shape", [property, value](kb::scene::RegionShapeComponent& shape) {
+        switch (property) {
+        case InspectorPropertyId::RegionShapeCenterX: shape.center.x = value; return true;
+        case InspectorPropertyId::RegionShapeCenterY: shape.center.y = value; return true;
+        case InspectorPropertyId::RegionShapeCenterZ: shape.center.z = value; return true;
+        case InspectorPropertyId::RegionShapeSizeX: if (value <= 0.0F) return false; shape.size.x = value; return true;
+        case InspectorPropertyId::RegionShapeSizeY: if (value <= 0.0F) return false; shape.size.y = value; return true;
+        case InspectorPropertyId::RegionShapeSizeZ: if (value <= 0.0F) return false; shape.size.z = value; return true;
+        case InspectorPropertyId::RegionShapeRadius: if (value <= 0.0F) return false; shape.radius = value; return true;
+        case InspectorPropertyId::RegionShapeHeight: if (value <= 0.0F) return false; shape.height = value; return true;
+        default: return false;
+        }
+    });
+}
+
+[[nodiscard]] bool ApplyContentInstanceText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    if (property != InspectorPropertyId::ContentInstanceAssetId) return false;
+    std::uint64_t assetId = 0U;
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), assetId);
+    if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) return false;
+    return EditContentInstance(sceneContext, entity, "Edit Content Instance Asset", [assetId](kb::scene::ContentInstanceComponent& value) {
+        value.assetId = assetId;
+        return true;
+    });
+}
+
+[[nodiscard]] bool ApplyStreamFocusText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    if (property == InspectorPropertyId::StreamFocusPriority) {
+        std::int32_t priority = 0;
+        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), priority);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) return false;
+        return EditStreamFocus(sceneContext, entity, "Edit Stream Focus Priority", [priority](kb::scene::StreamFocusComponent& value) { value.priority = priority; return true; });
+    }
+    if (property == InspectorPropertyId::StreamFocusLoadMask) {
+        std::uint32_t mask = 0U;
+        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), mask);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() || !kb::scene::IsStreamLoadMaskValid(static_cast<kb::scene::StreamLoadMask>(mask))) return false;
+        return EditStreamFocus(sceneContext, entity, "Edit Stream Focus Load Mask", [mask](kb::scene::StreamFocusComponent& value) { value.loadMask = static_cast<kb::scene::StreamLoadMask>(mask); return true; });
+    }
+    float radius = 0.0F;
+    if (!ParseFloat(text, radius) || !std::isfinite(radius)) return false;
+    return EditStreamFocus(sceneContext, entity, "Edit Stream Focus Radius", [property, radius](kb::scene::StreamFocusComponent& value) {
+        if (property == InspectorPropertyId::StreamFocusInnerRadius && radius >= 0.0F && radius <= value.outerRadius) { value.innerRadius = radius; return true; }
+        if (property == InspectorPropertyId::StreamFocusOuterRadius && radius >= value.innerRadius) { value.outerRadius = radius; return true; }
+        return false;
+    });
+}
+
+[[nodiscard]] bool ApplyWorldBackdropText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    if (property == InspectorPropertyId::WorldBackdropMode || property == InspectorPropertyId::WorldBackdropPriority) {
+        std::int32_t integer = 0;
+        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), integer);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) return false;
+        return EditWorldBackdrop(sceneContext, entity, "Edit World Backdrop", [property, integer](kb::scene::WorldBackdropComponent& value) {
+            kb::scene::WorldBackdropComponent candidate = value;
+            if (property == InspectorPropertyId::WorldBackdropMode) candidate.mode = static_cast<kb::scene::WorldBackdropMode>(integer);
+            else candidate.priority = integer;
+            if (!kb::scene::IsWorldBackdropComponentValid(candidate)) return false;
+            value = candidate;
+            return true;
+        });
+    }
+    if (property == InspectorPropertyId::WorldBackdropEnvironmentAssetId) {
+        std::uint64_t assetId = 0U;
+        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), assetId);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) return false;
+        return EditWorldBackdrop(sceneContext, entity, "Edit World Backdrop Environment", [assetId](kb::scene::WorldBackdropComponent& value) { value.environmentAssetId = assetId; return true; });
+    }
+    float number = 0.0F;
+    if (!ParseFloat(text, number) || !std::isfinite(number)) return false;
+    return EditWorldBackdrop(sceneContext, entity, "Edit World Backdrop", [property, number](kb::scene::WorldBackdropComponent& value) {
+        kb::scene::WorldBackdropComponent candidate = value;
+        switch (property) {
+        case InspectorPropertyId::WorldBackdropColorR: candidate.color.x = number; break;
+        case InspectorPropertyId::WorldBackdropColorG: candidate.color.y = number; break;
+        case InspectorPropertyId::WorldBackdropColorB: candidate.color.z = number; break;
+        case InspectorPropertyId::WorldBackdropHorizonColorR: candidate.horizonColor.x = number; break;
+        case InspectorPropertyId::WorldBackdropHorizonColorG: candidate.horizonColor.y = number; break;
+        case InspectorPropertyId::WorldBackdropHorizonColorB: candidate.horizonColor.z = number; break;
+        case InspectorPropertyId::WorldBackdropZenithColorR: candidate.zenithColor.x = number; break;
+        case InspectorPropertyId::WorldBackdropZenithColorG: candidate.zenithColor.y = number; break;
+        case InspectorPropertyId::WorldBackdropZenithColorB: candidate.zenithColor.z = number; break;
+        case InspectorPropertyId::WorldBackdropHorizonHeight: candidate.horizonHeight = number; break;
+        case InspectorPropertyId::WorldBackdropGradientExponent: candidate.gradientExponent = number; break;
+        default: return false;
+        }
+        if (!kb::scene::IsWorldBackdropComponentValid(candidate)) return false;
+        value = candidate;
+        return true;
+    });
+}
+
+[[nodiscard]] bool ApplyAmbientRadianceText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    if (property == InspectorPropertyId::AmbientRadianceMode || property == InspectorPropertyId::AmbientRadiancePriority) {
+        std::int32_t integer = 0; const auto parsed = std::from_chars(text.data(), text.data() + text.size(), integer);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) return false;
+        return EditAmbientRadiance(sceneContext, entity, "Edit Ambient Radiance", [property, integer](kb::scene::AmbientRadianceComponent& value) {
+            auto candidate = value;
+            if (property == InspectorPropertyId::AmbientRadianceMode) candidate.mode = static_cast<kb::scene::AmbientRadianceMode>(integer); else candidate.priority = integer;
+            if (!kb::scene::IsAmbientRadianceComponentValid(candidate)) return false;
+            value = candidate; return true;
+        });
+    }
+    if (property == InspectorPropertyId::AmbientRadianceEnvironmentAssetId) {
+        std::uint64_t assetId = 0U; const auto parsed = std::from_chars(text.data(), text.data() + text.size(), assetId);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) return false;
+        return EditAmbientRadiance(sceneContext, entity, "Edit Ambient Radiance Environment", [assetId](kb::scene::AmbientRadianceComponent& value) { value.environmentAssetId = assetId; return true; });
+    }
+    float number = 0.0F;
+    if (!ParseFloat(text, number) || !std::isfinite(number)) return false;
+    return EditAmbientRadiance(sceneContext, entity, "Edit Ambient Radiance", [property, number](kb::scene::AmbientRadianceComponent& value) {
+        auto candidate = value;
+        switch (property) {
+        case InspectorPropertyId::AmbientRadianceColorR: candidate.color.x = number; break;
+        case InspectorPropertyId::AmbientRadianceColorG: candidate.color.y = number; break;
+        case InspectorPropertyId::AmbientRadianceColorB: candidate.color.z = number; break;
+        case InspectorPropertyId::AmbientRadianceHorizonColorR: candidate.horizonColor.x = number; break;
+        case InspectorPropertyId::AmbientRadianceHorizonColorG: candidate.horizonColor.y = number; break;
+        case InspectorPropertyId::AmbientRadianceHorizonColorB: candidate.horizonColor.z = number; break;
+        case InspectorPropertyId::AmbientRadianceZenithColorR: candidate.zenithColor.x = number; break;
+        case InspectorPropertyId::AmbientRadianceZenithColorG: candidate.zenithColor.y = number; break;
+        case InspectorPropertyId::AmbientRadianceZenithColorB: candidate.zenithColor.z = number; break;
+        case InspectorPropertyId::AmbientRadianceIntensity: candidate.intensity = number; break;
+        case InspectorPropertyId::AmbientRadianceDiffuseIntensity: candidate.diffuseIntensity = number; break;
+        case InspectorPropertyId::AmbientRadianceSpecularIntensity: candidate.specularIntensity = number; break;
+        default: return false;
+        }
+        if (!kb::scene::IsAmbientRadianceComponentValid(candidate)) return false;
+        value = candidate; return true;
+    });
+}
+
+[[nodiscard]] bool ApplyDetailSwitchText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    return EditDetailSwitch(sceneContext, entity, "Edit Detail Switch", [property, text](kb::scene::SceneDetailSwitchComponent& value) {
+        kb::scene::SceneDetailSwitchComponent candidate = value;
+        if (property == InspectorPropertyId::DetailSwitchGroupId) {
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), candidate.groupId);
+            if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) return false;
+        } else if (property == InspectorPropertyId::DetailSwitchMinimumLod || property == InspectorPropertyId::DetailSwitchMaximumLod) {
+            std::uint32_t lod = 0U;
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), lod);
+            if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) return false;
+            if (property == InspectorPropertyId::DetailSwitchMinimumLod) candidate.minimumLod = lod; else candidate.maximumLod = lod;
+        } else {
+            float coverage = 0.0F;
+            if (!ParseFloat(text, coverage) || !std::isfinite(coverage)) return false;
+            if (property == InspectorPropertyId::DetailSwitchPromoteCoverage) candidate.promoteCoverage = coverage;
+            else if (property == InspectorPropertyId::DetailSwitchDemoteCoverage) candidate.demoteCoverage = coverage;
+            else return false;
+        }
+        if (!kb::scene::IsSceneDetailSwitchComponentValid(candidate)) return false;
+        value = candidate;
+        return true;
+    });
+}
+
+[[nodiscard]] bool ApplyVisibilityBlockerText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    float parsed = 0.0F;
+    if (!ParseFloat(text, parsed) || !std::isfinite(parsed)) return false;
+    return EditVisibilityBlocker(sceneContext, entity, "Edit Visibility Blocker", [property, parsed](kb::scene::SceneVisibilityBlockerComponent& value) {
+        kb::scene::SceneVisibilityBlockerComponent candidate = value;
+        switch (property) {
+        case InspectorPropertyId::VisibilityBlockerCenterX: candidate.localCenter.x = parsed; break;
+        case InspectorPropertyId::VisibilityBlockerCenterY: candidate.localCenter.y = parsed; break;
+        case InspectorPropertyId::VisibilityBlockerCenterZ: candidate.localCenter.z = parsed; break;
+        case InspectorPropertyId::VisibilityBlockerSizeX: candidate.size.x = parsed; break;
+        case InspectorPropertyId::VisibilityBlockerSizeY: candidate.size.y = parsed; break;
+        case InspectorPropertyId::VisibilityBlockerSizeZ: candidate.size.z = parsed; break;
+        default: return false;
+        }
+        if (!kb::scene::IsSceneVisibilityBlockerComponentValid(candidate)) return false;
+        value = candidate;
+        return true;
+    });
+}
+
+[[nodiscard]] bool ApplyVisibilityCellText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    std::uint32_t parsed = 0U;
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), parsed);
+    if (result.ec != std::errc{} || result.ptr != text.data() + text.size()) return false;
+    return EditVisibilityCell(sceneContext, entity, "Edit Visibility Cell", [property, parsed](kb::scene::VisibilityCellComponent& value) {
+        kb::scene::VisibilityCellComponent candidate = value;
+        switch (property) {
+        case InspectorPropertyId::VisibilityCellMembershipMask: candidate.membershipMask = parsed; break;
+        case InspectorPropertyId::VisibilityCellMembership:
+            if (parsed > static_cast<std::uint32_t>(kb::scene::VisibilityCellMembership::Exclude)) return false;
+            candidate.membership = static_cast<kb::scene::VisibilityCellMembership>(parsed); break;
+        case InspectorPropertyId::VisibilityCellOverride:
+            if (parsed > static_cast<std::uint32_t>(kb::scene::VisibilityCellOverride::ForceHidden)) return false;
+            candidate.visibilityOverride = static_cast<kb::scene::VisibilityCellOverride>(parsed); break;
+        default: return false;
+        }
+        if (!kb::scene::IsVisibilityCellComponentValid(candidate)) return false;
+        value = candidate;
+        return true;
+    });
+}
+
+[[nodiscard]] bool ApplyRegionPortalText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    if (property == InspectorPropertyId::RegionPortalPurposes) {
+        std::uint32_t purposes = 0U;
+        const auto result = std::from_chars(text.data(), text.data() + text.size(), purposes);
+        if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || !kb::scene::IsRegionPortalPurposeMaskValid(purposes)) return false;
+        return EditRegionPortal(sceneContext, entity, "Edit Region Portal", [purposes](kb::scene::SceneRegionPortalComponent& value) { value.purposes = purposes; return true; });
+    }
+
+    if (property != InspectorPropertyId::RegionPortalSourceCell && property != InspectorPropertyId::RegionPortalTargetCell) return false;
+    std::uint64_t cellId = 0U;
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), cellId);
+    const kb::scene::SceneEntity cell{ cellId };
+    if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || cell == entity ||
+        !sceneContext.Scene().Entities().IsAlive(cell) || !sceneContext.Scene().Components().VisibilityCells().Has(cell)) return false;
+    const kb::scene::SceneRegionPortalComponent* portal = sceneContext.Scene().Components().RegionPortals().TryGet(entity);
+    if (portal == nullptr) return false;
+    return property == InspectorPropertyId::RegionPortalSourceCell
+        ? sceneContext.SetRegionPortalCells(entity, cell, portal->targetCell)
+        : sceneContext.SetRegionPortalCells(entity, portal->sourceCell, cell);
 }
 
 [[nodiscard]] bool ToggleAudioProperty(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property) {
@@ -1600,6 +2216,36 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                     sceneContext.Scene().Components().NavObstacles().Remove(entity);
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
+            } else if (hit.section == InspectorSectionId::WorldBackdrop && sceneContext.Scene().Components().WorldBackdrops().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove World Backdrop")) {
+                    sceneContext.Scene().Components().WorldBackdrops().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
+            } else if (hit.section == InspectorSectionId::AmbientRadiance && sceneContext.Scene().Components().AmbientRadiances().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Ambient Radiance")) {
+                    sceneContext.Scene().Components().AmbientRadiances().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
+            } else if (hit.section == InspectorSectionId::DetailSwitch && sceneContext.Scene().Components().DetailSwitches().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Detail Switch")) {
+                    sceneContext.Scene().Components().DetailSwitches().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
+            } else if (hit.section == InspectorSectionId::VisibilityBlocker && sceneContext.Scene().Components().VisibilityBlockers().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Visibility Blocker")) {
+                    sceneContext.Scene().Components().VisibilityBlockers().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
+            } else if (hit.section == InspectorSectionId::VisibilityCell && sceneContext.Scene().Components().VisibilityCells().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Visibility Cell")) {
+                    sceneContext.Scene().Components().VisibilityCells().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
+            } else if (hit.section == InspectorSectionId::RegionPortal && sceneContext.Scene().Components().RegionPortals().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Region Portal")) {
+                    sceneContext.Scene().Components().RegionPortals().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
             } else if (const std::optional<PhysicsComponentKind> kind = PhysicsKindForSection(hit.section); kind.has_value()) {
                 static_cast<void>(sceneContext.RemovePhysicsComponent(entity, *kind));
             }
@@ -1668,6 +2314,29 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     if (hit.section == InspectorSectionId::NavObstacle) {
         return HandleNavObstacleClick(sceneContext, entity, hit);
     }
+    if (hit.section == InspectorSectionId::RegionShape) {
+        return HandleRegionShapeClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::ContentInstance) {
+        return HandleContentInstanceClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::StreamFocus) {
+        return HandleStreamFocusClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::WorldBackdrop) {
+        return HandleWorldBackdropClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::AmbientRadiance) {
+        return HandleAmbientRadianceClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::DetailSwitch) {
+        return HandleDetailSwitchClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::VisibilityBlocker) {
+        return HandleVisibilityBlockerClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::VisibilityCell) return HandleVisibilityCellClick(sceneContext, entity, hit);
+    if (hit.section == InspectorSectionId::RegionPortal) return HandleRegionPortalClick(sceneContext, entity, hit);
     if (hit.section == InspectorSectionId::Tags &&
         hit.kind == InspectorHitKind::TextField &&
         hit.property == InspectorPropertyId::TagsText) {
@@ -1932,6 +2601,58 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         if (sceneContext.Scene().Entities().IsAlive(entity) &&
             IsNavObstacleProperty(inspector.EditedProperty())) {
             static_cast<void>(ApplyNavObstacleText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            IsRegionShapeProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyRegionShapeText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            IsContentInstanceProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyContentInstanceText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            IsStreamFocusProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyStreamFocusText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            IsWorldBackdropProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyWorldBackdropText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            IsAmbientRadianceProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyAmbientRadianceText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            IsDetailSwitchProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyDetailSwitchText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            IsVisibilityBlockerProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyVisibilityBlockerText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) && IsVisibilityCellProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyVisibilityCellText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) && IsRegionPortalProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyRegionPortalText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
             inspector.EndTextEdit();
             return true;
         }

@@ -53,6 +53,19 @@ SceneTagsComponentQueries SceneComponentQueries::Tags() const noexcept {
     return SceneTagsComponentQueries{ scene_ };
 }
 
+SceneRegionShapeComponentQueries SceneComponentQueries::RegionShapes() const noexcept {
+    return SceneRegionShapeComponentQueries{ scene_ };
+}
+SceneGuideCurveComponentQueries SceneComponentQueries::GuideCurves() const noexcept { return SceneGuideCurveComponentQueries{ scene_ }; }
+SceneContentInstanceComponentQueries SceneComponentQueries::ContentInstances() const noexcept { return SceneContentInstanceComponentQueries{ scene_ }; }
+SceneStreamFocusComponentQueries SceneComponentQueries::StreamFocuses() const noexcept { return SceneStreamFocusComponentQueries{ scene_ }; }
+SceneWorldBackdropComponentQueries SceneComponentQueries::WorldBackdrops() const noexcept { return SceneWorldBackdropComponentQueries{ scene_ }; }
+SceneAmbientRadianceComponentQueries SceneComponentQueries::AmbientRadiances() const noexcept { return SceneAmbientRadianceComponentQueries{ scene_ }; }
+SceneDetailSwitchComponentQueries SceneComponentQueries::DetailSwitches() const noexcept { return SceneDetailSwitchComponentQueries{ scene_ }; }
+SceneVisibilityBlockerComponentQueries SceneComponentQueries::VisibilityBlockers() const noexcept { return SceneVisibilityBlockerComponentQueries{ scene_ }; }
+SceneVisibilityCellComponentQueries SceneComponentQueries::VisibilityCells() const noexcept { return SceneVisibilityCellComponentQueries{ scene_ }; }
+SceneRegionPortalComponentQueries SceneComponentQueries::RegionPortals() const noexcept { return SceneRegionPortalComponentQueries{ scene_ }; }
+
 SceneAudioSourceComponentQueries SceneComponentQueries::AudioSources() const noexcept {
     return SceneAudioSourceComponentQueries{ scene_ };
 }
@@ -117,6 +130,19 @@ SceneJointComponents SceneComponents::Joints() const noexcept {
 SceneTagsComponents SceneComponents::Tags() const noexcept {
     return SceneTagsComponents{ scene_ };
 }
+
+SceneRegionShapeComponents SceneComponents::RegionShapes() const noexcept {
+    return SceneRegionShapeComponents{ scene_ };
+}
+SceneGuideCurveComponents SceneComponents::GuideCurves() const noexcept { return SceneGuideCurveComponents{ scene_ }; }
+SceneContentInstanceComponents SceneComponents::ContentInstances() const noexcept { return SceneContentInstanceComponents{ scene_ }; }
+SceneStreamFocusComponents SceneComponents::StreamFocuses() const noexcept { return SceneStreamFocusComponents{ scene_ }; }
+SceneWorldBackdropComponents SceneComponents::WorldBackdrops() const noexcept { return SceneWorldBackdropComponents{ scene_ }; }
+SceneAmbientRadianceComponents SceneComponents::AmbientRadiances() const noexcept { return SceneAmbientRadianceComponents{ scene_ }; }
+SceneDetailSwitchComponents SceneComponents::DetailSwitches() const noexcept { return SceneDetailSwitchComponents{ scene_ }; }
+SceneVisibilityBlockerComponents SceneComponents::VisibilityBlockers() const noexcept { return SceneVisibilityBlockerComponents{ scene_ }; }
+SceneVisibilityCellComponents SceneComponents::VisibilityCells() const noexcept { return SceneVisibilityCellComponents{ scene_ }; }
+SceneRegionPortalComponents SceneComponents::RegionPortals() const noexcept { return SceneRegionPortalComponents{ scene_ }; }
 
 SceneAudioSourceComponents SceneComponents::AudioSources() const noexcept {
     return SceneAudioSourceComponents{ scene_ };

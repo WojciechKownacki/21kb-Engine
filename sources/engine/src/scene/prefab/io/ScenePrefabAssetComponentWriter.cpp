@@ -122,6 +122,107 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "tags.value=" << TagsText(*components.tags) << '\n';
     }
 
+    output << "regionShape=" << (components.regionShape.has_value() ? 1 : 0) << '\n';
+    if (components.regionShape.has_value()) {
+        output << "regionShape.kind=" << static_cast<int>(components.regionShape->kind) << '\n';
+        WriteVec3(output, "regionShape.center", components.regionShape->center);
+        WriteVec3(output, "regionShape.size", components.regionShape->size);
+        output << "regionShape.radius=" << components.regionShape->radius << '\n';
+        output << "regionShape.height=" << components.regionShape->height << '\n';
+        output << "regionShape.enabled=" << (components.regionShape->enabled ? 1 : 0) << '\n';
+    }
+
+    output << "guideCurve=" << (components.guideCurve.has_value() ? 1 : 0) << '\n';
+    if (components.guideCurve.has_value()) {
+        const GuideCurveComponent& guideCurve = *components.guideCurve;
+        output << "guideCurve.controlPointCount=" << guideCurve.controlPointCount << '\n';
+        output << "guideCurve.interpolation=" << static_cast<int>(guideCurve.interpolation) << '\n';
+        output << "guideCurve.closed=" << (guideCurve.closed ? 1 : 0) << '\n';
+        output << "guideCurve.enabled=" << (guideCurve.enabled ? 1 : 0) << '\n';
+        for (std::uint32_t index = 0U; index < guideCurve.controlPointCount; ++index) {
+            const std::string key = "guideCurve.point" + std::to_string(index);
+            WriteVec3(output, key.c_str(), guideCurve.controlPoints[index]);
+        }
+    }
+
+    output << "contentInstance=" << (components.contentInstance.has_value() ? 1 : 0) << '\n';
+    if (components.contentInstance.has_value()) {
+        const ContentInstanceComponent& content = *components.contentInstance;
+        output << "contentInstance.assetId=" << content.assetId << '\n';
+        output << "contentInstance.kind=" << static_cast<int>(content.kind) << '\n';
+        output << "contentInstance.lifetime=" << static_cast<int>(content.lifetime) << '\n';
+        output << "contentInstance.active=" << (content.active ? 1 : 0) << '\n';
+    }
+    output << "streamFocus=" << (components.streamFocus.has_value() ? 1 : 0) << '\n';
+    if (components.streamFocus.has_value()) {
+        const StreamFocusComponent& focus = *components.streamFocus;
+        output << "streamFocus.innerRadius=" << focus.innerRadius << '\n';
+        output << "streamFocus.outerRadius=" << focus.outerRadius << '\n';
+        output << "streamFocus.priority=" << focus.priority << '\n';
+        output << "streamFocus.loadMask=" << static_cast<std::uint32_t>(focus.loadMask) << '\n';
+        output << "streamFocus.enabled=" << (focus.enabled ? 1 : 0) << '\n';
+    }
+    output << "worldBackdrop=" << (components.worldBackdrop.has_value() ? 1 : 0) << '\n';
+    if (components.worldBackdrop.has_value()) {
+        const WorldBackdropComponent& backdrop = *components.worldBackdrop;
+        output << "worldBackdrop.mode=" << static_cast<std::uint32_t>(backdrop.mode) << '\n';
+        WriteVec3(output, "worldBackdrop.color", backdrop.color);
+        WriteVec3(output, "worldBackdrop.horizonColor", backdrop.horizonColor);
+        WriteVec3(output, "worldBackdrop.zenithColor", backdrop.zenithColor);
+        output << "worldBackdrop.environmentAssetId=" << backdrop.environmentAssetId << '\n';
+        output << "worldBackdrop.horizonHeight=" << backdrop.horizonHeight << '\n';
+        output << "worldBackdrop.gradientExponent=" << backdrop.gradientExponent << '\n';
+        output << "worldBackdrop.priority=" << backdrop.priority << '\n';
+        output << "worldBackdrop.enabled=" << (backdrop.enabled ? 1 : 0) << '\n';
+    }
+    output << "ambientRadiance=" << (components.ambientRadiance.has_value() ? 1 : 0) << '\n';
+    if (components.ambientRadiance.has_value()) {
+        const AmbientRadianceComponent& ambient = *components.ambientRadiance;
+        output << "ambientRadiance.mode=" << static_cast<std::uint32_t>(ambient.mode) << '\n';
+        WriteVec3(output, "ambientRadiance.color", ambient.color);
+        WriteVec3(output, "ambientRadiance.horizonColor", ambient.horizonColor);
+        WriteVec3(output, "ambientRadiance.zenithColor", ambient.zenithColor);
+        output << "ambientRadiance.environmentAssetId=" << ambient.environmentAssetId << '\n';
+        output << "ambientRadiance.intensity=" << ambient.intensity << '\n';
+        output << "ambientRadiance.diffuseIntensity=" << ambient.diffuseIntensity << '\n';
+        output << "ambientRadiance.specularIntensity=" << ambient.specularIntensity << '\n';
+        output << "ambientRadiance.priority=" << ambient.priority << '\n';
+        output << "ambientRadiance.enabled=" << (ambient.enabled ? 1 : 0) << '\n';
+    }
+    output << "detailSwitch=" << (components.detailSwitch.has_value() ? 1 : 0) << '\n';
+    if (components.detailSwitch.has_value()) {
+        const SceneDetailSwitchComponent& detail = *components.detailSwitch;
+        output << "detailSwitch.groupId=" << detail.groupId << '\n';
+        output << "detailSwitch.minimumLod=" << detail.minimumLod << '\n';
+        output << "detailSwitch.maximumLod=" << detail.maximumLod << '\n';
+        output << "detailSwitch.promoteCoverage=" << detail.promoteCoverage << '\n';
+        output << "detailSwitch.demoteCoverage=" << detail.demoteCoverage << '\n';
+        output << "detailSwitch.enabled=" << (detail.enabled ? 1 : 0) << '\n';
+    }
+    output << "visibilityBlocker=" << (components.visibilityBlocker.has_value() ? 1 : 0) << '\n';
+    if (components.visibilityBlocker.has_value()) {
+        const SceneVisibilityBlockerComponent& blocker = *components.visibilityBlocker;
+        WriteVec3(output, "visibilityBlocker.localCenter", blocker.localCenter);
+        WriteVec3(output, "visibilityBlocker.size", blocker.size);
+        output << "visibilityBlocker.enabled=" << (blocker.enabled ? 1 : 0) << '\n';
+    }
+    output << "visibilityCell=" << (components.visibilityCell.has_value() ? 1 : 0) << '\n';
+    if (components.visibilityCell.has_value()) {
+        const VisibilityCellComponent& cell = *components.visibilityCell;
+        output << "visibilityCell.membershipMask=" << cell.membershipMask << '\n';
+        output << "visibilityCell.membership=" << static_cast<int>(cell.membership) << '\n';
+        output << "visibilityCell.visibilityOverride=" << static_cast<int>(cell.visibilityOverride) << '\n';
+        output << "visibilityCell.enabled=" << (cell.enabled ? 1 : 0) << '\n';
+    }
+    output << "regionPortal=" << (components.regionPortal.has_value() ? 1 : 0) << '\n';
+    if (components.regionPortal.has_value()) {
+        const ScenePrefabRegionPortalComponent& portal = *components.regionPortal;
+        output << "regionPortal.sourceCellNodeStableId=" << portal.sourceCellNodeStableId << '\n';
+        output << "regionPortal.targetCellNodeStableId=" << portal.targetCellNodeStableId << '\n';
+        output << "regionPortal.purposes=" << portal.purposes << '\n';
+        output << "regionPortal.enabled=" << (portal.enabled ? 1 : 0) << '\n';
+    }
+
     output << "behaviour=" << (components.behaviour.has_value() ? 1 : 0) << '\n';
     if (components.behaviour.has_value()) {
         output << "behaviour.behaviourAssetId=" << components.behaviour->behaviourAssetId << '\n';

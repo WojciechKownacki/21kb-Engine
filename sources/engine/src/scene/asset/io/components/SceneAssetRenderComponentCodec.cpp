@@ -16,7 +16,8 @@ bool SceneAssetRenderComponentCodec::ReadMeshRenderer(SceneAssetBinaryIO::ByteRe
             return false;
         }
     }
-    return input.ReadBool(output.castsShadow) && input.ReadBool(output.receivesShadow) && input.ReadUInt32(output.layer);
+    return input.ReadBool(output.castsShadow) && input.ReadBool(output.receivesShadow) && input.ReadUInt32(output.layer)
+        && IsMeshRendererComponentValid(output);
 }
 
 void SceneAssetRenderComponentCodec::WriteMeshRenderer(std::vector<std::uint8_t>& output, const MeshRendererComponent& meshRenderer) {
@@ -55,7 +56,7 @@ bool SceneAssetRenderComponentCodec::ReadLight(SceneAssetBinaryIO::ByteReader& i
     output.kind = static_cast<LightKind>(kind);
     output.castsShadow = castsShadow;
     output.useColorTemperature = useColorTemperature;
-    return true;
+    return IsLightComponentValid(output);
 }
 
 void SceneAssetRenderComponentCodec::WriteLight(std::vector<std::uint8_t>& output, const LightComponent& light) {

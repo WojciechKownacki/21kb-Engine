@@ -45,8 +45,10 @@ void ScenePrefabAssetFieldWriter::WriteNode(std::ostream& output, const ScenePre
     WriteVec3(output, ScenePrefabAssetFormat::LocalPositionKey, node.transform.localPosition);
     WriteQuat(output, ScenePrefabAssetFormat::LocalRotationKey, node.transform.localRotation);
     WriteVec3(output, ScenePrefabAssetFormat::LocalScaleKey, node.transform.localScale);
-    output << ScenePrefabAssetFormat::VisibleKey << '=' << (node.visibility.mode != VisibilityMode::Hidden ? 1 : 0) << '\n';
-    output << ScenePrefabAssetFormat::VisibilityModeKey << '=' << static_cast<unsigned int>(node.visibility.mode) << '\n';
+    const VisibilityMode visibilityMode = node.visibility.visible
+        ? node.visibility.mode : VisibilityMode::Hidden;
+    output << ScenePrefabAssetFormat::VisibleKey << '=' << (visibilityMode != VisibilityMode::Hidden ? 1 : 0) << '\n';
+    output << ScenePrefabAssetFormat::VisibilityModeKey << '=' << static_cast<unsigned int>(visibilityMode) << '\n';
     output << ScenePrefabAssetFormat::VisibilityMaskKey << '=' << node.visibility.mask << '\n';
     ScenePrefabAssetComponentWriter::Write(output, node.components);
     output << ScenePrefabAssetFormat::EndNodeMarker << '\n';

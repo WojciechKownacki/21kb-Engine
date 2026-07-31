@@ -19,6 +19,9 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
+#include "engine/scene/AmbientRadianceComponent.hpp"
+#include "engine/scene/DetailSwitchComponent.hpp"
 #include "kb/render/resources/BuiltInParticleQuadMesh.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 #include "kb/render/scene/SceneParticleRenderSynchronizer.hpp"
@@ -33,6 +36,7 @@
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/shadow/DirectionalShadowPassPlanner.hpp"
 #include "scene/lighting/SceneForwardLightSelector.hpp"
+#include "scene/lighting/SceneLightingPacker.hpp"
 #include "scene/SceneLightColor.hpp"
 #include "scene/SceneRenderVisibilityPublisher.hpp"
 
@@ -200,6 +204,107 @@ void RunEcsSyncPropagatesCullingMaskAndClearSettingsTest() {
     const SceneRenderCamera builtCamera = RenderSceneCameraBuilder::Build(cameraProxy->desc, 1280U, 720U);
     Require(builtCamera.cullingMask == 0x00000006U, "RenderSceneCameraBuilder::Build did not carry cullingMask into the resolved SceneRenderCamera");
     Require(builtCamera.clearMode == SceneRenderCameraClearMode::DepthOnly, "RenderSceneCameraBuilder::Build did not carry clearMode into the resolved SceneRenderCamera");
+}
+
+void RunEcsSyncPropagatesDetailSwitchPolicyTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity mesh = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Detail Mesh" });
+    scene.Components().MeshRenderers().Set(mesh, kb::scene::MeshRendererComponent{ .meshAssetId = 9U });
+    scene.Components().DetailSwitches().Set(mesh, kb::scene::SceneDetailSwitchComponent{
+        .groupId = 41U, .minimumLod = 1U, .maximumLod = 3U, .promoteCoverage = 0.36F, .demoteCoverage = 0.18F, .enabled = true,
+    });
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+    const MeshRenderProxy* proxy = renderScene.FindMeshByEntity(mesh.Id());
+    Require(proxy != nullptr && proxy->desc.detailSwitchEnabled && proxy->desc.detailSwitchGroupId == 41U &&
+            proxy->desc.detailSwitchMinimumLod == 1U && proxy->desc.detailSwitchMaximumLod == 3U &&
+            NearlyEqual(proxy->desc.detailSwitchPromoteCoverage, 0.36F) && NearlyEqual(proxy->desc.detailSwitchDemoteCoverage, 0.18F),
+        "ECS Detail Switch policy was not copied into the renderer-derived mesh proxy");
+}
+
+void RunEcsSyncResolvesWorldBackdropDeterministicallyTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity low = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Backdrop Low" });
+    const kb::scene::SceneEntity high = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Backdrop High" });
+    kb::scene::WorldBackdropComponent lowBackdrop{};
+    lowBackdrop.mode = kb::scene::WorldBackdropMode::SolidColor;
+    lowBackdrop.color = kb::scene::Vec3{ 0.1F, 0.2F, 0.3F };
+    lowBackdrop.priority = 2;
+    scene.Components().WorldBackdrops().Set(low, lowBackdrop);
+    kb::scene::WorldBackdropComponent highBackdrop{};
+    highBackdrop.mode = kb::scene::WorldBackdropMode::VerticalGradient;
+    highBackdrop.horizonColor = kb::scene::Vec3{ 0.2F, 0.3F, 0.4F };
+    highBackdrop.zenithColor = kb::scene::Vec3{ 0.6F, 0.7F, 0.8F };
+    highBackdrop.gradientExponent = 1.5F;
+    highBackdrop.priority = 7;
+    scene.Components().WorldBackdrops().Set(high, highBackdrop);
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+    Require(renderScene.WorldBackdrop().has_value(), "ECS sync did not derive a world backdrop render state");
+    const SceneRenderWorldBackdrop& selected = *renderScene.WorldBackdrop();
+    Require(selected.entityId == high.Id() && selected.mode == SceneRenderWorldBackdropMode::VerticalGradient,
+        "ECS world backdrop sync did not choose the highest-priority enabled backdrop");
+    Require(NearlyEqual(selected.horizonColor[0], 0.2F) && NearlyEqual(selected.zenithColor[2], 0.8F) && NearlyEqual(selected.gradientExponent, 1.5F),
+        "ECS world backdrop sync lost authored gradient fields");
+
+    highBackdrop.enabled = false;
+    highBackdrop.priority = 99;
+    scene.Components().WorldBackdrops().Set(high, highBackdrop);
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+    Require(renderScene.WorldBackdrop().has_value() && renderScene.WorldBackdrop()->entityId == low.Id(),
+        "Disabled world backdrop was not excluded from deterministic runtime selection");
+}
+
+void RunEcsSyncResolvesAmbientRadianceDeterministicallyTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity low = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Ambient Low" });
+    const kb::scene::SceneEntity high = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Ambient High" });
+    kb::scene::AmbientRadianceComponent lowAmbient{};
+    lowAmbient.mode = kb::scene::AmbientRadianceMode::Constant;
+    lowAmbient.color = kb::scene::Vec3{ 0.1F, 0.2F, 0.3F };
+    lowAmbient.priority = 2;
+    scene.Components().AmbientRadiances().Set(low, lowAmbient);
+    kb::scene::AmbientRadianceComponent highAmbient{};
+    highAmbient.mode = kb::scene::AmbientRadianceMode::EnvironmentMap;
+    highAmbient.environmentAssetId = 77U;
+    highAmbient.horizonColor = kb::scene::Vec3{ 0.2F, 0.3F, 0.4F };
+    highAmbient.zenithColor = kb::scene::Vec3{ 0.6F, 0.7F, 0.8F };
+    highAmbient.intensity = 1.5F;
+    highAmbient.diffuseIntensity = 1.25F;
+    highAmbient.specularIntensity = 0.5F;
+    highAmbient.priority = 7;
+    scene.Components().AmbientRadiances().Set(high, highAmbient);
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+    Require(renderScene.AmbientRadiance().has_value(), "ECS sync did not derive ambient radiance render state");
+    const SceneRenderAmbientRadiance& selected = *renderScene.AmbientRadiance();
+    Require(selected.entityId == high.Id() && selected.mode == SceneRenderAmbientRadianceMode::EnvironmentMap && selected.environmentAssetId == 77U,
+        "ECS ambient radiance sync did not choose highest-priority enabled component");
+    Require(NearlyEqual(selected.zenithColor[2], 0.8F) && NearlyEqual(selected.intensity, 1.5F) && NearlyEqual(selected.specularIntensity, 0.5F),
+        "ECS ambient radiance sync lost authored fields");
+
+    const kb::scene::SceneEntity backdropEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Captured Backdrop" });
+    kb::scene::WorldBackdropComponent backdrop{};
+    backdrop.mode = kb::scene::WorldBackdropMode::VerticalGradient;
+    backdrop.color = kb::scene::Vec3{ 0.12F, 0.13F, 0.14F };
+    backdrop.horizonColor = kb::scene::Vec3{ 0.21F, 0.22F, 0.23F };
+    backdrop.zenithColor = kb::scene::Vec3{ 0.71F, 0.72F, 0.73F };
+    scene.Components().WorldBackdrops().Set(backdropEntity, backdrop);
+    highAmbient.mode = kb::scene::AmbientRadianceMode::CapturedEnvironment;
+    scene.Components().AmbientRadiances().Set(high, highAmbient);
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+    Require(renderScene.AmbientRadiance().has_value() &&
+            renderScene.AmbientRadiance()->mode == SceneRenderAmbientRadianceMode::CapturedEnvironment &&
+            NearlyEqual(renderScene.AmbientRadiance()->horizonColor[1], 0.22F) &&
+            NearlyEqual(renderScene.AmbientRadiance()->zenithColor[2], 0.73F),
+        "Captured ambient radiance did not derive its frame input from the selected ECS world backdrop");
+
+    highAmbient.enabled = false;
+    scene.Components().AmbientRadiances().Set(high, highAmbient);
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+    Require(renderScene.AmbientRadiance().has_value() && renderScene.AmbientRadiance()->entityId == low.Id(),
+        "Disabled ambient radiance was not excluded from deterministic selection");
 }
 
 void RunEcsSyncResolvesVisibilityGateHierarchyAndMaskTest() {
@@ -1413,6 +1518,94 @@ void RunSceneLightingPackerAddsEditorPreviewKeyLightTest() {
     Require(stats.skippedForwardLightCount == 0U, "Editor preview key light should not produce skipped scene light stats");
 }
 
+void RunRenderSceneSyncsAllSurfaceEmitterKindsTest() {
+    kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+    constexpr std::array<kb::scene::LightKind, 3U> kinds{
+        kb::scene::LightKind::AreaRect,
+        kb::scene::LightKind::AreaDisk,
+        kb::scene::LightKind::Tube,
+    };
+    constexpr std::array<RenderLightKind, 3U> expectedKinds{
+        RenderLightKind::AreaRect,
+        RenderLightKind::AreaDisk,
+        RenderLightKind::Tube,
+    };
+    std::array<kb::scene::SceneEntity, 3U> entities{};
+    for (std::size_t index = 0U; index < kinds.size(); ++index) {
+        const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = "Surface Emitter",
+            .transform = TransformAt(static_cast<float>(index), 1.0F, 2.0F),
+        });
+        scene.Components().Lights().Set(entity, kb::scene::LightComponent{
+            .kind = kinds[index],
+            .intensity = 2.0F,
+            .range = 12.0F,
+            .areaWidth = 2.0F + static_cast<float>(index),
+            .areaHeight = 1.0F + static_cast<float>(index),
+        });
+        entities[index] = entity;
+    }
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+    Require(renderScene.LightProxies().size() == kinds.size(), "ECS synchronization did not create every surface emitter proxy");
+    for (std::size_t index = 0U; index < entities.size(); ++index) {
+        const LightRenderProxy* proxy = renderScene.FindLightByEntity(entities[index].Id());
+        Require(proxy != nullptr, "ECS synchronization did not preserve a surface emitter entity association");
+        if (proxy == nullptr) {
+            continue;
+        }
+        Require(proxy->desc.kind == expectedKinds[index], "ECS synchronization changed a surface emitter kind");
+        Require(NearlyEqual(proxy->desc.areaWidth, 2.0F + static_cast<float>(index)) &&
+                NearlyEqual(proxy->desc.areaHeight, 1.0F + static_cast<float>(index)),
+            "ECS synchronization changed surface emitter dimensions");
+    }
+}
+
+void RunSceneLightingPackerPreservesSurfaceEmitterGeometryTest() {
+    RenderScene scene;
+    static_cast<void>(scene.UpsertLight(LightRenderProxyDesc{
+        .entityId = 1U,
+        .kind = RenderLightKind::AreaRect,
+        .intensity = 1.0F,
+        .range = 10.0F,
+        .areaWidth = 6.0F,
+        .areaHeight = 2.0F,
+        .visible = true,
+    }));
+    static_cast<void>(scene.UpsertLight(LightRenderProxyDesc{
+        .entityId = 2U,
+        .kind = RenderLightKind::AreaDisk,
+        .intensity = 1.0F,
+        .range = 10.0F,
+        .areaWidth = 4.0F,
+        .areaHeight = 4.0F,
+        .visible = true,
+    }));
+    static_cast<void>(scene.UpsertLight(LightRenderProxyDesc{
+        .entityId = 3U,
+        .kind = RenderLightKind::Tube,
+        .intensity = 1.0F,
+        .range = 10.0F,
+        .areaWidth = 8.0F,
+        .areaHeight = 1.5F,
+        .visible = true,
+    }));
+
+    SceneRenderSubmitStats stats{};
+    const PackedSceneLighting packed = SceneLightingPacker::Build(scene, stats, SceneRenderLightingConfig{ .maxForwardLights = 3U }, nullptr);
+    Require(stats.submittedForwardLightCount == 3U, "Surface emitters were not submitted to production lighting");
+    Require(NearlyEqual(packed.dirKind[3U], 3.0F) && NearlyEqual(packed.dirKind[7U], 4.0F) && NearlyEqual(packed.dirKind[11U], 5.0F),
+        "Surface emitter kinds were not preserved in GPU lighting data");
+    Require(NearlyEqual(packed.spot[2U], 6.0F) && NearlyEqual(packed.spot[3U], 2.0F) &&
+            NearlyEqual(packed.spot[6U], 4.0F) && NearlyEqual(packed.spot[7U], 4.0F) &&
+            NearlyEqual(packed.spot[10U], 8.0F) && NearlyEqual(packed.spot[11U], 1.5F),
+        "Surface emitter dimensions were not preserved in GPU lighting data");
+    Require(NearlyEqual(packed.areaRight[0U], 1.0F) && NearlyEqual(packed.areaRight[5U], 0.0F) && NearlyEqual(packed.areaRight[10U], 0.0F),
+        "Surface emitter orientation was not packed for GPU evaluation");
+}
+
 // LIB-141: proves SceneForwardLightSelector::Select filters lights by the light-side
 // layer bitmask against the camera's cullingMask - the light-side mirror of
 // MeshPipelinePassPolicy's mesh-vs-camera cullingMask filtering (LIB-136). A masked-out
@@ -2383,12 +2576,16 @@ void RunSceneRenderVisibilityPublisherBuildsFrameTest() {
 
 void RunRenderSceneSyncTests() {
     RunCreatesStableRenderProxiesTest();
+    RunEcsSyncPropagatesDetailSwitchPolicyTest();
     RunRenderScenePrimaryCameraSelectionRespectsViewportAndPriorityTest();
     RunEcsSyncPropagatesCullingMaskAndClearSettingsTest();
+    RunEcsSyncResolvesWorldBackdropDeterministicallyTest();
+    RunEcsSyncResolvesAmbientRadianceDeterministicallyTest();
     RunEcsSyncResolvesVisibilityGateHierarchyAndMaskTest();
     RunEcsSyncResolvesMaterialInstanceHandleTest();
     RunRenderSceneSyncsLightPipelineFieldsTest();
     RunRenderSceneIgnoresLightsWithoutBasicLightingProviderTest();
+    RunRenderSceneSyncsAllSurfaceEmitterKindsTest();
     RunRenderSceneSyncResolvesLightColorTemperatureTest();
     RunTracksUpdatesWithoutReplacingProxyTest();
     RunSyncEntitiesUpdatesOnlyRequestedProxyTest();
@@ -2418,6 +2615,7 @@ void RunRenderSceneSyncTests() {
     RunRendererStoresDefaultSceneDrawBudgetTest();
     RunRendererStoresDefaultSceneLightingConfigTest();
     RunSceneLightingPackerAddsEditorPreviewKeyLightTest();
+    RunSceneLightingPackerPreservesSurfaceEmitterGeometryTest();
     RunSceneForwardLightSelectorAppliesLayerMaskTest();
     RunSceneLightColorResolvesTemperatureTest();
     RunRendererStoresDefaultPostProcessSettingsTest();

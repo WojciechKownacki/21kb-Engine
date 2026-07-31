@@ -248,6 +248,7 @@ bool SceneMeshPassResources::Initialize() {
     lightPositionRangeUniform_ = bgfx::createUniform("u_lightPositionRange", bgfx::UniformType::Vec4, kMaxSceneForwardPlusLights);
     lightColorIntensityUniform_ = bgfx::createUniform("u_lightColorIntensity", bgfx::UniformType::Vec4, kMaxSceneForwardPlusLights);
     lightSpotUniform_ = bgfx::createUniform("u_lightSpot", bgfx::UniformType::Vec4, kMaxSceneForwardPlusLights);
+    lightAreaRightUniform_ = bgfx::createUniform("u_lightAreaRight", bgfx::UniformType::Vec4, kMaxSceneForwardPlusLights);
     lightParamsUniform_ = bgfx::createUniform("u_lightParams", bgfx::UniformType::Vec4);
     ambientColorUniform_ = bgfx::createUniform("u_ambientColor", bgfx::UniformType::Vec4);
     environmentZenithUniform_ = bgfx::createUniform("u_environmentZenith", bgfx::UniformType::Vec4);
@@ -335,6 +336,10 @@ void SceneMeshPassResources::Shutdown() {
     if (bgfx::isValid(lightSpotUniform_)) {
         bgfx::destroy(lightSpotUniform_);
         lightSpotUniform_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(lightAreaRightUniform_)) {
+        bgfx::destroy(lightAreaRightUniform_);
+        lightAreaRightUniform_ = BGFX_INVALID_HANDLE;
     }
     if (bgfx::isValid(lightColorIntensityUniform_)) {
         bgfx::destroy(lightColorIntensityUniform_);
@@ -460,7 +465,7 @@ bool SceneMeshPassResources::IsInitialized() const noexcept {
         bgfx::isValid(lightDirKindUniform_) &&
         bgfx::isValid(lightPositionRangeUniform_) &&
         bgfx::isValid(lightColorIntensityUniform_) &&
-        bgfx::isValid(lightSpotUniform_) &&
+        bgfx::isValid(lightSpotUniform_) && bgfx::isValid(lightAreaRightUniform_) &&
         bgfx::isValid(lightParamsUniform_) &&
         bgfx::isValid(ambientColorUniform_) &&
         bgfx::isValid(environmentZenithUniform_) &&
@@ -777,6 +782,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         bgfx::setUniform(lightPositionRangeUniform_, desc.lighting.positionRange.data(), kMaxSceneForwardPlusLights);
         bgfx::setUniform(lightColorIntensityUniform_, desc.lighting.colorIntensity.data(), kMaxSceneForwardPlusLights);
         bgfx::setUniform(lightSpotUniform_, desc.lighting.spot.data(), kMaxSceneForwardPlusLights);
+        bgfx::setUniform(lightAreaRightUniform_, desc.lighting.areaRight.data(), kMaxSceneForwardPlusLights);
         bgfx::setUniform(lightParamsUniform_, desc.lighting.params.data());
         bgfx::setUniform(ambientColorUniform_, desc.lighting.ambient.data());
         bgfx::setUniform(environmentZenithUniform_, desc.lighting.environmentZenith.data());
@@ -914,6 +920,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     bgfx::setUniform(lightPositionRangeUniform_, desc.lighting.positionRange.data(), kMaxSceneForwardPlusLights);
     bgfx::setUniform(lightColorIntensityUniform_, desc.lighting.colorIntensity.data(), kMaxSceneForwardPlusLights);
     bgfx::setUniform(lightSpotUniform_, desc.lighting.spot.data(), kMaxSceneForwardPlusLights);
+    bgfx::setUniform(lightAreaRightUniform_, desc.lighting.areaRight.data(), kMaxSceneForwardPlusLights);
     bgfx::setUniform(lightParamsUniform_, desc.lighting.params.data());
     bgfx::setUniform(ambientColorUniform_, desc.lighting.ambient.data());
     bgfx::setUniform(environmentZenithUniform_, desc.lighting.environmentZenith.data());

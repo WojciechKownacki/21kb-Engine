@@ -3,6 +3,16 @@
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
+#include "scene/components/SceneRegionShapeComponentStore.hpp"
+#include "scene/components/SceneGuideCurveComponentStore.hpp"
+#include "scene/components/SceneContentInstanceComponentStore.hpp"
+#include "scene/components/SceneStreamFocusComponentStore.hpp"
+#include "scene/components/SceneWorldBackdropComponentStore.hpp"
+#include "scene/components/SceneAmbientRadianceComponentStore.hpp"
+#include "scene/components/SceneDetailSwitchComponentStore.hpp"
+#include "scene/components/SceneVisibilityBlockerComponentStore.hpp"
+#include "scene/components/SceneVisibilityCellComponentStore.hpp"
+#include "scene/components/SceneRegionPortalComponentStore.hpp"
 #include "scene/components/SceneAudioListenerComponentStore.hpp"
 #include "scene/components/SceneAudioSourceComponentStore.hpp"
 #include "scene/components/SceneAnimatorComponentStore.hpp"
@@ -61,6 +71,26 @@ public:
     [[nodiscard]] SceneJointComponentStore& Joints() noexcept;
     [[nodiscard]] const SceneTagsComponentStore& Tags() const noexcept;
     [[nodiscard]] SceneTagsComponentStore& Tags() noexcept;
+    [[nodiscard]] const SceneRegionShapeComponentStore& RegionShapes() const noexcept;
+    [[nodiscard]] SceneRegionShapeComponentStore& RegionShapes() noexcept;
+    [[nodiscard]] const SceneGuideCurveComponentStore& GuideCurves() const noexcept;
+    [[nodiscard]] SceneGuideCurveComponentStore& GuideCurves() noexcept;
+    [[nodiscard]] const SceneContentInstanceComponentStore& ContentInstances() const noexcept;
+    [[nodiscard]] SceneContentInstanceComponentStore& ContentInstances() noexcept;
+    [[nodiscard]] const SceneStreamFocusComponentStore& StreamFocuses() const noexcept;
+    [[nodiscard]] SceneStreamFocusComponentStore& StreamFocuses() noexcept;
+    [[nodiscard]] const SceneWorldBackdropComponentStore& WorldBackdrops() const noexcept;
+    [[nodiscard]] SceneWorldBackdropComponentStore& WorldBackdrops() noexcept;
+    [[nodiscard]] const SceneAmbientRadianceComponentStore& AmbientRadiances() const noexcept;
+    [[nodiscard]] SceneAmbientRadianceComponentStore& AmbientRadiances() noexcept;
+    [[nodiscard]] const SceneDetailSwitchComponentStore& DetailSwitches() const noexcept;
+    [[nodiscard]] SceneDetailSwitchComponentStore& DetailSwitches() noexcept;
+    [[nodiscard]] const SceneVisibilityBlockerComponentStore& VisibilityBlockers() const noexcept;
+    [[nodiscard]] SceneVisibilityBlockerComponentStore& VisibilityBlockers() noexcept;
+    [[nodiscard]] const SceneVisibilityCellComponentStore& VisibilityCells() const noexcept;
+    [[nodiscard]] SceneVisibilityCellComponentStore& VisibilityCells() noexcept;
+    [[nodiscard]] const SceneRegionPortalComponentStore& RegionPortals() const noexcept;
+    [[nodiscard]] SceneRegionPortalComponentStore& RegionPortals() noexcept;
     [[nodiscard]] const SceneAudioSourceComponentStore& AudioSources() const noexcept;
     [[nodiscard]] SceneAudioSourceComponentStore& AudioSources() noexcept;
     [[nodiscard]] const SceneAudioListenerComponentStore& AudioListeners() const noexcept;
@@ -85,6 +115,16 @@ private:
     SceneCharacterControllerComponentStore characterControllers_;
     SceneJointComponentStore joints_;
     SceneTagsComponentStore tags_;
+    SceneRegionShapeComponentStore regionShapes_;
+    SceneGuideCurveComponentStore guideCurves_;
+    SceneContentInstanceComponentStore contentInstances_;
+    SceneStreamFocusComponentStore streamFocuses_;
+    SceneWorldBackdropComponentStore worldBackdrops_;
+    SceneAmbientRadianceComponentStore ambientRadiances_;
+    SceneDetailSwitchComponentStore detailSwitches_;
+    SceneVisibilityBlockerComponentStore visibilityBlockers_;
+    SceneVisibilityCellComponentStore visibilityCells_;
+    SceneRegionPortalComponentStore regionPortals_;
     SceneAudioSourceComponentStore audioSources_;
     SceneAudioListenerComponentStore audioListeners_;
     SceneAnimatorComponentStore animators_;

@@ -26,15 +26,22 @@ bool ScenePrefabValidator::IsValid(const ScenePrefab& prefab) noexcept {
         return false;
     }
     for (const ScenePrefabNodeDesc& node : nodes) {
-        if (!node.components.joint.has_value()) {
-            continue;
+        if (node.components.joint.has_value()) {
+            const std::uint64_t targetStableId = node.components.joint->connectedNodeStableId;
+            if (targetStableId != ScenePrefabJointComponent::InvalidConnectedNodeStableId &&
+                (targetStableId == node.stableId || !std::binary_search(stableIds.begin(), stableIds.end(), targetStableId))) return false;
         }
-        const std::uint64_t targetStableId = node.components.joint->connectedNodeStableId;
-        if (targetStableId == ScenePrefabJointComponent::InvalidConnectedNodeStableId) {
-            continue;
-        }
-        if (targetStableId == node.stableId || !std::binary_search(stableIds.begin(), stableIds.end(), targetStableId)) {
-            return false;
+        if (node.components.regionPortal.has_value()) {
+            const ScenePrefabRegionPortalComponent& portal = *node.components.regionPortal;
+            const bool unconfigured = !portal.enabled &&
+                portal.sourceCellNodeStableId == ScenePrefabRegionPortalComponent::InvalidCellNodeStableId &&
+                portal.targetCellNodeStableId == ScenePrefabRegionPortalComponent::InvalidCellNodeStableId;
+            if (unconfigured) continue;
+            if (!IsRegionPortalPurposeMaskValid(portal.purposes) || portal.sourceCellNodeStableId == ScenePrefabRegionPortalComponent::InvalidCellNodeStableId ||
+                portal.targetCellNodeStableId == ScenePrefabRegionPortalComponent::InvalidCellNodeStableId || portal.sourceCellNodeStableId == portal.targetCellNodeStableId ||
+                portal.sourceCellNodeStableId == node.stableId || portal.targetCellNodeStableId == node.stableId ||
+                !std::binary_search(stableIds.begin(), stableIds.end(), portal.sourceCellNodeStableId) ||
+                !std::binary_search(stableIds.begin(), stableIds.end(), portal.targetCellNodeStableId)) return false;
         }
     }
     return true;

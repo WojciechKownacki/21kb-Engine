@@ -15,6 +15,16 @@
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TagsComponent.hpp"
+#include "engine/scene/RegionShapeComponent.hpp"
+#include "engine/scene/GuideCurveComponent.hpp"
+#include "engine/scene/ContentInstanceComponent.hpp"
+#include "engine/scene/StreamFocusComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
+#include "engine/scene/AmbientRadianceComponent.hpp"
+#include "engine/scene/DetailSwitchComponent.hpp"
+#include "engine/scene/VisibilityBlockerComponent.hpp"
+#include "engine/scene/VisibilityCellComponent.hpp"
+#include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
 
@@ -79,6 +89,47 @@ public:
     static void SetTags(Scene& scene, SceneEntity entity, const TagsComponent& tags);
     static void RemoveTags(Scene& scene, SceneEntity entity) noexcept;
     static void MarkTagsModified(Scene& scene, SceneEntity entity) noexcept;
+
+    [[nodiscard]] static RegionShapeComponent* TryGetRegionShape(Scene& scene, SceneEntity entity) noexcept;
+    static void SetRegionShape(Scene& scene, SceneEntity entity, const RegionShapeComponent& shape);
+    static void RemoveRegionShape(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkRegionShapeModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static GuideCurveComponent* TryGetGuideCurve(Scene& scene, SceneEntity entity) noexcept;
+    static void SetGuideCurve(Scene& scene, SceneEntity entity, const GuideCurveComponent& curve);
+    static void RemoveGuideCurve(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkGuideCurveModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static ContentInstanceComponent* TryGetContentInstance(Scene& scene, SceneEntity entity) noexcept;
+    static void SetContentInstance(Scene& scene, SceneEntity entity, const ContentInstanceComponent& component);
+    static void RemoveContentInstance(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkContentInstanceModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static StreamFocusComponent* TryGetStreamFocus(Scene& scene, SceneEntity entity) noexcept;
+    static void SetStreamFocus(Scene& scene, SceneEntity entity, const StreamFocusComponent& component);
+    static void RemoveStreamFocus(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkStreamFocusModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static WorldBackdropComponent* TryGetWorldBackdrop(Scene& scene, SceneEntity entity) noexcept;
+    static void SetWorldBackdrop(Scene& scene, SceneEntity entity, const WorldBackdropComponent& component);
+    static void RemoveWorldBackdrop(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkWorldBackdropModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static AmbientRadianceComponent* TryGetAmbientRadiance(Scene& scene, SceneEntity entity) noexcept;
+    static void SetAmbientRadiance(Scene& scene, SceneEntity entity, const AmbientRadianceComponent& component);
+    static void RemoveAmbientRadiance(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkAmbientRadianceModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static SceneDetailSwitchComponent* TryGetDetailSwitch(Scene& scene, SceneEntity entity) noexcept;
+    static void SetDetailSwitch(Scene& scene, SceneEntity entity, const SceneDetailSwitchComponent& component);
+    static void RemoveDetailSwitch(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkDetailSwitchModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static SceneVisibilityBlockerComponent* TryGetVisibilityBlocker(Scene& scene, SceneEntity entity) noexcept;
+    static void SetVisibilityBlocker(Scene& scene, SceneEntity entity, const SceneVisibilityBlockerComponent& component);
+    static void RemoveVisibilityBlocker(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkVisibilityBlockerModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static VisibilityCellComponent* TryGetVisibilityCell(Scene& scene, SceneEntity entity) noexcept;
+    static void SetVisibilityCell(Scene& scene, SceneEntity entity, const VisibilityCellComponent& component);
+    static void RemoveVisibilityCell(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkVisibilityCellModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static SceneRegionPortalComponent* TryGetRegionPortal(Scene& scene, SceneEntity entity) noexcept;
+    static void SetRegionPortal(Scene& scene, SceneEntity entity, const SceneRegionPortalComponent& component);
+    static void RemoveRegionPortal(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkRegionPortalModified(Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static AudioSourceComponent* TryGetAudioSource(Scene& scene, SceneEntity entity) noexcept;
     static void SetAudioSource(Scene& scene, SceneEntity entity, const AudioSourceComponent& audioSource);

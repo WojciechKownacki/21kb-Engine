@@ -11,6 +11,7 @@
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/localization/LocalizationCatalog.hpp"
 #include "engine/scene/BehaviourVariableOverride.hpp"
+#include "engine/scene/ContentInstanceComponent.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/SceneEntity.hpp"
@@ -165,6 +166,20 @@ struct UIDocumentRuntimeRecord {
     std::map<UIElementId, VirtualListState> virtualLists;
 };
 
+// Derived execution state for ContentInstanceComponent. It deliberately keeps
+// no authorable fields beyond a cache key used to recognize a component edit.
+// The ECS component remains the sole source of placement, source and lifetime
+// policy; root/loadedSceneId are disposable runtime handles.
+struct ContentInstanceRuntimeRecord {
+    SceneEntity owner{};
+    std::uint64_t assetId = 0U;
+    ContentInstanceKind kind = ContentInstanceKind::Prefab;
+    ContentInstanceLifetime lifetime = ContentInstanceLifetime::Owner;
+    SceneEntity root{};
+    std::uint64_t loadedSceneId = 0U;
+    kb::assets::AssetHandle<ScenePrefab> prefab;
+};
+
 enum class UIRuntimeCommandKind : std::uint8_t {
     Create,
     Destroy,
@@ -236,6 +251,7 @@ public:
     std::vector<AnimationEventRecord> pendingAnimationEvents;
     std::map<std::uint64_t, TimelineRuntimeRecord> timelines;
     std::map<std::uint64_t, UIDocumentRuntimeRecord> uiDocuments;
+    std::map<std::uint64_t, ContentInstanceRuntimeRecord> contentInstances;
     // LIB-174: sole mutable UI write boundary. It is FIFO and drained by the
     // UI scene system, never by callers, so runtime tree iteration cannot be
     // invalidated by script/API mutations mid-frame.

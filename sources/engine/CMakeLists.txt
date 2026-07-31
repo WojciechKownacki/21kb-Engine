@@ -251,7 +251,31 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneVisitorTypes.hpp
     include/engine/scene/SceneVisitors.hpp
     include/engine/scene/TransformComponent.hpp
-    include/engine/scene/SceneTagsComponents.hpp
+      include/engine/scene/SceneTagsComponents.hpp
+      include/engine/scene/SceneRegionShapeComponents.hpp
+      include/engine/scene/SceneRegionShapeQueries.hpp
+      include/engine/scene/RegionShapeComponent.hpp
+      include/engine/scene/SceneGuideCurveComponents.hpp
+      include/engine/scene/SceneGuideCurveQueries.hpp
+      include/engine/scene/GuideCurveComponent.hpp
+        include/engine/scene/ContentInstanceComponent.hpp
+        include/engine/scene/SceneContentInstanceComponents.hpp
+        include/engine/scene/StreamFocusComponent.hpp
+        include/engine/scene/SceneStreamFocusComponents.hpp
+        include/engine/scene/WorldBackdropComponent.hpp
+        include/engine/scene/SceneWorldBackdropComponents.hpp
+        include/engine/scene/AmbientRadianceComponent.hpp
+        include/engine/scene/SceneAmbientRadianceComponents.hpp
+        include/engine/scene/DetailSwitchComponent.hpp
+        include/engine/scene/SceneDetailSwitchComponents.hpp
+        include/engine/scene/VisibilityBlockerComponent.hpp
+        include/engine/scene/SceneVisibilityBlockerComponents.hpp
+        include/engine/scene/SceneVisibilityCellComponents.hpp
+        include/engine/scene/SceneVisibilityCellQueries.hpp
+        include/engine/scene/VisibilityCellComponent.hpp
+        include/engine/scene/RegionPortalComponent.hpp
+        include/engine/scene/SceneRegionPortalComponents.hpp
+        include/engine/scene/SceneRegionPortalQueries.hpp
     include/engine/scene/SceneVisibilityComponents.hpp
     include/engine/scene/VisibilityComponent.hpp
     include/engine/render/postfx/PostProcessPipeline.hpp
@@ -618,8 +642,31 @@ add_library(kb_engine STATIC
     src/scene/components/ScenePhysicsBodyIteration.cpp
     src/scene/components/SceneRigidbodyApi.cpp
     src/scene/components/SceneRigidbodyStorage.cpp
-    src/scene/components/SceneTagsApi.cpp
-    src/scene/components/SceneTagsStorage.cpp
+      src/scene/components/SceneTagsApi.cpp
+      src/scene/components/SceneTagsStorage.cpp
+      src/scene/components/SceneRegionShapeApi.cpp
+      src/scene/components/SceneRegionShapeQueries.cpp
+      src/scene/components/SceneRegionShapeStorage.cpp
+      src/scene/components/SceneGuideCurveApi.cpp
+      src/scene/components/SceneGuideCurveQueries.cpp
+      src/scene/components/SceneGuideCurveStorage.cpp
+        src/scene/components/SceneContentInstanceApi.cpp
+        src/scene/components/SceneContentInstanceStorage.cpp
+        src/scene/components/SceneStreamFocusApi.cpp
+        src/scene/components/SceneStreamFocusStorage.cpp
+        src/scene/components/SceneWorldBackdropApi.cpp
+        src/scene/components/SceneWorldBackdropStorage.cpp
+        src/scene/components/SceneAmbientRadianceApi.cpp
+        src/scene/components/SceneAmbientRadianceStorage.cpp
+        src/scene/components/SceneDetailSwitchApi.cpp
+        src/scene/components/SceneDetailSwitchStorage.cpp
+        src/scene/components/SceneVisibilityBlockerApi.cpp
+        src/scene/components/SceneVisibilityBlockerStorage.cpp
+        src/scene/components/SceneVisibilityCellApi.cpp
+        src/scene/components/SceneVisibilityCellStorage.cpp
+        src/scene/components/SceneRegionPortalApi.cpp
+        src/scene/components/SceneRegionPortalStorage.cpp
+      src/scene/SceneContentInstanceService.cpp
     src/scene/components/SceneTransformApi.cpp
     src/scene/components/SceneTransformStorage.cpp
     src/scene/components/SceneTransformIteration.cpp
@@ -666,7 +713,12 @@ add_library(kb_engine STATIC
     src/scene/modules/components/SceneJointModule.cpp
     src/scene/modules/components/SceneMeshRendererModule.cpp
     src/scene/modules/components/SceneRigidbodyModule.cpp
-    src/scene/modules/components/SceneTagsModule.cpp
+      src/scene/modules/components/SceneTagsModule.cpp
+      src/scene/modules/components/SceneRegionShapeModule.cpp
+      src/scene/modules/components/SceneGuideCurveModule.cpp
+        src/scene/modules/components/SceneContentInstanceModule.cpp
+        src/scene/modules/components/SceneStreamFocusModule.cpp
+      src/scene/systems/ContentInstanceSceneSystem.cpp
     src/scene/modules/components/SceneVisibilityModule.cpp
     src/scene/modules/ScenePrefabAssetModule.cpp
     src/scene/modules/SceneAssets.cpp
@@ -943,7 +995,19 @@ add_library(kb_engine STATIC
     src/private/scene/components/SceneJointComponentStore.hpp
     src/private/scene/components/SceneMeshRendererComponentStore.hpp
     src/private/scene/components/SceneRigidbodyComponentStore.hpp
-    src/private/scene/components/SceneTagsComponentStore.hpp
+      src/private/scene/components/SceneTagsComponentStore.hpp
+      src/private/scene/components/SceneRegionShapeComponentStore.hpp
+      src/private/scene/components/SceneGuideCurveComponentStore.hpp
+        src/private/scene/components/SceneContentInstanceComponentStore.hpp
+        src/private/scene/components/SceneStreamFocusComponentStore.hpp
+        src/private/scene/components/SceneWorldBackdropComponentStore.hpp
+        src/private/scene/components/SceneAmbientRadianceComponentStore.hpp
+        src/private/scene/components/SceneDetailSwitchComponentStore.hpp
+        src/private/scene/components/SceneVisibilityBlockerComponentStore.hpp
+        src/private/scene/components/SceneVisibilityCellComponentStore.hpp
+        src/private/scene/components/SceneRegionPortalComponentStore.hpp
+      src/private/scene/SceneContentInstanceService.hpp
+      src/private/scene/systems/ContentInstanceSceneSystem.hpp
     src/private/scene/components/SceneTransformComponentStore.hpp
     src/private/scene/components/SceneVisibilityComponentStore.hpp
     src/private/scene/entities/SceneEntityCounter.hpp

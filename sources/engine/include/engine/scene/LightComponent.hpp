@@ -2,7 +2,9 @@
 
 #include "engine/scene/TransformComponent.hpp"
 
+#include <cmath>
 #include <cstdint>
+#include <string_view>
 
 namespace kb::scene {
 
@@ -16,6 +18,9 @@ enum class LightKind {
 };
 
 struct LightComponent {
+    static constexpr std::string_view StableId = "kb21.light.d3.radiance-emitter";
+    static constexpr std::uint32_t SchemaVersion = 1U;
+
     LightKind kind = LightKind::Point;
     Vec3 color{ 1.0F, 1.0F, 1.0F };
     float intensity = 1.0F;
@@ -45,5 +50,20 @@ struct LightComponent {
     // layer 1) sees no behavior change.
     std::uint32_t layerMask = 1U;
 };
+
+[[nodiscard]] constexpr bool IsLightKindValid(LightKind value) noexcept {
+    return value == LightKind::Directional || value == LightKind::Point || value == LightKind::Spot ||
+        value == LightKind::AreaRect || value == LightKind::AreaDisk || value == LightKind::Tube;
+}
+
+[[nodiscard]] inline bool IsLightComponentValid(const LightComponent& value) noexcept {
+    return IsLightKindValid(value.kind) &&
+        std::isfinite(value.color.x) && std::isfinite(value.color.y) && std::isfinite(value.color.z) &&
+        std::isfinite(value.intensity) && std::isfinite(value.range) &&
+        std::isfinite(value.innerConeDegrees) && std::isfinite(value.outerConeDegrees) &&
+        std::isfinite(value.areaWidth) && std::isfinite(value.areaHeight) &&
+        std::isfinite(value.contactShadowLength) && std::isfinite(value.volumetricScattering) &&
+        std::isfinite(value.colorTemperatureKelvin);
+}
 
 } // namespace kb::scene
