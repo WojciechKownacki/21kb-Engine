@@ -23,6 +23,7 @@
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
+#include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
@@ -1691,6 +1692,15 @@ void PaintVisibilityCellSection(HDC dc, RECT content, int& y, const EditorTheme&
     y = section.Bottom() + kSectionGap;
 }
 
+void PaintRegionPortalSection(HDC dc, RECT content, int& y, const EditorTheme& theme, const InspectorPanelState& inspector, const kb::scene::SceneRegionPortalComponent& portal) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::RegionPortal, HeroIconKind::Cube, "Region Portal", true);
+    section.Field("Source Cell", std::to_string(portal.sourceCell.Id()), InspectorPropertyId::RegionPortalSourceCell);
+    section.Field("Target Cell", std::to_string(portal.targetCell.Id()), InspectorPropertyId::RegionPortalTargetCell);
+    section.Field("Purposes", std::to_string(portal.purposes), InspectorPropertyId::RegionPortalPurposes);
+    section.Bool("Enabled", portal.enabled, InspectorPropertyId::RegionPortalEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
 constexpr int kCameraSectionRows = 13;
 
 void PaintCameraSection(
@@ -2073,6 +2083,10 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         const int h = SectionHeight(inspector, InspectorSectionId::VisibilityCell, 4);
         if (y < content.bottom && y + h > content.top) PaintVisibilityCellSection(dc, content, y, theme, inspector, *cell); else y += h + kSectionGap;
     }
+    if (const kb::scene::SceneRegionPortalComponent* portal = scene.Components().RegionPortals().TryGet(selected); portal != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::RegionPortal, 4);
+        if (y < content.bottom && y + h > content.top) PaintRegionPortalSection(dc, content, y, theme, inspector, *portal); else y += h + kSectionGap;
+    }
 
     if (sceneContext.HasEntityScript(selected)) {
         const std::vector<EditorSceneContext::EntityScriptVariable> scriptVariables = sceneContext.EntityScriptExposedVariables(selected);
@@ -2316,6 +2330,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (scene.Components().DetailSwitches().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::DetailSwitch, 6) + kSectionGap;
     if (scene.Components().VisibilityBlockers().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::VisibilityBlocker, 7) + kSectionGap;
     if (scene.Components().VisibilityCells().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::VisibilityCell, 4) + kSectionGap;
+    if (scene.Components().RegionPortals().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::RegionPortal, 4) + kSectionGap;
     if (sceneContext.HasEntityScript(selected)) {
         const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariables(selected).size());
         height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
@@ -3408,6 +3423,20 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                 if (hit.kind != InspectorHitKind::None) return hit;
                 AdvanceRow(y);
             }
+        }
+        y += kSectionGap;
+    }
+    if (sceneContext.Scene().Components().RegionPortals().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::RegionPortal, x, scrolledY, true); hit.kind != InspectorHitKind::None) return hit;
+        if (!state.IsCollapsed(InspectorSectionId::RegionPortal)) {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::RegionPortal, InspectorPropertyId::RegionPortalSourceCell, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::RegionPortal, InspectorPropertyId::RegionPortalTargetCell, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::RegionPortal, InspectorPropertyId::RegionPortalPurposes, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::RegionPortal, InspectorPropertyId::RegionPortalEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) return hit;
+            AdvanceRow(y);
         }
         y += kSectionGap;
     }
