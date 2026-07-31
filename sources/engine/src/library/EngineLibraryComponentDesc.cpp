@@ -163,6 +163,11 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .id = ComputeLibraryComponentId("Region Portal"),
             .serializable = true,
         },
+        LibraryComponentDesc{
+            .name = "Secondary Frame",
+            .id = ComputeLibraryComponentId("Secondary Frame"),
+            .serializable = true,
+        },
     };
     return kCatalog;
 }

@@ -15,6 +15,7 @@
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
+#include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -1182,6 +1183,10 @@ template <typename Integer>
     return property >= InspectorPropertyId::RegionPortalSourceCell && property <= InspectorPropertyId::RegionPortalEnabled;
 }
 
+[[nodiscard]] bool IsSecondaryFrameProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::SecondaryFrameMode && property <= InspectorPropertyId::SecondaryFrameEnabled;
+}
+
 template <typename Mutator>
 [[nodiscard]] bool EditNavAgent(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
     if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
@@ -1306,6 +1311,16 @@ template <typename Mutator>
     kb::scene::SceneRegionPortalComponent* portal = sceneContext.Scene().Components().RegionPortals().TryGet(entity);
     if (portal == nullptr || !mutator(*portal)) { sceneContext.CancelSceneEditTransaction(); return false; }
     sceneContext.Scene().Components().RegionPortals().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditSecondaryFrame(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::AuxFrameComponent* frame = sceneContext.Scene().Components().AuxFrames().TryGet(entity);
+    if (frame == nullptr || !mutator(*frame)) { sceneContext.CancelSceneEditTransaction(); return false; }
+    sceneContext.Scene().Components().AuxFrames().MarkModified(entity);
     static_cast<void>(sceneContext.CommitSceneEditTransaction());
     return true;
 }
@@ -1618,6 +1633,36 @@ template <typename Mutator>
     return true;
 }
 
+[[nodiscard]] std::string SecondaryFrameFieldText(const kb::scene::AuxFrameComponent& value, InspectorPropertyId property) {
+    switch (property) {
+    case InspectorPropertyId::SecondaryFrameMode: return std::to_string(static_cast<int>(value.mode));
+    case InspectorPropertyId::SecondaryFrameImageTargetId: return std::to_string(value.imageTargetId);
+    case InspectorPropertyId::SecondaryFrameWidth: return std::to_string(value.width);
+    case InspectorPropertyId::SecondaryFrameHeight: return std::to_string(value.height);
+    case InspectorPropertyId::SecondaryFramePlaneNormalX: return FormatCompactFloat(value.mirrorPlaneNormal.x);
+    case InspectorPropertyId::SecondaryFramePlaneNormalY: return FormatCompactFloat(value.mirrorPlaneNormal.y);
+    case InspectorPropertyId::SecondaryFramePlaneNormalZ: return FormatCompactFloat(value.mirrorPlaneNormal.z);
+    case InspectorPropertyId::SecondaryFramePlaneOffset: return FormatCompactFloat(value.mirrorPlaneOffset);
+    default: return {};
+    }
+}
+
+[[nodiscard]] bool HandleSecondaryFrameClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::AuxFrameComponent* frame = sceneContext.Scene().Components().AuxFrames().TryGet(entity);
+    if (frame == nullptr) return false;
+    if (hit.property == InspectorPropertyId::SecondaryFrameEnabled) {
+        return EditSecondaryFrame(sceneContext, entity, "Toggle Secondary Frame", [](kb::scene::AuxFrameComponent& value) {
+            kb::scene::AuxFrameComponent candidate = value;
+            candidate.enabled = !candidate.enabled;
+            if (!kb::scene::IsAuxFrameComponentPersistable(candidate)) return false;
+            value = candidate;
+            return true;
+        });
+    }
+    if (IsSecondaryFrameProperty(hit.property)) sceneContext.Inspector().BeginTextEdit(hit.property, SecondaryFrameFieldText(*frame, hit.property));
+    return true;
+}
+
 [[nodiscard]] bool ApplyNavAgentText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
     float value = 0.0F;
     if (property == InspectorPropertyId::NavAgentAreaMask) {
@@ -1887,6 +1932,39 @@ template <typename Mutator>
     return property == InspectorPropertyId::RegionPortalSourceCell
         ? sceneContext.SetRegionPortalCells(entity, cell, portal->targetCell)
         : sceneContext.SetRegionPortalCells(entity, portal->sourceCell, cell);
+}
+
+[[nodiscard]] bool ApplySecondaryFrameText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    return EditSecondaryFrame(sceneContext, entity, "Edit Secondary Frame", [property, text](kb::scene::AuxFrameComponent& value) {
+        kb::scene::AuxFrameComponent candidate = value;
+        if (property == InspectorPropertyId::SecondaryFrameMode) {
+            std::uint32_t mode = 0U;
+            const auto result = std::from_chars(text.data(), text.data() + text.size(), mode);
+            if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || mode > static_cast<std::uint32_t>(kb::scene::AuxFrameMode::Panoramic)) return false;
+            candidate.mode = static_cast<kb::scene::AuxFrameMode>(mode);
+        } else if (property == InspectorPropertyId::SecondaryFrameImageTargetId) {
+            const auto result = std::from_chars(text.data(), text.data() + text.size(), candidate.imageTargetId);
+            if (result.ec != std::errc{} || result.ptr != text.data() + text.size()) return false;
+        } else if (property == InspectorPropertyId::SecondaryFrameWidth || property == InspectorPropertyId::SecondaryFrameHeight) {
+            std::uint32_t dimension = 0U;
+            const auto result = std::from_chars(text.data(), text.data() + text.size(), dimension);
+            if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || dimension == 0U || dimension > UINT16_MAX) return false;
+            if (property == InspectorPropertyId::SecondaryFrameWidth) candidate.width = static_cast<std::uint16_t>(dimension); else candidate.height = static_cast<std::uint16_t>(dimension);
+        } else {
+            float number = 0.0F;
+            if (!ParseFloat(text, number) || !std::isfinite(number)) return false;
+            switch (property) {
+            case InspectorPropertyId::SecondaryFramePlaneNormalX: candidate.mirrorPlaneNormal.x = number; break;
+            case InspectorPropertyId::SecondaryFramePlaneNormalY: candidate.mirrorPlaneNormal.y = number; break;
+            case InspectorPropertyId::SecondaryFramePlaneNormalZ: candidate.mirrorPlaneNormal.z = number; break;
+            case InspectorPropertyId::SecondaryFramePlaneOffset: candidate.mirrorPlaneOffset = number; break;
+            default: return false;
+            }
+        }
+        if (!kb::scene::IsAuxFrameComponentPersistable(candidate)) return false;
+        value = candidate;
+        return true;
+    });
 }
 
 [[nodiscard]] bool ToggleAudioProperty(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property) {
@@ -2246,6 +2324,11 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                     sceneContext.Scene().Components().RegionPortals().Remove(entity);
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
+            } else if (hit.section == InspectorSectionId::SecondaryFrame && sceneContext.Scene().Components().AuxFrames().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Secondary Frame")) {
+                    sceneContext.Scene().Components().AuxFrames().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
             } else if (const std::optional<PhysicsComponentKind> kind = PhysicsKindForSection(hit.section); kind.has_value()) {
                 static_cast<void>(sceneContext.RemovePhysicsComponent(entity, *kind));
             }
@@ -2337,6 +2420,7 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::VisibilityCell) return HandleVisibilityCellClick(sceneContext, entity, hit);
     if (hit.section == InspectorSectionId::RegionPortal) return HandleRegionPortalClick(sceneContext, entity, hit);
+    if (hit.section == InspectorSectionId::SecondaryFrame) return HandleSecondaryFrameClick(sceneContext, entity, hit);
     if (hit.section == InspectorSectionId::Tags &&
         hit.kind == InspectorHitKind::TextField &&
         hit.property == InspectorPropertyId::TagsText) {
@@ -2653,6 +2737,11 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         }
         if (sceneContext.Scene().Entities().IsAlive(entity) && IsRegionPortalProperty(inspector.EditedProperty())) {
             static_cast<void>(ApplyRegionPortalText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) && IsSecondaryFrameProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplySecondaryFrameText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
             inspector.EndTextEdit();
             return true;
         }

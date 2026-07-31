@@ -86,6 +86,9 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
             .purposes = portal->purposes, .enabled = portal->enabled,
         };
     }
+    if (const AuxFrameComponent* auxFrame = sceneComponents.AuxFrames().TryGet(entity)) {
+        components.auxFrame = *auxFrame;
+    }
 
     if (const BehaviourComponent* behaviour = sceneComponents.Behaviours().TryGet(entity)) {
         components.behaviour = *behaviour;

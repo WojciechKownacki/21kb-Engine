@@ -21,7 +21,8 @@ struct SceneDocument {
     // v17: SceneVisibilityBlockerComponent persists non-renderable culling geometry.
     // v18: VisibilityCellComponent persists region-membership visibility policy.
     // v19: SceneRegionPortalComponent persists stable source/target cell links.
-    static constexpr std::uint32_t CurrentFileVersion = 19U;
+    // v20: AuxFrameComponent persists secondary-camera output configuration.
+    static constexpr std::uint32_t CurrentFileVersion = 20U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

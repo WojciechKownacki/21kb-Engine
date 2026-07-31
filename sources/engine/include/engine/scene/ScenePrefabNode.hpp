@@ -23,6 +23,7 @@
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
+#include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/ScenePrefabOverrides.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
@@ -86,6 +87,7 @@ struct ScenePrefabNodeComponents {
     std::optional<SceneVisibilityBlockerComponent> visibilityBlocker;
     std::optional<VisibilityCellComponent> visibilityCell;
     std::optional<ScenePrefabRegionPortalComponent> regionPortal;
+    std::optional<AuxFrameComponent> auxFrame;
     std::optional<BehaviourComponent> behaviour;
     std::optional<AudioSourceComponent> audioSource;
     std::optional<AudioListenerComponent> audioListener;

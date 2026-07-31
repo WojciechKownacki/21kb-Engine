@@ -65,6 +65,7 @@ SceneDetailSwitchComponentQueries SceneComponentQueries::DetailSwitches() const 
 SceneVisibilityBlockerComponentQueries SceneComponentQueries::VisibilityBlockers() const noexcept { return SceneVisibilityBlockerComponentQueries{ scene_ }; }
 SceneVisibilityCellComponentQueries SceneComponentQueries::VisibilityCells() const noexcept { return SceneVisibilityCellComponentQueries{ scene_ }; }
 SceneRegionPortalComponentQueries SceneComponentQueries::RegionPortals() const noexcept { return SceneRegionPortalComponentQueries{ scene_ }; }
+SceneAuxFrameComponentQueries SceneComponentQueries::AuxFrames() const noexcept { return SceneAuxFrameComponentQueries{ scene_ }; }
 
 SceneAudioSourceComponentQueries SceneComponentQueries::AudioSources() const noexcept {
     return SceneAudioSourceComponentQueries{ scene_ };
@@ -143,6 +144,7 @@ SceneDetailSwitchComponents SceneComponents::DetailSwitches() const noexcept { r
 SceneVisibilityBlockerComponents SceneComponents::VisibilityBlockers() const noexcept { return SceneVisibilityBlockerComponents{ scene_ }; }
 SceneVisibilityCellComponents SceneComponents::VisibilityCells() const noexcept { return SceneVisibilityCellComponents{ scene_ }; }
 SceneRegionPortalComponents SceneComponents::RegionPortals() const noexcept { return SceneRegionPortalComponents{ scene_ }; }
+SceneAuxFrameComponents SceneComponents::AuxFrames() const noexcept { return SceneAuxFrameComponents{ scene_ }; }
 
 SceneAudioSourceComponents SceneComponents::AudioSources() const noexcept {
     return SceneAudioSourceComponents{ scene_ };

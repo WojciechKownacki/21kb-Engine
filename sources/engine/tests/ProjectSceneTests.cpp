@@ -14,6 +14,7 @@
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
+#include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -436,6 +437,28 @@ void RunSceneVisibilityCellReflectionSerializationTest() {
         "Visibility Cell reflection did not roundtrip authored state");
 }
 
+void RunSceneSecondaryFrameReflectionSerializationTest() {
+    kb::scene::Scene source;
+    const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Secondary Frame" });
+    source.Components().AuxFrames().Set(sourceEntity, kb::scene::AuxFrameComponent{
+        .mode = kb::scene::AuxFrameMode::Mirror, .imageTargetId = 91U, .width = 1024U, .height = 576U,
+        .mirrorPlaneNormal = kb::scene::Vec3{ 0.0F, 1.0F, 0.0F }, .mirrorPlaneOffset = -2.5F, .enabled = true,
+    });
+    kb::ecs::World& sourceWorld = source.Runtime().EcsWorld();
+    const kb::ecs::ComponentReflection* reflection = sourceWorld.Reflection(kb::scene::AuxFrameComponent::StableId);
+    Require(reflection != nullptr && reflection->FindField("imageTargetId") != nullptr && reflection->FindField("mirrorPlaneNormal") != nullptr,
+        "Secondary Frame reflection was not registered under its stable id");
+    kb::ecs::SerializedComponent serialized;
+    Require(sourceWorld.SerializeComponent(sourceEntity, sourceWorld.Component<kb::scene::AuxFrameComponent>(), serialized), "Secondary Frame reflection serialization failed");
+    kb::scene::Scene target;
+    const kb::scene::SceneEntity targetEntity = target.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Secondary Frame Target" });
+    Require(target.Runtime().EcsWorld().ApplySerializedComponent(targetEntity, serialized), "Secondary Frame reflection apply failed");
+    const kb::scene::AuxFrameComponent* restored = target.Components().AuxFrames().TryGet(targetEntity);
+    Require(restored != nullptr && restored->mode == kb::scene::AuxFrameMode::Mirror && restored->imageTargetId == 91U &&
+            restored->width == 1024U && restored->height == 576U && NearlyEqual(restored->mirrorPlaneOffset, -2.5F) && restored->enabled,
+        "Secondary Frame reflection did not roundtrip authored state");
+}
+
 void RunSceneAudioSourceComponentReflectionSerializationTest() {
     kb::scene::Scene source;
     const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "AudioSource" });
@@ -669,6 +692,7 @@ void RunProjectSceneTests() {
     RunSceneDetailSwitchReflectionSerializationTest();
     RunSceneVisibilityBlockerReflectionSerializationTest();
     RunSceneVisibilityCellReflectionSerializationTest();
+    RunSceneSecondaryFrameReflectionSerializationTest();
     RunSceneAudioListenerComponentReflectionSerializationTest();
     RunSceneAudioSourceComponentReflectionSerializationTest();
     RunSceneAudioListenerPrefabRoundTripTest();
