@@ -22,6 +22,7 @@
 #include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/SurfaceCastComponent.hpp"
+#include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
@@ -8251,6 +8252,16 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
         }
         return ExecuteSceneCommand("Add Surface Cast Component", [this, entity]() {
             scene_->Components().SurfaceCasts().Set(entity, kb::scene::SurfaceCastComponent{});
+            return true;
+        });
+    }
+    if (componentId == "Facing Panel") {
+        if (scene_->Components().FacingPanels().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Facing Panel component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Facing Panel Component", [this, entity]() {
+            scene_->Components().FacingPanels().Set(entity, kb::scene::FacingPanelComponent{});
             return true;
         });
     }

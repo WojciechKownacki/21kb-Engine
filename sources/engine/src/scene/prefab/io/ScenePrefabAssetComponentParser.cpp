@@ -343,6 +343,23 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseFacingPanel(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "facingPanel", present)) return false;
+    if (!present) return true;
+    FacingPanelComponent panel{};
+    std::uint32_t mode = 0U;
+    if (!ParseField(fields, "facingPanel.mode", mode) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "facingPanel.targetPoint", panel.targetPoint) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "facingPanel.axis", panel.axis) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "facingPanel.up", panel.up) ||
+        !ParseOptionalBool(fields, "facingPanel.enabled", panel.enabled) || mode > static_cast<std::uint32_t>(FacingPanelMode::Fixed)) return false;
+    panel.mode = static_cast<FacingPanelMode>(mode);
+    if (!IsFacingPanelComponentPersistable(panel)) return false;
+    components.facingPanel = panel;
+    return true;
+}
+
 [[nodiscard]] bool ParseCharacterController(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool hasCharacterController = false;
     if (!ParseOptionalComponentFlag(fields, "characterController", hasCharacterController)) {
@@ -537,6 +554,7 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseAuxFrame(fields, components)
         && ParseGeometrySwarm(fields, components)
         && ParseSurfaceCast(fields, components)
+        && ParseFacingPanel(fields, components)
         && ParseCharacterController(fields, components)
         && ParseJoint(fields, components)
         && ScenePrefabAssetTagsParser::Parse(fields, components)

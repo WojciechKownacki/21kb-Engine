@@ -95,6 +95,9 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const SurfaceCastComponent* surfaceCast = sceneComponents.SurfaceCasts().TryGet(entity)) {
         components.surfaceCast = *surfaceCast;
     }
+    if (const FacingPanelComponent* facingPanel = sceneComponents.FacingPanels().TryGet(entity)) {
+        components.facingPanel = *facingPanel;
+    }
 
     if (const BehaviourComponent* behaviour = sceneComponents.Behaviours().TryGet(entity)) {
         components.behaviour = *behaviour;

@@ -23,7 +23,7 @@ struct SceneDocument {
     // v19: SceneRegionPortalComponent persists stable source/target cell links.
     // v20: AuxFrameComponent persists secondary-camera output configuration.
     // v21: GeometrySwarmComponent persists compact GPU-instancing authoring data.
-    static constexpr std::uint32_t CurrentFileVersion = 22U;
+    static constexpr std::uint32_t CurrentFileVersion = 23U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

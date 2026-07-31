@@ -21,6 +21,7 @@
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/SurfaceCastComponent.hpp"
+#include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/ecs/Query.hpp"
 #include "engine/ecs/UnsafeHotQuery.hpp"
@@ -398,6 +399,34 @@ void SyncSurfaceCast(kb::scene::SceneEntity entity, const kb::scene::SurfaceCast
     }));
 }
 
+void SyncFacingPanel(kb::scene::SceneEntity entity, const kb::scene::FacingPanelComponent& panel, void* context) {
+    auto* sync = static_cast<SyncContext*>(context);
+    if (!panel.enabled || !kb::scene::IsFacingPanelComponentValid(panel)) return;
+    const kb::scene::TransformComponent* transform = sync->scene->Transforms().TryGet(entity);
+    if (transform == nullptr) return;
+    kb::scene::TransformComponent oriented = sync->worldReader->Read(entity, *transform);
+    kb::math::Vec3 direction{};
+    switch (panel.mode) {
+    case kb::scene::FacingPanelMode::View: {
+        const CameraRenderProxyDesc* camera = sync->renderScene->FindPrimaryCameraProxy();
+        if (camera == nullptr) return;
+        direction = kb::math::Vec3{ camera->position[0] - oriented.worldPosition.x, camera->position[1] - oriented.worldPosition.y, camera->position[2] - oriented.worldPosition.z };
+        break;
+    }
+    case kb::scene::FacingPanelMode::Point:
+        direction = panel.targetPoint - oriented.worldPosition;
+        break;
+    case kb::scene::FacingPanelMode::Axis:
+        direction = panel.axis;
+        break;
+    case kb::scene::FacingPanelMode::Fixed:
+        return;
+    }
+    if (kb::math::Dot(direction, direction) <= 0.000001F) return;
+    oriented.worldRotation = kb::math::LookRotation(direction, panel.up);
+    static_cast<void>(sync->renderScene->UpdateMeshTransform(entity.Id(), SceneTransformMatrices::Model(oriented)));
+}
+
 void SyncEntity(kb::scene::SceneEntity entity, SyncContext& context) {
     if (context.scene == nullptr || context.renderScene == nullptr || context.transforms == nullptr ||
         context.meshes == nullptr || context.cameras == nullptr || context.lights == nullptr || context.visibilityBlockers == nullptr || context.geometrySwarms == nullptr || context.surfaceCasts == nullptr) {
@@ -447,6 +476,9 @@ void SyncEntity(kb::scene::SceneEntity entity, SyncContext& context) {
         SyncSurfaceCast(entity, *surfaceCast, &context);
     } else {
         static_cast<void>(context.renderScene->RemoveSurfaceCast(entity.Id()));
+    }
+    if (const kb::scene::FacingPanelComponent* facingPanel = components.FacingPanels().TryGet(entity); facingPanel != nullptr) {
+        SyncFacingPanel(entity, *facingPanel, &context);
     }
     if (const kb::scene::SceneVisibilityBlockerComponent* blocker = components.VisibilityBlockers().TryGet(entity); blocker != nullptr && transform != nullptr && blocker->enabled && kb::scene::IsSceneVisibilityBlockerComponentValid(*blocker)) {
         SyncVisibilityBlocker(entity, *transform, *blocker, &context);
@@ -512,6 +544,7 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
     visitors.ForEachMeshRenderer(&SyncMesh, &context);
     scene.Components().GeometrySwarms().ForEach(&SyncGeometrySwarm, &context);
     scene.Components().SurfaceCasts().ForEach(&SyncSurfaceCast, &context);
+    scene.Components().FacingPanels().ForEach(&SyncFacingPanel, &context);
     if (context.basicLightingEnabled) {
         visitors.ForEachLight(&SyncLight, &context);
     }

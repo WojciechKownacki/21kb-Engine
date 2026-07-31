@@ -183,6 +183,9 @@ namespace {
     return lhs.materialAssetId == rhs.materialAssetId && lhs.receiverLayerMask == rhs.receiverLayerMask &&
         lhs.order == rhs.order && lhs.content == rhs.content && lhs.enabled == rhs.enabled;
 }
+[[nodiscard]] bool Equals(const FacingPanelComponent& lhs, const FacingPanelComponent& rhs) noexcept {
+    return lhs.mode == rhs.mode && Equals(lhs.targetPoint, rhs.targetPoint) && Equals(lhs.axis, rhs.axis) && Equals(lhs.up, rhs.up) && lhs.enabled == rhs.enabled;
+}
 
 template <typename T, typename Components>
 void WriteOptionalComponent(Components components, SceneEntity entity, const std::optional<T>& component) {
@@ -253,6 +256,7 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , auxFrames(scene.Components().AuxFrames())
     , geometrySwarms(scene.Components().GeometrySwarms())
     , surfaceCasts(scene.Components().SurfaceCasts())
+    , facingPanels(scene.Components().FacingPanels())
     , behaviours(scene.Components().Behaviours())
     , audioSources(scene.Components().AudioSources())
     , audioListeners(scene.Components().AudioListeners())
@@ -332,6 +336,7 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     WriteOptionalComponent(context.auxFrames, entity, node.components.auxFrame);
     WriteOptionalComponent(context.geometrySwarms, entity, node.components.geometrySwarm);
     WriteOptionalComponent(context.surfaceCasts, entity, node.components.surfaceCast);
+    WriteOptionalComponent(context.facingPanels, entity, node.components.facingPanel);
     if (!componentMask.available || !componentMask.matches || node.components.behaviour.has_value()) {
         WriteOptionalComponent(context.behaviours, entity, node.components.behaviour);
     }

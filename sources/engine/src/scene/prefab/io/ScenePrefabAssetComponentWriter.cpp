@@ -258,6 +258,15 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "surfaceCast.content=" << static_cast<std::uint32_t>(surfaceCast.content) << '\n';
         output << "surfaceCast.enabled=" << (surfaceCast.enabled ? 1 : 0) << '\n';
     }
+    output << "facingPanel=" << (components.facingPanel.has_value() ? 1 : 0) << '\n';
+    if (components.facingPanel.has_value()) {
+        const FacingPanelComponent& panel = *components.facingPanel;
+        output << "facingPanel.mode=" << static_cast<std::uint32_t>(panel.mode) << '\n';
+        WriteVec3(output, "facingPanel.targetPoint", panel.targetPoint);
+        WriteVec3(output, "facingPanel.axis", panel.axis);
+        WriteVec3(output, "facingPanel.up", panel.up);
+        output << "facingPanel.enabled=" << (panel.enabled ? 1 : 0) << '\n';
+    }
 
     output << "behaviour=" << (components.behaviour.has_value() ? 1 : 0) << '\n';
     if (components.behaviour.has_value()) {

@@ -137,6 +137,15 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(surfaceCast.content));
         ScenePrefabHashBuilder::Mix(hash, surfaceCast.enabled ? 1U : 0U);
     }
+    ScenePrefabHashBuilder::Mix(hash, components.facingPanel.has_value() ? 1U : 0U);
+    if (components.facingPanel.has_value()) {
+        const FacingPanelComponent& panel = *components.facingPanel;
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(panel.mode));
+        ScenePrefabHashBuilder::MixVec3(hash, panel.targetPoint);
+        ScenePrefabHashBuilder::MixVec3(hash, panel.axis);
+        ScenePrefabHashBuilder::MixVec3(hash, panel.up);
+        ScenePrefabHashBuilder::Mix(hash, panel.enabled ? 1U : 0U);
+    }
 
     ScenePrefabHashBuilder::Mix(hash, components.tags.has_value() ? 1U : 0U);
     if (components.tags.has_value()) {

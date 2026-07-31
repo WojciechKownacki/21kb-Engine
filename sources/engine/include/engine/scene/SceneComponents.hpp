@@ -27,6 +27,7 @@
 #include "engine/scene/SceneAuxFrameComponents.hpp"
 #include "engine/scene/SceneGeometrySwarmComponents.hpp"
 #include "engine/scene/SceneSurfaceCastComponents.hpp"
+#include "engine/scene/SceneFacingPanelComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
 #include "engine/scene/SceneUIDocuments.hpp"
@@ -63,6 +64,7 @@ public:
     [[nodiscard]] SceneAuxFrameComponents AuxFrames() const noexcept;
     [[nodiscard]] SceneGeometrySwarmComponents GeometrySwarms() const noexcept;
     [[nodiscard]] SceneSurfaceCastComponents SurfaceCasts() const noexcept;
+    [[nodiscard]] SceneFacingPanelComponents FacingPanels() const noexcept;
     [[nodiscard]] SceneAudioSourceComponents AudioSources() const noexcept;
     [[nodiscard]] SceneAudioListenerComponents AudioListeners() const noexcept;
     [[nodiscard]] SceneAnimatorComponents Animators() const noexcept;

@@ -25,6 +25,7 @@
 #include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/SurfaceCastComponent.hpp"
+#include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
@@ -38,6 +39,7 @@
 #include "engine/scene/SceneVisibilityComponents.hpp"
 #include "engine/scene/SceneGeometrySwarmComponents.hpp"
 #include "engine/scene/SceneSurfaceCastComponents.hpp"
+#include "engine/scene/SceneFacingPanelComponents.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
@@ -426,6 +428,14 @@ struct ScriptComponentAccess<kb::scene::SurfaceCastComponent> {
     [[nodiscard]] static kb::scene::SurfaceCastComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().SurfaceCasts().TryGet(entity); }
     static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::SurfaceCastComponent& value) { scene.Components().SurfaceCasts().Set(entity, value); }
     [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().SurfaceCasts().Has(entity)) return false; scene.Components().SurfaceCasts().Remove(entity); return true; }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::FacingPanelComponent> {
+    [[nodiscard]] static const kb::scene::FacingPanelComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().FacingPanels().TryGet(entity); }
+    [[nodiscard]] static kb::scene::FacingPanelComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().FacingPanels().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::FacingPanelComponent& value) { scene.Components().FacingPanels().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().FacingPanels().Has(entity)) return false; scene.Components().FacingPanels().Remove(entity); return true; }
 };
 
 template <typename Component>
