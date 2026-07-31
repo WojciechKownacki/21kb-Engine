@@ -132,8 +132,25 @@ SceneDocumentLoadResult SceneAssetReader::Read(const std::filesystem::path& path
     std::uint32_t nodeCount = 0;
     if (!input.ReadString(scene.guid) ||
         !input.ReadString(scene.name) ||
-        !input.ReadString(scene.worldType) ||
-        !input.ReadUInt32(rootCount) ||
+        !input.ReadString(scene.worldType)) {
+        return SceneDocumentLoadResult{ .succeeded = false, .document = {}, .error = "Scene asset descriptor fields are invalid." };
+    }
+    if (fileVersion >= 27U) {
+        std::uint32_t tagCount = 0U;
+        if (!input.ReadUInt32(tagCount) || tagCount > 256U) {
+            return SceneDocumentLoadResult{ .succeeded = false, .document = {}, .error = "Scene asset tag catalog is invalid." };
+        }
+        scene.tagDefinitions.clear();
+        scene.tagDefinitions.reserve(tagCount);
+        for (std::uint32_t tagIndex = 0U; tagIndex < tagCount; ++tagIndex) {
+            std::string tag;
+            if (!input.ReadString(tag) || tag.empty() || tag.size() > 255U) {
+                return SceneDocumentLoadResult{ .succeeded = false, .document = {}, .error = "Scene asset tag catalog is invalid." };
+            }
+            scene.tagDefinitions.push_back(std::move(tag));
+        }
+    }
+    if (!input.ReadUInt32(rootCount) ||
         !input.ReadUInt32(nodeCount) ||
         nodeCount > SceneAssetFormat::MaxNodeCount) {
         return SceneDocumentLoadResult{ .succeeded = false, .document = {}, .error = "Scene asset descriptor fields are invalid." };

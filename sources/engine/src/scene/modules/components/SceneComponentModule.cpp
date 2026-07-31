@@ -69,6 +69,9 @@ SceneAuxFrameComponentQueries SceneComponentQueries::AuxFrames() const noexcept 
 SceneGeometrySwarmComponentQueries SceneComponentQueries::GeometrySwarms() const noexcept { return SceneGeometrySwarmComponentQueries{ scene_ }; }
 SceneSurfaceCastComponentQueries SceneComponentQueries::SurfaceCasts() const noexcept { return SceneSurfaceCastComponentQueries{ scene_ }; }
 SceneFacingPanelComponentQueries SceneComponentQueries::FacingPanels() const noexcept { return SceneFacingPanelComponentQueries{ scene_ }; }
+SceneSpaceStrokeComponentQueries SceneComponentQueries::SpaceStrokes() const noexcept { return SceneSpaceStrokeComponentQueries{ scene_ }; }
+SceneHistoryRibbonComponentQueries SceneComponentQueries::HistoryRibbons() const noexcept { return SceneHistoryRibbonComponentQueries{ scene_ }; }
+SceneLensEchoComponentQueries SceneComponentQueries::LensEchoes() const noexcept { return SceneLensEchoComponentQueries{ scene_ }; }
 
 SceneAudioSourceComponentQueries SceneComponentQueries::AudioSources() const noexcept {
     return SceneAudioSourceComponentQueries{ scene_ };
@@ -151,6 +154,9 @@ SceneAuxFrameComponents SceneComponents::AuxFrames() const noexcept { return Sce
 SceneGeometrySwarmComponents SceneComponents::GeometrySwarms() const noexcept { return SceneGeometrySwarmComponents{ scene_ }; }
 SceneSurfaceCastComponents SceneComponents::SurfaceCasts() const noexcept { return SceneSurfaceCastComponents{ scene_ }; }
 SceneFacingPanelComponents SceneComponents::FacingPanels() const noexcept { return SceneFacingPanelComponents{ scene_ }; }
+SceneSpaceStrokeComponents SceneComponents::SpaceStrokes() const noexcept { return SceneSpaceStrokeComponents{ scene_ }; }
+SceneHistoryRibbonComponents SceneComponents::HistoryRibbons() const noexcept { return SceneHistoryRibbonComponents{ scene_ }; }
+SceneLensEchoComponents SceneComponents::LensEchoes() const noexcept { return SceneLensEchoComponents{ scene_ }; }
 
 SceneAudioSourceComponents SceneComponents::AudioSources() const noexcept {
     return SceneAudioSourceComponents{ scene_ };

@@ -782,6 +782,11 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncMeshRendererUpdates end");
         }
     }
+    // History ribbons own transient samples in the render synchronizer. Full
+    // sync already advances them; this idempotent call also covers the normal
+    // transform/dirty-entity incremental path.
+    renderSceneSynchronizer_->AdvanceHistoryRibbons(scene, renderScene);
+    renderSceneSynchronizer_->SyncLensEchoes(scene, renderScene, desc.target.viewport.id.value);
     // LIB-143: injects one real MeshRenderProxyDesc per live particle (billboard quad,
     // camera-facing) into renderScene, BEFORE EnsureSceneResources below so those new
     // proxies' mesh/material get resolved this same frame - deliberately AFTER the ECS

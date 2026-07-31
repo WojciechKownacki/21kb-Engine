@@ -18,6 +18,8 @@
 #include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
+#include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -28,6 +30,7 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
 #include "engine/scene/SceneSystem.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
 #include "engine/ecs/ComponentSerialization.hpp"
@@ -229,6 +232,8 @@ void RunSceneDocumentRoundTripTest() {
         .tickGroup = kb::scene::BehaviourTickGroup::Gameplay,
         .executionOrder = -3,
     });
+    Require(source.Tags().Define("Boss") && source.Tags().SetAssigned(root, "Boss", true),
+        "Scene tag catalogue fixture was not created");
 
     Require(kb::scene::SceneDocumentService::Save(source, sceneFile, "RoundTrip"), "Scene document was not saved");
 
@@ -283,6 +288,8 @@ void RunSceneDocumentRoundTripTest() {
     Require(audioSource != nullptr && audioSource->clipAssetId == 90 && NearlyEqual(audioSource->volume, 0.25F) && NearlyEqual(audioSource->pitch, 1.5F) && audioSource->loop && !audioSource->spatial && audioSource->autoplay && !audioSource->enabled && audioSource->mute && NearlyEqual(audioSource->pan, -0.4F) && NearlyEqual(audioSource->spatialBlend, 0.35F) && audioSource->attenuationModel == kb::audio::AudioAttenuationModel::Linear && NearlyEqual(audioSource->minDistance, 2.0F) && NearlyEqual(audioSource->maxDistance, 80.0F) && NearlyEqual(audioSource->rolloff, 0.5F) && NearlyEqual(audioSource->dopplerFactor, 0.25F) && kb::scene::AudioSourceOutputBus(*audioSource) == "Music", "Scene document audio source did not roundtrip");
     Require(audioListener != nullptr && audioListener->primary && !audioListener->enabled, "Scene document audio listener did not roundtrip");
     Require(behaviour != nullptr && behaviour->behaviourAssetId == 91 && behaviour->backend == kb::scene::BehaviourBackend::Lua && behaviour->tickGroup == kb::scene::BehaviourTickGroup::Gameplay && behaviour->executionOrder == -3, "Scene document behaviour did not roundtrip");
+    Require(target.Tags().Contains("Boss") && target.Tags().IsAssigned(roots[0], "Boss"),
+        "Scene document tag catalogue and assignment did not roundtrip");
 }
 
 void RunSceneAudioListenerComponentReflectionSerializationTest() {
@@ -522,6 +529,71 @@ void RunSceneFacingPanelReflectionSerializationTest() {
     Require(restored != nullptr && restored->mode == kb::scene::FacingPanelMode::Axis && NearlyEqual(restored->targetPoint.x, 1.0F) && NearlyEqual(restored->axis.x, -1.0F) && restored->enabled, "Facing Panel reflection did not roundtrip authored state");
 }
 
+void RunSceneSpaceStrokeReflectionSerializationTest() {
+    kb::scene::Scene source;
+    const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Space Stroke" });
+    source.Components().SpaceStrokes().Set(sourceEntity, kb::scene::SpaceStrokeComponent{ .meshAssetId = 17U, .materialAssetId = 23U, .mode = kb::scene::SpaceStrokeMode::Cable, .width = 0.25F, .cableSag = 1.5F, .splineSegments = 12U, .layer = 4U, .castsShadow = true, .receivesShadow = false, .enabled = true });
+    kb::ecs::World& sourceWorld = source.Runtime().EcsWorld();
+    const kb::ecs::ComponentReflection* reflection = sourceWorld.Reflection(kb::scene::SpaceStrokeComponent::StableId);
+    Require(reflection != nullptr && reflection->FindField("mode") != nullptr && reflection->FindField("splineSegments") != nullptr, "Space Stroke reflection was not registered under its stable id");
+    kb::ecs::SerializedComponent serialized;
+    Require(sourceWorld.SerializeComponent(sourceEntity, sourceWorld.Component<kb::scene::SpaceStrokeComponent>(), serialized), "Space Stroke reflection serialization failed");
+    kb::scene::Scene target;
+    const kb::scene::SceneEntity targetEntity = target.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Space Stroke Target" });
+    Require(target.Runtime().EcsWorld().ApplySerializedComponent(targetEntity, serialized), "Space Stroke reflection apply failed");
+    const kb::scene::SpaceStrokeComponent* restored = target.Components().SpaceStrokes().TryGet(targetEntity);
+    Require(restored != nullptr && restored->meshAssetId == 17U && restored->materialAssetId == 23U && restored->mode == kb::scene::SpaceStrokeMode::Cable && NearlyEqual(restored->width, 0.25F) && NearlyEqual(restored->cableSag, 1.5F) && restored->splineSegments == 12U && restored->layer == 4U && restored->castsShadow && !restored->receivesShadow && restored->enabled, "Space Stroke reflection did not roundtrip authored state");
+}
+
+void RunSceneSpaceStrokePrefabRoundTripTest() {
+    kb::scene::Scene source;
+    const kb::scene::SceneObject root = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Space Stroke Prefab" });
+    source.Components().SpaceStrokes().Set(root.Entity(), kb::scene::SpaceStrokeComponent{
+        .meshAssetId = 17U, .materialAssetId = 23U, .mode = kb::scene::SpaceStrokeMode::Spline,
+        .width = 0.35F, .cableSag = 0.8F, .splineSegments = 11U, .layer = 8U,
+        .castsShadow = true, .receivesShadow = false, .enabled = true,
+    });
+
+    const kb::scene::ScenePrefab prefab = source.Prefabs().Capture(root);
+    kb::scene::Scene target;
+    const kb::scene::ScenePrefabInstance instance = target.Prefabs().Instantiate(prefab);
+    Require(!instance.Empty(), "Space Stroke prefab did not instantiate");
+    const kb::scene::SpaceStrokeComponent* restored = target.Components().SpaceStrokes().TryGet(instance.ObjectAt(0U).Entity());
+    Require(restored != nullptr && restored->meshAssetId == 17U && restored->materialAssetId == 23U &&
+            restored->mode == kb::scene::SpaceStrokeMode::Spline && NearlyEqual(restored->width, 0.35F) &&
+            NearlyEqual(restored->cableSag, 0.8F) && restored->splineSegments == 11U && restored->layer == 8U &&
+            restored->castsShadow && !restored->receivesShadow && restored->enabled,
+        "Space Stroke prefab component did not roundtrip");
+}
+
+void RunSceneHistoryRibbonReflectionSerializationTest() {
+    kb::scene::Scene source;
+    const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "History Ribbon" });
+    source.Components().HistoryRibbons().Set(sourceEntity, kb::scene::HistoryRibbonComponent{ .meshAssetId = 17U, .materialAssetId = 23U, .lifetimeSeconds = 2.5F, .width = 0.25F, .sampleIntervalSeconds = 0.1F, .layer = 4U, .castsShadow = true, .receivesShadow = false, .enabled = true });
+    kb::ecs::World& sourceWorld = source.Runtime().EcsWorld();
+    const kb::ecs::ComponentReflection* reflection = sourceWorld.Reflection(kb::scene::HistoryRibbonComponent::StableId);
+    Require(reflection != nullptr && reflection->FindField("lifetimeSeconds") != nullptr && reflection->FindField("sampleIntervalSeconds") != nullptr, "History Ribbon reflection was not registered under its stable id");
+    kb::ecs::SerializedComponent serialized;
+    Require(sourceWorld.SerializeComponent(sourceEntity, sourceWorld.Component<kb::scene::HistoryRibbonComponent>(), serialized), "History Ribbon reflection serialization failed");
+    kb::scene::Scene target;
+    const kb::scene::SceneEntity targetEntity = target.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "History Ribbon Target" });
+    Require(target.Runtime().EcsWorld().ApplySerializedComponent(targetEntity, serialized), "History Ribbon reflection apply failed");
+    const kb::scene::HistoryRibbonComponent* restored = target.Components().HistoryRibbons().TryGet(targetEntity);
+    Require(restored != nullptr && restored->meshAssetId == 17U && restored->materialAssetId == 23U && NearlyEqual(restored->lifetimeSeconds, 2.5F) && NearlyEqual(restored->width, 0.25F) && NearlyEqual(restored->sampleIntervalSeconds, 0.1F) && restored->layer == 4U && restored->castsShadow && !restored->receivesShadow && restored->enabled, "History Ribbon reflection did not roundtrip authored state");
+}
+
+void RunSceneHistoryRibbonPrefabRoundTripTest() {
+    kb::scene::Scene source;
+    const kb::scene::SceneObject root = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "History Ribbon Prefab" });
+    source.Components().HistoryRibbons().Set(root.Entity(), kb::scene::HistoryRibbonComponent{ .meshAssetId = 17U, .materialAssetId = 23U, .lifetimeSeconds = 2.0F, .width = 0.35F, .sampleIntervalSeconds = 0.2F, .layer = 8U, .castsShadow = true, .receivesShadow = false, .enabled = true });
+    const kb::scene::ScenePrefab prefab = source.Prefabs().Capture(root);
+    kb::scene::Scene target;
+    const kb::scene::ScenePrefabInstance instance = target.Prefabs().Instantiate(prefab);
+    Require(!instance.Empty(), "History Ribbon prefab did not instantiate");
+    const kb::scene::HistoryRibbonComponent* restored = target.Components().HistoryRibbons().TryGet(instance.ObjectAt(0U).Entity());
+    Require(restored != nullptr && restored->meshAssetId == 17U && restored->materialAssetId == 23U && NearlyEqual(restored->lifetimeSeconds, 2.0F) && NearlyEqual(restored->width, 0.35F) && NearlyEqual(restored->sampleIntervalSeconds, 0.2F) && restored->layer == 8U && restored->castsShadow && !restored->receivesShadow && restored->enabled, "History Ribbon prefab component did not roundtrip");
+}
+
 void RunSceneAudioSourceComponentReflectionSerializationTest() {
     kb::scene::Scene source;
     const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "AudioSource" });
@@ -647,6 +719,57 @@ void RunEmptySceneDocumentClearsRuntimeSceneTest() {
     Require(scene.Hierarchy().RootEntities().empty(), "Empty scene document did not clear runtime roots");
 }
 
+void RunSceneTagSingleSelectionTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity first = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "FirstTagged" });
+    const kb::scene::SceneEntity second = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "SecondTagged" });
+
+    Require(scene.Tags().SetAssigned(first, "Enemy", true), "Initial scene tag assignment failed");
+    Require(scene.Tags().SetAssigned(first, "Boss", true), "Replacing a scene tag assignment failed");
+    const kb::scene::TagsComponent* replaced = scene.Components().Tags().TryGet(first);
+    Require(replaced != nullptr && kb::scene::TagsText(*replaced) == "Boss",
+        "Assigning a second tag must replace the previous entity classification");
+    Require(!scene.Tags().IsAssigned(first, "Enemy") && scene.Tags().IsAssigned(first, "Boss"),
+        "Scene tag queries exposed more than one classification after replacement");
+
+    Require(scene.Tags().SetAssigned(second, "Boss", true) && scene.Tags().Undefine("Boss"),
+        "Scene tag definition removal fixture failed");
+    Require(!scene.Components().Tags().Has(first) && !scene.Components().Tags().Has(second),
+        "Removing a tag definition must clear that tag from every entity");
+
+    Require(scene.Tags().SetAssigned(first, "Player", true), "Built-in scene tag assignment fixture failed");
+    for (const std::string_view builtIn : kb::scene::SceneTagCatalog::DefaultNames) {
+        Require(kb::scene::SceneTagCatalog::IsBuiltIn(builtIn), "Built-in scene tag was not classified as immutable");
+        Require(!scene.Tags().Undefine(builtIn) && scene.Tags().Contains(builtIn),
+            "Built-in scene tag definition was removed");
+    }
+    Require(scene.Tags().IsAssigned(first, "Player"),
+        "Rejected built-in scene tag removal cleared an existing assignment");
+
+    const std::array<std::string, 1U> replacementDefinitions{ "QuestTarget" };
+    Require(scene.Tags().ReplaceDefinitions(replacementDefinitions),
+        "Replacing the scene tag catalogue with a custom definition failed");
+    for (const std::string_view builtIn : kb::scene::SceneTagCatalog::DefaultNames) {
+        Require(scene.Tags().Contains(builtIn),
+            "Replacing scene tag definitions removed a built-in tag");
+    }
+    Require(scene.Tags().Contains("QuestTarget"),
+        "Replacing scene tag definitions discarded a custom tag");
+
+    kb::scene::TagsComponent legacy;
+    kb::scene::SetTagsText(legacy, "Player, Enemy");
+    scene.Components().Tags().Set(first, legacy);
+    const kb::scene::TagsComponent* migrated = scene.Components().Tags().TryGet(first);
+    Require(migrated != nullptr && kb::scene::TagsText(*migrated) == "Player" && !scene.Tags().IsAssigned(first, "Enemy"),
+        "Legacy multi-tag component data was not migrated to one deterministic classification");
+
+    for (std::size_t index = scene.Tags().Names().size(); index < kb::scene::SceneTagCatalog::MaxDefinitions; ++index) {
+        Require(scene.Tags().Define("CapacityTag" + std::to_string(index)), "Scene tag catalogue capacity fixture failed");
+    }
+    Require(scene.Tags().Define("Player") && scene.Tags().SetAssigned(first, "Player", true),
+        "A full scene tag catalogue must still accept existing definitions and assignments");
+}
+
 void RunSceneDocumentLoadDoesNotTickRuntimeSystemsTest() {
     SceneDocumentSystemProbe probe;
     kb::project::ProjectDescriptor project;
@@ -759,12 +882,17 @@ void RunProjectSceneTests() {
     RunSceneGeometrySwarmReflectionSerializationTest();
     RunSceneSurfaceCastReflectionSerializationTest();
     RunSceneFacingPanelReflectionSerializationTest();
+    RunSceneSpaceStrokeReflectionSerializationTest();
+    RunSceneSpaceStrokePrefabRoundTripTest();
+    RunSceneHistoryRibbonReflectionSerializationTest();
+    RunSceneHistoryRibbonPrefabRoundTripTest();
     RunSceneAudioListenerComponentReflectionSerializationTest();
     RunSceneAudioSourceComponentReflectionSerializationTest();
     RunSceneAudioListenerPrefabRoundTripTest();
     RunSceneAudioSourcePrefabRoundTripTest();
     RunScenePhysicsComponentReflectionSerializationTest();
     RunEmptySceneDocumentClearsRuntimeSceneTest();
+    RunSceneTagSingleSelectionTest();
     RunSceneDocumentLoadDoesNotTickRuntimeSystemsTest();
     RunSceneDocumentAssetDiscoveryTest();
     RunSceneAssetWritesMetaAndLoadsThroughSceneSystemTest();

@@ -378,9 +378,22 @@ bool EditorHeadlessAutomation::AddComponent(
     static_cast<void>(
         InspectorPanelInteraction::HandlePointerDown(
             context_, search, searchPoint.x, searchPoint.y));
-    for (const char character : tile->label) {
+    const int wideLength = MultiByteToWideChar(
+        CP_UTF8, MB_ERR_INVALID_CHARS, tile->label.data(),
+        static_cast<int>(tile->label.size()), nullptr, 0);
+    if (wideLength <= 0) {
+        Trace("add_component", false, "invalid-utf8-label");
+        return false;
+    }
+    std::wstring wideLabel(static_cast<std::size_t>(wideLength), L'\0');
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, tile->label.data(),
+            static_cast<int>(tile->label.size()), wideLabel.data(), wideLength) != wideLength) {
+        Trace("add_component", false, "utf8-conversion-failed");
+        return false;
+    }
+    for (const wchar_t character : wideLabel) {
         static_cast<void>(InspectorPanelInteraction::HandleChar(
-            context_, static_cast<wchar_t>(character)));
+            context_, character));
     }
     const auto filteredOverlay =
         InspectorPanelRenderer::AddComponentOverlayRect(

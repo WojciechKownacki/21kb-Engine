@@ -1283,6 +1283,67 @@ int LuaWorldHasTag(lua_State* state) {
     return 1;
 }
 
+int LuaWorldDefineTag(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const char* tag = luaL_checkstring(state, 1);
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("tag", ScriptValue{ std::string{ tag != nullptr ? tag : "" } }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("World.DefineTag", arguments);
+    lua_pushboolean(state, result.Output("defined").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaWorldRemoveTagDefinition(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const char* tag = luaL_checkstring(state, 1);
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("tag", ScriptValue{ std::string{ tag != nullptr ? tag : "" } }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("World.RemoveTagDefinition", arguments);
+    lua_pushboolean(state, result.Output("removed").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaWorldTagCount(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushinteger(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("World.TagCount", {});
+    lua_pushinteger(state, static_cast<lua_Integer>(result.Output("count").value_or(ScriptValue{ 0 }).AsInt()));
+    return 1;
+}
+
+int LuaWorldTagAt(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushliteral(state, "");
+        return 1;
+    }
+    const lua_Integer index = luaL_checkinteger(state, 1);
+    if (index < static_cast<lua_Integer>(std::numeric_limits<std::int32_t>::min()) ||
+        index > static_cast<lua_Integer>(std::numeric_limits<std::int32_t>::max())) {
+        return luaL_error(state, "World.TagAt index must fit an Int");
+    }
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("index", ScriptValue{ static_cast<std::int32_t>(index) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("World.TagAt", arguments);
+    const std::string tag = result.Output("tag").value_or(ScriptValue{ std::string{} }).AsString();
+    lua_pushlstring(state, tag.data(), tag.size());
+    return 1;
+}
+
 int LuaWorldFindByTag(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -2998,7 +3059,7 @@ void SetClosure(lua_State* state, const char* name, lua_CFunction function, Scri
 // marshalling.  Their position follows ScriptApiCatalog::LuaBindingDefinitions
 // excluding Task and global bindings; table and Lua field names deliberately
 // live only in that catalog.
-constexpr std::array<lua_CFunction, 173> kCatalogBindingAdapters{ {
+constexpr std::array<lua_CFunction, 177> kCatalogBindingAdapters{ {
     &LuaAudioPlay,
     &LuaAudioSetMixer,
     &LuaAudioActiveMixer,
@@ -3064,6 +3125,10 @@ constexpr std::array<lua_CFunction, 173> kCatalogBindingAdapters{ {
     &LuaWorldDestroy,
     &LuaWorldSetTag,
     &LuaWorldHasTag,
+    &LuaWorldDefineTag,
+    &LuaWorldRemoveTagDefinition,
+    &LuaWorldTagCount,
+    &LuaWorldTagAt,
     &LuaWorldSetParent,
     &LuaWorldInstantiatePrefab,
     &LuaSceneLoad,

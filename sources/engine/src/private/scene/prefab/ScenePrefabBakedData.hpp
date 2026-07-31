@@ -39,6 +39,8 @@ enum class ScenePrefabBakedComponentMask : std::uint32_t {
     GeometrySwarm = 1U << 27U,
     SurfaceCast = 1U << 28U,
     FacingPanel = 1U << 29U,
+    SpaceStroke = 1U << 30U,
+    HistoryRibbon = 1U << 31U,
 };
 
 [[nodiscard]] constexpr std::uint32_t ScenePrefabBakedMask(ScenePrefabBakedComponentMask mask) noexcept {
@@ -77,6 +79,8 @@ struct ScenePrefabBakedArchetype {
     std::vector<GeometrySwarmComponent> geometrySwarms;
     std::vector<SurfaceCastComponent> surfaceCasts;
     std::vector<FacingPanelComponent> facingPanels;
+    std::vector<SpaceStrokeComponent> spaceStrokes;
+    std::vector<HistoryRibbonComponent> historyRibbons;
     std::vector<BehaviourComponent> behaviours;
     std::vector<AudioSourceComponent> audioSources;
     std::vector<AudioListenerComponent> audioListeners;

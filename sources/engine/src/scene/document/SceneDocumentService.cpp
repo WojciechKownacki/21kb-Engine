@@ -1,4 +1,5 @@
 #include "engine/scene/SceneDocumentService.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
 
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/scene/Scene.hpp"
@@ -6,6 +7,8 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/TransformComponent.hpp"
 #include "scene/document/SceneDocumentCaptureService.hpp"
 #include "scene/asset/io/SceneAssetFormat.hpp"
 #include "scene/asset/io/SceneAssetReader.hpp"
@@ -28,6 +31,13 @@ void ClearSceneRoots(Scene& scene) noexcept {
             continue;
         }
         scene.Entities().Destroy(root);
+    }
+}
+
+void RegisterAssignedTagVisitor(SceneEntity entity, const TransformComponent&, void* rawScene) {
+    auto* scene = static_cast<Scene*>(rawScene);
+    if (scene != nullptr) {
+        scene->Tags().RegisterAssignedTags(entity);
     }
 }
 
@@ -70,12 +80,18 @@ bool SceneDocumentService::LoadIntoScene(Scene& scene, const SceneDocument& docu
     static_cast<void>(
         kb::audio::AudioPlayback::DrainPendingMarkerEvents(scene));
     ClearSceneRoots(scene);
+    if (!scene.Tags().ReplaceDefinitions(document.tagDefinitions)) {
+        return false;
+    }
     if (!document.worldPrefab.Empty()) {
         const ScenePrefabInstance instance = scene.Prefabs().Instantiate(document.worldPrefab);
         if (instance.Empty()) {
             return false;
         }
     }
+    // Old scene files carried only assignment text. Import it once at the load
+    // boundary so the runtime catalogue remains the sole author-facing list.
+    scene.Transforms().ForEach(&RegisterAssignedTagVisitor, &scene);
     scene.Runtime().SynchronizeTransforms();
     return true;
 }

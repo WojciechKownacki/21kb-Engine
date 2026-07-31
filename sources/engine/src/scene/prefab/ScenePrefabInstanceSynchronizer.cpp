@@ -188,6 +188,33 @@ void DestroyRemovedObjects(Scene& scene, std::span<const SceneObject> oldObjects
         } else {
             components.FacingPanels().Remove(owner.Entity());
         }
+        if (nodes[nodeIndex].components.spaceStroke.has_value()) {
+            components.SpaceStrokes().Set(owner.Entity(), *nodes[nodeIndex].components.spaceStroke);
+        } else {
+            components.SpaceStrokes().Remove(owner.Entity());
+        }
+        if (nodes[nodeIndex].components.historyRibbon.has_value()) {
+            components.HistoryRibbons().Set(owner.Entity(), *nodes[nodeIndex].components.historyRibbon);
+        } else {
+            components.HistoryRibbons().Remove(owner.Entity());
+        }
+        const std::optional<ScenePrefabLensEchoComponent>& prefabEcho = nodes[nodeIndex].components.lensEcho;
+        if (!prefabEcho.has_value()) {
+            components.LensEchoes().Remove(owner.Entity());
+        } else if (!prefabEcho->enabled && prefabEcho->sourceNodeStableId == ScenePrefabLensEchoComponent::InvalidSourceNodeStableId) {
+            components.LensEchoes().Set(owner.Entity(), LensEchoComponent{
+                .profileMaterialAssetId = prefabEcho->profileMaterialAssetId, .intensity = prefabEcho->intensity,
+                .size = prefabEcho->size, .layer = prefabEcho->layer, .occlusionRule = prefabEcho->occlusionRule, .enabled = false,
+            });
+        } else {
+            const auto source = objectsByStableId.find(prefabEcho->sourceNodeStableId);
+            if (source == objectsByStableId.end() || !source->second.IsValid() || !scene.Entities().IsAlive(source->second)) return false;
+            components.LensEchoes().Set(owner.Entity(), LensEchoComponent{
+                .sourceEntityId = source->second.Entity().Id(), .profileMaterialAssetId = prefabEcho->profileMaterialAssetId,
+                .intensity = prefabEcho->intensity, .size = prefabEcho->size, .layer = prefabEcho->layer,
+                .occlusionRule = prefabEcho->occlusionRule, .enabled = prefabEcho->enabled,
+            });
+        }
         const std::optional<ScenePrefabJointComponent>& prefabJoint = nodes[nodeIndex].components.joint;
         if (!prefabJoint.has_value()) {
             components.Joints().Remove(owner.Entity());

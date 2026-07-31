@@ -30,6 +30,9 @@
 #include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/SurfaceCastComponent.hpp"
 #include "engine/scene/FacingPanelComponent.hpp"
+#include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/HistoryRibbonComponent.hpp"
+#include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
@@ -176,6 +179,47 @@ void RegisterFacingPanelReflection(kb::ecs::World& world) {
     }));
 }
 
+void RegisterSpaceStrokeReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<SpaceStrokeComponent>(SpaceStrokeComponent::StableId, {
+        KB_ECS_FIELD(SpaceStrokeComponent, meshAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(SpaceStrokeComponent, materialAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(SpaceStrokeComponent, mode, kb::ecs::ComponentFieldType::Enum32),
+        KB_ECS_FIELD(SpaceStrokeComponent, width, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(SpaceStrokeComponent, cableSag, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(SpaceStrokeComponent, splineSegments, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(SpaceStrokeComponent, layer, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(SpaceStrokeComponent, castsShadow, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(SpaceStrokeComponent, receivesShadow, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(SpaceStrokeComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
+void RegisterHistoryRibbonReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<HistoryRibbonComponent>(HistoryRibbonComponent::StableId, {
+        KB_ECS_FIELD(HistoryRibbonComponent, meshAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(HistoryRibbonComponent, materialAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(HistoryRibbonComponent, lifetimeSeconds, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(HistoryRibbonComponent, width, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(HistoryRibbonComponent, sampleIntervalSeconds, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(HistoryRibbonComponent, layer, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(HistoryRibbonComponent, castsShadow, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(HistoryRibbonComponent, receivesShadow, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(HistoryRibbonComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
+void RegisterLensEchoReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<LensEchoComponent>(LensEchoComponent::StableId, {
+        KB_ECS_FIELD(LensEchoComponent, sourceEntityId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(LensEchoComponent, profileMaterialAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(LensEchoComponent, intensity, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(LensEchoComponent, size, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(LensEchoComponent, layer, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(LensEchoComponent, occlusionRule, kb::ecs::ComponentFieldType::Enum32),
+        KB_ECS_FIELD(LensEchoComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
 void RegisterRegionShapeReflection(kb::ecs::World& world) {
     static_cast<void>(world.RegisterComponentReflection<RegionShapeComponent>(
         "kb.scene.RegionShapeComponent",
@@ -307,6 +351,9 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , geometrySwarmComponentId_(RegisterSceneComponent<GeometrySwarmComponent>(world, GeometrySwarmComponent::StableId))
     , surfaceCastComponentId_(RegisterSceneComponent<SurfaceCastComponent>(world, SurfaceCastComponent::StableId))
     , facingPanelComponentId_(RegisterSceneComponent<FacingPanelComponent>(world, FacingPanelComponent::StableId))
+    , spaceStrokeComponentId_(RegisterSceneComponent<SpaceStrokeComponent>(world, SpaceStrokeComponent::StableId))
+    , historyRibbonComponentId_(RegisterSceneComponent<HistoryRibbonComponent>(world, HistoryRibbonComponent::StableId))
+    , lensEchoComponentId_(RegisterSceneComponent<LensEchoComponent>(world, LensEchoComponent::StableId))
     , audioSourceComponentId_(RegisterSceneComponent<AudioSourceComponent>(world, "kb.scene.AudioSourceComponent"))
     , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, "kb.scene.AudioListenerComponent"))
     , animatorComponentId_(RegisterSceneComponent<Animator>(world, "kb.scene.AnimatorComponent"))
@@ -330,6 +377,9 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     RegisterGeometrySwarmReflection(world);
     RegisterSurfaceCastReflection(world);
     RegisterFacingPanelReflection(world);
+    RegisterSpaceStrokeReflection(world);
+    RegisterHistoryRibbonReflection(world);
+    RegisterLensEchoReflection(world);
 }
 
 std::uint64_t SceneComponentRegistry::TransformComponentId() const noexcept {
@@ -396,6 +446,9 @@ std::uint64_t SceneComponentRegistry::AuxFrameComponentId() const noexcept { ret
 std::uint64_t SceneComponentRegistry::GeometrySwarmComponentId() const noexcept { return geometrySwarmComponentId_; }
 std::uint64_t SceneComponentRegistry::SurfaceCastComponentId() const noexcept { return surfaceCastComponentId_; }
 std::uint64_t SceneComponentRegistry::FacingPanelComponentId() const noexcept { return facingPanelComponentId_; }
+std::uint64_t SceneComponentRegistry::SpaceStrokeComponentId() const noexcept { return spaceStrokeComponentId_; }
+std::uint64_t SceneComponentRegistry::HistoryRibbonComponentId() const noexcept { return historyRibbonComponentId_; }
+std::uint64_t SceneComponentRegistry::LensEchoComponentId() const noexcept { return lensEchoComponentId_; }
 
 std::uint64_t SceneComponentRegistry::AudioSourceComponentId() const noexcept {
     return audioSourceComponentId_;

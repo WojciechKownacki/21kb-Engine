@@ -60,6 +60,8 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.geometrySwarm.has_value()) sceneComponents.GeometrySwarms().Set(entity, *components.geometrySwarm);
     if (components.surfaceCast.has_value()) sceneComponents.SurfaceCasts().Set(entity, *components.surfaceCast);
     if (components.facingPanel.has_value()) sceneComponents.FacingPanels().Set(entity, *components.facingPanel);
+    if (components.spaceStroke.has_value()) sceneComponents.SpaceStrokes().Set(entity, *components.spaceStroke);
+    if (components.historyRibbon.has_value()) sceneComponents.HistoryRibbons().Set(entity, *components.historyRibbon);
     if (components.behaviour.has_value()) {
         sceneComponents.Behaviours().Set(entity, *components.behaviour);
     }

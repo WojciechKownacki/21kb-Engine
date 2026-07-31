@@ -155,6 +155,8 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<GeometrySwarmComponent> geometrySwarms;
     std::vector<SurfaceCastComponent> surfaceCasts;
     std::vector<FacingPanelComponent> facingPanels;
+    std::vector<SpaceStrokeComponent> spaceStrokes;
+    std::vector<HistoryRibbonComponent> historyRibbons;
     std::vector<BehaviourComponent> behaviours;
     std::vector<AudioSourceComponent> audioSources;
     std::vector<AudioListenerComponent> audioListeners;
@@ -269,6 +271,14 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::FacingPanel)) {
             RepeatComponents(facingPanels, std::span<const FacingPanelComponent>{ archetype.facingPanels }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const FacingPanelComponent>{ facingPanels });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::SpaceStroke)) {
+            RepeatComponents(spaceStrokes, std::span<const SpaceStrokeComponent>{ archetype.spaceStrokes }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const SpaceStrokeComponent>{ spaceStrokes });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::HistoryRibbon)) {
+            RepeatComponents(historyRibbons, std::span<const HistoryRibbonComponent>{ archetype.historyRibbons }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const HistoryRibbonComponent>{ historyRibbons });
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Behaviour)) {
             RepeatComponents(behaviours, std::span<const BehaviourComponent>{ archetype.behaviours }, instanceCount);
@@ -402,6 +412,14 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::FacingPanel)) {
             AddCommandComponentPatternView(views, std::span<const FacingPanelComponent>{ archetype.facingPanels }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const FacingPanelComponent>{ archetype.facingPanels }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::SpaceStroke)) {
+            AddCommandComponentPatternView(views, std::span<const SpaceStrokeComponent>{ archetype.spaceStrokes }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const SpaceStrokeComponent>{ archetype.spaceStrokes }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::HistoryRibbon)) {
+            AddCommandComponentPatternView(views, std::span<const HistoryRibbonComponent>{ archetype.historyRibbons }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const HistoryRibbonComponent>{ archetype.historyRibbons }, instanceCount);
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Behaviour)) {
             AddCommandComponentPatternView(views, std::span<const BehaviourComponent>{ archetype.behaviours }, instanceCount);
@@ -915,6 +933,37 @@ void ResolvePrefabRegionPortalReferences(
     }
 }
 
+void ResolvePrefabLensEchoReferences(
+    Scene& scene,
+    std::span<const ScenePrefabNodeDesc> nodes,
+    std::span<const SceneEntity> entities,
+    std::size_t instanceCount) {
+    std::unordered_map<std::uint64_t, std::size_t> nodeIndexByStableId;
+    nodeIndexByStableId.reserve(nodes.size());
+    for (std::size_t index = 0U; index < nodes.size(); ++index) nodeIndexByStableId.emplace(nodes[index].stableId, index);
+    for (std::size_t instanceIndex = 0U; instanceIndex < instanceCount; ++instanceIndex) {
+        for (std::size_t nodeIndex = 0U; nodeIndex < nodes.size(); ++nodeIndex) {
+            const std::optional<ScenePrefabLensEchoComponent>& prefabEcho = nodes[nodeIndex].components.lensEcho;
+            if (!prefabEcho.has_value()) continue;
+            const SceneEntity owner = entities[EntityIndex(instanceIndex, nodeIndex, nodes.size())];
+            if (!prefabEcho->enabled && prefabEcho->sourceNodeStableId == ScenePrefabLensEchoComponent::InvalidSourceNodeStableId) {
+                scene.Components().LensEchoes().Set(owner, LensEchoComponent{
+                    .profileMaterialAssetId = prefabEcho->profileMaterialAssetId, .intensity = prefabEcho->intensity,
+                    .size = prefabEcho->size, .layer = prefabEcho->layer, .occlusionRule = prefabEcho->occlusionRule, .enabled = false,
+                });
+                continue;
+            }
+            const auto source = nodeIndexByStableId.find(prefabEcho->sourceNodeStableId);
+            if (source == nodeIndexByStableId.end()) throw std::invalid_argument("Scene prefab lens echo references a missing stable node id");
+            scene.Components().LensEchoes().Set(owner, LensEchoComponent{
+                .sourceEntityId = entities[EntityIndex(instanceIndex, source->second, nodes.size())].Id(),
+                .profileMaterialAssetId = prefabEcho->profileMaterialAssetId, .intensity = prefabEcho->intensity,
+                .size = prefabEcho->size, .layer = prefabEcho->layer, .occlusionRule = prefabEcho->occlusionRule, .enabled = prefabEcho->enabled,
+            });
+        }
+    }
+}
+
 [[nodiscard]] std::vector<ScenePrefabInstance> BuildInstances(
     Scene& scene,
     std::span<const ScenePrefabNodeDesc> nodes,
@@ -1049,6 +1098,7 @@ void ResolvePrefabRegionPortalReferences(
         const std::uint64_t entityCreateNanoseconds = ElapsedNanoseconds(createStart, PrefabStatsClock::now());
         ResolvePrefabJointReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
         ResolvePrefabRegionPortalReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
+        ResolvePrefabLensEchoReferences(scene, nodes, std::span<const SceneEntity>{ entities }, count);
         const kb::ecs::NativeEcsStorageStats afterStorage = state.world.NativeStorageStats();
         std::uint64_t instanceObjectSlabNanoseconds = 0;
         std::uint64_t hierarchyRecordNanoseconds = 0;
@@ -1113,6 +1163,7 @@ void ResolvePrefabRegionPortalReferences(
     }
     ResolvePrefabJointReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
     ResolvePrefabRegionPortalReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
+    ResolvePrefabLensEchoReferences(scene, nodes, std::span<const SceneEntity>{ resolvedEntities }, count);
     std::uint64_t instanceObjectSlabNanoseconds = 0;
     std::uint64_t hierarchyRecordNanoseconds = 0;
     std::uint64_t nameAssignmentNanoseconds = 0;

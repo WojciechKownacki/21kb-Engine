@@ -124,6 +124,10 @@ void AddDependency(std::vector<SceneAssetDependency>& dependencies, std::set<std
     WriteString(output, scene.guid);
     WriteString(output, scene.name);
     WriteString(output, scene.worldType);
+    WriteUInt32(output, static_cast<std::uint32_t>(scene.tagDefinitions.size()));
+    for (const std::string& tag : scene.tagDefinitions) {
+        WriteString(output, tag);
+    }
     WriteUInt32(output, RootCount(scene.worldPrefab));
     WriteUInt32(output, static_cast<std::uint32_t>(scene.worldPrefab.NodeCount()));
     for (const ScenePrefabNodeDesc& node : scene.worldPrefab.Nodes()) {

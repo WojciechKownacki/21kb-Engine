@@ -85,6 +85,11 @@
 #include "engine/scene/SceneGuideCurveQueries.hpp"
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
+#include "engine/scene/GeometrySwarmComponent.hpp"
+#include "engine/scene/SurfaceCastComponent.hpp"
+#include "engine/scene/FacingPanelComponent.hpp"
+#include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/SceneLoadedContent.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -1545,10 +1550,10 @@ void RunEntityHandleTagsComponentAccessTest() {
     kb::tests::Require(!handle.Has<kb::scene::TagsComponent>(scene), "EntityHandle Tags query must be false before Object Classification is added");
 
     kb::scene::TagsComponent classification;
-    kb::scene::SetTagsText(classification, "Enemy, Boss");
+    kb::scene::SetTagsText(classification, "Enemy");
     kb::tests::Require(handle.Add<kb::scene::TagsComponent>(scene, classification), "EntityHandle must add Object Classification to a live entity");
     const kb::scene::TagsComponent* stored = handle.TryGet<kb::scene::TagsComponent>(scene);
-    kb::tests::Require(stored != nullptr && kb::scene::TagsText(*stored) == "Enemy, Boss", "EntityHandle must return the authored Object Classification value");
+    kb::tests::Require(stored != nullptr && kb::scene::TagsText(*stored) == "Enemy", "EntityHandle must return the authored Object Classification value");
     kb::tests::Require(handle.Remove<kb::scene::TagsComponent>(scene), "EntityHandle must remove Object Classification when present");
 }
 
@@ -2724,7 +2729,7 @@ void RunEngineLibraryComponentRegistryTest() {
     source.Components().Colliders().Set(object.Entity(), kb::scene::ColliderComponent{ .radius = 0.75F, .friction = 0.6F, .restitution = 0.2F });
     source.Components().CharacterControllers().Set(object.Entity(), kb::scene::CharacterControllerComponent{ .radius = 0.4F, .height = 1.8F, .slopeLimitDegrees = 40.0F, .stepOffset = 0.3F, .gravityScale = 1.5F, .useGravity = false });
     kb::scene::TagsComponent classification;
-    kb::scene::SetTagsText(classification, "Enemy, Boss");
+    kb::scene::SetTagsText(classification, "Enemy");
     source.Components().Tags().Set(object.Entity(), classification);
     source.Components().RegionShapes().Set(object.Entity(), kb::scene::RegionShapeComponent{
         .kind = kb::scene::RegionShapeKind::Capsule,
@@ -2777,6 +2782,27 @@ void RunEngineLibraryComponentRegistryTest() {
         .purposes = static_cast<kb::scene::RegionPortalPurposeMask>(kb::scene::RegionPortalPurpose::Visibility) |
             static_cast<kb::scene::RegionPortalPurposeMask>(kb::scene::RegionPortalPurpose::Streaming),
         .enabled = false,
+    });
+    source.Components().GeometrySwarms().Set(object.Entity(), kb::scene::GeometrySwarmComponent{
+        .meshAssetId = 901U, .materialAssetId = 902U, .instanceCount = 4U, .columns = 2U, .rows = 2U,
+        .layers = 1U, .spacing = { 1.0F, 2.0F, 3.0F }, .instanceScale = 1.25F, .layer = 3U,
+        .castsShadow = true, .receivesShadow = false, .enabled = true,
+    });
+    source.Components().SurfaceCasts().Set(object.Entity(), kb::scene::SurfaceCastComponent{
+        .materialAssetId = 903U, .receiverLayerMask = 3U, .order = 7,
+        .content = kb::scene::SurfaceCastContent::Detail, .enabled = true,
+    });
+    source.Components().FacingPanels().Set(object.Entity(), kb::scene::FacingPanelComponent{
+        .mode = kb::scene::FacingPanelMode::Axis, .axis = { -1.0F, 0.0F, 0.0F }, .enabled = true,
+    });
+    source.Components().SpaceStrokes().Set(object.Entity(), kb::scene::SpaceStrokeComponent{
+        .meshAssetId = 904U, .materialAssetId = 905U, .mode = kb::scene::SpaceStrokeMode::Cable,
+        .width = 0.25F, .cableSag = 1.5F, .splineSegments = 12U, .layer = 3U,
+        .castsShadow = true, .receivesShadow = false, .enabled = true,
+    });
+    source.Components().HistoryRibbons().Set(object.Entity(), kb::scene::HistoryRibbonComponent{
+        .meshAssetId = 906U, .materialAssetId = 907U, .lifetimeSeconds = 2.0F, .width = 0.3F,
+        .sampleIntervalSeconds = 0.1F, .layer = 3U, .castsShadow = true, .receivesShadow = false, .enabled = true,
     });
 
     const std::filesystem::path testRoot = std::filesystem::temp_directory_path() / "21kb_engine_library_component_registry_tests";
@@ -2848,7 +2874,7 @@ void RunEngineLibraryComponentRegistryTest() {
                             !restoredCharacterController->useGravity,
         "Engine21kbLibrary component registry: CharacterController's slopeLimitDegrees/stepOffset/gravityScale/useGravity must survive a save/load round trip");
     const kb::scene::TagsComponent* restoredClassification = target.Components().Tags().TryGet(restored);
-    kb::tests::Require(restoredClassification != nullptr && kb::scene::TagsText(*restoredClassification) == "Enemy, Boss",
+    kb::tests::Require(restoredClassification != nullptr && kb::scene::TagsText(*restoredClassification) == "Enemy",
         "Engine21kbLibrary component registry: Tags is marked serializable=true and must survive a save/load round trip");
     const kb::scene::RegionShapeComponent* restoredRegionShape = target.Components().RegionShapes().TryGet(restored);
     kb::tests::Require(restoredRegionShape != nullptr && restoredRegionShape->kind == kb::scene::RegionShapeKind::Capsule &&
@@ -2895,6 +2921,28 @@ void RunEngineLibraryComponentRegistryTest() {
                                 static_cast<kb::scene::RegionPortalPurposeMask>(kb::scene::RegionPortalPurpose::Streaming)) &&
                             !restoredPortal->enabled,
         "Engine21kbLibrary component registry: Region Portal must survive real cross-root save/load with both cell references remapped to loaded entities");
+    const kb::scene::GeometrySwarmComponent* restoredSwarm = target.Components().GeometrySwarms().TryGet(restored);
+    kb::tests::Require(restoredSwarm != nullptr && restoredSwarm->meshAssetId == 901U && restoredSwarm->instanceCount == 4U &&
+                            restoredSwarm->columns == 2U && kb::tests::NearlyEqual(restoredSwarm->instanceScale, 1.25F) && restoredSwarm->enabled,
+        "Engine21kbLibrary component registry: Geometry Swarm must survive real save/load with its generated-instance policy");
+    const kb::scene::SurfaceCastComponent* restoredCast = target.Components().SurfaceCasts().TryGet(restored);
+    kb::tests::Require(restoredCast != nullptr && restoredCast->materialAssetId == 903U && restoredCast->receiverLayerMask == 3U &&
+                            restoredCast->order == 7 && restoredCast->content == kb::scene::SurfaceCastContent::Detail && restoredCast->enabled,
+        "Engine21kbLibrary component registry: Surface Cast must survive real save/load with its receiver policy");
+    const kb::scene::FacingPanelComponent* restoredPanel = target.Components().FacingPanels().TryGet(restored);
+    kb::tests::Require(restoredPanel != nullptr && restoredPanel->mode == kb::scene::FacingPanelMode::Axis &&
+                            kb::tests::NearlyEqual(restoredPanel->axis.x, -1.0F) && restoredPanel->enabled,
+        "Engine21kbLibrary component registry: Facing Panel must survive real save/load with its orientation policy");
+    const kb::scene::SpaceStrokeComponent* restoredStroke = target.Components().SpaceStrokes().TryGet(restored);
+    kb::tests::Require(restoredStroke != nullptr && restoredStroke->meshAssetId == 904U && restoredStroke->materialAssetId == 905U &&
+                            restoredStroke->mode == kb::scene::SpaceStrokeMode::Cable && kb::tests::NearlyEqual(restoredStroke->width, 0.25F) &&
+                            kb::tests::NearlyEqual(restoredStroke->cableSag, 1.5F) && restoredStroke->splineSegments == 12U && restoredStroke->enabled,
+        "Engine21kbLibrary component registry: Kreska przestrzenna must survive real save/load with its curve render policy");
+    const kb::scene::HistoryRibbonComponent* restoredRibbon = target.Components().HistoryRibbons().TryGet(restored);
+    kb::tests::Require(restoredRibbon != nullptr && restoredRibbon->meshAssetId == 906U && restoredRibbon->materialAssetId == 907U &&
+                            kb::tests::NearlyEqual(restoredRibbon->lifetimeSeconds, 2.0F) && kb::tests::NearlyEqual(restoredRibbon->width, 0.3F) &&
+                            kb::tests::NearlyEqual(restoredRibbon->sampleIntervalSeconds, 0.1F) && restoredRibbon->enabled,
+        "Engine21kbLibrary component registry: Wstęga historii must survive real save/load with its sampling policy");
 
     for (const kb::library::LibraryComponentDesc& desc : catalog) {
         kb::tests::Require(desc.serializable,
@@ -3217,7 +3265,7 @@ void RunComponentInspectorDescCatalogTest() {
     // LIB-183 adds 11 NavAgent fields and 9 NavObstacle fields to the prior
     // 97-field contract, bringing the library/editor scripting surface to
     // 117 described fields across 12 components.
-    kb::tests::Require(fieldsChecked == 204U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (204) across all components");
+    kb::tests::Require(fieldsChecked == 260U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (260) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();
@@ -3545,13 +3593,11 @@ void RunLibraryCommandBatchTest() {
     kb::tests::Require(flushInsideQueryThrew, "Engine21kbLibrary CommandBatch::Flush() must throw std::logic_error when called while a Query<T>::ForEach iteration is still open");
 
     // LIB-080 (audit gap closed 2026-07-18): tag assignments COALESCE per
-    // target within one batch (read-your-own-writes) instead of the old
-    // last-write-wins, and a BatchEntity spawned in the same batch can now
-    // be tagged.
+    // target within one batch (read-your-own-writes), while the single-select
+    // classification contract makes the latest AddTag win. A BatchEntity
+    // spawned in the same batch can also be tagged.
     {
-        // Two AddTag calls for the SAME live entity in one batch must BOTH
-        // survive — the second must build on the first's pending state, not
-        // independently re-read the live (still empty) tag set and overwrite.
+        // Two AddTag calls for the same entity keep only the latest value.
         const kb::scene::SceneObject coalesceObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "CommandBatchCoalesce" });
         const kb::library::EntityHandle coalesceHandle{ coalesceObject.Entity(), scene.Id() };
         kb::library::CommandBatch coalesceBatch{ scene };
@@ -3559,20 +3605,18 @@ void RunLibraryCommandBatchTest() {
         kb::tests::Require(coalesceBatch.AddTag(coalesceHandle, "Beta"), "Engine21kbLibrary CommandBatch::AddTag second tag must record");
         static_cast<void>(coalesceBatch.Flush());
         const kb::scene::TagsComponent* coalesced = scene.Components().Tags().TryGet(coalesceObject.Entity());
-        kb::tests::Require(coalesced != nullptr && kb::scene::TagsText(*coalesced) == "Alpha, Beta",
-            "Engine21kbLibrary CommandBatch must COALESCE two AddTag calls on one entity into BOTH tags (Alpha, Beta), not last-write-wins");
+        kb::tests::Require(coalesced != nullptr && kb::scene::TagsText(*coalesced) == "Beta",
+            "Engine21kbLibrary CommandBatch must keep one classification and let the latest AddTag win");
 
-        // AddTag then RemoveTag of a DIFFERENT tag on the same entity in one
-        // batch: the RemoveTag must see the batch's pending "Gamma", leaving
-        // only "Delta".
+        // Removing a different tag must not clear the latest pending value.
         kb::library::CommandBatch mixedBatch{ scene };
         kb::tests::Require(mixedBatch.AddTag(coalesceHandle, "Gamma"), "Engine21kbLibrary CommandBatch::AddTag Gamma must record");
         kb::tests::Require(mixedBatch.AddTag(coalesceHandle, "Delta"), "Engine21kbLibrary CommandBatch::AddTag Delta must record");
         kb::tests::Require(mixedBatch.RemoveTag(coalesceHandle, "Alpha"), "Engine21kbLibrary CommandBatch::RemoveTag Alpha must record");
         static_cast<void>(mixedBatch.Flush());
         const kb::scene::TagsComponent* mixed = scene.Components().Tags().TryGet(coalesceObject.Entity());
-        kb::tests::Require(mixed != nullptr && kb::scene::TagsText(*mixed) == "Beta, Gamma, Delta",
-            "Engine21kbLibrary CommandBatch mixed AddTag/RemoveTag in one batch must read-your-own-writes over the seeded live tags (Alpha,Beta -> +Gamma +Delta -Alpha = Beta, Gamma, Delta)");
+        kb::tests::Require(mixed != nullptr && kb::scene::TagsText(*mixed) == "Delta",
+            "Engine21kbLibrary CommandBatch mixed AddTag/RemoveTag did not preserve its latest single classification");
 
         // A BatchEntity spawned in the SAME batch can be tagged — the tag
         // command is queued against the deferred entity and resolved by the
@@ -3581,14 +3625,14 @@ void RunLibraryCommandBatchTest() {
         kb::library::CommandBatch spawnTagBatch{ scene };
         const kb::library::BatchEntity spawnedTagged = spawnTagBatch.Spawn("CommandBatchSpawnedTagged");
         kb::tests::Require(spawnTagBatch.AddTag(spawnedTagged, "FreshOne"), "Engine21kbLibrary CommandBatch::AddTag on a BatchEntity must record");
-        kb::tests::Require(spawnTagBatch.AddTag(spawnedTagged, "FreshTwo"), "Engine21kbLibrary CommandBatch::AddTag second tag on a BatchEntity must coalesce too");
+        kb::tests::Require(spawnTagBatch.AddTag(spawnedTagged, "FreshTwo"), "Engine21kbLibrary CommandBatch::AddTag second tag on a BatchEntity must replace the first");
         const std::optional<kb::ecs::CommandBufferPlaybackResult> spawnTagResult = spawnTagBatch.Flush();
         kb::tests::Require(spawnTagResult.has_value(), "Engine21kbLibrary CommandBatch Flush with a tagged spawn must succeed");
         const kb::ecs::Entity resolvedTagged = spawnTagResult->Resolve(spawnedTagged.Raw());
         kb::tests::Require(resolvedTagged.IsValid() && scene.Entities().IsAlive(resolvedTagged), "Engine21kbLibrary tagged BatchEntity must resolve to a live entity");
         const kb::scene::TagsComponent* spawnedTags = scene.Components().Tags().TryGet(resolvedTagged);
-        kb::tests::Require(spawnedTags != nullptr && kb::scene::TagsText(*spawnedTags) == "FreshOne, FreshTwo",
-            "Engine21kbLibrary CommandBatch::AddTag on a spawned-this-batch BatchEntity must apply BOTH coalesced tags to the resolved entity after Flush()");
+        kb::tests::Require(spawnedTags != nullptr && kb::scene::TagsText(*spawnedTags) == "FreshTwo",
+            "Engine21kbLibrary CommandBatch::AddTag on a spawned-this-batch entity must keep only its latest classification");
     }
 }
 

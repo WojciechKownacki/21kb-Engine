@@ -28,6 +28,9 @@
 #include "engine/scene/SceneGeometrySwarmComponents.hpp"
 #include "engine/scene/SceneSurfaceCastComponents.hpp"
 #include "engine/scene/SceneFacingPanelComponents.hpp"
+#include "engine/scene/SceneSpaceStrokeComponents.hpp"
+#include "engine/scene/SceneHistoryRibbonComponents.hpp"
+#include "engine/scene/SceneLensEchoComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
 #include "engine/scene/SceneUIDocuments.hpp"
@@ -65,6 +68,9 @@ public:
     [[nodiscard]] SceneGeometrySwarmComponents GeometrySwarms() const noexcept;
     [[nodiscard]] SceneSurfaceCastComponents SurfaceCasts() const noexcept;
     [[nodiscard]] SceneFacingPanelComponents FacingPanels() const noexcept;
+    [[nodiscard]] SceneSpaceStrokeComponents SpaceStrokes() const noexcept;
+    [[nodiscard]] SceneHistoryRibbonComponents HistoryRibbons() const noexcept;
+    [[nodiscard]] SceneLensEchoComponents LensEchoes() const noexcept;
     [[nodiscard]] SceneAudioSourceComponents AudioSources() const noexcept;
     [[nodiscard]] SceneAudioListenerComponents AudioListeners() const noexcept;
     [[nodiscard]] SceneAnimatorComponents Animators() const noexcept;
