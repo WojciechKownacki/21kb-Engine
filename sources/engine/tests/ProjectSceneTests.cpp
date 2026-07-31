@@ -12,6 +12,7 @@
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
+#include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -391,6 +392,27 @@ void RunSceneDetailSwitchReflectionSerializationTest() {
         "Detail Switch reflection did not roundtrip authored state");
 }
 
+void RunSceneVisibilityBlockerReflectionSerializationTest() {
+    kb::scene::Scene source;
+    const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Visibility Blocker" });
+    source.Components().VisibilityBlockers().Set(sourceEntity, kb::scene::SceneVisibilityBlockerComponent{
+        .localCenter = kb::scene::Vec3{ 0.25F, -0.5F, 0.75F }, .size = kb::scene::Vec3{ 2.0F, 3.0F, 4.0F }, .enabled = false,
+    });
+    kb::ecs::World& sourceWorld = source.Runtime().EcsWorld();
+    const kb::ecs::ComponentReflection* reflection = sourceWorld.Reflection(kb::scene::SceneVisibilityBlockerComponent::StableId);
+    Require(reflection != nullptr && reflection->FindField("localCenter") != nullptr && reflection->FindField("size") != nullptr,
+        "Visibility Blocker reflection was not registered under its stable id");
+    kb::ecs::SerializedComponent serialized;
+    Require(sourceWorld.SerializeComponent(sourceEntity, sourceWorld.Component<kb::scene::SceneVisibilityBlockerComponent>(), serialized), "Visibility Blocker reflection serialization failed");
+    kb::scene::Scene target;
+    const kb::scene::SceneEntity targetEntity = target.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Visibility Blocker Target" });
+    Require(target.Runtime().EcsWorld().ApplySerializedComponent(targetEntity, serialized), "Visibility Blocker reflection apply failed");
+    const kb::scene::SceneVisibilityBlockerComponent* restored = target.Components().VisibilityBlockers().TryGet(targetEntity);
+    Require(restored != nullptr && NearlyEqual(restored->localCenter.x, 0.25F) && NearlyEqual(restored->localCenter.y, -0.5F) &&
+            NearlyEqual(restored->size.z, 4.0F) && !restored->enabled,
+        "Visibility Blocker reflection did not roundtrip authored state");
+}
+
 void RunSceneAudioSourceComponentReflectionSerializationTest() {
     kb::scene::Scene source;
     const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "AudioSource" });
@@ -622,6 +644,7 @@ void RunProjectSceneTests() {
     RunSceneRadianceEmitterReflectionSerializationTest();
     RunSceneAmbientRadianceReflectionSerializationTest();
     RunSceneDetailSwitchReflectionSerializationTest();
+    RunSceneVisibilityBlockerReflectionSerializationTest();
     RunSceneAudioListenerComponentReflectionSerializationTest();
     RunSceneAudioSourceComponentReflectionSerializationTest();
     RunSceneAudioListenerPrefabRoundTripTest();

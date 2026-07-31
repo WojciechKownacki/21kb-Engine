@@ -109,6 +109,7 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
         .resolvedMeshResource = desc.resolvedMeshResource,
         .resolvedMaterialResource = desc.resolvedMaterialResource,
         .camera = desc.camera,
+        .visibilityBlockers = desc.visibilityBlockers,
         .diagnostics = desc.diagnostics,
         .maxDrawCommands = desc.maxDrawCommands,
         .maxVisibleInstances = desc.maxVisibleInstances,

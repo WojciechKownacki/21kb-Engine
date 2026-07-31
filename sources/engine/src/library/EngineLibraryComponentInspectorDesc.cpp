@@ -331,6 +331,20 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
                 LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether this entity participates in coordinated LOD selection." },
             },
         },
+        LibraryComponentInspectorDesc{
+            .componentName = "Visibility Blocker",
+            .displayName = "Visibility Blocker",
+            .category = "Rendering",
+            .fields = {
+                LibraryComponentInspectorFieldDesc{ "localCenter.x", "Center X", "Local X offset of the non-renderable occlusion volume." },
+                LibraryComponentInspectorFieldDesc{ "localCenter.y", "Center Y", "Local Y offset of the non-renderable occlusion volume." },
+                LibraryComponentInspectorFieldDesc{ "localCenter.z", "Center Z", "Local Z offset of the non-renderable occlusion volume." },
+                LibraryComponentInspectorFieldDesc{ "size.x", "Size X", "Positive box width used to derive conservative culling geometry." },
+                LibraryComponentInspectorFieldDesc{ "size.y", "Size Y", "Positive box height used to derive conservative culling geometry." },
+                LibraryComponentInspectorFieldDesc{ "size.z", "Size Z", "Positive box depth used to derive conservative culling geometry." },
+                LibraryComponentInspectorFieldDesc{ "enabled", "Enabled", "Whether this volume participates in visibility rejection." },
+            },
+        },
     };
     return kCatalog;
 }

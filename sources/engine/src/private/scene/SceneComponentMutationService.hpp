@@ -22,6 +22,7 @@
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
+#include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
 
@@ -115,6 +116,10 @@ public:
     static void SetDetailSwitch(Scene& scene, SceneEntity entity, const SceneDetailSwitchComponent& component);
     static void RemoveDetailSwitch(Scene& scene, SceneEntity entity) noexcept;
     static void MarkDetailSwitchModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static SceneVisibilityBlockerComponent* TryGetVisibilityBlocker(Scene& scene, SceneEntity entity) noexcept;
+    static void SetVisibilityBlocker(Scene& scene, SceneEntity entity, const SceneVisibilityBlockerComponent& component);
+    static void RemoveVisibilityBlocker(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkVisibilityBlockerModified(Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static AudioSourceComponent* TryGetAudioSource(Scene& scene, SceneEntity entity) noexcept;
     static void SetAudioSource(Scene& scene, SceneEntity entity, const AudioSourceComponent& audioSource);

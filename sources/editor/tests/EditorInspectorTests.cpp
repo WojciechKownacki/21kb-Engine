@@ -186,6 +186,7 @@ void RunAudioComponentCatalogTest() {
     kb::editor::tests::Require(hasTile("AudioListener"), "Add Component catalog should expose Audio Listener");
     kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::Find("AudioSource") != nullptr, "Audio Source component id should resolve");
     kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::Find("AudioListener") != nullptr, "Audio Listener component id should resolve");
+    kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::Find("Visibility Blocker") != nullptr, "Visibility Blocker component id should resolve");
 }
 
 void RunObjectClassificationCatalogTest() {

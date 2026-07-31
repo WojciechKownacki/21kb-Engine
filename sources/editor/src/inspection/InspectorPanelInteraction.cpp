@@ -12,6 +12,7 @@
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
+#include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -1167,6 +1168,10 @@ template <typename Integer>
     return property >= InspectorPropertyId::DetailSwitchGroupId && property <= InspectorPropertyId::DetailSwitchEnabled;
 }
 
+[[nodiscard]] bool IsVisibilityBlockerProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::VisibilityBlockerCenterX && property <= InspectorPropertyId::VisibilityBlockerEnabled;
+}
+
 template <typename Mutator>
 [[nodiscard]] bool EditNavAgent(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
     if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
@@ -1261,6 +1266,16 @@ template <typename Mutator>
     kb::scene::SceneDetailSwitchComponent* detailSwitch = sceneContext.Scene().Components().DetailSwitches().TryGet(entity);
     if (detailSwitch == nullptr || !mutator(*detailSwitch)) { sceneContext.CancelSceneEditTransaction(); return false; }
     sceneContext.Scene().Components().DetailSwitches().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditVisibilityBlocker(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::SceneVisibilityBlockerComponent* blocker = sceneContext.Scene().Components().VisibilityBlockers().TryGet(entity);
+    if (blocker == nullptr || !mutator(*blocker)) { sceneContext.CancelSceneEditTransaction(); return false; }
+    sceneContext.Scene().Components().VisibilityBlockers().MarkModified(entity);
     static_cast<void>(sceneContext.CommitSceneEditTransaction());
     return true;
 }
@@ -1516,6 +1531,26 @@ template <typename Mutator>
     return true;
 }
 
+[[nodiscard]] std::string VisibilityBlockerFieldText(const kb::scene::SceneVisibilityBlockerComponent& value, InspectorPropertyId property) {
+    switch (property) {
+    case InspectorPropertyId::VisibilityBlockerCenterX: return FormatCompactFloat(value.localCenter.x);
+    case InspectorPropertyId::VisibilityBlockerCenterY: return FormatCompactFloat(value.localCenter.y);
+    case InspectorPropertyId::VisibilityBlockerCenterZ: return FormatCompactFloat(value.localCenter.z);
+    case InspectorPropertyId::VisibilityBlockerSizeX: return FormatCompactFloat(value.size.x);
+    case InspectorPropertyId::VisibilityBlockerSizeY: return FormatCompactFloat(value.size.y);
+    case InspectorPropertyId::VisibilityBlockerSizeZ: return FormatCompactFloat(value.size.z);
+    default: return {};
+    }
+}
+
+[[nodiscard]] bool HandleVisibilityBlockerClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::SceneVisibilityBlockerComponent* blocker = sceneContext.Scene().Components().VisibilityBlockers().TryGet(entity);
+    if (blocker == nullptr) return false;
+    if (hit.property == InspectorPropertyId::VisibilityBlockerEnabled) return EditVisibilityBlocker(sceneContext, entity, "Toggle Visibility Blocker", [](kb::scene::SceneVisibilityBlockerComponent& value) { value.enabled = !value.enabled; return true; });
+    if (IsVisibilityBlockerProperty(hit.property)) sceneContext.Inspector().BeginTextEdit(hit.property, VisibilityBlockerFieldText(*blocker, hit.property));
+    return true;
+}
+
 [[nodiscard]] bool ApplyNavAgentText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
     float value = 0.0F;
     if (property == InspectorPropertyId::NavAgentAreaMask) {
@@ -1719,6 +1754,26 @@ template <typename Mutator>
             else return false;
         }
         if (!kb::scene::IsSceneDetailSwitchComponentValid(candidate)) return false;
+        value = candidate;
+        return true;
+    });
+}
+
+[[nodiscard]] bool ApplyVisibilityBlockerText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    float parsed = 0.0F;
+    if (!ParseFloat(text, parsed) || !std::isfinite(parsed)) return false;
+    return EditVisibilityBlocker(sceneContext, entity, "Edit Visibility Blocker", [property, parsed](kb::scene::SceneVisibilityBlockerComponent& value) {
+        kb::scene::SceneVisibilityBlockerComponent candidate = value;
+        switch (property) {
+        case InspectorPropertyId::VisibilityBlockerCenterX: candidate.localCenter.x = parsed; break;
+        case InspectorPropertyId::VisibilityBlockerCenterY: candidate.localCenter.y = parsed; break;
+        case InspectorPropertyId::VisibilityBlockerCenterZ: candidate.localCenter.z = parsed; break;
+        case InspectorPropertyId::VisibilityBlockerSizeX: candidate.size.x = parsed; break;
+        case InspectorPropertyId::VisibilityBlockerSizeY: candidate.size.y = parsed; break;
+        case InspectorPropertyId::VisibilityBlockerSizeZ: candidate.size.z = parsed; break;
+        default: return false;
+        }
+        if (!kb::scene::IsSceneVisibilityBlockerComponentValid(candidate)) return false;
         value = candidate;
         return true;
     });
@@ -2066,6 +2121,11 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                     sceneContext.Scene().Components().DetailSwitches().Remove(entity);
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
+            } else if (hit.section == InspectorSectionId::VisibilityBlocker && sceneContext.Scene().Components().VisibilityBlockers().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Visibility Blocker")) {
+                    sceneContext.Scene().Components().VisibilityBlockers().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
             } else if (const std::optional<PhysicsComponentKind> kind = PhysicsKindForSection(hit.section); kind.has_value()) {
                 static_cast<void>(sceneContext.RemovePhysicsComponent(entity, *kind));
             }
@@ -2151,6 +2211,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::DetailSwitch) {
         return HandleDetailSwitchClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::VisibilityBlocker) {
+        return HandleVisibilityBlockerClick(sceneContext, entity, hit);
     }
     if (hit.section == InspectorSectionId::Tags &&
         hit.kind == InspectorHitKind::TextField &&
@@ -2452,6 +2515,12 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         if (sceneContext.Scene().Entities().IsAlive(entity) &&
             IsDetailSwitchProperty(inspector.EditedProperty())) {
             static_cast<void>(ApplyDetailSwitchText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            IsVisibilityBlockerProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyVisibilityBlockerText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
             inspector.EndTextEdit();
             return true;
         }

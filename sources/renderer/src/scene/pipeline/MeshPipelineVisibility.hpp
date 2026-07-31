@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <utility>
+#include <span>
 
 namespace kb::render {
 
@@ -30,6 +31,10 @@ public:
         const RenderBoundsSphere& localBounds,
         const std::array<float, 16>& model) noexcept;
     [[nodiscard]] static float ViewDepth(const SceneRenderCamera* camera, const RenderBoundsSphere& bounds) noexcept;
+    [[nodiscard]] static bool IsOccludedByVisibilityBlockers(
+        const SceneRenderCamera* camera,
+        const RenderBoundsSphere& bounds,
+        std::span<const SceneRenderVisibilityBlocker> blockers) noexcept;
     [[nodiscard]] static std::uint16_t DepthBucket(float depth) noexcept;
     [[nodiscard]] static std::uint8_t SelectLodLevel(
         const RenderMeshResource* mesh,

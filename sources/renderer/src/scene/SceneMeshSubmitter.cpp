@@ -12,6 +12,15 @@
 namespace kb::render {
 namespace {
 
+void BuildVisibilityBlockerInputs(const RenderScene& scene, std::vector<SceneRenderVisibilityBlocker>& out) {
+    out.clear();
+    out.reserve(scene.VisibilityBlockerProxies().size());
+    for (const auto& [entityId, proxy] : scene.VisibilityBlockerProxies()) {
+        const VisibilityBlockerRenderProxyDesc& source = proxy.desc;
+        out.push_back(SceneRenderVisibilityBlocker{ .entityId = entityId, .model = source.model, .localCenter = source.localCenter, .size = source.size });
+    }
+}
+
 [[nodiscard]] std::uint32_t ShadowFilterSampleCount(SceneRenderShadowFilter filter) noexcept {
     switch (filter) {
     case SceneRenderShadowFilter::Hard:
@@ -65,12 +74,15 @@ SceneRenderSubmitStats SceneMeshSubmitter::ValidateResourcesInto(
     std::span<const std::uint64_t> selectedEntityIds,
     SceneGpuDrivenFeatureSupport gpuDrivenSupport) noexcept {
     const std::vector<SceneRenderDrawGroup>& drawGroups = renderScene.DrawGroups();
+    std::vector<SceneRenderVisibilityBlocker> visibilityBlockers;
+    BuildVisibilityBlockerInputs(renderScene, visibilityBlockers);
     MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
         .pass = pass,
         .drawGroups = &drawGroups,
         .resources = &resources,
         .resourceMap = &resourceMap,
         .camera = camera,
+        .visibilityBlockers = visibilityBlockers,
         .diagnostics = diagnostics,
         .maxDrawCommands = drawBudget.maxDrawCommands,
         .maxVisibleInstances = drawBudget.maxVisibleInstances,
@@ -137,6 +149,8 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     }
 
     const std::vector<SceneRenderDrawGroup>& drawGroups = renderScene.DrawGroups();
+    std::vector<SceneRenderVisibilityBlocker> visibilityBlockers;
+    BuildVisibilityBlockerInputs(renderScene, visibilityBlockers);
     SceneRenderSubmitStats lightingStats{};
     const PackedSceneLighting lighting = SceneLightingPacker::Build(renderScene, lightingStats, lightingConfig, camera);
     const std::array<float, 4> cameraPosition = SceneLightingPacker::CameraPosition(camera);
@@ -151,6 +165,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .resources = &resources,
         .resourceMap = &resourceMap,
         .camera = camera,
+        .visibilityBlockers = visibilityBlockers,
         .diagnostics = diagnostics,
         .maxDrawCommands = drawBudget.maxDrawCommands,
         .maxVisibleInstances = drawBudget.maxVisibleInstances,

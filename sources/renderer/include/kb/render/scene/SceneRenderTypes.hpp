@@ -21,6 +21,15 @@ inline constexpr std::uint32_t kMaxSceneForwardLights = 4U;
 inline constexpr std::uint32_t kMaxSceneForwardPlusLights = 32U;
 inline constexpr std::uint32_t kMaxSceneReflectionProbes = 8U;
 
+// Frame-local renderer input derived from a Visibility Blocker ECS component.
+// It is intentionally not a mesh and can never reach a draw-command path.
+struct SceneRenderVisibilityBlocker {
+    std::uint64_t entityId = 0U;
+    std::array<float, 16> model{};
+    std::array<float, 3> localCenter{};
+    std::array<float, 3> size{ 1.0F, 1.0F, 1.0F };
+};
+
 enum class RenderLightKind : std::uint8_t {
     Directional,
     Point,

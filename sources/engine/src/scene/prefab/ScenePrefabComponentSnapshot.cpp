@@ -78,6 +78,7 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const SceneDetailSwitchComponent* detail = sceneComponents.DetailSwitches().TryGet(entity)) {
         components.detailSwitch = *detail;
     }
+    if (const SceneVisibilityBlockerComponent* blocker = sceneComponents.VisibilityBlockers().TryGet(entity)) components.visibilityBlocker = *blocker;
 
     if (const BehaviourComponent* behaviour = sceneComponents.Behaviours().TryGet(entity)) {
         components.behaviour = *behaviour;

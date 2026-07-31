@@ -47,6 +47,26 @@ namespace {
     return std::max(scaleX, std::max(scaleY, scaleZ));
 }
 
+[[nodiscard]] float MinAxisScale(const std::array<float, 16>& model) noexcept {
+    const float scaleX = Length3(model[0], model[1], model[2]);
+    const float scaleY = Length3(model[4], model[5], model[6]);
+    const float scaleZ = Length3(model[8], model[9], model[10]);
+    return std::min(scaleX, std::min(scaleY, scaleZ));
+}
+
+[[nodiscard]] std::array<float, 3> TransformPoint(const std::array<float, 16>& model, const std::array<float, 3>& point) noexcept {
+    return { model[0] * point[0] + model[4] * point[1] + model[8] * point[2] + model[12],
+             model[1] * point[0] + model[5] * point[1] + model[9] * point[2] + model[13],
+             model[2] * point[0] + model[6] * point[1] + model[10] * point[2] + model[14] };
+}
+
+[[nodiscard]] std::array<float, 3> ViewPoint(const SceneRenderCamera& camera, const std::array<float, 3>& point) noexcept {
+    const std::array<float, 16>& view = camera.view;
+    return { view[0] * point[0] + view[4] * point[1] + view[8] * point[2] + view[12],
+             view[1] * point[0] + view[5] * point[1] + view[9] * point[2] + view[13],
+             view[2] * point[0] + view[6] * point[1] + view[10] * point[2] + view[14] };
+}
+
 [[nodiscard]] float ScreenCoverageEstimate(const SceneRenderCamera* camera, const RenderBoundsSphere& worldBounds) noexcept {
     if (camera == nullptr || !worldBounds.IsValid()) {
         return 1.0F;
@@ -119,6 +139,32 @@ float MeshPipelineVisibility::ViewDepth(const SceneRenderCamera* camera, const R
     }
     const std::array<float, 16>& view = camera->view;
     return view[2] * bounds.center[0] + view[6] * bounds.center[1] + view[10] * bounds.center[2] + view[14];
+}
+
+bool MeshPipelineVisibility::IsOccludedByVisibilityBlockers(
+    const SceneRenderCamera* camera,
+    const RenderBoundsSphere& bounds,
+    std::span<const SceneRenderVisibilityBlocker> blockers) noexcept {
+    if (camera == nullptr || !bounds.IsValid()) return false;
+    const std::array<float, 3> candidateView = ViewPoint(*camera, bounds.center);
+    const float candidateDepth = std::abs(candidateView[2]);
+    if (candidateDepth <= bounds.radius || candidateDepth <= 0.0001F) return false;
+    const float candidateAngularRadius = bounds.radius / candidateDepth;
+    for (const SceneRenderVisibilityBlocker& blocker : blockers) {
+        const float smallestSize = std::min(blocker.size[0], std::min(blocker.size[1], blocker.size[2]));
+        const float radius = 0.5F * smallestSize * MinAxisScale(blocker.model);
+        if (!(radius > 0.0F) || !std::isfinite(radius)) continue;
+        const std::array<float, 3> blockerView = ViewPoint(*camera, TransformPoint(blocker.model, blocker.localCenter));
+        const float blockerDepth = std::abs(blockerView[2]);
+        // The inscribed sphere is entirely within the authored box. Rejection
+        // therefore remains conservative even under a simplified proxy.
+        if (blockerDepth <= radius || candidateDepth <= blockerDepth + bounds.radius) continue;
+        const float blockerAngularRadius = radius / (blockerDepth + radius);
+        const float dx = candidateView[0] / candidateDepth - blockerView[0] / blockerDepth;
+        const float dy = candidateView[1] / candidateDepth - blockerView[1] / blockerDepth;
+        if (std::sqrt(dx * dx + dy * dy) + candidateAngularRadius <= blockerAngularRadius) return true;
+    }
+    return false;
 }
 
 std::uint16_t MeshPipelineVisibility::DepthBucket(float depth) noexcept {

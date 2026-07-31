@@ -54,6 +54,7 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.detailSwitch.has_value()) {
         sceneComponents.DetailSwitches().Set(entity, *components.detailSwitch);
     }
+    if (components.visibilityBlocker.has_value()) sceneComponents.VisibilityBlockers().Set(entity, *components.visibilityBlocker);
     if (components.behaviour.has_value()) {
         sceneComponents.Behaviours().Set(entity, *components.behaviour);
     }
