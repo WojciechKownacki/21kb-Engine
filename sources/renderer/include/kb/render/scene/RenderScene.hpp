@@ -64,6 +64,12 @@ struct MeshRenderProxyDesc {
     bool receivesShadow = true;
     // LIB-136: mirrors kb::scene::MeshRendererComponent::layer.
     std::uint32_t layer = 1U;
+    std::uint64_t detailSwitchGroupId = 0U;
+    std::uint32_t detailSwitchMinimumLod = 0U;
+    std::uint32_t detailSwitchMaximumLod = 255U;
+    float detailSwitchPromoteCoverage = 0.20F;
+    float detailSwitchDemoteCoverage = 0.15F;
+    bool detailSwitchEnabled = false;
 };
 
 struct CameraRenderProxyDesc {

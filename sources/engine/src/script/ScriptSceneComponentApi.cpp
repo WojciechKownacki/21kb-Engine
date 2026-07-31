@@ -15,6 +15,7 @@
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
+#include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
 #include "engine/scene/SceneCharacterControllerComponents.hpp"
@@ -32,6 +33,7 @@
 #include "engine/scene/SceneStreamFocusComponents.hpp"
 #include "engine/scene/SceneWorldBackdropComponents.hpp"
 #include "engine/scene/SceneAmbientRadianceComponents.hpp"
+#include "engine/scene/SceneDetailSwitchComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -228,7 +230,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 19> kComponentNames{
+constexpr std::array<std::string_view, 20> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
@@ -248,6 +250,7 @@ constexpr std::array<std::string_view, 19> kComponentNames{
     "StreamFocus",
     "WorldBackdrop",
     "Ambient Radiance",
+    "Detail Switch",
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 10> kRegionShapePropertyDescs{
@@ -309,6 +312,15 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 16> kAmbientRadiancePrope
     ScriptSceneComponentPropertyDesc{ "horizonColor.x", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "horizonColor.y", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "horizonColor.z", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "zenithColor.x", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "zenithColor.y", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "zenithColor.z", ScriptValueType::Float },
     ScriptSceneComponentPropertyDesc{ "environmentAssetId", ScriptValueType::Hash }, ScriptSceneComponentPropertyDesc{ "intensity", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "diffuseIntensity", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "specularIntensity", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "priority", ScriptValueType::Int }, ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 6> kDetailSwitchPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "groupId", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "minimumLod", ScriptValueType::UInt32 },
+    ScriptSceneComponentPropertyDesc{ "maximumLod", ScriptValueType::UInt32 },
+    ScriptSceneComponentPropertyDesc{ "promoteCoverage", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "demoteCoverage", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
 };
 
 constexpr std::array<ScriptSceneComponentPropertyDesc, 1> kTagsPropertyDescs{
@@ -772,6 +784,20 @@ constexpr std::array<FieldBinding, 16> kAmbientRadianceFields{
     KB_BOOL(kb::scene::AmbientRadianceComponent, enabled),
 };
 
+constexpr std::array<FieldBinding, 6> kDetailSwitchFields{
+    FieldBinding{ "groupId", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SceneDetailSwitchComponent*>(component)->groupId, ScriptValueType::Hash }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Hash && (value.Type() != ScriptValueType::Int || value.AsInt() < 0)) return false; static_cast<kb::scene::SceneDetailSwitchComponent*>(component)->groupId = value.Type() == ScriptValueType::Hash ? value.AsUInt64() : static_cast<std::uint64_t>(value.AsInt()); return true; } },
+    FieldBinding{ "minimumLod", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SceneDetailSwitchComponent*>(component)->minimumLod }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::UInt32 && (value.Type() != ScriptValueType::Int || value.AsInt() < 0)) return false; static_cast<kb::scene::SceneDetailSwitchComponent*>(component)->minimumLod = value.Type() == ScriptValueType::UInt32 ? value.AsUInt32() : static_cast<std::uint32_t>(value.AsInt()); return true; } },
+    FieldBinding{ "maximumLod", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SceneDetailSwitchComponent*>(component)->maximumLod }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::UInt32 && (value.Type() != ScriptValueType::Int || value.AsInt() < 0)) return false; static_cast<kb::scene::SceneDetailSwitchComponent*>(component)->maximumLod = value.Type() == ScriptValueType::UInt32 ? value.AsUInt32() : static_cast<std::uint32_t>(value.AsInt()); return true; } },
+    FieldBinding{ "promoteCoverage", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SceneDetailSwitchComponent*>(component)->promoteCoverage }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat()) || value.AsFloat() < 0.0F || value.AsFloat() > 1.0F) return false; static_cast<kb::scene::SceneDetailSwitchComponent*>(component)->promoteCoverage = value.AsFloat(); return true; } },
+    FieldBinding{ "demoteCoverage", [](const void* component) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::SceneDetailSwitchComponent*>(component)->demoteCoverage }; },
+        [](void* component, const ScriptValue& value) noexcept -> bool { if (value.Type() != ScriptValueType::Float || !std::isfinite(value.AsFloat()) || value.AsFloat() < 0.0F || value.AsFloat() > 1.0F) return false; static_cast<kb::scene::SceneDetailSwitchComponent*>(component)->demoteCoverage = value.AsFloat(); return true; } },
+    KB_BOOL(kb::scene::SceneDetailSwitchComponent, enabled),
+};
+
 #undef KB_BOOL
 #undef KB_INT
 #undef KB_UINT32
@@ -851,6 +877,7 @@ void MarkContentInstanceModified(kb::scene::Scene& scene, kb::scene::SceneEntity
 void MarkStreamFocusModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().StreamFocuses().MarkModified(entity); }
 void MarkWorldBackdropModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().WorldBackdrops().MarkModified(entity); }
 void MarkAmbientRadianceModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().AmbientRadiances().MarkModified(entity); }
+void MarkDetailSwitchModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().DetailSwitches().MarkModified(entity); }
 
 [[nodiscard]] ComponentAccess AccessComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
     if (!entity.IsValid() || !scene.Entities().IsAlive(entity)) {
@@ -932,6 +959,10 @@ void MarkAmbientRadianceModified(kb::scene::Scene& scene, kb::scene::SceneEntity
         kb::scene::AmbientRadianceComponent* component = scene.Components().AmbientRadiances().TryGet(entity);
         return ComponentAccess{ component, component, kAmbientRadianceFields, &MarkAmbientRadianceModified };
     }
+    if (componentName == "Detail Switch") {
+        kb::scene::SceneDetailSwitchComponent* component = scene.Components().DetailSwitches().TryGet(entity);
+        return ComponentAccess{ component, component, kDetailSwitchFields, &MarkDetailSwitchModified };
+    }
     return {};
 }
 
@@ -956,6 +987,7 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "StreamFocus") return kStreamFocusPropertyDescs;
     if (componentName == "WorldBackdrop") return kWorldBackdropPropertyDescs;
     if (componentName == "Ambient Radiance") return kAmbientRadiancePropertyDescs;
+    if (componentName == "Detail Switch") return kDetailSwitchPropertyDescs;
     if (componentName == "Camera") {
         return kCameraPropertyDescs;
     }

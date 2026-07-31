@@ -31,6 +31,7 @@ enum class ScenePrefabBakedComponentMask : std::uint32_t {
     StreamFocus = 1U << 19U,
     WorldBackdrop = 1U << 20U,
     AmbientRadiance = 1U << 21U,
+    DetailSwitch = 1U << 22U,
 };
 
 [[nodiscard]] constexpr std::uint32_t ScenePrefabBakedMask(ScenePrefabBakedComponentMask mask) noexcept {
@@ -61,6 +62,7 @@ struct ScenePrefabBakedArchetype {
     std::vector<StreamFocusComponent> streamFocuses;
     std::vector<WorldBackdropComponent> worldBackdrops;
     std::vector<AmbientRadianceComponent> ambientRadiances;
+    std::vector<SceneDetailSwitchComponent> detailSwitches;
     std::vector<BehaviourComponent> behaviours;
     std::vector<AudioSourceComponent> audioSources;
     std::vector<AudioListenerComponent> audioListeners;

@@ -59,6 +59,7 @@ struct ScenePrefabNodeStateWriterContext {
     SceneStreamFocusComponents streamFocuses;
     SceneWorldBackdropComponents worldBackdrops;
     SceneAmbientRadianceComponents ambientRadiances;
+    SceneDetailSwitchComponents detailSwitches;
     SceneBehaviourComponents behaviours;
     SceneAudioSourceComponents audioSources;
     SceneAudioListenerComponents audioListeners;

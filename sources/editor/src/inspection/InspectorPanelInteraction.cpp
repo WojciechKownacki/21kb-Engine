@@ -11,6 +11,7 @@
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
+#include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -1162,6 +1163,10 @@ template <typename Integer>
     return property >= InspectorPropertyId::AmbientRadianceMode && property <= InspectorPropertyId::AmbientRadianceEnabled;
 }
 
+[[nodiscard]] bool IsDetailSwitchProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::DetailSwitchGroupId && property <= InspectorPropertyId::DetailSwitchEnabled;
+}
+
 template <typename Mutator>
 [[nodiscard]] bool EditNavAgent(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
     if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
@@ -1246,6 +1251,16 @@ template <typename Mutator>
     kb::scene::AmbientRadianceComponent* ambient = sceneContext.Scene().Components().AmbientRadiances().TryGet(entity);
     if (ambient == nullptr || !mutator(*ambient)) { sceneContext.CancelSceneEditTransaction(); return false; }
     sceneContext.Scene().Components().AmbientRadiances().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditDetailSwitch(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::SceneDetailSwitchComponent* detailSwitch = sceneContext.Scene().Components().DetailSwitches().TryGet(entity);
+    if (detailSwitch == nullptr || !mutator(*detailSwitch)) { sceneContext.CancelSceneEditTransaction(); return false; }
+    sceneContext.Scene().Components().DetailSwitches().MarkModified(entity);
     static_cast<void>(sceneContext.CommitSceneEditTransaction());
     return true;
 }
@@ -1480,6 +1495,27 @@ template <typename Mutator>
     return true;
 }
 
+[[nodiscard]] std::string DetailSwitchFieldText(const kb::scene::SceneDetailSwitchComponent& value, InspectorPropertyId property) {
+    switch (property) {
+    case InspectorPropertyId::DetailSwitchGroupId: return std::to_string(value.groupId);
+    case InspectorPropertyId::DetailSwitchMinimumLod: return std::to_string(value.minimumLod);
+    case InspectorPropertyId::DetailSwitchMaximumLod: return std::to_string(value.maximumLod);
+    case InspectorPropertyId::DetailSwitchPromoteCoverage: return FormatCompactFloat(value.promoteCoverage);
+    case InspectorPropertyId::DetailSwitchDemoteCoverage: return FormatCompactFloat(value.demoteCoverage);
+    default: return {};
+    }
+}
+
+[[nodiscard]] bool HandleDetailSwitchClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::SceneDetailSwitchComponent* detailSwitch = sceneContext.Scene().Components().DetailSwitches().TryGet(entity);
+    if (detailSwitch == nullptr) return false;
+    if (hit.property == InspectorPropertyId::DetailSwitchEnabled) {
+        return EditDetailSwitch(sceneContext, entity, "Toggle Detail Switch", [](kb::scene::SceneDetailSwitchComponent& value) { value.enabled = !value.enabled; return true; });
+    }
+    if (IsDetailSwitchProperty(hit.property)) sceneContext.Inspector().BeginTextEdit(hit.property, DetailSwitchFieldText(*detailSwitch, hit.property));
+    return true;
+}
+
 [[nodiscard]] bool ApplyNavAgentText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
     float value = 0.0F;
     if (property == InspectorPropertyId::NavAgentAreaMask) {
@@ -1661,6 +1697,30 @@ template <typename Mutator>
         }
         if (!kb::scene::IsAmbientRadianceComponentValid(candidate)) return false;
         value = candidate; return true;
+    });
+}
+
+[[nodiscard]] bool ApplyDetailSwitchText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    return EditDetailSwitch(sceneContext, entity, "Edit Detail Switch", [property, text](kb::scene::SceneDetailSwitchComponent& value) {
+        kb::scene::SceneDetailSwitchComponent candidate = value;
+        if (property == InspectorPropertyId::DetailSwitchGroupId) {
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), candidate.groupId);
+            if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) return false;
+        } else if (property == InspectorPropertyId::DetailSwitchMinimumLod || property == InspectorPropertyId::DetailSwitchMaximumLod) {
+            std::uint32_t lod = 0U;
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), lod);
+            if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) return false;
+            if (property == InspectorPropertyId::DetailSwitchMinimumLod) candidate.minimumLod = lod; else candidate.maximumLod = lod;
+        } else {
+            float coverage = 0.0F;
+            if (!ParseFloat(text, coverage) || !std::isfinite(coverage)) return false;
+            if (property == InspectorPropertyId::DetailSwitchPromoteCoverage) candidate.promoteCoverage = coverage;
+            else if (property == InspectorPropertyId::DetailSwitchDemoteCoverage) candidate.demoteCoverage = coverage;
+            else return false;
+        }
+        if (!kb::scene::IsSceneDetailSwitchComponentValid(candidate)) return false;
+        value = candidate;
+        return true;
     });
 }
 
@@ -2001,6 +2061,11 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                     sceneContext.Scene().Components().AmbientRadiances().Remove(entity);
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
+            } else if (hit.section == InspectorSectionId::DetailSwitch && sceneContext.Scene().Components().DetailSwitches().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Detail Switch")) {
+                    sceneContext.Scene().Components().DetailSwitches().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
             } else if (const std::optional<PhysicsComponentKind> kind = PhysicsKindForSection(hit.section); kind.has_value()) {
                 static_cast<void>(sceneContext.RemovePhysicsComponent(entity, *kind));
             }
@@ -2083,6 +2148,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::AmbientRadiance) {
         return HandleAmbientRadianceClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::DetailSwitch) {
+        return HandleDetailSwitchClick(sceneContext, entity, hit);
     }
     if (hit.section == InspectorSectionId::Tags &&
         hit.kind == InspectorHitKind::TextField &&
@@ -2378,6 +2446,12 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         if (sceneContext.Scene().Entities().IsAlive(entity) &&
             IsAmbientRadianceProperty(inspector.EditedProperty())) {
             static_cast<void>(ApplyAmbientRadianceText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            IsDetailSwitchProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyDetailSwitchText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
             inspector.EndTextEdit();
             return true;
         }

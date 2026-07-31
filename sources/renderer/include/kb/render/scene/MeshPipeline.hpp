@@ -87,6 +87,10 @@ struct MeshPipelineBuildResult {
     std::vector<SceneGpuDrivenInputRecord> gpuDrivenInputRecords;
     std::vector<SceneGpuDrivenInstanceValidationRecord> gpuDrivenCpuValidationRecords;
     std::unordered_map<MeshCommandLookupKey, std::size_t, MeshCommandLookupKeyHash> commandLookupScratch;
+    // Renderer-owned frame cache. It holds only the resolved level, never authored
+    // component data; caller reuse preserves hysteresis across submissions.
+    std::unordered_map<std::uint64_t, std::uint8_t> detailSwitchLevels;
+    std::unordered_map<std::uint64_t, std::uint8_t> detailSwitchPreviousLevels;
     SceneRenderSubmitStats stats{};
 };
 

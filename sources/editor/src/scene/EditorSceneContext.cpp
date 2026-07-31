@@ -15,6 +15,7 @@
 #include "engine/scene/StreamFocusComponent.hpp"
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
+#include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
@@ -8149,6 +8150,16 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
         }
         return ExecuteSceneCommand("Add Ambient Radiance Component", [this, entity]() {
             scene_->Components().AmbientRadiances().Set(entity, kb::scene::AmbientRadianceComponent{});
+            return true;
+        });
+    }
+    if (componentId == "Detail Switch") {
+        if (scene_->Components().DetailSwitches().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Detail Switch component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Detail Switch Component", [this, entity]() {
+            scene_->Components().DetailSwitches().Set(entity, kb::scene::SceneDetailSwitchComponent{});
             return true;
         });
     }

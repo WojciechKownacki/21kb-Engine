@@ -118,6 +118,11 @@ namespace {
         lhs.specularIntensity == rhs.specularIntensity && lhs.priority == rhs.priority && lhs.enabled == rhs.enabled;
 }
 
+[[nodiscard]] bool Equals(const SceneDetailSwitchComponent& lhs, const SceneDetailSwitchComponent& rhs) noexcept {
+    return lhs.groupId == rhs.groupId && lhs.minimumLod == rhs.minimumLod && lhs.maximumLod == rhs.maximumLod &&
+        lhs.promoteCoverage == rhs.promoteCoverage && lhs.demoteCoverage == rhs.demoteCoverage && lhs.enabled == rhs.enabled;
+}
+
 [[nodiscard]] bool Equals(const BehaviourComponent& lhs, const BehaviourComponent& rhs) noexcept {
     return lhs.behaviourAssetId == rhs.behaviourAssetId && lhs.backend == rhs.backend && lhs.enabled == rhs.enabled && lhs.tickGroup == rhs.tickGroup
         && lhs.executionOrder == rhs.executionOrder;
@@ -219,6 +224,7 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , streamFocuses(scene.Components().StreamFocuses())
     , worldBackdrops(scene.Components().WorldBackdrops())
     , ambientRadiances(scene.Components().AmbientRadiances())
+    , detailSwitches(scene.Components().DetailSwitches())
     , behaviours(scene.Components().Behaviours())
     , audioSources(scene.Components().AudioSources())
     , audioListeners(scene.Components().AudioListeners())
@@ -288,6 +294,7 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     WriteOptionalComponent(context.streamFocuses, entity, node.components.streamFocus);
     WriteOptionalComponent(context.worldBackdrops, entity, node.components.worldBackdrop);
     WriteOptionalComponent(context.ambientRadiances, entity, node.components.ambientRadiance);
+    WriteOptionalComponent(context.detailSwitches, entity, node.components.detailSwitch);
     if (!componentMask.available || !componentMask.matches || node.components.behaviour.has_value()) {
         WriteOptionalComponent(context.behaviours, entity, node.components.behaviour);
     }
