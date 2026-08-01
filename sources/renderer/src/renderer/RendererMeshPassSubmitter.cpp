@@ -11,7 +11,8 @@ void RendererMeshPassSubmitter::SubmitViewportPass(
     bgfx::ViewId viewId,
     RenderPassKind passKind,
     MeshPassType fallback,
-    const SceneRenderShadowMapBinding* shadowMap) {
+    const SceneRenderShadowMapBinding* shadowMap,
+    bool terrainLayersOnly) {
     const MeshPassType meshPass = RendererViewportPassResolver::MeshPassFor(desc.viewportPlan, passKind, fallback);
     desc.sceneRenderer.SubmitMeshPass(
         viewId,
@@ -24,7 +25,8 @@ void RendererMeshPassSubmitter::SubmitViewportPass(
         desc.lightingConfig,
         shadowMap,
         {},
-        &desc.gpuDrivenSupport);
+        &desc.gpuDrivenSupport,
+        terrainLayersOnly);
     desc.aggregateSubmitStats += desc.sceneRenderer.LastSubmitStats();
     desc.diagnostics += desc.sceneRenderer.LastDiagnostics();
     desc.passSubmitStats.push_back(SceneRenderPassSubmitStats{

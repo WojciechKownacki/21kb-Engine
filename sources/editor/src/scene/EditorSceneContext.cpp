@@ -1781,30 +1781,48 @@ const kb::assets::TerrainAsset* EditorSceneContext::TerrainForEditing(
     return &terrainReadCache_->terrain;
 }
 
+bool EditorSceneContext::BeginTerrainBrushStroke(
+    kb::scene::SceneEntity entity,
+    std::string label,
+    std::string* error) {
+    CancelTerrainBrushStroke();
+
+    const kb::assets::TerrainAsset* source = TerrainForEditing(entity, error);
+    if (source == nullptr) return false;
+
+    const kb::scene::MeshRendererComponent* renderer =
+        scene_->Components().MeshRenderers().TryGet(entity);
+    const kb::assets::AssetId assetId{
+        renderer == nullptr ? 0U : renderer->meshAssetId };
+    if (!assetId.IsValid()) {
+        if (error != nullptr) *error = "Entity does not reference a terrain asset";
+        return false;
+    }
+
+    kb::assets::TerrainAsset before = *source;
+    std::shared_ptr<kb::render::RenderMeshAssetData> previewMesh =
+        EditorTerrainService::CreatePreviewMesh(*scene_, assetId, before, error);
+    if (previewMesh == nullptr) return false;
+
+    terrainStroke_ = TerrainStrokeState{
+        .entity = entity,
+        .assetId = assetId,
+        .before = before,
+        .working = std::move(before),
+        .previewMesh = std::move(previewMesh),
+        .label = std::move(label),
+    };
+    if (error != nullptr) error->clear();
+    return true;
+}
+
 bool EditorSceneContext::ApplyTerrainBrushStamp(
     kb::scene::SceneEntity entity,
     const kb::terrain_editor::TerrainBrushSettings& settings,
     const kb::terrain_editor::TerrainBrushStamp& stamp,
     bool beginStroke,
     std::string* error) {
-    if (beginStroke) {
-        CancelTerrainBrushStroke();
-        std::optional<EditorTerrainAssetState> captured =
-            EditorTerrainService::Capture(*scene_, entity, error);
-        if (!captured.has_value()) return false;
-        std::shared_ptr<kb::render::RenderMeshAssetData> previewMesh =
-            EditorTerrainService::CreatePreviewMesh(
-                *scene_, captured->assetId, captured->terrain, error);
-        if (previewMesh == nullptr) return false;
-        terrainStroke_ = TerrainStrokeState{
-            .entity = entity,
-            .assetId = captured->assetId,
-            .before = captured->terrain,
-            .working = std::move(captured->terrain),
-            .previewMesh = std::move(previewMesh),
-            .label = "Sculpt Terrain",
-        };
-    }
+    if (beginStroke && !BeginTerrainBrushStroke(entity, "Sculpt Terrain", error)) return false;
     if (!terrainStroke_.has_value() || terrainStroke_->entity != entity) {
         if (error != nullptr) *error = "Terrain brush stroke is not active";
         return false;
@@ -1843,24 +1861,7 @@ bool EditorSceneContext::ApplyTerrainLayerPaintStamp(
     const kb::terrain_editor::TerrainBrushStamp& stamp,
     bool beginStroke,
     std::string* error) {
-    if (beginStroke) {
-        CancelTerrainBrushStroke();
-        std::optional<EditorTerrainAssetState> captured =
-            EditorTerrainService::Capture(*scene_, entity, error);
-        if (!captured.has_value()) return false;
-        std::shared_ptr<kb::render::RenderMeshAssetData> previewMesh =
-            EditorTerrainService::CreatePreviewMesh(
-                *scene_, captured->assetId, captured->terrain, error);
-        if (previewMesh == nullptr) return false;
-        terrainStroke_ = TerrainStrokeState{
-            .entity = entity,
-            .assetId = captured->assetId,
-            .before = captured->terrain,
-            .working = std::move(captured->terrain),
-            .previewMesh = std::move(previewMesh),
-            .label = "Paint Terrain Material",
-        };
-    }
+    if (beginStroke && !BeginTerrainBrushStroke(entity, "Paint Terrain Material", error)) return false;
     if (!terrainStroke_.has_value() || terrainStroke_->entity != entity) {
         if (error != nullptr) *error = "Terrain material paint stroke is not active";
         return false;
@@ -2016,7 +2017,8 @@ bool EditorSceneContext::CommitTerrainBrushStroke(std::string* error) {
 }
 
 void EditorSceneContext::CancelTerrainBrushStroke() noexcept {
-    if (terrainStroke_.has_value() && terrainStroke_->changed) {
+    if (!terrainStroke_.has_value()) return;
+    if (terrainStroke_->changed) {
         static_cast<void>(EditorTerrainService::PublishPreview(
             *scene_, terrainStroke_->assetId, terrainStroke_->before));
         const kb::scene::SceneEntity entity = terrainStroke_->entity;
