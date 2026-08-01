@@ -16,6 +16,15 @@ struct EditorMetrics;
 class EditorTerrainViewportInteraction final {
 public:
     EditorTerrainViewportInteraction() = delete;
+    [[nodiscard]] static bool UpdateHover(
+        HWND sourceWindow,
+        HWND mainWindow,
+        int x,
+        int y,
+        const EditorDockModel& dockModel,
+        const EditorFloatingWindowManager& floatingWindows,
+        const EditorMetrics& metrics,
+        EditorSceneContext& sceneContext);
     [[nodiscard]] static bool Stamp(
         HWND sourceWindow,
         HWND mainWindow,

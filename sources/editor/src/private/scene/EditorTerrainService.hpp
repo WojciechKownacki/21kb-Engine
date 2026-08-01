@@ -4,6 +4,7 @@
 #include "engine/assets/TerrainAsset.hpp"
 #include "engine/scene/SceneEntity.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -12,12 +13,24 @@ namespace kb::scene { class Scene; }
 
 namespace kb::editor {
 
+enum class EditorTerrainToolMode : std::uint8_t {
+    Select,
+    Sculpt,
+    Holes,
+};
+
 struct EditorTerrainToolState {
     kb::terrain_editor::TerrainBrushSettings brush{};
     bool editingEnabled = false;
     bool strokeActive = false;
     float lastStampX = 0.0F;
     float lastStampZ = 0.0F;
+    EditorTerrainToolMode mode = EditorTerrainToolMode::Sculpt;
+    bool brushMenuOpen = false;
+    bool hoverVisible = false;
+    std::uint64_t hoverEntityId = 0U;
+    float hoverLocalX = 0.0F;
+    float hoverLocalZ = 0.0F;
 };
 
 class EditorTerrainService final {

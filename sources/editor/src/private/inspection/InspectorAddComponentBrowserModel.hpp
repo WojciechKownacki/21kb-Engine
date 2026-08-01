@@ -3,6 +3,7 @@
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "rendering/HeroIconKind.hpp"
 
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -29,11 +30,17 @@ struct AddComponentRow {
 // so it is unit-testable against the catalog directly.
 class InspectorAddComponentBrowserModel {
 public:
+    using PluginEnabledPredicate = std::function<bool(std::string_view)>;
+
     // The scrollable rows for the current view. A non-empty `query` overrides the
     // level and returns a flat list of matching components; otherwise a non-empty
     // `category` returns that category's components, and an empty one returns the
     // top-level category list.
     [[nodiscard]] static std::vector<AddComponentRow> Rows(std::string_view category, std::string_view query);
+    [[nodiscard]] static std::vector<AddComponentRow> Rows(
+        std::string_view category,
+        std::string_view query,
+        const PluginEnabledPredicate& pluginEnabled);
 
     [[nodiscard]] static int TotalHeight(int rowCount, int rowHeightPx) noexcept;
     // Largest valid scroll offset so the last row can reach the list bottom.

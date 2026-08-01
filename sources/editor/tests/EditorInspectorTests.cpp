@@ -2300,6 +2300,17 @@ void RunAddComponentBrowserModelTest() {
     const std::vector<kb::editor::AddComponentRow> search = InspectorAddComponentBrowserModel::Rows("Physics", "collid");
     kb::editor::tests::Require(search.size() == 1U && search.front().id == "Collider", "A search query overrides the category and finds Collider");
 
+    const auto noPlugins = [](std::string_view) { return false; };
+    const std::vector<kb::editor::AddComponentRow> filteredCategories =
+        InspectorAddComponentBrowserModel::Rows("", "", noPlugins);
+    const bool exposesPhysics = std::ranges::any_of(
+        filteredCategories,
+        [](const kb::editor::AddComponentRow& row) { return row.id == "Physics"; });
+    kb::editor::tests::Require(!exposesPhysics, "A disabled plugin removes an empty component category");
+    kb::editor::tests::Require(
+        InspectorAddComponentBrowserModel::Rows("", "terrain", noPlugins).empty(),
+        "Search never exposes components owned by disabled plugins");
+
     kb::editor::tests::Require(InspectorAddComponentBrowserModel::TotalHeight(10, 26) == 260, "TotalHeight is rows * rowHeight");
     kb::editor::tests::Require(InspectorAddComponentBrowserModel::MaxScroll(10, 26, 100) == 160, "MaxScroll is total minus the list height");
     kb::editor::tests::Require(InspectorAddComponentBrowserModel::MaxScroll(3, 26, 100) == 0, "MaxScroll is 0 when every row fits");

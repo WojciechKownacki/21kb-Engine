@@ -1719,6 +1719,7 @@ bool EditorSceneContext::IsHierarchyEntitySelected(kb::scene::SceneEntity entity
 }
 
 void EditorSceneContext::SelectEntity(kb::scene::SceneEntity entity) noexcept {
+    const kb::scene::SceneEntity previous = hierarchySelection_.Primary();
     const kb::scene::SceneEntity selected = scene_->Entities().IsAlive(entity) ? entity : kb::scene::SceneEntity{};
     if (hierarchyRenameEntity_.IsValid() && hierarchyRenameEntity_ != selected) {
         static_cast<void>(CommitHierarchyRename());
@@ -1726,6 +1727,18 @@ void EditorSceneContext::SelectEntity(kb::scene::SceneEntity entity) noexcept {
     materialGraphFocused_ = false;
     hierarchySelection_.SelectEntity(selected);
     assetBrowser_.ClearSelection();
+    EditorTerrainToolState& terrainTool = EditorTerrainService::ToolState();
+    if (selected != previous && IsProjectPluginEnabled("Editor.Terrain") &&
+        EditorTerrainService::IsTerrainEntity(*scene_, selected)) {
+        terrainTool.mode = EditorTerrainToolMode::Sculpt;
+        terrainTool.editingEnabled = true;
+        terrainTool.brushMenuOpen = false;
+    } else if (!EditorTerrainService::IsTerrainEntity(*scene_, selected)) {
+        terrainTool.strokeActive = false;
+        terrainTool.hoverVisible = false;
+        terrainTool.hoverEntityId = 0U;
+        terrainTool.brushMenuOpen = false;
+    }
 }
 
 void EditorSceneContext::SelectHierarchyEntities(std::span<const kb::scene::SceneEntity> entities) noexcept {
@@ -7226,6 +7239,15 @@ bool EditorSceneContext::ToggleProjectPlugin(std::size_t catalogIndex) {
     }
 
     iter->enabled = !iter->enabled;
+    if (descriptor->id == "Editor.Terrain" && !iter->enabled) {
+        EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+        tool.editingEnabled = false;
+        tool.mode = EditorTerrainToolMode::Select;
+        tool.strokeActive = false;
+        tool.hoverVisible = false;
+        tool.hoverEntityId = 0U;
+        tool.brushMenuOpen = false;
+    }
     if (iter->binaryPath.empty()) {
         iter->binaryPath = EditorPluginCatalog::PersistentBinaryPath(descriptor->id);
     }
@@ -8134,6 +8156,7 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
             return false;
         }
         EditorTerrainService::ToolState().editingEnabled = true;
+        EditorTerrainService::ToolState().mode = EditorTerrainToolMode::Sculpt;
         console_.Info("Terrain", "Created a chunked 129 x 129 terrain with four LOD levels.");
         return true;
     }
