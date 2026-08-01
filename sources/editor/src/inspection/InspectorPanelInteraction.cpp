@@ -852,12 +852,22 @@ template <typename Mutator>
 [[nodiscard]] std::optional<std::uint8_t> TerrainLayerIndexForProperty(InspectorPropertyId property) noexcept {
     switch (property) {
     case InspectorPropertyId::TerrainMaterialLayer0:
-    case InspectorPropertyId::TerrainMaterialLayerPicker0: return 0U;
+        return 0U;
     case InspectorPropertyId::TerrainMaterialLayer1:
-    case InspectorPropertyId::TerrainMaterialLayerPicker1: return 1U;
+        return 1U;
     case InspectorPropertyId::TerrainMaterialLayer2:
-    case InspectorPropertyId::TerrainMaterialLayerPicker2: return 2U;
+        return 2U;
     case InspectorPropertyId::TerrainMaterialLayer3:
+        return 3U;
+    default: return std::nullopt;
+    }
+}
+
+[[nodiscard]] std::optional<std::uint8_t> TerrainLayerRevealIndexForProperty(InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::TerrainMaterialLayerPicker0: return 0U;
+    case InspectorPropertyId::TerrainMaterialLayerPicker1: return 1U;
+    case InspectorPropertyId::TerrainMaterialLayerPicker2: return 2U;
     case InspectorPropertyId::TerrainMaterialLayerPicker3: return 3U;
     default: return std::nullopt;
     }
@@ -882,6 +892,15 @@ template <typename Mutator>
         terrain_material_layer_menu::Toggle();
         return true;
     }
+    if (const std::optional<std::uint8_t> layerIndex = TerrainLayerRevealIndexForProperty(hit.property)) {
+        const std::optional<kb::assets::TerrainAsset> terrain = EditorTerrainService::Load(sceneContext.Scene(), entity);
+        if (terrain.has_value() && *layerIndex < terrain->materialLayers.size()) {
+            SelectAssetInProjectFiles(
+                sceneContext,
+                kb::assets::AssetId{ terrain->materialLayers[*layerIndex].materialAssetId });
+        }
+        return true;
+    }
     if (const std::optional<std::uint8_t> layerIndex = TerrainLayerIndexForProperty(hit.property)) {
         terrain_material_layer_menu::Close();
         EditorTerrainToolState& tool = EditorTerrainService::ToolState();
@@ -894,9 +913,12 @@ template <typename Mutator>
     }
     if (hit.property == InspectorPropertyId::TerrainMaterialLayerRemove) {
         terrain_material_layer_menu::Close();
+        const std::uint8_t layerIndex = hit.index >= 0
+            ? static_cast<std::uint8_t>(hit.index)
+            : EditorTerrainService::ToolState().selectedMaterialLayer;
         std::string error;
         if (!sceneContext.RemoveTerrainMaterialLayer(
-                entity, EditorTerrainService::ToolState().selectedMaterialLayer, &error)) {
+                entity, layerIndex, &error)) {
             sceneContext.Console().Warning("Terrain", error.empty() ? "Material layer could not be removed." : error);
         }
         return true;

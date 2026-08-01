@@ -254,16 +254,6 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
     return point;
 }
 
-[[nodiscard]] std::optional<std::uint8_t> TerrainMaterialLayerPickerForProperty(InspectorPropertyId property) noexcept {
-    switch (property) {
-    case InspectorPropertyId::TerrainMaterialLayerPicker0: return 0U;
-    case InspectorPropertyId::TerrainMaterialLayerPicker1: return 1U;
-    case InspectorPropertyId::TerrainMaterialLayerPicker2: return 2U;
-    case InspectorPropertyId::TerrainMaterialLayerPicker3: return 3U;
-    default: return std::nullopt;
-    }
-}
-
 [[nodiscard]] std::optional<std::filesystem::path> ShowTerrainHeightmapDialog(HWND owner) {
     std::array<wchar_t, 32768U> path{};
     OPENFILENAMEW dialog{};
@@ -995,7 +985,6 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             return;
         }
         const std::optional<std::uint32_t> materialSlotPicker = MeshRendererMaterialSlotPickerForProperty(hit.property);
-        const std::optional<std::uint8_t> terrainLayerPicker = TerrainMaterialLayerPickerForProperty(hit.property);
         if (hit.section == InspectorSectionId::Terrain &&
             hit.property == InspectorPropertyId::TerrainMaterialLayerCreate) {
             terrain_material_layer_menu::Close();
@@ -1026,32 +1015,16 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             return;
         }
         if (hit.section == InspectorSectionId::Terrain &&
-            (terrainLayerPicker.has_value() || hit.property == InspectorPropertyId::TerrainMaterialLayerAdd)) {
+            hit.property == InspectorPropertyId::TerrainMaterialLayerAdd) {
             terrain_material_layer_menu::Close();
-            if (terrainLayerPicker.has_value()) {
-                EditorTerrainToolState& tool = EditorTerrainService::ToolState();
-                tool.selectedMaterialLayer = *terrainLayerPicker;
-                tool.mode = EditorTerrainToolMode::Paint;
-                tool.editingEnabled = true;
-                tool.brush.strength = std::min(tool.brush.strength, 1.0F);
-                tool.brushMenuOpen = false;
-            }
             const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
-            const std::optional<kb::assets::TerrainAsset> terrain =
-                EditorTerrainService::Load(sceneContext_.Scene(), entity);
-            const std::uint64_t current = terrainLayerPicker.has_value() && terrain.has_value() &&
-                    *terrainLayerPicker < terrain->materialLayers.size()
-                ? terrain->materialLayers[*terrainLayerPicker].materialAssetId
-                : 0U;
             const EditorMaterialAssetPickerDialog::Result result = EditorMaterialAssetPickerDialog::Show(
-                mainWindow_, MakeEditorDarkTheme(), sceneContext_, kb::assets::AssetId{ current });
+                mainWindow_, MakeEditorDarkTheme(), sceneContext_, {});
             if (result.accepted) {
                 std::string error;
-                const bool assigned = terrainLayerPicker.has_value()
-                    ? sceneContext_.SetTerrainMaterialLayer(entity, *terrainLayerPicker, result.assetId, &error)
-                    : sceneContext_.AddTerrainMaterialLayer(entity, result.assetId, &error);
+                const bool assigned = sceneContext_.AddTerrainMaterialLayer(entity, result.assetId, &error);
                 if (!assigned) {
-                    sceneContext_.Console().Warning("Terrain", error.empty() ? "Material layer could not be updated." : error);
+                    sceneContext_.Console().Warning("Terrain", error.empty() ? "Material layer could not be added." : error);
                 } else {
                     sceneViewport_.RequestPresent();
                 }
