@@ -37,7 +37,8 @@ public:
         bgfx::ViewId viewId,
         RenderPassKind passKind,
         MeshPassType fallback,
-        const SceneRenderShadowMapBinding* shadowMap);
+        const SceneRenderShadowMapBinding* shadowMap,
+        bool terrainLayersOnly = false);
 
     static void SubmitSelectionMask(const RendererMeshPassSubmitDesc& desc);
 };

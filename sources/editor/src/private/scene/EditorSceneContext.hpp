@@ -853,6 +853,10 @@ public:
 
 private:
     [[nodiscard]] EditorSceneCommandController SceneCommands() noexcept;
+    [[nodiscard]] bool BeginTerrainBrushStroke(
+        kb::scene::SceneEntity entity,
+        std::string label,
+        std::string* error);
     [[nodiscard]] bool FinalizeActiveTransformEditApply(
         bool changed,
         std::span<const kb::scene::SceneEntity> touched);

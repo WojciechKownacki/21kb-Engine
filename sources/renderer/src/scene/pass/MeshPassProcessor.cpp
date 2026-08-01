@@ -189,6 +189,10 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
         if (!validateResources) {
             meshResource = desc.resolvedMeshResource;
         }
+        if (desc.terrainLayersOnly &&
+            (desc.pass != MeshPassType::BaseTransparent || meshResource == nullptr || meshResource->terrainLayerCount <= 1U)) {
+            continue;
+        }
 
         const RenderMeshSection fallbackSection{
             .indexStart = 0U,
@@ -200,6 +204,10 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
         const std::uint32_t sectionCount = sections == nullptr || sections->empty() ? 1U : static_cast<std::uint32_t>(sections->size());
         for (std::uint32_t sectionIndex = 0U; sectionIndex < sectionCount; ++sectionIndex) {
             const RenderMeshSection& section = sections == nullptr || sections->empty() ? fallbackSection : (*sections)[sectionIndex];
+            if (desc.terrainLayersOnly &&
+                (section.terrainLayerIndex == UINT8_MAX || section.terrainLayerIndex == 0U)) {
+                continue;
+            }
             const std::pair<std::uint32_t, std::uint32_t> meshletRange = MeshPipelineVisibility::MeshletRangeForSection(meshResource, sectionIndex);
             result.commandLookupScratch.clear();
             result.commandLookupScratch.reserve(instanceCount);
