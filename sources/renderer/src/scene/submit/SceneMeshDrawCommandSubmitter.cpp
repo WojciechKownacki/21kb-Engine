@@ -124,6 +124,10 @@ void EmitProgramUnavailableDiagnostic(
     return handle.idx;
 }
 
+[[nodiscard]] std::uint16_t HandleValue(bgfx::DynamicVertexBufferHandle handle) noexcept {
+    return handle.idx;
+}
+
 [[nodiscard]] std::uint16_t HandleValue(bgfx::IndexBufferHandle handle) noexcept {
     return handle.idx;
 }
@@ -156,7 +160,8 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
     }
     for (const MeshDrawCommand& command : desc.commands) {
         if (command.meshResource == nullptr ||
-            !bgfx::isValid(command.meshResource->vertexBuffer) ||
+            (!bgfx::isValid(command.meshResource->vertexBuffer) &&
+             !bgfx::isValid(command.meshResource->dynamicVertexBuffer)) ||
             !bgfx::isValid(command.meshResource->indexBuffer)) {
             if (meshDrawDebugLogEnabled) {
                 std::ostringstream message;
@@ -224,7 +229,11 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
             desc.pass != MeshPassType::ShadowDepth && !selectionPass);
 
         bgfx::setInstanceDataBuffer(&instanceBuffer, 0U, static_cast<std::uint32_t>(availableInstances));
-        bgfx::setVertexBuffer(0, command.meshResource->vertexBuffer);
+        if (bgfx::isValid(command.meshResource->dynamicVertexBuffer)) {
+            bgfx::setVertexBuffer(0, command.meshResource->dynamicVertexBuffer);
+        } else {
+            bgfx::setVertexBuffer(0, command.meshResource->vertexBuffer);
+        }
         bgfx::setIndexBuffer(command.meshResource->indexBuffer, command.indexStart, command.indexCount);
         const bgfx::ProgramHandle program = desc.passResources.Bind(SceneMeshPassBindDesc{
             .command = command,
@@ -250,7 +259,9 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
                 << " meshVertexFormat=" << VertexFormatName(command.meshResource->vertexFormat)
                 << " meshHasTangent=" << (VertexFormatHasTangent(command.meshResource->vertexFormat) ? "true" : "false")
                 << " meshStride=" << RenderStaticMeshVertexStride(command.meshResource->vertexFormat)
-                << " vb=" << HandleValue(command.meshResource->vertexBuffer)
+                << " vb=" << (bgfx::isValid(command.meshResource->dynamicVertexBuffer)
+                    ? HandleValue(command.meshResource->dynamicVertexBuffer)
+                    : HandleValue(command.meshResource->vertexBuffer))
                 << " ib=" << HandleValue(command.meshResource->indexBuffer)
                 << " graphProgram=" << (resolution.graphProgram ? "true" : "false")
                 << " fallback=" << (resolution.fellBackToBuiltin ? "true" : "false")
@@ -294,7 +305,9 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
                     << " instances=" << availableInstances << '/' << instanceCount
                     << " indexStart=" << command.indexStart
                     << " indexCount=" << command.indexCount
-                    << " vb=" << HandleValue(command.meshResource->vertexBuffer)
+                    << " vb=" << (bgfx::isValid(command.meshResource->dynamicVertexBuffer)
+                        ? HandleValue(command.meshResource->dynamicVertexBuffer)
+                        : HandleValue(command.meshResource->vertexBuffer))
                     << " ib=" << HandleValue(command.meshResource->indexBuffer)
                     << " program=" << HandleValue(program)
                     << " graphProgram=" << (resolution.graphProgram ? "true" : "false")

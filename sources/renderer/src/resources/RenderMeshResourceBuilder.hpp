@@ -9,7 +9,11 @@ public:
     [[nodiscard]] static bool IsValidDesc(const RenderMeshDesc& desc) noexcept;
     [[nodiscard]] static const void* VertexData(const RenderMeshDesc& desc) noexcept;
     [[nodiscard]] static RenderBoundsSphere ComputeBounds(const RenderMeshDesc& desc, std::uint32_t indexStart, std::uint32_t indexCount) noexcept;
-    [[nodiscard]] static RenderMeshResource Build(const RenderMeshDesc& desc, bgfx::VertexBufferHandle vertexBuffer, bgfx::IndexBufferHandle indexBuffer);
+    [[nodiscard]] static RenderMeshResource Build(
+        const RenderMeshDesc& desc,
+        bgfx::VertexBufferHandle vertexBuffer,
+        bgfx::DynamicVertexBufferHandle dynamicVertexBuffer,
+        bgfx::IndexBufferHandle indexBuffer);
 };
 
 } // namespace kb::render

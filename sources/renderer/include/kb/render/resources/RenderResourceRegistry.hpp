@@ -43,6 +43,11 @@ public:
     [[nodiscard]] RenderMeshHandle RegisterMesh(const RenderMeshDesc& desc);
     [[nodiscard]] const RenderMeshResource* FindMesh(RenderMeshHandle handle) const noexcept;
     [[nodiscard]] bool ContainsMesh(RenderMeshHandle handle) const noexcept;
+    [[nodiscard]] bool UpdateMeshVertices(
+        RenderMeshHandle handle,
+        const RenderMeshDesc& desc,
+        std::uint32_t firstVertex,
+        std::uint32_t vertexCount);
     void DestroyMesh(RenderMeshHandle handle) noexcept;
 
     [[nodiscard]] RenderMaterialHandle RegisterMaterial(const RenderMaterialDesc& desc);

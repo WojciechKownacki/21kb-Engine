@@ -52,6 +52,11 @@ struct RenderMeshEmbeddedMaterial {
     std::string layerMaskTexturePath;
 };
 
+struct RenderMeshVertexUpdateRange {
+    std::uint32_t firstVertex = 0U;
+    std::uint32_t vertexCount = 0U;
+};
+
 struct RenderMeshAssetData {
     std::vector<RenderStaticMeshVertexP3N3UV2> vertices;
     std::vector<RenderStaticMeshVertexP3N3T4UV2> tangentVertices;
@@ -63,10 +68,23 @@ struct RenderMeshAssetData {
     std::vector<RenderMaterialSlotDesc> materialSlots;
     std::vector<std::string> materialNames;
     std::vector<RenderMeshEmbeddedMaterial> embeddedMaterials;
+    std::vector<std::uint32_t> terrainSectionIndices;
     RenderBoundsSphere bounds{};
     RenderMeshDesc desc{};
+    std::uint64_t dynamicTopologyKey = 0U;
+    std::vector<RenderMeshVertexUpdateRange> dynamicVertexUpdateRanges;
+    std::uint32_t vertexUpdateFirst = 0U;
+    std::uint32_t vertexUpdateCount = 0U;
+    std::uint32_t terrainChunkCountX = 0U;
+    std::uint32_t terrainChunkCountZ = 0U;
+    std::uint32_t terrainLodCount = 0U;
+    bool dynamicVertexUpdates = false;
 
     RenderMeshDesc& RefreshDesc() noexcept;
+};
+
+struct RenderMeshFinalizeOptions {
+    bool optimizeVertexFetch = true;
 };
 
 class RenderMeshAssetBuilder {
@@ -78,7 +96,9 @@ public:
     [[nodiscard]] static std::optional<RenderMeshAssetData> LoadGltf(const std::filesystem::path& path, const RenderMeshGltfImportDesc& desc = {});
     [[nodiscard]] static std::optional<RenderMeshAssetData> LoadFbx(const std::filesystem::path& path, const RenderMeshFbxImportDesc& desc = {});
     [[nodiscard]] static std::optional<RenderMeshAssetData> LoadFbx(std::span<const std::byte> data, const RenderMeshFbxImportDesc& desc = {});
-    [[nodiscard]] static bool Finalize(RenderMeshAssetData& asset);
+    [[nodiscard]] static bool Finalize(
+        RenderMeshAssetData& asset,
+        const RenderMeshFinalizeOptions& options = {});
 };
 
 } // namespace kb::render

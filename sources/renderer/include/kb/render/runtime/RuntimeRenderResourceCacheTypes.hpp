@@ -43,7 +43,10 @@ struct RuntimeTextureAssetKeyHash {
 struct RuntimeMeshResource {
     RenderMeshHandle handle{};
     std::uint64_t contentHash = 0;
+    std::uint64_t dynamicTopologyKey = 0;
+    std::size_t dynamicVertexUpdateCount = 0U;
     std::uint64_t lastReferencedFrame = 0;
+    bool dynamicVertexUpdates = false;
 };
 
 struct RuntimeMaterialResource {

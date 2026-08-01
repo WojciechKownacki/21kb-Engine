@@ -134,7 +134,8 @@ MeshPipelineResolvedMesh MeshPipelineResourceResolver::ResolveMeshBatch(
         EmitPassDiagnostics(diagnostics, SceneRenderDiagnosticKind::UnsupportedMeshVertexFormat, SceneRenderDiagnosticSeverity::Error, pass, batch, batch.materialAssetId, selectedEntityIds, cullingMask);
         return {};
     }
-    if (!bgfx::isValid(meshResource->vertexBuffer) || !bgfx::isValid(meshResource->indexBuffer)) {
+    if ((!bgfx::isValid(meshResource->vertexBuffer) && !bgfx::isValid(meshResource->dynamicVertexBuffer)) ||
+        !bgfx::isValid(meshResource->indexBuffer)) {
         stats.visibleMeshCount += passInstanceCount;
         ++stats.visibleDrawGroupCount;
         stats.missingMeshResourceCount += passInstanceCount;
