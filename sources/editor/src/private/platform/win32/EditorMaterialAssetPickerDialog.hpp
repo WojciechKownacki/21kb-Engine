@@ -59,7 +59,8 @@ public:
         HWND owner,
         const EditorTheme& theme,
         const EditorSceneContext& sceneContext,
-        kb::assets::AssetId currentMaterial);
+        kb::assets::AssetId currentMaterial,
+        bool allowClear = true);
 #endif
 };
 
