@@ -4265,18 +4265,40 @@ void RunMaterialPreviewCameraControlSuite(Report& report) {
     report.Check(context.Scene().Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()),
         "Finding 28: register material loader");
     const std::filesystem::path materialPath = EditorProjectPaths::AssetsRoot() / "Materials" / "PreviewCamera.kbmat";
+    const std::filesystem::path inspectorMaterialPath =
+        EditorProjectPaths::AssetsRoot() / "Materials" / "PreviewInspector.kbmat";
     std::filesystem::create_directories(materialPath.parent_path(), error);
     kb::render::RenderMaterialAssetData fixture{};
     fixture.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
     report.Check(kb::render::RenderMaterialAssetWriter::Save(materialPath, fixture), "Finding 28: create .kbmat fixture");
+    kb::render::RenderMaterialAssetData inspectorFixture{};
+    inspectorFixture.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    inspectorFixture.desc.baseColor[0] = 0.2F;
+    inspectorFixture.desc.baseColor[1] = 0.4F;
+    inspectorFixture.desc.baseColor[2] = 0.8F;
+    report.Check(kb::render::RenderMaterialAssetWriter::Save(inspectorMaterialPath, inspectorFixture),
+        "Finding 28: create distinct Inspector preview fixture");
     report.Check(context.Scene().Assets().Discover() >= 1U, "Finding 28: discover .kbmat fixture");
     const kb::assets::AssetMetadata* metadata =
         context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/PreviewCamera.kbmat");
+    const kb::assets::AssetMetadata* inspectorMetadata =
+        context.Scene().Assets().Manager().Registry().FindByPath("/Game/Materials/PreviewInspector.kbmat");
     report.Check(metadata != nullptr, "Finding 28: resolve .kbmat metadata");
-    if (metadata == nullptr) {
+    report.Check(inspectorMetadata != nullptr, "Finding 28: resolve Inspector preview metadata");
+    if (metadata == nullptr || inspectorMetadata == nullptr) {
         return;
     }
     report.Check(context.OpenMaterialEditorAsset(metadata->id), "Finding 28: open material");
+
+    // Inspector selection and the open Material Editor are independent. They are queued into one renderer
+    // paint batch, so each surface must own a stable Scene until EndPaintLayout; sharing one scene made the
+    // second call destroy the first call's queued scene and caused an access violation after creating an asset.
+    const kb::scene::Scene& editorPreview = context.MaterialPreviewScene(
+        metadata->id, EditorMaterialPreviewSurface::MaterialEditor);
+    const kb::scene::Scene& inspectorPreview = context.MaterialPreviewScene(
+        inspectorMetadata->id, EditorMaterialPreviewSurface::Inspector);
+    report.Check(&editorPreview != &inspectorPreview && editorPreview.Id() != inspectorPreview.Id(),
+        "Finding 28: Inspector and Material Editor own independent preview scenes");
 
     // Build the preview scene so the revision has a real baseline. Every camera move below must leave this
     // baseline untouched: an orbit/zoom is a per-frame camera override, never a scene edit, so it must NOT
