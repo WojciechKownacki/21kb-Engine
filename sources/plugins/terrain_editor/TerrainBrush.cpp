@@ -21,13 +21,6 @@ namespace {
     return value * value * (3.0F - 2.0F * value);
 }
 
-[[nodiscard]] float Weight(float distance, const TerrainBrushSettings& settings) noexcept {
-    const float normalized = std::clamp(distance / settings.radius, 0.0F, 1.0F);
-    if (normalized <= settings.falloff) return 1.0F;
-    const float edgeWidth = std::max(1.0F - settings.falloff, 0.0001F);
-    return 1.0F - SmoothStep((normalized - settings.falloff) / edgeWidth);
-}
-
 [[nodiscard]] float HashNoise(std::uint32_t x, std::uint32_t z, std::uint32_t seed) noexcept {
     std::uint32_t value = x * 0x9E3779B9U ^ z * 0x85EBCA6BU ^ seed * 0xC2B2AE35U;
     value ^= value >> 16U;
@@ -36,6 +29,40 @@ namespace {
     value *= 0x846CA68BU;
     value ^= value >> 16U;
     return (static_cast<float>(value & 0x00FFFFFFU) / 8388607.5F) - 1.0F;
+}
+
+[[nodiscard]] float Weight(
+    float distance,
+    std::uint32_t sampleX,
+    std::uint32_t sampleZ,
+    const TerrainBrushSettings& settings) noexcept {
+    const float normalized = std::clamp(distance / settings.radius, 0.0F, 1.0F);
+    const auto softRound = [&settings, normalized] {
+        if (normalized <= settings.falloff) return 1.0F;
+        const float edgeWidth = std::max(1.0F - settings.falloff, 0.0001F);
+        return 1.0F - SmoothStep((normalized - settings.falloff) / edgeWidth);
+    };
+    switch (settings.shape) {
+    case TerrainBrushShape::SoftRound:
+        return softRound();
+    case TerrainBrushShape::HardRound:
+        return normalized < 0.96F ? 1.0F : 1.0F - SmoothStep((normalized - 0.96F) / 0.04F);
+    case TerrainBrushShape::LinearRound:
+        return 1.0F - normalized;
+    case TerrainBrushShape::Bell: {
+        constexpr float kPi = 3.14159265358979323846F;
+        return 0.5F + 0.5F * std::cos(normalized * kPi);
+    }
+    case TerrainBrushShape::Ring: {
+        const float ringDistance = std::abs(normalized - 0.58F) / 0.24F;
+        return 1.0F - SmoothStep(ringDistance);
+    }
+    case TerrainBrushShape::Speckle:
+        return HashNoise(sampleX, sampleZ, settings.noiseSeed ^ 0xA511E9B3U) > -0.18F
+            ? softRound()
+            : 0.0F;
+    }
+    return softRound();
 }
 
 void MarkChanged(TerrainBrushResult& result, std::uint32_t x, std::uint32_t z) noexcept {
@@ -69,7 +96,8 @@ void MarkChanged(TerrainBrushResult& result, std::uint32_t x, std::uint32_t z) n
 } // namespace
 
 bool IsTerrainBrushSettingsValid(const TerrainBrushSettings& settings) noexcept {
-    return std::isfinite(settings.radius) && settings.radius > 0.0F && settings.radius <= 100'000.0F &&
+    return static_cast<std::uint8_t>(settings.shape) <= static_cast<std::uint8_t>(TerrainBrushShape::Speckle) &&
+        std::isfinite(settings.radius) && settings.radius > 0.0F && settings.radius <= 100'000.0F &&
         std::isfinite(settings.strength) && settings.strength >= 0.0F && settings.strength <= 100'000.0F &&
         std::isfinite(settings.falloff) && settings.falloff >= 0.0F && settings.falloff <= 1.0F &&
         std::isfinite(settings.targetHeight) && std::abs(settings.targetHeight) <= 1'000'000.0F &&
@@ -102,7 +130,9 @@ TerrainBrushResult ApplyTerrainBrush(
             for (int x = minX; x < maxX; ++x) {
                 const float worldX = (static_cast<float>(x) + 0.5F) * cellSizeX - terrain.worldSizeX * 0.5F;
                 const float worldZ = (static_cast<float>(z) + 0.5F) * cellSizeZ - terrain.worldSizeZ * 0.5F;
-                if (std::hypot(worldX - stamp.localX, worldZ - stamp.localZ) > settings.radius) continue;
+                const float distance = std::hypot(worldX - stamp.localX, worldZ - stamp.localZ);
+                if (distance > settings.radius ||
+                    Weight(distance, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(z), settings) <= 0.25F) continue;
                 std::uint8_t& hole = terrain.holes[CellIndex(terrain, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(z))];
                 if (hole != target) {
                     hole = target;
@@ -123,7 +153,11 @@ TerrainBrushResult ApplyTerrainBrush(
             const float worldZ = static_cast<float>(z) * cellSizeZ - terrain.worldSizeZ * 0.5F;
             const float distance = std::hypot(worldX - stamp.localX, worldZ - stamp.localZ);
             if (distance > settings.radius) continue;
-            const float influence = Weight(distance, settings) * pressure;
+            const float influence = Weight(
+                distance,
+                static_cast<std::uint32_t>(x),
+                static_cast<std::uint32_t>(z),
+                settings) * pressure;
             const std::size_t index = VertexIndex(terrain, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(z));
             const float before = terrain.heights[index];
             float after = before;

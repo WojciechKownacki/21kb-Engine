@@ -13,6 +13,7 @@
 #include "rendering/MaterialPreviewViewportKeys.hpp"
 #include "rendering/SceneViewportToolbarDropdownOverlayWindow.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
+#include "scene/EditorTerrainService.hpp"
 
 #include <vector>
 
@@ -101,7 +102,10 @@ void FloatingWindowBackBufferPainter::Paint(HWND window, const DockPanel& panel,
         .sceneViewport = &sceneViewport,
     };
     GdiBackBufferRenderer::Paint(window, &PaintBackBuffer, &context);
-    if (panel.kind == DockPanelKind::Scene && sceneContext.ViewportPreview(panel.id).ToolbarDropdown() != EditorViewportToolbarDropdown::None) {
+    const EditorTerrainToolState& terrainTool = EditorTerrainService::ToolState();
+    if (panel.kind == DockPanelKind::Scene &&
+        (sceneContext.ViewportPreview(panel.id).ToolbarDropdown() != EditorViewportToolbarDropdown::None ||
+         terrainTool.brushMenuOpen || terrainTool.brushShapeMenuOpen)) {
         RECT content{};
         GetClientRect(window, &content);
         content = FloatingPanelContentRect(content, panel, metrics);

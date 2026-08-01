@@ -141,7 +141,6 @@ void RuntimeMeshResourceEnsurer::Ensure(
         if (cacheIt != meshes.end()) {
             context.sceneRenderer.ResourceMap().UnbindMeshHandle(cacheIt->second.handle);
             context.sceneRenderer.Resources().DestroyMesh(cacheIt->second.handle);
-            static_cast<void>(manager.Unload(assetId));
             meshes.erase(cacheIt);
         }
 
