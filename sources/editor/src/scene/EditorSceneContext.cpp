@@ -93,6 +93,7 @@
 #include "scene/EditorSceneHierarchyActions.hpp"
 #include "scene/EditorSceneMaterialAssetActions.hpp"
 #include "scene/EditorSceneMeshAssetActions.hpp"
+#include "scene/EditorTerrainService.hpp"
 #include "scene/EditorSceneObjectEditCommands.hpp"
 #include "scene/EditorScenePrefabActions.hpp"
 #include "scene/EditorSceneSelectionPivot.hpp"
@@ -8117,6 +8118,25 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
             return true;
         });
     }
+    if (componentId == "TerrainEditor") {
+        if (!IsProjectPluginEnabled("Editor.Terrain")) {
+            console_.Warning("Terrain", "Enable Terrain Editor in Edit > Plugins before adding the component.");
+            return false;
+        }
+        std::string error;
+        bool created = false;
+        const bool committed = ExecuteSceneCommand("Add Terrain Editor Component", [this, entity, &error, &created]() {
+            created = EditorTerrainService::Create(*scene_, entity, EditorProjectPaths::AssetsRoot(), &error);
+            return created;
+        });
+        if (!committed || !created) {
+            console_.Warning("Terrain", error.empty() ? "Terrain Editor component could not be created." : error);
+            return false;
+        }
+        EditorTerrainService::ToolState().editingEnabled = true;
+        console_.Info("Terrain", "Created a chunked 129 x 129 terrain with four LOD levels.");
+        return true;
+    }
     if (componentId == "Tags") {
         if (scene_->Components().Tags().Has(entity)) {
             console_.Warning("Inspector", "Entity already has an Object Classification component.");
@@ -8405,13 +8425,18 @@ bool EditorSceneContext::OpenAnimationAsset(kb::assets::AssetId id) {
 }
 
 bool EditorSceneContext::SetAnimatorControllerAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {
-    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
-    if (!entity.IsValid() || metadata == nullptr || metadata->type != kb::scene::kAnimatorControllerAssetType ||
-        !scene_->Components().Animators().Has(entity)) {
+    if (!entity.IsValid() || !scene_->Components().Animators().Has(entity)) {
+        console_.Warning("Animator", "Selected entity does not have an Animator component.");
+        return false;
+    }
+    const kb::assets::AssetMetadata* metadata = assetId.IsValid()
+        ? scene_->Assets().Manager().Registry().Find(assetId)
+        : nullptr;
+    if (assetId.IsValid() && (metadata == nullptr || metadata->type != kb::scene::kAnimatorControllerAssetType)) {
         console_.Warning("Animator", "Only Animator Controller assets can be assigned to an Animator component.");
         return false;
     }
-    return ExecuteSceneCommand("Assign Animator Controller", [this, entity, assetId]() {
+    return ExecuteSceneCommand(assetId.IsValid() ? "Assign Animator Controller" : "Clear Animator Controller", [this, entity, assetId]() {
         kb::scene::Animator* animator = scene_->Components().Animators().TryGet(entity);
         if (animator == nullptr) return false;
         animator->controllerAssetId = assetId.value;

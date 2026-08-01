@@ -11,6 +11,7 @@ namespace {
         InspectorComponentTile{ .id = "Camera", .category = "Rendering", .label = "Camera", .icon = HeroIconKind::Eye },
         InspectorComponentTile{ .id = "3D Radiance Emitter", .category = "Rendering", .label = "3D Radiance Emitter", .icon = HeroIconKind::Bolt },
         InspectorComponentTile{ .id = "MeshRenderer", .category = "Rendering", .label = "Mesh Renderer", .icon = HeroIconKind::Cube },
+        InspectorComponentTile{ .id = "TerrainEditor", .category = "World", .label = "Terrain Editor", .icon = HeroIconKind::Cube },
         InspectorComponentTile{ .id = "WorldBackdrop", .category = "Rendering", .label = "World Backdrop", .icon = HeroIconKind::Eye },
         InspectorComponentTile{ .id = "Ambient Radiance", .category = "Rendering", .label = "Ambient Radiance", .icon = HeroIconKind::Bolt },
         InspectorComponentTile{ .id = "Detail Switch", .category = "Rendering", .label = "Detail Switch", .icon = HeroIconKind::Cube },

@@ -947,7 +947,12 @@ void RunInspectorComponentAffordancesSuite(Report& report) {
             context.ScriptEditor().IsOpen() &&
             context.ScriptEditor().AssetId() == timelineId,
         "Timeline opens in the editor's writable typed-asset surface");
-    report.Check(context.SetAnimatorControllerAsset(actor, controllerId), "Assign Animator Controller through Inspector drop/edit path");
+    report.Check(context.SetAnimatorControllerAsset(actor, controllerId), "Assign Animator Controller through Inspector asset path");
+    report.Check(context.SetAnimatorControllerAsset(actor, {}), "Clear Animator Controller through asset picker path");
+    const kb::scene::Animator* clearedAnimator = context.Scene().Components().Animators().TryGet(actor);
+    report.Check(clearedAnimator != nullptr && clearedAnimator->controllerAssetId == 0U,
+        "Cleared Animator Controller remains an empty asset reference");
+    report.Check(context.SetAnimatorControllerAsset(actor, controllerId), "Reassign Animator Controller after clearing it");
     report.Check(context.SetAnimatorSpeed(actor, 1.75F), "Edit Animator speed through undoable Inspector command");
     report.Check(context.ToggleAnimatorEnabled(actor), "Toggle Animator enabled through Inspector");
     report.Check(context.CycleAnimatorRootMotionOwner(actor),
@@ -994,6 +999,7 @@ void RunInspectorComponentAffordancesSuite(Report& report) {
         "Cycle root-motion ownership back to None");
     bool foundAnimatorController = false;
     bool foundAnimatorSpeed = false;
+    bool foundAnimatorSpeedFloatField = false;
     bool foundAnimatorEnabled = false;
     bool foundAnimatorRootMotionOwner = false;
     const int animatorMaxScroll = InspectorPanelRenderer::MaxScrollOffset(kContent, context);
@@ -1008,12 +1014,20 @@ void RunInspectorComponentAffordancesSuite(Report& report) {
             foundAnimatorSpeed |= hit.property == InspectorPropertyId::AnimatorSpeed;
             foundAnimatorEnabled |= hit.property == InspectorPropertyId::AnimatorEnabled;
             foundAnimatorRootMotionOwner |= hit.property == InspectorPropertyId::AnimatorRootMotionOwner;
+            const InspectorPanelRenderer::Hit valueHit =
+                InspectorPanelRenderer::HitTest(kContent, context, kContent.right - 120, y);
+            foundAnimatorSpeedFloatField |=
+                valueHit.section == InspectorSectionId::Animator &&
+                valueHit.property == InspectorPropertyId::AnimatorSpeed &&
+                valueHit.kind == InspectorHitKind::FloatField;
         }
     }
     static_cast<void>(context.Inspector().SetScrollOffset(0, animatorMaxScroll));
     report.Check(foundAnimatorController && foundAnimatorSpeed && foundAnimatorEnabled &&
             foundAnimatorRootMotionOwner,
         "Animator Controller, Speed, Enabled and Root Motion are present in the live Inspector hit-test");
+    report.Check(foundAnimatorSpeedFloatField,
+        "Animator Speed uses the editable numeric Inspector field path");
     report.Check(context.RemoveAnimatorFromEntity(actor), "Animator section remove command removes the component");
     report.Check(!context.Scene().Components().Animators().Has(actor), "Animator component is gone after editor remove");
 }
