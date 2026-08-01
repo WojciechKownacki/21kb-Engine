@@ -22,6 +22,11 @@ constexpr int kDropdownRadius = 6;
     return tool.brushMenuOpen || tool.brushShapeMenuOpen;
 }
 
+[[nodiscard]] bool TerrainToolbarVisible(const EditorSceneContext& sceneContext) noexcept {
+    return sceneContext.IsProjectPluginEnabled("Editor.Terrain") &&
+        EditorTerrainService::IsTerrainEntity(sceneContext.Scene(), sceneContext.SelectedEntity());
+}
+
 [[nodiscard]] bool SameRect(const RECT& left, const RECT& right) noexcept {
     return left.left == right.left && left.top == right.top && left.right == right.right && left.bottom == right.bottom;
 }
@@ -89,6 +94,7 @@ void SceneViewportToolbarDropdownOverlayWindow::Show(HWND parent, const RECT& sc
     }
 
     parent_ = parent;
+    terrainToolbarOnly_ = false;
     sceneContent_ = sceneContent;
     panelId_ = panelId;
     theme_ = theme;
@@ -108,6 +114,35 @@ void SceneViewportToolbarDropdownOverlayWindow::Show(HWND parent, const RECT& sc
     if (movedOrResized || firstShow) {
         InvalidateRect(window_, nullptr, FALSE);
     }
+}
+
+void SceneViewportToolbarDropdownOverlayWindow::ShowTerrainToolbar(
+    HWND parent,
+    const RECT& sceneContent,
+    std::uint64_t panelId,
+    const EditorTheme& theme,
+    const EditorSceneContext& sceneContext) {
+    if (parent == nullptr || !TerrainToolbarVisible(sceneContext) || !EnsureWindow(parent)) {
+        Hide();
+        return;
+    }
+    parent_ = parent;
+    sceneContent_ = sceneContent;
+    panelId_ = panelId;
+    theme_ = theme;
+    sceneContext_ = &sceneContext;
+    terrainToolbarOnly_ = true;
+
+    const RECT nextBounds = ResolveScreenBounds();
+    if (EmptyRect(nextBounds)) {
+        Hide();
+        return;
+    }
+    const bool changed = !SameRect(screenBounds_, nextBounds) || !shown_;
+    if (changed) {
+        static_cast<void>(MoveToCurrentBounds(true));
+    }
+    InvalidateRect(window_, nullptr, FALSE);
 }
 
 void SceneViewportToolbarDropdownOverlayWindow::Hide() noexcept {
@@ -157,7 +192,9 @@ RECT SceneViewportToolbarDropdownOverlayWindow::ResolveScreenBounds() const noex
     }
 
     RECT popup{};
-    if (TerrainPopupOpen()) {
+    if (terrainToolbarOnly_) {
+        popup = SceneViewportToolbarRenderer::ResolveTerrainTools(sceneContent_).panel;
+    } else if (TerrainPopupOpen()) {
         const TerrainViewportToolbarRects terrainRects = SceneViewportToolbarRenderer::ResolveTerrainTools(sceneContent_);
         popup = EditorTerrainService::ToolState().brushShapeMenuOpen
             ? terrainRects.brushShapeMenu
@@ -213,6 +250,16 @@ void SceneViewportToolbarDropdownOverlayWindow::Paint(HDC dc) const {
 
     RECT client{};
     GetClientRect(window_, &client);
+    if (terrainToolbarOnly_) {
+        const RECT syntheticContent{
+            client.left - 8,
+            client.top - SceneViewportToolbarRenderer::Height - 8,
+            client.right + 8,
+            client.bottom,
+        };
+        SceneViewportToolbarRenderer::PaintTerrainTools(dc, syntheticContent, theme_, *sceneContext_);
+        return;
+    }
     if (TerrainPopupOpen()) {
         SceneViewportToolbarRenderer::PaintTerrainPopup(dc, client, theme_, *sceneContext_, hoveredItem_);
         return;
@@ -262,6 +309,9 @@ int SceneViewportToolbarDropdownOverlayWindow::ItemIndexAt(int clientX, int clie
     }
     RECT client{};
     GetClientRect(window_, &client);
+    if (terrainToolbarOnly_) {
+        return -1;
+    }
     if (TerrainPopupOpen()) {
         const bool shapes = EditorTerrainService::ToolState().brushShapeMenuOpen;
         const int headerHeight = shapes ? 38 : 34;
@@ -332,8 +382,11 @@ LRESULT CALLBACK SceneViewportToolbarDropdownOverlayWindow::WindowProc(HWND wind
     case WM_RBUTTONDOWN:
         if (overlay != nullptr) {
             overlay->ForwardMouseMessage(message, wparam, lparam);
+            const bool toolbarStillVisible = overlay->terrainToolbarOnly_ && overlay->sceneContext_ != nullptr &&
+                TerrainToolbarVisible(*overlay->sceneContext_);
             if (overlay->sceneContext_ == nullptr ||
-                (overlay->sceneContext_->ViewportPreview(overlay->panelId_).ToolbarDropdown() == EditorViewportToolbarDropdown::None &&
+                (!toolbarStillVisible &&
+                 overlay->sceneContext_->ViewportPreview(overlay->panelId_).ToolbarDropdown() == EditorViewportToolbarDropdown::None &&
                  !TerrainPopupOpen())) {
                 ShowWindow(window, SW_HIDE);
                 overlay->shown_ = false;
@@ -370,6 +423,7 @@ LRESULT CALLBACK SceneViewportToolbarDropdownOverlayWindow::WindowProc(HWND wind
             overlay->parent_ = nullptr;
             overlay->sceneContext_ = nullptr;
             overlay->shown_ = false;
+            overlay->terrainToolbarOnly_ = false;
             overlay->hoveredItem_ = -1;
             overlay->screenBounds_ = RECT{};
             overlay->sceneContent_ = RECT{};

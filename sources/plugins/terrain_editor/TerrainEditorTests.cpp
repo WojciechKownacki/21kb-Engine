@@ -154,9 +154,10 @@ void RunMeshBuildTest() {
     Require(mesh->desc.gpuDriven.allowGpuCulling && mesh->meshlets.size() == mesh->sections.size(),
         "Terrain chunks are not represented in GPU-driven culling metadata");
     Require(mesh->embeddedMaterials.size() == 1U &&
-            mesh->embeddedMaterials.front().desc.baseColor[1] >
-                mesh->embeddedMaterials.front().desc.baseColor[0],
-        "Terrain mesh does not provide a readable default surface material");
+            mesh->embeddedMaterials.front().desc.baseColor[0] == 1.0F &&
+            mesh->embeddedMaterials.front().desc.baseColor[1] == 1.0F &&
+            mesh->embeddedMaterials.front().desc.baseColor[2] == 1.0F,
+        "Terrain mesh does not provide a neutral white default surface material");
     const std::size_t beforeIndices = mesh->desc.indexCount;
     terrain.holes[32U * 64U + 32U] = 1U;
     const std::optional<kb::render::RenderMeshAssetData> withHole = kb::render::RenderTerrainMeshBuilder::Build(terrain);

@@ -95,8 +95,6 @@ public:
     SceneViewportToolbarRenderer() = delete;
 
     static constexpr int Height = 34;
-    static constexpr int TerrainToolsInset = 54;
-
     [[nodiscard]] static SceneViewportToolbarRects Resolve(const RECT& content) noexcept;
     [[nodiscard]] static SceneViewportToolbarRects Resolve(const RECT& content, const EditorViewportPreviewState& state) noexcept;
     [[nodiscard]] static SceneViewportToolbarRects Resolve(

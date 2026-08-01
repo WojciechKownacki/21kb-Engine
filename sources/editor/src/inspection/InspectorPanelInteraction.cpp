@@ -2731,6 +2731,8 @@ void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEnt
     switch (property) {
     case InspectorPropertyId::MeshRendererAdvanced:
         return InspectorDisclosureId::MeshRendererAdvanced;
+    case InspectorPropertyId::TerrainAdvanced:
+        return InspectorDisclosureId::TerrainAdvanced;
     default:
         return std::nullopt;
     }
