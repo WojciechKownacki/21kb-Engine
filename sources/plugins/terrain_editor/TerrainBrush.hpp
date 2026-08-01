@@ -3,6 +3,7 @@
 #include "engine/assets/TerrainAsset.hpp"
 
 #include <cstdint>
+#include <vector>
 
 namespace kb::terrain_editor {
 
@@ -65,5 +66,10 @@ struct TerrainBrushResult {
     kb::assets::TerrainAsset& terrain,
     const TerrainBrushSettings& settings,
     const TerrainBrushStamp& stamp) noexcept;
+[[nodiscard]] TerrainBrushResult ApplyTerrainBrushToValidatedTerrain(
+    kb::assets::TerrainAsset& terrain,
+    const TerrainBrushSettings& settings,
+    const TerrainBrushStamp& stamp,
+    std::vector<float>& scratchHeights) noexcept;
 
 } // namespace kb::terrain_editor

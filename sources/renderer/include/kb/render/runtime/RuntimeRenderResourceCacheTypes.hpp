@@ -45,6 +45,7 @@ struct RuntimeMeshResource {
     std::uint64_t contentHash = 0;
     std::uint64_t dynamicTopologyKey = 0;
     std::size_t dynamicVertexUpdateCount = 0U;
+    std::size_t dynamicSectionUpdateCount = 0U;
     std::uint64_t lastReferencedFrame = 0;
     bool dynamicVertexUpdates = false;
 };

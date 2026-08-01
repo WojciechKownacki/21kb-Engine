@@ -127,16 +127,26 @@ bool RenderResourceRegistry::UpdateMeshVertices(
         vertexBytes + static_cast<std::size_t>(firstVertex) * stride,
         vertexCount * stride);
     bgfx::update(resource->dynamicVertexBuffer, firstVertex, memory);
-    resource->bounds = desc.bounds;
-    for (std::uint32_t sectionIndex = 0U;
-         sectionIndex < resource->sections.size() && sectionIndex < desc.sectionCount;
-         ++sectionIndex) {
-        resource->sections[sectionIndex].bounds = desc.sections[sectionIndex].bounds;
+    resource->version = AllocateResourceVersion();
+    return true;
+}
+
+bool RenderResourceRegistry::UpdateMeshGeometryMetadata(
+    RenderMeshHandle handle,
+    const RenderMeshDesc& desc,
+    std::span<const std::uint32_t> sectionIndices) {
+    RenderMeshResource* resource = meshes_.Find(handle);
+    if (resource == nullptr || desc.sectionCount != resource->sections.size() ||
+        desc.gpuDriven.meshletCount != resource->meshlets.size()) {
+        return false;
     }
-    for (std::uint32_t meshletIndex = 0U;
-         meshletIndex < resource->meshlets.size() && meshletIndex < desc.gpuDriven.meshletCount;
-         ++meshletIndex) {
-        resource->meshlets[meshletIndex].bounds = desc.gpuDriven.meshlets[meshletIndex].bounds;
+    resource->bounds = desc.bounds;
+    for (const std::uint32_t sectionIndex : sectionIndices) {
+        if (sectionIndex >= resource->sections.size()) return false;
+        resource->sections[sectionIndex].bounds = desc.sections[sectionIndex].bounds;
+        if (sectionIndex < resource->meshlets.size()) {
+            resource->meshlets[sectionIndex].bounds = desc.gpuDriven.meshlets[sectionIndex].bounds;
+        }
     }
     resource->version = AllocateResourceVersion();
     return true;
