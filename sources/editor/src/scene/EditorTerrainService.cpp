@@ -61,16 +61,23 @@ namespace {
     kb::scene::Scene& scene,
     kb::assets::AssetId assetId,
     const kb::assets::TerrainAsset& terrain,
+    std::shared_ptr<kb::render::RenderMeshAssetData> mesh,
     bool persist,
+    bool refreshMetadata,
     std::string* error) {
     const kb::assets::AssetMetadata* sourceMetadata = TerrainMetadata(scene, assetId);
     if (sourceMetadata == nullptr) {
         if (error != nullptr) *error = "Terrain asset is not registered";
         return false;
     }
-    std::optional<kb::render::RenderMeshAssetData> mesh =
-        kb::render::RenderTerrainMeshBuilder::Build(terrain);
-    if (!mesh.has_value()) {
+    if (mesh == nullptr) {
+        std::optional<kb::render::RenderMeshAssetData> built =
+            kb::render::RenderTerrainMeshBuilder::Build(terrain);
+        if (built.has_value()) {
+            mesh = std::make_shared<kb::render::RenderMeshAssetData>(std::move(*built));
+        }
+    }
+    if (mesh == nullptr) {
         if (error != nullptr) *error = "Terrain preview mesh could not be built";
         return false;
     }
@@ -78,22 +85,33 @@ namespace {
     if (persist && !kb::assets::TerrainAssetIO::Save(sourceCopy.physicalPath, terrain, error)) {
         return false;
     }
-    kb::assets::AssetMetadata updated = sourceCopy;
-    ++updated.contentHash;
-    if (updated.contentHash == 0U) updated.contentHash = 1U;
     kb::assets::AssetManager& manager = scene.Assets().Manager();
-    if (!manager.RegisterAsset(std::move(updated))) {
-        if (error != nullptr) *error = "Terrain asset metadata could not be refreshed";
-        return false;
+    if (refreshMetadata) {
+        kb::assets::AssetMetadata updated = sourceCopy;
+        ++updated.contentHash;
+        if (updated.contentHash == 0U) updated.contentHash = 1U;
+        if (!manager.RegisterAsset(std::move(updated))) {
+            if (error != nullptr) *error = "Terrain asset metadata could not be refreshed";
+            return false;
+        }
     }
     if (!manager.PublishRuntimeAsset<kb::render::RenderMeshAssetData>(
             assetId,
-            std::make_shared<kb::render::RenderMeshAssetData>(std::move(*mesh)))) {
+            std::move(mesh))) {
         if (error != nullptr) *error = manager.LastError();
         return false;
     }
     if (error != nullptr) error->clear();
     return true;
+}
+
+[[nodiscard]] bool Refresh(
+    kb::scene::Scene& scene,
+    kb::assets::AssetId assetId,
+    const kb::assets::TerrainAsset& terrain,
+    bool persist,
+    std::string* error) {
+    return Refresh(scene, assetId, terrain, nullptr, persist, true, error);
 }
 
 } // namespace
@@ -192,12 +210,98 @@ bool EditorTerrainService::PublishPreview(
     return Refresh(scene, assetId, terrain, false, error);
 }
 
+std::shared_ptr<kb::render::RenderMeshAssetData> EditorTerrainService::CreatePreviewMesh(
+    kb::scene::Scene& scene,
+    kb::assets::AssetId assetId,
+    const kb::assets::TerrainAsset& terrain,
+    std::string* error) {
+    const kb::assets::AssetHandle<kb::render::RenderMeshAssetData> current =
+        scene.Assets().Manager().Load<kb::render::RenderMeshAssetData>(assetId);
+    std::shared_ptr<kb::render::RenderMeshAssetData> preview;
+    if (current.IsLoaded()) {
+        preview = std::make_shared<kb::render::RenderMeshAssetData>(*current);
+        preview->RefreshDesc();
+    }
+    if (preview == nullptr ||
+        !kb::render::RenderTerrainMeshBuilder::PrepareDynamicPreview(terrain, *preview)) {
+        std::optional<kb::render::RenderMeshAssetData> built =
+            kb::render::RenderTerrainMeshBuilder::Build(terrain);
+        if (!built.has_value()) {
+            if (error != nullptr) *error = "Terrain preview mesh could not be built";
+            return {};
+        }
+        preview = std::make_shared<kb::render::RenderMeshAssetData>(std::move(*built));
+        if (!kb::render::RenderTerrainMeshBuilder::PrepareDynamicPreview(terrain, *preview)) {
+            if (error != nullptr) *error = "Terrain preview mesh is not dynamically updateable";
+            return {};
+        }
+    }
+    if (error != nullptr) error->clear();
+    return preview;
+}
+
+bool EditorTerrainService::UpdatePreviewMesh(
+    const kb::assets::TerrainAsset& terrain,
+    const kb::terrain_editor::TerrainBrushResult& changedRegion,
+    bool topologyChanged,
+    std::shared_ptr<kb::render::RenderMeshAssetData>& mesh,
+    std::string* error) {
+    const bool updated = !topologyChanged && mesh != nullptr &&
+        kb::render::RenderTerrainMeshBuilder::UpdateDynamicPreview(
+            terrain,
+            kb::render::RenderTerrainMeshUpdateRegion{
+                .minX = changedRegion.minX,
+                .minZ = changedRegion.minZ,
+                .maxX = changedRegion.maxX,
+                .maxZ = changedRegion.maxZ,
+            },
+            *mesh);
+    if (updated) {
+        if (error != nullptr) error->clear();
+        return true;
+    }
+    std::optional<kb::render::RenderMeshAssetData> rebuilt =
+        kb::render::RenderTerrainMeshBuilder::Build(terrain);
+    if (!rebuilt.has_value()) {
+        if (error != nullptr) *error = "Terrain preview mesh could not be rebuilt";
+        return false;
+    }
+    mesh = std::make_shared<kb::render::RenderMeshAssetData>(std::move(*rebuilt));
+    if (!kb::render::RenderTerrainMeshBuilder::PrepareDynamicPreview(terrain, *mesh)) {
+        if (error != nullptr) *error = "Terrain preview mesh is not dynamically updateable";
+        return false;
+    }
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool EditorTerrainService::PublishPreview(
+    kb::scene::Scene& scene,
+    kb::assets::AssetId assetId,
+    const kb::assets::TerrainAsset& terrain,
+    std::shared_ptr<kb::render::RenderMeshAssetData> mesh,
+    bool initializeDynamicResource,
+    std::string* error) {
+    return Refresh(
+        scene, assetId, terrain, std::move(mesh), false,
+        initializeDynamicResource, error);
+}
+
 bool EditorTerrainService::Persist(
     kb::scene::Scene& scene,
     kb::assets::AssetId assetId,
     const kb::assets::TerrainAsset& terrain,
     std::string* error) {
     return Refresh(scene, assetId, terrain, true, error);
+}
+
+bool EditorTerrainService::Persist(
+    kb::scene::Scene& scene,
+    kb::assets::AssetId assetId,
+    const kb::assets::TerrainAsset& terrain,
+    std::shared_ptr<kb::render::RenderMeshAssetData> mesh,
+    std::string* error) {
+    return Refresh(scene, assetId, terrain, std::move(mesh), true, true, error);
 }
 
 std::optional<kb::assets::TerrainAsset> EditorTerrainService::BuildHeightmapImport(

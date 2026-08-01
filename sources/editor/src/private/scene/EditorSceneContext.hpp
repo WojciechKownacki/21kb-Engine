@@ -32,6 +32,7 @@
 #include "inspection/InspectorPanelState.hpp"
 #include "app/EditorPlayModeSceneSession.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "rendering/material_graph/MaterialGraphInteractionPolicy.hpp"
 
 #include <array>
@@ -125,7 +126,9 @@ class EditorSceneContext {
         kb::assets::AssetId assetId{};
         kb::assets::TerrainAsset before{};
         kb::assets::TerrainAsset working{};
+        std::shared_ptr<kb::render::RenderMeshAssetData> previewMesh{};
         bool changed = false;
+        bool previewPublished = false;
     };
 
     struct TerrainReadCache {

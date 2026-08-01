@@ -1,9 +1,12 @@
 #include "kb/render/resources/RenderTerrainMeshBuilder.hpp"
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <utility>
 
 namespace kb::render {
@@ -84,6 +87,58 @@ void BuildLodTable(RenderMeshAssetData& mesh) {
     }
 }
 
+[[nodiscard]] std::uint64_t TerrainTopologyKey(const kb::assets::TerrainAsset& terrain) noexcept {
+    std::uint64_t hash = 1469598103934665603ULL;
+    const auto append = [&hash](std::uint64_t value) noexcept {
+        hash ^= value;
+        hash *= 1099511628211ULL;
+    };
+    append(terrain.width);
+    append(terrain.height);
+    append(terrain.chunkQuads);
+    append(terrain.lodCount);
+    append(std::bit_cast<std::uint32_t>(terrain.worldSizeX));
+    append(std::bit_cast<std::uint32_t>(terrain.worldSizeZ));
+    for (const std::uint8_t hole : terrain.holes) append(hole);
+    return hash == 0U ? 1U : hash;
+}
+
+void ExpandBounds(RenderBoundsSphere& bounds, const RenderStaticMeshVertexP3N3T4UV2& vertex) noexcept {
+    const float dx = vertex.x - bounds.center[0];
+    const float dy = vertex.y - bounds.center[1];
+    const float dz = vertex.z - bounds.center[2];
+    const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (!bounds.IsValid()) {
+        bounds.center = { vertex.x, vertex.y, vertex.z };
+        bounds.radius = 0.000001F;
+    } else if (distance > bounds.radius) {
+        const float expandedRadius = (bounds.radius + distance) * 0.5F;
+        const float shift = (expandedRadius - bounds.radius) / distance;
+        bounds.center[0] += dx * shift;
+        bounds.center[1] += dy * shift;
+        bounds.center[2] += dz * shift;
+        bounds.radius = expandedRadius;
+    }
+}
+
+[[nodiscard]] RenderStaticMeshVertexP3N3T4UV2 BuildTangentVertex(
+    const kb::assets::TerrainAsset& terrain,
+    std::uint32_t x,
+    std::uint32_t z) noexcept {
+    const RenderStaticMeshVertexP3N3UV2 source = BuildVertex(terrain, x, z);
+    const float tangentLength = std::sqrt(source.ny * source.ny + source.nx * source.nx);
+    const float tx = tangentLength > 0.000001F ? source.ny / tangentLength : 1.0F;
+    const float ty = tangentLength > 0.000001F ? -source.nx / tangentLength : 0.0F;
+    return RenderStaticMeshVertexP3N3T4UV2{
+        .x = source.x, .y = source.y, .z = source.z,
+        .nx = source.nx, .ny = source.ny, .nz = source.nz,
+        .tx = tx, .ty = ty, .tz = 0.0F, .tw = 1.0F,
+        .u = source.u, .v = source.v,
+        .u1 = source.u1, .v1 = source.v1,
+        .r = source.r, .g = source.g, .b = source.b, .a = source.a,
+    };
+}
+
 } // namespace
 
 std::optional<RenderMeshAssetData> RenderTerrainMeshBuilder::Build(const kb::assets::TerrainAsset& terrain) {
@@ -99,6 +154,14 @@ std::optional<RenderMeshAssetData> RenderTerrainMeshBuilder::Build(const kb::ass
     const std::uint32_t quadsZ = terrain.height - 1U;
     const std::uint32_t maxLodsFromChunk = 1U + static_cast<std::uint32_t>(std::log2(static_cast<float>(terrain.chunkQuads)));
     const std::uint32_t lodCount = std::min(terrain.lodCount, maxLodsFromChunk);
+    const std::uint32_t chunkCountX = (quadsX + terrain.chunkQuads - 1U) / terrain.chunkQuads;
+    const std::uint32_t chunkCountZ = (quadsZ + terrain.chunkQuads - 1U) / terrain.chunkQuads;
+    mesh.terrainChunkCountX = chunkCountX;
+    mesh.terrainChunkCountZ = chunkCountZ;
+    mesh.terrainLodCount = lodCount;
+    mesh.terrainSectionIndices.assign(
+        static_cast<std::size_t>(lodCount) * chunkCountX * chunkCountZ,
+        UINT32_MAX);
     for (std::uint32_t lod = 0U; lod < lodCount; ++lod) {
         const std::uint32_t step = 1U << lod;
         for (std::uint32_t chunkZ = 0U; chunkZ < quadsZ; chunkZ += terrain.chunkQuads) {
@@ -118,6 +181,11 @@ std::optional<RenderMeshAssetData> RenderTerrainMeshBuilder::Build(const kb::ass
                 }
                 const std::uint32_t indexCount = static_cast<std::uint32_t>(mesh.indices32.size()) - firstIndex;
                 if (indexCount != 0U) {
+                    const std::size_t terrainSectionIndex =
+                        static_cast<std::size_t>(lod) * chunkCountX * chunkCountZ +
+                        static_cast<std::size_t>(chunkZ / terrain.chunkQuads) * chunkCountX +
+                        chunkX / terrain.chunkQuads;
+                    mesh.terrainSectionIndices[terrainSectionIndex] = static_cast<std::uint32_t>(mesh.sections.size());
                     mesh.sections.push_back(RenderMeshSectionDesc{
                         .indexStart = firstIndex,
                         .indexCount = indexCount,
@@ -128,7 +196,8 @@ std::optional<RenderMeshAssetData> RenderTerrainMeshBuilder::Build(const kb::ass
             }
         }
     }
-    if (mesh.indices32.empty() || !RenderMeshAssetBuilder::Finalize(mesh)) return std::nullopt;
+    if (mesh.indices32.empty() || !RenderMeshAssetBuilder::Finalize(
+            mesh, RenderMeshFinalizeOptions{ .optimizeVertexFetch = false })) return std::nullopt;
     BuildLodTable(mesh);
     mesh.materialSlots.push_back(RenderMaterialSlotDesc{});
     mesh.materialNames.emplace_back("Terrain");
@@ -140,8 +209,104 @@ std::optional<RenderMeshAssetData> RenderTerrainMeshBuilder::Build(const kb::ass
     defaultMaterial.desc.baseColor[3] = 1.0F;
     defaultMaterial.desc.roughnessFactor = 0.92F;
     mesh.embeddedMaterials.push_back(std::move(defaultMaterial));
+    mesh.dynamicTopologyKey = TerrainTopologyKey(terrain);
     mesh.RefreshDesc();
     return mesh;
+}
+
+bool RenderTerrainMeshBuilder::PrepareDynamicPreview(
+    const kb::assets::TerrainAsset& terrain,
+    RenderMeshAssetData& mesh) noexcept {
+    const std::size_t vertexCount = static_cast<std::size_t>(terrain.width) * terrain.height;
+    if (!kb::assets::IsTerrainAssetValid(terrain) ||
+        mesh.tangentVertices.size() != vertexCount ||
+        mesh.terrainChunkCountX == 0U || mesh.terrainChunkCountZ == 0U ||
+        mesh.terrainLodCount == 0U ||
+        mesh.terrainSectionIndices.size() != static_cast<std::size_t>(mesh.terrainChunkCountX) *
+            mesh.terrainChunkCountZ * mesh.terrainLodCount ||
+        mesh.dynamicTopologyKey != TerrainTopologyKey(terrain)) {
+        return false;
+    }
+    mesh.dynamicVertexUpdates = true;
+    mesh.vertexUpdateFirst = 0U;
+    mesh.vertexUpdateCount = static_cast<std::uint32_t>(vertexCount);
+    mesh.dynamicVertexUpdateRanges.clear();
+    mesh.dynamicVertexUpdateRanges.push_back(RenderMeshVertexUpdateRange{
+        .firstVertex = mesh.vertexUpdateFirst,
+        .vertexCount = mesh.vertexUpdateCount,
+    });
+    mesh.RefreshDesc();
+    return true;
+}
+
+bool RenderTerrainMeshBuilder::UpdateDynamicPreview(
+    const kb::assets::TerrainAsset& terrain,
+    const RenderTerrainMeshUpdateRegion& region,
+    RenderMeshAssetData& mesh) noexcept {
+    if (!mesh.dynamicVertexUpdates || mesh.tangentVertices.size() != terrain.heights.size() ||
+        mesh.terrainChunkCountX == 0U || mesh.terrainChunkCountZ == 0U ||
+        mesh.terrainLodCount == 0U ||
+        region.minX > region.maxX || region.minZ > region.maxZ ||
+        region.maxX >= terrain.width || region.maxZ >= terrain.height) {
+        return false;
+    }
+    const std::uint32_t minX = region.minX == 0U ? 0U : region.minX - 1U;
+    const std::uint32_t minZ = region.minZ == 0U ? 0U : region.minZ - 1U;
+    const std::uint32_t maxX = std::min(region.maxX + 1U, terrain.width - 1U);
+    const std::uint32_t maxZ = std::min(region.maxZ + 1U, terrain.height - 1U);
+    float minimumHeight = std::numeric_limits<float>::max();
+    float maximumHeight = std::numeric_limits<float>::lowest();
+    for (std::uint32_t z = minZ; z <= maxZ; ++z) {
+        for (std::uint32_t x = minX; x <= maxX; ++x) {
+            RenderStaticMeshVertexP3N3T4UV2& vertex = mesh.tangentVertices[VertexIndex(terrain, x, z)];
+            vertex = BuildTangentVertex(terrain, x, z);
+            minimumHeight = std::min(minimumHeight, vertex.y);
+            maximumHeight = std::max(maximumHeight, vertex.y);
+        }
+    }
+    mesh.vertexUpdateFirst = minZ * terrain.width + minX;
+    mesh.vertexUpdateCount = (maxZ * terrain.width + maxX) - mesh.vertexUpdateFirst + 1U;
+    mesh.dynamicVertexUpdateRanges.push_back(RenderMeshVertexUpdateRange{
+        .firstVertex = mesh.vertexUpdateFirst,
+        .vertexCount = mesh.vertexUpdateCount,
+    });
+
+    const float worldMinX = static_cast<float>(minX) * (terrain.worldSizeX / static_cast<float>(terrain.width - 1U)) - terrain.worldSizeX * 0.5F;
+    const float worldMaxX = static_cast<float>(maxX) * (terrain.worldSizeX / static_cast<float>(terrain.width - 1U)) - terrain.worldSizeX * 0.5F;
+    const float worldMinZ = static_cast<float>(minZ) * (terrain.worldSizeZ / static_cast<float>(terrain.height - 1U)) - terrain.worldSizeZ * 0.5F;
+    const float worldMaxZ = static_cast<float>(maxZ) * (terrain.worldSizeZ / static_cast<float>(terrain.height - 1U)) - terrain.worldSizeZ * 0.5F;
+    const std::array<RenderStaticMeshVertexP3N3T4UV2, 8U> corners{
+        RenderStaticMeshVertexP3N3T4UV2{ .x = worldMinX, .y = minimumHeight, .z = worldMinZ },
+        RenderStaticMeshVertexP3N3T4UV2{ .x = worldMaxX, .y = minimumHeight, .z = worldMinZ },
+        RenderStaticMeshVertexP3N3T4UV2{ .x = worldMinX, .y = minimumHeight, .z = worldMaxZ },
+        RenderStaticMeshVertexP3N3T4UV2{ .x = worldMaxX, .y = minimumHeight, .z = worldMaxZ },
+        RenderStaticMeshVertexP3N3T4UV2{ .x = worldMinX, .y = maximumHeight, .z = worldMinZ },
+        RenderStaticMeshVertexP3N3T4UV2{ .x = worldMaxX, .y = maximumHeight, .z = worldMinZ },
+        RenderStaticMeshVertexP3N3T4UV2{ .x = worldMinX, .y = maximumHeight, .z = worldMaxZ },
+        RenderStaticMeshVertexP3N3T4UV2{ .x = worldMaxX, .y = maximumHeight, .z = worldMaxZ },
+    };
+    for (const RenderStaticMeshVertexP3N3T4UV2& corner : corners) ExpandBounds(mesh.bounds, corner);
+    const std::uint32_t minChunkX = minX == 0U ? 0U : (minX - 1U) / terrain.chunkQuads;
+    const std::uint32_t minChunkZ = minZ == 0U ? 0U : (minZ - 1U) / terrain.chunkQuads;
+    const std::uint32_t maxChunkX = std::min(maxX / terrain.chunkQuads, mesh.terrainChunkCountX - 1U);
+    const std::uint32_t maxChunkZ = std::min(maxZ / terrain.chunkQuads, mesh.terrainChunkCountZ - 1U);
+    for (std::uint32_t lod = 0U; lod < mesh.terrainLodCount; ++lod) {
+        for (std::uint32_t chunkZ = minChunkZ; chunkZ <= maxChunkZ; ++chunkZ) {
+            for (std::uint32_t chunkX = minChunkX; chunkX <= maxChunkX; ++chunkX) {
+                const std::size_t terrainSectionIndex =
+                    static_cast<std::size_t>(lod) * mesh.terrainChunkCountX * mesh.terrainChunkCountZ +
+                    static_cast<std::size_t>(chunkZ) * mesh.terrainChunkCountX + chunkX;
+                if (terrainSectionIndex >= mesh.terrainSectionIndices.size()) continue;
+                const std::uint32_t sectionIndex = mesh.terrainSectionIndices[terrainSectionIndex];
+                if (sectionIndex == UINT32_MAX || sectionIndex >= mesh.sections.size()) continue;
+                RenderBoundsSphere& sectionBounds = mesh.sections[sectionIndex].bounds;
+                for (const RenderStaticMeshVertexP3N3T4UV2& corner : corners) ExpandBounds(sectionBounds, corner);
+                if (sectionIndex < mesh.meshlets.size()) mesh.meshlets[sectionIndex].bounds = sectionBounds;
+            }
+        }
+    }
+    mesh.RefreshDesc();
+    return true;
 }
 
 } // namespace kb::render

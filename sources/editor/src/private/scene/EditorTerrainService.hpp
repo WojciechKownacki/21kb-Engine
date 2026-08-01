@@ -8,10 +8,12 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 
 namespace kb::scene { class Scene; }
+namespace kb::render { struct RenderMeshAssetData; }
 
 namespace kb::editor {
 
@@ -76,10 +78,34 @@ public:
         kb::assets::AssetId assetId,
         const kb::assets::TerrainAsset& terrain,
         std::string* error = nullptr);
+    [[nodiscard]] static std::shared_ptr<kb::render::RenderMeshAssetData> CreatePreviewMesh(
+        kb::scene::Scene& scene,
+        kb::assets::AssetId assetId,
+        const kb::assets::TerrainAsset& terrain,
+        std::string* error = nullptr);
+    [[nodiscard]] static bool UpdatePreviewMesh(
+        const kb::assets::TerrainAsset& terrain,
+        const kb::terrain_editor::TerrainBrushResult& changedRegion,
+        bool topologyChanged,
+        std::shared_ptr<kb::render::RenderMeshAssetData>& mesh,
+        std::string* error = nullptr);
+    [[nodiscard]] static bool PublishPreview(
+        kb::scene::Scene& scene,
+        kb::assets::AssetId assetId,
+        const kb::assets::TerrainAsset& terrain,
+        std::shared_ptr<kb::render::RenderMeshAssetData> mesh,
+        bool initializeDynamicResource,
+        std::string* error = nullptr);
     [[nodiscard]] static bool Persist(
         kb::scene::Scene& scene,
         kb::assets::AssetId assetId,
         const kb::assets::TerrainAsset& terrain,
+        std::string* error = nullptr);
+    [[nodiscard]] static bool Persist(
+        kb::scene::Scene& scene,
+        kb::assets::AssetId assetId,
+        const kb::assets::TerrainAsset& terrain,
+        std::shared_ptr<kb::render::RenderMeshAssetData> mesh,
         std::string* error = nullptr);
     [[nodiscard]] static std::optional<kb::assets::TerrainAsset> BuildHeightmapImport(
         const kb::assets::TerrainAsset& current,

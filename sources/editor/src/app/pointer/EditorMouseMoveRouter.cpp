@@ -107,7 +107,6 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         EditorTerrainViewportInteraction::UpdateHover(
             messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
         sceneViewport_.RequestPresent();
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     }
 
     if (EditorTerrainService::ToolState().strokeActive) {

@@ -1791,11 +1791,16 @@ bool EditorSceneContext::ApplyTerrainBrushStamp(
         std::optional<EditorTerrainAssetState> captured =
             EditorTerrainService::Capture(*scene_, entity, error);
         if (!captured.has_value()) return false;
+        std::shared_ptr<kb::render::RenderMeshAssetData> previewMesh =
+            EditorTerrainService::CreatePreviewMesh(
+                *scene_, captured->assetId, captured->terrain, error);
+        if (previewMesh == nullptr) return false;
         terrainStroke_ = TerrainStrokeState{
             .entity = entity,
             .assetId = captured->assetId,
             .before = captured->terrain,
             .working = std::move(captured->terrain),
+            .previewMesh = std::move(previewMesh),
         };
     }
     if (!terrainStroke_.has_value() || terrainStroke_->entity != entity) {
@@ -1804,18 +1809,25 @@ bool EditorSceneContext::ApplyTerrainBrushStamp(
     }
 
     const kb::terrain_editor::TerrainBrushResult result =
-        kb::terrain_editor::ApplyTerrainBrush(
+        kb::terrain_editor::ApplyTerrainBrushToValidatedTerrain(
             terrainStroke_->working, settings, stamp);
     if (!result.Changed()) {
         if (error != nullptr) error->clear();
         return true;
     }
-    if (!EditorTerrainService::PublishPreview(
+    if (!EditorTerrainService::UpdatePreviewMesh(
+            terrainStroke_->working, result,
+            settings.mode == kb::terrain_editor::TerrainBrushMode::CutHole ||
+                settings.mode == kb::terrain_editor::TerrainBrushMode::FillHole,
+            terrainStroke_->previewMesh, error) ||
+        !EditorTerrainService::PublishPreview(
             *scene_, terrainStroke_->assetId,
-            terrainStroke_->working, error)) {
+            terrainStroke_->working, terrainStroke_->previewMesh,
+            !terrainStroke_->previewPublished, error)) {
         CancelTerrainBrushStroke();
         return false;
     }
+    terrainStroke_->previewPublished = true;
     terrainStroke_->changed = true;
     terrainReadCache_.reset();
     MarkSceneEntitiesRenderDirty(
@@ -1835,7 +1847,8 @@ bool EditorSceneContext::CommitTerrainBrushStroke(std::string* error) {
         return true;
     }
     if (!EditorTerrainService::Persist(
-            *scene_, completed.assetId, completed.working, error)) {
+            *scene_, completed.assetId, completed.working,
+            completed.previewMesh, error)) {
         static_cast<void>(EditorTerrainService::PublishPreview(
             *scene_, completed.assetId, completed.before));
         terrainReadCache_.reset();
