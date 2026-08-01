@@ -8,6 +8,7 @@ SAMPLER2D(s_metallicRoughness, 2);
 SAMPLER2D(s_occlusion, 3);
 SAMPLER2D(s_emissive, 4);
 SAMPLER2D(s_shadowMap, 5);
+SAMPLER2D(s_terrainLayerWeights, 15);
 uniform vec4 u_materialParams;
 uniform vec4 u_materialEmissive;
 uniform vec4 u_materialFlags;
@@ -24,6 +25,22 @@ uniform vec4 u_environmentZenith;
 uniform vec4 u_environmentGround;
 uniform vec4 u_environmentParams;
 uniform vec4 u_shadowParams;
+uniform vec4 u_terrainLayerParams;
+
+float TerrainLayerOpacity(vec2 terrainUv)
+{
+    if (u_terrainLayerParams.y < 0.5 || u_terrainLayerParams.x < 0.5) {
+        return 1.0;
+    }
+    vec4 weights = texture2D(s_terrainLayerWeights, terrainUv);
+    if (u_terrainLayerParams.x < 1.5) {
+        return weights.y / max(weights.x + weights.y, 0.0001);
+    }
+    if (u_terrainLayerParams.x < 2.5) {
+        return weights.z / max(weights.x + weights.y + weights.z, 0.0001);
+    }
+    return weights.w / max(weights.x + weights.y + weights.z + weights.w, 0.0001);
+}
 
 float DistributionGgx(float nDotH, float roughness)
 {
@@ -184,6 +201,10 @@ float SampleShadowVisibility(vec3 shadowCoord)
 
 void main()
 {
+    float terrainLayerOpacity = TerrainLayerOpacity(v_shadowFlags.zw);
+    if (terrainLayerOpacity <= 0.0001) {
+        discard;
+    }
     vec2 materialUv = v_texcoord0 * u_materialUvTransform.xy + u_materialUvTransform.zw;
     vec4 albedo = texture2D(s_albedo, materialUv) * v_color0;
     if (u_materialFlags.x > 0.5 && u_materialFlags.x < 1.5 && albedo.a < u_materialParams.w) {
@@ -218,6 +239,6 @@ void main()
         }
     }
     vec3 emissive = texture2D(s_emissive, materialUv).rgb * u_materialEmissive.rgb * u_materialEmissive.a;
-    float outputAlpha = u_materialFlags.x < 0.5 ? 1.0 : albedo.a;
+    float outputAlpha = (u_materialFlags.x < 0.5 ? 1.0 : albedo.a) * terrainLayerOpacity;
     gl_FragColor = vec4(lighting + emissive, outputAlpha);
 }

@@ -36,7 +36,8 @@ void MixU64(std::uint64_t& seed, std::uint64_t value) noexcept {
     const RenderMaterialResource* materialResource,
     RenderMeshHandle mesh,
     std::uint64_t meshAssetId,
-    std::uint16_t depthBucket) noexcept {
+    std::uint16_t depthBucket,
+    std::uint8_t terrainLayerIndex) noexcept {
     const std::uint64_t passKey = static_cast<std::uint64_t>(static_cast<std::uint8_t>(pass) & 0x0FU);
     // Group graph-material draws by their full GPU program identity so the sort minimizes program
     // switches across graph hash, static variant, material type/version, and pipeline state.
@@ -45,6 +46,13 @@ void MixU64(std::uint64_t& seed, std::uint64_t value) noexcept {
         : (material.IsValid() ? material.value : materialAssetId);
     const std::uint64_t materialKey = ResourceKey20(programIdentity);
     const std::uint64_t meshKey = ResourceKey20(mesh.IsValid() ? mesh.value : meshAssetId);
+    if (pass == MeshPassType::BaseTransparent && terrainLayerIndex != UINT8_MAX) {
+        return (passKey << 60U) |
+            (static_cast<std::uint64_t>(UINT16_MAX - depthBucket) << 44U) |
+            (meshKey << 24U) |
+            (static_cast<std::uint64_t>(terrainLayerIndex & 0x0FU) << 20U) |
+            materialKey;
+    }
     return (passKey << 60U) | (materialKey << 40U) | (meshKey << 20U) | static_cast<std::uint64_t>(SortDepthBucket(pass, depthBucket));
 }
 
@@ -59,6 +67,7 @@ void ResetCommandKeepingInstanceStorage(MeshDrawCommand& command) noexcept {
     command.indexStart = 0U;
     command.indexCount = 0U;
     command.lodLevel = 0U;
+    command.terrainLayerIndex = UINT8_MAX;
     command.depthBucket = 0U;
     command.mesh = {};
     command.material = {};
@@ -87,7 +96,7 @@ void MeshPipelineCommandBuilder::FinalizeCommands(MeshPipelineBuildResult& resul
         command.depthBucket = command.instances.empty()
             ? 0U
             : static_cast<std::uint16_t>(command.sortKey / static_cast<std::uint64_t>(command.instances.size()));
-        command.sortKey = BuildSortKey(pass, command.material, command.materialAssetId, command.materialResource, command.mesh, command.meshAssetId, command.depthBucket);
+        command.sortKey = BuildSortKey(pass, command.material, command.materialAssetId, command.materialResource, command.mesh, command.meshAssetId, command.depthBucket, command.terrainLayerIndex);
         result.stats.visibleMeshCount += static_cast<std::uint32_t>(command.instances.size());
         ++result.stats.visibleDrawGroupCount;
     }

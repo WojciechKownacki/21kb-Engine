@@ -8,6 +8,8 @@ add_library(kb_terrain_editor_core STATIC
     TerrainBrush.cpp
     TerrainHeightmapImporter.hpp
     TerrainHeightmapImporter.cpp
+    TerrainLayerPainter.hpp
+    TerrainLayerPainter.cpp
 )
 
 target_include_directories(kb_terrain_editor_core

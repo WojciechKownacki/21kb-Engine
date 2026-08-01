@@ -7,7 +7,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace kb::render {
 namespace {
@@ -30,6 +32,42 @@ namespace {
     for (std::uint32_t cellZ = z; cellZ < lastZ; ++cellZ) {
         for (std::uint32_t cellX = x; cellX < lastX; ++cellX) {
             if (terrain.holes[CellIndex(terrain, cellX, cellZ)] != 0U) return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] bool TerrainChunkLayerHasWeight(
+    const kb::assets::TerrainAsset& terrain,
+    std::uint32_t chunkIndexX,
+    std::uint32_t chunkIndexZ,
+    std::uint32_t layer) noexcept {
+    if (layer == 0U) return true;
+    if (layer >= terrain.materialLayers.size() || terrain.layerWeightWidth < 2U ||
+        terrain.layerWeightHeight < 2U) return false;
+    const std::uint32_t terrainQuadsX = terrain.width - 1U;
+    const std::uint32_t terrainQuadsZ = terrain.height - 1U;
+    const std::uint32_t startTerrainX = chunkIndexX * terrain.chunkQuads;
+    const std::uint32_t startTerrainZ = chunkIndexZ * terrain.chunkQuads;
+    const std::uint32_t endTerrainX = std::min(startTerrainX + terrain.chunkQuads, terrainQuadsX);
+    const std::uint32_t endTerrainZ = std::min(startTerrainZ + terrain.chunkQuads, terrainQuadsZ);
+    const std::uint32_t maxWeightX = terrain.layerWeightWidth - 1U;
+    const std::uint32_t maxWeightY = terrain.layerWeightHeight - 1U;
+    const std::uint32_t minX = static_cast<std::uint32_t>(
+        (static_cast<std::uint64_t>(startTerrainX) * maxWeightX) / terrainQuadsX);
+    const std::uint32_t minY = static_cast<std::uint32_t>(
+        (static_cast<std::uint64_t>(startTerrainZ) * maxWeightY) / terrainQuadsZ);
+    const std::uint32_t maxX = std::min(
+        maxWeightX,
+        static_cast<std::uint32_t>((static_cast<std::uint64_t>(endTerrainX) * maxWeightX + terrainQuadsX - 1U) / terrainQuadsX));
+    const std::uint32_t maxY = std::min(
+        maxWeightY,
+        static_cast<std::uint32_t>((static_cast<std::uint64_t>(endTerrainZ) * maxWeightY + terrainQuadsZ - 1U) / terrainQuadsZ));
+    for (std::uint32_t y = minY; y <= maxY; ++y) {
+        for (std::uint32_t x = minX; x <= maxX; ++x) {
+            const std::size_t offset =
+                (static_cast<std::size_t>(y) * terrain.layerWeightWidth + x) * 4U + layer;
+            if (terrain.layerWeights[offset] != 0U) return true;
         }
     }
     return false;
@@ -99,6 +137,12 @@ void BuildLodTable(RenderMeshAssetData& mesh) {
     append(terrain.lodCount);
     append(std::bit_cast<std::uint32_t>(terrain.worldSizeX));
     append(std::bit_cast<std::uint32_t>(terrain.worldSizeZ));
+    append(terrain.materialLayers.size());
+    append(terrain.layerWeightWidth);
+    append(terrain.layerWeightHeight);
+    for (const kb::assets::TerrainMaterialLayer& layer : terrain.materialLayers) {
+        append(layer.materialAssetId);
+    }
     for (const std::uint8_t hole : terrain.holes) append(hole);
     return hash == 0U ? 1U : hash;
 }
@@ -156,6 +200,21 @@ std::optional<RenderMeshAssetData> RenderTerrainMeshBuilder::Build(const kb::ass
     const std::uint32_t lodCount = std::min(terrain.lodCount, maxLodsFromChunk);
     const std::uint32_t chunkCountX = (quadsX + terrain.chunkQuads - 1U) / terrain.chunkQuads;
     const std::uint32_t chunkCountZ = (quadsZ + terrain.chunkQuads - 1U) / terrain.chunkQuads;
+    const std::uint32_t materialLayerCount = std::max<std::uint32_t>(
+        1U, static_cast<std::uint32_t>(terrain.materialLayers.size()));
+    std::vector<std::uint8_t> chunkLayerActive(
+        static_cast<std::size_t>(chunkCountX) * chunkCountZ * materialLayerCount,
+        1U);
+    for (std::uint32_t chunkZ = 0U; chunkZ < chunkCountZ; ++chunkZ) {
+        for (std::uint32_t chunkX = 0U; chunkX < chunkCountX; ++chunkX) {
+            for (std::uint32_t layer = 1U; layer < materialLayerCount; ++layer) {
+                const std::size_t activeIndex =
+                    (static_cast<std::size_t>(chunkZ) * chunkCountX + chunkX) * materialLayerCount + layer;
+                chunkLayerActive[activeIndex] = TerrainChunkLayerHasWeight(
+                    terrain, chunkX, chunkZ, layer) ? 1U : 0U;
+            }
+        }
+    }
     mesh.terrainChunkCountX = chunkCountX;
     mesh.terrainChunkCountZ = chunkCountZ;
     mesh.terrainLodCount = lodCount;
@@ -186,12 +245,21 @@ std::optional<RenderMeshAssetData> RenderTerrainMeshBuilder::Build(const kb::ass
                         static_cast<std::size_t>(chunkZ / terrain.chunkQuads) * chunkCountX +
                         chunkX / terrain.chunkQuads;
                     mesh.terrainSectionIndices[terrainSectionIndex] = static_cast<std::uint32_t>(mesh.sections.size());
-                    mesh.sections.push_back(RenderMeshSectionDesc{
-                        .indexStart = firstIndex,
-                        .indexCount = indexCount,
-                        .materialSlot = 0U,
-                        .lodLevel = static_cast<std::uint8_t>(lod),
-                    });
+                    for (std::uint32_t layer = 0U; layer < materialLayerCount; ++layer) {
+                        const std::size_t activeIndex =
+                            (static_cast<std::size_t>(chunkZ / terrain.chunkQuads) * chunkCountX +
+                             chunkX / terrain.chunkQuads) * materialLayerCount + layer;
+                        mesh.sections.push_back(RenderMeshSectionDesc{
+                            .indexStart = firstIndex,
+                            .indexCount = indexCount,
+                            .materialSlot = layer,
+                            .lodLevel = static_cast<std::uint8_t>(lod),
+                            .terrainLayerIndex = terrain.materialLayers.empty()
+                                ? UINT8_MAX
+                                : static_cast<std::uint8_t>(layer),
+                            .terrainLayerActive = chunkLayerActive[activeIndex] != 0U,
+                        });
+                    }
                 }
             }
         }
@@ -199,16 +267,31 @@ std::optional<RenderMeshAssetData> RenderTerrainMeshBuilder::Build(const kb::ass
     if (mesh.indices32.empty() || !RenderMeshAssetBuilder::Finalize(
             mesh, RenderMeshFinalizeOptions{ .optimizeVertexFetch = false })) return std::nullopt;
     BuildLodTable(mesh);
-    mesh.materialSlots.push_back(RenderMaterialSlotDesc{});
-    mesh.materialNames.emplace_back("Terrain");
-    RenderMeshEmbeddedMaterial defaultMaterial{};
-    defaultMaterial.name = "Terrain";
-    defaultMaterial.desc.baseColor[0] = 1.0F;
-    defaultMaterial.desc.baseColor[1] = 1.0F;
-    defaultMaterial.desc.baseColor[2] = 1.0F;
-    defaultMaterial.desc.baseColor[3] = 1.0F;
-    defaultMaterial.desc.roughnessFactor = 0.92F;
-    mesh.embeddedMaterials.push_back(std::move(defaultMaterial));
+    if (terrain.materialLayers.empty()) {
+        mesh.materialSlots.push_back(RenderMaterialSlotDesc{});
+        mesh.materialNames.emplace_back("Terrain");
+        RenderMeshEmbeddedMaterial defaultMaterial{};
+        defaultMaterial.name = "Terrain";
+        defaultMaterial.desc.baseColor[0] = 1.0F;
+        defaultMaterial.desc.baseColor[1] = 1.0F;
+        defaultMaterial.desc.baseColor[2] = 1.0F;
+        defaultMaterial.desc.baseColor[3] = 1.0F;
+        defaultMaterial.desc.roughnessFactor = 0.92F;
+        mesh.embeddedMaterials.push_back(std::move(defaultMaterial));
+    } else {
+        mesh.materialSlots.reserve(terrain.materialLayers.size());
+        mesh.materialNames.reserve(terrain.materialLayers.size());
+        for (std::uint32_t layer = 0U; layer < terrain.materialLayers.size(); ++layer) {
+            mesh.materialSlots.push_back(RenderMaterialSlotDesc{
+                .defaultMaterialAssetId = terrain.materialLayers[layer].materialAssetId,
+            });
+            mesh.materialNames.push_back("Terrain Layer " + std::to_string(layer + 1U));
+        }
+        mesh.terrainLayerWeights = terrain.layerWeights;
+        mesh.terrainLayerWeightWidth = static_cast<std::uint16_t>(terrain.layerWeightWidth);
+        mesh.terrainLayerWeightHeight = static_cast<std::uint16_t>(terrain.layerWeightHeight);
+        mesh.terrainLayerCount = static_cast<std::uint8_t>(terrain.materialLayers.size());
+    }
     mesh.dynamicTopologyKey = TerrainTopologyKey(terrain);
     mesh.RefreshDesc();
     return mesh;
@@ -239,6 +322,13 @@ bool RenderTerrainMeshBuilder::PrepareDynamicPreview(
     mesh.dynamicSectionUpdateIndices.reserve(mesh.sections.size());
     for (std::uint32_t sectionIndex = 0U; sectionIndex < mesh.sections.size(); ++sectionIndex) {
         mesh.dynamicSectionUpdateIndices.push_back(sectionIndex);
+    }
+    mesh.dynamicTerrainLayerWeightUpdates.clear();
+    if (mesh.terrainLayerCount != 0U) {
+        mesh.dynamicTerrainLayerWeightUpdates.push_back(RenderTerrainLayerWeightUpdateRegion{
+            .width = mesh.terrainLayerWeightWidth,
+            .height = mesh.terrainLayerWeightHeight,
+        });
     }
     mesh.RefreshDesc();
     return true;
@@ -307,13 +397,83 @@ bool RenderTerrainMeshBuilder::UpdateDynamicPreview(
                 if (terrainSectionIndex >= mesh.terrainSectionIndices.size()) continue;
                 const std::uint32_t sectionIndex = mesh.terrainSectionIndices[terrainSectionIndex];
                 if (sectionIndex == UINT32_MAX || sectionIndex >= mesh.sections.size()) continue;
-                RenderBoundsSphere& sectionBounds = mesh.sections[sectionIndex].bounds;
-                for (const RenderStaticMeshVertexP3N3T4UV2& corner : corners) ExpandBounds(sectionBounds, corner);
-                if (sectionIndex < mesh.meshlets.size()) mesh.meshlets[sectionIndex].bounds = sectionBounds;
-                mesh.dynamicSectionUpdateIndices.push_back(sectionIndex);
+                for (std::uint32_t layer = 0U; layer < std::max<std::uint32_t>(mesh.terrainLayerCount, 1U); ++layer) {
+                    const std::uint32_t layeredSectionIndex = sectionIndex + layer;
+                    if (layeredSectionIndex >= mesh.sections.size()) break;
+                    RenderBoundsSphere& sectionBounds = mesh.sections[layeredSectionIndex].bounds;
+                    for (const RenderStaticMeshVertexP3N3T4UV2& corner : corners) ExpandBounds(sectionBounds, corner);
+                    if (layeredSectionIndex < mesh.meshlets.size()) mesh.meshlets[layeredSectionIndex].bounds = sectionBounds;
+                    mesh.dynamicSectionUpdateIndices.push_back(layeredSectionIndex);
+                }
             }
         }
     }
+    mesh.RefreshDesc();
+    return true;
+}
+
+bool RenderTerrainMeshBuilder::UpdateDynamicLayerPreview(
+    const kb::assets::TerrainAsset& terrain,
+    const RenderTerrainLayerWeightUpdateRegion& region,
+    RenderMeshAssetData& mesh) noexcept {
+    if (!mesh.dynamicVertexUpdates || terrain.materialLayers.empty() ||
+        mesh.terrainLayerCount != terrain.materialLayers.size() ||
+        mesh.terrainLayerWeightWidth != terrain.layerWeightWidth ||
+        mesh.terrainLayerWeightHeight != terrain.layerWeightHeight ||
+        mesh.terrainLayerWeights.size() != terrain.layerWeights.size() ||
+        region.width == 0U || region.height == 0U ||
+        static_cast<std::uint32_t>(region.x) + region.width > terrain.layerWeightWidth ||
+        static_cast<std::uint32_t>(region.y) + region.height > terrain.layerWeightHeight) {
+        return false;
+    }
+    const std::size_t rowBytes = static_cast<std::size_t>(region.width) * 4U;
+    for (std::uint16_t row = 0U; row < region.height; ++row) {
+        const std::size_t offset =
+            (static_cast<std::size_t>(region.y + row) * terrain.layerWeightWidth + region.x) * 4U;
+        std::copy_n(
+            terrain.layerWeights.data() + offset,
+            rowBytes,
+            mesh.terrainLayerWeights.data() + offset);
+    }
+    const std::uint32_t terrainQuadsX = terrain.width - 1U;
+    const std::uint32_t terrainQuadsZ = terrain.height - 1U;
+    const std::uint32_t maxWeightX = terrain.layerWeightWidth - 1U;
+    const std::uint32_t maxWeightY = terrain.layerWeightHeight - 1U;
+    const std::uint32_t minTerrainX = static_cast<std::uint32_t>(
+        (static_cast<std::uint64_t>(region.x) * terrainQuadsX) / maxWeightX);
+    const std::uint32_t minTerrainZ = static_cast<std::uint32_t>(
+        (static_cast<std::uint64_t>(region.y) * terrainQuadsZ) / maxWeightY);
+    const std::uint32_t maxTerrainX = std::min(
+        terrainQuadsX,
+        static_cast<std::uint32_t>((static_cast<std::uint64_t>(region.x + region.width) * terrainQuadsX + maxWeightX - 1U) / maxWeightX));
+    const std::uint32_t maxTerrainZ = std::min(
+        terrainQuadsZ,
+        static_cast<std::uint32_t>((static_cast<std::uint64_t>(region.y + region.height) * terrainQuadsZ + maxWeightY - 1U) / maxWeightY));
+    const std::uint32_t minChunkX = std::min(minTerrainX / terrain.chunkQuads, mesh.terrainChunkCountX - 1U);
+    const std::uint32_t minChunkZ = std::min(minTerrainZ / terrain.chunkQuads, mesh.terrainChunkCountZ - 1U);
+    const std::uint32_t maxChunkX = std::min(maxTerrainX / terrain.chunkQuads, mesh.terrainChunkCountX - 1U);
+    const std::uint32_t maxChunkZ = std::min(maxTerrainZ / terrain.chunkQuads, mesh.terrainChunkCountZ - 1U);
+    for (std::uint32_t lod = 0U; lod < mesh.terrainLodCount; ++lod) {
+        for (std::uint32_t chunkZ = minChunkZ; chunkZ <= maxChunkZ; ++chunkZ) {
+            for (std::uint32_t chunkX = minChunkX; chunkX <= maxChunkX; ++chunkX) {
+                const std::size_t terrainSectionIndex =
+                    static_cast<std::size_t>(lod) * mesh.terrainChunkCountX * mesh.terrainChunkCountZ +
+                    static_cast<std::size_t>(chunkZ) * mesh.terrainChunkCountX + chunkX;
+                if (terrainSectionIndex >= mesh.terrainSectionIndices.size()) continue;
+                const std::uint32_t firstSection = mesh.terrainSectionIndices[terrainSectionIndex];
+                for (std::uint32_t layer = 1U; layer < mesh.terrainLayerCount; ++layer) {
+                    const std::uint32_t sectionIndex = firstSection + layer;
+                    if (sectionIndex >= mesh.sections.size()) continue;
+                    const bool active = TerrainChunkLayerHasWeight(terrain, chunkX, chunkZ, layer);
+                    if (mesh.sections[sectionIndex].terrainLayerActive != active) {
+                        mesh.sections[sectionIndex].terrainLayerActive = active;
+                        mesh.dynamicSectionUpdateIndices.push_back(sectionIndex);
+                    }
+                }
+            }
+        }
+    }
+    mesh.dynamicTerrainLayerWeightUpdates.push_back(region);
     mesh.RefreshDesc();
     return true;
 }

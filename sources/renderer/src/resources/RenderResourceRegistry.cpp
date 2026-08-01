@@ -6,9 +6,11 @@
 #include "resources/RenderTextureResourceBuilder.hpp"
 #include "renderer/RendererDebugLog.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <sstream>
 #include <utility>
+#include <vector>
 
 namespace kb::render {
 namespace {
@@ -92,8 +94,41 @@ RenderMeshHandle RenderResourceRegistry::RegisterMesh(const RenderMeshDesc& desc
         return {};
     }
 
+    bgfx::TextureHandle terrainLayerWeightTexture = BGFX_INVALID_HANDLE;
+    if (desc.terrainLayerCount != 0U) {
+        const std::uint64_t requiredBytes = static_cast<std::uint64_t>(desc.terrainLayerWeightWidth) *
+            desc.terrainLayerWeightHeight * 4U;
+        if (desc.terrainLayerCount > 4U || desc.terrainLayerWeightWidth == 0U ||
+            desc.terrainLayerWeightHeight == 0U || desc.terrainLayerWeights == nullptr ||
+            requiredBytes != desc.terrainLayerWeightBytes) {
+            if (bgfx::isValid(vertexBuffer)) bgfx::destroy(vertexBuffer);
+            if (bgfx::isValid(dynamicVertexBuffer)) bgfx::destroy(dynamicVertexBuffer);
+            bgfx::destroy(indexBuffer);
+            WriteRendererMaterialGraphDebugLog("resource", "register-mesh-failed invalid terrain layer weights");
+            return {};
+        }
+        const bgfx::Memory* weightMemory = bgfx::copy(
+            desc.terrainLayerWeights, desc.terrainLayerWeightBytes);
+        terrainLayerWeightTexture = bgfx::createTexture2D(
+            desc.terrainLayerWeightWidth,
+            desc.terrainLayerWeightHeight,
+            false,
+            1U,
+            bgfx::TextureFormat::RGBA8,
+            BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP,
+            weightMemory);
+        if (!bgfx::isValid(terrainLayerWeightTexture)) {
+            if (bgfx::isValid(vertexBuffer)) bgfx::destroy(vertexBuffer);
+            if (bgfx::isValid(dynamicVertexBuffer)) bgfx::destroy(dynamicVertexBuffer);
+            bgfx::destroy(indexBuffer);
+            WriteRendererMaterialGraphDebugLog("resource", "register-mesh-failed terrain layer texture invalid");
+            return {};
+        }
+    }
+
     const std::uint32_t slotIndex = meshes_.Allocate();
     RenderMeshResource resource = RenderMeshResourceBuilder::Build(desc, vertexBuffer, dynamicVertexBuffer, indexBuffer);
+    resource.terrainLayerWeightTexture = terrainLayerWeightTexture;
     resource.version = AllocateResourceVersion();
     meshes_.Activate(slotIndex, std::move(resource));
     {
@@ -144,11 +179,47 @@ bool RenderResourceRegistry::UpdateMeshGeometryMetadata(
     for (const std::uint32_t sectionIndex : sectionIndices) {
         if (sectionIndex >= resource->sections.size()) return false;
         resource->sections[sectionIndex].bounds = desc.sections[sectionIndex].bounds;
+        resource->sections[sectionIndex].terrainLayerActive = desc.sections[sectionIndex].terrainLayerActive;
         if (sectionIndex < resource->meshlets.size()) {
             resource->meshlets[sectionIndex].bounds = desc.gpuDriven.meshlets[sectionIndex].bounds;
         }
     }
     resource->version = AllocateResourceVersion();
+    return true;
+}
+
+bool RenderResourceRegistry::UpdateMeshTerrainLayerWeights(
+    RenderMeshHandle handle,
+    const RenderMeshDesc& desc,
+    std::uint16_t x,
+    std::uint16_t y,
+    std::uint16_t width,
+    std::uint16_t height) {
+    RenderMeshResource* resource = meshes_.Find(handle);
+    if (resource == nullptr || !bgfx::isValid(resource->terrainLayerWeightTexture) ||
+        desc.terrainLayerWeights == nullptr || desc.terrainLayerCount != resource->terrainLayerCount ||
+        desc.terrainLayerWeightWidth != resource->terrainLayerWeightWidth ||
+        desc.terrainLayerWeightHeight != resource->terrainLayerWeightHeight ||
+        width == 0U || height == 0U ||
+        static_cast<std::uint32_t>(x) + width > desc.terrainLayerWeightWidth ||
+        static_cast<std::uint32_t>(y) + height > desc.terrainLayerWeightHeight) {
+        return false;
+    }
+    const std::size_t rowBytes = static_cast<std::size_t>(width) * 4U;
+    std::vector<std::uint8_t> compact(rowBytes * height);
+    for (std::uint16_t row = 0U; row < height; ++row) {
+        const std::size_t sourceOffset =
+            (static_cast<std::size_t>(y + row) * desc.terrainLayerWeightWidth + x) * 4U;
+        std::copy_n(
+            desc.terrainLayerWeights + sourceOffset,
+            rowBytes,
+            compact.data() + static_cast<std::size_t>(row) * rowBytes);
+    }
+    const bgfx::Memory* memory = bgfx::copy(
+        compact.data(), static_cast<std::uint32_t>(compact.size()));
+    bgfx::updateTexture2D(
+        resource->terrainLayerWeightTexture, 0U, 0U,
+        x, y, width, height, memory);
     return true;
 }
 

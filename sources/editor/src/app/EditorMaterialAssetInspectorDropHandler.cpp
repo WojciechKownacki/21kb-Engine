@@ -55,6 +55,20 @@ namespace {
     }
 }
 
+[[nodiscard]] std::optional<std::uint8_t> TerrainLayerForProperty(InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::TerrainMaterialLayer0:
+    case InspectorPropertyId::TerrainMaterialLayerPicker0: return 0U;
+    case InspectorPropertyId::TerrainMaterialLayer1:
+    case InspectorPropertyId::TerrainMaterialLayerPicker1: return 1U;
+    case InspectorPropertyId::TerrainMaterialLayer2:
+    case InspectorPropertyId::TerrainMaterialLayerPicker2: return 2U;
+    case InspectorPropertyId::TerrainMaterialLayer3:
+    case InspectorPropertyId::TerrainMaterialLayerPicker3: return 3U;
+    default: return std::nullopt;
+    }
+}
+
 } // namespace
 
 bool EditorMaterialAssetInspectorDropHandler::Drop(
@@ -78,6 +92,15 @@ bool EditorMaterialAssetInspectorDropHandler::Drop(
     }
 
     const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(*inspector, sceneContext, x, y);
+    if (hit.section == InspectorSectionId::Terrain) {
+        if (const std::optional<std::uint8_t> layer = TerrainLayerForProperty(hit.property)) {
+            return sceneContext.SetTerrainMaterialLayer(entity, *layer, assetId);
+        }
+        if (hit.property == InspectorPropertyId::TerrainMaterialLayerAdd) {
+            return sceneContext.AddTerrainMaterialLayer(entity, assetId);
+        }
+        return false;
+    }
     if (hit.section != InspectorSectionId::MeshRenderer) {
         return false;
     }

@@ -383,6 +383,28 @@ inline void DrawGroupRow(HDC dc, RECT row, const EditorTheme& theme, std::string
     Text(dc, Rect(row.left + kRowPadX, row.top, row.right - kRowPadX, row.bottom), label, Color(theme.textDisabled));
 }
 
+inline void DrawActionRow(
+    HDC dc,
+    RECT row,
+    const EditorTheme& theme,
+    const InspectorPanelState& state,
+    InspectorSectionId section,
+    InspectorPropertyId property,
+    std::string_view label,
+    bool accent) {
+    const bool hovered = state.IsHovered(InspectorHitKind::Row, section, property) ||
+        state.IsHovered(InspectorHitKind::TextField, section, property);
+    const RECT button = Shrink(row, kRowPadX, 2, kRowPadX, 2);
+    DrawFrame(
+        dc, button,
+        hovered ? HoverFill(theme) : Color(theme.chrome),
+        accent || hovered ? Color(theme.accent) : Color(theme.borderPanel));
+    ScopedFont font(12, FW_SEMIBOLD);
+    const ScopedGdiObject selectedFont(dc, font.handle);
+    Text(dc, button, label, accent ? Color(theme.textPrimary) : Color(theme.textSecondary),
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
 inline void DrawTagFieldRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state,
     InspectorSectionId section, InspectorPropertyId property, std::string_view label, std::string_view value) {
     if (RowHovered(state, property)) {
@@ -519,6 +541,7 @@ public:
     void Pair(std::string_view label, std::string_view firstLabel, std::string_view firstValue, InspectorPropertyId firstProperty, std::string_view secondLabel, std::string_view secondValue, InspectorPropertyId secondProperty) { if (!collapsed_) { DrawPairRow(dc_, Row(), theme_, state_, section_, label, firstLabel, firstValue, firstProperty, secondLabel, secondValue, secondProperty); Advance(); } }
     void BoolPair(std::string_view label, std::string_view firstLabel, bool firstValue, InspectorPropertyId firstProperty, std::string_view secondLabel, bool secondValue, InspectorPropertyId secondProperty) { if (!collapsed_) { DrawBoolPairRow(dc_, Row(), theme_, state_, section_, label, firstLabel, firstValue, firstProperty, secondLabel, secondValue, secondProperty); Advance(); } }
     void Group(std::string_view label) { if (!collapsed_) { DrawGroupRow(dc_, Rect(bounds_.left, y_, bounds_.right, y_ + kGroupRowHeight), theme_, label); y_ += kGroupRowHeight; DrawDivider(dc_, bounds_.left, bounds_.right, y_); y_ += kDividerHeight; } }
+    void Action(std::string_view label, InspectorPropertyId property, bool accent = false) { if (!collapsed_) { DrawActionRow(dc_, Row(), theme_, state_, section_, property, label, accent); Advance(); } }
     void Rotation(std::string_view label, const kb::scene::Quat& value) { if (!collapsed_) { DrawRotationRow(dc_, Row(), theme_, state_, label, value); Advance(); } }
     void Disclosure(std::string_view label, InspectorPropertyId property, bool expanded) {
         if (collapsed_) {

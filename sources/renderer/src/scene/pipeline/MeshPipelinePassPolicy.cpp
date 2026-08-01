@@ -67,9 +67,17 @@ bool MeshPipelinePassPolicy::Accepts(
     const SceneRenderMeshInstance& instance,
     const RenderMaterialResource* material,
     std::span<const std::uint64_t> selectedEntityIds,
-    std::uint32_t cullingMask) noexcept {
+    std::uint32_t cullingMask,
+    const RenderMeshSection* section) noexcept {
     if (!PassesCullingMask(instance, cullingMask)) {
         return false;
+    }
+    if (section != nullptr && !section->terrainLayerActive) {
+        return false;
+    }
+    if (section != nullptr && section->terrainLayerIndex != UINT8_MAX &&
+        section->terrainLayerIndex > 0U) {
+        return pass == MeshPassType::BaseTransparent;
     }
     switch (pass) {
     case MeshPassType::Depth:
@@ -124,13 +132,21 @@ namespace {
 std::uint64_t MeshPipelinePassPolicy::State(
     MeshPassType pass,
     const RenderMeshResource* mesh,
-    const RenderMaterialResource* material) noexcept {
+    const RenderMaterialResource* material,
+    const RenderMeshSection* section) noexcept {
     const bool doubleSided = (mesh != nullptr && mesh->doubleSided) || (material != nullptr && material->doubleSided);
     const std::uint64_t rasterStateExtra = mesh == nullptr ? 0U : mesh->rasterStateExtra;
     const std::uint64_t cullState = doubleSided ? 0U : BGFX_STATE_CULL_CCW;
     // Opaque writes depth by default; a material may opt out (e.g. decals/overlays). Translucent always
     // renders depth read-only (convention). Two-sided already flows from the material above (MAT-79).
     const bool writesDepth = material == nullptr || material->writesDepth;
+    const bool terrainOverlay = section != nullptr &&
+        section->terrainLayerIndex != UINT8_MAX && section->terrainLayerIndex > 0U;
+
+    if (pass == MeshPassType::BaseTransparent && terrainOverlay) {
+        return SceneDepthPolicy::SceneDepthReadState() | BGFX_STATE_BLEND_ALPHA |
+            cullState | rasterStateExtra;
+    }
 
     switch (pass) {
     case MeshPassType::Depth:

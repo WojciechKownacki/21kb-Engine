@@ -275,6 +275,29 @@ bool EditorTerrainService::UpdatePreviewMesh(
     return true;
 }
 
+bool EditorTerrainService::UpdateLayerPreviewMesh(
+    const kb::assets::TerrainAsset& terrain,
+    const kb::terrain_editor::TerrainLayerPaintResult& changedRegion,
+    std::shared_ptr<kb::render::RenderMeshAssetData>& mesh,
+    std::string* error) {
+    const bool updated = mesh != nullptr &&
+        kb::render::RenderTerrainMeshBuilder::UpdateDynamicLayerPreview(
+            terrain,
+            kb::render::RenderTerrainLayerWeightUpdateRegion{
+                .x = static_cast<std::uint16_t>(changedRegion.minX),
+                .y = static_cast<std::uint16_t>(changedRegion.minY),
+                .width = static_cast<std::uint16_t>(changedRegion.maxX - changedRegion.minX + 1U),
+                .height = static_cast<std::uint16_t>(changedRegion.maxY - changedRegion.minY + 1U),
+            },
+            *mesh);
+    if (updated) {
+        if (error != nullptr) error->clear();
+        return true;
+    }
+    if (error != nullptr) *error = "Terrain layer preview could not be updated";
+    return false;
+}
+
 bool EditorTerrainService::PublishPreview(
     kb::scene::Scene& scene,
     kb::assets::AssetId assetId,
@@ -316,6 +339,10 @@ std::optional<kb::assets::TerrainAsset> EditorTerrainService::BuildHeightmapImpo
     imported->worldSizeZ = current.worldSizeZ;
     imported->chunkQuads = current.chunkQuads;
     imported->lodCount = current.lodCount;
+    imported->materialLayers = current.materialLayers;
+    imported->layerWeightWidth = current.layerWeightWidth;
+    imported->layerWeightHeight = current.layerWeightHeight;
+    imported->layerWeights = current.layerWeights;
     return imported;
 }
 
@@ -350,6 +377,10 @@ std::optional<kb::assets::TerrainAsset> EditorTerrainService::BuildReconfigured(
     result.lodCount = configuration.lodCount;
     result.worldSizeX = configuration.worldSizeX;
     result.worldSizeZ = configuration.worldSizeZ;
+    result.materialLayers = current.materialLayers;
+    result.layerWeightWidth = current.layerWeightWidth;
+    result.layerWeightHeight = current.layerWeightHeight;
+    result.layerWeights = current.layerWeights;
     result.heights.resize(
         static_cast<std::size_t>(result.width) * result.height);
     result.holes.resize(

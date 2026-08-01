@@ -232,7 +232,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                     // pass instead (MAT-80); this is correct routing, not an unsupported-material error.
                     continue;
                 }
-                if (!MeshPipelinePassPolicy::Accepts(desc.pass, instance, materialResource, desc.selectedEntityIds, cullingMask)) {
+                if (!MeshPipelinePassPolicy::Accepts(desc.pass, instance, materialResource, desc.selectedEntityIds, cullingMask, &section)) {
                     continue;
                 }
                 instance.worldBounds = MeshPipelineVisibility::TransformBounds(section.bounds.IsValid() ? section.bounds : (meshResource == nullptr ? RenderBoundsSphere{} : meshResource->bounds), instance.model);
@@ -277,7 +277,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                     continue;
                 }
                 if (command == nullptr) {
-                    const std::uint64_t commandState = MeshPipelinePassPolicy::State(desc.pass, meshResource, materialResource);
+                    const std::uint64_t commandState = MeshPipelinePassPolicy::State(desc.pass, meshResource, materialResource, &section);
                     const std::uint64_t materialTextureDependencySignature = PassUsesMaterialTextureDependencies(desc.pass)
                         ? SceneMaterialTextureDependencySignature::Build(SceneMaterialTextureDependencyDesc{
                               .material = materialResource,
@@ -296,6 +296,7 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                         .indexStart = section.indexStart,
                         .indexCount = section.indexCount,
                         .lodLevel = section.lodLevel,
+                        .terrainLayerIndex = section.terrainLayerIndex,
                         .mesh = meshHandle,
                         .material = materialHandle,
                         .meshResource = meshResource,

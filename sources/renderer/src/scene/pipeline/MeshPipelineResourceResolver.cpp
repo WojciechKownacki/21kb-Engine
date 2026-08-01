@@ -256,6 +256,10 @@ std::uint64_t MeshPipelineResourceResolver::MaterialAssetForSectionInstance(
     const SceneRenderMeshInstance& instance,
     const RenderMeshResource* meshResource,
     const RenderMeshSection& section) noexcept {
+    if (section.terrainLayerIndex != UINT8_MAX && meshResource != nullptr &&
+        section.materialSlot < meshResource->materialSlots.size()) {
+        return meshResource->materialSlots[section.materialSlot].defaultMaterialAssetId;
+    }
     if (section.materialSlot < instance.materialSlotOverrideCount &&
         section.materialSlot < kMaxSceneMaterialSlotOverrides &&
         instance.materialSlotAssetIds[section.materialSlot] != 0U) {
