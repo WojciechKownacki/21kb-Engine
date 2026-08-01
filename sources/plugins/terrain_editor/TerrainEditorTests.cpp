@@ -177,6 +177,7 @@ void RunDynamicMeshUpdateTest() {
     const std::uint64_t topologyKey = mesh->dynamicTopologyKey;
     const std::uint32_t fullVertexCount = mesh->desc.vertexCount;
     const float untouchedHeight = mesh->tangentVertices.front().y;
+    const std::size_t initialUpdateRangeCount = mesh->dynamicVertexUpdateRanges.size();
 
     const kb::terrain_editor::TerrainBrushResult changed =
         kb::terrain_editor::ApplyTerrainBrush(
@@ -202,9 +203,57 @@ void RunDynamicMeshUpdateTest() {
         "Dynamic terrain update changed GPU topology identity");
     Require(mesh->vertexUpdateCount > 0U && mesh->vertexUpdateCount < fullVertexCount / 4U,
         "Dynamic terrain update did not stay local to the brush region");
+    std::uint32_t uploadedVertexCount = 0U;
+    for (std::size_t rangeIndex = initialUpdateRangeCount;
+         rangeIndex < mesh->dynamicVertexUpdateRanges.size();
+         ++rangeIndex) {
+        uploadedVertexCount += mesh->dynamicVertexUpdateRanges[rangeIndex].vertexCount;
+    }
+    Require(uploadedVertexCount == mesh->vertexUpdateCount &&
+            mesh->dynamicVertexUpdateRanges.size() > initialUpdateRangeCount + 1U,
+        "Dynamic terrain update did not split the brush into compact row uploads");
     Require(mesh->tangentVertices[Center(terrain)].y > 0.9F &&
             mesh->tangentVertices.front().y == untouchedHeight,
         "Dynamic terrain update changed the wrong vertex range");
+}
+
+void RunSmoothWorkspaceTest() {
+    kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(513U, 512.0F, 512.0F);
+    terrain.heights[Center(terrain)] = 10.0F;
+    std::vector<float> scratchHeights;
+    const kb::terrain_editor::TerrainBrushResult changed =
+        kb::terrain_editor::ApplyTerrainBrushToValidatedTerrain(
+            terrain,
+            kb::terrain_editor::TerrainBrushSettings{
+                .mode = kb::terrain_editor::TerrainBrushMode::Smooth,
+                .radius = 4.0F,
+                .strength = 1.0F,
+            },
+            {},
+            scratchHeights);
+    Require(changed.Changed() && terrain.heights[Center(terrain)] < 10.0F,
+        "Smooth brush workspace path did not smooth the center sample");
+    Require(scratchHeights.size() < 512U,
+        "Smooth brush copied the full terrain instead of its local workspace");
+
+    const auto start = std::chrono::steady_clock::now();
+    for (std::uint32_t stampIndex = 0U; stampIndex < 200U; ++stampIndex) {
+        static_cast<void>(kb::terrain_editor::ApplyTerrainBrushToValidatedTerrain(
+            terrain,
+            kb::terrain_editor::TerrainBrushSettings{
+                .mode = kb::terrain_editor::TerrainBrushMode::Smooth,
+                .radius = 4.0F,
+                .strength = 0.25F,
+            },
+            kb::terrain_editor::TerrainBrushStamp{
+                .localX = static_cast<float>(stampIndex % 16U) * 0.25F,
+            },
+            scratchHeights));
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    std::cout << "Terrain smooth benchmark: 200 stamps="
+              << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
+              << " ms, scratch samples=" << scratchHeights.size() << '\n';
 }
 
 void RunDynamicMeshBenchmark() {
@@ -214,6 +263,7 @@ void RunDynamicMeshBenchmark() {
     Require(mesh.has_value() &&
             kb::render::RenderTerrainMeshBuilder::PrepareDynamicPreview(terrain, *mesh),
         "Terrain benchmark could not prepare its dynamic mesh");
+    const std::size_t initialUpdateRangeCount = mesh->dynamicVertexUpdateRanges.size();
     const kb::terrain_editor::TerrainBrushSettings brush{
         .mode = kb::terrain_editor::TerrainBrushMode::Raise,
         .radius = 4.0F,
@@ -249,9 +299,16 @@ void RunDynamicMeshBenchmark() {
     Require(rebuilt.has_value(), "Terrain benchmark full rebuild failed");
     Require(updateElapsed < rebuildElapsed,
         "Two hundred local terrain stamps cost more than one full mesh rebuild");
+    std::uint64_t uploadedVertexCount = 0U;
+    for (std::size_t rangeIndex = initialUpdateRangeCount;
+         rangeIndex < mesh->dynamicVertexUpdateRanges.size();
+         ++rangeIndex) {
+        uploadedVertexCount += mesh->dynamicVertexUpdateRanges[rangeIndex].vertexCount;
+    }
     std::cout << "Terrain dynamic benchmark: 200 stamps="
               << std::chrono::duration_cast<std::chrono::milliseconds>(updateElapsed).count()
-              << " ms, full rebuild="
+              << " ms, queued vertices=" << uploadedVertexCount
+              << ", full rebuild="
               << std::chrono::duration_cast<std::chrono::milliseconds>(rebuildElapsed).count()
               << " ms\n";
 }
@@ -293,6 +350,7 @@ int main() {
         RunHeightmapImportTest();
         RunMeshBuildTest();
         RunDynamicMeshUpdateTest();
+        RunSmoothWorkspaceTest();
         RunDynamicMeshBenchmark();
         RunRuntimeLoaderTest();
         std::cout << "Terrain Editor tests passed\n";

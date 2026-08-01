@@ -73,6 +73,7 @@ struct RenderMeshAssetData {
     RenderMeshDesc desc{};
     std::uint64_t dynamicTopologyKey = 0U;
     std::vector<RenderMeshVertexUpdateRange> dynamicVertexUpdateRanges;
+    std::vector<std::uint32_t> dynamicSectionUpdateIndices;
     std::uint32_t vertexUpdateFirst = 0U;
     std::uint32_t vertexUpdateCount = 0U;
     std::uint32_t terrainChunkCountX = 0U;

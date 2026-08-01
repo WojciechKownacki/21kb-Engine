@@ -74,19 +74,26 @@ void MarkChanged(TerrainBrushResult& result, std::uint32_t x, std::uint32_t z) n
 }
 
 [[nodiscard]] float SmoothedHeight(
-    const kb::assets::TerrainAsset& terrain,
     std::span<const float> sourceHeights,
+    std::uint32_t sourceMinX,
+    std::uint32_t sourceMinZ,
+    std::uint32_t sourceWidth,
     std::uint32_t x,
     std::uint32_t z) noexcept {
     float sum = 0.0F;
     std::uint32_t count = 0U;
     const std::uint32_t minX = x == 0U ? 0U : x - 1U;
     const std::uint32_t minZ = z == 0U ? 0U : z - 1U;
-    const std::uint32_t maxX = std::min(x + 1U, terrain.width - 1U);
-    const std::uint32_t maxZ = std::min(z + 1U, terrain.height - 1U);
+    const std::uint32_t sourceMaxX = sourceMinX + sourceWidth - 1U;
+    const std::uint32_t sourceHeight = static_cast<std::uint32_t>(sourceHeights.size() / sourceWidth);
+    const std::uint32_t sourceMaxZ = sourceMinZ + sourceHeight - 1U;
+    const std::uint32_t maxX = std::min(x + 1U, sourceMaxX);
+    const std::uint32_t maxZ = std::min(z + 1U, sourceMaxZ);
     for (std::uint32_t sampleZ = minZ; sampleZ <= maxZ; ++sampleZ) {
         for (std::uint32_t sampleX = minX; sampleX <= maxX; ++sampleX) {
-            sum += sourceHeights[VertexIndex(terrain, sampleX, sampleZ)];
+            sum += sourceHeights[
+                static_cast<std::size_t>(sampleZ - sourceMinZ) * sourceWidth +
+                (sampleX - sourceMinX)];
             ++count;
         }
     }
@@ -110,7 +117,8 @@ TerrainBrushResult ApplyTerrainBrushImpl(
     kb::assets::TerrainAsset& terrain,
     const TerrainBrushSettings& settings,
     const TerrainBrushStamp& stamp,
-    bool validateSamples) noexcept {
+    bool validateSamples,
+    std::vector<float>& scratchHeights) noexcept {
     TerrainBrushResult result{};
     const std::uint64_t vertexCount = static_cast<std::uint64_t>(terrain.width) * terrain.height;
     const std::uint64_t cellCount = terrain.width > 0U && terrain.height > 0U
@@ -139,13 +147,17 @@ TerrainBrushResult ApplyTerrainBrushImpl(
 
     if (settings.mode == TerrainBrushMode::CutHole || settings.mode == TerrainBrushMode::FillHole) {
         const std::uint8_t target = settings.mode == TerrainBrushMode::CutHole ? 1U : 0U;
+        const float radiusSquared = settings.radius * settings.radius;
         for (int z = minZ; z < maxZ; ++z) {
             for (int x = minX; x < maxX; ++x) {
                 const float worldX = (static_cast<float>(x) + 0.5F) * cellSizeX - terrain.worldSizeX * 0.5F;
                 const float worldZ = (static_cast<float>(z) + 0.5F) * cellSizeZ - terrain.worldSizeZ * 0.5F;
-                const float distance = std::hypot(worldX - stamp.localX, worldZ - stamp.localZ);
-                if (distance > settings.radius ||
-                    Weight(distance, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(z), settings) <= 0.25F) continue;
+                const float dx = worldX - stamp.localX;
+                const float dz = worldZ - stamp.localZ;
+                const float distanceSquared = dx * dx + dz * dz;
+                if (distanceSquared > radiusSquared ||
+                    Weight(std::sqrt(distanceSquared),
+                        static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(z), settings) <= 0.25F) continue;
                 std::uint8_t& hole = terrain.holes[CellIndex(terrain, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(z))];
                 if (hole != target) {
                     hole = target;
@@ -156,18 +168,34 @@ TerrainBrushResult ApplyTerrainBrushImpl(
         return result;
     }
 
-    const std::vector<float> sourceHeights =
-        settings.mode == TerrainBrushMode::Smooth
-            ? terrain.heights
-            : std::vector<float>{};
+    std::uint32_t sourceMinX = 0U;
+    std::uint32_t sourceMinZ = 0U;
+    std::uint32_t sourceWidth = 0U;
+    if (settings.mode == TerrainBrushMode::Smooth) {
+        sourceMinX = minX == 0 ? 0U : static_cast<std::uint32_t>(minX - 1);
+        sourceMinZ = minZ == 0 ? 0U : static_cast<std::uint32_t>(minZ - 1);
+        const std::uint32_t sourceMaxX = std::min(static_cast<std::uint32_t>(maxX + 1), terrain.width - 1U);
+        const std::uint32_t sourceMaxZ = std::min(static_cast<std::uint32_t>(maxZ + 1), terrain.height - 1U);
+        sourceWidth = sourceMaxX - sourceMinX + 1U;
+        const std::uint32_t sourceHeight = sourceMaxZ - sourceMinZ + 1U;
+        scratchHeights.resize(static_cast<std::size_t>(sourceWidth) * sourceHeight);
+        for (std::uint32_t sourceZ = sourceMinZ; sourceZ <= sourceMaxZ; ++sourceZ) {
+            const float* source = terrain.heights.data() + VertexIndex(terrain, sourceMinX, sourceZ);
+            float* destination = scratchHeights.data() + static_cast<std::size_t>(sourceZ - sourceMinZ) * sourceWidth;
+            std::copy_n(source, sourceWidth, destination);
+        }
+    }
+    const float radiusSquared = settings.radius * settings.radius;
     for (int z = minZ; z <= maxZ; ++z) {
         for (int x = minX; x <= maxX; ++x) {
             const float worldX = static_cast<float>(x) * cellSizeX - terrain.worldSizeX * 0.5F;
             const float worldZ = static_cast<float>(z) * cellSizeZ - terrain.worldSizeZ * 0.5F;
-            const float distance = std::hypot(worldX - stamp.localX, worldZ - stamp.localZ);
-            if (distance > settings.radius) continue;
+            const float dx = worldX - stamp.localX;
+            const float dz = worldZ - stamp.localZ;
+            const float distanceSquared = dx * dx + dz * dz;
+            if (distanceSquared > radiusSquared) continue;
             const float influence = Weight(
-                distance,
+                std::sqrt(distanceSquared),
                 static_cast<std::uint32_t>(x),
                 static_cast<std::uint32_t>(z),
                 settings) * pressure;
@@ -178,7 +206,10 @@ TerrainBrushResult ApplyTerrainBrushImpl(
             case TerrainBrushMode::Raise: after += settings.strength * influence; break;
             case TerrainBrushMode::Lower: after -= settings.strength * influence; break;
             case TerrainBrushMode::Smooth:
-                after = std::lerp(before, SmoothedHeight(terrain, sourceHeights, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(z)), std::clamp(settings.strength * influence, 0.0F, 1.0F));
+                after = std::lerp(before, SmoothedHeight(
+                    scratchHeights, sourceMinX, sourceMinZ, sourceWidth,
+                    static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(z)),
+                    std::clamp(settings.strength * influence, 0.0F, 1.0F));
                 break;
             case TerrainBrushMode::Flatten:
                 after = std::lerp(before, settings.targetHeight, std::clamp(settings.strength * influence, 0.0F, 1.0F));
@@ -211,14 +242,24 @@ TerrainBrushResult ApplyTerrainBrush(
     kb::assets::TerrainAsset& terrain,
     const TerrainBrushSettings& settings,
     const TerrainBrushStamp& stamp) noexcept {
-    return ApplyTerrainBrushImpl(terrain, settings, stamp, true);
+    std::vector<float> scratchHeights;
+    return ApplyTerrainBrushImpl(terrain, settings, stamp, true, scratchHeights);
 }
 
 TerrainBrushResult ApplyTerrainBrushToValidatedTerrain(
     kb::assets::TerrainAsset& terrain,
     const TerrainBrushSettings& settings,
     const TerrainBrushStamp& stamp) noexcept {
-    return ApplyTerrainBrushImpl(terrain, settings, stamp, false);
+    thread_local std::vector<float> scratchHeights;
+    return ApplyTerrainBrushImpl(terrain, settings, stamp, false, scratchHeights);
+}
+
+TerrainBrushResult ApplyTerrainBrushToValidatedTerrain(
+    kb::assets::TerrainAsset& terrain,
+    const TerrainBrushSettings& settings,
+    const TerrainBrushStamp& stamp,
+    std::vector<float>& scratchHeights) noexcept {
+    return ApplyTerrainBrushImpl(terrain, settings, stamp, false, scratchHeights);
 }
 
 } // namespace kb::terrain_editor

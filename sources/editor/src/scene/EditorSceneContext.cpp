@@ -1819,19 +1819,19 @@ bool EditorSceneContext::ApplyTerrainBrushStamp(
             terrainStroke_->working, result,
             settings.mode == kb::terrain_editor::TerrainBrushMode::CutHole ||
                 settings.mode == kb::terrain_editor::TerrainBrushMode::FillHole,
-            terrainStroke_->previewMesh, error) ||
-        !EditorTerrainService::PublishPreview(
+            terrainStroke_->previewMesh, error)) {
+        CancelTerrainBrushStroke();
+        return false;
+    }
+    if (!terrainStroke_->previewPublished && !EditorTerrainService::PublishPreview(
             *scene_, terrainStroke_->assetId,
             terrainStroke_->working, terrainStroke_->previewMesh,
-            !terrainStroke_->previewPublished, error)) {
+            true, error)) {
         CancelTerrainBrushStroke();
         return false;
     }
     terrainStroke_->previewPublished = true;
     terrainStroke_->changed = true;
-    terrainReadCache_.reset();
-    MarkSceneEntitiesRenderDirty(
-        std::span<const kb::scene::SceneEntity>{ &entity, 1U });
     return true;
 }
 
