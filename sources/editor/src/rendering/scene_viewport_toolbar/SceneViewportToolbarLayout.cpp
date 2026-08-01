@@ -137,7 +137,7 @@ TerrainViewportToolbarRects SceneViewportToolbarLayout::ResolveTerrainTools(cons
     rects.strengthMinusButton = button(24);
     rects.strengthValue = button(72);
     rects.strengthPlusButton = button(24);
-    rects.panel = RECT{ panelLeft, top, rects.strengthPlusButton.right + 1, top + panelHeight };
+    rects.panel = RECT{ panelLeft, top, rects.strengthPlusButton.right + 7, top + panelHeight };
 
     constexpr int operationMenuWidth = 356;
     constexpr int operationHeaderHeight = 34;
