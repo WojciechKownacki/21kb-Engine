@@ -157,6 +157,39 @@ namespace {
 
 constexpr std::string_view kEditorLiveAssetOverrideCategory = "EditorLiveOverride";
 
+class EditorTerrainAssetEditCommand final : public IEditorCommand {
+public:
+    EditorTerrainAssetEditCommand(
+        kb::scene::Scene& scene,
+        kb::assets::AssetId assetId,
+        std::string label,
+        kb::assets::TerrainAsset before,
+        kb::assets::TerrainAsset after) noexcept
+        : scene_(scene)
+        , assetId_(assetId)
+        , label_(std::move(label))
+        , before_(std::move(before))
+        , after_(std::move(after)) {}
+
+    [[nodiscard]] std::string_view Label() const noexcept override { return label_; }
+    [[nodiscard]] bool AffectsSceneDocument() const noexcept override { return false; }
+    [[nodiscard]] bool AffectsHierarchySelection() const noexcept override { return false; }
+    [[nodiscard]] bool Execute() override { return Apply(after_); }
+    [[nodiscard]] bool Undo() override { return Apply(before_); }
+    [[nodiscard]] bool Redo() override { return Apply(after_); }
+
+private:
+    [[nodiscard]] bool Apply(const kb::assets::TerrainAsset& terrain) {
+        return EditorTerrainService::Persist(scene_, assetId_, terrain);
+    }
+
+    kb::scene::Scene& scene_;
+    kb::assets::AssetId assetId_{};
+    std::string label_;
+    kb::assets::TerrainAsset before_{};
+    kb::assets::TerrainAsset after_{};
+};
+
 struct MaterialGraphContextMenuKeyboardRow {
     bool category = false;
     std::size_t categoryIndex = 0U;
@@ -1143,6 +1176,7 @@ EditorSceneContext::EditorSceneContext()
     , project_(projectBootstrap_.succeeded ? projectBootstrap_.descriptor : kb::project::ProjectDescriptor{})
     , projectFile_(projectBootstrap_.succeeded ? projectBootstrap_.projectFile : EditorProjectPaths::ProjectFile())
     , scene_(std::make_unique<kb::scene::Scene>(project_))
+    , inspectorMaterialPreviewScene_(std::make_unique<EditorMaterialPreviewScene>())
     , materialPreviewScene_(std::make_unique<EditorMaterialPreviewScene>())
     , graphShaderCacheRoot_((EditorProjectPaths::ProjectRoot() / ".cache" / "graph_shaders").generic_string())
     , materialGraphCookService_(std::make_unique<EditorMaterialGraphCookService>(EditorMaterialGraphCookConfig::Resolve(graphShaderCacheRoot_))) {
@@ -1458,7 +1492,12 @@ void EditorSceneContext::EndViewportCameraNavigation() noexcept {
 }
 
 bool EditorSceneContext::CloseViewportToolbarDropdowns() noexcept {
-    return viewportState_.CloseToolbarDropdowns();
+    bool changed = viewportState_.CloseToolbarDropdowns();
+    EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+    changed = changed || tool.brushMenuOpen || tool.brushShapeMenuOpen;
+    tool.brushMenuOpen = false;
+    tool.brushShapeMenuOpen = false;
+    return changed;
 }
 
 InspectorPanelState& EditorSceneContext::Inspector() noexcept {
@@ -1659,6 +1698,7 @@ bool EditorSceneContext::UndoSceneCommand() {
     const bool undone = materialHistoryActive
         ? commandStack_.Undo(EditorCommandHistoryKey::MaterialAsset(materialEditor_.OpenAssetId().value))
         : SceneCommands().Undo();
+    if (undone) terrainReadCache_.reset();
     if (undone && commandStack_.LastCompletedCommandAffectsOpenMaterialSource() &&
         commandStack_.LastCompletedCommandHistoryKey() == EditorCommandHistoryKey::MaterialAsset(materialEditor_.OpenAssetId().value)) {
         RefreshOpenMaterialEditorFromSource();
@@ -1678,6 +1718,7 @@ bool EditorSceneContext::RedoSceneCommand() {
     const bool redone = materialHistoryActive
         ? commandStack_.Redo(EditorCommandHistoryKey::MaterialAsset(materialEditor_.OpenAssetId().value))
         : SceneCommands().Redo();
+    if (redone) terrainReadCache_.reset();
     if (redone && commandStack_.LastCompletedCommandAffectsOpenMaterialSource() &&
         commandStack_.LastCompletedCommandHistoryKey() == EditorCommandHistoryKey::MaterialAsset(materialEditor_.OpenAssetId().value)) {
         RefreshOpenMaterialEditorFromSource();
@@ -1706,6 +1747,352 @@ bool EditorSceneContext::HasPendingSceneEditTransaction() const noexcept {
     return pendingSceneTransactionLabel_.has_value();
 }
 
+const kb::assets::TerrainAsset* EditorSceneContext::TerrainForEditing(
+    kb::scene::SceneEntity entity,
+    std::string* error) {
+    if (terrainStroke_.has_value() && terrainStroke_->entity == entity) {
+        if (error != nullptr) error->clear();
+        return &terrainStroke_->working;
+    }
+    const kb::scene::MeshRendererComponent* renderer =
+        scene_->Components().MeshRenderers().TryGet(entity);
+    const kb::assets::AssetId assetId{
+        renderer == nullptr ? 0U : renderer->meshAssetId };
+    const kb::assets::AssetMetadata* metadata =
+        scene_->Assets().Manager().Registry().Find(assetId);
+    if (!assetId.IsValid() || metadata == nullptr ||
+        !EditorTerrainService::IsTerrainEntity(*scene_, entity)) {
+        if (error != nullptr) *error = "Entity does not reference a terrain asset";
+        return nullptr;
+    }
+    if (!terrainReadCache_.has_value() ||
+        terrainReadCache_->assetId != assetId ||
+        terrainReadCache_->contentHash != metadata->contentHash) {
+        std::optional<kb::assets::TerrainAsset> terrain =
+            EditorTerrainService::Load(*scene_, entity, error);
+        if (!terrain.has_value()) return nullptr;
+        terrainReadCache_ = TerrainReadCache{
+            .assetId = assetId,
+            .contentHash = metadata->contentHash,
+            .terrain = std::move(*terrain),
+        };
+    }
+    if (error != nullptr) error->clear();
+    return &terrainReadCache_->terrain;
+}
+
+bool EditorSceneContext::ApplyTerrainBrushStamp(
+    kb::scene::SceneEntity entity,
+    const kb::terrain_editor::TerrainBrushSettings& settings,
+    const kb::terrain_editor::TerrainBrushStamp& stamp,
+    bool beginStroke,
+    std::string* error) {
+    if (beginStroke) {
+        CancelTerrainBrushStroke();
+        std::optional<EditorTerrainAssetState> captured =
+            EditorTerrainService::Capture(*scene_, entity, error);
+        if (!captured.has_value()) return false;
+        std::shared_ptr<kb::render::RenderMeshAssetData> previewMesh =
+            EditorTerrainService::CreatePreviewMesh(
+                *scene_, captured->assetId, captured->terrain, error);
+        if (previewMesh == nullptr) return false;
+        terrainStroke_ = TerrainStrokeState{
+            .entity = entity,
+            .assetId = captured->assetId,
+            .before = captured->terrain,
+            .working = std::move(captured->terrain),
+            .previewMesh = std::move(previewMesh),
+            .label = "Sculpt Terrain",
+        };
+    }
+    if (!terrainStroke_.has_value() || terrainStroke_->entity != entity) {
+        if (error != nullptr) *error = "Terrain brush stroke is not active";
+        return false;
+    }
+
+    const kb::terrain_editor::TerrainBrushResult result =
+        kb::terrain_editor::ApplyTerrainBrushToValidatedTerrain(
+            terrainStroke_->working, settings, stamp);
+    if (!result.Changed()) {
+        if (error != nullptr) error->clear();
+        return true;
+    }
+    if (!EditorTerrainService::UpdatePreviewMesh(
+            terrainStroke_->working, result,
+            settings.mode == kb::terrain_editor::TerrainBrushMode::CutHole ||
+                settings.mode == kb::terrain_editor::TerrainBrushMode::FillHole,
+            terrainStroke_->previewMesh, error)) {
+        CancelTerrainBrushStroke();
+        return false;
+    }
+    if (!terrainStroke_->previewPublished && !EditorTerrainService::PublishPreview(
+            *scene_, terrainStroke_->assetId,
+            terrainStroke_->working, terrainStroke_->previewMesh,
+            true, error)) {
+        CancelTerrainBrushStroke();
+        return false;
+    }
+    terrainStroke_->previewPublished = true;
+    terrainStroke_->changed = true;
+    return true;
+}
+
+bool EditorSceneContext::ApplyTerrainLayerPaintStamp(
+    kb::scene::SceneEntity entity,
+    const kb::terrain_editor::TerrainLayerPaintSettings& settings,
+    const kb::terrain_editor::TerrainBrushStamp& stamp,
+    bool beginStroke,
+    std::string* error) {
+    if (beginStroke) {
+        CancelTerrainBrushStroke();
+        std::optional<EditorTerrainAssetState> captured =
+            EditorTerrainService::Capture(*scene_, entity, error);
+        if (!captured.has_value()) return false;
+        std::shared_ptr<kb::render::RenderMeshAssetData> previewMesh =
+            EditorTerrainService::CreatePreviewMesh(
+                *scene_, captured->assetId, captured->terrain, error);
+        if (previewMesh == nullptr) return false;
+        terrainStroke_ = TerrainStrokeState{
+            .entity = entity,
+            .assetId = captured->assetId,
+            .before = captured->terrain,
+            .working = std::move(captured->terrain),
+            .previewMesh = std::move(previewMesh),
+            .label = "Paint Terrain Material",
+        };
+    }
+    if (!terrainStroke_.has_value() || terrainStroke_->entity != entity) {
+        if (error != nullptr) *error = "Terrain material paint stroke is not active";
+        return false;
+    }
+    const kb::terrain_editor::TerrainLayerPaintResult result =
+        kb::terrain_editor::ApplyTerrainLayerPaint(
+            terrainStroke_->working, settings, stamp);
+    if (!result.Changed()) {
+        if (error != nullptr) error->clear();
+        return true;
+    }
+    if (!EditorTerrainService::UpdateLayerPreviewMesh(
+            terrainStroke_->working, result, terrainStroke_->previewMesh, error)) {
+        CancelTerrainBrushStroke();
+        return false;
+    }
+    if (!terrainStroke_->previewPublished && !EditorTerrainService::PublishPreview(
+            *scene_, terrainStroke_->assetId,
+            terrainStroke_->working, terrainStroke_->previewMesh,
+            true, error)) {
+        CancelTerrainBrushStroke();
+        return false;
+    }
+    terrainStroke_->previewPublished = true;
+    terrainStroke_->changed = true;
+    return true;
+}
+
+bool EditorSceneContext::AddTerrainMaterialLayer(
+    kb::scene::SceneEntity entity,
+    kb::assets::AssetId materialAssetId,
+    std::string* error) {
+    CancelTerrainBrushStroke();
+    std::optional<EditorTerrainAssetState> captured =
+        EditorTerrainService::Capture(*scene_, entity, error);
+    if (!captured.has_value()) return false;
+    kb::assets::TerrainAsset edited = captured->terrain;
+    if (!kb::terrain_editor::AddTerrainMaterialLayer(edited, materialAssetId.value)) {
+        if (error != nullptr) *error = "Terrain supports at most four material layers";
+        return false;
+    }
+    const std::uint8_t selected = static_cast<std::uint8_t>(edited.materialLayers.size() - 1U);
+    auto command = std::make_unique<EditorTerrainAssetEditCommand>(
+        *scene_, captured->assetId, "Add Terrain Material Layer",
+        std::move(captured->terrain), std::move(edited));
+    if (!commandStack_.Execute(std::move(command))) {
+        if (error != nullptr && error->empty()) *error = "Terrain material layer could not be saved";
+        return false;
+    }
+    EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+    tool.selectedMaterialLayer = selected;
+    tool.mode = EditorTerrainToolMode::Paint;
+    tool.editingEnabled = true;
+    tool.brush.strength = std::min(tool.brush.strength, 1.0F);
+    terrainReadCache_.reset();
+    MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity>{ &entity, 1U });
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool EditorSceneContext::SetTerrainMaterialLayer(
+    kb::scene::SceneEntity entity,
+    std::uint8_t layerIndex,
+    kb::assets::AssetId materialAssetId,
+    std::string* error) {
+    CancelTerrainBrushStroke();
+    std::optional<EditorTerrainAssetState> captured =
+        EditorTerrainService::Capture(*scene_, entity, error);
+    if (!captured.has_value()) return false;
+    kb::assets::TerrainAsset edited = captured->terrain;
+    if (!kb::terrain_editor::SetTerrainMaterialLayer(
+            edited, layerIndex, materialAssetId.value)) {
+        if (error != nullptr) *error = "Terrain material layer index is invalid";
+        return false;
+    }
+    auto command = std::make_unique<EditorTerrainAssetEditCommand>(
+        *scene_, captured->assetId, "Assign Terrain Material Layer",
+        std::move(captured->terrain), std::move(edited));
+    if (!commandStack_.Execute(std::move(command))) {
+        if (error != nullptr && error->empty()) *error = "Terrain material layer could not be saved";
+        return false;
+    }
+    EditorTerrainService::ToolState().selectedMaterialLayer = layerIndex;
+    terrainReadCache_.reset();
+    MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity>{ &entity, 1U });
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool EditorSceneContext::RemoveTerrainMaterialLayer(
+    kb::scene::SceneEntity entity,
+    std::uint8_t layerIndex,
+    std::string* error) {
+    CancelTerrainBrushStroke();
+    std::optional<EditorTerrainAssetState> captured =
+        EditorTerrainService::Capture(*scene_, entity, error);
+    if (!captured.has_value()) return false;
+    kb::assets::TerrainAsset edited = captured->terrain;
+    if (!kb::terrain_editor::RemoveTerrainMaterialLayer(edited, layerIndex)) {
+        if (error != nullptr) *error = "Terrain material layer index is invalid";
+        return false;
+    }
+    const std::size_t remainingLayerCount = edited.materialLayers.size();
+    auto command = std::make_unique<EditorTerrainAssetEditCommand>(
+        *scene_, captured->assetId, "Remove Terrain Material Layer",
+        std::move(captured->terrain), std::move(edited));
+    if (!commandStack_.Execute(std::move(command))) {
+        if (error != nullptr && error->empty()) *error = "Terrain material layer could not be saved";
+        return false;
+    }
+    EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+    tool.selectedMaterialLayer = remainingLayerCount == 0U
+        ? 0U
+        : std::min<std::uint8_t>(layerIndex, static_cast<std::uint8_t>(remainingLayerCount - 1U));
+    if (remainingLayerCount == 0U && tool.mode == EditorTerrainToolMode::Paint) {
+        tool.mode = EditorTerrainToolMode::Sculpt;
+    }
+    terrainReadCache_.reset();
+    MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity>{ &entity, 1U });
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool EditorSceneContext::CommitTerrainBrushStroke(std::string* error) {
+    if (!terrainStroke_.has_value()) {
+        if (error != nullptr) error->clear();
+        return true;
+    }
+    TerrainStrokeState completed = std::move(*terrainStroke_);
+    terrainStroke_.reset();
+    if (!completed.changed) {
+        if (error != nullptr) error->clear();
+        return true;
+    }
+    if (!EditorTerrainService::Persist(
+            *scene_, completed.assetId, completed.working,
+            completed.previewMesh, error)) {
+        static_cast<void>(EditorTerrainService::PublishPreview(
+            *scene_, completed.assetId, completed.before));
+        terrainReadCache_.reset();
+        MarkSceneEntitiesRenderDirty(
+            std::span<const kb::scene::SceneEntity>{ &completed.entity, 1U });
+        return false;
+    }
+    commandStack_.PushExecuted(std::make_unique<EditorTerrainAssetEditCommand>(
+        *scene_, completed.assetId, completed.label,
+        std::move(completed.before), std::move(completed.working)));
+    terrainReadCache_.reset();
+    MarkSceneEntitiesRenderDirty(
+        std::span<const kb::scene::SceneEntity>{ &completed.entity, 1U });
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+void EditorSceneContext::CancelTerrainBrushStroke() noexcept {
+    if (terrainStroke_.has_value() && terrainStroke_->changed) {
+        static_cast<void>(EditorTerrainService::PublishPreview(
+            *scene_, terrainStroke_->assetId, terrainStroke_->before));
+        const kb::scene::SceneEntity entity = terrainStroke_->entity;
+        MarkSceneEntitiesRenderDirty(
+            std::span<const kb::scene::SceneEntity>{ &entity, 1U });
+    }
+    terrainStroke_.reset();
+    terrainReadCache_.reset();
+}
+
+bool EditorSceneContext::ImportTerrainHeightmap(
+    kb::scene::SceneEntity entity,
+    const std::filesystem::path& path,
+    const kb::terrain_editor::TerrainHeightmapImportSettings& settings,
+    std::string* error) {
+    CancelTerrainBrushStroke();
+    std::optional<EditorTerrainAssetState> captured =
+        EditorTerrainService::Capture(*scene_, entity, error);
+    if (!captured.has_value()) return false;
+    std::optional<kb::assets::TerrainAsset> imported =
+        EditorTerrainService::BuildHeightmapImport(
+            captured->terrain, path, settings, error);
+    if (!imported.has_value()) return false;
+    auto command = std::make_unique<EditorTerrainAssetEditCommand>(
+        *scene_, captured->assetId, "Import Terrain Heightmap",
+        std::move(captured->terrain), std::move(*imported));
+    if (!commandStack_.Execute(std::move(command))) {
+        if (error != nullptr && error->empty()) {
+            *error = "Imported terrain asset could not be saved";
+        }
+        return false;
+    }
+    terrainReadCache_.reset();
+    MarkSceneEntitiesRenderDirty(
+        std::span<const kb::scene::SceneEntity>{ &entity, 1U });
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool EditorSceneContext::ConfigureTerrain(
+    kb::scene::SceneEntity entity,
+    const EditorTerrainConfiguration& configuration,
+    std::string* error) {
+    CancelTerrainBrushStroke();
+    std::optional<EditorTerrainAssetState> captured =
+        EditorTerrainService::Capture(*scene_, entity, error);
+    if (!captured.has_value()) return false;
+    if (captured->terrain.width == configuration.width &&
+        captured->terrain.height == configuration.height &&
+        captured->terrain.chunkQuads == configuration.chunkQuads &&
+        captured->terrain.lodCount == configuration.lodCount &&
+        captured->terrain.worldSizeX == configuration.worldSizeX &&
+        captured->terrain.worldSizeZ == configuration.worldSizeZ) {
+        if (error != nullptr) error->clear();
+        return true;
+    }
+    std::optional<kb::assets::TerrainAsset> reconfigured =
+        EditorTerrainService::BuildReconfigured(
+            captured->terrain, configuration, error);
+    if (!reconfigured.has_value()) return false;
+    auto command = std::make_unique<EditorTerrainAssetEditCommand>(
+        *scene_, captured->assetId, "Configure Terrain",
+        std::move(captured->terrain), std::move(*reconfigured));
+    if (!commandStack_.Execute(std::move(command))) {
+        if (error != nullptr && error->empty()) {
+            *error = "Terrain configuration could not be saved";
+        }
+        return false;
+    }
+    terrainReadCache_.reset();
+    MarkSceneEntitiesRenderDirty(
+        std::span<const kb::scene::SceneEntity>{ &entity, 1U });
+    if (error != nullptr) error->clear();
+    return true;
+}
+
 kb::scene::SceneEntity EditorSceneContext::SelectedEntity() const noexcept {
     return hierarchySelection_.Primary();
 }
@@ -1719,13 +2106,32 @@ bool EditorSceneContext::IsHierarchyEntitySelected(kb::scene::SceneEntity entity
 }
 
 void EditorSceneContext::SelectEntity(kb::scene::SceneEntity entity) noexcept {
+    const kb::scene::SceneEntity previous = hierarchySelection_.Primary();
     const kb::scene::SceneEntity selected = scene_->Entities().IsAlive(entity) ? entity : kb::scene::SceneEntity{};
+    if (selected != previous && terrainStroke_.has_value()) {
+        CancelTerrainBrushStroke();
+        EditorTerrainService::ToolState().strokeActive = false;
+    }
     if (hierarchyRenameEntity_.IsValid() && hierarchyRenameEntity_ != selected) {
         static_cast<void>(CommitHierarchyRename());
     }
     materialGraphFocused_ = false;
     hierarchySelection_.SelectEntity(selected);
     assetBrowser_.ClearSelection();
+    EditorTerrainToolState& terrainTool = EditorTerrainService::ToolState();
+    if (selected != previous && IsProjectPluginEnabled("Editor.Terrain") &&
+        EditorTerrainService::IsTerrainEntity(*scene_, selected)) {
+        terrainTool.mode = EditorTerrainToolMode::Sculpt;
+        terrainTool.editingEnabled = true;
+        terrainTool.brushMenuOpen = false;
+        terrainTool.brushShapeMenuOpen = false;
+    } else if (!EditorTerrainService::IsTerrainEntity(*scene_, selected)) {
+        terrainTool.strokeActive = false;
+        terrainTool.hoverVisible = false;
+        terrainTool.hoverEntityId = 0U;
+        terrainTool.brushMenuOpen = false;
+        terrainTool.brushShapeMenuOpen = false;
+    }
 }
 
 void EditorSceneContext::SelectHierarchyEntities(std::span<const kb::scene::SceneEntity> entities) noexcept {
@@ -3033,12 +3439,19 @@ std::optional<kb::render::RenderMaterialAssetData> EditorSceneContext::ReadMater
     return ReadEffectiveMaterialAsset(id);
 }
 
-const kb::scene::Scene& EditorSceneContext::MaterialPreviewScene(kb::assets::AssetId id) {
+const kb::scene::Scene& EditorSceneContext::MaterialPreviewScene(
+    kb::assets::AssetId id,
+    EditorMaterialPreviewSurface surface) {
+    EditorMaterialPreviewScene& previewOwner = surface == EditorMaterialPreviewSurface::Inspector
+        ? *inspectorMaterialPreviewScene_
+        : *materialPreviewScene_;
+    const bool nodePreviewEnabled = surface == EditorMaterialPreviewSurface::MaterialEditor &&
+        materialPreviewNodePreviewEnabled_;
     const kb::render::RenderMaterialAssetData* workingCopy = nullptr;
     if (materialEditor_.OpenAssetId() == id && materialEditor_.WorkingCopy().has_value()) {
         workingCopy = &*materialEditor_.WorkingCopy();
         materialNodePreviewWorkingCopy_.reset();
-        if (materialPreviewNodePreviewEnabled_) {
+        if (nodePreviewEnabled) {
             materialNodePreviewWorkingCopy_ =
                 EditorMaterialNodePreviewBuilder::Build(*materialEditor_.WorkingCopy(), materialEditor_.SelectedNodeId());
             if (materialNodePreviewWorkingCopy_.has_value()) {
@@ -3049,7 +3462,7 @@ const kb::scene::Scene& EditorSceneContext::MaterialPreviewScene(kb::assets::Ass
         materialNodePreviewWorkingCopy_.reset();
     }
     const kb::render::RenderMaterialGraphVariantUsage usage =
-        materialPreviewNodePreviewEnabled_ && materialNodePreviewWorkingCopy_.has_value()
+        nodePreviewEnabled && materialNodePreviewWorkingCopy_.has_value()
         ? kb::render::RenderMaterialGraphVariantUsage::NodePreview
         : kb::render::RenderMaterialGraphVariantUsage::Preview;
     // Cheap "did anything feeding the preview change?" key so SceneFor can skip the full content-hash recompute
@@ -3062,15 +3475,15 @@ const kb::scene::Scene& EditorSceneContext::MaterialPreviewScene(kb::assets::Ass
     std::uint64_t previewInputRevision = mixRevision(0x21B7C0DEULL, scene_->Assets().Manager().Registry().Generation());
     if (workingCopy != nullptr) {
         previewInputRevision = mixRevision(previewInputRevision, materialEditor_.DocumentRevision());
-        if (materialPreviewNodePreviewEnabled_ && materialNodePreviewWorkingCopy_.has_value()) {
+        if (nodePreviewEnabled && materialNodePreviewWorkingCopy_.has_value()) {
             previewInputRevision = mixRevision(previewInputRevision, static_cast<std::uint64_t>(materialEditor_.SelectedNodeId()) + 1U);
             previewInputRevision = mixRevision(previewInputRevision, static_cast<std::uint64_t>(usage));
         }
     }
-    const std::uint64_t revisionBefore = materialPreviewScene_->Revision();
+    const std::uint64_t revisionBefore = previewOwner.Revision();
     const auto resolveStart = std::chrono::steady_clock::now();
-    const kb::scene::Scene& previewScene = materialPreviewScene_->SceneFor(*scene_, id, workingCopy, previewInputRevision);
-    const bool previewRebuilt = materialPreviewScene_->Revision() != revisionBefore;
+    const kb::scene::Scene& previewScene = previewOwner.SceneFor(*scene_, id, workingCopy, previewInputRevision);
+    const bool previewRebuilt = previewOwner.Revision() != revisionBefore;
     if (previewRebuilt) {
         // [perf] One-shot log: only fires when the preview scene actually rebuilds (i.e. after an edit), never
         // on a steady frame. This is the synchronous resolve/flatten cost of reflecting a graph edit.
@@ -3083,7 +3496,7 @@ const kb::scene::Scene& EditorSceneContext::MaterialPreviewScene(kb::assets::Ass
         static_cast<void>(materialGraphCookService_->RequestCook(
             id,
             *workingCopy,
-            MaterialPreviewGraphBuildContext(id, materialPreviewScene_->SceneSettings(), usage)));
+            MaterialPreviewGraphBuildContext(id, previewOwner.SceneSettings(), usage)));
     }
     return previewScene;
 }
@@ -3097,7 +3510,9 @@ const EditorMaterialPreviewPrimitivePolicy& EditorSceneContext::MaterialPreviewP
 }
 
 bool EditorSceneContext::SetMaterialPreviewPrimitivePolicy(EditorMaterialPreviewPrimitivePolicy policy) {
-    const bool changed = materialPreviewScene_->SetPrimitivePolicy(policy);
+    const bool editorChanged = materialPreviewScene_->SetPrimitivePolicy(policy);
+    const bool inspectorChanged = inspectorMaterialPreviewScene_->SetPrimitivePolicy(policy);
+    const bool changed = editorChanged || inspectorChanged;
     if (changed) {
         MarkSceneRenderDirty();
     }
@@ -3179,7 +3594,9 @@ const EditorMaterialPreviewSceneSettings& EditorSceneContext::MaterialPreviewSce
 }
 
 bool EditorSceneContext::SetMaterialPreviewSceneSettings(EditorMaterialPreviewSceneSettings settings) {
-    const bool changed = materialPreviewScene_->SetSceneSettings(settings);
+    const bool editorChanged = materialPreviewScene_->SetSceneSettings(settings);
+    const bool inspectorChanged = inspectorMaterialPreviewScene_->SetSceneSettings(settings);
+    const bool changed = editorChanged || inspectorChanged;
     if (changed) {
         if (materialGraphCookService_ != nullptr && materialEditor_.OpenAssetId().IsValid() && materialEditor_.WorkingCopy().has_value()) {
             const kb::assets::AssetId openAsset = materialEditor_.OpenAssetId();
@@ -3197,10 +3614,12 @@ bool EditorSceneContext::OrbitMaterialPreviewCamera(float deltaYawDegrees, float
     const EditorMaterialPreviewSceneSettings current = materialPreviewScene_->SceneSettings();
     // A pure camera move: no cook, no scene rebuild - just the next present. That is why it goes through the
     // scene's camera-only path rather than SetMaterialPreviewSceneSettings (which re-cooks the shader).
-    if (!materialPreviewScene_->SetCameraOrbit(
-            current.orbitYawDegrees + deltaYawDegrees,
-            current.orbitPitchDegrees + deltaPitchDegrees,
-            current.cameraDistance)) {
+    const float yaw = current.orbitYawDegrees + deltaYawDegrees;
+    const float pitch = current.orbitPitchDegrees + deltaPitchDegrees;
+    const bool editorChanged = materialPreviewScene_->SetCameraOrbit(yaw, pitch, current.cameraDistance);
+    const bool inspectorChanged = inspectorMaterialPreviewScene_->SetCameraOrbit(yaw, pitch, current.cameraDistance);
+    const bool changed = editorChanged || inspectorChanged;
+    if (!changed) {
         return false;
     }
     // No MarkSceneRenderDirty(): that re-syncs the main scene to the GPU, and the preview repaints every
@@ -3210,10 +3629,13 @@ bool EditorSceneContext::OrbitMaterialPreviewCamera(float deltaYawDegrees, float
 
 bool EditorSceneContext::ZoomMaterialPreviewCamera(float scale) {
     const EditorMaterialPreviewSceneSettings current = materialPreviewScene_->SceneSettings();
-    if (!materialPreviewScene_->SetCameraOrbit(
-            current.orbitYawDegrees,
-            current.orbitPitchDegrees,
-            current.cameraDistance * scale)) {
+    const float distance = current.cameraDistance * scale;
+    const bool editorChanged = materialPreviewScene_->SetCameraOrbit(
+        current.orbitYawDegrees, current.orbitPitchDegrees, distance);
+    const bool inspectorChanged = inspectorMaterialPreviewScene_->SetCameraOrbit(
+        current.orbitYawDegrees, current.orbitPitchDegrees, distance);
+    const bool changed = editorChanged || inspectorChanged;
+    if (!changed) {
         return false;
     }
     return true;
@@ -3272,8 +3694,10 @@ bool EditorSceneContext::ToggleMaterialPreviewNormalDebugView() {
     return SetMaterialPreviewNormalDebugViewEnabled(!MaterialPreviewNormalDebugViewEnabled());
 }
 
-std::uint64_t EditorSceneContext::MaterialPreviewRevision() const noexcept {
-    return materialPreviewScene_->Revision();
+std::uint64_t EditorSceneContext::MaterialPreviewRevision(EditorMaterialPreviewSurface surface) const noexcept {
+    return surface == EditorMaterialPreviewSurface::Inspector
+        ? inspectorMaterialPreviewScene_->Revision()
+        : materialPreviewScene_->Revision();
 }
 
 const std::string& EditorSceneContext::GraphShaderCacheRoot() const noexcept {
@@ -7226,6 +7650,16 @@ bool EditorSceneContext::ToggleProjectPlugin(std::size_t catalogIndex) {
     }
 
     iter->enabled = !iter->enabled;
+    if (descriptor->id == "Editor.Terrain" && !iter->enabled) {
+        EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+        tool.editingEnabled = false;
+        tool.mode = EditorTerrainToolMode::Select;
+        tool.strokeActive = false;
+        tool.hoverVisible = false;
+        tool.hoverEntityId = 0U;
+        tool.brushMenuOpen = false;
+        tool.brushShapeMenuOpen = false;
+    }
     if (iter->binaryPath.empty()) {
         iter->binaryPath = EditorPluginCatalog::PersistentBinaryPath(descriptor->id);
     }
@@ -8134,6 +8568,8 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
             return false;
         }
         EditorTerrainService::ToolState().editingEnabled = true;
+        EditorTerrainService::ToolState().mode = EditorTerrainToolMode::Sculpt;
+        static_cast<void>(FrameSelectedEntitiesInViewport());
         console_.Info("Terrain", "Created a chunked 129 x 129 terrain with four LOD levels.");
         return true;
     }
@@ -9208,6 +9644,9 @@ void EditorSceneContext::RebuildHierarchyRowsIfNeeded() const {
 
 void EditorSceneContext::ResetSceneEditState() {
     ClearMaterialEditorWorkingCopyRuntimePreview();
+    terrainStroke_.reset();
+    terrainReadCache_.reset();
+    EditorTerrainService::ToolState().strokeActive = false;
     commandStack_.Clear();
     pendingSceneTransactionLabel_.reset();
     activeTransformEdit_.Clear();

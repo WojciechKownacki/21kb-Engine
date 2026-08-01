@@ -7,7 +7,9 @@ namespace kb::render {
 class RenderMeshAssetFinalizer final {
 public:
     static void EnsureTangentVertexStorage(RenderMeshAssetData& asset);
-    [[nodiscard]] static bool Finalize(RenderMeshAssetData& asset);
+    [[nodiscard]] static bool Finalize(
+        RenderMeshAssetData& asset,
+        const RenderMeshFinalizeOptions& options = {});
 };
 
 } // namespace kb::render

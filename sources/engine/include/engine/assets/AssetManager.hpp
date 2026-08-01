@@ -108,6 +108,47 @@ public:
         return metadata == nullptr ? AssetHandle<T>{} : Load<T>(metadata->id);
     }
 
+    // Publishes an already-decoded payload for a registered asset on the owner
+    // thread. Editor working copies use this to preview an asset without
+    // serializing it to disk on every pointer sample. The payload type must
+    // match the registered loader, so consumers still observe the same runtime
+    // contract as a canonical Load<T>(). Metadata/content-hash ownership stays
+    // with the caller and must be updated before publishing when render
+    // consumers need to rebuild derived resources.
+    template <typename T>
+    [[nodiscard]] bool PublishRuntimeAsset(
+        AssetId id,
+        std::shared_ptr<T> payload) {
+        lastError_.clear();
+        const AssetMetadata* metadata = registry_.Find(id);
+        IAssetLoader* loader = metadata == nullptr ? nullptr : LoaderForType(metadata->type);
+        if (!id.IsValid() || payload == nullptr || metadata == nullptr ||
+            loader == nullptr || loader->PayloadType() != typeid(T)) {
+            lastError_ = !id.IsValid()
+                ? "Invalid asset id"
+                : payload == nullptr
+                    ? "Published asset payload is null"
+                    : metadata == nullptr
+                        ? "Asset is not registered"
+                        : loader == nullptr
+                            ? "No loader registered for asset type: " + metadata->type
+                            : "Published asset payload type does not match its loader";
+            return false;
+        }
+
+        ++asyncLoadGenerations_[id.value];
+        asyncLoads_.erase(id.value);
+        asyncLoadErrors_.erase(id.value);
+        std::shared_ptr<void> erased = std::move(payload);
+        cache_[id.value] = CachedAsset{
+            .retained = erased,
+            .weak = erased,
+            .type = typeid(T),
+            .policy = AssetUnloadPolicy::Retain,
+        };
+        return true;
+    }
+
     // Type-erased force-load: caches the payload through whatever loader is
     // registered for the asset's own metadata.type, without the caller
     // knowing (or being able to name) the C++ payload type at compile time.

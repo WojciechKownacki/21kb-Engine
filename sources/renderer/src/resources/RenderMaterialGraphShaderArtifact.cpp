@@ -522,6 +522,14 @@ std::string BuildGraphFragmentWrapperSource(
     wrapper += "#include <bgfx_shader.sh>\n";
     if (!shadowPass) {
         wrapper += "#include \"pbr_graph_forward.sh\"\n";
+        wrapper += "SAMPLER2D(s_terrainLayerWeights, 15);\n";
+        wrapper += "uniform vec4 u_terrainLayerParams;\n";
+        wrapper += "float KbTerrainLayerOpacity(vec2 terrainUv)\n{\n";
+        wrapper += "    if (u_terrainLayerParams.y < 0.5 || u_terrainLayerParams.x < 0.5) return 1.0;\n";
+        wrapper += "    vec4 weights = texture2D(s_terrainLayerWeights, terrainUv);\n";
+        wrapper += "    if (u_terrainLayerParams.x < 1.5) return weights.y / max(weights.x + weights.y, 0.0001);\n";
+        wrapper += "    if (u_terrainLayerParams.x < 2.5) return weights.z / max(weights.x + weights.y + weights.z, 0.0001);\n";
+        wrapper += "    return weights.w / max(weights.x + weights.y + weights.z + weights.w, 0.0001);\n}\n";
     }
     if (gbufferPass) {
         wrapper += "#include \"gbuffer_contract.sh\"\n";
@@ -582,6 +590,9 @@ std::string BuildGraphFragmentWrapperSource(
         wrapper += "    if (surface.alpha < surface.alphaClipThreshold)\n    {\n        discard;\n    }\n";
         wrapper += "    gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);\n";
     } else {
+        wrapper += "    float terrainLayerOpacity = KbTerrainLayerOpacity(v_shadowFlags.zw);\n";
+        wrapper += "    if (u_terrainLayerParams.y > 0.5 && terrainLayerOpacity <= 0.0001)\n    {\n        discard;\n    }\n";
+        wrapper += "    surface.alpha *= terrainLayerOpacity;\n";
         // MAT-38 Masked: clip fragments whose alpha is below the clip threshold so the background shows
         // through (binary opacity). The transparent modes keep every fragment and blend at the ROP stage.
         if (shader.reflection.blendMode == RenderMaterialGraphBlendMode::Masked) {

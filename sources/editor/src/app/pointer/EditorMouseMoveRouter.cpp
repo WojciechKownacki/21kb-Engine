@@ -103,9 +103,21 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         return;
     }
 
+    if (!EditorTerrainService::ToolState().strokeActive &&
+        EditorTerrainViewportInteraction::UpdateHover(
+            messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
+        sceneViewport_.RequestPresent();
+    }
+
     if (EditorTerrainService::ToolState().strokeActive) {
         if (!leftButtonDown) {
             EditorTerrainService::ToolState().strokeActive = false;
+            std::string error;
+            if (!sceneContext_.CommitTerrainBrushStroke(&error)) {
+                sceneContext_.Console().Warning(
+                    "Terrain",
+                    error.empty() ? "Terrain stroke could not be committed." : error);
+            }
             ReleaseCapture();
         } else {
             static_cast<void>(EditorTerrainViewportInteraction::Stamp(

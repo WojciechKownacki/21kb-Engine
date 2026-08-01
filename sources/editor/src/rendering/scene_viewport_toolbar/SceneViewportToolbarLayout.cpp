@@ -108,6 +108,88 @@ SceneViewportToolbarRects SceneViewportToolbarLayout::Resolve(const RECT& conten
     return rects;
 }
 
+TerrainViewportToolbarRects SceneViewportToolbarLayout::ResolveTerrainTools(const RECT& content) noexcept {
+    TerrainViewportToolbarRects rects{};
+    constexpr int panelHeight = 38;
+    constexpr int buttonHeight = 26;
+    constexpr int gap = 3;
+    int cursor = content.left + 8;
+    const int top = content.top + SceneViewportToolbarRenderer::Height + 8;
+    const int panelLeft = cursor;
+    cursor += 7;
+    const int buttonTop = top + (panelHeight - buttonHeight) / 2;
+    const auto button = [&](int width) {
+        const RECT value{ cursor, buttonTop, cursor + width, buttonTop + buttonHeight };
+        cursor = value.right + gap;
+        return value;
+    };
+    rects.selectButton = button(48);
+    rects.sculptButton = button(50);
+    rects.holesButton = button(46);
+    rects.paintButton = button(46);
+    cursor += 1;
+    rects.brushButton = button(95);
+    rects.brushShapeButton = button(110);
+    cursor += 1;
+    rects.sizeMinusButton = button(24);
+    rects.sizeValue = button(58);
+    rects.sizePlusButton = button(24);
+    cursor += 1;
+    rects.strengthMinusButton = button(24);
+    rects.strengthValue = button(72);
+    rects.strengthPlusButton = button(24);
+    rects.panel = RECT{ panelLeft, top, rects.strengthPlusButton.right + 7, top + panelHeight };
+
+    constexpr int operationMenuWidth = 356;
+    constexpr int operationHeaderHeight = 34;
+    constexpr int operationItemHeight = 55;
+    const int operationLeft = std::clamp(
+        static_cast<int>(rects.brushButton.left),
+        static_cast<int>(content.left + 8),
+        std::max(static_cast<int>(content.left + 8), static_cast<int>(content.right - operationMenuWidth - 8)));
+    rects.brushMenu = RECT{
+        operationLeft,
+        rects.panel.bottom + 5,
+        operationLeft + operationMenuWidth,
+        rects.panel.bottom + 5 + operationHeaderHeight + operationItemHeight * 4 + 8,
+    };
+    for (std::size_t index = 0U; index < rects.brushItems.size(); ++index) {
+        const int column = static_cast<int>(index % 2U);
+        const int row = static_cast<int>(index / 2U);
+        rects.brushItems[index] = RECT{
+            rects.brushMenu.left + 6 + column * 172,
+            rects.brushMenu.top + operationHeaderHeight + row * operationItemHeight,
+            rects.brushMenu.left + 6 + column * 172 + 168,
+            rects.brushMenu.top + operationHeaderHeight + row * operationItemHeight + 51,
+        };
+    }
+
+    constexpr int shapeMenuWidth = 404;
+    constexpr int shapeHeaderHeight = 38;
+    constexpr int shapeItemHeight = 72;
+    const int shapeLeft = std::clamp(
+        static_cast<int>(rects.brushShapeButton.left),
+        static_cast<int>(content.left + 8),
+        std::max(static_cast<int>(content.left + 8), static_cast<int>(content.right - shapeMenuWidth - 8)));
+    rects.brushShapeMenu = RECT{
+        shapeLeft,
+        rects.panel.bottom + 5,
+        shapeLeft + shapeMenuWidth,
+        rects.panel.bottom + 5 + shapeHeaderHeight + shapeItemHeight * 3 + 8,
+    };
+    for (std::size_t index = 0U; index < rects.brushShapeItems.size(); ++index) {
+        const int column = static_cast<int>(index % 2U);
+        const int row = static_cast<int>(index / 2U);
+        rects.brushShapeItems[index] = RECT{
+            rects.brushShapeMenu.left + 6 + column * 196,
+            rects.brushShapeMenu.top + shapeHeaderHeight + row * shapeItemHeight,
+            rects.brushShapeMenu.left + 6 + column * 196 + 192,
+            rects.brushShapeMenu.top + shapeHeaderHeight + row * shapeItemHeight + 68,
+        };
+    }
+    return rects;
+}
+
 } // namespace kb::editor
 
 #endif

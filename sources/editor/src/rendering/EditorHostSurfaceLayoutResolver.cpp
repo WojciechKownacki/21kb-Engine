@@ -83,7 +83,7 @@ std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> EditorHostSurfaceLayoutR
         if (panel->kind == DockPanelKind::Scene) {
             layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
                 .viewportKey = panelLayout.panelId,
-                .bounds = SceneViewportToolbarRenderer::Resolve(content, sceneContext.ViewportPreview(panelLayout.panelId)).renderArea,
+                .bounds = SceneViewportToolbarRenderer::Resolve(content, sceneContext.ViewportPreview(panelLayout.panelId), sceneContext).renderArea,
             });
             continue;
         }

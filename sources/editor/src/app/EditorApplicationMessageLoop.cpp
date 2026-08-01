@@ -136,6 +136,9 @@ constexpr int kMaxMessagesPerPump = 128;
     const std::uint32_t renderWidth = std::max<std::uint32_t>(1U, RectWidth(previewRect));
     const std::uint32_t renderHeight = std::max<std::uint32_t>(1U, RectHeight(previewRect));
     const EditorMaterialPreviewSceneSettings& previewSettings = sceneContext.MaterialPreviewSceneSettings();
+    const EditorMaterialPreviewSurface previewSurface = viewportKey == kInspectorMaterialPreviewViewportKey
+        ? EditorMaterialPreviewSurface::Inspector
+        : EditorMaterialPreviewSurface::MaterialEditor;
     return EditorSceneBgfxViewport::PresentSettings{
         .renderWidth = renderWidth,
         .renderHeight = renderHeight,
@@ -152,8 +155,8 @@ constexpr int kMaxMessagesPerPump = 128;
         .selectionOutlineEnabled = false,
         .gpuDrivenRuntimeDispatchEnabled = false,
         .drawSafeArea = false,
-        .sceneRevision = sceneContext.MaterialPreviewRevision(),
-        .sceneDirtyBaseRevision = sceneContext.MaterialPreviewRevision(),
+        .sceneRevision = sceneContext.MaterialPreviewRevision(previewSurface),
+        .sceneDirtyBaseRevision = sceneContext.MaterialPreviewRevision(previewSurface),
         .sceneFullSyncRequired = true,
     };
 }
@@ -277,7 +280,10 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
     bool presented = false;
     for (const PreviewTarget& target : targets) {
         if (target.metadata != nullptr && target.rect.has_value()) {
-            const kb::scene::Scene& previewScene = state.sceneContext.MaterialPreviewScene(target.metadata->id);
+            const EditorMaterialPreviewSurface previewSurface = target.viewportKey == kInspectorMaterialPreviewViewportKey
+                ? EditorMaterialPreviewSurface::Inspector
+                : EditorMaterialPreviewSurface::MaterialEditor;
+            const kb::scene::Scene& previewScene = state.sceneContext.MaterialPreviewScene(target.metadata->id, previewSurface);
             const EditorSceneBgfxViewport::PresentSettings settings = BuildMaterialPreviewSettings(state.sceneContext, *target.rect, target.viewportKey);
             state.sceneViewport.Present(host, *target.rect, previewScene, settings);
             presented = true;
@@ -469,7 +475,7 @@ void ConfigurePlayModePointerViewport(EditorApplicationState& state) {
     const EditorViewportPreviewState& preview =
         state.sceneContext.ViewportPreview(scenePanel->panelId);
     const RECT renderArea =
-        SceneViewportToolbarRenderer::Resolve(scenePanel->content, preview).renderArea;
+        SceneViewportToolbarRenderer::Resolve(scenePanel->content, preview, state.sceneContext).renderArea;
     const std::uint32_t displayWidth = static_cast<std::uint32_t>(
         std::max<LONG>(0, renderArea.right - renderArea.left));
     const std::uint32_t displayHeight = static_cast<std::uint32_t>(

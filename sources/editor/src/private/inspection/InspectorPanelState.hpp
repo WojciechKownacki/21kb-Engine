@@ -78,6 +78,7 @@ enum class InspectorHitKind : std::uint8_t {
 // frame ticking remain common.
 enum class InspectorDisclosureId : std::uint8_t {
     MeshRendererAdvanced,
+    TerrainAdvanced,
     Count,
 };
 
@@ -388,7 +389,29 @@ enum class InspectorPropertyId : std::uint16_t {
     TerrainBrushFalloff,
     TerrainFlattenHeight,
     TerrainTerraceStep,
+    TerrainNoiseSeed,
+    TerrainImportMinimumHeight,
+    TerrainImportMaximumHeight,
+    TerrainImportFlipVertically,
     TerrainImportHeightmap,
+    TerrainResolutionX,
+    TerrainResolutionZ,
+    TerrainWorldSizeX,
+    TerrainWorldSizeZ,
+    TerrainChunkQuads,
+    TerrainLodCount,
+    TerrainMaterialLayer0,
+    TerrainMaterialLayer1,
+    TerrainMaterialLayer2,
+    TerrainMaterialLayer3,
+    TerrainMaterialLayerPicker0,
+    TerrainMaterialLayerPicker1,
+    TerrainMaterialLayerPicker2,
+    TerrainMaterialLayerPicker3,
+    TerrainMaterialLayerCreate,
+    TerrainMaterialLayerAdd,
+    TerrainMaterialLayerRemove,
+    TerrainAdvanced,
 };
 
 struct InspectorPanelState {

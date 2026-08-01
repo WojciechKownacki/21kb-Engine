@@ -52,6 +52,7 @@ void HashCombine(std::size_t& seed, std::uint64_t value) noexcept {
         .indexStart = desc.indexStart,
         .indexCount = desc.indexCount,
         .lodLevel = desc.lodLevel,
+        .terrainLayerIndex = desc.terrainLayerIndex,
         .state = desc.state,
     };
 }
@@ -88,6 +89,7 @@ std::size_t SceneCachedDrawCommandKeyHash::operator()(const SceneCachedDrawComma
     HashCombine(seed, key.indexStart);
     HashCombine(seed, key.indexCount);
     HashCombine(seed, key.lodLevel);
+    HashCombine(seed, key.terrainLayerIndex);
     HashCombine(seed, key.state);
     return seed;
 }

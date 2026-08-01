@@ -30,6 +30,8 @@ namespace {
             .materialSlot = section.materialSlot,
             .bounds = section.bounds.IsValid() ? section.bounds : RenderMeshDescGeometry::ComputeBounds(desc, section.indexStart, section.indexCount),
             .lodLevel = section.lodLevel,
+            .terrainLayerIndex = section.terrainLayerIndex,
+            .terrainLayerActive = section.terrainLayerActive,
         });
     }
     return sections;
@@ -85,13 +87,18 @@ RenderBoundsSphere RenderMeshResourceBuilder::ComputeBounds(const RenderMeshDesc
     return RenderMeshDescGeometry::ComputeBounds(desc, indexStart, indexCount);
 }
 
-RenderMeshResource RenderMeshResourceBuilder::Build(const RenderMeshDesc& desc, bgfx::VertexBufferHandle vertexBuffer, bgfx::IndexBufferHandle indexBuffer) {
+RenderMeshResource RenderMeshResourceBuilder::Build(
+    const RenderMeshDesc& desc,
+    bgfx::VertexBufferHandle vertexBuffer,
+    bgfx::DynamicVertexBufferHandle dynamicVertexBuffer,
+    bgfx::IndexBufferHandle indexBuffer) {
     const RenderBoundsSphere meshBounds = desc.bounds.IsValid() ? desc.bounds : RenderMeshDescGeometry::ComputeBounds(desc, 0U, desc.indexCount);
     std::vector<RenderMeshSection> sections = BuildSections(desc, meshBounds);
     std::vector<RenderMaterialSlot> materialSlots = BuildMaterialSlots(desc, sections);
 
     return RenderMeshResource{
         .vertexBuffer = vertexBuffer,
+        .dynamicVertexBuffer = dynamicVertexBuffer,
         .indexBuffer = indexBuffer,
         .vertexCount = desc.vertexCount,
         .indexCount = desc.indexCount,
@@ -107,6 +114,9 @@ RenderMeshResource RenderMeshResourceBuilder::Build(const RenderMeshDesc& desc, 
         .gpuCullingEnabled = desc.gpuDriven.allowGpuCulling && desc.gpuDriven.meshletCount > 0U,
         .indirectDrawsEnabled = desc.gpuDriven.allowIndirectDraws && desc.gpuDriven.meshletCount > 0U,
         .meshletCullingEnabled = desc.gpuDriven.allowMeshletCulling && desc.gpuDriven.meshletCount > 0U,
+        .terrainLayerWeightWidth = desc.terrainLayerWeightWidth,
+        .terrainLayerWeightHeight = desc.terrainLayerWeightHeight,
+        .terrainLayerCount = desc.terrainLayerCount,
     };
 }
 

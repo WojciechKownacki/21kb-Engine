@@ -5,6 +5,7 @@
 #include "kb/render/resources/detail/RenderResourceSlotPool.hpp"
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace kb::render {
@@ -43,6 +44,22 @@ public:
     [[nodiscard]] RenderMeshHandle RegisterMesh(const RenderMeshDesc& desc);
     [[nodiscard]] const RenderMeshResource* FindMesh(RenderMeshHandle handle) const noexcept;
     [[nodiscard]] bool ContainsMesh(RenderMeshHandle handle) const noexcept;
+    [[nodiscard]] bool UpdateMeshVertices(
+        RenderMeshHandle handle,
+        const RenderMeshDesc& desc,
+        std::uint32_t firstVertex,
+        std::uint32_t vertexCount);
+    [[nodiscard]] bool UpdateMeshGeometryMetadata(
+        RenderMeshHandle handle,
+        const RenderMeshDesc& desc,
+        std::span<const std::uint32_t> sectionIndices);
+    [[nodiscard]] bool UpdateMeshTerrainLayerWeights(
+        RenderMeshHandle handle,
+        const RenderMeshDesc& desc,
+        std::uint16_t x,
+        std::uint16_t y,
+        std::uint16_t width,
+        std::uint16_t height);
     void DestroyMesh(RenderMeshHandle handle) noexcept;
 
     [[nodiscard]] RenderMaterialHandle RegisterMaterial(const RenderMaterialDesc& desc);
