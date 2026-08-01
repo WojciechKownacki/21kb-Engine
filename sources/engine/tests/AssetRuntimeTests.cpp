@@ -164,6 +164,49 @@ void RunAssetManagerDiscoveryCacheAndManifestTest() {
     kb::tests::Require(restoredMetadata->importCategory == metadata->importCategory, "Restored asset manifest did not preserve import category");
 }
 
+void RunAssetManagerRuntimePublicationTest() {
+    ResetTestRoot();
+
+    const std::filesystem::path assetsRoot = TestRoot() / "RuntimePublication" / "Assets";
+    WriteTextFile(assetsRoot / "Working.txt", "canonical");
+    kb::assets::AssetManager manager;
+    kb::tests::Require(
+        manager.RegisterLoader(std::make_unique<TextAssetLoader>()),
+        "Runtime publication text loader registration failed");
+    kb::tests::Require(
+        manager.Mounts().Mount("Game", assetsRoot),
+        "Runtime publication asset mount failed");
+    kb::tests::Require(
+        manager.DiscoverMountedAssets() == 1U,
+        "Runtime publication fixture was not discovered");
+    const kb::assets::AssetMetadata* metadata =
+        manager.Registry().FindByPath("/Game/Working.txt");
+    kb::tests::Require(metadata != nullptr, "Runtime publication asset metadata is missing");
+    const kb::assets::AssetId id = metadata->id;
+    const std::uint64_t generation = manager.LoadGeneration(id);
+
+    kb::tests::Require(
+        manager.PublishRuntimeAsset<std::string>(
+            id, std::make_shared<std::string>("working copy")),
+        "Matching runtime payload could not be published");
+    const kb::assets::AssetHandle<std::string> preview = manager.Load<std::string>(id);
+    kb::tests::Require(
+        preview.IsLoaded() && *preview.Get() == "working copy",
+        "A canonical load did not observe the published runtime payload");
+    kb::tests::Require(
+        manager.LoadGeneration(id) > generation,
+        "Runtime publication did not invalidate an older async generation");
+    kb::tests::Require(
+        !manager.PublishRuntimeAsset<int>(id, std::make_shared<int>(7)),
+        "Runtime publication accepted a payload type that does not match the loader");
+
+    kb::tests::Require(manager.Unload(id), "Published runtime payload could not be unloaded");
+    const kb::assets::AssetHandle<std::string> canonical = manager.Load<std::string>(id);
+    kb::tests::Require(
+        canonical.IsLoaded() && *canonical.Get() == "canonical",
+        "Unloading a runtime publication did not restore canonical disk loading");
+}
+
 // LIB-155: AssetManager::LoadOpaque — the type-erased force-load the
 // generic script-facing Assets.Load surface needs, because kb_engine cannot
 // name a compile-time payload T for asset kinds whose C++ type lives in
@@ -950,6 +993,7 @@ namespace kb::tests {
 
 void RunAssetRuntimeTests() {
     RunAssetManagerDiscoveryCacheAndManifestTest();
+    RunAssetManagerRuntimePublicationTest();
     RunAssetManagerLoadOpaqueTest();
     RunAssetManagerTrueAsyncLoadTest();
     RunAssetManagerAsyncLoaderReplacementTest();

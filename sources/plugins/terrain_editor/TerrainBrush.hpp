@@ -17,8 +17,18 @@ enum class TerrainBrushMode : std::uint8_t {
     FillHole,
 };
 
+enum class TerrainBrushShape : std::uint8_t {
+    SoftRound,
+    HardRound,
+    LinearRound,
+    Bell,
+    Ring,
+    Speckle,
+};
+
 struct TerrainBrushSettings {
     TerrainBrushMode mode = TerrainBrushMode::Raise;
+    TerrainBrushShape shape = TerrainBrushShape::SoftRound;
     float radius = 8.0F;
     float strength = 1.0F;
     float falloff = 0.65F;

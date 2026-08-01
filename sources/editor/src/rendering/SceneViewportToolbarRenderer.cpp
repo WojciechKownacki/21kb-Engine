@@ -34,6 +34,146 @@ namespace {
     return "Raise / Mountain";
 }
 
+[[nodiscard]] const char* TerrainBrushDescription(kb::terrain_editor::TerrainBrushMode mode) noexcept {
+    using Mode = kb::terrain_editor::TerrainBrushMode;
+    switch (mode) {
+    case Mode::Raise: return "Build height";
+    case Mode::Lower: return "Carve terrain";
+    case Mode::Smooth: return "Soften details";
+    case Mode::Flatten: return "Level to height";
+    case Mode::Noise: return "Add texture";
+    case Mode::Terrace: return "Create steps";
+    case Mode::CutHole: return "Remove surface";
+    case Mode::FillHole: return "Restore surface";
+    }
+    return "";
+}
+
+[[nodiscard]] const char* TerrainBrushToolbarLabel(kb::terrain_editor::TerrainBrushMode mode) noexcept {
+    using Mode = kb::terrain_editor::TerrainBrushMode;
+    switch (mode) {
+    case Mode::Raise: return "Raise";
+    case Mode::Lower: return "Lower";
+    default: return TerrainBrushLabel(mode);
+    }
+}
+
+[[nodiscard]] const char* TerrainBrushShapeLabel(kb::terrain_editor::TerrainBrushShape shape) noexcept {
+    using Shape = kb::terrain_editor::TerrainBrushShape;
+    switch (shape) {
+    case Shape::SoftRound: return "Soft Round";
+    case Shape::HardRound: return "Hard Round";
+    case Shape::LinearRound: return "Linear";
+    case Shape::Bell: return "Bell";
+    case Shape::Ring: return "Ring";
+    case Shape::Speckle: return "Speckle";
+    }
+    return "Soft Round";
+}
+
+[[nodiscard]] const char* TerrainBrushShapeDescription(kb::terrain_editor::TerrainBrushShape shape) noexcept {
+    using Shape = kb::terrain_editor::TerrainBrushShape;
+    switch (shape) {
+    case Shape::SoftRound: return "Smooth feathered edge";
+    case Shape::HardRound: return "Solid precise edge";
+    case Shape::LinearRound: return "Even radial fade";
+    case Shape::Bell: return "Natural dome";
+    case Shape::Ring: return "Circular band";
+    case Shape::Speckle: return "Organic texture";
+    }
+    return "";
+}
+
+void DrawTextAt(HDC dc, RECT rect, const char* text, COLORREF color, UINT format) {
+    SetTextColor(dc, color);
+    SetBkMode(dc, TRANSPARENT);
+    DrawTextA(dc, text, -1, &rect, format | DT_NOPREFIX | DT_SINGLELINE);
+}
+
+void DrawBrushShapePreview(HDC dc, const RECT& rect, kb::terrain_editor::TerrainBrushShape shape) {
+    SceneViewportToolbarDrawing::FillRound(dc, rect, RGB(15, 18, 23), RGB(55, 65, 77), 7);
+    const int centerX = (rect.left + rect.right) / 2;
+    const int centerY = (rect.top + rect.bottom) / 2;
+    const int width = static_cast<int>(rect.right - rect.left);
+    const int height = static_cast<int>(rect.bottom - rect.top);
+    const int radius = std::max(3, std::min(width, height) / 2 - 5);
+    const auto circle = [&](int r, COLORREF color) {
+        HBRUSH brush = CreateSolidBrush(color);
+        HPEN pen = CreatePen(PS_NULL, 0, color);
+        HGDIOBJ oldBrush = SelectObject(dc, brush);
+        HGDIOBJ oldPen = SelectObject(dc, pen);
+        Ellipse(dc, centerX - r, centerY - r, centerX + r + 1, centerY + r + 1);
+        SelectObject(dc, oldPen);
+        SelectObject(dc, oldBrush);
+        DeleteObject(pen);
+        DeleteObject(brush);
+    };
+    using Shape = kb::terrain_editor::TerrainBrushShape;
+    if (shape == Shape::HardRound) {
+        circle(radius, RGB(116, 193, 218));
+    } else if (shape == Shape::Ring) {
+        circle(radius, RGB(41, 72, 86));
+        circle(std::max(1, radius - 4), RGB(116, 193, 218));
+        circle(std::max(1, radius - 9), RGB(18, 23, 29));
+    } else if (shape == Shape::Speckle) {
+        constexpr std::array<POINT, 13U> dots{{
+            {-8, -7}, {-1, -9}, {7, -6}, {-10, 1}, {-3, -1}, {5, 0}, {10, 4},
+            {-7, 8}, {1, 7}, {7, 10}, {0, 1}, {4, -10}, {-11, -3},
+        }};
+        for (std::size_t index = 0U; index < dots.size(); ++index) {
+            const int dotRadius = index % 3U == 0U ? 2 : 1;
+            HBRUSH brush = CreateSolidBrush(index % 2U == 0U ? RGB(117, 197, 222) : RGB(66, 122, 143));
+            HGDIOBJ oldBrush = SelectObject(dc, brush);
+            Ellipse(dc, centerX + dots[index].x - dotRadius, centerY + dots[index].y - dotRadius,
+                centerX + dots[index].x + dotRadius + 1, centerY + dots[index].y + dotRadius + 1);
+            SelectObject(dc, oldBrush);
+            DeleteObject(brush);
+        }
+    } else {
+        const int layers = shape == Shape::LinearRound ? 4 : 5;
+        for (int layer = layers; layer >= 1; --layer) {
+            const int r = std::max(1, radius * layer / layers);
+            const int intensity = shape == Shape::Bell
+                ? 48 + (layers - layer) * 34
+                : 42 + (layers - layer) * 30;
+            circle(r, RGB(std::min(135, intensity), std::min(205, intensity + 54), std::min(226, intensity + 72)));
+        }
+    }
+}
+
+void DrawOperationGlyph(HDC dc, const RECT& rect, kb::terrain_editor::TerrainBrushMode mode) {
+    SceneViewportToolbarDrawing::FillRound(dc, rect, RGB(16, 20, 25), RGB(53, 64, 76), 7);
+    const int left = rect.left + 8;
+    const int right = rect.right - 8;
+    const int top = rect.top + 8;
+    const int bottom = rect.bottom - 8;
+    HPEN pen = CreatePen(PS_SOLID, 2, RGB(104, 190, 217));
+    HGDIOBJ oldPen = SelectObject(dc, pen);
+    using Mode = kb::terrain_editor::TerrainBrushMode;
+    if (mode == Mode::Flatten) {
+        MoveToEx(dc, left, (top + bottom) / 2, nullptr); LineTo(dc, right, (top + bottom) / 2);
+    } else if (mode == Mode::Terrace) {
+        MoveToEx(dc, left, bottom, nullptr); LineTo(dc, left + 8, bottom); LineTo(dc, left + 8, bottom - 7);
+        LineTo(dc, left + 16, bottom - 7); LineTo(dc, left + 16, top); LineTo(dc, right, top);
+    } else if (mode == Mode::Smooth) {
+        MoveToEx(dc, left, bottom - 3, nullptr); LineTo(dc, left + 7, top + 5); LineTo(dc, left + 14, top + 2); LineTo(dc, right, top + 6);
+    } else if (mode == Mode::Noise) {
+        constexpr std::array<POINT, 6U> points{{{4,16},{9,7},{14,13},{19,4},{24,11},{29,6}}};
+        MoveToEx(dc, rect.left + points[0].x, rect.top + points[0].y, nullptr);
+        for (std::size_t i = 1U; i < points.size(); ++i) LineTo(dc, rect.left + points[i].x, rect.top + points[i].y);
+    } else if (mode == Mode::CutHole || mode == Mode::FillHole) {
+        Ellipse(dc, left + 2, top + 2, right - 1, bottom - 1);
+        if (mode == Mode::FillHole) { MoveToEx(dc, (left + right) / 2, top + 5, nullptr); LineTo(dc, (left + right) / 2, bottom - 4); }
+    } else {
+        const bool lower = mode == Mode::Lower;
+        const int peak = lower ? bottom : top;
+        const int base = lower ? top : bottom;
+        MoveToEx(dc, left, base, nullptr); LineTo(dc, (left + right) / 2, peak); LineTo(dc, right, base);
+    }
+    SelectObject(dc, oldPen);
+    DeleteObject(pen);
+}
+
 void DrawTerrainModeButton(
     HDC dc,
     const RECT& rect,
@@ -159,11 +299,6 @@ void SceneViewportToolbarRenderer::PaintTerrainTools(
     const EditorTerrainToolState& tool = EditorTerrainService::ToolState();
     SceneViewportToolbarDrawing::FillRound(
         dc, rects.panel, RGB(20, 24, 30), RGB(67, 78, 92), 9);
-    GdiDrawing::FillRectColor(
-        dc,
-        RECT{ rects.panel.left + 2, rects.panel.top + 8,
-              rects.panel.left + 4, rects.panel.bottom - 8 },
-        RGB(80, 190, 222));
 
     const EditorTerrainToolMode visibleMode = tool.editingEnabled
         ? tool.mode
@@ -173,7 +308,10 @@ void SceneViewportToolbarRenderer::PaintTerrainTools(
     DrawTerrainModeButton(dc, rects.holesButton, "Holes", theme, visibleMode == EditorTerrainToolMode::Holes);
     SceneViewportToolbarDrawing::DrawValueButton(
         dc, rects.brushButton, HeroIconKind::AdjustmentsHorizontal,
-        TerrainBrushLabel(tool.brush.mode), theme, tool.brushMenuOpen);
+        TerrainBrushToolbarLabel(tool.brush.mode), theme, tool.brushMenuOpen);
+    SceneViewportToolbarDrawing::DrawValueButton(
+        dc, rects.brushShapeButton, HeroIconKind::RectangleGroup,
+        TerrainBrushShapeLabel(tool.brush.shape), theme, tool.brushShapeMenuOpen);
 
     SceneViewportToolbarDrawing::DrawIconButton(dc, rects.sizeMinusButton, HeroIconKind::Minus, theme, false);
     std::array<char, 32U> sizeText{};
@@ -187,6 +325,63 @@ void SceneViewportToolbarRenderer::PaintTerrainTools(
     DrawTerrainValue(dc, rects.strengthValue, strengthText.data(), theme);
     SceneViewportToolbarDrawing::DrawIconButton(dc, rects.strengthPlusButton, HeroIconKind::Plus, theme, false);
 
+}
+
+void SceneViewportToolbarRenderer::PaintTerrainPopup(
+    HDC dc,
+    const RECT& bounds,
+    const EditorTheme& theme,
+    const EditorSceneContext&,
+    int hoveredItem) {
+    const EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+    const bool shapes = tool.brushShapeMenuOpen;
+    if ((!tool.brushMenuOpen && !shapes) || bounds.right <= bounds.left || bounds.bottom <= bounds.top) return;
+
+    SceneViewportToolbarDrawing::FillRound(dc, bounds, RGB(20, 24, 30), RGB(72, 84, 99), 9);
+    RECT title{bounds.left + 12, bounds.top + 7, bounds.right - 12, bounds.top + (shapes ? 34 : 30)};
+    DrawTextAt(dc, title, shapes ? "BRUSH TIP" : "TERRAIN OPERATION",
+        GdiDrawing::ToColorRef(theme.textSecondary), DT_LEFT | DT_VCENTER);
+
+    const int headerHeight = shapes ? 38 : 34;
+    const int itemHeight = shapes ? 72 : 55;
+    const int columnWidth = shapes ? 196 : 172;
+    const int itemWidth = shapes ? 192 : 168;
+    const std::size_t count = shapes ? 6U : 8U;
+    for (std::size_t index = 0U; index < count; ++index) {
+        const int column = static_cast<int>(index % 2U);
+        const int row = static_cast<int>(index / 2U);
+        const RECT card{
+            bounds.left + 6 + column * columnWidth,
+            bounds.top + headerHeight + row * itemHeight,
+            bounds.left + 6 + column * columnWidth + itemWidth,
+            bounds.top + headerHeight + row * itemHeight + (shapes ? 68 : 51),
+        };
+        const bool selected = shapes
+            ? static_cast<std::size_t>(tool.brush.shape) == index
+            : static_cast<std::size_t>(tool.brush.mode) == index;
+        const bool hovered = hoveredItem == static_cast<int>(index);
+        SceneViewportToolbarDrawing::FillRound(
+            dc, card,
+            selected ? RGB(31, 71, 88) : (hovered ? RGB(35, 43, 53) : RGB(24, 29, 36)),
+            selected ? RGB(81, 171, 203) : (hovered ? RGB(73, 88, 104) : RGB(43, 52, 63)),
+            7);
+        const RECT preview{card.left + 7, card.top + 7, card.left + (shapes ? 57 : 45), card.bottom - 7};
+        if (shapes) {
+            DrawBrushShapePreview(dc, preview, static_cast<kb::terrain_editor::TerrainBrushShape>(index));
+        } else {
+            DrawOperationGlyph(dc, preview, static_cast<kb::terrain_editor::TerrainBrushMode>(index));
+        }
+        RECT name{preview.right + 8, card.top + (shapes ? 11 : 7), card.right - 7, card.top + (shapes ? 31 : 26)};
+        RECT description{preview.right + 8, name.bottom, card.right - 7, card.bottom - 6};
+        DrawTextAt(dc, name,
+            shapes ? TerrainBrushShapeLabel(static_cast<kb::terrain_editor::TerrainBrushShape>(index))
+                   : TerrainBrushLabel(static_cast<kb::terrain_editor::TerrainBrushMode>(index)),
+            selected ? RGB(235, 250, 255) : GdiDrawing::ToColorRef(theme.textPrimary), DT_LEFT | DT_VCENTER);
+        DrawTextAt(dc, description,
+            shapes ? TerrainBrushShapeDescription(static_cast<kb::terrain_editor::TerrainBrushShape>(index))
+                   : TerrainBrushDescription(static_cast<kb::terrain_editor::TerrainBrushMode>(index)),
+            GdiDrawing::ToColorRef(theme.textSecondary), DT_LEFT | DT_VCENTER);
+    }
 }
 
 } // namespace kb::editor

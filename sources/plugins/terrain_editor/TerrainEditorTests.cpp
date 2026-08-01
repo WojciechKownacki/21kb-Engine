@@ -74,6 +74,41 @@ void RunBrushTest() {
     Require(kb::terrain_editor::ApplyTerrainBrush(terrain, brush, {}).Changed(), "Fill Hole brush did not restore the hole mask");
 }
 
+void RunBrushShapeTest() {
+    kb::terrain_editor::TerrainBrushSettings brush{
+        .mode = kb::terrain_editor::TerrainBrushMode::Raise,
+        .shape = kb::terrain_editor::TerrainBrushShape::SoftRound,
+        .radius = 6.0F,
+        .strength = 1.0F,
+        .falloff = 0.25F,
+    };
+    kb::assets::TerrainAsset soft = kb::assets::MakeFlatTerrainAsset(33U, 32.0F, 32.0F);
+    const kb::terrain_editor::TerrainBrushResult softResult =
+        kb::terrain_editor::ApplyTerrainBrush(soft, brush, {});
+    brush.shape = kb::terrain_editor::TerrainBrushShape::HardRound;
+    kb::assets::TerrainAsset hard = kb::assets::MakeFlatTerrainAsset(33U, 32.0F, 32.0F);
+    const kb::terrain_editor::TerrainBrushResult hardResult =
+        kb::terrain_editor::ApplyTerrainBrush(hard, brush, {});
+    Require(hardResult.Changed() && softResult.Changed() &&
+            hard.heights[Center(hard) + 5U] > soft.heights[Center(soft) + 5U] + 0.25F,
+        "Hard Round brush did not preserve a stronger edge than Soft Round");
+
+    brush.shape = kb::terrain_editor::TerrainBrushShape::Ring;
+    kb::assets::TerrainAsset ring = kb::assets::MakeFlatTerrainAsset(33U, 32.0F, 32.0F);
+    Require(kb::terrain_editor::ApplyTerrainBrush(ring, brush, {}).Changed(),
+        "Ring brush did not produce an annular footprint");
+    Require(std::abs(ring.heights[Center(ring)]) < 0.001F,
+        "Ring brush unexpectedly modified its empty center");
+
+    brush.shape = kb::terrain_editor::TerrainBrushShape::Speckle;
+    kb::assets::TerrainAsset speckleA = kb::assets::MakeFlatTerrainAsset(33U, 32.0F, 32.0F);
+    kb::assets::TerrainAsset speckleB = speckleA;
+    static_cast<void>(kb::terrain_editor::ApplyTerrainBrush(speckleA, brush, {}));
+    static_cast<void>(kb::terrain_editor::ApplyTerrainBrush(speckleB, brush, {}));
+    Require(speckleA.heights == speckleB.heights,
+        "Speckle brush footprint is not deterministic");
+}
+
 void RunHeightmapImportTest() {
     const std::filesystem::path path = std::filesystem::temp_directory_path() / "kb_terrain_editor_heightmap.r16";
     {
@@ -118,6 +153,10 @@ void RunMeshBuildTest() {
     Require(mesh->sections.size() == 64U, "Terrain mesh did not emit one section per chunk and LOD");
     Require(mesh->desc.gpuDriven.allowGpuCulling && mesh->meshlets.size() == mesh->sections.size(),
         "Terrain chunks are not represented in GPU-driven culling metadata");
+    Require(mesh->embeddedMaterials.size() == 1U &&
+            mesh->embeddedMaterials.front().desc.baseColor[1] >
+                mesh->embeddedMaterials.front().desc.baseColor[0],
+        "Terrain mesh does not provide a readable default surface material");
     const std::size_t beforeIndices = mesh->desc.indexCount;
     terrain.holes[32U * 64U + 32U] = 1U;
     const std::optional<kb::render::RenderMeshAssetData> withHole = kb::render::RenderTerrainMeshBuilder::Build(terrain);
@@ -157,6 +196,7 @@ int main() {
     try {
         RunAssetRoundTripTest();
         RunBrushTest();
+        RunBrushShapeTest();
         RunHeightmapImportTest();
         RunMeshBuildTest();
         RunRuntimeLoaderTest();
