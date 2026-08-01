@@ -26,6 +26,7 @@
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "rendering/HierarchyToolbarLayout.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
+#include "inspection/TerrainMaterialLayerMenuState.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
@@ -936,6 +937,9 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         return;
     }
 
+    if (!panelHit.inInspectorPanel) {
+        terrain_material_layer_menu::Close();
+    }
     if (panelHit.inInspectorPanel) {
         const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(*panelHit.inspectorContent, sceneContext_, x, y);
         if (hit.section == InspectorSectionId::Terrain && hit.property == InspectorPropertyId::TerrainImportHeightmap) {
@@ -994,6 +998,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         const std::optional<std::uint8_t> terrainLayerPicker = TerrainMaterialLayerPickerForProperty(hit.property);
         if (hit.section == InspectorSectionId::Terrain &&
             hit.property == InspectorPropertyId::TerrainMaterialLayerCreate) {
+            terrain_material_layer_menu::Close();
             const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
             const std::optional<kb::assets::TerrainAsset> terrain =
                 EditorTerrainService::Load(sceneContext_.Scene(), entity);
@@ -1022,6 +1027,15 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         }
         if (hit.section == InspectorSectionId::Terrain &&
             (terrainLayerPicker.has_value() || hit.property == InspectorPropertyId::TerrainMaterialLayerAdd)) {
+            terrain_material_layer_menu::Close();
+            if (terrainLayerPicker.has_value()) {
+                EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+                tool.selectedMaterialLayer = *terrainLayerPicker;
+                tool.mode = EditorTerrainToolMode::Paint;
+                tool.editingEnabled = true;
+                tool.brush.strength = std::min(tool.brush.strength, 1.0F);
+                tool.brushMenuOpen = false;
+            }
             const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
             const std::optional<kb::assets::TerrainAsset> terrain =
                 EditorTerrainService::Load(sceneContext_.Scene(), entity);

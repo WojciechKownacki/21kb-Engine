@@ -1,4 +1,5 @@
 #include "inspection/InspectorPanelInteraction.hpp"
+#include "inspection/TerrainMaterialLayerMenuState.hpp"
 
 #if defined(_WIN32)
 #include "app/EditorTextInputShortcuts.hpp"
@@ -874,7 +875,15 @@ template <typename Mutator>
 }
 
 [[nodiscard]] bool HandleTerrainClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    if (hit.property == terrain_material_layer_menu::kProperty) {
+        sceneContext.Inspector().EndTextEdit();
+        sceneContext.Inspector().CloseAddComponentBrowser();
+        sceneContext.Inspector().CloseComponentMenus();
+        terrain_material_layer_menu::Toggle();
+        return true;
+    }
     if (const std::optional<std::uint8_t> layerIndex = TerrainLayerIndexForProperty(hit.property)) {
+        terrain_material_layer_menu::Close();
         EditorTerrainToolState& tool = EditorTerrainService::ToolState();
         tool.selectedMaterialLayer = *layerIndex;
         tool.mode = EditorTerrainToolMode::Paint;
@@ -884,19 +893,12 @@ template <typename Mutator>
         return true;
     }
     if (hit.property == InspectorPropertyId::TerrainMaterialLayerRemove) {
+        terrain_material_layer_menu::Close();
         std::string error;
         if (!sceneContext.RemoveTerrainMaterialLayer(
                 entity, EditorTerrainService::ToolState().selectedMaterialLayer, &error)) {
             sceneContext.Console().Warning("Terrain", error.empty() ? "Material layer could not be removed." : error);
         }
-        return true;
-    }
-    if (hit.property == InspectorPropertyId::TerrainEditEnabled) {
-        sceneContext.Inspector().EndTextEdit();
-        EditorTerrainToolState& tool = EditorTerrainService::ToolState();
-        tool.editingEnabled = !tool.editingEnabled;
-        tool.mode = tool.editingEnabled ? EditorTerrainToolMode::Sculpt : EditorTerrainToolMode::Select;
-        if (!tool.editingEnabled) tool.hoverVisible = false;
         return true;
     }
     if (hit.property == InspectorPropertyId::TerrainBrushMode) {
@@ -2777,6 +2779,7 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         sceneContext.Inspector().CloseAddComponentBrowser();
         sceneContext.Inspector().CloseComponentMenus();
         sceneContext.Inspector().CloseTagsDropdown();
+        terrain_material_layer_menu::Close();
         return false;
     }
 
@@ -2786,6 +2789,15 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
          hit.property == InspectorPropertyId::TagsText);
     if (!tagsMenuHit) {
         sceneContext.Inspector().CloseTagsDropdown();
+    }
+
+    const bool terrainLayerMenuHit = hit.section == InspectorSectionId::Terrain &&
+        (hit.property == terrain_material_layer_menu::kProperty ||
+         hit.property == InspectorPropertyId::TerrainMaterialLayerCreate ||
+         hit.property == InspectorPropertyId::TerrainMaterialLayerAdd ||
+         hit.property == InspectorPropertyId::TerrainMaterialLayerRemove);
+    if (!terrainLayerMenuHit) {
+        terrain_material_layer_menu::Close();
     }
 
     kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
