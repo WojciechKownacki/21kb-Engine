@@ -13,10 +13,12 @@
 #include "engine/scene/SceneComponentVisitors.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/overlay/EditorCameraWireframe.hpp"
 #include "scene/EditorSceneSelectionPivot.hpp"
+#include "scene/EditorTerrainService.hpp"
 #include "scene/EditorViewportCameraState.hpp"
 
 #include <bx/math.h>
@@ -412,21 +414,99 @@ struct LightWireframeBasis {
 // LIB-132: honest empty vector (zero cost beyond the IsEnabled check) whenever debug draw is
 // off - which it is by default, and which kb_standalone_player never turns on (it never calls
 // this function at all, see PhysicsDebugDraw.hpp's own "zero release-path impact" comment).
+[[nodiscard]] float TerrainHeightAt(
+    const kb::assets::TerrainAsset& terrain,
+    float localX,
+    float localZ) noexcept {
+    const float sampleX = std::clamp(
+        (localX + terrain.worldSizeX * 0.5F) / terrain.worldSizeX,
+        0.0F, 1.0F) * static_cast<float>(terrain.width - 1U);
+    const float sampleZ = std::clamp(
+        (localZ + terrain.worldSizeZ * 0.5F) / terrain.worldSizeZ,
+        0.0F, 1.0F) * static_cast<float>(terrain.height - 1U);
+    const std::uint32_t x0 = static_cast<std::uint32_t>(std::floor(sampleX));
+    const std::uint32_t z0 = static_cast<std::uint32_t>(std::floor(sampleZ));
+    const std::uint32_t x1 = std::min(x0 + 1U, terrain.width - 1U);
+    const std::uint32_t z1 = std::min(z0 + 1U, terrain.height - 1U);
+    const auto height = [&terrain](std::uint32_t x, std::uint32_t z) {
+        return terrain.heights[static_cast<std::size_t>(z) * terrain.width + x];
+    };
+    const float top = std::lerp(height(x0, z0), height(x1, z0), sampleX - static_cast<float>(x0));
+    const float bottom = std::lerp(height(x0, z1), height(x1, z1), sampleX - static_cast<float>(x0));
+    return std::lerp(top, bottom, sampleZ - static_cast<float>(z0));
+}
+
+[[nodiscard]] kb::scene::Vec3 TerrainPointToWorld(
+    const kb::scene::TransformComponent& transform,
+    kb::scene::Vec3 local) noexcept {
+    local.x *= transform.worldScale.x;
+    local.y *= transform.worldScale.y;
+    local.z *= transform.worldScale.z;
+    return transform.worldPosition + kb::math::Rotate(transform.worldRotation, local);
+}
+
+void AppendTerrainBrushRing(
+    const EditorSceneContext& sceneContext,
+    std::vector<kb::render::PhysicsDebugLine>& lines) {
+    const EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+    const kb::scene::SceneEntity entity{ tool.hoverEntityId };
+    if (!tool.editingEnabled || tool.mode == EditorTerrainToolMode::Select ||
+        !tool.hoverVisible || entity != sceneContext.SelectedEntity() ||
+        !sceneContext.IsProjectPluginEnabled("Editor.Terrain")) {
+        return;
+    }
+    const std::optional<kb::assets::TerrainAsset> terrain =
+        EditorTerrainService::Load(sceneContext.Scene(), entity);
+    if (!terrain.has_value()) return;
+    const kb::scene::TransformComponent transform = sceneContext.Scene().Transforms().Get(entity);
+    constexpr std::size_t segmentCount = 64U;
+    constexpr float twoPi = 6.28318530717958647692F;
+    const std::array<float, 3U> color = tool.mode == EditorTerrainToolMode::Holes
+        ? std::array<float, 3U>{ 1.0F, 0.38F, 0.12F }
+        : std::array<float, 3U>{ 0.16F, 0.88F, 1.0F };
+    const auto point = [&](std::size_t index) -> std::optional<kb::scene::Vec3> {
+        const float angle = twoPi * static_cast<float>(index) / static_cast<float>(segmentCount);
+        const float x = tool.hoverLocalX + std::cos(angle) * tool.brush.radius;
+        const float z = tool.hoverLocalZ + std::sin(angle) * tool.brush.radius;
+        if (std::abs(x) > terrain->worldSizeX * 0.5F ||
+            std::abs(z) > terrain->worldSizeZ * 0.5F) {
+            return std::nullopt;
+        }
+        return TerrainPointToWorld(
+            transform,
+            kb::scene::Vec3{ x, TerrainHeightAt(*terrain, x, z) + 0.04F, z });
+    };
+    std::optional<kb::scene::Vec3> from = point(0U);
+    for (std::size_t index = 1U; index <= segmentCount; ++index) {
+        const std::optional<kb::scene::Vec3> to = point(index % segmentCount);
+        if (from.has_value() && to.has_value()) {
+            lines.push_back(kb::render::PhysicsDebugLine{
+                .from = { from->x, from->y, from->z },
+                .to = { to->x, to->y, to->z },
+                .color = color,
+                .alpha = 1.0F,
+            });
+        }
+        from = to;
+    }
+}
+
 [[nodiscard]] std::vector<kb::render::PhysicsDebugLine> BuildPhysicsDebugLines(const EditorSceneContext& sceneContext) {
-    if (!kb::scene::PhysicsDebugDraw::IsEnabled(sceneContext.Scene())) {
-        return {};
-    }
-    const std::vector<kb::scene::PhysicsDebugLineDesc> shapes = kb::scene::PhysicsDebugDraw::CollectLines(sceneContext.Scene());
     std::vector<kb::render::PhysicsDebugLine> lines;
-    lines.reserve(shapes.size());
-    for (const kb::scene::PhysicsDebugLineDesc& shape : shapes) {
-        lines.push_back(kb::render::PhysicsDebugLine{
-            .from = { shape.from.x, shape.from.y, shape.from.z },
-            .to = { shape.to.x, shape.to.y, shape.to.z },
-            .color = { shape.color.x, shape.color.y, shape.color.z },
-            .alpha = shape.alpha,
-        });
+    if (kb::scene::PhysicsDebugDraw::IsEnabled(sceneContext.Scene())) {
+        const std::vector<kb::scene::PhysicsDebugLineDesc> shapes =
+            kb::scene::PhysicsDebugDraw::CollectLines(sceneContext.Scene());
+        lines.reserve(shapes.size() + 64U);
+        for (const kb::scene::PhysicsDebugLineDesc& shape : shapes) {
+            lines.push_back(kb::render::PhysicsDebugLine{
+                .from = { shape.from.x, shape.from.y, shape.from.z },
+                .to = { shape.to.x, shape.to.y, shape.to.z },
+                .color = { shape.color.x, shape.color.y, shape.color.z },
+                .alpha = shape.alpha,
+            });
+        }
     }
+    AppendTerrainBrushRing(sceneContext, lines);
     return lines;
 }
 
@@ -540,7 +620,11 @@ struct LightWireframeBasis {
     const EditorViewportCameraAxes axes = viewportCamera.Axes();
     kb::render::RenderSceneSubmitDesc::EditorGizmoDesc gizmo{};
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
-    if (selected.IsValid() && sceneContext.Scene().Entities().IsAlive(selected)) {
+    const EditorTerrainToolState& terrainTool = EditorTerrainService::ToolState();
+    const bool terrainEditing = terrainTool.editingEnabled &&
+        terrainTool.mode != EditorTerrainToolMode::Select &&
+        EditorTerrainService::IsTerrainEntity(sceneContext.Scene(), selected);
+    if (!terrainEditing && selected.IsValid() && sceneContext.Scene().Entities().IsAlive(selected)) {
         if (const std::optional<kb::scene::Vec3> pivot = EditorSceneSelectionPivot::Resolve(sceneContext.Scene(), sceneContext.SelectedHierarchyEntities(), selected)) {
             const kb::scene::Vec3 target = *pivot;
             gizmo.visible = true;
@@ -602,7 +686,7 @@ void ScenePanelContentRenderer::PresentViewport(
     }
 
     const EditorViewportPreviewState& viewportState = sceneContext.ViewportPreview(panel.id);
-    const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(content, viewportState);
+    const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(content, viewportState, sceneContext);
     const EditorSceneBgfxViewport::PresentSettings settings = BuildViewportPresentSettings(sceneContext, panel.id, panel.kind, viewportState, renderBackendSettings, sceneRects);
 
     sceneViewport.Present(sceneViewportHost, sceneRects.renderArea, sceneContext.Scene(), settings);
@@ -620,12 +704,13 @@ void ScenePanelContentRenderer::Paint(
     const EditorViewportPreviewState& viewportState = sceneContext.ViewportPreview(panel.id);
     SceneViewportToolbarRenderer::RecordEcsStats(BuildEcsStats(sceneContext));
     SceneViewportToolbarRenderer::Paint(dc, content, theme, viewportState);
+    SceneViewportToolbarRenderer::PaintTerrainTools(dc, content, theme, sceneContext);
 
     if (sceneViewport == nullptr) {
         return;
     }
 
-    const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(content, viewportState);
+    const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(content, viewportState, sceneContext);
     const EditorSceneBgfxViewport::PresentSettings settings = BuildViewportPresentSettings(sceneContext, panel.id, panel.kind, viewportState, renderBackendSettings, sceneRects);
     if (sceneViewportHost != nullptr) {
         sceneViewport->Present(dc, sceneViewportHost, sceneRects.renderArea, sceneContext.Scene(), theme, settings);

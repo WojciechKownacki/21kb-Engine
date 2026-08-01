@@ -36,6 +36,7 @@ public:
     // The tiles in one category, in display order.
     [[nodiscard]] static std::vector<const InspectorComponentTile*> InCategory(std::string_view category);
     [[nodiscard]] static const InspectorComponentTile* Find(std::string_view id);
+    [[nodiscard]] static std::string_view RequiredPluginId(std::string_view componentId) noexcept;
 };
 
 } // namespace kb::editor
