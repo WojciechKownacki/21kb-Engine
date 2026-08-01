@@ -104,12 +104,25 @@ bool IsTerrainBrushSettingsValid(const TerrainBrushSettings& settings) noexcept 
         std::isfinite(settings.terraceStep) && settings.terraceStep > 0.0F && settings.terraceStep <= 100'000.0F;
 }
 
-TerrainBrushResult ApplyTerrainBrush(
+namespace {
+
+TerrainBrushResult ApplyTerrainBrushImpl(
     kb::assets::TerrainAsset& terrain,
     const TerrainBrushSettings& settings,
-    const TerrainBrushStamp& stamp) noexcept {
+    const TerrainBrushStamp& stamp,
+    bool validateSamples) noexcept {
     TerrainBrushResult result{};
-    if (!kb::assets::IsTerrainAssetValid(terrain) || !IsTerrainBrushSettingsValid(settings) ||
+    const std::uint64_t vertexCount = static_cast<std::uint64_t>(terrain.width) * terrain.height;
+    const std::uint64_t cellCount = terrain.width > 0U && terrain.height > 0U
+        ? static_cast<std::uint64_t>(terrain.width - 1U) * (terrain.height - 1U)
+        : 0U;
+    const bool validLayout = kb::assets::IsTerrainResolutionValid(terrain.width) &&
+        kb::assets::IsTerrainResolutionValid(terrain.height) &&
+        std::isfinite(terrain.worldSizeX) && std::isfinite(terrain.worldSizeZ) &&
+        terrain.worldSizeX > 0.0F && terrain.worldSizeZ > 0.0F &&
+        terrain.heights.size() == vertexCount && terrain.holes.size() == cellCount;
+    if (!validLayout || (validateSamples && !kb::assets::IsTerrainAssetValid(terrain)) ||
+        !IsTerrainBrushSettingsValid(settings) ||
         !std::isfinite(stamp.localX) || !std::isfinite(stamp.localZ) || !std::isfinite(stamp.pressure)) return result;
 
     const float pressure = std::clamp(stamp.pressure, 0.0F, 1.0F);
@@ -190,6 +203,22 @@ TerrainBrushResult ApplyTerrainBrush(
         }
     }
     return result;
+}
+
+} // namespace
+
+TerrainBrushResult ApplyTerrainBrush(
+    kb::assets::TerrainAsset& terrain,
+    const TerrainBrushSettings& settings,
+    const TerrainBrushStamp& stamp) noexcept {
+    return ApplyTerrainBrushImpl(terrain, settings, stamp, true);
+}
+
+TerrainBrushResult ApplyTerrainBrushToValidatedTerrain(
+    kb::assets::TerrainAsset& terrain,
+    const TerrainBrushSettings& settings,
+    const TerrainBrushStamp& stamp) noexcept {
+    return ApplyTerrainBrushImpl(terrain, settings, stamp, false);
 }
 
 } // namespace kb::terrain_editor

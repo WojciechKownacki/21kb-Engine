@@ -85,13 +85,18 @@ RenderBoundsSphere RenderMeshResourceBuilder::ComputeBounds(const RenderMeshDesc
     return RenderMeshDescGeometry::ComputeBounds(desc, indexStart, indexCount);
 }
 
-RenderMeshResource RenderMeshResourceBuilder::Build(const RenderMeshDesc& desc, bgfx::VertexBufferHandle vertexBuffer, bgfx::IndexBufferHandle indexBuffer) {
+RenderMeshResource RenderMeshResourceBuilder::Build(
+    const RenderMeshDesc& desc,
+    bgfx::VertexBufferHandle vertexBuffer,
+    bgfx::DynamicVertexBufferHandle dynamicVertexBuffer,
+    bgfx::IndexBufferHandle indexBuffer) {
     const RenderBoundsSphere meshBounds = desc.bounds.IsValid() ? desc.bounds : RenderMeshDescGeometry::ComputeBounds(desc, 0U, desc.indexCount);
     std::vector<RenderMeshSection> sections = BuildSections(desc, meshBounds);
     std::vector<RenderMaterialSlot> materialSlots = BuildMaterialSlots(desc, sections);
 
     return RenderMeshResource{
         .vertexBuffer = vertexBuffer,
+        .dynamicVertexBuffer = dynamicVertexBuffer,
         .indexBuffer = indexBuffer,
         .vertexCount = desc.vertexCount,
         .indexCount = desc.indexCount,

@@ -28,6 +28,15 @@ public:
         return &slots_[index].resource;
     }
 
+    template <typename Handle>
+    [[nodiscard]] Resource* Find(Handle handle) noexcept {
+        const std::uint32_t index = handle.Index();
+        if (!IsLiveHandle(handle, index)) {
+            return nullptr;
+        }
+        return &slots_[index].resource;
+    }
+
     [[nodiscard]] std::uint32_t Allocate() {
         if (!freeSlots_.empty()) {
             const std::uint32_t index = freeSlots_.back();

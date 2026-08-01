@@ -131,23 +131,59 @@ void RuntimeMeshResourceEnsurer::Ensure(
             return;
         }
 
-        if (cacheIt != meshes.end() && cacheIt->second.contentHash == metadata->contentHash && context.sceneRenderer.Resources().ContainsMesh(cacheIt->second.handle)) {
+        if (cacheIt != meshes.end() && !cacheIt->second.dynamicVertexUpdates &&
+            cacheIt->second.contentHash == metadata->contentHash &&
+            context.sceneRenderer.Resources().ContainsMesh(cacheIt->second.handle)) {
             RuntimeMeshResource& cached = cacheIt->second;
             cached.lastReferencedFrame = context.currentFrame;
             context.sceneRenderer.ResourceMap().BindMesh(meshAssetId, cached.handle);
             return;
         }
 
+        const MeshRef asset = manager.Load<RenderMeshAssetData>(assetId);
+        if (!asset.IsLoaded()) {
+            if (cacheIt != meshes.end()) {
+                context.sceneRenderer.ResourceMap().UnbindMeshHandle(cacheIt->second.handle);
+                context.sceneRenderer.Resources().DestroyMesh(cacheIt->second.handle);
+                meshes.erase(cacheIt);
+            } else {
+                context.sceneRenderer.ResourceMap().UnbindMesh(meshAssetId);
+            }
+            return;
+        }
+
+        if (cacheIt != meshes.end() && cacheIt->second.dynamicVertexUpdates &&
+            asset->dynamicVertexUpdates && asset->dynamicTopologyKey != 0U &&
+            cacheIt->second.dynamicTopologyKey == asset->dynamicTopologyKey &&
+            cacheIt->second.dynamicVertexUpdateCount <= asset->dynamicVertexUpdateRanges.size() &&
+            context.sceneRenderer.Resources().ContainsMesh(cacheIt->second.handle)) {
+            bool updated = true;
+            for (std::size_t updateIndex = cacheIt->second.dynamicVertexUpdateCount;
+                 updateIndex < asset->dynamicVertexUpdateRanges.size();
+                 ++updateIndex) {
+                const RenderMeshVertexUpdateRange& update = asset->dynamicVertexUpdateRanges[updateIndex];
+                if (!context.sceneRenderer.Resources().UpdateMeshVertices(
+                        cacheIt->second.handle,
+                        asset->desc,
+                        update.firstVertex,
+                        update.vertexCount)) {
+                    updated = false;
+                    break;
+                }
+            }
+            if (updated) {
+                cacheIt->second.contentHash = metadata->contentHash;
+                cacheIt->second.dynamicVertexUpdateCount = asset->dynamicVertexUpdateRanges.size();
+                cacheIt->second.lastReferencedFrame = context.currentFrame;
+                context.sceneRenderer.ResourceMap().BindMesh(meshAssetId, cacheIt->second.handle);
+                return;
+            }
+        }
+
         if (cacheIt != meshes.end()) {
             context.sceneRenderer.ResourceMap().UnbindMeshHandle(cacheIt->second.handle);
             context.sceneRenderer.Resources().DestroyMesh(cacheIt->second.handle);
             meshes.erase(cacheIt);
-        }
-
-        const MeshRef asset = manager.Load<RenderMeshAssetData>(assetId);
-        if (!asset.IsLoaded()) {
-            context.sceneRenderer.ResourceMap().UnbindMesh(meshAssetId);
-            return;
         }
 
         std::vector<RenderMaterialSlotDesc> materialSlots = asset->materialSlots;
@@ -217,7 +253,10 @@ void RuntimeMeshResourceEnsurer::Ensure(
         meshes[runtimeKey] = RuntimeMeshResource{
             .handle = handle,
             .contentHash = metadata->contentHash,
+            .dynamicTopologyKey = asset->dynamicTopologyKey,
+            .dynamicVertexUpdateCount = asset->dynamicVertexUpdateRanges.size(),
             .lastReferencedFrame = context.currentFrame,
+            .dynamicVertexUpdates = asset->dynamicVertexUpdates,
         };
         context.sceneRenderer.ResourceMap().BindMesh(meshAssetId, handle);
     };
