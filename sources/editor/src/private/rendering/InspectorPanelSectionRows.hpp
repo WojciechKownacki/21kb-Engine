@@ -542,6 +542,14 @@ public:
     void BoolPair(std::string_view label, std::string_view firstLabel, bool firstValue, InspectorPropertyId firstProperty, std::string_view secondLabel, bool secondValue, InspectorPropertyId secondProperty) { if (!collapsed_) { DrawBoolPairRow(dc_, Row(), theme_, state_, section_, label, firstLabel, firstValue, firstProperty, secondLabel, secondValue, secondProperty); Advance(); } }
     void Group(std::string_view label) { if (!collapsed_) { DrawGroupRow(dc_, Rect(bounds_.left, y_, bounds_.right, y_ + kGroupRowHeight), theme_, label); y_ += kGroupRowHeight; DrawDivider(dc_, bounds_.left, bounds_.right, y_); y_ += kDividerHeight; } }
     void Action(std::string_view label, InspectorPropertyId property, bool accent = false) { if (!collapsed_) { DrawActionRow(dc_, Row(), theme_, state_, section_, property, label, accent); Advance(); } }
+    [[nodiscard]] RECT Reserve(int height) noexcept {
+        if (collapsed_ || height <= 0) {
+            return {};
+        }
+        const RECT reserved = Rect(bounds_.left, y_, bounds_.right, y_ + height);
+        y_ += height;
+        return reserved;
+    }
     void Rotation(std::string_view label, const kb::scene::Quat& value) { if (!collapsed_) { DrawRotationRow(dc_, Row(), theme_, state_, label, value); Advance(); } }
     void Disclosure(std::string_view label, InspectorPropertyId property, bool expanded) {
         if (collapsed_) {
