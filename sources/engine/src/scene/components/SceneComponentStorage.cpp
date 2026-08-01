@@ -27,6 +27,13 @@ SceneComponentStorage::SceneComponentStorage(kb::ecs::World& world, const SceneC
     , visibilityBlockers_(world, components.VisibilityBlockerComponentId())
     , visibilityCells_(world, components.VisibilityCellComponentId())
     , regionPortals_(world, components.RegionPortalComponentId())
+    , auxFrames_(world, components.AuxFrameComponentId())
+    , geometrySwarms_(world, components.GeometrySwarmComponentId())
+    , surfaceCasts_(world, components.SurfaceCastComponentId())
+    , facingPanels_(world, components.FacingPanelComponentId())
+    , spaceStrokes_(world, components.SpaceStrokeComponentId())
+    , historyRibbons_(world, components.HistoryRibbonComponentId())
+    , lensEchoes_(world, components.LensEchoComponentId())
     , audioSources_(world, components.AudioSourceComponentId())
     , audioListeners_(world, components.AudioListenerComponentId())
     , animators_(world, components.AnimatorComponentId())
@@ -159,6 +166,20 @@ const SceneVisibilityCellComponentStore& SceneComponentStorage::VisibilityCells(
 SceneVisibilityCellComponentStore& SceneComponentStorage::VisibilityCells() noexcept { return visibilityCells_; }
 const SceneRegionPortalComponentStore& SceneComponentStorage::RegionPortals() const noexcept { return regionPortals_; }
 SceneRegionPortalComponentStore& SceneComponentStorage::RegionPortals() noexcept { return regionPortals_; }
+const SceneAuxFrameComponentStore& SceneComponentStorage::AuxFrames() const noexcept { return auxFrames_; }
+SceneAuxFrameComponentStore& SceneComponentStorage::AuxFrames() noexcept { return auxFrames_; }
+const SceneGeometrySwarmComponentStore& SceneComponentStorage::GeometrySwarms() const noexcept { return geometrySwarms_; }
+SceneGeometrySwarmComponentStore& SceneComponentStorage::GeometrySwarms() noexcept { return geometrySwarms_; }
+const SceneSurfaceCastComponentStore& SceneComponentStorage::SurfaceCasts() const noexcept { return surfaceCasts_; }
+SceneSurfaceCastComponentStore& SceneComponentStorage::SurfaceCasts() noexcept { return surfaceCasts_; }
+const SceneFacingPanelComponentStore& SceneComponentStorage::FacingPanels() const noexcept { return facingPanels_; }
+SceneFacingPanelComponentStore& SceneComponentStorage::FacingPanels() noexcept { return facingPanels_; }
+const SceneSpaceStrokeComponentStore& SceneComponentStorage::SpaceStrokes() const noexcept { return spaceStrokes_; }
+SceneSpaceStrokeComponentStore& SceneComponentStorage::SpaceStrokes() noexcept { return spaceStrokes_; }
+const SceneHistoryRibbonComponentStore& SceneComponentStorage::HistoryRibbons() const noexcept { return historyRibbons_; }
+SceneHistoryRibbonComponentStore& SceneComponentStorage::HistoryRibbons() noexcept { return historyRibbons_; }
+const SceneLensEchoComponentStore& SceneComponentStorage::LensEchoes() const noexcept { return lensEchoes_; }
+SceneLensEchoComponentStore& SceneComponentStorage::LensEchoes() noexcept { return lensEchoes_; }
 
 const SceneAudioSourceComponentStore& SceneComponentStorage::AudioSources() const noexcept {
     return audioSources_;

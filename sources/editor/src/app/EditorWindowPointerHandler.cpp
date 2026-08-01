@@ -6,6 +6,7 @@
 #include "app/pointer/EditorLeftButtonDoubleClickRouter.hpp"
 #include "app/pointer/EditorLeftButtonDownRouter.hpp"
 #include "app/pointer/EditorLeftButtonUpRouter.hpp"
+#include "scene/EditorTerrainService.hpp"
 #include "app/pointer/EditorMouseMoveRouter.hpp"
 #include "app/pointer/EditorRightButtonDownRouter.hpp"
 #include "app/pointer/EditorSetCursorRouter.hpp"
@@ -150,6 +151,12 @@ LRESULT EditorWindowPointerHandler::HandleMouseWheel(HWND messageWindow, WPARAM 
 }
 
 LRESULT EditorWindowPointerHandler::HandleLeftButtonUp(HWND messageWindow, LPARAM lparam) {
+    if (EditorTerrainService::ToolState().strokeActive) {
+        EditorTerrainService::ToolState().strokeActive = false;
+        ReleaseCapture();
+        sceneViewport_.RequestPresent();
+        return 0;
+    }
     EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
     if (sceneCamera.HandleButtonUp(messageWindow)) {
         return 0;

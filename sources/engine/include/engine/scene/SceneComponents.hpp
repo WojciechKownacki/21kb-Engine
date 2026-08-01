@@ -24,6 +24,13 @@
 #include "engine/scene/SceneVisibilityBlockerComponents.hpp"
 #include "engine/scene/SceneVisibilityCellComponents.hpp"
 #include "engine/scene/SceneRegionPortalComponents.hpp"
+#include "engine/scene/SceneAuxFrameComponents.hpp"
+#include "engine/scene/SceneGeometrySwarmComponents.hpp"
+#include "engine/scene/SceneSurfaceCastComponents.hpp"
+#include "engine/scene/SceneFacingPanelComponents.hpp"
+#include "engine/scene/SceneSpaceStrokeComponents.hpp"
+#include "engine/scene/SceneHistoryRibbonComponents.hpp"
+#include "engine/scene/SceneLensEchoComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
 #include "engine/scene/SceneUIDocuments.hpp"
@@ -57,6 +64,13 @@ public:
     [[nodiscard]] SceneVisibilityBlockerComponents VisibilityBlockers() const noexcept;
     [[nodiscard]] SceneVisibilityCellComponents VisibilityCells() const noexcept;
     [[nodiscard]] SceneRegionPortalComponents RegionPortals() const noexcept;
+    [[nodiscard]] SceneAuxFrameComponents AuxFrames() const noexcept;
+    [[nodiscard]] SceneGeometrySwarmComponents GeometrySwarms() const noexcept;
+    [[nodiscard]] SceneSurfaceCastComponents SurfaceCasts() const noexcept;
+    [[nodiscard]] SceneFacingPanelComponents FacingPanels() const noexcept;
+    [[nodiscard]] SceneSpaceStrokeComponents SpaceStrokes() const noexcept;
+    [[nodiscard]] SceneHistoryRibbonComponents HistoryRibbons() const noexcept;
+    [[nodiscard]] SceneLensEchoComponents LensEchoes() const noexcept;
     [[nodiscard]] SceneAudioSourceComponents AudioSources() const noexcept;
     [[nodiscard]] SceneAudioListenerComponents AudioListeners() const noexcept;
     [[nodiscard]] SceneAnimatorComponents Animators() const noexcept;

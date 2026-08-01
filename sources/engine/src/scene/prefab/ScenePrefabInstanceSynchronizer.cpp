@@ -168,6 +168,53 @@ void DestroyRemovedObjects(Scene& scene, std::span<const SceneObject> oldObjects
         if (!owner.IsValid() || !scene.Entities().IsAlive(owner)) {
             return false;
         }
+        if (nodes[nodeIndex].components.auxFrame.has_value()) {
+            components.AuxFrames().Set(owner.Entity(), *nodes[nodeIndex].components.auxFrame);
+        } else {
+            components.AuxFrames().Remove(owner.Entity());
+        }
+        if (nodes[nodeIndex].components.geometrySwarm.has_value()) {
+            components.GeometrySwarms().Set(owner.Entity(), *nodes[nodeIndex].components.geometrySwarm);
+        } else {
+            components.GeometrySwarms().Remove(owner.Entity());
+        }
+        if (nodes[nodeIndex].components.surfaceCast.has_value()) {
+            components.SurfaceCasts().Set(owner.Entity(), *nodes[nodeIndex].components.surfaceCast);
+        } else {
+            components.SurfaceCasts().Remove(owner.Entity());
+        }
+        if (nodes[nodeIndex].components.facingPanel.has_value()) {
+            components.FacingPanels().Set(owner.Entity(), *nodes[nodeIndex].components.facingPanel);
+        } else {
+            components.FacingPanels().Remove(owner.Entity());
+        }
+        if (nodes[nodeIndex].components.spaceStroke.has_value()) {
+            components.SpaceStrokes().Set(owner.Entity(), *nodes[nodeIndex].components.spaceStroke);
+        } else {
+            components.SpaceStrokes().Remove(owner.Entity());
+        }
+        if (nodes[nodeIndex].components.historyRibbon.has_value()) {
+            components.HistoryRibbons().Set(owner.Entity(), *nodes[nodeIndex].components.historyRibbon);
+        } else {
+            components.HistoryRibbons().Remove(owner.Entity());
+        }
+        const std::optional<ScenePrefabLensEchoComponent>& prefabEcho = nodes[nodeIndex].components.lensEcho;
+        if (!prefabEcho.has_value()) {
+            components.LensEchoes().Remove(owner.Entity());
+        } else if (!prefabEcho->enabled && prefabEcho->sourceNodeStableId == ScenePrefabLensEchoComponent::InvalidSourceNodeStableId) {
+            components.LensEchoes().Set(owner.Entity(), LensEchoComponent{
+                .profileMaterialAssetId = prefabEcho->profileMaterialAssetId, .intensity = prefabEcho->intensity,
+                .size = prefabEcho->size, .layer = prefabEcho->layer, .occlusionRule = prefabEcho->occlusionRule, .enabled = false,
+            });
+        } else {
+            const auto source = objectsByStableId.find(prefabEcho->sourceNodeStableId);
+            if (source == objectsByStableId.end() || !source->second.IsValid() || !scene.Entities().IsAlive(source->second)) return false;
+            components.LensEchoes().Set(owner.Entity(), LensEchoComponent{
+                .sourceEntityId = source->second.Entity().Id(), .profileMaterialAssetId = prefabEcho->profileMaterialAssetId,
+                .intensity = prefabEcho->intensity, .size = prefabEcho->size, .layer = prefabEcho->layer,
+                .occlusionRule = prefabEcho->occlusionRule, .enabled = prefabEcho->enabled,
+            });
+        }
         const std::optional<ScenePrefabJointComponent>& prefabJoint = nodes[nodeIndex].components.joint;
         if (!prefabJoint.has_value()) {
             components.Joints().Remove(owner.Entity());

@@ -3,6 +3,7 @@
 #include "resources/RenderMeshFbxImporter.hpp"
 #include "resources/RenderMeshGltfImporter.hpp"
 #include "resources/RenderMeshObjImporter.hpp"
+#include "resources/RenderMeshAssetFinalizer.hpp"
 
 namespace kb::render {
 
@@ -52,6 +53,10 @@ std::optional<RenderMeshAssetData> RenderMeshAssetBuilder::LoadFbx(const std::fi
 
 std::optional<RenderMeshAssetData> RenderMeshAssetBuilder::LoadFbx(std::span<const std::byte> data, const RenderMeshFbxImportDesc& desc) {
     return RenderMeshFbxImporter::Load(data, desc);
+}
+
+bool RenderMeshAssetBuilder::Finalize(RenderMeshAssetData& asset) {
+    return RenderMeshAssetFinalizer::Finalize(asset);
 }
 
 } // namespace kb::render

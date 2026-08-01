@@ -131,6 +131,35 @@ namespace {
         lhs.height == rhs.height && lhs.area == rhs.area && lhs.carve == rhs.carve && lhs.enabled == rhs.enabled;
 }
 
+[[nodiscard]] bool Equal(const AuxFrameComponent& lhs, const AuxFrameComponent& rhs) noexcept {
+    return lhs.mode == rhs.mode && lhs.imageTargetId == rhs.imageTargetId && lhs.width == rhs.width && lhs.height == rhs.height &&
+        Equal(lhs.mirrorPlaneNormal, rhs.mirrorPlaneNormal) && lhs.mirrorPlaneOffset == rhs.mirrorPlaneOffset && lhs.enabled == rhs.enabled;
+}
+[[nodiscard]] bool Equal(const GeometrySwarmComponent& lhs, const GeometrySwarmComponent& rhs) noexcept {
+    return lhs.meshAssetId == rhs.meshAssetId && lhs.materialAssetId == rhs.materialAssetId && lhs.instanceCount == rhs.instanceCount &&
+        lhs.columns == rhs.columns && lhs.rows == rhs.rows && lhs.layers == rhs.layers && Equal(lhs.spacing, rhs.spacing) &&
+        lhs.instanceScale == rhs.instanceScale && lhs.layer == rhs.layer && lhs.castsShadow == rhs.castsShadow &&
+        lhs.receivesShadow == rhs.receivesShadow && lhs.enabled == rhs.enabled;
+}
+[[nodiscard]] bool Equal(const SurfaceCastComponent& lhs, const SurfaceCastComponent& rhs) noexcept {
+    return lhs.materialAssetId == rhs.materialAssetId && lhs.receiverLayerMask == rhs.receiverLayerMask &&
+        lhs.order == rhs.order && lhs.content == rhs.content && lhs.enabled == rhs.enabled;
+}
+[[nodiscard]] bool Equal(const FacingPanelComponent& lhs, const FacingPanelComponent& rhs) noexcept {
+    return lhs.mode == rhs.mode && Equal(lhs.targetPoint, rhs.targetPoint) && Equal(lhs.axis, rhs.axis) && Equal(lhs.up, rhs.up) && lhs.enabled == rhs.enabled;
+}
+[[nodiscard]] bool Equal(const SpaceStrokeComponent& lhs, const SpaceStrokeComponent& rhs) noexcept {
+    return lhs.meshAssetId == rhs.meshAssetId && lhs.materialAssetId == rhs.materialAssetId && lhs.mode == rhs.mode &&
+        lhs.width == rhs.width && lhs.cableSag == rhs.cableSag && lhs.splineSegments == rhs.splineSegments &&
+        lhs.layer == rhs.layer && lhs.castsShadow == rhs.castsShadow && lhs.receivesShadow == rhs.receivesShadow && lhs.enabled == rhs.enabled;
+}
+[[nodiscard]] bool Equal(const HistoryRibbonComponent& lhs, const HistoryRibbonComponent& rhs) noexcept {
+    return lhs.meshAssetId == rhs.meshAssetId && lhs.materialAssetId == rhs.materialAssetId &&
+        lhs.lifetimeSeconds == rhs.lifetimeSeconds && lhs.width == rhs.width &&
+        lhs.sampleIntervalSeconds == rhs.sampleIntervalSeconds && lhs.layer == rhs.layer &&
+        lhs.castsShadow == rhs.castsShadow && lhs.receivesShadow == rhs.receivesShadow && lhs.enabled == rhs.enabled;
+}
+
 template <typename T>
 [[nodiscard]] bool EqualOptionalComponent(const T* actual, const std::optional<T>& expected) noexcept {
     if (actual == nullptr) {
@@ -178,6 +207,23 @@ ScenePrefabOverrideFlag ScenePrefabComponentComparator::Compare(SceneComponents 
     }
     if (!EqualOptionalComponent(components.UIDocuments().TryGet(entity), expected.uiDocument)) {
         flags |= ScenePrefabOverrideFlag::UIDocument;
+    }
+    if (!EqualOptionalComponent(components.AuxFrames().TryGet(entity), expected.auxFrame)) {
+        flags |= ScenePrefabOverrideFlag::AuxFrame;
+    }
+    if (!EqualOptionalComponent(components.GeometrySwarms().TryGet(entity), expected.geometrySwarm)) flags |= ScenePrefabOverrideFlag::GeometrySwarm;
+    if (!EqualOptionalComponent(components.SurfaceCasts().TryGet(entity), expected.surfaceCast)) flags |= ScenePrefabOverrideFlag::SurfaceCast;
+    if (!EqualOptionalComponent(components.FacingPanels().TryGet(entity), expected.facingPanel)) flags |= ScenePrefabOverrideFlag::FacingPanel;
+    if (!EqualOptionalComponent(components.SpaceStrokes().TryGet(entity), expected.spaceStroke)) flags |= ScenePrefabOverrideFlag::SpaceStroke;
+    if (!EqualOptionalComponent(components.HistoryRibbons().TryGet(entity), expected.historyRibbon)) flags |= ScenePrefabOverrideFlag::HistoryRibbon;
+    const LensEchoComponent* actualLensEcho = components.LensEchoes().TryGet(entity);
+    if (!expected.lensEcho.has_value()) {
+        if (actualLensEcho != nullptr) flags |= ScenePrefabOverrideFlag::LensEcho;
+    } else if (actualLensEcho == nullptr || actualLensEcho->profileMaterialAssetId != expected.lensEcho->profileMaterialAssetId ||
+        actualLensEcho->intensity != expected.lensEcho->intensity || actualLensEcho->size != expected.lensEcho->size ||
+        actualLensEcho->layer != expected.lensEcho->layer || actualLensEcho->occlusionRule != expected.lensEcho->occlusionRule ||
+        actualLensEcho->enabled != expected.lensEcho->enabled) {
+        flags |= ScenePrefabOverrideFlag::LensEcho;
     }
     return flags;
 }

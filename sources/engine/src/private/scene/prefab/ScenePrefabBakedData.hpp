@@ -35,6 +35,12 @@ enum class ScenePrefabBakedComponentMask : std::uint32_t {
     VisibilityBlocker = 1U << 23U,
     VisibilityCell = 1U << 24U,
     RegionPortal = 1U << 25U,
+    AuxFrame = 1U << 26U,
+    GeometrySwarm = 1U << 27U,
+    SurfaceCast = 1U << 28U,
+    FacingPanel = 1U << 29U,
+    SpaceStroke = 1U << 30U,
+    HistoryRibbon = 1U << 31U,
 };
 
 [[nodiscard]] constexpr std::uint32_t ScenePrefabBakedMask(ScenePrefabBakedComponentMask mask) noexcept {
@@ -69,6 +75,12 @@ struct ScenePrefabBakedArchetype {
     std::vector<SceneVisibilityBlockerComponent> visibilityBlockers;
     std::vector<VisibilityCellComponent> visibilityCells;
     std::vector<SceneRegionPortalComponent> regionPortals;
+    std::vector<AuxFrameComponent> auxFrames;
+    std::vector<GeometrySwarmComponent> geometrySwarms;
+    std::vector<SurfaceCastComponent> surfaceCasts;
+    std::vector<FacingPanelComponent> facingPanels;
+    std::vector<SpaceStrokeComponent> spaceStrokes;
+    std::vector<HistoryRibbonComponent> historyRibbons;
     std::vector<BehaviourComponent> behaviours;
     std::vector<AudioSourceComponent> audioSources;
     std::vector<AudioListenerComponent> audioListeners;

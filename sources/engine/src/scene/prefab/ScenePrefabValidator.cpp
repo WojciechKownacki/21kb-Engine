@@ -43,6 +43,20 @@ bool ScenePrefabValidator::IsValid(const ScenePrefab& prefab) noexcept {
                 !std::binary_search(stableIds.begin(), stableIds.end(), portal.sourceCellNodeStableId) ||
                 !std::binary_search(stableIds.begin(), stableIds.end(), portal.targetCellNodeStableId)) return false;
         }
+        if (node.components.auxFrame.has_value() && !IsAuxFrameComponentPersistable(*node.components.auxFrame)) return false;
+        if (node.components.geometrySwarm.has_value() && !IsGeometrySwarmComponentPersistable(*node.components.geometrySwarm)) return false;
+        if (node.components.surfaceCast.has_value() && !IsSurfaceCastComponentPersistable(*node.components.surfaceCast)) return false;
+        if (node.components.facingPanel.has_value() && !IsFacingPanelComponentPersistable(*node.components.facingPanel)) return false;
+        if (node.components.spaceStroke.has_value() && !IsSpaceStrokeComponentPersistable(*node.components.spaceStroke)) return false;
+        if (node.components.historyRibbon.has_value() && !IsHistoryRibbonComponentPersistable(*node.components.historyRibbon)) return false;
+        if (node.components.lensEcho.has_value()) {
+            const ScenePrefabLensEchoComponent& echo = *node.components.lensEcho;
+            LensEchoComponent validation{ .sourceEntityId = echo.sourceNodeStableId, .profileMaterialAssetId = echo.profileMaterialAssetId,
+                .intensity = echo.intensity, .size = echo.size, .layer = echo.layer, .occlusionRule = echo.occlusionRule, .enabled = echo.enabled };
+            const bool unconfigured = !echo.enabled && echo.sourceNodeStableId == ScenePrefabLensEchoComponent::InvalidSourceNodeStableId;
+            if (!unconfigured && (!IsLensEchoComponentPersistable(validation) || echo.sourceNodeStableId == ScenePrefabLensEchoComponent::InvalidSourceNodeStableId ||
+                echo.sourceNodeStableId == node.stableId || !std::binary_search(stableIds.begin(), stableIds.end(), echo.sourceNodeStableId))) return false;
+        }
     }
     return true;
 }

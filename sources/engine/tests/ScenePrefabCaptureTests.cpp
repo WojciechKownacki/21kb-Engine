@@ -183,7 +183,7 @@ void RunPrefabAssetRoundTripTest() {
             },
         },
     });
-    kb::scene::SetTagsText(prefab.TryGetMutableNode(rootNode)->components.tags.emplace(), "Player, Runtime");
+    kb::scene::SetTagsText(prefab.TryGetMutableNode(rootNode)->components.tags.emplace(), "Player");
     const std::uint32_t childNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
         .name = "Asset Child\\Escaped",
         .parentNode = rootNode,
@@ -297,7 +297,7 @@ void RunPrefabAssetRoundTripTest() {
     kb::tests::Require(collider != nullptr && collider->shape == kb::scene::ColliderShape::Capsule && kb::tests::NearlyEqual(collider->center.y, 0.2F) && kb::tests::NearlyEqual(collider->boxSize.z, 4.0F) && kb::tests::NearlyEqual(collider->radius, 1.25F) && collider->trigger && kb::tests::NearlyEqual(collider->friction, 0.3F) && kb::tests::NearlyEqual(collider->restitution, 0.7F) && collider->layer == 8U, "Loaded prefab collider material/layer was not preserved");
     kb::tests::Require(characterController != nullptr && kb::tests::NearlyEqual(characterController->center.z, 0.6F) && kb::tests::NearlyEqual(characterController->radius, 0.35F) && kb::tests::NearlyEqual(characterController->height, 1.75F) && kb::tests::NearlyEqual(characterController->slopeLimitDegrees, 43.0F) && kb::tests::NearlyEqual(characterController->stepOffset, 0.25F) && kb::tests::NearlyEqual(characterController->gravityScale, 1.5F) && !characterController->useGravity, "Loaded prefab CharacterController was not preserved");
     kb::tests::Require(joint != nullptr && joint->type == kb::scene::JointType::Hinge && joint->connectedEntity == instance.ObjectAt(childNode).Entity() && kb::tests::NearlyEqual(joint->anchor.y, 0.2F) && kb::tests::NearlyEqual(joint->connectedAnchor.z, 0.6F) && kb::tests::NearlyEqual(joint->minLimit, -20.0F) && kb::tests::NearlyEqual(joint->maxLimit, 35.0F) && joint->enableLimit, "Loaded prefab joint did not resolve its connected entity");
-    kb::tests::Require(tags != nullptr && kb::scene::TagsText(*tags) == "Player, Runtime", "Loaded prefab tags were not preserved");
+    kb::tests::Require(tags != nullptr && kb::scene::TagsText(*tags) == "Player", "Loaded prefab tag was not preserved");
     kb::tests::Require(light != nullptr && light->kind == kb::scene::LightKind::Spot && kb::tests::NearlyEqual(light->intensity, 6.0F), "Loaded prefab light was not preserved");
     kb::tests::Require(light != nullptr && kb::tests::NearlyEqual(light->areaWidth, 2.0F) && kb::tests::NearlyEqual(light->areaHeight, 0.5F), "Loaded prefab light area size was not preserved");
     kb::tests::Require(light != nullptr && kb::tests::NearlyEqual(light->contactShadowLength, 0.3F) && kb::tests::NearlyEqual(light->volumetricScattering, 0.2F), "Loaded prefab light production controls were not preserved");

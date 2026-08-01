@@ -395,6 +395,23 @@ void RuntimeMaterialResourceEnsurer::Ensure(
             ensureMaterial(slot.defaultMaterialAssetId);
         }
     }
+    for (const auto& [entityId, proxy] : context.renderScene.GeometrySwarmProxies()) {
+        static_cast<void>(entityId);
+        ensureMaterial(proxy.desc.materialAssetId);
+
+        const RenderMeshHandle meshHandle = context.sceneRenderer.ResourceMap().ResolveMesh(proxy.desc.meshAssetId);
+        const RenderMeshResource* meshResource = context.sceneRenderer.Resources().FindMesh(meshHandle);
+        if (meshResource == nullptr) {
+            continue;
+        }
+        for (const RenderMaterialSlot& slot : meshResource->materialSlots) {
+            ensureMaterial(slot.defaultMaterialAssetId);
+        }
+    }
+    for (const auto& [entityId, proxy] : context.renderScene.SurfaceCastProxies()) {
+        static_cast<void>(entityId);
+        ensureMaterial(proxy.desc.materialAssetId);
+    }
 }
 
 } // namespace kb::render

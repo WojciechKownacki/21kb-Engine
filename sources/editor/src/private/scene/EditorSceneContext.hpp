@@ -750,8 +750,11 @@ public:
     // (i.e. any Inspector showing it should repaint). Not undoable (pure cache).
     [[nodiscard]] bool ReloadOpenScriptAsset();
     [[nodiscard]] bool AddComponentToEntity(kb::scene::SceneEntity entity, std::string_view componentId);
-    [[nodiscard]] bool SetTagsText(kb::scene::SceneEntity entity, std::string_view text);
+    [[nodiscard]] std::vector<std::string> EntityTags(kb::scene::SceneEntity entity) const;
+    [[nodiscard]] std::vector<std::string> KnownSceneTags() const;
+    [[nodiscard]] bool SetEntityTagSelected(kb::scene::SceneEntity entity, std::string_view tag, bool selected);
     [[nodiscard]] bool RemoveTagsFromEntity(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool DeleteSceneTag(std::string_view tag);
     [[nodiscard]] bool SetAudioSourceClipAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
     [[nodiscard]] bool SetAnimatorControllerAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
     [[nodiscard]] bool SetUIDocumentAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);

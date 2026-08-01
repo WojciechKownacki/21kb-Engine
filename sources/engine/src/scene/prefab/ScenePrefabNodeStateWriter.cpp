@@ -170,6 +170,35 @@ namespace {
         lhs.height == rhs.height && lhs.area == rhs.area && lhs.carve == rhs.carve && lhs.enabled == rhs.enabled;
 }
 
+[[nodiscard]] bool Equals(const AuxFrameComponent& lhs, const AuxFrameComponent& rhs) noexcept {
+    return lhs.mode == rhs.mode && lhs.imageTargetId == rhs.imageTargetId && lhs.width == rhs.width && lhs.height == rhs.height &&
+        Equals(lhs.mirrorPlaneNormal, rhs.mirrorPlaneNormal) && lhs.mirrorPlaneOffset == rhs.mirrorPlaneOffset && lhs.enabled == rhs.enabled;
+}
+[[nodiscard]] bool Equals(const GeometrySwarmComponent& lhs, const GeometrySwarmComponent& rhs) noexcept {
+    return lhs.meshAssetId == rhs.meshAssetId && lhs.materialAssetId == rhs.materialAssetId && lhs.instanceCount == rhs.instanceCount &&
+        lhs.columns == rhs.columns && lhs.rows == rhs.rows && lhs.layers == rhs.layers && Equals(lhs.spacing, rhs.spacing) &&
+        lhs.instanceScale == rhs.instanceScale && lhs.layer == rhs.layer && lhs.castsShadow == rhs.castsShadow && lhs.receivesShadow == rhs.receivesShadow && lhs.enabled == rhs.enabled;
+}
+[[nodiscard]] bool Equals(const SurfaceCastComponent& lhs, const SurfaceCastComponent& rhs) noexcept {
+    return lhs.materialAssetId == rhs.materialAssetId && lhs.receiverLayerMask == rhs.receiverLayerMask &&
+        lhs.order == rhs.order && lhs.content == rhs.content && lhs.enabled == rhs.enabled;
+}
+[[nodiscard]] bool Equals(const FacingPanelComponent& lhs, const FacingPanelComponent& rhs) noexcept {
+    return lhs.mode == rhs.mode && Equals(lhs.targetPoint, rhs.targetPoint) && Equals(lhs.axis, rhs.axis) && Equals(lhs.up, rhs.up) && lhs.enabled == rhs.enabled;
+}
+[[nodiscard]] bool Equals(const SpaceStrokeComponent& lhs, const SpaceStrokeComponent& rhs) noexcept {
+    return lhs.meshAssetId == rhs.meshAssetId && lhs.materialAssetId == rhs.materialAssetId && lhs.mode == rhs.mode && lhs.width == rhs.width &&
+        lhs.cableSag == rhs.cableSag && lhs.splineSegments == rhs.splineSegments && lhs.layer == rhs.layer && lhs.castsShadow == rhs.castsShadow &&
+        lhs.receivesShadow == rhs.receivesShadow && lhs.enabled == rhs.enabled;
+}
+
+[[nodiscard]] bool Equals(const HistoryRibbonComponent& lhs, const HistoryRibbonComponent& rhs) noexcept {
+    return lhs.meshAssetId == rhs.meshAssetId && lhs.materialAssetId == rhs.materialAssetId &&
+        lhs.lifetimeSeconds == rhs.lifetimeSeconds && lhs.width == rhs.width &&
+        lhs.sampleIntervalSeconds == rhs.sampleIntervalSeconds && lhs.layer == rhs.layer &&
+        lhs.castsShadow == rhs.castsShadow && lhs.receivesShadow == rhs.receivesShadow && lhs.enabled == rhs.enabled;
+}
+
 template <typename T, typename Components>
 void WriteOptionalComponent(Components components, SceneEntity entity, const std::optional<T>& component) {
     if (component.has_value()) {
@@ -236,6 +265,13 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , visibilityBlockers(scene.Components().VisibilityBlockers())
     , visibilityCells(scene.Components().VisibilityCells())
     , regionPortals(scene.Components().RegionPortals())
+    , auxFrames(scene.Components().AuxFrames())
+    , geometrySwarms(scene.Components().GeometrySwarms())
+    , surfaceCasts(scene.Components().SurfaceCasts())
+    , facingPanels(scene.Components().FacingPanels())
+    , spaceStrokes(scene.Components().SpaceStrokes())
+    , historyRibbons(scene.Components().HistoryRibbons())
+    , lensEchoes(scene.Components().LensEchoes())
     , behaviours(scene.Components().Behaviours())
     , audioSources(scene.Components().AudioSources())
     , audioListeners(scene.Components().AudioListeners())
@@ -312,6 +348,14 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     // writer owns the removal case while the synchronizer performs that final
     // graph-wide resolution for present portals.
     if (!node.components.regionPortal.has_value()) context.regionPortals.Remove(entity);
+    WriteOptionalComponent(context.auxFrames, entity, node.components.auxFrame);
+    WriteOptionalComponent(context.geometrySwarms, entity, node.components.geometrySwarm);
+    WriteOptionalComponent(context.surfaceCasts, entity, node.components.surfaceCast);
+    WriteOptionalComponent(context.facingPanels, entity, node.components.facingPanel);
+    WriteOptionalComponent(context.spaceStrokes, entity, node.components.spaceStroke);
+    WriteOptionalComponent(context.historyRibbons, entity, node.components.historyRibbon);
+    // Echo source references are resolved after every prefab node exists.
+    if (!node.components.lensEcho.has_value()) context.lensEchoes.Remove(entity);
     if (!componentMask.available || !componentMask.matches || node.components.behaviour.has_value()) {
         WriteOptionalComponent(context.behaviours, entity, node.components.behaviour);
     }

@@ -1442,7 +1442,7 @@ void RunRegisteredPrefabFullComponentOverrideLifecycleTest() {
             },
         },
     });
-    kb::scene::SetTagsText(prefab.TryGetMutableNode(rootNode)->components.tags.emplace(), "Prefab, Base");
+    kb::scene::SetTagsText(prefab.TryGetMutableNode(rootNode)->components.tags.emplace(), "PrefabBase");
 
     const kb::scene::ScenePrefabHandle prefabHandle = scene.Prefabs().Register("FullComponentOverridePrefab", std::move(prefab));
     const kb::scene::ScenePrefabInstance instance = scene.Prefabs().Instantiate(prefabHandle);
@@ -1452,7 +1452,7 @@ void RunRegisteredPrefabFullComponentOverrideLifecycleTest() {
     scene.Components().Rigidbodies().Set(entity, kb::scene::RigidbodyComponent{ .bodyType = kb::scene::RigidbodyBodyType::Kinematic, .mass = 5.0F });
     scene.Components().Colliders().Remove(entity);
     kb::scene::TagsComponent changedTags;
-    kb::scene::SetTagsText(changedTags, "Prefab, Changed");
+    kb::scene::SetTagsText(changedTags, "PrefabChanged");
     scene.Components().Tags().Set(entity, changedTags);
     scene.Components().Behaviours().Set(entity, kb::scene::BehaviourComponent{ .behaviourAssetId = 20, .backend = kb::scene::BehaviourBackend::Lua, .enabled = false, .tickGroup = kb::scene::BehaviourTickGroup::Camera, .executionOrder = -8 });
     scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{ .meshAssetId = 40, .materialAssetId = 55, .materialSlotAssetIds = { 42, 66 }, .materialSlotOverrideCount = 2 });
@@ -1494,7 +1494,7 @@ void RunRegisteredPrefabFullComponentOverrideLifecycleTest() {
     const kb::scene::AudioSourceComponent* revertedAudioSource = scene.Components().AudioSources().TryGet(entity);
     kb::tests::Require(revertedInput != nullptr && revertedInput->priority == 1 && revertedInput->enabled, "Full component prefab revert did not restore input");
     kb::tests::Require(revertedCollider != nullptr && revertedCollider->shape == kb::scene::ColliderShape::Box, "Full component prefab revert did not restore collider");
-    kb::tests::Require(revertedTags != nullptr && kb::scene::TagsText(*revertedTags) == "Prefab, Base", "Full component prefab revert did not restore tags");
+    kb::tests::Require(revertedTags != nullptr && kb::scene::TagsText(*revertedTags) == "PrefabBase", "Full component prefab revert did not restore tag");
     kb::tests::Require(revertedMeshRenderer != nullptr && revertedMeshRenderer->materialAssetId == 41 && revertedMeshRenderer->materialSlotOverrideCount == 1 && revertedMeshRenderer->materialSlotAssetIds[0] == 42, "Full component prefab revert did not restore mesh renderer material");
     kb::tests::Require(revertedAudioSource != nullptr && kb::tests::NearlyEqual(revertedAudioSource->volume, 0.75F) && !revertedAudioSource->mute, "Full component prefab revert did not restore audio source");
 

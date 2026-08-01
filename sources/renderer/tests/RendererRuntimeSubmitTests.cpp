@@ -2,11 +2,13 @@
 
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneAuxFrameComponents.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
@@ -4576,6 +4578,70 @@ void RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest() {
     renderer.Shutdown();
 }
 
+void RunSecondaryFrameModesProduceRuntimeTargetsTest() {
+    constexpr std::array<kb::scene::AuxFrameMode, 4U> modes{
+        kb::scene::AuxFrameMode::Flat,
+        kb::scene::AuxFrameMode::Mirror,
+        kb::scene::AuxFrameMode::Cube,
+        kb::scene::AuxFrameMode::Panoramic,
+    };
+    for (std::size_t index = 0U; index < modes.size(); ++index) {
+        kb::scene::Scene scene;
+        const kb::scene::SceneEntity owner = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = "Secondary Frame Camera",
+            .transform = TransformAt(0.0F, 1.0F, -3.0F),
+        });
+        scene.Components().Cameras().Set(owner, kb::scene::CameraComponent{});
+        const std::uint64_t imageTargetId = 0xA160U + index;
+        scene.Components().AuxFrames().Set(owner, kb::scene::AuxFrameComponent{
+            .mode = modes[index],
+            .imageTargetId = imageTargetId,
+            .width = 96U,
+            .height = 64U,
+            .mirrorPlaneNormal = kb::scene::Vec3{0.0F, 1.0F, 0.0F},
+            .enabled = true,
+        });
+
+        HeadlessSurface surface;
+        DisplayConfig config{};
+        config.allowHeadlessNoop = true;
+        config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+        Renderer renderer;
+        Require(renderer.Initialize(surface, &config), "Secondary Frame test renderer did not initialize");
+        Require(renderer.BeginFrame(), "Secondary Frame test renderer did not begin frame");
+        const RenderSceneSubmitDesc desc{
+            .target = RenderSceneTargetBinding{
+                .frameBuffer = BGFX_INVALID_HANDLE,
+                .colorTexture = BGFX_INVALID_HANDLE,
+                .viewport = RenderViewportDesc{.id = RenderViewportId{1U}, .extent = RenderExtent{64U, 64U}, .viewportIndex = 0U},
+            },
+            .cameraOverride = IdentityCamera(),
+        };
+        Require(renderer.SubmitScene(scene, desc), "Secondary Frame renderer rejected an enabled runtime target");
+        const SceneRenderResourceMap* map = renderer.SceneResourceMap();
+        const RenderResourceRegistry* resources = renderer.SceneResources();
+        Require(map != nullptr && resources != nullptr, "Secondary Frame renderer did not expose scene resource state");
+        const RenderTextureResource* target = resources->FindTexture(map->ResolveTexture(imageTargetId, RenderTextureColorSpace::Linear));
+        Require(target != nullptr, "Secondary Frame did not bind its renderer-owned image target");
+        const RenderTextureDimension expected = modes[index] == kb::scene::AuxFrameMode::Cube
+            ? RenderTextureDimension::TextureCube
+            : RenderTextureDimension::Texture2D;
+        Require(target->dimension == expected, "Secondary Frame mode produced an image target of the wrong texture dimension");
+        renderer.EndFrame();
+
+        kb::scene::AuxFrameComponent* frame = scene.Components().AuxFrames().TryGet(owner);
+        Require(frame != nullptr, "Secondary Frame test lost the canonical ECS component");
+        frame->enabled = false;
+        scene.Components().AuxFrames().MarkModified(owner);
+        Require(renderer.BeginFrame(), "Secondary Frame cleanup test renderer did not begin frame");
+        Require(renderer.SubmitScene(scene, desc), "Secondary Frame cleanup submit was rejected");
+        Require(!map->ResolveTexture(imageTargetId, RenderTextureColorSpace::Linear).IsValid(),
+            "Secondary Frame left a dynamic image target bound after the component was disabled");
+        renderer.EndFrame();
+        renderer.Shutdown();
+    }
+}
+
 void RunEditorCameraWireframesSubmitInHeadlessNoopTest() {
     HeadlessSurface surface;
     DisplayConfig config{};
@@ -4723,6 +4789,7 @@ void RunRendererRuntimeSubmitTests() {
     RunGraphMaterialReportsGpuMaterialGraphModeTest();
     RunRendererSubmitsDeferredGBufferAndLightingPassesInHeadlessNoopTest();
     RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest();
+    RunSecondaryFrameModesProduceRuntimeTargetsTest();
 }
 
 } // namespace kb::render::tests

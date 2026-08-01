@@ -222,6 +222,89 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "regionPortal.purposes=" << portal.purposes << '\n';
         output << "regionPortal.enabled=" << (portal.enabled ? 1 : 0) << '\n';
     }
+    output << "auxFrame=" << (components.auxFrame.has_value() ? 1 : 0) << '\n';
+    if (components.auxFrame.has_value()) {
+        const AuxFrameComponent& frame = *components.auxFrame;
+        output << "auxFrame.mode=" << static_cast<int>(frame.mode) << '\n';
+        output << "auxFrame.imageTargetId=" << frame.imageTargetId << '\n';
+        output << "auxFrame.width=" << frame.width << '\n';
+        output << "auxFrame.height=" << frame.height << '\n';
+        WriteVec3(output, "auxFrame.mirrorPlaneNormal", frame.mirrorPlaneNormal);
+        output << "auxFrame.mirrorPlaneOffset=" << frame.mirrorPlaneOffset << '\n';
+        output << "auxFrame.enabled=" << (frame.enabled ? 1 : 0) << '\n';
+    }
+    output << "geometrySwarm=" << (components.geometrySwarm.has_value() ? 1 : 0) << '\n';
+    if (components.geometrySwarm.has_value()) {
+        const GeometrySwarmComponent& swarm = *components.geometrySwarm;
+        output << "geometrySwarm.meshAssetId=" << swarm.meshAssetId << '\n';
+        output << "geometrySwarm.materialAssetId=" << swarm.materialAssetId << '\n';
+        output << "geometrySwarm.instanceCount=" << swarm.instanceCount << '\n';
+        output << "geometrySwarm.columns=" << swarm.columns << '\n';
+        output << "geometrySwarm.rows=" << swarm.rows << '\n';
+        output << "geometrySwarm.layers=" << swarm.layers << '\n';
+        WriteVec3(output, "geometrySwarm.spacing", swarm.spacing);
+        output << "geometrySwarm.instanceScale=" << swarm.instanceScale << '\n';
+        output << "geometrySwarm.layer=" << swarm.layer << '\n';
+        output << "geometrySwarm.castsShadow=" << (swarm.castsShadow ? 1 : 0) << '\n';
+        output << "geometrySwarm.receivesShadow=" << (swarm.receivesShadow ? 1 : 0) << '\n';
+        output << "geometrySwarm.enabled=" << (swarm.enabled ? 1 : 0) << '\n';
+    }
+    output << "surfaceCast=" << (components.surfaceCast.has_value() ? 1 : 0) << '\n';
+    if (components.surfaceCast.has_value()) {
+        const SurfaceCastComponent& surfaceCast = *components.surfaceCast;
+        output << "surfaceCast.materialAssetId=" << surfaceCast.materialAssetId << '\n';
+        output << "surfaceCast.receiverLayerMask=" << surfaceCast.receiverLayerMask << '\n';
+        output << "surfaceCast.order=" << surfaceCast.order << '\n';
+        output << "surfaceCast.content=" << static_cast<std::uint32_t>(surfaceCast.content) << '\n';
+        output << "surfaceCast.enabled=" << (surfaceCast.enabled ? 1 : 0) << '\n';
+    }
+    output << "facingPanel=" << (components.facingPanel.has_value() ? 1 : 0) << '\n';
+    if (components.facingPanel.has_value()) {
+        const FacingPanelComponent& panel = *components.facingPanel;
+        output << "facingPanel.mode=" << static_cast<std::uint32_t>(panel.mode) << '\n';
+        WriteVec3(output, "facingPanel.targetPoint", panel.targetPoint);
+        WriteVec3(output, "facingPanel.axis", panel.axis);
+        WriteVec3(output, "facingPanel.up", panel.up);
+        output << "facingPanel.enabled=" << (panel.enabled ? 1 : 0) << '\n';
+    }
+    output << "spaceStroke=" << (components.spaceStroke.has_value() ? 1 : 0) << '\n';
+    if (components.spaceStroke.has_value()) {
+        const SpaceStrokeComponent& stroke = *components.spaceStroke;
+        output << "spaceStroke.meshAssetId=" << stroke.meshAssetId << '\n';
+        output << "spaceStroke.materialAssetId=" << stroke.materialAssetId << '\n';
+        output << "spaceStroke.mode=" << static_cast<std::uint32_t>(stroke.mode) << '\n';
+        output << "spaceStroke.width=" << stroke.width << '\n';
+        output << "spaceStroke.cableSag=" << stroke.cableSag << '\n';
+        output << "spaceStroke.splineSegments=" << static_cast<std::uint32_t>(stroke.splineSegments) << '\n';
+        output << "spaceStroke.layer=" << stroke.layer << '\n';
+        output << "spaceStroke.castsShadow=" << (stroke.castsShadow ? 1 : 0) << '\n';
+        output << "spaceStroke.receivesShadow=" << (stroke.receivesShadow ? 1 : 0) << '\n';
+        output << "spaceStroke.enabled=" << (stroke.enabled ? 1 : 0) << '\n';
+    }
+    output << "historyRibbon=" << (components.historyRibbon.has_value() ? 1 : 0) << '\n';
+    if (components.historyRibbon.has_value()) {
+        const HistoryRibbonComponent& ribbon = *components.historyRibbon;
+        output << "historyRibbon.meshAssetId=" << ribbon.meshAssetId << '\n';
+        output << "historyRibbon.materialAssetId=" << ribbon.materialAssetId << '\n';
+        output << "historyRibbon.lifetimeSeconds=" << ribbon.lifetimeSeconds << '\n';
+        output << "historyRibbon.width=" << ribbon.width << '\n';
+        output << "historyRibbon.sampleIntervalSeconds=" << ribbon.sampleIntervalSeconds << '\n';
+        output << "historyRibbon.layer=" << ribbon.layer << '\n';
+        output << "historyRibbon.castsShadow=" << (ribbon.castsShadow ? 1 : 0) << '\n';
+        output << "historyRibbon.receivesShadow=" << (ribbon.receivesShadow ? 1 : 0) << '\n';
+        output << "historyRibbon.enabled=" << (ribbon.enabled ? 1 : 0) << '\n';
+    }
+    output << "lensEcho=" << (components.lensEcho.has_value() ? 1 : 0) << '\n';
+    if (components.lensEcho.has_value()) {
+        const ScenePrefabLensEchoComponent& echo = *components.lensEcho;
+        output << "lensEcho.sourceNodeStableId=" << echo.sourceNodeStableId << '\n';
+        output << "lensEcho.profileMaterialAssetId=" << echo.profileMaterialAssetId << '\n';
+        output << "lensEcho.intensity=" << echo.intensity << '\n';
+        output << "lensEcho.size=" << echo.size << '\n';
+        output << "lensEcho.layer=" << echo.layer << '\n';
+        output << "lensEcho.occlusionRule=" << static_cast<std::uint32_t>(echo.occlusionRule) << '\n';
+        output << "lensEcho.enabled=" << (echo.enabled ? 1 : 0) << '\n';
+    }
 
     output << "behaviour=" << (components.behaviour.has_value() ? 1 : 0) << '\n';
     if (components.behaviour.has_value()) {

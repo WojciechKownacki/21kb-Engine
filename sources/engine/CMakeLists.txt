@@ -25,6 +25,8 @@ add_library(kb_engine STATIC
     include/engine/assets/AssetId.hpp
     include/engine/assets/AssetKind.hpp
     include/engine/assets/AssetImportCatalog.hpp
+    include/engine/assets/TerrainAsset.hpp
+    include/engine/assets/TerrainAssetIO.hpp
     include/engine/assets/AssetImportService.hpp
     include/engine/assets/AssetImportTypes.hpp
     include/engine/assets/AssetManager.hpp
@@ -241,6 +243,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneAudioOcclusionAccess.hpp
     include/engine/scene/SceneRenderFeedback.hpp
     include/engine/scene/SceneRuntime.hpp
+    include/engine/scene/SceneTagCatalog.hpp
     include/engine/scene/SceneTasks.hpp
     include/engine/scene/SceneTimers.hpp
     include/engine/scene/SceneSystem.hpp
@@ -276,6 +279,21 @@ add_library(kb_engine STATIC
         include/engine/scene/RegionPortalComponent.hpp
         include/engine/scene/SceneRegionPortalComponents.hpp
         include/engine/scene/SceneRegionPortalQueries.hpp
+        include/engine/scene/AuxFrameComponent.hpp
+        include/engine/scene/SceneAuxFrameComponents.hpp
+        include/engine/scene/SceneAuxFrameQueries.hpp
+        include/engine/scene/GeometrySwarmComponent.hpp
+        include/engine/scene/SceneGeometrySwarmComponents.hpp
+        include/engine/scene/SurfaceCastComponent.hpp
+        include/engine/scene/SceneSurfaceCastComponents.hpp
+        include/engine/scene/FacingPanelComponent.hpp
+        include/engine/scene/SceneFacingPanelComponents.hpp
+        include/engine/scene/SpaceStrokeComponent.hpp
+        include/engine/scene/SceneSpaceStrokeComponents.hpp
+        include/engine/scene/HistoryRibbonComponent.hpp
+        include/engine/scene/SceneHistoryRibbonComponents.hpp
+        include/engine/scene/LensEchoComponent.hpp
+        include/engine/scene/SceneLensEchoComponents.hpp
     include/engine/scene/SceneVisibilityComponents.hpp
     include/engine/scene/VisibilityComponent.hpp
     include/engine/render/postfx/PostProcessPipeline.hpp
@@ -428,6 +446,8 @@ add_library(kb_engine STATIC
     src/assets/AssetFileSystem.cpp
     src/assets/AssetFolderOperations.cpp
     src/assets/AssetImportCatalog.cpp
+    src/assets/TerrainAsset.cpp
+    src/assets/TerrainAssetIO.cpp
     src/assets/AssetImportService.cpp
     src/assets/AssetImportTypes.cpp
     src/assets/AssetLoaderRegistry.cpp
@@ -580,6 +600,7 @@ add_library(kb_engine STATIC
     src/scene/ParticleEffectAssetLoader.cpp
     src/scene/SceneParticleSystemService.cpp
     src/scene/SceneModules.cpp
+    src/scene/SceneTagCatalog.cpp
     src/scene/SceneObject.cpp
     src/scene/SceneRuntime.cpp
     src/scene/SceneState.cpp
@@ -666,6 +687,20 @@ add_library(kb_engine STATIC
         src/scene/components/SceneVisibilityCellStorage.cpp
         src/scene/components/SceneRegionPortalApi.cpp
         src/scene/components/SceneRegionPortalStorage.cpp
+        src/scene/components/SceneAuxFrameApi.cpp
+        src/scene/components/SceneAuxFrameStorage.cpp
+        src/scene/components/SceneGeometrySwarmApi.cpp
+        src/scene/components/SceneGeometrySwarmStorage.cpp
+        src/scene/components/SceneSurfaceCastApi.cpp
+        src/scene/components/SceneSurfaceCastStorage.cpp
+        src/scene/components/SceneFacingPanelApi.cpp
+        src/scene/components/SceneFacingPanelStorage.cpp
+        src/scene/components/SceneSpaceStrokeApi.cpp
+        src/scene/components/SceneSpaceStrokeStorage.cpp
+        src/scene/components/SceneHistoryRibbonApi.cpp
+        src/scene/components/SceneHistoryRibbonStorage.cpp
+        src/scene/components/SceneLensEchoApi.cpp
+        src/scene/components/SceneLensEchoStorage.cpp
       src/scene/SceneContentInstanceService.cpp
     src/scene/components/SceneTransformApi.cpp
     src/scene/components/SceneTransformStorage.cpp
@@ -1006,6 +1041,13 @@ add_library(kb_engine STATIC
         src/private/scene/components/SceneVisibilityBlockerComponentStore.hpp
         src/private/scene/components/SceneVisibilityCellComponentStore.hpp
         src/private/scene/components/SceneRegionPortalComponentStore.hpp
+        src/private/scene/components/SceneAuxFrameComponentStore.hpp
+        src/private/scene/components/SceneGeometrySwarmComponentStore.hpp
+        src/private/scene/components/SceneSurfaceCastComponentStore.hpp
+        src/private/scene/components/SceneFacingPanelComponentStore.hpp
+        src/private/scene/components/SceneSpaceStrokeComponentStore.hpp
+        src/private/scene/components/SceneHistoryRibbonComponentStore.hpp
+        src/private/scene/components/SceneLensEchoComponentStore.hpp
       src/private/scene/SceneContentInstanceService.hpp
       src/private/scene/systems/ContentInstanceSceneSystem.hpp
     src/private/scene/components/SceneTransformComponentStore.hpp

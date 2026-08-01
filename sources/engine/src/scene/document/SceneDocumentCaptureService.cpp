@@ -2,6 +2,7 @@
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
 #include "scene/prefab/ScenePrefabCaptureService.hpp"
 
 #include <utility>
@@ -25,6 +26,7 @@ SceneDocument SceneDocumentCaptureService::Capture(Scene& scene, std::string nam
     };
 
     const std::vector<SceneObject> roots = scene.Hierarchy().RootObjects();
+    document.tagDefinitions.assign(scene.Tags().Names().begin(), scene.Tags().Names().end());
     document.worldPrefab = ScenePrefabCaptureService::CaptureRoots(scene, std::span<const SceneObject>{ roots }, ScenePrefabCaptureSettings{});
     return document;
 }

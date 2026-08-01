@@ -57,6 +57,7 @@ add_library(kb_renderer STATIC
     include/kb/render/resources/PostProcessProfileAssetLoader.hpp
     include/kb/render/resources/BuiltInParticleQuadMesh.hpp
     include/kb/render/resources/RenderMeshAssetBuilder.hpp
+    include/kb/render/resources/RenderTerrainMeshBuilder.hpp
     include/kb/render/resources/RenderMeshAssetLoader.hpp
     include/kb/render/resources/RenderResourceRegistry.hpp
     include/kb/render/resources/RenderResources.hpp
@@ -198,6 +199,7 @@ add_library(kb_renderer STATIC
     src/resources/RenderMeshAssetFinalizer.cpp
     src/resources/RenderMeshAssetFinalizer.hpp
     src/resources/RenderMeshAssetBuilder.cpp
+    src/resources/RenderTerrainMeshBuilder.cpp
     src/resources/RenderMeshFbxImporter.cpp
     src/resources/RenderMeshFbxImporter.hpp
     src/resources/RenderMeshGltfImporter.cpp
@@ -241,6 +243,8 @@ add_library(kb_renderer STATIC
     src/runtime/RuntimeTextureResourceEnsurer.cpp
     src/runtime/RuntimeTextureResourceEnsurer.hpp
     src/scene/EcsRenderSceneSynchronizer.cpp
+    src/scene/AuxFrameRenderer.cpp
+    src/scene/AuxFrameRenderer.hpp
     src/scene/SceneParticleRenderSynchronizer.cpp
     src/scene/SceneRenderVisibilityPublisher.cpp
     src/scene/SceneRenderVisibilityPublisher.hpp

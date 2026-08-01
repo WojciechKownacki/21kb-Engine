@@ -8,12 +8,15 @@
 #include "engine/ecs/WorkerPool.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAuxFrameComponents.hpp"
+#include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "kb/render/resources/PostProcessProfileAssetLoader.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 #include "kb/render/scene/SceneParticleRenderSynchronizer.hpp"
+#include "scene/AuxFrameRenderer.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/post/SceneExposureMeter.hpp"
@@ -263,6 +266,7 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
     SetGpuDrivenRuntimeDispatchEnabled(gpuDrivenRuntimeDispatchEnabled_);
     renderSceneSynchronizer_ = std::make_unique<EcsRenderSceneSynchronizer>();
     particleRenderSynchronizer_ = std::make_unique<SceneParticleRenderSynchronizer>();
+    auxFrameRenderer_ = std::make_unique<AuxFrameRenderer>();
     screenCapture_ = std::make_unique<RendererScreenCapture>();
     ApplyRuntimeSceneResourceReserve();
 
@@ -321,6 +325,10 @@ void Renderer::Shutdown() {
     temporalViewportStates_.clear();
     frameState_.Reset();
     renderSceneStore_.ReleaseAll();
+    if (auxFrameRenderer_ != nullptr) {
+        auxFrameRenderer_->Shutdown(sceneRenderer_.get());
+        auxFrameRenderer_.reset();
+    }
     runtimeResourceCache_.DestroyAll(sceneRenderer_.get());
     frameReferences_.Clear();
     runtimeAssetDiscovery_.Clear();
@@ -509,11 +517,84 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
         return false;
     }
 
+    std::vector<SceneFrameSubmission> expandedSubmissions{submissions.begin(), submissions.end()};
+    std::vector<AuxFramePanoramaConversion> panoramaConversions;
+    std::array<bool, 7U> occupiedViewportIndices{};
+    for (const SceneFrameSubmission& submission : expandedSubmissions) {
+        if (submission.desc.target.viewport.viewportIndex < occupiedViewportIndices.size()) {
+            occupiedViewportIndices[submission.desc.target.viewport.viewportIndex] = true;
+        }
+    }
+    std::vector<const kb::scene::Scene*> auxScenes;
+    auxScenes.reserve(expandedSubmissions.size());
+    if (auxFrameRenderer_ != nullptr && renderSceneSynchronizer_ != nullptr) {
+        for (const SceneFrameSubmission& submission : expandedSubmissions) {
+            if (submission.scene == nullptr || std::find(auxScenes.begin(), auxScenes.end(), submission.scene) != auxScenes.end()) {
+                continue;
+            }
+            bool hasAuxFrame = false;
+            submission.scene->Components().AuxFrames().ForEach([](kb::scene::SceneEntity, const kb::scene::AuxFrameComponent& component, void* raw) {
+                static_cast<void>(component);
+                *static_cast<bool*>(raw) = true;
+            }, &hasAuxFrame);
+            if (!hasAuxFrame && !auxFrameRenderer_->HasSceneOutputs(submission.scene->Id())) {
+                continue;
+            }
+            renderSceneSynchronizer_->Sync(*submission.scene, RenderSceneFor(*submission.scene));
+            auxScenes.push_back(submission.scene);
+            for (SceneFrameSubmission& expanded : expandedSubmissions) {
+                if (expanded.scene == submission.scene) {
+                    expanded.desc.synchronizeScene = false;
+                    expanded.desc.transformAffineSync = false;
+                    expanded.desc.dirtySceneEntityIds = {};
+                }
+            }
+        }
+        std::vector<std::uint32_t> availableViewportIndices;
+        for (std::uint32_t index = 1U; index < occupiedViewportIndices.size(); ++index) {
+            if (!occupiedViewportIndices[index]) {
+                availableViewportIndices.push_back(index);
+            }
+        }
+        auxFrameRenderer_->BeginFrame();
+        std::vector<AuxFramePreparedSubmission> auxSubmissions;
+        for (const kb::scene::Scene* scene : auxScenes) {
+            if (availableViewportIndices.empty()) {
+                break;
+            }
+            const auto source = std::find_if(expandedSubmissions.begin(), expandedSubmissions.end(), [scene](const SceneFrameSubmission& candidate) {
+                return candidate.scene == scene;
+            });
+            if (source == expandedSubmissions.end()) {
+                continue;
+            }
+            const std::size_t previousCount = auxSubmissions.size();
+            auxFrameRenderer_->Collect(
+                *scene,
+                RenderSceneFor(*scene),
+                source->desc,
+                availableViewportIndices,
+                static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL,
+                *sceneRenderer_,
+                auxSubmissions,
+                panoramaConversions);
+            const std::size_t consumed = auxSubmissions.size() - previousCount;
+            if (consumed > 0U) {
+                availableViewportIndices.erase(availableViewportIndices.begin(), availableViewportIndices.begin() + static_cast<std::ptrdiff_t>(consumed));
+            }
+        }
+        expandedSubmissions.reserve(expandedSubmissions.size() + auxSubmissions.size());
+        for (AuxFramePreparedSubmission& auxiliary : auxSubmissions) {
+            expandedSubmissions.push_back(SceneFrameSubmission{.scene = auxiliary.scene, .desc = std::move(auxiliary.desc)});
+        }
+    }
+    const std::span<const SceneFrameSubmission> submitList{expandedSubmissions};
+
     RenderFrameDesc frameDesc{};
     frameDesc.frameIndex = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL;
-    frameDesc.viewports.reserve(submissions.size());
-    for (std::size_t index = 0; index < submissions.size(); ++index) {
-        const SceneFrameSubmission& submission = submissions[index];
+    frameDesc.viewports.reserve(submitList.size());
+    for (std::size_t index = 0; index < submitList.size(); ++index) {
+        const SceneFrameSubmission& submission = submitList[index];
         if (!submission.IsValid()) {
             std::ostringstream message;
             message << "SubmitScenes invalid_submission index=" << index
@@ -538,11 +619,11 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
 
     WriteRendererBreadcrumb("renderer", "SubmitScenes BuildFramePlan begin");
     const RenderFramePlan plan = framePipeline_.Build(frameDesc);
-    if (!plan.Succeeded() || plan.viewports.size() != submissions.size()) {
+    if (!plan.Succeeded() || plan.viewports.size() != submitList.size()) {
         std::ostringstream message;
         message << "SubmitScenes BuildFramePlan failed succeeded=" << BoolText(plan.Succeeded())
                 << " planViewports=" << plan.viewports.size()
-                << " submissions=" << submissions.size();
+                << " submissions=" << submitList.size();
         WriteRendererBreadcrumb("renderer", message.str());
         return false;
     }
@@ -566,33 +647,41 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
     frameState_ = stagedFrameState;
     RendererViewConfigurator::ApplyViewOrder(frameState_.ViewOrder());
 
-    for (std::size_t index = 0; index < submissions.size(); ++index) {
+    for (std::size_t index = 0; index < submitList.size(); ++index) {
         {
             std::ostringstream message;
             message << "SubmitScenes SubmitSceneToViewport begin index=" << index
-                    << " viewportId=" << submissions[index].desc.target.viewport.id.value
-                    << " viewportIndex=" << submissions[index].desc.target.viewport.viewportIndex;
+                    << " viewportId=" << submitList[index].desc.target.viewport.id.value
+                    << " viewportIndex=" << submitList[index].desc.target.viewport.viewportIndex;
             WriteRendererBreadcrumb("renderer", message.str());
         }
-        if (!SubmitSceneToViewport(*submissions[index].scene, submissions[index].desc, plan.viewports[index])) {
+        if (!SubmitSceneToViewport(*submitList[index].scene, submitList[index].desc, plan.viewports[index])) {
             std::ostringstream message;
             message << "SubmitScenes SubmitSceneToViewport failed index=" << index
-                    << " viewportId=" << submissions[index].desc.target.viewport.id.value
-                    << " viewportIndex=" << submissions[index].desc.target.viewport.viewportIndex;
+                    << " viewportId=" << submitList[index].desc.target.viewport.id.value
+                    << " viewportIndex=" << submitList[index].desc.target.viewport.viewportIndex;
             WriteRendererBreadcrumb("renderer", message.str());
             return false;
         }
         {
             std::ostringstream message;
             message << "SubmitScenes SubmitSceneToViewport end index=" << index
-                    << " viewportId=" << submissions[index].desc.target.viewport.id.value
-                    << " viewportIndex=" << submissions[index].desc.target.viewport.viewportIndex;
+                    << " viewportId=" << submitList[index].desc.target.viewport.id.value
+                    << " viewportIndex=" << submitList[index].desc.target.viewport.viewportIndex;
             WriteRendererBreadcrumb("renderer", message.str());
         }
     }
+    // The conversion view belongs to the final-composite slot of its last
+    // cubemap face. Submit it only after frame-plan view ordering and all face
+    // submissions have been configured.
+    for (const AuxFramePanoramaConversion conversion : panoramaConversions) {
+        if (auxFrameRenderer_ == nullptr || !auxFrameRenderer_->SubmitPanoramaConversion(conversion)) {
+            return false;
+        }
+    }
     std::vector<const kb::scene::Scene*> submittedScenes;
-    submittedScenes.reserve(submissions.size());
-    for (const SceneFrameSubmission& submission : submissions) {
+    submittedScenes.reserve(submitList.size());
+    for (const SceneFrameSubmission& submission : submitList) {
         submittedScenes.push_back(submission.scene);
     }
     WriteRendererBreadcrumb("renderer", "SubmitScenes PruneUnused begin");
@@ -693,6 +782,11 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncMeshRendererUpdates end");
         }
     }
+    // History ribbons own transient samples in the render synchronizer. Full
+    // sync already advances them; this idempotent call also covers the normal
+    // transform/dirty-entity incremental path.
+    renderSceneSynchronizer_->AdvanceHistoryRibbons(scene, renderScene);
+    renderSceneSynchronizer_->SyncLensEchoes(scene, renderScene, desc.target.viewport.id.value);
     // LIB-143: injects one real MeshRenderProxyDesc per live particle (billboard quad,
     // camera-facing) into renderScene, BEFORE EnsureSceneResources below so those new
     // proxies' mesh/material get resolved this same frame - deliberately AFTER the ECS
@@ -1704,6 +1798,9 @@ bool Renderer::RuntimeAssetDiscoveryEnabled() const noexcept {
 
 void Renderer::ReleaseScene(const kb::scene::Scene& scene) noexcept {
     kb::scene::Scene& mutableScene = const_cast<kb::scene::Scene&>(scene);
+    if (auxFrameRenderer_ != nullptr) {
+        auxFrameRenderer_->ReleaseScene(scene.Id(), sceneRenderer_.get());
+    }
     screenCapture_->ReleaseScene(mutableScene);
     particleRenderSynchronizer_->ReleaseScene(scene.Id());
     kb::scene::SceneRenderFeedback::Clear(mutableScene);
@@ -1713,6 +1810,9 @@ void Renderer::ReleaseScene(const kb::scene::Scene& scene) noexcept {
 }
 
 void Renderer::ReleaseAllScenes() noexcept {
+    if (auxFrameRenderer_ != nullptr) {
+        auxFrameRenderer_->Shutdown(sceneRenderer_.get());
+    }
     screenCapture_->Shutdown();
     particleRenderSynchronizer_->Clear();
     renderSceneStore_.ReleaseAll();

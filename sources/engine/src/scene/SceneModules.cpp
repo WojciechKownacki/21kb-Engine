@@ -16,6 +16,7 @@
 #include "engine/scene/SceneParticleSystems.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
 #include "engine/scene/SceneTasks.hpp"
 #include "engine/scene/SceneTimelines.hpp"
 #include "engine/scene/SceneTimers.hpp"
@@ -98,6 +99,14 @@ SceneTimers Scene::Timers() noexcept {
 
 SceneTasks Scene::Tasks() noexcept {
     return SceneTasks{ *this };
+}
+
+SceneTagCatalog Scene::Tags() noexcept {
+    return SceneTagCatalog{ *this };
+}
+
+SceneTagCatalogQueries Scene::Tags() const noexcept {
+    return SceneTagCatalogQueries{ *this };
 }
 
 SceneMaterialInstances Scene::MaterialInstances() noexcept {
