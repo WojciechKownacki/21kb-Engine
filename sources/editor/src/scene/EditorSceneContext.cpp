@@ -1176,6 +1176,7 @@ EditorSceneContext::EditorSceneContext()
     , project_(projectBootstrap_.succeeded ? projectBootstrap_.descriptor : kb::project::ProjectDescriptor{})
     , projectFile_(projectBootstrap_.succeeded ? projectBootstrap_.projectFile : EditorProjectPaths::ProjectFile())
     , scene_(std::make_unique<kb::scene::Scene>(project_))
+    , inspectorMaterialPreviewScene_(std::make_unique<EditorMaterialPreviewScene>())
     , materialPreviewScene_(std::make_unique<EditorMaterialPreviewScene>())
     , graphShaderCacheRoot_((EditorProjectPaths::ProjectRoot() / ".cache" / "graph_shaders").generic_string())
     , materialGraphCookService_(std::make_unique<EditorMaterialGraphCookService>(EditorMaterialGraphCookConfig::Resolve(graphShaderCacheRoot_))) {
@@ -3438,12 +3439,19 @@ std::optional<kb::render::RenderMaterialAssetData> EditorSceneContext::ReadMater
     return ReadEffectiveMaterialAsset(id);
 }
 
-const kb::scene::Scene& EditorSceneContext::MaterialPreviewScene(kb::assets::AssetId id) {
+const kb::scene::Scene& EditorSceneContext::MaterialPreviewScene(
+    kb::assets::AssetId id,
+    EditorMaterialPreviewSurface surface) {
+    EditorMaterialPreviewScene& previewOwner = surface == EditorMaterialPreviewSurface::Inspector
+        ? *inspectorMaterialPreviewScene_
+        : *materialPreviewScene_;
+    const bool nodePreviewEnabled = surface == EditorMaterialPreviewSurface::MaterialEditor &&
+        materialPreviewNodePreviewEnabled_;
     const kb::render::RenderMaterialAssetData* workingCopy = nullptr;
     if (materialEditor_.OpenAssetId() == id && materialEditor_.WorkingCopy().has_value()) {
         workingCopy = &*materialEditor_.WorkingCopy();
         materialNodePreviewWorkingCopy_.reset();
-        if (materialPreviewNodePreviewEnabled_) {
+        if (nodePreviewEnabled) {
             materialNodePreviewWorkingCopy_ =
                 EditorMaterialNodePreviewBuilder::Build(*materialEditor_.WorkingCopy(), materialEditor_.SelectedNodeId());
             if (materialNodePreviewWorkingCopy_.has_value()) {
@@ -3454,7 +3462,7 @@ const kb::scene::Scene& EditorSceneContext::MaterialPreviewScene(kb::assets::Ass
         materialNodePreviewWorkingCopy_.reset();
     }
     const kb::render::RenderMaterialGraphVariantUsage usage =
-        materialPreviewNodePreviewEnabled_ && materialNodePreviewWorkingCopy_.has_value()
+        nodePreviewEnabled && materialNodePreviewWorkingCopy_.has_value()
         ? kb::render::RenderMaterialGraphVariantUsage::NodePreview
         : kb::render::RenderMaterialGraphVariantUsage::Preview;
     // Cheap "did anything feeding the preview change?" key so SceneFor can skip the full content-hash recompute
@@ -3467,15 +3475,15 @@ const kb::scene::Scene& EditorSceneContext::MaterialPreviewScene(kb::assets::Ass
     std::uint64_t previewInputRevision = mixRevision(0x21B7C0DEULL, scene_->Assets().Manager().Registry().Generation());
     if (workingCopy != nullptr) {
         previewInputRevision = mixRevision(previewInputRevision, materialEditor_.DocumentRevision());
-        if (materialPreviewNodePreviewEnabled_ && materialNodePreviewWorkingCopy_.has_value()) {
+        if (nodePreviewEnabled && materialNodePreviewWorkingCopy_.has_value()) {
             previewInputRevision = mixRevision(previewInputRevision, static_cast<std::uint64_t>(materialEditor_.SelectedNodeId()) + 1U);
             previewInputRevision = mixRevision(previewInputRevision, static_cast<std::uint64_t>(usage));
         }
     }
-    const std::uint64_t revisionBefore = materialPreviewScene_->Revision();
+    const std::uint64_t revisionBefore = previewOwner.Revision();
     const auto resolveStart = std::chrono::steady_clock::now();
-    const kb::scene::Scene& previewScene = materialPreviewScene_->SceneFor(*scene_, id, workingCopy, previewInputRevision);
-    const bool previewRebuilt = materialPreviewScene_->Revision() != revisionBefore;
+    const kb::scene::Scene& previewScene = previewOwner.SceneFor(*scene_, id, workingCopy, previewInputRevision);
+    const bool previewRebuilt = previewOwner.Revision() != revisionBefore;
     if (previewRebuilt) {
         // [perf] One-shot log: only fires when the preview scene actually rebuilds (i.e. after an edit), never
         // on a steady frame. This is the synchronous resolve/flatten cost of reflecting a graph edit.
@@ -3488,7 +3496,7 @@ const kb::scene::Scene& EditorSceneContext::MaterialPreviewScene(kb::assets::Ass
         static_cast<void>(materialGraphCookService_->RequestCook(
             id,
             *workingCopy,
-            MaterialPreviewGraphBuildContext(id, materialPreviewScene_->SceneSettings(), usage)));
+            MaterialPreviewGraphBuildContext(id, previewOwner.SceneSettings(), usage)));
     }
     return previewScene;
 }
@@ -3502,7 +3510,9 @@ const EditorMaterialPreviewPrimitivePolicy& EditorSceneContext::MaterialPreviewP
 }
 
 bool EditorSceneContext::SetMaterialPreviewPrimitivePolicy(EditorMaterialPreviewPrimitivePolicy policy) {
-    const bool changed = materialPreviewScene_->SetPrimitivePolicy(policy);
+    const bool editorChanged = materialPreviewScene_->SetPrimitivePolicy(policy);
+    const bool inspectorChanged = inspectorMaterialPreviewScene_->SetPrimitivePolicy(policy);
+    const bool changed = editorChanged || inspectorChanged;
     if (changed) {
         MarkSceneRenderDirty();
     }
@@ -3584,7 +3594,9 @@ const EditorMaterialPreviewSceneSettings& EditorSceneContext::MaterialPreviewSce
 }
 
 bool EditorSceneContext::SetMaterialPreviewSceneSettings(EditorMaterialPreviewSceneSettings settings) {
-    const bool changed = materialPreviewScene_->SetSceneSettings(settings);
+    const bool editorChanged = materialPreviewScene_->SetSceneSettings(settings);
+    const bool inspectorChanged = inspectorMaterialPreviewScene_->SetSceneSettings(settings);
+    const bool changed = editorChanged || inspectorChanged;
     if (changed) {
         if (materialGraphCookService_ != nullptr && materialEditor_.OpenAssetId().IsValid() && materialEditor_.WorkingCopy().has_value()) {
             const kb::assets::AssetId openAsset = materialEditor_.OpenAssetId();
@@ -3602,10 +3614,12 @@ bool EditorSceneContext::OrbitMaterialPreviewCamera(float deltaYawDegrees, float
     const EditorMaterialPreviewSceneSettings current = materialPreviewScene_->SceneSettings();
     // A pure camera move: no cook, no scene rebuild - just the next present. That is why it goes through the
     // scene's camera-only path rather than SetMaterialPreviewSceneSettings (which re-cooks the shader).
-    if (!materialPreviewScene_->SetCameraOrbit(
-            current.orbitYawDegrees + deltaYawDegrees,
-            current.orbitPitchDegrees + deltaPitchDegrees,
-            current.cameraDistance)) {
+    const float yaw = current.orbitYawDegrees + deltaYawDegrees;
+    const float pitch = current.orbitPitchDegrees + deltaPitchDegrees;
+    const bool editorChanged = materialPreviewScene_->SetCameraOrbit(yaw, pitch, current.cameraDistance);
+    const bool inspectorChanged = inspectorMaterialPreviewScene_->SetCameraOrbit(yaw, pitch, current.cameraDistance);
+    const bool changed = editorChanged || inspectorChanged;
+    if (!changed) {
         return false;
     }
     // No MarkSceneRenderDirty(): that re-syncs the main scene to the GPU, and the preview repaints every
@@ -3615,10 +3629,13 @@ bool EditorSceneContext::OrbitMaterialPreviewCamera(float deltaYawDegrees, float
 
 bool EditorSceneContext::ZoomMaterialPreviewCamera(float scale) {
     const EditorMaterialPreviewSceneSettings current = materialPreviewScene_->SceneSettings();
-    if (!materialPreviewScene_->SetCameraOrbit(
-            current.orbitYawDegrees,
-            current.orbitPitchDegrees,
-            current.cameraDistance * scale)) {
+    const float distance = current.cameraDistance * scale;
+    const bool editorChanged = materialPreviewScene_->SetCameraOrbit(
+        current.orbitYawDegrees, current.orbitPitchDegrees, distance);
+    const bool inspectorChanged = inspectorMaterialPreviewScene_->SetCameraOrbit(
+        current.orbitYawDegrees, current.orbitPitchDegrees, distance);
+    const bool changed = editorChanged || inspectorChanged;
+    if (!changed) {
         return false;
     }
     return true;
@@ -3677,8 +3694,10 @@ bool EditorSceneContext::ToggleMaterialPreviewNormalDebugView() {
     return SetMaterialPreviewNormalDebugViewEnabled(!MaterialPreviewNormalDebugViewEnabled());
 }
 
-std::uint64_t EditorSceneContext::MaterialPreviewRevision() const noexcept {
-    return materialPreviewScene_->Revision();
+std::uint64_t EditorSceneContext::MaterialPreviewRevision(EditorMaterialPreviewSurface surface) const noexcept {
+    return surface == EditorMaterialPreviewSurface::Inspector
+        ? inspectorMaterialPreviewScene_->Revision()
+        : materialPreviewScene_->Revision();
 }
 
 const std::string& EditorSceneContext::GraphShaderCacheRoot() const noexcept {

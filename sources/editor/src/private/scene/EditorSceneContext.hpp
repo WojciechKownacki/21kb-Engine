@@ -93,6 +93,11 @@ class EditorMaterialGraphCookService;
 struct EditorMaterialGraphCookResult;
 struct EditorTerrainConfiguration;
 
+enum class EditorMaterialPreviewSurface : std::uint8_t {
+    Inspector,
+    MaterialEditor,
+};
+
 enum class EditorDirtySceneResolution {
     Save,
     Discard,
@@ -400,7 +405,9 @@ public:
     [[nodiscard]] std::optional<kb::render::RenderMaterialInstanceAssetData> ReadMaterialInstanceAsset(kb::assets::AssetId id) const;
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadEffectiveMaterialAsset(kb::assets::AssetId id) const;
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadMaterialDocumentAsset(kb::assets::AssetId id) const;
-    [[nodiscard]] const kb::scene::Scene& MaterialPreviewScene(kb::assets::AssetId id);
+    [[nodiscard]] const kb::scene::Scene& MaterialPreviewScene(
+        kb::assets::AssetId id,
+        EditorMaterialPreviewSurface surface = EditorMaterialPreviewSurface::MaterialEditor);
     [[nodiscard]] const EditorMaterialPreviewTelemetry& MaterialPreviewTelemetry() const noexcept;
     [[nodiscard]] const EditorMaterialPreviewPrimitivePolicy& MaterialPreviewPrimitivePolicy() const noexcept;
     [[nodiscard]] bool SetMaterialPreviewPrimitivePolicy(EditorMaterialPreviewPrimitivePolicy policy);
@@ -434,7 +441,8 @@ public:
     // Apply freshly cooked graph programs to live render state (hot reload + status); returns the
     // number of completed cooks consumed this call (MAT-32/33).
     std::size_t PumpMaterialGraphCookResults();
-    [[nodiscard]] std::uint64_t MaterialPreviewRevision() const noexcept;
+    [[nodiscard]] std::uint64_t MaterialPreviewRevision(
+        EditorMaterialPreviewSurface surface = EditorMaterialPreviewSurface::MaterialEditor) const noexcept;
     [[nodiscard]] std::uint32_t SelectedMaterialGraphNodeId() const noexcept;
     [[nodiscard]] const std::vector<std::uint32_t>& SelectedMaterialGraphNodeIds() const noexcept;
     [[nodiscard]] bool IsMaterialGraphNodeSelected(std::uint32_t nodeId) const noexcept;
@@ -925,10 +933,13 @@ private:
     EditorPluginsState plugins_;
     EditorScriptEditorState scriptEditor_;
     bool physicsGizmosVisible_ = true;
+    // Inspector and Material Editor can display different assets in the same paint batch. Each queued
+    // viewport keeps a raw Scene pointer until EndPaintLayout(), so sharing one mutable preview scene here
+    // would let the second surface destroy the first surface's queued Scene (use-after-free).
+    std::unique_ptr<EditorMaterialPreviewScene> inspectorMaterialPreviewScene_;
     std::unique_ptr<EditorMaterialPreviewScene> materialPreviewScene_;
-    // Thumbnails own a separate preview scene: the shared one is submitted by the Inspector and Material
-    // Editor surfaces too, so a capture attached to it could grab their frame instead - and rebuilding it
-    // per thumbnail would swap the material out from under those panels.
+    // Thumbnails own a third preview scene so their asynchronous capture channel and per-asset rebuilds
+    // cannot alter either visible preview surface.
     std::unique_ptr<EditorMaterialPreviewScene> materialThumbnailScene_;
     std::string graphShaderCacheRoot_;
     std::unique_ptr<EditorMaterialGraphCookService> materialGraphCookService_;
