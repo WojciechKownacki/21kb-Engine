@@ -408,6 +408,7 @@ enum class InspectorPropertyId : std::uint16_t {
     TerrainMaterialLayerPicker1,
     TerrainMaterialLayerPicker2,
     TerrainMaterialLayerPicker3,
+    TerrainMaterialLayerCreate,
     TerrainMaterialLayerAdd,
     TerrainMaterialLayerRemove,
     TerrainAdvanced,
