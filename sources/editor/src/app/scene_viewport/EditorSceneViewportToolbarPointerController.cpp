@@ -4,6 +4,9 @@
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "scene/EditorTerrainService.hpp"
+
+#include <algorithm>
 
 namespace kb::editor {
 namespace {
@@ -41,6 +44,127 @@ namespace {
     return false;
 }
 
+[[nodiscard]] bool HandleTerrainTools(
+    EditorSceneContext& sceneContext,
+    const TerrainViewportToolbarRects& toolbar,
+    int x,
+    int y) {
+    const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
+    if (!sceneContext.IsProjectPluginEnabled("Editor.Terrain") ||
+        !EditorTerrainService::IsTerrainEntity(sceneContext.Scene(), selected)) {
+        return false;
+    }
+    EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+    const auto selectBrush = [&tool](std::size_t index) {
+        tool.brush.mode = static_cast<kb::terrain_editor::TerrainBrushMode>(index);
+        const bool holes =
+            tool.brush.mode == kb::terrain_editor::TerrainBrushMode::CutHole ||
+            tool.brush.mode == kb::terrain_editor::TerrainBrushMode::FillHole;
+        tool.mode = holes ? EditorTerrainToolMode::Holes : EditorTerrainToolMode::Sculpt;
+        tool.editingEnabled = true;
+        tool.brushMenuOpen = false;
+        tool.brushShapeMenuOpen = false;
+    };
+    if (PointInRect(toolbar.selectButton, x, y)) {
+        tool.mode = EditorTerrainToolMode::Select;
+        tool.editingEnabled = false;
+        tool.strokeActive = false;
+        tool.hoverVisible = false;
+        tool.brushMenuOpen = false;
+        tool.brushShapeMenuOpen = false;
+        return true;
+    }
+    if (PointInRect(toolbar.sculptButton, x, y)) {
+        tool.mode = EditorTerrainToolMode::Sculpt;
+        tool.editingEnabled = true;
+        if (tool.brush.mode == kb::terrain_editor::TerrainBrushMode::CutHole ||
+            tool.brush.mode == kb::terrain_editor::TerrainBrushMode::FillHole) {
+            tool.brush.mode = kb::terrain_editor::TerrainBrushMode::Raise;
+        }
+        tool.brushMenuOpen = false;
+        tool.brushShapeMenuOpen = false;
+        return true;
+    }
+    if (PointInRect(toolbar.holesButton, x, y)) {
+        tool.mode = EditorTerrainToolMode::Holes;
+        tool.editingEnabled = true;
+        if (tool.brush.mode != kb::terrain_editor::TerrainBrushMode::CutHole &&
+            tool.brush.mode != kb::terrain_editor::TerrainBrushMode::FillHole) {
+            tool.brush.mode = kb::terrain_editor::TerrainBrushMode::CutHole;
+        }
+        tool.brushMenuOpen = false;
+        tool.brushShapeMenuOpen = false;
+        return true;
+    }
+    if (PointInRect(toolbar.paintButton, x, y)) {
+        const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(selected);
+        if (terrain == nullptr || terrain->materialLayers.empty()) {
+            sceneContext.Console().Warning("Terrain", "Add a material layer in the Inspector before painting.");
+            return true;
+        }
+        tool.selectedMaterialLayer = std::min<std::uint8_t>(
+            tool.selectedMaterialLayer,
+            static_cast<std::uint8_t>(terrain->materialLayers.size() - 1U));
+        tool.mode = EditorTerrainToolMode::Paint;
+        tool.editingEnabled = true;
+        tool.brush.strength = std::min(tool.brush.strength, 1.0F);
+        tool.brushMenuOpen = false;
+        tool.brushShapeMenuOpen = false;
+        return true;
+    }
+    if (PointInRect(toolbar.brushButton, x, y)) {
+        if (tool.mode == EditorTerrainToolMode::Paint) return true;
+        tool.brushMenuOpen = !tool.brushMenuOpen;
+        tool.brushShapeMenuOpen = false;
+        return true;
+    }
+    if (PointInRect(toolbar.brushShapeButton, x, y)) {
+        tool.brushShapeMenuOpen = !tool.brushShapeMenuOpen;
+        tool.brushMenuOpen = false;
+        return true;
+    }
+    if (tool.brushMenuOpen) {
+        for (std::size_t index = 0U; index < toolbar.brushItems.size(); ++index) {
+            if (PointInRect(toolbar.brushItems[index], x, y)) {
+                selectBrush(index);
+                return true;
+            }
+        }
+        if (PointInRect(toolbar.brushMenu, x, y)) return true;
+        tool.brushMenuOpen = false;
+        return true;
+    }
+    if (tool.brushShapeMenuOpen) {
+        for (std::size_t index = 0U; index < toolbar.brushShapeItems.size(); ++index) {
+            if (!PointInRect(toolbar.brushShapeItems[index], x, y)) continue;
+            tool.brush.shape = static_cast<kb::terrain_editor::TerrainBrushShape>(index);
+            tool.brushShapeMenuOpen = false;
+            return true;
+        }
+        if (PointInRect(toolbar.brushShapeMenu, x, y)) return true;
+        tool.brushShapeMenuOpen = false;
+        return true;
+    }
+    if (PointInRect(toolbar.sizeMinusButton, x, y)) {
+        tool.brush.radius = std::max(0.25F, tool.brush.radius * 0.8F);
+        return true;
+    }
+    if (PointInRect(toolbar.sizePlusButton, x, y)) {
+        tool.brush.radius = std::min(100'000.0F, tool.brush.radius * 1.25F);
+        return true;
+    }
+    if (PointInRect(toolbar.strengthMinusButton, x, y)) {
+        tool.brush.strength = std::max(0.0F, tool.brush.strength - 0.25F);
+        return true;
+    }
+    if (PointInRect(toolbar.strengthPlusButton, x, y)) {
+        const float maximum = tool.mode == EditorTerrainToolMode::Paint ? 1.0F : 100'000.0F;
+        tool.brush.strength = std::min(maximum, tool.brush.strength + 0.25F);
+        return true;
+    }
+    return PointInRect(toolbar.panel, x, y);
+}
+
 } // namespace
 
 EditorSceneViewportToolbarPointerController::EditorSceneViewportToolbarPointerController(EditorSceneContext& sceneContext, EditorSceneBgfxViewport& sceneViewport) noexcept
@@ -50,6 +174,12 @@ EditorSceneViewportToolbarPointerController::EditorSceneViewportToolbarPointerCo
 bool EditorSceneViewportToolbarPointerController::HandlePointerDown(const EditorResolvedPanelContent& panelContent, int x, int y) {
     EditorViewportPreviewState& preview = sceneContext_.ViewportPreview(panelContent.panelId);
     const SceneViewportToolbarRects toolbar = SceneViewportToolbarRenderer::Resolve(panelContent.content, preview);
+    if (HandleTerrainTools(
+            sceneContext_, SceneViewportToolbarRenderer::ResolveTerrainTools(panelContent.content), x, y)) {
+        preview.CloseToolbarDropdown();
+        sceneViewport_.RequestPresent();
+        return true;
+    }
     if (SelectDropdownValue(preview, toolbar, x, y)) {
         sceneViewport_.RequestPresent();
         return true;

@@ -103,6 +103,9 @@ scenario-local aliases.
 | `instantiate_prefab` | result `id`, project-relative `path`, `virtual_path`; optional `parent` or complete `x`,`y`,`z`, and optional `name` |
 | `select_entity` | `entity` |
   | `add_component` | `entity`, `component` |
+  | `terrain_stamp` | Terrain `entity`, local `x`, `z`; optional `radius`, `strength`, `falloff`, `pressure`; commits one production Undo/Redo stroke |
+  | `assert_terrain_height` | Terrain `entity`, local `x`, `z`, expected `value`; optional `tolerance` |
+  | `configure_terrain`, `assert_terrain_configuration` | Terrain `entity`, `width`, `height`, `chunk_quads`, `lod_count`, `world_size_x`, `world_size_z`; configuration resamples through the production Undo/Redo path |
   | `set_animator_root_motion_owner`, `assert_animator_root_motion_owner` | Animator `entity`, owner: `none`, `animator`, `character_controller`, or `rigidbody`; setter uses the production Inspector command and rejects incompatible ownership |
   | `set_property`, `assert_property` | `entity`, `component`, `property`, `value`; assertion optionally `tolerance` |
 | `assert_entity` | `entity`; optional `exists` |

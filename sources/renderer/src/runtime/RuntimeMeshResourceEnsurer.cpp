@@ -12,6 +12,7 @@
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 
+#include <algorithm>
 #include <vector>
 
 namespace kb::render {
@@ -131,24 +132,125 @@ void RuntimeMeshResourceEnsurer::Ensure(
             return;
         }
 
-        if (cacheIt != meshes.end() && cacheIt->second.contentHash == metadata->contentHash && context.sceneRenderer.Resources().ContainsMesh(cacheIt->second.handle)) {
+        if (cacheIt != meshes.end() && !cacheIt->second.dynamicVertexUpdates &&
+            cacheIt->second.contentHash == metadata->contentHash &&
+            context.sceneRenderer.Resources().ContainsMesh(cacheIt->second.handle)) {
             RuntimeMeshResource& cached = cacheIt->second;
             cached.lastReferencedFrame = context.currentFrame;
             context.sceneRenderer.ResourceMap().BindMesh(meshAssetId, cached.handle);
             return;
         }
 
+        const MeshRef asset = manager.Load<RenderMeshAssetData>(assetId);
+        if (!asset.IsLoaded()) {
+            if (cacheIt != meshes.end()) {
+                context.sceneRenderer.ResourceMap().UnbindMeshHandle(cacheIt->second.handle);
+                context.sceneRenderer.Resources().DestroyMesh(cacheIt->second.handle);
+                meshes.erase(cacheIt);
+            } else {
+                context.sceneRenderer.ResourceMap().UnbindMesh(meshAssetId);
+            }
+            return;
+        }
+
+        if (cacheIt != meshes.end() && cacheIt->second.dynamicVertexUpdates &&
+            asset->dynamicVertexUpdates && asset->dynamicTopologyKey != 0U &&
+            cacheIt->second.dynamicTopologyKey == asset->dynamicTopologyKey &&
+            cacheIt->second.dynamicVertexUpdateCount <= asset->dynamicVertexUpdateRanges.size() &&
+            cacheIt->second.dynamicSectionUpdateCount <= asset->dynamicSectionUpdateIndices.size() &&
+            cacheIt->second.dynamicTerrainLayerWeightUpdateCount <= asset->dynamicTerrainLayerWeightUpdates.size() &&
+            context.sceneRenderer.Resources().ContainsMesh(cacheIt->second.handle)) {
+            if (cacheIt->second.dynamicVertexUpdateCount == asset->dynamicVertexUpdateRanges.size() &&
+                cacheIt->second.dynamicSectionUpdateCount == asset->dynamicSectionUpdateIndices.size() &&
+                cacheIt->second.dynamicTerrainLayerWeightUpdateCount == asset->dynamicTerrainLayerWeightUpdates.size()) {
+                cacheIt->second.contentHash = metadata->contentHash;
+                cacheIt->second.lastReferencedFrame = context.currentFrame;
+                context.sceneRenderer.ResourceMap().BindMesh(meshAssetId, cacheIt->second.handle);
+                return;
+            }
+            std::vector<RenderMeshVertexUpdateRange> pendingUpdates{
+                asset->dynamicVertexUpdateRanges.begin() + static_cast<std::ptrdiff_t>(cacheIt->second.dynamicVertexUpdateCount),
+                asset->dynamicVertexUpdateRanges.end(),
+            };
+            std::ranges::sort(pendingUpdates, {}, &RenderMeshVertexUpdateRange::firstVertex);
+            std::size_t mergedCount = 0U;
+            for (const RenderMeshVertexUpdateRange& update : pendingUpdates) {
+                if (update.vertexCount == 0U) continue;
+                if (mergedCount == 0U) {
+                    pendingUpdates[mergedCount++] = update;
+                    continue;
+                }
+                RenderMeshVertexUpdateRange& previous = pendingUpdates[mergedCount - 1U];
+                const std::uint32_t previousEnd = previous.firstVertex + previous.vertexCount;
+                const std::uint32_t updateEnd = update.firstVertex + update.vertexCount;
+                if (update.firstVertex <= previousEnd) {
+                    previous.vertexCount = std::max(previousEnd, updateEnd) - previous.firstVertex;
+                } else {
+                    pendingUpdates[mergedCount++] = update;
+                }
+            }
+            bool updated = true;
+            for (std::size_t updateIndex = 0U; updateIndex < mergedCount; ++updateIndex) {
+                const RenderMeshVertexUpdateRange& update = pendingUpdates[updateIndex];
+                if (!context.sceneRenderer.Resources().UpdateMeshVertices(
+                        cacheIt->second.handle,
+                        asset->desc,
+                        update.firstVertex,
+                        update.vertexCount)) {
+                    updated = false;
+                    break;
+                }
+            }
+            std::vector<std::uint32_t> dirtySections{
+                asset->dynamicSectionUpdateIndices.begin() + static_cast<std::ptrdiff_t>(cacheIt->second.dynamicSectionUpdateCount),
+                asset->dynamicSectionUpdateIndices.end(),
+            };
+            std::ranges::sort(dirtySections);
+            dirtySections.erase(std::unique(dirtySections.begin(), dirtySections.end()), dirtySections.end());
+            if (!dirtySections.empty()) {
+                updated = updated && context.sceneRenderer.Resources().UpdateMeshGeometryMetadata(
+                    cacheIt->second.handle, asset->desc, dirtySections);
+            }
+            if (updated && cacheIt->second.dynamicTerrainLayerWeightUpdateCount <
+                    asset->dynamicTerrainLayerWeightUpdates.size()) {
+                RenderTerrainLayerWeightUpdateRegion merged =
+                    asset->dynamicTerrainLayerWeightUpdates[cacheIt->second.dynamicTerrainLayerWeightUpdateCount];
+                std::uint32_t minX = merged.x;
+                std::uint32_t minY = merged.y;
+                std::uint32_t maxX = static_cast<std::uint32_t>(merged.x) + merged.width;
+                std::uint32_t maxY = static_cast<std::uint32_t>(merged.y) + merged.height;
+                for (std::size_t updateIndex = cacheIt->second.dynamicTerrainLayerWeightUpdateCount + 1U;
+                     updateIndex < asset->dynamicTerrainLayerWeightUpdates.size(); ++updateIndex) {
+                    const RenderTerrainLayerWeightUpdateRegion& update =
+                        asset->dynamicTerrainLayerWeightUpdates[updateIndex];
+                    minX = std::min<std::uint32_t>(minX, update.x);
+                    minY = std::min<std::uint32_t>(minY, update.y);
+                    maxX = std::max<std::uint32_t>(maxX, static_cast<std::uint32_t>(update.x) + update.width);
+                    maxY = std::max<std::uint32_t>(maxY, static_cast<std::uint32_t>(update.y) + update.height);
+                }
+                updated = context.sceneRenderer.Resources().UpdateMeshTerrainLayerWeights(
+                    cacheIt->second.handle,
+                    asset->desc,
+                    static_cast<std::uint16_t>(minX),
+                    static_cast<std::uint16_t>(minY),
+                    static_cast<std::uint16_t>(maxX - minX),
+                    static_cast<std::uint16_t>(maxY - minY));
+            }
+            if (updated) {
+                cacheIt->second.contentHash = metadata->contentHash;
+                cacheIt->second.dynamicVertexUpdateCount = asset->dynamicVertexUpdateRanges.size();
+                cacheIt->second.dynamicSectionUpdateCount = asset->dynamicSectionUpdateIndices.size();
+                cacheIt->second.dynamicTerrainLayerWeightUpdateCount = asset->dynamicTerrainLayerWeightUpdates.size();
+                cacheIt->second.lastReferencedFrame = context.currentFrame;
+                context.sceneRenderer.ResourceMap().BindMesh(meshAssetId, cacheIt->second.handle);
+                return;
+            }
+        }
+
         if (cacheIt != meshes.end()) {
             context.sceneRenderer.ResourceMap().UnbindMeshHandle(cacheIt->second.handle);
             context.sceneRenderer.Resources().DestroyMesh(cacheIt->second.handle);
-            static_cast<void>(manager.Unload(assetId));
             meshes.erase(cacheIt);
-        }
-
-        const MeshRef asset = manager.Load<RenderMeshAssetData>(assetId);
-        if (!asset.IsLoaded()) {
-            context.sceneRenderer.ResourceMap().UnbindMesh(meshAssetId);
-            return;
         }
 
         std::vector<RenderMaterialSlotDesc> materialSlots = asset->materialSlots;
@@ -218,7 +320,12 @@ void RuntimeMeshResourceEnsurer::Ensure(
         meshes[runtimeKey] = RuntimeMeshResource{
             .handle = handle,
             .contentHash = metadata->contentHash,
+            .dynamicTopologyKey = asset->dynamicTopologyKey,
+            .dynamicVertexUpdateCount = asset->dynamicVertexUpdateRanges.size(),
+            .dynamicSectionUpdateCount = asset->dynamicSectionUpdateIndices.size(),
+            .dynamicTerrainLayerWeightUpdateCount = asset->dynamicTerrainLayerWeightUpdates.size(),
             .lastReferencedFrame = context.currentFrame,
+            .dynamicVertexUpdates = asset->dynamicVertexUpdates,
         };
         context.sceneRenderer.ResourceMap().BindMesh(meshAssetId, handle);
     };

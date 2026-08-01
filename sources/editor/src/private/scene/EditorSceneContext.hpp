@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/assets/AssetImportTypes.hpp"
+#include "engine/assets/TerrainAsset.hpp"
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
@@ -31,6 +32,7 @@
 #include "inspection/InspectorPanelState.hpp"
 #include "app/EditorPlayModeSceneSession.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "rendering/material_graph/MaterialGraphInteractionPolicy.hpp"
 
 #include <array>
@@ -68,6 +70,15 @@ class ScriptModule;
 
 } // namespace kb::script
 
+namespace kb::terrain_editor {
+
+struct TerrainBrushSettings;
+struct TerrainBrushStamp;
+struct TerrainHeightmapImportSettings;
+struct TerrainLayerPaintSettings;
+
+} // namespace kb::terrain_editor
+
 namespace kb::editor {
 
 enum class PhysicsComponentKind; // inspection/InspectorPhysicsModel.hpp
@@ -80,6 +91,12 @@ class EditorMaterialPreviewScene;
 struct EditorMaterialPreviewTelemetry;
 class EditorMaterialGraphCookService;
 struct EditorMaterialGraphCookResult;
+struct EditorTerrainConfiguration;
+
+enum class EditorMaterialPreviewSurface : std::uint8_t {
+    Inspector,
+    MaterialEditor,
+};
 
 enum class EditorDirtySceneResolution {
     Save,
@@ -110,6 +127,23 @@ enum class MaterialGraphSelectionOperation : std::uint8_t {
 }
 
 class EditorSceneContext {
+    struct TerrainStrokeState {
+        kb::scene::SceneEntity entity{};
+        kb::assets::AssetId assetId{};
+        kb::assets::TerrainAsset before{};
+        kb::assets::TerrainAsset working{};
+        std::shared_ptr<kb::render::RenderMeshAssetData> previewMesh{};
+        bool changed = false;
+        bool previewPublished = false;
+        std::string label = "Sculpt Terrain";
+    };
+
+    struct TerrainReadCache {
+        kb::assets::AssetId assetId{};
+        std::uint64_t contentHash = 0U;
+        kb::assets::TerrainAsset terrain{};
+    };
+
     struct MaterialGraphDragNodeStart {
         std::uint32_t nodeId = 0U;
         std::int32_t positionX = 0;
@@ -213,6 +247,45 @@ public:
     [[nodiscard]] bool CommitSceneEditTransaction();
     void CancelSceneEditTransaction();
     [[nodiscard]] bool HasPendingSceneEditTransaction() const noexcept;
+    [[nodiscard]] const kb::assets::TerrainAsset* TerrainForEditing(
+        kb::scene::SceneEntity entity,
+        std::string* error = nullptr);
+    [[nodiscard]] bool ApplyTerrainBrushStamp(
+        kb::scene::SceneEntity entity,
+        const kb::terrain_editor::TerrainBrushSettings& settings,
+        const kb::terrain_editor::TerrainBrushStamp& stamp,
+        bool beginStroke,
+        std::string* error = nullptr);
+    [[nodiscard]] bool ApplyTerrainLayerPaintStamp(
+        kb::scene::SceneEntity entity,
+        const kb::terrain_editor::TerrainLayerPaintSettings& settings,
+        const kb::terrain_editor::TerrainBrushStamp& stamp,
+        bool beginStroke,
+        std::string* error = nullptr);
+    [[nodiscard]] bool AddTerrainMaterialLayer(
+        kb::scene::SceneEntity entity,
+        kb::assets::AssetId materialAssetId,
+        std::string* error = nullptr);
+    [[nodiscard]] bool SetTerrainMaterialLayer(
+        kb::scene::SceneEntity entity,
+        std::uint8_t layerIndex,
+        kb::assets::AssetId materialAssetId,
+        std::string* error = nullptr);
+    [[nodiscard]] bool RemoveTerrainMaterialLayer(
+        kb::scene::SceneEntity entity,
+        std::uint8_t layerIndex,
+        std::string* error = nullptr);
+    [[nodiscard]] bool CommitTerrainBrushStroke(std::string* error = nullptr);
+    void CancelTerrainBrushStroke() noexcept;
+    [[nodiscard]] bool ImportTerrainHeightmap(
+        kb::scene::SceneEntity entity,
+        const std::filesystem::path& path,
+        const kb::terrain_editor::TerrainHeightmapImportSettings& settings,
+        std::string* error = nullptr);
+    [[nodiscard]] bool ConfigureTerrain(
+        kb::scene::SceneEntity entity,
+        const EditorTerrainConfiguration& configuration,
+        std::string* error = nullptr);
 
     [[nodiscard]] kb::scene::SceneEntity SelectedEntity() const noexcept;
     [[nodiscard]] const std::vector<kb::scene::SceneEntity>& SelectedHierarchyEntities() const noexcept;
@@ -332,7 +405,9 @@ public:
     [[nodiscard]] std::optional<kb::render::RenderMaterialInstanceAssetData> ReadMaterialInstanceAsset(kb::assets::AssetId id) const;
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadEffectiveMaterialAsset(kb::assets::AssetId id) const;
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadMaterialDocumentAsset(kb::assets::AssetId id) const;
-    [[nodiscard]] const kb::scene::Scene& MaterialPreviewScene(kb::assets::AssetId id);
+    [[nodiscard]] const kb::scene::Scene& MaterialPreviewScene(
+        kb::assets::AssetId id,
+        EditorMaterialPreviewSurface surface = EditorMaterialPreviewSurface::MaterialEditor);
     [[nodiscard]] const EditorMaterialPreviewTelemetry& MaterialPreviewTelemetry() const noexcept;
     [[nodiscard]] const EditorMaterialPreviewPrimitivePolicy& MaterialPreviewPrimitivePolicy() const noexcept;
     [[nodiscard]] bool SetMaterialPreviewPrimitivePolicy(EditorMaterialPreviewPrimitivePolicy policy);
@@ -366,7 +441,8 @@ public:
     // Apply freshly cooked graph programs to live render state (hot reload + status); returns the
     // number of completed cooks consumed this call (MAT-32/33).
     std::size_t PumpMaterialGraphCookResults();
-    [[nodiscard]] std::uint64_t MaterialPreviewRevision() const noexcept;
+    [[nodiscard]] std::uint64_t MaterialPreviewRevision(
+        EditorMaterialPreviewSurface surface = EditorMaterialPreviewSurface::MaterialEditor) const noexcept;
     [[nodiscard]] std::uint32_t SelectedMaterialGraphNodeId() const noexcept;
     [[nodiscard]] const std::vector<std::uint32_t>& SelectedMaterialGraphNodeIds() const noexcept;
     [[nodiscard]] bool IsMaterialGraphNodeSelected(std::uint32_t nodeId) const noexcept;
@@ -857,15 +933,20 @@ private:
     EditorPluginsState plugins_;
     EditorScriptEditorState scriptEditor_;
     bool physicsGizmosVisible_ = true;
+    // Inspector and Material Editor can display different assets in the same paint batch. Each queued
+    // viewport keeps a raw Scene pointer until EndPaintLayout(), so sharing one mutable preview scene here
+    // would let the second surface destroy the first surface's queued Scene (use-after-free).
+    std::unique_ptr<EditorMaterialPreviewScene> inspectorMaterialPreviewScene_;
     std::unique_ptr<EditorMaterialPreviewScene> materialPreviewScene_;
-    // Thumbnails own a separate preview scene: the shared one is submitted by the Inspector and Material
-    // Editor surfaces too, so a capture attached to it could grab their frame instead - and rebuilding it
-    // per thumbnail would swap the material out from under those panels.
+    // Thumbnails own a third preview scene so their asynchronous capture channel and per-asset rebuilds
+    // cannot alter either visible preview surface.
     std::unique_ptr<EditorMaterialPreviewScene> materialThumbnailScene_;
     std::string graphShaderCacheRoot_;
     std::unique_ptr<EditorMaterialGraphCookService> materialGraphCookService_;
     bool sceneGraphCookPending_ = true;
     EditorCommandStack commandStack_;
+    std::optional<TerrainStrokeState> terrainStroke_;
+    std::optional<TerrainReadCache> terrainReadCache_;
     EditorHierarchySelectionState hierarchySelection_;
     EditorSceneViewportBoxSelectionState viewportBoxSelection_{};
     EditorHierarchyExpansionState hierarchyExpansion_;

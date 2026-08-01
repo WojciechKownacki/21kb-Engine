@@ -79,6 +79,7 @@ private:
 
     struct Capture {
         std::uint64_t assetId = 0U;
+        std::uint64_t contentHash = 0U;
         std::uint64_t captureId = 0U;
         int framesWaited = 0;
         bool presented = false;

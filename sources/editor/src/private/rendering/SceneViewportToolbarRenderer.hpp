@@ -16,6 +16,8 @@
 
 namespace kb::editor {
 
+class EditorSceneContext;
+
 #if defined(_WIN32)
 
 struct SceneViewportToolbarRects {
@@ -34,6 +36,26 @@ struct SceneViewportToolbarRects {
     RECT dropdownPanel{};
     std::array<RECT, 6U> dropdownItems{};
     RECT renderArea{};
+};
+
+struct TerrainViewportToolbarRects {
+    RECT panel{};
+    RECT selectButton{};
+    RECT sculptButton{};
+    RECT holesButton{};
+    RECT paintButton{};
+    RECT brushButton{};
+    RECT brushShapeButton{};
+    RECT sizeMinusButton{};
+    RECT sizeValue{};
+    RECT sizePlusButton{};
+    RECT strengthMinusButton{};
+    RECT strengthValue{};
+    RECT strengthPlusButton{};
+    RECT brushMenu{};
+    std::array<RECT, 8U> brushItems{};
+    RECT brushShapeMenu{};
+    std::array<RECT, 6U> brushShapeItems{};
 };
 
 struct SceneViewportToolbarRenderStats {
@@ -74,14 +96,29 @@ public:
     SceneViewportToolbarRenderer() = delete;
 
     static constexpr int Height = 34;
-
     [[nodiscard]] static SceneViewportToolbarRects Resolve(const RECT& content) noexcept;
     [[nodiscard]] static SceneViewportToolbarRects Resolve(const RECT& content, const EditorViewportPreviewState& state) noexcept;
+    [[nodiscard]] static SceneViewportToolbarRects Resolve(
+        const RECT& content,
+        const EditorViewportPreviewState& state,
+        const EditorSceneContext& sceneContext) noexcept;
+    [[nodiscard]] static TerrainViewportToolbarRects ResolveTerrainTools(const RECT& content) noexcept;
     static void RecordPresentedFrame() noexcept;
     static void RecordRenderStats(SceneViewportToolbarRenderStats stats) noexcept;
     static void RecordEcsStats(SceneViewportToolbarEcsStats stats);
     [[nodiscard]] static bool UpdateInfoHover(const RECT& content, int x, int y) noexcept;
     static void Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorViewportPreviewState& state);
+    static void PaintTerrainTools(
+        HDC dc,
+        const RECT& content,
+        const EditorTheme& theme,
+        const EditorSceneContext& sceneContext);
+    static void PaintTerrainPopup(
+        HDC dc,
+        const RECT& bounds,
+        const EditorTheme& theme,
+        const EditorSceneContext& sceneContext,
+        int hoveredItem = -1);
 };
 
 #endif

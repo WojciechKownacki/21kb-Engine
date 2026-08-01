@@ -31,6 +31,12 @@ RenderMeshDesc& RenderMeshAssetData::RefreshDesc() noexcept {
             .lods = lods.empty() ? nullptr : lods.data(),
             .lodCount = static_cast<std::uint32_t>(lods.size()),
         },
+        .dynamicVertexBuffer = dynamicVertexUpdates,
+        .terrainLayerWeights = terrainLayerWeights.empty() ? nullptr : terrainLayerWeights.data(),
+        .terrainLayerWeightBytes = static_cast<std::uint32_t>(terrainLayerWeights.size()),
+        .terrainLayerWeightWidth = terrainLayerWeightWidth,
+        .terrainLayerWeightHeight = terrainLayerWeightHeight,
+        .terrainLayerCount = terrainLayerCount,
     };
     return desc;
 }
@@ -55,8 +61,10 @@ std::optional<RenderMeshAssetData> RenderMeshAssetBuilder::LoadFbx(std::span<con
     return RenderMeshFbxImporter::Load(data, desc);
 }
 
-bool RenderMeshAssetBuilder::Finalize(RenderMeshAssetData& asset) {
-    return RenderMeshAssetFinalizer::Finalize(asset);
+bool RenderMeshAssetBuilder::Finalize(
+    RenderMeshAssetData& asset,
+    const RenderMeshFinalizeOptions& options) {
+    return RenderMeshAssetFinalizer::Finalize(asset, options);
 }
 
 } // namespace kb::render

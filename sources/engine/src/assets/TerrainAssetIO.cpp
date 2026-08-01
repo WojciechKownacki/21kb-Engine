@@ -15,7 +15,7 @@ namespace kb::assets {
 namespace {
 
 constexpr std::array<std::uint8_t, 8U> kMagic{ 'K', 'B', 'T', 'E', 'R', 'R', 'N', 0U };
-constexpr std::uint64_t kHeaderBytes = 8U + (5U * sizeof(std::uint32_t)) + (2U * sizeof(float));
+constexpr std::uint64_t kVersion1HeaderBytes = 8U + (5U * sizeof(std::uint32_t)) + (2U * sizeof(float));
 
 void SetError(std::string* output, std::string value) {
     if (output != nullptr) *output = std::move(value);
@@ -55,7 +55,7 @@ std::optional<TerrainAsset> TerrainAssetIO::Load(const std::filesystem::path& pa
         return std::nullopt;
     }
     const std::streamoff fileSize = input.tellg();
-    if (fileSize < static_cast<std::streamoff>(kHeaderBytes) || fileSize > static_cast<std::streamoff>(512U * 1024U * 1024U)) {
+    if (fileSize < static_cast<std::streamoff>(kVersion1HeaderBytes) || fileSize > static_cast<std::streamoff>(512U * 1024U * 1024U)) {
         SetError(error, "Terrain asset has an invalid file size");
         return std::nullopt;
     }
@@ -74,7 +74,7 @@ std::optional<TerrainAsset> TerrainAssetIO::Load(const std::filesystem::path& pa
     std::size_t cursor = kMagic.size();
     std::uint32_t version = 0U;
     TerrainAsset terrain{};
-    if (!ReadLittleEndian(bytes, cursor, version) || version != TerrainAsset::CurrentVersion ||
+    if (!ReadLittleEndian(bytes, cursor, version) || (version != 1U && version != TerrainAsset::CurrentVersion) ||
         !ReadLittleEndian(bytes, cursor, terrain.width) || !ReadLittleEndian(bytes, cursor, terrain.height) ||
         !ReadLittleEndian(bytes, cursor, terrain.chunkQuads) || !ReadLittleEndian(bytes, cursor, terrain.lodCount) ||
         !ReadLittleEndian(bytes, cursor, terrain.worldSizeX) || !ReadLittleEndian(bytes, cursor, terrain.worldSizeZ) ||
@@ -84,8 +84,8 @@ std::optional<TerrainAsset> TerrainAssetIO::Load(const std::filesystem::path& pa
     }
     const std::uint64_t vertexCount = static_cast<std::uint64_t>(terrain.width) * terrain.height;
     const std::uint64_t cellCount = static_cast<std::uint64_t>(terrain.width - 1U) * (terrain.height - 1U);
-    const std::uint64_t expectedSize = kHeaderBytes + vertexCount * sizeof(float) + cellCount;
-    if (expectedSize != bytes.size()) {
+    const std::uint64_t legacyPayloadSize = kVersion1HeaderBytes + vertexCount * sizeof(float) + cellCount;
+    if (legacyPayloadSize > bytes.size() || (version == 1U && legacyPayloadSize != bytes.size())) {
         SetError(error, "Terrain asset payload size does not match its dimensions");
         return std::nullopt;
     }
@@ -96,7 +96,35 @@ std::optional<TerrainAsset> TerrainAssetIO::Load(const std::filesystem::path& pa
             return std::nullopt;
         }
     }
-    terrain.holes.assign(bytes.begin() + static_cast<std::ptrdiff_t>(cursor), bytes.end());
+    terrain.holes.assign(
+        bytes.begin() + static_cast<std::ptrdiff_t>(cursor),
+        bytes.begin() + static_cast<std::ptrdiff_t>(cursor + cellCount));
+    cursor += static_cast<std::size_t>(cellCount);
+    if (version >= 2U) {
+        std::uint32_t layerCount = 0U;
+        if (!ReadLittleEndian(bytes, cursor, layerCount) ||
+            !ReadLittleEndian(bytes, cursor, terrain.layerWeightWidth) ||
+            !ReadLittleEndian(bytes, cursor, terrain.layerWeightHeight) ||
+            layerCount > TerrainAsset::MaximumMaterialLayers) {
+            SetError(error, "Terrain material layer header is invalid");
+            return std::nullopt;
+        }
+        terrain.materialLayers.resize(layerCount);
+        for (TerrainMaterialLayer& layer : terrain.materialLayers) {
+            if (!ReadLittleEndian(bytes, cursor, layer.materialAssetId)) {
+                SetError(error, "Terrain material layer payload is truncated");
+                return std::nullopt;
+            }
+        }
+        const std::uint64_t weightBytes = static_cast<std::uint64_t>(terrain.layerWeightWidth) *
+            terrain.layerWeightHeight * TerrainAsset::MaximumMaterialLayers;
+        if (weightBytes > bytes.size() - cursor || cursor + weightBytes != bytes.size()) {
+            SetError(error, "Terrain layer weight payload size is invalid");
+            return std::nullopt;
+        }
+        terrain.layerWeights.assign(
+            bytes.begin() + static_cast<std::ptrdiff_t>(cursor), bytes.end());
+    }
     if (!IsTerrainAssetValid(terrain, error)) return std::nullopt;
     return terrain;
 }
@@ -104,7 +132,8 @@ std::optional<TerrainAsset> TerrainAssetIO::Load(const std::filesystem::path& pa
 bool TerrainAssetIO::Save(const std::filesystem::path& path, const TerrainAsset& terrain, std::string* error) {
     if (!IsTerrainAssetValid(terrain, error)) return false;
     std::vector<std::uint8_t> bytes;
-    bytes.reserve(static_cast<std::size_t>(kHeaderBytes) + terrain.heights.size() * sizeof(float) + terrain.holes.size());
+    bytes.reserve(static_cast<std::size_t>(kVersion1HeaderBytes) + terrain.heights.size() * sizeof(float) +
+        terrain.holes.size() + 12U + terrain.materialLayers.size() * sizeof(std::uint64_t) + terrain.layerWeights.size());
     bytes.insert(bytes.end(), kMagic.begin(), kMagic.end());
     AppendLittleEndian(bytes, TerrainAsset::CurrentVersion);
     AppendLittleEndian(bytes, terrain.width);
@@ -115,6 +144,13 @@ bool TerrainAssetIO::Save(const std::filesystem::path& path, const TerrainAsset&
     AppendLittleEndian(bytes, terrain.worldSizeZ);
     for (const float height : terrain.heights) AppendLittleEndian(bytes, height);
     bytes.insert(bytes.end(), terrain.holes.begin(), terrain.holes.end());
+    AppendLittleEndian(bytes, static_cast<std::uint32_t>(terrain.materialLayers.size()));
+    AppendLittleEndian(bytes, terrain.layerWeightWidth);
+    AppendLittleEndian(bytes, terrain.layerWeightHeight);
+    for (const TerrainMaterialLayer& layer : terrain.materialLayers) {
+        AppendLittleEndian(bytes, layer.materialAssetId);
+    }
+    bytes.insert(bytes.end(), terrain.layerWeights.begin(), terrain.layerWeights.end());
 
     std::error_code directoryError;
     if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path(), directoryError);

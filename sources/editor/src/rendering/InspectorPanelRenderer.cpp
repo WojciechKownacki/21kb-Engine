@@ -42,6 +42,7 @@
 #include "inspection/InspectorMaterialTextureSlotFormatter.hpp"
 #include "inspection/EditorValueFormatter.hpp"
 #include "inspection/MaterialAssetFormatter.hpp"
+#include "inspection/TerrainMaterialLayerMenuState.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
@@ -51,6 +52,7 @@
 #include "rendering/GdiResources.hpp"
 #include "rendering/HeroIconPainter.hpp"
 #include "rendering/HeroIconKind.hpp"
+#include "rendering/ProjectFilesMaterialPreviewThumbnailModel.hpp"
 #include "rendering/ProjectFilesPanelDrawing.hpp"
 #include "rendering/gdi/ScopedBrush.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
@@ -70,6 +72,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -90,6 +93,7 @@ using inspector_panel_rows::DrawVec3Row;
 using inspector_panel_rows::DisplayField;
 using inspector_panel_rows::kDisclosureRowHeight;
 using inspector_panel_rows::kDisclosureTextOffset;
+using inspector_panel_rows::kGroupRowHeight;
 using inspector_panel_rows::SectionWriter;
 
 // Display/edit text for one exposed script variable's value (Bool rows use the
@@ -141,6 +145,7 @@ constexpr int kRowPadX = 16;
 constexpr int kAxisLetterWidth = 11;
 constexpr int kAxisGap = 6;
 constexpr int kLaneGap = 5;
+constexpr int kCheckboxSize = 16;
 constexpr int kDividerHeight = 1;
 constexpr int kTextBaselineOffsetY = 1;
 constexpr int kAssetPreviewMaxHeight = 214;
@@ -458,7 +463,12 @@ void DrawAddComponentBrowserRow(HDC dc, RECT row, const EditorTheme& theme, Hero
     }
 }
 
-void DrawAddComponentBrowser(HDC dc, RECT browser, const EditorTheme& theme, const InspectorPanelState& inspector) {
+void DrawAddComponentBrowser(
+    HDC dc,
+    RECT browser,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const EditorSceneContext& sceneContext) {
     DrawFrame(dc, browser, Rgb(30, 33, 38), Rgb(70, 78, 88));
 
     {
@@ -508,7 +518,9 @@ void DrawAddComponentBrowser(HDC dc, RECT browser, const EditorTheme& theme, con
         GdiDrawing::FillRectColor(dc, Rect(back.left, back.bottom - 1, back.right, back.bottom), Rgb(52, 58, 66));
     }
 
-    const std::vector<AddComponentRow> rows = InspectorAddComponentBrowserModel::Rows(query.empty() ? std::string_view{ category } : std::string_view{}, query);
+    const std::vector<AddComponentRow> rows = InspectorAddComponentBrowserModel::Rows(
+        query.empty() ? std::string_view{ category } : std::string_view{}, query,
+        [&sceneContext](std::string_view pluginId) { return sceneContext.IsProjectPluginEnabled(pluginId); });
     const RECT list = AddComponentListRect(browser, showBack);
     const int listHeight = static_cast<int>(list.bottom - list.top);
     const int rowCount = static_cast<int>(rows.size());
@@ -2074,6 +2086,321 @@ void PaintMultiSelection(HDC dc, RECT content, const EditorTheme& theme, const E
 // PaintEntity needs them to size (and virtualize) each section.
 [[nodiscard]] int SectionHeight(const InspectorPanelState& inspector, InspectorSectionId section, int rows) noexcept;
 [[nodiscard]] int MeshRendererSectionHeight(const EditorSceneContext& sceneContext, const kb::scene::MeshRendererComponent& renderer);
+[[nodiscard]] int TerrainSectionHeight(const InspectorPanelState& inspector, std::size_t layerCount) noexcept;
+
+[[nodiscard]] InspectorPropertyId TerrainLayerProperty(std::size_t index) noexcept {
+    constexpr std::array values{
+        InspectorPropertyId::TerrainMaterialLayer0,
+        InspectorPropertyId::TerrainMaterialLayer1,
+        InspectorPropertyId::TerrainMaterialLayer2,
+        InspectorPropertyId::TerrainMaterialLayer3,
+    };
+    return index < values.size() ? values[index] : InspectorPropertyId::None;
+}
+
+[[nodiscard]] InspectorPropertyId TerrainLayerPickerProperty(std::size_t index) noexcept {
+    constexpr std::array values{
+        InspectorPropertyId::TerrainMaterialLayerPicker0,
+        InspectorPropertyId::TerrainMaterialLayerPicker1,
+        InspectorPropertyId::TerrainMaterialLayerPicker2,
+        InspectorPropertyId::TerrainMaterialLayerPicker3,
+    };
+    return index < values.size() ? values[index] : InspectorPropertyId::None;
+}
+
+constexpr int kTerrainLayerBodyPadding = 8;
+constexpr int kTerrainLayerCardHeight = 78;
+constexpr int kTerrainLayerCardGap = 6;
+constexpr int kTerrainLayerEmptyHeight = 62;
+constexpr int kTerrainLayerToolbarHeight = 32;
+constexpr int kTerrainLayerMenuGap = 5;
+constexpr int kTerrainLayerMenuPadding = 4;
+constexpr int kTerrainLayerMenuItemHeight = 36;
+constexpr int kTerrainLayerPreviewSize = 52;
+
+[[nodiscard]] int TerrainLayerGridHeight(std::size_t layerCount) noexcept {
+    if (layerCount == 0U) {
+        return kTerrainLayerEmptyHeight;
+    }
+    const int rows = static_cast<int>((layerCount + 1U) / 2U);
+    return rows * kTerrainLayerCardHeight + (rows - 1) * kTerrainLayerCardGap;
+}
+
+[[nodiscard]] int TerrainLayerMenuActionCount(std::size_t layerCount) noexcept {
+    return layerCount == 0U ? 2 : 3;
+}
+
+[[nodiscard]] int TerrainMaterialLayersBodyHeight(std::size_t layerCount) noexcept {
+    const int menuHeight = terrain_material_layer_menu::Open()
+        ? kTerrainLayerMenuGap + 2 * kTerrainLayerMenuPadding +
+            TerrainLayerMenuActionCount(layerCount) * kTerrainLayerMenuItemHeight
+        : 0;
+    return 2 * kTerrainLayerBodyPadding + TerrainLayerGridHeight(layerCount) + kTerrainLayerCardGap +
+        kTerrainLayerToolbarHeight + menuHeight;
+}
+
+[[nodiscard]] RECT TerrainLayerCardRect(const RECT& body, std::size_t index) noexcept {
+    const int availableWidth = std::max(0, RectWidth(body) - 2 * kTerrainLayerBodyPadding);
+    const int cardWidth = std::max(1, (availableWidth - kTerrainLayerCardGap) / 2);
+    const int column = static_cast<int>(index % 2U);
+    const int row = static_cast<int>(index / 2U);
+    const int left = body.left + kTerrainLayerBodyPadding + column * (cardWidth + kTerrainLayerCardGap);
+    const int top = body.top + kTerrainLayerBodyPadding + row * (kTerrainLayerCardHeight + kTerrainLayerCardGap);
+    const int right = column == 1 ? body.right - kTerrainLayerBodyPadding : left + cardWidth;
+    return Rect(left, top, right, top + kTerrainLayerCardHeight);
+}
+
+[[nodiscard]] RECT TerrainLayerEmptyRect(const RECT& body) noexcept {
+    return Rect(
+        body.left + kTerrainLayerBodyPadding,
+        body.top + kTerrainLayerBodyPadding,
+        body.right - kTerrainLayerBodyPadding,
+        body.top + kTerrainLayerBodyPadding + kTerrainLayerEmptyHeight);
+}
+
+[[nodiscard]] RECT TerrainLayerToolbarRect(const RECT& body, std::size_t layerCount) noexcept {
+    const int top = body.top + kTerrainLayerBodyPadding + TerrainLayerGridHeight(layerCount) + kTerrainLayerCardGap;
+    return Rect(body.left + kTerrainLayerBodyPadding, top, body.right - kTerrainLayerBodyPadding, top + kTerrainLayerToolbarHeight);
+}
+
+[[nodiscard]] RECT TerrainLayerMenuRect(const RECT& body, std::size_t layerCount) noexcept {
+    const RECT toolbar = TerrainLayerToolbarRect(body, layerCount);
+    const int itemCount = TerrainLayerMenuActionCount(layerCount);
+    return Rect(
+        toolbar.left,
+        toolbar.bottom + kTerrainLayerMenuGap,
+        toolbar.right,
+        toolbar.bottom + kTerrainLayerMenuGap + 2 * kTerrainLayerMenuPadding + itemCount * kTerrainLayerMenuItemHeight);
+}
+
+[[nodiscard]] RECT TerrainLayerMenuItemRect(const RECT& menu, int index) noexcept {
+    const int top = menu.top + kTerrainLayerMenuPadding + index * kTerrainLayerMenuItemHeight;
+    return Rect(menu.left + kTerrainLayerMenuPadding, top, menu.right - kTerrainLayerMenuPadding, top + kTerrainLayerMenuItemHeight);
+}
+
+[[nodiscard]] RECT TerrainLayerPickerRect(const RECT& card) noexcept {
+    constexpr int size = 22;
+    return Rect(card.right - size - 7, card.bottom - size - 7, card.right - 7, card.bottom - 7);
+}
+
+class TerrainMaterialPreviewCache {
+public:
+    [[nodiscard]] const ProjectFilesMaterialPreviewImage& PreviewFor(
+        const kb::assets::AssetMetadata& metadata,
+        const kb::assets::AssetManager& assets) {
+        Entry& entry = entries_[metadata.id.value];
+        if (entry.contentHash != metadata.contentHash || entry.physicalPath != metadata.physicalPath || entry.image.bgra.empty()) {
+            entry.contentHash = metadata.contentHash;
+            entry.physicalPath = metadata.physicalPath;
+            const ProjectFilesMaterialPreviewStyle style = ProjectFilesMaterialPreviewThumbnailModel::StyleFromAsset(
+                metadata, &assets, &MaterialPreviewTextureAverageColor);
+            entry.image = ProjectFilesMaterialPreviewThumbnailModel::RenderImage(
+                kTerrainLayerPreviewSize, kTerrainLayerPreviewSize, style, false);
+        }
+        return entry.image;
+    }
+
+private:
+    struct Entry {
+        std::uint64_t contentHash = 0U;
+        std::filesystem::path physicalPath;
+        ProjectFilesMaterialPreviewImage image;
+    };
+    std::unordered_map<std::uint64_t, Entry> entries_;
+};
+
+[[nodiscard]] TerrainMaterialPreviewCache& TerrainLayerPreviewCache() {
+    static TerrainMaterialPreviewCache cache;
+    return cache;
+}
+
+void DrawTerrainMaterialPreview(HDC dc, const RECT& target, const ProjectFilesMaterialPreviewImage& image) {
+    if (image.width <= 0 || image.height <= 0 || image.bgra.empty()) {
+        return;
+    }
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = image.width;
+    info.bmiHeader.biHeight = -image.height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    static_cast<void>(StretchDIBits(
+        dc, target.left, target.top, RectWidth(target), RectHeight(target),
+        0, 0, image.width, image.height, image.bgra.data(), &info, DIB_RGB_COLORS, SRCCOPY));
+}
+
+void DrawTerrainLayerCard(
+    HDC dc,
+    const RECT& card,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const EditorSceneContext& sceneContext,
+    std::size_t index,
+    std::uint64_t materialAssetId,
+    bool selected) {
+    const InspectorPropertyId property = TerrainLayerProperty(index);
+    const bool hovered = inspector.IsHovered(InspectorHitKind::Row, InspectorSectionId::Terrain, property);
+    const COLORREF fill = selected
+        ? BlendColor(Color(theme.panel), Color(theme.accent), 10)
+        : (hovered ? HoverFill(theme) : BlendColor(Color(theme.panel), Color(theme.chrome), 24));
+    DrawFrame(dc, card, fill, selected ? Color(theme.accent) : Color(theme.borderPanel));
+
+    const RECT preview = Rect(card.left + 7, card.top + 13, card.left + 7 + kTerrainLayerPreviewSize, card.top + 13 + kTerrainLayerPreviewSize);
+    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    if (const kb::assets::AssetMetadata* metadata = manager.Registry().Find(kb::assets::AssetId{ materialAssetId }); metadata != nullptr) {
+        DrawTerrainMaterialPreview(dc, preview, TerrainLayerPreviewCache().PreviewFor(*metadata, manager));
+    } else {
+        DrawFrame(dc, preview, Rgb(24, 27, 31), Color(theme.borderPanel));
+        HeroIconPainter::Draw(dc, Shrink(preview, 15, 15, 15, 15), HeroIconKind::Cube, Color(theme.textDisabled), 1);
+    }
+
+    const RECT picker = TerrainLayerPickerRect(card);
+    const InspectorPropertyId pickerProperty = TerrainLayerPickerProperty(index);
+    const bool pickerHovered = inspector.IsHovered(InspectorHitKind::Row, InspectorSectionId::Terrain, pickerProperty);
+    DrawFrame(dc, picker, pickerHovered ? HoverFill(theme) : Color(theme.toolbarButton), Color(theme.borderPanel));
+    HeroIconPainter::Draw(dc, Shrink(picker, 4, 4, 4, 4), HeroIconKind::EllipsisHorizontal, Color(theme.textSecondary), 1);
+
+    const int textLeft = preview.right + 8;
+    const int textRight = card.right - 7;
+    {
+        ScopedFont font(9, FW_SEMIBOLD);
+        const ScopedGdiObject selectedFont(dc, font.handle);
+        Text(dc, Rect(textLeft, card.top + 8, textRight, card.top + 25),
+            index == 0U ? "BASE LAYER" : ("PAINT LAYER " + std::to_string(index)),
+            selected ? Color(theme.accent) : Color(theme.textSecondary));
+    }
+    {
+        ScopedFont font(11, FW_SEMIBOLD);
+        const ScopedGdiObject selectedFont(dc, font.handle);
+        Text(dc, Rect(textLeft, card.top + 25, textRight, card.top + 46),
+            MaterialDisplayName(sceneContext, materialAssetId), Color(theme.textPrimary));
+    }
+    {
+        ScopedFont font(9, FW_NORMAL);
+        const ScopedGdiObject selectedFont(dc, font.handle);
+        Text(dc, Rect(textLeft, card.top + 46, picker.left - 5, card.bottom - 7),
+            "Material", Color(theme.textDisabled));
+    }
+
+    if (selected) {
+        constexpr int markerSize = 6;
+        const RECT marker = Rect(card.right - 12, card.top + 7, card.right - 12 + markerSize, card.top + 7 + markerSize);
+        ScopedBrush markerBrush(Color(theme.accent));
+        ScopedPen markerPen(1, Color(theme.accent));
+        const ScopedGdiObject selectedBrush(dc, markerBrush.handle);
+        const ScopedGdiObject selectedPen(dc, markerPen.handle);
+        Ellipse(dc, marker.left, marker.top, marker.right, marker.bottom);
+    }
+}
+
+void DrawTerrainLayerMenuAction(
+    HDC dc,
+    const RECT& row,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    InspectorPropertyId property,
+    HeroIconKind icon,
+    std::string_view title,
+    std::string_view subtitle,
+    bool enabled) {
+    const bool hovered = enabled && inspector.IsHovered(InspectorHitKind::Row, InspectorSectionId::Terrain, property);
+    if (hovered) {
+        GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
+    }
+    const COLORREF primary = enabled ? Color(theme.textPrimary) : Color(theme.textDisabled);
+    const COLORREF secondary = enabled ? Color(theme.textSecondary) : Color(theme.textDisabled);
+    HeroIconPainter::Draw(dc, Rect(row.left + 8, row.top + 10, row.left + 24, row.top + 26), icon, primary, 1);
+    {
+        ScopedFont font(10, FW_SEMIBOLD);
+        const ScopedGdiObject selectedFont(dc, font.handle);
+        Text(dc, Rect(row.left + 32, row.top + 2, row.right - 8, row.top + 20), title, primary);
+    }
+    {
+        ScopedFont font(9, FW_NORMAL);
+        const ScopedGdiObject selectedFont(dc, font.handle);
+        Text(dc, Rect(row.left + 32, row.top + 17, row.right - 8, row.bottom - 1), subtitle, secondary);
+    }
+}
+
+void DrawTerrainMaterialLayers(
+    HDC dc,
+    const RECT& body,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const EditorSceneContext& sceneContext,
+    const std::optional<kb::assets::TerrainAsset>& terrain,
+    std::size_t selectedLayer) {
+    const std::size_t layerCount = terrain.has_value() ? terrain->materialLayers.size() : 0U;
+    if (terrain.has_value() && layerCount > 0U) {
+        for (std::size_t index = 0U; index < layerCount; ++index) {
+            DrawTerrainLayerCard(
+                dc, TerrainLayerCardRect(body, index), theme, inspector, sceneContext, index,
+                terrain->materialLayers[index].materialAssetId, index == selectedLayer);
+        }
+    } else {
+        const RECT empty = TerrainLayerEmptyRect(body);
+        DrawFrame(dc, empty, BlendColor(Color(theme.panel), Color(theme.chrome), 25), Color(theme.borderPanel));
+        HeroIconPainter::Draw(dc, Rect(empty.left + 12, empty.top + 19, empty.left + 36, empty.top + 43),
+            HeroIconKind::Cube, Color(theme.textDisabled), 1);
+        {
+            ScopedFont font(11, FW_SEMIBOLD);
+            const ScopedGdiObject selectedFont(dc, font.handle);
+            Text(dc, Rect(empty.left + 46, empty.top + 9, empty.right - 10, empty.top + 31),
+                terrain.has_value() ? "No Terrain Layers" : "Terrain asset unavailable", Color(theme.textPrimary));
+        }
+        {
+            ScopedFont font(9, FW_NORMAL);
+            const ScopedGdiObject selectedFont(dc, font.handle);
+            Text(dc, Rect(empty.left + 46, empty.top + 29, empty.right - 10, empty.bottom - 7),
+                terrain.has_value() ? "Create or add a Material to start painting." : "Repair the Terrain asset reference to edit layers.",
+                Color(theme.textSecondary));
+        }
+    }
+
+    const RECT toolbar = TerrainLayerToolbarRect(body, layerCount);
+    const bool toolbarHovered = inspector.IsHovered(
+        InspectorHitKind::Row, InspectorSectionId::Terrain, terrain_material_layer_menu::kProperty);
+    const bool menuOpen = terrain_material_layer_menu::Open();
+    DrawFrame(dc, toolbar,
+        toolbarHovered || menuOpen ? HoverFill(theme) : Color(theme.toolbarButton),
+        menuOpen ? Color(theme.accent) : Color(theme.borderPanel));
+    HeroIconPainter::Draw(dc, Rect(toolbar.left + 9, toolbar.top + 8, toolbar.left + 25, toolbar.top + 24),
+        HeroIconKind::AdjustmentsHorizontal, menuOpen ? Color(theme.accent) : Color(theme.textSecondary), 1);
+    {
+        ScopedFont font(10, FW_SEMIBOLD);
+        const ScopedGdiObject selectedFont(dc, font.handle);
+        Text(dc, Rect(toolbar.left + 32, toolbar.top, toolbar.right - 76, toolbar.bottom),
+            "Edit Terrain Layers", Color(theme.textPrimary));
+    }
+    {
+        ScopedFont font(9, FW_NORMAL);
+        const ScopedGdiObject selectedFont(dc, font.handle);
+        Text(dc, Rect(toolbar.right - 67, toolbar.top, toolbar.right - 29, toolbar.bottom),
+            std::to_string(layerCount) + " / " + std::to_string(kb::assets::TerrainAsset::MaximumMaterialLayers),
+            Color(theme.textSecondary), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    }
+    HeroIconPainter::Draw(dc, Rect(toolbar.right - 21, toolbar.top + 10, toolbar.right - 9, toolbar.top + 22),
+        menuOpen ? HeroIconKind::ChevronDown : HeroIconKind::ChevronRight, Color(theme.textSecondary), 1);
+
+    if (!menuOpen) {
+        return;
+    }
+    const RECT menu = TerrainLayerMenuRect(body, layerCount);
+    DrawFrame(dc, menu, BlendColor(Color(theme.strip), Color(theme.panel), 40), Color(theme.borderPanel));
+    const bool canAdd = terrain.has_value() && layerCount < kb::assets::TerrainAsset::MaximumMaterialLayers;
+    DrawTerrainLayerMenuAction(dc, TerrainLayerMenuItemRect(menu, 0), theme, inspector,
+        InspectorPropertyId::TerrainMaterialLayerCreate, HeroIconKind::Plus,
+        "Create Layer", "Create a new Material and assign it", canAdd);
+    DrawTerrainLayerMenuAction(dc, TerrainLayerMenuItemRect(menu, 1), theme, inspector,
+        InspectorPropertyId::TerrainMaterialLayerAdd, HeroIconKind::Folder,
+        "Add Layer", "Choose an existing Material", canAdd);
+    if (layerCount > 0U) {
+        DrawTerrainLayerMenuAction(dc, TerrainLayerMenuItemRect(menu, 2), theme, inspector,
+            InspectorPropertyId::TerrainMaterialLayerRemove, HeroIconKind::Minus,
+            "Remove Layer", "Detach the selected layer from Terrain", true);
+    }
+}
 
 [[nodiscard]] RECT TagsDropdownAnchorRect(const RECT& content) noexcept {
     const int tagsRowTop = content.top + kHeaderHeight + kPanelPadTop + kSectionHeaderHeight + kDividerHeight
@@ -2083,21 +2410,6 @@ void PaintMultiSelection(HDC dc, RECT content, const EditorTheme& theme, const E
     return Rect(labelRight, top, content.right - kRowPadX, top + kValueHeight);
 }
 
-[[nodiscard]] std::string_view TerrainBrushModeName(kb::terrain_editor::TerrainBrushMode mode) noexcept {
-    using Mode = kb::terrain_editor::TerrainBrushMode;
-    switch (mode) {
-    case Mode::Raise: return "Raise / Mountain";
-    case Mode::Lower: return "Lower / Valley";
-    case Mode::Smooth: return "Smooth";
-    case Mode::Flatten: return "Flatten";
-    case Mode::Noise: return "Noise";
-    case Mode::Terrace: return "Terrace";
-    case Mode::CutHole: return "Cut Hole";
-    case Mode::FillHole: return "Fill Hole";
-    }
-    return "Raise / Mountain";
-}
-
 void PaintTerrainSection(
     HDC dc,
     RECT content,
@@ -2105,30 +2417,63 @@ void PaintTerrainSection(
     const EditorTheme& theme,
     const InspectorPanelState& inspector,
     const EditorSceneContext& sceneContext,
-    const kb::scene::MeshRendererComponent& renderer) {
+    const kb::scene::MeshRendererComponent& renderer,
+    const std::optional<kb::assets::TerrainAsset>& terrain) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Terrain, HeroIconKind::Cube, "Terrain Editor", true);
     const EditorTerrainToolState& tool = EditorTerrainService::ToolState();
     const kb::terrain_editor::TerrainBrushSettings& brush = tool.brush;
-    section.Bool("Edit in Viewport", tool.editingEnabled, InspectorPropertyId::TerrainEditEnabled);
-    section.Field("Brush", TerrainBrushModeName(brush.mode), InspectorPropertyId::TerrainBrushMode);
-    section.Float("Radius", FormatFloat(brush.radius, 2), InspectorPropertyId::TerrainBrushRadius);
-    section.Float("Strength", FormatFloat(brush.strength, 2), InspectorPropertyId::TerrainBrushStrength);
+    const std::size_t layerCount = terrain.has_value() ? terrain->materialLayers.size() : 0U;
+    section.Group("TERRAIN LAYERS");
+    const RECT layerBody = section.Reserve(TerrainMaterialLayersBodyHeight(layerCount));
+    if (RectWidth(layerBody) > 0 && RectHeight(layerBody) > 0) {
+        DrawTerrainMaterialLayers(dc, layerBody, theme, inspector, sceneContext, terrain, tool.selectedMaterialLayer);
+    }
+    section.Group("BRUSH BEHAVIOR");
     section.Float("Falloff", FormatFloat(brush.falloff, 2), InspectorPropertyId::TerrainBrushFalloff);
     section.Float("Flatten Height", FormatFloat(brush.targetHeight, 2), InspectorPropertyId::TerrainFlattenHeight);
     section.Float("Terrace Step", FormatFloat(brush.terraceStep, 2), InspectorPropertyId::TerrainTerraceStep);
-    section.Field("Heightmap", "Import PNG16 / RAW16...", InspectorPropertyId::TerrainImportHeightmap);
-    if (const std::optional<kb::assets::TerrainAsset> terrain = EditorTerrainService::Load(sceneContext.Scene(), sceneContext.SelectedEntity())) {
-        section.Field("Resolution", std::to_string(terrain->width) + " x " + std::to_string(terrain->height));
+    section.Field("Noise Seed", std::to_string(brush.noiseSeed), InspectorPropertyId::TerrainNoiseSeed);
+
+    section.Group("HEIGHTMAP IMPORT");
+    section.Pair(
+        "Height Range",
+        "Min", FormatFloat(tool.heightmapImport.minimumHeight, 2), InspectorPropertyId::TerrainImportMinimumHeight,
+        "Max", FormatFloat(tool.heightmapImport.maximumHeight, 2), InspectorPropertyId::TerrainImportMaximumHeight);
+    section.Bool("Flip Vertical", tool.heightmapImport.flipVertically, InspectorPropertyId::TerrainImportFlipVertically);
+    section.Field("Source", "Import PNG16 / RAW16...", InspectorPropertyId::TerrainImportHeightmap);
+
+    section.Group("RENDERING");
+    section.BoolPair(
+        "Shadows",
+        "Cast", renderer.castsShadow, InspectorPropertyId::MeshRendererCastsShadow,
+        "Receive", renderer.receivesShadow, InspectorPropertyId::MeshRendererReceivesShadow);
+
+    section.Disclosure(
+        "Advanced Terrain Settings",
+        InspectorPropertyId::TerrainAdvanced,
+        inspector.IsDisclosureExpanded(InspectorDisclosureId::TerrainAdvanced));
+    if (inspector.IsDisclosureExpanded(InspectorDisclosureId::TerrainAdvanced) && terrain.has_value()) {
+        section.Pair(
+            "Resolution",
+            "X", std::to_string(terrain->width), InspectorPropertyId::TerrainResolutionX,
+            "Z", std::to_string(terrain->height), InspectorPropertyId::TerrainResolutionZ);
+        section.Pair(
+            "World Size",
+            "X", FormatFloat(terrain->worldSizeX, 2), InspectorPropertyId::TerrainWorldSizeX,
+            "Z", FormatFloat(terrain->worldSizeZ, 2), InspectorPropertyId::TerrainWorldSizeZ);
+        section.Pair(
+            "Topology",
+            "Chunk", std::to_string(terrain->chunkQuads), InspectorPropertyId::TerrainChunkQuads,
+            "LODs", std::to_string(terrain->lodCount), InspectorPropertyId::TerrainLodCount);
         const std::uint32_t chunksX = (terrain->width - 1U + terrain->chunkQuads - 1U) / terrain->chunkQuads;
         const std::uint32_t chunksZ = (terrain->height - 1U + terrain->chunkQuads - 1U) / terrain->chunkQuads;
-        section.Field("Streaming", std::to_string(chunksX * chunksZ) + " chunks / " + std::to_string(terrain->lodCount) + " LODs");
-    } else {
-        section.Field("Resolution", "Asset unavailable");
-        section.Field("Streaming", "-");
+        section.Field("Streaming Layout", std::to_string(chunksX * chunksZ) + " chunks / " + std::to_string(terrain->lodCount) + " LODs");
+    } else if (inspector.IsDisclosureExpanded(InspectorDisclosureId::TerrainAdvanced)) {
+        section.Pair("Resolution", "X", "Unavailable", InspectorPropertyId::None, "Z", "-", InspectorPropertyId::None);
+        section.Pair("World Size", "X", "-", InspectorPropertyId::None, "Z", "-", InspectorPropertyId::None);
+        section.Pair("Topology", "Chunk", "-", InspectorPropertyId::None, "LODs", "-", InspectorPropertyId::None);
+        section.Field("Streaming Layout", "Asset unavailable");
     }
-    section.AssetField("Material", MaterialDisplayName(sceneContext, renderer.materialAssetId), InspectorPropertyId::MeshRendererMaterial, InspectorPropertyId::MeshRendererMaterialPicker);
-    section.Bool("Casts Shadow", renderer.castsShadow, InspectorPropertyId::MeshRendererCastsShadow);
-    section.Bool("Receives Shadow", renderer.receivesShadow, InspectorPropertyId::MeshRendererReceivesShadow);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -2417,13 +2762,19 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         }
     }
     if (const kb::scene::MeshRendererComponent* meshRenderer = scene.Components().MeshRenderers().TryGet(selected); meshRenderer != nullptr) {
-        const bool terrain = EditorTerrainService::IsTerrainEntity(scene, selected);
-        const int h = terrain ? SectionHeight(inspector, InspectorSectionId::Terrain, 13) : MeshRendererSectionHeight(sceneContext, *meshRenderer);
-        if (sectionVisible(y, h)) {
-            if (terrain) PaintTerrainSection(dc, content, y, theme, inspector, sceneContext, *meshRenderer);
-            else PaintMeshRendererSection(dc, content, y, theme, inspector, sceneContext, *meshRenderer);
-        } else {
-            y += h + kSectionGap;
+        const bool isTerrain = EditorTerrainService::IsTerrainEntity(scene, selected);
+        if (!isTerrain || sceneContext.IsProjectPluginEnabled("Editor.Terrain")) {
+            const std::optional<kb::assets::TerrainAsset> terrain = isTerrain
+                ? EditorTerrainService::Load(scene, selected)
+                : std::nullopt;
+            const std::size_t terrainLayerCount = terrain.has_value() ? terrain->materialLayers.size() : 0U;
+            const int h = isTerrain ? TerrainSectionHeight(inspector, terrainLayerCount) : MeshRendererSectionHeight(sceneContext, *meshRenderer);
+            if (sectionVisible(y, h)) {
+                if (isTerrain) PaintTerrainSection(dc, content, y, theme, inspector, sceneContext, *meshRenderer, terrain);
+                else PaintMeshRendererSection(dc, content, y, theme, inspector, sceneContext, *meshRenderer);
+            } else {
+                y += h + kSectionGap;
+            }
         }
     }
     if (const kb::scene::AudioSourceComponent* audioSource = scene.Components().AudioSources().TryGet(selected); audioSource != nullptr) {
@@ -2518,6 +2869,21 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         return kSectionHeaderHeight;
     }
     return kSectionHeaderHeight + kDividerHeight + rows * (kFieldRowHeight + kDividerHeight);
+}
+
+[[nodiscard]] int TerrainSectionHeight(const InspectorPanelState& inspector, std::size_t layerCount) noexcept {
+    if (inspector.IsCollapsed(InspectorSectionId::Terrain)) {
+        return kSectionHeaderHeight;
+    }
+    constexpr int fixedRows = 8;
+    constexpr int groupCount = 4;
+    const int advancedRows = inspector.IsDisclosureExpanded(InspectorDisclosureId::TerrainAdvanced) ? 4 : 0;
+    return kSectionHeaderHeight + kDividerHeight
+        + fixedRows * (kFieldRowHeight + kDividerHeight)
+        + groupCount * (kGroupRowHeight + kDividerHeight)
+        + TerrainMaterialLayersBodyHeight(layerCount)
+        + kDisclosureRowHeight + kDividerHeight
+        + advancedRows * (kFieldRowHeight + kDividerHeight);
 }
 
 [[nodiscard]] int InputMappingRows(const EditorSceneContext& sceneContext, kb::assets::AssetId id) {
@@ -2635,9 +3001,15 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         height += SectionHeight(inspector, InspectorSectionId::Light, LightSectionRows(*light)) + kSectionGap;
     }
     if (const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(selected); renderer != nullptr) {
-        height += (EditorTerrainService::IsTerrainEntity(scene, selected)
-            ? SectionHeight(inspector, InspectorSectionId::Terrain, 13)
-            : MeshRendererSectionHeight(sceneContext, *renderer)) + kSectionGap;
+        const bool terrain = EditorTerrainService::IsTerrainEntity(scene, selected);
+        if (!terrain || sceneContext.IsProjectPluginEnabled("Editor.Terrain")) {
+            const std::optional<kb::assets::TerrainAsset> terrainAsset = terrain
+                ? EditorTerrainService::Load(scene, selected)
+                : std::nullopt;
+            height += (terrain
+                ? TerrainSectionHeight(inspector, terrainAsset.has_value() ? terrainAsset->materialLayers.size() : 0U)
+                : MeshRendererSectionHeight(sceneContext, *renderer)) + kSectionGap;
+        }
     }
     if (scene.Components().AudioSources().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::AudioSource, 10) + kSectionGap;
@@ -2792,6 +3164,63 @@ void AdvanceRow(int& y) noexcept;
     return {};
 }
 
+[[nodiscard]] InspectorPanelRenderer::Hit HitPair(
+    RECT row,
+    InspectorSectionId section,
+    std::string_view firstLabel,
+    InspectorPropertyId firstProperty,
+    std::string_view secondLabel,
+    InspectorPropertyId secondProperty,
+    int x,
+    int y) noexcept {
+    const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
+    const RECT valueRect = Rect(labelRect.right, row.top, row.right - kRowPadX, row.bottom);
+    const int laneWidth = std::max(66, (static_cast<int>(valueRect.right - valueRect.left) - kLaneGap) / 2);
+    const std::array<RECT, 2U> lanes{
+        Rect(valueRect.left, valueRect.top, valueRect.left + laneWidth, valueRect.bottom),
+        Rect(valueRect.left + laneWidth + kLaneGap, valueRect.top, valueRect.right, valueRect.bottom),
+    };
+    const std::array<std::string_view, 2U> labels{firstLabel, secondLabel};
+    const std::array<InspectorPropertyId, 2U> properties{firstProperty, secondProperty};
+    for (std::size_t index = 0U; index < lanes.size(); ++index) {
+        const int laneLabelWidth = labels[index].size() == 1U ? kAxisLetterWidth : 43;
+        const int top = CenteredY(lanes[index], kValueHeight);
+        const RECT box = Rect(lanes[index].left + laneLabelWidth + kAxisGap, top, lanes[index].right, top + kValueHeight);
+        if (properties[index] != InspectorPropertyId::None && Contains(box, x, y)) {
+            return MakeHit(InspectorHitKind::FloatField, section, properties[index], box);
+        }
+    }
+    return Contains(row, x, y)
+        ? MakeHit(InspectorHitKind::Row, section, firstProperty, row)
+        : InspectorPanelRenderer::Hit{};
+}
+
+[[nodiscard]] InspectorPanelRenderer::Hit HitBoolPair(
+    RECT row,
+    InspectorSectionId section,
+    InspectorPropertyId firstProperty,
+    InspectorPropertyId secondProperty,
+    int x,
+    int y) noexcept {
+    const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
+    const RECT valueRect = Rect(labelRect.right, row.top, row.right - kRowPadX, row.bottom);
+    const int laneWidth = std::max(66, (static_cast<int>(valueRect.right - valueRect.left) - kLaneGap) / 2);
+    const std::array<RECT, 2U> lanes{
+        Rect(valueRect.left, valueRect.top, valueRect.left + laneWidth, valueRect.bottom),
+        Rect(valueRect.left + laneWidth + kLaneGap, valueRect.top, valueRect.right, valueRect.bottom),
+    };
+    const std::array<InspectorPropertyId, 2U> properties{firstProperty, secondProperty};
+    for (std::size_t index = 0U; index < lanes.size(); ++index) {
+        const RECT box = CenteredRect(lanes[index], lanes[index].right - kCheckboxSize, kCheckboxSize, kCheckboxSize);
+        if (Contains(box, x, y)) {
+            return MakeHit(InspectorHitKind::BoolField, section, properties[index], box);
+        }
+    }
+    return Contains(row, x, y)
+        ? MakeHit(InspectorHitKind::Row, section, firstProperty, row)
+        : InspectorPanelRenderer::Hit{};
+}
+
 [[nodiscard]] InspectorPanelRenderer::Hit HitRotation(RECT row, int x, int y) noexcept {
     RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
     RECT valueRect = Rect(labelRect.right, row.top, row.right - kRowPadX, row.bottom);
@@ -2839,6 +3268,10 @@ void AdvanceRow(int& y) noexcept;
 
 void AdvanceRow(int& y) noexcept {
     y += kFieldRowHeight + kDividerHeight;
+}
+
+void AdvanceGroup(int& y) noexcept {
+    y += kGroupRowHeight + kDividerHeight;
 }
 
 // Hit-tests a physics component section (header "×" + one row per field). Mirrors
@@ -3162,34 +3595,114 @@ void AdvanceRow(int& y) noexcept {
 [[nodiscard]] InspectorPanelRenderer::Hit HitTestTerrainSection(
     const RECT& content,
     const InspectorPanelState& state,
+    const EditorSceneContext& sceneContext,
     int x,
     int yPoint,
     int& y) noexcept {
     if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::Terrain, x, yPoint, true); hit.kind != InspectorHitKind::None) return hit;
     if (state.IsCollapsed(InspectorSectionId::Terrain)) return {};
-    if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(content, y), InspectorSectionId::Terrain, InspectorPropertyId::TerrainEditEnabled, x, yPoint); hit.kind != InspectorHitKind::None) return hit;
-    AdvanceRow(y);
-    constexpr std::array editableRows{
-        InspectorPropertyId::TerrainBrushMode,
-        InspectorPropertyId::TerrainBrushRadius,
-        InspectorPropertyId::TerrainBrushStrength,
+
+    AdvanceGroup(y); // Terrain Layers.
+    const std::optional<kb::assets::TerrainAsset> terrain =
+        EditorTerrainService::Load(sceneContext.Scene(), sceneContext.SelectedEntity());
+    const std::size_t layerCount = terrain.has_value() ? terrain->materialLayers.size() : 0U;
+    const int layerBodyHeight = TerrainMaterialLayersBodyHeight(layerCount);
+    const RECT layerBody = Rect(content.left, y, content.right, y + layerBodyHeight);
+    if (terrain.has_value()) {
+        for (std::size_t index = 0U; index < layerCount; ++index) {
+            const RECT card = TerrainLayerCardRect(layerBody, index);
+            const RECT picker = TerrainLayerPickerRect(card);
+            if (Contains(picker, x, yPoint)) {
+                return MakeHit(InspectorHitKind::Row, InspectorSectionId::Terrain, TerrainLayerPickerProperty(index), picker);
+            }
+            if (Contains(card, x, yPoint)) {
+                return MakeHit(InspectorHitKind::Row, InspectorSectionId::Terrain, TerrainLayerProperty(index), card);
+            }
+        }
+    }
+    const RECT toolbar = TerrainLayerToolbarRect(layerBody, layerCount);
+    if (Contains(toolbar, x, yPoint)) {
+        return MakeHit(InspectorHitKind::Row, InspectorSectionId::Terrain, terrain_material_layer_menu::kProperty, toolbar);
+    }
+    if (terrain_material_layer_menu::Open()) {
+        const RECT menu = TerrainLayerMenuRect(layerBody, layerCount);
+        const bool canAdd = terrain.has_value() && layerCount < kb::assets::TerrainAsset::MaximumMaterialLayers;
+        if (canAdd && Contains(TerrainLayerMenuItemRect(menu, 0), x, yPoint)) {
+            return MakeHit(InspectorHitKind::Row, InspectorSectionId::Terrain, InspectorPropertyId::TerrainMaterialLayerCreate, TerrainLayerMenuItemRect(menu, 0));
+        }
+        if (canAdd && Contains(TerrainLayerMenuItemRect(menu, 1), x, yPoint)) {
+            return MakeHit(InspectorHitKind::Row, InspectorSectionId::Terrain, InspectorPropertyId::TerrainMaterialLayerAdd, TerrainLayerMenuItemRect(menu, 1));
+        }
+        if (layerCount > 0U && Contains(TerrainLayerMenuItemRect(menu, 2), x, yPoint)) {
+            return MakeHit(InspectorHitKind::Row, InspectorSectionId::Terrain, InspectorPropertyId::TerrainMaterialLayerRemove, TerrainLayerMenuItemRect(menu, 2));
+        }
+    }
+    y += layerBodyHeight;
+
+    AdvanceGroup(y); // Brush Behavior.
+    constexpr std::array brushRows{
         InspectorPropertyId::TerrainBrushFalloff,
         InspectorPropertyId::TerrainFlattenHeight,
         InspectorPropertyId::TerrainTerraceStep,
-        InspectorPropertyId::TerrainImportHeightmap,
+        InspectorPropertyId::TerrainNoiseSeed,
     };
-    for (const InspectorPropertyId property : editableRows) {
+    for (const InspectorPropertyId property : brushRows) {
         if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Terrain, property, x, yPoint); hit.kind != InspectorHitKind::None) return hit;
         AdvanceRow(y);
     }
-    AdvanceRow(y); // Resolution (read only).
-    AdvanceRow(y); // Chunk/LOD status (read only).
-    if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(RowRect(content, y), InspectorSectionId::Terrain, InspectorPropertyId::MeshRendererMaterial, InspectorPropertyId::MeshRendererMaterialPicker, x, yPoint); hit.kind != InspectorHitKind::None) return hit;
+
+    AdvanceGroup(y); // Heightmap Import.
+    if (InspectorPanelRenderer::Hit hit = HitPair(
+            RowRect(content, y), InspectorSectionId::Terrain,
+            "Min", InspectorPropertyId::TerrainImportMinimumHeight,
+            "Max", InspectorPropertyId::TerrainImportMaximumHeight,
+            x, yPoint); hit.kind != InspectorHitKind::None) return hit;
     AdvanceRow(y);
-    if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(content, y), InspectorSectionId::Terrain, InspectorPropertyId::MeshRendererCastsShadow, x, yPoint); hit.kind != InspectorHitKind::None) return hit;
+    if (InspectorPanelRenderer::Hit hit = HitBool(
+            RowRect(content, y), InspectorSectionId::Terrain,
+            InspectorPropertyId::TerrainImportFlipVertically,
+            x, yPoint); hit.kind != InspectorHitKind::None) return hit;
     AdvanceRow(y);
-    if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(content, y), InspectorSectionId::Terrain, InspectorPropertyId::MeshRendererReceivesShadow, x, yPoint); hit.kind != InspectorHitKind::None) return hit;
+    if (InspectorPanelRenderer::Hit hit = HitTextRow(
+            RowRect(content, y), InspectorSectionId::Terrain,
+            InspectorPropertyId::TerrainImportHeightmap,
+            x, yPoint); hit.kind != InspectorHitKind::None) return hit;
     AdvanceRow(y);
+
+    AdvanceGroup(y); // Rendering.
+    if (InspectorPanelRenderer::Hit hit = HitBoolPair(
+            RowRect(content, y), InspectorSectionId::Terrain,
+            InspectorPropertyId::MeshRendererCastsShadow,
+            InspectorPropertyId::MeshRendererReceivesShadow,
+            x, yPoint); hit.kind != InspectorHitKind::None) return hit;
+    AdvanceRow(y);
+
+    const RECT advanced = Rect(content.left, y, content.right, y + kDisclosureRowHeight);
+    if (Contains(advanced, x, yPoint)) {
+        return MakeHit(InspectorHitKind::Row, InspectorSectionId::Terrain, InspectorPropertyId::TerrainAdvanced, advanced);
+    }
+    y += kDisclosureRowHeight + kDividerHeight;
+    if (state.IsDisclosureExpanded(InspectorDisclosureId::TerrainAdvanced)) {
+        if (InspectorPanelRenderer::Hit hit = HitPair(
+                RowRect(content, y), InspectorSectionId::Terrain,
+                "X", InspectorPropertyId::TerrainResolutionX,
+                "Z", InspectorPropertyId::TerrainResolutionZ,
+                x, yPoint); hit.kind != InspectorHitKind::None) return hit;
+        AdvanceRow(y);
+        if (InspectorPanelRenderer::Hit hit = HitPair(
+                RowRect(content, y), InspectorSectionId::Terrain,
+                "X", InspectorPropertyId::TerrainWorldSizeX,
+                "Z", InspectorPropertyId::TerrainWorldSizeZ,
+                x, yPoint); hit.kind != InspectorHitKind::None) return hit;
+        AdvanceRow(y);
+        if (InspectorPanelRenderer::Hit hit = HitPair(
+                RowRect(content, y), InspectorSectionId::Terrain,
+                "Chunk", InspectorPropertyId::TerrainChunkQuads,
+                "LODs", InspectorPropertyId::TerrainLodCount,
+                x, yPoint); hit.kind != InspectorHitKind::None) return hit;
+        AdvanceRow(y);
+        AdvanceRow(y); // Streaming Layout summary (read only).
+    }
     return {};
 }
 
@@ -3277,7 +3790,7 @@ void InspectorPanelRenderer::PaintAddComponentOverlay(HDC dc, const RECT& bounds
     if (!sceneContext.Inspector().IsAddComponentBrowserOpen()) {
         return;
     }
-    DrawAddComponentBrowser(dc, bounds, theme, sceneContext.Inspector());
+    DrawAddComponentBrowser(dc, bounds, theme, sceneContext.Inspector(), sceneContext);
 }
 
 InspectorPanelRenderer::AddComponentScrollInfo InspectorPanelRenderer::AddComponentOverlayScrollGeometry(const RECT& bounds, const EditorSceneContext& sceneContext) {
@@ -3288,7 +3801,9 @@ InspectorPanelRenderer::AddComponentScrollInfo InspectorPanelRenderer::AddCompon
     const std::string_view query = AddComponentQuery(state);
     const std::string& category = state.AddComponentBrowserCategory();
     const bool showBack = query.empty() && !category.empty();
-    const std::vector<AddComponentRow> rows = InspectorAddComponentBrowserModel::Rows(query.empty() ? std::string_view{ category } : std::string_view{}, query);
+    const std::vector<AddComponentRow> rows = InspectorAddComponentBrowserModel::Rows(
+        query.empty() ? std::string_view{ category } : std::string_view{}, query,
+        [&sceneContext](std::string_view pluginId) { return sceneContext.IsProjectPluginEnabled(pluginId); });
     const RECT list = AddComponentListRect(bounds, showBack);
     const int listHeight = static_cast<int>(list.bottom - list.top);
     const int rowCount = static_cast<int>(rows.size());
@@ -3340,7 +3855,9 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTestAddComponentOverlay(
         }
     }
     const std::vector<AddComponentRow> rows =
-        InspectorAddComponentBrowserModel::Rows(query.empty() ? std::string_view{ category } : std::string_view{}, query);
+        InspectorAddComponentBrowserModel::Rows(
+            query.empty() ? std::string_view{ category } : std::string_view{}, query,
+            [&sceneContext](std::string_view pluginId) { return sceneContext.IsProjectPluginEnabled(pluginId); });
     const RECT list = AddComponentListRect(bounds, showBack);
     const int listHeight = static_cast<int>(list.bottom - list.top);
     const int rowCount = static_cast<int>(rows.size());
@@ -3904,8 +4421,9 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         y += kSectionGap;
     }
 
-    if (EditorTerrainService::IsTerrainEntity(sceneContext.Scene(), selected)) {
-        if (InspectorPanelRenderer::Hit hit = HitTestTerrainSection(viewport, state, x, scrolledY, y); hit.kind != InspectorHitKind::None) return hit;
+    if (sceneContext.IsProjectPluginEnabled("Editor.Terrain") &&
+        EditorTerrainService::IsTerrainEntity(sceneContext.Scene(), selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitTestTerrainSection(viewport, state, sceneContext, x, scrolledY, y); hit.kind != InspectorHitKind::None) return hit;
         y += kSectionGap;
     }
 

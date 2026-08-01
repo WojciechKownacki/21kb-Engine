@@ -139,6 +139,9 @@ struct RenderMeshSectionDesc {
     std::uint32_t materialSlot = 0;
     RenderBoundsSphere bounds{};
     std::uint8_t lodLevel = 0;
+    // UINT8_MAX for ordinary meshes; 0..3 for a terrain material pass.
+    std::uint8_t terrainLayerIndex = UINT8_MAX;
+    bool terrainLayerActive = true;
 };
 
 struct RenderMeshSection {
@@ -147,6 +150,8 @@ struct RenderMeshSection {
     std::uint32_t materialSlot = 0;
     RenderBoundsSphere bounds{};
     std::uint8_t lodLevel = 0;
+    std::uint8_t terrainLayerIndex = UINT8_MAX;
+    bool terrainLayerActive = true;
 };
 
 struct RenderMeshletDesc {
@@ -211,10 +216,17 @@ struct RenderMeshDesc {
     RenderGpuDrivenMeshDesc gpuDriven{};
     std::uint64_t rasterStateExtra = 0;
     bool doubleSided = false;
+    bool dynamicVertexBuffer = false;
+    const std::uint8_t* terrainLayerWeights = nullptr;
+    std::uint32_t terrainLayerWeightBytes = 0U;
+    std::uint16_t terrainLayerWeightWidth = 0U;
+    std::uint16_t terrainLayerWeightHeight = 0U;
+    std::uint8_t terrainLayerCount = 0U;
 };
 
 struct RenderMeshResource {
     bgfx::VertexBufferHandle vertexBuffer = BGFX_INVALID_HANDLE;
+    bgfx::DynamicVertexBufferHandle dynamicVertexBuffer = BGFX_INVALID_HANDLE;
     bgfx::IndexBufferHandle indexBuffer = BGFX_INVALID_HANDLE;
     std::uint32_t vertexCount = 0;
     std::uint32_t indexCount = 0;
@@ -230,6 +242,10 @@ struct RenderMeshResource {
     bool gpuCullingEnabled = false;
     bool indirectDrawsEnabled = false;
     bool meshletCullingEnabled = false;
+    bgfx::TextureHandle terrainLayerWeightTexture = BGFX_INVALID_HANDLE;
+    std::uint16_t terrainLayerWeightWidth = 0U;
+    std::uint16_t terrainLayerWeightHeight = 0U;
+    std::uint8_t terrainLayerCount = 0U;
     std::uint64_t version = 0;
 };
 

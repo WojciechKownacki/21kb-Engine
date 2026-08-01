@@ -82,6 +82,9 @@ namespace {
     const std::uint32_t renderWidth = std::max<std::uint32_t>(1U, RectWidth(previewRect));
     const std::uint32_t renderHeight = std::max<std::uint32_t>(1U, RectHeight(previewRect));
     const EditorMaterialPreviewSceneSettings& previewSettings = sceneContext.MaterialPreviewSceneSettings();
+    const EditorMaterialPreviewSurface previewSurface = viewportKey == kInspectorMaterialPreviewViewportKey
+        ? EditorMaterialPreviewSurface::Inspector
+        : EditorMaterialPreviewSurface::MaterialEditor;
     return EditorSceneBgfxViewport::PresentSettings{
         .renderWidth = renderWidth,
         .renderHeight = renderHeight,
@@ -93,7 +96,8 @@ namespace {
         .lightingConfig = BuildMaterialPreviewLightingConfig(previewSettings, sceneContext.Project().sceneLightingPath),
         .materialGraphContext = kb::render::RenderMaterialGraphBuildContext{
             .qualityLevel = previewSettings.qualityLevel,
-            .variantUsage = sceneContext.MaterialPreviewNodePreviewEnabled()
+            .variantUsage = previewSurface == EditorMaterialPreviewSurface::MaterialEditor &&
+                    sceneContext.MaterialPreviewNodePreviewEnabled()
                 ? kb::render::RenderMaterialGraphVariantUsage::NodePreview
                 : kb::render::RenderMaterialGraphVariantUsage::Preview,
         },
@@ -104,8 +108,8 @@ namespace {
         .selectionOutlineEnabled = false,
         .gpuDrivenRuntimeDispatchEnabled = false,
         .drawSafeArea = false,
-        .sceneRevision = sceneContext.MaterialPreviewRevision(),
-        .sceneDirtyBaseRevision = sceneContext.MaterialPreviewRevision(),
+        .sceneRevision = sceneContext.MaterialPreviewRevision(previewSurface),
+        .sceneDirtyBaseRevision = sceneContext.MaterialPreviewRevision(previewSurface),
         .sceneFullSyncRequired = true,
     };
 }
@@ -150,7 +154,10 @@ namespace {
         return false;
     }
 
-    const kb::scene::Scene& previewScene = sceneContext.MaterialPreviewScene(metadata->id);
+    const EditorMaterialPreviewSurface previewSurface = viewportKey == kInspectorMaterialPreviewViewportKey
+        ? EditorMaterialPreviewSurface::Inspector
+        : EditorMaterialPreviewSurface::MaterialEditor;
+    const kb::scene::Scene& previewScene = sceneContext.MaterialPreviewScene(metadata->id, previewSurface);
     const EditorSceneBgfxViewport::PresentSettings settings = BuildMaterialPreviewSettings(sceneContext, *preview, viewportKey);
     sceneViewport.Present(host, *preview, previewScene, settings);
     return true;
@@ -203,7 +210,7 @@ void AppendMaterialPreviewLayout(
             }
             layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
                 .viewportKey = panelLayout.panelId,
-                .bounds = SceneViewportToolbarRenderer::Resolve(content, sceneContext.ViewportPreview(panelLayout.panelId)).renderArea,
+                .bounds = SceneViewportToolbarRenderer::Resolve(content, sceneContext.ViewportPreview(panelLayout.panelId), sceneContext).renderArea,
             });
         }
     } else {
@@ -214,7 +221,7 @@ void AppendMaterialPreviewLayout(
             content.top += metrics.floatingChromeHeight;
             layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
                 .viewportKey = panel->id,
-                .bounds = SceneViewportToolbarRenderer::Resolve(content, sceneContext.ViewportPreview(panel->id)).renderArea,
+                .bounds = SceneViewportToolbarRenderer::Resolve(content, sceneContext.ViewportPreview(panel->id), sceneContext).renderArea,
             });
         }
     }

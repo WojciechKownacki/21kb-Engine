@@ -3,6 +3,7 @@
 #include "engine/assets/TerrainAsset.hpp"
 
 #include <cstdint>
+#include <vector>
 
 namespace kb::terrain_editor {
 
@@ -17,8 +18,18 @@ enum class TerrainBrushMode : std::uint8_t {
     FillHole,
 };
 
+enum class TerrainBrushShape : std::uint8_t {
+    SoftRound,
+    HardRound,
+    LinearRound,
+    Bell,
+    Ring,
+    Speckle,
+};
+
 struct TerrainBrushSettings {
     TerrainBrushMode mode = TerrainBrushMode::Raise;
+    TerrainBrushShape shape = TerrainBrushShape::SoftRound;
     float radius = 8.0F;
     float strength = 1.0F;
     float falloff = 0.65F;
@@ -44,9 +55,26 @@ struct TerrainBrushResult {
 };
 
 [[nodiscard]] bool IsTerrainBrushSettingsValid(const TerrainBrushSettings& settings) noexcept;
+[[nodiscard]] float TerrainBrushWeight(
+    float distance,
+    std::uint32_t sampleX,
+    std::uint32_t sampleZ,
+    const TerrainBrushSettings& settings) noexcept;
 [[nodiscard]] TerrainBrushResult ApplyTerrainBrush(
     kb::assets::TerrainAsset& terrain,
     const TerrainBrushSettings& settings,
     const TerrainBrushStamp& stamp) noexcept;
+// Hot path for an asset that was fully validated when the edit session began.
+// Brush mutations preserve the terrain sample invariants, while this entry
+// still checks dimensions, buffer sizes and all brush/stamp inputs.
+[[nodiscard]] TerrainBrushResult ApplyTerrainBrushToValidatedTerrain(
+    kb::assets::TerrainAsset& terrain,
+    const TerrainBrushSettings& settings,
+    const TerrainBrushStamp& stamp) noexcept;
+[[nodiscard]] TerrainBrushResult ApplyTerrainBrushToValidatedTerrain(
+    kb::assets::TerrainAsset& terrain,
+    const TerrainBrushSettings& settings,
+    const TerrainBrushStamp& stamp,
+    std::vector<float>& scratchHeights) noexcept;
 
 } // namespace kb::terrain_editor
