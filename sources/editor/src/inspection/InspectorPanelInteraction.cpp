@@ -831,6 +831,23 @@ template <typename Mutator>
         property == InspectorPropertyId::TerrainTerraceStep;
 }
 
+[[nodiscard]] bool IsTerrainImportFloatProperty(InspectorPropertyId property) noexcept {
+    return property == InspectorPropertyId::TerrainImportMinimumHeight ||
+        property == InspectorPropertyId::TerrainImportMaximumHeight;
+}
+
+[[nodiscard]] bool IsTerrainTextProperty(InspectorPropertyId property) noexcept {
+    return IsTerrainBrushFloatProperty(property) ||
+        IsTerrainImportFloatProperty(property) ||
+        property == InspectorPropertyId::TerrainNoiseSeed ||
+        property == InspectorPropertyId::TerrainResolutionX ||
+        property == InspectorPropertyId::TerrainResolutionZ ||
+        property == InspectorPropertyId::TerrainWorldSizeX ||
+        property == InspectorPropertyId::TerrainWorldSizeZ ||
+        property == InspectorPropertyId::TerrainChunkQuads ||
+        property == InspectorPropertyId::TerrainLodCount;
+}
+
 [[nodiscard]] float TerrainBrushFloatValue(const kb::terrain_editor::TerrainBrushSettings& brush, InspectorPropertyId property) noexcept {
     switch (property) {
     case InspectorPropertyId::TerrainBrushRadius: return brush.radius;
@@ -866,6 +883,51 @@ template <typename Mutator>
         sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(TerrainBrushFloatValue(EditorTerrainService::ToolState().brush, hit.property)));
         return true;
     }
+    if (IsTerrainImportFloatProperty(hit.property)) {
+        const kb::terrain_editor::TerrainHeightmapImportSettings& import =
+            EditorTerrainService::ToolState().heightmapImport;
+        sceneContext.Inspector().BeginTextEdit(
+            hit.property,
+            FormatCompactFloat(
+                hit.property == InspectorPropertyId::TerrainImportMinimumHeight
+                    ? import.minimumHeight
+                    : import.maximumHeight));
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::TerrainNoiseSeed) {
+        sceneContext.Inspector().BeginTextEdit(
+            hit.property,
+            std::to_string(EditorTerrainService::ToolState().brush.noiseSeed));
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::TerrainResolutionX ||
+        hit.property == InspectorPropertyId::TerrainResolutionZ ||
+        hit.property == InspectorPropertyId::TerrainWorldSizeX ||
+        hit.property == InspectorPropertyId::TerrainWorldSizeZ ||
+        hit.property == InspectorPropertyId::TerrainChunkQuads ||
+        hit.property == InspectorPropertyId::TerrainLodCount) {
+        const std::optional<kb::assets::TerrainAsset> terrain =
+            EditorTerrainService::Load(sceneContext.Scene(), entity);
+        if (!terrain.has_value()) return true;
+        std::string value;
+        switch (hit.property) {
+        case InspectorPropertyId::TerrainResolutionX: value = std::to_string(terrain->width); break;
+        case InspectorPropertyId::TerrainResolutionZ: value = std::to_string(terrain->height); break;
+        case InspectorPropertyId::TerrainWorldSizeX: value = FormatCompactFloat(terrain->worldSizeX); break;
+        case InspectorPropertyId::TerrainWorldSizeZ: value = FormatCompactFloat(terrain->worldSizeZ); break;
+        case InspectorPropertyId::TerrainChunkQuads: value = std::to_string(terrain->chunkQuads); break;
+        case InspectorPropertyId::TerrainLodCount: value = std::to_string(terrain->lodCount); break;
+        default: break;
+        }
+        sceneContext.Inspector().BeginTextEdit(hit.property, std::move(value));
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::TerrainImportFlipVertically) {
+        sceneContext.Inspector().EndTextEdit();
+        auto& flip = EditorTerrainService::ToolState().heightmapImport.flipVertically;
+        flip = !flip;
+        return true;
+    }
     if (hit.property == InspectorPropertyId::MeshRendererMaterial ||
         hit.property == InspectorPropertyId::MeshRendererCastsShadow ||
         hit.property == InspectorPropertyId::MeshRendererReceivesShadow) {
@@ -874,9 +936,91 @@ template <typename Mutator>
     return true;
 }
 
-[[nodiscard]] bool ApplyTerrainBrushText(InspectorPropertyId property, std::string_view text) {
+[[nodiscard]] bool ApplyTerrainText(
+    EditorSceneContext& sceneContext,
+    kb::scene::SceneEntity entity,
+    InspectorPropertyId property,
+    std::string_view text) {
+    if (property == InspectorPropertyId::TerrainNoiseSeed) {
+        text = Trim(text);
+        std::uint32_t value = 0U;
+        const std::from_chars_result parsed =
+            std::from_chars(text.data(), text.data() + text.size(), value);
+        if (text.empty() || parsed.ec != std::errc{} ||
+            parsed.ptr != text.data() + text.size()) {
+            return false;
+        }
+        EditorTerrainService::ToolState().brush.noiseSeed = value;
+        return true;
+    }
     float value = 0.0F;
     if (!ParseFloat(text, value) || !std::isfinite(value)) return false;
+    if (IsTerrainImportFloatProperty(property)) {
+        kb::terrain_editor::TerrainHeightmapImportSettings candidate =
+            EditorTerrainService::ToolState().heightmapImport;
+        if (property == InspectorPropertyId::TerrainImportMinimumHeight) {
+            candidate.minimumHeight = value;
+        } else {
+            candidate.maximumHeight = value;
+        }
+        if (!(candidate.minimumHeight < candidate.maximumHeight)) return false;
+        EditorTerrainService::ToolState().heightmapImport = candidate;
+        return true;
+    }
+    if (property == InspectorPropertyId::TerrainResolutionX ||
+        property == InspectorPropertyId::TerrainResolutionZ ||
+        property == InspectorPropertyId::TerrainWorldSizeX ||
+        property == InspectorPropertyId::TerrainWorldSizeZ ||
+        property == InspectorPropertyId::TerrainChunkQuads ||
+        property == InspectorPropertyId::TerrainLodCount) {
+        const std::optional<kb::assets::TerrainAsset> terrain =
+            EditorTerrainService::Load(sceneContext.Scene(), entity);
+        if (!terrain.has_value()) return false;
+        EditorTerrainConfiguration configuration{
+            .width = terrain->width,
+            .height = terrain->height,
+            .chunkQuads = terrain->chunkQuads,
+            .lodCount = terrain->lodCount,
+            .worldSizeX = terrain->worldSizeX,
+            .worldSizeZ = terrain->worldSizeZ,
+        };
+        if (property == InspectorPropertyId::TerrainWorldSizeX ||
+            property == InspectorPropertyId::TerrainWorldSizeZ) {
+            if (!ParseFloat(text, value) || !std::isfinite(value) || value <= 0.0F) {
+                return false;
+            }
+            if (property == InspectorPropertyId::TerrainWorldSizeX) {
+                configuration.worldSizeX = value;
+            } else {
+                configuration.worldSizeZ = value;
+            }
+        } else {
+            text = Trim(text);
+            std::uint32_t integer = 0U;
+            const std::from_chars_result parsed =
+                std::from_chars(text.data(), text.data() + text.size(), integer);
+            if (text.empty() || parsed.ec != std::errc{} ||
+                parsed.ptr != text.data() + text.size()) {
+                return false;
+            }
+            switch (property) {
+            case InspectorPropertyId::TerrainResolutionX: configuration.width = integer; break;
+            case InspectorPropertyId::TerrainResolutionZ: configuration.height = integer; break;
+            case InspectorPropertyId::TerrainChunkQuads: configuration.chunkQuads = integer; break;
+            case InspectorPropertyId::TerrainLodCount: configuration.lodCount = integer; break;
+            default: return false;
+            }
+        }
+        std::string error;
+        if (!sceneContext.ConfigureTerrain(entity, configuration, &error)) {
+            sceneContext.Console().Warning(
+                "Terrain", error.empty()
+                    ? "Terrain configuration is invalid."
+                    : error);
+            return false;
+        }
+        return true;
+    }
     kb::terrain_editor::TerrainBrushSettings candidate = EditorTerrainService::ToolState().brush;
     switch (property) {
     case InspectorPropertyId::TerrainBrushRadius: candidate.radius = value; break;
@@ -2640,6 +2784,7 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                 tool.mode = EditorTerrainToolMode::Select;
                 tool.hoverVisible = false;
                 tool.brushMenuOpen = false;
+                tool.brushShapeMenuOpen = false;
                 static_cast<void>(sceneContext.RemoveMeshRendererFromEntity(entity));
             } else if (hit.section == InspectorSectionId::MeshRenderer) {
                 static_cast<void>(sceneContext.RemoveMeshRendererFromEntity(entity));
@@ -3233,8 +3378,10 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             inspector.EndTextEdit();
             return true;
         }
-        if (IsTerrainBrushFloatProperty(inspector.EditedProperty())) {
-            static_cast<void>(ApplyTerrainBrushText(inspector.EditedProperty(), inspector.EditBuffer()));
+        if (IsTerrainTextProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyTerrainText(
+                sceneContext, entity,
+                inspector.EditedProperty(), inspector.EditBuffer()));
             inspector.EndTextEdit();
             return true;
         }

@@ -55,12 +55,23 @@ namespace {
         return false;
     }
     EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+    const auto selectBrush = [&tool](std::size_t index) {
+        tool.brush.mode = static_cast<kb::terrain_editor::TerrainBrushMode>(index);
+        const bool holes =
+            tool.brush.mode == kb::terrain_editor::TerrainBrushMode::CutHole ||
+            tool.brush.mode == kb::terrain_editor::TerrainBrushMode::FillHole;
+        tool.mode = holes ? EditorTerrainToolMode::Holes : EditorTerrainToolMode::Sculpt;
+        tool.editingEnabled = true;
+        tool.brushMenuOpen = false;
+        tool.brushShapeMenuOpen = false;
+    };
     if (PointInRect(toolbar.selectButton, x, y)) {
         tool.mode = EditorTerrainToolMode::Select;
         tool.editingEnabled = false;
         tool.strokeActive = false;
         tool.hoverVisible = false;
         tool.brushMenuOpen = false;
+        tool.brushShapeMenuOpen = false;
         return true;
     }
     if (PointInRect(toolbar.sculptButton, x, y)) {
@@ -71,6 +82,7 @@ namespace {
             tool.brush.mode = kb::terrain_editor::TerrainBrushMode::Raise;
         }
         tool.brushMenuOpen = false;
+        tool.brushShapeMenuOpen = false;
         return true;
     }
     if (PointInRect(toolbar.holesButton, x, y)) {
@@ -81,17 +93,39 @@ namespace {
             tool.brush.mode = kb::terrain_editor::TerrainBrushMode::CutHole;
         }
         tool.brushMenuOpen = false;
+        tool.brushShapeMenuOpen = false;
         return true;
     }
     if (PointInRect(toolbar.brushButton, x, y)) {
-        constexpr std::uint8_t brushCount = 8U;
-        const auto next = static_cast<std::uint8_t>(tool.brush.mode) + 1U;
-        tool.brush.mode = static_cast<kb::terrain_editor::TerrainBrushMode>(next % brushCount);
-        const bool holes = tool.brush.mode == kb::terrain_editor::TerrainBrushMode::CutHole ||
-            tool.brush.mode == kb::terrain_editor::TerrainBrushMode::FillHole;
-        tool.mode = holes ? EditorTerrainToolMode::Holes : EditorTerrainToolMode::Sculpt;
-        tool.editingEnabled = true;
+        tool.brushMenuOpen = !tool.brushMenuOpen;
+        tool.brushShapeMenuOpen = false;
+        return true;
+    }
+    if (PointInRect(toolbar.brushShapeButton, x, y)) {
+        tool.brushShapeMenuOpen = !tool.brushShapeMenuOpen;
         tool.brushMenuOpen = false;
+        return true;
+    }
+    if (tool.brushMenuOpen) {
+        for (std::size_t index = 0U; index < toolbar.brushItems.size(); ++index) {
+            if (PointInRect(toolbar.brushItems[index], x, y)) {
+                selectBrush(index);
+                return true;
+            }
+        }
+        if (PointInRect(toolbar.brushMenu, x, y)) return true;
+        tool.brushMenuOpen = false;
+        return true;
+    }
+    if (tool.brushShapeMenuOpen) {
+        for (std::size_t index = 0U; index < toolbar.brushShapeItems.size(); ++index) {
+            if (!PointInRect(toolbar.brushShapeItems[index], x, y)) continue;
+            tool.brush.shape = static_cast<kb::terrain_editor::TerrainBrushShape>(index);
+            tool.brushShapeMenuOpen = false;
+            return true;
+        }
+        if (PointInRect(toolbar.brushShapeMenu, x, y)) return true;
+        tool.brushShapeMenuOpen = false;
         return true;
     }
     if (PointInRect(toolbar.sizeMinusButton, x, y)) {

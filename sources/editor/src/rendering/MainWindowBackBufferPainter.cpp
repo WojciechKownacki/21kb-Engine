@@ -15,6 +15,7 @@
 #include "rendering/ProjectFilesFilterMenuOverlayWindow.hpp"
 #include "rendering/SceneViewportToolbarDropdownOverlayWindow.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
+#include "scene/EditorTerrainService.hpp"
 
 #include <algorithm>
 #include <optional>
@@ -91,7 +92,9 @@ struct SceneDropdownContent {
         if (panel == nullptr || panel->kind != DockPanelKind::Scene) {
             continue;
         }
-        if (sceneContext.ViewportPreview(panelLayout.panelId).ToolbarDropdown() == EditorViewportToolbarDropdown::None) {
+        const EditorTerrainToolState& terrainTool = EditorTerrainService::ToolState();
+        if (sceneContext.ViewportPreview(panelLayout.panelId).ToolbarDropdown() == EditorViewportToolbarDropdown::None &&
+            !terrainTool.brushMenuOpen && !terrainTool.brushShapeMenuOpen) {
             continue;
         }
         return SceneDropdownContent{

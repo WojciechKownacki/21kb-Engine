@@ -4,7 +4,9 @@
 #include "app/scene_viewport/EditorSceneViewportHitResolver.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SceneComponentVisitors.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "scene/EditorSceneContext.hpp"
 #include "scene/EditorTerrainService.hpp"
@@ -21,7 +23,15 @@ namespace {
 struct ResolvedTerrainPointer {
     kb::scene::SceneEntity entity{};
     kb::scene::Vec3 local{};
-    kb::assets::TerrainAsset terrain{};
+    float minimumSampleSpacing = 0.0F;
+};
+
+struct TerrainPickContext {
+    EditorSceneContext* sceneContext = nullptr;
+    const EditorSceneViewportRay* ray = nullptr;
+    kb::scene::SceneEntity entity{};
+    kb::scene::SceneEntity ignoredEntity{};
+    float distance = std::numeric_limits<float>::max();
 };
 
 [[nodiscard]] std::optional<kb::scene::Vec3> ToTerrainLocal(
@@ -136,6 +146,46 @@ struct ResolvedTerrainPointer {
     return std::nullopt;
 }
 
+[[nodiscard]] kb::scene::Vec3 ToWorld(
+    kb::scene::Vec3 local,
+    const kb::scene::TransformComponent& transform) noexcept {
+    const kb::scene::Vec3 scaled{
+        local.x * transform.worldScale.x,
+        local.y * transform.worldScale.y,
+        local.z * transform.worldScale.z,
+    };
+    return transform.worldPosition + kb::math::Rotate(transform.worldRotation, scaled);
+}
+
+void ConsiderTerrainPick(
+    kb::scene::SceneEntity entity,
+    const kb::scene::TransformComponent& transform,
+    const kb::scene::MeshRendererComponent& renderer,
+    void* opaque) {
+    static_cast<void>(renderer);
+    auto& pick = *static_cast<TerrainPickContext*>(opaque);
+    if (entity == pick.ignoredEntity || pick.sceneContext == nullptr || pick.ray == nullptr ||
+        !EditorTerrainService::IsTerrainEntity(pick.sceneContext->Scene(), entity)) return;
+    std::optional<kb::assets::TerrainAsset> loaded;
+    const kb::assets::TerrainAsset* terrain = nullptr;
+    if (pick.sceneContext->SelectedEntity() == entity) {
+        terrain = pick.sceneContext->TerrainForEditing(entity);
+    } else {
+        loaded = EditorTerrainService::Load(pick.sceneContext->Scene(), entity);
+        terrain = loaded.has_value() ? &*loaded : nullptr;
+    }
+    if (terrain == nullptr) return;
+    const std::optional<kb::scene::Vec3> local = TerrainSurfaceHit(*pick.ray, transform, *terrain);
+    if (!local.has_value()) return;
+    const float distance = EditorSceneViewportMath::Dot(
+        ToWorld(*local, transform) - pick.ray->origin,
+        pick.ray->direction);
+    if (distance > 0.0F && distance < pick.distance) {
+        pick.entity = entity;
+        pick.distance = distance;
+    }
+}
+
 [[nodiscard]] std::optional<ResolvedTerrainPointer> ResolveTerrainPointer(
     HWND sourceWindow,
     HWND mainWindow,
@@ -153,8 +203,8 @@ struct ResolvedTerrainPointer {
     const std::optional<EditorSceneViewportHit> rayHit = EditorSceneViewportHitResolver::ResolveRay(
         sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext);
     if (!rayHit.has_value()) return std::nullopt;
-    std::optional<kb::assets::TerrainAsset> terrain = EditorTerrainService::Load(sceneContext.Scene(), entity);
-    if (!terrain.has_value()) return std::nullopt;
+    const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(entity);
+    if (terrain == nullptr) return std::nullopt;
     const kb::scene::TransformComponent transform = sceneContext.Scene().Transforms().Get(entity);
     const std::optional<kb::scene::Vec3> local = TerrainSurfaceHit(rayHit->ray, transform, *terrain);
     if (!local.has_value() ||
@@ -165,7 +215,9 @@ struct ResolvedTerrainPointer {
     return ResolvedTerrainPointer{
         .entity = entity,
         .local = *local,
-        .terrain = std::move(*terrain),
+        .minimumSampleSpacing = std::max(
+            terrain->worldSizeX / static_cast<float>(terrain->width - 1U),
+            terrain->worldSizeZ / static_cast<float>(terrain->height - 1U)),
     };
 }
 
@@ -177,6 +229,47 @@ struct ResolvedTerrainPointer {
 }
 
 } // namespace
+
+bool EditorTerrainViewportInteraction::SelectAt(
+    HWND sourceWindow,
+    HWND mainWindow,
+    int x,
+    int y,
+    const EditorDockModel& dockModel,
+    const EditorFloatingWindowManager& floatingWindows,
+    const EditorMetrics& metrics,
+    EditorSceneContext& sceneContext) {
+    if (!sceneContext.IsProjectPluginEnabled("Editor.Terrain")) return false;
+    const std::optional<EditorSceneViewportHit> rayHit = EditorSceneViewportHitResolver::ResolveRay(
+        sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext);
+    if (!rayHit.has_value()) return false;
+
+    EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+    const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
+    if (EditorTerrainService::IsTerrainEntity(sceneContext.Scene(), selected)) {
+        const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(selected);
+        if (terrain != nullptr) {
+            const kb::scene::TransformComponent transform = sceneContext.Scene().Transforms().Get(selected);
+            if (TerrainSurfaceHit(rayHit->ray, transform, *terrain).has_value()) {
+                return !tool.editingEnabled || tool.mode == EditorTerrainToolMode::Select;
+            }
+        }
+    }
+
+    TerrainPickContext pick{
+        .sceneContext = &sceneContext,
+        .ray = &rayHit->ray,
+        .ignoredEntity = selected,
+    };
+    sceneContext.Scene().Components().Visitors().ForEachMeshRenderer(&ConsiderTerrainPick, &pick);
+    if (!pick.entity.IsValid()) return false;
+
+    if (sceneContext.SelectedEntity() != pick.entity) {
+        sceneContext.SelectEntity(pick.entity);
+        return true;
+    }
+    return !tool.editingEnabled || tool.mode == EditorTerrainToolMode::Select;
+}
 
 bool EditorTerrainViewportInteraction::UpdateHover(
     HWND sourceWindow,
@@ -223,23 +316,23 @@ bool EditorTerrainViewportInteraction::Stamp(
     tool.hoverLocalX = pointer->local.x;
     tool.hoverLocalZ = pointer->local.z;
     if (!tool.editingEnabled || tool.mode == EditorTerrainToolMode::Select) {
-        tool.mode = EditorTerrainToolMode::Sculpt;
-        tool.editingEnabled = true;
-        tool.strokeActive = false;
-        return true;
+        return false;
     }
     if (!beginStroke) {
         const float dx = pointer->local.x - tool.lastStampX;
         const float dz = pointer->local.z - tool.lastStampZ;
         const float minimumSpacing = std::max(
-            pointer->terrain.worldSizeX / static_cast<float>(pointer->terrain.width - 1U),
+            pointer->minimumSampleSpacing,
             tool.brush.radius * 0.12F);
         if (dx * dx + dz * dz < minimumSpacing * minimumSpacing) return true;
     }
     std::string error;
-    if (!EditorTerrainService::ApplyBrush(
-            sceneContext.Scene(), pointer->entity, tool.brush,
-            kb::terrain_editor::TerrainBrushStamp{ .localX = pointer->local.x, .localZ = pointer->local.z }, &error)) {
+    if (!sceneContext.ApplyTerrainBrushStamp(
+            pointer->entity, tool.brush,
+            kb::terrain_editor::TerrainBrushStamp{
+                .localX = pointer->local.x,
+                .localZ = pointer->local.z },
+            beginStroke, &error)) {
         sceneContext.Console().Warning("Terrain", error.empty() ? "Terrain brush stamp failed." : error);
         return true;
     }

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 
 namespace kb::render {
 namespace {
@@ -131,6 +132,14 @@ std::optional<RenderMeshAssetData> RenderTerrainMeshBuilder::Build(const kb::ass
     BuildLodTable(mesh);
     mesh.materialSlots.push_back(RenderMaterialSlotDesc{});
     mesh.materialNames.emplace_back("Terrain");
+    RenderMeshEmbeddedMaterial defaultMaterial{};
+    defaultMaterial.name = "Terrain";
+    defaultMaterial.desc.baseColor[0] = 0.32F;
+    defaultMaterial.desc.baseColor[1] = 0.46F;
+    defaultMaterial.desc.baseColor[2] = 0.22F;
+    defaultMaterial.desc.baseColor[3] = 1.0F;
+    defaultMaterial.desc.roughnessFactor = 0.92F;
+    mesh.embeddedMaterials.push_back(std::move(defaultMaterial));
     mesh.RefreshDesc();
     return mesh;
 }

@@ -388,7 +388,17 @@ enum class InspectorPropertyId : std::uint16_t {
     TerrainBrushFalloff,
     TerrainFlattenHeight,
     TerrainTerraceStep,
+    TerrainNoiseSeed,
+    TerrainImportMinimumHeight,
+    TerrainImportMaximumHeight,
+    TerrainImportFlipVertically,
     TerrainImportHeightmap,
+    TerrainResolutionX,
+    TerrainResolutionZ,
+    TerrainWorldSizeX,
+    TerrainWorldSizeZ,
+    TerrainChunkQuads,
+    TerrainLodCount,
 };
 
 struct InspectorPanelState {

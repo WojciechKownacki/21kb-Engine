@@ -2090,21 +2090,6 @@ void PaintMultiSelection(HDC dc, RECT content, const EditorTheme& theme, const E
     return Rect(labelRight, top, content.right - kRowPadX, top + kValueHeight);
 }
 
-[[nodiscard]] std::string_view TerrainBrushModeName(kb::terrain_editor::TerrainBrushMode mode) noexcept {
-    using Mode = kb::terrain_editor::TerrainBrushMode;
-    switch (mode) {
-    case Mode::Raise: return "Raise / Mountain";
-    case Mode::Lower: return "Lower / Valley";
-    case Mode::Smooth: return "Smooth";
-    case Mode::Flatten: return "Flatten";
-    case Mode::Noise: return "Noise";
-    case Mode::Terrace: return "Terrace";
-    case Mode::CutHole: return "Cut Hole";
-    case Mode::FillHole: return "Fill Hole";
-    }
-    return "Raise / Mountain";
-}
-
 void PaintTerrainSection(
     HDC dc,
     RECT content,
@@ -2116,21 +2101,33 @@ void PaintTerrainSection(
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Terrain, HeroIconKind::Cube, "Terrain Editor", true);
     const EditorTerrainToolState& tool = EditorTerrainService::ToolState();
     const kb::terrain_editor::TerrainBrushSettings& brush = tool.brush;
-    section.Bool("Edit in Viewport", tool.editingEnabled, InspectorPropertyId::TerrainEditEnabled);
-    section.Field("Brush", TerrainBrushModeName(brush.mode), InspectorPropertyId::TerrainBrushMode);
-    section.Float("Radius", FormatFloat(brush.radius, 2), InspectorPropertyId::TerrainBrushRadius);
-    section.Float("Strength", FormatFloat(brush.strength, 2), InspectorPropertyId::TerrainBrushStrength);
     section.Float("Falloff", FormatFloat(brush.falloff, 2), InspectorPropertyId::TerrainBrushFalloff);
     section.Float("Flatten Height", FormatFloat(brush.targetHeight, 2), InspectorPropertyId::TerrainFlattenHeight);
     section.Float("Terrace Step", FormatFloat(brush.terraceStep, 2), InspectorPropertyId::TerrainTerraceStep);
+    section.Field("Noise Seed", std::to_string(brush.noiseSeed), InspectorPropertyId::TerrainNoiseSeed);
+    section.Float("Import Min Height", FormatFloat(tool.heightmapImport.minimumHeight, 2), InspectorPropertyId::TerrainImportMinimumHeight);
+    section.Float("Import Max Height", FormatFloat(tool.heightmapImport.maximumHeight, 2), InspectorPropertyId::TerrainImportMaximumHeight);
+    section.Bool("Import Flip Vertical", tool.heightmapImport.flipVertically, InspectorPropertyId::TerrainImportFlipVertically);
     section.Field("Heightmap", "Import PNG16 / RAW16...", InspectorPropertyId::TerrainImportHeightmap);
-    if (const std::optional<kb::assets::TerrainAsset> terrain = EditorTerrainService::Load(sceneContext.Scene(), sceneContext.SelectedEntity())) {
-        section.Field("Resolution", std::to_string(terrain->width) + " x " + std::to_string(terrain->height));
+    const std::optional<kb::assets::TerrainAsset> terrain =
+        EditorTerrainService::Load(sceneContext.Scene(), sceneContext.SelectedEntity());
+    if (terrain.has_value()) {
+        section.Field("Resolution X", std::to_string(terrain->width), InspectorPropertyId::TerrainResolutionX);
+        section.Field("Resolution Z", std::to_string(terrain->height), InspectorPropertyId::TerrainResolutionZ);
+        section.Float("World Size X", FormatFloat(terrain->worldSizeX, 2), InspectorPropertyId::TerrainWorldSizeX);
+        section.Float("World Size Z", FormatFloat(terrain->worldSizeZ, 2), InspectorPropertyId::TerrainWorldSizeZ);
+        section.Field("Chunk Quads", std::to_string(terrain->chunkQuads), InspectorPropertyId::TerrainChunkQuads);
+        section.Field("LOD Count", std::to_string(terrain->lodCount), InspectorPropertyId::TerrainLodCount);
         const std::uint32_t chunksX = (terrain->width - 1U + terrain->chunkQuads - 1U) / terrain->chunkQuads;
         const std::uint32_t chunksZ = (terrain->height - 1U + terrain->chunkQuads - 1U) / terrain->chunkQuads;
         section.Field("Streaming", std::to_string(chunksX * chunksZ) + " chunks / " + std::to_string(terrain->lodCount) + " LODs");
     } else {
-        section.Field("Resolution", "Asset unavailable");
+        section.Field("Resolution X", "Asset unavailable");
+        section.Field("Resolution Z", "-");
+        section.Field("World Size X", "-");
+        section.Field("World Size Z", "-");
+        section.Field("Chunk Quads", "-");
+        section.Field("LOD Count", "-");
         section.Field("Streaming", "-");
     }
     section.AssetField("Material", MaterialDisplayName(sceneContext, renderer.materialAssetId), InspectorPropertyId::MeshRendererMaterial, InspectorPropertyId::MeshRendererMaterialPicker);
@@ -2426,7 +2423,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (const kb::scene::MeshRendererComponent* meshRenderer = scene.Components().MeshRenderers().TryGet(selected); meshRenderer != nullptr) {
         const bool terrain = EditorTerrainService::IsTerrainEntity(scene, selected);
         if (!terrain || sceneContext.IsProjectPluginEnabled("Editor.Terrain")) {
-            const int h = terrain ? SectionHeight(inspector, InspectorSectionId::Terrain, 13) : MeshRendererSectionHeight(sceneContext, *meshRenderer);
+            const int h = terrain ? SectionHeight(inspector, InspectorSectionId::Terrain, 18) : MeshRendererSectionHeight(sceneContext, *meshRenderer);
             if (sectionVisible(y, h)) {
                 if (terrain) PaintTerrainSection(dc, content, y, theme, inspector, sceneContext, *meshRenderer);
                 else PaintMeshRendererSection(dc, content, y, theme, inspector, sceneContext, *meshRenderer);
@@ -2647,7 +2644,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         const bool terrain = EditorTerrainService::IsTerrainEntity(scene, selected);
         if (!terrain || sceneContext.IsProjectPluginEnabled("Editor.Terrain")) {
             height += (terrain
-                ? SectionHeight(inspector, InspectorSectionId::Terrain, 13)
+                ? SectionHeight(inspector, InspectorSectionId::Terrain, 18)
                 : MeshRendererSectionHeight(sceneContext, *renderer)) + kSectionGap;
         }
     }
@@ -3179,23 +3176,43 @@ void AdvanceRow(int& y) noexcept {
     int& y) noexcept {
     if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::Terrain, x, yPoint, true); hit.kind != InspectorHitKind::None) return hit;
     if (state.IsCollapsed(InspectorSectionId::Terrain)) return {};
-    if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(content, y), InspectorSectionId::Terrain, InspectorPropertyId::TerrainEditEnabled, x, yPoint); hit.kind != InspectorHitKind::None) return hit;
-    AdvanceRow(y);
     constexpr std::array editableRows{
-        InspectorPropertyId::TerrainBrushMode,
-        InspectorPropertyId::TerrainBrushRadius,
-        InspectorPropertyId::TerrainBrushStrength,
         InspectorPropertyId::TerrainBrushFalloff,
         InspectorPropertyId::TerrainFlattenHeight,
         InspectorPropertyId::TerrainTerraceStep,
-        InspectorPropertyId::TerrainImportHeightmap,
+        InspectorPropertyId::TerrainNoiseSeed,
+        InspectorPropertyId::TerrainImportMinimumHeight,
+        InspectorPropertyId::TerrainImportMaximumHeight,
     };
     for (const InspectorPropertyId property : editableRows) {
         if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Terrain, property, x, yPoint); hit.kind != InspectorHitKind::None) return hit;
         AdvanceRow(y);
     }
-    AdvanceRow(y); // Resolution (read only).
-    AdvanceRow(y); // Chunk/LOD status (read only).
+    if (InspectorPanelRenderer::Hit hit = HitBool(
+            RowRect(content, y), InspectorSectionId::Terrain,
+            InspectorPropertyId::TerrainImportFlipVertically,
+            x, yPoint); hit.kind != InspectorHitKind::None) return hit;
+    AdvanceRow(y);
+    if (InspectorPanelRenderer::Hit hit = HitTextRow(
+            RowRect(content, y), InspectorSectionId::Terrain,
+            InspectorPropertyId::TerrainImportHeightmap,
+            x, yPoint); hit.kind != InspectorHitKind::None) return hit;
+    AdvanceRow(y);
+    constexpr std::array configurationRows{
+        InspectorPropertyId::TerrainResolutionX,
+        InspectorPropertyId::TerrainResolutionZ,
+        InspectorPropertyId::TerrainWorldSizeX,
+        InspectorPropertyId::TerrainWorldSizeZ,
+        InspectorPropertyId::TerrainChunkQuads,
+        InspectorPropertyId::TerrainLodCount,
+    };
+    for (const InspectorPropertyId property : configurationRows) {
+        if (InspectorPanelRenderer::Hit hit = HitTextRow(
+                RowRect(content, y), InspectorSectionId::Terrain,
+                property, x, yPoint); hit.kind != InspectorHitKind::None) return hit;
+        AdvanceRow(y);
+    }
+    AdvanceRow(y); // Streaming summary (read only).
     if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(RowRect(content, y), InspectorSectionId::Terrain, InspectorPropertyId::MeshRendererMaterial, InspectorPropertyId::MeshRendererMaterialPicker, x, yPoint); hit.kind != InspectorHitKind::None) return hit;
     AdvanceRow(y);
     if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(content, y), InspectorSectionId::Terrain, InspectorPropertyId::MeshRendererCastsShadow, x, yPoint); hit.kind != InspectorHitKind::None) return hit;

@@ -44,6 +44,7 @@ struct TerrainViewportToolbarRects {
     RECT sculptButton{};
     RECT holesButton{};
     RECT brushButton{};
+    RECT brushShapeButton{};
     RECT sizeMinusButton{};
     RECT sizeValue{};
     RECT sizePlusButton{};
@@ -52,6 +53,8 @@ struct TerrainViewportToolbarRects {
     RECT strengthPlusButton{};
     RECT brushMenu{};
     std::array<RECT, 8U> brushItems{};
+    RECT brushShapeMenu{};
+    std::array<RECT, 6U> brushShapeItems{};
 };
 
 struct SceneViewportToolbarRenderStats {
@@ -111,6 +114,12 @@ public:
         const RECT& content,
         const EditorTheme& theme,
         const EditorSceneContext& sceneContext);
+    static void PaintTerrainPopup(
+        HDC dc,
+        const RECT& bounds,
+        const EditorTheme& theme,
+        const EditorSceneContext& sceneContext,
+        int hoveredItem = -1);
 };
 
 #endif
