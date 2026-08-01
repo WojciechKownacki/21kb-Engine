@@ -1801,6 +1801,7 @@ bool EditorSceneContext::ApplyTerrainBrushStamp(
             .before = captured->terrain,
             .working = std::move(captured->terrain),
             .previewMesh = std::move(previewMesh),
+            .label = "Sculpt Terrain",
         };
     }
     if (!terrainStroke_.has_value() || terrainStroke_->entity != entity) {
@@ -1835,6 +1836,153 @@ bool EditorSceneContext::ApplyTerrainBrushStamp(
     return true;
 }
 
+bool EditorSceneContext::ApplyTerrainLayerPaintStamp(
+    kb::scene::SceneEntity entity,
+    const kb::terrain_editor::TerrainLayerPaintSettings& settings,
+    const kb::terrain_editor::TerrainBrushStamp& stamp,
+    bool beginStroke,
+    std::string* error) {
+    if (beginStroke) {
+        CancelTerrainBrushStroke();
+        std::optional<EditorTerrainAssetState> captured =
+            EditorTerrainService::Capture(*scene_, entity, error);
+        if (!captured.has_value()) return false;
+        std::shared_ptr<kb::render::RenderMeshAssetData> previewMesh =
+            EditorTerrainService::CreatePreviewMesh(
+                *scene_, captured->assetId, captured->terrain, error);
+        if (previewMesh == nullptr) return false;
+        terrainStroke_ = TerrainStrokeState{
+            .entity = entity,
+            .assetId = captured->assetId,
+            .before = captured->terrain,
+            .working = std::move(captured->terrain),
+            .previewMesh = std::move(previewMesh),
+            .label = "Paint Terrain Material",
+        };
+    }
+    if (!terrainStroke_.has_value() || terrainStroke_->entity != entity) {
+        if (error != nullptr) *error = "Terrain material paint stroke is not active";
+        return false;
+    }
+    const kb::terrain_editor::TerrainLayerPaintResult result =
+        kb::terrain_editor::ApplyTerrainLayerPaint(
+            terrainStroke_->working, settings, stamp);
+    if (!result.Changed()) {
+        if (error != nullptr) error->clear();
+        return true;
+    }
+    if (!EditorTerrainService::UpdateLayerPreviewMesh(
+            terrainStroke_->working, result, terrainStroke_->previewMesh, error)) {
+        CancelTerrainBrushStroke();
+        return false;
+    }
+    if (!terrainStroke_->previewPublished && !EditorTerrainService::PublishPreview(
+            *scene_, terrainStroke_->assetId,
+            terrainStroke_->working, terrainStroke_->previewMesh,
+            true, error)) {
+        CancelTerrainBrushStroke();
+        return false;
+    }
+    terrainStroke_->previewPublished = true;
+    terrainStroke_->changed = true;
+    return true;
+}
+
+bool EditorSceneContext::AddTerrainMaterialLayer(
+    kb::scene::SceneEntity entity,
+    kb::assets::AssetId materialAssetId,
+    std::string* error) {
+    CancelTerrainBrushStroke();
+    std::optional<EditorTerrainAssetState> captured =
+        EditorTerrainService::Capture(*scene_, entity, error);
+    if (!captured.has_value()) return false;
+    kb::assets::TerrainAsset edited = captured->terrain;
+    if (!kb::terrain_editor::AddTerrainMaterialLayer(edited, materialAssetId.value)) {
+        if (error != nullptr) *error = "Terrain supports at most four material layers";
+        return false;
+    }
+    const std::uint8_t selected = static_cast<std::uint8_t>(edited.materialLayers.size() - 1U);
+    auto command = std::make_unique<EditorTerrainAssetEditCommand>(
+        *scene_, captured->assetId, "Add Terrain Material Layer",
+        std::move(captured->terrain), std::move(edited));
+    if (!commandStack_.Execute(std::move(command))) {
+        if (error != nullptr && error->empty()) *error = "Terrain material layer could not be saved";
+        return false;
+    }
+    EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+    tool.selectedMaterialLayer = selected;
+    tool.mode = EditorTerrainToolMode::Paint;
+    tool.editingEnabled = true;
+    tool.brush.strength = std::min(tool.brush.strength, 1.0F);
+    terrainReadCache_.reset();
+    MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity>{ &entity, 1U });
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool EditorSceneContext::SetTerrainMaterialLayer(
+    kb::scene::SceneEntity entity,
+    std::uint8_t layerIndex,
+    kb::assets::AssetId materialAssetId,
+    std::string* error) {
+    CancelTerrainBrushStroke();
+    std::optional<EditorTerrainAssetState> captured =
+        EditorTerrainService::Capture(*scene_, entity, error);
+    if (!captured.has_value()) return false;
+    kb::assets::TerrainAsset edited = captured->terrain;
+    if (!kb::terrain_editor::SetTerrainMaterialLayer(
+            edited, layerIndex, materialAssetId.value)) {
+        if (error != nullptr) *error = "Terrain material layer index is invalid";
+        return false;
+    }
+    auto command = std::make_unique<EditorTerrainAssetEditCommand>(
+        *scene_, captured->assetId, "Assign Terrain Material Layer",
+        std::move(captured->terrain), std::move(edited));
+    if (!commandStack_.Execute(std::move(command))) {
+        if (error != nullptr && error->empty()) *error = "Terrain material layer could not be saved";
+        return false;
+    }
+    EditorTerrainService::ToolState().selectedMaterialLayer = layerIndex;
+    terrainReadCache_.reset();
+    MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity>{ &entity, 1U });
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool EditorSceneContext::RemoveTerrainMaterialLayer(
+    kb::scene::SceneEntity entity,
+    std::uint8_t layerIndex,
+    std::string* error) {
+    CancelTerrainBrushStroke();
+    std::optional<EditorTerrainAssetState> captured =
+        EditorTerrainService::Capture(*scene_, entity, error);
+    if (!captured.has_value()) return false;
+    kb::assets::TerrainAsset edited = captured->terrain;
+    if (!kb::terrain_editor::RemoveTerrainMaterialLayer(edited, layerIndex)) {
+        if (error != nullptr) *error = "Terrain material layer index is invalid";
+        return false;
+    }
+    const std::size_t remainingLayerCount = edited.materialLayers.size();
+    auto command = std::make_unique<EditorTerrainAssetEditCommand>(
+        *scene_, captured->assetId, "Remove Terrain Material Layer",
+        std::move(captured->terrain), std::move(edited));
+    if (!commandStack_.Execute(std::move(command))) {
+        if (error != nullptr && error->empty()) *error = "Terrain material layer could not be saved";
+        return false;
+    }
+    EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+    tool.selectedMaterialLayer = remainingLayerCount == 0U
+        ? 0U
+        : std::min<std::uint8_t>(layerIndex, static_cast<std::uint8_t>(remainingLayerCount - 1U));
+    if (remainingLayerCount == 0U && tool.mode == EditorTerrainToolMode::Paint) {
+        tool.mode = EditorTerrainToolMode::Sculpt;
+    }
+    terrainReadCache_.reset();
+    MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity>{ &entity, 1U });
+    if (error != nullptr) error->clear();
+    return true;
+}
+
 bool EditorSceneContext::CommitTerrainBrushStroke(std::string* error) {
     if (!terrainStroke_.has_value()) {
         if (error != nullptr) error->clear();
@@ -1857,7 +2005,7 @@ bool EditorSceneContext::CommitTerrainBrushStroke(std::string* error) {
         return false;
     }
     commandStack_.PushExecuted(std::make_unique<EditorTerrainAssetEditCommand>(
-        *scene_, completed.assetId, "Sculpt Terrain",
+        *scene_, completed.assetId, completed.label,
         std::move(completed.before), std::move(completed.working)));
     terrainReadCache_.reset();
     MarkSceneEntitiesRenderDirty(

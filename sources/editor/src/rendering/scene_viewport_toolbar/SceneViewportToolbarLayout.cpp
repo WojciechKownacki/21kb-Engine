@@ -123,12 +123,13 @@ TerrainViewportToolbarRects SceneViewportToolbarLayout::ResolveTerrainTools(cons
         cursor = value.right + gap;
         return value;
     };
-    rects.selectButton = button(54);
-    rects.sculptButton = button(58);
-    rects.holesButton = button(52);
+    rects.selectButton = button(48);
+    rects.sculptButton = button(50);
+    rects.holesButton = button(46);
+    rects.paintButton = button(46);
     cursor += 1;
-    rects.brushButton = button(110);
-    rects.brushShapeButton = button(124);
+    rects.brushButton = button(95);
+    rects.brushShapeButton = button(110);
     cursor += 1;
     rects.sizeMinusButton = button(24);
     rects.sizeValue = button(58);

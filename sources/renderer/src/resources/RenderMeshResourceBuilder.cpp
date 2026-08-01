@@ -30,6 +30,8 @@ namespace {
             .materialSlot = section.materialSlot,
             .bounds = section.bounds.IsValid() ? section.bounds : RenderMeshDescGeometry::ComputeBounds(desc, section.indexStart, section.indexCount),
             .lodLevel = section.lodLevel,
+            .terrainLayerIndex = section.terrainLayerIndex,
+            .terrainLayerActive = section.terrainLayerActive,
         });
     }
     return sections;
@@ -112,6 +114,9 @@ RenderMeshResource RenderMeshResourceBuilder::Build(
         .gpuCullingEnabled = desc.gpuDriven.allowGpuCulling && desc.gpuDriven.meshletCount > 0U,
         .indirectDrawsEnabled = desc.gpuDriven.allowIndirectDraws && desc.gpuDriven.meshletCount > 0U,
         .meshletCullingEnabled = desc.gpuDriven.allowMeshletCulling && desc.gpuDriven.meshletCount > 0U,
+        .terrainLayerWeightWidth = desc.terrainLayerWeightWidth,
+        .terrainLayerWeightHeight = desc.terrainLayerWeightHeight,
+        .terrainLayerCount = desc.terrainLayerCount,
     };
 }
 

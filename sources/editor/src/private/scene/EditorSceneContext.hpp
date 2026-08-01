@@ -75,6 +75,7 @@ namespace kb::terrain_editor {
 struct TerrainBrushSettings;
 struct TerrainBrushStamp;
 struct TerrainHeightmapImportSettings;
+struct TerrainLayerPaintSettings;
 
 } // namespace kb::terrain_editor
 
@@ -129,6 +130,7 @@ class EditorSceneContext {
         std::shared_ptr<kb::render::RenderMeshAssetData> previewMesh{};
         bool changed = false;
         bool previewPublished = false;
+        std::string label = "Sculpt Terrain";
     };
 
     struct TerrainReadCache {
@@ -248,6 +250,25 @@ public:
         const kb::terrain_editor::TerrainBrushSettings& settings,
         const kb::terrain_editor::TerrainBrushStamp& stamp,
         bool beginStroke,
+        std::string* error = nullptr);
+    [[nodiscard]] bool ApplyTerrainLayerPaintStamp(
+        kb::scene::SceneEntity entity,
+        const kb::terrain_editor::TerrainLayerPaintSettings& settings,
+        const kb::terrain_editor::TerrainBrushStamp& stamp,
+        bool beginStroke,
+        std::string* error = nullptr);
+    [[nodiscard]] bool AddTerrainMaterialLayer(
+        kb::scene::SceneEntity entity,
+        kb::assets::AssetId materialAssetId,
+        std::string* error = nullptr);
+    [[nodiscard]] bool SetTerrainMaterialLayer(
+        kb::scene::SceneEntity entity,
+        std::uint8_t layerIndex,
+        kb::assets::AssetId materialAssetId,
+        std::string* error = nullptr);
+    [[nodiscard]] bool RemoveTerrainMaterialLayer(
+        kb::scene::SceneEntity entity,
+        std::uint8_t layerIndex,
         std::string* error = nullptr);
     [[nodiscard]] bool CommitTerrainBrushStroke(std::string* error = nullptr);
     void CancelTerrainBrushStroke() noexcept;

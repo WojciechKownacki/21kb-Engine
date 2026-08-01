@@ -12,7 +12,7 @@
 
 namespace kb::render {
 
-inline constexpr std::uint64_t kRenderMaterialGraphShaderWrapperVersion = 7ULL;
+inline constexpr std::uint64_t kRenderMaterialGraphShaderWrapperVersion = 8ULL;
 
 enum class RenderMaterialGraphShaderBackend : std::uint8_t {
     Dxbc,

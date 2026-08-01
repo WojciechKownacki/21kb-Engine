@@ -111,6 +111,14 @@ bool IsTerrainBrushSettingsValid(const TerrainBrushSettings& settings) noexcept 
         std::isfinite(settings.terraceStep) && settings.terraceStep > 0.0F && settings.terraceStep <= 100'000.0F;
 }
 
+float TerrainBrushWeight(
+    float distance,
+    std::uint32_t sampleX,
+    std::uint32_t sampleZ,
+    const TerrainBrushSettings& settings) noexcept {
+    return Weight(distance, sampleX, sampleZ, settings);
+}
+
 namespace {
 
 TerrainBrushResult ApplyTerrainBrushImpl(

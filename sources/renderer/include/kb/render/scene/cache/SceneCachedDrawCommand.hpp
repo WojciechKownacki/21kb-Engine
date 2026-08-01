@@ -35,6 +35,7 @@ struct SceneCachedDrawCommandKey {
     std::uint32_t indexStart = 0;
     std::uint32_t indexCount = 0;
     std::uint8_t lodLevel = 0;
+    std::uint8_t terrainLayerIndex = UINT8_MAX;
     std::uint64_t state = 0;
 
     [[nodiscard]] friend constexpr bool operator==(SceneCachedDrawCommandKey lhs, SceneCachedDrawCommandKey rhs) noexcept = default;
@@ -70,6 +71,7 @@ struct SceneCachedDrawCommandDesc {
     std::uint32_t indexStart = 0;
     std::uint32_t indexCount = 0;
     std::uint8_t lodLevel = 0;
+    std::uint8_t terrainLayerIndex = UINT8_MAX;
     RenderMeshHandle mesh{};
     RenderMaterialHandle material{};
     const RenderMeshResource* meshResource = nullptr;

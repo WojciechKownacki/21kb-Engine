@@ -848,6 +848,20 @@ template <typename Mutator>
         property == InspectorPropertyId::TerrainLodCount;
 }
 
+[[nodiscard]] std::optional<std::uint8_t> TerrainLayerIndexForProperty(InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::TerrainMaterialLayer0:
+    case InspectorPropertyId::TerrainMaterialLayerPicker0: return 0U;
+    case InspectorPropertyId::TerrainMaterialLayer1:
+    case InspectorPropertyId::TerrainMaterialLayerPicker1: return 1U;
+    case InspectorPropertyId::TerrainMaterialLayer2:
+    case InspectorPropertyId::TerrainMaterialLayerPicker2: return 2U;
+    case InspectorPropertyId::TerrainMaterialLayer3:
+    case InspectorPropertyId::TerrainMaterialLayerPicker3: return 3U;
+    default: return std::nullopt;
+    }
+}
+
 [[nodiscard]] float TerrainBrushFloatValue(const kb::terrain_editor::TerrainBrushSettings& brush, InspectorPropertyId property) noexcept {
     switch (property) {
     case InspectorPropertyId::TerrainBrushRadius: return brush.radius;
@@ -860,6 +874,23 @@ template <typename Mutator>
 }
 
 [[nodiscard]] bool HandleTerrainClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    if (const std::optional<std::uint8_t> layerIndex = TerrainLayerIndexForProperty(hit.property)) {
+        EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+        tool.selectedMaterialLayer = *layerIndex;
+        tool.mode = EditorTerrainToolMode::Paint;
+        tool.editingEnabled = true;
+        tool.brush.strength = std::min(tool.brush.strength, 1.0F);
+        tool.brushMenuOpen = false;
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::TerrainMaterialLayerRemove) {
+        std::string error;
+        if (!sceneContext.RemoveTerrainMaterialLayer(
+                entity, EditorTerrainService::ToolState().selectedMaterialLayer, &error)) {
+            sceneContext.Console().Warning("Terrain", error.empty() ? "Material layer could not be removed." : error);
+        }
+        return true;
+    }
     if (hit.property == InspectorPropertyId::TerrainEditEnabled) {
         sceneContext.Inspector().EndTextEdit();
         EditorTerrainToolState& tool = EditorTerrainService::ToolState();

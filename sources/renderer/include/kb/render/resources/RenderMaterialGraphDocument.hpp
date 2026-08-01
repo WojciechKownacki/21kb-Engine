@@ -586,7 +586,8 @@ struct RenderMaterialGraphReflectionUniform {
 inline constexpr std::uint32_t kRenderMaterialGraphTextureBaseSlot = 6U;
 // Conservative sampler ceiling shared by every backend we target (D3D11/D3D12/Vulkan/Metal/GL3+/GLES3
 // all expose >= 16 fragment samplers). Graph textures must fit in [base, ceiling).
-inline constexpr std::uint32_t kRenderMaterialGraphMaxTextureSamplers = 16U;
+// Slot 15 is reserved for the terrain material-layer weight map.
+inline constexpr std::uint32_t kRenderMaterialGraphMaxTextureSamplers = 15U;
 
 enum class RenderMaterialGraphTextureDimension : std::uint8_t {
     Texture2D,
