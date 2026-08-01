@@ -14,6 +14,8 @@
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconKind.hpp"
 #include "rendering/HeroIconPainter.hpp"
+#include "rendering/MaterialPreviewTextureAverageColor.hpp"
+#include "rendering/ProjectFilesMaterialPreviewThumbnailModel.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -24,6 +26,7 @@
 #include <cctype>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 #include <windowsx.h>
@@ -50,14 +53,14 @@ constexpr int kTextureColumns = 4;
 constexpr int kTextureViewportHeight = kTextureDialogHeight - 62;
 constexpr int kTextureSearchHeight = 28;
 constexpr int kTextureButtonWidth = 82;
-// Mesh picker (tile grid with live 3D previews instead of a flat list).
-constexpr int kMeshDialogWidth = 588;
-constexpr int kMeshDialogHeight = 560;
-constexpr int kMeshTileWidth = 168;
-constexpr int kMeshTileHeight = 176;
-constexpr int kMeshTilePreviewHeight = 130;
-constexpr int kMeshTileGap = 12;
-constexpr int kMeshColumns = 3;
+// Shared asset grid used by mesh and material pickers.
+constexpr int kAssetGridDialogWidth = 588;
+constexpr int kAssetGridDialogHeight = 560;
+constexpr int kAssetTileWidth = 168;
+constexpr int kAssetTileHeight = 176;
+constexpr int kAssetTilePreviewHeight = 130;
+constexpr int kAssetTileGap = 12;
+constexpr int kAssetTileColumns = 3;
 
 struct AssetPickerRow {
     kb::assets::AssetId assetId{};
@@ -68,6 +71,12 @@ struct AssetPickerRow {
 struct AssetPickerResult {
     bool accepted = false;
     kb::assets::AssetId assetId{};
+};
+
+enum class AssetPickerTileKind : std::uint8_t {
+    None,
+    Mesh,
+    Material,
 };
 
 [[nodiscard]] COLORREF Color(EditorColor color) {
@@ -308,7 +317,8 @@ public:
         HeroIconKind icon,
         const kb::assets::AssetManager* assetManager = nullptr,
         bool textureThumbnails = false,
-        bool meshTiles = false)
+        AssetPickerTileKind tileKind = AssetPickerTileKind::None,
+        bool allowClear = true)
         : theme_(theme)
         , rows_(std::move(rows))
         , currentAsset_(currentAsset)
@@ -319,7 +329,8 @@ public:
         , icon_(icon)
         , assetManager_(assetManager)
         , textureThumbnails_(textureThumbnails)
-        , meshTiles_(meshTiles) {}
+        , tileKind_(tileKind)
+        , allowClear_(allowClear) {}
 
     [[nodiscard]] AssetPickerResult Show(HWND owner) {
         owner_ = owner;
@@ -367,14 +378,14 @@ private:
         if (textureThumbnails_) {
             return kTextureDialogWidth;
         }
-        return meshTiles_ ? kMeshDialogWidth : kListDialogWidth;
+        return tileKind_ != AssetPickerTileKind::None ? kAssetGridDialogWidth : kListDialogWidth;
     }
 
     [[nodiscard]] int DialogHeight() const noexcept {
         if (textureThumbnails_) {
             return kTextureDialogHeight;
         }
-        return meshTiles_ ? kMeshDialogHeight : kListDialogHeight;
+        return tileKind_ != AssetPickerTileKind::None ? kAssetGridDialogHeight : kListDialogHeight;
     }
 
     void EnableOwner(bool enabled) const noexcept {
@@ -412,7 +423,18 @@ private:
     }
 
     [[nodiscard]] int RowCount() const noexcept {
-        return static_cast<int>(rows_.size()) + 1;
+        return static_cast<int>(rows_.size()) + (allowClear_ ? 1 : 0);
+    }
+
+    [[nodiscard]] int AssetRowOffset() const noexcept {
+        return allowClear_ ? 1 : 0;
+    }
+
+    [[nodiscard]] const AssetPickerRow* AssetAtRow(int row) const noexcept {
+        const int assetIndex = row - AssetRowOffset();
+        return assetIndex >= 0 && assetIndex < static_cast<int>(rows_.size())
+            ? &rows_[static_cast<std::size_t>(assetIndex)]
+            : nullptr;
     }
 
     [[nodiscard]] int MaxScroll() const noexcept {
@@ -433,7 +455,8 @@ private:
             return;
         }
         result_.accepted = true;
-        result_.assetId = row == 0 ? kb::assets::AssetId{} : rows_[static_cast<std::size_t>(row - 1)].assetId;
+        const AssetPickerRow* asset = AssetAtRow(row);
+        result_.assetId = asset != nullptr ? asset->assetId : kb::assets::AssetId{};
         running_ = false;
         DestroyWindow(window_);
     }
@@ -639,67 +662,98 @@ private:
         PaintTextureScrollbar(dc, viewport, contentHeight);
     }
 
-    // --- Mesh tile grid (live 3D previews; click a tile to assign, tile 0 = None) ---
+    // --- Asset tile grid (mesh or material previews) ---
 
-    [[nodiscard]] RECT MeshViewportRect() const noexcept {
+    [[nodiscard]] RECT TileGridViewportRect() const noexcept {
         const RECT client = Client();
         return Rect(kPad, kListHeaderHeight, client.right - kPad, client.bottom - kFooterHeight);
     }
 
-    [[nodiscard]] int MeshGridLeft(const RECT& viewport) const noexcept {
-        const int gridWidth = (kMeshColumns * kMeshTileWidth) + ((kMeshColumns - 1) * kMeshTileGap);
+    [[nodiscard]] int TileGridLeft(const RECT& viewport) const noexcept {
+        const int gridWidth = (kAssetTileColumns * kAssetTileWidth) + ((kAssetTileColumns - 1) * kAssetTileGap);
         const int usableWidth = std::max(0, RectWidth(viewport) - kScrollbarWidth);
         return viewport.left + std::max(0, (usableWidth - gridWidth) / 2);
     }
 
-    [[nodiscard]] int MeshContentHeight() const noexcept {
+    [[nodiscard]] int TileGridContentHeight() const noexcept {
         const int count = RowCount();
-        const int gridRows = (count + kMeshColumns - 1) / kMeshColumns;
-        return gridRows <= 0 ? 0 : (gridRows * kMeshTileHeight) + ((gridRows - 1) * kMeshTileGap);
+        const int gridRows = (count + kAssetTileColumns - 1) / kAssetTileColumns;
+        return gridRows <= 0 ? 0 : (gridRows * kAssetTileHeight) + ((gridRows - 1) * kAssetTileGap);
     }
 
-    [[nodiscard]] int MaxMeshScroll() const noexcept {
-        return std::max(0, MeshContentHeight() - RectHeight(MeshViewportRect()));
+    [[nodiscard]] int MaxTileGridScroll() const noexcept {
+        return std::max(0, TileGridContentHeight() - RectHeight(TileGridViewportRect()));
     }
 
-    [[nodiscard]] RECT MeshTileRect(const RECT& viewport, int index) const noexcept {
-        const int row = index / kMeshColumns;
-        const int column = index % kMeshColumns;
-        const int left = MeshGridLeft(viewport) + (column * (kMeshTileWidth + kMeshTileGap));
-        const int top = viewport.top + (row * (kMeshTileHeight + kMeshTileGap)) - scrollOffset_;
-        return Rect(left, top, left + kMeshTileWidth, top + kMeshTileHeight);
+    [[nodiscard]] RECT TileGridRect(const RECT& viewport, int index) const noexcept {
+        const int row = index / kAssetTileColumns;
+        const int column = index % kAssetTileColumns;
+        const int left = TileGridLeft(viewport) + (column * (kAssetTileWidth + kAssetTileGap));
+        const int top = viewport.top + (row * (kAssetTileHeight + kAssetTileGap)) - scrollOffset_;
+        return Rect(left, top, left + kAssetTileWidth, top + kAssetTileHeight);
     }
 
-    [[nodiscard]] int MeshTileAt(int x, int y) const noexcept {
-        const RECT viewport = MeshViewportRect();
+    [[nodiscard]] int TileGridAt(int x, int y) const noexcept {
+        const RECT viewport = TileGridViewportRect();
         if (!Contains(viewport, x, y)) {
             return -1;
         }
         for (int index = 0; index < RowCount(); ++index) {
-            if (Contains(MeshTileRect(viewport, index), x, y)) {
+            if (Contains(TileGridRect(viewport, index), x, y)) {
                 return index;
             }
         }
         return -1;
     }
 
-    // The tile of the mesh currently assigned to the renderer (0 = None when
-    // nothing is assigned) — the default highlight before the user clicks.
-    [[nodiscard]] int CurrentMeshTile() const noexcept {
-        for (int index = 1; index < RowCount(); ++index) {
-            if (rows_[static_cast<std::size_t>(index - 1)].assetId.value == currentAsset_.value) {
+    // The currently assigned asset provides the initial highlight. A clearable picker
+    // highlights its None tile when no asset is assigned.
+    [[nodiscard]] int CurrentTile() const noexcept {
+        for (int index = 0; index < RowCount(); ++index) {
+            const AssetPickerRow* asset = AssetAtRow(index);
+            if (asset != nullptr && asset->assetId.value == currentAsset_.value) {
                 return index;
             }
         }
-        return 0;
+        return allowClear_ ? 0 : -1;
     }
 
-    // The highlighted tile: the user's click selection, or the current mesh.
-    [[nodiscard]] int SelectedMeshTile() const noexcept {
-        return meshSelectedTile_ >= 0 ? meshSelectedTile_ : CurrentMeshTile();
+    // The highlighted tile: the user's click selection, or the current asset.
+    [[nodiscard]] int SelectedTile() const noexcept {
+        return selectedTile_ >= 0 ? selectedTile_ : CurrentTile();
     }
 
-    void PaintMeshTile(HDC dc, RECT rect, int tileIndex, bool selected, bool hovered) const {
+    [[nodiscard]] const ProjectFilesMaterialPreviewImage* MaterialPreviewAtRow(int row) const {
+        if (tileKind_ != AssetPickerTileKind::Material || assetManager_ == nullptr) {
+            return nullptr;
+        }
+        const AssetPickerRow* asset = AssetAtRow(row);
+        if (asset == nullptr) {
+            return nullptr;
+        }
+        if (const auto found = materialPreviews_.find(asset->assetId.value); found != materialPreviews_.end()) {
+            return &found->second;
+        }
+        const kb::assets::AssetMetadata* metadata = assetManager_->Registry().Find(asset->assetId);
+        if (metadata == nullptr) {
+            return nullptr;
+        }
+        const ProjectFilesMaterialPreviewStyle style = ProjectFilesMaterialPreviewThumbnailModel::StyleFromAsset(
+            *metadata,
+            assetManager_,
+            &MaterialPreviewTextureAverageColor);
+        auto [entry, inserted] = materialPreviews_.emplace(
+            asset->assetId.value,
+            ProjectFilesMaterialPreviewThumbnailModel::RenderImage(
+                kAssetTilePreviewHeight,
+                kAssetTilePreviewHeight,
+                style,
+                false));
+        static_cast<void>(inserted);
+        return &entry->second;
+    }
+
+    void PaintTileGridItem(HDC dc, RECT rect, int tileIndex, bool selected, bool hovered) const {
         const COLORREF fill = selected || hovered ? Rgb(51, 55, 65) : Rgb(19, 20, 24);
         const COLORREF border = selected ? Color(theme_.accent) : Rgb(0, 0, 0);
         GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
@@ -707,12 +761,13 @@ private:
             GdiDrawing::DrawSharpFrame(dc, GdiDrawing::Inset(rect, 1), fill, Color(theme_.accent));
         }
 
-        const RECT image = Rect(rect.left + 6, rect.top + 6, rect.right - 6, rect.top + 6 + kMeshTilePreviewHeight);
+        const RECT image = Rect(rect.left + 6, rect.top + 6, rect.right - 6, rect.top + 6 + kAssetTilePreviewHeight);
         GdiDrawing::DrawSharpFrame(dc, image, Rgb(10, 11, 14), Rgb(0, 0, 0));
 
         bool drewPreview = false;
-        if (tileIndex > 0 && assetManager_ != nullptr) {
-            const kb::assets::AssetMetadata* metadata = assetManager_->Registry().Find(rows_[static_cast<std::size_t>(tileIndex - 1)].assetId);
+        const AssetPickerRow* asset = AssetAtRow(tileIndex);
+        if (asset != nullptr && assetManager_ != nullptr && tileKind_ == AssetPickerTileKind::Mesh) {
+            const kb::assets::AssetMetadata* metadata = assetManager_->Registry().Find(asset->assetId);
             if (metadata != nullptr) {
                 if (const EditorMeshThumbnailImage* preview = EditorMeshPreviewCache().PreviewFor(*assetManager_, *metadata, EditorMeshPreviewSettings{}); preview != nullptr) {
                     DrawMeshThumbnail(dc, GdiDrawing::Inset(image, 1), *preview);
@@ -720,14 +775,42 @@ private:
                 }
             }
         }
+        if (asset != nullptr && tileKind_ == AssetPickerTileKind::Material) {
+            if (const ProjectFilesMaterialPreviewImage* preview = MaterialPreviewAtRow(tileIndex);
+                preview != nullptr && preview->width > 0 && preview->height > 0 && !preview->bgra.empty()) {
+                BITMAPINFO info{};
+                info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+                info.bmiHeader.biWidth = preview->width;
+                info.bmiHeader.biHeight = -preview->height;
+                info.bmiHeader.biPlanes = 1;
+                info.bmiHeader.biBitCount = 32;
+                info.bmiHeader.biCompression = BI_RGB;
+                const RECT target = GdiDrawing::Inset(image, 1);
+                static_cast<void>(StretchDIBits(
+                    dc,
+                    target.left,
+                    target.top,
+                    RectWidth(target),
+                    RectHeight(target),
+                    0,
+                    0,
+                    preview->width,
+                    preview->height,
+                    preview->bgra.data(),
+                    &info,
+                    DIB_RGB_COLORS,
+                    SRCCOPY));
+                drewPreview = true;
+            }
+        }
         if (!drewPreview) {
-            // The "None" tile, or a mesh whose preview could not be rasterised.
+            // The "None" tile, or an asset whose preview could not be rasterised.
             const COLORREF iconColor = selected ? Color(theme_.accent) : Rgb(128, 133, 145);
             HeroIconPainter::Draw(dc, GdiDrawing::Inset(image, 42), icon_, iconColor, 2);
         }
 
-        const std::string name = tileIndex == 0 ? std::string{ "None" } : rows_[static_cast<std::size_t>(tileIndex - 1)].name;
-        RECT label = Rect(rect.left + 8, rect.top + kMeshTilePreviewHeight + 12, rect.right - 8, rect.bottom - 6);
+        const std::string name = asset != nullptr ? asset->name : std::string{ "None" };
+        RECT label = Rect(rect.left + 8, rect.top + kAssetTilePreviewHeight + 12, rect.right - 8, rect.bottom - 6);
         ScopedFont labelFont(12, FW_SEMIBOLD);
         const ScopedGdiObject selectedFont(dc, labelFont.handle);
         SetBkMode(dc, TRANSPARENT);
@@ -735,12 +818,12 @@ private:
         DrawTextA(dc, name.c_str(), static_cast<int>(name.size()), &label, DT_CENTER | DT_TOP | DT_END_ELLIPSIS | DT_NOPREFIX | DT_SINGLELINE);
     }
 
-    void PaintMeshScrollbar(HDC dc, RECT viewport) const {
-        const int maxScroll = MaxMeshScroll();
+    void PaintTileGridScrollbar(HDC dc, RECT viewport) const {
+        const int maxScroll = MaxTileGridScroll();
         if (maxScroll <= 0) {
             return;
         }
-        const int contentHeight = MeshContentHeight();
+        const int contentHeight = TileGridContentHeight();
         const RECT track = Rect(viewport.right - kScrollbarWidth, viewport.top, viewport.right - 3, viewport.bottom);
         GdiDrawing::FillRectColor(dc, track, Rgb(17, 18, 22));
         const int thumbHeight = std::clamp((RectHeight(track) * RectHeight(viewport)) / std::max(1, contentHeight), 28, RectHeight(track));
@@ -749,7 +832,7 @@ private:
         GdiDrawing::FillRectColor(dc, Rect(track.left + 1, thumbTop, track.right - 1, thumbTop + thumbHeight), Rgb(83, 96, 113));
     }
 
-    void PaintMeshBrowser(HDC dc) const {
+    void PaintTileGrid(HDC dc) const {
         const RECT client = Client();
         GdiDrawing::FillRectColor(dc, client, Rgb(17, 19, 23));
         GdiDrawing::DrawSharpFrame(dc, client, Rgb(17, 19, 23), Rgb(68, 76, 88));
@@ -764,19 +847,26 @@ private:
         GdiDrawing::DrawSharpFrame(dc, close, hoveredRow_ == -2 ? Rgb(43, 48, 56) : Rgb(27, 30, 35), hoveredRow_ == -2 ? Color(theme_.accent) : Rgb(74, 82, 94));
         Text(dc, close, "x", hoveredRow_ == -2 ? Color(theme_.textPrimary) : Color(theme_.textSecondary), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
-        const RECT viewport = MeshViewportRect();
-        const int selectedTile = SelectedMeshTile();
+        const RECT viewport = TileGridViewportRect();
+        const int selectedTile = SelectedTile();
         const int saved = SaveDC(dc);
         IntersectClipRect(dc, viewport.left, viewport.top, viewport.right - kScrollbarWidth, viewport.bottom);
         for (int index = 0; index < RowCount(); ++index) {
-            const RECT tile = MeshTileRect(viewport, index);
+            const RECT tile = TileGridRect(viewport, index);
             if (tile.bottom < viewport.top || tile.top > viewport.bottom) {
                 continue;
             }
-            PaintMeshTile(dc, tile, index, index == selectedTile, hoveredRow_ == index);
+            PaintTileGridItem(dc, tile, index, index == selectedTile, hoveredRow_ == index);
+        }
+        if (RowCount() == 0) {
+            const char* message = tileKind_ == AssetPickerTileKind::Material
+                ? "No material assets found"
+                : "No mesh assets found";
+            Text(dc, Rect(viewport.left, viewport.top + 12, viewport.right, viewport.top + 40),
+                message, Color(theme_.textSecondary), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
         RestoreDC(dc, saved);
-        PaintMeshScrollbar(dc, viewport);
+        PaintTileGridScrollbar(dc, viewport);
 
         Text(dc, Rect(kPad, client.bottom - 32, client.right - kPad, client.bottom - 10), "Click to select. Double-click or Enter to assign. Esc closes.", Color(theme_.textSecondary));
     }
@@ -786,8 +876,8 @@ private:
             PaintTextureBrowser(dc);
             return;
         }
-        if (meshTiles_) {
-            PaintMeshBrowser(dc);
+        if (tileKind_ != AssetPickerTileKind::None) {
+            PaintTileGrid(dc);
             return;
         }
 
@@ -875,8 +965,8 @@ private:
             } else {
                 next = TextureTileAt(x, y);
             }
-        } else if (meshTiles_) {
-            next = Contains(CloseButton(), x, y) ? -2 : MeshTileAt(x, y);
+        } else if (tileKind_ != AssetPickerTileKind::None) {
+            next = Contains(CloseButton(), x, y) ? -2 : TileGridAt(x, y);
         } else {
             next = Contains(CloseButton(), x, y) ? -2 : RowAt(x, y);
         }
@@ -896,7 +986,7 @@ private:
             return;
         }
 
-        const int maxScroll = meshTiles_ ? MaxMeshScroll() : MaxScroll();
+        const int maxScroll = tileKind_ != AssetPickerTileKind::None ? MaxTileGridScroll() : MaxScroll();
         const int next = std::clamp(scrollOffset_ + delta, 0, maxScroll);
         if (next != scrollOffset_) {
             scrollOffset_ = next;
@@ -1067,12 +1157,12 @@ private:
                     DestroyWindow(window);
                     return 0;
                 }
-                if (picker->meshTiles_) {
+                if (picker->tileKind_ != AssetPickerTileKind::None) {
                     // Single click selects (highlights) a tile; a double click
                     // (WM_LBUTTONDBLCLK) confirms the assignment.
-                    const int tile = picker->MeshTileAt(x, y);
-                    if (tile >= 0 && tile != picker->meshSelectedTile_) {
-                        picker->meshSelectedTile_ = tile;
+                    const int tile = picker->TileGridAt(x, y);
+                    if (tile >= 0 && tile != picker->selectedTile_) {
+                        picker->selectedTile_ = tile;
                         InvalidateRect(window, nullptr, FALSE);
                     }
                     return 0;
@@ -1082,8 +1172,8 @@ private:
             }
             break;
         case WM_LBUTTONDBLCLK:
-            if (picker != nullptr && picker->meshTiles_) {
-                const int tile = picker->MeshTileAt(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
+            if (picker != nullptr && picker->tileKind_ != AssetPickerTileKind::None) {
+                const int tile = picker->TileGridAt(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
                 if (tile >= 0) {
                     picker->AcceptRow(tile);
                 }
@@ -1106,8 +1196,8 @@ private:
             if (picker != nullptr && picker->HandleTextureKeyDown(wparam)) {
                 return 0;
             }
-            if (picker != nullptr && picker->meshTiles_ && wparam == VK_RETURN) {
-                picker->AcceptRow(picker->SelectedMeshTile());
+            if (picker != nullptr && picker->tileKind_ != AssetPickerTileKind::None && wparam == VK_RETURN) {
+                picker->AcceptRow(picker->SelectedTile());
                 return 0;
             }
             if (picker != nullptr && wparam == VK_ESCAPE) {
@@ -1150,16 +1240,18 @@ private:
     HeroIconKind icon_ = HeroIconKind::Cube;
     const kb::assets::AssetManager* assetManager_ = nullptr;
     bool textureThumbnails_ = false;
-    bool meshTiles_ = false;
+    AssetPickerTileKind tileKind_ = AssetPickerTileKind::None;
+    bool allowClear_ = true;
     AssetPickerResult result_{};
     bool running_ = true;
     int hoveredRow_ = -1;
     int scrollOffset_ = 0;
-    int meshSelectedTile_ = -1; // -1 = "use the currently-assigned mesh's tile"
+    int selectedTile_ = -1;
     int pressedTextureTarget_ = -1;
     int textureScrollOffset_ = 0;
     bool textureSearchFocused_ = true;
     std::string textureQuery_;
+    mutable std::unordered_map<std::uint64_t, ProjectFilesMaterialPreviewImage> materialPreviews_;
 };
 
 } // namespace
@@ -1180,7 +1272,7 @@ EditorMeshAssetPickerDialog::Result EditorMeshAssetPickerDialog::Show(
         HeroIconKind::Cube,
         &manager,
         false, // textureThumbnails
-        true,  // meshTiles (grid of live previews)
+        AssetPickerTileKind::Mesh,
     };
     const AssetPickerResult result = window.Show(owner);
     return EditorMeshAssetPickerDialog::Result{ .accepted = result.accepted, .assetId = result.assetId };
@@ -1190,15 +1282,21 @@ EditorMaterialAssetPickerDialog::Result EditorMaterialAssetPickerDialog::Show(
     HWND owner,
     const EditorTheme& theme,
     const EditorSceneContext& sceneContext,
-    kb::assets::AssetId currentMaterial) {
+    kb::assets::AssetId currentMaterial,
+    bool allowClear) {
+    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     AssetPickerWindow window{
         theme,
         BuildMaterialRows(sceneContext),
         currentMaterial,
         "Select Material",
-        "Choose a material asset for the selected Mesh Renderer.",
-        "Clear Mesh Renderer material",
+        "Choose a material asset from this project.",
+        "Clear material assignment",
         HeroIconKind::AdjustmentsHorizontal,
+        &manager,
+        false,
+        AssetPickerTileKind::Material,
+        allowClear,
     };
     const AssetPickerResult result = window.Show(owner);
     return EditorMaterialAssetPickerDialog::Result{ .accepted = result.accepted, .assetId = result.assetId };

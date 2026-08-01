@@ -1019,7 +1019,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             terrain_material_layer_menu::Close();
             const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
             const EditorMaterialAssetPickerDialog::Result result = EditorMaterialAssetPickerDialog::Show(
-                mainWindow_, MakeEditorDarkTheme(), sceneContext_, {});
+                mainWindow_, MakeEditorDarkTheme(), sceneContext_, {}, false);
             if (result.accepted) {
                 std::string error;
                 const bool assigned = sceneContext_.AddTerrainMaterialLayer(entity, result.assetId, &error);
