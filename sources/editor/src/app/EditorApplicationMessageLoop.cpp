@@ -469,7 +469,7 @@ void ConfigurePlayModePointerViewport(EditorApplicationState& state) {
     const EditorViewportPreviewState& preview =
         state.sceneContext.ViewportPreview(scenePanel->panelId);
     const RECT renderArea =
-        SceneViewportToolbarRenderer::Resolve(scenePanel->content, preview).renderArea;
+        SceneViewportToolbarRenderer::Resolve(scenePanel->content, preview, state.sceneContext).renderArea;
     const std::uint32_t displayWidth = static_cast<std::uint32_t>(
         std::max<LONG>(0, renderArea.right - renderArea.left));
     const std::uint32_t displayHeight = static_cast<std::uint32_t>(

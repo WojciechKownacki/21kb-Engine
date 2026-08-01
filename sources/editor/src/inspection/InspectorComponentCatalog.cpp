@@ -124,4 +124,19 @@ const InspectorComponentTile* InspectorComponentCatalog::Find(std::string_view i
     return iter == tiles.end() ? nullptr : &*iter;
 }
 
+std::string_view InspectorComponentCatalog::RequiredPluginId(std::string_view componentId) noexcept {
+    if (componentId == "TerrainEditor") return "Editor.Terrain";
+    if (componentId == "Rigidbody" || componentId == "Collider" ||
+        componentId == "CharacterController" || componentId == "Joint") {
+        return "Physics.Jolt";
+    }
+    if (componentId == "AudioSource" || componentId == "AudioListener") {
+        return "Audio.Miniaudio";
+    }
+    if (componentId == "3D Radiance Emitter" || componentId == "Ambient Radiance") {
+        return "Rendering.BasicLighting";
+    }
+    return {};
+}
+
 } // namespace kb::editor

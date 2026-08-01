@@ -3,12 +3,24 @@
 #include <algorithm>
 
 namespace kb::editor {
+namespace {
 
-std::vector<AddComponentRow> InspectorAddComponentBrowserModel::Rows(std::string_view category, std::string_view query) {
+[[nodiscard]] bool IsAvailable(
+    const InspectorComponentTile& tile,
+    const InspectorAddComponentBrowserModel::PluginEnabledPredicate* pluginEnabled) {
+    const std::string_view requiredPlugin =
+        InspectorComponentCatalog::RequiredPluginId(tile.id);
+    return pluginEnabled == nullptr || requiredPlugin.empty() || (*pluginEnabled)(requiredPlugin);
+}
+
+[[nodiscard]] std::vector<AddComponentRow> BuildRows(
+    std::string_view category,
+    std::string_view query,
+    const InspectorAddComponentBrowserModel::PluginEnabledPredicate* pluginEnabled) {
     std::vector<AddComponentRow> rows;
     if (!query.empty()) {
         for (const InspectorComponentTile* tile : InspectorComponentCatalog::Search(query)) {
-            if (tile != nullptr) {
+            if (tile != nullptr && IsAvailable(*tile, pluginEnabled)) {
                 rows.push_back(AddComponentRow{ .kind = AddComponentRowKind::Component, .label = tile->label, .icon = tile->icon, .id = tile->id });
             }
         }
@@ -16,16 +28,34 @@ std::vector<AddComponentRow> InspectorAddComponentBrowserModel::Rows(std::string
     }
     if (!category.empty()) {
         for (const InspectorComponentTile* tile : InspectorComponentCatalog::InCategory(category)) {
-            if (tile != nullptr) {
+            if (tile != nullptr && IsAvailable(*tile, pluginEnabled)) {
                 rows.push_back(AddComponentRow{ .kind = AddComponentRowKind::Component, .label = tile->label, .icon = tile->icon, .id = tile->id });
             }
         }
         return rows;
     }
     for (const InspectorComponentCategory& entry : InspectorComponentCatalog::Categories()) {
-        rows.push_back(AddComponentRow{ .kind = AddComponentRowKind::Category, .label = entry.name, .icon = entry.icon, .id = entry.name });
+        const std::vector<const InspectorComponentTile*> tiles = InspectorComponentCatalog::InCategory(entry.name);
+        if (std::ranges::any_of(tiles, [pluginEnabled](const InspectorComponentTile* tile) {
+                return tile != nullptr && IsAvailable(*tile, pluginEnabled);
+            })) {
+            rows.push_back(AddComponentRow{ .kind = AddComponentRowKind::Category, .label = entry.name, .icon = entry.icon, .id = entry.name });
+        }
     }
     return rows;
+}
+
+} // namespace
+
+std::vector<AddComponentRow> InspectorAddComponentBrowserModel::Rows(std::string_view category, std::string_view query) {
+    return BuildRows(category, query, nullptr);
+}
+
+std::vector<AddComponentRow> InspectorAddComponentBrowserModel::Rows(
+    std::string_view category,
+    std::string_view query,
+    const PluginEnabledPredicate& pluginEnabled) {
+    return BuildRows(category, query, &pluginEnabled);
 }
 
 int InspectorAddComponentBrowserModel::TotalHeight(int rowCount, int rowHeightPx) noexcept {

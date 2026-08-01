@@ -46,7 +46,10 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     if (paintContext->panel->kind == DockPanelKind::Scene) {
         layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
             .viewportKey = paintContext->panel->id,
-            .bounds = SceneViewportToolbarRenderer::Resolve(content, paintContext->sceneContext->ViewportPreview(paintContext->panel->id)).renderArea,
+            .bounds = SceneViewportToolbarRenderer::Resolve(
+                content,
+                paintContext->sceneContext->ViewportPreview(paintContext->panel->id),
+                *paintContext->sceneContext).renderArea,
         });
     } else if (paintContext->panel->kind == DockPanelKind::Inspector) {
         if (const std::optional<RECT> preview = InspectorPanelRenderer::MaterialPreviewRect(content, *paintContext->sceneContext)) {

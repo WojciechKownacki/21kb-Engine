@@ -29,7 +29,6 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
-#include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorInputInteraction.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
@@ -196,7 +195,9 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
     }
     if (hit.property == InspectorPropertyId::AddComponentOption) {
         const std::string& category = sceneContext.Inspector().AddComponentBrowserCategory();
-        const std::vector<AddComponentRow> rows = InspectorAddComponentBrowserModel::Rows(query.empty() ? std::string_view{ category } : std::string_view{}, query);
+        const std::vector<AddComponentRow> rows = InspectorAddComponentBrowserModel::Rows(
+            query.empty() ? std::string_view{ category } : std::string_view{}, query,
+            [&sceneContext](std::string_view pluginId) { return sceneContext.IsProjectPluginEnabled(pluginId); });
         if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < rows.size()) {
             const AddComponentRow& row = rows[static_cast<std::size_t>(hit.index)];
             if (row.kind == AddComponentRowKind::Category) {
@@ -844,13 +845,21 @@ template <typename Mutator>
 [[nodiscard]] bool HandleTerrainClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     if (hit.property == InspectorPropertyId::TerrainEditEnabled) {
         sceneContext.Inspector().EndTextEdit();
-        EditorTerrainService::ToolState().editingEnabled = !EditorTerrainService::ToolState().editingEnabled;
+        EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+        tool.editingEnabled = !tool.editingEnabled;
+        tool.mode = tool.editingEnabled ? EditorTerrainToolMode::Sculpt : EditorTerrainToolMode::Select;
+        if (!tool.editingEnabled) tool.hoverVisible = false;
         return true;
     }
     if (hit.property == InspectorPropertyId::TerrainBrushMode) {
         sceneContext.Inspector().EndTextEdit();
         auto& mode = EditorTerrainService::ToolState().brush.mode;
         mode = static_cast<kb::terrain_editor::TerrainBrushMode>((static_cast<std::uint32_t>(mode) + 1U) % 8U);
+        EditorTerrainService::ToolState().mode =
+            mode == kb::terrain_editor::TerrainBrushMode::CutHole || mode == kb::terrain_editor::TerrainBrushMode::FillHole
+                ? EditorTerrainToolMode::Holes
+                : EditorTerrainToolMode::Sculpt;
+        EditorTerrainService::ToolState().editingEnabled = true;
         return true;
     }
     if (IsTerrainBrushFloatProperty(hit.property)) {
@@ -2626,7 +2635,11 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
             if (hit.section == InspectorSectionId::Script) {
                 static_cast<void>(sceneContext.RemoveScriptFromEntity(entity));
             } else if (hit.section == InspectorSectionId::Terrain) {
-                EditorTerrainService::ToolState().editingEnabled = false;
+                EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+                tool.editingEnabled = false;
+                tool.mode = EditorTerrainToolMode::Select;
+                tool.hoverVisible = false;
+                tool.brushMenuOpen = false;
                 static_cast<void>(sceneContext.RemoveMeshRendererFromEntity(entity));
             } else if (hit.section == InspectorSectionId::MeshRenderer) {
                 static_cast<void>(sceneContext.RemoveMeshRendererFromEntity(entity));
@@ -3020,10 +3033,15 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             // Enter adds the top search match — but only while actually searching
             // (an empty query is the category list, where Enter must do nothing).
             if (!inspector.EditBuffer().empty()) {
-                const std::vector<const InspectorComponentTile*> tiles = InspectorComponentCatalog::Search(inspector.EditBuffer());
+                const std::vector<AddComponentRow> rows =
+                    InspectorAddComponentBrowserModel::Rows(
+                        {}, inspector.EditBuffer(),
+                        [&sceneContext](std::string_view pluginId) {
+                            return sceneContext.IsProjectPluginEnabled(pluginId);
+                        });
                 const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
-                if (!tiles.empty() && sceneContext.Scene().Entities().IsAlive(entity)) {
-                    static_cast<void>(sceneContext.AddComponentToEntity(entity, tiles.front()->id));
+                if (!rows.empty() && sceneContext.Scene().Entities().IsAlive(entity)) {
+                    static_cast<void>(sceneContext.AddComponentToEntity(entity, rows.front().id));
                 }
                 inspector.CloseAddComponentBrowser();
             }
