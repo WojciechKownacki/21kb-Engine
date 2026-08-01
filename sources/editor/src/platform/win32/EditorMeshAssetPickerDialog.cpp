@@ -10,6 +10,8 @@
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "rendering/EditorMeshPreviewService.hpp"
 #include "rendering/EditorMeshPreviewTypes.hpp"
+#include "rendering/EditorMaterialThumbnailService.hpp"
+#include "rendering/EditorSceneBgfxViewport.hpp"
 #include "rendering/EditorTexturePreviewService.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconKind.hpp"
@@ -24,6 +26,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -61,6 +64,8 @@ constexpr int kAssetTileHeight = 176;
 constexpr int kAssetTilePreviewHeight = 130;
 constexpr int kAssetTileGap = 12;
 constexpr int kAssetTileColumns = 3;
+constexpr UINT_PTR kMaterialThumbnailTimerId = 1U;
+constexpr UINT kMaterialThumbnailTimerPeriodMs = 16U;
 
 struct AssetPickerRow {
     kb::assets::AssetId assetId{};
@@ -293,6 +298,51 @@ void DrawMeshThumbnail(HDC dc, const RECT& target, const EditorMeshThumbnailImag
     SetStretchBltMode(dc, oldMode);
 }
 
+void DrawRenderedMaterialThumbnail(
+    HDC dc,
+    const RECT& target,
+    const EditorMaterialThumbnailImage& image) {
+    if (image.width <= 0 || image.height <= 0 || image.bgra.empty() ||
+        RectWidth(target) <= 0 || RectHeight(target) <= 0) {
+        return;
+    }
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = image.width;
+    info.bmiHeader.biHeight = -image.height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    HDC sourceDc = CreateCompatibleDC(dc);
+    if (sourceDc == nullptr) {
+        return;
+    }
+    void* bits = nullptr;
+    HBITMAP bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &bits, nullptr, 0U);
+    if (bitmap != nullptr && bits != nullptr) {
+        std::memcpy(bits, image.bgra.data(), image.bgra.size() * sizeof(std::uint32_t));
+        HGDIOBJ previous = SelectObject(sourceDc, bitmap);
+        const BLENDFUNCTION blend{ AC_SRC_OVER, 0U, 255U, AC_SRC_ALPHA };
+        static_cast<void>(AlphaBlend(
+            dc,
+            target.left,
+            target.top,
+            RectWidth(target),
+            RectHeight(target),
+            sourceDc,
+            0,
+            0,
+            image.width,
+            image.height,
+            blend));
+        SelectObject(sourceDc, previous);
+    }
+    if (bitmap != nullptr) {
+        DeleteObject(bitmap);
+    }
+    DeleteDC(sourceDc);
+}
+
 [[nodiscard]] RECT CenteredWindowRect(HWND owner, int width, int height) {
     RECT base{};
     if (owner != nullptr && IsWindow(owner) != 0) {
@@ -318,7 +368,9 @@ public:
         const kb::assets::AssetManager* assetManager = nullptr,
         bool textureThumbnails = false,
         AssetPickerTileKind tileKind = AssetPickerTileKind::None,
-        bool allowClear = true)
+        bool allowClear = true,
+        EditorSceneContext* sceneContext = nullptr,
+        EditorSceneBgfxViewport* sceneViewport = nullptr)
         : theme_(theme)
         , rows_(std::move(rows))
         , currentAsset_(currentAsset)
@@ -330,12 +382,18 @@ public:
         , assetManager_(assetManager)
         , textureThumbnails_(textureThumbnails)
         , tileKind_(tileKind)
-        , allowClear_(allowClear) {}
+        , allowClear_(allowClear)
+        , sceneContext_(sceneContext)
+        , sceneViewport_(sceneViewport) {}
 
     [[nodiscard]] AssetPickerResult Show(HWND owner) {
         owner_ = owner;
         if (!EnsureWindow()) {
             return {};
+        }
+        if (tileKind_ == AssetPickerTileKind::Material && sceneContext_ != nullptr && sceneViewport_ != nullptr) {
+            lastMaterialThumbnailRevision_ = EditorMaterialThumbnailCache().Revision();
+            static_cast<void>(SetTimer(window_, kMaterialThumbnailTimerId, kMaterialThumbnailTimerPeriodMs, nullptr));
         }
         const RECT bounds = CenteredWindowRect(owner, DialogWidth(), DialogHeight());
         EditorModalLoopExit exit = EditorModalLoopExit::Completed;
@@ -349,6 +407,7 @@ public:
         }
 
         if (window_ != nullptr && IsWindow(window_) != 0) {
+            KillTimer(window_, kMaterialThumbnailTimerId);
             DestroyWindow(window_);
             window_ = nullptr;
         }
@@ -776,31 +835,45 @@ private:
             }
         }
         if (asset != nullptr && tileKind_ == AssetPickerTileKind::Material) {
-            if (const ProjectFilesMaterialPreviewImage* preview = MaterialPreviewAtRow(tileIndex);
-                preview != nullptr && preview->width > 0 && preview->height > 0 && !preview->bgra.empty()) {
-                BITMAPINFO info{};
-                info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-                info.bmiHeader.biWidth = preview->width;
-                info.bmiHeader.biHeight = -preview->height;
-                info.bmiHeader.biPlanes = 1;
-                info.bmiHeader.biBitCount = 32;
-                info.bmiHeader.biCompression = BI_RGB;
-                const RECT target = GdiDrawing::Inset(image, 1);
-                static_cast<void>(StretchDIBits(
-                    dc,
-                    target.left,
-                    target.top,
-                    RectWidth(target),
-                    RectHeight(target),
-                    0,
-                    0,
-                    preview->width,
-                    preview->height,
-                    preview->bgra.data(),
-                    &info,
-                    DIB_RGB_COLORS,
-                    SRCCOPY));
-                drewPreview = true;
+            const RECT target = GdiDrawing::Inset(image, 1);
+            const kb::assets::AssetMetadata* metadata = assetManager_ != nullptr
+                ? assetManager_->Registry().Find(asset->assetId)
+                : nullptr;
+            if (metadata != nullptr) {
+                if (const EditorMaterialThumbnailImage* rendered = EditorMaterialThumbnailCache().ThumbnailFor(
+                        *metadata,
+                        std::min(RectWidth(target), RectHeight(target)));
+                    rendered != nullptr) {
+                    DrawRenderedMaterialThumbnail(dc, target, *rendered);
+                    drewPreview = true;
+                }
+            }
+            if (!drewPreview) {
+                const ProjectFilesMaterialPreviewImage* preview = MaterialPreviewAtRow(tileIndex);
+                if (preview != nullptr && preview->width > 0 && preview->height > 0 && !preview->bgra.empty()) {
+                    BITMAPINFO info{};
+                    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+                    info.bmiHeader.biWidth = preview->width;
+                    info.bmiHeader.biHeight = -preview->height;
+                    info.bmiHeader.biPlanes = 1;
+                    info.bmiHeader.biBitCount = 32;
+                    info.bmiHeader.biCompression = BI_RGB;
+                    static_cast<void>(StretchDIBits(
+                        dc,
+                        target.left,
+                        target.top,
+                        RectWidth(target),
+                        RectHeight(target),
+                        0,
+                        0,
+                        preview->width,
+                        preview->height,
+                        preview->bgra.data(),
+                        &info,
+                        DIB_RGB_COLORS,
+                        SRCCOPY));
+                    drewPreview = true;
+                }
             }
         }
         if (!drewPreview) {
@@ -1106,6 +1179,32 @@ private:
         return ch == 8 || ch == 13;
     }
 
+    void TickMaterialThumbnailRenderer() {
+        if (window_ == nullptr || sceneContext_ == nullptr || sceneViewport_ == nullptr) {
+            return;
+        }
+        EditorMaterialThumbnailService& thumbnails = EditorMaterialThumbnailCache();
+        if (thumbnails.HasPendingWork()) {
+            static_cast<void>(sceneContext_->PumpMaterialGraphCookResults());
+            sceneViewport_->SetGraphShaderCacheRoot(sceneContext_->GraphShaderCacheRoot());
+            const RECT client = Client();
+            const RECT staging{
+                std::max(client.left, client.right - 8),
+                std::max(client.top, client.bottom - 8),
+                client.right,
+                client.bottom,
+            };
+            sceneViewport_->BeginPaintLayout(window_);
+            thumbnails.Tick(*sceneContext_, *sceneViewport_, window_, staging);
+            sceneViewport_->EndPaintLayout();
+        }
+        const std::uint64_t revision = thumbnails.Revision();
+        if (revision != lastMaterialThumbnailRevision_) {
+            lastMaterialThumbnailRevision_ = revision;
+            InvalidateRect(window_, nullptr, FALSE);
+        }
+    }
+
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
         auto* picker = reinterpret_cast<AssetPickerWindow*>(GetWindowLongPtrW(window, GWLP_USERDATA));
         switch (message) {
@@ -1211,6 +1310,12 @@ private:
                 return 0;
             }
             break;
+        case WM_TIMER:
+            if (picker != nullptr && wparam == kMaterialThumbnailTimerId) {
+                picker->TickMaterialThumbnailRenderer();
+                return 0;
+            }
+            break;
         case WM_CLOSE:
             if (picker != nullptr) {
                 picker->running_ = false;
@@ -1219,6 +1324,7 @@ private:
             return 0;
         case WM_NCDESTROY:
             if (picker != nullptr && picker->window_ == window) {
+                KillTimer(window, kMaterialThumbnailTimerId);
                 picker->window_ = nullptr;
             }
             break;
@@ -1242,6 +1348,8 @@ private:
     bool textureThumbnails_ = false;
     AssetPickerTileKind tileKind_ = AssetPickerTileKind::None;
     bool allowClear_ = true;
+    EditorSceneContext* sceneContext_ = nullptr;
+    EditorSceneBgfxViewport* sceneViewport_ = nullptr;
     AssetPickerResult result_{};
     bool running_ = true;
     int hoveredRow_ = -1;
@@ -1252,6 +1360,7 @@ private:
     bool textureSearchFocused_ = true;
     std::string textureQuery_;
     mutable std::unordered_map<std::uint64_t, ProjectFilesMaterialPreviewImage> materialPreviews_;
+    std::uint64_t lastMaterialThumbnailRevision_ = 0U;
 };
 
 } // namespace
@@ -1281,7 +1390,8 @@ EditorMeshAssetPickerDialog::Result EditorMeshAssetPickerDialog::Show(
 EditorMaterialAssetPickerDialog::Result EditorMaterialAssetPickerDialog::Show(
     HWND owner,
     const EditorTheme& theme,
-    const EditorSceneContext& sceneContext,
+    EditorSceneContext& sceneContext,
+    EditorSceneBgfxViewport& sceneViewport,
     kb::assets::AssetId currentMaterial,
     bool allowClear) {
     const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
@@ -1297,6 +1407,8 @@ EditorMaterialAssetPickerDialog::Result EditorMaterialAssetPickerDialog::Show(
         false,
         AssetPickerTileKind::Material,
         allowClear,
+        &sceneContext,
+        &sceneViewport,
     };
     const AssetPickerResult result = window.Show(owner);
     return EditorMaterialAssetPickerDialog::Result{ .accepted = result.accepted, .assetId = result.assetId };
