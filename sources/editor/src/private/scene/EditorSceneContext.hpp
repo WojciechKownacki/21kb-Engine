@@ -135,6 +135,7 @@ class EditorSceneContext {
         std::shared_ptr<kb::render::RenderMeshAssetData> previewMesh{};
         bool changed = false;
         bool previewPublished = false;
+        bool layerPaint = false;
         std::string label = "Sculpt Terrain";
     };
 
@@ -260,6 +261,12 @@ public:
         kb::scene::SceneEntity entity,
         const kb::terrain_editor::TerrainLayerPaintSettings& settings,
         const kb::terrain_editor::TerrainBrushStamp& stamp,
+        bool beginStroke,
+        std::string* error = nullptr);
+    [[nodiscard]] bool ApplyTerrainLayerPaintStamps(
+        kb::scene::SceneEntity entity,
+        const kb::terrain_editor::TerrainLayerPaintSettings& settings,
+        std::span<const kb::terrain_editor::TerrainBrushStamp> stamps,
         bool beginStroke,
         std::string* error = nullptr);
     [[nodiscard]] bool AddTerrainMaterialLayer(
@@ -856,6 +863,7 @@ private:
     [[nodiscard]] bool BeginTerrainBrushStroke(
         kb::scene::SceneEntity entity,
         std::string label,
+        bool layerPaint,
         std::string* error);
     [[nodiscard]] bool FinalizeActiveTransformEditApply(
         bool changed,

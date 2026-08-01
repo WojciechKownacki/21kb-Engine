@@ -240,6 +240,28 @@ std::shared_ptr<kb::render::RenderMeshAssetData> EditorTerrainService::CreatePre
     return preview;
 }
 
+std::shared_ptr<kb::render::RenderMeshAssetData> EditorTerrainService::CreateLayerPreviewMesh(
+    kb::scene::Scene& scene,
+    kb::assets::AssetId assetId,
+    const kb::assets::TerrainAsset& terrain,
+    std::string* error) {
+    const kb::assets::AssetHandle<kb::render::RenderMeshAssetData> current =
+        scene.Assets().Manager().Load<kb::render::RenderMeshAssetData>(assetId);
+    if (current.IsLoaded() && current->terrainLayerCount == terrain.materialLayers.size() &&
+        current->terrainLayerWeightWidth == terrain.layerWeightWidth &&
+        current->terrainLayerWeightHeight == terrain.layerWeightHeight &&
+        current->terrainLayerWeights.size() == terrain.layerWeights.size()) {
+        // Runtime terrain assets are immutable to ordinary consumers. The editor publishes this same
+        // payload as its explicitly-owned working copy, so weight edits can stay subresource-only instead
+        // of cloning every vertex/index/LOD buffer on every mouse press.
+        std::shared_ptr<kb::render::RenderMeshAssetData> preview =
+            std::const_pointer_cast<kb::render::RenderMeshAssetData>(current.Shared());
+        if (error != nullptr) error->clear();
+        return preview;
+    }
+    return CreatePreviewMesh(scene, assetId, terrain, error);
+}
+
 bool EditorTerrainService::UpdatePreviewMesh(
     const kb::assets::TerrainAsset& terrain,
     const kb::terrain_editor::TerrainBrushResult& changedRegion,

@@ -12,6 +12,7 @@
 #include "scene/EditorTerrainService.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -234,6 +235,7 @@ void ConsiderTerrainPick(
     const EditorFloatingWindowManager& floatingWindows,
     const EditorMetrics& metrics,
     EditorSceneContext& sceneContext) {
+    const EditorTerrainToolState& tool = EditorTerrainService::ToolState();
     const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
     if (!sceneContext.IsProjectPluginEnabled("Editor.Terrain") ||
         !EditorTerrainService::IsTerrainEntity(sceneContext.Scene(), entity)) {
@@ -254,9 +256,14 @@ void ConsiderTerrainPick(
     return ResolvedTerrainPointer{
         .entity = entity,
         .local = *local,
-        .minimumSampleSpacing = std::max(
-            terrain->worldSizeX / static_cast<float>(terrain->width - 1U),
-            terrain->worldSizeZ / static_cast<float>(terrain->height - 1U)),
+        .minimumSampleSpacing = tool.mode == EditorTerrainToolMode::Paint &&
+                terrain->layerWeightWidth > 1U && terrain->layerWeightHeight > 1U
+            ? std::max(
+                terrain->worldSizeX / static_cast<float>(terrain->layerWeightWidth - 1U),
+                terrain->worldSizeZ / static_cast<float>(terrain->layerWeightHeight - 1U))
+            : std::max(
+                terrain->worldSizeX / static_cast<float>(terrain->width - 1U),
+                terrain->worldSizeZ / static_cast<float>(terrain->height - 1U)),
     };
 }
 
@@ -357,20 +364,34 @@ bool EditorTerrainViewportInteraction::Stamp(
     if (!tool.editingEnabled || tool.mode == EditorTerrainToolMode::Select) {
         return false;
     }
+    constexpr std::size_t kMaximumInterpolatedStamps = 32U;
+    std::array<kb::terrain_editor::TerrainBrushStamp, kMaximumInterpolatedStamps> stamps{};
+    std::size_t stampCount = 1U;
+    stamps[0] = kb::terrain_editor::TerrainBrushStamp{
+        .localX = pointer->local.x,
+        .localZ = pointer->local.z };
     if (!beginStroke) {
         const float dx = pointer->local.x - tool.lastStampX;
         const float dz = pointer->local.z - tool.lastStampZ;
+        const float distance = std::sqrt(dx * dx + dz * dz);
         const float minimumSpacing = std::max(
-            pointer->minimumSampleSpacing,
-            tool.brush.radius * 0.12F);
-        if (dx * dx + dz * dz < minimumSpacing * minimumSpacing) return true;
+            pointer->minimumSampleSpacing * 0.5F,
+            tool.brush.radius * 0.06F);
+        if (distance < minimumSpacing) return true;
+        stampCount = std::min<std::size_t>(
+            static_cast<std::size_t>(std::ceil(distance / minimumSpacing)),
+            kMaximumInterpolatedStamps);
+        for (std::size_t sample = 0U; sample < stampCount; ++sample) {
+            const float t = static_cast<float>(sample + 1U) / static_cast<float>(stampCount);
+            stamps[sample] = kb::terrain_editor::TerrainBrushStamp{
+                .localX = tool.lastStampX + dx * t,
+                .localZ = tool.lastStampZ + dz * t,
+            };
+        }
     }
     std::string error;
-    const kb::terrain_editor::TerrainBrushStamp stamp{
-        .localX = pointer->local.x,
-        .localZ = pointer->local.z };
     const bool applied = tool.mode == EditorTerrainToolMode::Paint
-        ? sceneContext.ApplyTerrainLayerPaintStamp(
+        ? sceneContext.ApplyTerrainLayerPaintStamps(
             pointer->entity,
             kb::terrain_editor::TerrainLayerPaintSettings{
                 .shape = tool.brush.shape,
@@ -381,9 +402,10 @@ bool EditorTerrainViewportInteraction::Stamp(
                 .noiseSeed = tool.brush.noiseSeed,
                 .erase = (GetKeyState(VK_CONTROL) & 0x8000) != 0,
             },
-            stamp, beginStroke, &error)
+            std::span<const kb::terrain_editor::TerrainBrushStamp>{ stamps.data(), stampCount },
+            beginStroke, &error)
         : sceneContext.ApplyTerrainBrushStamp(
-            pointer->entity, tool.brush, stamp, beginStroke, &error);
+            pointer->entity, tool.brush, stamps[stampCount - 1U], beginStroke, &error);
     if (!applied) {
         sceneContext.Console().Warning("Terrain", error.empty() ? "Terrain brush stamp failed." : error);
         return true;

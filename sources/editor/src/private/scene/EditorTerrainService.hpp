@@ -86,6 +86,11 @@ public:
         kb::assets::AssetId assetId,
         const kb::assets::TerrainAsset& terrain,
         std::string* error = nullptr);
+    [[nodiscard]] static std::shared_ptr<kb::render::RenderMeshAssetData> CreateLayerPreviewMesh(
+        kb::scene::Scene& scene,
+        kb::assets::AssetId assetId,
+        const kb::assets::TerrainAsset& terrain,
+        std::string* error = nullptr);
     [[nodiscard]] static bool UpdatePreviewMesh(
         const kb::assets::TerrainAsset& terrain,
         const kb::terrain_editor::TerrainBrushResult& changedRegion,
