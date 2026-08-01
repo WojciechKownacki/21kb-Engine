@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/assets/AssetImportTypes.hpp"
+#include "engine/assets/TerrainAsset.hpp"
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
@@ -68,6 +69,14 @@ class ScriptModule;
 
 } // namespace kb::script
 
+namespace kb::terrain_editor {
+
+struct TerrainBrushSettings;
+struct TerrainBrushStamp;
+struct TerrainHeightmapImportSettings;
+
+} // namespace kb::terrain_editor
+
 namespace kb::editor {
 
 enum class PhysicsComponentKind; // inspection/InspectorPhysicsModel.hpp
@@ -80,6 +89,7 @@ class EditorMaterialPreviewScene;
 struct EditorMaterialPreviewTelemetry;
 class EditorMaterialGraphCookService;
 struct EditorMaterialGraphCookResult;
+struct EditorTerrainConfiguration;
 
 enum class EditorDirtySceneResolution {
     Save,
@@ -110,6 +120,20 @@ enum class MaterialGraphSelectionOperation : std::uint8_t {
 }
 
 class EditorSceneContext {
+    struct TerrainStrokeState {
+        kb::scene::SceneEntity entity{};
+        kb::assets::AssetId assetId{};
+        kb::assets::TerrainAsset before{};
+        kb::assets::TerrainAsset working{};
+        bool changed = false;
+    };
+
+    struct TerrainReadCache {
+        kb::assets::AssetId assetId{};
+        std::uint64_t contentHash = 0U;
+        kb::assets::TerrainAsset terrain{};
+    };
+
     struct MaterialGraphDragNodeStart {
         std::uint32_t nodeId = 0U;
         std::int32_t positionX = 0;
@@ -213,6 +237,26 @@ public:
     [[nodiscard]] bool CommitSceneEditTransaction();
     void CancelSceneEditTransaction();
     [[nodiscard]] bool HasPendingSceneEditTransaction() const noexcept;
+    [[nodiscard]] const kb::assets::TerrainAsset* TerrainForEditing(
+        kb::scene::SceneEntity entity,
+        std::string* error = nullptr);
+    [[nodiscard]] bool ApplyTerrainBrushStamp(
+        kb::scene::SceneEntity entity,
+        const kb::terrain_editor::TerrainBrushSettings& settings,
+        const kb::terrain_editor::TerrainBrushStamp& stamp,
+        bool beginStroke,
+        std::string* error = nullptr);
+    [[nodiscard]] bool CommitTerrainBrushStroke(std::string* error = nullptr);
+    void CancelTerrainBrushStroke() noexcept;
+    [[nodiscard]] bool ImportTerrainHeightmap(
+        kb::scene::SceneEntity entity,
+        const std::filesystem::path& path,
+        const kb::terrain_editor::TerrainHeightmapImportSettings& settings,
+        std::string* error = nullptr);
+    [[nodiscard]] bool ConfigureTerrain(
+        kb::scene::SceneEntity entity,
+        const EditorTerrainConfiguration& configuration,
+        std::string* error = nullptr);
 
     [[nodiscard]] kb::scene::SceneEntity SelectedEntity() const noexcept;
     [[nodiscard]] const std::vector<kb::scene::SceneEntity>& SelectedHierarchyEntities() const noexcept;
@@ -866,6 +910,8 @@ private:
     std::unique_ptr<EditorMaterialGraphCookService> materialGraphCookService_;
     bool sceneGraphCookPending_ = true;
     EditorCommandStack commandStack_;
+    std::optional<TerrainStrokeState> terrainStroke_;
+    std::optional<TerrainReadCache> terrainReadCache_;
     EditorHierarchySelectionState hierarchySelection_;
     EditorSceneViewportBoxSelectionState viewportBoxSelection_{};
     EditorHierarchyExpansionState hierarchyExpansion_;

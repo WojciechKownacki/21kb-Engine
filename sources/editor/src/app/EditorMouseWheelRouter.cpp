@@ -14,6 +14,7 @@
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "scene/EditorTerrainService.hpp"
 
 #include <algorithm>
 #include <optional>
@@ -165,6 +166,27 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
     }
 
     if (routeSceneCamera_) {
+        const std::optional<RECT> sceneContent = EditorPanelContentResolver::Resolve(
+            DockPanelKind::Scene, messageWindow_, mainWindow_, dockModel_,
+            floatingWindows_, metrics_);
+        EditorTerrainToolState& terrainTool = EditorTerrainService::ToolState();
+        const bool controlDown = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+        const bool shiftDown = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+        if (sceneContent.has_value() && Contains(*sceneContent, x, y) &&
+            terrainTool.editingEnabled &&
+            EditorTerrainService::IsTerrainEntity(
+                sceneContext_.Scene(), sceneContext_.SelectedEntity()) &&
+            wheelDelta != 0 && (controlDown || shiftDown)) {
+            const float scale = wheelDelta > 0 ? 1.1F : (1.0F / 1.1F);
+            if (controlDown) {
+                terrainTool.brush.radius = std::clamp(
+                    terrainTool.brush.radius * scale, 0.1F, 100'000.0F);
+            } else {
+                terrainTool.brush.strength = std::clamp(
+                    terrainTool.brush.strength * scale, 0.0F, 100'000.0F);
+            }
+            return true;
+        }
         EditorSceneViewportCameraController sceneCamera(
             mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
         if (sceneCamera.HandleMouseWheel(messageWindow_, x, y, wheelDelta)) {

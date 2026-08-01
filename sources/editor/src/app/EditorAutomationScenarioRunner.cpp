@@ -65,6 +65,7 @@
 #include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneContext.hpp"
 #include "scene/EditorSceneMaterialAssetActions.hpp"
+#include "scene/EditorTerrainService.hpp"
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 
 #include <Windows.h>
@@ -365,7 +366,9 @@ void WriteLittleEndian32(std::ostream& output, std::uint32_t value) {
     if (found == state.entities.end()) {
         return {};
     }
-    if (state.context.Scene().Entities().IsAlive(found->second.entity)) {
+    if (state.context.Scene().Entities().IsAlive(found->second.entity) &&
+        state.context.Scene().Entities().Name(found->second.entity) ==
+            found->second.name) {
         return found->second.entity;
     }
 
@@ -397,6 +400,9 @@ void WriteLittleEndian32(std::ostream& output, std::uint32_t value) {
     }
     if (component == "UIDocument") {
         return scene.Components().UIDocuments().Has(entity);
+    }
+    if (component == "TerrainEditor") {
+        return EditorTerrainService::IsTerrainEntity(scene, entity);
     }
     return kb::script::ScriptSceneComponentApi::HasComponent(
         scene, entity, component);
@@ -1803,6 +1809,119 @@ ReadScriptValue(
         return {
             state.automation.AddComponent(*component),
             *component + " on " + *alias };
+    }
+
+    if (*operation == "terrain_stamp") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto x = NumberMember(step, "x", error);
+        const auto z = NumberMember(step, "z", error);
+        if (!alias || !x || !z) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        if (!EditorTerrainService::IsTerrainEntity(state.context.Scene(), entity)) {
+            return { false, "entity does not have a Terrain Editor component" };
+        }
+        kb::terrain_editor::TerrainBrushSettings settings{};
+        settings.radius = static_cast<float>(
+            NumberMember(step, "radius", error, false).value_or(settings.radius));
+        settings.strength = static_cast<float>(
+            NumberMember(step, "strength", error, false).value_or(settings.strength));
+        settings.falloff = static_cast<float>(
+            NumberMember(step, "falloff", error, false).value_or(settings.falloff));
+        const kb::terrain_editor::TerrainBrushStamp stamp{
+            .localX = static_cast<float>(*x),
+            .localZ = static_cast<float>(*z),
+            .pressure = static_cast<float>(
+                NumberMember(step, "pressure", error, false).value_or(1.0)),
+        };
+        if (!kb::terrain_editor::IsTerrainBrushSettingsValid(settings)) {
+            return { false, "terrain brush settings are invalid" };
+        }
+        if (!state.context.ApplyTerrainBrushStamp(entity, settings, stamp, true, &error)) {
+            return { false, error };
+        }
+        if (!state.context.CommitTerrainBrushStroke(&error)) {
+            return { false, error };
+        }
+        return { true, "terrain stroke committed" };
+    }
+
+    if (*operation == "assert_terrain_height") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto x = NumberMember(step, "x", error);
+        const auto z = NumberMember(step, "z", error);
+        const auto expected = NumberMember(step, "value", error);
+        if (!alias || !x || !z || !expected) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        const std::optional<kb::assets::TerrainAsset> terrain =
+            EditorTerrainService::Load(state.context.Scene(), entity, &error);
+        if (!terrain.has_value()) return { false, error };
+        const double sampleX =
+            (*x + static_cast<double>(terrain->worldSizeX) * 0.5) *
+            static_cast<double>(terrain->width - 1U) /
+            static_cast<double>(terrain->worldSizeX);
+        const double sampleZ =
+            (*z + static_cast<double>(terrain->worldSizeZ) * 0.5) *
+            static_cast<double>(terrain->height - 1U) /
+            static_cast<double>(terrain->worldSizeZ);
+        if (sampleX < 0.0 || sampleZ < 0.0 ||
+            sampleX > static_cast<double>(terrain->width - 1U) ||
+            sampleZ > static_cast<double>(terrain->height - 1U)) {
+            return { false, "terrain sample coordinate is outside the asset" };
+        }
+        const std::uint32_t ix = static_cast<std::uint32_t>(std::llround(sampleX));
+        const std::uint32_t iz = static_cast<std::uint32_t>(std::llround(sampleZ));
+        const float actual = terrain->heights[
+            static_cast<std::size_t>(iz) * terrain->width + ix];
+        const double tolerance =
+            NumberMember(step, "tolerance", error, false).value_or(0.0001);
+        const bool matched =
+            std::abs(static_cast<double>(actual) - *expected) <= tolerance;
+        return {
+            matched,
+            "actual=" + std::to_string(actual) +
+                " expected=" + std::to_string(*expected) };
+    }
+
+    if (*operation == "configure_terrain" ||
+        *operation == "assert_terrain_configuration") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto width = UInt32Member(step, "width", error);
+        const auto height = UInt32Member(step, "height", error);
+        const auto chunkQuads = UInt32Member(step, "chunk_quads", error);
+        const auto lodCount = UInt32Member(step, "lod_count", error);
+        const auto worldSizeX = NumberMember(step, "world_size_x", error);
+        const auto worldSizeZ = NumberMember(step, "world_size_z", error);
+        if (!alias || !width || !height || !chunkQuads || !lodCount ||
+            !worldSizeX || !worldSizeZ) {
+            return { false, error };
+        }
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        const EditorTerrainConfiguration configuration{
+            .width = *width,
+            .height = *height,
+            .chunkQuads = *chunkQuads,
+            .lodCount = *lodCount,
+            .worldSizeX = static_cast<float>(*worldSizeX),
+            .worldSizeZ = static_cast<float>(*worldSizeZ),
+        };
+        if (*operation == "configure_terrain") {
+            const bool configured =
+                state.context.ConfigureTerrain(entity, configuration, &error);
+            return { configured, configured ? "terrain configured" : error };
+        }
+        const std::optional<kb::assets::TerrainAsset> terrain =
+            EditorTerrainService::Load(state.context.Scene(), entity, &error);
+        if (!terrain.has_value()) return { false, error };
+        const double tolerance =
+            NumberMember(step, "tolerance", error, false).value_or(0.0001);
+        const bool matched =
+            terrain->width == configuration.width &&
+            terrain->height == configuration.height &&
+            terrain->chunkQuads == configuration.chunkQuads &&
+            terrain->lodCount == configuration.lodCount &&
+            std::abs(static_cast<double>(terrain->worldSizeX) - worldSizeX.value()) <= tolerance &&
+            std::abs(static_cast<double>(terrain->worldSizeZ) - worldSizeZ.value()) <= tolerance;
+        return { matched, matched ? "configuration matched" : "terrain configuration mismatch" };
     }
 
     if (*operation == "set_animator_root_motion_owner" ||

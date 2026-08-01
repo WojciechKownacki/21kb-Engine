@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
+#include "scene/EditorTerrainService.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -15,6 +16,11 @@ constexpr wchar_t kSceneViewportToolbarDropdownOverlayClassName[] = L"KBEditorSc
 constexpr int kDropdownPadding = 5;
 constexpr int kDropdownItemHeight = 24;
 constexpr int kDropdownRadius = 6;
+
+[[nodiscard]] bool TerrainPopupOpen() noexcept {
+    const EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+    return tool.brushMenuOpen || tool.brushShapeMenuOpen;
+}
 
 [[nodiscard]] bool SameRect(const RECT& left, const RECT& right) noexcept {
     return left.left == right.left && left.top == right.top && left.right == right.right && left.bottom == right.bottom;
@@ -77,7 +83,7 @@ void SceneViewportToolbarDropdownOverlayWindow::Show(HWND parent, const RECT& sc
     }
 
     const EditorViewportToolbarDropdown dropdown = sceneContext.ViewportPreview(panelId).ToolbarDropdown();
-    if (dropdown == EditorViewportToolbarDropdown::None) {
+    if (dropdown == EditorViewportToolbarDropdown::None && !TerrainPopupOpen()) {
         Hide();
         return;
     }
@@ -150,18 +156,27 @@ RECT SceneViewportToolbarDropdownOverlayWindow::ResolveScreenBounds() const noex
         return {};
     }
 
-    const SceneViewportToolbarRects rects = SceneViewportToolbarRenderer::Resolve(sceneContent_, sceneContext_->ViewportPreview(panelId_));
-    if (EmptyRect(rects.dropdownPanel)) {
+    RECT popup{};
+    if (TerrainPopupOpen()) {
+        const TerrainViewportToolbarRects terrainRects = SceneViewportToolbarRenderer::ResolveTerrainTools(sceneContent_);
+        popup = EditorTerrainService::ToolState().brushShapeMenuOpen
+            ? terrainRects.brushShapeMenu
+            : terrainRects.brushMenu;
+    } else {
+        popup = SceneViewportToolbarRenderer::Resolve(
+            sceneContent_, sceneContext_->ViewportPreview(panelId_)).dropdownPanel;
+    }
+    if (EmptyRect(popup)) {
         return {};
     }
 
-    POINT screen{ rects.dropdownPanel.left, rects.dropdownPanel.top };
+    POINT screen{ popup.left, popup.top };
     ClientToScreen(parent_, &screen);
     return RECT{
         screen.x,
         screen.y,
-        screen.x + rects.dropdownPanel.right - rects.dropdownPanel.left,
-        screen.y + rects.dropdownPanel.bottom - rects.dropdownPanel.top,
+        screen.x + popup.right - popup.left,
+        screen.y + popup.bottom - popup.top,
     };
 }
 
@@ -198,6 +213,10 @@ void SceneViewportToolbarDropdownOverlayWindow::Paint(HDC dc) const {
 
     RECT client{};
     GetClientRect(window_, &client);
+    if (TerrainPopupOpen()) {
+        SceneViewportToolbarRenderer::PaintTerrainPopup(dc, client, theme_, *sceneContext_, hoveredItem_);
+        return;
+    }
     FillRound(
         dc,
         client,
@@ -243,6 +262,29 @@ int SceneViewportToolbarDropdownOverlayWindow::ItemIndexAt(int clientX, int clie
     }
     RECT client{};
     GetClientRect(window_, &client);
+    if (TerrainPopupOpen()) {
+        const bool shapes = EditorTerrainService::ToolState().brushShapeMenuOpen;
+        const int headerHeight = shapes ? 38 : 34;
+        const int itemHeight = shapes ? 72 : 55;
+        const int columnWidth = shapes ? 196 : 172;
+        const int itemWidth = shapes ? 192 : 168;
+        const int itemVisualHeight = shapes ? 68 : 51;
+        const std::size_t count = shapes ? 6U : 8U;
+        for (std::size_t index = 0U; index < count; ++index) {
+            const int column = static_cast<int>(index % 2U);
+            const int row = static_cast<int>(index / 2U);
+            const RECT item{
+                client.left + 6 + column * columnWidth,
+                client.top + headerHeight + row * itemHeight,
+                client.left + 6 + column * columnWidth + itemWidth,
+                client.top + headerHeight + row * itemHeight + itemVisualHeight,
+            };
+            if (clientX >= item.left && clientX < item.right && clientY >= item.top && clientY < item.bottom) {
+                return static_cast<int>(index);
+            }
+        }
+        return -1;
+    }
     const EditorViewportPreviewState& state = sceneContext_->ViewportPreview(panelId_);
     const EditorViewportToolbarDropdown dropdown = state.ToolbarDropdown();
     const std::size_t count = dropdown == EditorViewportToolbarDropdown::GridSpacing
@@ -291,7 +333,8 @@ LRESULT CALLBACK SceneViewportToolbarDropdownOverlayWindow::WindowProc(HWND wind
         if (overlay != nullptr) {
             overlay->ForwardMouseMessage(message, wparam, lparam);
             if (overlay->sceneContext_ == nullptr ||
-                overlay->sceneContext_->ViewportPreview(overlay->panelId_).ToolbarDropdown() == EditorViewportToolbarDropdown::None) {
+                (overlay->sceneContext_->ViewportPreview(overlay->panelId_).ToolbarDropdown() == EditorViewportToolbarDropdown::None &&
+                 !TerrainPopupOpen())) {
                 ShowWindow(window, SW_HIDE);
                 overlay->shown_ = false;
             } else {

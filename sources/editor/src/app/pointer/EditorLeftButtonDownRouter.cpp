@@ -828,6 +828,15 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             return;
         }
 
+        if (EditorTerrainViewportInteraction::SelectAt(
+                messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
+            sceneContext_.AssetBrowser().FocusSelection(false);
+            EditorProjectFilesTransientUiController(sceneContext_).CloseTransientUi();
+            sceneViewport_.RequestPresent();
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+
         if (EditorTerrainViewportInteraction::Stamp(
                 messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, true)) {
             SetCapture(messageWindow);
@@ -922,7 +931,10 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         if (hit.section == InspectorSectionId::Terrain && hit.property == InspectorPropertyId::TerrainImportHeightmap) {
             if (const std::optional<std::filesystem::path> path = ShowTerrainHeightmapDialog(mainWindow_)) {
                 std::string error;
-                if (EditorTerrainService::ImportHeightmap(sceneContext_.Scene(), sceneContext_.SelectedEntity(), *path, &error)) {
+                if (sceneContext_.ImportTerrainHeightmap(
+                        sceneContext_.SelectedEntity(), *path,
+                        EditorTerrainService::ToolState().heightmapImport,
+                        &error)) {
                     sceneContext_.Console().Info("Terrain", "Imported heightmap: " + path->filename().string());
                     sceneViewport_.RequestPresent();
                 } else {
