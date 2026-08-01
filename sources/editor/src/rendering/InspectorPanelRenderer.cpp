@@ -3,6 +3,7 @@
 #include "rendering/MaterialPreviewAppearanceResolver.hpp"
 #include "rendering/MaterialPreviewTextureAverageColor.hpp"
 #include "rendering/InspectorPanelSectionRows.hpp"
+#include "rendering/EditorMaterialThumbnailService.hpp"
 
 #if defined(_WIN32)
 #include "engine/assets/AssetManager.hpp"
@@ -64,6 +65,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <cstdint>
 #include <filesystem>
@@ -2237,6 +2239,51 @@ void DrawTerrainMaterialPreview(HDC dc, const RECT& target, const ProjectFilesMa
         0, 0, image.width, image.height, image.bgra.data(), &info, DIB_RGB_COLORS, SRCCOPY));
 }
 
+void DrawTerrainRenderedMaterialPreview(
+    HDC dc,
+    const RECT& target,
+    const EditorMaterialThumbnailImage& image) {
+    if (image.width <= 0 || image.height <= 0 || image.bgra.empty() ||
+        RectWidth(target) <= 0 || RectHeight(target) <= 0) {
+        return;
+    }
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = image.width;
+    info.bmiHeader.biHeight = -image.height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    HDC sourceDc = CreateCompatibleDC(dc);
+    if (sourceDc == nullptr) {
+        return;
+    }
+    void* bits = nullptr;
+    HBITMAP bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &bits, nullptr, 0U);
+    if (bitmap != nullptr && bits != nullptr) {
+        std::memcpy(bits, image.bgra.data(), image.bgra.size() * sizeof(std::uint32_t));
+        HGDIOBJ previous = SelectObject(sourceDc, bitmap);
+        const BLENDFUNCTION blend{ AC_SRC_OVER, 0U, 255U, AC_SRC_ALPHA };
+        static_cast<void>(AlphaBlend(
+            dc,
+            target.left,
+            target.top,
+            RectWidth(target),
+            RectHeight(target),
+            sourceDc,
+            0,
+            0,
+            image.width,
+            image.height,
+            blend));
+        SelectObject(sourceDc, previous);
+    }
+    if (bitmap != nullptr) {
+        DeleteObject(bitmap);
+    }
+    DeleteDC(sourceDc);
+}
+
 void DrawTerrainLayerCard(
     HDC dc,
     const RECT& card,
@@ -2257,7 +2304,14 @@ void DrawTerrainLayerCard(
     const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     const kb::assets::AssetMetadata* materialMetadata = manager.Registry().Find(kb::assets::AssetId{ materialAssetId });
     if (materialMetadata != nullptr) {
-        DrawTerrainMaterialPreview(dc, preview, TerrainLayerPreviewCache().PreviewFor(*materialMetadata, manager));
+        if (const EditorMaterialThumbnailImage* rendered = EditorMaterialThumbnailCache().ThumbnailFor(
+                *materialMetadata,
+                std::min(RectWidth(preview), RectHeight(preview)));
+            rendered != nullptr) {
+            DrawTerrainRenderedMaterialPreview(dc, preview, *rendered);
+        } else {
+            DrawTerrainMaterialPreview(dc, preview, TerrainLayerPreviewCache().PreviewFor(*materialMetadata, manager));
+        }
     } else {
         DrawFrame(dc, preview, Rgb(24, 27, 31), Color(theme.borderPanel));
         HeroIconPainter::Draw(dc, Shrink(preview, 15, 15, 15, 15), HeroIconKind::Cube, Color(theme.textDisabled), 1);
