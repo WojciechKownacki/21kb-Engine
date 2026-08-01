@@ -211,16 +211,8 @@ SceneViewportToolbarRects SceneViewportToolbarRenderer::Resolve(const RECT& cont
 SceneViewportToolbarRects SceneViewportToolbarRenderer::Resolve(
     const RECT& content,
     const EditorViewportPreviewState& state,
-    const EditorSceneContext& sceneContext) noexcept {
-    SceneViewportToolbarRects rects = SceneViewportToolbarLayout::Resolve(content, state);
-    const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
-    if (sceneContext.IsProjectPluginEnabled("Editor.Terrain") &&
-        EditorTerrainService::IsTerrainEntity(sceneContext.Scene(), selected)) {
-        rects.renderArea.top = std::min<LONG>(
-            rects.renderArea.bottom,
-            rects.renderArea.top + TerrainToolsInset);
-    }
-    return rects;
+    const EditorSceneContext&) noexcept {
+    return SceneViewportToolbarLayout::Resolve(content, state);
 }
 
 TerrainViewportToolbarRects SceneViewportToolbarRenderer::ResolveTerrainTools(const RECT& content) noexcept {

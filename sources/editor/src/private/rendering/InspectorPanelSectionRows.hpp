@@ -12,6 +12,7 @@
 #include "rendering/gdi/ScopedGdiObject.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <span>
@@ -22,6 +23,7 @@ namespace kb::editor::inspector_panel_rows {
 
 inline constexpr int kDisclosureRowHeight = 18;
 inline constexpr int kDisclosureTextOffset = 29;
+inline constexpr int kGroupRowHeight = 20;
 
 namespace {
 
@@ -266,6 +268,121 @@ inline void DrawFieldRow(HDC dc, RECT row, const EditorTheme& theme, const Inspe
     DrawValueBox(dc, valueRect, theme, shown, valueHovered || editing);
 }
 
+inline void DrawPairLane(
+    HDC dc,
+    RECT lane,
+    const EditorTheme& theme,
+    const InspectorPanelState& state,
+    InspectorSectionId section,
+    InspectorPropertyId property,
+    std::string_view laneLabel,
+    std::string_view value) {
+    const int labelWidth = laneLabel.size() == 1U ? kAxisLetterWidth : 43;
+    const RECT labelRect = Rect(lane.left, lane.top, lane.left + labelWidth, lane.bottom);
+    {
+        ScopedFont font(11, FW_SEMIBOLD);
+        const ScopedGdiObject selectedFont(dc, font.handle);
+        const COLORREF color = laneLabel.size() == 1U
+            ? AxisColor(laneLabel.front())
+            : Color(theme.textDisabled);
+        Text(dc, labelRect, laneLabel, color, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    const bool editing = state.EditedProperty() == property;
+    const std::string_view shown = editing ? std::string_view{state.EditBuffer()} : value;
+    const RECT box = Rect(
+        labelRect.right + kAxisGap,
+        CenteredY(lane, kValueHeight),
+        lane.right,
+        CenteredY(lane, kValueHeight) + kValueHeight);
+    DrawValueBox(dc, box, theme, shown,
+        state.IsHovered(InspectorHitKind::FloatField, section, property) || editing);
+}
+
+inline void DrawPairRow(
+    HDC dc,
+    RECT row,
+    const EditorTheme& theme,
+    const InspectorPanelState& state,
+    InspectorSectionId section,
+    std::string_view label,
+    std::string_view firstLabel,
+    std::string_view firstValue,
+    InspectorPropertyId firstProperty,
+    std::string_view secondLabel,
+    std::string_view secondValue,
+    InspectorPropertyId secondProperty) {
+    if (RowHovered(state, firstProperty) || RowHovered(state, secondProperty)) {
+        GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
+    }
+    const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
+    const RECT valueRect = Rect(labelRect.right, row.top, row.right - kRowPadX, row.bottom);
+    {
+        ScopedFont labelFont(12, FW_SEMIBOLD);
+        const ScopedGdiObject selectedFont(dc, labelFont.handle);
+        Text(dc, labelRect, label, Color(theme.textSecondary));
+    }
+    const int valueWidth = static_cast<int>(valueRect.right - valueRect.left);
+    const int laneWidth = std::max(66, (valueWidth - kLaneGap) / 2);
+    const RECT first = Rect(valueRect.left, valueRect.top, valueRect.left + laneWidth, valueRect.bottom);
+    const RECT second = Rect(first.right + kLaneGap, valueRect.top, valueRect.right, valueRect.bottom);
+    DrawPairLane(dc, first, theme, state, section, firstProperty, firstLabel, firstValue);
+    DrawPairLane(dc, second, theme, state, section, secondProperty, secondLabel, secondValue);
+}
+
+inline void DrawBoolPairRow(
+    HDC dc,
+    RECT row,
+    const EditorTheme& theme,
+    const InspectorPanelState& state,
+    InspectorSectionId section,
+    std::string_view label,
+    std::string_view firstLabel,
+    bool firstValue,
+    InspectorPropertyId firstProperty,
+    std::string_view secondLabel,
+    bool secondValue,
+    InspectorPropertyId secondProperty) {
+    if (RowHovered(state, firstProperty) || RowHovered(state, secondProperty)) {
+        GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
+    }
+    const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
+    const RECT valueRect = Rect(labelRect.right, row.top, row.right - kRowPadX, row.bottom);
+    {
+        ScopedFont labelFont(12, FW_SEMIBOLD);
+        const ScopedGdiObject selectedFont(dc, labelFont.handle);
+        Text(dc, labelRect, label, Color(theme.textSecondary));
+    }
+    const int laneWidth = std::max(66, (static_cast<int>(valueRect.right - valueRect.left) - kLaneGap) / 2);
+    const std::array<RECT, 2U> lanes{
+        Rect(valueRect.left, valueRect.top, valueRect.left + laneWidth, valueRect.bottom),
+        Rect(valueRect.left + laneWidth + kLaneGap, valueRect.top, valueRect.right, valueRect.bottom),
+    };
+    const std::array<std::string_view, 2U> labels{firstLabel, secondLabel};
+    const std::array<bool, 2U> values{firstValue, secondValue};
+    const std::array<InspectorPropertyId, 2U> properties{firstProperty, secondProperty};
+    for (std::size_t index = 0U; index < lanes.size(); ++index) {
+        const RECT box = CenteredRect(lanes[index], lanes[index].right - kCheckboxSize, kCheckboxSize, kCheckboxSize);
+        Text(dc, Rect(lanes[index].left, lanes[index].top, box.left - 5, lanes[index].bottom), labels[index], Color(theme.textDisabled), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        const bool hovered = state.IsHovered(InspectorHitKind::BoolField, section, properties[index]);
+        DrawFrame(dc, box, hovered ? HoverFill(theme) : Color(theme.chrome), Color(theme.borderPanel));
+        if (values[index]) {
+            ScopedFont markFont(10, FW_SEMIBOLD);
+            const ScopedGdiObject selectedFont(dc, markFont.handle);
+            RECT glyph = box;
+            glyph.top -= 1;
+            glyph.bottom -= 1;
+            TextW(dc, glyph, L"\u2714", Color(theme.textPrimary));
+        }
+    }
+}
+
+inline void DrawGroupRow(HDC dc, RECT row, const EditorTheme& theme, std::string_view label) {
+    GdiDrawing::FillRectColor(dc, row, Rgb(25, 28, 33));
+    ScopedFont font(11, FW_SEMIBOLD);
+    const ScopedGdiObject selectedFont(dc, font.handle);
+    Text(dc, Rect(row.left + kRowPadX, row.top, row.right - kRowPadX, row.bottom), label, Color(theme.textDisabled));
+}
+
 inline void DrawTagFieldRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state,
     InspectorSectionId section, InspectorPropertyId property, std::string_view label, std::string_view value) {
     if (RowHovered(state, property)) {
@@ -399,6 +516,9 @@ public:
     void Float(std::string_view label, std::string_view value, InspectorPropertyId property) { Field(label, value, property); }
     void Bool(std::string_view label, bool value, InspectorPropertyId property = InspectorPropertyId::None, int editIndex = -1) { if (!collapsed_) { DrawBoolRow(dc_, Row(), theme_, state_, section_, property, label, value, editIndex); Advance(); } }
     void Vec3(std::string_view label, const kb::scene::Vec3& value, InspectorPropertyId x, InspectorPropertyId y, InspectorPropertyId z) { if (!collapsed_) { DrawVec3Row(dc_, Row(), theme_, state_, section_, label, value, x, y, z); Advance(); } }
+    void Pair(std::string_view label, std::string_view firstLabel, std::string_view firstValue, InspectorPropertyId firstProperty, std::string_view secondLabel, std::string_view secondValue, InspectorPropertyId secondProperty) { if (!collapsed_) { DrawPairRow(dc_, Row(), theme_, state_, section_, label, firstLabel, firstValue, firstProperty, secondLabel, secondValue, secondProperty); Advance(); } }
+    void BoolPair(std::string_view label, std::string_view firstLabel, bool firstValue, InspectorPropertyId firstProperty, std::string_view secondLabel, bool secondValue, InspectorPropertyId secondProperty) { if (!collapsed_) { DrawBoolPairRow(dc_, Row(), theme_, state_, section_, label, firstLabel, firstValue, firstProperty, secondLabel, secondValue, secondProperty); Advance(); } }
+    void Group(std::string_view label) { if (!collapsed_) { DrawGroupRow(dc_, Rect(bounds_.left, y_, bounds_.right, y_ + kGroupRowHeight), theme_, label); y_ += kGroupRowHeight; DrawDivider(dc_, bounds_.left, bounds_.right, y_); y_ += kDividerHeight; } }
     void Rotation(std::string_view label, const kb::scene::Quat& value) { if (!collapsed_) { DrawRotationRow(dc_, Row(), theme_, state_, label, value); Advance(); } }
     void Disclosure(std::string_view label, InspectorPropertyId property, bool expanded) {
         if (collapsed_) {

@@ -84,6 +84,11 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     return overlay;
 }
 
+[[nodiscard]] SceneViewportToolbarDropdownOverlayWindow& FloatingTerrainToolbarOverlay() {
+    static SceneViewportToolbarDropdownOverlayWindow overlay;
+    return overlay;
+}
+
 [[nodiscard]] InspectorAddComponentOverlayWindow& FloatingAddComponentOverlay() {
     static InspectorAddComponentOverlayWindow overlay;
     return overlay;
@@ -102,6 +107,14 @@ void FloatingWindowBackBufferPainter::Paint(HWND window, const DockPanel& panel,
         .sceneViewport = &sceneViewport,
     };
     GdiBackBufferRenderer::Paint(window, &PaintBackBuffer, &context);
+    if (panel.kind == DockPanelKind::Scene) {
+        RECT content{};
+        GetClientRect(window, &content);
+        content = FloatingPanelContentRect(content, panel, metrics);
+        FloatingTerrainToolbarOverlay().ShowTerrainToolbar(window, content, panel.id, theme, sceneContext);
+    } else {
+        FloatingTerrainToolbarOverlay().Hide();
+    }
     const EditorTerrainToolState& terrainTool = EditorTerrainService::ToolState();
     if (panel.kind == DockPanelKind::Scene &&
         (sceneContext.ViewportPreview(panel.id).ToolbarDropdown() != EditorViewportToolbarDropdown::None ||
