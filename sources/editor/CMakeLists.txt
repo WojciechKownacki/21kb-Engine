@@ -73,6 +73,7 @@ add_executable(kb_editor WIN32
     src/app/project_settings/EditorProjectSettingsPointerController.cpp
     src/app/scene_viewport/EditorSceneViewportCameraController.cpp
     src/app/scene_viewport/EditorSceneViewportGizmoDragSolver.cpp
+    src/app/scene_viewport/EditorTerrainViewportInteraction.cpp
     src/app/scene_viewport/EditorSceneViewportGizmoHitTester.cpp
     src/app/scene_viewport/EditorSceneViewportGizmoInteraction.cpp
     src/app/scene_viewport/gizmo/EditorSceneViewportGizmoAltDuplicate.cpp
@@ -341,6 +342,7 @@ add_executable(kb_editor WIN32
     src/private/app/project_files/EditorProjectFilesTransientUiController.hpp
     src/private/app/scene_viewport/EditorSceneViewportCameraController.hpp
     src/private/app/scene_viewport/EditorSceneViewportGizmoDragSolver.hpp
+    src/private/app/scene_viewport/EditorTerrainViewportInteraction.hpp
     src/private/app/scene_viewport/EditorSceneViewportGizmoHitTester.hpp
     src/private/app/scene_viewport/EditorSceneViewportGizmoInteraction.hpp
     src/private/app/scene_viewport/gizmo/EditorSceneViewportGizmoAltDuplicate.hpp
@@ -554,6 +556,7 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorSceneHierarchyActions.hpp
     src/private/scene/EditorSceneMaterialAssetActions.hpp
     src/private/scene/EditorSceneMeshAssetActions.hpp
+    src/private/scene/EditorTerrainService.hpp
     src/private/scene/EditorSceneObjectEditCommands.hpp
     src/private/scene/EditorSceneObjectEditTypes.hpp
     src/private/scene/EditorScenePrefabActions.hpp
@@ -759,6 +762,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneHierarchyActions.cpp
     src/scene/EditorSceneMaterialAssetActions.cpp
     src/scene/EditorSceneMeshAssetActions.cpp
+    src/scene/EditorTerrainService.cpp
     src/scene/EditorSceneObjectEditCommands.cpp
     src/scene/EditorScenePrefabActions.cpp
     src/scene/EditorSceneSelectionPivot.cpp
@@ -871,6 +875,7 @@ target_link_libraries(kb_editor
     PRIVATE
         kb_engine
         kb_renderer
+        kb_terrain_editor_core
 )
 
 if(TARGET kb_physics_jolt_plugin)
@@ -910,6 +915,10 @@ if(TARGET kb_basic_lighting_plugin)
         PRIVATE
             "KB_BASIC_LIGHTING_PLUGIN_PATH=\"${KB_BASIC_LIGHTING_EDITOR_PLUGIN_PATH}\""
     )
+endif()
+
+if(TARGET kb_terrain_editor_plugin)
+    add_dependencies(kb_editor kb_terrain_editor_plugin)
 endif()
 
 target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus ole32 dwmapi msimg32 comdlg32 shell32 xinput)
