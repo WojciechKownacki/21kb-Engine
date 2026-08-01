@@ -90,10 +90,20 @@ std::optional<TerrainAsset> TerrainAssetIO::Load(const std::filesystem::path& pa
         return std::nullopt;
     }
     terrain.heights.resize(static_cast<std::size_t>(vertexCount));
-    for (float& height : terrain.heights) {
-        if (!ReadLittleEndian(bytes, cursor, height)) {
-            SetError(error, "Terrain height payload is truncated");
-            return std::nullopt;
+    const std::size_t heightBytes = terrain.heights.size() * sizeof(float);
+    if (heightBytes > bytes.size() - cursor) {
+        SetError(error, "Terrain height payload is truncated");
+        return std::nullopt;
+    }
+    if constexpr (std::endian::native == std::endian::little) {
+        std::memcpy(terrain.heights.data(), bytes.data() + cursor, heightBytes);
+        cursor += heightBytes;
+    } else {
+        for (float& height : terrain.heights) {
+            if (!ReadLittleEndian(bytes, cursor, height)) {
+                SetError(error, "Terrain height payload is truncated");
+                return std::nullopt;
+            }
         }
     }
     terrain.holes.assign(
@@ -142,7 +152,15 @@ bool TerrainAssetIO::Save(const std::filesystem::path& path, const TerrainAsset&
     AppendLittleEndian(bytes, terrain.lodCount);
     AppendLittleEndian(bytes, terrain.worldSizeX);
     AppendLittleEndian(bytes, terrain.worldSizeZ);
-    for (const float height : terrain.heights) AppendLittleEndian(bytes, height);
+    if constexpr (std::endian::native == std::endian::little) {
+        const auto* firstHeightByte = reinterpret_cast<const std::uint8_t*>(terrain.heights.data());
+        bytes.insert(
+            bytes.end(),
+            firstHeightByte,
+            firstHeightByte + terrain.heights.size() * sizeof(float));
+    } else {
+        for (const float height : terrain.heights) AppendLittleEndian(bytes, height);
+    }
     bytes.insert(bytes.end(), terrain.holes.begin(), terrain.holes.end());
     AppendLittleEndian(bytes, static_cast<std::uint32_t>(terrain.materialLayers.size()));
     AppendLittleEndian(bytes, terrain.layerWeightWidth);
