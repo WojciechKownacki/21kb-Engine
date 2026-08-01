@@ -41,7 +41,8 @@ public:
         SceneRenderLightingConfig lightingConfig = {},
         const SceneRenderShadowMapBinding* shadowMap = nullptr,
         std::span<const std::uint64_t> selectedEntityIds = {},
-        const SceneGpuDrivenFeatureSupport* gpuDrivenSupportOverride = nullptr) const;
+        const SceneGpuDrivenFeatureSupport* gpuDrivenSupportOverride = nullptr,
+        bool terrainLayersOnly = false) const;
     void SetDefaultDrawBudget(SceneRenderDrawBudget drawBudget) noexcept;
     [[nodiscard]] SceneRenderDrawBudget DefaultDrawBudget() const noexcept;
     void SetDefaultLightingConfig(SceneRenderLightingConfig lightingConfig) noexcept;

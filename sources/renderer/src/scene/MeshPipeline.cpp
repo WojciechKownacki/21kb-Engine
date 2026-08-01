@@ -115,6 +115,7 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
         .maxVisibleInstances = desc.maxVisibleInstances,
         .selectedEntityIds = desc.selectedEntityIds,
         .resourceValidation = desc.resourceValidation,
+        .terrainLayersOnly = desc.terrainLayersOnly,
     }, result);
     SceneDrawCommandCache::EndBuild(result.drawCommandCache, desc.pass, result.stats);
     result.meshBatchScratch.clear();

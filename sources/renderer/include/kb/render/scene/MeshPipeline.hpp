@@ -68,6 +68,7 @@ struct MeshPipelineBuildDesc {
     std::span<const std::uint64_t> selectedEntityIds{};
     SceneGpuDrivenFeatureSupport gpuDrivenSupport{};
     MeshPipelineResourceValidation resourceValidation = MeshPipelineResourceValidation::ResolveAndValidate;
+    bool terrainLayersOnly = false;
 };
 
 struct MeshCommandLookupKey {

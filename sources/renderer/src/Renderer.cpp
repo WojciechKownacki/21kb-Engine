@@ -124,6 +124,8 @@ void WriteRendererBreadcrumb(std::string_view category, std::string_view message
     switch (mode) {
     case SceneRenderMeshPassMode::OpaqueOnly:
         return "OpaqueOnly";
+    case SceneRenderMeshPassMode::OpaqueAndTerrainLayers:
+        return "OpaqueAndTerrainLayers";
     case SceneRenderMeshPassMode::OpaqueAndTransparent:
         return "OpaqueAndTransparent";
     }
@@ -718,6 +720,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         WriteRendererBreadcrumb("renderer", message.str());
     }
     if (desc.meshPassMode != SceneRenderMeshPassMode::OpaqueOnly &&
+        desc.meshPassMode != SceneRenderMeshPassMode::OpaqueAndTerrainLayers &&
         desc.meshPassMode != SceneRenderMeshPassMode::OpaqueAndTransparent) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport invalid meshPassMode");
         return false;
@@ -1205,8 +1208,9 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             shadowBinding.IsValid() ? &shadowBinding : nullptr);
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport opaque pass end");
     }
-    if (desc.meshPassMode == SceneRenderMeshPassMode::OpaqueAndTransparent) {
-        if (bgfx::isValid(desc.target.colorTexture) && bgfx::isValid(desc.postProcess.pingTexture)) {
+    if (desc.meshPassMode != SceneRenderMeshPassMode::OpaqueOnly) {
+        const bool terrainLayersOnly = desc.meshPassMode == SceneRenderMeshPassMode::OpaqueAndTerrainLayers;
+        if (!terrainLayersOnly && bgfx::isValid(desc.target.colorTexture) && bgfx::isValid(desc.postProcess.pingTexture)) {
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent sceneColor blit begin");
             bgfx::blit(viewportPlan.viewIds.transparentScene, desc.postProcess.pingTexture, 0U, 0U, desc.target.colorTexture);
             sceneRenderer_->SetSceneColorTexture(desc.postProcess.pingTexture);
@@ -1218,7 +1222,8 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             viewportPlan.viewIds.transparentScene,
             RenderPassKind::TransparentScene,
             MeshPassType::BaseTransparent,
-            shadowBinding.IsValid() ? &shadowBinding : nullptr);
+            shadowBinding.IsValid() ? &shadowBinding : nullptr,
+            terrainLayersOnly);
         sceneRenderer_->SetSceneColorTexture(BGFX_INVALID_HANDLE);
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent pass end");
     }

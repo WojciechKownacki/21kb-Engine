@@ -139,9 +139,9 @@ struct SceneViewportRenderProfileDesc {
     switch (profile) {
     case EditorViewportRenderProfile::Interactive:
         return SceneViewportRenderProfileDesc{
-            // Terrain layers above the base layer are blended in BaseTransparent. Keeping that pass
-            // active is required for paint feedback; Interactive still skips shadows and GPU-driven dispatch.
-            .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueAndTransparent,
+            // Terrain layers above the base layer require blending, but Interactive must not pay for
+            // every transparent object or the SceneColor snapshot while editing terrain.
+            .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueAndTerrainLayers,
             .shadowPassEnabled = false,
             .postProcessEnabled = true,
             .selectionMaskEnabled = true,

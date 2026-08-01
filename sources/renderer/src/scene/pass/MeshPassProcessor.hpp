@@ -22,6 +22,7 @@ struct MeshPassProcessorDesc {
     std::uint32_t maxVisibleInstances = 0;
     std::span<const std::uint64_t> selectedEntityIds{};
     MeshPipelineResourceValidation resourceValidation = MeshPipelineResourceValidation::ResolveAndValidate;
+    bool terrainLayersOnly = false;
 };
 
 class MeshPassProcessor {

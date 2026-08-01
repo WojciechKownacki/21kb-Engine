@@ -72,7 +72,8 @@ SceneRenderSubmitStats SceneMeshSubmitter::ValidateResourcesInto(
     SceneRenderDrawBudget drawBudget,
     SceneRenderLightingConfig lightingConfig,
     std::span<const std::uint64_t> selectedEntityIds,
-    SceneGpuDrivenFeatureSupport gpuDrivenSupport) noexcept {
+    SceneGpuDrivenFeatureSupport gpuDrivenSupport,
+    bool terrainLayersOnly) noexcept {
     const std::vector<SceneRenderDrawGroup>& drawGroups = renderScene.DrawGroups();
     std::vector<SceneRenderVisibilityBlocker> visibilityBlockers;
     BuildVisibilityBlockerInputs(renderScene, visibilityBlockers);
@@ -89,6 +90,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::ValidateResourcesInto(
         .maxDroppedInstances = drawBudget.maxDroppedInstances,
         .selectedEntityIds = selectedEntityIds,
         .gpuDrivenSupport = gpuDrivenSupport,
+        .terrainLayersOnly = terrainLayersOnly,
     }, pipelineScratch);
     pipelineScratch.stats.meshDrawGroupScratchCapacity = static_cast<std::uint32_t>(renderScene.DrawGroupCapacity());
     pipelineScratch.stats.meshDrawGroupInstanceScratchCapacity = static_cast<std::uint32_t>(renderScene.DrawGroupInstanceCapacity());
@@ -142,7 +144,8 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     std::array<float, 4> frameTime,
     std::array<float, 4> dynamicParameter,
     bgfx::TextureHandle sceneDepthTexture,
-    bgfx::TextureHandle sceneColorTexture) const {
+    bgfx::TextureHandle sceneColorTexture,
+    bool terrainLayersOnly) const {
     SceneRenderSubmitStats stats{};
     if (!IsInitialized()) {
         return stats;
@@ -172,6 +175,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .maxDroppedInstances = drawBudget.maxDroppedInstances,
         .selectedEntityIds = selectedEntityIds,
         .gpuDrivenSupport = gpuDrivenSupport,
+        .terrainLayersOnly = terrainLayersOnly,
     }, pipelineScratch_);
     stats = pipelineScratch_.stats;
     stats.sceneLightCount = lightingStats.sceneLightCount;

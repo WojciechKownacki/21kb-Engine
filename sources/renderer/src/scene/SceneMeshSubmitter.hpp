@@ -37,7 +37,8 @@ public:
         std::array<float, 4> frameTime = {},
         std::array<float, 4> dynamicParameter = {},
         bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE,
-        bgfx::TextureHandle sceneColorTexture = BGFX_INVALID_HANDLE) const;
+        bgfx::TextureHandle sceneColorTexture = BGFX_INVALID_HANDLE,
+        bool terrainLayersOnly = false) const;
     [[nodiscard]] static SceneRenderSubmitStats ValidateResourcesInto(
         const RenderScene& renderScene,
         const RenderResourceRegistry& resources,
@@ -49,7 +50,8 @@ public:
         SceneRenderDrawBudget drawBudget = {},
         SceneRenderLightingConfig lightingConfig = {},
         std::span<const std::uint64_t> selectedEntityIds = {},
-        SceneGpuDrivenFeatureSupport gpuDrivenSupport = {}) noexcept;
+        SceneGpuDrivenFeatureSupport gpuDrivenSupport = {},
+        bool terrainLayersOnly = false) noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] MaterialProgramRegistryStats ProgramRegistryStats() const noexcept { return passResources_.ProgramRegistryStats(); }
     // Reset once per scene submit (before its passes) so the per-material GPU/fallback dedup accumulates

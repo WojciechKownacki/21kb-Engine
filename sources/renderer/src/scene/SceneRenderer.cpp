@@ -128,7 +128,8 @@ void SceneRenderer::SubmitMeshPass(
     SceneRenderLightingConfig lightingConfig,
     const SceneRenderShadowMapBinding* shadowMap,
     std::span<const std::uint64_t> selectedEntityIds,
-    const SceneGpuDrivenFeatureSupport* gpuDrivenSupportOverride) const {
+    const SceneGpuDrivenFeatureSupport* gpuDrivenSupportOverride,
+    bool terrainLayersOnly) const {
     lastSubmitStats_ = SceneRenderSubmitStats{};
     lastDiagnostics_.Clear();
     const SceneRenderDrawBudget effectiveDrawBudget = ResolveDrawBudget(drawBudget, defaultDrawBudget_);
@@ -165,7 +166,8 @@ void SceneRenderer::SubmitMeshPass(
             effectiveDrawBudget,
             effectiveLightingConfig,
             selectedEntityIds,
-            gpuDrivenSupportOverride == nullptr ? gpuDrivenRuntimeSupport_ : *gpuDrivenSupportOverride);
+            gpuDrivenSupportOverride == nullptr ? gpuDrivenRuntimeSupport_ : *gpuDrivenSupportOverride,
+            terrainLayersOnly);
         std::ostringstream message;
         message << "SubmitMeshPass validation-only end pass=" << MeshPassName(pass)
                 << " visible=" << lastSubmitStats_.visibleMeshCount
@@ -218,7 +220,8 @@ void SceneRenderer::SubmitMeshPass(
             FrameTimeConstants(),
             DynamicParameterConstants(),
             pass == MeshPassType::BaseTransparent ? sceneDepthTexture_ : bgfx::TextureHandle{ bgfx::kInvalidHandle },
-            pass == MeshPassType::BaseTransparent ? sceneColorTexture_ : bgfx::TextureHandle{ bgfx::kInvalidHandle });
+            pass == MeshPassType::BaseTransparent ? sceneColorTexture_ : bgfx::TextureHandle{ bgfx::kInvalidHandle },
+            terrainLayersOnly);
     }
     {
         std::ostringstream message;
