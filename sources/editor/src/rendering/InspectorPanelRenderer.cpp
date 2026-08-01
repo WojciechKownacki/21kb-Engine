@@ -2138,7 +2138,8 @@ void PaintTerrainSection(
                 TerrainLayerProperty(index), TerrainLayerPickerProperty(index));
         }
         if (terrain->materialLayers.size() < kb::assets::TerrainAsset::MaximumMaterialLayers) {
-            section.Action("+  Add Material Layer", InspectorPropertyId::TerrainMaterialLayerAdd, true);
+            section.Action("+  Create Material Layer", InspectorPropertyId::TerrainMaterialLayerCreate, true);
+            section.Action("+  Add Existing Material", InspectorPropertyId::TerrainMaterialLayerAdd);
         }
         if (!terrain->materialLayers.empty()) {
             section.Action("Remove Selected Layer", InspectorPropertyId::TerrainMaterialLayerRemove);
@@ -2594,7 +2595,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         return kSectionHeaderHeight;
     }
     const int layerRows = static_cast<int>(layerCount) +
-        (layerCount < kb::assets::TerrainAsset::MaximumMaterialLayers ? 1 : 0) +
+        (layerCount < kb::assets::TerrainAsset::MaximumMaterialLayers ? 2 : 0) +
         (layerCount > 0U ? 1 : 0);
     const int fixedRows = 8 + layerRows;
     constexpr int groupCount = 4;
@@ -3336,7 +3337,12 @@ void AdvanceGroup(int& y) noexcept {
         if (terrain->materialLayers.size() < kb::assets::TerrainAsset::MaximumMaterialLayers) {
             const RECT row = RowRect(content, y);
             if (Contains(row, x, yPoint)) {
-                return MakeHit(InspectorHitKind::Row, InspectorSectionId::Terrain, InspectorPropertyId::TerrainMaterialLayerAdd, row);
+                return MakeHit(InspectorHitKind::Row, InspectorSectionId::Terrain, InspectorPropertyId::TerrainMaterialLayerCreate, row);
+            }
+            AdvanceRow(y);
+            const RECT addExistingRow = RowRect(content, y);
+            if (Contains(addExistingRow, x, yPoint)) {
+                return MakeHit(InspectorHitKind::Row, InspectorSectionId::Terrain, InspectorPropertyId::TerrainMaterialLayerAdd, addExistingRow);
             }
             AdvanceRow(y);
         }

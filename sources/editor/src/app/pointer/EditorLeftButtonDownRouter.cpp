@@ -993,6 +993,34 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         const std::optional<std::uint32_t> materialSlotPicker = MeshRendererMaterialSlotPickerForProperty(hit.property);
         const std::optional<std::uint8_t> terrainLayerPicker = TerrainMaterialLayerPickerForProperty(hit.property);
         if (hit.section == InspectorSectionId::Terrain &&
+            hit.property == InspectorPropertyId::TerrainMaterialLayerCreate) {
+            const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+            const std::optional<kb::assets::TerrainAsset> terrain =
+                EditorTerrainService::Load(sceneContext_.Scene(), entity);
+            if (!terrain.has_value()) {
+                sceneContext_.Console().Warning("Terrain", "Terrain asset is unavailable.");
+            } else if (terrain->materialLayers.size() >= kb::assets::TerrainAsset::MaximumMaterialLayers) {
+                sceneContext_.Console().Warning("Terrain", "Terrain supports at most four material layers.");
+            } else {
+                const std::filesystem::path destinationFolder = sceneContext_.AssetBrowser().SelectedFolder();
+                if (sceneContext_.CreateMaterialAsset(destinationFolder)) {
+                    const kb::assets::AssetId materialAssetId = sceneContext_.AssetBrowser().SelectedAsset();
+                    sceneContext_.SelectEntity(entity);
+                    std::string error;
+                    if (!materialAssetId.IsValid() ||
+                        !sceneContext_.AddTerrainMaterialLayer(entity, materialAssetId, &error)) {
+                        sceneContext_.Console().Warning(
+                            "Terrain",
+                            error.empty() ? "The material was created, but its terrain layer could not be added." : error);
+                    } else {
+                        sceneViewport_.RequestPresent();
+                    }
+                }
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+        if (hit.section == InspectorSectionId::Terrain &&
             (terrainLayerPicker.has_value() || hit.property == InspectorPropertyId::TerrainMaterialLayerAdd)) {
             const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
             const std::optional<kb::assets::TerrainAsset> terrain =
