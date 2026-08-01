@@ -234,6 +234,7 @@ add_subdirectory(sources/tools tools)
 add_subdirectory(sources/plugins/physics_jolt physics_jolt)
 add_subdirectory(sources/plugins/audio_miniaudio audio_miniaudio)
 add_subdirectory(sources/plugins/basic_lighting basic_lighting)
+add_subdirectory(sources/plugins/terrain_editor terrain_editor)
 
 if(TARGET kb_engine_tests)
     add_dependencies(kb_engine_tests kb_physics_jolt_plugin kb_audio_miniaudio_plugin kb_basic_lighting_plugin)

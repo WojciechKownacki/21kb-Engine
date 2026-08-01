@@ -1,4 +1,5 @@
 #include "platform/win32/EditorMeshAssetPickerDialog.hpp"
+#include "platform/win32/EditorAnimatorControllerAssetPickerDialog.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
 
 #if defined(_WIN32)
@@ -6,6 +7,7 @@
 #include "platform/win32/EditorModalWindowScope.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/AnimationAssetIO.hpp"
 #include "rendering/EditorMeshPreviewService.hpp"
 #include "rendering/EditorMeshPreviewTypes.hpp"
 #include "rendering/EditorTexturePreviewService.hpp"
@@ -180,6 +182,28 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
             continue;
         }
         rows.push_back(AssetPickerRow{ .assetId = metadata.id, .name = DisplayName(metadata, "Material"), .path = DisplayPath(metadata) });
+    }
+    std::ranges::sort(rows, [](const AssetPickerRow& lhs, const AssetPickerRow& rhs) {
+        if (lhs.name != rhs.name) {
+            return lhs.name < rhs.name;
+        }
+        return lhs.assetId.value < rhs.assetId.value;
+    });
+    return rows;
+}
+
+[[nodiscard]] std::vector<AssetPickerRow> BuildAnimatorControllerRows(const EditorSceneContext& sceneContext) {
+    std::vector<AssetPickerRow> rows;
+    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
+        if (metadata.type != kb::scene::kAnimatorControllerAssetType) {
+            continue;
+        }
+        rows.push_back(AssetPickerRow{
+            .assetId = metadata.id,
+            .name = DisplayName(metadata, "Animator Controller"),
+            .path = DisplayPath(metadata),
+        });
     }
     std::ranges::sort(rows, [](const AssetPickerRow& lhs, const AssetPickerRow& rhs) {
         if (lhs.name != rhs.name) {
@@ -1178,6 +1202,27 @@ EditorMaterialAssetPickerDialog::Result EditorMaterialAssetPickerDialog::Show(
     };
     const AssetPickerResult result = window.Show(owner);
     return EditorMaterialAssetPickerDialog::Result{ .accepted = result.accepted, .assetId = result.assetId };
+}
+
+EditorAnimatorControllerAssetPickerDialog::Result EditorAnimatorControllerAssetPickerDialog::Show(
+    HWND owner,
+    const EditorTheme& theme,
+    const EditorSceneContext& sceneContext,
+    kb::assets::AssetId currentController) {
+    AssetPickerWindow window{
+        theme,
+        BuildAnimatorControllerRows(sceneContext),
+        currentController,
+        "Select Animator Controller",
+        "Choose an Animator Controller asset from this project.",
+        "Clear Animator Controller",
+        HeroIconKind::Play,
+    };
+    const AssetPickerResult result = window.Show(owner);
+    return EditorAnimatorControllerAssetPickerDialog::Result{
+        .accepted = result.accepted,
+        .assetId = result.assetId,
+    };
 }
 
 EditorTextureAssetPickerDialog::Result EditorTextureAssetPickerDialog::Show(

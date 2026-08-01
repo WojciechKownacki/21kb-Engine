@@ -54,6 +54,7 @@ enum class InspectorSectionId : std::uint8_t {
     CharacterController,
     Joint,
     AddComponent,
+    Terrain,
 };
 
 enum class InspectorHitKind : std::uint8_t {
@@ -211,6 +212,7 @@ enum class InspectorPropertyId : std::uint16_t {
     AudioListenerEnabled,
     AudioListenerPrimary,
     AnimatorController,
+    AnimatorControllerPicker,
     AnimatorSpeed,
     AnimatorEnabled,
     AnimatorRootMotionOwner,
@@ -379,6 +381,14 @@ enum class InspectorPropertyId : std::uint16_t {
     AddComponentSearch,
     AddComponentOption,
     AddComponentBack,
+    TerrainEditEnabled,
+    TerrainBrushMode,
+    TerrainBrushRadius,
+    TerrainBrushStrength,
+    TerrainBrushFalloff,
+    TerrainFlattenHeight,
+    TerrainTerraceStep,
+    TerrainImportHeightmap,
 };
 
 struct InspectorPanelState {

@@ -25,6 +25,8 @@ add_library(kb_engine STATIC
     include/engine/assets/AssetId.hpp
     include/engine/assets/AssetKind.hpp
     include/engine/assets/AssetImportCatalog.hpp
+    include/engine/assets/TerrainAsset.hpp
+    include/engine/assets/TerrainAssetIO.hpp
     include/engine/assets/AssetImportService.hpp
     include/engine/assets/AssetImportTypes.hpp
     include/engine/assets/AssetManager.hpp
@@ -444,6 +446,8 @@ add_library(kb_engine STATIC
     src/assets/AssetFileSystem.cpp
     src/assets/AssetFolderOperations.cpp
     src/assets/AssetImportCatalog.cpp
+    src/assets/TerrainAsset.cpp
+    src/assets/TerrainAssetIO.cpp
     src/assets/AssetImportService.cpp
     src/assets/AssetImportTypes.cpp
     src/assets/AssetLoaderRegistry.cpp

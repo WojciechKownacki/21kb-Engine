@@ -1,0 +1,169 @@
+#include "TerrainBrush.hpp"
+#include "TerrainHeightmapImporter.hpp"
+
+#include "engine/assets/AssetManager.hpp"
+#include "engine/assets/TerrainAssetIO.hpp"
+#include "kb/render/resources/RenderMeshAssetLoader.hpp"
+#include "kb/render/resources/RenderTerrainMeshBuilder.hpp"
+
+#include <cmath>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <memory>
+#include <stdexcept>
+#include <string>
+
+namespace {
+
+void Require(bool condition, const char* message) {
+    if (!condition) throw std::runtime_error(message);
+}
+
+[[nodiscard]] std::size_t Center(const kb::assets::TerrainAsset& terrain) {
+    return static_cast<std::size_t>(terrain.height / 2U) * terrain.width + terrain.width / 2U;
+}
+
+void RunAssetRoundTripTest() {
+    kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(33U, 64.0F, 48.0F);
+    terrain.heights[Center(terrain)] = 12.5F;
+    terrain.holes[0] = 1U;
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "kb_terrain_editor_roundtrip.kbterrain";
+    std::string error;
+    Require(kb::assets::TerrainAssetIO::Save(path, terrain, &error), error.c_str());
+    const std::optional<kb::assets::TerrainAsset> loaded = kb::assets::TerrainAssetIO::Load(path, &error);
+    std::error_code removeError;
+    std::filesystem::remove(path, removeError);
+    Require(loaded.has_value(), error.c_str());
+    Require(loaded->width == 33U && loaded->height == 33U && loaded->worldSizeX == 64.0F && loaded->worldSizeZ == 48.0F,
+        "Terrain round-trip changed header fields");
+    Require(loaded->heights[Center(*loaded)] == 12.5F && loaded->holes[0] == 1U,
+        "Terrain round-trip changed authored samples");
+}
+
+void RunBrushTest() {
+    kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(33U, 32.0F, 32.0F);
+    kb::terrain_editor::TerrainBrushSettings brush{ .mode = kb::terrain_editor::TerrainBrushMode::Raise, .radius = 4.0F, .strength = 3.0F, .falloff = 0.5F };
+    Require(kb::terrain_editor::ApplyTerrainBrush(terrain, brush, {}).Changed(), "Raise brush did not change terrain");
+    Require(std::abs(terrain.heights[Center(terrain)] - 3.0F) < 0.001F, "Raise brush strength was not deterministic");
+    brush.mode = kb::terrain_editor::TerrainBrushMode::Lower;
+    Require(kb::terrain_editor::ApplyTerrainBrush(terrain, brush, {}).Changed(), "Lower brush did not change terrain");
+    Require(std::abs(terrain.heights[Center(terrain)]) < 0.001F, "Lower brush did not invert raise");
+    brush.mode = kb::terrain_editor::TerrainBrushMode::Flatten;
+    brush.targetHeight = 7.0F;
+    brush.strength = 1.0F;
+    static_cast<void>(kb::terrain_editor::ApplyTerrainBrush(terrain, brush, {}));
+    Require(std::abs(terrain.heights[Center(terrain)] - 7.0F) < 0.001F, "Flatten brush missed its target height");
+    terrain.heights[Center(terrain)] = 9.0F;
+    brush.mode = kb::terrain_editor::TerrainBrushMode::Smooth;
+    Require(kb::terrain_editor::ApplyTerrainBrush(terrain, brush, {}).Changed() && terrain.heights[Center(terrain)] < 9.0F,
+        "Smooth brush did not relax a height discontinuity");
+    brush.mode = kb::terrain_editor::TerrainBrushMode::Noise;
+    brush.noiseSeed = 42U;
+    Require(kb::terrain_editor::ApplyTerrainBrush(terrain, brush, {}).Changed(), "Noise brush did not modify terrain");
+    terrain.heights[Center(terrain)] = 3.25F;
+    brush.mode = kb::terrain_editor::TerrainBrushMode::Terrace;
+    brush.terraceStep = 2.0F;
+    Require(kb::terrain_editor::ApplyTerrainBrush(terrain, brush, {}).Changed() &&
+            std::abs(terrain.heights[Center(terrain)] - 4.0F) < 0.001F,
+        "Terrace brush did not quantize the target height");
+    brush.mode = kb::terrain_editor::TerrainBrushMode::CutHole;
+    Require(kb::terrain_editor::ApplyTerrainBrush(terrain, brush, {}).Changed(), "Cut Hole brush did not change the hole mask");
+    brush.mode = kb::terrain_editor::TerrainBrushMode::FillHole;
+    Require(kb::terrain_editor::ApplyTerrainBrush(terrain, brush, {}).Changed(), "Fill Hole brush did not restore the hole mask");
+}
+
+void RunHeightmapImportTest() {
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "kb_terrain_editor_heightmap.r16";
+    {
+        std::ofstream output{ path, std::ios::binary | std::ios::trunc };
+        Require(output.is_open(), "Heightmap test could not create its RAW16 source");
+        for (std::uint32_t index = 0U; index < 17U * 17U; ++index) {
+            const std::uint16_t value = static_cast<std::uint16_t>((index * 65535U) / (17U * 17U - 1U));
+            const char encoded[2]{
+                static_cast<char>(value & 0xFFU),
+                static_cast<char>((value >> 8U) & 0xFFU),
+            };
+            output.write(encoded, sizeof(encoded));
+        }
+        Require(output.good(), "Heightmap test could not write its RAW16 source");
+    }
+    std::string error;
+    const std::optional<kb::assets::TerrainAsset> terrain =
+        kb::terrain_editor::TerrainHeightmapImporter::Import(
+            path,
+            kb::terrain_editor::TerrainHeightmapImportSettings{
+                .minimumHeight = -10.0F,
+                .maximumHeight = 30.0F,
+            },
+            &error);
+    std::error_code removeError;
+    std::filesystem::remove(path, removeError);
+    Require(terrain.has_value(), error.c_str());
+    Require(terrain->width == 17U && terrain->height == 17U,
+        "RAW16 heightmap import changed a valid terrain resolution");
+    Require(std::abs(terrain->heights.front() + 10.0F) < 0.001F &&
+            std::abs(terrain->heights.back() - 30.0F) < 0.001F,
+        "RAW16 heightmap import did not preserve the configured height range");
+}
+
+void RunMeshBuildTest() {
+    kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(65U, 64.0F, 64.0F);
+    terrain.chunkQuads = 16U;
+    terrain.lodCount = 4U;
+    const std::optional<kb::render::RenderMeshAssetData> mesh = kb::render::RenderTerrainMeshBuilder::Build(terrain);
+    Require(mesh.has_value(), "Terrain mesh builder rejected a valid terrain");
+    Require(mesh->lods.size() == 4U, "Terrain mesh did not preserve four LOD levels");
+    Require(mesh->sections.size() == 64U, "Terrain mesh did not emit one section per chunk and LOD");
+    Require(mesh->desc.gpuDriven.allowGpuCulling && mesh->meshlets.size() == mesh->sections.size(),
+        "Terrain chunks are not represented in GPU-driven culling metadata");
+    const std::size_t beforeIndices = mesh->desc.indexCount;
+    terrain.holes[32U * 64U + 32U] = 1U;
+    const std::optional<kb::render::RenderMeshAssetData> withHole = kb::render::RenderTerrainMeshBuilder::Build(terrain);
+    Require(withHole.has_value() && withHole->desc.indexCount < beforeIndices, "Terrain hole did not remove rendered triangles");
+}
+
+void RunRuntimeLoaderTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "kb_terrain_editor_loader";
+    std::error_code filesystemError;
+    std::filesystem::remove_all(root, filesystemError);
+    filesystemError.clear();
+    std::filesystem::create_directories(root, filesystemError);
+    Require(!filesystemError, "Terrain loader test could not create its temporary asset root");
+
+    const std::filesystem::path path = root / "Runtime.kbterrain";
+    std::string error;
+    Require(kb::assets::TerrainAssetIO::Save(path, kb::assets::MakeFlatTerrainAsset(33U, 32.0F, 32.0F), &error), error.c_str());
+
+    kb::assets::AssetManager manager;
+    Require(manager.RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>()),
+        "AssetManager rejected the terrain render-mesh loader");
+    Require(manager.Mounts().Mount("Game", root), "AssetManager could not mount the terrain test root");
+    Require(manager.DiscoverMountedAssets() == 1U, "AssetManager did not discover the terrain asset");
+    const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath("/Game/Runtime.kbterrain");
+    Require(metadata != nullptr && metadata->type == "RenderMesh", "Terrain asset was registered with the wrong runtime type");
+    const kb::assets::AssetHandle<kb::render::RenderMeshAssetData> mesh =
+        manager.Load<kb::render::RenderMeshAssetData>(metadata->id);
+    Require(mesh.IsLoaded() && mesh->desc.vertexCount == 1089U && mesh->desc.indexCount != 0U,
+        "Runtime terrain render mesh did not load through AssetManager");
+
+    std::filesystem::remove_all(root, filesystemError);
+}
+
+} // namespace
+
+int main() {
+    try {
+        RunAssetRoundTripTest();
+        RunBrushTest();
+        RunHeightmapImportTest();
+        RunMeshBuildTest();
+        RunRuntimeLoaderTest();
+        std::cout << "Terrain Editor tests passed\n";
+        return EXIT_SUCCESS;
+    } catch (const std::exception& error) {
+        std::cerr << "Terrain Editor tests failed: " << error.what() << '\n';
+        return EXIT_FAILURE;
+    }
+}

@@ -162,6 +162,22 @@ void RunDefaultSceneFactorySeedsEmptySceneTest() {
     kb::editor::tests::Require(scene.Hierarchy().RootEntities().empty(), "Editor default scene should start without root entities");
 }
 
+void RunTerrainEditorPluginCatalogTest() {
+    const kb::editor::EditorPluginDescriptor* plugin =
+        kb::editor::EditorPluginCatalog::FindById("Editor.Terrain");
+    kb::editor::tests::Require(plugin != nullptr, "Terrain Editor plugin should be present in the editor catalog");
+    kb::editor::tests::Require(plugin->displayName == "Terrain Editor", "Terrain Editor catalog display name is invalid");
+    kb::editor::tests::Require(plugin->category == "Editor", "Terrain Editor catalog category is invalid");
+    kb::editor::tests::Require(
+        kb::editor::EditorPluginCatalog::PersistentBinaryPath("Editor.Terrain") ==
+#if defined(_WIN32)
+            "kb_terrain_editor_plugin.dll",
+#else
+            "libkb_terrain_editor_plugin.so",
+#endif
+        "Terrain Editor catalog binary path should be configuration agnostic");
+}
+
 } // namespace
 
 namespace kb::editor::tests {
@@ -170,6 +186,7 @@ void RunEditorProjectTests() {
     RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest();
     RunProjectPathsPreferRepositoryProjectWhenLaunchedFromBuildTreeTest();
     RunDefaultSceneFactorySeedsEmptySceneTest();
+    RunTerrainEditorPluginCatalogTest();
 }
 
 } // namespace kb::editor::tests

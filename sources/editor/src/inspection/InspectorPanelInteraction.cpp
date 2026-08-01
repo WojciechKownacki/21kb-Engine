@@ -34,6 +34,7 @@
 #include "inspection/InspectorPhysicsModel.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "scene/transform_edit/EditorTransformProperty.hpp"
+#include "scene/EditorTerrainService.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -821,6 +822,66 @@ template <typename Mutator>
     return true;
 }
 
+[[nodiscard]] bool IsTerrainBrushFloatProperty(InspectorPropertyId property) noexcept {
+    return property == InspectorPropertyId::TerrainBrushRadius ||
+        property == InspectorPropertyId::TerrainBrushStrength ||
+        property == InspectorPropertyId::TerrainBrushFalloff ||
+        property == InspectorPropertyId::TerrainFlattenHeight ||
+        property == InspectorPropertyId::TerrainTerraceStep;
+}
+
+[[nodiscard]] float TerrainBrushFloatValue(const kb::terrain_editor::TerrainBrushSettings& brush, InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::TerrainBrushRadius: return brush.radius;
+    case InspectorPropertyId::TerrainBrushStrength: return brush.strength;
+    case InspectorPropertyId::TerrainBrushFalloff: return brush.falloff;
+    case InspectorPropertyId::TerrainFlattenHeight: return brush.targetHeight;
+    case InspectorPropertyId::TerrainTerraceStep: return brush.terraceStep;
+    default: return 0.0F;
+    }
+}
+
+[[nodiscard]] bool HandleTerrainClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    if (hit.property == InspectorPropertyId::TerrainEditEnabled) {
+        sceneContext.Inspector().EndTextEdit();
+        EditorTerrainService::ToolState().editingEnabled = !EditorTerrainService::ToolState().editingEnabled;
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::TerrainBrushMode) {
+        sceneContext.Inspector().EndTextEdit();
+        auto& mode = EditorTerrainService::ToolState().brush.mode;
+        mode = static_cast<kb::terrain_editor::TerrainBrushMode>((static_cast<std::uint32_t>(mode) + 1U) % 8U);
+        return true;
+    }
+    if (IsTerrainBrushFloatProperty(hit.property)) {
+        sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(TerrainBrushFloatValue(EditorTerrainService::ToolState().brush, hit.property)));
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::MeshRendererMaterial ||
+        hit.property == InspectorPropertyId::MeshRendererCastsShadow ||
+        hit.property == InspectorPropertyId::MeshRendererReceivesShadow) {
+        return HandleMeshRendererClick(sceneContext, entity, hit);
+    }
+    return true;
+}
+
+[[nodiscard]] bool ApplyTerrainBrushText(InspectorPropertyId property, std::string_view text) {
+    float value = 0.0F;
+    if (!ParseFloat(text, value) || !std::isfinite(value)) return false;
+    kb::terrain_editor::TerrainBrushSettings candidate = EditorTerrainService::ToolState().brush;
+    switch (property) {
+    case InspectorPropertyId::TerrainBrushRadius: candidate.radius = value; break;
+    case InspectorPropertyId::TerrainBrushStrength: candidate.strength = value; break;
+    case InspectorPropertyId::TerrainBrushFalloff: candidate.falloff = value; break;
+    case InspectorPropertyId::TerrainFlattenHeight: candidate.targetHeight = value; break;
+    case InspectorPropertyId::TerrainTerraceStep: candidate.terraceStep = value; break;
+    default: return false;
+    }
+    if (!kb::terrain_editor::IsTerrainBrushSettingsValid(candidate)) return false;
+    EditorTerrainService::ToolState().brush = candidate;
+    return true;
+}
+
 [[nodiscard]] bool ApplyLightLayerMask(
     EditorSceneContext& sceneContext,
     kb::scene::SceneEntity entity,
@@ -1112,8 +1173,9 @@ template <typename Integer>
         sceneContext.Inspector().EndTextEdit();
         return sceneContext.ToggleAnimatorEnabled(entity);
     }
-    if (hit.property == InspectorPropertyId::AnimatorController) {
-        sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(animator->controllerAssetId));
+    if (hit.property == InspectorPropertyId::AnimatorController ||
+        hit.property == InspectorPropertyId::AnimatorControllerPicker) {
+        sceneContext.Inspector().EndTextEdit();
         return true;
     }
     if (hit.property == InspectorPropertyId::AnimatorSpeed) {
@@ -2438,7 +2500,8 @@ template <typename Store, typename Op>
 [[nodiscard]] bool IsGenericEntityFloatProperty(InspectorPropertyId property) noexcept {
     return PhysicsKindForProperty(property).has_value() ||
         IsLightFloatProperty(property) ||
-        IsCameraFloatProperty(property);
+        IsCameraFloatProperty(property) ||
+        property == InspectorPropertyId::AnimatorSpeed;
 }
 
 [[nodiscard]] bool ReadEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, int index, float& out) {
@@ -2454,6 +2517,13 @@ template <typename Store, typename Op>
         if (const kb::scene::CameraComponent* camera =
                 sceneContext.Scene().Components().Cameras().TryGet(entity)) {
             return ReadCameraFloat(*camera, property, out);
+        }
+    }
+    if (property == InspectorPropertyId::AnimatorSpeed) {
+        if (const kb::scene::Animator* animator =
+                sceneContext.Scene().Components().Animators().TryGet(entity)) {
+            out = animator->speed;
+            return true;
         }
     }
     return false;
@@ -2475,6 +2545,10 @@ void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEnt
     if (IsCameraFloatProperty(property)) {
         static_cast<void>(ApplyCameraFloat(
             sceneContext, entity, property, value));
+        return;
+    }
+    if (property == InspectorPropertyId::AnimatorSpeed) {
+        static_cast<void>(sceneContext.SetAnimatorSpeed(entity, value));
     }
 }
 
@@ -2486,7 +2560,8 @@ void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEnt
     const bool isPhysicsFloat = physicsKind.has_value() && hit.index >= 0 && InspectorPhysicsModel::KindOf(*physicsKind, hit.index) == PhysicsFieldKind::Float;
     const bool isComponentFloat =
         IsLightFloatProperty(hit.property) ||
-        IsCameraFloatProperty(hit.property);
+        IsCameraFloatProperty(hit.property) ||
+        hit.property == InspectorPropertyId::AnimatorSpeed;
     if (!isPhysicsFloat && !isComponentFloat) {
         return false;
     }
@@ -2550,6 +2625,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         if (hit.property == InspectorPropertyId::ComponentRemove && sceneContext.Scene().Entities().IsAlive(entity)) {
             if (hit.section == InspectorSectionId::Script) {
                 static_cast<void>(sceneContext.RemoveScriptFromEntity(entity));
+            } else if (hit.section == InspectorSectionId::Terrain) {
+                EditorTerrainService::ToolState().editingEnabled = false;
+                static_cast<void>(sceneContext.RemoveMeshRendererFromEntity(entity));
             } else if (hit.section == InspectorSectionId::MeshRenderer) {
                 static_cast<void>(sceneContext.RemoveMeshRendererFromEntity(entity));
             } else if (hit.section == InspectorSectionId::Camera) {
@@ -2703,6 +2781,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
 
     if (hit.section == InspectorSectionId::Script) {
         return HandleScriptClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::Terrain) {
+        return HandleTerrainClick(sceneContext, entity, hit);
     }
     if (hit.section == InspectorSectionId::MeshRenderer) {
         return HandleMeshRendererClick(sceneContext, entity, hit);
@@ -3093,17 +3174,6 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             return true;
         }
         if (sceneContext.Scene().Entities().IsAlive(entity) &&
-            inspector.EditedProperty() == InspectorPropertyId::AnimatorController) {
-            std::uint64_t value = 0U;
-            const std::string_view text = inspector.EditBuffer();
-            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
-            if (parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size()) {
-                static_cast<void>(sceneContext.SetAnimatorControllerAsset(entity, kb::assets::AssetId{ value }));
-            }
-            inspector.EndTextEdit();
-            return true;
-        }
-        if (sceneContext.Scene().Entities().IsAlive(entity) &&
             inspector.EditedProperty() == InspectorPropertyId::UIDocumentAsset) {
             std::uint64_t value = 0U;
             const std::string_view text = inspector.EditBuffer();
@@ -3142,6 +3212,11 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
                 entity,
                 inspector.EditedProperty(),
                 inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (IsTerrainBrushFloatProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyTerrainBrushText(inspector.EditedProperty(), inspector.EditBuffer()));
             inspector.EndTextEdit();
             return true;
         }
