@@ -1784,11 +1784,16 @@ const kb::assets::TerrainAsset* EditorSceneContext::TerrainForEditing(
 bool EditorSceneContext::BeginTerrainBrushStroke(
     kb::scene::SceneEntity entity,
     std::string label,
+    bool layerPaint,
     std::string* error) {
     CancelTerrainBrushStroke();
 
     const kb::assets::TerrainAsset* source = TerrainForEditing(entity, error);
     if (source == nullptr) return false;
+    if (!terrainReadCache_.has_value()) {
+        if (error != nullptr) *error = "Terrain edit cache is unavailable";
+        return false;
+    }
 
     const kb::scene::MeshRendererComponent* renderer =
         scene_->Components().MeshRenderers().TryGet(entity);
@@ -1799,17 +1804,25 @@ bool EditorSceneContext::BeginTerrainBrushStroke(
         return false;
     }
 
-    kb::assets::TerrainAsset before = *source;
+    // TerrainForEditing owns this value through terrainReadCache_ while no stroke is active. Move that
+    // value into the stroke and make only the single copy required by undo; large terrains previously
+    // copied the full height/hole/weight payload twice on mouse-down.
+    kb::assets::TerrainAsset working = std::move(terrainReadCache_->terrain);
+    terrainReadCache_.reset();
+    kb::assets::TerrainAsset before = working;
     std::shared_ptr<kb::render::RenderMeshAssetData> previewMesh =
-        EditorTerrainService::CreatePreviewMesh(*scene_, assetId, before, error);
+        layerPaint
+            ? EditorTerrainService::CreateLayerPreviewMesh(*scene_, assetId, working, error)
+            : EditorTerrainService::CreatePreviewMesh(*scene_, assetId, working, error);
     if (previewMesh == nullptr) return false;
 
     terrainStroke_ = TerrainStrokeState{
         .entity = entity,
         .assetId = assetId,
-        .before = before,
-        .working = std::move(before),
+        .before = std::move(before),
+        .working = std::move(working),
         .previewMesh = std::move(previewMesh),
+        .layerPaint = layerPaint,
         .label = std::move(label),
     };
     if (error != nullptr) error->clear();
@@ -1822,7 +1835,7 @@ bool EditorSceneContext::ApplyTerrainBrushStamp(
     const kb::terrain_editor::TerrainBrushStamp& stamp,
     bool beginStroke,
     std::string* error) {
-    if (beginStroke && !BeginTerrainBrushStroke(entity, "Sculpt Terrain", error)) return false;
+    if (beginStroke && !BeginTerrainBrushStroke(entity, "Sculpt Terrain", false, error)) return false;
     if (!terrainStroke_.has_value() || terrainStroke_->entity != entity) {
         if (error != nullptr) *error = "Terrain brush stroke is not active";
         return false;
@@ -1861,14 +1874,40 @@ bool EditorSceneContext::ApplyTerrainLayerPaintStamp(
     const kb::terrain_editor::TerrainBrushStamp& stamp,
     bool beginStroke,
     std::string* error) {
-    if (beginStroke && !BeginTerrainBrushStroke(entity, "Paint Terrain Material", error)) return false;
+    return ApplyTerrainLayerPaintStamps(
+        entity, settings,
+        std::span<const kb::terrain_editor::TerrainBrushStamp>{ &stamp, 1U },
+        beginStroke, error);
+}
+
+bool EditorSceneContext::ApplyTerrainLayerPaintStamps(
+    kb::scene::SceneEntity entity,
+    const kb::terrain_editor::TerrainLayerPaintSettings& settings,
+    std::span<const kb::terrain_editor::TerrainBrushStamp> stamps,
+    bool beginStroke,
+    std::string* error) {
+    if (stamps.empty()) {
+        if (error != nullptr) error->clear();
+        return true;
+    }
+    if (beginStroke && !BeginTerrainBrushStroke(entity, "Paint Terrain Material", true, error)) return false;
     if (!terrainStroke_.has_value() || terrainStroke_->entity != entity) {
         if (error != nullptr) *error = "Terrain material paint stroke is not active";
         return false;
     }
-    const kb::terrain_editor::TerrainLayerPaintResult result =
-        kb::terrain_editor::ApplyTerrainLayerPaint(
-            terrainStroke_->working, settings, stamp);
+
+    kb::terrain_editor::TerrainLayerPaintResult result{};
+    for (const kb::terrain_editor::TerrainBrushStamp& stamp : stamps) {
+        const kb::terrain_editor::TerrainLayerPaintResult sample =
+            kb::terrain_editor::ApplyTerrainLayerPaint(
+                terrainStroke_->working, settings, stamp);
+        if (!sample.Changed()) continue;
+        result.changedTexels += sample.changedTexels;
+        result.minX = std::min(result.minX, sample.minX);
+        result.minY = std::min(result.minY, sample.minY);
+        result.maxX = std::max(result.maxX, sample.maxX);
+        result.maxY = std::max(result.maxY, sample.maxY);
+    }
     if (!result.Changed()) {
         if (error != nullptr) error->clear();
         return true;
@@ -2019,8 +2058,26 @@ bool EditorSceneContext::CommitTerrainBrushStroke(std::string* error) {
 void EditorSceneContext::CancelTerrainBrushStroke() noexcept {
     if (!terrainStroke_.has_value()) return;
     if (terrainStroke_->changed) {
-        static_cast<void>(EditorTerrainService::PublishPreview(
-            *scene_, terrainStroke_->assetId, terrainStroke_->before));
+        bool restored = false;
+        if (terrainStroke_->layerPaint && terrainStroke_->before.layerWeightWidth != 0U &&
+            terrainStroke_->before.layerWeightHeight != 0U) {
+            const kb::terrain_editor::TerrainLayerPaintResult wholeWeightMap{
+                .changedTexels = terrainStroke_->before.layerWeightWidth * terrainStroke_->before.layerWeightHeight,
+                .minX = 0U,
+                .minY = 0U,
+                .maxX = terrainStroke_->before.layerWeightWidth - 1U,
+                .maxY = terrainStroke_->before.layerWeightHeight - 1U,
+            };
+            restored = EditorTerrainService::UpdateLayerPreviewMesh(
+                terrainStroke_->before, wholeWeightMap, terrainStroke_->previewMesh) &&
+                EditorTerrainService::PublishPreview(
+                    *scene_, terrainStroke_->assetId, terrainStroke_->before,
+                    terrainStroke_->previewMesh, true);
+        }
+        if (!restored) {
+            static_cast<void>(EditorTerrainService::PublishPreview(
+                *scene_, terrainStroke_->assetId, terrainStroke_->before));
+        }
         const kb::scene::SceneEntity entity = terrainStroke_->entity;
         MarkSceneEntitiesRenderDirty(
             std::span<const kb::scene::SceneEntity>{ &entity, 1U });

@@ -133,6 +133,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
         }
 
         if (cacheIt != meshes.end() && !cacheIt->second.dynamicVertexUpdates &&
+            !cacheIt->second.dynamicTerrainLayerUpdates &&
             cacheIt->second.contentHash == metadata->contentHash &&
             context.sceneRenderer.Resources().ContainsMesh(cacheIt->second.handle)) {
             RuntimeMeshResource& cached = cacheIt->second;
@@ -151,6 +152,64 @@ void RuntimeMeshResourceEnsurer::Ensure(
                 context.sceneRenderer.ResourceMap().UnbindMesh(meshAssetId);
             }
             return;
+        }
+
+        // Terrain material painting mutates only the weight texture and per-layer active flags of the
+        // editor-published working asset. Keep the existing geometry buffers and upload those subresources
+        // directly. Pointer identity makes the metadata-only commit safe: a genuinely replaced asset still
+        // falls through to the normal rebuild path.
+        if (cacheIt != meshes.end() && cacheIt->second.sourceAsset == asset.Get() &&
+            cacheIt->second.dynamicTopologyKey == asset->dynamicTopologyKey &&
+            cacheIt->second.dynamicVertexUpdateCount == asset->dynamicVertexUpdateRanges.size() &&
+            cacheIt->second.dynamicSectionUpdateCount <= asset->dynamicSectionUpdateIndices.size() &&
+            cacheIt->second.dynamicTerrainLayerWeightUpdateCount <= asset->dynamicTerrainLayerWeightUpdates.size() &&
+            context.sceneRenderer.Resources().ContainsMesh(cacheIt->second.handle)) {
+            RuntimeMeshResource& cached = cacheIt->second;
+            bool updated = true;
+            std::vector<std::uint32_t> dirtySections{
+                asset->dynamicSectionUpdateIndices.begin() + static_cast<std::ptrdiff_t>(cached.dynamicSectionUpdateCount),
+                asset->dynamicSectionUpdateIndices.end(),
+            };
+            std::ranges::sort(dirtySections);
+            dirtySections.erase(std::unique(dirtySections.begin(), dirtySections.end()), dirtySections.end());
+            if (!dirtySections.empty()) {
+                updated = context.sceneRenderer.Resources().UpdateMeshGeometryMetadata(
+                    cached.handle, asset->desc, dirtySections);
+            }
+            if (updated && cached.dynamicTerrainLayerWeightUpdateCount <
+                    asset->dynamicTerrainLayerWeightUpdates.size()) {
+                RenderTerrainLayerWeightUpdateRegion merged =
+                    asset->dynamicTerrainLayerWeightUpdates[cached.dynamicTerrainLayerWeightUpdateCount];
+                std::uint32_t minX = merged.x;
+                std::uint32_t minY = merged.y;
+                std::uint32_t maxX = static_cast<std::uint32_t>(merged.x) + merged.width;
+                std::uint32_t maxY = static_cast<std::uint32_t>(merged.y) + merged.height;
+                for (std::size_t updateIndex = cached.dynamicTerrainLayerWeightUpdateCount + 1U;
+                     updateIndex < asset->dynamicTerrainLayerWeightUpdates.size(); ++updateIndex) {
+                    const RenderTerrainLayerWeightUpdateRegion& update =
+                        asset->dynamicTerrainLayerWeightUpdates[updateIndex];
+                    minX = std::min<std::uint32_t>(minX, update.x);
+                    minY = std::min<std::uint32_t>(minY, update.y);
+                    maxX = std::max<std::uint32_t>(maxX, static_cast<std::uint32_t>(update.x) + update.width);
+                    maxY = std::max<std::uint32_t>(maxY, static_cast<std::uint32_t>(update.y) + update.height);
+                }
+                updated = context.sceneRenderer.Resources().UpdateMeshTerrainLayerWeights(
+                    cached.handle,
+                    asset->desc,
+                    static_cast<std::uint16_t>(minX),
+                    static_cast<std::uint16_t>(minY),
+                    static_cast<std::uint16_t>(maxX - minX),
+                    static_cast<std::uint16_t>(maxY - minY));
+            }
+            if (updated) {
+                cached.dynamicTerrainLayerUpdates = true;
+                cached.contentHash = metadata->contentHash;
+                cached.dynamicSectionUpdateCount = asset->dynamicSectionUpdateIndices.size();
+                cached.dynamicTerrainLayerWeightUpdateCount = asset->dynamicTerrainLayerWeightUpdates.size();
+                cached.lastReferencedFrame = context.currentFrame;
+                context.sceneRenderer.ResourceMap().BindMesh(meshAssetId, cached.handle);
+                return;
+            }
         }
 
         if (cacheIt != meshes.end() && cacheIt->second.dynamicVertexUpdates &&
@@ -237,6 +296,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
                     static_cast<std::uint16_t>(maxY - minY));
             }
             if (updated) {
+                cacheIt->second.sourceAsset = asset.Get();
                 cacheIt->second.contentHash = metadata->contentHash;
                 cacheIt->second.dynamicVertexUpdateCount = asset->dynamicVertexUpdateRanges.size();
                 cacheIt->second.dynamicSectionUpdateCount = asset->dynamicSectionUpdateIndices.size();
@@ -319,6 +379,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
 
         meshes[runtimeKey] = RuntimeMeshResource{
             .handle = handle,
+            .sourceAsset = asset.Get(),
             .contentHash = metadata->contentHash,
             .dynamicTopologyKey = asset->dynamicTopologyKey,
             .dynamicVertexUpdateCount = asset->dynamicVertexUpdateRanges.size(),
@@ -326,6 +387,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
             .dynamicTerrainLayerWeightUpdateCount = asset->dynamicTerrainLayerWeightUpdates.size(),
             .lastReferencedFrame = context.currentFrame,
             .dynamicVertexUpdates = asset->dynamicVertexUpdates,
+            .dynamicTerrainLayerUpdates = !asset->dynamicTerrainLayerWeightUpdates.empty(),
         };
         context.sceneRenderer.ResourceMap().BindMesh(meshAssetId, handle);
     };
