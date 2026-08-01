@@ -58,5 +58,12 @@ struct TerrainBrushResult {
     kb::assets::TerrainAsset& terrain,
     const TerrainBrushSettings& settings,
     const TerrainBrushStamp& stamp) noexcept;
+// Hot path for an asset that was fully validated when the edit session began.
+// Brush mutations preserve the terrain sample invariants, while this entry
+// still checks dimensions, buffer sizes and all brush/stamp inputs.
+[[nodiscard]] TerrainBrushResult ApplyTerrainBrushToValidatedTerrain(
+    kb::assets::TerrainAsset& terrain,
+    const TerrainBrushSettings& settings,
+    const TerrainBrushStamp& stamp) noexcept;
 
 } // namespace kb::terrain_editor

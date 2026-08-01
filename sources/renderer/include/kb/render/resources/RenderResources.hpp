@@ -211,10 +211,12 @@ struct RenderMeshDesc {
     RenderGpuDrivenMeshDesc gpuDriven{};
     std::uint64_t rasterStateExtra = 0;
     bool doubleSided = false;
+    bool dynamicVertexBuffer = false;
 };
 
 struct RenderMeshResource {
     bgfx::VertexBufferHandle vertexBuffer = BGFX_INVALID_HANDLE;
+    bgfx::DynamicVertexBufferHandle dynamicVertexBuffer = BGFX_INVALID_HANDLE;
     bgfx::IndexBufferHandle indexBuffer = BGFX_INVALID_HANDLE;
     std::uint32_t vertexCount = 0;
     std::uint32_t indexCount = 0;

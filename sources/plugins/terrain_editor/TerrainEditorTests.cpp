@@ -7,6 +7,7 @@
 #include "kb/render/resources/RenderTerrainMeshBuilder.hpp"
 
 #include <cmath>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -162,6 +163,97 @@ void RunMeshBuildTest() {
     terrain.holes[32U * 64U + 32U] = 1U;
     const std::optional<kb::render::RenderMeshAssetData> withHole = kb::render::RenderTerrainMeshBuilder::Build(terrain);
     Require(withHole.has_value() && withHole->desc.indexCount < beforeIndices, "Terrain hole did not remove rendered triangles");
+    Require(withHole->dynamicTopologyKey != mesh->dynamicTopologyKey,
+        "Terrain hole did not invalidate dynamic mesh topology identity");
+}
+
+void RunDynamicMeshUpdateTest() {
+    kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(129U, 128.0F, 128.0F);
+    std::optional<kb::render::RenderMeshAssetData> mesh =
+        kb::render::RenderTerrainMeshBuilder::Build(terrain);
+    Require(mesh.has_value() &&
+            kb::render::RenderTerrainMeshBuilder::PrepareDynamicPreview(terrain, *mesh),
+        "Terrain mesh could not enter dynamic preview mode");
+    const std::uint64_t topologyKey = mesh->dynamicTopologyKey;
+    const std::uint32_t fullVertexCount = mesh->desc.vertexCount;
+    const float untouchedHeight = mesh->tangentVertices.front().y;
+
+    const kb::terrain_editor::TerrainBrushResult changed =
+        kb::terrain_editor::ApplyTerrainBrush(
+            terrain,
+            kb::terrain_editor::TerrainBrushSettings{
+                .mode = kb::terrain_editor::TerrainBrushMode::Raise,
+                .radius = 3.0F,
+                .strength = 1.0F,
+            },
+            {});
+    Require(changed.Changed(), "Dynamic terrain update test brush changed no samples");
+    Require(kb::render::RenderTerrainMeshBuilder::UpdateDynamicPreview(
+            terrain,
+            kb::render::RenderTerrainMeshUpdateRegion{
+                .minX = changed.minX,
+                .minZ = changed.minZ,
+                .maxX = changed.maxX,
+                .maxZ = changed.maxZ,
+            },
+            *mesh),
+        "Terrain mesh rejected a height-only dynamic update");
+    Require(mesh->desc.dynamicVertexBuffer && mesh->dynamicTopologyKey == topologyKey,
+        "Dynamic terrain update changed GPU topology identity");
+    Require(mesh->vertexUpdateCount > 0U && mesh->vertexUpdateCount < fullVertexCount / 4U,
+        "Dynamic terrain update did not stay local to the brush region");
+    Require(mesh->tangentVertices[Center(terrain)].y > 0.9F &&
+            mesh->tangentVertices.front().y == untouchedHeight,
+        "Dynamic terrain update changed the wrong vertex range");
+}
+
+void RunDynamicMeshBenchmark() {
+    kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(513U, 512.0F, 512.0F);
+    std::optional<kb::render::RenderMeshAssetData> mesh =
+        kb::render::RenderTerrainMeshBuilder::Build(terrain);
+    Require(mesh.has_value() &&
+            kb::render::RenderTerrainMeshBuilder::PrepareDynamicPreview(terrain, *mesh),
+        "Terrain benchmark could not prepare its dynamic mesh");
+    const kb::terrain_editor::TerrainBrushSettings brush{
+        .mode = kb::terrain_editor::TerrainBrushMode::Raise,
+        .radius = 4.0F,
+        .strength = 0.05F,
+    };
+    const auto updateStart = std::chrono::steady_clock::now();
+    for (std::uint32_t stampIndex = 0U; stampIndex < 200U; ++stampIndex) {
+        const float offset = static_cast<float>(stampIndex % 25U) * 0.25F;
+        const kb::terrain_editor::TerrainBrushResult changed =
+            kb::terrain_editor::ApplyTerrainBrushToValidatedTerrain(
+                terrain, brush,
+                kb::terrain_editor::TerrainBrushStamp{
+                    .localX = offset,
+                    .localZ = offset * 0.5F,
+                });
+        Require(changed.Changed() &&
+                kb::render::RenderTerrainMeshBuilder::UpdateDynamicPreview(
+                    terrain,
+                    kb::render::RenderTerrainMeshUpdateRegion{
+                        .minX = changed.minX,
+                        .minZ = changed.minZ,
+                        .maxX = changed.maxX,
+                        .maxZ = changed.maxZ,
+                    },
+                    *mesh),
+            "Terrain benchmark dynamic stamp failed");
+    }
+    const auto updateElapsed = std::chrono::steady_clock::now() - updateStart;
+    const auto rebuildStart = std::chrono::steady_clock::now();
+    const std::optional<kb::render::RenderMeshAssetData> rebuilt =
+        kb::render::RenderTerrainMeshBuilder::Build(terrain);
+    const auto rebuildElapsed = std::chrono::steady_clock::now() - rebuildStart;
+    Require(rebuilt.has_value(), "Terrain benchmark full rebuild failed");
+    Require(updateElapsed < rebuildElapsed,
+        "Two hundred local terrain stamps cost more than one full mesh rebuild");
+    std::cout << "Terrain dynamic benchmark: 200 stamps="
+              << std::chrono::duration_cast<std::chrono::milliseconds>(updateElapsed).count()
+              << " ms, full rebuild="
+              << std::chrono::duration_cast<std::chrono::milliseconds>(rebuildElapsed).count()
+              << " ms\n";
 }
 
 void RunRuntimeLoaderTest() {
@@ -200,6 +292,8 @@ int main() {
         RunBrushShapeTest();
         RunHeightmapImportTest();
         RunMeshBuildTest();
+        RunDynamicMeshUpdateTest();
+        RunDynamicMeshBenchmark();
         RunRuntimeLoaderTest();
         std::cout << "Terrain Editor tests passed\n";
         return EXIT_SUCCESS;

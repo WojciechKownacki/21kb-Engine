@@ -9,6 +9,9 @@ void RenderResourceReleaser::ReleaseMesh(RenderMeshResource& resource) noexcept 
     if (bgfx::isValid(resource.vertexBuffer)) {
         bgfx::destroy(resource.vertexBuffer);
     }
+    if (bgfx::isValid(resource.dynamicVertexBuffer)) {
+        bgfx::destroy(resource.dynamicVertexBuffer);
+    }
     resource = RenderMeshResource{};
 }
 

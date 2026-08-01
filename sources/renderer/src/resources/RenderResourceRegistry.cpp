@@ -6,6 +6,7 @@
 #include "resources/RenderTextureResourceBuilder.hpp"
 #include "renderer/RendererDebugLog.hpp"
 
+#include <cstddef>
 #include <sstream>
 #include <utility>
 
@@ -66,8 +67,15 @@ RenderMeshHandle RenderResourceRegistry::RegisterMesh(const RenderMeshDesc& desc
         WriteRendererMaterialGraphDebugLog("resource", row.str());
     }
     const bgfx::Memory* vertexMemory = bgfx::copy(vertexData, static_cast<std::uint32_t>(RenderStaticMeshVertexStride(desc.vertexFormat) * desc.vertexCount));
-    bgfx::VertexBufferHandle vertexBuffer = bgfx::createVertexBuffer(vertexMemory, layout);
-    if (!bgfx::isValid(vertexBuffer)) {
+    bgfx::VertexBufferHandle vertexBuffer = BGFX_INVALID_HANDLE;
+    bgfx::DynamicVertexBufferHandle dynamicVertexBuffer = BGFX_INVALID_HANDLE;
+    if (desc.dynamicVertexBuffer) {
+        dynamicVertexBuffer = bgfx::createDynamicVertexBuffer(vertexMemory, layout);
+    } else {
+        vertexBuffer = bgfx::createVertexBuffer(vertexMemory, layout);
+    }
+    if ((!desc.dynamicVertexBuffer && !bgfx::isValid(vertexBuffer)) ||
+        (desc.dynamicVertexBuffer && !bgfx::isValid(dynamicVertexBuffer))) {
         WriteRendererMaterialGraphDebugLog("resource", "register-mesh-failed vertex buffer invalid");
         return {};
     }
@@ -78,26 +86,60 @@ RenderMeshHandle RenderResourceRegistry::RegisterMesh(const RenderMeshDesc& desc
     const std::uint16_t indexFlags = desc.indexFormat == RenderIndexFormat::Uint32 ? BGFX_BUFFER_INDEX32 : 0U;
     bgfx::IndexBufferHandle indexBuffer = bgfx::createIndexBuffer(indexMemory, indexFlags);
     if (!bgfx::isValid(indexBuffer)) {
-        bgfx::destroy(vertexBuffer);
+        if (bgfx::isValid(vertexBuffer)) bgfx::destroy(vertexBuffer);
+        if (bgfx::isValid(dynamicVertexBuffer)) bgfx::destroy(dynamicVertexBuffer);
         WriteRendererMaterialGraphDebugLog("resource", "register-mesh-failed index buffer invalid");
         return {};
     }
 
     const std::uint32_t slotIndex = meshes_.Allocate();
-    RenderMeshResource resource = RenderMeshResourceBuilder::Build(desc, vertexBuffer, indexBuffer);
+    RenderMeshResource resource = RenderMeshResourceBuilder::Build(desc, vertexBuffer, dynamicVertexBuffer, indexBuffer);
     resource.version = AllocateResourceVersion();
     meshes_.Activate(slotIndex, std::move(resource));
     {
         const RenderMeshHandle handle{ detail::MakeRenderHandleValue(slotIndex, meshes_.Generation(slotIndex)) };
         std::ostringstream row;
         row << "register-mesh-ok handle=" << handle.value
-            << " vb=" << vertexBuffer.idx
+            << " vb=" << (desc.dynamicVertexBuffer ? dynamicVertexBuffer.idx : vertexBuffer.idx)
             << " ib=" << indexBuffer.idx
             << " vertexFormat=" << VertexFormatName(desc.vertexFormat)
             << " hasTangent=" << (VertexFormatHasTangent(desc.vertexFormat) ? "true" : "false");
         WriteRendererMaterialGraphDebugLog("resource", row.str());
         return handle;
     }
+}
+
+bool RenderResourceRegistry::UpdateMeshVertices(
+    RenderMeshHandle handle,
+    const RenderMeshDesc& desc,
+    std::uint32_t firstVertex,
+    std::uint32_t vertexCount) {
+    RenderMeshResource* resource = meshes_.Find(handle);
+    if (resource == nullptr || !bgfx::isValid(resource->dynamicVertexBuffer) ||
+        desc.vertexFormat != resource->vertexFormat || desc.vertexCount != resource->vertexCount ||
+        firstVertex >= desc.vertexCount || vertexCount == 0U || vertexCount > desc.vertexCount - firstVertex) {
+        return false;
+    }
+    const std::uint32_t stride = RenderStaticMeshVertexStride(desc.vertexFormat);
+    const auto* vertexBytes = static_cast<const std::byte*>(RenderMeshResourceBuilder::VertexData(desc));
+    if (vertexBytes == nullptr) return false;
+    const bgfx::Memory* memory = bgfx::copy(
+        vertexBytes + static_cast<std::size_t>(firstVertex) * stride,
+        vertexCount * stride);
+    bgfx::update(resource->dynamicVertexBuffer, firstVertex, memory);
+    resource->bounds = desc.bounds;
+    for (std::uint32_t sectionIndex = 0U;
+         sectionIndex < resource->sections.size() && sectionIndex < desc.sectionCount;
+         ++sectionIndex) {
+        resource->sections[sectionIndex].bounds = desc.sections[sectionIndex].bounds;
+    }
+    for (std::uint32_t meshletIndex = 0U;
+         meshletIndex < resource->meshlets.size() && meshletIndex < desc.gpuDriven.meshletCount;
+         ++meshletIndex) {
+        resource->meshlets[meshletIndex].bounds = desc.gpuDriven.meshlets[meshletIndex].bounds;
+    }
+    resource->version = AllocateResourceVersion();
+    return true;
 }
 
 const RenderMeshResource* RenderResourceRegistry::FindMesh(RenderMeshHandle handle) const noexcept {

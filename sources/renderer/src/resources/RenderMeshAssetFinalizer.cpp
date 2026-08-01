@@ -365,16 +365,20 @@ void RenderMeshAssetFinalizer::EnsureTangentVertexStorage(RenderMeshAssetData& a
     asset.vertices.clear();
 }
 
-bool RenderMeshAssetFinalizer::Finalize(RenderMeshAssetData& asset) {
+bool RenderMeshAssetFinalizer::Finalize(
+    RenderMeshAssetData& asset,
+    const RenderMeshFinalizeOptions& options) {
     if (!ValidateMeshAssetIndices(asset)) {
         return false;
     }
     EnsureTangentVertexStorage(asset);
     OptimizeMeshAssetVertexCache(asset);
-    if (!asset.tangentVertices.empty()) {
-        OptimizeMeshAssetVertexFetch(asset.tangentVertices, asset.indices32);
-    } else {
-        OptimizeMeshAssetVertexFetch(asset.vertices, asset.indices32);
+    if (options.optimizeVertexFetch) {
+        if (!asset.tangentVertices.empty()) {
+            OptimizeMeshAssetVertexFetch(asset.tangentVertices, asset.indices32);
+        } else {
+            OptimizeMeshAssetVertexFetch(asset.vertices, asset.indices32);
+        }
     }
     if (!ValidateMeshAssetIndices(asset)) {
         return false;

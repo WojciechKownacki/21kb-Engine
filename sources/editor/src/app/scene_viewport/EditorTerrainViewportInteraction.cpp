@@ -47,28 +47,6 @@ struct TerrainPickContext {
     };
 }
 
-[[nodiscard]] float HeightAt(
-    const kb::assets::TerrainAsset& terrain,
-    float localX,
-    float localZ) noexcept {
-    const float sampleX = std::clamp(
-        (localX + terrain.worldSizeX * 0.5F) / terrain.worldSizeX,
-        0.0F, 1.0F) * static_cast<float>(terrain.width - 1U);
-    const float sampleZ = std::clamp(
-        (localZ + terrain.worldSizeZ * 0.5F) / terrain.worldSizeZ,
-        0.0F, 1.0F) * static_cast<float>(terrain.height - 1U);
-    const std::uint32_t x0 = static_cast<std::uint32_t>(std::floor(sampleX));
-    const std::uint32_t z0 = static_cast<std::uint32_t>(std::floor(sampleZ));
-    const std::uint32_t x1 = std::min(x0 + 1U, terrain.width - 1U);
-    const std::uint32_t z1 = std::min(z0 + 1U, terrain.height - 1U);
-    const auto at = [&terrain](std::uint32_t x, std::uint32_t z) {
-        return terrain.heights[static_cast<std::size_t>(z) * terrain.width + x];
-    };
-    const float top = std::lerp(at(x0, z0), at(x1, z0), sampleX - static_cast<float>(x0));
-    const float bottom = std::lerp(at(x0, z1), at(x1, z1), sampleX - static_cast<float>(x0));
-    return std::lerp(top, bottom, sampleZ - static_cast<float>(z0));
-}
-
 [[nodiscard]] bool ClipRayAxis(
     float origin,
     float direction,
@@ -87,6 +65,29 @@ struct TerrainPickContext {
     return enter <= exit;
 }
 
+[[nodiscard]] float RayTriangleDistance(
+    kb::scene::Vec3 origin,
+    kb::scene::Vec3 direction,
+    kb::scene::Vec3 a,
+    kb::scene::Vec3 b,
+    kb::scene::Vec3 c) noexcept {
+    constexpr float kEpsilon = 0.000001F;
+    const kb::scene::Vec3 edgeAb = b - a;
+    const kb::scene::Vec3 edgeAc = c - a;
+    const kb::scene::Vec3 perpendicular = kb::math::Cross(direction, edgeAc);
+    const float determinant = EditorSceneViewportMath::Dot(edgeAb, perpendicular);
+    if (std::abs(determinant) <= kEpsilon) return std::numeric_limits<float>::max();
+    const float inverseDeterminant = 1.0F / determinant;
+    const kb::scene::Vec3 fromA = origin - a;
+    const float u = EditorSceneViewportMath::Dot(fromA, perpendicular) * inverseDeterminant;
+    if (u < 0.0F || u > 1.0F) return std::numeric_limits<float>::max();
+    const kb::scene::Vec3 cross = kb::math::Cross(fromA, edgeAb);
+    const float v = EditorSceneViewportMath::Dot(direction, cross) * inverseDeterminant;
+    if (v < 0.0F || u + v > 1.0F) return std::numeric_limits<float>::max();
+    const float distance = EditorSceneViewportMath::Dot(edgeAc, cross) * inverseDeterminant;
+    return distance > kEpsilon ? distance : std::numeric_limits<float>::max();
+}
+
 [[nodiscard]] std::optional<kb::scene::Vec3> TerrainSurfaceHit(
     const EditorSceneViewportRay& ray,
     const kb::scene::TransformComponent& transform,
@@ -95,53 +96,91 @@ struct TerrainPickContext {
     const std::optional<kb::scene::Vec3> next = ToTerrainLocal(ray.origin + ray.direction, transform);
     if (!origin.has_value() || !next.has_value()) return std::nullopt;
     const kb::scene::Vec3 direction = *next - *origin;
-    const auto [minimumHeight, maximumHeight] = std::ranges::minmax_element(terrain.heights);
     float enter = 0.05F;
     float exit = std::numeric_limits<float>::max();
     if (!ClipRayAxis(origin->x, direction.x, -terrain.worldSizeX * 0.5F, terrain.worldSizeX * 0.5F, enter, exit) ||
         !ClipRayAxis(origin->z, direction.z, -terrain.worldSizeZ * 0.5F, terrain.worldSizeZ * 0.5F, enter, exit) ||
-        !ClipRayAxis(origin->y, direction.y, *minimumHeight - 0.1F, *maximumHeight + 0.1F, enter, exit) ||
-        !std::isfinite(enter) || !std::isfinite(exit)) {
+        !std::isfinite(enter)) {
         return std::nullopt;
     }
-    const auto position = [&](float distance) { return *origin + direction * distance; };
-    const auto difference = [&](float distance) {
-        const kb::scene::Vec3 point = position(distance);
-        return point.y - HeightAt(terrain, point.x, point.z);
-    };
-    float previousDistance = enter;
-    float previousDifference = difference(previousDistance);
-    if (std::abs(previousDifference) <= 0.001F) return position(previousDistance);
-
     const float cellX = terrain.worldSizeX / static_cast<float>(terrain.width - 1U);
     const float cellZ = terrain.worldSizeZ / static_cast<float>(terrain.height - 1U);
-    const float cellsPerDistance = std::hypot(direction.x / cellX, direction.z / cellZ);
-    const float interval = exit - enter;
-    const float step = cellsPerDistance > 0.00001F
-        ? std::clamp(0.5F / cellsPerDistance, interval / 1024.0F, interval)
-        : interval;
-    for (float distance = std::min(enter + step, exit); distance <= exit + 0.00001F;) {
-        const float currentDifference = difference(distance);
-        if ((previousDifference >= 0.0F && currentDifference <= 0.0F) ||
-            (previousDifference <= 0.0F && currentDifference >= 0.0F)) {
-            float low = previousDistance;
-            float high = distance;
-            for (int iteration = 0; iteration < 12; ++iteration) {
-                const float middle = (low + high) * 0.5F;
-                const float middleDifference = difference(middle);
-                if ((previousDifference >= 0.0F && middleDifference >= 0.0F) ||
-                    (previousDifference <= 0.0F && middleDifference <= 0.0F)) {
-                    low = middle;
-                } else {
-                    high = middle;
-                }
-            }
-            return position((low + high) * 0.5F);
+    const auto height = [&terrain](std::uint32_t x, std::uint32_t z) noexcept {
+        return terrain.heights[static_cast<std::size_t>(z) * terrain.width + x];
+    };
+    const auto testCell = [&](std::uint32_t x, std::uint32_t z, float segmentEnter, float segmentExit) {
+        if (terrain.holes[static_cast<std::size_t>(z) * (terrain.width - 1U) + x] != 0U) {
+            return std::numeric_limits<float>::max();
         }
-        if (distance >= exit) break;
-        previousDistance = distance;
-        previousDifference = currentDifference;
-        distance = std::min(distance + step, exit);
+        const float x0 = static_cast<float>(x) * cellX - terrain.worldSizeX * 0.5F;
+        const float z0 = static_cast<float>(z) * cellZ - terrain.worldSizeZ * 0.5F;
+        const kb::scene::Vec3 a{ x0, height(x, z), z0 };
+        const kb::scene::Vec3 b{ x0 + cellX, height(x + 1U, z), z0 };
+        const kb::scene::Vec3 c{ x0, height(x, z + 1U), z0 + cellZ };
+        const kb::scene::Vec3 d{ x0 + cellX, height(x + 1U, z + 1U), z0 + cellZ };
+        const float first = RayTriangleDistance(*origin, direction, a, c, b);
+        const float second = RayTriangleDistance(*origin, direction, b, c, d);
+        const float nearest = std::min(first, second);
+        constexpr float kCellBoundaryTolerance = 0.0001F;
+        return nearest + kCellBoundaryTolerance >= segmentEnter && nearest <= segmentExit + kCellBoundaryTolerance
+            ? nearest
+            : std::numeric_limits<float>::max();
+    };
+
+    const bool vertical = std::abs(direction.x) <= 0.000001F && std::abs(direction.z) <= 0.000001F;
+    if (vertical) {
+        const float sampleX = (origin->x + terrain.worldSizeX * 0.5F) / cellX;
+        const float sampleZ = (origin->z + terrain.worldSizeZ * 0.5F) / cellZ;
+        const std::uint32_t cellIndexX = static_cast<std::uint32_t>(std::clamp(
+            static_cast<int>(std::floor(sampleX)), 0, static_cast<int>(terrain.width) - 2));
+        const std::uint32_t cellIndexZ = static_cast<std::uint32_t>(std::clamp(
+            static_cast<int>(std::floor(sampleZ)), 0, static_cast<int>(terrain.height) - 2));
+        const float hit = testCell(cellIndexX, cellIndexZ, enter, exit);
+        return std::isfinite(hit) && hit < std::numeric_limits<float>::max()
+            ? std::optional<kb::scene::Vec3>{ *origin + direction * hit }
+            : std::nullopt;
+    }
+
+    const float startDistance = std::min(enter + 0.00001F, exit);
+    const kb::scene::Vec3 start = *origin + direction * startDistance;
+    int cellIndexX = std::clamp(
+        static_cast<int>(std::floor((start.x + terrain.worldSizeX * 0.5F) / cellX)),
+        0, static_cast<int>(terrain.width) - 2);
+    int cellIndexZ = std::clamp(
+        static_cast<int>(std::floor((start.z + terrain.worldSizeZ * 0.5F) / cellZ)),
+        0, static_cast<int>(terrain.height) - 2);
+    const int stepX = direction.x > 0.0F ? 1 : (direction.x < 0.0F ? -1 : 0);
+    const int stepZ = direction.z > 0.0F ? 1 : (direction.z < 0.0F ? -1 : 0);
+    const float nextBoundaryX = (static_cast<float>(cellIndexX + (stepX > 0 ? 1 : 0)) * cellX) - terrain.worldSizeX * 0.5F;
+    const float nextBoundaryZ = (static_cast<float>(cellIndexZ + (stepZ > 0 ? 1 : 0)) * cellZ) - terrain.worldSizeZ * 0.5F;
+    float nextX = stepX == 0 ? std::numeric_limits<float>::max() : (nextBoundaryX - origin->x) / direction.x;
+    float nextZ = stepZ == 0 ? std::numeric_limits<float>::max() : (nextBoundaryZ - origin->z) / direction.z;
+    const float deltaX = stepX == 0 ? std::numeric_limits<float>::max() : cellX / std::abs(direction.x);
+    const float deltaZ = stepZ == 0 ? std::numeric_limits<float>::max() : cellZ / std::abs(direction.z);
+    float segmentEnter = enter;
+    const std::uint32_t maximumVisitedCells = terrain.width + terrain.height;
+    for (std::uint32_t visited = 0U; visited < maximumVisitedCells; ++visited) {
+        const float segmentExit = std::min({ nextX, nextZ, exit });
+        const float hit = testCell(
+            static_cast<std::uint32_t>(cellIndexX),
+            static_cast<std::uint32_t>(cellIndexZ),
+            segmentEnter,
+            segmentExit);
+        if (hit < std::numeric_limits<float>::max()) return *origin + direction * hit;
+        if (segmentExit >= exit) break;
+        const bool advanceX = nextX <= nextZ;
+        const bool advanceZ = nextZ <= nextX;
+        if (advanceX) {
+            cellIndexX += stepX;
+            nextX += deltaX;
+        }
+        if (advanceZ) {
+            cellIndexZ += stepZ;
+            nextZ += deltaZ;
+        }
+        if (cellIndexX < 0 || cellIndexX >= static_cast<int>(terrain.width) - 1 ||
+            cellIndexZ < 0 || cellIndexZ >= static_cast<int>(terrain.height) - 1) break;
+        segmentEnter = segmentExit;
     }
     return std::nullopt;
 }
