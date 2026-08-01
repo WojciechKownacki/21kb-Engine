@@ -22,6 +22,10 @@
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
+#include "engine/scene/FacingPanelComponent.hpp"
+#include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/HistoryRibbonComponent.hpp"
+#include "engine/scene/LensEchoComponent.hpp"
 #include "kb/render/resources/BuiltInParticleQuadMesh.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 #include "kb/render/scene/SceneParticleRenderSynchronizer.hpp"
@@ -42,6 +46,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <span>
 #include <system_error>
@@ -1518,6 +1523,202 @@ void RunSceneLightingPackerAddsEditorPreviewKeyLightTest() {
     Require(stats.skippedForwardLightCount == 0U, "Editor preview key light should not produce skipped scene light stats");
 }
 
+void RunRenderSceneExpandsGeometrySwarmIntoExistingDrawGroupTest() {
+    RenderScene renderScene;
+    static_cast<void>(renderScene.UpsertGeometrySwarm(GeometrySwarmRenderProxyDesc{
+        .entityId = 77U, .meshAssetId = 42U, .materialAssetId = 9U,
+        .model = { 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F },
+        .instanceCount = 4U, .columns = 2U, .rows = 2U, .layers = 1U,
+        .spacing = { 2.0F, 4.0F, 1.0F }, .instanceScale = 1.5F,
+    }));
+    const std::vector<SceneRenderDrawGroup>& groups = renderScene.DrawGroups();
+    Require(groups.size() == 1U && groups[0].instances.size() == 4U, "Geometry Swarm did not expand into the canonical mesh draw group");
+    Require(groups[0].instances[0].entityId != groups[0].instances[1].entityId, "Geometry Swarm did not generate deterministic unique per-instance identifiers");
+    Require(NearlyEqual(groups[0].instances[0].model[0], 1.5F), "Geometry Swarm did not apply per-instance scale to the generated model");
+    SceneRenderSnapshot snapshot;
+    renderScene.BuildSnapshotInto(1280U, 720U, snapshot);
+    Require(snapshot.meshes.size() == 4U, "Geometry Swarm did not reach the snapshot consumer used by the runtime renderer");
+    const float originalFirstInstanceX = groups[0].instances[0].model[12];
+    const std::array<float, 16> movedModel{ 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 6.0F, 0.0F, 0.0F, 1.0F };
+    Require(renderScene.UpdateGeometrySwarmTransform(77U, movedModel), "Geometry Swarm transform update did not update the renderer-derived proxy");
+    Require(NearlyEqual(renderScene.DrawGroups()[0].instances[0].model[12], originalFirstInstanceX + 6.0F), "Geometry Swarm transform update did not rebuild derived instances");
+    Require(renderScene.RemoveGeometrySwarm(77U), "Geometry Swarm proxy removal failed");
+    Require(renderScene.DrawGroups().empty(), "Geometry Swarm proxy removal left derived render instances behind");
+}
+
+void RunRenderSceneExpandsSpaceStrokeIntoExistingDrawGroupTest() {
+    RenderScene renderScene;
+    static_cast<void>(renderScene.UpsertSpaceStroke(SpaceStrokeRenderProxyDesc{
+        .entityId = 78U, .meshAssetId = 42U, .materialAssetId = 9U,
+        .model = { 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F },
+        .controlPoints = { std::array<float, 3>{ -1.0F, 0.0F, 0.0F }, std::array<float, 3>{ 0.0F, 0.0F, 0.0F }, std::array<float, 3>{ 1.0F, 0.0F, 0.0F } },
+        .controlPointCount = 3U, .splineSegments = 8U, .mode = static_cast<std::uint8_t>(kb::scene::SpaceStrokeMode::Polyline), .width = 0.25F,
+    }));
+    const std::vector<SceneRenderDrawGroup>& groups = renderScene.DrawGroups();
+    Require(groups.size() == 1U && groups[0].instances.size() == 2U, "Space Stroke did not expand its canonical curve into mesh draw instances");
+    const std::array<float, 16>& firstModel = groups[0].instances[0].model;
+    const float generatedWidth = std::sqrt(firstModel[0] * firstModel[0] + firstModel[1] * firstModel[1] + firstModel[2] * firstModel[2]);
+    Require(NearlyEqual(generatedWidth, 0.25F), "Space Stroke did not apply authored width to the generated segment");
+    SceneRenderSnapshot snapshot;
+    renderScene.BuildSnapshotInto(1280U, 720U, snapshot);
+    Require(snapshot.meshes.size() == 2U, "Space Stroke did not reach the runtime renderer snapshot consumer");
+    Require(renderScene.RemoveSpaceStroke(78U) && renderScene.DrawGroups().empty(), "Space Stroke removal left derived render instances behind");
+}
+
+void RunEcsSyncBuildsSpaceStrokeFromGuideCurveTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Space Stroke" });
+    kb::scene::GuideCurveComponent curve{};
+    curve.controlPointCount = 3U;
+    curve.controlPoints[0] = kb::scene::Vec3{ -2.0F, 0.0F, 0.0F };
+    curve.controlPoints[1] = kb::scene::Vec3{ 0.0F, 1.0F, 0.0F };
+    curve.controlPoints[2] = kb::scene::Vec3{ 2.0F, 0.0F, 0.0F };
+    scene.Components().GuideCurves().Set(entity, curve);
+    scene.Components().SpaceStrokes().Set(entity, kb::scene::SpaceStrokeComponent{
+        .meshAssetId = 11U, .materialAssetId = 19U, .mode = kb::scene::SpaceStrokeMode::Spline,
+        .width = 0.2F, .splineSegments = 6U, .castsShadow = true, .enabled = true,
+    });
+
+    EcsRenderSceneSynchronizer synchronizer;
+    RenderScene renderScene;
+    synchronizer.Sync(scene, renderScene);
+    Require(renderScene.SpaceStrokeProxyCount() == 1U && renderScene.DrawGroups().size() == 1U &&
+            renderScene.DrawGroups()[0].instances.size() == 6U,
+        "ECS Space Stroke sync did not derive spline segments from its Guide Curve");
+
+    kb::scene::SpaceStrokeComponent* stroke = scene.Components().SpaceStrokes().TryGet(entity);
+    Require(stroke != nullptr, "Space Stroke fixture lost its component");
+    const std::array<std::uint64_t, 1U> changedEntities{ entity.Id() };
+    stroke->mode = kb::scene::SpaceStrokeMode::Beam;
+    scene.Components().SpaceStrokes().MarkModified(entity);
+    synchronizer.SyncEntities(scene, renderScene, changedEntities);
+    Require(renderScene.DrawGroups().size() == 1U && renderScene.DrawGroups()[0].instances.size() == 1U,
+        "Incremental ECS Space Stroke sync did not refresh beam topology");
+
+    stroke->enabled = false;
+    scene.Components().SpaceStrokes().MarkModified(entity);
+    synchronizer.SyncEntities(scene, renderScene, changedEntities);
+    Require(renderScene.SpaceStrokeProxyCount() == 0U && renderScene.DrawGroups().empty(),
+        "Incremental ECS Space Stroke sync retained a disabled stroke proxy");
+}
+
+void RunEcsSyncBuildsHistoryRibbonFromTimedTransformSamplesTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "History Ribbon" });
+    scene.Transforms().Set(entity, LocalOnlyTransformAt(0.0F, 0.0F, 0.0F));
+    scene.Components().HistoryRibbons().Set(entity, kb::scene::HistoryRibbonComponent{
+        .meshAssetId = 11U, .materialAssetId = 19U, .lifetimeSeconds = 1.0F, .width = 0.2F,
+        .sampleIntervalSeconds = 0.05F, .castsShadow = true, .enabled = true,
+    });
+
+    EcsRenderSceneSynchronizer synchronizer;
+    RenderScene renderScene;
+    static_cast<void>(scene.Runtime().Update(0.1F));
+    synchronizer.Sync(scene, renderScene);
+    Require(renderScene.MeshProxyCount() == 0U && synchronizer.Stats().historyRibbonStateCount == 1U,
+        "History Ribbon did not retain its first timed transform sample without emitting a degenerate segment");
+
+    scene.Transforms().Set(entity, LocalOnlyTransformAt(2.0F, 0.0F, 0.0F));
+    static_cast<void>(scene.Runtime().Update(0.1F));
+    synchronizer.Sync(scene, renderScene);
+    Require(renderScene.MeshProxyCount() == 1U && renderScene.DrawGroups().size() == 1U &&
+            renderScene.DrawGroups()[0].instances.size() == 1U,
+        "History Ribbon did not emit its derived ribbon segment through the existing mesh draw group");
+
+    kb::scene::HistoryRibbonComponent* ribbon = scene.Components().HistoryRibbons().TryGet(entity);
+    Require(ribbon != nullptr, "History Ribbon fixture lost its component");
+    ribbon->enabled = false;
+    scene.Components().HistoryRibbons().MarkModified(entity);
+    synchronizer.Sync(scene, renderScene);
+    Require(renderScene.MeshProxyCount() == 0U, "Disabled History Ribbon retained derived renderer-owned segments");
+}
+
+void RunEcsSyncBuildsLensEchoFromSourceAndCleansStaleProxyTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity camera = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Echo Camera" });
+    scene.Transforms().Set(camera, LocalOnlyTransformAt(0.0F, 0.0F, 5.0F));
+    scene.Components().Cameras().Set(camera, kb::scene::CameraComponent{ .primary = true });
+    const kb::scene::SceneEntity source = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Echo Source" });
+    scene.Transforms().Set(source, LocalOnlyTransformAt(1.0F, 0.0F, 0.0F));
+    const kb::scene::SceneEntity owner = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Echo Owner" });
+    scene.Components().LensEchoes().Set(owner, kb::scene::LensEchoComponent{
+        .sourceEntityId = source.Id(), .profileMaterialAssetId = 77U, .intensity = 2.0F, .size = 0.5F,
+        .occlusionRule = kb::scene::LensEchoOcclusionRule::AlwaysVisible, .enabled = true,
+    });
+    EcsRenderSceneSynchronizer synchronizer;
+    RenderScene renderScene;
+    synchronizer.Sync(scene, renderScene);
+    synchronizer.SyncLensEchoes(scene, renderScene, 0U);
+    Require(renderScene.MeshProxyCount() == 1U, "Lens Echo did not emit one renderer-owned billboard");
+    const auto& [id, proxy] = *renderScene.MeshProxies().begin();
+    static_cast<void>(id);
+    Require(proxy.desc.meshAssetId == BuiltInParticleQuadMeshAssetId().value && proxy.desc.materialAssetId == 77U,
+        "Lens Echo did not preserve profile material or use the built-in billboard mesh");
+    Require(!proxy.desc.castsShadow && !proxy.desc.receivesShadow && proxy.desc.customData0 == 2.0F,
+        "Lens Echo did not preserve renderer-only optical policy");
+    kb::scene::LensEchoComponent* echo = scene.Components().LensEchoes().TryGet(owner);
+    Require(echo != nullptr, "Lens Echo fixture lost its component");
+    echo->enabled = false;
+    scene.Components().LensEchoes().MarkModified(owner);
+    synchronizer.SyncLensEchoes(scene, renderScene, 0U);
+    Require(renderScene.MeshProxyCount() == 0U, "Disabled Lens Echo retained a stale billboard proxy");
+}
+
+void RunRenderSceneAppliesSurfaceCastByRegionLayerAndOrderTest() {
+    RenderScene renderScene;
+    const std::array<float, 16> identity{ 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F };
+    std::array<float, 16> inside = identity; inside[12] = 0.25F;
+    std::array<float, 16> outside = identity; outside[12] = 3.0F;
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{ .entityId = 1U, .meshAssetId = 7U, .materialAssetId = 10U, .model = inside, .layer = 2U }));
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{ .entityId = 2U, .meshAssetId = 7U, .materialAssetId = 10U, .model = outside, .layer = 2U }));
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{ .entityId = 3U, .meshAssetId = 7U, .materialAssetId = 10U, .model = inside, .layer = 4U }));
+    static_cast<void>(renderScene.UpsertSurfaceCast(SurfaceCastRenderProxyDesc{ .entityId = 11U, .materialAssetId = 20U, .model = identity, .size = { 2.0F, 2.0F, 2.0F }, .receiverLayerMask = 2U, .order = 1, .region = RenderSurfaceCastRegion::Box }));
+    static_cast<void>(renderScene.UpsertSurfaceCast(SurfaceCastRenderProxyDesc{ .entityId = 12U, .materialAssetId = 30U, .model = identity, .size = { 2.0F, 2.0F, 2.0F }, .receiverLayerMask = 2U, .order = 2, .region = RenderSurfaceCastRegion::Box }));
+    SceneRenderSnapshot snapshot;
+    renderScene.BuildSnapshotInto(1280U, 720U, snapshot);
+    const auto material = [&snapshot](std::uint64_t entityId) { for (const SceneRenderMeshInstance& instance : snapshot.meshes) if (instance.entityId == entityId) return instance.materialAssetId; return std::uint64_t{ 0U }; };
+    Require(material(1U) == 30U, "Surface Cast did not apply the highest-order matching material");
+    Require(material(2U) == 10U, "Surface Cast ignored its region boundary");
+    Require(material(3U) == 10U, "Surface Cast ignored its receiver-layer filter");
+    Require(renderScene.RemoveSurfaceCast(12U), "Surface Cast proxy removal failed");
+    renderScene.BuildSnapshotInto(1280U, 720U, snapshot);
+    Require(material(1U) == 20U, "Surface Cast removal did not restore the preceding ordered cast");
+}
+
+void RunRenderSceneAppliesFacingPanelModesWithoutMutatingEcsTransformTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity camera = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Camera", .transform = TransformAt(0.0F, 0.0F, -5.0F) });
+    scene.Components().Cameras().Set(camera, kb::scene::CameraComponent{ .primary = true });
+    const kb::scene::SceneEntity panelEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Panel", .transform = TransformAt(0.0F, 0.0F, 0.0F) });
+    scene.Components().MeshRenderers().Set(panelEntity, kb::scene::MeshRendererComponent{ .meshAssetId = 7U, .materialAssetId = 9U });
+    kb::scene::FacingPanelComponent panel{ .mode = kb::scene::FacingPanelMode::View, .enabled = true };
+    scene.Components().FacingPanels().Set(panelEntity, panel);
+    EcsRenderSceneSynchronizer synchronizer;
+    RenderScene renderScene;
+    synchronizer.Sync(scene, renderScene);
+    const MeshRenderProxy* proxy = renderScene.FindMeshByEntity(panelEntity.Id());
+    Require(proxy != nullptr && proxy->desc.model[10] < -0.99F, "Facing Panel view mode did not orient the flat mesh toward the primary camera");
+    panel.mode = kb::scene::FacingPanelMode::Point;
+    panel.targetPoint = kb::scene::Vec3{ 5.0F, 0.0F, 0.0F };
+    scene.Components().FacingPanels().Set(panelEntity, panel);
+    synchronizer.Sync(scene, renderScene);
+    proxy = renderScene.FindMeshByEntity(panelEntity.Id());
+    Require(proxy != nullptr && proxy->desc.model[8] > 0.99F, "Facing Panel point mode did not orient the flat mesh toward its point");
+    panel.mode = kb::scene::FacingPanelMode::Axis;
+    panel.axis = kb::scene::Vec3{ -1.0F, 0.0F, 0.0F };
+    scene.Components().FacingPanels().Set(panelEntity, panel);
+    synchronizer.Sync(scene, renderScene);
+    proxy = renderScene.FindMeshByEntity(panelEntity.Id());
+    Require(proxy != nullptr && proxy->desc.model[8] < -0.99F, "Facing Panel axis mode did not use the authored axis");
+    panel.mode = kb::scene::FacingPanelMode::Fixed;
+    scene.Components().FacingPanels().Set(panelEntity, panel);
+    synchronizer.Sync(scene, renderScene);
+    proxy = renderScene.FindMeshByEntity(panelEntity.Id());
+    Require(proxy != nullptr && proxy->desc.model[10] > 0.99F, "Facing Panel fixed mode did not preserve the authored orientation");
+    const kb::scene::TransformComponent* canonicalTransform = scene.Transforms().TryGet(panelEntity);
+    Require(canonicalTransform != nullptr && canonicalTransform->worldRotation.z == 0.0F && canonicalTransform->worldRotation.w == 1.0F, "Facing Panel renderer consumer mutated canonical ECS TransformComponent");
+}
+
 void RunRenderSceneSyncsAllSurfaceEmitterKindsTest() {
     kb::scene::Scene scene;
     kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
@@ -2597,6 +2798,13 @@ void RunRenderSceneSyncTests() {
     RunRenderResourceMapRequiresExplicitBindingsTest();
     RunRenderSceneBuildsMeshMaterialDrawGroupsTest();
     RunRenderSceneBuildsLargeMeshMaterialDrawGroupsTest();
+    RunRenderSceneExpandsGeometrySwarmIntoExistingDrawGroupTest();
+    RunRenderSceneExpandsSpaceStrokeIntoExistingDrawGroupTest();
+    RunEcsSyncBuildsSpaceStrokeFromGuideCurveTest();
+    RunEcsSyncBuildsHistoryRibbonFromTimedTransformSamplesTest();
+    RunEcsSyncBuildsLensEchoFromSourceAndCleansStaleProxyTest();
+    RunRenderSceneAppliesSurfaceCastByRegionLayerAndOrderTest();
+    RunRenderSceneAppliesFacingPanelModesWithoutMutatingEcsTransformTest();
     RunRenderSceneCachesDrawGroupsUntilMeshStateChangesTest();
     RunRenderSceneReserveAndStatsExposeProxyCapacityTest();
     RunEcsSyncPropagatesMaterialSlotOverridesTest();

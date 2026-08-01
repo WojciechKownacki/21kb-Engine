@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "app/EditorTextInputShortcuts.hpp"
+#include "platform/win32/EditorTagNameDialog.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
@@ -15,12 +16,17 @@
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
+#include "engine/scene/AuxFrameComponent.hpp"
+#include "engine/scene/GeometrySwarmComponent.hpp"
+#include "engine/scene/SurfaceCastComponent.hpp"
+#include "engine/scene/FacingPanelComponent.hpp"
+#include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneAssets.hpp"
-#include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
@@ -28,6 +34,7 @@
 #include "inspection/InspectorPhysicsModel.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "scene/transform_edit/EditorTransformProperty.hpp"
+#include "scene/EditorTerrainService.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -815,6 +822,66 @@ template <typename Mutator>
     return true;
 }
 
+[[nodiscard]] bool IsTerrainBrushFloatProperty(InspectorPropertyId property) noexcept {
+    return property == InspectorPropertyId::TerrainBrushRadius ||
+        property == InspectorPropertyId::TerrainBrushStrength ||
+        property == InspectorPropertyId::TerrainBrushFalloff ||
+        property == InspectorPropertyId::TerrainFlattenHeight ||
+        property == InspectorPropertyId::TerrainTerraceStep;
+}
+
+[[nodiscard]] float TerrainBrushFloatValue(const kb::terrain_editor::TerrainBrushSettings& brush, InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::TerrainBrushRadius: return brush.radius;
+    case InspectorPropertyId::TerrainBrushStrength: return brush.strength;
+    case InspectorPropertyId::TerrainBrushFalloff: return brush.falloff;
+    case InspectorPropertyId::TerrainFlattenHeight: return brush.targetHeight;
+    case InspectorPropertyId::TerrainTerraceStep: return brush.terraceStep;
+    default: return 0.0F;
+    }
+}
+
+[[nodiscard]] bool HandleTerrainClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    if (hit.property == InspectorPropertyId::TerrainEditEnabled) {
+        sceneContext.Inspector().EndTextEdit();
+        EditorTerrainService::ToolState().editingEnabled = !EditorTerrainService::ToolState().editingEnabled;
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::TerrainBrushMode) {
+        sceneContext.Inspector().EndTextEdit();
+        auto& mode = EditorTerrainService::ToolState().brush.mode;
+        mode = static_cast<kb::terrain_editor::TerrainBrushMode>((static_cast<std::uint32_t>(mode) + 1U) % 8U);
+        return true;
+    }
+    if (IsTerrainBrushFloatProperty(hit.property)) {
+        sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(TerrainBrushFloatValue(EditorTerrainService::ToolState().brush, hit.property)));
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::MeshRendererMaterial ||
+        hit.property == InspectorPropertyId::MeshRendererCastsShadow ||
+        hit.property == InspectorPropertyId::MeshRendererReceivesShadow) {
+        return HandleMeshRendererClick(sceneContext, entity, hit);
+    }
+    return true;
+}
+
+[[nodiscard]] bool ApplyTerrainBrushText(InspectorPropertyId property, std::string_view text) {
+    float value = 0.0F;
+    if (!ParseFloat(text, value) || !std::isfinite(value)) return false;
+    kb::terrain_editor::TerrainBrushSettings candidate = EditorTerrainService::ToolState().brush;
+    switch (property) {
+    case InspectorPropertyId::TerrainBrushRadius: candidate.radius = value; break;
+    case InspectorPropertyId::TerrainBrushStrength: candidate.strength = value; break;
+    case InspectorPropertyId::TerrainBrushFalloff: candidate.falloff = value; break;
+    case InspectorPropertyId::TerrainFlattenHeight: candidate.targetHeight = value; break;
+    case InspectorPropertyId::TerrainTerraceStep: candidate.terraceStep = value; break;
+    default: return false;
+    }
+    if (!kb::terrain_editor::IsTerrainBrushSettingsValid(candidate)) return false;
+    EditorTerrainService::ToolState().brush = candidate;
+    return true;
+}
+
 [[nodiscard]] bool ApplyLightLayerMask(
     EditorSceneContext& sceneContext,
     kb::scene::SceneEntity entity,
@@ -1106,8 +1173,9 @@ template <typename Integer>
         sceneContext.Inspector().EndTextEdit();
         return sceneContext.ToggleAnimatorEnabled(entity);
     }
-    if (hit.property == InspectorPropertyId::AnimatorController) {
-        sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(animator->controllerAssetId));
+    if (hit.property == InspectorPropertyId::AnimatorController ||
+        hit.property == InspectorPropertyId::AnimatorControllerPicker) {
+        sceneContext.Inspector().EndTextEdit();
         return true;
     }
     if (hit.property == InspectorPropertyId::AnimatorSpeed) {
@@ -1180,6 +1248,26 @@ template <typename Integer>
 
 [[nodiscard]] bool IsRegionPortalProperty(InspectorPropertyId property) noexcept {
     return property >= InspectorPropertyId::RegionPortalSourceCell && property <= InspectorPropertyId::RegionPortalEnabled;
+}
+
+[[nodiscard]] bool IsSecondaryFrameProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::SecondaryFrameMode && property <= InspectorPropertyId::SecondaryFrameEnabled;
+}
+
+[[nodiscard]] bool IsGeometrySwarmProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::GeometrySwarmMeshAssetId && property <= InspectorPropertyId::GeometrySwarmEnabled;
+}
+[[nodiscard]] bool IsSurfaceCastProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::SurfaceCastMaterialAssetId && property <= InspectorPropertyId::SurfaceCastEnabled;
+}
+[[nodiscard]] bool IsFacingPanelProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::FacingPanelMode && property <= InspectorPropertyId::FacingPanelEnabled;
+}
+[[nodiscard]] bool IsSpaceStrokeProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::SpaceStrokeMeshAssetId && property <= InspectorPropertyId::SpaceStrokeEnabled;
+}
+[[nodiscard]] bool IsHistoryRibbonProperty(InspectorPropertyId property) noexcept {
+    return property >= InspectorPropertyId::HistoryRibbonMeshAssetId && property <= InspectorPropertyId::HistoryRibbonEnabled;
 }
 
 template <typename Mutator>
@@ -1306,6 +1394,62 @@ template <typename Mutator>
     kb::scene::SceneRegionPortalComponent* portal = sceneContext.Scene().Components().RegionPortals().TryGet(entity);
     if (portal == nullptr || !mutator(*portal)) { sceneContext.CancelSceneEditTransaction(); return false; }
     sceneContext.Scene().Components().RegionPortals().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditSecondaryFrame(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::AuxFrameComponent* frame = sceneContext.Scene().Components().AuxFrames().TryGet(entity);
+    if (frame == nullptr || !mutator(*frame)) { sceneContext.CancelSceneEditTransaction(); return false; }
+    sceneContext.Scene().Components().AuxFrames().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool EditGeometrySwarm(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::GeometrySwarmComponent* swarm = sceneContext.Scene().Components().GeometrySwarms().TryGet(entity);
+    if (swarm == nullptr || !mutator(*swarm)) { sceneContext.CancelSceneEditTransaction(); return false; }
+    sceneContext.Scene().Components().GeometrySwarms().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+template <typename Mutator>
+[[nodiscard]] bool EditSurfaceCast(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::SurfaceCastComponent* surfaceCast = sceneContext.Scene().Components().SurfaceCasts().TryGet(entity);
+    if (surfaceCast == nullptr || !mutator(*surfaceCast)) { sceneContext.CancelSceneEditTransaction(); return false; }
+    sceneContext.Scene().Components().SurfaceCasts().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+template <typename Mutator>
+[[nodiscard]] bool EditFacingPanel(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::FacingPanelComponent* panel = sceneContext.Scene().Components().FacingPanels().TryGet(entity);
+    if (panel == nullptr || !mutator(*panel)) { sceneContext.CancelSceneEditTransaction(); return false; }
+    sceneContext.Scene().Components().FacingPanels().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+template <typename Mutator>
+[[nodiscard]] bool EditSpaceStroke(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::SpaceStrokeComponent* stroke = sceneContext.Scene().Components().SpaceStrokes().TryGet(entity);
+    if (stroke == nullptr || !mutator(*stroke)) { sceneContext.CancelSceneEditTransaction(); return false; }
+    sceneContext.Scene().Components().SpaceStrokes().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+template <typename Mutator>
+[[nodiscard]] bool EditHistoryRibbon(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string_view label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) return false;
+    kb::scene::HistoryRibbonComponent* ribbon = sceneContext.Scene().Components().HistoryRibbons().TryGet(entity);
+    if (ribbon == nullptr || !mutator(*ribbon)) { sceneContext.CancelSceneEditTransaction(); return false; }
+    sceneContext.Scene().Components().HistoryRibbons().MarkModified(entity);
     static_cast<void>(sceneContext.CommitSceneEditTransaction());
     return true;
 }
@@ -1618,6 +1762,140 @@ template <typename Mutator>
     return true;
 }
 
+[[nodiscard]] std::string SecondaryFrameFieldText(const kb::scene::AuxFrameComponent& value, InspectorPropertyId property) {
+    switch (property) {
+    case InspectorPropertyId::SecondaryFrameMode: return std::to_string(static_cast<int>(value.mode));
+    case InspectorPropertyId::SecondaryFrameImageTargetId: return std::to_string(value.imageTargetId);
+    case InspectorPropertyId::SecondaryFrameWidth: return std::to_string(value.width);
+    case InspectorPropertyId::SecondaryFrameHeight: return std::to_string(value.height);
+    case InspectorPropertyId::SecondaryFramePlaneNormalX: return FormatCompactFloat(value.mirrorPlaneNormal.x);
+    case InspectorPropertyId::SecondaryFramePlaneNormalY: return FormatCompactFloat(value.mirrorPlaneNormal.y);
+    case InspectorPropertyId::SecondaryFramePlaneNormalZ: return FormatCompactFloat(value.mirrorPlaneNormal.z);
+    case InspectorPropertyId::SecondaryFramePlaneOffset: return FormatCompactFloat(value.mirrorPlaneOffset);
+    default: return {};
+    }
+}
+
+[[nodiscard]] bool HandleSecondaryFrameClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::AuxFrameComponent* frame = sceneContext.Scene().Components().AuxFrames().TryGet(entity);
+    if (frame == nullptr) return false;
+    if (hit.property == InspectorPropertyId::SecondaryFrameEnabled) {
+        return EditSecondaryFrame(sceneContext, entity, "Toggle Secondary Frame", [](kb::scene::AuxFrameComponent& value) {
+            kb::scene::AuxFrameComponent candidate = value;
+            candidate.enabled = !candidate.enabled;
+            if (!kb::scene::IsAuxFrameComponentPersistable(candidate)) return false;
+            value = candidate;
+            return true;
+        });
+    }
+    if (IsSecondaryFrameProperty(hit.property)) sceneContext.Inspector().BeginTextEdit(hit.property, SecondaryFrameFieldText(*frame, hit.property));
+    return true;
+}
+
+[[nodiscard]] bool HandleGeometrySwarmClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::GeometrySwarmComponent* swarm = sceneContext.Scene().Components().GeometrySwarms().TryGet(entity);
+    if (swarm == nullptr) return false;
+    if (hit.property == InspectorPropertyId::GeometrySwarmCastsShadow) return EditGeometrySwarm(sceneContext, entity, "Toggle Geometry Swarm Shadows", [](auto& value) { value.castsShadow = !value.castsShadow; return true; });
+    if (hit.property == InspectorPropertyId::GeometrySwarmReceivesShadow) return EditGeometrySwarm(sceneContext, entity, "Toggle Geometry Swarm Shadow Reception", [](auto& value) { value.receivesShadow = !value.receivesShadow; return true; });
+    if (hit.property == InspectorPropertyId::GeometrySwarmEnabled) return EditGeometrySwarm(sceneContext, entity, "Toggle Geometry Swarm", [](auto& value) { value.enabled = !value.enabled; return kb::scene::IsGeometrySwarmComponentPersistable(value); });
+    if (IsGeometrySwarmProperty(hit.property)) {
+        std::string text;
+        switch (hit.property) {
+        case InspectorPropertyId::GeometrySwarmMeshAssetId: text = std::to_string(swarm->meshAssetId); break;
+        case InspectorPropertyId::GeometrySwarmMaterialAssetId: text = std::to_string(swarm->materialAssetId); break;
+        case InspectorPropertyId::GeometrySwarmInstanceCount: text = std::to_string(swarm->instanceCount); break;
+        case InspectorPropertyId::GeometrySwarmColumns: text = std::to_string(swarm->columns); break;
+        case InspectorPropertyId::GeometrySwarmRows: text = std::to_string(swarm->rows); break;
+        case InspectorPropertyId::GeometrySwarmLayers: text = std::to_string(swarm->layers); break;
+        case InspectorPropertyId::GeometrySwarmLayer: text = std::to_string(swarm->layer); break;
+        case InspectorPropertyId::GeometrySwarmSpacingX: text = FormatCompactFloat(swarm->spacing.x); break;
+        case InspectorPropertyId::GeometrySwarmSpacingY: text = FormatCompactFloat(swarm->spacing.y); break;
+        case InspectorPropertyId::GeometrySwarmSpacingZ: text = FormatCompactFloat(swarm->spacing.z); break;
+        case InspectorPropertyId::GeometrySwarmInstanceScale: text = FormatCompactFloat(swarm->instanceScale); break;
+        default: return false;
+        }
+        sceneContext.Inspector().BeginTextEdit(hit.property, std::move(text));
+    }
+    return true;
+}
+[[nodiscard]] bool HandleSurfaceCastClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::SurfaceCastComponent* surfaceCast = sceneContext.Scene().Components().SurfaceCasts().TryGet(entity);
+    if (surfaceCast == nullptr) return false;
+    if (hit.property == InspectorPropertyId::SurfaceCastEnabled) return EditSurfaceCast(sceneContext, entity, "Toggle Surface Cast", [](auto& value) { value.enabled = !value.enabled; return kb::scene::IsSurfaceCastComponentPersistable(value); });
+    if (hit.property == InspectorPropertyId::SurfaceCastContent) return EditSurfaceCast(sceneContext, entity, "Change Surface Cast Content", [](auto& value) { value.content = value.content == kb::scene::SurfaceCastContent::Material ? kb::scene::SurfaceCastContent::Detail : kb::scene::SurfaceCastContent::Material; return true; });
+    if (IsSurfaceCastProperty(hit.property)) {
+        std::string text;
+        switch (hit.property) {
+        case InspectorPropertyId::SurfaceCastMaterialAssetId: text = std::to_string(surfaceCast->materialAssetId); break;
+        case InspectorPropertyId::SurfaceCastReceiverLayerMask: text = std::to_string(surfaceCast->receiverLayerMask); break;
+        case InspectorPropertyId::SurfaceCastOrder: text = std::to_string(surfaceCast->order); break;
+        default: return false;
+        }
+        sceneContext.Inspector().BeginTextEdit(hit.property, std::move(text));
+        return true;
+    }
+    return false;
+}
+[[nodiscard]] bool HandleFacingPanelClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::FacingPanelComponent* panel = sceneContext.Scene().Components().FacingPanels().TryGet(entity);
+    if (panel == nullptr) return false;
+    if (hit.property == InspectorPropertyId::FacingPanelEnabled) return EditFacingPanel(sceneContext, entity, "Toggle Facing Panel", [](auto& value) { value.enabled = !value.enabled; return kb::scene::IsFacingPanelComponentPersistable(value); });
+    if (hit.property == InspectorPropertyId::FacingPanelMode) return EditFacingPanel(sceneContext, entity, "Change Facing Panel Mode", [](auto& value) { value.mode = static_cast<kb::scene::FacingPanelMode>((static_cast<std::uint32_t>(value.mode) + 1U) % 4U); return true; });
+    if (!IsFacingPanelProperty(hit.property)) return false;
+    float value = 0.0F;
+    switch (hit.property) {
+    case InspectorPropertyId::FacingPanelTargetX: value = panel->targetPoint.x; break;
+    case InspectorPropertyId::FacingPanelTargetY: value = panel->targetPoint.y; break;
+    case InspectorPropertyId::FacingPanelTargetZ: value = panel->targetPoint.z; break;
+    case InspectorPropertyId::FacingPanelAxisX: value = panel->axis.x; break;
+    case InspectorPropertyId::FacingPanelAxisY: value = panel->axis.y; break;
+    case InspectorPropertyId::FacingPanelAxisZ: value = panel->axis.z; break;
+    case InspectorPropertyId::FacingPanelUpX: value = panel->up.x; break;
+    case InspectorPropertyId::FacingPanelUpY: value = panel->up.y; break;
+    case InspectorPropertyId::FacingPanelUpZ: value = panel->up.z; break;
+    default: return false;
+    }
+    sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(value));
+    return true;
+}
+[[nodiscard]] bool HandleSpaceStrokeClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::SpaceStrokeComponent* stroke = sceneContext.Scene().Components().SpaceStrokes().TryGet(entity);
+    if (stroke == nullptr) return false;
+    if (hit.property == InspectorPropertyId::SpaceStrokeCastsShadow) return EditSpaceStroke(sceneContext, entity, "Toggle Kreska przestrzenna Shadows", [](auto& value) { value.castsShadow = !value.castsShadow; return true; });
+    if (hit.property == InspectorPropertyId::SpaceStrokeReceivesShadow) return EditSpaceStroke(sceneContext, entity, "Toggle Kreska przestrzenna Shadow Reception", [](auto& value) { value.receivesShadow = !value.receivesShadow; return true; });
+    if (hit.property == InspectorPropertyId::SpaceStrokeEnabled) return EditSpaceStroke(sceneContext, entity, "Toggle Kreska przestrzenna", [](auto& value) { value.enabled = !value.enabled; return kb::scene::IsSpaceStrokeComponentPersistable(value); });
+    if (hit.property == InspectorPropertyId::SpaceStrokeMode) return EditSpaceStroke(sceneContext, entity, "Change Kreska przestrzenna Mode", [](auto& value) { value.mode = static_cast<kb::scene::SpaceStrokeMode>((static_cast<std::uint32_t>(value.mode) + 1U) % 4U); return true; });
+    if (!IsSpaceStrokeProperty(hit.property)) return false;
+    switch (hit.property) {
+    case InspectorPropertyId::SpaceStrokeMeshAssetId: sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(stroke->meshAssetId)); break;
+    case InspectorPropertyId::SpaceStrokeMaterialAssetId: sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(stroke->materialAssetId)); break;
+    case InspectorPropertyId::SpaceStrokeWidth: sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(stroke->width)); break;
+    case InspectorPropertyId::SpaceStrokeCableSag: sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(stroke->cableSag)); break;
+    case InspectorPropertyId::SpaceStrokeSplineSegments: sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(stroke->splineSegments)); break;
+    case InspectorPropertyId::SpaceStrokeLayer: sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(stroke->layer)); break;
+    default: return false;
+    }
+    return true;
+}
+[[nodiscard]] bool HandleHistoryRibbonClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::HistoryRibbonComponent* ribbon = sceneContext.Scene().Components().HistoryRibbons().TryGet(entity);
+    if (ribbon == nullptr) return false;
+    if (hit.property == InspectorPropertyId::HistoryRibbonCastsShadow) return EditHistoryRibbon(sceneContext, entity, "Toggle Wst\xC4\x99" "ga historii Shadows", [](auto& value) { value.castsShadow = !value.castsShadow; return true; });
+    if (hit.property == InspectorPropertyId::HistoryRibbonReceivesShadow) return EditHistoryRibbon(sceneContext, entity, "Toggle Wst\xC4\x99" "ga historii Shadow Reception", [](auto& value) { value.receivesShadow = !value.receivesShadow; return true; });
+    if (hit.property == InspectorPropertyId::HistoryRibbonEnabled) return EditHistoryRibbon(sceneContext, entity, "Toggle Wst\xC4\x99" "ga historii", [](auto& value) { value.enabled = !value.enabled; return kb::scene::IsHistoryRibbonComponentPersistable(value); });
+    if (!IsHistoryRibbonProperty(hit.property)) return false;
+    switch (hit.property) {
+    case InspectorPropertyId::HistoryRibbonMeshAssetId: sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(ribbon->meshAssetId)); break;
+    case InspectorPropertyId::HistoryRibbonMaterialAssetId: sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(ribbon->materialAssetId)); break;
+    case InspectorPropertyId::HistoryRibbonLifetimeSeconds: sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(ribbon->lifetimeSeconds)); break;
+    case InspectorPropertyId::HistoryRibbonWidth: sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(ribbon->width)); break;
+    case InspectorPropertyId::HistoryRibbonSampleIntervalSeconds: sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(ribbon->sampleIntervalSeconds)); break;
+    case InspectorPropertyId::HistoryRibbonLayer: sceneContext.Inspector().BeginTextEdit(hit.property, std::to_string(ribbon->layer)); break;
+    default: return false;
+    }
+    return true;
+}
+
 [[nodiscard]] bool ApplyNavAgentText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
     float value = 0.0F;
     if (property == InspectorPropertyId::NavAgentAreaMask) {
@@ -1889,6 +2167,133 @@ template <typename Mutator>
         : sceneContext.SetRegionPortalCells(entity, portal->sourceCell, cell);
 }
 
+[[nodiscard]] bool ApplySecondaryFrameText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    return EditSecondaryFrame(sceneContext, entity, "Edit Secondary Frame", [property, text](kb::scene::AuxFrameComponent& value) {
+        kb::scene::AuxFrameComponent candidate = value;
+        if (property == InspectorPropertyId::SecondaryFrameMode) {
+            std::uint32_t mode = 0U;
+            const auto result = std::from_chars(text.data(), text.data() + text.size(), mode);
+            if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || mode > static_cast<std::uint32_t>(kb::scene::AuxFrameMode::Panoramic)) return false;
+            candidate.mode = static_cast<kb::scene::AuxFrameMode>(mode);
+        } else if (property == InspectorPropertyId::SecondaryFrameImageTargetId) {
+            const auto result = std::from_chars(text.data(), text.data() + text.size(), candidate.imageTargetId);
+            if (result.ec != std::errc{} || result.ptr != text.data() + text.size()) return false;
+        } else if (property == InspectorPropertyId::SecondaryFrameWidth || property == InspectorPropertyId::SecondaryFrameHeight) {
+            std::uint32_t dimension = 0U;
+            const auto result = std::from_chars(text.data(), text.data() + text.size(), dimension);
+            if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || dimension == 0U || dimension > UINT16_MAX) return false;
+            if (property == InspectorPropertyId::SecondaryFrameWidth) candidate.width = static_cast<std::uint16_t>(dimension); else candidate.height = static_cast<std::uint16_t>(dimension);
+        } else {
+            float number = 0.0F;
+            if (!ParseFloat(text, number) || !std::isfinite(number)) return false;
+            switch (property) {
+            case InspectorPropertyId::SecondaryFramePlaneNormalX: candidate.mirrorPlaneNormal.x = number; break;
+            case InspectorPropertyId::SecondaryFramePlaneNormalY: candidate.mirrorPlaneNormal.y = number; break;
+            case InspectorPropertyId::SecondaryFramePlaneNormalZ: candidate.mirrorPlaneNormal.z = number; break;
+            case InspectorPropertyId::SecondaryFramePlaneOffset: candidate.mirrorPlaneOffset = number; break;
+            default: return false;
+            }
+        }
+        if (!kb::scene::IsAuxFrameComponentPersistable(candidate)) return false;
+        value = candidate;
+        return true;
+    });
+}
+
+[[nodiscard]] bool ApplyGeometrySwarmText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    return EditGeometrySwarm(sceneContext, entity, "Edit Geometry Swarm", [property, text](kb::scene::GeometrySwarmComponent& value) {
+        kb::scene::GeometrySwarmComponent candidate = value;
+        auto parseUnsigned = [text](auto& target) { const auto result = std::from_chars(text.data(), text.data() + text.size(), target); return result.ec == std::errc{} && result.ptr == text.data() + text.size(); };
+        switch (property) {
+        case InspectorPropertyId::GeometrySwarmMeshAssetId: if (!parseUnsigned(candidate.meshAssetId)) return false; break;
+        case InspectorPropertyId::GeometrySwarmMaterialAssetId: if (!parseUnsigned(candidate.materialAssetId)) return false; break;
+        case InspectorPropertyId::GeometrySwarmInstanceCount: if (!parseUnsigned(candidate.instanceCount)) return false; break;
+        case InspectorPropertyId::GeometrySwarmColumns: if (!parseUnsigned(candidate.columns)) return false; break;
+        case InspectorPropertyId::GeometrySwarmRows: if (!parseUnsigned(candidate.rows)) return false; break;
+        case InspectorPropertyId::GeometrySwarmLayers: if (!parseUnsigned(candidate.layers)) return false; break;
+        case InspectorPropertyId::GeometrySwarmLayer: if (!parseUnsigned(candidate.layer)) return false; break;
+        case InspectorPropertyId::GeometrySwarmSpacingX: if (!ParseFloat(text, candidate.spacing.x)) return false; break;
+        case InspectorPropertyId::GeometrySwarmSpacingY: if (!ParseFloat(text, candidate.spacing.y)) return false; break;
+        case InspectorPropertyId::GeometrySwarmSpacingZ: if (!ParseFloat(text, candidate.spacing.z)) return false; break;
+        case InspectorPropertyId::GeometrySwarmInstanceScale: if (!ParseFloat(text, candidate.instanceScale)) return false; break;
+        default: return false;
+        }
+        if (!kb::scene::IsGeometrySwarmComponentPersistable(candidate)) return false;
+        value = candidate;
+        return true;
+    });
+}
+[[nodiscard]] bool ApplySurfaceCastText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    return EditSurfaceCast(sceneContext, entity, "Edit Surface Cast", [property, text](kb::scene::SurfaceCastComponent& value) {
+        kb::scene::SurfaceCastComponent candidate = value;
+        switch (property) {
+        case InspectorPropertyId::SurfaceCastMaterialAssetId: { const auto result = std::from_chars(text.data(), text.data() + text.size(), candidate.materialAssetId); if (result.ec != std::errc{} || result.ptr != text.data() + text.size()) return false; break; }
+        case InspectorPropertyId::SurfaceCastReceiverLayerMask: { const auto result = std::from_chars(text.data(), text.data() + text.size(), candidate.receiverLayerMask); if (result.ec != std::errc{} || result.ptr != text.data() + text.size()) return false; break; }
+        case InspectorPropertyId::SurfaceCastOrder: { const auto result = std::from_chars(text.data(), text.data() + text.size(), candidate.order); if (result.ec != std::errc{} || result.ptr != text.data() + text.size()) return false; break; }
+        default: return false;
+        }
+        if (!kb::scene::IsSurfaceCastComponentPersistable(candidate)) return false;
+        value = candidate;
+        return true;
+    });
+}
+[[nodiscard]] bool ApplyFacingPanelText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    float parsed = 0.0F;
+    if (!ParseFloat(text, parsed) || !std::isfinite(parsed)) return false;
+    return EditFacingPanel(sceneContext, entity, "Edit Facing Panel", [property, parsed](kb::scene::FacingPanelComponent& value) {
+        kb::scene::FacingPanelComponent candidate = value;
+        switch (property) {
+        case InspectorPropertyId::FacingPanelTargetX: candidate.targetPoint.x = parsed; break;
+        case InspectorPropertyId::FacingPanelTargetY: candidate.targetPoint.y = parsed; break;
+        case InspectorPropertyId::FacingPanelTargetZ: candidate.targetPoint.z = parsed; break;
+        case InspectorPropertyId::FacingPanelAxisX: candidate.axis.x = parsed; break;
+        case InspectorPropertyId::FacingPanelAxisY: candidate.axis.y = parsed; break;
+        case InspectorPropertyId::FacingPanelAxisZ: candidate.axis.z = parsed; break;
+        case InspectorPropertyId::FacingPanelUpX: candidate.up.x = parsed; break;
+        case InspectorPropertyId::FacingPanelUpY: candidate.up.y = parsed; break;
+        case InspectorPropertyId::FacingPanelUpZ: candidate.up.z = parsed; break;
+        default: return false;
+        }
+        if (!kb::scene::IsFacingPanelComponentPersistable(candidate)) return false;
+        value = candidate;
+        return true;
+    });
+}
+[[nodiscard]] bool ApplySpaceStrokeText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    return EditSpaceStroke(sceneContext, entity, "Edit Kreska przestrzenna", [property, text](kb::scene::SpaceStrokeComponent& value) {
+        kb::scene::SpaceStrokeComponent candidate = value;
+        switch (property) {
+        case InspectorPropertyId::SpaceStrokeMeshAssetId: { const auto result = std::from_chars(text.data(), text.data() + text.size(), candidate.meshAssetId); if (result.ec != std::errc{} || result.ptr != text.data() + text.size()) return false; break; }
+        case InspectorPropertyId::SpaceStrokeMaterialAssetId: { const auto result = std::from_chars(text.data(), text.data() + text.size(), candidate.materialAssetId); if (result.ec != std::errc{} || result.ptr != text.data() + text.size()) return false; break; }
+        case InspectorPropertyId::SpaceStrokeSplineSegments: { std::uint32_t segments = 0U; const auto result = std::from_chars(text.data(), text.data() + text.size(), segments); if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || segments > UINT8_MAX) return false; candidate.splineSegments = static_cast<std::uint8_t>(segments); break; }
+        case InspectorPropertyId::SpaceStrokeLayer: { const auto result = std::from_chars(text.data(), text.data() + text.size(), candidate.layer); if (result.ec != std::errc{} || result.ptr != text.data() + text.size()) return false; break; }
+        case InspectorPropertyId::SpaceStrokeWidth: if (!ParseFloat(text, candidate.width)) return false; break;
+        case InspectorPropertyId::SpaceStrokeCableSag: if (!ParseFloat(text, candidate.cableSag)) return false; break;
+        default: return false;
+        }
+        if (!kb::scene::IsSpaceStrokeComponentPersistable(candidate)) return false;
+        value = candidate;
+        return true;
+    });
+}
+[[nodiscard]] bool ApplyHistoryRibbonText(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, std::string_view text) {
+    return EditHistoryRibbon(sceneContext, entity, "Edit Wst\xC4\x99" "ga historii", [property, text](kb::scene::HistoryRibbonComponent& value) {
+        kb::scene::HistoryRibbonComponent candidate = value;
+        switch (property) {
+        case InspectorPropertyId::HistoryRibbonMeshAssetId: { const auto result = std::from_chars(text.data(), text.data() + text.size(), candidate.meshAssetId); if (result.ec != std::errc{} || result.ptr != text.data() + text.size()) return false; break; }
+        case InspectorPropertyId::HistoryRibbonMaterialAssetId: { const auto result = std::from_chars(text.data(), text.data() + text.size(), candidate.materialAssetId); if (result.ec != std::errc{} || result.ptr != text.data() + text.size()) return false; break; }
+        case InspectorPropertyId::HistoryRibbonLayer: { const auto result = std::from_chars(text.data(), text.data() + text.size(), candidate.layer); if (result.ec != std::errc{} || result.ptr != text.data() + text.size()) return false; break; }
+        case InspectorPropertyId::HistoryRibbonLifetimeSeconds: if (!ParseFloat(text, candidate.lifetimeSeconds)) return false; break;
+        case InspectorPropertyId::HistoryRibbonWidth: if (!ParseFloat(text, candidate.width)) return false; break;
+        case InspectorPropertyId::HistoryRibbonSampleIntervalSeconds: if (!ParseFloat(text, candidate.sampleIntervalSeconds)) return false; break;
+        default: return false;
+        }
+        if (!kb::scene::IsHistoryRibbonComponentPersistable(candidate)) return false;
+        value = candidate;
+        return true;
+    });
+}
+
 [[nodiscard]] bool ToggleAudioProperty(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property) {
     if (!sceneContext.BeginSceneEditTransaction("Edit Audio Component")) {
         return true;
@@ -2095,7 +2500,8 @@ template <typename Store, typename Op>
 [[nodiscard]] bool IsGenericEntityFloatProperty(InspectorPropertyId property) noexcept {
     return PhysicsKindForProperty(property).has_value() ||
         IsLightFloatProperty(property) ||
-        IsCameraFloatProperty(property);
+        IsCameraFloatProperty(property) ||
+        property == InspectorPropertyId::AnimatorSpeed;
 }
 
 [[nodiscard]] bool ReadEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, int index, float& out) {
@@ -2111,6 +2517,13 @@ template <typename Store, typename Op>
         if (const kb::scene::CameraComponent* camera =
                 sceneContext.Scene().Components().Cameras().TryGet(entity)) {
             return ReadCameraFloat(*camera, property, out);
+        }
+    }
+    if (property == InspectorPropertyId::AnimatorSpeed) {
+        if (const kb::scene::Animator* animator =
+                sceneContext.Scene().Components().Animators().TryGet(entity)) {
+            out = animator->speed;
+            return true;
         }
     }
     return false;
@@ -2132,6 +2545,10 @@ void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEnt
     if (IsCameraFloatProperty(property)) {
         static_cast<void>(ApplyCameraFloat(
             sceneContext, entity, property, value));
+        return;
+    }
+    if (property == InspectorPropertyId::AnimatorSpeed) {
+        static_cast<void>(sceneContext.SetAnimatorSpeed(entity, value));
     }
 }
 
@@ -2143,7 +2560,8 @@ void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEnt
     const bool isPhysicsFloat = physicsKind.has_value() && hit.index >= 0 && InspectorPhysicsModel::KindOf(*physicsKind, hit.index) == PhysicsFieldKind::Float;
     const bool isComponentFloat =
         IsLightFloatProperty(hit.property) ||
-        IsCameraFloatProperty(hit.property);
+        IsCameraFloatProperty(hit.property) ||
+        hit.property == InspectorPropertyId::AnimatorSpeed;
     if (!isPhysicsFloat && !isComponentFloat) {
         return false;
     }
@@ -2172,7 +2590,16 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         sceneContext.Inspector().EndTextEdit();
         sceneContext.Inspector().CloseAddComponentBrowser();
         sceneContext.Inspector().CloseComponentMenus();
+        sceneContext.Inspector().CloseTagsDropdown();
         return false;
+    }
+
+    const bool tagsMenuHit = hit.kind == InspectorHitKind::TagOption ||
+        (hit.section == InspectorSectionId::General &&
+         hit.kind == InspectorHitKind::TextField &&
+         hit.property == InspectorPropertyId::TagsText);
+    if (!tagsMenuHit) {
+        sceneContext.Inspector().CloseTagsDropdown();
     }
 
     kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
@@ -2181,6 +2608,7 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         sceneContext.Inspector().EndTextEdit();
         sceneContext.Inspector().CloseAddComponentBrowser();
         sceneContext.Inspector().CloseComponentMenus();
+        sceneContext.Inspector().CloseTagsDropdown();
         sceneContext.Inspector().ToggleDisclosure(*disclosure);
         return true;
     }
@@ -2188,6 +2616,7 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         sceneContext.Inspector().EndTextEdit();
         sceneContext.Inspector().CloseAddComponentBrowser();
         sceneContext.Inspector().CloseComponentMenus();
+        sceneContext.Inspector().CloseTagsDropdown();
         sceneContext.Inspector().ToggleCollapsed(hit.section);
         return true;
     }
@@ -2196,6 +2625,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         if (hit.property == InspectorPropertyId::ComponentRemove && sceneContext.Scene().Entities().IsAlive(entity)) {
             if (hit.section == InspectorSectionId::Script) {
                 static_cast<void>(sceneContext.RemoveScriptFromEntity(entity));
+            } else if (hit.section == InspectorSectionId::Terrain) {
+                EditorTerrainService::ToolState().editingEnabled = false;
+                static_cast<void>(sceneContext.RemoveMeshRendererFromEntity(entity));
             } else if (hit.section == InspectorSectionId::MeshRenderer) {
                 static_cast<void>(sceneContext.RemoveMeshRendererFromEntity(entity));
             } else if (hit.section == InspectorSectionId::Camera) {
@@ -2246,6 +2678,36 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                     sceneContext.Scene().Components().RegionPortals().Remove(entity);
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
+            } else if (hit.section == InspectorSectionId::SecondaryFrame && sceneContext.Scene().Components().AuxFrames().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Secondary Frame")) {
+                    sceneContext.Scene().Components().AuxFrames().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
+            } else if (hit.section == InspectorSectionId::GeometrySwarm && sceneContext.Scene().Components().GeometrySwarms().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Geometry Swarm")) {
+                    sceneContext.Scene().Components().GeometrySwarms().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
+            } else if (hit.section == InspectorSectionId::SurfaceCast && sceneContext.Scene().Components().SurfaceCasts().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Surface Cast")) {
+                    sceneContext.Scene().Components().SurfaceCasts().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
+            } else if (hit.section == InspectorSectionId::FacingPanel && sceneContext.Scene().Components().FacingPanels().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Facing Panel")) {
+                    sceneContext.Scene().Components().FacingPanels().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
+            } else if (hit.section == InspectorSectionId::SpaceStroke && sceneContext.Scene().Components().SpaceStrokes().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Kreska przestrzenna")) {
+                    sceneContext.Scene().Components().SpaceStrokes().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
+            } else if (hit.section == InspectorSectionId::HistoryRibbon && sceneContext.Scene().Components().HistoryRibbons().Has(entity)) {
+                if (sceneContext.BeginSceneEditTransaction("Remove Wst\xC4\x99" "ga historii")) {
+                    sceneContext.Scene().Components().HistoryRibbons().Remove(entity);
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
             } else if (const std::optional<PhysicsComponentKind> kind = PhysicsKindForSection(hit.section); kind.has_value()) {
                 static_cast<void>(sceneContext.RemovePhysicsComponent(entity, *kind));
             }
@@ -2283,6 +2745,30 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         return true;
     }
 
+    if (hit.kind == InspectorHitKind::TagOption) {
+        sceneContext.Inspector().EndTextEdit();
+        const std::vector<std::string> known = sceneContext.KnownSceneTags();
+        if (hit.index >= 0 && hit.index < static_cast<int>(known.size())) {
+            const std::string& tag = known[static_cast<std::size_t>(hit.index)];
+            if (hit.property == InspectorPropertyId::TagsRemove) {
+                static_cast<void>(sceneContext.DeleteSceneTag(tag));
+                sceneContext.Inspector().SetTagsDropdownHover(-1);
+            } else {
+                static_cast<void>(sceneContext.SetEntityTagSelected(entity, tag, true));
+                sceneContext.Inspector().CloseTagsDropdown();
+            }
+        } else if (hit.index == static_cast<int>(known.size())) {
+            static_cast<void>(sceneContext.RemoveTagsFromEntity(entity));
+            sceneContext.Inspector().CloseTagsDropdown();
+        } else if (hit.index == static_cast<int>(known.size()) + 1) {
+            sceneContext.Inspector().CloseTagsDropdown();
+            if (const std::optional<std::string> tag = EditorTagNameDialog::Show(GetActiveWindow()); tag.has_value()) {
+                static_cast<void>(sceneContext.SetEntityTagSelected(entity, *tag, true));
+            }
+        }
+        return true;
+    }
+
     // Drag-to-scrub: pressing a numeric entity field (physics/light float) starts a
     // horizontal scrub; a click that does not move opens the inline editor on
     // pointer-up (handled below in HandlePointerUp). Transform/material fields have
@@ -2295,6 +2781,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
 
     if (hit.section == InspectorSectionId::Script) {
         return HandleScriptClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::Terrain) {
+        return HandleTerrainClick(sceneContext, entity, hit);
     }
     if (hit.section == InspectorSectionId::MeshRenderer) {
         return HandleMeshRendererClick(sceneContext, entity, hit);
@@ -2337,12 +2826,17 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::VisibilityCell) return HandleVisibilityCellClick(sceneContext, entity, hit);
     if (hit.section == InspectorSectionId::RegionPortal) return HandleRegionPortalClick(sceneContext, entity, hit);
-    if (hit.section == InspectorSectionId::Tags &&
+    if (hit.section == InspectorSectionId::SecondaryFrame) return HandleSecondaryFrameClick(sceneContext, entity, hit);
+    if (hit.section == InspectorSectionId::GeometrySwarm) return HandleGeometrySwarmClick(sceneContext, entity, hit);
+    if (hit.section == InspectorSectionId::SurfaceCast) return HandleSurfaceCastClick(sceneContext, entity, hit);
+    if (hit.section == InspectorSectionId::FacingPanel) return HandleFacingPanelClick(sceneContext, entity, hit);
+    if (hit.section == InspectorSectionId::SpaceStroke) return HandleSpaceStrokeClick(sceneContext, entity, hit);
+    if (hit.section == InspectorSectionId::HistoryRibbon) return HandleHistoryRibbonClick(sceneContext, entity, hit);
+    if (hit.section == InspectorSectionId::General &&
         hit.kind == InspectorHitKind::TextField &&
         hit.property == InspectorPropertyId::TagsText) {
-        if (const kb::scene::TagsComponent* tags = sceneContext.Scene().Components().Tags().TryGet(entity); tags != nullptr) {
-            sceneContext.Inspector().BeginTextEdit(InspectorPropertyId::TagsText, std::string{ kb::scene::TagsText(*tags) });
-        }
+        sceneContext.Inspector().EndTextEdit();
+        sceneContext.Inspector().ToggleTagsDropdown();
         return true;
     }
     if (hit.section == InspectorSectionId::Light) {
@@ -2357,16 +2851,6 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
 
     if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::EntityName) {
         sceneContext.Inspector().BeginTextEdit(InspectorPropertyId::EntityName, sceneContext.Scene().Entities().Name(entity));
-        return true;
-    }
-    if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::EntityVisibilityMode) {
-        sceneContext.Inspector().EndTextEdit();
-        return sceneContext.CycleEntityVisibilityMode(entity);
-    }
-    if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::EntityVisibilityMask) {
-        if (const kb::scene::VisibilityComponent* visibility = sceneContext.Scene().Components().Visibility().TryGet(entity); visibility != nullptr) {
-            sceneContext.Inspector().BeginTextEdit(InspectorPropertyId::EntityVisibilityMask, std::to_string(visibility->mask));
-        }
         return true;
     }
     if (hit.kind == InspectorHitKind::BoolField) {
@@ -2587,12 +3071,6 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         }
         const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
         if (sceneContext.Scene().Entities().IsAlive(entity) &&
-            inspector.EditedProperty() == InspectorPropertyId::TagsText) {
-            static_cast<void>(sceneContext.SetTagsText(entity, inspector.EditBuffer()));
-            inspector.EndTextEdit();
-            return true;
-        }
-        if (sceneContext.Scene().Entities().IsAlive(entity) &&
             IsNavAgentProperty(inspector.EditedProperty())) {
             static_cast<void>(ApplyNavAgentText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
             inspector.EndTextEdit();
@@ -2656,22 +3134,41 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             inspector.EndTextEdit();
             return true;
         }
+        if (sceneContext.Scene().Entities().IsAlive(entity) && IsSecondaryFrameProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplySecondaryFrameText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) && IsGeometrySwarmProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyGeometrySwarmText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) && IsSurfaceCastProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplySurfaceCastText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) && IsFacingPanelProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyFacingPanelText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) && IsSpaceStrokeProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplySpaceStrokeText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) && IsHistoryRibbonProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyHistoryRibbonText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
         if (sceneContext.Scene().Entities().IsAlive(entity) &&
             inspector.EditedProperty() == InspectorPropertyId::AnimatorSpeed) {
             float value = 0.0F;
             if (ParseFloat(inspector.EditBuffer(), value)) {
                 static_cast<void>(sceneContext.SetAnimatorSpeed(entity, value));
-            }
-            inspector.EndTextEdit();
-            return true;
-        }
-        if (sceneContext.Scene().Entities().IsAlive(entity) &&
-            inspector.EditedProperty() == InspectorPropertyId::AnimatorController) {
-            std::uint64_t value = 0U;
-            const std::string_view text = inspector.EditBuffer();
-            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
-            if (parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size()) {
-                static_cast<void>(sceneContext.SetAnimatorControllerAsset(entity, kb::assets::AssetId{ value }));
             }
             inspector.EndTextEdit();
             return true;
@@ -2715,6 +3212,11 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
                 entity,
                 inspector.EditedProperty(),
                 inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (IsTerrainBrushFloatProperty(inspector.EditedProperty())) {
+            static_cast<void>(ApplyTerrainBrushText(inspector.EditedProperty(), inspector.EditBuffer()));
             inspector.EndTextEdit();
             return true;
         }
@@ -2772,13 +3274,6 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
                         sceneContext.CancelActiveTransformEdit();
                     }
                 }
-            } else if (property == InspectorPropertyId::EntityVisibilityMask) {
-                std::uint32_t mask = 0U;
-                const std::string& text = inspector.EditBuffer();
-                const std::from_chars_result parsed = std::from_chars(text.data(), text.data() + text.size(), mask);
-                if (parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size()) {
-                    static_cast<void>(sceneContext.SetEntityVisibilityMask(entity, mask));
-                }
             }
         }
         inspector.EndTextEdit();
@@ -2797,8 +3292,11 @@ bool InspectorPanelInteraction::UpdateHover(EditorSceneContext& sceneContext, co
     const int dropdownHover = hit.kind == InspectorHitKind::ValueTypeOption ? hit.index : -1;
     const int previousDropdownHover = sceneContext.Inspector().ValueTypeDropdownHover();
     sceneContext.Inspector().SetValueTypeDropdownHover(dropdownHover);
+    const int tagsDropdownHover = hit.kind == InspectorHitKind::TagOption ? hit.index : -1;
+    const int previousTagsDropdownHover = sceneContext.Inspector().TagsDropdownHover();
+    sceneContext.Inspector().SetTagsDropdownHover(tagsDropdownHover);
     const bool hoverChanged = sceneContext.Inspector().SetHover(hit.kind, hit.section, hit.property, hit.index);
-    return hoverChanged || previousDropdownHover != dropdownHover;
+    return hoverChanged || previousDropdownHover != dropdownHover || previousTagsDropdownHover != tagsDropdownHover;
 }
 
 bool InspectorPanelInteraction::HandleMouseWheel(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit, int wheelDelta) noexcept {

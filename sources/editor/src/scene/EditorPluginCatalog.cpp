@@ -30,7 +30,15 @@ namespace {
 #endif
 #endif
 
-constexpr std::array<EditorPluginDescriptor, 3> kPlugins{{
+#if !defined(KB_TERRAIN_EDITOR_PLUGIN_PATH)
+#if defined(_WIN32)
+#define KB_TERRAIN_EDITOR_PLUGIN_PATH "kb_terrain_editor_plugin.dll"
+#else
+#define KB_TERRAIN_EDITOR_PLUGIN_PATH "libkb_terrain_editor_plugin.so"
+#endif
+#endif
+
+constexpr std::array<EditorPluginDescriptor, 4> kPlugins{{
     EditorPluginDescriptor{
         .id = "Physics.Jolt",
         .displayName = "Jolt Physics",
@@ -54,6 +62,14 @@ constexpr std::array<EditorPluginDescriptor, 3> kPlugins{{
         .provider = "21kb",
         .description = "Directional, point and spot lighting provider for scene rendering.",
         .binaryPath = KB_BASIC_LIGHTING_PLUGIN_PATH,
+    },
+    EditorPluginDescriptor{
+        .id = "Editor.Terrain",
+        .displayName = "Terrain Editor",
+        .category = "Editor",
+        .provider = "21kb",
+        .description = "Terrain authoring extension for the 21kb Editor.",
+        .binaryPath = KB_TERRAIN_EDITOR_PLUGIN_PATH,
     },
 }};
 

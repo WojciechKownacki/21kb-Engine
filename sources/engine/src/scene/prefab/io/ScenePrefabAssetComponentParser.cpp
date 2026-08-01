@@ -286,6 +286,133 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseAuxFrame(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "auxFrame", present)) return false;
+    if (!present) return true;
+    AuxFrameComponent frame{};
+    int mode = 0;
+    std::uint32_t width = 0U;
+    std::uint32_t height = 0U;
+    if (!ParseField(fields, "auxFrame.mode", mode) || !ParseField(fields, "auxFrame.imageTargetId", frame.imageTargetId) ||
+        !ParseField(fields, "auxFrame.width", width) || !ParseField(fields, "auxFrame.height", height) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "auxFrame.mirrorPlaneNormal", frame.mirrorPlaneNormal) ||
+        !ParseField(fields, "auxFrame.mirrorPlaneOffset", frame.mirrorPlaneOffset) || !ParseOptionalBool(fields, "auxFrame.enabled", frame.enabled) ||
+        mode < static_cast<int>(AuxFrameMode::Flat) || mode > static_cast<int>(AuxFrameMode::Panoramic) ||
+        width == 0U || width > UINT16_MAX || height == 0U || height > UINT16_MAX) return false;
+    frame.mode = static_cast<AuxFrameMode>(mode);
+    frame.width = static_cast<std::uint16_t>(width);
+    frame.height = static_cast<std::uint16_t>(height);
+    if (!IsAuxFrameComponentPersistable(frame)) return false;
+    components.auxFrame = frame;
+    return true;
+}
+
+[[nodiscard]] bool ParseGeometrySwarm(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "geometrySwarm", present)) return false;
+    if (!present) return true;
+    GeometrySwarmComponent swarm{};
+    std::uint32_t columns = 0U, rows = 0U, layers = 0U;
+    if (!ParseField(fields, "geometrySwarm.meshAssetId", swarm.meshAssetId) || !ParseField(fields, "geometrySwarm.materialAssetId", swarm.materialAssetId) ||
+        !ParseField(fields, "geometrySwarm.instanceCount", swarm.instanceCount) || !ParseField(fields, "geometrySwarm.columns", columns) ||
+        !ParseField(fields, "geometrySwarm.rows", rows) || !ParseField(fields, "geometrySwarm.layers", layers) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "geometrySwarm.spacing", swarm.spacing) || !ParseField(fields, "geometrySwarm.instanceScale", swarm.instanceScale) ||
+        !ParseField(fields, "geometrySwarm.layer", swarm.layer) || !ParseOptionalBool(fields, "geometrySwarm.castsShadow", swarm.castsShadow) ||
+        !ParseOptionalBool(fields, "geometrySwarm.receivesShadow", swarm.receivesShadow) || !ParseOptionalBool(fields, "geometrySwarm.enabled", swarm.enabled) ||
+        columns == 0U || columns > UINT16_MAX || rows == 0U || rows > UINT16_MAX || layers == 0U || layers > UINT16_MAX) return false;
+    swarm.columns = static_cast<std::uint16_t>(columns); swarm.rows = static_cast<std::uint16_t>(rows); swarm.layers = static_cast<std::uint16_t>(layers);
+    if (!IsGeometrySwarmComponentPersistable(swarm)) return false;
+    components.geometrySwarm = swarm;
+    return true;
+}
+
+[[nodiscard]] bool ParseSurfaceCast(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "surfaceCast", present)) return false;
+    if (!present) return true;
+    SurfaceCastComponent surfaceCast{};
+    std::uint32_t content = 0U;
+    if (!ParseField(fields, "surfaceCast.materialAssetId", surfaceCast.materialAssetId) ||
+        !ParseField(fields, "surfaceCast.receiverLayerMask", surfaceCast.receiverLayerMask) ||
+        !ParseField(fields, "surfaceCast.order", surfaceCast.order) || !ParseField(fields, "surfaceCast.content", content) ||
+        !ParseOptionalBool(fields, "surfaceCast.enabled", surfaceCast.enabled) || content > static_cast<std::uint32_t>(SurfaceCastContent::Detail)) return false;
+    surfaceCast.content = static_cast<SurfaceCastContent>(content);
+    if (!IsSurfaceCastComponentPersistable(surfaceCast)) return false;
+    components.surfaceCast = surfaceCast;
+    return true;
+}
+
+[[nodiscard]] bool ParseFacingPanel(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "facingPanel", present)) return false;
+    if (!present) return true;
+    FacingPanelComponent panel{};
+    std::uint32_t mode = 0U;
+    if (!ParseField(fields, "facingPanel.mode", mode) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "facingPanel.targetPoint", panel.targetPoint) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "facingPanel.axis", panel.axis) ||
+        !ScenePrefabAssetFieldParser::ParseVec3(fields, "facingPanel.up", panel.up) ||
+        !ParseOptionalBool(fields, "facingPanel.enabled", panel.enabled) || mode > static_cast<std::uint32_t>(FacingPanelMode::Fixed)) return false;
+    panel.mode = static_cast<FacingPanelMode>(mode);
+    if (!IsFacingPanelComponentPersistable(panel)) return false;
+    components.facingPanel = panel;
+    return true;
+}
+
+[[nodiscard]] bool ParseSpaceStroke(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "spaceStroke", present)) return false;
+    if (!present) return true;
+    SpaceStrokeComponent stroke{};
+    std::uint32_t mode = 0U;
+    std::uint32_t splineSegments = 0U;
+    if (!ParseField(fields, "spaceStroke.meshAssetId", stroke.meshAssetId) || !ParseField(fields, "spaceStroke.materialAssetId", stroke.materialAssetId) ||
+        !ParseField(fields, "spaceStroke.mode", mode) || !ParseField(fields, "spaceStroke.width", stroke.width) ||
+        !ParseField(fields, "spaceStroke.cableSag", stroke.cableSag) || !ParseField(fields, "spaceStroke.splineSegments", splineSegments) ||
+        !ParseField(fields, "spaceStroke.layer", stroke.layer) || !ParseOptionalBool(fields, "spaceStroke.castsShadow", stroke.castsShadow) ||
+        !ParseOptionalBool(fields, "spaceStroke.receivesShadow", stroke.receivesShadow) || !ParseOptionalBool(fields, "spaceStroke.enabled", stroke.enabled) ||
+        mode > static_cast<std::uint32_t>(SpaceStrokeMode::Cable) || splineSegments > UINT8_MAX) return false;
+    stroke.mode = static_cast<SpaceStrokeMode>(mode);
+    stroke.splineSegments = static_cast<std::uint8_t>(splineSegments);
+    if (!IsSpaceStrokeComponentPersistable(stroke)) return false;
+    components.spaceStroke = stroke;
+    return true;
+}
+
+[[nodiscard]] bool ParseHistoryRibbon(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "historyRibbon", present)) return false;
+    if (!present) return true;
+    HistoryRibbonComponent ribbon{};
+    if (!ParseField(fields, "historyRibbon.meshAssetId", ribbon.meshAssetId) || !ParseField(fields, "historyRibbon.materialAssetId", ribbon.materialAssetId) ||
+        !ParseField(fields, "historyRibbon.lifetimeSeconds", ribbon.lifetimeSeconds) || !ParseField(fields, "historyRibbon.width", ribbon.width) ||
+        !ParseField(fields, "historyRibbon.sampleIntervalSeconds", ribbon.sampleIntervalSeconds) || !ParseField(fields, "historyRibbon.layer", ribbon.layer) ||
+        !ParseOptionalBool(fields, "historyRibbon.castsShadow", ribbon.castsShadow) || !ParseOptionalBool(fields, "historyRibbon.receivesShadow", ribbon.receivesShadow) ||
+        !ParseOptionalBool(fields, "historyRibbon.enabled", ribbon.enabled) || !IsHistoryRibbonComponentPersistable(ribbon)) return false;
+    components.historyRibbon = ribbon;
+    return true;
+}
+
+[[nodiscard]] bool ParseLensEcho(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "lensEcho", present)) return false;
+    if (!present) return true;
+    ScenePrefabLensEchoComponent echo{};
+    std::uint32_t occlusionRule = 0U;
+    if (!ParseField(fields, "lensEcho.sourceNodeStableId", echo.sourceNodeStableId) ||
+        !ParseField(fields, "lensEcho.profileMaterialAssetId", echo.profileMaterialAssetId) ||
+        !ParseOptionalField(fields, "lensEcho.intensity", echo.intensity) || !ParseOptionalField(fields, "lensEcho.size", echo.size) ||
+        !ParseOptionalField(fields, "lensEcho.layer", echo.layer) || !ParseOptionalField(fields, "lensEcho.occlusionRule", occlusionRule) ||
+        !ParseOptionalBool(fields, "lensEcho.enabled", echo.enabled) || occlusionRule > static_cast<std::uint32_t>(LensEchoOcclusionRule::AlwaysVisible)) return false;
+    echo.occlusionRule = static_cast<LensEchoOcclusionRule>(occlusionRule);
+    LensEchoComponent validation{ .sourceEntityId = echo.sourceNodeStableId, .profileMaterialAssetId = echo.profileMaterialAssetId,
+        .intensity = echo.intensity, .size = echo.size, .layer = echo.layer, .occlusionRule = echo.occlusionRule, .enabled = echo.enabled };
+    if (!IsLensEchoComponentPersistable(validation)) return false;
+    components.lensEcho = echo;
+    return true;
+}
+
 [[nodiscard]] bool ParseCharacterController(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool hasCharacterController = false;
     if (!ParseOptionalComponentFlag(fields, "characterController", hasCharacterController)) {
@@ -477,6 +604,13 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseVisibilityBlocker(fields, components)
         && ParseVisibilityCell(fields, components)
         && ParseRegionPortal(fields, components)
+        && ParseAuxFrame(fields, components)
+        && ParseGeometrySwarm(fields, components)
+        && ParseSurfaceCast(fields, components)
+        && ParseFacingPanel(fields, components)
+        && ParseSpaceStroke(fields, components)
+        && ParseHistoryRibbon(fields, components)
+        && ParseLensEcho(fields, components)
         && ParseCharacterController(fields, components)
         && ParseJoint(fields, components)
         && ScenePrefabAssetTagsParser::Parse(fields, components)

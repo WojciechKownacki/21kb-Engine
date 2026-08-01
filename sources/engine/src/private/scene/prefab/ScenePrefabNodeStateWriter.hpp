@@ -11,6 +11,7 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneInputComponents.hpp"
 #include "engine/scene/SceneLightComponents.hpp"
+#include "engine/scene/SceneLensEchoComponents.hpp"
 #include "engine/scene/SceneMeshRendererComponents.hpp"
 #include "engine/scene/SceneNavigationComponents.hpp"
 #include "engine/scene/ScenePrefabNode.hpp"
@@ -24,6 +25,9 @@
 #include "engine/scene/SceneVisibilityBlockerComponents.hpp"
 #include "engine/scene/SceneVisibilityCellComponents.hpp"
 #include "engine/scene/SceneRegionPortalComponents.hpp"
+#include "engine/scene/SceneAuxFrameComponents.hpp"
+#include "engine/scene/SceneGeometrySwarmComponents.hpp"
+#include "engine/scene/SceneSurfaceCastComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -66,6 +70,13 @@ struct ScenePrefabNodeStateWriterContext {
     SceneVisibilityBlockerComponents visibilityBlockers;
     SceneVisibilityCellComponents visibilityCells;
     SceneRegionPortalComponents regionPortals;
+    SceneAuxFrameComponents auxFrames;
+    SceneGeometrySwarmComponents geometrySwarms;
+    SceneSurfaceCastComponents surfaceCasts;
+    SceneFacingPanelComponents facingPanels;
+    SceneSpaceStrokeComponents spaceStrokes;
+    SceneHistoryRibbonComponents historyRibbons;
+    SceneLensEchoComponents lensEchoes;
     SceneBehaviourComponents behaviours;
     SceneAudioSourceComponents audioSources;
     SceneAudioListenerComponents audioListeners;

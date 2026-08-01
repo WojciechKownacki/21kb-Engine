@@ -23,6 +23,13 @@
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
+#include "engine/scene/AuxFrameComponent.hpp"
+#include "engine/scene/GeometrySwarmComponent.hpp"
+#include "engine/scene/SurfaceCastComponent.hpp"
+#include "engine/scene/FacingPanelComponent.hpp"
+#include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/HistoryRibbonComponent.hpp"
+#include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/ScenePrefabOverrides.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
@@ -66,6 +73,19 @@ struct ScenePrefabRegionPortalComponent {
     bool enabled = true;
 };
 
+struct ScenePrefabLensEchoComponent {
+    static constexpr std::uint64_t InvalidSourceNodeStableId = 0U;
+    static constexpr std::uint64_t UnresolvedSourceNodeStableId = UINT64_MAX;
+
+    std::uint64_t sourceNodeStableId = InvalidSourceNodeStableId;
+    std::uint64_t profileMaterialAssetId = 0U;
+    float intensity = 1.0F;
+    float size = 1.0F;
+    std::uint32_t layer = 1U;
+    LensEchoOcclusionRule occlusionRule = LensEchoOcclusionRule::DepthTested;
+    bool enabled = false;
+};
+
 struct ScenePrefabNodeComponents {
     std::optional<CameraComponent> camera;
     std::optional<MeshRendererComponent> meshRenderer;
@@ -86,6 +106,13 @@ struct ScenePrefabNodeComponents {
     std::optional<SceneVisibilityBlockerComponent> visibilityBlocker;
     std::optional<VisibilityCellComponent> visibilityCell;
     std::optional<ScenePrefabRegionPortalComponent> regionPortal;
+    std::optional<AuxFrameComponent> auxFrame;
+    std::optional<GeometrySwarmComponent> geometrySwarm;
+    std::optional<SurfaceCastComponent> surfaceCast;
+    std::optional<FacingPanelComponent> facingPanel;
+    std::optional<SpaceStrokeComponent> spaceStroke;
+    std::optional<HistoryRibbonComponent> historyRibbon;
+    std::optional<ScenePrefabLensEchoComponent> lensEcho;
     std::optional<BehaviourComponent> behaviour;
     std::optional<AudioSourceComponent> audioSource;
     std::optional<AudioListenerComponent> audioListener;

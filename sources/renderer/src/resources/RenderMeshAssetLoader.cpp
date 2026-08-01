@@ -3,6 +3,8 @@
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
+#include "kb/render/resources/RenderTerrainMeshBuilder.hpp"
+#include "engine/assets/TerrainAssetIO.hpp"
 #include "resources/RenderMeshAssetFinalizer.hpp"
 
 #include <memory>
@@ -117,7 +119,7 @@ std::type_index RenderMeshAssetLoader::PayloadType() const noexcept {
 }
 
 std::vector<std::string> RenderMeshAssetLoader::Extensions() const {
-    return { ".obj", ".gltf", ".glb", ".fbx" };
+    return { ".obj", ".gltf", ".glb", ".fbx", ".kbterrain" };
 }
 
 kb::assets::AssetLoadResult RenderMeshAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
@@ -126,7 +128,10 @@ kb::assets::AssetLoadResult RenderMeshAssetLoader::Load(const kb::assets::AssetL
     if (extension == ".21kb") {
         mesh = LoadImportedMesh(request);
     } else {
-        if (extension == ".gltf" || extension == ".glb") {
+        if (extension == ".kbterrain") {
+            const std::optional<kb::assets::TerrainAsset> terrain = kb::assets::TerrainAssetIO::Load(request.resolvedPath);
+            if (terrain.has_value()) mesh = RenderTerrainMeshBuilder::Build(*terrain);
+        } else if (extension == ".gltf" || extension == ".glb") {
             mesh = RenderMeshAssetBuilder::LoadGltf(request.resolvedPath);
         } else if (extension == ".fbx") {
             mesh = RenderMeshAssetBuilder::LoadFbx(request.resolvedPath);

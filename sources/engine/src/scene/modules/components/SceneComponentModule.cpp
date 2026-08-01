@@ -65,6 +65,13 @@ SceneDetailSwitchComponentQueries SceneComponentQueries::DetailSwitches() const 
 SceneVisibilityBlockerComponentQueries SceneComponentQueries::VisibilityBlockers() const noexcept { return SceneVisibilityBlockerComponentQueries{ scene_ }; }
 SceneVisibilityCellComponentQueries SceneComponentQueries::VisibilityCells() const noexcept { return SceneVisibilityCellComponentQueries{ scene_ }; }
 SceneRegionPortalComponentQueries SceneComponentQueries::RegionPortals() const noexcept { return SceneRegionPortalComponentQueries{ scene_ }; }
+SceneAuxFrameComponentQueries SceneComponentQueries::AuxFrames() const noexcept { return SceneAuxFrameComponentQueries{ scene_ }; }
+SceneGeometrySwarmComponentQueries SceneComponentQueries::GeometrySwarms() const noexcept { return SceneGeometrySwarmComponentQueries{ scene_ }; }
+SceneSurfaceCastComponentQueries SceneComponentQueries::SurfaceCasts() const noexcept { return SceneSurfaceCastComponentQueries{ scene_ }; }
+SceneFacingPanelComponentQueries SceneComponentQueries::FacingPanels() const noexcept { return SceneFacingPanelComponentQueries{ scene_ }; }
+SceneSpaceStrokeComponentQueries SceneComponentQueries::SpaceStrokes() const noexcept { return SceneSpaceStrokeComponentQueries{ scene_ }; }
+SceneHistoryRibbonComponentQueries SceneComponentQueries::HistoryRibbons() const noexcept { return SceneHistoryRibbonComponentQueries{ scene_ }; }
+SceneLensEchoComponentQueries SceneComponentQueries::LensEchoes() const noexcept { return SceneLensEchoComponentQueries{ scene_ }; }
 
 SceneAudioSourceComponentQueries SceneComponentQueries::AudioSources() const noexcept {
     return SceneAudioSourceComponentQueries{ scene_ };
@@ -143,6 +150,13 @@ SceneDetailSwitchComponents SceneComponents::DetailSwitches() const noexcept { r
 SceneVisibilityBlockerComponents SceneComponents::VisibilityBlockers() const noexcept { return SceneVisibilityBlockerComponents{ scene_ }; }
 SceneVisibilityCellComponents SceneComponents::VisibilityCells() const noexcept { return SceneVisibilityCellComponents{ scene_ }; }
 SceneRegionPortalComponents SceneComponents::RegionPortals() const noexcept { return SceneRegionPortalComponents{ scene_ }; }
+SceneAuxFrameComponents SceneComponents::AuxFrames() const noexcept { return SceneAuxFrameComponents{ scene_ }; }
+SceneGeometrySwarmComponents SceneComponents::GeometrySwarms() const noexcept { return SceneGeometrySwarmComponents{ scene_ }; }
+SceneSurfaceCastComponents SceneComponents::SurfaceCasts() const noexcept { return SceneSurfaceCastComponents{ scene_ }; }
+SceneFacingPanelComponents SceneComponents::FacingPanels() const noexcept { return SceneFacingPanelComponents{ scene_ }; }
+SceneSpaceStrokeComponents SceneComponents::SpaceStrokes() const noexcept { return SceneSpaceStrokeComponents{ scene_ }; }
+SceneHistoryRibbonComponents SceneComponents::HistoryRibbons() const noexcept { return SceneHistoryRibbonComponents{ scene_ }; }
+SceneLensEchoComponents SceneComponents::LensEchoes() const noexcept { return SceneLensEchoComponents{ scene_ }; }
 
 SceneAudioSourceComponents SceneComponents::AudioSources() const noexcept {
     return SceneAudioSourceComponents{ scene_ };

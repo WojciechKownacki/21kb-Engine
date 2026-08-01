@@ -62,6 +62,14 @@ ScenePrefabNestedNodeMapping ScenePrefabNestedNodeMapper::Append(ScenePrefab& ou
             portal.sourceCellNodeStableId = sourceNode->stableId;
             portal.targetCellNodeStableId = targetNode->stableId;
         }
+        if (outputNode->components.lensEcho.has_value()) {
+            ScenePrefabLensEchoComponent& echo = *outputNode->components.lensEcho;
+            if (echo.sourceNodeStableId == ScenePrefabLensEchoComponent::InvalidSourceNodeStableId) continue;
+            const std::uint32_t sourceIndex = nestedPrefab.FindNodeIndexByStableId(echo.sourceNodeStableId);
+            if (sourceIndex == ScenePrefabNodeDesc::NoParent || sourceIndex >= nestedToOutput.size()) continue;
+            const ScenePrefabNodeDesc* sourceNode = output.TryGetNode(nestedToOutput[sourceIndex]);
+            if (sourceNode != nullptr) echo.sourceNodeStableId = sourceNode->stableId;
+        }
     }
 
     return mapping;

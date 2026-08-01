@@ -1,6 +1,7 @@
 #include "TestSupport.hpp"
 #include "TestSuites.hpp"
 
+
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "engine/input/InputActionAsset.hpp"
@@ -42,6 +43,7 @@
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTagCatalog.hpp"
 #include "engine/scene/SceneTasks.hpp"
 #include "engine/scene/SceneTimers.hpp"
 #include "engine/scene/SceneTransforms.hpp"
@@ -53,6 +55,12 @@
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
+#include "engine/scene/AuxFrameComponent.hpp"
+#include "engine/scene/GeometrySwarmComponent.hpp"
+#include "engine/scene/SurfaceCastComponent.hpp"
+#include "engine/scene/FacingPanelComponent.hpp"
+#include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/script/LuaScriptBackend.hpp"
 #include "engine/script/NativeScriptBuildPipeline.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
@@ -5146,7 +5154,7 @@ void RunScriptWorldTimePhysicsApiTest() {
         kb::scene::Scene prefabSource;
         const kb::scene::SceneObject prefabRoot = prefabSource.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Prefab Root" });
         kb::scene::TagsComponent prefabTags;
-        kb::scene::SetTagsText(prefabTags, "Prefab, Runtime");
+        kb::scene::SetTagsText(prefabTags, "Prefab");
         prefabSource.Components().Tags().Set(prefabRoot.Entity(), prefabTags);
         const kb::scene::ScenePrefabHandle prefab = prefabSource.Prefabs().CaptureRegistered(prefabRoot, "RuntimePrefab");
         kb::tests::Require(prefabSource.Prefabs().Save(prefab, prefabPath), "Script world API prefab fixture was not saved");
@@ -5226,7 +5234,7 @@ void RunScriptWorldTimePhysicsApiTest() {
     const kb::scene::SceneEntity spawnedPrefabRoot{ spawnedFromPrefab.Output("entity")->AsUInt64() };
     kb::tests::Require(spawnedPrefabRoot.IsValid() && scene.Entities().Name(spawnedPrefabRoot) == "Prefab Root", "World.Spawn(prefab=...) did not return the prefab's root entity");
     const kb::scene::TagsComponent* spawnedPrefabTags = scene.Components().Tags().TryGet(spawnedPrefabRoot);
-    kb::tests::Require(spawnedPrefabTags != nullptr && kb::scene::TagsText(*spawnedPrefabTags) == "Prefab, Runtime", "World.Spawn(prefab=...) did not preserve the prefab's own component data");
+    kb::tests::Require(spawnedPrefabTags != nullptr && kb::scene::TagsText(*spawnedPrefabTags) == "Prefab", "World.Spawn(prefab=...) did not preserve the prefab's own component data");
     kb::tests::Require(scene.Hierarchy().Parent(spawnedPrefabRoot) == enemy, "World.Spawn(prefab=...) did not apply the requested parent");
     const kb::scene::TransformComponent spawnedPrefabTransform = scene.Transforms().Get(spawnedPrefabRoot);
     kb::tests::Require(kb::tests::NearlyEqual(spawnedPrefabTransform.localPosition.x, 5.0F), "World.Spawn(prefab=...) did not apply the requested local position");
@@ -5270,6 +5278,35 @@ void RunScriptWorldTimePhysicsApiTest() {
     kb::tests::Require(tagged.Succeeded() && tagged.Output("tagged").has_value() && tagged.Output("tagged")->AsBool(), "World.SetTag direct call failed");
     const kb::scene::TagsComponent* enemyTags = scene.Components().Tags().TryGet(enemy);
     kb::tests::Require(enemyTags != nullptr && kb::scene::TagsText(*enemyTags) == "Enemy", "World.SetTag did not persist to scene TagsComponent");
+    const std::vector<kb::script::ScriptFunctionArgument> defineTagArgs{
+        kb::script::ScriptFunctionArgument{ .name = "tag", .value = kb::script::ScriptValue{ std::string{ "Boss" } } },
+    };
+    const kb::script::ScriptFunctionCallResult defined = host.Functions().Call("World.DefineTag", defineTagArgs, context);
+    kb::tests::Require(defined.Succeeded() && defined.Output("defined").has_value() && defined.Output("defined")->AsBool(), "World.DefineTag direct call failed");
+    const kb::script::ScriptFunctionCallResult tagCount = host.Functions().Call("World.TagCount", {}, context);
+    kb::tests::Require(tagCount.Succeeded() && tagCount.Output("count").has_value() && tagCount.Output("count")->AsInt() == 7,
+        "World.TagCount did not expose the default catalogue plus the defined tag");
+    const std::vector<kb::script::ScriptFunctionArgument> tagAtArgs{
+        kb::script::ScriptFunctionArgument{ .name = "index", .value = kb::script::ScriptValue{ 6 } },
+    };
+    const kb::script::ScriptFunctionCallResult tagAt = host.Functions().Call("World.TagAt", tagAtArgs, context);
+    kb::tests::Require(tagAt.Succeeded() && tagAt.Output("tag").has_value() && tagAt.Output("tag")->AsString() == "Boss",
+        "World.TagAt did not preserve catalogue order");
+    const std::vector<kb::script::ScriptFunctionArgument> setBossTagArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ enemy.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "tag", .value = kb::script::ScriptValue{ std::string{ "Boss" } } },
+    };
+    const kb::script::ScriptFunctionCallResult bossTagged = host.Functions().Call("World.SetTag", setBossTagArgs, context);
+    kb::tests::Require(bossTagged.Succeeded() && bossTagged.Output("tagged").has_value() && bossTagged.Output("tagged")->AsBool(),
+        "World.SetTag could not assign a script-defined tag");
+    kb::tests::Require(scene.Tags().IsAssigned(enemy, "Boss") && !scene.Tags().IsAssigned(enemy, "Enemy"),
+        "World.SetTag did not replace the entity's previous classification");
+    const kb::script::ScriptFunctionCallResult removedDefinition = host.Functions().Call("World.RemoveTagDefinition", defineTagArgs, context);
+    kb::tests::Require(removedDefinition.Succeeded() && removedDefinition.Output("removed").has_value() && removedDefinition.Output("removed")->AsBool() &&
+            !scene.Tags().Contains("Boss") && !scene.Tags().IsAssigned(enemy, "Boss"),
+        "World.RemoveTagDefinition did not remove the definition and its assignments");
+    const kb::script::ScriptFunctionCallResult retagged = host.Functions().Call("World.SetTag", setTagArgs, context);
+    kb::tests::Require(retagged.Succeeded() && retagged.Output("tagged")->AsBool(), "World.SetTag could not assign a tag after deleting the previous definition");
     const std::vector<kb::script::ScriptFunctionArgument> findTagArgs{
         kb::script::ScriptFunctionArgument{ .name = "tag", .value = kb::script::ScriptValue{ std::string{ "Enemy" } } },
     };
@@ -5344,7 +5381,7 @@ void RunScriptWorldTimePhysicsApiTest() {
             && kb::tests::NearlyEqual(scene.Transforms().Get(prefabEntity).localPosition.z, 7.0F),
         "World.InstantiatePrefab did not apply direct root position");
     const kb::scene::TagsComponent* prefabTags = scene.Components().Tags().TryGet(prefabEntity);
-    kb::tests::Require(prefabTags != nullptr && kb::scene::TagsText(*prefabTags) == "Prefab, Runtime", "World.InstantiatePrefab did not preserve prefab tags");
+    kb::tests::Require(prefabTags != nullptr && kb::scene::TagsText(*prefabTags) == "Prefab", "World.InstantiatePrefab did not preserve prefab tag");
 
     const kb::assets::AssetId luaAsset{ 8810U };
     const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua World Caller" });
@@ -5436,7 +5473,7 @@ end
             && kb::tests::NearlyEqual(scene.Transforms().Get(luaPrefabRoot).localPosition.z, 11.0F),
         "Lua World.InstantiatePrefab table position was not applied");
     const kb::scene::TagsComponent* luaPrefabTags = scene.Components().Tags().TryGet(luaPrefabRoot);
-    kb::tests::Require(luaPrefabTags != nullptr && kb::scene::TagsText(*luaPrefabTags) == "Prefab, Runtime", "Lua World.InstantiatePrefab did not preserve prefab tags");
+    kb::tests::Require(luaPrefabTags != nullptr && kb::scene::TagsText(*luaPrefabTags) == "Prefab", "Lua World.InstantiatePrefab did not preserve prefab tag");
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("time.delta")->AsFloat(), 0.125F), "Lua Time.delta returned the wrong delta");
 }
 
@@ -10896,6 +10933,12 @@ void RunScriptSceneComponentApiTest() {
     scene.Components().VisibilityCells().Set(sourceCell.Entity(), kb::scene::VisibilityCellComponent{});
     scene.Components().VisibilityCells().Set(targetCell.Entity(), kb::scene::VisibilityCellComponent{});
     scene.Components().RegionPortals().Set(object.Entity(), kb::scene::SceneRegionPortalComponent{ .sourceCell = sourceCell.Entity(), .targetCell = targetCell.Entity() });
+    scene.Components().AuxFrames().Set(object.Entity(), kb::scene::AuxFrameComponent{ .imageTargetId = 71U });
+    scene.Components().GeometrySwarms().Set(object.Entity(), kb::scene::GeometrySwarmComponent{ .meshAssetId = 83U });
+    scene.Components().SurfaceCasts().Set(object.Entity(), kb::scene::SurfaceCastComponent{});
+    scene.Components().FacingPanels().Set(object.Entity(), kb::scene::FacingPanelComponent{});
+    scene.Components().SpaceStrokes().Set(object.Entity(), kb::scene::SpaceStrokeComponent{ .meshAssetId = 97U });
+    scene.Components().HistoryRibbons().Set(object.Entity(), kb::scene::HistoryRibbonComponent{ .meshAssetId = 98U });
 
     kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Transform"), "Script component API did not see Transform");
     kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Visibility"), "Script component API did not see Visibility");
@@ -10919,6 +10962,27 @@ void RunScriptSceneComponentApiTest() {
     kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Region Portal") &&
                             kb::script::ScriptSceneComponentApi::ComponentProperties("Region Portal").size() == 4U,
         "Script component API did not expose Region Portal property reflection");
+    kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Secondary Frame") &&
+                            kb::script::ScriptSceneComponentApi::ComponentProperties("Secondary Frame").size() == 9U,
+        "Script component API did not expose Secondary Frame property reflection");
+    kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Geometry Swarm") &&
+                            kb::script::ScriptSceneComponentApi::ComponentProperties("Geometry Swarm").size() == 14U,
+        "Script component API did not expose Geometry Swarm property reflection");
+    kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Surface Cast") &&
+                            kb::script::ScriptSceneComponentApi::ComponentProperties("Surface Cast").size() == 5U,
+        "Script component API did not expose Surface Cast property reflection");
+    kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Facing Panel") &&
+                            kb::script::ScriptSceneComponentApi::ComponentProperties("Facing Panel").size() == 11U,
+        "Script component API did not expose Facing Panel property reflection");
+    kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Kreska przestrzenna") &&
+                            kb::script::ScriptSceneComponentApi::ComponentProperties("Kreska przestrzenna").size() == 10U,
+        "Script component API did not expose Kreska przestrzenna property reflection");
+    kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Wst\xC4\x99" "ga historii") &&
+                            kb::script::ScriptSceneComponentApi::ComponentProperties("Wst\xC4\x99" "ga historii").size() == 9U,
+        "Script component API did not expose Wstęga historii property reflection");
+    const kb::script::ScriptSceneComponentMutationResult setSecondaryFrameEnabled = kb::script::ScriptSceneComponentApi::SetProperty(
+        scene, object.Entity(), "Secondary Frame", "enabled", kb::script::ScriptValue{ true });
+    kb::tests::Require(setSecondaryFrameEnabled.succeeded, "Script component API did not enable a configured Secondary Frame");
 
     const kb::script::ScriptSceneComponentMutationResult setPortalSource = kb::script::ScriptSceneComponentApi::SetProperty(
         scene, object.Entity(), "Region Portal", "sourceCell", kb::script::ScriptValue{ sourceCell.Entity().Id(), kb::script::ScriptValueType::Entity });
@@ -10968,14 +11032,21 @@ void RunScriptSceneComponentApiTest() {
         object.Entity(),
         "Tags",
         "text",
-        kb::script::ScriptValue{ std::string{ "Enemy, Boss" } });
+        kb::script::ScriptValue{ std::string{ "Enemy" } });
     kb::tests::Require(setTags.succeeded, "Script component API did not set Tags.text");
     const kb::script::ScriptSceneComponentPropertyResult getTags = kb::script::ScriptSceneComponentApi::GetProperty(
         scene,
         object.Entity(),
         "Tags",
         "text");
-    kb::tests::Require(getTags.succeeded && getTags.value.AsString() == "Enemy, Boss", "Script component API did not read Tags.text");
+    kb::tests::Require(getTags.succeeded && getTags.value.AsString() == "Enemy", "Script component API did not read Tags.text");
+    const kb::script::ScriptSceneComponentMutationResult multipleTags = kb::script::ScriptSceneComponentApi::SetProperty(
+        scene,
+        object.Entity(),
+        "Tags",
+        "text",
+        kb::script::ScriptValue{ std::string{ "Enemy, Boss" } });
+    kb::tests::Require(!multipleTags.succeeded, "Script component API accepted multiple Object Classification tags");
     const kb::script::ScriptSceneComponentMutationResult oversizedTags = kb::script::ScriptSceneComponentApi::SetProperty(
         scene,
         object.Entity(),
@@ -10988,7 +11059,7 @@ void RunScriptSceneComponentApiTest() {
         object.Entity(),
         "Tags",
         "text");
-    kb::tests::Require(preservedTags.succeeded && preservedTags.value.AsString() == "Enemy, Boss", "Rejected Object Classification text must leave the stored value unchanged");
+    kb::tests::Require(preservedTags.succeeded && preservedTags.value.AsString() == "Enemy", "Rejected Object Classification text must leave the stored value unchanged");
 
     const kb::script::ScriptSceneComponentMutationResult setFov = kb::script::ScriptSceneComponentApi::SetProperty(
         scene,
@@ -11083,6 +11154,12 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     scene.Components().VisibilityCells().Set(sourceCell.Entity(), kb::scene::VisibilityCellComponent{});
     scene.Components().VisibilityCells().Set(targetCell.Entity(), kb::scene::VisibilityCellComponent{});
     scene.Components().RegionPortals().Set(object.Entity(), kb::scene::SceneRegionPortalComponent{ .sourceCell = sourceCell.Entity(), .targetCell = targetCell.Entity() });
+    scene.Components().AuxFrames().Set(object.Entity(), kb::scene::AuxFrameComponent{ .imageTargetId = 73U });
+    scene.Components().GeometrySwarms().Set(object.Entity(), kb::scene::GeometrySwarmComponent{ .meshAssetId = 83U });
+    scene.Components().SurfaceCasts().Set(object.Entity(), kb::scene::SurfaceCastComponent{});
+    scene.Components().FacingPanels().Set(object.Entity(), kb::scene::FacingPanelComponent{});
+    scene.Components().SpaceStrokes().Set(object.Entity(), kb::scene::SpaceStrokeComponent{ .meshAssetId = 97U });
+    scene.Components().HistoryRibbons().Set(object.Entity(), kb::scene::HistoryRibbonComponent{ .meshAssetId = 98U });
 
     std::size_t fieldsChecked = 0U;
     for (const std::string_view componentName : kb::script::ScriptSceneComponentApi::ComponentNames()) {
@@ -11139,7 +11216,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
                 }
                 break;
             case kb::script::ScriptValueType::String:
-                validValue = kb::script::ScriptValue{ std::string{ "Enemy, Boss" } };
+                validValue = kb::script::ScriptValue{ std::string{ "Enemy" } };
                 break;
             default:
                 kb::tests::Require(false, "Script component API generated accessor coverage test found a property type it does not know how to exercise");
@@ -11164,7 +11241,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
             } else if (property.type == kb::script::ScriptValueType::Bool) {
                 kb::tests::Require(get.value.AsBool(), ("Script component API did not round-trip " + fieldLabel).c_str());
             } else if (property.type == kb::script::ScriptValueType::String) {
-                kb::tests::Require(get.value.AsString() == "Enemy, Boss", ("Script component API did not round-trip " + fieldLabel).c_str());
+                kb::tests::Require(get.value.AsString() == "Enemy", ("Script component API did not round-trip " + fieldLabel).c_str());
             }
         }
     }
@@ -11180,7 +11257,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // The scene catalog now exposes 23 authorable component surfaces. This
     // total includes the stable task components and the complete 3D Radiance
     // Emitter, Ambient Radiance and Detail Switch schemas.
-    kb::tests::Require(fieldsChecked == 195U, "Script component API generated accessor coverage test did not exercise the expected total field count (195) across all components");
+    kb::tests::Require(fieldsChecked == 253U, "Script component API generated accessor coverage test did not exercise the expected total field count (253) across all components");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -11223,6 +11300,12 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     scene.Components().VisibilityBlockers().Set(object.Entity(), kb::scene::SceneVisibilityBlockerComponent{});
     scene.Components().VisibilityCells().Set(object.Entity(), kb::scene::VisibilityCellComponent{});
     scene.Components().RegionPortals().Set(object.Entity(), kb::scene::SceneRegionPortalComponent{});
+    scene.Components().AuxFrames().Set(object.Entity(), kb::scene::AuxFrameComponent{ .imageTargetId = 79U });
+    scene.Components().GeometrySwarms().Set(object.Entity(), kb::scene::GeometrySwarmComponent{ .meshAssetId = 83U });
+    scene.Components().SurfaceCasts().Set(object.Entity(), kb::scene::SurfaceCastComponent{});
+    scene.Components().FacingPanels().Set(object.Entity(), kb::scene::FacingPanelComponent{});
+    scene.Components().SpaceStrokes().Set(object.Entity(), kb::scene::SpaceStrokeComponent{ .meshAssetId = 97U });
+    scene.Components().HistoryRibbons().Set(object.Entity(), kb::scene::HistoryRibbonComponent{ .meshAssetId = 98U });
 
     std::size_t propertiesChecked = 0U;
     for (const std::string_view componentName : kb::script::ScriptSceneComponentApi::ComponentNames()) {
@@ -11252,7 +11335,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 195U, "LIB-082 raw-pointer audit did not exercise the expected total field count (195) across all components");
+    kb::tests::Require(propertiesChecked == 253U, "LIB-082 raw-pointer audit did not exercise the expected total field count (253) across all components");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {
@@ -13855,7 +13938,7 @@ void RunScriptEventBusRecipientFilterTest() {
         const kb::scene::SceneObject tagged = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Filter Tagged" });
         const kb::scene::SceneObject untagged = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Filter Untagged" });
         kb::scene::TagsComponent tags;
-        kb::scene::SetTagsText(tags, "Enemy, Boss");
+        kb::scene::SetTagsText(tags, "Enemy");
         scene.Components().Tags().Set(tagged.Entity(), tags);
 
         int taggedFired = 0;

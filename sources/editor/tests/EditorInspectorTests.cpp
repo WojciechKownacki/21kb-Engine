@@ -172,6 +172,13 @@ void RunInspectorTextEditDirtyStateTest() {
     kb::editor::tests::Require(state.IsTextEditDirty(), "Inspector text edit clear should mark a non-empty original value dirty");
     state.EndTextEdit();
     kb::editor::tests::Require(!state.IsTextEditDirty(), "Inspector text edit should not remain dirty after ending edit");
+
+    state.ToggleTagsDropdown();
+    kb::editor::tests::Require(state.IsTagsDropdownOpen(), "Tags dropdown should open on request");
+    state.SetTagsDropdownHover(2);
+    kb::editor::tests::Require(state.TagsDropdownHover() == 2, "Tags dropdown should retain its hovered option");
+    state.CloseTagsDropdown();
+    kb::editor::tests::Require(!state.IsTagsDropdownOpen(), "Tags dropdown should close on request");
 }
 
 void RunAudioComponentCatalogTest() {
@@ -189,6 +196,8 @@ void RunAudioComponentCatalogTest() {
     kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::Find("Visibility Blocker") != nullptr, "Visibility Blocker component id should resolve");
     kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::Find("Visibility Cell") != nullptr, "Visibility Cell component id should resolve");
     kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::Find("Region Portal") != nullptr, "Region Portal component id should resolve");
+    kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::Find("Secondary Frame") != nullptr, "Secondary Frame component id should resolve");
+    kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::Find("TerrainEditor") != nullptr, "Terrain Editor component id should resolve");
 }
 
 void RunObjectClassificationCatalogTest() {

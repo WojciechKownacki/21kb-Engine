@@ -13,6 +13,13 @@
 #include "scene/components/SceneVisibilityBlockerComponentStore.hpp"
 #include "scene/components/SceneVisibilityCellComponentStore.hpp"
 #include "scene/components/SceneRegionPortalComponentStore.hpp"
+#include "scene/components/SceneAuxFrameComponentStore.hpp"
+#include "scene/components/SceneGeometrySwarmComponentStore.hpp"
+#include "scene/components/SceneSurfaceCastComponentStore.hpp"
+#include "scene/components/SceneFacingPanelComponentStore.hpp"
+#include "scene/components/SceneSpaceStrokeComponentStore.hpp"
+#include "scene/components/SceneHistoryRibbonComponentStore.hpp"
+#include "scene/components/SceneLensEchoComponentStore.hpp"
 #include "scene/components/SceneAudioListenerComponentStore.hpp"
 #include "scene/components/SceneAudioSourceComponentStore.hpp"
 #include "scene/components/SceneAnimatorComponentStore.hpp"
@@ -91,6 +98,20 @@ public:
     [[nodiscard]] SceneVisibilityCellComponentStore& VisibilityCells() noexcept;
     [[nodiscard]] const SceneRegionPortalComponentStore& RegionPortals() const noexcept;
     [[nodiscard]] SceneRegionPortalComponentStore& RegionPortals() noexcept;
+    [[nodiscard]] const SceneAuxFrameComponentStore& AuxFrames() const noexcept;
+    [[nodiscard]] SceneAuxFrameComponentStore& AuxFrames() noexcept;
+    [[nodiscard]] const SceneGeometrySwarmComponentStore& GeometrySwarms() const noexcept;
+    [[nodiscard]] SceneGeometrySwarmComponentStore& GeometrySwarms() noexcept;
+    [[nodiscard]] const SceneSurfaceCastComponentStore& SurfaceCasts() const noexcept;
+    [[nodiscard]] SceneSurfaceCastComponentStore& SurfaceCasts() noexcept;
+    [[nodiscard]] const SceneFacingPanelComponentStore& FacingPanels() const noexcept;
+    [[nodiscard]] SceneFacingPanelComponentStore& FacingPanels() noexcept;
+    [[nodiscard]] const SceneSpaceStrokeComponentStore& SpaceStrokes() const noexcept;
+    [[nodiscard]] SceneSpaceStrokeComponentStore& SpaceStrokes() noexcept;
+    [[nodiscard]] const SceneHistoryRibbonComponentStore& HistoryRibbons() const noexcept;
+    [[nodiscard]] SceneHistoryRibbonComponentStore& HistoryRibbons() noexcept;
+    [[nodiscard]] const SceneLensEchoComponentStore& LensEchoes() const noexcept;
+    [[nodiscard]] SceneLensEchoComponentStore& LensEchoes() noexcept;
     [[nodiscard]] const SceneAudioSourceComponentStore& AudioSources() const noexcept;
     [[nodiscard]] SceneAudioSourceComponentStore& AudioSources() noexcept;
     [[nodiscard]] const SceneAudioListenerComponentStore& AudioListeners() const noexcept;
@@ -125,6 +146,13 @@ private:
     SceneVisibilityBlockerComponentStore visibilityBlockers_;
     SceneVisibilityCellComponentStore visibilityCells_;
     SceneRegionPortalComponentStore regionPortals_;
+    SceneAuxFrameComponentStore auxFrames_;
+    SceneGeometrySwarmComponentStore geometrySwarms_;
+    SceneSurfaceCastComponentStore surfaceCasts_;
+    SceneFacingPanelComponentStore facingPanels_;
+    SceneSpaceStrokeComponentStore spaceStrokes_;
+    SceneHistoryRibbonComponentStore historyRibbons_;
+    SceneLensEchoComponentStore lensEchoes_;
     SceneAudioSourceComponentStore audioSources_;
     SceneAudioListenerComponentStore audioListeners_;
     SceneAnimatorComponentStore animators_;

@@ -126,6 +126,64 @@ struct VisibilityBlockerRenderProxyDesc {
     std::array<float, 3> size{ 1.0F, 1.0F, 1.0F };
 };
 
+// Renderer-owned expansion of one canonical GeometrySwarmComponent.  Its
+// generated instances are transient input to the existing mesh batching and
+// GPU-driven indirect path; no expanded copy is written back into ECS.
+struct GeometrySwarmRenderProxyDesc {
+    std::uint64_t entityId = 0U;
+    std::uint64_t meshAssetId = 0U;
+    std::uint64_t materialAssetId = 0U;
+    std::array<float, 16> model{};
+    std::uint32_t instanceCount = 0U;
+    std::uint16_t columns = 1U;
+    std::uint16_t rows = 1U;
+    std::uint16_t layers = 1U;
+    std::array<float, 3> spacing{ 1.0F, 1.0F, 1.0F };
+    float instanceScale = 1.0F;
+    bool visible = true;
+    bool castsShadow = true;
+    bool receivesShadow = true;
+    std::uint32_t layer = 1U;
+};
+
+enum class RenderSurfaceCastRegion : std::uint8_t { Circle2D, Rectangle2D, Sphere, Box, Capsule };
+
+// Renderer-derived projection descriptor. The canonical configuration remains
+// the ECS SurfaceCastComponent plus RegionShapeComponent on the same entity.
+struct SurfaceCastRenderProxyDesc {
+    std::uint64_t entityId = 0U;
+    std::uint64_t materialAssetId = 0U;
+    std::array<float, 16> model{};
+    std::array<float, 3> localCenter{};
+    std::array<float, 3> size{ 1.0F, 1.0F, 1.0F };
+    float radius = 0.5F;
+    float height = 2.0F;
+    std::uint32_t receiverLayerMask = 0xFFFFFFFFU;
+    std::int32_t order = 0;
+    RenderSurfaceCastRegion region = RenderSurfaceCastRegion::Box;
+    bool visible = true;
+};
+
+// Renderer-derived stroke input. The curve points remain canonical ECS data;
+// the per-segment mesh instances are created only at the existing batch edge.
+struct SpaceStrokeRenderProxyDesc {
+    std::uint64_t entityId = 0U;
+    std::uint64_t meshAssetId = 0U;
+    std::uint64_t materialAssetId = 0U;
+    std::array<float, 16> model{};
+    std::array<std::array<float, 3>, 8U> controlPoints{};
+    std::uint8_t controlPointCount = 0U;
+    std::uint8_t splineSegments = 0U;
+    std::uint8_t mode = 0U;
+    float width = 0.1F;
+    float cableSag = 0.0F;
+    std::uint32_t layer = 1U;
+    bool closed = false;
+    bool visible = true;
+    bool castsShadow = false;
+    bool receivesShadow = true;
+};
+
 struct MeshRenderProxy {
     RenderProxyId id{};
     MeshRenderProxyDesc desc{};
@@ -157,11 +215,22 @@ struct VisibilityBlockerRenderProxy {
     RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None;
 };
 
+struct GeometrySwarmRenderProxy {
+    RenderProxyId id{};
+    GeometrySwarmRenderProxyDesc desc{};
+    RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None;
+};
+struct SurfaceCastRenderProxy { RenderProxyId id{}; SurfaceCastRenderProxyDesc desc{}; RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None; };
+struct SpaceStrokeRenderProxy { RenderProxyId id{}; SpaceStrokeRenderProxyDesc desc{}; RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None; };
+
 struct RenderSceneReserveDesc {
     std::uint32_t meshProxies = 0;
     std::uint32_t cameraProxies = 0;
     std::uint32_t lightProxies = 0;
     std::uint32_t visibilityBlockerProxies = 0;
+    std::uint32_t geometrySwarmProxies = 0;
+    std::uint32_t surfaceCastProxies = 0;
+    std::uint32_t spaceStrokeProxies = 0;
     std::uint32_t drawGroupKeys = 0;
 };
 
@@ -170,6 +239,9 @@ struct RenderSceneStats {
     std::uint32_t cameraProxyCount = 0;
     std::uint32_t lightProxyCount = 0;
     std::uint32_t visibilityBlockerProxyCount = 0;
+    std::uint32_t geometrySwarmProxyCount = 0;
+    std::uint32_t surfaceCastProxyCount = 0;
+    std::uint32_t spaceStrokeProxyCount = 0;
     std::uint32_t meshProxyCapacity = 0;
     std::uint32_t cameraProxyCapacity = 0;
     std::uint32_t lightProxyCapacity = 0;
@@ -187,6 +259,9 @@ public:
     using CameraProxyMap = std::unordered_map<std::uint64_t, CameraRenderProxy>;
     using LightProxyMap = std::unordered_map<std::uint64_t, LightRenderProxy>;
     using VisibilityBlockerProxyMap = std::unordered_map<std::uint64_t, VisibilityBlockerRenderProxy>;
+    using GeometrySwarmProxyMap = std::unordered_map<std::uint64_t, GeometrySwarmRenderProxy>;
+    using SurfaceCastProxyMap = std::unordered_map<std::uint64_t, SurfaceCastRenderProxy>;
+    using SpaceStrokeProxyMap = std::unordered_map<std::uint64_t, SpaceStrokeRenderProxy>;
 
     void Reserve(const RenderSceneReserveDesc& desc);
     [[nodiscard]] RenderSceneStats Stats() const noexcept;
@@ -194,6 +269,9 @@ public:
     [[nodiscard]] RenderProxyId UpsertCamera(const CameraRenderProxyDesc& desc);
     [[nodiscard]] RenderProxyId UpsertLight(const LightRenderProxyDesc& desc);
     [[nodiscard]] RenderProxyId UpsertVisibilityBlocker(const VisibilityBlockerRenderProxyDesc& desc);
+    [[nodiscard]] RenderProxyId UpsertGeometrySwarm(const GeometrySwarmRenderProxyDesc& desc);
+    [[nodiscard]] RenderProxyId UpsertSurfaceCast(const SurfaceCastRenderProxyDesc& desc);
+    [[nodiscard]] RenderProxyId UpsertSpaceStroke(const SpaceStrokeRenderProxyDesc& desc);
     void SetWorldBackdrop(std::optional<SceneRenderWorldBackdrop> backdrop) noexcept;
     [[nodiscard]] const std::optional<SceneRenderWorldBackdrop>& WorldBackdrop() const noexcept;
     void SetAmbientRadiance(std::optional<SceneRenderAmbientRadiance> ambientRadiance) noexcept;
@@ -211,6 +289,9 @@ public:
     // rebuild picks it up. Returns false only when the entity has no mesh proxy.
     [[nodiscard]] bool UpdateMeshTransform(std::uint64_t entityId, const std::array<float, 16>& model);
     [[nodiscard]] bool UpdateVisibilityBlockerTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
+    [[nodiscard]] bool UpdateGeometrySwarmTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
+    [[nodiscard]] bool UpdateSurfaceCastTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
+    [[nodiscard]] bool UpdateSpaceStrokeTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
 
     // H6 - shared core for the single-entity and parallel batch paths. Updates
     // the proxy's source-of-truth model and, when the cache is clean, the cached
@@ -218,6 +299,8 @@ public:
     // call concurrently for distinct entity ids (each owns a distinct proxy and
     // instance slot). The caller applies invalidation/telemetry once per batch.
     [[nodiscard]] TransformUpdateOutcome ApplyMeshTransform(std::uint64_t entityId, const std::array<float, 16>& model);
+    [[nodiscard]] bool ApplyGeometrySwarmTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
+    [[nodiscard]] bool ApplySpaceStrokeTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
     void InvalidateDrawGroupsIfFallback(TransformUpdateOutcome outcome) noexcept;
     void AddTransformUpdateCounts(std::uint64_t inPlace, std::uint64_t fallback) noexcept;
 
@@ -225,6 +308,9 @@ public:
     [[nodiscard]] bool RemoveCamera(std::uint64_t entityId) noexcept;
     [[nodiscard]] bool RemoveLight(std::uint64_t entityId) noexcept;
     [[nodiscard]] bool RemoveVisibilityBlocker(std::uint64_t entityId) noexcept;
+    [[nodiscard]] bool RemoveGeometrySwarm(std::uint64_t entityId) noexcept;
+    [[nodiscard]] bool RemoveSurfaceCast(std::uint64_t entityId) noexcept;
+    [[nodiscard]] bool RemoveSpaceStroke(std::uint64_t entityId) noexcept;
 
     [[nodiscard]] const MeshRenderProxy* FindMeshByEntity(std::uint64_t entityId) const noexcept;
     [[nodiscard]] const CameraRenderProxy* FindCameraByEntity(std::uint64_t entityId) const noexcept;
@@ -234,16 +320,25 @@ public:
     [[nodiscard]] std::uint32_t RemoveCamerasNotInSorted(std::span<const std::uint64_t> sortedEntityIds) noexcept;
     [[nodiscard]] std::uint32_t RemoveLightsNotInSorted(std::span<const std::uint64_t> sortedEntityIds) noexcept;
     [[nodiscard]] std::uint32_t RemoveVisibilityBlockersNotInSorted(std::span<const std::uint64_t> sortedEntityIds) noexcept;
+    [[nodiscard]] std::uint32_t RemoveGeometrySwarmsNotInSorted(std::span<const std::uint64_t> sortedEntityIds) noexcept;
+    [[nodiscard]] std::uint32_t RemoveSurfaceCastsNotInSorted(std::span<const std::uint64_t> sortedEntityIds) noexcept;
+    [[nodiscard]] std::uint32_t RemoveSpaceStrokesNotInSorted(std::span<const std::uint64_t> sortedEntityIds) noexcept;
 
     [[nodiscard]] std::size_t MeshProxyCount() const noexcept;
     [[nodiscard]] std::size_t CameraProxyCount() const noexcept;
     [[nodiscard]] std::size_t LightProxyCount() const noexcept;
     [[nodiscard]] std::size_t VisibilityBlockerProxyCount() const noexcept;
+    [[nodiscard]] std::size_t GeometrySwarmProxyCount() const noexcept;
+    [[nodiscard]] std::size_t SurfaceCastProxyCount() const noexcept;
+    [[nodiscard]] std::size_t SpaceStrokeProxyCount() const noexcept;
 
     [[nodiscard]] const MeshProxyMap& MeshProxies() const noexcept;
     [[nodiscard]] const CameraProxyMap& CameraProxies() const noexcept;
     [[nodiscard]] const LightProxyMap& LightProxies() const noexcept;
     [[nodiscard]] const VisibilityBlockerProxyMap& VisibilityBlockerProxies() const noexcept;
+    [[nodiscard]] const GeometrySwarmProxyMap& GeometrySwarmProxies() const noexcept;
+    [[nodiscard]] const SurfaceCastProxyMap& SurfaceCastProxies() const noexcept;
+    [[nodiscard]] const SpaceStrokeProxyMap& SpaceStrokeProxies() const noexcept;
 
     void ClearDirty() noexcept;
     // LIB-135: targetViewportId selects among cameras whose viewportId either
@@ -281,11 +376,15 @@ private:
     [[nodiscard]] RenderProxyId AllocateProxyId() noexcept;
     void InvalidateDrawGroups() noexcept;
     void RebuildDrawGroupsIfNeeded() const;
+    void ApplySurfaceCasts(SceneRenderMeshInstance& instance) const;
 
     MeshProxyMap meshes_;
     CameraProxyMap cameras_;
     LightProxyMap lights_;
     VisibilityBlockerProxyMap visibilityBlockers_;
+    GeometrySwarmProxyMap geometrySwarms_;
+    SurfaceCastProxyMap surfaceCasts_;
+    SpaceStrokeProxyMap spaceStrokes_;
     std::optional<SceneRenderWorldBackdrop> worldBackdrop_;
     std::optional<SceneRenderAmbientRadiance> ambientRadiance_;
     mutable std::vector<SceneRenderDrawGroup> drawGroups_;

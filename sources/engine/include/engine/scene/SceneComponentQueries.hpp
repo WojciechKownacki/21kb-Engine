@@ -24,6 +24,13 @@
 #include "engine/scene/SceneVisibilityBlockerComponents.hpp"
 #include "engine/scene/SceneVisibilityCellComponents.hpp"
 #include "engine/scene/SceneRegionPortalComponents.hpp"
+#include "engine/scene/SceneAuxFrameComponents.hpp"
+#include "engine/scene/SceneGeometrySwarmComponents.hpp"
+#include "engine/scene/SceneSurfaceCastComponents.hpp"
+#include "engine/scene/SceneFacingPanelComponents.hpp"
+#include "engine/scene/SceneSpaceStrokeComponents.hpp"
+#include "engine/scene/SceneHistoryRibbonComponents.hpp"
+#include "engine/scene/SceneLensEchoComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
 #include "engine/scene/SceneUIDocuments.hpp"
@@ -57,6 +64,13 @@ public:
     [[nodiscard]] SceneVisibilityBlockerComponentQueries VisibilityBlockers() const noexcept;
     [[nodiscard]] SceneVisibilityCellComponentQueries VisibilityCells() const noexcept;
     [[nodiscard]] SceneRegionPortalComponentQueries RegionPortals() const noexcept;
+    [[nodiscard]] SceneAuxFrameComponentQueries AuxFrames() const noexcept;
+    [[nodiscard]] SceneGeometrySwarmComponentQueries GeometrySwarms() const noexcept;
+    [[nodiscard]] SceneSurfaceCastComponentQueries SurfaceCasts() const noexcept;
+    [[nodiscard]] SceneFacingPanelComponentQueries FacingPanels() const noexcept;
+    [[nodiscard]] SceneSpaceStrokeComponentQueries SpaceStrokes() const noexcept;
+    [[nodiscard]] SceneHistoryRibbonComponentQueries HistoryRibbons() const noexcept;
+    [[nodiscard]] SceneLensEchoComponentQueries LensEchoes() const noexcept;
     [[nodiscard]] SceneAudioSourceComponentQueries AudioSources() const noexcept;
     [[nodiscard]] SceneAudioListenerComponentQueries AudioListeners() const noexcept;
     [[nodiscard]] SceneAnimatorComponentQueries Animators() const noexcept;

@@ -15,8 +15,8 @@
 namespace kb::scene {
 namespace {
 
-enum SceneNodeComponentBits : std::uint32_t {
-    CameraBit = 1U << 0U,
+enum SceneNodeComponentBits : std::uint64_t {
+      CameraBit = 1ULL << 0U,
     MeshRendererBit = 1U << 1U,
     LightBit = 1U << 2U,
     InputBit = 1U << 3U,
@@ -42,9 +42,16 @@ enum SceneNodeComponentBits : std::uint32_t {
       VisibilityBlockerBit = 1U << 23U,
       VisibilityCellBit = 1U << 24U,
       RegionPortalBit = 1U << 25U,
+      AuxFrameBit = 1U << 26U,
+      GeometrySwarmBit = 1U << 27U,
+      SurfaceCastBit = 1U << 28U,
+      FacingPanelBit = 1U << 29U,
+      SpaceStrokeBit = 1U << 30U,
+      HistoryRibbonBit = 1ULL << 31U,
+      LensEchoBit = 1ULL << 32U,
 };
 
-constexpr std::uint32_t KnownComponentBits = CameraBit |
+constexpr std::uint64_t KnownComponentBits = CameraBit |
     MeshRendererBit |
     LightBit |
     InputBit |
@@ -62,10 +69,10 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit;
 
-[[nodiscard]] std::uint32_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
-    std::uint32_t componentBits = 0;
+[[nodiscard]] std::uint64_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
+    std::uint64_t componentBits = 0;
     componentBits |= components.camera.has_value() ? CameraBit : 0U;
     componentBits |= components.meshRenderer.has_value() ? MeshRendererBit : 0U;
     componentBits |= components.light.has_value() ? LightBit : 0U;
@@ -92,16 +99,28 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
       componentBits |= components.visibilityBlocker.has_value() ? VisibilityBlockerBit : 0U;
       componentBits |= components.visibilityCell.has_value() ? VisibilityCellBit : 0U;
       componentBits |= components.regionPortal.has_value() ? RegionPortalBit : 0U;
+      componentBits |= components.auxFrame.has_value() ? AuxFrameBit : 0U;
+      componentBits |= components.geometrySwarm.has_value() ? GeometrySwarmBit : 0U;
+      componentBits |= components.surfaceCast.has_value() ? SurfaceCastBit : 0U;
+      componentBits |= components.facingPanel.has_value() ? FacingPanelBit : 0U;
+      componentBits |= components.spaceStroke.has_value() ? SpaceStrokeBit : 0U;
+      componentBits |= components.historyRibbon.has_value() ? HistoryRibbonBit : 0U;
+      componentBits |= components.lensEcho.has_value() ? LensEchoBit : 0U;
     return componentBits;
 }
 
 } // namespace
 
 bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, ScenePrefabNodeComponents& output) {
-    std::uint32_t componentBits = 0;
-    if (!input.ReadUInt32(componentBits) || (componentBits & ~KnownComponentBits) != 0U) {
+    std::uint64_t componentBits = 0U;
+    if (fileVersion <= 25U) {
+        std::uint32_t legacyComponentBits = 0U;
+        if (!input.ReadUInt32(legacyComponentBits)) return false;
+        componentBits = legacyComponentBits;
+    } else if (!input.ReadUInt64(componentBits)) {
         return false;
     }
+    if ((componentBits & ~KnownComponentBits) != 0U) return false;
 
     if ((componentBits & CameraBit) != 0U) {
         CameraComponent camera;
@@ -351,11 +370,96 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         if (!input.ReadUInt64(portal.sourceCellNodeStableId) || !input.ReadUInt64(portal.targetCellNodeStableId) || !input.ReadUInt32(portal.purposes) || !input.ReadBool(portal.enabled) || !IsRegionPortalPurposeMaskValid(portal.purposes)) return false;
         output.regionPortal = portal;
     }
+    if ((componentBits & AuxFrameBit) != 0U) {
+        if (fileVersion < 20U) return false;
+        AuxFrameComponent frame{};
+        std::uint32_t mode = 0U;
+        std::uint32_t width = 0U;
+        std::uint32_t height = 0U;
+        if (!input.ReadUInt32(mode) || !input.ReadUInt64(frame.imageTargetId) || !input.ReadUInt32(width) || !input.ReadUInt32(height) ||
+            !SceneAssetPrimitiveCodec::ReadVec3(input, frame.mirrorPlaneNormal) || !input.ReadFloat(frame.mirrorPlaneOffset) || !input.ReadBool(frame.enabled) ||
+            mode > static_cast<std::uint32_t>(AuxFrameMode::Panoramic) || width == 0U || width > UINT16_MAX || height == 0U || height > UINT16_MAX) return false;
+        frame.mode = static_cast<AuxFrameMode>(mode);
+        frame.width = static_cast<std::uint16_t>(width);
+        frame.height = static_cast<std::uint16_t>(height);
+        if (!IsAuxFrameComponentPersistable(frame)) return false;
+        output.auxFrame = frame;
+    }
+    if ((componentBits & GeometrySwarmBit) != 0U) {
+        if (fileVersion < 21U) return false;
+        GeometrySwarmComponent swarm{};
+        std::uint32_t columns = 0U, rows = 0U, layers = 0U;
+        if (!input.ReadUInt64(swarm.meshAssetId) || !input.ReadUInt64(swarm.materialAssetId) || !input.ReadUInt32(swarm.instanceCount) ||
+            !input.ReadUInt32(columns) || !input.ReadUInt32(rows) || !input.ReadUInt32(layers) || !SceneAssetPrimitiveCodec::ReadVec3(input, swarm.spacing) ||
+            !input.ReadFloat(swarm.instanceScale) || !input.ReadUInt32(swarm.layer) || !input.ReadBool(swarm.castsShadow) ||
+            !input.ReadBool(swarm.receivesShadow) || !input.ReadBool(swarm.enabled) || columns == 0U || columns > UINT16_MAX || rows == 0U || rows > UINT16_MAX || layers == 0U || layers > UINT16_MAX) return false;
+        swarm.columns = static_cast<std::uint16_t>(columns); swarm.rows = static_cast<std::uint16_t>(rows); swarm.layers = static_cast<std::uint16_t>(layers);
+        if (!IsGeometrySwarmComponentPersistable(swarm)) return false;
+        output.geometrySwarm = swarm;
+    }
+    if ((componentBits & SurfaceCastBit) != 0U) {
+        SurfaceCastComponent surfaceCast{};
+        std::uint32_t content = 0U;
+        if (!input.ReadUInt64(surfaceCast.materialAssetId) || !input.ReadUInt32(surfaceCast.receiverLayerMask) ||
+            !input.ReadInt32(surfaceCast.order) || !input.ReadUInt32(content) || !input.ReadBool(surfaceCast.enabled) ||
+            content > static_cast<std::uint32_t>(SurfaceCastContent::Detail)) return false;
+        surfaceCast.content = static_cast<SurfaceCastContent>(content);
+        if (!IsSurfaceCastComponentPersistable(surfaceCast)) return false;
+        output.surfaceCast = surfaceCast;
+    }
+    if ((componentBits & FacingPanelBit) != 0U) {
+        if (fileVersion < 23U) return false;
+        FacingPanelComponent panel{};
+        std::uint32_t mode = 0U;
+        if (!input.ReadUInt32(mode) || !SceneAssetPrimitiveCodec::ReadVec3(input, panel.targetPoint) ||
+            !SceneAssetPrimitiveCodec::ReadVec3(input, panel.axis) || !SceneAssetPrimitiveCodec::ReadVec3(input, panel.up) ||
+            !input.ReadBool(panel.enabled) || mode > static_cast<std::uint32_t>(FacingPanelMode::Fixed)) return false;
+        panel.mode = static_cast<FacingPanelMode>(mode);
+        if (!IsFacingPanelComponentPersistable(panel)) return false;
+        output.facingPanel = panel;
+    }
+    if ((componentBits & SpaceStrokeBit) != 0U) {
+        if (fileVersion < 24U) return false;
+        SpaceStrokeComponent stroke{};
+        std::uint32_t mode = 0U;
+        std::uint32_t splineSegments = 0U;
+        if (!input.ReadUInt64(stroke.meshAssetId) || !input.ReadUInt64(stroke.materialAssetId) || !input.ReadUInt32(mode) ||
+            !input.ReadFloat(stroke.width) || !input.ReadFloat(stroke.cableSag) || !input.ReadUInt32(splineSegments) ||
+            !input.ReadUInt32(stroke.layer) || !input.ReadBool(stroke.castsShadow) || !input.ReadBool(stroke.receivesShadow) ||
+            !input.ReadBool(stroke.enabled) || mode > static_cast<std::uint32_t>(SpaceStrokeMode::Cable) || splineSegments > UINT8_MAX) return false;
+        stroke.mode = static_cast<SpaceStrokeMode>(mode);
+        stroke.splineSegments = static_cast<std::uint8_t>(splineSegments);
+        if (!IsSpaceStrokeComponentPersistable(stroke)) return false;
+        output.spaceStroke = stroke;
+    }
+    if ((componentBits & HistoryRibbonBit) != 0U) {
+        if (fileVersion < 25U) return false;
+        HistoryRibbonComponent ribbon{};
+        if (!input.ReadUInt64(ribbon.meshAssetId) || !input.ReadUInt64(ribbon.materialAssetId) ||
+            !input.ReadFloat(ribbon.lifetimeSeconds) || !input.ReadFloat(ribbon.width) || !input.ReadFloat(ribbon.sampleIntervalSeconds) ||
+            !input.ReadUInt32(ribbon.layer) || !input.ReadBool(ribbon.castsShadow) || !input.ReadBool(ribbon.receivesShadow) ||
+            !input.ReadBool(ribbon.enabled) || !IsHistoryRibbonComponentPersistable(ribbon)) return false;
+        output.historyRibbon = ribbon;
+    }
+    if ((componentBits & LensEchoBit) != 0U) {
+        if (fileVersion < 26U) return false;
+        ScenePrefabLensEchoComponent echo{};
+        std::uint32_t occlusionRule = 0U;
+        if (!input.ReadUInt64(echo.sourceNodeStableId) || !input.ReadUInt64(echo.profileMaterialAssetId) ||
+            !input.ReadFloat(echo.intensity) || !input.ReadFloat(echo.size) || !input.ReadUInt32(echo.layer) ||
+            !input.ReadUInt32(occlusionRule) || !input.ReadBool(echo.enabled) ||
+            occlusionRule > static_cast<std::uint32_t>(LensEchoOcclusionRule::AlwaysVisible)) return false;
+        echo.occlusionRule = static_cast<LensEchoOcclusionRule>(occlusionRule);
+        LensEchoComponent validation{ .sourceEntityId = echo.sourceNodeStableId, .profileMaterialAssetId = echo.profileMaterialAssetId,
+            .intensity = echo.intensity, .size = echo.size, .layer = echo.layer, .occlusionRule = echo.occlusionRule, .enabled = echo.enabled };
+        if (!IsLensEchoComponentPersistable(validation)) return false;
+        output.lensEcho = echo;
+    }
     return true;
 }
 
 void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const ScenePrefabNodeComponents& components) {
-    SceneAssetBinaryIO::WriteUInt32(output, ComponentBits(components));
+    SceneAssetBinaryIO::WriteUInt64(output, ComponentBits(components));
     if (components.camera.has_value()) {
         SceneAssetCameraComponentCodec::Write(output, *components.camera);
     }
@@ -513,6 +617,82 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteUInt64(output, portal.targetCellNodeStableId);
         SceneAssetBinaryIO::WriteUInt32(output, portal.purposes);
         SceneAssetBinaryIO::WriteBool(output, portal.enabled);
+    }
+    if (components.auxFrame.has_value()) {
+        const AuxFrameComponent& frame = *components.auxFrame;
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(frame.mode));
+        SceneAssetBinaryIO::WriteUInt64(output, frame.imageTargetId);
+        SceneAssetBinaryIO::WriteUInt32(output, frame.width);
+        SceneAssetBinaryIO::WriteUInt32(output, frame.height);
+        SceneAssetPrimitiveCodec::WriteVec3(output, frame.mirrorPlaneNormal);
+        SceneAssetBinaryIO::WriteFloat(output, frame.mirrorPlaneOffset);
+        SceneAssetBinaryIO::WriteBool(output, frame.enabled);
+    }
+    if (components.geometrySwarm.has_value()) {
+        const GeometrySwarmComponent& swarm = *components.geometrySwarm;
+        SceneAssetBinaryIO::WriteUInt64(output, swarm.meshAssetId);
+        SceneAssetBinaryIO::WriteUInt64(output, swarm.materialAssetId);
+        SceneAssetBinaryIO::WriteUInt32(output, swarm.instanceCount);
+        SceneAssetBinaryIO::WriteUInt32(output, swarm.columns);
+        SceneAssetBinaryIO::WriteUInt32(output, swarm.rows);
+        SceneAssetBinaryIO::WriteUInt32(output, swarm.layers);
+        SceneAssetPrimitiveCodec::WriteVec3(output, swarm.spacing);
+        SceneAssetBinaryIO::WriteFloat(output, swarm.instanceScale);
+        SceneAssetBinaryIO::WriteUInt32(output, swarm.layer);
+        SceneAssetBinaryIO::WriteBool(output, swarm.castsShadow);
+        SceneAssetBinaryIO::WriteBool(output, swarm.receivesShadow);
+        SceneAssetBinaryIO::WriteBool(output, swarm.enabled);
+    }
+    if (components.surfaceCast.has_value()) {
+        const SurfaceCastComponent& surfaceCast = *components.surfaceCast;
+        SceneAssetBinaryIO::WriteUInt64(output, surfaceCast.materialAssetId);
+        SceneAssetBinaryIO::WriteUInt32(output, surfaceCast.receiverLayerMask);
+        SceneAssetBinaryIO::WriteInt32(output, surfaceCast.order);
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(surfaceCast.content));
+        SceneAssetBinaryIO::WriteBool(output, surfaceCast.enabled);
+    }
+    if (components.facingPanel.has_value()) {
+        const FacingPanelComponent& panel = *components.facingPanel;
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(panel.mode));
+        SceneAssetPrimitiveCodec::WriteVec3(output, panel.targetPoint);
+        SceneAssetPrimitiveCodec::WriteVec3(output, panel.axis);
+        SceneAssetPrimitiveCodec::WriteVec3(output, panel.up);
+        SceneAssetBinaryIO::WriteBool(output, panel.enabled);
+    }
+    if (components.spaceStroke.has_value()) {
+        const SpaceStrokeComponent& stroke = *components.spaceStroke;
+        SceneAssetBinaryIO::WriteUInt64(output, stroke.meshAssetId);
+        SceneAssetBinaryIO::WriteUInt64(output, stroke.materialAssetId);
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(stroke.mode));
+        SceneAssetBinaryIO::WriteFloat(output, stroke.width);
+        SceneAssetBinaryIO::WriteFloat(output, stroke.cableSag);
+        SceneAssetBinaryIO::WriteUInt32(output, stroke.splineSegments);
+        SceneAssetBinaryIO::WriteUInt32(output, stroke.layer);
+        SceneAssetBinaryIO::WriteBool(output, stroke.castsShadow);
+        SceneAssetBinaryIO::WriteBool(output, stroke.receivesShadow);
+        SceneAssetBinaryIO::WriteBool(output, stroke.enabled);
+    }
+    if (components.historyRibbon.has_value()) {
+        const HistoryRibbonComponent& ribbon = *components.historyRibbon;
+        SceneAssetBinaryIO::WriteUInt64(output, ribbon.meshAssetId);
+        SceneAssetBinaryIO::WriteUInt64(output, ribbon.materialAssetId);
+        SceneAssetBinaryIO::WriteFloat(output, ribbon.lifetimeSeconds);
+        SceneAssetBinaryIO::WriteFloat(output, ribbon.width);
+        SceneAssetBinaryIO::WriteFloat(output, ribbon.sampleIntervalSeconds);
+        SceneAssetBinaryIO::WriteUInt32(output, ribbon.layer);
+        SceneAssetBinaryIO::WriteBool(output, ribbon.castsShadow);
+        SceneAssetBinaryIO::WriteBool(output, ribbon.receivesShadow);
+        SceneAssetBinaryIO::WriteBool(output, ribbon.enabled);
+    }
+    if (components.lensEcho.has_value()) {
+        const ScenePrefabLensEchoComponent& echo = *components.lensEcho;
+        SceneAssetBinaryIO::WriteUInt64(output, echo.sourceNodeStableId);
+        SceneAssetBinaryIO::WriteUInt64(output, echo.profileMaterialAssetId);
+        SceneAssetBinaryIO::WriteFloat(output, echo.intensity);
+        SceneAssetBinaryIO::WriteFloat(output, echo.size);
+        SceneAssetBinaryIO::WriteUInt32(output, echo.layer);
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(echo.occlusionRule));
+        SceneAssetBinaryIO::WriteBool(output, echo.enabled);
     }
 }
 

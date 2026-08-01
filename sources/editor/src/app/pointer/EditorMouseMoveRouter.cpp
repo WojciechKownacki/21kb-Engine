@@ -12,12 +12,14 @@
 #include "app/project_settings/EditorProjectSettingsPointerController.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
+#include "app/scene_viewport/EditorTerrainViewportInteraction.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/EditorHostSurfaceLayoutResolver.hpp"
 #include "rendering/HierarchyToolbarLayout.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
+#include "scene/EditorTerrainService.hpp"
 
 #include <algorithm>
 #include <optional>
@@ -98,6 +100,18 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
 
     EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
     if (sceneCamera.HandlePointerMove(messageWindow, x, y)) {
+        return;
+    }
+
+    if (EditorTerrainService::ToolState().strokeActive) {
+        if (!leftButtonDown) {
+            EditorTerrainService::ToolState().strokeActive = false;
+            ReleaseCapture();
+        } else {
+            static_cast<void>(EditorTerrainViewportInteraction::Stamp(
+                messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, false));
+        }
+        sceneViewport_.RequestPresent();
         return;
     }
 

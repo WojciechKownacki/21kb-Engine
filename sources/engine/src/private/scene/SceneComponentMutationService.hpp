@@ -23,8 +23,15 @@
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
+#include "engine/scene/SurfaceCastComponent.hpp"
+#include "engine/scene/FacingPanelComponent.hpp"
+#include "engine/scene/SpaceStrokeComponent.hpp"
+#include "engine/scene/HistoryRibbonComponent.hpp"
+#include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
+#include "engine/scene/AuxFrameComponent.hpp"
+#include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "engine/scene/UIAssets.hpp"
 
@@ -130,6 +137,34 @@ public:
     static void SetRegionPortal(Scene& scene, SceneEntity entity, const SceneRegionPortalComponent& component);
     static void RemoveRegionPortal(Scene& scene, SceneEntity entity) noexcept;
     static void MarkRegionPortalModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static AuxFrameComponent* TryGetAuxFrame(Scene& scene, SceneEntity entity) noexcept;
+    static void SetAuxFrame(Scene& scene, SceneEntity entity, const AuxFrameComponent& component);
+    static void RemoveAuxFrame(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkAuxFrameModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static GeometrySwarmComponent* TryGetGeometrySwarm(Scene& scene, SceneEntity entity) noexcept;
+    static void SetGeometrySwarm(Scene& scene, SceneEntity entity, const GeometrySwarmComponent& component);
+    static void RemoveGeometrySwarm(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkGeometrySwarmModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static SurfaceCastComponent* TryGetSurfaceCast(Scene& scene, SceneEntity entity) noexcept;
+    static void SetSurfaceCast(Scene& scene, SceneEntity entity, const SurfaceCastComponent& component);
+    static void RemoveSurfaceCast(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkSurfaceCastModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static FacingPanelComponent* TryGetFacingPanel(Scene& scene, SceneEntity entity) noexcept;
+    static void SetFacingPanel(Scene& scene, SceneEntity entity, const FacingPanelComponent& component);
+    static void RemoveFacingPanel(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkFacingPanelModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static SpaceStrokeComponent* TryGetSpaceStroke(Scene& scene, SceneEntity entity) noexcept;
+    static void SetSpaceStroke(Scene& scene, SceneEntity entity, const SpaceStrokeComponent& component);
+    static void RemoveSpaceStroke(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkSpaceStrokeModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static HistoryRibbonComponent* TryGetHistoryRibbon(Scene& scene, SceneEntity entity) noexcept;
+    static void SetHistoryRibbon(Scene& scene, SceneEntity entity, const HistoryRibbonComponent& component);
+    static void RemoveHistoryRibbon(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkHistoryRibbonModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static LensEchoComponent* TryGetLensEcho(Scene& scene, SceneEntity entity) noexcept;
+    static void SetLensEcho(Scene& scene, SceneEntity entity, const LensEchoComponent& component);
+    static void RemoveLensEcho(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkLensEchoModified(Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static AudioSourceComponent* TryGetAudioSource(Scene& scene, SceneEntity entity) noexcept;
     static void SetAudioSource(Scene& scene, SceneEntity entity, const AudioSourceComponent& audioSource);

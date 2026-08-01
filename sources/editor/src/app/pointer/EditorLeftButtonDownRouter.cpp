@@ -18,6 +18,7 @@
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp"
+#include "app/scene_viewport/EditorTerrainViewportInteraction.hpp"
 #include "docking/DockMainLayoutResolver.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -28,14 +29,18 @@
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
+#include "platform/win32/EditorAnimatorControllerAssetPickerDialog.hpp"
 #include "platform/win32/EditorMaterialColorPickerDialog.hpp"
 #include "platform/win32/EditorMaterialParameterValueDialog.hpp"
 #include "platform/win32/EditorMeshAssetPickerDialog.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
+#include "scene/EditorTerrainService.hpp"
 
 #include <algorithm>
 #include <array>
+#include <commdlg.h>
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <string>
 
@@ -246,6 +251,19 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
         ClientToScreen(window, &point);
     }
     return point;
+}
+
+[[nodiscard]] std::optional<std::filesystem::path> ShowTerrainHeightmapDialog(HWND owner) {
+    std::array<wchar_t, 32768U> path{};
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = owner;
+    dialog.lpstrFilter = L"Heightmaps (*.png;*.raw;*.r16)\0*.png;*.raw;*.r16\0All files (*.*)\0*.*\0\0";
+    dialog.lpstrFile = path.data();
+    dialog.nMaxFile = static_cast<DWORD>(path.size());
+    dialog.lpstrTitle = L"Import Terrain Heightmap";
+    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    return GetOpenFileNameW(&dialog) != FALSE ? std::optional<std::filesystem::path>{ path.data() } : std::nullopt;
 }
 
 [[nodiscard]] std::optional<std::array<float, 4U>> ShowGraphColorPicker(
@@ -810,6 +828,14 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             return;
         }
 
+        if (EditorTerrainViewportInteraction::Stamp(
+                messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, true)) {
+            SetCapture(messageWindow);
+            sceneViewport_.RequestPresent();
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+
         if (EditorSceneViewportObjectInteraction::BeginGizmoDrag(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
             SetCapture(messageWindow);
             sceneContext_.AssetBrowser().FocusSelection(false);
@@ -893,6 +919,38 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
 
     if (panelHit.inInspectorPanel) {
         const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(*panelHit.inspectorContent, sceneContext_, x, y);
+        if (hit.section == InspectorSectionId::Terrain && hit.property == InspectorPropertyId::TerrainImportHeightmap) {
+            if (const std::optional<std::filesystem::path> path = ShowTerrainHeightmapDialog(mainWindow_)) {
+                std::string error;
+                if (EditorTerrainService::ImportHeightmap(sceneContext_.Scene(), sceneContext_.SelectedEntity(), *path, &error)) {
+                    sceneContext_.Console().Info("Terrain", "Imported heightmap: " + path->filename().string());
+                    sceneViewport_.RequestPresent();
+                } else {
+                    sceneContext_.Console().Warning("Terrain", error.empty() ? "Heightmap import failed." : error);
+                }
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+        if (hit.section == InspectorSectionId::Animator &&
+            (hit.property == InspectorPropertyId::AnimatorController ||
+             hit.property == InspectorPropertyId::AnimatorControllerPicker)) {
+            const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+            const kb::scene::Animator* animator = sceneContext_.Scene().Components().Animators().TryGet(entity);
+            if (animator != nullptr) {
+                const EditorAnimatorControllerAssetPickerDialog::Result result =
+                    EditorAnimatorControllerAssetPickerDialog::Show(
+                        mainWindow_,
+                        MakeEditorDarkTheme(),
+                        sceneContext_,
+                        kb::assets::AssetId{ animator->controllerAssetId });
+                if (result.accepted && sceneContext_.SetAnimatorControllerAsset(entity, result.assetId)) {
+                    sceneViewport_.RequestPresent();
+                }
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
         if (hit.section == InspectorSectionId::MeshRenderer && hit.property == InspectorPropertyId::MeshRendererMeshPicker) {
             const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
             const kb::scene::MeshRendererComponent* renderer = sceneContext_.Scene().Components().MeshRenderers().TryGet(entity);
@@ -911,7 +969,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             return;
         }
         const std::optional<std::uint32_t> materialSlotPicker = MeshRendererMaterialSlotPickerForProperty(hit.property);
-        if (hit.section == InspectorSectionId::MeshRenderer
+        if ((hit.section == InspectorSectionId::MeshRenderer || hit.section == InspectorSectionId::Terrain)
             && (hit.property == InspectorPropertyId::MeshRendererMaterialPicker || materialSlotPicker.has_value())) {
             const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
             const kb::scene::MeshRendererComponent* renderer = sceneContext_.Scene().Components().MeshRenderers().TryGet(entity);
