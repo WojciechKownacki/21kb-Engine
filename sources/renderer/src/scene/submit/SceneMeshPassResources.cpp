@@ -237,6 +237,8 @@ bool SceneMeshPassResources::Initialize() {
     metallicRoughnessSampler_ = bgfx::createUniform("s_metallicRoughness", bgfx::UniformType::Sampler);
     occlusionSampler_ = bgfx::createUniform("s_occlusion", bgfx::UniformType::Sampler);
     emissiveSampler_ = bgfx::createUniform("s_emissive", bgfx::UniformType::Sampler);
+    terrainLayerWeightSampler_ = bgfx::createUniform("s_terrainLayerWeights", bgfx::UniformType::Sampler);
+    terrainLayerParamsUniform_ = bgfx::createUniform("u_terrainLayerParams", bgfx::UniformType::Vec4);
     materialParamsUniform_ = bgfx::createUniform("u_materialParams", bgfx::UniformType::Vec4);
     materialEmissiveUniform_ = bgfx::createUniform("u_materialEmissive", bgfx::UniformType::Vec4);
     materialFlagsUniform_ = bgfx::createUniform("u_materialFlags", bgfx::UniformType::Vec4);
@@ -273,6 +275,14 @@ bool SceneMeshPassResources::Initialize() {
 }
 
 void SceneMeshPassResources::Shutdown() {
+    if (bgfx::isValid(terrainLayerParamsUniform_)) {
+        bgfx::destroy(terrainLayerParamsUniform_);
+        terrainLayerParamsUniform_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(terrainLayerWeightSampler_)) {
+        bgfx::destroy(terrainLayerWeightSampler_);
+        terrainLayerWeightSampler_ = BGFX_INVALID_HANDLE;
+    }
     if (bgfx::isValid(fallbackNormal2DArrayTexture_)) {
         bgfx::destroy(fallbackNormal2DArrayTexture_);
         fallbackNormal2DArrayTexture_ = BGFX_INVALID_HANDLE;
@@ -455,6 +465,8 @@ bool SceneMeshPassResources::IsInitialized() const noexcept {
         bgfx::isValid(metallicRoughnessSampler_) &&
         bgfx::isValid(occlusionSampler_) &&
         bgfx::isValid(emissiveSampler_) &&
+        bgfx::isValid(terrainLayerWeightSampler_) &&
+        bgfx::isValid(terrainLayerParamsUniform_) &&
         bgfx::isValid(materialParamsUniform_) &&
         bgfx::isValid(materialEmissiveUniform_) &&
         bgfx::isValid(materialFlagsUniform_) &&
@@ -762,6 +774,24 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         .whiteTexture = fallbackWhiteTexture_,
         .normalTexture = fallbackNormalTexture_,
     };
+    if (desc.pass != MeshPassType::ShadowDepth) {
+        const RenderMeshResource* mesh = desc.command.meshResource;
+        const bool terrainLayerEnabled =
+            desc.command.terrainLayerIndex != UINT8_MAX &&
+            mesh != nullptr &&
+            bgfx::isValid(mesh->terrainLayerWeightTexture);
+        const std::array<float, 4U> terrainLayerParams{
+            terrainLayerEnabled ? static_cast<float>(desc.command.terrainLayerIndex) : 0.0F,
+            terrainLayerEnabled ? 1.0F : 0.0F,
+            0.0F,
+            0.0F,
+        };
+        bgfx::setTexture(
+            15U,
+            terrainLayerWeightSampler_,
+            terrainLayerEnabled ? mesh->terrainLayerWeightTexture : fallbackWhiteTexture_);
+        bgfx::setUniform(terrainLayerParamsUniform_, terrainLayerParams.data());
+    }
     if (resolution.graphProgram && material != nullptr) {
         WriteRendererMaterialGraphDebugLog(
             "gpu",

@@ -43,6 +43,7 @@ struct TerrainViewportToolbarRects {
     RECT selectButton{};
     RECT sculptButton{};
     RECT holesButton{};
+    RECT paintButton{};
     RECT brushButton{};
     RECT brushShapeButton{};
     RECT sizeMinusButton{};

@@ -57,6 +57,13 @@ struct RenderMeshVertexUpdateRange {
     std::uint32_t vertexCount = 0U;
 };
 
+struct RenderTerrainLayerWeightUpdateRegion {
+    std::uint16_t x = 0U;
+    std::uint16_t y = 0U;
+    std::uint16_t width = 0U;
+    std::uint16_t height = 0U;
+};
+
 struct RenderMeshAssetData {
     std::vector<RenderStaticMeshVertexP3N3UV2> vertices;
     std::vector<RenderStaticMeshVertexP3N3T4UV2> tangentVertices;
@@ -74,11 +81,16 @@ struct RenderMeshAssetData {
     std::uint64_t dynamicTopologyKey = 0U;
     std::vector<RenderMeshVertexUpdateRange> dynamicVertexUpdateRanges;
     std::vector<std::uint32_t> dynamicSectionUpdateIndices;
+    std::vector<std::uint8_t> terrainLayerWeights;
+    std::vector<RenderTerrainLayerWeightUpdateRegion> dynamicTerrainLayerWeightUpdates;
     std::uint32_t vertexUpdateFirst = 0U;
     std::uint32_t vertexUpdateCount = 0U;
     std::uint32_t terrainChunkCountX = 0U;
     std::uint32_t terrainChunkCountZ = 0U;
     std::uint32_t terrainLodCount = 0U;
+    std::uint16_t terrainLayerWeightWidth = 0U;
+    std::uint16_t terrainLayerWeightHeight = 0U;
+    std::uint8_t terrainLayerCount = 0U;
     bool dynamicVertexUpdates = false;
 
     RenderMeshDesc& RefreshDesc() noexcept;

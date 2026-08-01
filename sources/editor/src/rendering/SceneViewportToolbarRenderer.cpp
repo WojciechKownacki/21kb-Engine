@@ -298,9 +298,12 @@ void SceneViewportToolbarRenderer::PaintTerrainTools(
     DrawTerrainModeButton(dc, rects.selectButton, "Select", theme, visibleMode == EditorTerrainToolMode::Select);
     DrawTerrainModeButton(dc, rects.sculptButton, "Sculpt", theme, visibleMode == EditorTerrainToolMode::Sculpt);
     DrawTerrainModeButton(dc, rects.holesButton, "Holes", theme, visibleMode == EditorTerrainToolMode::Holes);
+    DrawTerrainModeButton(dc, rects.paintButton, "Paint", theme, visibleMode == EditorTerrainToolMode::Paint);
+    const std::string paintLayerLabel = "Layer " + std::to_string(static_cast<unsigned>(tool.selectedMaterialLayer) + 1U);
     SceneViewportToolbarDrawing::DrawValueButton(
         dc, rects.brushButton, HeroIconKind::AdjustmentsHorizontal,
-        TerrainBrushToolbarLabel(tool.brush.mode), theme, tool.brushMenuOpen);
+        visibleMode == EditorTerrainToolMode::Paint ? paintLayerLabel.c_str() : TerrainBrushToolbarLabel(tool.brush.mode),
+        theme, tool.brushMenuOpen);
     SceneViewportToolbarDrawing::DrawValueButton(
         dc, rects.brushShapeButton, HeroIconKind::RectangleGroup,
         TerrainBrushShapeLabel(tool.brush.shape), theme, tool.brushShapeMenuOpen);
@@ -313,7 +316,10 @@ void SceneViewportToolbarRenderer::PaintTerrainTools(
 
     SceneViewportToolbarDrawing::DrawIconButton(dc, rects.strengthMinusButton, HeroIconKind::Minus, theme, false);
     std::array<char, 40U> strengthText{};
-    std::snprintf(strengthText.data(), strengthText.size(), "Strength %.2g", static_cast<double>(tool.brush.strength));
+    std::snprintf(
+        strengthText.data(), strengthText.size(),
+        visibleMode == EditorTerrainToolMode::Paint ? "Opacity %.2g" : "Strength %.2g",
+        static_cast<double>(tool.brush.strength));
     DrawTerrainValue(dc, rects.strengthValue, strengthText.data(), theme);
     SceneViewportToolbarDrawing::DrawIconButton(dc, rects.strengthPlusButton, HeroIconKind::Plus, theme, false);
 

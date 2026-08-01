@@ -129,6 +129,8 @@ private:
     bgfx::UniformHandle metallicRoughnessSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle occlusionSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle emissiveSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle terrainLayerWeightSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle terrainLayerParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialEmissiveUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialFlagsUniform_ = BGFX_INVALID_HANDLE;

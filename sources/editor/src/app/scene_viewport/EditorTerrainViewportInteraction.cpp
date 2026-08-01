@@ -366,12 +366,25 @@ bool EditorTerrainViewportInteraction::Stamp(
         if (dx * dx + dz * dz < minimumSpacing * minimumSpacing) return true;
     }
     std::string error;
-    if (!sceneContext.ApplyTerrainBrushStamp(
-            pointer->entity, tool.brush,
-            kb::terrain_editor::TerrainBrushStamp{
-                .localX = pointer->local.x,
-                .localZ = pointer->local.z },
-            beginStroke, &error)) {
+    const kb::terrain_editor::TerrainBrushStamp stamp{
+        .localX = pointer->local.x,
+        .localZ = pointer->local.z };
+    const bool applied = tool.mode == EditorTerrainToolMode::Paint
+        ? sceneContext.ApplyTerrainLayerPaintStamp(
+            pointer->entity,
+            kb::terrain_editor::TerrainLayerPaintSettings{
+                .shape = tool.brush.shape,
+                .layerIndex = tool.selectedMaterialLayer,
+                .radius = tool.brush.radius,
+                .opacity = std::clamp(tool.brush.strength, 0.0F, 1.0F),
+                .falloff = tool.brush.falloff,
+                .noiseSeed = tool.brush.noiseSeed,
+                .erase = (GetKeyState(VK_CONTROL) & 0x8000) != 0,
+            },
+            stamp, beginStroke, &error)
+        : sceneContext.ApplyTerrainBrushStamp(
+            pointer->entity, tool.brush, stamp, beginStroke, &error);
+    if (!applied) {
         sceneContext.Console().Warning("Terrain", error.empty() ? "Terrain brush stamp failed." : error);
         return true;
     }

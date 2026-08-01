@@ -58,6 +58,45 @@ bool IsTerrainAssetValid(const TerrainAsset& terrain, std::string* error) noexce
             return false;
         }
     }
+    if (terrain.materialLayers.size() > TerrainAsset::MaximumMaterialLayers) {
+        SetError(error, "Terrain supports at most four material layers");
+        return false;
+    }
+    if (terrain.materialLayers.empty()) {
+        if (terrain.layerWeightWidth != 0U || terrain.layerWeightHeight != 0U || !terrain.layerWeights.empty()) {
+            SetError(error, "Terrain without material layers must not contain a layer weight map");
+            return false;
+        }
+    } else {
+        if (terrain.layerWeightWidth == 0U || terrain.layerWeightHeight == 0U ||
+            terrain.layerWeightWidth > TerrainAsset::MaximumResolution ||
+            terrain.layerWeightHeight > TerrainAsset::MaximumResolution) {
+            SetError(error, "Terrain layer weight map dimensions are invalid");
+            return false;
+        }
+        const std::uint64_t weightBytes = static_cast<std::uint64_t>(terrain.layerWeightWidth) *
+            terrain.layerWeightHeight * TerrainAsset::MaximumMaterialLayers;
+        if (weightBytes != terrain.layerWeights.size()) {
+            SetError(error, "Terrain layer weight map payload does not match its dimensions");
+            return false;
+        }
+        const std::uint32_t layerCount = static_cast<std::uint32_t>(terrain.materialLayers.size());
+        for (std::size_t texel = 0U; texel < terrain.layerWeights.size(); texel += TerrainAsset::MaximumMaterialLayers) {
+            std::uint32_t sum = 0U;
+            for (std::uint32_t layer = 0U; layer < TerrainAsset::MaximumMaterialLayers; ++layer) {
+                const std::uint8_t weight = terrain.layerWeights[texel + layer];
+                if (layer >= layerCount && weight != 0U) {
+                    SetError(error, "Terrain layer weight map contains data for an inactive layer");
+                    return false;
+                }
+                sum += weight;
+            }
+            if (sum != 255U) {
+                SetError(error, "Terrain material layer weights must sum to 255 per texel");
+                return false;
+            }
+        }
+    }
     if (error != nullptr) error->clear();
     return true;
 }

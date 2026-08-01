@@ -53,6 +53,13 @@ public:
         RenderMeshHandle handle,
         const RenderMeshDesc& desc,
         std::span<const std::uint32_t> sectionIndices);
+    [[nodiscard]] bool UpdateMeshTerrainLayerWeights(
+        RenderMeshHandle handle,
+        const RenderMeshDesc& desc,
+        std::uint16_t x,
+        std::uint16_t y,
+        std::uint16_t width,
+        std::uint16_t height);
     void DestroyMesh(RenderMeshHandle handle) noexcept;
 
     [[nodiscard]] RenderMaterialHandle RegisterMaterial(const RenderMaterialDesc& desc);

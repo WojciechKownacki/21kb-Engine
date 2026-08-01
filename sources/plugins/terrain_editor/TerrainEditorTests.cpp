@@ -1,11 +1,13 @@
 #include "TerrainBrush.hpp"
 #include "TerrainHeightmapImporter.hpp"
+#include "TerrainLayerPainter.hpp"
 
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/TerrainAssetIO.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderTerrainMeshBuilder.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <chrono>
 #include <cstdlib>
@@ -30,6 +32,16 @@ void RunAssetRoundTripTest() {
     kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(33U, 64.0F, 48.0F);
     terrain.heights[Center(terrain)] = 12.5F;
     terrain.holes[0] = 1U;
+    Require(kb::terrain_editor::AddTerrainMaterialLayer(terrain, 101U), "Could not add round-trip base material layer");
+    Require(kb::terrain_editor::AddTerrainMaterialLayer(terrain, 202U), "Could not add round-trip paint material layer");
+    Require(kb::terrain_editor::ApplyTerrainLayerPaint(
+            terrain,
+            kb::terrain_editor::TerrainLayerPaintSettings{
+                .layerIndex = 1U,
+                .radius = 3.0F,
+                .opacity = 0.75F,
+            }, {}).Changed(),
+        "Round-trip material layer paint changed no weights");
     const std::filesystem::path path = std::filesystem::temp_directory_path() / "kb_terrain_editor_roundtrip.kbterrain";
     std::string error;
     Require(kb::assets::TerrainAssetIO::Save(path, terrain, &error), error.c_str());
@@ -41,6 +53,136 @@ void RunAssetRoundTripTest() {
         "Terrain round-trip changed header fields");
     Require(loaded->heights[Center(*loaded)] == 12.5F && loaded->holes[0] == 1U,
         "Terrain round-trip changed authored samples");
+    Require(loaded->materialLayers.size() == 2U &&
+            loaded->materialLayers[0].materialAssetId == 101U &&
+            loaded->materialLayers[1].materialAssetId == 202U &&
+            loaded->layerWeights == terrain.layerWeights,
+        "Terrain round-trip changed material layers or painted weights");
+}
+
+void RunMaterialLayerPaintTest() {
+    kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(65U, 64.0F, 64.0F);
+    Require(kb::terrain_editor::AddTerrainMaterialLayer(terrain, 11U),
+        "Terrain rejected its base material layer");
+    Require(terrain.layerWeightWidth == 512U && terrain.layerWeightHeight == 512U &&
+            terrain.layerWeights.front() == 255U,
+        "Base material layer did not initialize a full-coverage weight map");
+    Require(kb::terrain_editor::AddTerrainMaterialLayer(terrain, 22U),
+        "Terrain rejected its second material layer");
+    const kb::terrain_editor::TerrainLayerPaintResult painted =
+        kb::terrain_editor::ApplyTerrainLayerPaint(
+            terrain,
+            kb::terrain_editor::TerrainLayerPaintSettings{
+                .shape = kb::terrain_editor::TerrainBrushShape::SoftRound,
+                .layerIndex = 1U,
+                .radius = 4.0F,
+                .opacity = 0.5F,
+                .falloff = 0.65F,
+            }, {});
+    Require(painted.Changed() && painted.changedTexels < terrain.layerWeightWidth * terrain.layerWeightHeight / 16U,
+        "Material paint was not limited to a local splatmap rectangle");
+    const std::size_t center =
+        (static_cast<std::size_t>(terrain.layerWeightHeight) / 2U * terrain.layerWeightWidth + terrain.layerWeightWidth / 2U) * 4U;
+    Require(terrain.layerWeights[center + 1U] >= 127U,
+        "Material paint did not increase the selected layer at the brush center");
+    for (std::size_t texel = 0U; texel < terrain.layerWeights.size(); texel += 4U) {
+        Require(static_cast<std::uint32_t>(terrain.layerWeights[texel]) +
+                    terrain.layerWeights[texel + 1U] == 255U &&
+                    terrain.layerWeights[texel + 2U] == 0U &&
+                    terrain.layerWeights[texel + 3U] == 0U,
+            "Material paint produced non-normalized layer weights");
+    }
+    Require(kb::terrain_editor::SetTerrainMaterialLayer(terrain, 1U, 33U) &&
+            terrain.materialLayers[1].materialAssetId == 33U,
+        "Material layer assignment did not update its asset reference");
+    Require(kb::terrain_editor::RemoveTerrainMaterialLayer(terrain, 1U) &&
+            terrain.materialLayers.size() == 1U && terrain.layerWeights[center] == 255U,
+        "Removing a painted layer did not restore normalized base coverage");
+}
+
+void RunMaterialLayerMeshTest() {
+    kb::assets::TerrainAsset terrain = kb::assets::MakeFlatTerrainAsset(65U, 64.0F, 64.0F);
+    terrain.chunkQuads = 16U;
+    terrain.lodCount = 4U;
+    Require(kb::terrain_editor::AddTerrainMaterialLayer(terrain, 111U) &&
+            kb::terrain_editor::AddTerrainMaterialLayer(terrain, 222U),
+        "Could not prepare layered terrain mesh test");
+    std::optional<kb::render::RenderMeshAssetData> mesh =
+        kb::render::RenderTerrainMeshBuilder::Build(terrain);
+    Require(mesh.has_value() && mesh->sections.size() == 128U && mesh->materialSlots.size() == 2U,
+        "Layered terrain did not emit one draw section and slot per material layer");
+    Require(!mesh->sections[1].terrainLayerActive,
+        "An empty painted layer was not culled at chunk granularity");
+    Require(mesh->materialSlots[0].defaultMaterialAssetId == 111U &&
+            mesh->materialSlots[1].defaultMaterialAssetId == 222U &&
+            mesh->terrainLayerWeights == terrain.layerWeights,
+        "Layered terrain mesh lost material references or splat weights");
+    Require(kb::render::RenderTerrainMeshBuilder::PrepareDynamicPreview(terrain, *mesh),
+        "Layered terrain mesh could not enter dynamic preview mode");
+    const std::size_t initialUpdates = mesh->dynamicTerrainLayerWeightUpdates.size();
+    const kb::terrain_editor::TerrainLayerPaintResult painted =
+        kb::terrain_editor::ApplyTerrainLayerPaint(
+            terrain,
+            kb::terrain_editor::TerrainLayerPaintSettings{
+                .layerIndex = 1U,
+                .radius = 3.0F,
+                .opacity = 0.25F,
+            }, {});
+    Require(painted.Changed() && kb::render::RenderTerrainMeshBuilder::UpdateDynamicLayerPreview(
+            terrain,
+            kb::render::RenderTerrainLayerWeightUpdateRegion{
+                .x = static_cast<std::uint16_t>(painted.minX),
+                .y = static_cast<std::uint16_t>(painted.minY),
+                .width = static_cast<std::uint16_t>(painted.maxX - painted.minX + 1U),
+                .height = static_cast<std::uint16_t>(painted.maxY - painted.minY + 1U),
+            }, *mesh),
+        "Layered terrain rejected a local dynamic splatmap update");
+    Require(mesh->dynamicTerrainLayerWeightUpdates.size() == initialUpdates + 1U &&
+            mesh->terrainLayerWeights == terrain.layerWeights,
+        "Dynamic splatmap update did not preserve its compact upload journal");
+    Require(std::ranges::any_of(mesh->sections, [](const kb::render::RenderMeshSectionDesc& section) {
+            return section.terrainLayerIndex == 1U && section.terrainLayerActive;
+        }),
+        "Painting did not activate the affected material-layer chunk");
+    const std::size_t activeSectionUpdates = mesh->dynamicSectionUpdateIndices.size();
+    const kb::terrain_editor::TerrainLayerPaintResult repainted =
+        kb::terrain_editor::ApplyTerrainLayerPaint(
+            terrain,
+            kb::terrain_editor::TerrainLayerPaintSettings{
+                .layerIndex = 1U,
+                .radius = 2.0F,
+                .opacity = 0.1F,
+            }, {});
+    Require(repainted.Changed() && kb::render::RenderTerrainMeshBuilder::UpdateDynamicLayerPreview(
+            terrain,
+            kb::render::RenderTerrainLayerWeightUpdateRegion{
+                .x = static_cast<std::uint16_t>(repainted.minX),
+                .y = static_cast<std::uint16_t>(repainted.minY),
+                .width = static_cast<std::uint16_t>(repainted.maxX - repainted.minX + 1U),
+                .height = static_cast<std::uint16_t>(repainted.maxY - repainted.minY + 1U),
+            }, *mesh) && mesh->dynamicSectionUpdateIndices.size() == activeSectionUpdates,
+        "Painting inside an active chunk queued redundant draw-command metadata updates");
+
+    const auto start = std::chrono::steady_clock::now();
+    for (std::uint32_t stampIndex = 0U; stampIndex < 200U; ++stampIndex) {
+        static_cast<void>(kb::terrain_editor::ApplyTerrainLayerPaint(
+            terrain,
+            kb::terrain_editor::TerrainLayerPaintSettings{
+                .layerIndex = 1U,
+                .radius = 4.0F,
+                .opacity = 0.08F,
+            },
+            kb::terrain_editor::TerrainBrushStamp{
+                .localX = static_cast<float>(stampIndex % 25U) * 0.2F,
+                .localZ = static_cast<float>(stampIndex % 17U) * 0.2F,
+            }));
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    Require(elapsed < std::chrono::seconds(1),
+        "Two hundred local material-paint stamps exceeded the performance budget");
+    std::cout << "Terrain layer-paint benchmark: 200 stamps="
+              << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
+              << " ms\n";
 }
 
 void RunBrushTest() {
@@ -347,6 +489,8 @@ int main() {
         RunAssetRoundTripTest();
         RunBrushTest();
         RunBrushShapeTest();
+        RunMaterialLayerPaintTest();
+        RunMaterialLayerMeshTest();
         RunHeightmapImportTest();
         RunMeshBuildTest();
         RunDynamicMeshUpdateTest();

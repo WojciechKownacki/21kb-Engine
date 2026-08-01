@@ -55,6 +55,11 @@ struct TerrainBrushResult {
 };
 
 [[nodiscard]] bool IsTerrainBrushSettingsValid(const TerrainBrushSettings& settings) noexcept;
+[[nodiscard]] float TerrainBrushWeight(
+    float distance,
+    std::uint32_t sampleX,
+    std::uint32_t sampleZ,
+    const TerrainBrushSettings& settings) noexcept;
 [[nodiscard]] TerrainBrushResult ApplyTerrainBrush(
     kb::assets::TerrainAsset& terrain,
     const TerrainBrushSettings& settings,
