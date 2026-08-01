@@ -458,7 +458,12 @@ void DrawAddComponentBrowserRow(HDC dc, RECT row, const EditorTheme& theme, Hero
     }
 }
 
-void DrawAddComponentBrowser(HDC dc, RECT browser, const EditorTheme& theme, const InspectorPanelState& inspector) {
+void DrawAddComponentBrowser(
+    HDC dc,
+    RECT browser,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const EditorSceneContext& sceneContext) {
     DrawFrame(dc, browser, Rgb(30, 33, 38), Rgb(70, 78, 88));
 
     {
@@ -508,7 +513,9 @@ void DrawAddComponentBrowser(HDC dc, RECT browser, const EditorTheme& theme, con
         GdiDrawing::FillRectColor(dc, Rect(back.left, back.bottom - 1, back.right, back.bottom), Rgb(52, 58, 66));
     }
 
-    const std::vector<AddComponentRow> rows = InspectorAddComponentBrowserModel::Rows(query.empty() ? std::string_view{ category } : std::string_view{}, query);
+    const std::vector<AddComponentRow> rows = InspectorAddComponentBrowserModel::Rows(
+        query.empty() ? std::string_view{ category } : std::string_view{}, query,
+        [&sceneContext](std::string_view pluginId) { return sceneContext.IsProjectPluginEnabled(pluginId); });
     const RECT list = AddComponentListRect(browser, showBack);
     const int listHeight = static_cast<int>(list.bottom - list.top);
     const int rowCount = static_cast<int>(rows.size());
@@ -2418,12 +2425,14 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     }
     if (const kb::scene::MeshRendererComponent* meshRenderer = scene.Components().MeshRenderers().TryGet(selected); meshRenderer != nullptr) {
         const bool terrain = EditorTerrainService::IsTerrainEntity(scene, selected);
-        const int h = terrain ? SectionHeight(inspector, InspectorSectionId::Terrain, 13) : MeshRendererSectionHeight(sceneContext, *meshRenderer);
-        if (sectionVisible(y, h)) {
-            if (terrain) PaintTerrainSection(dc, content, y, theme, inspector, sceneContext, *meshRenderer);
-            else PaintMeshRendererSection(dc, content, y, theme, inspector, sceneContext, *meshRenderer);
-        } else {
-            y += h + kSectionGap;
+        if (!terrain || sceneContext.IsProjectPluginEnabled("Editor.Terrain")) {
+            const int h = terrain ? SectionHeight(inspector, InspectorSectionId::Terrain, 13) : MeshRendererSectionHeight(sceneContext, *meshRenderer);
+            if (sectionVisible(y, h)) {
+                if (terrain) PaintTerrainSection(dc, content, y, theme, inspector, sceneContext, *meshRenderer);
+                else PaintMeshRendererSection(dc, content, y, theme, inspector, sceneContext, *meshRenderer);
+            } else {
+                y += h + kSectionGap;
+            }
         }
     }
     if (const kb::scene::AudioSourceComponent* audioSource = scene.Components().AudioSources().TryGet(selected); audioSource != nullptr) {
@@ -2635,9 +2644,12 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         height += SectionHeight(inspector, InspectorSectionId::Light, LightSectionRows(*light)) + kSectionGap;
     }
     if (const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(selected); renderer != nullptr) {
-        height += (EditorTerrainService::IsTerrainEntity(scene, selected)
-            ? SectionHeight(inspector, InspectorSectionId::Terrain, 13)
-            : MeshRendererSectionHeight(sceneContext, *renderer)) + kSectionGap;
+        const bool terrain = EditorTerrainService::IsTerrainEntity(scene, selected);
+        if (!terrain || sceneContext.IsProjectPluginEnabled("Editor.Terrain")) {
+            height += (terrain
+                ? SectionHeight(inspector, InspectorSectionId::Terrain, 13)
+                : MeshRendererSectionHeight(sceneContext, *renderer)) + kSectionGap;
+        }
     }
     if (scene.Components().AudioSources().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::AudioSource, 10) + kSectionGap;
@@ -3277,7 +3289,7 @@ void InspectorPanelRenderer::PaintAddComponentOverlay(HDC dc, const RECT& bounds
     if (!sceneContext.Inspector().IsAddComponentBrowserOpen()) {
         return;
     }
-    DrawAddComponentBrowser(dc, bounds, theme, sceneContext.Inspector());
+    DrawAddComponentBrowser(dc, bounds, theme, sceneContext.Inspector(), sceneContext);
 }
 
 InspectorPanelRenderer::AddComponentScrollInfo InspectorPanelRenderer::AddComponentOverlayScrollGeometry(const RECT& bounds, const EditorSceneContext& sceneContext) {
@@ -3288,7 +3300,9 @@ InspectorPanelRenderer::AddComponentScrollInfo InspectorPanelRenderer::AddCompon
     const std::string_view query = AddComponentQuery(state);
     const std::string& category = state.AddComponentBrowserCategory();
     const bool showBack = query.empty() && !category.empty();
-    const std::vector<AddComponentRow> rows = InspectorAddComponentBrowserModel::Rows(query.empty() ? std::string_view{ category } : std::string_view{}, query);
+    const std::vector<AddComponentRow> rows = InspectorAddComponentBrowserModel::Rows(
+        query.empty() ? std::string_view{ category } : std::string_view{}, query,
+        [&sceneContext](std::string_view pluginId) { return sceneContext.IsProjectPluginEnabled(pluginId); });
     const RECT list = AddComponentListRect(bounds, showBack);
     const int listHeight = static_cast<int>(list.bottom - list.top);
     const int rowCount = static_cast<int>(rows.size());
@@ -3340,7 +3354,9 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTestAddComponentOverlay(
         }
     }
     const std::vector<AddComponentRow> rows =
-        InspectorAddComponentBrowserModel::Rows(query.empty() ? std::string_view{ category } : std::string_view{}, query);
+        InspectorAddComponentBrowserModel::Rows(
+            query.empty() ? std::string_view{ category } : std::string_view{}, query,
+            [&sceneContext](std::string_view pluginId) { return sceneContext.IsProjectPluginEnabled(pluginId); });
     const RECT list = AddComponentListRect(bounds, showBack);
     const int listHeight = static_cast<int>(list.bottom - list.top);
     const int rowCount = static_cast<int>(rows.size());
@@ -3904,7 +3920,8 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         y += kSectionGap;
     }
 
-    if (EditorTerrainService::IsTerrainEntity(sceneContext.Scene(), selected)) {
+    if (sceneContext.IsProjectPluginEnabled("Editor.Terrain") &&
+        EditorTerrainService::IsTerrainEntity(sceneContext.Scene(), selected)) {
         if (InspectorPanelRenderer::Hit hit = HitTestTerrainSection(viewport, state, x, scrolledY, y); hit.kind != InspectorHitKind::None) return hit;
         y += kSectionGap;
     }

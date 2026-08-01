@@ -108,6 +108,59 @@ SceneViewportToolbarRects SceneViewportToolbarLayout::Resolve(const RECT& conten
     return rects;
 }
 
+TerrainViewportToolbarRects SceneViewportToolbarLayout::ResolveTerrainTools(const RECT& content) noexcept {
+    TerrainViewportToolbarRects rects{};
+    constexpr int panelWidth = 690;
+    constexpr int panelHeight = 38;
+    constexpr int buttonHeight = 26;
+    constexpr int gap = 4;
+    int cursor = content.left + 8;
+    const int top = content.top + SceneViewportToolbarRenderer::Height + 8;
+    rects.panel = RECT{
+        cursor,
+        top,
+        std::min<LONG>(content.right - 8, static_cast<LONG>(cursor + panelWidth)),
+        top + panelHeight,
+    };
+    cursor += 7;
+    const int buttonTop = top + (panelHeight - buttonHeight) / 2;
+    const auto button = [&](int width) {
+        const RECT value{ cursor, buttonTop, cursor + width, buttonTop + buttonHeight };
+        cursor = value.right + gap;
+        return value;
+    };
+    rects.selectButton = button(58);
+    rects.sculptButton = button(64);
+    rects.holesButton = button(58);
+    cursor += 5;
+    rects.brushButton = button(164);
+    cursor += 5;
+    rects.sizeMinusButton = button(26);
+    rects.sizeValue = button(72);
+    rects.sizePlusButton = button(26);
+    cursor += 5;
+    rects.strengthMinusButton = button(26);
+    rects.strengthValue = button(88);
+    rects.strengthPlusButton = button(26);
+
+    constexpr int brushItemHeight = 27;
+    rects.brushMenu = RECT{
+        rects.brushButton.left,
+        rects.panel.bottom + 5,
+        rects.brushButton.right,
+        rects.panel.bottom + 5 + brushItemHeight * static_cast<int>(rects.brushItems.size()) + 8,
+    };
+    for (std::size_t index = 0U; index < rects.brushItems.size(); ++index) {
+        rects.brushItems[index] = RECT{
+            rects.brushMenu.left + 4,
+            rects.brushMenu.top + 4 + static_cast<int>(index) * brushItemHeight,
+            rects.brushMenu.right - 4,
+            rects.brushMenu.top + 4 + static_cast<int>(index + 1U) * brushItemHeight,
+        };
+    }
+    return rects;
+}
+
 } // namespace kb::editor
 
 #endif

@@ -4,6 +4,9 @@
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "scene/EditorTerrainService.hpp"
+
+#include <algorithm>
 
 namespace kb::editor {
 namespace {
@@ -41,6 +44,75 @@ namespace {
     return false;
 }
 
+[[nodiscard]] bool HandleTerrainTools(
+    EditorSceneContext& sceneContext,
+    const TerrainViewportToolbarRects& toolbar,
+    int x,
+    int y) {
+    const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
+    if (!sceneContext.IsProjectPluginEnabled("Editor.Terrain") ||
+        !EditorTerrainService::IsTerrainEntity(sceneContext.Scene(), selected)) {
+        return false;
+    }
+    EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+    if (PointInRect(toolbar.selectButton, x, y)) {
+        tool.mode = EditorTerrainToolMode::Select;
+        tool.editingEnabled = false;
+        tool.strokeActive = false;
+        tool.hoverVisible = false;
+        tool.brushMenuOpen = false;
+        return true;
+    }
+    if (PointInRect(toolbar.sculptButton, x, y)) {
+        tool.mode = EditorTerrainToolMode::Sculpt;
+        tool.editingEnabled = true;
+        if (tool.brush.mode == kb::terrain_editor::TerrainBrushMode::CutHole ||
+            tool.brush.mode == kb::terrain_editor::TerrainBrushMode::FillHole) {
+            tool.brush.mode = kb::terrain_editor::TerrainBrushMode::Raise;
+        }
+        tool.brushMenuOpen = false;
+        return true;
+    }
+    if (PointInRect(toolbar.holesButton, x, y)) {
+        tool.mode = EditorTerrainToolMode::Holes;
+        tool.editingEnabled = true;
+        if (tool.brush.mode != kb::terrain_editor::TerrainBrushMode::CutHole &&
+            tool.brush.mode != kb::terrain_editor::TerrainBrushMode::FillHole) {
+            tool.brush.mode = kb::terrain_editor::TerrainBrushMode::CutHole;
+        }
+        tool.brushMenuOpen = false;
+        return true;
+    }
+    if (PointInRect(toolbar.brushButton, x, y)) {
+        constexpr std::uint8_t brushCount = 8U;
+        const auto next = static_cast<std::uint8_t>(tool.brush.mode) + 1U;
+        tool.brush.mode = static_cast<kb::terrain_editor::TerrainBrushMode>(next % brushCount);
+        const bool holes = tool.brush.mode == kb::terrain_editor::TerrainBrushMode::CutHole ||
+            tool.brush.mode == kb::terrain_editor::TerrainBrushMode::FillHole;
+        tool.mode = holes ? EditorTerrainToolMode::Holes : EditorTerrainToolMode::Sculpt;
+        tool.editingEnabled = true;
+        tool.brushMenuOpen = false;
+        return true;
+    }
+    if (PointInRect(toolbar.sizeMinusButton, x, y)) {
+        tool.brush.radius = std::max(0.25F, tool.brush.radius * 0.8F);
+        return true;
+    }
+    if (PointInRect(toolbar.sizePlusButton, x, y)) {
+        tool.brush.radius = std::min(100'000.0F, tool.brush.radius * 1.25F);
+        return true;
+    }
+    if (PointInRect(toolbar.strengthMinusButton, x, y)) {
+        tool.brush.strength = std::max(0.0F, tool.brush.strength - 0.25F);
+        return true;
+    }
+    if (PointInRect(toolbar.strengthPlusButton, x, y)) {
+        tool.brush.strength = std::min(100'000.0F, tool.brush.strength + 0.25F);
+        return true;
+    }
+    return PointInRect(toolbar.panel, x, y);
+}
+
 } // namespace
 
 EditorSceneViewportToolbarPointerController::EditorSceneViewportToolbarPointerController(EditorSceneContext& sceneContext, EditorSceneBgfxViewport& sceneViewport) noexcept
@@ -50,6 +122,12 @@ EditorSceneViewportToolbarPointerController::EditorSceneViewportToolbarPointerCo
 bool EditorSceneViewportToolbarPointerController::HandlePointerDown(const EditorResolvedPanelContent& panelContent, int x, int y) {
     EditorViewportPreviewState& preview = sceneContext_.ViewportPreview(panelContent.panelId);
     const SceneViewportToolbarRects toolbar = SceneViewportToolbarRenderer::Resolve(panelContent.content, preview);
+    if (HandleTerrainTools(
+            sceneContext_, SceneViewportToolbarRenderer::ResolveTerrainTools(panelContent.content), x, y)) {
+        preview.CloseToolbarDropdown();
+        sceneViewport_.RequestPresent();
+        return true;
+    }
     if (SelectDropdownValue(preview, toolbar, x, y)) {
         sceneViewport_.RequestPresent();
         return true;
