@@ -499,8 +499,8 @@ const EditorMaterialThumbnailImage* EditorMaterialThumbnailService::ThumbnailFor
         return entry.first == metadata.id.value;
     });
     const auto scaledFor = [displaySize](Entry& entry) -> const EditorMaterialThumbnailImage* {
-        // Whatever render we have is shown, even while a newer one is being captured - only a material
-        // that has never been rendered falls back to the painted stand-in.
+        // A cached render is shown only for this entry's exact content hash. A changed material gets a new
+        // empty entry above and therefore uses the current painted stand-in until its capture completes.
         if (entry.image.bgra.empty() || displaySize <= 0) {
             return nullptr;
         }
@@ -518,13 +518,10 @@ const EditorMaterialThumbnailImage* EditorMaterialThumbnailService::ThumbnailFor
         return scaledFor(found->second);
     }
 
+    // A new content hash is a different visual result. Never keep the previous pixels here: the painted
+    // stand-in is resolved from the current material and is therefore honest while the new GPU capture is
+    // pending (especially important for a newly created white material after editing a coloured one).
     Entry entry{ .contentHash = metadata.contentHash };
-    if (found != entries_.end() && found->second.state == EntryState::Ready) {
-        // Keep showing the previous render while the new one is being produced: a tile that flips back to
-        // the painted stand-in on every re-render reads as a bug, not as a refresh.
-        entry.image = found->second.image;
-        entry.scaled = found->second.scaled;
-    }
     // A material rendered in an earlier session is already on disk: no GPU work, no waiting.
     if (LoadPng(ThumbnailPath(metadata), entry.image)) {
         EditorMaterialThumbnailService::ProcessCapture(entry.image);
@@ -581,8 +578,9 @@ void EditorMaterialThumbnailService::BeginNextCapture(
 
         const kb::scene::Scene& previewScene = sceneContext.MaterialThumbnailScene(kb::assets::AssetId{ assetId });
         viewport.Present(host, stagingRect, previewScene, ThumbnailPresentSettings(sceneContext));
+        const std::uint64_t contentHash = entry->second.contentHash;
         const std::uint64_t captureId =
-            sceneContext.RequestMaterialThumbnailCapture(ThumbnailPath(assetId, entry->second.contentHash));
+            sceneContext.RequestMaterialThumbnailCapture(ThumbnailPath(assetId, contentHash));
         if (captureId == 0U) {
             // Another capture still owns the channel; try again on a later frame.
             EditorCrashBreadcrumbs::WriteValue("material_thumbnail", "capture request refused", assetId);
@@ -592,7 +590,13 @@ void EditorMaterialThumbnailService::BeginNextCapture(
         EditorCrashBreadcrumbs::WriteValue("material_thumbnail", "capture started", assetId);
         entry->second.state = EntryState::Capturing;
         ++entry->second.attempts;
-        capture_ = Capture{ .assetId = assetId, .captureId = captureId, .framesWaited = 0, .presented = true };
+        capture_ = Capture{
+            .assetId = assetId,
+            .contentHash = contentHash,
+            .captureId = captureId,
+            .framesWaited = 0,
+            .presented = true,
+        };
         return;
     }
 }
@@ -617,7 +621,17 @@ void EditorMaterialThumbnailService::PollCapture(
     ++capture_.framesWaited;
     const kb::scene::SceneScreenCaptureStatus status = sceneContext.MaterialThumbnailCaptureStatus(capture_.captureId);
     if (status == kb::scene::SceneScreenCaptureStatus::Completed) {
-        if (LoadPng(ThumbnailPath(capture_.assetId, entry->second.contentHash), entry->second.image)) {
+        if (entry->second.contentHash != capture_.contentHash) {
+            // The asset changed while this asynchronous capture was in flight. Its PNG belongs to the old
+            // generation; keep the current entry queued and let the next capture render the current material.
+            entry->second.state = EntryState::Queued;
+            if (std::ranges::find(queue_, capture_.assetId) == queue_.end()) {
+                queue_.push_back(capture_.assetId);
+            }
+            capture_ = Capture{};
+            return;
+        }
+        if (LoadPng(ThumbnailPath(capture_.assetId, capture_.contentHash), entry->second.image)) {
             EditorMaterialThumbnailService::ProcessCapture(entry->second.image);
             entry->second.state = EntryState::Ready;
             EditorCrashBreadcrumbs::WriteValue("material_thumbnail", "ready", capture_.assetId);
@@ -639,7 +653,9 @@ void EditorMaterialThumbnailService::PollCapture(
             capture_.assetId);
         if (retryable) {
             entry->second.state = EntryState::Queued;
-            queue_.push_back(capture_.assetId);
+            if (std::ranges::find(queue_, capture_.assetId) == queue_.end()) {
+                queue_.push_back(capture_.assetId);
+            }
         } else {
             // Honest terminal answer: the tile keeps its painted stand-in instead of retrying forever.
             entry->second.state = EntryState::Failed;
