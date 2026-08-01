@@ -96,7 +96,24 @@ namespace {
         tool.brushShapeMenuOpen = false;
         return true;
     }
+    if (PointInRect(toolbar.paintButton, x, y)) {
+        const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(selected);
+        if (terrain == nullptr || terrain->materialLayers.empty()) {
+            sceneContext.Console().Warning("Terrain", "Add a material layer in the Inspector before painting.");
+            return true;
+        }
+        tool.selectedMaterialLayer = std::min<std::uint8_t>(
+            tool.selectedMaterialLayer,
+            static_cast<std::uint8_t>(terrain->materialLayers.size() - 1U));
+        tool.mode = EditorTerrainToolMode::Paint;
+        tool.editingEnabled = true;
+        tool.brush.strength = std::min(tool.brush.strength, 1.0F);
+        tool.brushMenuOpen = false;
+        tool.brushShapeMenuOpen = false;
+        return true;
+    }
     if (PointInRect(toolbar.brushButton, x, y)) {
+        if (tool.mode == EditorTerrainToolMode::Paint) return true;
         tool.brushMenuOpen = !tool.brushMenuOpen;
         tool.brushShapeMenuOpen = false;
         return true;
@@ -141,7 +158,8 @@ namespace {
         return true;
     }
     if (PointInRect(toolbar.strengthPlusButton, x, y)) {
-        tool.brush.strength = std::min(100'000.0F, tool.brush.strength + 0.25F);
+        const float maximum = tool.mode == EditorTerrainToolMode::Paint ? 1.0F : 100'000.0F;
+        tool.brush.strength = std::min(maximum, tool.brush.strength + 0.25F);
         return true;
     }
     return PointInRect(toolbar.panel, x, y);

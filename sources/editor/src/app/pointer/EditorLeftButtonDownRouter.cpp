@@ -253,6 +253,16 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
     return point;
 }
 
+[[nodiscard]] std::optional<std::uint8_t> TerrainMaterialLayerPickerForProperty(InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::TerrainMaterialLayerPicker0: return 0U;
+    case InspectorPropertyId::TerrainMaterialLayerPicker1: return 1U;
+    case InspectorPropertyId::TerrainMaterialLayerPicker2: return 2U;
+    case InspectorPropertyId::TerrainMaterialLayerPicker3: return 3U;
+    default: return std::nullopt;
+    }
+}
+
 [[nodiscard]] std::optional<std::filesystem::path> ShowTerrainHeightmapDialog(HWND owner) {
     std::array<wchar_t, 32768U> path{};
     OPENFILENAMEW dialog{};
@@ -981,6 +991,32 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             return;
         }
         const std::optional<std::uint32_t> materialSlotPicker = MeshRendererMaterialSlotPickerForProperty(hit.property);
+        const std::optional<std::uint8_t> terrainLayerPicker = TerrainMaterialLayerPickerForProperty(hit.property);
+        if (hit.section == InspectorSectionId::Terrain &&
+            (terrainLayerPicker.has_value() || hit.property == InspectorPropertyId::TerrainMaterialLayerAdd)) {
+            const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+            const std::optional<kb::assets::TerrainAsset> terrain =
+                EditorTerrainService::Load(sceneContext_.Scene(), entity);
+            const std::uint64_t current = terrainLayerPicker.has_value() && terrain.has_value() &&
+                    *terrainLayerPicker < terrain->materialLayers.size()
+                ? terrain->materialLayers[*terrainLayerPicker].materialAssetId
+                : 0U;
+            const EditorMaterialAssetPickerDialog::Result result = EditorMaterialAssetPickerDialog::Show(
+                mainWindow_, MakeEditorDarkTheme(), sceneContext_, kb::assets::AssetId{ current });
+            if (result.accepted) {
+                std::string error;
+                const bool assigned = terrainLayerPicker.has_value()
+                    ? sceneContext_.SetTerrainMaterialLayer(entity, *terrainLayerPicker, result.assetId, &error)
+                    : sceneContext_.AddTerrainMaterialLayer(entity, result.assetId, &error);
+                if (!assigned) {
+                    sceneContext_.Console().Warning("Terrain", error.empty() ? "Material layer could not be updated." : error);
+                } else {
+                    sceneViewport_.RequestPresent();
+                }
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
         if ((hit.section == InspectorSectionId::MeshRenderer || hit.section == InspectorSectionId::Terrain)
             && (hit.property == InspectorPropertyId::MeshRendererMaterialPicker || materialSlotPicker.has_value())) {
             const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();

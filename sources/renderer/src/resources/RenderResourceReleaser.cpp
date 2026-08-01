@@ -12,6 +12,9 @@ void RenderResourceReleaser::ReleaseMesh(RenderMeshResource& resource) noexcept 
     if (bgfx::isValid(resource.dynamicVertexBuffer)) {
         bgfx::destroy(resource.dynamicVertexBuffer);
     }
+    if (bgfx::isValid(resource.terrainLayerWeightTexture)) {
+        bgfx::destroy(resource.terrainLayerWeightTexture);
+    }
     resource = RenderMeshResource{};
 }
 

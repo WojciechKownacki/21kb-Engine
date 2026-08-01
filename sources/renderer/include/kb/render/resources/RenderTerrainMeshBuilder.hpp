@@ -25,6 +25,10 @@ public:
         const kb::assets::TerrainAsset& terrain,
         const RenderTerrainMeshUpdateRegion& region,
         RenderMeshAssetData& mesh) noexcept;
+    [[nodiscard]] static bool UpdateDynamicLayerPreview(
+        const kb::assets::TerrainAsset& terrain,
+        const RenderTerrainLayerWeightUpdateRegion& region,
+        RenderMeshAssetData& mesh) noexcept;
 };
 
 } // namespace kb::render

@@ -2,6 +2,7 @@
 
 #include "TerrainBrush.hpp"
 #include "TerrainHeightmapImporter.hpp"
+#include "TerrainLayerPainter.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/TerrainAsset.hpp"
 #include "engine/scene/SceneEntity.hpp"
@@ -21,6 +22,7 @@ enum class EditorTerrainToolMode : std::uint8_t {
     Select,
     Sculpt,
     Holes,
+    Paint,
 };
 
 struct EditorTerrainToolState {
@@ -31,6 +33,7 @@ struct EditorTerrainToolState {
     float lastStampX = 0.0F;
     float lastStampZ = 0.0F;
     EditorTerrainToolMode mode = EditorTerrainToolMode::Sculpt;
+    std::uint8_t selectedMaterialLayer = 0U;
     bool brushMenuOpen = false;
     bool brushShapeMenuOpen = false;
     bool hoverVisible = false;
@@ -87,6 +90,11 @@ public:
         const kb::assets::TerrainAsset& terrain,
         const kb::terrain_editor::TerrainBrushResult& changedRegion,
         bool topologyChanged,
+        std::shared_ptr<kb::render::RenderMeshAssetData>& mesh,
+        std::string* error = nullptr);
+    [[nodiscard]] static bool UpdateLayerPreviewMesh(
+        const kb::assets::TerrainAsset& terrain,
+        const kb::terrain_editor::TerrainLayerPaintResult& changedRegion,
         std::shared_ptr<kb::render::RenderMeshAssetData>& mesh,
         std::string* error = nullptr);
     [[nodiscard]] static bool PublishPreview(
