@@ -12,6 +12,7 @@
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 
+#include <algorithm>
 #include <vector>
 
 namespace kb::render {
@@ -156,12 +157,39 @@ void RuntimeMeshResourceEnsurer::Ensure(
             asset->dynamicVertexUpdates && asset->dynamicTopologyKey != 0U &&
             cacheIt->second.dynamicTopologyKey == asset->dynamicTopologyKey &&
             cacheIt->second.dynamicVertexUpdateCount <= asset->dynamicVertexUpdateRanges.size() &&
+            cacheIt->second.dynamicSectionUpdateCount <= asset->dynamicSectionUpdateIndices.size() &&
             context.sceneRenderer.Resources().ContainsMesh(cacheIt->second.handle)) {
+            if (cacheIt->second.dynamicVertexUpdateCount == asset->dynamicVertexUpdateRanges.size() &&
+                cacheIt->second.dynamicSectionUpdateCount == asset->dynamicSectionUpdateIndices.size()) {
+                cacheIt->second.contentHash = metadata->contentHash;
+                cacheIt->second.lastReferencedFrame = context.currentFrame;
+                context.sceneRenderer.ResourceMap().BindMesh(meshAssetId, cacheIt->second.handle);
+                return;
+            }
+            std::vector<RenderMeshVertexUpdateRange> pendingUpdates{
+                asset->dynamicVertexUpdateRanges.begin() + static_cast<std::ptrdiff_t>(cacheIt->second.dynamicVertexUpdateCount),
+                asset->dynamicVertexUpdateRanges.end(),
+            };
+            std::ranges::sort(pendingUpdates, {}, &RenderMeshVertexUpdateRange::firstVertex);
+            std::size_t mergedCount = 0U;
+            for (const RenderMeshVertexUpdateRange& update : pendingUpdates) {
+                if (update.vertexCount == 0U) continue;
+                if (mergedCount == 0U) {
+                    pendingUpdates[mergedCount++] = update;
+                    continue;
+                }
+                RenderMeshVertexUpdateRange& previous = pendingUpdates[mergedCount - 1U];
+                const std::uint32_t previousEnd = previous.firstVertex + previous.vertexCount;
+                const std::uint32_t updateEnd = update.firstVertex + update.vertexCount;
+                if (update.firstVertex <= previousEnd) {
+                    previous.vertexCount = std::max(previousEnd, updateEnd) - previous.firstVertex;
+                } else {
+                    pendingUpdates[mergedCount++] = update;
+                }
+            }
             bool updated = true;
-            for (std::size_t updateIndex = cacheIt->second.dynamicVertexUpdateCount;
-                 updateIndex < asset->dynamicVertexUpdateRanges.size();
-                 ++updateIndex) {
-                const RenderMeshVertexUpdateRange& update = asset->dynamicVertexUpdateRanges[updateIndex];
+            for (std::size_t updateIndex = 0U; updateIndex < mergedCount; ++updateIndex) {
+                const RenderMeshVertexUpdateRange& update = pendingUpdates[updateIndex];
                 if (!context.sceneRenderer.Resources().UpdateMeshVertices(
                         cacheIt->second.handle,
                         asset->desc,
@@ -171,9 +199,18 @@ void RuntimeMeshResourceEnsurer::Ensure(
                     break;
                 }
             }
+            std::vector<std::uint32_t> dirtySections{
+                asset->dynamicSectionUpdateIndices.begin() + static_cast<std::ptrdiff_t>(cacheIt->second.dynamicSectionUpdateCount),
+                asset->dynamicSectionUpdateIndices.end(),
+            };
+            std::ranges::sort(dirtySections);
+            dirtySections.erase(std::unique(dirtySections.begin(), dirtySections.end()), dirtySections.end());
+            updated = updated && context.sceneRenderer.Resources().UpdateMeshGeometryMetadata(
+                cacheIt->second.handle, asset->desc, dirtySections);
             if (updated) {
                 cacheIt->second.contentHash = metadata->contentHash;
                 cacheIt->second.dynamicVertexUpdateCount = asset->dynamicVertexUpdateRanges.size();
+                cacheIt->second.dynamicSectionUpdateCount = asset->dynamicSectionUpdateIndices.size();
                 cacheIt->second.lastReferencedFrame = context.currentFrame;
                 context.sceneRenderer.ResourceMap().BindMesh(meshAssetId, cacheIt->second.handle);
                 return;
@@ -255,6 +292,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
             .contentHash = metadata->contentHash,
             .dynamicTopologyKey = asset->dynamicTopologyKey,
             .dynamicVertexUpdateCount = asset->dynamicVertexUpdateRanges.size(),
+            .dynamicSectionUpdateCount = asset->dynamicSectionUpdateIndices.size(),
             .lastReferencedFrame = context.currentFrame,
             .dynamicVertexUpdates = asset->dynamicVertexUpdates,
         };

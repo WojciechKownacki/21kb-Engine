@@ -235,6 +235,11 @@ bool RenderTerrainMeshBuilder::PrepareDynamicPreview(
         .firstVertex = mesh.vertexUpdateFirst,
         .vertexCount = mesh.vertexUpdateCount,
     });
+    mesh.dynamicSectionUpdateIndices.clear();
+    mesh.dynamicSectionUpdateIndices.reserve(mesh.sections.size());
+    for (std::uint32_t sectionIndex = 0U; sectionIndex < mesh.sections.size(); ++sectionIndex) {
+        mesh.dynamicSectionUpdateIndices.push_back(sectionIndex);
+    }
     mesh.RefreshDesc();
     return true;
 }
@@ -265,11 +270,14 @@ bool RenderTerrainMeshBuilder::UpdateDynamicPreview(
         }
     }
     mesh.vertexUpdateFirst = minZ * terrain.width + minX;
-    mesh.vertexUpdateCount = (maxZ * terrain.width + maxX) - mesh.vertexUpdateFirst + 1U;
-    mesh.dynamicVertexUpdateRanges.push_back(RenderMeshVertexUpdateRange{
-        .firstVertex = mesh.vertexUpdateFirst,
-        .vertexCount = mesh.vertexUpdateCount,
-    });
+    const std::uint32_t updateWidth = maxX - minX + 1U;
+    mesh.vertexUpdateCount = updateWidth * (maxZ - minZ + 1U);
+    for (std::uint32_t z = minZ; z <= maxZ; ++z) {
+        mesh.dynamicVertexUpdateRanges.push_back(RenderMeshVertexUpdateRange{
+            .firstVertex = z * terrain.width + minX,
+            .vertexCount = updateWidth,
+        });
+    }
 
     const float worldMinX = static_cast<float>(minX) * (terrain.worldSizeX / static_cast<float>(terrain.width - 1U)) - terrain.worldSizeX * 0.5F;
     const float worldMaxX = static_cast<float>(maxX) * (terrain.worldSizeX / static_cast<float>(terrain.width - 1U)) - terrain.worldSizeX * 0.5F;
@@ -302,6 +310,7 @@ bool RenderTerrainMeshBuilder::UpdateDynamicPreview(
                 RenderBoundsSphere& sectionBounds = mesh.sections[sectionIndex].bounds;
                 for (const RenderStaticMeshVertexP3N3T4UV2& corner : corners) ExpandBounds(sectionBounds, corner);
                 if (sectionIndex < mesh.meshlets.size()) mesh.meshlets[sectionIndex].bounds = sectionBounds;
+                mesh.dynamicSectionUpdateIndices.push_back(sectionIndex);
             }
         }
     }

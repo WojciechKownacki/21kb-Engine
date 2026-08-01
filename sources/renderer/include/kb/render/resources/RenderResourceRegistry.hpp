@@ -5,6 +5,7 @@
 #include "kb/render/resources/detail/RenderResourceSlotPool.hpp"
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace kb::render {
@@ -48,6 +49,10 @@ public:
         const RenderMeshDesc& desc,
         std::uint32_t firstVertex,
         std::uint32_t vertexCount);
+    [[nodiscard]] bool UpdateMeshGeometryMetadata(
+        RenderMeshHandle handle,
+        const RenderMeshDesc& desc,
+        std::span<const std::uint32_t> sectionIndices);
     void DestroyMesh(RenderMeshHandle handle) noexcept;
 
     [[nodiscard]] RenderMaterialHandle RegisterMaterial(const RenderMaterialDesc& desc);
