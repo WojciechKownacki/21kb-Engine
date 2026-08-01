@@ -2183,6 +2183,13 @@ constexpr int kTerrainLayerPreviewSize = 52;
     return Rect(card.right - size - 7, card.bottom - size - 7, card.right - 7, card.bottom - 7);
 }
 
+[[nodiscard]] RECT TerrainLayerRemoveRect(const RECT& card) noexcept {
+    constexpr int size = 22;
+    constexpr int gap = 4;
+    const RECT reveal = TerrainLayerPickerRect(card);
+    return Rect(reveal.left - gap - size, reveal.top, reveal.left - gap, reveal.bottom);
+}
+
 class TerrainMaterialPreviewCache {
 public:
     [[nodiscard]] const ProjectFilesMaterialPreviewImage& PreviewFor(
@@ -2248,8 +2255,9 @@ void DrawTerrainLayerCard(
 
     const RECT preview = Rect(card.left + 7, card.top + 13, card.left + 7 + kTerrainLayerPreviewSize, card.top + 13 + kTerrainLayerPreviewSize);
     const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
-    if (const kb::assets::AssetMetadata* metadata = manager.Registry().Find(kb::assets::AssetId{ materialAssetId }); metadata != nullptr) {
-        DrawTerrainMaterialPreview(dc, preview, TerrainLayerPreviewCache().PreviewFor(*metadata, manager));
+    const kb::assets::AssetMetadata* materialMetadata = manager.Registry().Find(kb::assets::AssetId{ materialAssetId });
+    if (materialMetadata != nullptr) {
+        DrawTerrainMaterialPreview(dc, preview, TerrainLayerPreviewCache().PreviewFor(*materialMetadata, manager));
     } else {
         DrawFrame(dc, preview, Rgb(24, 27, 31), Color(theme.borderPanel));
         HeroIconPainter::Draw(dc, Shrink(preview, 15, 15, 15, 15), HeroIconKind::Cube, Color(theme.textDisabled), 1);
@@ -2258,8 +2266,23 @@ void DrawTerrainLayerCard(
     const RECT picker = TerrainLayerPickerRect(card);
     const InspectorPropertyId pickerProperty = TerrainLayerPickerProperty(index);
     const bool pickerHovered = inspector.IsHovered(InspectorHitKind::Row, InspectorSectionId::Terrain, pickerProperty);
-    DrawFrame(dc, picker, pickerHovered ? HoverFill(theme) : Color(theme.toolbarButton), Color(theme.borderPanel));
-    HeroIconPainter::Draw(dc, Shrink(picker, 4, 4, 4, 4), HeroIconKind::EllipsisHorizontal, Color(theme.textSecondary), 1);
+    DrawFrame(dc, picker,
+        pickerHovered && materialMetadata != nullptr ? HoverFill(theme) : Color(theme.toolbarButton),
+        Color(theme.borderPanel));
+    HeroIconPainter::Draw(dc, Shrink(picker, 4, 4, 4, 4), HeroIconKind::MagnifyingGlass,
+        materialMetadata != nullptr ? Color(theme.textSecondary) : Color(theme.textDisabled), 1);
+
+    const RECT remove = TerrainLayerRemoveRect(card);
+    const bool removeHovered = inspector.IsHovered(
+        InspectorHitKind::Row,
+        InspectorSectionId::Terrain,
+        InspectorPropertyId::TerrainMaterialLayerRemove,
+        static_cast<int>(index));
+    DrawFrame(dc, remove,
+        removeHovered ? Rgb(74, 35, 39) : Color(theme.toolbarButton),
+        removeHovered ? Rgb(188, 70, 79) : Color(theme.borderPanel));
+    HeroIconPainter::Draw(dc, Shrink(remove, 5, 5, 5, 5), HeroIconKind::XMark,
+        removeHovered ? Rgb(238, 113, 121) : Color(theme.textSecondary), 1);
 
     const int textLeft = preview.right + 8;
     const int textRight = card.right - 7;
@@ -2279,7 +2302,7 @@ void DrawTerrainLayerCard(
     {
         ScopedFont font(9, FW_NORMAL);
         const ScopedGdiObject selectedFont(dc, font.handle);
-        Text(dc, Rect(textLeft, card.top + 46, picker.left - 5, card.bottom - 7),
+        Text(dc, Rect(textLeft, card.top + 46, remove.left - 5, card.bottom - 7),
             "Material", Color(theme.textDisabled));
     }
 
@@ -3612,6 +3635,16 @@ void AdvanceGroup(int& y) noexcept {
         for (std::size_t index = 0U; index < layerCount; ++index) {
             const RECT card = TerrainLayerCardRect(layerBody, index);
             const RECT picker = TerrainLayerPickerRect(card);
+            const RECT remove = TerrainLayerRemoveRect(card);
+            if (Contains(remove, x, yPoint)) {
+                InspectorPanelRenderer::Hit hit = MakeHit(
+                    InspectorHitKind::Row,
+                    InspectorSectionId::Terrain,
+                    InspectorPropertyId::TerrainMaterialLayerRemove,
+                    remove);
+                hit.index = static_cast<int>(index);
+                return hit;
+            }
             if (Contains(picker, x, yPoint)) {
                 return MakeHit(InspectorHitKind::Row, InspectorSectionId::Terrain, TerrainLayerPickerProperty(index), picker);
             }
