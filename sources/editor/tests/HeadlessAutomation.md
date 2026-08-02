@@ -114,6 +114,7 @@ scenario-local aliases.
 | `assert_ui_element` | `entity`, numeric `element`; optional `exists`, `visible`, `kind`; queries the live runtime UI tree in Play Mode |
 | `assert_parent` | `entity`, `parent` |
 | `assert_asset` | virtual `path`; optional `type`, `exists` |
+| `assert_asset_compatibility` | `asset` alias or virtual path and expected boolean `compatible`; evaluates production AssetManager dependency compatibility |
 | `assert_skeleton_asset` | `asset` alias or virtual path, expected unsigned `bone_count`; force-loads the production Skeleton asset and verifies its canonical compatibility signature |
 | `assert_skeletal_mesh_asset` | `asset` alias or virtual path and expected unsigned `lod_count`; force-loads the canonical SkeletalMesh asset |
 | `assert_skeletal_animation_clip` | `asset` alias or virtual path, `skeleton_id`, `skeleton_signature`, `bone_count`, `morph_count`, `curve_count`, `root_motion_bone`; force-loads the production skeletal AnimationClip and verifies stable bindings and root-motion contract |

@@ -20,6 +20,9 @@ enum class AssetCompatibilityIssue : std::uint8_t {
     // so it can never be loaded here (e.g. a "RenderMesh" asset validated in
     // a headless build with no renderer loaders). The asset is `asset`.
     IncompatibleType,
+    // A registered dependency has the required broad asset type but violates
+    // an asset-specific runtime contract, such as a skeleton signature.
+    IncompatibleDependency,
 };
 
 [[nodiscard]] std::string_view ToString(AssetCompatibilityIssue issue) noexcept;

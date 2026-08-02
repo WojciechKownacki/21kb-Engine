@@ -2178,6 +2178,18 @@ ReadScriptValue(
             metadata == nullptr ? "absent" : metadata->type };
     }
 
+    if (*operation == "assert_asset_compatibility") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto expected = BoolMember(step, "compatible", error);
+        if (!asset || !expected) return { false, error };
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        if (!id.IsValid()) return { false, "asset was not found" };
+        const kb::assets::AssetCompatibilityReport report =
+            state.context.Scene().Assets().Manager().ValidateCompatibility(id);
+        const bool matched = report.compatible == *expected;
+        return { matched, matched ? "compatible" : report.FormatDiagnostics() };
+    }
+
     if (*operation == "assert_skeleton_asset") {
         const auto asset = StringMember(step, "asset", error);
         const auto boneCount = UInt32Member(step, "bone_count", error);

@@ -10,6 +10,12 @@ public:
     [[nodiscard]] std::type_index PayloadType() const noexcept override;
     [[nodiscard]] std::vector<std::string> Extensions() const override;
     [[nodiscard]] kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest& request) override;
+    [[nodiscard]] std::vector<kb::assets::AssetId> DiscoverDependencies(
+        const kb::assets::AssetMetadata& metadata,
+        const kb::assets::AssetRegistry& registry) const override;
+    [[nodiscard]] std::optional<std::string> ValidateDependencies(
+        const kb::assets::AssetMetadata& metadata,
+        const kb::assets::AssetRegistry& registry) const override;
 };
 
 class AnimatorControllerAssetLoader final : public kb::assets::IAssetLoader {
