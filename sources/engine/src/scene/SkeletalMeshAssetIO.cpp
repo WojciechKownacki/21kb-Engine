@@ -20,15 +20,31 @@ namespace {
 }
 } // namespace
 
-std::optional<SkeletalMeshAsset> SkeletalMeshAssetIO::Load(const std::filesystem::path& path) {
-    if (path.extension() != kSkeletalMeshAssetExtension) return std::nullopt;
-    const auto text = Read(path); if (!text) return std::nullopt;
+std::optional<SkeletalMeshAsset> SkeletalMeshAssetIO::Load(
+    const std::filesystem::path& path,
+    std::string* error) {
+    const auto fail = [error](std::string message) -> std::optional<SkeletalMeshAsset> {
+        if (error != nullptr) *error = std::move(message);
+        return std::nullopt;
+    };
+    if (error != nullptr) error->clear();
+    if (path.extension() != kSkeletalMeshAssetExtension) {
+        return fail("Skeletal mesh asset has an unexpected file extension.");
+    }
+    const auto text = Read(path);
+    if (!text) return fail("Skeletal mesh asset could not be read.");
     SkeletalMeshAsset asset{}; std::vector<SkeletalMeshMorphTarget> morphs;
     std::istringstream file{ *text }; file.imbue(std::locale::classic()); std::string line;
     bool schemaRead = false;
+    std::size_t lineNumber = 0U;
     while (std::getline(file, line)) {
+        ++lineNumber;
         std::istringstream in{ line }; in.imbue(std::locale::classic()); std::string cmd;
         if (!(in >> cmd) || cmd.starts_with('#')) continue;
+        if (error != nullptr) {
+            *error = "Skeletal mesh asset has an invalid record at line " +
+                std::to_string(lineNumber) + ".";
+        }
         if (!schemaRead) {
             const asset_io::TextAssetHeaderStatus header =
                 asset_io::ParseTextAssetHeader(
@@ -49,7 +65,12 @@ std::optional<SkeletalMeshAsset> SkeletalMeshAssetIO::Load(const std::filesystem
         else if (cmd == "delta") { std::size_t m=0; SkeletalMeshMorphDelta d{}; if (!(in>>m>>d.vertexIndex>>d.positionDelta.x>>d.positionDelta.y>>d.positionDelta.z>>d.normalDelta.x>>d.normalDelta.y>>d.normalDelta.z>>d.tangentDelta.x>>d.tangentDelta.y>>d.tangentDelta.z)||m>=morphs.size()||!End(in)) return std::nullopt; morphs[m].deltas.push_back(d); }
         else return std::nullopt;
     }
-    asset.morphTargets=std::move(morphs); return ValidateSkeletalMeshAsset(asset).valid ? std::optional<SkeletalMeshAsset>{std::move(asset)} : std::nullopt;
+    asset.morphTargets = std::move(morphs);
+    const SkeletalMeshAssetValidationResult validation =
+        ValidateSkeletalMeshAsset(asset);
+    if (!validation.valid) return fail(validation.error);
+    if (error != nullptr) error->clear();
+    return asset;
 }
 
 bool SkeletalMeshAssetIO::Save(const std::filesystem::path& path, const SkeletalMeshAsset& asset) {

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <string>
 
 namespace kb::scene {
 
@@ -19,8 +20,12 @@ class AnimationAssetIO final {
 public:
     AnimationAssetIO() = delete;
 
-    [[nodiscard]] static std::optional<AnimationClip> LoadClip(const std::filesystem::path& path);
-    [[nodiscard]] static std::optional<AnimatorController> LoadController(const std::filesystem::path& path);
+    [[nodiscard]] static std::optional<AnimationClip> LoadClip(
+        const std::filesystem::path& path,
+        std::string* error = nullptr);
+    [[nodiscard]] static std::optional<AnimatorController> LoadController(
+        const std::filesystem::path& path,
+        std::string* error = nullptr);
     [[nodiscard]] static bool SaveClip(const std::filesystem::path& path, const AnimationClip& clip);
     [[nodiscard]] static bool SaveController(const std::filesystem::path& path, const AnimatorController& controller);
 };

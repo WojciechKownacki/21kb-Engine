@@ -11,9 +11,10 @@ std::type_index SkeletalMeshAssetLoader::PayloadType() const noexcept { return t
 std::vector<std::string> SkeletalMeshAssetLoader::Extensions() const { return { kSkeletalMeshAssetExtension }; }
 
 kb::assets::AssetLoadResult SkeletalMeshAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    auto asset = SkeletalMeshAssetIO::Load(request.resolvedPath);
+    std::string error;
+    auto asset = SkeletalMeshAssetIO::Load(request.resolvedPath, &error);
     return asset ? kb::assets::AssetLoadResult{ std::make_shared<SkeletalMeshAsset>(std::move(*asset)), {} }
-                 : kb::assets::AssetLoadResult{ {}, "Skeletal mesh asset could not be loaded or validated." };
+                 : kb::assets::AssetLoadResult{ {}, std::move(error) };
 }
 
 } // namespace kb::scene
