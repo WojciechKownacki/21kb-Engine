@@ -3,6 +3,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -77,6 +78,8 @@ std::optional<SkeletalMeshGltfImportPlan> SkeletalMeshGltfImportPlanner::Plan(
         .imported = std::move(*imported),
         .skeletonAssetId = selected,
         .skeletonVirtualPath = std::move(selectedPath),
+        .meshVirtualPath = std::filesystem::path{ normalizedFolder } /
+            (sourcePath.stem().string() + kSkeletalMeshAssetExtension),
         .reusesSkeleton = reuse,
     };
 }

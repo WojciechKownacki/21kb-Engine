@@ -227,6 +227,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SkeletalMeshAsset.hpp
     include/engine/scene/SkeletalMeshGltfImporter.hpp
     include/engine/scene/SkeletalMeshGltfImportPlanner.hpp
+    include/engine/scene/SkeletalMeshGltfImportPublisher.hpp
     include/engine/scene/SkeletalMeshAssetIO.hpp
     include/engine/scene/SkeletalMeshAssetLoader.hpp
     include/engine/scene/UIAssets.hpp
@@ -598,6 +599,7 @@ add_library(kb_engine STATIC
     src/scene/SkeletalMeshAsset.cpp
     src/scene/SkeletalMeshGltfImporter.cpp
     src/scene/SkeletalMeshGltfImportPlanner.cpp
+    src/scene/SkeletalMeshGltfImportPublisher.cpp
     src/scene/SkeletalMeshAssetIO.cpp
     src/scene/SkeletalMeshAssetLoader.cpp
     src/scene/TimelineAssetIO.cpp
