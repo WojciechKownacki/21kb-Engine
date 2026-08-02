@@ -186,6 +186,16 @@ std::optional<std::string> InspectorPanelTextBuilder::Build(const EditorSceneCon
             "\nSpeed: " + std::to_string(animator->speed) +
             "\nEnabled: " + std::string{ animator->enabled ? "true" : "false" };
     }
+    if (const kb::scene::SkeletonBindingComponent* binding = sceneContext.Scene().Components().SkeletonBindings().TryGet(selected); binding != nullptr) {
+        text += "\n\nSkeleton Binding\nSkeleton: " + std::to_string(binding->skeletonAssetId) +
+            "\nEnabled: " + std::string{ binding->enabled ? "true" : "false" };
+    }
+    if (const kb::scene::DrawD3DeformedGeometryComponent* geometry = sceneContext.Scene().Components().DeformedGeometries().TryGet(selected); geometry != nullptr) {
+        text += "\n\nDeformed Geometry\nSkeletal Mesh: " + std::to_string(geometry->skeletalMeshAssetId) +
+            "\nCasts Shadow: " + std::string{ geometry->castsShadow ? "true" : "false" } +
+            "\nReceives Shadow: " + std::string{ geometry->receivesShadow ? "true" : "false" } +
+            "\nEnabled: " + std::string{ geometry->enabled ? "true" : "false" };
+    }
     if (const kb::scene::UIDocumentComponent* document = sceneContext.Scene().Components().UIDocuments().TryGet(selected); document != nullptr) {
         text += "\n\nUI Document\nDocument: " + std::to_string(document->documentAssetId) +
             "\nEnabled: " + std::string{ document->enabled ? "true" : "false" };

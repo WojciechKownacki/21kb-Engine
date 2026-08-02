@@ -17,7 +17,7 @@ DrawD3DeformedGeometryComponent* SceneComponentMutationService::TryGetDeformedGe
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.DeformedGeometries().TryGet(entity) : nullptr;
 }
 bool SceneComponentMutationService::SetDeformedGeometry(Scene& scene, SceneEntity entity, const DrawD3DeformedGeometryComponent& geometry) {
-    if (!SceneEntityService::IsAlive(scene, entity) || !IsDrawD3DeformedGeometryComponentValid(geometry)) return false;
+    if (!SceneEntityService::IsAlive(scene, entity) || !IsDrawD3DeformedGeometryComponentPersistable(geometry)) return false;
     if (geometry.poseSource.IsValid() && !SceneEntityService::IsAlive(scene, geometry.poseSource)) return false;
     SceneState& state = SceneAccess::State(scene);
     state.componentStorage.DeformedGeometries().Set(entity, geometry);

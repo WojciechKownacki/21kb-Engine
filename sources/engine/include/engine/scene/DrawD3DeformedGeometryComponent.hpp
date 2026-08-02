@@ -30,13 +30,20 @@ struct DrawD3DeformedGeometryComponent {
     bool castsShadow = true;
     bool receivesShadow = true;
     std::uint32_t layer = 1U;
-    bool enabled = true;
+    bool enabled = false;
 };
 
 [[nodiscard]] constexpr bool IsDrawD3DeformedGeometryComponentValid(
     const DrawD3DeformedGeometryComponent& value) noexcept {
     return value.skeletalMeshAssetId != 0U &&
         value.materialSlotOverrideCount <= kMaxDeformedGeometryMaterialSlotOverrides;
+}
+
+[[nodiscard]] constexpr bool IsDrawD3DeformedGeometryComponentPersistable(
+    const DrawD3DeformedGeometryComponent& value) noexcept {
+    return IsDrawD3DeformedGeometryComponentValid(value) ||
+        (!value.enabled && value.skeletalMeshAssetId == 0U &&
+         value.materialSlotOverrideCount == 0U && !value.poseSource.IsValid());
 }
 
 } // namespace kb::scene

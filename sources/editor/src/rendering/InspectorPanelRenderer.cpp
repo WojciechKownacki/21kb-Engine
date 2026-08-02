@@ -10,12 +10,14 @@
 #include "engine/assets/IAssetLoader.hpp"
 #include "engine/input/InputAssetIO.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTagCatalog.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SkeletonBindingComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
@@ -206,6 +208,31 @@ constexpr std::array<InspectorRowDefinition, 3> kAnimatorRows{ {
     { InspectorPropertyId::AnimatorEnabled, InspectorRowValueKind::Bool },
     { InspectorPropertyId::AnimatorRootMotionOwner, InspectorRowValueKind::Text },
 } };
+
+constexpr std::array<InspectorRowDefinition, 1> kSkeletonBindingRows{ {
+    { InspectorPropertyId::SkeletonBindingEnabled, InspectorRowValueKind::Bool },
+} };
+
+constexpr std::array<InspectorRowDefinition, 3> kDeformedGeometryRows{ {
+    { InspectorPropertyId::DeformedGeometryCastsShadow, InspectorRowValueKind::Bool },
+    { InspectorPropertyId::DeformedGeometryReceivesShadow, InspectorRowValueKind::Bool },
+    { InspectorPropertyId::DeformedGeometryEnabled, InspectorRowValueKind::Bool },
+} };
+
+constexpr std::array<const char*, kb::scene::kMaxDeformedGeometryMaterialSlotOverrides> kDeformedGeometryMaterialSlotLabels{ {
+    "Material Slot 0", "Material Slot 1", "Material Slot 2", "Material Slot 3",
+    "Material Slot 4", "Material Slot 5", "Material Slot 6", "Material Slot 7",
+} };
+
+[[nodiscard]] constexpr InspectorPropertyId DeformedGeometryMaterialSlotProperty(std::uint32_t slot) noexcept {
+    return static_cast<InspectorPropertyId>(
+        static_cast<std::uint16_t>(InspectorPropertyId::DeformedGeometryMaterialSlot0) + slot * 2U);
+}
+
+[[nodiscard]] constexpr InspectorPropertyId DeformedGeometryMaterialSlotPickerProperty(std::uint32_t slot) noexcept {
+    return static_cast<InspectorPropertyId>(
+        static_cast<std::uint16_t>(InspectorPropertyId::DeformedGeometryMaterialSlotPicker0) + slot * 2U);
+}
 
 constexpr std::array<InspectorRowDefinition, 2> kUIDocumentRows{ {
     { InspectorPropertyId::UIDocumentAsset, InspectorRowValueKind::Text },
@@ -1500,6 +1527,56 @@ void PaintUIDocumentSection(
         InspectorSectionId::UIDocument, HeroIconKind::DocumentText, "UI Document");
     section.Field("Document", AssetDisplayName(sceneContext, document.documentAssetId), InspectorPropertyId::UIDocumentAsset);
     section.Bool("Enabled", document.enabled, InspectorPropertyId::UIDocumentEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
+void PaintSkeletonBindingSection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const EditorSceneContext& sceneContext,
+    const kb::scene::SkeletonBindingComponent& binding) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
+        InspectorSectionId::SkeletonBinding, HeroIconKind::AdjustmentsHorizontal, "Skeleton Binding", true);
+    section.AssetField(
+        "Skeleton",
+        AssetDisplayName(sceneContext, binding.skeletonAssetId),
+        InspectorPropertyId::SkeletonBindingAsset,
+        InspectorPropertyId::SkeletonBindingAssetPicker);
+    section.Bool("Enabled", binding.enabled, InspectorPropertyId::SkeletonBindingEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
+void PaintDeformedGeometrySection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const EditorSceneContext& sceneContext,
+    const kb::scene::DrawD3DeformedGeometryComponent& geometry) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
+        InspectorSectionId::DeformedGeometry, HeroIconKind::Cube, "Deformed Geometry", true);
+    section.AssetField(
+        "Skeletal Mesh",
+        AssetDisplayName(sceneContext, geometry.skeletalMeshAssetId),
+        InspectorPropertyId::DeformedGeometryMesh,
+        InspectorPropertyId::DeformedGeometryMeshPicker);
+    for (std::uint32_t slot = 0U; slot < kb::scene::kMaxDeformedGeometryMaterialSlotOverrides; ++slot) {
+        const std::uint64_t material = slot < geometry.materialSlotOverrideCount
+            ? geometry.materialSlotAssetIds[slot]
+            : 0U;
+        section.AssetField(
+            kDeformedGeometryMaterialSlotLabels[slot],
+            AssetDisplayName(sceneContext, material),
+            DeformedGeometryMaterialSlotProperty(slot),
+            DeformedGeometryMaterialSlotPickerProperty(slot));
+    }
+    section.Bool("Casts Shadow", geometry.castsShadow, InspectorPropertyId::DeformedGeometryCastsShadow);
+    section.Bool("Receives Shadow", geometry.receivesShadow, InspectorPropertyId::DeformedGeometryReceivesShadow);
+    section.Bool("Enabled", geometry.enabled, InspectorPropertyId::DeformedGeometryEnabled);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -2886,6 +2963,22 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             y += h + kSectionGap;
         }
     }
+    if (const kb::scene::SkeletonBindingComponent* binding = scene.Components().SkeletonBindings().TryGet(selected); binding != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::SkeletonBinding, 2);
+        if (sectionVisible(y, h)) {
+            PaintSkeletonBindingSection(dc, content, y, theme, inspector, sceneContext, *binding);
+        } else {
+            y += h + kSectionGap;
+        }
+    }
+    if (const kb::scene::DrawD3DeformedGeometryComponent* geometry = scene.Components().DeformedGeometries().TryGet(selected); geometry != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::DeformedGeometry, 12);
+        if (sectionVisible(y, h)) {
+            PaintDeformedGeometrySection(dc, content, y, theme, inspector, sceneContext, *geometry);
+        } else {
+            y += h + kSectionGap;
+        }
+    }
     if (const kb::scene::NavAgent* agent = scene.Components().NavAgents().TryGet(selected); agent != nullptr) {
         const int h = SectionHeight(inspector, InspectorSectionId::NavAgent, 9);
         if (sectionVisible(y, h)) {
@@ -3096,6 +3189,12 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     }
     if (scene.Components().Animators().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::Animator, 4) + kSectionGap;
+    }
+    if (scene.Components().SkeletonBindings().TryGet(selected) != nullptr) {
+        height += SectionHeight(inspector, InspectorSectionId::SkeletonBinding, 2) + kSectionGap;
+    }
+    if (scene.Components().DeformedGeometries().TryGet(selected) != nullptr) {
+        height += SectionHeight(inspector, InspectorSectionId::DeformedGeometry, 12) + kSectionGap;
     }
     if (scene.Components().UIDocuments().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::UIDocument, 2) + kSectionGap;
@@ -4642,6 +4741,65 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         }
         if (!state.IsCollapsed(InspectorSectionId::UIDocument)) {
             if (InspectorPanelRenderer::Hit hit = HitRows(viewport, y, InspectorSectionId::UIDocument, kUIDocumentRows, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+        }
+        y += kSectionGap;
+    }
+
+    if (sceneContext.Scene().Components().SkeletonBindings().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::SkeletonBinding, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::SkeletonBinding)) {
+            if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(
+                    RowRect(viewport, y),
+                    InspectorSectionId::SkeletonBinding,
+                    InspectorPropertyId::SkeletonBindingAsset,
+                    InspectorPropertyId::SkeletonBindingAssetPicker,
+                    x,
+                    scrolledY);
+                hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitRows(viewport, y, InspectorSectionId::SkeletonBinding, kSkeletonBindingRows, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+        }
+        y += kSectionGap;
+    }
+
+    if (sceneContext.Scene().Components().DeformedGeometries().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::DeformedGeometry, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::DeformedGeometry)) {
+            if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(
+                    RowRect(viewport, y),
+                    InspectorSectionId::DeformedGeometry,
+                    InspectorPropertyId::DeformedGeometryMesh,
+                    InspectorPropertyId::DeformedGeometryMeshPicker,
+                    x,
+                    scrolledY);
+                hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+            for (std::uint32_t slot = 0U; slot < kb::scene::kMaxDeformedGeometryMaterialSlotOverrides; ++slot) {
+                if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(
+                        RowRect(viewport, y),
+                        InspectorSectionId::DeformedGeometry,
+                        DeformedGeometryMaterialSlotProperty(slot),
+                        DeformedGeometryMaterialSlotPickerProperty(slot),
+                        x,
+                        scrolledY);
+                    hit.kind != InspectorHitKind::None) {
+                    return hit;
+                }
+                AdvanceRow(y);
+            }
+            if (InspectorPanelRenderer::Hit hit = HitRows(viewport, y, InspectorSectionId::DeformedGeometry, kDeformedGeometryRows, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
         }

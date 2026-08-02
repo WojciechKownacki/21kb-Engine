@@ -7,8 +7,8 @@
 namespace kb::scene {
 namespace {
 
-[[nodiscard]] std::uint32_t ComponentMask(const ScenePrefabNodeComponents& components) noexcept {
-    std::uint32_t mask = 0U;
+[[nodiscard]] std::uint64_t ComponentMask(const ScenePrefabNodeComponents& components) noexcept {
+    std::uint64_t mask = 0U;
     if (components.camera.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Camera);
     }
@@ -78,6 +78,8 @@ namespace {
     if (components.animator.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Animator);
     }
+    if (components.skeletonBinding.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::SkeletonBinding);
+    if (components.deformedGeometry.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::DeformedGeometry);
     if (components.uiDocument.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::UIDocument);
     }
@@ -100,12 +102,12 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
     // A sparse expected-O(1) index avoids allocating one entry for every possible
     // component mask. Prefab baking is data-dependent: only masks present in the
     // authored nodes consume memory, which keeps this off the runtime hot path.
-    std::unordered_map<std::uint32_t, std::size_t> archetypeByMask;
+    std::unordered_map<std::uint64_t, std::size_t> archetypeByMask;
     archetypeByMask.reserve(nodes.size());
 
     for (std::size_t nodeIndex = 0; nodeIndex < nodes.size(); ++nodeIndex) {
         const ScenePrefabNodeDesc& node = nodes[nodeIndex];
-        const std::uint32_t mask = ComponentMask(node.components);
+        const std::uint64_t mask = ComponentMask(node.components);
         const auto found = archetypeByMask.find(mask);
         std::size_t archetypeIndex = 0U;
         if (found == archetypeByMask.end()) {
@@ -204,6 +206,8 @@ ScenePrefabBakedData ScenePrefabBakedData::Bake(std::span<const ScenePrefabNodeD
         if (node.components.animator.has_value()) {
             archetype.animators.push_back(*node.components.animator);
         }
+        if (node.components.skeletonBinding.has_value()) archetype.skeletonBindings.push_back(*node.components.skeletonBinding);
+        if (node.components.deformedGeometry.has_value()) archetype.deformedGeometries.push_back(*node.components.deformedGeometry);
         if (node.components.uiDocument.has_value()) {
             archetype.uiDocuments.push_back(*node.components.uiDocument);
         }
