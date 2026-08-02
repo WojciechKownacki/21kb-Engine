@@ -68,6 +68,51 @@ void RunAnimationRuntimeTests() {
     const auto runClipPath = root / "Assets" / "Animation" / "Run Fast.kbanim";
     Require(kb::scene::AnimationAssetIO::SaveClip(runClipPath, runClip), "Second AnimationClip production asset could not be saved");
 
+    kb::scene::AnimationClip skeletalClip{};
+    skeletalClip.durationSeconds = 1.0F;
+    skeletalClip.looping = true;
+    skeletalClip.targetSkeletonAssetId = 0xA55E7U;
+    skeletalClip.targetSkeletonCompatibilitySignature = 0x5A17U;
+    skeletalClip.skeletalTracks = {
+        {
+            .boneId = 101U,
+            .keyframes = {
+                { .timeSeconds = 0.0F, .transform = {} },
+                { .timeSeconds = 1.0F, .transform = { .position = { 2.0F, 0.0F, 0.0F } } },
+            },
+        },
+    };
+    skeletalClip.morphTracks = {
+        { .morphTarget = "Smile", .keyframes = { { .timeSeconds = 0.0F, .weight = 0.0F }, { .timeSeconds = 1.0F, .weight = 1.0F } } },
+    };
+    skeletalClip.curves = {
+        { .name = "FootPlant", .keyframes = { { .timeSeconds = 0.0F, .value = 0.0F }, { .timeSeconds = 1.0F, .value = 1.0F } } },
+    };
+    skeletalClip.rootMotionMode = kb::scene::AnimationRootMotionMode::ExtractFromBone;
+    skeletalClip.rootMotionBoneId = 101U;
+    const auto skeletalClipPath = root / "SkeletalRoundTrip.kbanim";
+    Require(kb::scene::AnimationAssetIO::SaveClip(skeletalClipPath, skeletalClip),
+        "Skeletal AnimationClip production asset could not be saved");
+    const auto loadedSkeletalClip = kb::scene::AnimationAssetIO::LoadClip(skeletalClipPath);
+    Require(loadedSkeletalClip.has_value() &&
+            loadedSkeletalClip->targetSkeletonAssetId == skeletalClip.targetSkeletonAssetId &&
+            loadedSkeletalClip->targetSkeletonCompatibilitySignature == skeletalClip.targetSkeletonCompatibilitySignature &&
+            loadedSkeletalClip->skeletalTracks.size() == 1U &&
+            loadedSkeletalClip->skeletalTracks.front().boneId == 101U &&
+            loadedSkeletalClip->morphTracks.size() == 1U &&
+            loadedSkeletalClip->curves.size() == 1U &&
+            loadedSkeletalClip->rootMotionMode == kb::scene::AnimationRootMotionMode::ExtractFromBone &&
+            loadedSkeletalClip->rootMotionBoneId == 101U,
+        "Skeletal AnimationClip round trip lost canonical bindings");
+    kb::scene::AnimationClip mixedBindingClip = skeletalClip;
+    mixedBindingClip.tracks = clip.tracks;
+    Require(!kb::scene::AnimationAssetIO::SaveClip(root / "MixedBinding.kbanim", mixedBindingClip),
+        "Skeletal AnimationClip accepted SceneEntity path bindings");
+    kb::scene::AnimationClip invalidRootMotionClip = skeletalClip;
+    invalidRootMotionClip.rootMotionBoneId = 999U;
+    Require(!kb::scene::AnimationAssetIO::SaveClip(root / "InvalidRootMotion.kbanim", invalidRootMotionClip),
+        "Skeletal AnimationClip accepted root motion outside its bone bindings");
+
     kb::scene::AnimatorController controller{};
     controller.parameters = {
         { .name = "Grounded", .type = kb::scene::AnimatorParameterType::Bool, .boolDefault = true },
