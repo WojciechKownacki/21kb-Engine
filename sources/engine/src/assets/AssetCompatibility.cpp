@@ -8,6 +8,8 @@ std::string_view ToString(AssetCompatibilityIssue issue) noexcept {
         return "MissingDependency";
     case AssetCompatibilityIssue::IncompatibleType:
         return "IncompatibleType";
+    case AssetCompatibilityIssue::IncompatibleDependency:
+        return "IncompatibleDependency";
     }
     return "MissingDependency";
 }
