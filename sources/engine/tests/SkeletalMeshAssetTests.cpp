@@ -13,6 +13,8 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <limits>
+#include <stdexcept>
 #include <string_view>
 
 namespace {
@@ -26,6 +28,12 @@ void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
     std::filesystem::create_directories(path.parent_path());
     std::ofstream output{ path, std::ios::binary | std::ios::trunc };
     output.write(text.data(), static_cast<std::streamsize>(text.size()));
+}
+
+void ReplaceOnce(std::string& text, std::string_view needle, std::string_view replacement) {
+    const std::size_t offset = text.find(needle);
+    if (offset == std::string::npos) throw std::runtime_error{ "Skeletal glTF fixture replacement failed" };
+    text.replace(offset, needle.size(), replacement);
 }
 
 void WriteSkeletalGltfFixture(const std::filesystem::path& folder) {
@@ -181,6 +189,18 @@ void RunSkeletalMeshAssetTests() {
                 plannerScene.Assets().Manager(), plannerRoot / "Missing.gltf", "/Game/Characters", {}, &importError).has_value() &&
             ReadTextFile(publishedMeshPath) == publishedMeshBytes,
         "A failed skeletal glTF reimport modified the last valid mesh asset");
+    std::fstream reimportBuffer{ importRoot / "Hero.bin", std::ios::in | std::ios::out | std::ios::binary };
+    const float reimportPosition = 2.0F;
+    reimportBuffer.seekp(0, std::ios::beg);
+    reimportBuffer.write(reinterpret_cast<const char*>(&reimportPosition), sizeof(reimportPosition));
+    reimportBuffer.close();
+    const auto reimportPlan = kb::scene::SkeletalMeshGltfImportPlanner::Plan(
+        plannerScene.Assets().Manager(), importRoot / "Hero.gltf", "/Game/Characters", {}, &importError);
+    const auto reimported = reimportPlan ? kb::scene::SkeletalMeshGltfImportPublisher::Publish(
+        plannerScene.Assets().Manager(), *reimportPlan, &importError) : std::nullopt;
+    Require(reimported.has_value() && reimported->meshAssetId == published->meshAssetId &&
+            kb::scene::SkeletalMeshAssetIO::Load(publishedMeshPath)->lods[0].vertices[0].position.x == 2.0F,
+        "Skeletal glTF reimport did not retain the mesh reference while publishing new content");
     const auto extendedImportRoot = root / "GltfExtendedImport";
     WriteExtendedSkeletalGltfFixture(extendedImportRoot);
     kb::scene::SkeletalMeshGltfImportOptions extendedOptions{};
@@ -230,6 +250,45 @@ void RunSkeletalMeshAssetTests() {
             !zeroWeightReport.diagnostics.front().mesh.empty() &&
             !zeroWeightReport.diagnostics.front().node.empty(),
         "Skeletal glTF import accepted a zero-weight binding");
+    const auto invalidMatrixRoot = root / "GltfInvalidMatrix";
+    WriteSkeletalGltfFixture(invalidMatrixRoot);
+    std::fstream invalidMatrixBuffer{ invalidMatrixRoot / "Hero.bin", std::ios::in | std::ios::out | std::ios::binary };
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    invalidMatrixBuffer.seekp(114, std::ios::beg);
+    invalidMatrixBuffer.write(reinterpret_cast<const char*>(&nan), sizeof(nan));
+    invalidMatrixBuffer.close();
+    Require(!kb::scene::SkeletalMeshGltfImporter::Import(
+                invalidMatrixRoot / "Hero.gltf", 777U, &importError).has_value(),
+        "Skeletal glTF import accepted a non-finite inverse bind matrix");
+    const auto missingJointRoot = root / "GltfMissingJoint";
+    WriteSkeletalGltfFixture(missingJointRoot);
+    std::fstream missingJointBuffer{ missingJointRoot / "Hero.bin", std::ios::in | std::ios::out | std::ios::binary };
+    const std::uint16_t missingJoint = 2U;
+    missingJointBuffer.seekp(36, std::ios::beg);
+    missingJointBuffer.write(reinterpret_cast<const char*>(&missingJoint), sizeof(missingJoint));
+    missingJointBuffer.close();
+    Require(!kb::scene::SkeletalMeshGltfImporter::Import(
+                missingJointRoot / "Hero.gltf", 777U, &importError).has_value() &&
+            importError.find("invalid JOINTS_0") != std::string::npos,
+        "Skeletal glTF import accepted a missing skin joint");
+    const auto multipleSkinsRoot = root / "GltfMultipleSkins";
+    WriteSkeletalGltfFixture(multipleSkinsRoot);
+    std::string multipleSkins = ReadTextFile(multipleSkinsRoot / "Hero.gltf");
+    ReplaceOnce(multipleSkins, "\"skins\":[{\"joints\":[0,1],\"inverseBindMatrices\":4}]",
+        "\"skins\":[{\"joints\":[0,1],\"inverseBindMatrices\":4},{\"joints\":[0,1],\"inverseBindMatrices\":4}]");
+    WriteTextFile(multipleSkinsRoot / "Hero.gltf", multipleSkins);
+    Require(!kb::scene::SkeletalMeshGltfImporter::Import(
+                multipleSkinsRoot / "Hero.gltf", 777U, &importError).has_value() &&
+            importError.find("exactly one") != std::string::npos,
+        "Skeletal glTF import accepted multiple skins");
+    const auto cyclicHierarchyRoot = root / "GltfCyclicHierarchy";
+    WriteSkeletalGltfFixture(cyclicHierarchyRoot);
+    std::string cyclicHierarchy = ReadTextFile(cyclicHierarchyRoot / "Hero.gltf");
+    ReplaceOnce(cyclicHierarchy, "\"children\":[1]", "\"children\":[0,1]");
+    WriteTextFile(cyclicHierarchyRoot / "Hero.gltf", cyclicHierarchy);
+    Require(!kb::scene::SkeletalMeshGltfImporter::Import(
+                cyclicHierarchyRoot / "Hero.gltf", 777U, &importError).has_value(),
+        "Skeletal glTF import accepted a cyclic joint hierarchy");
     kb::scene::Scene scene; Require(scene.Assets().MountProject(root),"SkeletalMeshAsset mount failed"); Require(scene.Assets().Discover()==2U,"SkeletalMeshAsset discovery failed");
     const auto* skeletonMetadata = scene.Assets().Manager().Registry().FindByPath(
         "/Game/Characters/Hero.kbskeleton");
