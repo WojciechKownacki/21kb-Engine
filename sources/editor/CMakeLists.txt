@@ -1084,6 +1084,7 @@ if(BUILD_TESTING)
         src/project/EditorProjectPaths.cpp
         src/rendering/EditorRenderBackendSettings.cpp
         src/rendering/EditorToolbarLayout.cpp
+        src/rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.cpp
         src/rendering/ProjectFilesAssetIconResolver.cpp
         src/rendering/ProjectFilesMaterialPreviewThumbnailModel.cpp
         src/rendering/MaterialPreviewAppearanceResolver.cpp
