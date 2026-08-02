@@ -40,6 +40,8 @@
 #include "engine/scene/PhysicsDebugDraw.hpp"
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SkeletonAsset.hpp"
+#include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
@@ -2173,6 +2175,35 @@ ReadScriptValue(
             metadata == nullptr ? "absent" : metadata->type };
     }
 
+    if (*operation == "assert_skeleton_asset") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto boneCount = UInt32Member(step, "bone_count", error);
+        if (!asset || !boneCount) return { false, error };
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        kb::assets::AssetManager& manager = state.context.Scene().Assets().Manager();
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(id);
+        if (metadata == nullptr || metadata->type != kb::scene::kSkeletonAssetType) {
+            return { false, "asset is not a Skeleton" };
+        }
+        const kb::assets::AssetHandle<kb::scene::SkeletonAsset> skeleton =
+            manager.Load<kb::scene::SkeletonAsset>(id);
+        if (!skeleton.IsLoaded()) {
+            return { false, manager.LastError() };
+        }
+        const std::uint64_t signature = kb::scene::SkeletonCompatibilitySignature(*skeleton);
+        const bool matched = skeleton->bones.size() == *boneCount && signature != 0U;
+        return { matched, matched ? std::to_string(signature) : "skeleton data mismatch" };
+    }
+
+    if (*operation == "select_asset") {
+        const auto asset = StringMember(step, "asset", error);
+        if (!asset) return { false, error };
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        const bool selected = id.IsValid() && state.context.AssetBrowser().SelectAsset(
+            id, state.context.Scene().Assets().Manager());
+        return { selected, selected ? *asset : "asset was not found" };
+    }
+
     if (*operation == "create_asset") {
         const auto alias = StringMember(step, "id", error);
         const auto type = StringMember(step, "type", error);
@@ -3554,7 +3585,28 @@ int EditorAutomationScenarioRunner::Run(
              << "schema=" << kSchema << '\n'
              << "stepsExecuted=" << reportLines.size() << '\n'
              << "result=" << (passed ? "PASS" : "FAIL") << '\n';
-    return passed && manifest.good() ? 0 : 1;
+
+    std::ofstream reportJson(
+        absoluteArtifacts / "report.json",
+        std::ios::binary | std::ios::trunc);
+    reportJson << "{\"schema\":\"21kb.editor-automation-report/v1\",\"result\":\""
+               << (passed ? "PASS" : "FAIL")
+               << "\",\"stepsExecuted\":" << reportLines.size()
+               << "}\n";
+    std::ofstream manifestJson(
+        absoluteArtifacts / "artifact-manifest.json",
+        std::ios::binary | std::ios::trunc);
+    manifestJson << "{\"schema\":\"21kb.editor-automation-artifacts/v1\",\"task\":\""
+                 << absoluteArtifacts.filename().string()
+                 << "\",\"trace\":\"trace.jsonl\",\"report\":\"report.json\",\"screenshots\":\"automation/screenshots\"}\n";
+    std::error_code traceError;
+    std::filesystem::copy_file(
+        absoluteArtifacts / "automation" / "trace.jsonl",
+        absoluteArtifacts / "trace.jsonl",
+        std::filesystem::copy_options::overwrite_existing,
+        traceError);
+    return passed && manifest.good() && reportJson.good() &&
+        manifestJson.good() && !traceError ? 0 : 1;
 }
 
 } // namespace kb::editor
