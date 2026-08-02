@@ -95,6 +95,64 @@ void RunMaterialLayerPaintTest() {
     Require(kb::terrain_editor::SetTerrainMaterialLayer(terrain, 1U, 33U) &&
             terrain.materialLayers[1].materialAssetId == 33U,
         "Material layer assignment did not update its asset reference");
+    Require(kb::terrain_editor::AddTerrainMaterialLayer(terrain, 44U),
+        "Terrain rejected its third material layer");
+    const kb::terrain_editor::TerrainLayerPaintResult segmentPainted =
+        kb::terrain_editor::ApplyTerrainLayerPaintSegment(
+            terrain,
+            kb::terrain_editor::TerrainLayerPaintSettings{
+                .shape = kb::terrain_editor::TerrainBrushShape::SoftRound,
+                .layerIndex = 2U,
+                .radius = 2.0F,
+                .opacity = 0.6F,
+                .falloff = 0.5F,
+            },
+            kb::terrain_editor::TerrainBrushStamp{ .localX = -12.0F, .localZ = 8.0F },
+            kb::terrain_editor::TerrainBrushStamp{ .localX = 12.0F, .localZ = 8.0F });
+    Require(segmentPainted.Changed(),
+        "A continuous stroke did not paint the selected third material layer");
+    const auto weightOffset = [&terrain](float localX, float localZ) {
+        const std::uint32_t x = static_cast<std::uint32_t>(std::lround(
+            (localX + terrain.worldSizeX * 0.5F) *
+            static_cast<float>(terrain.layerWeightWidth - 1U) / terrain.worldSizeX));
+        const std::uint32_t y = static_cast<std::uint32_t>(std::lround(
+            (localZ + terrain.worldSizeZ * 0.5F) *
+            static_cast<float>(terrain.layerWeightHeight - 1U) / terrain.worldSizeZ));
+        return (static_cast<std::size_t>(y) * terrain.layerWeightWidth + x) * 4U;
+    };
+    for (const float x : { -12.0F, 0.0F, 12.0F }) {
+        const std::size_t offset = weightOffset(x, 8.0F);
+        Require(terrain.layerWeights[offset + 2U] > 0U,
+            "A continuous third-layer stroke left a gap between pointer samples");
+        Require(static_cast<std::uint32_t>(terrain.layerWeights[offset]) +
+                    terrain.layerWeights[offset + 1U] + terrain.layerWeights[offset + 2U] == 255U &&
+                    terrain.layerWeights[offset + 3U] == 0U,
+            "Continuous third-layer painting produced non-normalized weights");
+    }
+    Require(kb::terrain_editor::AddTerrainMaterialLayer(terrain, 55U),
+        "Terrain rejected its fourth material layer");
+    const kb::terrain_editor::TerrainLayerPaintResult fourthLayerPainted =
+        kb::terrain_editor::ApplyTerrainLayerPaintSegment(
+            terrain,
+            kb::terrain_editor::TerrainLayerPaintSettings{
+                .shape = kb::terrain_editor::TerrainBrushShape::HardRound,
+                .layerIndex = 3U,
+                .radius = 2.0F,
+                .opacity = 0.5F,
+            },
+            kb::terrain_editor::TerrainBrushStamp{ .localX = -12.0F, .localZ = -8.0F },
+            kb::terrain_editor::TerrainBrushStamp{ .localX = 12.0F, .localZ = -8.0F });
+    const std::size_t fourthLayerCenter = weightOffset(0.0F, -8.0F);
+    Require(fourthLayerPainted.Changed() && terrain.layerWeights[fourthLayerCenter + 3U] > 0U &&
+            static_cast<std::uint32_t>(terrain.layerWeights[fourthLayerCenter]) +
+                terrain.layerWeights[fourthLayerCenter + 1U] +
+                terrain.layerWeights[fourthLayerCenter + 2U] +
+                terrain.layerWeights[fourthLayerCenter + 3U] == 255U,
+        "Continuous fourth-layer painting did not update the selected normalized channel");
+    Require(kb::terrain_editor::RemoveTerrainMaterialLayer(terrain, 3U),
+        "Removing the continuously painted fourth layer failed");
+    Require(kb::terrain_editor::RemoveTerrainMaterialLayer(terrain, 2U),
+        "Removing the continuously painted third layer failed");
     Require(kb::terrain_editor::RemoveTerrainMaterialLayer(terrain, 1U) &&
             terrain.materialLayers.size() == 1U && terrain.layerWeights[center] == 255U,
         "Removing a painted layer did not restore normalized base coverage");
@@ -182,6 +240,28 @@ void RunMaterialLayerMeshTest() {
         "Two hundred local material-paint stamps exceeded the performance budget");
     std::cout << "Terrain layer-paint benchmark: 200 stamps="
               << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
+              << " ms\n";
+
+    const auto segmentStart = std::chrono::steady_clock::now();
+    for (std::uint32_t segmentIndex = 0U; segmentIndex < 100U; ++segmentIndex) {
+        const float row = -24.0F + static_cast<float>(segmentIndex % 49U);
+        const float from = (segmentIndex & 1U) == 0U ? -24.0F : 24.0F;
+        const float to = -from;
+        static_cast<void>(kb::terrain_editor::ApplyTerrainLayerPaintSegment(
+            terrain,
+            kb::terrain_editor::TerrainLayerPaintSettings{
+                .layerIndex = 1U,
+                .radius = 4.0F,
+                .opacity = 0.08F,
+            },
+            kb::terrain_editor::TerrainBrushStamp{ .localX = from, .localZ = row },
+            kb::terrain_editor::TerrainBrushStamp{ .localX = to, .localZ = row }));
+    }
+    const auto segmentElapsed = std::chrono::steady_clock::now() - segmentStart;
+    Require(segmentElapsed < std::chrono::seconds(1),
+        "One hundred continuous material-paint segments exceeded the performance budget");
+    std::cout << "Terrain layer-paint benchmark: 100 continuous segments="
+              << std::chrono::duration_cast<std::chrono::milliseconds>(segmentElapsed).count()
               << " ms\n";
 }
 

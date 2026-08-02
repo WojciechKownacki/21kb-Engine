@@ -161,6 +161,8 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<AudioSourceComponent> audioSources;
     std::vector<AudioListenerComponent> audioListeners;
     std::vector<Animator> animators;
+    std::vector<SkeletonBindingComponent> skeletonBindings;
+    std::vector<DrawD3DeformedGeometryComponent> deformedGeometries;
     std::vector<UIDocumentComponent> uiDocuments;
     std::vector<NavAgent> navAgents;
     std::vector<NavObstacle> navObstacles;
@@ -179,7 +181,7 @@ struct ScenePrefabArchetypeSpawnPayload {
         AddComponentViews(views, worldViews, std::span<const TransformComponent>{ transforms });
         AddComponentViews(views, worldViews, std::span<const VisibilityComponent>{ visibility });
 
-        const std::uint32_t mask = archetype.componentMask;
+        const std::uint64_t mask = archetype.componentMask;
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Camera)) {
             RepeatComponents(cameras, std::span<const CameraComponent>{ archetype.cameras }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const CameraComponent>{ cameras });
@@ -296,6 +298,14 @@ struct ScenePrefabArchetypeSpawnPayload {
             RepeatComponents(animators, std::span<const Animator>{ archetype.animators }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const Animator>{ animators });
         }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::SkeletonBinding)) {
+            RepeatComponents(skeletonBindings, std::span<const SkeletonBindingComponent>{ archetype.skeletonBindings }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const SkeletonBindingComponent>{ skeletonBindings });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::DeformedGeometry)) {
+            RepeatComponents(deformedGeometries, std::span<const DrawD3DeformedGeometryComponent>{ archetype.deformedGeometries }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const DrawD3DeformedGeometryComponent>{ deformedGeometries });
+        }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::UIDocument)) {
             RepeatComponents(uiDocuments, std::span<const UIDocumentComponent>{ archetype.uiDocuments }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const UIDocumentComponent>{ uiDocuments });
@@ -320,7 +330,7 @@ struct ScenePrefabArchetypeSpawnPayload {
         AddCommandComponentPatternView(views, std::span<const VisibilityComponent>{ archetype.visibility }, instanceCount);
         AddWorldComponentPatternView(worldViews, std::span<const VisibilityComponent>{ archetype.visibility }, instanceCount);
 
-        const std::uint32_t mask = archetype.componentMask;
+        const std::uint64_t mask = archetype.componentMask;
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Camera)) {
             AddCommandComponentPatternView(views, std::span<const CameraComponent>{ archetype.cameras }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const CameraComponent>{ archetype.cameras }, instanceCount);
@@ -436,6 +446,14 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Animator)) {
             AddCommandComponentPatternView(views, std::span<const Animator>{ archetype.animators }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const Animator>{ archetype.animators }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::SkeletonBinding)) {
+            AddCommandComponentPatternView(views, std::span<const SkeletonBindingComponent>{ archetype.skeletonBindings }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const SkeletonBindingComponent>{ archetype.skeletonBindings }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::DeformedGeometry)) {
+            AddCommandComponentPatternView(views, std::span<const DrawD3DeformedGeometryComponent>{ archetype.deformedGeometries }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const DrawD3DeformedGeometryComponent>{ archetype.deformedGeometries }, instanceCount);
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::UIDocument)) {
             AddCommandComponentPatternView(views, std::span<const UIDocumentComponent>{ archetype.uiDocuments }, instanceCount);

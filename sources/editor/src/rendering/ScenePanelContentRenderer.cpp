@@ -139,7 +139,9 @@ struct SceneViewportRenderProfileDesc {
     switch (profile) {
     case EditorViewportRenderProfile::Interactive:
         return SceneViewportRenderProfileDesc{
-            .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueOnly,
+            // Terrain layers above the base layer require blending, but Interactive must not pay for
+            // every transparent object or the SceneColor snapshot while editing terrain.
+            .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueAndTerrainLayers,
             .shadowPassEnabled = false,
             .postProcessEnabled = true,
             .selectionMaskEnabled = true,
@@ -455,9 +457,8 @@ void AppendTerrainBrushRing(
         !sceneContext.IsProjectPluginEnabled("Editor.Terrain")) {
         return;
     }
-    const std::optional<kb::assets::TerrainAsset> terrain =
-        EditorTerrainService::Load(sceneContext.Scene(), entity);
-    if (!terrain.has_value()) return;
+    const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(entity);
+    if (terrain == nullptr) return;
     const kb::scene::TransformComponent transform = sceneContext.Scene().Transforms().Get(entity);
     constexpr std::size_t segmentCount = 64U;
     constexpr float twoPi = 6.28318530717958647692F;

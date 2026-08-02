@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/scene/SceneEntity.hpp"
+#include "engine/scene/SkeletonAsset.hpp"
 #include "engine/scene/TransformComponent.hpp"
 
 #include <cstdint>
@@ -34,11 +35,58 @@ struct AnimationEventKeyframe {
     AnimationEventId id = 0U;
 };
 
+struct AnimationBoneKeyframe {
+    float timeSeconds = 0.0F;
+    LocalTransform transform{};
+};
+
+struct AnimationBoneTrack {
+    SkeletonBoneId boneId = 0U;
+    std::vector<AnimationBoneKeyframe> keyframes;
+};
+
+struct AnimationMorphKeyframe {
+    float timeSeconds = 0.0F;
+    float weight = 0.0F;
+};
+
+struct AnimationMorphTrack {
+    std::string morphTarget;
+    std::vector<AnimationMorphKeyframe> keyframes;
+};
+
+struct AnimationCurveKeyframe {
+    float timeSeconds = 0.0F;
+    float value = 0.0F;
+};
+
+struct AnimationCurveTrack {
+    std::string name;
+    std::vector<AnimationCurveKeyframe> keyframes;
+};
+
+enum class AnimationRootMotionMode : std::uint8_t {
+    None,
+    ExtractFromBone,
+};
+
 struct AnimationClip {
     float durationSeconds = 1.0F;
     bool looping = true;
     std::vector<AnimationTransformTrack> tracks;
     std::vector<AnimationEventKeyframe> events;
+    // A zero target preserves the existing generic Animator hierarchy clip.
+    // A skeletal clip has exactly one canonical skeleton identity and uses
+    // stable bone bindings rather than SceneEntity child-name paths.
+    std::uint64_t targetSkeletonAssetId = 0U;
+    std::uint64_t targetSkeletonCompatibilitySignature = 0U;
+    std::vector<AnimationBoneTrack> skeletalTracks;
+    std::vector<AnimationMorphTrack> morphTracks;
+    std::vector<AnimationCurveTrack> curves;
+    // ExtractFromBone makes the selected skeletal bone the sole source of the
+    // component root-motion delta. None requires rootMotionBoneId to be zero.
+    AnimationRootMotionMode rootMotionMode = AnimationRootMotionMode::None;
+    SkeletonBoneId rootMotionBoneId = 0U;
 };
 
 enum class AnimatorParameterType : std::uint8_t {

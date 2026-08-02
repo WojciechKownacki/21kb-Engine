@@ -23,6 +23,8 @@
 #include "rendering/script_editor/ScriptEditorWindow.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
+#include "app/scene_viewport/EditorTerrainViewportInteraction.hpp"
+#include "scene/EditorTerrainService.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -335,19 +337,29 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
     const bool previewPresented = PresentMaterialPreview(state, state.window, inspector, materialEditor);
 
     // Material thumbnails: one material per frame is rendered at thumbnail resolution into a small
-    // staging strip inside the Project Files panel and captured from the GPU. Only while that panel is
-    // visible - nobody is looking at tiles otherwise, so nobody pays for them.
+    // staging strip and captured from the GPU. Project Files is preferred as the staging host; the
+    // Inspector keeps the queue moving when terrain layer cards are the visible consumer.
     bool thumbnailPresented = false;
-    if (const std::optional<RECT> assets = EditorPanelContentResolver::Resolve(
-            DockPanelKind::Assets,
-            state.window,
-            state.window,
-            state.dockModel,
-            state.floatingWindows,
-            state.metrics);
-        assets.has_value() && EditorMaterialThumbnailCache().HasPendingWork()) {
-        const RECT staging{ assets->left, assets->top, assets->left + 8, assets->top + 8 };
+    const std::optional<RECT> assets = EditorPanelContentResolver::Resolve(
+        DockPanelKind::Assets,
+        state.window,
+        state.window,
+        state.dockModel,
+        state.floatingWindows,
+        state.metrics);
+    const std::optional<RECT>& thumbnailHost = assets.has_value() ? assets : inspector;
+    if (thumbnailHost.has_value() && EditorMaterialThumbnailCache().HasPendingWork()) {
+        const RECT staging{
+            thumbnailHost->left,
+            thumbnailHost->top,
+            thumbnailHost->left + 8,
+            thumbnailHost->top + 8,
+        };
+        const std::uint64_t revisionBefore = EditorMaterialThumbnailCache().Revision();
         EditorMaterialThumbnailCache().Tick(state.sceneContext, state.sceneViewport, state.window, staging);
+        if (EditorMaterialThumbnailCache().Revision() != revisionBefore) {
+            InvalidateInspectorPanels(state);
+        }
         thumbnailPresented = true;
     }
     return scenePresented || previewPresented || thumbnailPresented;
@@ -525,6 +537,12 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     // cheap per-frame write keeps green collider wireframes on across reloads).
     kb::scene::PhysicsDebugDraw::SetEnabled(state.sceneContext.Scene(), state.sceneContext.ArePhysicsGizmosVisible());
 
+    const bool terrainStrokeChanged =
+        EditorTerrainViewportInteraction::TickActiveStroke(state.sceneContext, deltaSeconds);
+    if (terrainStrokeChanged) {
+        state.sceneViewport.RequestPresent();
+    }
+
     bool navigationChanged = false;
     if (state.sceneContext.HasActiveViewportCameraNavigation()) {
         navigationChanged = EditorSceneViewportCameraController{
@@ -579,7 +597,8 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     }
 
     const bool viewportsPresented = PresentVisibleViewports(state);
-    return viewportsPresented || navigationChanged || gizmoChanged || focusChanged || scriptSaved || addComponentSliding || disclosureSliding;
+    return viewportsPresented || navigationChanged || gizmoChanged || focusChanged || scriptSaved ||
+        addComponentSliding || disclosureSliding || EditorTerrainService::ToolState().strokeActive;
 }
 
 [[nodiscard]] bool TickPointerDragFrame(EditorApplicationState& state) {

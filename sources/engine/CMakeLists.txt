@@ -171,6 +171,8 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneAudioListenerComponents.hpp
     include/engine/scene/SceneAudioSourceComponents.hpp
     include/engine/scene/SceneAnimatorComponents.hpp
+    include/engine/scene/SceneSkeletonBindingComponents.hpp
+    include/engine/scene/SceneDeformedGeometryComponents.hpp
     include/engine/scene/SceneUIDocuments.hpp
     include/engine/scene/SceneAssets.hpp
     include/engine/scene/SceneAssetMeta.hpp
@@ -219,8 +221,19 @@ add_library(kb_engine STATIC
     include/engine/scene/ScenePrefabPrivateScene.hpp
     include/engine/scene/SceneMaterialInstances.hpp
     include/engine/scene/AnimationAssets.hpp
+    include/engine/scene/SkeletonBindingComponent.hpp
+    include/engine/scene/DrawD3DeformedGeometryComponent.hpp
     include/engine/scene/AnimationAssetIO.hpp
     include/engine/scene/AnimationAssetLoaders.hpp
+    include/engine/scene/SkeletonAsset.hpp
+    include/engine/scene/SkeletonAssetIO.hpp
+    include/engine/scene/SkeletonAssetLoader.hpp
+    include/engine/scene/SkeletalMeshAsset.hpp
+    include/engine/scene/SkeletalMeshGltfImporter.hpp
+    include/engine/scene/SkeletalMeshGltfImportPlanner.hpp
+    include/engine/scene/SkeletalMeshGltfImportPublisher.hpp
+    include/engine/scene/SkeletalMeshAssetIO.hpp
+    include/engine/scene/SkeletalMeshAssetLoader.hpp
     include/engine/scene/UIAssets.hpp
     include/engine/scene/UIAssetIO.hpp
     include/engine/scene/UIAssetLoaders.hpp
@@ -584,6 +597,15 @@ add_library(kb_engine STATIC
     src/scene/SceneMaterialInstanceService.cpp
     src/scene/AnimationAssetIO.cpp
     src/scene/AnimationAssetLoaders.cpp
+    src/scene/SkeletonAsset.cpp
+    src/scene/SkeletonAssetIO.cpp
+    src/scene/SkeletonAssetLoader.cpp
+    src/scene/SkeletalMeshAsset.cpp
+    src/scene/SkeletalMeshGltfImporter.cpp
+    src/scene/SkeletalMeshGltfImportPlanner.cpp
+    src/scene/SkeletalMeshGltfImportPublisher.cpp
+    src/scene/SkeletalMeshAssetIO.cpp
+    src/scene/SkeletalMeshAssetLoader.cpp
     src/scene/TimelineAssetIO.cpp
     src/scene/TimelineAssetLoader.cpp
     src/scene/SceneTimelineService.cpp
@@ -631,6 +653,10 @@ add_library(kb_engine STATIC
     src/scene/components/SceneCameraStorage.cpp
     src/scene/components/SceneAnimatorApi.cpp
     src/scene/components/SceneAnimatorStorage.cpp
+    src/scene/components/SceneSkeletonBindingApi.cpp
+    src/scene/components/SceneSkeletonBindingStorage.cpp
+    src/scene/components/SceneDeformedGeometryApi.cpp
+    src/scene/components/SceneDeformedGeometryStorage.cpp
     src/scene/components/SceneUIDocumentStorage.cpp
     src/scene/components/SceneNavigationApi.cpp
     src/scene/components/SceneNavigationStorage.cpp
@@ -737,6 +763,8 @@ add_library(kb_engine STATIC
     src/scene/modules/components/SceneAudioSourceModule.cpp
     src/scene/modules/components/SceneCameraModule.cpp
     src/scene/modules/components/SceneAnimatorModule.cpp
+    src/scene/modules/components/SceneSkeletonBindingModule.cpp
+    src/scene/modules/components/SceneDeformedGeometryModule.cpp
     src/scene/modules/components/SceneBehaviourModule.cpp
     src/scene/modules/components/SceneComponentIterationModule.cpp
     src/scene/modules/components/SceneComponentModule.cpp
@@ -1015,6 +1043,8 @@ add_library(kb_engine STATIC
     src/private/scene/components/SceneAudioSourceComponentStore.hpp
     src/private/scene/components/SceneCameraComponentStore.hpp
     src/private/scene/components/SceneAnimatorComponentStore.hpp
+    src/private/scene/components/SceneSkeletonBindingComponentStore.hpp
+    src/private/scene/components/SceneDeformedGeometryComponentStore.hpp
     src/private/scene/components/SceneUIDocumentComponentStore.hpp
     src/private/scene/components/SceneComponentIteration.hpp
     src/private/scene/components/SceneComponentIterationAccess.hpp
@@ -1392,6 +1422,7 @@ target_include_directories(kb_engine
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/private
+        ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty
 )
 
 target_link_libraries(kb_engine
@@ -1451,6 +1482,8 @@ if(BUILD_TESTING)
         tests/PhysicsSceneSystemTests.cpp
         tests/AudioSceneSystemTests.cpp
         tests/AnimationRuntimeTests.cpp
+        tests/SkeletonAssetTests.cpp
+        tests/SkeletalMeshAssetTests.cpp
         tests/TimelineRuntimeTests.cpp
         tests/UIDocumentRuntimeTests.cpp
         tests/LocalizationTests.cpp

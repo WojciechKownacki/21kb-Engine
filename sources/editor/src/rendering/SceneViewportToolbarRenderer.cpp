@@ -211,8 +211,10 @@ SceneViewportToolbarRects SceneViewportToolbarRenderer::Resolve(const RECT& cont
 SceneViewportToolbarRects SceneViewportToolbarRenderer::Resolve(
     const RECT& content,
     const EditorViewportPreviewState& state,
-    const EditorSceneContext&) noexcept {
-    return SceneViewportToolbarLayout::Resolve(content, state);
+    const EditorSceneContext& sceneContext) noexcept {
+    const bool terrainToolsVisible = sceneContext.IsProjectPluginEnabled("Editor.Terrain") &&
+        EditorTerrainService::IsTerrainEntity(sceneContext.Scene(), sceneContext.SelectedEntity());
+    return SceneViewportToolbarLayout::Resolve(content, state, terrainToolsVisible);
 }
 
 TerrainViewportToolbarRects SceneViewportToolbarRenderer::ResolveTerrainTools(const RECT& content) noexcept {

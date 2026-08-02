@@ -84,6 +84,12 @@ SceneAudioListenerComponentQueries SceneComponentQueries::AudioListeners() const
 SceneAnimatorComponentQueries SceneComponentQueries::Animators() const noexcept {
     return SceneAnimatorComponentQueries{ scene_ };
 }
+SceneSkeletonBindingComponentQueries SceneComponentQueries::SkeletonBindings() const noexcept {
+    return SceneSkeletonBindingComponentQueries{ scene_ };
+}
+SceneDeformedGeometryComponentQueries SceneComponentQueries::DeformedGeometries() const noexcept {
+    return SceneDeformedGeometryComponentQueries{ scene_ };
+}
 SceneUIDocumentComponentQueries SceneComponentQueries::UIDocuments() const noexcept {
     return SceneUIDocumentComponentQueries{ scene_ };
 }
@@ -168,6 +174,12 @@ SceneAudioListenerComponents SceneComponents::AudioListeners() const noexcept {
 
 SceneAnimatorComponents SceneComponents::Animators() const noexcept {
     return SceneAnimatorComponents{ scene_ };
+}
+SceneSkeletonBindingComponents SceneComponents::SkeletonBindings() const noexcept {
+    return SceneSkeletonBindingComponents{ scene_ };
+}
+SceneDeformedGeometryComponents SceneComponents::DeformedGeometries() const noexcept {
+    return SceneDeformedGeometryComponents{ scene_ };
 }
 SceneUIDocumentComponents SceneComponents::UIDocuments() const noexcept {
     return SceneUIDocumentComponents{ scene_ };

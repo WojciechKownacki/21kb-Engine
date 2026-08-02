@@ -200,6 +200,7 @@ struct RenderSceneSubmitDesc {
         return target.IsValid() && postProcess.IsValid() && finalComposite.IsValid() &&
                (!finalComposite.enabled || !postProcessEnabled || postProcess.enabled) &&
                (meshPassMode == SceneRenderMeshPassMode::OpaqueOnly ||
+                meshPassMode == SceneRenderMeshPassMode::OpaqueAndTerrainLayers ||
                 meshPassMode == SceneRenderMeshPassMode::OpaqueAndTransparent);
     }
 

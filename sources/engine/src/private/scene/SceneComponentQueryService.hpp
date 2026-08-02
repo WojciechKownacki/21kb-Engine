@@ -3,6 +3,8 @@
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/AnimationAssets.hpp"
+#include "engine/scene/SkeletonBindingComponent.hpp"
+#include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
@@ -118,6 +120,10 @@ public:
     [[nodiscard]] static const AudioListenerComponent* TryGetAudioListener(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasAnimator(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const Animator* TryGetAnimator(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasSkeletonBinding(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const SkeletonBindingComponent* TryGetSkeletonBinding(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool HasDeformedGeometry(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const DrawD3DeformedGeometryComponent* TryGetDeformedGeometry(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasUIDocument(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const UIDocumentComponent* TryGetUIDocument(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool HasNavAgent(const Scene& scene, SceneEntity entity) noexcept;

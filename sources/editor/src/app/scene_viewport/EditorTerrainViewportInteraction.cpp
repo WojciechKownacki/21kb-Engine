@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "app/scene_viewport/EditorSceneViewportHitResolver.hpp"
+#include "app/scene_viewport/EditorTerrainStrokeTickPolicy.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -234,6 +235,7 @@ void ConsiderTerrainPick(
     const EditorFloatingWindowManager& floatingWindows,
     const EditorMetrics& metrics,
     EditorSceneContext& sceneContext) {
+    const EditorTerrainToolState& tool = EditorTerrainService::ToolState();
     const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
     if (!sceneContext.IsProjectPluginEnabled("Editor.Terrain") ||
         !EditorTerrainService::IsTerrainEntity(sceneContext.Scene(), entity)) {
@@ -254,9 +256,14 @@ void ConsiderTerrainPick(
     return ResolvedTerrainPointer{
         .entity = entity,
         .local = *local,
-        .minimumSampleSpacing = std::max(
-            terrain->worldSizeX / static_cast<float>(terrain->width - 1U),
-            terrain->worldSizeZ / static_cast<float>(terrain->height - 1U)),
+        .minimumSampleSpacing = tool.mode == EditorTerrainToolMode::Paint &&
+                terrain->layerWeightWidth > 1U && terrain->layerWeightHeight > 1U
+            ? std::max(
+                terrain->worldSizeX / static_cast<float>(terrain->layerWeightWidth - 1U),
+                terrain->worldSizeZ / static_cast<float>(terrain->layerWeightHeight - 1U))
+            : std::max(
+                terrain->worldSizeX / static_cast<float>(terrain->width - 1U),
+                terrain->worldSizeZ / static_cast<float>(terrain->height - 1U)),
     };
 }
 
@@ -357,20 +364,24 @@ bool EditorTerrainViewportInteraction::Stamp(
     if (!tool.editingEnabled || tool.mode == EditorTerrainToolMode::Select) {
         return false;
     }
-    if (!beginStroke) {
-        const float dx = pointer->local.x - tool.lastStampX;
-        const float dz = pointer->local.z - tool.lastStampZ;
-        const float minimumSpacing = std::max(
-            pointer->minimumSampleSpacing,
-            tool.brush.radius * 0.12F);
-        if (dx * dx + dz * dz < minimumSpacing * minimumSpacing) return true;
-    }
-    std::string error;
     const kb::terrain_editor::TerrainBrushStamp stamp{
         .localX = pointer->local.x,
         .localZ = pointer->local.z };
+    kb::terrain_editor::TerrainBrushStamp segmentStart = stamp;
+    if (!beginStroke) {
+        const float dx = pointer->local.x - tool.lastStampX;
+        const float dz = pointer->local.z - tool.lastStampZ;
+        const float distance = std::sqrt(dx * dx + dz * dz);
+        const float minimumSpacing = std::max(
+            pointer->minimumSampleSpacing * 0.5F,
+            tool.brush.radius * 0.06F);
+        if (distance < minimumSpacing) return true;
+        segmentStart.localX = tool.lastStampX;
+        segmentStart.localZ = tool.lastStampZ;
+    }
+    std::string error;
     const bool applied = tool.mode == EditorTerrainToolMode::Paint
-        ? sceneContext.ApplyTerrainLayerPaintStamp(
+        ? sceneContext.ApplyTerrainLayerPaintSegment(
             pointer->entity,
             kb::terrain_editor::TerrainLayerPaintSettings{
                 .shape = tool.brush.shape,
@@ -381,7 +392,8 @@ bool EditorTerrainViewportInteraction::Stamp(
                 .noiseSeed = tool.brush.noiseSeed,
                 .erase = (GetKeyState(VK_CONTROL) & 0x8000) != 0,
             },
-            stamp, beginStroke, &error)
+            segmentStart, stamp,
+            beginStroke, &error)
         : sceneContext.ApplyTerrainBrushStamp(
             pointer->entity, tool.brush, stamp, beginStroke, &error);
     if (!applied) {
@@ -389,8 +401,60 @@ bool EditorTerrainViewportInteraction::Stamp(
         return true;
     }
     tool.strokeActive = true;
+    tool.heldSculptElapsedSeconds = 0.0F;
     tool.lastStampX = pointer->local.x;
     tool.lastStampZ = pointer->local.z;
+    return true;
+}
+
+bool EditorTerrainViewportInteraction::TickActiveStroke(
+    EditorSceneContext& sceneContext,
+    float deltaSeconds) {
+    EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+    if (!tool.strokeActive || !tool.editingEnabled || tool.mode != EditorTerrainToolMode::Sculpt) {
+        tool.heldSculptElapsedSeconds = 0.0F;
+        return false;
+    }
+    if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0) {
+        tool.strokeActive = false;
+        tool.heldSculptElapsedSeconds = 0.0F;
+        std::string error;
+        if (!sceneContext.CommitTerrainBrushStroke(&error)) {
+            sceneContext.Console().Warning(
+                "Terrain",
+                error.empty() ? "Terrain stroke could not be committed." : error);
+        }
+        ReleaseCapture();
+        return true;
+    }
+    if (!EditorTerrainStrokeTickPolicy::Advance(deltaSeconds, tool.heldSculptElapsedSeconds)) {
+        return false;
+    }
+
+    const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
+    if (!entity.IsValid() || entity.Id() != tool.hoverEntityId) {
+        return false;
+    }
+
+    std::string error;
+    const bool applied = sceneContext.ApplyTerrainBrushStamp(
+        entity,
+        tool.brush,
+        kb::terrain_editor::TerrainBrushStamp{
+            .localX = tool.lastStampX,
+            .localZ = tool.lastStampZ,
+            .pressure = EditorTerrainStrokeTickPolicy::StampPressure,
+        },
+        false,
+        &error);
+    if (!applied) {
+        tool.strokeActive = false;
+        tool.heldSculptElapsedSeconds = 0.0F;
+        ReleaseCapture();
+        sceneContext.Console().Warning(
+            "Terrain",
+            error.empty() ? "Continuous terrain sculpt failed." : error);
+    }
     return true;
 }
 

@@ -112,6 +112,7 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
     if (EditorTerrainService::ToolState().strokeActive) {
         if (!leftButtonDown) {
             EditorTerrainService::ToolState().strokeActive = false;
+            EditorTerrainService::ToolState().heldSculptElapsedSeconds = 0.0F;
             std::string error;
             if (!sceneContext_.CommitTerrainBrushStroke(&error)) {
                 sceneContext_.Console().Warning(

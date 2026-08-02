@@ -31,6 +31,8 @@
 #include "rendering/DockTabControlGeometry.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
 #include "platform/win32/EditorAnimatorControllerAssetPickerDialog.hpp"
+#include "platform/win32/EditorSkeletonAssetPickerDialog.hpp"
+#include "platform/win32/EditorSkeletalMeshAssetPickerDialog.hpp"
 #include "platform/win32/EditorMaterialColorPickerDialog.hpp"
 #include "platform/win32/EditorMaterialParameterValueDialog.hpp"
 #include "platform/win32/EditorMeshAssetPickerDialog.hpp"
@@ -51,6 +53,25 @@ namespace {
 constexpr int kHierarchyScrollbarWidth = 12;
 constexpr int kHierarchyScrollbarInset = 3;
 constexpr int kHierarchyScrollbarMinThumb = 24;
+
+[[nodiscard]] std::optional<std::uint32_t> DeformedGeometryMaterialSlotForProperty(InspectorPropertyId property) noexcept {
+    constexpr std::array<InspectorPropertyId, kb::scene::kMaxDeformedGeometryMaterialSlotOverrides> fields{ {
+        InspectorPropertyId::DeformedGeometryMaterialSlot0, InspectorPropertyId::DeformedGeometryMaterialSlot1,
+        InspectorPropertyId::DeformedGeometryMaterialSlot2, InspectorPropertyId::DeformedGeometryMaterialSlot3,
+        InspectorPropertyId::DeformedGeometryMaterialSlot4, InspectorPropertyId::DeformedGeometryMaterialSlot5,
+        InspectorPropertyId::DeformedGeometryMaterialSlot6, InspectorPropertyId::DeformedGeometryMaterialSlot7,
+    } };
+    constexpr std::array<InspectorPropertyId, kb::scene::kMaxDeformedGeometryMaterialSlotOverrides> pickers{ {
+        InspectorPropertyId::DeformedGeometryMaterialSlotPicker0, InspectorPropertyId::DeformedGeometryMaterialSlotPicker1,
+        InspectorPropertyId::DeformedGeometryMaterialSlotPicker2, InspectorPropertyId::DeformedGeometryMaterialSlotPicker3,
+        InspectorPropertyId::DeformedGeometryMaterialSlotPicker4, InspectorPropertyId::DeformedGeometryMaterialSlotPicker5,
+        InspectorPropertyId::DeformedGeometryMaterialSlotPicker6, InspectorPropertyId::DeformedGeometryMaterialSlotPicker7,
+    } };
+    for (std::uint32_t slot = 0U; slot < fields.size(); ++slot) {
+        if (property == fields[slot] || property == pickers[slot]) return slot;
+    }
+    return std::nullopt;
+}
 
 [[nodiscard]] bool PointInRect(const RECT& rect, int x, int y) noexcept {
     return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
@@ -252,16 +273,6 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
         ClientToScreen(window, &point);
     }
     return point;
-}
-
-[[nodiscard]] std::optional<std::uint8_t> TerrainMaterialLayerPickerForProperty(InspectorPropertyId property) noexcept {
-    switch (property) {
-    case InspectorPropertyId::TerrainMaterialLayerPicker0: return 0U;
-    case InspectorPropertyId::TerrainMaterialLayerPicker1: return 1U;
-    case InspectorPropertyId::TerrainMaterialLayerPicker2: return 2U;
-    case InspectorPropertyId::TerrainMaterialLayerPicker3: return 3U;
-    default: return std::nullopt;
-    }
 }
 
 [[nodiscard]] std::optional<std::filesystem::path> ShowTerrainHeightmapDialog(HWND owner) {
@@ -977,6 +988,54 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             return;
         }
+        if (hit.section == InspectorSectionId::SkeletonBinding &&
+            (hit.property == InspectorPropertyId::SkeletonBindingAsset ||
+             hit.property == InspectorPropertyId::SkeletonBindingAssetPicker)) {
+            const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+            const kb::scene::SkeletonBindingComponent* binding = sceneContext_.Scene().Components().SkeletonBindings().TryGet(entity);
+            if (binding != nullptr) {
+                const EditorSkeletonAssetPickerDialog::Result result = EditorSkeletonAssetPickerDialog::Show(
+                    mainWindow_, MakeEditorDarkTheme(), sceneContext_, kb::assets::AssetId{ binding->skeletonAssetId });
+                if (result.accepted && sceneContext_.SetSkeletonBindingAsset(entity, result.assetId)) {
+                    sceneViewport_.RequestPresent();
+                }
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+        if (hit.section == InspectorSectionId::DeformedGeometry &&
+            (hit.property == InspectorPropertyId::DeformedGeometryMesh ||
+             hit.property == InspectorPropertyId::DeformedGeometryMeshPicker)) {
+            const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+            const kb::scene::DrawD3DeformedGeometryComponent* geometry = sceneContext_.Scene().Components().DeformedGeometries().TryGet(entity);
+            if (geometry != nullptr) {
+                const EditorSkeletalMeshAssetPickerDialog::Result result = EditorSkeletalMeshAssetPickerDialog::Show(
+                    mainWindow_, MakeEditorDarkTheme(), sceneContext_, kb::assets::AssetId{ geometry->skeletalMeshAssetId });
+                if (result.accepted && sceneContext_.SetDeformedGeometryMeshAsset(entity, result.assetId)) {
+                    sceneViewport_.RequestPresent();
+                }
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+        if (hit.section == InspectorSectionId::DeformedGeometry) {
+            if (const std::optional<std::uint32_t> slot = DeformedGeometryMaterialSlotForProperty(hit.property)) {
+                const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+                const kb::scene::DrawD3DeformedGeometryComponent* geometry = sceneContext_.Scene().Components().DeformedGeometries().TryGet(entity);
+                if (geometry != nullptr) {
+                    const std::uint64_t current = *slot < geometry->materialSlotOverrideCount
+                        ? geometry->materialSlotAssetIds[*slot]
+                        : 0U;
+                    const EditorMaterialAssetPickerDialog::Result result = EditorMaterialAssetPickerDialog::Show(
+                        mainWindow_, MakeEditorDarkTheme(), sceneContext_, sceneViewport_, kb::assets::AssetId{ current }, true);
+                    if (result.accepted && sceneContext_.SetDeformedGeometryMaterialSlotAsset(entity, *slot, result.assetId)) {
+                        sceneViewport_.RequestPresent();
+                    }
+                }
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return;
+            }
+        }
         if (hit.section == InspectorSectionId::MeshRenderer && hit.property == InspectorPropertyId::MeshRendererMeshPicker) {
             const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
             const kb::scene::MeshRendererComponent* renderer = sceneContext_.Scene().Components().MeshRenderers().TryGet(entity);
@@ -995,14 +1054,12 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             return;
         }
         const std::optional<std::uint32_t> materialSlotPicker = MeshRendererMaterialSlotPickerForProperty(hit.property);
-        const std::optional<std::uint8_t> terrainLayerPicker = TerrainMaterialLayerPickerForProperty(hit.property);
         if (hit.section == InspectorSectionId::Terrain &&
             hit.property == InspectorPropertyId::TerrainMaterialLayerCreate) {
             terrain_material_layer_menu::Close();
             const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
-            const std::optional<kb::assets::TerrainAsset> terrain =
-                EditorTerrainService::Load(sceneContext_.Scene(), entity);
-            if (!terrain.has_value()) {
+            const kb::assets::TerrainAsset* terrain = sceneContext_.TerrainForEditing(entity);
+            if (terrain == nullptr) {
                 sceneContext_.Console().Warning("Terrain", "Terrain asset is unavailable.");
             } else if (terrain->materialLayers.size() >= kb::assets::TerrainAsset::MaximumMaterialLayers) {
                 sceneContext_.Console().Warning("Terrain", "Terrain supports at most four material layers.");
@@ -1026,32 +1083,16 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             return;
         }
         if (hit.section == InspectorSectionId::Terrain &&
-            (terrainLayerPicker.has_value() || hit.property == InspectorPropertyId::TerrainMaterialLayerAdd)) {
+            hit.property == InspectorPropertyId::TerrainMaterialLayerAdd) {
             terrain_material_layer_menu::Close();
-            if (terrainLayerPicker.has_value()) {
-                EditorTerrainToolState& tool = EditorTerrainService::ToolState();
-                tool.selectedMaterialLayer = *terrainLayerPicker;
-                tool.mode = EditorTerrainToolMode::Paint;
-                tool.editingEnabled = true;
-                tool.brush.strength = std::min(tool.brush.strength, 1.0F);
-                tool.brushMenuOpen = false;
-            }
             const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
-            const std::optional<kb::assets::TerrainAsset> terrain =
-                EditorTerrainService::Load(sceneContext_.Scene(), entity);
-            const std::uint64_t current = terrainLayerPicker.has_value() && terrain.has_value() &&
-                    *terrainLayerPicker < terrain->materialLayers.size()
-                ? terrain->materialLayers[*terrainLayerPicker].materialAssetId
-                : 0U;
             const EditorMaterialAssetPickerDialog::Result result = EditorMaterialAssetPickerDialog::Show(
-                mainWindow_, MakeEditorDarkTheme(), sceneContext_, kb::assets::AssetId{ current });
+                mainWindow_, MakeEditorDarkTheme(), sceneContext_, sceneViewport_, {}, false);
             if (result.accepted) {
                 std::string error;
-                const bool assigned = terrainLayerPicker.has_value()
-                    ? sceneContext_.SetTerrainMaterialLayer(entity, *terrainLayerPicker, result.assetId, &error)
-                    : sceneContext_.AddTerrainMaterialLayer(entity, result.assetId, &error);
+                const bool assigned = sceneContext_.AddTerrainMaterialLayer(entity, result.assetId, &error);
                 if (!assigned) {
-                    sceneContext_.Console().Warning("Terrain", error.empty() ? "Material layer could not be updated." : error);
+                    sceneContext_.Console().Warning("Terrain", error.empty() ? "Material layer could not be added." : error);
                 } else {
                     sceneViewport_.RequestPresent();
                 }
@@ -1073,6 +1114,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     mainWindow_,
                     MakeEditorDarkTheme(),
                     sceneContext_,
+                    sceneViewport_,
                     kb::assets::AssetId{ current });
                 if (result.accepted) {
                     const bool assigned = overridePicker

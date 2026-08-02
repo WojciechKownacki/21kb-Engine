@@ -3,6 +3,8 @@
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/AnimationAssets.hpp"
+#include "engine/scene/SkeletonBindingComponent.hpp"
+#include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
@@ -179,6 +181,14 @@ public:
     static void SetAnimator(Scene& scene, SceneEntity entity, const Animator& animator);
     static void RemoveAnimator(Scene& scene, SceneEntity entity) noexcept;
     static void MarkAnimatorModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static SkeletonBindingComponent* TryGetSkeletonBinding(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool SetSkeletonBinding(Scene& scene, SceneEntity entity, const SkeletonBindingComponent& binding);
+    static void RemoveSkeletonBinding(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkSkeletonBindingModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static DrawD3DeformedGeometryComponent* TryGetDeformedGeometry(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool SetDeformedGeometry(Scene& scene, SceneEntity entity, const DrawD3DeformedGeometryComponent& geometry);
+    static void RemoveDeformedGeometry(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkDeformedGeometryModified(Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static UIDocumentComponent* TryGetUIDocument(Scene& scene, SceneEntity entity) noexcept;
     static void SetUIDocument(Scene& scene, SceneEntity entity, const UIDocumentComponent& document);
     static void RemoveUIDocument(Scene& scene, SceneEntity entity) noexcept;

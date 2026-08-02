@@ -291,6 +291,7 @@ struct SceneRenderShadowMapBinding {
 
 enum class SceneRenderMeshPassMode : std::uint8_t {
     OpaqueOnly,
+    OpaqueAndTerrainLayers,
     OpaqueAndTransparent,
 };
 

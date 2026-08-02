@@ -31,9 +31,33 @@
 #endif
 
 namespace kb::tests {
+namespace {
+
+[[nodiscard]] std::string ReadTextFile(const std::filesystem::path& path) {
+    std::ifstream input{ path, std::ios::binary };
+    return { std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+}
+
+void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
+    output.write(text.data(), static_cast<std::streamsize>(text.size()));
+}
+
+} // namespace
 
 void RunAnimationRuntimeTests() {
     constexpr kb::scene::AnimationEventId kFootstepEvent = 0xA11CE001U;
+    const kb::scene::Animator authoredAnimator{
+        .controllerAssetId = 73U,
+        .speed = 1.25F,
+        .enabled = false,
+        .rootMotionOwner = kb::scene::AnimatorRootMotionOwner::Rigidbody,
+    };
+    Require(authoredAnimator.controllerAssetId == 73U && NearlyEqual(authoredAnimator.speed, 1.25F) &&
+            !authoredAnimator.enabled &&
+            authoredAnimator.rootMotionOwner == kb::scene::AnimatorRootMotionOwner::Rigidbody,
+        "Animator must remain a compact authored controller, speed, enabled, and root-motion-owner configuration");
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb-animation-runtime-tests";
     std::filesystem::remove_all(root);
     std::filesystem::create_directories(root / "Assets" / "Animation");
@@ -68,6 +92,51 @@ void RunAnimationRuntimeTests() {
     const auto runClipPath = root / "Assets" / "Animation" / "Run Fast.kbanim";
     Require(kb::scene::AnimationAssetIO::SaveClip(runClipPath, runClip), "Second AnimationClip production asset could not be saved");
 
+    kb::scene::AnimationClip skeletalClip{};
+    skeletalClip.durationSeconds = 1.0F;
+    skeletalClip.looping = true;
+    skeletalClip.targetSkeletonAssetId = 0xA55E7U;
+    skeletalClip.targetSkeletonCompatibilitySignature = 0x5A17U;
+    skeletalClip.skeletalTracks = {
+        {
+            .boneId = 101U,
+            .keyframes = {
+                { .timeSeconds = 0.0F, .transform = {} },
+                { .timeSeconds = 1.0F, .transform = { .position = { 2.0F, 0.0F, 0.0F } } },
+            },
+        },
+    };
+    skeletalClip.morphTracks = {
+        { .morphTarget = "Smile", .keyframes = { { .timeSeconds = 0.0F, .weight = 0.0F }, { .timeSeconds = 1.0F, .weight = 1.0F } } },
+    };
+    skeletalClip.curves = {
+        { .name = "FootPlant", .keyframes = { { .timeSeconds = 0.0F, .value = 0.0F }, { .timeSeconds = 1.0F, .value = 1.0F } } },
+    };
+    skeletalClip.rootMotionMode = kb::scene::AnimationRootMotionMode::ExtractFromBone;
+    skeletalClip.rootMotionBoneId = 101U;
+    const auto skeletalClipPath = root / "SkeletalRoundTrip.kbanim";
+    Require(kb::scene::AnimationAssetIO::SaveClip(skeletalClipPath, skeletalClip),
+        "Skeletal AnimationClip production asset could not be saved");
+    const auto loadedSkeletalClip = kb::scene::AnimationAssetIO::LoadClip(skeletalClipPath);
+    Require(loadedSkeletalClip.has_value() &&
+            loadedSkeletalClip->targetSkeletonAssetId == skeletalClip.targetSkeletonAssetId &&
+            loadedSkeletalClip->targetSkeletonCompatibilitySignature == skeletalClip.targetSkeletonCompatibilitySignature &&
+            loadedSkeletalClip->skeletalTracks.size() == 1U &&
+            loadedSkeletalClip->skeletalTracks.front().boneId == 101U &&
+            loadedSkeletalClip->morphTracks.size() == 1U &&
+            loadedSkeletalClip->curves.size() == 1U &&
+            loadedSkeletalClip->rootMotionMode == kb::scene::AnimationRootMotionMode::ExtractFromBone &&
+            loadedSkeletalClip->rootMotionBoneId == 101U,
+        "Skeletal AnimationClip round trip lost canonical bindings");
+    kb::scene::AnimationClip mixedBindingClip = skeletalClip;
+    mixedBindingClip.tracks = clip.tracks;
+    Require(!kb::scene::AnimationAssetIO::SaveClip(root / "MixedBinding.kbanim", mixedBindingClip),
+        "Skeletal AnimationClip accepted SceneEntity path bindings");
+    kb::scene::AnimationClip invalidRootMotionClip = skeletalClip;
+    invalidRootMotionClip.rootMotionBoneId = 999U;
+    Require(!kb::scene::AnimationAssetIO::SaveClip(root / "InvalidRootMotion.kbanim", invalidRootMotionClip),
+        "Skeletal AnimationClip accepted root motion outside its bone bindings");
+
     kb::scene::AnimatorController controller{};
     controller.parameters = {
         { .name = "Grounded", .type = kb::scene::AnimatorParameterType::Bool, .boolDefault = true },
@@ -99,6 +168,45 @@ void RunAnimationRuntimeTests() {
     };
     const auto controllerPath = root / "Assets" / "Animation" / "Character.kbanimcontroller";
     Require(kb::scene::AnimationAssetIO::SaveController(controllerPath, controller), "AnimatorController production asset could not be saved");
+    const std::filesystem::path roundTripRoot = root / "RoundTrip";
+    const std::filesystem::path deterministicClipPath = roundTripRoot / "MoveCopy.kbanim";
+    Require(kb::scene::AnimationAssetIO::SaveClip(deterministicClipPath, clip) &&
+            ReadTextFile(clipPath) == ReadTextFile(deterministicClipPath),
+        "AnimationClip serialization is not deterministic");
+    const std::string serializedClip = ReadTextFile(clipPath);
+    const std::size_t clipHeaderEnd = serializedClip.find('\n');
+    Require(clipHeaderEnd != std::string::npos,
+        "AnimationClip serialization has no schema header");
+    const std::filesystem::path legacyClipPath = roundTripRoot / "Legacy.kbanim";
+    WriteTextFile(legacyClipPath, std::string_view{ serializedClip }.substr(clipHeaderEnd + 1U));
+    Require(kb::scene::AnimationAssetIO::LoadClip(legacyClipPath).has_value(),
+        "AnimationClip legacy migration failed");
+    const std::filesystem::path corruptClipPath = roundTripRoot / "Corrupt.kbanim";
+    WriteTextFile(corruptClipPath, "21kb AnimationClip 99\n");
+    std::string corruptClipError;
+    Require(!kb::scene::AnimationAssetIO::LoadClip(corruptClipPath, &corruptClipError).has_value() &&
+            corruptClipError.find("line 1") != std::string::npos,
+        "AnimationClip accepted an unsupported schema version without a diagnostic");
+    const std::filesystem::path deterministicControllerPath = roundTripRoot / "CharacterCopy.kbanimcontroller";
+    Require(kb::scene::AnimationAssetIO::SaveController(deterministicControllerPath, controller) &&
+            ReadTextFile(controllerPath) == ReadTextFile(deterministicControllerPath),
+        "AnimatorController serialization is not deterministic");
+    const std::string serializedController = ReadTextFile(controllerPath);
+    const std::size_t controllerHeaderEnd = serializedController.find('\n');
+    Require(controllerHeaderEnd != std::string::npos,
+        "AnimatorController serialization has no schema header");
+    const std::filesystem::path legacyControllerPath = roundTripRoot / "Legacy.kbanimcontroller";
+    WriteTextFile(legacyControllerPath,
+        std::string_view{ serializedController }.substr(controllerHeaderEnd + 1U));
+    Require(kb::scene::AnimationAssetIO::LoadController(legacyControllerPath).has_value(),
+        "AnimatorController legacy migration failed");
+    const std::filesystem::path corruptControllerPath = roundTripRoot / "Corrupt.kbanimcontroller";
+    WriteTextFile(corruptControllerPath, "21kb AnimatorController 99\n");
+    std::string corruptControllerError;
+    Require(!kb::scene::AnimationAssetIO::LoadController(
+                corruptControllerPath, &corruptControllerError).has_value() &&
+            corruptControllerError.find("line 1") != std::string::npos,
+        "AnimatorController accepted an unsupported schema version without a diagnostic");
     kb::scene::AnimationClip turnClip{};
     turnClip.durationSeconds = 1.0F;
     turnClip.looping = true;

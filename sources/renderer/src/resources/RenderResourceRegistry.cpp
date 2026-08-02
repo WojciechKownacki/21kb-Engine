@@ -107,16 +107,13 @@ RenderMeshHandle RenderResourceRegistry::RegisterMesh(const RenderMeshDesc& desc
             WriteRendererMaterialGraphDebugLog("resource", "register-mesh-failed invalid terrain layer weights");
             return {};
         }
-        const bgfx::Memory* weightMemory = bgfx::copy(
-            desc.terrainLayerWeights, desc.terrainLayerWeightBytes);
         terrainLayerWeightTexture = bgfx::createTexture2D(
             desc.terrainLayerWeightWidth,
             desc.terrainLayerWeightHeight,
             false,
             1U,
             bgfx::TextureFormat::RGBA8,
-            BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP,
-            weightMemory);
+            BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
         if (!bgfx::isValid(terrainLayerWeightTexture)) {
             if (bgfx::isValid(vertexBuffer)) bgfx::destroy(vertexBuffer);
             if (bgfx::isValid(dynamicVertexBuffer)) bgfx::destroy(dynamicVertexBuffer);
@@ -124,6 +121,17 @@ RenderMeshHandle RenderResourceRegistry::RegisterMesh(const RenderMeshDesc& desc
             WriteRendererMaterialGraphDebugLog("resource", "register-mesh-failed terrain layer texture invalid");
             return {};
         }
+        // Passing initial memory to createTexture2D makes a bgfx texture immutable. Terrain painting
+        // updates subregions in place, so allocate mutable storage first and upload the initial map
+        // through the same update path that later brush strokes use.
+        const bgfx::Memory* weightMemory = bgfx::copy(
+            desc.terrainLayerWeights, desc.terrainLayerWeightBytes);
+        bgfx::updateTexture2D(
+            terrainLayerWeightTexture, 0U, 0U,
+            0U, 0U,
+            desc.terrainLayerWeightWidth,
+            desc.terrainLayerWeightHeight,
+            weightMemory);
     }
 
     const std::uint32_t slotIndex = meshes_.Allocate();
