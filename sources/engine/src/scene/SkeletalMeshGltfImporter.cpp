@@ -10,6 +10,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <ranges>
 #include <set>
 #include <string>
 #include <string_view>
@@ -27,10 +28,85 @@ struct GltfDataDeleter {
 
 using GltfData = std::unique_ptr<cgltf_data, GltfDataDeleter>;
 
+struct ImportContext {
+    std::string mesh;
+    std::string node;
+    std::string bone;
+    std::int32_t primitiveIndex = -1;
+    std::int32_t channelIndex = -1;
+};
+
+void AddDiagnostic(SkeletalMeshGltfImportReport* report,
+    SkeletalMeshGltfImportDiagnosticSeverity severity,
+    const std::filesystem::path& sourcePath,
+    const ImportContext& context,
+    std::string message) {
+    if (report == nullptr) return;
+    report->diagnostics.push_back({
+        .severity = severity,
+        .message = std::move(message),
+        .sourcePath = sourcePath,
+        .mesh = context.mesh,
+        .node = context.node,
+        .bone = context.bone,
+        .primitiveIndex = context.primitiveIndex,
+        .channelIndex = context.channelIndex,
+    });
+}
+
+class ErrorReporter final {
+public:
+    ErrorReporter(SkeletalMeshGltfImportReport* report, std::string* error,
+        const std::filesystem::path& sourcePath) noexcept
+        : report_(report), error_(error), sourcePath_(sourcePath) {}
+
+    ~ErrorReporter() {
+        const bool alreadyReported = report_ != nullptr && std::ranges::any_of(
+            report_->diagnostics, [](const SkeletalMeshGltfImportDiagnostic& diagnostic) {
+                return diagnostic.severity == SkeletalMeshGltfImportDiagnosticSeverity::Error;
+            });
+        if (report_ != nullptr && error_ != nullptr && !error_->empty() && !alreadyReported) {
+            AddDiagnostic(report_, SkeletalMeshGltfImportDiagnosticSeverity::Error,
+                sourcePath_, {}, *error_);
+        }
+    }
+
+    ErrorReporter(const ErrorReporter&) = delete;
+    ErrorReporter& operator=(const ErrorReporter&) = delete;
+
+private:
+    SkeletalMeshGltfImportReport* report_ = nullptr;
+    std::string* error_ = nullptr;
+    const std::filesystem::path& sourcePath_;
+};
+
 template <typename T>
 [[nodiscard]] std::optional<T> Fail(std::string* error, std::string message) {
     if (error != nullptr) *error = std::move(message);
     return std::nullopt;
+}
+
+template <typename T>
+[[nodiscard]] std::optional<T> FailWithDiagnostic(std::string* error,
+    SkeletalMeshGltfImportReport* report,
+    const std::filesystem::path& sourcePath,
+    const ImportContext& context,
+    std::string message) {
+    AddDiagnostic(report, SkeletalMeshGltfImportDiagnosticSeverity::Error,
+        sourcePath, context, message);
+    return Fail<T>(error, std::move(message));
+}
+
+[[nodiscard]] std::string NameOf(const cgltf_node* node, std::string_view fallback) {
+    return node != nullptr && node->name != nullptr && node->name[0] != '\0'
+        ? std::string{ node->name }
+        : std::string{ fallback };
+}
+
+[[nodiscard]] std::string NameOf(const cgltf_mesh* mesh, std::string_view fallback) {
+    return mesh != nullptr && mesh->name != nullptr && mesh->name[0] != '\0'
+        ? std::string{ mesh->name }
+        : std::string{ fallback };
 }
 
 [[nodiscard]] bool ReadFloat(const cgltf_accessor* accessor, cgltf_size index,
@@ -256,8 +332,13 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
     const std::filesystem::path& path,
     std::uint64_t skeletonAssetId,
     const SkeletalMeshGltfImportOptions& importOptions,
-    std::string* error) {
+    std::string* error,
+    SkeletalMeshGltfImportReport* report) {
+    if (report != nullptr) report->diagnostics.clear();
+    std::string reportError;
+    if (error == nullptr && report != nullptr) error = &reportError;
     if (error != nullptr) error->clear();
+    ErrorReporter errorReporter{ report, error, path };
     if (skeletonAssetId == 0U) {
         return Fail<SkeletalMeshGltfImportResult>(error,
             "Skeletal glTF import requires a valid Skeleton asset id.");
@@ -363,6 +444,10 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
         return Fail<SkeletalMeshGltfImportResult>(error,
             "Skeletal glTF import could not find a mesh node bound to the skin.");
     }
+    const ImportContext meshContext{
+        .mesh = NameOf(meshNode->mesh, "Mesh_0"),
+        .node = NameOf(meshNode, "MeshNode"),
+    };
 
     SkeletalMeshLod lod{};
     lod.minScreenCoverage = 0.0F;
@@ -370,6 +455,8 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
          primitiveIndex < meshNode->mesh->primitives_count; ++primitiveIndex) {
         const cgltf_primitive& primitive = meshNode->mesh->primitives[primitiveIndex];
         if (primitive.type != cgltf_primitive_type_triangles) continue;
+        ImportContext primitiveContext = meshContext;
+        primitiveContext.primitiveIndex = static_cast<std::int32_t>(primitiveIndex);
         const cgltf_accessor* positions = Attribute(primitive, cgltf_attribute_type_position);
         const cgltf_accessor* normals = Attribute(primitive, cgltf_attribute_type_normal);
         const cgltf_accessor* tangents = Attribute(primitive, cgltf_attribute_type_tangent);
@@ -387,8 +474,16 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
             (tangents != nullptr && !EqualCount(tangents, positions->count)) ||
             (texCoords != nullptr && !EqualCount(texCoords, positions->count)) ||
             positions->count == 0U) {
-            return Fail<SkeletalMeshGltfImportResult>(error,
+            return FailWithDiagnostic<SkeletalMeshGltfImportResult>(error, report, path, primitiveContext,
                 "Skeletal glTF primitive has incomplete POSITION, JOINTS_0, or WEIGHTS_0 data.");
+        }
+        if (normals == nullptr) {
+            AddDiagnostic(report, SkeletalMeshGltfImportDiagnosticSeverity::Warning, path,
+                primitiveContext, "Skeletal glTF primitive omits NORMAL; the canonical default normal was authored.");
+        }
+        if (tangents == nullptr) {
+            AddDiagnostic(report, SkeletalMeshGltfImportDiagnosticSeverity::Warning, path,
+                primitiveContext, "Skeletal glTF primitive omits TANGENT; the canonical default tangent was authored.");
         }
         const std::uint32_t baseVertex = static_cast<std::uint32_t>(lod.vertices.size());
         SkeletalMeshSection section{};
@@ -429,7 +524,7 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
                 if (joint[influence] >= skin.joints_count ||
                     joint[influence] > std::numeric_limits<std::uint16_t>::max() ||
                     !std::isfinite(weight[influence]) || weight[influence] < 0.0F) {
-                    return Fail<SkeletalMeshGltfImportResult>(error,
+                    return FailWithDiagnostic<SkeletalMeshGltfImportResult>(error, report, path, primitiveContext,
                         "Skeletal glTF primitive has an invalid JOINTS_0 or WEIGHTS_0 influence.");
                 }
                 influences[influence] = {
@@ -449,7 +544,7 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
                     if (joint1[influence] >= skin.joints_count ||
                         joint1[influence] > std::numeric_limits<std::uint16_t>::max() ||
                         !std::isfinite(weight1[influence]) || weight1[influence] < 0.0F) {
-                        return Fail<SkeletalMeshGltfImportResult>(error,
+                        return FailWithDiagnostic<SkeletalMeshGltfImportResult>(error, report, path, primitiveContext,
                             "Skeletal glTF primitive has an invalid JOINTS_1 or WEIGHTS_1 influence.");
                     }
                     influences[influence + 4U] = {
@@ -471,7 +566,7 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
                 weightSum += vertex.jointWeights[influence];
             }
             if (!std::isfinite(weightSum) || weightSum <= 0.0F) {
-                return Fail<SkeletalMeshGltfImportResult>(error,
+                return FailWithDiagnostic<SkeletalMeshGltfImportResult>(error, report, path, primitiveContext,
                     "Skeletal glTF primitive has a zero-weight skin binding.");
             }
             for (float& influenceWeight : vertex.jointWeights) {
@@ -500,7 +595,7 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
             if (targetPositions == nullptr || !EqualCount(targetPositions, positions->count) ||
                 (targetNormals != nullptr && !EqualCount(targetNormals, positions->count)) ||
                 (targetTangents != nullptr && !EqualCount(targetTangents, positions->count))) {
-                return Fail<SkeletalMeshGltfImportResult>(error,
+                return FailWithDiagnostic<SkeletalMeshGltfImportResult>(error, report, path, primitiveContext,
                     "Skeletal glTF morph target has incomplete POSITION, NORMAL, or TANGENT deltas.");
             }
             SkeletalMeshMorphTarget& morph = result.mesh.morphTargets[targetIndex];
@@ -511,7 +606,7 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
                 if (!ReadFloat(targetPositions, vertexIndex, positionDelta.data(), positionDelta.size()) ||
                     (targetNormals != nullptr && !ReadFloat(targetNormals, vertexIndex, normalDelta.data(), normalDelta.size())) ||
                     (targetTangents != nullptr && !ReadFloat(targetTangents, vertexIndex, tangentDelta.data(), tangentDelta.size()))) {
-                    return Fail<SkeletalMeshGltfImportResult>(error,
+                    return FailWithDiagnostic<SkeletalMeshGltfImportResult>(error, report, path, primitiveContext,
                         "Skeletal glTF morph target has unreadable deltas.");
                 }
                 morph.deltas.push_back({
@@ -528,12 +623,12 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
         const cgltf_size indexCount = primitive.indices == nullptr
             ? positions->count
             : primitive.indices->count;
-        if (indexCount == 0U || indexCount % 3U != 0U) return Fail<SkeletalMeshGltfImportResult>(error, "Skeletal glTF primitive has non-triangle indices.");
+        if (indexCount == 0U || indexCount % 3U != 0U) return FailWithDiagnostic<SkeletalMeshGltfImportResult>(error, report, path, primitiveContext, "Skeletal glTF primitive has non-triangle indices.");
         for (cgltf_size index = 0U; index < indexCount; ++index) {
             const cgltf_size sourceIndex = primitive.indices == nullptr
                 ? index
                 : cgltf_accessor_read_index(primitive.indices, index);
-            if (sourceIndex >= positions->count) return Fail<SkeletalMeshGltfImportResult>(error, "Skeletal glTF primitive index is outside its vertex range.");
+            if (sourceIndex >= positions->count) return FailWithDiagnostic<SkeletalMeshGltfImportResult>(error, report, path, primitiveContext, "Skeletal glTF primitive index is outside its vertex range.");
             lod.indices.push_back(baseVertex + static_cast<std::uint32_t>(sourceIndex));
         }
         if (conversion->reversesWinding) {
@@ -588,6 +683,9 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
         bool hasMorphChannel = false;
         for (cgltf_size channelIndex = 0U; channelIndex < sourceAnimation.channels_count; ++channelIndex) {
             const cgltf_animation_channel& channel = sourceAnimation.channels[channelIndex];
+            ImportContext channelContext = meshContext;
+            channelContext.channelIndex = static_cast<std::int32_t>(channelIndex);
+            channelContext.node = NameOf(channel.target_node, "AnimationTarget");
             if (channel.target_path == cgltf_animation_path_type_weights) {
                 if (channel.target_node != meshNode || channel.sampler == nullptr ||
                     channel.sampler->input == nullptr || channel.sampler->output == nullptr ||
@@ -595,7 +693,7 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
                     channel.sampler->input->count == 0U || result.mesh.morphTargets.empty() ||
                     channel.sampler->output->count != channel.sampler->input->count * result.mesh.morphTargets.size() ||
                     hasMorphChannel) {
-                    return Fail<SkeletalMeshGltfImportResult>(error,
+                    return FailWithDiagnostic<SkeletalMeshGltfImportResult>(error, report, path, channelContext,
                         "Skeletal glTF animation has an invalid morph channel or unsupported interpolation.");
                 }
                 hasMorphChannel = true;
@@ -604,11 +702,11 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
                     std::array<cgltf_float, 1U> inputTime{};
                     if (!ReadFloat(channel.sampler->input, keyIndex, inputTime.data(), 1U) ||
                         !std::isfinite(inputTime[0]) || inputTime[0] < 0.0F) {
-                        return Fail<SkeletalMeshGltfImportResult>(error,
+                        return FailWithDiagnostic<SkeletalMeshGltfImportResult>(error, report, path, channelContext,
                             "Skeletal glTF animation has unreadable or non-finite morph keyframes.");
                     }
                     if (inputTime[0] <= previousMorphTime) {
-                        return Fail<SkeletalMeshGltfImportResult>(error,
+                        return FailWithDiagnostic<SkeletalMeshGltfImportResult>(error, report, path, channelContext,
                             "Skeletal glTF animation has unordered morph keyframes.");
                     }
                     previousMorphTime = inputTime[0];
@@ -617,7 +715,7 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
                         if (!ReadFloat(channel.sampler->output,
                                 keyIndex * result.mesh.morphTargets.size() + targetIndex,
                                 weight.data(), 1U) || !std::isfinite(weight[0])) {
-                            return Fail<SkeletalMeshGltfImportResult>(error,
+                            return FailWithDiagnostic<SkeletalMeshGltfImportResult>(error, report, path, channelContext,
                                 "Skeletal glTF animation has unreadable or non-finite morph weights.");
                         }
                         morphKeys[result.mesh.morphTargets[targetIndex].name].push_back({
@@ -631,7 +729,7 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
             if (channel.target_path != cgltf_animation_path_type_translation &&
                 channel.target_path != cgltf_animation_path_type_rotation &&
                 channel.target_path != cgltf_animation_path_type_scale) {
-                return Fail<SkeletalMeshGltfImportResult>(error,
+                return FailWithDiagnostic<SkeletalMeshGltfImportResult>(error, report, path, channelContext,
                     "Skeletal glTF animation has an unsupported channel path.");
             }
             const auto target = jointSourceIndex.find(channel.target_node);
@@ -640,12 +738,13 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
                 channel.sampler->interpolation != cgltf_interpolation_type_linear ||
                 channel.sampler->input->count == 0U ||
                 channel.sampler->input->count != channel.sampler->output->count) {
-                return Fail<SkeletalMeshGltfImportResult>(error,
+                return FailWithDiagnostic<SkeletalMeshGltfImportResult>(error, report, path, channelContext,
                     "Skeletal glTF animation has an invalid bone channel or unsupported interpolation.");
             }
             const SkeletonBoneId boneId = static_cast<SkeletonBoneId>(target->second + 1U);
+            channelContext.bone = NameOf(channel.target_node, "Joint_" + std::to_string(target->second));
             if (!boneChannelTargets.emplace(boneId, channel.target_path).second) {
-                return Fail<SkeletalMeshGltfImportResult>(error,
+                return FailWithDiagnostic<SkeletalMeshGltfImportResult>(error, report, path, channelContext,
                     "Skeletal glTF animation has duplicate bone channels.");
             }
             const LocalTransform referencePose = referencePoses.at(boneId);
@@ -658,11 +757,11 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
                 if (!ReadFloat(channel.sampler->input, keyIndex, inputTime.data(), 1U) ||
                     !ReadFloat(channel.sampler->output, keyIndex, value.data(), componentCount) ||
                     !std::isfinite(inputTime[0]) || inputTime[0] < 0.0F) {
-                    return Fail<SkeletalMeshGltfImportResult>(error,
+                    return FailWithDiagnostic<SkeletalMeshGltfImportResult>(error, report, path, channelContext,
                         "Skeletal glTF animation has unreadable or non-finite keyframes.");
                 }
                 if (!channelTimes.empty() && inputTime[0] <= channelTimes.back()) {
-                    return Fail<SkeletalMeshGltfImportResult>(error,
+                    return FailWithDiagnostic<SkeletalMeshGltfImportResult>(error, report, path, channelContext,
                         "Skeletal glTF animation has unordered bone keyframes.");
                 }
                 channelTimes.push_back(inputTime[0]);
@@ -678,7 +777,7 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
             }
             const auto timeIt = boneChannelTimes.find(boneId);
             if (timeIt != boneChannelTimes.end() && timeIt->second != channelTimes) {
-                return Fail<SkeletalMeshGltfImportResult>(error,
+                return FailWithDiagnostic<SkeletalMeshGltfImportResult>(error, report, path, channelContext,
                     "Skeletal glTF animation bone channels must share one keyframe time grid.");
             }
             if (timeIt == boneChannelTimes.end()) {
@@ -704,6 +803,12 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
         result.clips.push_back(std::move(clip));
     }
     return result;
+}
+
+bool SkeletalMeshGltfImportReport::HasErrors() const noexcept {
+    return std::ranges::any_of(diagnostics, [](const SkeletalMeshGltfImportDiagnostic& diagnostic) {
+        return diagnostic.severity == SkeletalMeshGltfImportDiagnosticSeverity::Error;
+    });
 }
 
 } // namespace kb::scene

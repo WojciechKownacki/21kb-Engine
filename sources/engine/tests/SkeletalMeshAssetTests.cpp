@@ -130,8 +130,9 @@ void RunSkeletalMeshAssetTests() {
     const auto importRoot = root / "GltfImport";
     WriteSkeletalGltfFixture(importRoot);
     std::string importError;
+    kb::scene::SkeletalMeshGltfImportReport importReport;
     const auto imported = kb::scene::SkeletalMeshGltfImporter::Import(
-        importRoot / "Hero.gltf", 777U, &importError);
+        importRoot / "Hero.gltf", 777U, &importError, &importReport);
     Require(imported.has_value() && imported->skeleton.bones.size() == 2U &&
             imported->skeleton.bones[1].parentIndex == 0 &&
             imported->mesh.skeletonAssetId == 777U &&
@@ -141,6 +142,10 @@ void RunSkeletalMeshAssetTests() {
             imported->mesh.lods[0].vertices[1].jointWeights[0] == 1.0F &&
             kb::scene::ValidateSkeletalMeshAsset(imported->mesh).valid,
         "Skeletal glTF import did not preserve hierarchy, inverse binds, JOINTS_0, and WEIGHTS_0");
+    Require(!importReport.HasErrors() && importReport.diagnostics.size() == 2U &&
+            importReport.diagnostics[0].severity == kb::scene::SkeletalMeshGltfImportDiagnosticSeverity::Warning &&
+            importReport.diagnostics[0].primitiveIndex == 0,
+        "Skeletal glTF import did not report defaulted vertex attributes");
     const auto plannerRoot = root / "GltfImportPlanner";
     std::filesystem::create_directories(plannerRoot / "Assets" / "Characters");
     kb::scene::Scene plannerScene;
@@ -217,9 +222,13 @@ void RunSkeletalMeshAssetTests() {
     zeroWeightBuffer.seekp(60, std::ios::beg);
     zeroWeightBuffer.write(reinterpret_cast<const char*>(zeroWeights.data()), sizeof(zeroWeights));
     zeroWeightBuffer.close();
+    kb::scene::SkeletalMeshGltfImportReport zeroWeightReport;
     Require(!kb::scene::SkeletalMeshGltfImporter::Import(
-                zeroWeightRoot / "Hero.gltf", 777U, &importError).has_value() &&
-            importError.find("zero-weight") != std::string::npos,
+                zeroWeightRoot / "Hero.gltf", 777U, &importError, &zeroWeightReport).has_value() &&
+            importError.find("zero-weight") != std::string::npos && zeroWeightReport.HasErrors() &&
+            zeroWeightReport.diagnostics.front().primitiveIndex == 0 &&
+            !zeroWeightReport.diagnostics.front().mesh.empty() &&
+            !zeroWeightReport.diagnostics.front().node.empty(),
         "Skeletal glTF import accepted a zero-weight binding");
     kb::scene::Scene scene; Require(scene.Assets().MountProject(root),"SkeletalMeshAsset mount failed"); Require(scene.Assets().Discover()==2U,"SkeletalMeshAsset discovery failed");
     const auto* skeletonMetadata = scene.Assets().Manager().Registry().FindByPath(

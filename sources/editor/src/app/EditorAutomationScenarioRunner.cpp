@@ -2236,18 +2236,26 @@ ReadScriptValue(
         if (!clipCount && step.Find("clip_count") != nullptr) return { false, error };
         const auto morphCount = UInt32Member(step, "morph_count", error, false);
         if (!morphCount && step.Find("morph_count") != nullptr) return { false, error };
+        const auto warningCount = UInt32Member(step, "warning_count", error, false);
+        if (!warningCount && step.Find("warning_count") != nullptr) return { false, error };
         const auto source = ResolveProjectPath(*path, error);
         if (!source) return { false, error };
         std::string importError;
+        kb::scene::SkeletalMeshGltfImportReport importReport;
         const auto imported = kb::scene::SkeletalMeshGltfImporter::Import(
-            *source, *skeletonId, &importError);
+            *source, *skeletonId, &importError, &importReport);
+        const std::size_t actualWarningCount = static_cast<std::size_t>(std::ranges::count_if(
+            importReport.diagnostics, [](const kb::scene::SkeletalMeshGltfImportDiagnostic& diagnostic) {
+                return diagnostic.severity == kb::scene::SkeletalMeshGltfImportDiagnosticSeverity::Warning;
+            }));
         const bool matched = imported.has_value() &&
             imported->skeleton.bones.size() == *boneCount &&
             imported->mesh.skeletonAssetId == *skeletonId &&
             imported->mesh.lods.size() == 1U &&
             imported->mesh.lods.front().vertices.size() == *vertexCount &&
             (!clipCount || imported->clips.size() == *clipCount) &&
-            (!morphCount || imported->mesh.morphTargets.size() == *morphCount);
+            (!morphCount || imported->mesh.morphTargets.size() == *morphCount) &&
+            (!warningCount || actualWarningCount == *warningCount);
         return { matched, matched ? "canonical glTF skeletal import" : importError };
     }
 
