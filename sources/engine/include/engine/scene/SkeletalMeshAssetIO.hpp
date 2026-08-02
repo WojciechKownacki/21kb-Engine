@@ -2,6 +2,7 @@
 
 #include "engine/scene/SkeletalMeshAsset.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 
@@ -9,6 +10,7 @@ namespace kb::scene {
 
 inline constexpr const char* kSkeletalMeshAssetExtension = ".kbskeletalmesh";
 inline constexpr const char* kSkeletalMeshAssetType = "SkeletalMesh";
+inline constexpr std::uint32_t kSkeletalMeshAssetSchemaVersion = 1U;
 
 class SkeletalMeshAssetIO final {
 public:

@@ -1,6 +1,7 @@
 #include "engine/scene/AnimationAssetIO.hpp"
 
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
+#include "scene/asset/io/VersionedTextAssetHeader.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -297,11 +298,22 @@ std::optional<AnimationClip> AnimationAssetIO::LoadClip(const std::filesystem::p
     std::istringstream file{ *text };
     file.imbue(std::locale::classic());
     std::string line;
+    bool schemaRead = false;
     while (std::getline(file, line)) {
         std::istringstream input{ line };
         input.imbue(std::locale::classic());
         std::string command;
         if (!(input >> command) || command.starts_with('#')) continue;
+        if (!schemaRead) {
+            const asset_io::TextAssetHeaderStatus header =
+                asset_io::ParseTextAssetHeader(
+                    line, kAnimationClipAssetType, kAnimationClipAssetSchemaVersion);
+            if (header == asset_io::TextAssetHeaderStatus::Invalid) {
+                return std::nullopt;
+            }
+            schemaRead = true;
+            if (header == asset_io::TextAssetHeaderStatus::Current) continue;
+        }
         if (command == "durationSeconds") {
             if (!(input >> clip.durationSeconds) || !EndOfRecord(input)) return std::nullopt;
         } else if (command == "looping") {
@@ -394,11 +406,23 @@ std::optional<AnimatorController> AnimationAssetIO::LoadController(const std::fi
     std::istringstream file{ *text };
     file.imbue(std::locale::classic());
     std::string line;
+    bool schemaRead = false;
     while (std::getline(file, line)) {
         std::istringstream input{ line };
         input.imbue(std::locale::classic());
         std::string command;
         if (!(input >> command) || command.starts_with('#')) continue;
+        if (!schemaRead) {
+            const asset_io::TextAssetHeaderStatus header =
+                asset_io::ParseTextAssetHeader(
+                    line, kAnimatorControllerAssetType,
+                    kAnimatorControllerAssetSchemaVersion);
+            if (header == asset_io::TextAssetHeaderStatus::Invalid) {
+                return std::nullopt;
+            }
+            schemaRead = true;
+            if (header == asset_io::TextAssetHeaderStatus::Current) continue;
+        }
         if (command == "parameter") {
             AnimatorParameterDefinition parameter{};
             std::string type;
@@ -515,6 +539,8 @@ bool AnimationAssetIO::SaveClip(const std::filesystem::path& path, const Animati
     if (!ValidateClip(clip)) return false;
     std::ostringstream output;
     output.imbue(std::locale::classic());
+    output << asset_io::TextAssetHeader(
+        kAnimationClipAssetType, kAnimationClipAssetSchemaVersion);
     output << "durationSeconds " << clip.durationSeconds << "\nlooping " << (clip.looping ? 1 : 0) << '\n';
     for (const auto& track : clip.tracks) output << "track " << std::quoted(track.targetPath.empty() ? "." : track.targetPath) << ' ' << track.bindingMask << '\n';
     for (std::size_t index = 0U; index < clip.tracks.size(); ++index) {
@@ -567,6 +593,8 @@ bool AnimationAssetIO::SaveController(const std::filesystem::path& path, const A
     if (!ValidateController(controller)) return false;
     std::ostringstream output;
     output.imbue(std::locale::classic());
+    output << asset_io::TextAssetHeader(
+        kAnimatorControllerAssetType, kAnimatorControllerAssetSchemaVersion);
     for (const auto& parameter : controller.parameters) {
         output << "parameter " << std::quoted(parameter.name) << ' ' << ParameterTypeName(parameter.type) << ' ';
         if (parameter.type == AnimatorParameterType::Int) output << parameter.intDefault;

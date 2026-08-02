@@ -1,6 +1,7 @@
 #include "engine/scene/SkeletonAssetIO.hpp"
 
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
+#include "scene/asset/io/VersionedTextAssetHeader.hpp"
 
 #include <iomanip>
 #include <limits>
@@ -37,11 +38,22 @@ std::optional<SkeletonAsset> SkeletonAssetIO::Load(const std::filesystem::path& 
     std::istringstream file{ *text };
     file.imbue(std::locale::classic());
     std::string line;
+    bool schemaRead = false;
     while (std::getline(file, line)) {
         std::istringstream input{ line };
         input.imbue(std::locale::classic());
         std::string command;
         if (!(input >> command) || command.starts_with('#')) continue;
+        if (!schemaRead) {
+            const asset_io::TextAssetHeaderStatus header =
+                asset_io::ParseTextAssetHeader(
+                    line, kSkeletonAssetType, kSkeletonAssetSchemaVersion);
+            if (header == asset_io::TextAssetHeaderStatus::Invalid) {
+                return std::nullopt;
+            }
+            schemaRead = true;
+            if (header == asset_io::TextAssetHeaderStatus::Current) continue;
+        }
         if (command != "bone") return std::nullopt;
 
         SkeletonBone bone{};
@@ -72,6 +84,8 @@ bool SkeletonAssetIO::Save(const std::filesystem::path& path, const SkeletonAsse
     std::ostringstream output;
     output.imbue(std::locale::classic());
     output << std::setprecision(std::numeric_limits<float>::max_digits10);
+    output << asset_io::TextAssetHeader(
+        kSkeletonAssetType, kSkeletonAssetSchemaVersion);
     for (const SkeletonBone& bone : asset.bones) {
         const LocalTransform& pose = bone.referencePose;
         output << "bone " << bone.id << ' ' << bone.parentIndex << ' ' << std::quoted(bone.name) << ' '
