@@ -172,6 +172,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneAudioSourceComponents.hpp
     include/engine/scene/SceneAnimatorComponents.hpp
     include/engine/scene/SceneSkeletonBindingComponents.hpp
+    include/engine/scene/SceneDeformedGeometryComponents.hpp
     include/engine/scene/SceneUIDocuments.hpp
     include/engine/scene/SceneAssets.hpp
     include/engine/scene/SceneAssetMeta.hpp
@@ -221,6 +222,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneMaterialInstances.hpp
     include/engine/scene/AnimationAssets.hpp
     include/engine/scene/SkeletonBindingComponent.hpp
+    include/engine/scene/DrawD3DeformedGeometryComponent.hpp
     include/engine/scene/AnimationAssetIO.hpp
     include/engine/scene/AnimationAssetLoaders.hpp
     include/engine/scene/SkeletonAsset.hpp
@@ -653,6 +655,8 @@ add_library(kb_engine STATIC
     src/scene/components/SceneAnimatorStorage.cpp
     src/scene/components/SceneSkeletonBindingApi.cpp
     src/scene/components/SceneSkeletonBindingStorage.cpp
+    src/scene/components/SceneDeformedGeometryApi.cpp
+    src/scene/components/SceneDeformedGeometryStorage.cpp
     src/scene/components/SceneUIDocumentStorage.cpp
     src/scene/components/SceneNavigationApi.cpp
     src/scene/components/SceneNavigationStorage.cpp
@@ -760,6 +764,7 @@ add_library(kb_engine STATIC
     src/scene/modules/components/SceneCameraModule.cpp
     src/scene/modules/components/SceneAnimatorModule.cpp
     src/scene/modules/components/SceneSkeletonBindingModule.cpp
+    src/scene/modules/components/SceneDeformedGeometryModule.cpp
     src/scene/modules/components/SceneBehaviourModule.cpp
     src/scene/modules/components/SceneComponentIterationModule.cpp
     src/scene/modules/components/SceneComponentModule.cpp
@@ -1039,6 +1044,7 @@ add_library(kb_engine STATIC
     src/private/scene/components/SceneCameraComponentStore.hpp
     src/private/scene/components/SceneAnimatorComponentStore.hpp
     src/private/scene/components/SceneSkeletonBindingComponentStore.hpp
+    src/private/scene/components/SceneDeformedGeometryComponentStore.hpp
     src/private/scene/components/SceneUIDocumentComponentStore.hpp
     src/private/scene/components/SceneComponentIteration.hpp
     src/private/scene/components/SceneComponentIterationAccess.hpp
