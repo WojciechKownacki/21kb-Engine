@@ -159,6 +159,18 @@ namespace {
         lhs.sampleIntervalSeconds == rhs.sampleIntervalSeconds && lhs.layer == rhs.layer &&
         lhs.castsShadow == rhs.castsShadow && lhs.receivesShadow == rhs.receivesShadow && lhs.enabled == rhs.enabled;
 }
+[[nodiscard]] bool Equal(const SkeletonBindingComponent& lhs, const SkeletonBindingComponent& rhs) noexcept {
+    return lhs.skeletonAssetId == rhs.skeletonAssetId &&
+        lhs.skeletonCompatibilitySignature == rhs.skeletonCompatibilitySignature && lhs.enabled == rhs.enabled;
+}
+[[nodiscard]] bool Equal(const DrawD3DeformedGeometryComponent& lhs, const DrawD3DeformedGeometryComponent& rhs) noexcept {
+    return lhs.skeletalMeshAssetId == rhs.skeletalMeshAssetId &&
+        lhs.materialSlotAssetIds == rhs.materialSlotAssetIds &&
+        lhs.materialSlotOverrideCount == rhs.materialSlotOverrideCount &&
+        lhs.poseSource == rhs.poseSource && lhs.lodBias == rhs.lodBias && lhs.lodEnabled == rhs.lodEnabled &&
+        lhs.fixedBounds == rhs.fixedBounds && lhs.castsShadow == rhs.castsShadow &&
+        lhs.receivesShadow == rhs.receivesShadow && lhs.layer == rhs.layer && lhs.enabled == rhs.enabled;
+}
 
 template <typename T>
 [[nodiscard]] bool EqualOptionalComponent(const T* actual, const std::optional<T>& expected) noexcept {
@@ -204,6 +216,12 @@ ScenePrefabOverrideFlag ScenePrefabComponentComparator::Compare(SceneComponents 
     }
     if (!EqualOptionalComponent(components.Animators().TryGet(entity), expected.animator)) {
         flags |= ScenePrefabOverrideFlag::Animator;
+    }
+    if (!EqualOptionalComponent(components.SkeletonBindings().TryGet(entity), expected.skeletonBinding)) {
+        flags |= ScenePrefabOverrideFlag::SkeletonBinding;
+    }
+    if (!EqualOptionalComponent(components.DeformedGeometries().TryGet(entity), expected.deformedGeometry)) {
+        flags |= ScenePrefabOverrideFlag::DeformedGeometry;
     }
     if (!EqualOptionalComponent(components.UIDocuments().TryGet(entity), expected.uiDocument)) {
         flags |= ScenePrefabOverrideFlag::UIDocument;

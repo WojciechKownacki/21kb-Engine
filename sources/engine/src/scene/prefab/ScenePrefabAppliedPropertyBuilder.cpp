@@ -73,6 +73,12 @@ namespace {
     if (StartsWith(propertyPath, "animator")) {
         return ScenePrefabOverrideFlag::Animator;
     }
+    if (StartsWith(propertyPath, "skeletonBinding")) {
+        return ScenePrefabOverrideFlag::SkeletonBinding;
+    }
+    if (StartsWith(propertyPath, "deformedGeometry")) {
+        return ScenePrefabOverrideFlag::DeformedGeometry;
+    }
     if (StartsWith(propertyPath, "uiDocument")) {
         return ScenePrefabOverrideFlag::UIDocument;
     }

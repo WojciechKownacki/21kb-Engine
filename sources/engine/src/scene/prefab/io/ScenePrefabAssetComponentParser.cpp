@@ -574,6 +574,42 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseSkeletonBinding(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "skeletonBinding", present)) return false;
+    if (!present) return true;
+    SkeletonBindingComponent binding{};
+    if (!ParseField(fields, "skeletonBinding.skeletonAssetId", binding.skeletonAssetId) ||
+        !ParseField(fields, "skeletonBinding.compatibilitySignature", binding.skeletonCompatibilitySignature) ||
+        !ParseOptionalBool(fields, "skeletonBinding.enabled", binding.enabled) ||
+        !IsSkeletonBindingComponentPersistable(binding)) return false;
+    components.skeletonBinding = binding;
+    return true;
+}
+
+[[nodiscard]] bool ParseDeformedGeometry(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "deformedGeometry", present)) return false;
+    if (!present) return true;
+    DrawD3DeformedGeometryComponent geometry{};
+    if (!ParseField(fields, "deformedGeometry.skeletalMeshAssetId", geometry.skeletalMeshAssetId) ||
+        !ParseField(fields, "deformedGeometry.materialSlotOverrideCount", geometry.materialSlotOverrideCount) ||
+        geometry.materialSlotOverrideCount > kMaxDeformedGeometryMaterialSlotOverrides ||
+        !ParseField(fields, "deformedGeometry.lodBias", geometry.lodBias) ||
+        !ParseOptionalBool(fields, "deformedGeometry.lodEnabled", geometry.lodEnabled) ||
+        !ParseOptionalBool(fields, "deformedGeometry.fixedBounds", geometry.fixedBounds) ||
+        !ParseOptionalBool(fields, "deformedGeometry.castsShadow", geometry.castsShadow) ||
+        !ParseOptionalBool(fields, "deformedGeometry.receivesShadow", geometry.receivesShadow) ||
+        !ParseField(fields, "deformedGeometry.layer", geometry.layer) ||
+        !ParseOptionalBool(fields, "deformedGeometry.enabled", geometry.enabled)) return false;
+    for (std::uint32_t slot = 0U; slot < kMaxDeformedGeometryMaterialSlotOverrides; ++slot) {
+        if (!ParseOptionalField(fields, "deformedGeometry.materialSlotAssetId." + std::to_string(slot), geometry.materialSlotAssetIds[slot])) return false;
+    }
+    if (!IsDrawD3DeformedGeometryComponentPersistable(geometry)) return false;
+    components.deformedGeometry = geometry;
+    return true;
+}
+
 [[nodiscard]] bool ParseUIDocument(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool hasDocument = false;
     if (!ParseOptionalComponentFlag(fields, "uiDocument", hasDocument)) return false;
@@ -618,6 +654,8 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseAudioSource(fields, components)
         && ParseAudioListener(fields, components)
         && ParseAnimator(fields, components)
+        && ParseSkeletonBinding(fields, components)
+        && ParseDeformedGeometry(fields, components)
         && ParseUIDocument(fields, components);
 }
 

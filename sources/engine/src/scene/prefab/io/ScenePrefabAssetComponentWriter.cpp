@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <ostream>
+#include <stdexcept>
 #include <string_view>
 
 namespace kb::scene {
@@ -350,6 +351,29 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "animator.speed=" << components.animator->speed << '\n';
         output << "animator.enabled=" << (components.animator->enabled ? 1 : 0) << '\n';
         output << "animator.rootMotionOwner=" << static_cast<int>(components.animator->rootMotionOwner) << '\n';
+    }
+    output << "skeletonBinding=" << (components.skeletonBinding.has_value() ? 1 : 0) << '\n';
+    if (components.skeletonBinding.has_value()) {
+        output << "skeletonBinding.skeletonAssetId=" << components.skeletonBinding->skeletonAssetId << '\n';
+        output << "skeletonBinding.compatibilitySignature=" << components.skeletonBinding->skeletonCompatibilitySignature << '\n';
+        output << "skeletonBinding.enabled=" << (components.skeletonBinding->enabled ? 1 : 0) << '\n';
+    }
+    output << "deformedGeometry=" << (components.deformedGeometry.has_value() ? 1 : 0) << '\n';
+    if (components.deformedGeometry.has_value()) {
+        const DrawD3DeformedGeometryComponent& geometry = *components.deformedGeometry;
+        if (geometry.poseSource.IsValid()) throw std::invalid_argument("Deformed Geometry prefab serialization requires a stable pose-source node reference");
+        output << "deformedGeometry.skeletalMeshAssetId=" << geometry.skeletalMeshAssetId << '\n';
+        output << "deformedGeometry.materialSlotOverrideCount=" << geometry.materialSlotOverrideCount << '\n';
+        for (std::uint32_t slot = 0U; slot < kMaxDeformedGeometryMaterialSlotOverrides; ++slot) {
+            output << "deformedGeometry.materialSlotAssetId." << slot << '=' << geometry.materialSlotAssetIds[slot] << '\n';
+        }
+        output << "deformedGeometry.lodBias=" << geometry.lodBias << '\n';
+        output << "deformedGeometry.lodEnabled=" << (geometry.lodEnabled ? 1 : 0) << '\n';
+        output << "deformedGeometry.fixedBounds=" << (geometry.fixedBounds ? 1 : 0) << '\n';
+        output << "deformedGeometry.castsShadow=" << (geometry.castsShadow ? 1 : 0) << '\n';
+        output << "deformedGeometry.receivesShadow=" << (geometry.receivesShadow ? 1 : 0) << '\n';
+        output << "deformedGeometry.layer=" << geometry.layer << '\n';
+        output << "deformedGeometry.enabled=" << (geometry.enabled ? 1 : 0) << '\n';
     }
     output << "uiDocument=" << (components.uiDocument.has_value() ? 1 : 0) << '\n';
     if (components.uiDocument.has_value()) {

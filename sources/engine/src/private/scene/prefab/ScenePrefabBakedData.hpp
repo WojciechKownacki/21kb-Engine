@@ -8,51 +8,53 @@
 
 namespace kb::scene {
 
-enum class ScenePrefabBakedComponentMask : std::uint32_t {
-    Camera = 1U << 0U,
-    MeshRenderer = 1U << 1U,
-    Light = 1U << 2U,
-    Input = 1U << 3U,
-    Rigidbody = 1U << 4U,
-    Collider = 1U << 5U,
-    Tags = 1U << 6U,
-    Behaviour = 1U << 7U,
-    AudioSource = 1U << 8U,
-    AudioListener = 1U << 9U,
-    CharacterController = 1U << 10U,
-    Joint = 1U << 11U,
-    Animator = 1U << 12U,
-    UIDocument = 1U << 13U,
-    NavAgent = 1U << 14U,
-    NavObstacle = 1U << 15U,
-    RegionShape = 1U << 16U,
-    GuideCurve = 1U << 17U,
-    ContentInstance = 1U << 18U,
-    StreamFocus = 1U << 19U,
-    WorldBackdrop = 1U << 20U,
-    AmbientRadiance = 1U << 21U,
-    DetailSwitch = 1U << 22U,
-    VisibilityBlocker = 1U << 23U,
-    VisibilityCell = 1U << 24U,
-    RegionPortal = 1U << 25U,
-    AuxFrame = 1U << 26U,
-    GeometrySwarm = 1U << 27U,
-    SurfaceCast = 1U << 28U,
-    FacingPanel = 1U << 29U,
-    SpaceStroke = 1U << 30U,
-    HistoryRibbon = 1U << 31U,
+enum class ScenePrefabBakedComponentMask : std::uint64_t {
+    Camera = 1ULL << 0U,
+    MeshRenderer = 1ULL << 1U,
+    Light = 1ULL << 2U,
+    Input = 1ULL << 3U,
+    Rigidbody = 1ULL << 4U,
+    Collider = 1ULL << 5U,
+    Tags = 1ULL << 6U,
+    Behaviour = 1ULL << 7U,
+    AudioSource = 1ULL << 8U,
+    AudioListener = 1ULL << 9U,
+    CharacterController = 1ULL << 10U,
+    Joint = 1ULL << 11U,
+    Animator = 1ULL << 12U,
+    UIDocument = 1ULL << 13U,
+    NavAgent = 1ULL << 14U,
+    NavObstacle = 1ULL << 15U,
+    RegionShape = 1ULL << 16U,
+    GuideCurve = 1ULL << 17U,
+    ContentInstance = 1ULL << 18U,
+    StreamFocus = 1ULL << 19U,
+    WorldBackdrop = 1ULL << 20U,
+    AmbientRadiance = 1ULL << 21U,
+    DetailSwitch = 1ULL << 22U,
+    VisibilityBlocker = 1ULL << 23U,
+    VisibilityCell = 1ULL << 24U,
+    RegionPortal = 1ULL << 25U,
+    AuxFrame = 1ULL << 26U,
+    GeometrySwarm = 1ULL << 27U,
+    SurfaceCast = 1ULL << 28U,
+    FacingPanel = 1ULL << 29U,
+    SpaceStroke = 1ULL << 30U,
+    HistoryRibbon = 1ULL << 31U,
+    SkeletonBinding = 1ULL << 32U,
+    DeformedGeometry = 1ULL << 33U,
 };
 
-[[nodiscard]] constexpr std::uint32_t ScenePrefabBakedMask(ScenePrefabBakedComponentMask mask) noexcept {
-    return static_cast<std::uint32_t>(mask);
+[[nodiscard]] constexpr std::uint64_t ScenePrefabBakedMask(ScenePrefabBakedComponentMask mask) noexcept {
+    return static_cast<std::uint64_t>(mask);
 }
 
-[[nodiscard]] constexpr bool ScenePrefabBakedMaskHas(std::uint32_t mask, ScenePrefabBakedComponentMask component) noexcept {
+[[nodiscard]] constexpr bool ScenePrefabBakedMaskHas(std::uint64_t mask, ScenePrefabBakedComponentMask component) noexcept {
     return (mask & ScenePrefabBakedMask(component)) != 0U;
 }
 
 struct ScenePrefabBakedArchetype {
-    std::uint32_t componentMask = 0U;
+    std::uint64_t componentMask = 0U;
     std::vector<std::uint32_t> nodeIndices;
     std::vector<TransformComponent> transforms;
     std::vector<VisibilityComponent> visibility;
@@ -85,6 +87,8 @@ struct ScenePrefabBakedArchetype {
     std::vector<AudioSourceComponent> audioSources;
     std::vector<AudioListenerComponent> audioListeners;
     std::vector<Animator> animators;
+    std::vector<SkeletonBindingComponent> skeletonBindings;
+    std::vector<DrawD3DeformedGeometryComponent> deformedGeometries;
     std::vector<UIDocumentComponent> uiDocuments;
     std::vector<NavAgent> navAgents;
     std::vector<NavObstacle> navObstacles;

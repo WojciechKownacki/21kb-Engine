@@ -499,6 +499,41 @@ void RunBulkPrefabSceneHierarchyOnlyInstantiationTest() {
     kb::tests::Require(world.Name(mutableChild.Entity()).empty(), "Scene-hierarchy-only prefab edit synchronized a backend child name");
 }
 
+void RunBulkPrefabSkeletalComponentInstantiationTest() {
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t node = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Skeletal Bulk Root",
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .skeletonBinding = kb::scene::SkeletonBindingComponent{
+                .skeletonAssetId = 0x51U,
+                .skeletonCompatibilitySignature = 0xC0DEU,
+                .enabled = true,
+            },
+            .deformedGeometry = kb::scene::DrawD3DeformedGeometryComponent{
+                .skeletalMeshAssetId = 0x52U,
+                .materialSlotAssetIds = { 0x53U },
+                .materialSlotOverrideCount = 1U,
+                .castsShadow = false,
+                .receivesShadow = true,
+                .enabled = true,
+            },
+        },
+    });
+    const std::vector<kb::scene::ScenePrefabInstance> instances = scene.Prefabs().InstantiateMany(prefab, 2U);
+    kb::tests::Require(instances.size() == 2U, "Skeletal bulk prefab did not create every requested instance");
+    for (const kb::scene::ScenePrefabInstance& instance : instances) {
+        const kb::scene::SceneEntity entity = instance.ObjectAt(node).Entity();
+        const kb::scene::SkeletonBindingComponent* binding = scene.Components().SkeletonBindings().TryGet(entity);
+        const kb::scene::DrawD3DeformedGeometryComponent* geometry = scene.Components().DeformedGeometries().TryGet(entity);
+        kb::tests::Require(binding != nullptr && binding->skeletonAssetId == 0x51U && binding->skeletonCompatibilitySignature == 0xC0DEU && binding->enabled,
+            "Skeletal bulk prefab did not preserve the Skeleton Binding configuration");
+        kb::tests::Require(geometry != nullptr && geometry->skeletalMeshAssetId == 0x52U && geometry->materialSlotOverrideCount == 1U &&
+                geometry->materialSlotAssetIds[0] == 0x53U && !geometry->castsShadow && geometry->receivesShadow && geometry->enabled,
+            "Skeletal bulk prefab did not preserve the Deformed Geometry configuration");
+    }
+}
+
 void RunBulkPrefabBatchStatsOnlyInstantiationTest() {
     kb::scene::Scene scene;
     kb::scene::ScenePrefab prefab;
@@ -2811,6 +2846,7 @@ void RunScenePrefabInstantiationTests() {
     run("RunRegisteredPrefabBatchInstantiationTest", RunRegisteredPrefabBatchInstantiationTest);
     run("RunBulkPrefabInstantiationTest", RunBulkPrefabInstantiationTest);
     run("RunBulkPrefabSceneHierarchyOnlyInstantiationTest", RunBulkPrefabSceneHierarchyOnlyInstantiationTest);
+    run("RunBulkPrefabSkeletalComponentInstantiationTest", RunBulkPrefabSkeletalComponentInstantiationTest);
     run("RunBulkPrefabBatchStatsOnlyInstantiationTest", RunBulkPrefabBatchStatsOnlyInstantiationTest);
     run("RunBulkPrefabMultiArchetypeNodeOrderTest", RunBulkPrefabMultiArchetypeNodeOrderTest);
     run("RunLargePrefabHierarchyTransformTest", RunLargePrefabHierarchyTransformTest);

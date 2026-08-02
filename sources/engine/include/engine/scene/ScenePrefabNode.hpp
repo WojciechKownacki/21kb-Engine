@@ -3,6 +3,7 @@
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/AnimationAssets.hpp"
+#include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
@@ -31,6 +32,7 @@
 #include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/ScenePrefabOverrides.hpp"
+#include "engine/scene/SkeletonBindingComponent.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
@@ -117,6 +119,8 @@ struct ScenePrefabNodeComponents {
     std::optional<AudioSourceComponent> audioSource;
     std::optional<AudioListenerComponent> audioListener;
     std::optional<Animator> animator;
+    std::optional<SkeletonBindingComponent> skeletonBinding;
+    std::optional<DrawD3DeformedGeometryComponent> deformedGeometry;
     std::optional<UIDocumentComponent> uiDocument;
     std::optional<NavAgent> navAgent;
     std::optional<NavObstacle> navObstacle;
