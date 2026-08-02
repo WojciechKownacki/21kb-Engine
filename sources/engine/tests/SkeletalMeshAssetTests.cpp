@@ -6,6 +6,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
+#include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/SkeletonAsset.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletalMeshGltfImporter.hpp"
@@ -319,6 +320,35 @@ void RunSkeletalMeshAssetTests() {
     scene.Components().SkeletonBindings().Remove(bindingObject.Entity());
     Require(!scene.Components().SkeletonBindings().Has(bindingObject.Entity()),
         "Skeleton binding component was not removed from its live entity");
+    const kb::scene::SceneObject deformedGeometryObject = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{ .name = "Deformed geometry" });
+    const kb::scene::DrawD3DeformedGeometryComponent deformedGeometry{
+        .skeletalMeshAssetId = 999U,
+        .materialSlotAssetIds = { 41U },
+        .materialSlotOverrideCount = 1U,
+        .poseSource = bindingObject.Entity(),
+        .lodBias = -1,
+        .lodEnabled = true,
+        .fixedBounds = true,
+        .castsShadow = true,
+        .receivesShadow = true,
+        .layer = 4U,
+        .enabled = true,
+    };
+    Require(kb::scene::IsDrawD3DeformedGeometryComponentValid(deformedGeometry) &&
+            scene.Components().DeformedGeometries().Set(deformedGeometryObject.Entity(), deformedGeometry),
+        "Deformed geometry component rejected valid authored configuration");
+    const auto* storedDeformedGeometry = scene.Components().DeformedGeometries().TryGet(deformedGeometryObject.Entity());
+    Require(storedDeformedGeometry != nullptr && storedDeformedGeometry->poseSource == bindingObject.Entity() &&
+            storedDeformedGeometry->fixedBounds && storedDeformedGeometry->materialSlotAssetIds[0] == 41U,
+        "Deformed geometry component did not preserve its mesh, material, bounds, and pose-source configuration");
+    kb::scene::DrawD3DeformedGeometryComponent invalidDeformedGeometry = deformedGeometry;
+    invalidDeformedGeometry.materialSlotOverrideCount = kb::scene::kMaxDeformedGeometryMaterialSlotOverrides + 1U;
+    Require(!scene.Components().DeformedGeometries().Set(deformedGeometryObject.Entity(), invalidDeformedGeometry),
+        "Deformed geometry accepted an invalid material override range");
+    scene.Components().DeformedGeometries().Remove(deformedGeometryObject.Entity());
+    Require(!scene.Components().DeformedGeometries().Has(deformedGeometryObject.Entity()),
+        "Deformed geometry component was not removed from its live entity");
     mesh.skeletonAssetId = skeletonId.value;
     Require(kb::scene::SkeletalMeshAssetIO::Save(path, mesh),
         "SkeletalMeshAsset could not store the canonical Skeleton id");
