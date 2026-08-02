@@ -4,6 +4,9 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
@@ -354,6 +357,56 @@ void RunSkeletalMeshAssetTests() {
     scene.Components().DeformedGeometries().Remove(deformedGeometryObject.Entity());
     Require(!scene.Components().DeformedGeometries().Has(deformedGeometryObject.Entity()),
         "Deformed geometry component was not removed from its live entity");
+    const kb::scene::SceneObject persistedGeometryObject = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{ .name = "Persisted deformed geometry" });
+    const kb::scene::SceneObject externalPoseSource = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{ .name = "External pose source" });
+    const kb::scene::DrawD3DeformedGeometryComponent persistedGeometry{
+        .skeletalMeshAssetId = 999U,
+        .enabled = true,
+    };
+    Require(scene.Components().DeformedGeometries().Set(persistedGeometryObject.Entity(), persistedGeometry),
+        "Deformed Geometry owner pose source could not be authored for serialization");
+    const auto persistedScenePath = root / "RoundTrip" / "DeformedGeometry.21kbscene";
+    Require(kb::scene::SceneDocumentService::Save(scene, persistedScenePath, "DeformedGeometry"),
+        "Deformed Geometry owner pose source could not be serialized into a scene");
+    kb::scene::Scene restoredScene;
+    Require(kb::scene::SceneDocumentService::LoadFileIntoScene(restoredScene, persistedScenePath),
+        "Deformed Geometry owner pose source scene could not be reloaded");
+    const auto restoredRoots = restoredScene.Hierarchy().RootEntities();
+    const auto restoredGeometry = std::find_if(restoredRoots.begin(), restoredRoots.end(), [&restoredScene](kb::scene::SceneEntity entity) {
+        return restoredScene.Entities().Name(entity) == "Persisted deformed geometry";
+    });
+    const kb::scene::DrawD3DeformedGeometryComponent* restoredComponent =
+        restoredGeometry == restoredRoots.end() ? nullptr : restoredScene.Components().DeformedGeometries().TryGet(*restoredGeometry);
+    Require(restoredComponent != nullptr && restoredComponent->skeletalMeshAssetId == 999U &&
+            !restoredComponent->poseSource.IsValid(),
+        "Deformed Geometry scene round trip did not preserve the canonical owner pose source");
+    const auto persistedPrefabPath = root / "RoundTrip" / "DeformedGeometry.21kbprefab";
+    const kb::scene::ScenePrefabHandle persistedPrefab = scene.Prefabs().CaptureRegistered(
+        persistedGeometryObject, "PersistedDeformedGeometry");
+    Require(persistedPrefab.IsValid() && scene.Prefabs().Save(persistedPrefab, persistedPrefabPath),
+        "Deformed Geometry owner pose source could not be serialized into a prefab");
+    kb::scene::Scene restoredPrefabScene;
+    const kb::scene::ScenePrefabHandle restoredPrefab = restoredPrefabScene.Prefabs().Load(persistedPrefabPath);
+    const kb::scene::ScenePrefabInstance restoredPrefabInstance = restoredPrefabScene.Prefabs().Instantiate(restoredPrefab);
+    const kb::scene::DrawD3DeformedGeometryComponent* restoredPrefabComponent = restoredPrefabInstance.Empty()
+        ? nullptr
+        : restoredPrefabScene.Components().DeformedGeometries().TryGet(restoredPrefabInstance.ObjectAt(0U).Entity());
+    Require(restoredPrefab.IsValid() && restoredPrefabComponent != nullptr && restoredPrefabComponent->skeletalMeshAssetId == 999U &&
+            !restoredPrefabComponent->poseSource.IsValid(),
+        "Deformed Geometry prefab round trip did not preserve the canonical owner pose source");
+    kb::scene::DrawD3DeformedGeometryComponent* invalidPersistedGeometry =
+        scene.Components().DeformedGeometries().TryGet(persistedGeometryObject.Entity());
+    Require(invalidPersistedGeometry != nullptr,
+        "Deformed Geometry owner pose source was unavailable for invalid-reference validation");
+    invalidPersistedGeometry->poseSource = externalPoseSource.Entity();
+    const auto invalidScenePath = root / "RoundTrip" / "InvalidExternalPoseSource.21kbscene";
+    Require(!kb::scene::SceneDocumentService::Save(scene, invalidScenePath, "InvalidExternalPoseSource") &&
+            !std::filesystem::exists(invalidScenePath),
+        "Deformed Geometry scene serialization accepted a non-persistent external pose source");
+    Require(!scene.Prefabs().CaptureRegistered(persistedGeometryObject, "InvalidExternalPoseSource").IsValid(),
+        "Deformed Geometry prefab serialization accepted a non-persistent external pose source");
     mesh.skeletonAssetId = skeletonId.value;
     Require(kb::scene::SkeletalMeshAssetIO::Save(path, mesh),
         "SkeletalMeshAsset could not store the canonical Skeleton id");
