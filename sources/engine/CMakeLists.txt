@@ -225,6 +225,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SkeletonAssetIO.hpp
     include/engine/scene/SkeletonAssetLoader.hpp
     include/engine/scene/SkeletalMeshAsset.hpp
+    include/engine/scene/SkeletalMeshGltfImporter.hpp
     include/engine/scene/SkeletalMeshAssetIO.hpp
     include/engine/scene/SkeletalMeshAssetLoader.hpp
     include/engine/scene/UIAssets.hpp
@@ -594,6 +595,7 @@ add_library(kb_engine STATIC
     src/scene/SkeletonAssetIO.cpp
     src/scene/SkeletonAssetLoader.cpp
     src/scene/SkeletalMeshAsset.cpp
+    src/scene/SkeletalMeshGltfImporter.cpp
     src/scene/SkeletalMeshAssetIO.cpp
     src/scene/SkeletalMeshAssetLoader.cpp
     src/scene/TimelineAssetIO.cpp
@@ -1404,6 +1406,7 @@ target_include_directories(kb_engine
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/private
+        ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty
 )
 
 target_link_libraries(kb_engine

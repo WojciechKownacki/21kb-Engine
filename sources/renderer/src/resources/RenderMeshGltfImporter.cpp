@@ -4,7 +4,6 @@
 #include "resources/RenderMeshGltfMaterialImporter.hpp"
 #include "resources/RenderMeshGltfTransforms.hpp"
 
-#define CGLTF_IMPLEMENTATION
 #include <cgltf/cgltf.h>
 
 #include <array>
