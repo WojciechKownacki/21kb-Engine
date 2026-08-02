@@ -2117,6 +2117,78 @@ ReadScriptValue(
             std::string{ found ? "present" : "absent" } };
     }
 
+    if (*operation == "assert_skeleton_binding") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto asset = StringMember(step, "asset", error);
+        const auto enabled = BoolMember(step, "enabled", error, false);
+        if (!alias || !asset) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        const kb::assets::AssetId expectedAsset = ResolveAsset(state, *asset);
+        if (!state.context.Scene().Entities().IsAlive(entity)) {
+            return { false, "Skeleton Binding entity alias was not found" };
+        }
+        if (!expectedAsset.IsValid()) {
+            return { false, "Skeleton asset was not found" };
+        }
+        const kb::scene::SkeletonBindingComponent* binding =
+            state.context.Scene().Components().SkeletonBindings().TryGet(entity);
+        const auto skeleton = state.context.Scene().Assets().Manager()
+            .Load<kb::scene::SkeletonAsset>(expectedAsset);
+        const bool expectedEnabled = enabled.value_or(true);
+        const bool matched = binding != nullptr && skeleton.IsLoaded() &&
+            binding->skeletonAssetId == expectedAsset.value &&
+            binding->skeletonCompatibilitySignature ==
+                kb::scene::SkeletonCompatibilitySignature(*skeleton) &&
+            binding->enabled == expectedEnabled;
+        return {
+            matched,
+            matched ? "canonical Skeleton binding" : "Skeleton binding does not match the selected asset" };
+    }
+
+    if (*operation == "assert_deformed_geometry") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto mesh = StringMember(step, "mesh", error);
+        const auto material = StringMember(step, "material", error, false);
+        const auto materialSlot = UInt32Member(step, "material_slot", error, false);
+        const auto poseSource = StringMember(step, "pose_source", error, false);
+        const auto enabled = BoolMember(step, "enabled", error, false);
+        if (!alias || !mesh || (material.has_value() != materialSlot.has_value())) {
+            if (error.empty()) error = "material and material_slot must be specified together";
+            return { false, error };
+        }
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        const kb::assets::AssetId expectedMesh = ResolveAsset(state, *mesh);
+        if (!state.context.Scene().Entities().IsAlive(entity)) {
+            return { false, "Deformed Geometry entity alias was not found" };
+        }
+        if (!expectedMesh.IsValid()) {
+            return { false, "Skeletal Mesh asset was not found" };
+        }
+        const kb::scene::DrawD3DeformedGeometryComponent* geometry =
+            state.context.Scene().Components().DeformedGeometries().TryGet(entity);
+        const bool expectedEnabled = enabled.value_or(true);
+        bool matched = geometry != nullptr &&
+            geometry->skeletalMeshAssetId == expectedMesh.value &&
+            geometry->enabled == expectedEnabled;
+        if (matched && material.has_value()) {
+            const kb::assets::AssetId expectedMaterial = ResolveAsset(state, *material);
+            matched = expectedMaterial.IsValid() &&
+                *materialSlot < kb::scene::kMaxDeformedGeometryMaterialSlotOverrides &&
+                geometry->materialSlotOverrideCount > *materialSlot &&
+                geometry->materialSlotAssetIds[*materialSlot] == expectedMaterial.value;
+        }
+        if (matched && poseSource.has_value()) {
+            const kb::scene::SceneEntity expectedPoseSource = ResolveEntity(state, *poseSource);
+            matched = expectedPoseSource.IsValid() &&
+                geometry->poseSource == expectedPoseSource;
+        } else if (matched) {
+            matched = !geometry->poseSource.IsValid();
+        }
+        return {
+            matched,
+            matched ? "canonical Deformed Geometry" : "Deformed Geometry does not match authored configuration" };
+    }
+
     if (*operation == "assert_ui_element") {
         const auto alias = StringMember(step, "entity", error);
         const auto elementValue = NumberMember(step, "element", error);
@@ -3056,10 +3128,50 @@ ReadScriptValue(
     }
 
     if (*operation == "undo") {
-        return { state.context.UndoSceneCommand(), "undo" };
+        const auto restoredAlias = StringMember(step, "restore_entity", error, false);
+        if (!error.empty()) return { false, error };
+        auto alias = state.entities.end();
+        if (restoredAlias.has_value()) {
+            alias = state.entities.find(std::string{ *restoredAlias });
+        }
+        if (restoredAlias.has_value() && alias == state.entities.end()) {
+            return { false, "restore_entity does not name an existing entity alias" };
+        }
+        if (!state.context.UndoSceneCommand()) {
+            return { false, "undo" };
+        }
+        if (restoredAlias.has_value()) {
+            const kb::scene::SceneEntity restored = state.context.SelectedEntity();
+            if (!state.context.Scene().Entities().IsAlive(restored)) {
+                return { false, "undo did not select a restored entity" };
+            }
+            alias->second.entity = restored;
+            alias->second.name = state.context.Scene().Entities().Name(restored);
+        }
+        return { true, "undo" };
     }
     if (*operation == "redo") {
-        return { state.context.RedoSceneCommand(), "redo" };
+        const auto restoredAlias = StringMember(step, "restore_entity", error, false);
+        if (!error.empty()) return { false, error };
+        auto alias = state.entities.end();
+        if (restoredAlias.has_value()) {
+            alias = state.entities.find(std::string{ *restoredAlias });
+        }
+        if (restoredAlias.has_value() && alias == state.entities.end()) {
+            return { false, "restore_entity does not name an existing entity alias" };
+        }
+        if (!state.context.RedoSceneCommand()) {
+            return { false, "redo" };
+        }
+        if (restoredAlias.has_value()) {
+            const kb::scene::SceneEntity restored = state.context.SelectedEntity();
+            if (!state.context.Scene().Entities().IsAlive(restored)) {
+                return { false, "redo did not select a restored entity" };
+            }
+            alias->second.entity = restored;
+            alias->second.name = state.context.Scene().Entities().Name(restored);
+        }
+        return { true, "redo" };
     }
 
     if (*operation == "play") {
