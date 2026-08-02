@@ -48,6 +48,16 @@ void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
 
 void RunAnimationRuntimeTests() {
     constexpr kb::scene::AnimationEventId kFootstepEvent = 0xA11CE001U;
+    const kb::scene::Animator authoredAnimator{
+        .controllerAssetId = 73U,
+        .speed = 1.25F,
+        .enabled = false,
+        .rootMotionOwner = kb::scene::AnimatorRootMotionOwner::Rigidbody,
+    };
+    Require(authoredAnimator.controllerAssetId == 73U && NearlyEqual(authoredAnimator.speed, 1.25F) &&
+            !authoredAnimator.enabled &&
+            authoredAnimator.rootMotionOwner == kb::scene::AnimatorRootMotionOwner::Rigidbody,
+        "Animator must remain a compact authored controller, speed, enabled, and root-motion-owner configuration");
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb-animation-runtime-tests";
     std::filesystem::remove_all(root);
     std::filesystem::create_directories(root / "Assets" / "Animation");
