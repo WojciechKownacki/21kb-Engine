@@ -23,6 +23,8 @@
 #include "rendering/script_editor/ScriptEditorWindow.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
+#include "app/scene_viewport/EditorTerrainViewportInteraction.hpp"
+#include "scene/EditorTerrainService.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -535,6 +537,12 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     // cheap per-frame write keeps green collider wireframes on across reloads).
     kb::scene::PhysicsDebugDraw::SetEnabled(state.sceneContext.Scene(), state.sceneContext.ArePhysicsGizmosVisible());
 
+    const bool terrainStrokeChanged =
+        EditorTerrainViewportInteraction::TickActiveStroke(state.sceneContext, deltaSeconds);
+    if (terrainStrokeChanged) {
+        state.sceneViewport.RequestPresent();
+    }
+
     bool navigationChanged = false;
     if (state.sceneContext.HasActiveViewportCameraNavigation()) {
         navigationChanged = EditorSceneViewportCameraController{
@@ -589,7 +597,8 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     }
 
     const bool viewportsPresented = PresentVisibleViewports(state);
-    return viewportsPresented || navigationChanged || gizmoChanged || focusChanged || scriptSaved || addComponentSliding || disclosureSliding;
+    return viewportsPresented || navigationChanged || gizmoChanged || focusChanged || scriptSaved ||
+        addComponentSliding || disclosureSliding || EditorTerrainService::ToolState().strokeActive;
 }
 
 [[nodiscard]] bool TickPointerDragFrame(EditorApplicationState& state) {

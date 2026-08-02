@@ -250,7 +250,7 @@ public:
     [[nodiscard]] bool HasPendingSceneEditTransaction() const noexcept;
     [[nodiscard]] const kb::assets::TerrainAsset* TerrainForEditing(
         kb::scene::SceneEntity entity,
-        std::string* error = nullptr);
+        std::string* error = nullptr) const;
     [[nodiscard]] bool ApplyTerrainBrushStamp(
         kb::scene::SceneEntity entity,
         const kb::terrain_editor::TerrainBrushSettings& settings,
@@ -263,10 +263,11 @@ public:
         const kb::terrain_editor::TerrainBrushStamp& stamp,
         bool beginStroke,
         std::string* error = nullptr);
-    [[nodiscard]] bool ApplyTerrainLayerPaintStamps(
+    [[nodiscard]] bool ApplyTerrainLayerPaintSegment(
         kb::scene::SceneEntity entity,
         const kb::terrain_editor::TerrainLayerPaintSettings& settings,
-        std::span<const kb::terrain_editor::TerrainBrushStamp> stamps,
+        const kb::terrain_editor::TerrainBrushStamp& start,
+        const kb::terrain_editor::TerrainBrushStamp& end,
         bool beginStroke,
         std::string* error = nullptr);
     [[nodiscard]] bool AddTerrainMaterialLayer(
@@ -958,7 +959,7 @@ private:
     bool sceneGraphCookPending_ = true;
     EditorCommandStack commandStack_;
     std::optional<TerrainStrokeState> terrainStroke_;
-    std::optional<TerrainReadCache> terrainReadCache_;
+    mutable std::optional<TerrainReadCache> terrainReadCache_;
     EditorHierarchySelectionState hierarchySelection_;
     EditorSceneViewportBoxSelectionState viewportBoxSelection_{};
     EditorHierarchyExpansionState hierarchyExpansion_;

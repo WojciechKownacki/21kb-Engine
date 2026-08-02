@@ -80,22 +80,6 @@ struct SceneDropdownContent {
     std::uint64_t panelId = 0U;
 };
 
-[[nodiscard]] std::optional<SceneDropdownContent> ResolveActiveSceneContent(
-    const DockLayout& layout,
-    const EditorDockModel& dockModel) {
-    for (const DockPanelLayout& panelLayout : layout.panels) {
-        if (!panelLayout.active) continue;
-        const DockPanel* panel = dockModel.Queries().FindPanel(panelLayout.panelId);
-        if (panel != nullptr && panel->kind == DockPanelKind::Scene) {
-            return SceneDropdownContent{
-                .content = ToRect(panelLayout.content),
-                .panelId = panelLayout.panelId,
-            };
-        }
-    }
-    return std::nullopt;
-}
-
 [[nodiscard]] std::optional<SceneDropdownContent> ResolveSceneDropdownContent(
     const DockLayout& layout,
     const EditorDockModel& dockModel,
@@ -199,11 +183,6 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     return overlay;
 }
 
-[[nodiscard]] SceneViewportToolbarDropdownOverlayWindow& MainTerrainToolbarOverlay() {
-    static SceneViewportToolbarDropdownOverlayWindow overlay;
-    return overlay;
-}
-
 [[nodiscard]] InspectorAddComponentOverlayWindow& MainAddComponentOverlay() {
     static InspectorAddComponentOverlayWindow overlay;
     return overlay;
@@ -263,11 +242,6 @@ void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dock
         }
     } else {
         MainFilterMenuOverlay().Hide();
-    }
-    if (const std::optional<SceneDropdownContent> sceneContent = ResolveActiveSceneContent(layout, dockModel); sceneContent.has_value()) {
-        MainTerrainToolbarOverlay().ShowTerrainToolbar(window, sceneContent->content, sceneContent->panelId, theme, sceneContext);
-    } else {
-        MainTerrainToolbarOverlay().Hide();
     }
     if (const std::optional<SceneDropdownContent> sceneDropdown = ResolveSceneDropdownContent(layout, dockModel, sceneContext); sceneDropdown.has_value()) {
         MainSceneToolbarDropdownOverlay().Show(window, sceneDropdown->content, sceneDropdown->panelId, theme, sceneContext);

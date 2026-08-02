@@ -60,6 +60,13 @@ SceneViewportToolbarRects SceneViewportToolbarLayout::Resolve(const RECT& conten
 }
 
 SceneViewportToolbarRects SceneViewportToolbarLayout::Resolve(const RECT& content, const EditorViewportPreviewState& state) noexcept {
+    return Resolve(content, state, false);
+}
+
+SceneViewportToolbarRects SceneViewportToolbarLayout::Resolve(
+    const RECT& content,
+    const EditorViewportPreviewState& state,
+    bool terrainToolsVisible) noexcept {
     SceneViewportToolbarRects rects{};
     rects.toolbar = content;
     rects.toolbar.bottom = rects.toolbar.top + SceneViewportToolbarRenderer::Height;
@@ -105,6 +112,12 @@ SceneViewportToolbarRects SceneViewportToolbarLayout::Resolve(const RECT& conten
 
     rects.renderArea = content;
     rects.renderArea.top = rects.toolbar.bottom;
+    if (terrainToolsVisible) {
+        const TerrainViewportToolbarRects terrainTools = ResolveTerrainTools(content);
+        rects.renderArea.top = std::min<LONG>(
+            rects.renderArea.bottom,
+            terrainTools.panel.bottom + 8);
+    }
     return rects;
 }
 
