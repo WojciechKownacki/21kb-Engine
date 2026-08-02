@@ -8,9 +8,15 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace kb::scene {
 namespace {
@@ -52,6 +58,16 @@ template <typename T>
     return nullptr;
 }
 
+[[nodiscard]] const cgltf_accessor* TargetAttribute(
+    const cgltf_morph_target& target,
+    cgltf_attribute_type type) {
+    for (cgltf_size index = 0U; index < target.attributes_count; ++index) {
+        const cgltf_attribute& attribute = target.attributes[index];
+        if (attribute.type == type) return attribute.data;
+    }
+    return nullptr;
+}
+
 [[nodiscard]] bool EqualCount(
     const cgltf_accessor* accessor,
     cgltf_size count) noexcept {
@@ -72,17 +88,182 @@ struct SkinInfluence {
     std::uint32_t sourceOrder = 0U;
 };
 
+struct CoordinateConversion {
+    std::array<std::size_t, 3U> sourceAxisForEngine{};
+    std::array<float, 3U> signForEngine{};
+    float unitScale = 1.0F;
+    bool reversesWinding = false;
+};
+
+[[nodiscard]] std::optional<CoordinateConversion> MakeCoordinateConversion(
+    const SkeletalMeshGltfCoordinateConversion& settings,
+    std::string* error) {
+    CoordinateConversion conversion{};
+    if (!std::isfinite(settings.unitScale) || settings.unitScale <= 0.0F) {
+        return Fail<CoordinateConversion>(error,
+            "Skeletal glTF coordinate conversion has an invalid unit scale.");
+    }
+    std::array<bool, 3U> seen{};
+    float determinant = 1.0F;
+    for (std::size_t engineAxis = 0U; engineAxis < conversion.sourceAxisForEngine.size(); ++engineAxis) {
+        const std::size_t sourceAxis = static_cast<std::size_t>(settings.engineAxes[engineAxis]);
+        const float sign = settings.engineAxisSigns[engineAxis];
+        if (sourceAxis >= seen.size() || seen[sourceAxis] ||
+            !std::isfinite(sign) || (sign != -1.0F && sign != 1.0F)) {
+            return Fail<CoordinateConversion>(error,
+                "Skeletal glTF coordinate conversion must be a signed axis permutation.");
+        }
+        seen[sourceAxis] = true;
+        conversion.sourceAxisForEngine[engineAxis] = sourceAxis;
+        conversion.signForEngine[engineAxis] = sign;
+        determinant *= sign;
+        for (std::size_t later = engineAxis + 1U; later < conversion.sourceAxisForEngine.size(); ++later) {
+            if (static_cast<std::size_t>(settings.engineAxes[later]) < sourceAxis) determinant = -determinant;
+        }
+    }
+    conversion.unitScale = settings.unitScale;
+    conversion.reversesWinding = determinant < 0.0F;
+    return conversion;
+}
+
+[[nodiscard]] kb::math::Vec3 ConvertDirection(
+    const CoordinateConversion& conversion,
+    const kb::math::Vec3 source) noexcept {
+    const std::array<float, 3U> values{ source.x, source.y, source.z };
+    return {
+        conversion.signForEngine[0U] * values[conversion.sourceAxisForEngine[0U]],
+        conversion.signForEngine[1U] * values[conversion.sourceAxisForEngine[1U]],
+        conversion.signForEngine[2U] * values[conversion.sourceAxisForEngine[2U]],
+    };
+}
+
+[[nodiscard]] kb::math::Vec3 ConvertPosition(
+    const CoordinateConversion& conversion,
+    const kb::math::Vec3 source) noexcept {
+    return ConvertDirection(conversion, source) * conversion.unitScale;
+}
+
+[[nodiscard]] kb::math::Quat ConvertRotation(
+    const CoordinateConversion& conversion,
+    kb::math::Quat source) noexcept {
+    source = kb::math::Normalize(source);
+    const float xx = source.x * source.x;
+    const float yy = source.y * source.y;
+    const float zz = source.z * source.z;
+    const float xy = source.x * source.y;
+    const float xz = source.x * source.z;
+    const float yz = source.y * source.z;
+    const float wx = source.w * source.x;
+    const float wy = source.w * source.y;
+    const float wz = source.w * source.z;
+    const float sourceMatrix[3U][3U]{
+        { 1.0F - 2.0F * (yy + zz), 2.0F * (xy - wz), 2.0F * (xz + wy) },
+        { 2.0F * (xy + wz), 1.0F - 2.0F * (xx + zz), 2.0F * (yz - wx) },
+        { 2.0F * (xz - wy), 2.0F * (yz + wx), 1.0F - 2.0F * (xx + yy) },
+    };
+    float matrix[3U][3U]{};
+    for (std::size_t row = 0U; row < 3U; ++row) {
+        for (std::size_t column = 0U; column < 3U; ++column) {
+            matrix[row][column] = conversion.signForEngine[row] * conversion.signForEngine[column] *
+                sourceMatrix[conversion.sourceAxisForEngine[row]][conversion.sourceAxisForEngine[column]];
+        }
+    }
+    kb::math::Quat result{};
+    const float trace = matrix[0U][0U] + matrix[1U][1U] + matrix[2U][2U];
+    if (trace > 0.0F) {
+        const float scale = std::sqrt(trace + 1.0F) * 2.0F;
+        result = { (matrix[2U][1U] - matrix[1U][2U]) / scale,
+            (matrix[0U][2U] - matrix[2U][0U]) / scale,
+            (matrix[1U][0U] - matrix[0U][1U]) / scale, 0.25F * scale };
+    } else if (matrix[0U][0U] > matrix[1U][1U] && matrix[0U][0U] > matrix[2U][2U]) {
+        const float scale = std::sqrt(1.0F + matrix[0U][0U] - matrix[1U][1U] - matrix[2U][2U]) * 2.0F;
+        result = { 0.25F * scale, (matrix[0U][1U] + matrix[1U][0U]) / scale,
+            (matrix[0U][2U] + matrix[2U][0U]) / scale, (matrix[2U][1U] - matrix[1U][2U]) / scale };
+    } else if (matrix[1U][1U] > matrix[2U][2U]) {
+        const float scale = std::sqrt(1.0F + matrix[1U][1U] - matrix[0U][0U] - matrix[2U][2U]) * 2.0F;
+        result = { (matrix[0U][1U] + matrix[1U][0U]) / scale, 0.25F * scale,
+            (matrix[1U][2U] + matrix[2U][1U]) / scale, (matrix[0U][2U] - matrix[2U][0U]) / scale };
+    } else {
+        const float scale = std::sqrt(1.0F + matrix[2U][2U] - matrix[0U][0U] - matrix[1U][1U]) * 2.0F;
+        result = { (matrix[0U][2U] + matrix[2U][0U]) / scale, (matrix[1U][2U] + matrix[2U][1U]) / scale,
+            0.25F * scale, (matrix[1U][0U] - matrix[0U][1U]) / scale };
+    }
+    return kb::math::Normalize(result);
+}
+
+[[nodiscard]] kb::math::Vec3 ConvertScale(
+    const CoordinateConversion& conversion,
+    const kb::math::Vec3 source) noexcept {
+    const std::array<float, 3U> values{ source.x, source.y, source.z };
+    return { values[conversion.sourceAxisForEngine[0U]], values[conversion.sourceAxisForEngine[1U]],
+        values[conversion.sourceAxisForEngine[2U]] };
+}
+
+[[nodiscard]] kb::math::Mat4 ConvertInverseBind(
+    const CoordinateConversion& conversion,
+    const std::array<cgltf_float, 16U>& source) noexcept {
+    kb::math::Mat4 basis{};
+    kb::math::Mat4 inverseBasis{};
+    for (kb::math::Vec4& column : basis.columns) column = {};
+    for (kb::math::Vec4& column : inverseBasis.columns) column = {};
+    basis.columns[3U].w = 1.0F;
+    inverseBasis.columns[3U].w = 1.0F;
+    for (std::size_t engineAxis = 0U; engineAxis < 3U; ++engineAxis) {
+        const std::size_t sourceAxis = conversion.sourceAxisForEngine[engineAxis];
+        if (engineAxis == 0U) basis.columns[sourceAxis].x = conversion.signForEngine[engineAxis] * conversion.unitScale;
+        else if (engineAxis == 1U) basis.columns[sourceAxis].y = conversion.signForEngine[engineAxis] * conversion.unitScale;
+        else basis.columns[sourceAxis].z = conversion.signForEngine[engineAxis] * conversion.unitScale;
+        if (sourceAxis == 0U) inverseBasis.columns[engineAxis].x = conversion.signForEngine[engineAxis] / conversion.unitScale;
+        else if (sourceAxis == 1U) inverseBasis.columns[engineAxis].y = conversion.signForEngine[engineAxis] / conversion.unitScale;
+        else inverseBasis.columns[engineAxis].z = conversion.signForEngine[engineAxis] / conversion.unitScale;
+    }
+    kb::math::Mat4 matrix{};
+    for (std::size_t column = 0U; column < 4U; ++column) {
+        matrix.columns[column] = { source[column * 4U], source[column * 4U + 1U],
+            source[column * 4U + 2U], source[column * 4U + 3U] };
+    }
+    return basis * matrix * inverseBasis;
+}
+
+[[nodiscard]] std::optional<std::uint64_t> ResolveMaterialAssetId(
+    const cgltf_primitive& primitive,
+    const cgltf_data& data,
+    const SkeletalMeshGltfImportOptions& options,
+    std::string* error) {
+    if (primitive.material == nullptr) return std::uint64_t{ 0U };
+    if (options.materialResolver == nullptr) {
+        return Fail<std::uint64_t>(error,
+            "Skeletal glTF primitive references a material but no material resolver was supplied.");
+    }
+    const std::ptrdiff_t materialIndex = primitive.material - data.materials;
+    if (materialIndex < 0 || static_cast<cgltf_size>(materialIndex) >= data.materials_count) {
+        return Fail<std::uint64_t>(error, "Skeletal glTF primitive references an invalid material.");
+    }
+    const std::string materialName = primitive.material->name == nullptr || primitive.material->name[0] == '\0'
+        ? "Material_" + std::to_string(materialIndex)
+        : std::string{ primitive.material->name };
+    const std::uint64_t materialAssetId = options.materialResolver(materialName, options.materialResolverUserData);
+    if (materialAssetId == 0U) {
+        return Fail<std::uint64_t>(error,
+            "Skeletal glTF material resolver did not return an asset id for '" + materialName + "'.");
+    }
+    return materialAssetId;
+}
+
 } // namespace
 
 std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
     const std::filesystem::path& path,
     std::uint64_t skeletonAssetId,
+    const SkeletalMeshGltfImportOptions& importOptions,
     std::string* error) {
     if (error != nullptr) error->clear();
     if (skeletonAssetId == 0U) {
         return Fail<SkeletalMeshGltfImportResult>(error,
             "Skeletal glTF import requires a valid Skeleton asset id.");
     }
+    const auto conversion = MakeCoordinateConversion(importOptions.coordinateConversion, error);
+    if (!conversion) return std::nullopt;
 
     cgltf_options options{};
     cgltf_data* rawData = nullptr;
@@ -122,6 +303,7 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
     emittedBone.reserve(jointSourceIndex.size());
     const auto emitBone = [&](const auto& self, const cgltf_node* node) -> bool {
         if (emittedBone.contains(node)) return true;
+        if (node->has_matrix) return false;
         std::int32_t parentIndex = -1;
         if (node->parent != nullptr && jointSourceIndex.contains(node->parent)) {
             if (!self(self, node->parent)) return false;
@@ -134,32 +316,27 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
         bone.name = node->name == nullptr || node->name[0] == '\0'
             ? "Joint_" + std::to_string(sourceIndex)
             : std::string{ node->name };
-        bone.referencePose.position = {
+        bone.referencePose.position = ConvertPosition(*conversion, {
             node->has_translation ? node->translation[0] : 0.0F,
             node->has_translation ? node->translation[1] : 0.0F,
             node->has_translation ? node->translation[2] : 0.0F,
-        };
-        bone.referencePose.rotation = {
+        });
+        bone.referencePose.rotation = ConvertRotation(*conversion, {
             node->has_rotation ? node->rotation[0] : 0.0F,
             node->has_rotation ? node->rotation[1] : 0.0F,
             node->has_rotation ? node->rotation[2] : 0.0F,
             node->has_rotation ? node->rotation[3] : 1.0F,
-        };
-        bone.referencePose.scale = {
+        });
+        bone.referencePose.scale = ConvertScale(*conversion, {
             node->has_scale ? node->scale[0] : 1.0F,
             node->has_scale ? node->scale[1] : 1.0F,
             node->has_scale ? node->scale[2] : 1.0F,
-        };
+        });
         std::array<cgltf_float, 16U> inverseBind{};
         if (!ReadFloat(skin.inverse_bind_matrices, sourceIndex, inverseBind.data(), inverseBind.size())) {
             return false;
         }
-        for (std::size_t column = 0U; column < 4U; ++column) {
-            bone.inverseBind.columns[column] = {
-                inverseBind[column * 4U], inverseBind[column * 4U + 1U],
-                inverseBind[column * 4U + 2U], inverseBind[column * 4U + 3U],
-            };
-        }
+        bone.inverseBind = ConvertInverseBind(*conversion, inverseBind);
         emittedBone.emplace(node, static_cast<std::int32_t>(result.skeleton.bones.size()));
         result.skeleton.bones.push_back(std::move(bone));
         return true;
@@ -167,7 +344,7 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
     for (cgltf_size index = 0U; index < skin.joints_count; ++index) {
         if (!emitBone(emitBone, skin.joints[index])) {
             return Fail<SkeletalMeshGltfImportResult>(error,
-                "Skeletal glTF import could not read an inverse bind matrix.");
+                "Skeletal glTF import could not read an inverse bind matrix or uses unsupported matrix-authored joints.");
         }
     }
     if (!ValidateSkeletonAsset(result.skeleton).valid) {
@@ -216,7 +393,9 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
         const std::uint32_t baseVertex = static_cast<std::uint32_t>(lod.vertices.size());
         SkeletalMeshSection section{};
         section.firstIndex = static_cast<std::uint32_t>(lod.indices.size());
-        section.materialAssetId = 0U;
+        const auto materialAssetId = ResolveMaterialAssetId(primitive, *data, importOptions, error);
+        if (!materialAssetId) return std::nullopt;
+        section.materialAssetId = *materialAssetId;
         section.boneMap.reserve(static_cast<std::size_t>(skin.joints_count));
         for (cgltf_size joint = 0U; joint < skin.joints_count; ++joint) {
             section.boneMap.push_back(static_cast<SkeletonBoneId>(joint + 1U));
@@ -238,9 +417,12 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
             if (tangents != nullptr && !ReadFloat(tangents, vertexIndex, tangent.data(), 4U)) return Fail<SkeletalMeshGltfImportResult>(error, "Skeletal glTF primitive has unreadable TANGENT data.");
             if (texCoords != nullptr && !ReadFloat(texCoords, vertexIndex, uv.data(), 2U)) return Fail<SkeletalMeshGltfImportResult>(error, "Skeletal glTF primitive has unreadable TEXCOORD_0 data.");
             SkeletalMeshVertex vertex{};
-            vertex.position = { position[0], position[1], position[2] };
-            vertex.normal = { normal[0], normal[1], normal[2] };
-            vertex.tangent = { tangent[0], tangent[1], tangent[2], tangent[3] };
+            vertex.position = ConvertPosition(*conversion, { position[0], position[1], position[2] });
+            vertex.normal = ConvertDirection(*conversion, { normal[0], normal[1], normal[2] });
+            const kb::math::Vec3 tangentDirection = ConvertDirection(*conversion,
+                { tangent[0], tangent[1], tangent[2] });
+            vertex.tangent = { tangentDirection.x, tangentDirection.y, tangentDirection.z,
+                conversion->reversesWinding ? -tangent[3] : tangent[3] };
             vertex.uv = { uv[0], uv[1] };
             std::array<SkinInfluence, 8U> influences{};
             for (std::size_t influence = 0U; influence < joint.size(); ++influence) {
@@ -298,6 +480,51 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
             if (!IsFinite(vertex)) return Fail<SkeletalMeshGltfImportResult>(error, "Skeletal glTF primitive has non-finite vertex data.");
             lod.vertices.push_back(vertex);
         }
+        while (result.mesh.morphTargets.size() < primitive.targets_count) {
+            const std::size_t targetIndex = result.mesh.morphTargets.size();
+            const char* targetName = targetIndex < meshNode->mesh->target_names_count
+                ? meshNode->mesh->target_names[targetIndex]
+                : nullptr;
+            result.mesh.morphTargets.push_back({
+                .name = targetName == nullptr || targetName[0] == '\0'
+                    ? "Morph_" + std::to_string(targetIndex)
+                    : std::string{ targetName },
+                .lodIndex = 0U,
+            });
+        }
+        for (cgltf_size targetIndex = 0U; targetIndex < primitive.targets_count; ++targetIndex) {
+            const cgltf_morph_target& target = primitive.targets[targetIndex];
+            const cgltf_accessor* targetPositions = TargetAttribute(target, cgltf_attribute_type_position);
+            const cgltf_accessor* targetNormals = TargetAttribute(target, cgltf_attribute_type_normal);
+            const cgltf_accessor* targetTangents = TargetAttribute(target, cgltf_attribute_type_tangent);
+            if (targetPositions == nullptr || !EqualCount(targetPositions, positions->count) ||
+                (targetNormals != nullptr && !EqualCount(targetNormals, positions->count)) ||
+                (targetTangents != nullptr && !EqualCount(targetTangents, positions->count))) {
+                return Fail<SkeletalMeshGltfImportResult>(error,
+                    "Skeletal glTF morph target has incomplete POSITION, NORMAL, or TANGENT deltas.");
+            }
+            SkeletalMeshMorphTarget& morph = result.mesh.morphTargets[targetIndex];
+            for (cgltf_size vertexIndex = 0U; vertexIndex < positions->count; ++vertexIndex) {
+                std::array<cgltf_float, 3U> positionDelta{};
+                std::array<cgltf_float, 3U> normalDelta{};
+                std::array<cgltf_float, 3U> tangentDelta{};
+                if (!ReadFloat(targetPositions, vertexIndex, positionDelta.data(), positionDelta.size()) ||
+                    (targetNormals != nullptr && !ReadFloat(targetNormals, vertexIndex, normalDelta.data(), normalDelta.size())) ||
+                    (targetTangents != nullptr && !ReadFloat(targetTangents, vertexIndex, tangentDelta.data(), tangentDelta.size()))) {
+                    return Fail<SkeletalMeshGltfImportResult>(error,
+                        "Skeletal glTF morph target has unreadable deltas.");
+                }
+                morph.deltas.push_back({
+                    .vertexIndex = baseVertex + static_cast<std::uint32_t>(vertexIndex),
+                    .positionDelta = ConvertPosition(*conversion,
+                        { positionDelta[0], positionDelta[1], positionDelta[2] }),
+                    .normalDelta = ConvertDirection(*conversion,
+                        { normalDelta[0], normalDelta[1], normalDelta[2] }),
+                    .tangentDelta = ConvertDirection(*conversion,
+                        { tangentDelta[0], tangentDelta[1], tangentDelta[2] }),
+                });
+            }
+        }
         const cgltf_size indexCount = primitive.indices == nullptr
             ? positions->count
             : primitive.indices->count;
@@ -308,6 +535,12 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
                 : cgltf_accessor_read_index(primitive.indices, index);
             if (sourceIndex >= positions->count) return Fail<SkeletalMeshGltfImportResult>(error, "Skeletal glTF primitive index is outside its vertex range.");
             lod.indices.push_back(baseVertex + static_cast<std::uint32_t>(sourceIndex));
+        }
+        if (conversion->reversesWinding) {
+            for (std::size_t index = static_cast<std::size_t>(section.firstIndex);
+                 index < lod.indices.size(); index += 3U) {
+                std::swap(lod.indices[index + 1U], lod.indices[index + 2U]);
+            }
         }
         section.indexCount = static_cast<std::uint32_t>(lod.indices.size()) - section.firstIndex;
         lod.sections.push_back(std::move(section));
@@ -336,6 +569,140 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
     result.mesh.conservativeBounds.extents = { (maximum.x - minimum.x) * 0.5F, (maximum.y - minimum.y) * 0.5F, (maximum.z - minimum.z) * 0.5F };
     const SkeletalMeshAssetValidationResult validation = ValidateSkeletalMeshAsset(result.mesh);
     if (!validation.valid) return Fail<SkeletalMeshGltfImportResult>(error, validation.error);
+
+    std::unordered_map<SkeletonBoneId, LocalTransform> referencePoses;
+    referencePoses.reserve(result.skeleton.bones.size());
+    for (const SkeletonBone& bone : result.skeleton.bones) {
+        referencePoses.emplace(bone.id, bone.referencePose);
+    }
+    for (cgltf_size animationIndex = 0U; animationIndex < data->animations_count; ++animationIndex) {
+        const cgltf_animation& sourceAnimation = data->animations[animationIndex];
+        AnimationClip clip{};
+        clip.durationSeconds = 0.0F;
+        clip.targetSkeletonAssetId = skeletonAssetId;
+        clip.targetSkeletonCompatibilitySignature = result.mesh.skeletonCompatibilitySignature;
+        std::map<SkeletonBoneId, std::map<float, LocalTransform>> keys;
+        std::map<SkeletonBoneId, std::vector<float>> boneChannelTimes;
+        std::set<std::pair<SkeletonBoneId, cgltf_animation_path_type>> boneChannelTargets;
+        std::map<std::string, std::vector<AnimationMorphKeyframe>> morphKeys;
+        bool hasMorphChannel = false;
+        for (cgltf_size channelIndex = 0U; channelIndex < sourceAnimation.channels_count; ++channelIndex) {
+            const cgltf_animation_channel& channel = sourceAnimation.channels[channelIndex];
+            if (channel.target_path == cgltf_animation_path_type_weights) {
+                if (channel.target_node != meshNode || channel.sampler == nullptr ||
+                    channel.sampler->input == nullptr || channel.sampler->output == nullptr ||
+                    channel.sampler->interpolation != cgltf_interpolation_type_linear ||
+                    channel.sampler->input->count == 0U || result.mesh.morphTargets.empty() ||
+                    channel.sampler->output->count != channel.sampler->input->count * result.mesh.morphTargets.size() ||
+                    hasMorphChannel) {
+                    return Fail<SkeletalMeshGltfImportResult>(error,
+                        "Skeletal glTF animation has an invalid morph channel or unsupported interpolation.");
+                }
+                hasMorphChannel = true;
+                float previousMorphTime = -1.0F;
+                for (cgltf_size keyIndex = 0U; keyIndex < channel.sampler->input->count; ++keyIndex) {
+                    std::array<cgltf_float, 1U> inputTime{};
+                    if (!ReadFloat(channel.sampler->input, keyIndex, inputTime.data(), 1U) ||
+                        !std::isfinite(inputTime[0]) || inputTime[0] < 0.0F) {
+                        return Fail<SkeletalMeshGltfImportResult>(error,
+                            "Skeletal glTF animation has unreadable or non-finite morph keyframes.");
+                    }
+                    if (inputTime[0] <= previousMorphTime) {
+                        return Fail<SkeletalMeshGltfImportResult>(error,
+                            "Skeletal glTF animation has unordered morph keyframes.");
+                    }
+                    previousMorphTime = inputTime[0];
+                    for (std::size_t targetIndex = 0U; targetIndex < result.mesh.morphTargets.size(); ++targetIndex) {
+                        std::array<cgltf_float, 1U> weight{};
+                        if (!ReadFloat(channel.sampler->output,
+                                keyIndex * result.mesh.morphTargets.size() + targetIndex,
+                                weight.data(), 1U) || !std::isfinite(weight[0])) {
+                            return Fail<SkeletalMeshGltfImportResult>(error,
+                                "Skeletal glTF animation has unreadable or non-finite morph weights.");
+                        }
+                        morphKeys[result.mesh.morphTargets[targetIndex].name].push_back({
+                            .timeSeconds = inputTime[0], .weight = weight[0],
+                        });
+                    }
+                    clip.durationSeconds = std::max(clip.durationSeconds, inputTime[0]);
+                }
+                continue;
+            }
+            if (channel.target_path != cgltf_animation_path_type_translation &&
+                channel.target_path != cgltf_animation_path_type_rotation &&
+                channel.target_path != cgltf_animation_path_type_scale) {
+                return Fail<SkeletalMeshGltfImportResult>(error,
+                    "Skeletal glTF animation has an unsupported channel path.");
+            }
+            const auto target = jointSourceIndex.find(channel.target_node);
+            if (target == jointSourceIndex.end() || channel.sampler == nullptr ||
+                channel.sampler->input == nullptr || channel.sampler->output == nullptr ||
+                channel.sampler->interpolation != cgltf_interpolation_type_linear ||
+                channel.sampler->input->count == 0U ||
+                channel.sampler->input->count != channel.sampler->output->count) {
+                return Fail<SkeletalMeshGltfImportResult>(error,
+                    "Skeletal glTF animation has an invalid bone channel or unsupported interpolation.");
+            }
+            const SkeletonBoneId boneId = static_cast<SkeletonBoneId>(target->second + 1U);
+            if (!boneChannelTargets.emplace(boneId, channel.target_path).second) {
+                return Fail<SkeletalMeshGltfImportResult>(error,
+                    "Skeletal glTF animation has duplicate bone channels.");
+            }
+            const LocalTransform referencePose = referencePoses.at(boneId);
+            const cgltf_size componentCount = channel.target_path == cgltf_animation_path_type_rotation ? 4U : 3U;
+            std::vector<float> channelTimes;
+            channelTimes.reserve(static_cast<std::size_t>(channel.sampler->input->count));
+            for (cgltf_size keyIndex = 0U; keyIndex < channel.sampler->input->count; ++keyIndex) {
+                std::array<cgltf_float, 4U> inputTime{};
+                std::array<cgltf_float, 4U> value{};
+                if (!ReadFloat(channel.sampler->input, keyIndex, inputTime.data(), 1U) ||
+                    !ReadFloat(channel.sampler->output, keyIndex, value.data(), componentCount) ||
+                    !std::isfinite(inputTime[0]) || inputTime[0] < 0.0F) {
+                    return Fail<SkeletalMeshGltfImportResult>(error,
+                        "Skeletal glTF animation has unreadable or non-finite keyframes.");
+                }
+                if (!channelTimes.empty() && inputTime[0] <= channelTimes.back()) {
+                    return Fail<SkeletalMeshGltfImportResult>(error,
+                        "Skeletal glTF animation has unordered bone keyframes.");
+                }
+                channelTimes.push_back(inputTime[0]);
+                LocalTransform& transform = keys[boneId].try_emplace(inputTime[0], referencePose).first->second;
+                if (channel.target_path == cgltf_animation_path_type_translation) {
+                    transform.position = ConvertPosition(*conversion, { value[0], value[1], value[2] });
+                } else if (channel.target_path == cgltf_animation_path_type_rotation) {
+                    transform.rotation = ConvertRotation(*conversion, { value[0], value[1], value[2], value[3] });
+                } else {
+                    transform.scale = ConvertScale(*conversion, { value[0], value[1], value[2] });
+                }
+                clip.durationSeconds = std::max(clip.durationSeconds, inputTime[0]);
+            }
+            const auto timeIt = boneChannelTimes.find(boneId);
+            if (timeIt != boneChannelTimes.end() && timeIt->second != channelTimes) {
+                return Fail<SkeletalMeshGltfImportResult>(error,
+                    "Skeletal glTF animation bone channels must share one keyframe time grid.");
+            }
+            if (timeIt == boneChannelTimes.end()) {
+                boneChannelTimes.emplace(boneId, std::move(channelTimes));
+            }
+        }
+        if (keys.empty() && morphKeys.empty()) continue;
+        clip.durationSeconds = std::max(clip.durationSeconds, 0.0001F);
+        for (const auto& [boneId, boneKeys] : keys) {
+            AnimationBoneTrack track{};
+            track.boneId = boneId;
+            for (const auto& [time, transform] : boneKeys) {
+                track.keyframes.push_back({ .timeSeconds = time, .transform = transform });
+            }
+            clip.skeletalTracks.push_back(std::move(track));
+        }
+        for (auto& [morphTarget, morphTrackKeys] : morphKeys) {
+            AnimationMorphTrack track{};
+            track.morphTarget = std::move(morphTarget);
+            track.keyframes = std::move(morphTrackKeys);
+            clip.morphTracks.push_back(std::move(track));
+        }
+        result.clips.push_back(std::move(clip));
+    }
     return result;
 }
 

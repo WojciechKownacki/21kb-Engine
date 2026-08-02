@@ -2,13 +2,16 @@
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/SkeletonAsset.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletalMeshGltfImporter.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 
+#include <array>
 #include <filesystem>
 #include <fstream>
+#include <string_view>
 
 namespace {
 
@@ -41,6 +44,38 @@ void WriteSkeletalGltfFixture(const std::filesystem::path& folder) {
     binary.write(reinterpret_cast<const char*>(inverseBinds.data()), sizeof(inverseBinds));
     binary.close();
     WriteTextFile(folder / "Hero.gltf", R"({"asset":{"version":"2.0"},"buffers":[{"uri":"Hero.bin","byteLength":242}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24},{"buffer":0,"byteOffset":60,"byteLength":48},{"buffer":0,"byteOffset":108,"byteLength":6},{"buffer":0,"byteOffset":114,"byteLength":128}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"MAT4"}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3}]}],"nodes":[{"name":"Root","children":[1]},{"name":"Spine","translation":[0,1,0]},{"mesh":0,"skin":0}],"skins":[{"joints":[0,1],"inverseBindMatrices":4}]})");
+}
+
+std::uint64_t ResolveFixtureMaterial(std::string_view name, void*) {
+    return name == "Skin" ? 31337U : 0U;
+}
+
+void WriteExtendedSkeletalGltfFixture(const std::filesystem::path& folder) {
+    std::filesystem::create_directories(folder);
+    std::ofstream binary{ folder / "HeroExtended.bin", std::ios::binary | std::ios::trunc };
+    const std::array<float, 9U> positions{ 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 2.0F };
+    const std::array<std::uint16_t, 12U> joints{ 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 1U, 0U, 0U, 0U };
+    const std::array<float, 12U> weights{ 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F };
+    const std::array<std::uint16_t, 3U> indices{ 0U, 1U, 2U };
+    const std::array<float, 32U> inverseBinds{
+        1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F,
+        1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, -1.0F, 0.0F, 1.0F,
+    };
+    const std::array<float, 9U> morphPositionDeltas{ 0.0F, 0.0F, 0.25F, 0.0F, 0.0F, 0.25F, 0.0F, 0.0F, 0.25F };
+    const std::array<float, 2U> times{ 0.0F, 1.0F };
+    const std::array<float, 6U> spineTranslations{ 0.0F, 1.0F, 0.0F, 0.0F, 1.0F, 2.0F };
+    const std::array<float, 2U> morphWeights{ 0.0F, 1.0F };
+    binary.write(reinterpret_cast<const char*>(positions.data()), sizeof(positions));
+    binary.write(reinterpret_cast<const char*>(joints.data()), sizeof(joints));
+    binary.write(reinterpret_cast<const char*>(weights.data()), sizeof(weights));
+    binary.write(reinterpret_cast<const char*>(indices.data()), sizeof(indices));
+    binary.write(reinterpret_cast<const char*>(inverseBinds.data()), sizeof(inverseBinds));
+    binary.write(reinterpret_cast<const char*>(morphPositionDeltas.data()), sizeof(morphPositionDeltas));
+    binary.write(reinterpret_cast<const char*>(times.data()), sizeof(times));
+    binary.write(reinterpret_cast<const char*>(spineTranslations.data()), sizeof(spineTranslations));
+    binary.write(reinterpret_cast<const char*>(morphWeights.data()), sizeof(morphWeights));
+    binary.close();
+    WriteTextFile(folder / "HeroExtended.gltf", R"({"asset":{"version":"2.0"},"buffers":[{"uri":"HeroExtended.bin","byteLength":318}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24},{"buffer":0,"byteOffset":60,"byteLength":48},{"buffer":0,"byteOffset":108,"byteLength":6},{"buffer":0,"byteOffset":114,"byteLength":128},{"buffer":0,"byteOffset":242,"byteLength":36},{"buffer":0,"byteOffset":278,"byteLength":8},{"buffer":0,"byteOffset":286,"byteLength":24},{"buffer":0,"byteOffset":310,"byteLength":8}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"MAT4"},{"bufferView":5,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":6,"componentType":5126,"count":2,"type":"SCALAR"},{"bufferView":7,"componentType":5126,"count":2,"type":"VEC3"},{"bufferView":8,"componentType":5126,"count":2,"type":"SCALAR"}],"materials":[{"name":"Skin"}],"meshes":[{"extras":{"targetNames":["Smile"]},"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3,"material":0,"targets":[{"POSITION":5}]}]}],"nodes":[{"name":"Root","children":[1]},{"name":"Spine","translation":[0,1,0]},{"mesh":0,"skin":0}],"skins":[{"joints":[0,1],"inverseBindMatrices":4}],"animations":[{"samplers":[{"input":6,"output":7,"interpolation":"LINEAR"},{"input":6,"output":8,"interpolation":"LINEAR"}],"channels":[{"sampler":0,"target":{"node":1,"path":"translation"}},{"sampler":1,"target":{"node":2,"path":"weights"}}]}]})");
 }
 
 } // namespace
@@ -104,6 +139,39 @@ void RunSkeletalMeshAssetTests() {
             imported->mesh.lods[0].vertices[1].jointWeights[0] == 1.0F &&
             kb::scene::ValidateSkeletalMeshAsset(imported->mesh).valid,
         "Skeletal glTF import did not preserve hierarchy, inverse binds, JOINTS_0, and WEIGHTS_0");
+    const auto extendedImportRoot = root / "GltfExtendedImport";
+    WriteExtendedSkeletalGltfFixture(extendedImportRoot);
+    kb::scene::SkeletalMeshGltfImportOptions extendedOptions{};
+    extendedOptions.coordinateConversion.unitScale = 100.0F;
+    extendedOptions.materialResolver = ResolveFixtureMaterial;
+    const auto extendedImported = kb::scene::SkeletalMeshGltfImporter::Import(
+        extendedImportRoot / "HeroExtended.gltf", 777U, extendedOptions, &importError);
+    const std::string extendedImportFailure =
+        "Skeletal glTF import rejected channels, morphs, material sections, or coordinate conversion: " + importError;
+    Require(extendedImported.has_value(), extendedImportFailure.c_str());
+    Require(extendedImported->mesh.lods[0].sections[0].materialAssetId == 31337U,
+        "Skeletal glTF import did not resolve material section");
+    Require(extendedImported->mesh.lods[0].indices[1] == 2U,
+        "Skeletal glTF import did not reverse triangle winding for handedness conversion");
+    Require(extendedImported->mesh.lods[0].vertices[2].position.z == -200.0F,
+        "Skeletal glTF import did not convert source units or handedness");
+    Require(extendedImported->mesh.morphTargets.size() == 1U &&
+            extendedImported->mesh.morphTargets[0].name == "Smile" &&
+            extendedImported->mesh.morphTargets[0].deltas[0].positionDelta.z == -25.0F,
+        "Skeletal glTF import did not preserve morph target deltas");
+    Require(kb::scene::ValidateSkeletalMeshAsset(extendedImported->mesh).valid,
+        "Skeletal glTF import produced an invalid mesh after conversion");
+    Require(extendedImported->clips.size() == 1U &&
+            extendedImported->clips[0].durationSeconds == 1.0F &&
+            extendedImported->clips.size() == 1U &&
+            extendedImported->clips[0].skeletalTracks.size() == 1U &&
+            extendedImported->clips[0].skeletalTracks[0].keyframes[1].transform.position.z == -200.0F &&
+            extendedImported->clips[0].morphTracks.size() == 1U &&
+            extendedImported->clips[0].morphTracks[0].keyframes[1].weight == 1.0F,
+        "Skeletal glTF import did not preserve animation channels or morph weights");
+    Require(kb::scene::AnimationAssetIO::SaveClip(
+                extendedImportRoot / "HeroImported.kbanim", extendedImported->clips[0]),
+        "Skeletal glTF importer produced an animation clip that cannot be serialized");
     const auto zeroWeightRoot = root / "GltfZeroWeight";
     WriteSkeletalGltfFixture(zeroWeightRoot);
     std::fstream zeroWeightBuffer{

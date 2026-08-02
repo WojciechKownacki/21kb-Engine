@@ -160,7 +160,8 @@ bool ValidateClip(AnimationClip& clip, std::string* error = nullptr) {
     setError("Skeletal animation clip has an invalid skeleton target or mixed bindings.");
     if (clip.targetSkeletonAssetId == 0U ||
         clip.targetSkeletonCompatibilitySignature == 0U ||
-        !clip.tracks.empty() || clip.skeletalTracks.empty()) {
+        !clip.tracks.empty() ||
+        (clip.skeletalTracks.empty() && clip.morphTracks.empty() && clip.curves.empty())) {
         return false;
     }
     std::unordered_set<SkeletonBoneId> bones;
