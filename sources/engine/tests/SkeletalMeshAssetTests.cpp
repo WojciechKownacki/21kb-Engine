@@ -7,6 +7,22 @@
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 
 #include <filesystem>
+#include <fstream>
+
+namespace {
+
+[[nodiscard]] std::string ReadTextFile(const std::filesystem::path& path) {
+    std::ifstream input{ path, std::ios::binary };
+    return { std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+}
+
+void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
+    output.write(text.data(), static_cast<std::streamsize>(text.size()));
+}
+
+} // namespace
 
 namespace kb::tests {
 
@@ -33,6 +49,24 @@ void RunSkeletalMeshAssetTests() {
     Require(kb::scene::SkeletalMeshAssetIO::Save(path,mesh),"SkeletalMeshAsset production save failed");
     const auto loaded=kb::scene::SkeletalMeshAssetIO::Load(path);
     Require(loaded && loaded->lods.size()==1U && loaded->lods[0].sections[0].materialAssetId==42U && loaded->morphTargets[0].deltas.size()==1U,"SkeletalMeshAsset round trip lost canonical data");
+    const auto deterministicPath = root / "RoundTrip/HeroCopy.kbskeletalmesh";
+    Require(kb::scene::SkeletalMeshAssetIO::Save(deterministicPath, mesh) &&
+            ReadTextFile(path) == ReadTextFile(deterministicPath),
+        "SkeletalMeshAsset serialization is not deterministic");
+    const std::string serialized = ReadTextFile(path);
+    const std::size_t headerEnd = serialized.find('\n');
+    Require(headerEnd != std::string::npos,
+        "SkeletalMeshAsset serialization has no schema header");
+    const auto legacyPath = root / "RoundTrip/Legacy.kbskeletalmesh";
+    WriteTextFile(legacyPath, std::string_view{ serialized }.substr(headerEnd + 1U));
+    Require(kb::scene::SkeletalMeshAssetIO::Load(legacyPath).has_value(),
+        "SkeletalMeshAsset legacy migration failed");
+    const auto corruptPath = root / "RoundTrip/Corrupt.kbskeletalmesh";
+    WriteTextFile(corruptPath, "21kb SkeletalMesh 99\n");
+    std::string corruptError;
+    Require(!kb::scene::SkeletalMeshAssetIO::Load(corruptPath, &corruptError).has_value() &&
+            corruptError.find("line 1") != std::string::npos,
+        "SkeletalMeshAsset accepted an unsupported schema version without a diagnostic");
     kb::scene::SkeletalMeshAsset invalid=mesh; invalid.lods[0].vertices[0].jointWeights={0,0,0,0};
     Require(!kb::scene::ValidateSkeletalMeshAsset(invalid).valid,"SkeletalMeshAsset accepted zero skin weights");
     kb::scene::Scene scene; Require(scene.Assets().MountProject(root),"SkeletalMeshAsset mount failed"); Require(scene.Assets().Discover()==2U,"SkeletalMeshAsset discovery failed");

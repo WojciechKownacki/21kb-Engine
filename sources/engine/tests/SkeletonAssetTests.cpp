@@ -6,6 +6,22 @@
 #include "engine/scene/SkeletonAssetIO.hpp"
 
 #include <filesystem>
+#include <fstream>
+
+namespace {
+
+[[nodiscard]] std::string ReadTextFile(const std::filesystem::path& path) {
+    std::ifstream input{ path, std::ios::binary };
+    return { std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+}
+
+void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
+    output.write(text.data(), static_cast<std::streamsize>(text.size()));
+}
+
+} // namespace
 
 namespace kb::tests {
 
@@ -52,6 +68,27 @@ void RunSkeletonAssetTests() {
         "SkeletonAsset round trip lost canonical bone data");
     Require(kb::scene::SkeletonCompatibilitySignature(*loaded) == signature,
         "SkeletonAsset compatibility signature changed after round trip");
+    const std::filesystem::path deterministicPath =
+        root / "RoundTrip" / "HeroCopy.kbskeleton";
+    Require(kb::scene::SkeletonAssetIO::Save(deterministicPath, skeleton) &&
+            ReadTextFile(path) == ReadTextFile(deterministicPath),
+        "SkeletonAsset serialization is not deterministic");
+    const std::string serialized = ReadTextFile(path);
+    const std::size_t headerEnd = serialized.find('\n');
+    Require(headerEnd != std::string::npos,
+        "SkeletonAsset serialization has no schema header");
+    const std::filesystem::path legacyPath =
+        root / "RoundTrip" / "Legacy.kbskeleton";
+    WriteTextFile(legacyPath, std::string_view{ serialized }.substr(headerEnd + 1U));
+    Require(kb::scene::SkeletonAssetIO::Load(legacyPath).has_value(),
+        "SkeletonAsset legacy migration failed");
+    const std::filesystem::path corruptPath =
+        root / "RoundTrip" / "Corrupt.kbskeleton";
+    WriteTextFile(corruptPath, "21kb Skeleton 99\n");
+    std::string corruptError;
+    Require(!kb::scene::SkeletonAssetIO::Load(corruptPath, &corruptError).has_value() &&
+            corruptError.find("line 1") != std::string::npos,
+        "SkeletonAsset accepted an unsupported schema version without a diagnostic");
 
     kb::scene::SkeletonAsset invalid = skeleton;
     invalid.bones[1].parentIndex = 1;

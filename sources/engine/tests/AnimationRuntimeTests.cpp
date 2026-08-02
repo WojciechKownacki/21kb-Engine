@@ -31,6 +31,20 @@
 #endif
 
 namespace kb::tests {
+namespace {
+
+[[nodiscard]] std::string ReadTextFile(const std::filesystem::path& path) {
+    std::ifstream input{ path, std::ios::binary };
+    return { std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+}
+
+void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
+    output.write(text.data(), static_cast<std::streamsize>(text.size()));
+}
+
+} // namespace
 
 void RunAnimationRuntimeTests() {
     constexpr kb::scene::AnimationEventId kFootstepEvent = 0xA11CE001U;
@@ -144,6 +158,45 @@ void RunAnimationRuntimeTests() {
     };
     const auto controllerPath = root / "Assets" / "Animation" / "Character.kbanimcontroller";
     Require(kb::scene::AnimationAssetIO::SaveController(controllerPath, controller), "AnimatorController production asset could not be saved");
+    const std::filesystem::path roundTripRoot = root / "RoundTrip";
+    const std::filesystem::path deterministicClipPath = roundTripRoot / "MoveCopy.kbanim";
+    Require(kb::scene::AnimationAssetIO::SaveClip(deterministicClipPath, clip) &&
+            ReadTextFile(clipPath) == ReadTextFile(deterministicClipPath),
+        "AnimationClip serialization is not deterministic");
+    const std::string serializedClip = ReadTextFile(clipPath);
+    const std::size_t clipHeaderEnd = serializedClip.find('\n');
+    Require(clipHeaderEnd != std::string::npos,
+        "AnimationClip serialization has no schema header");
+    const std::filesystem::path legacyClipPath = roundTripRoot / "Legacy.kbanim";
+    WriteTextFile(legacyClipPath, std::string_view{ serializedClip }.substr(clipHeaderEnd + 1U));
+    Require(kb::scene::AnimationAssetIO::LoadClip(legacyClipPath).has_value(),
+        "AnimationClip legacy migration failed");
+    const std::filesystem::path corruptClipPath = roundTripRoot / "Corrupt.kbanim";
+    WriteTextFile(corruptClipPath, "21kb AnimationClip 99\n");
+    std::string corruptClipError;
+    Require(!kb::scene::AnimationAssetIO::LoadClip(corruptClipPath, &corruptClipError).has_value() &&
+            corruptClipError.find("line 1") != std::string::npos,
+        "AnimationClip accepted an unsupported schema version without a diagnostic");
+    const std::filesystem::path deterministicControllerPath = roundTripRoot / "CharacterCopy.kbanimcontroller";
+    Require(kb::scene::AnimationAssetIO::SaveController(deterministicControllerPath, controller) &&
+            ReadTextFile(controllerPath) == ReadTextFile(deterministicControllerPath),
+        "AnimatorController serialization is not deterministic");
+    const std::string serializedController = ReadTextFile(controllerPath);
+    const std::size_t controllerHeaderEnd = serializedController.find('\n');
+    Require(controllerHeaderEnd != std::string::npos,
+        "AnimatorController serialization has no schema header");
+    const std::filesystem::path legacyControllerPath = roundTripRoot / "Legacy.kbanimcontroller";
+    WriteTextFile(legacyControllerPath,
+        std::string_view{ serializedController }.substr(controllerHeaderEnd + 1U));
+    Require(kb::scene::AnimationAssetIO::LoadController(legacyControllerPath).has_value(),
+        "AnimatorController legacy migration failed");
+    const std::filesystem::path corruptControllerPath = roundTripRoot / "Corrupt.kbanimcontroller";
+    WriteTextFile(corruptControllerPath, "21kb AnimatorController 99\n");
+    std::string corruptControllerError;
+    Require(!kb::scene::AnimationAssetIO::LoadController(
+                corruptControllerPath, &corruptControllerError).has_value() &&
+            corruptControllerError.find("line 1") != std::string::npos,
+        "AnimatorController accepted an unsupported schema version without a diagnostic");
     kb::scene::AnimationClip turnClip{};
     turnClip.durationSeconds = 1.0F;
     turnClip.looping = true;
