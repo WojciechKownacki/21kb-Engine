@@ -1030,6 +1030,36 @@ void RunInspectorComponentAffordancesSuite(Report& report) {
         "Animator Speed uses the editable numeric Inspector field path");
     report.Check(context.RemoveAnimatorFromEntity(actor), "Animator section remove command removes the component");
     report.Check(!context.Scene().Components().Animators().Has(actor), "Animator component is gone after editor remove");
+
+    report.Check(InspectorComponentCatalog::Find("SkeletonBinding") != nullptr &&
+            InspectorComponentCatalog::Find("SkeletonBinding")->category == "Animation",
+        "Skeleton Binding tile is catalogued under Animation");
+    report.Check(InspectorComponentCatalog::Find("DeformedGeometry") != nullptr &&
+            InspectorComponentCatalog::Find("DeformedGeometry")->category == "Rendering",
+        "Deformed Geometry tile is catalogued under Rendering");
+    report.Check(context.AddComponentToEntity(actor, "SkeletonBinding"), "Add Skeleton Binding component from Inspector catalog");
+    report.Check(context.AddComponentToEntity(actor, "DeformedGeometry"), "Add Deformed Geometry component from Inspector catalog");
+    report.Check(!context.ToggleSkeletonBindingEnabled(actor) && !context.ToggleDeformedGeometryEnabled(actor),
+        "Incomplete skeletal authoring drafts cannot be enabled");
+    report.Check(context.ToggleDeformedGeometryCastsShadow(actor) && context.ToggleDeformedGeometryReceivesShadow(actor),
+        "Deformed Geometry Inspector toggles mutate authored rendering flags");
+    const kb::scene::DrawD3DeformedGeometryComponent* authoredGeometry = context.Scene().Components().DeformedGeometries().TryGet(actor);
+    report.Check(authoredGeometry != nullptr && !authoredGeometry->castsShadow && !authoredGeometry->receivesShadow,
+        "Deformed Geometry authored flags retain their independent values");
+    context.SelectEntity(actor);
+    report.Check(context.DuplicateSelectedHierarchyEntities(), "Duplicate entity with skeletal authoring components");
+    const kb::scene::SceneEntity duplicate = context.SelectedEntity();
+    report.Check(duplicate.IsValid() && duplicate != actor &&
+            context.Scene().Components().SkeletonBindings().Has(duplicate) &&
+            context.Scene().Components().DeformedGeometries().Has(duplicate),
+        "Duplicate preserves Skeleton Binding and Deformed Geometry components");
+    report.Check(context.UndoSceneCommand() && !context.Scene().Entities().IsAlive(duplicate),
+        "Undo removes duplicated skeletal authoring components with their entity");
+    report.Check(context.RedoSceneCommand(), "Redo restores duplicated skeletal authoring entity");
+    report.Check(context.RemoveSkeletonBindingFromEntity(actor) && context.RemoveDeformedGeometryFromEntity(actor),
+        "Inspector remove commands remove both skeletal authoring components");
+    report.Check(!context.Scene().Components().SkeletonBindings().Has(actor) && !context.Scene().Components().DeformedGeometries().Has(actor),
+        "Skeletal authoring components are gone after Inspector remove");
 }
 
 // The engine has a full physics subsystem (Jolt) but the editor never exposed it.

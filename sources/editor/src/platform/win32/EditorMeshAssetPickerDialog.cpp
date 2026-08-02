@@ -1,6 +1,8 @@
 #include "platform/win32/EditorMeshAssetPickerDialog.hpp"
 #include "platform/win32/EditorAnimatorControllerAssetPickerDialog.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
+#include "platform/win32/EditorSkeletonAssetPickerDialog.hpp"
+#include "platform/win32/EditorSkeletalMeshAssetPickerDialog.hpp"
 
 #if defined(_WIN32)
 #include "platform/win32/EditorModalMessageLoop.hpp"
@@ -8,6 +10,8 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/scene/SkeletonAssetIO.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "rendering/EditorMeshPreviewService.hpp"
 #include "rendering/EditorMeshPreviewTypes.hpp"
 #include "rendering/EditorMaterialThumbnailService.hpp"
@@ -224,6 +228,32 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
             return lhs.name < rhs.name;
         }
         return lhs.assetId.value < rhs.assetId.value;
+    });
+    return rows;
+}
+
+[[nodiscard]] std::vector<AssetPickerRow> BuildSkeletonRows(const EditorSceneContext& sceneContext) {
+    std::vector<AssetPickerRow> rows;
+    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
+        if (metadata.type != kb::scene::kSkeletonAssetType) continue;
+        rows.push_back(AssetPickerRow{ .assetId = metadata.id, .name = DisplayName(metadata, "Skeleton"), .path = DisplayPath(metadata) });
+    }
+    std::ranges::sort(rows, [](const AssetPickerRow& lhs, const AssetPickerRow& rhs) {
+        return lhs.name != rhs.name ? lhs.name < rhs.name : lhs.assetId.value < rhs.assetId.value;
+    });
+    return rows;
+}
+
+[[nodiscard]] std::vector<AssetPickerRow> BuildSkeletalMeshRows(const EditorSceneContext& sceneContext) {
+    std::vector<AssetPickerRow> rows;
+    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
+        if (metadata.type != kb::scene::kSkeletalMeshAssetType) continue;
+        rows.push_back(AssetPickerRow{ .assetId = metadata.id, .name = DisplayName(metadata, "Skeletal Mesh"), .path = DisplayPath(metadata) });
+    }
+    std::ranges::sort(rows, [](const AssetPickerRow& lhs, const AssetPickerRow& rhs) {
+        return lhs.name != rhs.name ? lhs.name < rhs.name : lhs.assetId.value < rhs.assetId.value;
     });
     return rows;
 }
@@ -1433,6 +1463,42 @@ EditorAnimatorControllerAssetPickerDialog::Result EditorAnimatorControllerAssetP
         .accepted = result.accepted,
         .assetId = result.assetId,
     };
+}
+
+EditorSkeletonAssetPickerDialog::Result EditorSkeletonAssetPickerDialog::Show(
+    HWND owner,
+    const EditorTheme& theme,
+    const EditorSceneContext& sceneContext,
+    kb::assets::AssetId currentSkeleton) {
+    AssetPickerWindow window{
+        theme,
+        BuildSkeletonRows(sceneContext),
+        currentSkeleton,
+        "Select Skeleton",
+        "Choose a Skeleton asset for the selected Skeleton Binding.",
+        "Clear Skeleton Binding",
+        HeroIconKind::AdjustmentsHorizontal,
+    };
+    const AssetPickerResult result = window.Show(owner);
+    return EditorSkeletonAssetPickerDialog::Result{ .accepted = result.accepted, .assetId = result.assetId };
+}
+
+EditorSkeletalMeshAssetPickerDialog::Result EditorSkeletalMeshAssetPickerDialog::Show(
+    HWND owner,
+    const EditorTheme& theme,
+    const EditorSceneContext& sceneContext,
+    kb::assets::AssetId currentSkeletalMesh) {
+    AssetPickerWindow window{
+        theme,
+        BuildSkeletalMeshRows(sceneContext),
+        currentSkeletalMesh,
+        "Select Skeletal Mesh",
+        "Choose a Skeletal Mesh asset for the selected Deformed Geometry.",
+        "Clear Deformed Geometry mesh",
+        HeroIconKind::Cube,
+    };
+    const AssetPickerResult result = window.Show(owner);
+    return EditorSkeletalMeshAssetPickerDialog::Result{ .accepted = result.accepted, .assetId = result.assetId };
 }
 
 EditorTextureAssetPickerDialog::Result EditorTextureAssetPickerDialog::Show(

@@ -198,13 +198,24 @@ namespace {
         lhs.sampleIntervalSeconds == rhs.sampleIntervalSeconds && lhs.layer == rhs.layer &&
         lhs.castsShadow == rhs.castsShadow && lhs.receivesShadow == rhs.receivesShadow && lhs.enabled == rhs.enabled;
 }
+[[nodiscard]] bool Equals(const SkeletonBindingComponent& lhs, const SkeletonBindingComponent& rhs) noexcept {
+    return lhs.skeletonAssetId == rhs.skeletonAssetId &&
+        lhs.skeletonCompatibilitySignature == rhs.skeletonCompatibilitySignature && lhs.enabled == rhs.enabled;
+}
+[[nodiscard]] bool Equals(const DrawD3DeformedGeometryComponent& lhs, const DrawD3DeformedGeometryComponent& rhs) noexcept {
+    return lhs.skeletalMeshAssetId == rhs.skeletalMeshAssetId && lhs.materialSlotAssetIds == rhs.materialSlotAssetIds &&
+        lhs.materialSlotOverrideCount == rhs.materialSlotOverrideCount && lhs.poseSource == rhs.poseSource &&
+        lhs.lodBias == rhs.lodBias && lhs.lodEnabled == rhs.lodEnabled && lhs.fixedBounds == rhs.fixedBounds &&
+        lhs.castsShadow == rhs.castsShadow && lhs.receivesShadow == rhs.receivesShadow &&
+        lhs.layer == rhs.layer && lhs.enabled == rhs.enabled;
+}
 
 template <typename T, typename Components>
 void WriteOptionalComponent(Components components, SceneEntity entity, const std::optional<T>& component) {
     if (component.has_value()) {
         const T* current = components.TryGet(entity);
         if (current == nullptr || !Equals(*current, *component)) {
-            components.Set(entity, *component);
+            static_cast<void>(components.Set(entity, *component));
         }
     } else if (components.TryGet(entity) != nullptr) {
         components.Remove(entity);
@@ -276,6 +287,8 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , audioSources(scene.Components().AudioSources())
     , audioListeners(scene.Components().AudioListeners())
     , animators(scene.Components().Animators())
+    , skeletonBindings(scene.Components().SkeletonBindings())
+    , deformedGeometries(scene.Components().DeformedGeometries())
     , uiDocuments(scene.Components().UIDocuments())
     , navAgents(scene.Components().NavAgents())
     , navObstacles(scene.Components().NavObstacles()) {
@@ -367,6 +380,12 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     }
     if (!componentMask.available || !componentMask.matches || node.components.animator.has_value()) {
         WriteOptionalComponent(context.animators, entity, node.components.animator);
+    }
+    if (!componentMask.available || !componentMask.matches || node.components.skeletonBinding.has_value()) {
+        WriteOptionalComponent(context.skeletonBindings, entity, node.components.skeletonBinding);
+    }
+    if (!componentMask.available || !componentMask.matches || node.components.deformedGeometry.has_value()) {
+        WriteOptionalComponent(context.deformedGeometries, entity, node.components.deformedGeometry);
     }
     if (!componentMask.available || !componentMask.matches || node.components.uiDocument.has_value()) {
         WriteOptionalComponent(context.uiDocuments, entity, node.components.uiDocument);

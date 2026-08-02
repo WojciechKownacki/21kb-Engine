@@ -11,6 +11,7 @@
 #include "scene/asset/io/components/SceneAssetTagsComponentCodec.hpp"
 
 #include <cmath>
+#include <stdexcept>
 
 namespace kb::scene {
 namespace {
@@ -49,6 +50,8 @@ enum SceneNodeComponentBits : std::uint64_t {
       SpaceStrokeBit = 1U << 30U,
       HistoryRibbonBit = 1ULL << 31U,
       LensEchoBit = 1ULL << 32U,
+      SkeletonBindingBit = 1ULL << 33U,
+      DeformedGeometryBit = 1ULL << 34U,
 };
 
 constexpr std::uint64_t KnownComponentBits = CameraBit |
@@ -69,7 +72,7 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit;
 
 [[nodiscard]] std::uint64_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint64_t componentBits = 0;
@@ -106,6 +109,8 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
       componentBits |= components.spaceStroke.has_value() ? SpaceStrokeBit : 0U;
       componentBits |= components.historyRibbon.has_value() ? HistoryRibbonBit : 0U;
       componentBits |= components.lensEcho.has_value() ? LensEchoBit : 0U;
+      componentBits |= components.skeletonBinding.has_value() ? SkeletonBindingBit : 0U;
+      componentBits |= components.deformedGeometry.has_value() ? DeformedGeometryBit : 0U;
     return componentBits;
 }
 
@@ -223,6 +228,26 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
             animator.rootMotionOwner = static_cast<AnimatorRootMotionOwner>(rootMotionOwner);
         }
         output.animator = animator;
+    }
+    if ((componentBits & SkeletonBindingBit) != 0U) {
+        if (fileVersion < 28U) return false;
+        SkeletonBindingComponent binding{};
+        if (!input.ReadUInt64(binding.skeletonAssetId) || !input.ReadUInt64(binding.skeletonCompatibilitySignature) ||
+            !input.ReadBool(binding.enabled) || !IsSkeletonBindingComponentPersistable(binding)) return false;
+        output.skeletonBinding = binding;
+    }
+    if ((componentBits & DeformedGeometryBit) != 0U) {
+        if (fileVersion < 28U) return false;
+        DrawD3DeformedGeometryComponent geometry{};
+        std::uint64_t poseSourceStableId = 0U;
+        if (!input.ReadUInt64(geometry.skeletalMeshAssetId) || !input.ReadUInt32(geometry.materialSlotOverrideCount) ||
+            geometry.materialSlotOverrideCount > kMaxDeformedGeometryMaterialSlotOverrides) return false;
+        for (std::uint64_t& material : geometry.materialSlotAssetIds) if (!input.ReadUInt64(material)) return false;
+        if (!input.ReadUInt64(poseSourceStableId) || poseSourceStableId != 0U || !input.ReadInt32(geometry.lodBias) ||
+            !input.ReadBool(geometry.lodEnabled) || !input.ReadBool(geometry.fixedBounds) || !input.ReadBool(geometry.castsShadow) ||
+            !input.ReadBool(geometry.receivesShadow) || !input.ReadUInt32(geometry.layer) || !input.ReadBool(geometry.enabled) ||
+            !IsDrawD3DeformedGeometryComponentPersistable(geometry)) return false;
+        output.deformedGeometry = geometry;
     }
     if ((componentBits & UIDocumentBit) != 0U) {
         if (fileVersion < 7U) return false;
@@ -501,6 +526,30 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteFloat(output, components.animator->speed);
         SceneAssetBinaryIO::WriteBool(output, components.animator->enabled);
         SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(components.animator->rootMotionOwner));
+    }
+    if (components.skeletonBinding.has_value()) {
+        SceneAssetBinaryIO::WriteUInt64(output, components.skeletonBinding->skeletonAssetId);
+        SceneAssetBinaryIO::WriteUInt64(output, components.skeletonBinding->skeletonCompatibilitySignature);
+        SceneAssetBinaryIO::WriteBool(output, components.skeletonBinding->enabled);
+    }
+    if (components.deformedGeometry.has_value()) {
+        const DrawD3DeformedGeometryComponent& geometry = *components.deformedGeometry;
+        if (geometry.poseSource.IsValid()) {
+            throw std::invalid_argument("Deformed Geometry scene serialization requires a stable pose-source node reference");
+        }
+        SceneAssetBinaryIO::WriteUInt64(output, geometry.skeletalMeshAssetId);
+        SceneAssetBinaryIO::WriteUInt32(output, geometry.materialSlotOverrideCount);
+        for (const std::uint64_t material : geometry.materialSlotAssetIds) SceneAssetBinaryIO::WriteUInt64(output, material);
+        // Zero is the canonical component-owner pose source. Non-owner live ECS
+        // handles are rejected above instead of being silently discarded.
+        SceneAssetBinaryIO::WriteUInt64(output, 0U);
+        SceneAssetBinaryIO::WriteInt32(output, geometry.lodBias);
+        SceneAssetBinaryIO::WriteBool(output, geometry.lodEnabled);
+        SceneAssetBinaryIO::WriteBool(output, geometry.fixedBounds);
+        SceneAssetBinaryIO::WriteBool(output, geometry.castsShadow);
+        SceneAssetBinaryIO::WriteBool(output, geometry.receivesShadow);
+        SceneAssetBinaryIO::WriteUInt32(output, geometry.layer);
+        SceneAssetBinaryIO::WriteBool(output, geometry.enabled);
     }
     if (components.uiDocument.has_value()) {
         SceneAssetBinaryIO::WriteUInt64(output, components.uiDocument->documentAssetId);

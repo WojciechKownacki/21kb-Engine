@@ -1412,6 +1412,36 @@ template <typename Integer>
     return true;
 }
 
+[[nodiscard]] bool HandleSkeletonBindingClick(
+    EditorSceneContext& sceneContext,
+    kb::scene::SceneEntity entity,
+    const InspectorPanelRenderer::Hit& hit) {
+    if (sceneContext.Scene().Components().SkeletonBindings().TryGet(entity) == nullptr) return false;
+    sceneContext.Inspector().EndTextEdit();
+    if (hit.property == InspectorPropertyId::SkeletonBindingEnabled) {
+        return sceneContext.ToggleSkeletonBindingEnabled(entity);
+    }
+    return true;
+}
+
+[[nodiscard]] bool HandleDeformedGeometryClick(
+    EditorSceneContext& sceneContext,
+    kb::scene::SceneEntity entity,
+    const InspectorPanelRenderer::Hit& hit) {
+    if (sceneContext.Scene().Components().DeformedGeometries().TryGet(entity) == nullptr) return false;
+    sceneContext.Inspector().EndTextEdit();
+    switch (hit.property) {
+    case InspectorPropertyId::DeformedGeometryCastsShadow:
+        return sceneContext.ToggleDeformedGeometryCastsShadow(entity);
+    case InspectorPropertyId::DeformedGeometryReceivesShadow:
+        return sceneContext.ToggleDeformedGeometryReceivesShadow(entity);
+    case InspectorPropertyId::DeformedGeometryEnabled:
+        return sceneContext.ToggleDeformedGeometryEnabled(entity);
+    default:
+        return true;
+    }
+}
+
 [[nodiscard]] bool IsNavAgentProperty(InspectorPropertyId property) noexcept {
     return property >= InspectorPropertyId::NavAgentRadius && property <= InspectorPropertyId::NavAgentEnabled;
 }
@@ -2857,6 +2887,10 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                 static_cast<void>(RemoveCameraComponent(sceneContext, entity));
             } else if (hit.section == InspectorSectionId::Animator) {
                 static_cast<void>(sceneContext.RemoveAnimatorFromEntity(entity));
+            } else if (hit.section == InspectorSectionId::SkeletonBinding) {
+                static_cast<void>(sceneContext.RemoveSkeletonBindingFromEntity(entity));
+            } else if (hit.section == InspectorSectionId::DeformedGeometry) {
+                static_cast<void>(sceneContext.RemoveDeformedGeometryFromEntity(entity));
             } else if (hit.section == InspectorSectionId::UIDocument) {
                 static_cast<void>(sceneContext.RemoveUIDocumentFromEntity(entity));
             } else if (hit.section == InspectorSectionId::Tags) {
@@ -3016,6 +3050,12 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::Animator) {
         return HandleAnimatorClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::SkeletonBinding) {
+        return HandleSkeletonBindingClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::DeformedGeometry) {
+        return HandleDeformedGeometryClick(sceneContext, entity, hit);
     }
     if (hit.section == InspectorSectionId::UIDocument) {
         return HandleUIDocumentClick(sceneContext, entity, hit);
