@@ -24,6 +24,7 @@
 #include "scene/components/SceneAudioSourceComponentStore.hpp"
 #include "scene/components/SceneAnimatorComponentStore.hpp"
 #include "scene/components/SceneSkeletonBindingComponentStore.hpp"
+#include "scene/components/SceneDeformedGeometryComponentStore.hpp"
 #include "scene/components/SceneBehaviourComponentStore.hpp"
 #include "scene/components/SceneCameraComponentStore.hpp"
 #include "scene/components/SceneCharacterControllerComponentStore.hpp"
@@ -121,6 +122,8 @@ public:
     [[nodiscard]] SceneAnimatorComponentStore& Animators() noexcept;
     [[nodiscard]] const SceneSkeletonBindingComponentStore& SkeletonBindings() const noexcept;
     [[nodiscard]] SceneSkeletonBindingComponentStore& SkeletonBindings() noexcept;
+    [[nodiscard]] const SceneDeformedGeometryComponentStore& DeformedGeometries() const noexcept;
+    [[nodiscard]] SceneDeformedGeometryComponentStore& DeformedGeometries() noexcept;
     [[nodiscard]] const SceneUIDocumentComponentStore& UIDocuments() const noexcept;
     [[nodiscard]] SceneUIDocumentComponentStore& UIDocuments() noexcept;
     [[nodiscard]] const SceneNavigationComponentStore& Navigation() const noexcept;
@@ -160,6 +163,7 @@ private:
     SceneAudioListenerComponentStore audioListeners_;
     SceneAnimatorComponentStore animators_;
     SceneSkeletonBindingComponentStore skeletonBindings_;
+    SceneDeformedGeometryComponentStore deformedGeometries_;
     SceneUIDocumentComponentStore uiDocuments_;
     SceneNavigationComponentStore navigation_;
 };
