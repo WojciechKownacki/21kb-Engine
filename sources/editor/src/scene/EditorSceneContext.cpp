@@ -9028,13 +9028,15 @@ bool EditorSceneContext::SetDeformedGeometryMaterialSlotAsset(
 }
 
 bool EditorSceneContext::ToggleSkeletonBindingEnabled(kb::scene::SceneEntity entity) {
+    const kb::scene::SkeletonBindingComponent* binding = scene_->Components().SkeletonBindings().TryGet(entity);
+    if (binding == nullptr) return false;
+    if (!binding->enabled && !kb::scene::IsSkeletonBindingComponentValid(*binding)) {
+        console_.Warning("Skeleton Binding", "Assign a valid Skeleton asset before enabling this component.");
+        return false;
+    }
     return ExecuteSceneCommand("Toggle Skeleton Binding Enabled", [this, entity]() {
         kb::scene::SkeletonBindingComponent* binding = scene_->Components().SkeletonBindings().TryGet(entity);
         if (binding == nullptr) return false;
-        if (!binding->enabled && !kb::scene::IsSkeletonBindingComponentValid(*binding)) {
-            console_.Warning("Skeleton Binding", "Assign a valid Skeleton asset before enabling this component.");
-            return false;
-        }
         binding->enabled = !binding->enabled;
         scene_->Components().SkeletonBindings().MarkModified(entity);
         return true;
@@ -9042,13 +9044,15 @@ bool EditorSceneContext::ToggleSkeletonBindingEnabled(kb::scene::SceneEntity ent
 }
 
 bool EditorSceneContext::ToggleDeformedGeometryEnabled(kb::scene::SceneEntity entity) {
+    const kb::scene::DrawD3DeformedGeometryComponent* geometry = scene_->Components().DeformedGeometries().TryGet(entity);
+    if (geometry == nullptr) return false;
+    if (!geometry->enabled && !kb::scene::IsDrawD3DeformedGeometryComponentValid(*geometry)) {
+        console_.Warning("Deformed Geometry", "Assign a valid Skeletal Mesh asset before enabling this component.");
+        return false;
+    }
     return ExecuteSceneCommand("Toggle Deformed Geometry Enabled", [this, entity]() {
         kb::scene::DrawD3DeformedGeometryComponent* geometry = scene_->Components().DeformedGeometries().TryGet(entity);
         if (geometry == nullptr) return false;
-        if (!geometry->enabled && !kb::scene::IsDrawD3DeformedGeometryComponentValid(*geometry)) {
-            console_.Warning("Deformed Geometry", "Assign a valid Skeletal Mesh asset before enabling this component.");
-            return false;
-        }
         geometry->enabled = !geometry->enabled;
         scene_->Components().DeformedGeometries().MarkModified(entity);
         return true;
