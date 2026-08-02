@@ -382,8 +382,11 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
     SkeletalMeshGltfImportResult result{};
     std::unordered_map<const cgltf_node*, std::int32_t> emittedBone;
     emittedBone.reserve(jointSourceIndex.size());
+    std::unordered_set<const cgltf_node*> visitingBone;
+    visitingBone.reserve(jointSourceIndex.size());
     const auto emitBone = [&](const auto& self, const cgltf_node* node) -> bool {
         if (emittedBone.contains(node)) return true;
+        if (!visitingBone.insert(node).second) return false;
         if (node->has_matrix) return false;
         std::int32_t parentIndex = -1;
         if (node->parent != nullptr && jointSourceIndex.contains(node->parent)) {
@@ -420,6 +423,7 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
         bone.inverseBind = ConvertInverseBind(*conversion, inverseBind);
         emittedBone.emplace(node, static_cast<std::int32_t>(result.skeleton.bones.size()));
         result.skeleton.bones.push_back(std::move(bone));
+        visitingBone.erase(node);
         return true;
     };
     for (cgltf_size index = 0U; index < skin.joints_count; ++index) {
