@@ -37,6 +37,7 @@ SceneComponentStorage::SceneComponentStorage(kb::ecs::World& world, const SceneC
     , audioSources_(world, components.AudioSourceComponentId())
     , audioListeners_(world, components.AudioListenerComponentId())
     , animators_(world, components.AnimatorComponentId())
+    , skeletonBindings_(world, components.SkeletonBindingComponentId())
     , uiDocuments_(world, components.UIDocumentComponentId())
     , navigation_(world) {}
 
@@ -199,6 +200,8 @@ SceneAudioListenerComponentStore& SceneComponentStorage::AudioListeners() noexce
 
 const SceneAnimatorComponentStore& SceneComponentStorage::Animators() const noexcept { return animators_; }
 SceneAnimatorComponentStore& SceneComponentStorage::Animators() noexcept { return animators_; }
+const SceneSkeletonBindingComponentStore& SceneComponentStorage::SkeletonBindings() const noexcept { return skeletonBindings_; }
+SceneSkeletonBindingComponentStore& SceneComponentStorage::SkeletonBindings() noexcept { return skeletonBindings_; }
 const SceneUIDocumentComponentStore& SceneComponentStorage::UIDocuments() const noexcept { return uiDocuments_; }
 SceneUIDocumentComponentStore& SceneComponentStorage::UIDocuments() noexcept { return uiDocuments_; }
 const SceneNavigationComponentStore& SceneComponentStorage::Navigation() const noexcept { return navigation_; }

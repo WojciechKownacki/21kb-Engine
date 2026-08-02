@@ -7,6 +7,7 @@
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AnimationAssets.hpp"
+#include "engine/scene/SkeletonBindingComponent.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/InputComponent.hpp"
@@ -357,6 +358,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , audioSourceComponentId_(RegisterSceneComponent<AudioSourceComponent>(world, "kb.scene.AudioSourceComponent"))
     , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, "kb.scene.AudioListenerComponent"))
     , animatorComponentId_(RegisterSceneComponent<Animator>(world, "kb.scene.AnimatorComponent"))
+    , skeletonBindingComponentId_(RegisterSceneComponent<SkeletonBindingComponent>(world, SkeletonBindingComponent::StableId))
     , uiDocumentComponentId_(RegisterSceneComponent<UIDocumentComponent>(world, "kb.scene.UIDocumentComponent"))
     , navAgentComponentId_(RegisterSceneComponent<NavAgent>(world, "kb.scene.NavAgent"))
     , navObstacleComponentId_(RegisterSceneComponent<NavObstacle>(world, "kb.scene.NavObstacle")) {
@@ -459,6 +461,7 @@ std::uint64_t SceneComponentRegistry::AudioListenerComponentId() const noexcept 
 }
 
 std::uint64_t SceneComponentRegistry::AnimatorComponentId() const noexcept { return animatorComponentId_; }
+std::uint64_t SceneComponentRegistry::SkeletonBindingComponentId() const noexcept { return skeletonBindingComponentId_; }
 std::uint64_t SceneComponentRegistry::UIDocumentComponentId() const noexcept { return uiDocumentComponentId_; }
 std::uint64_t SceneComponentRegistry::NavAgentComponentId() const noexcept { return navAgentComponentId_; }
 std::uint64_t SceneComponentRegistry::NavObstacleComponentId() const noexcept { return navObstacleComponentId_; }
