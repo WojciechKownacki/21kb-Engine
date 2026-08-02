@@ -114,6 +114,8 @@ scenario-local aliases.
 | `assert_ui_element` | `entity`, numeric `element`; optional `exists`, `visible`, `kind`; queries the live runtime UI tree in Play Mode |
 | `assert_parent` | `entity`, `parent` |
 | `assert_asset` | virtual `path`; optional `type`, `exists` |
+| `assert_skeleton_asset` | `asset` alias or virtual path, expected unsigned `bone_count`; force-loads the production Skeleton asset and verifies its canonical compatibility signature |
+| `select_asset` | `asset` alias or virtual path; selects the real asset in the production Asset Browser |
 | `create_asset` | `id`, `type`, `folder`; types: `lua_script`, `input_action`, `input_axis`, `input_context`, `material`, `material_function`, `material_graph`, `material_type` |
 | `copy_asset`, `move_asset` | `asset`, destination virtual folder |
 | `delete_asset` | `asset` |
