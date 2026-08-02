@@ -19,6 +19,28 @@ struct SkeletalMeshGltfImportResult {
     std::vector<AnimationClip> clips;
 };
 
+enum class SkeletalMeshGltfImportDiagnosticSeverity : std::uint8_t {
+    Warning,
+    Error,
+};
+
+struct SkeletalMeshGltfImportDiagnostic {
+    SkeletalMeshGltfImportDiagnosticSeverity severity = SkeletalMeshGltfImportDiagnosticSeverity::Error;
+    std::string message;
+    std::filesystem::path sourcePath;
+    std::string mesh;
+    std::string node;
+    std::string bone;
+    std::int32_t primitiveIndex = -1;
+    std::int32_t channelIndex = -1;
+};
+
+struct SkeletalMeshGltfImportReport {
+    std::vector<SkeletalMeshGltfImportDiagnostic> diagnostics;
+
+    [[nodiscard]] bool HasErrors() const noexcept;
+};
+
 enum class SkeletalMeshGltfAxis : std::uint8_t {
     X = 0U,
     Y = 1U,
@@ -61,13 +83,15 @@ public:
         const std::filesystem::path& path,
         std::uint64_t skeletonAssetId,
         const SkeletalMeshGltfImportOptions& options,
-        std::string* error = nullptr);
+        std::string* error = nullptr,
+        SkeletalMeshGltfImportReport* report = nullptr);
 
     [[nodiscard]] static std::optional<SkeletalMeshGltfImportResult> Import(
         const std::filesystem::path& path,
         std::uint64_t skeletonAssetId,
-        std::string* error = nullptr) {
-        return Import(path, skeletonAssetId, {}, error);
+        std::string* error = nullptr,
+        SkeletalMeshGltfImportReport* report = nullptr) {
+        return Import(path, skeletonAssetId, {}, error, report);
     }
 };
 
