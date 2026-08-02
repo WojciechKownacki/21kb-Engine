@@ -29,28 +29,41 @@ namespace {
 
 } // namespace
 
-std::optional<SkeletonAsset> SkeletonAssetIO::Load(const std::filesystem::path& path) {
-    if (path.extension() != kSkeletonAssetExtension) return std::nullopt;
+std::optional<SkeletonAsset> SkeletonAssetIO::Load(
+    const std::filesystem::path& path,
+    std::string* error) {
+    const auto fail = [error](std::string message) -> std::optional<SkeletonAsset> {
+        if (error != nullptr) *error = std::move(message);
+        return std::nullopt;
+    };
+    if (error != nullptr) error->clear();
+    if (path.extension() != kSkeletonAssetExtension) {
+        return fail("Skeleton asset has an unexpected file extension.");
+    }
     const std::optional<std::string> text = ReadText(path);
-    if (!text) return std::nullopt;
+    if (!text) return fail("Skeleton asset could not be read.");
 
     SkeletonAsset asset{};
     std::istringstream file{ *text };
     file.imbue(std::locale::classic());
     std::string line;
     bool schemaRead = false;
+    std::size_t lineNumber = 0U;
     while (std::getline(file, line)) {
+        ++lineNumber;
         std::istringstream input{ line };
         input.imbue(std::locale::classic());
         std::string command;
         if (!(input >> command) || command.starts_with('#')) continue;
+        if (error != nullptr) {
+            *error = "Skeleton asset has an invalid record at line " +
+                std::to_string(lineNumber) + ".";
+        }
         if (!schemaRead) {
             const asset_io::TextAssetHeaderStatus header =
                 asset_io::ParseTextAssetHeader(
                     line, kSkeletonAssetType, kSkeletonAssetSchemaVersion);
-            if (header == asset_io::TextAssetHeaderStatus::Invalid) {
-                return std::nullopt;
-            }
+            if (header == asset_io::TextAssetHeaderStatus::Invalid) return std::nullopt;
             schemaRead = true;
             if (header == asset_io::TextAssetHeaderStatus::Current) continue;
         }
@@ -66,6 +79,7 @@ std::optional<SkeletonAsset> SkeletonAssetIO::Load(const std::filesystem::path& 
         }
 
         if (!std::getline(file, line)) return std::nullopt;
+        ++lineNumber;
         std::istringstream matrixInput{ line };
         matrixInput.imbue(std::locale::classic());
         if (!(matrixInput >> command) || command != "inverseBind") return std::nullopt;
@@ -76,7 +90,10 @@ std::optional<SkeletonAsset> SkeletonAssetIO::Load(const std::filesystem::path& 
         asset.bones.push_back(std::move(bone));
     }
 
-    return ValidateSkeletonAsset(asset).valid ? std::optional<SkeletonAsset>{ std::move(asset) } : std::nullopt;
+    const SkeletonAssetValidationResult validation = ValidateSkeletonAsset(asset);
+    if (!validation.valid) return fail(validation.error);
+    if (error != nullptr) error->clear();
+    return asset;
 }
 
 bool SkeletonAssetIO::Save(const std::filesystem::path& path, const SkeletonAsset& asset) {

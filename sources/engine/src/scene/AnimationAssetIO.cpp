@@ -110,8 +110,13 @@ AnimatorParameterType ConditionParameterType(AnimatorConditionMode mode) {
     return AnimatorParameterType::Float;
 }
 
-bool ValidateClip(AnimationClip& clip) {
+bool ValidateClip(AnimationClip& clip, std::string* error = nullptr) {
+    const auto setError = [error](const char* message) {
+        if (error != nullptr) *error = message;
+    };
+    setError("Animation clip has an invalid duration.");
     if (!std::isfinite(clip.durationSeconds) || clip.durationSeconds <= 0.0F) return false;
+    setError("Animation clip has invalid generic transform bindings or keyframes.");
     std::unordered_set<std::string> paths;
     for (AnimationTransformTrack& track : clip.tracks) {
         if (track.bindingMask == 0U || track.keyframes.empty() || !paths.insert(track.targetPath).second) return false;
@@ -130,6 +135,7 @@ bool ValidateClip(AnimationClip& clip) {
     }
     float previousEventTime = -1.0F;
     AnimationEventId previousEventId = 0U;
+    setError("Animation clip has invalid or unordered events.");
     for (const AnimationEventKeyframe& event : clip.events) {
         const bool sameTime = event.timeSeconds == previousEventTime;
         if (!std::isfinite(event.timeSeconds) || event.timeSeconds <= 0.0F ||
@@ -146,13 +152,19 @@ bool ValidateClip(AnimationClip& clip) {
         !clip.skeletalTracks.empty() || !clip.morphTracks.empty() ||
         !clip.curves.empty() ||
         clip.rootMotionMode != AnimationRootMotionMode::None;
-    if (!skeletal) return !clip.tracks.empty();
+    if (!skeletal) {
+        if (!clip.tracks.empty()) return true;
+        setError("Generic animation clip has no transform tracks.");
+        return false;
+    }
+    setError("Skeletal animation clip has an invalid skeleton target or mixed bindings.");
     if (clip.targetSkeletonAssetId == 0U ||
         clip.targetSkeletonCompatibilitySignature == 0U ||
         !clip.tracks.empty() || clip.skeletalTracks.empty()) {
         return false;
     }
     std::unordered_set<SkeletonBoneId> bones;
+    setError("Skeletal animation clip has invalid stable bone bindings or keyframes.");
     for (AnimationBoneTrack& track : clip.skeletalTracks) {
         if (track.boneId == 0U || !bones.insert(track.boneId).second ||
             track.keyframes.empty()) {
@@ -175,6 +187,7 @@ bool ValidateClip(AnimationClip& clip) {
         }
     }
     std::unordered_set<std::string> morphs;
+    setError("Skeletal animation clip has invalid morph channels or keyframes.");
     for (const AnimationMorphTrack& track : clip.morphTracks) {
         if (track.morphTarget.empty() || !morphs.insert(track.morphTarget).second ||
             track.keyframes.empty()) {
@@ -191,6 +204,7 @@ bool ValidateClip(AnimationClip& clip) {
         }
     }
     std::unordered_set<std::string> curves;
+    setError("Skeletal animation clip has invalid curve channels or keyframes.");
     for (const AnimationCurveTrack& track : clip.curves) {
         if (track.name.empty() || !curves.insert(track.name).second || track.keyframes.empty()) return false;
         float previous = -1.0F;
@@ -203,13 +217,22 @@ bool ValidateClip(AnimationClip& clip) {
             previous = key.timeSeconds;
         }
     }
-    return clip.rootMotionMode == AnimationRootMotionMode::None
+    const bool validRootMotion = clip.rootMotionMode == AnimationRootMotionMode::None
         ? clip.rootMotionBoneId == 0U
         : clip.rootMotionBoneId != 0U && bones.contains(clip.rootMotionBoneId);
+    if (!validRootMotion) {
+        setError("Skeletal animation clip has an invalid root-motion bone binding.");
+    }
+    return validRootMotion;
 }
 
-bool ValidateController(const AnimatorController& controller) {
+bool ValidateController(const AnimatorController& controller, std::string* error = nullptr) {
+    const auto setError = [error](const char* message) {
+        if (error != nullptr) *error = message;
+    };
+    setError("Animator controller has no layers.");
     if (controller.layers.empty()) return false;
+    setError("Animator controller has invalid parameter definitions.");
     std::unordered_set<std::string> parameterNames;
     for (const AnimatorParameterDefinition& parameter : controller.parameters) {
         if (parameter.name.empty() || !parameterNames.insert(parameter.name).second ||
@@ -217,6 +240,7 @@ bool ValidateController(const AnimatorController& controller) {
             (parameter.type == AnimatorParameterType::Trigger && parameter.boolDefault)) return false;
     }
     std::unordered_set<std::string> layerNames;
+    setError("Animator controller has invalid layer or state definitions.");
     for (const AnimatorControllerLayer& layer : controller.layers) {
         if (layer.name.empty() || !layerNames.insert(layer.name).second || layer.defaultState.empty() ||
             !std::isfinite(layer.weight) || layer.weight < 0.0F || layer.weight > 1.0F || layer.mask == 0U ||
@@ -229,6 +253,7 @@ bool ValidateController(const AnimatorController& controller) {
             const bool hasBlendTree = !state.blendParameter.empty() || !state.blendChildren.empty();
             if (hasClip == hasBlendTree) return false;
             if (hasBlendTree) {
+                setError("Animator controller has an invalid blend tree.");
                 const auto parameter = std::find_if(controller.parameters.begin(), controller.parameters.end(),
                     [&](const AnimatorParameterDefinition& value) {
                         return value.name == state.blendParameter &&
@@ -244,7 +269,9 @@ bool ValidateController(const AnimatorController& controller) {
             }
             foundDefault |= state.name == layer.defaultState;
         }
+        setError("Animator controller layer has no declared default state.");
         if (!foundDefault) return false;
+        setError("Animator controller has an invalid transition or condition.");
         for (const AnimatorControllerTransition& transition : layer.transitions) {
             if (!stateNames.contains(transition.fromState) || !stateNames.contains(transition.toState) ||
                 transition.fromState == transition.toState || !std::isfinite(transition.durationSeconds) ||
@@ -260,6 +287,7 @@ bool ValidateController(const AnimatorController& controller) {
     }
     std::unordered_set<std::string> constraintNames;
     std::unordered_set<std::string> drivenPaths;
+    setError("Animator controller has invalid rig constraints.");
     for (const AnimatorRigConstraint& constraint : controller.rigConstraints) {
         if (constraint.name.empty() || !constraintNames.insert(constraint.name).second ||
             constraint.target.empty() || !std::isfinite(constraint.weight) ||
@@ -286,24 +314,41 @@ bool ValidateController(const AnimatorController& controller) {
             break;
         }
     }
+    if (error != nullptr) error->clear();
     return true;
 }
 
 } // namespace
 
-std::optional<AnimationClip> AnimationAssetIO::LoadClip(const std::filesystem::path& path) {
+std::optional<AnimationClip> AnimationAssetIO::LoadClip(
+    const std::filesystem::path& path,
+    std::string* error) {
+    const auto fail = [error](std::string message) -> std::optional<AnimationClip> {
+        if (error != nullptr) *error = std::move(message);
+        return std::nullopt;
+    };
+    if (error != nullptr) error->clear();
+    if (path.extension() != kAnimationClipAssetExtension) {
+        return fail("Animation clip has an unexpected file extension.");
+    }
     const auto text = ReadText(path);
-    if (!text) return std::nullopt;
+    if (!text) return fail("Animation clip could not be read.");
     AnimationClip clip{};
     std::istringstream file{ *text };
     file.imbue(std::locale::classic());
     std::string line;
     bool schemaRead = false;
+    std::size_t lineNumber = 0U;
     while (std::getline(file, line)) {
+        ++lineNumber;
         std::istringstream input{ line };
         input.imbue(std::locale::classic());
         std::string command;
         if (!(input >> command) || command.starts_with('#')) continue;
+        if (error != nullptr) {
+            *error = "Animation clip has an invalid record at line " +
+                std::to_string(lineNumber) + ".";
+        }
         if (!schemaRead) {
             const asset_io::TextAssetHeaderStatus header =
                 asset_io::ParseTextAssetHeader(
@@ -396,22 +441,40 @@ std::optional<AnimationClip> AnimationAssetIO::LoadClip(const std::filesystem::p
             return std::nullopt;
         }
     }
-    return ValidateClip(clip) ? std::optional<AnimationClip>{ std::move(clip) } : std::nullopt;
+    if (!ValidateClip(clip, error)) return std::nullopt;
+    if (error != nullptr) error->clear();
+    return clip;
 }
 
-std::optional<AnimatorController> AnimationAssetIO::LoadController(const std::filesystem::path& path) {
+std::optional<AnimatorController> AnimationAssetIO::LoadController(
+    const std::filesystem::path& path,
+    std::string* error) {
+    const auto fail = [error](std::string message) -> std::optional<AnimatorController> {
+        if (error != nullptr) *error = std::move(message);
+        return std::nullopt;
+    };
+    if (error != nullptr) error->clear();
+    if (path.extension() != kAnimatorControllerAssetExtension) {
+        return fail("Animator controller has an unexpected file extension.");
+    }
     const auto text = ReadText(path);
-    if (!text) return std::nullopt;
+    if (!text) return fail("Animator controller could not be read.");
     AnimatorController controller{};
     std::istringstream file{ *text };
     file.imbue(std::locale::classic());
     std::string line;
     bool schemaRead = false;
+    std::size_t lineNumber = 0U;
     while (std::getline(file, line)) {
+        ++lineNumber;
         std::istringstream input{ line };
         input.imbue(std::locale::classic());
         std::string command;
         if (!(input >> command) || command.starts_with('#')) continue;
+        if (error != nullptr) {
+            *error = "Animator controller has an invalid record at line " +
+                std::to_string(lineNumber) + ".";
+        }
         if (!schemaRead) {
             const asset_io::TextAssetHeaderStatus header =
                 asset_io::ParseTextAssetHeader(
@@ -531,7 +594,9 @@ std::optional<AnimatorController> AnimationAssetIO::LoadController(const std::fi
             return std::nullopt;
         }
     }
-    return ValidateController(controller) ? std::optional<AnimatorController>{ std::move(controller) } : std::nullopt;
+    if (!ValidateController(controller, error)) return std::nullopt;
+    if (error != nullptr) error->clear();
+    return controller;
 }
 
 bool AnimationAssetIO::SaveClip(const std::filesystem::path& path, const AnimationClip& source) {
@@ -539,6 +604,7 @@ bool AnimationAssetIO::SaveClip(const std::filesystem::path& path, const Animati
     if (!ValidateClip(clip)) return false;
     std::ostringstream output;
     output.imbue(std::locale::classic());
+    output << std::setprecision(std::numeric_limits<float>::max_digits10);
     output << asset_io::TextAssetHeader(
         kAnimationClipAssetType, kAnimationClipAssetSchemaVersion);
     output << "durationSeconds " << clip.durationSeconds << "\nlooping " << (clip.looping ? 1 : 0) << '\n';
@@ -593,6 +659,7 @@ bool AnimationAssetIO::SaveController(const std::filesystem::path& path, const A
     if (!ValidateController(controller)) return false;
     std::ostringstream output;
     output.imbue(std::locale::classic());
+    output << std::setprecision(std::numeric_limits<float>::max_digits10);
     output << asset_io::TextAssetHeader(
         kAnimatorControllerAssetType, kAnimatorControllerAssetSchemaVersion);
     for (const auto& parameter : controller.parameters) {
