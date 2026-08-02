@@ -28,7 +28,7 @@ void WriteSkeletalGltfFixture(const std::filesystem::path& folder) {
     std::ofstream binary{ folder / "Hero.bin", std::ios::binary | std::ios::trunc };
     const std::array<float, 9U> positions{ 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F };
     const std::array<std::uint16_t, 12U> joints{ 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 1U, 0U, 0U, 0U };
-    const std::array<float, 12U> weights{ 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F };
+    const std::array<float, 12U> weights{ 2.0F, 0.0F, 0.0F, 0.0F, 2.0F, 0.0F, 0.0F, 0.0F, 2.0F, 0.0F, 0.0F, 0.0F };
     const std::array<std::uint16_t, 3U> indices{ 0U, 1U, 2U };
     const std::array<float, 32U> inverseBinds{
         1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F,
@@ -104,6 +104,18 @@ void RunSkeletalMeshAssetTests() {
             imported->mesh.lods[0].vertices[1].jointWeights[0] == 1.0F &&
             kb::scene::ValidateSkeletalMeshAsset(imported->mesh).valid,
         "Skeletal glTF import did not preserve hierarchy, inverse binds, JOINTS_0, and WEIGHTS_0");
+    const auto zeroWeightRoot = root / "GltfZeroWeight";
+    WriteSkeletalGltfFixture(zeroWeightRoot);
+    std::fstream zeroWeightBuffer{
+        zeroWeightRoot / "Hero.bin", std::ios::in | std::ios::out | std::ios::binary };
+    const std::array<float, 4U> zeroWeights{};
+    zeroWeightBuffer.seekp(60, std::ios::beg);
+    zeroWeightBuffer.write(reinterpret_cast<const char*>(zeroWeights.data()), sizeof(zeroWeights));
+    zeroWeightBuffer.close();
+    Require(!kb::scene::SkeletalMeshGltfImporter::Import(
+                zeroWeightRoot / "Hero.gltf", 777U, &importError).has_value() &&
+            importError.find("zero-weight") != std::string::npos,
+        "Skeletal glTF import accepted a zero-weight binding");
     kb::scene::Scene scene; Require(scene.Assets().MountProject(root),"SkeletalMeshAsset mount failed"); Require(scene.Assets().Discover()==2U,"SkeletalMeshAsset discovery failed");
     const auto* skeletonMetadata = scene.Assets().Manager().Registry().FindByPath(
         "/Game/Characters/Hero.kbskeleton");
