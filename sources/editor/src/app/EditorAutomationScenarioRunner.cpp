@@ -2230,6 +2230,10 @@ ReadScriptValue(
         const auto boneCount = UInt32Member(step, "bone_count", error);
         const auto vertexCount = UInt32Member(step, "vertex_count", error);
         if (!path || !skeletonId || !boneCount || !vertexCount) return { false, error };
+        const auto clipCount = UInt32Member(step, "clip_count", error, false);
+        if (!clipCount && step.Find("clip_count") != nullptr) return { false, error };
+        const auto morphCount = UInt32Member(step, "morph_count", error, false);
+        if (!morphCount && step.Find("morph_count") != nullptr) return { false, error };
         const auto source = ResolveProjectPath(*path, error);
         if (!source) return { false, error };
         std::string importError;
@@ -2239,7 +2243,9 @@ ReadScriptValue(
             imported->skeleton.bones.size() == *boneCount &&
             imported->mesh.skeletonAssetId == *skeletonId &&
             imported->mesh.lods.size() == 1U &&
-            imported->mesh.lods.front().vertices.size() == *vertexCount;
+            imported->mesh.lods.front().vertices.size() == *vertexCount &&
+            (!clipCount || imported->clips.size() == *clipCount) &&
+            (!morphCount || imported->mesh.morphTargets.size() == *morphCount);
         return { matched, matched ? "canonical glTF skeletal import" : importError };
     }
 
