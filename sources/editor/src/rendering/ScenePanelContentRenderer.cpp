@@ -457,9 +457,8 @@ void AppendTerrainBrushRing(
         !sceneContext.IsProjectPluginEnabled("Editor.Terrain")) {
         return;
     }
-    const std::optional<kb::assets::TerrainAsset> terrain =
-        EditorTerrainService::Load(sceneContext.Scene(), entity);
-    if (!terrain.has_value()) return;
+    const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(entity);
+    if (terrain == nullptr) return;
     const kb::scene::TransformComponent transform = sceneContext.Scene().Transforms().Get(entity);
     constexpr std::size_t segmentCount = 64U;
     constexpr float twoPi = 6.28318530717958647692F;

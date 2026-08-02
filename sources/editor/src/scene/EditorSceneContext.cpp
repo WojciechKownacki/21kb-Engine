@@ -1749,7 +1749,7 @@ bool EditorSceneContext::HasPendingSceneEditTransaction() const noexcept {
 
 const kb::assets::TerrainAsset* EditorSceneContext::TerrainForEditing(
     kb::scene::SceneEntity entity,
-    std::string* error) {
+    std::string* error) const {
     if (terrainStroke_.has_value() && terrainStroke_->entity == entity) {
         if (error != nullptr) error->clear();
         return &terrainStroke_->working;
@@ -1874,40 +1874,26 @@ bool EditorSceneContext::ApplyTerrainLayerPaintStamp(
     const kb::terrain_editor::TerrainBrushStamp& stamp,
     bool beginStroke,
     std::string* error) {
-    return ApplyTerrainLayerPaintStamps(
-        entity, settings,
-        std::span<const kb::terrain_editor::TerrainBrushStamp>{ &stamp, 1U },
-        beginStroke, error);
+    return ApplyTerrainLayerPaintSegment(
+        entity, settings, stamp, stamp, beginStroke, error);
 }
 
-bool EditorSceneContext::ApplyTerrainLayerPaintStamps(
+bool EditorSceneContext::ApplyTerrainLayerPaintSegment(
     kb::scene::SceneEntity entity,
     const kb::terrain_editor::TerrainLayerPaintSettings& settings,
-    std::span<const kb::terrain_editor::TerrainBrushStamp> stamps,
+    const kb::terrain_editor::TerrainBrushStamp& start,
+    const kb::terrain_editor::TerrainBrushStamp& end,
     bool beginStroke,
     std::string* error) {
-    if (stamps.empty()) {
-        if (error != nullptr) error->clear();
-        return true;
-    }
     if (beginStroke && !BeginTerrainBrushStroke(entity, "Paint Terrain Material", true, error)) return false;
     if (!terrainStroke_.has_value() || terrainStroke_->entity != entity) {
         if (error != nullptr) *error = "Terrain material paint stroke is not active";
         return false;
     }
 
-    kb::terrain_editor::TerrainLayerPaintResult result{};
-    for (const kb::terrain_editor::TerrainBrushStamp& stamp : stamps) {
-        const kb::terrain_editor::TerrainLayerPaintResult sample =
-            kb::terrain_editor::ApplyTerrainLayerPaint(
-                terrainStroke_->working, settings, stamp);
-        if (!sample.Changed()) continue;
-        result.changedTexels += sample.changedTexels;
-        result.minX = std::min(result.minX, sample.minX);
-        result.minY = std::min(result.minY, sample.minY);
-        result.maxX = std::max(result.maxX, sample.maxX);
-        result.maxY = std::max(result.maxY, sample.maxY);
-    }
+    const kb::terrain_editor::TerrainLayerPaintResult result =
+        kb::terrain_editor::ApplyTerrainLayerPaintSegment(
+            terrainStroke_->working, settings, start, end);
     if (!result.Changed()) {
         if (error != nullptr) error->clear();
         return true;

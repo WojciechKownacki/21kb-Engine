@@ -108,31 +108,62 @@ TerrainLayerPaintResult ApplyTerrainLayerPaint(
     kb::assets::TerrainAsset& terrain,
     const TerrainLayerPaintSettings& settings,
     const TerrainBrushStamp& stamp) noexcept {
+    return ApplyTerrainLayerPaintSegment(terrain, settings, stamp, stamp);
+}
+
+TerrainLayerPaintResult ApplyTerrainLayerPaintSegment(
+    kb::assets::TerrainAsset& terrain,
+    const TerrainLayerPaintSettings& settings,
+    const TerrainBrushStamp& start,
+    const TerrainBrushStamp& end) noexcept {
     TerrainLayerPaintResult result{};
     const std::uint32_t layerCount = static_cast<std::uint32_t>(terrain.materialLayers.size());
-    if (settings.layerIndex >= layerCount || terrain.layerWeightWidth == 0U || terrain.layerWeightHeight == 0U ||
+    if (settings.layerIndex >= layerCount || terrain.layerWeightWidth < 2U || terrain.layerWeightHeight < 2U ||
         terrain.layerWeights.size() != static_cast<std::size_t>(terrain.layerWeightWidth) * terrain.layerWeightHeight * kChannels ||
-        !std::isfinite(settings.radius) || settings.radius <= 0.0F ||
+        !std::isfinite(terrain.worldSizeX) || terrain.worldSizeX <= 0.0F ||
+        !std::isfinite(terrain.worldSizeZ) || terrain.worldSizeZ <= 0.0F ||
+        !std::isfinite(settings.radius) || settings.radius <= 0.0F || settings.radius > 100'000.0F ||
         !std::isfinite(settings.opacity) || settings.opacity < 0.0F ||
         !std::isfinite(settings.falloff) || settings.falloff < 0.0F || settings.falloff > 1.0F ||
-        !std::isfinite(stamp.localX) || !std::isfinite(stamp.localZ) ||
-        !std::isfinite(stamp.pressure) || stamp.pressure < 0.0F) {
+        !std::isfinite(start.localX) || !std::isfinite(start.localZ) ||
+        !std::isfinite(start.pressure) || start.pressure < 0.0F ||
+        !std::isfinite(end.localX) || !std::isfinite(end.localZ) ||
+        !std::isfinite(end.pressure) || end.pressure < 0.0F) {
         return result;
     }
     if (settings.erase && layerCount == 1U) return result;
     const float texelSizeX = terrain.worldSizeX / static_cast<float>(terrain.layerWeightWidth - 1U);
     const float texelSizeY = terrain.worldSizeZ / static_cast<float>(terrain.layerWeightHeight - 1U);
-    const int centerX = static_cast<int>(std::lround(
-        (stamp.localX + terrain.worldSizeX * 0.5F) / texelSizeX));
-    const int centerY = static_cast<int>(std::lround(
-        (stamp.localZ + terrain.worldSizeZ * 0.5F) / texelSizeY));
-    const int extentX = static_cast<int>(std::ceil(settings.radius / texelSizeX));
-    const int extentY = static_cast<int>(std::ceil(settings.radius / texelSizeY));
-    const int minX = std::max(centerX - extentX, 0);
-    const int minY = std::max(centerY - extentY, 0);
-    const int maxX = std::min(centerX + extentX, static_cast<int>(terrain.layerWeightWidth) - 1);
-    const int maxY = std::min(centerY + extentY, static_cast<int>(terrain.layerWeightHeight) - 1);
+    const float weightOriginX = -terrain.worldSizeX * 0.5F;
+    const float weightOriginY = -terrain.worldSizeZ * 0.5F;
+    const double terrainMaximumX = static_cast<double>(weightOriginX) + terrain.worldSizeX;
+    const double terrainMaximumY = static_cast<double>(weightOriginY) + terrain.worldSizeZ;
+    const double sweptMinimumX = std::min<double>(start.localX, end.localX) - settings.radius;
+    const double sweptMinimumY = std::min<double>(start.localZ, end.localZ) - settings.radius;
+    const double sweptMaximumX = std::max<double>(start.localX, end.localX) + settings.radius;
+    const double sweptMaximumY = std::max<double>(start.localZ, end.localZ) + settings.radius;
+    if (sweptMaximumX < weightOriginX || sweptMaximumY < weightOriginY ||
+        sweptMinimumX > terrainMaximumX || sweptMinimumY > terrainMaximumY) {
+        return result;
+    }
+    const int minX = static_cast<int>(std::floor(
+        (std::max<double>(sweptMinimumX, weightOriginX) - weightOriginX) / texelSizeX));
+    const int minY = static_cast<int>(std::floor(
+        (std::max<double>(sweptMinimumY, weightOriginY) - weightOriginY) / texelSizeY));
+    const int maxX = std::min(
+        static_cast<int>(terrain.layerWeightWidth) - 1,
+        static_cast<int>(std::ceil(
+            (std::min(sweptMaximumX, terrainMaximumX) - weightOriginX) / texelSizeX)));
+    const int maxY = std::min(
+        static_cast<int>(terrain.layerWeightHeight) - 1,
+        static_cast<int>(std::ceil(
+            (std::min(sweptMaximumY, terrainMaximumY) - weightOriginY) / texelSizeY)));
+    // Rasterize the swept brush once. Replaying interpolated point stamps multiplies both opacity
+    // and work in the overlapping part of a stroke, making the result input-sampling dependent.
     const float radiusSquared = settings.radius * settings.radius;
+    const double segmentX = static_cast<double>(end.localX) - start.localX;
+    const double segmentY = static_cast<double>(end.localZ) - start.localZ;
+    const double segmentLengthSquared = segmentX * segmentX + segmentY * segmentY;
     const TerrainBrushSettings brush{
         .shape = settings.shape,
         .radius = settings.radius,
@@ -140,17 +171,25 @@ TerrainLayerPaintResult ApplyTerrainLayerPaint(
         .falloff = settings.falloff,
         .noiseSeed = settings.noiseSeed,
     };
-    const float opacity = std::clamp(settings.opacity * stamp.pressure, 0.0F, 1.0F);
     for (int y = minY; y <= maxY; ++y) {
-        const float worldZ = static_cast<float>(y) * texelSizeY - terrain.worldSizeZ * 0.5F;
+        const float worldZ = static_cast<float>(y) * texelSizeY + weightOriginY;
         for (int x = minX; x <= maxX; ++x) {
-            const float worldX = static_cast<float>(x) * texelSizeX - terrain.worldSizeX * 0.5F;
-            const float dx = worldX - stamp.localX;
-            const float dz = worldZ - stamp.localZ;
-            const float distanceSquared = dx * dx + dz * dz;
+            const float worldX = static_cast<float>(x) * texelSizeX + weightOriginX;
+            const double fromStartX = static_cast<double>(worldX) - start.localX;
+            const double fromStartY = static_cast<double>(worldZ) - start.localZ;
+            const double segmentT = segmentLengthSquared > std::numeric_limits<double>::epsilon()
+                ? std::clamp((fromStartX * segmentX + fromStartY * segmentY) / segmentLengthSquared, 0.0, 1.0)
+                : 0.0;
+            const double dx = static_cast<double>(worldX) -
+                (static_cast<double>(start.localX) + segmentX * segmentT);
+            const double dz = static_cast<double>(worldZ) -
+                (static_cast<double>(start.localZ) + segmentY * segmentT);
+            const double distanceSquared = dx * dx + dz * dz;
             if (distanceSquared > radiusSquared) continue;
+            const float pressure = std::lerp(start.pressure, end.pressure, static_cast<float>(segmentT));
+            const float opacity = std::clamp(settings.opacity * pressure, 0.0F, 1.0F);
             const float influence = TerrainBrushWeight(
-                std::sqrt(distanceSquared), static_cast<std::uint32_t>(x),
+                static_cast<float>(std::sqrt(distanceSquared)), static_cast<std::uint32_t>(x),
                 static_cast<std::uint32_t>(y), brush) * opacity;
             if (influence <= 0.0F) continue;
             std::uint8_t* weights = terrain.layerWeights.data() +

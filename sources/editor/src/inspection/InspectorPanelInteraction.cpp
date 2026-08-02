@@ -893,8 +893,8 @@ template <typename Mutator>
         return true;
     }
     if (const std::optional<std::uint8_t> layerIndex = TerrainLayerRevealIndexForProperty(hit.property)) {
-        const std::optional<kb::assets::TerrainAsset> terrain = EditorTerrainService::Load(sceneContext.Scene(), entity);
-        if (terrain.has_value() && *layerIndex < terrain->materialLayers.size()) {
+        const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(entity);
+        if (terrain != nullptr && *layerIndex < terrain->materialLayers.size()) {
             SelectAssetInProjectFiles(
                 sceneContext,
                 kb::assets::AssetId{ terrain->materialLayers[*layerIndex].materialAssetId });
@@ -961,9 +961,8 @@ template <typename Mutator>
         hit.property == InspectorPropertyId::TerrainWorldSizeZ ||
         hit.property == InspectorPropertyId::TerrainChunkQuads ||
         hit.property == InspectorPropertyId::TerrainLodCount) {
-        const std::optional<kb::assets::TerrainAsset> terrain =
-            EditorTerrainService::Load(sceneContext.Scene(), entity);
-        if (!terrain.has_value()) return true;
+        const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(entity);
+        if (terrain == nullptr) return true;
         std::string value;
         switch (hit.property) {
         case InspectorPropertyId::TerrainResolutionX: value = std::to_string(terrain->width); break;
@@ -1028,9 +1027,8 @@ template <typename Mutator>
         property == InspectorPropertyId::TerrainWorldSizeZ ||
         property == InspectorPropertyId::TerrainChunkQuads ||
         property == InspectorPropertyId::TerrainLodCount) {
-        const std::optional<kb::assets::TerrainAsset> terrain =
-            EditorTerrainService::Load(sceneContext.Scene(), entity);
-        if (!terrain.has_value()) return false;
+        const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(entity);
+        if (terrain == nullptr) return false;
         EditorTerrainConfiguration configuration{
             .width = terrain->width,
             .height = terrain->height,

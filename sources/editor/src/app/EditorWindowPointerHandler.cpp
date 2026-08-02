@@ -153,6 +153,7 @@ LRESULT EditorWindowPointerHandler::HandleMouseWheel(HWND messageWindow, WPARAM 
 LRESULT EditorWindowPointerHandler::HandleLeftButtonUp(HWND messageWindow, LPARAM lparam) {
     if (EditorTerrainService::ToolState().strokeActive) {
         EditorTerrainService::ToolState().strokeActive = false;
+        EditorTerrainService::ToolState().heldSculptElapsedSeconds = 0.0F;
         std::string error;
         if (!sceneContext_.CommitTerrainBrushStroke(&error)) {
             sceneContext_.Console().Warning(

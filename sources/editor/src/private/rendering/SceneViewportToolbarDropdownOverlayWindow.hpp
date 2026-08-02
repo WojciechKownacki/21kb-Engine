@@ -23,7 +23,6 @@ public:
     SceneViewportToolbarDropdownOverlayWindow& operator=(const SceneViewportToolbarDropdownOverlayWindow&) = delete;
 
     void Show(HWND parent, const RECT& sceneContent, std::uint64_t panelId, const EditorTheme& theme, const EditorSceneContext& sceneContext);
-    void ShowTerrainToolbar(HWND parent, const RECT& sceneContent, std::uint64_t panelId, const EditorTheme& theme, const EditorSceneContext& sceneContext);
     void Hide() noexcept;
 #endif
 
@@ -44,7 +43,6 @@ private:
     RECT screenBounds_{};
     std::uint64_t panelId_ = 0U;
     bool shown_ = false;
-    bool terrainToolbarOnly_ = false;
     int hoveredItem_ = -1;
     EditorTheme theme_{};
     const EditorSceneContext* sceneContext_ = nullptr;

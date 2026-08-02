@@ -44,6 +44,9 @@ public:
         const EditorMetrics& metrics,
         EditorSceneContext& sceneContext,
         bool beginStroke);
+    [[nodiscard]] static bool TickActiveStroke(
+        EditorSceneContext& sceneContext,
+        float deltaSeconds);
 };
 
 } // namespace kb::editor
