@@ -66,6 +66,12 @@ template <typename T>
         finite(vertex.tangent.w) && finite(vertex.uv[0]) && finite(vertex.uv[1]);
 }
 
+struct SkinInfluence {
+    std::uint32_t joint = 0U;
+    float weight = 0.0F;
+    std::uint32_t sourceOrder = 0U;
+};
+
 } // namespace
 
 std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
@@ -193,8 +199,13 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
         const cgltf_accessor* texCoords = Attribute(primitive, cgltf_attribute_type_texcoord);
         const cgltf_accessor* joints = Attribute(primitive, cgltf_attribute_type_joints);
         const cgltf_accessor* weights = Attribute(primitive, cgltf_attribute_type_weights);
+        const cgltf_accessor* joints1 = Attribute(primitive, cgltf_attribute_type_joints, 1);
+        const cgltf_accessor* weights1 = Attribute(primitive, cgltf_attribute_type_weights, 1);
         if (!EqualCount(positions, positions == nullptr ? 0U : positions->count) ||
             !EqualCount(joints, positions->count) || !EqualCount(weights, positions->count) ||
+            ((joints1 == nullptr) != (weights1 == nullptr)) ||
+            (joints1 != nullptr && !EqualCount(joints1, positions->count)) ||
+            (weights1 != nullptr && !EqualCount(weights1, positions->count)) ||
             (normals != nullptr && !EqualCount(normals, positions->count)) ||
             (tangents != nullptr && !EqualCount(tangents, positions->count)) ||
             (texCoords != nullptr && !EqualCount(texCoords, positions->count)) ||
@@ -231,14 +242,58 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
             vertex.normal = { normal[0], normal[1], normal[2] };
             vertex.tangent = { tangent[0], tangent[1], tangent[2], tangent[3] };
             vertex.uv = { uv[0], uv[1] };
+            std::array<SkinInfluence, 8U> influences{};
             for (std::size_t influence = 0U; influence < joint.size(); ++influence) {
                 if (joint[influence] >= skin.joints_count ||
-                    joint[influence] > std::numeric_limits<std::uint16_t>::max()) {
+                    joint[influence] > std::numeric_limits<std::uint16_t>::max() ||
+                    !std::isfinite(weight[influence]) || weight[influence] < 0.0F) {
                     return Fail<SkeletalMeshGltfImportResult>(error,
-                        "Skeletal glTF primitive references a joint outside its skin.");
+                        "Skeletal glTF primitive has an invalid JOINTS_0 or WEIGHTS_0 influence.");
                 }
-                vertex.jointIndices[influence] = static_cast<std::uint16_t>(joint[influence]);
-                vertex.jointWeights[influence] = weight[influence];
+                influences[influence] = {
+                    .joint = joint[influence], .weight = weight[influence],
+                    .sourceOrder = static_cast<std::uint32_t>(influence),
+                };
+            }
+            if (joints1 != nullptr) {
+                std::array<cgltf_float, 4U> weight1{};
+                std::array<cgltf_uint, 4U> joint1{};
+                if (!ReadUint(joints1, vertexIndex, joint1.data(), joint1.size()) ||
+                    !ReadFloat(weights1, vertexIndex, weight1.data(), weight1.size())) {
+                    return Fail<SkeletalMeshGltfImportResult>(error,
+                        "Skeletal glTF primitive has unreadable JOINTS_1 or WEIGHTS_1 data.");
+                }
+                for (std::size_t influence = 0U; influence < joint1.size(); ++influence) {
+                    if (joint1[influence] >= skin.joints_count ||
+                        joint1[influence] > std::numeric_limits<std::uint16_t>::max() ||
+                        !std::isfinite(weight1[influence]) || weight1[influence] < 0.0F) {
+                        return Fail<SkeletalMeshGltfImportResult>(error,
+                            "Skeletal glTF primitive has an invalid JOINTS_1 or WEIGHTS_1 influence.");
+                    }
+                    influences[influence + 4U] = {
+                        .joint = joint1[influence], .weight = weight1[influence],
+                        .sourceOrder = static_cast<std::uint32_t>(influence + 4U),
+                    };
+                }
+            }
+            std::sort(influences.begin(), influences.end(),
+                [](const SkinInfluence& lhs, const SkinInfluence& rhs) {
+                    if (lhs.weight != rhs.weight) return lhs.weight > rhs.weight;
+                    if (lhs.joint != rhs.joint) return lhs.joint < rhs.joint;
+                    return lhs.sourceOrder < rhs.sourceOrder;
+                });
+            float weightSum = 0.0F;
+            for (std::size_t influence = 0U; influence < vertex.jointWeights.size(); ++influence) {
+                vertex.jointIndices[influence] = static_cast<std::uint16_t>(influences[influence].joint);
+                vertex.jointWeights[influence] = influences[influence].weight;
+                weightSum += vertex.jointWeights[influence];
+            }
+            if (!std::isfinite(weightSum) || weightSum <= 0.0F) {
+                return Fail<SkeletalMeshGltfImportResult>(error,
+                    "Skeletal glTF primitive has a zero-weight skin binding.");
+            }
+            for (float& influenceWeight : vertex.jointWeights) {
+                influenceWeight /= weightSum;
             }
             if (!IsFinite(vertex)) return Fail<SkeletalMeshGltfImportResult>(error, "Skeletal glTF primitive has non-finite vertex data.");
             lod.vertices.push_back(vertex);
