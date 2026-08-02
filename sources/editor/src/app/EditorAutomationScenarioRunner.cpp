@@ -38,6 +38,8 @@
 #include "engine/platform/UserStorage.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
+#include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SkeletonAsset.hpp"
@@ -2207,6 +2209,36 @@ ReadScriptValue(
         const auto mesh = manager.Load<kb::scene::SkeletalMeshAsset>(id);
         const bool matched = mesh.IsLoaded() && mesh->lods.size() == *lodCount && mesh->skeletonAssetId != 0U;
         return { matched, matched ? "canonical skeletal mesh loaded" : manager.LastError() };
+    }
+
+    if (*operation == "assert_skeletal_animation_clip") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto skeletonId = UInt32Member(step, "skeleton_id", error);
+        const auto signature = UInt32Member(step, "skeleton_signature", error);
+        const auto boneCount = UInt32Member(step, "bone_count", error);
+        const auto morphCount = UInt32Member(step, "morph_count", error);
+        const auto curveCount = UInt32Member(step, "curve_count", error);
+        const auto rootMotionBone = UInt32Member(step, "root_motion_bone", error);
+        if (!asset || !skeletonId || !signature || !boneCount || !morphCount ||
+            !curveCount || !rootMotionBone) {
+            return { false, error };
+        }
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        kb::assets::AssetManager& manager = state.context.Scene().Assets().Manager();
+        const auto* metadata = manager.Registry().Find(id);
+        if (metadata == nullptr || metadata->type != kb::scene::kAnimationClipAssetType) {
+            return { false, "asset is not an AnimationClip" };
+        }
+        const auto clip = manager.Load<kb::scene::AnimationClip>(id);
+        const bool matched = clip.IsLoaded() &&
+            clip->targetSkeletonAssetId == *skeletonId &&
+            clip->targetSkeletonCompatibilitySignature == *signature &&
+            clip->skeletalTracks.size() == *boneCount &&
+            clip->morphTracks.size() == *morphCount &&
+            clip->curves.size() == *curveCount &&
+            clip->rootMotionMode == kb::scene::AnimationRootMotionMode::ExtractFromBone &&
+            clip->rootMotionBoneId == *rootMotionBone;
+        return { matched, matched ? "canonical skeletal clip loaded" : manager.LastError() };
     }
 
     if (*operation == "select_asset") {

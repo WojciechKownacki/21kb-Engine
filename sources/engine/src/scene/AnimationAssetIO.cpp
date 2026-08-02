@@ -110,7 +110,7 @@ AnimatorParameterType ConditionParameterType(AnimatorConditionMode mode) {
 }
 
 bool ValidateClip(AnimationClip& clip) {
-    if (!std::isfinite(clip.durationSeconds) || clip.durationSeconds <= 0.0F || clip.tracks.empty()) return false;
+    if (!std::isfinite(clip.durationSeconds) || clip.durationSeconds <= 0.0F) return false;
     std::unordered_set<std::string> paths;
     for (AnimationTransformTrack& track : clip.tracks) {
         if (track.bindingMask == 0U || track.keyframes.empty() || !paths.insert(track.targetPath).second) return false;
@@ -139,7 +139,72 @@ bool ValidateClip(AnimationClip& clip) {
         previousEventTime = event.timeSeconds;
         previousEventId = event.id;
     }
-    return true;
+    const bool skeletal =
+        clip.targetSkeletonAssetId != 0U ||
+        clip.targetSkeletonCompatibilitySignature != 0U ||
+        !clip.skeletalTracks.empty() || !clip.morphTracks.empty() ||
+        !clip.curves.empty() ||
+        clip.rootMotionMode != AnimationRootMotionMode::None;
+    if (!skeletal) return !clip.tracks.empty();
+    if (clip.targetSkeletonAssetId == 0U ||
+        clip.targetSkeletonCompatibilitySignature == 0U ||
+        !clip.tracks.empty() || clip.skeletalTracks.empty()) {
+        return false;
+    }
+    std::unordered_set<SkeletonBoneId> bones;
+    for (AnimationBoneTrack& track : clip.skeletalTracks) {
+        if (track.boneId == 0U || !bones.insert(track.boneId).second ||
+            track.keyframes.empty()) {
+            return false;
+        }
+        float previous = -1.0F;
+        for (AnimationBoneKeyframe& key : track.keyframes) {
+            const LocalTransform& transform = key.transform;
+            if (!std::isfinite(key.timeSeconds) || key.timeSeconds < 0.0F ||
+                key.timeSeconds > clip.durationSeconds || key.timeSeconds < previous ||
+                !std::isfinite(transform.position.x) || !std::isfinite(transform.position.y) ||
+                !std::isfinite(transform.position.z) || !std::isfinite(transform.rotation.x) ||
+                !std::isfinite(transform.rotation.y) || !std::isfinite(transform.rotation.z) ||
+                !std::isfinite(transform.rotation.w) || !std::isfinite(transform.scale.x) ||
+                !std::isfinite(transform.scale.y) || !std::isfinite(transform.scale.z)) {
+                return false;
+            }
+            key.transform.rotation = kb::math::Normalize(key.transform.rotation);
+            previous = key.timeSeconds;
+        }
+    }
+    std::unordered_set<std::string> morphs;
+    for (const AnimationMorphTrack& track : clip.morphTracks) {
+        if (track.morphTarget.empty() || !morphs.insert(track.morphTarget).second ||
+            track.keyframes.empty()) {
+            return false;
+        }
+        float previous = -1.0F;
+        for (const AnimationMorphKeyframe& key : track.keyframes) {
+            if (!std::isfinite(key.timeSeconds) || !std::isfinite(key.weight) ||
+                key.timeSeconds < 0.0F || key.timeSeconds > clip.durationSeconds ||
+                key.timeSeconds < previous) {
+                return false;
+            }
+            previous = key.timeSeconds;
+        }
+    }
+    std::unordered_set<std::string> curves;
+    for (const AnimationCurveTrack& track : clip.curves) {
+        if (track.name.empty() || !curves.insert(track.name).second || track.keyframes.empty()) return false;
+        float previous = -1.0F;
+        for (const AnimationCurveKeyframe& key : track.keyframes) {
+            if (!std::isfinite(key.timeSeconds) || !std::isfinite(key.value) ||
+                key.timeSeconds < 0.0F || key.timeSeconds > clip.durationSeconds ||
+                key.timeSeconds < previous) {
+                return false;
+            }
+            previous = key.timeSeconds;
+        }
+    }
+    return clip.rootMotionMode == AnimationRootMotionMode::None
+        ? clip.rootMotionBoneId == 0U
+        : clip.rootMotionBoneId != 0U && bones.contains(clip.rootMotionBoneId);
 }
 
 bool ValidateController(const AnimatorController& controller) {
@@ -261,6 +326,60 @@ std::optional<AnimationClip> AnimationAssetIO::LoadClip(const std::filesystem::p
             AnimationEventKeyframe event{};
             if (!(input >> event.timeSeconds >> event.id) || !EndOfRecord(input)) return std::nullopt;
             clip.events.push_back(event);
+        } else if (command == "targetSkeleton") {
+            if (!(input >> clip.targetSkeletonAssetId >> clip.targetSkeletonCompatibilitySignature) || !EndOfRecord(input)) return std::nullopt;
+        } else if (command == "skeletalTrack") {
+            AnimationBoneTrack track{};
+            if (!(input >> track.boneId) || !EndOfRecord(input)) return std::nullopt;
+            clip.skeletalTracks.push_back(std::move(track));
+        } else if (command == "skeletalKey") {
+            std::size_t trackIndex = 0U;
+            AnimationBoneKeyframe key{};
+            LocalTransform& value = key.transform;
+            if (!(input >> trackIndex >> key.timeSeconds >>
+                    value.position.x >> value.position.y >> value.position.z >>
+                    value.rotation.x >> value.rotation.y >> value.rotation.z >> value.rotation.w >>
+                    value.scale.x >> value.scale.y >> value.scale.z) ||
+                trackIndex >= clip.skeletalTracks.size() || !EndOfRecord(input)) {
+                return std::nullopt;
+            }
+            clip.skeletalTracks[trackIndex].keyframes.push_back(key);
+        } else if (command == "morphTrack") {
+            AnimationMorphTrack track{};
+            if (!(input >> std::quoted(track.morphTarget)) || !EndOfRecord(input)) return std::nullopt;
+            clip.morphTracks.push_back(std::move(track));
+        } else if (command == "morphKey") {
+            std::size_t trackIndex = 0U;
+            AnimationMorphKeyframe key{};
+            if (!(input >> trackIndex >> key.timeSeconds >> key.weight) ||
+                trackIndex >= clip.morphTracks.size() || !EndOfRecord(input)) {
+                return std::nullopt;
+            }
+            clip.morphTracks[trackIndex].keyframes.push_back(key);
+        } else if (command == "curve") {
+            AnimationCurveTrack track{};
+            if (!(input >> std::quoted(track.name)) || !EndOfRecord(input)) return std::nullopt;
+            clip.curves.push_back(std::move(track));
+        } else if (command == "curveKey") {
+            std::size_t trackIndex = 0U;
+            AnimationCurveKeyframe key{};
+            if (!(input >> trackIndex >> key.timeSeconds >> key.value) ||
+                trackIndex >= clip.curves.size() || !EndOfRecord(input)) {
+                return std::nullopt;
+            }
+            clip.curves[trackIndex].keyframes.push_back(key);
+        } else if (command == "rootMotion") {
+            std::string mode;
+            if (!(input >> mode >> clip.rootMotionBoneId) || !EndOfRecord(input)) {
+                return std::nullopt;
+            }
+            if (mode == "None") {
+                clip.rootMotionMode = AnimationRootMotionMode::None;
+            } else if (mode == "ExtractFromBone") {
+                clip.rootMotionMode = AnimationRootMotionMode::ExtractFromBone;
+            } else {
+                return std::nullopt;
+            }
         } else {
             return std::nullopt;
         }
@@ -408,6 +527,38 @@ bool AnimationAssetIO::SaveClip(const std::filesystem::path& path, const Animati
     }
     for (const AnimationEventKeyframe& event : clip.events) {
         output << "event " << event.timeSeconds << ' ' << event.id << '\n';
+    }
+    if (clip.targetSkeletonAssetId != 0U) {
+        output << "targetSkeleton " << clip.targetSkeletonAssetId << ' '
+               << clip.targetSkeletonCompatibilitySignature << '\n';
+        for (std::size_t index = 0U; index < clip.skeletalTracks.size(); ++index) {
+            const AnimationBoneTrack& track = clip.skeletalTracks[index];
+            output << "skeletalTrack " << track.boneId << '\n';
+            for (const AnimationBoneKeyframe& key : track.keyframes) {
+                const LocalTransform& value = key.transform;
+                output << "skeletalKey " << index << ' ' << key.timeSeconds << ' '
+                       << value.position.x << ' ' << value.position.y << ' ' << value.position.z << ' '
+                       << value.rotation.x << ' ' << value.rotation.y << ' ' << value.rotation.z << ' ' << value.rotation.w << ' '
+                       << value.scale.x << ' ' << value.scale.y << ' ' << value.scale.z << '\n';
+            }
+        }
+        for (std::size_t index = 0U; index < clip.morphTracks.size(); ++index) {
+            const AnimationMorphTrack& track = clip.morphTracks[index];
+            output << "morphTrack " << std::quoted(track.morphTarget) << '\n';
+            for (const AnimationMorphKeyframe& key : track.keyframes) {
+                output << "morphKey " << index << ' ' << key.timeSeconds << ' ' << key.weight << '\n';
+            }
+        }
+        for (std::size_t index = 0U; index < clip.curves.size(); ++index) {
+            const auto& curve = clip.curves[index];
+            output << "curve " << std::quoted(curve.name) << '\n';
+            for (const auto& key : curve.keyframes) {
+                output << "curveKey " << index << ' ' << key.timeSeconds << ' ' << key.value << '\n';
+            }
+        }
+        output << "rootMotion "
+               << (clip.rootMotionMode == AnimationRootMotionMode::ExtractFromBone ? "ExtractFromBone" : "None")
+               << ' ' << clip.rootMotionBoneId << '\n';
     }
     return WriteText(path, output.str());
 }
