@@ -1,0 +1,26 @@
+#pragma once
+
+#include "engine/scene/SkeletonAsset.hpp"
+
+#include <cstdint>
+#include <filesystem>
+#include <optional>
+#include <string>
+
+namespace kb::scene {
+
+inline constexpr const char* kSkeletonAssetExtension = ".kbskeleton";
+inline constexpr const char* kSkeletonAssetType = "Skeleton";
+inline constexpr std::uint32_t kSkeletonAssetSchemaVersion = 1U;
+
+class SkeletonAssetIO final {
+public:
+    SkeletonAssetIO() = delete;
+
+    [[nodiscard]] static std::optional<SkeletonAsset> Load(
+        const std::filesystem::path& path,
+        std::string* error = nullptr);
+    [[nodiscard]] static bool Save(const std::filesystem::path& path, const SkeletonAsset& asset);
+};
+
+} // namespace kb::scene

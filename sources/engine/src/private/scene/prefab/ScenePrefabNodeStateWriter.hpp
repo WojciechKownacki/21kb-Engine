@@ -7,6 +7,7 @@
 #include "engine/scene/SceneCharacterControllerComponents.hpp"
 #include "engine/scene/SceneColliderComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneDeformedGeometryComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneInputComponents.hpp"
@@ -16,6 +17,7 @@
 #include "engine/scene/SceneNavigationComponents.hpp"
 #include "engine/scene/ScenePrefabNode.hpp"
 #include "engine/scene/SceneRigidbodyComponents.hpp"
+#include "engine/scene/SceneSkeletonBindingComponents.hpp"
 #include "engine/scene/SceneRegionShapeComponents.hpp"
 #include "engine/scene/SceneGuideCurveComponents.hpp"
 #include "engine/scene/SceneContentInstanceComponents.hpp"
@@ -81,6 +83,8 @@ struct ScenePrefabNodeStateWriterContext {
     SceneAudioSourceComponents audioSources;
     SceneAudioListenerComponents audioListeners;
     SceneAnimatorComponents animators;
+    SceneSkeletonBindingComponents skeletonBindings;
+    SceneDeformedGeometryComponents deformedGeometries;
     SceneUIDocumentComponents uiDocuments;
     SceneNavAgentComponents navAgents;
     SceneNavObstacleComponents navObstacles;

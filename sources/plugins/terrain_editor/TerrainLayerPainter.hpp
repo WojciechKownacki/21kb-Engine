@@ -41,5 +41,10 @@ struct TerrainLayerPaintResult {
     kb::assets::TerrainAsset& terrain,
     const TerrainLayerPaintSettings& settings,
     const TerrainBrushStamp& stamp) noexcept;
+[[nodiscard]] TerrainLayerPaintResult ApplyTerrainLayerPaintSegment(
+    kb::assets::TerrainAsset& terrain,
+    const TerrainLayerPaintSettings& settings,
+    const TerrainBrushStamp& start,
+    const TerrainBrushStamp& end) noexcept;
 
 } // namespace kb::terrain_editor

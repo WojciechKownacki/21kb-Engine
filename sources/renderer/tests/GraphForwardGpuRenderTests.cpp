@@ -6,6 +6,8 @@
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialGraphProgramBindingBuilder.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
+#include "kb/render/resources/RenderMeshAssetBuilder.hpp"
+#include "kb/render/resources/RenderResourceRegistry.hpp"
 
 #include <bgfx/bgfx.h>
 
@@ -597,6 +599,75 @@ private:
     bgfx::UniformHandle uSceneColor_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle uSceneDepth_ = BGFX_INVALID_HANDLE;
 };
+
+void RunTerrainLayerWeightTextureUpdatesGpuTest() {
+    ForwardRenderHarness harness;
+    if (!harness.Init()) {
+        Require(false, "Terrain layer weight update test requires a Direct3D11 device");
+        return;
+    }
+
+    std::istringstream triangle{
+        "v -1 -1 0\n"
+        "v 1 -1 0\n"
+        "v 0 1 0\n"
+        "vt 0 0\n"
+        "vt 1 0\n"
+        "vt 0.5 1\n"
+        "vn 0 0 1\n"
+        "f 1/1/1 2/2/1 3/3/1\n"
+    };
+    std::optional<RenderMeshAssetData> mesh = RenderMeshAssetBuilder::LoadObj(triangle);
+    Require(mesh.has_value(), "Terrain layer weight update fixture mesh did not build");
+    mesh->terrainLayerWeights = {
+        255U, 0U, 0U, 0U,
+        200U, 55U, 0U, 0U,
+        128U, 127U, 0U, 0U,
+        0U, 255U, 0U, 0U,
+    };
+    mesh->terrainLayerWeightWidth = 2U;
+    mesh->terrainLayerWeightHeight = 2U;
+    mesh->terrainLayerCount = 2U;
+    mesh->RefreshDesc();
+
+    RenderResourceRegistry registry;
+    const RenderMeshHandle handle = registry.RegisterMesh(mesh->desc);
+    Require(handle.IsValid(), "Terrain layer weight update fixture did not register");
+    const RenderMeshResource* resource = registry.FindMesh(handle);
+    Require(resource != nullptr && bgfx::isValid(resource->terrainLayerWeightTexture),
+        "Terrain layer weight texture was not created");
+
+    const bgfx::TextureHandle readback = bgfx::createTexture2D(
+        2U, 2U, false, 1U, bgfx::TextureFormat::RGBA8,
+        BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST);
+    Require(bgfx::isValid(readback), "Terrain layer weight readback texture was not created");
+    const auto readWeights = [readback, resource]() {
+        std::array<std::uint8_t, 16U> pixels{};
+        bgfx::blit(0U, readback, 0U, 0U, resource->terrainLayerWeightTexture, 0U, 0U, 2U, 2U);
+        const std::uint32_t readyFrame = bgfx::readTexture(readback, pixels.data());
+        std::uint32_t frame = bgfx::frame();
+        for (int guard = 0; frame < readyFrame && guard < 8; ++guard) {
+            frame = bgfx::frame();
+        }
+        return pixels;
+    };
+
+    const std::array<std::uint8_t, 16U> initial = readWeights();
+    Require(std::ranges::equal(initial, mesh->terrainLayerWeights),
+        "Terrain layer weight texture did not receive its initial upload");
+
+    mesh->terrainLayerWeights[4U] = 0U;
+    mesh->terrainLayerWeights[5U] = 255U;
+    Require(registry.UpdateMeshTerrainLayerWeights(handle, mesh->desc, 1U, 0U, 1U, 1U),
+        "Terrain layer weight subregion update was rejected");
+    const std::array<std::uint8_t, 16U> updated = readWeights();
+    Require(std::ranges::equal(updated, mesh->terrainLayerWeights),
+        "Terrain layer weight subregion update did not reach the GPU texture");
+
+    bgfx::destroy(readback);
+    registry.Shutdown();
+    harness.Shutdown();
+}
 
 class DeferredGBufferHarness {
 public:
@@ -4689,6 +4760,7 @@ void RunForwardGraphMaterialParameterCollectionRendersTest() {
 
 void RunGraphForwardGpuRenderTests() {
 #if defined(KB_TEST_GRAPH_SHADERC_PATH)
+    RunTerrainLayerWeightTextureUpdatesGpuTest();
     RunDeferredGBufferGraphGpuReadbackProofTest();
     RunDeferredLightingSurfaceSemanticsGpuTest();
     RunDeferredGBufferTextureNormalMapReadbackProofTest();

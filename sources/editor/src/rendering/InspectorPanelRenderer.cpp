@@ -3,18 +3,21 @@
 #include "rendering/MaterialPreviewAppearanceResolver.hpp"
 #include "rendering/MaterialPreviewTextureAverageColor.hpp"
 #include "rendering/InspectorPanelSectionRows.hpp"
+#include "rendering/EditorMaterialThumbnailService.hpp"
 
 #if defined(_WIN32)
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/IAssetLoader.hpp"
 #include "engine/input/InputAssetIO.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTagCatalog.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SkeletonBindingComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/GuideCurveComponent.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
@@ -64,6 +67,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <cstdint>
 #include <filesystem>
@@ -204,6 +208,31 @@ constexpr std::array<InspectorRowDefinition, 3> kAnimatorRows{ {
     { InspectorPropertyId::AnimatorEnabled, InspectorRowValueKind::Bool },
     { InspectorPropertyId::AnimatorRootMotionOwner, InspectorRowValueKind::Text },
 } };
+
+constexpr std::array<InspectorRowDefinition, 1> kSkeletonBindingRows{ {
+    { InspectorPropertyId::SkeletonBindingEnabled, InspectorRowValueKind::Bool },
+} };
+
+constexpr std::array<InspectorRowDefinition, 3> kDeformedGeometryRows{ {
+    { InspectorPropertyId::DeformedGeometryCastsShadow, InspectorRowValueKind::Bool },
+    { InspectorPropertyId::DeformedGeometryReceivesShadow, InspectorRowValueKind::Bool },
+    { InspectorPropertyId::DeformedGeometryEnabled, InspectorRowValueKind::Bool },
+} };
+
+constexpr std::array<const char*, kb::scene::kMaxDeformedGeometryMaterialSlotOverrides> kDeformedGeometryMaterialSlotLabels{ {
+    "Material Slot 0", "Material Slot 1", "Material Slot 2", "Material Slot 3",
+    "Material Slot 4", "Material Slot 5", "Material Slot 6", "Material Slot 7",
+} };
+
+[[nodiscard]] constexpr InspectorPropertyId DeformedGeometryMaterialSlotProperty(std::uint32_t slot) noexcept {
+    return static_cast<InspectorPropertyId>(
+        static_cast<std::uint16_t>(InspectorPropertyId::DeformedGeometryMaterialSlot0) + slot * 2U);
+}
+
+[[nodiscard]] constexpr InspectorPropertyId DeformedGeometryMaterialSlotPickerProperty(std::uint32_t slot) noexcept {
+    return static_cast<InspectorPropertyId>(
+        static_cast<std::uint16_t>(InspectorPropertyId::DeformedGeometryMaterialSlotPicker0) + slot * 2U);
+}
 
 constexpr std::array<InspectorRowDefinition, 2> kUIDocumentRows{ {
     { InspectorPropertyId::UIDocumentAsset, InspectorRowValueKind::Text },
@@ -1501,6 +1530,56 @@ void PaintUIDocumentSection(
     y = section.Bottom() + kSectionGap;
 }
 
+void PaintSkeletonBindingSection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const EditorSceneContext& sceneContext,
+    const kb::scene::SkeletonBindingComponent& binding) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
+        InspectorSectionId::SkeletonBinding, HeroIconKind::AdjustmentsHorizontal, "Skeleton Binding", true);
+    section.AssetField(
+        "Skeleton",
+        AssetDisplayName(sceneContext, binding.skeletonAssetId),
+        InspectorPropertyId::SkeletonBindingAsset,
+        InspectorPropertyId::SkeletonBindingAssetPicker);
+    section.Bool("Enabled", binding.enabled, InspectorPropertyId::SkeletonBindingEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
+void PaintDeformedGeometrySection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const EditorSceneContext& sceneContext,
+    const kb::scene::DrawD3DeformedGeometryComponent& geometry) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
+        InspectorSectionId::DeformedGeometry, HeroIconKind::Cube, "Deformed Geometry", true);
+    section.AssetField(
+        "Skeletal Mesh",
+        AssetDisplayName(sceneContext, geometry.skeletalMeshAssetId),
+        InspectorPropertyId::DeformedGeometryMesh,
+        InspectorPropertyId::DeformedGeometryMeshPicker);
+    for (std::uint32_t slot = 0U; slot < kb::scene::kMaxDeformedGeometryMaterialSlotOverrides; ++slot) {
+        const std::uint64_t material = slot < geometry.materialSlotOverrideCount
+            ? geometry.materialSlotAssetIds[slot]
+            : 0U;
+        section.AssetField(
+            kDeformedGeometryMaterialSlotLabels[slot],
+            AssetDisplayName(sceneContext, material),
+            DeformedGeometryMaterialSlotProperty(slot),
+            DeformedGeometryMaterialSlotPickerProperty(slot));
+    }
+    section.Bool("Casts Shadow", geometry.castsShadow, InspectorPropertyId::DeformedGeometryCastsShadow);
+    section.Bool("Receives Shadow", geometry.receivesShadow, InspectorPropertyId::DeformedGeometryReceivesShadow);
+    section.Bool("Enabled", geometry.enabled, InspectorPropertyId::DeformedGeometryEnabled);
+    y = section.Bottom() + kSectionGap;
+}
+
 void PaintNavAgentSection(
     HDC dc,
     RECT content,
@@ -2183,6 +2262,13 @@ constexpr int kTerrainLayerPreviewSize = 52;
     return Rect(card.right - size - 7, card.bottom - size - 7, card.right - 7, card.bottom - 7);
 }
 
+[[nodiscard]] RECT TerrainLayerRemoveRect(const RECT& card) noexcept {
+    constexpr int size = 22;
+    constexpr int gap = 4;
+    const RECT reveal = TerrainLayerPickerRect(card);
+    return Rect(reveal.left - gap - size, reveal.top, reveal.left - gap, reveal.bottom);
+}
+
 class TerrainMaterialPreviewCache {
 public:
     [[nodiscard]] const ProjectFilesMaterialPreviewImage& PreviewFor(
@@ -2230,6 +2316,51 @@ void DrawTerrainMaterialPreview(HDC dc, const RECT& target, const ProjectFilesMa
         0, 0, image.width, image.height, image.bgra.data(), &info, DIB_RGB_COLORS, SRCCOPY));
 }
 
+void DrawTerrainRenderedMaterialPreview(
+    HDC dc,
+    const RECT& target,
+    const EditorMaterialThumbnailImage& image) {
+    if (image.width <= 0 || image.height <= 0 || image.bgra.empty() ||
+        RectWidth(target) <= 0 || RectHeight(target) <= 0) {
+        return;
+    }
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = image.width;
+    info.bmiHeader.biHeight = -image.height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    HDC sourceDc = CreateCompatibleDC(dc);
+    if (sourceDc == nullptr) {
+        return;
+    }
+    void* bits = nullptr;
+    HBITMAP bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &bits, nullptr, 0U);
+    if (bitmap != nullptr && bits != nullptr) {
+        std::memcpy(bits, image.bgra.data(), image.bgra.size() * sizeof(std::uint32_t));
+        HGDIOBJ previous = SelectObject(sourceDc, bitmap);
+        const BLENDFUNCTION blend{ AC_SRC_OVER, 0U, 255U, AC_SRC_ALPHA };
+        static_cast<void>(AlphaBlend(
+            dc,
+            target.left,
+            target.top,
+            RectWidth(target),
+            RectHeight(target),
+            sourceDc,
+            0,
+            0,
+            image.width,
+            image.height,
+            blend));
+        SelectObject(sourceDc, previous);
+    }
+    if (bitmap != nullptr) {
+        DeleteObject(bitmap);
+    }
+    DeleteDC(sourceDc);
+}
+
 void DrawTerrainLayerCard(
     HDC dc,
     const RECT& card,
@@ -2248,8 +2379,16 @@ void DrawTerrainLayerCard(
 
     const RECT preview = Rect(card.left + 7, card.top + 13, card.left + 7 + kTerrainLayerPreviewSize, card.top + 13 + kTerrainLayerPreviewSize);
     const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
-    if (const kb::assets::AssetMetadata* metadata = manager.Registry().Find(kb::assets::AssetId{ materialAssetId }); metadata != nullptr) {
-        DrawTerrainMaterialPreview(dc, preview, TerrainLayerPreviewCache().PreviewFor(*metadata, manager));
+    const kb::assets::AssetMetadata* materialMetadata = manager.Registry().Find(kb::assets::AssetId{ materialAssetId });
+    if (materialMetadata != nullptr) {
+        if (const EditorMaterialThumbnailImage* rendered = EditorMaterialThumbnailCache().ThumbnailFor(
+                *materialMetadata,
+                std::min(RectWidth(preview), RectHeight(preview)));
+            rendered != nullptr) {
+            DrawTerrainRenderedMaterialPreview(dc, preview, *rendered);
+        } else {
+            DrawTerrainMaterialPreview(dc, preview, TerrainLayerPreviewCache().PreviewFor(*materialMetadata, manager));
+        }
     } else {
         DrawFrame(dc, preview, Rgb(24, 27, 31), Color(theme.borderPanel));
         HeroIconPainter::Draw(dc, Shrink(preview, 15, 15, 15, 15), HeroIconKind::Cube, Color(theme.textDisabled), 1);
@@ -2258,8 +2397,23 @@ void DrawTerrainLayerCard(
     const RECT picker = TerrainLayerPickerRect(card);
     const InspectorPropertyId pickerProperty = TerrainLayerPickerProperty(index);
     const bool pickerHovered = inspector.IsHovered(InspectorHitKind::Row, InspectorSectionId::Terrain, pickerProperty);
-    DrawFrame(dc, picker, pickerHovered ? HoverFill(theme) : Color(theme.toolbarButton), Color(theme.borderPanel));
-    HeroIconPainter::Draw(dc, Shrink(picker, 4, 4, 4, 4), HeroIconKind::EllipsisHorizontal, Color(theme.textSecondary), 1);
+    DrawFrame(dc, picker,
+        pickerHovered && materialMetadata != nullptr ? HoverFill(theme) : Color(theme.toolbarButton),
+        Color(theme.borderPanel));
+    HeroIconPainter::Draw(dc, Shrink(picker, 4, 4, 4, 4), HeroIconKind::MagnifyingGlass,
+        materialMetadata != nullptr ? Color(theme.textSecondary) : Color(theme.textDisabled), 1);
+
+    const RECT remove = TerrainLayerRemoveRect(card);
+    const bool removeHovered = inspector.IsHovered(
+        InspectorHitKind::Row,
+        InspectorSectionId::Terrain,
+        InspectorPropertyId::TerrainMaterialLayerRemove,
+        static_cast<int>(index));
+    DrawFrame(dc, remove,
+        removeHovered ? Rgb(74, 35, 39) : Color(theme.toolbarButton),
+        removeHovered ? Rgb(188, 70, 79) : Color(theme.borderPanel));
+    HeroIconPainter::Draw(dc, Shrink(remove, 5, 5, 5, 5), HeroIconKind::XMark,
+        removeHovered ? Rgb(238, 113, 121) : Color(theme.textSecondary), 1);
 
     const int textLeft = preview.right + 8;
     const int textRight = card.right - 7;
@@ -2279,7 +2433,7 @@ void DrawTerrainLayerCard(
     {
         ScopedFont font(9, FW_NORMAL);
         const ScopedGdiObject selectedFont(dc, font.handle);
-        Text(dc, Rect(textLeft, card.top + 46, picker.left - 5, card.bottom - 7),
+        Text(dc, Rect(textLeft, card.top + 46, remove.left - 5, card.bottom - 7),
             "Material", Color(theme.textDisabled));
     }
 
@@ -2329,10 +2483,10 @@ void DrawTerrainMaterialLayers(
     const EditorTheme& theme,
     const InspectorPanelState& inspector,
     const EditorSceneContext& sceneContext,
-    const std::optional<kb::assets::TerrainAsset>& terrain,
+    const kb::assets::TerrainAsset* terrain,
     std::size_t selectedLayer) {
-    const std::size_t layerCount = terrain.has_value() ? terrain->materialLayers.size() : 0U;
-    if (terrain.has_value() && layerCount > 0U) {
+    const std::size_t layerCount = terrain != nullptr ? terrain->materialLayers.size() : 0U;
+    if (terrain != nullptr && layerCount > 0U) {
         for (std::size_t index = 0U; index < layerCount; ++index) {
             DrawTerrainLayerCard(
                 dc, TerrainLayerCardRect(body, index), theme, inspector, sceneContext, index,
@@ -2347,13 +2501,13 @@ void DrawTerrainMaterialLayers(
             ScopedFont font(11, FW_SEMIBOLD);
             const ScopedGdiObject selectedFont(dc, font.handle);
             Text(dc, Rect(empty.left + 46, empty.top + 9, empty.right - 10, empty.top + 31),
-                terrain.has_value() ? "No Terrain Layers" : "Terrain asset unavailable", Color(theme.textPrimary));
+                terrain != nullptr ? "No Terrain Layers" : "Terrain asset unavailable", Color(theme.textPrimary));
         }
         {
             ScopedFont font(9, FW_NORMAL);
             const ScopedGdiObject selectedFont(dc, font.handle);
             Text(dc, Rect(empty.left + 46, empty.top + 29, empty.right - 10, empty.bottom - 7),
-                terrain.has_value() ? "Create or add a Material to start painting." : "Repair the Terrain asset reference to edit layers.",
+                terrain != nullptr ? "Create or add a Material to start painting." : "Repair the Terrain asset reference to edit layers.",
                 Color(theme.textSecondary));
         }
     }
@@ -2388,7 +2542,7 @@ void DrawTerrainMaterialLayers(
     }
     const RECT menu = TerrainLayerMenuRect(body, layerCount);
     DrawFrame(dc, menu, BlendColor(Color(theme.strip), Color(theme.panel), 40), Color(theme.borderPanel));
-    const bool canAdd = terrain.has_value() && layerCount < kb::assets::TerrainAsset::MaximumMaterialLayers;
+    const bool canAdd = terrain != nullptr && layerCount < kb::assets::TerrainAsset::MaximumMaterialLayers;
     DrawTerrainLayerMenuAction(dc, TerrainLayerMenuItemRect(menu, 0), theme, inspector,
         InspectorPropertyId::TerrainMaterialLayerCreate, HeroIconKind::Plus,
         "Create Layer", "Create a new Material and assign it", canAdd);
@@ -2418,11 +2572,11 @@ void PaintTerrainSection(
     const InspectorPanelState& inspector,
     const EditorSceneContext& sceneContext,
     const kb::scene::MeshRendererComponent& renderer,
-    const std::optional<kb::assets::TerrainAsset>& terrain) {
+    const kb::assets::TerrainAsset* terrain) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Terrain, HeroIconKind::Cube, "Terrain Editor", true);
     const EditorTerrainToolState& tool = EditorTerrainService::ToolState();
     const kb::terrain_editor::TerrainBrushSettings& brush = tool.brush;
-    const std::size_t layerCount = terrain.has_value() ? terrain->materialLayers.size() : 0U;
+    const std::size_t layerCount = terrain != nullptr ? terrain->materialLayers.size() : 0U;
     section.Group("TERRAIN LAYERS");
     const RECT layerBody = section.Reserve(TerrainMaterialLayersBodyHeight(layerCount));
     if (RectWidth(layerBody) > 0 && RectHeight(layerBody) > 0) {
@@ -2452,7 +2606,7 @@ void PaintTerrainSection(
         "Advanced Terrain Settings",
         InspectorPropertyId::TerrainAdvanced,
         inspector.IsDisclosureExpanded(InspectorDisclosureId::TerrainAdvanced));
-    if (inspector.IsDisclosureExpanded(InspectorDisclosureId::TerrainAdvanced) && terrain.has_value()) {
+    if (inspector.IsDisclosureExpanded(InspectorDisclosureId::TerrainAdvanced) && terrain != nullptr) {
         section.Pair(
             "Resolution",
             "X", std::to_string(terrain->width), InspectorPropertyId::TerrainResolutionX,
@@ -2764,10 +2918,10 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (const kb::scene::MeshRendererComponent* meshRenderer = scene.Components().MeshRenderers().TryGet(selected); meshRenderer != nullptr) {
         const bool isTerrain = EditorTerrainService::IsTerrainEntity(scene, selected);
         if (!isTerrain || sceneContext.IsProjectPluginEnabled("Editor.Terrain")) {
-            const std::optional<kb::assets::TerrainAsset> terrain = isTerrain
-                ? EditorTerrainService::Load(scene, selected)
-                : std::nullopt;
-            const std::size_t terrainLayerCount = terrain.has_value() ? terrain->materialLayers.size() : 0U;
+            const kb::assets::TerrainAsset* terrain = isTerrain
+                ? sceneContext.TerrainForEditing(selected)
+                : nullptr;
+            const std::size_t terrainLayerCount = terrain != nullptr ? terrain->materialLayers.size() : 0U;
             const int h = isTerrain ? TerrainSectionHeight(inspector, terrainLayerCount) : MeshRendererSectionHeight(sceneContext, *meshRenderer);
             if (sectionVisible(y, h)) {
                 if (isTerrain) PaintTerrainSection(dc, content, y, theme, inspector, sceneContext, *meshRenderer, terrain);
@@ -2805,6 +2959,22 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         const int h = SectionHeight(inspector, InspectorSectionId::UIDocument, 2);
         if (sectionVisible(y, h)) {
             PaintUIDocumentSection(dc, content, y, theme, inspector, sceneContext, *document);
+        } else {
+            y += h + kSectionGap;
+        }
+    }
+    if (const kb::scene::SkeletonBindingComponent* binding = scene.Components().SkeletonBindings().TryGet(selected); binding != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::SkeletonBinding, 2);
+        if (sectionVisible(y, h)) {
+            PaintSkeletonBindingSection(dc, content, y, theme, inspector, sceneContext, *binding);
+        } else {
+            y += h + kSectionGap;
+        }
+    }
+    if (const kb::scene::DrawD3DeformedGeometryComponent* geometry = scene.Components().DeformedGeometries().TryGet(selected); geometry != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::DeformedGeometry, 12);
+        if (sectionVisible(y, h)) {
+            PaintDeformedGeometrySection(dc, content, y, theme, inspector, sceneContext, *geometry);
         } else {
             y += h + kSectionGap;
         }
@@ -3003,11 +3173,11 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(selected); renderer != nullptr) {
         const bool terrain = EditorTerrainService::IsTerrainEntity(scene, selected);
         if (!terrain || sceneContext.IsProjectPluginEnabled("Editor.Terrain")) {
-            const std::optional<kb::assets::TerrainAsset> terrainAsset = terrain
-                ? EditorTerrainService::Load(scene, selected)
-                : std::nullopt;
+            const kb::assets::TerrainAsset* terrainAsset = terrain
+                ? sceneContext.TerrainForEditing(selected)
+                : nullptr;
             height += (terrain
-                ? TerrainSectionHeight(inspector, terrainAsset.has_value() ? terrainAsset->materialLayers.size() : 0U)
+                ? TerrainSectionHeight(inspector, terrainAsset != nullptr ? terrainAsset->materialLayers.size() : 0U)
                 : MeshRendererSectionHeight(sceneContext, *renderer)) + kSectionGap;
         }
     }
@@ -3019,6 +3189,12 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     }
     if (scene.Components().Animators().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::Animator, 4) + kSectionGap;
+    }
+    if (scene.Components().SkeletonBindings().TryGet(selected) != nullptr) {
+        height += SectionHeight(inspector, InspectorSectionId::SkeletonBinding, 2) + kSectionGap;
+    }
+    if (scene.Components().DeformedGeometries().TryGet(selected) != nullptr) {
+        height += SectionHeight(inspector, InspectorSectionId::DeformedGeometry, 12) + kSectionGap;
     }
     if (scene.Components().UIDocuments().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::UIDocument, 2) + kSectionGap;
@@ -3603,15 +3779,25 @@ void AdvanceGroup(int& y) noexcept {
     if (state.IsCollapsed(InspectorSectionId::Terrain)) return {};
 
     AdvanceGroup(y); // Terrain Layers.
-    const std::optional<kb::assets::TerrainAsset> terrain =
-        EditorTerrainService::Load(sceneContext.Scene(), sceneContext.SelectedEntity());
-    const std::size_t layerCount = terrain.has_value() ? terrain->materialLayers.size() : 0U;
+    const kb::assets::TerrainAsset* terrain =
+        sceneContext.TerrainForEditing(sceneContext.SelectedEntity());
+    const std::size_t layerCount = terrain != nullptr ? terrain->materialLayers.size() : 0U;
     const int layerBodyHeight = TerrainMaterialLayersBodyHeight(layerCount);
     const RECT layerBody = Rect(content.left, y, content.right, y + layerBodyHeight);
-    if (terrain.has_value()) {
+    if (terrain != nullptr) {
         for (std::size_t index = 0U; index < layerCount; ++index) {
             const RECT card = TerrainLayerCardRect(layerBody, index);
             const RECT picker = TerrainLayerPickerRect(card);
+            const RECT remove = TerrainLayerRemoveRect(card);
+            if (Contains(remove, x, yPoint)) {
+                InspectorPanelRenderer::Hit hit = MakeHit(
+                    InspectorHitKind::Row,
+                    InspectorSectionId::Terrain,
+                    InspectorPropertyId::TerrainMaterialLayerRemove,
+                    remove);
+                hit.index = static_cast<int>(index);
+                return hit;
+            }
             if (Contains(picker, x, yPoint)) {
                 return MakeHit(InspectorHitKind::Row, InspectorSectionId::Terrain, TerrainLayerPickerProperty(index), picker);
             }
@@ -3626,7 +3812,7 @@ void AdvanceGroup(int& y) noexcept {
     }
     if (terrain_material_layer_menu::Open()) {
         const RECT menu = TerrainLayerMenuRect(layerBody, layerCount);
-        const bool canAdd = terrain.has_value() && layerCount < kb::assets::TerrainAsset::MaximumMaterialLayers;
+        const bool canAdd = terrain != nullptr && layerCount < kb::assets::TerrainAsset::MaximumMaterialLayers;
         if (canAdd && Contains(TerrainLayerMenuItemRect(menu, 0), x, yPoint)) {
             return MakeHit(InspectorHitKind::Row, InspectorSectionId::Terrain, InspectorPropertyId::TerrainMaterialLayerCreate, TerrainLayerMenuItemRect(menu, 0));
         }
@@ -4555,6 +4741,65 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         }
         if (!state.IsCollapsed(InspectorSectionId::UIDocument)) {
             if (InspectorPanelRenderer::Hit hit = HitRows(viewport, y, InspectorSectionId::UIDocument, kUIDocumentRows, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+        }
+        y += kSectionGap;
+    }
+
+    if (sceneContext.Scene().Components().SkeletonBindings().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::SkeletonBinding, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::SkeletonBinding)) {
+            if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(
+                    RowRect(viewport, y),
+                    InspectorSectionId::SkeletonBinding,
+                    InspectorPropertyId::SkeletonBindingAsset,
+                    InspectorPropertyId::SkeletonBindingAssetPicker,
+                    x,
+                    scrolledY);
+                hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitRows(viewport, y, InspectorSectionId::SkeletonBinding, kSkeletonBindingRows, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+        }
+        y += kSectionGap;
+    }
+
+    if (sceneContext.Scene().Components().DeformedGeometries().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::DeformedGeometry, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::DeformedGeometry)) {
+            if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(
+                    RowRect(viewport, y),
+                    InspectorSectionId::DeformedGeometry,
+                    InspectorPropertyId::DeformedGeometryMesh,
+                    InspectorPropertyId::DeformedGeometryMeshPicker,
+                    x,
+                    scrolledY);
+                hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+            for (std::uint32_t slot = 0U; slot < kb::scene::kMaxDeformedGeometryMaterialSlotOverrides; ++slot) {
+                if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(
+                        RowRect(viewport, y),
+                        InspectorSectionId::DeformedGeometry,
+                        DeformedGeometryMaterialSlotProperty(slot),
+                        DeformedGeometryMaterialSlotPickerProperty(slot),
+                        x,
+                        scrolledY);
+                    hit.kind != InspectorHitKind::None) {
+                    return hit;
+                }
+                AdvanceRow(y);
+            }
+            if (InspectorPanelRenderer::Hit hit = HitRows(viewport, y, InspectorSectionId::DeformedGeometry, kDeformedGeometryRows, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
         }

@@ -416,7 +416,7 @@ bool RenderTerrainMeshBuilder::UpdateDynamicLayerPreview(
     const kb::assets::TerrainAsset& terrain,
     const RenderTerrainLayerWeightUpdateRegion& region,
     RenderMeshAssetData& mesh) noexcept {
-    if (!mesh.dynamicVertexUpdates || terrain.materialLayers.empty() ||
+    if (terrain.materialLayers.empty() ||
         mesh.terrainLayerCount != terrain.materialLayers.size() ||
         mesh.terrainLayerWeightWidth != terrain.layerWeightWidth ||
         mesh.terrainLayerWeightHeight != terrain.layerWeightHeight ||

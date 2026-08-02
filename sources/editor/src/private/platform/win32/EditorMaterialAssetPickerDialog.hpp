@@ -16,6 +16,7 @@
 namespace kb::editor {
 
 class EditorSceneContext;
+class EditorSceneBgfxViewport;
 
 enum class EditorTextureAssetPickerFilter : std::uint8_t {
     Texture2D,
@@ -58,8 +59,10 @@ public:
     [[nodiscard]] static Result Show(
         HWND owner,
         const EditorTheme& theme,
-        const EditorSceneContext& sceneContext,
-        kb::assets::AssetId currentMaterial);
+        EditorSceneContext& sceneContext,
+        EditorSceneBgfxViewport& sceneViewport,
+        kb::assets::AssetId currentMaterial,
+        bool allowClear = true);
 #endif
 };
 

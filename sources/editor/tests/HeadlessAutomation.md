@@ -111,13 +111,23 @@ scenario-local aliases.
 | `assert_entity` | `entity`; optional `exists` |
 | `assert_name` | `entity`, expected string `value`; verifies the live entity name |
 | `assert_component` | `entity`, `component`; optional `exists` |
+| `assert_skeleton_binding` | `entity`, Skeleton `asset`; optional `enabled`; verifies the component stores the selected asset and its canonical compatibility signature |
+| `assert_deformed_geometry` | `entity`, Skeletal Mesh `mesh`; optional `material` with `material_slot`, `pose_source`, and `enabled`; verifies the production component configuration |
 | `assert_ui_element` | `entity`, numeric `element`; optional `exists`, `visible`, `kind`; queries the live runtime UI tree in Play Mode |
 | `assert_parent` | `entity`, `parent` |
 | `assert_asset` | virtual `path`; optional `type`, `exists` |
+| `assert_asset_compatibility` | `asset` alias or virtual path and expected boolean `compatible`; evaluates production AssetManager dependency compatibility |
+| `assert_skeleton_asset` | `asset` alias or virtual path, expected unsigned `bone_count`; force-loads the production Skeleton asset and verifies its canonical compatibility signature |
+| `assert_skeletal_mesh_asset` | `asset` alias or virtual path and expected unsigned `lod_count`; force-loads the canonical SkeletalMesh asset |
+| `assert_skeletal_gltf_import` | project-relative glTF `path`, `skeleton_id`, expected `bone_count`, `vertex_count`; optional `clip_count`, `morph_count`, `warning_count`; executes the production skeletal importer, including its default glTF-to-engine coordinate conversion and diagnostics |
+| `assert_skeletal_gltf_import_plan` | project-relative glTF `path`, destination virtual `folder`, expected boolean `reuse`; verifies deterministic skeletal import planning without publishing files |
+| `assert_skeletal_gltf_import_publish` | project-relative glTF `path`, destination virtual `folder`, expected boolean `created_skeleton`; verifies the atomic production publication path |
+| `assert_skeletal_animation_clip` | `asset` alias or virtual path, `skeleton_id`, `skeleton_signature`, `bone_count`, `morph_count`, `curve_count`, `root_motion_bone`; force-loads the production skeletal AnimationClip and verifies stable bindings and root-motion contract |
+| `select_asset` | `asset` alias or virtual path; selects the real asset in the production Asset Browser |
 | `create_asset` | `id`, `type`, `folder`; types: `lua_script`, `input_action`, `input_axis`, `input_context`, `material`, `material_function`, `material_graph`, `material_type` |
 | `copy_asset`, `move_asset` | `asset`, destination virtual folder |
 | `delete_asset` | `asset` |
-| `assign_asset` | `entity`, `asset`, `role`; roles: `mesh`, `material`, `audio_clip`, `animator_controller`, `script` |
+| `assign_asset` | `entity`, `asset`, `role`; roles: `mesh`, `material`, `audio_clip`, `animator_controller`, `skeleton_binding`, `deformed_geometry_mesh`, `deformed_geometry_material` (requires `slot`), `script` |
 | `assign_material_slot`, `assert_material_slot` | Mesh Renderer `entity`, material `asset`, integer `slot`; assigns or verifies the production per-slot material override |
 | `set_material`, `assert_material` | `asset`, `property`, `value`; numeric factors plus `double_sided` and `alpha_mode` |
 | `save_material` | `asset` |
@@ -135,7 +145,8 @@ scenario-local aliases.
 | `open_asset` | `asset` alias or virtual path |
 | `new_scene`, `reload_scene` | none |
 | `save_scene`, `open_scene` | `path` |
-| `undo`, `redo`, `play`, `stop` | none |
+| `undo`, `redo` | optional `restore_entity` alias refreshed from the selected restored entity |
+| `play`, `stop` | none |
 | `key` | `key`, `down`; optional `gamepad` |
 | `analog` | `key`, `value`; optional `gamepad` |
 | `pointer` | `x`, `y` |

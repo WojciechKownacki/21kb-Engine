@@ -38,8 +38,16 @@
 #include "engine/platform/UserStorage.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
+#include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SkeletonAsset.hpp"
+#include "engine/scene/SkeletonAssetIO.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
+#include "engine/scene/SkeletalMeshGltfImporter.hpp"
+#include "engine/scene/SkeletalMeshGltfImportPlanner.hpp"
+#include "engine/scene/SkeletalMeshGltfImportPublisher.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
@@ -397,6 +405,12 @@ void WriteLittleEndian32(std::ostream& output, std::uint32_t value) {
     }
     if (component == "Animator") {
         return scene.Components().Animators().Has(entity);
+    }
+    if (component == "SkeletonBinding") {
+        return scene.Components().SkeletonBindings().Has(entity);
+    }
+    if (component == "DeformedGeometry") {
+        return scene.Components().DeformedGeometries().Has(entity);
     }
     if (component == "UIDocument") {
         return scene.Components().UIDocuments().Has(entity);
@@ -1811,6 +1825,23 @@ ReadScriptValue(
             *component + " on " + *alias };
     }
 
+    if (*operation == "remove_component") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto component = StringMember(step, "component", error);
+        if (!alias || !component) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(entity)) {
+            return { false, "entity alias is not alive" };
+        }
+        if (*component == "SkeletonBinding") {
+            return { state.context.RemoveSkeletonBindingFromEntity(entity), *component };
+        }
+        if (*component == "DeformedGeometry") {
+            return { state.context.RemoveDeformedGeometryFromEntity(entity), *component };
+        }
+        return { false, "component cannot be removed by this operation" };
+    }
+
     if (*operation == "terrain_stamp") {
         const auto alias = StringMember(step, "entity", error);
         const auto x = NumberMember(step, "x", error);
@@ -2086,6 +2117,78 @@ ReadScriptValue(
             std::string{ found ? "present" : "absent" } };
     }
 
+    if (*operation == "assert_skeleton_binding") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto asset = StringMember(step, "asset", error);
+        const auto enabled = BoolMember(step, "enabled", error, false);
+        if (!alias || !asset) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        const kb::assets::AssetId expectedAsset = ResolveAsset(state, *asset);
+        if (!state.context.Scene().Entities().IsAlive(entity)) {
+            return { false, "Skeleton Binding entity alias was not found" };
+        }
+        if (!expectedAsset.IsValid()) {
+            return { false, "Skeleton asset was not found" };
+        }
+        const kb::scene::SkeletonBindingComponent* binding =
+            state.context.Scene().Components().SkeletonBindings().TryGet(entity);
+        const auto skeleton = state.context.Scene().Assets().Manager()
+            .Load<kb::scene::SkeletonAsset>(expectedAsset);
+        const bool expectedEnabled = enabled.value_or(true);
+        const bool matched = binding != nullptr && skeleton.IsLoaded() &&
+            binding->skeletonAssetId == expectedAsset.value &&
+            binding->skeletonCompatibilitySignature ==
+                kb::scene::SkeletonCompatibilitySignature(*skeleton) &&
+            binding->enabled == expectedEnabled;
+        return {
+            matched,
+            matched ? "canonical Skeleton binding" : "Skeleton binding does not match the selected asset" };
+    }
+
+    if (*operation == "assert_deformed_geometry") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto mesh = StringMember(step, "mesh", error);
+        const auto material = StringMember(step, "material", error, false);
+        const auto materialSlot = UInt32Member(step, "material_slot", error, false);
+        const auto poseSource = StringMember(step, "pose_source", error, false);
+        const auto enabled = BoolMember(step, "enabled", error, false);
+        if (!alias || !mesh || (material.has_value() != materialSlot.has_value())) {
+            if (error.empty()) error = "material and material_slot must be specified together";
+            return { false, error };
+        }
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        const kb::assets::AssetId expectedMesh = ResolveAsset(state, *mesh);
+        if (!state.context.Scene().Entities().IsAlive(entity)) {
+            return { false, "Deformed Geometry entity alias was not found" };
+        }
+        if (!expectedMesh.IsValid()) {
+            return { false, "Skeletal Mesh asset was not found" };
+        }
+        const kb::scene::DrawD3DeformedGeometryComponent* geometry =
+            state.context.Scene().Components().DeformedGeometries().TryGet(entity);
+        const bool expectedEnabled = enabled.value_or(true);
+        bool matched = geometry != nullptr &&
+            geometry->skeletalMeshAssetId == expectedMesh.value &&
+            geometry->enabled == expectedEnabled;
+        if (matched && material.has_value()) {
+            const kb::assets::AssetId expectedMaterial = ResolveAsset(state, *material);
+            matched = expectedMaterial.IsValid() &&
+                *materialSlot < kb::scene::kMaxDeformedGeometryMaterialSlotOverrides &&
+                geometry->materialSlotOverrideCount > *materialSlot &&
+                geometry->materialSlotAssetIds[*materialSlot] == expectedMaterial.value;
+        }
+        if (matched && poseSource.has_value()) {
+            const kb::scene::SceneEntity expectedPoseSource = ResolveEntity(state, *poseSource);
+            matched = expectedPoseSource.IsValid() &&
+                geometry->poseSource == expectedPoseSource;
+        } else if (matched) {
+            matched = !geometry->poseSource.IsValid();
+        }
+        return {
+            matched,
+            matched ? "canonical Deformed Geometry" : "Deformed Geometry does not match authored configuration" };
+    }
+
     if (*operation == "assert_ui_element") {
         const auto alias = StringMember(step, "entity", error);
         const auto elementValue = NumberMember(step, "element", error);
@@ -2171,6 +2274,161 @@ ReadScriptValue(
         return {
             matched,
             metadata == nullptr ? "absent" : metadata->type };
+    }
+
+    if (*operation == "assert_asset_compatibility") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto expected = BoolMember(step, "compatible", error);
+        if (!asset || !expected) return { false, error };
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        if (!id.IsValid()) return { false, "asset was not found" };
+        const kb::assets::AssetCompatibilityReport report =
+            state.context.Scene().Assets().Manager().ValidateCompatibility(id);
+        const bool matched = report.compatible == *expected;
+        return { matched, matched ? "compatible" : report.FormatDiagnostics() };
+    }
+
+    if (*operation == "assert_skeleton_asset") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto boneCount = UInt32Member(step, "bone_count", error);
+        if (!asset || !boneCount) return { false, error };
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        kb::assets::AssetManager& manager = state.context.Scene().Assets().Manager();
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(id);
+        if (metadata == nullptr || metadata->type != kb::scene::kSkeletonAssetType) {
+            return { false, "asset is not a Skeleton" };
+        }
+        const kb::assets::AssetHandle<kb::scene::SkeletonAsset> skeleton =
+            manager.Load<kb::scene::SkeletonAsset>(id);
+        if (!skeleton.IsLoaded()) {
+            return { false, manager.LastError() };
+        }
+        const std::uint64_t signature = kb::scene::SkeletonCompatibilitySignature(*skeleton);
+        const bool matched = skeleton->bones.size() == *boneCount && signature != 0U;
+        return { matched, matched ? std::to_string(signature) : "skeleton data mismatch" };
+    }
+
+    if (*operation == "assert_skeletal_mesh_asset") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto lodCount = UInt32Member(step, "lod_count", error);
+        if (!asset || !lodCount) return { false, error };
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        kb::assets::AssetManager& manager = state.context.Scene().Assets().Manager();
+        const auto* metadata = manager.Registry().Find(id);
+        if (metadata == nullptr || metadata->type != kb::scene::kSkeletalMeshAssetType) return { false, "asset is not a SkeletalMesh" };
+        const auto mesh = manager.Load<kb::scene::SkeletalMeshAsset>(id);
+        const bool matched = mesh.IsLoaded() && mesh->lods.size() == *lodCount && mesh->skeletonAssetId != 0U;
+        return { matched, matched ? "canonical skeletal mesh loaded" : manager.LastError() };
+    }
+
+    if (*operation == "assert_skeletal_gltf_import") {
+        const auto path = StringMember(step, "path", error);
+        const auto skeletonId = UInt32Member(step, "skeleton_id", error);
+        const auto boneCount = UInt32Member(step, "bone_count", error);
+        const auto vertexCount = UInt32Member(step, "vertex_count", error);
+        if (!path || !skeletonId || !boneCount || !vertexCount) return { false, error };
+        const auto clipCount = UInt32Member(step, "clip_count", error, false);
+        if (!clipCount && step.Find("clip_count") != nullptr) return { false, error };
+        const auto morphCount = UInt32Member(step, "morph_count", error, false);
+        if (!morphCount && step.Find("morph_count") != nullptr) return { false, error };
+        const auto warningCount = UInt32Member(step, "warning_count", error, false);
+        if (!warningCount && step.Find("warning_count") != nullptr) return { false, error };
+        const auto source = ResolveProjectPath(*path, error);
+        if (!source) return { false, error };
+        std::string importError;
+        kb::scene::SkeletalMeshGltfImportReport importReport;
+        const auto imported = kb::scene::SkeletalMeshGltfImporter::Import(
+            *source, *skeletonId, &importError, &importReport);
+        const std::size_t actualWarningCount = static_cast<std::size_t>(std::ranges::count_if(
+            importReport.diagnostics, [](const kb::scene::SkeletalMeshGltfImportDiagnostic& diagnostic) {
+                return diagnostic.severity == kb::scene::SkeletalMeshGltfImportDiagnosticSeverity::Warning;
+            }));
+        const bool matched = imported.has_value() &&
+            imported->skeleton.bones.size() == *boneCount &&
+            imported->mesh.skeletonAssetId == *skeletonId &&
+            imported->mesh.lods.size() == 1U &&
+            imported->mesh.lods.front().vertices.size() == *vertexCount &&
+            (!clipCount || imported->clips.size() == *clipCount) &&
+            (!morphCount || imported->mesh.morphTargets.size() == *morphCount) &&
+            (!warningCount || actualWarningCount == *warningCount);
+        return { matched, matched ? "canonical glTF skeletal import" : importError };
+    }
+
+    if (*operation == "assert_skeletal_gltf_import_plan") {
+        const auto path = StringMember(step, "path", error);
+        const auto folder = StringMember(step, "folder", error);
+        const auto reuse = BoolMember(step, "reuse", error);
+        if (!path || !folder || !reuse) return { false, error };
+        const auto source = ResolveProjectPath(*path, error);
+        if (!source) return { false, error };
+        static_cast<void>(state.context.Scene().Assets().Discover());
+        std::string importError;
+        const auto plan = kb::scene::SkeletalMeshGltfImportPlanner::Plan(
+            state.context.Scene().Assets().Manager(), *source, *folder, {}, &importError);
+        const bool matched = plan.has_value() && plan->reusesSkeleton == *reuse &&
+            plan->skeletonAssetId.IsValid() &&
+            plan->imported.mesh.skeletonAssetId == plan->skeletonAssetId.value;
+        return { matched, matched ? "canonical glTF skeletal import plan" : importError };
+    }
+
+    if (*operation == "assert_skeletal_gltf_import_publish") {
+        const auto path = StringMember(step, "path", error);
+        const auto folder = StringMember(step, "folder", error);
+        const auto createdSkeleton = BoolMember(step, "created_skeleton", error);
+        if (!path || !folder || !createdSkeleton) return { false, error };
+        const auto source = ResolveProjectPath(*path, error);
+        if (!source) return { false, error };
+        static_cast<void>(state.context.Scene().Assets().Discover());
+        std::string importError;
+        const auto plan = kb::scene::SkeletalMeshGltfImportPlanner::Plan(
+            state.context.Scene().Assets().Manager(), *source, *folder, {}, &importError);
+        if (!plan) return { false, importError };
+        const auto published = kb::scene::SkeletalMeshGltfImportPublisher::Publish(
+            state.context.Scene().Assets().Manager(), *plan, &importError);
+        const bool matched = published.has_value() &&
+            published->createdSkeleton == *createdSkeleton &&
+            published->meshAssetId.IsValid() &&
+            published->skeletonAssetId == plan->skeletonAssetId;
+        return { matched, matched ? "atomic glTF skeletal import published" : importError };
+    }
+
+    if (*operation == "assert_skeletal_animation_clip") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto skeletonId = UInt32Member(step, "skeleton_id", error);
+        const auto signature = UInt32Member(step, "skeleton_signature", error);
+        const auto boneCount = UInt32Member(step, "bone_count", error);
+        const auto morphCount = UInt32Member(step, "morph_count", error);
+        const auto curveCount = UInt32Member(step, "curve_count", error);
+        const auto rootMotionBone = UInt32Member(step, "root_motion_bone", error);
+        if (!asset || !skeletonId || !signature || !boneCount || !morphCount ||
+            !curveCount || !rootMotionBone) {
+            return { false, error };
+        }
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        kb::assets::AssetManager& manager = state.context.Scene().Assets().Manager();
+        const auto* metadata = manager.Registry().Find(id);
+        if (metadata == nullptr || metadata->type != kb::scene::kAnimationClipAssetType) {
+            return { false, "asset is not an AnimationClip" };
+        }
+        const auto clip = manager.Load<kb::scene::AnimationClip>(id);
+        const bool matched = clip.IsLoaded() &&
+            clip->targetSkeletonAssetId == *skeletonId &&
+            clip->targetSkeletonCompatibilitySignature == *signature &&
+            clip->skeletalTracks.size() == *boneCount &&
+            clip->morphTracks.size() == *morphCount &&
+            clip->curves.size() == *curveCount &&
+            clip->rootMotionMode == kb::scene::AnimationRootMotionMode::ExtractFromBone &&
+            clip->rootMotionBoneId == *rootMotionBone;
+        return { matched, matched ? "canonical skeletal clip loaded" : manager.LastError() };
+    }
+
+    if (*operation == "select_asset") {
+        const auto asset = StringMember(step, "asset", error);
+        if (!asset) return { false, error };
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        const bool selected = id.IsValid() && state.context.AssetBrowser().SelectAsset(
+            id, state.context.Scene().Assets().Manager());
+        return { selected, selected ? *asset : "asset was not found" };
     }
 
     if (*operation == "create_asset") {
@@ -2291,6 +2549,19 @@ ReadScriptValue(
         } else if (*role == "animator_controller") {
             assigned =
                 state.context.SetAnimatorControllerAsset(entity, id);
+        } else if (*role == "skeleton_binding") {
+            assigned = state.context.SetSkeletonBindingAsset(entity, id);
+        } else if (*role == "deformed_geometry_mesh") {
+            assigned = state.context.SetDeformedGeometryMeshAsset(entity, id);
+        } else if (*role == "deformed_geometry_material") {
+            const auto slot = NumberMember(step, "slot", error);
+            if (!slot || *slot < 0.0 ||
+                *slot >= static_cast<double>(kb::scene::kMaxDeformedGeometryMaterialSlotOverrides) ||
+                std::floor(*slot) != *slot) {
+                return { false, "deformed geometry material slot must be a valid integer" };
+            }
+            assigned = state.context.SetDeformedGeometryMaterialSlotAsset(
+                entity, static_cast<std::uint32_t>(*slot), id);
         } else if (*role == "ui_document") {
             assigned = state.context.SetUIDocumentAsset(entity, id);
         } else if (*role == "script") {
@@ -2857,10 +3128,50 @@ ReadScriptValue(
     }
 
     if (*operation == "undo") {
-        return { state.context.UndoSceneCommand(), "undo" };
+        const auto restoredAlias = StringMember(step, "restore_entity", error, false);
+        if (!error.empty()) return { false, error };
+        auto alias = state.entities.end();
+        if (restoredAlias.has_value()) {
+            alias = state.entities.find(std::string{ *restoredAlias });
+        }
+        if (restoredAlias.has_value() && alias == state.entities.end()) {
+            return { false, "restore_entity does not name an existing entity alias" };
+        }
+        if (!state.context.UndoSceneCommand()) {
+            return { false, "undo" };
+        }
+        if (restoredAlias.has_value()) {
+            const kb::scene::SceneEntity restored = state.context.SelectedEntity();
+            if (!state.context.Scene().Entities().IsAlive(restored)) {
+                return { false, "undo did not select a restored entity" };
+            }
+            alias->second.entity = restored;
+            alias->second.name = state.context.Scene().Entities().Name(restored);
+        }
+        return { true, "undo" };
     }
     if (*operation == "redo") {
-        return { state.context.RedoSceneCommand(), "redo" };
+        const auto restoredAlias = StringMember(step, "restore_entity", error, false);
+        if (!error.empty()) return { false, error };
+        auto alias = state.entities.end();
+        if (restoredAlias.has_value()) {
+            alias = state.entities.find(std::string{ *restoredAlias });
+        }
+        if (restoredAlias.has_value() && alias == state.entities.end()) {
+            return { false, "restore_entity does not name an existing entity alias" };
+        }
+        if (!state.context.RedoSceneCommand()) {
+            return { false, "redo" };
+        }
+        if (restoredAlias.has_value()) {
+            const kb::scene::SceneEntity restored = state.context.SelectedEntity();
+            if (!state.context.Scene().Entities().IsAlive(restored)) {
+                return { false, "redo did not select a restored entity" };
+            }
+            alias->second.entity = restored;
+            alias->second.name = state.context.Scene().Entities().Name(restored);
+        }
+        return { true, "redo" };
     }
 
     if (*operation == "play") {
@@ -3554,7 +3865,28 @@ int EditorAutomationScenarioRunner::Run(
              << "schema=" << kSchema << '\n'
              << "stepsExecuted=" << reportLines.size() << '\n'
              << "result=" << (passed ? "PASS" : "FAIL") << '\n';
-    return passed && manifest.good() ? 0 : 1;
+
+    std::ofstream reportJson(
+        absoluteArtifacts / "report.json",
+        std::ios::binary | std::ios::trunc);
+    reportJson << "{\"schema\":\"21kb.editor-automation-report/v1\",\"result\":\""
+               << (passed ? "PASS" : "FAIL")
+               << "\",\"stepsExecuted\":" << reportLines.size()
+               << "}\n";
+    std::ofstream manifestJson(
+        absoluteArtifacts / "artifact-manifest.json",
+        std::ios::binary | std::ios::trunc);
+    manifestJson << "{\"schema\":\"21kb.editor-automation-artifacts/v1\",\"task\":\""
+                 << absoluteArtifacts.filename().string()
+                 << "\",\"trace\":\"trace.jsonl\",\"report\":\"report.json\",\"screenshots\":\"automation/screenshots\"}\n";
+    std::error_code traceError;
+    std::filesystem::copy_file(
+        absoluteArtifacts / "automation" / "trace.jsonl",
+        absoluteArtifacts / "trace.jsonl",
+        std::filesystem::copy_options::overwrite_existing,
+        traceError);
+    return passed && manifest.good() && reportJson.good() &&
+        manifestJson.good() && !traceError ? 0 : 1;
 }
 
 } // namespace kb::editor

@@ -852,12 +852,22 @@ template <typename Mutator>
 [[nodiscard]] std::optional<std::uint8_t> TerrainLayerIndexForProperty(InspectorPropertyId property) noexcept {
     switch (property) {
     case InspectorPropertyId::TerrainMaterialLayer0:
-    case InspectorPropertyId::TerrainMaterialLayerPicker0: return 0U;
+        return 0U;
     case InspectorPropertyId::TerrainMaterialLayer1:
-    case InspectorPropertyId::TerrainMaterialLayerPicker1: return 1U;
+        return 1U;
     case InspectorPropertyId::TerrainMaterialLayer2:
-    case InspectorPropertyId::TerrainMaterialLayerPicker2: return 2U;
+        return 2U;
     case InspectorPropertyId::TerrainMaterialLayer3:
+        return 3U;
+    default: return std::nullopt;
+    }
+}
+
+[[nodiscard]] std::optional<std::uint8_t> TerrainLayerRevealIndexForProperty(InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::TerrainMaterialLayerPicker0: return 0U;
+    case InspectorPropertyId::TerrainMaterialLayerPicker1: return 1U;
+    case InspectorPropertyId::TerrainMaterialLayerPicker2: return 2U;
     case InspectorPropertyId::TerrainMaterialLayerPicker3: return 3U;
     default: return std::nullopt;
     }
@@ -882,6 +892,15 @@ template <typename Mutator>
         terrain_material_layer_menu::Toggle();
         return true;
     }
+    if (const std::optional<std::uint8_t> layerIndex = TerrainLayerRevealIndexForProperty(hit.property)) {
+        const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(entity);
+        if (terrain != nullptr && *layerIndex < terrain->materialLayers.size()) {
+            SelectAssetInProjectFiles(
+                sceneContext,
+                kb::assets::AssetId{ terrain->materialLayers[*layerIndex].materialAssetId });
+        }
+        return true;
+    }
     if (const std::optional<std::uint8_t> layerIndex = TerrainLayerIndexForProperty(hit.property)) {
         terrain_material_layer_menu::Close();
         EditorTerrainToolState& tool = EditorTerrainService::ToolState();
@@ -894,9 +913,12 @@ template <typename Mutator>
     }
     if (hit.property == InspectorPropertyId::TerrainMaterialLayerRemove) {
         terrain_material_layer_menu::Close();
+        const std::uint8_t layerIndex = hit.index >= 0
+            ? static_cast<std::uint8_t>(hit.index)
+            : EditorTerrainService::ToolState().selectedMaterialLayer;
         std::string error;
         if (!sceneContext.RemoveTerrainMaterialLayer(
-                entity, EditorTerrainService::ToolState().selectedMaterialLayer, &error)) {
+                entity, layerIndex, &error)) {
             sceneContext.Console().Warning("Terrain", error.empty() ? "Material layer could not be removed." : error);
         }
         return true;
@@ -939,9 +961,8 @@ template <typename Mutator>
         hit.property == InspectorPropertyId::TerrainWorldSizeZ ||
         hit.property == InspectorPropertyId::TerrainChunkQuads ||
         hit.property == InspectorPropertyId::TerrainLodCount) {
-        const std::optional<kb::assets::TerrainAsset> terrain =
-            EditorTerrainService::Load(sceneContext.Scene(), entity);
-        if (!terrain.has_value()) return true;
+        const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(entity);
+        if (terrain == nullptr) return true;
         std::string value;
         switch (hit.property) {
         case InspectorPropertyId::TerrainResolutionX: value = std::to_string(terrain->width); break;
@@ -1006,9 +1027,8 @@ template <typename Mutator>
         property == InspectorPropertyId::TerrainWorldSizeZ ||
         property == InspectorPropertyId::TerrainChunkQuads ||
         property == InspectorPropertyId::TerrainLodCount) {
-        const std::optional<kb::assets::TerrainAsset> terrain =
-            EditorTerrainService::Load(sceneContext.Scene(), entity);
-        if (!terrain.has_value()) return false;
+        const kb::assets::TerrainAsset* terrain = sceneContext.TerrainForEditing(entity);
+        if (terrain == nullptr) return false;
         EditorTerrainConfiguration configuration{
             .width = terrain->width,
             .height = terrain->height,
@@ -1390,6 +1410,36 @@ template <typename Integer>
         return true;
     }
     return true;
+}
+
+[[nodiscard]] bool HandleSkeletonBindingClick(
+    EditorSceneContext& sceneContext,
+    kb::scene::SceneEntity entity,
+    const InspectorPanelRenderer::Hit& hit) {
+    if (sceneContext.Scene().Components().SkeletonBindings().TryGet(entity) == nullptr) return false;
+    sceneContext.Inspector().EndTextEdit();
+    if (hit.property == InspectorPropertyId::SkeletonBindingEnabled) {
+        return sceneContext.ToggleSkeletonBindingEnabled(entity);
+    }
+    return true;
+}
+
+[[nodiscard]] bool HandleDeformedGeometryClick(
+    EditorSceneContext& sceneContext,
+    kb::scene::SceneEntity entity,
+    const InspectorPanelRenderer::Hit& hit) {
+    if (sceneContext.Scene().Components().DeformedGeometries().TryGet(entity) == nullptr) return false;
+    sceneContext.Inspector().EndTextEdit();
+    switch (hit.property) {
+    case InspectorPropertyId::DeformedGeometryCastsShadow:
+        return sceneContext.ToggleDeformedGeometryCastsShadow(entity);
+    case InspectorPropertyId::DeformedGeometryReceivesShadow:
+        return sceneContext.ToggleDeformedGeometryReceivesShadow(entity);
+    case InspectorPropertyId::DeformedGeometryEnabled:
+        return sceneContext.ToggleDeformedGeometryEnabled(entity);
+    default:
+        return true;
+    }
 }
 
 [[nodiscard]] bool IsNavAgentProperty(InspectorPropertyId property) noexcept {
@@ -2837,6 +2887,10 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                 static_cast<void>(RemoveCameraComponent(sceneContext, entity));
             } else if (hit.section == InspectorSectionId::Animator) {
                 static_cast<void>(sceneContext.RemoveAnimatorFromEntity(entity));
+            } else if (hit.section == InspectorSectionId::SkeletonBinding) {
+                static_cast<void>(sceneContext.RemoveSkeletonBindingFromEntity(entity));
+            } else if (hit.section == InspectorSectionId::DeformedGeometry) {
+                static_cast<void>(sceneContext.RemoveDeformedGeometryFromEntity(entity));
             } else if (hit.section == InspectorSectionId::UIDocument) {
                 static_cast<void>(sceneContext.RemoveUIDocumentFromEntity(entity));
             } else if (hit.section == InspectorSectionId::Tags) {
@@ -2996,6 +3050,12 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::Animator) {
         return HandleAnimatorClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::SkeletonBinding) {
+        return HandleSkeletonBindingClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::DeformedGeometry) {
+        return HandleDeformedGeometryClick(sceneContext, entity, hit);
     }
     if (hit.section == InspectorSectionId::UIDocument) {
         return HandleUIDocumentClick(sceneContext, entity, hit);

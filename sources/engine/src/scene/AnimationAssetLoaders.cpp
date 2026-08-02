@@ -2,6 +2,7 @@
 
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/scene/SkeletonAssetIO.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -13,18 +14,51 @@ std::string_view AnimationClipAssetLoader::Type() const noexcept { return kAnima
 std::type_index AnimationClipAssetLoader::PayloadType() const noexcept { return typeid(AnimationClip); }
 std::vector<std::string> AnimationClipAssetLoader::Extensions() const { return { kAnimationClipAssetExtension }; }
 kb::assets::AssetLoadResult AnimationClipAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    auto value = AnimationAssetIO::LoadClip(request.resolvedPath);
+    std::string error;
+    auto value = AnimationAssetIO::LoadClip(request.resolvedPath, &error);
     return value ? kb::assets::AssetLoadResult{ std::make_shared<AnimationClip>(std::move(*value)), {} }
-                 : kb::assets::AssetLoadResult{ {}, "Animation clip could not be loaded or parsed." };
+                 : kb::assets::AssetLoadResult{ {}, std::move(error) };
+}
+
+std::vector<kb::assets::AssetId> AnimationClipAssetLoader::DiscoverDependencies(
+    const kb::assets::AssetMetadata& metadata,
+    const kb::assets::AssetRegistry& registry) const {
+    static_cast<void>(registry);
+    const auto clip = AnimationAssetIO::LoadClip(metadata.physicalPath);
+    if (!clip || clip->targetSkeletonAssetId == 0U) return {};
+    return { kb::assets::AssetId{ clip->targetSkeletonAssetId } };
+}
+
+std::optional<std::string> AnimationClipAssetLoader::ValidateDependencies(
+    const kb::assets::AssetMetadata& metadata,
+    const kb::assets::AssetRegistry& registry) const {
+    std::string error;
+    const auto clip = AnimationAssetIO::LoadClip(metadata.physicalPath, &error);
+    if (!clip) return error;
+    if (clip->targetSkeletonAssetId == 0U) return std::nullopt;
+
+    const kb::assets::AssetMetadata* skeletonMetadata = registry.Find(
+        kb::assets::AssetId{ clip->targetSkeletonAssetId });
+    if (skeletonMetadata == nullptr) return std::nullopt;
+    if (skeletonMetadata->type != kSkeletonAssetType) {
+        return "references an asset that is not a Skeleton.";
+    }
+    const auto skeleton = SkeletonAssetIO::Load(skeletonMetadata->physicalPath, &error);
+    if (!skeleton) return "references a Skeleton that cannot be loaded: " + error;
+    if (SkeletonCompatibilitySignature(*skeleton) != clip->targetSkeletonCompatibilitySignature) {
+        return "references a Skeleton with an incompatible compatibility signature.";
+    }
+    return std::nullopt;
 }
 
 std::string_view AnimatorControllerAssetLoader::Type() const noexcept { return kAnimatorControllerAssetType; }
 std::type_index AnimatorControllerAssetLoader::PayloadType() const noexcept { return typeid(AnimatorController); }
 std::vector<std::string> AnimatorControllerAssetLoader::Extensions() const { return { kAnimatorControllerAssetExtension }; }
 kb::assets::AssetLoadResult AnimatorControllerAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    auto value = AnimationAssetIO::LoadController(request.resolvedPath);
+    std::string error;
+    auto value = AnimationAssetIO::LoadController(request.resolvedPath, &error);
     return value ? kb::assets::AssetLoadResult{ std::make_shared<AnimatorController>(std::move(*value)), {} }
-                 : kb::assets::AssetLoadResult{ {}, "Animator controller could not be loaded or parsed." };
+                 : kb::assets::AssetLoadResult{ {}, std::move(error) };
 }
 
 std::vector<kb::assets::AssetId> AnimatorControllerAssetLoader::DiscoverDependencies(

@@ -30,6 +30,7 @@ struct EditorTerrainToolState {
     kb::terrain_editor::TerrainHeightmapImportSettings heightmapImport{};
     bool editingEnabled = false;
     bool strokeActive = false;
+    float heldSculptElapsedSeconds = 0.0F;
     float lastStampX = 0.0F;
     float lastStampZ = 0.0F;
     EditorTerrainToolMode mode = EditorTerrainToolMode::Sculpt;
@@ -82,6 +83,11 @@ public:
         const kb::assets::TerrainAsset& terrain,
         std::string* error = nullptr);
     [[nodiscard]] static std::shared_ptr<kb::render::RenderMeshAssetData> CreatePreviewMesh(
+        kb::scene::Scene& scene,
+        kb::assets::AssetId assetId,
+        const kb::assets::TerrainAsset& terrain,
+        std::string* error = nullptr);
+    [[nodiscard]] static std::shared_ptr<kb::render::RenderMeshAssetData> CreateLayerPreviewMesh(
         kb::scene::Scene& scene,
         kb::assets::AssetId assetId,
         const kb::assets::TerrainAsset& terrain,

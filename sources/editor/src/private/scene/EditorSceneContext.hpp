@@ -135,6 +135,7 @@ class EditorSceneContext {
         std::shared_ptr<kb::render::RenderMeshAssetData> previewMesh{};
         bool changed = false;
         bool previewPublished = false;
+        bool layerPaint = false;
         std::string label = "Sculpt Terrain";
     };
 
@@ -249,7 +250,7 @@ public:
     [[nodiscard]] bool HasPendingSceneEditTransaction() const noexcept;
     [[nodiscard]] const kb::assets::TerrainAsset* TerrainForEditing(
         kb::scene::SceneEntity entity,
-        std::string* error = nullptr);
+        std::string* error = nullptr) const;
     [[nodiscard]] bool ApplyTerrainBrushStamp(
         kb::scene::SceneEntity entity,
         const kb::terrain_editor::TerrainBrushSettings& settings,
@@ -260,6 +261,13 @@ public:
         kb::scene::SceneEntity entity,
         const kb::terrain_editor::TerrainLayerPaintSettings& settings,
         const kb::terrain_editor::TerrainBrushStamp& stamp,
+        bool beginStroke,
+        std::string* error = nullptr);
+    [[nodiscard]] bool ApplyTerrainLayerPaintSegment(
+        kb::scene::SceneEntity entity,
+        const kb::terrain_editor::TerrainLayerPaintSettings& settings,
+        const kb::terrain_editor::TerrainBrushStamp& start,
+        const kb::terrain_editor::TerrainBrushStamp& end,
         bool beginStroke,
         std::string* error = nullptr);
     [[nodiscard]] bool AddTerrainMaterialLayer(
@@ -768,6 +776,11 @@ public:
     [[nodiscard]] bool CycleMeshRendererMaterialAsset(kb::scene::SceneEntity entity);
     [[nodiscard]] bool SetMeshRendererMaterialSlotAsset(kb::scene::SceneEntity entity, std::uint32_t slotIndex, kb::assets::AssetId assetId);
     [[nodiscard]] bool CycleMeshRendererMaterialSlotAsset(kb::scene::SceneEntity entity, std::uint32_t slotIndex);
+    [[nodiscard]] bool SetSkeletonBindingAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
+    [[nodiscard]] bool SetDeformedGeometryMeshAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
+    [[nodiscard]] bool SetDeformedGeometryMaterialSlotAsset(kb::scene::SceneEntity entity, std::uint32_t slotIndex, kb::assets::AssetId assetId);
+    [[nodiscard]] bool RemoveSkeletonBindingFromEntity(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool RemoveDeformedGeometryFromEntity(kb::scene::SceneEntity entity);
 
     // Inspector-driven script behaviour authoring.
     [[nodiscard]] bool HasEntityScript(kb::scene::SceneEntity entity) const;
@@ -833,6 +846,10 @@ public:
     [[nodiscard]] bool DeleteSceneTag(std::string_view tag);
     [[nodiscard]] bool SetAudioSourceClipAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
     [[nodiscard]] bool SetAnimatorControllerAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
+    [[nodiscard]] bool ToggleSkeletonBindingEnabled(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool ToggleDeformedGeometryEnabled(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool ToggleDeformedGeometryCastsShadow(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool ToggleDeformedGeometryReceivesShadow(kb::scene::SceneEntity entity);
     [[nodiscard]] bool SetUIDocumentAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
     [[nodiscard]] bool SetAnimatorSpeed(kb::scene::SceneEntity entity, float speed);
     [[nodiscard]] bool ToggleAnimatorEnabled(kb::scene::SceneEntity entity);
@@ -853,6 +870,11 @@ public:
 
 private:
     [[nodiscard]] EditorSceneCommandController SceneCommands() noexcept;
+    [[nodiscard]] bool BeginTerrainBrushStroke(
+        kb::scene::SceneEntity entity,
+        std::string label,
+        bool layerPaint,
+        std::string* error);
     [[nodiscard]] bool FinalizeActiveTransformEditApply(
         bool changed,
         std::span<const kb::scene::SceneEntity> touched);
@@ -946,7 +968,7 @@ private:
     bool sceneGraphCookPending_ = true;
     EditorCommandStack commandStack_;
     std::optional<TerrainStrokeState> terrainStroke_;
-    std::optional<TerrainReadCache> terrainReadCache_;
+    mutable std::optional<TerrainReadCache> terrainReadCache_;
     EditorHierarchySelectionState hierarchySelection_;
     EditorSceneViewportBoxSelectionState viewportBoxSelection_{};
     EditorHierarchyExpansionState hierarchyExpansion_;
