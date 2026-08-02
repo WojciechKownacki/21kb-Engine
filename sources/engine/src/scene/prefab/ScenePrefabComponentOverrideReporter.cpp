@@ -374,6 +374,54 @@ void AppendAnimator(SceneComponents components, SceneEntity entity, const std::o
     }
 }
 
+void AppendSkeletonBinding(SceneComponents components, SceneEntity entity, const std::optional<SkeletonBindingComponent>& expected, ScenePrefabOverrideReport& report, std::uint32_t nodeIndex, SceneObject object) {
+    const SkeletonBindingComponent* actual = components.SkeletonBindings().TryGet(entity);
+    const bool equal = actual == nullptr ? !expected.has_value() : expected.has_value() &&
+        actual->skeletonAssetId == expected->skeletonAssetId &&
+        actual->skeletonCompatibilitySignature == expected->skeletonCompatibilitySignature && actual->enabled == expected->enabled;
+    if (equal) return;
+    if (HasPresenceOverride(actual, expected, report, nodeIndex, object, "skeletonBinding", ScenePrefabOverrideFlag::SkeletonBinding)) return;
+    if (!expected.has_value() || actual->skeletonAssetId != expected->skeletonAssetId) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "skeletonBinding.skeletonAssetId", ScenePrefabOverrideValueFormatter::ToString(actual->skeletonAssetId), ScenePrefabOverrideFlag::SkeletonBinding);
+    }
+    if (!expected.has_value() || actual->skeletonCompatibilitySignature != expected->skeletonCompatibilitySignature) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "skeletonBinding.compatibilitySignature", ScenePrefabOverrideValueFormatter::ToString(actual->skeletonCompatibilitySignature), ScenePrefabOverrideFlag::SkeletonBinding);
+    }
+    if (!expected.has_value() || actual->enabled != expected->enabled) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "skeletonBinding.enabled", ScenePrefabOverrideValueFormatter::ToString(actual->enabled), ScenePrefabOverrideFlag::SkeletonBinding);
+    }
+}
+
+void AppendDeformedGeometry(SceneComponents components, SceneEntity entity, const std::optional<DrawD3DeformedGeometryComponent>& expected, ScenePrefabOverrideReport& report, std::uint32_t nodeIndex, SceneObject object) {
+    const DrawD3DeformedGeometryComponent* actual = components.DeformedGeometries().TryGet(entity);
+    const bool equal = actual == nullptr ? !expected.has_value() : expected.has_value() &&
+        actual->skeletalMeshAssetId == expected->skeletalMeshAssetId && actual->materialSlotAssetIds == expected->materialSlotAssetIds &&
+        actual->materialSlotOverrideCount == expected->materialSlotOverrideCount && actual->poseSource == expected->poseSource &&
+        actual->lodBias == expected->lodBias && actual->lodEnabled == expected->lodEnabled && actual->fixedBounds == expected->fixedBounds &&
+        actual->castsShadow == expected->castsShadow && actual->receivesShadow == expected->receivesShadow && actual->layer == expected->layer && actual->enabled == expected->enabled;
+    if (equal) return;
+    if (HasPresenceOverride(actual, expected, report, nodeIndex, object, "deformedGeometry", ScenePrefabOverrideFlag::DeformedGeometry)) return;
+    const auto add = [&](std::string path, const auto& value) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, std::move(path), ScenePrefabOverrideValueFormatter::ToString(value), ScenePrefabOverrideFlag::DeformedGeometry);
+    };
+    if (!expected.has_value() || actual->skeletalMeshAssetId != expected->skeletalMeshAssetId) add("deformedGeometry.skeletalMeshAssetId", actual->skeletalMeshAssetId);
+    if (!expected.has_value() || actual->materialSlotOverrideCount != expected->materialSlotOverrideCount) add("deformedGeometry.materialSlotOverrideCount", static_cast<std::uint64_t>(actual->materialSlotOverrideCount));
+    for (std::uint32_t slot = 0U; slot < kMaxDeformedGeometryMaterialSlotOverrides; ++slot) {
+        if (!expected.has_value() || actual->materialSlotAssetIds[slot] != expected->materialSlotAssetIds[slot]) {
+            add("deformedGeometry.materialSlotAssetId." + std::to_string(slot), actual->materialSlotAssetIds[slot]);
+        }
+    }
+    if (!expected.has_value() || actual->lodBias != expected->lodBias) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "deformedGeometry.lodBias", std::to_string(actual->lodBias), ScenePrefabOverrideFlag::DeformedGeometry);
+    }
+    if (!expected.has_value() || actual->lodEnabled != expected->lodEnabled) add("deformedGeometry.lodEnabled", actual->lodEnabled);
+    if (!expected.has_value() || actual->fixedBounds != expected->fixedBounds) add("deformedGeometry.fixedBounds", actual->fixedBounds);
+    if (!expected.has_value() || actual->castsShadow != expected->castsShadow) add("deformedGeometry.castsShadow", actual->castsShadow);
+    if (!expected.has_value() || actual->receivesShadow != expected->receivesShadow) add("deformedGeometry.receivesShadow", actual->receivesShadow);
+    if (!expected.has_value() || actual->layer != expected->layer) add("deformedGeometry.layer", static_cast<std::uint64_t>(actual->layer));
+    if (!expected.has_value() || actual->enabled != expected->enabled) add("deformedGeometry.enabled", actual->enabled);
+}
+
 void AppendUIDocument(SceneComponents components, SceneEntity entity, const std::optional<UIDocumentComponent>& expected, ScenePrefabOverrideReport& report, std::uint32_t nodeIndex, SceneObject object) {
     const UIDocumentComponent* actual = components.UIDocuments().TryGet(entity);
     const bool equal = actual == nullptr ? !expected.has_value() : expected.has_value() &&
@@ -402,6 +450,8 @@ void ScenePrefabComponentOverrideReporter::Append(SceneComponents components, Sc
     AppendAudioSource(components, entity, expected.audioSource, report, nodeIndex, object);
     AppendAudioListener(components, entity, expected.audioListener, report, nodeIndex, object);
     AppendAnimator(components, entity, expected.animator, report, nodeIndex, object);
+    AppendSkeletonBinding(components, entity, expected.skeletonBinding, report, nodeIndex, object);
+    AppendDeformedGeometry(components, entity, expected.deformedGeometry, report, nodeIndex, object);
     AppendUIDocument(components, entity, expected.uiDocument, report, nodeIndex, object);
 }
 

@@ -435,6 +435,44 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
         Ensure(node.components.animator).rootMotionOwner = static_cast<AnimatorRootMotionOwner>(owner);
         return true;
     }
+    if (property.propertyPath == "skeletonBinding") {
+        return ApplyComponentPresence(property.value, node.components.skeletonBinding);
+    }
+    if (property.propertyPath == "skeletonBinding.skeletonAssetId") {
+        return ParseNumber(property.value, Ensure(node.components.skeletonBinding).skeletonAssetId);
+    }
+    if (property.propertyPath == "skeletonBinding.compatibilitySignature") {
+        return ParseNumber(property.value, Ensure(node.components.skeletonBinding).skeletonCompatibilitySignature);
+    }
+    if (property.propertyPath == "skeletonBinding.enabled") {
+        return ParseBool(property.value, Ensure(node.components.skeletonBinding).enabled);
+    }
+    if (property.propertyPath == "deformedGeometry") {
+        return ApplyComponentPresence(property.value, node.components.deformedGeometry);
+    }
+    if (property.propertyPath == "deformedGeometry.skeletalMeshAssetId") {
+        return ParseNumber(property.value, Ensure(node.components.deformedGeometry).skeletalMeshAssetId);
+    }
+    if (property.propertyPath == "deformedGeometry.materialSlotOverrideCount") {
+        std::uint32_t count = 0U;
+        if (!ParseNumber(property.value, count) || count > kMaxDeformedGeometryMaterialSlotOverrides) return false;
+        Ensure(node.components.deformedGeometry).materialSlotOverrideCount = count;
+        return true;
+    }
+    for (std::uint32_t slot = 0U; slot < kMaxDeformedGeometryMaterialSlotOverrides; ++slot) {
+        if (property.propertyPath == "deformedGeometry.materialSlotAssetId." + std::to_string(slot)) {
+            return ParseNumber(property.value, Ensure(node.components.deformedGeometry).materialSlotAssetIds[slot]);
+        }
+    }
+    if (property.propertyPath == "deformedGeometry.lodBias") {
+        return ParseNumber(property.value, Ensure(node.components.deformedGeometry).lodBias);
+    }
+    if (property.propertyPath == "deformedGeometry.lodEnabled") return ParseBool(property.value, Ensure(node.components.deformedGeometry).lodEnabled);
+    if (property.propertyPath == "deformedGeometry.fixedBounds") return ParseBool(property.value, Ensure(node.components.deformedGeometry).fixedBounds);
+    if (property.propertyPath == "deformedGeometry.castsShadow") return ParseBool(property.value, Ensure(node.components.deformedGeometry).castsShadow);
+    if (property.propertyPath == "deformedGeometry.receivesShadow") return ParseBool(property.value, Ensure(node.components.deformedGeometry).receivesShadow);
+    if (property.propertyPath == "deformedGeometry.layer") return ParseNumber(property.value, Ensure(node.components.deformedGeometry).layer);
+    if (property.propertyPath == "deformedGeometry.enabled") return ParseBool(property.value, Ensure(node.components.deformedGeometry).enabled);
     if (property.propertyPath == "uiDocument") {
         return ApplyComponentPresence(property.value, node.components.uiDocument);
     }

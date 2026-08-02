@@ -304,6 +304,7 @@ void RunSkeletalMeshAssetTests() {
     const kb::scene::SkeletonBindingComponent binding{
         .skeletonAssetId = skeletonId.value,
         .skeletonCompatibilitySignature = kb::scene::SkeletonCompatibilitySignature(skeleton),
+        .enabled = true,
     };
     Require(kb::scene::IsSkeletonBindingComponentValid(binding),
         "Skeleton binding requires an authoritative skeleton asset and compatibility signature");
@@ -313,7 +314,11 @@ void RunSkeletalMeshAssetTests() {
     Require(storedBinding != nullptr && storedBinding->skeletonAssetId == binding.skeletonAssetId &&
             storedBinding->skeletonCompatibilitySignature == binding.skeletonCompatibilitySignature,
         "Skeleton binding component did not preserve its authoritative configuration");
-    Require(!scene.Components().SkeletonBindings().Set(bindingObject.Entity(), {}),
+    Require(!scene.Components().SkeletonBindings().Set(bindingObject.Entity(), {
+                .skeletonAssetId = binding.skeletonAssetId,
+                .skeletonCompatibilitySignature = 0U,
+                .enabled = true,
+            }),
         "Skeleton binding accepted an incomplete authoritative configuration");
     Require(scene.Components().SkeletonBindings().TryGet(bindingObject.Entity())->skeletonAssetId == binding.skeletonAssetId,
         "Skeleton binding mutation changed the last valid authoritative configuration");

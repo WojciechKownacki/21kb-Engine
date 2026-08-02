@@ -28,7 +28,8 @@ struct SceneDocument {
     // v25: HistoryRibbonComponent persists renderer sampling policy.
     // v26: LensEchoComponent and 64-bit component-presence mask persist source-linked optical policy.
     // v27: scene-owned tag definitions persist independently from assignments.
-    static constexpr std::uint32_t CurrentFileVersion = 27U;
+    // v28: SkeletonBinding and DeformedGeometry authoring components persist.
+    static constexpr std::uint32_t CurrentFileVersion = 28U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

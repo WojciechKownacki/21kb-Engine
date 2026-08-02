@@ -776,6 +776,11 @@ public:
     [[nodiscard]] bool CycleMeshRendererMaterialAsset(kb::scene::SceneEntity entity);
     [[nodiscard]] bool SetMeshRendererMaterialSlotAsset(kb::scene::SceneEntity entity, std::uint32_t slotIndex, kb::assets::AssetId assetId);
     [[nodiscard]] bool CycleMeshRendererMaterialSlotAsset(kb::scene::SceneEntity entity, std::uint32_t slotIndex);
+    [[nodiscard]] bool SetSkeletonBindingAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
+    [[nodiscard]] bool SetDeformedGeometryMeshAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
+    [[nodiscard]] bool SetDeformedGeometryMaterialSlotAsset(kb::scene::SceneEntity entity, std::uint32_t slotIndex, kb::assets::AssetId assetId);
+    [[nodiscard]] bool RemoveSkeletonBindingFromEntity(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool RemoveDeformedGeometryFromEntity(kb::scene::SceneEntity entity);
 
     // Inspector-driven script behaviour authoring.
     [[nodiscard]] bool HasEntityScript(kb::scene::SceneEntity entity) const;
@@ -841,6 +846,10 @@ public:
     [[nodiscard]] bool DeleteSceneTag(std::string_view tag);
     [[nodiscard]] bool SetAudioSourceClipAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
     [[nodiscard]] bool SetAnimatorControllerAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
+    [[nodiscard]] bool ToggleSkeletonBindingEnabled(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool ToggleDeformedGeometryEnabled(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool ToggleDeformedGeometryCastsShadow(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool ToggleDeformedGeometryReceivesShadow(kb::scene::SceneEntity entity);
     [[nodiscard]] bool SetUIDocumentAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
     [[nodiscard]] bool SetAnimatorSpeed(kb::scene::SceneEntity entity, float speed);
     [[nodiscard]] bool ToggleAnimatorEnabled(kb::scene::SceneEntity entity);

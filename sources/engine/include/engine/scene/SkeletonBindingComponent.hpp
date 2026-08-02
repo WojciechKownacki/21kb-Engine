@@ -14,10 +14,18 @@ struct SkeletonBindingComponent {
 
     std::uint64_t skeletonAssetId = 0U;
     std::uint64_t skeletonCompatibilitySignature = 0U;
+    // An explicitly disabled binding is an editor draft and cannot contribute
+    // a pose. Runtime systems require IsSkeletonBindingComponentValid().
+    bool enabled = false;
 };
 
 [[nodiscard]] constexpr bool IsSkeletonBindingComponentValid(const SkeletonBindingComponent& value) noexcept {
     return value.skeletonAssetId != 0U && value.skeletonCompatibilitySignature != 0U;
+}
+
+[[nodiscard]] constexpr bool IsSkeletonBindingComponentPersistable(const SkeletonBindingComponent& value) noexcept {
+    return IsSkeletonBindingComponentValid(value) ||
+        (!value.enabled && value.skeletonAssetId == 0U && value.skeletonCompatibilitySignature == 0U);
 }
 
 } // namespace kb::scene

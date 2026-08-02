@@ -17,7 +17,7 @@ SkeletonBindingComponent* SceneComponentMutationService::TryGetSkeletonBinding(S
     return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.SkeletonBindings().TryGet(entity) : nullptr;
 }
 bool SceneComponentMutationService::SetSkeletonBinding(Scene& scene, SceneEntity entity, const SkeletonBindingComponent& binding) {
-    if (!SceneEntityService::IsAlive(scene, entity) || !IsSkeletonBindingComponentValid(binding)) return false;
+    if (!SceneEntityService::IsAlive(scene, entity) || !IsSkeletonBindingComponentPersistable(binding)) return false;
     SceneState& state = SceneAccess::State(scene);
     state.componentStorage.SkeletonBindings().Set(entity, binding);
     MarkScenePrefabNodeDirty(state, entity);

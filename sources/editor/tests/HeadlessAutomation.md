@@ -125,7 +125,7 @@ scenario-local aliases.
 | `create_asset` | `id`, `type`, `folder`; types: `lua_script`, `input_action`, `input_axis`, `input_context`, `material`, `material_function`, `material_graph`, `material_type` |
 | `copy_asset`, `move_asset` | `asset`, destination virtual folder |
 | `delete_asset` | `asset` |
-| `assign_asset` | `entity`, `asset`, `role`; roles: `mesh`, `material`, `audio_clip`, `animator_controller`, `script` |
+| `assign_asset` | `entity`, `asset`, `role`; roles: `mesh`, `material`, `audio_clip`, `animator_controller`, `skeleton_binding`, `deformed_geometry_mesh`, `deformed_geometry_material` (requires `slot`), `script` |
 | `assign_material_slot`, `assert_material_slot` | Mesh Renderer `entity`, material `asset`, integer `slot`; assigns or verifies the production per-slot material override |
 | `set_material`, `assert_material` | `asset`, `property`, `value`; numeric factors plus `double_sided` and `alpha_mode` |
 | `save_material` | `asset` |

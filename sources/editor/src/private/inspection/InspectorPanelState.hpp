@@ -55,6 +55,8 @@ enum class InspectorSectionId : std::uint8_t {
     Joint,
     AddComponent,
     Terrain,
+    SkeletonBinding,
+    DeformedGeometry,
 };
 
 enum class InspectorHitKind : std::uint8_t {
@@ -412,6 +414,30 @@ enum class InspectorPropertyId : std::uint16_t {
     TerrainMaterialLayerAdd,
     TerrainMaterialLayerRemove,
     TerrainAdvanced,
+    SkeletonBindingAsset,
+    SkeletonBindingAssetPicker,
+    SkeletonBindingEnabled,
+    DeformedGeometryMesh,
+    DeformedGeometryMeshPicker,
+    DeformedGeometryCastsShadow,
+    DeformedGeometryReceivesShadow,
+    DeformedGeometryEnabled,
+    DeformedGeometryMaterialSlot0,
+    DeformedGeometryMaterialSlotPicker0,
+    DeformedGeometryMaterialSlot1,
+    DeformedGeometryMaterialSlotPicker1,
+    DeformedGeometryMaterialSlot2,
+    DeformedGeometryMaterialSlotPicker2,
+    DeformedGeometryMaterialSlot3,
+    DeformedGeometryMaterialSlotPicker3,
+    DeformedGeometryMaterialSlot4,
+    DeformedGeometryMaterialSlotPicker4,
+    DeformedGeometryMaterialSlot5,
+    DeformedGeometryMaterialSlotPicker5,
+    DeformedGeometryMaterialSlot6,
+    DeformedGeometryMaterialSlotPicker6,
+    DeformedGeometryMaterialSlot7,
+    DeformedGeometryMaterialSlotPicker7,
 };
 
 struct InspectorPanelState {

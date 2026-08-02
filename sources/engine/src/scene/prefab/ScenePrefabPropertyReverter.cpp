@@ -80,6 +80,18 @@ void RevertComponentProperty(Scene& scene, SceneObject object, const ScenePrefab
         } else {
             components.Animators().Remove(entity);
         }
+    } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "skeletonBinding")) {
+        if (node.components.skeletonBinding.has_value()) {
+            static_cast<void>(components.SkeletonBindings().Set(entity, *node.components.skeletonBinding));
+        } else {
+            components.SkeletonBindings().Remove(entity);
+        }
+    } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "deformedGeometry")) {
+        if (node.components.deformedGeometry.has_value()) {
+            static_cast<void>(components.DeformedGeometries().Set(entity, *node.components.deformedGeometry));
+        } else {
+            components.DeformedGeometries().Remove(entity);
+        }
     } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "uiDocument")) {
         if (node.components.uiDocument.has_value()) {
             components.UIDocuments().Set(entity, *node.components.uiDocument);

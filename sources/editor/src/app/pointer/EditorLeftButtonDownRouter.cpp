@@ -31,6 +31,8 @@
 #include "rendering/DockTabControlGeometry.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
 #include "platform/win32/EditorAnimatorControllerAssetPickerDialog.hpp"
+#include "platform/win32/EditorSkeletonAssetPickerDialog.hpp"
+#include "platform/win32/EditorSkeletalMeshAssetPickerDialog.hpp"
 #include "platform/win32/EditorMaterialColorPickerDialog.hpp"
 #include "platform/win32/EditorMaterialParameterValueDialog.hpp"
 #include "platform/win32/EditorMeshAssetPickerDialog.hpp"
@@ -51,6 +53,25 @@ namespace {
 constexpr int kHierarchyScrollbarWidth = 12;
 constexpr int kHierarchyScrollbarInset = 3;
 constexpr int kHierarchyScrollbarMinThumb = 24;
+
+[[nodiscard]] std::optional<std::uint32_t> DeformedGeometryMaterialSlotForProperty(InspectorPropertyId property) noexcept {
+    constexpr std::array<InspectorPropertyId, kb::scene::kMaxDeformedGeometryMaterialSlotOverrides> fields{ {
+        InspectorPropertyId::DeformedGeometryMaterialSlot0, InspectorPropertyId::DeformedGeometryMaterialSlot1,
+        InspectorPropertyId::DeformedGeometryMaterialSlot2, InspectorPropertyId::DeformedGeometryMaterialSlot3,
+        InspectorPropertyId::DeformedGeometryMaterialSlot4, InspectorPropertyId::DeformedGeometryMaterialSlot5,
+        InspectorPropertyId::DeformedGeometryMaterialSlot6, InspectorPropertyId::DeformedGeometryMaterialSlot7,
+    } };
+    constexpr std::array<InspectorPropertyId, kb::scene::kMaxDeformedGeometryMaterialSlotOverrides> pickers{ {
+        InspectorPropertyId::DeformedGeometryMaterialSlotPicker0, InspectorPropertyId::DeformedGeometryMaterialSlotPicker1,
+        InspectorPropertyId::DeformedGeometryMaterialSlotPicker2, InspectorPropertyId::DeformedGeometryMaterialSlotPicker3,
+        InspectorPropertyId::DeformedGeometryMaterialSlotPicker4, InspectorPropertyId::DeformedGeometryMaterialSlotPicker5,
+        InspectorPropertyId::DeformedGeometryMaterialSlotPicker6, InspectorPropertyId::DeformedGeometryMaterialSlotPicker7,
+    } };
+    for (std::uint32_t slot = 0U; slot < fields.size(); ++slot) {
+        if (property == fields[slot] || property == pickers[slot]) return slot;
+    }
+    return std::nullopt;
+}
 
 [[nodiscard]] bool PointInRect(const RECT& rect, int x, int y) noexcept {
     return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
@@ -966,6 +987,54 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             }
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             return;
+        }
+        if (hit.section == InspectorSectionId::SkeletonBinding &&
+            (hit.property == InspectorPropertyId::SkeletonBindingAsset ||
+             hit.property == InspectorPropertyId::SkeletonBindingAssetPicker)) {
+            const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+            const kb::scene::SkeletonBindingComponent* binding = sceneContext_.Scene().Components().SkeletonBindings().TryGet(entity);
+            if (binding != nullptr) {
+                const EditorSkeletonAssetPickerDialog::Result result = EditorSkeletonAssetPickerDialog::Show(
+                    mainWindow_, MakeEditorDarkTheme(), sceneContext_, kb::assets::AssetId{ binding->skeletonAssetId });
+                if (result.accepted && sceneContext_.SetSkeletonBindingAsset(entity, result.assetId)) {
+                    sceneViewport_.RequestPresent();
+                }
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+        if (hit.section == InspectorSectionId::DeformedGeometry &&
+            (hit.property == InspectorPropertyId::DeformedGeometryMesh ||
+             hit.property == InspectorPropertyId::DeformedGeometryMeshPicker)) {
+            const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+            const kb::scene::DrawD3DeformedGeometryComponent* geometry = sceneContext_.Scene().Components().DeformedGeometries().TryGet(entity);
+            if (geometry != nullptr) {
+                const EditorSkeletalMeshAssetPickerDialog::Result result = EditorSkeletalMeshAssetPickerDialog::Show(
+                    mainWindow_, MakeEditorDarkTheme(), sceneContext_, kb::assets::AssetId{ geometry->skeletalMeshAssetId });
+                if (result.accepted && sceneContext_.SetDeformedGeometryMeshAsset(entity, result.assetId)) {
+                    sceneViewport_.RequestPresent();
+                }
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+        if (hit.section == InspectorSectionId::DeformedGeometry) {
+            if (const std::optional<std::uint32_t> slot = DeformedGeometryMaterialSlotForProperty(hit.property)) {
+                const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+                const kb::scene::DrawD3DeformedGeometryComponent* geometry = sceneContext_.Scene().Components().DeformedGeometries().TryGet(entity);
+                if (geometry != nullptr) {
+                    const std::uint64_t current = *slot < geometry->materialSlotOverrideCount
+                        ? geometry->materialSlotAssetIds[*slot]
+                        : 0U;
+                    const EditorMaterialAssetPickerDialog::Result result = EditorMaterialAssetPickerDialog::Show(
+                        mainWindow_, MakeEditorDarkTheme(), sceneContext_, sceneViewport_, kb::assets::AssetId{ current }, true);
+                    if (result.accepted && sceneContext_.SetDeformedGeometryMaterialSlotAsset(entity, *slot, result.assetId)) {
+                        sceneViewport_.RequestPresent();
+                    }
+                }
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return;
+            }
         }
         if (hit.section == InspectorSectionId::MeshRenderer && hit.property == InspectorPropertyId::MeshRendererMeshPicker) {
             const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();

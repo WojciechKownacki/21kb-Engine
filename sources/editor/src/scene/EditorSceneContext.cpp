@@ -33,6 +33,8 @@
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/AnimationAssets.hpp"
+#include "engine/scene/SkeletonAssetIO.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/TimelineAssetIO.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
@@ -8597,6 +8599,24 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
             return true;
         });
     }
+    if (componentId == "SkeletonBinding") {
+        if (scene_->Components().SkeletonBindings().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Skeleton Binding component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Skeleton Binding Component", [this, entity]() {
+            return scene_->Components().SkeletonBindings().Set(entity, kb::scene::SkeletonBindingComponent{});
+        });
+    }
+    if (componentId == "DeformedGeometry") {
+        if (scene_->Components().DeformedGeometries().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Deformed Geometry component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Deformed Geometry Component", [this, entity]() {
+            return scene_->Components().DeformedGeometries().Set(entity, kb::scene::DrawD3DeformedGeometryComponent{});
+        });
+    }
     if (componentId == "TerrainEditor") {
         if (!IsProjectPluginEnabled("Editor.Terrain")) {
             console_.Warning("Terrain", "Enable Terrain Editor in Edit > Plugins before adding the component.");
@@ -8924,6 +8944,145 @@ bool EditorSceneContext::SetAnimatorControllerAsset(kb::scene::SceneEntity entit
         scene_->Components().Animators().MarkModified(entity);
         return true;
     });
+}
+
+bool EditorSceneContext::SetSkeletonBindingAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {
+    if (!entity.IsValid() || !scene_->Components().SkeletonBindings().Has(entity)) return false;
+    kb::scene::SkeletonBindingComponent binding{};
+    if (assetId.IsValid()) {
+        const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
+        if (metadata == nullptr || metadata->type != kb::scene::kSkeletonAssetType) {
+            console_.Warning("Skeleton Binding", "Only Skeleton assets can be assigned.");
+            return false;
+        }
+        const auto asset = scene_->Assets().Manager().Load<kb::scene::SkeletonAsset>(assetId);
+        if (!asset.IsLoaded()) {
+            console_.Warning("Skeleton Binding", "Only loadable Skeleton assets can be assigned.");
+            return false;
+        }
+        binding.skeletonAssetId = assetId.value;
+        binding.skeletonCompatibilitySignature = kb::scene::SkeletonCompatibilitySignature(*asset);
+        binding.enabled = true;
+    }
+    return ExecuteSceneCommand(assetId.IsValid() ? "Assign Skeleton" : "Clear Skeleton", [this, entity, binding]() {
+        return scene_->Components().SkeletonBindings().Set(entity, binding);
+    });
+}
+
+bool EditorSceneContext::SetDeformedGeometryMeshAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {
+    if (!entity.IsValid() || !scene_->Components().DeformedGeometries().Has(entity)) return false;
+    if (assetId.IsValid()) {
+        const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
+        if (metadata == nullptr || metadata->type != kb::scene::kSkeletalMeshAssetType) {
+            console_.Warning("Deformed Geometry", "Only Skeletal Mesh assets can be assigned.");
+            return false;
+        }
+    }
+    return ExecuteSceneCommand(assetId.IsValid() ? "Assign Skeletal Mesh" : "Clear Skeletal Mesh", [this, entity, assetId]() {
+        kb::scene::DrawD3DeformedGeometryComponent* geometry = scene_->Components().DeformedGeometries().TryGet(entity);
+        if (geometry == nullptr) return false;
+        geometry->skeletalMeshAssetId = assetId.value;
+        if (!assetId.IsValid()) {
+            geometry->materialSlotAssetIds = {};
+            geometry->materialSlotOverrideCount = 0U;
+            geometry->poseSource = {};
+            geometry->enabled = false;
+        } else {
+            geometry->enabled = true;
+        }
+        scene_->Components().DeformedGeometries().MarkModified(entity);
+        return true;
+    });
+}
+
+bool EditorSceneContext::SetDeformedGeometryMaterialSlotAsset(
+    kb::scene::SceneEntity entity,
+    std::uint32_t slotIndex,
+    kb::assets::AssetId assetId) {
+    if (!entity.IsValid() || !scene_->Components().DeformedGeometries().Has(entity) ||
+        slotIndex >= kb::scene::kMaxDeformedGeometryMaterialSlotOverrides) {
+        return false;
+    }
+    if (assetId.IsValid()) {
+        const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
+        if (metadata == nullptr || !EditorSceneMaterialAssetActions::IsMaterialAsset(*metadata)) {
+            console_.Warning("Deformed Geometry", "Only material assets can be assigned to a Skeletal Mesh material slot.");
+            return false;
+        }
+    }
+    return ExecuteSceneCommand(assetId.IsValid() ? "Assign Deformed Geometry Material" : "Clear Deformed Geometry Material", [this, entity, slotIndex, assetId]() {
+        kb::scene::DrawD3DeformedGeometryComponent* geometry = scene_->Components().DeformedGeometries().TryGet(entity);
+        if (geometry == nullptr) return false;
+        geometry->materialSlotAssetIds[slotIndex] = assetId.value;
+        if (assetId.IsValid()) {
+            geometry->materialSlotOverrideCount = std::max(geometry->materialSlotOverrideCount, slotIndex + 1U);
+        } else if (slotIndex + 1U == geometry->materialSlotOverrideCount) {
+            while (geometry->materialSlotOverrideCount > 0U &&
+                   geometry->materialSlotAssetIds[geometry->materialSlotOverrideCount - 1U] == 0U) {
+                --geometry->materialSlotOverrideCount;
+            }
+        }
+        scene_->Components().DeformedGeometries().MarkModified(entity);
+        return true;
+    });
+}
+
+bool EditorSceneContext::ToggleSkeletonBindingEnabled(kb::scene::SceneEntity entity) {
+    return ExecuteSceneCommand("Toggle Skeleton Binding Enabled", [this, entity]() {
+        kb::scene::SkeletonBindingComponent* binding = scene_->Components().SkeletonBindings().TryGet(entity);
+        if (binding == nullptr) return false;
+        if (!binding->enabled && !kb::scene::IsSkeletonBindingComponentValid(*binding)) {
+            console_.Warning("Skeleton Binding", "Assign a valid Skeleton asset before enabling this component.");
+            return false;
+        }
+        binding->enabled = !binding->enabled;
+        scene_->Components().SkeletonBindings().MarkModified(entity);
+        return true;
+    });
+}
+
+bool EditorSceneContext::ToggleDeformedGeometryEnabled(kb::scene::SceneEntity entity) {
+    return ExecuteSceneCommand("Toggle Deformed Geometry Enabled", [this, entity]() {
+        kb::scene::DrawD3DeformedGeometryComponent* geometry = scene_->Components().DeformedGeometries().TryGet(entity);
+        if (geometry == nullptr) return false;
+        if (!geometry->enabled && !kb::scene::IsDrawD3DeformedGeometryComponentValid(*geometry)) {
+            console_.Warning("Deformed Geometry", "Assign a valid Skeletal Mesh asset before enabling this component.");
+            return false;
+        }
+        geometry->enabled = !geometry->enabled;
+        scene_->Components().DeformedGeometries().MarkModified(entity);
+        return true;
+    });
+}
+
+bool EditorSceneContext::ToggleDeformedGeometryCastsShadow(kb::scene::SceneEntity entity) {
+    return ExecuteSceneCommand("Toggle Deformed Geometry Casts Shadow", [this, entity]() {
+        kb::scene::DrawD3DeformedGeometryComponent* geometry = scene_->Components().DeformedGeometries().TryGet(entity);
+        if (geometry == nullptr) return false;
+        geometry->castsShadow = !geometry->castsShadow;
+        scene_->Components().DeformedGeometries().MarkModified(entity);
+        return true;
+    });
+}
+
+bool EditorSceneContext::ToggleDeformedGeometryReceivesShadow(kb::scene::SceneEntity entity) {
+    return ExecuteSceneCommand("Toggle Deformed Geometry Receives Shadow", [this, entity]() {
+        kb::scene::DrawD3DeformedGeometryComponent* geometry = scene_->Components().DeformedGeometries().TryGet(entity);
+        if (geometry == nullptr) return false;
+        geometry->receivesShadow = !geometry->receivesShadow;
+        scene_->Components().DeformedGeometries().MarkModified(entity);
+        return true;
+    });
+}
+
+bool EditorSceneContext::RemoveSkeletonBindingFromEntity(kb::scene::SceneEntity entity) {
+    if (!entity.IsValid() || !scene_->Components().SkeletonBindings().Has(entity)) return false;
+    return ExecuteSceneCommand("Remove Skeleton Binding", [this, entity]() { scene_->Components().SkeletonBindings().Remove(entity); return true; });
+}
+
+bool EditorSceneContext::RemoveDeformedGeometryFromEntity(kb::scene::SceneEntity entity) {
+    if (!entity.IsValid() || !scene_->Components().DeformedGeometries().Has(entity)) return false;
+    return ExecuteSceneCommand("Remove Deformed Geometry", [this, entity]() { scene_->Components().DeformedGeometries().Remove(entity); return true; });
 }
 
 bool EditorSceneContext::SetUIDocumentAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {

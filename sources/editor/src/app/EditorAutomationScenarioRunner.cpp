@@ -406,6 +406,12 @@ void WriteLittleEndian32(std::ostream& output, std::uint32_t value) {
     if (component == "Animator") {
         return scene.Components().Animators().Has(entity);
     }
+    if (component == "SkeletonBinding") {
+        return scene.Components().SkeletonBindings().Has(entity);
+    }
+    if (component == "DeformedGeometry") {
+        return scene.Components().DeformedGeometries().Has(entity);
+    }
     if (component == "UIDocument") {
         return scene.Components().UIDocuments().Has(entity);
     }
@@ -1819,6 +1825,23 @@ ReadScriptValue(
             *component + " on " + *alias };
     }
 
+    if (*operation == "remove_component") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto component = StringMember(step, "component", error);
+        if (!alias || !component) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(entity)) {
+            return { false, "entity alias is not alive" };
+        }
+        if (*component == "SkeletonBinding") {
+            return { state.context.RemoveSkeletonBindingFromEntity(entity), *component };
+        }
+        if (*component == "DeformedGeometry") {
+            return { state.context.RemoveDeformedGeometryFromEntity(entity), *component };
+        }
+        return { false, "component cannot be removed by this operation" };
+    }
+
     if (*operation == "terrain_stamp") {
         const auto alias = StringMember(step, "entity", error);
         const auto x = NumberMember(step, "x", error);
@@ -2454,6 +2477,19 @@ ReadScriptValue(
         } else if (*role == "animator_controller") {
             assigned =
                 state.context.SetAnimatorControllerAsset(entity, id);
+        } else if (*role == "skeleton_binding") {
+            assigned = state.context.SetSkeletonBindingAsset(entity, id);
+        } else if (*role == "deformed_geometry_mesh") {
+            assigned = state.context.SetDeformedGeometryMeshAsset(entity, id);
+        } else if (*role == "deformed_geometry_material") {
+            const auto slot = NumberMember(step, "slot", error);
+            if (!slot || *slot < 0.0 ||
+                *slot >= static_cast<double>(kb::scene::kMaxDeformedGeometryMaterialSlotOverrides) ||
+                std::floor(*slot) != *slot) {
+                return { false, "deformed geometry material slot must be a valid integer" };
+            }
+            assigned = state.context.SetDeformedGeometryMaterialSlotAsset(
+                entity, static_cast<std::uint32_t>(*slot), id);
         } else if (*role == "ui_document") {
             assigned = state.context.SetUIDocumentAsset(entity, id);
         } else if (*role == "script") {
