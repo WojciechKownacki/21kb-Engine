@@ -46,6 +46,7 @@ public:
     [[nodiscard]] std::uint64_t AudioSourceComponentId() const noexcept;
     [[nodiscard]] std::uint64_t AudioListenerComponentId() const noexcept;
     [[nodiscard]] std::uint64_t AnimatorComponentId() const noexcept;
+    [[nodiscard]] std::uint64_t SkeletonBindingComponentId() const noexcept;
     [[nodiscard]] std::uint64_t UIDocumentComponentId() const noexcept;
     [[nodiscard]] std::uint64_t NavAgentComponentId() const noexcept;
     [[nodiscard]] std::uint64_t NavObstacleComponentId() const noexcept;
@@ -83,6 +84,7 @@ private:
     std::uint64_t audioSourceComponentId_ = 0;
     std::uint64_t audioListenerComponentId_ = 0;
     std::uint64_t animatorComponentId_ = 0;
+    std::uint64_t skeletonBindingComponentId_ = 0;
     std::uint64_t uiDocumentComponentId_ = 0;
     std::uint64_t navAgentComponentId_ = 0;
     std::uint64_t navObstacleComponentId_ = 0;
