@@ -224,6 +224,9 @@ add_library(kb_engine STATIC
     include/engine/scene/SkeletonAsset.hpp
     include/engine/scene/SkeletonAssetIO.hpp
     include/engine/scene/SkeletonAssetLoader.hpp
+    include/engine/scene/SkeletalMeshAsset.hpp
+    include/engine/scene/SkeletalMeshAssetIO.hpp
+    include/engine/scene/SkeletalMeshAssetLoader.hpp
     include/engine/scene/UIAssets.hpp
     include/engine/scene/UIAssetIO.hpp
     include/engine/scene/UIAssetLoaders.hpp
@@ -590,6 +593,9 @@ add_library(kb_engine STATIC
     src/scene/SkeletonAsset.cpp
     src/scene/SkeletonAssetIO.cpp
     src/scene/SkeletonAssetLoader.cpp
+    src/scene/SkeletalMeshAsset.cpp
+    src/scene/SkeletalMeshAssetIO.cpp
+    src/scene/SkeletalMeshAssetLoader.cpp
     src/scene/TimelineAssetIO.cpp
     src/scene/TimelineAssetLoader.cpp
     src/scene/SceneTimelineService.cpp
@@ -1458,6 +1464,7 @@ if(BUILD_TESTING)
         tests/AudioSceneSystemTests.cpp
         tests/AnimationRuntimeTests.cpp
         tests/SkeletonAssetTests.cpp
+        tests/SkeletalMeshAssetTests.cpp
         tests/TimelineRuntimeTests.cpp
         tests/UIDocumentRuntimeTests.cpp
         tests/LocalizationTests.cpp

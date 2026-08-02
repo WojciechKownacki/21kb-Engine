@@ -18,6 +18,7 @@ void RunEngineLibraryTests();
 void RunEngineMathTests();
 void RunAnimationRuntimeTests();
 void RunSkeletonAssetTests();
+void RunSkeletalMeshAssetTests();
 void RunTimelineRuntimeTests();
 void RunUIDocumentRuntimeTests();
 void RunLocalizationTests();
