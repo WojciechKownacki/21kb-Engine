@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <string>
 
 namespace kb::scene {
 
@@ -16,7 +17,9 @@ class SkeletonAssetIO final {
 public:
     SkeletonAssetIO() = delete;
 
-    [[nodiscard]] static std::optional<SkeletonAsset> Load(const std::filesystem::path& path);
+    [[nodiscard]] static std::optional<SkeletonAsset> Load(
+        const std::filesystem::path& path,
+        std::string* error = nullptr);
     [[nodiscard]] static bool Save(const std::filesystem::path& path, const SkeletonAsset& asset);
 };
 
