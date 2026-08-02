@@ -46,6 +46,7 @@
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/SkeletalMeshGltfImporter.hpp"
+#include "engine/scene/SkeletalMeshGltfImportPlanner.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
@@ -2247,6 +2248,23 @@ ReadScriptValue(
             (!clipCount || imported->clips.size() == *clipCount) &&
             (!morphCount || imported->mesh.morphTargets.size() == *morphCount);
         return { matched, matched ? "canonical glTF skeletal import" : importError };
+    }
+
+    if (*operation == "assert_skeletal_gltf_import_plan") {
+        const auto path = StringMember(step, "path", error);
+        const auto folder = StringMember(step, "folder", error);
+        const auto reuse = BoolMember(step, "reuse", error);
+        if (!path || !folder || !reuse) return { false, error };
+        const auto source = ResolveProjectPath(*path, error);
+        if (!source) return { false, error };
+        static_cast<void>(state.context.Scene().Assets().Discover());
+        std::string importError;
+        const auto plan = kb::scene::SkeletalMeshGltfImportPlanner::Plan(
+            state.context.Scene().Assets().Manager(), *source, *folder, {}, &importError);
+        const bool matched = plan.has_value() && plan->reusesSkeleton == *reuse &&
+            plan->skeletonAssetId.IsValid() &&
+            plan->imported.mesh.skeletonAssetId == plan->skeletonAssetId.value;
+        return { matched, matched ? "canonical glTF skeletal import plan" : importError };
     }
 
     if (*operation == "assert_skeletal_animation_clip") {
