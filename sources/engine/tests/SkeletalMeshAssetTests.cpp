@@ -6,6 +6,7 @@
 #include "engine/scene/SkeletonAsset.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletalMeshGltfImporter.hpp"
+#include "engine/scene/SkeletalMeshGltfImportPlanner.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 
 #include <array>
@@ -139,6 +140,27 @@ void RunSkeletalMeshAssetTests() {
             imported->mesh.lods[0].vertices[1].jointWeights[0] == 1.0F &&
             kb::scene::ValidateSkeletalMeshAsset(imported->mesh).valid,
         "Skeletal glTF import did not preserve hierarchy, inverse binds, JOINTS_0, and WEIGHTS_0");
+    const auto plannerRoot = root / "GltfImportPlanner";
+    std::filesystem::create_directories(plannerRoot / "Assets" / "Characters");
+    kb::scene::Scene plannerScene;
+    Require(plannerScene.Assets().MountProject(plannerRoot),
+        "Skeletal glTF import planner mount failed");
+    const auto createPlan = kb::scene::SkeletalMeshGltfImportPlanner::Plan(
+        plannerScene.Assets().Manager(), importRoot / "Hero.gltf", "/Game/Characters", {}, &importError);
+    Require(createPlan.has_value() && !createPlan->reusesSkeleton &&
+            createPlan->skeletonVirtualPath == "/Game/Characters/Hero.kbskeleton" &&
+            createPlan->imported.mesh.skeletonAssetId == createPlan->skeletonAssetId.value,
+        "Skeletal glTF import planner did not deterministically plan a new Skeleton asset");
+    Require(kb::scene::SkeletonAssetIO::Save(
+                plannerRoot / "Assets" / "Characters" / "Shared.kbskeleton", imported->skeleton) &&
+            plannerScene.Assets().Discover() == 1U,
+        "Skeletal glTF import planner could not register a compatible Skeleton asset");
+    const auto reusePlan = kb::scene::SkeletalMeshGltfImportPlanner::Plan(
+        plannerScene.Assets().Manager(), importRoot / "Hero.gltf", "/Game/Characters", {}, &importError);
+    Require(reusePlan.has_value() && reusePlan->reusesSkeleton &&
+            reusePlan->skeletonVirtualPath == "/Game/Characters/Shared.kbskeleton" &&
+            reusePlan->imported.mesh.skeletonAssetId == reusePlan->skeletonAssetId.value,
+        "Skeletal glTF import planner did not reuse a compatible Skeleton asset");
     const auto extendedImportRoot = root / "GltfExtendedImport";
     WriteExtendedSkeletalGltfFixture(extendedImportRoot);
     kb::scene::SkeletalMeshGltfImportOptions extendedOptions{};
