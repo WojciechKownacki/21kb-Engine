@@ -2,7 +2,10 @@
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/scene/SkeletonBindingComponent.hpp"
 #include "engine/scene/SkeletonAsset.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletalMeshGltfImporter.hpp"
@@ -295,6 +298,27 @@ void RunSkeletalMeshAssetTests() {
     Require(skeletonMetadata != nullptr,
         "SkeletalMeshAsset Skeleton registry classification failed");
     const kb::assets::AssetId skeletonId = skeletonMetadata->id;
+    const kb::scene::SceneObject bindingObject = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{ .name = "Skeletal binding" });
+    const kb::scene::SkeletonBindingComponent binding{
+        .skeletonAssetId = skeletonId.value,
+        .skeletonCompatibilitySignature = kb::scene::SkeletonCompatibilitySignature(skeleton),
+    };
+    Require(kb::scene::IsSkeletonBindingComponentValid(binding),
+        "Skeleton binding requires an authoritative skeleton asset and compatibility signature");
+    Require(scene.Components().SkeletonBindings().Set(bindingObject.Entity(), binding),
+        "Skeleton binding component rejected valid authoritative configuration");
+    const auto* storedBinding = scene.Components().SkeletonBindings().TryGet(bindingObject.Entity());
+    Require(storedBinding != nullptr && storedBinding->skeletonAssetId == binding.skeletonAssetId &&
+            storedBinding->skeletonCompatibilitySignature == binding.skeletonCompatibilitySignature,
+        "Skeleton binding component did not preserve its authoritative configuration");
+    Require(!scene.Components().SkeletonBindings().Set(bindingObject.Entity(), {}),
+        "Skeleton binding accepted an incomplete authoritative configuration");
+    Require(scene.Components().SkeletonBindings().TryGet(bindingObject.Entity())->skeletonAssetId == binding.skeletonAssetId,
+        "Skeleton binding mutation changed the last valid authoritative configuration");
+    scene.Components().SkeletonBindings().Remove(bindingObject.Entity());
+    Require(!scene.Components().SkeletonBindings().Has(bindingObject.Entity()),
+        "Skeleton binding component was not removed from its live entity");
     mesh.skeletonAssetId = skeletonId.value;
     Require(kb::scene::SkeletalMeshAssetIO::Save(path, mesh),
         "SkeletalMeshAsset could not store the canonical Skeleton id");
