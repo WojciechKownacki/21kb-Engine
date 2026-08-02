@@ -118,6 +118,7 @@ scenario-local aliases.
 | `assert_skeleton_asset` | `asset` alias or virtual path, expected unsigned `bone_count`; force-loads the production Skeleton asset and verifies its canonical compatibility signature |
 | `assert_skeletal_mesh_asset` | `asset` alias or virtual path and expected unsigned `lod_count`; force-loads the canonical SkeletalMesh asset |
 | `assert_skeletal_gltf_import` | project-relative glTF `path`, `skeleton_id`, expected `bone_count`, `vertex_count`; optional `clip_count` and `morph_count`; executes the production skeletal importer, including its default glTF-to-engine coordinate conversion |
+| `assert_skeletal_gltf_import_plan` | project-relative glTF `path`, destination virtual `folder`, expected boolean `reuse`; verifies deterministic skeletal import planning without publishing files |
 | `assert_skeletal_animation_clip` | `asset` alias or virtual path, `skeleton_id`, `skeleton_signature`, `bone_count`, `morph_count`, `curve_count`, `root_motion_bone`; force-loads the production skeletal AnimationClip and verifies stable bindings and root-motion contract |
 | `select_asset` | `asset` alias or virtual path; selects the real asset in the production Asset Browser |
 | `create_asset` | `id`, `type`, `folder`; types: `lua_script`, `input_action`, `input_axis`, `input_context`, `material`, `material_function`, `material_graph`, `material_type` |
