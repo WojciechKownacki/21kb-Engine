@@ -7,6 +7,7 @@
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletalMeshGltfImporter.hpp"
 #include "engine/scene/SkeletalMeshGltfImportPlanner.hpp"
+#include "engine/scene/SkeletalMeshGltfImportPublisher.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 
 #include <array>
@@ -161,6 +162,20 @@ void RunSkeletalMeshAssetTests() {
             reusePlan->skeletonVirtualPath == "/Game/Characters/Shared.kbskeleton" &&
             reusePlan->imported.mesh.skeletonAssetId == reusePlan->skeletonAssetId.value,
         "Skeletal glTF import planner did not reuse a compatible Skeleton asset");
+    const auto published = kb::scene::SkeletalMeshGltfImportPublisher::Publish(
+        plannerScene.Assets().Manager(), *reusePlan, &importError);
+    Require(published.has_value() && !published->createdSkeleton &&
+            published->skeletonAssetId == reusePlan->skeletonAssetId && published->meshAssetId.IsValid(),
+        "Skeletal glTF import publisher did not atomically publish a compatible Skeleton reuse plan");
+    const auto publishedMeshPath = plannerRoot / "Assets" / "Characters" / "Hero.kbskeletalmesh";
+    const std::string publishedMeshBytes = ReadTextFile(publishedMeshPath);
+    Require(!publishedMeshBytes.empty() &&
+            kb::scene::SkeletalMeshAssetIO::Load(publishedMeshPath)->skeletonAssetId == reusePlan->skeletonAssetId.value,
+        "Skeletal glTF import publisher did not preserve the planned Skeleton reference");
+    Require(!kb::scene::SkeletalMeshGltfImportPlanner::Plan(
+                plannerScene.Assets().Manager(), plannerRoot / "Missing.gltf", "/Game/Characters", {}, &importError).has_value() &&
+            ReadTextFile(publishedMeshPath) == publishedMeshBytes,
+        "A failed skeletal glTF reimport modified the last valid mesh asset");
     const auto extendedImportRoot = root / "GltfExtendedImport";
     WriteExtendedSkeletalGltfFixture(extendedImportRoot);
     kb::scene::SkeletalMeshGltfImportOptions extendedOptions{};

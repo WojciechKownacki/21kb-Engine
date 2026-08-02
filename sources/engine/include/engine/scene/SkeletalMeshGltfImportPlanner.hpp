@@ -17,6 +17,7 @@ struct SkeletalMeshGltfImportPlan {
     SkeletalMeshGltfImportResult imported;
     kb::assets::AssetId skeletonAssetId{};
     std::filesystem::path skeletonVirtualPath;
+    std::filesystem::path meshVirtualPath;
     bool reusesSkeleton = false;
 };
 
