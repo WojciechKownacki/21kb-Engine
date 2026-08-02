@@ -30,6 +30,7 @@ struct EditorTerrainToolState {
     kb::terrain_editor::TerrainHeightmapImportSettings heightmapImport{};
     bool editingEnabled = false;
     bool strokeActive = false;
+    float heldSculptElapsedSeconds = 0.0F;
     float lastStampX = 0.0F;
     float lastStampZ = 0.0F;
     EditorTerrainToolMode mode = EditorTerrainToolMode::Sculpt;

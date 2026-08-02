@@ -12,6 +12,10 @@ public:
 
     [[nodiscard]] static SceneViewportToolbarRects Resolve(const RECT& content) noexcept;
     [[nodiscard]] static SceneViewportToolbarRects Resolve(const RECT& content, const EditorViewportPreviewState& state) noexcept;
+    [[nodiscard]] static SceneViewportToolbarRects Resolve(
+        const RECT& content,
+        const EditorViewportPreviewState& state,
+        bool terrainToolsVisible) noexcept;
     [[nodiscard]] static TerrainViewportToolbarRects ResolveTerrainTools(const RECT& content) noexcept;
 };
 

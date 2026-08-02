@@ -2406,10 +2406,10 @@ void DrawTerrainMaterialLayers(
     const EditorTheme& theme,
     const InspectorPanelState& inspector,
     const EditorSceneContext& sceneContext,
-    const std::optional<kb::assets::TerrainAsset>& terrain,
+    const kb::assets::TerrainAsset* terrain,
     std::size_t selectedLayer) {
-    const std::size_t layerCount = terrain.has_value() ? terrain->materialLayers.size() : 0U;
-    if (terrain.has_value() && layerCount > 0U) {
+    const std::size_t layerCount = terrain != nullptr ? terrain->materialLayers.size() : 0U;
+    if (terrain != nullptr && layerCount > 0U) {
         for (std::size_t index = 0U; index < layerCount; ++index) {
             DrawTerrainLayerCard(
                 dc, TerrainLayerCardRect(body, index), theme, inspector, sceneContext, index,
@@ -2424,13 +2424,13 @@ void DrawTerrainMaterialLayers(
             ScopedFont font(11, FW_SEMIBOLD);
             const ScopedGdiObject selectedFont(dc, font.handle);
             Text(dc, Rect(empty.left + 46, empty.top + 9, empty.right - 10, empty.top + 31),
-                terrain.has_value() ? "No Terrain Layers" : "Terrain asset unavailable", Color(theme.textPrimary));
+                terrain != nullptr ? "No Terrain Layers" : "Terrain asset unavailable", Color(theme.textPrimary));
         }
         {
             ScopedFont font(9, FW_NORMAL);
             const ScopedGdiObject selectedFont(dc, font.handle);
             Text(dc, Rect(empty.left + 46, empty.top + 29, empty.right - 10, empty.bottom - 7),
-                terrain.has_value() ? "Create or add a Material to start painting." : "Repair the Terrain asset reference to edit layers.",
+                terrain != nullptr ? "Create or add a Material to start painting." : "Repair the Terrain asset reference to edit layers.",
                 Color(theme.textSecondary));
         }
     }
@@ -2465,7 +2465,7 @@ void DrawTerrainMaterialLayers(
     }
     const RECT menu = TerrainLayerMenuRect(body, layerCount);
     DrawFrame(dc, menu, BlendColor(Color(theme.strip), Color(theme.panel), 40), Color(theme.borderPanel));
-    const bool canAdd = terrain.has_value() && layerCount < kb::assets::TerrainAsset::MaximumMaterialLayers;
+    const bool canAdd = terrain != nullptr && layerCount < kb::assets::TerrainAsset::MaximumMaterialLayers;
     DrawTerrainLayerMenuAction(dc, TerrainLayerMenuItemRect(menu, 0), theme, inspector,
         InspectorPropertyId::TerrainMaterialLayerCreate, HeroIconKind::Plus,
         "Create Layer", "Create a new Material and assign it", canAdd);
@@ -2495,11 +2495,11 @@ void PaintTerrainSection(
     const InspectorPanelState& inspector,
     const EditorSceneContext& sceneContext,
     const kb::scene::MeshRendererComponent& renderer,
-    const std::optional<kb::assets::TerrainAsset>& terrain) {
+    const kb::assets::TerrainAsset* terrain) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Terrain, HeroIconKind::Cube, "Terrain Editor", true);
     const EditorTerrainToolState& tool = EditorTerrainService::ToolState();
     const kb::terrain_editor::TerrainBrushSettings& brush = tool.brush;
-    const std::size_t layerCount = terrain.has_value() ? terrain->materialLayers.size() : 0U;
+    const std::size_t layerCount = terrain != nullptr ? terrain->materialLayers.size() : 0U;
     section.Group("TERRAIN LAYERS");
     const RECT layerBody = section.Reserve(TerrainMaterialLayersBodyHeight(layerCount));
     if (RectWidth(layerBody) > 0 && RectHeight(layerBody) > 0) {
@@ -2529,7 +2529,7 @@ void PaintTerrainSection(
         "Advanced Terrain Settings",
         InspectorPropertyId::TerrainAdvanced,
         inspector.IsDisclosureExpanded(InspectorDisclosureId::TerrainAdvanced));
-    if (inspector.IsDisclosureExpanded(InspectorDisclosureId::TerrainAdvanced) && terrain.has_value()) {
+    if (inspector.IsDisclosureExpanded(InspectorDisclosureId::TerrainAdvanced) && terrain != nullptr) {
         section.Pair(
             "Resolution",
             "X", std::to_string(terrain->width), InspectorPropertyId::TerrainResolutionX,
@@ -2841,10 +2841,10 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (const kb::scene::MeshRendererComponent* meshRenderer = scene.Components().MeshRenderers().TryGet(selected); meshRenderer != nullptr) {
         const bool isTerrain = EditorTerrainService::IsTerrainEntity(scene, selected);
         if (!isTerrain || sceneContext.IsProjectPluginEnabled("Editor.Terrain")) {
-            const std::optional<kb::assets::TerrainAsset> terrain = isTerrain
-                ? EditorTerrainService::Load(scene, selected)
-                : std::nullopt;
-            const std::size_t terrainLayerCount = terrain.has_value() ? terrain->materialLayers.size() : 0U;
+            const kb::assets::TerrainAsset* terrain = isTerrain
+                ? sceneContext.TerrainForEditing(selected)
+                : nullptr;
+            const std::size_t terrainLayerCount = terrain != nullptr ? terrain->materialLayers.size() : 0U;
             const int h = isTerrain ? TerrainSectionHeight(inspector, terrainLayerCount) : MeshRendererSectionHeight(sceneContext, *meshRenderer);
             if (sectionVisible(y, h)) {
                 if (isTerrain) PaintTerrainSection(dc, content, y, theme, inspector, sceneContext, *meshRenderer, terrain);
@@ -3080,11 +3080,11 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(selected); renderer != nullptr) {
         const bool terrain = EditorTerrainService::IsTerrainEntity(scene, selected);
         if (!terrain || sceneContext.IsProjectPluginEnabled("Editor.Terrain")) {
-            const std::optional<kb::assets::TerrainAsset> terrainAsset = terrain
-                ? EditorTerrainService::Load(scene, selected)
-                : std::nullopt;
+            const kb::assets::TerrainAsset* terrainAsset = terrain
+                ? sceneContext.TerrainForEditing(selected)
+                : nullptr;
             height += (terrain
-                ? TerrainSectionHeight(inspector, terrainAsset.has_value() ? terrainAsset->materialLayers.size() : 0U)
+                ? TerrainSectionHeight(inspector, terrainAsset != nullptr ? terrainAsset->materialLayers.size() : 0U)
                 : MeshRendererSectionHeight(sceneContext, *renderer)) + kSectionGap;
         }
     }
@@ -3680,12 +3680,12 @@ void AdvanceGroup(int& y) noexcept {
     if (state.IsCollapsed(InspectorSectionId::Terrain)) return {};
 
     AdvanceGroup(y); // Terrain Layers.
-    const std::optional<kb::assets::TerrainAsset> terrain =
-        EditorTerrainService::Load(sceneContext.Scene(), sceneContext.SelectedEntity());
-    const std::size_t layerCount = terrain.has_value() ? terrain->materialLayers.size() : 0U;
+    const kb::assets::TerrainAsset* terrain =
+        sceneContext.TerrainForEditing(sceneContext.SelectedEntity());
+    const std::size_t layerCount = terrain != nullptr ? terrain->materialLayers.size() : 0U;
     const int layerBodyHeight = TerrainMaterialLayersBodyHeight(layerCount);
     const RECT layerBody = Rect(content.left, y, content.right, y + layerBodyHeight);
-    if (terrain.has_value()) {
+    if (terrain != nullptr) {
         for (std::size_t index = 0U; index < layerCount; ++index) {
             const RECT card = TerrainLayerCardRect(layerBody, index);
             const RECT picker = TerrainLayerPickerRect(card);
@@ -3713,7 +3713,7 @@ void AdvanceGroup(int& y) noexcept {
     }
     if (terrain_material_layer_menu::Open()) {
         const RECT menu = TerrainLayerMenuRect(layerBody, layerCount);
-        const bool canAdd = terrain.has_value() && layerCount < kb::assets::TerrainAsset::MaximumMaterialLayers;
+        const bool canAdd = terrain != nullptr && layerCount < kb::assets::TerrainAsset::MaximumMaterialLayers;
         if (canAdd && Contains(TerrainLayerMenuItemRect(menu, 0), x, yPoint)) {
             return MakeHit(InspectorHitKind::Row, InspectorSectionId::Terrain, InspectorPropertyId::TerrainMaterialLayerCreate, TerrainLayerMenuItemRect(menu, 0));
         }

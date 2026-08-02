@@ -15,14 +15,31 @@
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "scene/EditorTerrainService.hpp"
 
 #include <optional>
+#include <string>
 
 namespace kb::editor {
 namespace {
 
 [[nodiscard]] bool ModifierDown(int virtualKey) noexcept {
     return (GetKeyState(virtualKey) & 0x8000) != 0;
+}
+
+void FinishTerrainStroke(EditorWindowMessageContext& context) {
+    EditorTerrainToolState& tool = EditorTerrainService::ToolState();
+    if (!tool.strokeActive) {
+        return;
+    }
+    tool.strokeActive = false;
+    tool.heldSculptElapsedSeconds = 0.0F;
+    std::string error;
+    if (!context.sceneContext.CommitTerrainBrushStroke(&error)) {
+        context.sceneContext.Console().Warning(
+            "Terrain",
+            error.empty() ? "Terrain stroke could not be committed." : error);
+    }
 }
 
 [[nodiscard]] bool HandleTransformToolShortcut(EditorSceneContext& sceneContext, WPARAM key) noexcept {
@@ -444,6 +461,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
     case WM_EXITSIZEMOVE:
         return EditorWindowResizeHandler::HandlePlacementChanged(messageWindow, context_.sceneViewport);
     case WM_CANCELMODE:
+        FinishTerrainStroke(context_);
         static_cast<void>(context_.sceneContext.CancelMaterialGraphInteractions());
         EditorSceneViewportCameraController{
             context_.mainWindow,
@@ -465,6 +483,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         HWND newCapture = reinterpret_cast<HWND>(lparam);
         context_.dockController.HandleCaptureChanged(newCapture);
         if (newCapture != messageWindow) {
+            FinishTerrainStroke(context_);
             static_cast<void>(context_.sceneContext.CancelMaterialGraphInteractions());
             EditorSceneViewportCameraController{
                 context_.mainWindow,

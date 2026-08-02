@@ -989,9 +989,8 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             hit.property == InspectorPropertyId::TerrainMaterialLayerCreate) {
             terrain_material_layer_menu::Close();
             const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
-            const std::optional<kb::assets::TerrainAsset> terrain =
-                EditorTerrainService::Load(sceneContext_.Scene(), entity);
-            if (!terrain.has_value()) {
+            const kb::assets::TerrainAsset* terrain = sceneContext_.TerrainForEditing(entity);
+            if (terrain == nullptr) {
                 sceneContext_.Console().Warning("Terrain", "Terrain asset is unavailable.");
             } else if (terrain->materialLayers.size() >= kb::assets::TerrainAsset::MaximumMaterialLayers) {
                 sceneContext_.Console().Warning("Terrain", "Terrain supports at most four material layers.");

@@ -3,6 +3,7 @@
 
 #include "app/EditorPlayModeState.hpp"
 #include "app/scene_viewport/EditorSceneViewportMeshPicker.hpp"
+#include "app/scene_viewport/EditorTerrainStrokeTickPolicy.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/Scene.hpp"
@@ -12,6 +13,7 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
 #include "rendering/EditorTexturePreviewService.hpp"
+#include "rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLabelFormat.hpp"
 #include "scene/EditorViewportCameraState.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
@@ -84,6 +86,45 @@ void RunRenderProfileCycleTest() {
 
     state.CycleRenderProfile();
     kb::editor::tests::Require(state.RenderProfile() == kb::editor::EditorViewportRenderProfile::Interactive, "Viewport render profile cycle did not wrap to Interactive");
+}
+
+void RunTerrainToolbarAndStrokeTickPolicyTest() {
+    const RECT content{ 10, 20, 1010, 720 };
+    kb::editor::EditorViewportPreviewState viewport;
+    const kb::editor::SceneViewportToolbarRects baseLayout =
+        kb::editor::SceneViewportToolbarLayout::Resolve(content, viewport, false);
+    const kb::editor::SceneViewportToolbarRects terrainLayout =
+        kb::editor::SceneViewportToolbarLayout::Resolve(content, viewport, true);
+    const kb::editor::TerrainViewportToolbarRects terrainTools =
+        kb::editor::SceneViewportToolbarLayout::ResolveTerrainTools(content);
+
+    kb::editor::tests::Require(
+        baseLayout.renderArea.top == baseLayout.toolbar.bottom,
+        "Scene render area must start below the fixed scene toolbar");
+    kb::editor::tests::Require(
+        terrainLayout.renderArea.top == terrainTools.panel.bottom + 8,
+        "Terrain render area must reserve the fixed terrain toolbar row");
+    kb::editor::tests::Require(
+        terrainLayout.renderArea.top > baseLayout.renderArea.top,
+        "Visible terrain tools must not overlap the bgfx viewport child window");
+
+    float elapsed = 0.0F;
+    kb::editor::tests::Require(
+        !kb::editor::EditorTerrainStrokeTickPolicy::Advance(
+            kb::editor::EditorTerrainStrokeTickPolicy::TickIntervalSeconds * 0.5F,
+            elapsed),
+        "Held sculpt must wait for its fixed update interval");
+    kb::editor::tests::Require(
+        kb::editor::EditorTerrainStrokeTickPolicy::Advance(
+            kb::editor::EditorTerrainStrokeTickPolicy::TickIntervalSeconds * 0.5F,
+            elapsed),
+        "Held sculpt must tick without requiring mouse movement");
+    kb::editor::tests::Require(
+        kb::editor::EditorTerrainStrokeTickPolicy::Advance(1.0F, elapsed),
+        "A delayed frame must still produce a held sculpt tick");
+    kb::editor::tests::Require(
+        elapsed < kb::editor::EditorTerrainStrokeTickPolicy::TickIntervalSeconds,
+        "Held sculpt must discard an unbounded stalled-frame backlog");
 }
 
 void RunGridAndSnapStateTest() {
@@ -550,6 +591,7 @@ void RunTexturePreviewLockBitsDecodeTest() {
 namespace kb::editor::tests {
 
 void RunEditorViewportPreviewTests() {
+    RunTerrainToolbarAndStrokeTickPolicyTest();
     RunTexturePreviewLockBitsDecodeTest();
     RunToolbarHudLabelFormatTest();
     RunProfileCycleAndResolutionTest();
