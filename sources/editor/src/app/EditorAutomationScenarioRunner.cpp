@@ -42,6 +42,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SkeletonAsset.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
@@ -2193,6 +2194,19 @@ ReadScriptValue(
         const std::uint64_t signature = kb::scene::SkeletonCompatibilitySignature(*skeleton);
         const bool matched = skeleton->bones.size() == *boneCount && signature != 0U;
         return { matched, matched ? std::to_string(signature) : "skeleton data mismatch" };
+    }
+
+    if (*operation == "assert_skeletal_mesh_asset") {
+        const auto asset = StringMember(step, "asset", error);
+        const auto lodCount = UInt32Member(step, "lod_count", error);
+        if (!asset || !lodCount) return { false, error };
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        kb::assets::AssetManager& manager = state.context.Scene().Assets().Manager();
+        const auto* metadata = manager.Registry().Find(id);
+        if (metadata == nullptr || metadata->type != kb::scene::kSkeletalMeshAssetType) return { false, "asset is not a SkeletalMesh" };
+        const auto mesh = manager.Load<kb::scene::SkeletalMeshAsset>(id);
+        const bool matched = mesh.IsLoaded() && mesh->lods.size() == *lodCount && mesh->skeletonAssetId != 0U;
+        return { matched, matched ? "canonical skeletal mesh loaded" : manager.LastError() };
     }
 
     if (*operation == "select_asset") {
