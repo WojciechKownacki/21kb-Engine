@@ -45,6 +45,7 @@
 #include "engine/scene/SkeletonAsset.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
+#include "engine/scene/SkeletalMeshGltfImporter.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
@@ -2221,6 +2222,25 @@ ReadScriptValue(
         const auto mesh = manager.Load<kb::scene::SkeletalMeshAsset>(id);
         const bool matched = mesh.IsLoaded() && mesh->lods.size() == *lodCount && mesh->skeletonAssetId != 0U;
         return { matched, matched ? "canonical skeletal mesh loaded" : manager.LastError() };
+    }
+
+    if (*operation == "assert_skeletal_gltf_import") {
+        const auto path = StringMember(step, "path", error);
+        const auto skeletonId = UInt32Member(step, "skeleton_id", error);
+        const auto boneCount = UInt32Member(step, "bone_count", error);
+        const auto vertexCount = UInt32Member(step, "vertex_count", error);
+        if (!path || !skeletonId || !boneCount || !vertexCount) return { false, error };
+        const auto source = ResolveProjectPath(*path, error);
+        if (!source) return { false, error };
+        std::string importError;
+        const auto imported = kb::scene::SkeletalMeshGltfImporter::Import(
+            *source, *skeletonId, &importError);
+        const bool matched = imported.has_value() &&
+            imported->skeleton.bones.size() == *boneCount &&
+            imported->mesh.skeletonAssetId == *skeletonId &&
+            imported->mesh.lods.size() == 1U &&
+            imported->mesh.lods.front().vertices.size() == *vertexCount;
+        return { matched, matched ? "canonical glTF skeletal import" : importError };
     }
 
     if (*operation == "assert_skeletal_animation_clip") {

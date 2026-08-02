@@ -4,6 +4,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SkeletonAsset.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
+#include "engine/scene/SkeletalMeshGltfImporter.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 
 #include <filesystem>
@@ -20,6 +21,26 @@ void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
     std::filesystem::create_directories(path.parent_path());
     std::ofstream output{ path, std::ios::binary | std::ios::trunc };
     output.write(text.data(), static_cast<std::streamsize>(text.size()));
+}
+
+void WriteSkeletalGltfFixture(const std::filesystem::path& folder) {
+    std::filesystem::create_directories(folder);
+    std::ofstream binary{ folder / "Hero.bin", std::ios::binary | std::ios::trunc };
+    const std::array<float, 9U> positions{ 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F };
+    const std::array<std::uint16_t, 12U> joints{ 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 1U, 0U, 0U, 0U };
+    const std::array<float, 12U> weights{ 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F };
+    const std::array<std::uint16_t, 3U> indices{ 0U, 1U, 2U };
+    const std::array<float, 32U> inverseBinds{
+        1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F,
+        1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, -1.0F, 0.0F, 1.0F,
+    };
+    binary.write(reinterpret_cast<const char*>(positions.data()), sizeof(positions));
+    binary.write(reinterpret_cast<const char*>(joints.data()), sizeof(joints));
+    binary.write(reinterpret_cast<const char*>(weights.data()), sizeof(weights));
+    binary.write(reinterpret_cast<const char*>(indices.data()), sizeof(indices));
+    binary.write(reinterpret_cast<const char*>(inverseBinds.data()), sizeof(inverseBinds));
+    binary.close();
+    WriteTextFile(folder / "Hero.gltf", R"({"asset":{"version":"2.0"},"buffers":[{"uri":"Hero.bin","byteLength":242}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24},{"buffer":0,"byteOffset":60,"byteLength":48},{"buffer":0,"byteOffset":108,"byteLength":6},{"buffer":0,"byteOffset":114,"byteLength":128}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"MAT4"}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3}]}],"nodes":[{"name":"Root","children":[1]},{"name":"Spine","translation":[0,1,0]},{"mesh":0,"skin":0}],"skins":[{"joints":[0,1],"inverseBindMatrices":4}]})");
 }
 
 } // namespace
@@ -69,6 +90,20 @@ void RunSkeletalMeshAssetTests() {
         "SkeletalMeshAsset accepted an unsupported schema version without a diagnostic");
     kb::scene::SkeletalMeshAsset invalid=mesh; invalid.lods[0].vertices[0].jointWeights={0,0,0,0};
     Require(!kb::scene::ValidateSkeletalMeshAsset(invalid).valid,"SkeletalMeshAsset accepted zero skin weights");
+    const auto importRoot = root / "GltfImport";
+    WriteSkeletalGltfFixture(importRoot);
+    std::string importError;
+    const auto imported = kb::scene::SkeletalMeshGltfImporter::Import(
+        importRoot / "Hero.gltf", 777U, &importError);
+    Require(imported.has_value() && imported->skeleton.bones.size() == 2U &&
+            imported->skeleton.bones[1].parentIndex == 0 &&
+            imported->mesh.skeletonAssetId == 777U &&
+            imported->mesh.lods.size() == 1U &&
+            imported->mesh.lods[0].vertices.size() == 3U &&
+            imported->mesh.lods[0].vertices[1].jointIndices[0] == 1U &&
+            imported->mesh.lods[0].vertices[1].jointWeights[0] == 1.0F &&
+            kb::scene::ValidateSkeletalMeshAsset(imported->mesh).valid,
+        "Skeletal glTF import did not preserve hierarchy, inverse binds, JOINTS_0, and WEIGHTS_0");
     kb::scene::Scene scene; Require(scene.Assets().MountProject(root),"SkeletalMeshAsset mount failed"); Require(scene.Assets().Discover()==2U,"SkeletalMeshAsset discovery failed");
     const auto* skeletonMetadata = scene.Assets().Manager().Registry().FindByPath(
         "/Game/Characters/Hero.kbskeleton");
