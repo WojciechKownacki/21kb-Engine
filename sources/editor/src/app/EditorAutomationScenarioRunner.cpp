@@ -47,6 +47,7 @@
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/SkeletalMeshGltfImporter.hpp"
 #include "engine/scene/SkeletalMeshGltfImportPlanner.hpp"
+#include "engine/scene/SkeletalMeshGltfImportPublisher.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
@@ -2265,6 +2266,27 @@ ReadScriptValue(
             plan->skeletonAssetId.IsValid() &&
             plan->imported.mesh.skeletonAssetId == plan->skeletonAssetId.value;
         return { matched, matched ? "canonical glTF skeletal import plan" : importError };
+    }
+
+    if (*operation == "assert_skeletal_gltf_import_publish") {
+        const auto path = StringMember(step, "path", error);
+        const auto folder = StringMember(step, "folder", error);
+        const auto createdSkeleton = BoolMember(step, "created_skeleton", error);
+        if (!path || !folder || !createdSkeleton) return { false, error };
+        const auto source = ResolveProjectPath(*path, error);
+        if (!source) return { false, error };
+        static_cast<void>(state.context.Scene().Assets().Discover());
+        std::string importError;
+        const auto plan = kb::scene::SkeletalMeshGltfImportPlanner::Plan(
+            state.context.Scene().Assets().Manager(), *source, *folder, {}, &importError);
+        if (!plan) return { false, importError };
+        const auto published = kb::scene::SkeletalMeshGltfImportPublisher::Publish(
+            state.context.Scene().Assets().Manager(), *plan, &importError);
+        const bool matched = published.has_value() &&
+            published->createdSkeleton == *createdSkeleton &&
+            published->meshAssetId.IsValid() &&
+            published->skeletonAssetId == plan->skeletonAssetId;
+        return { matched, matched ? "atomic glTF skeletal import published" : importError };
     }
 
     if (*operation == "assert_skeletal_animation_clip") {
