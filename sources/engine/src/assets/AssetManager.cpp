@@ -628,12 +628,22 @@ AssetCompatibilityReport AssetManager::ValidateCompatibility(AssetId id) const {
             continue;
         }
 
-        if (LoaderForType(metadata->type) == nullptr) {
+        IAssetLoader* loader = LoaderForType(metadata->type);
+        if (loader == nullptr) {
             report.diagnostics.push_back(AssetCompatibilityDiagnostic{
                 .issue = AssetCompatibilityIssue::IncompatibleType,
                 .asset = current,
                 .dependency = {},
                 .message = "Asset " + DescribeAsset(*metadata) + " has type \"" + metadata->type + "\" which has no registered loader in this runtime",
+            });
+        } else if (const std::optional<std::string> diagnostic =
+                       loader->ValidateDependencies(*metadata, registry_);
+                   diagnostic.has_value()) {
+            report.diagnostics.push_back(AssetCompatibilityDiagnostic{
+                .issue = AssetCompatibilityIssue::IncompatibleDependency,
+                .asset = current,
+                .dependency = {},
+                .message = "Asset " + DescribeAsset(*metadata) + " " + *diagnostic,
             });
         }
 

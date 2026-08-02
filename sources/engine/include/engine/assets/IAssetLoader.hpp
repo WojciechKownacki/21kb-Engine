@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <typeindex>
@@ -39,6 +40,13 @@ public:
         static_cast<void>(metadata);
         static_cast<void>(registry);
         return {};
+    }
+    [[nodiscard]] virtual std::optional<std::string> ValidateDependencies(
+        const AssetMetadata& metadata,
+        const AssetRegistry& registry) const {
+        static_cast<void>(metadata);
+        static_cast<void>(registry);
+        return std::nullopt;
     }
 };
 
