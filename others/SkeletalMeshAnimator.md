@@ -740,7 +740,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     przełączanie LOD bez niezgodności palety.
 43. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować morph weights/curves i połączyć je z klipem,
     AnimatorInstance oraz rendererem.
-44. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować socket/attachment queries wyprowadzane z component-space
+44. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować socket/attachment queries wyprowadzane z component-space
     pose bez tworzenia stałej encji dla każdej kości.
 45. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać testy animated culling, LOD switching, morph deformation i socket
     transforms.

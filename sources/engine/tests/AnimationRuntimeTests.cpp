@@ -1238,6 +1238,13 @@ end
                 } },
             },
         };
+        skeleton.sockets = {
+            {
+                .name = "Weapon",
+                .boneId = 900U,
+                .localTransform = { .position = { 0.0F, 0.5F, 0.0F } },
+            },
+        };
         const std::uint64_t skeletonSignature =
             kb::scene::SkeletonCompatibilitySignature(skeleton);
         const std::filesystem::path skeletonPath = skeletalRoot / "Assets" /
@@ -1444,6 +1451,11 @@ end
         static_cast<void>(scene.Runtime().Update(0.25F));
         const auto sampledSkeleton =
             scene.Animators().InstanceSkeleton(owner.Entity());
+        const auto attachment = scene.Animators().AttachmentTransform(
+            owner.Entity(), 900U,
+            kb::scene::LocalTransform{ .position = { 0.0F, 0.5F, 0.0F } });
+        const auto socket = scene.Animators().SocketTransform(
+            owner.Entity(), "Weapon");
         const kb::scene::TransformComponent& ownerTransform =
             scene.Transforms().Get(owner.Entity());
         const kb::math::Vec4 sampledSkinOrigin = sampledSkeleton.has_value() &&
@@ -1459,6 +1471,15 @@ end
                 sampledSkeleton->morphWeights.targetNames[0] == "Smile" &&
                 NearlyEqual(sampledSkeleton->morphWeights.currentWeights[0], 0.25F) &&
                 NearlyEqual(sampledSkeleton->morphWeights.previousWeights[0], 0.0F) &&
+                attachment.has_value() && socket.has_value() &&
+                NearlyEqual(attachment->componentSpace.position.x, 1.0F) &&
+                NearlyEqual(attachment->componentSpace.position.y, 1.5F) &&
+                NearlyEqual(attachment->componentSpace.position.z, 0.25F) &&
+                NearlyEqual(socket->componentSpace.position.x, attachment->componentSpace.position.x) &&
+                NearlyEqual(socket->componentSpace.position.y, attachment->componentSpace.position.y) &&
+                NearlyEqual(socket->componentSpace.position.z, attachment->componentSpace.position.z) &&
+                NearlyEqual(socket->worldSpace.position.x, attachment->componentSpace.position.x) &&
+                !scene.Animators().SocketTransform(owner.Entity(), "Missing").has_value() &&
                 NearlyEqual(
                     sampledSkeleton->previousLocalPose.positions[0].x,
                     3.0F) &&

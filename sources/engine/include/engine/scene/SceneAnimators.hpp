@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -40,6 +41,11 @@ struct AnimatorInstanceSkeletonView {
     std::uint64_t hierarchySolveCount = 0U;
 };
 
+struct AnimatorAttachmentTransform {
+    LocalTransform componentSpace;
+    WorldTransform worldSpace;
+};
+
 class SceneAnimatorQueries {
 public:
     explicit SceneAnimatorQueries(const Scene& scene) noexcept;
@@ -52,6 +58,11 @@ public:
     [[nodiscard]] std::uint64_t RuntimeBindingGeneration(SceneEntity entity) const noexcept;
     [[nodiscard]] std::optional<AnimatorInstanceSkeletonView> InstanceSkeleton(
         SceneEntity entity) const noexcept;
+    [[nodiscard]] std::optional<AnimatorAttachmentTransform> AttachmentTransform(
+        SceneEntity entity, SkeletonBoneId boneId,
+        const LocalTransform& localOffset = {}) const noexcept;
+    [[nodiscard]] std::optional<AnimatorAttachmentTransform> SocketTransform(
+        SceneEntity entity, std::string_view socketName) const noexcept;
     [[nodiscard]] std::optional<AnimatorStateInfo> State(SceneEntity entity, std::string_view layer) const;
 
 private:
@@ -72,6 +83,11 @@ public:
     [[nodiscard]] std::uint64_t RuntimeBindingGeneration(SceneEntity entity) const noexcept;
     [[nodiscard]] std::optional<AnimatorInstanceSkeletonView> InstanceSkeleton(
         SceneEntity entity) const noexcept;
+    [[nodiscard]] std::optional<AnimatorAttachmentTransform> AttachmentTransform(
+        SceneEntity entity, SkeletonBoneId boneId,
+        const LocalTransform& localOffset = {}) const noexcept;
+    [[nodiscard]] std::optional<AnimatorAttachmentTransform> SocketTransform(
+        SceneEntity entity, std::string_view socketName) const noexcept;
     [[nodiscard]] bool SetBool(SceneEntity entity, std::string_view name, bool value) noexcept;
     [[nodiscard]] bool SetInt(SceneEntity entity, std::string_view name, std::int32_t value) noexcept;
     [[nodiscard]] bool SetFloat(SceneEntity entity, std::string_view name, float value) noexcept;

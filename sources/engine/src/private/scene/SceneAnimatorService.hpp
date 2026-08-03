@@ -15,6 +15,12 @@ public:
         const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static std::optional<AnimatorInstanceSkeletonView>
         InstanceSkeleton(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static std::optional<AnimatorAttachmentTransform>
+        AttachmentTransform(const Scene& scene, SceneEntity entity,
+            SkeletonBoneId boneId, const LocalTransform& localOffset) noexcept;
+    [[nodiscard]] static std::optional<AnimatorAttachmentTransform>
+        SocketTransform(const Scene& scene, SceneEntity entity,
+            std::string_view socketName) noexcept;
     [[nodiscard]] static bool Play(Scene& scene, SceneEntity entity, std::string_view layer, std::string_view state, float normalizedTime) noexcept;
     [[nodiscard]] static bool CrossFade(Scene& scene, SceneEntity entity, std::string_view layer, std::string_view state, float durationSeconds, float normalizedTime) noexcept;
     [[nodiscard]] static bool SetSpeed(Scene& scene, SceneEntity entity, float speed) noexcept;
