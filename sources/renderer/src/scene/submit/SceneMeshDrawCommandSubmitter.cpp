@@ -247,6 +247,7 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
             .shadowMap = desc.shadowMap,
             .sceneDepthTexture = desc.sceneDepthTexture,
             .sceneColorTexture = desc.sceneColorTexture,
+            .skinningPaletteAllocator = desc.skinningPaletteAllocator,
         });
         const SceneMeshPassProgramResolution resolution = desc.passResources.LastProgramResolution();
         if (command.materialResource != nullptr && command.materialResource->graphProgram.active) {

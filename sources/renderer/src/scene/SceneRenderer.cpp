@@ -98,6 +98,7 @@ bool SceneRenderer::Initialize() {
     if (!graphShaderCacheRoot_.empty()) {
         meshSubmitter_->SetGraphShaderCacheRoot(graphShaderCacheRoot_);
     }
+    meshSubmitter_->SetSkinningPaletteAllocator(&skinningPalettes_);
 
     initialized_ = true;
     return true;
@@ -110,6 +111,7 @@ void SceneRenderer::Shutdown() {
     }
     resourceMap_.Clear();
     resources_.Shutdown();
+    skinningPalettes_.Shutdown();
     initialized_ = false;
 }
 
@@ -306,6 +308,15 @@ void SceneRenderer::SetSceneDepthTexture(bgfx::TextureHandle texture) noexcept {
 
 void SceneRenderer::SetSceneColorTexture(bgfx::TextureHandle texture) noexcept {
     sceneColorTexture_ = texture;
+}
+
+bool SceneRenderer::BeginSkinningFrame(
+    std::uint64_t frame, std::uint64_t completedFrame) noexcept {
+    return initialized_ && skinningPalettes_.BeginFrame(frame, completedFrame);
+}
+
+RenderSkinningPaletteAllocator& SceneRenderer::SkinningPalettes() noexcept {
+    return skinningPalettes_;
 }
 
 void SceneRenderer::TickFrame() noexcept {

@@ -62,7 +62,11 @@ std::optional<MeshPassType> MeshPassForRenderPassKind(RenderPassKind kind) noexc
 }
 
 std::size_t MeshCommandLookupKeyHash::operator()(MeshCommandLookupKey key) const noexcept {
-    const std::uint64_t mixed = key.materialAssetId ^ (key.materialHandleValue + 0x9e3779b97f4a7c15ULL + (key.materialAssetId << 6U) + (key.materialAssetId >> 2U));
+    std::uint64_t mixed = key.materialAssetId ^ (key.materialHandleValue + 0x9e3779b97f4a7c15ULL + (key.materialAssetId << 6U) + (key.materialAssetId >> 2U));
+    mixed ^= key.currentSkinningPalette.frame + (mixed << 6U) + (mixed >> 2U);
+    mixed ^= static_cast<std::uint64_t>(key.currentSkinningPalette.firstMatrix) << 32U;
+    mixed ^= key.previousSkinningPalette.frame + (mixed << 6U) + (mixed >> 2U);
+    mixed ^= static_cast<std::uint64_t>(key.previousSkinningPalette.firstMatrix) << 16U;
     return static_cast<std::size_t>(mixed);
 }
 

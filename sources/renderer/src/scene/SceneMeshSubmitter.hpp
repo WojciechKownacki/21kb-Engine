@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/resources/RenderResourceRegistry.hpp"
+#include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
 #include "kb/render/scene/MeshPipeline.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneGpuDrivenCullingPass.hpp"
@@ -60,6 +61,7 @@ public:
     [[nodiscard]] SceneMeshGraphMaterialDrawStats GraphMaterialDrawStats() const noexcept { return passResources_.GraphMaterialDrawStats(); }
     void EndFrame(std::uint64_t frameIndex) const { passResources_.EndFrame(frameIndex); }
     void SetGraphShaderCacheRoot(std::string root) { passResources_.SetGraphShaderCacheRoot(std::move(root)); }
+    void SetSkinningPaletteAllocator(const RenderSkinningPaletteAllocator* allocator) noexcept { skinningPaletteAllocator_ = allocator; }
 
 private:
     SceneMeshPassResources passResources_;
@@ -69,6 +71,7 @@ private:
     mutable std::vector<SceneRenderVisibilityBlocker> visibilityBlockerScratch_;
     // Derived renderer state only. The authored detail-switch policy remains in ECS.
     mutable const RenderScene* detailSwitchScene_ = nullptr;
+    const RenderSkinningPaletteAllocator* skinningPaletteAllocator_ = nullptr;
 };
 
 } // namespace kb::render

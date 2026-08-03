@@ -262,6 +262,8 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 const MeshCommandLookupKey commandKey{
                     .materialAssetId = materialAssetId,
                     .materialHandleValue = materialHandle.value,
+                    .currentSkinningPalette = instance.currentSkinningPalette,
+                    .previousSkinningPalette = instance.previousSkinningPalette,
                 };
                 const auto commandLookupIt = result.commandLookupScratch.find(commandKey);
                 MeshDrawCommand* command = commandLookupIt == result.commandLookupScratch.end() ? nullptr : &result.commands[commandLookupIt->second];
@@ -316,6 +318,8 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                     }, result.stats);
                     command = &MeshPipelineCommandBuilder::WritableCommand(result, writeCommandCount);
                     SceneCachedDrawCommandMaterializer::ApplyTemplate(cachedCommand, *command);
+                    command->currentSkinningPalette = instance.currentSkinningPalette;
+                    command->previousSkinningPalette = instance.previousSkinningPalette;
                     command->instances.reserve(instanceCount);
                     result.stats.meshPipelineScratchInstanceCapacity += static_cast<std::uint32_t>(command->instances.capacity());
                     result.commandLookupScratch.emplace(commandKey, writeCommandCount);
