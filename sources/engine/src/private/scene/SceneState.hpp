@@ -106,6 +106,12 @@ struct AnimatorRuntimeConstraint {
     SceneEntity constrained{};
     SceneEntity mid{};
     SceneEntity tip{};
+    std::uint32_t constrainedBoneIndex =
+        std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t midBoneIndex =
+        std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t tipBoneIndex =
+        std::numeric_limits<std::uint32_t>::max();
 };
 
 struct AnimatorInstanceSkeleton {

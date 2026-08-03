@@ -162,8 +162,9 @@ enum class AnimatorRigConstraintType : std::uint8_t {
 };
 
 // Constraints are evaluated in authored order after all controller layers.
-// Every driven path may appear only once, making this list the sole rig
-// authority after clip/blend-tree sampling.
+// A controller uses either SceneEntity paths or stable skeleton bone IDs for
+// each constraint. Every driven path/bone may appear only once, making this
+// list the sole rig authority after clip/blend-tree sampling.
 struct AnimatorRigConstraint {
     std::string name;
     AnimatorRigConstraintType type = AnimatorRigConstraintType::TwoBoneIK;
@@ -175,6 +176,9 @@ struct AnimatorRigConstraint {
     std::string target;
     std::string poleTarget;
     float weight = 1.0F;
+    SkeletonBoneId constrainedBoneId = 0U;
+    SkeletonBoneId midBoneId = 0U;
+    SkeletonBoneId tipBoneId = 0U;
 };
 
 struct AnimatorController {
