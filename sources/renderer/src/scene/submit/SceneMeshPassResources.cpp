@@ -911,7 +911,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
             SceneDepthPolicy::HomogeneousDepth() ? 1.0F : 0.0F,
             0.0F, 0.0F, 0.0F,
         };
-        bgfx::setTexture(16U, motionDepthSampler_, desc.sceneDepthTexture,
+        bgfx::setTexture(0U, motionDepthSampler_, desc.sceneDepthTexture,
             BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT |
                 BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
         bgfx::setUniform(motionPreviousViewProjectionUniform_, desc.motionVectorPreviousViewProjection.data());

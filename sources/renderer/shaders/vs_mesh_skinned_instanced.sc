@@ -4,7 +4,7 @@ $output v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags,
 #include <bgfx_shader.sh>
 
 uniform mat4 u_shadowViewProj;
-uniform sampler2D s_skinningPalette;
+SAMPLER2D(s_skinningPalette, 14);
 // x = first palette matrix, y = reciprocal palette texture height.
 uniform vec4 u_skinningPaletteInfo;
 

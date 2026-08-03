@@ -3,7 +3,7 @@ $output v_color0, v_texcoord0
 
 #include <bgfx_shader.sh>
 
-uniform sampler2D s_skinningPalette;
+SAMPLER2D(s_skinningPalette, 14);
 uniform vec4 u_skinningPaletteInfo;
 
 void main()
