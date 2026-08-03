@@ -1298,7 +1298,7 @@ end
                 .name = "Base",
                 .defaultState = "Blend",
                 .weight = 1.0F,
-                .mask = 1U,
+                .mask = 3U,
                 .states = {
                     {
                         .name = "Blend",
@@ -1435,25 +1435,25 @@ end
                     3.0F) &&
                 NearlyEqual(
                     sampledSkeleton->currentLocalPose.positions[0].x,
-                    1.5F) &&
+                    0.0F) &&
                 NearlyEqual(
                     sampledSkeleton->currentLocalPose.positions[0].z,
-                    0.125F) &&
+                    0.25F) &&
                 NearlyEqual(
                     sampledSkeleton->currentLocalPose.positions[2].x,
                     1.0F) &&
                 NearlyEqual(
                     sampledSkeleton->currentComponentPose.positions[2].x,
-                    3.0F) &&
+                    1.0F) &&
                 NearlyEqual(
                     sampledSkeleton->currentComponentPose.positions[2].y,
-                    1.5F) &&
+                    1.0F) &&
                 NearlyEqual(
                     sampledSkeleton->currentComponentPose.positions[2].z,
-                    0.125F) &&
-                NearlyEqual(sampledSkinOrigin.x, 1.5F) &&
-                NearlyEqual(sampledSkinOrigin.y, 1.5F) &&
-                NearlyEqual(sampledSkinOrigin.z, 0.125F) &&
+                    0.25F) &&
+                NearlyEqual(sampledSkinOrigin.x, 0.0F) &&
+                NearlyEqual(sampledSkinOrigin.y, 1.0F) &&
+                NearlyEqual(sampledSkinOrigin.z, 0.25F) &&
                 NearlyEqual(sampledSkinOrigin.w, 1.0F) &&
                 NearlyEqual(ownerTransform.localPosition.x, 0.0F) &&
                 NearlyEqual(ownerTransform.localPosition.y, 0.0F) &&
@@ -1492,24 +1492,74 @@ end
                     1.75F) &&
                 NearlyEqual(
                     transitionedSkeleton->currentLocalPose.positions[0].x,
-                    1.5F) &&
+                    0.0F) &&
                 NearlyEqual(
                     transitionedSkeleton->currentLocalPose.positions[0].z,
-                    0.25F) &&
+                    0.4375F) &&
                 NearlyEqual(
                     transitionedSkeleton->currentComponentPose.positions[2].x,
-                    4.125F) &&
+                    1.75F) &&
                 NearlyEqual(
                     transitionedSkeleton->currentComponentPose.positions[2].y,
-                    1.5F) &&
+                    1.0F) &&
                 NearlyEqual(
                     transitionedSkeleton->currentComponentPose.positions[2].z,
-                    0.25F) &&
-                NearlyEqual(transitionedSkinOrigin.x, 2.625F) &&
-                NearlyEqual(transitionedSkinOrigin.y, 1.5F) &&
-                NearlyEqual(transitionedSkinOrigin.z, 0.25F) &&
+                    0.4375F) &&
+                NearlyEqual(transitionedSkinOrigin.x, 0.75F) &&
+                NearlyEqual(transitionedSkinOrigin.y, 1.0F) &&
+                NearlyEqual(transitionedSkinOrigin.z, 0.4375F) &&
                 NearlyEqual(transitionedSkinOrigin.w, 1.0F),
             "Compact skeletal state/layer/mask/blend/transition evaluation diverged from controller semantics");
+
+        scene.Components().Animators().Set(
+            owner.Entity(), kb::scene::Animator{
+                .controllerAssetId =
+                    scene.Animators().Controller(owner.Entity()),
+                .speed = 1.0F,
+                .enabled = true,
+                .rootMotionOwner =
+                    kb::scene::AnimatorRootMotionOwner::Animator,
+            });
+        static_cast<void>(scene.Runtime().Update(0.25F));
+        const auto extractedSkeleton =
+            scene.Animators().InstanceSkeleton(owner.Entity());
+        const kb::scene::TransformComponent& extractedOwnerTransform =
+            scene.Transforms().Get(owner.Entity());
+        const kb::math::Vec4 extractedSkinOrigin =
+            extractedSkeleton.has_value() &&
+                extractedSkeleton->currentSkinMatrices.size() == 3U
+            ? extractedSkeleton->currentSkinMatrices[2] *
+                kb::math::Vec4{ 0.0F, 0.0F, 0.0F, 1.0F }
+            : kb::math::Vec4{};
+        Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
+                extractedSkeleton.has_value() &&
+                extractedSkeleton->evaluationCount == 3U &&
+                extractedSkeleton->hierarchySolveCount == 3U &&
+                NearlyEqual(
+                    extractedSkeleton->previousLocalPose.positions[0].z,
+                    0.4375F) &&
+                NearlyEqual(
+                    extractedSkeleton->currentLocalPose.positions[0].x,
+                    3.0F) &&
+                NearlyEqual(
+                    extractedSkeleton->currentLocalPose.positions[0].z,
+                    0.0F) &&
+                NearlyEqual(
+                    extractedSkeleton->currentLocalPose.positions[2].x,
+                    3.0F) &&
+                NearlyEqual(
+                    extractedSkeleton->currentComponentPose.positions[2].x,
+                    6.0F) &&
+                NearlyEqual(
+                    extractedSkeleton->currentComponentPose.positions[2].y,
+                    1.0F) &&
+                NearlyEqual(extractedSkinOrigin.x, 5.0F) &&
+                NearlyEqual(extractedSkinOrigin.y, 1.0F) &&
+                NearlyEqual(extractedSkinOrigin.z, 0.0F) &&
+                NearlyEqual(extractedOwnerTransform.localPosition.x, 0.0F) &&
+                NearlyEqual(extractedOwnerTransform.localPosition.y, 0.0F) &&
+                NearlyEqual(extractedOwnerTransform.localPosition.z, 0.25F),
+            "Skeletal root motion was not extracted before pose solve and routed exclusively to the Animator owner");
 
         kb::scene::AnimationClip invalidBoneClip = instanceClip;
         invalidBoneClip.rootMotionMode =
