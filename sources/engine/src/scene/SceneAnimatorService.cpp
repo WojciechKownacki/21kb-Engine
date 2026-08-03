@@ -10,6 +10,7 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SkeletonBindingComponent.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
@@ -72,6 +73,11 @@ double StateTime(float normalizedTime, const AnimationClip& clip);
 [[nodiscard]] bool RuntimeAssetsAreCurrent(
     const kb::assets::AssetManager& manager,
     const AnimatorRuntimeRecord& record) {
+    if (record.skeleton.has_value() &&
+        record.skeleton->loadGeneration !=
+            manager.LoadGeneration(record.skeleton->asset.Id())) {
+        return false;
+    }
     for (const AnimatorRuntimeLayer& runtimeLayer : record.layers) {
         for (const AnimatorRuntimeState& runtimeState : runtimeLayer.states) {
             for (const AnimatorRuntimeState::Motion& motion :
@@ -84,6 +90,88 @@ double StateTime(float normalizedTime, const AnimationClip& clip);
         }
     }
     return true;
+}
+
+[[nodiscard]] bool BindSkeletalMotion(
+    Scene& scene, AnimatorRuntimeRecord& instance,
+    AnimatorRuntimeState::Motion& motion) {
+    const AnimationClip& clip = *motion.clip;
+    const SkeletonBindingComponent* authoredBinding =
+        scene.Components().SkeletonBindings().TryGet(instance.entity);
+    if (authoredBinding == nullptr || !authoredBinding->enabled ||
+        !IsSkeletonBindingComponentValid(*authoredBinding) ||
+        authoredBinding->skeletonAssetId != clip.targetSkeletonAssetId ||
+        authoredBinding->skeletonCompatibilitySignature !=
+            clip.targetSkeletonCompatibilitySignature) {
+        return false;
+    }
+
+    if (!instance.skeleton.has_value()) {
+        if (!instance.bindings.empty()) return false;
+        auto skeleton = scene.Assets().Manager().Load<SkeletonAsset>(
+            kb::assets::AssetId{ authoredBinding->skeletonAssetId });
+        if (!skeleton.IsLoaded() ||
+            SkeletonCompatibilitySignature(*skeleton) !=
+                authoredBinding->skeletonCompatibilitySignature ||
+            skeleton->bones.size() >
+                static_cast<std::size_t>(
+                    std::numeric_limits<std::uint32_t>::max())) {
+            return false;
+        }
+
+        AnimatorInstanceSkeleton derived{};
+        derived.asset = std::move(skeleton);
+        derived.loadGeneration = scene.Assets().Manager().LoadGeneration(
+            derived.asset.Id());
+        derived.compatibilitySignature =
+            authoredBinding->skeletonCompatibilitySignature;
+        derived.boneIds.reserve(derived.asset->bones.size());
+        derived.boneIndices.reserve(derived.asset->bones.size());
+        for (std::size_t index = 0U; index < derived.asset->bones.size();
+             ++index) {
+            const SkeletonBoneId boneId = derived.asset->bones[index].id;
+            derived.boneIds.push_back(boneId);
+            if (!derived.boneIndices.emplace(
+                    boneId, static_cast<std::uint32_t>(index)).second) {
+                return false;
+            }
+        }
+        instance.skeleton.emplace(std::move(derived));
+    } else if (instance.skeleton->asset.Id().value !=
+                   clip.targetSkeletonAssetId ||
+               instance.skeleton->compatibilitySignature !=
+                   clip.targetSkeletonCompatibilitySignature) {
+        return false;
+    }
+
+    motion.boneIndices.reserve(clip.skeletalTracks.size());
+    for (const AnimationBoneTrack& track : clip.skeletalTracks) {
+        const auto found = instance.skeleton->boneIndices.find(track.boneId);
+        if (found == instance.skeleton->boneIndices.end()) return false;
+        motion.boneIndices.push_back(found->second);
+    }
+    if (clip.rootMotionMode == AnimationRootMotionMode::ExtractFromBone) {
+        const auto found =
+            instance.skeleton->boneIndices.find(clip.rootMotionBoneId);
+        if (found == instance.skeleton->boneIndices.end()) return false;
+        motion.rootMotionBoneIndex = found->second;
+    }
+    return true;
+}
+
+[[nodiscard]] bool RuntimeSkeletalBindingIsCurrent(
+    Scene& scene, const AnimatorRuntimeRecord& instance) {
+    if (!instance.skeleton.has_value()) return true;
+    const SkeletonBindingComponent* binding =
+        scene.Components().SkeletonBindings().TryGet(instance.entity);
+    return binding != nullptr && binding->enabled &&
+        IsSkeletonBindingComponentValid(*binding) &&
+        binding->skeletonAssetId == instance.skeleton->asset.Id().value &&
+        binding->skeletonCompatibilitySignature ==
+            instance.skeleton->compatibilitySignature &&
+        instance.skeleton->loadGeneration ==
+            scene.Assets().Manager().LoadGeneration(
+                instance.skeleton->asset.Id());
 }
 
 void RestoreCompatibleRuntimeState(
@@ -996,27 +1084,41 @@ bool SceneAnimatorService::Attach(Scene& scene, SceneEntity entity, std::uint64_
                 motion.clip = std::move(clip);
                 motion.clipLoadGeneration =
                     manager.LoadGeneration(motion.clip.Id());
-                motion.targetIndices.reserve(motion.clip->tracks.size());
-                for (const AnimationTransformTrack& track : motion.clip->tracks) {
-                    const SceneEntity target =
-                        ResolveTarget(scene, entity, track.targetPath);
-                    const TransformComponent* transform =
-                        scene.Transforms().TryGet(target);
-                    if (!target.IsValid() || transform == nullptr) return false;
-                    auto binding = std::find_if(
-                        candidate.bindings.begin(), candidate.bindings.end(),
-                        [target](const AnimatorRuntimeBinding& value) {
-                            return value.target == target;
-                        });
-                    if (binding == candidate.bindings.end()) {
-                        candidate.bindings.push_back(AnimatorRuntimeBinding{
-                            .target = target,
-                            .bindTransform = transform->LocalPayload(),
-                        });
-                        binding = candidate.bindings.end() - 1;
+                if (motion.clip->targetSkeletonAssetId != 0U) {
+                    if (!BindSkeletalMotion(scene, candidate, motion)) {
+                        return false;
                     }
-                    motion.targetIndices.push_back(static_cast<std::size_t>(
-                        binding - candidate.bindings.begin()));
+                } else {
+                    if (candidate.skeleton.has_value()) return false;
+                    motion.targetIndices.reserve(motion.clip->tracks.size());
+                    for (const AnimationTransformTrack& track :
+                         motion.clip->tracks) {
+                        const SceneEntity target =
+                            ResolveTarget(scene, entity, track.targetPath);
+                        const TransformComponent* transform =
+                            scene.Transforms().TryGet(target);
+                        if (!target.IsValid() || transform == nullptr) {
+                            return false;
+                        }
+                        auto binding = std::find_if(
+                            candidate.bindings.begin(),
+                            candidate.bindings.end(),
+                            [target](const AnimatorRuntimeBinding& value) {
+                                return value.target == target;
+                            });
+                        if (binding == candidate.bindings.end()) {
+                            candidate.bindings.push_back(
+                                AnimatorRuntimeBinding{
+                                    .target = target,
+                                    .bindTransform =
+                                        transform->LocalPayload(),
+                                });
+                            binding = candidate.bindings.end() - 1;
+                        }
+                        motion.targetIndices.push_back(
+                            static_cast<std::size_t>(
+                                binding - candidate.bindings.begin()));
+                    }
                 }
                 state.motions.push_back(std::move(motion));
             }
@@ -1085,6 +1187,22 @@ std::uint64_t SceneAnimatorService::RuntimeBindingGeneration(
     const AnimatorRuntimeRecord* record =
         Find(SceneAccess::State(scene), entity);
     return record == nullptr ? 0U : record->runtimeBindingGeneration;
+}
+
+std::optional<AnimatorInstanceSkeletonView>
+SceneAnimatorService::InstanceSkeleton(
+    const Scene& scene, SceneEntity entity) noexcept {
+    const AnimatorRuntimeRecord* instance =
+        Find(SceneAccess::State(scene), entity);
+    if (instance == nullptr || !instance->skeleton.has_value()) {
+        return std::nullopt;
+    }
+    return AnimatorInstanceSkeletonView{
+        .skeletonAssetId = instance->skeleton->asset.Id().value,
+        .compatibilitySignature =
+            instance->skeleton->compatibilitySignature,
+        .boneIds = instance->skeleton->boneIds,
+    };
 }
 
 bool SceneAnimatorService::Play(Scene& scene, SceneEntity entity, std::string_view layerName, std::string_view stateName, float normalizedTime) noexcept {
@@ -1256,6 +1374,9 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
         const bool clipChanged =
             record != nullptr &&
             !RuntimeAssetsAreCurrent(scene.Assets().Manager(), *record);
+        const bool skeletalBindingChanged =
+            record != nullptr &&
+            !RuntimeSkeletalBindingIsCurrent(scene, *record);
         const bool hierarchyChanged =
             record != nullptr &&
             record->observedHierarchyTopologyVersion !=
@@ -1263,7 +1384,8 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
         const bool hierarchyBindingsChanged =
             hierarchyChanged &&
             !RuntimeBindingsMatchCanonicalHierarchy(scene, *record);
-        if (controllerChanged || clipChanged || hierarchyBindingsChanged) {
+        if (controllerChanged || clipChanged || skeletalBindingChanged ||
+            hierarchyBindingsChanged) {
             // Once a canonical source or binding is stale, the old derived
             // record must not remain queryable or feed a physics queue if the
             // replacement asset fails to load.
@@ -1277,7 +1399,8 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
             }
             record = Find(SceneAccess::State(scene), value.entity);
             if (previous.has_value() &&
-                (controllerReloaded || clipChanged)) {
+                (controllerReloaded || clipChanged ||
+                 skeletalBindingChanged)) {
                 RestoreCompatibleRuntimeState(*previous, *record);
             }
             record->lastAppliedComponentSpeed = value.animator.speed;
