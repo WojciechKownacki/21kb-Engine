@@ -1215,7 +1215,12 @@ end
                 .referencePose = {
                     .position = { 1.0F, 0.0F, 0.0F },
                 },
-                .inverseBind = {},
+                .inverseBind = { .columns = {
+                    { 1.0F, 0.0F, 0.0F, 0.0F },
+                    { 0.0F, 1.0F, 0.0F, 0.0F },
+                    { 0.0F, 0.0F, 1.0F, 0.0F },
+                    { -1.0F, 0.0F, 0.0F, 1.0F },
+                } },
             },
         };
         const std::uint64_t skeletonSignature =
@@ -1382,6 +1387,12 @@ end
                 completePose(instanceSkeleton->previousLocalPose) &&
                 completePose(instanceSkeleton->currentComponentPose) &&
                 completePose(instanceSkeleton->previousComponentPose) &&
+                instanceSkeleton->currentSkinMatrices.size() == 3U &&
+                instanceSkeleton->previousSkinMatrices.size() == 3U &&
+                instanceSkeleton->currentSkinMatrices.data() !=
+                    instanceSkeleton->previousSkinMatrices.data() &&
+                instanceSkeleton->evaluationCount == 0U &&
+                instanceSkeleton->hierarchySolveCount == 0U &&
                 NearlyEqual(
                     instanceSkeleton->currentLocalPose.positions[2].x,
                     1.0F) &&
@@ -1410,8 +1421,15 @@ end
             scene.Animators().InstanceSkeleton(owner.Entity());
         const kb::scene::TransformComponent& ownerTransform =
             scene.Transforms().Get(owner.Entity());
+        const kb::math::Vec4 sampledSkinOrigin = sampledSkeleton.has_value() &&
+                sampledSkeleton->currentSkinMatrices.size() == 3U
+            ? sampledSkeleton->currentSkinMatrices[2] *
+                kb::math::Vec4{ 0.0F, 0.0F, 0.0F, 1.0F }
+            : kb::math::Vec4{};
         Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
                 sampledSkeleton.has_value() &&
+                sampledSkeleton->evaluationCount == 1U &&
+                sampledSkeleton->hierarchySolveCount == 1U &&
                 NearlyEqual(
                     sampledSkeleton->previousLocalPose.positions[0].x,
                     3.0F) &&
@@ -1433,6 +1451,10 @@ end
                 NearlyEqual(
                     sampledSkeleton->currentComponentPose.positions[2].z,
                     0.125F) &&
+                NearlyEqual(sampledSkinOrigin.x, 1.5F) &&
+                NearlyEqual(sampledSkinOrigin.y, 1.5F) &&
+                NearlyEqual(sampledSkinOrigin.z, 0.125F) &&
+                NearlyEqual(sampledSkinOrigin.w, 1.0F) &&
                 NearlyEqual(ownerTransform.localPosition.x, 0.0F) &&
                 NearlyEqual(ownerTransform.localPosition.y, 0.0F) &&
                 NearlyEqual(ownerTransform.localPosition.z, 0.0F) &&
@@ -1447,9 +1469,17 @@ end
             scene.Animators().InstanceSkeleton(owner.Entity());
         const auto transitionedState =
             scene.Animators().State(owner.Entity(), "Base");
+        const kb::math::Vec4 transitionedSkinOrigin =
+            transitionedSkeleton.has_value() &&
+                transitionedSkeleton->currentSkinMatrices.size() == 3U
+            ? transitionedSkeleton->currentSkinMatrices[2] *
+                kb::math::Vec4{ 0.0F, 0.0F, 0.0F, 1.0F }
+            : kb::math::Vec4{};
         Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
                 transitionedSkeleton.has_value() &&
                 transitionedState.has_value() &&
+                transitionedSkeleton->evaluationCount == 2U &&
+                transitionedSkeleton->hierarchySolveCount == 2U &&
                 transitionedState->state == "DirectB" &&
                 transitionedState->previousState == "Blend" &&
                 transitionedState->transitioning &&
@@ -1474,7 +1504,11 @@ end
                     1.5F) &&
                 NearlyEqual(
                     transitionedSkeleton->currentComponentPose.positions[2].z,
-                    0.25F),
+                    0.25F) &&
+                NearlyEqual(transitionedSkinOrigin.x, 2.625F) &&
+                NearlyEqual(transitionedSkinOrigin.y, 1.5F) &&
+                NearlyEqual(transitionedSkinOrigin.z, 0.25F) &&
+                NearlyEqual(transitionedSkinOrigin.w, 1.0F),
             "Compact skeletal state/layer/mask/blend/transition evaluation diverged from controller semantics");
 
         kb::scene::AnimationClip invalidBoneClip = instanceClip;

@@ -103,28 +103,32 @@ void SolveComponentPose(
             pose.component.positions[index] = pose.local.positions[index];
             pose.component.rotations[index] = pose.local.rotations[index];
             pose.component.scales[index] = pose.local.scales[index];
-            continue;
+        } else {
+            const std::size_t parentIndex =
+                static_cast<std::size_t>(bone.parentIndex);
+            const Vec3 parentScale = pose.component.scales[parentIndex];
+            const Vec3 scaledLocalPosition{
+                parentScale.x * pose.local.positions[index].x,
+                parentScale.y * pose.local.positions[index].y,
+                parentScale.z * pose.local.positions[index].z,
+            };
+            pose.component.positions[index] =
+                pose.component.positions[parentIndex] + kb::math::Rotate(
+                    pose.component.rotations[parentIndex],
+                    scaledLocalPosition);
+            pose.component.rotations[index] = kb::math::Normalize(
+                pose.component.rotations[parentIndex] *
+                pose.local.rotations[index]);
+            pose.component.scales[index] = {
+                parentScale.x * pose.local.scales[index].x,
+                parentScale.y * pose.local.scales[index].y,
+                parentScale.z * pose.local.scales[index].z,
+            };
         }
-        const std::size_t parentIndex =
-            static_cast<std::size_t>(bone.parentIndex);
-        const Vec3 parentScale = pose.component.scales[parentIndex];
-        const Vec3 scaledLocalPosition{
-            parentScale.x * pose.local.positions[index].x,
-            parentScale.y * pose.local.positions[index].y,
-            parentScale.z * pose.local.positions[index].z,
-        };
-        pose.component.positions[index] =
-            pose.component.positions[parentIndex] + kb::math::Rotate(
-                pose.component.rotations[parentIndex],
-                scaledLocalPosition);
-        pose.component.rotations[index] = kb::math::Normalize(
-            pose.component.rotations[parentIndex] *
-            pose.local.rotations[index]);
-        pose.component.scales[index] = {
-            parentScale.x * pose.local.scales[index].x,
-            parentScale.y * pose.local.scales[index].y,
-            parentScale.z * pose.local.scales[index].z,
-        };
+        pose.skinMatrices[index] = kb::math::FromTRS(
+            pose.component.positions[index],
+            pose.component.rotations[index],
+            pose.component.scales[index]) * bone.inverseBind;
     }
 }
 
@@ -137,6 +141,7 @@ void InitializePoseBuffers(AnimatorInstanceSkeleton& derived) {
     reference.component.positions.resize(boneCount);
     reference.component.rotations.resize(boneCount);
     reference.component.scales.resize(boneCount);
+    reference.skinMatrices.resize(boneCount);
     for (const SkeletonBone& bone : derived.asset->bones) {
         reference.local.positions.push_back(bone.referencePose.position);
         reference.local.rotations.push_back(bone.referencePose.rotation);
@@ -902,6 +907,14 @@ void EvaluateIndexedSkeletalState(
 
 void EvaluateIndexedSkeletalPose(AnimatorRuntimeRecord& instance) {
     AnimatorInstanceSkeleton& skeleton = *instance.skeleton;
+    if (skeleton.evaluationCount ==
+            std::numeric_limits<std::uint64_t>::max() ||
+        skeleton.hierarchySolveCount ==
+            std::numeric_limits<std::uint64_t>::max()) {
+        throw std::overflow_error(
+            "AnimatorInstance pose evaluation counter exhausted");
+    }
+    ++skeleton.evaluationCount;
     skeleton.currentPose ^= 1U;
     AnimatorInstanceSkeleton::PoseBuffer& current =
         skeleton.poses[skeleton.currentPose];
@@ -970,6 +983,7 @@ void EvaluateIndexedSkeletalPose(AnimatorRuntimeRecord& instance) {
         }
     }
     SolveComponentPose(*skeleton.asset, current);
+    ++skeleton.hierarchySolveCount;
 }
 
 bool ConditionMatches(
@@ -1490,6 +1504,10 @@ SceneAnimatorService::InstanceSkeleton(
         .previousLocalPose = view(previous.local),
         .currentComponentPose = view(current.component),
         .previousComponentPose = view(previous.component),
+        .currentSkinMatrices = current.skinMatrices,
+        .previousSkinMatrices = previous.skinMatrices,
+        .evaluationCount = skeleton.evaluationCount,
+        .hierarchySolveCount = skeleton.hierarchySolveCount,
     };
 }
 
