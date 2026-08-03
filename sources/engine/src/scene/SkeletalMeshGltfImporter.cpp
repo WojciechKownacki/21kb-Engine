@@ -666,6 +666,7 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
     }
     result.mesh.conservativeBounds.center = { (minimum.x + maximum.x) * 0.5F, (minimum.y + maximum.y) * 0.5F, (minimum.z + maximum.z) * 0.5F };
     result.mesh.conservativeBounds.extents = { (maximum.x - minimum.x) * 0.5F, (maximum.y - minimum.y) * 0.5F, (maximum.z - minimum.z) * 0.5F };
+    result.mesh.fixedBounds = result.mesh.conservativeBounds;
     const SkeletalMeshAssetValidationResult validation = ValidateSkeletalMeshAsset(result.mesh);
     if (!validation.valid) return Fail<SkeletalMeshGltfImportResult>(error, validation.error);
 
