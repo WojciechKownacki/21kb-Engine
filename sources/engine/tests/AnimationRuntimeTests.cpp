@@ -20,6 +20,8 @@
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SkeletonAssetIO.hpp"
+#include "engine/scene/SkeletonBindingComponent.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
 #include <algorithm>
@@ -100,6 +102,7 @@ void RunAnimationRuntimeTests() {
     skeletalClip.skeletalTracks = {
         {
             .boneId = 101U,
+            .bindingMask = 4U,
             .keyframes = {
                 { .timeSeconds = 0.0F, .transform = {} },
                 { .timeSeconds = 1.0F, .transform = { .position = { 2.0F, 0.0F, 0.0F } } },
@@ -123,11 +126,37 @@ void RunAnimationRuntimeTests() {
             loadedSkeletalClip->targetSkeletonCompatibilitySignature == skeletalClip.targetSkeletonCompatibilitySignature &&
             loadedSkeletalClip->skeletalTracks.size() == 1U &&
             loadedSkeletalClip->skeletalTracks.front().boneId == 101U &&
+            loadedSkeletalClip->skeletalTracks.front().bindingMask == 4U &&
             loadedSkeletalClip->morphTracks.size() == 1U &&
             loadedSkeletalClip->curves.size() == 1U &&
             loadedSkeletalClip->rootMotionMode == kb::scene::AnimationRootMotionMode::ExtractFromBone &&
             loadedSkeletalClip->rootMotionBoneId == 101U,
         "Skeletal AnimationClip round trip lost canonical bindings");
+    std::string legacySkeletalText = ReadTextFile(skeletalClipPath);
+    const std::string currentSkeletalHeader = "21kb AnimationClip 2";
+    const std::size_t currentSkeletalHeaderOffset =
+        legacySkeletalText.find(currentSkeletalHeader);
+    const std::string currentSkeletalTrack = "skeletalTrack 101 4";
+    const std::size_t currentSkeletalTrackOffset =
+        legacySkeletalText.find(currentSkeletalTrack);
+    Require(currentSkeletalHeaderOffset != std::string::npos &&
+            currentSkeletalTrackOffset != std::string::npos,
+        "Skeletal AnimationClip did not serialize its binding mask");
+    legacySkeletalText.replace(
+        currentSkeletalHeaderOffset, currentSkeletalHeader.size(),
+        "21kb AnimationClip 1");
+    legacySkeletalText.replace(
+        currentSkeletalTrackOffset, currentSkeletalTrack.size(),
+        "skeletalTrack 101");
+    const auto legacySkeletalClipPath = root / "LegacySkeletal.kbanim";
+    WriteTextFile(legacySkeletalClipPath, legacySkeletalText);
+    const auto loadedLegacySkeletalClip =
+        kb::scene::AnimationAssetIO::LoadClip(legacySkeletalClipPath);
+    Require(loadedLegacySkeletalClip.has_value() &&
+            loadedLegacySkeletalClip->skeletalTracks.size() == 1U &&
+            loadedLegacySkeletalClip->skeletalTracks.front().bindingMask ==
+                ~std::uint64_t{ 0U },
+        "Legacy skeletal track did not migrate to the full binding mask");
     kb::scene::AnimationClip mixedBindingClip = skeletalClip;
     mixedBindingClip.tracks = clip.tracks;
     Require(!kb::scene::AnimationAssetIO::SaveClip(root / "MixedBinding.kbanim", mixedBindingClip),
@@ -200,6 +229,21 @@ void RunAnimationRuntimeTests() {
         std::string_view{ serializedController }.substr(controllerHeaderEnd + 1U));
     Require(kb::scene::AnimationAssetIO::LoadController(legacyControllerPath).has_value(),
         "AnimatorController legacy migration failed");
+    std::string versionOneController = serializedController;
+    const std::string currentControllerHeader = "21kb AnimatorController 2";
+    const std::size_t currentControllerHeaderOffset =
+        versionOneController.find(currentControllerHeader);
+    Require(currentControllerHeaderOffset != std::string::npos,
+        "AnimatorController did not serialize its current schema version");
+    versionOneController.replace(
+        currentControllerHeaderOffset, currentControllerHeader.size(),
+        "21kb AnimatorController 1");
+    const std::filesystem::path versionOneControllerPath =
+        roundTripRoot / "VersionOne.kbanimcontroller";
+    WriteTextFile(versionOneControllerPath, versionOneController);
+    Require(kb::scene::AnimationAssetIO::LoadController(
+                versionOneControllerPath).has_value(),
+        "AnimatorController schema 1 migration failed");
     const std::filesystem::path corruptControllerPath = roundTripRoot / "Corrupt.kbanimcontroller";
     WriteTextFile(corruptControllerPath, "21kb AnimatorController 99\n");
     std::string corruptControllerError;
@@ -1092,6 +1136,836 @@ end
                         return error.find("exclusive kinematic Rigidbody") != std::string::npos;
                     }),
             "Runtime accepted CharacterController and Rigidbody as competing Transform authorities");
+    }
+    {
+        kb::scene::Scene scene;
+        Require(scene.Assets().MountProject(root) && scene.Assets().Discover() == 8U,
+            "Animation rediscovery test could not mount and discover the project");
+        const auto* controllerMetadata = scene.Assets().Manager().Registry().FindByPath(
+            "/Game/Animation/Character.kbanimcontroller");
+        const auto* runMetadata = scene.Assets().Manager().Registry().FindByPath(
+            "/Game/Animation/Run Fast.kbanim");
+        Require(controllerMetadata != nullptr && runMetadata != nullptr,
+            "Animation rediscovery test did not find its controller and clip");
+        const kb::assets::AssetId controllerId = controllerMetadata->id;
+        const kb::assets::AssetId runId = runMetadata->id;
+        const kb::scene::SceneObject owner = scene.Entities().CreateObject({ .name = "Rediscovery Character" });
+        const kb::scene::SceneObject arm = scene.Entities().CreateObject({ .name = "Left Arm" });
+        Require(arm.SetParent(owner),
+            "Animation rediscovery hierarchy could not be authored");
+        scene.Components().Animators().Set(owner.Entity(), kb::scene::Animator{
+            .controllerAssetId = controllerId.value,
+            .speed = 1.0F,
+            .enabled = true,
+        });
+        Require(scene.Components().Animators().TryGet(owner.Entity()) != nullptr,
+            "Animation rediscovery Animator could not be authored");
+        scene.Runtime().SetPlaying(true);
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        Require(scene.Animators().Play(owner.Entity(), "Root Layer", "Run State", 0.2F),
+            "Animation rediscovery test could not select its live state");
+        const auto stateBefore = scene.Animators().State(owner.Entity(), "Root Layer");
+        const std::uint64_t runGeneration = scene.Assets().Manager().LoadGeneration(runId);
+        const std::uint64_t controllerGeneration = scene.Assets().Manager().LoadGeneration(controllerId);
+
+        kb::scene::AnimationClip reimportedRunClip = runClip;
+        reimportedRunClip.tracks[0].keyframes[1].transform.position.x = 50.0F;
+        reimportedRunClip.tracks[1].keyframes[1].transform.position.x = 60.0F;
+        Require(kb::scene::AnimationAssetIO::SaveClip(runClipPath, reimportedRunClip) &&
+                scene.Assets().Discover() == 8U,
+            "Animation clip reimport was not discovered through the production asset pipeline");
+        const auto* reimportedController = scene.Assets().Manager().Registry().FindByPath(
+            "/Game/Animation/Character.kbanimcontroller");
+        const auto* reimportedRun = scene.Assets().Manager().Registry().FindByPath(
+            "/Game/Animation/Run Fast.kbanim");
+        Require(reimportedController != nullptr && reimportedController->id == controllerId &&
+                reimportedRun != nullptr && reimportedRun->id == runId,
+            "Animation reimport changed a stable controller or clip reference");
+        Require(scene.Assets().Manager().LoadGeneration(runId) > runGeneration &&
+                scene.Assets().Manager().LoadGeneration(controllerId) > controllerGeneration,
+            "Animation reimport did not invalidate the clip's dependent controller closure");
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const auto stateAfter = scene.Animators().State(owner.Entity(), "Root Layer");
+        Require(stateBefore.has_value() && stateAfter.has_value() &&
+                stateAfter->state == stateBefore->state &&
+                NearlyEqual(stateAfter->normalizedTime, stateBefore->normalizedTime),
+            "Animation hot reload lost its compatible live state and playhead");
+        static_cast<void>(scene.Runtime().Update(0.1F));
+        Require(scene.Transforms().Get(owner.Entity()).localPosition.x > 10.0F,
+            "Animation hot reload retained the stale clip payload after rediscovery");
+        Require(kb::scene::AnimationAssetIO::SaveClip(runClipPath, runClip),
+            "Animation rediscovery fixture could not restore its canonical clip");
+    }
+    {
+        const std::filesystem::path skeletalRoot =
+            std::filesystem::temp_directory_path() /
+            "21kb-animator-instance-tests";
+        std::filesystem::remove_all(skeletalRoot);
+
+        kb::scene::SkeletonAsset skeleton{};
+        skeleton.bones = {
+            {
+                .id = 700U,
+                .parentIndex = -1,
+                .name = "Root",
+                .referencePose = {
+                    .position = { 3.0F, 0.0F, 0.0F },
+                    .scale = { 2.0F, 2.0F, 2.0F },
+                },
+                .inverseBind = {},
+            },
+            {
+                .id = 101U,
+                .parentIndex = 0,
+                .name = "Spine",
+                .referencePose = {
+                    .position = { 0.0F, 1.0F, 0.0F },
+                },
+                .inverseBind = {},
+            },
+            {
+                .id = 900U,
+                .parentIndex = 1,
+                .name = "Hand",
+                .referencePose = {
+                    .position = { 1.0F, 0.0F, 0.0F },
+                },
+                .inverseBind = { .columns = {
+                    { 1.0F, 0.0F, 0.0F, 0.0F },
+                    { 0.0F, 1.0F, 0.0F, 0.0F },
+                    { 0.0F, 0.0F, 1.0F, 0.0F },
+                    { -1.0F, 0.0F, 0.0F, 1.0F },
+                } },
+            },
+        };
+        const std::uint64_t skeletonSignature =
+            kb::scene::SkeletonCompatibilitySignature(skeleton);
+        const std::filesystem::path skeletonPath = skeletalRoot / "Assets" /
+            "Skeletal" / "RuntimeRig.kbskeleton";
+        Require(skeletonSignature != 0U &&
+                kb::scene::SkeletonAssetIO::Save(skeletonPath, skeleton),
+            "AnimatorInstance fixture could not save its canonical Skeleton");
+
+        kb::scene::Scene scene;
+        Require(scene.Assets().MountProject(skeletalRoot) &&
+                scene.Assets().Discover() == 1U,
+            "AnimatorInstance fixture could not discover its Skeleton");
+        const kb::assets::AssetMetadata* skeletonMetadata =
+            scene.Assets().Manager().Registry().FindByPath(
+                "/Game/Skeletal/RuntimeRig.kbskeleton");
+        Require(skeletonMetadata != nullptr,
+            "AnimatorInstance fixture did not retain its Skeleton metadata");
+        const kb::assets::AssetId skeletonId = skeletonMetadata->id;
+
+        kb::scene::AnimationClip instanceClip{};
+        instanceClip.durationSeconds = 1.0F;
+        instanceClip.looping = true;
+        instanceClip.targetSkeletonAssetId = skeletonId.value;
+        instanceClip.targetSkeletonCompatibilitySignature = skeletonSignature;
+        instanceClip.skeletalTracks = {
+            {
+                .boneId = 900U,
+                .bindingMask = 1U,
+                .keyframes = {
+                    { .timeSeconds = 0.0F, .transform = {} },
+                    { .timeSeconds = 1.0F, .transform = {
+                        .position = { 2.0F, 0.0F, 0.0F },
+                    } },
+                },
+            },
+            {
+                .boneId = 700U,
+                .bindingMask = 2U,
+                .keyframes = {
+                    { .timeSeconds = 0.0F, .transform = {} },
+                    { .timeSeconds = 1.0F, .transform = {
+                        .position = { 0.0F, 0.0F, 1.0F },
+                    } },
+                },
+            },
+        };
+        instanceClip.rootMotionMode =
+            kb::scene::AnimationRootMotionMode::ExtractFromBone;
+        instanceClip.rootMotionBoneId = 700U;
+        const std::filesystem::path instanceClipPath = skeletalRoot /
+            "Assets" / "Animation" / "Skeletal.kbanim";
+        kb::scene::AnimationClip instanceClipB = instanceClip;
+        instanceClipB.skeletalTracks[0].keyframes[1].transform.position.x =
+            6.0F;
+        const std::filesystem::path instanceClipBPath = skeletalRoot /
+            "Assets" / "Animation" / "SkeletalB.kbanim";
+        Require(kb::scene::AnimationAssetIO::SaveClip(
+                    instanceClipPath, instanceClip) &&
+                kb::scene::AnimationAssetIO::SaveClip(
+                    instanceClipBPath, instanceClipB),
+            "AnimatorInstance fixture could not save its skeletal clips");
+
+        kb::scene::AnimatorController instanceController{};
+        instanceController.parameters = {
+            {
+                .name = "Blend",
+                .type = kb::scene::AnimatorParameterType::Float,
+                .floatDefault = 0.5F,
+            },
+        };
+        instanceController.layers = {
+            {
+                .name = "Base",
+                .defaultState = "Blend",
+                .weight = 1.0F,
+                .mask = 3U,
+                .states = {
+                    {
+                        .name = "Blend",
+                        .blendParameter = "Blend",
+                        .blendChildren = {
+                            {
+                                .threshold = 0.0F,
+                                .clipReference =
+                                    "/Game/Animation/Skeletal.kbanim",
+                            },
+                            {
+                                .threshold = 1.0F,
+                                .clipReference =
+                                    "/Game/Animation/SkeletalB.kbanim",
+                            },
+                        },
+                    },
+                    {
+                        .name = "DirectB",
+                        .clipReference =
+                            "/Game/Animation/SkeletalB.kbanim",
+                    },
+                },
+            },
+            {
+                .name = "Root",
+                .defaultState = "Root",
+                .weight = 0.5F,
+                .mask = 2U,
+                .states = {
+                    {
+                        .name = "Root",
+                        .clipReference =
+                            "/Game/Animation/Skeletal.kbanim",
+                    },
+                },
+            },
+        };
+        const std::filesystem::path instanceControllerPath = skeletalRoot /
+            "Assets" / "Animation" / "Skeletal.kbanimcontroller";
+        Require(kb::scene::AnimationAssetIO::SaveController(
+                    instanceControllerPath, instanceController) &&
+                scene.Assets().Discover() == 4U,
+            "AnimatorInstance fixture could not discover its clip and controller");
+        const kb::assets::AssetMetadata* instanceControllerMetadata =
+            scene.Assets().Manager().Registry().FindByPath(
+                "/Game/Animation/Skeletal.kbanimcontroller");
+        Require(instanceControllerMetadata != nullptr,
+            "AnimatorInstance fixture did not retain controller metadata");
+
+        const kb::scene::SceneObject owner =
+            scene.Entities().CreateObject({ .name = "Skeletal Character" });
+        Require(scene.Components().SkeletonBindings().Set(
+                    owner.Entity(), kb::scene::SkeletonBindingComponent{
+                        .skeletonAssetId = skeletonId.value,
+                        .skeletonCompatibilitySignature = skeletonSignature,
+                        .enabled = true,
+                    }),
+            "AnimatorInstance fixture could not author SkeletonBinding");
+        scene.Components().Animators().Set(owner.Entity(), kb::scene::Animator{
+            .controllerAssetId = instanceControllerMetadata->id.value,
+            .speed = 1.0F,
+            .enabled = true,
+        });
+        scene.Runtime().SetPlaying(false);
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const auto instanceSkeleton =
+            scene.Animators().InstanceSkeleton(owner.Entity());
+        const auto completePose = [](const kb::scene::AnimatorPoseSoaView& pose) {
+            return pose.positions.size() == 3U &&
+                pose.rotations.size() == 3U && pose.scales.size() == 3U;
+        };
+        Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
+                scene.Animators().Exists(owner.Entity()) &&
+                scene.Animators().RuntimeBindingGeneration(owner.Entity()) !=
+                    0U &&
+                instanceSkeleton.has_value() &&
+                instanceSkeleton->skeletonAssetId == skeletonId.value &&
+                instanceSkeleton->compatibilitySignature ==
+                    skeletonSignature &&
+                instanceSkeleton->boneIds.size() == 3U &&
+                instanceSkeleton->boneIds[0] == 700U &&
+                instanceSkeleton->boneIds[1] == 101U &&
+                instanceSkeleton->boneIds[2] == 900U &&
+                completePose(instanceSkeleton->currentLocalPose) &&
+                completePose(instanceSkeleton->previousLocalPose) &&
+                completePose(instanceSkeleton->currentComponentPose) &&
+                completePose(instanceSkeleton->previousComponentPose) &&
+                instanceSkeleton->currentSkinMatrices.size() == 3U &&
+                instanceSkeleton->previousSkinMatrices.size() == 3U &&
+                instanceSkeleton->currentSkinMatrices.data() !=
+                    instanceSkeleton->previousSkinMatrices.data() &&
+                instanceSkeleton->evaluationCount == 0U &&
+                instanceSkeleton->hierarchySolveCount == 0U &&
+                NearlyEqual(
+                    instanceSkeleton->currentLocalPose.positions[2].x,
+                    1.0F) &&
+                NearlyEqual(
+                    instanceSkeleton->currentComponentPose.positions[1].x,
+                    3.0F) &&
+                NearlyEqual(
+                    instanceSkeleton->currentComponentPose.positions[1].y,
+                    2.0F) &&
+                NearlyEqual(
+                    instanceSkeleton->currentComponentPose.positions[2].x,
+                    5.0F) &&
+                NearlyEqual(
+                    instanceSkeleton->currentComponentPose.positions[2].y,
+                    2.0F) &&
+                instanceSkeleton->currentLocalPose.positions.data() !=
+                    instanceSkeleton->previousLocalPose.positions.data() &&
+                instanceSkeleton->currentComponentPose.positions.data() !=
+                    instanceSkeleton->previousComponentPose.positions.data() &&
+                scene.Entities().Count() == 1U,
+            "AnimatorInstance did not derive contiguous double-buffered local/component SoA poses without bone entities");
+
+        scene.Runtime().SetPlaying(true);
+        static_cast<void>(scene.Runtime().Update(0.25F));
+        const auto sampledSkeleton =
+            scene.Animators().InstanceSkeleton(owner.Entity());
+        const kb::scene::TransformComponent& ownerTransform =
+            scene.Transforms().Get(owner.Entity());
+        const kb::math::Vec4 sampledSkinOrigin = sampledSkeleton.has_value() &&
+                sampledSkeleton->currentSkinMatrices.size() == 3U
+            ? sampledSkeleton->currentSkinMatrices[2] *
+                kb::math::Vec4{ 0.0F, 0.0F, 0.0F, 1.0F }
+            : kb::math::Vec4{};
+        Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
+                sampledSkeleton.has_value() &&
+                sampledSkeleton->evaluationCount == 1U &&
+                sampledSkeleton->hierarchySolveCount == 1U &&
+                NearlyEqual(
+                    sampledSkeleton->previousLocalPose.positions[0].x,
+                    3.0F) &&
+                NearlyEqual(
+                    sampledSkeleton->currentLocalPose.positions[0].x,
+                    0.0F) &&
+                NearlyEqual(
+                    sampledSkeleton->currentLocalPose.positions[0].z,
+                    0.25F) &&
+                NearlyEqual(
+                    sampledSkeleton->currentLocalPose.positions[2].x,
+                    1.0F) &&
+                NearlyEqual(
+                    sampledSkeleton->currentComponentPose.positions[2].x,
+                    1.0F) &&
+                NearlyEqual(
+                    sampledSkeleton->currentComponentPose.positions[2].y,
+                    1.0F) &&
+                NearlyEqual(
+                    sampledSkeleton->currentComponentPose.positions[2].z,
+                    0.25F) &&
+                NearlyEqual(sampledSkinOrigin.x, 0.0F) &&
+                NearlyEqual(sampledSkinOrigin.y, 1.0F) &&
+                NearlyEqual(sampledSkinOrigin.z, 0.25F) &&
+                NearlyEqual(sampledSkinOrigin.w, 1.0F) &&
+                NearlyEqual(ownerTransform.localPosition.x, 0.0F) &&
+                NearlyEqual(ownerTransform.localPosition.y, 0.0F) &&
+                NearlyEqual(ownerTransform.localPosition.z, 0.0F) &&
+                scene.Entities().Count() == 1U,
+            "Indexed skeletal sampling did not write the compact pose independently of SceneEntity Transform storage");
+
+        Require(scene.Animators().CrossFade(
+                    owner.Entity(), "Base", "DirectB", 0.5F, 0.0F),
+            "Compact skeletal controller could not start a named transition");
+        static_cast<void>(scene.Runtime().Update(0.25F));
+        const auto transitionedSkeleton =
+            scene.Animators().InstanceSkeleton(owner.Entity());
+        const auto transitionedState =
+            scene.Animators().State(owner.Entity(), "Base");
+        const kb::math::Vec4 transitionedSkinOrigin =
+            transitionedSkeleton.has_value() &&
+                transitionedSkeleton->currentSkinMatrices.size() == 3U
+            ? transitionedSkeleton->currentSkinMatrices[2] *
+                kb::math::Vec4{ 0.0F, 0.0F, 0.0F, 1.0F }
+            : kb::math::Vec4{};
+        Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
+                transitionedSkeleton.has_value() &&
+                transitionedState.has_value() &&
+                transitionedSkeleton->evaluationCount == 2U &&
+                transitionedSkeleton->hierarchySolveCount == 2U &&
+                transitionedState->state == "DirectB" &&
+                transitionedState->previousState == "Blend" &&
+                transitionedState->transitioning &&
+                NearlyEqual(transitionedState->transitionProgress, 0.5F) &&
+                NearlyEqual(
+                    transitionedSkeleton->previousLocalPose.positions[2].x,
+                    1.0F) &&
+                NearlyEqual(
+                    transitionedSkeleton->currentLocalPose.positions[2].x,
+                    1.75F) &&
+                NearlyEqual(
+                    transitionedSkeleton->currentLocalPose.positions[0].x,
+                    0.0F) &&
+                NearlyEqual(
+                    transitionedSkeleton->currentLocalPose.positions[0].z,
+                    0.4375F) &&
+                NearlyEqual(
+                    transitionedSkeleton->currentComponentPose.positions[2].x,
+                    1.75F) &&
+                NearlyEqual(
+                    transitionedSkeleton->currentComponentPose.positions[2].y,
+                    1.0F) &&
+                NearlyEqual(
+                    transitionedSkeleton->currentComponentPose.positions[2].z,
+                    0.4375F) &&
+                NearlyEqual(transitionedSkinOrigin.x, 0.75F) &&
+                NearlyEqual(transitionedSkinOrigin.y, 1.0F) &&
+                NearlyEqual(transitionedSkinOrigin.z, 0.4375F) &&
+                NearlyEqual(transitionedSkinOrigin.w, 1.0F),
+            "Compact skeletal state/layer/mask/blend/transition evaluation diverged from controller semantics");
+
+        scene.Components().Animators().Set(
+            owner.Entity(), kb::scene::Animator{
+                .controllerAssetId =
+                    scene.Animators().Controller(owner.Entity()),
+                .speed = 1.0F,
+                .enabled = true,
+                .rootMotionOwner =
+                    kb::scene::AnimatorRootMotionOwner::Animator,
+            });
+        static_cast<void>(scene.Runtime().Update(0.25F));
+        const auto extractedSkeleton =
+            scene.Animators().InstanceSkeleton(owner.Entity());
+        const kb::scene::TransformComponent& extractedOwnerTransform =
+            scene.Transforms().Get(owner.Entity());
+        const kb::math::Vec4 extractedSkinOrigin =
+            extractedSkeleton.has_value() &&
+                extractedSkeleton->currentSkinMatrices.size() == 3U
+            ? extractedSkeleton->currentSkinMatrices[2] *
+                kb::math::Vec4{ 0.0F, 0.0F, 0.0F, 1.0F }
+            : kb::math::Vec4{};
+        Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
+                extractedSkeleton.has_value() &&
+                extractedSkeleton->evaluationCount == 3U &&
+                extractedSkeleton->hierarchySolveCount == 3U &&
+                NearlyEqual(
+                    extractedSkeleton->previousLocalPose.positions[0].z,
+                    0.4375F) &&
+                NearlyEqual(
+                    extractedSkeleton->currentLocalPose.positions[0].x,
+                    3.0F) &&
+                NearlyEqual(
+                    extractedSkeleton->currentLocalPose.positions[0].z,
+                    0.0F) &&
+                NearlyEqual(
+                    extractedSkeleton->currentLocalPose.positions[2].x,
+                    3.0F) &&
+                NearlyEqual(
+                    extractedSkeleton->currentComponentPose.positions[2].x,
+                    6.0F) &&
+                NearlyEqual(
+                    extractedSkeleton->currentComponentPose.positions[2].y,
+                    1.0F) &&
+                NearlyEqual(extractedSkinOrigin.x, 5.0F) &&
+                NearlyEqual(extractedSkinOrigin.y, 1.0F) &&
+                NearlyEqual(extractedSkinOrigin.z, 0.0F) &&
+                NearlyEqual(extractedOwnerTransform.localPosition.x, 0.0F) &&
+                NearlyEqual(extractedOwnerTransform.localPosition.y, 0.0F) &&
+                NearlyEqual(extractedOwnerTransform.localPosition.z, 0.25F),
+            "Skeletal root motion was not extracted before pose solve and routed exclusively to the Animator owner");
+
+        kb::scene::AnimationClip invalidBoneClip = instanceClip;
+        invalidBoneClip.rootMotionMode =
+            kb::scene::AnimationRootMotionMode::None;
+        invalidBoneClip.rootMotionBoneId = 0U;
+        invalidBoneClip.skeletalTracks[0].boneId = 404U;
+        const std::filesystem::path invalidBoneClipPath = skeletalRoot /
+            "Assets" / "Animation" / "InvalidBone.kbanim";
+        kb::scene::AnimatorController invalidBoneController =
+            instanceController;
+        invalidBoneController.layers[0].states[0]
+            .blendChildren[0].clipReference =
+            "/Game/Animation/InvalidBone.kbanim";
+        const std::filesystem::path invalidBoneControllerPath = skeletalRoot /
+            "Assets" / "Animation" / "InvalidBone.kbanimcontroller";
+        Require(kb::scene::AnimationAssetIO::SaveClip(
+                    invalidBoneClipPath, invalidBoneClip) &&
+                kb::scene::AnimationAssetIO::SaveController(
+                    invalidBoneControllerPath, invalidBoneController) &&
+                scene.Assets().Discover() == 6U,
+            "AnimatorInstance invalid-bone fixture could not be discovered");
+        const kb::assets::AssetMetadata* invalidControllerMetadata =
+            scene.Assets().Manager().Registry().FindByPath(
+                "/Game/Animation/InvalidBone.kbanimcontroller");
+        Require(invalidControllerMetadata != nullptr,
+            "AnimatorInstance invalid-bone controller metadata was missing");
+        const kb::scene::SceneObject invalidOwner =
+            scene.Entities().CreateObject({ .name = "Invalid Skeletal Character" });
+        Require(scene.Components().SkeletonBindings().Set(
+                    invalidOwner.Entity(), kb::scene::SkeletonBindingComponent{
+                        .skeletonAssetId = skeletonId.value,
+                        .skeletonCompatibilitySignature = skeletonSignature,
+                        .enabled = true,
+                    }),
+            "AnimatorInstance invalid-bone binding could not be authored");
+        scene.Components().Animators().Set(
+            invalidOwner.Entity(), kb::scene::Animator{
+                .controllerAssetId = invalidControllerMetadata->id.value,
+                .speed = 1.0F,
+                .enabled = true,
+            });
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const std::vector<std::string> invalidBoneErrors =
+            scene.Runtime().DrainSceneSystemErrors();
+        Require(!scene.Animators().Exists(invalidOwner.Entity()) &&
+                std::any_of(
+                    invalidBoneErrors.begin(), invalidBoneErrors.end(),
+                    [](const std::string& error) {
+                        return error.find("bind the authored hierarchy") !=
+                            std::string::npos;
+                    }),
+            "AnimatorInstance accepted a skeletal track with no canonical bone index");
+
+        scene.Components().Animators().Remove(invalidOwner.Entity());
+        scene.Runtime().SetPlaying(false);
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        static_cast<void>(scene.Runtime().DrainSceneSystemErrors());
+
+        kb::scene::AnimationClip constraintClip{};
+        constraintClip.durationSeconds = 1.0F;
+        constraintClip.looping = true;
+        constraintClip.targetSkeletonAssetId = skeletonId.value;
+        constraintClip.targetSkeletonCompatibilitySignature =
+            skeletonSignature;
+        constraintClip.skeletalTracks = {
+            {
+                .boneId = 700U,
+                .keyframes = {
+                    { .timeSeconds = 0.0F,
+                      .transform = skeleton.bones[0].referencePose },
+                    { .timeSeconds = 1.0F,
+                      .transform = skeleton.bones[0].referencePose },
+                },
+            },
+            {
+                .boneId = 101U,
+                .keyframes = {
+                    { .timeSeconds = 0.0F,
+                      .transform = skeleton.bones[1].referencePose },
+                    { .timeSeconds = 1.0F,
+                      .transform = skeleton.bones[1].referencePose },
+                },
+            },
+            {
+                .boneId = 900U,
+                .keyframes = {
+                    { .timeSeconds = 0.0F,
+                      .transform = skeleton.bones[2].referencePose },
+                    { .timeSeconds = 1.0F,
+                      .transform = skeleton.bones[2].referencePose },
+                },
+            },
+        };
+        const std::filesystem::path constraintClipPath = skeletalRoot /
+            "Assets" / "Animation" / "ConstraintPose.kbanim";
+        Require(kb::scene::AnimationAssetIO::SaveClip(
+                    constraintClipPath, constraintClip),
+            "Compact-pose constraint fixture could not save its clip");
+
+        const auto constraintController = [](
+            kb::scene::AnimatorRigConstraint constraint) {
+            kb::scene::AnimatorController value{};
+            value.layers = {
+                {
+                    .name = "Base",
+                    .defaultState = "Pose",
+                    .states = {
+                        {
+                            .name = "Pose",
+                            .clipReference =
+                                "/Game/Animation/ConstraintPose.kbanim",
+                        },
+                    },
+                },
+            };
+            value.rigConstraints.push_back(std::move(constraint));
+            return value;
+        };
+        const kb::scene::AnimatorController skeletalIkController =
+            constraintController({
+                .name = "Arm IK",
+                .type = kb::scene::AnimatorRigConstraintType::TwoBoneIK,
+                .target = "HandTarget",
+                .poleTarget = "ElbowPole",
+                .constrainedBoneId = 700U,
+                .midBoneId = 101U,
+                .tipBoneId = 900U,
+            });
+        const kb::scene::AnimatorController skeletalAimController =
+            constraintController({
+                .name = "Hand Aim",
+                .type = kb::scene::AnimatorRigConstraintType::Aim,
+                .target = "LookTarget",
+                .constrainedBoneId = 900U,
+            });
+        const kb::scene::AnimatorController skeletalCopyController =
+            constraintController({
+                .name = "Hand Copy",
+                .type = kb::scene::AnimatorRigConstraintType::CopyTransform,
+                .target = "CopyTarget",
+                .constrainedBoneId = 900U,
+            });
+        const std::filesystem::path skeletalIkControllerPath = skeletalRoot /
+            "Assets" / "Animation" / "SkeletalIk.kbanimcontroller";
+        const std::filesystem::path skeletalAimControllerPath = skeletalRoot /
+            "Assets" / "Animation" / "SkeletalAim.kbanimcontroller";
+        const std::filesystem::path skeletalCopyControllerPath = skeletalRoot /
+            "Assets" / "Animation" / "SkeletalCopy.kbanimcontroller";
+        Require(kb::scene::AnimationAssetIO::SaveController(
+                    skeletalIkControllerPath, skeletalIkController) &&
+                kb::scene::AnimationAssetIO::SaveController(
+                    skeletalAimControllerPath, skeletalAimController) &&
+                kb::scene::AnimationAssetIO::SaveController(
+                    skeletalCopyControllerPath, skeletalCopyController) &&
+                scene.Assets().Discover() == 10U,
+            "Compact-pose constraint assets were not discovered");
+        const auto loadedSkeletalIkController =
+            kb::scene::AnimationAssetIO::LoadController(
+                skeletalIkControllerPath);
+        Require(loadedSkeletalIkController.has_value() &&
+                loadedSkeletalIkController->rigConstraints.size() == 1U &&
+                loadedSkeletalIkController->rigConstraints[0]
+                        .constrainedBoneId == 700U &&
+                loadedSkeletalIkController->rigConstraints[0].midBoneId ==
+                    101U &&
+                loadedSkeletalIkController->rigConstraints[0].tipBoneId ==
+                    900U,
+            "Skeletal rig constraint serialization lost stable bone IDs");
+
+        const auto controllerIdAt = [&](std::string_view path) {
+            const kb::assets::AssetMetadata* metadata =
+                scene.Assets().Manager().Registry().FindByPath(
+                    std::filesystem::path{ path });
+            Require(metadata != nullptr,
+                "Compact-pose constraint controller metadata was missing");
+            return metadata->id.value;
+        };
+        const auto authorConstraintOwner = [&scene, skeletonId,
+                                             skeletonSignature](
+            std::string_view name, std::uint64_t controllerAssetId,
+            kb::scene::TransformComponent transform = {}) {
+            const kb::scene::SceneObject entity =
+                scene.Entities().CreateObject({
+                    .name = std::string{ name },
+                    .transform = transform,
+                });
+            Require(scene.Components().SkeletonBindings().Set(
+                        entity.Entity(),
+                        kb::scene::SkeletonBindingComponent{
+                            .skeletonAssetId = skeletonId.value,
+                            .skeletonCompatibilitySignature =
+                                skeletonSignature,
+                            .enabled = true,
+                        }),
+                "Compact-pose constraint owner could not bind its Skeleton");
+            scene.Components().Animators().Set(
+                entity.Entity(), kb::scene::Animator{
+                    .controllerAssetId = controllerAssetId,
+                    .speed = 1.0F,
+                    .enabled = true,
+                });
+            return entity;
+        };
+        const kb::scene::SceneObject ikOwner = authorConstraintOwner(
+            "Skeletal IK", controllerIdAt(
+                "/Game/Animation/SkeletalIk.kbanimcontroller"));
+        const kb::scene::SceneObject aimOwner = authorConstraintOwner(
+            "Skeletal Aim", controllerIdAt(
+                "/Game/Animation/SkeletalAim.kbanimcontroller"));
+        const kb::scene::SceneObject copyOwner = authorConstraintOwner(
+            "Skeletal Copy", controllerIdAt(
+                "/Game/Animation/SkeletalCopy.kbanimcontroller"),
+            kb::scene::TransformComponent{
+                .localPosition = { 10.0F, 0.0F, 0.0F },
+                .localScale = { 2.0F, 2.0F, 2.0F },
+            });
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const std::size_t entityCountBeforeConstraintEvaluation =
+            scene.Entities().Count();
+        Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
+                scene.Animators().SetIkTarget(
+                    ikOwner.Entity(), "HandTarget",
+                    kb::scene::AnimatorIkTarget{
+                        .worldPosition = { 4.0F, 2.0F, 1.0F },
+                    }) &&
+                scene.Animators().SetIkTarget(
+                    ikOwner.Entity(), "ElbowPole",
+                    kb::scene::AnimatorIkTarget{
+                        .worldPosition = { 3.0F, 0.0F, 2.0F },
+                    }) &&
+                scene.Animators().SetIkTarget(
+                    aimOwner.Entity(), "LookTarget",
+                    kb::scene::AnimatorIkTarget{
+                        .worldPosition = { 5.0F, 2.0F, 5.0F },
+                    }) &&
+                scene.Animators().SetIkTarget(
+                    copyOwner.Entity(), "CopyTarget",
+                    kb::scene::AnimatorIkTarget{
+                        .worldPosition = { 24.0F, 8.0F, 2.0F },
+                        .worldRotation = {
+                            0.0F, 0.70710678F, 0.0F, 0.70710678F,
+                        },
+                    }),
+            "Compact-pose constraint targets could not bind to live instances");
+        scene.Runtime().SetPlaying(true);
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const auto ikPose = scene.Animators().InstanceSkeleton(
+            ikOwner.Entity());
+        const auto aimPose = scene.Animators().InstanceSkeleton(
+            aimOwner.Entity());
+        const auto copyPose = scene.Animators().InstanceSkeleton(
+            copyOwner.Entity());
+        const kb::math::Vec3 aimedForward = aimPose.has_value()
+            ? kb::math::Rotate(
+                  aimPose->currentComponentPose.rotations[2],
+                  kb::math::Vec3{ 0.0F, 0.0F, 1.0F })
+            : kb::math::Vec3{};
+        Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
+                ikPose.has_value() && aimPose.has_value() &&
+                copyPose.has_value() &&
+                ikPose->evaluationCount == 1U &&
+                ikPose->hierarchySolveCount == 1U &&
+                aimPose->hierarchySolveCount == 1U &&
+                copyPose->hierarchySolveCount == 1U &&
+                kb::math::Length(
+                    ikPose->currentComponentPose.positions[2] -
+                    kb::math::Vec3{ 4.0F, 2.0F, 1.0F }) <= 1.0e-3F &&
+                kb::math::Dot(
+                    aimedForward,
+                    kb::math::Vec3{ 0.0F, 0.0F, 1.0F }) >= 0.999F &&
+                kb::math::Length(
+                    copyPose->currentComponentPose.positions[2] -
+                    kb::math::Vec3{ 7.0F, 4.0F, 1.0F }) <= 1.0e-4F &&
+                NearlyEqual(
+                    copyPose->currentComponentPose.rotations[2].y,
+                    0.70710678F) &&
+                scene.Entities().Count() ==
+                    entityCountBeforeConstraintEvaluation,
+            "Skeletal TwoBoneIK/Aim/CopyTransform did not evaluate on compact poses without bone entities or extra hierarchy solves");
+
+        const std::uint64_t instanceControllerId =
+            scene.Animators().Controller(owner.Entity());
+        const auto sampleDirectSkeletalState = [&scene, &owner,
+                                                 instanceControllerId]() {
+            scene.Components().Animators().Remove(owner.Entity());
+            static_cast<void>(scene.Runtime().Update(0.0F));
+            scene.Components().Animators().Set(
+                owner.Entity(), kb::scene::Animator{
+                    .controllerAssetId = instanceControllerId,
+                    .speed = 1.0F,
+                    .enabled = true,
+                    .rootMotionOwner =
+                        kb::scene::AnimatorRootMotionOwner::Animator,
+                });
+            kb::scene::TransformComponent* transform =
+                scene.Transforms().TryGet(owner.Entity());
+            Require(transform != nullptr,
+                "Deterministic skeletal sampling lost its root transform");
+            transform->localPosition = {};
+            transform->localRotation = {};
+            transform->localScale = { 1.0F, 1.0F, 1.0F };
+            scene.Transforms().MarkModified(owner.Entity());
+            static_cast<void>(scene.Runtime().Update(0.0F));
+            Require(scene.Animators().CrossFade(
+                        owner.Entity(), "Base", "DirectB", 0.0F, 0.0F),
+                "Deterministic skeletal sampling could not select DirectB");
+        };
+        sampleDirectSkeletalState();
+        static_cast<void>(scene.Runtime().Update(0.5F));
+        const auto wholeStepPose = scene.Animators().InstanceSkeleton(
+            owner.Entity());
+        const bool hasWholeStepPose = wholeStepPose.has_value();
+        const float wholeStepLocalHandX = hasWholeStepPose
+            ? wholeStepPose->currentLocalPose.positions[2].x
+            : 0.0F;
+        const float wholeStepComponentHandX = hasWholeStepPose
+            ? wholeStepPose->currentComponentPose.positions[2].x
+            : 0.0F;
+        const kb::scene::TransformComponent wholeStepTransform =
+            scene.Transforms().Get(owner.Entity());
+
+        sampleDirectSkeletalState();
+        static_cast<void>(scene.Runtime().Update(0.25F));
+        static_cast<void>(scene.Runtime().Update(0.25F));
+        const auto splitStepPose = scene.Animators().InstanceSkeleton(
+            owner.Entity());
+        const kb::scene::TransformComponent splitStepTransform =
+            scene.Transforms().Get(owner.Entity());
+        const std::string deterministicSkeletalFailure =
+            "Skeletal sampling, known pose, or root motion changed across equivalent frame slicing: whole hand=" +
+            std::to_string(wholeStepLocalHandX) +
+            " split hand=" +
+            std::to_string(splitStepPose.has_value()
+                               ? splitStepPose->currentLocalPose.positions[2].x
+                               : -999.0F) +
+            " whole root motion=" +
+            std::to_string(wholeStepTransform.localPosition.z) +
+            " split root motion=" +
+            std::to_string(splitStepTransform.localPosition.z);
+        Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
+                hasWholeStepPose && splitStepPose.has_value() &&
+                NearlyEqual(wholeStepLocalHandX, 3.0F) &&
+                NearlyEqual(splitStepPose->currentLocalPose.positions[2].x,
+                            3.0F) &&
+                NearlyEqual(wholeStepLocalHandX,
+                            splitStepPose->currentLocalPose.positions[2].x) &&
+                NearlyEqual(wholeStepComponentHandX,
+                            splitStepPose->currentComponentPose.positions[2].x) &&
+                NearlyEqual(wholeStepTransform.localPosition.z,
+                            splitStepTransform.localPosition.z),
+            deterministicSkeletalFailure.c_str());
+
+        const auto directBStateBeforeReload = scene.Animators().State(
+            owner.Entity(), "Base");
+        const kb::assets::AssetMetadata* instanceClipBMetadata =
+            scene.Assets().Manager().Registry().FindByPath(
+                "/Game/Animation/SkeletalB.kbanim");
+        Require(directBStateBeforeReload.has_value() &&
+                instanceClipBMetadata != nullptr,
+            "Skeletal hot-reload fixture lost its active state or clip metadata");
+        const std::uint64_t instanceClipBGeneration =
+            scene.Assets().Manager().LoadGeneration(instanceClipBMetadata->id);
+        kb::scene::AnimationClip reloadedInstanceClipB = instanceClipB;
+        reloadedInstanceClipB.skeletalTracks[0].keyframes[1].transform.position.x =
+            10.0F;
+        Require(kb::scene::AnimationAssetIO::SaveClip(
+                    instanceClipBPath, reloadedInstanceClipB) &&
+                scene.Assets().Discover() > 0U &&
+                scene.Assets().Manager().LoadGeneration(instanceClipBMetadata->id) >
+                    instanceClipBGeneration,
+            "Skeletal clip hot reload was not published through the production asset pipeline");
+        static_cast<void>(scene.Runtime().Update(0.25F));
+        const auto directBStateAfterReload = scene.Animators().State(
+            owner.Entity(), "Base");
+        const auto reloadedSkeletalPose = scene.Animators().InstanceSkeleton(
+            owner.Entity());
+        Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
+                directBStateAfterReload.has_value() &&
+                reloadedSkeletalPose.has_value() &&
+                directBStateAfterReload->state == "DirectB" &&
+                !directBStateAfterReload->transitioning &&
+                NearlyEqual(directBStateAfterReload->normalizedTime, 0.75F) &&
+                NearlyEqual(
+                    reloadedSkeletalPose->currentLocalPose.positions[2].x,
+                    7.5F),
+            "Skeletal hot reload did not preserve the live state/playhead or use the new clip payload");
+        Require(kb::scene::AnimationAssetIO::SaveClip(
+                    instanceClipBPath, instanceClipB),
+            "Skeletal hot-reload fixture could not restore its canonical clip");
+
+        std::filesystem::remove_all(skeletalRoot);
     }
     std::filesystem::remove_all(root);
 }

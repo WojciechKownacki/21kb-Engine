@@ -95,11 +95,43 @@ void WriteExtendedSkeletalGltfFixture(const std::filesystem::path& folder) {
     WriteTextFile(folder / "HeroExtended.gltf", R"({"asset":{"version":"2.0"},"buffers":[{"uri":"HeroExtended.bin","byteLength":318}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24},{"buffer":0,"byteOffset":60,"byteLength":48},{"buffer":0,"byteOffset":108,"byteLength":6},{"buffer":0,"byteOffset":114,"byteLength":128},{"buffer":0,"byteOffset":242,"byteLength":36},{"buffer":0,"byteOffset":278,"byteLength":8},{"buffer":0,"byteOffset":286,"byteLength":24},{"buffer":0,"byteOffset":310,"byteLength":8}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"MAT4"},{"bufferView":5,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":6,"componentType":5126,"count":2,"type":"SCALAR"},{"bufferView":7,"componentType":5126,"count":2,"type":"VEC3"},{"bufferView":8,"componentType":5126,"count":2,"type":"SCALAR"}],"materials":[{"name":"Skin"}],"meshes":[{"extras":{"targetNames":["Smile"]},"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3,"material":0,"targets":[{"POSITION":5}]}]}],"nodes":[{"name":"Root","children":[1]},{"name":"Spine","translation":[0,1,0]},{"mesh":0,"skin":0}],"skins":[{"joints":[0,1],"inverseBindMatrices":4}],"animations":[{"samplers":[{"input":6,"output":7,"interpolation":"LINEAR"},{"input":6,"output":8,"interpolation":"LINEAR"}],"channels":[{"sampler":0,"target":{"node":1,"path":"translation"}},{"sampler":1,"target":{"node":2,"path":"weights"}}]}]})");
 }
 
+void RunSkeletalGltfImportAcceptsSkinnedMeshAndSkinNodeTest() {
+    const auto root = std::filesystem::temp_directory_path() / "21kb-skeletal-gltf-import-acceptance";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    kb::tests::Require(!error, "Skeletal glTF acceptance test could not create its temporary root");
+
+    WriteSkeletalGltfFixture(root);
+    std::string importError;
+    kb::scene::SkeletalMeshGltfImportReport report;
+    const auto imported = kb::scene::SkeletalMeshGltfImporter::Import(
+        root / "Hero.gltf", 777U, &importError, &report);
+    kb::tests::Require(imported.has_value() &&
+            imported->skeleton.bones.size() == 2U &&
+            imported->skeleton.bones[1U].parentIndex == 0 &&
+            imported->mesh.skeletonAssetId == 777U &&
+            imported->mesh.lods.size() == 1U &&
+            imported->mesh.lods[0U].vertices.size() == 3U &&
+            imported->mesh.lods[0U].vertices[1U].jointIndices[0U] == 1U &&
+            imported->mesh.lods[0U].vertices[1U].jointWeights[0U] == 1.0F &&
+            imported->mesh.boundsMode == kb::scene::SkeletalMeshBoundsMode::ImportedConservative &&
+            imported->mesh.conservativeBounds.extents.x > 0.49F &&
+            imported->mesh.fixedBounds.extents.x == imported->mesh.conservativeBounds.extents.x &&
+            kb::scene::ValidateSkeletalMeshAsset(imported->mesh).valid,
+        "Skeletal glTF import rejected a valid skin node or did not preserve its skin data");
+    kb::tests::Require(!report.HasErrors(),
+        "Skeletal glTF import reported an error for a valid skinned mesh");
+
+    std::filesystem::remove_all(root, error);
+}
+
 } // namespace
 
 namespace kb::tests {
 
 void RunSkeletalMeshAssetTests() {
+    RunSkeletalGltfImportAcceptsSkinnedMeshAndSkinNodeTest();
     const auto root=std::filesystem::temp_directory_path()/"21kb-skeletal-mesh-asset-tests";
     std::filesystem::remove_all(root); const auto path=root/"Assets/Characters/Hero.kbskeletalmesh";
     kb::scene::SkeletonAsset skeleton{};
@@ -115,13 +147,18 @@ void RunSkeletalMeshAssetTests() {
     mesh.skeletonCompatibilitySignature =
         kb::scene::SkeletonCompatibilitySignature(skeleton);
     mesh.conservativeBounds={.center={0,0,0},.extents={1,2,1}};
+    mesh.fixedBounds = mesh.conservativeBounds;
     kb::scene::SkeletalMeshLod lod{}; lod.requiredBones={1U,2U}; lod.minScreenCoverage=0.5F;
     lod.vertices={ {}, {.position={1,0,0}}, {.position={0,1,0}} }; lod.indices={0,1,2}; lod.sections={{.firstIndex=0,.indexCount=3,.materialAssetId=42U,.boneMap={1U,2U}}}; mesh.lods={lod};
     mesh.morphTargets={{.name="Smile",.lodIndex=0,.deltas={{.vertexIndex=1,.positionDelta={0,0.1F,0}}}}};
     Require(kb::scene::ValidateSkeletalMeshAsset(mesh).valid,"Valid SkeletalMeshAsset was rejected");
     Require(kb::scene::SkeletalMeshAssetIO::Save(path,mesh),"SkeletalMeshAsset production save failed");
     const auto loaded=kb::scene::SkeletalMeshAssetIO::Load(path);
-    Require(loaded && loaded->lods.size()==1U && loaded->lods[0].sections[0].materialAssetId==42U && loaded->morphTargets[0].deltas.size()==1U,"SkeletalMeshAsset round trip lost canonical data");
+    Require(loaded && loaded->lods.size()==1U && loaded->lods[0].sections[0].materialAssetId==42U && loaded->morphTargets[0].deltas.size()==1U &&
+            loaded->boundsMode == kb::scene::SkeletalMeshBoundsMode::ImportedConservative &&
+            !loaded->lods[0].boneBounds.empty() &&
+            loaded->fixedBounds.extents.y == 2.0F,
+        "SkeletalMeshAsset round trip lost canonical data");
     const auto deterministicPath = root / "RoundTrip/HeroCopy.kbskeletalmesh";
     Require(kb::scene::SkeletalMeshAssetIO::Save(deterministicPath, mesh) &&
             ReadTextFile(path) == ReadTextFile(deterministicPath),
@@ -142,6 +179,36 @@ void RunSkeletalMeshAssetTests() {
         "SkeletalMeshAsset accepted an unsupported schema version without a diagnostic");
     kb::scene::SkeletalMeshAsset invalid=mesh; invalid.lods[0].vertices[0].jointWeights={0,0,0,0};
     Require(!kb::scene::ValidateSkeletalMeshAsset(invalid).valid,"SkeletalMeshAsset accepted zero skin weights");
+    invalid = mesh;
+    invalid.conservativeBounds.extents = { 0.25F, 0.25F, 0.25F };
+    Require(!kb::scene::ValidateSkeletalMeshAsset(invalid).valid,
+        "SkeletalMeshAsset accepted imported vertices outside conservative bounds");
+    kb::scene::SkeletalMeshAsset fixedBoundsMesh = mesh;
+    fixedBoundsMesh.boundsMode = kb::scene::SkeletalMeshBoundsMode::Fixed;
+    fixedBoundsMesh.fixedBounds = { .center = { 0.0F, 0.0F, 0.0F }, .extents = { 1.0F, 2.0F, 1.0F } };
+    Require(kb::scene::ValidateSkeletalMeshAsset(fixedBoundsMesh).valid &&
+            kb::scene::SkeletalMeshAssetIO::Save(root / "RoundTrip/FixedBounds.kbskeletalmesh", fixedBoundsMesh),
+        "SkeletalMeshAsset rejected an explicit fixed-bounds mode");
+    const auto loadedFixedBounds = kb::scene::SkeletalMeshAssetIO::Load(root / "RoundTrip/FixedBounds.kbskeletalmesh");
+    Require(loadedFixedBounds && loadedFixedBounds->boundsMode == kb::scene::SkeletalMeshBoundsMode::Fixed,
+        "SkeletalMeshAsset round trip lost its fixed-bounds mode");
+    kb::scene::SkeletalMeshAsset animatedBoundsMesh = mesh;
+    animatedBoundsMesh.lods[0].vertices[2].jointIndices[0] = 1U;
+    kb::scene::BuildSkeletalMeshLodBoneBounds(animatedBoundsMesh.lods[0]);
+    const std::array<kb::scene::SkeletonBoneId, 2U> animatedBoneIds{ 1U, 2U };
+    const std::array<kb::math::Mat4, 2U> animatedSkinMatrices{
+        kb::math::FromTRS({}, {}, { 1.0F, 1.0F, 1.0F }),
+        kb::math::FromTRS({ 0.0F, 3.0F, 0.0F }, {}, { 1.0F, 1.0F, 1.0F }),
+    };
+    const auto animatedBounds = kb::scene::EvaluateSkeletalMeshAnimatedBounds(
+        animatedBoundsMesh, 0U, animatedBoneIds, animatedSkinMatrices);
+    Require(animatedBounds && animatedBounds->center.y > 1.9F && animatedBounds->extents.y > 1.9F,
+        "SkeletalMeshAsset did not update bounds from the current bone palette");
+    animatedBoundsMesh.boundsMode = kb::scene::SkeletalMeshBoundsMode::Fixed;
+    const auto fixedAnimatedBounds = kb::scene::EvaluateSkeletalMeshAnimatedBounds(
+        animatedBoundsMesh, 0U, animatedBoneIds, animatedSkinMatrices);
+    Require(fixedAnimatedBounds && fixedAnimatedBounds->extents.y == animatedBoundsMesh.fixedBounds.extents.y,
+        "SkeletalMeshAsset fixed-bounds mode did not bypass animated bounds");
     const auto importRoot = root / "GltfImport";
     WriteSkeletalGltfFixture(importRoot);
     std::string importError;
@@ -414,16 +481,33 @@ void RunSkeletalMeshAssetTests() {
         "SkeletalMeshAsset reference reimport discovery failed");
     const auto* metadata=scene.Assets().Manager().Registry().FindByPath("/Game/Characters/Hero.kbskeletalmesh");
     Require(metadata && metadata->type==kb::scene::kSkeletalMeshAssetType,"SkeletalMeshAsset registry classification failed");
-    const auto runtime=scene.Assets().Manager().Load<kb::scene::SkeletalMeshAsset>(metadata->id);
+    const kb::assets::AssetId meshId = metadata->id;
+    const auto runtime=scene.Assets().Manager().Load<kb::scene::SkeletalMeshAsset>(meshId);
     Require(runtime.IsLoaded() && runtime->skeletonAssetId == skeletonId.value && runtime->lods[0].vertices.size()==3U,"SkeletalMeshAsset loader did not produce canonical runtime data");
-    Require(scene.Assets().Manager().ValidateCompatibility(metadata->id).compatible,
+    Require(scene.Assets().Manager().ValidateCompatibility(meshId).compatible,
         "SkeletalMeshAsset rejected a matching Skeleton reference");
+    const std::uint64_t meshLoadGeneration = scene.Assets().Manager().LoadGeneration(meshId);
     skeleton.bones[1].referencePose.position.y = 2.0F;
     Require(kb::scene::SkeletonAssetIO::Save(skeletonPath, skeleton),
         "SkeletalMeshAsset test Skeleton reimport could not be saved");
     Require(scene.Assets().Discover() == 2U,
         "SkeletalMeshAsset reimport discovery failed");
-    const auto report = scene.Assets().Manager().ValidateCompatibility(metadata->id);
+    const auto* reimportedMetadata = scene.Assets().Manager().Registry().FindByPath(
+        "/Game/Characters/Hero.kbskeletalmesh");
+    Require(reimportedMetadata != nullptr && reimportedMetadata->id == meshId,
+        "SkeletalMeshAsset reimport did not preserve the stable asset reference");
+    Require(scene.Assets().Manager().LoadGeneration(meshId) > meshLoadGeneration &&
+            !scene.Assets().Manager().IsLoaded(meshId),
+        "SkeletalMeshAsset reimport retained a stale dependent runtime payload");
+    const auto reloadedRuntime = scene.Assets().Manager().Load<kb::scene::SkeletalMeshAsset>(meshId);
+    Require(!reloadedRuntime.IsLoaded() &&
+            scene.Assets().Manager().LastError().find("incompatible compatibility signature") != std::string::npos,
+        "SkeletalMeshAsset reimport silently loaded an incompatible dependent mesh");
+    Require(scene.Assets().Manager().LoadAsync<kb::scene::SkeletalMeshAsset>(meshId) &&
+            scene.Assets().Manager().AsyncLoadStatus(meshId) == kb::assets::AsyncAssetLoadStatus::Failed &&
+            scene.Assets().Manager().AsyncLoadError(meshId).find("incompatible compatibility signature") != std::string::npos,
+        "SkeletalMeshAsset async reload silently accepted an incompatible dependent mesh");
+    const auto report = scene.Assets().Manager().ValidateCompatibility(meshId);
     Require(!report.compatible && !report.diagnostics.empty() &&
             report.diagnostics.front().issue == kb::assets::AssetCompatibilityIssue::IncompatibleDependency,
         "SkeletalMeshAsset accepted a reimported incompatible Skeleton");

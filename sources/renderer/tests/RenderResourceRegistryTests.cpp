@@ -17,8 +17,10 @@
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
+#include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "resources/RenderTextureResourceBuilder.hpp"
+#include "resources/RenderMeshResourceBuilder.hpp"
 #include "runtime/RuntimeTextureMipChain.hpp"
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
@@ -383,19 +385,68 @@ void RunStaticMeshVertexFormatsExposeExpectedStridesTest() {
     Require(RenderStaticMeshVertexLayout(RenderVertexFormat::P3N3UV2).getStride() == sizeof(RenderStaticMeshVertexP3N3UV2), "P3N3UV2 layout stride mismatch");
 }
 
-void RunStaticMeshRegistryRejectsSkinnedFormatUntilSkinningRuntimeExistsTest() {
-    const RenderStaticMeshVertexSkinned vertices[3]{};
+void RunSkinnedMeshRegistrationContractTest() {
+    RenderStaticMeshVertexSkinned vertices[]{
+        { .x = 0.0F, .y = 0.0F, .z = 0.0F, .joints = { 0U, 1U, 0U, 0U }, .weights = { 0.75F, 0.25F, 0.0F, 0.0F } },
+        { .x = 1.0F, .y = 0.0F, .z = 0.0F, .joints = { 0U, 1U, 0U, 0U }, .weights = { 0.75F, 0.25F, 0.0F, 0.0F } },
+        { .x = 0.0F, .y = 1.0F, .z = 0.0F, .joints = { 0U, 1U, 0U, 0U }, .weights = { 0.75F, 0.25F, 0.0F, 0.0F } },
+    };
     const std::uint16_t indices[]{ 0U, 1U, 2U };
-    RenderResourceRegistry registry;
-    const RenderMeshHandle handle = registry.RegisterMesh(RenderMeshDesc{
+    RenderMeshDesc desc{
         .vertexData = vertices,
         .vertexCount = 3U,
         .indices = indices,
         .indexCount = 3U,
         .vertexFormat = RenderVertexFormat::SkinnedP3N3T4UV2J4W4,
         .indexFormat = RenderIndexFormat::Uint16,
-    });
-    Require(!handle.IsValid(), "Static mesh registry accepted a skinned vertex format without skinning runtime support");
+        .skinning = { .jointCount = 2U },
+    };
+    Require(RenderMeshResourceBuilder::IsValidDesc(desc),
+        "Skinned mesh registration rejected a valid layout, influences, or joint range");
+    const RenderMeshResource resource = RenderMeshResourceBuilder::Build(
+        desc, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
+    Require(resource.vertexFormat == RenderVertexFormat::SkinnedP3N3T4UV2J4W4 &&
+            resource.skinning.jointCount == 2U,
+        "Skinned mesh registration did not retain its joint-range metadata");
+
+    desc.skinning.jointCount = 0U;
+    Require(!RenderMeshResourceBuilder::IsValidDesc(desc),
+        "Skinned mesh registration accepted an absent joint range");
+    desc.skinning.jointCount = 2U;
+    vertices[1U].joints[0U] = 2U;
+    Require(!RenderMeshResourceBuilder::IsValidDesc(desc),
+        "Skinned mesh registration accepted an out-of-range joint index");
+    vertices[1U].joints[0U] = 0U;
+    vertices[1U].weights[0U] = 0.5F;
+    Require(!RenderMeshResourceBuilder::IsValidDesc(desc),
+        "Skinned mesh registration accepted non-normalized joint weights");
+    vertices[1U].weights[0U] = 0.75F;
+    desc.skinning.jointCount = kRenderSkinnedVertexJointLimit + 1U;
+    Require(!RenderMeshResourceBuilder::IsValidDesc(desc),
+        "Skinned mesh registration accepted a joint range beyond the BGFX Uint16 vertex layout");
+}
+
+void RunSkinningPaletteAllocatorLifetimeTest() {
+    RenderSkinningPaletteAllocator allocator{
+        RenderSkinningPaletteAllocatorDesc{ .matrixCapacityPerFrame = 4U } };
+    Require(allocator.BeginFrame(1U, 0U),
+        "Skinning palette allocator could not begin its first frame");
+    const RenderSkinningPaletteHandle first = allocator.Allocate(3U);
+    Require(first.IsValid() && first.firstMatrix == 0U && first.matrixCount == 3U &&
+            !allocator.Allocate(2U).IsValid(),
+        "Skinning palette allocator did not enforce its per-frame capacity");
+    Require(allocator.BeginFrame(2U, 0U) && allocator.Allocate(4U).IsValid() &&
+            !allocator.BeginFrame(3U, 0U),
+        "Skinning palette allocator overwrote a palette before its frame fence completed");
+    Require(allocator.BeginFrame(3U, 1U) && allocator.Allocate(1U).IsValid(),
+        "Skinning palette allocator did not reuse a completed double-buffered frame");
+    const RenderSkinningPaletteAllocatorStats stats = allocator.Stats();
+    Require(stats.activeFrame == 3U && stats.completedFrame == 1U &&
+            stats.allocatedMatrices == 1U && stats.allocationFailures == 2U,
+        "Skinning palette allocator did not report frame ownership or explicit pressure");
+    allocator.Shutdown();
+    Require(allocator.BeginFrame(1U, 0U) && allocator.Allocate(4U).IsValid(),
+        "Skinning palette allocator did not reset cleanly after renderer reload");
 }
 
 void RunObjImporterBuildsRenderMeshDescWithSectionsAndSlotsTest() {
@@ -1088,120 +1139,6 @@ void RunRuntimeMaterialResolverBlocksTraversalTexturePathsTest() {
     Require(importedResolved.material.desc.albedoTextureAssetId == importedTexture.id.value,
         "Runtime resolver did not bind editor-imported Texture assets to material texture ids");
 
-    std::filesystem::remove_all(root, error);
-}
-
-void RunGltfImporterRejectsSkinnedMeshesUntilSkinningRuntimeExistsTest() {
-    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_skinned_gltf_reject";
-    std::error_code error;
-    std::filesystem::remove_all(root, error);
-    std::filesystem::create_directories(root, error);
-    Require(!error, "Skinned glTF reject test could not create temp root");
-
-    const std::filesystem::path binPath = root / "skinned.bin";
-    {
-        const std::vector<float> positions{
-            0.0F, 0.0F, 0.0F,
-            1.0F, 0.0F, 0.0F,
-            0.0F, 1.0F, 0.0F,
-        };
-        const std::uint16_t joints[]{
-            0U, 1U, 0U, 0U,
-            0U, 1U, 0U, 0U,
-            0U, 1U, 0U, 0U,
-        };
-        const std::vector<float> weights{
-            0.75F, 0.25F, 0.0F, 0.0F,
-            0.75F, 0.25F, 0.0F, 0.0F,
-            0.75F, 0.25F, 0.0F, 0.0F,
-        };
-        const std::uint16_t indices[]{ 0U, 1U, 2U };
-
-        std::ofstream output{ binPath, std::ios::binary | std::ios::trunc };
-        output.write(reinterpret_cast<const char*>(positions.data()), static_cast<std::streamsize>(positions.size() * sizeof(float)));
-        output.write(reinterpret_cast<const char*>(joints), static_cast<std::streamsize>(sizeof(joints)));
-        output.write(reinterpret_cast<const char*>(weights.data()), static_cast<std::streamsize>(weights.size() * sizeof(float)));
-        output.write(reinterpret_cast<const char*>(indices), static_cast<std::streamsize>(sizeof(indices)));
-        const std::uint16_t padding = 0U;
-        output.write(reinterpret_cast<const char*>(&padding), static_cast<std::streamsize>(sizeof(padding)));
-    }
-
-    const std::filesystem::path gltfPath = root / "skinned.gltf";
-    {
-        std::ofstream output{ gltfPath, std::ios::trunc };
-        output
-            << "{\n"
-            << "  \"asset\": { \"version\": \"2.0\" },\n"
-            << "  \"scene\": 0,\n"
-            << "  \"scenes\": [{ \"nodes\": [0] }],\n"
-            << "  \"nodes\": [{ \"mesh\": 0 }],\n"
-            << "  \"meshes\": [{ \"primitives\": [{ \"attributes\": { \"POSITION\": 0, \"JOINTS_0\": 1, \"WEIGHTS_0\": 2 }, \"indices\": 3 }] }],\n"
-            << "  \"buffers\": [{ \"uri\": \"skinned.bin\", \"byteLength\": 112 }],\n"
-            << "  \"bufferViews\": [\n"
-            << "    { \"buffer\": 0, \"byteOffset\": 0, \"byteLength\": 36, \"target\": 34962 },\n"
-            << "    { \"buffer\": 0, \"byteOffset\": 36, \"byteLength\": 24, \"target\": 34962 },\n"
-            << "    { \"buffer\": 0, \"byteOffset\": 60, \"byteLength\": 48, \"target\": 34962 },\n"
-            << "    { \"buffer\": 0, \"byteOffset\": 108, \"byteLength\": 6, \"target\": 34963 }\n"
-            << "  ],\n"
-            << "  \"accessors\": [\n"
-            << "    { \"bufferView\": 0, \"componentType\": 5126, \"count\": 3, \"type\": \"VEC3\", \"min\": [0, 0, 0], \"max\": [1, 1, 0] },\n"
-            << "    { \"bufferView\": 1, \"componentType\": 5123, \"count\": 3, \"type\": \"VEC4\" },\n"
-            << "    { \"bufferView\": 2, \"componentType\": 5126, \"count\": 3, \"type\": \"VEC4\" },\n"
-            << "    { \"bufferView\": 3, \"componentType\": 5123, \"count\": 3, \"type\": \"SCALAR\" }\n"
-            << "  ]\n"
-            << "}\n";
-    }
-
-    Require(!RenderMeshAssetBuilder::LoadGltf(gltfPath).has_value(), "Static glTF importer accepted a skinned mesh without skinning runtime support");
-    std::filesystem::remove_all(root, error);
-}
-
-void RunGltfImporterRejectsSkinNodesUntilSkinningRuntimeExistsTest() {
-    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_skin_node_gltf_reject";
-    std::error_code error;
-    std::filesystem::remove_all(root, error);
-    std::filesystem::create_directories(root, error);
-    Require(!error, "Skin node glTF reject test could not create temp root");
-
-    const std::filesystem::path binPath = root / "skin_node.bin";
-    {
-        const std::vector<float> positions{
-            0.0F, 0.0F, 0.0F,
-            1.0F, 0.0F, 0.0F,
-            0.0F, 1.0F, 0.0F,
-        };
-        const std::uint16_t indices[]{ 0U, 1U, 2U };
-        std::ofstream output{ binPath, std::ios::binary | std::ios::trunc };
-        output.write(reinterpret_cast<const char*>(positions.data()), static_cast<std::streamsize>(positions.size() * sizeof(float)));
-        output.write(reinterpret_cast<const char*>(indices), static_cast<std::streamsize>(sizeof(indices)));
-        const std::uint16_t padding = 0U;
-        output.write(reinterpret_cast<const char*>(&padding), static_cast<std::streamsize>(sizeof(padding)));
-    }
-
-    const std::filesystem::path gltfPath = root / "skin_node.gltf";
-    {
-        std::ofstream output{ gltfPath, std::ios::trunc };
-        output
-            << "{\n"
-            << "  \"asset\": { \"version\": \"2.0\" },\n"
-            << "  \"scene\": 0,\n"
-            << "  \"scenes\": [{ \"nodes\": [0] }],\n"
-            << "  \"nodes\": [{ \"mesh\": 0, \"skin\": 0 }],\n"
-            << "  \"skins\": [{ \"joints\": [] }],\n"
-            << "  \"meshes\": [{ \"primitives\": [{ \"attributes\": { \"POSITION\": 0 }, \"indices\": 1 }] }],\n"
-            << "  \"buffers\": [{ \"uri\": \"skin_node.bin\", \"byteLength\": 44 }],\n"
-            << "  \"bufferViews\": [\n"
-            << "    { \"buffer\": 0, \"byteOffset\": 0, \"byteLength\": 36, \"target\": 34962 },\n"
-            << "    { \"buffer\": 0, \"byteOffset\": 36, \"byteLength\": 6, \"target\": 34963 }\n"
-            << "  ],\n"
-            << "  \"accessors\": [\n"
-            << "    { \"bufferView\": 0, \"componentType\": 5126, \"count\": 3, \"type\": \"VEC3\" },\n"
-            << "    { \"bufferView\": 1, \"componentType\": 5123, \"count\": 3, \"type\": \"SCALAR\" }\n"
-            << "  ]\n"
-            << "}\n";
-    }
-
-    Require(!RenderMeshAssetBuilder::LoadGltf(gltfPath).has_value(), "Static glTF importer accepted a skin node without skinning runtime support");
     std::filesystem::remove_all(root, error);
 }
 
@@ -2911,7 +2848,8 @@ void RunRenderResourceRegistryTests() {
     RunShutdownInvalidatesLiveHandlesTest();
     RunReserveAndStatsReportPoolPressureTest();
     RunStaticMeshVertexFormatsExposeExpectedStridesTest();
-    RunStaticMeshRegistryRejectsSkinnedFormatUntilSkinningRuntimeExistsTest();
+    RunSkinnedMeshRegistrationContractTest();
+    RunSkinningPaletteAllocatorLifetimeTest();
     RunObjImporterBuildsRenderMeshDescWithSectionsAndSlotsTest();
     RunFbxImporterBuildsSectionsForMaterialSlotsTest();
     RunFbxImporterStopsAtFooterAfterNullTerminatorTest();
@@ -2922,8 +2860,6 @@ void RunRenderResourceRegistryTests() {
     RunGltfImporterKeepsDefaultUvTransformForUnsupportedTextureRotationTest();
     RunGltfImporterBlocksTraversalTextureUrisTest();
     RunRuntimeMaterialResolverBlocksTraversalTexturePathsTest();
-    RunGltfImporterRejectsSkinnedMeshesUntilSkinningRuntimeExistsTest();
-    RunGltfImporterRejectsSkinNodesUntilSkinningRuntimeExistsTest();
     RunGltfImporterRejectsOutOfRangeIndicesTest();
     RunGltfImporterKeepsUint32IndicesForLargeTangentMeshesTest();
     RunRenderMaterialAssetLoaderDiscoversAndLoadsMaterialThroughAssetManagerTest();

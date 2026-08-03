@@ -267,6 +267,7 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
     }
     SetGpuDrivenRuntimeDispatchEnabled(gpuDrivenRuntimeDispatchEnabled_);
     renderSceneSynchronizer_ = std::make_unique<EcsRenderSceneSynchronizer>();
+    renderSceneSynchronizer_->SetSkinningPaletteAllocator(&sceneRenderer_->SkinningPalettes());
     particleRenderSynchronizer_ = std::make_unique<SceneParticleRenderSynchronizer>();
     auxFrameRenderer_ = std::make_unique<AuxFrameRenderer>();
     screenCapture_ = std::make_unique<RendererScreenCapture>();
@@ -383,6 +384,11 @@ bool Renderer::BeginFrame() {
     frameActive_ = context_->BeginFrame();
     if (frameActive_) {
         frameState_.Begin(static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL);
+        if (sceneRenderer_ != nullptr) {
+            static_cast<void>(sceneRenderer_->BeginSkinningFrame(
+                static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL,
+                static_cast<std::uint64_t>(lastCompletedFrame_)));
+        }
     } else {
         frameState_.Reset();
     }
@@ -1360,6 +1366,12 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
 
             TemporalViewportState& temporalState = TemporalStateFor(desc.target.viewport.id, desc.target.viewport.viewportIndex);
             const bool temporalHistoryValid = temporalState.hasHistory && temporalState.extent == sampledSceneDesc.target.viewport.extent;
+            const std::array<float, 16> currentUnjitteredViewProjection = overlayCamera == nullptr
+                ? RendererMatrixMath::Identity()
+                : RendererMatrixMath::ViewProjection(*overlayCamera);
+            const std::array<float, 16> previousMotionViewProjection = temporalHistoryValid
+                ? temporalState.previousViewProjection
+                : currentUnjitteredViewProjection;
             {
                 std::ostringstream message;
                 message << "AA renderer submit"
@@ -1422,6 +1434,31 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             if (!bgfx::isValid(scenePostProcessOutput)) {
                 WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport postProcess Submit invalid output");
                 return false;
+            }
+            if (postProcessOutput.temporalAntiAliasingEnabled && overlayCamera != nullptr &&
+                bgfx::isValid(sampledSceneDesc.postProcess.motionVectorFrameBuffer) &&
+                bgfx::isValid(sampledSceneDesc.SceneOverlayDepthTexture())) {
+                sceneRenderer_->SetMotionVectorPreviousViewProjection(previousMotionViewProjection);
+                const RendererMeshPassSubmitDesc motionVectorSubmitDesc{
+                    .sceneRenderer = *sceneRenderer_,
+                    .renderScene = renderScene,
+                    .sceneDesc = sampledSceneDesc,
+                    .viewportPlan = viewportPlan,
+                    .sceneCamera = overlayCamera,
+                    .lightingConfig = effectiveLightingConfig,
+                    .width = width,
+                    .height = height,
+                    .gpuDrivenSupport = effectiveGpuDrivenSupport,
+                    .aggregateSubmitStats = lastSceneSubmitStats_,
+                    .diagnostics = lastSceneDiagnostics_,
+                    .passSubmitStats = lastScenePassSubmitStats_,
+                };
+                RendererMeshPassSubmitter::SubmitViewportPass(
+                    motionVectorSubmitDesc,
+                    viewportPlan.viewIds.postProcessMotionVectors,
+                    RenderPassKind::PostProcessMotionVectors,
+                    MeshPassType::MotionVectors,
+                    nullptr);
             }
             {
                 std::ostringstream message;

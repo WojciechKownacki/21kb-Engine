@@ -2,6 +2,7 @@
 
 #include "kb/render/MaterialProgramRegistry.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
+#include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
 #include "kb/render/scene/MeshPipeline.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
@@ -63,7 +64,11 @@ public:
     void SetSceneDepthTexture(bgfx::TextureHandle texture) noexcept;
     // MAT-31: opaque scene color snapshot bound to color-sampling graph materials (SceneColor / SceneTexture).
     void SetSceneColorTexture(bgfx::TextureHandle texture) noexcept;
+    void SetMotionVectorPreviousViewProjection(const std::array<float, 16>& matrix) noexcept;
     void TickFrame() noexcept;
+    [[nodiscard]] bool BeginSkinningFrame(
+        std::uint64_t frame, std::uint64_t completedFrame) noexcept;
+    [[nodiscard]] RenderSkinningPaletteAllocator& SkinningPalettes() noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] RenderResourceRegistry& Resources() noexcept;
     [[nodiscard]] const RenderResourceRegistry& Resources() const noexcept;
@@ -86,6 +91,8 @@ public:
 private:
     RenderResourceRegistry resources_;
     SceneRenderResourceMap resourceMap_;
+    RenderSkinningPaletteAllocator skinningPalettes_{
+        RenderSkinningPaletteAllocatorDesc{ .matrixCapacityPerFrame = 4096U } };
     std::unique_ptr<SceneMeshSubmitter> meshSubmitter_;
     mutable MeshPipelineBuildResult validationPipelineScratch_;
     mutable SceneRenderSubmitStats lastSubmitStats_{};
@@ -96,6 +103,11 @@ private:
     std::string graphShaderCacheRoot_;
     bgfx::TextureHandle sceneDepthTexture_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle sceneColorTexture_ = BGFX_INVALID_HANDLE;
+    std::array<float, 16> motionVectorPreviousViewProjection_{
+        1.0F, 0.0F, 0.0F, 0.0F,
+        0.0F, 1.0F, 0.0F, 0.0F,
+        0.0F, 0.0F, 1.0F, 0.0F,
+        0.0F, 0.0F, 0.0F, 1.0F};
     float frameTimeSeconds_ = 0.0F;
     float frameDeltaSeconds_ = 0.0F;
     std::uint32_t frameTimeIndex_ = 0U;

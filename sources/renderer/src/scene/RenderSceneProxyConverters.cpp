@@ -133,6 +133,8 @@ SceneRenderMeshInstance RenderSceneMeshInstanceBuilder::Build(const MeshRenderPr
         .color = mesh.color,
         .fadeAmount = mesh.fadeAmount,
         .customData0 = mesh.customData0,
+        .currentSkinningPalette = mesh.currentSkinningPalette,
+        .previousSkinningPalette = mesh.previousSkinningPalette,
         .castsShadow = mesh.castsShadow,
         .receivesShadow = mesh.receivesShadow,
         .layer = mesh.layer,
