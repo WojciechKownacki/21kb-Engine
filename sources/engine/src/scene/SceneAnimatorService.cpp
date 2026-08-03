@@ -92,6 +92,53 @@ double StateTime(float normalizedTime, const AnimationClip& clip);
     return true;
 }
 
+void InitializePoseBuffers(AnimatorInstanceSkeleton& derived) {
+    AnimatorInstanceSkeleton::PoseBuffer& reference = derived.poses[0U];
+    const std::size_t boneCount = derived.asset->bones.size();
+    reference.local.positions.reserve(boneCount);
+    reference.local.rotations.reserve(boneCount);
+    reference.local.scales.reserve(boneCount);
+    reference.component.positions.resize(boneCount);
+    reference.component.rotations.resize(boneCount);
+    reference.component.scales.resize(boneCount);
+
+    for (std::size_t index = 0U; index < boneCount; ++index) {
+        const SkeletonBone& bone = derived.asset->bones[index];
+        reference.local.positions.push_back(bone.referencePose.position);
+        reference.local.rotations.push_back(bone.referencePose.rotation);
+        reference.local.scales.push_back(bone.referencePose.scale);
+
+        if (bone.parentIndex < 0) {
+            reference.component.positions[index] = bone.referencePose.position;
+            reference.component.rotations[index] = bone.referencePose.rotation;
+            reference.component.scales[index] = bone.referencePose.scale;
+            continue;
+        }
+        const std::size_t parentIndex =
+            static_cast<std::size_t>(bone.parentIndex);
+        const Vec3 parentScale = reference.component.scales[parentIndex];
+        const Vec3 scaledLocalPosition{
+            parentScale.x * bone.referencePose.position.x,
+            parentScale.y * bone.referencePose.position.y,
+            parentScale.z * bone.referencePose.position.z,
+        };
+        reference.component.positions[index] =
+            reference.component.positions[parentIndex] + kb::math::Rotate(
+                reference.component.rotations[parentIndex],
+                scaledLocalPosition);
+        reference.component.rotations[index] = kb::math::Normalize(
+            reference.component.rotations[parentIndex] *
+            bone.referencePose.rotation);
+        reference.component.scales[index] = {
+            parentScale.x * bone.referencePose.scale.x,
+            parentScale.y * bone.referencePose.scale.y,
+            parentScale.z * bone.referencePose.scale.z,
+        };
+    }
+    derived.poses[1U] = reference;
+    derived.currentPose = 0U;
+}
+
 [[nodiscard]] bool BindSkeletalMotion(
     Scene& scene, AnimatorRuntimeRecord& instance,
     AnimatorRuntimeState::Motion& motion) {
@@ -136,6 +183,7 @@ double StateTime(float normalizedTime, const AnimationClip& clip);
                 return false;
             }
         }
+        InitializePoseBuffers(derived);
         instance.skeleton.emplace(std::move(derived));
     } else if (instance.skeleton->asset.Id().value !=
                    clip.targetSkeletonAssetId ||
@@ -1197,11 +1245,27 @@ SceneAnimatorService::InstanceSkeleton(
     if (instance == nullptr || !instance->skeleton.has_value()) {
         return std::nullopt;
     }
+    const AnimatorInstanceSkeleton& skeleton = *instance->skeleton;
+    const AnimatorInstanceSkeleton::PoseBuffer& current =
+        skeleton.poses[skeleton.currentPose];
+    const AnimatorInstanceSkeleton::PoseBuffer& previous =
+        skeleton.poses[skeleton.currentPose ^ 1U];
+    const auto view = [](const AnimatorInstanceSkeleton::PoseSoa& pose) {
+        return AnimatorPoseSoaView{
+            .positions = pose.positions,
+            .rotations = pose.rotations,
+            .scales = pose.scales,
+        };
+    };
     return AnimatorInstanceSkeletonView{
-        .skeletonAssetId = instance->skeleton->asset.Id().value,
+        .skeletonAssetId = skeleton.asset.Id().value,
         .compatibilitySignature =
-            instance->skeleton->compatibilitySignature,
-        .boneIds = instance->skeleton->boneIds,
+            skeleton.compatibilitySignature,
+        .boneIds = skeleton.boneIds,
+        .currentLocalPose = view(current.local),
+        .previousLocalPose = view(previous.local),
+        .currentComponentPose = view(current.component),
+        .previousComponentPose = view(previous.component),
     };
 }
 
