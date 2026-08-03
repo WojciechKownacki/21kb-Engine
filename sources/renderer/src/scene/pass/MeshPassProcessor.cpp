@@ -42,6 +42,7 @@ void EmitInstanceDiagnostic(
     switch (pass) {
     case MeshPassType::SelectionId:
     case MeshPassType::EditorSelection:
+    case MeshPassType::MotionVectors:
         return false;
     case MeshPassType::Depth:
     case MeshPassType::BaseOpaque:
@@ -61,6 +62,7 @@ void EmitInstanceDiagnostic(
     case MeshPassType::BaseOpaque:
     case MeshPassType::GBuffer:
     case MeshPassType::ShadowDepth:
+    case MeshPassType::MotionVectors:
         return true;
     case MeshPassType::BaseTransparent:
         // The transparent pass IS the alpha-blend pass (MAT-80); it must not skip blended materials.

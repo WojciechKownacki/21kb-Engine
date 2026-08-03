@@ -41,6 +41,7 @@ void RunMeshPassTypeNamesResolveTest() {
     Require(MeshPassTypeName(MeshPassType::GBuffer) == std::string_view("GBuffer"), "MeshPassTypeName did not resolve GBuffer");
     Require(MeshPassTypeName(MeshPassType::BaseTransparent) == std::string_view("BaseTransparent"), "MeshPassTypeName did not resolve BaseTransparent");
     Require(MeshPassTypeName(MeshPassType::ShadowDepth) == std::string_view("ShadowDepth"), "MeshPassTypeName did not resolve ShadowDepth");
+    Require(MeshPassTypeName(MeshPassType::MotionVectors) == std::string_view("MotionVectors"), "MeshPassTypeName did not resolve MotionVectors");
     Require(MeshPassTypeName(MeshPassType::SelectionId) == std::string_view("SelectionId"), "MeshPassTypeName did not resolve SelectionId");
     Require(MeshPassTypeName(MeshPassType::EditorSelection) == std::string_view("EditorSelection"), "MeshPassTypeName did not resolve EditorSelection");
     Require(MeshPassTypeName(MeshPassType::Gizmo) == std::string_view("Gizmo"), "MeshPassTypeName did not resolve Gizmo");
@@ -56,6 +57,7 @@ void RunFramePassKindsMapToMeshPassesTest() {
     Require(MeshPassForRenderPassKind(RenderPassKind::GBufferGeometry).value_or(MeshPassType::Depth) == MeshPassType::GBuffer, "GBufferGeometry did not map to GBuffer mesh pass");
     Require(MeshPassForRenderPassKind(RenderPassKind::TransparentScene).value_or(MeshPassType::Depth) == MeshPassType::BaseTransparent, "TransparentScene did not map to BaseTransparent mesh pass");
     Require(MeshPassForRenderPassKind(RenderPassKind::EditorSelectionMask).value_or(MeshPassType::Depth) == MeshPassType::SelectionId, "EditorSelectionMask did not map to SelectionId mesh pass");
+    Require(MeshPassForRenderPassKind(RenderPassKind::PostProcessMotionVectors).value_or(MeshPassType::Depth) == MeshPassType::MotionVectors, "PostProcessMotionVectors did not map to MotionVectors mesh pass");
     Require(!MeshPassForRenderPassKind(RenderPassKind::PostProcessBloomPrefilter).has_value(), "Post-process pass unexpectedly mapped to a mesh pass");
     Require(!MeshPassForRenderPassKind(RenderPassKind::FinalComposite).has_value(), "FinalComposite unexpectedly mapped to a mesh pass");
 }
