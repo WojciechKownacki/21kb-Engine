@@ -749,7 +749,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
 
 46. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zbudować jeden Persona-like `AnimationPreviewContext` współdzielony
     przez wszystkie edytory animacyjne.
-47. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Preview musi używać dokładnie produkcyjnego AnimatorInstance, GPU
+47. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Preview musi używać dokładnie produkcyjnego AnimatorInstance, GPU
     skinningu, bounds i materiałów z runtime gry.
 48. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać kompatybilny preview Skeleton/SkeletalMesh/Clip/Controller,
     reference pose i animated pose.

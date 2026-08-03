@@ -89,6 +89,7 @@ class EditorInputMappingContextAuthoring;
 class IEditorMaterialAssetPropertyEdit;
 class EditorMaterialAssetAuthoring;
 class EditorMaterialPreviewScene;
+class EditorAnimationPreviewScene;
 struct EditorMaterialPreviewTelemetry;
 class EditorMaterialGraphCookService;
 struct EditorMaterialGraphCookResult;
@@ -170,6 +171,7 @@ public:
     [[nodiscard]] const EditorViewportPreviewState& ViewportPreview(std::uint64_t viewportKey) const noexcept;
     [[nodiscard]] AnimationPreviewContext& AnimationPreview() noexcept;
     [[nodiscard]] const AnimationPreviewContext& AnimationPreview() const noexcept;
+    [[nodiscard]] const kb::scene::Scene& AnimationPreviewScene();
     [[nodiscard]] EditorViewportCameraState& ViewportCamera() noexcept;
     [[nodiscard]] const EditorViewportCameraState& ViewportCamera() const noexcept;
     [[nodiscard]] EditorViewportCameraState& ViewportCamera(std::uint64_t viewportKey) noexcept;
@@ -947,6 +949,7 @@ private:
     EditorConsoleState console_;
     EditorSceneViewportStateStore viewportState_;
     AnimationPreviewContext animationPreview_;
+    std::unique_ptr<EditorAnimationPreviewScene> animationPreviewScene_;
     InspectorPanelState inspector_;
     MaterialEditorState materialEditor_;
     kb::assets::AssetId materialRuntimePreviewAssetId_{};
