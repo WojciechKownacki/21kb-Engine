@@ -36,6 +36,7 @@
 #include "scene/systems/SceneSystemScheduler.hpp"
 #include "scene/transform/SceneTransformBranchUpdater.hpp"
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -108,11 +109,23 @@ struct AnimatorRuntimeConstraint {
 };
 
 struct AnimatorInstanceSkeleton {
+    struct PoseSoa {
+        std::vector<Vec3> positions;
+        std::vector<Quat> rotations;
+        std::vector<Vec3> scales;
+    };
+    struct PoseBuffer {
+        PoseSoa local;
+        PoseSoa component;
+    };
+
     kb::assets::AssetHandle<SkeletonAsset> asset;
     std::uint64_t loadGeneration = 0U;
     std::uint64_t compatibilitySignature = 0U;
     std::vector<SkeletonBoneId> boneIds;
     std::unordered_map<SkeletonBoneId, std::uint32_t> boneIndices;
+    std::array<PoseBuffer, 2U> poses;
+    std::uint32_t currentPose = 0U;
 };
 
 struct AnimatorInstance {

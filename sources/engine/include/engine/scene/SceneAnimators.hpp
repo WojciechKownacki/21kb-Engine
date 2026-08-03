@@ -13,10 +13,20 @@ namespace kb::scene {
 
 class Scene;
 
+struct AnimatorPoseSoaView {
+    std::span<const Vec3> positions;
+    std::span<const Quat> rotations;
+    std::span<const Vec3> scales;
+};
+
 struct AnimatorInstanceSkeletonView {
     std::uint64_t skeletonAssetId = 0U;
     std::uint64_t compatibilitySignature = 0U;
     std::span<const SkeletonBoneId> boneIds;
+    AnimatorPoseSoaView currentLocalPose;
+    AnimatorPoseSoaView previousLocalPose;
+    AnimatorPoseSoaView currentComponentPose;
+    AnimatorPoseSoaView previousComponentPose;
 };
 
 class SceneAnimatorQueries {
