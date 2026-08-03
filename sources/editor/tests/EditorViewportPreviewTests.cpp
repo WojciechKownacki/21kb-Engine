@@ -17,6 +17,7 @@
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLabelFormat.hpp"
 #include "scene/EditorViewportCameraState.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
+#include "scene/AnimationPreviewContext.hpp"
 
 #include "engine/assets/AssetMetadata.hpp"
 
@@ -53,6 +54,28 @@ void RunProfileCycleAndResolutionTest() {
     kb::editor::tests::Require(phone.kind == kb::editor::EditorViewportProfileKind::PhoneLandscape, "Viewport profile cycle should skip the removed phone portrait profile");
     kb::editor::tests::Require(phone.devicePreview, "Phone landscape should remain a device preview profile");
     kb::editor::tests::Require(phone.safeArea.left > 0U && phone.safeArea.right > 0U, "Phone landscape should expose safe area insets");
+}
+
+void RunAnimationPreviewContextTracksSharedBindingTest() {
+    kb::editor::AnimationPreviewContext preview;
+    const std::uint64_t initialRevision = preview.Revision();
+    preview.SetAssets({ 1U }, { 2U }, { 3U }, { 4U });
+    kb::editor::tests::Require(
+        preview.SkeletonAsset().value == 1U && preview.SkeletalMeshAsset().value == 2U &&
+            preview.ClipAsset().value == 3U && preview.ControllerAsset().value == 4U &&
+            preview.Revision() == initialRevision + 1U,
+        "Animation preview context did not retain one shared asset binding");
+    preview.SetPoseMode(kb::editor::AnimationPreviewPoseMode::Animated);
+    kb::editor::tests::Require(
+        preview.PoseMode() == kb::editor::AnimationPreviewPoseMode::Animated &&
+            preview.Revision() == initialRevision + 2U,
+        "Animation preview context did not invalidate after a pose-mode change");
+    preview.Clear();
+    kb::editor::tests::Require(
+        !preview.SkeletonAsset().IsValid() && !preview.SkeletalMeshAsset().IsValid() &&
+            !preview.ClipAsset().IsValid() && !preview.ControllerAsset().IsValid() &&
+            preview.PoseMode() == kb::editor::AnimationPreviewPoseMode::Reference,
+        "Animation preview context did not reset shared state atomically");
 }
 
 void RunFitCameraAndCustomTest() {
@@ -591,6 +614,7 @@ void RunTexturePreviewLockBitsDecodeTest() {
 namespace kb::editor::tests {
 
 void RunEditorViewportPreviewTests() {
+    RunAnimationPreviewContextTracksSharedBindingTest();
     RunTerrainToolbarAndStrokeTickPolicyTest();
     RunTexturePreviewLockBitsDecodeTest();
     RunToolbarHudLabelFormatTest();

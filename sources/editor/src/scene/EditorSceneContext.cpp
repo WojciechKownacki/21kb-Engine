@@ -1453,6 +1453,14 @@ const EditorViewportPreviewState& EditorSceneContext::ViewportPreview(std::uint6
     return viewportState_.Preview(viewportKey);
 }
 
+AnimationPreviewContext& EditorSceneContext::AnimationPreview() noexcept {
+    return animationPreview_;
+}
+
+const AnimationPreviewContext& EditorSceneContext::AnimationPreview() const noexcept {
+    return animationPreview_;
+}
+
 EditorViewportCameraState& EditorSceneContext::ViewportCamera() noexcept {
     return viewportState_.Camera();
 }
