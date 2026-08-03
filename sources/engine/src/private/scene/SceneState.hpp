@@ -117,6 +117,7 @@ struct AnimatorInstanceSkeleton {
     struct PoseBuffer {
         PoseSoa local;
         PoseSoa component;
+        std::vector<kb::math::Mat4> skinMatrices;
     };
 
     kb::assets::AssetHandle<SkeletonAsset> asset;
@@ -129,6 +130,8 @@ struct AnimatorInstanceSkeleton {
     std::array<std::vector<std::uint8_t>, 2U> stateTouched;
     std::array<std::vector<std::uint8_t>, 2U> motionTouched;
     std::uint32_t currentPose = 0U;
+    std::uint64_t evaluationCount = 0U;
+    std::uint64_t hierarchySolveCount = 0U;
 };
 
 struct AnimatorInstance {

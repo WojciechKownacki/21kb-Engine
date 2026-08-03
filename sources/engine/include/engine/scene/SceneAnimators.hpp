@@ -27,6 +27,10 @@ struct AnimatorInstanceSkeletonView {
     AnimatorPoseSoaView previousLocalPose;
     AnimatorPoseSoaView currentComponentPose;
     AnimatorPoseSoaView previousComponentPose;
+    std::span<const kb::math::Mat4> currentSkinMatrices;
+    std::span<const kb::math::Mat4> previousSkinMatrices;
+    std::uint64_t evaluationCount = 0U;
+    std::uint64_t hierarchySolveCount = 0U;
 };
 
 class SceneAnimatorQueries {
