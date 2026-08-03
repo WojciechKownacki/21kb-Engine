@@ -55,11 +55,18 @@ struct SkeletalMeshBounds {
     kb::math::Vec3 extents{};
 };
 
+enum class SkeletalMeshBoundsMode : std::uint8_t {
+    ImportedConservative,
+    Fixed,
+};
+
 struct SkeletalMeshAsset {
     std::uint64_t skeletonAssetId = 0U;
     std::uint64_t skeletonCompatibilitySignature = 0U;
     std::vector<SkeletalMeshLod> lods;
     SkeletalMeshBounds conservativeBounds{};
+    SkeletalMeshBounds fixedBounds{};
+    SkeletalMeshBoundsMode boundsMode = SkeletalMeshBoundsMode::ImportedConservative;
     std::vector<SkeletalMeshMorphTarget> morphTargets;
 };
 

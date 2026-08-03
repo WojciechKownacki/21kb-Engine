@@ -115,6 +115,9 @@ void RunSkeletalGltfImportAcceptsSkinnedMeshAndSkinNodeTest() {
             imported->mesh.lods[0U].vertices.size() == 3U &&
             imported->mesh.lods[0U].vertices[1U].jointIndices[0U] == 1U &&
             imported->mesh.lods[0U].vertices[1U].jointWeights[0U] == 1.0F &&
+            imported->mesh.boundsMode == kb::scene::SkeletalMeshBoundsMode::ImportedConservative &&
+            imported->mesh.conservativeBounds.extents.x > 0.49F &&
+            imported->mesh.fixedBounds.extents.x == imported->mesh.conservativeBounds.extents.x &&
             kb::scene::ValidateSkeletalMeshAsset(imported->mesh).valid,
         "Skeletal glTF import rejected a valid skin node or did not preserve its skin data");
     kb::tests::Require(!report.HasErrors(),
@@ -144,13 +147,17 @@ void RunSkeletalMeshAssetTests() {
     mesh.skeletonCompatibilitySignature =
         kb::scene::SkeletonCompatibilitySignature(skeleton);
     mesh.conservativeBounds={.center={0,0,0},.extents={1,2,1}};
+    mesh.fixedBounds = mesh.conservativeBounds;
     kb::scene::SkeletalMeshLod lod{}; lod.requiredBones={1U,2U}; lod.minScreenCoverage=0.5F;
     lod.vertices={ {}, {.position={1,0,0}}, {.position={0,1,0}} }; lod.indices={0,1,2}; lod.sections={{.firstIndex=0,.indexCount=3,.materialAssetId=42U,.boneMap={1U,2U}}}; mesh.lods={lod};
     mesh.morphTargets={{.name="Smile",.lodIndex=0,.deltas={{.vertexIndex=1,.positionDelta={0,0.1F,0}}}}};
     Require(kb::scene::ValidateSkeletalMeshAsset(mesh).valid,"Valid SkeletalMeshAsset was rejected");
     Require(kb::scene::SkeletalMeshAssetIO::Save(path,mesh),"SkeletalMeshAsset production save failed");
     const auto loaded=kb::scene::SkeletalMeshAssetIO::Load(path);
-    Require(loaded && loaded->lods.size()==1U && loaded->lods[0].sections[0].materialAssetId==42U && loaded->morphTargets[0].deltas.size()==1U,"SkeletalMeshAsset round trip lost canonical data");
+    Require(loaded && loaded->lods.size()==1U && loaded->lods[0].sections[0].materialAssetId==42U && loaded->morphTargets[0].deltas.size()==1U &&
+            loaded->boundsMode == kb::scene::SkeletalMeshBoundsMode::ImportedConservative &&
+            loaded->fixedBounds.extents.y == 2.0F,
+        "SkeletalMeshAsset round trip lost canonical data");
     const auto deterministicPath = root / "RoundTrip/HeroCopy.kbskeletalmesh";
     Require(kb::scene::SkeletalMeshAssetIO::Save(deterministicPath, mesh) &&
             ReadTextFile(path) == ReadTextFile(deterministicPath),
@@ -171,6 +178,19 @@ void RunSkeletalMeshAssetTests() {
         "SkeletalMeshAsset accepted an unsupported schema version without a diagnostic");
     kb::scene::SkeletalMeshAsset invalid=mesh; invalid.lods[0].vertices[0].jointWeights={0,0,0,0};
     Require(!kb::scene::ValidateSkeletalMeshAsset(invalid).valid,"SkeletalMeshAsset accepted zero skin weights");
+    invalid = mesh;
+    invalid.conservativeBounds.extents = { 0.25F, 0.25F, 0.25F };
+    Require(!kb::scene::ValidateSkeletalMeshAsset(invalid).valid,
+        "SkeletalMeshAsset accepted imported vertices outside conservative bounds");
+    kb::scene::SkeletalMeshAsset fixedBoundsMesh = mesh;
+    fixedBoundsMesh.boundsMode = kb::scene::SkeletalMeshBoundsMode::Fixed;
+    fixedBoundsMesh.fixedBounds = { .center = { 0.0F, 0.0F, 0.0F }, .extents = { 1.0F, 2.0F, 1.0F } };
+    Require(kb::scene::ValidateSkeletalMeshAsset(fixedBoundsMesh).valid &&
+            kb::scene::SkeletalMeshAssetIO::Save(root / "RoundTrip/FixedBounds.kbskeletalmesh", fixedBoundsMesh),
+        "SkeletalMeshAsset rejected an explicit fixed-bounds mode");
+    const auto loadedFixedBounds = kb::scene::SkeletalMeshAssetIO::Load(root / "RoundTrip/FixedBounds.kbskeletalmesh");
+    Require(loadedFixedBounds && loadedFixedBounds->boundsMode == kb::scene::SkeletalMeshBoundsMode::Fixed,
+        "SkeletalMeshAsset round trip lost its fixed-bounds mode");
     const auto importRoot = root / "GltfImport";
     WriteSkeletalGltfFixture(importRoot);
     std::string importError;
