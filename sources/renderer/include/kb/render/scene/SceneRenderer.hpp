@@ -2,6 +2,7 @@
 
 #include "kb/render/MaterialProgramRegistry.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
+#include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
 #include "kb/render/scene/MeshPipeline.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
@@ -64,6 +65,9 @@ public:
     // MAT-31: opaque scene color snapshot bound to color-sampling graph materials (SceneColor / SceneTexture).
     void SetSceneColorTexture(bgfx::TextureHandle texture) noexcept;
     void TickFrame() noexcept;
+    [[nodiscard]] bool BeginSkinningFrame(
+        std::uint64_t frame, std::uint64_t completedFrame) noexcept;
+    [[nodiscard]] RenderSkinningPaletteAllocator& SkinningPalettes() noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] RenderResourceRegistry& Resources() noexcept;
     [[nodiscard]] const RenderResourceRegistry& Resources() const noexcept;
@@ -86,6 +90,8 @@ public:
 private:
     RenderResourceRegistry resources_;
     SceneRenderResourceMap resourceMap_;
+    RenderSkinningPaletteAllocator skinningPalettes_{
+        RenderSkinningPaletteAllocatorDesc{ .matrixCapacityPerFrame = 4096U } };
     std::unique_ptr<SceneMeshSubmitter> meshSubmitter_;
     mutable MeshPipelineBuildResult validationPipelineScratch_;
     mutable SceneRenderSubmitStats lastSubmitStats_{};

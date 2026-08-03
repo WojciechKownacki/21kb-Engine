@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include <string_view>
 
 namespace kb::render::tests {
 void RunGraphForwardGpuRenderTests();
@@ -23,7 +24,18 @@ void RunShaderManifestTests();
 void RunShaderPrewarmParseTests();
 }
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view{ argv[1] } == "resource-registry") {
+        kb::render::tests::RunRenderResourceRegistryTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "mesh-pipeline") {
+        kb::render::tests::RunMeshPipelineTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc != 1) {
+        return EXIT_FAILURE;
+    }
     kb::render::tests::RunGraphForwardGpuRenderTests();
     kb::render::tests::RunFinalCompositePassTests();
     kb::render::tests::RunPostProcessChainTests();

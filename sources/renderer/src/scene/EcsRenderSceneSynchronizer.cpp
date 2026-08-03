@@ -11,6 +11,7 @@
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityResolution.hpp"
 #include "engine/scene/TransformComponent.hpp"
@@ -287,8 +288,30 @@ struct SyncContext {
     std::vector<std::uint64_t>* geometrySwarms = nullptr;
     std::vector<std::uint64_t>* surfaceCasts = nullptr;
     std::vector<std::uint64_t>* spaceStrokes = nullptr;
+    RenderSkinningPaletteAllocator* skinningPaletteAllocator = nullptr;
+    std::vector<RenderSkinningMatrix>* skinningMatrixScratch = nullptr;
     bool basicLightingEnabled = false;
 };
+
+[[nodiscard]] RenderSkinningPaletteHandle UploadSkinningPalette(
+    RenderSkinningPaletteAllocator* allocator,
+    std::vector<RenderSkinningMatrix>* scratch,
+    std::span<const kb::math::Mat4> matrices) {
+    if (allocator == nullptr || scratch == nullptr || matrices.empty()) {
+        return {};
+    }
+    const RenderSkinningPaletteHandle handle = allocator->Allocate(
+        static_cast<std::uint32_t>(matrices.size()));
+    if (!handle.IsValid()) {
+        return {};
+    }
+    scratch->resize(matrices.size());
+    for (std::size_t index = 0U; index < matrices.size(); ++index) {
+        (*scratch)[index] = FlattenModel(matrices[index]);
+    }
+    return allocator->Upload(handle, std::span<const RenderSkinningMatrix>{ *scratch })
+        ? handle : RenderSkinningPaletteHandle{};
+}
 
 void SyncCamera(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::CameraComponent& camera, void* context) {
     auto* sync = static_cast<SyncContext*>(context);
@@ -343,6 +366,17 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
     sync->meshes->push_back(entity.Id());
     const kb::scene::ResolvedVisibility visibility = kb::scene::ResolveVisibility(*sync->scene, entity);
     const kb::scene::SceneDetailSwitchComponent* detailSwitch = sync->scene->Components().DetailSwitches().TryGet(entity);
+    RenderSkinningPaletteHandle currentSkinningPalette{};
+    RenderSkinningPaletteHandle previousSkinningPalette{};
+    if (const std::optional<kb::scene::AnimatorInstanceSkeletonView> skeleton =
+            sync->scene->Animators().InstanceSkeleton(entity); skeleton.has_value()) {
+        currentSkinningPalette = UploadSkinningPalette(
+            sync->skinningPaletteAllocator, sync->skinningMatrixScratch,
+            skeleton->currentSkinMatrices);
+        previousSkinningPalette = UploadSkinningPalette(
+            sync->skinningPaletteAllocator, sync->skinningMatrixScratch,
+            skeleton->previousSkinMatrices);
+    }
     static_cast<void>(sync->renderScene->UpsertMesh(MeshRenderProxyDesc{
         .entityId = entity.Id(),
         .meshAssetId = renderer.meshAssetId,
@@ -351,6 +385,8 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
         .materialSlotOverrideCount = materialSlotOverrideCount,
         .model = SceneTransformMatrices::Model(renderTransform),
         .color = NeutralInstanceColor(),
+        .currentSkinningPalette = currentSkinningPalette,
+        .previousSkinningPalette = previousSkinningPalette,
         .visible = visibility.visible,
         .castsShadow = renderer.castsShadow,
         .receivesShadow = renderer.receivesShadow,
@@ -587,6 +623,11 @@ void EcsRenderSceneSynchronizer::Reserve(const EcsRenderSceneSynchronizerReserve
     }
 }
 
+void EcsRenderSceneSynchronizer::SetSkinningPaletteAllocator(
+    RenderSkinningPaletteAllocator* allocator) noexcept {
+    skinningPaletteAllocator_ = allocator;
+}
+
 void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene& renderScene) const {
     seenMeshes_.clear();
     seenCameras_.clear();
@@ -612,6 +653,8 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
         .geometrySwarms = &seenGeometrySwarms_,
         .surfaceCasts = &seenSurfaceCasts_,
         .spaceStrokes = &seenSpaceStrokes_,
+        .skinningPaletteAllocator = skinningPaletteAllocator_,
+        .skinningMatrixScratch = &skinningMatrixScratch_,
         .basicLightingEnabled = kb::scene::SceneLightingAccess::BasicLightingEnabled(scene),
     };
 
@@ -687,6 +730,8 @@ void EcsRenderSceneSynchronizer::SyncEntities(
         .geometrySwarms = &seenGeometrySwarms_,
         .surfaceCasts = &seenSurfaceCasts_,
         .spaceStrokes = &seenSpaceStrokes_,
+        .skinningPaletteAllocator = skinningPaletteAllocator_,
+        .skinningMatrixScratch = &skinningMatrixScratch_,
         .basicLightingEnabled = kb::scene::SceneLightingAccess::BasicLightingEnabled(scene),
     };
 
