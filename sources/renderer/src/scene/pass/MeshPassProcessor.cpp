@@ -245,7 +245,10 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 if (!MeshPipelinePassPolicy::Accepts(desc.pass, instance, materialResource, desc.selectedEntityIds, cullingMask, &section)) {
                     continue;
                 }
-                instance.worldBounds = MeshPipelineVisibility::TransformBounds(section.bounds.IsValid() ? section.bounds : (meshResource == nullptr ? RenderBoundsSphere{} : meshResource->bounds), instance.model);
+                const RenderBoundsSphere localBounds = instance.boundsOverride.IsValid()
+                    ? instance.boundsOverride
+                    : (section.bounds.IsValid() ? section.bounds : (meshResource == nullptr ? RenderBoundsSphere{} : meshResource->bounds));
+                instance.worldBounds = MeshPipelineVisibility::TransformBounds(localBounds, instance.model);
                 const bool gpuDrivenCandidate = MeshPipelineGpuDrivenRecorder::IsCandidate(meshResource);
                 if (!MeshPipelineVisibility::IsInsideFrustum(frustum, instance.worldBounds)) {
                     if (gpuDrivenCandidate) {
