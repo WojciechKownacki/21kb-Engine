@@ -11,6 +11,8 @@ std::span<const AnimatorParameterValue> SceneAnimatorQueries::Parameters(SceneEn
 float SceneAnimatorQueries::Speed(SceneEntity entity) const noexcept { return SceneAnimatorService::Speed(scene_, entity); }
 std::uint64_t SceneAnimatorQueries::RuntimeBindingGeneration(SceneEntity entity) const noexcept { return SceneAnimatorService::RuntimeBindingGeneration(scene_, entity); }
 std::optional<AnimatorInstanceSkeletonView> SceneAnimatorQueries::InstanceSkeleton(SceneEntity entity) const noexcept { return SceneAnimatorService::InstanceSkeleton(scene_, entity); }
+std::optional<AnimatorAttachmentTransform> SceneAnimatorQueries::AttachmentTransform(SceneEntity entity, SkeletonBoneId boneId, const LocalTransform& localOffset) const noexcept { return SceneAnimatorService::AttachmentTransform(scene_, entity, boneId, localOffset); }
+std::optional<AnimatorAttachmentTransform> SceneAnimatorQueries::SocketTransform(SceneEntity entity, std::string_view socketName) const noexcept { return SceneAnimatorService::SocketTransform(scene_, entity, socketName); }
 std::optional<AnimatorStateInfo> SceneAnimatorQueries::State(SceneEntity entity, std::string_view layer) const { return SceneAnimatorService::State(scene_, entity, layer); }
 
 SceneAnimators::SceneAnimators(Scene& scene) noexcept : scene_(scene) {}
@@ -23,6 +25,8 @@ bool SceneAnimators::SetSpeed(SceneEntity entity, float speed) noexcept { return
 float SceneAnimators::Speed(SceneEntity entity) const noexcept { return SceneAnimatorService::Speed(scene_, entity); }
 std::uint64_t SceneAnimators::RuntimeBindingGeneration(SceneEntity entity) const noexcept { return SceneAnimatorService::RuntimeBindingGeneration(scene_, entity); }
 std::optional<AnimatorInstanceSkeletonView> SceneAnimators::InstanceSkeleton(SceneEntity entity) const noexcept { return SceneAnimatorService::InstanceSkeleton(scene_, entity); }
+std::optional<AnimatorAttachmentTransform> SceneAnimators::AttachmentTransform(SceneEntity entity, SkeletonBoneId boneId, const LocalTransform& localOffset) const noexcept { return SceneAnimatorService::AttachmentTransform(scene_, entity, boneId, localOffset); }
+std::optional<AnimatorAttachmentTransform> SceneAnimators::SocketTransform(SceneEntity entity, std::string_view socketName) const noexcept { return SceneAnimatorService::SocketTransform(scene_, entity, socketName); }
 bool SceneAnimators::SetBool(SceneEntity entity, std::string_view name, bool value) noexcept { return SceneAnimatorService::SetBool(scene_, entity, name, value); }
 bool SceneAnimators::SetInt(SceneEntity entity, std::string_view name, std::int32_t value) noexcept { return SceneAnimatorService::SetInt(scene_, entity, name, value); }
 bool SceneAnimators::SetFloat(SceneEntity entity, std::string_view name, float value) noexcept { return SceneAnimatorService::SetFloat(scene_, entity, name, value); }
