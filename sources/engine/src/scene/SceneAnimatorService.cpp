@@ -506,6 +506,15 @@ struct RootMotionDelta {
     return RootMotionDelta{ .translation = pose.position, .rotation = pose.rotation };
 }
 
+[[nodiscard]] RootMotionDelta RootPose(
+    const AnimationBoneTrack& track, float timeSeconds) {
+    const LocalTransform pose = Sample(track, timeSeconds);
+    return RootMotionDelta{
+        .translation = pose.position,
+        .rotation = pose.rotation,
+    };
+}
+
 [[nodiscard]] const AnimationClip& ReferenceClip(
     const AnimatorRuntimeState& state) {
     return *state.motions.front().clip;
@@ -558,21 +567,52 @@ struct BlendSelection {
     return nullptr;
 }
 
+[[nodiscard]] const AnimationBoneTrack* SkeletalRootTrack(
+    const AnimatorRuntimeState::Motion& motion,
+    const AnimatorControllerLayer& layer) {
+    if (motion.clip->rootMotionMode !=
+            AnimationRootMotionMode::ExtractFromBone ||
+        motion.rootMotionBoneIndex ==
+            std::numeric_limits<std::uint32_t>::max()) {
+        return nullptr;
+    }
+    for (std::size_t trackIndex = 0U;
+         trackIndex < motion.clip->skeletalTracks.size(); ++trackIndex) {
+        const AnimationBoneTrack& track =
+            motion.clip->skeletalTracks[trackIndex];
+        if (motion.boneIndices[trackIndex] == motion.rootMotionBoneIndex &&
+            (track.bindingMask & layer.mask) != 0U) {
+            return &track;
+        }
+    }
+    return nullptr;
+}
+
 [[nodiscard]] RootMotionDelta MotionRootMotion(
     const AnimatorRuntimeState::Motion& motion,
     const AnimatorControllerLayer& layer,
     double startSeconds,
     double deltaSeconds) {
-    const AnimationTransformTrack* track = RootTrack(motion, layer);
-    if (track == nullptr) {
-        throw std::runtime_error("Root motion requires an owner track on the controller's first layer");
-    }
     const AnimationClip& clip = *motion.clip;
-    const RootMotionDelta start = RootPose(*track, static_cast<float>(startSeconds));
+    const AnimationTransformTrack* transformTrack =
+        RootTrack(motion, layer);
+    const AnimationBoneTrack* boneTrack =
+        SkeletalRootTrack(motion, layer);
+    if (transformTrack == nullptr && boneTrack == nullptr) {
+        throw std::runtime_error(
+            "Root motion requires a bound source track on the controller's first layer");
+    }
+    const auto sampleRoot = [&](float timeSeconds) {
+        return boneTrack != nullptr
+            ? RootPose(*boneTrack, timeSeconds)
+            : RootPose(*transformTrack, timeSeconds);
+    };
+    const RootMotionDelta start =
+        sampleRoot(static_cast<float>(startSeconds));
     if (!clip.looping) {
         const float end = static_cast<float>(std::min(
             startSeconds + deltaSeconds, static_cast<double>(clip.durationSeconds)));
-        return Relative(start, RootPose(*track, end));
+        return Relative(start, sampleRoot(end));
     }
 
     const double duration = static_cast<double>(clip.durationSeconds);
@@ -580,9 +620,11 @@ struct BlendSelection {
     const std::size_t cycles = static_cast<std::size_t>(std::floor(unwrappedEnd / duration));
     double wrappedEnd = std::fmod(unwrappedEnd, duration);
     if (wrappedEnd < 0.0) wrappedEnd += duration;
-    const RootMotionDelta first = RootPose(*track, 0.0F);
-    const RootMotionDelta cycle = Relative(first, RootPose(*track, clip.durationSeconds));
-    const RootMotionDelta endFromFirst = Relative(first, RootPose(*track, static_cast<float>(wrappedEnd)));
+    const RootMotionDelta first = sampleRoot(0.0F);
+    const RootMotionDelta cycle =
+        Relative(first, sampleRoot(clip.durationSeconds));
+    const RootMotionDelta endFromFirst =
+        Relative(first, sampleRoot(static_cast<float>(wrappedEnd)));
     return Relative(Relative(first, start), Compose(Pow(cycle, cycles), endFromFirst));
 }
 
@@ -905,7 +947,9 @@ void EvaluateIndexedSkeletalState(
     }
 }
 
-void EvaluateIndexedSkeletalPose(AnimatorRuntimeRecord& instance) {
+void EvaluateIndexedSkeletalPose(
+    AnimatorRuntimeRecord& instance,
+    std::optional<std::uint32_t> extractedRootMotionBone) {
     AnimatorInstanceSkeleton& skeleton = *instance.skeleton;
     if (skeleton.evaluationCount ==
             std::numeric_limits<std::uint64_t>::max() ||
@@ -981,6 +1025,17 @@ void EvaluateIndexedSkeletalPose(AnimatorRuntimeRecord& instance) {
                         layerDefinition.weight));
             }
         }
+    }
+    if (extractedRootMotionBone.has_value()) {
+        const std::size_t boneIndex = *extractedRootMotionBone;
+        if (boneIndex >= skeleton.asset->bones.size()) {
+            throw std::runtime_error(
+                "AnimatorInstance root-motion bone index is out of range");
+        }
+        const LocalTransform& reference =
+            skeleton.asset->bones[boneIndex].referencePose;
+        current.local.positions[boneIndex] = reference.position;
+        current.local.rotations[boneIndex] = reference.rotation;
     }
     SolveComponentPose(*skeleton.asset, current);
     ++skeleton.hierarchySolveCount;
@@ -1427,6 +1482,26 @@ bool SceneAnimatorService::Attach(Scene& scene, SceneEntity entity, std::uint64_
         !controller->rigConstraints.empty()) {
         return false;
     }
+    if (candidate.skeleton.has_value()) {
+        const AnimatorRuntimeState::Motion& rootMotion =
+            candidate.layers.front().states.front().motions.front();
+        for (const AnimatorRuntimeState& runtimeState :
+             candidate.layers.front().states) {
+            for (const AnimatorRuntimeState::Motion& motion :
+                 runtimeState.motions) {
+                if (motion.clip->rootMotionMode !=
+                        rootMotion.clip->rootMotionMode ||
+                    motion.clip->rootMotionBoneId !=
+                        rootMotion.clip->rootMotionBoneId ||
+                    (motion.clip->rootMotionMode ==
+                         AnimationRootMotionMode::ExtractFromBone &&
+                     SkeletalRootTrack(
+                         motion, controller->layers.front()) == nullptr)) {
+                    return false;
+                }
+            }
+        }
+    }
     candidate.rigConstraints.reserve(controller->rigConstraints.size());
     for (std::size_t definitionIndex = 0U;
          definitionIndex < controller->rigConstraints.size();
@@ -1794,13 +1869,19 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
     }
     state.pendingAnimationEvents.reserve(eventCount);
 
-    for (const auto& [id, record] : state.animators) {
+    for (auto& [id, record] : state.animators) {
         static_cast<void>(id);
         if (!scene.Entities().IsActive(record.entity)) continue;
+        record.hasExtractedRootMotion = false;
+        record.extractedRootMotionTranslation = {};
+        record.extractedRootMotionRotation = {};
         const Animator* component = scene.Components().Animators().TryGet(record.entity);
         if (component == nullptr || component->rootMotionOwner == AnimatorRootMotionOwner::None) continue;
         const double scaledDelta = static_cast<double>(deltaSeconds) * static_cast<double>(record.speed);
         const RootMotionDelta motion = ExtractRootMotion(record, scaledDelta, deltaSeconds);
+        record.extractedRootMotionTranslation = motion.translation;
+        record.extractedRootMotionRotation = motion.rotation;
+        record.hasExtractedRootMotion = true;
         switch (component->rootMotionOwner) {
         case AnimatorRootMotionOwner::None:
             break;
@@ -1857,12 +1938,13 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
             ? AnimatorRootMotionOwner::None
             : component->rootMotionOwner;
         const RootMotionDelta animatorMotion =
-            rootMotionOwner == AnimatorRootMotionOwner::Animator
-                ? ExtractRootMotion(
-                      record,
-                      static_cast<double>(deltaSeconds) * static_cast<double>(record.speed),
-                      deltaSeconds)
-                : RootMotionDelta{};
+            rootMotionOwner == AnimatorRootMotionOwner::Animator &&
+                record.hasExtractedRootMotion
+            ? RootMotionDelta{
+                  .translation = record.extractedRootMotionTranslation,
+                  .rotation = record.extractedRootMotionRotation,
+              }
+            : RootMotionDelta{};
         for (AnimatorRuntimeBinding& binding : record.bindings) {
             binding.output = binding.bindTransform;
             binding.outputTouched = false;
@@ -1934,7 +2016,22 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
             }
         }
         if (record.skeleton.has_value()) {
-            EvaluateIndexedSkeletalPose(record);
+            std::optional<std::uint32_t> extractedRootMotionBone;
+            if (record.hasExtractedRootMotion) {
+                const AnimatorRuntimeLayer& rootLayer =
+                    record.layers.front();
+                const std::uint32_t boneIndex = rootLayer
+                    .states[rootLayer.currentState].motions.front()
+                    .rootMotionBoneIndex;
+                if (boneIndex ==
+                    std::numeric_limits<std::uint32_t>::max()) {
+                    throw std::runtime_error(
+                        "Skeletal root motion has no prebound source bone");
+                }
+                extractedRootMotionBone = boneIndex;
+            }
+            EvaluateIndexedSkeletalPose(
+                record, extractedRootMotionBone);
         }
         for (AnimatorRuntimeBinding& binding : record.bindings) {
             if (!binding.outputTouched || !scene.Entities().IsAlive(binding.target)) continue;
