@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/resources/RenderHandles.hpp"
+#include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
 #include "kb/render/resources/RenderResources.hpp"
 #include "kb/render/scene/MeshPassType.hpp"
 #include "kb/render/scene/SceneGpuDrivenFrameResources.hpp"
@@ -48,6 +49,8 @@ struct MeshDrawCommand {
     const RenderMaterialResource* materialResource = nullptr;
     std::uint64_t state = 0;
     std::uint64_t sortKey = 0;
+    RenderSkinningPaletteHandle currentSkinningPalette{};
+    RenderSkinningPaletteHandle previousSkinningPalette{};
     std::vector<SceneRenderMeshInstance> instances;
 };
 
@@ -74,6 +77,8 @@ struct MeshPipelineBuildDesc {
 struct MeshCommandLookupKey {
     std::uint64_t materialAssetId = 0;
     std::uint64_t materialHandleValue = 0;
+    RenderSkinningPaletteHandle currentSkinningPalette{};
+    RenderSkinningPaletteHandle previousSkinningPalette{};
 
     [[nodiscard]] friend constexpr bool operator==(MeshCommandLookupKey lhs, MeshCommandLookupKey rhs) noexcept = default;
 };

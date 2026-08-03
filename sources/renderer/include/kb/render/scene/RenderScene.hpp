@@ -2,6 +2,7 @@
 
 #include "kb/render/scene/RenderProxyId.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
+#include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
 
 #include <array>
 #include <cstddef>
@@ -59,6 +60,9 @@ struct MeshRenderProxyDesc {
     std::array<float, 4> color{ 0.76F, 0.80F, 0.86F, 1.0F };
     float fadeAmount = 1.0F;
     float customData0 = 0.0F;
+    // Renderer-transient palette allocations; never mirror authored ECS state.
+    RenderSkinningPaletteHandle currentSkinningPalette{};
+    RenderSkinningPaletteHandle previousSkinningPalette{};
     bool visible = true;
     bool castsShadow = true;
     bool receivesShadow = true;

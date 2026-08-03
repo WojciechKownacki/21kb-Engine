@@ -2,6 +2,7 @@
 
 #include "kb/render/MaterialProgramRegistry.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
+#include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
 #include "kb/render/scene/MeshPipeline.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "scene/lighting/SceneLightingPacker.hpp"
@@ -32,6 +33,7 @@ struct SceneMeshPassBindDesc {
     bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE;
     // MAT-31: the opaque scene-color snapshot for graph fragment shaders that sample SceneColor/SceneTexture.
     bgfx::TextureHandle sceneColorTexture = BGFX_INVALID_HANDLE;
+    const RenderSkinningPaletteAllocator* skinningPaletteAllocator = nullptr;
 };
 
 struct SceneMeshProgramBindStats {
@@ -74,7 +76,9 @@ public:
     void EndFrame(std::uint64_t frameIndex) const;
 
     void SetGraphShaderCacheRoot(std::string root) { graphShaderCacheRoot_ = std::move(root); }
-    [[nodiscard]] SceneMeshPassProgramResolution ResolveMeshPassProgram(const RenderMaterialResource* material, MeshPassType pass) const noexcept;
+    [[nodiscard]] SceneMeshPassProgramResolution ResolveMeshPassProgram(
+        const RenderMaterialResource* material, MeshPassType pass,
+        bool skinned = false) const noexcept;
     [[nodiscard]] SceneMeshPassProgramResolution LastProgramResolution() const noexcept { return lastProgramResolution_; }
     void ResetProgramBindStats() const noexcept;
     [[nodiscard]] SceneMeshProgramBindStats ProgramBindStats() const noexcept { return programBindStats_; }
@@ -125,6 +129,8 @@ private:
     bgfx::ProgramHandle selectionProgram_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle albedoSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle shadowSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle skinningPaletteSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle skinningPaletteInfoUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle normalSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle metallicRoughnessSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle occlusionSampler_ = BGFX_INVALID_HANDLE;
