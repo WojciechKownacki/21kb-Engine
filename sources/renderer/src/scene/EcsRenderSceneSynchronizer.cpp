@@ -1,9 +1,11 @@
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/assets/AssetHandle.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneMaterialInstances.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -19,6 +21,7 @@
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/DetailSwitchComponent.hpp"
+#include "engine/scene/SkeletalMeshAsset.hpp"
 #include "engine/scene/VisibilityBlockerComponent.hpp"
 #include "engine/scene/GeometrySwarmComponent.hpp"
 #include "engine/scene/SurfaceCastComponent.hpp"
@@ -313,6 +316,32 @@ struct SyncContext {
         ? handle : RenderSkinningPaletteHandle{};
 }
 
+[[nodiscard]] RenderBoundsSphere AnimatedBoundsForMesh(
+    const kb::scene::Scene& scene,
+    kb::scene::SceneEntity entity,
+    const std::optional<kb::scene::AnimatorInstanceSkeletonView>& skeleton) {
+    const kb::scene::DrawD3DeformedGeometryComponent* geometry =
+        scene.Components().DeformedGeometries().TryGet(entity);
+    if (geometry == nullptr || !geometry->enabled || skeleton == std::nullopt) return {};
+    const kb::scene::SceneEntity poseSource = geometry->poseSource.IsValid() ? geometry->poseSource : entity;
+    const std::optional<kb::scene::AnimatorInstanceSkeletonView> pose = poseSource == entity
+        ? skeleton
+        : scene.Animators().InstanceSkeleton(poseSource);
+    if (!pose || pose->skeletonAssetId == 0U) return {};
+    const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> asset =
+        scene.Assets().Manager().AcquireLoaded<kb::scene::SkeletalMeshAsset>(
+            kb::assets::AssetId{ geometry->skeletalMeshAssetId });
+    if (!asset.IsLoaded() || asset->skeletonAssetId != pose->skeletonAssetId ||
+        asset->skeletonCompatibilitySignature != pose->compatibilitySignature) return {};
+    const std::optional<kb::scene::SkeletalMeshBounds> bounds = geometry->fixedBounds
+        ? std::optional<kb::scene::SkeletalMeshBounds>{ asset->fixedBounds }
+        : kb::scene::EvaluateSkeletalMeshAnimatedBounds(*asset, 0U, pose->boneIds, pose->currentSkinMatrices);
+    if (!bounds) return {};
+    const float radius = std::sqrt(bounds->extents.x * bounds->extents.x +
+        bounds->extents.y * bounds->extents.y + bounds->extents.z * bounds->extents.z);
+    return { .center = { bounds->center.x, bounds->center.y, bounds->center.z }, .radius = radius };
+}
+
 void SyncCamera(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::CameraComponent& camera, void* context) {
     auto* sync = static_cast<SyncContext*>(context);
     const kb::scene::TransformComponent renderTransform = sync->worldReader->Read(entity, transform);
@@ -366,10 +395,11 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
     sync->meshes->push_back(entity.Id());
     const kb::scene::ResolvedVisibility visibility = kb::scene::ResolveVisibility(*sync->scene, entity);
     const kb::scene::SceneDetailSwitchComponent* detailSwitch = sync->scene->Components().DetailSwitches().TryGet(entity);
+    const std::optional<kb::scene::AnimatorInstanceSkeletonView> skeleton =
+        sync->scene->Animators().InstanceSkeleton(entity);
     RenderSkinningPaletteHandle currentSkinningPalette{};
     RenderSkinningPaletteHandle previousSkinningPalette{};
-    if (const std::optional<kb::scene::AnimatorInstanceSkeletonView> skeleton =
-            sync->scene->Animators().InstanceSkeleton(entity); skeleton.has_value()) {
+    if (skeleton.has_value()) {
         currentSkinningPalette = UploadSkinningPalette(
             sync->skinningPaletteAllocator, sync->skinningMatrixScratch,
             skeleton->currentSkinMatrices);
@@ -384,6 +414,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
         .materialSlotAssetIds = materialSlotAssetIds,
         .materialSlotOverrideCount = materialSlotOverrideCount,
         .model = SceneTransformMatrices::Model(renderTransform),
+        .boundsOverride = AnimatedBoundsForMesh(*sync->scene, entity, skeleton),
         .color = NeutralInstanceColor(),
         .currentSkinningPalette = currentSkinningPalette,
         .previousSkinningPalette = previousSkinningPalette,
