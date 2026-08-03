@@ -658,6 +658,7 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
     result.mesh.skeletonCompatibilitySignature =
         SkeletonCompatibilitySignature(result.skeleton);
     result.mesh.lods.push_back(std::move(lod));
+    BuildSkeletalMeshLodBoneBounds(result.mesh.lods.back());
     kb::math::Vec3 minimum = result.mesh.lods[0].vertices.front().position;
     kb::math::Vec3 maximum = minimum;
     for (const SkeletalMeshVertex& vertex : result.mesh.lods[0].vertices) {

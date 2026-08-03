@@ -5,6 +5,8 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -26,11 +28,18 @@ struct SkeletalMeshSection {
     std::vector<SkeletonBoneId> boneMap;
 };
 
+struct SkeletalMeshBoneBounds {
+    SkeletonBoneId boneId = 0U;
+    kb::math::Vec3 center{};
+    kb::math::Vec3 extents{};
+};
+
 struct SkeletalMeshLod {
     std::vector<SkeletalMeshVertex> vertices;
     std::vector<std::uint32_t> indices;
     std::vector<SkeletalMeshSection> sections;
     std::vector<SkeletonBoneId> requiredBones;
+    std::vector<SkeletalMeshBoneBounds> boneBounds;
     float minScreenCoverage = 0.0F;
 };
 
@@ -76,5 +85,11 @@ struct SkeletalMeshAssetValidationResult {
 };
 
 [[nodiscard]] SkeletalMeshAssetValidationResult ValidateSkeletalMeshAsset(const SkeletalMeshAsset& asset);
+void BuildSkeletalMeshLodBoneBounds(SkeletalMeshLod& lod);
+[[nodiscard]] std::optional<SkeletalMeshBounds> EvaluateSkeletalMeshAnimatedBounds(
+    const SkeletalMeshAsset& asset,
+    std::uint32_t lodIndex,
+    std::span<const SkeletonBoneId> boneIds,
+    std::span<const kb::math::Mat4> skinMatrices) noexcept;
 
 } // namespace kb::scene
