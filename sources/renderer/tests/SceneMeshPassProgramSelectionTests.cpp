@@ -199,6 +199,20 @@ void RunSceneMeshPassProgramSelectionTest() {
         Require(selectionResolution.program.idx != builtinResolution.program.idx,
             "KBMAT-MAT07: Selection program must differ from the opaque program");
 
+        for (const MeshPassType pass : {
+                 MeshPassType::BaseOpaque,
+                 MeshPassType::GBuffer,
+                 MeshPassType::Depth,
+                 MeshPassType::ShadowDepth,
+                 MeshPassType::SelectionId,
+                 MeshPassType::MotionVectors,
+             }) {
+            const SceneMeshPassProgramResolution skinnedResolution =
+                passResources.ResolveMeshPassProgram(&builtinMaterial, pass, true);
+            Require(bgfx::isValid(skinnedResolution.program),
+                "SMA-35: Every skinned mesh pass must resolve a runtime shader program");
+        }
+
         // Graph material with no cooked binary must safely fall back to the builtin program.
         const RenderMaterialResource graphFallback = MakeGraphMaterialResource(0xDEAD1234U);
         const SceneMeshPassProgramResolution fallbackResolution = passResources.ResolveMeshPassProgram(&graphFallback, MeshPassType::BaseOpaque);

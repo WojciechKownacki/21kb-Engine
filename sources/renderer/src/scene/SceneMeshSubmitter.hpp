@@ -39,7 +39,8 @@ public:
         std::array<float, 4> dynamicParameter = {},
         bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE,
         bgfx::TextureHandle sceneColorTexture = BGFX_INVALID_HANDLE,
-        bool terrainLayersOnly = false) const;
+        bool terrainLayersOnly = false,
+        std::array<float, 16> motionVectorPreviousViewProjection = {}) const;
     [[nodiscard]] static SceneRenderSubmitStats ValidateResourcesInto(
         const RenderScene& renderScene,
         const RenderResourceRegistry& resources,

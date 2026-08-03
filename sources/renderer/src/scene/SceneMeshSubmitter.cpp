@@ -145,7 +145,8 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     std::array<float, 4> dynamicParameter,
     bgfx::TextureHandle sceneDepthTexture,
     bgfx::TextureHandle sceneColorTexture,
-    bool terrainLayersOnly) const {
+    bool terrainLayersOnly,
+    std::array<float, 16> motionVectorPreviousViewProjection) const {
     SceneRenderSubmitStats stats{};
     if (!IsInitialized()) {
         return stats;
@@ -228,6 +229,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .shadowMap = shadowMap,
         .sceneDepthTexture = sceneDepthTexture,
         .sceneColorTexture = sceneColorTexture,
+        .motionVectorPreviousViewProjection = motionVectorPreviousViewProjection,
         .skinningPaletteAllocator = skinningPaletteAllocator_,
         .passResources = passResources_,
         .diagnostics = diagnostics,

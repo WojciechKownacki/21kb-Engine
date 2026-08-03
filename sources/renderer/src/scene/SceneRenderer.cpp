@@ -67,6 +67,8 @@ namespace {
         return "BaseTransparent";
     case MeshPassType::ShadowDepth:
         return "ShadowDepth";
+    case MeshPassType::MotionVectors:
+        return "MotionVectors";
     case MeshPassType::SelectionId:
         return "SelectionId";
     case MeshPassType::EditorSelection:
@@ -221,9 +223,11 @@ void SceneRenderer::SubmitMeshPass(
             gpuDrivenSupportOverride == nullptr ? gpuDrivenRuntimeSupport_ : *gpuDrivenSupportOverride,
             FrameTimeConstants(),
             DynamicParameterConstants(),
-            pass == MeshPassType::BaseTransparent ? sceneDepthTexture_ : bgfx::TextureHandle{ bgfx::kInvalidHandle },
+            (pass == MeshPassType::BaseTransparent || pass == MeshPassType::MotionVectors)
+                ? sceneDepthTexture_ : bgfx::TextureHandle{ bgfx::kInvalidHandle },
             pass == MeshPassType::BaseTransparent ? sceneColorTexture_ : bgfx::TextureHandle{ bgfx::kInvalidHandle },
-            terrainLayersOnly);
+            terrainLayersOnly,
+            motionVectorPreviousViewProjection_);
     }
     {
         std::ostringstream message;
@@ -308,6 +312,10 @@ void SceneRenderer::SetSceneDepthTexture(bgfx::TextureHandle texture) noexcept {
 
 void SceneRenderer::SetSceneColorTexture(bgfx::TextureHandle texture) noexcept {
     sceneColorTexture_ = texture;
+}
+
+void SceneRenderer::SetMotionVectorPreviousViewProjection(const std::array<float, 16>& matrix) noexcept {
+    motionVectorPreviousViewProjection_ = matrix;
 }
 
 bool SceneRenderer::BeginSkinningFrame(
