@@ -77,6 +77,8 @@ struct MeshRenderProxyDesc {
     float detailSwitchPromoteCoverage = 0.20F;
     float detailSwitchDemoteCoverage = 0.15F;
     bool detailSwitchEnabled = false;
+    std::int32_t lodBias = 0;
+    bool lodEnabled = true;
 };
 
 struct CameraRenderProxyDesc {

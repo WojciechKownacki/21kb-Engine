@@ -5,9 +5,12 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SkeletalMeshAsset.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "kb/render/resources/BuiltInParticleQuadMesh.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "kb/render/resources/RenderAssetRefs.hpp"
+#include "kb/render/resources/SkeletalMeshRenderResourceBuilder.hpp"
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
@@ -120,7 +123,8 @@ void RuntimeMeshResourceEnsurer::Ensure(
         const kb::assets::AssetId assetId{ meshAssetId };
         const kb::assets::AssetMetadata* metadata = manager.Registry().Find(assetId);
         auto cacheIt = meshes.find(runtimeKey);
-        if (metadata == nullptr || metadata->type != "RenderMesh") {
+        const bool skeletalMesh = metadata != nullptr && metadata->type == kb::scene::kSkeletalMeshAssetType;
+        if (metadata == nullptr || (metadata->type != "RenderMesh" && !skeletalMesh)) {
             if (cacheIt != meshes.end()) {
                 context.sceneRenderer.ResourceMap().UnbindMeshHandle(cacheIt->second.handle);
                 context.sceneRenderer.Resources().DestroyMesh(cacheIt->second.handle);
@@ -139,6 +143,47 @@ void RuntimeMeshResourceEnsurer::Ensure(
             RuntimeMeshResource& cached = cacheIt->second;
             cached.lastReferencedFrame = context.currentFrame;
             context.sceneRenderer.ResourceMap().BindMesh(meshAssetId, cached.handle);
+            return;
+        }
+
+        if (skeletalMesh) {
+            const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> asset =
+                manager.Load<kb::scene::SkeletalMeshAsset>(assetId);
+            if (!asset.IsLoaded()) {
+                if (cacheIt != meshes.end()) {
+                    context.sceneRenderer.ResourceMap().UnbindMeshHandle(cacheIt->second.handle);
+                    context.sceneRenderer.Resources().DestroyMesh(cacheIt->second.handle);
+                    meshes.erase(cacheIt);
+                } else {
+                    context.sceneRenderer.ResourceMap().UnbindMesh(meshAssetId);
+                }
+                return;
+            }
+            const std::optional<SkeletalMeshRenderResourceData> resource =
+                SkeletalMeshRenderResourceBuilder::Build(*asset);
+            if (!resource) {
+                context.sceneRenderer.ResourceMap().UnbindMesh(meshAssetId);
+                static_cast<void>(manager.Unload(assetId));
+                return;
+            }
+            if (cacheIt != meshes.end()) {
+                context.sceneRenderer.ResourceMap().UnbindMeshHandle(cacheIt->second.handle);
+                context.sceneRenderer.Resources().DestroyMesh(cacheIt->second.handle);
+                meshes.erase(cacheIt);
+            }
+            const RenderMeshHandle handle = context.sceneRenderer.Resources().RegisterMesh(resource->desc);
+            if (!handle.IsValid()) {
+                context.sceneRenderer.ResourceMap().UnbindMesh(meshAssetId);
+                static_cast<void>(manager.Unload(assetId));
+                return;
+            }
+            meshes[runtimeKey] = RuntimeMeshResource{
+                .handle = handle,
+                .sourceAsset = asset.Get(),
+                .contentHash = metadata->contentHash,
+                .lastReferencedFrame = context.currentFrame,
+            };
+            context.sceneRenderer.ResourceMap().BindMesh(meshAssetId, handle);
             return;
         }
 

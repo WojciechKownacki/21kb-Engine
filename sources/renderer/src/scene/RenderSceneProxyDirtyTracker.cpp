@@ -19,7 +19,8 @@ RenderProxyDirtyFlag RenderSceneProxyDirtyTracker::DirtyForMeshChange(const Mesh
         current.fadeAmount != next.fadeAmount ||
         current.customData0 != next.customData0 ||
         current.currentSkinningPalette != next.currentSkinningPalette ||
-        current.previousSkinningPalette != next.previousSkinningPalette) {
+        current.previousSkinningPalette != next.previousSkinningPalette ||
+        current.lodBias != next.lodBias || current.lodEnabled != next.lodEnabled) {
         dirty |= RenderProxyDirtyFlag::Material;
     }
     if (current.visible != next.visible) {

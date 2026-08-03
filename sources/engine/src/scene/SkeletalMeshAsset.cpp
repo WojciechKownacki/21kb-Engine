@@ -88,6 +88,50 @@ void BuildSkeletalMeshLodBoneBounds(SkeletalMeshLod& lod) {
     }
 }
 
+bool BuildSkeletalMeshSkinningPalette(
+    const SkeletalMeshAsset& asset,
+    std::span<const SkeletonBoneId> poseBoneIds,
+    std::span<const kb::math::Mat4> poseSkinMatrices,
+    std::vector<kb::math::Mat4>& outSkinMatrices) {
+    std::vector<SkeletonBoneId> paletteBoneScratch;
+    return BuildSkeletalMeshSkinningPalette(
+        asset, poseBoneIds, poseSkinMatrices, paletteBoneScratch, outSkinMatrices);
+}
+
+bool BuildSkeletalMeshSkinningPalette(
+    const SkeletalMeshAsset& asset,
+    std::span<const SkeletonBoneId> poseBoneIds,
+    std::span<const kb::math::Mat4> poseSkinMatrices,
+    std::vector<SkeletonBoneId>& paletteBoneScratch,
+    std::vector<kb::math::Mat4>& outSkinMatrices) {
+    if (poseBoneIds.size() != poseSkinMatrices.size()) return false;
+    paletteBoneScratch.clear();
+    for (const SkeletalMeshLod& lod : asset.lods) {
+        paletteBoneScratch.insert(paletteBoneScratch.end(), lod.requiredBones.begin(), lod.requiredBones.end());
+    }
+    std::sort(paletteBoneScratch.begin(), paletteBoneScratch.end());
+    paletteBoneScratch.erase(std::unique(paletteBoneScratch.begin(), paletteBoneScratch.end()), paletteBoneScratch.end());
+    if (paletteBoneScratch.empty()) return false;
+
+    outSkinMatrices.resize(paletteBoneScratch.size());
+    for (std::size_t paletteIndex = 0U; paletteIndex < paletteBoneScratch.size(); ++paletteIndex) {
+        const auto poseIndex = std::find(poseBoneIds.begin(), poseBoneIds.end(), paletteBoneScratch[paletteIndex]);
+        if (poseIndex == poseBoneIds.end()) {
+            outSkinMatrices.clear();
+            return false;
+        }
+        const kb::math::Mat4& matrix = poseSkinMatrices[static_cast<std::size_t>(poseIndex - poseBoneIds.begin())];
+        for (const kb::math::Vec4& column : matrix.columns) {
+            if (!IsFinite(column)) {
+                outSkinMatrices.clear();
+                return false;
+            }
+        }
+        outSkinMatrices[paletteIndex] = matrix;
+    }
+    return true;
+}
+
 std::optional<SkeletalMeshBounds> EvaluateSkeletalMeshAnimatedBounds(
     const SkeletalMeshAsset& asset,
     std::uint32_t lodIndex,
@@ -133,8 +177,12 @@ SkeletalMeshAssetValidationResult ValidateSkeletalMeshAsset(const SkeletalMeshAs
             return { false, "Skeletal mesh LOD " + std::to_string(lodIndex) + " is incomplete." };
         }
         std::unordered_set<SkeletonBoneId> required;
+        SkeletonBoneId previousRequiredBone = 0U;
         for (const SkeletonBoneId bone : lod.requiredBones) {
-            if (bone == 0U || !required.insert(bone).second) return { false, "Skeletal mesh LOD has duplicate required bones." };
+            if (bone == 0U || bone <= previousRequiredBone || !required.insert(bone).second) {
+                return { false, "Skeletal mesh LOD required bones must be strictly sorted and unique." };
+            }
+            previousRequiredBone = bone;
         }
         SkeletonBoneId previousBoundBone = 0U;
         for (const SkeletalMeshBoneBounds& bounds : lod.boneBounds) {
@@ -160,7 +208,11 @@ SkeletalMeshAssetValidationResult ValidateSkeletalMeshAsset(const SkeletalMeshAs
             if (section.indexCount == 0U || section.indexCount % 3U != 0U || section.firstIndex != previousSectionEnd ||
                 section.firstIndex > lod.indices.size() || section.indexCount > lod.indices.size() - section.firstIndex || section.boneMap.empty()) return { false, "Skeletal mesh section range or bone map is invalid." };
             std::unordered_set<SkeletonBoneId> sectionBones;
-            for (const SkeletonBoneId bone : section.boneMap) if (bone == 0U || !sectionBones.insert(bone).second) return { false, "Skeletal mesh section has duplicate or invalid bone ids." };
+            for (const SkeletonBoneId bone : section.boneMap) {
+                if (bone == 0U || !required.contains(bone) || !sectionBones.insert(bone).second) {
+                    return { false, "Skeletal mesh section references a bone outside its LOD required-bone set." };
+                }
+            }
             for (std::uint32_t indexOffset = 0U; indexOffset < section.indexCount; ++indexOffset) {
                 const SkeletalMeshVertex& vertex = lod.vertices[lod.indices[section.firstIndex + indexOffset]];
                 for (const std::uint16_t joint : vertex.jointIndices) if (joint >= section.boneMap.size()) return { false, "Skeletal mesh joint index is outside its section bone map." };
