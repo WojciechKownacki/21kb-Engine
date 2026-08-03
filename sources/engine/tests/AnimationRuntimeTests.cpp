@@ -1166,7 +1166,10 @@ end
                 .id = 700U,
                 .parentIndex = -1,
                 .name = "Root",
-                .referencePose = {},
+                .referencePose = {
+                    .position = { 3.0F, 0.0F, 0.0F },
+                    .scale = { 2.0F, 2.0F, 2.0F },
+                },
                 .inverseBind = {},
             },
             {
@@ -1285,6 +1288,10 @@ end
         static_cast<void>(scene.Runtime().Update(0.0F));
         const auto instanceSkeleton =
             scene.Animators().InstanceSkeleton(owner.Entity());
+        const auto completePose = [](const kb::scene::AnimatorPoseSoaView& pose) {
+            return pose.positions.size() == 3U &&
+                pose.rotations.size() == 3U && pose.scales.size() == 3U;
+        };
         Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
                 scene.Animators().Exists(owner.Entity()) &&
                 scene.Animators().RuntimeBindingGeneration(owner.Entity()) !=
@@ -1296,8 +1303,32 @@ end
                 instanceSkeleton->boneIds.size() == 3U &&
                 instanceSkeleton->boneIds[0] == 700U &&
                 instanceSkeleton->boneIds[1] == 101U &&
-                instanceSkeleton->boneIds[2] == 900U,
-            "AnimatorInstance did not derive a contiguous canonical bone-index table");
+                instanceSkeleton->boneIds[2] == 900U &&
+                completePose(instanceSkeleton->currentLocalPose) &&
+                completePose(instanceSkeleton->previousLocalPose) &&
+                completePose(instanceSkeleton->currentComponentPose) &&
+                completePose(instanceSkeleton->previousComponentPose) &&
+                NearlyEqual(
+                    instanceSkeleton->currentLocalPose.positions[2].x,
+                    1.0F) &&
+                NearlyEqual(
+                    instanceSkeleton->currentComponentPose.positions[1].x,
+                    3.0F) &&
+                NearlyEqual(
+                    instanceSkeleton->currentComponentPose.positions[1].y,
+                    2.0F) &&
+                NearlyEqual(
+                    instanceSkeleton->currentComponentPose.positions[2].x,
+                    5.0F) &&
+                NearlyEqual(
+                    instanceSkeleton->currentComponentPose.positions[2].y,
+                    2.0F) &&
+                instanceSkeleton->currentLocalPose.positions.data() !=
+                    instanceSkeleton->previousLocalPose.positions.data() &&
+                instanceSkeleton->currentComponentPose.positions.data() !=
+                    instanceSkeleton->previousComponentPose.positions.data() &&
+                scene.Entities().Count() == 1U,
+            "AnimatorInstance did not derive contiguous double-buffered local/component SoA poses without bone entities");
 
         kb::scene::AnimationClip invalidBoneClip = instanceClip;
         invalidBoneClip.rootMotionMode =
