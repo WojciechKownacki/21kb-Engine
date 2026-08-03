@@ -28,7 +28,8 @@ void RuntimeRenderResourceLifecycle::ReleaseScene(
         }
         sceneRenderer->ResourceMap().UnbindMeshHandle(it->second.handle);
         sceneRenderer->Resources().DestroyMesh(it->second.handle);
-        static_cast<void>(manager.Unload(kb::assets::AssetId{ it->first.assetId }));
+        static_cast<void>(manager.Unload(kb::assets::AssetId{
+            it->second.sourceAssetId != 0U ? it->second.sourceAssetId : it->first.assetId }));
         it = meshes.erase(it);
     }
     for (auto it = materials.begin(); it != materials.end();) {

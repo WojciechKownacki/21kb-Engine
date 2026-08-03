@@ -1284,6 +1284,12 @@ end
                 },
             },
         };
+        instanceClip.morphTracks = {
+            { .morphTarget = "Smile", .keyframes = {
+                { .timeSeconds = 0.0F, .weight = 0.0F },
+                { .timeSeconds = 1.0F, .weight = 1.0F },
+            } },
+        };
         instanceClip.rootMotionMode =
             kb::scene::AnimationRootMotionMode::ExtractFromBone;
         instanceClip.rootMotionBoneId = 700U;
@@ -1405,7 +1411,11 @@ end
                 instanceSkeleton->currentSkinMatrices.size() == 3U &&
                 instanceSkeleton->previousSkinMatrices.size() == 3U &&
                 instanceSkeleton->currentSkinMatrices.data() !=
-                    instanceSkeleton->previousSkinMatrices.data() &&
+                instanceSkeleton->previousSkinMatrices.data() &&
+                instanceSkeleton->morphWeights.targetNames.size() == 1U &&
+                instanceSkeleton->morphWeights.targetNames[0] == "Smile" &&
+                instanceSkeleton->morphWeights.currentWeights.size() == 1U &&
+                instanceSkeleton->morphWeights.previousWeights.size() == 1U &&
                 instanceSkeleton->evaluationCount == 0U &&
                 instanceSkeleton->hierarchySolveCount == 0U &&
                 NearlyEqual(
@@ -1445,6 +1455,10 @@ end
                 sampledSkeleton.has_value() &&
                 sampledSkeleton->evaluationCount == 1U &&
                 sampledSkeleton->hierarchySolveCount == 1U &&
+                sampledSkeleton->morphWeights.targetNames.size() == 1U &&
+                sampledSkeleton->morphWeights.targetNames[0] == "Smile" &&
+                NearlyEqual(sampledSkeleton->morphWeights.currentWeights[0], 0.25F) &&
+                NearlyEqual(sampledSkeleton->morphWeights.previousWeights[0], 0.0F) &&
                 NearlyEqual(
                     sampledSkeleton->previousLocalPose.positions[0].x,
                     3.0F) &&

@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
+#include <string>
 #include <vector>
 
 namespace kb::scene {
@@ -22,6 +24,7 @@ struct SkeletalMeshRenderResourceData {
     std::vector<RenderMaterialSlotDesc> materialSlots;
     std::vector<std::uint64_t> paletteBoneIds;
     RenderBoundsSphere bounds{};
+    bool dynamicVertexBuffer = false;
     RenderMeshDesc desc{};
 
     RenderMeshDesc& RefreshDesc() noexcept;
@@ -30,7 +33,9 @@ struct SkeletalMeshRenderResourceData {
 class SkeletalMeshRenderResourceBuilder final {
 public:
     [[nodiscard]] static std::optional<SkeletalMeshRenderResourceData> Build(
-        const kb::scene::SkeletalMeshAsset& asset);
+        const kb::scene::SkeletalMeshAsset& asset,
+        std::span<const std::string> morphTargetNames = {},
+        std::span<const float> morphWeights = {});
 };
 
 } // namespace kb::render
