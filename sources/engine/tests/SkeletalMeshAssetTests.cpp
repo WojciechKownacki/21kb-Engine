@@ -156,6 +156,7 @@ void RunSkeletalMeshAssetTests() {
     const auto loaded=kb::scene::SkeletalMeshAssetIO::Load(path);
     Require(loaded && loaded->lods.size()==1U && loaded->lods[0].sections[0].materialAssetId==42U && loaded->morphTargets[0].deltas.size()==1U &&
             loaded->boundsMode == kb::scene::SkeletalMeshBoundsMode::ImportedConservative &&
+            !loaded->lods[0].boneBounds.empty() &&
             loaded->fixedBounds.extents.y == 2.0F,
         "SkeletalMeshAsset round trip lost canonical data");
     const auto deterministicPath = root / "RoundTrip/HeroCopy.kbskeletalmesh";
@@ -191,6 +192,23 @@ void RunSkeletalMeshAssetTests() {
     const auto loadedFixedBounds = kb::scene::SkeletalMeshAssetIO::Load(root / "RoundTrip/FixedBounds.kbskeletalmesh");
     Require(loadedFixedBounds && loadedFixedBounds->boundsMode == kb::scene::SkeletalMeshBoundsMode::Fixed,
         "SkeletalMeshAsset round trip lost its fixed-bounds mode");
+    kb::scene::SkeletalMeshAsset animatedBoundsMesh = mesh;
+    animatedBoundsMesh.lods[0].vertices[2].jointIndices[0] = 1U;
+    kb::scene::BuildSkeletalMeshLodBoneBounds(animatedBoundsMesh.lods[0]);
+    const std::array<kb::scene::SkeletonBoneId, 2U> animatedBoneIds{ 1U, 2U };
+    const std::array<kb::math::Mat4, 2U> animatedSkinMatrices{
+        kb::math::FromTRS({}, {}, { 1.0F, 1.0F, 1.0F }),
+        kb::math::FromTRS({ 0.0F, 3.0F, 0.0F }, {}, { 1.0F, 1.0F, 1.0F }),
+    };
+    const auto animatedBounds = kb::scene::EvaluateSkeletalMeshAnimatedBounds(
+        animatedBoundsMesh, 0U, animatedBoneIds, animatedSkinMatrices);
+    Require(animatedBounds && animatedBounds->center.y > 1.9F && animatedBounds->extents.y > 1.9F,
+        "SkeletalMeshAsset did not update bounds from the current bone palette");
+    animatedBoundsMesh.boundsMode = kb::scene::SkeletalMeshBoundsMode::Fixed;
+    const auto fixedAnimatedBounds = kb::scene::EvaluateSkeletalMeshAnimatedBounds(
+        animatedBoundsMesh, 0U, animatedBoneIds, animatedSkinMatrices);
+    Require(fixedAnimatedBounds && fixedAnimatedBounds->extents.y == animatedBoundsMesh.fixedBounds.extents.y,
+        "SkeletalMeshAsset fixed-bounds mode did not bypass animated bounds");
     const auto importRoot = root / "GltfImport";
     WriteSkeletalGltfFixture(importRoot);
     std::string importError;
