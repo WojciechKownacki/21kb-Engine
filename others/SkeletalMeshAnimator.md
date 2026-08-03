@@ -747,7 +747,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
 
 ### Sprint SK-07 — wspólna scena podglądowa
 
-46. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zbudować jeden Persona-like `AnimationPreviewContext` współdzielony
+46. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zbudować jeden Persona-like `AnimationPreviewContext` współdzielony
     przez wszystkie edytory animacyjne.
 47. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Preview musi używać dokładnie produkcyjnego AnimatorInstance, GPU
     skinningu, bounds i materiałów z runtime gry.
