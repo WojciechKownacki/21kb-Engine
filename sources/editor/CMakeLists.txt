@@ -739,6 +739,7 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorPanelTextBuilder.cpp
     src/inspection/InspectorRigidbodyTextBuilder.cpp
     src/scene/EditorDefaultSceneFactory.cpp
+    src/scene/EditorAnimationPreviewScene.cpp
     src/scene/EditorHierarchyContentResolver.cpp
     src/scene/EditorHierarchyFloatingContentResolver.cpp
     src/scene/EditorHierarchyMainContentResolver.cpp
