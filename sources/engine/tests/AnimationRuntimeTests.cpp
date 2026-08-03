@@ -102,6 +102,7 @@ void RunAnimationRuntimeTests() {
     skeletalClip.skeletalTracks = {
         {
             .boneId = 101U,
+            .bindingMask = 4U,
             .keyframes = {
                 { .timeSeconds = 0.0F, .transform = {} },
                 { .timeSeconds = 1.0F, .transform = { .position = { 2.0F, 0.0F, 0.0F } } },
@@ -125,11 +126,37 @@ void RunAnimationRuntimeTests() {
             loadedSkeletalClip->targetSkeletonCompatibilitySignature == skeletalClip.targetSkeletonCompatibilitySignature &&
             loadedSkeletalClip->skeletalTracks.size() == 1U &&
             loadedSkeletalClip->skeletalTracks.front().boneId == 101U &&
+            loadedSkeletalClip->skeletalTracks.front().bindingMask == 4U &&
             loadedSkeletalClip->morphTracks.size() == 1U &&
             loadedSkeletalClip->curves.size() == 1U &&
             loadedSkeletalClip->rootMotionMode == kb::scene::AnimationRootMotionMode::ExtractFromBone &&
             loadedSkeletalClip->rootMotionBoneId == 101U,
         "Skeletal AnimationClip round trip lost canonical bindings");
+    std::string legacySkeletalText = ReadTextFile(skeletalClipPath);
+    const std::string currentSkeletalHeader = "21kb AnimationClip 2";
+    const std::size_t currentSkeletalHeaderOffset =
+        legacySkeletalText.find(currentSkeletalHeader);
+    const std::string currentSkeletalTrack = "skeletalTrack 101 4";
+    const std::size_t currentSkeletalTrackOffset =
+        legacySkeletalText.find(currentSkeletalTrack);
+    Require(currentSkeletalHeaderOffset != std::string::npos &&
+            currentSkeletalTrackOffset != std::string::npos,
+        "Skeletal AnimationClip did not serialize its binding mask");
+    legacySkeletalText.replace(
+        currentSkeletalHeaderOffset, currentSkeletalHeader.size(),
+        "21kb AnimationClip 1");
+    legacySkeletalText.replace(
+        currentSkeletalTrackOffset, currentSkeletalTrack.size(),
+        "skeletalTrack 101");
+    const auto legacySkeletalClipPath = root / "LegacySkeletal.kbanim";
+    WriteTextFile(legacySkeletalClipPath, legacySkeletalText);
+    const auto loadedLegacySkeletalClip =
+        kb::scene::AnimationAssetIO::LoadClip(legacySkeletalClipPath);
+    Require(loadedLegacySkeletalClip.has_value() &&
+            loadedLegacySkeletalClip->skeletalTracks.size() == 1U &&
+            loadedLegacySkeletalClip->skeletalTracks.front().bindingMask ==
+                ~std::uint64_t{ 0U },
+        "Legacy skeletal track did not migrate to the full binding mask");
     kb::scene::AnimationClip mixedBindingClip = skeletalClip;
     mixedBindingClip.tracks = clip.tracks;
     Require(!kb::scene::AnimationAssetIO::SaveClip(root / "MixedBinding.kbanim", mixedBindingClip),
@@ -1218,6 +1245,7 @@ end
         instanceClip.skeletalTracks = {
             {
                 .boneId = 900U,
+                .bindingMask = 1U,
                 .keyframes = {
                     { .timeSeconds = 0.0F, .transform = {} },
                     { .timeSeconds = 1.0F, .transform = {
@@ -1227,6 +1255,7 @@ end
             },
             {
                 .boneId = 700U,
+                .bindingMask = 2U,
                 .keyframes = {
                     { .timeSeconds = 0.0F, .transform = {} },
                     { .timeSeconds = 1.0F, .transform = {
@@ -1240,18 +1269,63 @@ end
         instanceClip.rootMotionBoneId = 700U;
         const std::filesystem::path instanceClipPath = skeletalRoot /
             "Assets" / "Animation" / "Skeletal.kbanim";
+        kb::scene::AnimationClip instanceClipB = instanceClip;
+        instanceClipB.skeletalTracks[0].keyframes[1].transform.position.x =
+            6.0F;
+        const std::filesystem::path instanceClipBPath = skeletalRoot /
+            "Assets" / "Animation" / "SkeletalB.kbanim";
         Require(kb::scene::AnimationAssetIO::SaveClip(
-                    instanceClipPath, instanceClip),
-            "AnimatorInstance fixture could not save its skeletal clip");
+                    instanceClipPath, instanceClip) &&
+                kb::scene::AnimationAssetIO::SaveClip(
+                    instanceClipBPath, instanceClipB),
+            "AnimatorInstance fixture could not save its skeletal clips");
 
         kb::scene::AnimatorController instanceController{};
+        instanceController.parameters = {
+            {
+                .name = "Blend",
+                .type = kb::scene::AnimatorParameterType::Float,
+                .floatDefault = 0.5F,
+            },
+        };
         instanceController.layers = {
             {
                 .name = "Base",
-                .defaultState = "Idle",
+                .defaultState = "Blend",
+                .weight = 1.0F,
+                .mask = 1U,
                 .states = {
                     {
-                        .name = "Idle",
+                        .name = "Blend",
+                        .blendParameter = "Blend",
+                        .blendChildren = {
+                            {
+                                .threshold = 0.0F,
+                                .clipReference =
+                                    "/Game/Animation/Skeletal.kbanim",
+                            },
+                            {
+                                .threshold = 1.0F,
+                                .clipReference =
+                                    "/Game/Animation/SkeletalB.kbanim",
+                            },
+                        },
+                    },
+                    {
+                        .name = "DirectB",
+                        .clipReference =
+                            "/Game/Animation/SkeletalB.kbanim",
+                    },
+                },
+            },
+            {
+                .name = "Root",
+                .defaultState = "Root",
+                .weight = 0.5F,
+                .mask = 2U,
+                .states = {
+                    {
+                        .name = "Root",
                         .clipReference =
                             "/Game/Animation/Skeletal.kbanim",
                     },
@@ -1262,7 +1336,7 @@ end
             "Assets" / "Animation" / "Skeletal.kbanimcontroller";
         Require(kb::scene::AnimationAssetIO::SaveController(
                     instanceControllerPath, instanceController) &&
-                scene.Assets().Discover() == 3U,
+                scene.Assets().Discover() == 4U,
             "AnimatorInstance fixture could not discover its clip and controller");
         const kb::assets::AssetMetadata* instanceControllerMetadata =
             scene.Assets().Manager().Registry().FindByPath(
@@ -1342,25 +1416,66 @@ end
                     sampledSkeleton->previousLocalPose.positions[0].x,
                     3.0F) &&
                 NearlyEqual(
+                    sampledSkeleton->currentLocalPose.positions[0].x,
+                    1.5F) &&
+                NearlyEqual(
                     sampledSkeleton->currentLocalPose.positions[0].z,
-                    0.25F) &&
+                    0.125F) &&
                 NearlyEqual(
                     sampledSkeleton->currentLocalPose.positions[2].x,
-                    0.5F) &&
-                NearlyEqual(
-                    sampledSkeleton->currentComponentPose.positions[2].x,
-                    0.5F) &&
-                NearlyEqual(
-                    sampledSkeleton->currentComponentPose.positions[2].y,
                     1.0F) &&
                 NearlyEqual(
+                    sampledSkeleton->currentComponentPose.positions[2].x,
+                    3.0F) &&
+                NearlyEqual(
+                    sampledSkeleton->currentComponentPose.positions[2].y,
+                    1.5F) &&
+                NearlyEqual(
                     sampledSkeleton->currentComponentPose.positions[2].z,
-                    0.25F) &&
+                    0.125F) &&
                 NearlyEqual(ownerTransform.localPosition.x, 0.0F) &&
                 NearlyEqual(ownerTransform.localPosition.y, 0.0F) &&
                 NearlyEqual(ownerTransform.localPosition.z, 0.0F) &&
                 scene.Entities().Count() == 1U,
             "Indexed skeletal sampling did not write the compact pose independently of SceneEntity Transform storage");
+
+        Require(scene.Animators().CrossFade(
+                    owner.Entity(), "Base", "DirectB", 0.5F, 0.0F),
+            "Compact skeletal controller could not start a named transition");
+        static_cast<void>(scene.Runtime().Update(0.25F));
+        const auto transitionedSkeleton =
+            scene.Animators().InstanceSkeleton(owner.Entity());
+        const auto transitionedState =
+            scene.Animators().State(owner.Entity(), "Base");
+        Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
+                transitionedSkeleton.has_value() &&
+                transitionedState.has_value() &&
+                transitionedState->state == "DirectB" &&
+                transitionedState->previousState == "Blend" &&
+                transitionedState->transitioning &&
+                NearlyEqual(transitionedState->transitionProgress, 0.5F) &&
+                NearlyEqual(
+                    transitionedSkeleton->previousLocalPose.positions[2].x,
+                    1.0F) &&
+                NearlyEqual(
+                    transitionedSkeleton->currentLocalPose.positions[2].x,
+                    1.75F) &&
+                NearlyEqual(
+                    transitionedSkeleton->currentLocalPose.positions[0].x,
+                    1.5F) &&
+                NearlyEqual(
+                    transitionedSkeleton->currentLocalPose.positions[0].z,
+                    0.25F) &&
+                NearlyEqual(
+                    transitionedSkeleton->currentComponentPose.positions[2].x,
+                    4.125F) &&
+                NearlyEqual(
+                    transitionedSkeleton->currentComponentPose.positions[2].y,
+                    1.5F) &&
+                NearlyEqual(
+                    transitionedSkeleton->currentComponentPose.positions[2].z,
+                    0.25F),
+            "Compact skeletal state/layer/mask/blend/transition evaluation diverged from controller semantics");
 
         kb::scene::AnimationClip invalidBoneClip = instanceClip;
         invalidBoneClip.rootMotionMode =
@@ -1371,7 +1486,8 @@ end
             "Assets" / "Animation" / "InvalidBone.kbanim";
         kb::scene::AnimatorController invalidBoneController =
             instanceController;
-        invalidBoneController.layers[0].states[0].clipReference =
+        invalidBoneController.layers[0].states[0]
+            .blendChildren[0].clipReference =
             "/Game/Animation/InvalidBone.kbanim";
         const std::filesystem::path invalidBoneControllerPath = skeletalRoot /
             "Assets" / "Animation" / "InvalidBone.kbanimcontroller";
@@ -1379,7 +1495,7 @@ end
                     invalidBoneClipPath, invalidBoneClip) &&
                 kb::scene::AnimationAssetIO::SaveController(
                     invalidBoneControllerPath, invalidBoneController) &&
-                scene.Assets().Discover() == 5U,
+                scene.Assets().Discover() == 6U,
             "AnimatorInstance invalid-bone fixture could not be discovered");
         const kb::assets::AssetMetadata* invalidControllerMetadata =
             scene.Assets().Manager().Registry().FindByPath(
