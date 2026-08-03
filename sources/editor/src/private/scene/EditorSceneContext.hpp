@@ -23,6 +23,7 @@
 #include "scene/EditorScriptEditorState.hpp"
 #include "scene/EditorSceneObjectEditTypes.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
+#include "scene/AnimationPreviewContext.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
 #include "scene/material/MaterialEditorState.hpp"
 #include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
@@ -167,6 +168,8 @@ public:
     [[nodiscard]] const EditorViewportPreviewState& ViewportPreview() const noexcept;
     [[nodiscard]] EditorViewportPreviewState& ViewportPreview(std::uint64_t viewportKey) noexcept;
     [[nodiscard]] const EditorViewportPreviewState& ViewportPreview(std::uint64_t viewportKey) const noexcept;
+    [[nodiscard]] AnimationPreviewContext& AnimationPreview() noexcept;
+    [[nodiscard]] const AnimationPreviewContext& AnimationPreview() const noexcept;
     [[nodiscard]] EditorViewportCameraState& ViewportCamera() noexcept;
     [[nodiscard]] const EditorViewportCameraState& ViewportCamera() const noexcept;
     [[nodiscard]] EditorViewportCameraState& ViewportCamera(std::uint64_t viewportKey) noexcept;
@@ -943,6 +946,7 @@ private:
     EditorAssetBrowserState assetBrowser_;
     EditorConsoleState console_;
     EditorSceneViewportStateStore viewportState_;
+    AnimationPreviewContext animationPreview_;
     InspectorPanelState inspector_;
     MaterialEditorState materialEditor_;
     kb::assets::AssetId materialRuntimePreviewAssetId_{};
