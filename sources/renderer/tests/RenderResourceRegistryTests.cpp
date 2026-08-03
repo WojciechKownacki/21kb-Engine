@@ -444,6 +444,9 @@ void RunSkinningPaletteAllocatorLifetimeTest() {
     Require(stats.activeFrame == 3U && stats.completedFrame == 1U &&
             stats.allocatedMatrices == 1U && stats.allocationFailures == 2U,
         "Skinning palette allocator did not report frame ownership or explicit pressure");
+    allocator.Shutdown();
+    Require(allocator.BeginFrame(1U, 0U) && allocator.Allocate(4U).IsValid(),
+        "Skinning palette allocator did not reset cleanly after renderer reload");
 }
 
 void RunObjImporterBuildsRenderMeshDescWithSectionsAndSlotsTest() {

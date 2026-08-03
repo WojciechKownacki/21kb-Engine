@@ -117,6 +117,11 @@ void RenderSkinningPaletteAllocator::Shutdown() noexcept {
 bool RenderSkinningPaletteAllocator::EnsureBuffers() noexcept {
     if (desc_.matrixCapacityPerFrame == 0U) return false;
     if (desc_.matrixCapacityPerFrame > UINT16_MAX) return false;
+    for (std::vector<RenderSkinningMatrix>& staging : staging_) {
+        if (staging.size() != desc_.matrixCapacityPerFrame) {
+            staging.resize(desc_.matrixCapacityPerFrame);
+        }
+    }
     for (bgfx::TextureHandle& texture : textures_) {
         if (bgfx::isValid(texture)) continue;
         texture = bgfx::createTexture2D(4U,

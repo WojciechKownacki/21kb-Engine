@@ -3,8 +3,8 @@ $output v_currentClip, v_previousClip
 
 #include <bgfx_shader.sh>
 
-uniform sampler2D s_skinningPalette;
-uniform sampler2D s_previousSkinningPalette;
+SAMPLER2D(s_skinningPalette, 14);
+SAMPLER2D(s_previousSkinningPalette, 15);
 uniform vec4 u_skinningPaletteInfo;
 uniform vec4 u_previousSkinningPaletteInfo;
 uniform mat4 u_motionPreviousViewProjection;
