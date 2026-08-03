@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/math/EngineMath.hpp"
+#include "engine/scene/SkeletonAsset.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
@@ -116,6 +118,8 @@ private:
     mutable std::vector<std::uint64_t> seenSpaceStrokes_;
     mutable std::vector<std::uint64_t> transformUpdateEntities_;
     mutable std::vector<RenderSkinningMatrix> skinningMatrixScratch_;
+    mutable std::vector<kb::scene::SkeletonBoneId> skinningBoneScratch_;
+    mutable std::vector<kb::math::Mat4> skinningPoseScratch_;
     RenderSkinningPaletteAllocator* skinningPaletteAllocator_ = nullptr;
     mutable std::unordered_map<std::uint64_t, kb::scene::TransformComponent> transformCache_;
     mutable std::unordered_set<std::uint64_t> transformResolving_;
