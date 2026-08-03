@@ -110,6 +110,7 @@
 #include "scene/material_preview/EditorMaterialNodePreviewBuilder.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "scene/material_preview/EditorMaterialPreviewScene.hpp"
+#include "scene/EditorAnimationPreviewScene.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "scene/transform_edit/EditorSceneTransformCommitBuilder.hpp"
 #include "scene/transform_edit/EditorSceneTransformEditApplier.hpp"
@@ -1180,6 +1181,7 @@ EditorSceneContext::EditorSceneContext()
     , scene_(std::make_unique<kb::scene::Scene>(project_))
     , inspectorMaterialPreviewScene_(std::make_unique<EditorMaterialPreviewScene>())
     , materialPreviewScene_(std::make_unique<EditorMaterialPreviewScene>())
+    , animationPreviewScene_(std::make_unique<EditorAnimationPreviewScene>())
     , graphShaderCacheRoot_((EditorProjectPaths::ProjectRoot() / ".cache" / "graph_shaders").generic_string())
     , materialGraphCookService_(std::make_unique<EditorMaterialGraphCookService>(EditorMaterialGraphCookConfig::Resolve(graphShaderCacheRoot_))) {
     if (projectBootstrap_.succeeded) {
@@ -1459,6 +1461,10 @@ AnimationPreviewContext& EditorSceneContext::AnimationPreview() noexcept {
 
 const AnimationPreviewContext& EditorSceneContext::AnimationPreview() const noexcept {
     return animationPreview_;
+}
+
+const kb::scene::Scene& EditorSceneContext::AnimationPreviewScene() {
+    return animationPreviewScene_->SceneFor(*scene_, animationPreview_);
 }
 
 EditorViewportCameraState& EditorSceneContext::ViewportCamera() noexcept {
