@@ -751,7 +751,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     przez wszystkie edytory animacyjne.
 47. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Preview musi używać dokładnie produkcyjnego AnimatorInstance, GPU
     skinningu, bounds i materiałów z runtime gry.
-48. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać kompatybilny preview Skeleton/SkeletalMesh/Clip/Controller,
+48. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać kompatybilny preview Skeleton/SkeletalMesh/Clip/Controller,
     reference pose i animated pose.
 49. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować orbit, pan, zoom, focus, kamerę, podłogę, światło,
     environment i stabilną ekspozycję.

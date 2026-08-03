@@ -9,6 +9,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SkeletonAsset.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
+#include "engine/scene/SkeletalMeshAsset.hpp"
 
 namespace kb::editor {
 
@@ -28,25 +29,36 @@ void EditorAnimationPreviewScene::Rebuild(
     }
     const kb::scene::SceneEntity entity = scene_->Entities().CreateEntity(
         kb::scene::SceneObjectDesc{ .name = "Animation Preview" });
+    const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> mesh =
+        context.SkeletalMeshAsset().IsValid()
+        ? scene_->Assets().Manager().Load<kb::scene::SkeletalMeshAsset>(context.SkeletalMeshAsset())
+        : kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset>{};
+    bool compatible = mesh.IsLoaded();
+    std::uint64_t skeletonSignature = 0U;
+    if (compatible && context.SkeletonAsset().IsValid()) {
+        const kb::assets::AssetHandle<kb::scene::SkeletonAsset> skeleton =
+            scene_->Assets().Manager().Load<kb::scene::SkeletonAsset>(context.SkeletonAsset());
+        skeletonSignature = skeleton.IsLoaded() ? kb::scene::SkeletonCompatibilitySignature(*skeleton) : 0U;
+        compatible = skeletonSignature != 0U &&
+            mesh->skeletonAssetId == context.SkeletonAsset().value &&
+            mesh->skeletonCompatibilitySignature == skeletonSignature;
+    }
     static_cast<void>(scene_->Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
         .meshAssetId = context.SkeletalMeshAsset().value,
     }));
     static_cast<void>(scene_->Components().DeformedGeometries().Set(entity, kb::scene::DrawD3DeformedGeometryComponent{
         .skeletalMeshAssetId = context.SkeletalMeshAsset().value,
-        .enabled = context.SkeletalMeshAsset().IsValid(),
+        .enabled = compatible,
     }));
-    if (context.SkeletonAsset().IsValid()) {
-        const kb::assets::AssetHandle<kb::scene::SkeletonAsset> skeleton =
-            scene_->Assets().Manager().Load<kb::scene::SkeletonAsset>(context.SkeletonAsset());
-        if (skeleton.IsLoaded()) {
+    if (compatible && context.SkeletonAsset().IsValid()) {
             static_cast<void>(scene_->Components().SkeletonBindings().Set(entity, kb::scene::SkeletonBindingComponent{
                 .skeletonAssetId = context.SkeletonAsset().value,
-                .skeletonCompatibilitySignature = kb::scene::SkeletonCompatibilitySignature(*skeleton),
+                .skeletonCompatibilitySignature = skeletonSignature,
                 .enabled = true,
             }));
-        }
     }
-    if (context.ControllerAsset().IsValid()) {
+    if (compatible && context.PoseMode() == AnimationPreviewPoseMode::Animated &&
+        context.ControllerAsset().IsValid()) {
         static_cast<void>(scene_->Components().Animators().Set(entity, kb::scene::Animator{
             .controllerAssetId = context.ControllerAsset().value,
             .enabled = true,
