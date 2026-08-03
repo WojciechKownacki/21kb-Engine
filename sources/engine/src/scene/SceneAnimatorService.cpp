@@ -132,6 +132,11 @@ void SolveComponentPose(
     }
 }
 
+void ApplySkeletalRigConstraints(
+    Scene& scene, AnimatorRuntimeRecord& record,
+    AnimatorInstanceSkeleton::PoseBuffer& pose,
+    std::optional<std::uint32_t> extractedRootMotionBone);
+
 void InitializePoseBuffers(AnimatorInstanceSkeleton& derived) {
     AnimatorInstanceSkeleton::PoseBuffer& reference = derived.poses[0U];
     const std::size_t boneCount = derived.asset->bones.size();
@@ -384,6 +389,32 @@ void RestoreCompatibleRuntimeState(
         }
         const AnimatorRigConstraint& definition =
             record.controller->rigConstraints[constraint.definitionIndex];
+        if (record.skeleton.has_value()) {
+            const AnimatorInstanceSkeleton& skeleton = *record.skeleton;
+            const auto constrained = skeleton.boneIndices.find(
+                definition.constrainedBoneId);
+            if (constrained == skeleton.boneIndices.end() ||
+                constrained->second != constraint.constrainedBoneIndex) {
+                return false;
+            }
+            if (definition.type == AnimatorRigConstraintType::TwoBoneIK) {
+                const auto mid = skeleton.boneIndices.find(
+                    definition.midBoneId);
+                const auto tip = skeleton.boneIndices.find(
+                    definition.tipBoneId);
+                if (mid == skeleton.boneIndices.end() ||
+                    tip == skeleton.boneIndices.end() ||
+                    mid->second != constraint.midBoneIndex ||
+                    tip->second != constraint.tipBoneIndex ||
+                    skeleton.asset->bones[mid->second].parentIndex !=
+                        static_cast<std::int32_t>(constrained->second) ||
+                    skeleton.asset->bones[tip->second].parentIndex !=
+                        static_cast<std::int32_t>(mid->second)) {
+                    return false;
+                }
+            }
+            continue;
+        }
         if (ResolveTarget(
                 scene, record.entity, definition.constrainedPath) !=
             constraint.constrained) {
@@ -948,7 +979,7 @@ void EvaluateIndexedSkeletalState(
 }
 
 void EvaluateIndexedSkeletalPose(
-    AnimatorRuntimeRecord& instance,
+    Scene& scene, AnimatorRuntimeRecord& instance,
     std::optional<std::uint32_t> extractedRootMotionBone) {
     AnimatorInstanceSkeleton& skeleton = *instance.skeleton;
     if (skeleton.evaluationCount ==
@@ -1038,6 +1069,8 @@ void EvaluateIndexedSkeletalPose(
         current.local.rotations[boneIndex] = reference.rotation;
     }
     SolveComponentPose(*skeleton.asset, current);
+    ApplySkeletalRigConstraints(
+        scene, instance, current, extractedRootMotionBone);
     ++skeleton.hierarchySolveCount;
 }
 
@@ -1218,8 +1251,248 @@ void ApplyTwoBoneIk(
     }
 }
 
-void ApplyRigConstraints(Scene& scene, AnimatorRuntimeRecord& record) {
+[[nodiscard]] bool IsBoneDescendant(
+    const SkeletonAsset& skeleton, std::size_t boneIndex,
+    std::size_t ancestorIndex) {
+    std::int32_t current = static_cast<std::int32_t>(boneIndex);
+    while (current >= 0) {
+        if (static_cast<std::size_t>(current) == ancestorIndex) return true;
+        current = skeleton.bones[static_cast<std::size_t>(current)].parentIndex;
+    }
+    return false;
+}
+
+void UpdateComponentSubtree(
+    const SkeletonAsset& skeleton,
+    AnimatorInstanceSkeleton::PoseBuffer& pose,
+    std::size_t rootIndex) {
+    for (std::size_t index = rootIndex; index < skeleton.bones.size(); ++index) {
+        if (!IsBoneDescendant(skeleton, index, rootIndex)) continue;
+        const SkeletonBone& bone = skeleton.bones[index];
+        if (bone.parentIndex < 0) {
+            pose.component.positions[index] = pose.local.positions[index];
+            pose.component.rotations[index] = pose.local.rotations[index];
+            pose.component.scales[index] = pose.local.scales[index];
+        } else {
+            const std::size_t parent =
+                static_cast<std::size_t>(bone.parentIndex);
+            const Vec3 parentScale = pose.component.scales[parent];
+            const Vec3 scaled{
+                parentScale.x * pose.local.positions[index].x,
+                parentScale.y * pose.local.positions[index].y,
+                parentScale.z * pose.local.positions[index].z,
+            };
+            pose.component.positions[index] =
+                pose.component.positions[parent] + kb::math::Rotate(
+                    pose.component.rotations[parent], scaled);
+            pose.component.rotations[index] = kb::math::Normalize(
+                pose.component.rotations[parent] * pose.local.rotations[index]);
+            pose.component.scales[index] = {
+                parentScale.x * pose.local.scales[index].x,
+                parentScale.y * pose.local.scales[index].y,
+                parentScale.z * pose.local.scales[index].z,
+            };
+        }
+        pose.skinMatrices[index] = kb::math::FromTRS(
+            pose.component.positions[index], pose.component.rotations[index],
+            pose.component.scales[index]) * bone.inverseBind;
+    }
+}
+
+void SetBoneComponentPose(
+    const SkeletonAsset& skeleton,
+    AnimatorInstanceSkeleton::PoseBuffer& pose, std::size_t boneIndex,
+    Vec3 componentPosition, Quat componentRotation, bool setPosition) {
+    const std::int32_t parentIndex = skeleton.bones[boneIndex].parentIndex;
+    if (parentIndex < 0) {
+        if (setPosition) pose.local.positions[boneIndex] = componentPosition;
+        pose.local.rotations[boneIndex] =
+            kb::math::Normalize(componentRotation);
+    } else {
+        const std::size_t parent = static_cast<std::size_t>(parentIndex);
+        const Quat inverseParent =
+            kb::math::Inverse(pose.component.rotations[parent]);
+        if (setPosition) {
+            const Vec3 unrotated = kb::math::Rotate(
+                inverseParent,
+                componentPosition - pose.component.positions[parent]);
+            const Vec3 parentScale = pose.component.scales[parent];
+            pose.local.positions[boneIndex] = {
+                SafeDivide(unrotated.x, parentScale.x),
+                SafeDivide(unrotated.y, parentScale.y),
+                SafeDivide(unrotated.z, parentScale.z),
+            };
+        }
+        pose.local.rotations[boneIndex] = kb::math::Normalize(
+            inverseParent * componentRotation);
+    }
+    UpdateComponentSubtree(skeleton, pose, boneIndex);
+}
+
+[[nodiscard]] Vec3 WorldToAnimatorPosition(
+    const TransformComponent& owner, Vec3 worldPosition) {
+    const Vec3 unrotated = kb::math::Rotate(
+        kb::math::Inverse(owner.worldRotation),
+        worldPosition - owner.worldPosition);
+    return {
+        SafeDivide(unrotated.x, owner.worldScale.x),
+        SafeDivide(unrotated.y, owner.worldScale.y),
+        SafeDivide(unrotated.z, owner.worldScale.z),
+    };
+}
+
+[[nodiscard]] Quat WorldToAnimatorRotation(
+    const TransformComponent& owner, Quat worldRotation) {
+    return kb::math::Normalize(
+        kb::math::Inverse(owner.worldRotation) * worldRotation);
+}
+
+void ApplySkeletalRigConstraints(
+    Scene& scene, AnimatorRuntimeRecord& record,
+    AnimatorInstanceSkeleton::PoseBuffer& pose,
+    std::optional<std::uint32_t> extractedRootMotionBone) {
     if (record.rigConstraints.empty()) return;
+    const TransformComponent* owner = scene.Transforms().TryGet(record.entity);
+    if (owner == nullptr) {
+        throw std::runtime_error("Skeletal Animator owner has no Transform");
+    }
+    const SkeletonAsset& skeleton = *record.skeleton->asset;
+    for (const AnimatorRuntimeConstraint& constraint : record.rigConstraints) {
+        const AnimatorRigConstraint& definition =
+            record.controller->rigConstraints[constraint.definitionIndex];
+        if (extractedRootMotionBone.has_value() &&
+            (constraint.constrainedBoneIndex == *extractedRootMotionBone ||
+             constraint.midBoneIndex == *extractedRootMotionBone ||
+             constraint.tipBoneIndex == *extractedRootMotionBone)) {
+            throw std::runtime_error(
+                "Rig constraint cannot drive the root-motion source bone");
+        }
+        const auto targetIt = record.ikTargets.find(definition.target);
+        if (targetIt == record.ikTargets.end()) continue;
+        const AnimatorIkTarget& target = targetIt->second;
+        const Vec3 targetPosition =
+            WorldToAnimatorPosition(*owner, target.worldPosition);
+        const Quat targetRotation =
+            WorldToAnimatorRotation(*owner, target.worldRotation);
+        const std::size_t constrained = constraint.constrainedBoneIndex;
+        switch (definition.type) {
+        case AnimatorRigConstraintType::TwoBoneIK: {
+            const std::size_t mid = constraint.midBoneIndex;
+            const std::size_t tip = constraint.tipBoneIndex;
+            const Vec3 rootPosition = pose.component.positions[constrained];
+            Vec3 midPosition = pose.component.positions[mid];
+            Vec3 tipPosition = pose.component.positions[tip];
+            const float upperLength = kb::math::Length(midPosition - rootPosition);
+            const float lowerLength = kb::math::Length(tipPosition - midPosition);
+            if (upperLength <= 1.0e-5F || lowerLength <= 1.0e-5F) {
+                throw std::runtime_error("TwoBoneIK requires non-zero bone lengths");
+            }
+            const float positionWeight =
+                definition.weight * target.positionWeight;
+            if (positionWeight > 0.0F) {
+                Vec3 delta = targetPosition - rootPosition;
+                float distance = kb::math::Length(delta);
+                if (distance <= 1.0e-5F) {
+                    throw std::runtime_error(
+                        "TwoBoneIK target cannot coincide with its root");
+                }
+                const Vec3 direction = delta * (1.0F / distance);
+                distance = std::clamp(
+                    distance, std::abs(upperLength - lowerLength) + 1.0e-5F,
+                    upperLength + lowerLength - 1.0e-5F);
+                const auto poleIt = definition.poleTarget.empty()
+                    ? record.ikTargets.end()
+                    : record.ikTargets.find(definition.poleTarget);
+                const Vec3 poleDirection = poleIt == record.ikTargets.end()
+                    ? midPosition - rootPosition
+                    : WorldToAnimatorPosition(
+                          *owner, poleIt->second.worldPosition) - rootPosition;
+                const Vec3 bend = StableBendDirection(
+                    direction, poleDirection, midPosition - rootPosition);
+                const float cosine = std::clamp(
+                    (upperLength * upperLength + distance * distance -
+                     lowerLength * lowerLength) /
+                        (2.0F * upperLength * distance), -1.0F, 1.0F);
+                const Vec3 desiredMid = rootPosition +
+                    direction * (cosine * upperLength) +
+                    bend * (std::sqrt(std::max(
+                        0.0F, 1.0F - cosine * cosine)) * upperLength);
+                const Quat rootRotation = kb::math::Normalize(
+                    kb::math::FromToRotation(
+                        midPosition - rootPosition,
+                        desiredMid - rootPosition) *
+                    pose.component.rotations[constrained]);
+                SetBoneComponentPose(
+                    skeleton, pose, constrained, rootPosition,
+                    kb::math::Slerp(
+                        pose.component.rotations[constrained], rootRotation,
+                        positionWeight), false);
+                midPosition = pose.component.positions[mid];
+                tipPosition = pose.component.positions[tip];
+                const Quat midRotation = kb::math::Normalize(
+                    kb::math::FromToRotation(
+                        tipPosition - midPosition,
+                        targetPosition - midPosition) *
+                    pose.component.rotations[mid]);
+                SetBoneComponentPose(
+                    skeleton, pose, mid, midPosition,
+                    kb::math::Slerp(
+                        pose.component.rotations[mid], midRotation,
+                        positionWeight), false);
+            }
+            const float rotationWeight =
+                definition.weight * target.rotationWeight;
+            if (rotationWeight > 0.0F) {
+                SetBoneComponentPose(
+                    skeleton, pose, tip, pose.component.positions[tip],
+                    kb::math::Slerp(
+                        pose.component.rotations[tip], targetRotation,
+                        rotationWeight), false);
+            }
+            break;
+        }
+        case AnimatorRigConstraintType::Aim: {
+            const float weight = definition.weight * target.positionWeight;
+            if (weight <= 0.0F) break;
+            const Vec3 direction =
+                targetPosition - pose.component.positions[constrained];
+            if (kb::math::Dot(direction, direction) <= 1.0e-8F) {
+                throw std::runtime_error(
+                    "Aim target cannot coincide with its constrained bone");
+            }
+            const Quat desired = kb::math::LookRotation(
+                direction, kb::math::Rotate(
+                    targetRotation, Vec3{ 0.0F, 1.0F, 0.0F }));
+            SetBoneComponentPose(
+                skeleton, pose, constrained,
+                pose.component.positions[constrained],
+                kb::math::Slerp(
+                    pose.component.rotations[constrained], desired, weight),
+                false);
+            break;
+        }
+        case AnimatorRigConstraintType::CopyTransform: {
+            const float positionWeight =
+                definition.weight * target.positionWeight;
+            const float rotationWeight =
+                definition.weight * target.rotationWeight;
+            if (positionWeight <= 0.0F && rotationWeight <= 0.0F) break;
+            SetBoneComponentPose(
+                skeleton, pose, constrained,
+                pose.component.positions[constrained] +
+                    (targetPosition - pose.component.positions[constrained]) *
+                        positionWeight,
+                kb::math::Slerp(
+                    pose.component.rotations[constrained], targetRotation,
+                    rotationWeight), true);
+            break;
+        }
+        }
+    }
+}
+
+void ApplyRigConstraints(Scene& scene, AnimatorRuntimeRecord& record) {
+    if (record.rigConstraints.empty() || record.skeleton.has_value()) return;
     scene.Runtime().SynchronizeTransforms();
     for (const AnimatorRuntimeConstraint& constraint : record.rigConstraints) {
         if (!scene.Entities().IsActive(constraint.constrained)) continue;
@@ -1478,10 +1751,6 @@ bool SceneAnimatorService::Attach(Scene& scene, SceneEntity entity, std::uint64_
         layer.previousState = layer.currentState;
         candidate.layers.push_back(std::move(layer));
     }
-    if (candidate.skeleton.has_value() &&
-        !controller->rigConstraints.empty()) {
-        return false;
-    }
     if (candidate.skeleton.has_value()) {
         const AnimatorRuntimeState::Motion& rootMotion =
             candidate.layers.front().states.front().motions.front();
@@ -1508,19 +1777,42 @@ bool SceneAnimatorService::Attach(Scene& scene, SceneEntity entity, std::uint64_
          ++definitionIndex) {
         const AnimatorRigConstraint& definition =
             controller->rigConstraints[definitionIndex];
-        AnimatorRuntimeConstraint constraint{
-            .definitionIndex = definitionIndex,
-            .constrained = ResolveTarget(
-                scene, entity, definition.constrainedPath),
-        };
-        if (!constraint.constrained.IsValid()) return false;
-        if (definition.type == AnimatorRigConstraintType::TwoBoneIK) {
-            constraint.mid = ResolveTarget(scene, entity, definition.midPath);
-            constraint.tip = ResolveTarget(scene, entity, definition.tipPath);
-            if (!constraint.mid.IsValid() || !constraint.tip.IsValid() ||
-                scene.Hierarchy().Parent(constraint.mid) != constraint.constrained ||
-                scene.Hierarchy().Parent(constraint.tip) != constraint.mid) {
+        AnimatorRuntimeConstraint constraint{};
+        constraint.definitionIndex = definitionIndex;
+        if (candidate.skeleton.has_value()) {
+            if (definition.constrainedBoneId == 0U) return false;
+            const auto constrained = candidate.skeleton->boneIndices.find(
+                definition.constrainedBoneId);
+            if (constrained == candidate.skeleton->boneIndices.end()) {
                 return false;
+            }
+            constraint.constrainedBoneIndex = constrained->second;
+            if (definition.type == AnimatorRigConstraintType::TwoBoneIK) {
+                const auto mid = candidate.skeleton->boneIndices.find(
+                    definition.midBoneId);
+                const auto tip = candidate.skeleton->boneIndices.find(
+                    definition.tipBoneId);
+                if (mid == candidate.skeleton->boneIndices.end() ||
+                    tip == candidate.skeleton->boneIndices.end() ||
+                    candidate.skeleton->asset->bones[mid->second].parentIndex !=
+                        static_cast<std::int32_t>(constraint.constrainedBoneIndex) ||
+                    candidate.skeleton->asset->bones[tip->second].parentIndex !=
+                        static_cast<std::int32_t>(mid->second)) return false;
+                constraint.midBoneIndex = mid->second;
+                constraint.tipBoneIndex = tip->second;
+            }
+        } else {
+            constraint.constrained = ResolveTarget(
+                scene, entity, definition.constrainedPath);
+            if (!constraint.constrained.IsValid()) return false;
+            if (definition.type == AnimatorRigConstraintType::TwoBoneIK) {
+                constraint.mid = ResolveTarget(scene, entity, definition.midPath);
+                constraint.tip = ResolveTarget(scene, entity, definition.tipPath);
+                if (!constraint.mid.IsValid() || !constraint.tip.IsValid() ||
+                    scene.Hierarchy().Parent(constraint.mid) != constraint.constrained ||
+                    scene.Hierarchy().Parent(constraint.tip) != constraint.mid) {
+                    return false;
+                }
             }
         }
         candidate.rigConstraints.push_back(std::move(constraint));
@@ -2031,7 +2323,7 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
                 extractedRootMotionBone = boneIndex;
             }
             EvaluateIndexedSkeletalPose(
-                record, extractedRootMotionBone);
+                scene, record, extractedRootMotionBone);
         }
         for (AnimatorRuntimeBinding& binding : record.bindings) {
             if (!binding.outputTouched || !scene.Entities().IsAlive(binding.target)) continue;
