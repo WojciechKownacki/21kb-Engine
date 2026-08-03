@@ -75,6 +75,8 @@ void ResetCommandKeepingInstanceStorage(MeshDrawCommand& command) noexcept {
     command.materialResource = nullptr;
     command.state = 0U;
     command.sortKey = 0U;
+    command.currentSkinningPalette = {};
+    command.previousSkinningPalette = {};
     command.instances.clear();
 }
 

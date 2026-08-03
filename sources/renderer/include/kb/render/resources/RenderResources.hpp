@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -80,13 +81,18 @@ struct RenderStaticMeshVertexSkinned {
     float weights[4]{ 1.0F, 0.0F, 0.0F, 0.0F };
 };
 
+// Joint indices use the Uint16 BGFX vertex attribute declared by
+// RenderStaticMeshVertexLayout. This is the hard representable limit before a
+// palette is allocated or bound by the later skinning runtime.
+inline constexpr std::uint32_t kRenderSkinnedVertexJointLimit =
+    static_cast<std::uint32_t>(std::numeric_limits<std::uint16_t>::max()) + 1U;
+
 using RenderVertexP3C3 = RenderStaticMeshVertex;
 
 enum class RenderVertexFormat : std::uint8_t {
     P3C3,
     P3N3UV2,
     P3N3T4UV2,
-    // Layout is reserved for a later skinning runtime; static scene mesh registration rejects it.
     SkinnedP3N3T4UV2J4W4,
 };
 
@@ -199,6 +205,12 @@ struct RenderMaterialSlot {
     std::uint64_t defaultMaterialAssetId = 0;
 };
 
+struct RenderMeshSkinningDesc {
+    // Number of entries addressable by the source mesh's joint indices. It is
+    // mesh metadata, not a runtime palette handle or a serialized pose.
+    std::uint32_t jointCount = 0U;
+};
+
 struct RenderMeshDesc {
     const RenderStaticMeshVertex* vertices = nullptr;
     const void* vertexData = nullptr;
@@ -214,6 +226,7 @@ struct RenderMeshDesc {
     std::uint32_t materialSlotCount = 0;
     RenderBoundsSphere bounds{};
     RenderGpuDrivenMeshDesc gpuDriven{};
+    RenderMeshSkinningDesc skinning{};
     std::uint64_t rasterStateExtra = 0;
     bool doubleSided = false;
     bool dynamicVertexBuffer = false;
@@ -242,6 +255,7 @@ struct RenderMeshResource {
     bool gpuCullingEnabled = false;
     bool indirectDrawsEnabled = false;
     bool meshletCullingEnabled = false;
+    RenderMeshSkinningDesc skinning{};
     bgfx::TextureHandle terrainLayerWeightTexture = BGFX_INVALID_HANDLE;
     std::uint16_t terrainLayerWeightWidth = 0U;
     std::uint16_t terrainLayerWeightHeight = 0U;

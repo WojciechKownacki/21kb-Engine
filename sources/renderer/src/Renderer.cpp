@@ -267,6 +267,7 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
     }
     SetGpuDrivenRuntimeDispatchEnabled(gpuDrivenRuntimeDispatchEnabled_);
     renderSceneSynchronizer_ = std::make_unique<EcsRenderSceneSynchronizer>();
+    renderSceneSynchronizer_->SetSkinningPaletteAllocator(&sceneRenderer_->SkinningPalettes());
     particleRenderSynchronizer_ = std::make_unique<SceneParticleRenderSynchronizer>();
     auxFrameRenderer_ = std::make_unique<AuxFrameRenderer>();
     screenCapture_ = std::make_unique<RendererScreenCapture>();
@@ -383,6 +384,11 @@ bool Renderer::BeginFrame() {
     frameActive_ = context_->BeginFrame();
     if (frameActive_) {
         frameState_.Begin(static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL);
+        if (sceneRenderer_ != nullptr) {
+            static_cast<void>(sceneRenderer_->BeginSkinningFrame(
+                static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL,
+                static_cast<std::uint64_t>(lastCompletedFrame_)));
+        }
     } else {
         frameState_.Reset();
     }

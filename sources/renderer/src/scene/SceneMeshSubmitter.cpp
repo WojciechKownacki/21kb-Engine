@@ -228,6 +228,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .shadowMap = shadowMap,
         .sceneDepthTexture = sceneDepthTexture,
         .sceneColorTexture = sceneColorTexture,
+        .skinningPaletteAllocator = skinningPaletteAllocator_,
         .passResources = passResources_,
         .diagnostics = diagnostics,
         .stats = stats,

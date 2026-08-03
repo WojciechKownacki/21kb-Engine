@@ -346,6 +346,31 @@ void RunMeshPipelineBuildsFromSceneMeshBatchesTest() {
     Require(shadowDependencyResult.stats.meshDrawCommandCachePruneCount == 1U, "MeshPipeline did not prune stale shadow cached draw command after alpha-mask texture dependency changed");
 }
 
+void RunMeshPipelineSplitsSkinnedPalettesAndPreservesMotionHistoryTest() {
+    const RenderSkinningPaletteHandle firstCurrent{ .frame = 10U, .firstMatrix = 0U, .matrixCount = 2U, .bufferIndex = 0U };
+    const RenderSkinningPaletteHandle firstPrevious{ .frame = 9U, .firstMatrix = 0U, .matrixCount = 2U, .bufferIndex = 1U };
+    const RenderSkinningPaletteHandle secondCurrent{ .frame = 10U, .firstMatrix = 2U, .matrixCount = 2U, .bufferIndex = 0U };
+    const RenderSkinningPaletteHandle secondPrevious{ .frame = 9U, .firstMatrix = 2U, .matrixCount = 2U, .bufferIndex = 1U };
+    const std::vector<SceneRenderDrawGroup> groups{ SceneRenderDrawGroup{
+        .meshAssetId = 42U, .materialAssetId = 7U,
+        .instances = {
+            SceneRenderMeshInstance{ .entityId = 1U, .meshAssetId = 42U, .materialAssetId = 7U, .currentSkinningPalette = firstCurrent, .previousSkinningPalette = firstPrevious },
+            SceneRenderMeshInstance{ .entityId = 2U, .meshAssetId = 42U, .materialAssetId = 7U, .currentSkinningPalette = secondCurrent, .previousSkinningPalette = secondPrevious },
+        },
+    } };
+    const std::vector<SceneMeshBatch> batches = SceneMeshBatchBuilder::Build(groups);
+    const MeshPipelineBuildResult result = MeshPipelineProcessor::Build({
+        .pass = MeshPassType::BaseOpaque, .meshBatches = &batches,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+    Require(result.commands.size() == 2U &&
+            result.commands[0].instances.size() == 1U &&
+            result.commands[1].instances.size() == 1U &&
+            ((result.commands[0].currentSkinningPalette == firstCurrent && result.commands[0].previousSkinningPalette == firstPrevious && result.commands[1].currentSkinningPalette == secondCurrent && result.commands[1].previousSkinningPalette == secondPrevious) ||
+             (result.commands[1].currentSkinningPalette == firstCurrent && result.commands[1].previousSkinningPalette == firstPrevious && result.commands[0].currentSkinningPalette == secondCurrent && result.commands[0].previousSkinningPalette == secondPrevious)),
+        "Mesh pipeline merged skinned instances with different current or previous palettes");
+}
+
 void RunMeshPipelineReportsMissingMeshBindingPerInstanceTest() {
     const std::vector<SceneRenderDrawGroup> drawGroups{
         SceneRenderDrawGroup{
@@ -1621,6 +1646,7 @@ void RunMeshPipelineTests() {
     RunFramePassKindsMapToMeshPassesTest();
     RunSceneMeshBatchBuilderCreatesStableViewsTest();
     RunMeshPipelineBuildsFromSceneMeshBatchesTest();
+    RunMeshPipelineSplitsSkinnedPalettesAndPreservesMotionHistoryTest();
     RunMeshPipelineReportsMissingMeshBindingPerInstanceTest();
     RunMeshPipelineReportsMissingOcclusionTextureBindingTest();
     RunMeshPipelineCanBuildPassCommandsWithoutResourceValidationTest();

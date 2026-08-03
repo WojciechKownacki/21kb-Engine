@@ -95,11 +95,40 @@ void WriteExtendedSkeletalGltfFixture(const std::filesystem::path& folder) {
     WriteTextFile(folder / "HeroExtended.gltf", R"({"asset":{"version":"2.0"},"buffers":[{"uri":"HeroExtended.bin","byteLength":318}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24},{"buffer":0,"byteOffset":60,"byteLength":48},{"buffer":0,"byteOffset":108,"byteLength":6},{"buffer":0,"byteOffset":114,"byteLength":128},{"buffer":0,"byteOffset":242,"byteLength":36},{"buffer":0,"byteOffset":278,"byteLength":8},{"buffer":0,"byteOffset":286,"byteLength":24},{"buffer":0,"byteOffset":310,"byteLength":8}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"MAT4"},{"bufferView":5,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":6,"componentType":5126,"count":2,"type":"SCALAR"},{"bufferView":7,"componentType":5126,"count":2,"type":"VEC3"},{"bufferView":8,"componentType":5126,"count":2,"type":"SCALAR"}],"materials":[{"name":"Skin"}],"meshes":[{"extras":{"targetNames":["Smile"]},"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3,"material":0,"targets":[{"POSITION":5}]}]}],"nodes":[{"name":"Root","children":[1]},{"name":"Spine","translation":[0,1,0]},{"mesh":0,"skin":0}],"skins":[{"joints":[0,1],"inverseBindMatrices":4}],"animations":[{"samplers":[{"input":6,"output":7,"interpolation":"LINEAR"},{"input":6,"output":8,"interpolation":"LINEAR"}],"channels":[{"sampler":0,"target":{"node":1,"path":"translation"}},{"sampler":1,"target":{"node":2,"path":"weights"}}]}]})");
 }
 
+void RunSkeletalGltfImportAcceptsSkinnedMeshAndSkinNodeTest() {
+    const auto root = std::filesystem::temp_directory_path() / "21kb-skeletal-gltf-import-acceptance";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    kb::tests::Require(!error, "Skeletal glTF acceptance test could not create its temporary root");
+
+    WriteSkeletalGltfFixture(root);
+    std::string importError;
+    kb::scene::SkeletalMeshGltfImportReport report;
+    const auto imported = kb::scene::SkeletalMeshGltfImporter::Import(
+        root / "Hero.gltf", 777U, &importError, &report);
+    kb::tests::Require(imported.has_value() &&
+            imported->skeleton.bones.size() == 2U &&
+            imported->skeleton.bones[1U].parentIndex == 0 &&
+            imported->mesh.skeletonAssetId == 777U &&
+            imported->mesh.lods.size() == 1U &&
+            imported->mesh.lods[0U].vertices.size() == 3U &&
+            imported->mesh.lods[0U].vertices[1U].jointIndices[0U] == 1U &&
+            imported->mesh.lods[0U].vertices[1U].jointWeights[0U] == 1.0F &&
+            kb::scene::ValidateSkeletalMeshAsset(imported->mesh).valid,
+        "Skeletal glTF import rejected a valid skin node or did not preserve its skin data");
+    kb::tests::Require(!report.HasErrors(),
+        "Skeletal glTF import reported an error for a valid skinned mesh");
+
+    std::filesystem::remove_all(root, error);
+}
+
 } // namespace
 
 namespace kb::tests {
 
 void RunSkeletalMeshAssetTests() {
+    RunSkeletalGltfImportAcceptsSkinnedMeshAndSkinNodeTest();
     const auto root=std::filesystem::temp_directory_path()/"21kb-skeletal-mesh-asset-tests";
     std::filesystem::remove_all(root); const auto path=root/"Assets/Characters/Hero.kbskeletalmesh";
     kb::scene::SkeletonAsset skeleton{};

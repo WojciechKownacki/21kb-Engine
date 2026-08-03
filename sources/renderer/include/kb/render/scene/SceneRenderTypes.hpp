@@ -2,6 +2,7 @@
 
 #include "kb/render/frame/RenderPassKind.hpp"
 #include "kb/render/resources/RenderResources.hpp"
+#include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
 #include "kb/render/scene/SceneGpuDrivenFeatureState.hpp"
 #include "kb/render/scene/SceneGpuDrivenParityValidator.hpp"
 
@@ -157,6 +158,8 @@ struct SceneRenderMeshInstance {
     std::array<float, 4> color{ 0.76F, 0.80F, 0.86F, 1.0F };
     float fadeAmount = 1.0F;
     float customData0 = 0.0F;
+    RenderSkinningPaletteHandle currentSkinningPalette{};
+    RenderSkinningPaletteHandle previousSkinningPalette{};
     RenderBoundsSphere worldBounds{};
     std::uint16_t depthBucket = 0;
     bool castsShadow = true;

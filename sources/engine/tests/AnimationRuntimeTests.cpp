@@ -1855,6 +1855,116 @@ end
                     entityCountBeforeConstraintEvaluation,
             "Skeletal TwoBoneIK/Aim/CopyTransform did not evaluate on compact poses without bone entities or extra hierarchy solves");
 
+        const std::uint64_t instanceControllerId =
+            scene.Animators().Controller(owner.Entity());
+        const auto sampleDirectSkeletalState = [&scene, &owner,
+                                                 instanceControllerId]() {
+            scene.Components().Animators().Remove(owner.Entity());
+            static_cast<void>(scene.Runtime().Update(0.0F));
+            scene.Components().Animators().Set(
+                owner.Entity(), kb::scene::Animator{
+                    .controllerAssetId = instanceControllerId,
+                    .speed = 1.0F,
+                    .enabled = true,
+                    .rootMotionOwner =
+                        kb::scene::AnimatorRootMotionOwner::Animator,
+                });
+            kb::scene::TransformComponent* transform =
+                scene.Transforms().TryGet(owner.Entity());
+            Require(transform != nullptr,
+                "Deterministic skeletal sampling lost its root transform");
+            transform->localPosition = {};
+            transform->localRotation = {};
+            transform->localScale = { 1.0F, 1.0F, 1.0F };
+            scene.Transforms().MarkModified(owner.Entity());
+            static_cast<void>(scene.Runtime().Update(0.0F));
+            Require(scene.Animators().CrossFade(
+                        owner.Entity(), "Base", "DirectB", 0.0F, 0.0F),
+                "Deterministic skeletal sampling could not select DirectB");
+        };
+        sampleDirectSkeletalState();
+        static_cast<void>(scene.Runtime().Update(0.5F));
+        const auto wholeStepPose = scene.Animators().InstanceSkeleton(
+            owner.Entity());
+        const bool hasWholeStepPose = wholeStepPose.has_value();
+        const float wholeStepLocalHandX = hasWholeStepPose
+            ? wholeStepPose->currentLocalPose.positions[2].x
+            : 0.0F;
+        const float wholeStepComponentHandX = hasWholeStepPose
+            ? wholeStepPose->currentComponentPose.positions[2].x
+            : 0.0F;
+        const kb::scene::TransformComponent wholeStepTransform =
+            scene.Transforms().Get(owner.Entity());
+
+        sampleDirectSkeletalState();
+        static_cast<void>(scene.Runtime().Update(0.25F));
+        static_cast<void>(scene.Runtime().Update(0.25F));
+        const auto splitStepPose = scene.Animators().InstanceSkeleton(
+            owner.Entity());
+        const kb::scene::TransformComponent splitStepTransform =
+            scene.Transforms().Get(owner.Entity());
+        const std::string deterministicSkeletalFailure =
+            "Skeletal sampling, known pose, or root motion changed across equivalent frame slicing: whole hand=" +
+            std::to_string(wholeStepLocalHandX) +
+            " split hand=" +
+            std::to_string(splitStepPose.has_value()
+                               ? splitStepPose->currentLocalPose.positions[2].x
+                               : -999.0F) +
+            " whole root motion=" +
+            std::to_string(wholeStepTransform.localPosition.z) +
+            " split root motion=" +
+            std::to_string(splitStepTransform.localPosition.z);
+        Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
+                hasWholeStepPose && splitStepPose.has_value() &&
+                NearlyEqual(wholeStepLocalHandX, 3.0F) &&
+                NearlyEqual(splitStepPose->currentLocalPose.positions[2].x,
+                            3.0F) &&
+                NearlyEqual(wholeStepLocalHandX,
+                            splitStepPose->currentLocalPose.positions[2].x) &&
+                NearlyEqual(wholeStepComponentHandX,
+                            splitStepPose->currentComponentPose.positions[2].x) &&
+                NearlyEqual(wholeStepTransform.localPosition.z,
+                            splitStepTransform.localPosition.z),
+            deterministicSkeletalFailure.c_str());
+
+        const auto directBStateBeforeReload = scene.Animators().State(
+            owner.Entity(), "Base");
+        const kb::assets::AssetMetadata* instanceClipBMetadata =
+            scene.Assets().Manager().Registry().FindByPath(
+                "/Game/Animation/SkeletalB.kbanim");
+        Require(directBStateBeforeReload.has_value() &&
+                instanceClipBMetadata != nullptr,
+            "Skeletal hot-reload fixture lost its active state or clip metadata");
+        const std::uint64_t instanceClipBGeneration =
+            scene.Assets().Manager().LoadGeneration(instanceClipBMetadata->id);
+        kb::scene::AnimationClip reloadedInstanceClipB = instanceClipB;
+        reloadedInstanceClipB.skeletalTracks[0].keyframes[1].transform.position.x =
+            10.0F;
+        Require(kb::scene::AnimationAssetIO::SaveClip(
+                    instanceClipBPath, reloadedInstanceClipB) &&
+                scene.Assets().Discover() > 0U &&
+                scene.Assets().Manager().LoadGeneration(instanceClipBMetadata->id) >
+                    instanceClipBGeneration,
+            "Skeletal clip hot reload was not published through the production asset pipeline");
+        static_cast<void>(scene.Runtime().Update(0.25F));
+        const auto directBStateAfterReload = scene.Animators().State(
+            owner.Entity(), "Base");
+        const auto reloadedSkeletalPose = scene.Animators().InstanceSkeleton(
+            owner.Entity());
+        Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
+                directBStateAfterReload.has_value() &&
+                reloadedSkeletalPose.has_value() &&
+                directBStateAfterReload->state == "DirectB" &&
+                !directBStateAfterReload->transitioning &&
+                NearlyEqual(directBStateAfterReload->normalizedTime, 0.75F) &&
+                NearlyEqual(
+                    reloadedSkeletalPose->currentLocalPose.positions[2].x,
+                    7.5F),
+            "Skeletal hot reload did not preserve the live state/playhead or use the new clip payload");
+        Require(kb::scene::AnimationAssetIO::SaveClip(
+                    instanceClipBPath, instanceClipB),
+            "Skeletal hot-reload fixture could not restore its canonical clip");
+
         std::filesystem::remove_all(skeletalRoot);
     }
     std::filesystem::remove_all(root);

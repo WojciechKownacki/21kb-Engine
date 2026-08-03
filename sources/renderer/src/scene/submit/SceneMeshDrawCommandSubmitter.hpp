@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/resources/RenderResourceRegistry.hpp"
+#include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
 #include "kb/render/scene/MeshPipeline.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "scene/lighting/SceneLightingPacker.hpp"
@@ -28,6 +29,7 @@ struct SceneMeshDrawCommandSubmitDesc {
     bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE;
     // MAT-31: opaque scene color snapshot bound to color-sampling graph materials in the transparent pass.
     bgfx::TextureHandle sceneColorTexture = BGFX_INVALID_HANDLE;
+    const RenderSkinningPaletteAllocator* skinningPaletteAllocator = nullptr;
     const SceneMeshPassResources& passResources;
     SceneRenderDiagnostics* diagnostics = nullptr;
     SceneRenderSubmitStats& stats;
