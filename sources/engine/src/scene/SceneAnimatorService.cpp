@@ -92,6 +92,42 @@ double StateTime(float normalizedTime, const AnimationClip& clip);
     return true;
 }
 
+void SolveComponentPose(
+    const SkeletonAsset& skeleton,
+    AnimatorInstanceSkeleton::PoseBuffer& pose) {
+    const std::size_t boneCount = skeleton.bones.size();
+    for (std::size_t index = 0U; index < boneCount; ++index) {
+        const SkeletonBone& bone = skeleton.bones[index];
+
+        if (bone.parentIndex < 0) {
+            pose.component.positions[index] = pose.local.positions[index];
+            pose.component.rotations[index] = pose.local.rotations[index];
+            pose.component.scales[index] = pose.local.scales[index];
+            continue;
+        }
+        const std::size_t parentIndex =
+            static_cast<std::size_t>(bone.parentIndex);
+        const Vec3 parentScale = pose.component.scales[parentIndex];
+        const Vec3 scaledLocalPosition{
+            parentScale.x * pose.local.positions[index].x,
+            parentScale.y * pose.local.positions[index].y,
+            parentScale.z * pose.local.positions[index].z,
+        };
+        pose.component.positions[index] =
+            pose.component.positions[parentIndex] + kb::math::Rotate(
+                pose.component.rotations[parentIndex],
+                scaledLocalPosition);
+        pose.component.rotations[index] = kb::math::Normalize(
+            pose.component.rotations[parentIndex] *
+            pose.local.rotations[index]);
+        pose.component.scales[index] = {
+            parentScale.x * pose.local.scales[index].x,
+            parentScale.y * pose.local.scales[index].y,
+            parentScale.z * pose.local.scales[index].z,
+        };
+    }
+}
+
 void InitializePoseBuffers(AnimatorInstanceSkeleton& derived) {
     AnimatorInstanceSkeleton::PoseBuffer& reference = derived.poses[0U];
     const std::size_t boneCount = derived.asset->bones.size();
@@ -101,40 +137,12 @@ void InitializePoseBuffers(AnimatorInstanceSkeleton& derived) {
     reference.component.positions.resize(boneCount);
     reference.component.rotations.resize(boneCount);
     reference.component.scales.resize(boneCount);
-
-    for (std::size_t index = 0U; index < boneCount; ++index) {
-        const SkeletonBone& bone = derived.asset->bones[index];
+    for (const SkeletonBone& bone : derived.asset->bones) {
         reference.local.positions.push_back(bone.referencePose.position);
         reference.local.rotations.push_back(bone.referencePose.rotation);
         reference.local.scales.push_back(bone.referencePose.scale);
-
-        if (bone.parentIndex < 0) {
-            reference.component.positions[index] = bone.referencePose.position;
-            reference.component.rotations[index] = bone.referencePose.rotation;
-            reference.component.scales[index] = bone.referencePose.scale;
-            continue;
-        }
-        const std::size_t parentIndex =
-            static_cast<std::size_t>(bone.parentIndex);
-        const Vec3 parentScale = reference.component.scales[parentIndex];
-        const Vec3 scaledLocalPosition{
-            parentScale.x * bone.referencePose.position.x,
-            parentScale.y * bone.referencePose.position.y,
-            parentScale.z * bone.referencePose.position.z,
-        };
-        reference.component.positions[index] =
-            reference.component.positions[parentIndex] + kb::math::Rotate(
-                reference.component.rotations[parentIndex],
-                scaledLocalPosition);
-        reference.component.rotations[index] = kb::math::Normalize(
-            reference.component.rotations[parentIndex] *
-            bone.referencePose.rotation);
-        reference.component.scales[index] = {
-            parentScale.x * bone.referencePose.scale.x,
-            parentScale.y * bone.referencePose.scale.y,
-            parentScale.z * bone.referencePose.scale.z,
-        };
     }
+    SolveComponentPose(*derived.asset, reference);
     derived.poses[1U] = reference;
     derived.currentPose = 0U;
 }
@@ -393,6 +401,44 @@ LocalTransform Sample(const AnimationTransformTrack& track, float time) {
             kb::math::Lerp(a.transform.scale.x, b.transform.scale.x, alpha),
             kb::math::Lerp(a.transform.scale.y, b.transform.scale.y, alpha),
             kb::math::Lerp(a.transform.scale.z, b.transform.scale.z, alpha) },
+    };
+}
+
+LocalTransform Sample(const AnimationBoneTrack& track, float time) {
+    if (time <= track.keyframes.front().timeSeconds) {
+        return track.keyframes.front().transform;
+    }
+    if (time >= track.keyframes.back().timeSeconds) {
+        return track.keyframes.back().transform;
+    }
+    const auto upper = std::upper_bound(
+        track.keyframes.begin(), track.keyframes.end(), time,
+        [](float value, const AnimationBoneKeyframe& key) {
+            return value < key.timeSeconds;
+        });
+    const AnimationBoneKeyframe& b = *upper;
+    const AnimationBoneKeyframe& a = *(upper - 1);
+    const float alpha =
+        (time - a.timeSeconds) / (b.timeSeconds - a.timeSeconds);
+    return LocalTransform{
+        .position = {
+            kb::math::Lerp(
+                a.transform.position.x, b.transform.position.x, alpha),
+            kb::math::Lerp(
+                a.transform.position.y, b.transform.position.y, alpha),
+            kb::math::Lerp(
+                a.transform.position.z, b.transform.position.z, alpha),
+        },
+        .rotation = kb::math::Slerp(
+            a.transform.rotation, b.transform.rotation, alpha),
+        .scale = {
+            kb::math::Lerp(
+                a.transform.scale.x, b.transform.scale.x, alpha),
+            kb::math::Lerp(
+                a.transform.scale.y, b.transform.scale.y, alpha),
+            kb::math::Lerp(
+                a.transform.scale.z, b.transform.scale.z, alpha),
+        },
     };
 }
 
@@ -750,6 +796,44 @@ void EvaluateState(
             binding.toTouched = true;
         }
     }
+}
+
+void EvaluateIndexedSkeletalPose(AnimatorRuntimeRecord& instance) {
+    AnimatorInstanceSkeleton& skeleton = *instance.skeleton;
+    skeleton.currentPose ^= 1U;
+    AnimatorInstanceSkeleton::PoseBuffer& current =
+        skeleton.poses[skeleton.currentPose];
+    for (std::size_t index = 0U; index < skeleton.asset->bones.size();
+         ++index) {
+        const LocalTransform& reference =
+            skeleton.asset->bones[index].referencePose;
+        current.local.positions[index] = reference.position;
+        current.local.rotations[index] = reference.rotation;
+        current.local.scales[index] = reference.scale;
+    }
+
+    const AnimatorRuntimeLayer& layer = instance.layers.front();
+    const AnimatorRuntimeState& state = layer.states[layer.currentState];
+    const AnimatorRuntimeState::Motion& motion = state.motions.front();
+    if (motion.boneIndices.size() != motion.clip->skeletalTracks.size()) {
+        throw std::runtime_error(
+            "AnimatorInstance lost its prebound skeletal track indices");
+    }
+    const float sampleTime = static_cast<float>(layer.currentTimeSeconds);
+    for (std::size_t trackIndex = 0U;
+         trackIndex < motion.clip->skeletalTracks.size(); ++trackIndex) {
+        const std::uint32_t boneIndex = motion.boneIndices[trackIndex];
+        if (boneIndex >= current.local.positions.size()) {
+            throw std::runtime_error(
+                "AnimatorInstance contains an out-of-range bone index");
+        }
+        const LocalTransform sampled = Sample(
+            motion.clip->skeletalTracks[trackIndex], sampleTime);
+        current.local.positions[boneIndex] = sampled.position;
+        current.local.rotations[boneIndex] = sampled.rotation;
+        current.local.scales[boneIndex] = sampled.scale;
+    }
+    SolveComponentPose(*skeleton.asset, current);
 }
 
 bool ConditionMatches(
@@ -1188,6 +1272,17 @@ bool SceneAnimatorService::Attach(Scene& scene, SceneEntity entity, std::uint64_
         if (layer.currentState >= layer.states.size()) return false;
         layer.previousState = layer.currentState;
         candidate.layers.push_back(std::move(layer));
+    }
+    if (candidate.skeleton.has_value()) {
+        if (controller->layers.size() != 1U ||
+            !controller->layers.front().transitions.empty() ||
+            !controller->rigConstraints.empty()) {
+            return false;
+        }
+        for (const AnimatorControllerState& state :
+             controller->layers.front().states) {
+            if (!state.blendChildren.empty()) return false;
+        }
     }
     candidate.rigConstraints.reserve(controller->rigConstraints.size());
     for (std::size_t definitionIndex = 0U;
@@ -1690,6 +1785,9 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
                     binding.outputTouched = true;
                 }
             }
+        }
+        if (record.skeleton.has_value()) {
+            EvaluateIndexedSkeletalPose(record);
         }
         for (AnimatorRuntimeBinding& binding : record.bindings) {
             if (!binding.outputTouched || !scene.Entities().IsAlive(binding.target)) continue;
