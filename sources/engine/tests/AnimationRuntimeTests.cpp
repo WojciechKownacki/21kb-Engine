@@ -229,6 +229,21 @@ void RunAnimationRuntimeTests() {
         std::string_view{ serializedController }.substr(controllerHeaderEnd + 1U));
     Require(kb::scene::AnimationAssetIO::LoadController(legacyControllerPath).has_value(),
         "AnimatorController legacy migration failed");
+    std::string versionOneController = serializedController;
+    const std::string currentControllerHeader = "21kb AnimatorController 2";
+    const std::size_t currentControllerHeaderOffset =
+        versionOneController.find(currentControllerHeader);
+    Require(currentControllerHeaderOffset != std::string::npos,
+        "AnimatorController did not serialize its current schema version");
+    versionOneController.replace(
+        currentControllerHeaderOffset, currentControllerHeader.size(),
+        "21kb AnimatorController 1");
+    const std::filesystem::path versionOneControllerPath =
+        roundTripRoot / "VersionOne.kbanimcontroller";
+    WriteTextFile(versionOneControllerPath, versionOneController);
+    Require(kb::scene::AnimationAssetIO::LoadController(
+                versionOneControllerPath).has_value(),
+        "AnimatorController schema 1 migration failed");
     const std::filesystem::path corruptControllerPath = roundTripRoot / "Corrupt.kbanimcontroller";
     WriteTextFile(corruptControllerPath, "21kb AnimatorController 99\n");
     std::string corruptControllerError;
@@ -1612,6 +1627,233 @@ end
                             std::string::npos;
                     }),
             "AnimatorInstance accepted a skeletal track with no canonical bone index");
+
+        scene.Components().Animators().Remove(invalidOwner.Entity());
+        scene.Runtime().SetPlaying(false);
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        static_cast<void>(scene.Runtime().DrainSceneSystemErrors());
+
+        kb::scene::AnimationClip constraintClip{};
+        constraintClip.durationSeconds = 1.0F;
+        constraintClip.looping = true;
+        constraintClip.targetSkeletonAssetId = skeletonId.value;
+        constraintClip.targetSkeletonCompatibilitySignature =
+            skeletonSignature;
+        constraintClip.skeletalTracks = {
+            {
+                .boneId = 700U,
+                .keyframes = {
+                    { .timeSeconds = 0.0F,
+                      .transform = skeleton.bones[0].referencePose },
+                    { .timeSeconds = 1.0F,
+                      .transform = skeleton.bones[0].referencePose },
+                },
+            },
+            {
+                .boneId = 101U,
+                .keyframes = {
+                    { .timeSeconds = 0.0F,
+                      .transform = skeleton.bones[1].referencePose },
+                    { .timeSeconds = 1.0F,
+                      .transform = skeleton.bones[1].referencePose },
+                },
+            },
+            {
+                .boneId = 900U,
+                .keyframes = {
+                    { .timeSeconds = 0.0F,
+                      .transform = skeleton.bones[2].referencePose },
+                    { .timeSeconds = 1.0F,
+                      .transform = skeleton.bones[2].referencePose },
+                },
+            },
+        };
+        const std::filesystem::path constraintClipPath = skeletalRoot /
+            "Assets" / "Animation" / "ConstraintPose.kbanim";
+        Require(kb::scene::AnimationAssetIO::SaveClip(
+                    constraintClipPath, constraintClip),
+            "Compact-pose constraint fixture could not save its clip");
+
+        const auto constraintController = [](
+            kb::scene::AnimatorRigConstraint constraint) {
+            kb::scene::AnimatorController value{};
+            value.layers = {
+                {
+                    .name = "Base",
+                    .defaultState = "Pose",
+                    .states = {
+                        {
+                            .name = "Pose",
+                            .clipReference =
+                                "/Game/Animation/ConstraintPose.kbanim",
+                        },
+                    },
+                },
+            };
+            value.rigConstraints.push_back(std::move(constraint));
+            return value;
+        };
+        const kb::scene::AnimatorController skeletalIkController =
+            constraintController({
+                .name = "Arm IK",
+                .type = kb::scene::AnimatorRigConstraintType::TwoBoneIK,
+                .target = "HandTarget",
+                .poleTarget = "ElbowPole",
+                .constrainedBoneId = 700U,
+                .midBoneId = 101U,
+                .tipBoneId = 900U,
+            });
+        const kb::scene::AnimatorController skeletalAimController =
+            constraintController({
+                .name = "Hand Aim",
+                .type = kb::scene::AnimatorRigConstraintType::Aim,
+                .target = "LookTarget",
+                .constrainedBoneId = 900U,
+            });
+        const kb::scene::AnimatorController skeletalCopyController =
+            constraintController({
+                .name = "Hand Copy",
+                .type = kb::scene::AnimatorRigConstraintType::CopyTransform,
+                .target = "CopyTarget",
+                .constrainedBoneId = 900U,
+            });
+        const std::filesystem::path skeletalIkControllerPath = skeletalRoot /
+            "Assets" / "Animation" / "SkeletalIk.kbanimcontroller";
+        const std::filesystem::path skeletalAimControllerPath = skeletalRoot /
+            "Assets" / "Animation" / "SkeletalAim.kbanimcontroller";
+        const std::filesystem::path skeletalCopyControllerPath = skeletalRoot /
+            "Assets" / "Animation" / "SkeletalCopy.kbanimcontroller";
+        Require(kb::scene::AnimationAssetIO::SaveController(
+                    skeletalIkControllerPath, skeletalIkController) &&
+                kb::scene::AnimationAssetIO::SaveController(
+                    skeletalAimControllerPath, skeletalAimController) &&
+                kb::scene::AnimationAssetIO::SaveController(
+                    skeletalCopyControllerPath, skeletalCopyController) &&
+                scene.Assets().Discover() == 10U,
+            "Compact-pose constraint assets were not discovered");
+        const auto loadedSkeletalIkController =
+            kb::scene::AnimationAssetIO::LoadController(
+                skeletalIkControllerPath);
+        Require(loadedSkeletalIkController.has_value() &&
+                loadedSkeletalIkController->rigConstraints.size() == 1U &&
+                loadedSkeletalIkController->rigConstraints[0]
+                        .constrainedBoneId == 700U &&
+                loadedSkeletalIkController->rigConstraints[0].midBoneId ==
+                    101U &&
+                loadedSkeletalIkController->rigConstraints[0].tipBoneId ==
+                    900U,
+            "Skeletal rig constraint serialization lost stable bone IDs");
+
+        const auto controllerIdAt = [&](std::string_view path) {
+            const kb::assets::AssetMetadata* metadata =
+                scene.Assets().Manager().Registry().FindByPath(
+                    std::filesystem::path{ path });
+            Require(metadata != nullptr,
+                "Compact-pose constraint controller metadata was missing");
+            return metadata->id.value;
+        };
+        const auto authorConstraintOwner = [&scene, skeletonId,
+                                             skeletonSignature](
+            std::string_view name, std::uint64_t controllerAssetId,
+            kb::scene::TransformComponent transform = {}) {
+            const kb::scene::SceneObject entity =
+                scene.Entities().CreateObject({
+                    .name = std::string{ name },
+                    .transform = transform,
+                });
+            Require(scene.Components().SkeletonBindings().Set(
+                        entity.Entity(),
+                        kb::scene::SkeletonBindingComponent{
+                            .skeletonAssetId = skeletonId.value,
+                            .skeletonCompatibilitySignature =
+                                skeletonSignature,
+                            .enabled = true,
+                        }),
+                "Compact-pose constraint owner could not bind its Skeleton");
+            scene.Components().Animators().Set(
+                entity.Entity(), kb::scene::Animator{
+                    .controllerAssetId = controllerAssetId,
+                    .speed = 1.0F,
+                    .enabled = true,
+                });
+            return entity;
+        };
+        const kb::scene::SceneObject ikOwner = authorConstraintOwner(
+            "Skeletal IK", controllerIdAt(
+                "/Game/Animation/SkeletalIk.kbanimcontroller"));
+        const kb::scene::SceneObject aimOwner = authorConstraintOwner(
+            "Skeletal Aim", controllerIdAt(
+                "/Game/Animation/SkeletalAim.kbanimcontroller"));
+        const kb::scene::SceneObject copyOwner = authorConstraintOwner(
+            "Skeletal Copy", controllerIdAt(
+                "/Game/Animation/SkeletalCopy.kbanimcontroller"),
+            kb::scene::TransformComponent{
+                .localPosition = { 10.0F, 0.0F, 0.0F },
+                .localScale = { 2.0F, 2.0F, 2.0F },
+            });
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const std::size_t entityCountBeforeConstraintEvaluation =
+            scene.Entities().Count();
+        Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
+                scene.Animators().SetIkTarget(
+                    ikOwner.Entity(), "HandTarget",
+                    kb::scene::AnimatorIkTarget{
+                        .worldPosition = { 4.0F, 2.0F, 1.0F },
+                    }) &&
+                scene.Animators().SetIkTarget(
+                    ikOwner.Entity(), "ElbowPole",
+                    kb::scene::AnimatorIkTarget{
+                        .worldPosition = { 3.0F, 0.0F, 2.0F },
+                    }) &&
+                scene.Animators().SetIkTarget(
+                    aimOwner.Entity(), "LookTarget",
+                    kb::scene::AnimatorIkTarget{
+                        .worldPosition = { 5.0F, 2.0F, 5.0F },
+                    }) &&
+                scene.Animators().SetIkTarget(
+                    copyOwner.Entity(), "CopyTarget",
+                    kb::scene::AnimatorIkTarget{
+                        .worldPosition = { 24.0F, 8.0F, 2.0F },
+                        .worldRotation = {
+                            0.0F, 0.70710678F, 0.0F, 0.70710678F,
+                        },
+                    }),
+            "Compact-pose constraint targets could not bind to live instances");
+        scene.Runtime().SetPlaying(true);
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const auto ikPose = scene.Animators().InstanceSkeleton(
+            ikOwner.Entity());
+        const auto aimPose = scene.Animators().InstanceSkeleton(
+            aimOwner.Entity());
+        const auto copyPose = scene.Animators().InstanceSkeleton(
+            copyOwner.Entity());
+        const kb::math::Vec3 aimedForward = aimPose.has_value()
+            ? kb::math::Rotate(
+                  aimPose->currentComponentPose.rotations[2],
+                  kb::math::Vec3{ 0.0F, 0.0F, 1.0F })
+            : kb::math::Vec3{};
+        Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
+                ikPose.has_value() && aimPose.has_value() &&
+                copyPose.has_value() &&
+                ikPose->evaluationCount == 1U &&
+                ikPose->hierarchySolveCount == 1U &&
+                aimPose->hierarchySolveCount == 1U &&
+                copyPose->hierarchySolveCount == 1U &&
+                kb::math::Length(
+                    ikPose->currentComponentPose.positions[2] -
+                    kb::math::Vec3{ 4.0F, 2.0F, 1.0F }) <= 1.0e-3F &&
+                kb::math::Dot(
+                    aimedForward,
+                    kb::math::Vec3{ 0.0F, 0.0F, 1.0F }) >= 0.999F &&
+                kb::math::Length(
+                    copyPose->currentComponentPose.positions[2] -
+                    kb::math::Vec3{ 7.0F, 4.0F, 1.0F }) <= 1.0e-4F &&
+                NearlyEqual(
+                    copyPose->currentComponentPose.rotations[2].y,
+                    0.70710678F) &&
+                scene.Entities().Count() ==
+                    entityCountBeforeConstraintEvaluation,
+            "Skeletal TwoBoneIK/Aim/CopyTransform did not evaluate on compact poses without bone entities or extra hierarchy solves");
 
         std::filesystem::remove_all(skeletalRoot);
     }
