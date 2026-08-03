@@ -180,7 +180,8 @@ std::uint8_t MeshPipelineVisibility::SelectLodLevel(
         return 0U;
     }
 
-    const RenderBoundsSphere worldBounds = TransformBounds(mesh->bounds, instance.model);
+    const RenderBoundsSphere worldBounds = TransformBounds(
+        instance.boundsOverride.IsValid() ? instance.boundsOverride : mesh->bounds, instance.model);
     const float coverage = ScreenCoverageEstimate(camera, worldBounds);
     std::uint8_t selected = static_cast<std::uint8_t>(std::min<std::size_t>(mesh->lods.size() - 1U, UINT8_MAX));
     for (std::size_t lodIndex = 0U; lodIndex < mesh->lods.size(); ++lodIndex) {
@@ -190,7 +191,10 @@ std::uint8_t MeshPipelineVisibility::SelectLodLevel(
             break;
         }
     }
-    return selected;
+    if (!instance.lodEnabled) return 0U;
+    const std::int32_t biased = static_cast<std::int32_t>(selected) + instance.lodBias;
+    return static_cast<std::uint8_t>(std::clamp<std::int32_t>(biased, 0,
+        static_cast<std::int32_t>(std::min<std::size_t>(mesh->lods.size() - 1U, UINT8_MAX))));
 }
 
 std::pair<std::uint32_t, std::uint32_t> MeshPipelineVisibility::MeshletRangeForSection(const RenderMeshResource* mesh, std::uint32_t sectionIndex) noexcept {

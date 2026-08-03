@@ -293,6 +293,8 @@ struct SyncContext {
     std::vector<std::uint64_t>* spaceStrokes = nullptr;
     RenderSkinningPaletteAllocator* skinningPaletteAllocator = nullptr;
     std::vector<RenderSkinningMatrix>* skinningMatrixScratch = nullptr;
+    std::vector<kb::scene::SkeletonBoneId>* skinningBoneScratch = nullptr;
+    std::vector<kb::math::Mat4>* skinningPoseScratch = nullptr;
     bool basicLightingEnabled = false;
 };
 
@@ -397,9 +399,55 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
     const kb::scene::SceneDetailSwitchComponent* detailSwitch = sync->scene->Components().DetailSwitches().TryGet(entity);
     const std::optional<kb::scene::AnimatorInstanceSkeletonView> skeleton =
         sync->scene->Animators().InstanceSkeleton(entity);
+    const kb::scene::DrawD3DeformedGeometryComponent* geometry =
+        sync->scene->Components().DeformedGeometries().TryGet(entity);
+    std::uint64_t meshAssetId = renderer.meshAssetId;
+    std::uint64_t materialAssetId = ResolveMaterialAssetId(*sync->scene, renderer);
+    std::uint32_t effectiveMaterialSlotOverrideCount = materialSlotOverrideCount;
+    bool visible = visibility.visible;
+    bool castsShadow = renderer.castsShadow;
+    bool receivesShadow = renderer.receivesShadow;
+    std::uint32_t layer = renderer.layer & visibility.mask;
+    std::int32_t lodBias = 0;
+    bool lodEnabled = true;
     RenderSkinningPaletteHandle currentSkinningPalette{};
     RenderSkinningPaletteHandle previousSkinningPalette{};
-    if (skeleton.has_value()) {
+    if (geometry != nullptr && geometry->enabled) {
+        meshAssetId = geometry->skeletalMeshAssetId;
+        materialSlotAssetIds = geometry->materialSlotAssetIds;
+        effectiveMaterialSlotOverrideCount = std::min<std::uint32_t>(
+            geometry->materialSlotOverrideCount, kMaxSceneMaterialSlotOverrides);
+        castsShadow = geometry->castsShadow;
+        receivesShadow = geometry->receivesShadow;
+        layer = geometry->layer & visibility.mask;
+        lodBias = geometry->lodBias;
+        lodEnabled = geometry->lodEnabled;
+        const kb::scene::SceneEntity poseSource = geometry->poseSource.IsValid() ? geometry->poseSource : entity;
+        const std::optional<kb::scene::AnimatorInstanceSkeletonView> pose = poseSource == entity
+            ? skeleton
+            : sync->scene->Animators().InstanceSkeleton(poseSource);
+        const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> asset =
+            sync->scene->Assets().Manager().AcquireLoaded<kb::scene::SkeletalMeshAsset>(
+                kb::assets::AssetId{ geometry->skeletalMeshAssetId });
+        if (!pose || !asset.IsLoaded() || asset->skeletonAssetId != pose->skeletonAssetId ||
+            asset->skeletonCompatibilitySignature != pose->compatibilitySignature ||
+            sync->skinningBoneScratch == nullptr || sync->skinningPoseScratch == nullptr ||
+            !kb::scene::BuildSkeletalMeshSkinningPalette(
+                *asset, pose->boneIds, pose->currentSkinMatrices,
+                *sync->skinningBoneScratch, *sync->skinningPoseScratch)) {
+            visible = false;
+        } else {
+            currentSkinningPalette = UploadSkinningPalette(
+                sync->skinningPaletteAllocator, sync->skinningMatrixScratch, *sync->skinningPoseScratch);
+            const bool previousPaletteResolved = kb::scene::BuildSkeletalMeshSkinningPalette(
+                *asset, pose->boneIds, pose->previousSkinMatrices,
+                *sync->skinningBoneScratch, *sync->skinningPoseScratch);
+            previousSkinningPalette = previousPaletteResolved
+                ? UploadSkinningPalette(sync->skinningPaletteAllocator, sync->skinningMatrixScratch, *sync->skinningPoseScratch)
+                : RenderSkinningPaletteHandle{};
+            if (!currentSkinningPalette.IsValid() || !previousSkinningPalette.IsValid()) visible = false;
+        }
+    } else if (skeleton.has_value()) {
         currentSkinningPalette = UploadSkinningPalette(
             sync->skinningPaletteAllocator, sync->skinningMatrixScratch,
             skeleton->currentSkinMatrices);
@@ -409,25 +457,27 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
     }
     static_cast<void>(sync->renderScene->UpsertMesh(MeshRenderProxyDesc{
         .entityId = entity.Id(),
-        .meshAssetId = renderer.meshAssetId,
-        .materialAssetId = ResolveMaterialAssetId(*sync->scene, renderer),
+        .meshAssetId = meshAssetId,
+        .materialAssetId = materialAssetId,
         .materialSlotAssetIds = materialSlotAssetIds,
-        .materialSlotOverrideCount = materialSlotOverrideCount,
+        .materialSlotOverrideCount = effectiveMaterialSlotOverrideCount,
         .model = SceneTransformMatrices::Model(renderTransform),
         .boundsOverride = AnimatedBoundsForMesh(*sync->scene, entity, skeleton),
         .color = NeutralInstanceColor(),
         .currentSkinningPalette = currentSkinningPalette,
         .previousSkinningPalette = previousSkinningPalette,
-        .visible = visibility.visible,
-        .castsShadow = renderer.castsShadow,
-        .receivesShadow = renderer.receivesShadow,
-        .layer = renderer.layer & visibility.mask,
+        .visible = visible,
+        .castsShadow = castsShadow,
+        .receivesShadow = receivesShadow,
+        .layer = layer,
         .detailSwitchGroupId = detailSwitch != nullptr ? detailSwitch->groupId : 0U,
         .detailSwitchMinimumLod = detailSwitch != nullptr ? detailSwitch->minimumLod : 0U,
         .detailSwitchMaximumLod = detailSwitch != nullptr ? detailSwitch->maximumLod : 255U,
         .detailSwitchPromoteCoverage = detailSwitch != nullptr ? detailSwitch->promoteCoverage : 0.20F,
         .detailSwitchDemoteCoverage = detailSwitch != nullptr ? detailSwitch->demoteCoverage : 0.15F,
         .detailSwitchEnabled = detailSwitch != nullptr && detailSwitch->enabled && kb::scene::IsSceneDetailSwitchComponentValid(*detailSwitch),
+        .lodBias = lodBias,
+        .lodEnabled = lodEnabled,
     }));
     static_cast<void>(transform);
 }
@@ -686,6 +736,8 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
         .spaceStrokes = &seenSpaceStrokes_,
         .skinningPaletteAllocator = skinningPaletteAllocator_,
         .skinningMatrixScratch = &skinningMatrixScratch_,
+        .skinningBoneScratch = &skinningBoneScratch_,
+        .skinningPoseScratch = &skinningPoseScratch_,
         .basicLightingEnabled = kb::scene::SceneLightingAccess::BasicLightingEnabled(scene),
     };
 
@@ -763,6 +815,8 @@ void EcsRenderSceneSynchronizer::SyncEntities(
         .spaceStrokes = &seenSpaceStrokes_,
         .skinningPaletteAllocator = skinningPaletteAllocator_,
         .skinningMatrixScratch = &skinningMatrixScratch_,
+        .skinningBoneScratch = &skinningBoneScratch_,
+        .skinningPoseScratch = &skinningPoseScratch_,
         .basicLightingEnabled = kb::scene::SceneLightingAccess::BasicLightingEnabled(scene),
     };
 

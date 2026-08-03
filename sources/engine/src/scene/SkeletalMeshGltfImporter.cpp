@@ -496,9 +496,6 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
         if (!materialAssetId) return std::nullopt;
         section.materialAssetId = *materialAssetId;
         section.boneMap.reserve(static_cast<std::size_t>(skin.joints_count));
-        for (cgltf_size joint = 0U; joint < skin.joints_count; ++joint) {
-            section.boneMap.push_back(static_cast<SkeletonBoneId>(joint + 1U));
-        }
         for (cgltf_size vertexIndex = 0U; vertexIndex < positions->count; ++vertexIndex) {
             std::array<cgltf_float, 4U> position{};
             std::array<cgltf_float, 4U> normal{ 0.0F, 1.0F, 0.0F, 0.0F };
@@ -642,6 +639,35 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
             }
         }
         section.indexCount = static_cast<std::uint32_t>(lod.indices.size()) - section.firstIndex;
+
+        // glTF joints address the complete skin. Keep only the influences this
+        // section needs and remap into its compact local bone map. The renderer
+        // later maps those entries into a stable mesh-wide palette, so LOD
+        // changes cannot reinterpret a joint index.
+        std::vector<std::uint16_t> remap(static_cast<std::size_t>(skin.joints_count), UINT16_MAX);
+        for (std::uint32_t vertexOffset = 0U; vertexOffset < positions->count; ++vertexOffset) {
+            SkeletalMeshVertex& vertex = lod.vertices[baseVertex + vertexOffset];
+            for (std::size_t influence = 0U; influence < vertex.jointIndices.size(); ++influence) {
+                if (vertex.jointWeights[influence] <= 0.0F) continue;
+                const std::uint16_t joint = vertex.jointIndices[influence];
+                if (joint >= remap.size()) {
+                    return FailWithDiagnostic<SkeletalMeshGltfImportResult>(error, report, path, primitiveContext,
+                        "Skeletal glTF primitive has a joint outside the skin joint array.");
+                }
+                if (remap[joint] == UINT16_MAX) {
+                    if (section.boneMap.size() >= static_cast<std::size_t>(UINT16_MAX) + 1U) {
+                        return FailWithDiagnostic<SkeletalMeshGltfImportResult>(error, report, path, primitiveContext,
+                            "Skeletal glTF section exceeds the representable joint palette size.");
+                    }
+                    remap[joint] = static_cast<std::uint16_t>(section.boneMap.size());
+                    section.boneMap.push_back(static_cast<SkeletonBoneId>(joint + 1U));
+                }
+                vertex.jointIndices[influence] = remap[joint];
+            }
+            for (std::size_t influence = 0U; influence < vertex.jointIndices.size(); ++influence) {
+                if (vertex.jointWeights[influence] <= 0.0F) vertex.jointIndices[influence] = 0U;
+            }
+        }
         lod.sections.push_back(std::move(section));
     }
     if (lod.vertices.empty() || lod.indices.empty()) {
