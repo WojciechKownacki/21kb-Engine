@@ -167,7 +167,8 @@ bool ValidateClip(AnimationClip& clip, std::string* error = nullptr) {
     std::unordered_set<SkeletonBoneId> bones;
     setError("Skeletal animation clip has invalid stable bone bindings or keyframes.");
     for (AnimationBoneTrack& track : clip.skeletalTracks) {
-        if (track.boneId == 0U || !bones.insert(track.boneId).second ||
+        if (track.boneId == 0U || track.bindingMask == 0U ||
+            !bones.insert(track.boneId).second ||
             track.keyframes.empty()) {
             return false;
         }
@@ -339,6 +340,7 @@ std::optional<AnimationClip> AnimationAssetIO::LoadClip(
     file.imbue(std::locale::classic());
     std::string line;
     bool schemaRead = false;
+    std::uint32_t schemaVersion = 0U;
     std::size_t lineNumber = 0U;
     while (std::getline(file, line)) {
         ++lineNumber;
@@ -351,14 +353,22 @@ std::optional<AnimationClip> AnimationAssetIO::LoadClip(
                 std::to_string(lineNumber) + ".";
         }
         if (!schemaRead) {
-            const asset_io::TextAssetHeaderStatus header =
-                asset_io::ParseTextAssetHeader(
-                    line, kAnimationClipAssetType, kAnimationClipAssetSchemaVersion);
-            if (header == asset_io::TextAssetHeaderStatus::Invalid) {
-                return std::nullopt;
+            if (line.starts_with("21kb")) {
+                std::istringstream headerInput{ line };
+                headerInput.imbue(std::locale::classic());
+                std::string magic;
+                std::string type;
+                if (!(headerInput >> magic >> type >> schemaVersion) ||
+                    magic != "21kb" || type != kAnimationClipAssetType ||
+                    schemaVersion == 0U ||
+                    schemaVersion > kAnimationClipAssetSchemaVersion ||
+                    !EndOfRecord(headerInput)) {
+                    return std::nullopt;
+                }
+                schemaRead = true;
+                continue;
             }
             schemaRead = true;
-            if (header == asset_io::TextAssetHeaderStatus::Current) continue;
         }
         if (command == "durationSeconds") {
             if (!(input >> clip.durationSeconds) || !EndOfRecord(input)) return std::nullopt;
@@ -388,7 +398,14 @@ std::optional<AnimationClip> AnimationAssetIO::LoadClip(
             if (!(input >> clip.targetSkeletonAssetId >> clip.targetSkeletonCompatibilitySignature) || !EndOfRecord(input)) return std::nullopt;
         } else if (command == "skeletalTrack") {
             AnimationBoneTrack track{};
-            if (!(input >> track.boneId) || !EndOfRecord(input)) return std::nullopt;
+            if (!(input >> track.boneId)) return std::nullopt;
+            if (schemaVersion >= 2U) {
+                if (!(input >> track.bindingMask) || !EndOfRecord(input)) {
+                    return std::nullopt;
+                }
+            } else if (!EndOfRecord(input)) {
+                return std::nullopt;
+            }
             clip.skeletalTracks.push_back(std::move(track));
         } else if (command == "skeletalKey") {
             std::size_t trackIndex = 0U;
@@ -626,7 +643,8 @@ bool AnimationAssetIO::SaveClip(const std::filesystem::path& path, const Animati
                << clip.targetSkeletonCompatibilitySignature << '\n';
         for (std::size_t index = 0U; index < clip.skeletalTracks.size(); ++index) {
             const AnimationBoneTrack& track = clip.skeletalTracks[index];
-            output << "skeletalTrack " << track.boneId << '\n';
+            output << "skeletalTrack " << track.boneId << ' '
+                   << track.bindingMask << '\n';
             for (const AnimationBoneKeyframe& key : track.keyframes) {
                 const LocalTransform& value = key.transform;
                 output << "skeletalKey " << index << ' ' << key.timeSeconds << ' '

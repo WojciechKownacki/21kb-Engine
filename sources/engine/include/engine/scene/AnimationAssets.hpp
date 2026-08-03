@@ -42,6 +42,7 @@ struct AnimationBoneKeyframe {
 
 struct AnimationBoneTrack {
     SkeletonBoneId boneId = 0U;
+    std::uint64_t bindingMask = ~std::uint64_t{ 0U };
     std::vector<AnimationBoneKeyframe> keyframes;
 };
 

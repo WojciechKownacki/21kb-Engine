@@ -144,6 +144,18 @@ void InitializePoseBuffers(AnimatorInstanceSkeleton& derived) {
     }
     SolveComponentPose(*derived.asset, reference);
     derived.poses[1U] = reference;
+    for (AnimatorInstanceSkeleton::PoseSoa& scratch :
+         derived.stateScratch) {
+        scratch.positions.resize(boneCount);
+        scratch.rotations.resize(boneCount);
+        scratch.scales.resize(boneCount);
+    }
+    for (std::vector<std::uint8_t>& touched : derived.stateTouched) {
+        touched.resize(boneCount);
+    }
+    for (std::vector<std::uint8_t>& touched : derived.motionTouched) {
+        touched.resize(boneCount);
+    }
     derived.currentPose = 0U;
 }
 
@@ -798,6 +810,96 @@ void EvaluateState(
     }
 }
 
+[[nodiscard]] LocalTransform ReadPose(
+    const AnimatorInstanceSkeleton::PoseSoa& pose,
+    std::size_t boneIndex) {
+    return LocalTransform{
+        .position = pose.positions[boneIndex],
+        .rotation = pose.rotations[boneIndex],
+        .scale = pose.scales[boneIndex],
+    };
+}
+
+void WritePose(
+    AnimatorInstanceSkeleton::PoseSoa& pose, std::size_t boneIndex,
+    const LocalTransform& value) {
+    pose.positions[boneIndex] = value.position;
+    pose.rotations[boneIndex] = value.rotation;
+    pose.scales[boneIndex] = value.scale;
+}
+
+void EvaluateIndexedSkeletalState(
+    AnimatorRuntimeRecord& instance,
+    const AnimatorRuntimeState& state,
+    const AnimatorControllerState& definition,
+    double time, std::uint64_t mask, std::size_t scratchIndex) {
+    AnimatorInstanceSkeleton& skeleton = *instance.skeleton;
+    AnimatorInstanceSkeleton::PoseSoa& output =
+        skeleton.stateScratch[scratchIndex];
+    std::vector<std::uint8_t>& outputTouched =
+        skeleton.stateTouched[scratchIndex];
+    std::vector<std::uint8_t>& lowerTouched =
+        skeleton.motionTouched[0U];
+    std::vector<std::uint8_t>& upperTouched =
+        skeleton.motionTouched[1U];
+    std::fill(outputTouched.begin(), outputTouched.end(), std::uint8_t{ 0U });
+    std::fill(lowerTouched.begin(), lowerTouched.end(), std::uint8_t{ 0U });
+    std::fill(upperTouched.begin(), upperTouched.end(), std::uint8_t{ 0U });
+
+    const BlendSelection selection = SelectBlend(instance, state, definition);
+    const float sampleTime = static_cast<float>(time);
+    const auto sampleMotion = [&](std::size_t motionIndex,
+                                  std::vector<std::uint8_t>& touched,
+                                  bool blendUpper) {
+        const AnimatorRuntimeState::Motion& motion =
+            state.motions[motionIndex];
+        if (motion.boneIndices.size() !=
+            motion.clip->skeletalTracks.size()) {
+            throw std::runtime_error(
+                "AnimatorInstance lost its prebound skeletal track indices");
+        }
+        for (std::size_t trackIndex = 0U;
+             trackIndex < motion.clip->skeletalTracks.size(); ++trackIndex) {
+            const AnimationBoneTrack& track =
+                motion.clip->skeletalTracks[trackIndex];
+            if ((track.bindingMask & mask) == 0U) continue;
+            const std::uint32_t boneIndex =
+                motion.boneIndices[trackIndex];
+            if (boneIndex >= output.positions.size()) {
+                throw std::runtime_error(
+                    "AnimatorInstance contains an out-of-range bone index");
+            }
+            LocalTransform sampled = Sample(track, sampleTime);
+            if (blendUpper) {
+                const LocalTransform lower = lowerTouched[boneIndex] != 0U
+                    ? ReadPose(output, boneIndex)
+                    : skeleton.asset->bones[boneIndex].referencePose;
+                sampled = Blend(lower, sampled, selection.alpha);
+            }
+            WritePose(output, boneIndex, sampled);
+            touched[boneIndex] = 1U;
+            outputTouched[boneIndex] = 1U;
+        }
+    };
+
+    sampleMotion(selection.lower, lowerTouched, false);
+    if (selection.lower == selection.upper) return;
+    sampleMotion(selection.upper, upperTouched, true);
+    for (std::size_t boneIndex = 0U;
+         boneIndex < lowerTouched.size(); ++boneIndex) {
+        if (lowerTouched[boneIndex] == 0U ||
+            upperTouched[boneIndex] != 0U) {
+            continue;
+        }
+        WritePose(
+            output, boneIndex,
+            Blend(
+                ReadPose(output, boneIndex),
+                skeleton.asset->bones[boneIndex].referencePose,
+                selection.alpha));
+    }
+}
+
 void EvaluateIndexedSkeletalPose(AnimatorRuntimeRecord& instance) {
     AnimatorInstanceSkeleton& skeleton = *instance.skeleton;
     skeleton.currentPose ^= 1U;
@@ -805,33 +907,67 @@ void EvaluateIndexedSkeletalPose(AnimatorRuntimeRecord& instance) {
         skeleton.poses[skeleton.currentPose];
     for (std::size_t index = 0U; index < skeleton.asset->bones.size();
          ++index) {
-        const LocalTransform& reference =
-            skeleton.asset->bones[index].referencePose;
-        current.local.positions[index] = reference.position;
-        current.local.rotations[index] = reference.rotation;
-        current.local.scales[index] = reference.scale;
+        WritePose(
+            current.local, index,
+            skeleton.asset->bones[index].referencePose);
     }
 
-    const AnimatorRuntimeLayer& layer = instance.layers.front();
-    const AnimatorRuntimeState& state = layer.states[layer.currentState];
-    const AnimatorRuntimeState::Motion& motion = state.motions.front();
-    if (motion.boneIndices.size() != motion.clip->skeletalTracks.size()) {
-        throw std::runtime_error(
-            "AnimatorInstance lost its prebound skeletal track indices");
-    }
-    const float sampleTime = static_cast<float>(layer.currentTimeSeconds);
-    for (std::size_t trackIndex = 0U;
-         trackIndex < motion.clip->skeletalTracks.size(); ++trackIndex) {
-        const std::uint32_t boneIndex = motion.boneIndices[trackIndex];
-        if (boneIndex >= current.local.positions.size()) {
-            throw std::runtime_error(
-                "AnimatorInstance contains an out-of-range bone index");
+    for (std::size_t layerIndex = 0U;
+         layerIndex < instance.layers.size(); ++layerIndex) {
+        const AnimatorRuntimeLayer& layer = instance.layers[layerIndex];
+        const AnimatorControllerLayer& layerDefinition =
+            instance.controller->layers[layerIndex];
+        if (layer.transitioning) {
+            EvaluateIndexedSkeletalState(
+                instance, layer.states[layer.previousState],
+                layerDefinition.states[layer.previousState],
+                layer.previousTimeSeconds, layerDefinition.mask, 0U);
+            EvaluateIndexedSkeletalState(
+                instance, layer.states[layer.currentState],
+                layerDefinition.states[layer.currentState],
+                layer.currentTimeSeconds, layerDefinition.mask, 1U);
+            const float transition = static_cast<float>(std::clamp(
+                layer.transitionElapsedSeconds /
+                    layer.transitionDurationSeconds,
+                0.0, 1.0));
+            for (std::size_t boneIndex = 0U;
+                 boneIndex < skeleton.asset->bones.size(); ++boneIndex) {
+                const bool fromTouched =
+                    skeleton.stateTouched[0U][boneIndex] != 0U;
+                const bool toTouched =
+                    skeleton.stateTouched[1U][boneIndex] != 0U;
+                if (!fromTouched && !toTouched) continue;
+                const LocalTransform& reference =
+                    skeleton.asset->bones[boneIndex].referencePose;
+                const LocalTransform from = fromTouched
+                    ? ReadPose(skeleton.stateScratch[0U], boneIndex)
+                    : reference;
+                const LocalTransform to = toTouched
+                    ? ReadPose(skeleton.stateScratch[1U], boneIndex)
+                    : reference;
+                WritePose(
+                    current.local, boneIndex,
+                    Blend(
+                        ReadPose(current.local, boneIndex),
+                        Blend(from, to, transition),
+                        layerDefinition.weight));
+            }
+        } else {
+            EvaluateIndexedSkeletalState(
+                instance, layer.states[layer.currentState],
+                layerDefinition.states[layer.currentState],
+                layer.currentTimeSeconds, layerDefinition.mask, 1U);
+            for (std::size_t boneIndex = 0U;
+                 boneIndex < skeleton.asset->bones.size(); ++boneIndex) {
+                if (skeleton.stateTouched[1U][boneIndex] == 0U) continue;
+                WritePose(
+                    current.local, boneIndex,
+                    Blend(
+                        ReadPose(current.local, boneIndex),
+                        ReadPose(skeleton.stateScratch[1U], boneIndex),
+                        layerDefinition.weight));
+            }
         }
-        const LocalTransform sampled = Sample(
-            motion.clip->skeletalTracks[trackIndex], sampleTime);
-        current.local.positions[boneIndex] = sampled.position;
-        current.local.rotations[boneIndex] = sampled.rotation;
-        current.local.scales[boneIndex] = sampled.scale;
     }
     SolveComponentPose(*skeleton.asset, current);
 }
@@ -1273,16 +1409,9 @@ bool SceneAnimatorService::Attach(Scene& scene, SceneEntity entity, std::uint64_
         layer.previousState = layer.currentState;
         candidate.layers.push_back(std::move(layer));
     }
-    if (candidate.skeleton.has_value()) {
-        if (controller->layers.size() != 1U ||
-            !controller->layers.front().transitions.empty() ||
-            !controller->rigConstraints.empty()) {
-            return false;
-        }
-        for (const AnimatorControllerState& state :
-             controller->layers.front().states) {
-            if (!state.blendChildren.empty()) return false;
-        }
+    if (candidate.skeleton.has_value() &&
+        !controller->rigConstraints.empty()) {
+        return false;
     }
     candidate.rigConstraints.reserve(controller->rigConstraints.size());
     for (std::size_t definitionIndex = 0U;
