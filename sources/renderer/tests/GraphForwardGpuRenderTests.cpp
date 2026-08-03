@@ -8,6 +8,7 @@
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
+#include "kb/render/scene/RenderInstanceBuffer.hpp"
 
 #include <bgfx/bgfx.h>
 
@@ -20,6 +21,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -110,6 +112,26 @@ struct ForwardRenderProbe {
     std::filesystem::remove(outBin, error);
     const int code = std::system(command.str().c_str());
     return code == 0 && std::filesystem::exists(outBin, error) && std::filesystem::file_size(outBin, error) > 0U;
+}
+
+[[nodiscard]] bool CookShaderSource(
+    const std::filesystem::path& source,
+    const std::filesystem::path& output,
+    std::string_view type) {
+    std::ostringstream command;
+    command << '"' << '"' << KB_TEST_GRAPH_SHADERC_PATH << '"'
+        << " --type " << type << " --platform windows --profile s_5_0"
+        << " -f \"" << source.generic_string() << '"'
+        << " -o \"" << output.generic_string() << '"'
+        << " --varyingdef \"" << KB_TEST_GRAPH_SHADER_VARYING_DEF << '"'
+        << " -i \"" << KB_TEST_GRAPH_SHADER_INCLUDE_DIR << '"'
+        << " -i \"" << KB_TEST_GRAPH_BGFX_SHADER_INCLUDE_DIR << '"'
+        << " -O 3\"";
+    std::error_code error;
+    std::filesystem::remove(output, error);
+    const int code = std::system(command.str().c_str());
+    return code == 0 && std::filesystem::exists(output, error) &&
+        std::filesystem::file_size(output, error) > 0U;
 }
 
 [[nodiscard]] bool CookHarnessDepthVertexShader(const std::filesystem::path& outBin, float clipDepth) {
@@ -466,6 +488,96 @@ public:
         int guard = 0;
         while (frame < readyFrame && guard < 8) { frame = bgfx::frame(); ++guard; }
         return pixels;
+    }
+
+    [[nodiscard]] ForwardRenderProbe RenderSkinnedProbe(
+        bgfx::ProgramHandle program,
+        bgfx::UniformHandle paletteSampler,
+        bgfx::UniformHandle paletteInfo,
+        bgfx::UniformHandle previousPaletteSampler,
+        bgfx::UniformHandle previousPaletteInfo,
+        bgfx::UniformHandle previousViewProjection,
+        bgfx::UniformHandle shadowViewProjection,
+        bool motionVectors = false) {
+        const std::array<RenderStaticMeshVertexSkinned, 3U> vertices{{
+            { .x = -1.0F, .y = -3.0F, .z = 0.0F, .nx = 0.0F, .ny = 0.0F, .nz = 1.0F, .tx = 1.0F, .ty = 0.0F, .tz = 0.0F, .tw = 1.0F, .u = 0.0F, .v = 2.0F, .r = 1.0F, .g = 1.0F, .b = 1.0F },
+            { .x = -1.0F, .y =  1.0F, .z = 0.0F, .nx = 0.0F, .ny = 0.0F, .nz = 1.0F, .tx = 1.0F, .ty = 0.0F, .tz = 0.0F, .tw = 1.0F, .u = 0.0F, .v = 0.0F, .r = 1.0F, .g = 1.0F, .b = 1.0F },
+            { .x =  3.0F, .y =  1.0F, .z = 0.0F, .nx = 0.0F, .ny = 0.0F, .nz = 1.0F, .tx = 1.0F, .ty = 0.0F, .tz = 0.0F, .tw = 1.0F, .u = 2.0F, .v = 0.0F, .r = 1.0F, .g = 1.0F, .b = 1.0F },
+        }};
+        const bgfx::VertexLayout layout = RenderStaticMeshVertexLayout(RenderVertexFormat::SkinnedP3N3T4UV2J4W4);
+        const bgfx::VertexBufferHandle vertexBuffer = bgfx::createVertexBuffer(bgfx::copy(vertices.data(), sizeof(vertices)), layout);
+        const std::array<float, 16U> palette{
+            0.5F, 0.0F, 0.0F, 0.0F,
+            0.0F, 1.0F, 0.0F, 0.0F,
+            0.0F, 0.0F, 1.0F, 0.0F,
+            0.0F, 0.0F, 0.0F, 1.0F,
+        };
+        const bgfx::TextureHandle paletteTexture = bgfx::createTexture2D(
+            4U, 1U, false, 1U, bgfx::TextureFormat::RGBA32F,
+            BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT |
+                BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+        const std::array<float, 16U> previousPalette{
+            1.0F, 0.0F, 0.0F, 0.0F,
+            0.0F, 1.0F, 0.0F, 0.0F,
+            0.0F, 0.0F, 1.0F, 0.0F,
+            0.0F, 0.0F, 0.0F, 1.0F,
+        };
+        const bgfx::TextureHandle previousPaletteTexture = bgfx::createTexture2D(
+            4U, 1U, false, 1U, bgfx::TextureFormat::RGBA32F,
+            BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT |
+                BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+        Require(bgfx::isValid(paletteTexture) && bgfx::isValid(previousPaletteTexture),
+            "SMA-38: GPU test could not create skinning palette textures");
+        bgfx::updateTexture2D(paletteTexture, 0U, 0U, 0U, 0U, 4U, 1U,
+            bgfx::copy(palette.data(), sizeof(palette)));
+        bgfx::updateTexture2D(previousPaletteTexture, 0U, 0U, 0U, 0U, 4U, 1U,
+            bgfx::copy(previousPalette.data(), sizeof(previousPalette)));
+        bgfx::frame();
+        const std::array<float, 4U> info{ 0.0F, 1.0F, 1.0F, 0.0F };
+        const std::array<float, 16U> identity{
+            1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F,
+            0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F };
+        bgfx::InstanceDataBuffer instanceBuffer{};
+        Require(bgfx::getAvailInstanceDataBuffer(1U, RenderInstanceBuffer::Stride()) == 1U,
+            "SMA-38: GPU test could not allocate a skinned instance");
+        bgfx::allocInstanceDataBuffer(&instanceBuffer, 1U, RenderInstanceBuffer::Stride());
+        auto* instance = reinterpret_cast<RenderInstanceData*>(instanceBuffer.data);
+        instance->model = identity;
+        instance->color = { 1.0F, 1.0F, 1.0F, 1.0F };
+        bgfx::setViewFrameBuffer(0U, fb_);
+        bgfx::setViewRect(0U, 0U, 0U, 64U, 64U);
+        bgfx::setViewClear(0U, BGFX_CLEAR_COLOR, 0x000000ffU, 1.0F, 0U);
+        bgfx::setTexture(14U, paletteSampler, paletteTexture,
+            BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT |
+                BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+        bgfx::setUniform(paletteInfo, info.data());
+        bgfx::setUniform(shadowViewProjection, identity.data());
+        if (motionVectors) {
+            bgfx::setTexture(15U, previousPaletteSampler, previousPaletteTexture,
+                BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT |
+                    BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+            bgfx::setUniform(previousPaletteInfo, info.data());
+            bgfx::setUniform(previousViewProjection, identity.data());
+        }
+        bgfx::setVertexBuffer(0U, vertexBuffer);
+        bgfx::setInstanceDataBuffer(&instanceBuffer, 0U, 1U);
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+        bgfx::submit(0U, program);
+        bgfx::frame();
+        bgfx::blit(1U, readTex_, 0U, 0U, rt_, 0U, 0U, 64U, 64U);
+        std::vector<std::uint8_t> pixels(64U * 64U * 4U);
+        const std::uint32_t readyFrame = bgfx::readTexture(readTex_, pixels.data());
+        std::uint32_t frame = bgfx::frame();
+        std::uint32_t guard = 0U;
+        while (frame < readyFrame && guard < 8U) {
+            frame = bgfx::frame();
+            ++guard;
+        }
+        Require(frame >= readyFrame, "SMA-38: skinned GPU readback did not become ready");
+        bgfx::destroy(previousPaletteTexture);
+        bgfx::destroy(paletteTexture);
+        bgfx::destroy(vertexBuffer);
+        return ProbeAt(pixels, 48U, 32U);
     }
 
     [[nodiscard]] std::vector<std::uint8_t> RenderSplitPixels(
@@ -2515,6 +2627,70 @@ void RunForwardGraphPreSkinnedVertexDataTest() {
 
     bgfx::destroy(normalProgram);
     bgfx::destroy(positionProgram);
+    harness.Shutdown();
+}
+
+void RunSkinnedMeshPassGpuReadbackTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "sma38_skinned_pass_readback";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    const auto writeFragment = [&](std::string_view name, std::string_view input, std::string_view body) {
+        const std::filesystem::path source = cacheDir / (std::string{name} + ".sc");
+        std::ofstream output{source, std::ios::binary | std::ios::trunc};
+        output << "$input " << input << "\n#include <bgfx_shader.sh>\nvoid main() { " << body << " }\n";
+        return source;
+    };
+    const std::filesystem::path baseFragment = writeFragment("fs_skinned_probe",
+        "v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal",
+        "gl_FragColor = vec4((v_worldPos.x - v_objectLocalPos.x) * 0.5 + 0.5, 0.0, 0.0, 1.0);");
+    const std::filesystem::path shadowFragment = writeFragment("fs_skinned_shadow_probe", "v_color0, v_texcoord0", "gl_FragColor = vec4(v_texcoord0.x, 0.0, 0.0, 1.0);");
+    const std::filesystem::path motionFragment = writeFragment("fs_skinned_motion_probe", "v_currentClip, v_previousClip",
+        "float velocityX = v_currentClip.x / v_currentClip.w - v_previousClip.x / v_previousClip.w; gl_FragColor = vec4(velocityX * 0.5 + 0.5, 0.0, 0.0, 1.0);");
+    const std::filesystem::path shaderRoot = std::filesystem::absolute(
+        std::filesystem::path{KB_TEST_GRAPH_SHADER_INCLUDE_DIR});
+    const std::array<std::tuple<const char*, std::filesystem::path, std::filesystem::path, bool>, 3U> variants{{
+        { "base_gbuffer_selection", shaderRoot / "vs_mesh_skinned_instanced.sc", baseFragment, false },
+        { "depth_shadow", shaderRoot / "vs_mesh_shadow_skinned_instanced.sc", shadowFragment, false },
+        { "motion_vectors", shaderRoot / "vs_mesh_skinned_motion_vectors_instanced.sc", motionFragment, true },
+    }};
+    ForwardRenderHarness harness;
+    Require(harness.Init(), "SMA-38: A Direct3D11 device is required for skinned pass GPU readback");
+    const bgfx::UniformHandle paletteSampler = bgfx::createUniform("s_skinningPalette", bgfx::UniformType::Sampler);
+    const bgfx::UniformHandle paletteInfo = bgfx::createUniform("u_skinningPaletteInfo", bgfx::UniformType::Vec4);
+    const bgfx::UniformHandle previousPaletteSampler = bgfx::createUniform("s_previousSkinningPalette", bgfx::UniformType::Sampler);
+    const bgfx::UniformHandle previousPaletteInfo = bgfx::createUniform("u_previousSkinningPaletteInfo", bgfx::UniformType::Vec4);
+    const bgfx::UniformHandle previousViewProjection = bgfx::createUniform("u_motionPreviousViewProjection", bgfx::UniformType::Mat4);
+    const bgfx::UniformHandle shadowViewProjection = bgfx::createUniform("u_shadowViewProj", bgfx::UniformType::Mat4);
+    for (const auto& [name, vertexSource, fragmentSource, motionVectors] : variants) {
+        const std::filesystem::path vertexBinary = cacheDir / (std::string{name} + ".vs.bin");
+        const std::filesystem::path fragmentBinary = cacheDir / (std::string{name} + ".fs.bin");
+        Require(CookShaderSource(vertexSource, vertexBinary, "vertex") && CookShaderSource(fragmentSource, fragmentBinary, "fragment"),
+            "SMA-38: skinned pass shaders must cook for GPU readback");
+        const std::vector<std::uint8_t> vertexBytes = ReadAllBytes(vertexBinary);
+        const std::vector<std::uint8_t> fragmentBytes = ReadAllBytes(fragmentBinary);
+        const bgfx::ShaderHandle vertex = bgfx::createShader(bgfx::copy(vertexBytes.data(), static_cast<std::uint32_t>(vertexBytes.size())));
+        const bgfx::ShaderHandle fragment = bgfx::createShader(bgfx::copy(fragmentBytes.data(), static_cast<std::uint32_t>(fragmentBytes.size())));
+        const bgfx::ProgramHandle program = bgfx::createProgram(vertex, fragment, true);
+        Require(bgfx::isValid(program),
+            (std::string{"SMA-38: skinned pass shaders must link for GPU readback: "} + name).c_str());
+        const ForwardRenderProbe pixel = harness.RenderSkinnedProbe(program,
+            paletteSampler, paletteInfo, previousPaletteSampler, previousPaletteInfo,
+            previousViewProjection, shadowViewProjection, motionVectors);
+        const bool expected = std::string_view{name} == "depth_shadow"
+            ? pixel.r > 230U && pixel.g < 8U && pixel.b < 8U
+            : pixel.r < 90U && pixel.g < 8U && pixel.b < 8U;
+        Require(expected,
+            (std::string{"SMA-38: palette deformation readback failed for "} + name +
+             " rgb=" + std::to_string(pixel.r) + "," + std::to_string(pixel.g) + "," + std::to_string(pixel.b)).c_str());
+        bgfx::destroy(program);
+    }
+    bgfx::destroy(shadowViewProjection);
+    bgfx::destroy(previousViewProjection);
+    bgfx::destroy(previousPaletteInfo);
+    bgfx::destroy(previousPaletteSampler);
+    bgfx::destroy(paletteInfo);
+    bgfx::destroy(paletteSampler);
     harness.Shutdown();
 }
 
@@ -4776,6 +4952,7 @@ void RunGraphForwardGpuRenderTests() {
     RunForwardGraphObjectSpaceTest();
     RunForwardGraphPerInstanceTest();
     RunForwardGraphPreSkinnedVertexDataTest();
+    RunSkinnedMeshPassGpuReadbackTest();
     RunForwardGraphSamplerStateTest();
     RunForwardGraphTransparentBlendTest();
     RunForwardGraphWorldPositionOffsetTest();
@@ -4805,6 +4982,12 @@ void RunGraphForwardGpuRenderTests() {
     RunForwardGraphNoiseRendersTest();
     RunForwardGraphSobolRendersTest();
     RunForwardGraphMaterialParameterCollectionRendersTest();
+#endif
+}
+
+void RunSkinnedMeshGpuReadbackTests() {
+#if defined(KB_TEST_GRAPH_SHADERC_PATH)
+    RunSkinnedMeshPassGpuReadbackTest();
 #endif
 }
 
