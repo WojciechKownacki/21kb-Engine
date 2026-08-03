@@ -55,6 +55,7 @@ namespace {
 
 constexpr std::uint64_t kBuiltinMeshMaterialTypeId = 0x6275696C74696E70ULL; // "builtinp"
 constexpr std::uint32_t kBuiltinMeshMaterialTypeVersion = 1U;
+constexpr std::uint64_t kSkinnedGraphPipelineStateBit = 1ULL << 63U;
 
 [[nodiscard]] const char* GraphBackendDirectoryForKey(std::uint32_t backend) noexcept;
 
@@ -594,7 +595,9 @@ bgfx::ProgramHandle SceneMeshPassResources::LoadProgramForKey(const MaterialProg
     } else if (key.requiresGeneratedVertexShader) {
         return BGFX_INVALID_HANDLE;
     } else {
-        vertex = ShaderLoader::Load("vs_mesh_instanced.sc");
+        vertex = ShaderLoader::Load((key.pipelineStateKey & kSkinnedGraphPipelineStateBit) != 0U
+            ? "vs_mesh_skinned_instanced.sc"
+            : "vs_mesh_instanced.sc");
     }
     if (!bgfx::isValid(vertex)) {
         return BGFX_INVALID_HANDLE;
@@ -754,15 +757,12 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(
         resolution.materialProgramIdentity = MaterialProgramKeyIdentityHash(resolution.key);
         resolution.status = SceneRenderMaterialProgramStatus::Builtin;
         if (skinned && material != nullptr && material->graphProgram.active &&
-            IsGraphCapablePass(pass)) {
-            // Generated graph vertex programs currently target the static mesh
-            // input contract. Rendering one against skinned input would produce
-            // an undeformed pose, so keep this path fail-closed until a skinned
-            // graph permutation is cooked.
+            material->graphProgram.requiresGeneratedVertexShader && IsGraphCapablePass(pass)) {
             resolution.program = BGFX_INVALID_HANDLE;
             resolution.status = SceneRenderMaterialProgramStatus::GraphFallback;
         }
-        if (!skinned && material != nullptr && material->graphProgram.active && IsGraphCapablePass(pass)) {
+        if (material != nullptr && material->graphProgram.active && IsGraphCapablePass(pass) &&
+            (!skinned || !material->graphProgram.requiresGeneratedVertexShader)) {
             const MaterialProgramKey key{
                 .materialTypeId = material->graphProgram.materialTypeId,
                 .materialTypeVersion = material->graphProgram.materialTypeVersion,
@@ -776,7 +776,8 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(
                     material->graphProgram.variantKey,
                     GraphMeshPassName(pass),
                     static_cast<std::uint32_t>(bgfx::getRendererType())),
-                .pipelineStateKey = material->graphProgram.pipelineStateKey,
+                .pipelineStateKey = material->graphProgram.pipelineStateKey |
+                    (skinned ? kSkinnedGraphPipelineStateBit : 0U),
                 .requiresGeneratedVertexShader = material->graphProgram.requiresGeneratedVertexShader,
                 .graphProgram = true,
             };

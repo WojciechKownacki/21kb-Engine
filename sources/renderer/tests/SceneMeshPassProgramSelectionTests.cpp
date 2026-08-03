@@ -309,6 +309,12 @@ void RunSceneMeshPassProgramSelectionTest() {
         Require(passResources.ProgramBindStats().builtinFallbackBindCount == 0U,
             "Deferred graph setup must not count builtin fallback before GBuffer resolution");
 
+        const SceneMeshPassProgramResolution skinnedGraphA =
+            passResources.ResolveMeshPassProgram(&graphMaterialA, MeshPassType::BaseOpaque, true);
+        Require(skinnedGraphA.graphProgram && bgfx::isValid(skinnedGraphA.program) &&
+                skinnedGraphA.key.pipelineStateKey != graphA.key.pipelineStateKey,
+            "SMA-36: A graph fragment program must pair with the skinned vertex permutation for bind-pose varyings");
+
         const SceneMeshPassProgramResolution graphGBuffer = passResources.ResolveMeshPassProgram(&graphMaterialA, MeshPassType::GBuffer);
         Require(graphGBuffer.graphProgram && bgfx::isValid(graphGBuffer.program) && !graphGBuffer.fellBackToBuiltin &&
                 graphGBuffer.status == SceneRenderMaterialProgramStatus::GraphReady &&
@@ -423,8 +429,8 @@ void RunSceneMeshPassProgramSelectionTest() {
                 passResources.ProgramRegistryStats().failures == registryStatsBefore.failures + 1U,
             "KBMAT-MAT99-19: missing WPO vs.bin must not silently bind the fixed mesh vertex shader as a graph program");
 
-        Require(passResources.ProgramBindStats().graphProgramBindCount == 9U,
-            "KBMAT-MAT07/P0.5: Base, GBuffer, and generated ShadowDepth graph program binds must be counted in submit stats");
+        Require(passResources.ProgramBindStats().graphProgramBindCount == 10U,
+            "KBMAT-MAT07/P0.5/SMA-36: static and skinned graph program binds must be counted in submit stats");
 #endif
 
         passResources.Shutdown();
