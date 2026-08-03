@@ -67,6 +67,18 @@ std::optional<SkeletonAsset> SkeletonAssetIO::Load(
             schemaRead = true;
             if (header == asset_io::TextAssetHeaderStatus::Current) continue;
         }
+        if (command == "socket") {
+            SkeletonSocket socket{};
+            if (!(input >> std::quoted(socket.name) >> socket.boneId >>
+                    socket.localTransform.position.x >> socket.localTransform.position.y >> socket.localTransform.position.z >>
+                    socket.localTransform.rotation.x >> socket.localTransform.rotation.y >> socket.localTransform.rotation.z >> socket.localTransform.rotation.w >>
+                    socket.localTransform.scale.x >> socket.localTransform.scale.y >> socket.localTransform.scale.z) ||
+                !EndOfRecord(input)) {
+                return std::nullopt;
+            }
+            asset.sockets.push_back(std::move(socket));
+            continue;
+        }
         if (command != "bone") return std::nullopt;
 
         SkeletonBone bone{};
@@ -114,6 +126,13 @@ bool SkeletonAssetIO::Save(const std::filesystem::path& path, const SkeletonAsse
             output << ' ' << column.x << ' ' << column.y << ' ' << column.z << ' ' << column.w;
         }
         output << '\n';
+    }
+    for (const SkeletonSocket& socket : asset.sockets) {
+        const LocalTransform& transform = socket.localTransform;
+        output << "socket " << std::quoted(socket.name) << ' ' << socket.boneId << ' '
+               << transform.position.x << ' ' << transform.position.y << ' ' << transform.position.z << ' '
+               << transform.rotation.x << ' ' << transform.rotation.y << ' ' << transform.rotation.z << ' ' << transform.rotation.w << ' '
+               << transform.scale.x << ' ' << transform.scale.y << ' ' << transform.scale.z << '\n';
     }
     return WriteText(path, output.str());
 }

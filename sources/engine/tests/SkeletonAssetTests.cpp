@@ -52,6 +52,13 @@ void RunSkeletonAssetTests() {
             } },
         },
     };
+    skeleton.sockets = {
+        {
+            .name = "Weapon",
+            .boneId = 0x1002U,
+            .localTransform = { .position = { 0.25F, 0.0F, 0.0F } },
+        },
+    };
 
     const kb::scene::SkeletonAssetValidationResult validation = kb::scene::ValidateSkeletonAsset(skeleton);
     Require(validation.valid, "Canonical SkeletonAsset rejected a valid hierarchy");
@@ -64,7 +71,10 @@ void RunSkeletonAssetTests() {
                 loaded->bones[1].parentIndex == 0 &&
                 loaded->bones[1].name == "Spine" &&
                 NearlyEqual(loaded->bones[1].referencePose.position.y, 1.0F) &&
-                NearlyEqual(loaded->bones[1].inverseBind.columns[3].y, -1.0F),
+                NearlyEqual(loaded->bones[1].inverseBind.columns[3].y, -1.0F) &&
+                loaded->sockets.size() == 1U && loaded->sockets[0].name == "Weapon" &&
+                loaded->sockets[0].boneId == 0x1002U &&
+                NearlyEqual(loaded->sockets[0].localTransform.position.x, 0.25F),
         "SkeletonAsset round trip lost canonical bone data");
     Require(kb::scene::SkeletonCompatibilitySignature(*loaded) == signature,
         "SkeletonAsset compatibility signature changed after round trip");
