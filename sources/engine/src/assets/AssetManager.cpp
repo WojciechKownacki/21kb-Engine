@@ -107,12 +107,48 @@ std::size_t AssetManager::DiscoverMountedAssets() {
     // metadata. Do not race either operation with queued loader calls, and
     // never publish a payload decoded from pre-discovery metadata.
     StopAsyncWorker();
+    std::unordered_map<std::uint64_t, std::uint64_t> previousContentHashes;
+    previousContentHashes.reserve(registry_.All().size());
+    for (const AssetMetadata& metadata : registry_.All()) {
+        previousContentHashes.emplace(metadata.id.value, metadata.contentHash);
+    }
     for (const auto& [assetId, record] : asyncLoads_) {
         static_cast<void>(record);
         ++asyncLoadGenerations_[assetId];
     }
     asyncLoads_.clear();
     const std::size_t count = AssetDiscoveryService::DiscoverMountedAssets(mounts_, registry_, loaders_, cache_);
+    std::unordered_set<std::uint64_t> invalidatedAssets;
+    invalidatedAssets.reserve(previousContentHashes.size());
+    for (const auto& [assetId, previousContentHash] : previousContentHashes) {
+        const AssetMetadata* current = registry_.Find(AssetId{ assetId });
+        if (current == nullptr || current->contentHash != previousContentHash) {
+            invalidatedAssets.insert(assetId);
+        }
+    }
+
+    // A skeletal mesh/clip/controller may keep identical source bytes while a
+    // referenced Skeleton or Clip has changed. Invalidate the complete
+    // dependent closure so derived runtime bindings cannot continue sampling
+    // an obsolete asset payload after discovery.
+    bool foundDependent = true;
+    while (foundDependent) {
+        foundDependent = false;
+        for (const AssetMetadata& metadata : registry_.All()) {
+            for (const AssetId dependency : metadata.dependencies) {
+                if (invalidatedAssets.contains(dependency.value) &&
+                    invalidatedAssets.insert(metadata.id.value).second) {
+                    foundDependent = true;
+                    break;
+                }
+            }
+        }
+    }
+    for (const std::uint64_t assetId : invalidatedAssets) {
+        ++asyncLoadGenerations_[assetId];
+        cache_.erase(assetId);
+        asyncLoadErrors_.erase(assetId);
+    }
     ++revision_;
     return count;
 }
@@ -312,6 +348,13 @@ bool AssetManager::RequestLoadAsync(AssetId id, AssetUnloadPolicy policy) {
     IAssetLoader* loader = LoaderForType(registered->type);
     if (loader == nullptr) {
         lastError_ = "No loader registered for asset type: " + registered->type;
+        asyncLoadErrors_[id.value] = lastError_;
+        return true;
+    }
+    if (const std::optional<std::string> diagnostic =
+            loader->ValidateDependencies(*registered, registry_);
+        diagnostic.has_value()) {
+        lastError_ = "Asset dependency validation failed: " + *diagnostic;
         asyncLoadErrors_[id.value] = lastError_;
         return true;
     }

@@ -2,6 +2,7 @@
 
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TransformComponent.hpp"
+#include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -69,6 +70,7 @@ struct EcsRenderSceneSynchronizerStats {
 class EcsRenderSceneSynchronizer {
 public:
     void Reserve(const EcsRenderSceneSynchronizerReserveDesc& desc);
+    void SetSkinningPaletteAllocator(RenderSkinningPaletteAllocator* allocator) noexcept;
     void Sync(const kb::scene::Scene& scene, RenderScene& renderScene) const;
     void SyncEntities(const kb::scene::Scene& scene, RenderScene& renderScene, std::span<const std::uint64_t> entityIds) const;
     void SyncTransformUpdates(const kb::scene::Scene& scene, RenderScene& renderScene) const;
@@ -113,6 +115,8 @@ private:
     mutable std::vector<std::uint64_t> seenSurfaceCasts_;
     mutable std::vector<std::uint64_t> seenSpaceStrokes_;
     mutable std::vector<std::uint64_t> transformUpdateEntities_;
+    mutable std::vector<RenderSkinningMatrix> skinningMatrixScratch_;
+    RenderSkinningPaletteAllocator* skinningPaletteAllocator_ = nullptr;
     mutable std::unordered_map<std::uint64_t, kb::scene::TransformComponent> transformCache_;
     mutable std::unordered_set<std::uint64_t> transformResolving_;
     mutable std::size_t transformPrecomputedReadCount_ = 0;

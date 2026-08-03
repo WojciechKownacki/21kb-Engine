@@ -114,6 +114,7 @@ RenderMeshResource RenderMeshResourceBuilder::Build(
         .gpuCullingEnabled = desc.gpuDriven.allowGpuCulling && desc.gpuDriven.meshletCount > 0U,
         .indirectDrawsEnabled = desc.gpuDriven.allowIndirectDraws && desc.gpuDriven.meshletCount > 0U,
         .meshletCullingEnabled = desc.gpuDriven.allowMeshletCulling && desc.gpuDriven.meshletCount > 0U,
+        .skinning = desc.skinning,
         .terrainLayerWeightWidth = desc.terrainLayerWeightWidth,
         .terrainLayerWeightHeight = desc.terrainLayerWeightHeight,
         .terrainLayerCount = desc.terrainLayerCount,

@@ -84,6 +84,7 @@ Thumbs.db
 # Logs
 # =========================
 *.log
+AGENTS.md
 
 # =========================
 # Local runtime, verification, and benchmark outputs

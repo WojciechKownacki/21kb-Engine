@@ -36,6 +36,7 @@
 #include "scene/systems/SceneSystemScheduler.hpp"
 #include "scene/transform/SceneTransformBranchUpdater.hpp"
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -70,6 +71,9 @@ struct AnimatorRuntimeState {
         kb::assets::AssetHandle<AnimationClip> clip;
         std::uint64_t clipLoadGeneration = 0U;
         std::vector<std::size_t> targetIndices;
+        std::vector<std::uint32_t> boneIndices;
+        std::uint32_t rootMotionBoneIndex =
+            std::numeric_limits<std::uint32_t>::max();
     };
     std::vector<Motion> motions;
     std::size_t blendParameterIndex = std::numeric_limits<std::size_t>::max();
@@ -102,9 +106,41 @@ struct AnimatorRuntimeConstraint {
     SceneEntity constrained{};
     SceneEntity mid{};
     SceneEntity tip{};
+    std::uint32_t constrainedBoneIndex =
+        std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t midBoneIndex =
+        std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t tipBoneIndex =
+        std::numeric_limits<std::uint32_t>::max();
 };
 
-struct AnimatorRuntimeRecord {
+struct AnimatorInstanceSkeleton {
+    struct PoseSoa {
+        std::vector<Vec3> positions;
+        std::vector<Quat> rotations;
+        std::vector<Vec3> scales;
+    };
+    struct PoseBuffer {
+        PoseSoa local;
+        PoseSoa component;
+        std::vector<kb::math::Mat4> skinMatrices;
+    };
+
+    kb::assets::AssetHandle<SkeletonAsset> asset;
+    std::uint64_t loadGeneration = 0U;
+    std::uint64_t compatibilitySignature = 0U;
+    std::vector<SkeletonBoneId> boneIds;
+    std::unordered_map<SkeletonBoneId, std::uint32_t> boneIndices;
+    std::array<PoseBuffer, 2U> poses;
+    std::array<PoseSoa, 2U> stateScratch;
+    std::array<std::vector<std::uint8_t>, 2U> stateTouched;
+    std::array<std::vector<std::uint8_t>, 2U> motionTouched;
+    std::uint32_t currentPose = 0U;
+    std::uint64_t evaluationCount = 0U;
+    std::uint64_t hierarchySolveCount = 0U;
+};
+
+struct AnimatorInstance {
     SceneEntity entity{};
     kb::assets::AssetHandle<AnimatorController> controller;
     std::uint64_t controllerLoadGeneration = 0U;
@@ -114,14 +150,20 @@ struct AnimatorRuntimeRecord {
     std::uint64_t observedHierarchyTopologyVersion = 0U;
     std::vector<AnimatorRuntimeLayer> layers;
     std::vector<AnimatorRuntimeBinding> bindings;
+    std::optional<AnimatorInstanceSkeleton> skeleton;
     std::vector<AnimatorParameterValue> parameters;
     std::vector<AnimatorRuntimeConstraint> rigConstraints;
     std::map<std::string, AnimatorIkTarget, std::less<>> ikTargets;
+    Vec3 extractedRootMotionTranslation{};
+    Quat extractedRootMotionRotation{};
+    bool hasExtractedRootMotion = false;
     // Live speed is script-mutable. This cache only detects a later authored
     // component edit; it is never exposed or serialized as independent state.
     float speed = 1.0F;
     float lastAppliedComponentSpeed = 1.0F;
 };
+
+using AnimatorRuntimeRecord = AnimatorInstance;
 
 struct TimelineRuntimeBinding {
     SceneEntity target{};
@@ -250,7 +292,7 @@ public:
     kb::assets::AssetHandle<kb::localization::LocalizationCatalog> localizationCatalog;
     std::uint64_t localizationCatalogGeneration = 0U;
     std::string localizationLanguage;
-    std::map<std::uint64_t, AnimatorRuntimeRecord> animators;
+    std::map<std::uint64_t, AnimatorInstance> animators;
     std::vector<AnimationEventRecord> pendingAnimationEvents;
     std::map<std::uint64_t, TimelineRuntimeRecord> timelines;
     std::map<std::uint64_t, UIDocumentRuntimeRecord> uiDocuments;

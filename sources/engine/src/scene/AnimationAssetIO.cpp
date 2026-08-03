@@ -167,7 +167,8 @@ bool ValidateClip(AnimationClip& clip, std::string* error = nullptr) {
     std::unordered_set<SkeletonBoneId> bones;
     setError("Skeletal animation clip has invalid stable bone bindings or keyframes.");
     for (AnimationBoneTrack& track : clip.skeletalTracks) {
-        if (track.boneId == 0U || !bones.insert(track.boneId).second ||
+        if (track.boneId == 0U || track.bindingMask == 0U ||
+            !bones.insert(track.boneId).second ||
             track.keyframes.empty()) {
             return false;
         }
@@ -288,30 +289,52 @@ bool ValidateController(const AnimatorController& controller, std::string* error
     }
     std::unordered_set<std::string> constraintNames;
     std::unordered_set<std::string> drivenPaths;
+    std::unordered_set<SkeletonBoneId> drivenBones;
     setError("Animator controller has invalid rig constraints.");
     for (const AnimatorRigConstraint& constraint : controller.rigConstraints) {
         if (constraint.name.empty() || !constraintNames.insert(constraint.name).second ||
             constraint.target.empty() || !std::isfinite(constraint.weight) ||
             constraint.weight <= 0.0F || constraint.weight > 1.0F) return false;
+        const bool skeletal = constraint.constrainedBoneId != 0U ||
+            constraint.midBoneId != 0U || constraint.tipBoneId != 0U;
+        if (skeletal && (!constraint.constrainedPath.empty() ||
+                         !constraint.midPath.empty() ||
+                         !constraint.tipPath.empty())) return false;
         switch (constraint.type) {
         case AnimatorRigConstraintType::TwoBoneIK:
-            if (constraint.midPath.empty() || constraint.tipPath.empty() ||
-                constraint.constrainedPath == constraint.midPath ||
-                constraint.constrainedPath == constraint.tipPath ||
-                constraint.midPath == constraint.tipPath ||
-                !drivenPaths.insert(
-                    constraint.constrainedPath.empty()
-                        ? "."
-                        : constraint.constrainedPath).second ||
-                !drivenPaths.insert(constraint.midPath).second ||
-                !drivenPaths.insert(constraint.tipPath).second) return false;
+            if (skeletal) {
+                if (constraint.constrainedBoneId == 0U ||
+                    constraint.midBoneId == 0U ||
+                    constraint.tipBoneId == 0U ||
+                    constraint.constrainedBoneId == constraint.midBoneId ||
+                    constraint.constrainedBoneId == constraint.tipBoneId ||
+                    constraint.midBoneId == constraint.tipBoneId ||
+                    !drivenBones.insert(constraint.constrainedBoneId).second ||
+                    !drivenBones.insert(constraint.midBoneId).second ||
+                    !drivenBones.insert(constraint.tipBoneId).second) return false;
+            } else if (constraint.midPath.empty() || constraint.tipPath.empty() ||
+                       constraint.constrainedPath == constraint.midPath ||
+                       constraint.constrainedPath == constraint.tipPath ||
+                       constraint.midPath == constraint.tipPath ||
+                       !drivenPaths.insert(
+                           constraint.constrainedPath.empty() ? "." :
+                           constraint.constrainedPath).second ||
+                       !drivenPaths.insert(constraint.midPath).second ||
+                       !drivenPaths.insert(constraint.tipPath).second) return false;
             break;
         case AnimatorRigConstraintType::Aim:
         case AnimatorRigConstraintType::CopyTransform:
-            if (!drivenPaths.insert(
-                    constraint.constrainedPath.empty() ? "." : constraint.constrainedPath).second ||
-                !constraint.midPath.empty() || !constraint.tipPath.empty() ||
-                !constraint.poleTarget.empty()) return false;
+            if (skeletal) {
+                if (constraint.constrainedBoneId == 0U ||
+                    constraint.midBoneId != 0U || constraint.tipBoneId != 0U ||
+                    !drivenBones.insert(constraint.constrainedBoneId).second ||
+                    !constraint.poleTarget.empty()) return false;
+            } else if (!drivenPaths.insert(
+                           constraint.constrainedPath.empty() ? "." :
+                           constraint.constrainedPath).second ||
+                       !constraint.midPath.empty() ||
+                       !constraint.tipPath.empty() ||
+                       !constraint.poleTarget.empty()) return false;
             break;
         }
     }
@@ -339,6 +362,7 @@ std::optional<AnimationClip> AnimationAssetIO::LoadClip(
     file.imbue(std::locale::classic());
     std::string line;
     bool schemaRead = false;
+    std::uint32_t schemaVersion = 0U;
     std::size_t lineNumber = 0U;
     while (std::getline(file, line)) {
         ++lineNumber;
@@ -351,14 +375,22 @@ std::optional<AnimationClip> AnimationAssetIO::LoadClip(
                 std::to_string(lineNumber) + ".";
         }
         if (!schemaRead) {
-            const asset_io::TextAssetHeaderStatus header =
-                asset_io::ParseTextAssetHeader(
-                    line, kAnimationClipAssetType, kAnimationClipAssetSchemaVersion);
-            if (header == asset_io::TextAssetHeaderStatus::Invalid) {
-                return std::nullopt;
+            if (line.starts_with("21kb")) {
+                std::istringstream headerInput{ line };
+                headerInput.imbue(std::locale::classic());
+                std::string magic;
+                std::string type;
+                if (!(headerInput >> magic >> type >> schemaVersion) ||
+                    magic != "21kb" || type != kAnimationClipAssetType ||
+                    schemaVersion == 0U ||
+                    schemaVersion > kAnimationClipAssetSchemaVersion ||
+                    !EndOfRecord(headerInput)) {
+                    return std::nullopt;
+                }
+                schemaRead = true;
+                continue;
             }
             schemaRead = true;
-            if (header == asset_io::TextAssetHeaderStatus::Current) continue;
         }
         if (command == "durationSeconds") {
             if (!(input >> clip.durationSeconds) || !EndOfRecord(input)) return std::nullopt;
@@ -388,7 +420,14 @@ std::optional<AnimationClip> AnimationAssetIO::LoadClip(
             if (!(input >> clip.targetSkeletonAssetId >> clip.targetSkeletonCompatibilitySignature) || !EndOfRecord(input)) return std::nullopt;
         } else if (command == "skeletalTrack") {
             AnimationBoneTrack track{};
-            if (!(input >> track.boneId) || !EndOfRecord(input)) return std::nullopt;
+            if (!(input >> track.boneId)) return std::nullopt;
+            if (schemaVersion >= 2U) {
+                if (!(input >> track.bindingMask) || !EndOfRecord(input)) {
+                    return std::nullopt;
+                }
+            } else if (!EndOfRecord(input)) {
+                return std::nullopt;
+            }
             clip.skeletalTracks.push_back(std::move(track));
         } else if (command == "skeletalKey") {
             std::size_t trackIndex = 0U;
@@ -465,6 +504,7 @@ std::optional<AnimatorController> AnimationAssetIO::LoadController(
     file.imbue(std::locale::classic());
     std::string line;
     bool schemaRead = false;
+    std::uint32_t schemaVersion = 0U;
     std::size_t lineNumber = 0U;
     while (std::getline(file, line)) {
         ++lineNumber;
@@ -477,15 +517,21 @@ std::optional<AnimatorController> AnimationAssetIO::LoadController(
                 std::to_string(lineNumber) + ".";
         }
         if (!schemaRead) {
-            const asset_io::TextAssetHeaderStatus header =
-                asset_io::ParseTextAssetHeader(
-                    line, kAnimatorControllerAssetType,
-                    kAnimatorControllerAssetSchemaVersion);
-            if (header == asset_io::TextAssetHeaderStatus::Invalid) {
-                return std::nullopt;
+            if (line.starts_with("21kb")) {
+                std::istringstream headerInput{ line };
+                headerInput.imbue(std::locale::classic());
+                std::string magic;
+                std::string type;
+                if (!(headerInput >> magic >> type >> schemaVersion) ||
+                    magic != "21kb" ||
+                    type != kAnimatorControllerAssetType ||
+                    schemaVersion == 0U ||
+                    schemaVersion > kAnimatorControllerAssetSchemaVersion ||
+                    !EndOfRecord(headerInput)) return std::nullopt;
+                schemaRead = true;
+                continue;
             }
             schemaRead = true;
-            if (header == asset_io::TextAssetHeaderStatus::Current) continue;
         }
         if (command == "parameter") {
             AnimatorParameterDefinition parameter{};
@@ -591,6 +637,17 @@ std::optional<AnimatorController> AnimationAssetIO::LoadController(
                 !EndOfRecord(input)) return std::nullopt;
             if (constraint.constrainedPath == ".") constraint.constrainedPath.clear();
             controller.rigConstraints.push_back(std::move(constraint));
+        } else if (command == "skeletalConstraint") {
+            if (schemaVersion < 2U) return std::nullopt;
+            AnimatorRigConstraint constraint{};
+            std::string type;
+            if (!(input >> type >> std::quoted(constraint.name) >>
+                    constraint.constrainedBoneId >> constraint.midBoneId >>
+                    constraint.tipBoneId >> std::quoted(constraint.target) >>
+                    std::quoted(constraint.poleTarget) >> constraint.weight) ||
+                !ParseRigConstraintType(type, constraint.type) ||
+                !EndOfRecord(input)) return std::nullopt;
+            controller.rigConstraints.push_back(std::move(constraint));
         } else {
             return std::nullopt;
         }
@@ -626,7 +683,8 @@ bool AnimationAssetIO::SaveClip(const std::filesystem::path& path, const Animati
                << clip.targetSkeletonCompatibilitySignature << '\n';
         for (std::size_t index = 0U; index < clip.skeletalTracks.size(); ++index) {
             const AnimationBoneTrack& track = clip.skeletalTracks[index];
-            output << "skeletalTrack " << track.boneId << '\n';
+            output << "skeletalTrack " << track.boneId << ' '
+                   << track.bindingMask << '\n';
             for (const AnimationBoneKeyframe& key : track.keyframes) {
                 const LocalTransform& value = key.transform;
                 output << "skeletalKey " << index << ' ' << key.timeSeconds << ' '
@@ -708,6 +766,18 @@ bool AnimationAssetIO::SaveController(const std::filesystem::path& path, const A
         }
     }
     for (const AnimatorRigConstraint& constraint : controller.rigConstraints) {
+        if (constraint.constrainedBoneId != 0U) {
+            output << "skeletalConstraint "
+                   << RigConstraintTypeName(constraint.type) << ' '
+                   << std::quoted(constraint.name) << ' '
+                   << constraint.constrainedBoneId << ' '
+                   << constraint.midBoneId << ' '
+                   << constraint.tipBoneId << ' '
+                   << std::quoted(constraint.target) << ' '
+                   << std::quoted(constraint.poleTarget) << ' '
+                   << constraint.weight << '\n';
+            continue;
+        }
         output << "constraint " << RigConstraintTypeName(constraint.type) << ' '
                << std::quoted(constraint.name) << ' '
                << std::quoted(

@@ -1,7 +1,9 @@
 #include <cstdlib>
+#include <string_view>
 
 namespace kb::render::tests {
 void RunGraphForwardGpuRenderTests();
+void RunSkinnedMeshGpuReadbackTests();
 void RunFinalCompositePassTests();
 void RunPostProcessChainTests();
 void RunRenderFramePipelineTests();
@@ -23,7 +25,30 @@ void RunShaderManifestTests();
 void RunShaderPrewarmParseTests();
 }
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view{ argv[1] } == "resource-registry") {
+        kb::render::tests::RunRenderResourceRegistryTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "mesh-pipeline") {
+        kb::render::tests::RunMeshPipelineTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "mesh-pass-program-selection") {
+        kb::render::tests::RunSceneMeshPassProgramSelectionTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "graph-forward-gpu") {
+        kb::render::tests::RunGraphForwardGpuRenderTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "skinned-gpu-readback") {
+        kb::render::tests::RunSkinnedMeshGpuReadbackTests();
+        return EXIT_SUCCESS;
+    }
+    if (argc != 1) {
+        return EXIT_FAILURE;
+    }
     kb::render::tests::RunGraphForwardGpuRenderTests();
     kb::render::tests::RunFinalCompositePassTests();
     kb::render::tests::RunPostProcessChainTests();

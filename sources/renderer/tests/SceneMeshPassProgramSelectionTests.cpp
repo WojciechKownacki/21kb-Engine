@@ -199,6 +199,20 @@ void RunSceneMeshPassProgramSelectionTest() {
         Require(selectionResolution.program.idx != builtinResolution.program.idx,
             "KBMAT-MAT07: Selection program must differ from the opaque program");
 
+        for (const MeshPassType pass : {
+                 MeshPassType::BaseOpaque,
+                 MeshPassType::GBuffer,
+                 MeshPassType::Depth,
+                 MeshPassType::ShadowDepth,
+                 MeshPassType::SelectionId,
+                 MeshPassType::MotionVectors,
+             }) {
+            const SceneMeshPassProgramResolution skinnedResolution =
+                passResources.ResolveMeshPassProgram(&builtinMaterial, pass, true);
+            Require(bgfx::isValid(skinnedResolution.program),
+                "SMA-35: Every skinned mesh pass must resolve a runtime shader program");
+        }
+
         // Graph material with no cooked binary must safely fall back to the builtin program.
         const RenderMaterialResource graphFallback = MakeGraphMaterialResource(0xDEAD1234U);
         const SceneMeshPassProgramResolution fallbackResolution = passResources.ResolveMeshPassProgram(&graphFallback, MeshPassType::BaseOpaque);
@@ -294,6 +308,12 @@ void RunSceneMeshPassProgramSelectionTest() {
             "KBMAT-MAT66: Successful graph program resolution must expose full runtime program diagnostics");
         Require(passResources.ProgramBindStats().builtinFallbackBindCount == 0U,
             "Deferred graph setup must not count builtin fallback before GBuffer resolution");
+
+        const SceneMeshPassProgramResolution skinnedGraphA =
+            passResources.ResolveMeshPassProgram(&graphMaterialA, MeshPassType::BaseOpaque, true);
+        Require(skinnedGraphA.graphProgram && bgfx::isValid(skinnedGraphA.program) &&
+                skinnedGraphA.key.pipelineStateKey != graphA.key.pipelineStateKey,
+            "SMA-36: A graph fragment program must pair with the skinned vertex permutation for bind-pose varyings");
 
         const SceneMeshPassProgramResolution graphGBuffer = passResources.ResolveMeshPassProgram(&graphMaterialA, MeshPassType::GBuffer);
         Require(graphGBuffer.graphProgram && bgfx::isValid(graphGBuffer.program) && !graphGBuffer.fellBackToBuiltin &&
@@ -409,8 +429,8 @@ void RunSceneMeshPassProgramSelectionTest() {
                 passResources.ProgramRegistryStats().failures == registryStatsBefore.failures + 1U,
             "KBMAT-MAT99-19: missing WPO vs.bin must not silently bind the fixed mesh vertex shader as a graph program");
 
-        Require(passResources.ProgramBindStats().graphProgramBindCount == 9U,
-            "KBMAT-MAT07/P0.5: Base, GBuffer, and generated ShadowDepth graph program binds must be counted in submit stats");
+        Require(passResources.ProgramBindStats().graphProgramBindCount == 10U,
+            "KBMAT-MAT07/P0.5/SMA-36: static and skinned graph program binds must be counted in submit stats");
 #endif
 
         passResources.Shutdown();

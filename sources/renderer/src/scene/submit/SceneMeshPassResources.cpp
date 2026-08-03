@@ -1,5 +1,6 @@
 #include "scene/submit/SceneMeshPassResources.hpp"
 
+#include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/ShaderLoader.hpp"
 #include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "renderer/RendererDebugLog.hpp"
@@ -54,10 +55,11 @@ namespace {
 
 constexpr std::uint64_t kBuiltinMeshMaterialTypeId = 0x6275696C74696E70ULL; // "builtinp"
 constexpr std::uint32_t kBuiltinMeshMaterialTypeVersion = 1U;
+constexpr std::uint64_t kSkinnedGraphPipelineStateBit = 1ULL << 63U;
 
 [[nodiscard]] const char* GraphBackendDirectoryForKey(std::uint32_t backend) noexcept;
 
-[[nodiscard]] MaterialProgramKey BuiltinMeshProgramKey(std::string pass) {
+[[nodiscard]] MaterialProgramKey BuiltinMeshProgramKey(std::string pass, bool skinned = false) {
     return MaterialProgramKey{
         .materialTypeId = kBuiltinMeshMaterialTypeId,
         .materialTypeVersion = kBuiltinMeshMaterialTypeVersion,
@@ -65,7 +67,7 @@ constexpr std::uint32_t kBuiltinMeshMaterialTypeVersion = 1U;
         .variantKey = 0U,
         .pass = std::move(pass),
         .backend = 0U,
-        .pipelineStateKey = 0U,
+        .pipelineStateKey = skinned ? 1U : 0U,
         .requiresGeneratedVertexShader = false,
         .graphProgram = false,
     };
@@ -110,21 +112,36 @@ void AppendUniqueValue(std::vector<T>& values, const T& value) {
 }
 
 [[nodiscard]] bgfx::ProgramHandle LoadBuiltinMeshProgram(const MaterialProgramKey& key) {
+    const bool skinned = key.pipelineStateKey == 1U;
+    const char* const meshVertexShader = skinned
+        ? "vs_mesh_skinned_instanced.sc"
+        : "vs_mesh_instanced.sc";
+    const char* const shadowVertexShader = skinned
+        ? "vs_mesh_shadow_skinned_instanced.sc"
+        : "vs_mesh_shadow_instanced.sc";
     if (key.pass == "BaseOpaque") {
-        return ShaderLoader::LoadProgram("vs_mesh_instanced.sc", "fs_mesh_instanced.sc");
+        return ShaderLoader::LoadProgram(meshVertexShader, "fs_mesh_instanced.sc");
     }
     if (key.pass == "BaseTransparent") {
         // Transparent reuses the forward shader; the alpha blend is a render state (MAT-80), not a shader.
-        return ShaderLoader::LoadProgram("vs_mesh_instanced.sc", "fs_mesh_instanced.sc");
+        return ShaderLoader::LoadProgram(meshVertexShader, "fs_mesh_instanced.sc");
     }
     if (key.pass == "GBuffer") {
-        return ShaderLoader::LoadProgram("vs_mesh_instanced.sc", "fs_mesh_gbuffer_instanced.sc");
+        return ShaderLoader::LoadProgram(meshVertexShader, "fs_mesh_gbuffer_instanced.sc");
+    }
+    if (key.pass == "Depth") {
+        return ShaderLoader::LoadProgram(shadowVertexShader, "fs_mesh_shadow_instanced.sc");
     }
     if (key.pass == "ShadowDepth") {
-        return ShaderLoader::LoadProgram("vs_mesh_shadow_instanced.sc", "fs_mesh_shadow_instanced.sc");
+        return ShaderLoader::LoadProgram(shadowVertexShader, "fs_mesh_shadow_instanced.sc");
     }
     if (key.pass == "SelectionId") {
-        return ShaderLoader::LoadProgram("vs_mesh_instanced.sc", "fs_mesh_selection_instanced.sc");
+        return ShaderLoader::LoadProgram(meshVertexShader, "fs_mesh_selection_instanced.sc");
+    }
+    if (key.pass == "MotionVectors") {
+        return ShaderLoader::LoadProgram(
+            skinned ? "vs_mesh_skinned_motion_vectors_instanced.sc" : "vs_mesh_motion_vectors_instanced.sc",
+            "fs_mesh_motion_vectors.sc");
     }
     return BGFX_INVALID_HANDLE;
 }
@@ -233,6 +250,13 @@ bool SceneMeshPassResources::Initialize() {
 
     albedoSampler_ = bgfx::createUniform("s_albedo", bgfx::UniformType::Sampler);
     shadowSampler_ = bgfx::createUniform("s_shadowMap", bgfx::UniformType::Sampler);
+    skinningPaletteSampler_ = bgfx::createUniform("s_skinningPalette", bgfx::UniformType::Sampler);
+    skinningPaletteInfoUniform_ = bgfx::createUniform("u_skinningPaletteInfo", bgfx::UniformType::Vec4);
+    previousSkinningPaletteSampler_ = bgfx::createUniform("s_previousSkinningPalette", bgfx::UniformType::Sampler);
+    previousSkinningPaletteInfoUniform_ = bgfx::createUniform("u_previousSkinningPaletteInfo", bgfx::UniformType::Vec4);
+    motionDepthSampler_ = bgfx::createUniform("s_sceneDepth", bgfx::UniformType::Sampler);
+    motionPreviousViewProjectionUniform_ = bgfx::createUniform("u_motionPreviousViewProjection", bgfx::UniformType::Mat4);
+    motionVectorParamsUniform_ = bgfx::createUniform("u_motionVectorParams", bgfx::UniformType::Vec4);
     normalSampler_ = bgfx::createUniform("s_normal", bgfx::UniformType::Sampler);
     metallicRoughnessSampler_ = bgfx::createUniform("s_metallicRoughness", bgfx::UniformType::Sampler);
     occlusionSampler_ = bgfx::createUniform("s_occlusion", bgfx::UniformType::Sampler);
@@ -275,6 +299,34 @@ bool SceneMeshPassResources::Initialize() {
 }
 
 void SceneMeshPassResources::Shutdown() {
+    if (bgfx::isValid(motionVectorParamsUniform_)) {
+        bgfx::destroy(motionVectorParamsUniform_);
+        motionVectorParamsUniform_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(motionPreviousViewProjectionUniform_)) {
+        bgfx::destroy(motionPreviousViewProjectionUniform_);
+        motionPreviousViewProjectionUniform_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(motionDepthSampler_)) {
+        bgfx::destroy(motionDepthSampler_);
+        motionDepthSampler_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(previousSkinningPaletteInfoUniform_)) {
+        bgfx::destroy(previousSkinningPaletteInfoUniform_);
+        previousSkinningPaletteInfoUniform_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(previousSkinningPaletteSampler_)) {
+        bgfx::destroy(previousSkinningPaletteSampler_);
+        previousSkinningPaletteSampler_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(skinningPaletteInfoUniform_)) {
+        bgfx::destroy(skinningPaletteInfoUniform_);
+        skinningPaletteInfoUniform_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(skinningPaletteSampler_)) {
+        bgfx::destroy(skinningPaletteSampler_);
+        skinningPaletteSampler_ = BGFX_INVALID_HANDLE;
+    }
     if (bgfx::isValid(terrainLayerParamsUniform_)) {
         bgfx::destroy(terrainLayerParamsUniform_);
         terrainLayerParamsUniform_ = BGFX_INVALID_HANDLE;
@@ -461,6 +513,8 @@ bool SceneMeshPassResources::IsInitialized() const noexcept {
         bgfx::isValid(selectionProgram_) &&
         bgfx::isValid(albedoSampler_) &&
         bgfx::isValid(shadowSampler_) &&
+        bgfx::isValid(skinningPaletteSampler_) &&
+        bgfx::isValid(skinningPaletteInfoUniform_) &&
         bgfx::isValid(normalSampler_) &&
         bgfx::isValid(metallicRoughnessSampler_) &&
         bgfx::isValid(occlusionSampler_) &&
@@ -541,7 +595,9 @@ bgfx::ProgramHandle SceneMeshPassResources::LoadProgramForKey(const MaterialProg
     } else if (key.requiresGeneratedVertexShader) {
         return BGFX_INVALID_HANDLE;
     } else {
-        vertex = ShaderLoader::Load("vs_mesh_instanced.sc");
+        vertex = ShaderLoader::Load((key.pipelineStateKey & kSkinnedGraphPipelineStateBit) != 0U
+            ? "vs_mesh_skinned_instanced.sc"
+            : "vs_mesh_instanced.sc");
     }
     if (!bgfx::isValid(vertex)) {
         return BGFX_INVALID_HANDLE;
@@ -661,19 +717,52 @@ void SceneMeshPassResources::EndFrame(std::uint64_t frameIndex) const {
     usedGraphSamplerUniforms_.clear();
 }
 
-SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(const RenderMaterialResource* material, MeshPassType pass) const noexcept {
+SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(
+    const RenderMaterialResource* material, MeshPassType pass, bool skinned) const noexcept {
     SceneMeshPassProgramResolution resolution{};
     if (IsSelectionPass(pass)) {
-        resolution.program = selectionProgram_;
-        resolution.key = BuiltinMeshProgramKey("SelectionId");
+        resolution.key = BuiltinMeshProgramKey("SelectionId", skinned);
+        resolution.program = skinned ? programRegistry_.Find(resolution.key) : selectionProgram_;
+        if (skinned && !bgfx::isValid(resolution.program)) {
+            resolution.program = programRegistry_.Acquire(resolution.key);
+            if (bgfx::isValid(resolution.program)) {
+                AppendUniqueValue(residentProgramKeys_, resolution.key);
+            }
+        }
+        if (skinned && bgfx::isValid(resolution.program)) {
+            AppendUniqueValue(usedProgramKeys_, resolution.key);
+        }
         resolution.materialProgramIdentity = MaterialProgramKeyIdentityHash(resolution.key);
         resolution.status = SceneRenderMaterialProgramStatus::Builtin;
     } else {
-        resolution.program = pass == MeshPassType::ShadowDepth ? shadowProgram_ : (pass == MeshPassType::GBuffer ? gbufferProgram_ : meshProgram_);
-        resolution.key = BuiltinMeshProgramKey(pass == MeshPassType::ShadowDepth ? "ShadowDepth" : GraphMeshPassName(pass));
+        resolution.key = BuiltinMeshProgramKey(
+            pass == MeshPassType::Depth ? "Depth" :
+                (pass == MeshPassType::ShadowDepth ? "ShadowDepth" :
+                    (pass == MeshPassType::MotionVectors ? "MotionVectors" : GraphMeshPassName(pass))),
+            skinned);
+        resolution.program = skinned
+            ? programRegistry_.Find(resolution.key)
+            : ((pass == MeshPassType::ShadowDepth || pass == MeshPassType::Depth)
+                ? shadowProgram_
+                : (pass == MeshPassType::GBuffer ? gbufferProgram_ : meshProgram_));
+        if (skinned && !bgfx::isValid(resolution.program)) {
+            resolution.program = programRegistry_.Acquire(resolution.key);
+            if (bgfx::isValid(resolution.program)) {
+                AppendUniqueValue(residentProgramKeys_, resolution.key);
+            }
+        }
+        if (skinned && bgfx::isValid(resolution.program)) {
+            AppendUniqueValue(usedProgramKeys_, resolution.key);
+        }
         resolution.materialProgramIdentity = MaterialProgramKeyIdentityHash(resolution.key);
         resolution.status = SceneRenderMaterialProgramStatus::Builtin;
-        if (material != nullptr && material->graphProgram.active && IsGraphCapablePass(pass)) {
+        if (skinned && material != nullptr && material->graphProgram.active &&
+            material->graphProgram.requiresGeneratedVertexShader && IsGraphCapablePass(pass)) {
+            resolution.program = BGFX_INVALID_HANDLE;
+            resolution.status = SceneRenderMaterialProgramStatus::GraphFallback;
+        }
+        if (material != nullptr && material->graphProgram.active && IsGraphCapablePass(pass) &&
+            (!skinned || !material->graphProgram.requiresGeneratedVertexShader)) {
             const MaterialProgramKey key{
                 .materialTypeId = material->graphProgram.materialTypeId,
                 .materialTypeVersion = material->graphProgram.materialTypeVersion,
@@ -687,7 +776,8 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(co
                     material->graphProgram.variantKey,
                     GraphMeshPassName(pass),
                     static_cast<std::uint32_t>(bgfx::getRendererType())),
-                .pipelineStateKey = material->graphProgram.pipelineStateKey,
+                .pipelineStateKey = material->graphProgram.pipelineStateKey |
+                    (skinned ? kSkinnedGraphPipelineStateBit : 0U),
                 .requiresGeneratedVertexShader = material->graphProgram.requiresGeneratedVertexShader,
                 .graphProgram = true,
             };
@@ -762,11 +852,70 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(co
 
 bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& desc) const noexcept {
     const RenderMaterialResource* material = desc.command.materialResource;
-    const SceneMeshPassProgramResolution resolution = ResolveMeshPassProgram(material, desc.pass);
+    const bool skinned = desc.command.meshResource != nullptr &&
+        desc.command.meshResource->vertexFormat == RenderVertexFormat::SkinnedP3N3T4UV2J4W4;
+    const SceneMeshPassProgramResolution resolution = ResolveMeshPassProgram(material, desc.pass, skinned);
     lastProgramResolution_ = resolution;
+    if (skinned) {
+        if (desc.skinningPaletteAllocator == nullptr ||
+            !desc.command.currentSkinningPalette.IsValid()) {
+            return BGFX_INVALID_HANDLE;
+        }
+        const bgfx::TextureHandle paletteTexture = desc.skinningPaletteAllocator->Texture(
+            desc.command.currentSkinningPalette);
+        const RenderSkinningPaletteAllocatorStats paletteStats = desc.skinningPaletteAllocator->Stats();
+        if (!bgfx::isValid(paletteTexture) || paletteStats.matrixCapacityPerFrame == 0U) {
+            return BGFX_INVALID_HANDLE;
+        }
+        const std::array<float, 4U> paletteInfo{
+            static_cast<float>(desc.command.currentSkinningPalette.firstMatrix),
+            1.0F / static_cast<float>(paletteStats.matrixCapacityPerFrame),
+            static_cast<float>(desc.command.currentSkinningPalette.matrixCount),
+            0.0F,
+        };
+        bgfx::setTexture(14U, skinningPaletteSampler_, paletteTexture,
+            BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT |
+                BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+        bgfx::setUniform(skinningPaletteInfoUniform_, paletteInfo.data());
+        if (desc.pass == MeshPassType::MotionVectors) {
+            if (!desc.command.previousSkinningPalette.IsValid()) {
+                return BGFX_INVALID_HANDLE;
+            }
+            const bgfx::TextureHandle previousPaletteTexture = desc.skinningPaletteAllocator->Texture(
+                desc.command.previousSkinningPalette);
+            if (!bgfx::isValid(previousPaletteTexture)) {
+                return BGFX_INVALID_HANDLE;
+            }
+            const std::array<float, 4U> previousPaletteInfo{
+                static_cast<float>(desc.command.previousSkinningPalette.firstMatrix),
+                1.0F / static_cast<float>(paletteStats.matrixCapacityPerFrame),
+                static_cast<float>(desc.command.previousSkinningPalette.matrixCount),
+                0.0F,
+            };
+            bgfx::setTexture(15U, previousSkinningPaletteSampler_, previousPaletteTexture,
+                BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT |
+                    BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+            bgfx::setUniform(previousSkinningPaletteInfoUniform_, previousPaletteInfo.data());
+        }
+    }
     if (IsSelectionPass(desc.pass)) {
         const std::array<float, 16> disabledShadowViewProj{};
         bgfx::setUniform(shadowViewProjUniform_, disabledShadowViewProj.data());
+        return resolution.program;
+    }
+    if (desc.pass == MeshPassType::MotionVectors) {
+        if (!bgfx::isValid(desc.sceneDepthTexture)) {
+            return BGFX_INVALID_HANDLE;
+        }
+        const std::array<float, 4U> motionVectorParams{
+            SceneDepthPolicy::HomogeneousDepth() ? 1.0F : 0.0F,
+            0.0F, 0.0F, 0.0F,
+        };
+        bgfx::setTexture(0U, motionDepthSampler_, desc.sceneDepthTexture,
+            BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT |
+                BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+        bgfx::setUniform(motionPreviousViewProjectionUniform_, desc.motionVectorPreviousViewProjection.data());
+        bgfx::setUniform(motionVectorParamsUniform_, motionVectorParams.data());
         return resolution.program;
     }
 

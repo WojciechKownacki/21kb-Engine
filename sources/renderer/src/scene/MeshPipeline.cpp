@@ -21,6 +21,8 @@ const char* MeshPassTypeName(MeshPassType pass) noexcept {
         return "BaseTransparent";
     case MeshPassType::ShadowDepth:
         return "ShadowDepth";
+    case MeshPassType::MotionVectors:
+        return "MotionVectors";
     case MeshPassType::SelectionId:
         return "SelectionId";
     case MeshPassType::EditorSelection:
@@ -44,6 +46,8 @@ std::optional<MeshPassType> MeshPassForRenderPassKind(RenderPassKind kind) noexc
         return MeshPassType::BaseTransparent;
     case RenderPassKind::EditorSelectionMask:
         return MeshPassType::SelectionId;
+    case RenderPassKind::PostProcessMotionVectors:
+        return MeshPassType::MotionVectors;
     case RenderPassKind::SceneTargetSetup:
     case RenderPassKind::DeferredLighting:
     case RenderPassKind::PostProcessBloomPrefilter:
@@ -62,7 +66,11 @@ std::optional<MeshPassType> MeshPassForRenderPassKind(RenderPassKind kind) noexc
 }
 
 std::size_t MeshCommandLookupKeyHash::operator()(MeshCommandLookupKey key) const noexcept {
-    const std::uint64_t mixed = key.materialAssetId ^ (key.materialHandleValue + 0x9e3779b97f4a7c15ULL + (key.materialAssetId << 6U) + (key.materialAssetId >> 2U));
+    std::uint64_t mixed = key.materialAssetId ^ (key.materialHandleValue + 0x9e3779b97f4a7c15ULL + (key.materialAssetId << 6U) + (key.materialAssetId >> 2U));
+    mixed ^= key.currentSkinningPalette.frame + (mixed << 6U) + (mixed >> 2U);
+    mixed ^= static_cast<std::uint64_t>(key.currentSkinningPalette.firstMatrix) << 32U;
+    mixed ^= key.previousSkinningPalette.frame + (mixed << 6U) + (mixed >> 2U);
+    mixed ^= static_cast<std::uint64_t>(key.previousSkinningPalette.firstMatrix) << 16U;
     return static_cast<std::size_t>(mixed);
 }
 
