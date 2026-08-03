@@ -125,6 +125,9 @@ struct AnimatorInstanceSkeleton {
     std::vector<SkeletonBoneId> boneIds;
     std::unordered_map<SkeletonBoneId, std::uint32_t> boneIndices;
     std::array<PoseBuffer, 2U> poses;
+    std::array<PoseSoa, 2U> stateScratch;
+    std::array<std::vector<std::uint8_t>, 2U> stateTouched;
+    std::array<std::vector<std::uint8_t>, 2U> motionTouched;
     std::uint32_t currentPose = 0U;
 };
 
