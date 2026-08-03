@@ -53,7 +53,9 @@ void SceneRenderVisibilityPublisher::BuildFrame(
                 localBounds = meshResource->bounds;
             }
         }
-        const RenderBoundsSphere worldBounds = MeshPipelineVisibility::TransformBounds(localBounds, proxy.desc.model);
+        const RenderBoundsSphere worldBounds = MeshPipelineVisibility::TransformBounds(
+            proxy.desc.boundsOverride.IsValid() ? proxy.desc.boundsOverride : localBounds,
+            proxy.desc.model);
 
         const bool passesMask = (proxy.desc.layer & cullingMask) != 0U;
         const bool insideFrustum = MeshPipelineVisibility::IsInsideFrustum(frustum, worldBounds);
