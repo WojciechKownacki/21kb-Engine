@@ -145,6 +145,8 @@ SceneRenderMeshInstance RenderSceneMeshInstanceBuilder::Build(const MeshRenderPr
         .detailSwitchPromoteCoverage = mesh.detailSwitchPromoteCoverage,
         .detailSwitchDemoteCoverage = mesh.detailSwitchDemoteCoverage,
         .detailSwitchEnabled = mesh.detailSwitchEnabled,
+        .lodBias = mesh.lodBias,
+        .lodEnabled = mesh.lodEnabled,
     };
 }
 

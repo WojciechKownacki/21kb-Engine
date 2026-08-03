@@ -57,6 +57,7 @@ add_library(kb_renderer STATIC
     include/kb/render/resources/PostProcessProfileAssetLoader.hpp
     include/kb/render/resources/BuiltInParticleQuadMesh.hpp
     include/kb/render/resources/RenderMeshAssetBuilder.hpp
+    include/kb/render/resources/SkeletalMeshRenderResourceBuilder.hpp
     include/kb/render/resources/RenderTerrainMeshBuilder.hpp
     include/kb/render/resources/RenderMeshAssetLoader.hpp
     include/kb/render/resources/RenderResourceRegistry.hpp
@@ -215,6 +216,7 @@ add_library(kb_renderer STATIC
     src/resources/RenderMeshObjMaterialResolver.cpp
     src/resources/RenderMeshObjMaterialResolver.hpp
     src/resources/RenderMeshResourceBuilder.cpp
+    src/resources/SkeletalMeshRenderResourceBuilder.cpp
     src/resources/RenderMeshResourceBuilder.hpp
     src/resources/RenderResourceRegistry.cpp
     src/resources/RenderSkinningPaletteAllocator.cpp
