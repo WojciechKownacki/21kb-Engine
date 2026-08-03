@@ -70,6 +70,9 @@ struct AnimatorRuntimeState {
         kb::assets::AssetHandle<AnimationClip> clip;
         std::uint64_t clipLoadGeneration = 0U;
         std::vector<std::size_t> targetIndices;
+        std::vector<std::uint32_t> boneIndices;
+        std::uint32_t rootMotionBoneIndex =
+            std::numeric_limits<std::uint32_t>::max();
     };
     std::vector<Motion> motions;
     std::size_t blendParameterIndex = std::numeric_limits<std::size_t>::max();
@@ -104,7 +107,15 @@ struct AnimatorRuntimeConstraint {
     SceneEntity tip{};
 };
 
-struct AnimatorRuntimeRecord {
+struct AnimatorInstanceSkeleton {
+    kb::assets::AssetHandle<SkeletonAsset> asset;
+    std::uint64_t loadGeneration = 0U;
+    std::uint64_t compatibilitySignature = 0U;
+    std::vector<SkeletonBoneId> boneIds;
+    std::unordered_map<SkeletonBoneId, std::uint32_t> boneIndices;
+};
+
+struct AnimatorInstance {
     SceneEntity entity{};
     kb::assets::AssetHandle<AnimatorController> controller;
     std::uint64_t controllerLoadGeneration = 0U;
@@ -114,6 +125,7 @@ struct AnimatorRuntimeRecord {
     std::uint64_t observedHierarchyTopologyVersion = 0U;
     std::vector<AnimatorRuntimeLayer> layers;
     std::vector<AnimatorRuntimeBinding> bindings;
+    std::optional<AnimatorInstanceSkeleton> skeleton;
     std::vector<AnimatorParameterValue> parameters;
     std::vector<AnimatorRuntimeConstraint> rigConstraints;
     std::map<std::string, AnimatorIkTarget, std::less<>> ikTargets;
@@ -122,6 +134,8 @@ struct AnimatorRuntimeRecord {
     float speed = 1.0F;
     float lastAppliedComponentSpeed = 1.0F;
 };
+
+using AnimatorRuntimeRecord = AnimatorInstance;
 
 struct TimelineRuntimeBinding {
     SceneEntity target{};
@@ -250,7 +264,7 @@ public:
     kb::assets::AssetHandle<kb::localization::LocalizationCatalog> localizationCatalog;
     std::uint64_t localizationCatalogGeneration = 0U;
     std::string localizationLanguage;
-    std::map<std::uint64_t, AnimatorRuntimeRecord> animators;
+    std::map<std::uint64_t, AnimatorInstance> animators;
     std::vector<AnimationEventRecord> pendingAnimationEvents;
     std::map<std::uint64_t, TimelineRuntimeRecord> timelines;
     std::map<std::uint64_t, UIDocumentRuntimeRecord> uiDocuments;

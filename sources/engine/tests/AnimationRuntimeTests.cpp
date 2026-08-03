@@ -20,6 +20,8 @@
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SkeletonAssetIO.hpp"
+#include "engine/scene/SkeletonBindingComponent.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
 #include <algorithm>
@@ -1151,6 +1153,204 @@ end
             "Animation hot reload retained the stale clip payload after rediscovery");
         Require(kb::scene::AnimationAssetIO::SaveClip(runClipPath, runClip),
             "Animation rediscovery fixture could not restore its canonical clip");
+    }
+    {
+        const std::filesystem::path skeletalRoot =
+            std::filesystem::temp_directory_path() /
+            "21kb-animator-instance-tests";
+        std::filesystem::remove_all(skeletalRoot);
+
+        kb::scene::SkeletonAsset skeleton{};
+        skeleton.bones = {
+            {
+                .id = 700U,
+                .parentIndex = -1,
+                .name = "Root",
+                .referencePose = {},
+                .inverseBind = {},
+            },
+            {
+                .id = 101U,
+                .parentIndex = 0,
+                .name = "Spine",
+                .referencePose = {
+                    .position = { 0.0F, 1.0F, 0.0F },
+                },
+                .inverseBind = {},
+            },
+            {
+                .id = 900U,
+                .parentIndex = 1,
+                .name = "Hand",
+                .referencePose = {
+                    .position = { 1.0F, 0.0F, 0.0F },
+                },
+                .inverseBind = {},
+            },
+        };
+        const std::uint64_t skeletonSignature =
+            kb::scene::SkeletonCompatibilitySignature(skeleton);
+        const std::filesystem::path skeletonPath = skeletalRoot / "Assets" /
+            "Skeletal" / "RuntimeRig.kbskeleton";
+        Require(skeletonSignature != 0U &&
+                kb::scene::SkeletonAssetIO::Save(skeletonPath, skeleton),
+            "AnimatorInstance fixture could not save its canonical Skeleton");
+
+        kb::scene::Scene scene;
+        Require(scene.Assets().MountProject(skeletalRoot) &&
+                scene.Assets().Discover() == 1U,
+            "AnimatorInstance fixture could not discover its Skeleton");
+        const kb::assets::AssetMetadata* skeletonMetadata =
+            scene.Assets().Manager().Registry().FindByPath(
+                "/Game/Skeletal/RuntimeRig.kbskeleton");
+        Require(skeletonMetadata != nullptr,
+            "AnimatorInstance fixture did not retain its Skeleton metadata");
+        const kb::assets::AssetId skeletonId = skeletonMetadata->id;
+
+        kb::scene::AnimationClip instanceClip{};
+        instanceClip.durationSeconds = 1.0F;
+        instanceClip.looping = true;
+        instanceClip.targetSkeletonAssetId = skeletonId.value;
+        instanceClip.targetSkeletonCompatibilitySignature = skeletonSignature;
+        instanceClip.skeletalTracks = {
+            {
+                .boneId = 900U,
+                .keyframes = {
+                    { .timeSeconds = 0.0F, .transform = {} },
+                    { .timeSeconds = 1.0F, .transform = {
+                        .position = { 2.0F, 0.0F, 0.0F },
+                    } },
+                },
+            },
+            {
+                .boneId = 700U,
+                .keyframes = {
+                    { .timeSeconds = 0.0F, .transform = {} },
+                    { .timeSeconds = 1.0F, .transform = {
+                        .position = { 0.0F, 0.0F, 1.0F },
+                    } },
+                },
+            },
+        };
+        instanceClip.rootMotionMode =
+            kb::scene::AnimationRootMotionMode::ExtractFromBone;
+        instanceClip.rootMotionBoneId = 700U;
+        const std::filesystem::path instanceClipPath = skeletalRoot /
+            "Assets" / "Animation" / "Skeletal.kbanim";
+        Require(kb::scene::AnimationAssetIO::SaveClip(
+                    instanceClipPath, instanceClip),
+            "AnimatorInstance fixture could not save its skeletal clip");
+
+        kb::scene::AnimatorController instanceController{};
+        instanceController.layers = {
+            {
+                .name = "Base",
+                .defaultState = "Idle",
+                .states = {
+                    {
+                        .name = "Idle",
+                        .clipReference =
+                            "/Game/Animation/Skeletal.kbanim",
+                    },
+                },
+            },
+        };
+        const std::filesystem::path instanceControllerPath = skeletalRoot /
+            "Assets" / "Animation" / "Skeletal.kbanimcontroller";
+        Require(kb::scene::AnimationAssetIO::SaveController(
+                    instanceControllerPath, instanceController) &&
+                scene.Assets().Discover() == 3U,
+            "AnimatorInstance fixture could not discover its clip and controller");
+        const kb::assets::AssetMetadata* instanceControllerMetadata =
+            scene.Assets().Manager().Registry().FindByPath(
+                "/Game/Animation/Skeletal.kbanimcontroller");
+        Require(instanceControllerMetadata != nullptr,
+            "AnimatorInstance fixture did not retain controller metadata");
+
+        const kb::scene::SceneObject owner =
+            scene.Entities().CreateObject({ .name = "Skeletal Character" });
+        Require(scene.Components().SkeletonBindings().Set(
+                    owner.Entity(), kb::scene::SkeletonBindingComponent{
+                        .skeletonAssetId = skeletonId.value,
+                        .skeletonCompatibilitySignature = skeletonSignature,
+                        .enabled = true,
+                    }),
+            "AnimatorInstance fixture could not author SkeletonBinding");
+        scene.Components().Animators().Set(owner.Entity(), kb::scene::Animator{
+            .controllerAssetId = instanceControllerMetadata->id.value,
+            .speed = 1.0F,
+            .enabled = true,
+        });
+        scene.Runtime().SetPlaying(false);
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const auto instanceSkeleton =
+            scene.Animators().InstanceSkeleton(owner.Entity());
+        Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
+                scene.Animators().Exists(owner.Entity()) &&
+                scene.Animators().RuntimeBindingGeneration(owner.Entity()) !=
+                    0U &&
+                instanceSkeleton.has_value() &&
+                instanceSkeleton->skeletonAssetId == skeletonId.value &&
+                instanceSkeleton->compatibilitySignature ==
+                    skeletonSignature &&
+                instanceSkeleton->boneIds.size() == 3U &&
+                instanceSkeleton->boneIds[0] == 700U &&
+                instanceSkeleton->boneIds[1] == 101U &&
+                instanceSkeleton->boneIds[2] == 900U,
+            "AnimatorInstance did not derive a contiguous canonical bone-index table");
+
+        kb::scene::AnimationClip invalidBoneClip = instanceClip;
+        invalidBoneClip.rootMotionMode =
+            kb::scene::AnimationRootMotionMode::None;
+        invalidBoneClip.rootMotionBoneId = 0U;
+        invalidBoneClip.skeletalTracks[0].boneId = 404U;
+        const std::filesystem::path invalidBoneClipPath = skeletalRoot /
+            "Assets" / "Animation" / "InvalidBone.kbanim";
+        kb::scene::AnimatorController invalidBoneController =
+            instanceController;
+        invalidBoneController.layers[0].states[0].clipReference =
+            "/Game/Animation/InvalidBone.kbanim";
+        const std::filesystem::path invalidBoneControllerPath = skeletalRoot /
+            "Assets" / "Animation" / "InvalidBone.kbanimcontroller";
+        Require(kb::scene::AnimationAssetIO::SaveClip(
+                    invalidBoneClipPath, invalidBoneClip) &&
+                kb::scene::AnimationAssetIO::SaveController(
+                    invalidBoneControllerPath, invalidBoneController) &&
+                scene.Assets().Discover() == 5U,
+            "AnimatorInstance invalid-bone fixture could not be discovered");
+        const kb::assets::AssetMetadata* invalidControllerMetadata =
+            scene.Assets().Manager().Registry().FindByPath(
+                "/Game/Animation/InvalidBone.kbanimcontroller");
+        Require(invalidControllerMetadata != nullptr,
+            "AnimatorInstance invalid-bone controller metadata was missing");
+        const kb::scene::SceneObject invalidOwner =
+            scene.Entities().CreateObject({ .name = "Invalid Skeletal Character" });
+        Require(scene.Components().SkeletonBindings().Set(
+                    invalidOwner.Entity(), kb::scene::SkeletonBindingComponent{
+                        .skeletonAssetId = skeletonId.value,
+                        .skeletonCompatibilitySignature = skeletonSignature,
+                        .enabled = true,
+                    }),
+            "AnimatorInstance invalid-bone binding could not be authored");
+        scene.Components().Animators().Set(
+            invalidOwner.Entity(), kb::scene::Animator{
+                .controllerAssetId = invalidControllerMetadata->id.value,
+                .speed = 1.0F,
+                .enabled = true,
+            });
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const std::vector<std::string> invalidBoneErrors =
+            scene.Runtime().DrainSceneSystemErrors();
+        Require(!scene.Animators().Exists(invalidOwner.Entity()) &&
+                std::any_of(
+                    invalidBoneErrors.begin(), invalidBoneErrors.end(),
+                    [](const std::string& error) {
+                        return error.find("bind the authored hierarchy") !=
+                            std::string::npos;
+                    }),
+            "AnimatorInstance accepted a skeletal track with no canonical bone index");
+
+        std::filesystem::remove_all(skeletalRoot);
     }
     std::filesystem::remove_all(root);
 }
