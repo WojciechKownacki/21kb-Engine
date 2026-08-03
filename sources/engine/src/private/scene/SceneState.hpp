@@ -72,6 +72,7 @@ struct AnimatorRuntimeState {
         std::uint64_t clipLoadGeneration = 0U;
         std::vector<std::size_t> targetIndices;
         std::vector<std::uint32_t> boneIndices;
+        std::vector<std::uint32_t> morphIndices;
         std::uint32_t rootMotionBoneIndex =
             std::numeric_limits<std::uint32_t>::max();
     };
@@ -135,6 +136,10 @@ struct AnimatorInstanceSkeleton {
     std::array<PoseSoa, 2U> stateScratch;
     std::array<std::vector<std::uint8_t>, 2U> stateTouched;
     std::array<std::vector<std::uint8_t>, 2U> motionTouched;
+    std::vector<std::string> morphTargetNames;
+    std::array<std::vector<float>, 2U> morphWeights;
+    std::array<std::vector<float>, 2U> stateMorphScratch;
+    std::array<std::vector<std::uint8_t>, 2U> stateMorphTouched;
     std::uint32_t currentPose = 0U;
     std::uint64_t evaluationCount = 0U;
     std::uint64_t hierarchySolveCount = 0U;

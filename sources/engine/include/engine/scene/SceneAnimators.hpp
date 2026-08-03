@@ -19,6 +19,12 @@ struct AnimatorPoseSoaView {
     std::span<const Vec3> scales;
 };
 
+struct AnimatorMorphWeightsView {
+    std::span<const std::string> targetNames;
+    std::span<const float> currentWeights;
+    std::span<const float> previousWeights;
+};
+
 struct AnimatorInstanceSkeletonView {
     std::uint64_t skeletonAssetId = 0U;
     std::uint64_t compatibilitySignature = 0U;
@@ -29,6 +35,7 @@ struct AnimatorInstanceSkeletonView {
     AnimatorPoseSoaView previousComponentPose;
     std::span<const kb::math::Mat4> currentSkinMatrices;
     std::span<const kb::math::Mat4> previousSkinMatrices;
+    AnimatorMorphWeightsView morphWeights;
     std::uint64_t evaluationCount = 0U;
     std::uint64_t hierarchySolveCount = 0U;
 };

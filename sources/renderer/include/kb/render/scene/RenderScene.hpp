@@ -53,6 +53,9 @@ enum class RenderCameraClearMode : std::uint8_t {
 struct MeshRenderProxyDesc {
     std::uint64_t entityId = 0;
     std::uint64_t meshAssetId = 0;
+    // Non-zero only for an entity-local CPU morph resource. meshAssetId then
+    // names the transient resource while this field remains the authored asset.
+    std::uint64_t skeletalMeshAssetId = 0;
     std::uint64_t materialAssetId = 0;
     std::array<std::uint64_t, kMaxSceneMaterialSlotOverrides> materialSlotAssetIds{};
     std::uint32_t materialSlotOverrideCount = 0;
@@ -79,6 +82,7 @@ struct MeshRenderProxyDesc {
     bool detailSwitchEnabled = false;
     std::int32_t lodBias = 0;
     bool lodEnabled = true;
+    bool morphDeformationEnabled = false;
 };
 
 struct CameraRenderProxyDesc {

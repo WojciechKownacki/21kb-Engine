@@ -237,6 +237,48 @@ void InitializePoseBuffers(AnimatorInstanceSkeleton& derived) {
     return true;
 }
 
+[[nodiscard]] bool BindMorphTargets(AnimatorRuntimeRecord& instance) {
+    if (!instance.skeleton.has_value()) return true;
+    AnimatorInstanceSkeleton& skeleton = *instance.skeleton;
+    std::vector<std::string> names;
+    for (const AnimatorRuntimeLayer& layer : instance.layers) {
+        for (const AnimatorRuntimeState& state : layer.states) {
+            for (const AnimatorRuntimeState::Motion& motion : state.motions) {
+                for (const AnimationMorphTrack& track : motion.clip->morphTracks) {
+                    names.push_back(track.morphTarget);
+                }
+            }
+        }
+    }
+    std::sort(names.begin(), names.end());
+    names.erase(std::unique(names.begin(), names.end()), names.end());
+    skeleton.morphTargetNames = std::move(names);
+    for (std::vector<float>& weights : skeleton.morphWeights) {
+        weights.assign(skeleton.morphTargetNames.size(), 0.0F);
+    }
+    for (std::vector<float>& weights : skeleton.stateMorphScratch) {
+        weights.assign(skeleton.morphTargetNames.size(), 0.0F);
+    }
+    for (std::vector<std::uint8_t>& touched : skeleton.stateMorphTouched) {
+        touched.assign(skeleton.morphTargetNames.size(), 0U);
+    }
+    for (AnimatorRuntimeLayer& layer : instance.layers) {
+        for (AnimatorRuntimeState& state : layer.states) {
+            for (AnimatorRuntimeState::Motion& motion : state.motions) {
+                motion.morphIndices.clear();
+                motion.morphIndices.reserve(motion.clip->morphTracks.size());
+                for (const AnimationMorphTrack& track : motion.clip->morphTracks) {
+                    const auto index = std::lower_bound(
+                        skeleton.morphTargetNames.begin(), skeleton.morphTargetNames.end(), track.morphTarget);
+                    if (index == skeleton.morphTargetNames.end() || *index != track.morphTarget) return false;
+                    motion.morphIndices.push_back(static_cast<std::uint32_t>(index - skeleton.morphTargetNames.begin()));
+                }
+            }
+        }
+    }
+    return true;
+}
+
 [[nodiscard]] bool RuntimeSkeletalBindingIsCurrent(
     Scene& scene, const AnimatorRuntimeRecord& instance) {
     if (!instance.skeleton.has_value()) return true;
@@ -488,6 +530,18 @@ LocalTransform Sample(const AnimationBoneTrack& track, float time) {
                 a.transform.scale.z, b.transform.scale.z, alpha),
         },
     };
+}
+
+[[nodiscard]] float Sample(const AnimationMorphTrack& track, float time) {
+    if (time <= track.keyframes.front().timeSeconds) return track.keyframes.front().weight;
+    if (time >= track.keyframes.back().timeSeconds) return track.keyframes.back().weight;
+    const auto upper = std::upper_bound(
+        track.keyframes.begin(), track.keyframes.end(), time,
+        [](float value, const AnimationMorphKeyframe& key) { return value < key.timeSeconds; });
+    const AnimationMorphKeyframe& after = *upper;
+    const AnimationMorphKeyframe& before = *(upper - 1);
+    const float alpha = (time - before.timeSeconds) / (after.timeSeconds - before.timeSeconds);
+    return kb::math::Lerp(before.weight, after.weight, alpha);
 }
 
 LocalTransform Blend(const LocalTransform& a, const LocalTransform& b, float weight) {
@@ -920,9 +974,15 @@ void EvaluateIndexedSkeletalState(
         skeleton.motionTouched[0U];
     std::vector<std::uint8_t>& upperTouched =
         skeleton.motionTouched[1U];
+    std::vector<float>& outputMorphWeights =
+        skeleton.stateMorphScratch[scratchIndex];
+    std::vector<std::uint8_t>& outputMorphTouched =
+        skeleton.stateMorphTouched[scratchIndex];
     std::fill(outputTouched.begin(), outputTouched.end(), std::uint8_t{ 0U });
     std::fill(lowerTouched.begin(), lowerTouched.end(), std::uint8_t{ 0U });
     std::fill(upperTouched.begin(), upperTouched.end(), std::uint8_t{ 0U });
+    std::fill(outputMorphWeights.begin(), outputMorphWeights.end(), 0.0F);
+    std::fill(outputMorphTouched.begin(), outputMorphTouched.end(), std::uint8_t{ 0U });
 
     const BlendSelection selection = SelectBlend(instance, state, definition);
     const float sampleTime = static_cast<float>(time);
@@ -957,6 +1017,23 @@ void EvaluateIndexedSkeletalState(
             WritePose(output, boneIndex, sampled);
             touched[boneIndex] = 1U;
             outputTouched[boneIndex] = 1U;
+        }
+        if (motion.morphIndices.size() != motion.clip->morphTracks.size()) {
+            throw std::runtime_error("AnimatorInstance lost its prebound morph track indices");
+        }
+        for (std::size_t trackIndex = 0U;
+             trackIndex < motion.clip->morphTracks.size(); ++trackIndex) {
+            const AnimationMorphTrack& track = motion.clip->morphTracks[trackIndex];
+            const std::uint32_t morphIndex = motion.morphIndices[trackIndex];
+            if (morphIndex >= outputMorphWeights.size()) {
+                throw std::runtime_error("AnimatorInstance contains an out-of-range morph index");
+            }
+            const float sampled = Sample(track, sampleTime);
+            const float lower = outputMorphTouched[morphIndex] != 0U
+                ? outputMorphWeights[morphIndex] : 0.0F;
+            outputMorphWeights[morphIndex] = blendUpper
+                ? kb::math::Lerp(lower, sampled, selection.alpha) : sampled;
+            outputMorphTouched[morphIndex] = 1U;
         }
     };
 
@@ -993,6 +1070,8 @@ void EvaluateIndexedSkeletalPose(
     skeleton.currentPose ^= 1U;
     AnimatorInstanceSkeleton::PoseBuffer& current =
         skeleton.poses[skeleton.currentPose];
+    std::vector<float>& currentMorphWeights = skeleton.morphWeights[skeleton.currentPose];
+    std::fill(currentMorphWeights.begin(), currentMorphWeights.end(), 0.0F);
     for (std::size_t index = 0U; index < skeleton.asset->bones.size();
          ++index) {
         WritePose(
@@ -1040,6 +1119,17 @@ void EvaluateIndexedSkeletalPose(
                         Blend(from, to, transition),
                         layerDefinition.weight));
             }
+            for (std::size_t morphIndex = 0U;
+                 morphIndex < currentMorphWeights.size(); ++morphIndex) {
+                const float from = skeleton.stateMorphTouched[0U][morphIndex] != 0U
+                    ? skeleton.stateMorphScratch[0U][morphIndex] : 0.0F;
+                const float to = skeleton.stateMorphTouched[1U][morphIndex] != 0U
+                    ? skeleton.stateMorphScratch[1U][morphIndex] : 0.0F;
+                if (skeleton.stateMorphTouched[0U][morphIndex] == 0U &&
+                    skeleton.stateMorphTouched[1U][morphIndex] == 0U) continue;
+                currentMorphWeights[morphIndex] = kb::math::Lerp(
+                    currentMorphWeights[morphIndex], kb::math::Lerp(from, to, transition), layerDefinition.weight);
+            }
         } else {
             EvaluateIndexedSkeletalState(
                 instance, layer.states[layer.currentState],
@@ -1054,6 +1144,12 @@ void EvaluateIndexedSkeletalPose(
                         ReadPose(current.local, boneIndex),
                         ReadPose(skeleton.stateScratch[1U], boneIndex),
                         layerDefinition.weight));
+            }
+            for (std::size_t morphIndex = 0U;
+                 morphIndex < currentMorphWeights.size(); ++morphIndex) {
+                if (skeleton.stateMorphTouched[1U][morphIndex] == 0U) continue;
+                currentMorphWeights[morphIndex] = kb::math::Lerp(
+                    currentMorphWeights[morphIndex], skeleton.stateMorphScratch[1U][morphIndex], layerDefinition.weight);
             }
         }
     }
@@ -1751,6 +1847,7 @@ bool SceneAnimatorService::Attach(Scene& scene, SceneEntity entity, std::uint64_
         layer.previousState = layer.currentState;
         candidate.layers.push_back(std::move(layer));
     }
+    if (!BindMorphTargets(candidate)) return false;
     if (candidate.skeleton.has_value()) {
         const AnimatorRuntimeState::Motion& rootMotion =
             candidate.layers.front().states.front().motions.front();
@@ -1873,6 +1970,11 @@ SceneAnimatorService::InstanceSkeleton(
         .previousComponentPose = view(previous.component),
         .currentSkinMatrices = current.skinMatrices,
         .previousSkinMatrices = previous.skinMatrices,
+        .morphWeights = {
+            .targetNames = skeleton.morphTargetNames,
+            .currentWeights = skeleton.morphWeights[skeleton.currentPose],
+            .previousWeights = skeleton.morphWeights[skeleton.currentPose ^ 1U],
+        },
         .evaluationCount = skeleton.evaluationCount,
         .hierarchySolveCount = skeleton.hierarchySolveCount,
     };
