@@ -3,6 +3,8 @@
 #include "assets/AssetLoaderRegistry.hpp"
 #include "assets/AssetPathUtilities.hpp"
 
+#include <optional>
+
 namespace kb::assets {
 
 std::shared_ptr<void> AssetRuntimeLoadService::LoadUntyped(
@@ -53,6 +55,11 @@ std::shared_ptr<void> AssetRuntimeLoadService::LoadUntyped(
     }
     if (loader->PayloadType() != expectedType) {
         errorMessage = "Requested payload type does not match asset loader";
+        return {};
+    }
+    if (const std::optional<std::string> diagnostic = loader->ValidateDependencies(*metadata, registry);
+        diagnostic.has_value()) {
+        errorMessage = "Asset dependency validation failed: " + *diagnostic;
         return {};
     }
 

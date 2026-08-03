@@ -414,16 +414,33 @@ void RunSkeletalMeshAssetTests() {
         "SkeletalMeshAsset reference reimport discovery failed");
     const auto* metadata=scene.Assets().Manager().Registry().FindByPath("/Game/Characters/Hero.kbskeletalmesh");
     Require(metadata && metadata->type==kb::scene::kSkeletalMeshAssetType,"SkeletalMeshAsset registry classification failed");
-    const auto runtime=scene.Assets().Manager().Load<kb::scene::SkeletalMeshAsset>(metadata->id);
+    const kb::assets::AssetId meshId = metadata->id;
+    const auto runtime=scene.Assets().Manager().Load<kb::scene::SkeletalMeshAsset>(meshId);
     Require(runtime.IsLoaded() && runtime->skeletonAssetId == skeletonId.value && runtime->lods[0].vertices.size()==3U,"SkeletalMeshAsset loader did not produce canonical runtime data");
-    Require(scene.Assets().Manager().ValidateCompatibility(metadata->id).compatible,
+    Require(scene.Assets().Manager().ValidateCompatibility(meshId).compatible,
         "SkeletalMeshAsset rejected a matching Skeleton reference");
+    const std::uint64_t meshLoadGeneration = scene.Assets().Manager().LoadGeneration(meshId);
     skeleton.bones[1].referencePose.position.y = 2.0F;
     Require(kb::scene::SkeletonAssetIO::Save(skeletonPath, skeleton),
         "SkeletalMeshAsset test Skeleton reimport could not be saved");
     Require(scene.Assets().Discover() == 2U,
         "SkeletalMeshAsset reimport discovery failed");
-    const auto report = scene.Assets().Manager().ValidateCompatibility(metadata->id);
+    const auto* reimportedMetadata = scene.Assets().Manager().Registry().FindByPath(
+        "/Game/Characters/Hero.kbskeletalmesh");
+    Require(reimportedMetadata != nullptr && reimportedMetadata->id == meshId,
+        "SkeletalMeshAsset reimport did not preserve the stable asset reference");
+    Require(scene.Assets().Manager().LoadGeneration(meshId) > meshLoadGeneration &&
+            !scene.Assets().Manager().IsLoaded(meshId),
+        "SkeletalMeshAsset reimport retained a stale dependent runtime payload");
+    const auto reloadedRuntime = scene.Assets().Manager().Load<kb::scene::SkeletalMeshAsset>(meshId);
+    Require(!reloadedRuntime.IsLoaded() &&
+            scene.Assets().Manager().LastError().find("incompatible compatibility signature") != std::string::npos,
+        "SkeletalMeshAsset reimport silently loaded an incompatible dependent mesh");
+    Require(scene.Assets().Manager().LoadAsync<kb::scene::SkeletalMeshAsset>(meshId) &&
+            scene.Assets().Manager().AsyncLoadStatus(meshId) == kb::assets::AsyncAssetLoadStatus::Failed &&
+            scene.Assets().Manager().AsyncLoadError(meshId).find("incompatible compatibility signature") != std::string::npos,
+        "SkeletalMeshAsset async reload silently accepted an incompatible dependent mesh");
+    const auto report = scene.Assets().Manager().ValidateCompatibility(meshId);
     Require(!report.compatible && !report.diagnostics.empty() &&
             report.diagnostics.front().issue == kb::assets::AssetCompatibilityIssue::IncompatibleDependency,
         "SkeletalMeshAsset accepted a reimported incompatible Skeleton");

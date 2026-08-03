@@ -1093,6 +1093,65 @@ end
                     }),
             "Runtime accepted CharacterController and Rigidbody as competing Transform authorities");
     }
+    {
+        kb::scene::Scene scene;
+        Require(scene.Assets().MountProject(root) && scene.Assets().Discover() == 8U,
+            "Animation rediscovery test could not mount and discover the project");
+        const auto* controllerMetadata = scene.Assets().Manager().Registry().FindByPath(
+            "/Game/Animation/Character.kbanimcontroller");
+        const auto* runMetadata = scene.Assets().Manager().Registry().FindByPath(
+            "/Game/Animation/Run Fast.kbanim");
+        Require(controllerMetadata != nullptr && runMetadata != nullptr,
+            "Animation rediscovery test did not find its controller and clip");
+        const kb::assets::AssetId controllerId = controllerMetadata->id;
+        const kb::assets::AssetId runId = runMetadata->id;
+        const kb::scene::SceneObject owner = scene.Entities().CreateObject({ .name = "Rediscovery Character" });
+        const kb::scene::SceneObject arm = scene.Entities().CreateObject({ .name = "Left Arm" });
+        Require(arm.SetParent(owner),
+            "Animation rediscovery hierarchy could not be authored");
+        scene.Components().Animators().Set(owner.Entity(), kb::scene::Animator{
+            .controllerAssetId = controllerId.value,
+            .speed = 1.0F,
+            .enabled = true,
+        });
+        Require(scene.Components().Animators().TryGet(owner.Entity()) != nullptr,
+            "Animation rediscovery Animator could not be authored");
+        scene.Runtime().SetPlaying(true);
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        Require(scene.Animators().Play(owner.Entity(), "Root Layer", "Run State", 0.2F),
+            "Animation rediscovery test could not select its live state");
+        const auto stateBefore = scene.Animators().State(owner.Entity(), "Root Layer");
+        const std::uint64_t runGeneration = scene.Assets().Manager().LoadGeneration(runId);
+        const std::uint64_t controllerGeneration = scene.Assets().Manager().LoadGeneration(controllerId);
+
+        kb::scene::AnimationClip reimportedRunClip = runClip;
+        reimportedRunClip.tracks[0].keyframes[1].transform.position.x = 50.0F;
+        reimportedRunClip.tracks[1].keyframes[1].transform.position.x = 60.0F;
+        Require(kb::scene::AnimationAssetIO::SaveClip(runClipPath, reimportedRunClip) &&
+                scene.Assets().Discover() == 8U,
+            "Animation clip reimport was not discovered through the production asset pipeline");
+        const auto* reimportedController = scene.Assets().Manager().Registry().FindByPath(
+            "/Game/Animation/Character.kbanimcontroller");
+        const auto* reimportedRun = scene.Assets().Manager().Registry().FindByPath(
+            "/Game/Animation/Run Fast.kbanim");
+        Require(reimportedController != nullptr && reimportedController->id == controllerId &&
+                reimportedRun != nullptr && reimportedRun->id == runId,
+            "Animation reimport changed a stable controller or clip reference");
+        Require(scene.Assets().Manager().LoadGeneration(runId) > runGeneration &&
+                scene.Assets().Manager().LoadGeneration(controllerId) > controllerGeneration,
+            "Animation reimport did not invalidate the clip's dependent controller closure");
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const auto stateAfter = scene.Animators().State(owner.Entity(), "Root Layer");
+        Require(stateBefore.has_value() && stateAfter.has_value() &&
+                stateAfter->state == stateBefore->state &&
+                NearlyEqual(stateAfter->normalizedTime, stateBefore->normalizedTime),
+            "Animation hot reload lost its compatible live state and playhead");
+        static_cast<void>(scene.Runtime().Update(0.1F));
+        Require(scene.Transforms().Get(owner.Entity()).localPosition.x > 10.0F,
+            "Animation hot reload retained the stale clip payload after rediscovery");
+        Require(kb::scene::AnimationAssetIO::SaveClip(runClipPath, runClip),
+            "Animation rediscovery fixture could not restore its canonical clip");
+    }
     std::filesystem::remove_all(root);
 }
 
