@@ -446,12 +446,20 @@ void RunSkeletalMeshLodResourceUsesStablePaletteTest() {
     low.sections[0].materialAssetId = 12U;
     low.sections[0].boneMap = { 2U };
     asset.lods = { high, low };
+    asset.morphTargets = { {
+        .name = "Smile",
+        .lodIndex = 0U,
+        .deltas = { { .vertexIndex = 1U, .positionDelta = { 0.0F, 0.5F, 0.0F } } },
+    } };
 
-    const auto resource = SkeletalMeshRenderResourceBuilder::Build(asset);
+    const std::vector<std::string> morphNames{ "Smile" };
+    const std::vector<float> morphWeights{ 0.5F };
+    const auto resource = SkeletalMeshRenderResourceBuilder::Build(asset, morphNames, morphWeights);
     Require(resource.has_value() && resource->paletteBoneIds == std::vector<std::uint64_t>{ 1U, 2U } &&
             resource->desc.skinning.jointCount == 2U && resource->sections.size() == 2U &&
             resource->sections[0].lodLevel == 0U && resource->sections[1].lodLevel == 1U &&
-            resource->vertices.size() == 6U && resource->vertices[0].joints[0] == 0U &&
+            resource->dynamicVertexBuffer && resource->vertices.size() == 6U && resource->vertices[0].joints[0] == 0U &&
+            resource->vertices[1].y == 0.25F &&
             resource->vertices[3].joints[0] == 1U && RenderMeshResourceBuilder::IsValidDesc(resource->desc),
         "Skeletal mesh LOD resource did not remap every section into one stable palette");
 }

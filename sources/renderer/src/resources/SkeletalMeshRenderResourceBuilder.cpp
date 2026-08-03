@@ -63,16 +63,62 @@ RenderMeshDesc& SkeletalMeshRenderResourceData::RefreshDesc() noexcept {
             .allowMeshletCulling = false,
         },
         .skinning = { .jointCount = static_cast<std::uint32_t>(paletteBoneIds.size()) },
+        .dynamicVertexBuffer = dynamicVertexBuffer,
     };
     return desc;
 }
 
 std::optional<SkeletalMeshRenderResourceData> SkeletalMeshRenderResourceBuilder::Build(
-    const kb::scene::SkeletalMeshAsset& asset) {
+    const kb::scene::SkeletalMeshAsset& asset,
+    std::span<const std::string> morphTargetNames,
+    std::span<const float> morphWeights) {
     if (!kb::scene::ValidateSkeletalMeshAsset(asset).valid || asset.lods.size() > static_cast<std::size_t>(UINT8_MAX) + 1U) {
         return std::nullopt;
     }
+    if (morphTargetNames.size() != morphWeights.size()) return std::nullopt;
     SkeletalMeshRenderResourceData result{};
+    std::vector<std::vector<kb::scene::SkeletalMeshVertex>> morphedVertices;
+    morphedVertices.reserve(asset.lods.size());
+    for (const kb::scene::SkeletalMeshLod& lod : asset.lods) {
+        morphedVertices.push_back(lod.vertices);
+    }
+    for (const kb::scene::SkeletalMeshMorphTarget& morph : asset.morphTargets) {
+        const auto weight = std::find(morphTargetNames.begin(), morphTargetNames.end(), morph.name);
+        if (weight == morphTargetNames.end()) continue;
+        const float value = morphWeights[static_cast<std::size_t>(weight - morphTargetNames.begin())];
+        if (!std::isfinite(value)) return std::nullopt;
+        if (value == 0.0F) continue;
+        for (const kb::scene::SkeletalMeshMorphDelta& delta : morph.deltas) {
+            kb::scene::SkeletalMeshVertex& vertex = morphedVertices[morph.lodIndex][delta.vertexIndex];
+            vertex.position = vertex.position + delta.positionDelta * value;
+            vertex.normal = vertex.normal + delta.normalDelta * value;
+            vertex.tangent.x += delta.tangentDelta.x * value;
+            vertex.tangent.y += delta.tangentDelta.y * value;
+            vertex.tangent.z += delta.tangentDelta.z * value;
+        }
+    }
+    const kb::scene::SkeletalMeshVertex* firstVertex = nullptr;
+    kb::math::Vec3 minimum{};
+    kb::math::Vec3 maximum{};
+    for (const std::vector<kb::scene::SkeletalMeshVertex>& vertices : morphedVertices) {
+        for (const kb::scene::SkeletalMeshVertex& vertex : vertices) {
+            if (firstVertex == nullptr) {
+                firstVertex = &vertex;
+                minimum = vertex.position;
+                maximum = vertex.position;
+                continue;
+            }
+            minimum.x = std::min(minimum.x, vertex.position.x); minimum.y = std::min(minimum.y, vertex.position.y); minimum.z = std::min(minimum.z, vertex.position.z);
+            maximum.x = std::max(maximum.x, vertex.position.x); maximum.y = std::max(maximum.y, vertex.position.y); maximum.z = std::max(maximum.z, vertex.position.z);
+        }
+    }
+    if (firstVertex == nullptr) return std::nullopt;
+    const kb::scene::SkeletalMeshBounds morphedBounds{
+        .center = { (minimum.x + maximum.x) * 0.5F, (minimum.y + maximum.y) * 0.5F, (minimum.z + maximum.z) * 0.5F },
+        .extents = { (maximum.x - minimum.x) * 0.5F, (maximum.y - minimum.y) * 0.5F, (maximum.z - minimum.z) * 0.5F },
+    };
+    result.bounds = BoundsOf(morphedBounds);
+    result.dynamicVertexBuffer = !asset.morphTargets.empty();
     for (const kb::scene::SkeletalMeshLod& lod : asset.lods) {
         result.paletteBoneIds.insert(result.paletteBoneIds.end(), lod.requiredBones.begin(), lod.requiredBones.end());
     }
@@ -90,7 +136,7 @@ std::optional<SkeletalMeshRenderResourceData> SkeletalMeshRenderResourceBuilder:
             if (inserted) result.materialSlots.push_back({ .defaultMaterialAssetId = section.materialAssetId });
             const std::uint32_t indexStart = static_cast<std::uint32_t>(result.indices.size());
             for (std::uint32_t indexOffset = 0U; indexOffset < section.indexCount; ++indexOffset) {
-                const kb::scene::SkeletalMeshVertex& source = lod.vertices[lod.indices[section.firstIndex + indexOffset]];
+                const kb::scene::SkeletalMeshVertex& source = morphedVertices[lodIndex][lod.indices[section.firstIndex + indexOffset]];
                 const RenderStaticMeshVertexSkinned vertex = ConvertVertex(source, section, result.paletteBoneIds);
                 if (vertex.weights[0] <= 0.0F && vertex.weights[1] <= 0.0F && vertex.weights[2] <= 0.0F && vertex.weights[3] <= 0.0F) return std::nullopt;
                 result.indices.push_back(static_cast<std::uint32_t>(result.vertices.size()));
@@ -100,7 +146,7 @@ std::optional<SkeletalMeshRenderResourceData> SkeletalMeshRenderResourceBuilder:
                 .indexStart = indexStart,
                 .indexCount = section.indexCount,
                 .materialSlot = slot->second,
-                .bounds = BoundsOf(asset.conservativeBounds),
+                .bounds = result.bounds,
                 .lodLevel = static_cast<std::uint8_t>(lodIndex),
             });
         }
@@ -110,7 +156,6 @@ std::optional<SkeletalMeshRenderResourceData> SkeletalMeshRenderResourceBuilder:
             .minScreenCoverage = lod.minScreenCoverage,
         });
     }
-    result.bounds = BoundsOf(asset.conservativeBounds);
     if (!result.bounds.IsValid()) return std::nullopt;
     result.RefreshDesc();
     return result;

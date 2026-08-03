@@ -20,6 +20,8 @@ RenderProxyDirtyFlag RenderSceneProxyDirtyTracker::DirtyForMeshChange(const Mesh
         current.customData0 != next.customData0 ||
         current.currentSkinningPalette != next.currentSkinningPalette ||
         current.previousSkinningPalette != next.previousSkinningPalette ||
+        current.skeletalMeshAssetId != next.skeletalMeshAssetId ||
+        current.morphDeformationEnabled != next.morphDeformationEnabled ||
         current.lodBias != next.lodBias || current.lodEnabled != next.lodEnabled) {
         dirty |= RenderProxyDirtyFlag::Material;
     }

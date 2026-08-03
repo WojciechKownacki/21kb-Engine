@@ -318,6 +318,10 @@ struct SyncContext {
         ? handle : RenderSkinningPaletteHandle{};
 }
 
+[[nodiscard]] std::uint64_t MorphResourceId(kb::scene::SceneEntity entity) noexcept {
+    return 0xD000000000000000ULL | (entity.Id() & 0x0FFFFFFFFFFFFFFFULL);
+}
+
 [[nodiscard]] RenderBoundsSphere AnimatedBoundsForMesh(
     const kb::scene::Scene& scene,
     kb::scene::SceneEntity entity,
@@ -402,6 +406,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
     const kb::scene::DrawD3DeformedGeometryComponent* geometry =
         sync->scene->Components().DeformedGeometries().TryGet(entity);
     std::uint64_t meshAssetId = renderer.meshAssetId;
+    std::uint64_t skeletalMeshAssetId = 0U;
     std::uint64_t materialAssetId = ResolveMaterialAssetId(*sync->scene, renderer);
     std::uint32_t effectiveMaterialSlotOverrideCount = materialSlotOverrideCount;
     bool visible = visibility.visible;
@@ -410,6 +415,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
     std::uint32_t layer = renderer.layer & visibility.mask;
     std::int32_t lodBias = 0;
     bool lodEnabled = true;
+    bool morphDeformationEnabled = false;
     RenderSkinningPaletteHandle currentSkinningPalette{};
     RenderSkinningPaletteHandle previousSkinningPalette{};
     if (geometry != nullptr && geometry->enabled) {
@@ -437,6 +443,11 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
                 *sync->skinningBoneScratch, *sync->skinningPoseScratch)) {
             visible = false;
         } else {
+            if (!asset->morphTargets.empty()) {
+                skeletalMeshAssetId = geometry->skeletalMeshAssetId;
+                meshAssetId = MorphResourceId(entity);
+                morphDeformationEnabled = true;
+            }
             currentSkinningPalette = UploadSkinningPalette(
                 sync->skinningPaletteAllocator, sync->skinningMatrixScratch, *sync->skinningPoseScratch);
             const bool previousPaletteResolved = kb::scene::BuildSkeletalMeshSkinningPalette(
@@ -458,6 +469,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
     static_cast<void>(sync->renderScene->UpsertMesh(MeshRenderProxyDesc{
         .entityId = entity.Id(),
         .meshAssetId = meshAssetId,
+        .skeletalMeshAssetId = skeletalMeshAssetId,
         .materialAssetId = materialAssetId,
         .materialSlotAssetIds = materialSlotAssetIds,
         .materialSlotOverrideCount = effectiveMaterialSlotOverrideCount,
@@ -478,6 +490,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
         .detailSwitchEnabled = detailSwitch != nullptr && detailSwitch->enabled && kb::scene::IsSceneDetailSwitchComponentValid(*detailSwitch),
         .lodBias = lodBias,
         .lodEnabled = lodEnabled,
+        .morphDeformationEnabled = morphDeformationEnabled,
     }));
     static_cast<void>(transform);
 }
