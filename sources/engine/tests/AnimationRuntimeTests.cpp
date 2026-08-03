@@ -1330,6 +1330,38 @@ end
                 scene.Entities().Count() == 1U,
             "AnimatorInstance did not derive contiguous double-buffered local/component SoA poses without bone entities");
 
+        scene.Runtime().SetPlaying(true);
+        static_cast<void>(scene.Runtime().Update(0.25F));
+        const auto sampledSkeleton =
+            scene.Animators().InstanceSkeleton(owner.Entity());
+        const kb::scene::TransformComponent& ownerTransform =
+            scene.Transforms().Get(owner.Entity());
+        Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
+                sampledSkeleton.has_value() &&
+                NearlyEqual(
+                    sampledSkeleton->previousLocalPose.positions[0].x,
+                    3.0F) &&
+                NearlyEqual(
+                    sampledSkeleton->currentLocalPose.positions[0].z,
+                    0.25F) &&
+                NearlyEqual(
+                    sampledSkeleton->currentLocalPose.positions[2].x,
+                    0.5F) &&
+                NearlyEqual(
+                    sampledSkeleton->currentComponentPose.positions[2].x,
+                    0.5F) &&
+                NearlyEqual(
+                    sampledSkeleton->currentComponentPose.positions[2].y,
+                    1.0F) &&
+                NearlyEqual(
+                    sampledSkeleton->currentComponentPose.positions[2].z,
+                    0.25F) &&
+                NearlyEqual(ownerTransform.localPosition.x, 0.0F) &&
+                NearlyEqual(ownerTransform.localPosition.y, 0.0F) &&
+                NearlyEqual(ownerTransform.localPosition.z, 0.0F) &&
+                scene.Entities().Count() == 1U,
+            "Indexed skeletal sampling did not write the compact pose independently of SceneEntity Transform storage");
+
         kb::scene::AnimationClip invalidBoneClip = instanceClip;
         invalidBoneClip.rootMotionMode =
             kb::scene::AnimationRootMotionMode::None;
