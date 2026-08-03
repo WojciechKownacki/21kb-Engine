@@ -5,6 +5,9 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneAnimators.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/SkeletalMeshAsset.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "kb/render/resources/BuiltInParticleQuadMesh.hpp"
@@ -105,6 +108,81 @@ void RuntimeMeshResourceEnsurer::Ensure(
     RuntimeMeshResourceMap& meshes,
     RuntimeMaterialResourceMap& embeddedMaterials) {
     kb::assets::AssetManager& manager = context.scene.Assets().Manager();
+
+    const auto ensureMorphMesh = [&](const MeshRenderProxyDesc& proxy) {
+        if (!proxy.morphDeformationEnabled || proxy.skeletalMeshAssetId == 0U || proxy.meshAssetId == 0U) {
+            return false;
+        }
+        const RuntimeAssetKey runtimeKey{
+            .sceneId = context.scene.Id(),
+            .assetId = proxy.meshAssetId,
+        };
+        context.frameReferences.MarkMesh(runtimeKey);
+        const kb::assets::AssetId sourceAssetId{ proxy.skeletalMeshAssetId };
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(sourceAssetId);
+        auto cacheIt = meshes.find(runtimeKey);
+        if (metadata == nullptr || metadata->type != kb::scene::kSkeletalMeshAssetType) {
+            if (cacheIt != meshes.end()) {
+                context.sceneRenderer.ResourceMap().UnbindMeshHandle(cacheIt->second.handle);
+                context.sceneRenderer.Resources().DestroyMesh(cacheIt->second.handle);
+                meshes.erase(cacheIt);
+            } else {
+                context.sceneRenderer.ResourceMap().UnbindMesh(proxy.meshAssetId);
+            }
+            return true;
+        }
+        const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> asset =
+            manager.Load<kb::scene::SkeletalMeshAsset>(sourceAssetId);
+        if (!asset.IsLoaded()) {
+            context.sceneRenderer.ResourceMap().UnbindMesh(proxy.meshAssetId);
+            return true;
+        }
+        const kb::scene::DrawD3DeformedGeometryComponent* geometry =
+            context.scene.Components().DeformedGeometries().TryGet(kb::scene::SceneEntity{ proxy.entityId });
+        const kb::scene::SceneEntity poseSource = geometry != nullptr && geometry->poseSource.IsValid()
+            ? geometry->poseSource : kb::scene::SceneEntity{ proxy.entityId };
+        const std::optional<kb::scene::AnimatorInstanceSkeletonView> pose =
+            context.scene.Animators().InstanceSkeleton(poseSource);
+        const std::span<const std::string> morphTargetNames = pose
+            ? pose->morphWeights.targetNames : std::span<const std::string>{};
+        const std::span<const float> morphWeights = pose
+            ? pose->morphWeights.currentWeights : std::span<const float>{};
+        const std::optional<SkeletalMeshRenderResourceData> resource =
+            SkeletalMeshRenderResourceBuilder::Build(*asset, morphTargetNames, morphWeights);
+        if (!resource) {
+            context.sceneRenderer.ResourceMap().UnbindMesh(proxy.meshAssetId);
+            return true;
+        }
+        if (cacheIt != meshes.end() && cacheIt->second.contentHash == metadata->contentHash &&
+            cacheIt->second.sourceAsset == asset.Get() &&
+            context.sceneRenderer.Resources().ContainsMesh(cacheIt->second.handle) &&
+            context.sceneRenderer.Resources().UpdateMeshVertices(
+                cacheIt->second.handle, resource->desc, 0U, resource->desc.vertexCount)) {
+            cacheIt->second.lastReferencedFrame = context.currentFrame;
+            context.sceneRenderer.ResourceMap().BindMesh(proxy.meshAssetId, cacheIt->second.handle);
+            return true;
+        }
+        if (cacheIt != meshes.end()) {
+            context.sceneRenderer.ResourceMap().UnbindMeshHandle(cacheIt->second.handle);
+            context.sceneRenderer.Resources().DestroyMesh(cacheIt->second.handle);
+            meshes.erase(cacheIt);
+        }
+        const RenderMeshHandle handle = context.sceneRenderer.Resources().RegisterMesh(resource->desc);
+        if (!handle.IsValid()) {
+            context.sceneRenderer.ResourceMap().UnbindMesh(proxy.meshAssetId);
+            return true;
+        }
+        meshes[runtimeKey] = RuntimeMeshResource{
+            .handle = handle,
+            .sourceAsset = asset.Get(),
+            .sourceAssetId = sourceAssetId.value,
+            .contentHash = metadata->contentHash,
+            .lastReferencedFrame = context.currentFrame,
+            .dynamicVertexUpdates = true,
+        };
+        context.sceneRenderer.ResourceMap().BindMesh(proxy.meshAssetId, handle);
+        return true;
+    };
 
     const auto ensureMesh = [&](std::uint64_t meshAssetId) {
         if (meshAssetId == 0U) {
@@ -439,7 +517,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
 
     for (const auto& [entityId, proxy] : context.renderScene.MeshProxies()) {
         static_cast<void>(entityId);
-        ensureMesh(proxy.desc.meshAssetId);
+        if (!ensureMorphMesh(proxy.desc)) ensureMesh(proxy.desc.meshAssetId);
     }
     for (const auto& [entityId, proxy] : context.renderScene.GeometrySwarmProxies()) {
         static_cast<void>(entityId);

@@ -9,10 +9,11 @@
 namespace kb::render {
 namespace {
 
-void UnloadFromSubmittedScene(std::span<const kb::scene::Scene*> submittedScenes, RuntimeAssetKey key) {
+void UnloadFromSubmittedScene(std::span<const kb::scene::Scene*> submittedScenes, RuntimeAssetKey key, std::uint64_t sourceAssetId) {
     for (const kb::scene::Scene* scene : submittedScenes) {
         if (scene != nullptr && scene->Id() == key.sceneId) {
-            static_cast<void>(const_cast<kb::scene::Scene*>(scene)->Assets().Manager().Unload(kb::assets::AssetId{ key.assetId }));
+            static_cast<void>(const_cast<kb::scene::Scene*>(scene)->Assets().Manager().Unload(
+                kb::assets::AssetId{ sourceAssetId != 0U ? sourceAssetId : key.assetId }));
             break;
         }
     }
@@ -57,7 +58,7 @@ void RuntimeRenderResourcePruner::PruneUnused(
         }
         sceneRenderer.ResourceMap().UnbindMeshHandle(it->second.handle);
         sceneRenderer.Resources().DestroyMesh(it->second.handle);
-        UnloadFromSubmittedScene(submittedScenes, it->first);
+        UnloadFromSubmittedScene(submittedScenes, it->first, it->second.sourceAssetId);
         it = meshes.erase(it);
     }
 
@@ -68,7 +69,7 @@ void RuntimeRenderResourcePruner::PruneUnused(
         }
         sceneRenderer.ResourceMap().UnbindMaterialHandle(it->second.handle);
         sceneRenderer.Resources().DestroyMaterial(it->second.handle);
-        UnloadFromSubmittedScene(submittedScenes, it->first);
+        UnloadFromSubmittedScene(submittedScenes, it->first, 0U);
         it = materials.erase(it);
     }
 
