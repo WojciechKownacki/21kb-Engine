@@ -148,6 +148,9 @@ struct AnimatorInstance {
     std::vector<AnimatorParameterValue> parameters;
     std::vector<AnimatorRuntimeConstraint> rigConstraints;
     std::map<std::string, AnimatorIkTarget, std::less<>> ikTargets;
+    Vec3 extractedRootMotionTranslation{};
+    Quat extractedRootMotionRotation{};
+    bool hasExtractedRootMotion = false;
     // Live speed is script-mutable. This cache only detects a later authored
     // component edit; it is never exposed or serialized as independent state.
     float speed = 1.0F;
