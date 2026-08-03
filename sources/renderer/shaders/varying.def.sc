@@ -10,6 +10,8 @@ vec4 v_objectLocalPos : COLOR2 = vec4(0.0, 0.0, 0.0, 0.0);
 vec4 v_objectWorldPos : COLOR3 = vec4(0.0, 0.0, 0.0, 0.0);
 vec4 v_objectOrientation : COLOR4 = vec4(0.0, 0.0, 1.0, 0.0);
 vec3 v_preSkinnedNormal : COLOR5 = vec3(0.0, 0.0, 1.0);
+vec4 v_currentClip : TEXCOORD8 = vec4(0.0, 0.0, 0.0, 1.0);
+vec4 v_previousClip : TEXCOORD9 = vec4(0.0, 0.0, 0.0, 1.0);
 
 vec3 a_position  : POSITION;
 vec3 a_normal    : NORMAL;

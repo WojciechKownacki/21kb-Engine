@@ -21,6 +21,8 @@ const char* MeshPassTypeName(MeshPassType pass) noexcept {
         return "BaseTransparent";
     case MeshPassType::ShadowDepth:
         return "ShadowDepth";
+    case MeshPassType::MotionVectors:
+        return "MotionVectors";
     case MeshPassType::SelectionId:
         return "SelectionId";
     case MeshPassType::EditorSelection:
@@ -44,6 +46,8 @@ std::optional<MeshPassType> MeshPassForRenderPassKind(RenderPassKind kind) noexc
         return MeshPassType::BaseTransparent;
     case RenderPassKind::EditorSelectionMask:
         return MeshPassType::SelectionId;
+    case RenderPassKind::PostProcessMotionVectors:
+        return MeshPassType::MotionVectors;
     case RenderPassKind::SceneTargetSetup:
     case RenderPassKind::DeferredLighting:
     case RenderPassKind::PostProcessBloomPrefilter:

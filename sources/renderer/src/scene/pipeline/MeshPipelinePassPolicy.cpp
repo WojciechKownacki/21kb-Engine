@@ -36,6 +36,8 @@ bool MeshPipelinePassPolicy::CanEverContain(
     switch (pass) {
     case MeshPassType::ShadowDepth:
         return instance.castsShadow;
+    case MeshPassType::MotionVectors:
+        return true;
     case MeshPassType::SelectionId:
     case MeshPassType::EditorSelection:
         return IsSelectedEntity(selectedEntityIds, instance.entityId);
@@ -90,6 +92,8 @@ bool MeshPipelinePassPolicy::Accepts(
         return UsesDisabledAlphaBlend(material);
     case MeshPassType::ShadowDepth:
         return instance.castsShadow && !UsesDisabledAlphaBlend(material);
+    case MeshPassType::MotionVectors:
+        return !UsesDisabledAlphaBlend(material);
     case MeshPassType::SelectionId:
     case MeshPassType::EditorSelection:
         return IsSelectedEntity(selectedEntityIds, instance.entityId);
@@ -154,6 +158,8 @@ std::uint64_t MeshPipelinePassPolicy::State(
         return BGFX_STATE_WRITE_Z | SceneDepthPolicy::DepthTestState() | cullState | rasterStateExtra;
     case MeshPassType::GBuffer:
         return SceneDepthPolicy::SceneWriteState() | cullState | rasterStateExtra;
+    case MeshPassType::MotionVectors:
+        return BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | cullState | rasterStateExtra;
     case MeshPassType::BaseTransparent:
         return SceneDepthPolicy::SceneDepthReadState() | TranslucencyBlendState(material) | cullState | rasterStateExtra;
     case MeshPassType::SelectionId:

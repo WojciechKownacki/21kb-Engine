@@ -10,6 +10,7 @@ enum class MeshPassType : std::uint8_t {
     GBuffer,
     BaseTransparent,
     ShadowDepth,
+    MotionVectors,
     SelectionId,
     EditorSelection,
     Gizmo,

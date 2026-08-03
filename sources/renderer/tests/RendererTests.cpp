@@ -33,6 +33,10 @@ int main(int argc, char** argv) {
         kb::render::tests::RunMeshPipelineTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{ argv[1] } == "mesh-pass-program-selection") {
+        kb::render::tests::RunSceneMeshPassProgramSelectionTests();
+        return EXIT_SUCCESS;
+    }
     if (argc != 1) {
         return EXIT_FAILURE;
     }

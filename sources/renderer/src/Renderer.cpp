@@ -1366,6 +1366,12 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
 
             TemporalViewportState& temporalState = TemporalStateFor(desc.target.viewport.id, desc.target.viewport.viewportIndex);
             const bool temporalHistoryValid = temporalState.hasHistory && temporalState.extent == sampledSceneDesc.target.viewport.extent;
+            const std::array<float, 16> currentUnjitteredViewProjection = overlayCamera == nullptr
+                ? RendererMatrixMath::Identity()
+                : RendererMatrixMath::ViewProjection(*overlayCamera);
+            const std::array<float, 16> previousMotionViewProjection = temporalHistoryValid
+                ? temporalState.previousViewProjection
+                : currentUnjitteredViewProjection;
             {
                 std::ostringstream message;
                 message << "AA renderer submit"
@@ -1428,6 +1434,31 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             if (!bgfx::isValid(scenePostProcessOutput)) {
                 WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport postProcess Submit invalid output");
                 return false;
+            }
+            if (postProcessOutput.temporalAntiAliasingEnabled && overlayCamera != nullptr &&
+                bgfx::isValid(sampledSceneDesc.postProcess.motionVectorFrameBuffer) &&
+                bgfx::isValid(sampledSceneDesc.SceneOverlayDepthTexture())) {
+                sceneRenderer_->SetMotionVectorPreviousViewProjection(previousMotionViewProjection);
+                const RendererMeshPassSubmitDesc motionVectorSubmitDesc{
+                    .sceneRenderer = *sceneRenderer_,
+                    .renderScene = renderScene,
+                    .sceneDesc = sampledSceneDesc,
+                    .viewportPlan = viewportPlan,
+                    .sceneCamera = overlayCamera,
+                    .lightingConfig = effectiveLightingConfig,
+                    .width = width,
+                    .height = height,
+                    .gpuDrivenSupport = effectiveGpuDrivenSupport,
+                    .aggregateSubmitStats = lastSceneSubmitStats_,
+                    .diagnostics = lastSceneDiagnostics_,
+                    .passSubmitStats = lastScenePassSubmitStats_,
+                };
+                RendererMeshPassSubmitter::SubmitViewportPass(
+                    motionVectorSubmitDesc,
+                    viewportPlan.viewIds.postProcessMotionVectors,
+                    RenderPassKind::PostProcessMotionVectors,
+                    MeshPassType::MotionVectors,
+                    nullptr);
             }
             {
                 std::ostringstream message;
