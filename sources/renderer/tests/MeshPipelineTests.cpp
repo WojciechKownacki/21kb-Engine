@@ -1105,6 +1105,41 @@ void RunMeshPipelineCpuCullsByFrustumBoundsTest() {
     Require(result.stats.culledInstanceCount == 1U, "MeshPipeline culling stats did not count culled instances");
 }
 
+void RunMeshPipelineAnimatedBoundsOverrideControlsCullingTest() {
+    RenderMeshResource mesh{};
+    mesh.indexCount = 3U;
+    mesh.bounds = RenderBoundsSphere{ .center = { 4.0F, 0.0F, 0.0F }, .radius = 0.25F };
+    mesh.sections = {
+        RenderMeshSection{ .indexStart = 0U, .indexCount = 3U, .bounds = mesh.bounds },
+    };
+    const SceneRenderCamera camera{ .view = IdentityMatrix(), .projection = IdentityMatrix() };
+    const std::vector<SceneRenderDrawGroup> drawGroups{
+        SceneRenderDrawGroup{
+            .meshAssetId = 42U,
+            .instances = {
+                SceneRenderMeshInstance{
+                    .entityId = 1U, .meshAssetId = 42U, .model = TranslationMatrix(0.0F, 0.0F, 0.0F),
+                    .boundsOverride = RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 0.25F },
+                },
+                SceneRenderMeshInstance{
+                    .entityId = 2U, .meshAssetId = 42U, .model = TranslationMatrix(0.0F, 0.0F, 0.0F),
+                    .boundsOverride = RenderBoundsSphere{ .center = { 4.0F, 0.0F, 0.0F }, .radius = 0.25F },
+                },
+            },
+        },
+    };
+    const MeshPipelineBuildResult result = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .drawGroups = &drawGroups,
+        .resolvedMeshResource = &mesh,
+        .camera = &camera,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+    Require(result.commands.size() == 1U && result.commands[0].instances.size() == 1U &&
+            result.commands[0].instances[0].entityId == 1U && result.stats.culledInstanceCount == 1U,
+        "MeshPipeline did not cull from the animated bounds override instead of static mesh bounds");
+}
+
 void RunMeshPipelineSelectsLodAndCarriesMeshletRangesTest() {
     RenderMeshResource mesh{};
     mesh.indexCount = 12U;
@@ -1668,6 +1703,7 @@ void RunMeshPipelineTests() {
     RunMeshPipelineCullsBackFacesForSingleSidedMeshesTest();
     RunMeshPipelineKeepsBlendDisabledUntilTransparentPassIsReadyTest();
     RunMeshPipelineCpuCullsByFrustumBoundsTest();
+    RunMeshPipelineAnimatedBoundsOverrideControlsCullingTest();
     RunMeshPipelineCullsWithVisibilityBlockerTest();
     RunMeshPipelineSelectsLodAndCarriesMeshletRangesTest();
     RunMeshPipelineCoordinatesDetailSwitchGroupsWithHysteresisTest();

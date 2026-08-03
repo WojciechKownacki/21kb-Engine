@@ -742,7 +742,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     AnimatorInstance oraz rendererem.
 44. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować socket/attachment queries wyprowadzane z component-space
     pose bez tworzenia stałej encji dla każdej kości.
-45. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać testy animated culling, LOD switching, morph deformation i socket
+45. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać testy animated culling, LOD switching, morph deformation i socket
     transforms.
 
 ### Sprint SK-07 — wspólna scena podglądowa
