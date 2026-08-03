@@ -155,6 +155,7 @@ struct SceneRenderMeshInstance {
     std::array<std::uint64_t, kMaxSceneMaterialSlotOverrides> materialSlotAssetIds{};
     std::uint32_t materialSlotOverrideCount = 0;
     std::array<float, 16> model{};
+    RenderBoundsSphere boundsOverride{};
     std::array<float, 4> color{ 0.76F, 0.80F, 0.86F, 1.0F };
     float fadeAmount = 1.0F;
     float customData0 = 0.0F;
