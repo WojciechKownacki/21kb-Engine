@@ -132,6 +132,50 @@ void SolveComponentPose(
     }
 }
 
+[[nodiscard]] bool IsFiniteTransform(const LocalTransform& transform) noexcept {
+    const float rotationLengthSquared =
+        transform.rotation.x * transform.rotation.x +
+        transform.rotation.y * transform.rotation.y +
+        transform.rotation.z * transform.rotation.z +
+        transform.rotation.w * transform.rotation.w;
+    return std::isfinite(transform.position.x) &&
+        std::isfinite(transform.position.y) &&
+        std::isfinite(transform.position.z) &&
+        std::isfinite(transform.rotation.x) &&
+        std::isfinite(transform.rotation.y) &&
+        std::isfinite(transform.rotation.z) &&
+        std::isfinite(transform.rotation.w) &&
+        rotationLengthSquared > 1.0e-8F &&
+        std::isfinite(transform.scale.x) &&
+        std::isfinite(transform.scale.y) &&
+        std::isfinite(transform.scale.z);
+}
+
+[[nodiscard]] LocalTransform ComposeTransform(
+    const LocalTransform& parent, const LocalTransform& child) noexcept {
+    const Vec3 scaledPosition{
+        parent.scale.x * child.position.x,
+        parent.scale.y * child.position.y,
+        parent.scale.z * child.position.z,
+    };
+    return {
+        .position = parent.position + kb::math::Rotate(parent.rotation, scaledPosition),
+        .rotation = kb::math::Normalize(parent.rotation * child.rotation),
+        .scale = {
+            parent.scale.x * child.scale.x,
+            parent.scale.y * child.scale.y,
+            parent.scale.z * child.scale.z,
+        },
+    };
+}
+
+[[nodiscard]] WorldTransform ComposeWorldTransform(
+    const WorldTransform& parent, const LocalTransform& child) noexcept {
+    const LocalTransform composed = ComposeTransform(
+        { .position = parent.position, .rotation = parent.rotation, .scale = parent.scale }, child);
+    return { .position = composed.position, .rotation = composed.rotation, .scale = composed.scale };
+}
+
 void ApplySkeletalRigConstraints(
     Scene& scene, AnimatorRuntimeRecord& record,
     AnimatorInstanceSkeleton::PoseBuffer& pose,
@@ -1978,6 +2022,51 @@ SceneAnimatorService::InstanceSkeleton(
         .evaluationCount = skeleton.evaluationCount,
         .hierarchySolveCount = skeleton.hierarchySolveCount,
     };
+}
+
+std::optional<AnimatorAttachmentTransform>
+SceneAnimatorService::AttachmentTransform(
+    const Scene& scene, SceneEntity entity, SkeletonBoneId boneId,
+    const LocalTransform& localOffset) noexcept {
+    if (boneId == 0U || !IsFiniteTransform(localOffset)) return std::nullopt;
+    const AnimatorRuntimeRecord* instance = Find(SceneAccess::State(scene), entity);
+    const TransformComponent* owner = scene.Transforms().TryGet(entity);
+    if (instance == nullptr || !instance->skeleton.has_value() || owner == nullptr) {
+        return std::nullopt;
+    }
+    const AnimatorInstanceSkeleton& skeleton = *instance->skeleton;
+    const auto bone = std::find(skeleton.boneIds.begin(), skeleton.boneIds.end(), boneId);
+    if (bone == skeleton.boneIds.end()) return std::nullopt;
+    const std::size_t index = static_cast<std::size_t>(bone - skeleton.boneIds.begin());
+    const AnimatorInstanceSkeleton::PoseBuffer& pose = skeleton.poses[skeleton.currentPose];
+    if (index >= pose.component.positions.size() || index >= pose.component.rotations.size() ||
+        index >= pose.component.scales.size()) {
+        return std::nullopt;
+    }
+    const LocalTransform component = ComposeTransform({
+        .position = pose.component.positions[index],
+        .rotation = pose.component.rotations[index],
+        .scale = pose.component.scales[index],
+    }, localOffset);
+    return AnimatorAttachmentTransform{
+        .componentSpace = component,
+        .worldSpace = ComposeWorldTransform(owner->WorldPayload(), component),
+    };
+}
+
+std::optional<AnimatorAttachmentTransform>
+SceneAnimatorService::SocketTransform(
+    const Scene& scene, SceneEntity entity, std::string_view socketName) noexcept {
+    if (socketName.empty()) return std::nullopt;
+    const AnimatorRuntimeRecord* instance = Find(SceneAccess::State(scene), entity);
+    if (instance == nullptr || !instance->skeleton.has_value()) return std::nullopt;
+    const SkeletonAsset& skeleton = *instance->skeleton->asset;
+    const auto socket = std::find_if(
+        skeleton.sockets.begin(), skeleton.sockets.end(),
+        [socketName](const SkeletonSocket& value) { return value.name == socketName; });
+    return socket == skeleton.sockets.end()
+        ? std::nullopt
+        : AttachmentTransform(scene, entity, socket->boneId, socket->localTransform);
 }
 
 bool SceneAnimatorService::Play(Scene& scene, SceneEntity entity, std::string_view layerName, std::string_view stateName, float normalizedTime) noexcept {
