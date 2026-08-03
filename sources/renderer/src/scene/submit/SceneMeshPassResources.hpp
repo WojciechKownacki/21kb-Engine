@@ -33,6 +33,7 @@ struct SceneMeshPassBindDesc {
     bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE;
     // MAT-31: the opaque scene-color snapshot for graph fragment shaders that sample SceneColor/SceneTexture.
     bgfx::TextureHandle sceneColorTexture = BGFX_INVALID_HANDLE;
+    std::array<float, 16> motionVectorPreviousViewProjection{};
     const RenderSkinningPaletteAllocator* skinningPaletteAllocator = nullptr;
 };
 
@@ -131,6 +132,11 @@ private:
     bgfx::UniformHandle shadowSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle skinningPaletteSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle skinningPaletteInfoUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle previousSkinningPaletteSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle previousSkinningPaletteInfoUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle motionDepthSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle motionPreviousViewProjectionUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle motionVectorParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle normalSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle metallicRoughnessSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle occlusionSampler_ = BGFX_INVALID_HANDLE;

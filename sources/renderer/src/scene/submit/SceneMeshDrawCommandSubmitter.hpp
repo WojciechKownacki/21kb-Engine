@@ -29,6 +29,7 @@ struct SceneMeshDrawCommandSubmitDesc {
     bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE;
     // MAT-31: opaque scene color snapshot bound to color-sampling graph materials in the transparent pass.
     bgfx::TextureHandle sceneColorTexture = BGFX_INVALID_HANDLE;
+    std::array<float, 16> motionVectorPreviousViewProjection{};
     const RenderSkinningPaletteAllocator* skinningPaletteAllocator = nullptr;
     const SceneMeshPassResources& passResources;
     SceneRenderDiagnostics* diagnostics = nullptr;
