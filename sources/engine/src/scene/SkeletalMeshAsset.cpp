@@ -15,12 +15,29 @@ namespace {
     return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z) && IsFinite(value.w);
 }
 
+[[nodiscard]] bool IsValidBounds(const SkeletalMeshBounds& bounds) noexcept {
+    return IsFinite(bounds.center) && IsFinite(bounds.extents) &&
+        bounds.extents.x >= 0.0F && bounds.extents.y >= 0.0F && bounds.extents.z >= 0.0F;
+}
+
+[[nodiscard]] bool Contains(const SkeletalMeshBounds& bounds, const kb::math::Vec3& point) noexcept {
+    constexpr float kEpsilon = 0.0001F;
+    return point.x >= bounds.center.x - bounds.extents.x - kEpsilon &&
+        point.x <= bounds.center.x + bounds.extents.x + kEpsilon &&
+        point.y >= bounds.center.y - bounds.extents.y - kEpsilon &&
+        point.y <= bounds.center.y + bounds.extents.y + kEpsilon &&
+        point.z >= bounds.center.z - bounds.extents.z - kEpsilon &&
+        point.z <= bounds.center.z + bounds.extents.z + kEpsilon;
+}
+
 } // namespace
 
 SkeletalMeshAssetValidationResult ValidateSkeletalMeshAsset(const SkeletalMeshAsset& asset) {
     if (asset.skeletonAssetId == 0U || asset.skeletonCompatibilitySignature == 0U || asset.lods.empty() ||
-        !IsFinite(asset.conservativeBounds.center) || !IsFinite(asset.conservativeBounds.extents) ||
-        asset.conservativeBounds.extents.x < 0.0F || asset.conservativeBounds.extents.y < 0.0F || asset.conservativeBounds.extents.z < 0.0F) {
+        !IsValidBounds(asset.conservativeBounds) ||
+        !IsValidBounds(asset.fixedBounds) ||
+        asset.boundsMode != SkeletalMeshBoundsMode::ImportedConservative &&
+            asset.boundsMode != SkeletalMeshBoundsMode::Fixed) {
         return { false, "Skeletal mesh has an invalid skeleton reference, LOD set, or conservative bounds." };
     }
     std::unordered_set<std::string> morphNames;
@@ -66,6 +83,17 @@ SkeletalMeshAssetValidationResult ValidateSkeletalMeshAsset(const SkeletalMeshAs
             if (delta.vertexIndex >= asset.lods[morph.lodIndex].vertices.size() || (!first && delta.vertexIndex <= previousVertex) ||
                 !IsFinite(delta.positionDelta) || !IsFinite(delta.normalDelta) || !IsFinite(delta.tangentDelta)) return { false, "Skeletal mesh morph delta is invalid." };
             first = false; previousVertex = delta.vertexIndex;
+        }
+    }
+    for (const SkeletalMeshLod& lod : asset.lods) {
+        for (const SkeletalMeshVertex& vertex : lod.vertices) {
+            if (!Contains(asset.conservativeBounds, vertex.position)) {
+                return { false, "Skeletal mesh conservative bounds do not contain every imported vertex." };
+            }
+            if (asset.boundsMode == SkeletalMeshBoundsMode::Fixed &&
+                !Contains(asset.fixedBounds, vertex.position)) {
+                return { false, "Skeletal mesh fixed bounds do not contain every imported vertex." };
+            }
         }
     }
     return { true, {} };
