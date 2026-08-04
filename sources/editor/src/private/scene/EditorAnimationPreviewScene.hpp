@@ -13,7 +13,7 @@ namespace kb::editor {
 class EditorAnimationPreviewScene {
 public:
     [[nodiscard]] const kb::scene::Scene& SceneFor(
-        const kb::scene::Scene& source, const AnimationPreviewContext& context);
+        const kb::scene::Scene& source, AnimationPreviewContext& context);
     [[nodiscard]] kb::scene::Scene* MutableScene() noexcept { return scene_.get(); }
     [[nodiscard]] EditorViewportCameraState& Camera() noexcept { return camera_; }
     [[nodiscard]] const EditorViewportCameraState& Camera() const noexcept { return camera_; }
@@ -23,12 +23,14 @@ public:
     [[nodiscard]] kb::scene::SceneEntity EnvironmentEntity() const noexcept { return environmentEntity_; }
     void Focus(float durationSeconds = 0.0F) noexcept;
     [[nodiscard]] bool TickCamera(float deltaSeconds) noexcept;
+    [[nodiscard]] bool TickPlayback(AnimationPreviewContext& context, float deltaSeconds) noexcept;
     [[nodiscard]] std::uint64_t Revision() const noexcept { return revision_; }
     void Clear() noexcept;
 
 private:
     void Rebuild(const kb::scene::Scene& source, const AnimationPreviewContext& context);
     void SynchronizeCamera() noexcept;
+    void SynchronizePlayback(AnimationPreviewContext& context) noexcept;
 
     std::unique_ptr<kb::scene::Scene> scene_;
     EditorViewportCameraState camera_;
@@ -40,6 +42,7 @@ private:
     float focusRadius_ = 1.0F;
     std::uint64_t sourceSceneId_ = 0U;
     std::uint64_t contextRevision_ = 0U;
+    std::uint64_t playbackRevision_ = 0U;
     std::uint64_t revision_ = 1U;
 };
 
