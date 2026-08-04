@@ -157,7 +157,7 @@ scenario-local aliases.
 | `inspector_pointer` | `action` (`down`, `drag`, `up`); `x`,`y` for down/drag |
 | `inspector_text` | `text` |
 | `inspector_key` | `key` (`enter`, `escape`, `backspace`, `delete`, `left`, `right`, `home`, `end`) |
-| `capture` | `panel`, `checkpoint`; panels: `hierarchy`, `scene`, `inspector`, `assets`, `console`, `project_settings`, `script_editor`, `plugins`, `material_editor`. `script_editor` captures the real child editor renderer and loaded document, not only panel chrome. |
+| `capture` | `panel`, `checkpoint`; panels: `hierarchy`, `scene`, `inspector`, `assets`, `console`, `project_settings`, `script_editor`, `plugins`, `material_editor`, `skeletal_mesh_editor`, `animation_clip_editor`, `animator_editor`. `script_editor` captures the real child editor renderer and loaded document, not only panel chrome. |
 | `capture_runtime` | `checkpoint`; optional `require_non_uniform`; requires Play Mode and writes a PNG from the production GPU readback path |
 | `snapshot` | `kind`, `checkpoint`; kinds: `console`, `inspector_tree` |
 | `assert_console` | `contains`; optional `category`, `level`, `count_at_least` |

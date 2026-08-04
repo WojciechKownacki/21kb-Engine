@@ -410,8 +410,8 @@ Obecne testy UI nie mogą zostać zachowane jako kryterium ukończenia:
 
 - `EditorSelfTest.cpp:931-934` uznaje controller otwarty w Script Editorze za
   zapisywalną powierzchnię assetu animacji;
-- `HeadlessAutomationScenario.json:115-118` przechwytuje panel `script_editor`
-  pod nazwą checkpointu `animation-controller-editor`.
+- `HeadlessAutomationScenario.json` przechwytuje panel `animator_editor` jako
+  dedykowany workspace controllera.
 
 Przy krytycznej implementacji testy te trzeba zastąpić testami dedykowanego
 workspace. Script Editor nie może pozostać cichym fallbackiem dla uszkodzonego
@@ -819,7 +819,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     przycisku Compile; błąd wskazuje dokładny node/transition/parameter.
 79. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Atomowy hot reload aktywuje nowy controller wyłącznie po sukcesie;
     ostatnia poprawna instancja pozostaje aktywna przy błędzie.
-80. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zastąpić testy nazywające Script Editor „animation-controller-editor”
+80. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zastąpić testy nazywające Script Editor „animation-controller-editor”
     prawdziwymi testami workspace, authoringu i serializacji grafu.
 
 ### Sprint SK-11 — live debug i diagnostyka
