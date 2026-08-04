@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/input/InputKey.hpp"
+#include "engine/library/EngineLibraryParsing.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -63,10 +64,7 @@ std::optional<UIBindingValue> ReadBoundControl(const UIDocumentElement& element,
             else return std::nullopt;
             return value;
         }
-        const char* first = control.text.data();
-        const char* const last = first + control.text.size();
-        const auto parsed = std::from_chars(first, last, value.number, std::chars_format::general);
-        if (parsed.ec != std::errc{} || parsed.ptr != last || !std::isfinite(value.number)) return std::nullopt;
+        if (!kb::library::TryParseDouble(control.text, value.number) || !std::isfinite(value.number)) return std::nullopt;
         return value;
     }
     if (binding.property == "toggle" && binding.valueType == UIDataValueType::Boolean && control.kind == UIControlKind::Toggle) {
