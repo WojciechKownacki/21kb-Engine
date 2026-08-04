@@ -27,7 +27,11 @@ public:
         const std::filesystem::path& path,
         std::string* error = nullptr);
     [[nodiscard]] static bool SaveClip(const std::filesystem::path& path, const AnimationClip& clip);
-    [[nodiscard]] static bool SaveController(const std::filesystem::path& path, const AnimatorController& controller);
+    [[nodiscard]] static bool ValidateController(const AnimatorController& controller, std::string* error = nullptr);
+    [[nodiscard]] static bool SaveController(
+        const std::filesystem::path& path,
+        const AnimatorController& controller,
+        std::string* error = nullptr);
 };
 
 } // namespace kb::scene

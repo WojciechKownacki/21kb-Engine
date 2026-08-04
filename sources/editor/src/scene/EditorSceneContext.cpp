@@ -9172,8 +9172,12 @@ bool EditorSceneContext::RedoAnimatorEditorEdit() {
 bool EditorSceneContext::SaveAnimatorEditorAsset() {
     const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(animatorEditorAssetId_);
     const kb::scene::AnimatorController* working = animatorEditorGraphDocument_.Controller();
-    if (metadata == nullptr || working == nullptr || !kb::scene::AnimationAssetIO::SaveController(metadata->physicalPath, *working)) {
-        console_.Error("Animator Editor", "Animator Controller validation or atomic save failed; runtime preview was not reloaded.");
+    std::string error;
+    if (metadata == nullptr || working == nullptr ||
+        !kb::scene::AnimationAssetIO::SaveController(metadata->physicalPath, *working, &error)) {
+        console_.Error("Animator Editor", error.empty()
+            ? "Animator Controller validation or atomic save failed; runtime preview was not reloaded."
+            : "Save failed: " + error);
         return false;
     }
     static_cast<void>(scene_->Assets().Manager().DiscoverMountedAssets());
