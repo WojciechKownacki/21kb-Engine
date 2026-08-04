@@ -5,6 +5,7 @@
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAnimators.hpp"
@@ -1416,6 +1417,12 @@ end
             .speed = 1.0F,
             .enabled = true,
         });
+        Require(scene.Components().DeformedGeometries().Set(owner.Entity(),
+                    kb::scene::DrawD3DeformedGeometryComponent{
+                        .skeletalMeshAssetId = 0xD1A60001U,
+                        .enabled = true,
+                    }),
+            "Animator debug fixture could not author an incompatible deformed geometry asset");
         scene.Runtime().SetPlaying(false);
         static_cast<void>(scene.Runtime().Update(0.0F));
         const auto instanceSkeleton =
@@ -1607,6 +1614,7 @@ end
                 NearlyEqual(transitionedDebugInstance->layers.front().transitionProgress, 0.5F) &&
                 transitionedDebugInstance->bones.size() == 3U &&
                 transitionedDebugInstance->paletteMatrixCount == 3U &&
+                !transitionedDebugInstance->compatibilityDiagnostics.empty() &&
                 transitionedDebugInstance->poseEvaluationCount == 2U,
             "Animator debug snapshot did not retain the evaluated live skeletal state");
 
