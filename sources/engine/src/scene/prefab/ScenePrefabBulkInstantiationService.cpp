@@ -1044,35 +1044,6 @@ void ResolvePrefabLensEchoReferences(
     return instances;
 }
 
-[[nodiscard]] std::vector<ScenePrefabInstance> BuildInstances(
-    Scene& scene,
-    std::span<const ScenePrefabNodeDesc> nodes,
-    std::span<const kb::ecs::CommandEntity> commandEntities,
-    const kb::ecs::CommandBufferPlaybackResult& playback,
-    const ScenePrefabInstantiationSettings& settings,
-    std::size_t instanceCount,
-    bool collectInstances,
-    std::uint64_t& instanceObjectSlabNanoseconds,
-    std::uint64_t& hierarchyRecordNanoseconds,
-    std::uint64_t& nameAssignmentNanoseconds,
-    std::uint32_t& maxGeneratedEntityIndex) {
-    std::vector<SceneEntity> resolvedEntities(commandEntities.size());
-    for (std::size_t index = 0; index < commandEntities.size(); ++index) {
-        resolvedEntities[index] = playback.Resolve(commandEntities[index]);
-    }
-    return BuildInstances(
-        scene,
-        nodes,
-        std::span<const SceneEntity>{ resolvedEntities },
-        settings,
-        instanceCount,
-        collectInstances,
-        instanceObjectSlabNanoseconds,
-        hierarchyRecordNanoseconds,
-        nameAssignmentNanoseconds,
-        maxGeneratedEntityIndex);
-}
-
 [[nodiscard]] std::vector<ScenePrefabInstance> InstantiateInternal(
     Scene& scene,
     const ScenePrefab& prefab,
