@@ -7,6 +7,7 @@
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 #include "scene/SkeletalMeshEditorTreeState.hpp"
 #include "scene/SkeletalMeshEditorDetailsState.hpp"
+#include "scene/SkeletalMeshEditorDocumentState.hpp"
 #include "windowing/FloatingWindowControlHitTester.hpp"
 #include "windowing/FloatingWindowControlLayout.hpp"
 
@@ -479,6 +480,26 @@ void RunSkeletalMeshEditorDetailsStateTest() {
         "Skeletal Mesh editor Morph Targets panel should use the canonical mesh morph data");
 }
 
+void RunSkeletalMeshEditorDocumentStateTest() {
+    kb::scene::SkeletalMeshAsset mesh{};
+    mesh.skeletonAssetId = 10U;
+    mesh.skeletonCompatibilitySignature = 20U;
+    mesh.lods = {{ .vertices = std::vector<kb::scene::SkeletalMeshVertex>(3U), .indices = { 0U, 1U, 2U },
+        .sections = {{ .firstIndex = 0U, .indexCount = 3U, .boneMap = { 1U } }}, .requiredBones = { 1U } }};
+    kb::editor::SkeletalMeshEditorDocumentState document;
+    document.Open(kb::assets::AssetId{ 42U }, mesh);
+    kb::scene::SkeletalMeshAsset fixed = mesh;
+    fixed.boundsMode = kb::scene::SkeletalMeshBoundsMode::Fixed;
+    kb::editor::tests::Require(document.Apply(fixed) && document.Dirty() && document.CanUndo(),
+        "Skeletal Mesh document should retain a dirty working-copy history");
+    kb::editor::tests::Require(document.Undo() && !document.Dirty() && document.CanRedo(),
+        "Skeletal Mesh document undo should restore the saved working copy");
+    kb::editor::tests::Require(document.Redo() && document.MarkSaved() && !document.Dirty(),
+        "Skeletal Mesh document save should establish a new clean history baseline");
+    kb::editor::tests::Require(document.RevertToSaved() && !document.Dirty(),
+        "Skeletal Mesh document revert should discard unsaved history");
+}
+
 // A click on any tab — the active one or an inactive sibling — must hit-test as a
 // dock Tab. The pointer router relies on this: a dock hit means the click is a
 // layout action (switch tabs), so it must NOT clear the scene selection and blank
@@ -536,6 +557,7 @@ void RunEditorDockingTests() {
     RunSkeletalMeshEditorDefaultLayoutTest();
     RunSkeletalMeshEditorTreeStateTest();
     RunSkeletalMeshEditorDetailsStateTest();
+    RunSkeletalMeshEditorDocumentStateTest();
     RunTabClickIsDockInteractionTest();
 }
 

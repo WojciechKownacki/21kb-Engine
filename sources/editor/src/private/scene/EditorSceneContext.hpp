@@ -27,6 +27,7 @@
 #include "scene/EditorAnimationPreviewScene.hpp"
 #include "scene/SkeletalMeshEditorTreeState.hpp"
 #include "scene/SkeletalMeshEditorDetailsState.hpp"
+#include "scene/SkeletalMeshEditorDocumentState.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
 #include "scene/material/MaterialEditorState.hpp"
 #include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
@@ -433,6 +434,17 @@ public:
     [[nodiscard]] const std::string& SelectedSkeletalMeshEditorSocket() const noexcept;
     [[nodiscard]] SkeletalMeshEditorDetailsModel SkeletalMeshEditorDetails() const;
     [[nodiscard]] const std::vector<kb::scene::SkeletalMeshMorphTarget>& SkeletalMeshEditorMorphTargets() const noexcept;
+    [[nodiscard]] bool HasDirtySkeletalMeshEditorAssetEdit() const noexcept;
+    [[nodiscard]] bool CanUndoSkeletalMeshEditorAssetEdit() const noexcept;
+    [[nodiscard]] bool CanRedoSkeletalMeshEditorAssetEdit() const noexcept;
+    [[nodiscard]] bool SetSkeletalMeshEditorBoundsMode(kb::scene::SkeletalMeshBoundsMode mode);
+    [[nodiscard]] bool UndoSkeletalMeshEditorAssetEdit();
+    [[nodiscard]] bool RedoSkeletalMeshEditorAssetEdit();
+    [[nodiscard]] bool SaveSkeletalMeshEditorAsset();
+    [[nodiscard]] bool RevertSkeletalMeshEditorAsset();
+    [[nodiscard]] bool ReimportSkeletalMeshEditorAsset();
+    [[nodiscard]] bool PrepareSkeletalMeshEditorClose(std::string_view reason);
+    void CloseSkeletalMeshEditorAsset() noexcept;
     [[nodiscard]] bool OpenMaterialEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenMaterialEditorGraphSourceAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenMaterialEditorMaterialTypeAsset(kb::assets::AssetId id);
@@ -984,6 +996,7 @@ private:
     kb::assets::AssetId skeletalMeshEditorAssetId_{};
     SkeletalMeshEditorTreeState skeletalMeshEditorTree_;
     SkeletalMeshEditorDetailsState skeletalMeshEditorDetails_;
+    SkeletalMeshEditorDocumentState skeletalMeshEditorDocument_;
     InspectorPanelState inspector_;
     MaterialEditorState materialEditor_;
     kb::assets::AssetId materialRuntimePreviewAssetId_{};

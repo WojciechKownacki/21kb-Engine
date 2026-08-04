@@ -161,6 +161,18 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
     }
 }
 
+[[nodiscard]] bool ResolveDirtySkeletalMeshEditorTabClose(HWND owner, EditorSceneContext& sceneContext) {
+    if (!sceneContext.HasDirtySkeletalMeshEditorAssetEdit()) return true;
+    const int result = MessageBoxW(
+        owner,
+        L"Save changes to the open Skeletal Mesh before closing the editor?\n\nYes = Save\nNo = Discard changes\nCancel = keep editing",
+        L"Unsaved Skeletal Mesh",
+        MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1 | MB_APPLMODAL);
+    if (result == IDYES) return sceneContext.SaveSkeletalMeshEditorAsset();
+    if (result == IDNO) return sceneContext.RevertSkeletalMeshEditorAsset();
+    return false;
+}
+
 [[nodiscard]] int RectHeight(const RECT& rect) noexcept {
     return std::max(0L, rect.bottom - rect.top);
 }
@@ -389,9 +401,15 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             if (panel != nullptr && panel->kind == DockPanelKind::MaterialEditor && !ResolveDirtyMaterialEditorTabClose(messageWindow, sceneContext_)) {
                 return;
             }
+            if (panel != nullptr && panel->kind == DockPanelKind::SkeletalMeshEditor && !ResolveDirtySkeletalMeshEditorTabClose(messageWindow, sceneContext_)) {
+                return;
+            }
             if (dockModel_.Commands().ClosePanel(closeTab->panelId)) {
                 if (panel != nullptr && panel->kind == DockPanelKind::MaterialEditor) {
                     sceneContext_.CloseMaterialEditorAsset();
+                }
+                if (panel != nullptr && panel->kind == DockPanelKind::SkeletalMeshEditor) {
+                    sceneContext_.CloseSkeletalMeshEditorAsset();
                 }
                 sceneViewport_.RequestPresent();
                 EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
