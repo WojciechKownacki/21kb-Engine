@@ -419,6 +419,11 @@ public:
     [[nodiscard]] bool OpenAnimatorEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] kb::assets::AssetId AnimatorEditorAssetId() const noexcept;
     [[nodiscard]] bool HasAnimatorEditorAsset() const noexcept;
+    [[nodiscard]] bool AnimatorEditorDebuggingPreview() const noexcept;
+    [[nodiscard]] kb::scene::SceneEntity AnimatorEditorDebugTarget() const noexcept;
+    [[nodiscard]] std::string AnimatorEditorDebugTargetLabel() const;
+    [[nodiscard]] bool SetAnimatorEditorDebugTarget(kb::scene::SceneEntity entity);
+    void SetAnimatorEditorDebugTargetPreview() noexcept;
     [[nodiscard]] const kb::scene::Scene* AnimatorEditorPreviewScene() const noexcept;
     [[nodiscard]] std::uint64_t AnimatorEditorPreviewRevision() const noexcept;
     [[nodiscard]] const kb::scene::AnimatorController* AnimatorEditorController() const noexcept;
@@ -1033,6 +1038,7 @@ private:
     AnimationPreviewContext animationPreview_;
     std::unique_ptr<EditorAnimationPreviewScene> animationPreviewScene_;
     kb::assets::AssetId animatorEditorAssetId_{};
+    kb::scene::SceneEntity animatorEditorDebugTarget_{};
     std::optional<kb::scene::AnimatorController> animatorEditorController_;
     AnimatorEditorGraphDocumentState animatorEditorGraphDocument_;
     kb::assets::AssetId animationClipEditorAssetId_{};
