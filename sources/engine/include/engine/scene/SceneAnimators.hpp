@@ -77,9 +77,14 @@ public:
     [[nodiscard]] std::uint64_t Controller(SceneEntity entity) const noexcept;
     [[nodiscard]] std::span<const AnimatorParameterValue> Parameters(SceneEntity entity) const noexcept;
     [[nodiscard]] bool Play(SceneEntity entity, std::string_view layer, std::string_view state, float normalizedTime = 0.0F) noexcept;
+    // Re-samples every active controller layer at one normalized instant. This
+    // bypasses delta-time accumulation and cancels transitions, making editor
+    // and cinematic scrubbing independent of the path taken to reach a pose.
+    [[nodiscard]] bool SeekNormalized(SceneEntity entity, float normalizedTime) noexcept;
     [[nodiscard]] bool CrossFade(SceneEntity entity, std::string_view layer, std::string_view state, float durationSeconds, float normalizedTime = 0.0F) noexcept;
     [[nodiscard]] bool SetSpeed(SceneEntity entity, float speed) noexcept;
     [[nodiscard]] float Speed(SceneEntity entity) const noexcept;
+    [[nodiscard]] float CurrentStateDuration(SceneEntity entity) const noexcept;
     [[nodiscard]] std::uint64_t RuntimeBindingGeneration(SceneEntity entity) const noexcept;
     [[nodiscard]] std::optional<AnimatorInstanceSkeletonView> InstanceSkeleton(
         SceneEntity entity) const noexcept;

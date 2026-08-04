@@ -468,6 +468,15 @@ end
                 nativeEvents[0].eventId == kFootstepEvent && nativeEvents[0].layer == "Root Layer" &&
                 nativeEvents[0].state == "Run State" && NearlyEqual(nativeEvents[0].normalizedTime, 0.25F),
             "Animation event did not cross the native typed queue at the authored playhead time");
+        Require(scene.Animators().SeekNormalized(owner.Entity(), 0.5F) &&
+                !scene.Animators().SeekNormalized(owner.Entity(), -0.01F),
+            "Animator normalized seek did not validate and apply the requested playhead");
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const auto seekedState = scene.Animators().State(owner.Entity(), "Root Layer");
+        Require(seekedState.has_value() && !seekedState->transitioning &&
+                NearlyEqual(seekedState->normalizedTime, 0.5F) &&
+                NearlyEqual(scene.Transforms().Get(owner.Entity()).localPosition.x, 15.0F),
+            "Animator normalized seek did not deterministically resample the production pose");
         static_cast<void>(scene.Runtime().Update(0.5F));
         const auto loopEvents = scene.Animators().DrainEvents();
         Require(loopEvents.size() == 1U && loopEvents[0].eventId == kFootstepEvent,

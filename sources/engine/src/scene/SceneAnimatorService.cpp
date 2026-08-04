@@ -2091,6 +2091,25 @@ bool SceneAnimatorService::Play(Scene& scene, SceneEntity entity, std::string_vi
     return true;
 }
 
+bool SceneAnimatorService::SeekNormalized(
+    Scene& scene, SceneEntity entity, float normalizedTime) noexcept {
+    if (!std::isfinite(normalizedTime) || normalizedTime < 0.0F || normalizedTime > 1.0F) return false;
+    AnimatorRuntimeRecord* record = Find(SceneAccess::State(scene), entity);
+    if (record == nullptr || record->layers.size() != record->controller->layers.size()) return false;
+    for (std::size_t layerIndex = 0U; layerIndex < record->layers.size(); ++layerIndex) {
+        AnimatorRuntimeLayer& layer = record->layers[layerIndex];
+        if (layer.currentState >= layer.states.size()) return false;
+        const AnimationClip& clip = ReferenceClip(layer.states[layer.currentState]);
+        layer.currentTimeSeconds = StateTime(normalizedTime, clip);
+        layer.previousState = layer.currentState;
+        layer.previousTimeSeconds = layer.currentTimeSeconds;
+        layer.transitioning = false;
+        layer.transitionElapsedSeconds = 0.0;
+        layer.transitionDurationSeconds = 0.0;
+    }
+    return true;
+}
+
 bool SceneAnimatorService::CrossFade(
     Scene& scene, SceneEntity entity, std::string_view layerName, std::string_view stateName,
     float durationSeconds, float normalizedTime) noexcept {
@@ -2116,6 +2135,14 @@ bool SceneAnimatorService::SetSpeed(Scene& scene, SceneEntity entity, float spee
 float SceneAnimatorService::Speed(const Scene& scene, SceneEntity entity) noexcept {
     const AnimatorRuntimeRecord* record = Find(SceneAccess::State(scene), entity);
     return record == nullptr ? 0.0F : record->speed;
+}
+
+float SceneAnimatorService::CurrentStateDuration(const Scene& scene, SceneEntity entity) noexcept {
+    const AnimatorRuntimeRecord* record = Find(SceneAccess::State(scene), entity);
+    if (record == nullptr || record->layers.empty()) return 0.0F;
+    const AnimatorRuntimeLayer& layer = record->layers.front();
+    if (layer.currentState >= layer.states.size()) return 0.0F;
+    return ReferenceClip(layer.states[layer.currentState]).durationSeconds;
 }
 
 bool SceneAnimatorService::SetBool(Scene& scene, SceneEntity entity, std::string_view name, bool value) noexcept {
