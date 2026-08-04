@@ -168,6 +168,10 @@ void PaintDetails(HDC dc, const RECT& rect, const kb::scene::AnimatorController*
                 (constraint.hasTarget ? "target bound" : "target missing"));
             if (y >= rect.bottom) return;
         }
+        for (const std::string& diagnostic : debug->compatibilityDiagnostics) {
+            row("Compatibility: " + diagnostic);
+            if (y >= rect.bottom) return;
+        }
         y += 4;
     }
     row("Parameters: " + std::to_string(controller->parameters.size()));
