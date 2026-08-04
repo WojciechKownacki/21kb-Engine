@@ -158,6 +158,7 @@ scenario-local aliases.
 | `inspector_text` | `text` |
 | `inspector_key` | `key` (`enter`, `escape`, `backspace`, `delete`, `left`, `right`, `home`, `end`) |
 | `capture` | `panel`, `checkpoint`; panels: `hierarchy`, `scene`, `inspector`, `assets`, `console`, `project_settings`, `script_editor`, `plugins`, `material_editor`, `skeletal_mesh_editor`, `animation_clip_editor`, `animator_editor`. `script_editor` captures the real child editor renderer and loaded document, not only panel chrome. |
+| `capture_screenshot_matrix` | `panel`, `checkpoint`; captures `material_editor`, `skeletal_mesh_editor`, or `animation_clip_editor` through production docked and floating renderers. Every invocation writes six checked BMPs: 1920x1080, 1366x768, and a 1280x720 logical client at 150% DPI (a 1920x1080 bitmap), each in both layouts. |
 | `capture_runtime` | `checkpoint`; optional `require_non_uniform`; requires Play Mode and writes a PNG from the production GPU readback path |
 | `set_animator_debug_target` | `target`: `preview` or a live entity alias using the open Animator Controller |
 | `assert_animator_debug_snapshot` | `target`: `preview` or entity alias; optional `minimum_layers`, `minimum_bones` |
