@@ -678,6 +678,7 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorPanelState.cpp
     src/rendering/MainWindowBackBufferPainter.cpp
     src/rendering/PanelContentRenderer.cpp
+    src/rendering/SkeletalMeshEditorPanelRenderer.cpp
     src/rendering/ProjectFilesAssetListRenderer.cpp
     src/rendering/ProjectFilesAssetIconResolver.cpp
     src/rendering/ProjectFilesAssetTileFrameRenderer.cpp

@@ -764,7 +764,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
 
 ### Sprint SK-08 — Skeletal Mesh Editor
 
-54. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać typed asset dispatch i dedykowany workspace
+54. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać typed asset dispatch i dedykowany workspace
     `Skeletal Mesh Editor`; ponowne otwarcie fokusuje istniejący dokument.
 55. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Odtworzyć domyślny flow UE5 `20/60/20`: toolbox, centralny viewport oraz
     prawa kolumna Skeleton Tree/asset details.

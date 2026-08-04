@@ -8,6 +8,7 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/TimelineAssetIO.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -69,6 +70,11 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::Handle
         if (metadata->type == "LuaScript") {
             return sceneContext.OpenLuaScript(metadata->id)
                 ? EditorAssetBrowserDoubleClickResult::ScriptEditorOpened
+                : EditorAssetBrowserDoubleClickResult::None;
+        }
+        if (metadata->type == kb::scene::kSkeletalMeshAssetType) {
+            return sceneContext.OpenSkeletalMeshEditorAsset(metadata->id)
+                ? EditorAssetBrowserDoubleClickResult::SkeletalMeshEditorOpened
                 : EditorAssetBrowserDoubleClickResult::None;
         }
         if (metadata->type == kb::scene::kAnimationClipAssetType ||
