@@ -249,6 +249,14 @@ void EditorSceneBgfxViewport::SyncHostSurfaceLayouts(HWND parent, std::span<cons
         return;
     }
 
+    const auto hostKey = reinterpret_cast<EditorHostSurfaceLifecycle::HostKey>(parent);
+    hostLifecycle_.TrackHost(hostKey);
+    if (hostLifecycle_.IsSuspended(hostKey)) {
+        hostSurfaceStore_.HideForHost(parent);
+        sessionStore_.MarkHostNotPresented(parent);
+        return;
+    }
+
     TrackPaintHost(parent);
     for (const HostSurfaceLayout& layout : layouts) {
         const RECT layoutBounds = ClipRectToClient(parent, layout.bounds);
@@ -288,6 +296,14 @@ void EditorSceneBgfxViewport::SyncHostSurfaceLayoutsForResize(HWND parent, std::
         return;
     }
 
+    const auto hostKey = reinterpret_cast<EditorHostSurfaceLifecycle::HostKey>(parent);
+    hostLifecycle_.TrackHost(hostKey);
+    if (hostLifecycle_.IsSuspended(hostKey)) {
+        hostSurfaceStore_.HideForHost(parent);
+        sessionStore_.MarkHostNotPresented(parent);
+        return;
+    }
+
     hostSurfaceStore_.MarkHostNotPresented(parent);
     for (const HostSurfaceLayout& layout : layouts) {
         const RECT layoutBounds = ClipRectToClient(parent, layout.bounds);
@@ -314,20 +330,24 @@ void EditorSceneBgfxViewport::SyncHostSurfaceLayoutsForResize(HWND parent, std::
 void EditorSceneBgfxViewport::SetHostSurfaceSuspended(HWND host, bool suspended) noexcept {
     if (host == nullptr) return;
     if (suspended) {
+        static_cast<void>(hostLifecycle_.Suspend(reinterpret_cast<EditorHostSurfaceLifecycle::HostKey>(host)));
         hostSurfaceStore_.HideForHost(host);
         sessionStore_.MarkHostNotPresented(host);
         return;
     }
+    if (!hostLifecycle_.Resume(reinterpret_cast<EditorHostSurfaceLifecycle::HostKey>(host))) return;
     RequestPresent();
     InvalidateRect(host, nullptr, FALSE);
 }
 
 void EditorSceneBgfxViewport::SetAllHostSurfacesSuspended(bool suspended) noexcept {
     if (suspended) {
+        static_cast<void>(hostLifecycle_.SuspendAll());
         hostSurfaceStore_.HideAll();
         sessionStore_.MarkAllNotPresented();
         return;
     }
+    if (!hostLifecycle_.ResumeAll()) return;
     RequestPresent();
 }
 
@@ -345,6 +365,7 @@ void EditorSceneBgfxViewport::Shutdown() {
 
     sessionStore_.Clear();
     hostSurfaceStore_.Clear();
+    hostLifecycle_.Clear();
 
     if (windowClassRegistered_ && instance_ != nullptr) {
         UnregisterClassW(kSceneViewportClassName, instance_);
@@ -418,6 +439,14 @@ void EditorSceneBgfxViewport::Present(HDC dc, HWND parent, const RECT& rect, con
 
     if (parent == nullptr || RectWidth(rect) == 0 || RectHeight(rect) == 0) {
         HideSession(parent, settings.viewportKey);
+        return;
+    }
+
+    const auto hostKey = reinterpret_cast<EditorHostSurfaceLifecycle::HostKey>(parent);
+    hostLifecycle_.TrackHost(hostKey);
+    if (hostLifecycle_.IsSuspended(hostKey)) {
+        hostSurfaceStore_.HideForHost(parent);
+        sessionStore_.MarkHostNotPresented(parent);
         return;
     }
 

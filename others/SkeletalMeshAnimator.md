@@ -760,7 +760,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
 51. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać overlay kości, nazw, socketów, root motion, bounds, LOD i normals.
 52. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zapewnić bezpieczny lifecycle native child surface podczas resize,
     docking, floating, DPI, minimalizacji i Alt-Tab.
-53. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać testy preview state, dokładnej pozy po scrubie i lifecycle hosta.
+53. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać testy preview state, dokładnej pozy po scrubie i lifecycle hosta.
 
 ### Sprint SK-08 — Skeletal Mesh Editor
 
