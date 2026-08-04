@@ -334,6 +334,34 @@ template <typename Paint>
     return saved;
 }
 
+[[nodiscard]] bool RectEquals(const RECT& left, const RECT& right) noexcept {
+    return left.left == right.left && left.top == right.top &&
+        left.right == right.right && left.bottom == right.bottom;
+}
+
+[[nodiscard]] RECT WindowRectInHostClient(HWND window, HWND host) noexcept {
+    RECT rect{};
+    if (window == nullptr || host == nullptr || GetWindowRect(window, &rect) == 0) {
+        return {};
+    }
+    POINT points[2]{ { rect.left, rect.top }, { rect.right, rect.bottom } };
+    static_cast<void>(MapWindowPoints(nullptr, host, points, 2U));
+    return { points[0].x, points[0].y, points[1].x, points[1].y };
+}
+
+[[nodiscard]] HWND FindViewportClipWindow(HWND host, const RECT& bounds) noexcept {
+    constexpr wchar_t kViewportWindowClass[] = L"KBEditorSceneBgfxViewport";
+    for (HWND child = FindWindowExW(host, nullptr, kViewportWindowClass, nullptr);
+         child != nullptr;
+         child = FindWindowExW(host, child, kViewportWindowClass, nullptr)) {
+        if (IsWindowVisible(child) != 0 &&
+            RectEquals(WindowRectInHostClient(child, host), bounds)) {
+            return child;
+        }
+    }
+    return nullptr;
+}
+
 } // namespace
 
 struct EditorHeadlessAutomation::Impl {
@@ -990,6 +1018,73 @@ bool EditorHeadlessAutomation::CapturePanelScreenshotMatrix(
                     path.filename().string());
         }
     }
+    return succeeded;
+}
+
+bool EditorHeadlessAutomation::VerifyViewportHostLifecycle() {
+    if (impl_->window == nullptr ||
+        SetWindowPos(
+            impl_->window, HWND_BOTTOM, -10000, -10000, 640, 360,
+            SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW) == 0 ||
+        !impl_->Render(context_)) {
+        Trace("verify_viewport_host_lifecycle", false, "initial-present-failed");
+        return false;
+    }
+
+    constexpr std::uint64_t viewportKey = 1U;
+    constexpr RECT initialBounds{ 0, 0, 640, 360 };
+    const auto visible = [this] {
+        return impl_->viewport.IsHostSurfaceVisible(impl_->window, viewportKey);
+    };
+    const bool initiallyVisible = visible() &&
+        FindViewportClipWindow(impl_->window, initialBounds) != nullptr;
+
+    // WM_SIZE/SIZE_MINIMIZED: hide the child before the parent is hidden.
+    impl_->viewport.SetHostSurfaceSuspended(impl_->window, true);
+    const bool minimizedHidden = !visible();
+    impl_->viewport.SetHostSurfaceSuspended(impl_->window, false);
+    const bool resumedAfterMinimize = impl_->viewport.PresentRequested() &&
+        impl_->Render(context_) && visible();
+
+    // WM_ACTIVATEAPP applies to every host surface, including floating hosts.
+    impl_->viewport.SetAllHostSurfacesSuspended(true);
+    const bool deactivatedHidden = !visible();
+    impl_->viewport.SetAllHostSurfacesSuspended(false);
+    const bool resumedAfterDeactivate = impl_->viewport.PresentRequested() &&
+        impl_->Render(context_) && visible();
+
+    // WM_DPICHANGED hides the old physical-pixel child until the next paint.
+    impl_->viewport.NotifyHostDpiChanged(impl_->window);
+    const bool dpiTransitionHidden = !visible();
+    const bool resumedAfterDpi = impl_->viewport.PresentRequested() &&
+        impl_->Render(context_) && visible();
+
+    constexpr RECT movedBounds{ 113, 57, 529, 291 };
+    const EditorSceneBgfxViewport::HostSurfaceLayout movedLayout{
+        .viewportKey = viewportKey,
+        .bounds = movedBounds,
+    };
+    impl_->viewport.SyncHostSurfaceLayoutsForResize(
+        impl_->window,
+        std::span<const EditorSceneBgfxViewport::HostSurfaceLayout>{
+            &movedLayout, 1U });
+    const bool resizeMoveHasNoLeakedViewport = visible() &&
+        FindViewportClipWindow(impl_->window, movedBounds) != nullptr;
+
+    // A layout without the viewport must hide the previous child surface.
+    impl_->viewport.SyncHostSurfaceLayoutsForResize(
+        impl_->window,
+        std::span<const EditorSceneBgfxViewport::HostSurfaceLayout>{});
+    const bool removedViewportHidden = !visible();
+
+    const bool succeeded = initiallyVisible && minimizedHidden &&
+        resumedAfterMinimize && deactivatedHidden && resumedAfterDeactivate &&
+        dpiTransitionHidden && resumedAfterDpi && resizeMoveHasNoLeakedViewport &&
+        removedViewportHidden;
+    ShowWindow(impl_->window, SW_HIDE);
+    Trace(
+        "verify_viewport_host_lifecycle", succeeded,
+        succeeded ? "minimize,deactivate,dpi,resize-move" : "lifecycle-invariant-failed");
     return succeeded;
 }
 
