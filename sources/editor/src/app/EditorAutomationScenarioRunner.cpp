@@ -3064,6 +3064,38 @@ ReadScriptValue(
         return { attached, attached ? *asset : "attach failed" };
     }
 
+    if (*operation == "set_animator_debug_target") {
+        const auto target = StringMember(step, "target", error);
+        if (!target) return { false, error };
+        if (*target == "preview") {
+            state.context.SetAnimatorEditorDebugTargetPreview();
+            return { state.context.AnimatorEditorDebuggingPreview(), "Preview Instance" };
+        }
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *target);
+        const bool selected = entity.IsValid() &&
+            state.context.SetAnimatorEditorDebugTarget(entity);
+        return { selected, selected ? *target : "debug target rejected" };
+    }
+
+    if (*operation == "assert_animator_debug_snapshot") {
+        const auto target = StringMember(step, "target", error);
+        if (!target) return { false, error };
+        const kb::scene::SceneEntity expected = *target == "preview"
+            ? state.context.AnimatorEditorResolvedDebugTarget()
+            : ResolveEntity(state, *target);
+        const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> snapshot =
+            state.context.AnimatorEditorDebugSnapshot();
+        const kb::scene::AnimatorDebugInstanceSnapshot* instance =
+            snapshot == nullptr ? nullptr : snapshot->Find(expected);
+        const auto minimumLayers = NumberMember(step, "minimum_layers", error, false);
+        const auto minimumBones = NumberMember(step, "minimum_bones", error, false);
+        if (!error.empty()) return { false, error };
+        const bool valid = instance != nullptr &&
+            (!minimumLayers.has_value() || instance->layers.size() >= static_cast<std::size_t>(*minimumLayers)) &&
+            (!minimumBones.has_value() || instance->bones.size() >= static_cast<std::size_t>(*minimumBones));
+        return { valid, valid ? "immutable animator debug snapshot" : "animator debug snapshot mismatch" };
+    }
+
     if (*operation == "open_asset") {
         const auto asset = StringMember(step, "asset", error);
         if (!asset) return { false, error };

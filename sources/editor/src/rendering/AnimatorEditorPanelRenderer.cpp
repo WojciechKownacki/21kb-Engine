@@ -48,7 +48,8 @@ void DrawText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize
     DrawTextA(dc, text, -1, &rect, flags | DT_NOPREFIX);
 }
 
-void PaintGraph(HDC dc, const RECT& rect, const kb::scene::AnimatorController* controller) {
+void PaintGraph(HDC dc, const RECT& rect, const kb::scene::AnimatorController* controller,
+    const kb::scene::AnimatorDebugInstanceSnapshot* debug) {
     GdiDrawing::FillRectColor(dc, rect, RGB(29, 32, 37));
     GdiDrawing::DrawSharpFrame(dc, rect, RGB(29, 32, 37), RGB(56, 61, 69));
     DrawText(dc, RECT{ rect.left + 10, rect.top + 4, rect.right - 10, rect.top + 28 }, "State Machine", RGB(204, 212, 221), 12, FW_SEMIBOLD);
@@ -77,8 +78,14 @@ void PaintGraph(HDC dc, const RECT& rect, const kb::scene::AnimatorController* c
             if (left >= rect.right - 8) break;
             const RECT node{ left, rowTop + 22, std::min(static_cast<int>(rect.right) - 8, left + nodeWidth), rowTop + 22 + nodeHeight };
             const bool defaultState = state.name == layer.defaultState;
-            GdiDrawing::DrawSharpFrame(dc, node, defaultState ? RGB(42, 72, 91) : RGB(42, 46, 53),
-                defaultState ? RGB(90, 156, 210) : RGB(78, 84, 93));
+            const bool activeState = debug != nullptr && std::any_of(
+                debug->layers.begin(), debug->layers.end(),
+                [&state](const kb::scene::AnimatorDebugLayerSnapshot& value) {
+                    return value.activeStateId == state.id;
+                });
+            GdiDrawing::DrawSharpFrame(dc, node,
+                activeState ? RGB(47, 84, 58) : (defaultState ? RGB(42, 72, 91) : RGB(42, 46, 53)),
+                activeState ? RGB(111, 205, 126) : (defaultState ? RGB(90, 156, 210) : RGB(78, 84, 93)));
             DrawText(dc, RECT{ node.left + 7, node.top + 3, node.right - 7, node.bottom - 3 },
                 state.name.c_str(), RGB(224, 230, 237), 11, FW_SEMIBOLD);
             if (defaultState) {
@@ -91,13 +98,21 @@ void PaintGraph(HDC dc, const RECT& rect, const kb::scene::AnimatorController* c
             if (transitionY + 14 >= rowTop + layerHeight || transitionY + 14 >= rect.bottom) break;
             const std::string text = transition.fromState + " -> " + transition.toState +
                 "  (" + std::to_string(transition.durationSeconds) + "s)";
-            DrawText(dc, RECT{ rect.left + 18, transitionY, rect.right - 10, transitionY + 14 }, text.c_str(), RGB(203, 173, 99), 10);
+            const bool activeTransition = debug != nullptr && std::any_of(
+                debug->layers.begin(), debug->layers.end(),
+                [&transition](const kb::scene::AnimatorDebugLayerSnapshot& value) {
+                    return value.transitioning && value.activeTransitionId == transition.id;
+                });
+            DrawText(dc, RECT{ rect.left + 18, transitionY, rect.right - 10, transitionY + 14 }, text.c_str(),
+                activeTransition ? RGB(245, 211, 101) : RGB(203, 173, 99), 10,
+                activeTransition ? FW_SEMIBOLD : FW_NORMAL);
             transitionY += 14;
         }
     }
 }
 
-void PaintDetails(HDC dc, const RECT& rect, const kb::scene::AnimatorController* controller) {
+void PaintDetails(HDC dc, const RECT& rect, const kb::scene::AnimatorController* controller,
+    const kb::scene::AnimatorDebugInstanceSnapshot* debug) {
     GdiDrawing::FillRectColor(dc, rect, RGB(27, 29, 33));
     GdiDrawing::DrawSharpFrame(dc, rect, RGB(27, 29, 33), RGB(56, 61, 69));
     DrawText(dc, RECT{ rect.left + 10, rect.top + 4, rect.right - 10, rect.top + 28 }, "Details / Assets", RGB(204, 212, 221), 12, FW_SEMIBOLD);
@@ -107,6 +122,54 @@ void PaintDetails(HDC dc, const RECT& rect, const kb::scene::AnimatorController*
         DrawText(dc, RECT{ rect.left + 10, y, rect.right - 10, y + 19 }, label.c_str(), RGB(168, 178, 190), 11);
         y += 20;
     };
+    if (debug != nullptr) {
+        row("Live Debug");
+        for (const kb::scene::AnimatorDebugLayerSnapshot& layer : debug->layers) {
+            row(layer.name + ": " + layer.activeState +
+                (layer.transitioning ? " <- " + layer.previousState + " (" +
+                    std::to_string(layer.transitionProgress) + ")" : "") +
+                " | t " + std::to_string(layer.elapsedSeconds));
+            if (y >= rect.bottom) return;
+        }
+        for (const kb::scene::AnimatorDebugParameterSnapshot& parameter : debug->parameters) {
+            std::string value;
+            switch (parameter.type) {
+            case kb::scene::AnimatorParameterType::Bool:
+            case kb::scene::AnimatorParameterType::Trigger:
+                value = parameter.boolValue ? "true" : "false";
+                break;
+            case kb::scene::AnimatorParameterType::Int:
+                value = std::to_string(parameter.intValue);
+                break;
+            case kb::scene::AnimatorParameterType::Float:
+                value = std::to_string(parameter.floatValue);
+                break;
+            }
+            row(parameter.name + " = " + value);
+            if (y >= rect.bottom) return;
+        }
+        row("Pose bones: " + std::to_string(debug->bones.size()) +
+            " | palette: " + std::to_string(debug->paletteMatrixCount));
+        row("LOD: " + std::string{ debug->lodEnabled ? "enabled" : "disabled" } +
+            " | bias: " + std::to_string(debug->lodBias) +
+            " | bounds: " + (debug->fixedBounds ? "fixed" : "animated"));
+        row("Root motion: " + std::string{ debug->hasRootMotion ? "active" : "none" });
+        row("Root trail samples: " + std::to_string(debug->rootMotionTrail.size()));
+        for (std::size_t index = 0U; index < std::min<std::size_t>(debug->bones.size(), 3U); ++index) {
+            const kb::scene::AnimatorDebugBoneSnapshot& bone = debug->bones[index];
+            row("Bone " + std::to_string(bone.id) + " final: " +
+                std::to_string(bone.componentPose.position.x) + ", " +
+                std::to_string(bone.componentPose.position.y) + ", " +
+                std::to_string(bone.componentPose.position.z));
+            if (y >= rect.bottom) return;
+        }
+        for (const kb::scene::AnimatorDebugConstraintSnapshot& constraint : debug->constraints) {
+            row("Constraint " + constraint.name + ": " +
+                (constraint.hasTarget ? "target bound" : "target missing"));
+            if (y >= rect.bottom) return;
+        }
+        y += 4;
+    }
     row("Parameters: " + std::to_string(controller->parameters.size()));
     for (const kb::scene::AnimatorParameterDefinition& parameter : controller->parameters) {
         row(parameter.name + " : " + ParameterTypeLabel(parameter.type));
@@ -169,6 +232,9 @@ void AnimatorEditorPanelRenderer::Paint(
     const kb::assets::AssetMetadata* previewMesh =
         sceneContext.Scene().Assets().Manager().Registry().Find(sceneContext.AnimationPreview().SkeletalMeshAsset());
     const kb::scene::AnimatorController* controller = sceneContext.AnimatorEditorController();
+    const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> debugSnapshot = sceneContext.AnimatorEditorDebugSnapshot();
+    const kb::scene::AnimatorDebugInstanceSnapshot* debug = debugSnapshot == nullptr ? nullptr :
+        debugSnapshot->Find(sceneContext.AnimatorEditorResolvedDebugTarget());
     const kb::scene::AnimatorControllerState* motion = nullptr;
     if (controller != nullptr && sceneContext.AnimatorEditorGraphDocument().MotionState() != 0U) {
         for (const auto& layer : controller->layers) for (const auto& state : layer.states)
@@ -177,14 +243,14 @@ void AnimatorEditorPanelRenderer::Paint(
     const std::string title = (metadata == nullptr ? std::string{ "Animator Controller" } : metadata->name) +
         (sceneContext.HasDirtyAnimatorEditorAssetEdit() ? " *" : "") +
         (previewMesh == nullptr ? std::string{} : "  |  Preview " + previewMesh->name) +
-        "  |  Debug " + sceneContext.AnimatorEditorDebugTargetLabel();
+        "  |  Debug " + sceneContext.AnimatorEditorDebugTargetLabel() + " (click to switch)";
     DrawText(dc, RECT{ content.left + 10, content.top, content.right - 10, content.top + kHeaderHeight },
         (title + "  >  " + (motion == nullptr ? "State Machine" : motion->name)).c_str(), RGB(219, 225, 233), 13, FW_SEMIBOLD);
 
     const AnimatorEditorPanelLayout layout = ResolveLayout(
         RECT{ content.left, content.top + kHeaderHeight, content.right, content.bottom });
     GdiDrawing::FillRectColor(dc, layout.preview, RGB(20, 23, 28));
-    if (motion == nullptr) PaintGraph(dc, layout.graph, controller);
+    if (motion == nullptr) PaintGraph(dc, layout.graph, controller, debug);
     else {
         GdiDrawing::FillRectColor(dc, layout.graph, RGB(29, 32, 37));
         DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 10, layout.graph.right - 12, layout.graph.top + 34 }, "Motion / Blend Document", RGB(204, 212, 221), 13, FW_SEMIBOLD);
@@ -201,7 +267,7 @@ void AnimatorEditorPanelRenderer::Paint(
             }
         }
     }
-    PaintDetails(dc, layout.details, controller);
+    PaintDetails(dc, layout.details, controller, debug);
     if (sceneViewport == nullptr) return;
     const std::uint64_t revision = sceneContext.AnimatorEditorPreviewRevision();
     EditorSceneBgfxViewport::PresentSettings settings{};

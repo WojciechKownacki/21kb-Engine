@@ -29,6 +29,7 @@
 #include "inspection/TerrainMaterialLayerMenuState.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/AnimationClipEditorPanelRenderer.hpp"
+#include "rendering/AnimatorEditorPanelRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
@@ -864,6 +865,22 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             return;
         }
+    }
+
+    if (const std::optional<RECT> animatorEditorContent = EditorPanelContentResolver::Resolve(
+            DockPanelKind::AnimatorEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        animatorEditorContent.has_value() &&
+        x >= animatorEditorContent->left && x < animatorEditorContent->right &&
+        y >= animatorEditorContent->top && y < animatorEditorContent->top + 30) {
+        const kb::scene::SceneEntity selected = sceneContext_.SelectedEntity();
+        if (sceneContext_.AnimatorEditorDebuggingPreview() &&
+            sceneContext_.SetAnimatorEditorDebugTarget(selected)) {
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+        sceneContext_.SetAnimatorEditorDebugTargetPreview();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
     }
 
     if (const std::optional<RECT> skeletalMeshEditorContent = EditorPanelContentResolver::Resolve(

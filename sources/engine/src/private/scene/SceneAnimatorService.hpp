@@ -37,8 +37,13 @@ public:
     [[nodiscard]] static bool ClearIkTarget(
         Scene& scene, SceneEntity entity, std::string_view name) noexcept;
     [[nodiscard]] static std::optional<AnimatorStateInfo> State(const Scene& scene, SceneEntity entity, std::string_view layer);
+    [[nodiscard]] static std::shared_ptr<const AnimatorDebugSnapshot> DebugSnapshot(
+        const Scene& scene) noexcept;
     [[nodiscard]] static std::vector<AnimationEventRecord> DrainEvents(Scene& scene);
     static void Advance(Scene& scene, float deltaSeconds);
+    // Runs after pose evaluation. It only copies completed runtime state into
+    // a retained immutable value; readers never lock animator-owned storage.
+    static void PublishDebugSnapshot(Scene& scene);
     static void SyncComponents(Scene& scene);
 };
 
