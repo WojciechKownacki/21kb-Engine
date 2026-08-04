@@ -790,7 +790,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
 65. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zsynchronizować timeline selection ↔ Skeleton Tree ↔ viewport ↔ Details.
 66. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować operacje kluczy i eventów z grupowanym undo/redo,
     walidacją czasu oraz deterministycznym sortowaniem.
-67. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać wybór wyłącznie kompatybilnego preview mesh/skeleton i czytelną
+67. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać wybór wyłącznie kompatybilnego preview mesh/skeleton i czytelną
     diagnostykę niezgodności.
 68. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Save ma automatycznie walidować, budować runtime clip i hot reloadować
     go dopiero po atomowym sukcesie.
