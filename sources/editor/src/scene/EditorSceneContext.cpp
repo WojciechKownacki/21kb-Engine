@@ -9034,6 +9034,7 @@ bool EditorSceneContext::OpenAnimationClipEditorAsset(kb::assets::AssetId id) {
     static_cast<void>(animationPreview_.Transport().SetLooping(clip->looping));
     animationClipEditorAssetId_ = id;
     animationClipEditorTimeline_.SetClip(*clip);
+    animationClipEditorDocument_.Open(id, *clip);
     skeletalMeshEditorTree_.SetSkeleton(*skeleton);
     skeletalMeshEditorDetails_.SetDocument(*previewMesh, *skeleton, *previewMeshMetadata);
     static_cast<void>(AnimationPreviewScene());
@@ -9064,6 +9065,53 @@ AnimationClipTimelineState& EditorSceneContext::AnimationClipEditorTimeline() no
 
 const AnimationClipTimelineState& EditorSceneContext::AnimationClipEditorTimeline() const noexcept {
     return animationClipEditorTimeline_;
+}
+
+bool EditorSceneContext::BeginAnimationClipEditorEditGroup() {
+    if (!HasAnimationClipEditorAsset()) return false;
+    animationClipEditorDocument_.BeginGroup();
+    return true;
+}
+
+void EditorSceneContext::EndAnimationClipEditorEditGroup() noexcept {
+    animationClipEditorDocument_.EndGroup();
+}
+
+bool EditorSceneContext::PublishAnimationClipEditorWorkingCopy() {
+    const kb::scene::AnimationClip* clip = animationClipEditorDocument_.WorkingCopy();
+    if (clip == nullptr || !scene_->Assets().Manager().PublishRuntimeAsset(
+            animationClipEditorAssetId_, std::make_shared<kb::scene::AnimationClip>(*clip))) {
+        return false;
+    }
+    animationClipEditorTimeline_.SetClip(*clip);
+    animationPreviewScene_->Clear();
+    static_cast<void>(AnimationPreviewScene());
+    return true;
+}
+
+bool EditorSceneContext::UndoAnimationClipEditorEdit() {
+    return animationClipEditorDocument_.Undo() && PublishAnimationClipEditorWorkingCopy();
+}
+
+bool EditorSceneContext::RedoAnimationClipEditorEdit() {
+    return animationClipEditorDocument_.Redo() && PublishAnimationClipEditorWorkingCopy();
+}
+
+bool EditorSceneContext::UpsertAnimationClipBoneKey(
+    kb::scene::SkeletonBoneId boneId, float timeSeconds, kb::scene::LocalTransform transform) {
+    return animationClipEditorDocument_.UpsertBoneKey(boneId, timeSeconds, transform) && PublishAnimationClipEditorWorkingCopy();
+}
+
+bool EditorSceneContext::RemoveAnimationClipBoneKey(kb::scene::SkeletonBoneId boneId, float timeSeconds) {
+    return animationClipEditorDocument_.RemoveBoneKey(boneId, timeSeconds) && PublishAnimationClipEditorWorkingCopy();
+}
+
+bool EditorSceneContext::UpsertAnimationClipEvent(kb::scene::AnimationEventId id, float timeSeconds) {
+    return animationClipEditorDocument_.UpsertEvent(id, timeSeconds) && PublishAnimationClipEditorWorkingCopy();
+}
+
+bool EditorSceneContext::RemoveAnimationClipEvent(kb::scene::AnimationEventId id) {
+    return animationClipEditorDocument_.RemoveEvent(id) && PublishAnimationClipEditorWorkingCopy();
 }
 
 bool EditorSceneContext::OpenSkeletalMeshEditorAsset(kb::assets::AssetId id) {

@@ -555,6 +555,7 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorSceneCommandController.hpp
     src/private/scene/EditorSceneContext.hpp
     src/private/scene/AnimationClipTimelineState.hpp
+    src/private/scene/AnimationClipEditorDocumentState.hpp
     src/private/scene/EditorSceneDocumentAssetLoaders.hpp
     src/private/scene/EditorSceneHierarchyActions.hpp
     src/private/scene/EditorSceneMaterialAssetActions.hpp

@@ -9,6 +9,7 @@
 #include "scene/SkeletalMeshEditorDetailsState.hpp"
 #include "scene/SkeletalMeshEditorDocumentState.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
+#include "scene/AnimationClipEditorDocumentState.hpp"
 #include "windowing/FloatingWindowControlHitTester.hpp"
 #include "windowing/FloatingWindowControlLayout.hpp"
 
@@ -563,6 +564,28 @@ void RunAnimationClipTimelineStateTest() {
         "Animation Clip timeline should retain zoom, pan and frame snapping state");
 }
 
+void RunAnimationClipEditorDocumentStateTest() {
+    kb::scene::AnimationClip clip{};
+    clip.durationSeconds = 2.0F;
+    clip.looping = true;
+    clip.targetSkeletonAssetId = 1U;
+    clip.targetSkeletonCompatibilitySignature = 2U;
+    clip.skeletalTracks = {{ .boneId = 7U, .keyframes = {{ .timeSeconds = 0.0F }} }};
+    kb::editor::AnimationClipEditorDocumentState document;
+    document.Open(kb::assets::AssetId{ 42U }, clip);
+    document.BeginGroup();
+    kb::editor::tests::Require(document.UpsertBoneKey(7U, 1.0F, {}) && document.UpsertEvent(9U, 0.5F),
+        "Animation Clip document should accept valid grouped key and event edits");
+    document.EndGroup();
+    const kb::scene::AnimationClip* edited = document.WorkingCopy();
+    kb::editor::tests::Require(edited != nullptr && document.Dirty() && document.CanUndo() &&
+            edited->skeletalTracks[0].keyframes.size() == 2U && edited->events.size() == 1U,
+        "Animation Clip document should retain grouped working-copy edits");
+    kb::editor::tests::Require(document.Undo() && !document.Dirty() && document.Redo() &&
+            !document.UpsertEvent(0U, 0.5F) && !document.UpsertEvent(10U, 2.0F),
+        "Animation Clip document should undo grouped edits and reject invalid event times");
+}
+
 // A click on any tab — the active one or an inactive sibling — must hit-test as a
 // dock Tab. The pointer router relies on this: a dock hit means the click is a
 // layout action (switch tabs), so it must NOT clear the scene selection and blank
@@ -623,6 +646,7 @@ void RunEditorDockingTests() {
     RunSkeletalMeshEditorDetailsStateTest();
     RunSkeletalMeshEditorDocumentStateTest();
     RunAnimationClipTimelineStateTest();
+    RunAnimationClipEditorDocumentStateTest();
     RunTabClickIsDockInteractionTest();
 }
 
