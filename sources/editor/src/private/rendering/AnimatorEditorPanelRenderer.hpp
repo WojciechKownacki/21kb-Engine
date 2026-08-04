@@ -2,6 +2,7 @@
 
 #include "kb/editor/docking/DockTypes.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
+#include "rendering/AnimatorEditorPanelLayout.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -17,6 +18,9 @@ namespace kb::editor {
 class AnimatorEditorPanelRenderer {
 public:
 #if defined(_WIN32)
+    [[nodiscard]] static AnimatorEditorPanelLayout ResolveLayout(const RECT& content) noexcept {
+        return AnimatorEditorPanelLayoutResolver::Resolve(content);
+    }
     void Paint(
         HDC dc,
         HWND host,

@@ -5,6 +5,7 @@
 #include "rendering/DockTabControlGeometry.hpp"
 #include "rendering/EditorToolbarLayout.hpp"
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
+#include "rendering/AnimatorEditorPanelRenderer.hpp"
 #include "scene/SkeletalMeshEditorTreeState.hpp"
 #include "scene/SkeletalMeshEditorDetailsState.hpp"
 #include "scene/SkeletalMeshEditorDocumentState.hpp"
@@ -447,6 +448,21 @@ void RunAnimatorEditorWorkspaceActivationTest() {
         "Animator Editor should receive focus after typed dispatch");
 }
 
+void RunAnimatorEditorDefaultLayoutTest() {
+    const RECT content{ 20, 30, 1300, 730 };
+    const kb::editor::AnimatorEditorPanelLayout layout =
+        kb::editor::AnimatorEditorPanelRenderer::ResolveLayout(content);
+    kb::editor::tests::Require(
+        layout.preview.right - layout.preview.left == 320 &&
+            layout.graph.right - layout.graph.left == 704 &&
+            layout.details.right - layout.details.left == 256,
+        "Animator Editor should keep the default 25/55/20 workspace split");
+    kb::editor::tests::Require(
+        layout.preview.left == content.left && layout.graph.left == layout.preview.right &&
+            layout.details.left == layout.graph.right && layout.details.right == content.right,
+        "Animator Editor workspace panes should be contiguous");
+}
+
 void RunSkeletalMeshEditorDefaultLayoutTest() {
     const RECT content{ 20, 30, 1220, 730 };
     const kb::editor::SkeletalMeshEditorPanelLayout layout =
@@ -665,6 +681,7 @@ void RunEditorDockingTests() {
     RunSkeletalMeshEditorWorkspaceActivationTest();
     RunAnimationClipEditorWorkspaceActivationTest();
     RunAnimatorEditorWorkspaceActivationTest();
+    RunAnimatorEditorDefaultLayoutTest();
     RunSkeletalMeshEditorDefaultLayoutTest();
     RunSkeletalMeshEditorTreeStateTest();
     RunSkeletalMeshEditorDetailsStateTest();
