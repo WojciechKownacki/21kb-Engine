@@ -9017,14 +9017,25 @@ bool EditorSceneContext::OpenAnimationClipEditorAsset(kb::assets::AssetId id) {
         return false;
     }
 
+    const kb::assets::AssetMetadata* previewMeshMetadata = scene_->Assets().Manager().Registry().Find(previewMeshId);
+    const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> previewMesh =
+        scene_->Assets().Manager().Load<kb::scene::SkeletalMeshAsset>(previewMeshId);
+    if (previewMeshMetadata == nullptr || !previewMesh.IsLoaded()) {
+        console_.Error("Animation Clip Editor", "The selected preview Skeletal Mesh could not be loaded.");
+        return false;
+    }
+
     CloseSkeletalMeshEditorAsset();
     animationPreview_.Clear();
     animationPreview_.SetAssets(skeletonId, previewMeshId, id, {});
     animationPreview_.SetPoseMode(AnimationPreviewPoseMode::Animated);
+    static_cast<void>(animationPreview_.Overlays().SetBonesVisible(true));
     static_cast<void>(animationPreview_.Transport().SetDurationSeconds(clip->durationSeconds));
     static_cast<void>(animationPreview_.Transport().SetLooping(clip->looping));
     animationClipEditorAssetId_ = id;
     animationClipEditorTimeline_.SetClip(*clip);
+    skeletalMeshEditorTree_.SetSkeleton(*skeleton);
+    skeletalMeshEditorDetails_.SetDocument(*previewMesh, *skeleton, *previewMeshMetadata);
     static_cast<void>(AnimationPreviewScene());
     console_.Info("Animation Clip Editor", "Opened document: " + clipMetadata->virtualPath.generic_string());
     return true;
@@ -9157,7 +9168,11 @@ std::vector<SkeletalMeshEditorTreeRow> EditorSceneContext::SkeletalMeshEditorTre
 }
 
 bool EditorSceneContext::SelectSkeletalMeshEditorBone(kb::scene::SkeletonBoneId boneId) {
-    return skeletalMeshEditorTree_.SelectBone(boneId);
+    const bool changed = skeletalMeshEditorTree_.SelectBone(boneId);
+    if (animationClipEditorAssetId_.IsValid()) {
+        static_cast<void>(animationClipEditorTimeline_.SelectBoneTrack(boneId));
+    }
+    return changed;
 }
 
 bool EditorSceneContext::SelectSkeletalMeshEditorSocket(std::string socketName) {
