@@ -127,7 +127,9 @@ void PaintDetails(HDC dc, const RECT& rect, const EditorSceneContext& sceneConte
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(207, 214, 222));
     RECT title{ rect.left + 10, rect.top + 8, rect.right - 8, rect.top + 26 };
-    DrawTextA(dc, model.title.empty() ? "Asset Details" : model.title.c_str(), -1, &title,
+    const std::string titleText = (sceneContext.HasDirtySkeletalMeshEditorAssetEdit() ? "* " : "") +
+        (model.title.empty() ? std::string{ "Asset Details" } : model.title);
+    DrawTextA(dc, titleText.c_str(), -1, &title,
         DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     const ScopedFont bodyFont{ 11, FW_NORMAL };
     const ScopedGdiObject selectedBodyFont(dc, bodyFont.handle);
