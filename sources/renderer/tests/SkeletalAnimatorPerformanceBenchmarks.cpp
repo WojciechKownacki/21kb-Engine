@@ -87,6 +87,8 @@ struct BenchmarkResult {
     std::size_t parallelPoseWorkers = 1U;
     std::size_t updateRateSkippedPoses = 0U;
     double firstPoseFingerprint = 0.0;
+    std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> retainedDebugSnapshot;
+    bool stressLifecycleCompleted = false;
 };
 
 void Require(bool value, const char* message) {
@@ -330,7 +332,8 @@ void WriteTriangleObj(const std::filesystem::path& path) {
 
 [[nodiscard]] BenchmarkResult RunBenchmark(
     Workload workload, kb::render::Renderer& renderer,
-    bool includeConstraint = true, float poseUpdateRateHz = 0.0F) {
+    bool includeConstraint = true, float poseUpdateRateHz = 0.0F,
+    bool stressLifecycle = false) {
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
         ("21kb-sk12-87-" + std::to_string(workload.rigCount) + "x" +
          std::to_string(workload.boneCount));
@@ -541,6 +544,47 @@ void WriteTriangleObj(const std::filesystem::path& path) {
             result.submittedDrawCalls != 0U && !drawStats.HasMissingResources(),
         "SK-12.87 production renderer did not submit every rig draw proxy");
 
+    if (stressLifecycle) {
+        const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> beforeReload =
+            scene.Animators().DebugSnapshot();
+        kb::scene::AnimatorController reimportedController =
+            MakeController(skeleton, includeConstraint);
+        reimportedController.parameters.front().floatDefault = 0.75F;
+        const bool controllerCached = [&scene, controllerMetadata] {
+            return scene.Assets().Manager()
+                .Load<kb::scene::AnimatorController>(controllerMetadata->id)
+                .IsLoaded();
+        }();
+        Require(beforeReload != nullptr && controllerCached &&
+                kb::scene::AnimationAssetIO::SaveController(
+                    root / "Assets" / "Animation" / "Bench.kbanimcontroller",
+                    reimportedController) &&
+                scene.Assets().Manager().Unload(controllerMetadata->id),
+            "SK-12.90 could not reimport and evict the live animator controller");
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> afterReload =
+            scene.Animators().DebugSnapshot();
+        Require(afterReload != nullptr && afterReload->revision > beforeReload->revision &&
+                afterReload->instances.size() == rigs.size() &&
+                afterReload->instances.front().runtimeBindingGeneration !=
+                    beforeReload->instances.front().runtimeBindingGeneration,
+            "SK-12.90 animation reload did not publish a fresh production debug snapshot");
+
+        const kb::scene::SceneEntity destroyedEntity = rigs.front();
+        scene.Entities().QueueDeferredDestroy(destroyedEntity);
+        Require(scene.Entities().DrainDeferredDestroys() == 1U &&
+                !scene.Entities().IsAlive(destroyedEntity),
+            "SK-12.90 deferred entity destruction did not complete while debugging");
+        result.retainedDebugSnapshot = afterReload;
+        Require(scene.Assets().Manager().Unload(meshMetadata->id),
+            "SK-12.90 could not evict the live render mesh asset");
+        Require(!scene.Assets().Manager().IsLoaded(meshMetadata->id),
+            "SK-12.90 render mesh eviction did not remove the cache entry");
+        result.stressLifecycleCompleted = true;
+    } else {
+        result.retainedDebugSnapshot = scene.Animators().DebugSnapshot();
+    }
+
     const LodMeasurement lod = MeasureLodSelection(workload);
     result.lodSelections = lod.selections;
     result.lodEnabledMilliseconds = lod.enabledMilliseconds;
@@ -605,6 +649,25 @@ void VerifySk1289(kb::render::Renderer& renderer) {
         "SK-12.89 pose update-rate optimization did not deterministically skip only the scheduled pose sample");
 }
 
+void VerifySk1290(
+    kb::render::Renderer& renderer, HeadlessSurface& surface,
+    kb::render::DisplayConfig& config) {
+    BenchmarkResult stressed = RunBenchmark(
+        Workload{ .rigCount = 8U, .boneCount = 10U }, renderer, false, 0.0F, true);
+    Require(stressed.stressLifecycleCompleted && stressed.retainedDebugSnapshot != nullptr &&
+            stressed.retainedDebugSnapshot->instances.size() == stressed.workload.rigCount,
+        "SK-12.90 scene teardown precondition did not retain the immutable debug snapshot");
+    renderer.Shutdown();
+    Require(renderer.Initialize(surface, &config),
+        "SK-12.90 could not reset the production headless renderer");
+    Require(stressed.retainedDebugSnapshot->instances.size() == stressed.workload.rigCount,
+        "SK-12.90 scene unload invalidated the immutable debug snapshot");
+    const BenchmarkResult afterRendererReset = RunBenchmark(
+        Workload{ .rigCount = 8U, .boneCount = 10U }, renderer, false);
+    Require(afterRendererReset.submittedMeshes == afterRendererReset.workload.rigCount,
+        "SK-12.90 runtime scene did not submit after renderer reset");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -617,9 +680,9 @@ int main(int argc, char** argv) {
         kb::render::Renderer renderer;
         Require(renderer.Initialize(surface, &config),
             "SK-12.87 could not initialize the production headless renderer");
-        const bool sk1289Only = argc == 2 &&
-            std::string_view{ argv[1] } == "--sk12-89-only";
-        if (!sk1289Only) {
+        const bool sk1289Only = argc == 2 && std::string_view{ argv[1] } == "--sk12-89-only";
+        const bool sk1290Only = argc == 2 && std::string_view{ argv[1] } == "--sk12-90-only";
+        if (!sk1289Only && !sk1290Only) {
             for (const Workload workload : std::array<Workload, 2U>{
                      Workload{ .rigCount = 100U, .boneCount = 100U },
                      Workload{ .rigCount = 1000U, .boneCount = 200U },
@@ -627,7 +690,8 @@ int main(int argc, char** argv) {
                 PrintResult(RunBenchmark(workload, renderer));
             }
         }
-        VerifySk1289(renderer);
+        if (!sk1290Only) VerifySk1289(renderer);
+        if (!sk1289Only) VerifySk1290(renderer, surface, config);
         renderer.Shutdown();
         return 0;
     } catch (const std::exception& error) {
