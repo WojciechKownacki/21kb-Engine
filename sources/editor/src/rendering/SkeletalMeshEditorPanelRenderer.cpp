@@ -31,6 +31,38 @@ void PaintPanel(HDC dc, const RECT& rect, const char* title, const char* subtitl
 
 constexpr int kTreeHeaderHeight = 56;
 constexpr int kTreeRowHeight = 20;
+constexpr int kTreeAuxiliaryHeight = 76;
+
+void DrawAdvancedPreviewRow(HDC dc, int left, int right, int& y, const char* label, bool enabled) {
+    RECT row{ left + 10, y, right - 8, y + 20 };
+    GdiDrawing::FillRectColor(dc, RECT{ row.left, row.top + 3, row.left + 10, row.top + 13 },
+        enabled ? RGB(74, 150, 106) : RGB(68, 72, 79));
+    SetTextColor(dc, RGB(211, 217, 225));
+    RECT text{ row.left + 16, row.top, row.right, row.bottom };
+    DrawTextA(dc, label, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    y += 20;
+}
+
+void PaintAdvancedPreview(HDC dc, const RECT& rect, const EditorSceneContext& sceneContext) {
+    GdiDrawing::FillRectColor(dc, rect, RGB(28, 30, 34));
+    GdiDrawing::DrawSharpFrame(dc, rect, RGB(28, 30, 34), RGB(53, 57, 64));
+    const ScopedFont titleFont{ 13, FW_SEMIBOLD };
+    const ScopedGdiObject selectedTitleFont(dc, titleFont.handle);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(207, 214, 222));
+    RECT title{ rect.left + 10, rect.top + 8, rect.right - 8, rect.top + 28 };
+    DrawTextA(dc, "Advanced Preview", -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    const ScopedFont bodyFont{ 11, FW_NORMAL };
+    const ScopedGdiObject selectedBodyFont(dc, bodyFont.handle);
+    const AnimationPreviewOverlayState& overlays = sceneContext.AnimationPreview().Overlays();
+    int y = rect.top + 32;
+    DrawAdvancedPreviewRow(dc, rect.left, rect.right, y, "Bones", overlays.BonesVisible());
+    DrawAdvancedPreviewRow(dc, rect.left, rect.right, y, "Bone Names", overlays.BoneNamesVisible());
+    DrawAdvancedPreviewRow(dc, rect.left, rect.right, y, "Sockets", overlays.SocketsVisible());
+    DrawAdvancedPreviewRow(dc, rect.left, rect.right, y, "Bounds", overlays.BoundsVisible());
+    DrawAdvancedPreviewRow(dc, rect.left, rect.right, y, "LOD", overlays.LodVisible());
+    DrawAdvancedPreviewRow(dc, rect.left, rect.right, y, "Normals", overlays.NormalsVisible());
+}
 
 void PaintTree(HDC dc, const RECT& rect, const EditorSceneContext& sceneContext) {
     GdiDrawing::FillRectColor(dc, rect, RGB(28, 30, 34));
@@ -55,12 +87,35 @@ void PaintTree(HDC dc, const RECT& rect, const EditorSceneContext& sceneContext)
     for (std::size_t index = 0U; index < rows.size(); ++index) {
         RECT row{ rect.left + 1, rect.top + kTreeHeaderHeight + static_cast<int>(index) * kTreeRowHeight,
             rect.right - 1, rect.top + kTreeHeaderHeight + static_cast<int>(index + 1U) * kTreeRowHeight };
-        if (row.top >= rect.bottom) break;
+        if (row.top >= rect.bottom - kTreeAuxiliaryHeight) break;
         if (rows[index].selected) GdiDrawing::FillRectColor(dc, row, RGB(35, 75, 112));
         RECT label{ row.left + 10 + static_cast<int>(rows[index].depth) * 14, row.top, row.right - 6, row.bottom };
         SetTextColor(dc, rows[index].kind == SkeletalMeshEditorTreeItemKind::Socket ? RGB(120, 196, 176) : RGB(211, 217, 225));
         DrawTextA(dc, rows[index].label.c_str(), -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
+    const RECT morphPanel{ rect.left + 1, rect.bottom - kTreeAuxiliaryHeight, rect.right - 1, rect.bottom - 38 };
+    const RECT curvesPanel{ rect.left + 1, rect.bottom - 38, rect.right - 1, rect.bottom - 1 };
+    GdiDrawing::DrawSharpFrame(dc, morphPanel, RGB(28, 30, 34), RGB(53, 57, 64));
+    GdiDrawing::DrawSharpFrame(dc, curvesPanel, RGB(28, 30, 34), RGB(53, 57, 64));
+    RECT morphTitle{ morphPanel.left + 8, morphPanel.top + 3, morphPanel.right - 8, morphPanel.top + 18 };
+    SetTextColor(dc, RGB(207, 214, 222));
+    DrawTextA(dc, "Morph Targets", -1, &morphTitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    const std::vector<kb::scene::SkeletalMeshMorphTarget>& morphs = sceneContext.SkeletalMeshEditorMorphTargets();
+    const std::string morphSummary = morphs.empty()
+        ? "None"
+        : morphs.front().name + " (LOD " + std::to_string(morphs.front().lodIndex) + ", " +
+            std::to_string(morphs.front().deltas.size()) + " deltas)" +
+            (morphs.size() > 1U ? " +" + std::to_string(morphs.size() - 1U) : "");
+    RECT morphValue{ morphPanel.left + 8, morphPanel.top + 19, morphPanel.right - 8, morphPanel.bottom - 3 };
+    SetTextColor(dc, RGB(120, 196, 176));
+    DrawTextA(dc, morphSummary.c_str(), -1, &morphValue, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    RECT curveTitle{ curvesPanel.left + 8, curvesPanel.top + 3, curvesPanel.right - 8, curvesPanel.top + 18 };
+    SetTextColor(dc, RGB(207, 214, 222));
+    DrawTextA(dc, "Curves", -1, &curveTitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    RECT curveValue{ curvesPanel.left + 8, curvesPanel.top + 18, curvesPanel.right - 8, curvesPanel.bottom - 2 };
+    SetTextColor(dc, RGB(145, 155, 168));
+    const char* curves = sceneContext.AnimationPreview().ClipAsset().IsValid() ? "Clip curve channels are available." : "Reference pose: no active clip.";
+    DrawTextA(dc, curves, -1, &curveValue, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 }
 
 void PaintDetails(HDC dc, const RECT& rect, const EditorSceneContext& sceneContext) {
@@ -133,7 +188,7 @@ void SkeletalMeshEditorPanelRenderer::Paint(
         return;
     }
     const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
-    PaintPanel(dc, layout.toolbox, "Toolbox", "Preview workspace");
+    PaintAdvancedPreview(dc, layout.toolbox, sceneContext);
     PaintTree(dc, layout.skeletonTree, sceneContext);
     PaintDetails(dc, layout.assetDetails, sceneContext);
     if (sceneViewport == nullptr) return;
@@ -158,7 +213,7 @@ std::optional<SkeletalMeshEditorTreeRow> SkeletalMeshEditorPanelRenderer::TreeRo
     const RECT& content, const EditorSceneContext& sceneContext, int x, int y) {
     const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
     if (x < layout.skeletonTree.left || x >= layout.skeletonTree.right ||
-        y < layout.skeletonTree.top + kTreeHeaderHeight || y >= layout.skeletonTree.bottom) return std::nullopt;
+        y < layout.skeletonTree.top + kTreeHeaderHeight || y >= layout.skeletonTree.bottom - kTreeAuxiliaryHeight) return std::nullopt;
     const std::size_t index = static_cast<std::size_t>((y - (layout.skeletonTree.top + kTreeHeaderHeight)) / kTreeRowHeight);
     const std::vector<SkeletalMeshEditorTreeRow> rows = sceneContext.SkeletalMeshEditorTreeRows();
     return index < rows.size() ? std::optional<SkeletalMeshEditorTreeRow>{ rows[index] } : std::nullopt;
@@ -169,6 +224,14 @@ bool SkeletalMeshEditorPanelRenderer::IsTreeSearchAt(const RECT& content, int x,
     const RECT search{ layout.skeletonTree.left + 8, layout.skeletonTree.top + 30,
         layout.skeletonTree.right - 8, layout.skeletonTree.top + 50 };
     return x >= search.left && x < search.right && y >= search.top && y < search.bottom;
+}
+
+std::optional<std::uint8_t> SkeletalMeshEditorPanelRenderer::AdvancedPreviewOverlayAt(
+    const RECT& content, int x, int y) noexcept {
+    const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
+    if (x < layout.toolbox.left || x >= layout.toolbox.right || y < layout.toolbox.top + 32) return std::nullopt;
+    const int index = (y - (layout.toolbox.top + 32)) / 20;
+    return index >= 0 && index < 6 ? std::optional<std::uint8_t>{ static_cast<std::uint8_t>(index) } : std::nullopt;
 }
 
 std::optional<kb::scene::SkeletonBoneId> SkeletalMeshEditorPanelRenderer::BoneAt(
