@@ -817,7 +817,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     Save/Revert i close prompt.
 78. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Save automatycznie waliduje i buduje reprezentację runtime bez jawnego
     przycisku Compile; błąd wskazuje dokładny node/transition/parameter.
-79. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Atomowy hot reload aktywuje nowy controller wyłącznie po sukcesie;
+79. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Atomowy hot reload aktywuje nowy controller wyłącznie po sukcesie;
     ostatnia poprawna instancja pozostaje aktywna przy błędzie.
 80. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zastąpić testy nazywające Script Editor „animation-controller-editor”
     prawdziwymi testami workspace, authoringu i serializacji grafu.
