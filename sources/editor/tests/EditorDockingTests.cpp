@@ -8,6 +8,7 @@
 #include "scene/SkeletalMeshEditorTreeState.hpp"
 #include "scene/SkeletalMeshEditorDetailsState.hpp"
 #include "scene/SkeletalMeshEditorDocumentState.hpp"
+#include "scene/AnimationClipTimelineState.hpp"
 #include "windowing/FloatingWindowControlHitTester.hpp"
 #include "windowing/FloatingWindowControlLayout.hpp"
 
@@ -521,6 +522,38 @@ void RunSkeletalMeshEditorDocumentStateTest() {
         "Skeletal Mesh document revert should discard unsaved history");
 }
 
+void RunAnimationClipTimelineStateTest() {
+    kb::scene::AnimationClip clip{};
+    clip.durationSeconds = 2.0F;
+    clip.skeletalTracks = {
+        { .boneId = 20U, .keyframes = {{ .timeSeconds = 1.5F }, { .timeSeconds = 0.5F }} },
+        { .boneId = 10U, .keyframes = {{ .timeSeconds = 1.0F }} },
+    };
+    clip.morphTracks = {{ .morphTarget = "Smile", .keyframes = {{ .timeSeconds = 0.25F }} }};
+    clip.curves = {{ .name = "FootPlant", .keyframes = {{ .timeSeconds = 1.25F }} }};
+    clip.events = {{ .timeSeconds = 1.75F, .id = 4U }, { .timeSeconds = 0.75F, .id = 2U }};
+    clip.rootMotionMode = kb::scene::AnimationRootMotionMode::ExtractFromBone;
+    clip.rootMotionBoneId = 20U;
+    kb::editor::AnimationClipTimelineState timeline;
+    timeline.SetClip(clip);
+    const std::vector<kb::editor::AnimationClipTimelineTrack>& tracks = timeline.Tracks();
+    const auto find = [&tracks](std::string_view label) {
+        return std::find_if(tracks.begin(), tracks.end(), [label](const kb::editor::AnimationClipTimelineTrack& track) {
+            return track.label == label;
+        });
+    };
+    const auto bone = find("Bone 20");
+    const auto events = find("Events");
+    const auto rootMotion = find("Root Motion (Bone 20)");
+    kb::editor::tests::Require(timeline.DurationSeconds() == 2.0F && bone != tracks.end() &&
+            bone->keys.size() == 2U && bone->keys[0].timeSeconds == 0.5F &&
+            find("Morph Smile") != tracks.end() && find("Curve FootPlant") != tracks.end(),
+        "Animation Clip timeline should expose canonical bone, morph and curve tracks");
+    kb::editor::tests::Require(events != tracks.end() && events->keys[0].timeSeconds == 0.75F &&
+            rootMotion != tracks.end() && rootMotion->keys.size() == bone->keys.size(),
+        "Animation Clip timeline should deterministically expose events and root motion keys");
+}
+
 // A click on any tab — the active one or an inactive sibling — must hit-test as a
 // dock Tab. The pointer router relies on this: a dock hit means the click is a
 // layout action (switch tabs), so it must NOT clear the scene selection and blank
@@ -580,6 +613,7 @@ void RunEditorDockingTests() {
     RunSkeletalMeshEditorTreeStateTest();
     RunSkeletalMeshEditorDetailsStateTest();
     RunSkeletalMeshEditorDocumentStateTest();
+    RunAnimationClipTimelineStateTest();
     RunTabClickIsDockInteractionTest();
 }
 

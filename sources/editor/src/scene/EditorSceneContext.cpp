@@ -9024,6 +9024,7 @@ bool EditorSceneContext::OpenAnimationClipEditorAsset(kb::assets::AssetId id) {
     static_cast<void>(animationPreview_.Transport().SetDurationSeconds(clip->durationSeconds));
     static_cast<void>(animationPreview_.Transport().SetLooping(clip->looping));
     animationClipEditorAssetId_ = id;
+    animationClipEditorTimeline_.SetClip(*clip);
     static_cast<void>(AnimationPreviewScene());
     console_.Info("Animation Clip Editor", "Opened document: " + clipMetadata->virtualPath.generic_string());
     return true;
@@ -9044,6 +9045,10 @@ const kb::scene::Scene* EditorSceneContext::AnimationClipEditorPreviewScene() co
 
 std::uint64_t EditorSceneContext::AnimationClipEditorPreviewRevision() const noexcept {
     return HasAnimationClipEditorAsset() ? animationPreviewScene_->Revision() : 0U;
+}
+
+const AnimationClipTimelineState& EditorSceneContext::AnimationClipEditorTimeline() const noexcept {
+    return animationClipEditorTimeline_;
 }
 
 bool EditorSceneContext::OpenSkeletalMeshEditorAsset(kb::assets::AssetId id) {
@@ -9080,6 +9085,7 @@ bool EditorSceneContext::OpenSkeletalMeshEditorAsset(kb::assets::AssetId id) {
     animationPreview_.SetPoseMode(AnimationPreviewPoseMode::Reference);
     static_cast<void>(animationPreview_.Overlays().SetBonesVisible(true));
     animationClipEditorAssetId_ = {};
+    animationClipEditorTimeline_ = {};
     skeletalMeshEditorAssetId_ = id;
     skeletalMeshEditorDocument_.Open(id, *mesh);
     skeletalMeshEditorTree_.SetSkeleton(*skeleton);
