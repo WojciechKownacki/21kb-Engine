@@ -51,6 +51,10 @@ public:
         return BuildAsset();
     }
 
+    [[nodiscard]] const std::vector<kb::scene::SkeletalMeshMorphTarget>& MorphTargets() const noexcept {
+        return mesh_.morphTargets;
+    }
+
 private:
     [[nodiscard]] static std::string Number(std::uint64_t value) { return std::to_string(value); }
     [[nodiscard]] static std::string Number(float value) {

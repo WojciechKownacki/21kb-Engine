@@ -7,6 +7,7 @@
 #include "scene/EditorSceneContext.hpp"
 
 #include <optional>
+#include <cstdint>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -31,6 +32,8 @@ public:
     [[nodiscard]] static std::optional<SkeletalMeshEditorTreeRow> TreeRowAt(
         const RECT& content, const EditorSceneContext& sceneContext, int x, int y);
     [[nodiscard]] static bool IsTreeSearchAt(const RECT& content, int x, int y) noexcept;
+    [[nodiscard]] static std::optional<std::uint8_t> AdvancedPreviewOverlayAt(
+        const RECT& content, int x, int y) noexcept;
     [[nodiscard]] static std::optional<kb::scene::SkeletonBoneId> BoneAt(
         const RECT& content, const EditorSceneContext& sceneContext, int x, int y) noexcept;
 #endif

@@ -472,6 +472,10 @@ void RunSkeletalMeshEditorDetailsStateTest() {
     const kb::editor::SkeletalMeshEditorDetailsModel socket = details.Build(0U, "Weapon");
     kb::editor::tests::Require(socket.title == "Socket: Weapon" && socket.sections[0].fields[1].value == "10",
         "Skeletal Mesh Details should expose selected socket data");
+    mesh.morphTargets = {{ .name = "Smile", .lodIndex = 0U, .deltas = {{ .vertexIndex = 0U }} }};
+    details.SetDocument(mesh, skeleton, metadata);
+    kb::editor::tests::Require(details.MorphTargets().size() == 1U && details.MorphTargets()[0].name == "Smile",
+        "Skeletal Mesh editor Morph Targets panel should use the canonical mesh morph data");
 }
 
 // A click on any tab — the active one or an inactive sibling — must hit-test as a
