@@ -1586,6 +1586,23 @@ end
                 NearlyEqual(transitionedSkinOrigin.w, 1.0F),
             "Compact skeletal state/layer/mask/blend/transition evaluation diverged from controller semantics");
 
+        const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> transitionedDebug =
+            scene.Animators().DebugSnapshot();
+        const kb::scene::AnimatorDebugInstanceSnapshot* transitionedDebugInstance =
+            transitionedDebug == nullptr ? nullptr : transitionedDebug->Find(owner.Entity());
+        Require(transitionedDebug != nullptr && transitionedDebug->revision != 0U &&
+                transitionedDebugInstance != nullptr &&
+                transitionedDebugInstance->controllerAssetId == scene.Animators().Controller(owner.Entity()) &&
+                transitionedDebugInstance->layers.size() == 2U &&
+                transitionedDebugInstance->layers.front().activeState == "DirectB" &&
+                transitionedDebugInstance->layers.front().previousState == "Blend" &&
+                transitionedDebugInstance->layers.front().transitioning &&
+                NearlyEqual(transitionedDebugInstance->layers.front().transitionProgress, 0.5F) &&
+                transitionedDebugInstance->bones.size() == 3U &&
+                transitionedDebugInstance->paletteMatrixCount == 3U &&
+                transitionedDebugInstance->poseEvaluationCount == 2U,
+            "Animator debug snapshot did not retain the evaluated live skeletal state");
+
         scene.Components().Animators().Set(
             owner.Entity(), kb::scene::Animator{
                 .controllerAssetId =
@@ -2011,9 +2028,19 @@ end
             owner.Entity(), "Base");
         const auto reloadedSkeletalPose = scene.Animators().InstanceSkeleton(
             owner.Entity());
+        const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> reloadedDebug =
+            scene.Animators().DebugSnapshot();
+        const kb::scene::AnimatorDebugInstanceSnapshot* reloadedDebugInstance =
+            reloadedDebug == nullptr ? nullptr : reloadedDebug->Find(owner.Entity());
         Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
                 directBStateAfterReload.has_value() &&
                 reloadedSkeletalPose.has_value() &&
+                reloadedDebug != nullptr && transitionedDebug != nullptr &&
+                reloadedDebug->revision > transitionedDebug->revision &&
+                reloadedDebugInstance != nullptr &&
+                reloadedDebugInstance->layers.front().activeState == "DirectB" &&
+                reloadedDebugInstance->bones.size() == 3U &&
+                NearlyEqual(reloadedDebugInstance->bones[2].localPose.position.x, 7.5F) &&
                 directBStateAfterReload->state == "DirectB" &&
                 !directBStateAfterReload->transitioning &&
                 NearlyEqual(directBStateAfterReload->normalizedTime, 0.75F) &&
@@ -2024,6 +2051,16 @@ end
         Require(kb::scene::AnimationAssetIO::SaveClip(
                     instanceClipBPath, instanceClipB),
             "Skeletal hot-reload fixture could not restore its canonical clip");
+
+        const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> retainedDebug =
+            scene.Animators().DebugSnapshot();
+        scene.Components().Animators().Remove(owner.Entity());
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> detachedDebug =
+            scene.Animators().DebugSnapshot();
+        Require(retainedDebug != nullptr && retainedDebug->Find(owner.Entity()) != nullptr &&
+                detachedDebug != nullptr && detachedDebug->Find(owner.Entity()) == nullptr,
+            "Animator debug snapshots must remain valid after the live instance detaches");
 
         std::filesystem::remove_all(skeletalRoot);
     }

@@ -14,6 +14,7 @@ std::optional<AnimatorInstanceSkeletonView> SceneAnimatorQueries::InstanceSkelet
 std::optional<AnimatorAttachmentTransform> SceneAnimatorQueries::AttachmentTransform(SceneEntity entity, SkeletonBoneId boneId, const LocalTransform& localOffset) const noexcept { return SceneAnimatorService::AttachmentTransform(scene_, entity, boneId, localOffset); }
 std::optional<AnimatorAttachmentTransform> SceneAnimatorQueries::SocketTransform(SceneEntity entity, std::string_view socketName) const noexcept { return SceneAnimatorService::SocketTransform(scene_, entity, socketName); }
 std::optional<AnimatorStateInfo> SceneAnimatorQueries::State(SceneEntity entity, std::string_view layer) const { return SceneAnimatorService::State(scene_, entity, layer); }
+std::shared_ptr<const AnimatorDebugSnapshot> SceneAnimatorQueries::DebugSnapshot() const { return SceneAnimatorService::DebugSnapshot(scene_); }
 
 SceneAnimators::SceneAnimators(Scene& scene) noexcept : scene_(scene) {}
 bool SceneAnimators::Exists(SceneEntity entity) const noexcept { return SceneAnimatorService::Exists(scene_, entity); }
@@ -43,6 +44,7 @@ bool SceneAnimators::ClearIkTarget(SceneEntity entity, std::string_view name) no
     return SceneAnimatorService::ClearIkTarget(scene_, entity, name);
 }
 std::optional<AnimatorStateInfo> SceneAnimators::State(SceneEntity entity, std::string_view layer) const { return SceneAnimatorService::State(scene_, entity, layer); }
+std::shared_ptr<const AnimatorDebugSnapshot> SceneAnimators::DebugSnapshot() const { return SceneAnimatorService::DebugSnapshot(scene_); }
 std::vector<AnimationEventRecord> SceneAnimators::DrainEvents() { return SceneAnimatorService::DrainEvents(scene_); }
 
 } // namespace kb::scene

@@ -376,6 +376,9 @@ public:
     float timeScale = 1.0F;
     std::uint64_t runtimeSnapshotRevision = 0U;
     kb::core::ReadSnapshotPublisher<SceneRuntimeReadSnapshot> runtimeSnapshots;
+    std::uint64_t animatorDebugSnapshotRevision = 0U;
+    kb::core::ReadSnapshotPublisher<AnimatorDebugSnapshot> animatorDebugSnapshots;
+    std::map<std::uint64_t, std::vector<Vec3>> animatorDebugRootMotionTrails;
     kb::core::CommandQueue<SceneRuntimeCommand> runtimeCommands;
     // LIB-095: one scheduled Timer.Once/Timer.Repeat entry. `owner` invalid
     // (default SceneEntity{}) means "no owner" — TimerFired broadcasts to

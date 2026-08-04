@@ -422,6 +422,8 @@ public:
     [[nodiscard]] bool AnimatorEditorDebuggingPreview() const noexcept;
     [[nodiscard]] kb::scene::SceneEntity AnimatorEditorDebugTarget() const noexcept;
     [[nodiscard]] std::string AnimatorEditorDebugTargetLabel() const;
+    [[nodiscard]] kb::scene::SceneEntity AnimatorEditorResolvedDebugTarget() const noexcept;
+    [[nodiscard]] std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> AnimatorEditorDebugSnapshot() const;
     [[nodiscard]] bool SetAnimatorEditorDebugTarget(kb::scene::SceneEntity entity);
     void SetAnimatorEditorDebugTargetPreview() noexcept;
     [[nodiscard]] const kb::scene::Scene* AnimatorEditorPreviewScene() const noexcept;
