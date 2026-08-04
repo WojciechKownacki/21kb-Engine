@@ -63,6 +63,39 @@ void PaintTree(HDC dc, const RECT& rect, const EditorSceneContext& sceneContext)
     }
 }
 
+void PaintDetails(HDC dc, const RECT& rect, const EditorSceneContext& sceneContext) {
+    GdiDrawing::FillRectColor(dc, rect, RGB(28, 30, 34));
+    GdiDrawing::DrawSharpFrame(dc, rect, RGB(28, 30, 34), RGB(53, 57, 64));
+    const SkeletalMeshEditorDetailsModel model = sceneContext.SkeletalMeshEditorDetails();
+    const ScopedFont titleFont{ 13, FW_SEMIBOLD };
+    const ScopedGdiObject selectedTitleFont(dc, titleFont.handle);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(207, 214, 222));
+    RECT title{ rect.left + 10, rect.top + 8, rect.right - 8, rect.top + 26 };
+    DrawTextA(dc, model.title.empty() ? "Asset Details" : model.title.c_str(), -1, &title,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    const ScopedFont bodyFont{ 11, FW_NORMAL };
+    const ScopedGdiObject selectedBodyFont(dc, bodyFont.handle);
+    int y = rect.top + 30;
+    for (const SkeletalMeshEditorDetailsSection& section : model.sections) {
+        if (y + 18 > rect.bottom) break;
+        RECT sectionRect{ rect.left + 8, y, rect.right - 8, y + 18 };
+        SetTextColor(dc, RGB(139, 149, 161));
+        DrawTextA(dc, section.title.c_str(), -1, &sectionRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        y += 18;
+        for (const SkeletalMeshEditorDetailsField& field : section.fields) {
+            if (y + 18 > rect.bottom) return;
+            RECT label{ rect.left + 12, y, rect.left + 104, y + 18 };
+            RECT value{ rect.left + 106, y, rect.right - 8, y + 18 };
+            SetTextColor(dc, RGB(154, 164, 176));
+            DrawTextA(dc, field.label.c_str(), -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            SetTextColor(dc, RGB(211, 217, 225));
+            DrawTextA(dc, field.value.c_str(), -1, &value, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            y += 18;
+        }
+    }
+}
+
 [[nodiscard]] float PointSegmentDistanceSquared(float px, float py, float ax, float ay, float bx, float by) noexcept {
     const float dx = bx - ax;
     const float dy = by - ay;
@@ -102,7 +135,7 @@ void SkeletalMeshEditorPanelRenderer::Paint(
     const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
     PaintPanel(dc, layout.toolbox, "Toolbox", "Preview workspace");
     PaintTree(dc, layout.skeletonTree, sceneContext);
-    PaintPanel(dc, layout.assetDetails, "Asset Details", "Skeletal Mesh properties");
+    PaintDetails(dc, layout.assetDetails, sceneContext);
     if (sceneViewport == nullptr) return;
 
     const std::uint64_t revision = sceneContext.SkeletalMeshEditorPreviewRevision();

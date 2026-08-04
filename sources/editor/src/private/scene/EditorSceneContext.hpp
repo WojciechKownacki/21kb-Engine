@@ -26,6 +26,7 @@
 #include "scene/AnimationPreviewContext.hpp"
 #include "scene/EditorAnimationPreviewScene.hpp"
 #include "scene/SkeletalMeshEditorTreeState.hpp"
+#include "scene/SkeletalMeshEditorDetailsState.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
 #include "scene/material/MaterialEditorState.hpp"
 #include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
@@ -430,6 +431,7 @@ public:
     [[nodiscard]] bool ClearSkeletalMeshEditorTreeSelection();
     [[nodiscard]] kb::scene::SkeletonBoneId SelectedSkeletalMeshEditorBone() const noexcept;
     [[nodiscard]] const std::string& SelectedSkeletalMeshEditorSocket() const noexcept;
+    [[nodiscard]] SkeletalMeshEditorDetailsModel SkeletalMeshEditorDetails() const;
     [[nodiscard]] bool OpenMaterialEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenMaterialEditorGraphSourceAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenMaterialEditorMaterialTypeAsset(kb::assets::AssetId id);
@@ -980,6 +982,7 @@ private:
     std::unique_ptr<EditorAnimationPreviewScene> animationPreviewScene_;
     kb::assets::AssetId skeletalMeshEditorAssetId_{};
     SkeletalMeshEditorTreeState skeletalMeshEditorTree_;
+    SkeletalMeshEditorDetailsState skeletalMeshEditorDetails_;
     InspectorPanelState inspector_;
     MaterialEditorState materialEditor_;
     kb::assets::AssetId materialRuntimePreviewAssetId_{};
