@@ -7,8 +7,28 @@
 #include "engine/scene/SceneEntity.hpp"
 
 #include <memory>
+#include <string>
+#include <vector>
 
 namespace kb::editor {
+
+struct AnimationPreviewOverlayLine {
+    kb::scene::Vec3 from{};
+    kb::scene::Vec3 to{};
+    kb::scene::Vec3 color{ 1.0F, 1.0F, 1.0F };
+};
+
+struct AnimationPreviewOverlayLabel {
+    kb::scene::Vec3 position{};
+    std::string text;
+};
+
+struct AnimationPreviewOverlaySnapshot {
+    std::vector<AnimationPreviewOverlayLine> lines;
+    std::vector<AnimationPreviewOverlayLabel> labels;
+    std::uint32_t lodCount = 0U;
+    std::uint64_t poseEvaluationCount = 0U;
+};
 
 class EditorAnimationPreviewScene {
 public:
@@ -24,6 +44,7 @@ public:
     void Focus(float durationSeconds = 0.0F) noexcept;
     [[nodiscard]] bool TickCamera(float deltaSeconds) noexcept;
     [[nodiscard]] bool TickPlayback(AnimationPreviewContext& context, float deltaSeconds) noexcept;
+    [[nodiscard]] AnimationPreviewOverlaySnapshot BuildOverlays(const AnimationPreviewContext& context) const;
     [[nodiscard]] std::uint64_t Revision() const noexcept { return revision_; }
     void Clear() noexcept;
 

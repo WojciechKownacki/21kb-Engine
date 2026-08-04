@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 namespace kb::editor {
 
@@ -121,6 +123,43 @@ private:
     std::uint64_t revision_ = 1U;
 };
 
+class AnimationPreviewOverlayState {
+public:
+    [[nodiscard]] bool BonesVisible() const noexcept { return bonesVisible_; }
+    [[nodiscard]] bool BoneNamesVisible() const noexcept { return boneNamesVisible_; }
+    [[nodiscard]] bool SocketsVisible() const noexcept { return socketsVisible_; }
+    [[nodiscard]] bool RootMotionVisible() const noexcept { return rootMotionVisible_; }
+    [[nodiscard]] bool BoundsVisible() const noexcept { return boundsVisible_; }
+    [[nodiscard]] bool LodVisible() const noexcept { return lodVisible_; }
+    [[nodiscard]] bool NormalsVisible() const noexcept { return normalsVisible_; }
+    [[nodiscard]] std::uint64_t Revision() const noexcept { return revision_; }
+
+    [[nodiscard]] bool SetBonesVisible(bool value) noexcept { return Set(bonesVisible_, value); }
+    [[nodiscard]] bool SetBoneNamesVisible(bool value) noexcept { return Set(boneNamesVisible_, value); }
+    [[nodiscard]] bool SetSocketsVisible(bool value) noexcept { return Set(socketsVisible_, value); }
+    [[nodiscard]] bool SetRootMotionVisible(bool value) noexcept { return Set(rootMotionVisible_, value); }
+    [[nodiscard]] bool SetBoundsVisible(bool value) noexcept { return Set(boundsVisible_, value); }
+    [[nodiscard]] bool SetLodVisible(bool value) noexcept { return Set(lodVisible_, value); }
+    [[nodiscard]] bool SetNormalsVisible(bool value) noexcept { return Set(normalsVisible_, value); }
+
+private:
+    [[nodiscard]] bool Set(bool& destination, bool value) noexcept {
+        if (destination == value) return false;
+        destination = value;
+        ++revision_;
+        return true;
+    }
+
+    bool bonesVisible_ = false;
+    bool boneNamesVisible_ = false;
+    bool socketsVisible_ = false;
+    bool rootMotionVisible_ = false;
+    bool boundsVisible_ = false;
+    bool lodVisible_ = false;
+    bool normalsVisible_ = false;
+    std::uint64_t revision_ = 1U;
+};
+
 // The editor owns exactly one animation preview state. Skeletal-mesh, clip and
 // controller documents bind their production runtime inputs to this context;
 // they never create independent preview worlds.
@@ -133,6 +172,8 @@ public:
     [[nodiscard]] AnimationPreviewPoseMode PoseMode() const noexcept { return poseMode_; }
     [[nodiscard]] AnimationPreviewTransport& Transport() noexcept { return transport_; }
     [[nodiscard]] const AnimationPreviewTransport& Transport() const noexcept { return transport_; }
+    [[nodiscard]] AnimationPreviewOverlayState& Overlays() noexcept { return overlays_; }
+    [[nodiscard]] const AnimationPreviewOverlayState& Overlays() const noexcept { return overlays_; }
     [[nodiscard]] std::uint64_t Revision() const noexcept { return revision_; }
 
     void SetAssets(kb::assets::AssetId skeleton, kb::assets::AssetId mesh,
@@ -165,6 +206,7 @@ private:
     kb::assets::AssetId controllerAsset_{};
     AnimationPreviewPoseMode poseMode_ = AnimationPreviewPoseMode::Reference;
     AnimationPreviewTransport transport_{};
+    AnimationPreviewOverlayState overlays_{};
     std::uint64_t revision_ = 1U;
 };
 
