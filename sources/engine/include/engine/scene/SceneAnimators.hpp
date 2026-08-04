@@ -4,6 +4,7 @@
 #include "engine/scene/SceneEntity.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -64,6 +65,7 @@ public:
     [[nodiscard]] std::optional<AnimatorAttachmentTransform> SocketTransform(
         SceneEntity entity, std::string_view socketName) const noexcept;
     [[nodiscard]] std::optional<AnimatorStateInfo> State(SceneEntity entity, std::string_view layer) const;
+    [[nodiscard]] std::shared_ptr<const AnimatorDebugSnapshot> DebugSnapshot() const;
 
 private:
     const Scene& scene_;
@@ -104,6 +106,7 @@ public:
     [[nodiscard]] bool ClearIkTarget(
         SceneEntity entity, std::string_view name) noexcept;
     [[nodiscard]] std::optional<AnimatorStateInfo> State(SceneEntity entity, std::string_view layer) const;
+    [[nodiscard]] std::shared_ptr<const AnimatorDebugSnapshot> DebugSnapshot() const;
     [[nodiscard]] std::vector<AnimationEventRecord> DrainEvents();
 
 private:

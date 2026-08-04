@@ -3,6 +3,7 @@
 #include "app/EditorCrashBreadcrumbs.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/script/ScriptAsset.hpp"
@@ -9099,15 +9100,37 @@ bool EditorSceneContext::HasAnimatorEditorAsset() const noexcept {
 }
 
 bool EditorSceneContext::AnimatorEditorDebuggingPreview() const noexcept {
-    return !animatorEditorDebugTarget_.IsValid();
+    if (!animatorEditorDebugTarget_.IsValid() || !HasAnimatorEditorAsset()) return true;
+    const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> snapshot =
+        scene_->Animators().DebugSnapshot();
+    const kb::scene::AnimatorDebugInstanceSnapshot* instance = snapshot == nullptr
+        ? nullptr
+        : snapshot->Find(animatorEditorDebugTarget_);
+    return instance == nullptr ||
+        instance->controllerAssetId != animatorEditorAssetId_.value;
 }
 
 kb::scene::SceneEntity EditorSceneContext::AnimatorEditorDebugTarget() const noexcept {
-    return animatorEditorDebugTarget_;
+    return AnimatorEditorDebuggingPreview() ? kb::scene::SceneEntity{} : animatorEditorDebugTarget_;
 }
 
 std::string EditorSceneContext::AnimatorEditorDebugTargetLabel() const {
     return AnimatorEditorDebuggingPreview() ? "Preview Instance" : scene_->Entities().Name(animatorEditorDebugTarget_);
+}
+
+kb::scene::SceneEntity EditorSceneContext::AnimatorEditorResolvedDebugTarget() const noexcept {
+    if (!AnimatorEditorDebuggingPreview()) return animatorEditorDebugTarget_;
+    return animationPreviewScene_ == nullptr ? kb::scene::SceneEntity{} :
+        animationPreviewScene_->PreviewEntity();
+}
+
+std::shared_ptr<const kb::scene::AnimatorDebugSnapshot>
+EditorSceneContext::AnimatorEditorDebugSnapshot() const {
+    if (!HasAnimatorEditorAsset()) return {};
+    if (!AnimatorEditorDebuggingPreview()) return scene_->Animators().DebugSnapshot();
+    const kb::scene::Scene* preview = AnimatorEditorPreviewScene();
+    return preview == nullptr ? std::shared_ptr<const kb::scene::AnimatorDebugSnapshot>{}
+        : preview->Animators().DebugSnapshot();
 }
 
 bool EditorSceneContext::SetAnimatorEditorDebugTarget(kb::scene::SceneEntity entity) {
