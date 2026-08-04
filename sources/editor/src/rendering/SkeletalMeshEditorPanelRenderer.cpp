@@ -2,10 +2,30 @@
 
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 
 namespace kb::editor {
+namespace {
+
+void PaintPanel(HDC dc, const RECT& rect, const char* title, const char* subtitle) {
+    GdiDrawing::FillRectColor(dc, rect, RGB(28, 30, 34));
+    GdiDrawing::DrawSharpFrame(dc, rect, RGB(28, 30, 34), RGB(53, 57, 64));
+    const ScopedFont titleFont{ 13, FW_SEMIBOLD };
+    const ScopedGdiObject selectedTitleFont(dc, titleFont.handle);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(207, 214, 222));
+    RECT titleRect{ rect.left + 10, rect.top + 8, rect.right - 8, rect.top + 28 };
+    DrawTextA(dc, title, -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    const ScopedFont subtitleFont{ 11, FW_NORMAL };
+    const ScopedGdiObject selectedSubtitleFont(dc, subtitleFont.handle);
+    SetTextColor(dc, RGB(139, 149, 161));
+    RECT subtitleRect{ rect.left + 10, rect.top + 34, rect.right - 8, rect.bottom - 8 };
+    DrawTextA(dc, subtitle, -1, &subtitleRect, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
+}
+
+} // namespace
 
 void SkeletalMeshEditorPanelRenderer::Paint(
     HDC dc,
@@ -29,6 +49,10 @@ void SkeletalMeshEditorPanelRenderer::Paint(
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         return;
     }
+    const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
+    PaintPanel(dc, layout.toolbox, "Toolbox", "Preview workspace");
+    PaintPanel(dc, layout.skeletonTree, "Skeleton Tree", "Skeleton hierarchy");
+    PaintPanel(dc, layout.assetDetails, "Asset Details", "Skeletal Mesh properties");
     if (sceneViewport == nullptr) return;
 
     const std::uint64_t revision = sceneContext.SkeletalMeshEditorPreviewRevision();
@@ -44,7 +68,7 @@ void SkeletalMeshEditorPanelRenderer::Paint(
     settings.selectionMaskEnabled = false;
     settings.selectionOutlineEnabled = false;
     settings.gpuDrivenRuntimeDispatchEnabled = renderBackendSettings.GpuDrivenEnabled();
-    sceneViewport->Present(dc, host, content, *sceneContext.SkeletalMeshEditorPreviewScene(), theme, settings);
+    sceneViewport->Present(dc, host, layout.viewport, *sceneContext.SkeletalMeshEditorPreviewScene(), theme, settings);
 }
 
 } // namespace kb::editor
