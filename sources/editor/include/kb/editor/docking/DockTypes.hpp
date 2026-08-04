@@ -26,6 +26,7 @@ enum class DockPanelKind : std::uint8_t {
     Plugins,
     MaterialEditor,
     SkeletalMeshEditor,
+    AnimationClipEditor,
 };
 
 enum class DockSplitAxis : std::uint8_t {

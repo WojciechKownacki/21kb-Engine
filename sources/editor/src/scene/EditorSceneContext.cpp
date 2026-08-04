@@ -8966,6 +8966,86 @@ bool EditorSceneContext::OpenAnimationAsset(kb::assets::AssetId id) {
     return true;
 }
 
+bool EditorSceneContext::OpenAnimationClipEditorAsset(kb::assets::AssetId id) {
+    const kb::assets::AssetMetadata* clipMetadata = scene_->Assets().Manager().Registry().Find(id);
+    if (clipMetadata == nullptr || clipMetadata->type != kb::scene::kAnimationClipAssetType) {
+        console_.Error("Animation Clip Editor", "Selected asset is not an Animation Clip.");
+        return false;
+    }
+    const kb::assets::AssetHandle<kb::scene::AnimationClip> clip =
+        scene_->Assets().Manager().Load<kb::scene::AnimationClip>(id);
+    if (!clip.IsLoaded() || clip->targetSkeletonAssetId == 0U ||
+        clip->targetSkeletonCompatibilitySignature == 0U) {
+        console_.Error("Animation Clip Editor", "Animation Clip runtime data or its Skeleton binding could not be loaded.");
+        return false;
+    }
+    const kb::assets::AssetId skeletonId{ clip->targetSkeletonAssetId };
+    const kb::assets::AssetMetadata* skeletonMetadata = scene_->Assets().Manager().Registry().Find(skeletonId);
+    if (skeletonMetadata == nullptr || skeletonMetadata->type != kb::scene::kSkeletonAssetType) {
+        console_.Error("Animation Clip Editor", "Animation Clip references a missing Skeleton asset.");
+        return false;
+    }
+    const kb::assets::AssetHandle<kb::scene::SkeletonAsset> skeleton =
+        scene_->Assets().Manager().Load<kb::scene::SkeletonAsset>(skeletonId);
+    if (!skeleton.IsLoaded() ||
+        kb::scene::SkeletonCompatibilitySignature(*skeleton) != clip->targetSkeletonCompatibilitySignature) {
+        console_.Error("Animation Clip Editor", "Animation Clip and Skeleton are incompatible.");
+        return false;
+    }
+
+    std::vector<kb::assets::AssetMetadata> meshMetadata;
+    for (const kb::assets::AssetMetadata& candidate : scene_->Assets().Manager().Registry().All()) {
+        if (candidate.type == kb::scene::kSkeletalMeshAssetType) meshMetadata.push_back(candidate);
+    }
+    std::ranges::sort(meshMetadata, {}, [](const kb::assets::AssetMetadata& value) { return value.id.value; });
+    kb::assets::AssetId previewMeshId{};
+    for (const kb::assets::AssetMetadata& candidate : meshMetadata) {
+        const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> mesh =
+            scene_->Assets().Manager().Load<kb::scene::SkeletalMeshAsset>(candidate.id);
+        if (mesh.IsLoaded() && mesh->skeletonAssetId == skeletonId.value &&
+            mesh->skeletonCompatibilitySignature == clip->targetSkeletonCompatibilitySignature) {
+            previewMeshId = candidate.id;
+            break;
+        }
+    }
+    if (!previewMeshId.IsValid()) {
+        console_.Error("Animation Clip Editor", "No Skeletal Mesh compatible with this Animation Clip's Skeleton is available for preview.");
+        return false;
+    }
+    if (HasDirtySkeletalMeshEditorAssetEdit()) {
+        console_.Warning("Animation Clip Editor", "Save or Revert the open Skeletal Mesh before changing the shared preview document.");
+        return false;
+    }
+
+    CloseSkeletalMeshEditorAsset();
+    animationPreview_.Clear();
+    animationPreview_.SetAssets(skeletonId, previewMeshId, id, {});
+    animationPreview_.SetPoseMode(AnimationPreviewPoseMode::Animated);
+    static_cast<void>(animationPreview_.Transport().SetDurationSeconds(clip->durationSeconds));
+    static_cast<void>(animationPreview_.Transport().SetLooping(clip->looping));
+    animationClipEditorAssetId_ = id;
+    static_cast<void>(AnimationPreviewScene());
+    console_.Info("Animation Clip Editor", "Opened document: " + clipMetadata->virtualPath.generic_string());
+    return true;
+}
+
+kb::assets::AssetId EditorSceneContext::AnimationClipEditorAssetId() const noexcept {
+    return animationClipEditorAssetId_;
+}
+
+bool EditorSceneContext::HasAnimationClipEditorAsset() const noexcept {
+    return animationClipEditorAssetId_.IsValid() && animationPreview_.ClipAsset() == animationClipEditorAssetId_ &&
+        animationPreviewScene_ != nullptr && animationPreviewScene_->CurrentScene() != nullptr;
+}
+
+const kb::scene::Scene* EditorSceneContext::AnimationClipEditorPreviewScene() const noexcept {
+    return HasAnimationClipEditorAsset() ? animationPreviewScene_->CurrentScene() : nullptr;
+}
+
+std::uint64_t EditorSceneContext::AnimationClipEditorPreviewRevision() const noexcept {
+    return HasAnimationClipEditorAsset() ? animationPreviewScene_->Revision() : 0U;
+}
+
 bool EditorSceneContext::OpenSkeletalMeshEditorAsset(kb::assets::AssetId id) {
     const kb::assets::AssetMetadata* meshMetadata = scene_->Assets().Manager().Registry().Find(id);
     if (meshMetadata == nullptr || meshMetadata->type != kb::scene::kSkeletalMeshAssetType) {
@@ -8999,6 +9079,7 @@ bool EditorSceneContext::OpenSkeletalMeshEditorAsset(kb::assets::AssetId id) {
     animationPreview_.SetAssets(skeletonId, id, {}, {});
     animationPreview_.SetPoseMode(AnimationPreviewPoseMode::Reference);
     static_cast<void>(animationPreview_.Overlays().SetBonesVisible(true));
+    animationClipEditorAssetId_ = {};
     skeletalMeshEditorAssetId_ = id;
     skeletalMeshEditorDocument_.Open(id, *mesh);
     skeletalMeshEditorTree_.SetSkeleton(*skeleton);
