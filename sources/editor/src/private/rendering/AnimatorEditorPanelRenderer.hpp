@@ -13,6 +13,8 @@
 #include <Windows.h>
 #endif
 
+#include <optional>
+
 namespace kb::editor {
 
 class AnimatorEditorPanelRenderer {
@@ -21,6 +23,8 @@ public:
     [[nodiscard]] static AnimatorEditorPanelLayout ResolveLayout(const RECT& content) noexcept {
         return AnimatorEditorPanelLayoutResolver::Resolve(content);
     }
+    [[nodiscard]] static std::optional<std::uint64_t> GraphStateAt(
+        const RECT& content, const kb::scene::AnimatorController& controller, int x, int y) noexcept;
     void Paint(
         HDC dc,
         HWND host,

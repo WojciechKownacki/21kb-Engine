@@ -27,6 +27,18 @@ public:
         return controller_.has_value() ? &*controller_ : nullptr;
     }
     [[nodiscard]] const std::vector<std::uint64_t>& Selection() const noexcept { return selection_; }
+    [[nodiscard]] std::uint64_t MotionState() const noexcept { return motionStateId_; }
+
+    [[nodiscard]] bool OpenMotionDocument(std::uint64_t stateId) {
+        if (FindState(stateId) == nullptr || motionStateId_ == stateId) return false;
+        motionStateId_ = stateId;
+        return true;
+    }
+    [[nodiscard]] bool CloseMotionDocument() noexcept {
+        if (motionStateId_ == 0U) return false;
+        motionStateId_ = 0U;
+        return true;
+    }
 
     [[nodiscard]] bool SetSelection(std::vector<std::uint64_t> stateIds) {
         if (!controller_.has_value()) return false;
@@ -179,6 +191,7 @@ private:
     std::vector<std::uint64_t> selection_;
     std::vector<ClipboardState> clipboard_;
     std::uint64_t nextId_ = 1U;
+    std::uint64_t motionStateId_ = 0U;
 };
 
 } // namespace kb::editor

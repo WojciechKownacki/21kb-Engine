@@ -168,16 +168,26 @@ void AnimatorEditorPanelRenderer::Paint(
         sceneContext.Scene().Assets().Manager().Registry().Find(sceneContext.AnimatorEditorAssetId());
     const kb::assets::AssetMetadata* previewMesh =
         sceneContext.Scene().Assets().Manager().Registry().Find(sceneContext.AnimationPreview().SkeletalMeshAsset());
+    const kb::scene::AnimatorController* controller = sceneContext.AnimatorEditorController();
+    const kb::scene::AnimatorControllerState* motion = nullptr;
+    if (controller != nullptr && sceneContext.AnimatorEditorGraphDocument().MotionState() != 0U) {
+        for (const auto& layer : controller->layers) for (const auto& state : layer.states)
+            if (state.id == sceneContext.AnimatorEditorGraphDocument().MotionState()) motion = &state;
+    }
     const std::string title = (metadata == nullptr ? std::string{ "Animator Controller" } : metadata->name) +
         (previewMesh == nullptr ? std::string{} : "  |  Preview " + previewMesh->name);
     DrawText(dc, RECT{ content.left + 10, content.top, content.right - 10, content.top + kHeaderHeight },
-        title.c_str(), RGB(219, 225, 233), 13, FW_SEMIBOLD);
+        (title + "  >  " + (motion == nullptr ? "State Machine" : motion->name)).c_str(), RGB(219, 225, 233), 13, FW_SEMIBOLD);
 
     const AnimatorEditorPanelLayout layout = ResolveLayout(
         RECT{ content.left, content.top + kHeaderHeight, content.right, content.bottom });
-    const kb::scene::AnimatorController* controller = sceneContext.AnimatorEditorController();
     GdiDrawing::FillRectColor(dc, layout.preview, RGB(20, 23, 28));
-    PaintGraph(dc, layout.graph, controller);
+    if (motion == nullptr) PaintGraph(dc, layout.graph, controller);
+    else {
+        GdiDrawing::FillRectColor(dc, layout.graph, RGB(29, 32, 37));
+        DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 10, layout.graph.right - 12, layout.graph.top + 34 }, "Motion / Blend Document", RGB(204, 212, 221), 13, FW_SEMIBOLD);
+        DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 42, layout.graph.right - 12, layout.graph.top + 62 }, motion->clipReference.empty() ? motion->blendParameter.c_str() : motion->clipReference.c_str(), RGB(168, 178, 190), 12);
+    }
     PaintDetails(dc, layout.details, controller);
     if (sceneViewport == nullptr) return;
     const std::uint64_t revision = sceneContext.AnimatorEditorPreviewRevision();
@@ -194,6 +204,29 @@ void AnimatorEditorPanelRenderer::Paint(
     settings.selectionOutlineEnabled = false;
     settings.gpuDrivenRuntimeDispatchEnabled = renderBackendSettings.GpuDrivenEnabled();
     sceneViewport->Present(dc, host, layout.preview, *sceneContext.AnimatorEditorPreviewScene(), theme, settings);
+}
+
+std::optional<std::uint64_t> AnimatorEditorPanelRenderer::GraphStateAt(
+    const RECT& content, const kb::scene::AnimatorController& controller, int x, int y) noexcept {
+    constexpr int entryWidth = 48;
+    constexpr int nodeHeight = 44;
+    const AnimatorEditorPanelLayout layout = ResolveLayout(RECT{ content.left, content.top + kHeaderHeight, content.right, content.bottom });
+    if (x < layout.graph.left || x >= layout.graph.right || y < layout.graph.top || y >= layout.graph.bottom) return std::nullopt;
+    const int nodeWidth = std::clamp((static_cast<int>(layout.graph.right) - static_cast<int>(layout.graph.left)) / 4, 104, 168);
+    const int layerHeight = std::max(nodeHeight + 36, (static_cast<int>(layout.graph.bottom) - static_cast<int>(layout.graph.top) - 30) /
+        std::max(1, static_cast<int>(controller.layers.size())));
+    for (std::size_t layerIndex = 0U; layerIndex < controller.layers.size(); ++layerIndex) {
+        const int rowTop = layout.graph.top + 30 + static_cast<int>(layerIndex) * layerHeight;
+        const auto& layer = controller.layers[layerIndex];
+        for (std::size_t stateIndex = 0U; stateIndex < layer.states.size(); ++stateIndex) {
+            const auto& state = layer.states[stateIndex];
+            const auto positioned = std::ranges::find_if(controller.graphLayout, [&state](const auto& value) { return value.stateId == state.id; });
+            const int left = layout.graph.left + entryWidth + 30 +
+                (positioned == controller.graphLayout.end() ? static_cast<int>(stateIndex) * (nodeWidth + 22) : positioned->positionX);
+            if (x >= left && x < left + nodeWidth && y >= rowTop + 22 && y < rowTop + 22 + nodeHeight) return state.id;
+        }
+    }
+    return std::nullopt;
 }
 
 } // namespace kb::editor
