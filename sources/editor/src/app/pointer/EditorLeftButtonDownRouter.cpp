@@ -921,6 +921,18 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             case 8U: static_cast<void>(transport.Step(-1)); break;
             default: break;
             }
+        } else if (const std::optional<std::size_t> track = AnimationClipEditorPanelRenderer::TimelineTrackAt(
+                       *animationClipEditorContent, timeline, x, y);
+                   track.has_value()) {
+            static_cast<void>(timeline.SelectTrack(*track));
+            if (const AnimationClipTimelineTrack* selected = timeline.SelectedTrackData();
+                selected != nullptr && selected->boneId != 0U) {
+                static_cast<void>(sceneContext_.SelectSkeletalMeshEditorBone(selected->boneId));
+            }
+        } else if (const std::optional<kb::scene::SkeletonBoneId> bone = AnimationClipEditorPanelRenderer::BoneAt(
+                       *animationClipEditorContent, sceneContext_, x, y);
+                   bone.has_value()) {
+            static_cast<void>(sceneContext_.SelectSkeletalMeshEditorBone(*bone));
         } else if (const std::optional<float> time = AnimationClipEditorPanelRenderer::TimelineTimeAt(
                        *animationClipEditorContent, timeline, x, y);
                    time.has_value()) {

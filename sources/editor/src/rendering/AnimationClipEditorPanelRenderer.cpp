@@ -8,6 +8,7 @@
 #include "rendering/gdi/ScopedGdiObject.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <string>
@@ -73,7 +74,11 @@ void PaintTimeline(HDC dc, const RECT& rect, const AnimationClipTimelineState& t
         const int rowTop = top + headerHeight + static_cast<int>(index) * rowHeight;
         if (rowTop >= bottom) break;
         const int rowBottom = std::min(bottom, rowTop + rowHeight);
-        if ((index & 1U) != 0U) GdiDrawing::FillRectColor(dc, RECT{ tracksLeft, rowTop, right, rowBottom }, RGB(29, 32, 37));
+        if (timeline.SelectedTrack() == index) {
+            GdiDrawing::FillRectColor(dc, RECT{ left, rowTop, right, rowBottom }, RGB(55, 71, 91));
+        } else if ((index & 1U) != 0U) {
+            GdiDrawing::FillRectColor(dc, RECT{ tracksLeft, rowTop, right, rowBottom }, RGB(29, 32, 37));
+        }
         SetTextColor(dc, TrackColor(tracks[index].kind));
         RECT label{ left + 8, rowTop, tracksLeft - 6, rowBottom };
         DrawTextA(dc, tracks[index].label.c_str(), -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
@@ -126,7 +131,11 @@ void AnimationClipEditorPanelRenderer::Paint(
     std::snprintf(transportText, sizeof(transportText), "  |  Frame %llu / %llu  |  %.3f / %.3f s",
         static_cast<unsigned long long>(frame), static_cast<unsigned long long>(frameCount),
         transport.NormalizedTime() * transport.DurationSeconds(), transport.DurationSeconds());
-    const std::string text = name + transportText;
+    const SkeletalMeshEditorDetailsModel details = sceneContext.SkeletalMeshEditorDetails();
+    const std::string selection = sceneContext.SelectedSkeletalMeshEditorBone() == 0U
+        ? std::string{}
+        : "  |  " + details.title;
+    const std::string text = name + transportText + selection;
     DrawTextA(dc, text.c_str(), -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 
     const char* labels[kTransportControlCount] = { "]", "[", "+", "-", "S", "L", ">|", transport.IsPlaying() ? "||" : ">", "|<" };
@@ -168,6 +177,19 @@ std::optional<std::uint8_t> AnimationClipEditorPanelRenderer::TransportControlAt
     return std::nullopt;
 }
 
+std::optional<std::size_t> AnimationClipEditorPanelRenderer::TimelineTrackAt(
+    const RECT& content, const AnimationClipTimelineState& timeline, int x, int y) noexcept {
+    const int timelineHeight = std::clamp((static_cast<int>(content.bottom) - static_cast<int>(content.top)) / 3, 150, 300);
+    const int timelineTop = static_cast<int>(content.bottom) - timelineHeight;
+    const int outlinerWidth = std::clamp((static_cast<int>(content.right) - static_cast<int>(content.left)) / 4, 180, 320);
+    const int tracksLeft = static_cast<int>(content.left) + outlinerWidth;
+    constexpr int kTimelineHeaderHeight = 24;
+    constexpr int kRowHeight = 20;
+    if (x < content.left || x >= tracksLeft || y < timelineTop + kTimelineHeaderHeight || y >= content.bottom) return std::nullopt;
+    const std::size_t index = static_cast<std::size_t>((y - (timelineTop + kTimelineHeaderHeight)) / kRowHeight);
+    return index < timeline.Tracks().size() ? std::optional<std::size_t>{ index } : std::nullopt;
+}
+
 std::optional<float> AnimationClipEditorPanelRenderer::TimelineTimeAt(
     const RECT& content, const AnimationClipTimelineState& timeline, int x, int y) noexcept {
     const int timelineHeight = std::clamp((static_cast<int>(content.bottom) - static_cast<int>(content.top)) / 3, 150, 300);
@@ -178,6 +200,48 @@ std::optional<float> AnimationClipEditorPanelRenderer::TimelineTimeAt(
     const int width = std::max(1, static_cast<int>(content.right) - tracksLeft - 1);
     const float normalized = std::clamp(static_cast<float>(x - tracksLeft) / static_cast<float>(width), 0.0F, 1.0F);
     return timeline.PanSeconds() + normalized * timeline.VisibleDurationSeconds();
+}
+
+std::optional<kb::scene::SkeletonBoneId> AnimationClipEditorPanelRenderer::BoneAt(
+    const RECT& content, const EditorSceneContext& sceneContext, int x, int y) noexcept {
+    const int timelineHeight = std::clamp((static_cast<int>(content.bottom) - static_cast<int>(content.top)) / 3, 150, 300);
+    const RECT viewport{ content.left, content.top + kHeaderHeight, content.right, content.bottom - timelineHeight };
+    if (x < viewport.left || x >= viewport.right || y < viewport.top || y >= viewport.bottom) return std::nullopt;
+    const EditorViewportCameraAxes camera = sceneContext.AnimationPreviewCamera().Axes();
+    const float width = static_cast<float>(std::max(1L, viewport.right - viewport.left));
+    const float height = static_cast<float>(std::max(1L, viewport.bottom - viewport.top));
+    const float tangent = std::tan(sceneContext.AnimationPreviewCamera().VerticalFovDegrees() * 0.00872664626F);
+    const float aspect = width / height;
+    auto project = [&](kb::scene::Vec3 point, float& screenX, float& screenY) {
+        const kb::scene::Vec3 relative = point - camera.position;
+        const float depth = kb::math::Dot(relative, camera.forward);
+        if (depth <= 0.001F) return false;
+        const float horizontal = kb::math::Dot(relative, camera.right) / (depth * tangent * aspect);
+        const float vertical = kb::math::Dot(relative, camera.up) / (depth * tangent);
+        screenX = static_cast<float>(viewport.left) + (horizontal + 1.0F) * width * 0.5F;
+        screenY = static_cast<float>(viewport.top) + (1.0F - vertical) * height * 0.5F;
+        return true;
+    };
+    std::optional<kb::scene::SkeletonBoneId> closest;
+    float closestDistance = 100.0F;
+    for (const AnimationPreviewOverlayLine& line : sceneContext.AnimationPreviewOverlays().lines) {
+        if (line.boneId == 0U) continue;
+        float fromX = 0.0F, fromY = 0.0F, toX = 0.0F, toY = 0.0F;
+        if (!project(line.from, fromX, fromY) || !project(line.to, toX, toY)) continue;
+        const float dx = toX - fromX;
+        const float dy = toY - fromY;
+        const float squaredLength = dx * dx + dy * dy;
+        const float parameter = squaredLength <= 0.0001F ? 0.0F : std::clamp(
+            ((static_cast<float>(x) - fromX) * dx + (static_cast<float>(y) - fromY) * dy) / squaredLength, 0.0F, 1.0F);
+        const float distanceX = static_cast<float>(x) - (fromX + parameter * dx);
+        const float distanceY = static_cast<float>(y) - (fromY + parameter * dy);
+        const float distance = distanceX * distanceX + distanceY * distanceY;
+        if (distance < closestDistance) {
+            closestDistance = distance;
+            closest = line.boneId;
+        }
+    }
+    return closest;
 }
 
 } // namespace kb::editor

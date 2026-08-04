@@ -30,7 +30,9 @@ public:
         const EditorRenderBackendSettings& renderBackendSettings,
         EditorSceneBgfxViewport* sceneViewport) const;
     [[nodiscard]] static std::optional<std::uint8_t> TransportControlAt(const RECT& content, int x, int y) noexcept;
+    [[nodiscard]] static std::optional<std::size_t> TimelineTrackAt(const RECT& content, const AnimationClipTimelineState& timeline, int x, int y) noexcept;
     [[nodiscard]] static std::optional<float> TimelineTimeAt(const RECT& content, const AnimationClipTimelineState& timeline, int x, int y) noexcept;
+    [[nodiscard]] static std::optional<kb::scene::SkeletonBoneId> BoneAt(const RECT& content, const EditorSceneContext& sceneContext, int x, int y) noexcept;
 #endif
 };
 
