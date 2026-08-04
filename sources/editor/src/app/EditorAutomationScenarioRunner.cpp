@@ -3083,6 +3083,11 @@ ReadScriptValue(
         const kb::scene::SceneEntity expected = *target == "preview"
             ? state.context.AnimatorEditorResolvedDebugTarget()
             : ResolveEntity(state, *target);
+        const bool uiMatchesTarget =
+            state.context.AnimatorEditorResolvedDebugTarget() == expected &&
+            (*target == "preview"
+                ? state.context.AnimatorEditorDebuggingPreview()
+                : state.context.AnimatorEditorDebugTarget() == expected);
         const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> snapshot =
             state.context.AnimatorEditorDebugSnapshot();
         const kb::scene::AnimatorDebugInstanceSnapshot* instance =
@@ -3090,7 +3095,7 @@ ReadScriptValue(
         const auto minimumLayers = NumberMember(step, "minimum_layers", error, false);
         const auto minimumBones = NumberMember(step, "minimum_bones", error, false);
         if (!error.empty()) return { false, error };
-        const bool valid = instance != nullptr &&
+        const bool valid = uiMatchesTarget && instance != nullptr &&
             (!minimumLayers.has_value() || instance->layers.size() >= static_cast<std::size_t>(*minimumLayers)) &&
             (!minimumBones.has_value() || instance->bones.size() >= static_cast<std::size_t>(*minimumBones));
         return { valid, valid ? "immutable animator debug snapshot" : "animator debug snapshot mismatch" };

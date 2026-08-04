@@ -219,7 +219,7 @@
     { "op": "open_asset", "asset": "/Game/Animation/SkeletalAutomation.kbanimcontroller" },
     { "op": "set_animator_debug_target", "target": "skeletal_probe" },
     { "op": "assert_animator_debug_snapshot", "target": "skeletal_probe", "minimum_layers": 1, "minimum_bones": 1 },
-    { "op": "set_animator_debug_target", "target": "preview" },
+    { "op": "delete_entity", "entity": "skeletal_probe" },
     { "op": "assert_animator_debug_snapshot", "target": "preview", "minimum_layers": 1, "minimum_bones": 1 },
     { "op": "capture", "panel": "animator_editor", "checkpoint": "07b-animator-live-debug" },
     { "op": "assert_console", "contains": "visual graph runtime mutation observed", "category": "Script", "level": "info" },
