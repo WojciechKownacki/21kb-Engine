@@ -425,6 +425,8 @@ public:
     [[nodiscard]] AnimatorEditorGraphDocumentState& AnimatorEditorGraphDocument() noexcept;
     [[nodiscard]] const AnimatorEditorGraphDocumentState& AnimatorEditorGraphDocument() const noexcept;
     [[nodiscard]] bool AddAnimationClipToAnimatorEditor(kb::assets::AssetId clipId, std::int32_t graphX, std::int32_t graphY);
+    [[nodiscard]] bool OpenAnimatorMotionDocument(std::uint64_t stateId);
+    [[nodiscard]] bool ReturnToAnimatorStateMachine();
     [[nodiscard]] kb::assets::AssetId AnimationClipEditorAssetId() const noexcept;
     [[nodiscard]] bool HasAnimationClipEditorAsset() const noexcept;
     [[nodiscard]] const kb::scene::Scene* AnimationClipEditorPreviewScene() const noexcept;
