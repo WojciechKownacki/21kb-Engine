@@ -9139,6 +9139,16 @@ bool EditorSceneContext::AddAnimationClipToAnimatorEditor(kb::assets::AssetId cl
     return true;
 }
 
+bool EditorSceneContext::OpenAnimatorMotionDocument(std::uint64_t stateId) {
+    if (!HasAnimatorEditorAsset() || !animatorEditorGraphDocument_.OpenMotionDocument(stateId)) return false;
+    console_.Info("Animator Editor", "Opened state motion document.");
+    return true;
+}
+
+bool EditorSceneContext::ReturnToAnimatorStateMachine() {
+    return animatorEditorGraphDocument_.CloseMotionDocument();
+}
+
 bool EditorSceneContext::OpenAnimationClipEditorAsset(kb::assets::AssetId id) {
     const kb::assets::AssetMetadata* clipMetadata = scene_->Assets().Manager().Registry().Find(id);
     if (clipMetadata == nullptr || clipMetadata->type != kb::scene::kAnimationClipAssetType) {
