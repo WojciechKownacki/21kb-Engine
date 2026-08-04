@@ -457,7 +457,21 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
     case WM_ENTERSIZEMOVE:
         return EditorWindowResizeHandler::HandleEnterSizeMove(messageWindow, context_.sceneViewport);
     case WM_SIZE:
+        if (wparam == SIZE_MINIMIZED) {
+            context_.sceneViewport.SetHostSurfaceSuspended(messageWindow, true);
+        } else {
+            context_.sceneViewport.SetHostSurfaceSuspended(messageWindow, false);
+        }
         return EditorWindowResizeHandler::HandleSize(messageWindow, wparam, lparam, context_.dockModel, context_.floatingWindows, context_.sceneViewport);
+    case WM_DPICHANGED:
+        context_.sceneViewport.NotifyHostDpiChanged(messageWindow);
+        return DefWindowProcW(messageWindow, message, wparam, lparam);
+    case WM_ACTIVATEAPP:
+        context_.sceneViewport.SetAllHostSurfacesSuspended(wparam == FALSE);
+        if (wparam != FALSE && context_.mainWindow != nullptr) {
+            InvalidateRect(context_.mainWindow, nullptr, FALSE);
+        }
+        return 0;
     case WM_EXITSIZEMOVE:
         return EditorWindowResizeHandler::HandlePlacementChanged(messageWindow, context_.sceneViewport);
     case WM_CANCELMODE:
