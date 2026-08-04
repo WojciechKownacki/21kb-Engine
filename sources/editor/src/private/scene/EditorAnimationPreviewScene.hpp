@@ -5,6 +5,7 @@
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntity.hpp"
+#include "engine/scene/SkeletonAsset.hpp"
 
 #include <memory>
 #include <string>
@@ -16,6 +17,7 @@ struct AnimationPreviewOverlayLine {
     kb::scene::Vec3 from{};
     kb::scene::Vec3 to{};
     kb::scene::Vec3 color{ 1.0F, 1.0F, 1.0F };
+    kb::scene::SkeletonBoneId boneId = 0U;
 };
 
 struct AnimationPreviewOverlayLabel {

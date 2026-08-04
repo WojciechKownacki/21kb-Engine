@@ -6,6 +6,10 @@
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <vector>
+
 namespace kb::editor {
 namespace {
 
@@ -23,6 +27,52 @@ void PaintPanel(HDC dc, const RECT& rect, const char* title, const char* subtitl
     SetTextColor(dc, RGB(139, 149, 161));
     RECT subtitleRect{ rect.left + 10, rect.top + 34, rect.right - 8, rect.bottom - 8 };
     DrawTextA(dc, subtitle, -1, &subtitleRect, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
+}
+
+constexpr int kTreeHeaderHeight = 56;
+constexpr int kTreeRowHeight = 20;
+
+void PaintTree(HDC dc, const RECT& rect, const EditorSceneContext& sceneContext) {
+    GdiDrawing::FillRectColor(dc, rect, RGB(28, 30, 34));
+    GdiDrawing::DrawSharpFrame(dc, rect, RGB(28, 30, 34), RGB(53, 57, 64));
+    const ScopedFont titleFont{ 13, FW_SEMIBOLD };
+    const ScopedGdiObject selectedTitleFont(dc, titleFont.handle);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(207, 214, 222));
+    RECT title{ rect.left + 10, rect.top + 8, rect.right - 8, rect.top + 26 };
+    DrawTextA(dc, "Skeleton Tree", -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    GdiDrawing::DrawSharpFrame(dc, RECT{ rect.left + 8, rect.top + 30, rect.right - 8, rect.top + 50 }, RGB(23, 25, 28),
+        sceneContext.IsSkeletalMeshEditorTreeSearchFocused() ? RGB(77, 143, 204) : RGB(63, 68, 76));
+    const ScopedFont bodyFont{ 11, FW_NORMAL };
+    const ScopedGdiObject selectedBodyFont(dc, bodyFont.handle);
+    SetTextColor(dc, RGB(145, 155, 168));
+    RECT filter{ rect.left + 14, rect.top + 31, rect.right - 12, rect.top + 49 };
+    const std::string filterText = sceneContext.SkeletalMeshEditorTreeFilter().empty()
+        ? "Search bones and sockets" : sceneContext.SkeletalMeshEditorTreeFilter();
+    DrawTextA(dc, filterText.c_str(), -1, &filter, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+
+    const std::vector<SkeletalMeshEditorTreeRow> rows = sceneContext.SkeletalMeshEditorTreeRows();
+    for (std::size_t index = 0U; index < rows.size(); ++index) {
+        RECT row{ rect.left + 1, rect.top + kTreeHeaderHeight + static_cast<int>(index) * kTreeRowHeight,
+            rect.right - 1, rect.top + kTreeHeaderHeight + static_cast<int>(index + 1U) * kTreeRowHeight };
+        if (row.top >= rect.bottom) break;
+        if (rows[index].selected) GdiDrawing::FillRectColor(dc, row, RGB(35, 75, 112));
+        RECT label{ row.left + 10 + static_cast<int>(rows[index].depth) * 14, row.top, row.right - 6, row.bottom };
+        SetTextColor(dc, rows[index].kind == SkeletalMeshEditorTreeItemKind::Socket ? RGB(120, 196, 176) : RGB(211, 217, 225));
+        DrawTextA(dc, rows[index].label.c_str(), -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    }
+}
+
+[[nodiscard]] float PointSegmentDistanceSquared(float px, float py, float ax, float ay, float bx, float by) noexcept {
+    const float dx = bx - ax;
+    const float dy = by - ay;
+    const float lengthSquared = dx * dx + dy * dy;
+    const float parameter = lengthSquared <= 0.0001F ? 0.0F : std::clamp(((px - ax) * dx + (py - ay) * dy) / lengthSquared, 0.0F, 1.0F);
+    const float x = ax + parameter * dx;
+    const float y = ay + parameter * dy;
+    const float deltaX = px - x;
+    const float deltaY = py - y;
+    return deltaX * deltaX + deltaY * deltaY;
 }
 
 } // namespace
@@ -51,7 +101,7 @@ void SkeletalMeshEditorPanelRenderer::Paint(
     }
     const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
     PaintPanel(dc, layout.toolbox, "Toolbox", "Preview workspace");
-    PaintPanel(dc, layout.skeletonTree, "Skeleton Tree", "Skeleton hierarchy");
+    PaintTree(dc, layout.skeletonTree, sceneContext);
     PaintPanel(dc, layout.assetDetails, "Asset Details", "Skeletal Mesh properties");
     if (sceneViewport == nullptr) return;
 
@@ -69,6 +119,57 @@ void SkeletalMeshEditorPanelRenderer::Paint(
     settings.selectionOutlineEnabled = false;
     settings.gpuDrivenRuntimeDispatchEnabled = renderBackendSettings.GpuDrivenEnabled();
     sceneViewport->Present(dc, host, layout.viewport, *sceneContext.SkeletalMeshEditorPreviewScene(), theme, settings);
+}
+
+std::optional<SkeletalMeshEditorTreeRow> SkeletalMeshEditorPanelRenderer::TreeRowAt(
+    const RECT& content, const EditorSceneContext& sceneContext, int x, int y) {
+    const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
+    if (x < layout.skeletonTree.left || x >= layout.skeletonTree.right ||
+        y < layout.skeletonTree.top + kTreeHeaderHeight || y >= layout.skeletonTree.bottom) return std::nullopt;
+    const std::size_t index = static_cast<std::size_t>((y - (layout.skeletonTree.top + kTreeHeaderHeight)) / kTreeRowHeight);
+    const std::vector<SkeletalMeshEditorTreeRow> rows = sceneContext.SkeletalMeshEditorTreeRows();
+    return index < rows.size() ? std::optional<SkeletalMeshEditorTreeRow>{ rows[index] } : std::nullopt;
+}
+
+bool SkeletalMeshEditorPanelRenderer::IsTreeSearchAt(const RECT& content, int x, int y) noexcept {
+    const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
+    const RECT search{ layout.skeletonTree.left + 8, layout.skeletonTree.top + 30,
+        layout.skeletonTree.right - 8, layout.skeletonTree.top + 50 };
+    return x >= search.left && x < search.right && y >= search.top && y < search.bottom;
+}
+
+std::optional<kb::scene::SkeletonBoneId> SkeletalMeshEditorPanelRenderer::BoneAt(
+    const RECT& content, const EditorSceneContext& sceneContext, int x, int y) noexcept {
+    const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
+    if (x < layout.viewport.left || x >= layout.viewport.right || y < layout.viewport.top || y >= layout.viewport.bottom) return std::nullopt;
+    const EditorViewportCameraAxes camera = sceneContext.AnimationPreviewCamera().Axes();
+    const float width = static_cast<float>(std::max(1L, layout.viewport.right - layout.viewport.left));
+    const float height = static_cast<float>(std::max(1L, layout.viewport.bottom - layout.viewport.top));
+    const float tangent = std::tan(sceneContext.AnimationPreviewCamera().VerticalFovDegrees() * 0.00872664626F);
+    const float aspect = width / height;
+    auto project = [&](kb::scene::Vec3 point, float& screenX, float& screenY) {
+        const kb::scene::Vec3 delta = point - camera.position;
+        const float depth = delta.x * camera.forward.x + delta.y * camera.forward.y + delta.z * camera.forward.z;
+        if (depth <= 0.001F) return false;
+        const float horizontal = (delta.x * camera.right.x + delta.y * camera.right.y + delta.z * camera.right.z) / (depth * tangent * aspect);
+        const float vertical = (delta.x * camera.up.x + delta.y * camera.up.y + delta.z * camera.up.z) / (depth * tangent);
+        screenX = static_cast<float>(layout.viewport.left) + (horizontal * 0.5F + 0.5F) * width;
+        screenY = static_cast<float>(layout.viewport.top) + (0.5F - vertical * 0.5F) * height;
+        return true;
+    };
+    std::optional<kb::scene::SkeletonBoneId> closest;
+    float closestDistance = 100.0F;
+    for (const AnimationPreviewOverlayLine& line : sceneContext.AnimationPreviewOverlays().lines) {
+        if (line.boneId == 0U) continue;
+        float fromX = 0.0F, fromY = 0.0F, toX = 0.0F, toY = 0.0F;
+        if (!project(line.from, fromX, fromY) || !project(line.to, toX, toY)) continue;
+        const float distance = PointSegmentDistanceSquared(static_cast<float>(x), static_cast<float>(y), fromX, fromY, toX, toY);
+        if (distance < closestDistance) {
+            closestDistance = distance;
+            closest = line.boneId;
+        }
+    }
+    return closest;
 }
 
 } // namespace kb::editor

@@ -28,6 +28,7 @@
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "inspection/TerrainMaterialLayerMenuState.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
 #include "platform/win32/EditorAnimatorControllerAssetPickerDialog.hpp"
@@ -829,6 +830,34 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             return;
         }
+    }
+
+    if (const std::optional<RECT> skeletalMeshEditorContent = EditorPanelContentResolver::Resolve(
+            DockPanelKind::SkeletalMeshEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        skeletalMeshEditorContent.has_value() && PointInRect(*skeletalMeshEditorContent, x, y) &&
+        sceneContext_.HasSkeletalMeshEditorAsset()) {
+        if (SkeletalMeshEditorPanelRenderer::IsTreeSearchAt(*skeletalMeshEditorContent, x, y)) {
+            sceneContext_.FocusSkeletalMeshEditorTreeSearch(true);
+        } else if (const std::optional<SkeletalMeshEditorTreeRow> row =
+                SkeletalMeshEditorPanelRenderer::TreeRowAt(*skeletalMeshEditorContent, sceneContext_, x, y);
+            row.has_value()) {
+            sceneContext_.FocusSkeletalMeshEditorTreeSearch(false);
+            if (row->kind == SkeletalMeshEditorTreeItemKind::Bone) {
+                static_cast<void>(sceneContext_.SelectSkeletalMeshEditorBone(row->boneId));
+            } else {
+                static_cast<void>(sceneContext_.SelectSkeletalMeshEditorSocket(row->socketName));
+            }
+        } else if (const std::optional<kb::scene::SkeletonBoneId> bone =
+                       SkeletalMeshEditorPanelRenderer::BoneAt(*skeletalMeshEditorContent, sceneContext_, x, y);
+                   bone.has_value()) {
+            sceneContext_.FocusSkeletalMeshEditorTreeSearch(false);
+            static_cast<void>(sceneContext_.SelectSkeletalMeshEditorBone(*bone));
+        } else {
+            sceneContext_.FocusSkeletalMeshEditorTreeSearch(false);
+            static_cast<void>(sceneContext_.ClearSkeletalMeshEditorTreeSelection());
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
     }
 
     // A click outside the Project Settings panel dismisses its open dropdown,

@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "app/EditorEditCommandInputHandler.hpp"
 #include "app/EditorHierarchySearchInputHandler.hpp"
+#include "app/EditorSkeletalMeshTreeSearchInputHandler.hpp"
 #include "app/EditorTextInputShortcuts.hpp"
 #include "app/EditorAssetBrowserInputHandler.hpp"
 #include "app/EditorWindowHitTestHandler.hpp"
@@ -541,6 +542,9 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         if (EditorHierarchySearchInputHandler{ context_.mainWindow, context_.sceneContext }.HandleChar(messageWindow, wparam)) {
             return 0;
         }
+        if (EditorSkeletalMeshTreeSearchInputHandler{ context_.mainWindow, context_.sceneContext }.HandleChar(messageWindow, wparam)) {
+            return 0;
+        }
         break;
     case WM_KEYDOWN:
         if (InspectorPanelInteraction::HandleKeyCapture(context_.sceneContext, wparam)) {
@@ -567,6 +571,10 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             return 0;
         }
         if (EditorHierarchySearchInputHandler{ context_.mainWindow, context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {
+            context_.sceneViewport.RequestPresent();
+            return 0;
+        }
+        if (EditorSkeletalMeshTreeSearchInputHandler{ context_.mainWindow, context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {
             context_.sceneViewport.RequestPresent();
             return 0;
         }

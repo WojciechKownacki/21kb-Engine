@@ -5,6 +5,7 @@
 #include "rendering/DockTabControlGeometry.hpp"
 #include "rendering/EditorToolbarLayout.hpp"
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
+#include "scene/SkeletalMeshEditorTreeState.hpp"
 #include "windowing/FloatingWindowControlHitTester.hpp"
 #include "windowing/FloatingWindowControlLayout.hpp"
 
@@ -418,6 +419,34 @@ void RunSkeletalMeshEditorDefaultLayoutTest() {
         "Skeletal Mesh Editor right column should stack Skeleton Tree over Asset Details");
 }
 
+void RunSkeletalMeshEditorTreeStateTest() {
+    kb::scene::SkeletonAsset skeleton{};
+    skeleton.bones = {
+        { .id = 10U, .parentIndex = -1, .name = "Root" },
+        { .id = 20U, .parentIndex = 0, .name = "Spine" },
+        { .id = 30U, .parentIndex = 1, .name = "Hand" },
+    };
+    skeleton.sockets = {{ .name = "Weapon", .boneId = 30U }};
+    kb::editor::SkeletalMeshEditorTreeState tree;
+    tree.SetSkeleton(skeleton);
+    kb::editor::tests::Require(tree.SelectBone(30U) && tree.SelectedBone() == 30U && tree.SelectedSocket().empty(),
+        "Skeleton Tree should retain viewport-selected bones");
+    kb::editor::tests::Require(tree.SelectSocket("Weapon") && tree.SelectedBone() == 0U && tree.SelectedSocket() == "Weapon",
+        "Skeleton Tree should retain selected sockets independently from bones");
+    kb::editor::tests::Require(tree.SetFilter("hand"), "Skeleton Tree should accept a case-insensitive search filter");
+    const std::vector<kb::editor::SkeletalMeshEditorTreeRow> rows = tree.Rows();
+    kb::editor::tests::Require(rows.size() == 3U && rows[0].label == "Root" && rows[1].label == "Spine" && rows[2].label == "Hand",
+        "Skeleton Tree filtering should retain matching bones and their hierarchy ancestors");
+    tree.FocusSearch(true);
+    tree.SelectAllSearch();
+    tree.AppendSearchText(L's');
+    tree.AppendSearchText(L'p');
+    kb::editor::tests::Require(tree.IsSearchFocused() && tree.Filter() == "sp",
+        "Skeleton Tree search should accept focused text input");
+    tree.BackspaceSearch();
+    kb::editor::tests::Require(tree.Filter() == "s", "Skeleton Tree search should handle backspace");
+}
+
 // A click on any tab — the active one or an inactive sibling — must hit-test as a
 // dock Tab. The pointer router relies on this: a dock hit means the click is a
 // layout action (switch tabs), so it must NOT clear the scene selection and blank
@@ -473,6 +502,7 @@ void RunEditorDockingTests() {
     RunClosedMaterialEditorReopensInCenterDockTest();
     RunSkeletalMeshEditorWorkspaceActivationTest();
     RunSkeletalMeshEditorDefaultLayoutTest();
+    RunSkeletalMeshEditorTreeStateTest();
     RunTabClickIsDockInteractionTest();
 }
 
