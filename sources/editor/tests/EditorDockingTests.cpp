@@ -456,7 +456,7 @@ void RunSkeletalMeshEditorDetailsStateTest() {
     mesh.skeletonAssetId = 99U;
     mesh.skeletonCompatibilitySignature = 456U;
     mesh.lods = {{ .vertices = std::vector<kb::scene::SkeletalMeshVertex>(3U), .indices = { 0U, 1U, 2U },
-        .sections = {{ .firstIndex = 0U, .indexCount = 3U, .materialAssetId = 123U }}, .requiredBones = { 10U } }};
+        .sections = {{ .firstIndex = 0U, .indexCount = 3U, .materialAssetId = 123U, .boneMap = { 10U } }}, .requiredBones = { 10U } }};
     kb::assets::AssetMetadata metadata{};
     metadata.name = "Hero";
     metadata.virtualPath = "/Game/Hero.kbskeletalmesh";
@@ -467,7 +467,8 @@ void RunSkeletalMeshEditorDetailsStateTest() {
     kb::editor::tests::Require(asset.sections.size() >= 5U && asset.sections[1].title == "LOD 0" && asset.sections[2].title == "LOD 0 Material 0",
         "Skeletal Mesh Details should expose asset LOD and material-section data");
     const kb::editor::SkeletalMeshEditorDetailsModel bone = details.Build(10U, {});
-    kb::editor::tests::Require(bone.title == "Bone: Root" && bone.sections[0].fields[0].value == "10",
+    kb::editor::tests::Require(bone.title == "Bone: Root" && bone.sections[0].fields[0].value == "10" &&
+            bone.sections[0].fields[5].value == "3",
         "Skeletal Mesh Details should expose selected bone data");
     const kb::editor::SkeletalMeshEditorDetailsModel socket = details.Build(0U, "Weapon");
     kb::editor::tests::Require(socket.title == "Socket: Weapon" && socket.sections[0].fields[1].value == "10",

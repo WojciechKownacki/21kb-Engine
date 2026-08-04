@@ -773,7 +773,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
 57. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować Details dla assetu, kości, socketu, sekcji materiałowej,
     LOD, bounds i import settings.
 58. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać panele Morph Targets, curves i Advanced Preview.
-59. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać reference pose, LOD/material visualization, bone weights oraz
+59. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać reference pose, LOD/material visualization, bone weights oraz
     diagnostics importu/reimportu.
 60. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować working copy, dirty marker, Save, Revert, atomic
     reimport, per-document undo/redo i close prompt.
