@@ -176,7 +176,8 @@ void AnimatorEditorPanelRenderer::Paint(
     }
     const std::string title = (metadata == nullptr ? std::string{ "Animator Controller" } : metadata->name) +
         (sceneContext.HasDirtyAnimatorEditorAssetEdit() ? " *" : "") +
-        (previewMesh == nullptr ? std::string{} : "  |  Preview " + previewMesh->name);
+        (previewMesh == nullptr ? std::string{} : "  |  Preview " + previewMesh->name) +
+        "  |  Debug " + sceneContext.AnimatorEditorDebugTargetLabel();
     DrawText(dc, RECT{ content.left + 10, content.top, content.right - 10, content.top + kHeaderHeight },
         (title + "  >  " + (motion == nullptr ? "State Machine" : motion->name)).c_str(), RGB(219, 225, 233), 13, FW_SEMIBOLD);
 
