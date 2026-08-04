@@ -801,7 +801,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
 
 70. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać typed asset dispatch i dedykowany `Animator Editor`; usunąć
     kierowanie controllera do Script Editora.
-71. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Odtworzyć domyślny flow UE5 `25/55/20`: preview, centralny dokument
+71. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Odtworzyć domyślny flow UE5 `25/55/20`: preview, centralny dokument
     graph/state machine oraz Details/Asset Browser.
 72. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować Parameters, Layers, Entry/default state, state nodes,
     transitions, conditions i transition Details.
