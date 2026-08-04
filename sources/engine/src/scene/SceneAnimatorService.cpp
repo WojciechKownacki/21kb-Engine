@@ -92,6 +92,127 @@ double StateTime(float normalizedTime, const AnimationClip& clip);
     return true;
 }
 
+void BuildAndPublishDebugSnapshot(Scene& scene, SceneState& state) {
+    AnimatorDebugSnapshot published{};
+    published.revision = ++state.animatorDebugSnapshotRevision;
+    published.instances.reserve(state.animators.size());
+    std::erase_if(state.animatorDebugRootMotionTrails,
+        [&state](const auto& value) { return !state.animators.contains(value.first); });
+    for (const auto& [id, record] : state.animators) {
+        static_cast<void>(id);
+        if (!scene.Entities().IsAlive(record.entity) || !record.controller.IsLoaded()) {
+            continue;
+        }
+        AnimatorDebugInstanceSnapshot instance{};
+        instance.entity = record.entity;
+        instance.controllerAssetId = record.controller.Id().value;
+        instance.runtimeBindingGeneration = record.runtimeBindingGeneration;
+        instance.parameters.reserve(record.parameters.size());
+        for (std::size_t index = 0U; index < record.parameters.size(); ++index) {
+            const AnimatorParameterValue& value = record.parameters[index];
+            const AnimatorParameterDefinition& definition = record.controller->parameters[index];
+            instance.parameters.push_back({
+                .name = definition.name,
+                .type = value.type,
+                .boolValue = value.boolValue,
+                .intValue = value.intValue,
+                .floatValue = value.floatValue,
+            });
+        }
+        instance.layers.reserve(record.layers.size());
+        for (std::size_t index = 0U; index < record.layers.size(); ++index) {
+            const AnimatorRuntimeLayer& runtime = record.layers[index];
+            const AnimatorControllerLayer& definition = record.controller->layers[index];
+            const AnimatorControllerState& active = definition.states[runtime.currentState];
+            const AnimatorControllerState& previous = definition.states[runtime.previousState];
+            const AnimationClip& clip = ReferenceClip(runtime.states[runtime.currentState]);
+            std::uint64_t transitionId = 0U;
+            if (runtime.transitioning) {
+                const auto transition = std::find_if(
+                    definition.transitions.begin(), definition.transitions.end(),
+                    [&previous, &active](const AnimatorControllerTransition& candidate) {
+                        return candidate.fromState == previous.name && candidate.toState == active.name;
+                    });
+                if (transition != definition.transitions.end()) transitionId = transition->id;
+            }
+            instance.layers.push_back({
+                .name = definition.name,
+                .activeStateId = active.id,
+                .previousStateId = previous.id,
+                .activeTransitionId = transitionId,
+                .activeState = active.name,
+                .previousState = previous.name,
+                .normalizedTime = clip.durationSeconds > 0.0F
+                    ? static_cast<float>(runtime.currentTimeSeconds / clip.durationSeconds) : 0.0F,
+                .transitionProgress = runtime.transitioning && runtime.transitionDurationSeconds > 0.0
+                    ? static_cast<float>(std::clamp(runtime.transitionElapsedSeconds / runtime.transitionDurationSeconds, 0.0, 1.0)) : 1.0F,
+                .weight = definition.weight,
+                .elapsedSeconds = runtime.currentTimeSeconds,
+                .transitioning = runtime.transitioning,
+            });
+        }
+        instance.constraints.reserve(record.rigConstraints.size());
+        for (const AnimatorRuntimeConstraint& runtime : record.rigConstraints) {
+            const AnimatorRigConstraint& definition = record.controller->rigConstraints[runtime.definitionIndex];
+            AnimatorDebugConstraintSnapshot constraint{};
+            constraint.name = definition.name;
+            constraint.type = definition.type;
+            constraint.constrainedBoneId = definition.constrainedBoneId;
+            constraint.midBoneId = definition.midBoneId;
+            constraint.tipBoneId = definition.tipBoneId;
+            constraint.target = definition.target;
+            constraint.poleTarget = definition.poleTarget;
+            if (const auto target = record.ikTargets.find(definition.target); target != record.ikTargets.end()) {
+                constraint.targetValue = target->second;
+                constraint.hasTarget = true;
+            }
+            if (const auto target = record.ikTargets.find(definition.poleTarget); target != record.ikTargets.end()) {
+                constraint.poleTargetValue = target->second;
+                constraint.hasPoleTarget = true;
+            }
+            instance.constraints.push_back(std::move(constraint));
+        }
+        instance.rootMotionTranslation = record.extractedRootMotionTranslation;
+        instance.rootMotionRotation = record.extractedRootMotionRotation;
+        instance.hasRootMotion = record.hasExtractedRootMotion;
+        std::vector<Vec3>& rootMotionTrail = state.animatorDebugRootMotionTrails[id];
+        if (rootMotionTrail.empty()) rootMotionTrail.reserve(128U);
+        if (record.hasExtractedRootMotion) {
+            const Vec3 previous = rootMotionTrail.empty() ? Vec3{} : rootMotionTrail.back();
+            rootMotionTrail.push_back(previous + record.extractedRootMotionTranslation);
+            if (rootMotionTrail.size() > 128U) rootMotionTrail.erase(rootMotionTrail.begin());
+        }
+        instance.rootMotionTrail = rootMotionTrail;
+        if (record.skeleton.has_value()) {
+            const AnimatorInstanceSkeleton& skeleton = *record.skeleton;
+            const AnimatorInstanceSkeleton::PoseBuffer& pose = skeleton.poses[skeleton.currentPose];
+            instance.skeletonAssetId = skeleton.asset.Id().value;
+            instance.skeletonCompatibilitySignature = skeleton.compatibilitySignature;
+            instance.poseEvaluationCount = skeleton.evaluationCount;
+            instance.hierarchySolveCount = skeleton.hierarchySolveCount;
+            instance.paletteMatrixCount = static_cast<std::uint32_t>(pose.skinMatrices.size());
+            instance.bones.reserve(skeleton.boneIds.size());
+            for (std::size_t index = 0U; index < skeleton.boneIds.size(); ++index) {
+                instance.bones.push_back({
+                    .id = skeleton.boneIds[index],
+                    .localPose = { pose.local.positions[index], pose.local.rotations[index], pose.local.scales[index] },
+                    .componentPose = { pose.component.positions[index], pose.component.rotations[index], pose.component.scales[index] },
+                });
+            }
+        }
+        if (const DrawD3DeformedGeometryComponent* geometry = scene.Components().DeformedGeometries().TryGet(record.entity);
+            geometry != nullptr) {
+            instance.skeletalMeshAssetId = geometry->skeletalMeshAssetId;
+            instance.lodBias = geometry->lodBias;
+            instance.lodEnabled = geometry->lodEnabled;
+            instance.fixedBounds = geometry->fixedBounds;
+            instance.deformedGeometryEnabled = geometry->enabled;
+        }
+        published.instances.push_back(std::move(instance));
+    }
+    state.animatorDebugSnapshots.Publish(std::move(published));
+}
+
 void SolveComponentPose(
     const SkeletonAsset& skeleton,
     AnimatorInstanceSkeleton::PoseBuffer& pose) {
@@ -2209,6 +2330,16 @@ std::optional<AnimatorStateInfo> SceneAnimatorService::State(const Scene& scene,
             : 1.0F,
         .transitioning = layer.transitioning,
     };
+}
+
+std::shared_ptr<const AnimatorDebugSnapshot> SceneAnimatorService::DebugSnapshot(
+    const Scene& scene) noexcept {
+    return SceneAccess::State(scene).animatorDebugSnapshots.Read();
+}
+
+void SceneAnimatorService::PublishDebugSnapshot(Scene& scene) {
+    SceneState& state = SceneAccess::State(scene);
+    BuildAndPublishDebugSnapshot(scene, state);
 }
 
 std::vector<AnimationEventRecord> SceneAnimatorService::DrainEvents(Scene& scene) {
