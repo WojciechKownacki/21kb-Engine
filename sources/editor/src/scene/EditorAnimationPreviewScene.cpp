@@ -23,8 +23,10 @@
 #include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <memory>
+#include <string>
 
 namespace kb::editor {
 namespace {
@@ -48,6 +50,62 @@ void RegisterPreviewFloorAsset(kb::assets::AssetManager& manager) {
 
 [[nodiscard]] float BoundsRadius(const kb::scene::SkeletalMeshBounds& bounds) noexcept {
     return std::max(0.25F, kb::math::Length(bounds.extents));
+}
+
+[[nodiscard]] kb::scene::Vec3 WorldPoint(
+    const kb::scene::WorldTransform& transform, kb::scene::Vec3 point) noexcept {
+    const kb::scene::Vec3 scaled{
+        point.x * transform.scale.x,
+        point.y * transform.scale.y,
+        point.z * transform.scale.z,
+    };
+    return transform.position + kb::math::Rotate(transform.rotation, scaled);
+}
+
+[[nodiscard]] kb::scene::Vec3 WorldDirection(
+    const kb::scene::WorldTransform& transform, kb::scene::Vec3 direction) noexcept {
+    return kb::math::Normalize(kb::math::Rotate(transform.rotation, direction));
+}
+
+void AppendBoundsLines(
+    AnimationPreviewOverlaySnapshot& output,
+    const kb::scene::SkeletalMeshBounds& bounds,
+    const kb::scene::WorldTransform& owner) {
+    std::array<kb::scene::Vec3, 8U> corners{};
+    for (std::uint32_t index = 0U; index < corners.size(); ++index) {
+        corners[index] = WorldPoint(owner, kb::scene::Vec3{
+            bounds.center.x + ((index & 1U) == 0U ? -bounds.extents.x : bounds.extents.x),
+            bounds.center.y + ((index & 2U) == 0U ? -bounds.extents.y : bounds.extents.y),
+            bounds.center.z + ((index & 4U) == 0U ? -bounds.extents.z : bounds.extents.z),
+        });
+    }
+    constexpr std::array<std::array<std::uint32_t, 2U>, 12U> edges{{
+        {{0U, 1U}}, {{0U, 2U}}, {{0U, 4U}}, {{1U, 3U}}, {{1U, 5U}}, {{2U, 3U}},
+        {{2U, 6U}}, {{3U, 7U}}, {{4U, 5U}}, {{4U, 6U}}, {{5U, 7U}}, {{6U, 7U}},
+    }};
+    for (const auto& edge : edges) {
+        output.lines.push_back(AnimationPreviewOverlayLine{
+            .from = corners[edge[0]], .to = corners[edge[1]], .color = { 1.0F, 0.76F, 0.12F },
+        });
+    }
+}
+
+void AppendNormalLines(
+    AnimationPreviewOverlaySnapshot& output,
+    const kb::scene::SkeletalMeshAsset& mesh,
+    const kb::scene::WorldTransform& owner) {
+    if (mesh.lods.empty() || mesh.lods.front().vertices.empty()) return;
+    const std::vector<kb::scene::SkeletalMeshVertex>& vertices = mesh.lods.front().vertices;
+    constexpr std::size_t kMaximumNormalLines = 128U;
+    const std::size_t stride = std::max<std::size_t>(1U, (vertices.size() + kMaximumNormalLines - 1U) / kMaximumNormalLines);
+    for (std::size_t index = 0U; index < vertices.size(); index += stride) {
+        const kb::scene::SkeletalMeshVertex& vertex = vertices[index];
+        const kb::scene::Vec3 start = WorldPoint(owner, vertex.position);
+        const kb::scene::Vec3 direction = WorldDirection(owner, vertex.normal);
+        output.lines.push_back(AnimationPreviewOverlayLine{
+            .from = start, .to = start + direction * 0.075F, .color = { 0.28F, 0.88F, 1.0F },
+        });
+    }
 }
 
 } // namespace
@@ -77,6 +135,95 @@ bool EditorAnimationPreviewScene::TickPlayback(AnimationPreviewContext& context,
     const bool advanced = context.Transport().Advance(deltaSeconds);
     SynchronizePlayback(context);
     return advanced;
+}
+
+AnimationPreviewOverlaySnapshot EditorAnimationPreviewScene::BuildOverlays(
+    const AnimationPreviewContext& context) const {
+    AnimationPreviewOverlaySnapshot output;
+    if (scene_ == nullptr || !previewEntity_.IsValid()) return output;
+    const AnimationPreviewOverlayState& settings = context.Overlays();
+    if (!settings.BonesVisible() && !settings.BoneNamesVisible() && !settings.SocketsVisible() &&
+        !settings.RootMotionVisible() && !settings.BoundsVisible() && !settings.LodVisible() &&
+        !settings.NormalsVisible()) return output;
+
+    const kb::scene::TransformComponent* ownerTransform = scene_->Transforms().TryGet(previewEntity_);
+    if (ownerTransform == nullptr) return output;
+    const kb::scene::WorldTransform owner = ownerTransform->WorldPayload();
+    const auto skeletonView = scene_->Animators().InstanceSkeleton(previewEntity_);
+    const kb::assets::AssetHandle<kb::scene::SkeletonAsset> skeleton = context.SkeletonAsset().IsValid()
+        ? scene_->Assets().Manager().Load<kb::scene::SkeletonAsset>(context.SkeletonAsset())
+        : kb::assets::AssetHandle<kb::scene::SkeletonAsset>{};
+    const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> mesh = context.SkeletalMeshAsset().IsValid()
+        ? scene_->Assets().Manager().Load<kb::scene::SkeletalMeshAsset>(context.SkeletalMeshAsset())
+        : kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset>{};
+    if (mesh.IsLoaded()) {
+        output.lodCount = static_cast<std::uint32_t>(mesh->lods.size());
+        if (settings.NormalsVisible()) AppendNormalLines(output, *mesh, owner);
+    }
+    if (settings.LodVisible()) {
+        output.labels.push_back(AnimationPreviewOverlayLabel{
+            .position = WorldPoint(owner, focusCenter_),
+            .text = "LODs: " + std::to_string(output.lodCount),
+        });
+    }
+    if (skeletonView.has_value()) {
+        output.poseEvaluationCount = skeletonView->evaluationCount;
+        const std::span<const kb::scene::SkeletonBoneId> boneIds = skeletonView->boneIds;
+        const std::span<const kb::scene::Vec3> positions = skeletonView->currentComponentPose.positions;
+        if (skeleton.IsLoaded() && positions.size() == boneIds.size()) {
+            for (std::size_t index = 0U; index < boneIds.size(); ++index) {
+                const auto bone = std::find_if(skeleton->bones.begin(), skeleton->bones.end(),
+                    [id = boneIds[index]](const kb::scene::SkeletonBone& value) { return value.id == id; });
+                if (bone == skeleton->bones.end()) continue;
+                const kb::scene::Vec3 position = WorldPoint(owner, positions[index]);
+                if (settings.BoneNamesVisible()) {
+                    output.labels.push_back(AnimationPreviewOverlayLabel{ .position = position, .text = bone->name });
+                }
+                if (settings.BonesVisible() && bone->parentIndex >= 0 &&
+                    static_cast<std::size_t>(bone->parentIndex) < skeleton->bones.size()) {
+                    const kb::scene::SkeletonBoneId parentId = skeleton->bones[static_cast<std::size_t>(bone->parentIndex)].id;
+                    const auto parent = std::find(boneIds.begin(), boneIds.end(), parentId);
+                    if (parent != boneIds.end()) {
+                        output.lines.push_back(AnimationPreviewOverlayLine{
+                            .from = WorldPoint(owner, positions[static_cast<std::size_t>(parent - boneIds.begin())]),
+                            .to = position,
+                            .color = { 0.96F, 0.35F, 0.12F },
+                        });
+                    }
+                }
+            }
+            if (settings.RootMotionVisible() && !positions.empty()) {
+                const kb::scene::Vec3 origin = WorldPoint(owner, {});
+                const kb::scene::Vec3 root = WorldPoint(owner, positions.front());
+                output.lines.push_back(AnimationPreviewOverlayLine{
+                    .from = origin, .to = root, .color = { 0.94F, 0.16F, 0.78F },
+                });
+                output.labels.push_back(AnimationPreviewOverlayLabel{ .position = root, .text = "Root motion" });
+            }
+        }
+        if (settings.SocketsVisible() && skeleton.IsLoaded()) {
+            for (const kb::scene::SkeletonSocket& socket : skeleton->sockets) {
+                const auto transform = scene_->Animators().SocketTransform(previewEntity_, socket.name);
+                if (!transform.has_value()) continue;
+                const kb::scene::Vec3 start = transform->worldSpace.position;
+                const kb::scene::Vec3 x = kb::math::Rotate(transform->worldSpace.rotation, kb::scene::Vec3{ 0.12F, 0.0F, 0.0F });
+                const kb::scene::Vec3 y = kb::math::Rotate(transform->worldSpace.rotation, kb::scene::Vec3{ 0.0F, 0.12F, 0.0F });
+                const kb::scene::Vec3 z = kb::math::Rotate(transform->worldSpace.rotation, kb::scene::Vec3{ 0.0F, 0.0F, 0.12F });
+                output.lines.push_back(AnimationPreviewOverlayLine{ .from = start, .to = start + x, .color = { 1.0F, 0.2F, 0.2F } });
+                output.lines.push_back(AnimationPreviewOverlayLine{ .from = start, .to = start + y, .color = { 0.2F, 1.0F, 0.2F } });
+                output.lines.push_back(AnimationPreviewOverlayLine{ .from = start, .to = start + z, .color = { 0.2F, 0.4F, 1.0F } });
+                output.labels.push_back(AnimationPreviewOverlayLabel{ .position = start, .text = socket.name });
+            }
+        }
+    }
+    if (settings.BoundsVisible() && mesh.IsLoaded()) {
+        const std::optional<kb::scene::SkeletalMeshBounds> bounds = skeletonView.has_value()
+            ? kb::scene::EvaluateSkeletalMeshAnimatedBounds(
+                *mesh, 0U, skeletonView->boneIds, skeletonView->currentSkinMatrices)
+            : std::optional<kb::scene::SkeletalMeshBounds>{ mesh->conservativeBounds };
+        if (bounds.has_value()) AppendBoundsLines(output, *bounds, owner);
+    }
+    return output;
 }
 
 void EditorAnimationPreviewScene::Rebuild(
