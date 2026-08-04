@@ -242,9 +242,9 @@ void RunTabStripDropInsertsAtResolvedIndexTest() {
         model.Queries().ResolveDropPreview(tabbedLayout, inspectorLayout->tab.x + 1, inspectorLayout->tab.y + 1);
     kb::editor::tests::Require(preview.has_value(), "Tab strip did not resolve a drop marker");
     kb::editor::tests::Require(preview->kind == kb::editor::DockDropPreviewKind::StripMarker, "Tab strip drop should use a strip marker preview");
-    // The default center leaf carries Scene (2), Script Editor (8), and
-    // Material Editor (10), so the docked Inspector (4) lands at tab index 3.
-    kb::editor::tests::Require(preview->tabInsertionIndex == 3U, "Tab strip insertion index did not match the cursor position");
+    // The default center leaf carries Scene (2), Script Editor (8), Material
+    // Editor (10), and Skeletal Mesh Editor (11), so Inspector (4) lands at 4.
+    kb::editor::tests::Require(preview->tabInsertionIndex == 4U, "Tab strip insertion index did not match the cursor position");
     kb::editor::tests::Require(
         preview->rect.width == 3 && preview->rect.height == inspectorLayout->tab.height,
         "Tab strip marker geometry should be a thin vertical marker");
@@ -253,8 +253,8 @@ void RunTabStripDropInsertsAtResolvedIndexTest() {
     model.Commands().DockPanelTo(5U, *preview);
     const kb::editor::DockLayout dockedLayout = BuildDefaultLayout(model);
     const std::vector<std::uint32_t> order = PanelOrderInLeaf(dockedLayout, sceneLayout->leafId);
-    kb::editor::tests::Require(order.size() >= 5U, "Docked tab was not inserted into the target leaf");
-    kb::editor::tests::Require(order[0] == 2U && order[1] == 8U && order[2] == 10U && order[3] == 5U && order[4] == 4U, "Docked tab was not inserted at the resolved tab strip index");
+    kb::editor::tests::Require(order.size() >= 6U, "Docked tab was not inserted into the target leaf");
+    kb::editor::tests::Require(order[0] == 2U && order[1] == 8U && order[2] == 10U && order[3] == 11U && order[4] == 5U && order[5] == 4U, "Docked tab was not inserted at the resolved tab strip index");
 }
 
 void RunSplitterAndFloatingResizeTest() {
@@ -370,6 +370,34 @@ void RunClosedMaterialEditorReopensInCenterDockTest() {
     kb::editor::tests::Require(scene != nullptr && reopened->leafId == scene->leafId, "Reopened Material Editor should return to the center workspace group");
 }
 
+void RunSkeletalMeshEditorWorkspaceActivationTest() {
+    kb::editor::EditorDockModel model;
+    const kb::editor::DockPanel* panel = RequirePanel(model, 11U);
+    kb::editor::tests::Require(
+        panel->kind == kb::editor::DockPanelKind::SkeletalMeshEditor &&
+            panel->title == "Skeletal Mesh Editor",
+        "Default workspace should register the Skeletal Mesh Editor");
+    const kb::editor::DockLayout initialLayout = BuildDefaultLayout(model);
+    const kb::editor::DockLeafLayout* sceneLeaf = FindLeafForPanel(initialLayout, 2U);
+    const kb::editor::DockLeafLayout* skeletalMeshLeaf = FindLeafForPanel(initialLayout, 11U);
+    kb::editor::tests::Require(
+        sceneLeaf != nullptr && skeletalMeshLeaf != nullptr &&
+            sceneLeaf->leafId == skeletalMeshLeaf->leafId,
+        "Skeletal Mesh Editor should use the central workspace");
+
+    kb::editor::tests::Require(model.Commands().ClosePanel(11U),
+        "Closing Skeletal Mesh Editor should succeed");
+    kb::editor::tests::Require(
+        model.Commands().ActivatePanelKind(
+            kb::editor::DockPanelKind::SkeletalMeshEditor,
+            kb::editor::DockArea::Center),
+        "Reopening a Skeletal Mesh document should restore its workspace");
+    const kb::editor::DockLayout reopenedLayout = BuildDefaultLayout(model);
+    const kb::editor::DockPanelLayout* reopened = FindPanelLayout(reopenedLayout, 11U);
+    kb::editor::tests::Require(reopened != nullptr && reopened->active,
+        "Reopened Skeletal Mesh Editor should receive focus");
+}
+
 // A click on any tab — the active one or an inactive sibling — must hit-test as a
 // dock Tab. The pointer router relies on this: a dock hit means the click is a
 // layout action (switch tabs), so it must NOT clear the scene selection and blank
@@ -423,6 +451,7 @@ void RunEditorDockingTests() {
     RunDefaultWorkspaceRegistersMaterialEditorPanelTest();
     RunMaterialEditorPanelActivationTest();
     RunClosedMaterialEditorReopensInCenterDockTest();
+    RunSkeletalMeshEditorWorkspaceActivationTest();
     RunTabClickIsDockInteractionTest();
 }
 
