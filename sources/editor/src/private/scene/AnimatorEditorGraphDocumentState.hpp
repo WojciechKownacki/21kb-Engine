@@ -19,14 +19,33 @@ public:
         controller_ = std::move(controller);
         selection_.clear();
         clipboard_.clear();
+        motionStateId_ = 0U;
         nextId_ = 1U;
         ReserveExistingIds();
+        history_.assign(1U, *controller_);
+        historyCursor_ = 0U;
     }
 
     [[nodiscard]] const kb::scene::AnimatorController* Controller() const noexcept {
         return controller_.has_value() ? &*controller_ : nullptr;
     }
     [[nodiscard]] const std::vector<std::uint64_t>& Selection() const noexcept { return selection_; }
+    [[nodiscard]] bool Dirty() const noexcept { return historyCursor_ != 0U; }
+    [[nodiscard]] bool CanUndo() const noexcept { return historyCursor_ > 0U; }
+    [[nodiscard]] bool CanRedo() const noexcept { return historyCursor_ + 1U < history_.size(); }
+    [[nodiscard]] bool Undo() noexcept { if (!CanUndo()) return false; controller_ = history_[--historyCursor_]; selection_.clear(); return true; }
+    [[nodiscard]] bool Redo() noexcept { if (!CanRedo()) return false; controller_ = history_[++historyCursor_]; selection_.clear(); return true; }
+    [[nodiscard]] bool Revert() noexcept {
+        if (!Dirty()) return false;
+        controller_ = history_.front();
+        history_.resize(1U);
+        historyCursor_ = 0U;
+        selection_.clear();
+        nextId_ = 1U;
+        ReserveExistingIds();
+        return true;
+    }
+    [[nodiscard]] bool MarkSaved() { if (!controller_.has_value()) return false; history_.assign(1U, *controller_); historyCursor_ = 0U; return true; }
     [[nodiscard]] std::uint64_t MotionState() const noexcept { return motionStateId_; }
 
     [[nodiscard]] bool OpenMotionDocument(std::uint64_t stateId) {
@@ -65,6 +84,7 @@ public:
             if (transition.fromState == previous) transition.fromState = state.name;
             if (transition.toState == previous) transition.toState = state.name;
         }
+        RecordMutation();
         return true;
     }
 
@@ -76,6 +96,7 @@ public:
         layer->states.push_back({ .id = id, .name = std::move(name), .clipReference = std::move(clipReference) });
         controller_->graphLayout.push_back({ .stateId = id, .positionX = x, .positionY = y });
         selection_ = { id };
+        RecordMutation();
         return id;
     }
 
@@ -108,6 +129,7 @@ public:
             }), group.stateIds.end());
         }
         selection_.clear();
+        RecordMutation();
         return true;
     }
 
@@ -115,6 +137,7 @@ public:
         if (!controller_.has_value() || text.empty() || width <= 0 || height <= 0) return 0U;
         const std::uint64_t id = AllocateId();
         controller_->graphComments.push_back({ .id = id, .text = std::move(text), .positionX = x, .positionY = y, .width = width, .height = height });
+        RecordMutation();
         return id;
     }
 
@@ -125,6 +148,7 @@ public:
         stateIds.erase(std::unique(stateIds.begin(), stateIds.end()), stateIds.end());
         const std::uint64_t id = AllocateId();
         controller_->graphGroups.push_back({ .id = id, .name = std::move(name), .stateIds = std::move(stateIds) });
+        RecordMutation();
         return id;
     }
 
@@ -161,6 +185,8 @@ public:
                 .positionY = (source == controller_->graphLayout.end() ? 0 : source->positionY) + offsetY });
             pasted.push_back(state.id);
         }
+        if (pasted.empty()) return false;
+        RecordMutation();
         return SetSelection(std::move(pasted));
     }
 
@@ -186,10 +212,18 @@ private:
         for (const auto& group : controller_->graphGroups) nextId_ = std::max(nextId_, group.id + 1U);
     }
     [[nodiscard]] std::uint64_t AllocateId() noexcept { return nextId_++; }
+    void RecordMutation() {
+        if (!controller_.has_value()) return;
+        history_.resize(historyCursor_ + 1U);
+        history_.push_back(*controller_);
+        ++historyCursor_;
+    }
 
     std::optional<kb::scene::AnimatorController> controller_;
     std::vector<std::uint64_t> selection_;
     std::vector<ClipboardState> clipboard_;
+    std::vector<kb::scene::AnimatorController> history_;
+    std::size_t historyCursor_ = 0U;
     std::uint64_t nextId_ = 1U;
     std::uint64_t motionStateId_ = 0U;
 };
