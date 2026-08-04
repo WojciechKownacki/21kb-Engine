@@ -2,6 +2,8 @@
 
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/math/EngineMath.hpp"
+#include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
@@ -25,6 +27,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <filesystem>
 #include <memory>
 #include <string>
 
@@ -264,10 +267,51 @@ void EditorAnimationPreviewScene::Rebuild(
             .enabled = true,
         }));
     }
+    kb::assets::AssetId controllerId = context.ControllerAsset();
     if (compatible && context.PoseMode() == AnimationPreviewPoseMode::Animated &&
-        context.ControllerAsset().IsValid()) {
+        !controllerId.IsValid() && context.ClipAsset().IsValid()) {
+        const kb::assets::AssetHandle<kb::scene::AnimationClip> clip =
+            scene_->Assets().Manager().Load<kb::scene::AnimationClip>(context.ClipAsset());
+        compatible = clip.IsLoaded() &&
+            clip->targetSkeletonAssetId == context.SkeletonAsset().value &&
+            clip->targetSkeletonCompatibilitySignature == skeletonSignature;
+        if (compatible) {
+            const std::string clipId = kb::assets::ToString(context.ClipAsset());
+            const std::filesystem::path controllerPath =
+                std::filesystem::path{ "/__EditorPreview/AnimationClip_" + clipId + ".kbanimcontroller" };
+            controllerId = kb::assets::MakeAssetId(controllerPath.generic_string());
+            kb::assets::AssetManager& assets = scene_->Assets().Manager();
+            const kb::assets::AssetMetadata* existing = assets.Registry().Find(controllerId);
+            if (existing != nullptr &&
+                (existing->type != kb::scene::kAnimatorControllerAssetType || existing->virtualPath != controllerPath)) {
+                compatible = false;
+            } else {
+                if (existing == nullptr && !assets.RegisterAsset(kb::assets::AssetMetadata{
+                        .id = controllerId,
+                        .type = kb::scene::kAnimatorControllerAssetType,
+                        .name = "Animation Clip Preview",
+                        .virtualPath = controllerPath,
+                        .runtimeLoadable = true,
+                    })) {
+                    compatible = false;
+                }
+                if (compatible) {
+                    auto controller = std::make_shared<kb::scene::AnimatorController>();
+                    controller->layers = {{
+                        .name = "Preview",
+                        .defaultState = "Clip",
+                        .weight = 1.0F,
+                        .mask = ~std::uint64_t{ 0U },
+                        .states = {{ .name = "Clip", .clipReference = clipId }},
+                    }};
+                    compatible = assets.PublishRuntimeAsset(controllerId, std::move(controller));
+                }
+            }
+        }
+    }
+    if (compatible && context.PoseMode() == AnimationPreviewPoseMode::Animated && controllerId.IsValid()) {
         static_cast<void>(scene_->Components().Animators().Set(previewEntity_, kb::scene::Animator{
-            .controllerAssetId = context.ControllerAsset().value,
+            .controllerAssetId = controllerId.value,
             .enabled = true,
         }));
     }

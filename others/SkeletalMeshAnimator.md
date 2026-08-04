@@ -781,7 +781,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
 
 ### Sprint SK-09 — Animation Clip Editor
 
-62. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać typed asset dispatch i dedykowany `Animation Clip Editor` ze
+62. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać typed asset dispatch i dedykowany `Animation Clip Editor` ze
     wspólnym preview context.
 63. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować timeline/outliner: bone tracks, curves, morph channels,
     events/notifies i root motion.

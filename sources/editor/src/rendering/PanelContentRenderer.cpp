@@ -7,6 +7,7 @@
 #include "rendering/HierarchyPanelRenderer.hpp"
 #include "rendering/HeroIconPainter.hpp"
 #include "rendering/EditorScriptEditorOverlay.hpp"
+#include "rendering/AnimationClipEditorPanelRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/PluginsPanelRenderer.hpp"
@@ -325,6 +326,11 @@ void PanelContentRenderer::Paint(
         break;
     case DockPanelKind::SkeletalMeshEditor:
         SkeletalMeshEditorPanelRenderer{}.Paint(
+            dc, sceneViewportHost, visibleContent, panel, theme, sceneContext,
+            renderBackendSettings, sceneViewport);
+        break;
+    case DockPanelKind::AnimationClipEditor:
+        AnimationClipEditorPanelRenderer{}.Paint(
             dc, sceneViewportHost, visibleContent, panel, theme, sceneContext,
             renderBackendSettings, sceneViewport);
         break;
