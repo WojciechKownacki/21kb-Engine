@@ -95,6 +95,12 @@ public:
     void ClearPresentRequest() noexcept;
     void SyncHostSurfaceLayouts(HWND parent, std::span<const HostSurfaceLayout> layouts) noexcept;
     void SyncHostSurfaceLayoutsForResize(HWND parent, std::span<const HostSurfaceLayout> layouts) noexcept;
+    // Native child surfaces must never remain above a minimized, deactivated,
+    // or DPI-reconfigured host. Resuming only schedules a normal paint, so the
+    // next present recreates any size-dependent target from current bounds.
+    void SetHostSurfaceSuspended(HWND host, bool suspended) noexcept;
+    void SetAllHostSurfacesSuspended(bool suspended) noexcept;
+    void NotifyHostDpiChanged(HWND host) noexcept;
     void ReleaseScene(const kb::scene::Scene& scene) noexcept;
     void Shutdown();
     void BeginPaintLayout() noexcept;
@@ -133,6 +139,8 @@ private:
         void MarkLayoutActive(HostSurface& surface) noexcept;
         void Hide(HostSurface& surface) noexcept;
         void HideUnpresentedForHost(HWND host) noexcept;
+        void HideForHost(HWND host) noexcept;
+        void HideAll() noexcept;
         void ReleaseWindow(HWND window) noexcept;
         void ShutdownPresentTargets() noexcept;
         void DestroyWindows() noexcept;

@@ -115,6 +115,22 @@ void EditorSceneBgfxViewport::HostSurfaceStore::HideUnpresentedForHost(HWND host
     }
 }
 
+void EditorSceneBgfxViewport::HostSurfaceStore::HideForHost(HWND host) noexcept {
+    for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
+        if (surface != nullptr && surface->host == host) {
+            Hide(*surface);
+        }
+    }
+}
+
+void EditorSceneBgfxViewport::HostSurfaceStore::HideAll() noexcept {
+    for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
+        if (surface != nullptr) {
+            Hide(*surface);
+        }
+    }
+}
+
 void EditorSceneBgfxViewport::HostSurfaceStore::ReleaseWindow(HWND window) noexcept {
     HostSurface* surface = FindByWindow(window);
     if (surface == nullptr) {

@@ -311,6 +311,35 @@ void EditorSceneBgfxViewport::SyncHostSurfaceLayoutsForResize(HWND parent, std::
     hostSurfaceStore_.HideUnpresentedForHost(parent);
 }
 
+void EditorSceneBgfxViewport::SetHostSurfaceSuspended(HWND host, bool suspended) noexcept {
+    if (host == nullptr) return;
+    if (suspended) {
+        hostSurfaceStore_.HideForHost(host);
+        sessionStore_.MarkHostNotPresented(host);
+        return;
+    }
+    RequestPresent();
+    InvalidateRect(host, nullptr, FALSE);
+}
+
+void EditorSceneBgfxViewport::SetAllHostSurfacesSuspended(bool suspended) noexcept {
+    if (suspended) {
+        hostSurfaceStore_.HideAll();
+        sessionStore_.MarkAllNotPresented();
+        return;
+    }
+    RequestPresent();
+}
+
+void EditorSceneBgfxViewport::NotifyHostDpiChanged(HWND host) noexcept {
+    if (host == nullptr) return;
+    // A child HWND keeps physical pixels while the parent transitions DPI.
+    // Hide it until the post-DPI paint supplies fresh client coordinates,
+    // avoiding a stale child surface drawn at the old scale.
+    SetHostSurfaceSuspended(host, true);
+    SetHostSurfaceSuspended(host, false);
+}
+
 void EditorSceneBgfxViewport::Shutdown() {
     ShutdownGpuResources();
 
