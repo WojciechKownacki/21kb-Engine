@@ -298,6 +298,9 @@ SceneRuntimeHotPathReport SceneRuntimeService::HotPathReport(const Scene& scene)
         .transformHierarchyFlushNanoseconds = state.lastTransformHierarchyFlushNanoseconds,
         .transformHierarchyBudgetLimit = state.transformPropagationBudget.maxInspectedEntitiesPerSync,
         .transformHierarchyBudgetExhausted = state.lastTransformHierarchyBudgetExhausted,
+        .animatorParallelEvaluationCount = state.lastAnimatorParallelEvaluationCount,
+        .animatorParallelWorkerCount = state.lastAnimatorParallelWorkerCount,
+        .animatorUpdateRateSkippedPoseCount = state.lastAnimatorUpdateRateSkippedPoseCount,
     };
 }
 

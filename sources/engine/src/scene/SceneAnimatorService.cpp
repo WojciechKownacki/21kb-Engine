@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 
@@ -92,6 +93,177 @@ double StateTime(float normalizedTime, const AnimationClip& clip);
     return true;
 }
 
+constexpr std::size_t kAnimatorParallelEvaluationGrainSize = 16U;
+constexpr std::size_t kAnimatorParallelEvaluationThreshold =
+    kAnimatorParallelEvaluationGrainSize * 2U;
+
+void EnsureAnimatorWorkerPool(SceneState& state) {
+    if (state.animatorWorkerPool == nullptr) {
+        state.animatorWorkerPool = std::make_unique<kb::ecs::WorkerPool>(
+            kb::ecs::WorkerPoolConfig{ .collectDispatchTelemetry = true });
+    } else if (!state.animatorWorkerPool->Running()) {
+        state.animatorWorkerPool->Start(
+            kb::ecs::WorkerPoolConfig{ .collectDispatchTelemetry = true });
+    }
+}
+
+[[nodiscard]] bool CanEvaluateSkeletalPoseInParallel(
+    const AnimatorRuntimeRecord& record, AnimatorRootMotionOwner rootMotionOwner) noexcept {
+    return record.skeleton.has_value() && record.bindings.empty() &&
+        record.rigConstraints.empty() &&
+        rootMotionOwner == AnimatorRootMotionOwner::None;
+}
+
+[[nodiscard]] bool ShouldEvaluateSkeletalPose(
+    AnimatorRuntimeRecord& record, float deltaSeconds) noexcept {
+    if (!record.skeleton.has_value() || record.poseUpdateRateHz <= 0.0F) {
+        record.hasEvaluatedPose = true;
+        return true;
+    }
+    if (!record.hasEvaluatedPose) {
+        record.hasEvaluatedPose = true;
+        record.poseUpdateAccumulatorSeconds = 0.0;
+        return true;
+    }
+    const double interval = 1.0 / static_cast<double>(record.poseUpdateRateHz);
+    record.poseUpdateAccumulatorSeconds += static_cast<double>(deltaSeconds);
+    if (record.poseUpdateAccumulatorSeconds + 1.0e-12 < interval) return false;
+    record.poseUpdateAccumulatorSeconds = std::fmod(record.poseUpdateAccumulatorSeconds, interval);
+    return true;
+}
+
+void BuildAndPublishDebugSnapshot(Scene& scene, SceneState& state) {
+    AnimatorDebugSnapshot published{};
+    published.revision = ++state.animatorDebugSnapshotRevision;
+    published.instances.reserve(state.animators.size());
+    std::erase_if(state.animatorDebugRootMotionTrails,
+        [&state](const auto& value) { return !state.animators.contains(value.first); });
+    for (const auto& [id, record] : state.animators) {
+        static_cast<void>(id);
+        if (!scene.Entities().IsAlive(record.entity) || !record.controller.IsLoaded()) {
+            continue;
+        }
+        AnimatorDebugInstanceSnapshot instance{};
+        instance.entity = record.entity;
+        instance.controllerAssetId = record.controller.Id().value;
+        instance.runtimeBindingGeneration = record.runtimeBindingGeneration;
+        const auto appendCompatibilityDiagnostics = [&scene, &instance](std::uint64_t assetId) {
+            if (assetId == 0U) return;
+            const kb::assets::AssetCompatibilityReport report =
+                scene.Assets().Manager().ValidateCompatibility(kb::assets::AssetId{ assetId });
+            for (const kb::assets::AssetCompatibilityDiagnostic& diagnostic : report.diagnostics) {
+                instance.compatibilityDiagnostics.push_back(diagnostic.message);
+            }
+        };
+        appendCompatibilityDiagnostics(instance.controllerAssetId);
+        instance.parameters.reserve(record.parameters.size());
+        for (std::size_t index = 0U; index < record.parameters.size(); ++index) {
+            const AnimatorParameterValue& value = record.parameters[index];
+            const AnimatorParameterDefinition& definition = record.controller->parameters[index];
+            instance.parameters.push_back({
+                .name = definition.name,
+                .type = value.type,
+                .boolValue = value.boolValue,
+                .intValue = value.intValue,
+                .floatValue = value.floatValue,
+            });
+        }
+        instance.layers.reserve(record.layers.size());
+        for (std::size_t index = 0U; index < record.layers.size(); ++index) {
+            const AnimatorRuntimeLayer& runtime = record.layers[index];
+            const AnimatorControllerLayer& definition = record.controller->layers[index];
+            const AnimatorControllerState& active = definition.states[runtime.currentState];
+            const AnimatorControllerState& previous = definition.states[runtime.previousState];
+            const AnimationClip& clip = ReferenceClip(runtime.states[runtime.currentState]);
+            std::uint64_t transitionId = 0U;
+            if (runtime.transitioning) {
+                const auto transition = std::find_if(
+                    definition.transitions.begin(), definition.transitions.end(),
+                    [&previous, &active](const AnimatorControllerTransition& candidate) {
+                        return candidate.fromState == previous.name && candidate.toState == active.name;
+                    });
+                if (transition != definition.transitions.end()) transitionId = transition->id;
+            }
+            instance.layers.push_back({
+                .name = definition.name,
+                .activeStateId = active.id,
+                .previousStateId = previous.id,
+                .activeTransitionId = transitionId,
+                .activeState = active.name,
+                .previousState = previous.name,
+                .normalizedTime = clip.durationSeconds > 0.0F
+                    ? static_cast<float>(runtime.currentTimeSeconds / clip.durationSeconds) : 0.0F,
+                .transitionProgress = runtime.transitioning && runtime.transitionDurationSeconds > 0.0
+                    ? static_cast<float>(std::clamp(runtime.transitionElapsedSeconds / runtime.transitionDurationSeconds, 0.0, 1.0)) : 1.0F,
+                .weight = definition.weight,
+                .elapsedSeconds = runtime.currentTimeSeconds,
+                .transitioning = runtime.transitioning,
+            });
+        }
+        instance.constraints.reserve(record.rigConstraints.size());
+        for (const AnimatorRuntimeConstraint& runtime : record.rigConstraints) {
+            const AnimatorRigConstraint& definition = record.controller->rigConstraints[runtime.definitionIndex];
+            AnimatorDebugConstraintSnapshot constraint{};
+            constraint.name = definition.name;
+            constraint.type = definition.type;
+            constraint.constrainedBoneId = definition.constrainedBoneId;
+            constraint.midBoneId = definition.midBoneId;
+            constraint.tipBoneId = definition.tipBoneId;
+            constraint.target = definition.target;
+            constraint.poleTarget = definition.poleTarget;
+            if (const auto target = record.ikTargets.find(definition.target); target != record.ikTargets.end()) {
+                constraint.targetValue = target->second;
+                constraint.hasTarget = true;
+            }
+            if (const auto target = record.ikTargets.find(definition.poleTarget); target != record.ikTargets.end()) {
+                constraint.poleTargetValue = target->second;
+                constraint.hasPoleTarget = true;
+            }
+            instance.constraints.push_back(std::move(constraint));
+        }
+        instance.rootMotionTranslation = record.extractedRootMotionTranslation;
+        instance.rootMotionRotation = record.extractedRootMotionRotation;
+        instance.hasRootMotion = record.hasExtractedRootMotion;
+        std::vector<Vec3>& rootMotionTrail = state.animatorDebugRootMotionTrails[id];
+        if (rootMotionTrail.empty()) rootMotionTrail.reserve(128U);
+        if (record.hasExtractedRootMotion) {
+            const Vec3 previous = rootMotionTrail.empty() ? Vec3{} : rootMotionTrail.back();
+            rootMotionTrail.push_back(previous + record.extractedRootMotionTranslation);
+            if (rootMotionTrail.size() > 128U) rootMotionTrail.erase(rootMotionTrail.begin());
+        }
+        instance.rootMotionTrail = rootMotionTrail;
+        if (record.skeleton.has_value()) {
+            const AnimatorInstanceSkeleton& skeleton = *record.skeleton;
+            const AnimatorInstanceSkeleton::PoseBuffer& pose = skeleton.poses[skeleton.currentPose];
+            instance.skeletonAssetId = skeleton.asset.Id().value;
+            instance.skeletonCompatibilitySignature = skeleton.compatibilitySignature;
+            appendCompatibilityDiagnostics(instance.skeletonAssetId);
+            instance.poseEvaluationCount = skeleton.evaluationCount;
+            instance.hierarchySolveCount = skeleton.hierarchySolveCount;
+            instance.paletteMatrixCount = static_cast<std::uint32_t>(pose.skinMatrices.size());
+            instance.bones.reserve(skeleton.boneIds.size());
+            for (std::size_t index = 0U; index < skeleton.boneIds.size(); ++index) {
+                instance.bones.push_back({
+                    .id = skeleton.boneIds[index],
+                    .localPose = { pose.local.positions[index], pose.local.rotations[index], pose.local.scales[index] },
+                    .componentPose = { pose.component.positions[index], pose.component.rotations[index], pose.component.scales[index] },
+                });
+            }
+        }
+        if (const DrawD3DeformedGeometryComponent* geometry = scene.Components().DeformedGeometries().TryGet(record.entity);
+            geometry != nullptr) {
+            instance.skeletalMeshAssetId = geometry->skeletalMeshAssetId;
+            appendCompatibilityDiagnostics(instance.skeletalMeshAssetId);
+            instance.lodBias = geometry->lodBias;
+            instance.lodEnabled = geometry->lodEnabled;
+            instance.fixedBounds = geometry->fixedBounds;
+            instance.deformedGeometryEnabled = geometry->enabled;
+        }
+        published.instances.push_back(std::move(instance));
+    }
+    state.animatorDebugSnapshots.Publish(std::move(published));
+}
+
 void SolveComponentPose(
     const SkeletonAsset& skeleton,
     AnimatorInstanceSkeleton::PoseBuffer& pose) {
@@ -130,6 +302,50 @@ void SolveComponentPose(
             pose.component.rotations[index],
             pose.component.scales[index]) * bone.inverseBind;
     }
+}
+
+[[nodiscard]] bool IsFiniteTransform(const LocalTransform& transform) noexcept {
+    const float rotationLengthSquared =
+        transform.rotation.x * transform.rotation.x +
+        transform.rotation.y * transform.rotation.y +
+        transform.rotation.z * transform.rotation.z +
+        transform.rotation.w * transform.rotation.w;
+    return std::isfinite(transform.position.x) &&
+        std::isfinite(transform.position.y) &&
+        std::isfinite(transform.position.z) &&
+        std::isfinite(transform.rotation.x) &&
+        std::isfinite(transform.rotation.y) &&
+        std::isfinite(transform.rotation.z) &&
+        std::isfinite(transform.rotation.w) &&
+        rotationLengthSquared > 1.0e-8F &&
+        std::isfinite(transform.scale.x) &&
+        std::isfinite(transform.scale.y) &&
+        std::isfinite(transform.scale.z);
+}
+
+[[nodiscard]] LocalTransform ComposeTransform(
+    const LocalTransform& parent, const LocalTransform& child) noexcept {
+    const Vec3 scaledPosition{
+        parent.scale.x * child.position.x,
+        parent.scale.y * child.position.y,
+        parent.scale.z * child.position.z,
+    };
+    return {
+        .position = parent.position + kb::math::Rotate(parent.rotation, scaledPosition),
+        .rotation = kb::math::Normalize(parent.rotation * child.rotation),
+        .scale = {
+            parent.scale.x * child.scale.x,
+            parent.scale.y * child.scale.y,
+            parent.scale.z * child.scale.z,
+        },
+    };
+}
+
+[[nodiscard]] WorldTransform ComposeWorldTransform(
+    const WorldTransform& parent, const LocalTransform& child) noexcept {
+    const LocalTransform composed = ComposeTransform(
+        { .position = parent.position, .rotation = parent.rotation, .scale = parent.scale }, child);
+    return { .position = composed.position, .rotation = composed.rotation, .scale = composed.scale };
 }
 
 void ApplySkeletalRigConstraints(
@@ -233,6 +449,48 @@ void InitializePoseBuffers(AnimatorInstanceSkeleton& derived) {
             instance.skeleton->boneIndices.find(clip.rootMotionBoneId);
         if (found == instance.skeleton->boneIndices.end()) return false;
         motion.rootMotionBoneIndex = found->second;
+    }
+    return true;
+}
+
+[[nodiscard]] bool BindMorphTargets(AnimatorRuntimeRecord& instance) {
+    if (!instance.skeleton.has_value()) return true;
+    AnimatorInstanceSkeleton& skeleton = *instance.skeleton;
+    std::vector<std::string> names;
+    for (const AnimatorRuntimeLayer& layer : instance.layers) {
+        for (const AnimatorRuntimeState& state : layer.states) {
+            for (const AnimatorRuntimeState::Motion& motion : state.motions) {
+                for (const AnimationMorphTrack& track : motion.clip->morphTracks) {
+                    names.push_back(track.morphTarget);
+                }
+            }
+        }
+    }
+    std::sort(names.begin(), names.end());
+    names.erase(std::unique(names.begin(), names.end()), names.end());
+    skeleton.morphTargetNames = std::move(names);
+    for (std::vector<float>& weights : skeleton.morphWeights) {
+        weights.assign(skeleton.morphTargetNames.size(), 0.0F);
+    }
+    for (std::vector<float>& weights : skeleton.stateMorphScratch) {
+        weights.assign(skeleton.morphTargetNames.size(), 0.0F);
+    }
+    for (std::vector<std::uint8_t>& touched : skeleton.stateMorphTouched) {
+        touched.assign(skeleton.morphTargetNames.size(), 0U);
+    }
+    for (AnimatorRuntimeLayer& layer : instance.layers) {
+        for (AnimatorRuntimeState& state : layer.states) {
+            for (AnimatorRuntimeState::Motion& motion : state.motions) {
+                motion.morphIndices.clear();
+                motion.morphIndices.reserve(motion.clip->morphTracks.size());
+                for (const AnimationMorphTrack& track : motion.clip->morphTracks) {
+                    const auto index = std::lower_bound(
+                        skeleton.morphTargetNames.begin(), skeleton.morphTargetNames.end(), track.morphTarget);
+                    if (index == skeleton.morphTargetNames.end() || *index != track.morphTarget) return false;
+                    motion.morphIndices.push_back(static_cast<std::uint32_t>(index - skeleton.morphTargetNames.begin()));
+                }
+            }
+        }
     }
     return true;
 }
@@ -488,6 +746,18 @@ LocalTransform Sample(const AnimationBoneTrack& track, float time) {
                 a.transform.scale.z, b.transform.scale.z, alpha),
         },
     };
+}
+
+[[nodiscard]] float Sample(const AnimationMorphTrack& track, float time) {
+    if (time <= track.keyframes.front().timeSeconds) return track.keyframes.front().weight;
+    if (time >= track.keyframes.back().timeSeconds) return track.keyframes.back().weight;
+    const auto upper = std::upper_bound(
+        track.keyframes.begin(), track.keyframes.end(), time,
+        [](float value, const AnimationMorphKeyframe& key) { return value < key.timeSeconds; });
+    const AnimationMorphKeyframe& after = *upper;
+    const AnimationMorphKeyframe& before = *(upper - 1);
+    const float alpha = (time - before.timeSeconds) / (after.timeSeconds - before.timeSeconds);
+    return kb::math::Lerp(before.weight, after.weight, alpha);
 }
 
 LocalTransform Blend(const LocalTransform& a, const LocalTransform& b, float weight) {
@@ -920,9 +1190,15 @@ void EvaluateIndexedSkeletalState(
         skeleton.motionTouched[0U];
     std::vector<std::uint8_t>& upperTouched =
         skeleton.motionTouched[1U];
+    std::vector<float>& outputMorphWeights =
+        skeleton.stateMorphScratch[scratchIndex];
+    std::vector<std::uint8_t>& outputMorphTouched =
+        skeleton.stateMorphTouched[scratchIndex];
     std::fill(outputTouched.begin(), outputTouched.end(), std::uint8_t{ 0U });
     std::fill(lowerTouched.begin(), lowerTouched.end(), std::uint8_t{ 0U });
     std::fill(upperTouched.begin(), upperTouched.end(), std::uint8_t{ 0U });
+    std::fill(outputMorphWeights.begin(), outputMorphWeights.end(), 0.0F);
+    std::fill(outputMorphTouched.begin(), outputMorphTouched.end(), std::uint8_t{ 0U });
 
     const BlendSelection selection = SelectBlend(instance, state, definition);
     const float sampleTime = static_cast<float>(time);
@@ -957,6 +1233,23 @@ void EvaluateIndexedSkeletalState(
             WritePose(output, boneIndex, sampled);
             touched[boneIndex] = 1U;
             outputTouched[boneIndex] = 1U;
+        }
+        if (motion.morphIndices.size() != motion.clip->morphTracks.size()) {
+            throw std::runtime_error("AnimatorInstance lost its prebound morph track indices");
+        }
+        for (std::size_t trackIndex = 0U;
+             trackIndex < motion.clip->morphTracks.size(); ++trackIndex) {
+            const AnimationMorphTrack& track = motion.clip->morphTracks[trackIndex];
+            const std::uint32_t morphIndex = motion.morphIndices[trackIndex];
+            if (morphIndex >= outputMorphWeights.size()) {
+                throw std::runtime_error("AnimatorInstance contains an out-of-range morph index");
+            }
+            const float sampled = Sample(track, sampleTime);
+            const float lower = outputMorphTouched[morphIndex] != 0U
+                ? outputMorphWeights[morphIndex] : 0.0F;
+            outputMorphWeights[morphIndex] = blendUpper
+                ? kb::math::Lerp(lower, sampled, selection.alpha) : sampled;
+            outputMorphTouched[morphIndex] = 1U;
         }
     };
 
@@ -993,6 +1286,8 @@ void EvaluateIndexedSkeletalPose(
     skeleton.currentPose ^= 1U;
     AnimatorInstanceSkeleton::PoseBuffer& current =
         skeleton.poses[skeleton.currentPose];
+    std::vector<float>& currentMorphWeights = skeleton.morphWeights[skeleton.currentPose];
+    std::fill(currentMorphWeights.begin(), currentMorphWeights.end(), 0.0F);
     for (std::size_t index = 0U; index < skeleton.asset->bones.size();
          ++index) {
         WritePose(
@@ -1040,6 +1335,17 @@ void EvaluateIndexedSkeletalPose(
                         Blend(from, to, transition),
                         layerDefinition.weight));
             }
+            for (std::size_t morphIndex = 0U;
+                 morphIndex < currentMorphWeights.size(); ++morphIndex) {
+                const float from = skeleton.stateMorphTouched[0U][morphIndex] != 0U
+                    ? skeleton.stateMorphScratch[0U][morphIndex] : 0.0F;
+                const float to = skeleton.stateMorphTouched[1U][morphIndex] != 0U
+                    ? skeleton.stateMorphScratch[1U][morphIndex] : 0.0F;
+                if (skeleton.stateMorphTouched[0U][morphIndex] == 0U &&
+                    skeleton.stateMorphTouched[1U][morphIndex] == 0U) continue;
+                currentMorphWeights[morphIndex] = kb::math::Lerp(
+                    currentMorphWeights[morphIndex], kb::math::Lerp(from, to, transition), layerDefinition.weight);
+            }
         } else {
             EvaluateIndexedSkeletalState(
                 instance, layer.states[layer.currentState],
@@ -1054,6 +1360,12 @@ void EvaluateIndexedSkeletalPose(
                         ReadPose(current.local, boneIndex),
                         ReadPose(skeleton.stateScratch[1U], boneIndex),
                         layerDefinition.weight));
+            }
+            for (std::size_t morphIndex = 0U;
+                 morphIndex < currentMorphWeights.size(); ++morphIndex) {
+                if (skeleton.stateMorphTouched[1U][morphIndex] == 0U) continue;
+                currentMorphWeights[morphIndex] = kb::math::Lerp(
+                    currentMorphWeights[morphIndex], skeleton.stateMorphScratch[1U][morphIndex], layerDefinition.weight);
             }
         }
     }
@@ -1751,6 +2063,7 @@ bool SceneAnimatorService::Attach(Scene& scene, SceneEntity entity, std::uint64_
         layer.previousState = layer.currentState;
         candidate.layers.push_back(std::move(layer));
     }
+    if (!BindMorphTargets(candidate)) return false;
     if (candidate.skeleton.has_value()) {
         const AnimatorRuntimeState::Motion& rootMotion =
             candidate.layers.front().states.front().motions.front();
@@ -1873,9 +2186,59 @@ SceneAnimatorService::InstanceSkeleton(
         .previousComponentPose = view(previous.component),
         .currentSkinMatrices = current.skinMatrices,
         .previousSkinMatrices = previous.skinMatrices,
+        .morphWeights = {
+            .targetNames = skeleton.morphTargetNames,
+            .currentWeights = skeleton.morphWeights[skeleton.currentPose],
+            .previousWeights = skeleton.morphWeights[skeleton.currentPose ^ 1U],
+        },
         .evaluationCount = skeleton.evaluationCount,
         .hierarchySolveCount = skeleton.hierarchySolveCount,
     };
+}
+
+std::optional<AnimatorAttachmentTransform>
+SceneAnimatorService::AttachmentTransform(
+    const Scene& scene, SceneEntity entity, SkeletonBoneId boneId,
+    const LocalTransform& localOffset) noexcept {
+    if (boneId == 0U || !IsFiniteTransform(localOffset)) return std::nullopt;
+    const AnimatorRuntimeRecord* instance = Find(SceneAccess::State(scene), entity);
+    const TransformComponent* owner = scene.Transforms().TryGet(entity);
+    if (instance == nullptr || !instance->skeleton.has_value() || owner == nullptr) {
+        return std::nullopt;
+    }
+    const AnimatorInstanceSkeleton& skeleton = *instance->skeleton;
+    const auto bone = std::find(skeleton.boneIds.begin(), skeleton.boneIds.end(), boneId);
+    if (bone == skeleton.boneIds.end()) return std::nullopt;
+    const std::size_t index = static_cast<std::size_t>(bone - skeleton.boneIds.begin());
+    const AnimatorInstanceSkeleton::PoseBuffer& pose = skeleton.poses[skeleton.currentPose];
+    if (index >= pose.component.positions.size() || index >= pose.component.rotations.size() ||
+        index >= pose.component.scales.size()) {
+        return std::nullopt;
+    }
+    const LocalTransform component = ComposeTransform({
+        .position = pose.component.positions[index],
+        .rotation = pose.component.rotations[index],
+        .scale = pose.component.scales[index],
+    }, localOffset);
+    return AnimatorAttachmentTransform{
+        .componentSpace = component,
+        .worldSpace = ComposeWorldTransform(owner->WorldPayload(), component),
+    };
+}
+
+std::optional<AnimatorAttachmentTransform>
+SceneAnimatorService::SocketTransform(
+    const Scene& scene, SceneEntity entity, std::string_view socketName) noexcept {
+    if (socketName.empty()) return std::nullopt;
+    const AnimatorRuntimeRecord* instance = Find(SceneAccess::State(scene), entity);
+    if (instance == nullptr || !instance->skeleton.has_value()) return std::nullopt;
+    const SkeletonAsset& skeleton = *instance->skeleton->asset;
+    const auto socket = std::find_if(
+        skeleton.sockets.begin(), skeleton.sockets.end(),
+        [socketName](const SkeletonSocket& value) { return value.name == socketName; });
+    return socket == skeleton.sockets.end()
+        ? std::nullopt
+        : AttachmentTransform(scene, entity, socket->boneId, socket->localTransform);
 }
 
 bool SceneAnimatorService::Play(Scene& scene, SceneEntity entity, std::string_view layerName, std::string_view stateName, float normalizedTime) noexcept {
@@ -1897,6 +2260,25 @@ bool SceneAnimatorService::Play(Scene& scene, SceneEntity entity, std::string_vi
     layer.transitioning = false;
     layer.transitionElapsedSeconds = 0.0;
     layer.transitionDurationSeconds = 0.0;
+    return true;
+}
+
+bool SceneAnimatorService::SeekNormalized(
+    Scene& scene, SceneEntity entity, float normalizedTime) noexcept {
+    if (!std::isfinite(normalizedTime) || normalizedTime < 0.0F || normalizedTime > 1.0F) return false;
+    AnimatorRuntimeRecord* record = Find(SceneAccess::State(scene), entity);
+    if (record == nullptr || record->layers.size() != record->controller->layers.size()) return false;
+    for (std::size_t layerIndex = 0U; layerIndex < record->layers.size(); ++layerIndex) {
+        AnimatorRuntimeLayer& layer = record->layers[layerIndex];
+        if (layer.currentState >= layer.states.size()) return false;
+        const AnimationClip& clip = ReferenceClip(layer.states[layer.currentState]);
+        layer.currentTimeSeconds = StateTime(normalizedTime, clip);
+        layer.previousState = layer.currentState;
+        layer.previousTimeSeconds = layer.currentTimeSeconds;
+        layer.transitioning = false;
+        layer.transitionElapsedSeconds = 0.0;
+        layer.transitionDurationSeconds = 0.0;
+    }
     return true;
 }
 
@@ -1925,6 +2307,14 @@ bool SceneAnimatorService::SetSpeed(Scene& scene, SceneEntity entity, float spee
 float SceneAnimatorService::Speed(const Scene& scene, SceneEntity entity) noexcept {
     const AnimatorRuntimeRecord* record = Find(SceneAccess::State(scene), entity);
     return record == nullptr ? 0.0F : record->speed;
+}
+
+float SceneAnimatorService::CurrentStateDuration(const Scene& scene, SceneEntity entity) noexcept {
+    const AnimatorRuntimeRecord* record = Find(SceneAccess::State(scene), entity);
+    if (record == nullptr || record->layers.empty()) return 0.0F;
+    const AnimatorRuntimeLayer& layer = record->layers.front();
+    if (layer.currentState >= layer.states.size()) return 0.0F;
+    return ReferenceClip(layer.states[layer.currentState]).durationSeconds;
 }
 
 bool SceneAnimatorService::SetBool(Scene& scene, SceneEntity entity, std::string_view name, bool value) noexcept {
@@ -1993,6 +2383,16 @@ std::optional<AnimatorStateInfo> SceneAnimatorService::State(const Scene& scene,
     };
 }
 
+std::shared_ptr<const AnimatorDebugSnapshot> SceneAnimatorService::DebugSnapshot(
+    const Scene& scene) noexcept {
+    return SceneAccess::State(scene).animatorDebugSnapshots.Read();
+}
+
+void SceneAnimatorService::PublishDebugSnapshot(Scene& scene) {
+    SceneState& state = SceneAccess::State(scene);
+    BuildAndPublishDebugSnapshot(scene, state);
+}
+
 std::vector<AnimationEventRecord> SceneAnimatorService::DrainEvents(Scene& scene) {
     std::vector<AnimationEventRecord> drained;
     drained.swap(SceneAccess::State(scene).pendingAnimationEvents);
@@ -2025,8 +2425,9 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
     std::map<std::uint64_t, bool> retained;
     for (const AuthoredAnimator& value : authored) {
         if (!value.animator.enabled) continue;
-        if (value.animator.controllerAssetId == 0U || !std::isfinite(value.animator.speed) || value.animator.speed < 0.0F) {
-            throw std::runtime_error("Enabled Animator component has an invalid controller or speed");
+        if (value.animator.controllerAssetId == 0U || !std::isfinite(value.animator.speed) || value.animator.speed < 0.0F ||
+            !std::isfinite(value.animator.poseUpdateRateHz) || value.animator.poseUpdateRateHz < 0.0F) {
+            throw std::runtime_error("Enabled Animator component has an invalid controller, speed, or pose update rate");
         }
         retained[value.entity.Id()] = true;
         AnimatorRuntimeRecord* record = Find(SceneAccess::State(scene), value.entity);
@@ -2078,6 +2479,8 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
             }
             record->lastAppliedComponentSpeed = value.animator.speed;
             record->speed = value.animator.speed;
+            record->lastAppliedComponentPoseUpdateRateHz = value.animator.poseUpdateRateHz;
+            record->poseUpdateRateHz = value.animator.poseUpdateRateHz;
         } else if (hierarchyChanged) {
             record->observedHierarchyTopologyVersion =
                 state.hierarchyTopologyVersion;
@@ -2085,6 +2488,12 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
         if (record->lastAppliedComponentSpeed != value.animator.speed) {
             record->lastAppliedComponentSpeed = value.animator.speed;
             record->speed = value.animator.speed;
+        }
+        if (record->lastAppliedComponentPoseUpdateRateHz != value.animator.poseUpdateRateHz) {
+            record->lastAppliedComponentPoseUpdateRateHz = value.animator.poseUpdateRateHz;
+            record->poseUpdateRateHz = value.animator.poseUpdateRateHz;
+            record->poseUpdateAccumulatorSeconds = 0.0;
+            record->hasEvaluatedPose = false;
         }
         if (!state.isPlaying) {
             for (AnimatorRuntimeBinding& binding : record->bindings) {
@@ -2119,6 +2528,10 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
         throw std::invalid_argument("AnimatorSceneSystem requires a finite, non-negative deltaSeconds");
     }
     if (!state.isPlaying) return;
+    state.lastAnimatorParallelEvaluationCount = 0U;
+    state.lastAnimatorParallelWorkerCount = 1U;
+    state.lastAnimatorUpdateRateSkippedPoseCount = 0U;
+    state.animatorParallelPoseScratch.clear();
 
     for (auto& [id, record] : state.animators) {
         static_cast<void>(id);
@@ -2322,8 +2735,16 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
                 }
                 extractedRootMotionBone = boneIndex;
             }
-            EvaluateIndexedSkeletalPose(
-                scene, record, extractedRootMotionBone);
+            if (CanEvaluateSkeletalPoseInParallel(record, rootMotionOwner)) {
+                if (ShouldEvaluateSkeletalPose(record, deltaSeconds)) {
+                    state.animatorParallelPoseScratch.push_back(&record);
+                } else {
+                    ++state.lastAnimatorUpdateRateSkippedPoseCount;
+                }
+            } else {
+                EvaluateIndexedSkeletalPose(
+                    scene, record, extractedRootMotionBone);
+            }
         }
         for (AnimatorRuntimeBinding& binding : record.bindings) {
             if (!binding.outputTouched || !scene.Entities().IsAlive(binding.target)) continue;
@@ -2346,6 +2767,30 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
             transform->localRotation = kb::math::Normalize(
                 transform->localRotation * animatorMotion.rotation);
             scene.Transforms().MarkModified(record.entity);
+        }
+    }
+    if (!state.animatorParallelPoseScratch.empty()) {
+        if (state.animatorParallelPoseScratch.size() < kAnimatorParallelEvaluationThreshold) {
+            for (AnimatorRuntimeRecord* record : state.animatorParallelPoseScratch) {
+                EvaluateIndexedSkeletalPose(scene, *record, std::nullopt);
+            }
+        } else {
+            EnsureAnimatorWorkerPool(state);
+            state.animatorWorkerPool->ParallelForChunks(
+                state.animatorParallelPoseScratch.size(),
+                kAnimatorParallelEvaluationGrainSize,
+                [&scene, &state](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+                    for (std::size_t offset = 0U; offset < chunk.count; ++offset) {
+                        EvaluateIndexedSkeletalPose(
+                            scene,
+                            *state.animatorParallelPoseScratch[chunk.begin + offset],
+                            std::nullopt);
+                    }
+                });
+            state.lastAnimatorParallelEvaluationCount =
+                state.animatorParallelPoseScratch.size();
+            state.lastAnimatorParallelWorkerCount =
+                state.animatorWorkerPool->WorkerCount();
         }
     }
     for (auto& [id, record] : state.animators) {

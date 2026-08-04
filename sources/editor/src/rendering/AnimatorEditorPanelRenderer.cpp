@@ -1,0 +1,317 @@
+#include "rendering/AnimatorEditorPanelRenderer.hpp"
+
+#if defined(_WIN32)
+#include "engine/assets/AssetMetadata.hpp"
+#include "engine/scene/AnimationAssets.hpp"
+#include "engine/scene/SceneAssets.hpp"
+#include "rendering/GdiDrawing.hpp"
+#include "rendering/gdi/ScopedFont.hpp"
+#include "rendering/gdi/ScopedGdiObject.hpp"
+
+#include <algorithm>
+#include <string>
+
+namespace kb::editor {
+namespace {
+
+constexpr int kHeaderHeight = 30;
+
+[[nodiscard]] const char* ParameterTypeLabel(kb::scene::AnimatorParameterType type) noexcept {
+    switch (type) {
+    case kb::scene::AnimatorParameterType::Bool: return "Bool";
+    case kb::scene::AnimatorParameterType::Int: return "Int";
+    case kb::scene::AnimatorParameterType::Float: return "Float";
+    case kb::scene::AnimatorParameterType::Trigger: return "Trigger";
+    }
+    return "Unknown";
+}
+
+[[nodiscard]] const char* ConditionModeLabel(kb::scene::AnimatorConditionMode mode) noexcept {
+    switch (mode) {
+    case kb::scene::AnimatorConditionMode::BoolEquals: return "==";
+    case kb::scene::AnimatorConditionMode::IntEquals: return "==";
+    case kb::scene::AnimatorConditionMode::IntGreater: return ">";
+    case kb::scene::AnimatorConditionMode::IntLess: return "<";
+    case kb::scene::AnimatorConditionMode::FloatGreater: return ">";
+    case kb::scene::AnimatorConditionMode::FloatLess: return "<";
+    case kb::scene::AnimatorConditionMode::TriggerSet: return "set";
+    }
+    return "?";
+}
+
+void DrawText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize, int weight = FW_NORMAL,
+    UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
+    const ScopedFont font{ pointSize, weight };
+    const ScopedGdiObject selectedFont(dc, font.handle);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, color);
+    DrawTextA(dc, text, -1, &rect, flags | DT_NOPREFIX);
+}
+
+void PaintGraph(HDC dc, const RECT& rect, const kb::scene::AnimatorController* controller,
+    const kb::scene::AnimatorDebugInstanceSnapshot* debug) {
+    GdiDrawing::FillRectColor(dc, rect, RGB(29, 32, 37));
+    GdiDrawing::DrawSharpFrame(dc, rect, RGB(29, 32, 37), RGB(56, 61, 69));
+    DrawText(dc, RECT{ rect.left + 10, rect.top + 4, rect.right - 10, rect.top + 28 }, "State Machine", RGB(204, 212, 221), 12, FW_SEMIBOLD);
+    if (controller == nullptr) return;
+
+    const int nodeWidth = std::clamp((static_cast<int>(rect.right) - static_cast<int>(rect.left)) / 4, 104, 168);
+    const int nodeHeight = 44;
+    const int layerHeight = std::max(nodeHeight + 36, (static_cast<int>(rect.bottom) - static_cast<int>(rect.top) - 30) /
+        std::max(1, static_cast<int>(controller->layers.size())));
+    for (std::size_t layerIndex = 0U; layerIndex < controller->layers.size(); ++layerIndex) {
+        const kb::scene::AnimatorControllerLayer& layer = controller->layers[layerIndex];
+        const int rowTop = rect.top + 30 + static_cast<int>(layerIndex) * layerHeight;
+        if (rowTop >= rect.bottom) break;
+        DrawText(dc, RECT{ rect.left + 10, rowTop, rect.right - 10, rowTop + 18 }, layer.name.c_str(), RGB(130, 167, 205), 11, FW_SEMIBOLD);
+        constexpr int entryWidth = 48;
+        const RECT entry{ rect.left + 12, rowTop + 22, rect.left + 12 + entryWidth, rowTop + 22 + nodeHeight };
+        GdiDrawing::DrawSharpFrame(dc, entry, RGB(57, 67, 48), RGB(132, 172, 106));
+        DrawText(dc, RECT{ entry.left + 4, entry.top + 3, entry.right - 4, entry.bottom - 3 }, "Entry", RGB(218, 233, 205), 10, FW_SEMIBOLD);
+        for (std::size_t stateIndex = 0U; stateIndex < layer.states.size(); ++stateIndex) {
+            const kb::scene::AnimatorControllerState& state = layer.states[stateIndex];
+            const auto layout = std::ranges::find_if(controller->graphLayout, [&state](const auto& value) {
+                return value.stateId == state.id;
+            });
+            const int left = rect.left + entryWidth + 30 +
+                (layout == controller->graphLayout.end() ? static_cast<int>(stateIndex) * (nodeWidth + 22) : layout->positionX);
+            if (left >= rect.right - 8) break;
+            const RECT node{ left, rowTop + 22, std::min(static_cast<int>(rect.right) - 8, left + nodeWidth), rowTop + 22 + nodeHeight };
+            const bool defaultState = state.name == layer.defaultState;
+            const bool activeState = debug != nullptr && std::any_of(
+                debug->layers.begin(), debug->layers.end(),
+                [&state](const kb::scene::AnimatorDebugLayerSnapshot& value) {
+                    return value.activeStateId == state.id;
+                });
+            GdiDrawing::DrawSharpFrame(dc, node,
+                activeState ? RGB(47, 84, 58) : (defaultState ? RGB(42, 72, 91) : RGB(42, 46, 53)),
+                activeState ? RGB(111, 205, 126) : (defaultState ? RGB(90, 156, 210) : RGB(78, 84, 93)));
+            DrawText(dc, RECT{ node.left + 7, node.top + 3, node.right - 7, node.bottom - 3 },
+                state.name.c_str(), RGB(224, 230, 237), 11, FW_SEMIBOLD);
+            if (defaultState) {
+                const int middle = node.top + (node.bottom - node.top) / 2;
+                GdiDrawing::FillRectColor(dc, RECT{ entry.right, middle, node.left, middle + 2 }, RGB(132, 172, 106));
+            }
+        }
+        int transitionY = rowTop + 22 + nodeHeight + 4;
+        for (const kb::scene::AnimatorControllerTransition& transition : layer.transitions) {
+            if (transitionY + 14 >= rowTop + layerHeight || transitionY + 14 >= rect.bottom) break;
+            const std::string text = transition.fromState + " -> " + transition.toState +
+                "  (" + std::to_string(transition.durationSeconds) + "s)";
+            const bool activeTransition = debug != nullptr && std::any_of(
+                debug->layers.begin(), debug->layers.end(),
+                [&transition](const kb::scene::AnimatorDebugLayerSnapshot& value) {
+                    return value.transitioning && value.activeTransitionId == transition.id;
+                });
+            DrawText(dc, RECT{ rect.left + 18, transitionY, rect.right - 10, transitionY + 14 }, text.c_str(),
+                activeTransition ? RGB(245, 211, 101) : RGB(203, 173, 99), 10,
+                activeTransition ? FW_SEMIBOLD : FW_NORMAL);
+            transitionY += 14;
+        }
+    }
+}
+
+void PaintDetails(HDC dc, const RECT& rect, const kb::scene::AnimatorController* controller,
+    const kb::scene::AnimatorDebugInstanceSnapshot* debug) {
+    GdiDrawing::FillRectColor(dc, rect, RGB(27, 29, 33));
+    GdiDrawing::DrawSharpFrame(dc, rect, RGB(27, 29, 33), RGB(56, 61, 69));
+    DrawText(dc, RECT{ rect.left + 10, rect.top + 4, rect.right - 10, rect.top + 28 }, "Details / Assets", RGB(204, 212, 221), 12, FW_SEMIBOLD);
+    if (controller == nullptr) return;
+    int y = rect.top + 36;
+    const auto row = [&](const std::string& label) {
+        DrawText(dc, RECT{ rect.left + 10, y, rect.right - 10, y + 19 }, label.c_str(), RGB(168, 178, 190), 11);
+        y += 20;
+    };
+    if (debug != nullptr) {
+        row("Live Debug");
+        for (const kb::scene::AnimatorDebugLayerSnapshot& layer : debug->layers) {
+            row(layer.name + ": " + layer.activeState +
+                (layer.transitioning ? " <- " + layer.previousState + " (" +
+                    std::to_string(layer.transitionProgress) + ")" : "") +
+                " | t " + std::to_string(layer.elapsedSeconds));
+            if (y >= rect.bottom) return;
+        }
+        for (const kb::scene::AnimatorDebugParameterSnapshot& parameter : debug->parameters) {
+            std::string value;
+            switch (parameter.type) {
+            case kb::scene::AnimatorParameterType::Bool:
+            case kb::scene::AnimatorParameterType::Trigger:
+                value = parameter.boolValue ? "true" : "false";
+                break;
+            case kb::scene::AnimatorParameterType::Int:
+                value = std::to_string(parameter.intValue);
+                break;
+            case kb::scene::AnimatorParameterType::Float:
+                value = std::to_string(parameter.floatValue);
+                break;
+            }
+            row(parameter.name + " = " + value);
+            if (y >= rect.bottom) return;
+        }
+        row("Pose bones: " + std::to_string(debug->bones.size()) +
+            " | palette: " + std::to_string(debug->paletteMatrixCount));
+        row("LOD: " + std::string{ debug->lodEnabled ? "enabled" : "disabled" } +
+            " | bias: " + std::to_string(debug->lodBias) +
+            " | bounds: " + (debug->fixedBounds ? "fixed" : "animated"));
+        row("Root motion: " + std::string{ debug->hasRootMotion ? "active" : "none" });
+        row("Root trail samples: " + std::to_string(debug->rootMotionTrail.size()));
+        for (std::size_t index = 0U; index < std::min<std::size_t>(debug->bones.size(), 3U); ++index) {
+            const kb::scene::AnimatorDebugBoneSnapshot& bone = debug->bones[index];
+            row("Bone " + std::to_string(bone.id) + " final: " +
+                std::to_string(bone.componentPose.position.x) + ", " +
+                std::to_string(bone.componentPose.position.y) + ", " +
+                std::to_string(bone.componentPose.position.z));
+            if (y >= rect.bottom) return;
+        }
+        for (const kb::scene::AnimatorDebugConstraintSnapshot& constraint : debug->constraints) {
+            row("Constraint " + constraint.name + ": " +
+                (constraint.hasTarget ? "target bound" : "target missing"));
+            if (y >= rect.bottom) return;
+        }
+        for (const std::string& diagnostic : debug->compatibilityDiagnostics) {
+            row("Compatibility: " + diagnostic);
+            if (y >= rect.bottom) return;
+        }
+        y += 4;
+    }
+    row("Parameters: " + std::to_string(controller->parameters.size()));
+    for (const kb::scene::AnimatorParameterDefinition& parameter : controller->parameters) {
+        row(parameter.name + " : " + ParameterTypeLabel(parameter.type));
+        if (y >= rect.bottom) return;
+    }
+    row("Layers: " + std::to_string(controller->layers.size()));
+    for (const kb::scene::AnimatorControllerLayer& layer : controller->layers) {
+        row(layer.name + " | Entry: " + layer.defaultState);
+        if (y >= rect.bottom) return;
+    }
+    row("Constraints: " + std::to_string(controller->rigConstraints.size()));
+    y += 5;
+    DrawText(dc, RECT{ rect.left + 10, y, rect.right - 10, y + 19 }, "Transitions", RGB(130, 167, 205), 11, FW_SEMIBOLD);
+    y += 21;
+    for (const kb::scene::AnimatorControllerLayer& layer : controller->layers) {
+        for (const kb::scene::AnimatorControllerTransition& transition : layer.transitions) {
+            row(transition.fromState + " -> " + transition.toState + " | " +
+                std::to_string(transition.durationSeconds) + " s");
+            for (const kb::scene::AnimatorTransitionCondition& condition : transition.conditions) {
+                row("  " + condition.parameter + " " + ConditionModeLabel(condition.mode));
+            }
+            if (y >= rect.bottom) return;
+        }
+    }
+    DrawText(dc, RECT{ rect.left + 10, y, rect.right - 10, y + 19 }, "Referenced clips", RGB(130, 167, 205), 11, FW_SEMIBOLD);
+    y += 21;
+    for (const kb::scene::AnimatorControllerLayer& layer : controller->layers) {
+        for (const kb::scene::AnimatorControllerState& state : layer.states) {
+            const std::string reference = state.clipReference.empty() ? state.blendParameter : state.clipReference;
+            if (!reference.empty()) row(reference);
+            for (const kb::scene::AnimatorControllerState::BlendChild& child : state.blendChildren) {
+                if (!child.clipReference.empty()) row(child.clipReference);
+            }
+            if (y >= rect.bottom) return;
+        }
+    }
+}
+
+} // namespace
+
+void AnimatorEditorPanelRenderer::Paint(
+    HDC dc,
+    HWND host,
+    const RECT& content,
+    const DockPanel& panel,
+    const EditorTheme& theme,
+    const EditorSceneContext& sceneContext,
+    const EditorRenderBackendSettings& renderBackendSettings,
+    EditorSceneBgfxViewport* sceneViewport) const {
+    if (!sceneContext.HasAnimatorEditorAsset() || sceneContext.AnimatorEditorPreviewScene() == nullptr) {
+        GdiDrawing::FillRectColor(dc, content, RGB(27, 29, 33));
+        DrawText(dc, content, "Open an Animator Controller asset to begin editing.", RGB(168, 178, 190), 15,
+            FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        return;
+    }
+
+    GdiDrawing::FillRectColor(dc, RECT{ content.left, content.top, content.right, content.top + kHeaderHeight }, RGB(34, 37, 43));
+    const kb::assets::AssetMetadata* metadata =
+        sceneContext.Scene().Assets().Manager().Registry().Find(sceneContext.AnimatorEditorAssetId());
+    const kb::assets::AssetMetadata* previewMesh =
+        sceneContext.Scene().Assets().Manager().Registry().Find(sceneContext.AnimationPreview().SkeletalMeshAsset());
+    const kb::scene::AnimatorController* controller = sceneContext.AnimatorEditorController();
+    const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> debugSnapshot = sceneContext.AnimatorEditorDebugSnapshot();
+    const kb::scene::AnimatorDebugInstanceSnapshot* debug = debugSnapshot == nullptr ? nullptr :
+        debugSnapshot->Find(sceneContext.AnimatorEditorResolvedDebugTarget());
+    const kb::scene::AnimatorControllerState* motion = nullptr;
+    if (controller != nullptr && sceneContext.AnimatorEditorGraphDocument().MotionState() != 0U) {
+        for (const auto& layer : controller->layers) for (const auto& state : layer.states)
+            if (state.id == sceneContext.AnimatorEditorGraphDocument().MotionState()) motion = &state;
+    }
+    const std::string title = (metadata == nullptr ? std::string{ "Animator Controller" } : metadata->name) +
+        (sceneContext.HasDirtyAnimatorEditorAssetEdit() ? " *" : "") +
+        (previewMesh == nullptr ? std::string{} : "  |  Preview " + previewMesh->name) +
+        "  |  Debug " + sceneContext.AnimatorEditorDebugTargetLabel() + " (click to switch)";
+    DrawText(dc, RECT{ content.left + 10, content.top, content.right - 10, content.top + kHeaderHeight },
+        (title + "  >  " + (motion == nullptr ? "State Machine" : motion->name)).c_str(), RGB(219, 225, 233), 13, FW_SEMIBOLD);
+
+    const AnimatorEditorPanelLayout layout = ResolveLayout(
+        RECT{ content.left, content.top + kHeaderHeight, content.right, content.bottom });
+    GdiDrawing::FillRectColor(dc, layout.preview, RGB(20, 23, 28));
+    if (motion == nullptr) PaintGraph(dc, layout.graph, controller, debug);
+    else {
+        GdiDrawing::FillRectColor(dc, layout.graph, RGB(29, 32, 37));
+        DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 10, layout.graph.right - 12, layout.graph.top + 34 }, "Motion / Blend Document", RGB(204, 212, 221), 13, FW_SEMIBOLD);
+        if (!motion->clipReference.empty()) {
+            DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 42, layout.graph.right - 12, layout.graph.top + 62 }, motion->clipReference.c_str(), RGB(168, 178, 190), 12);
+        } else {
+            DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 42, layout.graph.right - 12, layout.graph.top + 62 },
+                ("1D Blend Tree | " + motion->blendParameter).c_str(), RGB(130, 167, 205), 12, FW_SEMIBOLD);
+            int y = layout.graph.top + 70;
+            for (const kb::scene::AnimatorControllerState::BlendChild& child : motion->blendChildren) {
+                const std::string row = std::to_string(child.threshold) + "  |  " + child.clipReference;
+                DrawText(dc, RECT{ layout.graph.left + 20, y, layout.graph.right - 12, y + 20 }, row.c_str(), RGB(168, 178, 190), 11);
+                y += 22;
+            }
+        }
+    }
+    PaintDetails(dc, layout.details, controller, debug);
+    if (sceneViewport == nullptr) return;
+    const std::uint64_t revision = sceneContext.AnimatorEditorPreviewRevision();
+    EditorSceneBgfxViewport::PresentSettings settings{};
+    settings.viewportKey = panel.id;
+    settings.editorSceneOverlaysEnabled = false;
+    settings.sceneRevision = revision;
+    settings.sceneDirtyBaseRevision = revision;
+    settings.sceneFullSyncRequired = false;
+    settings.msaaSamples = renderBackendSettings.MsaaSamples();
+    settings.shadowPassEnabled = renderBackendSettings.ShadowsEnabled();
+    settings.postProcessEnabled = true;
+    settings.selectionMaskEnabled = false;
+    settings.selectionOutlineEnabled = false;
+    settings.gpuDrivenRuntimeDispatchEnabled = renderBackendSettings.GpuDrivenEnabled();
+    sceneViewport->Present(dc, host, layout.preview, *sceneContext.AnimatorEditorPreviewScene(), theme, settings);
+}
+
+std::optional<std::uint64_t> AnimatorEditorPanelRenderer::GraphStateAt(
+    const RECT& content, const kb::scene::AnimatorController& controller, int x, int y) noexcept {
+    constexpr int entryWidth = 48;
+    constexpr int nodeHeight = 44;
+    const AnimatorEditorPanelLayout layout = ResolveLayout(RECT{ content.left, content.top + kHeaderHeight, content.right, content.bottom });
+    if (x < layout.graph.left || x >= layout.graph.right || y < layout.graph.top || y >= layout.graph.bottom) return std::nullopt;
+    const int nodeWidth = std::clamp((static_cast<int>(layout.graph.right) - static_cast<int>(layout.graph.left)) / 4, 104, 168);
+    const int layerHeight = std::max(nodeHeight + 36, (static_cast<int>(layout.graph.bottom) - static_cast<int>(layout.graph.top) - 30) /
+        std::max(1, static_cast<int>(controller.layers.size())));
+    for (std::size_t layerIndex = 0U; layerIndex < controller.layers.size(); ++layerIndex) {
+        const int rowTop = layout.graph.top + 30 + static_cast<int>(layerIndex) * layerHeight;
+        const auto& layer = controller.layers[layerIndex];
+        for (std::size_t stateIndex = 0U; stateIndex < layer.states.size(); ++stateIndex) {
+            const auto& state = layer.states[stateIndex];
+            const auto positioned = std::ranges::find_if(controller.graphLayout, [&state](const auto& value) { return value.stateId == state.id; });
+            const int left = layout.graph.left + entryWidth + 30 +
+                (positioned == controller.graphLayout.end() ? static_cast<int>(stateIndex) * (nodeWidth + 22) : positioned->positionX);
+            if (x >= left && x < left + nodeWidth && y >= rowTop + 22 && y < rowTop + 22 + nodeHeight) return state.id;
+        }
+    }
+    return std::nullopt;
+}
+
+} // namespace kb::editor
+
+#endif

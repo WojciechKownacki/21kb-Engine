@@ -183,6 +183,34 @@ void RunSkeletalMeshAssetTests() {
     invalid.conservativeBounds.extents = { 0.25F, 0.25F, 0.25F };
     Require(!kb::scene::ValidateSkeletalMeshAsset(invalid).valid,
         "SkeletalMeshAsset accepted imported vertices outside conservative bounds");
+    kb::scene::SkeletalMeshAsset lodPaletteMesh = mesh;
+    kb::scene::SkeletalMeshLod lowerLod = lod;
+    lowerLod.requiredBones = { 2U };
+    lowerLod.sections[0].boneMap = { 2U };
+    lowerLod.minScreenCoverage = 0.0F;
+    lodPaletteMesh.lods.push_back(lowerLod);
+    const std::array<kb::scene::SkeletonBoneId, 2U> paletteBoneIds{ 1U, 2U };
+    const std::array<kb::math::Mat4, 2U> paletteMatrices{
+        kb::math::FromTRS({ 1.0F, 0.0F, 0.0F }, {}, { 1.0F, 1.0F, 1.0F }),
+        kb::math::FromTRS({ 2.0F, 0.0F, 0.0F }, {}, { 1.0F, 1.0F, 1.0F }),
+    };
+    std::vector<kb::math::Mat4> stablePalette;
+    Require(kb::scene::ValidateSkeletalMeshAsset(lodPaletteMesh).valid &&
+            kb::scene::BuildSkeletalMeshSkinningPalette(
+                lodPaletteMesh, paletteBoneIds, paletteMatrices, stablePalette) &&
+            stablePalette.size() == 2U && stablePalette[0].columns[3].x == 1.0F &&
+            stablePalette[1].columns[3].x == 2.0F,
+        "SkeletalMeshAsset did not build a stable palette shared by every LOD");
+    const std::array<kb::scene::SkeletonBoneId, 1U> incompletePaletteIds{ 1U };
+    const std::array<kb::math::Mat4, 1U> incompletePaletteMatrices{ paletteMatrices[0] };
+    Require(!kb::scene::BuildSkeletalMeshSkinningPalette(
+                lodPaletteMesh, incompletePaletteIds, incompletePaletteMatrices, stablePalette) &&
+            stablePalette.empty(),
+        "SkeletalMeshAsset accepted an incomplete LOD palette");
+    invalid = lodPaletteMesh;
+    invalid.lods[1].sections[0].boneMap = { 1U };
+    Require(!kb::scene::ValidateSkeletalMeshAsset(invalid).valid,
+        "SkeletalMeshAsset accepted a section bone outside required bones");
     kb::scene::SkeletalMeshAsset fixedBoundsMesh = mesh;
     fixedBoundsMesh.boundsMode = kb::scene::SkeletalMeshBoundsMode::Fixed;
     fixedBoundsMesh.fixedBounds = { .center = { 0.0F, 0.0F, 0.0F }, .extents = { 1.0F, 2.0F, 1.0F } };

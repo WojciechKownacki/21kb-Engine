@@ -78,6 +78,19 @@ SkeletonAssetValidationResult ValidateSkeletonAsset(const SkeletonAsset& asset) 
             return { false, "Skeleton bone '" + bone.name + "' has a non-finite inverse bind matrix." };
         }
     }
+    std::unordered_set<std::string> socketNames;
+    for (const SkeletonSocket& socket : asset.sockets) {
+        if (socket.name.empty() || !socketNames.insert(socket.name).second ||
+            !ids.contains(socket.boneId)) {
+            return { false, "Skeleton has a socket with an invalid name or bone reference." };
+        }
+        if (!IsFinite(socket.localTransform.position) ||
+            !IsFinite(socket.localTransform.scale) ||
+            !IsFinite(socket.localTransform.rotation) ||
+            !IsUnitQuaternion(socket.localTransform.rotation)) {
+            return { false, "Skeleton socket '" + socket.name + "' has an invalid local transform." };
+        }
+    }
     return { true, {} };
 }
 

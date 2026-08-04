@@ -23,6 +23,14 @@
 #include "scene/EditorScriptEditorState.hpp"
 #include "scene/EditorSceneObjectEditTypes.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
+#include "scene/AnimationPreviewContext.hpp"
+#include "scene/AnimationClipTimelineState.hpp"
+#include "scene/AnimationClipEditorDocumentState.hpp"
+#include "scene/AnimatorEditorGraphDocumentState.hpp"
+#include "scene/EditorAnimationPreviewScene.hpp"
+#include "scene/SkeletalMeshEditorTreeState.hpp"
+#include "scene/SkeletalMeshEditorDetailsState.hpp"
+#include "scene/SkeletalMeshEditorDocumentState.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
 #include "scene/material/MaterialEditorState.hpp"
 #include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
@@ -88,6 +96,7 @@ class EditorInputMappingContextAuthoring;
 class IEditorMaterialAssetPropertyEdit;
 class EditorMaterialAssetAuthoring;
 class EditorMaterialPreviewScene;
+class EditorAnimationPreviewScene;
 struct EditorMaterialPreviewTelemetry;
 class EditorMaterialGraphCookService;
 struct EditorMaterialGraphCookResult;
@@ -167,6 +176,15 @@ public:
     [[nodiscard]] const EditorViewportPreviewState& ViewportPreview() const noexcept;
     [[nodiscard]] EditorViewportPreviewState& ViewportPreview(std::uint64_t viewportKey) noexcept;
     [[nodiscard]] const EditorViewportPreviewState& ViewportPreview(std::uint64_t viewportKey) const noexcept;
+    [[nodiscard]] AnimationPreviewContext& AnimationPreview() noexcept;
+    [[nodiscard]] const AnimationPreviewContext& AnimationPreview() const noexcept;
+    [[nodiscard]] const kb::scene::Scene& AnimationPreviewScene();
+    [[nodiscard]] EditorViewportCameraState& AnimationPreviewCamera() noexcept;
+    [[nodiscard]] const EditorViewportCameraState& AnimationPreviewCamera() const noexcept;
+    void FocusAnimationPreview(float durationSeconds = 0.0F) noexcept;
+    [[nodiscard]] bool TickAnimationPreviewCamera(float deltaSeconds) noexcept;
+    [[nodiscard]] bool TickAnimationPreviewPlayback(float deltaSeconds) noexcept;
+    [[nodiscard]] AnimationPreviewOverlaySnapshot AnimationPreviewOverlays() const;
     [[nodiscard]] EditorViewportCameraState& ViewportCamera() noexcept;
     [[nodiscard]] const EditorViewportCameraState& ViewportCamera() const noexcept;
     [[nodiscard]] EditorViewportCameraState& ViewportCamera(std::uint64_t viewportKey) noexcept;
@@ -397,6 +415,80 @@ public:
     [[nodiscard]] bool CreateLuaScriptAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
     [[nodiscard]] bool OpenAnimationAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool OpenAnimationClipEditorAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool OpenAnimatorEditorAsset(kb::assets::AssetId id);
+    [[nodiscard]] kb::assets::AssetId AnimatorEditorAssetId() const noexcept;
+    [[nodiscard]] bool HasAnimatorEditorAsset() const noexcept;
+    [[nodiscard]] bool AnimatorEditorDebuggingPreview() const noexcept;
+    [[nodiscard]] kb::scene::SceneEntity AnimatorEditorDebugTarget() const noexcept;
+    [[nodiscard]] std::string AnimatorEditorDebugTargetLabel() const;
+    [[nodiscard]] kb::scene::SceneEntity AnimatorEditorResolvedDebugTarget() const noexcept;
+    [[nodiscard]] std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> AnimatorEditorDebugSnapshot() const;
+    [[nodiscard]] bool SetAnimatorEditorDebugTarget(kb::scene::SceneEntity entity);
+    void SetAnimatorEditorDebugTargetPreview() noexcept;
+    [[nodiscard]] const kb::scene::Scene* AnimatorEditorPreviewScene() const noexcept;
+    [[nodiscard]] std::uint64_t AnimatorEditorPreviewRevision() const noexcept;
+    [[nodiscard]] const kb::scene::AnimatorController* AnimatorEditorController() const noexcept;
+    [[nodiscard]] AnimatorEditorGraphDocumentState& AnimatorEditorGraphDocument() noexcept;
+    [[nodiscard]] const AnimatorEditorGraphDocumentState& AnimatorEditorGraphDocument() const noexcept;
+    [[nodiscard]] bool AddAnimationClipToAnimatorEditor(kb::assets::AssetId clipId, std::int32_t graphX, std::int32_t graphY);
+    [[nodiscard]] bool OpenAnimatorMotionDocument(std::uint64_t stateId);
+    [[nodiscard]] bool ReturnToAnimatorStateMachine();
+    [[nodiscard]] bool HasDirtyAnimatorEditorAssetEdit() const noexcept;
+    [[nodiscard]] bool UndoAnimatorEditorEdit();
+    [[nodiscard]] bool RedoAnimatorEditorEdit();
+    [[nodiscard]] bool SaveAnimatorEditorAsset();
+    [[nodiscard]] bool RevertAnimatorEditorAsset();
+    [[nodiscard]] kb::assets::AssetId AnimationClipEditorAssetId() const noexcept;
+    [[nodiscard]] bool HasAnimationClipEditorAsset() const noexcept;
+    [[nodiscard]] const kb::scene::Scene* AnimationClipEditorPreviewScene() const noexcept;
+    [[nodiscard]] std::uint64_t AnimationClipEditorPreviewRevision() const noexcept;
+    [[nodiscard]] AnimationClipTimelineState& AnimationClipEditorTimeline() noexcept;
+    [[nodiscard]] const AnimationClipTimelineState& AnimationClipEditorTimeline() const noexcept;
+    [[nodiscard]] bool BeginAnimationClipEditorEditGroup();
+    void EndAnimationClipEditorEditGroup() noexcept;
+    [[nodiscard]] bool UndoAnimationClipEditorEdit();
+    [[nodiscard]] bool RedoAnimationClipEditorEdit();
+    [[nodiscard]] bool UpsertAnimationClipBoneKey(kb::scene::SkeletonBoneId boneId, float timeSeconds, kb::scene::LocalTransform transform);
+    [[nodiscard]] bool RemoveAnimationClipBoneKey(kb::scene::SkeletonBoneId boneId, float timeSeconds);
+    [[nodiscard]] bool UpsertAnimationClipEvent(kb::scene::AnimationEventId id, float timeSeconds);
+    [[nodiscard]] bool RemoveAnimationClipEvent(kb::scene::AnimationEventId id);
+    [[nodiscard]] bool SaveAnimationClipEditorAsset();
+    [[nodiscard]] std::vector<kb::assets::AssetId> AnimationClipEditorCompatiblePreviewMeshes();
+    [[nodiscard]] bool SetAnimationClipEditorPreviewMesh(kb::assets::AssetId meshId);
+    [[nodiscard]] bool OpenSkeletalMeshEditorAsset(kb::assets::AssetId id);
+    [[nodiscard]] kb::assets::AssetId SkeletalMeshEditorAssetId() const noexcept;
+    [[nodiscard]] bool HasSkeletalMeshEditorAsset() const noexcept;
+    [[nodiscard]] const kb::scene::Scene* SkeletalMeshEditorPreviewScene() const noexcept;
+    [[nodiscard]] std::uint64_t SkeletalMeshEditorPreviewRevision() const noexcept;
+    [[nodiscard]] bool SetSkeletalMeshEditorTreeFilter(std::string filter);
+    [[nodiscard]] const std::string& SkeletalMeshEditorTreeFilter() const noexcept;
+    [[nodiscard]] bool IsSkeletalMeshEditorTreeSearchFocused() const noexcept;
+    void FocusSkeletalMeshEditorTreeSearch(bool focused) noexcept;
+    void AppendSkeletalMeshEditorTreeSearchText(wchar_t character);
+    void InsertSkeletalMeshEditorTreeSearchText(std::string_view text);
+    void BackspaceSkeletalMeshEditorTreeSearch();
+    void SelectAllSkeletalMeshEditorTreeSearch() noexcept;
+    void ClearSkeletalMeshEditorTreeSearch();
+    [[nodiscard]] std::vector<SkeletalMeshEditorTreeRow> SkeletalMeshEditorTreeRows() const;
+    [[nodiscard]] bool SelectSkeletalMeshEditorBone(kb::scene::SkeletonBoneId boneId);
+    [[nodiscard]] bool SelectSkeletalMeshEditorSocket(std::string socketName);
+    [[nodiscard]] bool ClearSkeletalMeshEditorTreeSelection();
+    [[nodiscard]] kb::scene::SkeletonBoneId SelectedSkeletalMeshEditorBone() const noexcept;
+    [[nodiscard]] const std::string& SelectedSkeletalMeshEditorSocket() const noexcept;
+    [[nodiscard]] SkeletalMeshEditorDetailsModel SkeletalMeshEditorDetails() const;
+    [[nodiscard]] const std::vector<kb::scene::SkeletalMeshMorphTarget>& SkeletalMeshEditorMorphTargets() const noexcept;
+    [[nodiscard]] bool HasDirtySkeletalMeshEditorAssetEdit() const noexcept;
+    [[nodiscard]] bool CanUndoSkeletalMeshEditorAssetEdit() const noexcept;
+    [[nodiscard]] bool CanRedoSkeletalMeshEditorAssetEdit() const noexcept;
+    [[nodiscard]] bool SetSkeletalMeshEditorBoundsMode(kb::scene::SkeletalMeshBoundsMode mode);
+    [[nodiscard]] bool UndoSkeletalMeshEditorAssetEdit();
+    [[nodiscard]] bool RedoSkeletalMeshEditorAssetEdit();
+    [[nodiscard]] bool SaveSkeletalMeshEditorAsset();
+    [[nodiscard]] bool RevertSkeletalMeshEditorAsset();
+    [[nodiscard]] bool ReimportSkeletalMeshEditorAsset();
+    [[nodiscard]] bool PrepareSkeletalMeshEditorClose(std::string_view reason);
+    void CloseSkeletalMeshEditorAsset() noexcept;
     [[nodiscard]] bool OpenMaterialEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenMaterialEditorGraphSourceAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenMaterialEditorMaterialTypeAsset(kb::assets::AssetId id);
@@ -869,6 +961,8 @@ public:
     [[nodiscard]] bool HasActiveTransformEdit() const noexcept;
 
 private:
+    [[nodiscard]] bool PublishAnimationClipEditorWorkingCopy();
+    [[nodiscard]] bool RefreshAnimatorEditorWorkingPreview();
     [[nodiscard]] EditorSceneCommandController SceneCommands() noexcept;
     [[nodiscard]] bool BeginTerrainBrushStroke(
         kb::scene::SceneEntity entity,
@@ -943,6 +1037,19 @@ private:
     EditorAssetBrowserState assetBrowser_;
     EditorConsoleState console_;
     EditorSceneViewportStateStore viewportState_;
+    AnimationPreviewContext animationPreview_;
+    std::unique_ptr<EditorAnimationPreviewScene> animationPreviewScene_;
+    kb::assets::AssetId animatorEditorAssetId_{};
+    kb::scene::SceneEntity animatorEditorDebugTarget_{};
+    std::optional<kb::scene::AnimatorController> animatorEditorController_;
+    AnimatorEditorGraphDocumentState animatorEditorGraphDocument_;
+    kb::assets::AssetId animationClipEditorAssetId_{};
+    AnimationClipTimelineState animationClipEditorTimeline_;
+    AnimationClipEditorDocumentState animationClipEditorDocument_;
+    kb::assets::AssetId skeletalMeshEditorAssetId_{};
+    SkeletalMeshEditorTreeState skeletalMeshEditorTree_;
+    SkeletalMeshEditorDetailsState skeletalMeshEditorDetails_;
+    SkeletalMeshEditorDocumentState skeletalMeshEditorDocument_;
     InspectorPanelState inspector_;
     MaterialEditorState materialEditor_;
     kb::assets::AssetId materialRuntimePreviewAssetId_{};

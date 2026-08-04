@@ -22,6 +22,7 @@
 #include "assets/EditorAssetBrowserState.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "inspection/InspectorPanelState.hpp"
@@ -328,6 +329,14 @@ bool EditorPointerDropHandler::Drop(
     const EditorMetrics& metrics,
     EditorSceneContext& sceneContext,
     const EditorPointerDragState& drag) {
+    if (drag.kind == EditorPointerDragKind::PrefabAsset && drag.assetId.IsValid()) {
+        const kb::assets::AssetMetadata* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(drag.assetId);
+        const std::optional<RECT> animator = EditorDropPanelResolver::Resolve(
+            DockPanelKind::AnimatorEditor, sourceWindow, mainWindow, dockModel, floatingWindows, metrics);
+        if (metadata != nullptr && metadata->type == kb::scene::kAnimationClipAssetType && animator.has_value() && Contains(*animator, x, y)) {
+            return sceneContext.AddAnimationClipToAnimatorEditor(drag.assetId, x - animator->left, y - animator->top);
+        }
+    }
     switch (drag.kind) {
     case EditorPointerDragKind::HierarchyEntity:
         return EditorHierarchyEntityAssetDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.entity)

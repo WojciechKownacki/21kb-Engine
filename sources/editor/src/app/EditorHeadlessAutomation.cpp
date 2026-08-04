@@ -1,11 +1,16 @@
 #include "app/EditorHeadlessAutomation.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorPlayModeState.hpp"
+#include "app/EditorShellInteractionState.hpp"
+#include "docking/EditorDockModel.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
+#include "rendering/DockWorkspaceRenderer.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
+#include "rendering/FloatingEditorWindowRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/PanelContentRenderer.hpp"
 #include "rendering/ScriptEditorPanelRenderer.hpp"
@@ -32,6 +37,7 @@
 #include <gdiplus.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <fstream>
 #include <iomanip>
@@ -48,6 +54,35 @@ namespace kb::editor {
 namespace {
 
 constexpr RECT kInspectorContent{ 0, 0, 900, 700 };
+
+struct ScreenshotDimensions {
+    int logicalWidth = 0;
+    int logicalHeight = 0;
+    int dpi = 96;
+};
+
+struct ScreenshotProfile {
+    std::string_view name;
+    ScreenshotDimensions dimensions;
+};
+
+constexpr ScreenshotDimensions kDefaultScreenshotDimensions{
+    .logicalWidth = 900,
+    .logicalHeight = 700,
+};
+
+constexpr std::array<ScreenshotProfile, 3U> kEditorScreenshotProfiles{{
+    { "1920x1080", { 1920, 1080, 96 } },
+    { "1366x768", { 1366, 768, 96 } },
+    // A 1280x720 logical client at 144 DPI produces a 1920x1080 capture.
+    { "150dpi", { 1280, 720, 144 } },
+}};
+
+[[nodiscard]] int PhysicalPixels(int logicalPixels, int dpi) noexcept {
+    return static_cast<int>(
+        (static_cast<long long>(logicalPixels) * dpi + 48LL) /
+        96LL);
+}
 
 [[nodiscard]] POINT Center(const RECT& rect) noexcept {
     return POINT{
@@ -197,12 +232,34 @@ FindInspectorHit(
     if (panel == "material_editor") {
         return DockPanelKind::MaterialEditor;
     }
+    if (panel == "skeletal_mesh_editor") {
+        return DockPanelKind::SkeletalMeshEditor;
+    }
+    if (panel == "animation_clip_editor") {
+        return DockPanelKind::AnimationClipEditor;
+    }
+    if (panel == "animator_editor") {
+        return DockPanelKind::AnimatorEditor;
+    }
     return std::nullopt;
 }
 
 template <typename Paint>
 [[nodiscard]] bool CaptureBitmap(
-    const std::filesystem::path& path, Paint&& paint) {
+    const std::filesystem::path& path,
+    ScreenshotDimensions dimensions,
+    Paint&& paint) {
+    if (dimensions.logicalWidth <= 0 ||
+        dimensions.logicalHeight <= 0 || dimensions.dpi < 96) {
+        return false;
+    }
+    const int pixelWidth = PhysicalPixels(
+        dimensions.logicalWidth, dimensions.dpi);
+    const int pixelHeight = PhysicalPixels(
+        dimensions.logicalHeight, dimensions.dpi);
+    if (pixelWidth <= 0 || pixelHeight <= 0) {
+        return false;
+    }
     HDC screen = GetDC(nullptr);
     HDC memory =
         screen == nullptr ? nullptr : CreateCompatibleDC(screen);
@@ -210,20 +267,64 @@ template <typename Paint>
         memory == nullptr
         ? nullptr
         : CreateCompatibleBitmap(
-              screen, kInspectorContent.right,
-              kInspectorContent.bottom);
+              screen, pixelWidth, pixelHeight);
     HGDIOBJ previous =
         bitmap == nullptr ? nullptr : SelectObject(memory, bitmap);
     bool saved = false;
     if (previous != nullptr) {
         HeroIconGdiplusRuntime::EnsureStarted();
-        paint(memory);
-        if (const auto encoder = EncoderClsid(L"image/bmp")) {
-            Gdiplus::Bitmap image(bitmap, nullptr);
-            saved =
-                image.Save(
-                    path.wstring().c_str(), &*encoder, nullptr) ==
-                Gdiplus::Ok;
+        const int savedDc = SaveDC(memory);
+        const bool scaled = dimensions.dpi == 96 ||
+            (savedDc != 0 &&
+             SetMapMode(memory, MM_ANISOTROPIC) != 0 &&
+             SetWindowExtEx(
+                 memory, dimensions.logicalWidth,
+                 dimensions.logicalHeight, nullptr) != 0 &&
+             SetViewportExtEx(
+                 memory, pixelWidth, pixelHeight, nullptr) != 0);
+        if (scaled) {
+            paint(memory);
+        }
+        if (savedDc != 0) {
+            static_cast<void>(RestoreDC(memory, savedDc));
+        }
+
+        std::array<COLORREF, 16U> sampledColors{};
+        std::size_t distinctColorCount = 0U;
+        for (int y = pixelHeight / 8;
+             y < pixelHeight &&
+             distinctColorCount < sampledColors.size();
+             y += std::max(1, pixelHeight / 8)) {
+            for (int x = pixelWidth / 8;
+                 x < pixelWidth &&
+                 distinctColorCount < sampledColors.size();
+                 x += std::max(1, pixelWidth / 8)) {
+                const COLORREF color = GetPixel(memory, x, y);
+                bool seen = color == CLR_INVALID;
+                for (std::size_t index = 0U;
+                     index < distinctColorCount && !seen; ++index) {
+                    seen = sampledColors[index] == color;
+                }
+                if (!seen) {
+                    sampledColors[distinctColorCount++] = color;
+                }
+            }
+        }
+        if (scaled && distinctColorCount >= 1U) {
+            if (const auto encoder = EncoderClsid(L"image/bmp")) {
+                Gdiplus::Bitmap image(bitmap, nullptr);
+                const Gdiplus::Status resolution = image.SetResolution(
+                    static_cast<float>(dimensions.dpi),
+                    static_cast<float>(dimensions.dpi));
+                saved = resolution == Gdiplus::Ok &&
+                    image.GetWidth() ==
+                        static_cast<UINT>(pixelWidth) &&
+                    image.GetHeight() ==
+                        static_cast<UINT>(pixelHeight) &&
+                    image.Save(
+                        path.wstring().c_str(), &*encoder, nullptr) ==
+                        Gdiplus::Ok;
+            }
         }
         SelectObject(memory, previous);
     }
@@ -231,6 +332,34 @@ template <typename Paint>
     if (memory != nullptr) DeleteDC(memory);
     if (screen != nullptr) ReleaseDC(nullptr, screen);
     return saved;
+}
+
+[[nodiscard]] bool RectEquals(const RECT& left, const RECT& right) noexcept {
+    return left.left == right.left && left.top == right.top &&
+        left.right == right.right && left.bottom == right.bottom;
+}
+
+[[nodiscard]] RECT WindowRectInHostClient(HWND window, HWND host) noexcept {
+    RECT rect{};
+    if (window == nullptr || host == nullptr || GetWindowRect(window, &rect) == 0) {
+        return {};
+    }
+    POINT points[2]{ { rect.left, rect.top }, { rect.right, rect.bottom } };
+    static_cast<void>(MapWindowPoints(nullptr, host, points, 2U));
+    return { points[0].x, points[0].y, points[1].x, points[1].y };
+}
+
+[[nodiscard]] HWND FindViewportClipWindow(HWND host, const RECT& bounds) noexcept {
+    constexpr wchar_t kViewportWindowClass[] = L"KBEditorSceneBgfxViewport";
+    for (HWND child = FindWindowExW(host, nullptr, kViewportWindowClass, nullptr);
+         child != nullptr;
+         child = FindWindowExW(host, child, kViewportWindowClass, nullptr)) {
+        if (IsWindowVisible(child) != 0 &&
+            RectEquals(WindowRectInHostClient(child, host), bounds)) {
+            return child;
+        }
+    }
+    return nullptr;
 }
 
 } // namespace
@@ -714,7 +843,8 @@ bool EditorHeadlessAutomation::CaptureInspector(
     const std::filesystem::path path =
         artifactRoot_ / "screenshots" /
         (SafeCheckpoint(checkpoint) + ".bmp");
-    const bool saved = CaptureBitmap(path, [this](HDC memory) {
+    const bool saved = CaptureBitmap(
+        path, kDefaultScreenshotDimensions, [this](HDC memory) {
         InspectorPanelRenderer renderer;
         renderer.Paint(
             memory, kInspectorContent, MakeEditorDarkTheme(),
@@ -736,7 +866,8 @@ bool EditorHeadlessAutomation::CapturePanel(
         (SafeCheckpoint(checkpoint) + ".bmp");
     bool panelContentCaptured = true;
     const bool saved = CaptureBitmap(
-        path, [this, kind, &panelContentCaptured](HDC memory) {
+        path, kDefaultScreenshotDimensions,
+        [this, kind, &panelContentCaptured](HDC memory) {
             const DockPanel dockPanel{
                 .id = 1U,
                 .kind = *kind,
@@ -788,6 +919,172 @@ bool EditorHeadlessAutomation::CapturePanel(
     Trace(
         "capture_panel", succeeded,
         std::string{ panel } + ':' + path.filename().string());
+    return succeeded;
+}
+
+bool EditorHeadlessAutomation::CapturePanelScreenshotMatrix(
+    std::string_view panel, std::string_view checkpoint) {
+    const auto kind = ParsePanelKind(panel);
+    if (!kind.has_value() ||
+        (*kind != DockPanelKind::MaterialEditor &&
+         *kind != DockPanelKind::SkeletalMeshEditor &&
+         *kind != DockPanelKind::AnimationClipEditor)) {
+        Trace("capture_panel_screenshot_matrix", false, panel);
+        return false;
+    }
+
+    const std::string safeCheckpoint = SafeCheckpoint(checkpoint);
+    bool succeeded = true;
+    for (const ScreenshotProfile& profile : kEditorScreenshotProfiles) {
+        for (const bool floating : { false, true }) {
+            const char* const placement = floating ? "floating" : "docked";
+            const std::filesystem::path path =
+                artifactRoot_ / "screenshots" /
+                (safeCheckpoint + "-" + std::string{ profile.name } +
+                 "-" + placement + ".bmp");
+
+            bool rendered = true;
+            const bool saved = CaptureBitmap(
+                path, profile.dimensions,
+                [this, kind, floating, &rendered, &profile](HDC memory) {
+                    EditorDockModel dockModel;
+                    if (!dockModel.Commands().ActivatePanelKind(
+                            *kind, DockArea::Center)) {
+                        rendered = false;
+                        return;
+                    }
+
+                    const DockPanel* panelToRender = nullptr;
+                    for (const DockPanel& candidate :
+                         dockModel.Queries().Panels()) {
+                        if (candidate.kind == *kind) {
+                            panelToRender = &candidate;
+                            break;
+                        }
+                    }
+                    if (panelToRender == nullptr) {
+                        rendered = false;
+                        return;
+                    }
+
+                    const EditorTheme theme = MakeEditorDarkTheme();
+                    const EditorMetrics metrics{};
+                    const EditorRenderBackendSettings settings{};
+                    if (!floating) {
+                        EditorPlayModeState playMode;
+                        EditorShellInteractionState shellInteraction;
+                        DockWorkspaceRenderer{}.Paint(
+                            impl_->window, memory,
+                            profile.dimensions.logicalWidth,
+                            profile.dimensions.logicalHeight, dockModel,
+                            theme, metrics, context_, settings, nullptr,
+                            nullptr, playMode, shellInteraction, nullptr);
+                        return;
+                    }
+
+                    const std::uint32_t panelId = panelToRender->id;
+                    dockModel.Commands().UndockPanel(
+                        panelId,
+                        DockRect{
+                            .x = 80,
+                            .y = 80,
+                            .width = profile.dimensions.logicalWidth,
+                            .height = profile.dimensions.logicalHeight,
+                        });
+                    panelToRender =
+                        dockModel.Queries().FindPanel(panelId);
+                    if (panelToRender == nullptr ||
+                        panelToRender->area != DockArea::Floating) {
+                        rendered = false;
+                        return;
+                    }
+                    FloatingEditorWindowRenderer{}.Paint(
+                        memory, impl_->window,
+                        RECT{
+                            0, 0,
+                            profile.dimensions.logicalWidth,
+                            profile.dimensions.logicalHeight,
+                        },
+                        *panelToRender, theme, metrics, context_, settings,
+                        nullptr);
+                });
+            const bool captureSucceeded = saved && rendered;
+            succeeded = captureSucceeded && succeeded;
+            Trace(
+                "capture_panel_screenshot",
+                captureSucceeded,
+                std::string{ panel } + ':' +
+                    std::string{ profile.name } + ':' + placement + ':' +
+                    path.filename().string());
+        }
+    }
+    return succeeded;
+}
+
+bool EditorHeadlessAutomation::VerifyViewportHostLifecycle() {
+    if (impl_->window == nullptr ||
+        SetWindowPos(
+            impl_->window, HWND_BOTTOM, -10000, -10000, 640, 360,
+            SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW) == 0 ||
+        !impl_->Render(context_)) {
+        Trace("verify_viewport_host_lifecycle", false, "initial-present-failed");
+        return false;
+    }
+
+    constexpr std::uint64_t viewportKey = 1U;
+    constexpr RECT initialBounds{ 0, 0, 640, 360 };
+    const auto visible = [this] {
+        return impl_->viewport.IsHostSurfaceVisible(impl_->window, viewportKey);
+    };
+    const bool initiallyVisible = visible() &&
+        FindViewportClipWindow(impl_->window, initialBounds) != nullptr;
+
+    // WM_SIZE/SIZE_MINIMIZED: hide the child before the parent is hidden.
+    impl_->viewport.SetHostSurfaceSuspended(impl_->window, true);
+    const bool minimizedHidden = !visible();
+    impl_->viewport.SetHostSurfaceSuspended(impl_->window, false);
+    const bool resumedAfterMinimize = impl_->viewport.PresentRequested() &&
+        impl_->Render(context_) && visible();
+
+    // WM_ACTIVATEAPP applies to every host surface, including floating hosts.
+    impl_->viewport.SetAllHostSurfacesSuspended(true);
+    const bool deactivatedHidden = !visible();
+    impl_->viewport.SetAllHostSurfacesSuspended(false);
+    const bool resumedAfterDeactivate = impl_->viewport.PresentRequested() &&
+        impl_->Render(context_) && visible();
+
+    // WM_DPICHANGED hides the old physical-pixel child until the next paint.
+    impl_->viewport.NotifyHostDpiChanged(impl_->window);
+    const bool dpiTransitionHidden = !visible();
+    const bool resumedAfterDpi = impl_->viewport.PresentRequested() &&
+        impl_->Render(context_) && visible();
+
+    constexpr RECT movedBounds{ 113, 57, 529, 291 };
+    const EditorSceneBgfxViewport::HostSurfaceLayout movedLayout{
+        .viewportKey = viewportKey,
+        .bounds = movedBounds,
+    };
+    impl_->viewport.SyncHostSurfaceLayoutsForResize(
+        impl_->window,
+        std::span<const EditorSceneBgfxViewport::HostSurfaceLayout>{
+            &movedLayout, 1U });
+    const bool resizeMoveHasNoLeakedViewport = visible() &&
+        FindViewportClipWindow(impl_->window, movedBounds) != nullptr;
+
+    // A layout without the viewport must hide the previous child surface.
+    impl_->viewport.SyncHostSurfaceLayoutsForResize(
+        impl_->window,
+        std::span<const EditorSceneBgfxViewport::HostSurfaceLayout>{});
+    const bool removedViewportHidden = !visible();
+
+    const bool succeeded = initiallyVisible && minimizedHidden &&
+        resumedAfterMinimize && deactivatedHidden && resumedAfterDeactivate &&
+        dpiTransitionHidden && resumedAfterDpi && resizeMoveHasNoLeakedViewport &&
+        removedViewportHidden;
+    ShowWindow(impl_->window, SW_HIDE);
+    Trace(
+        "verify_viewport_host_lifecycle", succeeded,
+        succeeded ? "minimize,deactivate,dpi,resize-move" : "lifecycle-invariant-failed");
     return succeeded;
 }
 

@@ -72,6 +72,7 @@ struct AnimatorRuntimeState {
         std::uint64_t clipLoadGeneration = 0U;
         std::vector<std::size_t> targetIndices;
         std::vector<std::uint32_t> boneIndices;
+        std::vector<std::uint32_t> morphIndices;
         std::uint32_t rootMotionBoneIndex =
             std::numeric_limits<std::uint32_t>::max();
     };
@@ -135,6 +136,10 @@ struct AnimatorInstanceSkeleton {
     std::array<PoseSoa, 2U> stateScratch;
     std::array<std::vector<std::uint8_t>, 2U> stateTouched;
     std::array<std::vector<std::uint8_t>, 2U> motionTouched;
+    std::vector<std::string> morphTargetNames;
+    std::array<std::vector<float>, 2U> morphWeights;
+    std::array<std::vector<float>, 2U> stateMorphScratch;
+    std::array<std::vector<std::uint8_t>, 2U> stateMorphTouched;
     std::uint32_t currentPose = 0U;
     std::uint64_t evaluationCount = 0U;
     std::uint64_t hierarchySolveCount = 0U;
@@ -161,6 +166,10 @@ struct AnimatorInstance {
     // component edit; it is never exposed or serialized as independent state.
     float speed = 1.0F;
     float lastAppliedComponentSpeed = 1.0F;
+    float poseUpdateRateHz = 0.0F;
+    float lastAppliedComponentPoseUpdateRateHz = 0.0F;
+    double poseUpdateAccumulatorSeconds = 0.0;
+    bool hasEvaluatedPose = false;
 };
 
 using AnimatorRuntimeRecord = AnimatorInstance;
@@ -294,6 +303,11 @@ public:
     std::string localizationLanguage;
     std::map<std::uint64_t, AnimatorInstance> animators;
     std::vector<AnimationEventRecord> pendingAnimationEvents;
+    std::unique_ptr<kb::ecs::WorkerPool> animatorWorkerPool;
+    std::vector<AnimatorRuntimeRecord*> animatorParallelPoseScratch;
+    std::size_t lastAnimatorParallelEvaluationCount = 0U;
+    std::size_t lastAnimatorParallelWorkerCount = 1U;
+    std::size_t lastAnimatorUpdateRateSkippedPoseCount = 0U;
     std::map<std::uint64_t, TimelineRuntimeRecord> timelines;
     std::map<std::uint64_t, UIDocumentRuntimeRecord> uiDocuments;
     std::map<std::uint64_t, ContentInstanceRuntimeRecord> contentInstances;
@@ -371,6 +385,9 @@ public:
     float timeScale = 1.0F;
     std::uint64_t runtimeSnapshotRevision = 0U;
     kb::core::ReadSnapshotPublisher<SceneRuntimeReadSnapshot> runtimeSnapshots;
+    std::uint64_t animatorDebugSnapshotRevision = 0U;
+    kb::core::ReadSnapshotPublisher<AnimatorDebugSnapshot> animatorDebugSnapshots;
+    std::map<std::uint64_t, std::vector<Vec3>> animatorDebugRootMotionTrails;
     kb::core::CommandQueue<SceneRuntimeCommand> runtimeCommands;
     // LIB-095: one scheduled Timer.Once/Timer.Repeat entry. `owner` invalid
     // (default SceneEntity{}) means "no owner" — TimerFired broadcasts to

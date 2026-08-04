@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -12,9 +13,8 @@ struct ReadSnapshot {
     std::uint64_t revision = 0U;
 };
 
-// A reader receives an immutable retained value. Publishing replaces the
-// retained pointer under a short lock, so a worker can keep an older snapshot
-// while the main thread builds and publishes the next one without touching
+// A reader receives an immutable retained value. Publishing atomically replaces
+// the retained pointer, so readers never block the producer or touch
 // scene-owned mutable storage.
 template <typename Snapshot>
 class ReadSnapshotPublisher final {
@@ -23,19 +23,16 @@ public:
         : latest_(std::make_shared<const Snapshot>()) {}
 
     void Publish(Snapshot snapshot) {
-        auto published = std::make_shared<const Snapshot>(std::move(snapshot));
-        std::lock_guard lock{mutex_};
-        latest_ = std::move(published);
+        latest_.store(std::make_shared<const Snapshot>(std::move(snapshot)),
+            std::memory_order_release);
     }
 
     [[nodiscard]] std::shared_ptr<const Snapshot> Read() const {
-        std::lock_guard lock{mutex_};
-        return latest_;
+        return latest_.load(std::memory_order_acquire);
     }
 
 private:
-    mutable std::mutex mutex_;
-    std::shared_ptr<const Snapshot> latest_;
+    std::atomic<std::shared_ptr<const Snapshot>> latest_;
 };
 
 struct RuntimeCommand {

@@ -7,12 +7,15 @@
 #include "rendering/HierarchyPanelRenderer.hpp"
 #include "rendering/HeroIconPainter.hpp"
 #include "rendering/EditorScriptEditorOverlay.hpp"
+#include "rendering/AnimationClipEditorPanelRenderer.hpp"
+#include "rendering/AnimatorEditorPanelRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/PluginsPanelRenderer.hpp"
 #include "rendering/ProjectFilesPanelRenderer.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
 #include "rendering/ScriptEditorPanelRenderer.hpp"
+#include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
@@ -321,6 +324,21 @@ void PanelContentRenderer::Paint(
         break;
     case DockPanelKind::MaterialEditor:
         MaterialEditorPanelRenderer{}.Paint(dc, visibleContent, theme, sceneContext);
+        break;
+    case DockPanelKind::SkeletalMeshEditor:
+        SkeletalMeshEditorPanelRenderer{}.Paint(
+            dc, sceneViewportHost, visibleContent, panel, theme, sceneContext,
+            renderBackendSettings, sceneViewport);
+        break;
+    case DockPanelKind::AnimationClipEditor:
+        AnimationClipEditorPanelRenderer{}.Paint(
+            dc, sceneViewportHost, visibleContent, panel, theme, sceneContext,
+            renderBackendSettings, sceneViewport);
+        break;
+    case DockPanelKind::AnimatorEditor:
+        AnimatorEditorPanelRenderer{}.Paint(
+            dc, sceneViewportHost, visibleContent, panel, theme, sceneContext,
+            renderBackendSettings, sceneViewport);
         break;
     case DockPanelKind::Assets:
         ProjectFilesPanelRenderer{}.Paint(dc, content, overlayBounds, theme, sceneContext);

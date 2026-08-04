@@ -29,7 +29,8 @@ struct SceneDocument {
     // v26: LensEchoComponent and 64-bit component-presence mask persist source-linked optical policy.
     // v27: scene-owned tag definitions persist independently from assignments.
     // v28: SkeletonBinding and DeformedGeometry authoring components persist.
-    static constexpr std::uint32_t CurrentFileVersion = 28U;
+    // v29: Animator pose update-rate policy persists.
+    static constexpr std::uint32_t CurrentFileVersion = 29U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

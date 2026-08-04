@@ -3064,6 +3064,43 @@ ReadScriptValue(
         return { attached, attached ? *asset : "attach failed" };
     }
 
+    if (*operation == "set_animator_debug_target") {
+        const auto target = StringMember(step, "target", error);
+        if (!target) return { false, error };
+        if (*target == "preview") {
+            state.context.SetAnimatorEditorDebugTargetPreview();
+            return { state.context.AnimatorEditorDebuggingPreview(), "Preview Instance" };
+        }
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *target);
+        const bool selected = entity.IsValid() &&
+            state.context.SetAnimatorEditorDebugTarget(entity);
+        return { selected, selected ? *target : "debug target rejected" };
+    }
+
+    if (*operation == "assert_animator_debug_snapshot") {
+        const auto target = StringMember(step, "target", error);
+        if (!target) return { false, error };
+        const kb::scene::SceneEntity expected = *target == "preview"
+            ? state.context.AnimatorEditorResolvedDebugTarget()
+            : ResolveEntity(state, *target);
+        const bool uiMatchesTarget =
+            state.context.AnimatorEditorResolvedDebugTarget() == expected &&
+            (*target == "preview"
+                ? state.context.AnimatorEditorDebuggingPreview()
+                : state.context.AnimatorEditorDebugTarget() == expected);
+        const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> snapshot =
+            state.context.AnimatorEditorDebugSnapshot();
+        const kb::scene::AnimatorDebugInstanceSnapshot* instance =
+            snapshot == nullptr ? nullptr : snapshot->Find(expected);
+        const auto minimumLayers = NumberMember(step, "minimum_layers", error, false);
+        const auto minimumBones = NumberMember(step, "minimum_bones", error, false);
+        if (!error.empty()) return { false, error };
+        const bool valid = uiMatchesTarget && instance != nullptr &&
+            (!minimumLayers.has_value() || instance->layers.size() >= static_cast<std::size_t>(*minimumLayers)) &&
+            (!minimumBones.has_value() || instance->bones.size() >= static_cast<std::size_t>(*minimumBones));
+        return { valid, valid ? "immutable animator debug snapshot" : "animator debug snapshot mismatch" };
+    }
+
     if (*operation == "open_asset") {
         const auto asset = StringMember(step, "asset", error);
         if (!asset) return { false, error };
@@ -3076,10 +3113,13 @@ ReadScriptValue(
         bool opened = false;
         if (metadata->type == "LuaScript") {
             opened = state.context.OpenLuaScript(id);
-        } else if (
-            metadata->type == "AnimationClip" ||
-            metadata->type == "AnimatorController" ||
-            metadata->type == "Timeline") {
+        } else if (metadata->type == "SkeletalMesh") {
+            opened = state.context.OpenSkeletalMeshEditorAsset(id);
+        } else if (metadata->type == "AnimationClip") {
+            opened = state.context.OpenAnimationClipEditorAsset(id);
+        } else if (metadata->type == "AnimatorController") {
+            opened = state.context.OpenAnimatorEditorAsset(id);
+        } else if (metadata->type == "Timeline") {
             opened = state.context.OpenAnimationAsset(id);
         } else if (
             metadata->type == "RenderMaterial" ||
@@ -3382,6 +3422,17 @@ ReadScriptValue(
             *panel + ':' + *checkpoint };
     }
 
+    if (*operation == "capture_screenshot_matrix") {
+        const auto panel = StringMember(step, "panel", error);
+        const auto checkpoint =
+            StringMember(step, "checkpoint", error);
+        if (!panel || !checkpoint) return { false, error };
+        return {
+            state.automation.CapturePanelScreenshotMatrix(
+                *panel, *checkpoint),
+            *panel + ':' + *checkpoint };
+    }
+
     if (*operation == "capture_runtime") {
         const auto checkpoint =
             StringMember(step, "checkpoint", error);
@@ -3395,6 +3446,12 @@ ReadScriptValue(
             state.automation.CaptureRuntime(
                 *checkpoint, requireNonUniform),
             *checkpoint };
+    }
+
+    if (*operation == "verify_viewport_host_lifecycle") {
+        return {
+            state.automation.VerifyViewportHostLifecycle(),
+            "minimize,deactivate,dpi,resize-move" };
     }
 
     if (*operation == "snapshot") {

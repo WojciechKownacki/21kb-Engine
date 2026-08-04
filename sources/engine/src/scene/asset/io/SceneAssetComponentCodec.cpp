@@ -227,6 +227,9 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
                 rootMotionOwner > static_cast<std::uint32_t>(AnimatorRootMotionOwner::Rigidbody)) return false;
             animator.rootMotionOwner = static_cast<AnimatorRootMotionOwner>(rootMotionOwner);
         }
+        if (fileVersion >= 29U &&
+            (!input.ReadFloat(animator.poseUpdateRateHz) ||
+             !std::isfinite(animator.poseUpdateRateHz) || animator.poseUpdateRateHz < 0.0F)) return false;
         output.animator = animator;
     }
     if ((componentBits & SkeletonBindingBit) != 0U) {
@@ -526,6 +529,7 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteFloat(output, components.animator->speed);
         SceneAssetBinaryIO::WriteBool(output, components.animator->enabled);
         SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(components.animator->rootMotionOwner));
+        SceneAssetBinaryIO::WriteFloat(output, components.animator->poseUpdateRateHz);
     }
     if (components.skeletonBinding.has_value()) {
         SceneAssetBinaryIO::WriteUInt64(output, components.skeletonBinding->skeletonAssetId);

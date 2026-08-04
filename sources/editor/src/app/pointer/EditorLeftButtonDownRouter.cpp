@@ -28,6 +28,9 @@
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "inspection/TerrainMaterialLayerMenuState.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/AnimationClipEditorPanelRenderer.hpp"
+#include "rendering/AnimatorEditorPanelRenderer.hpp"
+#include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
 #include "platform/win32/EditorAnimatorControllerAssetPickerDialog.hpp"
@@ -158,6 +161,30 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
     default:
         return false;
     }
+}
+
+[[nodiscard]] bool ResolveDirtySkeletalMeshEditorTabClose(HWND owner, EditorSceneContext& sceneContext) {
+    if (!sceneContext.HasDirtySkeletalMeshEditorAssetEdit()) return true;
+    const int result = MessageBoxW(
+        owner,
+        L"Save changes to the open Skeletal Mesh before closing the editor?\n\nYes = Save\nNo = Discard changes\nCancel = keep editing",
+        L"Unsaved Skeletal Mesh",
+        MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1 | MB_APPLMODAL);
+    if (result == IDYES) return sceneContext.SaveSkeletalMeshEditorAsset();
+    if (result == IDNO) return sceneContext.RevertSkeletalMeshEditorAsset();
+    return false;
+}
+
+[[nodiscard]] bool ResolveDirtyAnimatorEditorTabClose(HWND owner, EditorSceneContext& sceneContext) {
+    if (!sceneContext.HasDirtyAnimatorEditorAssetEdit()) return true;
+    const int result = MessageBoxW(
+        owner,
+        L"Save changes to the open Animator Controller before closing the editor?\n\nYes = Save\nNo = Discard changes\nCancel = keep editing",
+        L"Unsaved Animator Controller",
+        MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1 | MB_APPLMODAL);
+    if (result == IDYES) return sceneContext.SaveAnimatorEditorAsset();
+    if (result == IDNO) return sceneContext.RevertAnimatorEditorAsset();
+    return false;
 }
 
 [[nodiscard]] int RectHeight(const RECT& rect) noexcept {
@@ -388,9 +415,18 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             if (panel != nullptr && panel->kind == DockPanelKind::MaterialEditor && !ResolveDirtyMaterialEditorTabClose(messageWindow, sceneContext_)) {
                 return;
             }
+            if (panel != nullptr && panel->kind == DockPanelKind::SkeletalMeshEditor && !ResolveDirtySkeletalMeshEditorTabClose(messageWindow, sceneContext_)) {
+                return;
+            }
+            if (panel != nullptr && panel->kind == DockPanelKind::AnimatorEditor && !ResolveDirtyAnimatorEditorTabClose(messageWindow, sceneContext_)) {
+                return;
+            }
             if (dockModel_.Commands().ClosePanel(closeTab->panelId)) {
                 if (panel != nullptr && panel->kind == DockPanelKind::MaterialEditor) {
                     sceneContext_.CloseMaterialEditorAsset();
+                }
+                if (panel != nullptr && panel->kind == DockPanelKind::SkeletalMeshEditor) {
+                    sceneContext_.CloseSkeletalMeshEditorAsset();
                 }
                 sceneViewport_.RequestPresent();
                 EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
@@ -829,6 +865,119 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             return;
         }
+    }
+
+    if (const std::optional<RECT> animatorEditorContent = EditorPanelContentResolver::Resolve(
+            DockPanelKind::AnimatorEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        animatorEditorContent.has_value() &&
+        x >= animatorEditorContent->left && x < animatorEditorContent->right &&
+        y >= animatorEditorContent->top && y < animatorEditorContent->top + 30) {
+        const kb::scene::SceneEntity selected = sceneContext_.SelectedEntity();
+        if (sceneContext_.AnimatorEditorDebuggingPreview() &&
+            sceneContext_.SetAnimatorEditorDebugTarget(selected)) {
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+        sceneContext_.SetAnimatorEditorDebugTargetPreview();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (const std::optional<RECT> skeletalMeshEditorContent = EditorPanelContentResolver::Resolve(
+            DockPanelKind::SkeletalMeshEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        skeletalMeshEditorContent.has_value() && PointInRect(*skeletalMeshEditorContent, x, y) &&
+        sceneContext_.HasSkeletalMeshEditorAsset()) {
+        if (const std::optional<std::uint8_t> overlay = SkeletalMeshEditorPanelRenderer::AdvancedPreviewOverlayAt(
+                *skeletalMeshEditorContent, x, y);
+            overlay.has_value()) {
+            AnimationPreviewOverlayState& overlays = sceneContext_.AnimationPreview().Overlays();
+            switch (*overlay) {
+            case 0U: static_cast<void>(overlays.SetBonesVisible(!overlays.BonesVisible())); break;
+            case 1U: static_cast<void>(overlays.SetBoneNamesVisible(!overlays.BoneNamesVisible())); break;
+            case 2U: static_cast<void>(overlays.SetSocketsVisible(!overlays.SocketsVisible())); break;
+            case 3U: static_cast<void>(overlays.SetBoundsVisible(!overlays.BoundsVisible())); break;
+            case 4U: static_cast<void>(overlays.SetLodVisible(!overlays.LodVisible())); break;
+            case 5U: static_cast<void>(overlays.SetNormalsVisible(!overlays.NormalsVisible())); break;
+            default: break;
+            }
+        } else if (SkeletalMeshEditorPanelRenderer::IsTreeSearchAt(*skeletalMeshEditorContent, x, y)) {
+            sceneContext_.FocusSkeletalMeshEditorTreeSearch(true);
+        } else if (const std::optional<SkeletalMeshEditorTreeRow> row =
+                SkeletalMeshEditorPanelRenderer::TreeRowAt(*skeletalMeshEditorContent, sceneContext_, x, y);
+            row.has_value()) {
+            sceneContext_.FocusSkeletalMeshEditorTreeSearch(false);
+            if (row->kind == SkeletalMeshEditorTreeItemKind::Bone) {
+                static_cast<void>(sceneContext_.SelectSkeletalMeshEditorBone(row->boneId));
+            } else {
+                static_cast<void>(sceneContext_.SelectSkeletalMeshEditorSocket(row->socketName));
+            }
+        } else if (const std::optional<kb::scene::SkeletonBoneId> bone =
+                       SkeletalMeshEditorPanelRenderer::BoneAt(*skeletalMeshEditorContent, sceneContext_, x, y);
+                   bone.has_value()) {
+            sceneContext_.FocusSkeletalMeshEditorTreeSearch(false);
+            static_cast<void>(sceneContext_.SelectSkeletalMeshEditorBone(*bone));
+        } else {
+            sceneContext_.FocusSkeletalMeshEditorTreeSearch(false);
+            static_cast<void>(sceneContext_.ClearSkeletalMeshEditorTreeSelection());
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (const std::optional<RECT> animationClipEditorContent = EditorPanelContentResolver::Resolve(
+            DockPanelKind::AnimationClipEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        animationClipEditorContent.has_value() && PointInRect(*animationClipEditorContent, x, y) &&
+        sceneContext_.HasAnimationClipEditorAsset()) {
+        AnimationPreviewTransport& transport = sceneContext_.AnimationPreview().Transport();
+        AnimationClipTimelineState& timeline = sceneContext_.AnimationClipEditorTimeline();
+        if (const std::optional<std::uint8_t> control =
+                AnimationClipEditorPanelRenderer::TransportControlAt(*animationClipEditorContent, x, y);
+            control.has_value()) {
+            switch (*control) {
+            case 0U:
+                if (transport.NormalizedTime() > transport.LoopStartNormalized()) {
+                    static_cast<void>(transport.SetLoopRange(transport.LoopStartNormalized(), transport.NormalizedTime()));
+                }
+                break;
+            case 1U:
+                if (transport.NormalizedTime() < transport.LoopEndNormalized()) {
+                    static_cast<void>(transport.SetLoopRange(transport.NormalizedTime(), transport.LoopEndNormalized()));
+                }
+                break;
+            case 2U: static_cast<void>(timeline.SetZoom(timeline.Zoom() * 2.0F)); break;
+            case 3U: static_cast<void>(timeline.SetZoom(timeline.Zoom() * 0.5F)); break;
+            case 4U: static_cast<void>(timeline.SetSnappingEnabled(!timeline.SnappingEnabled())); break;
+            case 5U: static_cast<void>(transport.SetLooping(!transport.Loops())); break;
+            case 6U: static_cast<void>(transport.Step(1)); break;
+            case 7U: static_cast<void>(transport.SetPlaying(!transport.IsPlaying())); break;
+            case 8U: static_cast<void>(transport.Step(-1)); break;
+            default: break;
+            }
+        } else if (const std::optional<std::size_t> track = AnimationClipEditorPanelRenderer::TimelineTrackAt(
+                       *animationClipEditorContent, timeline, x, y);
+                   track.has_value()) {
+            static_cast<void>(timeline.SelectTrack(*track));
+            if (const AnimationClipTimelineTrack* selected = timeline.SelectedTrackData();
+                selected != nullptr && selected->boneId != 0U) {
+                static_cast<void>(sceneContext_.SelectSkeletalMeshEditorBone(selected->boneId));
+            }
+        } else if (const std::optional<kb::scene::SkeletonBoneId> bone = AnimationClipEditorPanelRenderer::BoneAt(
+                       *animationClipEditorContent, sceneContext_, x, y);
+                   bone.has_value()) {
+            static_cast<void>(sceneContext_.SelectSkeletalMeshEditorBone(*bone));
+        } else if (const std::optional<float> time = AnimationClipEditorPanelRenderer::TimelineTimeAt(
+                       *animationClipEditorContent, timeline, x, y);
+                   time.has_value()) {
+            if (KeyDown(VK_SHIFT)) {
+                static_cast<void>(timeline.Pan(*time - (timeline.PanSeconds() + timeline.VisibleDurationSeconds() * 0.5F)));
+            } else {
+                const float snapped = timeline.SnapTime(*time, transport.FrameRate());
+                static_cast<void>(transport.Scrub(snapped / transport.DurationSeconds()));
+            }
+        }
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
     }
 
     // A click outside the Project Settings panel dismisses its open dropdown,

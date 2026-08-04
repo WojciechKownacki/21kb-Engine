@@ -10939,6 +10939,7 @@ void RunScriptSceneComponentApiTest() {
     scene.Components().FacingPanels().Set(object.Entity(), kb::scene::FacingPanelComponent{});
     scene.Components().SpaceStrokes().Set(object.Entity(), kb::scene::SpaceStrokeComponent{ .meshAssetId = 97U });
     scene.Components().HistoryRibbons().Set(object.Entity(), kb::scene::HistoryRibbonComponent{ .meshAssetId = 98U });
+    scene.Components().LensEchoes().Set(object.Entity(), kb::scene::LensEchoComponent{});
 
     kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Transform"), "Script component API did not see Transform");
     kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Visibility"), "Script component API did not see Visibility");
@@ -11160,6 +11161,7 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     scene.Components().FacingPanels().Set(object.Entity(), kb::scene::FacingPanelComponent{});
     scene.Components().SpaceStrokes().Set(object.Entity(), kb::scene::SpaceStrokeComponent{ .meshAssetId = 97U });
     scene.Components().HistoryRibbons().Set(object.Entity(), kb::scene::HistoryRibbonComponent{ .meshAssetId = 98U });
+    scene.Components().LensEchoes().Set(object.Entity(), kb::scene::LensEchoComponent{});
 
     std::size_t fieldsChecked = 0U;
     for (const std::string_view componentName : kb::script::ScriptSceneComponentApi::ComponentNames()) {
@@ -11254,10 +11256,10 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    // The scene catalog now exposes 23 authorable component surfaces. This
-    // total includes the stable task components and the complete 3D Radiance
-    // Emitter, Ambient Radiance and Detail Switch schemas.
-    kb::tests::Require(fieldsChecked == 253U, "Script component API generated accessor coverage test did not exercise the expected total field count (253) across all components");
+    // The scene catalog now exposes 30 authorable component surfaces. This
+    // total includes the stable task components and the complete Lens Echo
+    // schema.
+    kb::tests::Require(fieldsChecked == 260U, "Script component API generated accessor coverage test did not exercise the expected total field count (260) across all components");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -11306,6 +11308,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     scene.Components().FacingPanels().Set(object.Entity(), kb::scene::FacingPanelComponent{});
     scene.Components().SpaceStrokes().Set(object.Entity(), kb::scene::SpaceStrokeComponent{ .meshAssetId = 97U });
     scene.Components().HistoryRibbons().Set(object.Entity(), kb::scene::HistoryRibbonComponent{ .meshAssetId = 98U });
+    scene.Components().LensEchoes().Set(object.Entity(), kb::scene::LensEchoComponent{});
 
     std::size_t propertiesChecked = 0U;
     for (const std::string_view componentName : kb::script::ScriptSceneComponentApi::ComponentNames()) {
@@ -11335,7 +11338,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 253U, "LIB-082 raw-pointer audit did not exercise the expected total field count (253) across all components");
+    kb::tests::Require(propertiesChecked == 260U, "LIB-082 raw-pointer audit did not exercise the expected total field count (260) across all components");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {

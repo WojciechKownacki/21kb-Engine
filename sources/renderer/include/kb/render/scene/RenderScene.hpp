@@ -53,10 +53,16 @@ enum class RenderCameraClearMode : std::uint8_t {
 struct MeshRenderProxyDesc {
     std::uint64_t entityId = 0;
     std::uint64_t meshAssetId = 0;
+    // Non-zero only for an entity-local CPU morph resource. meshAssetId then
+    // names the transient resource while this field remains the authored asset.
+    std::uint64_t skeletalMeshAssetId = 0;
     std::uint64_t materialAssetId = 0;
     std::array<std::uint64_t, kMaxSceneMaterialSlotOverrides> materialSlotAssetIds{};
     std::uint32_t materialSlotOverrideCount = 0;
     std::array<float, 16> model{};
+    // Optional animated/deformed local-space sphere. When valid it replaces
+    // static mesh bounds for every visibility and shadow-culling path.
+    RenderBoundsSphere boundsOverride{};
     std::array<float, 4> color{ 0.76F, 0.80F, 0.86F, 1.0F };
     float fadeAmount = 1.0F;
     float customData0 = 0.0F;
@@ -74,6 +80,9 @@ struct MeshRenderProxyDesc {
     float detailSwitchPromoteCoverage = 0.20F;
     float detailSwitchDemoteCoverage = 0.15F;
     bool detailSwitchEnabled = false;
+    std::int32_t lodBias = 0;
+    bool lodEnabled = true;
+    bool morphDeformationEnabled = false;
 };
 
 struct CameraRenderProxyDesc {
