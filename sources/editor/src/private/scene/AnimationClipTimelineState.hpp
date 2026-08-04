@@ -27,6 +27,7 @@ struct AnimationClipTimelineKey {
 
 struct AnimationClipTimelineTrack {
     AnimationClipTimelineTrackKind kind = AnimationClipTimelineTrackKind::Bone;
+    kb::scene::SkeletonBoneId boneId = 0U;
     std::string label;
     std::vector<AnimationClipTimelineKey> keys;
 };
@@ -40,25 +41,25 @@ public:
             clip.skeletalTracks.size() + clip.tracks.size() + clip.morphTracks.size() +
             clip.curves.size() + 2U);
         for (const kb::scene::AnimationBoneTrack& source : clip.skeletalTracks) {
-            tracks_.push_back({ AnimationClipTimelineTrackKind::Bone, "Bone " + std::to_string(source.boneId), BoneKeys(source) });
+            tracks_.push_back({ AnimationClipTimelineTrackKind::Bone, source.boneId, "Bone " + std::to_string(source.boneId), BoneKeys(source) });
         }
         for (const kb::scene::AnimationTransformTrack& source : clip.tracks) {
-            tracks_.push_back({ AnimationClipTimelineTrackKind::Transform,
+            tracks_.push_back({ AnimationClipTimelineTrackKind::Transform, 0U,
                 source.targetPath.empty() || source.targetPath == "." ? "Transform (Owner)" : "Transform " + source.targetPath,
                 TransformKeys(source) });
         }
         for (const kb::scene::AnimationMorphTrack& source : clip.morphTracks) {
-            tracks_.push_back({ AnimationClipTimelineTrackKind::Morph, "Morph " + source.morphTarget, MorphKeys(source) });
+            tracks_.push_back({ AnimationClipTimelineTrackKind::Morph, 0U, "Morph " + source.morphTarget, MorphKeys(source) });
         }
         for (const kb::scene::AnimationCurveTrack& source : clip.curves) {
-            tracks_.push_back({ AnimationClipTimelineTrackKind::Curve, "Curve " + source.name, CurveKeys(source) });
+            tracks_.push_back({ AnimationClipTimelineTrackKind::Curve, 0U, "Curve " + source.name, CurveKeys(source) });
         }
         if (!clip.events.empty()) {
             std::vector<AnimationClipTimelineKey> keys;
             keys.reserve(clip.events.size());
             for (const kb::scene::AnimationEventKeyframe& event : clip.events) keys.push_back({ event.timeSeconds, event.id });
             SortKeys(keys);
-            tracks_.push_back({ AnimationClipTimelineTrackKind::Event, "Events", std::move(keys) });
+            tracks_.push_back({ AnimationClipTimelineTrackKind::Event, 0U, "Events", std::move(keys) });
         }
         if (clip.rootMotionMode == kb::scene::AnimationRootMotionMode::ExtractFromBone) {
             std::vector<AnimationClipTimelineKey> keys;
@@ -66,15 +67,16 @@ public:
                 return track.boneId == clip.rootMotionBoneId;
             });
             if (source != clip.skeletalTracks.end()) keys = BoneKeys(*source);
-            tracks_.push_back({ AnimationClipTimelineTrackKind::RootMotion,
+            tracks_.push_back({ AnimationClipTimelineTrackKind::RootMotion, clip.rootMotionBoneId,
                 "Root Motion (Bone " + std::to_string(clip.rootMotionBoneId) + ")", std::move(keys) });
         } else {
-            tracks_.push_back({ AnimationClipTimelineTrackKind::RootMotion, "Root Motion (Disabled)", {} });
+            tracks_.push_back({ AnimationClipTimelineTrackKind::RootMotion, 0U, "Root Motion (Disabled)", {} });
         }
         std::stable_sort(tracks_.begin(), tracks_.end(), [](const AnimationClipTimelineTrack& lhs, const AnimationClipTimelineTrack& rhs) {
             if (lhs.kind != rhs.kind) return lhs.kind < rhs.kind;
             return lhs.label < rhs.label;
         });
+        selectedTrack_ = tracks_.empty() ? kNoTrack : 0U;
     }
 
     [[nodiscard]] float DurationSeconds() const noexcept { return durationSeconds_; }
@@ -82,6 +84,21 @@ public:
     [[nodiscard]] float Zoom() const noexcept { return zoom_; }
     [[nodiscard]] float PanSeconds() const noexcept { return panSeconds_; }
     [[nodiscard]] bool SnappingEnabled() const noexcept { return snappingEnabled_; }
+    [[nodiscard]] std::size_t SelectedTrack() const noexcept { return selectedTrack_; }
+    [[nodiscard]] const AnimationClipTimelineTrack* SelectedTrackData() const noexcept {
+        return selectedTrack_ < tracks_.size() ? &tracks_[selectedTrack_] : nullptr;
+    }
+    [[nodiscard]] bool SelectTrack(std::size_t index) noexcept {
+        if (index >= tracks_.size() || selectedTrack_ == index) return false;
+        selectedTrack_ = index;
+        return true;
+    }
+    [[nodiscard]] bool SelectBoneTrack(kb::scene::SkeletonBoneId boneId) noexcept {
+        const auto found = std::find_if(tracks_.begin(), tracks_.end(), [boneId](const AnimationClipTimelineTrack& track) {
+            return track.kind == AnimationClipTimelineTrackKind::Bone && track.boneId == boneId;
+        });
+        return found != tracks_.end() && SelectTrack(static_cast<std::size_t>(found - tracks_.begin()));
+    }
 
     [[nodiscard]] bool SetZoom(float zoom) noexcept {
         if (!std::isfinite(zoom)) return false;
@@ -153,6 +170,8 @@ private:
     }
 
     float durationSeconds_ = 1.0F;
+    static constexpr std::size_t kNoTrack = static_cast<std::size_t>(-1);
+    std::size_t selectedTrack_ = kNoTrack;
     float zoom_ = 1.0F;
     float panSeconds_ = 0.0F;
     bool snappingEnabled_ = true;
