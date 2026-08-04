@@ -815,7 +815,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     produkcyjny runtime contract; bez UI-only node'ów.
 77. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować working copy, per-document undo/redo, dirty marker,
     Save/Revert i close prompt.
-78. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Save automatycznie waliduje i buduje reprezentację runtime bez jawnego
+78. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Save automatycznie waliduje i buduje reprezentację runtime bez jawnego
     przycisku Compile; błąd wskazuje dokładny node/transition/parameter.
 79. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Atomowy hot reload aktywuje nowy controller wyłącznie po sukcesie;
     ostatnia poprawna instancja pozostaje aktywna przy błędzie.

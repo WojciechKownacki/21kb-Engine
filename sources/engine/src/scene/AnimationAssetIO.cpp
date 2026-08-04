@@ -264,62 +264,88 @@ bool ValidateClip(AnimationClip& clip, std::string* error = nullptr) {
     return validRootMotion;
 }
 
-bool ValidateController(const AnimatorController& controller, std::string* error = nullptr) {
-    const auto setError = [error](const char* message) {
+bool ValidateAnimatorController(const AnimatorController& controller, std::string* error = nullptr) {
+    const auto setError = [error](std::string message) {
         if (error != nullptr) *error = message;
     };
     setError("Animator controller has no layers.");
     if (controller.layers.empty()) return false;
-    setError("Animator controller has invalid parameter definitions.");
     std::unordered_set<std::string> parameterNames;
     for (const AnimatorParameterDefinition& parameter : controller.parameters) {
         if (parameter.name.empty() || !parameterNames.insert(parameter.name).second ||
             !std::isfinite(parameter.floatDefault) ||
-            (parameter.type == AnimatorParameterType::Trigger && parameter.boolDefault)) return false;
+            (parameter.type == AnimatorParameterType::Trigger && parameter.boolDefault)) {
+            setError("Parameter \"" + parameter.name + "\" has an invalid definition.");
+            return false;
+        }
     }
     std::unordered_set<std::string> layerNames;
-    setError("Animator controller has invalid layer or state definitions.");
     for (const AnimatorControllerLayer& layer : controller.layers) {
         if (layer.name.empty() || !layerNames.insert(layer.name).second || layer.defaultState.empty() ||
             !std::isfinite(layer.weight) || layer.weight < 0.0F || layer.weight > 1.0F || layer.mask == 0U ||
-            layer.states.empty()) return false;
+            layer.states.empty()) {
+            setError("Layer \"" + layer.name + "\" has an invalid definition.");
+            return false;
+        }
         std::unordered_set<std::string> stateNames;
+        std::unordered_set<std::uint64_t> stateIds;
         bool foundDefault = false;
         for (const AnimatorControllerState& state : layer.states) {
-            if (state.name.empty() || !stateNames.insert(state.name).second) return false;
+            if (state.id == 0U || state.name.empty() || !stateNames.insert(state.name).second || !stateIds.insert(state.id).second) {
+                setError("State \"" + state.name + "\" in layer \"" + layer.name + "\" has an invalid identity or name.");
+                return false;
+            }
             const bool hasClip = !state.clipReference.empty();
             const bool hasBlendTree = !state.blendParameter.empty() || !state.blendChildren.empty();
-            if (hasClip == hasBlendTree) return false;
+            if (hasClip == hasBlendTree) {
+                setError("State \"" + state.name + "\" in layer \"" + layer.name + "\" must have exactly one motion source.");
+                return false;
+            }
             if (hasBlendTree) {
-                setError("Animator controller has an invalid blend tree.");
                 const auto parameter = std::find_if(controller.parameters.begin(), controller.parameters.end(),
                     [&](const AnimatorParameterDefinition& value) {
                         return value.name == state.blendParameter &&
                             value.type == AnimatorParameterType::Float;
                     });
-                if (parameter == controller.parameters.end() || state.blendChildren.size() < 2U) return false;
+                if (parameter == controller.parameters.end() || state.blendChildren.size() < 2U) {
+                    setError("State \"" + state.name + "\" references invalid blend parameter \"" + state.blendParameter + "\".");
+                    return false;
+                }
                 float previousThreshold = -std::numeric_limits<float>::infinity();
                 for (const AnimatorControllerState::BlendChild& child : state.blendChildren) {
                     if (!std::isfinite(child.threshold) || child.threshold <= previousThreshold ||
-                        child.clipReference.empty()) return false;
+                        child.clipReference.empty()) {
+                        setError("State \"" + state.name + "\" has an invalid blend child.");
+                        return false;
+                    }
                     previousThreshold = child.threshold;
                 }
             }
             foundDefault |= state.name == layer.defaultState;
         }
-        setError("Animator controller layer has no declared default state.");
-        if (!foundDefault) return false;
-        setError("Animator controller has an invalid transition or condition.");
+        if (!foundDefault) {
+            setError("Layer \"" + layer.name + "\" default state \"" + layer.defaultState + "\" does not exist.");
+            return false;
+        }
+        std::unordered_set<std::uint64_t> transitionIds;
         for (const AnimatorControllerTransition& transition : layer.transitions) {
             if (!stateNames.contains(transition.fromState) || !stateNames.contains(transition.toState) ||
                 transition.fromState == transition.toState || !std::isfinite(transition.durationSeconds) ||
                 transition.durationSeconds < 0.0F || !std::isfinite(transition.exitNormalizedTime) ||
-                transition.exitNormalizedTime > 1.0F || transition.conditions.empty()) return false;
+                transition.exitNormalizedTime > 1.0F || transition.conditions.empty() || transition.id == 0U ||
+                !transitionIds.insert(transition.id).second) {
+                setError("Transition " + std::to_string(transition.id) + " in layer \"" + layer.name + "\" has an invalid definition.");
+                return false;
+            }
             for (const AnimatorTransitionCondition& condition : transition.conditions) {
                 const auto parameter = std::find_if(controller.parameters.begin(), controller.parameters.end(),
                     [&](const AnimatorParameterDefinition& value) { return value.name == condition.parameter; });
                 if (parameter == controller.parameters.end() || parameter->type != ConditionParameterType(condition.mode) ||
-                    !std::isfinite(condition.floatValue)) return false;
+                    !std::isfinite(condition.floatValue)) {
+                    setError("Transition " + std::to_string(transition.id) + " in layer \"" + layer.name +
+                        "\" references invalid parameter \"" + condition.parameter + "\".");
+                    return false;
+                }
             }
         }
     }
@@ -600,10 +626,21 @@ std::optional<AnimatorController> AnimationAssetIO::LoadController(
         } else if (command == "state") {
             std::size_t layerIndex = 0U;
             AnimatorControllerState state{};
-            if (!(input >> layerIndex) ||
-                (schemaVersion >= 3U && !(input >> state.id)) ||
-                !(input >> std::quoted(state.name) >> std::quoted(state.clipReference)) ||
-                layerIndex >= controller.layers.size() || !EndOfRecord(input)) return std::nullopt;
+            bool parsed = false;
+            if (schemaVersion == 0U) {
+                std::istringstream modern{ line };
+                std::string ignored;
+                modern.imbue(std::locale::classic());
+                parsed = (modern >> ignored >> layerIndex >> state.id >> std::quoted(state.name) >>
+                    std::quoted(state.clipReference)) && EndOfRecord(modern);
+            }
+            if (!parsed) {
+                if (!(input >> layerIndex) ||
+                    (schemaVersion >= 3U && !(input >> state.id)) ||
+                    !(input >> std::quoted(state.name) >> std::quoted(state.clipReference)) ||
+                    !EndOfRecord(input)) return std::nullopt;
+            }
+            if (layerIndex >= controller.layers.size()) return std::nullopt;
             controller.layers[layerIndex].states.push_back(std::move(state));
         } else if (command == "blend1D") {
             std::size_t layerIndex = 0U;
@@ -628,25 +665,37 @@ std::optional<AnimatorController> AnimationAssetIO::LoadController(
         } else if (command == "transition") {
             std::size_t layerIndex = 0U;
             AnimatorControllerTransition transition{};
-            if (!(input >> layerIndex) ||
-                (schemaVersion >= 3U && !(input >> transition.id)) ||
-                !(input >> std::quoted(transition.fromState) >> std::quoted(transition.toState) >>
-                    transition.durationSeconds >> transition.exitNormalizedTime) ||
-                layerIndex >= controller.layers.size() || !EndOfRecord(input)) return std::nullopt;
+            bool parsed = false;
+            if (schemaVersion == 0U) {
+                std::istringstream modern{ line };
+                std::string ignored;
+                modern.imbue(std::locale::classic());
+                parsed = (modern >> ignored >> layerIndex >> transition.id >>
+                    std::quoted(transition.fromState) >> std::quoted(transition.toState) >>
+                    transition.durationSeconds >> transition.exitNormalizedTime) && EndOfRecord(modern);
+            }
+            if (!parsed) {
+                if (!(input >> layerIndex) ||
+                    (schemaVersion >= 3U && !(input >> transition.id)) ||
+                    !(input >> std::quoted(transition.fromState) >> std::quoted(transition.toState) >>
+                        transition.durationSeconds >> transition.exitNormalizedTime) ||
+                    !EndOfRecord(input)) return std::nullopt;
+            }
+            if (layerIndex >= controller.layers.size()) return std::nullopt;
             controller.layers[layerIndex].transitions.push_back(std::move(transition));
         } else if (command == "graphNode") {
-            if (schemaVersion < 3U) return std::nullopt;
+            if (schemaVersion != 0U && schemaVersion < 3U) return std::nullopt;
             AnimatorGraphNodeLayout node{};
             if (!(input >> node.stateId >> node.positionX >> node.positionY) || !EndOfRecord(input)) return std::nullopt;
             controller.graphLayout.push_back(node);
         } else if (command == "graphComment") {
-            if (schemaVersion < 3U) return std::nullopt;
+            if (schemaVersion != 0U && schemaVersion < 3U) return std::nullopt;
             AnimatorGraphComment comment{};
             if (!(input >> comment.id >> std::quoted(comment.text) >> comment.positionX >> comment.positionY >>
                     comment.width >> comment.height) || !EndOfRecord(input)) return std::nullopt;
             controller.graphComments.push_back(std::move(comment));
         } else if (command == "graphGroup") {
-            if (schemaVersion < 3U) return std::nullopt;
+            if (schemaVersion != 0U && schemaVersion < 3U) return std::nullopt;
             AnimatorGraphGroup group{};
             std::size_t count = 0U;
             if (!(input >> group.id >> std::quoted(group.name) >> count)) return std::nullopt;
@@ -700,7 +749,7 @@ std::optional<AnimatorController> AnimationAssetIO::LoadController(
             if (constraint.constrainedPath == ".") constraint.constrainedPath.clear();
             controller.rigConstraints.push_back(std::move(constraint));
         } else if (command == "skeletalConstraint") {
-            if (schemaVersion < 2U) return std::nullopt;
+            if (schemaVersion != 0U && schemaVersion < 2U) return std::nullopt;
             AnimatorRigConstraint constraint{};
             std::string type;
             if (!(input >> type >> std::quoted(constraint.name) >>
@@ -777,10 +826,19 @@ bool AnimationAssetIO::SaveClip(const std::filesystem::path& path, const Animati
     return WriteText(path, output.str());
 }
 
-bool AnimationAssetIO::SaveController(const std::filesystem::path& path, const AnimatorController& controller) {
+bool AnimationAssetIO::ValidateController(const AnimatorController& controller, std::string* error) {
     AnimatorController normalized = controller;
     EnsureControllerGraphIdentity(normalized);
-    if (!ValidateController(normalized)) return false;
+    return ValidateAnimatorController(normalized, error);
+}
+
+bool AnimationAssetIO::SaveController(
+    const std::filesystem::path& path,
+    const AnimatorController& controller,
+    std::string* error) {
+    AnimatorController normalized = controller;
+    EnsureControllerGraphIdentity(normalized);
+    if (!ValidateAnimatorController(normalized, error)) return false;
     std::ostringstream output;
     output.imbue(std::locale::classic());
     output << std::setprecision(std::numeric_limits<float>::max_digits10);
@@ -865,7 +923,12 @@ bool AnimationAssetIO::SaveController(const std::filesystem::path& path, const A
         for (const std::uint64_t stateId : group.stateIds) output << ' ' << stateId;
         output << '\n';
     }
-    return WriteText(path, output.str());
+    if (!WriteText(path, output.str())) {
+        if (error != nullptr) *error = "Animator Controller could not be written atomically.";
+        return false;
+    }
+    if (error != nullptr) error->clear();
+    return true;
 }
 
 } // namespace kb::scene
