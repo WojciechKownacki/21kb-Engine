@@ -16,6 +16,29 @@ namespace {
 
 constexpr int kHeaderHeight = 30;
 
+[[nodiscard]] const char* ParameterTypeLabel(kb::scene::AnimatorParameterType type) noexcept {
+    switch (type) {
+    case kb::scene::AnimatorParameterType::Bool: return "Bool";
+    case kb::scene::AnimatorParameterType::Int: return "Int";
+    case kb::scene::AnimatorParameterType::Float: return "Float";
+    case kb::scene::AnimatorParameterType::Trigger: return "Trigger";
+    }
+    return "Unknown";
+}
+
+[[nodiscard]] const char* ConditionModeLabel(kb::scene::AnimatorConditionMode mode) noexcept {
+    switch (mode) {
+    case kb::scene::AnimatorConditionMode::BoolEquals: return "==";
+    case kb::scene::AnimatorConditionMode::IntEquals: return "==";
+    case kb::scene::AnimatorConditionMode::IntGreater: return ">";
+    case kb::scene::AnimatorConditionMode::IntLess: return "<";
+    case kb::scene::AnimatorConditionMode::FloatGreater: return ">";
+    case kb::scene::AnimatorConditionMode::FloatLess: return "<";
+    case kb::scene::AnimatorConditionMode::TriggerSet: return "set";
+    }
+    return "?";
+}
+
 void DrawText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize, int weight = FW_NORMAL,
     UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
     const ScopedFont font{ pointSize, weight };
@@ -40,8 +63,12 @@ void PaintGraph(HDC dc, const RECT& rect, const kb::scene::AnimatorController* c
         const int rowTop = rect.top + 30 + static_cast<int>(layerIndex) * layerHeight;
         if (rowTop >= rect.bottom) break;
         DrawText(dc, RECT{ rect.left + 10, rowTop, rect.right - 10, rowTop + 18 }, layer.name.c_str(), RGB(130, 167, 205), 11, FW_SEMIBOLD);
+        constexpr int entryWidth = 48;
+        const RECT entry{ rect.left + 12, rowTop + 22, rect.left + 12 + entryWidth, rowTop + 22 + nodeHeight };
+        GdiDrawing::DrawSharpFrame(dc, entry, RGB(57, 67, 48), RGB(132, 172, 106));
+        DrawText(dc, RECT{ entry.left + 4, entry.top + 3, entry.right - 4, entry.bottom - 3 }, "Entry", RGB(218, 233, 205), 10, FW_SEMIBOLD);
         for (std::size_t stateIndex = 0U; stateIndex < layer.states.size(); ++stateIndex) {
-            const int left = rect.left + 18 + static_cast<int>(stateIndex) * (nodeWidth + 22);
+            const int left = rect.left + entryWidth + 30 + static_cast<int>(stateIndex) * (nodeWidth + 22);
             if (left >= rect.right - 8) break;
             const RECT node{ left, rowTop + 22, std::min(static_cast<int>(rect.right) - 8, left + nodeWidth), rowTop + 22 + nodeHeight };
             const bool defaultState = layer.states[stateIndex].name == layer.defaultState;
@@ -49,10 +76,18 @@ void PaintGraph(HDC dc, const RECT& rect, const kb::scene::AnimatorController* c
                 defaultState ? RGB(90, 156, 210) : RGB(78, 84, 93));
             DrawText(dc, RECT{ node.left + 7, node.top + 3, node.right - 7, node.bottom - 3 },
                 layer.states[stateIndex].name.c_str(), RGB(224, 230, 237), 11, FW_SEMIBOLD);
-            if (stateIndex + 1U < layer.states.size() && node.right + 18 < rect.right) {
+            if (defaultState) {
                 const int middle = node.top + (node.bottom - node.top) / 2;
-                GdiDrawing::FillRectColor(dc, RECT{ node.right, middle, node.right + 18, middle + 1 }, RGB(102, 114, 127));
+                GdiDrawing::FillRectColor(dc, RECT{ entry.right, middle, node.left, middle + 2 }, RGB(132, 172, 106));
             }
+        }
+        int transitionY = rowTop + 22 + nodeHeight + 4;
+        for (const kb::scene::AnimatorControllerTransition& transition : layer.transitions) {
+            if (transitionY + 14 >= rowTop + layerHeight || transitionY + 14 >= rect.bottom) break;
+            const std::string text = transition.fromState + " -> " + transition.toState +
+                "  (" + std::to_string(transition.durationSeconds) + "s)";
+            DrawText(dc, RECT{ rect.left + 18, transitionY, rect.right - 10, transitionY + 14 }, text.c_str(), RGB(203, 173, 99), 10);
+            transitionY += 14;
         }
     }
 }
@@ -68,9 +103,29 @@ void PaintDetails(HDC dc, const RECT& rect, const kb::scene::AnimatorController*
         y += 20;
     };
     row("Parameters: " + std::to_string(controller->parameters.size()));
+    for (const kb::scene::AnimatorParameterDefinition& parameter : controller->parameters) {
+        row(parameter.name + " : " + ParameterTypeLabel(parameter.type));
+        if (y >= rect.bottom) return;
+    }
     row("Layers: " + std::to_string(controller->layers.size()));
+    for (const kb::scene::AnimatorControllerLayer& layer : controller->layers) {
+        row(layer.name + " | Entry: " + layer.defaultState);
+        if (y >= rect.bottom) return;
+    }
     row("Constraints: " + std::to_string(controller->rigConstraints.size()));
     y += 5;
+    DrawText(dc, RECT{ rect.left + 10, y, rect.right - 10, y + 19 }, "Transitions", RGB(130, 167, 205), 11, FW_SEMIBOLD);
+    y += 21;
+    for (const kb::scene::AnimatorControllerLayer& layer : controller->layers) {
+        for (const kb::scene::AnimatorControllerTransition& transition : layer.transitions) {
+            row(transition.fromState + " -> " + transition.toState + " | " +
+                std::to_string(transition.durationSeconds) + " s");
+            for (const kb::scene::AnimatorTransitionCondition& condition : transition.conditions) {
+                row("  " + condition.parameter + " " + ConditionModeLabel(condition.mode));
+            }
+            if (y >= rect.bottom) return;
+        }
+    }
     DrawText(dc, RECT{ rect.left + 10, y, rect.right - 10, y + 19 }, "Referenced clips", RGB(130, 167, 205), 11, FW_SEMIBOLD);
     y += 21;
     for (const kb::scene::AnimatorControllerLayer& layer : controller->layers) {
