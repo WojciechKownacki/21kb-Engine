@@ -77,8 +77,12 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::Handle
                 ? EditorAssetBrowserDoubleClickResult::SkeletalMeshEditorOpened
                 : EditorAssetBrowserDoubleClickResult::None;
         }
-        if (metadata->type == kb::scene::kAnimationClipAssetType ||
-            metadata->type == kb::scene::kAnimatorControllerAssetType ||
+        if (metadata->type == kb::scene::kAnimationClipAssetType) {
+            return sceneContext.OpenAnimationClipEditorAsset(metadata->id)
+                ? EditorAssetBrowserDoubleClickResult::AnimationClipEditorOpened
+                : EditorAssetBrowserDoubleClickResult::None;
+        }
+        if (metadata->type == kb::scene::kAnimatorControllerAssetType ||
             metadata->type == kb::scene::kTimelineAssetType) {
             return sceneContext.OpenAnimationAsset(metadata->id)
                 ? EditorAssetBrowserDoubleClickResult::ScriptEditorOpened

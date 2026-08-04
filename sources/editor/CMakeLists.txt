@@ -477,6 +477,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.hpp
     src/private/rendering/material_graph/MaterialGraphCanvas.hpp
     src/private/rendering/PanelContentRenderer.hpp
+    src/private/rendering/AnimationClipEditorPanelRenderer.hpp
     src/private/rendering/ProjectFilesAssetListRenderer.hpp
     src/private/rendering/ProjectFilesAssetIconResolver.hpp
     src/private/rendering/ProjectFilesAssetTileFrameRenderer.hpp
@@ -679,6 +680,7 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorPanelState.cpp
     src/rendering/MainWindowBackBufferPainter.cpp
     src/rendering/PanelContentRenderer.cpp
+    src/rendering/AnimationClipEditorPanelRenderer.cpp
     src/rendering/SkeletalMeshEditorPanelRenderer.cpp
     src/rendering/ProjectFilesAssetListRenderer.cpp
     src/rendering/ProjectFilesAssetIconResolver.cpp

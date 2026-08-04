@@ -225,12 +225,12 @@ void RunAnimationPreviewExactScrubTest() {
         "Animation preview scrub fixture could not load its controller");
 
     kb::editor::AnimationPreviewContext context;
-    context.SetAssets(skeletonId, meshMetadata->id, clipMetadata->id, controllerMetadata->id);
+    context.SetAssets(skeletonId, meshMetadata->id, clipMetadata->id, {});
     context.SetPoseMode(kb::editor::AnimationPreviewPoseMode::Animated);
     kb::editor::EditorAnimationPreviewScene preview;
     const kb::scene::Scene& initialPreviewScene = preview.SceneFor(source, context);
     kb::editor::tests::Require(initialPreviewScene.Animators().Exists(preview.PreviewEntity()),
-        "Animation preview scrub fixture did not create a runtime animator");
+        "Animation Clip preview did not create a runtime animator from the runtime clip");
     kb::editor::tests::Require(context.Transport().Scrub(0.5F), "Animation preview scrub rejected a normalized midpoint");
     const kb::scene::Scene& previewScene = preview.SceneFor(source, context);
     const auto pose = previewScene.Animators().InstanceSkeleton(preview.PreviewEntity());

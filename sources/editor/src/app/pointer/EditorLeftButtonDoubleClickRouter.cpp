@@ -130,6 +130,9 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
     if (assetResult == EditorAssetBrowserDoubleClickResult::SkeletalMeshEditorOpened) {
         static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::SkeletalMeshEditor, DockArea::Center));
     }
+    if (assetResult == EditorAssetBrowserDoubleClickResult::AnimationClipEditorOpened) {
+        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::AnimationClipEditor, DockArea::Center));
+    }
     EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     return true;
 }

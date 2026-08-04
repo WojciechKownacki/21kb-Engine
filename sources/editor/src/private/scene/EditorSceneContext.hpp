@@ -412,6 +412,11 @@ public:
     [[nodiscard]] bool CreateLuaScriptAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
     [[nodiscard]] bool OpenAnimationAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool OpenAnimationClipEditorAsset(kb::assets::AssetId id);
+    [[nodiscard]] kb::assets::AssetId AnimationClipEditorAssetId() const noexcept;
+    [[nodiscard]] bool HasAnimationClipEditorAsset() const noexcept;
+    [[nodiscard]] const kb::scene::Scene* AnimationClipEditorPreviewScene() const noexcept;
+    [[nodiscard]] std::uint64_t AnimationClipEditorPreviewRevision() const noexcept;
     [[nodiscard]] bool OpenSkeletalMeshEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] kb::assets::AssetId SkeletalMeshEditorAssetId() const noexcept;
     [[nodiscard]] bool HasSkeletalMeshEditorAsset() const noexcept;
@@ -993,6 +998,7 @@ private:
     EditorSceneViewportStateStore viewportState_;
     AnimationPreviewContext animationPreview_;
     std::unique_ptr<EditorAnimationPreviewScene> animationPreviewScene_;
+    kb::assets::AssetId animationClipEditorAssetId_{};
     kb::assets::AssetId skeletalMeshEditorAssetId_{};
     SkeletalMeshEditorTreeState skeletalMeshEditorTree_;
     SkeletalMeshEditorDetailsState skeletalMeshEditorDetails_;
