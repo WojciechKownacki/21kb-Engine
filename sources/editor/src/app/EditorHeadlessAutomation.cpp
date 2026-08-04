@@ -197,6 +197,9 @@ FindInspectorHit(
     if (panel == "material_editor") {
         return DockPanelKind::MaterialEditor;
     }
+    if (panel == "skeletal_mesh_editor") {
+        return DockPanelKind::SkeletalMeshEditor;
+    }
     return std::nullopt;
 }
 
