@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 
@@ -89,6 +90,45 @@ double StateTime(float normalizedTime, const AnimationClip& clip);
             }
         }
     }
+    return true;
+}
+
+constexpr std::size_t kAnimatorParallelEvaluationGrainSize = 16U;
+constexpr std::size_t kAnimatorParallelEvaluationThreshold =
+    kAnimatorParallelEvaluationGrainSize * 2U;
+
+void EnsureAnimatorWorkerPool(SceneState& state) {
+    if (state.animatorWorkerPool == nullptr) {
+        state.animatorWorkerPool = std::make_unique<kb::ecs::WorkerPool>(
+            kb::ecs::WorkerPoolConfig{ .collectDispatchTelemetry = true });
+    } else if (!state.animatorWorkerPool->Running()) {
+        state.animatorWorkerPool->Start(
+            kb::ecs::WorkerPoolConfig{ .collectDispatchTelemetry = true });
+    }
+}
+
+[[nodiscard]] bool CanEvaluateSkeletalPoseInParallel(
+    const AnimatorRuntimeRecord& record, AnimatorRootMotionOwner rootMotionOwner) noexcept {
+    return record.skeleton.has_value() && record.bindings.empty() &&
+        record.rigConstraints.empty() &&
+        rootMotionOwner == AnimatorRootMotionOwner::None;
+}
+
+[[nodiscard]] bool ShouldEvaluateSkeletalPose(
+    AnimatorRuntimeRecord& record, float deltaSeconds) noexcept {
+    if (!record.skeleton.has_value() || record.poseUpdateRateHz <= 0.0F) {
+        record.hasEvaluatedPose = true;
+        return true;
+    }
+    if (!record.hasEvaluatedPose) {
+        record.hasEvaluatedPose = true;
+        record.poseUpdateAccumulatorSeconds = 0.0;
+        return true;
+    }
+    const double interval = 1.0 / static_cast<double>(record.poseUpdateRateHz);
+    record.poseUpdateAccumulatorSeconds += static_cast<double>(deltaSeconds);
+    if (record.poseUpdateAccumulatorSeconds + 1.0e-12 < interval) return false;
+    record.poseUpdateAccumulatorSeconds = std::fmod(record.poseUpdateAccumulatorSeconds, interval);
     return true;
 }
 
@@ -2385,8 +2425,9 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
     std::map<std::uint64_t, bool> retained;
     for (const AuthoredAnimator& value : authored) {
         if (!value.animator.enabled) continue;
-        if (value.animator.controllerAssetId == 0U || !std::isfinite(value.animator.speed) || value.animator.speed < 0.0F) {
-            throw std::runtime_error("Enabled Animator component has an invalid controller or speed");
+        if (value.animator.controllerAssetId == 0U || !std::isfinite(value.animator.speed) || value.animator.speed < 0.0F ||
+            !std::isfinite(value.animator.poseUpdateRateHz) || value.animator.poseUpdateRateHz < 0.0F) {
+            throw std::runtime_error("Enabled Animator component has an invalid controller, speed, or pose update rate");
         }
         retained[value.entity.Id()] = true;
         AnimatorRuntimeRecord* record = Find(SceneAccess::State(scene), value.entity);
@@ -2438,6 +2479,8 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
             }
             record->lastAppliedComponentSpeed = value.animator.speed;
             record->speed = value.animator.speed;
+            record->lastAppliedComponentPoseUpdateRateHz = value.animator.poseUpdateRateHz;
+            record->poseUpdateRateHz = value.animator.poseUpdateRateHz;
         } else if (hierarchyChanged) {
             record->observedHierarchyTopologyVersion =
                 state.hierarchyTopologyVersion;
@@ -2445,6 +2488,12 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
         if (record->lastAppliedComponentSpeed != value.animator.speed) {
             record->lastAppliedComponentSpeed = value.animator.speed;
             record->speed = value.animator.speed;
+        }
+        if (record->lastAppliedComponentPoseUpdateRateHz != value.animator.poseUpdateRateHz) {
+            record->lastAppliedComponentPoseUpdateRateHz = value.animator.poseUpdateRateHz;
+            record->poseUpdateRateHz = value.animator.poseUpdateRateHz;
+            record->poseUpdateAccumulatorSeconds = 0.0;
+            record->hasEvaluatedPose = false;
         }
         if (!state.isPlaying) {
             for (AnimatorRuntimeBinding& binding : record->bindings) {
@@ -2479,6 +2528,10 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
         throw std::invalid_argument("AnimatorSceneSystem requires a finite, non-negative deltaSeconds");
     }
     if (!state.isPlaying) return;
+    state.lastAnimatorParallelEvaluationCount = 0U;
+    state.lastAnimatorParallelWorkerCount = 1U;
+    state.lastAnimatorUpdateRateSkippedPoseCount = 0U;
+    state.animatorParallelPoseScratch.clear();
 
     for (auto& [id, record] : state.animators) {
         static_cast<void>(id);
@@ -2682,8 +2735,16 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
                 }
                 extractedRootMotionBone = boneIndex;
             }
-            EvaluateIndexedSkeletalPose(
-                scene, record, extractedRootMotionBone);
+            if (CanEvaluateSkeletalPoseInParallel(record, rootMotionOwner)) {
+                if (ShouldEvaluateSkeletalPose(record, deltaSeconds)) {
+                    state.animatorParallelPoseScratch.push_back(&record);
+                } else {
+                    ++state.lastAnimatorUpdateRateSkippedPoseCount;
+                }
+            } else {
+                EvaluateIndexedSkeletalPose(
+                    scene, record, extractedRootMotionBone);
+            }
         }
         for (AnimatorRuntimeBinding& binding : record.bindings) {
             if (!binding.outputTouched || !scene.Entities().IsAlive(binding.target)) continue;
@@ -2706,6 +2767,30 @@ void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
             transform->localRotation = kb::math::Normalize(
                 transform->localRotation * animatorMotion.rotation);
             scene.Transforms().MarkModified(record.entity);
+        }
+    }
+    if (!state.animatorParallelPoseScratch.empty()) {
+        if (state.animatorParallelPoseScratch.size() < kAnimatorParallelEvaluationThreshold) {
+            for (AnimatorRuntimeRecord* record : state.animatorParallelPoseScratch) {
+                EvaluateIndexedSkeletalPose(scene, *record, std::nullopt);
+            }
+        } else {
+            EnsureAnimatorWorkerPool(state);
+            state.animatorWorkerPool->ParallelForChunks(
+                state.animatorParallelPoseScratch.size(),
+                kAnimatorParallelEvaluationGrainSize,
+                [&scene, &state](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+                    for (std::size_t offset = 0U; offset < chunk.count; ++offset) {
+                        EvaluateIndexedSkeletalPose(
+                            scene,
+                            *state.animatorParallelPoseScratch[chunk.begin + offset],
+                            std::nullopt);
+                    }
+                });
+            state.lastAnimatorParallelEvaluationCount =
+                state.animatorParallelPoseScratch.size();
+            state.lastAnimatorParallelWorkerCount =
+                state.animatorWorkerPool->WorkerCount();
         }
     }
     for (auto& [id, record] : state.animators) {
