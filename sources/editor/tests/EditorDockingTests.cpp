@@ -13,6 +13,7 @@
 #include "windowing/FloatingWindowControlLayout.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -552,6 +553,11 @@ void RunAnimationClipTimelineStateTest() {
     kb::editor::tests::Require(events != tracks.end() && events->keys[0].timeSeconds == 0.75F &&
             rootMotion != tracks.end() && rootMotion->keys.size() == bone->keys.size(),
         "Animation Clip timeline should deterministically expose events and root motion keys");
+    kb::editor::tests::Require(timeline.SetZoom(4.0F) && timeline.Pan(0.25F) &&
+            std::fabs(timeline.VisibleDurationSeconds() - 0.5F) < 0.0001F &&
+            std::fabs(timeline.SnapTime(1.12F, 20.0F) - 1.1F) < 0.0001F &&
+            timeline.SetSnappingEnabled(false) && std::fabs(timeline.SnapTime(1.12F, 20.0F) - 1.12F) < 0.0001F,
+        "Animation Clip timeline should retain zoom, pan and frame snapping state");
 }
 
 // A click on any tab — the active one or an inactive sibling — must hit-test as a

@@ -9047,6 +9047,10 @@ std::uint64_t EditorSceneContext::AnimationClipEditorPreviewRevision() const noe
     return HasAnimationClipEditorAsset() ? animationPreviewScene_->Revision() : 0U;
 }
 
+AnimationClipTimelineState& EditorSceneContext::AnimationClipEditorTimeline() noexcept {
+    return animationClipEditorTimeline_;
+}
+
 const AnimationClipTimelineState& EditorSceneContext::AnimationClipEditorTimeline() const noexcept {
     return animationClipEditorTimeline_;
 }

@@ -3,6 +3,7 @@
 #include "engine/scene/AnimationAssets.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -78,6 +79,39 @@ public:
 
     [[nodiscard]] float DurationSeconds() const noexcept { return durationSeconds_; }
     [[nodiscard]] const std::vector<AnimationClipTimelineTrack>& Tracks() const noexcept { return tracks_; }
+    [[nodiscard]] float Zoom() const noexcept { return zoom_; }
+    [[nodiscard]] float PanSeconds() const noexcept { return panSeconds_; }
+    [[nodiscard]] bool SnappingEnabled() const noexcept { return snappingEnabled_; }
+
+    [[nodiscard]] bool SetZoom(float zoom) noexcept {
+        if (!std::isfinite(zoom)) return false;
+        const float clamped = std::clamp(zoom, 1.0F, 64.0F);
+        if (zoom_ == clamped) return false;
+        zoom_ = clamped;
+        panSeconds_ = std::clamp(panSeconds_, 0.0F, std::max(0.0F, durationSeconds_ - VisibleDurationSeconds()));
+        return true;
+    }
+
+    [[nodiscard]] bool Pan(float deltaSeconds) noexcept {
+        if (!std::isfinite(deltaSeconds)) return false;
+        const float next = std::clamp(panSeconds_ + deltaSeconds, 0.0F, std::max(0.0F, durationSeconds_ - VisibleDurationSeconds()));
+        if (next == panSeconds_) return false;
+        panSeconds_ = next;
+        return true;
+    }
+
+    [[nodiscard]] bool SetSnappingEnabled(bool enabled) noexcept {
+        if (snappingEnabled_ == enabled) return false;
+        snappingEnabled_ = enabled;
+        return true;
+    }
+
+    [[nodiscard]] float VisibleDurationSeconds() const noexcept { return durationSeconds_ / zoom_; }
+
+    [[nodiscard]] float SnapTime(float timeSeconds, float frameRate) const noexcept {
+        if (!snappingEnabled_ || !std::isfinite(timeSeconds) || !std::isfinite(frameRate) || frameRate < 1.0F) return timeSeconds;
+        return std::round(timeSeconds * frameRate) / frameRate;
+    }
 
 private:
     static void SortKeys(std::vector<AnimationClipTimelineKey>& keys) {
@@ -119,6 +153,9 @@ private:
     }
 
     float durationSeconds_ = 1.0F;
+    float zoom_ = 1.0F;
+    float panSeconds_ = 0.0F;
+    bool snappingEnabled_ = true;
     std::vector<AnimationClipTimelineTrack> tracks_;
 };
 

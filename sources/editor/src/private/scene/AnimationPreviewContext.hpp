@@ -23,6 +23,8 @@ public:
     [[nodiscard]] float NormalizedTime() const noexcept { return normalizedTime_; }
     [[nodiscard]] float FrameRate() const noexcept { return frameRate_; }
     [[nodiscard]] float DurationSeconds() const noexcept { return durationSeconds_; }
+    [[nodiscard]] float LoopStartNormalized() const noexcept { return loopStartNormalized_; }
+    [[nodiscard]] float LoopEndNormalized() const noexcept { return loopEndNormalized_; }
     [[nodiscard]] std::uint64_t Revision() const noexcept { return revision_; }
 
     [[nodiscard]] bool SetPlaying(bool playing) noexcept {
@@ -61,9 +63,20 @@ public:
         return true;
     }
 
+    [[nodiscard]] bool SetLoopRange(float startNormalized, float endNormalized) noexcept {
+        if (!std::isfinite(startNormalized) || !std::isfinite(endNormalized) ||
+            startNormalized < 0.0F || endNormalized > 1.0F || startNormalized >= endNormalized) return false;
+        if (loopStartNormalized_ == startNormalized && loopEndNormalized_ == endNormalized) return false;
+        loopStartNormalized_ = startNormalized;
+        loopEndNormalized_ = endNormalized;
+        normalizedTime_ = std::clamp(normalizedTime_, loopStartNormalized_, loopEndNormalized_);
+        ++revision_;
+        return true;
+    }
+
     [[nodiscard]] bool Scrub(float normalizedTime) noexcept {
         if (!std::isfinite(normalizedTime)) return false;
-        const float clamped = std::clamp(normalizedTime, 0.0F, 1.0F);
+        const float clamped = std::clamp(normalizedTime, loopStartNormalized_, loopEndNormalized_);
         if (clamped == normalizedTime_) return false;
         normalizedTime_ = clamped;
         ++revision_;
@@ -93,6 +106,8 @@ public:
         normalizedTime_ = 0.0F;
         frameRate_ = 60.0F;
         durationSeconds_ = 1.0F;
+        loopStartNormalized_ = 0.0F;
+        loopEndNormalized_ = 1.0F;
         ++revision_;
     }
 
@@ -100,12 +115,16 @@ private:
     [[nodiscard]] bool Move(double normalizedDelta, bool stopAtEnd) noexcept {
         const double current = static_cast<double>(normalizedTime_);
         double next = current + normalizedDelta;
+        const double start = static_cast<double>(loopStartNormalized_);
+        const double end = static_cast<double>(loopEndNormalized_);
+        const double range = end - start;
         if (loops_) {
-            next = std::fmod(next, 1.0);
-            if (next < 0.0) next += 1.0;
+            next = std::fmod(next - start, range);
+            if (next < 0.0) next += range;
+            next += start;
         } else {
-            next = std::clamp(next, 0.0, 1.0);
-            if (stopAtEnd && next >= 1.0) playing_ = false;
+            next = std::clamp(next, start, end);
+            if (stopAtEnd && next >= end) playing_ = false;
         }
         const float result = static_cast<float>(next);
         if (result == normalizedTime_) return false;
@@ -120,6 +139,8 @@ private:
     float normalizedTime_ = 0.0F;
     float frameRate_ = 60.0F;
     float durationSeconds_ = 1.0F;
+    float loopStartNormalized_ = 0.0F;
+    float loopEndNormalized_ = 1.0F;
     std::uint64_t revision_ = 1U;
 };
 

@@ -28,6 +28,7 @@
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "inspection/TerrainMaterialLayerMenuState.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/AnimationClipEditorPanelRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
@@ -887,6 +888,50 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             sceneContext_.FocusSkeletalMeshEditorTreeSearch(false);
             static_cast<void>(sceneContext_.ClearSkeletalMeshEditorTreeSelection());
         }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (const std::optional<RECT> animationClipEditorContent = EditorPanelContentResolver::Resolve(
+            DockPanelKind::AnimationClipEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        animationClipEditorContent.has_value() && PointInRect(*animationClipEditorContent, x, y) &&
+        sceneContext_.HasAnimationClipEditorAsset()) {
+        AnimationPreviewTransport& transport = sceneContext_.AnimationPreview().Transport();
+        AnimationClipTimelineState& timeline = sceneContext_.AnimationClipEditorTimeline();
+        if (const std::optional<std::uint8_t> control =
+                AnimationClipEditorPanelRenderer::TransportControlAt(*animationClipEditorContent, x, y);
+            control.has_value()) {
+            switch (*control) {
+            case 0U:
+                if (transport.NormalizedTime() > transport.LoopStartNormalized()) {
+                    static_cast<void>(transport.SetLoopRange(transport.LoopStartNormalized(), transport.NormalizedTime()));
+                }
+                break;
+            case 1U:
+                if (transport.NormalizedTime() < transport.LoopEndNormalized()) {
+                    static_cast<void>(transport.SetLoopRange(transport.NormalizedTime(), transport.LoopEndNormalized()));
+                }
+                break;
+            case 2U: static_cast<void>(timeline.SetZoom(timeline.Zoom() * 2.0F)); break;
+            case 3U: static_cast<void>(timeline.SetZoom(timeline.Zoom() * 0.5F)); break;
+            case 4U: static_cast<void>(timeline.SetSnappingEnabled(!timeline.SnappingEnabled())); break;
+            case 5U: static_cast<void>(transport.SetLooping(!transport.Loops())); break;
+            case 6U: static_cast<void>(transport.Step(1)); break;
+            case 7U: static_cast<void>(transport.SetPlaying(!transport.IsPlaying())); break;
+            case 8U: static_cast<void>(transport.Step(-1)); break;
+            default: break;
+            }
+        } else if (const std::optional<float> time = AnimationClipEditorPanelRenderer::TimelineTimeAt(
+                       *animationClipEditorContent, timeline, x, y);
+                   time.has_value()) {
+            if (KeyDown(VK_SHIFT)) {
+                static_cast<void>(timeline.Pan(*time - (timeline.PanSeconds() + timeline.VisibleDurationSeconds() * 0.5F)));
+            } else {
+                const float snapped = timeline.SnapTime(*time, transport.FrameRate());
+                static_cast<void>(transport.Scrub(snapped / transport.DurationSeconds()));
+            }
+        }
+        sceneViewport_.RequestPresent();
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return;
     }
