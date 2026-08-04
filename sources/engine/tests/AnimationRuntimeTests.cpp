@@ -1397,6 +1397,8 @@ end
                     instanceControllerPath, instanceController) &&
                 scene.Assets().Discover() == 4U,
             "AnimatorInstance fixture could not discover its clip and controller");
+        const std::string instanceControllerBeforeDebugSnapshot =
+            ReadTextFile(instanceControllerPath);
         const kb::assets::AssetMetadata* instanceControllerMetadata =
             scene.Assets().Manager().Registry().FindByPath(
                 "/Game/Animation/Skeletal.kbanimcontroller");
@@ -1617,6 +1619,9 @@ end
                 !transitionedDebugInstance->compatibilityDiagnostics.empty() &&
                 transitionedDebugInstance->poseEvaluationCount == 2U,
             "Animator debug snapshot did not retain the evaluated live skeletal state");
+        Require(ReadTextFile(instanceControllerPath) ==
+                instanceControllerBeforeDebugSnapshot,
+            "Animator debug snapshot serialized live debug state into the controller asset");
 
         scene.Components().Animators().Set(
             owner.Entity(), kb::scene::Animator{
