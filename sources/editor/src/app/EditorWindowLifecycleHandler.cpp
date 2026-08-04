@@ -62,6 +62,22 @@ namespace {
     }
 }
 
+[[nodiscard]] bool ResolveDirtySkeletalMeshEditorClose(HWND owner, EditorSceneContext& sceneContext, std::wstring_view action) {
+    if (!sceneContext.HasDirtySkeletalMeshEditorAssetEdit()) return true;
+    std::wstring text = L"Save changes to the open Skeletal Mesh before ";
+    text += action;
+    text += L"?\n\nYes = Save\nNo = Discard changes\nCancel = keep editing";
+    switch (MessageBoxW(owner, text.c_str(), L"Unsaved Skeletal Mesh", MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1 | MB_APPLMODAL)) {
+    case IDYES:
+        return sceneContext.SaveSkeletalMeshEditorAsset();
+    case IDNO:
+        return sceneContext.RevertSkeletalMeshEditorAsset();
+    case IDCANCEL:
+    default:
+        return false;
+    }
+}
+
 } // namespace
 
 EditorWindowLifecycleHandler::EditorWindowLifecycleHandler(HWND& mainWindow, bool& running, EditorDockModel& dockModel, EditorFloatingWindowManager& floatingWindows, EditorSceneContext& sceneContext) noexcept
@@ -78,6 +94,10 @@ LRESULT EditorWindowLifecycleHandler::HandleClose(HWND messageWindow) {
             !ResolveDirtyMaterialEditorClose(messageWindow, sceneContext_, L"closing the Material Editor")) {
             return 0;
         }
+        if (panel != nullptr && panel->kind == DockPanelKind::SkeletalMeshEditor &&
+            !ResolveDirtySkeletalMeshEditorClose(messageWindow, sceneContext_, L"closing the Skeletal Mesh Editor")) {
+            return 0;
+        }
         floatingWindows_.Commands().Destroy(panelId);
         dockModel_.Commands().DockPanelTo(panelId, DockDropPreview{ .zone = DockDropZone::Bottom });
         InvalidateRect(mainWindow_, nullptr, FALSE);
@@ -86,6 +106,9 @@ LRESULT EditorWindowLifecycleHandler::HandleClose(HWND messageWindow) {
 
     static_cast<void>(sceneContext_.RestorePlayModeSceneSession());
     if (!ResolveDirtyMaterialEditorClose(messageWindow, sceneContext_, L"closing the editor")) {
+        return 0;
+    }
+    if (!ResolveDirtySkeletalMeshEditorClose(messageWindow, sceneContext_, L"closing the editor")) {
         return 0;
     }
     const std::optional<EditorDirtySceneResolution> resolution =

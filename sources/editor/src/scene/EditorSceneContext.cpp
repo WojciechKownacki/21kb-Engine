@@ -9000,6 +9000,7 @@ bool EditorSceneContext::OpenSkeletalMeshEditorAsset(kb::assets::AssetId id) {
     animationPreview_.SetPoseMode(AnimationPreviewPoseMode::Reference);
     static_cast<void>(animationPreview_.Overlays().SetBonesVisible(true));
     skeletalMeshEditorAssetId_ = id;
+    skeletalMeshEditorDocument_.Open(id, *mesh);
     skeletalMeshEditorTree_.SetSkeleton(*skeleton);
     skeletalMeshEditorDetails_.SetDocument(*mesh, *skeleton, *meshMetadata);
     static_cast<void>(AnimationPreviewScene());
@@ -9091,6 +9092,99 @@ SkeletalMeshEditorDetailsModel EditorSceneContext::SkeletalMeshEditorDetails() c
 
 const std::vector<kb::scene::SkeletalMeshMorphTarget>& EditorSceneContext::SkeletalMeshEditorMorphTargets() const noexcept {
     return skeletalMeshEditorDetails_.MorphTargets();
+}
+
+bool EditorSceneContext::HasDirtySkeletalMeshEditorAssetEdit() const noexcept {
+    return skeletalMeshEditorDocument_.Dirty();
+}
+
+bool EditorSceneContext::CanUndoSkeletalMeshEditorAssetEdit() const noexcept {
+    return skeletalMeshEditorDocument_.CanUndo();
+}
+
+bool EditorSceneContext::CanRedoSkeletalMeshEditorAssetEdit() const noexcept {
+    return skeletalMeshEditorDocument_.CanRedo();
+}
+
+bool EditorSceneContext::SetSkeletalMeshEditorBoundsMode(kb::scene::SkeletalMeshBoundsMode mode) {
+    const kb::scene::SkeletalMeshAsset* working = skeletalMeshEditorDocument_.WorkingCopy();
+    if (working == nullptr || working->boundsMode == mode) return false;
+    kb::scene::SkeletalMeshAsset candidate = *working;
+    candidate.boundsMode = mode;
+    if (!skeletalMeshEditorDocument_.Apply(std::move(candidate))) return false;
+    const kb::scene::SkeletalMeshAsset* updated = skeletalMeshEditorDocument_.WorkingCopy();
+    if (updated == nullptr || !scene_->Assets().Manager().PublishRuntimeAsset(
+            skeletalMeshEditorAssetId_, std::make_shared<kb::scene::SkeletalMeshAsset>(*updated))) {
+        return false;
+    }
+    animationPreviewScene_->Clear();
+    static_cast<void>(AnimationPreviewScene());
+    return true;
+}
+
+bool EditorSceneContext::UndoSkeletalMeshEditorAssetEdit() {
+    if (!skeletalMeshEditorDocument_.Undo()) return false;
+    const kb::scene::SkeletalMeshAsset* working = skeletalMeshEditorDocument_.WorkingCopy();
+    if (working == nullptr || !scene_->Assets().Manager().PublishRuntimeAsset(
+            skeletalMeshEditorAssetId_, std::make_shared<kb::scene::SkeletalMeshAsset>(*working))) return false;
+    animationPreviewScene_->Clear();
+    static_cast<void>(AnimationPreviewScene());
+    return true;
+}
+
+bool EditorSceneContext::RedoSkeletalMeshEditorAssetEdit() {
+    if (!skeletalMeshEditorDocument_.Redo()) return false;
+    const kb::scene::SkeletalMeshAsset* working = skeletalMeshEditorDocument_.WorkingCopy();
+    if (working == nullptr || !scene_->Assets().Manager().PublishRuntimeAsset(
+            skeletalMeshEditorAssetId_, std::make_shared<kb::scene::SkeletalMeshAsset>(*working))) return false;
+    animationPreviewScene_->Clear();
+    static_cast<void>(AnimationPreviewScene());
+    return true;
+}
+
+bool EditorSceneContext::SaveSkeletalMeshEditorAsset() {
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(skeletalMeshEditorAssetId_);
+    const kb::scene::SkeletalMeshAsset* working = skeletalMeshEditorDocument_.WorkingCopy();
+    if (metadata == nullptr || working == nullptr || !kb::scene::SkeletalMeshAssetIO::Save(metadata->physicalPath, *working)) {
+        console_.Error("Skeletal Mesh Editor", "Skeletal Mesh working copy could not be saved atomically.");
+        return false;
+    }
+    static_cast<void>(scene_->Assets().Manager().DiscoverMountedAssets());
+    static_cast<void>(skeletalMeshEditorDocument_.MarkSaved());
+    console_.Info("Skeletal Mesh Editor", "Saved Skeletal Mesh working copy.");
+    return true;
+}
+
+bool EditorSceneContext::RevertSkeletalMeshEditorAsset() {
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(skeletalMeshEditorAssetId_);
+    std::string error;
+    const std::optional<kb::scene::SkeletalMeshAsset> candidate = metadata == nullptr
+        ? std::nullopt : kb::scene::SkeletalMeshAssetIO::Load(metadata->physicalPath, &error);
+    if (!candidate.has_value() || !skeletalMeshEditorDocument_.ReplaceFromReimport(*candidate)) {
+        console_.Error("Skeletal Mesh Editor", error.empty() ? "Skeletal Mesh could not be reverted." : error);
+        return false;
+    }
+    static_cast<void>(scene_->Assets().Manager().PublishRuntimeAsset(
+        skeletalMeshEditorAssetId_, std::make_shared<kb::scene::SkeletalMeshAsset>(*candidate)));
+    animationPreviewScene_->Clear();
+    static_cast<void>(AnimationPreviewScene());
+    console_.Info("Skeletal Mesh Editor", "Reverted Skeletal Mesh working copy.");
+    return true;
+}
+
+bool EditorSceneContext::ReimportSkeletalMeshEditorAsset() {
+    return RevertSkeletalMeshEditorAsset();
+}
+
+bool EditorSceneContext::PrepareSkeletalMeshEditorClose(std::string_view reason) {
+    if (!HasDirtySkeletalMeshEditorAssetEdit()) return true;
+    console_.Warning("Skeletal Mesh Editor", "Unsaved Skeletal Mesh edits block " + std::string{ reason } + ". Save or Revert first.");
+    return false;
+}
+
+void EditorSceneContext::CloseSkeletalMeshEditorAsset() noexcept {
+    skeletalMeshEditorDocument_.Close();
+    skeletalMeshEditorAssetId_ = {};
 }
 
 bool EditorSceneContext::SetAnimatorControllerAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {
