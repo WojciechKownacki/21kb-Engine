@@ -1593,10 +1593,17 @@ end
         Require(transitionedDebug != nullptr && transitionedDebug->revision != 0U &&
                 transitionedDebugInstance != nullptr &&
                 transitionedDebugInstance->controllerAssetId == scene.Animators().Controller(owner.Entity()) &&
+                transitionedDebugInstance->parameters.size() == 1U &&
+                transitionedDebugInstance->parameters.front().name == "Blend" &&
+                transitionedDebugInstance->parameters.front().type == kb::scene::AnimatorParameterType::Float &&
+                NearlyEqual(transitionedDebugInstance->parameters.front().floatValue, 0.5F) &&
                 transitionedDebugInstance->layers.size() == 2U &&
+                transitionedDebugInstance->layers.front().name == "Base" &&
                 transitionedDebugInstance->layers.front().activeState == "DirectB" &&
                 transitionedDebugInstance->layers.front().previousState == "Blend" &&
                 transitionedDebugInstance->layers.front().transitioning &&
+                NearlyEqual(transitionedDebugInstance->layers.front().weight, 1.0F) &&
+                NearlyEqual(static_cast<float>(transitionedDebugInstance->layers.front().elapsedSeconds), 0.25F) &&
                 NearlyEqual(transitionedDebugInstance->layers.front().transitionProgress, 0.5F) &&
                 transitionedDebugInstance->bones.size() == 3U &&
                 transitionedDebugInstance->paletteMatrixCount == 3U &&
