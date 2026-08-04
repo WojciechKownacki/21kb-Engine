@@ -584,6 +584,8 @@ void RunAnimationClipEditorDocumentStateTest() {
     kb::editor::tests::Require(document.Undo() && !document.Dirty() && document.Redo() &&
             !document.UpsertEvent(0U, 0.5F) && !document.UpsertEvent(10U, 2.0F),
         "Animation Clip document should undo grouped edits and reject invalid event times");
+    kb::editor::tests::Require(document.MarkSaved() && !document.Dirty() && !document.CanUndo() && !document.CanRedo(),
+        "Animation Clip document save should establish a clean history baseline");
 }
 
 // A click on any tab — the active one or an inactive sibling — must hit-test as a

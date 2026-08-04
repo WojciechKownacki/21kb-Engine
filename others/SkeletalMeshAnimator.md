@@ -792,7 +792,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     walidacją czasu oraz deterministycznym sortowaniem.
 67. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać wybór wyłącznie kompatybilnego preview mesh/skeleton i czytelną
     diagnostykę niezgodności.
-68. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Save ma automatycznie walidować, budować runtime clip i hot reloadować
+68. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Save ma automatycznie walidować, budować runtime clip i hot reloadować
     go dopiero po atomowym sukcesie.
 69. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać headless tests scrub/evaluation/edit/save/reopen oraz golden
     screenshots timeline.
