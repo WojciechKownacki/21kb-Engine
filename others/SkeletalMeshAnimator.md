@@ -805,7 +805,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     graph/state machine oraz Details/Asset Browser.
 72. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować Parameters, Layers, Entry/default state, state nodes,
     transitions, conditions i transition Details.
-73. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać stabilne node/edge IDs, serializowany graph layout, comments,
+73. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać stabilne node/edge IDs, serializowany graph layout, comments,
     groups, copy/paste, rename, delete i multi-selection.
 74. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować drag Animation Clip z kompatybilnego Asset Browsera na
     graph oraz automatyczne utworzenie stanu.

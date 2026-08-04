@@ -9079,6 +9079,7 @@ bool EditorSceneContext::OpenAnimatorEditorAsset(kb::assets::AssetId id) {
     animationClipEditorDocument_ = {};
     animatorEditorAssetId_ = id;
     animatorEditorController_ = *controller;
+    animatorEditorGraphDocument_.Open(*controller);
     skeletalMeshEditorTree_.SetSkeleton(*skeleton);
     skeletalMeshEditorDetails_.SetDocument(*previewMesh, *skeleton, *previewMeshMetadata);
     static_cast<void>(AnimationPreviewScene());
@@ -9104,9 +9105,15 @@ std::uint64_t EditorSceneContext::AnimatorEditorPreviewRevision() const noexcept
 }
 
 const kb::scene::AnimatorController* EditorSceneContext::AnimatorEditorController() const noexcept {
-    return animatorEditorAssetId_.IsValid() && animatorEditorController_.has_value()
-        ? &*animatorEditorController_
-        : nullptr;
+    return animatorEditorAssetId_.IsValid() ? animatorEditorGraphDocument_.Controller() : nullptr;
+}
+
+AnimatorEditorGraphDocumentState& EditorSceneContext::AnimatorEditorGraphDocument() noexcept {
+    return animatorEditorGraphDocument_;
+}
+
+const AnimatorEditorGraphDocumentState& EditorSceneContext::AnimatorEditorGraphDocument() const noexcept {
+    return animatorEditorGraphDocument_;
 }
 
 bool EditorSceneContext::OpenAnimationClipEditorAsset(kb::assets::AssetId id) {
@@ -9177,6 +9184,7 @@ bool EditorSceneContext::OpenAnimationClipEditorAsset(kb::assets::AssetId id) {
     static_cast<void>(animationPreview_.Transport().SetLooping(clip->looping));
     animatorEditorAssetId_ = {};
     animatorEditorController_.reset();
+    animatorEditorGraphDocument_ = {};
     animationClipEditorAssetId_ = id;
     animationClipEditorTimeline_.SetClip(*clip);
     animationClipEditorDocument_.Open(id, *clip);
@@ -9356,6 +9364,7 @@ bool EditorSceneContext::OpenSkeletalMeshEditorAsset(kb::assets::AssetId id) {
     static_cast<void>(animationPreview_.Overlays().SetBonesVisible(true));
     animatorEditorAssetId_ = {};
     animatorEditorController_.reset();
+    animatorEditorGraphDocument_ = {};
     animationClipEditorAssetId_ = {};
     animationClipEditorTimeline_ = {};
     skeletalMeshEditorAssetId_ = id;

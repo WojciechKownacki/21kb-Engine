@@ -110,6 +110,42 @@ AnimatorParameterType ConditionParameterType(AnimatorConditionMode mode) {
     return AnimatorParameterType::Float;
 }
 
+void EnsureControllerGraphIdentity(AnimatorController& controller) {
+    std::uint64_t nextId = 1U;
+    const auto reserve = [&nextId](std::uint64_t id) {
+        if (id >= nextId) nextId = id + 1U;
+    };
+    for (const AnimatorControllerLayer& layer : controller.layers) {
+        for (const AnimatorControllerState& state : layer.states) reserve(state.id);
+        for (const AnimatorControllerTransition& transition : layer.transitions) reserve(transition.id);
+    }
+    for (const AnimatorGraphComment& comment : controller.graphComments) reserve(comment.id);
+    for (const AnimatorGraphGroup& group : controller.graphGroups) reserve(group.id);
+    for (AnimatorControllerLayer& layer : controller.layers) {
+        for (AnimatorControllerState& state : layer.states) {
+            if (state.id == 0U) state.id = nextId++;
+        }
+        for (AnimatorControllerTransition& transition : layer.transitions) {
+            if (transition.id == 0U) transition.id = nextId++;
+        }
+    }
+    std::unordered_set<std::uint64_t> positioned;
+    for (const AnimatorGraphNodeLayout& node : controller.graphLayout) positioned.insert(node.stateId);
+    for (std::size_t layerIndex = 0U; layerIndex < controller.layers.size(); ++layerIndex) {
+        const AnimatorControllerLayer& layer = controller.layers[layerIndex];
+        for (std::size_t stateIndex = 0U; stateIndex < layer.states.size(); ++stateIndex) {
+            const AnimatorControllerState& state = layer.states[stateIndex];
+            if (positioned.insert(state.id).second) {
+                controller.graphLayout.push_back(AnimatorGraphNodeLayout{
+                    .stateId = state.id,
+                    .positionX = static_cast<std::int32_t>(stateIndex * 240U),
+                    .positionY = static_cast<std::int32_t>(layerIndex * 180U),
+                });
+            }
+        }
+    }
+}
+
 bool ValidateClip(AnimationClip& clip, std::string* error = nullptr) {
     const auto setError = [error](const char* message) {
         if (error != nullptr) *error = message;
@@ -564,7 +600,9 @@ std::optional<AnimatorController> AnimationAssetIO::LoadController(
         } else if (command == "state") {
             std::size_t layerIndex = 0U;
             AnimatorControllerState state{};
-            if (!(input >> layerIndex >> std::quoted(state.name) >> std::quoted(state.clipReference)) ||
+            if (!(input >> layerIndex) ||
+                (schemaVersion >= 3U && !(input >> state.id)) ||
+                !(input >> std::quoted(state.name) >> std::quoted(state.clipReference)) ||
                 layerIndex >= controller.layers.size() || !EndOfRecord(input)) return std::nullopt;
             controller.layers[layerIndex].states.push_back(std::move(state));
         } else if (command == "blend1D") {
@@ -590,10 +628,34 @@ std::optional<AnimatorController> AnimationAssetIO::LoadController(
         } else if (command == "transition") {
             std::size_t layerIndex = 0U;
             AnimatorControllerTransition transition{};
-            if (!(input >> layerIndex >> std::quoted(transition.fromState) >> std::quoted(transition.toState) >>
+            if (!(input >> layerIndex) ||
+                (schemaVersion >= 3U && !(input >> transition.id)) ||
+                !(input >> std::quoted(transition.fromState) >> std::quoted(transition.toState) >>
                     transition.durationSeconds >> transition.exitNormalizedTime) ||
                 layerIndex >= controller.layers.size() || !EndOfRecord(input)) return std::nullopt;
             controller.layers[layerIndex].transitions.push_back(std::move(transition));
+        } else if (command == "graphNode") {
+            if (schemaVersion < 3U) return std::nullopt;
+            AnimatorGraphNodeLayout node{};
+            if (!(input >> node.stateId >> node.positionX >> node.positionY) || !EndOfRecord(input)) return std::nullopt;
+            controller.graphLayout.push_back(node);
+        } else if (command == "graphComment") {
+            if (schemaVersion < 3U) return std::nullopt;
+            AnimatorGraphComment comment{};
+            if (!(input >> comment.id >> std::quoted(comment.text) >> comment.positionX >> comment.positionY >>
+                    comment.width >> comment.height) || !EndOfRecord(input)) return std::nullopt;
+            controller.graphComments.push_back(std::move(comment));
+        } else if (command == "graphGroup") {
+            if (schemaVersion < 3U) return std::nullopt;
+            AnimatorGraphGroup group{};
+            std::size_t count = 0U;
+            if (!(input >> group.id >> std::quoted(group.name) >> count)) return std::nullopt;
+            group.stateIds.resize(count);
+            for (std::uint64_t& stateId : group.stateIds) {
+                if (!(input >> stateId)) return std::nullopt;
+            }
+            if (!EndOfRecord(input)) return std::nullopt;
+            controller.graphGroups.push_back(std::move(group));
         } else if (command == "condition") {
             std::size_t layerIndex = 0U;
             std::size_t transitionIndex = 0U;
@@ -652,6 +714,7 @@ std::optional<AnimatorController> AnimationAssetIO::LoadController(
             return std::nullopt;
         }
     }
+    EnsureControllerGraphIdentity(controller);
     if (!ValidateController(controller, error)) return std::nullopt;
     if (error != nullptr) error->clear();
     return controller;
@@ -715,24 +778,26 @@ bool AnimationAssetIO::SaveClip(const std::filesystem::path& path, const Animati
 }
 
 bool AnimationAssetIO::SaveController(const std::filesystem::path& path, const AnimatorController& controller) {
-    if (!ValidateController(controller)) return false;
+    AnimatorController normalized = controller;
+    EnsureControllerGraphIdentity(normalized);
+    if (!ValidateController(normalized)) return false;
     std::ostringstream output;
     output.imbue(std::locale::classic());
     output << std::setprecision(std::numeric_limits<float>::max_digits10);
     output << asset_io::TextAssetHeader(
         kAnimatorControllerAssetType, kAnimatorControllerAssetSchemaVersion);
-    for (const auto& parameter : controller.parameters) {
+    for (const auto& parameter : normalized.parameters) {
         output << "parameter " << std::quoted(parameter.name) << ' ' << ParameterTypeName(parameter.type) << ' ';
         if (parameter.type == AnimatorParameterType::Int) output << parameter.intDefault;
         else if (parameter.type == AnimatorParameterType::Float) output << parameter.floatDefault;
         else output << (parameter.boolDefault ? 1 : 0);
         output << '\n';
     }
-    for (const auto& layer : controller.layers) {
+    for (const auto& layer : normalized.layers) {
         output << "layer " << std::quoted(layer.name) << ' ' << std::quoted(layer.defaultState) << ' ' << layer.weight << ' ' << layer.mask << '\n';
-        const std::size_t layerIndex = static_cast<std::size_t>(&layer - controller.layers.data());
+        const std::size_t layerIndex = static_cast<std::size_t>(&layer - normalized.layers.data());
         for (const auto& state : layer.states) {
-            output << "state " << layerIndex << ' ' << std::quoted(state.name) << ' ' << std::quoted(state.clipReference) << '\n';
+            output << "state " << layerIndex << ' ' << state.id << ' ' << std::quoted(state.name) << ' ' << std::quoted(state.clipReference) << '\n';
             const std::size_t stateIndex =
                 static_cast<std::size_t>(&state - layer.states.data());
             if (!state.blendChildren.empty()) {
@@ -746,7 +811,7 @@ bool AnimationAssetIO::SaveController(const std::filesystem::path& path, const A
         }
         for (std::size_t transitionIndex = 0U; transitionIndex < layer.transitions.size(); ++transitionIndex) {
             const AnimatorControllerTransition& transition = layer.transitions[transitionIndex];
-            output << "transition " << layerIndex << ' ' << std::quoted(transition.fromState) << ' '
+            output << "transition " << layerIndex << ' ' << transition.id << ' ' << std::quoted(transition.fromState) << ' '
                    << std::quoted(transition.toState) << ' ' << transition.durationSeconds << ' '
                    << transition.exitNormalizedTime << '\n';
             for (const AnimatorTransitionCondition& condition : transition.conditions) {
@@ -765,7 +830,7 @@ bool AnimationAssetIO::SaveController(const std::filesystem::path& path, const A
             }
         }
     }
-    for (const AnimatorRigConstraint& constraint : controller.rigConstraints) {
+    for (const AnimatorRigConstraint& constraint : normalized.rigConstraints) {
         if (constraint.constrainedBoneId != 0U) {
             output << "skeletalConstraint "
                    << RigConstraintTypeName(constraint.type) << ' '
@@ -787,6 +852,18 @@ bool AnimationAssetIO::SaveController(const std::filesystem::path& path, const A
                << std::quoted(constraint.target) << ' '
                << std::quoted(constraint.poleTarget) << ' '
                << constraint.weight << '\n';
+    }
+    for (const AnimatorGraphNodeLayout& node : normalized.graphLayout) {
+        output << "graphNode " << node.stateId << ' ' << node.positionX << ' ' << node.positionY << '\n';
+    }
+    for (const AnimatorGraphComment& comment : normalized.graphComments) {
+        output << "graphComment " << comment.id << ' ' << std::quoted(comment.text) << ' ' << comment.positionX << ' '
+               << comment.positionY << ' ' << comment.width << ' ' << comment.height << '\n';
+    }
+    for (const AnimatorGraphGroup& group : normalized.graphGroups) {
+        output << "graphGroup " << group.id << ' ' << std::quoted(group.name) << ' ' << group.stateIds.size();
+        for (const std::uint64_t stateId : group.stateIds) output << ' ' << stateId;
+        output << '\n';
     }
     return WriteText(path, output.str());
 }

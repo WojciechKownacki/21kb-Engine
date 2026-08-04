@@ -68,14 +68,19 @@ void PaintGraph(HDC dc, const RECT& rect, const kb::scene::AnimatorController* c
         GdiDrawing::DrawSharpFrame(dc, entry, RGB(57, 67, 48), RGB(132, 172, 106));
         DrawText(dc, RECT{ entry.left + 4, entry.top + 3, entry.right - 4, entry.bottom - 3 }, "Entry", RGB(218, 233, 205), 10, FW_SEMIBOLD);
         for (std::size_t stateIndex = 0U; stateIndex < layer.states.size(); ++stateIndex) {
-            const int left = rect.left + entryWidth + 30 + static_cast<int>(stateIndex) * (nodeWidth + 22);
+            const kb::scene::AnimatorControllerState& state = layer.states[stateIndex];
+            const auto layout = std::ranges::find_if(controller->graphLayout, [&state](const auto& value) {
+                return value.stateId == state.id;
+            });
+            const int left = rect.left + entryWidth + 30 +
+                (layout == controller->graphLayout.end() ? static_cast<int>(stateIndex) * (nodeWidth + 22) : layout->positionX);
             if (left >= rect.right - 8) break;
             const RECT node{ left, rowTop + 22, std::min(static_cast<int>(rect.right) - 8, left + nodeWidth), rowTop + 22 + nodeHeight };
-            const bool defaultState = layer.states[stateIndex].name == layer.defaultState;
+            const bool defaultState = state.name == layer.defaultState;
             GdiDrawing::DrawSharpFrame(dc, node, defaultState ? RGB(42, 72, 91) : RGB(42, 46, 53),
                 defaultState ? RGB(90, 156, 210) : RGB(78, 84, 93));
             DrawText(dc, RECT{ node.left + 7, node.top + 3, node.right - 7, node.bottom - 3 },
-                layer.states[stateIndex].name.c_str(), RGB(224, 230, 237), 11, FW_SEMIBOLD);
+                state.name.c_str(), RGB(224, 230, 237), 11, FW_SEMIBOLD);
             if (defaultState) {
                 const int middle = node.top + (node.bottom - node.top) / 2;
                 GdiDrawing::FillRectColor(dc, RECT{ entry.right, middle, node.left, middle + 2 }, RGB(132, 172, 106));
