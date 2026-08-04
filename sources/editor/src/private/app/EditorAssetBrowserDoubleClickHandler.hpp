@@ -22,6 +22,7 @@ enum class EditorAssetBrowserDoubleClickResult {
     SceneOpened,
     ScriptEditorOpened,
     MaterialEditorOpened,
+    SkeletalMeshEditorOpened,
 };
 
 class EditorAssetBrowserDoubleClickHandler {

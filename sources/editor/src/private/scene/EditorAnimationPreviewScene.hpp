@@ -34,6 +34,7 @@ class EditorAnimationPreviewScene {
 public:
     [[nodiscard]] const kb::scene::Scene& SceneFor(
         const kb::scene::Scene& source, AnimationPreviewContext& context);
+    [[nodiscard]] const kb::scene::Scene* CurrentScene() const noexcept { return scene_.get(); }
     [[nodiscard]] kb::scene::Scene* MutableScene() noexcept { return scene_.get(); }
     [[nodiscard]] EditorViewportCameraState& Camera() noexcept { return camera_; }
     [[nodiscard]] const EditorViewportCameraState& Camera() const noexcept { return camera_; }
