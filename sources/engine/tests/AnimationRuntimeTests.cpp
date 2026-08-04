@@ -175,14 +175,14 @@ void RunAnimationRuntimeTests() {
     };
     controller.layers = {
         { .name = "Root Layer", .defaultState = "Walk State", .weight = 1.0F, .mask = 1U, .states = {
-            { .name = "Walk State", .clipReference = "/Game/Animation/Move.kbanim" },
-            { .name = "Run State", .clipReference = "/Game/Animation/Run Fast.kbanim" },
-            { .name = "Blend State", .blendParameter = "Speed", .blendChildren = {
+            { .id = 1U, .name = "Walk State", .clipReference = "/Game/Animation/Move.kbanim" },
+            { .id = 2U, .name = "Run State", .clipReference = "/Game/Animation/Run Fast.kbanim" },
+            { .id = 3U, .name = "Blend State", .blendParameter = "Speed", .blendChildren = {
                 { .threshold = 0.0F, .clipReference = "/Game/Animation/Move.kbanim" },
                 { .threshold = 10.0F, .clipReference = "/Game/Animation/Run Fast.kbanim" },
             } },
         }, .transitions = {
-            { .fromState = "Walk State", .toState = "Run State", .durationSeconds = 0.2F,
+            { .id = 4U, .fromState = "Walk State", .toState = "Run State", .durationSeconds = 0.2F,
               .conditions = {
                   { .parameter = "Grounded", .mode = kb::scene::AnimatorConditionMode::BoolEquals, .boolValue = false },
                   { .parameter = "Lives", .mode = kb::scene::AnimatorConditionMode::IntGreater, .intValue = 3 },
@@ -195,8 +195,23 @@ void RunAnimationRuntimeTests() {
             { .name = "Run State", .clipReference = "/Game/Animation/Run Fast.kbanim" },
         } },
     };
+    controller.graphLayout = {
+        { .stateId = 1U, .positionX = 0, .positionY = 0 },
+        { .stateId = 2U, .positionX = 240, .positionY = 0 },
+        { .stateId = 3U, .positionX = 480, .positionY = 0 },
+    };
+    controller.graphComments = {{ .id = 5U, .text = "Locomotion", .positionX = -20, .positionY = -80, .width = 780, .height = 280 }};
+    controller.graphGroups = {{ .id = 6U, .name = "Movement", .stateIds = { 1U, 2U, 3U } }};
     const auto controllerPath = root / "Assets" / "Animation" / "Character.kbanimcontroller";
     Require(kb::scene::AnimationAssetIO::SaveController(controllerPath, controller), "AnimatorController production asset could not be saved");
+    const std::optional<kb::scene::AnimatorController> persistedController =
+        kb::scene::AnimationAssetIO::LoadController(controllerPath);
+    Require(persistedController.has_value() && persistedController->graphLayout.size() == 5U &&
+            persistedController->graphComments.size() == 1U &&
+            persistedController->graphComments.front().text == "Locomotion" &&
+            persistedController->graphGroups.size() == 1U &&
+            persistedController->graphGroups.front().stateIds == std::vector<std::uint64_t>{ 1U, 2U, 3U },
+        "Animator graph serialization did not preserve layout, comments, and groups");
     const std::filesystem::path roundTripRoot = root / "RoundTrip";
     const std::filesystem::path deterministicClipPath = roundTripRoot / "MoveCopy.kbanim";
     Require(kb::scene::AnimationAssetIO::SaveClip(deterministicClipPath, clip) &&
