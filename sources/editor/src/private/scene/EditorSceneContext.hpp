@@ -24,6 +24,8 @@
 #include "scene/EditorSceneObjectEditTypes.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
 #include "scene/AnimationPreviewContext.hpp"
+#include "scene/EditorAnimationPreviewScene.hpp"
+#include "scene/SkeletalMeshEditorTreeState.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
 #include "scene/material/MaterialEditorState.hpp"
 #include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
@@ -177,6 +179,7 @@ public:
     void FocusAnimationPreview(float durationSeconds = 0.0F) noexcept;
     [[nodiscard]] bool TickAnimationPreviewCamera(float deltaSeconds) noexcept;
     [[nodiscard]] bool TickAnimationPreviewPlayback(float deltaSeconds) noexcept;
+    [[nodiscard]] AnimationPreviewOverlaySnapshot AnimationPreviewOverlays() const;
     [[nodiscard]] EditorViewportCameraState& ViewportCamera() noexcept;
     [[nodiscard]] const EditorViewportCameraState& ViewportCamera() const noexcept;
     [[nodiscard]] EditorViewportCameraState& ViewportCamera(std::uint64_t viewportKey) noexcept;
@@ -412,6 +415,21 @@ public:
     [[nodiscard]] bool HasSkeletalMeshEditorAsset() const noexcept;
     [[nodiscard]] const kb::scene::Scene* SkeletalMeshEditorPreviewScene() const noexcept;
     [[nodiscard]] std::uint64_t SkeletalMeshEditorPreviewRevision() const noexcept;
+    [[nodiscard]] bool SetSkeletalMeshEditorTreeFilter(std::string filter);
+    [[nodiscard]] const std::string& SkeletalMeshEditorTreeFilter() const noexcept;
+    [[nodiscard]] bool IsSkeletalMeshEditorTreeSearchFocused() const noexcept;
+    void FocusSkeletalMeshEditorTreeSearch(bool focused) noexcept;
+    void AppendSkeletalMeshEditorTreeSearchText(wchar_t character);
+    void InsertSkeletalMeshEditorTreeSearchText(std::string_view text);
+    void BackspaceSkeletalMeshEditorTreeSearch();
+    void SelectAllSkeletalMeshEditorTreeSearch() noexcept;
+    void ClearSkeletalMeshEditorTreeSearch();
+    [[nodiscard]] std::vector<SkeletalMeshEditorTreeRow> SkeletalMeshEditorTreeRows() const;
+    [[nodiscard]] bool SelectSkeletalMeshEditorBone(kb::scene::SkeletonBoneId boneId);
+    [[nodiscard]] bool SelectSkeletalMeshEditorSocket(std::string socketName);
+    [[nodiscard]] bool ClearSkeletalMeshEditorTreeSelection();
+    [[nodiscard]] kb::scene::SkeletonBoneId SelectedSkeletalMeshEditorBone() const noexcept;
+    [[nodiscard]] const std::string& SelectedSkeletalMeshEditorSocket() const noexcept;
     [[nodiscard]] bool OpenMaterialEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenMaterialEditorGraphSourceAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenMaterialEditorMaterialTypeAsset(kb::assets::AssetId id);
@@ -961,6 +979,7 @@ private:
     AnimationPreviewContext animationPreview_;
     std::unique_ptr<EditorAnimationPreviewScene> animationPreviewScene_;
     kb::assets::AssetId skeletalMeshEditorAssetId_{};
+    SkeletalMeshEditorTreeState skeletalMeshEditorTree_;
     InspectorPanelState inspector_;
     MaterialEditorState materialEditor_;
     kb::assets::AssetId materialRuntimePreviewAssetId_{};

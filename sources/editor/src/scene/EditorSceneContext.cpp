@@ -1487,6 +1487,12 @@ bool EditorSceneContext::TickAnimationPreviewPlayback(float deltaSeconds) noexce
     return animationPreviewScene_->TickPlayback(animationPreview_, deltaSeconds);
 }
 
+AnimationPreviewOverlaySnapshot EditorSceneContext::AnimationPreviewOverlays() const {
+    return animationPreviewScene_ == nullptr
+        ? AnimationPreviewOverlaySnapshot{}
+        : animationPreviewScene_->BuildOverlays(animationPreview_);
+}
+
 EditorViewportCameraState& EditorSceneContext::ViewportCamera() noexcept {
     return viewportState_.Camera();
 }
@@ -2342,6 +2348,7 @@ bool EditorSceneContext::IsHierarchyRenaming() const noexcept {
 bool EditorSceneContext::IsAnyInlineTextEditActive() const noexcept {
     return IsHierarchyRenaming()
         || IsHierarchySearchFocused()
+        || IsSkeletalMeshEditorTreeSearchFocused()
         || assetBrowser_.IsTextEditing()
         || assetBrowser_.IsSearchFocused()
         || Inspector().IsTextEditing()
@@ -8991,7 +8998,9 @@ bool EditorSceneContext::OpenSkeletalMeshEditorAsset(kb::assets::AssetId id) {
 
     animationPreview_.SetAssets(skeletonId, id, {}, {});
     animationPreview_.SetPoseMode(AnimationPreviewPoseMode::Reference);
+    static_cast<void>(animationPreview_.Overlays().SetBonesVisible(true));
     skeletalMeshEditorAssetId_ = id;
+    skeletalMeshEditorTree_.SetSkeleton(*skeleton);
     static_cast<void>(AnimationPreviewScene());
     console_.Info("Skeletal Mesh Editor", "Opened document: " + meshMetadata->virtualPath.generic_string());
     return true;
@@ -9012,6 +9021,66 @@ const kb::scene::Scene* EditorSceneContext::SkeletalMeshEditorPreviewScene() con
 
 std::uint64_t EditorSceneContext::SkeletalMeshEditorPreviewRevision() const noexcept {
     return animationPreviewScene_ == nullptr ? 0U : animationPreviewScene_->Revision();
+}
+
+bool EditorSceneContext::SetSkeletalMeshEditorTreeFilter(std::string filter) {
+    return skeletalMeshEditorTree_.SetFilter(std::move(filter));
+}
+
+const std::string& EditorSceneContext::SkeletalMeshEditorTreeFilter() const noexcept {
+    return skeletalMeshEditorTree_.Filter();
+}
+
+bool EditorSceneContext::IsSkeletalMeshEditorTreeSearchFocused() const noexcept {
+    return skeletalMeshEditorTree_.IsSearchFocused();
+}
+
+void EditorSceneContext::FocusSkeletalMeshEditorTreeSearch(bool focused) noexcept {
+    skeletalMeshEditorTree_.FocusSearch(focused);
+}
+
+void EditorSceneContext::AppendSkeletalMeshEditorTreeSearchText(wchar_t character) {
+    skeletalMeshEditorTree_.AppendSearchText(character);
+}
+
+void EditorSceneContext::InsertSkeletalMeshEditorTreeSearchText(std::string_view text) {
+    skeletalMeshEditorTree_.InsertSearchText(text);
+}
+
+void EditorSceneContext::BackspaceSkeletalMeshEditorTreeSearch() {
+    skeletalMeshEditorTree_.BackspaceSearch();
+}
+
+void EditorSceneContext::SelectAllSkeletalMeshEditorTreeSearch() noexcept {
+    skeletalMeshEditorTree_.SelectAllSearch();
+}
+
+void EditorSceneContext::ClearSkeletalMeshEditorTreeSearch() {
+    skeletalMeshEditorTree_.ClearSearch();
+}
+
+std::vector<SkeletalMeshEditorTreeRow> EditorSceneContext::SkeletalMeshEditorTreeRows() const {
+    return skeletalMeshEditorTree_.Rows();
+}
+
+bool EditorSceneContext::SelectSkeletalMeshEditorBone(kb::scene::SkeletonBoneId boneId) {
+    return skeletalMeshEditorTree_.SelectBone(boneId);
+}
+
+bool EditorSceneContext::SelectSkeletalMeshEditorSocket(std::string socketName) {
+    return skeletalMeshEditorTree_.SelectSocket(std::move(socketName));
+}
+
+bool EditorSceneContext::ClearSkeletalMeshEditorTreeSelection() {
+    return skeletalMeshEditorTree_.ClearSelection();
+}
+
+kb::scene::SkeletonBoneId EditorSceneContext::SelectedSkeletalMeshEditorBone() const noexcept {
+    return skeletalMeshEditorTree_.SelectedBone();
+}
+
+const std::string& EditorSceneContext::SelectedSkeletalMeshEditorSocket() const noexcept {
+    return skeletalMeshEditorTree_.SelectedSocket();
 }
 
 bool EditorSceneContext::SetAnimatorControllerAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {

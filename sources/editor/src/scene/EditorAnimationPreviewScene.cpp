@@ -188,6 +188,7 @@ AnimationPreviewOverlaySnapshot EditorAnimationPreviewScene::BuildOverlays(
                             .from = WorldPoint(owner, positions[static_cast<std::size_t>(parent - boneIds.begin())]),
                             .to = position,
                             .color = { 0.96F, 0.35F, 0.12F },
+                            .boneId = boneIds[index],
                         });
                     }
                 }

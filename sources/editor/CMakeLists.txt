@@ -44,6 +44,7 @@ add_executable(kb_editor WIN32
     src/app/EditorMeshAssetSceneDropHandler.cpp
     src/app/EditorPrefabAssetSceneDropHandler.cpp
     src/app/EditorHierarchySearchInputHandler.cpp
+    src/app/EditorSkeletalMeshTreeSearchInputHandler.cpp
     src/app/EditorMouseWheelRouter.cpp
     src/app/inspector/EditorInspectorPointerController.cpp
     src/app/plugins/EditorPluginsPointerController.cpp
