@@ -186,7 +186,18 @@ void AnimatorEditorPanelRenderer::Paint(
     else {
         GdiDrawing::FillRectColor(dc, layout.graph, RGB(29, 32, 37));
         DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 10, layout.graph.right - 12, layout.graph.top + 34 }, "Motion / Blend Document", RGB(204, 212, 221), 13, FW_SEMIBOLD);
-        DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 42, layout.graph.right - 12, layout.graph.top + 62 }, motion->clipReference.empty() ? motion->blendParameter.c_str() : motion->clipReference.c_str(), RGB(168, 178, 190), 12);
+        if (!motion->clipReference.empty()) {
+            DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 42, layout.graph.right - 12, layout.graph.top + 62 }, motion->clipReference.c_str(), RGB(168, 178, 190), 12);
+        } else {
+            DrawText(dc, RECT{ layout.graph.left + 12, layout.graph.top + 42, layout.graph.right - 12, layout.graph.top + 62 },
+                ("1D Blend Tree | " + motion->blendParameter).c_str(), RGB(130, 167, 205), 12, FW_SEMIBOLD);
+            int y = layout.graph.top + 70;
+            for (const kb::scene::AnimatorControllerState::BlendChild& child : motion->blendChildren) {
+                const std::string row = std::to_string(child.threshold) + "  |  " + child.clipReference;
+                DrawText(dc, RECT{ layout.graph.left + 20, y, layout.graph.right - 12, y + 20 }, row.c_str(), RGB(168, 178, 190), 11);
+                y += 22;
+            }
+        }
     }
     PaintDetails(dc, layout.details, controller);
     if (sceneViewport == nullptr) return;
