@@ -88,6 +88,8 @@
     { "op": "write_file", "path": "Assets/Skeletal/AutomationRig.kbskeleton", "content": "21kb Skeleton 1\nbone 1 -1 \"Root\" 0 0 0 0 0 0 1 1 1 1\ninverseBind 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1\n" },
     { "op": "discover_assets" },
     { "op": "write_file", "path": "Assets/Skeletal/AutomationMesh.kbskeletalmesh", "content": "21kb SkeletalMesh 1\nskeleton {{ASSET_ID:/Game/Skeletal/AutomationRig.kbskeleton}} 16356918308828979207\nbounds 0.5 0.5 0 0.5 0.5 0.1\nlod 1\nvertex 0 0 0 0 0 1 0 1 0 0 1 0 0 0 0 0 0 1 0 0 0\nvertex 0 1 0 0 0 1 0 1 0 0 1 1 0 0 0 0 0 1 0 0 0\nvertex 0 0 1 0 0 1 0 1 0 0 1 0 1 0 0 0 0 1 0 0 0\nindex 0 0\nindex 0 1\nindex 0 2\nsection 0 0 3 0\nsectionBone 0 0 1\nrequiredBone 0 1\n" },
+    { "op": "write_file", "path": "Assets/Animation/ProbeA.kbanim", "content": "21kb AnimationClip 2\ndurationSeconds 1\nlooping 1\ntargetSkeleton {{ASSET_ID:/Game/Skeletal/AutomationRig.kbskeleton}} 16356918308828979207\nskeletalTrack 1 18446744073709551615\nskeletalKey 0 0 0 0 0 0 0 0 1 1 1 1\nskeletalKey 0 1 1 0 0 0 0 0 1 1 1 1\nevent 0.25 730001\nrootMotion None 0\n" },
+    { "op": "write_file", "path": "Assets/Animation/ProbeB.kbanim", "content": "21kb AnimationClip 2\ndurationSeconds 1\nlooping 1\ntargetSkeleton {{ASSET_ID:/Game/Skeletal/AutomationRig.kbskeleton}} 16356918308828979207\nskeletalTrack 1 18446744073709551615\nskeletalKey 0 0 0 0 0 0 0 0 1 1 1 1\nskeletalKey 0 1 2 0 0 0 0 0 1 1 1 1\nevent 0.5 730002\nrootMotion None 0\n" },
     { "op": "write_file", "path": "Assets/Automation/RuntimeProbe.kbgraph", "content": "kbgraph 1\nname RuntimeProbe\nnode 1 Event Ready\npin 1 Output then Void\nnode 2 CallNative Function.Save.Clear\npin 2 Input exec Void\npin 2 Output then Void\npin 2 Output cleared Bool\nedge exec 1 then 2 exec\n" },
     {
       "op": "write_file",
@@ -131,7 +133,7 @@
     { "op": "open_asset", "asset": "/Game/Automation/UniversalRuntimeProbe.lua" },
     { "op": "capture", "panel": "script_editor", "checkpoint": "01-script-editor" },
     { "op": "open_asset", "asset": "/Game/Animation/Automation.kbanimcontroller" },
-    { "op": "capture", "panel": "script_editor", "checkpoint": "01b-animation-controller-editor" },
+    { "op": "capture", "panel": "animator_editor", "checkpoint": "01b-animator-workspace" },
     { "op": "open_asset", "asset": "/Game/Cinematics/Automation.kbtimeline" },
     { "op": "capture", "panel": "script_editor", "checkpoint": "01c-timeline-editor" },
 
