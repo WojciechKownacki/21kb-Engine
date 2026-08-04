@@ -308,13 +308,15 @@ void RunAnimationRuntimeTests() {
     kb::scene::AnimatorController invalidBlendController = controller;
     invalidBlendController.layers[0].states[2].blendParameter = "Grounded";
     std::string invalidBlendError;
+    const std::string controllerBeforeInvalidSave = ReadTextFile(controllerPath);
     Require(!kb::scene::AnimationAssetIO::SaveController(
-                root / "Assets" / "Animation" / "InvalidBlend.kbanimcontroller",
+                controllerPath,
                 invalidBlendController,
                 &invalidBlendError) &&
             invalidBlendError.find("Blend State") != std::string::npos &&
-            invalidBlendError.find("Grounded") != std::string::npos,
-        "Blend tree validation did not identify its state and parameter");
+            invalidBlendError.find("Grounded") != std::string::npos &&
+            ReadTextFile(controllerPath) == controllerBeforeInvalidSave,
+        "Invalid controller save replaced the active serialized controller");
     kb::scene::AnimatorController invalidRigController = rigController;
     invalidRigController.rigConstraints[0].weight = 0.0F;
     Require(!kb::scene::AnimationAssetIO::SaveController(
