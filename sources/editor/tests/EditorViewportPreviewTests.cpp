@@ -7,6 +7,7 @@
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
@@ -18,6 +19,7 @@
 #include "scene/EditorViewportCameraState.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
 #include "scene/AnimationPreviewContext.hpp"
+#include "scene/EditorAnimationPreviewScene.hpp"
 
 #include "engine/assets/AssetMetadata.hpp"
 
@@ -76,6 +78,34 @@ void RunAnimationPreviewContextTracksSharedBindingTest() {
             !preview.ClipAsset().IsValid() && !preview.ControllerAsset().IsValid() &&
             preview.PoseMode() == kb::editor::AnimationPreviewPoseMode::Reference,
         "Animation preview context did not reset shared state atomically");
+}
+
+void RunAnimationPreviewScenePresentationTest() {
+    kb::scene::Scene source{ kb::scene::SceneMode::Runtime };
+    kb::editor::AnimationPreviewContext context;
+    kb::editor::EditorAnimationPreviewScene preview;
+    const kb::scene::Scene& scene = preview.SceneFor(source, context);
+    kb::editor::tests::Require(scene.Mode() == kb::scene::SceneMode::Runtime, "Animation preview must use a runtime scene");
+    kb::editor::tests::Require(
+        preview.PreviewEntity().IsValid() && preview.CameraEntity().IsValid() &&
+            preview.FloorEntity().IsValid() && preview.EnvironmentEntity().IsValid(),
+        "Animation preview did not create its presentation entities");
+    kb::editor::tests::Require(
+        scene.Components().Cameras().TryGet(preview.CameraEntity()) != nullptr &&
+            scene.Components().MeshRenderers().TryGet(preview.FloorEntity()) != nullptr &&
+            scene.Components().WorldBackdrops().TryGet(preview.EnvironmentEntity()) != nullptr &&
+            scene.Components().AmbientRadiances().TryGet(preview.EnvironmentEntity()) != nullptr,
+        "Animation preview presentation does not include camera, floor and environment");
+    const kb::scene::TransformComponent initialCamera = scene.Transforms().Get(preview.CameraEntity());
+    preview.Camera().BeginNavigation(kb::editor::EditorViewportCameraNavigationMode::Orbit, 10, 10);
+    static_cast<void>(preview.Camera().UpdatePointer(40, 24));
+    preview.Camera().EndNavigation();
+    const kb::scene::TransformComponent movedCamera = preview.SceneFor(source, context).Transforms().Get(preview.CameraEntity());
+    kb::editor::tests::Require(
+        std::fabs(initialCamera.localPosition.x - movedCamera.localPosition.x) > 0.0001F ||
+            std::fabs(initialCamera.localPosition.y - movedCamera.localPosition.y) > 0.0001F ||
+            std::fabs(initialCamera.localPosition.z - movedCamera.localPosition.z) > 0.0001F,
+        "Animation preview camera navigation did not update the runtime camera transform");
 }
 
 void RunFitCameraAndCustomTest() {
@@ -615,6 +645,7 @@ namespace kb::editor::tests {
 
 void RunEditorViewportPreviewTests() {
     RunAnimationPreviewContextTracksSharedBindingTest();
+    RunAnimationPreviewScenePresentationTest();
     RunTerrainToolbarAndStrokeTickPolicyTest();
     RunTexturePreviewLockBitsDecodeTest();
     RunToolbarHudLabelFormatTest();

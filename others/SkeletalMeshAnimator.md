@@ -753,7 +753,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     skinningu, bounds i materiałów z runtime gry.
 48. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać kompatybilny preview Skeleton/SkeletalMesh/Clip/Controller,
     reference pose i animated pose.
-49. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować orbit, pan, zoom, focus, kamerę, podłogę, światło,
+49. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować orbit, pan, zoom, focus, kamerę, podłogę, światło,
     environment i stabilną ekspozycję.
 50. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać play, pause, loop, step, speed i deterministyczny scrub wspólnego
     playheada.
