@@ -232,6 +232,7 @@
     { "op": "assert_file", "path": "Saves/Universal.kbsettings", "min_size": 16 },
     { "op": "assert_no_errors" },
     { "op": "capture_runtime", "checkpoint": "runtime-gpu", "require_non_uniform": true },
+    { "op": "verify_viewport_host_lifecycle" },
     { "op": "capture", "panel": "inspector", "checkpoint": "07-runtime-result" },
     { "op": "capture", "panel": "console", "checkpoint": "08-runtime-console" },
     { "op": "capture", "panel": "scene", "checkpoint": "09-scene-panel" },

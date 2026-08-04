@@ -3448,6 +3448,12 @@ ReadScriptValue(
             *checkpoint };
     }
 
+    if (*operation == "verify_viewport_host_lifecycle") {
+        return {
+            state.automation.VerifyViewportHostLifecycle(),
+            "minimize,deactivate,dpi,resize-move" };
+    }
+
     if (*operation == "snapshot") {
         const auto kind = StringMember(step, "kind", error);
         const auto checkpoint =
