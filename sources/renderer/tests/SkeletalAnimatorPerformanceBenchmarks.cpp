@@ -1,5 +1,8 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/ecs/SystemSchedulerTrace.hpp"
+#include "engine/ecs/World.hpp"
+#include "engine/ecs/WorldTelemetry.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
@@ -16,10 +19,12 @@
 #include "kb/render/Renderer.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
+#include "kb/render/scene/MeshPipeline.hpp"
 
 #include <bgfx/bgfx.h>
 
 #include <array>
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -60,6 +65,23 @@ struct BenchmarkResult {
     std::uint32_t paletteBatches = 0U;
     std::uint32_t submittedDrawCalls = 0U;
     std::uint32_t submittedMeshes = 0U;
+    double updateRate30HzMilliseconds = 0.0;
+    double workerDispatchWallMilliseconds = 0.0;
+    double workerActiveMilliseconds = 0.0;
+    std::size_t workerCount = 0U;
+    std::size_t ecsStorageAllocations = 0U;
+    std::size_t ecsAllocatedBytes = 0U;
+    std::uint64_t ecsQueryCacheMisses = 0U;
+    std::uint64_t ecsQueryRecordCacheMisses = 0U;
+    std::uint64_t ecsQueryBatches = 0U;
+    double ecsAverageBatchSize = 0.0;
+    std::uint32_t submittedDrawGroups = 0U;
+    std::uint32_t drawCommandCacheHits = 0U;
+    std::uint32_t drawCommandCacheMisses = 0U;
+    std::uint32_t drawCommandCacheBuilds = 0U;
+    std::uint32_t lodSelections = 0U;
+    double lodEnabledMilliseconds = 0.0;
+    double lodDisabledMilliseconds = 0.0;
 };
 
 void Require(bool value, const char* message) {
@@ -99,6 +121,97 @@ void Require(bool value, const char* message) {
             },
         },
         .cameraOverride = IdentityCamera(),
+    };
+}
+
+[[nodiscard]] std::array<float, 16U> TranslationMatrix(float z) noexcept {
+    return {
+        1.0F, 0.0F, 0.0F, 0.0F,
+        0.0F, 1.0F, 0.0F, 0.0F,
+        0.0F, 0.0F, 1.0F, 0.0F,
+        0.0F, 0.0F, z, 1.0F,
+    };
+}
+
+struct LodMeasurement {
+    double enabledMilliseconds = 0.0;
+    double disabledMilliseconds = 0.0;
+    std::uint32_t selections = 0U;
+};
+
+[[nodiscard]] LodMeasurement MeasureLodSelection(Workload workload) {
+    kb::render::RenderMeshResource mesh{};
+    mesh.indexCount = 6U;
+    mesh.bounds = kb::render::RenderBoundsSphere{
+        .center = { 0.0F, 0.0F, 0.0F }, .radius = 0.05F,
+    };
+    mesh.sections = {
+        kb::render::RenderMeshSection{
+            .indexStart = 0U, .indexCount = 3U, .bounds = mesh.bounds, .lodLevel = 0U,
+        },
+        kb::render::RenderMeshSection{
+            .indexStart = 3U, .indexCount = 3U, .bounds = mesh.bounds, .lodLevel = 1U,
+        },
+    };
+    mesh.lods = {
+        kb::render::RenderMeshLodDesc{
+            .firstSection = 0U, .sectionCount = 1U, .minScreenCoverage = 0.05F,
+        },
+        kb::render::RenderMeshLodDesc{
+            .firstSection = 1U, .sectionCount = 1U, .minScreenCoverage = 0.0F,
+        },
+    };
+
+    kb::render::SceneRenderDrawGroup enabledGroup{
+        .meshAssetId = 0x534B3132U,
+        .materialAssetId = 0x534B3133U,
+    };
+    enabledGroup.instances.reserve(workload.rigCount);
+    for (std::size_t index = 0U; index < workload.rigCount; ++index) {
+        enabledGroup.instances.push_back(kb::render::SceneRenderMeshInstance{
+            .entityId = index + 1U,
+            .meshAssetId = enabledGroup.meshAssetId,
+            .materialAssetId = enabledGroup.materialAssetId,
+            .model = TranslationMatrix(index % 2U == 0U ? 0.1F : 0.9F),
+            .lodEnabled = true,
+        });
+    }
+    kb::render::SceneRenderDrawGroup disabledGroup = enabledGroup;
+    for (kb::render::SceneRenderMeshInstance& instance : disabledGroup.instances) {
+        instance.lodEnabled = false;
+    }
+    const std::vector<kb::render::SceneRenderDrawGroup> enabledGroups{ enabledGroup };
+    const std::vector<kb::render::SceneRenderDrawGroup> disabledGroups{ disabledGroup };
+    const kb::render::SceneRenderCamera camera = IdentityCamera();
+    const auto measure = [&](const std::vector<kb::render::SceneRenderDrawGroup>& groups) {
+        kb::render::MeshPipelineBuildResult result;
+        const kb::render::MeshPipelineBuildDesc desc{
+            .pass = kb::render::MeshPassType::BaseOpaque,
+            .drawGroups = &groups,
+            .resolvedMeshResource = &mesh,
+            .camera = &camera,
+            .resourceValidation = kb::render::MeshPipelineResourceValidation::Skip,
+        };
+        kb::render::MeshPipelineProcessor::BuildInto(desc, result);
+        constexpr std::uint32_t kSamples = 5U;
+        const Clock::time_point startedAt = Clock::now();
+        for (std::uint32_t sample = 0U; sample < kSamples; ++sample) {
+            kb::render::MeshPipelineProcessor::BuildInto(desc, result);
+        }
+        return std::pair{
+            ElapsedMilliseconds(startedAt) / static_cast<double>(kSamples), result.stats,
+        };
+    };
+
+    const auto [enabledMilliseconds, enabledStats] = measure(enabledGroups);
+    const auto [disabledMilliseconds, disabledStats] = measure(disabledGroups);
+    Require(enabledStats.lodSelectionCount == workload.rigCount * mesh.sections.size() &&
+            disabledStats.lodSelectionCount == workload.rigCount * mesh.sections.size(),
+        "SK-12.88 production LOD pipeline did not evaluate every rig and section");
+    return {
+        .enabledMilliseconds = enabledMilliseconds,
+        .disabledMilliseconds = disabledMilliseconds,
+        .selections = enabledStats.lodSelectionCount,
     };
 }
 
@@ -308,10 +421,29 @@ void WriteTriangleObj(const std::filesystem::path& path) {
         beforeEvaluationCount += instance->evaluationCount;
         beforeHierarchyCount += instance->hierarchySolveCount;
     }
+    kb::ecs::World& ecsWorld = scene.Runtime().EcsWorld();
+    ecsWorld.ResetTelemetryFrameCounters();
+    const kb::ecs::WorldTelemetrySnapshot telemetryBefore = ecsWorld.TelemetrySnapshot();
+    scene.Runtime().SetEcsProfilerEnabled(true);
     const Clock::time_point animationStartedAt = Clock::now();
     static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
     BenchmarkResult result{ .workload = workload };
     result.animationMilliseconds = ElapsedMilliseconds(animationStartedAt);
+    const kb::ecs::WorldTelemetrySnapshot telemetryAfter = ecsWorld.TelemetrySnapshot();
+    const kb::ecs::SystemSchedulerTrace profilerTrace = scene.Runtime().LastEcsProfilerTrace();
+    scene.Runtime().SetEcsProfilerEnabled(false);
+    result.workerDispatchWallMilliseconds = static_cast<double>(
+        profilerTrace.frameCounters.lastWorkerDispatchWallNanoseconds) / 1'000'000.0;
+    result.workerActiveMilliseconds = static_cast<double>(
+        profilerTrace.frameCounters.lastWorkerActiveNanoseconds) / 1'000'000.0;
+    result.workerCount = profilerTrace.frameCounters.lastWorkerDispatchActiveWorkerCount;
+    result.ecsStorageAllocations = telemetryAfter.storageSystemAllocationsSinceReset;
+    result.ecsAllocatedBytes = telemetryAfter.allocatedBytes;
+    result.ecsQueryCacheMisses = telemetryAfter.queryCacheMisses >= telemetryBefore.queryCacheMisses
+        ? telemetryAfter.queryCacheMisses - telemetryBefore.queryCacheMisses : 0U;
+    result.ecsQueryRecordCacheMisses = telemetryAfter.queryRecordCacheMisses;
+    result.ecsQueryBatches = telemetryAfter.queryBatches;
+    result.ecsAverageBatchSize = telemetryAfter.queryAverageEffectiveBatchSize;
 
     std::vector<kb::render::RenderSkinningMatrix> palette;
     for (const kb::scene::SceneEntity entity : rigs) {
@@ -332,6 +464,10 @@ void WriteTriangleObj(const std::filesystem::path& path) {
     Require(result.evaluatedPoses >= workload.rigCount &&
             result.hierarchySolves >= workload.rigCount,
         "SK-12.87 runtime did not execute sampling, blend, constraints and hierarchy solve for every rig");
+
+    const Clock::time_point updateRate30HzStartedAt = Clock::now();
+    static_cast<void>(scene.Runtime().Update(1.0F / 30.0F));
+    result.updateRate30HzMilliseconds = ElapsedMilliseconds(updateRate30HzStartedAt);
 
     constexpr std::uint32_t kPalettePageCapacity = UINT16_MAX;
     kb::render::RenderSkinningPaletteAllocator palettes{
@@ -375,9 +511,18 @@ void WriteTriangleObj(const std::filesystem::path& path) {
     renderer.EndFrame();
     result.submittedMeshes = drawStats.submittedMeshCount;
     result.submittedDrawCalls = drawStats.submittedDrawCallCount;
+    result.submittedDrawGroups = drawStats.submittedDrawGroupCount;
+    result.drawCommandCacheHits = drawStats.meshDrawCommandCacheHitCount;
+    result.drawCommandCacheMisses = drawStats.meshDrawCommandCacheMissCount;
+    result.drawCommandCacheBuilds = drawStats.meshDrawCommandCacheBuildCount;
     Require(result.submittedMeshes == workload.rigCount &&
             result.submittedDrawCalls != 0U && !drawStats.HasMissingResources(),
         "SK-12.87 production renderer did not submit every rig draw proxy");
+
+    const LodMeasurement lod = MeasureLodSelection(workload);
+    result.lodSelections = lod.selections;
+    result.lodEnabledMilliseconds = lod.enabledMilliseconds;
+    result.lodDisabledMilliseconds = lod.disabledMilliseconds;
 
     palettes.Shutdown();
     std::filesystem::remove_all(root, error);
@@ -386,7 +531,7 @@ void WriteTriangleObj(const std::filesystem::path& path) {
 }
 
 void PrintResult(const BenchmarkResult& result) {
-    std::cout << "SK-12.87 " << result.workload.rigCount << " rigs x "
+    std::cout << "SK-12.87/88 " << result.workload.rigCount << " rigs x "
               << result.workload.boneCount << " bones: "
               << "sampling+blend+constraints+hierarchy="
               << std::fixed << std::setprecision(3) << result.animationMilliseconds << "ms"
@@ -397,7 +542,26 @@ void PrintResult(const BenchmarkResult& result) {
               << " palette-batches=" << result.paletteBatches
               << " draw-submission=" << result.drawSubmissionMilliseconds << "ms"
               << " submitted-meshes=" << result.submittedMeshes
-              << " submitted-draw-calls=" << result.submittedDrawCalls << std::endl;
+              << " submitted-draw-groups=" << result.submittedDrawGroups
+              << " submitted-draw-calls=" << result.submittedDrawCalls
+              << " draw-command-cache-hits=" << result.drawCommandCacheHits
+              << " draw-command-cache-misses=" << result.drawCommandCacheMisses
+              << " draw-command-cache-builds=" << result.drawCommandCacheBuilds
+              << " main-thread-update-60hz=" << result.animationMilliseconds << "ms"
+              << " worker-dispatch-wall=" << result.workerDispatchWallMilliseconds << "ms"
+              << " worker-active=" << result.workerActiveMilliseconds << "ms"
+              << " active-workers=" << result.workerCount
+              << " update-rate-30hz=" << result.updateRate30HzMilliseconds << "ms"
+              << " ecs-storage-allocations=" << result.ecsStorageAllocations
+              << " ecs-allocated-bytes=" << result.ecsAllocatedBytes
+              << " ecs-query-cache-misses=" << result.ecsQueryCacheMisses
+              << " ecs-query-record-cache-misses=" << result.ecsQueryRecordCacheMisses
+              << " ecs-query-batches=" << result.ecsQueryBatches
+              << " ecs-average-batch-size=" << result.ecsAverageBatchSize
+              << " lod-selections=" << result.lodSelections
+              << " lod-enabled=" << result.lodEnabledMilliseconds << "ms"
+              << " lod-disabled=" << result.lodDisabledMilliseconds << "ms"
+              << std::endl;
 }
 
 } // namespace

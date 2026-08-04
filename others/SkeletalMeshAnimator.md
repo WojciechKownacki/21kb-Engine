@@ -839,7 +839,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
 
 87. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać benchmark 100 i 1000 rigów po 100–200 kości dla sampling, blend,
     constraints, hierarchy solve, palette upload i draw submission.
-88. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zmierzyć alokacje, cache misses, czas worker/main/render thread,
+88. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zmierzyć alokacje, cache misses, czas worker/main/render thread,
     batching oraz koszty LOD/update-rate.
 89. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Wprowadzić równoległą ewaluację i update-rate optimization dopiero na
     podstawie pomiarów, zachowując deterministyczny wynik.
