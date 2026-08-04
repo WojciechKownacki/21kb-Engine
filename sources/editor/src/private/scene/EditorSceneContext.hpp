@@ -420,6 +420,7 @@ public:
     [[nodiscard]] bool HasAnimatorEditorAsset() const noexcept;
     [[nodiscard]] const kb::scene::Scene* AnimatorEditorPreviewScene() const noexcept;
     [[nodiscard]] std::uint64_t AnimatorEditorPreviewRevision() const noexcept;
+    [[nodiscard]] const kb::scene::AnimatorController* AnimatorEditorController() const noexcept;
     [[nodiscard]] kb::assets::AssetId AnimationClipEditorAssetId() const noexcept;
     [[nodiscard]] bool HasAnimationClipEditorAsset() const noexcept;
     [[nodiscard]] const kb::scene::Scene* AnimationClipEditorPreviewScene() const noexcept;
@@ -1020,6 +1021,7 @@ private:
     AnimationPreviewContext animationPreview_;
     std::unique_ptr<EditorAnimationPreviewScene> animationPreviewScene_;
     kb::assets::AssetId animatorEditorAssetId_{};
+    std::optional<kb::scene::AnimatorController> animatorEditorController_;
     kb::assets::AssetId animationClipEditorAssetId_{};
     AnimationClipTimelineState animationClipEditorTimeline_;
     AnimationClipEditorDocumentState animationClipEditorDocument_;
