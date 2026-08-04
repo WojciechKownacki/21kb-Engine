@@ -841,7 +841,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     constraints, hierarchy solve, palette upload i draw submission.
 88. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zmierzyć alokacje, cache misses, czas worker/main/render thread,
     batching oraz koszty LOD/update-rate.
-89. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Wprowadzić równoległą ewaluację i update-rate optimization dopiero na
+89. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Wprowadzić równoległą ewaluację i update-rate optimization dopiero na
     podstawie pomiarów, zachowując deterministyczny wynik.
 90. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać stress tests reload/reimport, asset eviction, scene unload,
     renderer reset i zniszczenie encji w trakcie debugowania.

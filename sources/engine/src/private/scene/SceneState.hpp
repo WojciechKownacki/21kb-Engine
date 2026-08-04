@@ -166,6 +166,10 @@ struct AnimatorInstance {
     // component edit; it is never exposed or serialized as independent state.
     float speed = 1.0F;
     float lastAppliedComponentSpeed = 1.0F;
+    float poseUpdateRateHz = 0.0F;
+    float lastAppliedComponentPoseUpdateRateHz = 0.0F;
+    double poseUpdateAccumulatorSeconds = 0.0;
+    bool hasEvaluatedPose = false;
 };
 
 using AnimatorRuntimeRecord = AnimatorInstance;
@@ -299,6 +303,11 @@ public:
     std::string localizationLanguage;
     std::map<std::uint64_t, AnimatorInstance> animators;
     std::vector<AnimationEventRecord> pendingAnimationEvents;
+    std::unique_ptr<kb::ecs::WorkerPool> animatorWorkerPool;
+    std::vector<AnimatorRuntimeRecord*> animatorParallelPoseScratch;
+    std::size_t lastAnimatorParallelEvaluationCount = 0U;
+    std::size_t lastAnimatorParallelWorkerCount = 1U;
+    std::size_t lastAnimatorUpdateRateSkippedPoseCount = 0U;
     std::map<std::uint64_t, TimelineRuntimeRecord> timelines;
     std::map<std::uint64_t, UIDocumentRuntimeRecord> uiDocuments;
     std::map<std::uint64_t, ContentInstanceRuntimeRecord> contentInstances;
