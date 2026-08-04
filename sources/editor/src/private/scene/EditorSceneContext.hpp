@@ -26,6 +26,7 @@
 #include "scene/AnimationPreviewContext.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
 #include "scene/AnimationClipEditorDocumentState.hpp"
+#include "scene/AnimatorEditorGraphDocumentState.hpp"
 #include "scene/EditorAnimationPreviewScene.hpp"
 #include "scene/SkeletalMeshEditorTreeState.hpp"
 #include "scene/SkeletalMeshEditorDetailsState.hpp"
@@ -421,6 +422,8 @@ public:
     [[nodiscard]] const kb::scene::Scene* AnimatorEditorPreviewScene() const noexcept;
     [[nodiscard]] std::uint64_t AnimatorEditorPreviewRevision() const noexcept;
     [[nodiscard]] const kb::scene::AnimatorController* AnimatorEditorController() const noexcept;
+    [[nodiscard]] AnimatorEditorGraphDocumentState& AnimatorEditorGraphDocument() noexcept;
+    [[nodiscard]] const AnimatorEditorGraphDocumentState& AnimatorEditorGraphDocument() const noexcept;
     [[nodiscard]] kb::assets::AssetId AnimationClipEditorAssetId() const noexcept;
     [[nodiscard]] bool HasAnimationClipEditorAsset() const noexcept;
     [[nodiscard]] const kb::scene::Scene* AnimationClipEditorPreviewScene() const noexcept;
@@ -1022,6 +1025,7 @@ private:
     std::unique_ptr<EditorAnimationPreviewScene> animationPreviewScene_;
     kb::assets::AssetId animatorEditorAssetId_{};
     std::optional<kb::scene::AnimatorController> animatorEditorController_;
+    AnimatorEditorGraphDocumentState animatorEditorGraphDocument_;
     kb::assets::AssetId animationClipEditorAssetId_{};
     AnimationClipTimelineState animationClipEditorTimeline_;
     AnimationClipEditorDocumentState animationClipEditorDocument_;
