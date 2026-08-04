@@ -4,10 +4,19 @@
 #include "docking/EditorDockModel.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
 #include "rendering/EditorToolbarLayout.hpp"
+#include "rendering/SkeletalMeshEditorPanelLayout.hpp"
+#include "rendering/AnimatorEditorPanelRenderer.hpp"
+#include "scene/SkeletalMeshEditorTreeState.hpp"
+#include "scene/SkeletalMeshEditorDetailsState.hpp"
+#include "scene/SkeletalMeshEditorDocumentState.hpp"
+#include "scene/AnimationClipTimelineState.hpp"
+#include "scene/AnimationClipEditorDocumentState.hpp"
+#include "scene/AnimatorEditorGraphDocumentState.hpp"
 #include "windowing/FloatingWindowControlHitTester.hpp"
 #include "windowing/FloatingWindowControlLayout.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -237,14 +246,19 @@ void RunTabStripDropInsertsAtResolvedIndexTest() {
     inspectorLayout = FindPanelLayout(tabbedLayout, 4U);
     kb::editor::tests::Require(sceneLayout != nullptr && inspectorLayout != nullptr, "Inspector did not dock next to Scene");
     kb::editor::tests::Require(sceneLayout->leafId == inspectorLayout->leafId, "Scene/Inspector tabs should share a leaf");
+    const std::vector<std::uint32_t> tabOrder = PanelOrderInLeaf(tabbedLayout, sceneLayout->leafId);
+    const auto inspectorOrder = std::find(tabOrder.begin(), tabOrder.end(), 4U);
+    kb::editor::tests::Require(inspectorOrder != tabOrder.end(), "Inspector tab is missing from its resolved leaf");
+    const std::uint32_t expectedInsertionIndex = static_cast<std::uint32_t>(
+        std::distance(tabOrder.begin(), inspectorOrder));
 
     const std::optional<kb::editor::DockDropPreview> preview =
         model.Queries().ResolveDropPreview(tabbedLayout, inspectorLayout->tab.x + 1, inspectorLayout->tab.y + 1);
     kb::editor::tests::Require(preview.has_value(), "Tab strip did not resolve a drop marker");
     kb::editor::tests::Require(preview->kind == kb::editor::DockDropPreviewKind::StripMarker, "Tab strip drop should use a strip marker preview");
-    // The default center leaf carries Scene (2), Script Editor (8), and
-    // Material Editor (10), so the docked Inspector (4) lands at tab index 3.
-    kb::editor::tests::Require(preview->tabInsertionIndex == 3U, "Tab strip insertion index did not match the cursor position");
+    kb::editor::tests::Require(
+        preview->tabInsertionIndex == expectedInsertionIndex,
+        "Tab strip insertion index did not match the cursor position");
     kb::editor::tests::Require(
         preview->rect.width == 3 && preview->rect.height == inspectorLayout->tab.height,
         "Tab strip marker geometry should be a thin vertical marker");
@@ -253,8 +267,13 @@ void RunTabStripDropInsertsAtResolvedIndexTest() {
     model.Commands().DockPanelTo(5U, *preview);
     const kb::editor::DockLayout dockedLayout = BuildDefaultLayout(model);
     const std::vector<std::uint32_t> order = PanelOrderInLeaf(dockedLayout, sceneLayout->leafId);
-    kb::editor::tests::Require(order.size() >= 5U, "Docked tab was not inserted into the target leaf");
-    kb::editor::tests::Require(order[0] == 2U && order[1] == 8U && order[2] == 10U && order[3] == 5U && order[4] == 4U, "Docked tab was not inserted at the resolved tab strip index");
+    std::vector<std::uint32_t> expectedOrder = tabOrder;
+    expectedOrder.insert(
+        expectedOrder.begin() + static_cast<std::ptrdiff_t>(expectedInsertionIndex),
+        5U);
+    kb::editor::tests::Require(
+        order == expectedOrder,
+        "Docked tab was not inserted at the resolved tab strip index");
 }
 
 void RunSplitterAndFloatingResizeTest() {
@@ -370,6 +389,279 @@ void RunClosedMaterialEditorReopensInCenterDockTest() {
     kb::editor::tests::Require(scene != nullptr && reopened->leafId == scene->leafId, "Reopened Material Editor should return to the center workspace group");
 }
 
+void RunSkeletalMeshEditorWorkspaceActivationTest() {
+    kb::editor::EditorDockModel model;
+    const kb::editor::DockPanel* panel = RequirePanel(model, 11U);
+    kb::editor::tests::Require(
+        panel->kind == kb::editor::DockPanelKind::SkeletalMeshEditor &&
+            panel->title == "Skeletal Mesh Editor",
+        "Default workspace should register the Skeletal Mesh Editor");
+    const kb::editor::DockLayout initialLayout = BuildDefaultLayout(model);
+    const kb::editor::DockLeafLayout* sceneLeaf = FindLeafForPanel(initialLayout, 2U);
+    const kb::editor::DockLeafLayout* skeletalMeshLeaf = FindLeafForPanel(initialLayout, 11U);
+    kb::editor::tests::Require(
+        sceneLeaf != nullptr && skeletalMeshLeaf != nullptr &&
+            sceneLeaf->leafId == skeletalMeshLeaf->leafId,
+        "Skeletal Mesh Editor should use the central workspace");
+
+    kb::editor::tests::Require(model.Commands().ClosePanel(11U),
+        "Closing Skeletal Mesh Editor should succeed");
+    kb::editor::tests::Require(
+        model.Commands().ActivatePanelKind(
+            kb::editor::DockPanelKind::SkeletalMeshEditor,
+            kb::editor::DockArea::Center),
+        "Reopening a Skeletal Mesh document should restore its workspace");
+    const kb::editor::DockLayout reopenedLayout = BuildDefaultLayout(model);
+    const kb::editor::DockPanelLayout* reopened = FindPanelLayout(reopenedLayout, 11U);
+    kb::editor::tests::Require(reopened != nullptr && reopened->active,
+        "Reopened Skeletal Mesh Editor should receive focus");
+}
+
+void RunAnimationClipEditorWorkspaceActivationTest() {
+    kb::editor::EditorDockModel model;
+    const kb::editor::DockPanel* panel = RequirePanel(model, 12U);
+    kb::editor::tests::Require(
+        panel != nullptr && panel->kind == kb::editor::DockPanelKind::AnimationClipEditor,
+        "Animation Clip Editor should be registered as a typed dock panel");
+    const kb::editor::DockLayout initialLayout = BuildDefaultLayout(model);
+    const kb::editor::DockLeafLayout* sceneLeaf = FindLeafForPanel(initialLayout, 2U);
+    const kb::editor::DockLeafLayout* clipLeaf = FindLeafForPanel(initialLayout, 12U);
+    kb::editor::tests::Require(
+        sceneLeaf != nullptr && clipLeaf != nullptr && sceneLeaf->leafId == clipLeaf->leafId,
+        "Animation Clip Editor should use the central workspace");
+    kb::editor::tests::Require(
+        model.Commands().ActivatePanelKind(kb::editor::DockPanelKind::AnimationClipEditor, kb::editor::DockArea::Center),
+        "Animation Clip Editor should activate through typed dock dispatch");
+    const kb::editor::DockLayout activatedLayout = BuildDefaultLayout(model);
+    const kb::editor::DockPanelLayout* activated = FindPanelLayout(activatedLayout, 12U);
+    kb::editor::tests::Require(activated != nullptr && activated->active,
+        "Animation Clip Editor should receive focus after typed dispatch");
+}
+
+void RunAnimatorEditorWorkspaceActivationTest() {
+    kb::editor::EditorDockModel model;
+    const kb::editor::DockPanel* panel = RequirePanel(model, 13U);
+    kb::editor::tests::Require(
+        panel != nullptr && panel->kind == kb::editor::DockPanelKind::AnimatorEditor,
+        "Animator Editor should be registered as a typed dock panel");
+    const kb::editor::DockLayout initialLayout = BuildDefaultLayout(model);
+    const kb::editor::DockLeafLayout* sceneLeaf = FindLeafForPanel(initialLayout, 2U);
+    const kb::editor::DockLeafLayout* animatorLeaf = FindLeafForPanel(initialLayout, 13U);
+    kb::editor::tests::Require(
+        sceneLeaf != nullptr && animatorLeaf != nullptr && sceneLeaf->leafId == animatorLeaf->leafId,
+        "Animator Editor should use the central workspace");
+    kb::editor::tests::Require(
+        model.Commands().ActivatePanelKind(kb::editor::DockPanelKind::AnimatorEditor, kb::editor::DockArea::Center),
+        "Animator Editor should activate through typed dock dispatch");
+    const kb::editor::DockLayout activatedLayout = BuildDefaultLayout(model);
+    const kb::editor::DockPanelLayout* activated = FindPanelLayout(activatedLayout, 13U);
+    kb::editor::tests::Require(activated != nullptr && activated->active,
+        "Animator Editor should receive focus after typed dispatch");
+}
+
+void RunAnimatorEditorDefaultLayoutTest() {
+    const RECT content{ 20, 30, 1300, 730 };
+    const kb::editor::AnimatorEditorPanelLayout layout =
+        kb::editor::AnimatorEditorPanelRenderer::ResolveLayout(content);
+    kb::editor::tests::Require(
+        layout.preview.right - layout.preview.left == 320 &&
+            layout.graph.right - layout.graph.left == 704 &&
+            layout.details.right - layout.details.left == 256,
+        "Animator Editor should keep the default 25/55/20 workspace split");
+    kb::editor::tests::Require(
+        layout.preview.left == content.left && layout.graph.left == layout.preview.right &&
+            layout.details.left == layout.graph.right && layout.details.right == content.right,
+        "Animator Editor workspace panes should be contiguous");
+}
+
+void RunAnimatorEditorGraphDocumentStateTest() {
+    kb::scene::AnimatorController controller{};
+    controller.layers = {{ .name = "Base", .defaultState = "Idle", .states = {
+        { .id = 10U, .name = "Idle", .clipReference = "idle" },
+        { .id = 11U, .name = "Walk", .clipReference = "walk" },
+    }, .transitions = {{ .id = 12U, .fromState = "Idle", .toState = "Walk", .conditions = {{ .parameter = "Speed", .mode = kb::scene::AnimatorConditionMode::FloatGreater }} }} }};
+    kb::editor::AnimatorEditorGraphDocumentState document;
+    document.Open(controller);
+    kb::editor::tests::Require(document.SetSelection({ 10U, 11U }) && document.CopySelection(),
+        "Animator graph document should support multi-selection copy");
+    kb::editor::tests::Require(document.PasteIntoLayer("Base", 100, 50),
+        "Animator graph document should paste selected states with fresh stable ids");
+    const kb::scene::AnimatorController* pasted = document.Controller();
+    kb::editor::tests::Require(pasted != nullptr && pasted->layers.front().states.size() == 4U && document.Selection().size() == 2U,
+        "Animator graph paste should select exactly the new state nodes");
+    const std::uint64_t comment = document.AddComment("Locomotion", 0, 0, 320, 160);
+    kb::editor::tests::Require(comment != 0U && document.AddGroup("Locomotion", document.Selection()) != 0U,
+        "Animator graph document should persist comments and groups with stable ids");
+    kb::editor::tests::Require(document.RenameState(10U, "Rest") && document.SetSelection({ 10U }) && document.DeleteSelectedStates(),
+        "Animator graph document should rename and delete a state while retaining a valid layer");
+    kb::editor::tests::Require(document.Dirty() && document.CanUndo() && document.Undo() && document.CanRedo() && document.Redo(),
+        "Animator graph document should retain per-document undo and redo history");
+    kb::editor::tests::Require(document.MarkSaved() && !document.Dirty() && !document.CanUndo() && !document.CanRedo(),
+        "Animator graph document should clear its dirty marker and history after saving");
+}
+
+void RunSkeletalMeshEditorDefaultLayoutTest() {
+    const RECT content{ 20, 30, 1220, 730 };
+    const kb::editor::SkeletalMeshEditorPanelLayout layout =
+        kb::editor::SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
+    kb::editor::tests::Require(
+        layout.toolbox.right - layout.toolbox.left == 240 &&
+            layout.viewport.right - layout.viewport.left == 720 &&
+            layout.skeletonTree.right - layout.skeletonTree.left == 240,
+        "Skeletal Mesh Editor should keep the default 20/60/20 workspace split");
+    kb::editor::tests::Require(
+        layout.toolbox.left == content.left && layout.viewport.left == layout.toolbox.right &&
+            layout.skeletonTree.left == layout.viewport.right && layout.skeletonTree.right == content.right,
+        "Skeletal Mesh Editor layout should tile the workspace without gaps");
+    kb::editor::tests::Require(
+        layout.skeletonTree.bottom == layout.assetDetails.top &&
+            layout.skeletonTree.top == content.top && layout.assetDetails.bottom == content.bottom,
+        "Skeletal Mesh Editor right column should stack Skeleton Tree over Asset Details");
+}
+
+void RunSkeletalMeshEditorTreeStateTest() {
+    kb::scene::SkeletonAsset skeleton{};
+    skeleton.bones = {
+        { .id = 10U, .parentIndex = -1, .name = "Root" },
+        { .id = 20U, .parentIndex = 0, .name = "Spine" },
+        { .id = 30U, .parentIndex = 1, .name = "Hand" },
+    };
+    skeleton.sockets = {{ .name = "Weapon", .boneId = 30U }};
+    kb::editor::SkeletalMeshEditorTreeState tree;
+    tree.SetSkeleton(skeleton);
+    kb::editor::tests::Require(tree.SelectBone(30U) && tree.SelectedBone() == 30U && tree.SelectedSocket().empty(),
+        "Skeleton Tree should retain viewport-selected bones");
+    kb::editor::tests::Require(tree.SelectSocket("Weapon") && tree.SelectedBone() == 0U && tree.SelectedSocket() == "Weapon",
+        "Skeleton Tree should retain selected sockets independently from bones");
+    kb::editor::tests::Require(tree.SetFilter("hand"), "Skeleton Tree should accept a case-insensitive search filter");
+    const std::vector<kb::editor::SkeletalMeshEditorTreeRow> rows = tree.Rows();
+    kb::editor::tests::Require(rows.size() == 3U && rows[0].label == "Root" && rows[1].label == "Spine" && rows[2].label == "Hand",
+        "Skeleton Tree filtering should retain matching bones and their hierarchy ancestors");
+    tree.FocusSearch(true);
+    tree.SelectAllSearch();
+    tree.AppendSearchText(L's');
+    tree.AppendSearchText(L'p');
+    kb::editor::tests::Require(tree.IsSearchFocused() && tree.Filter() == "sp",
+        "Skeleton Tree search should accept focused text input");
+    tree.BackspaceSearch();
+    kb::editor::tests::Require(tree.Filter() == "s", "Skeleton Tree search should handle backspace");
+}
+
+void RunSkeletalMeshEditorDetailsStateTest() {
+    kb::scene::SkeletonAsset skeleton{};
+    skeleton.bones = {{ .id = 10U, .parentIndex = -1, .name = "Root" }};
+    skeleton.sockets = {{ .name = "Weapon", .boneId = 10U }};
+    kb::scene::SkeletalMeshAsset mesh{};
+    mesh.skeletonAssetId = 99U;
+    mesh.skeletonCompatibilitySignature = 456U;
+    mesh.lods = {{ .vertices = std::vector<kb::scene::SkeletalMeshVertex>(3U), .indices = { 0U, 1U, 2U },
+        .sections = {{ .firstIndex = 0U, .indexCount = 3U, .materialAssetId = 123U, .boneMap = { 10U } }}, .requiredBones = { 10U } }};
+    kb::assets::AssetMetadata metadata{};
+    metadata.name = "Hero";
+    metadata.virtualPath = "/Game/Hero.kbskeletalmesh";
+    metadata.importCategory = "glTF";
+    kb::editor::SkeletalMeshEditorDetailsState details;
+    details.SetDocument(mesh, skeleton, metadata);
+    const kb::editor::SkeletalMeshEditorDetailsModel asset = details.Build(0U, {});
+    kb::editor::tests::Require(asset.sections.size() >= 5U && asset.sections[1].title == "LOD 0" && asset.sections[2].title == "LOD 0 Material 0",
+        "Skeletal Mesh Details should expose asset LOD and material-section data");
+    const kb::editor::SkeletalMeshEditorDetailsModel bone = details.Build(10U, {});
+    kb::editor::tests::Require(bone.title == "Bone: Root" && bone.sections[0].fields[0].value == "10" &&
+            bone.sections[0].fields[5].value == "3",
+        "Skeletal Mesh Details should expose selected bone data");
+    const kb::editor::SkeletalMeshEditorDetailsModel socket = details.Build(0U, "Weapon");
+    kb::editor::tests::Require(socket.title == "Socket: Weapon" && socket.sections[0].fields[1].value == "10",
+        "Skeletal Mesh Details should expose selected socket data");
+    mesh.morphTargets = {{ .name = "Smile", .lodIndex = 0U, .deltas = {{ .vertexIndex = 0U }} }};
+    details.SetDocument(mesh, skeleton, metadata);
+    kb::editor::tests::Require(details.MorphTargets().size() == 1U && details.MorphTargets()[0].name == "Smile",
+        "Skeletal Mesh editor Morph Targets panel should use the canonical mesh morph data");
+}
+
+void RunSkeletalMeshEditorDocumentStateTest() {
+    kb::scene::SkeletalMeshAsset mesh{};
+    mesh.skeletonAssetId = 10U;
+    mesh.skeletonCompatibilitySignature = 20U;
+    mesh.lods = {{ .vertices = std::vector<kb::scene::SkeletalMeshVertex>(3U), .indices = { 0U, 1U, 2U },
+        .sections = {{ .firstIndex = 0U, .indexCount = 3U, .boneMap = { 1U } }}, .requiredBones = { 1U } }};
+    kb::editor::SkeletalMeshEditorDocumentState document;
+    document.Open(kb::assets::AssetId{ 42U }, mesh);
+    kb::scene::SkeletalMeshAsset fixed = mesh;
+    fixed.boundsMode = kb::scene::SkeletalMeshBoundsMode::Fixed;
+    kb::editor::tests::Require(document.Apply(fixed) && document.Dirty() && document.CanUndo(),
+        "Skeletal Mesh document should retain a dirty working-copy history");
+    kb::editor::tests::Require(document.Undo() && !document.Dirty() && document.CanRedo(),
+        "Skeletal Mesh document undo should restore the saved working copy");
+    kb::editor::tests::Require(document.Redo() && document.MarkSaved() && !document.Dirty(),
+        "Skeletal Mesh document save should establish a new clean history baseline");
+    kb::editor::tests::Require(document.RevertToSaved() && !document.Dirty(),
+        "Skeletal Mesh document revert should discard unsaved history");
+}
+
+void RunAnimationClipTimelineStateTest() {
+    kb::scene::AnimationClip clip{};
+    clip.durationSeconds = 2.0F;
+    clip.skeletalTracks = {
+        { .boneId = 20U, .keyframes = {{ .timeSeconds = 1.5F }, { .timeSeconds = 0.5F }} },
+        { .boneId = 10U, .keyframes = {{ .timeSeconds = 1.0F }} },
+    };
+    clip.morphTracks = {{ .morphTarget = "Smile", .keyframes = {{ .timeSeconds = 0.25F }} }};
+    clip.curves = {{ .name = "FootPlant", .keyframes = {{ .timeSeconds = 1.25F }} }};
+    clip.events = {{ .timeSeconds = 1.75F, .id = 4U }, { .timeSeconds = 0.75F, .id = 2U }};
+    clip.rootMotionMode = kb::scene::AnimationRootMotionMode::ExtractFromBone;
+    clip.rootMotionBoneId = 20U;
+    kb::editor::AnimationClipTimelineState timeline;
+    timeline.SetClip(clip);
+    const std::vector<kb::editor::AnimationClipTimelineTrack>& tracks = timeline.Tracks();
+    const auto find = [&tracks](std::string_view label) {
+        return std::find_if(tracks.begin(), tracks.end(), [label](const kb::editor::AnimationClipTimelineTrack& track) {
+            return track.label == label;
+        });
+    };
+    const auto bone = find("Bone 20");
+    const auto events = find("Events");
+    const auto rootMotion = find("Root Motion (Bone 20)");
+    kb::editor::tests::Require(timeline.DurationSeconds() == 2.0F && bone != tracks.end() &&
+            bone->keys.size() == 2U && bone->keys[0].timeSeconds == 0.5F &&
+            find("Morph Smile") != tracks.end() && find("Curve FootPlant") != tracks.end(),
+        "Animation Clip timeline should expose canonical bone, morph and curve tracks");
+    kb::editor::tests::Require(events != tracks.end() && events->keys[0].timeSeconds == 0.75F &&
+            rootMotion != tracks.end() && rootMotion->keys.size() == bone->keys.size(),
+        "Animation Clip timeline should deterministically expose events and root motion keys");
+    kb::editor::tests::Require(timeline.SelectBoneTrack(20U) && timeline.SelectedTrackData() != nullptr &&
+            timeline.SelectedTrackData()->boneId == 20U,
+        "Animation Clip timeline should retain the selected skeletal bone track");
+    kb::editor::tests::Require(timeline.SetZoom(4.0F) && timeline.Pan(0.25F) &&
+            std::fabs(timeline.VisibleDurationSeconds() - 0.5F) < 0.0001F &&
+            std::fabs(timeline.SnapTime(1.12F, 20.0F) - 1.1F) < 0.0001F &&
+            timeline.SetSnappingEnabled(false) && std::fabs(timeline.SnapTime(1.12F, 20.0F) - 1.12F) < 0.0001F,
+        "Animation Clip timeline should retain zoom, pan and frame snapping state");
+}
+
+void RunAnimationClipEditorDocumentStateTest() {
+    kb::scene::AnimationClip clip{};
+    clip.durationSeconds = 2.0F;
+    clip.looping = true;
+    clip.targetSkeletonAssetId = 1U;
+    clip.targetSkeletonCompatibilitySignature = 2U;
+    clip.skeletalTracks = {{ .boneId = 7U, .keyframes = {{ .timeSeconds = 0.0F }} }};
+    kb::editor::AnimationClipEditorDocumentState document;
+    document.Open(kb::assets::AssetId{ 42U }, clip);
+    document.BeginGroup();
+    kb::editor::tests::Require(document.UpsertBoneKey(7U, 1.0F, {}) && document.UpsertEvent(9U, 0.5F),
+        "Animation Clip document should accept valid grouped key and event edits");
+    document.EndGroup();
+    const kb::scene::AnimationClip* edited = document.WorkingCopy();
+    kb::editor::tests::Require(edited != nullptr && document.Dirty() && document.CanUndo() &&
+            edited->skeletalTracks[0].keyframes.size() == 2U && edited->events.size() == 1U,
+        "Animation Clip document should retain grouped working-copy edits");
+    kb::editor::tests::Require(document.Undo() && !document.Dirty() && document.Redo() &&
+            !document.UpsertEvent(0U, 0.5F) && !document.UpsertEvent(10U, 2.0F),
+        "Animation Clip document should undo grouped edits and reject invalid event times");
+    kb::editor::tests::Require(document.MarkSaved() && !document.Dirty() && !document.CanUndo() && !document.CanRedo(),
+        "Animation Clip document save should establish a clean history baseline");
+}
+
 // A click on any tab — the active one or an inactive sibling — must hit-test as a
 // dock Tab. The pointer router relies on this: a dock hit means the click is a
 // layout action (switch tabs), so it must NOT clear the scene selection and blank
@@ -423,6 +715,17 @@ void RunEditorDockingTests() {
     RunDefaultWorkspaceRegistersMaterialEditorPanelTest();
     RunMaterialEditorPanelActivationTest();
     RunClosedMaterialEditorReopensInCenterDockTest();
+    RunSkeletalMeshEditorWorkspaceActivationTest();
+    RunAnimationClipEditorWorkspaceActivationTest();
+    RunAnimatorEditorWorkspaceActivationTest();
+    RunAnimatorEditorDefaultLayoutTest();
+    RunAnimatorEditorGraphDocumentStateTest();
+    RunSkeletalMeshEditorDefaultLayoutTest();
+    RunSkeletalMeshEditorTreeStateTest();
+    RunSkeletalMeshEditorDetailsStateTest();
+    RunSkeletalMeshEditorDocumentStateTest();
+    RunAnimationClipTimelineStateTest();
+    RunAnimationClipEditorDocumentStateTest();
     RunTabClickIsDockInteractionTest();
 }
 

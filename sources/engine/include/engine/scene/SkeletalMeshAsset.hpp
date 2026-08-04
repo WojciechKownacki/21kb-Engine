@@ -86,6 +86,17 @@ struct SkeletalMeshAssetValidationResult {
 
 [[nodiscard]] SkeletalMeshAssetValidationResult ValidateSkeletalMeshAsset(const SkeletalMeshAsset& asset);
 void BuildSkeletalMeshLodBoneBounds(SkeletalMeshLod& lod);
+[[nodiscard]] bool BuildSkeletalMeshSkinningPalette(
+    const SkeletalMeshAsset& asset,
+    std::span<const SkeletonBoneId> poseBoneIds,
+    std::span<const kb::math::Mat4> poseSkinMatrices,
+    std::vector<kb::math::Mat4>& outSkinMatrices);
+[[nodiscard]] bool BuildSkeletalMeshSkinningPalette(
+    const SkeletalMeshAsset& asset,
+    std::span<const SkeletonBoneId> poseBoneIds,
+    std::span<const kb::math::Mat4> poseSkinMatrices,
+    std::vector<SkeletonBoneId>& paletteBoneScratch,
+    std::vector<kb::math::Mat4>& outSkinMatrices);
 [[nodiscard]] std::optional<SkeletalMeshBounds> EvaluateSkeletalMeshAnimatedBounds(
     const SkeletalMeshAsset& asset,
     std::uint32_t lodIndex,

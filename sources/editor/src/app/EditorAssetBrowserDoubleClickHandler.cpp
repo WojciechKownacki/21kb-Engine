@@ -8,6 +8,7 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/TimelineAssetIO.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -71,9 +72,22 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::Handle
                 ? EditorAssetBrowserDoubleClickResult::ScriptEditorOpened
                 : EditorAssetBrowserDoubleClickResult::None;
         }
-        if (metadata->type == kb::scene::kAnimationClipAssetType ||
-            metadata->type == kb::scene::kAnimatorControllerAssetType ||
-            metadata->type == kb::scene::kTimelineAssetType) {
+        if (metadata->type == kb::scene::kSkeletalMeshAssetType) {
+            return sceneContext.OpenSkeletalMeshEditorAsset(metadata->id)
+                ? EditorAssetBrowserDoubleClickResult::SkeletalMeshEditorOpened
+                : EditorAssetBrowserDoubleClickResult::None;
+        }
+        if (metadata->type == kb::scene::kAnimationClipAssetType) {
+            return sceneContext.OpenAnimationClipEditorAsset(metadata->id)
+                ? EditorAssetBrowserDoubleClickResult::AnimationClipEditorOpened
+                : EditorAssetBrowserDoubleClickResult::None;
+        }
+        if (metadata->type == kb::scene::kAnimatorControllerAssetType) {
+            return sceneContext.OpenAnimatorEditorAsset(metadata->id)
+                ? EditorAssetBrowserDoubleClickResult::AnimatorEditorOpened
+                : EditorAssetBrowserDoubleClickResult::None;
+        }
+        if (metadata->type == kb::scene::kTimelineAssetType) {
             return sceneContext.OpenAnimationAsset(metadata->id)
                 ? EditorAssetBrowserDoubleClickResult::ScriptEditorOpened
                 : EditorAssetBrowserDoubleClickResult::None;

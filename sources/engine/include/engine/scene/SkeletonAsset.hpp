@@ -21,8 +21,15 @@ struct SkeletonBone {
     kb::math::Mat4 inverseBind{};
 };
 
+struct SkeletonSocket {
+    std::string name;
+    SkeletonBoneId boneId = 0U;
+    LocalTransform localTransform{};
+};
+
 struct SkeletonAsset {
     std::vector<SkeletonBone> bones;
+    std::vector<SkeletonSocket> sockets;
 };
 
 struct SkeletonAssetValidationResult {

@@ -1,9 +1,11 @@
 #pragma once
 
+#include "engine/core/ReadSnapshotQueue.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SkeletonAsset.hpp"
 #include "engine/scene/TransformComponent.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -106,6 +108,7 @@ struct AnimatorParameterDefinition {
 };
 
 struct AnimatorControllerState {
+    std::uint64_t id = 0U;
     std::string name;
     // Exactly one motion source is authored: a clipReference, or a 1D blend
     // tree driven by a Float parameter.
@@ -137,6 +140,7 @@ struct AnimatorTransitionCondition {
 };
 
 struct AnimatorControllerTransition {
+    std::uint64_t id = 0U;
     std::string fromState;
     std::string toState;
     float durationSeconds = 0.1F;
@@ -181,10 +185,34 @@ struct AnimatorRigConstraint {
     SkeletonBoneId tipBoneId = 0U;
 };
 
+struct AnimatorGraphNodeLayout {
+    std::uint64_t stateId = 0U;
+    std::int32_t positionX = 0;
+    std::int32_t positionY = 0;
+};
+
+struct AnimatorGraphComment {
+    std::uint64_t id = 0U;
+    std::string text;
+    std::int32_t positionX = 0;
+    std::int32_t positionY = 0;
+    std::int32_t width = 240;
+    std::int32_t height = 120;
+};
+
+struct AnimatorGraphGroup {
+    std::uint64_t id = 0U;
+    std::string name;
+    std::vector<std::uint64_t> stateIds;
+};
+
 struct AnimatorController {
     std::vector<AnimatorParameterDefinition> parameters;
     std::vector<AnimatorControllerLayer> layers;
     std::vector<AnimatorRigConstraint> rigConstraints;
+    std::vector<AnimatorGraphNodeLayout> graphLayout;
+    std::vector<AnimatorGraphComment> graphComments;
+    std::vector<AnimatorGraphGroup> graphGroups;
 };
 
 enum class AnimatorRootMotionOwner : std::uint8_t {
@@ -209,6 +237,10 @@ enum class AnimatorRootMotionOwner : std::uint8_t {
 struct Animator {
     std::uint64_t controllerAssetId = 0U;
     float speed = 1.0F;
+    // Zero preserves per-frame pose evaluation. A positive value limits only
+    // visual pose sampling; playheads, transitions, events, and root motion
+    // still advance on every runtime tick.
+    float poseUpdateRateHz = 0.0F;
     bool enabled = true;
     AnimatorRootMotionOwner rootMotionOwner = AnimatorRootMotionOwner::None;
 };
@@ -252,6 +284,90 @@ struct AnimationEventRecord {
     std::string layer;
     std::string state;
     float normalizedTime = 0.0F;
+};
+
+// Immutable diagnostic state published only after an animator update has
+// completed. It owns every exposed value and can be retained by editor or
+// rendering threads without touching scene-owned mutable storage.
+struct AnimatorDebugParameterSnapshot {
+    std::string name;
+    AnimatorParameterType type = AnimatorParameterType::Float;
+    bool boolValue = false;
+    std::int32_t intValue = 0;
+    float floatValue = 0.0F;
+};
+
+struct AnimatorDebugLayerSnapshot {
+    std::string name;
+    std::uint64_t activeStateId = 0U;
+    std::uint64_t previousStateId = 0U;
+    std::uint64_t activeTransitionId = 0U;
+    std::string activeState;
+    std::string previousState;
+    float normalizedTime = 0.0F;
+    float transitionProgress = 1.0F;
+    float weight = 1.0F;
+    double elapsedSeconds = 0.0;
+    bool transitioning = false;
+};
+
+struct AnimatorDebugBoneSnapshot {
+    SkeletonBoneId id = 0U;
+    LocalTransform localPose{};
+    LocalTransform componentPose{};
+};
+
+struct AnimatorDebugConstraintSnapshot {
+    std::string name;
+    AnimatorRigConstraintType type = AnimatorRigConstraintType::TwoBoneIK;
+    SkeletonBoneId constrainedBoneId = 0U;
+    SkeletonBoneId midBoneId = 0U;
+    SkeletonBoneId tipBoneId = 0U;
+    std::string target;
+    std::string poleTarget;
+    AnimatorIkTarget targetValue{};
+    AnimatorIkTarget poleTargetValue{};
+    bool hasTarget = false;
+    bool hasPoleTarget = false;
+};
+
+struct AnimatorDebugInstanceSnapshot {
+    SceneEntity entity{};
+    std::uint64_t controllerAssetId = 0U;
+    std::uint64_t runtimeBindingGeneration = 0U;
+    std::uint64_t skeletonAssetId = 0U;
+    std::uint64_t skeletonCompatibilitySignature = 0U;
+    std::uint64_t poseEvaluationCount = 0U;
+    std::uint64_t hierarchySolveCount = 0U;
+    std::uint32_t paletteMatrixCount = 0U;
+    std::uint64_t skeletalMeshAssetId = 0U;
+    std::int32_t lodBias = 0;
+    bool lodEnabled = false;
+    bool fixedBounds = false;
+    bool deformedGeometryEnabled = false;
+    Vec3 rootMotionTranslation{};
+    Quat rootMotionRotation{};
+    bool hasRootMotion = false;
+    std::vector<Vec3> rootMotionTrail;
+    std::vector<AnimatorDebugParameterSnapshot> parameters;
+    std::vector<AnimatorDebugLayerSnapshot> layers;
+    std::vector<AnimatorDebugBoneSnapshot> bones;
+    std::vector<AnimatorDebugConstraintSnapshot> constraints;
+    std::vector<std::string> compatibilityDiagnostics;
+};
+
+struct AnimatorDebugSnapshot final : kb::core::ReadSnapshot {
+    std::vector<AnimatorDebugInstanceSnapshot> instances;
+
+    [[nodiscard]] const AnimatorDebugInstanceSnapshot* Find(
+        SceneEntity target) const noexcept {
+        const auto it = std::find_if(
+            instances.begin(), instances.end(),
+            [target](const AnimatorDebugInstanceSnapshot& value) {
+                return value.entity == target;
+            });
+        return it == instances.end() ? nullptr : &*it;
+    }
 };
 
 } // namespace kb::scene

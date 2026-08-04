@@ -9,6 +9,7 @@
 #include "platform/win32/EditorMaterialParameterValueDialog.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/AnimatorEditorPanelRenderer.hpp"
 
 #include <optional>
 
@@ -126,6 +127,33 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
     }
     if (assetResult == EditorAssetBrowserDoubleClickResult::MaterialEditorOpened) {
         static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::MaterialEditor, DockArea::Center));
+    }
+
+    const std::optional<RECT> animatorEditorContent = EditorPanelContentResolver::Resolve(
+        DockPanelKind::AnimatorEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    if (animatorEditorContent.has_value()) {
+        if (sceneContext_.AnimatorEditorGraphDocument().MotionState() != 0U) {
+            if (sceneContext_.ReturnToAnimatorStateMachine()) {
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return true;
+            }
+        } else if (const kb::scene::AnimatorController* controller = sceneContext_.AnimatorEditorController(); controller != nullptr) {
+            if (const std::optional<std::uint64_t> state = AnimatorEditorPanelRenderer::GraphStateAt(
+                    *animatorEditorContent, *controller, x, y); state.has_value() &&
+                sceneContext_.OpenAnimatorMotionDocument(*state)) {
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return true;
+            }
+        }
+    }
+    if (assetResult == EditorAssetBrowserDoubleClickResult::SkeletalMeshEditorOpened) {
+        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::SkeletalMeshEditor, DockArea::Center));
+    }
+    if (assetResult == EditorAssetBrowserDoubleClickResult::AnimationClipEditorOpened) {
+        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::AnimationClipEditor, DockArea::Center));
+    }
+    if (assetResult == EditorAssetBrowserDoubleClickResult::AnimatorEditorOpened) {
+        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::AnimatorEditor, DockArea::Center));
     }
     EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     return true;

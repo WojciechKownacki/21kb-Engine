@@ -14,7 +14,7 @@ inline constexpr const char* kAnimationClipAssetType = "AnimationClip";
 inline constexpr std::uint32_t kAnimationClipAssetSchemaVersion = 2U;
 inline constexpr const char* kAnimatorControllerAssetExtension = ".kbanimcontroller";
 inline constexpr const char* kAnimatorControllerAssetType = "AnimatorController";
-inline constexpr std::uint32_t kAnimatorControllerAssetSchemaVersion = 2U;
+inline constexpr std::uint32_t kAnimatorControllerAssetSchemaVersion = 3U;
 
 class AnimationAssetIO final {
 public:
@@ -27,7 +27,11 @@ public:
         const std::filesystem::path& path,
         std::string* error = nullptr);
     [[nodiscard]] static bool SaveClip(const std::filesystem::path& path, const AnimationClip& clip);
-    [[nodiscard]] static bool SaveController(const std::filesystem::path& path, const AnimatorController& controller);
+    [[nodiscard]] static bool ValidateController(const AnimatorController& controller, std::string* error = nullptr);
+    [[nodiscard]] static bool SaveController(
+        const std::filesystem::path& path,
+        const AnimatorController& controller,
+        std::string* error = nullptr);
 };
 
 } // namespace kb::scene

@@ -5,6 +5,7 @@
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAnimators.hpp"
@@ -175,14 +176,14 @@ void RunAnimationRuntimeTests() {
     };
     controller.layers = {
         { .name = "Root Layer", .defaultState = "Walk State", .weight = 1.0F, .mask = 1U, .states = {
-            { .name = "Walk State", .clipReference = "/Game/Animation/Move.kbanim" },
-            { .name = "Run State", .clipReference = "/Game/Animation/Run Fast.kbanim" },
-            { .name = "Blend State", .blendParameter = "Speed", .blendChildren = {
+            { .id = 1U, .name = "Walk State", .clipReference = "/Game/Animation/Move.kbanim" },
+            { .id = 2U, .name = "Run State", .clipReference = "/Game/Animation/Run Fast.kbanim" },
+            { .id = 3U, .name = "Blend State", .blendParameter = "Speed", .blendChildren = {
                 { .threshold = 0.0F, .clipReference = "/Game/Animation/Move.kbanim" },
                 { .threshold = 10.0F, .clipReference = "/Game/Animation/Run Fast.kbanim" },
             } },
         }, .transitions = {
-            { .fromState = "Walk State", .toState = "Run State", .durationSeconds = 0.2F,
+            { .id = 4U, .fromState = "Walk State", .toState = "Run State", .durationSeconds = 0.2F,
               .conditions = {
                   { .parameter = "Grounded", .mode = kb::scene::AnimatorConditionMode::BoolEquals, .boolValue = false },
                   { .parameter = "Lives", .mode = kb::scene::AnimatorConditionMode::IntGreater, .intValue = 3 },
@@ -195,8 +196,23 @@ void RunAnimationRuntimeTests() {
             { .name = "Run State", .clipReference = "/Game/Animation/Run Fast.kbanim" },
         } },
     };
+    controller.graphLayout = {
+        { .stateId = 1U, .positionX = 0, .positionY = 0 },
+        { .stateId = 2U, .positionX = 240, .positionY = 0 },
+        { .stateId = 3U, .positionX = 480, .positionY = 0 },
+    };
+    controller.graphComments = {{ .id = 5U, .text = "Locomotion", .positionX = -20, .positionY = -80, .width = 780, .height = 280 }};
+    controller.graphGroups = {{ .id = 6U, .name = "Movement", .stateIds = { 1U, 2U, 3U } }};
     const auto controllerPath = root / "Assets" / "Animation" / "Character.kbanimcontroller";
     Require(kb::scene::AnimationAssetIO::SaveController(controllerPath, controller), "AnimatorController production asset could not be saved");
+    const std::optional<kb::scene::AnimatorController> persistedController =
+        kb::scene::AnimationAssetIO::LoadController(controllerPath);
+    Require(persistedController.has_value() && persistedController->graphLayout.size() == 5U &&
+            persistedController->graphComments.size() == 1U &&
+            persistedController->graphComments.front().text == "Locomotion" &&
+            persistedController->graphGroups.size() == 1U &&
+            persistedController->graphGroups.front().stateIds == std::vector<std::uint64_t>{ 1U, 2U, 3U },
+        "Animator graph serialization did not preserve layout, comments, and groups");
     const std::filesystem::path roundTripRoot = root / "RoundTrip";
     const std::filesystem::path deterministicClipPath = roundTripRoot / "MoveCopy.kbanim";
     Require(kb::scene::AnimationAssetIO::SaveClip(deterministicClipPath, clip) &&
@@ -229,18 +245,13 @@ void RunAnimationRuntimeTests() {
         std::string_view{ serializedController }.substr(controllerHeaderEnd + 1U));
     Require(kb::scene::AnimationAssetIO::LoadController(legacyControllerPath).has_value(),
         "AnimatorController legacy migration failed");
-    std::string versionOneController = serializedController;
-    const std::string currentControllerHeader = "21kb AnimatorController 2";
-    const std::size_t currentControllerHeaderOffset =
-        versionOneController.find(currentControllerHeader);
-    Require(currentControllerHeaderOffset != std::string::npos,
-        "AnimatorController did not serialize its current schema version");
-    versionOneController.replace(
-        currentControllerHeaderOffset, currentControllerHeader.size(),
-        "21kb AnimatorController 1");
     const std::filesystem::path versionOneControllerPath =
         roundTripRoot / "VersionOne.kbanimcontroller";
-    WriteTextFile(versionOneControllerPath, versionOneController);
+    WriteTextFile(versionOneControllerPath,
+        "21kb AnimatorController 1\n"
+        "parameter \"Speed\" Float 0\n"
+        "layer \"Base\" \"Idle\" 1 1\n"
+        "state 0 \"Idle\" \"/Game/Animation/Move.kbanim\"\n");
     Require(kb::scene::AnimationAssetIO::LoadController(
                 versionOneControllerPath).has_value(),
         "AnimatorController schema 1 migration failed");
@@ -312,10 +323,16 @@ void RunAnimationRuntimeTests() {
         "Rig AnimatorController production asset could not be saved");
     kb::scene::AnimatorController invalidBlendController = controller;
     invalidBlendController.layers[0].states[2].blendParameter = "Grounded";
+    std::string invalidBlendError;
+    const std::string controllerBeforeInvalidSave = ReadTextFile(controllerPath);
     Require(!kb::scene::AnimationAssetIO::SaveController(
-                root / "Assets" / "Animation" / "InvalidBlend.kbanimcontroller",
-                invalidBlendController),
-        "Blend tree accepted a non-Float parameter");
+                controllerPath,
+                invalidBlendController,
+                &invalidBlendError) &&
+            invalidBlendError.find("Blend State") != std::string::npos &&
+            invalidBlendError.find("Grounded") != std::string::npos &&
+            ReadTextFile(controllerPath) == controllerBeforeInvalidSave,
+        "Invalid controller save replaced the active serialized controller");
     kb::scene::AnimatorController invalidRigController = rigController;
     invalidRigController.rigConstraints[0].weight = 0.0F;
     Require(!kb::scene::AnimationAssetIO::SaveController(
@@ -468,6 +485,15 @@ end
                 nativeEvents[0].eventId == kFootstepEvent && nativeEvents[0].layer == "Root Layer" &&
                 nativeEvents[0].state == "Run State" && NearlyEqual(nativeEvents[0].normalizedTime, 0.25F),
             "Animation event did not cross the native typed queue at the authored playhead time");
+        Require(scene.Animators().SeekNormalized(owner.Entity(), 0.5F) &&
+                !scene.Animators().SeekNormalized(owner.Entity(), -0.01F),
+            "Animator normalized seek did not validate and apply the requested playhead");
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const auto seekedState = scene.Animators().State(owner.Entity(), "Root Layer");
+        Require(seekedState.has_value() && !seekedState->transitioning &&
+                NearlyEqual(seekedState->normalizedTime, 0.5F) &&
+                NearlyEqual(scene.Transforms().Get(owner.Entity()).localPosition.x, 15.0F),
+            "Animator normalized seek did not deterministically resample the production pose");
         static_cast<void>(scene.Runtime().Update(0.5F));
         const auto loopEvents = scene.Animators().DrainEvents();
         Require(loopEvents.size() == 1U && loopEvents[0].eventId == kFootstepEvent,
@@ -1238,6 +1264,13 @@ end
                 } },
             },
         };
+        skeleton.sockets = {
+            {
+                .name = "Weapon",
+                .boneId = 900U,
+                .localTransform = { .position = { 0.0F, 0.5F, 0.0F } },
+            },
+        };
         const std::uint64_t skeletonSignature =
             kb::scene::SkeletonCompatibilitySignature(skeleton);
         const std::filesystem::path skeletonPath = skeletalRoot / "Assets" /
@@ -1283,6 +1316,12 @@ end
                     } },
                 },
             },
+        };
+        instanceClip.morphTracks = {
+            { .morphTarget = "Smile", .keyframes = {
+                { .timeSeconds = 0.0F, .weight = 0.0F },
+                { .timeSeconds = 1.0F, .weight = 1.0F },
+            } },
         };
         instanceClip.rootMotionMode =
             kb::scene::AnimationRootMotionMode::ExtractFromBone;
@@ -1358,6 +1397,8 @@ end
                     instanceControllerPath, instanceController) &&
                 scene.Assets().Discover() == 4U,
             "AnimatorInstance fixture could not discover its clip and controller");
+        const std::string instanceControllerBeforeDebugSnapshot =
+            ReadTextFile(instanceControllerPath);
         const kb::assets::AssetMetadata* instanceControllerMetadata =
             scene.Assets().Manager().Registry().FindByPath(
                 "/Game/Animation/Skeletal.kbanimcontroller");
@@ -1378,6 +1419,12 @@ end
             .speed = 1.0F,
             .enabled = true,
         });
+        Require(scene.Components().DeformedGeometries().Set(owner.Entity(),
+                    kb::scene::DrawD3DeformedGeometryComponent{
+                        .skeletalMeshAssetId = 0xD1A60001U,
+                        .enabled = true,
+                    }),
+            "Animator debug fixture could not author an incompatible deformed geometry asset");
         scene.Runtime().SetPlaying(false);
         static_cast<void>(scene.Runtime().Update(0.0F));
         const auto instanceSkeleton =
@@ -1405,7 +1452,11 @@ end
                 instanceSkeleton->currentSkinMatrices.size() == 3U &&
                 instanceSkeleton->previousSkinMatrices.size() == 3U &&
                 instanceSkeleton->currentSkinMatrices.data() !=
-                    instanceSkeleton->previousSkinMatrices.data() &&
+                instanceSkeleton->previousSkinMatrices.data() &&
+                instanceSkeleton->morphWeights.targetNames.size() == 1U &&
+                instanceSkeleton->morphWeights.targetNames[0] == "Smile" &&
+                instanceSkeleton->morphWeights.currentWeights.size() == 1U &&
+                instanceSkeleton->morphWeights.previousWeights.size() == 1U &&
                 instanceSkeleton->evaluationCount == 0U &&
                 instanceSkeleton->hierarchySolveCount == 0U &&
                 NearlyEqual(
@@ -1434,6 +1485,11 @@ end
         static_cast<void>(scene.Runtime().Update(0.25F));
         const auto sampledSkeleton =
             scene.Animators().InstanceSkeleton(owner.Entity());
+        const auto attachment = scene.Animators().AttachmentTransform(
+            owner.Entity(), 900U,
+            kb::scene::LocalTransform{ .position = { 0.0F, 0.5F, 0.0F } });
+        const auto socket = scene.Animators().SocketTransform(
+            owner.Entity(), "Weapon");
         const kb::scene::TransformComponent& ownerTransform =
             scene.Transforms().Get(owner.Entity());
         const kb::math::Vec4 sampledSkinOrigin = sampledSkeleton.has_value() &&
@@ -1445,6 +1501,19 @@ end
                 sampledSkeleton.has_value() &&
                 sampledSkeleton->evaluationCount == 1U &&
                 sampledSkeleton->hierarchySolveCount == 1U &&
+                sampledSkeleton->morphWeights.targetNames.size() == 1U &&
+                sampledSkeleton->morphWeights.targetNames[0] == "Smile" &&
+                NearlyEqual(sampledSkeleton->morphWeights.currentWeights[0], 0.25F) &&
+                NearlyEqual(sampledSkeleton->morphWeights.previousWeights[0], 0.0F) &&
+                attachment.has_value() && socket.has_value() &&
+                NearlyEqual(attachment->componentSpace.position.x, 1.0F) &&
+                NearlyEqual(attachment->componentSpace.position.y, 1.5F) &&
+                NearlyEqual(attachment->componentSpace.position.z, 0.25F) &&
+                NearlyEqual(socket->componentSpace.position.x, attachment->componentSpace.position.x) &&
+                NearlyEqual(socket->componentSpace.position.y, attachment->componentSpace.position.y) &&
+                NearlyEqual(socket->componentSpace.position.z, attachment->componentSpace.position.z) &&
+                NearlyEqual(socket->worldSpace.position.x, attachment->componentSpace.position.x) &&
+                !scene.Animators().SocketTransform(owner.Entity(), "Missing").has_value() &&
                 NearlyEqual(
                     sampledSkeleton->previousLocalPose.positions[0].x,
                     3.0F) &&
@@ -1525,6 +1594,34 @@ end
                 NearlyEqual(transitionedSkinOrigin.z, 0.4375F) &&
                 NearlyEqual(transitionedSkinOrigin.w, 1.0F),
             "Compact skeletal state/layer/mask/blend/transition evaluation diverged from controller semantics");
+
+        const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> transitionedDebug =
+            scene.Animators().DebugSnapshot();
+        const kb::scene::AnimatorDebugInstanceSnapshot* transitionedDebugInstance =
+            transitionedDebug == nullptr ? nullptr : transitionedDebug->Find(owner.Entity());
+        Require(transitionedDebug != nullptr && transitionedDebug->revision != 0U &&
+                transitionedDebugInstance != nullptr &&
+                transitionedDebugInstance->controllerAssetId == scene.Animators().Controller(owner.Entity()) &&
+                transitionedDebugInstance->parameters.size() == 1U &&
+                transitionedDebugInstance->parameters.front().name == "Blend" &&
+                transitionedDebugInstance->parameters.front().type == kb::scene::AnimatorParameterType::Float &&
+                NearlyEqual(transitionedDebugInstance->parameters.front().floatValue, 0.5F) &&
+                transitionedDebugInstance->layers.size() == 2U &&
+                transitionedDebugInstance->layers.front().name == "Base" &&
+                transitionedDebugInstance->layers.front().activeState == "DirectB" &&
+                transitionedDebugInstance->layers.front().previousState == "Blend" &&
+                transitionedDebugInstance->layers.front().transitioning &&
+                NearlyEqual(transitionedDebugInstance->layers.front().weight, 1.0F) &&
+                NearlyEqual(static_cast<float>(transitionedDebugInstance->layers.front().elapsedSeconds), 0.25F) &&
+                NearlyEqual(transitionedDebugInstance->layers.front().transitionProgress, 0.5F) &&
+                transitionedDebugInstance->bones.size() == 3U &&
+                transitionedDebugInstance->paletteMatrixCount == 3U &&
+                !transitionedDebugInstance->compatibilityDiagnostics.empty() &&
+                transitionedDebugInstance->poseEvaluationCount == 2U,
+            "Animator debug snapshot did not retain the evaluated live skeletal state");
+        Require(ReadTextFile(instanceControllerPath) ==
+                instanceControllerBeforeDebugSnapshot,
+            "Animator debug snapshot serialized live debug state into the controller asset");
 
         scene.Components().Animators().Set(
             owner.Entity(), kb::scene::Animator{
@@ -1951,9 +2048,19 @@ end
             owner.Entity(), "Base");
         const auto reloadedSkeletalPose = scene.Animators().InstanceSkeleton(
             owner.Entity());
+        const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> reloadedDebug =
+            scene.Animators().DebugSnapshot();
+        const kb::scene::AnimatorDebugInstanceSnapshot* reloadedDebugInstance =
+            reloadedDebug == nullptr ? nullptr : reloadedDebug->Find(owner.Entity());
         Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
                 directBStateAfterReload.has_value() &&
                 reloadedSkeletalPose.has_value() &&
+                reloadedDebug != nullptr && transitionedDebug != nullptr &&
+                reloadedDebug->revision > transitionedDebug->revision &&
+                reloadedDebugInstance != nullptr &&
+                reloadedDebugInstance->layers.front().activeState == "DirectB" &&
+                reloadedDebugInstance->bones.size() == 3U &&
+                NearlyEqual(reloadedDebugInstance->bones[2].localPose.position.x, 7.5F) &&
                 directBStateAfterReload->state == "DirectB" &&
                 !directBStateAfterReload->transitioning &&
                 NearlyEqual(directBStateAfterReload->normalizedTime, 0.75F) &&
@@ -1964,6 +2071,16 @@ end
         Require(kb::scene::AnimationAssetIO::SaveClip(
                     instanceClipBPath, instanceClipB),
             "Skeletal hot-reload fixture could not restore its canonical clip");
+
+        const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> retainedDebug =
+            scene.Animators().DebugSnapshot();
+        scene.Components().Animators().Remove(owner.Entity());
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> detachedDebug =
+            scene.Animators().DebugSnapshot();
+        Require(retainedDebug != nullptr && retainedDebug->Find(owner.Entity()) != nullptr &&
+                detachedDebug != nullptr && detachedDebug->Find(owner.Entity()) == nullptr,
+            "Animator debug snapshots must remain valid after the live instance detaches");
 
         std::filesystem::remove_all(skeletalRoot);
     }

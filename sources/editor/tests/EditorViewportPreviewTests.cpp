@@ -4,19 +4,28 @@
 #include "app/EditorPlayModeState.hpp"
 #include "app/scene_viewport/EditorSceneViewportMeshPicker.hpp"
 #include "app/scene_viewport/EditorTerrainStrokeTickPolicy.hpp"
+#include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAnimators.hpp"
+#include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
+#include "engine/scene/SkeletonAssetIO.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
+#include "rendering/EditorHostSurfaceLifecycle.hpp"
 #include "rendering/EditorTexturePreviewService.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLabelFormat.hpp"
 #include "scene/EditorViewportCameraState.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
+#include "scene/AnimationPreviewContext.hpp"
+#include "scene/EditorAnimationPreviewScene.hpp"
 
 #include "engine/assets/AssetMetadata.hpp"
 
@@ -28,6 +37,7 @@
 #include <fstream>
 #include <span>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -53,6 +63,211 @@ void RunProfileCycleAndResolutionTest() {
     kb::editor::tests::Require(phone.kind == kb::editor::EditorViewportProfileKind::PhoneLandscape, "Viewport profile cycle should skip the removed phone portrait profile");
     kb::editor::tests::Require(phone.devicePreview, "Phone landscape should remain a device preview profile");
     kb::editor::tests::Require(phone.safeArea.left > 0U && phone.safeArea.right > 0U, "Phone landscape should expose safe area insets");
+}
+
+void RunAnimationPreviewContextTracksSharedBindingTest() {
+    kb::editor::AnimationPreviewContext preview;
+    const std::uint64_t initialRevision = preview.Revision();
+    preview.SetAssets({ 1U }, { 2U }, { 3U }, { 4U });
+    kb::editor::tests::Require(
+        preview.SkeletonAsset().value == 1U && preview.SkeletalMeshAsset().value == 2U &&
+            preview.ClipAsset().value == 3U && preview.ControllerAsset().value == 4U &&
+            preview.Revision() == initialRevision + 1U,
+        "Animation preview context did not retain one shared asset binding");
+    preview.SetPoseMode(kb::editor::AnimationPreviewPoseMode::Animated);
+    kb::editor::tests::Require(
+        preview.PoseMode() == kb::editor::AnimationPreviewPoseMode::Animated &&
+            preview.Revision() == initialRevision + 2U,
+        "Animation preview context did not invalidate after a pose-mode change");
+    preview.Clear();
+    kb::editor::tests::Require(
+        !preview.SkeletonAsset().IsValid() && !preview.SkeletalMeshAsset().IsValid() &&
+            !preview.ClipAsset().IsValid() && !preview.ControllerAsset().IsValid() &&
+            preview.PoseMode() == kb::editor::AnimationPreviewPoseMode::Reference,
+        "Animation preview context did not reset shared state atomically");
+}
+
+void RunAnimationPreviewTransportTest() {
+    kb::editor::AnimationPreviewTransport transport;
+    kb::editor::tests::Require(
+        transport.SetDurationSeconds(2.0F) && transport.SetFrameRate(20.0F) &&
+            transport.SetPlaying(true) && transport.Advance(0.5F) &&
+            std::fabs(transport.NormalizedTime() - 0.25F) < 0.0001F,
+        "Animation preview transport did not advance in clip-time units");
+    kb::editor::tests::Require(
+        transport.Step(1) && std::fabs(transport.NormalizedTime() - 0.275F) < 0.0001F,
+        "Animation preview transport did not step by one configured frame");
+    kb::editor::tests::Require(
+        transport.SetLooping(false) && transport.Scrub(0.99F) && transport.Advance(1.0F) &&
+            !transport.IsPlaying() && std::fabs(transport.NormalizedTime() - 1.0F) < 0.0001F,
+        "Animation preview transport did not deterministically stop at a non-looping end");
+    kb::editor::tests::Require(
+        transport.SetLooping(true) && transport.SetPlaying(true) && transport.Scrub(0.95F) && transport.Advance(0.2F) &&
+            std::fabs(transport.NormalizedTime() - 0.05F) < 0.0001F,
+        "Animation preview transport did not wrap a looping playhead deterministically");
+    transport.Reset();
+    kb::editor::tests::Require(
+        transport.SetDurationSeconds(2.0F) && transport.SetLoopRange(0.25F, 0.5F) &&
+            transport.SetPlaying(true) && transport.Scrub(0.49F) && transport.Advance(0.1F) &&
+            std::fabs(transport.NormalizedTime() - 0.29F) < 0.0001F,
+        "Animation preview transport did not honor a bounded loop range");
+}
+
+void RunAnimationPreviewOverlayStateTest() {
+    kb::editor::AnimationPreviewOverlayState overlays;
+    const std::uint64_t revision = overlays.Revision();
+    kb::editor::tests::Require(
+        overlays.SetBonesVisible(true) && overlays.SetBoneNamesVisible(true) && overlays.SetSocketsVisible(true) &&
+            overlays.SetRootMotionVisible(true) && overlays.SetBoundsVisible(true) && overlays.SetLodVisible(true) &&
+            overlays.SetNormalsVisible(true) && overlays.Revision() == revision + 7U,
+        "Animation preview overlays did not retain all runtime debug visibility switches");
+    kb::editor::tests::Require(
+        overlays.BonesVisible() && overlays.BoneNamesVisible() && overlays.SocketsVisible() &&
+            overlays.RootMotionVisible() && overlays.BoundsVisible() && overlays.LodVisible() && overlays.NormalsVisible(),
+        "Animation preview overlay visibility query lost enabled diagnostics");
+}
+
+void RunAnimationPreviewScenePresentationTest() {
+    kb::scene::Scene source{ kb::scene::SceneMode::Runtime };
+    kb::editor::AnimationPreviewContext context;
+    kb::editor::EditorAnimationPreviewScene preview;
+    const kb::scene::Scene& scene = preview.SceneFor(source, context);
+    kb::editor::tests::Require(scene.Mode() == kb::scene::SceneMode::Runtime, "Animation preview must use a runtime scene");
+    kb::editor::tests::Require(
+        preview.PreviewEntity().IsValid() && preview.CameraEntity().IsValid() &&
+            preview.FloorEntity().IsValid() && preview.EnvironmentEntity().IsValid(),
+        "Animation preview did not create its presentation entities");
+    kb::editor::tests::Require(
+        scene.Components().Cameras().TryGet(preview.CameraEntity()) != nullptr &&
+            scene.Components().MeshRenderers().TryGet(preview.FloorEntity()) != nullptr &&
+            scene.Components().WorldBackdrops().TryGet(preview.EnvironmentEntity()) != nullptr &&
+            scene.Components().AmbientRadiances().TryGet(preview.EnvironmentEntity()) != nullptr,
+        "Animation preview presentation does not include camera, floor and environment");
+    const kb::scene::TransformComponent initialCamera = scene.Transforms().Get(preview.CameraEntity());
+    preview.Camera().BeginNavigation(kb::editor::EditorViewportCameraNavigationMode::Orbit, 10, 10);
+    static_cast<void>(preview.Camera().UpdatePointer(40, 24));
+    preview.Camera().EndNavigation();
+    const kb::scene::TransformComponent movedCamera = preview.SceneFor(source, context).Transforms().Get(preview.CameraEntity());
+    kb::editor::tests::Require(
+        std::fabs(initialCamera.localPosition.x - movedCamera.localPosition.x) > 0.0001F ||
+            std::fabs(initialCamera.localPosition.y - movedCamera.localPosition.y) > 0.0001F ||
+            std::fabs(initialCamera.localPosition.z - movedCamera.localPosition.z) > 0.0001F,
+        "Animation preview camera navigation did not update the runtime camera transform");
+}
+
+void RunAnimationPreviewExactScrubTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb-editor-animation-preview-scrub-tests";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    const std::filesystem::path skeletonPath = root / "Assets" / "Skeletal" / "Preview.kbskeleton";
+    kb::scene::SkeletonAsset skeleton{};
+    skeleton.bones = {{ .id = 7U, .parentIndex = -1, .name = "Root", .referencePose = {}, .inverseBind = {} }};
+    kb::editor::tests::Require(kb::scene::SkeletonAssetIO::Save(skeletonPath, skeleton),
+        "Animation preview scrub fixture could not save its skeleton");
+
+    kb::scene::Scene source{ kb::scene::SceneMode::Runtime };
+    kb::editor::tests::Require(source.Assets().MountProject(root) && source.Assets().Discover() == 1U,
+        "Animation preview scrub fixture could not discover its skeleton");
+    const kb::assets::AssetMetadata* skeletonMetadata =
+        source.Assets().Manager().Registry().FindByPath("/Game/Skeletal/Preview.kbskeleton");
+    kb::editor::tests::Require(skeletonMetadata != nullptr, "Animation preview scrub fixture lost skeleton metadata");
+    if (skeletonMetadata == nullptr) return;
+    const kb::assets::AssetId skeletonId = skeletonMetadata->id;
+
+    const std::uint64_t signature = kb::scene::SkeletonCompatibilitySignature(skeleton);
+    kb::scene::SkeletalMeshAsset mesh{};
+    mesh.skeletonAssetId = skeletonId.value;
+    mesh.skeletonCompatibilitySignature = signature;
+    mesh.conservativeBounds = { .center = {}, .extents = { 1.0F, 1.0F, 1.0F } };
+    mesh.fixedBounds = mesh.conservativeBounds;
+    kb::scene::SkeletalMeshLod lod{};
+    lod.requiredBones = { 7U };
+    lod.vertices = { {}, { .position = { 1.0F, 0.0F, 0.0F } }, { .position = { 0.0F, 1.0F, 0.0F } } };
+    lod.indices = { 0U, 1U, 2U };
+    lod.sections = {{ .firstIndex = 0U, .indexCount = 3U, .boneMap = { 7U } }};
+    mesh.lods = { std::move(lod) };
+    const std::filesystem::path meshPath = root / "Assets" / "Skeletal" / "Preview.kbskeletalmesh";
+    kb::editor::tests::Require(kb::scene::SkeletalMeshAssetIO::Save(meshPath, mesh),
+        "Animation preview scrub fixture could not save its mesh");
+
+    kb::scene::AnimationClip clip{};
+    clip.durationSeconds = 1.0F;
+    clip.looping = true;
+    clip.targetSkeletonAssetId = skeletonId.value;
+    clip.targetSkeletonCompatibilitySignature = signature;
+    clip.skeletalTracks = {{ .boneId = 7U, .bindingMask = 1U, .keyframes = {
+        { .timeSeconds = 0.0F, .transform = {} },
+        { .timeSeconds = 1.0F, .transform = { .position = { 10.0F, 0.0F, 0.0F } } },
+    } }};
+    const std::filesystem::path clipPath = root / "Assets" / "Animation" / "Preview.kbanim";
+    kb::editor::tests::Require(kb::scene::AnimationAssetIO::SaveClip(clipPath, clip),
+        "Animation preview scrub fixture could not save its clip");
+    kb::scene::AnimatorController controller{};
+    controller.layers = {{ .name = "Base", .defaultState = "Preview", .weight = 1.0F, .mask = 1U,
+        .states = {{ .name = "Preview", .clipReference = "/Game/Animation/Preview.kbanim" }} }};
+    const std::filesystem::path controllerPath = root / "Assets" / "Animation" / "Preview.kbanimcontroller";
+    kb::editor::tests::Require(kb::scene::AnimationAssetIO::SaveController(controllerPath, controller) &&
+            source.Assets().Discover() == 4U,
+        "Animation preview scrub fixture could not discover mesh and animation assets");
+
+    const kb::assets::AssetMetadata* meshMetadata =
+        source.Assets().Manager().Registry().FindByPath("/Game/Skeletal/Preview.kbskeletalmesh");
+    const kb::assets::AssetMetadata* clipMetadata =
+        source.Assets().Manager().Registry().FindByPath("/Game/Animation/Preview.kbanim");
+    const kb::assets::AssetMetadata* controllerMetadata =
+        source.Assets().Manager().Registry().FindByPath("/Game/Animation/Preview.kbanimcontroller");
+    kb::editor::tests::Require(meshMetadata != nullptr && clipMetadata != nullptr && controllerMetadata != nullptr,
+        "Animation preview scrub fixture lost runtime asset metadata");
+    if (meshMetadata == nullptr || clipMetadata == nullptr || controllerMetadata == nullptr) return;
+    const auto sourceSkeleton = source.Assets().Manager().Load<kb::scene::SkeletonAsset>(skeletonId);
+    const std::string skeletonLoadFailure = "Animation preview scrub fixture could not load its skeleton: " +
+        source.Assets().Manager().LastError();
+    kb::editor::tests::Require(sourceSkeleton.IsLoaded(), skeletonLoadFailure.c_str());
+    kb::editor::tests::Require(source.Assets().Manager().Load<kb::scene::SkeletalMeshAsset>(meshMetadata->id).IsLoaded(),
+        "Animation preview scrub fixture could not load its skeletal mesh");
+    kb::editor::tests::Require(source.Assets().Manager().Load<kb::scene::AnimationClip>(clipMetadata->id).IsLoaded(),
+        "Animation preview scrub fixture could not load its clip");
+    kb::editor::tests::Require(source.Assets().Manager().Load<kb::scene::AnimatorController>(controllerMetadata->id).IsLoaded(),
+        "Animation preview scrub fixture could not load its controller");
+
+    kb::editor::AnimationPreviewContext context;
+    context.SetAssets(skeletonId, meshMetadata->id, clipMetadata->id, {});
+    context.SetPoseMode(kb::editor::AnimationPreviewPoseMode::Animated);
+    kb::editor::EditorAnimationPreviewScene preview;
+    const kb::scene::Scene& initialPreviewScene = preview.SceneFor(source, context);
+    kb::editor::tests::Require(initialPreviewScene.Animators().Exists(preview.PreviewEntity()),
+        "Animation Clip preview did not create a runtime animator from the runtime clip");
+    kb::editor::tests::Require(context.Transport().Scrub(0.5F), "Animation preview scrub rejected a normalized midpoint");
+    const kb::scene::Scene& previewScene = preview.SceneFor(source, context);
+    const auto pose = previewScene.Animators().InstanceSkeleton(preview.PreviewEntity());
+    const float sampledPosition = pose.has_value() && !pose->currentComponentPose.positions.empty()
+        ? pose->currentComponentPose.positions.front().x
+        : -1000.0F;
+    const std::string scrubFailure = "Animation preview scrub did not evaluate the exact midpoint skeletal pose (sample=" +
+        std::to_string(sampledPosition) + ")";
+    kb::editor::tests::Require(
+        pose.has_value() && pose->currentComponentPose.positions.size() == 1U &&
+            std::fabs(sampledPosition - 5.0F) < 0.0001F,
+        scrubFailure.c_str());
+    std::filesystem::remove_all(root, error);
+}
+
+void RunHostSurfaceLifecycleStateTest() {
+    kb::editor::EditorHostSurfaceLifecycle lifecycle;
+    constexpr kb::editor::EditorHostSurfaceLifecycle::HostKey firstHost = 1U;
+    constexpr kb::editor::EditorHostSurfaceLifecycle::HostKey secondHost = 2U;
+    lifecycle.TrackHost(firstHost);
+    lifecycle.TrackHost(secondHost);
+    kb::editor::tests::Require(lifecycle.Suspend(firstHost) && lifecycle.IsSuspended(firstHost) && !lifecycle.IsSuspended(secondHost),
+        "Host lifecycle did not isolate a minimized host");
+    kb::editor::tests::Require(!lifecycle.Suspend(firstHost) && lifecycle.Resume(firstHost) && !lifecycle.IsSuspended(firstHost),
+        "Host lifecycle did not make minimize/resume transitions idempotent");
+    kb::editor::tests::Require(lifecycle.Suspend(firstHost) && lifecycle.SuspendAll() &&
+            lifecycle.IsSuspended(firstHost) && lifecycle.IsSuspended(secondHost),
+        "Host lifecycle did not suspend every host on application deactivation");
+    kb::editor::tests::Require(!lifecycle.Resume(firstHost) && lifecycle.ResumeAll() &&
+            lifecycle.IsSuspended(firstHost) && !lifecycle.IsSuspended(secondHost) && lifecycle.Resume(firstHost),
+        "Host lifecycle did not retain a minimized host across application reactivation");
 }
 
 void RunFitCameraAndCustomTest() {
@@ -591,6 +806,12 @@ void RunTexturePreviewLockBitsDecodeTest() {
 namespace kb::editor::tests {
 
 void RunEditorViewportPreviewTests() {
+    RunAnimationPreviewContextTracksSharedBindingTest();
+    RunAnimationPreviewTransportTest();
+    RunAnimationPreviewOverlayStateTest();
+    RunAnimationPreviewScenePresentationTest();
+    RunAnimationPreviewExactScrubTest();
+    RunHostSurfaceLifecycleStateTest();
     RunTerrainToolbarAndStrokeTickPolicyTest();
     RunTexturePreviewLockBitsDecodeTest();
     RunToolbarHudLabelFormatTest();

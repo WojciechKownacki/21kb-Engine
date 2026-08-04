@@ -130,6 +130,7 @@ SceneRenderMeshInstance RenderSceneMeshInstanceBuilder::Build(const MeshRenderPr
         .materialSlotAssetIds = mesh.materialSlotAssetIds,
         .materialSlotOverrideCount = mesh.materialSlotOverrideCount,
         .model = mesh.model,
+        .boundsOverride = mesh.boundsOverride,
         .color = mesh.color,
         .fadeAmount = mesh.fadeAmount,
         .customData0 = mesh.customData0,
@@ -144,6 +145,8 @@ SceneRenderMeshInstance RenderSceneMeshInstanceBuilder::Build(const MeshRenderPr
         .detailSwitchPromoteCoverage = mesh.detailSwitchPromoteCoverage,
         .detailSwitchDemoteCoverage = mesh.detailSwitchDemoteCoverage,
         .detailSwitchEnabled = mesh.detailSwitchEnabled,
+        .lodBias = mesh.lodBias,
+        .lodEnabled = mesh.lodEnabled,
     };
 }
 

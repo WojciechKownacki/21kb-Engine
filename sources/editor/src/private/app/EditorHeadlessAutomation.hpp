@@ -54,6 +54,9 @@ public:
         std::string_view checkpoint);
     [[nodiscard]] bool CapturePanel(
         std::string_view panel, std::string_view checkpoint);
+    [[nodiscard]] bool CapturePanelScreenshotMatrix(
+        std::string_view panel, std::string_view checkpoint);
+    [[nodiscard]] bool VerifyViewportHostLifecycle();
     [[nodiscard]] bool CaptureRuntime(
         std::string_view checkpoint,
         bool requireNonUniform = false);

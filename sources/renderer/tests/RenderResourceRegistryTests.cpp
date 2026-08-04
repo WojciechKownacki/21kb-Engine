@@ -18,6 +18,8 @@
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
+#include "kb/render/resources/SkeletalMeshRenderResourceBuilder.hpp"
+#include "engine/scene/SkeletalMeshAsset.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "resources/RenderTextureResourceBuilder.hpp"
 #include "resources/RenderMeshResourceBuilder.hpp"
@@ -424,6 +426,42 @@ void RunSkinnedMeshRegistrationContractTest() {
     desc.skinning.jointCount = kRenderSkinnedVertexJointLimit + 1U;
     Require(!RenderMeshResourceBuilder::IsValidDesc(desc),
         "Skinned mesh registration accepted a joint range beyond the BGFX Uint16 vertex layout");
+}
+
+void RunSkeletalMeshLodResourceUsesStablePaletteTest() {
+    kb::scene::SkeletalMeshAsset asset{};
+    asset.skeletonAssetId = 1U;
+    asset.skeletonCompatibilitySignature = 1U;
+    asset.conservativeBounds = { .center = { 0.5F, 0.5F, 0.0F }, .extents = { 0.5F, 0.5F, 0.1F } };
+    asset.fixedBounds = asset.conservativeBounds;
+    kb::scene::SkeletalMeshLod high{};
+    high.requiredBones = { 1U };
+    high.minScreenCoverage = 0.5F;
+    high.vertices = { {}, { .position = { 1.0F, 0.0F, 0.0F } }, { .position = { 0.0F, 1.0F, 0.0F } } };
+    high.indices = { 0U, 1U, 2U };
+    high.sections = { { .firstIndex = 0U, .indexCount = 3U, .materialAssetId = 11U, .boneMap = { 1U } } };
+    kb::scene::SkeletalMeshLod low = high;
+    low.requiredBones = { 2U };
+    low.minScreenCoverage = 0.0F;
+    low.sections[0].materialAssetId = 12U;
+    low.sections[0].boneMap = { 2U };
+    asset.lods = { high, low };
+    asset.morphTargets = { {
+        .name = "Smile",
+        .lodIndex = 0U,
+        .deltas = { { .vertexIndex = 1U, .positionDelta = { 0.0F, 0.5F, 0.0F } } },
+    } };
+
+    const std::vector<std::string> morphNames{ "Smile" };
+    const std::vector<float> morphWeights{ 0.5F };
+    const auto resource = SkeletalMeshRenderResourceBuilder::Build(asset, morphNames, morphWeights);
+    Require(resource.has_value() && resource->paletteBoneIds == std::vector<std::uint64_t>{ 1U, 2U } &&
+            resource->desc.skinning.jointCount == 2U && resource->sections.size() == 2U &&
+            resource->sections[0].lodLevel == 0U && resource->sections[1].lodLevel == 1U &&
+            resource->dynamicVertexBuffer && resource->vertices.size() == 6U && resource->vertices[0].joints[0] == 0U &&
+            resource->vertices[1].y == 0.25F &&
+            resource->vertices[3].joints[0] == 1U && RenderMeshResourceBuilder::IsValidDesc(resource->desc),
+        "Skeletal mesh LOD resource did not remap every section into one stable palette");
 }
 
 void RunSkinningPaletteAllocatorLifetimeTest() {
@@ -2849,6 +2887,7 @@ void RunRenderResourceRegistryTests() {
     RunReserveAndStatsReportPoolPressureTest();
     RunStaticMeshVertexFormatsExposeExpectedStridesTest();
     RunSkinnedMeshRegistrationContractTest();
+    RunSkeletalMeshLodResourceUsesStablePaletteTest();
     RunSkinningPaletteAllocatorLifetimeTest();
     RunObjImporterBuildsRenderMeshDescWithSectionsAndSlotsTest();
     RunFbxImporterBuildsSectionsForMaterialSlotsTest();
