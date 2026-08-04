@@ -25,6 +25,7 @@
 #include "scene/EditorSceneViewportStateStore.hpp"
 #include "scene/AnimationPreviewContext.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
+#include "scene/AnimationClipEditorDocumentState.hpp"
 #include "scene/EditorAnimationPreviewScene.hpp"
 #include "scene/SkeletalMeshEditorTreeState.hpp"
 #include "scene/SkeletalMeshEditorDetailsState.hpp"
@@ -420,6 +421,14 @@ public:
     [[nodiscard]] std::uint64_t AnimationClipEditorPreviewRevision() const noexcept;
     [[nodiscard]] AnimationClipTimelineState& AnimationClipEditorTimeline() noexcept;
     [[nodiscard]] const AnimationClipTimelineState& AnimationClipEditorTimeline() const noexcept;
+    [[nodiscard]] bool BeginAnimationClipEditorEditGroup();
+    void EndAnimationClipEditorEditGroup() noexcept;
+    [[nodiscard]] bool UndoAnimationClipEditorEdit();
+    [[nodiscard]] bool RedoAnimationClipEditorEdit();
+    [[nodiscard]] bool UpsertAnimationClipBoneKey(kb::scene::SkeletonBoneId boneId, float timeSeconds, kb::scene::LocalTransform transform);
+    [[nodiscard]] bool RemoveAnimationClipBoneKey(kb::scene::SkeletonBoneId boneId, float timeSeconds);
+    [[nodiscard]] bool UpsertAnimationClipEvent(kb::scene::AnimationEventId id, float timeSeconds);
+    [[nodiscard]] bool RemoveAnimationClipEvent(kb::scene::AnimationEventId id);
     [[nodiscard]] bool OpenSkeletalMeshEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] kb::assets::AssetId SkeletalMeshEditorAssetId() const noexcept;
     [[nodiscard]] bool HasSkeletalMeshEditorAsset() const noexcept;
@@ -925,6 +934,7 @@ public:
     [[nodiscard]] bool HasActiveTransformEdit() const noexcept;
 
 private:
+    [[nodiscard]] bool PublishAnimationClipEditorWorkingCopy();
     [[nodiscard]] EditorSceneCommandController SceneCommands() noexcept;
     [[nodiscard]] bool BeginTerrainBrushStroke(
         kb::scene::SceneEntity entity,
@@ -1003,6 +1013,7 @@ private:
     std::unique_ptr<EditorAnimationPreviewScene> animationPreviewScene_;
     kb::assets::AssetId animationClipEditorAssetId_{};
     AnimationClipTimelineState animationClipEditorTimeline_;
+    AnimationClipEditorDocumentState animationClipEditorDocument_;
     kb::assets::AssetId skeletalMeshEditorAssetId_{};
     SkeletalMeshEditorTreeState skeletalMeshEditorTree_;
     SkeletalMeshEditorDetailsState skeletalMeshEditorDetails_;
