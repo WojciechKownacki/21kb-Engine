@@ -3076,8 +3076,9 @@ ReadScriptValue(
         bool opened = false;
         if (metadata->type == "LuaScript") {
             opened = state.context.OpenLuaScript(id);
+        } else if (metadata->type == "AnimationClip") {
+            opened = state.context.OpenAnimationClipEditorAsset(id);
         } else if (
-            metadata->type == "AnimationClip" ||
             metadata->type == "AnimatorController" ||
             metadata->type == "Timeline") {
             opened = state.context.OpenAnimationAsset(id);
