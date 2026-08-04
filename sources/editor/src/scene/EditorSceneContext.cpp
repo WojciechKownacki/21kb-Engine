@@ -9149,6 +9149,54 @@ bool EditorSceneContext::ReturnToAnimatorStateMachine() {
     return animatorEditorGraphDocument_.CloseMotionDocument();
 }
 
+bool EditorSceneContext::HasDirtyAnimatorEditorAssetEdit() const noexcept {
+    return animatorEditorGraphDocument_.Dirty();
+}
+
+bool EditorSceneContext::UndoAnimatorEditorEdit() {
+    if (!animatorEditorGraphDocument_.Undo() || animatorEditorGraphDocument_.Controller() == nullptr) return false;
+    static_cast<void>(scene_->Assets().Manager().PublishRuntimeAsset(animatorEditorAssetId_, std::make_shared<kb::scene::AnimatorController>(*animatorEditorGraphDocument_.Controller())));
+    animationPreviewScene_->Clear();
+    static_cast<void>(AnimationPreviewScene());
+    return true;
+}
+
+bool EditorSceneContext::RedoAnimatorEditorEdit() {
+    if (!animatorEditorGraphDocument_.Redo() || animatorEditorGraphDocument_.Controller() == nullptr) return false;
+    static_cast<void>(scene_->Assets().Manager().PublishRuntimeAsset(animatorEditorAssetId_, std::make_shared<kb::scene::AnimatorController>(*animatorEditorGraphDocument_.Controller())));
+    animationPreviewScene_->Clear();
+    static_cast<void>(AnimationPreviewScene());
+    return true;
+}
+
+bool EditorSceneContext::SaveAnimatorEditorAsset() {
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(animatorEditorAssetId_);
+    const kb::scene::AnimatorController* working = animatorEditorGraphDocument_.Controller();
+    if (metadata == nullptr || working == nullptr || !kb::scene::AnimationAssetIO::SaveController(metadata->physicalPath, *working)) {
+        console_.Error("Animator Editor", "Animator Controller validation or atomic save failed; runtime preview was not reloaded.");
+        return false;
+    }
+    static_cast<void>(scene_->Assets().Manager().DiscoverMountedAssets());
+    if (!scene_->Assets().Manager().PublishRuntimeAsset(
+            animatorEditorAssetId_, std::make_shared<kb::scene::AnimatorController>(*working))) {
+        console_.Error("Animator Editor", "Animator Controller was saved but its runtime hot reload failed.");
+        return false;
+    }
+    static_cast<void>(animatorEditorGraphDocument_.MarkSaved());
+    animationPreviewScene_->Clear();
+    static_cast<void>(AnimationPreviewScene());
+    console_.Info("Animator Editor", "Saved and hot reloaded Animator Controller.");
+    return true;
+}
+
+bool EditorSceneContext::RevertAnimatorEditorAsset() {
+    if (!animatorEditorGraphDocument_.Revert() || animatorEditorGraphDocument_.Controller() == nullptr) return false;
+    static_cast<void>(scene_->Assets().Manager().PublishRuntimeAsset(animatorEditorAssetId_, std::make_shared<kb::scene::AnimatorController>(*animatorEditorGraphDocument_.Controller())));
+    animationPreviewScene_->Clear();
+    static_cast<void>(AnimationPreviewScene());
+    return true;
+}
+
 bool EditorSceneContext::OpenAnimationClipEditorAsset(kb::assets::AssetId id) {
     const kb::assets::AssetMetadata* clipMetadata = scene_->Assets().Manager().Registry().Find(id);
     if (clipMetadata == nullptr || clipMetadata->type != kb::scene::kAnimationClipAssetType) {

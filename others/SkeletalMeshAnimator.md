@@ -813,7 +813,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     breadcrumbs/back navigation.
 76. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Rozszerzyć 1D blend tree i pose/motion graph tylko o węzły posiadające
     produkcyjny runtime contract; bez UI-only node'ów.
-77. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować working copy, per-document undo/redo, dirty marker,
+77. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować working copy, per-document undo/redo, dirty marker,
     Save/Revert i close prompt.
 78. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Save automatycznie waliduje i buduje reprezentację runtime bez jawnego
     przycisku Compile; błąd wskazuje dokładny node/transition/parameter.
