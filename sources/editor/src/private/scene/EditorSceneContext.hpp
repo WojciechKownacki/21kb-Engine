@@ -429,6 +429,8 @@ public:
     [[nodiscard]] bool RemoveAnimationClipBoneKey(kb::scene::SkeletonBoneId boneId, float timeSeconds);
     [[nodiscard]] bool UpsertAnimationClipEvent(kb::scene::AnimationEventId id, float timeSeconds);
     [[nodiscard]] bool RemoveAnimationClipEvent(kb::scene::AnimationEventId id);
+    [[nodiscard]] std::vector<kb::assets::AssetId> AnimationClipEditorCompatiblePreviewMeshes();
+    [[nodiscard]] bool SetAnimationClipEditorPreviewMesh(kb::assets::AssetId meshId);
     [[nodiscard]] bool OpenSkeletalMeshEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] kb::assets::AssetId SkeletalMeshEditorAssetId() const noexcept;
     [[nodiscard]] bool HasSkeletalMeshEditorAsset() const noexcept;
