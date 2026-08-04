@@ -794,7 +794,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     diagnostykę niezgodności.
 68. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Save ma automatycznie walidować, budować runtime clip i hot reloadować
     go dopiero po atomowym sukcesie.
-69. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać headless tests scrub/evaluation/edit/save/reopen oraz golden
+69. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać headless tests scrub/evaluation/edit/save/reopen oraz golden
     screenshots timeline.
 
 ### Sprint SK-10 — Animator/Controller Editor
