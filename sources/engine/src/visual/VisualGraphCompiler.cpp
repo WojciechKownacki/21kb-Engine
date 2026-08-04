@@ -235,6 +235,8 @@ const char* ToString(VisualGraphIrOpcode opcode) noexcept {
         return "CallNative";
     case VisualGraphIrOpcode::EmitEvent:
         return "EmitEvent";
+    case VisualGraphIrOpcode::Wait:
+        return "Wait";
     }
     return "Sequence";
 }
