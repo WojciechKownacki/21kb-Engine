@@ -9089,6 +9089,10 @@ SkeletalMeshEditorDetailsModel EditorSceneContext::SkeletalMeshEditorDetails() c
         skeletalMeshEditorTree_.SelectedBone(), skeletalMeshEditorTree_.SelectedSocket());
 }
 
+const std::vector<kb::scene::SkeletalMeshMorphTarget>& EditorSceneContext::SkeletalMeshEditorMorphTargets() const noexcept {
+    return skeletalMeshEditorDetails_.MorphTargets();
+}
+
 bool EditorSceneContext::SetAnimatorControllerAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {
     if (!entity.IsValid() || !scene_->Components().Animators().Has(entity)) {
         console_.Warning("Animator", "Selected entity does not have an Animator component.");

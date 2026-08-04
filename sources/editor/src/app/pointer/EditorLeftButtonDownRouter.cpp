@@ -836,7 +836,20 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             DockPanelKind::SkeletalMeshEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         skeletalMeshEditorContent.has_value() && PointInRect(*skeletalMeshEditorContent, x, y) &&
         sceneContext_.HasSkeletalMeshEditorAsset()) {
-        if (SkeletalMeshEditorPanelRenderer::IsTreeSearchAt(*skeletalMeshEditorContent, x, y)) {
+        if (const std::optional<std::uint8_t> overlay = SkeletalMeshEditorPanelRenderer::AdvancedPreviewOverlayAt(
+                *skeletalMeshEditorContent, x, y);
+            overlay.has_value()) {
+            AnimationPreviewOverlayState& overlays = sceneContext_.AnimationPreview().Overlays();
+            switch (*overlay) {
+            case 0U: static_cast<void>(overlays.SetBonesVisible(!overlays.BonesVisible())); break;
+            case 1U: static_cast<void>(overlays.SetBoneNamesVisible(!overlays.BoneNamesVisible())); break;
+            case 2U: static_cast<void>(overlays.SetSocketsVisible(!overlays.SocketsVisible())); break;
+            case 3U: static_cast<void>(overlays.SetBoundsVisible(!overlays.BoundsVisible())); break;
+            case 4U: static_cast<void>(overlays.SetLodVisible(!overlays.LodVisible())); break;
+            case 5U: static_cast<void>(overlays.SetNormalsVisible(!overlays.NormalsVisible())); break;
+            default: break;
+            }
+        } else if (SkeletalMeshEditorPanelRenderer::IsTreeSearchAt(*skeletalMeshEditorContent, x, y)) {
             sceneContext_.FocusSkeletalMeshEditorTreeSearch(true);
         } else if (const std::optional<SkeletalMeshEditorTreeRow> row =
                 SkeletalMeshEditorPanelRenderer::TreeRowAt(*skeletalMeshEditorContent, sceneContext_, x, y);
