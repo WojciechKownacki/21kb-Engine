@@ -3113,6 +3113,8 @@ ReadScriptValue(
         bool opened = false;
         if (metadata->type == "LuaScript") {
             opened = state.context.OpenLuaScript(id);
+        } else if (metadata->type == "SkeletalMesh") {
+            opened = state.context.OpenSkeletalMeshEditorAsset(id);
         } else if (metadata->type == "AnimationClip") {
             opened = state.context.OpenAnimationClipEditorAsset(id);
         } else if (metadata->type == "AnimatorController") {
@@ -3417,6 +3419,17 @@ ReadScriptValue(
         if (!panel || !checkpoint) return { false, error };
         return {
             state.automation.CapturePanel(*panel, *checkpoint),
+            *panel + ':' + *checkpoint };
+    }
+
+    if (*operation == "capture_screenshot_matrix") {
+        const auto panel = StringMember(step, "panel", error);
+        const auto checkpoint =
+            StringMember(step, "checkpoint", error);
+        if (!panel || !checkpoint) return { false, error };
+        return {
+            state.automation.CapturePanelScreenshotMatrix(
+                *panel, *checkpoint),
             *panel + ':' + *checkpoint };
     }
 
