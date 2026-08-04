@@ -803,7 +803,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     kierowanie controllera do Script Editora.
 71. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Odtworzyć domyślny flow UE5 `25/55/20`: preview, centralny dokument
     graph/state machine oraz Details/Asset Browser.
-72. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować Parameters, Layers, Entry/default state, state nodes,
+72. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować Parameters, Layers, Entry/default state, state nodes,
     transitions, conditions i transition Details.
 73. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać stabilne node/edge IDs, serializowany graph layout, comments,
     groups, copy/paste, rename, delete i multi-selection.
