@@ -82,8 +82,12 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::Handle
                 ? EditorAssetBrowserDoubleClickResult::AnimationClipEditorOpened
                 : EditorAssetBrowserDoubleClickResult::None;
         }
-        if (metadata->type == kb::scene::kAnimatorControllerAssetType ||
-            metadata->type == kb::scene::kTimelineAssetType) {
+        if (metadata->type == kb::scene::kAnimatorControllerAssetType) {
+            return sceneContext.OpenAnimatorEditorAsset(metadata->id)
+                ? EditorAssetBrowserDoubleClickResult::AnimatorEditorOpened
+                : EditorAssetBrowserDoubleClickResult::None;
+        }
+        if (metadata->type == kb::scene::kTimelineAssetType) {
             return sceneContext.OpenAnimationAsset(metadata->id)
                 ? EditorAssetBrowserDoubleClickResult::ScriptEditorOpened
                 : EditorAssetBrowserDoubleClickResult::None;

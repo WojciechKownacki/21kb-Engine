@@ -3078,9 +3078,9 @@ ReadScriptValue(
             opened = state.context.OpenLuaScript(id);
         } else if (metadata->type == "AnimationClip") {
             opened = state.context.OpenAnimationClipEditorAsset(id);
-        } else if (
-            metadata->type == "AnimatorController" ||
-            metadata->type == "Timeline") {
+        } else if (metadata->type == "AnimatorController") {
+            opened = state.context.OpenAnimatorEditorAsset(id);
+        } else if (metadata->type == "Timeline") {
             opened = state.context.OpenAnimationAsset(id);
         } else if (
             metadata->type == "RenderMaterial" ||
