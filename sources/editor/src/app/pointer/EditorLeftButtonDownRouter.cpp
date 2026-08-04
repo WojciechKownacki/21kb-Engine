@@ -174,6 +174,18 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
     return false;
 }
 
+[[nodiscard]] bool ResolveDirtyAnimatorEditorTabClose(HWND owner, EditorSceneContext& sceneContext) {
+    if (!sceneContext.HasDirtyAnimatorEditorAssetEdit()) return true;
+    const int result = MessageBoxW(
+        owner,
+        L"Save changes to the open Animator Controller before closing the editor?\n\nYes = Save\nNo = Discard changes\nCancel = keep editing",
+        L"Unsaved Animator Controller",
+        MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1 | MB_APPLMODAL);
+    if (result == IDYES) return sceneContext.SaveAnimatorEditorAsset();
+    if (result == IDNO) return sceneContext.RevertAnimatorEditorAsset();
+    return false;
+}
+
 [[nodiscard]] int RectHeight(const RECT& rect) noexcept {
     return std::max(0L, rect.bottom - rect.top);
 }
@@ -403,6 +415,9 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 return;
             }
             if (panel != nullptr && panel->kind == DockPanelKind::SkeletalMeshEditor && !ResolveDirtySkeletalMeshEditorTabClose(messageWindow, sceneContext_)) {
+                return;
+            }
+            if (panel != nullptr && panel->kind == DockPanelKind::AnimatorEditor && !ResolveDirtyAnimatorEditorTabClose(messageWindow, sceneContext_)) {
                 return;
             }
             if (dockModel_.Commands().ClosePanel(closeTab->panelId)) {

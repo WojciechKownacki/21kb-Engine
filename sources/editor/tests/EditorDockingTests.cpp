@@ -484,6 +484,10 @@ void RunAnimatorEditorGraphDocumentStateTest() {
         "Animator graph document should persist comments and groups with stable ids");
     kb::editor::tests::Require(document.RenameState(10U, "Rest") && document.SetSelection({ 10U }) && document.DeleteSelectedStates(),
         "Animator graph document should rename and delete a state while retaining a valid layer");
+    kb::editor::tests::Require(document.Dirty() && document.CanUndo() && document.Undo() && document.CanRedo() && document.Redo(),
+        "Animator graph document should retain per-document undo and redo history");
+    kb::editor::tests::Require(document.MarkSaved() && !document.Dirty() && !document.CanUndo() && !document.CanRedo(),
+        "Animator graph document should clear its dirty marker and history after saving");
 }
 
 void RunSkeletalMeshEditorDefaultLayoutTest() {
