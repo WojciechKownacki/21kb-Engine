@@ -11,6 +11,7 @@
 #include "scene/SkeletalMeshEditorDocumentState.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
 #include "scene/AnimationClipEditorDocumentState.hpp"
+#include "scene/AnimatorEditorGraphDocumentState.hpp"
 #include "windowing/FloatingWindowControlHitTester.hpp"
 #include "windowing/FloatingWindowControlLayout.hpp"
 
@@ -463,6 +464,28 @@ void RunAnimatorEditorDefaultLayoutTest() {
         "Animator Editor workspace panes should be contiguous");
 }
 
+void RunAnimatorEditorGraphDocumentStateTest() {
+    kb::scene::AnimatorController controller{};
+    controller.layers = {{ .name = "Base", .defaultState = "Idle", .states = {
+        { .id = 10U, .name = "Idle", .clipReference = "idle" },
+        { .id = 11U, .name = "Walk", .clipReference = "walk" },
+    }, .transitions = {{ .id = 12U, .fromState = "Idle", .toState = "Walk", .conditions = {{ .parameter = "Speed", .mode = kb::scene::AnimatorConditionMode::FloatGreater }} }} }};
+    kb::editor::AnimatorEditorGraphDocumentState document;
+    document.Open(controller);
+    kb::editor::tests::Require(document.SetSelection({ 10U, 11U }) && document.CopySelection(),
+        "Animator graph document should support multi-selection copy");
+    kb::editor::tests::Require(document.PasteIntoLayer("Base", 100, 50),
+        "Animator graph document should paste selected states with fresh stable ids");
+    const kb::scene::AnimatorController* pasted = document.Controller();
+    kb::editor::tests::Require(pasted != nullptr && pasted->layers.front().states.size() == 4U && document.Selection().size() == 2U,
+        "Animator graph paste should select exactly the new state nodes");
+    const std::uint64_t comment = document.AddComment("Locomotion", 0, 0, 320, 160);
+    kb::editor::tests::Require(comment != 0U && document.AddGroup("Locomotion", document.Selection()) != 0U,
+        "Animator graph document should persist comments and groups with stable ids");
+    kb::editor::tests::Require(document.RenameState(10U, "Rest") && document.SetSelection({ 10U }) && document.DeleteSelectedStates(),
+        "Animator graph document should rename and delete a state while retaining a valid layer");
+}
+
 void RunSkeletalMeshEditorDefaultLayoutTest() {
     const RECT content{ 20, 30, 1220, 730 };
     const kb::editor::SkeletalMeshEditorPanelLayout layout =
@@ -682,6 +705,7 @@ void RunEditorDockingTests() {
     RunAnimationClipEditorWorkspaceActivationTest();
     RunAnimatorEditorWorkspaceActivationTest();
     RunAnimatorEditorDefaultLayoutTest();
+    RunAnimatorEditorGraphDocumentStateTest();
     RunSkeletalMeshEditorDefaultLayoutTest();
     RunSkeletalMeshEditorTreeStateTest();
     RunSkeletalMeshEditorDetailsStateTest();

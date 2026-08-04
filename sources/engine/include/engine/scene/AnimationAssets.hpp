@@ -106,6 +106,7 @@ struct AnimatorParameterDefinition {
 };
 
 struct AnimatorControllerState {
+    std::uint64_t id = 0U;
     std::string name;
     // Exactly one motion source is authored: a clipReference, or a 1D blend
     // tree driven by a Float parameter.
@@ -137,6 +138,7 @@ struct AnimatorTransitionCondition {
 };
 
 struct AnimatorControllerTransition {
+    std::uint64_t id = 0U;
     std::string fromState;
     std::string toState;
     float durationSeconds = 0.1F;
@@ -181,10 +183,34 @@ struct AnimatorRigConstraint {
     SkeletonBoneId tipBoneId = 0U;
 };
 
+struct AnimatorGraphNodeLayout {
+    std::uint64_t stateId = 0U;
+    std::int32_t positionX = 0;
+    std::int32_t positionY = 0;
+};
+
+struct AnimatorGraphComment {
+    std::uint64_t id = 0U;
+    std::string text;
+    std::int32_t positionX = 0;
+    std::int32_t positionY = 0;
+    std::int32_t width = 240;
+    std::int32_t height = 120;
+};
+
+struct AnimatorGraphGroup {
+    std::uint64_t id = 0U;
+    std::string name;
+    std::vector<std::uint64_t> stateIds;
+};
+
 struct AnimatorController {
     std::vector<AnimatorParameterDefinition> parameters;
     std::vector<AnimatorControllerLayer> layers;
     std::vector<AnimatorRigConstraint> rigConstraints;
+    std::vector<AnimatorGraphNodeLayout> graphLayout;
+    std::vector<AnimatorGraphComment> graphComments;
+    std::vector<AnimatorGraphGroup> graphGroups;
 };
 
 enum class AnimatorRootMotionOwner : std::uint8_t {
