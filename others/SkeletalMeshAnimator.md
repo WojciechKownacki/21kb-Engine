@@ -785,7 +785,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     wspólnym preview context.
 63. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować timeline/outliner: bone tracks, curves, morph channels,
     events/notifies i root motion.
-64. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać transport, exact scrub, frame/time display, zoom, pan, snapping,
+64. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać transport, exact scrub, frame/time display, zoom, pan, snapping,
     loop range i step forward/back.
 65. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zsynchronizować timeline selection ↔ Skeleton Tree ↔ viewport ↔ Details.
 66. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować operacje kluczy i eventów z grupowanym undo/redo,
