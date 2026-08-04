@@ -123,6 +123,8 @@ void AnimationClipEditorPanelRenderer::Paint(
     RECT title{ content.left + 10, content.top, content.right - kTransportControlCount * kTransportControlWidth - 12, content.top + kHeaderHeight };
     const kb::assets::AssetMetadata* metadata =
         sceneContext.Scene().Assets().Manager().Registry().Find(sceneContext.AnimationClipEditorAssetId());
+    const kb::assets::AssetMetadata* previewMeshMetadata =
+        sceneContext.Scene().Assets().Manager().Registry().Find(sceneContext.AnimationPreview().SkeletalMeshAsset());
     const std::string name = metadata == nullptr ? std::string{ "Animation Clip" } : metadata->name;
     const AnimationPreviewTransport& transport = sceneContext.AnimationPreview().Transport();
     const std::uint64_t frame = static_cast<std::uint64_t>(transport.NormalizedTime() * transport.DurationSeconds() * transport.FrameRate() + 0.5F);
@@ -135,7 +137,8 @@ void AnimationClipEditorPanelRenderer::Paint(
     const std::string selection = sceneContext.SelectedSkeletalMeshEditorBone() == 0U
         ? std::string{}
         : "  |  " + details.title;
-    const std::string text = name + transportText + selection;
+    const std::string preview = previewMeshMetadata == nullptr ? std::string{} : "  |  Preview " + previewMeshMetadata->name;
+    const std::string text = name + transportText + preview + selection;
     DrawTextA(dc, text.c_str(), -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 
     const char* labels[kTransportControlCount] = { "]", "[", "+", "-", "S", "L", ">|", transport.IsPlaying() ? "||" : ">", "|<" };
