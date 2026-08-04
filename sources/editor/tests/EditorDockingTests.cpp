@@ -426,6 +426,27 @@ void RunAnimationClipEditorWorkspaceActivationTest() {
         "Animation Clip Editor should receive focus after typed dispatch");
 }
 
+void RunAnimatorEditorWorkspaceActivationTest() {
+    kb::editor::EditorDockModel model;
+    const kb::editor::DockPanel* panel = RequirePanel(model, 13U);
+    kb::editor::tests::Require(
+        panel != nullptr && panel->kind == kb::editor::DockPanelKind::AnimatorEditor,
+        "Animator Editor should be registered as a typed dock panel");
+    const kb::editor::DockLayout initialLayout = BuildDefaultLayout(model);
+    const kb::editor::DockLeafLayout* sceneLeaf = FindLeafForPanel(initialLayout, 2U);
+    const kb::editor::DockLeafLayout* animatorLeaf = FindLeafForPanel(initialLayout, 13U);
+    kb::editor::tests::Require(
+        sceneLeaf != nullptr && animatorLeaf != nullptr && sceneLeaf->leafId == animatorLeaf->leafId,
+        "Animator Editor should use the central workspace");
+    kb::editor::tests::Require(
+        model.Commands().ActivatePanelKind(kb::editor::DockPanelKind::AnimatorEditor, kb::editor::DockArea::Center),
+        "Animator Editor should activate through typed dock dispatch");
+    const kb::editor::DockLayout activatedLayout = BuildDefaultLayout(model);
+    const kb::editor::DockPanelLayout* activated = FindPanelLayout(activatedLayout, 13U);
+    kb::editor::tests::Require(activated != nullptr && activated->active,
+        "Animator Editor should receive focus after typed dispatch");
+}
+
 void RunSkeletalMeshEditorDefaultLayoutTest() {
     const RECT content{ 20, 30, 1220, 730 };
     const kb::editor::SkeletalMeshEditorPanelLayout layout =
@@ -643,6 +664,7 @@ void RunEditorDockingTests() {
     RunClosedMaterialEditorReopensInCenterDockTest();
     RunSkeletalMeshEditorWorkspaceActivationTest();
     RunAnimationClipEditorWorkspaceActivationTest();
+    RunAnimatorEditorWorkspaceActivationTest();
     RunSkeletalMeshEditorDefaultLayoutTest();
     RunSkeletalMeshEditorTreeStateTest();
     RunSkeletalMeshEditorDetailsStateTest();
