@@ -105,6 +105,12 @@ void RunAnimationPreviewTransportTest() {
         transport.SetLooping(true) && transport.SetPlaying(true) && transport.Scrub(0.95F) && transport.Advance(0.2F) &&
             std::fabs(transport.NormalizedTime() - 0.05F) < 0.0001F,
         "Animation preview transport did not wrap a looping playhead deterministically");
+    transport.Reset();
+    kb::editor::tests::Require(
+        transport.SetDurationSeconds(2.0F) && transport.SetLoopRange(0.25F, 0.5F) &&
+            transport.SetPlaying(true) && transport.Scrub(0.49F) && transport.Advance(0.1F) &&
+            std::fabs(transport.NormalizedTime() - 0.29F) < 0.0001F,
+        "Animation preview transport did not honor a bounded loop range");
 }
 
 void RunAnimationPreviewOverlayStateTest() {
