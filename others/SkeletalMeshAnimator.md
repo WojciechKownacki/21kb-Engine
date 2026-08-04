@@ -824,15 +824,15 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
 
 ### Sprint SK-11 — live debug i diagnostyka
 
-81. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać wybór Preview Instance albo żywej encji jako debug targetu.
-82. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Pokazywać live parameters, triggers, aktywne stany, previous state,
+81. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać wybór Preview Instance albo żywej encji jako debug targetu.
+82. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Pokazywać live parameters, triggers, aktywne stany, previous state,
     transition progress, elapsed time i wagi warstw.
-83. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Podświetlać aktywne state/transition nodes bez zapisywania debug state do
+83. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Podświetlać aktywne state/transition nodes bez zapisywania debug state do
     assetu.
-84. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać pose/bone diagnostics, final pose, constraint targets, root motion
+84. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać pose/bone diagnostics, final pose, constraint targets, root motion
     trail, palette/bounds/LOD status i błędy kompatybilności.
-85. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zapewnić thread-safe snapshot debug bez blokowania animation hot path.
-86. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać testy przełączania debug targetu, odpinania encji, reloadu i
+85. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zapewnić thread-safe snapshot debug bez blokowania animation hot path.
+86. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać testy przełączania debug targetu, odpinania encji, reloadu i
     zgodności UI z runtime snapshotem.
 
 ### Sprint SK-12 — wydajność, stabilność i odbiór produktu
