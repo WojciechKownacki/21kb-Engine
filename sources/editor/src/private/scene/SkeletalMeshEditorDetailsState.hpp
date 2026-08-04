@@ -4,6 +4,7 @@
 #include "engine/scene/SkeletalMeshAsset.hpp"
 
 #include <iomanip>
+#include <unordered_set>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -132,6 +133,12 @@ private:
             { "Content Hash", Number(meshMetadata_.contentHash) },
             { "Runtime Loadable", meshMetadata_.runtimeLoadable ? "Yes" : "No" },
         } });
+        const kb::scene::SkeletalMeshAssetValidationResult meshValidation = kb::scene::ValidateSkeletalMeshAsset(mesh_);
+        const kb::scene::SkeletonAssetValidationResult skeletonValidation = kb::scene::ValidateSkeletonAsset(skeleton_);
+        model.sections.push_back({ "Import / Reimport Diagnostics", {
+            { "Skeletal Mesh", meshValidation.valid ? "Valid" : meshValidation.error },
+            { "Skeleton", skeletonValidation.valid ? "Valid" : skeletonValidation.error },
+        } });
         return model;
     }
 
@@ -139,6 +146,30 @@ private:
         std::string parent = "None";
         if (bone.parentIndex >= 0 && static_cast<std::size_t>(bone.parentIndex) < skeleton_.bones.size()) {
             parent = skeleton_.bones[static_cast<std::size_t>(bone.parentIndex)].name;
+        }
+        std::uint64_t influencedVertices = 0U;
+        double totalWeight = 0.0;
+        float peakWeight = 0.0F;
+        for (const kb::scene::SkeletalMeshLod& lod : mesh_.lods) {
+            std::unordered_set<std::uint32_t> visitedVertices;
+            for (const kb::scene::SkeletalMeshSection& section : lod.sections) {
+                for (std::uint32_t offset = 0U; offset < section.indexCount; ++offset) {
+                    const std::uint32_t vertexIndex = lod.indices[section.firstIndex + offset];
+                    if (!visitedVertices.insert(vertexIndex).second || vertexIndex >= lod.vertices.size()) continue;
+                    const kb::scene::SkeletalMeshVertex& vertex = lod.vertices[vertexIndex];
+                    float vertexWeight = 0.0F;
+                    for (std::size_t influence = 0U; influence < vertex.jointWeights.size(); ++influence) {
+                        const std::uint16_t joint = vertex.jointIndices[influence];
+                        if (joint >= section.boneMap.size() || section.boneMap[joint] != bone.id) continue;
+                        vertexWeight += vertex.jointWeights[influence];
+                    }
+                    if (vertexWeight > 0.0F) {
+                        ++influencedVertices;
+                        totalWeight += vertexWeight;
+                        peakWeight = std::max(peakWeight, vertexWeight);
+                    }
+                }
+            }
         }
         return SkeletalMeshEditorDetailsModel{
             .title = "Bone: " + bone.name,
@@ -148,6 +179,9 @@ private:
                 { "Reference Position", Vector(bone.referencePose.position) },
                 { "Reference Rotation", Rotation(bone.referencePose.rotation) },
                 { "Reference Scale", Vector(bone.referencePose.scale) },
+                { "Influenced Vertices", Number(influencedVertices) },
+                { "Average Weight", Number(influencedVertices == 0U ? 0.0F : static_cast<float>(totalWeight / influencedVertices)) },
+                { "Peak Weight", Number(peakWeight) },
             } }},
         };
     }
