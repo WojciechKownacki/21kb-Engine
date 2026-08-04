@@ -9,6 +9,7 @@
 #include "kb/render/resources/NativeWindowFramebuffer.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
+#include "rendering/EditorHostSurfaceLifecycle.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
 
 #include <bgfx/bgfx.h>
@@ -313,6 +314,7 @@ private:
     render::Renderer renderer_;
     ViewportSessionStore sessionStore_;
     HostSurfaceStore hostSurfaceStore_;
+    EditorHostSurfaceLifecycle hostLifecycle_;
     std::vector<PendingPresent> pendingPresents_;
     std::vector<render::Renderer::SceneFrameSubmission> pendingSubmissions_;
 #endif
