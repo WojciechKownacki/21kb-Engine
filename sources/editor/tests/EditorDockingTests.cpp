@@ -4,6 +4,7 @@
 #include "docking/EditorDockModel.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
 #include "rendering/EditorToolbarLayout.hpp"
+#include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 #include "windowing/FloatingWindowControlHitTester.hpp"
 #include "windowing/FloatingWindowControlLayout.hpp"
 
@@ -398,6 +399,25 @@ void RunSkeletalMeshEditorWorkspaceActivationTest() {
         "Reopened Skeletal Mesh Editor should receive focus");
 }
 
+void RunSkeletalMeshEditorDefaultLayoutTest() {
+    const RECT content{ 20, 30, 1220, 730 };
+    const kb::editor::SkeletalMeshEditorPanelLayout layout =
+        kb::editor::SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
+    kb::editor::tests::Require(
+        layout.toolbox.right - layout.toolbox.left == 240 &&
+            layout.viewport.right - layout.viewport.left == 720 &&
+            layout.skeletonTree.right - layout.skeletonTree.left == 240,
+        "Skeletal Mesh Editor should keep the default 20/60/20 workspace split");
+    kb::editor::tests::Require(
+        layout.toolbox.left == content.left && layout.viewport.left == layout.toolbox.right &&
+            layout.skeletonTree.left == layout.viewport.right && layout.skeletonTree.right == content.right,
+        "Skeletal Mesh Editor layout should tile the workspace without gaps");
+    kb::editor::tests::Require(
+        layout.skeletonTree.bottom == layout.assetDetails.top &&
+            layout.skeletonTree.top == content.top && layout.assetDetails.bottom == content.bottom,
+        "Skeletal Mesh Editor right column should stack Skeleton Tree over Asset Details");
+}
+
 // A click on any tab — the active one or an inactive sibling — must hit-test as a
 // dock Tab. The pointer router relies on this: a dock hit means the click is a
 // layout action (switch tabs), so it must NOT clear the scene selection and blank
@@ -452,6 +472,7 @@ void RunEditorDockingTests() {
     RunMaterialEditorPanelActivationTest();
     RunClosedMaterialEditorReopensInCenterDockTest();
     RunSkeletalMeshEditorWorkspaceActivationTest();
+    RunSkeletalMeshEditorDefaultLayoutTest();
     RunTabClickIsDockInteractionTest();
 }
 
