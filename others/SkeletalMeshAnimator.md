@@ -843,7 +843,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     batching oraz koszty LOD/update-rate.
 89. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Wprowadzić równoległą ewaluację i update-rate optimization dopiero na
     podstawie pomiarów, zachowując deterministyczny wynik.
-90. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać stress tests reload/reimport, asset eviction, scene unload,
+90. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać stress tests reload/reimport, asset eviction, scene unload,
     renderer reset i zniszczenie encji w trakcie debugowania.
 91. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać screenshot tests 1920×1080, 1366×768 i 150% DPI dla wszystkich
     trzech edytorów, docked i floating.
