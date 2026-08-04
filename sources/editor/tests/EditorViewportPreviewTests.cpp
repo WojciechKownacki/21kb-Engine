@@ -100,6 +100,20 @@ void RunAnimationPreviewTransportTest() {
         "Animation preview transport did not wrap a looping playhead deterministically");
 }
 
+void RunAnimationPreviewOverlayStateTest() {
+    kb::editor::AnimationPreviewOverlayState overlays;
+    const std::uint64_t revision = overlays.Revision();
+    kb::editor::tests::Require(
+        overlays.SetBonesVisible(true) && overlays.SetBoneNamesVisible(true) && overlays.SetSocketsVisible(true) &&
+            overlays.SetRootMotionVisible(true) && overlays.SetBoundsVisible(true) && overlays.SetLodVisible(true) &&
+            overlays.SetNormalsVisible(true) && overlays.Revision() == revision + 7U,
+        "Animation preview overlays did not retain all runtime debug visibility switches");
+    kb::editor::tests::Require(
+        overlays.BonesVisible() && overlays.BoneNamesVisible() && overlays.SocketsVisible() &&
+            overlays.RootMotionVisible() && overlays.BoundsVisible() && overlays.LodVisible() && overlays.NormalsVisible(),
+        "Animation preview overlay visibility query lost enabled diagnostics");
+}
+
 void RunAnimationPreviewScenePresentationTest() {
     kb::scene::Scene source{ kb::scene::SceneMode::Runtime };
     kb::editor::AnimationPreviewContext context;
@@ -666,6 +680,7 @@ namespace kb::editor::tests {
 void RunEditorViewportPreviewTests() {
     RunAnimationPreviewContextTracksSharedBindingTest();
     RunAnimationPreviewTransportTest();
+    RunAnimationPreviewOverlayStateTest();
     RunAnimationPreviewScenePresentationTest();
     RunTerrainToolbarAndStrokeTickPolicyTest();
     RunTexturePreviewLockBitsDecodeTest();

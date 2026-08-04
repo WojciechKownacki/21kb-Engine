@@ -757,7 +757,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     environment i stabilną ekspozycję.
 50. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać play, pause, loop, step, speed i deterministyczny scrub wspólnego
     playheada.
-51. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać overlay kości, nazw, socketów, root motion, bounds, LOD i normals.
+51. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać overlay kości, nazw, socketów, root motion, bounds, LOD i normals.
 52. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zapewnić bezpieczny lifecycle native child surface podczas resize,
     docking, floating, DPI, minimalizacji i Alt-Tab.
 53. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać testy preview state, dokładnej pozy po scrubie i lifecycle hosta.
