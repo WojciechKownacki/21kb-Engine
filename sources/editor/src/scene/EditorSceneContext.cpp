@@ -9080,6 +9080,7 @@ bool EditorSceneContext::OpenAnimatorEditorAsset(kb::assets::AssetId id) {
     animatorEditorAssetId_ = id;
     animatorEditorController_ = *controller;
     animatorEditorGraphDocument_.Open(*controller);
+    animationPreview_.SetControllerOverride(std::make_shared<kb::scene::AnimatorController>(*controller));
     skeletalMeshEditorTree_.SetSkeleton(*skeleton);
     skeletalMeshEditorDetails_.SetDocument(*previewMesh, *skeleton, *previewMeshMetadata);
     static_cast<void>(AnimationPreviewScene());
@@ -9131,10 +9132,7 @@ bool EditorSceneContext::AddAnimationClipToAnimatorEditor(kb::assets::AssetId cl
     const std::string name = metadata->name.empty() ? metadata->virtualPath.stem().string() : metadata->name;
     const std::uint64_t stateId = animatorEditorGraphDocument_.AddState(
         controller->layers.front().name, name, kb::assets::ToString(clipId), graphX, graphY);
-    if (stateId == 0U || animatorEditorGraphDocument_.Controller() == nullptr || !scene_->Assets().Manager().PublishRuntimeAsset(
-            animatorEditorAssetId_, std::make_shared<kb::scene::AnimatorController>(*animatorEditorGraphDocument_.Controller()))) return false;
-    animationPreviewScene_->Clear();
-    static_cast<void>(AnimationPreviewScene());
+    if (stateId == 0U || !RefreshAnimatorEditorWorkingPreview()) return false;
     console_.Info("Animator Editor", "Created state from Animation Clip: " + name);
     return true;
 }
@@ -9154,19 +9152,11 @@ bool EditorSceneContext::HasDirtyAnimatorEditorAssetEdit() const noexcept {
 }
 
 bool EditorSceneContext::UndoAnimatorEditorEdit() {
-    if (!animatorEditorGraphDocument_.Undo() || animatorEditorGraphDocument_.Controller() == nullptr) return false;
-    static_cast<void>(scene_->Assets().Manager().PublishRuntimeAsset(animatorEditorAssetId_, std::make_shared<kb::scene::AnimatorController>(*animatorEditorGraphDocument_.Controller())));
-    animationPreviewScene_->Clear();
-    static_cast<void>(AnimationPreviewScene());
-    return true;
+    return animatorEditorGraphDocument_.Undo() && RefreshAnimatorEditorWorkingPreview();
 }
 
 bool EditorSceneContext::RedoAnimatorEditorEdit() {
-    if (!animatorEditorGraphDocument_.Redo() || animatorEditorGraphDocument_.Controller() == nullptr) return false;
-    static_cast<void>(scene_->Assets().Manager().PublishRuntimeAsset(animatorEditorAssetId_, std::make_shared<kb::scene::AnimatorController>(*animatorEditorGraphDocument_.Controller())));
-    animationPreviewScene_->Clear();
-    static_cast<void>(AnimationPreviewScene());
-    return true;
+    return animatorEditorGraphDocument_.Redo() && RefreshAnimatorEditorWorkingPreview();
 }
 
 bool EditorSceneContext::SaveAnimatorEditorAsset() {
@@ -9194,8 +9184,14 @@ bool EditorSceneContext::SaveAnimatorEditorAsset() {
 }
 
 bool EditorSceneContext::RevertAnimatorEditorAsset() {
-    if (!animatorEditorGraphDocument_.Revert() || animatorEditorGraphDocument_.Controller() == nullptr) return false;
-    static_cast<void>(scene_->Assets().Manager().PublishRuntimeAsset(animatorEditorAssetId_, std::make_shared<kb::scene::AnimatorController>(*animatorEditorGraphDocument_.Controller())));
+    if (!animatorEditorGraphDocument_.Revert()) return false;
+    return RefreshAnimatorEditorWorkingPreview();
+}
+
+bool EditorSceneContext::RefreshAnimatorEditorWorkingPreview() {
+    const kb::scene::AnimatorController* controller = animatorEditorGraphDocument_.Controller();
+    if (!HasAnimatorEditorAsset() || controller == nullptr) return false;
+    animationPreview_.SetControllerOverride(std::make_shared<kb::scene::AnimatorController>(*controller));
     animationPreviewScene_->Clear();
     static_cast<void>(AnimationPreviewScene());
     return true;

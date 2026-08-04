@@ -955,6 +955,7 @@ public:
 
 private:
     [[nodiscard]] bool PublishAnimationClipEditorWorkingCopy();
+    [[nodiscard]] bool RefreshAnimatorEditorWorkingPreview();
     [[nodiscard]] EditorSceneCommandController SceneCommands() noexcept;
     [[nodiscard]] bool BeginTerrainBrushStroke(
         kb::scene::SceneEntity entity,

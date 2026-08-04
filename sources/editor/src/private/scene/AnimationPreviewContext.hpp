@@ -1,10 +1,12 @@
 #pragma once
 
 #include "engine/assets/AssetId.hpp"
+#include "engine/scene/AnimationAssets.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -190,6 +192,9 @@ public:
     [[nodiscard]] kb::assets::AssetId SkeletalMeshAsset() const noexcept { return skeletalMeshAsset_; }
     [[nodiscard]] kb::assets::AssetId ClipAsset() const noexcept { return clipAsset_; }
     [[nodiscard]] kb::assets::AssetId ControllerAsset() const noexcept { return controllerAsset_; }
+    [[nodiscard]] const std::shared_ptr<const kb::scene::AnimatorController>& ControllerOverride() const noexcept {
+        return controllerOverride_;
+    }
     [[nodiscard]] AnimationPreviewPoseMode PoseMode() const noexcept { return poseMode_; }
     [[nodiscard]] AnimationPreviewTransport& Transport() noexcept { return transport_; }
     [[nodiscard]] const AnimationPreviewTransport& Transport() const noexcept { return transport_; }
@@ -214,8 +219,15 @@ public:
         ++revision_;
     }
 
+    void SetControllerOverride(std::shared_ptr<const kb::scene::AnimatorController> controller) noexcept {
+        if (controllerOverride_ == controller) return;
+        controllerOverride_ = std::move(controller);
+        ++revision_;
+    }
+
     void Clear() noexcept {
         SetAssets({}, {}, {}, {});
+        SetControllerOverride({});
         SetPoseMode(AnimationPreviewPoseMode::Reference);
         transport_.Reset();
     }
@@ -225,6 +237,7 @@ private:
     kb::assets::AssetId skeletalMeshAsset_{};
     kb::assets::AssetId clipAsset_{};
     kb::assets::AssetId controllerAsset_{};
+    std::shared_ptr<const kb::scene::AnimatorController> controllerOverride_;
     AnimationPreviewPoseMode poseMode_ = AnimationPreviewPoseMode::Reference;
     AnimationPreviewTransport transport_{};
     AnimationPreviewOverlayState overlays_{};

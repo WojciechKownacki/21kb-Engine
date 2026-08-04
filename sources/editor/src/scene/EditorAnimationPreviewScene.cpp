@@ -268,6 +268,10 @@ void EditorAnimationPreviewScene::Rebuild(
         }));
     }
     kb::assets::AssetId controllerId = context.ControllerAsset();
+    if (compatible && controllerId.IsValid() && context.ControllerOverride() != nullptr) {
+        compatible = scene_->Assets().Manager().PublishRuntimeAsset(
+            controllerId, std::make_shared<kb::scene::AnimatorController>(*context.ControllerOverride()));
+    }
     if (compatible && context.PoseMode() == AnimationPreviewPoseMode::Animated &&
         !controllerId.IsValid() && context.ClipAsset().IsValid()) {
         const kb::assets::AssetHandle<kb::scene::AnimationClip> clip =
