@@ -116,21 +116,6 @@ namespace {
     return lhs.documentAssetId == rhs.documentAssetId && lhs.enabled == rhs.enabled;
 }
 
-[[nodiscard]] bool Equal(const NavAgent& lhs, const NavAgent& rhs) noexcept {
-    return lhs.radius == rhs.radius && lhs.height == rhs.height && lhs.maxSpeed == rhs.maxSpeed &&
-        lhs.acceleration == rhs.acceleration && lhs.angularSpeedDegrees == rhs.angularSpeedDegrees &&
-        lhs.stoppingDistance == rhs.stoppingDistance && lhs.areaMask == rhs.areaMask &&
-        lhs.destination.x == rhs.destination.x && lhs.destination.y == rhs.destination.y && lhs.destination.z == rhs.destination.z &&
-        lhs.velocity.x == rhs.velocity.x && lhs.velocity.y == rhs.velocity.y && lhs.velocity.z == rhs.velocity.z &&
-        lhs.remainingDistance == rhs.remainingDistance && lhs.pathStatus == rhs.pathStatus && lhs.enabled == rhs.enabled;
-}
-
-[[nodiscard]] bool Equal(const NavObstacle& lhs, const NavObstacle& rhs) noexcept {
-    return lhs.shape == rhs.shape && lhs.center.x == rhs.center.x && lhs.center.y == rhs.center.y && lhs.center.z == rhs.center.z &&
-        lhs.size.x == rhs.size.x && lhs.size.y == rhs.size.y && lhs.size.z == rhs.size.z && lhs.radius == rhs.radius &&
-        lhs.height == rhs.height && lhs.area == rhs.area && lhs.carve == rhs.carve && lhs.enabled == rhs.enabled;
-}
-
 [[nodiscard]] bool Equal(const AuxFrameComponent& lhs, const AuxFrameComponent& rhs) noexcept {
     return lhs.mode == rhs.mode && lhs.imageTargetId == rhs.imageTargetId && lhs.width == rhs.width && lhs.height == rhs.height &&
         Equal(lhs.mirrorPlaneNormal, rhs.mirrorPlaneNormal) && lhs.mirrorPlaneOffset == rhs.mirrorPlaneOffset && lhs.enabled == rhs.enabled;
