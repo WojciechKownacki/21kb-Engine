@@ -237,6 +237,10 @@ enum class AnimatorRootMotionOwner : std::uint8_t {
 struct Animator {
     std::uint64_t controllerAssetId = 0U;
     float speed = 1.0F;
+    // Zero preserves per-frame pose evaluation. A positive value limits only
+    // visual pose sampling; playheads, transitions, events, and root motion
+    // still advance on every runtime tick.
+    float poseUpdateRateHz = 0.0F;
     bool enabled = true;
     AnimatorRootMotionOwner rootMotionOwner = AnimatorRootMotionOwner::None;
 };

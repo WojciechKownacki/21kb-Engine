@@ -80,6 +80,9 @@ struct SceneRuntimeHotPathReport {
     std::uint64_t transformHierarchyFlushNanoseconds = 0U;
     std::size_t transformHierarchyBudgetLimit = 0U;
     bool transformHierarchyBudgetExhausted = false;
+    std::size_t animatorParallelEvaluationCount = 0U;
+    std::size_t animatorParallelWorkerCount = 1U;
+    std::size_t animatorUpdateRateSkippedPoseCount = 0U;
 };
 
 struct SceneRuntimeReadSnapshot final : kb::core::ReadSnapshot {
