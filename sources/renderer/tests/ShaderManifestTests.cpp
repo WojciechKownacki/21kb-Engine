@@ -65,7 +65,9 @@ void PrebuiltShaderProfilesContainRequiredManifest() {
 
     for (std::string_view profile : profiles) {
         const ShaderManifestValidationResult result = ValidateShaderManifestProfile(root / profile);
-        Require(result.checkedRequiredShaderCount == RequiredShaderManifest().size(), "Shader manifest validation checked the wrong number of required shaders");
+        const std::size_t requiredShaderCount = static_cast<std::size_t>(std::ranges::count_if(
+            RequiredShaderManifest(), [](const ShaderManifestEntry& shader) { return shader.required; }));
+        Require(result.checkedRequiredShaderCount == requiredShaderCount, "Shader manifest validation checked the wrong number of required shaders");
         Require(result.Succeeded(), "Prebuilt shader profile is missing a required runtime shader");
     }
 }

@@ -246,14 +246,19 @@ void RunTabStripDropInsertsAtResolvedIndexTest() {
     inspectorLayout = FindPanelLayout(tabbedLayout, 4U);
     kb::editor::tests::Require(sceneLayout != nullptr && inspectorLayout != nullptr, "Inspector did not dock next to Scene");
     kb::editor::tests::Require(sceneLayout->leafId == inspectorLayout->leafId, "Scene/Inspector tabs should share a leaf");
+    const std::vector<std::uint32_t> tabOrder = PanelOrderInLeaf(tabbedLayout, sceneLayout->leafId);
+    const auto inspectorOrder = std::find(tabOrder.begin(), tabOrder.end(), 4U);
+    kb::editor::tests::Require(inspectorOrder != tabOrder.end(), "Inspector tab is missing from its resolved leaf");
+    const std::uint32_t expectedInsertionIndex = static_cast<std::uint32_t>(
+        std::distance(tabOrder.begin(), inspectorOrder));
 
     const std::optional<kb::editor::DockDropPreview> preview =
         model.Queries().ResolveDropPreview(tabbedLayout, inspectorLayout->tab.x + 1, inspectorLayout->tab.y + 1);
     kb::editor::tests::Require(preview.has_value(), "Tab strip did not resolve a drop marker");
     kb::editor::tests::Require(preview->kind == kb::editor::DockDropPreviewKind::StripMarker, "Tab strip drop should use a strip marker preview");
-    // The default center leaf carries Scene (2), Script Editor (8), Material
-    // Editor (10), and Skeletal Mesh Editor (11), so Inspector (4) lands at 4.
-    kb::editor::tests::Require(preview->tabInsertionIndex == 4U, "Tab strip insertion index did not match the cursor position");
+    kb::editor::tests::Require(
+        preview->tabInsertionIndex == expectedInsertionIndex,
+        "Tab strip insertion index did not match the cursor position");
     kb::editor::tests::Require(
         preview->rect.width == 3 && preview->rect.height == inspectorLayout->tab.height,
         "Tab strip marker geometry should be a thin vertical marker");
@@ -262,8 +267,13 @@ void RunTabStripDropInsertsAtResolvedIndexTest() {
     model.Commands().DockPanelTo(5U, *preview);
     const kb::editor::DockLayout dockedLayout = BuildDefaultLayout(model);
     const std::vector<std::uint32_t> order = PanelOrderInLeaf(dockedLayout, sceneLayout->leafId);
-    kb::editor::tests::Require(order.size() >= 6U, "Docked tab was not inserted into the target leaf");
-    kb::editor::tests::Require(order[0] == 2U && order[1] == 8U && order[2] == 10U && order[3] == 11U && order[4] == 5U && order[5] == 4U, "Docked tab was not inserted at the resolved tab strip index");
+    std::vector<std::uint32_t> expectedOrder = tabOrder;
+    expectedOrder.insert(
+        expectedOrder.begin() + static_cast<std::ptrdiff_t>(expectedInsertionIndex),
+        5U);
+    kb::editor::tests::Require(
+        order == expectedOrder,
+        "Docked tab was not inserted at the resolved tab strip index");
 }
 
 void RunSplitterAndFloatingResizeTest() {

@@ -26,6 +26,10 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "fs_mesh.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_mesh_gbuffer_instanced.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_mesh_instanced.sc", .stage = ShaderStage::Fragment},
+    // These skinned/motion-vector permutations are shipped only in DXBC. They
+    // remain declared for D3D11 program resolution, but are not a portable
+    // runtime requirement for backends whose prebuilt profile omits them.
+    ShaderManifestEntry{.name = "fs_mesh_motion_vectors.sc", .stage = ShaderStage::Fragment, .required = false},
     ShaderManifestEntry{.name = "fs_mesh_selection_instanced.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_mesh_shadow_instanced.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_post_bloom_blur.sc", .stage = ShaderStage::Fragment},
@@ -46,14 +50,20 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "vs_lit_trs_gpu_cull.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_mesh.sc", .stage = ShaderStage::Vertex},
     ShaderManifestEntry{.name = "vs_mesh_instanced.sc", .stage = ShaderStage::Vertex},
+    ShaderManifestEntry{.name = "vs_mesh_motion_vectors_instanced.sc", .stage = ShaderStage::Vertex, .required = false},
     ShaderManifestEntry{.name = "vs_mesh_shadow_instanced.sc", .stage = ShaderStage::Vertex},
+    ShaderManifestEntry{.name = "vs_mesh_shadow_skinned_instanced.sc", .stage = ShaderStage::Vertex, .required = false},
+    ShaderManifestEntry{.name = "vs_mesh_skinned_instanced.sc", .stage = ShaderStage::Vertex, .required = false},
+    ShaderManifestEntry{.name = "vs_mesh_skinned_motion_vectors_instanced.sc", .stage = ShaderStage::Vertex, .required = false},
     ShaderManifestEntry{.name = "vs_present.sc", .stage = ShaderStage::Vertex},
 });
 
 constexpr auto kRequiredPrograms = std::to_array<ShaderProgramManifestEntry>({
     ShaderProgramManifestEntry{.name = "scene_mesh_instanced", .vertexShader = "vs_mesh_instanced.sc", .fragmentShader = "fs_mesh_instanced.sc"},
+    ShaderProgramManifestEntry{.name = "scene_mesh_skinned", .vertexShader = "vs_mesh_skinned_instanced.sc", .fragmentShader = "fs_mesh_instanced.sc"},
     ShaderProgramManifestEntry{.name = "scene_mesh_gbuffer", .vertexShader = "vs_mesh_instanced.sc", .fragmentShader = "fs_mesh_gbuffer_instanced.sc"},
     ShaderProgramManifestEntry{.name = "scene_mesh_shadow", .vertexShader = "vs_mesh_shadow_instanced.sc", .fragmentShader = "fs_mesh_shadow_instanced.sc"},
+    ShaderProgramManifestEntry{.name = "scene_mesh_shadow_skinned", .vertexShader = "vs_mesh_shadow_skinned_instanced.sc", .fragmentShader = "fs_mesh_shadow_instanced.sc"},
     ShaderProgramManifestEntry{.name = "scene_mesh_selection", .vertexShader = "vs_mesh_instanced.sc", .fragmentShader = "fs_mesh_selection_instanced.sc"},
     ShaderProgramManifestEntry{.name = "deferred_lighting", .vertexShader = "vs_present.sc", .fragmentShader = "fs_deferred_lighting.sc"},
     ShaderProgramManifestEntry{.name = "fullscreen_present", .vertexShader = "vs_present.sc", .fragmentShader = "fs_present_tex.sc"},
@@ -63,6 +73,8 @@ constexpr auto kRequiredPrograms = std::to_array<ShaderProgramManifestEntry>({
     ShaderProgramManifestEntry{.name = "post_exposure_luminance", .vertexShader = "vs_present.sc", .fragmentShader = "fs_post_exposure_luminance.sc"},
     ShaderProgramManifestEntry{.name = "post_fxaa", .vertexShader = "vs_present.sc", .fragmentShader = "fs_post_fxaa.sc"},
     ShaderProgramManifestEntry{.name = "post_motion_vectors", .vertexShader = "vs_present.sc", .fragmentShader = "fs_post_motion_vectors.sc"},
+    ShaderProgramManifestEntry{.name = "scene_mesh_motion_vectors", .vertexShader = "vs_mesh_motion_vectors_instanced.sc", .fragmentShader = "fs_mesh_motion_vectors.sc"},
+    ShaderProgramManifestEntry{.name = "scene_mesh_skinned_motion_vectors", .vertexShader = "vs_mesh_skinned_motion_vectors_instanced.sc", .fragmentShader = "fs_mesh_motion_vectors.sc"},
     ShaderProgramManifestEntry{.name = "post_taa_resolve", .vertexShader = "vs_present.sc", .fragmentShader = "fs_post_taa_resolve.sc"},
     ShaderProgramManifestEntry{.name = "editor_selection_outline", .vertexShader = "vs_present.sc", .fragmentShader = "fs_editor_selection_outline.sc"},
     ShaderProgramManifestEntry{.name = "editor_grid", .vertexShader = "vs_editor_grid.sc", .fragmentShader = "fs_editor_grid.sc"},
