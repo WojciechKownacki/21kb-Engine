@@ -349,6 +349,7 @@ struct AnimatorDebugInstanceSnapshot {
     std::vector<AnimatorDebugLayerSnapshot> layers;
     std::vector<AnimatorDebugBoneSnapshot> bones;
     std::vector<AnimatorDebugConstraintSnapshot> constraints;
+    std::vector<std::string> compatibilityDiagnostics;
 };
 
 struct AnimatorDebugSnapshot final : kb::core::ReadSnapshot {
