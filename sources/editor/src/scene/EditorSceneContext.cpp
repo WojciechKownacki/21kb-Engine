@@ -8959,6 +8959,61 @@ bool EditorSceneContext::OpenAnimationAsset(kb::assets::AssetId id) {
     return true;
 }
 
+bool EditorSceneContext::OpenSkeletalMeshEditorAsset(kb::assets::AssetId id) {
+    const kb::assets::AssetMetadata* meshMetadata = scene_->Assets().Manager().Registry().Find(id);
+    if (meshMetadata == nullptr || meshMetadata->type != kb::scene::kSkeletalMeshAssetType) {
+        console_.Error("Skeletal Mesh Editor", "Selected asset is not a Skeletal Mesh.");
+        return false;
+    }
+    const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> mesh =
+        scene_->Assets().Manager().Load<kb::scene::SkeletalMeshAsset>(id);
+    if (!mesh.IsLoaded() || mesh->skeletonAssetId == 0U) {
+        console_.Error("Skeletal Mesh Editor", "Skeletal Mesh runtime data or its Skeleton binding could not be loaded.");
+        return false;
+    }
+    const kb::assets::AssetId skeletonId{ mesh->skeletonAssetId };
+    const kb::assets::AssetMetadata* skeletonMetadata = scene_->Assets().Manager().Registry().Find(skeletonId);
+    if (skeletonMetadata == nullptr || skeletonMetadata->type != kb::scene::kSkeletonAssetType) {
+        console_.Error("Skeletal Mesh Editor", "Skeletal Mesh references a missing Skeleton asset.");
+        return false;
+    }
+    const kb::assets::AssetHandle<kb::scene::SkeletonAsset> skeleton =
+        scene_->Assets().Manager().Load<kb::scene::SkeletonAsset>(skeletonId);
+    if (!skeleton.IsLoaded() ||
+        mesh->skeletonCompatibilitySignature != kb::scene::SkeletonCompatibilitySignature(*skeleton)) {
+        console_.Error("Skeletal Mesh Editor", "Skeletal Mesh and Skeleton are incompatible.");
+        return false;
+    }
+    if (skeletalMeshEditorAssetId_ == id && animationPreviewScene_ != nullptr) {
+        console_.Info("Skeletal Mesh Editor", "Focused existing document: " + meshMetadata->virtualPath.generic_string());
+        return true;
+    }
+
+    animationPreview_.SetAssets(skeletonId, id, {}, {});
+    animationPreview_.SetPoseMode(AnimationPreviewPoseMode::Reference);
+    skeletalMeshEditorAssetId_ = id;
+    static_cast<void>(AnimationPreviewScene());
+    console_.Info("Skeletal Mesh Editor", "Opened document: " + meshMetadata->virtualPath.generic_string());
+    return true;
+}
+
+kb::assets::AssetId EditorSceneContext::SkeletalMeshEditorAssetId() const noexcept {
+    return skeletalMeshEditorAssetId_;
+}
+
+bool EditorSceneContext::HasSkeletalMeshEditorAsset() const noexcept {
+    return skeletalMeshEditorAssetId_.IsValid() && animationPreviewScene_ != nullptr &&
+        animationPreviewScene_->CurrentScene() != nullptr;
+}
+
+const kb::scene::Scene* EditorSceneContext::SkeletalMeshEditorPreviewScene() const noexcept {
+    return animationPreviewScene_ == nullptr ? nullptr : animationPreviewScene_->CurrentScene();
+}
+
+std::uint64_t EditorSceneContext::SkeletalMeshEditorPreviewRevision() const noexcept {
+    return animationPreviewScene_ == nullptr ? 0U : animationPreviewScene_->Revision();
+}
+
 bool EditorSceneContext::SetAnimatorControllerAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {
     if (!entity.IsValid() || !scene_->Components().Animators().Has(entity)) {
         console_.Warning("Animator", "Selected entity does not have an Animator component.");
