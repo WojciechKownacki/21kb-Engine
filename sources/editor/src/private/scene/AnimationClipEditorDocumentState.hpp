@@ -45,6 +45,16 @@ public:
         ++cursor_;
         return true;
     }
+    [[nodiscard]] bool MarkSaved() {
+        const kb::scene::AnimationClip* current = WorkingCopy();
+        if (current == nullptr) return false;
+        saved_ = *current;
+        history_.assign(1U, saved_);
+        cursor_ = 0U;
+        groupActive_ = false;
+        groupHasEdit_ = false;
+        return true;
+    }
 
     [[nodiscard]] bool UpsertBoneKey(kb::scene::SkeletonBoneId boneId, float timeSeconds, kb::scene::LocalTransform transform) {
         if (!ValidTime(timeSeconds)) return false;

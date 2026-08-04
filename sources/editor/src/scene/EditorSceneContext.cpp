@@ -9114,6 +9114,26 @@ bool EditorSceneContext::RemoveAnimationClipEvent(kb::scene::AnimationEventId id
     return animationClipEditorDocument_.RemoveEvent(id) && PublishAnimationClipEditorWorkingCopy();
 }
 
+bool EditorSceneContext::SaveAnimationClipEditorAsset() {
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(animationClipEditorAssetId_);
+    const kb::scene::AnimationClip* working = animationClipEditorDocument_.WorkingCopy();
+    if (metadata == nullptr || working == nullptr || !kb::scene::AnimationAssetIO::SaveClip(metadata->physicalPath, *working)) {
+        console_.Error("Animation Clip Editor", "Animation Clip validation or atomic save failed; runtime preview was not reloaded.");
+        return false;
+    }
+    static_cast<void>(scene_->Assets().Manager().DiscoverMountedAssets());
+    if (!scene_->Assets().Manager().PublishRuntimeAsset(
+            animationClipEditorAssetId_, std::make_shared<kb::scene::AnimationClip>(*working))) {
+        console_.Error("Animation Clip Editor", "Animation Clip was saved but its runtime hot reload failed.");
+        return false;
+    }
+    static_cast<void>(animationClipEditorDocument_.MarkSaved());
+    animationPreviewScene_->Clear();
+    static_cast<void>(AnimationPreviewScene());
+    console_.Info("Animation Clip Editor", "Saved and hot reloaded Animation Clip.");
+    return true;
+}
+
 std::vector<kb::assets::AssetId> EditorSceneContext::AnimationClipEditorCompatiblePreviewMeshes() {
     std::vector<kb::assets::AssetId> result;
     const kb::scene::AnimationClip* clip = animationClipEditorDocument_.WorkingCopy();
