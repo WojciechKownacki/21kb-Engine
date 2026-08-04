@@ -2714,6 +2714,10 @@ void RunEngineLibraryComponentRegistryTest() {
         "Engine21kbLibrary component id must be deterministic for the same name");
     kb::tests::Require(kb::library::ComputeLibraryComponentId("Camera") != kb::library::ComputeLibraryComponentId("3D Radiance Emitter"),
         "Engine21kbLibrary component id must differ for different names");
+    kb::tests::Require(kb::library::EngineLibraryComponentRegistry::Find("Light") != nullptr &&
+            kb::script::ScriptSceneComponentApi::ComponentProperties("Light").data() ==
+                kb::script::ScriptSceneComponentApi::ComponentProperties("3D Radiance Emitter").data(),
+        "Engine21kbLibrary must retain Light as an exact compatibility alias for 3D Radiance Emitter");
 
     // Honest serializable check: round-trip a scene containing every
     // cataloged component and verify that every serializable claim survives
@@ -3232,8 +3236,9 @@ void RunComponentInspectorDescCatalogTest() {
     const std::span<const std::string_view> scriptComponentNames = kb::script::ScriptSceneComponentApi::ComponentNames();
     const std::vector<kb::library::LibraryComponentInspectorDesc>& catalog = kb::library::EngineLibraryComponentInspectorRegistry::Catalog();
 
-    kb::tests::Require(catalog.size() == scriptComponentNames.size(),
-        "Engine21kbLibrary component inspector catalog must cover exactly the same number of components ScriptSceneComponentApi.cpp gates Lua/VisualGraph access behind");
+    constexpr std::size_t compatibilityAliasCount = 1U;
+    kb::tests::Require(catalog.size() + compatibilityAliasCount == scriptComponentNames.size(),
+        "Engine21kbLibrary component inspector catalog plus its compatibility aliases must cover exactly the components ScriptSceneComponentApi.cpp gates Lua/VisualGraph access behind");
 
     std::size_t fieldsChecked = 0U;
     for (const std::string_view scriptName : scriptComponentNames) {
@@ -3265,7 +3270,9 @@ void RunComponentInspectorDescCatalogTest() {
     // LIB-183 adds 11 NavAgent fields and 9 NavObstacle fields to the prior
     // 97-field contract, bringing the library/editor scripting surface to
     // 117 described fields across 12 components.
-    kb::tests::Require(fieldsChecked == 260U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (260) across all components");
+    // Light remains a public compatibility alias for 3D Radiance Emitter and
+    // intentionally reuses the canonical inspector metadata for its 16 fields.
+    kb::tests::Require(fieldsChecked == 276U, "Engine21kbLibrary component inspector catalog did not exercise the expected total field count (276, including the Light compatibility alias) across all components");
 
     for (const kb::library::LibraryComponentInspectorDesc& desc : catalog) {
         const bool foundInScriptNames = std::ranges::find(scriptComponentNames, desc.componentName) != scriptComponentNames.end();

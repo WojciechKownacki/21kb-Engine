@@ -486,6 +486,9 @@ const std::vector<LibraryComponentInspectorDesc>& EngineLibraryComponentInspecto
 }
 
 const LibraryComponentInspectorDesc* EngineLibraryComponentInspectorRegistry::Find(std::string_view componentName) noexcept {
+    if (componentName == "Light") {
+        componentName = "3D Radiance Emitter";
+    }
     const std::vector<LibraryComponentInspectorDesc>& catalog = Catalog();
     const auto iterator = std::ranges::find_if(catalog, [componentName](const LibraryComponentInspectorDesc& desc) { return desc.componentName == componentName; });
     return iterator == catalog.end() ? nullptr : &*iterator;

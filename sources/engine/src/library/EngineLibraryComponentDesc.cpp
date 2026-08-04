@@ -60,6 +60,14 @@ const std::vector<LibraryComponentDesc>& EngineLibraryComponentRegistry::Catalog
             .id = ComputeLibraryComponentId("3D Radiance Emitter"),
             .serializable = true,
         },
+        // Compatibility alias retained in the public script manifest. The
+        // canonical authoring name is 3D Radiance Emitter, but existing
+        // scripts and serialized API consumers must continue to resolve Light.
+        LibraryComponentDesc{
+            .name = "Light",
+            .id = ComputeLibraryComponentId("Light"),
+            .serializable = true,
+        },
         LibraryComponentDesc{
             .name = "MeshRenderer",
             .id = ComputeLibraryComponentId("MeshRenderer"),

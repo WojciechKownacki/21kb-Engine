@@ -23,7 +23,7 @@ jobs:
             build_editor: "ON"
             build_renderer: "ON"
             sanitizer: "OFF"
-            targets: "kb_engine_tests;kb_engine_library_tests;kb_library_benchmarks;kb_library_safety_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_snapshot_scale_tests;kb_renderer_tests;kb_editor_tests;kb_editor_material_graph_canvas_tests;kb_editor;kb_cli;kb_cli_tests"
+            targets: "kb_engine_tests;kb_engine_library_tests;kb_library_benchmarks;kb_library_safety_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_snapshot_scale_tests;kb_renderer_tests;kb_skeletal_animator_benchmarks;kb_terrain_editor_tests;kb_editor_tests;kb_editor_material_graph_canvas_tests;kb_standalone_player;kb_editor;kb_cli;kb_cli_tests"
             api_compat_check: "ON"
           - name: Linux GCC ASan UBSan
             os: ubuntu-24.04

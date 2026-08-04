@@ -831,7 +831,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     assetu.
 84. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać pose/bone diagnostics, final pose, constraint targets, root motion
     trail, palette/bounds/LOD status i błędy kompatybilności.
-85. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zapewnić thread-safe snapshot debug bez blokowania animation hot path.
+85. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zapewnić thread-safe snapshot debug bez blokowania animation hot path.
 86. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać testy przełączania debug targetu, odpinania encji, reloadu i
     zgodności UI z runtime snapshotem.
 
