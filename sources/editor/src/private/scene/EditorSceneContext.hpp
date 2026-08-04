@@ -415,6 +415,11 @@ public:
     [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
     [[nodiscard]] bool OpenAnimationAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenAnimationClipEditorAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool OpenAnimatorEditorAsset(kb::assets::AssetId id);
+    [[nodiscard]] kb::assets::AssetId AnimatorEditorAssetId() const noexcept;
+    [[nodiscard]] bool HasAnimatorEditorAsset() const noexcept;
+    [[nodiscard]] const kb::scene::Scene* AnimatorEditorPreviewScene() const noexcept;
+    [[nodiscard]] std::uint64_t AnimatorEditorPreviewRevision() const noexcept;
     [[nodiscard]] kb::assets::AssetId AnimationClipEditorAssetId() const noexcept;
     [[nodiscard]] bool HasAnimationClipEditorAsset() const noexcept;
     [[nodiscard]] const kb::scene::Scene* AnimationClipEditorPreviewScene() const noexcept;
@@ -1014,6 +1019,7 @@ private:
     EditorSceneViewportStateStore viewportState_;
     AnimationPreviewContext animationPreview_;
     std::unique_ptr<EditorAnimationPreviewScene> animationPreviewScene_;
+    kb::assets::AssetId animatorEditorAssetId_{};
     kb::assets::AssetId animationClipEditorAssetId_{};
     AnimationClipTimelineState animationClipEditorTimeline_;
     AnimationClipEditorDocumentState animationClipEditorDocument_;

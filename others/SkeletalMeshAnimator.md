@@ -799,7 +799,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
 
 ### Sprint SK-10 — Animator/Controller Editor
 
-70. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać typed asset dispatch i dedykowany `Animator Editor`; usunąć
+70. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać typed asset dispatch i dedykowany `Animator Editor`; usunąć
     kierowanie controllera do Script Editora.
 71. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Odtworzyć domyślny flow UE5 `25/55/20`: preview, centralny dokument
     graph/state machine oraz Details/Asset Browser.
