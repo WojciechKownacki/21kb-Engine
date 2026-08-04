@@ -176,6 +176,7 @@ public:
     [[nodiscard]] const EditorViewportCameraState& AnimationPreviewCamera() const noexcept;
     void FocusAnimationPreview(float durationSeconds = 0.0F) noexcept;
     [[nodiscard]] bool TickAnimationPreviewCamera(float deltaSeconds) noexcept;
+    [[nodiscard]] bool TickAnimationPreviewPlayback(float deltaSeconds) noexcept;
     [[nodiscard]] EditorViewportCameraState& ViewportCamera() noexcept;
     [[nodiscard]] const EditorViewportCameraState& ViewportCamera() const noexcept;
     [[nodiscard]] EditorViewportCameraState& ViewportCamera(std::uint64_t viewportKey) noexcept;

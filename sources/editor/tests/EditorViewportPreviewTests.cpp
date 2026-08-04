@@ -80,6 +80,26 @@ void RunAnimationPreviewContextTracksSharedBindingTest() {
         "Animation preview context did not reset shared state atomically");
 }
 
+void RunAnimationPreviewTransportTest() {
+    kb::editor::AnimationPreviewTransport transport;
+    kb::editor::tests::Require(
+        transport.SetDurationSeconds(2.0F) && transport.SetFrameRate(20.0F) &&
+            transport.SetPlaying(true) && transport.Advance(0.5F) &&
+            std::fabs(transport.NormalizedTime() - 0.25F) < 0.0001F,
+        "Animation preview transport did not advance in clip-time units");
+    kb::editor::tests::Require(
+        transport.Step(1) && std::fabs(transport.NormalizedTime() - 0.275F) < 0.0001F,
+        "Animation preview transport did not step by one configured frame");
+    kb::editor::tests::Require(
+        transport.SetLooping(false) && transport.Scrub(0.99F) && transport.Advance(1.0F) &&
+            !transport.IsPlaying() && std::fabs(transport.NormalizedTime() - 1.0F) < 0.0001F,
+        "Animation preview transport did not deterministically stop at a non-looping end");
+    kb::editor::tests::Require(
+        transport.SetLooping(true) && transport.SetPlaying(true) && transport.Scrub(0.95F) && transport.Advance(0.2F) &&
+            std::fabs(transport.NormalizedTime() - 0.05F) < 0.0001F,
+        "Animation preview transport did not wrap a looping playhead deterministically");
+}
+
 void RunAnimationPreviewScenePresentationTest() {
     kb::scene::Scene source{ kb::scene::SceneMode::Runtime };
     kb::editor::AnimationPreviewContext context;
@@ -645,6 +665,7 @@ namespace kb::editor::tests {
 
 void RunEditorViewportPreviewTests() {
     RunAnimationPreviewContextTracksSharedBindingTest();
+    RunAnimationPreviewTransportTest();
     RunAnimationPreviewScenePresentationTest();
     RunTerrainToolbarAndStrokeTickPolicyTest();
     RunTexturePreviewLockBitsDecodeTest();

@@ -1483,6 +1483,10 @@ bool EditorSceneContext::TickAnimationPreviewCamera(float deltaSeconds) noexcept
     return animationPreviewScene_->TickCamera(deltaSeconds);
 }
 
+bool EditorSceneContext::TickAnimationPreviewPlayback(float deltaSeconds) noexcept {
+    return animationPreviewScene_->TickPlayback(animationPreview_, deltaSeconds);
+}
+
 EditorViewportCameraState& EditorSceneContext::ViewportCamera() noexcept {
     return viewportState_.Camera();
 }
