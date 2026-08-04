@@ -432,6 +432,7 @@ public:
     [[nodiscard]] kb::scene::SkeletonBoneId SelectedSkeletalMeshEditorBone() const noexcept;
     [[nodiscard]] const std::string& SelectedSkeletalMeshEditorSocket() const noexcept;
     [[nodiscard]] SkeletalMeshEditorDetailsModel SkeletalMeshEditorDetails() const;
+    [[nodiscard]] const std::vector<kb::scene::SkeletalMeshMorphTarget>& SkeletalMeshEditorMorphTargets() const noexcept;
     [[nodiscard]] bool OpenMaterialEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenMaterialEditorGraphSourceAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenMaterialEditorMaterialTypeAsset(kb::assets::AssetId id);
