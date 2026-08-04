@@ -172,6 +172,10 @@ public:
     [[nodiscard]] AnimationPreviewContext& AnimationPreview() noexcept;
     [[nodiscard]] const AnimationPreviewContext& AnimationPreview() const noexcept;
     [[nodiscard]] const kb::scene::Scene& AnimationPreviewScene();
+    [[nodiscard]] EditorViewportCameraState& AnimationPreviewCamera() noexcept;
+    [[nodiscard]] const EditorViewportCameraState& AnimationPreviewCamera() const noexcept;
+    void FocusAnimationPreview(float durationSeconds = 0.0F) noexcept;
+    [[nodiscard]] bool TickAnimationPreviewCamera(float deltaSeconds) noexcept;
     [[nodiscard]] EditorViewportCameraState& ViewportCamera() noexcept;
     [[nodiscard]] const EditorViewportCameraState& ViewportCamera() const noexcept;
     [[nodiscard]] EditorViewportCameraState& ViewportCamera(std::uint64_t viewportKey) noexcept;
