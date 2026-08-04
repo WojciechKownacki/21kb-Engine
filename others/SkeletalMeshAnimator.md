@@ -777,7 +777,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     diagnostics importu/reimportu.
 60. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować working copy, dirty marker, Save, Revert, atomic
     reimport, per-document undo/redo i close prompt.
-61. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać headless authoring tests i golden screenshots layoutu.
+61. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać headless authoring tests i golden screenshots layoutu.
 
 ### Sprint SK-09 — Animation Clip Editor
 
