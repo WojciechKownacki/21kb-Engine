@@ -107,6 +107,15 @@ void BuildAndPublishDebugSnapshot(Scene& scene, SceneState& state) {
         instance.entity = record.entity;
         instance.controllerAssetId = record.controller.Id().value;
         instance.runtimeBindingGeneration = record.runtimeBindingGeneration;
+        const auto appendCompatibilityDiagnostics = [&scene, &instance](std::uint64_t assetId) {
+            if (assetId == 0U) return;
+            const kb::assets::AssetCompatibilityReport report =
+                scene.Assets().Manager().ValidateCompatibility(kb::assets::AssetId{ assetId });
+            for (const kb::assets::AssetCompatibilityDiagnostic& diagnostic : report.diagnostics) {
+                instance.compatibilityDiagnostics.push_back(diagnostic.message);
+            }
+        };
+        appendCompatibilityDiagnostics(instance.controllerAssetId);
         instance.parameters.reserve(record.parameters.size());
         for (std::size_t index = 0U; index < record.parameters.size(); ++index) {
             const AnimatorParameterValue& value = record.parameters[index];
@@ -188,6 +197,7 @@ void BuildAndPublishDebugSnapshot(Scene& scene, SceneState& state) {
             const AnimatorInstanceSkeleton::PoseBuffer& pose = skeleton.poses[skeleton.currentPose];
             instance.skeletonAssetId = skeleton.asset.Id().value;
             instance.skeletonCompatibilitySignature = skeleton.compatibilitySignature;
+            appendCompatibilityDiagnostics(instance.skeletonAssetId);
             instance.poseEvaluationCount = skeleton.evaluationCount;
             instance.hierarchySolveCount = skeleton.hierarchySolveCount;
             instance.paletteMatrixCount = static_cast<std::uint32_t>(pose.skinMatrices.size());
@@ -203,6 +213,7 @@ void BuildAndPublishDebugSnapshot(Scene& scene, SceneState& state) {
         if (const DrawD3DeformedGeometryComponent* geometry = scene.Components().DeformedGeometries().TryGet(record.entity);
             geometry != nullptr) {
             instance.skeletalMeshAssetId = geometry->skeletalMeshAssetId;
+            appendCompatibilityDiagnostics(instance.skeletalMeshAssetId);
             instance.lodBias = geometry->lodBias;
             instance.lodEnabled = geometry->lodEnabled;
             instance.fixedBounds = geometry->fixedBounds;
