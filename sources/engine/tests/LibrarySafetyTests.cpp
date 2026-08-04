@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <atomic>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -33,6 +35,36 @@ void RunCommandQueueOwnershipSafetyTest() {
         "Command queue must remain valid after a drained batch is released");
 }
 
+void RunReadSnapshotPublisherConcurrencyTest() {
+    struct Snapshot final : kb::core::ReadSnapshot {
+        std::uint64_t payload = 0U;
+    };
+    kb::core::ReadSnapshotPublisher<Snapshot> publisher;
+    std::atomic<bool> writerFinished{false};
+    std::atomic<bool> readerObservedTear{false};
+    std::thread reader{[&] {
+        while (!writerFinished.load(std::memory_order_acquire)) {
+            const std::shared_ptr<const Snapshot> snapshot = publisher.Read();
+            if (snapshot->payload != snapshot->revision) {
+                readerObservedTear.store(true, std::memory_order_release);
+                return;
+            }
+        }
+    }};
+    for (std::uint64_t revision = 1U; revision <= 4'096U; ++revision) {
+        Snapshot snapshot{};
+        snapshot.revision = revision;
+        snapshot.payload = revision;
+        publisher.Publish(std::move(snapshot));
+    }
+    writerFinished.store(true, std::memory_order_release);
+    reader.join();
+    const std::shared_ptr<const Snapshot> final = publisher.Read();
+    kb::tests::Require(!readerObservedTear.load(std::memory_order_acquire) &&
+            final->revision == 4'096U && final->payload == 4'096U,
+        "Read snapshot publisher must expose one complete immutable value to concurrent readers");
+}
+
 void RunEntityHandleLifetimeSafetyTest() {
     kb::scene::Scene scene;
     std::vector<kb::library::EntityHandle> staleHandles;
@@ -56,6 +88,7 @@ void RunEntityHandleLifetimeSafetyTest() {
 
 int main() {
     RunCommandQueueOwnershipSafetyTest();
+    RunReadSnapshotPublisherConcurrencyTest();
     RunEntityHandleLifetimeSafetyTest();
     return EXIT_SUCCESS;
 }
