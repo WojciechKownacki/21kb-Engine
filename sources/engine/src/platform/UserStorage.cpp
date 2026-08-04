@@ -37,7 +37,7 @@ bool UserStorage::Write(std::string_view key, std::string_view data) {
     const std::uintmax_t oldBytes = exists ? std::filesystem::file_size(path, error) : 0U;
     const std::uintmax_t usedBytes = Usage();
     if (error || usedBytes < oldBytes || usedBytes - oldBytes > quotaBytes_ || data.size() > quotaBytes_ - (usedBytes - oldBytes) ||
-        !std::filesystem::create_directories(path.parent_path(), error) && error) return false;
+        (!std::filesystem::create_directories(path.parent_path(), error) && error)) return false;
     const std::filesystem::path temporary = path.string() + ".tmp";
     { std::ofstream output(temporary, std::ios::binary | std::ios::trunc); if (!output) return false; output.write(data.data(), static_cast<std::streamsize>(data.size())); if (!output) return false; }
 #if defined(_WIN32)
