@@ -9078,6 +9078,7 @@ bool EditorSceneContext::OpenAnimatorEditorAsset(kb::assets::AssetId id) {
     animationClipEditorTimeline_ = {};
     animationClipEditorDocument_ = {};
     animatorEditorAssetId_ = id;
+    animatorEditorDebugTarget_ = {};
     animatorEditorController_ = *controller;
     animatorEditorGraphDocument_.Open(*controller);
     animationPreview_.SetControllerOverride(std::make_shared<kb::scene::AnimatorController>(*controller));
@@ -9095,6 +9096,33 @@ kb::assets::AssetId EditorSceneContext::AnimatorEditorAssetId() const noexcept {
 bool EditorSceneContext::HasAnimatorEditorAsset() const noexcept {
     return animatorEditorAssetId_.IsValid() && animationPreview_.ControllerAsset() == animatorEditorAssetId_ &&
         animationPreviewScene_ != nullptr && animationPreviewScene_->CurrentScene() != nullptr;
+}
+
+bool EditorSceneContext::AnimatorEditorDebuggingPreview() const noexcept {
+    return !animatorEditorDebugTarget_.IsValid();
+}
+
+kb::scene::SceneEntity EditorSceneContext::AnimatorEditorDebugTarget() const noexcept {
+    return animatorEditorDebugTarget_;
+}
+
+std::string EditorSceneContext::AnimatorEditorDebugTargetLabel() const {
+    return AnimatorEditorDebuggingPreview() ? "Preview Instance" : scene_->Entities().Name(animatorEditorDebugTarget_);
+}
+
+bool EditorSceneContext::SetAnimatorEditorDebugTarget(kb::scene::SceneEntity entity) {
+    const kb::scene::Animator* animator = scene_->Components().Animators().TryGet(entity);
+    if (!HasAnimatorEditorAsset() || !scene_->Entities().IsAlive(entity) || animator == nullptr ||
+        animator->controllerAssetId != animatorEditorAssetId_.value || !scene_->Animators().Exists(entity)) {
+        console_.Warning("Animator Editor", "Debug target must be a live Animator instance using the open Animator Controller.");
+        return false;
+    }
+    animatorEditorDebugTarget_ = entity;
+    return true;
+}
+
+void EditorSceneContext::SetAnimatorEditorDebugTargetPreview() noexcept {
+    animatorEditorDebugTarget_ = {};
 }
 
 const kb::scene::Scene* EditorSceneContext::AnimatorEditorPreviewScene() const noexcept {
