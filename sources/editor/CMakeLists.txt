@@ -1064,6 +1064,7 @@ if(BUILD_TESTING)
           src/scene/EditorScenePrefabActions.cpp
           src/scene/EditorViewportCameraState.cpp
           src/scene/EditorViewportPreviewState.cpp
+          src/scene/EditorAnimationPreviewScene.cpp
           src/app/scene_viewport/EditorSceneViewportMath.cpp
           src/app/scene_viewport/EditorSceneViewportMeshPicker.cpp
       src/scene/material/EditorMaterialAssetAuthoring.cpp
