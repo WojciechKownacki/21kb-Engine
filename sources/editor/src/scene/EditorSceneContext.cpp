@@ -9116,6 +9116,29 @@ const AnimatorEditorGraphDocumentState& EditorSceneContext::AnimatorEditorGraphD
     return animatorEditorGraphDocument_;
 }
 
+bool EditorSceneContext::AddAnimationClipToAnimatorEditor(kb::assets::AssetId clipId, std::int32_t graphX, std::int32_t graphY) {
+    if (!HasAnimatorEditorAsset()) return false;
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(clipId);
+    const kb::assets::AssetHandle<kb::scene::AnimationClip> clip = scene_->Assets().Manager().Load<kb::scene::AnimationClip>(clipId);
+    if (metadata == nullptr || metadata->type != kb::scene::kAnimationClipAssetType || !clip.IsLoaded() ||
+        clip->targetSkeletonAssetId != animationPreview_.SkeletonAsset().value ||
+        clip->targetSkeletonCompatibilitySignature == 0U) {
+        console_.Error("Animator Editor", "Dropped Animation Clip is not compatible with the active Animator preview Skeleton.");
+        return false;
+    }
+    const kb::scene::AnimatorController* controller = animatorEditorGraphDocument_.Controller();
+    if (controller == nullptr || controller->layers.empty()) return false;
+    const std::string name = metadata->name.empty() ? metadata->virtualPath.stem().string() : metadata->name;
+    const std::uint64_t stateId = animatorEditorGraphDocument_.AddState(
+        controller->layers.front().name, name, kb::assets::ToString(clipId), graphX, graphY);
+    if (stateId == 0U || animatorEditorGraphDocument_.Controller() == nullptr || !scene_->Assets().Manager().PublishRuntimeAsset(
+            animatorEditorAssetId_, std::make_shared<kb::scene::AnimatorController>(*animatorEditorGraphDocument_.Controller()))) return false;
+    animationPreviewScene_->Clear();
+    static_cast<void>(AnimationPreviewScene());
+    console_.Info("Animator Editor", "Created state from Animation Clip: " + name);
+    return true;
+}
+
 bool EditorSceneContext::OpenAnimationClipEditorAsset(kb::assets::AssetId id) {
     const kb::assets::AssetMetadata* clipMetadata = scene_->Assets().Manager().Registry().Find(id);
     if (clipMetadata == nullptr || clipMetadata->type != kb::scene::kAnimationClipAssetType) {

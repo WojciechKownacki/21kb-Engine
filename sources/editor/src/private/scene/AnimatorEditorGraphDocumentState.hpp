@@ -56,6 +56,17 @@ public:
         return true;
     }
 
+    [[nodiscard]] std::uint64_t AddState(std::string_view layerName, std::string name, std::string clipReference, std::int32_t x, std::int32_t y) {
+        if (!controller_.has_value() || name.empty() || clipReference.empty()) return 0U;
+        const auto layer = std::ranges::find_if(controller_->layers, [layerName](const auto& value) { return value.name == layerName; });
+        if (layer == controller_->layers.end() || std::ranges::any_of(layer->states, [&name](const auto& state) { return state.name == name; })) return 0U;
+        const std::uint64_t id = AllocateId();
+        layer->states.push_back({ .id = id, .name = std::move(name), .clipReference = std::move(clipReference) });
+        controller_->graphLayout.push_back({ .stateId = id, .positionX = x, .positionY = y });
+        selection_ = { id };
+        return id;
+    }
+
     [[nodiscard]] bool DeleteSelectedStates() {
         if (!controller_.has_value() || selection_.empty()) return false;
         std::unordered_set<std::uint64_t> removed{ selection_.begin(), selection_.end() };
