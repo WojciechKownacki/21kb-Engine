@@ -775,7 +775,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
 58. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać panele Morph Targets, curves i Advanced Preview.
 59. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać reference pose, LOD/material visualization, bone weights oraz
     diagnostics importu/reimportu.
-60. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować working copy, dirty marker, Save, Revert, atomic
+60. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować working copy, dirty marker, Save, Revert, atomic
     reimport, per-document undo/redo i close prompt.
 61. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać headless authoring tests i golden screenshots layoutu.
 
