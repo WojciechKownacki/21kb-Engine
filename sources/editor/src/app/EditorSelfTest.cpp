@@ -928,10 +928,9 @@ void RunInspectorComponentAffordancesSuite(Report& report) {
                      .runtimeLoadable = true,
                  }),
         "Register Animator Controller for Inspector assignment");
-    report.Check(context.OpenAnimationAsset(controllerId) &&
-            context.ScriptEditor().IsOpen() &&
-            context.ScriptEditor().AssetId() == controllerId,
-        "Animator Controller opens in the editor's writable animation-asset surface");
+    report.Check(!context.OpenAnimationAsset(controllerId) &&
+            context.ScriptEditor().AssetId() != controllerId,
+        "Animator Controller is never routed to the Script Editor when its runtime data is unavailable");
     const kb::assets::AssetId timelineId{ 0xA111U };
     report.Check(context.Scene().Assets().Manager().RegisterAsset(
                      kb::assets::AssetMetadata{

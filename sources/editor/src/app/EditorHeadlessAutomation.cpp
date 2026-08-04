@@ -203,6 +203,9 @@ FindInspectorHit(
     if (panel == "animation_clip_editor") {
         return DockPanelKind::AnimationClipEditor;
     }
+    if (panel == "animator_editor") {
+        return DockPanelKind::AnimatorEditor;
+    }
     return std::nullopt;
 }
 
