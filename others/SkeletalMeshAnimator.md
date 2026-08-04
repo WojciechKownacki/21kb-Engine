@@ -768,7 +768,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     `Skeletal Mesh Editor`; ponowne otwarcie fokusuje istniejący dokument.
 55. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Odtworzyć domyślny flow UE5 `20/60/20`: toolbox, centralny viewport oraz
     prawa kolumna Skeleton Tree/asset details.
-56. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować Skeleton Tree z wyszukiwaniem, hierarchią, bone/socket
+56. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować Skeleton Tree z wyszukiwaniem, hierarchią, bone/socket
     selection i dwukierunkowym viewport picking.
 57. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować Details dla assetu, kości, socketu, sekcji materiałowej,
     LOD, bounds i import settings.
