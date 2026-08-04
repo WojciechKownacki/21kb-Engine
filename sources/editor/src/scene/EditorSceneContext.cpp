@@ -9001,6 +9001,7 @@ bool EditorSceneContext::OpenSkeletalMeshEditorAsset(kb::assets::AssetId id) {
     static_cast<void>(animationPreview_.Overlays().SetBonesVisible(true));
     skeletalMeshEditorAssetId_ = id;
     skeletalMeshEditorTree_.SetSkeleton(*skeleton);
+    skeletalMeshEditorDetails_.SetDocument(*mesh, *skeleton, *meshMetadata);
     static_cast<void>(AnimationPreviewScene());
     console_.Info("Skeletal Mesh Editor", "Opened document: " + meshMetadata->virtualPath.generic_string());
     return true;
@@ -9081,6 +9082,11 @@ kb::scene::SkeletonBoneId EditorSceneContext::SelectedSkeletalMeshEditorBone() c
 
 const std::string& EditorSceneContext::SelectedSkeletalMeshEditorSocket() const noexcept {
     return skeletalMeshEditorTree_.SelectedSocket();
+}
+
+SkeletalMeshEditorDetailsModel EditorSceneContext::SkeletalMeshEditorDetails() const {
+    return skeletalMeshEditorDetails_.Build(
+        skeletalMeshEditorTree_.SelectedBone(), skeletalMeshEditorTree_.SelectedSocket());
 }
 
 bool EditorSceneContext::SetAnimatorControllerAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {

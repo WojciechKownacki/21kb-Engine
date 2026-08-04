@@ -6,6 +6,7 @@
 #include "rendering/EditorToolbarLayout.hpp"
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 #include "scene/SkeletalMeshEditorTreeState.hpp"
+#include "scene/SkeletalMeshEditorDetailsState.hpp"
 #include "windowing/FloatingWindowControlHitTester.hpp"
 #include "windowing/FloatingWindowControlLayout.hpp"
 
@@ -447,6 +448,32 @@ void RunSkeletalMeshEditorTreeStateTest() {
     kb::editor::tests::Require(tree.Filter() == "s", "Skeleton Tree search should handle backspace");
 }
 
+void RunSkeletalMeshEditorDetailsStateTest() {
+    kb::scene::SkeletonAsset skeleton{};
+    skeleton.bones = {{ .id = 10U, .parentIndex = -1, .name = "Root" }};
+    skeleton.sockets = {{ .name = "Weapon", .boneId = 10U }};
+    kb::scene::SkeletalMeshAsset mesh{};
+    mesh.skeletonAssetId = 99U;
+    mesh.skeletonCompatibilitySignature = 456U;
+    mesh.lods = {{ .vertices = std::vector<kb::scene::SkeletalMeshVertex>(3U), .indices = { 0U, 1U, 2U },
+        .sections = {{ .firstIndex = 0U, .indexCount = 3U, .materialAssetId = 123U }}, .requiredBones = { 10U } }};
+    kb::assets::AssetMetadata metadata{};
+    metadata.name = "Hero";
+    metadata.virtualPath = "/Game/Hero.kbskeletalmesh";
+    metadata.importCategory = "glTF";
+    kb::editor::SkeletalMeshEditorDetailsState details;
+    details.SetDocument(mesh, skeleton, metadata);
+    const kb::editor::SkeletalMeshEditorDetailsModel asset = details.Build(0U, {});
+    kb::editor::tests::Require(asset.sections.size() >= 5U && asset.sections[1].title == "LOD 0" && asset.sections[2].title == "LOD 0 Material 0",
+        "Skeletal Mesh Details should expose asset LOD and material-section data");
+    const kb::editor::SkeletalMeshEditorDetailsModel bone = details.Build(10U, {});
+    kb::editor::tests::Require(bone.title == "Bone: Root" && bone.sections[0].fields[0].value == "10",
+        "Skeletal Mesh Details should expose selected bone data");
+    const kb::editor::SkeletalMeshEditorDetailsModel socket = details.Build(0U, "Weapon");
+    kb::editor::tests::Require(socket.title == "Socket: Weapon" && socket.sections[0].fields[1].value == "10",
+        "Skeletal Mesh Details should expose selected socket data");
+}
+
 // A click on any tab — the active one or an inactive sibling — must hit-test as a
 // dock Tab. The pointer router relies on this: a dock hit means the click is a
 // layout action (switch tabs), so it must NOT clear the scene selection and blank
@@ -503,6 +530,7 @@ void RunEditorDockingTests() {
     RunSkeletalMeshEditorWorkspaceActivationTest();
     RunSkeletalMeshEditorDefaultLayoutTest();
     RunSkeletalMeshEditorTreeStateTest();
+    RunSkeletalMeshEditorDetailsStateTest();
     RunTabClickIsDockInteractionTest();
 }
 
