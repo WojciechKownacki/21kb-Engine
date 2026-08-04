@@ -608,4 +608,27 @@ if(BUILD_TESTING)
     endif()
 
     kb_apply_quality_gates(kb_renderer_tests)
+
+    add_executable(kb_skeletal_animator_benchmarks
+        tests/SkeletalAnimatorPerformanceBenchmarks.cpp
+    )
+
+    target_link_libraries(kb_skeletal_animator_benchmarks
+        PRIVATE
+            kb_renderer
+    )
+
+    target_include_directories(kb_skeletal_animator_benchmarks
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    add_test(NAME kb_skeletal_animator_benchmarks COMMAND $<TARGET_FILE:kb_skeletal_animator_benchmarks>)
+    set_tests_properties(kb_skeletal_animator_benchmarks PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "performance;animation"
+        TIMEOUT 600
+    )
+
+    kb_apply_quality_gates(kb_skeletal_animator_benchmarks)
 endif()
