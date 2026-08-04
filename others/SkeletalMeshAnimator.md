@@ -837,7 +837,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
 
 ### Sprint SK-12 — wydajność, stabilność i odbiór produktu
 
-87. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać benchmark 100 i 1000 rigów po 100–200 kości dla sampling, blend,
+87. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać benchmark 100 i 1000 rigów po 100–200 kości dla sampling, blend,
     constraints, hierarchy solve, palette upload i draw submission.
 88. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zmierzyć alokacje, cache misses, czas worker/main/render thread,
     batching oraz koszty LOD/update-rate.
