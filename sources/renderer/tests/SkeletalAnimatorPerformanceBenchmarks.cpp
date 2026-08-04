@@ -36,6 +36,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -82,6 +83,10 @@ struct BenchmarkResult {
     std::uint32_t lodSelections = 0U;
     double lodEnabledMilliseconds = 0.0;
     double lodDisabledMilliseconds = 0.0;
+    std::size_t parallelPoseEvaluations = 0U;
+    std::size_t parallelPoseWorkers = 1U;
+    std::size_t updateRateSkippedPoses = 0U;
+    double firstPoseFingerprint = 0.0;
 };
 
 void Require(bool value, const char* message) {
@@ -269,7 +274,7 @@ void WriteTriangleObj(const std::filesystem::path& path) {
 }
 
 [[nodiscard]] kb::scene::AnimatorController MakeController(
-    const kb::scene::SkeletonAsset& skeleton) {
+    const kb::scene::SkeletonAsset& skeleton, bool includeConstraint = true) {
     kb::scene::AnimatorController controller{};
     controller.parameters = {
         { .name = "Blend", .type = kb::scene::AnimatorParameterType::Float,
@@ -296,14 +301,16 @@ void WriteTriangleObj(const std::filesystem::path& path) {
             },
         },
     };
-    controller.rigConstraints = {
-        {
-            .name = "Aim",
-            .type = kb::scene::AnimatorRigConstraintType::Aim,
-            .target = "AimTarget",
-            .constrainedBoneId = skeleton.bones.back().id,
-        },
-    };
+    if (includeConstraint) {
+        controller.rigConstraints = {
+            {
+                .name = "Aim",
+                .type = kb::scene::AnimatorRigConstraintType::Aim,
+                .target = "AimTarget",
+                .constrainedBoneId = skeleton.bones.back().id,
+            },
+        };
+    }
     return controller;
 }
 
@@ -322,7 +329,8 @@ void WriteTriangleObj(const std::filesystem::path& path) {
 }
 
 [[nodiscard]] BenchmarkResult RunBenchmark(
-    Workload workload, kb::render::Renderer& renderer) {
+    Workload workload, kb::render::Renderer& renderer,
+    bool includeConstraint = true, float poseUpdateRateHz = 0.0F) {
     const std::filesystem::path root = std::filesystem::temp_directory_path() /
         ("21kb-sk12-87-" + std::to_string(workload.rigCount) + "x" +
          std::to_string(workload.boneCount));
@@ -365,7 +373,7 @@ void WriteTriangleObj(const std::filesystem::path& path) {
                 MakeClip(skeleton, skeletonId.value, signature, 0.02F)) &&
             kb::scene::AnimationAssetIO::SaveController(
                 root / "Assets" / "Animation" / "Bench.kbanimcontroller",
-                MakeController(skeleton)),
+                MakeController(skeleton, includeConstraint)),
         "SK-12.87 could not save production animation assets");
     static_cast<void>(scene.Assets().Discover());
     const kb::assets::AssetMetadata* controllerMetadata =
@@ -390,6 +398,7 @@ void WriteTriangleObj(const std::filesystem::path& path) {
         scene.Components().Animators().Set(entity, {
             .controllerAssetId = controllerMetadata->id.value,
             .speed = 1.0F,
+            .poseUpdateRateHz = poseUpdateRateHz,
             .enabled = true,
         });
         scene.Components().MeshRenderers().Set(entity, {
@@ -406,9 +415,9 @@ void WriteTriangleObj(const std::filesystem::path& path) {
     static_cast<void>(scene.Runtime().Update(0.0F));
     for (const kb::scene::SceneEntity entity : rigs) {
         Require(scene.Animators().SetFloat(entity, "Blend", 0.5F) &&
-                scene.Animators().SetIkTarget(entity, "AimTarget", {
+                (!includeConstraint || scene.Animators().SetIkTarget(entity, "AimTarget", {
                     .worldPosition = { 1.0F, 1.0F, 1.0F },
-                }),
+                })),
             "SK-12.87 could not configure live blend or constraint target");
     }
     static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
@@ -444,6 +453,10 @@ void WriteTriangleObj(const std::filesystem::path& path) {
     result.ecsQueryRecordCacheMisses = telemetryAfter.queryRecordCacheMisses;
     result.ecsQueryBatches = telemetryAfter.queryBatches;
     result.ecsAverageBatchSize = telemetryAfter.queryAverageEffectiveBatchSize;
+    const kb::scene::SceneRuntimeHotPathReport hotPath = scene.Runtime().HotPathReport();
+    result.parallelPoseEvaluations = hotPath.animatorParallelEvaluationCount;
+    result.parallelPoseWorkers = hotPath.animatorParallelWorkerCount;
+    result.updateRateSkippedPoses = hotPath.animatorUpdateRateSkippedPoseCount;
 
     std::vector<kb::render::RenderSkinningMatrix> palette;
     for (const kb::scene::SceneEntity entity : rigs) {
@@ -456,14 +469,23 @@ void WriteTriangleObj(const std::filesystem::path& path) {
             palette.reserve(instance->currentSkinMatrices.size());
             for (const kb::math::Mat4& matrix : instance->currentSkinMatrices) {
                 palette.push_back(ToRenderMatrix(matrix));
+                result.firstPoseFingerprint +=
+                    static_cast<double>(matrix.columns[0].x) +
+                    static_cast<double>(matrix.columns[1].y) +
+                    static_cast<double>(matrix.columns[2].z) +
+                    static_cast<double>(matrix.columns[3].x) +
+                    static_cast<double>(matrix.columns[3].y) +
+                    static_cast<double>(matrix.columns[3].z);
             }
         }
     }
     result.evaluatedPoses -= beforeEvaluationCount;
     result.hierarchySolves -= beforeHierarchyCount;
-    Require(result.evaluatedPoses >= workload.rigCount &&
-            result.hierarchySolves >= workload.rigCount,
-        "SK-12.87 runtime did not execute sampling, blend, constraints and hierarchy solve for every rig");
+    if (poseUpdateRateHz == 0.0F) {
+        Require(result.evaluatedPoses >= workload.rigCount &&
+                result.hierarchySolves >= workload.rigCount,
+            "SK-12.87 runtime did not execute sampling, blend, constraints and hierarchy solve for every rig");
+    }
 
     const Clock::time_point updateRate30HzStartedAt = Clock::now();
     static_cast<void>(scene.Runtime().Update(1.0F / 30.0F));
@@ -561,12 +583,31 @@ void PrintResult(const BenchmarkResult& result) {
               << " lod-selections=" << result.lodSelections
               << " lod-enabled=" << result.lodEnabledMilliseconds << "ms"
               << " lod-disabled=" << result.lodDisabledMilliseconds << "ms"
+              << " parallel-pose-evaluations=" << result.parallelPoseEvaluations
+              << " parallel-pose-workers=" << result.parallelPoseWorkers
+              << " update-rate-skipped-poses=" << result.updateRateSkippedPoses
               << std::endl;
+}
+
+void VerifySk1289(kb::render::Renderer& renderer) {
+    const BenchmarkResult serial = RunBenchmark(
+        Workload{ .rigCount = 31U, .boneCount = 10U }, renderer, false);
+    const BenchmarkResult parallel = RunBenchmark(
+        Workload{ .rigCount = 32U, .boneCount = 10U }, renderer, false);
+    Require(parallel.parallelPoseEvaluations == parallel.workload.rigCount &&
+            parallel.parallelPoseWorkers > 1U &&
+            parallel.firstPoseFingerprint == serial.firstPoseFingerprint,
+        "SK-12.89 parallel skeletal evaluation did not preserve the serial pose result");
+    const BenchmarkResult rateLimited = RunBenchmark(
+        Workload{ .rigCount = 32U, .boneCount = 10U }, renderer, false, 20.0F);
+    Require(rateLimited.evaluatedPoses == 0U &&
+            rateLimited.updateRateSkippedPoses == rateLimited.workload.rigCount,
+        "SK-12.89 pose update-rate optimization did not deterministically skip only the scheduled pose sample");
 }
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     try {
         HeadlessSurface surface;
         kb::render::DisplayConfig config{};
@@ -576,12 +617,17 @@ int main() {
         kb::render::Renderer renderer;
         Require(renderer.Initialize(surface, &config),
             "SK-12.87 could not initialize the production headless renderer");
-        for (const Workload workload : std::array<Workload, 2U>{
-                 Workload{ .rigCount = 100U, .boneCount = 100U },
-                 Workload{ .rigCount = 1000U, .boneCount = 200U },
-             }) {
-            PrintResult(RunBenchmark(workload, renderer));
+        const bool sk1289Only = argc == 2 &&
+            std::string_view{ argv[1] } == "--sk12-89-only";
+        if (!sk1289Only) {
+            for (const Workload workload : std::array<Workload, 2U>{
+                     Workload{ .rigCount = 100U, .boneCount = 100U },
+                     Workload{ .rigCount = 1000U, .boneCount = 200U },
+                 }) {
+                PrintResult(RunBenchmark(workload, renderer));
+            }
         }
+        VerifySk1289(renderer);
         renderer.Shutdown();
         return 0;
     } catch (const std::exception& error) {
