@@ -807,7 +807,7 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     transitions, conditions i transition Details.
 73. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać stabilne node/edge IDs, serializowany graph layout, comments,
     groups, copy/paste, rename, delete i multi-selection.
-74. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować drag Animation Clip z kompatybilnego Asset Browsera na
+74. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować drag Animation Clip z kompatybilnego Asset Browsera na
     graph oraz automatyczne utworzenie stanu.
 75. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zaimplementować double-click state, motion/blend document oraz
     breadcrumbs/back navigation.
