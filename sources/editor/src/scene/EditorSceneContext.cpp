@@ -1467,6 +1467,22 @@ const kb::scene::Scene& EditorSceneContext::AnimationPreviewScene() {
     return animationPreviewScene_->SceneFor(*scene_, animationPreview_);
 }
 
+EditorViewportCameraState& EditorSceneContext::AnimationPreviewCamera() noexcept {
+    return animationPreviewScene_->Camera();
+}
+
+const EditorViewportCameraState& EditorSceneContext::AnimationPreviewCamera() const noexcept {
+    return animationPreviewScene_->Camera();
+}
+
+void EditorSceneContext::FocusAnimationPreview(float durationSeconds) noexcept {
+    animationPreviewScene_->Focus(durationSeconds);
+}
+
+bool EditorSceneContext::TickAnimationPreviewCamera(float deltaSeconds) noexcept {
+    return animationPreviewScene_->TickCamera(deltaSeconds);
+}
+
 EditorViewportCameraState& EditorSceneContext::ViewportCamera() noexcept {
     return viewportState_.Camera();
 }
