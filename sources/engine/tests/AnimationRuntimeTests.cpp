@@ -229,18 +229,13 @@ void RunAnimationRuntimeTests() {
         std::string_view{ serializedController }.substr(controllerHeaderEnd + 1U));
     Require(kb::scene::AnimationAssetIO::LoadController(legacyControllerPath).has_value(),
         "AnimatorController legacy migration failed");
-    std::string versionOneController = serializedController;
-    const std::string currentControllerHeader = "21kb AnimatorController 2";
-    const std::size_t currentControllerHeaderOffset =
-        versionOneController.find(currentControllerHeader);
-    Require(currentControllerHeaderOffset != std::string::npos,
-        "AnimatorController did not serialize its current schema version");
-    versionOneController.replace(
-        currentControllerHeaderOffset, currentControllerHeader.size(),
-        "21kb AnimatorController 1");
     const std::filesystem::path versionOneControllerPath =
         roundTripRoot / "VersionOne.kbanimcontroller";
-    WriteTextFile(versionOneControllerPath, versionOneController);
+    WriteTextFile(versionOneControllerPath,
+        "21kb AnimatorController 1\n"
+        "parameter \"Speed\" Float 0\n"
+        "layer \"Base\" \"Idle\" 1 1\n"
+        "state 0 \"Idle\" \"/Game/Animation/Move.kbanim\"\n");
     Require(kb::scene::AnimationAssetIO::LoadController(
                 versionOneControllerPath).has_value(),
         "AnimatorController schema 1 migration failed");
@@ -312,10 +307,14 @@ void RunAnimationRuntimeTests() {
         "Rig AnimatorController production asset could not be saved");
     kb::scene::AnimatorController invalidBlendController = controller;
     invalidBlendController.layers[0].states[2].blendParameter = "Grounded";
+    std::string invalidBlendError;
     Require(!kb::scene::AnimationAssetIO::SaveController(
                 root / "Assets" / "Animation" / "InvalidBlend.kbanimcontroller",
-                invalidBlendController),
-        "Blend tree accepted a non-Float parameter");
+                invalidBlendController,
+                &invalidBlendError) &&
+            invalidBlendError.find("Blend State") != std::string::npos &&
+            invalidBlendError.find("Grounded") != std::string::npos,
+        "Blend tree validation did not identify its state and parameter");
     kb::scene::AnimatorController invalidRigController = rigController;
     invalidRigController.rigConstraints[0].weight = 0.0F;
     Require(!kb::scene::AnimationAssetIO::SaveController(
