@@ -24,6 +24,7 @@
 #include "scene/EditorSceneObjectEditTypes.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
 #include "scene/AnimationPreviewContext.hpp"
+#include "scene/AnimationClipTimelineState.hpp"
 #include "scene/EditorAnimationPreviewScene.hpp"
 #include "scene/SkeletalMeshEditorTreeState.hpp"
 #include "scene/SkeletalMeshEditorDetailsState.hpp"
@@ -417,6 +418,7 @@ public:
     [[nodiscard]] bool HasAnimationClipEditorAsset() const noexcept;
     [[nodiscard]] const kb::scene::Scene* AnimationClipEditorPreviewScene() const noexcept;
     [[nodiscard]] std::uint64_t AnimationClipEditorPreviewRevision() const noexcept;
+    [[nodiscard]] const AnimationClipTimelineState& AnimationClipEditorTimeline() const noexcept;
     [[nodiscard]] bool OpenSkeletalMeshEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] kb::assets::AssetId SkeletalMeshEditorAssetId() const noexcept;
     [[nodiscard]] bool HasSkeletalMeshEditorAsset() const noexcept;
@@ -999,6 +1001,7 @@ private:
     AnimationPreviewContext animationPreview_;
     std::unique_ptr<EditorAnimationPreviewScene> animationPreviewScene_;
     kb::assets::AssetId animationClipEditorAssetId_{};
+    AnimationClipTimelineState animationClipEditorTimeline_;
     kb::assets::AssetId skeletalMeshEditorAssetId_{};
     SkeletalMeshEditorTreeState skeletalMeshEditorTree_;
     SkeletalMeshEditorDetailsState skeletalMeshEditorDetails_;
