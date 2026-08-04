@@ -20,9 +20,11 @@ bool SceneAnimators::Exists(SceneEntity entity) const noexcept { return SceneAni
 std::uint64_t SceneAnimators::Controller(SceneEntity entity) const noexcept { return SceneAnimatorService::Controller(scene_, entity); }
 std::span<const AnimatorParameterValue> SceneAnimators::Parameters(SceneEntity entity) const noexcept { return SceneAnimatorService::Parameters(scene_, entity); }
 bool SceneAnimators::Play(SceneEntity entity, std::string_view layer, std::string_view state, float normalizedTime) noexcept { return SceneAnimatorService::Play(scene_, entity, layer, state, normalizedTime); }
+bool SceneAnimators::SeekNormalized(SceneEntity entity, float normalizedTime) noexcept { return SceneAnimatorService::SeekNormalized(scene_, entity, normalizedTime); }
 bool SceneAnimators::CrossFade(SceneEntity entity, std::string_view layer, std::string_view state, float durationSeconds, float normalizedTime) noexcept { return SceneAnimatorService::CrossFade(scene_, entity, layer, state, durationSeconds, normalizedTime); }
 bool SceneAnimators::SetSpeed(SceneEntity entity, float speed) noexcept { return SceneAnimatorService::SetSpeed(scene_, entity, speed); }
 float SceneAnimators::Speed(SceneEntity entity) const noexcept { return SceneAnimatorService::Speed(scene_, entity); }
+float SceneAnimators::CurrentStateDuration(SceneEntity entity) const noexcept { return SceneAnimatorService::CurrentStateDuration(scene_, entity); }
 std::uint64_t SceneAnimators::RuntimeBindingGeneration(SceneEntity entity) const noexcept { return SceneAnimatorService::RuntimeBindingGeneration(scene_, entity); }
 std::optional<AnimatorInstanceSkeletonView> SceneAnimators::InstanceSkeleton(SceneEntity entity) const noexcept { return SceneAnimatorService::InstanceSkeleton(scene_, entity); }
 std::optional<AnimatorAttachmentTransform> SceneAnimators::AttachmentTransform(SceneEntity entity, SkeletonBoneId boneId, const LocalTransform& localOffset) const noexcept { return SceneAnimatorService::AttachmentTransform(scene_, entity, boneId, localOffset); }

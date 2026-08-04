@@ -8,6 +8,7 @@
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
@@ -52,10 +53,11 @@ void RegisterPreviewFloorAsset(kb::assets::AssetManager& manager) {
 } // namespace
 
 const kb::scene::Scene& EditorAnimationPreviewScene::SceneFor(
-    const kb::scene::Scene& source, const AnimationPreviewContext& context) {
+    const kb::scene::Scene& source, AnimationPreviewContext& context) {
     if (scene_ == nullptr || sourceSceneId_ != source.Id() || contextRevision_ != context.Revision()) {
         Rebuild(source, context);
     }
+    SynchronizePlayback(context);
     SynchronizeCamera();
     return *scene_;
 }
@@ -69,6 +71,12 @@ bool EditorAnimationPreviewScene::TickCamera(float deltaSeconds) noexcept {
     const bool animating = camera_.TickFocus(deltaSeconds);
     SynchronizeCamera();
     return animating;
+}
+
+bool EditorAnimationPreviewScene::TickPlayback(AnimationPreviewContext& context, float deltaSeconds) noexcept {
+    const bool advanced = context.Transport().Advance(deltaSeconds);
+    SynchronizePlayback(context);
+    return advanced;
 }
 
 void EditorAnimationPreviewScene::Rebuild(
@@ -186,6 +194,7 @@ void EditorAnimationPreviewScene::Rebuild(
     static_cast<void>(scene_->Runtime().Update(0.0F));
     sourceSceneId_ = source.Id();
     contextRevision_ = context.Revision();
+    playbackRevision_ = 0U;
     ++revision_;
 }
 
@@ -201,6 +210,21 @@ void EditorAnimationPreviewScene::SynchronizeCamera() noexcept {
     scene_->Runtime().SynchronizeTransforms();
 }
 
+void EditorAnimationPreviewScene::SynchronizePlayback(AnimationPreviewContext& context) noexcept {
+    if (scene_ == nullptr) return;
+    if (scene_->Animators().Exists(previewEntity_)) {
+        static_cast<void>(context.Transport().SetDurationSeconds(
+            scene_->Animators().CurrentStateDuration(previewEntity_)));
+    }
+    if (playbackRevision_ == context.Transport().Revision()) return;
+    if (scene_->Animators().Exists(previewEntity_)) {
+        static_cast<void>(scene_->Animators().SeekNormalized(
+            previewEntity_, context.Transport().NormalizedTime()));
+        static_cast<void>(scene_->Runtime().Update(0.0F));
+    }
+    playbackRevision_ = context.Transport().Revision();
+}
+
 void EditorAnimationPreviewScene::Clear() noexcept {
     scene_.reset();
     previewEntity_ = {};
@@ -211,6 +235,7 @@ void EditorAnimationPreviewScene::Clear() noexcept {
     focusRadius_ = 1.0F;
     sourceSceneId_ = 0U;
     contextRevision_ = 0U;
+    playbackRevision_ = 0U;
     ++revision_;
 }
 
