@@ -44,6 +44,17 @@ public:
     // Runs after pose evaluation. It only copies completed runtime state into
     // a retained immutable value; readers never lock animator-owned storage.
     static void PublishDebugSnapshot(Scene& scene);
+    // Frame-pipelined variant used by AnimatorSceneSystem: scalar state is
+    // captured on the calling thread, while the bone copy and publish run as
+    // a single worker-pool job once the skeletal instance count reaches the
+    // async threshold. A frame is skipped (never queued up) when the previous
+    // build is still in flight, so the animation hot path never waits on
+    // diagnostics. Every animator-state mutation entry point joins the
+    // in-flight build before touching animator-owned storage.
+    static void SubmitDebugSnapshot(Scene& scene);
+    // Joins the in-flight asynchronous debug snapshot build (a no-op when
+    // none is running) and rethrows any failure the worker recorded.
+    static void WaitForDebugSnapshot(Scene& scene);
     static void SyncComponents(Scene& scene);
 };
 

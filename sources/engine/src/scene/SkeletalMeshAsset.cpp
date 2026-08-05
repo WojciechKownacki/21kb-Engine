@@ -165,8 +165,8 @@ SkeletalMeshAssetValidationResult ValidateSkeletalMeshAsset(const SkeletalMeshAs
     if (asset.skeletonAssetId == 0U || asset.skeletonCompatibilitySignature == 0U || asset.lods.empty() ||
         !IsValidBounds(asset.conservativeBounds) ||
         !IsValidBounds(asset.fixedBounds) ||
-        asset.boundsMode != SkeletalMeshBoundsMode::ImportedConservative &&
-            asset.boundsMode != SkeletalMeshBoundsMode::Fixed) {
+        (asset.boundsMode != SkeletalMeshBoundsMode::ImportedConservative &&
+            asset.boundsMode != SkeletalMeshBoundsMode::Fixed)) {
         return { false, "Skeletal mesh has an invalid skeleton reference, LOD set, or conservative bounds." };
     }
     std::unordered_set<std::string> morphNames;

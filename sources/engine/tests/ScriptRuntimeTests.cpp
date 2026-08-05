@@ -11256,10 +11256,12 @@ void RunScriptSceneComponentGeneratedAccessorCoverageTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    // The scene catalog now exposes 30 authorable component surfaces. This
-    // total includes the stable task components and the complete Lens Echo
-    // schema.
-    kb::tests::Require(fieldsChecked == 260U, "Script component API generated accessor coverage test did not exercise the expected total field count (260) across all components");
+    // The scene catalog exposes 30 canonical authorable component surfaces
+    // plus one public compatibility alias. This total includes the stable
+    // task components and the complete Lens Echo schema.
+    // Light is a public compatibility alias for 3D Radiance Emitter and
+    // deliberately exercises the same 16 generated accessors.
+    kb::tests::Require(fieldsChecked == 276U, "Script component API generated accessor coverage test did not exercise the expected total field count (276, including the Light compatibility alias) across all components");
 }
 
 // LIB-082: defensive regression guard — the KB_ASSERT_NOT_POINTER
@@ -11338,7 +11340,7 @@ void RunScriptSceneComponentPropertiesNeverExposeRawPointerTest() {
     // LIB-136: Camera grew three more fields (cullingMask/clearMode/clearColor, the latter
     // decomposed into x/y/z), and MeshRenderer grew one (layer), so the total climbs from
     // 86 to 92.
-    kb::tests::Require(propertiesChecked == 260U, "LIB-082 raw-pointer audit did not exercise the expected total field count (260) across all components");
+    kb::tests::Require(propertiesChecked == 276U, "LIB-082 raw-pointer audit did not exercise the expected total field count (276, including the Light compatibility alias) across all components");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {

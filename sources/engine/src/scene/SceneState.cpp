@@ -14,6 +14,10 @@ SceneState::SceneState(kb::ecs::WorldConfig worldConfig)
     , componentStorage(world, components) {}
 
 SceneState::~SceneState() {
+    // Join the in-flight animator debug snapshot build before any member it
+    // reads (animator records, pose buffers, the publisher) is destroyed.
+    // The job callback never throws, so this wait cannot rethrow here.
+    animatorDebugSnapshotJob.Wait();
     if (cameraIterationQuery != nullptr) {
         ecs_query_fini(cameraIterationQuery);
         cameraIterationQuery = nullptr;
