@@ -9134,6 +9134,17 @@ EditorSceneContext::AnimatorEditorDebugSnapshot() const {
         : preview->Animators().DebugSnapshot();
 }
 
+void EditorSceneContext::WaitForAnimatorEditorDebugSnapshot() {
+    if (!HasAnimatorEditorAsset()) return;
+    if (!AnimatorEditorDebuggingPreview()) {
+        scene_->Animators().WaitForDebugSnapshot();
+        return;
+    }
+    kb::scene::Scene* preview =
+        animationPreviewScene_ == nullptr ? nullptr : animationPreviewScene_->MutableScene();
+    if (preview != nullptr) preview->Animators().WaitForDebugSnapshot();
+}
+
 bool EditorSceneContext::SetAnimatorEditorDebugTarget(kb::scene::SceneEntity entity) {
     const kb::scene::Animator* animator = scene_->Components().Animators().TryGet(entity);
     if (!HasAnimatorEditorAsset() || !scene_->Entities().IsAlive(entity) || animator == nullptr ||

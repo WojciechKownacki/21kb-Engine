@@ -251,11 +251,12 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 30> kComponentNames{
+constexpr std::array<std::string_view, 31> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
     "3D Radiance Emitter",
+    "Light",
     "MeshRenderer",
     "Behaviour",
     "Rigidbody",
