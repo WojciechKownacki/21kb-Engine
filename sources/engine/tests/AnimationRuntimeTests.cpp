@@ -26,8 +26,10 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
+#include <thread>
 
 #if !defined(KB_PHYSICS_JOLT_PLUGIN_PATH)
 #define KB_PHYSICS_JOLT_PLUGIN_PATH ""
@@ -2083,6 +2085,255 @@ end
             "Animator debug snapshots must remain valid after the live instance detaches");
 
         std::filesystem::remove_all(skeletalRoot);
+    }
+
+    // SK-11.85 — thread-safe asynchronous debug snapshots. With enough
+    // skeletal instances the bone copy leaves the animation hot path and runs
+    // as one worker-pool job; readers keep receiving complete immutable
+    // revisions while evaluation continues on the main thread and workers.
+    {
+        const std::filesystem::path asyncRoot =
+            std::filesystem::temp_directory_path() /
+            "21kb-animator-debug-snapshot-async-tests";
+        std::filesystem::remove_all(asyncRoot);
+
+        kb::scene::SkeletonAsset asyncSkeleton{};
+        asyncSkeleton.bones = {
+            {
+                .id = 700U,
+                .parentIndex = -1,
+                .name = "Root",
+                .referencePose = { .position = { 3.0F, 0.0F, 0.0F } },
+                .inverseBind = {},
+            },
+            {
+                .id = 101U,
+                .parentIndex = 0,
+                .name = "Spine",
+                .referencePose = { .position = { 0.0F, 1.0F, 0.0F } },
+                .inverseBind = {},
+            },
+            {
+                .id = 900U,
+                .parentIndex = 1,
+                .name = "Hand",
+                .referencePose = { .position = { 1.0F, 0.0F, 0.0F } },
+                .inverseBind = {},
+            },
+        };
+        const std::uint64_t asyncSkeletonSignature =
+            kb::scene::SkeletonCompatibilitySignature(asyncSkeleton);
+        Require(kb::scene::SkeletonAssetIO::Save(
+                    asyncRoot / "Assets" / "Skeletal" / "AsyncRig.kbskeleton",
+                    asyncSkeleton),
+            "Async debug snapshot fixture could not save its Skeleton");
+
+        kb::scene::Scene bootstrap;
+        Require(bootstrap.Assets().MountProject(asyncRoot) &&
+                bootstrap.Assets().Discover() == 1U,
+            "Async debug snapshot fixture could not discover its Skeleton");
+        const kb::assets::AssetMetadata* asyncSkeletonMetadata =
+            bootstrap.Assets().Manager().Registry().FindByPath(
+                "/Game/Skeletal/AsyncRig.kbskeleton");
+        Require(asyncSkeletonMetadata != nullptr,
+            "Async debug snapshot fixture did not retain its Skeleton metadata");
+        const std::uint64_t asyncSkeletonId = asyncSkeletonMetadata->id.value;
+
+        kb::scene::AnimationClip asyncClip{};
+        asyncClip.durationSeconds = 1.0F;
+        asyncClip.looping = true;
+        asyncClip.targetSkeletonAssetId = asyncSkeletonId;
+        asyncClip.targetSkeletonCompatibilitySignature = asyncSkeletonSignature;
+        asyncClip.skeletalTracks = {
+            {
+                .boneId = 900U,
+                .bindingMask = 1U,
+                .keyframes = {
+                    { .timeSeconds = 0.0F, .transform = {} },
+                    { .timeSeconds = 1.0F, .transform = {
+                        .position = { 2.0F, 0.0F, 0.0F } } },
+                },
+            },
+        };
+        kb::scene::AnimatorController asyncController{};
+        asyncController.layers = {
+            {
+                .name = "Base",
+                .defaultState = "Move",
+                .weight = 1.0F,
+                .mask = 7U,
+                .states = {
+                    {
+                        .name = "Move",
+                        .clipReference = "/Game/Animation/Async.kbanim",
+                    },
+                },
+            },
+        };
+        Require(kb::scene::AnimationAssetIO::SaveClip(
+                    asyncRoot / "Assets" / "Animation" / "Async.kbanim",
+                    asyncClip) &&
+                kb::scene::AnimationAssetIO::SaveController(
+                    asyncRoot / "Assets" / "Animation" / "Async.kbanimcontroller",
+                    asyncController),
+            "Async debug snapshot fixture could not save its clip and controller");
+
+        // Above the async offload threshold (32 skeletal instances).
+        constexpr std::size_t kAsyncRigCount = 40U;
+        const auto buildScene = [&]() {
+            auto scene = std::make_unique<kb::scene::Scene>();
+            Require(scene->Assets().MountProject(asyncRoot) &&
+                    scene->Assets().Discover() == 3U,
+                "Async debug snapshot fixture could not discover its assets");
+            const kb::assets::AssetMetadata* skeletonMetadata =
+                scene->Assets().Manager().Registry().FindByPath(
+                    "/Game/Skeletal/AsyncRig.kbskeleton");
+            const kb::assets::AssetMetadata* controllerMetadata =
+                scene->Assets().Manager().Registry().FindByPath(
+                    "/Game/Animation/Async.kbanimcontroller");
+            Require(skeletonMetadata != nullptr && controllerMetadata != nullptr &&
+                    skeletonMetadata->id.value == asyncSkeletonId,
+                "Async debug snapshot fixture did not resolve stable asset ids");
+            for (std::size_t index = 0U; index < kAsyncRigCount; ++index) {
+                const kb::scene::SceneObject object =
+                    scene->Entities().CreateObject({ .name = "Async Rig" });
+                Require(scene->Components().SkeletonBindings().Set(
+                            object.Entity(), kb::scene::SkeletonBindingComponent{
+                                .skeletonAssetId = asyncSkeletonId,
+                                .skeletonCompatibilitySignature = asyncSkeletonSignature,
+                                .enabled = true,
+                            }),
+                    "Async debug snapshot fixture could not author SkeletonBinding");
+                scene->Components().Animators().Set(object.Entity(), kb::scene::Animator{
+                    .controllerAssetId = controllerMetadata->id.value,
+                    .speed = 1.0F,
+                    .enabled = true,
+                });
+            }
+            return scene;
+        };
+        const auto bonesMatch = [](const kb::scene::AnimatorDebugInstanceSnapshot& lhs,
+                                   const kb::scene::AnimatorDebugInstanceSnapshot& rhs) {
+            if (lhs.entity != rhs.entity || lhs.bones.size() != rhs.bones.size()) {
+                return false;
+            }
+            for (std::size_t index = 0U; index < lhs.bones.size(); ++index) {
+                const kb::scene::AnimatorDebugBoneSnapshot& lhsBone = lhs.bones[index];
+                const kb::scene::AnimatorDebugBoneSnapshot& rhsBone = rhs.bones[index];
+                if (lhsBone.id != rhsBone.id ||
+                    !NearlyEqual(lhsBone.localPose.position.x, rhsBone.localPose.position.x) ||
+                    !NearlyEqual(lhsBone.localPose.position.y, rhsBone.localPose.position.y) ||
+                    !NearlyEqual(lhsBone.localPose.position.z, rhsBone.localPose.position.z) ||
+                    !NearlyEqual(lhsBone.componentPose.position.x, rhsBone.componentPose.position.x) ||
+                    !NearlyEqual(lhsBone.componentPose.position.y, rhsBone.componentPose.position.y) ||
+                    !NearlyEqual(lhsBone.componentPose.position.z, rhsBone.componentPose.position.z)) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        const std::unique_ptr<kb::scene::Scene> sceneA = buildScene();
+        sceneA->Runtime().SetPlaying(false);
+        static_cast<void>(sceneA->Runtime().Update(0.0F));
+        sceneA->Runtime().SetPlaying(true);
+        static_cast<void>(sceneA->Runtime().Update(0.25F));
+        const kb::scene::SceneRuntimeHotPathReport asyncHotPath =
+            sceneA->Runtime().HotPathReport();
+        sceneA->Animators().WaitForDebugSnapshot();
+        const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> snapshotA =
+            sceneA->Animators().DebugSnapshot();
+        Require(asyncHotPath.animatorDebugSnapshotAsyncSubmissionCount >= 1U,
+            "Async debug snapshot builds must be offloaded to the worker pool above the threshold");
+        Require(snapshotA != nullptr && snapshotA->revision >= 1U &&
+                snapshotA->instances.size() == kAsyncRigCount,
+            "Async debug snapshot must publish every skeletal instance");
+        bool asyncSnapshotComplete = true;
+        for (const kb::scene::AnimatorDebugInstanceSnapshot& instance : snapshotA->instances) {
+            asyncSnapshotComplete = asyncSnapshotComplete && instance.bones.size() == 3U;
+        }
+        Require(asyncSnapshotComplete,
+            "Async debug snapshot must publish a complete bone set for every skeletal instance");
+        const kb::scene::SceneEntity firstAsyncEntity = snapshotA->instances.front().entity;
+        const auto firstAsyncView = sceneA->Animators().InstanceSkeleton(firstAsyncEntity);
+        Require(firstAsyncView.has_value() && firstAsyncView->currentLocalPose.positions.size() == 3U &&
+                NearlyEqual(snapshotA->instances.front().bones[2].localPose.position.x,
+                    firstAsyncView->currentLocalPose.positions[2].x) &&
+                NearlyEqual(snapshotA->instances.front().bones[2].componentPose.position.x,
+                    firstAsyncView->currentComponentPose.positions[2].x),
+            "Async debug snapshot bones must match the live frozen pose buffers");
+
+        const std::uint64_t firstAsyncRevision = snapshotA->revision;
+        const float firstAsyncBoneX = snapshotA->instances.front().bones[2].localPose.position.x;
+        static_cast<void>(sceneA->Runtime().Update(0.25F));
+        sceneA->Animators().WaitForDebugSnapshot();
+        const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> snapshotB =
+            sceneA->Animators().DebugSnapshot();
+        Require(snapshotB != nullptr && snapshotB->revision > firstAsyncRevision &&
+                snapshotB->instances.front().bones[2].localPose.position.x > firstAsyncBoneX,
+            "Async debug snapshots must track the animated pose across frames");
+        Require(snapshotA->revision == firstAsyncRevision &&
+                NearlyEqual(snapshotA->instances.front().bones[2].localPose.position.x, firstAsyncBoneX),
+            "A retained async debug snapshot must stay immutable while newer revisions publish");
+
+        const std::unique_ptr<kb::scene::Scene> sceneB = buildScene();
+        sceneB->Runtime().SetPlaying(false);
+        static_cast<void>(sceneB->Runtime().Update(0.0F));
+        sceneB->Runtime().SetPlaying(true);
+        static_cast<void>(sceneB->Runtime().Update(0.25F));
+        static_cast<void>(sceneB->Runtime().Update(0.25F));
+        sceneB->Animators().WaitForDebugSnapshot();
+        const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> snapshotB2 =
+            sceneB->Animators().DebugSnapshot();
+        bool deterministicSnapshot = snapshotB2 != nullptr &&
+            snapshotB2->instances.size() == snapshotB->instances.size();
+        for (std::size_t index = 0U;
+             deterministicSnapshot && index < snapshotB->instances.size(); ++index) {
+            deterministicSnapshot = bonesMatch(
+                snapshotB->instances[index], snapshotB2->instances[index]);
+        }
+        Require(deterministicSnapshot,
+            "Async debug snapshots must stay deterministic across identical scenes and worker schedules");
+
+        std::atomic<bool> stopSnapshotReader{ false };
+        std::atomic<bool> snapshotRevisionRegressed{ false };
+        std::thread snapshotReader{ [&] {
+            std::uint64_t lastRevision = 0U;
+            while (!stopSnapshotReader.load(std::memory_order_acquire)) {
+                const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> observed =
+                    sceneA->Animators().DebugSnapshot();
+                if (observed == nullptr) continue;
+                if (observed->revision < lastRevision) {
+                    snapshotRevisionRegressed.store(true, std::memory_order_release);
+                    return;
+                }
+                lastRevision = observed->revision;
+            }
+        } };
+        for (std::uint32_t frame = 0U; frame < 30U; ++frame) {
+            static_cast<void>(sceneA->Runtime().Update(1.0F / 60.0F));
+            sceneA->Animators().WaitForDebugSnapshot();
+        }
+        stopSnapshotReader.store(true, std::memory_order_release);
+        snapshotReader.join();
+        Require(!snapshotRevisionRegressed.load(std::memory_order_acquire),
+            "Concurrent readers must never observe an async debug snapshot revision regression");
+
+        std::uint64_t teardownAsyncSubmissions = 0U;
+        for (std::uint32_t iteration = 0U; iteration < 8U; ++iteration) {
+            const std::unique_ptr<kb::scene::Scene> ephemeral = buildScene();
+            ephemeral->Runtime().SetPlaying(true);
+            static_cast<void>(ephemeral->Runtime().Update(1.0F / 60.0F));
+            teardownAsyncSubmissions +=
+                ephemeral->Runtime().HotPathReport().animatorDebugSnapshotAsyncSubmissionCount;
+            // The scene is destroyed here with its asynchronous snapshot
+            // build potentially still in flight; ~SceneState must join it
+            // before releasing animator storage.
+        }
+        Require(teardownAsyncSubmissions == 8U,
+            "Async debug snapshot builds must survive scene teardown while in flight");
+
+        std::filesystem::remove_all(asyncRoot);
     }
     std::filesystem::remove_all(root);
 }
