@@ -301,6 +301,8 @@ SceneRuntimeHotPathReport SceneRuntimeService::HotPathReport(const Scene& scene)
         .animatorParallelEvaluationCount = state.lastAnimatorParallelEvaluationCount,
         .animatorParallelWorkerCount = state.lastAnimatorParallelWorkerCount,
         .animatorUpdateRateSkippedPoseCount = state.lastAnimatorUpdateRateSkippedPoseCount,
+        .animatorDebugSnapshotAsyncSubmissionCount = state.animatorDebugSnapshotAsyncSubmissionCount,
+        .animatorDebugSnapshotSkippedSubmissionCount = state.animatorDebugSnapshotSkippedSubmissionCount,
     };
 }
 

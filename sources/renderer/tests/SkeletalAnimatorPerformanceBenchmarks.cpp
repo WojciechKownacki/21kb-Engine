@@ -545,6 +545,7 @@ void WriteTriangleObj(const std::filesystem::path& path) {
         "SK-12.87 production renderer did not submit every rig draw proxy");
 
     if (stressLifecycle) {
+        scene.Animators().WaitForDebugSnapshot();
         const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> beforeReload =
             scene.Animators().DebugSnapshot();
         kb::scene::AnimatorController reimportedController =
@@ -562,6 +563,7 @@ void WriteTriangleObj(const std::filesystem::path& path) {
                 scene.Assets().Manager().Unload(controllerMetadata->id),
             "SK-12.90 could not reimport and evict the live animator controller");
         static_cast<void>(scene.Runtime().Update(0.0F));
+        scene.Animators().WaitForDebugSnapshot();
         const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> afterReload =
             scene.Animators().DebugSnapshot();
         Require(afterReload != nullptr && afterReload->revision > beforeReload->revision &&
@@ -582,6 +584,7 @@ void WriteTriangleObj(const std::filesystem::path& path) {
             "SK-12.90 render mesh eviction did not remove the cache entry");
         result.stressLifecycleCompleted = true;
     } else {
+        scene.Animators().WaitForDebugSnapshot();
         result.retainedDebugSnapshot = scene.Animators().DebugSnapshot();
     }
 

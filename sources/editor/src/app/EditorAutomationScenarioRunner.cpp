@@ -3088,6 +3088,7 @@ ReadScriptValue(
             (*target == "preview"
                 ? state.context.AnimatorEditorDebuggingPreview()
                 : state.context.AnimatorEditorDebugTarget() == expected);
+        state.context.WaitForAnimatorEditorDebugSnapshot();
         const std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> snapshot =
             state.context.AnimatorEditorDebugSnapshot();
         const kb::scene::AnimatorDebugInstanceSnapshot* instance =

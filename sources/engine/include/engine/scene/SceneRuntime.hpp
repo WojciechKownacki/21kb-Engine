@@ -83,6 +83,8 @@ struct SceneRuntimeHotPathReport {
     std::size_t animatorParallelEvaluationCount = 0U;
     std::size_t animatorParallelWorkerCount = 1U;
     std::size_t animatorUpdateRateSkippedPoseCount = 0U;
+    std::uint64_t animatorDebugSnapshotAsyncSubmissionCount = 0U;
+    std::uint64_t animatorDebugSnapshotSkippedSubmissionCount = 0U;
 };
 
 struct SceneRuntimeReadSnapshot final : kb::core::ReadSnapshot {
