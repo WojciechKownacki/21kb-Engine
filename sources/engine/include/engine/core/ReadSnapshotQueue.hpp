@@ -28,6 +28,18 @@ public:
         latest_ = std::move(published);
     }
 
+    // Publishes only when the candidate is newer than the retained snapshot.
+    // Asynchronous producers use this so a slow worker can never overwrite a
+    // fresher value with a stale one; the revision check happens under the
+    // same lock as the pointer swap.
+    [[nodiscard]] bool TryPublishMonotonic(Snapshot snapshot) {
+        auto published = std::make_shared<const Snapshot>(std::move(snapshot));
+        std::lock_guard lock{mutex_};
+        if (published->revision <= latest_->revision) return false;
+        latest_ = std::move(published);
+        return true;
+    }
+
     [[nodiscard]] std::shared_ptr<const Snapshot> Read() const {
         std::lock_guard lock{mutex_};
         return latest_;

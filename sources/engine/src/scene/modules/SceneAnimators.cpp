@@ -45,6 +45,7 @@ bool SceneAnimators::ClearIkTarget(SceneEntity entity, std::string_view name) no
 }
 std::optional<AnimatorStateInfo> SceneAnimators::State(SceneEntity entity, std::string_view layer) const { return SceneAnimatorService::State(scene_, entity, layer); }
 std::shared_ptr<const AnimatorDebugSnapshot> SceneAnimators::DebugSnapshot() const { return SceneAnimatorService::DebugSnapshot(scene_); }
+void SceneAnimators::WaitForDebugSnapshot() { SceneAnimatorService::WaitForDebugSnapshot(scene_); }
 std::vector<AnimationEventRecord> SceneAnimators::DrainEvents() { return SceneAnimatorService::DrainEvents(scene_); }
 
 } // namespace kb::scene

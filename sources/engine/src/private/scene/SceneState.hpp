@@ -387,6 +387,16 @@ public:
     kb::core::ReadSnapshotPublisher<SceneRuntimeReadSnapshot> runtimeSnapshots;
     std::uint64_t animatorDebugSnapshotRevision = 0U;
     kb::core::ReadSnapshotPublisher<AnimatorDebugSnapshot> animatorDebugSnapshots;
+    // At most one asynchronous debug snapshot build is in flight per scene.
+    // The job owns a capture of scalar animator state and reads only frozen
+    // pose buffers; every animator-state mutation entry point (Attach,
+    // SyncComponents, Advance) and ~SceneState join it before touching
+    // animator-owned storage. The context shared_ptr keeps the job payload
+    // alive until the join, even if the pool is stopped with work queued.
+    kb::ecs::JobHandle animatorDebugSnapshotJob;
+    std::shared_ptr<void> animatorDebugSnapshotJobContext;
+    std::uint64_t animatorDebugSnapshotAsyncSubmissionCount = 0U;
+    std::uint64_t animatorDebugSnapshotSkippedSubmissionCount = 0U;
     std::map<std::uint64_t, std::vector<Vec3>> animatorDebugRootMotionTrails;
     kb::core::CommandQueue<SceneRuntimeCommand> runtimeCommands;
     // LIB-095: one scheduled Timer.Once/Timer.Repeat entry. `owner` invalid

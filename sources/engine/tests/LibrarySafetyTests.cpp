@@ -65,6 +65,35 @@ void RunReadSnapshotPublisherConcurrencyTest() {
         "Read snapshot publisher must expose one complete immutable value to concurrent readers");
 }
 
+void RunReadSnapshotPublisherMonotonicTest() {
+    struct Snapshot final : kb::core::ReadSnapshot {
+        std::uint64_t payload = 0U;
+    };
+    kb::core::ReadSnapshotPublisher<Snapshot> publisher;
+    Snapshot initial{};
+    initial.revision = 4U;
+    initial.payload = 4U;
+    publisher.Publish(std::move(initial));
+
+    Snapshot stale{};
+    stale.revision = 3U;
+    stale.payload = 3U;
+    const bool staleAccepted = publisher.TryPublishMonotonic(std::move(stale));
+    Snapshot equal{};
+    equal.revision = 4U;
+    equal.payload = 99U;
+    const bool equalAccepted = publisher.TryPublishMonotonic(std::move(equal));
+    Snapshot newer{};
+    newer.revision = 5U;
+    newer.payload = 5U;
+    const bool newerAccepted = publisher.TryPublishMonotonic(std::move(newer));
+
+    const std::shared_ptr<const Snapshot> latest = publisher.Read();
+    kb::tests::Require(!staleAccepted && !equalAccepted && newerAccepted &&
+            latest->revision == 5U && latest->payload == 5U,
+        "Monotonic snapshot publish must reject stale and equal revisions under the publisher lock");
+}
+
 void RunEntityHandleLifetimeSafetyTest() {
     kb::scene::Scene scene;
     std::vector<kb::library::EntityHandle> staleHandles;
@@ -89,6 +118,7 @@ void RunEntityHandleLifetimeSafetyTest() {
 int main() {
     RunCommandQueueOwnershipSafetyTest();
     RunReadSnapshotPublisherConcurrencyTest();
+    RunReadSnapshotPublisherMonotonicTest();
     RunEntityHandleLifetimeSafetyTest();
     return EXIT_SUCCESS;
 }
