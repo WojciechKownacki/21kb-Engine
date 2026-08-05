@@ -107,6 +107,11 @@ public:
         SceneEntity entity, std::string_view name) noexcept;
     [[nodiscard]] std::optional<AnimatorStateInfo> State(SceneEntity entity, std::string_view layer) const;
     [[nodiscard]] std::shared_ptr<const AnimatorDebugSnapshot> DebugSnapshot() const;
+    // Joins the in-flight asynchronous debug snapshot build, so the next
+    // DebugSnapshot() read observes the newest published revision. Used by
+    // headless automation and tests which need a deterministic read point;
+    // live editor panels simply tolerate one snapshot of latency.
+    void WaitForDebugSnapshot();
     [[nodiscard]] std::vector<AnimationEventRecord> DrainEvents();
 
 private:

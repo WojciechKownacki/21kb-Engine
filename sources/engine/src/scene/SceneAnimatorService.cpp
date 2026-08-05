@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -96,6 +97,11 @@ double StateTime(float normalizedTime, const AnimationClip& clip);
 constexpr std::size_t kAnimatorParallelEvaluationGrainSize = 16U;
 constexpr std::size_t kAnimatorParallelEvaluationThreshold =
     kAnimatorParallelEvaluationGrainSize * 2U;
+// Below this skeletal-instance count the debug snapshot bone copy is cheap
+// enough to finish inline; at or above it the copy is offloaded to the
+// animator worker pool so the animation hot path never pays for diagnostics.
+constexpr std::size_t kAnimatorDebugSnapshotAsyncThreshold =
+    kAnimatorParallelEvaluationThreshold;
 
 void EnsureAnimatorWorkerPool(SceneState& state) {
     if (state.animatorWorkerPool == nullptr) {
@@ -132,10 +138,29 @@ void EnsureAnimatorWorkerPool(SceneState& state) {
     return true;
 }
 
-void BuildAndPublishDebugSnapshot(Scene& scene, SceneState& state) {
-    AnimatorDebugSnapshot published{};
+struct AnimatorDebugSnapshotSkeletalSource {
+    const AnimatorInstanceSkeleton* skeleton = nullptr;
+    std::uint32_t frozenPose = 0U;
+};
+
+// Result of the main-thread capture phase. Every scalar input is owned by
+// the capture; skeletal instances additionally record which pose buffer
+// their bone copy must come from. A recorded buffer is not rewritten until
+// the second evaluation after the capture, and the recorded pointers stay
+// valid until the next animator-state mutation — and every mutation entry
+// point joins the in-flight build first — so a worker can finish the bone
+// copy while the main thread continues the frame.
+struct AnimatorDebugSnapshotCapture {
+    AnimatorDebugSnapshot snapshot;
+    std::vector<AnimatorDebugSnapshotSkeletalSource> skeletalSources;
+};
+
+AnimatorDebugSnapshotCapture CaptureAnimatorDebugSnapshot(Scene& scene, SceneState& state) {
+    AnimatorDebugSnapshotCapture capture{};
+    AnimatorDebugSnapshot& published = capture.snapshot;
     published.revision = ++state.animatorDebugSnapshotRevision;
     published.instances.reserve(state.animators.size());
+    capture.skeletalSources.reserve(state.animators.size());
     std::erase_if(state.animatorDebugRootMotionTrails,
         [&state](const auto& value) { return !state.animators.contains(value.first); });
     for (const auto& [id, record] : state.animators) {
@@ -232,23 +257,19 @@ void BuildAndPublishDebugSnapshot(Scene& scene, SceneState& state) {
             if (rootMotionTrail.size() > 128U) rootMotionTrail.erase(rootMotionTrail.begin());
         }
         instance.rootMotionTrail = rootMotionTrail;
+        AnimatorDebugSnapshotSkeletalSource skeletalSource{};
         if (record.skeleton.has_value()) {
             const AnimatorInstanceSkeleton& skeleton = *record.skeleton;
-            const AnimatorInstanceSkeleton::PoseBuffer& pose = skeleton.poses[skeleton.currentPose];
+            skeletalSource.skeleton = &skeleton;
+            skeletalSource.frozenPose = skeleton.currentPose;
+            const AnimatorInstanceSkeleton::PoseBuffer& pose =
+                skeleton.poses[skeletalSource.frozenPose];
             instance.skeletonAssetId = skeleton.asset.Id().value;
             instance.skeletonCompatibilitySignature = skeleton.compatibilitySignature;
             appendCompatibilityDiagnostics(instance.skeletonAssetId);
             instance.poseEvaluationCount = skeleton.evaluationCount;
             instance.hierarchySolveCount = skeleton.hierarchySolveCount;
             instance.paletteMatrixCount = static_cast<std::uint32_t>(pose.skinMatrices.size());
-            instance.bones.reserve(skeleton.boneIds.size());
-            for (std::size_t index = 0U; index < skeleton.boneIds.size(); ++index) {
-                instance.bones.push_back({
-                    .id = skeleton.boneIds[index],
-                    .localPose = { pose.local.positions[index], pose.local.rotations[index], pose.local.scales[index] },
-                    .componentPose = { pose.component.positions[index], pose.component.rotations[index], pose.component.scales[index] },
-                });
-            }
         }
         if (const DrawD3DeformedGeometryComponent* geometry = scene.Components().DeformedGeometries().TryGet(record.entity);
             geometry != nullptr) {
@@ -260,8 +281,73 @@ void BuildAndPublishDebugSnapshot(Scene& scene, SceneState& state) {
             instance.deformedGeometryEnabled = geometry->enabled;
         }
         published.instances.push_back(std::move(instance));
+        capture.skeletalSources.push_back(skeletalSource);
     }
-    state.animatorDebugSnapshots.Publish(std::move(published));
+    return capture;
+}
+
+// Thread-agnostic second phase: touches only capture-owned storage and the
+// frozen pose buffers recorded by the capture, never mutable scene state.
+void BuildCapturedDebugSnapshotBones(AnimatorDebugSnapshotCapture& capture) {
+    for (std::size_t index = 0U; index < capture.skeletalSources.size(); ++index) {
+        const AnimatorDebugSnapshotSkeletalSource& source =
+            capture.skeletalSources[index];
+        if (source.skeleton == nullptr) continue;
+        const AnimatorInstanceSkeleton& skeleton = *source.skeleton;
+        const AnimatorInstanceSkeleton::PoseBuffer& pose =
+            skeleton.poses[source.frozenPose];
+        AnimatorDebugInstanceSnapshot& instance = capture.snapshot.instances[index];
+        instance.bones.reserve(skeleton.boneIds.size());
+        for (std::size_t boneIndex = 0U; boneIndex < skeleton.boneIds.size(); ++boneIndex) {
+            instance.bones.push_back({
+                .id = skeleton.boneIds[boneIndex],
+                .localPose = { pose.local.positions[boneIndex], pose.local.rotations[boneIndex], pose.local.scales[boneIndex] },
+                .componentPose = { pose.component.positions[boneIndex], pose.component.rotations[boneIndex], pose.component.scales[boneIndex] },
+            });
+        }
+    }
+}
+
+void BuildAndPublishDebugSnapshot(Scene& scene, SceneState& state) {
+    AnimatorDebugSnapshotCapture capture = CaptureAnimatorDebugSnapshot(scene, state);
+    BuildCapturedDebugSnapshotBones(capture);
+    state.animatorDebugSnapshots.Publish(std::move(capture.snapshot));
+}
+
+struct AnimatorDebugSnapshotJobContext {
+    kb::core::ReadSnapshotPublisher<AnimatorDebugSnapshot>* publisher = nullptr;
+    AnimatorDebugSnapshotCapture capture;
+    std::exception_ptr error;
+};
+
+void BuildAndPublishCapturedDebugSnapshotJob(
+    kb::ecs::WorkerContext, void* rawContext) noexcept {
+    auto& context = *static_cast<AnimatorDebugSnapshotJobContext*>(rawContext);
+    try {
+        BuildCapturedDebugSnapshotBones(context.capture);
+        // A fresher synchronous publish may have landed while this build was
+        // queued or running; a stale worker result must never overwrite it.
+        static_cast<void>(
+            context.publisher->TryPublishMonotonic(std::move(context.capture.snapshot)));
+    } catch (...) {
+        context.error = std::current_exception();
+    }
+}
+
+// Joins the in-flight asynchronous snapshot build (a no-op when none is
+// running) and rethrows any failure the worker recorded. Every entry point
+// that mutates animator-owned storage calls this first, which bounds the
+// lifetime of the pointers held by the job capture.
+void JoinAnimatorDebugSnapshotJob(SceneState& state) {
+    if (!state.animatorDebugSnapshotJob.Valid()) return;
+    state.animatorDebugSnapshotJob.Wait();
+    const auto context = std::static_pointer_cast<AnimatorDebugSnapshotJobContext>(
+        state.animatorDebugSnapshotJobContext);
+    state.animatorDebugSnapshotJob = kb::ecs::JobHandle{};
+    state.animatorDebugSnapshotJobContext.reset();
+    if (context != nullptr && context->error != nullptr) {
+        std::rethrow_exception(context->error);
+    }
 }
 
 void SolveComponentPose(
@@ -1949,6 +2035,9 @@ void EvaluateControllerTransitions(AnimatorRuntimeRecord& record) {
 
 bool SceneAnimatorService::Attach(Scene& scene, SceneEntity entity, std::uint64_t controllerAssetId) {
     if (!scene.Entities().IsAlive(entity)) return false;
+    // Installing the record below can replace an existing animator runtime;
+    // an in-flight debug snapshot build must finish reading it first.
+    JoinAnimatorDebugSnapshotJob(SceneAccess::State(scene));
     auto& manager = scene.Assets().Manager();
     auto controller = manager.Load<AnimatorController>(kb::assets::AssetId{ controllerAssetId });
     if (!controller.IsLoaded()) return false;
@@ -2393,6 +2482,48 @@ void SceneAnimatorService::PublishDebugSnapshot(Scene& scene) {
     BuildAndPublishDebugSnapshot(scene, state);
 }
 
+void SceneAnimatorService::SubmitDebugSnapshot(Scene& scene) {
+    SceneState& state = SceneAccess::State(scene);
+    if (!state.animatorDebugSnapshotJob.IsReady()) {
+        // The previous build is still running; diagnostics stay one snapshot
+        // behind rather than blocking the animation hot path, and at most one
+        // build is ever queued.
+        ++state.animatorDebugSnapshotSkippedSubmissionCount;
+        return;
+    }
+    JoinAnimatorDebugSnapshotJob(state);
+    std::size_t skeletalCount = 0U;
+    for (const auto& [id, record] : state.animators) {
+        static_cast<void>(id);
+        if (record.skeleton.has_value() && scene.Entities().IsAlive(record.entity) &&
+            record.controller.IsLoaded()) {
+            ++skeletalCount;
+        }
+    }
+    if (skeletalCount < kAnimatorDebugSnapshotAsyncThreshold) {
+        // Below the offload threshold the bone copy is cheap enough to finish
+        // inline; small scenes keep fully synchronous snapshot semantics.
+        PublishDebugSnapshot(scene);
+        return;
+    }
+    AnimatorDebugSnapshotCapture capture = CaptureAnimatorDebugSnapshot(scene, state);
+    EnsureAnimatorWorkerPool(state);
+    auto context = std::make_shared<AnimatorDebugSnapshotJobContext>();
+    context->publisher = &state.animatorDebugSnapshots;
+    context->capture = std::move(capture);
+    state.animatorDebugSnapshotJobContext = context;
+    state.animatorDebugSnapshotJob = state.animatorWorkerPool->Submit({
+        kb::ecs::WorkerPoolJob{
+            .callback = &BuildAndPublishCapturedDebugSnapshotJob,
+            .context = context.get(),
+        } });
+    ++state.animatorDebugSnapshotAsyncSubmissionCount;
+}
+
+void SceneAnimatorService::WaitForDebugSnapshot(Scene& scene) {
+    JoinAnimatorDebugSnapshotJob(SceneAccess::State(scene));
+}
+
 std::vector<AnimationEventRecord> SceneAnimatorService::DrainEvents(Scene& scene) {
     std::vector<AnimationEventRecord> drained;
     drained.swap(SceneAccess::State(scene).pendingAnimationEvents);
@@ -2400,6 +2531,9 @@ std::vector<AnimationEventRecord> SceneAnimatorService::DrainEvents(Scene& scene
 }
 
 void SceneAnimatorService::SyncComponents(Scene& scene) {
+    // Structural mutations below invalidate the pointers an in-flight debug
+    // snapshot build may still be reading.
+    JoinAnimatorDebugSnapshotJob(SceneAccess::State(scene));
     if (scene.Entities().Count() == 0U) {
         SceneState& state = SceneAccess::State(scene);
         state.animators.clear();
@@ -2520,6 +2654,9 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
 
 void SceneAnimatorService::Advance(Scene& scene, float deltaSeconds) {
     SceneState& state = SceneAccess::State(scene);
+    // Pose buffers and animator records are rewritten below; an in-flight
+    // debug snapshot build must finish reading the frozen state first.
+    JoinAnimatorDebugSnapshotJob(state);
     for (auto it = state.animators.begin(); it != state.animators.end();) {
         if (!scene.Entities().IsAlive(it->second.entity)) it = state.animators.erase(it);
         else ++it;

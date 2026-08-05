@@ -424,6 +424,11 @@ public:
     [[nodiscard]] std::string AnimatorEditorDebugTargetLabel() const;
     [[nodiscard]] kb::scene::SceneEntity AnimatorEditorResolvedDebugTarget() const noexcept;
     [[nodiscard]] std::shared_ptr<const kb::scene::AnimatorDebugSnapshot> AnimatorEditorDebugSnapshot() const;
+    // Joins the in-flight asynchronous debug snapshot build of the scene the
+    // debug target resolves to, so headless automation reads a deterministic
+    // snapshot. Live panels do not call this; they tolerate one snapshot of
+    // latency instead of blocking on the worker pool.
+    void WaitForAnimatorEditorDebugSnapshot();
     [[nodiscard]] bool SetAnimatorEditorDebugTarget(kb::scene::SceneEntity entity);
     void SetAnimatorEditorDebugTargetPreview() noexcept;
     [[nodiscard]] const kb::scene::Scene* AnimatorEditorPreviewScene() const noexcept;
