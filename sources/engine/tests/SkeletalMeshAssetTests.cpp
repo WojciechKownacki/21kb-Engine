@@ -8,6 +8,7 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/scene/MotionSkeletonRuleComponent.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/SkeletonAsset.hpp"
@@ -420,6 +421,16 @@ void RunSkeletalMeshAssetTests() {
         "Skeleton binding accepted an incomplete authoritative configuration");
     Require(scene.Components().SkeletonBindings().TryGet(bindingObject.Entity())->skeletonAssetId == binding.skeletonAssetId,
         "Skeleton binding mutation changed the last valid authoritative configuration");
+    const kb::scene::MotionSkeletonRuleComponent twistRule{
+        .kind = kb::scene::MotionSkeletonRuleKind::Twist,
+        .constrainedBoneId = 1U,
+        .sourceBoneId = 2U,
+        .axis = { 0.0F, 1.0F, 0.0F },
+        .enabled = true,
+    };
+    Require(kb::scene::IsMotionSkeletonRuleComponentValid(twistRule) &&
+            scene.Components().MotionSkeletonRules().Set(bindingObject.Entity(), twistRule),
+        "Motion Skeleton Rule rejected a valid twist configuration");
     scene.Components().SkeletonBindings().Remove(bindingObject.Entity());
     Require(!scene.Components().SkeletonBindings().Has(bindingObject.Entity()),
         "Skeleton binding component was not removed from its live entity");
@@ -477,6 +488,19 @@ void RunSkeletalMeshAssetTests() {
     Require(restoredComponent != nullptr && restoredComponent->skeletalMeshAssetId == 999U &&
             !restoredComponent->poseSource.IsValid(),
         "Deformed Geometry scene round trip did not preserve the canonical owner pose source");
+    const auto restoredBinding = std::find_if(restoredRoots.begin(), restoredRoots.end(), [&restoredScene](kb::scene::SceneEntity entity) {
+        return restoredScene.Entities().Name(entity) == "Skeletal binding";
+    });
+    const kb::scene::MotionSkeletonRuleComponent* restoredRule = restoredBinding == restoredRoots.end()
+        ? nullptr
+        : restoredScene.Components().MotionSkeletonRules().TryGet(*restoredBinding);
+    Require(restoredBinding != restoredRoots.end(),
+        "Motion Skeleton Rule scene round trip did not restore its owner entity");
+    Require(restoredRule != nullptr,
+        "Motion Skeleton Rule scene round trip did not restore the component");
+    Require(restoredRule->kind == kb::scene::MotionSkeletonRuleKind::Twist &&
+            restoredRule->sourceBoneId == twistRule.sourceBoneId && restoredRule->axis.y == twistRule.axis.y,
+        "Motion Skeleton Rule scene round trip did not preserve a valid twist configuration");
     const auto persistedPrefabPath = root / "RoundTrip" / "DeformedGeometry.21kbprefab";
     const kb::scene::ScenePrefabHandle persistedPrefab = scene.Prefabs().CaptureRegistered(
         persistedGeometryObject, "PersistedDeformedGeometry");
