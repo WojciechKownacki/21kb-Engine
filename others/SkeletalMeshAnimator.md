@@ -831,7 +831,19 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     assetu.
 84. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać pose/bone diagnostics, final pose, constraint targets, root motion
     trail, palette/bounds/LOD status i błędy kompatybilności.
-85. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zapewnić thread-safe snapshot debug bez blokowania animation hot path.
+85. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zapewnić thread-safe snapshot debug bez blokowania animation hot path.
+    Dowód: `AnimatorSceneSystem` publikuje teraz przez `SceneAnimatorService::SubmitDebugSnapshot` — skalary są
+    kopiowane na wątku głównym (capture), a kopia kości i publikacja lecą jako jedno zadanie worker pool powyżej
+    progu 32 instancji skeletal; poniżej progu synchroniczna `PublishDebugSnapshot` (bez osieroconego API).
+    Co najwyżej jedno zadanie w locie (skip zamiast kolejki), każdy punkt mutacji animatora (`Attach`,
+    `SyncComponents`, `Advance`) oraz `~SceneState` joinują build przed dotknięciem storage, publikacja jest
+    monotoniczna (`ReadSnapshotPublisher::TryPublishMonotonic`, check pod lockiem). Editor/automation czytają
+    deterministycznie przez `SceneAnimators::WaitForDebugSnapshot`; telemetria w `SceneRuntimeHotPathReport`.
+    Testy: `animation-runtime` (async offload ≥1 submit, kompletność kości vs frozen pose buffer, immutability
+    retained, determinizm dwóch scen, reader thread bez regresji rewizji, 8× teardown sceny z buildem w locie),
+    `kb_engine_library_tests` (monotonic publish odrzuca stale/equal), pełny `kb_engine_tests`,
+    `kb_skeletal_animator_benchmarks` 100/1000 rigów, `kb_editor_tests`, `kb_editor_headless_automation_scenario` —
+    wszystko przechodzi.
 86. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać testy przełączania debug targetu, odpinania encji, reloadu i
     zgodności UI z runtime snapshotem.
 
@@ -845,8 +857,16 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     podstawie pomiarów, zachowując deterministyczny wynik.
 90. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać stress tests reload/reimport, asset eviction, scene unload,
     renderer reset i zniszczenie encji w trakcie debugowania.
-91. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać screenshot tests 1920×1080, 1366×768 i 150% DPI dla wszystkich
+91. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Dodać screenshot tests 1920×1080, 1366×768 i 150% DPI dla wszystkich
     trzech edytorów, docked i floating.
+    Dowód: `AnimatorEditor` dopisany do whitelist `CapturePanelScreenshotMatrix`
+    (`EditorHeadlessAutomation.cpp`) — macierz 3 profile (1920×1080, 1366×768, 1280×720@144 DPI→bitmapa 1920×1080)
+    × {docked, floating} renderuje przez produkcyjne `DockWorkspaceRenderer`/`FloatingEditorWindowRenderer`;
+    krok `capture_screenshot_matrix` dla `animator_editor` w `HeadlessAutomationScenario.json` po otwarciu
+    `SkeletalAutomation.kbanimcontroller`; tabela op w `HeadlessAutomation.md` zaktualizowana. CTest
+    `kb_editor_headless_automation_scenario` przechodzi; sześć BMPów `01b-animator-workspace-*` zweryfikowanych
+    wizualnie (prawdziwy workspace: state machine Entry→Skeletal Blend + Live Debug, chrome okna floating,
+    poprawne wymiary i metadane DPI 96/144).
 92. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zweryfikować brak overlayów nad inną aplikacją po Alt-Tab, minimalizacji
     i deaktywacji oraz brak wycieku viewportu podczas resize/move/DPI.
 93. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Uruchomić pełny build i test suite, usunąć regresje oraz przejrzeć diff

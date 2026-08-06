@@ -138,6 +138,7 @@
     { "op": "capture", "panel": "script_editor", "checkpoint": "01-script-editor" },
     { "op": "open_asset", "asset": "/Game/Animation/SkeletalAutomation.kbanimcontroller" },
     { "op": "capture", "panel": "animator_editor", "checkpoint": "01b-animator-workspace" },
+    { "op": "capture_screenshot_matrix", "panel": "animator_editor", "checkpoint": "01b-animator-workspace" },
     { "op": "open_asset", "asset": "/Game/Cinematics/Automation.kbtimeline" },
     { "op": "capture", "panel": "script_editor", "checkpoint": "01c-timeline-editor" },
 
