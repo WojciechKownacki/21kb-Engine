@@ -52,6 +52,7 @@ enum SceneNodeComponentBits : std::uint64_t {
       LensEchoBit = 1ULL << 32U,
       SkeletonBindingBit = 1ULL << 33U,
       DeformedGeometryBit = 1ULL << 34U,
+      MotionSkeletonRuleBit = 1ULL << 35U,
 };
 
 constexpr std::uint64_t KnownComponentBits = CameraBit |
@@ -72,7 +73,7 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit;
 
 [[nodiscard]] std::uint64_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint64_t componentBits = 0;
@@ -113,6 +114,7 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     include(components.historyRibbon.has_value(), HistoryRibbonBit);
     include(components.lensEcho.has_value(), LensEchoBit);
     include(components.skeletonBinding.has_value(), SkeletonBindingBit);
+    include(components.motionSkeletonRule.has_value(), MotionSkeletonRuleBit);
     include(components.deformedGeometry.has_value(), DeformedGeometryBit);
     return componentBits;
 }
@@ -241,6 +243,30 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         if (!input.ReadUInt64(binding.skeletonAssetId) || !input.ReadUInt64(binding.skeletonCompatibilitySignature) ||
             !input.ReadBool(binding.enabled) || !IsSkeletonBindingComponentPersistable(binding)) return false;
         output.skeletonBinding = binding;
+    }
+    if ((componentBits & MotionSkeletonRuleBit) != 0U) {
+        if (fileVersion < 30U) return false;
+        MotionSkeletonRuleComponent rule{};
+        std::uint32_t kind = 0U;
+        std::string target;
+        std::string poleTarget;
+        if (!input.ReadUInt32(kind) || kind > static_cast<std::uint32_t>(MotionSkeletonRuleKind::SpaceCorrection) ||
+            !input.ReadUInt64(rule.constrainedBoneId) || !input.ReadUInt64(rule.midBoneId) ||
+            !input.ReadUInt64(rule.tipBoneId) || !input.ReadUInt64(rule.sourceBoneId) ||
+            !input.ReadString(target, MotionSkeletonRuleComponent::MaxTargetNameBytes) ||
+            !input.ReadString(poleTarget, MotionSkeletonRuleComponent::MaxTargetNameBytes) ||
+            !TrySetMotionSkeletonRuleTargetText(rule, target) ||
+            !TrySetMotionSkeletonRulePoleTargetText(rule, poleTarget) ||
+            !SceneAssetPrimitiveCodec::ReadVec3(input, rule.axis) ||
+            !input.ReadFloat(rule.minAngleDegrees) || !input.ReadFloat(rule.maxAngleDegrees) ||
+            !input.ReadFloat(rule.halfLifeSeconds) || !input.ReadFloat(rule.weight) ||
+            !input.ReadBool(rule.enabled) ||
+            !std::isfinite(rule.minAngleDegrees) || !std::isfinite(rule.maxAngleDegrees) ||
+            !std::isfinite(rule.halfLifeSeconds) || !std::isfinite(rule.weight) ||
+            !std::isfinite(rule.axis.x) || !std::isfinite(rule.axis.y) || !std::isfinite(rule.axis.z)) return false;
+        rule.kind = static_cast<MotionSkeletonRuleKind>(kind);
+        if (!IsMotionSkeletonRuleComponentPersistable(rule)) return false;
+        output.motionSkeletonRule = rule;
     }
     if ((componentBits & DeformedGeometryBit) != 0U) {
         if (fileVersion < 28U) return false;
@@ -538,6 +564,22 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteUInt64(output, components.skeletonBinding->skeletonAssetId);
         SceneAssetBinaryIO::WriteUInt64(output, components.skeletonBinding->skeletonCompatibilitySignature);
         SceneAssetBinaryIO::WriteBool(output, components.skeletonBinding->enabled);
+    }
+    if (components.motionSkeletonRule.has_value()) {
+        const MotionSkeletonRuleComponent& rule = *components.motionSkeletonRule;
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(rule.kind));
+        SceneAssetBinaryIO::WriteUInt64(output, rule.constrainedBoneId);
+        SceneAssetBinaryIO::WriteUInt64(output, rule.midBoneId);
+        SceneAssetBinaryIO::WriteUInt64(output, rule.tipBoneId);
+        SceneAssetBinaryIO::WriteUInt64(output, rule.sourceBoneId);
+        SceneAssetBinaryIO::WriteString(output, MotionSkeletonRuleTargetText(rule));
+        SceneAssetBinaryIO::WriteString(output, MotionSkeletonRulePoleTargetText(rule));
+        SceneAssetPrimitiveCodec::WriteVec3(output, rule.axis);
+        SceneAssetBinaryIO::WriteFloat(output, rule.minAngleDegrees);
+        SceneAssetBinaryIO::WriteFloat(output, rule.maxAngleDegrees);
+        SceneAssetBinaryIO::WriteFloat(output, rule.halfLifeSeconds);
+        SceneAssetBinaryIO::WriteFloat(output, rule.weight);
+        SceneAssetBinaryIO::WriteBool(output, rule.enabled);
     }
     if (components.deformedGeometry.has_value()) {
         const DrawD3DeformedGeometryComponent& geometry = *components.deformedGeometry;

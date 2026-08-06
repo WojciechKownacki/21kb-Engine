@@ -554,8 +554,8 @@ być krótki; nie może zawierać `others/`, `SelfTest/` ani pracy następnego z
 
 ### Sprint 05 — rig, deformacja i reguły pozy
 
-42. [ ] `[P/C]` **Wiązanie szkieletu** — `kb21.motion.skeleton-binding`: asset hierarchii, mapa kości i pozy spoczynkowe; bieżąca paleta należy do cache'u systemu ruchu.
-43. [ ] `[P/B]` **Geometria odkształcana** — `kb21.draw.d3.deformed-geometry`: geometria ze szkieletem, morfami i wiązaniem do pozy ewaluowanej poza komponentem.
+42. [X] `[P/C]` **Wiązanie szkieletu** — `kb21.motion.skeleton-binding`: asset hierarchii, mapa kości i pozy spoczynkowe; bieżąca paleta należy do cache'u systemu ruchu.
+43. [X] `[P/B]` **Geometria odkształcana** — `kb21.draw.d3.deformed-geometry`: geometria ze szkieletem, morfami i wiązaniem do pozy ewaluowanej poza komponentem.
 44. [ ] `[M/B]` **Odkształcacz płaski** — `kb21.draw.d2.deformer`: szkieletowe albo siatkowe odkształcanie obrazu 2D.
 45. [ ] `[M/C]` **Reguła pozy szkieletu** — `kb21.motion.skeleton-rule`: ograniczenie kości: celowanie, IK łańcucha, skręt, limit, sprężyna albo korekta przestrzeni.
 46. [ ] `[M/C]` **Reguła ramy** — `kb21.scene.frame-rule`: constraint ewaluowany w fazie korekty ramy: kopiowanie pozycji, obrotu lub skali, celowanie, podpięcie do obiektu albo kości oraz osadzenie na krzywej; nie generuje prędkości ruchu.
