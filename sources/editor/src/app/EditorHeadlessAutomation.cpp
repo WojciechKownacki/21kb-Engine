@@ -2,20 +2,24 @@
 
 #if defined(_WIN32)
 #include "app/EditorPlayModeState.hpp"
+#include "app/EditorPointerDragState.hpp"
 #include "app/EditorShellInteractionState.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "rendering/DockWorkspaceRenderer.hpp"
+#include "rendering/FloatingWindowBackBufferPainter.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "rendering/FloatingEditorWindowRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
+#include "rendering/MainWindowBackBufferPainter.hpp"
 #include "rendering/PanelContentRenderer.hpp"
 #include "rendering/ScriptEditorPanelRenderer.hpp"
 #include "rendering/script_editor/ScriptEditorWindow.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "scene/EditorViewportPreviewState.hpp"
 
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputHaptics.hpp"
@@ -362,6 +366,27 @@ template <typename Paint>
     return nullptr;
 }
 
+// Overlay popups are WS_POPUP windows owned by an editor window; ownership
+// shows up through GWLP_HWNDPARENT on the top-level enumeration.
+[[nodiscard]] bool HasVisibleOwnedOverlay(HWND owner) noexcept {
+    struct EnumContext {
+        HWND owner;
+        bool found;
+    } context{ owner, false };
+    EnumWindows(
+        [](HWND window, LPARAM lparam) -> BOOL {
+            auto* context = reinterpret_cast<EnumContext*>(lparam);
+            if (reinterpret_cast<HWND>(GetWindowLongPtrW(window, GWLP_HWNDPARENT)) == context->owner &&
+                IsWindowVisible(window) != 0) {
+                context->found = true;
+                return FALSE;
+            }
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&context));
+    return context.found;
+}
+
 } // namespace
 
 struct EditorHeadlessAutomation::Impl {
@@ -421,6 +446,61 @@ struct EditorHeadlessAutomation::Impl {
         viewport.BeginPaintLayout(window);
         viewport.Present(
             window, bounds, context.Scene(), settings);
+        viewport.EndPaintLayout();
+        return std::string_view{ viewport.ActiveBackendLabel() } !=
+            "Not initialized";
+    }
+
+    // Renders the scene viewport and, when an Animator Controller asset is
+    // open, the Animator Editor preview in a single paint. The preview mirrors
+    // AnimatorEditorPanelRenderer: animation editor previews share the
+    // host-surface mechanism keyed by panel.id, so lifecycle checks must cover
+    // both surfaces of the host window.
+    [[nodiscard]] bool RenderAll(EditorSceneContext& context, std::uint64_t animatorPreviewKey) {
+        if (window == nullptr) return false;
+        constexpr RECT bounds{ 0, 0, 640, 360 };
+        EditorSceneBgfxViewport::PresentSettings settings{};
+        settings.renderWidth = 640U;
+        settings.renderHeight = 360U;
+        settings.viewportKey = 1U;
+        kb::render::SceneRenderCamera camera{};
+        bx::mtxLookAt(
+            camera.view.data(),
+            bx::Vec3{ 0.0F, 0.0F, 3.0F },
+            bx::Vec3{ 0.0F, 0.0F, 0.0F });
+        kb::render::SceneDepthPolicy::MakePerspective(
+            camera.projection.data(), 60.0F,
+            640.0F / 360.0F, 0.05F, 100.0F,
+            kb::render::SceneDepthPolicy::HomogeneousDepth());
+        settings.cameraOverride = camera;
+        settings.sceneRevision = context.SceneRenderRevision();
+        settings.sceneDirtyBaseRevision = settings.sceneRevision;
+        settings.sceneFullSyncRequired = true;
+        settings.editorSceneOverlaysEnabled = false;
+        settings.selectionMaskEnabled = false;
+        settings.selectionOutlineEnabled = false;
+        settings.drawSafeArea = false;
+        viewport.BeginPaintLayout(window);
+        viewport.Present(
+            window, bounds, context.Scene(), settings);
+        if (animatorPreviewKey != 0U && context.AnimatorEditorPreviewScene() != nullptr) {
+            constexpr RECT previewBounds{ 320, 180, 640, 360 };
+            const std::uint64_t revision = context.AnimatorEditorPreviewRevision();
+            EditorSceneBgfxViewport::PresentSettings previewSettings{};
+            previewSettings.viewportKey = animatorPreviewKey;
+            previewSettings.editorSceneOverlaysEnabled = false;
+            previewSettings.sceneRevision = revision;
+            previewSettings.sceneDirtyBaseRevision = revision;
+            previewSettings.sceneFullSyncRequired = false;
+            previewSettings.msaaSamples = backendSettings.MsaaSamples();
+            previewSettings.shadowPassEnabled = backendSettings.ShadowsEnabled();
+            previewSettings.postProcessEnabled = true;
+            previewSettings.selectionMaskEnabled = false;
+            previewSettings.selectionOutlineEnabled = false;
+            previewSettings.gpuDrivenRuntimeDispatchEnabled = backendSettings.GpuDrivenEnabled();
+            viewport.Present(
+                window, previewBounds, *context.AnimatorEditorPreviewScene(), previewSettings);
+        }
         viewport.EndPaintLayout();
         return std::string_view{ viewport.ActiveBackendLabel() } !=
             "Not initialized";
@@ -1026,39 +1106,137 @@ bool EditorHeadlessAutomation::VerifyViewportHostLifecycle() {
     if (impl_->window == nullptr ||
         SetWindowPos(
             impl_->window, HWND_BOTTOM, -10000, -10000, 640, 360,
-            SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW) == 0 ||
-        !impl_->Render(context_)) {
+            SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW) == 0) {
         Trace("verify_viewport_host_lifecycle", false, "initial-present-failed");
         return false;
     }
 
     constexpr std::uint64_t viewportKey = 1U;
     constexpr RECT initialBounds{ 0, 0, 640, 360 };
-    const auto visible = [this] {
-        return impl_->viewport.IsHostSurfaceVisible(impl_->window, viewportKey);
+
+    // The animation editors (Skeletal Mesh / Animation Clip / Animator) present
+    // their preview through the shared host-surface mechanism keyed by panel.id.
+    // Mirror the Animator Editor path so the lifecycle assertions below cover
+    // every host surface registered for this window, not only the scene key.
+    const bool animatorAssetOpen = context_.HasAnimatorEditorAsset() &&
+        context_.AnimatorEditorPreviewScene() != nullptr;
+    std::uint64_t animatorPreviewKey = 0U;
+    if (animatorAssetOpen) {
+        EditorDockModel animatorDock;
+        if (animatorDock.Commands().ActivatePanelKind(DockPanelKind::AnimatorEditor, DockArea::Center)) {
+            for (const DockPanel& panel : animatorDock.Queries().Panels()) {
+                if (panel.kind == DockPanelKind::AnimatorEditor) {
+                    animatorPreviewKey = panel.id;
+                    break;
+                }
+            }
+        }
+    }
+    if (!impl_->RenderAll(context_, animatorPreviewKey)) {
+        Trace("verify_viewport_host_lifecycle", false, "initial-present-failed");
+        return false;
+    }
+
+    const std::vector<std::uint64_t> expectedKeys =
+        impl_->viewport.HostSurfaceKeysForHost(impl_->window);
+    const auto visible = [this](std::uint64_t key) {
+        return impl_->viewport.IsHostSurfaceVisible(impl_->window, key);
     };
-    const bool initiallyVisible = visible() &&
+    const auto allExpectedVisible = [this, &expectedKeys, &visible] {
+        return !expectedKeys.empty() &&
+            std::ranges::all_of(expectedKeys, visible);
+    };
+    const auto noneVisible = [this, &visible] {
+        return std::ranges::none_of(
+            impl_->viewport.HostSurfaceKeysForHost(impl_->window), visible);
+    };
+
+    const bool initiallyVisible = visible(viewportKey) &&
         FindViewportClipWindow(impl_->window, initialBounds) != nullptr;
+    const bool animatorPreviewCovered = !animatorAssetOpen ||
+        (animatorPreviewKey != 0U &&
+         std::ranges::find(expectedKeys, animatorPreviewKey) != expectedKeys.end() &&
+         visible(animatorPreviewKey));
 
     // WM_SIZE/SIZE_MINIMIZED: hide the child before the parent is hidden.
     impl_->viewport.SetHostSurfaceSuspended(impl_->window, true);
-    const bool minimizedHidden = !visible();
+    const bool minimizedHidden = noneVisible();
     impl_->viewport.SetHostSurfaceSuspended(impl_->window, false);
     const bool resumedAfterMinimize = impl_->viewport.PresentRequested() &&
-        impl_->Render(context_) && visible();
+        impl_->RenderAll(context_, animatorPreviewKey) && allExpectedVisible();
 
-    // WM_ACTIVATEAPP applies to every host surface, including floating hosts.
+    // Show a production overlay popup (scene viewport toolbar dropdown)
+    // through the same paint path the live editor uses, owned by the test
+    // window. The painter performs GDI only here; host-surface presents stay
+    // with RenderAll, so the overlay phase adds no extra surfaces.
+    EditorDockModel overlayDock;
+    std::uint64_t overlayScenePanelId = 0U;
+    if (overlayDock.Commands().ActivatePanelKind(DockPanelKind::Scene, DockArea::Center)) {
+        for (const DockPanel& panel : overlayDock.Queries().Panels()) {
+            if (panel.kind == DockPanelKind::Scene) {
+                overlayScenePanelId = panel.id;
+                break;
+            }
+        }
+    }
+    bool overlayShown = false;
+    if (overlayScenePanelId != 0U) {
+        context_.ViewportPreview(overlayScenePanelId).OpenToolbarDropdown(
+            EditorViewportToolbarDropdown::GridSpacing);
+        InvalidateRect(impl_->window, nullptr, FALSE);
+        const EditorTheme theme = MakeEditorDarkTheme();
+        const EditorMetrics metrics{};
+        const EditorRenderBackendSettings settings{};
+        EditorPlayModeState playMode;
+        EditorShellInteractionState shellInteraction;
+        EditorPointerDragState drag;
+        MainWindowBackBufferPainter::Paint(
+            impl_->window, overlayDock, theme, metrics, context_,
+            nullptr, nullptr, drag, settings, playMode,
+            shellInteraction, impl_->viewport);
+        overlayShown = HasVisibleOwnedOverlay(impl_->window);
+    }
+
+    // WM_ACTIVATEAPP(wparam == FALSE): same calls as EditorWindowMessageRouter.
+    // Every host surface of the window hides, and no owned overlay popup may
+    // stay visible above the application that takes focus.
     impl_->viewport.SetAllHostSurfacesSuspended(true);
-    const bool deactivatedHidden = !visible();
+    MainWindowBackBufferPainter::HideAllOverlays();
+    FloatingWindowBackBufferPainter::HideAllOverlays();
+    const bool deactivatedHidden = noneVisible();
+    const bool overlayHiddenOnDeactivate = !HasVisibleOwnedOverlay(impl_->window);
+
     impl_->viewport.SetAllHostSurfacesSuspended(false);
     const bool resumedAfterDeactivate = impl_->viewport.PresentRequested() &&
-        impl_->Render(context_) && visible();
+        impl_->RenderAll(context_, animatorPreviewKey) && allExpectedVisible();
+    bool overlayRestoredOnActivate = true;
+    if (overlayShown) {
+        // The repaint on reactivation re-shows the overlay because the UI
+        // state (open toolbar dropdown) still requires it.
+        InvalidateRect(impl_->window, nullptr, FALSE);
+        const EditorTheme theme = MakeEditorDarkTheme();
+        const EditorMetrics metrics{};
+        const EditorRenderBackendSettings settings{};
+        EditorPlayModeState playMode;
+        EditorShellInteractionState shellInteraction;
+        EditorPointerDragState drag;
+        MainWindowBackBufferPainter::Paint(
+            impl_->window, overlayDock, theme, metrics, context_,
+            nullptr, nullptr, drag, settings, playMode,
+            shellInteraction, impl_->viewport);
+        overlayRestoredOnActivate = HasVisibleOwnedOverlay(impl_->window);
+    }
+    if (overlayScenePanelId != 0U) {
+        context_.ViewportPreview(overlayScenePanelId).CloseToolbarDropdown();
+        MainWindowBackBufferPainter::HideAllOverlays();
+        FloatingWindowBackBufferPainter::HideAllOverlays();
+    }
 
     // WM_DPICHANGED hides the old physical-pixel child until the next paint.
     impl_->viewport.NotifyHostDpiChanged(impl_->window);
-    const bool dpiTransitionHidden = !visible();
+    const bool dpiTransitionHidden = noneVisible();
     const bool resumedAfterDpi = impl_->viewport.PresentRequested() &&
-        impl_->Render(context_) && visible();
+        impl_->RenderAll(context_, animatorPreviewKey) && allExpectedVisible();
 
     constexpr RECT movedBounds{ 113, 57, 529, 291 };
     const EditorSceneBgfxViewport::HostSurfaceLayout movedLayout{
@@ -1069,24 +1247,57 @@ bool EditorHeadlessAutomation::VerifyViewportHostLifecycle() {
         impl_->window,
         std::span<const EditorSceneBgfxViewport::HostSurfaceLayout>{
             &movedLayout, 1U });
-    const bool resizeMoveHasNoLeakedViewport = visible() &&
-        FindViewportClipWindow(impl_->window, movedBounds) != nullptr;
+    // No leaked viewport during resize/move: the moved surface tracks its new
+    // bounds and every surface absent from the layout stays hidden.
+    const bool resizeMoveHasNoLeakedViewport = visible(viewportKey) &&
+        FindViewportClipWindow(impl_->window, movedBounds) != nullptr &&
+        std::ranges::all_of(
+            impl_->viewport.HostSurfaceKeysForHost(impl_->window),
+            [&visible](std::uint64_t key) {
+                return key == viewportKey || !visible(key);
+            });
 
     // A layout without the viewport must hide the previous child surface.
     impl_->viewport.SyncHostSurfaceLayoutsForResize(
         impl_->window,
         std::span<const EditorSceneBgfxViewport::HostSurfaceLayout>{});
-    const bool removedViewportHidden = !visible();
+    const bool removedViewportHidden = noneVisible();
 
-    const bool succeeded = initiallyVisible && minimizedHidden &&
-        resumedAfterMinimize && deactivatedHidden && resumedAfterDeactivate &&
+    const bool succeeded = initiallyVisible && animatorPreviewCovered &&
+        minimizedHidden && resumedAfterMinimize && overlayShown &&
+        deactivatedHidden && overlayHiddenOnDeactivate &&
+        resumedAfterDeactivate && overlayRestoredOnActivate &&
         dpiTransitionHidden && resumedAfterDpi && resizeMoveHasNoLeakedViewport &&
         removedViewportHidden;
     ShowWindow(impl_->window, SW_HIDE);
-    Trace(
-        "verify_viewport_host_lifecycle", succeeded,
-        succeeded ? "minimize,deactivate,dpi,resize-move" : "lifecycle-invariant-failed");
-    return succeeded;
+    if (succeeded) {
+        Trace(
+            "verify_viewport_host_lifecycle", true,
+            "minimize,deactivate,overlay,dpi,resize-move");
+        return true;
+    }
+    std::string detail = "failed:";
+    const auto append = [&detail](bool passed, std::string_view name) {
+        if (!passed) {
+            detail += ' ';
+            detail += name;
+        }
+    };
+    append(initiallyVisible, "initial");
+    append(animatorPreviewCovered, "animator-preview");
+    append(minimizedHidden, "minimize-hide");
+    append(resumedAfterMinimize, "minimize-resume");
+    append(overlayShown, "overlay-show");
+    append(deactivatedHidden, "deactivate-hide");
+    append(overlayHiddenOnDeactivate, "overlay-deactivate-hide");
+    append(resumedAfterDeactivate, "deactivate-resume");
+    append(overlayRestoredOnActivate, "overlay-reactivate-show");
+    append(dpiTransitionHidden, "dpi-hide");
+    append(resumedAfterDpi, "dpi-resume");
+    append(resizeMoveHasNoLeakedViewport, "resize-move");
+    append(removedViewportHidden, "remove-hide");
+    Trace("verify_viewport_host_lifecycle", false, detail);
+    return false;
 }
 
 bool EditorHeadlessAutomation::SnapshotInspectorTree(

@@ -77,6 +77,9 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.skeletonBinding.has_value()) {
         static_cast<void>(sceneComponents.SkeletonBindings().Set(entity, *components.skeletonBinding));
     }
+    if (components.motionSkeletonRule.has_value()) {
+        static_cast<void>(sceneComponents.MotionSkeletonRules().Set(entity, *components.motionSkeletonRule));
+    }
     if (components.deformedGeometry.has_value()) {
         static_cast<void>(sceneComponents.DeformedGeometries().Set(entity, *components.deformedGeometry));
     }

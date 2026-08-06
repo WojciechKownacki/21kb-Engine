@@ -38,6 +38,7 @@ SceneComponentStorage::SceneComponentStorage(kb::ecs::World& world, const SceneC
     , audioListeners_(world, components.AudioListenerComponentId())
     , animators_(world, components.AnimatorComponentId())
     , skeletonBindings_(world, components.SkeletonBindingComponentId())
+    , motionSkeletonRules_(world, components.MotionSkeletonRuleComponentId())
     , deformedGeometries_(world, components.DeformedGeometryComponentId())
     , uiDocuments_(world, components.UIDocumentComponentId())
     , navigation_(world) {}
@@ -203,6 +204,8 @@ const SceneAnimatorComponentStore& SceneComponentStorage::Animators() const noex
 SceneAnimatorComponentStore& SceneComponentStorage::Animators() noexcept { return animators_; }
 const SceneSkeletonBindingComponentStore& SceneComponentStorage::SkeletonBindings() const noexcept { return skeletonBindings_; }
 SceneSkeletonBindingComponentStore& SceneComponentStorage::SkeletonBindings() noexcept { return skeletonBindings_; }
+const SceneMotionSkeletonRuleComponentStore& SceneComponentStorage::MotionSkeletonRules() const noexcept { return motionSkeletonRules_; }
+SceneMotionSkeletonRuleComponentStore& SceneComponentStorage::MotionSkeletonRules() noexcept { return motionSkeletonRules_; }
 const SceneDeformedGeometryComponentStore& SceneComponentStorage::DeformedGeometries() const noexcept { return deformedGeometries_; }
 SceneDeformedGeometryComponentStore& SceneComponentStorage::DeformedGeometries() noexcept { return deformedGeometries_; }
 const SceneUIDocumentComponentStore& SceneComponentStorage::UIDocuments() const noexcept { return uiDocuments_; }

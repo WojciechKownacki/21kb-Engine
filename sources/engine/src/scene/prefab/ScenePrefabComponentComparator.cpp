@@ -148,6 +148,16 @@ namespace {
     return lhs.skeletonAssetId == rhs.skeletonAssetId &&
         lhs.skeletonCompatibilitySignature == rhs.skeletonCompatibilitySignature && lhs.enabled == rhs.enabled;
 }
+[[nodiscard]] bool Equal(const MotionSkeletonRuleComponent& lhs, const MotionSkeletonRuleComponent& rhs) noexcept {
+    return lhs.kind == rhs.kind && lhs.constrainedBoneId == rhs.constrainedBoneId &&
+        lhs.midBoneId == rhs.midBoneId && lhs.tipBoneId == rhs.tipBoneId &&
+        lhs.sourceBoneId == rhs.sourceBoneId &&
+        MotionSkeletonRuleTargetText(lhs) == MotionSkeletonRuleTargetText(rhs) &&
+        MotionSkeletonRulePoleTargetText(lhs) == MotionSkeletonRulePoleTargetText(rhs) &&
+        lhs.axis.x == rhs.axis.x && lhs.axis.y == rhs.axis.y && lhs.axis.z == rhs.axis.z &&
+        lhs.minAngleDegrees == rhs.minAngleDegrees && lhs.maxAngleDegrees == rhs.maxAngleDegrees &&
+        lhs.halfLifeSeconds == rhs.halfLifeSeconds && lhs.weight == rhs.weight && lhs.enabled == rhs.enabled;
+}
 [[nodiscard]] bool Equal(const DrawD3DeformedGeometryComponent& lhs, const DrawD3DeformedGeometryComponent& rhs) noexcept {
     return lhs.skeletalMeshAssetId == rhs.skeletalMeshAssetId &&
         lhs.materialSlotAssetIds == rhs.materialSlotAssetIds &&
@@ -204,6 +214,9 @@ ScenePrefabOverrideFlag ScenePrefabComponentComparator::Compare(SceneComponents 
     }
     if (!EqualOptionalComponent(components.SkeletonBindings().TryGet(entity), expected.skeletonBinding)) {
         flags |= ScenePrefabOverrideFlag::SkeletonBinding;
+    }
+    if (!EqualOptionalComponent(components.MotionSkeletonRules().TryGet(entity), expected.motionSkeletonRule)) {
+        flags |= ScenePrefabOverrideFlag::MotionSkeletonRule;
     }
     if (!EqualOptionalComponent(components.DeformedGeometries().TryGet(entity), expected.deformedGeometry)) {
         flags |= ScenePrefabOverrideFlag::DeformedGeometry;

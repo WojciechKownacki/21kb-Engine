@@ -867,12 +867,45 @@ testu. Sprinty są zależnościowe i powinny być realizowane w podanej kolejno�
     `kb_editor_headless_automation_scenario` przechodzi; sześć BMPów `01b-animator-workspace-*` zweryfikowanych
     wizualnie (prawdziwy workspace: state machine Entry→Skeletal Blend + Live Debug, chrome okna floating,
     poprawne wymiary i metadane DPI 96/144).
-92. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zweryfikować brak overlayów nad inną aplikacją po Alt-Tab, minimalizacji
+92. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Zweryfikować brak overlayów nad inną aplikacją po Alt-Tab, minimalizacji
     i deaktywacji oraz brak wycieku viewportu podczas resize/move/DPI.
-93. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Uruchomić pełny build i test suite, usunąć regresje oraz przejrzeć diff
+    Dowód: `WM_ACTIVATEAPP` przy deaktywacji wywołuje teraz oprócz `SetAllHostSurfacesSuspended(true)` także
+    `MainWindowBackBufferPainter::HideAllOverlays` i `FloatingWindowBackBufferPainter::HideAllOverlays` — wszystkie
+    popup overlaye (WS_POPUP, owned; brak WS_EX_TOPMOST w całym `sources/editor`) chowają się przy
+    Alt-Tab/deaktywacji, a przy aktywacji invalidowane są również okna floating, więc overlaye wracają z
+    repaintem. Kontrolki WS_CHILD (`ConsoleDetailTextOverlay`, `EditorScriptEditorOverlay`) są przycięte do
+    rodzica i fizycznie nie mogą wisieć nad inną aplikacją. `EditorSceneBgfxViewport` dostał
+    `HostSurfaceKeysForHost(HWND)`; przebudowany `VerifyViewportHostLifecycle` (`EditorHeadlessAutomation.cpp`)
+    enumeruje wszystkie host surfaces okna testowego — klucz sceny 1 oraz preview Animator Editora z kluczem
+    `panel.id` (prezentowany ścieżką 1:1 z `AnimatorEditorPanelRenderer::Paint`) — i weryfikuje: minimize →
+    wszystkie hidden, resume + render → widoczne; deaktywacja → żaden surface ani owned overlay nie jest
+    widoczny (produkcyjny overlay dropdownu toolbaru sceny pokazany przez prawdziwy
+    `MainWindowBackBufferPainter::Paint`), aktywacja + repaint → powrót; `WM_DPICHANGED` → hidden do następnego
+    painta; resize/move przez `SyncHostSurfaceLayoutsForResize` → każdy surface spoza layoutu ukryty, a
+    przesunięty clip window dokładnie w nowych bounds; pusty layout → wszystkie ukryte. Trace kończy się listą
+    nazw nieprzeszedłych sub-checków. Testy: `kb_editor_tests` PASS,
+    `kb_editor_headless_automation_scenario` PASS (trace `verify_viewport_host_lifecycle` succeeded, detail
+    "minimize,deactivate,overlay,dpi,resize-move").
+93. [x] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Uruchomić pełny build i test suite, usunąć regresje oraz przejrzeć diff
     bez cichych fallbacków i osieroconego API.
+    Dowód: pełny `cmake --build build --config Debug` (wszystkie targety) PASS; pełny `ctest -C Debug` — 17/17 PASS
+    (m.in. `kb_engine_tests`, `kb_renderer_tests`, `kb_skeletal_animator_benchmarks`, `kb_editor_tests`,
+    `kb_editor_headless_automation_scenario`); wcześniejsze pre-existing failure'y (`LIB-134 determinism rigs
+    diverged`, fixture accessorów Script API) już się nie reprodukują; zero nowych regresji. Przegląd diffa: brak
+    cichych fallbacków, osieroconego API, martwego kodu i TODO; zaostrzono jedną słabą asercję
+    (`animatorPreviewCovered` przy otwartym assecie Animatora wymaga teraz rozwiązanego `panel.id` oraz
+    zarejestrowanego, widocznego host surface — degradacja pokrycia jest FAILURE).
 94. [ ] **[SSOT · RUNTIME · ZERO-STUB · HEADLESS]** Oznaczyć zadania 42, 43 i 45 w `Components.md` jako ukończone dopiero po
     spełnieniu ich pełnych kryteriów runtime, edytora, serializacji i testów.
+    Stan (2026-08-06): zadania 42 i 43 oznaczono `[X]` w `Components.md` — `SkeletonBindingComponent` i
+    `DrawD3DeformedGeometryComponent` mają pełną ścieżkę: Add Component z katalogu Inspectora, edycję, remove,
+    duplicate, serializację scen/prefabów z walidacją referencji, system runtime i testy headless
+    (`EditorSelfTest`, scenariusz `add_component`/`remove_component`). Zadanie 45 pozostaje otwarte:
+    `MotionSkeletonRuleComponent` nie istnieje jako komponent sceny — ograniczenia (TwoBoneIK, Aim,
+    CopyTransform) żyją wyłącznie jako dane assetu AnimatorController, bez per-obiektowego stanu autorytatywnego
+    podpinanego przez Add Component, a z sześciu wariantów kontraktu (celowanie, IK łańcucha, skręt, limit,
+    sprężyna, korekta przestrzeni) zaimplementowane są trzy. Odhaczenie 45 wymaga najpierw produkcyjnego
+    komponentu reguły pozy z pełnym workflow edytora.
 
 ### Kryteria akceptacji wyglądu i lifecycle
 
