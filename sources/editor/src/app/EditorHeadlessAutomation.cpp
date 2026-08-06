@@ -928,7 +928,8 @@ bool EditorHeadlessAutomation::CapturePanelScreenshotMatrix(
     if (!kind.has_value() ||
         (*kind != DockPanelKind::MaterialEditor &&
          *kind != DockPanelKind::SkeletalMeshEditor &&
-         *kind != DockPanelKind::AnimationClipEditor)) {
+         *kind != DockPanelKind::AnimationClipEditor &&
+         *kind != DockPanelKind::AnimatorEditor)) {
         Trace("capture_panel_screenshot_matrix", false, panel);
         return false;
     }
