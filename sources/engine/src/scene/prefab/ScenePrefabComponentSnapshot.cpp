@@ -133,6 +133,9 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const SkeletonBindingComponent* binding = sceneComponents.SkeletonBindings().TryGet(entity)) {
         components.skeletonBinding = *binding;
     }
+    if (const MotionSkeletonRuleComponent* rule = sceneComponents.MotionSkeletonRules().TryGet(entity)) {
+        components.motionSkeletonRule = *rule;
+    }
     if (const DrawD3DeformedGeometryComponent* geometry = sceneComponents.DeformedGeometries().TryGet(entity)) {
         components.deformedGeometry = *geometry;
     }

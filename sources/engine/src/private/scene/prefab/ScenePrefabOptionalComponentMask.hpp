@@ -61,6 +61,7 @@ struct ScenePrefabOptionalComponentMaskMatch {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Animator);
     }
     if (components.skeletonBinding.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::SkeletonBinding);
+    if (components.motionSkeletonRule.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::MotionSkeletonRule);
     if (components.deformedGeometry.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::DeformedGeometry);
     if (components.uiDocument.has_value()) {
         mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::UIDocument);
@@ -77,8 +78,8 @@ struct ScenePrefabOptionalComponentMaskMatch {
     return mask;
 }
 
-[[nodiscard]] inline std::array<kb::ecs::ComponentId, 19U> ScenePrefabOptionalComponentIds(const SceneComponentRegistry& registry) noexcept {
-    return std::array<kb::ecs::ComponentId, 19U>{
+[[nodiscard]] inline std::array<kb::ecs::ComponentId, 20U> ScenePrefabOptionalComponentIds(const SceneComponentRegistry& registry) noexcept {
+    return std::array<kb::ecs::ComponentId, 20U>{
         registry.CameraComponentId(),
         registry.MeshRendererComponentId(),
         registry.LightComponentId(),
@@ -93,6 +94,7 @@ struct ScenePrefabOptionalComponentMaskMatch {
         registry.JointComponentId(),
         registry.AnimatorComponentId(),
         registry.SkeletonBindingComponentId(),
+        registry.MotionSkeletonRuleComponentId(),
         registry.DeformedGeometryComponentId(),
         registry.UIDocumentComponentId(),
         registry.NavAgentComponentId(),

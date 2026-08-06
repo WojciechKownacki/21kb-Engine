@@ -43,6 +43,7 @@ enum class ScenePrefabBakedComponentMask : std::uint64_t {
     HistoryRibbon = 1ULL << 31U,
     SkeletonBinding = 1ULL << 32U,
     DeformedGeometry = 1ULL << 33U,
+    MotionSkeletonRule = 1ULL << 34U,
 };
 
 [[nodiscard]] constexpr std::uint64_t ScenePrefabBakedMask(ScenePrefabBakedComponentMask mask) noexcept {
@@ -88,6 +89,7 @@ struct ScenePrefabBakedArchetype {
     std::vector<AudioListenerComponent> audioListeners;
     std::vector<Animator> animators;
     std::vector<SkeletonBindingComponent> skeletonBindings;
+    std::vector<MotionSkeletonRuleComponent> motionSkeletonRules;
     std::vector<DrawD3DeformedGeometryComponent> deformedGeometries;
     std::vector<UIDocumentComponent> uiDocuments;
     std::vector<NavAgent> navAgents;

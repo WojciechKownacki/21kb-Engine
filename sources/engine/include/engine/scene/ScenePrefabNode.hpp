@@ -33,6 +33,7 @@
 #include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/ScenePrefabOverrides.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
+#include "engine/scene/MotionSkeletonRuleComponent.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
@@ -120,6 +121,7 @@ struct ScenePrefabNodeComponents {
     std::optional<AudioListenerComponent> audioListener;
     std::optional<Animator> animator;
     std::optional<SkeletonBindingComponent> skeletonBinding;
+    std::optional<MotionSkeletonRuleComponent> motionSkeletonRule;
     std::optional<DrawD3DeformedGeometryComponent> deformedGeometry;
     std::optional<UIDocumentComponent> uiDocument;
     std::optional<NavAgent> navAgent;

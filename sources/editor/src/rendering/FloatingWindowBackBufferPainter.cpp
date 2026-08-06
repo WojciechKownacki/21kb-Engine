@@ -91,6 +91,11 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
 
 } // namespace
 
+void FloatingWindowBackBufferPainter::HideAllOverlays() noexcept {
+    FloatingSceneToolbarDropdownOverlay().Hide();
+    FloatingAddComponentOverlay().Hide();
+}
+
 void FloatingWindowBackBufferPainter::Paint(HWND window, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings, EditorSceneBgfxViewport& sceneViewport) {
     FloatingWindowPaintContext context{
         .window = window,

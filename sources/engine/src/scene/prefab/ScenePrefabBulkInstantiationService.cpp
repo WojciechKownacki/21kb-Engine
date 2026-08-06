@@ -162,6 +162,7 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<AudioListenerComponent> audioListeners;
     std::vector<Animator> animators;
     std::vector<SkeletonBindingComponent> skeletonBindings;
+    std::vector<MotionSkeletonRuleComponent> motionSkeletonRules;
     std::vector<DrawD3DeformedGeometryComponent> deformedGeometries;
     std::vector<UIDocumentComponent> uiDocuments;
     std::vector<NavAgent> navAgents;
@@ -301,6 +302,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::SkeletonBinding)) {
             RepeatComponents(skeletonBindings, std::span<const SkeletonBindingComponent>{ archetype.skeletonBindings }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const SkeletonBindingComponent>{ skeletonBindings });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::MotionSkeletonRule)) {
+            RepeatComponents(motionSkeletonRules, std::span<const MotionSkeletonRuleComponent>{ archetype.motionSkeletonRules }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const MotionSkeletonRuleComponent>{ motionSkeletonRules });
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::DeformedGeometry)) {
             RepeatComponents(deformedGeometries, std::span<const DrawD3DeformedGeometryComponent>{ archetype.deformedGeometries }, instanceCount);
@@ -450,6 +455,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::SkeletonBinding)) {
             AddCommandComponentPatternView(views, std::span<const SkeletonBindingComponent>{ archetype.skeletonBindings }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const SkeletonBindingComponent>{ archetype.skeletonBindings }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::MotionSkeletonRule)) {
+            AddCommandComponentPatternView(views, std::span<const MotionSkeletonRuleComponent>{ archetype.motionSkeletonRules }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const MotionSkeletonRuleComponent>{ archetype.motionSkeletonRules }, instanceCount);
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::DeformedGeometry)) {
             AddCommandComponentPatternView(views, std::span<const DrawD3DeformedGeometryComponent>{ archetype.deformedGeometries }, instanceCount);

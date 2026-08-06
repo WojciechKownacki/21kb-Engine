@@ -87,6 +87,9 @@ SceneAnimatorComponentQueries SceneComponentQueries::Animators() const noexcept 
 SceneSkeletonBindingComponentQueries SceneComponentQueries::SkeletonBindings() const noexcept {
     return SceneSkeletonBindingComponentQueries{ scene_ };
 }
+SceneMotionSkeletonRuleComponentQueries SceneComponentQueries::MotionSkeletonRules() const noexcept {
+    return SceneMotionSkeletonRuleComponentQueries{ scene_ };
+}
 SceneDeformedGeometryComponentQueries SceneComponentQueries::DeformedGeometries() const noexcept {
     return SceneDeformedGeometryComponentQueries{ scene_ };
 }
@@ -177,6 +180,9 @@ SceneAnimatorComponents SceneComponents::Animators() const noexcept {
 }
 SceneSkeletonBindingComponents SceneComponents::SkeletonBindings() const noexcept {
     return SceneSkeletonBindingComponents{ scene_ };
+}
+SceneMotionSkeletonRuleComponents SceneComponents::MotionSkeletonRules() const noexcept {
+    return SceneMotionSkeletonRuleComponents{ scene_ };
 }
 SceneDeformedGeometryComponents SceneComponents::DeformedGeometries() const noexcept {
     return SceneDeformedGeometryComponents{ scene_ };

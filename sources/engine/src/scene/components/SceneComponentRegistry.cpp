@@ -8,6 +8,7 @@
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
+#include "engine/scene/MotionSkeletonRuleComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
@@ -360,6 +361,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, "kb.scene.AudioListenerComponent"))
     , animatorComponentId_(RegisterSceneComponent<Animator>(world, "kb.scene.AnimatorComponent"))
     , skeletonBindingComponentId_(RegisterSceneComponent<SkeletonBindingComponent>(world, SkeletonBindingComponent::StableId))
+    , motionSkeletonRuleComponentId_(RegisterSceneComponent<MotionSkeletonRuleComponent>(world, MotionSkeletonRuleComponent::StableId))
     , deformedGeometryComponentId_(RegisterSceneComponent<DrawD3DeformedGeometryComponent>(world, DrawD3DeformedGeometryComponent::StableId))
     , uiDocumentComponentId_(RegisterSceneComponent<UIDocumentComponent>(world, "kb.scene.UIDocumentComponent"))
     , navAgentComponentId_(RegisterSceneComponent<NavAgent>(world, "kb.scene.NavAgent"))
@@ -464,6 +466,7 @@ std::uint64_t SceneComponentRegistry::AudioListenerComponentId() const noexcept 
 
 std::uint64_t SceneComponentRegistry::AnimatorComponentId() const noexcept { return animatorComponentId_; }
 std::uint64_t SceneComponentRegistry::SkeletonBindingComponentId() const noexcept { return skeletonBindingComponentId_; }
+std::uint64_t SceneComponentRegistry::MotionSkeletonRuleComponentId() const noexcept { return motionSkeletonRuleComponentId_; }
 std::uint64_t SceneComponentRegistry::DeformedGeometryComponentId() const noexcept { return deformedGeometryComponentId_; }
 std::uint64_t SceneComponentRegistry::UIDocumentComponentId() const noexcept { return uiDocumentComponentId_; }
 std::uint64_t SceneComponentRegistry::NavAgentComponentId() const noexcept { return navAgentComponentId_; }

@@ -60,6 +60,19 @@ EditorSceneBgfxViewport::HostSurface* EditorSceneBgfxViewport::HostSurfaceStore:
     return iter == hostSurfaces_.end() ? nullptr : iter->get();
 }
 
+std::vector<std::uint64_t> EditorSceneBgfxViewport::HostSurfaceStore::KeysForHost(HWND host) const {
+    std::vector<std::uint64_t> keys;
+    if (host == nullptr) {
+        return keys;
+    }
+    for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
+        if (surface != nullptr && surface->host == host) {
+            keys.push_back(surface->key);
+        }
+    }
+    return keys;
+}
+
 void EditorSceneBgfxViewport::HostSurfaceStore::MarkHostNotPresented(HWND host) noexcept {
     for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
         if (surface != nullptr && surface->host == host) {

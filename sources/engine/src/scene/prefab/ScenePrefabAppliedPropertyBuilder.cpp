@@ -76,6 +76,9 @@ namespace {
     if (StartsWith(propertyPath, "skeletonBinding")) {
         return ScenePrefabOverrideFlag::SkeletonBinding;
     }
+    if (StartsWith(propertyPath, "motionSkeletonRule")) {
+        return ScenePrefabOverrideFlag::MotionSkeletonRule;
+    }
     if (StartsWith(propertyPath, "deformedGeometry")) {
         return ScenePrefabOverrideFlag::DeformedGeometry;
     }

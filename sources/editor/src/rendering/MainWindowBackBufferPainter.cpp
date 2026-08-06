@@ -190,6 +190,14 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
 
 } // namespace
 
+void MainWindowBackBufferPainter::HideAllOverlays() noexcept {
+    MainDropPreviewOverlay().Hide();
+    MainDeleteConfirmOverlay().Hide();
+    MainFilterMenuOverlay().Hide();
+    MainSceneToolbarDropdownOverlay().Hide();
+    MainAddComponentOverlay().Hide();
+}
+
 void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const DockDropPreview* preview, const DockPointerDrag* dockDrag, const EditorPointerDragState& drag, const EditorRenderBackendSettings& renderBackendSettings, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport& sceneViewport) {
     MainWindowPaintContext context{
         .window = window,

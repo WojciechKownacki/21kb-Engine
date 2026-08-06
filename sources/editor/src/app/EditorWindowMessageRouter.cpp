@@ -15,6 +15,8 @@
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
+#include "rendering/FloatingWindowBackBufferPainter.hpp"
+#include "rendering/MainWindowBackBufferPainter.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "scene/EditorTerrainService.hpp"
 
@@ -469,8 +471,21 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         return DefWindowProcW(messageWindow, message, wparam, lparam);
     case WM_ACTIVATEAPP:
         context_.sceneViewport.SetAllHostSurfacesSuspended(wparam == FALSE);
-        if (wparam != FALSE && context_.mainWindow != nullptr) {
+        if (wparam == FALSE) {
+            // Owned WS_POPUP overlays would stay above the application that
+            // takes focus, so hide them explicitly; the repaint on
+            // reactivation re-shows whatever the UI state still needs.
+            MainWindowBackBufferPainter::HideAllOverlays();
+            FloatingWindowBackBufferPainter::HideAllOverlays();
+            return 0;
+        }
+        if (context_.mainWindow != nullptr) {
             InvalidateRect(context_.mainWindow, nullptr, FALSE);
+        }
+        for (const HWND floatingWindow : context_.floatingWindows.Queries().Windows()) {
+            if (floatingWindow != nullptr) {
+                InvalidateRect(floatingWindow, nullptr, FALSE);
+            }
         }
         return 0;
     case WM_EXITSIZEMOVE:
