@@ -68,42 +68,71 @@ template <typename T>
         close(lhs.scale.x, rhs.scale.x) && close(lhs.scale.y, rhs.scale.y) && close(lhs.scale.z, rhs.scale.z);
 }
 
+[[nodiscard]] bool SameMatrix(const kb::math::Mat4& lhs, const kb::math::Mat4& rhs) noexcept {
+    constexpr float epsilon = 0.00001F;
+    const auto close = [](float a, float b) { return std::abs(a - b) <= epsilon; };
+    for (std::size_t column = 0U; column < 4U; ++column) {
+        const kb::math::Vec4& a = lhs.columns[column];
+        const kb::math::Vec4& b = rhs.columns[column];
+        if (!close(a.x, b.x) || !close(a.y, b.y) || !close(a.z, b.z) || !close(a.w, b.w)) return false;
+    }
+    return true;
+}
+
 struct Influence {
     std::uint32_t joint = 0U;
     float weight = 0.0F;
 };
 
+struct SkinnedMeshNode {
+    const ufbx_node* node = nullptr;
+    const ufbx_mesh* mesh = nullptr;
+    const ufbx_skin_deformer* skin = nullptr;
+};
+
 [[nodiscard]] std::optional<SkeletalMeshFbxImportResult> Build(
     const ufbx_scene& scene, std::uint64_t skeletonAssetId,
     const SkeletalMeshFbxImportOptions& options, std::string* error) {
-    std::vector<ufbx_node*> meshNodes;
+    std::vector<SkinnedMeshNode> meshNodes;
     for (std::size_t index = 0U; index < scene.nodes.count; ++index) {
         ufbx_node* node = scene.nodes.data[index];
-        if (node != nullptr && node->mesh != nullptr && node->mesh->skin_deformers.count != 0U) meshNodes.push_back(node);
+        if (node == nullptr || node->mesh == nullptr || node->mesh->skin_deformers.count == 0U) continue;
+        if (node->mesh->skin_deformers.count != 1U) return Fail<SkeletalMeshFbxImportResult>(error,
+            "Skeletal FBX import requires exactly one skin deformer per mesh node.");
+        const ufbx_skin_deformer* skin = node->mesh->skin_deformers.data[0];
+        if (skin == nullptr || skin->clusters.count == 0U || skin->vertices.count != node->mesh->num_vertices) {
+            return Fail<SkeletalMeshFbxImportResult>(error,
+                "Skeletal FBX mesh has missing or inconsistent skin vertex data.");
+        }
+        meshNodes.push_back({ node, node->mesh, skin });
     }
-    if (meshNodes.size() != 1U) return Fail<SkeletalMeshFbxImportResult>(error,
-        "Skeletal FBX import requires exactly one skinned mesh node.");
-    const ufbx_node& meshNode = *meshNodes.front();
-    const ufbx_mesh& sourceMesh = *meshNode.mesh;
-    if (sourceMesh.skin_deformers.count != 1U) return Fail<SkeletalMeshFbxImportResult>(error,
-        "Skeletal FBX import requires exactly one skin deformer.");
-    const ufbx_skin_deformer& skin = *sourceMesh.skin_deformers.data[0];
-    if (skin.clusters.count == 0U || skin.vertices.count != sourceMesh.num_vertices) {
-        return Fail<SkeletalMeshFbxImportResult>(error,
-            "Skeletal FBX mesh has missing or inconsistent skin vertex data.");
-    }
-    if (skin.clusters.count > static_cast<std::size_t>(std::numeric_limits<std::uint16_t>::max()) + 1U) {
-        return Fail<SkeletalMeshFbxImportResult>(error, "Skeletal FBX skin exceeds the joint palette limit.");
-    }
+    if (meshNodes.empty()) return Fail<SkeletalMeshFbxImportResult>(error,
+        "Skeletal FBX import requires at least one skinned mesh node.");
+    if (!options.combineMeshes && meshNodes.size() != 1U) return Fail<SkeletalMeshFbxImportResult>(error,
+        "Skeletal FBX source contains multiple skinned mesh nodes; enable Combine meshes to import them as one asset.");
 
     SkeletalMeshFbxImportResult result{};
     std::unordered_map<const ufbx_node*, std::uint32_t> jointIndex;
-    jointIndex.reserve(skin.clusters.count);
-    for (std::size_t index = 0U; index < skin.clusters.count; ++index) {
-        const ufbx_skin_cluster* cluster = skin.clusters.data[index];
-        if (cluster == nullptr || cluster->bone_node == nullptr ||
-            !jointIndex.emplace(cluster->bone_node, static_cast<std::uint32_t>(index)).second) {
-            return Fail<SkeletalMeshFbxImportResult>(error, "Skeletal FBX skin contains a null or duplicate bone cluster.");
+    std::unordered_map<const ufbx_node*, const ufbx_skin_cluster*> clusterByBone;
+    std::vector<const ufbx_node*> boneNodes;
+    for (const SkinnedMeshNode& mesh : meshNodes) {
+        for (std::size_t index = 0U; index < mesh.skin->clusters.count; ++index) {
+            const ufbx_skin_cluster* cluster = mesh.skin->clusters.data[index];
+            if (cluster == nullptr || cluster->bone_node == nullptr) return Fail<SkeletalMeshFbxImportResult>(error,
+                "Skeletal FBX skin contains a null bone cluster.");
+            if (!jointIndex.contains(cluster->bone_node)) {
+                if (boneNodes.size() >= static_cast<std::size_t>(std::numeric_limits<std::uint16_t>::max()) + 1U) {
+                    return Fail<SkeletalMeshFbxImportResult>(error, "Skeletal FBX skin exceeds the joint palette limit.");
+                }
+                jointIndex.emplace(cluster->bone_node, static_cast<std::uint32_t>(boneNodes.size()));
+                clusterByBone.emplace(cluster->bone_node, cluster);
+                boneNodes.push_back(cluster->bone_node);
+            } else if (!SameMatrix(
+                    Matrix(clusterByBone.at(cluster->bone_node)->geometry_to_bone),
+                    Matrix(cluster->geometry_to_bone))) {
+                return Fail<SkeletalMeshFbxImportResult>(error,
+                    "Skeletal FBX mesh nodes use incompatible bind poses and cannot be combined safely.");
+            }
         }
     }
     std::unordered_map<const ufbx_node*, std::int32_t> emitted;
@@ -117,7 +146,7 @@ struct Influence {
             parent = emitted.at(node->parent);
         }
         const std::uint32_t index = jointIndex.at(node);
-        const ufbx_skin_cluster& cluster = *skin.clusters.data[index];
+        const ufbx_skin_cluster& cluster = *clusterByBone.at(node);
         SkeletonBone bone{};
         bone.id = static_cast<SkeletonBoneId>(index + 1U);
         bone.parentIndex = parent;
@@ -129,8 +158,8 @@ struct Influence {
         visiting.erase(node);
         return true;
     };
-    for (std::size_t index = 0U; index < skin.clusters.count; ++index) {
-        if (!emitBone(emitBone, skin.clusters.data[index]->bone_node)) {
+    for (const ufbx_node* boneNode : boneNodes) {
+        if (!emitBone(emitBone, boneNode)) {
             return Fail<SkeletalMeshFbxImportResult>(error, "Skeletal FBX skin has a cyclic bone hierarchy.");
         }
     }
@@ -140,21 +169,36 @@ struct Influence {
     SkeletalMeshLod lod{};
     std::vector<SkeletalMeshSection> sections;
     std::optional<std::uint32_t> previousSourceMaterial;
-    const auto beginSection = [&](std::uint32_t material) {
-        if (previousSourceMaterial == material) return;
+    const auto beginSection = [&](std::uint32_t sourceMaterial, std::uint64_t materialAssetId) {
+        if (previousSourceMaterial == sourceMaterial) return;
         if (!sections.empty()) {
             sections.back().indexCount = static_cast<std::uint32_t>(lod.indices.size()) - sections.back().firstIndex;
         }
         sections.push_back({ .firstIndex = static_cast<std::uint32_t>(lod.indices.size()),
-            .materialAssetId = 0U });
-        previousSourceMaterial = material;
+            .materialAssetId = materialAssetId });
+        previousSourceMaterial = sourceMaterial;
     };
-    for (std::size_t faceIndex = 0U; faceIndex < sourceMesh.faces.count; ++faceIndex) {
+    for (const SkinnedMeshNode& skinnedMesh : meshNodes) {
+      const ufbx_node& meshNode = *skinnedMesh.node;
+      const ufbx_mesh& sourceMesh = *skinnedMesh.mesh;
+      const ufbx_skin_deformer& skin = *skinnedMesh.skin;
+      previousSourceMaterial.reset();
+      for (std::size_t faceIndex = 0U; faceIndex < sourceMesh.faces.count; ++faceIndex) {
         const ufbx_face face = sourceMesh.faces.data[faceIndex];
         if (face.num_indices < 3U) continue;
-        const std::uint32_t material = options.importMaterialSlots && sourceMesh.face_material.count > faceIndex
+        const std::uint32_t materialSlot = options.importMaterialSlots && sourceMesh.face_material.count > faceIndex
             ? sourceMesh.face_material.data[faceIndex] : 0U;
-        beginSection(material);
+        std::uint64_t materialAssetId = 0U;
+        if (options.importMaterialSlots && options.materialResolver != nullptr && materialSlot < meshNode.materials.count) {
+            const ufbx_material* material = meshNode.materials.data[materialSlot];
+            const std::string materialName = material == nullptr
+                ? "Material_" + std::to_string(materialSlot)
+                : String(material->name, "Material_" + std::to_string(materialSlot));
+            materialAssetId = options.materialResolver(materialName, options.materialResolverUserData);
+            if (materialAssetId == 0U) return Fail<SkeletalMeshFbxImportResult>(error,
+                "Skeletal FBX material resolver returned an invalid Material asset id.");
+        }
+        beginSection(materialSlot, materialAssetId);
         std::vector<std::uint32_t> triangles((static_cast<std::size_t>(face.num_indices) - 2U) * 3U);
         const std::uint32_t triangleCount = ufbx_triangulate_face(
             triangles.data(), triangles.size(), &sourceMesh, face);
@@ -175,14 +219,24 @@ struct Influence {
                 // FBX permits partially skinned meshes. Keep such vertices
                 // deterministic by binding them to the first cluster rather
                 // than emitting invalid zero-weight runtime vertices.
-                influences.push_back({ 0U, 1.0F });
+                const ufbx_skin_cluster* fallbackCluster = skin.clusters.data[0];
+                if (fallbackCluster == nullptr || fallbackCluster->bone_node == nullptr ||
+                    !jointIndex.contains(fallbackCluster->bone_node)) {
+                    return Fail<SkeletalMeshFbxImportResult>(error,
+                        "Skeletal FBX mesh has no valid fallback bone for an unweighted vertex.");
+                }
+                influences.push_back({ jointIndex.at(fallbackCluster->bone_node), 1.0F });
             }
             for (std::size_t weightIndex = 0U; weightIndex < sourceVertex.num_weights; ++weightIndex) {
                 const ufbx_skin_weight weight = skin.weights.data[sourceVertex.weight_begin + weightIndex];
                 if (weight.cluster_index >= skin.clusters.count || !std::isfinite(weight.weight) || weight.weight < 0.0) {
                     return Fail<SkeletalMeshFbxImportResult>(error, "Skeletal FBX contains an invalid skin weight.");
                 }
-                influences.push_back({ weight.cluster_index, static_cast<float>(weight.weight) });
+                const ufbx_skin_cluster* cluster = skin.clusters.data[weight.cluster_index];
+                if (cluster == nullptr || cluster->bone_node == nullptr || !jointIndex.contains(cluster->bone_node)) {
+                    return Fail<SkeletalMeshFbxImportResult>(error, "Skeletal FBX skin weight references an unknown bone cluster.");
+                }
+                influences.push_back({ jointIndex.at(cluster->bone_node), static_cast<float>(weight.weight) });
             }
             std::sort(influences.begin(), influences.end(), [](const Influence& lhs, const Influence& rhs) {
                 return lhs.weight == rhs.weight ? lhs.joint < rhs.joint : lhs.weight > rhs.weight;
@@ -211,6 +265,7 @@ struct Influence {
             lod.indices.push_back(static_cast<std::uint32_t>(lod.vertices.size()));
             lod.vertices.push_back(vertex);
         }
+      }
     }
     if (lod.vertices.empty()) return Fail<SkeletalMeshFbxImportResult>(error, "Skeletal FBX contains no triangle geometry.");
     if (!sections.empty()) {
@@ -281,7 +336,7 @@ struct Influence {
                 "Skeletal FBX animation could not be evaluated.");
             for (std::size_t boneIndex = 0U; boneIndex < result.skeleton.bones.size(); ++boneIndex) {
                 const SkeletonBone& bone = result.skeleton.bones[boneIndex];
-                const ufbx_node* sourceNode = skin.clusters.data[bone.id - 1U]->bone_node;
+                const ufbx_node* sourceNode = boneNodes[bone.id - 1U];
                 if (sourceNode->typed_id >= evaluated->nodes.count) return Fail<SkeletalMeshFbxImportResult>(error,
                     "Skeletal FBX animation evaluation returned an incompatible node table.");
                 tracks[boneIndex].keyframes.push_back({

@@ -31,6 +31,8 @@ struct RenderMeshGltfImportDesc {
 };
 
 struct RenderMeshFbxImportDesc {
+    const RenderMeshAssetMaterialBinding* materialBindings = nullptr;
+    std::uint32_t materialBindingCount = 0;
     bool importMaterialSlots = true;
 };
 
