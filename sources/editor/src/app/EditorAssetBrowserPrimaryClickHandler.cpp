@@ -93,7 +93,7 @@ bool EditorAssetBrowserPrimaryClickHandler::HandlePointerDown(
         const std::optional<EditorAssetImportSelection> selection = EditorAssetImportDialog::Open(GetActiveWindow());
         return !selection.has_value() || selection->files.empty()
             ? true
-            : sceneContext.ImportAssetFiles(selection->files, sceneContext.AssetBrowser().SelectedFolder(), selection->options);
+            : sceneContext.BeginAssetImport(selection->files, sceneContext.AssetBrowser().SelectedFolder(), selection->options);
     }
     case EditorAssetBrowserHitKind::Filters:
         PrepareBrowserAction(state);

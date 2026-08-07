@@ -37,6 +37,19 @@ template <typename T>
     return { static_cast<float>(value.x), static_cast<float>(value.y), static_cast<float>(value.z) };
 }
 
+[[nodiscard]] ufbx_matrix BoneBindToWorld(const ufbx_skin_cluster& cluster) noexcept {
+    const ufbx_matrix boneToGeometry = ufbx_matrix_invert(&cluster.geometry_to_bone);
+    return ufbx_matrix_mul(&cluster.geometry_to_world, &boneToGeometry);
+}
+
+[[nodiscard]] ufbx_matrix RelativeMatrix(
+    const ufbx_matrix& childWorld,
+    const ufbx_matrix* parentWorld) noexcept {
+    if (parentWorld == nullptr) return childWorld;
+    const ufbx_matrix worldToParent = ufbx_matrix_invert(parentWorld);
+    return ufbx_matrix_mul(&worldToParent, &childWorld);
+}
+
 [[nodiscard]] LocalTransform Transform(const ufbx_transform value) noexcept {
     return {
         .position = Vec3(value.translation),
@@ -45,6 +58,10 @@ template <typename T>
             static_cast<float>(value.rotation.w) }),
         .scale = Vec3(value.scale),
     };
+}
+
+[[nodiscard]] LocalTransform Transform(const ufbx_matrix& value) noexcept {
+    return Transform(ufbx_matrix_to_transform(&value));
 }
 
 [[nodiscard]] kb::math::Mat4 Matrix(const ufbx_matrix value) noexcept {
@@ -128,8 +145,8 @@ struct SkinnedMeshNode {
                 clusterByBone.emplace(cluster->bone_node, cluster);
                 boneNodes.push_back(cluster->bone_node);
             } else if (!SameMatrix(
-                    Matrix(clusterByBone.at(cluster->bone_node)->geometry_to_bone),
-                    Matrix(cluster->geometry_to_bone))) {
+                    Matrix(BoneBindToWorld(*clusterByBone.at(cluster->bone_node))),
+                    Matrix(BoneBindToWorld(*cluster)))) {
                 return Fail<SkeletalMeshFbxImportResult>(error,
                     "Skeletal FBX mesh nodes use incompatible bind poses and cannot be combined safely.");
             }
@@ -147,12 +164,21 @@ struct SkinnedMeshNode {
         }
         const std::uint32_t index = jointIndex.at(node);
         const ufbx_skin_cluster& cluster = *clusterByBone.at(node);
+        const ufbx_matrix bindWorld = BoneBindToWorld(cluster);
+        const ufbx_matrix* parentBindWorld = nullptr;
+        ufbx_matrix parentBindWorldStorage{};
+        if (node->parent != nullptr && jointIndex.contains(node->parent)) {
+            parentBindWorldStorage = BoneBindToWorld(*clusterByBone.at(node->parent));
+            parentBindWorld = &parentBindWorldStorage;
+        }
+        const ufbx_matrix bindLocal = RelativeMatrix(bindWorld, parentBindWorld);
+        const ufbx_matrix inverseBindWorld = ufbx_matrix_invert(&bindWorld);
         SkeletonBone bone{};
         bone.id = static_cast<SkeletonBoneId>(index + 1U);
         bone.parentIndex = parent;
         bone.name = String(node->name, "Bone_" + std::to_string(index));
-        bone.referencePose = Transform(node->local_transform);
-        bone.inverseBind = Matrix(cluster.geometry_to_bone);
+        bone.referencePose = Transform(bindLocal);
+        bone.inverseBind = Matrix(inverseBindWorld);
         emitted.emplace(node, static_cast<std::int32_t>(result.skeleton.bones.size()));
         result.skeleton.bones.push_back(std::move(bone));
         visiting.erase(node);
@@ -182,6 +208,11 @@ struct SkinnedMeshNode {
       const ufbx_node& meshNode = *skinnedMesh.node;
       const ufbx_mesh& sourceMesh = *skinnedMesh.mesh;
       const ufbx_skin_deformer& skin = *skinnedMesh.skin;
+      const ufbx_skin_cluster* firstCluster = skin.clusters.count == 0U ? nullptr : skin.clusters.data[0];
+      if (firstCluster == nullptr) return Fail<SkeletalMeshFbxImportResult>(error,
+          "Skeletal FBX mesh has no bind-space transform.");
+      const ufbx_matrix bindGeometryToWorld = firstCluster->geometry_to_world;
+      const ufbx_matrix bindNormalToWorld = ufbx_matrix_for_normals(&bindGeometryToWorld);
       previousSourceMaterial.reset();
       for (std::size_t faceIndex = 0U; faceIndex < sourceMesh.faces.count; ++faceIndex) {
         const ufbx_face face = sourceMesh.faces.data[faceIndex];
@@ -242,10 +273,18 @@ struct SkinnedMeshNode {
                 return lhs.weight == rhs.weight ? lhs.joint < rhs.joint : lhs.weight > rhs.weight;
             });
             SkeletalMeshVertex vertex{};
-            vertex.position = Vec3(ufbx_get_vertex_vec3(&sourceMesh.vertex_position, corner));
-            if (sourceMesh.vertex_normal.exists) vertex.normal = Vec3(ufbx_get_vertex_vec3(&sourceMesh.vertex_normal, corner));
+            vertex.position = Vec3(ufbx_transform_position(
+                &bindGeometryToWorld,
+                ufbx_get_vertex_vec3(&sourceMesh.vertex_position, corner)));
+            if (sourceMesh.vertex_normal.exists) {
+                vertex.normal = kb::math::Normalize(Vec3(ufbx_transform_direction(
+                    &bindNormalToWorld,
+                    ufbx_get_vertex_vec3(&sourceMesh.vertex_normal, corner))));
+            }
             if (sourceMesh.vertex_tangent.exists) {
-                const kb::math::Vec3 tangent = Vec3(ufbx_get_vertex_vec3(&sourceMesh.vertex_tangent, corner));
+                const kb::math::Vec3 tangent = kb::math::Normalize(Vec3(ufbx_transform_direction(
+                    &bindGeometryToWorld,
+                    ufbx_get_vertex_vec3(&sourceMesh.vertex_tangent, corner))));
                 vertex.tangent = { tangent.x, tangent.y, tangent.z, sourceMesh.reversed_winding ? -1.0F : 1.0F };
             }
             if (sourceMesh.vertex_uv.exists) {
@@ -328,20 +367,55 @@ struct SkinnedMeshNode {
             tracks[boneIndex].boneId = result.skeleton.bones[boneIndex].id;
             tracks[boneIndex].keyframes.reserve(sampleCount);
         }
+        const bool requiresExactSceneEvaluation = std::ranges::any_of(
+            boneNodes, [](const ufbx_node* node) {
+                for (const ufbx_node* current = node; current != nullptr; current = current->parent) {
+                    if (current->inherit_mode != UFBX_INHERIT_MODE_NORMAL) return true;
+                }
+                return false;
+            });
         for (std::size_t sample = 0U; sample < sampleCount; ++sample) {
             const double time = std::min(stack->time_begin + static_cast<double>(sample) / fps, stack->time_end);
-            ufbx_error evaluateError{};
-            FbxScene evaluated{ ufbx_evaluate_scene(&scene, stack->anim, time, nullptr, &evaluateError) };
-            if (!evaluated) return Fail<SkeletalMeshFbxImportResult>(error,
-                "Skeletal FBX animation could not be evaluated.");
+            FbxScene evaluated;
+            if (requiresExactSceneEvaluation) {
+                ufbx_error evaluateError{};
+                evaluated.reset(ufbx_evaluate_scene(&scene, stack->anim, time, nullptr, &evaluateError));
+                if (!evaluated) return Fail<SkeletalMeshFbxImportResult>(error,
+                    "Skeletal FBX animation could not be evaluated.");
+            }
+            std::vector<ufbx_matrix> evaluatedWorld(scene.nodes.count);
+            std::vector<std::uint8_t> evaluatedState(scene.nodes.count, 0U);
+            const auto evaluateWorld = [&](const auto& self, const ufbx_node* node) -> const ufbx_matrix& {
+                const std::size_t nodeIndex = node->typed_id;
+                if (evaluatedState[nodeIndex] != 0U) return evaluatedWorld[nodeIndex];
+                const ufbx_transform local = ufbx_evaluate_transform(stack->anim, node, time);
+                const ufbx_matrix localMatrix = ufbx_transform_to_matrix(&local);
+                evaluatedWorld[nodeIndex] = node->parent == nullptr
+                    ? localMatrix
+                    : ufbx_matrix_mul(&self(self, node->parent), &localMatrix);
+                evaluatedState[nodeIndex] = 1U;
+                return evaluatedWorld[nodeIndex];
+            };
             for (std::size_t boneIndex = 0U; boneIndex < result.skeleton.bones.size(); ++boneIndex) {
                 const SkeletonBone& bone = result.skeleton.bones[boneIndex];
                 const ufbx_node* sourceNode = boneNodes[bone.id - 1U];
-                if (sourceNode->typed_id >= evaluated->nodes.count) return Fail<SkeletalMeshFbxImportResult>(error,
-                    "Skeletal FBX animation evaluation returned an incompatible node table.");
+                const ufbx_node* sourceParent = sourceNode->parent != nullptr && jointIndex.contains(sourceNode->parent)
+                    ? sourceNode->parent : nullptr;
+                const ufbx_matrix sourceWorld = requiresExactSceneEvaluation
+                    ? evaluated->nodes.data[sourceNode->typed_id]->node_to_world
+                    : evaluateWorld(evaluateWorld, sourceNode);
+                ufbx_matrix sourceParentWorldStorage{};
+                const ufbx_matrix* sourceParentWorld = nullptr;
+                if (sourceParent != nullptr) {
+                    sourceParentWorldStorage = requiresExactSceneEvaluation
+                        ? evaluated->nodes.data[sourceParent->typed_id]->node_to_world
+                        : evaluateWorld(evaluateWorld, sourceParent);
+                    sourceParentWorld = &sourceParentWorldStorage;
+                }
+                const ufbx_matrix localMatrix = RelativeMatrix(sourceWorld, sourceParentWorld);
                 tracks[boneIndex].keyframes.push_back({
                     .timeSeconds = static_cast<float>(time - stack->time_begin),
-                    .transform = Transform(evaluated->nodes.data[sourceNode->typed_id]->local_transform),
+                    .transform = Transform(localMatrix),
                 });
             }
         }
@@ -368,6 +442,11 @@ std::optional<SkeletalMeshFbxImportResult> SkeletalMeshFbxImporter::Import(
     ufbx_load_opts loadOptions{};
     loadOptions.target_axes = ufbx_axes_left_handed_y_up;
     loadOptions.target_unit_meters = 1.0;
+    // An explicit mirror axis keeps the handedness conversion as a reflection
+    // on geometry. Without it ufbx represents the reflection as a negative
+    // uniform root scale plus a 180-degree rotation, which turns Y-up rigs
+    // upside down when MODIFY_GEOMETRY bakes that root scale into vertices.
+    loadOptions.handedness_conversion_axis = UFBX_MIRROR_AXIS_Z;
     loadOptions.space_conversion = UFBX_SPACE_CONVERSION_MODIFY_GEOMETRY;
     loadOptions.generate_missing_normals = true;
     ufbx_error loadError{};

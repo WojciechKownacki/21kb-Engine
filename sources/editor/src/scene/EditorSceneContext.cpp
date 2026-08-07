@@ -136,6 +136,7 @@
 #include <optional>
 #include <span>
 #include <sstream>
+#include <stdexcept>
 #include <system_error>
 #include <unordered_set>
 #include <utility>
@@ -1215,6 +1216,9 @@ EditorSceneContext::EditorSceneContext()
 }
 
 EditorSceneContext::~EditorSceneContext() {
+    if (assetImportWorker_.joinable()) {
+        assetImportWorker_.join();
+    }
     // Scene shutdown dispatches the script Destroyed lifecycle and scripts may
     // legitimately call the editor-provided Log function from that callback.
     // Destroy the scene explicitly while console_ is still alive; the default
@@ -2797,6 +2801,91 @@ bool EditorSceneContext::ImportAssetFiles(
         console_.Error("Assets", AssetErrorOr(scene_->Assets().Manager(), "Asset import failed."));
     }
     return report.ImportedCount() > 0U;
+}
+
+bool EditorSceneContext::BeginAssetImport(
+    std::span<const std::filesystem::path> sourceFiles,
+    const std::filesystem::path& destinationVirtualFolder,
+    const kb::assets::AssetImportOptions& options) {
+    if (sourceFiles.empty()) return false;
+    if (assetImportWorker_.joinable()) {
+        console_.Warning("Assets", "An asset import is already running.");
+        return false;
+    }
+
+    const std::vector<std::filesystem::path> files{ sourceFiles.begin(), sourceFiles.end() };
+    const std::filesystem::path projectRoot = EditorProjectPaths::ProjectRoot();
+    assetImportRunning_.store(true, std::memory_order_release);
+    console_.Info("Assets", "Import started in background for " + std::to_string(files.size()) + " file(s).");
+    try {
+        assetImportWorker_ = std::thread{
+            [this, files, destinationVirtualFolder, options, projectRoot]() mutable {
+                kb::assets::AssetImportResult report{};
+                try {
+                    kb::scene::Scene importScene{ kb::scene::SceneMode::Runtime };
+                    if (!importScene.Assets().MountProject(projectRoot)) {
+                        throw std::runtime_error{ "The project asset mount could not be opened by the import worker." };
+                    }
+                    RegisterEditorSceneDocumentAssetLoaders(importScene);
+                    static_cast<void>(importScene.Assets().Discover());
+                    EditorAssetBrowserState workerBrowser;
+                    report = EditorSceneAssetBrowserCommands::ImportFilesWithReport(
+                        importScene, workerBrowser, files, destinationVirtualFolder, options);
+                } catch (const std::exception& error) {
+                    report.items.reserve(files.size());
+                    for (const std::filesystem::path& file : files) {
+                        report.items.push_back(kb::assets::AssetImportItemResult{
+                            .sourcePath = file,
+                            .category = kb::assets::AssetImportCategory::Model,
+                            .status = kb::assets::AssetImportItemStatus::Failed,
+                            .error = std::string{ "Background import failed: " } + error.what(),
+                        });
+                    }
+                }
+                {
+                    std::lock_guard<std::mutex> lock{ assetImportMutex_ };
+                    completedAssetImport_ = std::move(report);
+                }
+                assetImportRunning_.store(false, std::memory_order_release);
+            }
+        };
+    } catch (const std::exception& error) {
+        assetImportRunning_.store(false, std::memory_order_release);
+        console_.Error("Assets", std::string{ "Asset import worker could not start: " } + error.what());
+        return false;
+    }
+    return true;
+}
+
+std::size_t EditorSceneContext::PumpAssetImportResults() {
+    std::optional<kb::assets::AssetImportResult> completed;
+    {
+        std::lock_guard<std::mutex> lock{ assetImportMutex_ };
+        if (!completedAssetImport_.has_value()) return 0U;
+        completed = std::move(completedAssetImport_);
+        completedAssetImport_.reset();
+    }
+    if (assetImportWorker_.joinable()) assetImportWorker_.join();
+
+    static_cast<void>(scene_->Assets().Discover());
+    LogAssetImportReport(console_, *completed, assetBrowser_.SelectedFolder());
+    for (const kb::assets::AssetImportItemResult& item : completed->items) {
+        if (!item.Succeeded()) continue;
+        if (const kb::assets::AssetMetadata* metadata =
+                scene_->Assets().Manager().Registry().FindByPath(item.virtualPath);
+            metadata != nullptr) {
+            static_cast<void>(assetBrowser_.SelectAsset(metadata->id, scene_->Assets().Manager()));
+            break;
+        }
+    }
+    if (completed->ImportedCount() == 0U) {
+        console_.Error("Assets", AssetErrorOr(scene_->Assets().Manager(), "Asset import failed."));
+    }
+    return completed->items.size();
+}
+
+bool EditorSceneContext::AssetImportInProgress() const noexcept {
+    return assetImportRunning_.load(std::memory_order_acquire);
 }
 
 bool EditorSceneContext::ToggleHierarchyRowExpanded(std::size_t rowIndex) {
