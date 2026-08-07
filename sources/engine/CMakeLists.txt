@@ -234,6 +234,9 @@ add_library(kb_engine STATIC
     include/engine/scene/SkeletalMeshGltfImporter.hpp
     include/engine/scene/SkeletalMeshGltfImportPlanner.hpp
     include/engine/scene/SkeletalMeshGltfImportPublisher.hpp
+    include/engine/scene/SkeletalMeshFbxImporter.hpp
+    include/engine/scene/SkeletalMeshFbxImportPlanner.hpp
+    include/engine/scene/SkeletalMeshFbxImportPublisher.hpp
     include/engine/scene/SkeletalMeshAssetIO.hpp
     include/engine/scene/SkeletalMeshAssetLoader.hpp
     include/engine/scene/UIAssets.hpp
@@ -606,6 +609,9 @@ add_library(kb_engine STATIC
     src/scene/SkeletalMeshGltfImporter.cpp
     src/scene/SkeletalMeshGltfImportPlanner.cpp
     src/scene/SkeletalMeshGltfImportPublisher.cpp
+    src/scene/SkeletalMeshFbxImporter.cpp
+    src/scene/SkeletalMeshFbxImportPlanner.cpp
+    src/scene/SkeletalMeshFbxImportPublisher.cpp
     src/scene/SkeletalMeshAssetIO.cpp
     src/scene/SkeletalMeshAssetLoader.cpp
     src/scene/TimelineAssetIO.cpp
@@ -1435,6 +1441,7 @@ target_link_libraries(kb_engine
     PRIVATE
         flecs::flecs_static
         kb_lua
+        kb_ufbx
 )
 
 if(KB_ENGINE_ENABLE_NATIVE_AVX2)

@@ -338,9 +338,17 @@ void AppendAudioListener(SceneComponents components, SceneEntity entity, const s
         return;
     }
     if (!expected.has_value()) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "audioListener.priority", std::to_string(actual->priority), ScenePrefabOverrideFlag::AudioListener);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "audioListener.localUser", std::to_string(actual->localUser.value), ScenePrefabOverrideFlag::AudioListener);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "audioListener.primary", ScenePrefabOverrideValueFormatter::ToString(actual->primary), ScenePrefabOverrideFlag::AudioListener);
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "audioListener.enabled", ScenePrefabOverrideValueFormatter::ToString(actual->enabled), ScenePrefabOverrideFlag::AudioListener);
         return;
+    }
+    if (actual->priority != expected->priority) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "audioListener.priority", std::to_string(actual->priority), ScenePrefabOverrideFlag::AudioListener);
+    }
+    if (actual->localUser != expected->localUser) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "audioListener.localUser", std::to_string(actual->localUser.value), ScenePrefabOverrideFlag::AudioListener);
     }
     if (actual->primary != expected->primary) {
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "audioListener.primary", ScenePrefabOverrideValueFormatter::ToString(actual->primary), ScenePrefabOverrideFlag::AudioListener);

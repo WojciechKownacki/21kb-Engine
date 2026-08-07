@@ -51,6 +51,18 @@ miniaudio can be used under either license option documented in its license
 file. If the MIT No Attribution option is chosen, no attribution is required by
 the license text.
 
+## ufbx
+
+- Repository: https://github.com/ufbx/ufbx
+- Local path: `third_party/ufbx`
+- Revision: `fcc5d6ba444cfd3eb80677dba5e37e493941abe5`
+- License selected: MIT
+- License file: `third_party/ufbx/LICENSE`
+
+ufbx is supplied as its upstream single-file loader (`ufbx.c` and `ufbx.h`).
+The MIT copyright and permission notice must be included in all copies or
+substantial portions of the software.
+
 ## Jolt Physics
 
 - Repository: https://github.com/jrouwe/JoltPhysics

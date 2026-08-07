@@ -102,7 +102,7 @@ namespace {
 }
 
 [[nodiscard]] bool Equal(const AudioListenerComponent& lhs, const AudioListenerComponent& rhs) noexcept {
-    return lhs.primary == rhs.primary
+    return lhs.priority == rhs.priority && lhs.localUser == rhs.localUser && lhs.primary == rhs.primary
         && lhs.enabled == rhs.enabled;
 }
 

@@ -207,7 +207,7 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
     }
     if ((componentBits & AudioListenerBit) != 0U) {
         AudioListenerComponent audioListener;
-        if (!SceneAssetAudioComponentCodec::ReadListener(input, audioListener)) {
+        if (!SceneAssetAudioComponentCodec::ReadListener(input, fileVersion, audioListener)) {
             return false;
         }
         output.audioListener = audioListener;

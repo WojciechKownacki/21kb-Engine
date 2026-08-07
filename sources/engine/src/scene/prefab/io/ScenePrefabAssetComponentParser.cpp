@@ -547,10 +547,14 @@ template <typename T>
     }
 
     AudioListenerComponent audioListener;
-    if (!ParseOptionalBool(fields, "audioListener.primary", audioListener.primary)
+    std::uint32_t localUser = 0U;
+    if (!ParseOptionalField(fields, "audioListener.priority", audioListener.priority)
+        || !ParseOptionalField(fields, "audioListener.localUser", localUser)
+        || !ParseOptionalBool(fields, "audioListener.primary", audioListener.primary)
         || !ParseOptionalBool(fields, "audioListener.enabled", audioListener.enabled)) {
         return false;
     }
+    audioListener.localUser = kb::input::LocalUserId{ localUser };
 
     components.audioListener = audioListener;
     return true;

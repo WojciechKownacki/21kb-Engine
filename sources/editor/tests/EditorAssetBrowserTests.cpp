@@ -377,6 +377,49 @@ void RunImportCommandReturnsMaterialTextureReportTest() {
     ResetTempRoot();
 }
 
+void WriteSkeletalGltfImportFixture(const std::filesystem::path& folder) {
+    std::error_code error;
+    std::filesystem::create_directories(folder, error);
+    const std::array<float, 9U> positions{ 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F };
+    const std::array<std::uint16_t, 12U> joints{ 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 1U, 0U, 0U, 0U };
+    const std::array<float, 12U> weights{ 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F };
+    const std::array<std::uint16_t, 3U> indices{ 0U, 1U, 2U };
+    const std::array<float, 32U> inverseBinds{
+        1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F,
+        1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, -1.0F, 0.0F, 1.0F,
+    };
+    std::ofstream binary{ folder / "Robot.bin", std::ios::binary | std::ios::trunc };
+    binary.write(reinterpret_cast<const char*>(positions.data()), sizeof(positions));
+    binary.write(reinterpret_cast<const char*>(joints.data()), sizeof(joints));
+    binary.write(reinterpret_cast<const char*>(weights.data()), sizeof(weights));
+    binary.write(reinterpret_cast<const char*>(indices.data()), sizeof(indices));
+    binary.write(reinterpret_cast<const char*>(inverseBinds.data()), sizeof(inverseBinds));
+    WriteTextFile(folder / "Robot.gltf", R"({"asset":{"version":"2.0"},"buffers":[{"uri":"Robot.bin","byteLength":242}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24},{"buffer":0,"byteOffset":60,"byteLength":48},{"buffer":0,"byteOffset":108,"byteLength":6},{"buffer":0,"byteOffset":114,"byteLength":128}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"MAT4"}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3}]}],"nodes":[{"name":"Root","children":[1]},{"name":"Spine","translation":[0,1,0]},{"mesh":0,"skin":0}],"skins":[{"joints":[0,1],"inverseBindMatrices":4}]})");
+}
+
+void RunImportCommandPublishesSkeletalGltfTest() {
+    ResetTempRoot();
+    const std::filesystem::path projectRoot = TempRoot() / "SkeletalProject";
+    const std::filesystem::path sourceRoot = TempRoot() / "SkeletalSources";
+    WriteSkeletalGltfImportFixture(sourceRoot);
+
+    kb::scene::Scene scene;
+    kb::editor::EditorAssetBrowserState browser;
+    kb::editor::tests::Require(scene.Assets().MountProject(projectRoot), "Skeletal import command test could not mount project assets");
+    kb::assets::AssetImportOptions options{};
+    options.mesh.importSkeletalMesh = true;
+    const std::array<std::filesystem::path, 1U> files{ sourceRoot / "Robot.gltf" };
+    const kb::assets::AssetImportResult report =
+        kb::editor::EditorSceneAssetBrowserCommands::ImportFilesWithReport(scene, browser, files, "/Game/Characters", options);
+    const kb::assets::AssetMetadata* mesh = scene.Assets().Manager().Registry().FindByPath("/Game/Characters/Robot.kbskeletalmesh");
+    const kb::assets::AssetMetadata* skeleton = scene.Assets().Manager().Registry().FindByPath("/Game/Characters/Robot.kbskeleton");
+    kb::editor::tests::Require(report.Succeeded() && report.CreatedCount() == 1U && mesh != nullptr &&
+            mesh->type == "SkeletalMesh" && skeleton != nullptr && skeleton->type == "Skeleton" &&
+            browser.SelectedAsset() == mesh->id,
+        "Skeletal glTF import command did not publish and select the Skeletal Mesh and Skeleton assets");
+    ResetTempRoot();
+}
+
 #if defined(_WIN32)
 [[nodiscard]] kb::assets::AssetMetadata MaterialMetadata(std::string name, const std::filesystem::path& path, std::uint64_t contentHash) {
     kb::assets::AssetMetadata metadata = Metadata(std::move(name), "RenderMaterial", "/Game/Materials/ThumbnailProbe.kbmat");
@@ -765,6 +808,7 @@ void RunEditorAssetBrowserTests() {
     RunDependencySafetyBlocksRenameAndDeleteTest();
     RunSearchTextShortcutStateTest();
     RunImportCommandReturnsMaterialTextureReportTest();
+    RunImportCommandPublishesSkeletalGltfTest();
 #if defined(_WIN32)
     RunProjectFilesEdgeToEdgeLayoutTest();
     RunTileHitTestUsesExactGridGeometryTest();
