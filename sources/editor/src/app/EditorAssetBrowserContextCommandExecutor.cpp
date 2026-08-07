@@ -29,7 +29,7 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
         const std::optional<EditorAssetImportSelection> selection = EditorAssetImportDialog::Open(GetActiveWindow());
         return !selection.has_value() || selection->files.empty()
             ? true
-            : sceneContext.ImportAssetFiles(selection->files, destinationFolder, selection->options);
+            : sceneContext.BeginAssetImport(selection->files, destinationFolder, selection->options);
     }
     case EditorAssetContextCommand::NewFolder:
         if (targetKind == EditorAssetContextTargetKind::Folder) {

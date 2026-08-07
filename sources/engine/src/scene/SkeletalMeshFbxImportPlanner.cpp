@@ -31,7 +31,7 @@ std::optional<SkeletalMeshFbxImportPlan> SkeletalMeshFbxImportPlanner::Plan(
     if (normalizedFolder.empty() || normalizedFolder.front() != '/') return Fail<SkeletalMeshFbxImportPlan>(error,
         "Skeletal FBX import destination must be a mounted virtual folder.");
     std::string importError;
-    const auto candidate = SkeletalMeshFbxImporter::Import(sourcePath, kPlanningSkeletonId, options, &importError);
+    auto candidate = SkeletalMeshFbxImporter::Import(sourcePath, kPlanningSkeletonId, options, &importError);
     if (!candidate) return Fail<SkeletalMeshFbxImportPlan>(error, std::move(importError));
     const std::uint64_t signature = SkeletonCompatibilitySignature(candidate->skeleton);
     if (signature == 0U) return Fail<SkeletalMeshFbxImportPlan>(error,
@@ -62,10 +62,10 @@ std::optional<SkeletalMeshFbxImportPlan> SkeletalMeshFbxImportPlanner::Plan(
         selectedPath = candidatePath;
         selected = kb::assets::MakeAssetId(kb::assets::NormalizeAssetPath(selectedPath) + ":" + kSkeletonAssetType);
     }
-    const auto imported = SkeletalMeshFbxImporter::Import(sourcePath, selected.value, options, &importError);
-    if (!imported) return Fail<SkeletalMeshFbxImportPlan>(error, std::move(importError));
+    candidate->mesh.skeletonAssetId = selected.value;
+    for (AnimationClip& clip : candidate->clips) clip.targetSkeletonAssetId = selected.value;
     return SkeletalMeshFbxImportPlan{
-        .imported = std::move(*imported), .skeletonAssetId = selected,
+        .imported = std::move(*candidate), .skeletonAssetId = selected,
         .skeletonVirtualPath = std::move(selectedPath),
         .meshVirtualPath = std::filesystem::path{ normalizedFolder } /
             (sourcePath.stem().string() + kSkeletalMeshAssetExtension),

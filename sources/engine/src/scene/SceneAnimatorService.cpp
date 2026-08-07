@@ -471,6 +471,48 @@ void InitializePoseBuffers(AnimatorInstanceSkeleton& derived) {
     derived.currentPose = 0U;
 }
 
+[[nodiscard]] const AnimatorInstanceSkeleton* FindSkeletonPose(
+    const SceneState& state, SceneEntity entity) noexcept {
+    if (const AnimatorRuntimeRecord* animator = Find(state, entity);
+        animator != nullptr && animator->skeleton.has_value()) {
+        return &*animator->skeleton;
+    }
+    const auto binding = state.skeletonBindingPoses.find(entity.Id());
+    return binding != state.skeletonBindingPoses.end() && binding->second.entity == entity
+        ? &binding->second.skeleton
+        : nullptr;
+}
+
+[[nodiscard]] std::optional<AnimatorInstanceSkeleton> LoadSkeletonBindingPose(
+    Scene& scene, const SkeletonBindingComponent& authoredBinding) {
+    if (!authoredBinding.enabled || !IsSkeletonBindingComponentValid(authoredBinding)) {
+        return std::nullopt;
+    }
+    auto skeleton = scene.Assets().Manager().Load<SkeletonAsset>(
+        kb::assets::AssetId{ authoredBinding.skeletonAssetId });
+    if (!skeleton.IsLoaded() ||
+        SkeletonCompatibilitySignature(*skeleton) != authoredBinding.skeletonCompatibilitySignature ||
+        skeleton->bones.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+        return std::nullopt;
+    }
+
+    AnimatorInstanceSkeleton derived{};
+    derived.asset = std::move(skeleton);
+    derived.loadGeneration = scene.Assets().Manager().LoadGeneration(derived.asset.Id());
+    derived.compatibilitySignature = authoredBinding.skeletonCompatibilitySignature;
+    derived.boneIds.reserve(derived.asset->bones.size());
+    derived.boneIndices.reserve(derived.asset->bones.size());
+    for (std::size_t index = 0U; index < derived.asset->bones.size(); ++index) {
+        const SkeletonBoneId boneId = derived.asset->bones[index].id;
+        derived.boneIds.push_back(boneId);
+        if (!derived.boneIndices.emplace(boneId, static_cast<std::uint32_t>(index)).second) {
+            return std::nullopt;
+        }
+    }
+    InitializePoseBuffers(derived);
+    return derived;
+}
+
 [[nodiscard]] bool BindSkeletalMotion(
     Scene& scene, AnimatorRuntimeRecord& instance,
     AnimatorRuntimeState::Motion& motion) {
@@ -487,36 +529,10 @@ void InitializePoseBuffers(AnimatorInstanceSkeleton& derived) {
 
     if (!instance.skeleton.has_value()) {
         if (!instance.bindings.empty()) return false;
-        auto skeleton = scene.Assets().Manager().Load<SkeletonAsset>(
-            kb::assets::AssetId{ authoredBinding->skeletonAssetId });
-        if (!skeleton.IsLoaded() ||
-            SkeletonCompatibilitySignature(*skeleton) !=
-                authoredBinding->skeletonCompatibilitySignature ||
-            skeleton->bones.size() >
-                static_cast<std::size_t>(
-                    std::numeric_limits<std::uint32_t>::max())) {
-            return false;
-        }
-
-        AnimatorInstanceSkeleton derived{};
-        derived.asset = std::move(skeleton);
-        derived.loadGeneration = scene.Assets().Manager().LoadGeneration(
-            derived.asset.Id());
-        derived.compatibilitySignature =
-            authoredBinding->skeletonCompatibilitySignature;
-        derived.boneIds.reserve(derived.asset->bones.size());
-        derived.boneIndices.reserve(derived.asset->bones.size());
-        for (std::size_t index = 0U; index < derived.asset->bones.size();
-             ++index) {
-            const SkeletonBoneId boneId = derived.asset->bones[index].id;
-            derived.boneIds.push_back(boneId);
-            if (!derived.boneIndices.emplace(
-                    boneId, static_cast<std::uint32_t>(index)).second) {
-                return false;
-            }
-        }
-        InitializePoseBuffers(derived);
-        instance.skeleton.emplace(std::move(derived));
+        std::optional<AnimatorInstanceSkeleton> derived =
+            LoadSkeletonBindingPose(scene, *authoredBinding);
+        if (!derived.has_value()) return false;
+        instance.skeleton.emplace(std::move(*derived));
     } else if (instance.skeleton->asset.Id().value !=
                    clip.targetSkeletonAssetId ||
                instance.skeleton->compatibilitySignature !=
@@ -2239,20 +2255,25 @@ std::span<const AnimatorParameterValue> SceneAnimatorService::Parameters(const S
 
 std::uint64_t SceneAnimatorService::RuntimeBindingGeneration(
     const Scene& scene, SceneEntity entity) noexcept {
-    const AnimatorRuntimeRecord* record =
-        Find(SceneAccess::State(scene), entity);
-    return record == nullptr ? 0U : record->runtimeBindingGeneration;
+    const SceneState& state = SceneAccess::State(scene);
+    const AnimatorRuntimeRecord* record = Find(state, entity);
+    if (record != nullptr && record->skeleton.has_value()) {
+        return record->runtimeBindingGeneration;
+    }
+    const auto binding = state.skeletonBindingPoses.find(entity.Id());
+    if (binding != state.skeletonBindingPoses.end() && binding->second.entity == entity) {
+        return binding->second.runtimeBindingGeneration;
+    }
+    return record != nullptr ? record->runtimeBindingGeneration : 0U;
 }
 
 std::optional<AnimatorInstanceSkeletonView>
 SceneAnimatorService::InstanceSkeleton(
     const Scene& scene, SceneEntity entity) noexcept {
-    const AnimatorRuntimeRecord* instance =
-        Find(SceneAccess::State(scene), entity);
-    if (instance == nullptr || !instance->skeleton.has_value()) {
-        return std::nullopt;
-    }
-    const AnimatorInstanceSkeleton& skeleton = *instance->skeleton;
+    const AnimatorInstanceSkeleton* resolved =
+        FindSkeletonPose(SceneAccess::State(scene), entity);
+    if (resolved == nullptr) return std::nullopt;
+    const AnimatorInstanceSkeleton& skeleton = *resolved;
     const AnimatorInstanceSkeleton::PoseBuffer& current =
         skeleton.poses[skeleton.currentPose];
     const AnimatorInstanceSkeleton::PoseBuffer& previous =
@@ -2290,16 +2311,16 @@ SceneAnimatorService::AttachmentTransform(
     const Scene& scene, SceneEntity entity, SkeletonBoneId boneId,
     const LocalTransform& localOffset) noexcept {
     if (boneId == 0U || !IsFiniteTransform(localOffset)) return std::nullopt;
-    const AnimatorRuntimeRecord* instance = Find(SceneAccess::State(scene), entity);
+    const AnimatorInstanceSkeleton* skeleton =
+        FindSkeletonPose(SceneAccess::State(scene), entity);
     const TransformComponent* owner = scene.Transforms().TryGet(entity);
-    if (instance == nullptr || !instance->skeleton.has_value() || owner == nullptr) {
+    if (skeleton == nullptr || owner == nullptr) {
         return std::nullopt;
     }
-    const AnimatorInstanceSkeleton& skeleton = *instance->skeleton;
-    const auto bone = std::find(skeleton.boneIds.begin(), skeleton.boneIds.end(), boneId);
-    if (bone == skeleton.boneIds.end()) return std::nullopt;
-    const std::size_t index = static_cast<std::size_t>(bone - skeleton.boneIds.begin());
-    const AnimatorInstanceSkeleton::PoseBuffer& pose = skeleton.poses[skeleton.currentPose];
+    const auto bone = std::find(skeleton->boneIds.begin(), skeleton->boneIds.end(), boneId);
+    if (bone == skeleton->boneIds.end()) return std::nullopt;
+    const std::size_t index = static_cast<std::size_t>(bone - skeleton->boneIds.begin());
+    const AnimatorInstanceSkeleton::PoseBuffer& pose = skeleton->poses[skeleton->currentPose];
     if (index >= pose.component.positions.size() || index >= pose.component.rotations.size() ||
         index >= pose.component.scales.size()) {
         return std::nullopt;
@@ -2319,9 +2340,10 @@ std::optional<AnimatorAttachmentTransform>
 SceneAnimatorService::SocketTransform(
     const Scene& scene, SceneEntity entity, std::string_view socketName) noexcept {
     if (socketName.empty()) return std::nullopt;
-    const AnimatorRuntimeRecord* instance = Find(SceneAccess::State(scene), entity);
-    if (instance == nullptr || !instance->skeleton.has_value()) return std::nullopt;
-    const SkeletonAsset& skeleton = *instance->skeleton->asset;
+    const AnimatorInstanceSkeleton* pose =
+        FindSkeletonPose(SceneAccess::State(scene), entity);
+    if (pose == nullptr) return std::nullopt;
+    const SkeletonAsset& skeleton = *pose->asset;
     const auto socket = std::find_if(
         skeleton.sockets.begin(), skeleton.sockets.end(),
         [socketName](const SkeletonSocket& value) { return value.name == socketName; });
@@ -2537,6 +2559,7 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
     if (scene.Entities().Count() == 0U) {
         SceneState& state = SceneAccess::State(scene);
         state.animators.clear();
+        state.skeletonBindingPoses.clear();
         state.pendingAnimationEvents.clear();
         return;
     }
@@ -2544,7 +2567,12 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
         SceneEntity entity{};
         Animator animator{};
     };
+    struct AuthoredSkeletonBinding {
+        SceneEntity entity{};
+        SkeletonBindingComponent binding{};
+    };
     std::vector<AuthoredAnimator> authored;
+    std::vector<AuthoredSkeletonBinding> authoredSkeletonBindings;
     std::vector<SceneEntity> pending = scene.Hierarchy().RootEntities();
     while (!pending.empty()) {
         const SceneEntity entity = pending.back();
@@ -2553,6 +2581,10 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
         pending.insert(pending.end(), children.begin(), children.end());
         if (const Animator* animator = SceneAccess::State(scene).componentStorage.Animators().TryGet(entity)) {
             authored.push_back(AuthoredAnimator{ .entity = entity, .animator = *animator });
+        }
+        if (const SkeletonBindingComponent* binding =
+                SceneAccess::State(scene).componentStorage.SkeletonBindings().TryGet(entity)) {
+            authoredSkeletonBindings.push_back(AuthoredSkeletonBinding{ .entity = entity, .binding = *binding });
         }
     }
 
@@ -2646,6 +2678,44 @@ void SceneAnimatorService::SyncComponents(Scene& scene) {
         const Animator* component = state.componentStorage.Animators().TryGet(it->second.entity);
         if (component == nullptr || !component->enabled || !retained.contains(it->first)) {
             it = state.animators.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    std::map<std::uint64_t, bool> retainedSkeletonBindings;
+    for (const AuthoredSkeletonBinding& value : authoredSkeletonBindings) {
+        if (!value.binding.enabled) continue;
+        if (!IsSkeletonBindingComponentValid(value.binding)) {
+            throw std::runtime_error("Enabled SkeletonBinding component is invalid");
+        }
+        retainedSkeletonBindings[value.entity.Id()] = true;
+        auto existing = state.skeletonBindingPoses.find(value.entity.Id());
+        const bool current = existing != state.skeletonBindingPoses.end() &&
+            existing->second.entity == value.entity &&
+            existing->second.skeleton.asset.Id().value == value.binding.skeletonAssetId &&
+            existing->second.skeleton.compatibilitySignature == value.binding.skeletonCompatibilitySignature &&
+            existing->second.skeleton.loadGeneration == scene.Assets().Manager().LoadGeneration(
+                kb::assets::AssetId{ value.binding.skeletonAssetId });
+        if (current) continue;
+
+        std::optional<AnimatorInstanceSkeleton> pose = LoadSkeletonBindingPose(scene, value.binding);
+        if (!pose.has_value()) {
+            state.skeletonBindingPoses.erase(value.entity.Id());
+            throw std::runtime_error("SkeletonBinding component could not load its compatible skeleton");
+        }
+        if (state.nextAnimatorRuntimeBindingGeneration == std::numeric_limits<std::uint64_t>::max()) {
+            throw std::overflow_error("Skeleton binding runtime generation exhausted");
+        }
+        state.skeletonBindingPoses.insert_or_assign(value.entity.Id(), SkeletonBindingRuntimePose{
+            .entity = value.entity,
+            .runtimeBindingGeneration = state.nextAnimatorRuntimeBindingGeneration++,
+            .skeleton = std::move(*pose),
+        });
+    }
+    for (auto it = state.skeletonBindingPoses.begin(); it != state.skeletonBindingPoses.end();) {
+        if (!scene.Entities().IsAlive(it->second.entity) || !retainedSkeletonBindings.contains(it->first)) {
+            it = state.skeletonBindingPoses.erase(it);
         } else {
             ++it;
         }

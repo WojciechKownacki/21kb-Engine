@@ -44,6 +44,7 @@
 #include "rendering/material_graph/MaterialGraphInteractionPolicy.hpp"
 
 #include <array>
+#include <atomic>
 #include <string>
 #include <string_view>
 #include <cstddef>
@@ -51,8 +52,10 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -385,6 +388,9 @@ public:
     [[nodiscard]] bool ImportAssetFiles(std::span<const std::filesystem::path> sourceFiles);
     [[nodiscard]] bool ImportAssetFiles(std::span<const std::filesystem::path> sourceFiles, const std::filesystem::path& destinationVirtualFolder);
     [[nodiscard]] bool ImportAssetFiles(std::span<const std::filesystem::path> sourceFiles, const std::filesystem::path& destinationVirtualFolder, const kb::assets::AssetImportOptions& options);
+    [[nodiscard]] bool BeginAssetImport(std::span<const std::filesystem::path> sourceFiles, const std::filesystem::path& destinationVirtualFolder, const kb::assets::AssetImportOptions& options);
+    [[nodiscard]] std::size_t PumpAssetImportResults();
+    [[nodiscard]] bool AssetImportInProgress() const noexcept;
 
     [[nodiscard]] bool ToggleHierarchyRowExpanded(std::size_t rowIndex);
     [[nodiscard]] bool ToggleEntityVisibility(kb::scene::SceneEntity entity);
@@ -1041,6 +1047,10 @@ private:
     std::filesystem::path currentScenePath_;
     EditorAssetBrowserState assetBrowser_;
     EditorConsoleState console_;
+    std::mutex assetImportMutex_;
+    std::thread assetImportWorker_;
+    std::optional<kb::assets::AssetImportResult> completedAssetImport_;
+    std::atomic_bool assetImportRunning_{ false };
     EditorSceneViewportStateStore viewportState_;
     AnimationPreviewContext animationPreview_;
     std::unique_ptr<EditorAnimationPreviewScene> animationPreviewScene_;

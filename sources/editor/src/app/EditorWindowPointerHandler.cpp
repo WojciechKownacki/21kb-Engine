@@ -15,12 +15,37 @@
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 
 #include <algorithm>
 #include <optional>
 #include <windowsx.h>
 
 namespace kb::editor {
+namespace {
+
+[[nodiscard]] bool PointInRect(const RECT& rect, int x, int y) noexcept {
+    return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+}
+
+[[nodiscard]] std::optional<RECT> SkeletalPreviewViewportAt(
+    HWND messageWindow,
+    HWND mainWindow,
+    const EditorDockModel& dockModel,
+    const EditorFloatingWindowManager& floatingWindows,
+    const EditorMetrics& metrics,
+    const EditorSceneContext& sceneContext,
+    int x,
+    int y) {
+    if (!sceneContext.HasSkeletalMeshEditorAsset()) return std::nullopt;
+    const std::optional<RECT> content = EditorPanelContentResolver::Resolve(
+        DockPanelKind::SkeletalMeshEditor, messageWindow, mainWindow, dockModel, floatingWindows, metrics);
+    if (!content.has_value()) return std::nullopt;
+    const RECT viewport = SkeletalMeshEditorPanelLayoutResolver::Resolve(*content).viewport;
+    return PointInRect(viewport, x, y) ? std::optional<RECT>{ viewport } : std::nullopt;
+}
+
+} // namespace
 
 EditorWindowPointerHandler::EditorWindowPointerHandler(
     HWND mainWindow,
@@ -51,6 +76,13 @@ EditorWindowPointerHandler::EditorWindowPointerHandler(
 LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPARAM lparam) {
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
+    if ((GetKeyState(VK_MENU) & 0x8000) != 0 &&
+        SkeletalPreviewViewportAt(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, x, y).has_value()) {
+        sceneContext_.AnimationPreviewCamera().BeginNavigation(EditorViewportCameraNavigationMode::Orbit, x, y);
+        SetCapture(messageWindow);
+        sceneViewport_.RequestPresent();
+        return 0;
+    }
     if (sceneContext_.Inspector().IsAddComponentBrowserOpen()) {
         bool addComponentButtonClicked = false;
         const std::optional<RECT> inspectorContent =
@@ -85,6 +117,12 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPA
 LRESULT EditorWindowPointerHandler::HandleRightButtonDown(HWND messageWindow, LPARAM lparam) {
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
+    if (SkeletalPreviewViewportAt(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, x, y).has_value()) {
+        sceneContext_.AnimationPreviewCamera().BeginNavigation(EditorViewportCameraNavigationMode::Orbit, x, y);
+        SetCapture(messageWindow);
+        sceneViewport_.RequestPresent();
+        return 0;
+    }
     EditorRightButtonDownRouter rightButtonDown(mainWindow_, dockModel_, floatingWindows_, sceneContext_, sceneViewport_, pointerDrag_, metrics_);
     rightButtonDown.Handle(messageWindow, x, y);
     return 0;
@@ -93,6 +131,12 @@ LRESULT EditorWindowPointerHandler::HandleRightButtonDown(HWND messageWindow, LP
 LRESULT EditorWindowPointerHandler::HandleMiddleButtonDown(HWND messageWindow, LPARAM lparam) {
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
+    if (SkeletalPreviewViewportAt(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, x, y).has_value()) {
+        sceneContext_.AnimationPreviewCamera().BeginNavigation(EditorViewportCameraNavigationMode::Pan, x, y);
+        SetCapture(messageWindow);
+        sceneViewport_.RequestPresent();
+        return 0;
+    }
     EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
     if (sceneCamera.HandleMiddleButtonDown(messageWindow, x, y)) {
         return 0;
@@ -115,6 +159,12 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDoubleClick(HWND messageWind
 LRESULT EditorWindowPointerHandler::HandleMouseMove(HWND messageWindow, WPARAM wparam, LPARAM lparam) {
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
+    if (sceneContext_.AnimationPreviewCamera().IsNavigating()) {
+        static_cast<void>(sceneContext_.AnimationPreviewCamera().UpdatePointer(x, y));
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return 0;
+    }
     const bool leftButtonDown = (wparam & MK_LBUTTON) != 0;
     const bool rightButtonDown = (wparam & MK_RBUTTON) != 0;
     EditorMouseMoveRouter mouseMove(
@@ -134,6 +184,14 @@ LRESULT EditorWindowPointerHandler::HandleMouseMove(HWND messageWindow, WPARAM w
 LRESULT EditorWindowPointerHandler::HandleMouseWheel(HWND messageWindow, WPARAM wparam, LPARAM lparam) {
     POINT point{ GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
     ScreenToClient(messageWindow, &point);
+    if (SkeletalPreviewViewportAt(
+            messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, point.x, point.y).has_value()) {
+        static_cast<void>(sceneContext_.AnimationPreviewCamera().ApplyWheel(
+            static_cast<float>(GET_WHEEL_DELTA_WPARAM(wparam)) / static_cast<float>(WHEEL_DELTA), false));
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return 0;
+    }
     EditorMouseWheelRouter mouseWheel(
         messageWindow,
         mainWindow_,
@@ -151,6 +209,12 @@ LRESULT EditorWindowPointerHandler::HandleMouseWheel(HWND messageWindow, WPARAM 
 }
 
 LRESULT EditorWindowPointerHandler::HandleLeftButtonUp(HWND messageWindow, LPARAM lparam) {
+    if (sceneContext_.AnimationPreviewCamera().IsNavigating()) {
+        sceneContext_.AnimationPreviewCamera().EndNavigation();
+        if (GetCapture() == messageWindow) ReleaseCapture();
+        sceneViewport_.RequestPresent();
+        return 0;
+    }
     if (EditorTerrainService::ToolState().strokeActive) {
         EditorTerrainService::ToolState().strokeActive = false;
         EditorTerrainService::ToolState().heldSculptElapsedSeconds = 0.0F;
@@ -187,6 +251,12 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonUp(HWND messageWindow, LPARA
 }
 
 LRESULT EditorWindowPointerHandler::HandleRightButtonUp(HWND messageWindow, LPARAM lparam) {
+    if (sceneContext_.AnimationPreviewCamera().IsNavigating()) {
+        sceneContext_.AnimationPreviewCamera().EndNavigation();
+        if (GetCapture() == messageWindow) ReleaseCapture();
+        sceneViewport_.RequestPresent();
+        return 0;
+    }
     if (sceneContext_.IsMaterialGraphPanning()) {
         const int x = GET_X_LPARAM(lparam);
         const int y = GET_Y_LPARAM(lparam);
@@ -218,6 +288,12 @@ LRESULT EditorWindowPointerHandler::HandleRightButtonUp(HWND messageWindow, LPAR
 }
 
 LRESULT EditorWindowPointerHandler::HandleMiddleButtonUp(HWND messageWindow) {
+    if (sceneContext_.AnimationPreviewCamera().IsNavigating()) {
+        sceneContext_.AnimationPreviewCamera().EndNavigation();
+        if (GetCapture() == messageWindow) ReleaseCapture();
+        sceneViewport_.RequestPresent();
+        return 0;
+    }
     EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
     if (sceneCamera.HandleButtonUp(messageWindow)) {
         return 0;

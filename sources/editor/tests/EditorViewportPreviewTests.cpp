@@ -223,12 +223,30 @@ void RunAnimationPreviewExactScrubTest() {
     const std::string skeletonLoadFailure = "Animation preview scrub fixture could not load its skeleton: " +
         source.Assets().Manager().LastError();
     kb::editor::tests::Require(sourceSkeleton.IsLoaded(), skeletonLoadFailure.c_str());
-    kb::editor::tests::Require(source.Assets().Manager().Load<kb::scene::SkeletalMeshAsset>(meshMetadata->id).IsLoaded(),
+    const auto sourceMesh = source.Assets().Manager().Load<kb::scene::SkeletalMeshAsset>(meshMetadata->id);
+    kb::editor::tests::Require(sourceMesh.IsLoaded(),
         "Animation preview scrub fixture could not load its skeletal mesh");
     kb::editor::tests::Require(source.Assets().Manager().Load<kb::scene::AnimationClip>(clipMetadata->id).IsLoaded(),
         "Animation preview scrub fixture could not load its clip");
     kb::editor::tests::Require(source.Assets().Manager().Load<kb::scene::AnimatorController>(controllerMetadata->id).IsLoaded(),
         "Animation preview scrub fixture could not load its controller");
+
+    kb::editor::AnimationPreviewContext referenceContext;
+    referenceContext.SetAssets(skeletonId, meshMetadata->id, {}, {});
+    kb::editor::EditorAnimationPreviewScene referencePreview;
+    const kb::scene::Scene& referenceScene = referencePreview.SceneFor(source, referenceContext);
+    const auto sharedPreviewMesh = referenceScene.Assets().Manager().AcquireLoaded<kb::scene::SkeletalMeshAsset>(meshMetadata->id);
+    kb::editor::tests::Require(
+        sharedPreviewMesh.IsLoaded() && sharedPreviewMesh.Shared().get() == sourceMesh.Shared().get(),
+        "Animation preview reparsed an already-loaded skeletal mesh instead of sharing its immutable payload");
+    const auto referencePose = referenceScene.Animators().InstanceSkeleton(referencePreview.PreviewEntity());
+    const kb::scene::DrawD3DeformedGeometryComponent* referenceGeometry =
+        referenceScene.Components().DeformedGeometries().TryGet(referencePreview.PreviewEntity());
+    kb::editor::tests::Require(
+        !referenceScene.Animators().Exists(referencePreview.PreviewEntity()) && referencePose.has_value() &&
+            referencePose->currentComponentPose.positions.size() == skeleton.bones.size() &&
+            referenceGeometry != nullptr && referenceGeometry->enabled,
+        "SkeletonBinding did not expose its reference pose to deformed rendering without an Animator");
 
     kb::editor::AnimationPreviewContext context;
     context.SetAssets(skeletonId, meshMetadata->id, clipMetadata->id, {});
