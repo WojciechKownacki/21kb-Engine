@@ -51,6 +51,25 @@ void RegisterPreviewFloorAsset(kb::assets::AssetManager& manager) {
     }));
 }
 
+template <typename T>
+[[nodiscard]] kb::assets::AssetHandle<T> ShareOrLoadPreviewAsset(
+    const kb::scene::Scene& source,
+    kb::assets::AssetManager& previewAssets,
+    kb::assets::AssetId id) {
+    if (!id.IsValid()) return {};
+    const kb::assets::AssetHandle<T> sourceAsset = source.Assets().Manager().AcquireLoaded<T>(id);
+    if (sourceAsset.IsLoaded()) {
+        // Runtime assets are exposed as immutable handles. PublishRuntimeAsset takes
+        // mutable ownership only to erase the payload type; neither manager exposes a
+        // mutable asset after publication, so both scenes can safely share the payload.
+        std::shared_ptr<T> shared = std::const_pointer_cast<T>(sourceAsset.Shared());
+        if (previewAssets.PublishRuntimeAsset(id, std::move(shared))) {
+            return previewAssets.AcquireLoaded<T>(id);
+        }
+    }
+    return previewAssets.Load<T>(id);
+}
+
 [[nodiscard]] float BoundsRadius(const kb::scene::SkeletalMeshBounds& bounds) noexcept {
     return std::max(0.25F, kb::math::Length(bounds.extents));
 }
@@ -239,15 +258,14 @@ void EditorAnimationPreviewScene::Rebuild(
     RegisterPreviewFloorAsset(scene_->Assets().Manager());
     previewEntity_ = scene_->Entities().CreateEntity(
         kb::scene::SceneObjectDesc{ .name = "Animation Preview" });
+    kb::assets::AssetManager& previewAssets = scene_->Assets().Manager();
     const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> mesh =
-        context.SkeletalMeshAsset().IsValid()
-        ? scene_->Assets().Manager().Load<kb::scene::SkeletalMeshAsset>(context.SkeletalMeshAsset())
-        : kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset>{};
+        ShareOrLoadPreviewAsset<kb::scene::SkeletalMeshAsset>(source, previewAssets, context.SkeletalMeshAsset());
     bool compatible = mesh.IsLoaded();
     std::uint64_t skeletonSignature = 0U;
     if (compatible && context.SkeletonAsset().IsValid()) {
         const kb::assets::AssetHandle<kb::scene::SkeletonAsset> skeleton =
-            scene_->Assets().Manager().Load<kb::scene::SkeletonAsset>(context.SkeletonAsset());
+            ShareOrLoadPreviewAsset<kb::scene::SkeletonAsset>(source, previewAssets, context.SkeletonAsset());
         skeletonSignature = skeleton.IsLoaded() ? kb::scene::SkeletonCompatibilitySignature(*skeleton) : 0U;
         compatible = skeletonSignature != 0U &&
             mesh->skeletonAssetId == context.SkeletonAsset().value &&
@@ -275,7 +293,7 @@ void EditorAnimationPreviewScene::Rebuild(
     if (compatible && context.PoseMode() == AnimationPreviewPoseMode::Animated &&
         !controllerId.IsValid() && context.ClipAsset().IsValid()) {
         const kb::assets::AssetHandle<kb::scene::AnimationClip> clip =
-            scene_->Assets().Manager().Load<kb::scene::AnimationClip>(context.ClipAsset());
+            ShareOrLoadPreviewAsset<kb::scene::AnimationClip>(source, previewAssets, context.ClipAsset());
         compatible = clip.IsLoaded() &&
             clip->targetSkeletonAssetId == context.SkeletonAsset().value &&
             clip->targetSkeletonCompatibilitySignature == skeletonSignature;
