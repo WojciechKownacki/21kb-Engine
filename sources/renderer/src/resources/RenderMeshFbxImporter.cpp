@@ -591,6 +591,14 @@ void AppendTriangle(RenderMeshAssetData& asset, Bounds3 bounds, Vec3 a, Vec3 b, 
         } else {
             asset.materialNames.push_back("Material " + std::to_string(slotIndex + 1U));
         }
+        const std::string& materialName = asset.materialNames.back();
+        for (std::uint32_t bindingIndex = 0U; bindingIndex < desc.materialBindingCount; ++bindingIndex) {
+            const RenderMeshAssetMaterialBinding& binding = desc.materialBindings[bindingIndex];
+            if (binding.materialName == materialName) {
+                asset.materialSlots[slotIndex].defaultMaterialAssetId = binding.materialAssetId;
+                break;
+            }
+        }
     }
     for (std::uint32_t slotIndex = 0U; slotIndex < slotCount; ++slotIndex) {
         const std::uint32_t sectionStart = static_cast<std::uint32_t>(asset.indices32.size());

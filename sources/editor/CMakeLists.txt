@@ -763,6 +763,8 @@ add_executable(kb_editor WIN32
     src/scene/EditorPluginCatalog.cpp
     src/scene/EditorScriptAssetGateway.cpp
     src/scene/EditorSceneAssetBrowserCommands.cpp
+    src/private/scene/EditorMeshImportArtifacts.hpp
+    src/scene/EditorMeshImportArtifacts.cpp
     src/scene/EditorSceneAudioAssetActions.cpp
     src/scene/EditorSceneCommandController.cpp
     src/scene/EditorSceneContext.cpp
@@ -1064,6 +1066,8 @@ if(BUILD_TESTING)
         src/scene/EditorHierarchySelectionState.cpp
         src/scene/EditorPluginCatalog.cpp
         src/scene/EditorSceneAssetBrowserCommands.cpp
+        src/private/scene/EditorMeshImportArtifacts.hpp
+        src/scene/EditorMeshImportArtifacts.cpp
         src/scene/EditorSceneSelectionPivot.cpp
         src/scene/EditorSceneAudioAssetActions.cpp
           src/scene/EditorSceneMaterialAssetActions.cpp

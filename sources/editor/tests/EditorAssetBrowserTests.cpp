@@ -8,7 +8,10 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "scene/EditorSceneAssetBrowserCommands.hpp"
+#include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #if defined(_WIN32)
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "rendering/ProjectFilesAssetIconResolver.hpp"
@@ -420,6 +423,83 @@ void RunImportCommandPublishesSkeletalGltfTest() {
     ResetTempRoot();
 }
 
+void WriteSkeletalGltfMaterialAndTextureFixture(const std::filesystem::path& folder) {
+    WriteSkeletalGltfImportFixture(folder);
+    std::filesystem::path current = std::filesystem::current_path();
+    std::filesystem::path pngFixture;
+    while (!current.empty()) {
+        const std::filesystem::path candidate =
+            current / "third_party/bgfx.cmake/bgfx/examples/runtime/images/SplashScreen.png";
+        if (std::filesystem::is_regular_file(candidate)) {
+            pngFixture = candidate;
+            break;
+        }
+        const std::filesystem::path parent = current.parent_path();
+        if (parent == current) {
+            break;
+        }
+        current = parent;
+    }
+    kb::editor::tests::Require(!pngFixture.empty(), "Skeletal material import PNG fixture was not found");
+    std::error_code copyError;
+    static_cast<void>(std::filesystem::copy_file(
+        pngFixture, folder / "Albedo.png", std::filesystem::copy_options::overwrite_existing, copyError));
+    kb::editor::tests::Require(!copyError, "Skeletal material import PNG fixture could not be copied");
+    WriteTextFile(folder / "Robot.gltf", R"({"asset":{"version":"2.0"},"buffers":[{"uri":"Robot.bin","byteLength":242}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24},{"buffer":0,"byteOffset":60,"byteLength":48},{"buffer":0,"byteOffset":108,"byteLength":6},{"buffer":0,"byteOffset":114,"byteLength":128}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"MAT4"}],"images":[{"name":"Albedo","uri":"Albedo.png"}],"textures":[{"source":0}],"materials":[{"name":"RobotSurface","pbrMetallicRoughness":{"baseColorTexture":{"index":0},"metallicFactor":0.25,"roughnessFactor":0.75}}],"meshes":[{"name":"RobotParts","primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3,"material":0}]}],"nodes":[{"name":"Root","children":[1]},{"name":"Spine","translation":[0,1,0]},{"name":"Body","mesh":0,"skin":0},{"name":"Armor","mesh":0,"skin":0}],"skins":[{"joints":[0,1],"inverseBindMatrices":4}]})");
+}
+
+void RunImportCommandPublishesCombinedSkeletalMeshMaterialsAndTexturesTest() {
+    ResetTempRoot();
+    const std::filesystem::path projectRoot = TempRoot() / "SkeletalMaterialProject";
+    const std::filesystem::path sourceRoot = TempRoot() / "SkeletalMaterialSources";
+    WriteSkeletalGltfMaterialAndTextureFixture(sourceRoot);
+
+    kb::scene::Scene scene;
+    kb::editor::EditorAssetBrowserState browser;
+    kb::editor::tests::Require(scene.Assets().MountProject(projectRoot),
+        "Skeletal material import test could not mount project assets");
+    kb::assets::AssetImportOptions options{};
+    options.mesh.importSkeletalMesh = true;
+    options.mesh.importTextures = true;
+    options.mesh.importMaterials = true;
+    options.mesh.combineMeshes = true;
+    const std::array<std::filesystem::path, 1U> files{ sourceRoot / "Robot.gltf" };
+    const kb::assets::AssetImportResult report =
+        kb::editor::EditorSceneAssetBrowserCommands::ImportFilesWithReport(
+            scene, browser, files, "/Game/Characters", options);
+
+    const kb::assets::AssetMetadata* meshMetadata =
+        scene.Assets().Manager().Registry().FindByPath("/Game/Characters/Robot.kbskeletalmesh");
+    const std::vector<kb::assets::AssetMetadata> materials =
+        scene.Assets().Manager().Registry().ByType("RenderMaterial");
+    const std::vector<kb::assets::AssetMetadata> textures =
+        scene.Assets().Manager().Registry().ByType("RenderTexture");
+    const auto mesh = meshMetadata == nullptr
+        ? std::nullopt
+        : kb::scene::SkeletalMeshAssetIO::Load(meshMetadata->physicalPath);
+    const auto material = materials.size() == 1U
+        ? kb::render::RenderMaterialAssetLoader::LoadMaterial(materials[0].physicalPath)
+        : std::nullopt;
+    kb::editor::tests::Require(material.has_value(),
+        "Skeletal mesh import did not publish a loadable material asset");
+    const auto texture = textures.size() == 1U
+        ? kb::render::RenderTextureAssetLoader::LoadTexture(textures[0].physicalPath)
+        : std::nullopt;
+    kb::editor::tests::Require(texture.has_value(),
+        "Skeletal mesh import did not publish a loadable texture asset");
+    const bool assigned = mesh.has_value() && materials.size() == 1U &&
+        mesh->lods.size() == 1U && mesh->lods[0].vertices.size() == 6U &&
+        mesh->lods[0].sections.size() == 2U &&
+        std::ranges::all_of(mesh->lods[0].sections, [&](const kb::scene::SkeletalMeshSection& section) {
+            return section.materialAssetId == materials[0].id.value;
+        });
+    kb::editor::tests::Require(report.Succeeded() && report.CreatedCount() == 1U &&
+            materials.size() == 1U && textures.size() == 1U && assigned &&
+            material->desc.albedoTextureAssetId == textures[0].id.value,
+        "Skeletal mesh import did not combine nodes and publish assigned material and texture assets");
+    ResetTempRoot();
+}
+
 #if defined(_WIN32)
 [[nodiscard]] kb::assets::AssetMetadata MaterialMetadata(std::string name, const std::filesystem::path& path, std::uint64_t contentHash) {
     kb::assets::AssetMetadata metadata = Metadata(std::move(name), "RenderMaterial", "/Game/Materials/ThumbnailProbe.kbmat");
@@ -809,6 +889,7 @@ void RunEditorAssetBrowserTests() {
     RunSearchTextShortcutStateTest();
     RunImportCommandReturnsMaterialTextureReportTest();
     RunImportCommandPublishesSkeletalGltfTest();
+    RunImportCommandPublishesCombinedSkeletalMeshMaterialsAndTexturesTest();
 #if defined(_WIN32)
     RunProjectFilesEdgeToEdgeLayoutTest();
     RunTileHitTestUsesExactGridGeometryTest();

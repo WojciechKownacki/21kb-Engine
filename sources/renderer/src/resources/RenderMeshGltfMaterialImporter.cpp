@@ -144,7 +144,7 @@ void ApplyMaterialUvTransform(RenderMaterialDesc& desc, const cgltf_material& ma
     desc.uvOffset[1] = transformView->transform.offset[1];
 }
 
-[[nodiscard]] RenderMeshEmbeddedMaterial BuildEmbeddedMaterial(std::string_view materialName, const cgltf_material* material) {
+[[nodiscard]] RenderMeshEmbeddedMaterial BuildEmbeddedMaterialImpl(std::string_view materialName, const cgltf_material* material) {
     RenderMeshEmbeddedMaterial embedded{};
     embedded.name = std::string{ materialName };
     if (material == nullptr) {
@@ -176,6 +176,12 @@ void ApplyMaterialUvTransform(RenderMaterialDesc& desc, const cgltf_material& ma
 
 } // namespace
 
+RenderMeshEmbeddedMaterial RenderMeshGltfMaterialImporter::BuildEmbeddedMaterial(
+    std::string_view materialName,
+    const cgltf_material* material) {
+    return BuildEmbeddedMaterialImpl(materialName, material);
+}
+
 std::uint32_t RenderMeshGltfMaterialImporter::EnsureMaterialSlot(
     RenderMeshAssetData& asset,
     std::string_view materialName,
@@ -189,7 +195,7 @@ std::uint32_t RenderMeshGltfMaterialImporter::EnsureMaterialSlot(
     }
 
     asset.materialNames.push_back(std::string{ materialName });
-    asset.embeddedMaterials.push_back(BuildEmbeddedMaterial(materialName, material));
+    asset.embeddedMaterials.push_back(BuildEmbeddedMaterialImpl(materialName, material));
     asset.materialSlots.push_back(RenderMaterialSlotDesc{
         .defaultMaterialAssetId = MaterialAssetIdForName(materialName, desc),
     });

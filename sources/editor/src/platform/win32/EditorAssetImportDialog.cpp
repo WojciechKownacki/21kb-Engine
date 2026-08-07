@@ -102,6 +102,9 @@ public:
             ? std::optional<kb::assets::AssetImportOptions>{ kb::assets::AssetImportOptions{
                 .mesh = {
                     .importMaterialSlots = importMaterialSlots_,
+                    .importTextures = importTextures_,
+                    .importMaterials = importMaterials_,
+                    .combineMeshes = combineMeshes_,
                     .importSkeletalMesh = importSkeletalMesh_,
                 },
             } }
@@ -126,6 +129,9 @@ private:
     [[nodiscard]] RECT Client() const noexcept { RECT rect{}; GetClientRect(window_, &rect); return rect; }
     [[nodiscard]] RECT Viewport() const noexcept { const RECT client = Client(); return Rect(kPadding, kHeaderHeight + 12, client.right - kPadding, client.bottom - kFooterHeight - 10); }
     [[nodiscard]] RECT MaterialSlotsRow() const noexcept { const RECT viewport = Viewport(); return Rect(viewport.left, viewport.top + 68 - scrollOffset_, viewport.right - 12, viewport.top + 68 - scrollOffset_ + kRowHeight); }
+    [[nodiscard]] RECT TexturesRow() const noexcept { const RECT viewport = Viewport(); return Rect(viewport.left, viewport.top + 162 - scrollOffset_, viewport.right - 12, viewport.top + 162 - scrollOffset_ + kRowHeight); }
+    [[nodiscard]] RECT MaterialsRow() const noexcept { const RECT viewport = Viewport(); return Rect(viewport.left, viewport.top + 212 - scrollOffset_, viewport.right - 12, viewport.top + 212 - scrollOffset_ + kRowHeight); }
+    [[nodiscard]] RECT CombineMeshesRow() const noexcept { const RECT viewport = Viewport(); return Rect(viewport.left, viewport.top + 262 - scrollOffset_, viewport.right - 12, viewport.top + 262 - scrollOffset_ + kRowHeight); }
     [[nodiscard]] RECT SkeletonRow() const noexcept { const RECT viewport = Viewport(); return Rect(viewport.left, viewport.top + 312 - scrollOffset_, viewport.right - 12, viewport.top + 312 - scrollOffset_ + kRowHeight); }
     [[nodiscard]] int MaxScroll() const noexcept { return std::max(0, 430 - Height(Viewport())); }
     void Scroll(int delta) noexcept { scrollOffset_ = std::clamp(scrollOffset_ + delta, 0, MaxScroll()); InvalidateRect(window_, nullptr, FALSE); }
@@ -156,9 +162,12 @@ private:
             materialSlotsAvailable_ ? "Preserve FBX material names and per-section assignments" : "Available only when every selected mesh is an FBX source",
             materialSlotsAvailable_ && !importSkeletalMesh_);
         { ScopedFont font(12, FW_SEMIBOLD); Text(dc, Rect(viewport.left, y + 132, viewport.right, y + 156), "IMPORT PIPELINE", Rgb(124, 167, 220)); }
-        DrawDisabledRow(dc, Rect(viewport.left, y + 162, viewport.right - 12, y + 206), "Import textures", "Requires source texture extraction and texture-asset dependencies");
-        DrawDisabledRow(dc, Rect(viewport.left, y + 212, viewport.right - 12, y + 256), "Import materials", "Requires generated material assets and FBX material translation");
-        DrawDisabledRow(dc, Rect(viewport.left, y + 262, viewport.right - 12, y + 306), "Combine meshes", "Requires a multi-output FBX asset import pipeline");
+        DrawCheckRow(dc, TexturesRow(), importTextures_, "Import textures",
+            "Copies external images and extracts embedded FBX, glTF, or GLB image data", skeletalImportAvailable_);
+        DrawCheckRow(dc, MaterialsRow(), importMaterials_, "Import materials",
+            "Creates PBR Material assets and assigns them to imported mesh sections", skeletalImportAvailable_);
+        DrawCheckRow(dc, CombineMeshesRow(), combineMeshes_, "Combine meshes",
+            "Merges all compatible mesh nodes bound to the imported skin into one asset", skeletalImportAvailable_);
         DrawCheckRow(
             dc,
             SkeletonRow(),
@@ -170,8 +179,8 @@ private:
             skeletalImportAvailable_);
         { ScopedFont font(11, FW_NORMAL); Text(dc, Rect(viewport.left, y + 374, viewport.right - 12, y + 416),
             importSkeletalMesh_
-                ? "The importer publishes the rig, skinned mesh and clips atomically. Source materials remain unassigned until material import is available."
-                : "Unavailable options are disabled deliberately. The editor never records settings it cannot execute deterministically.",
+                ? "The importer publishes textures, materials, rig, skinned mesh and clips as one deterministic import operation."
+                : "Static mesh import uses the same texture and material asset pipeline.",
             Rgb(126, 136, 151), DT_LEFT | DT_WORDBREAK | DT_NOPREFIX); }
         RestoreDC(dc, saved);
 
@@ -211,6 +220,23 @@ private:
         const RECT client = Client();
         if (Contains(Rect(client.right - 52, 6, client.right - 6, 52), x, y)) { Close(false); return; }
         if (materialSlotsAvailable_ && !importSkeletalMesh_ && Contains(MaterialSlotsRow(), x, y)) { importMaterialSlots_ = !importMaterialSlots_; InvalidateRect(window_, nullptr, FALSE); return; }
+        if (skeletalImportAvailable_ && Contains(TexturesRow(), x, y)) {
+            importTextures_ = !importTextures_;
+            if (!importTextures_) importMaterials_ = false;
+            InvalidateRect(window_, nullptr, FALSE);
+            return;
+        }
+        if (skeletalImportAvailable_ && Contains(MaterialsRow(), x, y)) {
+            importMaterials_ = !importMaterials_;
+            if (importMaterials_) importTextures_ = true;
+            InvalidateRect(window_, nullptr, FALSE);
+            return;
+        }
+        if (skeletalImportAvailable_ && Contains(CombineMeshesRow(), x, y)) {
+            combineMeshes_ = !combineMeshes_;
+            InvalidateRect(window_, nullptr, FALSE);
+            return;
+        }
         if (skeletalImportAvailable_ && Contains(SkeletonRow(), x, y)) { importSkeletalMesh_ = !importSkeletalMesh_; InvalidateRect(window_, nullptr, FALSE); return; }
         if (Contains(Rect(client.right - 198, client.bottom - 43, client.right - 106, client.bottom - 15), x, y)) { Close(false); return; }
         if (Contains(Rect(client.right - 96, client.bottom - 43, client.right - 16, client.bottom - 15), x, y)) Close(true);
@@ -241,6 +267,9 @@ private:
     bool materialSlotsAvailable_ = false;
     bool skeletalImportAvailable_ = false;
     bool importMaterialSlots_ = true;
+    bool importTextures_ = true;
+    bool importMaterials_ = true;
+    bool combineMeshes_ = true;
     bool importSkeletalMesh_ = false;
     bool accepted_ = false;
     bool running_ = true;
