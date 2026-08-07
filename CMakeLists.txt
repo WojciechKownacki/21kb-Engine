@@ -180,6 +180,19 @@ set(MINIAUDIO_BUILD_TOOLS OFF CACHE BOOL "Do not build miniaudio tools" FORCE)
 set(MINIAUDIO_INSTALL OFF CACHE BOOL "Do not install vendored miniaudio" FORCE)
 add_subdirectory(third_party/miniaudio third_party/miniaudio EXCLUDE_FROM_ALL)
 
+# ufbx is intentionally built as a small isolated C library. The engine owns
+# conversion into its canonical skeletal asset types; no ufbx types escape the
+# importer implementation.
+add_library(kb_ufbx STATIC
+    third_party/ufbx/ufbx.c
+)
+target_include_directories(kb_ufbx PUBLIC
+    ${CMAKE_SOURCE_DIR}/third_party/ufbx
+)
+if(NOT WIN32)
+    set_target_properties(kb_ufbx PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
+
 FetchContent_Declare(
     kb_lua
     URL https://www.lua.org/ftp/lua-5.4.8.tar.gz

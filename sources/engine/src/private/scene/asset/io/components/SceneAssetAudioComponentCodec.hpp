@@ -16,7 +16,7 @@ public:
     [[nodiscard]] static bool ReadSource(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, AudioSourceComponent& output);
     static void WriteSource(std::vector<std::uint8_t>& output, const AudioSourceComponent& audioSource);
 
-    [[nodiscard]] static bool ReadListener(SceneAssetBinaryIO::ByteReader& input, AudioListenerComponent& output);
+    [[nodiscard]] static bool ReadListener(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, AudioListenerComponent& output);
     static void WriteListener(std::vector<std::uint8_t>& output, const AudioListenerComponent& audioListener);
 };
 

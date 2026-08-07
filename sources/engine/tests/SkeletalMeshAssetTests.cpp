@@ -306,6 +306,17 @@ void RunSkeletalMeshAssetTests() {
         "Skeletal glTF reimport did not retain the mesh reference while publishing new content");
     const auto extendedImportRoot = root / "GltfExtendedImport";
     WriteExtendedSkeletalGltfFixture(extendedImportRoot);
+    kb::scene::SkeletalMeshGltfImportReport unassignedMaterialReport;
+    const auto importedWithUnassignedMaterial = kb::scene::SkeletalMeshGltfImporter::Import(
+        extendedImportRoot / "HeroExtended.gltf", 777U, {}, &importError,
+        &unassignedMaterialReport);
+    Require(importedWithUnassignedMaterial.has_value() &&
+            importedWithUnassignedMaterial->mesh.lods[0].sections[0].materialAssetId == 0U &&
+            std::ranges::any_of(unassignedMaterialReport.diagnostics, [](const auto& diagnostic) {
+                return diagnostic.severity == kb::scene::SkeletalMeshGltfImportDiagnosticSeverity::Warning &&
+                    diagnostic.message.find("unassigned material slot") != std::string::npos;
+            }),
+        "Skeletal glTF import without a material resolver did not retain an explicit unassigned material slot diagnostic");
     kb::scene::SkeletalMeshGltfImportOptions extendedOptions{};
     extendedOptions.coordinateConversion.unitScale = 100.0F;
     extendedOptions.materialResolver = ResolveFixtureMaterial;

@@ -37,6 +37,9 @@ enum class AssetImportItemStatus : std::uint8_t {
 
 struct AssetMeshImportOptions {
     bool importMaterialSlots = true;
+    // The editor routes this mode through the skeletal glTF publication
+    // pipeline rather than the generic static-mesh container importer.
+    bool importSkeletalMesh = false;
 };
 
 struct AssetImportOptions {
@@ -65,8 +68,7 @@ struct AssetImportItemResult {
         return error.empty() &&
             (status == AssetImportItemStatus::Created || status == AssetImportItemStatus::Reused) &&
             id.IsValid() &&
-            !assetPhysicalPath.empty() &&
-            !metaPhysicalPath.empty();
+            !assetPhysicalPath.empty();
     }
 };
 

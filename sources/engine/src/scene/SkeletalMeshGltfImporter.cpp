@@ -305,11 +305,16 @@ struct CoordinateConversion {
     const cgltf_primitive& primitive,
     const cgltf_data& data,
     const SkeletalMeshGltfImportOptions& options,
+    SkeletalMeshGltfImportReport* report,
+    const std::filesystem::path& sourcePath,
+    const ImportContext& context,
     std::string* error) {
     if (primitive.material == nullptr) return std::uint64_t{ 0U };
     if (options.materialResolver == nullptr) {
-        return Fail<std::uint64_t>(error,
-            "Skeletal glTF primitive references a material but no material resolver was supplied.");
+        AddDiagnostic(report, SkeletalMeshGltfImportDiagnosticSeverity::Warning,
+            sourcePath, context,
+            "Skeletal glTF primitive material was imported as an unassigned material slot because no material resolver was supplied.");
+        return std::uint64_t{ 0U };
     }
     const std::ptrdiff_t materialIndex = primitive.material - data.materials;
     if (materialIndex < 0 || static_cast<cgltf_size>(materialIndex) >= data.materials_count) {
@@ -492,7 +497,8 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
         const std::uint32_t baseVertex = static_cast<std::uint32_t>(lod.vertices.size());
         SkeletalMeshSection section{};
         section.firstIndex = static_cast<std::uint32_t>(lod.indices.size());
-        const auto materialAssetId = ResolveMaterialAssetId(primitive, *data, importOptions, error);
+        const auto materialAssetId = ResolveMaterialAssetId(
+            primitive, *data, importOptions, report, path, primitiveContext, error);
         if (!materialAssetId) return std::nullopt;
         section.materialAssetId = *materialAssetId;
         section.boneMap.reserve(static_cast<std::size_t>(skin.joints_count));

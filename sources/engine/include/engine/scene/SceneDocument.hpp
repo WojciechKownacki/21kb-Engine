@@ -31,7 +31,8 @@ struct SceneDocument {
     // v28: SkeletonBinding and DeformedGeometry authoring components persist.
     // v29: Animator pose update-rate policy persists.
     // v30: MotionSkeletonRule per-entity pose rule persists.
-    static constexpr std::uint32_t CurrentFileVersion = 30U;
+    // v31: AudioListener priority and local-user binding persist.
+    static constexpr std::uint32_t CurrentFileVersion = 31U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

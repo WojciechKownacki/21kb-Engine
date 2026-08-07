@@ -71,7 +71,7 @@ void SceneAssetAudioComponentCodec::WriteSource(std::vector<std::uint8_t>& outpu
     SceneAssetBinaryIO::WriteString(output, AudioSourceOutputBus(audioSource));
 }
 
-bool SceneAssetAudioComponentCodec::ReadListener(SceneAssetBinaryIO::ByteReader& input, AudioListenerComponent& output) {
+bool SceneAssetAudioComponentCodec::ReadListener(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, AudioListenerComponent& output) {
     bool primary = true;
     bool enabled = true;
     if (!input.ReadBool(primary) ||
@@ -80,12 +80,23 @@ bool SceneAssetAudioComponentCodec::ReadListener(SceneAssetBinaryIO::ByteReader&
     }
     output.primary = primary;
     output.enabled = enabled;
+    if (fileVersion >= 31U) {
+        std::uint32_t priority = 0U;
+        std::uint32_t localUser = 0U;
+        if (!input.ReadUInt32(priority) || !input.ReadUInt32(localUser)) {
+            return false;
+        }
+        output.priority = static_cast<std::int32_t>(priority);
+        output.localUser = kb::input::LocalUserId{ localUser };
+    }
     return true;
 }
 
 void SceneAssetAudioComponentCodec::WriteListener(std::vector<std::uint8_t>& output, const AudioListenerComponent& audioListener) {
     SceneAssetBinaryIO::WriteUInt8(output, audioListener.primary ? 1U : 0U);
     SceneAssetBinaryIO::WriteUInt8(output, audioListener.enabled ? 1U : 0U);
+    SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(audioListener.priority));
+    SceneAssetBinaryIO::WriteUInt32(output, audioListener.localUser.value);
 }
 
 } // namespace kb::scene

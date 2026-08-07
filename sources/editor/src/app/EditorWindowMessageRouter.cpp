@@ -470,11 +470,11 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         context_.sceneViewport.NotifyHostDpiChanged(messageWindow);
         return DefWindowProcW(messageWindow, message, wparam, lparam);
     case WM_ACTIVATEAPP:
-        context_.sceneViewport.SetAllHostSurfacesSuspended(wparam == FALSE);
         if (wparam == FALSE) {
-            // Owned WS_POPUP overlays would stay above the application that
-            // takes focus, so hide them explicitly; the repaint on
-            // reactivation re-shows whatever the UI state still needs.
+            // Native scene surfaces are WS_CHILD and therefore cannot escape
+            // their editor host. Keeping their last frame avoids flashing the
+            // Scene View gray while the editor is merely inactive. Owned
+            // WS_POPUP overlays are different: hide them explicitly.
             MainWindowBackBufferPainter::HideAllOverlays();
             FloatingWindowBackBufferPainter::HideAllOverlays();
             return 0;
