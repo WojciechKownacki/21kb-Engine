@@ -210,7 +210,8 @@ struct LivePrefabComponentReaders {
 }
 
 [[nodiscard]] bool Equals(const AudioListenerComponent& lhs, const AudioListenerComponent& rhs) noexcept {
-    return lhs.primary == rhs.primary && lhs.enabled == rhs.enabled;
+    return lhs.priority == rhs.priority && lhs.localUser == rhs.localUser &&
+        lhs.primary == rhs.primary && lhs.enabled == rhs.enabled;
 }
 
 [[nodiscard]] bool Equals(const Animator& lhs, const Animator& rhs) noexcept {
@@ -432,6 +433,8 @@ void MixLiveSceneComponents(std::uint64_t& hash, SceneComponents components, Sce
     const AudioListenerComponent* audioListener = components.AudioListeners().TryGet(entity);
     ScenePrefabHashBuilder::Mix(hash, audioListener != nullptr ? 1U : 0U);
     if (audioListener != nullptr) {
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(audioListener->priority));
+        ScenePrefabHashBuilder::Mix(hash, audioListener->localUser.value);
         ScenePrefabHashBuilder::Mix(hash, audioListener->primary ? 1U : 0U);
         ScenePrefabHashBuilder::Mix(hash, audioListener->enabled ? 1U : 0U);
     }
