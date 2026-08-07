@@ -5,10 +5,15 @@
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
+#include "engine/math/EngineMath.hpp"
+#include "kb/render/SceneDepthPolicy.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <vector>
+
+#include <bx/math.h>
 
 namespace kb::editor {
 namespace {
@@ -32,6 +37,30 @@ void PaintPanel(HDC dc, const RECT& rect, const char* title, const char* subtitl
 constexpr int kTreeHeaderHeight = 56;
 constexpr int kTreeRowHeight = 20;
 constexpr int kTreeAuxiliaryHeight = 76;
+
+[[nodiscard]] kb::render::SceneRenderCamera BuildPreviewCamera(
+    const EditorViewportCameraState& camera,
+    std::uint32_t width,
+    std::uint32_t height) noexcept {
+    const EditorViewportCameraAxes axes = camera.Axes();
+    kb::render::SceneRenderCamera output{};
+    bx::mtxLookAt(
+        output.view.data(),
+        bx::Vec3{ axes.position.x, axes.position.y, axes.position.z },
+        bx::Vec3{
+            axes.position.x + axes.forward.x,
+            axes.position.y + axes.forward.y,
+            axes.position.z + axes.forward.z,
+        },
+        bx::Vec3{ axes.up.x, axes.up.y, axes.up.z });
+    const float aspect = height == 0U ? 1.0F :
+        static_cast<float>(std::max(1U, width)) / static_cast<float>(height);
+    kb::render::SceneDepthPolicy::MakePerspective(
+        output.projection.data(), camera.VerticalFovDegrees(), aspect,
+        camera.NearClip(), camera.FarClip(),
+        kb::render::SceneDepthPolicy::HomogeneousDepth());
+    return output;
+}
 
 void DrawAdvancedPreviewRow(HDC dc, int left, int right, int& y, const char* label, bool enabled) {
     RECT row{ left + 10, y, right - 8, y + 20 };
@@ -165,6 +194,70 @@ void PaintDetails(HDC dc, const RECT& rect, const EditorSceneContext& sceneConte
     return deltaX * deltaX + deltaY * deltaY;
 }
 
+void AppendDebugSegment(
+    std::vector<kb::render::PhysicsDebugLine>& output,
+    kb::scene::Vec3 from,
+    kb::scene::Vec3 to,
+    kb::scene::Vec3 color,
+    float alpha = 1.0F) {
+    output.push_back(kb::render::PhysicsDebugLine{
+        .from = { from.x, from.y, from.z },
+        .to = { to.x, to.y, to.z },
+        .color = { color.x, color.y, color.z },
+        .alpha = alpha,
+    });
+}
+
+void AppendBoneShape(
+    std::vector<kb::render::PhysicsDebugLine>& output,
+    const AnimationPreviewOverlayLine& bone,
+    bool selected) {
+    const kb::scene::Vec3 delta = bone.to - bone.from;
+    const float length = kb::math::Length(delta);
+    if (length <= 0.00001F) return;
+
+    const kb::scene::Vec3 direction = delta * (1.0F / length);
+    const kb::scene::Vec3 helper = std::abs(direction.y) < 0.9F
+        ? kb::scene::Vec3{ 0.0F, 1.0F, 0.0F }
+        : kb::scene::Vec3{ 1.0F, 0.0F, 0.0F };
+    const kb::scene::Vec3 side = kb::math::Normalize(kb::math::Cross(direction, helper));
+    const kb::scene::Vec3 up = kb::math::Normalize(kb::math::Cross(side, direction));
+    const float radius = std::max(length * 0.09F, 0.0025F);
+    const kb::scene::Vec3 ringCenter = bone.from + direction * (length * 0.22F);
+    const std::array<kb::scene::Vec3, 4U> ring{
+        ringCenter + side * radius,
+        ringCenter + up * radius,
+        ringCenter - side * radius,
+        ringCenter - up * radius,
+    };
+    const kb::scene::Vec3 color = selected
+        ? kb::scene::Vec3{ 1.0F, 0.82F, 0.18F }
+        : kb::scene::Vec3{ 0.98F, 0.36F, 0.10F };
+    for (std::size_t index = 0U; index < ring.size(); ++index) {
+        const kb::scene::Vec3& current = ring[index];
+        const kb::scene::Vec3& next = ring[(index + 1U) % ring.size()];
+        AppendDebugSegment(output, bone.from, current, color);
+        AppendDebugSegment(output, current, next, color);
+        AppendDebugSegment(output, current, bone.to, color);
+    }
+    AppendDebugSegment(output, bone.from, bone.to, selected ? kb::scene::Vec3{ 1.0F, 0.95F, 0.55F } : color);
+}
+
+[[nodiscard]] std::vector<kb::render::PhysicsDebugLine> BuildSkeletalPreviewLines(
+    const AnimationPreviewOverlaySnapshot& overlays,
+    kb::scene::SkeletonBoneId selectedBone) {
+    std::vector<kb::render::PhysicsDebugLine> output;
+    output.reserve(overlays.lines.size() * 13U);
+    for (const AnimationPreviewOverlayLine& line : overlays.lines) {
+        if (line.boneId != 0U) {
+            AppendBoneShape(output, line, line.boneId == selectedBone);
+        } else {
+            AppendDebugSegment(output, line.from, line.to, line.color);
+        }
+    }
+    return output;
+}
+
 } // namespace
 
 void SkeletalMeshEditorPanelRenderer::Paint(
@@ -193,22 +286,52 @@ void SkeletalMeshEditorPanelRenderer::Paint(
     PaintAdvancedPreview(dc, layout.toolbox, sceneContext);
     PaintTree(dc, layout.skeletonTree, sceneContext);
     PaintDetails(dc, layout.assetDetails, sceneContext);
-    if (sceneViewport == nullptr) return;
+    if (sceneViewport != nullptr) {
+        static_cast<void>(PresentViewport(
+            *sceneViewport, host, content, panel, sceneContext, renderBackendSettings));
+    }
+}
 
+bool SkeletalMeshEditorPanelRenderer::PresentViewport(
+    EditorSceneBgfxViewport& sceneViewport,
+    HWND host,
+    const RECT& content,
+    const DockPanel& panel,
+    const EditorSceneContext& sceneContext,
+    const EditorRenderBackendSettings& renderBackendSettings) {
+    const kb::scene::Scene* previewScene = sceneContext.SkeletalMeshEditorPreviewScene();
+    if (host == nullptr || IsWindow(host) == 0 || IsWindowVisible(host) == 0 ||
+        !sceneContext.HasSkeletalMeshEditorAsset() || previewScene == nullptr) {
+        return false;
+    }
+
+    const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
+    if (layout.viewport.right <= layout.viewport.left || layout.viewport.bottom <= layout.viewport.top) {
+        return false;
+    }
     const std::uint64_t revision = sceneContext.SkeletalMeshEditorPreviewRevision();
+    const std::uint32_t renderWidth = static_cast<std::uint32_t>(layout.viewport.right - layout.viewport.left);
+    const std::uint32_t renderHeight = static_cast<std::uint32_t>(layout.viewport.bottom - layout.viewport.top);
     EditorSceneBgfxViewport::PresentSettings settings{};
+    settings.renderWidth = renderWidth;
+    settings.renderHeight = renderHeight;
+    settings.cameraOverride = BuildPreviewCamera(
+        sceneContext.AnimationPreviewCamera(), renderWidth, renderHeight);
     settings.viewportKey = panel.id;
-    settings.editorSceneOverlaysEnabled = false;
+    settings.editorSceneOverlaysEnabled = true;
+    settings.physicsDebugLines = BuildSkeletalPreviewLines(
+        sceneContext.AnimationPreviewOverlays(), sceneContext.SelectedSkeletalMeshEditorBone());
     settings.sceneRevision = revision;
     settings.sceneDirtyBaseRevision = revision;
-    settings.sceneFullSyncRequired = false;
+    settings.sceneFullSyncRequired = true;
     settings.msaaSamples = renderBackendSettings.MsaaSamples();
     settings.shadowPassEnabled = renderBackendSettings.ShadowsEnabled();
     settings.postProcessEnabled = true;
     settings.selectionMaskEnabled = false;
     settings.selectionOutlineEnabled = false;
     settings.gpuDrivenRuntimeDispatchEnabled = renderBackendSettings.GpuDrivenEnabled();
-    sceneViewport->Present(dc, host, layout.viewport, *sceneContext.SkeletalMeshEditorPreviewScene(), theme, settings);
+    sceneViewport.Present(host, layout.viewport, *previewScene, settings);
+    return true;
 }
 
 std::optional<SkeletalMeshEditorTreeRow> SkeletalMeshEditorPanelRenderer::TreeRowAt(

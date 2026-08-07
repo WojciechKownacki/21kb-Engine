@@ -1407,6 +1407,31 @@ end
         Require(instanceControllerMetadata != nullptr,
             "AnimatorInstance fixture did not retain controller metadata");
 
+        const kb::scene::SceneObject referenceOwner =
+            scene.Entities().CreateObject({ .name = "Reference Pose Character" });
+        Require(scene.Components().SkeletonBindings().Set(
+                    referenceOwner.Entity(), kb::scene::SkeletonBindingComponent{
+                        .skeletonAssetId = skeletonId.value,
+                        .skeletonCompatibilitySignature = skeletonSignature,
+                        .enabled = true,
+                    }),
+            "SkeletonBinding reference-pose fixture could not author its binding");
+        scene.Runtime().SetPlaying(false);
+        static_cast<void>(scene.Runtime().Update(0.0F));
+        const auto referenceSkeleton =
+            scene.Animators().InstanceSkeleton(referenceOwner.Entity());
+        Require(scene.Runtime().DrainSceneSystemErrors().empty() &&
+                !scene.Animators().Exists(referenceOwner.Entity()) &&
+                scene.Animators().RuntimeBindingGeneration(referenceOwner.Entity()) != 0U &&
+                referenceSkeleton.has_value() &&
+                referenceSkeleton->skeletonAssetId == skeletonId.value &&
+                referenceSkeleton->compatibilitySignature == skeletonSignature &&
+                referenceSkeleton->boneIds.size() == 3U &&
+                referenceSkeleton->currentComponentPose.positions.size() == 3U &&
+                referenceSkeleton->currentSkinMatrices.size() == 3U &&
+                referenceSkeleton->previousSkinMatrices.size() == 3U,
+            "SkeletonBinding must publish a complete reference pose without an Animator");
+
         const kb::scene::SceneObject owner =
             scene.Entities().CreateObject({ .name = "Skeletal Character" });
         Require(scene.Components().SkeletonBindings().Set(

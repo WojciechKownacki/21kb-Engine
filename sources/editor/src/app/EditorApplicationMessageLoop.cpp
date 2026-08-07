@@ -18,6 +18,7 @@
 #include "rendering/EditorHostSurfaceLayoutResolver.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
+#include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "rendering/EditorMaterialThumbnailService.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/script_editor/ScriptEditorWindow.hpp"
@@ -309,15 +310,23 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
     state.sceneViewport.SyncHostSurfaceLayouts(
         state.window,
         std::span<const EditorSceneBgfxViewport::HostSurfaceLayout>{hostLayouts.data(), hostLayouts.size()});
+    bool documentPresented = false;
     for (const DockPanelLayout& panelLayout : layout.panels) {
         if (!panelLayout.active) {
             continue;
         }
         const DockPanel* panel = state.dockModel.Queries().FindPanel(panelLayout.panelId);
-        if (panel == nullptr || panel->kind != DockPanelKind::Scene) {
+        if (panel == nullptr) {
             continue;
         }
-        scenePresented = PresentScenePanel(state, state.window, *panel, ToRect(panelLayout.content), refreshToolbar) || scenePresented;
+        const RECT content = ToRect(panelLayout.content);
+        if (panel->kind == DockPanelKind::Scene) {
+            scenePresented = PresentScenePanel(state, state.window, *panel, content, refreshToolbar) || scenePresented;
+        } else if (panel->kind == DockPanelKind::SkeletalMeshEditor) {
+            documentPresented = SkeletalMeshEditorPanelRenderer::PresentViewport(
+                state.sceneViewport, state.window, content, *panel,
+                state.sceneContext, state.renderBackendSettings) || documentPresented;
+        }
     }
 
     const std::optional<RECT> inspector = EditorPanelContentResolver::Resolve(
@@ -362,7 +371,7 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
         }
         thumbnailPresented = true;
     }
-    return scenePresented || previewPresented || thumbnailPresented;
+    return scenePresented || documentPresented || previewPresented || thumbnailPresented;
 }
 
 [[nodiscard]] bool QueueFloatingHosts(EditorApplicationState& state, bool refreshToolbar, bool& scenePresented) {
@@ -387,6 +396,19 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
                 state.metrics);
             if (content.has_value()) {
                 scenePresented = PresentScenePanel(state, window, *panel, *content, refreshToolbar) || scenePresented;
+            }
+        } else if (panel != nullptr && panel->kind == DockPanelKind::SkeletalMeshEditor) {
+            const std::optional<RECT> content = EditorPanelContentResolver::Resolve(
+                DockPanelKind::SkeletalMeshEditor,
+                window,
+                state.window,
+                state.dockModel,
+                state.floatingWindows,
+                state.metrics);
+            if (content.has_value()) {
+                presented = SkeletalMeshEditorPanelRenderer::PresentViewport(
+                    state.sceneViewport, window, *content, *panel,
+                    state.sceneContext, state.renderBackendSettings) || presented;
             }
         }
 
@@ -413,6 +435,11 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
 [[nodiscard]] bool PresentVisibleViewports(EditorApplicationState& state) {
     const bool refreshToolbar = ShouldRefreshSceneToolbars();
     state.sceneViewport.SetGraphShaderCacheRoot(state.sceneContext.GraphShaderCacheRoot());
+    const std::size_t importedItems = state.sceneContext.PumpAssetImportResults();
+    if (importedItems > 0U) {
+        state.sceneViewport.RequestPresent();
+        InvalidateRect(state.window, nullptr, FALSE);
+    }
     const auto cookStart = std::chrono::steady_clock::now();
     const std::size_t cookResults = state.sceneContext.PumpMaterialGraphCookResults();
     const double cookMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cookStart).count();
@@ -723,7 +750,7 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
             // Keep the loop paced (instead of parking in WaitMessage) while a material is open so
             // async graph cook results keep pumping; time-driven preview animation (MAT-72) is
             // carried by the per-frame preview presents in TickEditorFrame.
-            if (state.sceneContext.MaterialEditor().OpenAssetId().IsValid()) {
+            if (state.sceneContext.MaterialEditor().OpenAssetId().IsValid() || state.sceneContext.AssetImportInProgress()) {
                 static_cast<void>(MsgWaitForMultipleObjects(0, nullptr, FALSE, FrameWaitMilliseconds(currentTick, nextEditorFrame), QS_ALLINPUT));
             } else {
                 WaitMessage();

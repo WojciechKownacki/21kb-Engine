@@ -29,6 +29,13 @@ public:
         const EditorSceneContext& sceneContext,
         const EditorRenderBackendSettings& renderBackendSettings,
         EditorSceneBgfxViewport* sceneViewport) const;
+    [[nodiscard]] static bool PresentViewport(
+        EditorSceneBgfxViewport& sceneViewport,
+        HWND host,
+        const RECT& content,
+        const DockPanel& panel,
+        const EditorSceneContext& sceneContext,
+        const EditorRenderBackendSettings& renderBackendSettings);
     [[nodiscard]] static std::optional<SkeletalMeshEditorTreeRow> TreeRowAt(
         const RECT& content, const EditorSceneContext& sceneContext, int x, int y);
     [[nodiscard]] static bool IsTreeSearchAt(const RECT& content, int x, int y) noexcept;

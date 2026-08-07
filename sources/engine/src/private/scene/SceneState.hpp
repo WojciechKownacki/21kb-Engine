@@ -145,6 +145,16 @@ struct AnimatorInstanceSkeleton {
     std::uint64_t hierarchySolveCount = 0U;
 };
 
+// A SkeletonBinding owns a valid reference pose even when no Animator is
+// attached. Keeping that derived pose beside animator poses gives rendering,
+// sockets and editor inspection one canonical query path without fabricating
+// an animation clip or controller.
+struct SkeletonBindingRuntimePose {
+    SceneEntity entity{};
+    std::uint64_t runtimeBindingGeneration = 0U;
+    AnimatorInstanceSkeleton skeleton;
+};
+
 struct AnimatorInstance {
     SceneEntity entity{};
     kb::assets::AssetHandle<AnimatorController> controller;
@@ -302,6 +312,7 @@ public:
     std::uint64_t localizationCatalogGeneration = 0U;
     std::string localizationLanguage;
     std::map<std::uint64_t, AnimatorInstance> animators;
+    std::map<std::uint64_t, SkeletonBindingRuntimePose> skeletonBindingPoses;
     std::vector<AnimationEventRecord> pendingAnimationEvents;
     std::unique_ptr<kb::ecs::WorkerPool> animatorWorkerPool;
     std::vector<AnimatorRuntimeRecord*> animatorParallelPoseScratch;
