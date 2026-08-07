@@ -158,6 +158,19 @@ template <typename T>
         finite(vertex.tangent.w) && finite(vertex.uv[0]) && finite(vertex.uv[1]);
 }
 
+[[nodiscard]] bool SameWorldTransform(const cgltf_node& lhs, const cgltf_node& rhs) noexcept {
+    std::array<cgltf_float, 16U> lhsMatrix{};
+    std::array<cgltf_float, 16U> rhsMatrix{};
+    cgltf_node_transform_world(&lhs, lhsMatrix.data());
+    cgltf_node_transform_world(&rhs, rhsMatrix.data());
+    constexpr cgltf_float epsilon = 0.00001F;
+    for (std::size_t index = 0U; index < lhsMatrix.size(); ++index) {
+        if (!std::isfinite(lhsMatrix[index]) || !std::isfinite(rhsMatrix[index]) ||
+            std::abs(lhsMatrix[index] - rhsMatrix[index]) > epsilon) return false;
+    }
+    return true;
+}
+
 struct SkinInfluence {
     std::uint32_t joint = 0U;
     float weight = 0.0F;
@@ -442,17 +455,35 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
             "Skeletal glTF import produced an invalid Skeleton hierarchy.");
     }
 
-    const cgltf_node* meshNode = nullptr;
+    std::vector<const cgltf_node*> meshNodes;
     for (cgltf_size index = 0U; index < data->nodes_count; ++index) {
         if (data->nodes[index].skin == &skin && data->nodes[index].mesh != nullptr) {
-            meshNode = &data->nodes[index];
-            break;
+            meshNodes.push_back(&data->nodes[index]);
         }
     }
-    if (meshNode == nullptr) {
+    if (meshNodes.empty()) {
         return Fail<SkeletalMeshGltfImportResult>(error,
             "Skeletal glTF import could not find a mesh node bound to the skin.");
     }
+    if (!importOptions.combineMeshes && meshNodes.size() != 1U) {
+        return Fail<SkeletalMeshGltfImportResult>(error,
+            "Skeletal glTF source contains multiple mesh nodes; enable Combine meshes to import them as one asset.");
+    }
+    if (meshNodes.size() > 1U) {
+        for (const cgltf_node* node : meshNodes) {
+            if (!SameWorldTransform(*meshNodes.front(), *node)) {
+                return Fail<SkeletalMeshGltfImportResult>(error,
+                    "Combining glTF mesh nodes with different world transforms is not representable by one skeletal mesh asset.");
+            }
+            for (cgltf_size primitiveIndex = 0U; primitiveIndex < node->mesh->primitives_count; ++primitiveIndex) {
+                if (node->mesh->primitives[primitiveIndex].targets_count != 0U) {
+                    return Fail<SkeletalMeshGltfImportResult>(error,
+                        "Combining glTF mesh nodes with morph targets is not representable as one canonical morph set.");
+                }
+            }
+        }
+    }
+    const cgltf_node* meshNode = meshNodes.front();
     const ImportContext meshContext{
         .mesh = NameOf(meshNode->mesh, "Mesh_0"),
         .node = NameOf(meshNode, "MeshNode"),
@@ -460,11 +491,16 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
 
     SkeletalMeshLod lod{};
     lod.minScreenCoverage = 0.0F;
-    for (cgltf_size primitiveIndex = 0U;
-         primitiveIndex < meshNode->mesh->primitives_count; ++primitiveIndex) {
-        const cgltf_primitive& primitive = meshNode->mesh->primitives[primitiveIndex];
+    for (const cgltf_node* currentMeshNode : meshNodes) {
+      const ImportContext currentMeshContext{
+          .mesh = NameOf(currentMeshNode->mesh, "Mesh_0"),
+          .node = NameOf(currentMeshNode, "MeshNode"),
+      };
+      for (cgltf_size primitiveIndex = 0U;
+         primitiveIndex < currentMeshNode->mesh->primitives_count; ++primitiveIndex) {
+        const cgltf_primitive& primitive = currentMeshNode->mesh->primitives[primitiveIndex];
         if (primitive.type != cgltf_primitive_type_triangles) continue;
-        ImportContext primitiveContext = meshContext;
+        ImportContext primitiveContext = currentMeshContext;
         primitiveContext.primitiveIndex = static_cast<std::int32_t>(primitiveIndex);
         const cgltf_accessor* positions = Attribute(primitive, cgltf_attribute_type_position);
         const cgltf_accessor* normals = Attribute(primitive, cgltf_attribute_type_normal);
@@ -584,8 +620,8 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
         }
         while (result.mesh.morphTargets.size() < primitive.targets_count) {
             const std::size_t targetIndex = result.mesh.morphTargets.size();
-            const char* targetName = targetIndex < meshNode->mesh->target_names_count
-                ? meshNode->mesh->target_names[targetIndex]
+            const char* targetName = targetIndex < currentMeshNode->mesh->target_names_count
+                ? currentMeshNode->mesh->target_names[targetIndex]
                 : nullptr;
             result.mesh.morphTargets.push_back({
                 .name = targetName == nullptr || targetName[0] == '\0'
@@ -675,6 +711,7 @@ std::optional<SkeletalMeshGltfImportResult> SkeletalMeshGltfImporter::Import(
             }
         }
         lod.sections.push_back(std::move(section));
+      }
     }
     if (lod.vertices.empty() || lod.indices.empty()) {
         return Fail<SkeletalMeshGltfImportResult>(error,

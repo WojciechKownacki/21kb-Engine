@@ -7,6 +7,7 @@
 #include "engine/scene/SkeletalMeshGltfImportPublisher.hpp"
 #include "engine/scene/SkeletalMeshFbxImportPlanner.hpp"
 #include "engine/scene/SkeletalMeshFbxImportPublisher.hpp"
+#include "scene/EditorMeshImportArtifacts.hpp"
 
 #include <array>
 #include <optional>
@@ -92,7 +93,8 @@ void RefreshAssets(kb::scene::Scene& scene) {
 [[nodiscard]] kb::assets::AssetImportResult ImportSkeletalGltfFiles(
     kb::scene::Scene& scene,
     std::span<const std::filesystem::path> sourceFiles,
-    const std::filesystem::path& destinationVirtualFolder) {
+    const std::filesystem::path& destinationVirtualFolder,
+    const kb::assets::AssetImportOptions& options) {
     kb::assets::AssetManager& manager = AssetManager(scene);
     kb::assets::AssetImportResult result{};
     result.items.reserve(sourceFiles.size());
@@ -108,8 +110,22 @@ void RefreshAssets(kb::scene::Scene& scene) {
         }
 
         std::string error;
+        auto prepared = EditorMeshImportArtifacts::Prepare(
+            manager, sourcePath, destinationVirtualFolder, options, &error);
+        if (!prepared) {
+            item.status = kb::assets::AssetImportItemStatus::Failed;
+            item.error = error.empty() ? "Skeletal glTF auxiliary asset planning failed." : std::move(error);
+            result.items.push_back(std::move(item));
+            continue;
+        }
+        kb::scene::SkeletalMeshGltfImportOptions importOptions{};
+        importOptions.combineMeshes = options.mesh.combineMeshes;
+        if (options.mesh.importMaterials) {
+            importOptions.materialResolver = &EditorMeshImportArtifacts::ResolveMaterial;
+            importOptions.materialResolverUserData = &prepared->materialAssetIds;
+        }
         const auto plan = kb::scene::SkeletalMeshGltfImportPlanner::Plan(
-            manager, sourcePath, destinationVirtualFolder, {}, &error);
+            manager, sourcePath, destinationVirtualFolder, importOptions, &error);
         if (!plan.has_value()) {
             item.status = kb::assets::AssetImportItemStatus::Failed;
             item.error = error.empty() ? "Skeletal glTF import planning failed." : std::move(error);
@@ -118,7 +134,8 @@ void RefreshAssets(kb::scene::Scene& scene) {
         }
 
         const bool meshAlreadyExisted = manager.Registry().FindByPath(plan->meshVirtualPath) != nullptr;
-        const auto published = kb::scene::SkeletalMeshGltfImportPublisher::Publish(manager, *plan, &error);
+        const auto published = kb::scene::SkeletalMeshGltfImportPublisher::PublishWithArtifacts(
+            manager, *plan, prepared->artifacts, &error);
         if (!published.has_value()) {
             item.status = kb::assets::AssetImportItemStatus::Failed;
             item.error = error.empty() ? "Skeletal glTF asset publication failed." : std::move(error);
@@ -147,7 +164,8 @@ void RefreshAssets(kb::scene::Scene& scene) {
 
 [[nodiscard]] kb::assets::AssetImportResult ImportSkeletalFbxFiles(
     kb::scene::Scene& scene, std::span<const std::filesystem::path> sourceFiles,
-    const std::filesystem::path& destinationVirtualFolder) {
+    const std::filesystem::path& destinationVirtualFolder,
+    const kb::assets::AssetImportOptions& options) {
     kb::assets::AssetManager& manager = AssetManager(scene);
     kb::assets::AssetImportResult result{};
     result.items.reserve(sourceFiles.size());
@@ -162,8 +180,23 @@ void RefreshAssets(kb::scene::Scene& scene) {
             continue;
         }
         std::string error;
+        auto prepared = EditorMeshImportArtifacts::Prepare(
+            manager, sourcePath, destinationVirtualFolder, options, &error);
+        if (!prepared) {
+            item.status = kb::assets::AssetImportItemStatus::Failed;
+            item.error = error.empty() ? "Skeletal FBX auxiliary asset planning failed." : std::move(error);
+            result.items.push_back(std::move(item));
+            continue;
+        }
+        kb::scene::SkeletalMeshFbxImportOptions importOptions{};
+        importOptions.importMaterialSlots = options.mesh.importMaterialSlots;
+        importOptions.combineMeshes = options.mesh.combineMeshes;
+        if (options.mesh.importMaterials) {
+            importOptions.materialResolver = &EditorMeshImportArtifacts::ResolveMaterial;
+            importOptions.materialResolverUserData = &prepared->materialAssetIds;
+        }
         const auto plan = kb::scene::SkeletalMeshFbxImportPlanner::Plan(
-            manager, sourcePath, destinationVirtualFolder, {}, &error);
+            manager, sourcePath, destinationVirtualFolder, importOptions, &error);
         if (!plan) {
             item.status = kb::assets::AssetImportItemStatus::Failed;
             item.error = error.empty() ? "Skeletal FBX import planning failed." : std::move(error);
@@ -171,7 +204,8 @@ void RefreshAssets(kb::scene::Scene& scene) {
             continue;
         }
         const bool meshAlreadyExisted = manager.Registry().FindByPath(plan->meshVirtualPath) != nullptr;
-        const auto published = kb::scene::SkeletalMeshFbxImportPublisher::Publish(manager, *plan, &error);
+        const auto published = kb::scene::SkeletalMeshFbxImportPublisher::PublishWithArtifacts(
+            manager, *plan, prepared->artifacts, &error);
         if (!published) {
             item.status = kb::assets::AssetImportItemStatus::Failed;
             item.error = error.empty() ? "Skeletal FBX asset publication failed." : std::move(error);
@@ -197,16 +231,64 @@ void RefreshAssets(kb::scene::Scene& scene) {
 
 [[nodiscard]] kb::assets::AssetImportResult ImportSkeletalFiles(
     kb::scene::Scene& scene, std::span<const std::filesystem::path> sourceFiles,
-    const std::filesystem::path& destinationVirtualFolder) {
+    const std::filesystem::path& destinationVirtualFolder,
+    const kb::assets::AssetImportOptions& options) {
     kb::assets::AssetImportResult result{};
     result.items.reserve(sourceFiles.size());
     for (const std::filesystem::path& sourcePath : sourceFiles) {
         const std::array<std::filesystem::path, 1U> oneSource{ sourcePath };
         kb::assets::AssetImportResult one = IsGltfSkeletalSource(sourcePath)
-            ? ImportSkeletalGltfFiles(scene, oneSource, destinationVirtualFolder)
-            : ImportSkeletalFbxFiles(scene, oneSource, destinationVirtualFolder);
+            ? ImportSkeletalGltfFiles(scene, oneSource, destinationVirtualFolder, options)
+            : ImportSkeletalFbxFiles(scene, oneSource, destinationVirtualFolder, options);
         result.items.insert(result.items.end(),
             std::make_move_iterator(one.items.begin()), std::make_move_iterator(one.items.end()));
+    }
+    return result;
+}
+
+[[nodiscard]] kb::assets::AssetImportResult ImportStaticFiles(
+    kb::scene::Scene& scene,
+    std::span<const std::filesystem::path> sourceFiles,
+    const std::filesystem::path& destinationVirtualFolder,
+    const kb::assets::AssetImportOptions& options) {
+    kb::assets::AssetManager& manager = AssetManager(scene);
+    kb::assets::AssetImportResult result{};
+    result.items.reserve(sourceFiles.size());
+    for (const std::filesystem::path& sourcePath : sourceFiles) {
+        const bool meshSource = IsGltfSkeletalSource(sourcePath) || IsFbxSkeletalSource(sourcePath);
+        std::string error;
+        std::optional<EditorPreparedMeshImportArtifacts> prepared;
+        if (meshSource && (options.mesh.importTextures || options.mesh.importMaterials)) {
+            prepared = EditorMeshImportArtifacts::Prepare(
+                manager, sourcePath, destinationVirtualFolder, options, &error);
+            if (!prepared) {
+                result.items.push_back({
+                    .sourcePath = sourcePath,
+                    .category = kb::assets::AssetImportCategory::Model,
+                    .status = kb::assets::AssetImportItemStatus::Failed,
+                    .error = error.empty() ? "Static mesh auxiliary asset planning failed." : std::move(error),
+                });
+                continue;
+            }
+        }
+        const std::array<std::filesystem::path, 1U> oneSource{ sourcePath };
+        kb::assets::AssetImportResult imported = kb::assets::AssetImportService::ImportFiles(
+            manager, oneSource, destinationVirtualFolder, options);
+        if (imported.items.empty()) continue;
+        kb::assets::AssetImportItemResult item = std::move(imported.items.front());
+        if (item.Succeeded() && prepared.has_value() &&
+            !EditorMeshImportArtifacts::PublishStandalone(manager, prepared->artifacts, &error)) {
+            if (item.status == kb::assets::AssetImportItemStatus::Created) {
+                std::error_code removeError;
+                std::filesystem::remove(item.assetPhysicalPath, removeError);
+                removeError.clear();
+                if (!item.metaPhysicalPath.empty()) std::filesystem::remove(item.metaPhysicalPath, removeError);
+                static_cast<void>(manager.DiscoverMountedAssets());
+            }
+            item.status = kb::assets::AssetImportItemStatus::Failed;
+            item.error = error.empty() ? "Static mesh auxiliary asset publication failed." : std::move(error);
+        }
+        result.items.push_back(std::move(item));
     }
     return result;
 }
@@ -526,8 +608,8 @@ kb::assets::AssetImportResult EditorSceneAssetBrowserCommands::ImportFilesWithRe
 
     kb::assets::AssetManager& manager = AssetManager(scene);
     const kb::assets::AssetImportResult imported = options.mesh.importSkeletalMesh
-        ? ImportSkeletalFiles(scene, sourceFiles, destinationVirtualFolder)
-        : kb::assets::AssetImportService::ImportFiles(manager, sourceFiles, destinationVirtualFolder, options);
+        ? ImportSkeletalFiles(scene, sourceFiles, destinationVirtualFolder, options)
+        : ImportStaticFiles(scene, sourceFiles, destinationVirtualFolder, options);
     if (imported.ImportedCount() == 0U) {
         return imported;
     }

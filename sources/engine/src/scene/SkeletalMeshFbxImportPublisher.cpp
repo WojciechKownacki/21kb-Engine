@@ -6,6 +6,12 @@ namespace kb::scene {
 
 std::optional<SkeletalMeshFbxPublishResult> SkeletalMeshFbxImportPublisher::Publish(
     kb::assets::AssetManager& manager, const SkeletalMeshFbxImportPlan& plan, std::string* error) {
+    return PublishWithArtifacts(manager, plan, {}, error);
+}
+
+std::optional<SkeletalMeshFbxPublishResult> SkeletalMeshFbxImportPublisher::PublishWithArtifacts(
+    kb::assets::AssetManager& manager, const SkeletalMeshFbxImportPlan& plan,
+    std::span<const SkeletalMeshImportArtifact> artifacts, std::string* error) {
     // Publication is source-format agnostic. Reuse the existing transactional
     // writer so FBX has the identical all-or-nothing asset contract as glTF.
     const SkeletalMeshGltfImportPlan canonicalPlan{
@@ -19,7 +25,8 @@ std::optional<SkeletalMeshFbxPublishResult> SkeletalMeshFbxImportPublisher::Publ
         .meshVirtualPath = plan.meshVirtualPath,
         .reusesSkeleton = plan.reusesSkeleton,
     };
-    const auto published = SkeletalMeshGltfImportPublisher::Publish(manager, canonicalPlan, error);
+    const auto published = SkeletalMeshGltfImportPublisher::PublishWithArtifacts(
+        manager, canonicalPlan, artifacts, error);
     if (!published) return std::nullopt;
     return SkeletalMeshFbxPublishResult{
         .skeletonAssetId = published->skeletonAssetId,

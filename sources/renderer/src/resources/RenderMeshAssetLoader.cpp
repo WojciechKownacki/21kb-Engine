@@ -3,6 +3,7 @@
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
+#include "kb/render/resources/RenderMeshSourceImport.hpp"
 #include "kb/render/resources/RenderTerrainMeshBuilder.hpp"
 #include "engine/assets/TerrainAssetIO.hpp"
 #include "resources/RenderMeshAssetFinalizer.hpp"
@@ -75,6 +76,24 @@ namespace {
     }
 
     std::optional<RenderMeshAssetData> mesh = RenderMeshAssetBuilder::LoadGltf(tempPath);
+    if (mesh.has_value() &&
+        (imported.importOptions & kb::assets::kAssetImportOptionMeshImportMaterials) != 0U) {
+        std::vector<RenderMeshAssetMaterialBinding> bindings;
+        bindings.reserve(mesh->materialNames.size());
+        for (const std::string& materialName : mesh->materialNames) {
+            const std::filesystem::path path = RenderMeshSourceImport::GeneratedMaterialVirtualPath(
+                request.metadata.virtualPath, imported.sourceName, materialName);
+            bindings.push_back({
+                .materialName = materialName,
+                .materialAssetId = kb::assets::MakeAssetId(
+                    kb::assets::NormalizeAssetPath(path) + ":RenderMaterial").value,
+            });
+        }
+        mesh = RenderMeshAssetBuilder::LoadGltf(tempPath, RenderMeshGltfImportDesc{
+            .materialBindings = bindings.data(),
+            .materialBindingCount = static_cast<std::uint32_t>(bindings.size()),
+        });
+    }
     std::filesystem::remove(tempPath, error);
     return mesh;
 }
@@ -99,11 +118,30 @@ namespace {
         return LoadGltfPayload(request, *imported);
     }
     if (sourceExtension == ".fbx") {
-        return RenderMeshAssetBuilder::LoadFbx(
-            std::span<const std::byte>{ imported->payload.data(), imported->payload.size() },
+        const auto payload = std::span<const std::byte>{ imported->payload.data(), imported->payload.size() };
+        std::optional<RenderMeshAssetData> mesh = RenderMeshAssetBuilder::LoadFbx(
+            payload,
             RenderMeshFbxImportDesc{
                 .importMaterialSlots = (imported->importOptions & kb::assets::kAssetImportOptionMeshDisableMaterialSlots) == 0U,
             });
+        if (!mesh.has_value() ||
+            (imported->importOptions & kb::assets::kAssetImportOptionMeshImportMaterials) == 0U) return mesh;
+        std::vector<RenderMeshAssetMaterialBinding> bindings;
+        bindings.reserve(mesh->materialNames.size());
+        for (const std::string& materialName : mesh->materialNames) {
+            const std::filesystem::path path = RenderMeshSourceImport::GeneratedMaterialVirtualPath(
+                request.metadata.virtualPath, imported->sourceName, materialName);
+            bindings.push_back({
+                .materialName = materialName,
+                .materialAssetId = kb::assets::MakeAssetId(
+                    kb::assets::NormalizeAssetPath(path) + ":RenderMaterial").value,
+            });
+        }
+        return RenderMeshAssetBuilder::LoadFbx(payload, RenderMeshFbxImportDesc{
+            .materialBindings = bindings.data(),
+            .materialBindingCount = static_cast<std::uint32_t>(bindings.size()),
+            .importMaterialSlots = (imported->importOptions & kb::assets::kAssetImportOptionMeshDisableMaterialSlots) == 0U,
+        });
     }
     return std::nullopt;
 }

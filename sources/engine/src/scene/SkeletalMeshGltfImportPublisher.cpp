@@ -7,6 +7,7 @@
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 
 #include <functional>
+#include <set>
 #include <system_error>
 #include <utility>
 
@@ -64,6 +65,14 @@ std::optional<SkeletalMeshGltfPublishResult> SkeletalMeshGltfImportPublisher::Pu
     kb::assets::AssetManager& manager,
     const SkeletalMeshGltfImportPlan& plan,
     std::string* error) {
+    return PublishWithArtifacts(manager, plan, {}, error);
+}
+
+std::optional<SkeletalMeshGltfPublishResult> SkeletalMeshGltfImportPublisher::PublishWithArtifacts(
+    kb::assets::AssetManager& manager,
+    const SkeletalMeshGltfImportPlan& plan,
+    std::span<const SkeletalMeshImportArtifact> artifacts,
+    std::string* error) {
     if (error != nullptr) error->clear();
     if (!plan.skeletonAssetId.IsValid() || plan.skeletonVirtualPath.empty() || plan.meshVirtualPath.empty()) {
         return Fail<SkeletalMeshGltfPublishResult>(error, "Skeletal glTF import plan is incomplete.");
@@ -76,8 +85,11 @@ std::optional<SkeletalMeshGltfPublishResult> SkeletalMeshGltfImportPublisher::Pu
         "Skeletal glTF mesh destination is not mounted.");
 
     std::vector<StagedAsset> staged;
+    std::set<std::string> stagedPaths;
     const auto add = [&](const std::filesystem::path& virtualPath,
                          const std::function<bool(const std::filesystem::path&)>& write) -> bool {
+        const std::string normalized = kb::assets::NormalizeAssetPath(virtualPath);
+        if (normalized.empty() || !stagedPaths.insert(normalized).second || !write) return false;
         const auto physical = PhysicalPath(manager, virtualPath);
         if (!physical) return false;
         StagedAsset asset{};
@@ -87,10 +99,21 @@ std::optional<SkeletalMeshGltfPublishResult> SkeletalMeshGltfImportPublisher::Pu
         asset.backup = asset.target.string() + ".skeletal-backup-" + std::to_string(staged.size());
         RemoveIfExists(asset.staging);
         RemoveIfExists(asset.backup);
+        std::error_code folderError;
+        std::filesystem::create_directories(asset.target.parent_path(), folderError);
+        if (folderError) return false;
         if (!write(asset.staging)) return false;
         staged.push_back(std::move(asset));
         return true;
     };
+    for (const SkeletalMeshImportArtifact& artifact : artifacts) {
+        if (artifact.virtualPath.empty() || artifact.expectedAssetType.empty() || !artifact.write ||
+            !add(artifact.virtualPath, artifact.write)) {
+            Rollback(staged);
+            return Fail<SkeletalMeshGltfPublishResult>(error,
+                "Skeletal mesh auxiliary asset staging write failed.");
+        }
+    }
     if (!plan.reusesSkeleton && !add(plan.skeletonVirtualPath, [&](const auto& path) {
             return SkeletonAssetIO::Save(path, plan.imported.skeleton);
         })) {
@@ -129,10 +152,11 @@ std::optional<SkeletalMeshGltfPublishResult> SkeletalMeshGltfImportPublisher::Pu
         }
         asset.installed = true;
     }
-    for (const StagedAsset& asset : staged) RemoveIfExists(asset.backup);
     static_cast<void>(manager.DiscoverMountedAssets());
     const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath(meshVirtualPath);
     if (meshMetadata == nullptr || meshMetadata->type != kSkeletalMeshAssetType) {
+        Rollback(staged);
+        static_cast<void>(manager.DiscoverMountedAssets());
         return Fail<SkeletalMeshGltfPublishResult>(error,
             "Skeletal glTF import published files but asset discovery did not register the mesh.");
     }
@@ -140,14 +164,27 @@ std::optional<SkeletalMeshGltfPublishResult> SkeletalMeshGltfImportPublisher::Pu
     result.skeletonAssetId = plan.skeletonAssetId;
     result.meshAssetId = meshMetadata->id;
     result.createdSkeleton = !plan.reusesSkeleton;
+    for (const SkeletalMeshImportArtifact& artifact : artifacts) {
+        const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath(artifact.virtualPath);
+        if (metadata == nullptr || metadata->type != artifact.expectedAssetType) {
+            Rollback(staged);
+            static_cast<void>(manager.DiscoverMountedAssets());
+            return Fail<SkeletalMeshGltfPublishResult>(error,
+                "Skeletal mesh import published an auxiliary asset with an unexpected runtime type.");
+        }
+        result.auxiliaryAssetIds.push_back(metadata->id);
+    }
     for (const std::filesystem::path& path : clipVirtualPaths) {
         const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath(path);
         if (metadata == nullptr || metadata->type != kAnimationClipAssetType) {
+            Rollback(staged);
+            static_cast<void>(manager.DiscoverMountedAssets());
             return Fail<SkeletalMeshGltfPublishResult>(error,
                 "Skeletal glTF import published an animation clip that asset discovery did not register.");
         }
         result.animationClipAssetIds.push_back(metadata->id);
     }
+    for (const StagedAsset& asset : staged) RemoveIfExists(asset.backup);
     return result;
 }
 

@@ -66,15 +66,16 @@ using SkeletalMeshGltfMaterialResolver = std::uint64_t (*)(
 
 struct SkeletalMeshGltfImportOptions {
     SkeletalMeshGltfCoordinateConversion coordinateConversion{};
-    // A primitive with a glTF material is rejected unless this resolver
-    // returns a canonical Material asset id. This prevents a source material
-    // from being silently discarded during skeletal import.
+    // When supplied, every referenced source material must resolve to a
+    // canonical Material asset id. Without a resolver, slots remain explicitly
+    // unassigned and the import report records a warning.
     SkeletalMeshGltfMaterialResolver materialResolver = nullptr;
     void* materialResolverUserData = nullptr;
+    bool combineMeshes = true;
 };
 
-// Imports one glTF skin and the mesh node bound to it into the canonical
-// skeletal asset pair. The caller owns atomic publication of the result.
+// Imports one glTF skin and its bound mesh nodes into the canonical skeletal
+// asset pair. The caller owns atomic publication of the result.
 class SkeletalMeshGltfImporter final {
 public:
     SkeletalMeshGltfImporter() = delete;

@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace kb::scene {
@@ -17,14 +18,18 @@ struct SkeletalMeshFbxImportResult {
     std::vector<AnimationClip> clips;
 };
 
+using SkeletalMeshFbxMaterialResolver = std::uint64_t (*)(
+    std::string_view sourceMaterialName,
+    void* userData);
+
 struct SkeletalMeshFbxImportOptions {
-    // FBX material translation is intentionally outside the skeletal importer.
-    // Source slots are retained as unassigned runtime slots until material assets
-    // are authored or a dedicated FBX material pipeline is available.
     bool importMaterialSlots = true;
+    SkeletalMeshFbxMaterialResolver materialResolver = nullptr;
+    void* materialResolverUserData = nullptr;
+    bool combineMeshes = true;
 };
 
-// Imports one skinned FBX mesh into the canonical Skeleton, SkeletalMesh and
+// Imports compatible skinned FBX mesh nodes into the canonical Skeleton, SkeletalMesh and
 // AnimationClip runtime assets. Coordinates and units are normalized by ufbx
 // to the engine's left-handed, Y-up metre convention at the file boundary.
 class SkeletalMeshFbxImporter final {

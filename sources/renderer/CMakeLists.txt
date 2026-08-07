@@ -57,6 +57,7 @@ add_library(kb_renderer STATIC
     include/kb/render/resources/PostProcessProfileAssetLoader.hpp
     include/kb/render/resources/BuiltInParticleQuadMesh.hpp
     include/kb/render/resources/RenderMeshAssetBuilder.hpp
+    include/kb/render/resources/RenderMeshSourceImport.hpp
     include/kb/render/resources/SkeletalMeshRenderResourceBuilder.hpp
     include/kb/render/resources/RenderTerrainMeshBuilder.hpp
     include/kb/render/resources/RenderMeshAssetLoader.hpp
@@ -207,6 +208,7 @@ add_library(kb_renderer STATIC
     src/resources/RenderMeshGltfImporter.hpp
     src/resources/RenderMeshGltfMaterialImporter.cpp
     src/resources/RenderMeshGltfMaterialImporter.hpp
+    src/resources/RenderMeshSourceImport.cpp
     src/resources/RenderMeshGltfTransforms.cpp
     src/resources/RenderMeshGltfTransforms.hpp
     src/resources/RenderMeshAssetLoader.cpp
@@ -535,6 +537,7 @@ target_link_libraries(kb_renderer
         bx
         bimg
         bimg_decode
+        kb_ufbx
 )
 
 if(WIN32)
