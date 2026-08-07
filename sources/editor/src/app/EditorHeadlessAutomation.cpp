@@ -1197,18 +1197,13 @@ bool EditorHeadlessAutomation::VerifyViewportHostLifecycle() {
         overlayShown = HasVisibleOwnedOverlay(impl_->window);
     }
 
-    // WM_ACTIVATEAPP(wparam == FALSE): same calls as EditorWindowMessageRouter.
-    // Every host surface of the window hides, and no owned overlay popup may
-    // stay visible above the application that takes focus.
-    impl_->viewport.SetAllHostSurfacesSuspended(true);
+    // WM_ACTIVATEAPP(wparam == FALSE): native render surfaces are WS_CHILD,
+    // so the router leaves their last frame intact. This prevents a gray Scene
+    // View while inactive; only owned WS_POPUP overlays must be hidden.
     MainWindowBackBufferPainter::HideAllOverlays();
     FloatingWindowBackBufferPainter::HideAllOverlays();
-    const bool deactivatedHidden = noneVisible();
+    const bool sceneStayedVisibleOnDeactivate = allExpectedVisible();
     const bool overlayHiddenOnDeactivate = !HasVisibleOwnedOverlay(impl_->window);
-
-    impl_->viewport.SetAllHostSurfacesSuspended(false);
-    const bool resumedAfterDeactivate = impl_->viewport.PresentRequested() &&
-        impl_->RenderAll(context_, animatorPreviewKey) && allExpectedVisible();
     bool overlayRestoredOnActivate = true;
     if (overlayShown) {
         // The repaint on reactivation re-shows the overlay because the UI
@@ -1265,8 +1260,8 @@ bool EditorHeadlessAutomation::VerifyViewportHostLifecycle() {
 
     const bool succeeded = initiallyVisible && animatorPreviewCovered &&
         minimizedHidden && resumedAfterMinimize && overlayShown &&
-        deactivatedHidden && overlayHiddenOnDeactivate &&
-        resumedAfterDeactivate && overlayRestoredOnActivate &&
+        sceneStayedVisibleOnDeactivate && overlayHiddenOnDeactivate &&
+        overlayRestoredOnActivate &&
         dpiTransitionHidden && resumedAfterDpi && resizeMoveHasNoLeakedViewport &&
         removedViewportHidden;
     ShowWindow(impl_->window, SW_HIDE);
@@ -1288,9 +1283,8 @@ bool EditorHeadlessAutomation::VerifyViewportHostLifecycle() {
     append(minimizedHidden, "minimize-hide");
     append(resumedAfterMinimize, "minimize-resume");
     append(overlayShown, "overlay-show");
-    append(deactivatedHidden, "deactivate-hide");
+    append(sceneStayedVisibleOnDeactivate, "deactivate-scene-visible");
     append(overlayHiddenOnDeactivate, "overlay-deactivate-hide");
-    append(resumedAfterDeactivate, "deactivate-resume");
     append(overlayRestoredOnActivate, "overlay-reactivate-show");
     append(dpiTransitionHidden, "dpi-hide");
     append(resumedAfterDpi, "dpi-resume");

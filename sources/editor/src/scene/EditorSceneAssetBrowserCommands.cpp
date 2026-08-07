@@ -3,8 +3,15 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/assets/AssetImportService.hpp"
+#include "engine/scene/SkeletalMeshGltfImportPlanner.hpp"
+#include "engine/scene/SkeletalMeshGltfImportPublisher.hpp"
+#include "engine/scene/SkeletalMeshFbxImportPlanner.hpp"
+#include "engine/scene/SkeletalMeshFbxImportPublisher.hpp"
 
+#include <array>
 #include <optional>
+#include <cctype>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -64,6 +71,144 @@ namespace {
 
 void RefreshAssets(kb::scene::Scene& scene) {
     static_cast<void>(scene.Assets().Discover());
+}
+
+[[nodiscard]] bool IsGltfSkeletalSource(const std::filesystem::path& path) {
+    std::string extension = path.extension().string();
+    std::ranges::transform(extension, extension.begin(), [](unsigned char value) {
+        return static_cast<char>(std::tolower(value));
+    });
+    return extension == ".gltf" || extension == ".glb";
+}
+
+[[nodiscard]] bool IsFbxSkeletalSource(const std::filesystem::path& path) {
+    std::string extension = path.extension().string();
+    std::ranges::transform(extension, extension.begin(), [](unsigned char value) {
+        return static_cast<char>(std::tolower(value));
+    });
+    return extension == ".fbx";
+}
+
+[[nodiscard]] kb::assets::AssetImportResult ImportSkeletalGltfFiles(
+    kb::scene::Scene& scene,
+    std::span<const std::filesystem::path> sourceFiles,
+    const std::filesystem::path& destinationVirtualFolder) {
+    kb::assets::AssetManager& manager = AssetManager(scene);
+    kb::assets::AssetImportResult result{};
+    result.items.reserve(sourceFiles.size());
+    for (const std::filesystem::path& sourcePath : sourceFiles) {
+        kb::assets::AssetImportItemResult item{};
+        item.sourcePath = sourcePath;
+        item.category = kb::assets::AssetImportCategory::Model;
+        if (!IsGltfSkeletalSource(sourcePath)) {
+            item.status = kb::assets::AssetImportItemStatus::Unsupported;
+            item.error = "Skeletal Mesh import supports glTF (.gltf) and GLB (.glb) sources only.";
+            result.items.push_back(std::move(item));
+            continue;
+        }
+
+        std::string error;
+        const auto plan = kb::scene::SkeletalMeshGltfImportPlanner::Plan(
+            manager, sourcePath, destinationVirtualFolder, {}, &error);
+        if (!plan.has_value()) {
+            item.status = kb::assets::AssetImportItemStatus::Failed;
+            item.error = error.empty() ? "Skeletal glTF import planning failed." : std::move(error);
+            result.items.push_back(std::move(item));
+            continue;
+        }
+
+        const bool meshAlreadyExisted = manager.Registry().FindByPath(plan->meshVirtualPath) != nullptr;
+        const auto published = kb::scene::SkeletalMeshGltfImportPublisher::Publish(manager, *plan, &error);
+        if (!published.has_value()) {
+            item.status = kb::assets::AssetImportItemStatus::Failed;
+            item.error = error.empty() ? "Skeletal glTF asset publication failed." : std::move(error);
+            result.items.push_back(std::move(item));
+            continue;
+        }
+
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(published->meshAssetId);
+        if (metadata == nullptr) {
+            item.status = kb::assets::AssetImportItemStatus::Failed;
+            item.error = "Skeletal glTF import completed without a registered Skeletal Mesh asset.";
+            result.items.push_back(std::move(item));
+            continue;
+        }
+        item.id = metadata->id;
+        item.assetPhysicalPath = metadata->physicalPath;
+        item.virtualPath = metadata->virtualPath;
+        item.assetHash = metadata->contentHash;
+        item.status = meshAlreadyExisted
+            ? kb::assets::AssetImportItemStatus::Reused
+            : kb::assets::AssetImportItemStatus::Created;
+        result.items.push_back(std::move(item));
+    }
+    return result;
+}
+
+[[nodiscard]] kb::assets::AssetImportResult ImportSkeletalFbxFiles(
+    kb::scene::Scene& scene, std::span<const std::filesystem::path> sourceFiles,
+    const std::filesystem::path& destinationVirtualFolder) {
+    kb::assets::AssetManager& manager = AssetManager(scene);
+    kb::assets::AssetImportResult result{};
+    result.items.reserve(sourceFiles.size());
+    for (const std::filesystem::path& sourcePath : sourceFiles) {
+        kb::assets::AssetImportItemResult item{};
+        item.sourcePath = sourcePath;
+        item.category = kb::assets::AssetImportCategory::Model;
+        if (!IsFbxSkeletalSource(sourcePath)) {
+            item.status = kb::assets::AssetImportItemStatus::Unsupported;
+            item.error = "Skeletal Mesh import supports FBX, glTF (.gltf), and GLB (.glb) sources only.";
+            result.items.push_back(std::move(item));
+            continue;
+        }
+        std::string error;
+        const auto plan = kb::scene::SkeletalMeshFbxImportPlanner::Plan(
+            manager, sourcePath, destinationVirtualFolder, {}, &error);
+        if (!plan) {
+            item.status = kb::assets::AssetImportItemStatus::Failed;
+            item.error = error.empty() ? "Skeletal FBX import planning failed." : std::move(error);
+            result.items.push_back(std::move(item));
+            continue;
+        }
+        const bool meshAlreadyExisted = manager.Registry().FindByPath(plan->meshVirtualPath) != nullptr;
+        const auto published = kb::scene::SkeletalMeshFbxImportPublisher::Publish(manager, *plan, &error);
+        if (!published) {
+            item.status = kb::assets::AssetImportItemStatus::Failed;
+            item.error = error.empty() ? "Skeletal FBX asset publication failed." : std::move(error);
+            result.items.push_back(std::move(item));
+            continue;
+        }
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(published->meshAssetId);
+        if (metadata == nullptr) {
+            item.status = kb::assets::AssetImportItemStatus::Failed;
+            item.error = "Skeletal FBX import completed without a registered Skeletal Mesh asset.";
+            result.items.push_back(std::move(item));
+            continue;
+        }
+        item.id = metadata->id;
+        item.assetPhysicalPath = metadata->physicalPath;
+        item.virtualPath = metadata->virtualPath;
+        item.assetHash = metadata->contentHash;
+        item.status = meshAlreadyExisted ? kb::assets::AssetImportItemStatus::Reused : kb::assets::AssetImportItemStatus::Created;
+        result.items.push_back(std::move(item));
+    }
+    return result;
+}
+
+[[nodiscard]] kb::assets::AssetImportResult ImportSkeletalFiles(
+    kb::scene::Scene& scene, std::span<const std::filesystem::path> sourceFiles,
+    const std::filesystem::path& destinationVirtualFolder) {
+    kb::assets::AssetImportResult result{};
+    result.items.reserve(sourceFiles.size());
+    for (const std::filesystem::path& sourcePath : sourceFiles) {
+        const std::array<std::filesystem::path, 1U> oneSource{ sourcePath };
+        kb::assets::AssetImportResult one = IsGltfSkeletalSource(sourcePath)
+            ? ImportSkeletalGltfFiles(scene, oneSource, destinationVirtualFolder)
+            : ImportSkeletalFbxFiles(scene, oneSource, destinationVirtualFolder);
+        result.items.insert(result.items.end(),
+            std::make_move_iterator(one.items.begin()), std::make_move_iterator(one.items.end()));
+    }
+    return result;
 }
 
 [[nodiscard]] std::filesystem::path UniquePathInFolder(const std::filesystem::path& folder, const std::filesystem::path& filename) {
@@ -380,7 +525,9 @@ kb::assets::AssetImportResult EditorSceneAssetBrowserCommands::ImportFilesWithRe
     }
 
     kb::assets::AssetManager& manager = AssetManager(scene);
-    const kb::assets::AssetImportResult imported = kb::assets::AssetImportService::ImportFiles(manager, sourceFiles, destinationVirtualFolder, options);
+    const kb::assets::AssetImportResult imported = options.mesh.importSkeletalMesh
+        ? ImportSkeletalFiles(scene, sourceFiles, destinationVirtualFolder)
+        : kb::assets::AssetImportService::ImportFiles(manager, sourceFiles, destinationVirtualFolder, options);
     if (imported.ImportedCount() == 0U) {
         return imported;
     }

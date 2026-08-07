@@ -8,6 +8,7 @@
 #include "engine/scene/TransformComponent.hpp"
 
 #include <cmath>
+#include <cstdint>
 
 namespace kb::audio_miniaudio {
 namespace {
@@ -38,7 +39,9 @@ using kb::math::Rotate;
 struct ListenerScan {
     kb::scene::Scene* scene = nullptr;
     bool found = false;
+    std::int32_t priority = 0;
     bool primary = false;
+    kb::scene::SceneEntity entity{};
     kb::scene::TransformComponent transform{};
 };
 
@@ -48,9 +51,14 @@ void ScanListener(kb::scene::SceneEntity entity, const kb::scene::TransformCompo
     if (listener == nullptr || !listener->enabled) {
         return;
     }
-    if (!scan->found || (!scan->primary && listener->primary)) {
+    const bool preferred = !scan->found || listener->priority > scan->priority ||
+        (listener->priority == scan->priority && listener->primary && !scan->primary) ||
+        (listener->priority == scan->priority && listener->primary == scan->primary && entity < scan->entity);
+    if (preferred) {
         scan->found = true;
+        scan->priority = listener->priority;
         scan->primary = listener->primary;
+        scan->entity = entity;
         scan->transform = transform;
     }
 }
