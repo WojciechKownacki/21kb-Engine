@@ -24,6 +24,7 @@ std::optional<SkeletalMeshFbxPublishResult> SkeletalMeshFbxImportPublisher::Publ
         .skeletonVirtualPath = plan.skeletonVirtualPath,
         .meshVirtualPath = plan.meshVirtualPath,
         .reusesSkeleton = plan.reusesSkeleton,
+        .updatesSkeleton = plan.updatesSkeleton,
     };
     const auto published = SkeletalMeshGltfImportPublisher::PublishWithArtifacts(
         manager, canonicalPlan, artifacts, error);

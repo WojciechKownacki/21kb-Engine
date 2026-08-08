@@ -31,6 +31,7 @@ enum class HeroIconKind : std::uint8_t {
     Gamepad2,
     RotationSnap,
     Camera,
+    Skeleton,
 };
 
 } // namespace kb::editor
