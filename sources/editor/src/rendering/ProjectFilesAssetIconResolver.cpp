@@ -1,5 +1,8 @@
 #include "rendering/ProjectFilesAssetIconResolver.hpp"
 
+#include "engine/scene/SkeletonAssetIO.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
+
 #if defined(_WIN32)
 namespace kb::editor {
 namespace {
@@ -34,7 +37,17 @@ bool ProjectFilesAssetIconResolver::IsTexture(const kb::assets::AssetMetadata& m
 }
 
 bool ProjectFilesAssetIconResolver::IsMesh(const kb::assets::AssetMetadata& metadata) noexcept {
-    return metadata.type == "RenderMesh" || metadata.importCategory == "Mesh";
+    return metadata.type == "RenderMesh" || metadata.importCategory == "Mesh" || IsSkeletalMesh(metadata);
+}
+
+bool ProjectFilesAssetIconResolver::IsSkeletalMesh(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == kb::scene::kSkeletalMeshAssetType ||
+        metadata.virtualPath.extension() == kb::scene::kSkeletalMeshAssetExtension;
+}
+
+bool ProjectFilesAssetIconResolver::IsSkeleton(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == kb::scene::kSkeletonAssetType ||
+        metadata.virtualPath.extension() == kb::scene::kSkeletonAssetExtension;
 }
 
 bool ProjectFilesAssetIconResolver::IsMaterial(const kb::assets::AssetMetadata& metadata) noexcept {
@@ -50,6 +63,9 @@ bool ProjectFilesAssetIconResolver::IsMaterialType(const kb::assets::AssetMetada
 }
 
 ProjectFilesAssetIcon ProjectFilesAssetIconResolver::Resolve(const kb::assets::AssetMetadata& metadata, bool selected) noexcept {
+    if (IsSkeleton(metadata)) {
+        return ProjectFilesAssetIcon{ .kind = HeroIconKind::Skeleton, .color = selected ? RGB(255, 180, 116) : RGB(232, 116, 55), .strokeWidth = 2 };
+    }
     if (IsPrefab(metadata)) {
         return ProjectFilesAssetIcon{ .kind = HeroIconKind::Cube, .color = selected ? RGB(106, 177, 255) : RGB(68, 145, 236), .strokeWidth = 2 };
     }

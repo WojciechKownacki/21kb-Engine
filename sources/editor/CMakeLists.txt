@@ -1100,6 +1100,10 @@ if(BUILD_TESTING)
         src/rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.cpp
         src/rendering/ProjectFilesAssetIconResolver.cpp
         src/rendering/ProjectFilesMaterialPreviewThumbnailModel.cpp
+        src/rendering/EditorMeshPreviewRasterizer.cpp
+        src/rendering/EditorMeshPreviewService.cpp
+        src/rendering/EditorMeshThumbnailDiskCache.cpp
+        src/rendering/EditorMeshThumbnailService.cpp
         src/rendering/MaterialPreviewAppearanceResolver.cpp
         src/inspection/InspectorAudioTextBuilder.cpp
         src/inspection/InspectorComponentCatalog.cpp

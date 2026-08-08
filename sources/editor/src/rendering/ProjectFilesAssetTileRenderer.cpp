@@ -593,7 +593,10 @@ void DrawAssetTile(
     } else if (const ProjectFilesMaterialPreviewStyle* materialStyle = MaterialPreviewStyleCache().StyleFor(asset.metadata, manager)) {
         // Painted stand-in, shown only until that render lands (and if it never can).
         DrawMaterialPreviewBall(dc, MaterialPreviewRect(tile, visual), *materialStyle, asset.selected);
-    } else if (const EditorMeshThumbnailImage* thumbnail = meshThumbnails.PreviewFor(manager, asset.metadata)) {
+    } else if (const EditorMeshThumbnailImage* thumbnail =
+                   ProjectFilesAssetIconResolver::IsSkeletalMesh(asset.metadata)
+                       ? meshThumbnails.ThumbnailFor(asset.metadata)
+                       : meshThumbnails.PreviewFor(manager, asset.metadata)) {
         DrawThumbnailBitmap(dc, ThumbnailRect(tile, visual), *thumbnail);
     } else {
         const ProjectFilesAssetIcon icon = ProjectFilesAssetIconResolver::Resolve(asset.metadata, asset.selected);

@@ -68,6 +68,7 @@
 #include "engine/visual/VisualGraphNodeCatalog.hpp"
 #include "engine/visual/VisualGraphRuntimeBindingRegistry.hpp"
 #include "engine/visual/VisualGraphRuntimeRegistry.hpp"
+#include "rendering/EditorMeshThumbnailService.hpp"
 #include "engine/visual/VisualGraphDebugSession.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "scene/EditorPluginCatalog.hpp"
@@ -1573,9 +1574,22 @@ ReadScriptValue(
         if (!sourcePath) return { false, error };
         const std::array<std::filesystem::path, 1U> sources{
             *sourcePath };
+        const auto skeletal = BoolMember(step, "skeletal", error, false);
+        if (!skeletal && step.Find("skeletal") != nullptr) return { false, error };
+        const auto importTextures = BoolMember(step, "import_textures", error, false);
+        if (!importTextures && step.Find("import_textures") != nullptr) return { false, error };
+        const auto importMaterials = BoolMember(step, "import_materials", error, false);
+        if (!importMaterials && step.Find("import_materials") != nullptr) return { false, error };
+        const auto combineMeshes = BoolMember(step, "combine_meshes", error, false);
+        if (!combineMeshes && step.Find("combine_meshes") != nullptr) return { false, error };
+        kb::assets::AssetImportOptions options{};
+        options.mesh.importSkeletalMesh = skeletal.value_or(false);
+        options.mesh.importTextures = importTextures.value_or(false);
+        options.mesh.importMaterials = importMaterials.value_or(false);
+        options.mesh.combineMeshes = combineMeshes.value_or(false);
         return {
             state.context.ImportAssetFiles(
-                sources, std::filesystem::path{ *destination }),
+                sources, std::filesystem::path{ *destination }, options),
             sourcePath->string() };
     }
 
@@ -2319,6 +2333,26 @@ ReadScriptValue(
         const auto mesh = manager.Load<kb::scene::SkeletalMeshAsset>(id);
         const bool matched = mesh.IsLoaded() && mesh->lods.size() == *lodCount && mesh->skeletonAssetId != 0U;
         return { matched, matched ? "canonical skeletal mesh loaded" : manager.LastError() };
+    }
+
+    if (*operation == "assert_mesh_thumbnail") {
+        const auto asset = StringMember(step, "asset", error);
+        if (!asset) return { false, error };
+        kb::assets::AssetManager& manager = state.context.Scene().Assets().Manager();
+        const kb::assets::AssetId id = ResolveAsset(state, *asset);
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(id);
+        if (metadata == nullptr) return { false, "thumbnail asset was not found" };
+        EditorMeshThumbnailService& thumbnails = EditorMeshThumbnailCache();
+        thumbnails.Clear();
+        const EditorMeshThumbnailImage* image = thumbnails.ThumbnailFor(*metadata);
+        const EditorMeshThumbnailStats* stats = thumbnails.StatsFor(*metadata);
+        const bool matched = image != nullptr && image->width == kEditorMeshThumbnailSize &&
+            image->height == kEditorMeshThumbnailSize && !image->bgra.empty() &&
+            stats != nullptr && stats->vertexCount >= 3U && stats->triangleCount >= 1U;
+        return { matched, matched
+            ? std::to_string(stats->vertexCount) + " vertices, " +
+                std::to_string(stats->triangleCount) + " triangles"
+            : "mesh geometry thumbnail was not rendered" };
     }
 
     if (*operation == "assert_skeletal_gltf_import") {

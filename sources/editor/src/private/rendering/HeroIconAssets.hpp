@@ -34,6 +34,7 @@ public:
     [[nodiscard]] static HeroIconGlyph Gamepad2() noexcept;
     [[nodiscard]] static HeroIconGlyph RotationSnap() noexcept;
     [[nodiscard]] static HeroIconGlyph Camera() noexcept;
+    [[nodiscard]] static HeroIconGlyph Skeleton() noexcept;
 };
 
 } // namespace kb::editor
