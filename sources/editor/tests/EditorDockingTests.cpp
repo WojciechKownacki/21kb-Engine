@@ -403,6 +403,10 @@ void RunSkeletalMeshEditorWorkspaceActivationTest() {
         sceneLeaf != nullptr && skeletalMeshLeaf != nullptr &&
             sceneLeaf->leafId == skeletalMeshLeaf->leafId,
         "Skeletal Mesh Editor should use the central workspace");
+    kb::editor::tests::Require(
+        model.Commands().SetPanelTitle(kb::editor::DockPanelKind::SkeletalMeshEditor, "Y Bot.kbskeletalmesh") &&
+            RequirePanel(model, 11U)->title == "Y Bot.kbskeletalmesh",
+        "Skeletal Mesh Editor tab should accept the opened asset filename");
 
     kb::editor::tests::Require(model.Commands().ClosePanel(11U),
         "Closing Skeletal Mesh Editor should succeed");
@@ -549,13 +553,20 @@ void RunSkeletalMeshEditorTreeStateTest() {
 
 void RunSkeletalMeshEditorDetailsStateTest() {
     kb::scene::SkeletonAsset skeleton{};
-    skeleton.bones = {{ .id = 10U, .parentIndex = -1, .name = "Root" }};
+    skeleton.bones = {
+        { .id = 10U, .parentIndex = -1, .name = "Root" },
+        { .id = 20U, .parentIndex = 0, .name = "Child" },
+    };
     skeleton.sockets = {{ .name = "Weapon", .boneId = 10U }};
     kb::scene::SkeletalMeshAsset mesh{};
     mesh.skeletonAssetId = 99U;
     mesh.skeletonCompatibilitySignature = 456U;
-    mesh.lods = {{ .vertices = std::vector<kb::scene::SkeletalMeshVertex>(3U), .indices = { 0U, 1U, 2U },
-        .sections = {{ .firstIndex = 0U, .indexCount = 3U, .materialAssetId = 123U, .boneMap = { 10U } }}, .requiredBones = { 10U } }};
+    mesh.lods = {{ .vertices = std::vector<kb::scene::SkeletalMeshVertex>(3U), .indices = { 0U, 1U, 2U, 0U, 1U, 2U },
+        .sections = {{ .firstIndex = 0U, .indexCount = 6U, .materialAssetId = 123U, .boneMap = { 10U, 20U } }}, .requiredBones = { 10U, 20U } }};
+    mesh.lods[0].vertices[0].jointIndices = { 0U, 1U, 0U, 0U };
+    mesh.lods[0].vertices[0].jointWeights = { 0.25F, 0.75F, 0.0F, 0.0F };
+    mesh.lods[0].vertices[1].jointIndices = { 0U, 1U, 0U, 0U };
+    mesh.lods[0].vertices[1].jointWeights = { 0.5F, 0.5F, 0.0F, 0.0F };
     kb::assets::AssetMetadata metadata{};
     metadata.name = "Hero";
     metadata.virtualPath = "/Game/Hero.kbskeletalmesh";
@@ -569,13 +580,20 @@ void RunSkeletalMeshEditorDetailsStateTest() {
     kb::editor::tests::Require(bone.title == "Bone: Root" && bone.sections[0].fields[0].value == "10" &&
             bone.sections[0].fields[5].value == "3",
         "Skeletal Mesh Details should expose selected bone data");
+    const kb::editor::SkeletalMeshEditorDetailsModel child = details.Build(20U, {});
+    kb::editor::tests::Require(child.sections[0].fields[5].value == "2" &&
+            child.sections[0].fields[6].value == "0.625" && child.sections[0].fields[7].value == "0.75",
+        "Skeletal Mesh Details should precompute per-bone vertex counts and weights without counting repeated indices");
     const kb::editor::SkeletalMeshEditorDetailsModel socket = details.Build(0U, "Weapon");
     kb::editor::tests::Require(socket.title == "Socket: Weapon" && socket.sections[0].fields[1].value == "10",
         "Skeletal Mesh Details should expose selected socket data");
     mesh.morphTargets = {{ .name = "Smile", .lodIndex = 0U, .deltas = {{ .vertexIndex = 0U }} }};
+    mesh.lods[0].vertices[0].jointWeights = { 0.0F, 1.0F, 0.0F, 0.0F };
     details.SetDocument(mesh, skeleton, metadata);
     kb::editor::tests::Require(details.MorphTargets().size() == 1U && details.MorphTargets()[0].name == "Smile",
         "Skeletal Mesh editor Morph Targets panel should use the canonical mesh morph data");
+    kb::editor::tests::Require(details.Build(10U, {}).sections[0].fields[5].value == "2",
+        "Skeletal Mesh Details should rebuild cached bone influence statistics when the document changes");
 }
 
 void RunSkeletalMeshEditorDocumentStateTest() {

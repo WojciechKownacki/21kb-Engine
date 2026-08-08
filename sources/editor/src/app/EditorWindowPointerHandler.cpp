@@ -160,9 +160,11 @@ LRESULT EditorWindowPointerHandler::HandleMouseMove(HWND messageWindow, WPARAM w
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
     if (sceneContext_.AnimationPreviewCamera().IsNavigating()) {
-        static_cast<void>(sceneContext_.AnimationPreviewCamera().UpdatePointer(x, y));
+        // Coalesce the native WM_MOUSEMOVE burst and apply at most one camera update per editor
+        // frame. The main Scene viewport follows the same policy; processing every message here
+        // used to repaint the entire application dozens of times between two GPU frames.
+        sceneContext_.AnimationPreviewCamera().QueuePointer(x, y);
         sceneViewport_.RequestPresent();
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return 0;
     }
     const bool leftButtonDown = (wparam & MK_LBUTTON) != 0;

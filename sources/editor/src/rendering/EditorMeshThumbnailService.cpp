@@ -8,11 +8,17 @@ const EditorMeshThumbnailImage* EditorMeshThumbnailService::ThumbnailFor(const k
     return EditorMeshPreviewCache().ThumbnailFor(metadata);
 }
 
+const EditorMeshThumbnailImage* EditorMeshThumbnailService::ThumbnailFor(
+    kb::assets::AssetManager& manager,
+    const kb::assets::AssetMetadata& metadata) {
+    return EditorMeshPreviewCache().ThumbnailFor(manager, metadata);
+}
+
 const EditorMeshThumbnailImage* EditorMeshThumbnailService::PreviewFor(const kb::assets::AssetMetadata& metadata) {
     return EditorMeshPreviewCache().PreviewFor(metadata);
 }
 
-const EditorMeshThumbnailImage* EditorMeshThumbnailService::PreviewFor(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata) {
+const EditorMeshThumbnailImage* EditorMeshThumbnailService::PreviewFor(kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata) {
     return EditorMeshPreviewCache().PreviewFor(manager, metadata, EditorMeshPreviewSettings{});
 }
 
@@ -20,7 +26,7 @@ const EditorMeshThumbnailImage* EditorMeshThumbnailService::PreviewFor(const kb:
     return EditorMeshPreviewCache().PreviewFor(metadata, settings);
 }
 
-const EditorMeshThumbnailImage* EditorMeshThumbnailService::PreviewFor(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata, const EditorMeshPreviewSettings& settings) {
+const EditorMeshThumbnailImage* EditorMeshThumbnailService::PreviewFor(kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata, const EditorMeshPreviewSettings& settings) {
     return EditorMeshPreviewCache().PreviewFor(manager, metadata, settings);
 }
 
@@ -28,7 +34,7 @@ const EditorMeshThumbnailStats* EditorMeshThumbnailService::StatsFor(const kb::a
     return EditorMeshPreviewCache().StatsFor(metadata);
 }
 
-const EditorMeshThumbnailStats* EditorMeshThumbnailService::StatsFor(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata) {
+const EditorMeshThumbnailStats* EditorMeshThumbnailService::StatsFor(kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata) {
     return EditorMeshPreviewCache().StatsFor(manager, metadata);
 }
 

@@ -5,6 +5,7 @@
 #include "app/EditorWindowInvalidator.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
 #include "docking/DockMainLayoutResolver.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
 #include "platform/win32/EditorMaterialParameterValueDialog.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
@@ -147,6 +148,15 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
         }
     }
     if (assetResult == EditorAssetBrowserDoubleClickResult::SkeletalMeshEditorOpened) {
+        const kb::assets::AssetId selectedAsset = sceneContext_.RequestedSkeletalMeshEditorAssetId();
+        if (const kb::assets::AssetMetadata* metadata =
+                sceneContext_.Scene().Assets().Manager().Registry().Find(selectedAsset);
+            metadata != nullptr) {
+            const std::string filename = metadata->virtualPath.filename().string();
+            static_cast<void>(dockModel_.Commands().SetPanelTitle(
+                DockPanelKind::SkeletalMeshEditor,
+                filename.empty() ? metadata->name : filename));
+        }
         static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::SkeletalMeshEditor, DockArea::Center));
     }
     if (assetResult == EditorAssetBrowserDoubleClickResult::AnimationClipEditorOpened) {
