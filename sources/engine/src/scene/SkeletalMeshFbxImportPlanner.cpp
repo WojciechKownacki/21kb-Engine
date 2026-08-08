@@ -44,6 +44,7 @@ std::optional<SkeletalMeshFbxImportPlan> SkeletalMeshFbxImportPlanner::Plan(
     kb::assets::AssetId selected{};
     std::filesystem::path selectedPath;
     bool reuse = false;
+    bool update = false;
     for (const kb::assets::AssetMetadata& metadata : skeletons) {
         std::string loadError;
         const auto existing = SkeletonAssetIO::Load(metadata.physicalPath, &loadError);
@@ -57,10 +58,18 @@ std::optional<SkeletalMeshFbxImportPlan> SkeletalMeshFbxImportPlanner::Plan(
     if (!reuse) {
         const std::filesystem::path candidatePath = std::filesystem::path{ normalizedFolder } /
             (sourcePath.stem().string() + kSkeletonAssetExtension);
-        if (manager.Registry().FindByPath(candidatePath) != nullptr) return Fail<SkeletalMeshFbxImportPlan>(error,
-            "Skeletal FBX import destination Skeleton path is already occupied by an incompatible asset.");
-        selectedPath = candidatePath;
-        selected = kb::assets::MakeAssetId(kb::assets::NormalizeAssetPath(selectedPath) + ":" + kSkeletonAssetType);
+        if (const kb::assets::AssetMetadata* occupied = manager.Registry().FindByPath(candidatePath);
+            occupied != nullptr) {
+            if (occupied->type != kSkeletonAssetType) return Fail<SkeletalMeshFbxImportPlan>(error,
+                "Skeletal FBX import destination path is occupied by a non-Skeleton asset.");
+            selectedPath = occupied->virtualPath;
+            selected = occupied->id;
+            update = true;
+        } else {
+            selectedPath = candidatePath;
+            selected = kb::assets::MakeAssetId(
+                kb::assets::NormalizeAssetPath(selectedPath) + ":" + kSkeletonAssetType);
+        }
     }
     candidate->mesh.skeletonAssetId = selected.value;
     for (AnimationClip& clip : candidate->clips) clip.targetSkeletonAssetId = selected.value;
@@ -70,6 +79,7 @@ std::optional<SkeletalMeshFbxImportPlan> SkeletalMeshFbxImportPlanner::Plan(
         .meshVirtualPath = std::filesystem::path{ normalizedFolder } /
             (sourcePath.stem().string() + kSkeletalMeshAssetExtension),
         .reusesSkeleton = reuse,
+        .updatesSkeleton = update,
     };
 }
 

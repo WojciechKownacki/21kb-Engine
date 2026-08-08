@@ -268,6 +268,35 @@ void RunSkeletalMeshAssetTests() {
             createPlan->skeletonVirtualPath == "/Game/Characters/Hero.kbskeleton" &&
             createPlan->imported.mesh.skeletonAssetId == createPlan->skeletonAssetId.value,
         "Skeletal glTF import planner did not deterministically plan a new Skeleton asset");
+    const auto replacementRoot = root / "GltfImportReplacementPlanner";
+    std::filesystem::create_directories(replacementRoot / "Assets" / "Characters");
+    kb::scene::Scene replacementScene;
+    Require(replacementScene.Assets().MountProject(replacementRoot),
+        "Skeletal glTF replacement planner mount failed");
+    kb::scene::SkeletonAsset incompatibleSkeleton = imported->skeleton;
+    incompatibleSkeleton.bones.back().name += "_Outdated";
+    const auto replacementSkeletonPath =
+        replacementRoot / "Assets" / "Characters" / "Hero.kbskeleton";
+    Require(kb::scene::SkeletonAssetIO::Save(replacementSkeletonPath, incompatibleSkeleton) &&
+            replacementScene.Assets().Discover() == 1U,
+        "Skeletal glTF replacement planner could not register the outdated Skeleton asset");
+    const kb::assets::AssetMetadata* outdatedMetadata =
+        replacementScene.Assets().Manager().Registry().FindByPath("/Game/Characters/Hero.kbskeleton");
+    Require(outdatedMetadata != nullptr, "Outdated Skeleton metadata was not registered");
+    const kb::assets::AssetId outdatedSkeletonId = outdatedMetadata->id;
+    const auto replacementPlan = kb::scene::SkeletalMeshGltfImportPlanner::Plan(
+        replacementScene.Assets().Manager(), importRoot / "Hero.gltf", "/Game/Characters", {}, &importError);
+    Require(replacementPlan.has_value() && !replacementPlan->reusesSkeleton &&
+            replacementPlan->updatesSkeleton && replacementPlan->skeletonAssetId == outdatedSkeletonId,
+        "Skeletal glTF reimport did not plan an in-place Skeleton update");
+    const auto replacementPublished = replacementPlan ? kb::scene::SkeletalMeshGltfImportPublisher::Publish(
+        replacementScene.Assets().Manager(), *replacementPlan, &importError) : std::nullopt;
+    const auto replacedSkeleton = kb::scene::SkeletonAssetIO::Load(replacementSkeletonPath);
+    Require(replacementPublished.has_value() && !replacementPublished->createdSkeleton &&
+            replacementPublished->skeletonAssetId == outdatedSkeletonId && replacedSkeleton.has_value() &&
+            kb::scene::SkeletonCompatibilitySignature(*replacedSkeleton) ==
+                kb::scene::SkeletonCompatibilitySignature(imported->skeleton),
+        "Skeletal glTF reimport did not atomically replace the outdated Skeleton while preserving its identity");
     Require(kb::scene::SkeletonAssetIO::Save(
                 plannerRoot / "Assets" / "Characters" / "Shared.kbskeleton", imported->skeleton) &&
             plannerScene.Assets().Discover() == 1U,

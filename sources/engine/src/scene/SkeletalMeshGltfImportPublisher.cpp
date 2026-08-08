@@ -160,10 +160,19 @@ std::optional<SkeletalMeshGltfPublishResult> SkeletalMeshGltfImportPublisher::Pu
         return Fail<SkeletalMeshGltfPublishResult>(error,
             "Skeletal glTF import published files but asset discovery did not register the mesh.");
     }
+    const kb::assets::AssetMetadata* skeletonMetadata =
+        manager.Registry().FindByPath(plan.skeletonVirtualPath);
+    if (skeletonMetadata == nullptr || skeletonMetadata->type != kSkeletonAssetType ||
+        skeletonMetadata->id != plan.skeletonAssetId) {
+        Rollback(staged);
+        static_cast<void>(manager.DiscoverMountedAssets());
+        return Fail<SkeletalMeshGltfPublishResult>(error,
+            "Skeletal glTF import did not preserve the planned Skeleton asset identity.");
+    }
     SkeletalMeshGltfPublishResult result{};
     result.skeletonAssetId = plan.skeletonAssetId;
     result.meshAssetId = meshMetadata->id;
-    result.createdSkeleton = !plan.reusesSkeleton;
+    result.createdSkeleton = !plan.reusesSkeleton && !plan.updatesSkeleton;
     for (const SkeletalMeshImportArtifact& artifact : artifacts) {
         const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath(artifact.virtualPath);
         if (metadata == nullptr || metadata->type != artifact.expectedAssetType) {

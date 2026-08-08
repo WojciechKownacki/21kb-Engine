@@ -17,6 +17,7 @@ struct SkeletalMeshFbxImportPlan {
     std::filesystem::path skeletonVirtualPath;
     std::filesystem::path meshVirtualPath;
     bool reusesSkeleton = false;
+    bool updatesSkeleton = false;
 };
 
 class SkeletalMeshFbxImportPlanner final {

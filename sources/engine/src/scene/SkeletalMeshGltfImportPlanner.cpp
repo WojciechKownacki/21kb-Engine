@@ -50,6 +50,7 @@ std::optional<SkeletalMeshGltfImportPlan> SkeletalMeshGltfImportPlanner::Plan(
     kb::assets::AssetId selected{};
     std::filesystem::path selectedPath;
     bool reuse = false;
+    bool update = false;
     for (const kb::assets::AssetMetadata& metadata : skeletons) {
         std::string loadError;
         const auto existing = SkeletonAssetIO::Load(metadata.physicalPath, &loadError);
@@ -65,12 +66,16 @@ std::optional<SkeletalMeshGltfImportPlan> SkeletalMeshGltfImportPlanner::Plan(
             (sourcePath.stem().string() + kSkeletonAssetExtension);
         if (const kb::assets::AssetMetadata* occupied = manager.Registry().FindByPath(candidatePath);
             occupied != nullptr) {
-            return Fail<SkeletalMeshGltfImportPlan>(error,
-                "Skeletal glTF import destination Skeleton path is already occupied by an incompatible asset.");
+            if (occupied->type != kSkeletonAssetType) return Fail<SkeletalMeshGltfImportPlan>(error,
+                "Skeletal glTF import destination path is occupied by a non-Skeleton asset.");
+            selectedPath = occupied->virtualPath;
+            selected = occupied->id;
+            update = true;
+        } else {
+            selectedPath = candidatePath;
+            selected = kb::assets::MakeAssetId(
+                kb::assets::NormalizeAssetPath(selectedPath) + ":" + kSkeletonAssetType);
         }
-        selectedPath = candidatePath;
-        selected = kb::assets::MakeAssetId(
-            kb::assets::NormalizeAssetPath(selectedPath) + ":" + kSkeletonAssetType);
     }
     const auto imported = SkeletalMeshGltfImporter::Import(sourcePath, selected.value, options, &importError);
     if (!imported) return Fail<SkeletalMeshGltfImportPlan>(error, std::move(importError));
@@ -81,6 +86,7 @@ std::optional<SkeletalMeshGltfImportPlan> SkeletalMeshGltfImportPlanner::Plan(
         .meshVirtualPath = std::filesystem::path{ normalizedFolder } /
             (sourcePath.stem().string() + kSkeletalMeshAssetExtension),
         .reusesSkeleton = reuse,
+        .updatesSkeleton = update,
     };
 }
 

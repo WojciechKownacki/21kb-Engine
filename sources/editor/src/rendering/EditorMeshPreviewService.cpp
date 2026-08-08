@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/IAssetLoader.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "rendering/EditorMeshPreviewRasterizer.hpp"
@@ -30,7 +31,14 @@ constexpr std::size_t kMaxCachedPreviewVariants = 16U;
         || extension == ".obj"
         || extension == ".gltf"
         || extension == ".glb"
-        || extension == ".fbx";
+        || extension == ".fbx"
+        || extension == kb::scene::kSkeletalMeshAssetExtension;
+}
+
+[[nodiscard]] bool IsSkeletalMeshAsset(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == kb::scene::kSkeletalMeshAssetType ||
+        metadata.physicalPath.extension() == kb::scene::kSkeletalMeshAssetExtension ||
+        metadata.virtualPath.extension() == kb::scene::kSkeletalMeshAssetExtension;
 }
 
 [[nodiscard]] std::optional<kb::render::RenderMeshAssetData> LoadMesh(const kb::assets::AssetMetadata& metadata) {
@@ -57,6 +65,37 @@ constexpr std::size_t kMaxCachedPreviewVariants = 16U;
 
 [[nodiscard]] bool HasImage(const EditorMeshThumbnailImage& image) noexcept {
     return image.width > 0 && image.height > 0 && !image.bgra.empty();
+}
+
+[[nodiscard]] std::optional<EditorMeshPreviewGeometry> LoadSkeletalMeshGeometry(
+    const kb::assets::AssetMetadata& metadata) {
+    if (metadata.physicalPath.empty()) return std::nullopt;
+    const std::optional<kb::scene::SkeletalMeshAsset> mesh =
+        kb::scene::SkeletalMeshAssetIO::Load(metadata.physicalPath);
+    if (!mesh || mesh->lods.empty() || mesh->lods.front().vertices.size() < 3U) {
+        return std::nullopt;
+    }
+
+    const kb::scene::SkeletalMeshLod& lod = mesh->lods.front();
+    EditorMeshPreviewGeometry geometry{};
+    geometry.positions.reserve(lod.vertices.size());
+    geometry.normals.reserve(lod.vertices.size());
+    for (const kb::scene::SkeletalMeshVertex& vertex : lod.vertices) {
+        geometry.positions.push_back({ vertex.position.x, vertex.position.y, vertex.position.z });
+        geometry.normals.push_back({ vertex.normal.x, vertex.normal.y, vertex.normal.z });
+    }
+    geometry.indices = lod.indices;
+    geometry.stats.vertexCount = static_cast<std::uint32_t>(geometry.positions.size());
+    geometry.stats.indexCount = static_cast<std::uint32_t>(geometry.indices.size());
+    geometry.stats.triangleCount = geometry.stats.indexCount / 3U;
+    geometry.stats.materialSlotCount = static_cast<std::uint32_t>(lod.sections.size());
+    geometry.stats.boundsCenter[0] = mesh->conservativeBounds.center.x;
+    geometry.stats.boundsCenter[1] = mesh->conservativeBounds.center.y;
+    geometry.stats.boundsCenter[2] = mesh->conservativeBounds.center.z;
+    const kb::math::Vec3 extents = mesh->conservativeBounds.extents;
+    geometry.stats.boundsRadius = std::sqrt(
+        extents.x * extents.x + extents.y * extents.y + extents.z * extents.z);
+    return geometry;
 }
 
 [[nodiscard]] std::uint64_t PreviewMaterialCacheKey(const kb::assets::AssetManager* manager) noexcept {
@@ -374,12 +413,16 @@ std::optional<EditorMeshPreviewService::Entry> EditorMeshPreviewService::BuildEn
         return cached;
     }
 
-    std::optional<kb::render::RenderMeshAssetData> mesh = LoadMesh(metadata);
-    if (!mesh.has_value()) {
-        return std::nullopt;
+    std::optional<EditorMeshPreviewGeometry> loadedGeometry;
+    std::optional<kb::render::RenderMeshAssetData> mesh;
+    if (IsSkeletalMeshAsset(metadata)) {
+        loadedGeometry = LoadSkeletalMeshGeometry(metadata);
+    } else {
+        mesh = LoadMesh(metadata);
+        if (mesh) loadedGeometry = EditorMeshPreviewRasterizer::ExtractGeometry(*mesh);
     }
-
-    EditorMeshPreviewGeometry geometry = EditorMeshPreviewRasterizer::ExtractGeometry(*mesh);
+    if (!loadedGeometry) return std::nullopt;
+    EditorMeshPreviewGeometry geometry = std::move(*loadedGeometry);
     if (geometry.positions.size() < 3U) {
         return std::nullopt;
     }
@@ -389,7 +432,7 @@ std::optional<EditorMeshPreviewService::Entry> EditorMeshPreviewService::BuildEn
     entry.materialContentHash = PreviewMaterialCacheKey(manager);
     entry.state = EntryState::Ready;
     entry.geometry = std::move(geometry);
-    ApplyResolvedPreviewMaterial(manager, *mesh, entry.geometry);
+    if (mesh) ApplyResolvedPreviewMaterial(manager, *mesh, entry.geometry);
     entry.geometryLoaded = true;
     entry.stats = entry.geometry.stats;
     entry.validation = ValidateGeometry(entry.geometry);
@@ -431,12 +474,17 @@ bool EditorMeshPreviewService::EnsureGeometry(const kb::assets::AssetManager* ma
         return !entry.geometry.positions.empty();
     }
 
-    std::optional<kb::render::RenderMeshAssetData> mesh = LoadMesh(metadata);
-    if (!mesh.has_value()) {
-        return false;
+    std::optional<kb::render::RenderMeshAssetData> mesh;
+    if (IsSkeletalMeshAsset(metadata)) {
+        const std::optional<EditorMeshPreviewGeometry> geometry = LoadSkeletalMeshGeometry(metadata);
+        if (!geometry) return false;
+        entry.geometry = std::move(*geometry);
+    } else {
+        mesh = LoadMesh(metadata);
+        if (!mesh) return false;
+        entry.geometry = EditorMeshPreviewRasterizer::ExtractGeometry(*mesh);
+        ApplyResolvedPreviewMaterial(manager, *mesh, entry.geometry);
     }
-    entry.geometry = EditorMeshPreviewRasterizer::ExtractGeometry(*mesh);
-    ApplyResolvedPreviewMaterial(manager, *mesh, entry.geometry);
     entry.geometryLoaded = true;
     entry.validation = ValidateGeometry(entry.geometry);
     if (entry.stats.vertexCount == 0U) {
