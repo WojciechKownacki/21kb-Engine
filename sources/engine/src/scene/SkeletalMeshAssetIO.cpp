@@ -6,16 +6,234 @@
 #include "scene/asset/io/VersionedTextAssetHeader.hpp"
 
 #include <charconv>
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <iomanip>
+#include <fstream>
 #include <limits>
 #include <locale>
 #include <sstream>
+#include <span>
 #include <string_view>
 #include <type_traits>
+#include <array>
+#include <system_error>
 
 namespace kb::scene {
 namespace {
+constexpr std::array<std::uint8_t, 8U> kDerivedMagic{ 'K', 'B', 'S', 'M', 'D', 'D', 'C', 0U };
+constexpr std::uint32_t kDerivedVersion = 2U;
+constexpr std::uint32_t kMaxDerivedLods = 64U;
+constexpr std::uint32_t kMaxDerivedVertices = 10'000'000U;
+constexpr std::uint32_t kMaxDerivedIndices = 30'000'000U;
+constexpr std::uint32_t kMaxDerivedSections = 1'000'000U;
+constexpr std::uint32_t kMaxDerivedBones = 1'000'000U;
+constexpr std::uint32_t kMaxDerivedMorphTargets = 100'000U;
+constexpr std::uint32_t kMaxDerivedMorphDeltas = 10'000'000U;
+constexpr std::uint64_t kFnvOffset = 14695981039346656037ULL;
+constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
+
+static_assert(std::is_trivially_copyable_v<SkeletalMeshVertex>);
+static_assert(std::is_trivially_copyable_v<SkeletalMeshBoneBounds>);
+static_assert(std::is_trivially_copyable_v<SkeletalMeshMorphDelta>);
+
+[[nodiscard]] std::uint64_t HashBytes(std::string_view bytes) noexcept {
+    std::uint64_t hash = kFnvOffset;
+    for (const unsigned char value : bytes) {
+        hash ^= value;
+        hash *= kFnvPrime;
+    }
+    return hash == 0U ? kFnvPrime : hash;
+}
+
+[[nodiscard]] std::uint64_t HashBytes(std::span<const std::uint8_t> bytes) noexcept {
+    std::uint64_t hash = kFnvOffset;
+    for (const std::uint8_t value : bytes) {
+        hash ^= value;
+        hash *= kFnvPrime;
+    }
+    return hash == 0U ? kFnvPrime : hash;
+}
+
+[[nodiscard]] std::optional<std::filesystem::path> DerivedDataPath(
+    const std::filesystem::path& sourcePath,
+    std::uint64_t sourceContentHash) {
+    if (sourceContentHash == 0U) return std::nullopt;
+    std::filesystem::path cursor = sourcePath.parent_path();
+    while (!cursor.empty()) {
+        std::string name = cursor.filename().string();
+        std::ranges::transform(name, name.begin(), [](unsigned char character) {
+            return static_cast<char>(std::tolower(character));
+        });
+        if (name == "assets") {
+            return cursor.parent_path() / "Saved" / "Cache" / "SkeletalMesh" /
+                (std::to_string(sourceContentHash) + ".kbskeletalmesh.ddc");
+        }
+        const std::filesystem::path parent = cursor.parent_path();
+        if (parent == cursor) break;
+        cursor = parent;
+    }
+    return std::nullopt;
+}
+
+template <typename T>
+void WriteVectorRaw(std::vector<std::uint8_t>& output, const std::vector<T>& values) {
+    SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(values.size()));
+    if (!values.empty()) {
+        SceneAssetBinaryIO::WriteRaw(output, values.data(), values.size() * sizeof(T));
+    }
+}
+
+template <typename T>
+[[nodiscard]] bool ReadVectorRaw(
+    SceneAssetBinaryIO::ByteReader& reader,
+    std::vector<T>& values,
+    std::uint32_t maximumCount) {
+    std::uint32_t count = 0U;
+    if (!reader.ReadUInt32(count) || count > maximumCount) return false;
+    values.resize(count);
+    return count == 0U || reader.ReadRaw(values.data(), values.size() * sizeof(T));
+}
+
+void WriteBounds(std::vector<std::uint8_t>& output, const SkeletalMeshBounds& bounds) {
+    SceneAssetBinaryIO::WriteFloat(output, bounds.center.x);
+    SceneAssetBinaryIO::WriteFloat(output, bounds.center.y);
+    SceneAssetBinaryIO::WriteFloat(output, bounds.center.z);
+    SceneAssetBinaryIO::WriteFloat(output, bounds.extents.x);
+    SceneAssetBinaryIO::WriteFloat(output, bounds.extents.y);
+    SceneAssetBinaryIO::WriteFloat(output, bounds.extents.z);
+}
+
+[[nodiscard]] bool ReadBounds(SceneAssetBinaryIO::ByteReader& reader, SkeletalMeshBounds& bounds) {
+    return reader.ReadFloat(bounds.center.x) && reader.ReadFloat(bounds.center.y) &&
+        reader.ReadFloat(bounds.center.z) && reader.ReadFloat(bounds.extents.x) &&
+        reader.ReadFloat(bounds.extents.y) && reader.ReadFloat(bounds.extents.z);
+}
+
+[[nodiscard]] std::vector<std::uint8_t> EncodeDerivedData(
+    std::uint64_t sourceContentHash,
+    const SkeletalMeshAsset& asset) {
+    std::vector<std::uint8_t> output;
+    std::size_t reserveBytes = 256U;
+    for (const SkeletalMeshLod& lod : asset.lods) {
+        reserveBytes += lod.vertices.size() * sizeof(SkeletalMeshVertex) +
+            lod.indices.size() * sizeof(std::uint32_t);
+    }
+    output.reserve(reserveBytes);
+    SceneAssetBinaryIO::WriteRaw(output, kDerivedMagic.data(), kDerivedMagic.size());
+    SceneAssetBinaryIO::WriteUInt32(output, kDerivedVersion);
+    SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(sizeof(SkeletalMeshVertex)));
+    SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(sizeof(SkeletalMeshBoneBounds)));
+    SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(sizeof(SkeletalMeshMorphDelta)));
+    SceneAssetBinaryIO::WriteUInt64(output, sourceContentHash);
+    SceneAssetBinaryIO::WriteUInt64(output, asset.skeletonAssetId);
+    SceneAssetBinaryIO::WriteUInt64(output, asset.skeletonCompatibilitySignature);
+    WriteBounds(output, asset.conservativeBounds);
+    WriteBounds(output, asset.fixedBounds);
+    SceneAssetBinaryIO::WriteUInt8(output, static_cast<std::uint8_t>(asset.boundsMode));
+    SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(asset.lods.size()));
+    for (const SkeletalMeshLod& lod : asset.lods) {
+        SceneAssetBinaryIO::WriteFloat(output, lod.minScreenCoverage);
+        WriteVectorRaw(output, lod.vertices);
+        WriteVectorRaw(output, lod.indices);
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(lod.sections.size()));
+        for (const SkeletalMeshSection& section : lod.sections) {
+            SceneAssetBinaryIO::WriteUInt32(output, section.firstIndex);
+            SceneAssetBinaryIO::WriteUInt32(output, section.indexCount);
+            SceneAssetBinaryIO::WriteUInt64(output, section.materialAssetId);
+            WriteVectorRaw(output, section.boneMap);
+        }
+        WriteVectorRaw(output, lod.requiredBones);
+        WriteVectorRaw(output, lod.boneBounds);
+    }
+    SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(asset.morphTargets.size()));
+    for (const SkeletalMeshMorphTarget& morph : asset.morphTargets) {
+        SceneAssetBinaryIO::WriteString(output, morph.name);
+        SceneAssetBinaryIO::WriteUInt32(output, morph.lodIndex);
+        WriteVectorRaw(output, morph.deltas);
+    }
+    SceneAssetBinaryIO::WriteUInt64(output, HashBytes(output));
+    return output;
+}
+
+[[nodiscard]] std::optional<SkeletalMeshAsset> DecodeDerivedData(
+    std::vector<std::uint8_t> bytes,
+    std::uint64_t expectedContentHash) {
+    if (bytes.size() < sizeof(std::uint64_t)) return std::nullopt;
+    std::uint64_t storedChecksum = 0U;
+    const std::size_t checksumOffset = bytes.size() - sizeof(std::uint64_t);
+    for (std::uint32_t byte = 0U; byte < 8U; ++byte) {
+        storedChecksum |= static_cast<std::uint64_t>(bytes[checksumOffset + byte]) << (byte * 8U);
+    }
+    if (storedChecksum != HashBytes(std::span<const std::uint8_t>{bytes.data(), checksumOffset})) {
+        return std::nullopt;
+    }
+    bytes.resize(checksumOffset);
+    SceneAssetBinaryIO::ByteReader reader{std::move(bytes)};
+    std::array<std::uint8_t, kDerivedMagic.size()> magic{};
+    std::uint32_t version = 0U;
+    std::uint32_t vertexSize = 0U;
+    std::uint32_t boneBoundsSize = 0U;
+    std::uint32_t morphDeltaSize = 0U;
+    std::uint64_t contentHash = 0U;
+    if (!reader.ReadRaw(magic.data(), magic.size()) || magic != kDerivedMagic ||
+        !reader.ReadUInt32(version) || version != kDerivedVersion ||
+        !reader.ReadUInt32(vertexSize) || vertexSize != sizeof(SkeletalMeshVertex) ||
+        !reader.ReadUInt32(boneBoundsSize) || boneBoundsSize != sizeof(SkeletalMeshBoneBounds) ||
+        !reader.ReadUInt32(morphDeltaSize) || morphDeltaSize != sizeof(SkeletalMeshMorphDelta) ||
+        !reader.ReadUInt64(contentHash) || contentHash != expectedContentHash) {
+        return std::nullopt;
+    }
+
+    SkeletalMeshAsset asset{};
+    std::uint8_t boundsMode = 0U;
+    std::uint32_t lodCount = 0U;
+    if (!reader.ReadUInt64(asset.skeletonAssetId) ||
+        !reader.ReadUInt64(asset.skeletonCompatibilitySignature) ||
+        !ReadBounds(reader, asset.conservativeBounds) || !ReadBounds(reader, asset.fixedBounds) ||
+        !reader.ReadUInt8(boundsMode) || boundsMode > static_cast<std::uint8_t>(SkeletalMeshBoundsMode::Fixed) ||
+        !reader.ReadUInt32(lodCount) || lodCount > kMaxDerivedLods) {
+        return std::nullopt;
+    }
+    asset.boundsMode = static_cast<SkeletalMeshBoundsMode>(boundsMode);
+    asset.lods.resize(lodCount);
+    for (SkeletalMeshLod& lod : asset.lods) {
+        std::uint32_t sectionCount = 0U;
+        if (!reader.ReadFloat(lod.minScreenCoverage) ||
+            !ReadVectorRaw(reader, lod.vertices, kMaxDerivedVertices) ||
+            !ReadVectorRaw(reader, lod.indices, kMaxDerivedIndices) ||
+            !reader.ReadUInt32(sectionCount) || sectionCount > kMaxDerivedSections) {
+            return std::nullopt;
+        }
+        lod.sections.resize(sectionCount);
+        for (SkeletalMeshSection& section : lod.sections) {
+            if (!reader.ReadUInt32(section.firstIndex) || !reader.ReadUInt32(section.indexCount) ||
+                !reader.ReadUInt64(section.materialAssetId) ||
+                !ReadVectorRaw(reader, section.boneMap, kMaxDerivedBones)) {
+                return std::nullopt;
+            }
+        }
+        if (!ReadVectorRaw(reader, lod.requiredBones, kMaxDerivedBones) ||
+            !ReadVectorRaw(reader, lod.boneBounds, kMaxDerivedBones)) {
+            return std::nullopt;
+        }
+    }
+    std::uint32_t morphCount = 0U;
+    if (!reader.ReadUInt32(morphCount) || morphCount > kMaxDerivedMorphTargets) return std::nullopt;
+    asset.morphTargets.resize(morphCount);
+    for (SkeletalMeshMorphTarget& morph : asset.morphTargets) {
+        if (!reader.ReadString(morph.name) || !reader.ReadUInt32(morph.lodIndex) ||
+            !ReadVectorRaw(reader, morph.deltas, kMaxDerivedMorphDeltas)) {
+            return std::nullopt;
+        }
+    }
+    if (!reader.Exhausted()) return std::nullopt;
+    // The cache checksum covers a payload emitted only after canonical validation. Repeating the
+    // full semantic vertex/index scan here would turn a cache hit back into the original stall.
+    return asset;
+}
+
 [[nodiscard]] std::optional<std::string> Read(const std::filesystem::path& path) {
     const auto bytes = SceneAssetBinaryIO::ReadAllBytes(path);
     return bytes.empty() ? std::nullopt : std::optional<std::string>{ std::string{ reinterpret_cast<const char*>(bytes.data()), bytes.size() } };
@@ -113,6 +331,52 @@ private:
 };
 } // namespace
 
+std::optional<SkeletalMeshAssetBinding> SkeletalMeshAssetIO::LoadBinding(
+    const std::filesystem::path& path,
+    std::string* error) {
+    const auto fail = [error](std::string message) -> std::optional<SkeletalMeshAssetBinding> {
+        if (error != nullptr) *error = std::move(message);
+        return std::nullopt;
+    };
+    if (error != nullptr) error->clear();
+    if (path.extension() != kSkeletalMeshAssetExtension) {
+        return fail("Skeletal mesh asset has an unexpected file extension.");
+    }
+
+    std::ifstream input{path, std::ios::in | std::ios::binary};
+    if (!input.is_open()) {
+        return fail("Skeletal mesh asset could not be read.");
+    }
+
+    bool schemaRead = false;
+    std::string line;
+    while (std::getline(input, line)) {
+        RecordCursor in{line};
+        std::string_view command;
+        if (!in.ReadToken(command)) continue;
+        if (!schemaRead) {
+            const asset_io::TextAssetHeaderStatus header = asset_io::ParseTextAssetHeader(
+                line, kSkeletalMeshAssetType, kSkeletalMeshAssetSchemaVersion);
+            if (header == asset_io::TextAssetHeaderStatus::Invalid) {
+                return fail("Skeletal mesh asset has an invalid schema header.");
+            }
+            schemaRead = true;
+            if (header == asset_io::TextAssetHeaderStatus::Current) continue;
+        }
+        if (command != "skeleton") {
+            return fail("Skeletal mesh asset is missing its skeleton binding record.");
+        }
+        SkeletalMeshAssetBinding binding{};
+        if (!in.ReadUnsigned(binding.skeletonAssetId) ||
+            !in.ReadUnsigned(binding.skeletonCompatibilitySignature) || !in.End() ||
+            binding.skeletonAssetId == 0U || binding.skeletonCompatibilitySignature == 0U) {
+            return fail("Skeletal mesh asset has an invalid skeleton binding record.");
+        }
+        return binding;
+    }
+    return fail("Skeletal mesh asset is missing its skeleton binding record.");
+}
+
 std::optional<SkeletalMeshAsset> SkeletalMeshAssetIO::Load(
     const std::filesystem::path& path,
     std::string* error) {
@@ -180,6 +444,38 @@ std::optional<SkeletalMeshAsset> SkeletalMeshAssetIO::Load(
     return asset;
 }
 
+std::optional<SkeletalMeshAsset> SkeletalMeshAssetIO::LoadDerivedData(
+    const std::filesystem::path& sourcePath,
+    std::uint64_t sourceContentHash,
+    std::string* error) {
+    if (error != nullptr) error->clear();
+    const std::optional<std::filesystem::path> cachePath =
+        DerivedDataPath(sourcePath, sourceContentHash);
+    if (!cachePath.has_value()) return std::nullopt;
+    std::vector<std::uint8_t> bytes = SceneAssetBinaryIO::ReadAllBytes(*cachePath);
+    if (bytes.empty()) return std::nullopt;
+    std::optional<SkeletalMeshAsset> asset =
+        DecodeDerivedData(std::move(bytes), sourceContentHash);
+    if (!asset.has_value() && error != nullptr) {
+        *error = "Skeletal mesh derived-data cache is invalid and will be rebuilt.";
+    }
+    return asset;
+}
+
+bool SkeletalMeshAssetIO::SaveDerivedData(
+    const std::filesystem::path& sourcePath,
+    std::uint64_t sourceContentHash,
+    const SkeletalMeshAsset& asset) {
+    const std::optional<std::filesystem::path> cachePath =
+        DerivedDataPath(sourcePath, sourceContentHash);
+    // Callers publish this cache only after the canonical Load/Save validation succeeds. Repeating
+    // the full vertex/index scan here would double the one-time cold-import cost; cache reads still
+    // validate before exposing the payload and discard any damaged entry.
+    if (!cachePath.has_value()) return false;
+    const std::vector<std::uint8_t> bytes = EncodeDerivedData(sourceContentHash, asset);
+    return SceneAssetBinaryIO::WriteBytesAtomically(*cachePath, bytes);
+}
+
 bool SkeletalMeshAssetIO::Save(const std::filesystem::path& path, const SkeletalMeshAsset& asset) {
     if (path.extension()!=kSkeletalMeshAssetExtension || !ValidateSkeletalMeshAsset(asset).valid) return false;
     std::ostringstream out; out.imbue(std::locale::classic()); out<<std::setprecision(std::numeric_limits<float>::max_digits10);
@@ -188,6 +484,11 @@ bool SkeletalMeshAssetIO::Save(const std::filesystem::path& path, const Skeletal
     out<<"skeleton "<<asset.skeletonAssetId<<' '<<asset.skeletonCompatibilitySignature<<"\nbounds "<<asset.conservativeBounds.center.x<<' '<<asset.conservativeBounds.center.y<<' '<<asset.conservativeBounds.center.z<<' '<<asset.conservativeBounds.extents.x<<' '<<asset.conservativeBounds.extents.y<<' '<<asset.conservativeBounds.extents.z<<"\nfixedBounds "<<asset.fixedBounds.center.x<<' '<<asset.fixedBounds.center.y<<' '<<asset.fixedBounds.center.z<<' '<<asset.fixedBounds.extents.x<<' '<<asset.fixedBounds.extents.y<<' '<<asset.fixedBounds.extents.z<<"\nboundsMode "<<(asset.boundsMode == SkeletalMeshBoundsMode::Fixed ? "fixed" : "imported")<<'\n';
     for(std::size_t l=0;l<asset.lods.size();++l){const auto& lod=asset.lods[l];out<<"lod "<<lod.minScreenCoverage<<'\n';for(const auto& v:lod.vertices)out<<"vertex "<<l<<' '<<v.position.x<<' '<<v.position.y<<' '<<v.position.z<<' '<<v.normal.x<<' '<<v.normal.y<<' '<<v.normal.z<<' '<<v.tangent.x<<' '<<v.tangent.y<<' '<<v.tangent.z<<' '<<v.tangent.w<<' '<<v.uv[0]<<' '<<v.uv[1]<<' '<<v.jointIndices[0]<<' '<<v.jointIndices[1]<<' '<<v.jointIndices[2]<<' '<<v.jointIndices[3]<<' '<<v.jointWeights[0]<<' '<<v.jointWeights[1]<<' '<<v.jointWeights[2]<<' '<<v.jointWeights[3]<<'\n';for(auto i:lod.indices)out<<"index "<<l<<' '<<i<<'\n';for(std::size_t s=0;s<lod.sections.size();++s){const auto& x=lod.sections[s];out<<"section "<<l<<' '<<x.firstIndex<<' '<<x.indexCount<<' '<<x.materialAssetId<<'\n';for(auto b:x.boneMap)out<<"sectionBone "<<l<<' '<<s<<' '<<b<<'\n';}for(auto b:lod.requiredBones)out<<"requiredBone "<<l<<' '<<b<<'\n';for(const auto& b:lod.boneBounds)out<<"boneBounds "<<l<<' '<<b.boneId<<' '<<b.center.x<<' '<<b.center.y<<' '<<b.center.z<<' '<<b.extents.x<<' '<<b.extents.y<<' '<<b.extents.z<<'\n';}
     for(std::size_t m=0;m<asset.morphTargets.size();++m){const auto& x=asset.morphTargets[m];out<<"morph "<<std::quoted(x.name)<<' '<<x.lodIndex<<'\n';for(const auto& d:x.deltas)out<<"delta "<<m<<' '<<d.vertexIndex<<' '<<d.positionDelta.x<<' '<<d.positionDelta.y<<' '<<d.positionDelta.z<<' '<<d.normalDelta.x<<' '<<d.normalDelta.y<<' '<<d.normalDelta.z<<' '<<d.tangentDelta.x<<' '<<d.tangentDelta.y<<' '<<d.tangentDelta.z<<'\n';}
-    return Write(path,out.str());
+    const std::string text = out.str();
+    if (!Write(path, text)) return false;
+    // Derived data is disposable and keyed by the canonical text bytes. Failure to create it must
+    // not turn a successful source save/import into data loss; the loader will rebuild it later.
+    static_cast<void>(SaveDerivedData(path, HashBytes(text), asset));
+    return true;
 }
 } // namespace kb::scene

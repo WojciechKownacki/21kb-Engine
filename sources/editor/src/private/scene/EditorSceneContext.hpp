@@ -467,8 +467,17 @@ public:
     [[nodiscard]] bool SaveAnimationClipEditorAsset();
     [[nodiscard]] std::vector<kb::assets::AssetId> AnimationClipEditorCompatiblePreviewMeshes();
     [[nodiscard]] bool SetAnimationClipEditorPreviewMesh(kb::assets::AssetId meshId);
+    // Interactive opens are staged through AssetManager's worker so the Win32
+    // double-click handler never parses a Skeletal Mesh on the message thread.
+    // OpenSkeletalMeshEditorAsset intentionally remains synchronous for headless
+    // automation and callers that require the document to be ready on return.
+    [[nodiscard]] bool RequestOpenSkeletalMeshEditorAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool RequestOpenSkeletalMeshEditorSkeletonAsset(kb::assets::AssetId skeletonId);
+    [[nodiscard]] bool PumpPendingSkeletalMeshEditorOpen();
+    [[nodiscard]] bool HasPendingSkeletalMeshEditorOpen() const noexcept;
     [[nodiscard]] bool OpenSkeletalMeshEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] kb::assets::AssetId SkeletalMeshEditorAssetId() const noexcept;
+    [[nodiscard]] kb::assets::AssetId RequestedSkeletalMeshEditorAssetId() const noexcept;
     [[nodiscard]] bool HasSkeletalMeshEditorAsset() const noexcept;
     [[nodiscard]] const kb::scene::Scene* SkeletalMeshEditorPreviewScene() const noexcept;
     [[nodiscard]] std::uint64_t SkeletalMeshEditorPreviewRevision() const noexcept;
@@ -972,6 +981,10 @@ public:
     [[nodiscard]] bool HasActiveTransformEdit() const noexcept;
 
 private:
+    [[nodiscard]] bool FinalizeLoadedSkeletalMeshEditorAsset(
+        kb::assets::AssetId meshId,
+        kb::assets::AssetId skeletonId,
+        std::uint64_t diagnosticEventId);
     [[nodiscard]] bool PublishAnimationClipEditorWorkingCopy();
     [[nodiscard]] bool RefreshAnimatorEditorWorkingPreview();
     [[nodiscard]] EditorSceneCommandController SceneCommands() noexcept;
@@ -1062,6 +1075,9 @@ private:
     AnimationClipTimelineState animationClipEditorTimeline_;
     AnimationClipEditorDocumentState animationClipEditorDocument_;
     kb::assets::AssetId skeletalMeshEditorAssetId_{};
+    kb::assets::AssetId pendingSkeletalMeshEditorAssetId_{};
+    kb::assets::AssetId pendingSkeletalMeshEditorSkeletonId_{};
+    std::uint64_t pendingSkeletalMeshEditorOpenEventId_ = 0U;
     SkeletalMeshEditorTreeState skeletalMeshEditorTree_;
     SkeletalMeshEditorDetailsState skeletalMeshEditorDetails_;
     SkeletalMeshEditorDocumentState skeletalMeshEditorDocument_;

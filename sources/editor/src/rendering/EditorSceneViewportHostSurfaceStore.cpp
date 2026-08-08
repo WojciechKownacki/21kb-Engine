@@ -200,7 +200,8 @@ void EditorSceneBgfxViewport::HostSurfaceStore::DestroyWindows() noexcept {
     }
 }
 
-void EditorSceneBgfxViewport::HostSurfaceStore::ShowPresentedWindows() noexcept {
+bool EditorSceneBgfxViewport::HostSurfaceStore::ShowPresentedWindows() noexcept {
+    bool showedWindow = false;
     for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
         if (surface == nullptr ||
             !surface->presentedInCurrentPaint ||
@@ -216,6 +217,7 @@ void EditorSceneBgfxViewport::HostSurfaceStore::ShowPresentedWindows() noexcept 
             flags |= SWP_NOCOPYBITS;
         }
         if (IsWindowVisible(surface->clipWindow) == 0) {
+            showedWindow = true;
             SetWindowPos(
                 surface->clipWindow,
                 HWND_BOTTOM,
@@ -226,6 +228,7 @@ void EditorSceneBgfxViewport::HostSurfaceStore::ShowPresentedWindows() noexcept 
                 flags);
         }
         if (IsWindowVisible(surface->window) == 0) {
+            showedWindow = true;
             SetWindowPos(
                 surface->window,
                 HWND_TOP,
@@ -236,6 +239,7 @@ void EditorSceneBgfxViewport::HostSurfaceStore::ShowPresentedWindows() noexcept 
                 flags);
         }
     }
+    return showedWindow;
 }
 
 } // namespace kb::editor

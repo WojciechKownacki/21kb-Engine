@@ -464,6 +464,71 @@ void RunSkeletalMeshLodResourceUsesStablePaletteTest() {
         "Skeletal mesh LOD resource did not remap every section into one stable palette");
 }
 
+void RunSkeletalMeshValidatedBuildMatchesCheckedBuildTest() {
+    kb::scene::SkeletalMeshAsset asset{};
+    asset.skeletonAssetId = 10U;
+    asset.skeletonCompatibilitySignature = 20U;
+    asset.conservativeBounds = { .center = { 0.5F, 0.5F, 0.0F }, .extents = { 0.5F, 0.5F, 0.1F } };
+    asset.fixedBounds = { .center = { 1.0F, 2.0F, 3.0F }, .extents = { 5.0F, 6.0F, 7.0F } };
+    asset.boundsMode = kb::scene::SkeletalMeshBoundsMode::Fixed;
+
+    kb::scene::SkeletalMeshVertex vertex{};
+    vertex.jointIndices = { 0U, 1U, 0U, 1U };
+    vertex.jointWeights = { 0.5F, 0.5F, 0.0F, 0.0F };
+    kb::scene::SkeletalMeshLod lod{};
+    lod.vertices = { vertex, vertex, vertex };
+    lod.vertices[1].position = { 1.0F, 0.0F, 0.0F };
+    lod.vertices[2].position = { 0.0F, 1.0F, 0.0F };
+    lod.indices = { 0U, 1U, 2U };
+    lod.sections = { kb::scene::SkeletalMeshSection{
+        .firstIndex = 0U,
+        .indexCount = 3U,
+        .materialAssetId = 30U,
+        .boneMap = { 20U, 10U },
+    } };
+    lod.requiredBones = { 10U, 20U };
+    asset.lods.push_back(std::move(lod));
+    asset.morphTargets.push_back(kb::scene::SkeletalMeshMorphTarget{
+        .name = "Unused",
+        .lodIndex = 0U,
+        .deltas = { kb::scene::SkeletalMeshMorphDelta{
+            .vertexIndex = 0U,
+            .positionDelta = { 0.25F, 0.0F, 0.0F },
+        } },
+    });
+
+    Require(kb::scene::ValidateSkeletalMeshAsset(asset).valid,
+        "Validated skeletal mesh builder test fixture is invalid");
+    const auto checked = SkeletalMeshRenderResourceBuilder::Build(asset);
+    const auto validated = SkeletalMeshRenderResourceBuilder::BuildValidated(asset);
+    Require(checked.has_value() && validated.has_value(),
+        "Checked and validated skeletal mesh builds should both accept a valid asset");
+    Require(checked->vertices.size() == validated->vertices.size() &&
+            checked->indices == validated->indices && checked->sections.size() == validated->sections.size() &&
+            checked->lods.size() == validated->lods.size() &&
+            checked->materialSlots.size() == validated->materialSlots.size() &&
+            checked->paletteBoneIds == validated->paletteBoneIds,
+        "Validated skeletal mesh build diverged from the checked build");
+    Require(validated->vertices.size() == 3U && validated->vertices[0].joints[0] == 1U &&
+            validated->vertices[0].joints[1] == 0U,
+        "Validated skeletal mesh build did not use the section-to-palette remap");
+    Require(std::fabs(validated->vertices[0].x) <= 0.0001F && validated->dynamicVertexBuffer,
+        "A zero-active-morph build changed vertex data or lost its dynamic-buffer contract");
+    Require(std::fabs(validated->bounds.center[0] - 1.0F) <= 0.0001F &&
+            std::fabs(validated->bounds.center[1] - 2.0F) <= 0.0001F &&
+            std::fabs(validated->bounds.center[2] - 3.0F) <= 0.0001F &&
+            std::fabs(validated->bounds.radius - std::sqrt(110.0F)) <= 0.0001F,
+        "A zero-active-morph build did not reuse the authored fixed bounds");
+
+    kb::scene::SkeletalMeshAsset invalid = asset;
+    invalid.lods[0].indices[0] = 99U;
+    Require(!SkeletalMeshRenderResourceBuilder::Build(invalid).has_value(),
+        "Checked skeletal mesh build must continue to reject invalid assets");
+    const std::array<std::string, 1U> morphNames{ "Unused" };
+    Require(!SkeletalMeshRenderResourceBuilder::BuildValidated(asset, morphNames, {}).has_value(),
+        "Validated skeletal mesh build must reject mismatched morph input spans");
+}
+
 void RunSkinningPaletteAllocatorLifetimeTest() {
     RenderSkinningPaletteAllocator allocator{
         RenderSkinningPaletteAllocatorDesc{ .matrixCapacityPerFrame = 4U } };
@@ -2888,6 +2953,7 @@ void RunRenderResourceRegistryTests() {
     RunStaticMeshVertexFormatsExposeExpectedStridesTest();
     RunSkinnedMeshRegistrationContractTest();
     RunSkeletalMeshLodResourceUsesStablePaletteTest();
+    RunSkeletalMeshValidatedBuildMatchesCheckedBuildTest();
     RunSkinningPaletteAllocatorLifetimeTest();
     RunObjImporterBuildsRenderMeshDescWithSectionsAndSlotsTest();
     RunFbxImporterBuildsSectionsForMaterialSlotsTest();
@@ -2921,6 +2987,7 @@ void RunRenderResourceRegistryTests() {
     RunMeshAssetDataKeepsUint32IndicesForLargeMeshesTest();
     RunSceneRendererTicksRegistryDeferredDestroyTest();
     RunRendererTypedAssetReferenceSaveRoundTripTest();
+
 }
 
 } // namespace kb::render::tests

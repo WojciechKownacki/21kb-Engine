@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/SkeletalMeshEditorBonePicker.hpp"
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
@@ -182,18 +183,6 @@ void PaintDetails(HDC dc, const RECT& rect, const EditorSceneContext& sceneConte
     }
 }
 
-[[nodiscard]] float PointSegmentDistanceSquared(float px, float py, float ax, float ay, float bx, float by) noexcept {
-    const float dx = bx - ax;
-    const float dy = by - ay;
-    const float lengthSquared = dx * dx + dy * dy;
-    const float parameter = lengthSquared <= 0.0001F ? 0.0F : std::clamp(((px - ax) * dx + (py - ay) * dy) / lengthSquared, 0.0F, 1.0F);
-    const float x = ax + parameter * dx;
-    const float y = ay + parameter * dy;
-    const float deltaX = px - x;
-    const float deltaY = py - y;
-    return deltaX * deltaX + deltaY * deltaY;
-}
-
 void AppendDebugSegment(
     std::vector<kb::render::PhysicsDebugLine>& output,
     kb::scene::Vec3 from,
@@ -243,14 +232,41 @@ void AppendBoneShape(
     AppendDebugSegment(output, bone.from, bone.to, selected ? kb::scene::Vec3{ 1.0F, 0.95F, 0.55F } : color);
 }
 
+void AppendSelectedJointMarker(
+    std::vector<kb::render::PhysicsDebugLine>& output,
+    kb::scene::Vec3 position,
+    float radius) {
+    const kb::scene::Vec3 color{ 1.0F, 0.95F, 0.55F };
+    AppendDebugSegment(output, position - kb::scene::Vec3{ radius, 0.0F, 0.0F },
+        position + kb::scene::Vec3{ radius, 0.0F, 0.0F }, color);
+    AppendDebugSegment(output, position - kb::scene::Vec3{ 0.0F, radius, 0.0F },
+        position + kb::scene::Vec3{ 0.0F, radius, 0.0F }, color);
+    AppendDebugSegment(output, position - kb::scene::Vec3{ 0.0F, 0.0F, radius },
+        position + kb::scene::Vec3{ 0.0F, 0.0F, radius }, color);
+}
+
 [[nodiscard]] std::vector<kb::render::PhysicsDebugLine> BuildSkeletalPreviewLines(
     const AnimationPreviewOverlaySnapshot& overlays,
     kb::scene::SkeletonBoneId selectedBone) {
     std::vector<kb::render::PhysicsDebugLine> output;
-    output.reserve(overlays.lines.size() * 13U);
+    output.reserve(overlays.lines.size() * 16U);
+    const bool selectedBoneHasIncomingShape = selectedBone != 0U &&
+        std::ranges::any_of(overlays.lines, [selectedBone](const AnimationPreviewOverlayLine& line) {
+            return line.boneId == selectedBone;
+        });
+    bool selectedRootMarkerEmitted = false;
     for (const AnimationPreviewOverlayLine& line : overlays.lines) {
         if (line.boneId != 0U) {
             AppendBoneShape(output, line, line.boneId == selectedBone);
+            const float markerRadius = std::clamp(
+                kb::math::Length(line.to - line.from) * 0.08F, 0.01F, 0.05F);
+            if (line.boneId == selectedBone) {
+                AppendSelectedJointMarker(output, line.to, markerRadius);
+            } else if (!selectedBoneHasIncomingShape && !selectedRootMarkerEmitted &&
+                line.fromBoneId == selectedBone) {
+                AppendSelectedJointMarker(output, line.from, markerRadius);
+                selectedRootMarkerEmitted = true;
+            }
         } else {
             AppendDebugSegment(output, line.from, line.to, line.color);
         }
@@ -278,7 +294,10 @@ void SkeletalMeshEditorPanelRenderer::Paint(
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, RGB(168, 178, 190));
         RECT text = content;
-        DrawTextA(dc, "Open a Skeletal Mesh asset to begin editing.", -1, &text,
+        const char* message = sceneContext.HasPendingSkeletalMeshEditorOpen()
+            ? "Loading Skeletal Mesh..."
+            : "Open a Skeletal Mesh asset to begin editing.";
+        DrawTextA(dc, message, -1, &text,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         return;
     }
@@ -299,6 +318,7 @@ bool SkeletalMeshEditorPanelRenderer::PresentViewport(
     const DockPanel& panel,
     const EditorSceneContext& sceneContext,
     const EditorRenderBackendSettings& renderBackendSettings) {
+    static_cast<void>(renderBackendSettings);
     const kb::scene::Scene* previewScene = sceneContext.SkeletalMeshEditorPreviewScene();
     if (host == nullptr || IsWindow(host) == 0 || IsWindowVisible(host) == 0 ||
         !sceneContext.HasSkeletalMeshEditorAsset() || previewScene == nullptr) {
@@ -323,13 +343,15 @@ bool SkeletalMeshEditorPanelRenderer::PresentViewport(
         sceneContext.AnimationPreviewOverlays(), sceneContext.SelectedSkeletalMeshEditorBone());
     settings.sceneRevision = revision;
     settings.sceneDirtyBaseRevision = revision;
-    settings.sceneFullSyncRequired = true;
-    settings.msaaSamples = renderBackendSettings.MsaaSamples();
-    settings.shadowPassEnabled = renderBackendSettings.ShadowsEnabled();
-    settings.postProcessEnabled = true;
+    // The preview scene has its own monotonic revision. Re-synchronizing the complete 24 MB Y Bot
+    // payload on every selection repaint stalls the UI thread while bgfx retires the upload.
+    settings.sceneFullSyncRequired = false;
+    settings.msaaSamples = 0U;
+    settings.shadowPassEnabled = false;
+    settings.postProcessEnabled = false;
     settings.selectionMaskEnabled = false;
     settings.selectionOutlineEnabled = false;
-    settings.gpuDrivenRuntimeDispatchEnabled = renderBackendSettings.GpuDrivenEnabled();
+    settings.gpuDrivenRuntimeDispatchEnabled = false;
     sceneViewport.Present(host, layout.viewport, *previewScene, settings);
     return true;
 }
@@ -363,34 +385,18 @@ std::optional<kb::scene::SkeletonBoneId> SkeletalMeshEditorPanelRenderer::BoneAt
     const RECT& content, const EditorSceneContext& sceneContext, int x, int y) noexcept {
     const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
     if (x < layout.viewport.left || x >= layout.viewport.right || y < layout.viewport.top || y >= layout.viewport.bottom) return std::nullopt;
-    const EditorViewportCameraAxes camera = sceneContext.AnimationPreviewCamera().Axes();
-    const float width = static_cast<float>(std::max(1L, layout.viewport.right - layout.viewport.left));
-    const float height = static_cast<float>(std::max(1L, layout.viewport.bottom - layout.viewport.top));
-    const float tangent = std::tan(sceneContext.AnimationPreviewCamera().VerticalFovDegrees() * 0.00872664626F);
-    const float aspect = width / height;
-    auto project = [&](kb::scene::Vec3 point, float& screenX, float& screenY) {
-        const kb::scene::Vec3 delta = point - camera.position;
-        const float depth = delta.x * camera.forward.x + delta.y * camera.forward.y + delta.z * camera.forward.z;
-        if (depth <= 0.001F) return false;
-        const float horizontal = (delta.x * camera.right.x + delta.y * camera.right.y + delta.z * camera.right.z) / (depth * tangent * aspect);
-        const float vertical = (delta.x * camera.up.x + delta.y * camera.up.y + delta.z * camera.up.z) / (depth * tangent);
-        screenX = static_cast<float>(layout.viewport.left) + (horizontal * 0.5F + 0.5F) * width;
-        screenY = static_cast<float>(layout.viewport.top) + (0.5F - vertical * 0.5F) * height;
-        return true;
-    };
-    std::optional<kb::scene::SkeletonBoneId> closest;
-    float closestDistance = 100.0F;
-    for (const AnimationPreviewOverlayLine& line : sceneContext.AnimationPreviewOverlays().lines) {
-        if (line.boneId == 0U) continue;
-        float fromX = 0.0F, fromY = 0.0F, toX = 0.0F, toY = 0.0F;
-        if (!project(line.from, fromX, fromY) || !project(line.to, toX, toY)) continue;
-        const float distance = PointSegmentDistanceSquared(static_cast<float>(x), static_cast<float>(y), fromX, fromY, toX, toY);
-        if (distance < closestDistance) {
-            closestDistance = distance;
-            closest = line.boneId;
-        }
-    }
-    return closest;
+    const AnimationPreviewOverlaySnapshot overlays = sceneContext.AnimationPreviewOverlays();
+    return SkeletalMeshEditorBonePicker::Pick(
+        SkeletalMeshEditorBonePickViewport{
+            .left = static_cast<float>(layout.viewport.left),
+            .top = static_cast<float>(layout.viewport.top),
+            .width = static_cast<float>(std::max(1L, layout.viewport.right - layout.viewport.left)),
+            .height = static_cast<float>(std::max(1L, layout.viewport.bottom - layout.viewport.top)),
+        },
+        sceneContext.AnimationPreviewCamera(),
+        overlays.lines,
+        static_cast<float>(x),
+        static_cast<float>(y));
 }
 
 } // namespace kb::editor

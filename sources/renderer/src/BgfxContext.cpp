@@ -3,11 +3,19 @@
 #include "kb/render/RenderSurface.hpp"
 
 #include <bgfx/platform.h>
+#include <array>
+#include <chrono>
+#include <cstdio>
 #include <cstdarg>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
+#include <limits>
+#include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <utility>
 
 #if defined(_WIN32)
 #include <Windows.h>
@@ -67,10 +75,69 @@ void WriteBgfxFatalLog(const char* filePath, std::uint16_t line, bgfx::Fatal::En
     AppendBgfxLog(text);
 }
 
+void AppendBgfxPsoTrace(
+    std::uint64_t id,
+    double durationMs,
+    std::uint32_t cachedSize,
+    bool cacheReadSucceeded,
+    std::uint32_t writtenSize) {
+    if (durationMs < 4.0) {
+        return;
+    }
+    static std::mutex traceMutex;
+    static std::ofstream trace = [] {
+        std::error_code error;
+        const std::filesystem::path path = std::filesystem::current_path(error) /
+            "Saved" / "Logs" / "bgfx-pso-trace.log";
+        if (!error) {
+            std::filesystem::create_directories(path.parent_path(), error);
+        }
+        return error
+            ? std::ofstream{}
+            : std::ofstream{path, std::ios::out | std::ios::app};
+    }();
+    if (!trace.is_open()) {
+        return;
+    }
+    const auto epochMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::scoped_lock lock(traceMutex);
+    trace << "epoch_ms=" << epochMs
+          << " pso=0x" << std::hex << id << std::dec
+          << " duration=" << durationMs << "ms"
+          << " cacheHit=" << (cachedSize > 0U ? 1 : 0)
+          << " cacheRead=" << (cacheReadSucceeded ? 1 : 0)
+          << " cachedBytes=" << cachedSize
+          << " writtenBytes=" << writtenSize << '\n';
+    trace.flush();
+}
+
+[[nodiscard]] std::filesystem::path BgfxCacheRoot(bgfx::RendererType::Enum backend) {
+    std::error_code error;
+    std::filesystem::path root = std::filesystem::current_path(error);
+    if (error) {
+        error.clear();
+        root = std::filesystem::temp_directory_path(error);
+    }
+    if (error || root.empty()) {
+        return {};
+    }
+    return root / "Saved" / "Cache" / "bgfx" /
+        std::to_string(static_cast<std::uint32_t>(backend));
+}
+
 } // namespace
 
 class BgfxEngineCallback final : public bgfx::CallbackI {
 public:
+    explicit BgfxEngineCallback(std::filesystem::path cacheRoot)
+        : cacheRoot_(std::move(cacheRoot)) {
+        if (!cacheRoot_.empty()) {
+            std::error_code error;
+            std::filesystem::create_directories(cacheRoot_, error);
+        }
+    }
+
     void fatal(const char* filePath, std::uint16_t line, bgfx::Fatal::Enum code, const char* message) override {
         WriteBgfxFatalLog(filePath, line, code, message);
 #if defined(_WIN32)
@@ -91,17 +158,128 @@ public:
     void profilerBegin(const char*, std::uint32_t, const char*, std::uint16_t) override {}
     void profilerBeginLiteral(const char*, std::uint32_t, const char*, std::uint16_t) override {}
     void profilerEnd() override {}
-    std::uint32_t cacheReadSize(std::uint64_t) override {
-        return 0;
+    std::uint32_t cacheReadSize(std::uint64_t id) override {
+        std::lock_guard lock{cacheMutex_};
+        if (cacheTrace_.size() >= kMaximumTrackedCacheEntries) {
+            cacheTrace_.clear();
+        }
+        CacheTraceState& trace = cacheTrace_[id];
+        trace = CacheTraceState{ .started = std::chrono::steady_clock::now() };
+        const std::filesystem::path path = CachePath(id);
+        if (path.empty()) {
+            return 0U;
+        }
+        std::error_code error;
+        const std::uintmax_t size = std::filesystem::file_size(path, error);
+        if (error || size == 0U || size > kMaximumCacheEntrySize ||
+            size > std::numeric_limits<std::uint32_t>::max()) {
+            return 0U;
+        }
+        trace.cachedSize = static_cast<std::uint32_t>(size);
+        return trace.cachedSize;
     }
-    bool cacheRead(std::uint64_t, void*, std::uint32_t) override {
-        return false;
+    bool cacheRead(std::uint64_t id, void* data, std::uint32_t size) override {
+        if (data == nullptr || size == 0U || size > kMaximumCacheEntrySize) {
+            return false;
+        }
+        std::lock_guard lock{cacheMutex_};
+        const std::filesystem::path path = CachePath(id);
+        if (path.empty()) {
+            return false;
+        }
+        std::ifstream input{path, std::ios::in | std::ios::binary};
+        if (!input.is_open()) {
+            return false;
+        }
+        input.read(static_cast<char*>(data), static_cast<std::streamsize>(size));
+        const bool succeeded = input.good() && input.gcount() == static_cast<std::streamsize>(size);
+        if (const auto existing = cacheTrace_.find(id); existing != cacheTrace_.end()) {
+            existing->second.readSucceeded = succeeded;
+        }
+        return succeeded;
     }
-    void cacheWrite(std::uint64_t, const void*, std::uint32_t) override {}
+    void cacheWrite(std::uint64_t id, const void* data, std::uint32_t size) override {
+        const auto completed = std::chrono::steady_clock::now();
+        CacheTraceState trace{};
+        bool hasTrace = false;
+        {
+            std::lock_guard lock{cacheMutex_};
+            if (const auto existing = cacheTrace_.find(id); existing != cacheTrace_.end()) {
+                trace = existing->second;
+                cacheTrace_.erase(existing);
+                hasTrace = true;
+            }
+        }
+        if (hasTrace) {
+            const double durationMs = std::chrono::duration<double, std::milli>(
+                completed - trace.started).count();
+            AppendBgfxPsoTrace(id, durationMs, trace.cachedSize, trace.readSucceeded, size);
+        }
+        if (data == nullptr || size == 0U || size > kMaximumCacheEntrySize || cacheRoot_.empty()) {
+            return;
+        }
+        std::lock_guard lock{cacheMutex_};
+        std::error_code error;
+        std::filesystem::create_directories(cacheRoot_, error);
+        if (error) {
+            return;
+        }
+
+        const std::filesystem::path path = CachePath(id);
+        std::filesystem::path temporary = path;
+        temporary += ".tmp";
+        {
+            std::ofstream output{temporary, std::ios::out | std::ios::binary | std::ios::trunc};
+            if (!output.is_open()) {
+                return;
+            }
+            output.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
+            output.flush();
+            if (!output.good()) {
+                output.close();
+                std::filesystem::remove(temporary, error);
+                return;
+            }
+        }
+
+        error.clear();
+        std::filesystem::remove(path, error);
+        error.clear();
+        std::filesystem::rename(temporary, path, error);
+        if (error) {
+            std::error_code cleanupError;
+            std::filesystem::remove(temporary, cleanupError);
+        }
+    }
     void screenShot(const char*, std::uint32_t, std::uint32_t, std::uint32_t, bgfx::TextureFormat::Enum, const void*, std::uint32_t, bool) override {}
     void captureBegin(std::uint32_t, std::uint32_t, std::uint32_t, bgfx::TextureFormat::Enum, bool) override {}
     void captureEnd() override {}
     void captureFrame(const void*, std::uint32_t) override {}
+
+private:
+    static constexpr std::uint32_t kMaximumCacheEntrySize = 64U * 1024U * 1024U;
+    static constexpr std::size_t kMaximumTrackedCacheEntries = 4096U;
+
+    struct CacheTraceState {
+        std::chrono::steady_clock::time_point started{};
+        std::uint32_t cachedSize = 0U;
+        bool readSucceeded = false;
+    };
+
+    [[nodiscard]] std::filesystem::path CachePath(std::uint64_t id) const {
+        if (cacheRoot_.empty()) {
+            return {};
+        }
+        std::array<char, 17U> name{};
+        static_cast<void>(std::snprintf(
+            name.data(), name.size(), "%016llx",
+            static_cast<unsigned long long>(id)));
+        return cacheRoot_ / name.data();
+    }
+
+    std::filesystem::path cacheRoot_;
+    std::mutex cacheMutex_;
+    std::unordered_map<std::uint64_t, CacheTraceState> cacheTrace_;
 };
 
 BgfxContext::BgfxContext() = default;
@@ -128,7 +306,7 @@ bool BgfxContext::InitializeImpl(std::uint32_t width, std::uint32_t height, void
         return false;
     }
 
-    callback_ = std::make_unique<BgfxEngineCallback>();
+    callback_ = std::make_unique<BgfxEngineCallback>(BgfxCacheRoot(preferredBackend));
     nativeWindowHandle_ = nwh;
     nativeDisplayHandle_ = ndt;
 

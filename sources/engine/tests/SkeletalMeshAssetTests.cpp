@@ -154,6 +154,42 @@ void RunSkeletalMeshAssetTests() {
     mesh.morphTargets={{.name="Smile",.lodIndex=0,.deltas={{.vertexIndex=1,.positionDelta={0,0.1F,0}}}}};
     Require(kb::scene::ValidateSkeletalMeshAsset(mesh).valid,"Valid SkeletalMeshAsset was rejected");
     Require(kb::scene::SkeletalMeshAssetIO::Save(path,mesh),"SkeletalMeshAsset production save failed");
+    kb::scene::Scene derivedDataScene;
+    Require(derivedDataScene.Assets().MountProject(root) && derivedDataScene.Assets().Discover() == 2U,
+        "SkeletalMeshAsset derived-data fixture could not discover its source assets");
+    const kb::assets::AssetMetadata* derivedMetadata =
+        derivedDataScene.Assets().Manager().Registry().FindByPath("/Game/Characters/Hero.kbskeletalmesh");
+    const auto derivedLoaded = derivedMetadata == nullptr
+        ? std::optional<kb::scene::SkeletalMeshAsset>{}
+        : kb::scene::SkeletalMeshAssetIO::LoadDerivedData(path, derivedMetadata->contentHash);
+    Require(derivedMetadata != nullptr && derivedLoaded.has_value() &&
+            derivedLoaded->lods.size() == mesh.lods.size() &&
+            derivedLoaded->lods.front().vertices.size() == mesh.lods.front().vertices.size() &&
+            derivedLoaded->morphTargets.size() == mesh.morphTargets.size(),
+        "SkeletalMeshAsset binary derived-data cache did not preserve the runtime payload");
+    Require(!kb::scene::SkeletalMeshAssetIO::LoadDerivedData(
+            path, derivedMetadata == nullptr ? 1U : derivedMetadata->contentHash + 1U).has_value(),
+        "SkeletalMeshAsset derived-data cache accepted a different source content hash");
+    if (derivedMetadata != nullptr) {
+        const std::filesystem::path cachePath = root / "Saved" / "Cache" / "SkeletalMesh" /
+            (std::to_string(derivedMetadata->contentHash) + ".kbskeletalmesh.ddc");
+        std::string damagedCache = ReadTextFile(cachePath);
+        Require(damagedCache.size() > 64U,
+            "SkeletalMeshAsset derived-data cache was not written to the project cache");
+        damagedCache[40U] = static_cast<char>(damagedCache[40U] ^ 0x5A);
+        WriteTextFile(cachePath, damagedCache);
+        Require(!kb::scene::SkeletalMeshAssetIO::LoadDerivedData(
+                path, derivedMetadata->contentHash).has_value(),
+            "SkeletalMeshAsset derived-data cache accepted checksum-corrupted bytes");
+        Require(kb::scene::SkeletalMeshAssetIO::SaveDerivedData(
+                path, derivedMetadata->contentHash, mesh),
+            "SkeletalMeshAsset derived-data cache could not be rebuilt after corruption");
+    }
+    const auto serializedBinding = kb::scene::SkeletalMeshAssetIO::LoadBinding(path);
+    Require(serializedBinding &&
+            serializedBinding->skeletonAssetId == mesh.skeletonAssetId &&
+            serializedBinding->skeletonCompatibilitySignature == mesh.skeletonCompatibilitySignature,
+        "SkeletalMeshAsset lightweight binding load lost the skeleton dependency");
     const auto loaded=kb::scene::SkeletalMeshAssetIO::Load(path);
     Require(loaded && loaded->lods.size()==1U && loaded->lods[0].sections[0].materialAssetId==42U && loaded->morphTargets[0].deltas.size()==1U &&
             loaded->boundsMode == kb::scene::SkeletalMeshBoundsMode::ImportedConservative &&
@@ -175,6 +211,10 @@ void RunSkeletalMeshAssetTests() {
     const auto corruptPath = root / "RoundTrip/Corrupt.kbskeletalmesh";
     WriteTextFile(corruptPath, "21kb SkeletalMesh 99\n");
     std::string corruptError;
+    Require(!kb::scene::SkeletalMeshAssetIO::LoadBinding(corruptPath, &corruptError).has_value() &&
+            !corruptError.empty(),
+        "SkeletalMeshAsset lightweight binding load accepted an unsupported schema");
+    corruptError.clear();
     Require(!kb::scene::SkeletalMeshAssetIO::Load(corruptPath, &corruptError).has_value() &&
             corruptError.find("line 1") != std::string::npos,
         "SkeletalMeshAsset accepted an unsupported schema version without a diagnostic");

@@ -3,8 +3,11 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/SkeletalMeshAsset.hpp"
 
+#include <algorithm>
+#include <array>
 #include <iomanip>
-#include <unordered_set>
+#include <optional>
+#include <unordered_map>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -36,6 +39,9 @@ public:
         mesh_ = mesh;
         skeleton_ = skeleton;
         meshMetadata_ = meshMetadata;
+        cachedAssetModel_.reset();
+        cachedBoneModels_.clear();
+        RebuildBoneInfluenceStats();
         hasDocument_ = true;
     }
 
@@ -57,6 +63,65 @@ public:
     }
 
 private:
+    struct BoneInfluenceStats {
+        std::uint64_t influencedVertices = 0U;
+        double totalWeight = 0.0;
+        float peakWeight = 0.0F;
+    };
+
+    void RebuildBoneInfluenceStats() {
+        boneInfluenceStats_.clear();
+        boneInfluenceStats_.reserve(skeleton_.bones.size());
+        for (const kb::scene::SkeletonBone& bone : skeleton_.bones) {
+            boneInfluenceStats_.try_emplace(bone.id);
+        }
+
+        struct VertexBoneWeight {
+            kb::scene::SkeletonBoneId boneId = 0U;
+            float weight = 0.0F;
+        };
+        for (const kb::scene::SkeletalMeshLod& lod : mesh_.lods) {
+            std::vector<std::uint8_t> visitedVertices(lod.vertices.size(), 0U);
+            for (const kb::scene::SkeletalMeshSection& section : lod.sections) {
+                for (std::uint32_t offset = 0U; offset < section.indexCount; ++offset) {
+                    const std::size_t indexPosition = static_cast<std::size_t>(section.firstIndex) + offset;
+                    if (indexPosition >= lod.indices.size()) continue;
+                    const std::uint32_t vertexIndex = lod.indices[indexPosition];
+                    if (vertexIndex >= lod.vertices.size() || visitedVertices[vertexIndex] != 0U) continue;
+                    visitedVertices[vertexIndex] = 1U;
+
+                    const kb::scene::SkeletalMeshVertex& vertex = lod.vertices[vertexIndex];
+                    std::array<VertexBoneWeight, 4U> vertexBoneWeights{};
+                    std::size_t vertexBoneCount = 0U;
+                    for (std::size_t influence = 0U; influence < vertex.jointWeights.size(); ++influence) {
+                        const std::uint16_t joint = vertex.jointIndices[influence];
+                        if (joint >= section.boneMap.size()) continue;
+                        const float weight = vertex.jointWeights[influence];
+                        const kb::scene::SkeletonBoneId boneId = section.boneMap[joint];
+                        const auto vertexBoneEnd = vertexBoneWeights.begin() + vertexBoneCount;
+                        auto existing = std::find_if(
+                            vertexBoneWeights.begin(),
+                            vertexBoneEnd,
+                            [boneId](const VertexBoneWeight& candidate) { return candidate.boneId == boneId; });
+                        if (existing != vertexBoneEnd) {
+                            existing->weight += weight;
+                        } else {
+                            vertexBoneWeights[vertexBoneCount++] = { .boneId = boneId, .weight = weight };
+                        }
+                    }
+                    for (std::size_t index = 0U; index < vertexBoneCount; ++index) {
+                        const VertexBoneWeight& influence = vertexBoneWeights[index];
+                        if (influence.weight <= 0.0F) continue;
+                        BoneInfluenceStats& stats = boneInfluenceStats_[influence.boneId];
+                        ++stats.influencedVertices;
+                        stats.totalWeight += influence.weight;
+                        stats.peakWeight = std::max(stats.peakWeight, influence.weight);
+                    }
+                }
+            }
+        }
+    }
+
     [[nodiscard]] static std::string Number(std::uint64_t value) { return std::to_string(value); }
     [[nodiscard]] static std::string Number(float value) {
         std::ostringstream output;
@@ -96,6 +161,7 @@ private:
     }
 
     [[nodiscard]] SkeletalMeshEditorDetailsModel BuildAsset() const {
+        if (cachedAssetModel_.has_value()) return *cachedAssetModel_;
         SkeletalMeshEditorDetailsModel model{ .title = "Skeletal Mesh" };
         model.sections.push_back({ "Asset", {
             { "Name", meshMetadata_.name },
@@ -139,39 +205,23 @@ private:
             { "Skeletal Mesh", meshValidation.valid ? "Valid" : meshValidation.error },
             { "Skeleton", skeletonValidation.valid ? "Valid" : skeletonValidation.error },
         } });
+        cachedAssetModel_ = model;
         return model;
     }
 
     [[nodiscard]] SkeletalMeshEditorDetailsModel BuildBone(const kb::scene::SkeletonBone& bone) const {
+        if (const auto cached = cachedBoneModels_.find(bone.id); cached != cachedBoneModels_.end()) {
+            return cached->second;
+        }
         std::string parent = "None";
         if (bone.parentIndex >= 0 && static_cast<std::size_t>(bone.parentIndex) < skeleton_.bones.size()) {
             parent = skeleton_.bones[static_cast<std::size_t>(bone.parentIndex)].name;
         }
-        std::uint64_t influencedVertices = 0U;
-        double totalWeight = 0.0;
-        float peakWeight = 0.0F;
-        for (const kb::scene::SkeletalMeshLod& lod : mesh_.lods) {
-            std::unordered_set<std::uint32_t> visitedVertices;
-            for (const kb::scene::SkeletalMeshSection& section : lod.sections) {
-                for (std::uint32_t offset = 0U; offset < section.indexCount; ++offset) {
-                    const std::uint32_t vertexIndex = lod.indices[section.firstIndex + offset];
-                    if (!visitedVertices.insert(vertexIndex).second || vertexIndex >= lod.vertices.size()) continue;
-                    const kb::scene::SkeletalMeshVertex& vertex = lod.vertices[vertexIndex];
-                    float vertexWeight = 0.0F;
-                    for (std::size_t influence = 0U; influence < vertex.jointWeights.size(); ++influence) {
-                        const std::uint16_t joint = vertex.jointIndices[influence];
-                        if (joint >= section.boneMap.size() || section.boneMap[joint] != bone.id) continue;
-                        vertexWeight += vertex.jointWeights[influence];
-                    }
-                    if (vertexWeight > 0.0F) {
-                        ++influencedVertices;
-                        totalWeight += vertexWeight;
-                        peakWeight = std::max(peakWeight, vertexWeight);
-                    }
-                }
-            }
-        }
-        return SkeletalMeshEditorDetailsModel{
+        const auto statsIterator = boneInfluenceStats_.find(bone.id);
+        const BoneInfluenceStats stats = statsIterator == boneInfluenceStats_.end()
+            ? BoneInfluenceStats{}
+            : statsIterator->second;
+        SkeletalMeshEditorDetailsModel model{
             .title = "Bone: " + bone.name,
             .sections = {{ "Bone", {
                 { "Id", Number(bone.id) },
@@ -179,11 +229,13 @@ private:
                 { "Reference Position", Vector(bone.referencePose.position) },
                 { "Reference Rotation", Rotation(bone.referencePose.rotation) },
                 { "Reference Scale", Vector(bone.referencePose.scale) },
-                { "Influenced Vertices", Number(influencedVertices) },
-                { "Average Weight", Number(influencedVertices == 0U ? 0.0F : static_cast<float>(totalWeight / influencedVertices)) },
-                { "Peak Weight", Number(peakWeight) },
+                { "Influenced Vertices", Number(stats.influencedVertices) },
+                { "Average Weight", Number(stats.influencedVertices == 0U ? 0.0F : static_cast<float>(stats.totalWeight / stats.influencedVertices)) },
+                { "Peak Weight", Number(stats.peakWeight) },
             } }},
         };
+        cachedBoneModels_.emplace(bone.id, model);
+        return model;
     }
 
     [[nodiscard]] SkeletalMeshEditorDetailsModel BuildSocket(const kb::scene::SkeletonSocket& socket) const {
@@ -203,6 +255,9 @@ private:
     kb::scene::SkeletalMeshAsset mesh_{};
     kb::scene::SkeletonAsset skeleton_{};
     kb::assets::AssetMetadata meshMetadata_{};
+    mutable std::optional<SkeletalMeshEditorDetailsModel> cachedAssetModel_{};
+    mutable std::unordered_map<kb::scene::SkeletonBoneId, SkeletalMeshEditorDetailsModel> cachedBoneModels_{};
+    std::unordered_map<kb::scene::SkeletonBoneId, BoneInfluenceStats> boneInfluenceStats_{};
     bool hasDocument_ = false;
 };
 

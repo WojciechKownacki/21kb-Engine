@@ -29,7 +29,7 @@ public:
         HDC dc,
         const RECT& content,
         const EditorTheme& theme,
-        const EditorSceneContext& sceneContext) const;
+        EditorSceneContext& sceneContext) const;
     [[nodiscard]] static Hit HitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y) noexcept;
     [[nodiscard]] static int ContentHeight(const RECT& content, const EditorSceneContext& sceneContext);
     [[nodiscard]] static int MaxScrollOffset(const RECT& content, const EditorSceneContext& sceneContext);

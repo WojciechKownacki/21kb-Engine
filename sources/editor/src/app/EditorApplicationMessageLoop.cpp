@@ -20,12 +20,14 @@
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "rendering/EditorMaterialThumbnailService.hpp"
+#include "rendering/EditorMeshPreviewService.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/script_editor/ScriptEditorWindow.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "app/scene_viewport/EditorTerrainViewportInteraction.hpp"
 #include "scene/EditorTerrainService.hpp"
+#include "diagnostics/EditorLagTrace.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -62,9 +64,49 @@ void WriteFramePerf(std::string_view line) {
 
 constexpr float kMaximumRuntimeDeltaSeconds = 1.0F / 15.0F;
 constexpr DWORD kPausedToolbarAnimationIntervalMs = 33;
-constexpr double kEditorTargetFrameRate = 180.0;
+constexpr double kEditorTargetFrameRate = 60.0;
 constexpr DWORD kSceneToolbarRefreshIntervalMs = 250;
 constexpr int kMaxMessagesPerPump = 128;
+
+[[nodiscard]] const char* MessageName(UINT message) noexcept {
+    switch (message) {
+    case WM_PAINT: return "WM_PAINT";
+    case WM_LBUTTONDOWN: return "WM_LBUTTONDOWN";
+    case WM_LBUTTONUP: return "WM_LBUTTONUP";
+    case WM_LBUTTONDBLCLK: return "WM_LBUTTONDBLCLK";
+    case WM_RBUTTONDOWN: return "WM_RBUTTONDOWN";
+    case WM_RBUTTONUP: return "WM_RBUTTONUP";
+    case WM_MBUTTONDOWN: return "WM_MBUTTONDOWN";
+    case WM_MBUTTONUP: return "WM_MBUTTONUP";
+    case WM_MOUSEMOVE: return "WM_MOUSEMOVE";
+    case WM_MOUSEWHEEL: return "WM_MOUSEWHEEL";
+    case WM_KEYDOWN: return "WM_KEYDOWN";
+    case WM_KEYUP: return "WM_KEYUP";
+    case WM_CHAR: return "WM_CHAR";
+    case WM_TIMER: return "WM_TIMER";
+    case WM_SIZE: return "WM_SIZE";
+    case WM_WINDOWPOSCHANGED: return "WM_WINDOWPOSCHANGED";
+    default: return "WM_OTHER";
+    }
+}
+
+[[nodiscard]] bool IsDiagnosticInputMessage(UINT message) noexcept {
+    switch (message) {
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONDOWN:
+    case WM_RBUTTONUP:
+    case WM_MBUTTONDOWN:
+    case WM_MBUTTONUP:
+    case WM_MOUSEWHEEL:
+    case WM_KEYDOWN:
+    case WM_CHAR:
+        return true;
+    default:
+        return false;
+    }
+}
 
 [[nodiscard]] float RuntimeDeltaSeconds(std::chrono::steady_clock::time_point previous, std::chrono::steady_clock::time_point current) noexcept {
     const std::chrono::duration<float> delta = current - previous;
@@ -434,7 +476,18 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
 
 [[nodiscard]] bool PresentVisibleViewports(EditorApplicationState& state) {
     const bool refreshToolbar = ShouldRefreshSceneToolbars();
+    const bool explicitPresentRequested = state.sceneViewport.PresentRequested();
     state.sceneViewport.SetGraphShaderCacheRoot(state.sceneContext.GraphShaderCacheRoot());
+    if (EditorMeshPreviewCache().PumpCompletedPreviews(state.sceneContext.Scene().Assets().Manager()) > 0U) {
+        if (state.window != nullptr) {
+            InvalidateRect(state.window, nullptr, FALSE);
+        }
+        for (HWND window : state.floatingWindows.Queries().Windows()) {
+            if (window != nullptr && IsWindow(window) != 0) {
+                InvalidateRect(window, nullptr, FALSE);
+            }
+        }
+    }
     const std::size_t importedItems = state.sceneContext.PumpAssetImportResults();
     if (importedItems > 0U) {
         state.sceneViewport.RequestPresent();
@@ -443,6 +496,33 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
     const auto cookStart = std::chrono::steady_clock::now();
     const std::size_t cookResults = state.sceneContext.PumpMaterialGraphCookResults();
     const double cookMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cookStart).count();
+    if (cookResults > 0U) {
+        state.sceneViewport.RequestPresent();
+    }
+
+    // Present only when visible GPU content can actually have changed. The previous loop ignored
+    // PresentRequested() and continuously submitted every viewport at 180 Hz, keeping bgfx and the
+    // graphics driver saturated even while the editor was idle. Material graphs are the one
+    // intentionally time-driven preview and Play Mode advances the scene every tick.
+    const bool playPresent = state.playMode.IsPlaying();
+    const bool materialPresent = state.sceneContext.MaterialEditor().OpenAssetId().IsValid();
+    const bool thumbnailPresent = EditorMaterialThumbnailCache().HasPendingWork();
+    const bool continuousPresent = playPresent || materialPresent;
+    const bool postShowPresent = state.sceneViewport.PostShowPresentPending();
+    if (postShowPresent) {
+        // WM_PAINT may clear the ordinary request between ticks. The lifecycle-owned request
+        // remains pending until a settled message-loop submission has completed.
+        state.sceneViewport.RequestPresent();
+    }
+    // The toolbar refresh only repaints cached counters. It must not manufacture a GPU frame:
+    // doing so submitted every visible viewport exactly four times per second while idle.
+    if (continuousPresent || thumbnailPresent) {
+        state.sceneViewport.RequestPresent();
+    }
+    if (!state.sceneViewport.PresentRequested()) {
+        return false;
+    }
+
     bool scenePresented = false;
     const auto beginStart = std::chrono::steady_clock::now();
     state.sceneViewport.BeginPaintLayout(state.window);
@@ -461,11 +541,27 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
         std::ostringstream row;
         row << "[present] cook=" << cookMs << "ms(r=" << cookResults << ") begin=" << beginMs
             << "ms mainHost=" << mainMs << "ms floatHost=" << floatMs << "ms endFrame=" << endMs
-            << "ms scene=" << (scenePresented ? 1 : 0);
+            << "ms scene=" << (scenePresented ? 1 : 0)
+            << " reason(explicit=" << (explicitPresentRequested ? 1 : 0)
+            << ",toolbar=" << (refreshToolbar ? 1 : 0)
+            << ",play=" << (playPresent ? 1 : 0)
+            << ",material=" << (materialPresent ? 1 : 0)
+            << ",thumbnail=" << (thumbnailPresent ? 1 : 0)
+            << ",import=" << (importedItems > 0U ? 1 : 0)
+            << ",cook=" << (cookResults > 0U ? 1 : 0) << ')';
         WriteFramePerf(row.str());
+        diagnostics::EditorLagTrace::Slow(
+            "present-cycle",
+            diagnostics::EditorLagTrace::NextEventId(),
+            std::max(cookMs, presentMs),
+            row.str(),
+            25.0);
     }
     if (mainPresented || floatingPresented) {
         state.sceneViewport.ClearPresentRequest();
+        if (postShowPresent) {
+            state.sceneViewport.AcknowledgePostShowPresent();
+        }
     }
     if (scenePresented) {
         state.sceneContext.AcknowledgeSceneRenderSubmitted();
@@ -559,6 +655,27 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
 }
 
 [[nodiscard]] bool TickEditorFrame(EditorApplicationState& state, float deltaSeconds) {
+    const bool asyncAssetsPending = state.sceneContext.HasPendingSkeletalMeshEditorOpen() ||
+        EditorMeshPreviewCache().HasPendingPreviewWork();
+    if (asyncAssetsPending) {
+        // AssetManager publishes worker results only on its owner thread. Keep
+        // this as the single editor-loop pump for both document and thumbnail
+        // requests so input dispatch never waits for asset parsing.
+        state.sceneContext.Scene().Assets().Manager().PumpAsyncLoads();
+    }
+    const bool skeletalMeshEditorOpenChanged = state.sceneContext.PumpPendingSkeletalMeshEditorOpen();
+    if (skeletalMeshEditorOpenChanged) {
+        state.sceneViewport.RequestPresent();
+        if (state.window != nullptr) {
+            InvalidateRect(state.window, nullptr, FALSE);
+        }
+        for (HWND window : state.floatingWindows.Queries().Windows()) {
+            if (window != nullptr && IsWindow(window) != 0) {
+                InvalidateRect(window, nullptr, FALSE);
+            }
+        }
+    }
+
     // Keep the scene's physics debug-draw flag in sync with the editor's collider
     // gizmo toggle (the flag lives in per-scene state and resets on reload, so a
     // cheap per-frame write keeps green collider wireframes on across reloads).
@@ -602,6 +719,12 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         state.sceneViewport.RequestPresent();
     }
 
+    const bool animationPreviewCameraChanged = state.sceneContext.TickAnimationPreviewCamera(deltaSeconds);
+    const bool animationPreviewPlaybackChanged = state.sceneContext.TickAnimationPreviewPlayback(deltaSeconds);
+    if (animationPreviewCameraChanged || animationPreviewPlaybackChanged) {
+        state.sceneViewport.RequestPresent();
+    }
+
     // Saving a script in the Script Editor (Ctrl+S) writes the file but leaves the
     // cached asset stale; detect the save here and reload it so the Inspector's
     // exposed-variable schema reflects the edit immediately (no editor/scene save
@@ -624,8 +747,10 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     }
 
     const bool viewportsPresented = PresentVisibleViewports(state);
-    return viewportsPresented || navigationChanged || gizmoChanged || focusChanged || scriptSaved ||
-        addComponentSliding || disclosureSliding || EditorTerrainService::ToolState().strokeActive;
+    return viewportsPresented || navigationChanged || gizmoChanged || focusChanged ||
+        animationPreviewCameraChanged || animationPreviewPlaybackChanged || scriptSaved ||
+        addComponentSliding || disclosureSliding || skeletalMeshEditorOpenChanged ||
+        EditorTerrainService::ToolState().strokeActive;
 }
 
 [[nodiscard]] bool TickPointerDragFrame(EditorApplicationState& state) {
@@ -672,6 +797,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
 } // namespace
 
 void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
+    diagnostics::EditorLagTrace::Marker("session", "message-loop-start");
     MSG message{};
     auto previousTick = std::chrono::steady_clock::now();
     auto nextEditorFrame = previousTick;
@@ -690,11 +816,31 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
             const bool isPaint = message.message == WM_PAINT;
             dispatchedPaint = dispatchedPaint || isPaint;
             CoalesceConsecutiveMouseMoveMessages(message);
+            const std::uint64_t messageEventId = diagnostics::EditorLagTrace::NextEventId();
+            if (IsDiagnosticInputMessage(message.message)) {
+                const auto x = static_cast<std::int64_t>(static_cast<short>(LOWORD(message.lParam)));
+                const auto y = static_cast<std::int64_t>(static_cast<short>(HIWORD(message.lParam)));
+                diagnostics::EditorLagTrace::Input(
+                    messageEventId,
+                    MessageName(message.message),
+                    reinterpret_cast<std::uintptr_t>(message.hwnd),
+                    x,
+                    y);
+            }
             TranslateMessage(&message);
             const auto dispatchStart = std::chrono::steady_clock::now();
             DispatchMessageW(&message);
+            const double dispatchMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - dispatchStart).count();
+            if (dispatchMs >= 8.0) {
+                std::ostringstream detail;
+                detail << "message=" << MessageName(message.message)
+                       << " id=0x" << std::hex << message.message
+                       << " hwnd=0x" << reinterpret_cast<std::uintptr_t>(message.hwnd) << std::dec;
+                diagnostics::EditorLagTrace::Slow("dispatch", messageEventId, dispatchMs, detail.str());
+            }
             if (isPaint) {
-                paintMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - dispatchStart).count();
+                paintMs += dispatchMs;
             }
         }
         const double pumpMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pumpStart).count();
@@ -709,6 +855,12 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
                 row << "[frame] pump=" << pumpMs << "ms wmpaint=" << paintMs << "ms(" << (dispatchedPaint ? 1 : 0)
                     << ") msgs=" << pumpedMessages << " tick=0ms (paced-wait)";
                 WriteFramePerf(row.str());
+                diagnostics::EditorLagTrace::Slow(
+                    "message-pump",
+                    diagnostics::EditorLagTrace::NextEventId(),
+                    pumpMs,
+                    row.str(),
+                    40.0);
             }
             const DWORD waitMs = FrameWaitMilliseconds(currentTick, nextEditorFrame);
             static_cast<void>(MsgWaitForMultipleObjects(0, nullptr, FALSE, waitMs, QS_ALLINPUT));
@@ -727,6 +879,12 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
             row << "[frame] pump=" << pumpMs << "ms wmpaint=" << paintMs << "ms(" << (dispatchedPaint ? 1 : 0)
                 << ") msgs=" << pumpedMessages << " tick=" << tickMs << "ms";
             WriteFramePerf(row.str());
+            diagnostics::EditorLagTrace::Slow(
+                "editor-loop",
+                diagnostics::EditorLagTrace::NextEventId(),
+                std::max(pumpMs, tickMs),
+                row.str(),
+                40.0);
         }
         nextEditorFrame = currentTick + editorFrameInterval;
 
@@ -750,7 +908,10 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
             // Keep the loop paced (instead of parking in WaitMessage) while a material is open so
             // async graph cook results keep pumping; time-driven preview animation (MAT-72) is
             // carried by the per-frame preview presents in TickEditorFrame.
-            if (state.sceneContext.MaterialEditor().OpenAssetId().IsValid() || state.sceneContext.AssetImportInProgress()) {
+            if (state.sceneContext.MaterialEditor().OpenAssetId().IsValid() ||
+                state.sceneContext.AssetImportInProgress() ||
+                state.sceneContext.HasPendingSkeletalMeshEditorOpen() ||
+                EditorMeshPreviewCache().HasPendingPreviewWork()) {
                 static_cast<void>(MsgWaitForMultipleObjects(0, nullptr, FALSE, FrameWaitMilliseconds(currentTick, nextEditorFrame), QS_ALLINPUT));
             } else {
                 WaitMessage();

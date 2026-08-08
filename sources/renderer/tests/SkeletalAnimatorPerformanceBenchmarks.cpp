@@ -15,9 +15,11 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "kb/render/RenderSurface.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
+#include "kb/render/resources/SkeletalMeshRenderResourceBuilder.hpp"
 #include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
 #include "kb/render/scene/MeshPipeline.hpp"
 
@@ -671,6 +673,131 @@ void VerifySk1290(
         "SK-12.90 runtime scene did not submit after renderer reset");
 }
 
+void ProbeSkeletalMeshAsset(
+    kb::render::Renderer& renderer,
+    const std::filesystem::path& meshPath,
+    const std::filesystem::path& skeletonPath) {
+    std::string meshError;
+    std::string skeletonError;
+    const std::optional<kb::scene::SkeletalMeshAsset> mesh =
+        kb::scene::SkeletalMeshAssetIO::Load(meshPath, &meshError);
+    const std::optional<kb::scene::SkeletonAsset> skeleton =
+        kb::scene::SkeletonAssetIO::Load(skeletonPath, &skeletonError);
+    Require(mesh.has_value(), meshError.empty() ? "Skeletal Mesh probe could not load the mesh" : meshError.c_str());
+    Require(skeleton.has_value(), skeletonError.empty() ? "Skeletal Mesh probe could not load the skeleton" : skeletonError.c_str());
+    Require(mesh->skeletonAssetId != 0U &&
+            mesh->skeletonCompatibilitySignature == kb::scene::SkeletonCompatibilitySignature(*skeleton),
+        "Skeletal Mesh probe found an incompatible mesh/skeleton pair");
+
+    constexpr kb::assets::AssetId meshId{ 0x534B454C4554414CULL };
+    const kb::assets::AssetId skeletonId{ mesh->skeletonAssetId };
+    kb::scene::Scene scene{ kb::scene::SceneMode::Runtime };
+    kb::assets::AssetManager& assets = scene.Assets().Manager();
+    Require(assets.RegisterAsset({
+                .id = skeletonId,
+                .type = kb::scene::kSkeletonAssetType,
+                .name = "Skeletal probe skeleton",
+                .virtualPath = "/__Probe/Skeleton.kbskeleton",
+                .runtimeLoadable = true,
+            }) &&
+            assets.RegisterAsset({
+                .id = meshId,
+                .type = kb::scene::kSkeletalMeshAssetType,
+                .name = "Skeletal probe mesh",
+                .virtualPath = "/__Probe/Mesh.kbskeletalmesh",
+                .runtimeLoadable = true,
+            }) &&
+            assets.PublishRuntimeAsset(skeletonId, std::make_shared<kb::scene::SkeletonAsset>(*skeleton)) &&
+            assets.PublishRuntimeAsset(meshId, std::make_shared<kb::scene::SkeletalMeshAsset>(*mesh)),
+        "Skeletal Mesh probe could not publish its immutable assets");
+
+    kb::scene::SceneObjectDesc object{ .name = "Skeletal probe" };
+    object.transform.localRotation = kb::scene::Quat{ 0.0F, 0.0F, 1.0F, 0.0F };
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(object);
+    scene.Components().MeshRenderers().Set(entity, { .meshAssetId = meshId.value });
+    const bool geometrySet = scene.Components().DeformedGeometries().Set(entity, {
+        .skeletalMeshAssetId = meshId.value,
+        .fixedBounds = true,
+        .enabled = true,
+    });
+    const bool bindingSet = scene.Components().SkeletonBindings().Set(entity, {
+        .skeletonAssetId = skeletonId.value,
+        .skeletonCompatibilitySignature = mesh->skeletonCompatibilitySignature,
+        .enabled = true,
+    });
+    Require(geometrySet && bindingSet && scene.Components().MeshRenderers().Has(entity) &&
+            scene.Components().DeformedGeometries().Has(entity) &&
+            scene.Components().SkeletonBindings().Has(entity),
+        "Skeletal Mesh probe could not create the renderable entity");
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    const std::optional<kb::scene::AnimatorInstanceSkeletonView> pose = scene.Animators().InstanceSkeleton(entity);
+    Require(pose.has_value() && pose->boneIds.size() == skeleton->bones.size(),
+        "Skeletal Mesh probe did not create a complete reference pose");
+    std::vector<kb::scene::SkeletonBoneId> paletteBones;
+    std::vector<kb::math::Mat4> paletteMatrices;
+    const bool currentPaletteBuilt = kb::scene::BuildSkeletalMeshSkinningPalette(
+        *mesh, pose->boneIds, pose->currentSkinMatrices, paletteBones, paletteMatrices);
+    const bool previousPaletteBuilt = kb::scene::BuildSkeletalMeshSkinningPalette(
+        *mesh, pose->boneIds, pose->previousSkinMatrices, paletteBones, paletteMatrices);
+    const std::optional<kb::render::SkeletalMeshRenderResourceData> builtMesh =
+        kb::render::SkeletalMeshRenderResourceBuilder::BuildValidated(*mesh);
+
+    const kb::render::RenderSceneSubmitDesc desc = SubmitDesc();
+    Require(renderer.BeginFrame() && renderer.SubmitScene(scene, desc),
+        "Skeletal Mesh probe could not submit its warm-up frame");
+    renderer.EndFrame();
+    Require(renderer.BeginFrame() && renderer.SubmitScene(scene, desc),
+        "Skeletal Mesh probe could not submit its measured frame");
+    const kb::render::SceneRenderSubmitStats stats = renderer.LastSceneSubmitStats();
+    const kb::render::Renderer::RuntimeSceneResourceStats resourceStats =
+        renderer.RuntimeResourceStats();
+    const kb::assets::AssetMetadata* finalMeshMetadata = assets.Registry().Find(meshId);
+    const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> finalMeshAsset =
+        assets.AcquireLoaded<kb::scene::SkeletalMeshAsset>(meshId);
+    renderer.EndFrame();
+    std::cout << "skeletal-asset-probe bones=" << skeleton->bones.size()
+              << " vertices=" << mesh->lods.front().vertices.size()
+              << " indices=" << mesh->lods.front().indices.size()
+              << " poseAsset=" << pose->skeletonAssetId
+              << " meshAsset=" << mesh->skeletonAssetId
+              << " poseCompatibility=" << pose->compatibilitySignature
+              << " meshCompatibility=" << mesh->skeletonCompatibilitySignature
+              << " currentMatrices=" << pose->currentSkinMatrices.size()
+              << " previousMatrices=" << pose->previousSkinMatrices.size()
+              << " currentPalette=" << currentPaletteBuilt
+              << " previousPalette=" << previousPaletteBuilt
+              << " meshBuilt=" << builtMesh.has_value()
+              << " builtVertices=" << (builtMesh ? builtMesh->desc.vertexCount : 0U)
+              << " builtIndices=" << (builtMesh ? builtMesh->desc.indexCount : 0U)
+              << " finalMetadata=" << (finalMeshMetadata != nullptr)
+              << " finalType=" << (finalMeshMetadata != nullptr ? finalMeshMetadata->type : std::string{})
+              << " finalLoaded=" << finalMeshAsset.IsLoaded()
+              << " cachedMeshes=" << resourceStats.cachedMeshCount
+              << " meshSlots=" << resourceStats.meshResourceSlotCapacity
+              << " meshBindings=" << resourceStats.meshBindingCapacity
+              << " renderProxies=" << resourceStats.renderSceneMeshProxyCount
+              << " visibleMeshes=" << stats.visibleMeshCount
+              << " submittedMeshes=" << stats.submittedMeshCount
+              << " drawCalls=" << stats.submittedDrawCallCount
+              << " culled=" << stats.culledInstanceCount
+              << " dropped=" << stats.droppedInstanceCount
+              << " missingBinding=" << stats.missingMeshBindingCount
+              << " missingMesh=" << stats.missingMeshResourceCount
+              << " unsupportedVertex=" << stats.unsupportedMeshVertexFormatCount
+              << " missingMaterialBinding=" << stats.missingMaterialBindingCount
+              << " missingMaterial=" << stats.missingMaterialResourceCount
+              << " diagnostics=" << renderer.LastSceneDiagnostics().events.size() << '\n';
+    const std::uint32_t expectedSections =
+        static_cast<std::uint32_t>(mesh->lods.front().sections.size());
+    Require(stats.visibleMeshCount == expectedSections &&
+            stats.submittedMeshCount == expectedSections &&
+            stats.submittedDrawCallCount != 0U &&
+            stats.missingMeshBindingCount == 0U &&
+            stats.missingMeshResourceCount == 0U &&
+            stats.unsupportedMeshVertexFormatCount == 0U,
+        "Skeletal Mesh probe did not reach a visible GPU draw");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -683,6 +810,11 @@ int main(int argc, char** argv) {
         kb::render::Renderer renderer;
         Require(renderer.Initialize(surface, &config),
             "SK-12.87 could not initialize the production headless renderer");
+        if (argc == 4 && std::string_view{ argv[1] } == "--probe-skeletal-asset") {
+            ProbeSkeletalMeshAsset(renderer, argv[2], argv[3]);
+            renderer.Shutdown();
+            return 0;
+        }
         const bool sk1289Only = argc == 2 && std::string_view{ argv[1] } == "--sk12-89-only";
         const bool sk1290Only = argc == 2 && std::string_view{ argv[1] } == "--sk12-90-only";
         if (!sk1289Only && !sk1290Only) {

@@ -244,6 +244,16 @@ void EditorSceneBgfxViewport::ClearPresentRequest() noexcept {
     presentRequested_ = false;
 }
 
+bool EditorSceneBgfxViewport::PostShowPresentPending() const noexcept {
+    return postShowPresentsRemaining_ > 0U;
+}
+
+void EditorSceneBgfxViewport::AcknowledgePostShowPresent() noexcept {
+    if (postShowPresentsRemaining_ > 0U) {
+        --postShowPresentsRemaining_;
+    }
+}
+
 void EditorSceneBgfxViewport::SyncHostSurfaceLayouts(HWND parent, std::span<const HostSurfaceLayout> layouts) noexcept {
     if (parent == nullptr) {
         return;

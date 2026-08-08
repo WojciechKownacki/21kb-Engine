@@ -17,9 +17,12 @@
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
+#include "diagnostics/EditorLagTrace.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <optional>
+#include <sstream>
 #include <span>
 #include <vector>
 
@@ -410,20 +413,39 @@ EditorPaintDispatcher::EditorPaintDispatcher(
     , pointerDrag_(pointerDrag) {}
 
 void EditorPaintDispatcher::Paint(HWND paintWindow) const {
+    const std::uint64_t paintEventId = diagnostics::EditorLagTrace::NextEventId();
     if (paintWindow == nullptr || IsMainWindow(paintWindow)) {
+        const auto gdiStart = std::chrono::steady_clock::now();
         renderer_.Paint(mainWindow_, dockModel_, theme_, metrics_, sceneContext_, dockController_.DropPreview(), dockController_.ActiveDrag(), pointerDrag_, renderBackendSettings_, playMode_, shellInteraction_, sceneViewport_);
+        const double gdiMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - gdiStart).count();
+        diagnostics::EditorLagTrace::Slow("paint-gdi", paintEventId, gdiMs, "host=main", 8.0);
         const DockPointerDrag* activeDrag = dockController_.ActiveDrag();
         const bool draggingSplitter = activeDrag != nullptr && activeDrag->kind == DockHitKind::Splitter;
         if (EditorWindowResizeInteraction::IsWindowResizing(mainWindow_) || draggingSplitter) {
+            const auto presentStart = std::chrono::steady_clock::now();
             static_cast<void>(PresentPaintHostViewports(mainWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, renderBackendSettings_, sceneViewport_));
+            const double presentMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - presentStart).count();
+            diagnostics::EditorLagTrace::Slow("paint-resize-present", paintEventId, presentMs, "host=main", 8.0);
         }
         return;
     }
 
     if (const DockPanel* panel = dockModel_.Queries().FindPanel(floatingWindows_.Queries().PanelId(paintWindow)); panel != nullptr) {
+        const auto gdiStart = std::chrono::steady_clock::now();
         renderer_.PaintFloating(paintWindow, *panel, theme_, metrics_, sceneContext_, renderBackendSettings_, sceneViewport_);
+        const double gdiMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - gdiStart).count();
+        std::ostringstream paintDetail;
+        paintDetail << "host=floating panelKind=" << static_cast<unsigned>(panel->kind);
+        diagnostics::EditorLagTrace::Slow("paint-gdi", paintEventId, gdiMs, paintDetail.str(), 8.0);
         if (EditorWindowResizeInteraction::IsWindowResizing(paintWindow)) {
+            const auto presentStart = std::chrono::steady_clock::now();
             static_cast<void>(PresentPaintHostViewports(paintWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, renderBackendSettings_, sceneViewport_));
+            const double presentMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - presentStart).count();
+            diagnostics::EditorLagTrace::Slow("paint-resize-present", paintEventId, presentMs, paintDetail.str(), 8.0);
         }
     }
 }

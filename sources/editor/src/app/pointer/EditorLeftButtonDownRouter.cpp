@@ -20,6 +20,7 @@
 #include "app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp"
 #include "app/scene_viewport/EditorTerrainViewportInteraction.hpp"
 #include "docking/DockMainLayoutResolver.hpp"
+#include "diagnostics/EditorLagTrace.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -908,6 +909,9 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             sceneContext_.FocusSkeletalMeshEditorTreeSearch(false);
             if (row->kind == SkeletalMeshEditorTreeItemKind::Bone) {
                 static_cast<void>(sceneContext_.SelectSkeletalMeshEditorBone(row->boneId));
+                diagnostics::EditorLagTrace::Marker(
+                    "skeletal-bone-selection",
+                    "source=tree hit=1 boneId=" + std::to_string(row->boneId));
             } else {
                 static_cast<void>(sceneContext_.SelectSkeletalMeshEditorSocket(row->socketName));
             }
@@ -916,10 +920,19 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                    bone.has_value()) {
             sceneContext_.FocusSkeletalMeshEditorTreeSearch(false);
             static_cast<void>(sceneContext_.SelectSkeletalMeshEditorBone(*bone));
+            diagnostics::EditorLagTrace::Marker(
+                "skeletal-bone-selection",
+                "source=viewport hit=1 boneId=" + std::to_string(*bone));
         } else {
             sceneContext_.FocusSkeletalMeshEditorTreeSearch(false);
             static_cast<void>(sceneContext_.ClearSkeletalMeshEditorTreeSelection());
+            diagnostics::EditorLagTrace::Marker(
+                "skeletal-bone-selection", "source=viewport hit=0");
         }
+        // The viewport is a native GPU child and sits above the invalidated GDI panel. Repainting
+        // the host alone cannot update its selected-bone overlay; request a new GPU composition
+        // for every selection transition, including clearing the selection.
+        sceneViewport_.RequestPresent();
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return;
     }

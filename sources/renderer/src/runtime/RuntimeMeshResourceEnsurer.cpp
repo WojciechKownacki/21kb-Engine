@@ -148,7 +148,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
         const std::span<const float> morphWeights = pose
             ? pose->morphWeights.currentWeights : std::span<const float>{};
         const std::optional<SkeletalMeshRenderResourceData> resource =
-            SkeletalMeshRenderResourceBuilder::Build(*asset, morphTargetNames, morphWeights);
+            SkeletalMeshRenderResourceBuilder::BuildValidated(*asset, morphTargetNames, morphWeights);
         if (!resource) {
             context.sceneRenderer.ResourceMap().UnbindMesh(proxy.meshAssetId);
             return true;
@@ -238,7 +238,7 @@ void RuntimeMeshResourceEnsurer::Ensure(
                 return;
             }
             const std::optional<SkeletalMeshRenderResourceData> resource =
-                SkeletalMeshRenderResourceBuilder::Build(*asset);
+                SkeletalMeshRenderResourceBuilder::BuildValidated(*asset);
             if (!resource) {
                 context.sceneRenderer.ResourceMap().UnbindMesh(meshAssetId);
                 static_cast<void>(manager.Unload(assetId));
