@@ -18,7 +18,9 @@
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
+#include "rendering/EditorBgfxBackendSelector.hpp"
 #include "rendering/EditorHostSurfaceLifecycle.hpp"
+#include "rendering/SkeletalMeshEditorBonePicker.hpp"
 #include "rendering/EditorTexturePreviewService.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLabelFormat.hpp"
@@ -35,6 +37,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -153,6 +156,112 @@ void RunAnimationPreviewScenePresentationTest() {
             std::fabs(initialCamera.localPosition.y - movedCamera.localPosition.y) > 0.0001F ||
             std::fabs(initialCamera.localPosition.z - movedCamera.localPosition.z) > 0.0001F,
         "Animation preview camera navigation did not update the runtime camera transform");
+}
+
+void RunAnimationPreviewLegacyFbxOrientationTest() {
+    constexpr kb::assets::AssetId skeletonId{ 701U };
+    constexpr kb::assets::AssetId meshId{ 702U };
+    kb::scene::SkeletonAsset skeleton{};
+    skeleton.bones = {
+        { .id = 1U, .parentIndex = -1, .name = "Hips", .referencePose = { .position = { 0.0F, -1.0F, 0.0F } }, .inverseBind = {} },
+        { .id = 2U, .parentIndex = 0, .name = "Head", .referencePose = { .position = { 0.0F, -0.6F, 0.0F } }, .inverseBind = {} },
+    };
+    const std::uint64_t signature = kb::scene::SkeletonCompatibilitySignature(skeleton);
+    kb::scene::SkeletalMeshAsset mesh{};
+    mesh.skeletonAssetId = skeletonId.value;
+    mesh.skeletonCompatibilitySignature = signature;
+    mesh.conservativeBounds = { .center = { 0.0F, -0.8F, 0.0F }, .extents = { 0.5F, 0.8F, 0.25F } };
+    mesh.fixedBounds = mesh.conservativeBounds;
+    mesh.lods = {{
+        .vertices = {
+            { .position = { -0.5F, -1.6F, 0.0F }, .jointWeights = { 1.0F, 0.0F, 0.0F, 0.0F } },
+            { .position = { 0.5F, -1.6F, 0.0F }, .jointWeights = { 1.0F, 0.0F, 0.0F, 0.0F } },
+            { .position = { 0.0F, 0.0F, 0.0F }, .jointWeights = { 1.0F, 0.0F, 0.0F, 0.0F } },
+        },
+        .indices = { 0U, 1U, 2U },
+        .sections = {{ .firstIndex = 0U, .indexCount = 3U, .boneMap = { 1U, 2U } }},
+        .requiredBones = { 1U, 2U },
+    }};
+
+    kb::scene::Scene source{ kb::scene::SceneMode::Runtime };
+    kb::assets::AssetManager& assets = source.Assets().Manager();
+    kb::editor::tests::Require(
+        assets.RegisterAsset({ .id = skeletonId, .type = kb::scene::kSkeletonAssetType,
+            .name = "Legacy Skeleton", .virtualPath = "/Game/Legacy.kbskeleton" }) &&
+        assets.RegisterAsset({ .id = meshId, .type = kb::scene::kSkeletalMeshAssetType,
+            .name = "Legacy Mesh", .virtualPath = "/Game/Legacy.kbskeletalmesh" }) &&
+        assets.PublishRuntimeAsset(skeletonId, std::make_shared<kb::scene::SkeletonAsset>(skeleton)) &&
+        assets.PublishRuntimeAsset(meshId, std::make_shared<kb::scene::SkeletalMeshAsset>(mesh)),
+        "Legacy FBX preview fixture could not publish its runtime assets");
+
+    kb::editor::AnimationPreviewContext context;
+    context.SetAssets(skeletonId, meshId, {}, {});
+    static_cast<void>(context.Overlays().SetBonesVisible(true));
+    kb::editor::EditorAnimationPreviewScene preview;
+    static_cast<void>(preview.SceneFor(source, context));
+    const kb::editor::AnimationPreviewOverlaySnapshot overlays = preview.BuildOverlays(context);
+    kb::editor::tests::Require(
+        !overlays.lines.empty() && overlays.lines.front().to.y > overlays.lines.front().from.y &&
+            overlays.lines.front().fromBoneId == 1U && overlays.lines.front().boneId == 2U,
+        "Animation preview did not turn a legacy below-ground FBX skeleton upright");
+    kb::editor::tests::Require(
+        preview.Camera().YawDegrees() == 180.0F && preview.Camera().PitchDegrees() == 0.0F,
+        "Skeletal Mesh Editor did not open a newly selected mesh facing the camera");
+}
+
+void RunSkeletalMeshEditorBonePickerTest() {
+    kb::editor::EditorViewportCameraState camera;
+    const kb::editor::EditorViewportCameraAxes axes = camera.Axes();
+    const kb::scene::Vec3 center = axes.position + axes.forward * 5.0F;
+    const kb::scene::Vec3 root = center - axes.right * 0.25F;
+    const kb::scene::Vec3 child = center + axes.right * 0.25F;
+    const std::array lines{
+        kb::editor::AnimationPreviewOverlayLine{
+            .from = root,
+            .to = child,
+            .fromBoneId = 11U,
+            .boneId = 22U,
+        },
+    };
+    constexpr kb::editor::SkeletalMeshEditorBonePickViewport viewport{
+        .left = 0.0F,
+        .top = 0.0F,
+        .width = 1000.0F,
+        .height = 1000.0F,
+    };
+    const auto project = [&](kb::scene::Vec3 point) {
+        const kb::scene::Vec3 delta = point - axes.position;
+        const auto dot = [](kb::scene::Vec3 left, kb::scene::Vec3 right) {
+            return left.x * right.x + left.y * right.y + left.z * right.z;
+        };
+        const float depth = dot(delta, axes.forward);
+        const float tangent = std::tan(camera.VerticalFovDegrees() * 0.00872664626F);
+        return std::array{
+            (dot(delta, axes.right) / (depth * tangent) * 0.5F + 0.5F) * viewport.width,
+            (0.5F - dot(delta, axes.up) / (depth * tangent) * 0.5F) * viewport.height,
+        };
+    };
+    const std::array<float, 2U> rootScreen = project(root);
+    const std::array<float, 2U> childScreen = project(child);
+    const float shaftX = (rootScreen[0] + childScreen[0]) * 0.5F;
+    const float shaftY = (rootScreen[1] + childScreen[1]) * 0.5F;
+
+    kb::editor::tests::Require(
+        kb::editor::SkeletalMeshEditorBonePicker::Pick(
+            viewport, camera, lines, rootScreen[0], rootScreen[1]) == 11U,
+        "Skeletal Mesh viewport did not select the parent/root joint at a branch start");
+    kb::editor::tests::Require(
+        kb::editor::SkeletalMeshEditorBonePicker::Pick(
+            viewport, camera, lines, childScreen[0], childScreen[1]) == 22U,
+        "Skeletal Mesh viewport did not select the child joint at a bone end");
+    kb::editor::tests::Require(
+        kb::editor::SkeletalMeshEditorBonePicker::Pick(
+            viewport, camera, lines, shaftX, shaftY + 10.0F) == 22U,
+        "Skeletal Mesh viewport bone shaft hit target is narrower than the visible bone shape");
+    kb::editor::tests::Require(
+        !kb::editor::SkeletalMeshEditorBonePicker::Pick(
+            viewport, camera, lines, shaftX, shaftY + 50.0F).has_value(),
+        "Skeletal Mesh viewport selected a bone outside its visible hit target");
 }
 
 void RunAnimationPreviewExactScrubTest() {
@@ -697,6 +806,28 @@ void RunRenderBackendSettingsTest() {
     kb::editor::tests::Require(settings.Generation() == 3U, "Third render backend cycle should bump generation");
 }
 
+void RunEditorBackendSelectionTest() {
+    constexpr std::array supported{
+        bgfx::RendererType::Direct3D12,
+        bgfx::RendererType::Direct3D11,
+        bgfx::RendererType::Vulkan,
+    };
+    kb::editor::EditorRenderBackendSettings settings;
+#if defined(_WIN32)
+    kb::editor::tests::Require(
+        kb::editor::EditorBgfxBackendSelector::Resolve(
+            supported.data(), static_cast<std::uint8_t>(supported.size()), &settings) ==
+            bgfx::RendererType::Direct3D11,
+        "Auto editor backend should prefer low-latency D3D11 on Windows");
+#endif
+    settings.SetBackend(kb::editor::EditorRenderBackend::DirectX12);
+    kb::editor::tests::Require(
+        kb::editor::EditorBgfxBackendSelector::Resolve(
+            supported.data(), static_cast<std::uint8_t>(supported.size()), &settings) ==
+            bgfx::RendererType::Direct3D12,
+        "Explicit DX12 editor backend selection was not honored");
+}
+
 void RunPlayModeStateTest() {
     kb::editor::EditorPlayModeState playMode;
     kb::editor::tests::Require(playMode.Mode() == kb::editor::EditorPlayMode::Stopped, "Editor play mode should default to stopped mode");
@@ -828,6 +959,8 @@ void RunEditorViewportPreviewTests() {
     RunAnimationPreviewTransportTest();
     RunAnimationPreviewOverlayStateTest();
     RunAnimationPreviewScenePresentationTest();
+    RunAnimationPreviewLegacyFbxOrientationTest();
+    RunSkeletalMeshEditorBonePickerTest();
     RunAnimationPreviewExactScrubTest();
     RunHostSurfaceLifecycleStateTest();
     RunTerrainToolbarAndStrokeTickPolicyTest();
@@ -846,6 +979,7 @@ void RunEditorViewportPreviewTests() {
     RunViewportLightIconPickerSelectsLightIconsTest();
     RunViewportMeshPickerWinsInsideLightWireframeVolumeTest();
     RunRenderBackendSettingsTest();
+    RunEditorBackendSelectionTest();
     RunPlayModeStateTest();
 }
 

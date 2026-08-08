@@ -577,7 +577,7 @@ void DrawAssetTile(
     const EditorTheme& theme,
     const EditorAssetItemRow& asset,
     const EditorAssetBrowserState& state,
-    const kb::assets::AssetManager& manager,
+    kb::assets::AssetManager& manager,
     EditorMeshThumbnailService& meshThumbnails) {
     Frame::Paint(dc, tile, theme, asset.selected, asset.selected && state.IsSelectionFocused());
     const int namePoint = Metrics::NamePointSize(tile);
@@ -595,7 +595,7 @@ void DrawAssetTile(
         DrawMaterialPreviewBall(dc, MaterialPreviewRect(tile, visual), *materialStyle, asset.selected);
     } else if (const EditorMeshThumbnailImage* thumbnail =
                    ProjectFilesAssetIconResolver::IsSkeletalMesh(asset.metadata)
-                       ? meshThumbnails.ThumbnailFor(asset.metadata)
+                       ? meshThumbnails.ThumbnailFor(manager, asset.metadata)
                        : meshThumbnails.PreviewFor(manager, asset.metadata)) {
         DrawThumbnailBitmap(dc, ThumbnailRect(tile, visual), *thumbnail);
     } else {
@@ -642,7 +642,7 @@ void ProjectFilesAssetTileRenderer::Paint(
     const EditorAssetBrowserLayoutRects& layout,
     const EditorTheme& theme,
     const EditorAssetBrowserState& state,
-    const kb::assets::AssetManager& manager,
+    kb::assets::AssetManager& manager,
     EditorMeshThumbnailService& meshThumbnails,
     const std::vector<EditorAssetFolderRow>& folders,
     const std::vector<EditorAssetItemRow>& assets) {

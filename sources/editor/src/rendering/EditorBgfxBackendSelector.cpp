@@ -14,6 +14,15 @@ bgfx::RendererType::Enum EditorBgfxBackendSelector::Resolve(
     if (requested != bgfx::RendererType::Count && Contains(supportedBackends, supportedBackendCount, requested)) {
         return requested;
     }
+#if defined(_WIN32)
+    // D3D12 pipeline creation can block the editor's synchronous viewport submission for seconds,
+    // especially when a newly opened skeletal mesh introduces its first skinned PSO. D3D11 avoids
+    // that interaction and remains the low-latency default for editor UI. Explicit DX12/Vulkan
+    // project settings are still honored above.
+    if (Contains(supportedBackends, supportedBackendCount, bgfx::RendererType::Direct3D11)) {
+        return bgfx::RendererType::Direct3D11;
+    }
+#endif
     return render::ResolvePreferredRendererBackend(supportedBackends, supportedBackendCount);
 }
 

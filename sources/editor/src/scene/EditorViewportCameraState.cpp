@@ -231,6 +231,14 @@ bool EditorViewportCameraState::ApplyWheel(float wheelSteps, bool adjustSpeed) n
     return true;
 }
 
+void EditorViewportCameraState::SetViewAngles(float yawDegrees, float pitchDegrees) noexcept {
+    focusAnimating_ = false;
+    yawDegrees_ = yawDegrees;
+    pitchDegrees_ = pitchDegrees;
+    ClampPitch();
+    UpdateOrbitPosition();
+}
+
 void EditorViewportCameraState::FocusOn(const kb::scene::Vec3& target, float radius, float durationSeconds) noexcept {
     const float safeRadius = std::max(0.25F, radius);
     const float halfFov = DegreesToRadians(std::clamp(verticalFovDegrees_, 1.0F, 179.0F) * 0.5F);

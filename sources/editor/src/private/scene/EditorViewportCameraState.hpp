@@ -53,6 +53,7 @@ public:
     void EndNavigation() noexcept;
     [[nodiscard]] bool ApplyKeyboardFlight(const EditorViewportCameraFlightInput& input, float deltaSeconds) noexcept;
     [[nodiscard]] bool ApplyWheel(float wheelSteps, bool adjustSpeed) noexcept;
+    void SetViewAngles(float yawDegrees, float pitchDegrees) noexcept;
 
     // Frames a world-space sphere (center, radius) in view while keeping the
     // current yaw/pitch: recenters the orbit pivot on the target and pulls the

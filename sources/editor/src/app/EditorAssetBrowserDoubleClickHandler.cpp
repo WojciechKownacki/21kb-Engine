@@ -9,6 +9,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
+#include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/TimelineAssetIO.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -73,7 +74,12 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::Handle
                 : EditorAssetBrowserDoubleClickResult::None;
         }
         if (metadata->type == kb::scene::kSkeletalMeshAssetType) {
-            return sceneContext.OpenSkeletalMeshEditorAsset(metadata->id)
+            return sceneContext.RequestOpenSkeletalMeshEditorAsset(metadata->id)
+                ? EditorAssetBrowserDoubleClickResult::SkeletalMeshEditorOpened
+                : EditorAssetBrowserDoubleClickResult::None;
+        }
+        if (metadata->type == kb::scene::kSkeletonAssetType) {
+            return sceneContext.RequestOpenSkeletalMeshEditorSkeletonAsset(metadata->id)
                 ? EditorAssetBrowserDoubleClickResult::SkeletalMeshEditorOpened
                 : EditorAssetBrowserDoubleClickResult::None;
         }
