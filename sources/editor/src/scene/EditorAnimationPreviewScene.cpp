@@ -23,6 +23,7 @@
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "scene/material_preview/EditorMaterialPreviewMeshLoader.hpp"
 #include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
+#include "diagnostics/EditorLagTrace.hpp"
 
 #include <algorithm>
 #include <array>
@@ -36,6 +37,17 @@ namespace {
 
 constexpr float kPreviewFloorExtent = 12.0F;
 constexpr float kPreviewFloorHeight = -0.01F;
+
+[[nodiscard]] bool RequiresLegacyFbxUpAxisCorrection(
+    const kb::scene::SkeletalMeshBounds& bounds) noexcept {
+    // Skeletal FBX assets produced before the explicit ufbx mirror-axis conversion were reflected
+    // below Y=0: their complete AABB is below the preview floor and the character faces downward.
+    // Limit this compatibility correction to that unambiguous legacy shape. Assets that cross the
+    // ground plane, including intentionally off-centre rigs, retain their authored orientation.
+    const float tolerance = std::max(0.001F, bounds.extents.y * 0.01F);
+    return bounds.center.y < -tolerance &&
+        bounds.center.y + bounds.extents.y <= tolerance;
+}
 
 void RegisterPreviewFloorAsset(kb::assets::AssetManager& manager) {
     const kb::assets::AssetId planeAssetId =
@@ -148,9 +160,11 @@ void EditorAnimationPreviewScene::Focus(float durationSeconds) noexcept {
 }
 
 bool EditorAnimationPreviewScene::TickCamera(float deltaSeconds) noexcept {
-    const bool animating = camera_.TickFocus(deltaSeconds);
-    SynchronizeCamera();
-    return animating;
+    const bool changed = camera_.ApplyQueuedPointer() || camera_.TickFocus(deltaSeconds);
+    if (changed) {
+        SynchronizeCamera();
+    }
+    return changed;
 }
 
 bool EditorAnimationPreviewScene::TickPlayback(AnimationPreviewContext& context, float deltaSeconds) noexcept {
@@ -210,6 +224,7 @@ AnimationPreviewOverlaySnapshot EditorAnimationPreviewScene::BuildOverlays(
                             .from = WorldPoint(owner, positions[static_cast<std::size_t>(parent - boneIds.begin())]),
                             .to = position,
                             .color = { 0.96F, 0.35F, 0.12F },
+                            .fromBoneId = parentId,
                             .boneId = boneIds[index],
                         });
                     }
@@ -251,6 +266,7 @@ AnimationPreviewOverlaySnapshot EditorAnimationPreviewScene::BuildOverlays(
 
 void EditorAnimationPreviewScene::Rebuild(
     const kb::scene::Scene& source, const AnimationPreviewContext& context) {
+    const bool openingDifferentMesh = framedMeshAsset_ != context.SkeletalMeshAsset();
     scene_ = std::make_unique<kb::scene::Scene>(kb::scene::SceneMode::Runtime);
     for (const kb::assets::AssetMetadata& metadata : source.Assets().Manager().Registry().All()) {
         static_cast<void>(scene_->Assets().Manager().RegisterAsset(metadata));
@@ -261,6 +277,24 @@ void EditorAnimationPreviewScene::Rebuild(
     kb::assets::AssetManager& previewAssets = scene_->Assets().Manager();
     const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> mesh =
         ShareOrLoadPreviewAsset<kb::scene::SkeletalMeshAsset>(source, previewAssets, context.SkeletalMeshAsset());
+    const bool correctLegacyFbxUpAxis = mesh.IsLoaded() &&
+        RequiresLegacyFbxUpAxisCorrection(mesh->conservativeBounds);
+    if (mesh.IsLoaded()) {
+        diagnostics::EditorLagTrace::Marker(
+            "skeletal-orientation",
+            "assetId=" + std::to_string(context.SkeletalMeshAsset().value) +
+            " legacyCorrection=" + (correctLegacyFbxUpAxis ? "1" : "0") +
+            " centerY=" + std::to_string(mesh->conservativeBounds.center.y) +
+            " extentY=" + std::to_string(mesh->conservativeBounds.extents.y));
+    }
+    const kb::scene::Quat previewRotation = correctLegacyFbxUpAxis
+        ? kb::scene::Quat{ 0.0F, 0.0F, 1.0F, 0.0F }
+        : kb::scene::Quat{};
+    if (correctLegacyFbxUpAxis) {
+        kb::scene::TransformComponent previewTransform = scene_->Transforms().Get(previewEntity_);
+        previewTransform.localRotation = previewRotation;
+        scene_->Transforms().Set(previewEntity_, previewTransform);
+    }
     bool compatible = mesh.IsLoaded();
     std::uint64_t skeletonSignature = 0U;
     if (compatible && context.SkeletonAsset().IsValid()) {
@@ -276,6 +310,11 @@ void EditorAnimationPreviewScene::Rebuild(
     }));
     static_cast<void>(scene_->Components().DeformedGeometries().Set(previewEntity_, kb::scene::DrawD3DeformedGeometryComponent{
         .skeletalMeshAssetId = context.SkeletalMeshAsset().value,
+        // Asset-editor previews contain exactly one inspected character. Use its imported
+        // conservative bounds instead of deriving animated bounds for frustum culling: a bad or
+        // incomplete imported per-bone bound must never make the model disappear while its bones
+        // remain visible, and there is no crowd-scale culling benefit in this viewport.
+        .fixedBounds = true,
         .enabled = compatible,
     }));
     if (compatible && context.SkeletonAsset().IsValid()) {
@@ -338,7 +377,9 @@ void EditorAnimationPreviewScene::Rebuild(
         }));
     }
 
-    focusCenter_ = mesh.IsLoaded() ? mesh->conservativeBounds.center : kb::scene::Vec3{};
+    focusCenter_ = mesh.IsLoaded()
+        ? kb::math::Rotate(previewRotation, mesh->conservativeBounds.center)
+        : kb::scene::Vec3{};
     focusRadius_ = mesh.IsLoaded() ? BoundsRadius(mesh->conservativeBounds) : 1.0F;
 
     kb::scene::SceneObjectDesc cameraDesc{ .name = "Animation Preview Camera" };
@@ -404,9 +445,18 @@ void EditorAnimationPreviewScene::Rebuild(
     }));
     kb::scene::SceneLightingAccess::SetBasicLightingEnabled(*scene_, true);
 
+    if (openingDifferentMesh) {
+        // Asset editors open on an orthographic-looking front view. The shared scene-camera default
+        // is intentionally a three-quarter view, but it made imported rigs appear tilted even after
+        // their legacy up-axis was corrected.
+        // Imported characters face -Z after the legacy up-axis correction. Place the asset-editor
+        // camera on the opposite side so the reference pose opens facing the programmer.
+        camera_.SetViewAngles(180.0F, 0.0F);
+    }
     Focus(0.0F);
     static_cast<void>(scene_->Runtime().Update(0.0F));
     sourceSceneId_ = source.Id();
+    framedMeshAsset_ = context.SkeletalMeshAsset();
     contextRevision_ = context.Revision();
     playbackRevision_ = 0U;
     ++revision_;
@@ -448,6 +498,7 @@ void EditorAnimationPreviewScene::Clear() noexcept {
     focusCenter_ = {};
     focusRadius_ = 1.0F;
     sourceSceneId_ = 0U;
+    framedMeshAsset_ = {};
     contextRevision_ = 0U;
     playbackRevision_ = 0U;
     ++revision_;

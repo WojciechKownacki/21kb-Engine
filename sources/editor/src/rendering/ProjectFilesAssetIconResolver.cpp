@@ -2,6 +2,7 @@
 
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
+#include "engine/scene/AnimationAssetIO.hpp"
 
 #if defined(_WIN32)
 namespace kb::editor {
@@ -50,6 +51,11 @@ bool ProjectFilesAssetIconResolver::IsSkeleton(const kb::assets::AssetMetadata& 
         metadata.virtualPath.extension() == kb::scene::kSkeletonAssetExtension;
 }
 
+bool ProjectFilesAssetIconResolver::IsAnimationClip(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == kb::scene::kAnimationClipAssetType ||
+        metadata.virtualPath.extension() == kb::scene::kAnimationClipAssetExtension;
+}
+
 bool ProjectFilesAssetIconResolver::IsMaterial(const kb::assets::AssetMetadata& metadata) noexcept {
     return metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance";
 }
@@ -63,6 +69,9 @@ bool ProjectFilesAssetIconResolver::IsMaterialType(const kb::assets::AssetMetada
 }
 
 ProjectFilesAssetIcon ProjectFilesAssetIconResolver::Resolve(const kb::assets::AssetMetadata& metadata, bool selected) noexcept {
+    if (IsAnimationClip(metadata)) {
+        return ProjectFilesAssetIcon{ .kind = HeroIconKind::Play, .color = selected ? RGB(196, 174, 255) : RGB(143, 112, 232), .strokeWidth = 2 };
+    }
     if (IsSkeleton(metadata)) {
         return ProjectFilesAssetIcon{ .kind = HeroIconKind::Skeleton, .color = selected ? RGB(255, 180, 116) : RGB(232, 116, 55), .strokeWidth = 2 };
     }

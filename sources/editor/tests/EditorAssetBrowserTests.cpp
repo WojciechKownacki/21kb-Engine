@@ -8,6 +8,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "scene/EditorSceneAssetBrowserCommands.hpp"
@@ -15,14 +16,16 @@
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #if defined(_WIN32)
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
+#include "rendering/EditorMeshPreviewService.hpp"
 #include "rendering/ProjectFilesAssetIconResolver.hpp"
-#include "rendering/EditorMeshThumbnailService.hpp"
 #include "rendering/ProjectFilesMaterialPreviewThumbnailModel.hpp"
 #include "rendering/ProjectFilesMaterialPreviewThumbnailPolicy.hpp"
 #endif
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -30,6 +33,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -503,6 +507,36 @@ void RunImportCommandPublishesCombinedSkeletalMeshMaterialsAndTexturesTest() {
 }
 
 #if defined(_WIN32)
+class CountingSkeletalMeshLoader final : public kb::assets::IAssetLoader {
+public:
+    CountingSkeletalMeshLoader(
+        kb::scene::SkeletalMeshAsset fixture,
+        std::shared_ptr<std::atomic_uint32_t> loadCount)
+        : fixture_(std::move(fixture))
+        , loadCount_(std::move(loadCount)) {}
+
+    [[nodiscard]] std::string_view Type() const noexcept override {
+        return kb::scene::kSkeletalMeshAssetType;
+    }
+
+    [[nodiscard]] std::type_index PayloadType() const noexcept override {
+        return typeid(kb::scene::SkeletalMeshAsset);
+    }
+
+    [[nodiscard]] std::vector<std::string> Extensions() const override {
+        return { kb::scene::kSkeletalMeshAssetExtension };
+    }
+
+    [[nodiscard]] kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest&) override {
+        loadCount_->fetch_add(1U, std::memory_order_relaxed);
+        return { .asset = std::make_shared<kb::scene::SkeletalMeshAsset>(fixture_) };
+    }
+
+private:
+    kb::scene::SkeletalMeshAsset fixture_{};
+    std::shared_ptr<std::atomic_uint32_t> loadCount_{};
+};
+
 [[nodiscard]] kb::assets::AssetMetadata MaterialMetadata(std::string name, const std::filesystem::path& path, std::uint64_t contentHash) {
     kb::assets::AssetMetadata metadata = Metadata(std::move(name), "RenderMaterial", "/Game/Materials/ThumbnailProbe.kbmat");
     metadata.id.value = 0x2100BEEF + contentHash;
@@ -812,6 +846,8 @@ void RunMaterialAssetIconResolverRecognizesPreviewMaterialsTest() {
         "Hero", kb::scene::kSkeletalMeshAssetType, "/Game/Characters/Hero.kbskeletalmesh");
     const kb::assets::AssetMetadata skeleton = Metadata(
         "Hero", kb::scene::kSkeletonAssetType, "/Game/Characters/Hero.kbskeleton");
+    const kb::assets::AssetMetadata animation = Metadata(
+        "Hero_Run", kb::scene::kAnimationClipAssetType, "/Game/Characters/Hero_Run.kbanim");
 
     kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsMaterial(material), "Project Files should classify material assets for the preview thumbnail path");
     kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsMaterial(instance), "Project Files should classify material instances for the preview thumbnail path");
@@ -826,6 +862,9 @@ void RunMaterialAssetIconResolverRecognizesPreviewMaterialsTest() {
     kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsSkeleton(skeleton) &&
             kb::editor::ProjectFilesAssetIconResolver::Resolve(skeleton, false).kind == kb::editor::HeroIconKind::Skeleton,
         "Project Files should use the dedicated Skeleton glyph instead of the generic cube");
+    kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsAnimationClip(animation) &&
+            kb::editor::ProjectFilesAssetIconResolver::Resolve(animation, false).kind == kb::editor::HeroIconKind::Play,
+        "Project Files should use an immediately recognizable playback glyph for Animation Clip assets");
     kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::Resolve(graph, false).kind == kb::editor::HeroIconKind::RectangleGroup,
         "KBMAT-GRAPH-0005: Material Graph should use a graph/document icon instead of the material preview sphere");
     kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::Resolve(type, false).kind == kb::editor::HeroIconKind::DocumentText,
@@ -876,12 +915,90 @@ void RunSkeletalMeshThumbnailUsesAssetGeometryTest() {
         "Hero", kb::scene::kSkeletalMeshAssetType, "/Game/Characters/Hero.kbskeletalmesh");
     metadata.id = kb::assets::AssetId{ 91U };
     metadata.physicalPath = path;
-    metadata.contentHash = 1U;
-    kb::editor::EditorMeshThumbnailService thumbnails;
-    const kb::editor::EditorMeshThumbnailImage* thumbnail = thumbnails.ThumbnailFor(metadata);
+    metadata.contentHash = static_cast<std::uint64_t>(
+        std::filesystem::last_write_time(path).time_since_epoch().count());
+    kb::editor::EditorMeshPreviewService previews;
+    kb::editor::tests::Require(previews.ThumbnailFor(metadata) == nullptr && previews.HasPendingPreviewWork(),
+        "A cold Skeletal Mesh thumbnail load should leave the UI thread immediately");
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    while (previews.HasPendingPreviewWork() && std::chrono::steady_clock::now() < deadline) {
+        static_cast<void>(previews.PumpCompletedPreviews());
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    const kb::editor::EditorMeshThumbnailImage* thumbnail = previews.ThumbnailFor(metadata);
     kb::editor::tests::Require(thumbnail != nullptr && thumbnail->width == kb::editor::kEditorMeshThumbnailSize &&
             thumbnail->height == kb::editor::kEditorMeshThumbnailSize && !thumbnail->bgra.empty(),
         "Project Files did not render a real Skeletal Mesh geometry thumbnail");
+
+    kb::assets::AssetManager manager;
+    const std::uint64_t revisionAfterThumbnail = previews.Revision();
+    kb::editor::tests::Require(previews.StatsFor(manager, metadata) != nullptr && previews.Revision() == revisionAfterThumbnail,
+        "Skeletal Mesh Inspector invalidated the Project Files cache solely because an AssetManager was supplied");
+
+    const kb::editor::EditorMeshThumbnailImage* immediatePreview = previews.PreviewFor(metadata);
+    kb::editor::tests::Require(immediatePreview != nullptr,
+        "Skeletal Mesh Inspector did not retain a thumbnail while its large preview was generated asynchronously");
+    deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    while (previews.HasPendingPreviewWork() && std::chrono::steady_clock::now() < deadline) {
+        static_cast<void>(previews.PumpCompletedPreviews());
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    const kb::editor::EditorMeshThumbnailImage* completedPreview = previews.PreviewFor(metadata);
+    kb::editor::tests::Require(!previews.HasPendingPreviewWork() && completedPreview != nullptr &&
+            completedPreview->width == kb::editor::kEditorMeshPreviewSize &&
+            completedPreview->height == kb::editor::kEditorMeshPreviewSize,
+        "Skeletal Mesh preview worker did not publish its completed 512px preview");
+}
+
+void RunSkeletalMeshPreviewRetainsAssetManagerPayloadTest() {
+    kb::scene::SkeletalMeshAsset mesh{};
+    mesh.conservativeBounds = { .center = { 0.0F, 0.5F, 0.0F }, .extents = { 0.5F, 0.5F, 0.1F } };
+    mesh.fixedBounds = mesh.conservativeBounds;
+    kb::scene::SkeletalMeshLod lod{};
+    lod.vertices = {
+        { .position = { -0.5F, 0.0F, 0.0F }, .normal = { 0.0F, 0.0F, 1.0F } },
+        { .position = { 0.5F, 0.0F, 0.0F }, .normal = { 0.0F, 0.0F, 1.0F } },
+        { .position = { 0.0F, 1.0F, 0.0F }, .normal = { 0.0F, 0.0F, 1.0F } },
+    };
+    lod.indices = { 0U, 1U, 2U };
+    lod.sections = {{ .firstIndex = 0U, .indexCount = 3U }};
+    mesh.lods.push_back(std::move(lod));
+
+    const auto loadCount = std::make_shared<std::atomic_uint32_t>(0U);
+    kb::assets::AssetManager manager;
+    kb::editor::tests::Require(
+        manager.RegisterLoader(std::make_unique<CountingSkeletalMeshLoader>(mesh, loadCount)),
+        "Skeletal Mesh preview counting loader registration failed");
+    kb::assets::AssetMetadata metadata = Metadata(
+        "RetainedHero", kb::scene::kSkeletalMeshAssetType, "/Game/Characters/RetainedHero.kbskeletalmesh");
+    metadata.id = kb::assets::AssetId{ 0x2100C01DU };
+    metadata.physicalPath = TempRoot() / "RetainedHero.kbskeletalmesh";
+    metadata.contentHash = 0xA55E7001U;
+    kb::editor::tests::Require(manager.RegisterAsset(metadata),
+        "Skeletal Mesh preview fixture registration failed");
+
+    kb::editor::EditorMeshPreviewService previews;
+    kb::editor::tests::Require(previews.ValidationFor(manager, metadata) == nullptr &&
+            previews.HasPendingPreviewWork(),
+        "Skeletal Mesh preview should enqueue one AssetManager cold load");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    while (previews.HasPendingPreviewWork() && std::chrono::steady_clock::now() < deadline) {
+        manager.PumpAsyncLoads();
+        static_cast<void>(previews.PumpCompletedPreviews(manager));
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+
+    const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> retained =
+        manager.AcquireLoaded<kb::scene::SkeletalMeshAsset>(metadata.id);
+    kb::editor::tests::Require(!previews.HasPendingPreviewWork() && retained.IsLoaded() &&
+            previews.ValidationFor(manager, metadata) != nullptr &&
+            loadCount->load(std::memory_order_relaxed) == 1U,
+        "Skeletal Mesh preview did not publish geometry from the retained AssetManager payload");
+    const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> reopened =
+        manager.Load<kb::scene::SkeletalMeshAsset>(metadata.id);
+    kb::editor::tests::Require(reopened.IsLoaded() && reopened.Shared().get() == retained.Shared().get() &&
+            loadCount->load(std::memory_order_relaxed) == 1U,
+        "Opening a previewed Skeletal Mesh parsed the asset a second time instead of reusing the retained payload");
 }
 
 void RunMaterialThumbnailPreviewRuntimeModelTest() {
@@ -947,6 +1064,7 @@ void RunEditorAssetBrowserTests() {
     RunMaterialAssetDoubleClickOpensMaterialEditorTest();
     RunMaterialAssetIconResolverRecognizesPreviewMaterialsTest();
     RunSkeletalMeshThumbnailUsesAssetGeometryTest();
+    RunSkeletalMeshPreviewRetainsAssetManagerPayloadTest();
     RunMaterialThumbnailPreviewRuntimeModelTest();
 #endif
 }

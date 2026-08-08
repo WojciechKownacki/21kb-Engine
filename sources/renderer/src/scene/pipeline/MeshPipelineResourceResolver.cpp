@@ -17,9 +17,9 @@ namespace {
     switch (format) {
     case RenderVertexFormat::P3N3UV2:
     case RenderVertexFormat::P3N3T4UV2:
+    case RenderVertexFormat::SkinnedP3N3T4UV2J4W4:
         return true;
     case RenderVertexFormat::P3C3:
-    case RenderVertexFormat::SkinnedP3N3T4UV2J4W4:
         return false;
     }
     return false;

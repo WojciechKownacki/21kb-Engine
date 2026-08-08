@@ -26,7 +26,7 @@ public:
     [[nodiscard]] static Result Show(
         HWND owner,
         const EditorTheme& theme,
-        const EditorSceneContext& sceneContext,
+        EditorSceneContext& sceneContext,
         kb::assets::AssetId currentMesh);
 #endif
 };

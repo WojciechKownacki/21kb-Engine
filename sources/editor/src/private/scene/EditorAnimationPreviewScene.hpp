@@ -17,6 +17,9 @@ struct AnimationPreviewOverlayLine {
     kb::scene::Vec3 from{};
     kb::scene::Vec3 to{};
     kb::scene::Vec3 color{ 1.0F, 1.0F, 1.0F };
+    // Bone owning the start joint. This makes branch/root hit-testing deterministic; boneId owns
+    // the end joint and the shaft leading into it.
+    kb::scene::SkeletonBoneId fromBoneId = 0U;
     kb::scene::SkeletonBoneId boneId = 0U;
 };
 
@@ -65,6 +68,7 @@ private:
     kb::scene::Vec3 focusCenter_{};
     float focusRadius_ = 1.0F;
     std::uint64_t sourceSceneId_ = 0U;
+    kb::assets::AssetId framedMeshAsset_{};
     std::uint64_t contextRevision_ = 0U;
     std::uint64_t playbackRevision_ = 0U;
     std::uint64_t revision_ = 1U;

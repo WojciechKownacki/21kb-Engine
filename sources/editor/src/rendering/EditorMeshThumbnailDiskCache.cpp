@@ -15,7 +15,7 @@
 namespace kb::editor {
 namespace {
 
-constexpr std::uint32_t kDiskCacheVersion = 2;
+constexpr std::uint32_t kDiskCacheVersion = 3;
 constexpr std::array<char, 12> kDiskCacheMagic{ '2', '1', 'K', 'B', 'T', 'H', 'U', 'M', 'B', '\r', '\n', '\0' };
 
 void WriteU32(std::ostream& output, std::uint32_t value) {

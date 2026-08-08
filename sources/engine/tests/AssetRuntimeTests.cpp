@@ -385,6 +385,28 @@ void RunAssetManagerAsyncLoaderReplacementTest() {
         "Restarted async request did not publish the replacement loader payload");
 }
 
+void RunAssetManagerNewLoaderPreservesRetainedAssetsTest() {
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<TextAssetLoader>()),
+        "Retained-asset test could not register its initial loader");
+    constexpr kb::assets::AssetId textId{ 0xA551E7U };
+    kb::tests::Require(manager.RegisterAsset({
+            .id = textId,
+            .type = "Text",
+            .name = "Published before plug-in discovery",
+            .virtualPath = "/Game/Published.txt",
+            .runtimeLoadable = true,
+        }) && manager.PublishRuntimeAsset(textId, std::make_shared<std::string>("resident")),
+        "Retained-asset test could not publish its payload");
+
+    const auto gate = std::make_shared<AsyncLoaderGate>();
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<GatedTextAssetLoader>(gate)),
+        "Retained-asset test could not add an unrelated loader type");
+    const kb::assets::AssetHandle<std::string> retained = manager.AcquireLoaded<std::string>(textId);
+    kb::tests::Require(retained.IsLoaded() && *retained == "resident",
+        "Adding an unrelated loader evicted a retained runtime asset");
+}
+
 // LIB-157: kb::assets::AssetKind — the single source of truth mapping each
 // typed-reference kind to its concrete AssetMetadata::type string(s). Pure
 // value-type test, no scene needed. Proves ToString/TryParseAssetKind round
@@ -997,6 +1019,7 @@ void RunAssetRuntimeTests() {
     RunAssetManagerLoadOpaqueTest();
     RunAssetManagerTrueAsyncLoadTest();
     RunAssetManagerAsyncLoaderReplacementTest();
+    RunAssetManagerNewLoaderPreservesRetainedAssetsTest();
     RunAssetCacheReferenceAndPolicyTest();
     RunAssetCompatibilityValidationTest();
     RunAssetKindClassificationTest();

@@ -38,7 +38,7 @@ void AppendRect(std::ostringstream& out, const RECT& rect) {
 [[nodiscard]] std::string BuildProjectFilesSignature(
     const RECT& content,
     const EditorAssetBrowserState& state,
-    const kb::assets::AssetManager& manager,
+    kb::assets::AssetManager& manager,
     const EditorMeshThumbnailService& meshThumbnails) {
     std::ostringstream out;
     AppendRect(out, content);
@@ -173,7 +173,7 @@ void PaintProjectFilesBase(
     const RECT& content,
     const EditorTheme& theme,
     const EditorAssetBrowserState& state,
-    const kb::assets::AssetManager& manager,
+    kb::assets::AssetManager& manager,
     EditorMeshThumbnailService& meshThumbnails) {
     const EditorAssetBrowserLayoutRects layout = EditorAssetBrowserLayout::Build(content, state.TreeWidth());
 
@@ -204,8 +204,8 @@ ProjectFilesRetainedSurface& RetainedSurface() {
 
 } // namespace
 
-void ProjectFilesPanelRenderer::Paint(HDC dc, const RECT& content, const RECT& overlayBounds, const EditorTheme& theme, const EditorSceneContext& sceneContext) const {
-    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+void ProjectFilesPanelRenderer::Paint(HDC dc, const RECT& content, const RECT& overlayBounds, const EditorTheme& theme, EditorSceneContext& sceneContext) const {
+    kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     const EditorAssetBrowserState& state = sceneContext.AssetBrowser();
     EditorMeshThumbnailService& meshThumbnails = EditorMeshThumbnailCache();
 

@@ -984,6 +984,7 @@ if(BUILD_TESTING)
         tests/SvgPathTests.cpp
         src/rendering/MaterialEditorPanelLayout.cpp
         src/rendering/EditorTexturePreviewService.cpp
+        src/rendering/EditorBgfxBackendSelector.cpp
         src/rendering/HeroIconGdiplusRuntime.cpp
         src/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.cpp
         src/rendering/material_graph/MaterialGraphCanvas.cpp

@@ -119,6 +119,7 @@
 #include "scene/transform_edit/EditorSceneTransformSnapshotBuilder.hpp"
 #include "project/EditorProjectBootstrap.hpp"
 #include "project/EditorProjectPaths.hpp"
+#include "diagnostics/EditorLagTrace.hpp"
 
 #include <bit>
 #include <algorithm>
@@ -1469,7 +1470,13 @@ const AnimationPreviewContext& EditorSceneContext::AnimationPreview() const noex
 }
 
 const kb::scene::Scene& EditorSceneContext::AnimationPreviewScene() {
-    return animationPreviewScene_->SceneFor(*scene_, animationPreview_);
+    const std::uint64_t eventId = diagnostics::EditorLagTrace::NextEventId();
+    const auto start = std::chrono::steady_clock::now();
+    const kb::scene::Scene& previewScene = animationPreviewScene_->SceneFor(*scene_, animationPreview_);
+    const double durationMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - start).count();
+    diagnostics::EditorLagTrace::Slow("skeletal-preview-scene", eventId, durationMs, "SceneFor", 8.0);
+    return previewScene;
 }
 
 EditorViewportCameraState& EditorSceneContext::AnimationPreviewCamera() noexcept {
@@ -9562,14 +9569,227 @@ bool EditorSceneContext::SetAnimationClipEditorPreviewMesh(kb::assets::AssetId m
     return true;
 }
 
+bool EditorSceneContext::RequestOpenSkeletalMeshEditorAsset(kb::assets::AssetId id) {
+    kb::assets::AssetManager& manager = scene_->Assets().Manager();
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().Find(id);
+    if (meshMetadata == nullptr || meshMetadata->type != kb::scene::kSkeletalMeshAssetType) {
+        console_.Error("Skeletal Mesh Editor", "Selected asset is not a Skeletal Mesh.");
+        return false;
+    }
+    if (skeletalMeshEditorAssetId_ == id && animationPreviewScene_ != nullptr) {
+        pendingSkeletalMeshEditorAssetId_ = {};
+        pendingSkeletalMeshEditorSkeletonId_ = {};
+        pendingSkeletalMeshEditorOpenEventId_ = 0U;
+        console_.Info("Skeletal Mesh Editor", "Focused existing document: " + meshMetadata->virtualPath.generic_string());
+        return true;
+    }
+    if (pendingSkeletalMeshEditorAssetId_ == id) {
+        return true;
+    }
+
+    pendingSkeletalMeshEditorAssetId_ = id;
+    pendingSkeletalMeshEditorSkeletonId_ = {};
+    pendingSkeletalMeshEditorOpenEventId_ = diagnostics::EditorLagTrace::NextEventId();
+    if (!manager.LoadAsync<kb::scene::SkeletalMeshAsset>(id)) {
+        pendingSkeletalMeshEditorAssetId_ = {};
+        pendingSkeletalMeshEditorOpenEventId_ = 0U;
+        console_.Error("Skeletal Mesh Editor", AssetErrorOr(manager, "Skeletal Mesh loading could not be started."));
+        return false;
+    }
+    console_.Info("Skeletal Mesh Editor", "Loading document: " + meshMetadata->virtualPath.generic_string());
+    return true;
+}
+
+bool EditorSceneContext::RequestOpenSkeletalMeshEditorSkeletonAsset(kb::assets::AssetId skeletonId) {
+    kb::assets::AssetManager& manager = scene_->Assets().Manager();
+    const kb::assets::AssetMetadata* skeletonMetadata = manager.Registry().Find(skeletonId);
+    if (skeletonMetadata == nullptr || skeletonMetadata->type != kb::scene::kSkeletonAssetType) {
+        console_.Error("Skeleton", "Selected asset is not a Skeleton.");
+        return false;
+    }
+
+    // A Skeleton is shared rig data, not renderable geometry. Opening it resolves the first
+    // compatible Skeletal Mesh and presents the rig in the existing hierarchy/details editor.
+    // LoadBinding reads only the two-line header, so this search never decodes mesh vertices.
+    kb::assets::AssetId fallbackMeshId{};
+    for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
+        if (metadata.type != kb::scene::kSkeletalMeshAssetType) {
+            continue;
+        }
+        std::filesystem::path path = metadata.physicalPath;
+        if (const std::optional<std::filesystem::path> mounted = manager.Mounts().Resolve(metadata.virtualPath)) {
+            path = *mounted;
+        }
+        const std::optional<kb::scene::SkeletalMeshAssetBinding> binding =
+            kb::scene::SkeletalMeshAssetIO::LoadBinding(path);
+        if (binding.has_value() && binding->skeletonAssetId == skeletonId.value) {
+            const bool matchingName = metadata.name == skeletonMetadata->name ||
+                metadata.virtualPath.stem() == skeletonMetadata->virtualPath.stem();
+            if (matchingName) {
+                return RequestOpenSkeletalMeshEditorAsset(metadata.id);
+            }
+            if (!fallbackMeshId.IsValid()) fallbackMeshId = metadata.id;
+        }
+    }
+
+    if (fallbackMeshId.IsValid()) {
+        return RequestOpenSkeletalMeshEditorAsset(fallbackMeshId);
+    }
+
+    console_.Warning(
+        "Skeleton",
+        "No Skeletal Mesh using " + skeletonMetadata->virtualPath.filename().string() +
+            " was found. A Skeleton stores a shared rig and needs compatible mesh geometry for preview.");
+    return false;
+}
+
+bool EditorSceneContext::PumpPendingSkeletalMeshEditorOpen() {
+    if (!pendingSkeletalMeshEditorAssetId_.IsValid()) {
+        return false;
+    }
+
+    kb::assets::AssetManager& manager = scene_->Assets().Manager();
+    const kb::assets::AssetId meshId = pendingSkeletalMeshEditorAssetId_;
+    const std::uint64_t eventId = pendingSkeletalMeshEditorOpenEventId_;
+    if (!pendingSkeletalMeshEditorSkeletonId_.IsValid()) {
+        const kb::assets::AsyncAssetLoadStatus meshStatus = manager.AsyncLoadStatus(meshId);
+        if (meshStatus == kb::assets::AsyncAssetLoadStatus::Pending) {
+            return false;
+        }
+        if (meshStatus != kb::assets::AsyncAssetLoadStatus::Completed) {
+            const std::string error = manager.AsyncLoadError(meshId);
+            pendingSkeletalMeshEditorAssetId_ = {};
+            pendingSkeletalMeshEditorOpenEventId_ = 0U;
+            console_.Error("Skeletal Mesh Editor", error.empty()
+                ? "Skeletal Mesh runtime data could not be loaded."
+                : "Skeletal Mesh runtime data could not be loaded: " + error);
+            return true;
+        }
+
+        const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> mesh =
+            manager.AcquireLoaded<kb::scene::SkeletalMeshAsset>(meshId);
+        if (!mesh.IsLoaded() || mesh->skeletonAssetId == 0U) {
+            pendingSkeletalMeshEditorAssetId_ = {};
+            pendingSkeletalMeshEditorOpenEventId_ = 0U;
+            console_.Error("Skeletal Mesh Editor", "Skeletal Mesh runtime data or its Skeleton binding could not be loaded.");
+            return true;
+        }
+
+        const kb::assets::AssetId skeletonId{ mesh->skeletonAssetId };
+        const kb::assets::AssetMetadata* skeletonMetadata = manager.Registry().Find(skeletonId);
+        if (skeletonMetadata == nullptr || skeletonMetadata->type != kb::scene::kSkeletonAssetType) {
+            pendingSkeletalMeshEditorAssetId_ = {};
+            pendingSkeletalMeshEditorOpenEventId_ = 0U;
+            console_.Error("Skeletal Mesh Editor", "Skeletal Mesh references a missing Skeleton asset.");
+            return true;
+        }
+        pendingSkeletalMeshEditorSkeletonId_ = skeletonId;
+        if (!manager.LoadAsync<kb::scene::SkeletonAsset>(skeletonId)) {
+            pendingSkeletalMeshEditorAssetId_ = {};
+            pendingSkeletalMeshEditorSkeletonId_ = {};
+            pendingSkeletalMeshEditorOpenEventId_ = 0U;
+            console_.Error("Skeletal Mesh Editor", AssetErrorOr(manager, "Skeleton loading could not be started."));
+            return true;
+        }
+    }
+
+    const kb::assets::AssetId skeletonId = pendingSkeletalMeshEditorSkeletonId_;
+    const kb::assets::AsyncAssetLoadStatus skeletonStatus = manager.AsyncLoadStatus(skeletonId);
+    if (skeletonStatus == kb::assets::AsyncAssetLoadStatus::Pending) {
+        return false;
+    }
+    if (skeletonStatus != kb::assets::AsyncAssetLoadStatus::Completed) {
+        const std::string error = manager.AsyncLoadError(skeletonId);
+        pendingSkeletalMeshEditorAssetId_ = {};
+        pendingSkeletalMeshEditorSkeletonId_ = {};
+        pendingSkeletalMeshEditorOpenEventId_ = 0U;
+        console_.Error("Skeletal Mesh Editor", error.empty()
+            ? "Skeletal Mesh Skeleton could not be loaded."
+            : "Skeletal Mesh Skeleton could not be loaded: " + error);
+        return true;
+    }
+
+    pendingSkeletalMeshEditorAssetId_ = {};
+    pendingSkeletalMeshEditorSkeletonId_ = {};
+    pendingSkeletalMeshEditorOpenEventId_ = 0U;
+    static_cast<void>(FinalizeLoadedSkeletalMeshEditorAsset(meshId, skeletonId, eventId));
+    return true;
+}
+
+bool EditorSceneContext::HasPendingSkeletalMeshEditorOpen() const noexcept {
+    return pendingSkeletalMeshEditorAssetId_.IsValid();
+}
+
+bool EditorSceneContext::FinalizeLoadedSkeletalMeshEditorAsset(
+    kb::assets::AssetId meshId,
+    kb::assets::AssetId skeletonId,
+    std::uint64_t diagnosticEventId) {
+    kb::assets::AssetManager& manager = scene_->Assets().Manager();
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().Find(meshId);
+    const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> mesh =
+        manager.AcquireLoaded<kb::scene::SkeletalMeshAsset>(meshId);
+    const kb::assets::AssetHandle<kb::scene::SkeletonAsset> skeleton =
+        manager.AcquireLoaded<kb::scene::SkeletonAsset>(skeletonId);
+    if (meshMetadata == nullptr || meshMetadata->type != kb::scene::kSkeletalMeshAssetType || !mesh.IsLoaded()) {
+        console_.Error("Skeletal Mesh Editor", "Skeletal Mesh runtime data could not be acquired after loading.");
+        return false;
+    }
+    if (!skeleton.IsLoaded() || mesh->skeletonAssetId != skeletonId.value ||
+        mesh->skeletonCompatibilitySignature != kb::scene::SkeletonCompatibilitySignature(*skeleton)) {
+        console_.Error("Skeletal Mesh Editor", "Skeletal Mesh and Skeleton are incompatible.");
+        return false;
+    }
+    if (skeletalMeshEditorAssetId_ == meshId && animationPreviewScene_ != nullptr) {
+        console_.Info("Skeletal Mesh Editor", "Focused existing document: " + meshMetadata->virtualPath.generic_string());
+        return true;
+    }
+
+    std::ostringstream assetDetail;
+    assetDetail << "assetId=" << meshId.value;
+    const auto documentStart = std::chrono::steady_clock::now();
+    animationPreview_.SetAssets(skeletonId, meshId, {}, {});
+    animationPreview_.SetPoseMode(AnimationPreviewPoseMode::Reference);
+    static_cast<void>(animationPreview_.Overlays().SetBonesVisible(true));
+    animatorEditorAssetId_ = {};
+    animatorEditorController_.reset();
+    animatorEditorGraphDocument_ = {};
+    animationClipEditorAssetId_ = {};
+    animationClipEditorTimeline_ = {};
+    skeletalMeshEditorAssetId_ = meshId;
+    skeletalMeshEditorDocument_.Open(meshId, *mesh);
+    skeletalMeshEditorTree_.SetSkeleton(*skeleton);
+    skeletalMeshEditorDetails_.SetDocument(*mesh, *skeleton, *meshMetadata);
+    const double documentMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - documentStart).count();
+    diagnostics::EditorLagTrace::Slow("skeletal-open-document", diagnosticEventId, documentMs, assetDetail.str(), 4.0);
+    const auto previewStart = std::chrono::steady_clock::now();
+    static_cast<void>(AnimationPreviewScene());
+    const double previewMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - previewStart).count();
+    diagnostics::EditorLagTrace::Slow("skeletal-open-preview", diagnosticEventId, previewMs, assetDetail.str(), 4.0);
+    console_.Info("Skeletal Mesh Editor", "Opened document: " + meshMetadata->virtualPath.generic_string());
+    return true;
+}
+
 bool EditorSceneContext::OpenSkeletalMeshEditorAsset(kb::assets::AssetId id) {
+    pendingSkeletalMeshEditorAssetId_ = {};
+    pendingSkeletalMeshEditorSkeletonId_ = {};
+    pendingSkeletalMeshEditorOpenEventId_ = 0U;
+    const std::uint64_t eventId = diagnostics::EditorLagTrace::NextEventId();
+    const auto totalStart = std::chrono::steady_clock::now();
+    std::ostringstream assetDetail;
+    assetDetail << "assetId=" << id.value;
     const kb::assets::AssetMetadata* meshMetadata = scene_->Assets().Manager().Registry().Find(id);
     if (meshMetadata == nullptr || meshMetadata->type != kb::scene::kSkeletalMeshAssetType) {
         console_.Error("Skeletal Mesh Editor", "Selected asset is not a Skeletal Mesh.");
         return false;
     }
+    const auto meshLoadStart = std::chrono::steady_clock::now();
     const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> mesh =
         scene_->Assets().Manager().Load<kb::scene::SkeletalMeshAsset>(id);
+    const double meshLoadMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - meshLoadStart).count();
+    diagnostics::EditorLagTrace::Slow("skeletal-open-mesh-load", eventId, meshLoadMs, assetDetail.str(), 4.0);
     if (!mesh.IsLoaded() || mesh->skeletonAssetId == 0U) {
         console_.Error("Skeletal Mesh Editor", "Skeletal Mesh runtime data or its Skeleton binding could not be loaded.");
         return false;
@@ -9580,37 +9800,31 @@ bool EditorSceneContext::OpenSkeletalMeshEditorAsset(kb::assets::AssetId id) {
         console_.Error("Skeletal Mesh Editor", "Skeletal Mesh references a missing Skeleton asset.");
         return false;
     }
+    const auto skeletonLoadStart = std::chrono::steady_clock::now();
     const kb::assets::AssetHandle<kb::scene::SkeletonAsset> skeleton =
         scene_->Assets().Manager().Load<kb::scene::SkeletonAsset>(skeletonId);
-    if (!skeleton.IsLoaded() ||
-        mesh->skeletonCompatibilitySignature != kb::scene::SkeletonCompatibilitySignature(*skeleton)) {
+    const double skeletonLoadMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - skeletonLoadStart).count();
+    diagnostics::EditorLagTrace::Slow("skeletal-open-skeleton-load", eventId, skeletonLoadMs, assetDetail.str(), 4.0);
+    if (!skeleton.IsLoaded()) {
         console_.Error("Skeletal Mesh Editor", "Skeletal Mesh and Skeleton are incompatible.");
         return false;
     }
-    if (skeletalMeshEditorAssetId_ == id && animationPreviewScene_ != nullptr) {
-        console_.Info("Skeletal Mesh Editor", "Focused existing document: " + meshMetadata->virtualPath.generic_string());
-        return true;
-    }
-
-    animationPreview_.SetAssets(skeletonId, id, {}, {});
-    animationPreview_.SetPoseMode(AnimationPreviewPoseMode::Reference);
-    static_cast<void>(animationPreview_.Overlays().SetBonesVisible(true));
-    animatorEditorAssetId_ = {};
-    animatorEditorController_.reset();
-    animatorEditorGraphDocument_ = {};
-    animationClipEditorAssetId_ = {};
-    animationClipEditorTimeline_ = {};
-    skeletalMeshEditorAssetId_ = id;
-    skeletalMeshEditorDocument_.Open(id, *mesh);
-    skeletalMeshEditorTree_.SetSkeleton(*skeleton);
-    skeletalMeshEditorDetails_.SetDocument(*mesh, *skeleton, *meshMetadata);
-    static_cast<void>(AnimationPreviewScene());
-    console_.Info("Skeletal Mesh Editor", "Opened document: " + meshMetadata->virtualPath.generic_string());
-    return true;
+    const bool opened = FinalizeLoadedSkeletalMeshEditorAsset(id, skeletonId, eventId);
+    const double totalMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - totalStart).count();
+    diagnostics::EditorLagTrace::Slow("skeletal-open-total", eventId, totalMs, assetDetail.str(), 4.0);
+    return opened;
 }
 
 kb::assets::AssetId EditorSceneContext::SkeletalMeshEditorAssetId() const noexcept {
     return skeletalMeshEditorAssetId_;
+}
+
+kb::assets::AssetId EditorSceneContext::RequestedSkeletalMeshEditorAssetId() const noexcept {
+    return pendingSkeletalMeshEditorAssetId_.IsValid()
+        ? pendingSkeletalMeshEditorAssetId_
+        : skeletalMeshEditorAssetId_;
 }
 
 bool EditorSceneContext::HasSkeletalMeshEditorAsset() const noexcept {
@@ -9691,8 +9905,21 @@ const std::string& EditorSceneContext::SelectedSkeletalMeshEditorSocket() const 
 }
 
 SkeletalMeshEditorDetailsModel EditorSceneContext::SkeletalMeshEditorDetails() const {
-    return skeletalMeshEditorDetails_.Build(
-        skeletalMeshEditorTree_.SelectedBone(), skeletalMeshEditorTree_.SelectedSocket());
+    const std::uint64_t eventId = diagnostics::EditorLagTrace::NextEventId();
+    const auto start = std::chrono::steady_clock::now();
+    const kb::scene::SkeletonBoneId selectedBone = skeletalMeshEditorTree_.SelectedBone();
+    const std::string& selectedSocket = skeletalMeshEditorTree_.SelectedSocket();
+    SkeletalMeshEditorDetailsModel details = skeletalMeshEditorDetails_.Build(selectedBone, selectedSocket);
+    const double durationMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - start).count();
+    const char* selection = selectedBone != 0U ? "bone" : (!selectedSocket.empty() ? "socket" : "asset");
+    diagnostics::EditorLagTrace::Slow(
+        "skeletal-details-build",
+        eventId,
+        durationMs,
+        std::string{"selection="} + selection + " assetId=" + std::to_string(skeletalMeshEditorAssetId_.value),
+        4.0);
+    return details;
 }
 
 const std::vector<kb::scene::SkeletalMeshMorphTarget>& EditorSceneContext::SkeletalMeshEditorMorphTargets() const noexcept {
@@ -9788,6 +10015,9 @@ bool EditorSceneContext::PrepareSkeletalMeshEditorClose(std::string_view reason)
 }
 
 void EditorSceneContext::CloseSkeletalMeshEditorAsset() noexcept {
+    pendingSkeletalMeshEditorAssetId_ = {};
+    pendingSkeletalMeshEditorSkeletonId_ = {};
+    pendingSkeletalMeshEditorOpenEventId_ = 0U;
     skeletalMeshEditorDocument_.Close();
     skeletalMeshEditorAssetId_ = {};
 }
