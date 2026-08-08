@@ -8,6 +8,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "scene/EditorSceneAssetBrowserCommands.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
@@ -15,6 +16,7 @@
 #if defined(_WIN32)
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "rendering/ProjectFilesAssetIconResolver.hpp"
+#include "rendering/EditorMeshThumbnailService.hpp"
 #include "rendering/ProjectFilesMaterialPreviewThumbnailModel.hpp"
 #include "rendering/ProjectFilesMaterialPreviewThumbnailPolicy.hpp"
 #endif
@@ -806,6 +808,10 @@ void RunMaterialAssetIconResolverRecognizesPreviewMaterialsTest() {
     const kb::assets::AssetMetadata graph = Metadata("StudioGraph", "RenderMaterialGraph", "/Game/Materials/StudioGraph.kbmaterialgraph");
     const kb::assets::AssetMetadata type = Metadata("StudioType", "RenderMaterialType", "/Game/Materials/StudioType.kbmaterialtype");
     const kb::assets::AssetMetadata mesh = Metadata("StudioMesh", "RenderMesh", "/Game/Meshes/StudioMesh.gltf");
+    const kb::assets::AssetMetadata skeletalMesh = Metadata(
+        "Hero", kb::scene::kSkeletalMeshAssetType, "/Game/Characters/Hero.kbskeletalmesh");
+    const kb::assets::AssetMetadata skeleton = Metadata(
+        "Hero", kb::scene::kSkeletonAssetType, "/Game/Characters/Hero.kbskeleton");
 
     kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsMaterial(material), "Project Files should classify material assets for the preview thumbnail path");
     kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsMaterial(instance), "Project Files should classify material instances for the preview thumbnail path");
@@ -814,6 +820,12 @@ void RunMaterialAssetIconResolverRecognizesPreviewMaterialsTest() {
     kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsMaterialGraph(graph), "Project Files should classify Material Graph assets");
     kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsMaterialType(type), "Project Files should classify Material Type assets");
     kb::editor::tests::Require(!kb::editor::ProjectFilesAssetIconResolver::IsMaterial(mesh), "Project Files should keep mesh assets on the mesh thumbnail path");
+    kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsMesh(skeletalMesh) &&
+            kb::editor::ProjectFilesAssetIconResolver::IsSkeletalMesh(skeletalMesh),
+        "Project Files should route Skeletal Mesh assets through the real geometry thumbnail path");
+    kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsSkeleton(skeleton) &&
+            kb::editor::ProjectFilesAssetIconResolver::Resolve(skeleton, false).kind == kb::editor::HeroIconKind::Skeleton,
+        "Project Files should use the dedicated Skeleton glyph instead of the generic cube");
     kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::Resolve(graph, false).kind == kb::editor::HeroIconKind::RectangleGroup,
         "KBMAT-GRAPH-0005: Material Graph should use a graph/document icon instead of the material preview sphere");
     kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::Resolve(type, false).kind == kb::editor::HeroIconKind::DocumentText,
@@ -838,6 +850,38 @@ void RunMaterialAssetIconResolverRecognizesPreviewMaterialsTest() {
         "KBMAT-UE-0007: Non-material assets should not use the material preview primitive thumbnail policy");
     kb::editor::tests::Require(!graphPolicy.usesPreviewScenePrimitive && !typePolicy.usesPreviewScenePrimitive,
         "KBMAT-GRAPH-0005: Raw Material Graph and Material Type assets should use metadata icons, not material preview thumbnails");
+}
+
+void RunSkeletalMeshThumbnailUsesAssetGeometryTest() {
+    const std::filesystem::path path = TempRoot() / "SkeletalThumbnail" / "Hero.kbskeletalmesh";
+    kb::scene::SkeletalMeshAsset mesh{};
+    mesh.skeletonAssetId = 7U;
+    mesh.skeletonCompatibilitySignature = 11U;
+    mesh.conservativeBounds = { .center = { 0.0F, 0.5F, 0.0F }, .extents = { 0.5F, 0.5F, 0.1F } };
+    mesh.fixedBounds = mesh.conservativeBounds;
+    kb::scene::SkeletalMeshLod lod{};
+    lod.vertices = {
+        { .position = { -0.5F, 0.0F, 0.0F }, .normal = { 0.0F, 0.0F, 1.0F } },
+        { .position = { 0.5F, 0.0F, 0.0F }, .normal = { 0.0F, 0.0F, 1.0F } },
+        { .position = { 0.0F, 1.0F, 0.0F }, .normal = { 0.0F, 0.0F, 1.0F } },
+    };
+    lod.indices = { 0U, 1U, 2U };
+    lod.sections = {{ .firstIndex = 0U, .indexCount = 3U, .boneMap = { 1U } }};
+    lod.requiredBones = { 1U };
+    mesh.lods.push_back(std::move(lod));
+    std::filesystem::create_directories(path.parent_path());
+    kb::editor::tests::Require(kb::scene::SkeletalMeshAssetIO::Save(path, mesh),
+        "Skeletal Mesh thumbnail fixture could not be saved");
+    kb::assets::AssetMetadata metadata = Metadata(
+        "Hero", kb::scene::kSkeletalMeshAssetType, "/Game/Characters/Hero.kbskeletalmesh");
+    metadata.id = kb::assets::AssetId{ 91U };
+    metadata.physicalPath = path;
+    metadata.contentHash = 1U;
+    kb::editor::EditorMeshThumbnailService thumbnails;
+    const kb::editor::EditorMeshThumbnailImage* thumbnail = thumbnails.ThumbnailFor(metadata);
+    kb::editor::tests::Require(thumbnail != nullptr && thumbnail->width == kb::editor::kEditorMeshThumbnailSize &&
+            thumbnail->height == kb::editor::kEditorMeshThumbnailSize && !thumbnail->bgra.empty(),
+        "Project Files did not render a real Skeletal Mesh geometry thumbnail");
 }
 
 void RunMaterialThumbnailPreviewRuntimeModelTest() {
@@ -902,6 +946,7 @@ void RunEditorAssetBrowserTests() {
     RunMaterialContextMenuCommandTest();
     RunMaterialAssetDoubleClickOpensMaterialEditorTest();
     RunMaterialAssetIconResolverRecognizesPreviewMaterialsTest();
+    RunSkeletalMeshThumbnailUsesAssetGeometryTest();
     RunMaterialThumbnailPreviewRuntimeModelTest();
 #endif
 }

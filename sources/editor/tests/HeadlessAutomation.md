@@ -92,7 +92,8 @@ scenario-local aliases.
 | `assert_optional_platform_adapter` | Verifies achievements, cloud save, DLC and user services remain capability-gated and unavailable services fail closed. |
 | `discover_assets` | none |
 | `unload_asset` | asset alias or virtual path; force-loads then unloads the live `AssetManager` entry so a running system must reacquire it |
-| `import_asset` | `source` project-relative path, `destination` virtual folder |
+| `import_asset` | `source` project-relative path, `destination` virtual folder; optional `skeletal`, `import_textures`, `import_materials`, and `combine_meshes` booleans |
+| `assert_mesh_thumbnail` | `asset` alias or virtual path; renders the production 128x128 geometry thumbnail and requires non-empty mesh statistics |
 | `create_entity` | `id`; optional `name` |
 | `create_mesh_entity` | `id`, `asset` alias or virtual path |
 | `duplicate_entity` | `entity`, result `id`; optional `name` |
