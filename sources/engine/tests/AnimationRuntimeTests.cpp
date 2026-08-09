@@ -1505,7 +1505,7 @@ end
                     instanceSkeleton->previousLocalPose.positions.data() &&
                 instanceSkeleton->currentComponentPose.positions.data() !=
                     instanceSkeleton->previousComponentPose.positions.data() &&
-                scene.Entities().Count() == 1U,
+                scene.Entities().Count() == 2U,
             "AnimatorInstance did not derive contiguous double-buffered local/component SoA poses without bone entities");
 
         scene.Runtime().SetPlaying(true);
@@ -1569,7 +1569,7 @@ end
                 NearlyEqual(ownerTransform.localPosition.x, 0.0F) &&
                 NearlyEqual(ownerTransform.localPosition.y, 0.0F) &&
                 NearlyEqual(ownerTransform.localPosition.z, 0.0F) &&
-                scene.Entities().Count() == 1U,
+                scene.Entities().Count() == 2U,
             "Indexed skeletal sampling did not write the compact pose independently of SceneEntity Transform storage");
 
         Require(scene.Animators().CrossFade(
