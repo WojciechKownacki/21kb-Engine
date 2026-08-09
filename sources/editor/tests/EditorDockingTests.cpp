@@ -9,6 +9,7 @@
 #include "scene/SkeletalMeshEditorTreeState.hpp"
 #include "scene/SkeletalMeshEditorDetailsState.hpp"
 #include "scene/SkeletalMeshEditorDocumentState.hpp"
+#include "scene/SkeletonEditorDocumentState.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
 #include "scene/AnimationClipEditorDocumentState.hpp"
 #include "scene/AnimatorEditorGraphDocumentState.hpp"
@@ -514,13 +515,24 @@ void RunSkeletalMeshEditorDefaultLayoutTest() {
             layout.skeletonTree.right - layout.skeletonTree.left == 240,
         "Skeletal Mesh Editor should keep the default 20/60/20 workspace split");
     kb::editor::tests::Require(
-        layout.toolbox.left == content.left && layout.viewport.left == layout.toolbox.right &&
+        layout.documentBar.left == content.left && layout.documentBar.right == content.right &&
+            layout.documentBar.top == content.top && layout.documentBar.bottom == content.top + 38 &&
+            layout.commandBar.top == layout.documentBar.bottom && layout.commandBar.bottom == content.top + 74 &&
+            layout.toolbox.top == layout.commandBar.bottom &&
+            layout.toolbox.left == content.left && layout.viewport.left == layout.toolbox.right &&
             layout.skeletonTree.left == layout.viewport.right && layout.skeletonTree.right == content.right,
-        "Skeletal Mesh Editor layout should tile the workspace without gaps");
+        "Skeletal Mesh Editor should place its linked-asset and command bars above the workspace without gaps");
     kb::editor::tests::Require(
         layout.skeletonTree.bottom == layout.assetDetails.top &&
-            layout.skeletonTree.top == content.top && layout.assetDetails.bottom == content.bottom,
+            layout.skeletonTree.top == layout.commandBar.bottom && layout.assetDetails.bottom == content.bottom,
         "Skeletal Mesh Editor right column should stack Skeleton Tree over Asset Details");
+    kb::editor::tests::Require(
+        layout.meshDocument.left == content.left + 112 &&
+            layout.meshDocument.right == layout.skeletonDocument.left &&
+            layout.skeletonDocument.right == content.right - 8 &&
+            layout.meshDocument.top == layout.skeletonDocument.top &&
+            layout.meshDocument.bottom == layout.skeletonDocument.bottom,
+        "Skeletal Mesh Editor linked-asset bar should expose separate Mesh and Skeleton hit targets");
 }
 
 void RunSkeletalMeshEditorTreeStateTest() {
@@ -609,6 +621,9 @@ void RunSkeletalMeshEditorDetailsStateTest() {
         "Skeleton document should expose rig data and identify mesh geometry as preview-only");
     kb::editor::tests::Require(details.Build(10U, {}).sections[0].fields.size() == 5U,
         "Skeleton document should not present preview-mesh skin weights as owned Skeleton data");
+    details.SetSkeletonDocument(skeleton, skeletonMetadata, nullptr);
+    kb::editor::tests::Require(details.Build(0U, {}).sections[0].fields[5].value == "None",
+        "Skeleton document should remain valid when no compatible preview mesh exists");
 }
 
 void RunSkeletalMeshEditorDocumentStateTest() {
@@ -629,6 +644,23 @@ void RunSkeletalMeshEditorDocumentStateTest() {
         "Skeletal Mesh document save should establish a new clean history baseline");
     kb::editor::tests::Require(document.RevertToSaved() && !document.Dirty(),
         "Skeletal Mesh document revert should discard unsaved history");
+}
+
+void RunSkeletonEditorDocumentStateTest() {
+    kb::scene::SkeletonAsset skeleton{};
+    skeleton.bones = {{ .id = 10U, .parentIndex = -1, .name = "Root" }};
+    kb::editor::SkeletonEditorDocumentState document;
+    document.Open(kb::assets::AssetId{ 77U }, skeleton);
+    kb::scene::SkeletonAsset withSocket = skeleton;
+    withSocket.sockets.push_back({ .name = "Root Socket", .boneId = 10U });
+    kb::editor::tests::Require(document.Apply(withSocket) && document.Dirty() && document.CanUndo() &&
+            document.WorkingCopy() != nullptr && document.WorkingCopy()->sockets.size() == 1U,
+        "Skeleton document should retain validated socket edits in its working-copy history");
+    kb::editor::tests::Require(document.Undo() && !document.Dirty() && document.CanRedo() &&
+            document.WorkingCopy() != nullptr && document.WorkingCopy()->sockets.empty(),
+        "Skeleton document undo should restore the saved rig");
+    kb::editor::tests::Require(document.Redo() && document.MarkSaved() && !document.Dirty(),
+        "Skeleton document save should establish a clean history baseline");
 }
 
 void RunAnimationClipTimelineStateTest() {
@@ -757,6 +789,7 @@ void RunEditorDockingTests() {
     RunSkeletalMeshEditorTreeStateTest();
     RunSkeletalMeshEditorDetailsStateTest();
     RunSkeletalMeshEditorDocumentStateTest();
+    RunSkeletonEditorDocumentStateTest();
     RunAnimationClipTimelineStateTest();
     RunAnimationClipEditorDocumentStateTest();
     RunTabClickIsDockInteractionTest();
