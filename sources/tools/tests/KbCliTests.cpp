@@ -1857,6 +1857,9 @@ void RunProjectileTemplateTests() {
         "--scene", "Assets/Scenes/Main.21kbscene",
         "--frames", "300",
     });
+    if (run.exitCode != 0) {
+        std::fputs(run.output.c_str(), stderr);
+    }
     Require(run.exitCode == 0, "projectile template run reported diagnostics");
     Require(Contains(run.output, "[module] active Physics.Jolt"),
         "kb_cli run did not load the project-configured Physics.Jolt module");
