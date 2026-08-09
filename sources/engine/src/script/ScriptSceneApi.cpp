@@ -76,9 +76,9 @@ ScriptFunctionCallResult Load(const ScriptFunctionCallContext& context, std::spa
         return Error("scene path is empty");
     }
     std::filesystem::path path{ pathText };
-    if (pathText.front() == '/') {
-        const kb::assets::AssetMetadata* metadata =
-            context.scene->Assets().Manager().Registry().FindByPath(path);
+    kb::assets::AssetManager& assets = context.scene->Assets().Manager();
+    if (assets.Mounts().Resolve(path).has_value()) {
+        const kb::assets::AssetMetadata* metadata = assets.Registry().FindByPath(path);
         if (metadata == nullptr || metadata->physicalPath.empty()) {
             return Error("scene asset could not be resolved: " + pathText);
         }
