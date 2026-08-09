@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/library/EngineLibraryParsing.hpp"
+
 #include <charconv>
 #include <cstdint>
 #include <string>
@@ -33,7 +35,8 @@ struct ConsoleCommand {
     if (type == ConsoleArgumentType::String) return true;
     if (type == ConsoleArgumentType::Bool) return value == "true" || value == "false";
     if (type == ConsoleArgumentType::Integer) { std::int64_t parsed{}; const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), parsed); return error == std::errc{} && end == value.data() + value.size(); }
-    double parsed{}; const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), parsed); return error == std::errc{} && end == value.data() + value.size();
+    double parsed{};
+    return kb::library::TryParseDouble(value, parsed);
 }
 
 [[nodiscard]] inline bool CanExecute(const ConsoleCommand& command, ConsolePermission caller, const std::vector<std::string_view>& values) noexcept {
