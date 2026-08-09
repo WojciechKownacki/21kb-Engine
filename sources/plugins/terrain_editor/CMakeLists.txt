@@ -43,7 +43,7 @@ endif()
 
 kb_apply_quality_gates(kb_terrain_editor_plugin)
 
-if(BUILD_TESTING)
+if(BUILD_TESTING AND KB_BUILD_RENDERER)
     add_executable(kb_terrain_editor_tests TerrainEditorTests.cpp)
     target_link_libraries(kb_terrain_editor_tests PRIVATE kb_terrain_editor_core kb_renderer)
     kb_apply_quality_gates(kb_terrain_editor_tests)

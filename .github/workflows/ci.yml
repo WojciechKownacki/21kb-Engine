@@ -98,7 +98,17 @@ jobs:
 
       - name: Test
         shell: pwsh
-        run: ctest --test-dir build/ci -C Debug --output-on-failure
+        run: |
+          $testArgs = @("--test-dir", "build/ci", "-C", "Debug", "--output-on-failure")
+          # Sanitizers deliberately distort timings; correctness and safety tests still run,
+          # while the performance budget remains enforced by the unsanitized Windows job.
+          if ("${{ matrix.sanitizer }}" -eq "ON") {
+            $testArgs += @("--label-exclude", "performance")
+          }
+          ctest @testArgs
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
 
       # LIB-024: fail the build on a breaking change to the script API
       # surface versus the committed baseline. Runs only on the full

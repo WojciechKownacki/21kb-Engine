@@ -301,7 +301,7 @@ void RunSceneAudioListenerComponentReflectionSerializationTest() {
     });
 
     kb::ecs::World& sourceWorld = source.Runtime().EcsWorld();
-    const kb::ecs::ComponentReflection* reflection = sourceWorld.Reflection("kb.scene.AudioListenerComponent");
+    const kb::ecs::ComponentReflection* reflection = sourceWorld.Reflection(kb::scene::AudioListenerComponent::StableId);
     Require(reflection != nullptr, "AudioListenerComponent reflection was not registered");
     Require(reflection->FindField("primary") != nullptr, "AudioListenerComponent reflection is missing primary");
 
