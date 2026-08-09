@@ -28,6 +28,8 @@ constexpr float kMaxPitch = 89.0F;
 constexpr float kMinOrbitDistance = 0.15F;
 constexpr float kMinSpeed = 0.05F;
 constexpr float kMaxSpeed = 200.0F;
+constexpr float kFlightVelocityResponse = 14.0F;
+constexpr float kFlightVelocityEpsilon = 0.0001F;
 
 // LIB-044: delegates to the single canonical kb::math::ToRadians instead
 // of an independently-rederived degrees-to-radians constant.
@@ -114,6 +116,7 @@ EditorViewportCameraAxes EditorViewportCameraState::Axes() const noexcept {
 
 void EditorViewportCameraState::BeginNavigation(EditorViewportCameraNavigationMode mode, int x, int y) noexcept {
     focusAnimating_ = false;
+    flightVelocityLocal_ = {};
     navigationMode_ = mode;
     lastX_ = x;
     lastY_ = y;
@@ -190,19 +193,18 @@ bool EditorViewportCameraState::UpdatePointer(int x, int y) noexcept {
 void EditorViewportCameraState::EndNavigation() noexcept {
     navigationMode_ = EditorViewportCameraNavigationMode::None;
     hasPendingPointer_ = false;
+    flightVelocityLocal_ = {};
 }
 
 bool EditorViewportCameraState::ApplyKeyboardFlight(const EditorViewportCameraFlightInput& input, float deltaSeconds) noexcept {
     if (!AllowsKeyboardFlight() || deltaSeconds <= 0.0F) {
+        flightVelocityLocal_ = {};
         return false;
     }
 
     const float localForward = DirectionSign(input.forward, input.backward);
     const float localRight = DirectionSign(input.right, input.left);
     const float localUp = DirectionSign(input.up, input.down);
-    if (localForward == 0.0F && localRight == 0.0F && localUp == 0.0F) {
-        return false;
-    }
 
     float multiplier = 1.0F;
     if (input.boost) {
@@ -211,8 +213,22 @@ bool EditorViewportCameraState::ApplyKeyboardFlight(const EditorViewportCameraFl
     if (input.slow) {
         multiplier *= 0.25F;
     }
-    const float distance = speed_ * multiplier * deltaSeconds;
-    MoveLocal(localRight * distance, localUp * distance, localForward * distance);
+    const float targetSpeed = speed_ * multiplier;
+    const kb::scene::Vec3 targetVelocity{
+        localRight * targetSpeed,
+        localUp * targetSpeed,
+        localForward * targetSpeed,
+    };
+    const float blend = 1.0F - std::exp(-kFlightVelocityResponse * deltaSeconds);
+    flightVelocityLocal_ = Lerp(flightVelocityLocal_, targetVelocity, blend);
+    if (Length(flightVelocityLocal_) <= kFlightVelocityEpsilon) {
+        flightVelocityLocal_ = {};
+        return false;
+    }
+    MoveLocal(
+        flightVelocityLocal_.x * deltaSeconds,
+        flightVelocityLocal_.y * deltaSeconds,
+        flightVelocityLocal_.z * deltaSeconds);
     return true;
 }
 

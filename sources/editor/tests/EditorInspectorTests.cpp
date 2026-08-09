@@ -14,6 +14,7 @@
 #include "engine/scene/SceneHistory.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "inspection/InspectorAudioTextBuilder.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorComponentLabelFormatter.hpp"
@@ -341,6 +342,7 @@ void RunMeshRendererMeshAssignmentActionTest() {
     kb::editor::tests::Require(kb::editor::EditorSceneMeshAssetActions::IsMeshAsset(kb::assets::AssetMetadata{ .type = "RenderMesh", .importCategory = "Model" }), "RenderMesh model asset should be accepted as mesh");
     kb::editor::tests::Require(kb::editor::EditorSceneMeshAssetActions::IsMeshAsset(kb::assets::AssetMetadata{ .type = "RenderMesh" }), "RenderMesh asset should be accepted as mesh without import category");
     kb::editor::tests::Require(kb::editor::EditorSceneMeshAssetActions::IsMeshAsset(kb::assets::AssetMetadata{ .importCategory = "Mesh" }), "Mesh import category should be accepted as mesh");
+    kb::editor::tests::Require(kb::editor::EditorSceneMeshAssetActions::IsScenePlaceableAsset(kb::assets::AssetMetadata{ .type = kb::scene::kSkeletalMeshAssetType }), "Skeletal Mesh should be accepted as scene-placeable geometry");
     kb::editor::tests::Require(!kb::editor::EditorSceneMeshAssetActions::IsMeshAsset(kb::assets::AssetMetadata{ .type = "RenderMaterial" }), "Non-mesh asset should be rejected as mesh");
     kb::editor::tests::Require(kb::editor::EditorSceneMeshAssetActions::AssignMesh(scene, entity, meshId), "Mesh Renderer mesh action did not assign a mesh asset");
     const kb::scene::MeshRendererComponent* assigned = scene.Components().MeshRenderers().TryGet(entity);
@@ -1065,6 +1067,14 @@ void RunMaterialPreviewMeshFactoryTest() {
     kb::editor::tests::Require(plane.desc.vertexCount == 4U && plane.desc.indexCount == 6U, "KBMAT-UE-0008: Material preview plane should generate one quad");
     kb::editor::tests::Require(plane.desc.vertexFormat == kb::render::RenderVertexFormat::P3N3T4UV2 && !plane.tangentVertices.empty(), "Material preview plane must provide tangents for the PBR shader");
     kb::editor::tests::Require(plane.desc.materialSlotCount == 1U && plane.bounds.radius > 0.0F, "KBMAT-UE-0008: Material preview plane should expose a slot and bounds");
+    const auto& planeA = plane.tangentVertices[plane.indices32[0U]];
+    const auto& planeB = plane.tangentVertices[plane.indices32[1U]];
+    const auto& planeC = plane.tangentVertices[plane.indices32[2U]];
+    const float planeWindingZ = ((planeB.x - planeA.x) * (planeC.y - planeA.y)) -
+        ((planeB.y - planeA.y) * (planeC.x - planeA.x));
+    kb::editor::tests::Require(
+        planeWindingZ > 0.0F && planeA.nz > 0.99F && planeB.nz > 0.99F && planeC.nz > 0.99F,
+        "Material preview plane winding and vertex normals must agree on the +Z front face");
 
     const kb::editor::EditorMaterialPreviewPrimitivePolicy spherePolicy = kb::editor::EditorMaterialPreviewPrimitivePolicy::Sphere();
     const kb::editor::EditorMaterialPreviewPrimitivePolicy cylinderPolicy = kb::editor::EditorMaterialPreviewPrimitivePolicy::Cylinder();

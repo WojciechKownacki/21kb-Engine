@@ -94,8 +94,6 @@ public:
     void RequestPresent() noexcept;
     [[nodiscard]] bool PresentRequested() const noexcept;
     void ClearPresentRequest() noexcept;
-    [[nodiscard]] bool PostShowPresentPending() const noexcept;
-    void AcknowledgePostShowPresent() noexcept;
     void SyncHostSurfaceLayouts(HWND parent, std::span<const HostSurfaceLayout> layouts) noexcept;
     void SyncHostSurfaceLayoutsForResize(HWND parent, std::span<const HostSurfaceLayout> layouts) noexcept;
     // Native child surfaces must never remain above a minimized, deactivated,
@@ -152,7 +150,8 @@ private:
         void ReleaseWindow(HWND window) noexcept;
         void ShutdownPresentTargets() noexcept;
         void DestroyWindows() noexcept;
-        [[nodiscard]] bool ShowPresentedWindows() noexcept;
+        void Show(HostSurface& surface) noexcept;
+        void ShowPresentedWindows() noexcept;
 
     private:
         std::vector<std::unique_ptr<HostSurface>> hostSurfaces_;
@@ -321,10 +320,6 @@ private:
     render::Renderer renderer_;
     ViewportSessionStore sessionStore_;
     HostSurfaceStore hostSurfaceStore_;
-    // A child swapchain is first submitted while its native HWND is hidden. Once that HWND is
-    // shown, render two settled frames against the now-visible surface; otherwise Windows can
-    // leave the provisional startup backbuffer on screen until the first camera interaction.
-    std::uint8_t postShowPresentsRemaining_ = 0U;
     EditorHostSurfaceLifecycle hostLifecycle_;
     std::vector<PendingPresent> pendingPresents_;
     std::vector<render::Renderer::SceneFrameSubmission> pendingSubmissions_;

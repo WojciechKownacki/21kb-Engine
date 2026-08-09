@@ -70,10 +70,7 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::Submit(std::span<const Pend
     diagnostics::EditorLagTrace::Slow("viewport-render-frame", eventId, submitMs, detail.str(), 8.0);
 
     const auto showStart = std::chrono::steady_clock::now();
-    if (viewport_.hostSurfaceStore_.ShowPresentedWindows()) {
-        viewport_.postShowPresentsRemaining_ = 2U;
-        viewport_.RequestPresent();
-    }
+    viewport_.hostSurfaceStore_.ShowPresentedWindows();
     const double showMs = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - showStart).count();
     diagnostics::EditorLagTrace::Slow("viewport-show-windows", eventId, showMs, detail.str(), 8.0);

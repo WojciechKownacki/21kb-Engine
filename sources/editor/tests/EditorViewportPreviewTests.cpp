@@ -2,6 +2,7 @@
 #include "EditorTestSuites.hpp"
 
 #include "app/EditorPlayModeState.hpp"
+#include "app/scene_viewport/EditorViewportCameraNavigationInput.hpp"
 #include "app/scene_viewport/EditorSceneViewportMeshPicker.hpp"
 #include "app/scene_viewport/EditorTerrainStrokeTickPolicy.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
@@ -21,6 +22,7 @@
 #include "rendering/EditorBgfxBackendSelector.hpp"
 #include "rendering/EditorHostSurfaceLifecycle.hpp"
 #include "rendering/SkeletalMeshEditorBonePicker.hpp"
+#include "rendering/SkeletalMeshEditorSceneLabelBuilder.hpp"
 #include "rendering/EditorTexturePreviewService.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLabelFormat.hpp"
@@ -146,6 +148,12 @@ void RunAnimationPreviewScenePresentationTest() {
             scene.Components().WorldBackdrops().TryGet(preview.EnvironmentEntity()) != nullptr &&
             scene.Components().AmbientRadiances().TryGet(preview.EnvironmentEntity()) != nullptr,
         "Animation preview presentation does not include camera, floor and environment");
+    const kb::scene::TransformComponent floorTransform = scene.Transforms().Get(preview.FloorEntity());
+    const kb::scene::Vec3 floorFront = kb::math::Rotate(
+        floorTransform.localRotation, kb::scene::Vec3{ 0.0F, 0.0F, 1.0F });
+    kb::editor::tests::Require(
+        std::fabs(floorFront.x) < 0.0001F && floorFront.y > 0.9999F && std::fabs(floorFront.z) < 0.0001F,
+        "Animation preview floor front face must point upward");
     const kb::scene::TransformComponent initialCamera = scene.Transforms().Get(preview.CameraEntity());
     preview.Camera().BeginNavigation(kb::editor::EditorViewportCameraNavigationMode::Orbit, 10, 10);
     static_cast<void>(preview.Camera().UpdatePointer(40, 24));
@@ -156,6 +164,59 @@ void RunAnimationPreviewScenePresentationTest() {
             std::fabs(initialCamera.localPosition.y - movedCamera.localPosition.y) > 0.0001F ||
             std::fabs(initialCamera.localPosition.z - movedCamera.localPosition.z) > 0.0001F,
         "Animation preview camera navigation did not update the runtime camera transform");
+
+    preview.Camera().BeginNavigation(kb::editor::EditorViewportCameraNavigationMode::Look, 40, 24);
+    const kb::scene::Vec3 flightStart = preview.Camera().Position();
+    kb::editor::EditorViewportCameraFlightInput flight{};
+    flight.forward = true;
+    kb::editor::tests::Require(
+        preview.TickCamera(0.25F, flight) &&
+            kb::math::Length(preview.Camera().Position() - flightStart) > 0.0001F,
+        "Skeletal Mesh Editor RMB navigation must apply WASD camera flight");
+    preview.Camera().EndNavigation();
+}
+
+void RunViewportCameraNavigationBindingPolicyTest() {
+    using kb::editor::EditorViewportCameraNavigationMode;
+    kb::editor::tests::Require(
+        kb::editor::ResolveEditorViewportCameraNavigationMode(false, true, false, false) ==
+            EditorViewportCameraNavigationMode::Look,
+        "RMB must enter free-look navigation in every 3D viewport");
+    kb::editor::tests::Require(
+        kb::editor::ResolveEditorViewportCameraNavigationMode(false, true, false, true) ==
+            EditorViewportCameraNavigationMode::Dolly,
+        "Alt+RMB must retain the shared dolly binding");
+}
+
+void RunSkeletalMeshSceneLabelBuilderTest() {
+    kb::editor::EditorViewportCameraState camera;
+    const kb::editor::EditorViewportCameraAxes axes = camera.Axes();
+    const kb::scene::Vec3 visiblePosition = axes.position + axes.forward * 5.0F;
+    const std::array<kb::editor::AnimationPreviewOverlayLabel, 1U> visibleLabels{{
+        {
+            .position = visiblePosition,
+            .text = "mixamorig:Hips",
+        },
+    }};
+    std::vector<kb::render::PhysicsDebugLine> lines;
+    kb::editor::SkeletalMeshEditorSceneLabelBuilder::Append(lines, visibleLabels, camera, 720U);
+    kb::editor::tests::Require(!lines.empty(), "A visible bone name must produce scene label geometry");
+    for (const kb::render::PhysicsDebugLine& line : lines) {
+        kb::editor::tests::Require(
+            std::isfinite(line.from[0]) && std::isfinite(line.from[1]) && std::isfinite(line.from[2]) &&
+                std::isfinite(line.to[0]) && std::isfinite(line.to[1]) && std::isfinite(line.to[2]),
+            "Scene label geometry must remain finite");
+        RequireNear(line.color[0], 1.0F, 0.0001F, "Scene label must preserve its diagnostic color");
+        RequireNear(line.color[1], 0.58F, 0.0001F, "Scene label must preserve its diagnostic color");
+        RequireNear(line.color[2], 0.24F, 0.0001F, "Scene label must preserve its diagnostic color");
+    }
+
+    const std::array<kb::editor::AnimationPreviewOverlayLabel, 1U> hiddenLabels{{
+        { .position = axes.position - axes.forward * 2.0F, .text = "Behind camera" },
+    }};
+    std::vector<kb::render::PhysicsDebugLine> hiddenLines;
+    kb::editor::SkeletalMeshEditorSceneLabelBuilder::Append(hiddenLines, hiddenLabels, camera, 720U);
+    kb::editor::tests::Require(hiddenLines.empty(), "Labels behind the preview camera must be culled");
 }
 
 void RunAnimationPreviewLegacyFbxOrientationTest() {
@@ -166,6 +227,7 @@ void RunAnimationPreviewLegacyFbxOrientationTest() {
         { .id = 1U, .parentIndex = -1, .name = "Hips", .referencePose = { .position = { 0.0F, -1.0F, 0.0F } }, .inverseBind = {} },
         { .id = 2U, .parentIndex = 0, .name = "Head", .referencePose = { .position = { 0.0F, -0.6F, 0.0F } }, .inverseBind = {} },
     };
+    skeleton.sockets = {{ .name = "HeadSocket", .boneId = 2U }};
     const std::uint64_t signature = kb::scene::SkeletonCompatibilitySignature(skeleton);
     kb::scene::SkeletalMeshAsset mesh{};
     mesh.skeletonAssetId = skeletonId.value;
@@ -197,13 +259,40 @@ void RunAnimationPreviewLegacyFbxOrientationTest() {
     kb::editor::AnimationPreviewContext context;
     context.SetAssets(skeletonId, meshId, {}, {});
     static_cast<void>(context.Overlays().SetBonesVisible(true));
+    static_cast<void>(context.Overlays().SetBoneNamesVisible(true));
+    static_cast<void>(context.Overlays().SetSocketsVisible(true));
+    static_cast<void>(context.Overlays().SetBoundsVisible(true));
+    static_cast<void>(context.Overlays().SetLodVisible(true));
+    static_cast<void>(context.Overlays().SetNormalsVisible(true));
     kb::editor::EditorAnimationPreviewScene preview;
     static_cast<void>(preview.SceneFor(source, context));
     const kb::editor::AnimationPreviewOverlaySnapshot overlays = preview.BuildOverlays(context);
+    const auto headBoneLine = std::find_if(overlays.lines.begin(), overlays.lines.end(),
+        [](const kb::editor::AnimationPreviewOverlayLine& line) { return line.boneId == 2U; });
     kb::editor::tests::Require(
-        !overlays.lines.empty() && overlays.lines.front().to.y > overlays.lines.front().from.y &&
-            overlays.lines.front().fromBoneId == 1U && overlays.lines.front().boneId == 2U,
+        headBoneLine != overlays.lines.end() && headBoneLine->to.y > headBoneLine->from.y &&
+            headBoneLine->fromBoneId == 1U,
         "Animation preview did not turn a legacy below-ground FBX skeleton upright");
+    const auto hasLabel = [&overlays](std::string_view text) {
+        return std::ranges::any_of(overlays.labels,
+            [text](const kb::editor::AnimationPreviewOverlayLabel& label) { return label.text == text; });
+    };
+    const auto hasLineColor = [&overlays](kb::scene::Vec3 color) {
+        return std::ranges::any_of(overlays.lines,
+            [color](const kb::editor::AnimationPreviewOverlayLine& line) {
+                return std::fabs(line.color.x - color.x) < 0.0001F &&
+                    std::fabs(line.color.y - color.y) < 0.0001F &&
+                    std::fabs(line.color.z - color.z) < 0.0001F;
+            });
+    };
+    kb::editor::tests::Require(
+        hasLabel("Hips") && hasLabel("Head") && hasLabel("HeadSocket") && hasLabel("LODs: 1"),
+        "Bone names, sockets and LOD diagnostics must publish visible scene labels");
+    kb::editor::tests::Require(
+        hasLineColor({ 1.0F, 0.76F, 0.12F }) && hasLineColor({ 0.28F, 0.88F, 1.0F }) &&
+            hasLineColor({ 1.0F, 0.2F, 0.2F }) && hasLineColor({ 0.2F, 1.0F, 0.2F }) &&
+            hasLineColor({ 0.2F, 0.4F, 1.0F }),
+        "Bounds, posed normals and socket axes must publish scene geometry");
     kb::editor::tests::Require(
         preview.Camera().YawDegrees() == 180.0F && preview.Camera().PitchDegrees() == 0.0F,
         "Skeletal Mesh Editor did not open a newly selected mesh facing the camera");
@@ -546,6 +635,29 @@ void RunViewportCameraNavigationTest() {
     kb::editor::tests::Require(camera.Speed() > speedBeforeWheel, "Mouse wheel in flight mode should increase camera speed");
     camera.EndNavigation();
     kb::editor::tests::Require(!camera.IsNavigating(), "Viewport camera should exit navigation mode");
+}
+
+void RunViewportCameraFlightSmoothingTest() {
+    kb::editor::EditorViewportCameraState camera;
+    camera.BeginNavigation(kb::editor::EditorViewportCameraNavigationMode::Look, 0, 0);
+    constexpr float deltaSeconds = 1.0F / 60.0F;
+    const kb::editor::EditorViewportCameraFlightInput forward{ .forward = true };
+
+    const kb::scene::Vec3 start = camera.Position();
+    kb::editor::tests::Require(camera.ApplyKeyboardFlight(forward, deltaSeconds), "Smoothed camera flight should start moving on the first frame");
+    const float firstStep = kb::math::Length(camera.Position() - start);
+    const kb::scene::Vec3 beforeSettledStep = camera.Position();
+    for (int frame = 0; frame < 20; ++frame) {
+        static_cast<void>(camera.ApplyKeyboardFlight(forward, deltaSeconds));
+    }
+    const float settledStep = kb::math::Length(camera.Position() - beforeSettledStep) / 20.0F;
+    kb::editor::tests::Require(firstStep < settledStep, "Camera flight should ease into its target speed");
+
+    const kb::scene::Vec3 beforeRelease = camera.Position();
+    kb::editor::tests::Require(camera.ApplyKeyboardFlight({}, deltaSeconds), "Camera flight should ease out after releasing movement keys");
+    kb::editor::tests::Require(kb::math::Length(camera.Position() - beforeRelease) > 0.0F, "Camera flight release should retain a small deceleration step");
+    camera.EndNavigation();
+    kb::editor::tests::Require(!camera.ApplyKeyboardFlight({}, deltaSeconds), "Ending camera navigation should clear smoothed flight velocity");
 }
 
 void RunViewportCameraOrbitTest() {
@@ -955,6 +1067,8 @@ void RunTexturePreviewLockBitsDecodeTest() {
 namespace kb::editor::tests {
 
 void RunEditorViewportPreviewTests() {
+    RunViewportCameraNavigationBindingPolicyTest();
+    RunSkeletalMeshSceneLabelBuilderTest();
     RunAnimationPreviewContextTracksSharedBindingTest();
     RunAnimationPreviewTransportTest();
     RunAnimationPreviewOverlayStateTest();
@@ -972,6 +1086,7 @@ void RunEditorViewportPreviewTests() {
     RunGridAndSnapStateTest();
     RunViewportCameraAxesTest();
     RunViewportCameraNavigationTest();
+    RunViewportCameraFlightSmoothingTest();
     RunViewportCameraOrbitTest();
     RunViewportCameraTrackDirectionTest();
     RunViewportMeshPickerNearestMeshRendererTest();

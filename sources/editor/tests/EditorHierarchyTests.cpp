@@ -6,12 +6,14 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/ScenePrefabInstance.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SkeletonBindingComponent.hpp"
 #include "scene/EditorSceneMeshAssetActions.hpp"
 #include "scene/EditorScenePrefabActions.hpp"
 #include "scene/EditorHierarchyExpansionState.hpp"
@@ -325,6 +327,25 @@ void RunMeshAssetActionCreatesRenderableSceneEntityTest() {
     kb::editor::tests::Require(renderer->meshAssetId == meshAssetId.value, "Mesh renderer component did not reference the imported mesh asset");
 }
 
+void RunSkeletalMeshAssetActionCreatesDeformedSceneEntityTest() {
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId meshAssetId{ 0x2101ULL };
+    constexpr kb::assets::AssetId skeletonAssetId{ 0x5101ULL };
+    constexpr std::uint64_t compatibilitySignature = 0xC001ULL;
+
+    const kb::scene::SceneEntity entity = kb::editor::EditorSceneMeshAssetActions::CreateSkeletalMeshEntity(
+        scene, meshAssetId, skeletonAssetId, compatibilitySignature, "Imported Character");
+    kb::editor::tests::Require(entity.IsValid() && scene.Entities().IsAlive(entity), "Skeletal Mesh asset action did not create a scene entity");
+    const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(entity);
+    const kb::scene::DrawD3DeformedGeometryComponent* geometry = scene.Components().DeformedGeometries().TryGet(entity);
+    const kb::scene::SkeletonBindingComponent* binding = scene.Components().SkeletonBindings().TryGet(entity);
+    kb::editor::tests::Require(renderer != nullptr && renderer->meshAssetId == meshAssetId.value, "Skeletal Mesh entity did not attach its renderer synchronization component");
+    kb::editor::tests::Require(geometry != nullptr && geometry->enabled && geometry->skeletalMeshAssetId == meshAssetId.value, "Skeletal Mesh entity did not attach enabled deformed geometry");
+    kb::editor::tests::Require(binding != nullptr && binding->enabled && binding->skeletonAssetId == skeletonAssetId.value &&
+            binding->skeletonCompatibilitySignature == compatibilitySignature,
+        "Skeletal Mesh entity did not attach its compatible skeleton binding");
+}
+
 } // namespace
 
 namespace kb::editor::tests {
@@ -343,6 +364,7 @@ void RunEditorHierarchyTests() {
     RunRowBuilderMarksOnlyPrefabRootsTest();
     RunDroppedPrefabAssetBuildsPrefabHierarchyRowsTest();
     RunMeshAssetActionCreatesRenderableSceneEntityTest();
+    RunSkeletalMeshAssetActionCreatesDeformedSceneEntityTest();
 }
 
 } // namespace kb::editor::tests

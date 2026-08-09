@@ -265,7 +265,11 @@ private:
     std::unique_ptr<FinalCompositePass> finalCompositePass_;
     std::unique_ptr<SceneDeferredLightingPass> deferredLightingPass_;
     SceneRenderTarget defaultSceneTarget_;
-    SceneGBuffer defaultSceneGBuffer_;
+    // G-buffer commands are consumed asynchronously by bgfx. Reusing one allocation for
+    // differently-sized viewports in the same frame destroys attachments still referenced by an
+    // earlier viewport, producing intermittent grid/depth corruption. Each view-index owns its
+    // resources for the complete frame lifetime.
+    std::array<SceneGBuffer, RenderViewportViewIdAllocator::kMaxViewportCount> sceneGBuffers_{};
     ScenePostProcessTargets defaultPostProcessTargets_;
     ShadowMapResource defaultShadowMap_;
     RenderFramePipeline framePipeline_;
@@ -313,6 +317,9 @@ private:
     std::uint32_t lastMaterialResolverDiagnosticCount_ = 0;
     std::uint32_t lastCompletedFrame_ = 0;
     std::vector<TemporalViewportState> temporalViewportStates_;
+    // A scene's frame-local skinning palettes are shared by all of its viewport submissions.
+    // This avoids uploading the same crowd once per docked/floating viewport in one frame.
+    std::vector<std::uint64_t> skinningSynchronizedSceneIds_;
     DisplayConfig displayConfig_{};
     bool frameActive_ = false;
 };

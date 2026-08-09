@@ -24,6 +24,7 @@
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/script_editor/ScriptEditorWindow.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
+#include "app/scene_viewport/EditorViewportCameraNavigationInput.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "app/scene_viewport/EditorTerrainViewportInteraction.hpp"
 #include "scene/EditorTerrainService.hpp"
@@ -508,12 +509,6 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
     const bool materialPresent = state.sceneContext.MaterialEditor().OpenAssetId().IsValid();
     const bool thumbnailPresent = EditorMaterialThumbnailCache().HasPendingWork();
     const bool continuousPresent = playPresent || materialPresent;
-    const bool postShowPresent = state.sceneViewport.PostShowPresentPending();
-    if (postShowPresent) {
-        // WM_PAINT may clear the ordinary request between ticks. The lifecycle-owned request
-        // remains pending until a settled message-loop submission has completed.
-        state.sceneViewport.RequestPresent();
-    }
     // The toolbar refresh only repaints cached counters. It must not manufacture a GPU frame:
     // doing so submitted every visible viewport exactly four times per second while idle.
     if (continuousPresent || thumbnailPresent) {
@@ -559,9 +554,6 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
     }
     if (mainPresented || floatingPresented) {
         state.sceneViewport.ClearPresentRequest();
-        if (postShowPresent) {
-            state.sceneViewport.AcknowledgePostShowPresent();
-        }
     }
     if (scenePresented) {
         state.sceneContext.AcknowledgeSceneRenderSubmitted();
@@ -719,7 +711,8 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         state.sceneViewport.RequestPresent();
     }
 
-    const bool animationPreviewCameraChanged = state.sceneContext.TickAnimationPreviewCamera(deltaSeconds);
+    const bool animationPreviewCameraChanged = state.sceneContext.TickAnimationPreviewCamera(
+        deltaSeconds, ReadEditorViewportCameraFlightInput());
     const bool animationPreviewPlaybackChanged = state.sceneContext.TickAnimationPreviewPlayback(deltaSeconds);
     if (animationPreviewCameraChanged || animationPreviewPlaybackChanged) {
         state.sceneViewport.RequestPresent();
