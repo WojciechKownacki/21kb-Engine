@@ -11,6 +11,7 @@
 #include "app/pointer/EditorRightButtonDownRouter.hpp"
 #include "app/pointer/EditorSetCursorRouter.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
+#include "app/scene_viewport/EditorViewportCameraNavigationInput.hpp"
 #include "app/EditorWindowInvalidator.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
@@ -118,8 +119,11 @@ LRESULT EditorWindowPointerHandler::HandleRightButtonDown(HWND messageWindow, LP
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
     if (SkeletalPreviewViewportAt(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, x, y).has_value()) {
-        sceneContext_.AnimationPreviewCamera().BeginNavigation(EditorViewportCameraNavigationMode::Orbit, x, y);
+        const bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+        sceneContext_.AnimationPreviewCamera().BeginNavigation(
+            ResolveEditorViewportCameraNavigationMode(false, true, false, alt), x, y);
         SetCapture(messageWindow);
+        HideEditorViewportNavigationCursor();
         sceneViewport_.RequestPresent();
         return 0;
     }
@@ -188,8 +192,9 @@ LRESULT EditorWindowPointerHandler::HandleMouseWheel(HWND messageWindow, WPARAM 
     ScreenToClient(messageWindow, &point);
     if (SkeletalPreviewViewportAt(
             messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, point.x, point.y).has_value()) {
+        const bool adjustSpeed = sceneContext_.AnimationPreviewCamera().AllowsKeyboardFlight();
         static_cast<void>(sceneContext_.AnimationPreviewCamera().ApplyWheel(
-            static_cast<float>(GET_WHEEL_DELTA_WPARAM(wparam)) / static_cast<float>(WHEEL_DELTA), false));
+            static_cast<float>(GET_WHEEL_DELTA_WPARAM(wparam)) / static_cast<float>(WHEEL_DELTA), adjustSpeed));
         sceneViewport_.RequestPresent();
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return 0;
@@ -213,6 +218,7 @@ LRESULT EditorWindowPointerHandler::HandleMouseWheel(HWND messageWindow, WPARAM 
 LRESULT EditorWindowPointerHandler::HandleLeftButtonUp(HWND messageWindow, LPARAM lparam) {
     if (sceneContext_.AnimationPreviewCamera().IsNavigating()) {
         sceneContext_.AnimationPreviewCamera().EndNavigation();
+        RestoreEditorViewportNavigationCursor();
         if (GetCapture() == messageWindow) ReleaseCapture();
         sceneViewport_.RequestPresent();
         return 0;
@@ -255,6 +261,7 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonUp(HWND messageWindow, LPARA
 LRESULT EditorWindowPointerHandler::HandleRightButtonUp(HWND messageWindow, LPARAM lparam) {
     if (sceneContext_.AnimationPreviewCamera().IsNavigating()) {
         sceneContext_.AnimationPreviewCamera().EndNavigation();
+        RestoreEditorViewportNavigationCursor();
         if (GetCapture() == messageWindow) ReleaseCapture();
         sceneViewport_.RequestPresent();
         return 0;
@@ -292,6 +299,7 @@ LRESULT EditorWindowPointerHandler::HandleRightButtonUp(HWND messageWindow, LPAR
 LRESULT EditorWindowPointerHandler::HandleMiddleButtonUp(HWND messageWindow) {
     if (sceneContext_.AnimationPreviewCamera().IsNavigating()) {
         sceneContext_.AnimationPreviewCamera().EndNavigation();
+        RestoreEditorViewportNavigationCursor();
         if (GetCapture() == messageWindow) ReleaseCapture();
         sceneViewport_.RequestPresent();
         return 0;

@@ -7,6 +7,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "scene/EditorHierarchyRowPicker.hpp"
+#include "scene/EditorSceneMeshAssetActions.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -24,12 +25,6 @@ namespace {
 
 [[nodiscard]] bool IsPrefabLike(const kb::assets::AssetMetadata& metadata) {
     return metadata.type == "ScenePrefab" || Lower(metadata.virtualPath.extension().string()) == ".kbprefab";
-}
-
-[[nodiscard]] bool IsMeshAsset(const kb::assets::AssetMetadata& metadata) {
-    return metadata.type == "RenderMesh"
-        || metadata.importCategory == kb::assets::ToString(kb::assets::AssetImportCategory::Model)
-        || metadata.importCategory == "Mesh";
 }
 
 [[nodiscard]] bool IsAudioAsset(const kb::assets::AssetMetadata& metadata) {
@@ -107,7 +102,7 @@ void EditorPointerDragSourceResolver::Resolve(
             drag.assetVirtualPath = metadata->virtualPath;
             drag.assetLabel = metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name;
             drag.assetInstantiatesPrefab = IsPrefabLike(*metadata);
-            drag.assetCreatesMeshEntity = IsMeshAsset(*metadata);
+            drag.assetCreatesMeshEntity = EditorSceneMeshAssetActions::IsScenePlaceableAsset(*metadata);
             drag.assetAddsBehaviour = kb::script::ScriptBehaviourAsset::IsBehaviourAsset(*metadata);
             drag.assetAssignsAudioClip = IsAudioAsset(*metadata);
             drag.assetAssignsMaterial = IsMaterialAsset(*metadata);

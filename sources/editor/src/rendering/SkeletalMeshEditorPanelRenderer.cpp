@@ -4,6 +4,7 @@
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/SkeletalMeshEditorBonePicker.hpp"
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
+#include "rendering/SkeletalMeshEditorSceneLabelBuilder.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "engine/math/EngineMath.hpp"
@@ -129,13 +130,17 @@ void PaintTree(HDC dc, const RECT& rect, const EditorSceneContext& sceneContext)
     GdiDrawing::DrawSharpFrame(dc, curvesPanel, RGB(28, 30, 34), RGB(53, 57, 64));
     RECT morphTitle{ morphPanel.left + 8, morphPanel.top + 3, morphPanel.right - 8, morphPanel.top + 18 };
     SetTextColor(dc, RGB(207, 214, 222));
-    DrawTextA(dc, "Morph Targets", -1, &morphTitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    const bool skeletonDocument = sceneContext.IsSkeletalMeshEditorSkeletonDocument();
+    const char* morphPanelTitle = skeletonDocument ? "Preview Geometry" : "Morph Targets";
+    DrawTextA(dc, morphPanelTitle, -1, &morphTitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     const std::vector<kb::scene::SkeletalMeshMorphTarget>& morphs = sceneContext.SkeletalMeshEditorMorphTargets();
-    const std::string morphSummary = morphs.empty()
+    const std::string morphSummary = skeletonDocument
+        ? "Compatible mesh is preview-only."
+        : (morphs.empty()
         ? "None"
         : morphs.front().name + " (LOD " + std::to_string(morphs.front().lodIndex) + ", " +
             std::to_string(morphs.front().deltas.size()) + " deltas)" +
-            (morphs.size() > 1U ? " +" + std::to_string(morphs.size() - 1U) : "");
+            (morphs.size() > 1U ? " +" + std::to_string(morphs.size() - 1U) : ""));
     RECT morphValue{ morphPanel.left + 8, morphPanel.top + 19, morphPanel.right - 8, morphPanel.bottom - 3 };
     SetTextColor(dc, RGB(120, 196, 176));
     DrawTextA(dc, morphSummary.c_str(), -1, &morphValue, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
@@ -247,7 +252,9 @@ void AppendSelectedJointMarker(
 
 [[nodiscard]] std::vector<kb::render::PhysicsDebugLine> BuildSkeletalPreviewLines(
     const AnimationPreviewOverlaySnapshot& overlays,
-    kb::scene::SkeletonBoneId selectedBone) {
+    kb::scene::SkeletonBoneId selectedBone,
+    const EditorViewportCameraState& camera,
+    std::uint32_t viewportHeight) {
     std::vector<kb::render::PhysicsDebugLine> output;
     output.reserve(overlays.lines.size() * 16U);
     const bool selectedBoneHasIncomingShape = selectedBone != 0U &&
@@ -271,6 +278,7 @@ void AppendSelectedJointMarker(
             AppendDebugSegment(output, line.from, line.to, line.color);
         }
     }
+    SkeletalMeshEditorSceneLabelBuilder::Append(output, overlays.labels, camera, viewportHeight);
     return output;
 }
 
@@ -294,9 +302,10 @@ void SkeletalMeshEditorPanelRenderer::Paint(
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, RGB(168, 178, 190));
         RECT text = content;
+        const bool skeletonDocument = sceneContext.IsSkeletalMeshEditorSkeletonDocument();
         const char* message = sceneContext.HasPendingSkeletalMeshEditorOpen()
-            ? "Loading Skeletal Mesh..."
-            : "Open a Skeletal Mesh asset to begin editing.";
+            ? (skeletonDocument ? "Loading Skeleton preview..." : "Loading Skeletal Mesh...")
+            : (skeletonDocument ? "Open a Skeleton asset to begin editing." : "Open a Skeletal Mesh asset to begin editing.");
         DrawTextA(dc, message, -1, &text,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         return;
@@ -340,7 +349,8 @@ bool SkeletalMeshEditorPanelRenderer::PresentViewport(
     settings.viewportKey = panel.id;
     settings.editorSceneOverlaysEnabled = true;
     settings.physicsDebugLines = BuildSkeletalPreviewLines(
-        sceneContext.AnimationPreviewOverlays(), sceneContext.SelectedSkeletalMeshEditorBone());
+        sceneContext.AnimationPreviewOverlays(), sceneContext.SelectedSkeletalMeshEditorBone(),
+        sceneContext.AnimationPreviewCamera(), renderHeight);
     settings.sceneRevision = revision;
     settings.sceneDirtyBaseRevision = revision;
     // The preview scene has its own monotonic revision. Re-synchronizing the complete 24 MB Y Bot

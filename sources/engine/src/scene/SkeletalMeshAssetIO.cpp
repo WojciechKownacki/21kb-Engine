@@ -23,7 +23,10 @@
 namespace kb::scene {
 namespace {
 constexpr std::array<std::uint8_t, 8U> kDerivedMagic{ 'K', 'B', 'S', 'M', 'D', 'D', 'C', 0U };
-constexpr std::uint32_t kDerivedVersion = 2U;
+// Version 3 stores the canonical outward-facing winding. Version 2 caches may contain meshes
+// produced by the legacy FBX axis conversion, where both triangle winding and normals point
+// inward, so they must be rebuilt from the source asset and migrated below.
+constexpr std::uint32_t kDerivedVersion = 3U;
 constexpr std::uint32_t kMaxDerivedLods = 64U;
 constexpr std::uint32_t kMaxDerivedVertices = 10'000'000U;
 constexpr std::uint32_t kMaxDerivedIndices = 30'000'000U;
@@ -54,6 +57,67 @@ static_assert(std::is_trivially_copyable_v<SkeletalMeshMorphDelta>);
         hash *= kFnvPrime;
     }
     return hash == 0U ? kFnvPrime : hash;
+}
+
+[[nodiscard]] bool UsesLegacyFbxUpAxis(const SkeletalMeshBounds& bounds) noexcept {
+    const float tolerance = std::max(0.001F, std::abs(bounds.extents.y) * 0.01F);
+    return bounds.center.y < -tolerance &&
+        bounds.center.y + bounds.extents.y <= tolerance;
+}
+
+[[nodiscard]] double SignedVolumeSix(const SkeletalMeshLod& lod) noexcept {
+    double volume = 0.0;
+    for (std::size_t index = 0U; index + 2U < lod.indices.size(); index += 3U) {
+        const std::uint32_t i0 = lod.indices[index];
+        const std::uint32_t i1 = lod.indices[index + 1U];
+        const std::uint32_t i2 = lod.indices[index + 2U];
+        if (i0 >= lod.vertices.size() || i1 >= lod.vertices.size() || i2 >= lod.vertices.size()) {
+            return 0.0;
+        }
+        const kb::math::Vec3& a = lod.vertices[i0].position;
+        const kb::math::Vec3& b = lod.vertices[i1].position;
+        const kb::math::Vec3& c = lod.vertices[i2].position;
+        volume += static_cast<double>(a.x) *
+                (static_cast<double>(b.y) * c.z - static_cast<double>(b.z) * c.y) -
+            static_cast<double>(a.y) *
+                (static_cast<double>(b.x) * c.z - static_cast<double>(b.z) * c.x) +
+            static_cast<double>(a.z) *
+                (static_cast<double>(b.x) * c.y - static_cast<double>(b.y) * c.x);
+    }
+    return volume;
+}
+
+void NormalizeLegacyFbxWinding(SkeletalMeshAsset& asset) {
+    if (!UsesLegacyFbxUpAxis(asset.conservativeBounds)) return;
+
+    const double boundsVolume = 8.0 * static_cast<double>(asset.conservativeBounds.extents.x) *
+        static_cast<double>(asset.conservativeBounds.extents.y) *
+        static_cast<double>(asset.conservativeBounds.extents.z);
+    const double negativeThreshold = -std::max(1.0e-9, boundsVolume * 1.0e-6) * 6.0;
+    std::vector<bool> normalizedLods(asset.lods.size(), false);
+    for (std::size_t lodIndex = 0U; lodIndex < asset.lods.size(); ++lodIndex) {
+        SkeletalMeshLod& lod = asset.lods[lodIndex];
+        if (SignedVolumeSix(lod) >= negativeThreshold) continue;
+
+        for (std::size_t index = 0U; index + 2U < lod.indices.size(); index += 3U) {
+            std::swap(lod.indices[index + 1U], lod.indices[index + 2U]);
+        }
+        for (SkeletalMeshVertex& vertex : lod.vertices) {
+            vertex.normal.x = -vertex.normal.x;
+            vertex.normal.y = -vertex.normal.y;
+            vertex.normal.z = -vertex.normal.z;
+            vertex.tangent.w = -vertex.tangent.w;
+        }
+        normalizedLods[lodIndex] = true;
+    }
+    for (SkeletalMeshMorphTarget& morph : asset.morphTargets) {
+        if (morph.lodIndex >= normalizedLods.size() || !normalizedLods[morph.lodIndex]) continue;
+        for (SkeletalMeshMorphDelta& delta : morph.deltas) {
+            delta.normalDelta.x = -delta.normalDelta.x;
+            delta.normalDelta.y = -delta.normalDelta.y;
+            delta.normalDelta.z = -delta.normalDelta.z;
+        }
+    }
 }
 
 [[nodiscard]] std::optional<std::filesystem::path> DerivedDataPath(
@@ -434,6 +498,7 @@ std::optional<SkeletalMeshAsset> SkeletalMeshAssetIO::Load(
     }
     if (!fixedBoundsRead) asset.fixedBounds = asset.conservativeBounds;
     asset.morphTargets = std::move(morphs);
+    NormalizeLegacyFbxWinding(asset);
     for (SkeletalMeshLod& lod : asset.lods) {
         if (lod.boneBounds.empty()) BuildSkeletalMeshLodBoneBounds(lod);
     }

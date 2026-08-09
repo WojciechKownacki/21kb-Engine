@@ -4545,6 +4545,7 @@ void RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest() {
             },
         },
         .cameraOverride = IdentityCamera(),
+        .lightingConfig = SceneRenderLightingConfig{.lightingPath = SceneRenderLightingPath::Deferred},
         .meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent,
     };
     const RenderSceneSubmitDesc detached{
@@ -4558,6 +4559,7 @@ void RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest() {
             },
         },
         .cameraOverride = IdentityCamera(),
+        .lightingConfig = SceneRenderLightingConfig{.lightingPath = SceneRenderLightingPath::Deferred},
         .meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent,
     };
     const std::array<Renderer::SceneFrameSubmission, 2U> submissions{
@@ -4567,11 +4569,13 @@ void RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest() {
 
     Require(renderer.SubmitScenes(submissions), "Renderer rejected docked and detached viewport submissions in one frame");
     const std::span<const SceneRenderPassSubmitStats> passStats = renderer.LastScenePassSubmitStats();
-    Require(passStats.size() == 4U, "Same-frame multi-viewport test did not report both scene passes for both viewports");
-    Require(passStats[0].viewportId == 1U && passStats[0].viewportIndex == 0U, "Docked viewport opaque pass metadata is wrong");
-    Require(passStats[1].viewportId == 1U && passStats[1].viewportIndex == 0U, "Docked viewport transparent pass metadata is wrong");
-    Require(passStats[2].viewportId == 2U && passStats[2].viewportIndex == 1U, "Detached viewport opaque pass metadata is wrong");
-    Require(passStats[3].viewportId == 2U && passStats[3].viewportIndex == 1U, "Detached viewport transparent pass metadata is wrong");
+    Require(passStats.size() == 6U, "Same-frame multi-viewport test did not report both deferred pipelines");
+    for (std::size_t index = 0U; index < 3U; ++index) {
+        Require(passStats[index].viewportId == 1U && passStats[index].viewportIndex == 0U,
+            "Docked viewport deferred pass metadata is wrong");
+        Require(passStats[index + 3U].viewportId == 2U && passStats[index + 3U].viewportIndex == 1U,
+            "Detached viewport deferred pass metadata is wrong");
+    }
     Require(!renderer.LastSceneSubmitStats().HasMissingResources(), "Same-frame multi-viewport test reported missing resources for an empty scene");
 
     renderer.EndFrame();

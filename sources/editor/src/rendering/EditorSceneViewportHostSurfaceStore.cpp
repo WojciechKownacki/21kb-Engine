@@ -200,46 +200,44 @@ void EditorSceneBgfxViewport::HostSurfaceStore::DestroyWindows() noexcept {
     }
 }
 
-bool EditorSceneBgfxViewport::HostSurfaceStore::ShowPresentedWindows() noexcept {
-    bool showedWindow = false;
+void EditorSceneBgfxViewport::HostSurfaceStore::Show(HostSurface& surface) noexcept {
+    if (surface.clipWindow == nullptr || surface.window == nullptr ||
+        IsWindow(surface.clipWindow) == 0 || IsWindow(surface.window) == 0) {
+        return;
+    }
+    UINT flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOREDRAW | SWP_SHOWWINDOW;
+    if (!EditorSceneBgfxViewport::ShouldPreserveHostSurfaceBits(surface.key)) {
+        flags |= SWP_NOCOPYBITS;
+    }
+    if (IsWindowVisible(surface.clipWindow) == 0) {
+        SetWindowPos(
+            surface.clipWindow,
+            HWND_BOTTOM,
+            surface.rect.left,
+            surface.rect.top,
+            static_cast<int>(RectWidth(surface.rect)),
+            static_cast<int>(RectHeight(surface.rect)),
+            flags);
+    }
+    if (IsWindowVisible(surface.window) == 0) {
+        SetWindowPos(
+            surface.window,
+            HWND_TOP,
+            0,
+            0,
+            static_cast<int>(RectWidth(surface.rect)),
+            static_cast<int>(RectHeight(surface.rect)),
+            flags);
+    }
+}
+
+void EditorSceneBgfxViewport::HostSurfaceStore::ShowPresentedWindows() noexcept {
     for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
-        if (surface == nullptr ||
-            !surface->presentedInCurrentPaint ||
-            surface->clipWindow == nullptr ||
-            surface->window == nullptr ||
-            IsWindow(surface->clipWindow) == 0 ||
-            IsWindow(surface->window) == 0) {
+        if (surface == nullptr || !surface->presentedInCurrentPaint) {
             continue;
         }
-
-        UINT flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOREDRAW | SWP_SHOWWINDOW;
-        if (!EditorSceneBgfxViewport::ShouldPreserveHostSurfaceBits(surface->key)) {
-            flags |= SWP_NOCOPYBITS;
-        }
-        if (IsWindowVisible(surface->clipWindow) == 0) {
-            showedWindow = true;
-            SetWindowPos(
-                surface->clipWindow,
-                HWND_BOTTOM,
-                surface->rect.left,
-                surface->rect.top,
-                static_cast<int>(RectWidth(surface->rect)),
-                static_cast<int>(RectHeight(surface->rect)),
-                flags);
-        }
-        if (IsWindowVisible(surface->window) == 0) {
-            showedWindow = true;
-            SetWindowPos(
-                surface->window,
-                HWND_TOP,
-                0,
-                0,
-                static_cast<int>(RectWidth(surface->rect)),
-                static_cast<int>(RectHeight(surface->rect)),
-                flags);
-        }
+        Show(*surface);
     }
-    return showedWindow;
 }
 
 } // namespace kb::editor

@@ -495,6 +495,16 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
     static_cast<void>(transform);
 }
 
+void SyncDeformedMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform,
+    const kb::scene::MeshRendererComponent& renderer, void* context) {
+    auto* sync = static_cast<SyncContext*>(context);
+    const kb::scene::DrawD3DeformedGeometryComponent* geometry =
+        sync->scene->Components().DeformedGeometries().TryGet(entity);
+    if (geometry != nullptr && geometry->enabled) {
+        SyncMesh(entity, transform, renderer, context);
+    }
+}
+
 void SyncLight(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::LightComponent& light, void* context) {
     auto* sync = static_cast<SyncContext*>(context);
     const kb::scene::TransformComponent renderTransform = sync->worldReader->Read(entity, transform);
@@ -1054,6 +1064,31 @@ void EcsRenderSceneSynchronizer::SyncMeshRendererUpdates(const kb::scene::Scene&
         transformUpdateEntities_.push_back(entity.Id());
     }
     SyncEntities(scene, renderScene, std::span<const std::uint64_t>{ transformUpdateEntities_ });
+}
+
+void EcsRenderSceneSynchronizer::SyncDeformedMeshPalettes(
+    const kb::scene::Scene& scene, RenderScene& renderScene) const {
+    seenMeshes_.clear();
+    transformCache_.clear();
+    transformResolving_.clear();
+
+    EcsRenderTransformResolver transforms{ scene, transformCache_, transformResolving_ };
+    SceneRenderWorldTransformReader worldReader{ transforms };
+    SyncContext context{
+        .scene = &scene,
+        .renderScene = &renderScene,
+        .transforms = &transforms,
+        .worldReader = &worldReader,
+        .meshes = &seenMeshes_,
+        .skinningPaletteAllocator = skinningPaletteAllocator_,
+        .skinningMatrixScratch = &skinningMatrixScratch_,
+        .skinningBoneScratch = &skinningBoneScratch_,
+        .skinningPoseScratch = &skinningPoseScratch_,
+        .basicLightingEnabled = kb::scene::SceneLightingAccess::BasicLightingEnabled(scene),
+    };
+    scene.Components().Visitors().ForEachMeshRenderer(&SyncDeformedMesh, &context);
+    transformPrecomputedReadCount_ = worldReader.PrecomputedReadCount();
+    transformResolvedFallbackCount_ = worldReader.ResolvedFallbackCount();
 }
 
 EcsRenderSceneSynchronizerStats EcsRenderSceneSynchronizer::Stats() const noexcept {

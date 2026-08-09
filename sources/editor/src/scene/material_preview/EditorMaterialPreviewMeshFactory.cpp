@@ -319,10 +319,12 @@ kb::render::RenderMeshAssetData EditorMaterialPreviewMeshFactory::BuildCube() {
 
 kb::render::RenderMeshAssetData EditorMaterialPreviewMeshFactory::BuildPlane() {
     kb::render::RenderMeshAssetData mesh;
-    AppendVertex(mesh, -1.0F, -1.0F, 0.0F, 0.0F, 0.0F, -1.0F, 0.0F, 1.0F);
-    AppendVertex(mesh, 1.0F, -1.0F, 0.0F, 0.0F, 0.0F, -1.0F, 1.0F, 1.0F);
-    AppendVertex(mesh, 1.0F, 1.0F, 0.0F, 0.0F, 0.0F, -1.0F, 1.0F, 0.0F);
-    AppendVertex(mesh, -1.0F, 1.0F, 0.0F, 0.0F, 0.0F, -1.0F, 0.0F, 0.0F);
+    // The counter-clockwise winding below faces +Z. Keep the authored normals aligned with that
+    // front face so one-sided users (including the skeletal preview floor) can orient it reliably.
+    AppendVertex(mesh, -1.0F, -1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 1.0F);
+    AppendVertex(mesh, 1.0F, -1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F);
+    AppendVertex(mesh, 1.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 1.0F, 0.0F);
+    AppendVertex(mesh, -1.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F);
     mesh.indices32 = { 0U, 1U, 2U, 0U, 2U, 3U };
     FinalizeMesh(mesh, 1.4143F);
     return mesh;

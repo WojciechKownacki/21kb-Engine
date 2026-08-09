@@ -12,6 +12,7 @@
 #include "app/EditorWindowPointerMessageDispatcher.hpp"
 #include "app/EditorWindowResizeHandler.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
+#include "app/scene_viewport/EditorViewportCameraNavigationInput.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
@@ -45,8 +46,17 @@ void FinishTerrainStroke(EditorWindowMessageContext& context) {
     }
 }
 
+void CancelAnimationPreviewCameraNavigation(EditorWindowMessageContext& context) noexcept {
+    if (!context.sceneContext.AnimationPreviewCamera().IsNavigating()) return;
+    context.sceneContext.AnimationPreviewCamera().EndNavigation();
+    RestoreEditorViewportNavigationCursor();
+    context.sceneViewport.RequestPresent();
+}
+
 [[nodiscard]] bool HandleTransformToolShortcut(EditorSceneContext& sceneContext, WPARAM key) noexcept {
-    if (ModifierDown(VK_CONTROL) || ModifierDown(VK_MENU) || sceneContext.HasActiveViewportCameraNavigation() || sceneContext.Gizmo().IsDragging()) {
+    if (ModifierDown(VK_CONTROL) || ModifierDown(VK_MENU) ||
+        sceneContext.HasActiveViewportCameraNavigation() ||
+        sceneContext.AnimationPreviewCamera().IsNavigating() || sceneContext.Gizmo().IsDragging()) {
         return false;
     }
     // A single letter W/E/R must not retarget the gizmo while the user is
@@ -492,6 +502,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         return EditorWindowResizeHandler::HandlePlacementChanged(messageWindow, context_.sceneViewport);
     case WM_CANCELMODE:
         FinishTerrainStroke(context_);
+        CancelAnimationPreviewCameraNavigation(context_);
         static_cast<void>(context_.sceneContext.CancelMaterialGraphInteractions());
         EditorSceneViewportCameraController{
             context_.mainWindow,
@@ -514,6 +525,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         context_.dockController.HandleCaptureChanged(newCapture);
         if (newCapture != messageWindow) {
             FinishTerrainStroke(context_);
+            CancelAnimationPreviewCameraNavigation(context_);
             static_cast<void>(context_.sceneContext.CancelMaterialGraphInteractions());
             EditorSceneViewportCameraController{
                 context_.mainWindow,

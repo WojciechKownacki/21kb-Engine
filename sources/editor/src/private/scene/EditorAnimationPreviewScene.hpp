@@ -48,7 +48,9 @@ public:
     [[nodiscard]] kb::scene::SceneEntity FloorEntity() const noexcept { return floorEntity_; }
     [[nodiscard]] kb::scene::SceneEntity EnvironmentEntity() const noexcept { return environmentEntity_; }
     void Focus(float durationSeconds = 0.0F) noexcept;
-    [[nodiscard]] bool TickCamera(float deltaSeconds) noexcept;
+    [[nodiscard]] bool TickCamera(
+        float deltaSeconds,
+        const EditorViewportCameraFlightInput& flightInput = {}) noexcept;
     [[nodiscard]] bool TickPlayback(AnimationPreviewContext& context, float deltaSeconds) noexcept;
     [[nodiscard]] AnimationPreviewOverlaySnapshot BuildOverlays(const AnimationPreviewContext& context) const;
     [[nodiscard]] std::uint64_t Revision() const noexcept { return revision_; }

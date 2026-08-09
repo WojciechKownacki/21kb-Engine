@@ -594,6 +594,21 @@ void RunSkeletalMeshEditorDetailsStateTest() {
         "Skeletal Mesh editor Morph Targets panel should use the canonical mesh morph data");
     kb::editor::tests::Require(details.Build(10U, {}).sections[0].fields[5].value == "2",
         "Skeletal Mesh Details should rebuild cached bone influence statistics when the document changes");
+
+    kb::assets::AssetMetadata skeletonMetadata{};
+    skeletonMetadata.name = "Hero Skeleton";
+    skeletonMetadata.virtualPath = "/Game/Hero.kbskeleton";
+    details.SetSkeletonDocument(skeleton, skeletonMetadata, &metadata);
+    const kb::editor::SkeletalMeshEditorDetailsModel skeletonAsset = details.Build(0U, {});
+    kb::editor::tests::Require(
+        skeletonAsset.title == "Skeleton" && skeletonAsset.sections.size() == 3U &&
+            skeletonAsset.sections[0].fields[0].value == "Hero Skeleton" &&
+            skeletonAsset.sections[0].fields[2].value == "2" &&
+            skeletonAsset.sections[0].fields[5].value == "Hero.kbskeletalmesh" &&
+            details.MorphTargets().empty(),
+        "Skeleton document should expose rig data and identify mesh geometry as preview-only");
+    kb::editor::tests::Require(details.Build(10U, {}).sections[0].fields.size() == 5U,
+        "Skeleton document should not present preview-mesh skin weights as owned Skeleton data");
 }
 
 void RunSkeletalMeshEditorDocumentStateTest() {
