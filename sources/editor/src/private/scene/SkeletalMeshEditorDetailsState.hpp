@@ -43,6 +43,27 @@ public:
         cachedBoneModels_.clear();
         RebuildBoneInfluenceStats();
         hasDocument_ = true;
+        skeletonDocument_ = false;
+    }
+
+    void SetSkeletonDocument(
+        const kb::scene::SkeletonAsset& skeleton,
+        const kb::assets::AssetMetadata& skeletonMetadata,
+        const kb::assets::AssetMetadata* previewMeshMetadata) {
+        mesh_ = {};
+        skeleton_ = skeleton;
+        meshMetadata_ = {};
+        skeletonMetadata_ = skeletonMetadata;
+        previewMeshName_ = previewMeshMetadata == nullptr
+            ? std::string{ "None" }
+            : (previewMeshMetadata->virtualPath.filename().empty()
+                ? previewMeshMetadata->name
+                : previewMeshMetadata->virtualPath.filename().string());
+        cachedAssetModel_.reset();
+        cachedBoneModels_.clear();
+        boneInfluenceStats_.clear();
+        hasDocument_ = true;
+        skeletonDocument_ = true;
     }
 
     [[nodiscard]] SkeletalMeshEditorDetailsModel Build(
@@ -59,7 +80,7 @@ public:
     }
 
     [[nodiscard]] const std::vector<kb::scene::SkeletalMeshMorphTarget>& MorphTargets() const noexcept {
-        return mesh_.morphTargets;
+        return skeletonDocument_ ? emptyMorphTargets_ : mesh_.morphTargets;
     }
 
 private:
@@ -162,6 +183,30 @@ private:
 
     [[nodiscard]] SkeletalMeshEditorDetailsModel BuildAsset() const {
         if (cachedAssetModel_.has_value()) return *cachedAssetModel_;
+        if (skeletonDocument_) {
+            const kb::scene::SkeletonAssetValidationResult validation =
+                kb::scene::ValidateSkeletonAsset(skeleton_);
+            SkeletalMeshEditorDetailsModel model{ .title = "Skeleton" };
+            model.sections.push_back({ "Asset", {
+                { "Name", skeletonMetadata_.name },
+                { "Path", skeletonMetadata_.virtualPath.generic_string() },
+                { "Bones", Number(skeleton_.bones.size()) },
+                { "Sockets", Number(skeleton_.sockets.size()) },
+                { "Compatibility", Number(kb::scene::SkeletonCompatibilitySignature(skeleton_)) },
+                { "Preview Mesh", previewMeshName_ },
+            } });
+            model.sections.push_back({ "Import Settings", {
+                { "Category", skeletonMetadata_.importCategory },
+                { "Source", skeletonMetadata_.physicalPath.generic_string() },
+                { "Content Hash", Number(skeletonMetadata_.contentHash) },
+                { "Runtime Loadable", skeletonMetadata_.runtimeLoadable ? "Yes" : "No" },
+            } });
+            model.sections.push_back({ "Validation", {
+                { "Skeleton", validation.valid ? "Valid" : validation.error },
+            } });
+            cachedAssetModel_ = model;
+            return model;
+        }
         SkeletalMeshEditorDetailsModel model{ .title = "Skeletal Mesh" };
         model.sections.push_back({ "Asset", {
             { "Name", meshMetadata_.name },
@@ -229,11 +274,16 @@ private:
                 { "Reference Position", Vector(bone.referencePose.position) },
                 { "Reference Rotation", Rotation(bone.referencePose.rotation) },
                 { "Reference Scale", Vector(bone.referencePose.scale) },
-                { "Influenced Vertices", Number(stats.influencedVertices) },
-                { "Average Weight", Number(stats.influencedVertices == 0U ? 0.0F : static_cast<float>(stats.totalWeight / stats.influencedVertices)) },
-                { "Peak Weight", Number(stats.peakWeight) },
             } }},
         };
+        if (!skeletonDocument_) {
+            std::vector<SkeletalMeshEditorDetailsField>& fields = model.sections.front().fields;
+            fields.push_back({ "Influenced Vertices", Number(stats.influencedVertices) });
+            fields.push_back({ "Average Weight", Number(stats.influencedVertices == 0U
+                ? 0.0F
+                : static_cast<float>(stats.totalWeight / stats.influencedVertices)) });
+            fields.push_back({ "Peak Weight", Number(stats.peakWeight) });
+        }
         cachedBoneModels_.emplace(bone.id, model);
         return model;
     }
@@ -255,10 +305,14 @@ private:
     kb::scene::SkeletalMeshAsset mesh_{};
     kb::scene::SkeletonAsset skeleton_{};
     kb::assets::AssetMetadata meshMetadata_{};
+    kb::assets::AssetMetadata skeletonMetadata_{};
+    std::string previewMeshName_;
+    std::vector<kb::scene::SkeletalMeshMorphTarget> emptyMorphTargets_;
     mutable std::optional<SkeletalMeshEditorDetailsModel> cachedAssetModel_{};
     mutable std::unordered_map<kb::scene::SkeletonBoneId, SkeletalMeshEditorDetailsModel> cachedBoneModels_{};
     std::unordered_map<kb::scene::SkeletonBoneId, BoneInfluenceStats> boneInfluenceStats_{};
     bool hasDocument_ = false;
+    bool skeletonDocument_ = false;
 };
 
 } // namespace kb::editor

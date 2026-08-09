@@ -742,19 +742,25 @@ void ProbeSkeletalMeshAsset(
     const std::optional<kb::render::SkeletalMeshRenderResourceData> builtMesh =
         kb::render::SkeletalMeshRenderResourceBuilder::BuildValidated(*mesh);
 
-    const kb::render::RenderSceneSubmitDesc desc = SubmitDesc();
+    kb::render::RenderSceneSubmitDesc desc = SubmitDesc();
     Require(renderer.BeginFrame() && renderer.SubmitScene(scene, desc),
         "Skeletal Mesh probe could not submit its warm-up frame");
     renderer.EndFrame();
-    Require(renderer.BeginFrame() && renderer.SubmitScene(scene, desc),
-        "Skeletal Mesh probe could not submit its measured frame");
-    const kb::render::SceneRenderSubmitStats stats = renderer.LastSceneSubmitStats();
+    desc.synchronizeScene = false;
+    kb::render::SceneRenderSubmitStats stats{};
+    for (std::uint32_t frame = 0U; frame < 4U; ++frame) {
+        Require(renderer.BeginFrame() && renderer.SubmitScene(scene, desc),
+            "Skeletal Mesh probe could not submit an unchanged camera-only frame");
+        stats = renderer.LastSceneSubmitStats();
+        Require(stats.submittedDrawCallCount != 0U,
+            "Skeletal Mesh probe lost its frame-local skinning palette after the warm-up frame");
+        renderer.EndFrame();
+    }
     const kb::render::Renderer::RuntimeSceneResourceStats resourceStats =
         renderer.RuntimeResourceStats();
     const kb::assets::AssetMetadata* finalMeshMetadata = assets.Registry().Find(meshId);
     const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> finalMeshAsset =
         assets.AcquireLoaded<kb::scene::SkeletalMeshAsset>(meshId);
-    renderer.EndFrame();
     std::cout << "skeletal-asset-probe bones=" << skeleton->bones.size()
               << " vertices=" << mesh->lods.front().vertices.size()
               << " indices=" << mesh->lods.front().indices.size()

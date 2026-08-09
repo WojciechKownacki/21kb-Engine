@@ -127,18 +127,77 @@ void AppendBoundsLines(
 void AppendNormalLines(
     AnimationPreviewOverlaySnapshot& output,
     const kb::scene::SkeletalMeshAsset& mesh,
-    const kb::scene::WorldTransform& owner) {
+    const kb::scene::WorldTransform& owner,
+    const kb::scene::AnimatorInstanceSkeletonView* skeletonView) {
     if (mesh.lods.empty() || mesh.lods.front().vertices.empty()) return;
-    const std::vector<kb::scene::SkeletalMeshVertex>& vertices = mesh.lods.front().vertices;
+    const kb::scene::SkeletalMeshLod& lod = mesh.lods.front();
     constexpr std::size_t kMaximumNormalLines = 128U;
-    const std::size_t stride = std::max<std::size_t>(1U, (vertices.size() + kMaximumNormalLines - 1U) / kMaximumNormalLines);
-    for (std::size_t index = 0U; index < vertices.size(); index += stride) {
-        const kb::scene::SkeletalMeshVertex& vertex = vertices[index];
-        const kb::scene::Vec3 start = WorldPoint(owner, vertex.position);
-        const kb::scene::Vec3 direction = WorldDirection(owner, vertex.normal);
+    const std::size_t candidateCount = lod.indices.empty() ? lod.vertices.size() : lod.indices.size();
+    const std::size_t stride = std::max<std::size_t>(
+        1U, (candidateCount + kMaximumNormalLines - 1U) / kMaximumNormalLines);
+    std::size_t emitted = 0U;
+
+    const auto appendVertex = [&](const kb::scene::SkeletalMeshVertex& vertex,
+                                  const kb::scene::SkeletalMeshSection* section) {
+        kb::scene::Vec3 position = vertex.position;
+        kb::scene::Vec3 normal = vertex.normal;
+        if (section != nullptr && skeletonView != nullptr &&
+            skeletonView->boneIds.size() == skeletonView->currentSkinMatrices.size()) {
+            kb::scene::Vec3 skinnedPosition{};
+            kb::scene::Vec3 skinnedNormal{};
+            float accumulatedWeight = 0.0F;
+            for (std::size_t influence = 0U; influence < vertex.jointWeights.size(); ++influence) {
+                const float weight = vertex.jointWeights[influence];
+                const std::uint16_t joint = vertex.jointIndices[influence];
+                if (weight <= 0.0F || joint >= section->boneMap.size()) continue;
+                const kb::scene::SkeletonBoneId boneId = section->boneMap[joint];
+                const auto poseBone = std::find(skeletonView->boneIds.begin(), skeletonView->boneIds.end(), boneId);
+                if (poseBone == skeletonView->boneIds.end()) continue;
+                const std::size_t poseIndex = static_cast<std::size_t>(poseBone - skeletonView->boneIds.begin());
+                const kb::math::Mat4& skin = skeletonView->currentSkinMatrices[poseIndex];
+                const kb::math::Vec4 transformedPosition = skin * kb::math::Vec4{
+                    vertex.position.x, vertex.position.y, vertex.position.z, 1.0F };
+                const kb::math::Vec4 transformedNormal = skin * kb::math::Vec4{
+                    vertex.normal.x, vertex.normal.y, vertex.normal.z, 0.0F };
+                skinnedPosition = skinnedPosition + kb::scene::Vec3{
+                    transformedPosition.x, transformedPosition.y, transformedPosition.z } * weight;
+                skinnedNormal = skinnedNormal + kb::scene::Vec3{
+                    transformedNormal.x, transformedNormal.y, transformedNormal.z } * weight;
+                accumulatedWeight += weight;
+            }
+            if (accumulatedWeight > 0.000001F) {
+                position = skinnedPosition * (1.0F / accumulatedWeight);
+                normal = kb::math::Normalize(skinnedNormal);
+            }
+        }
+        const kb::scene::Vec3 start = WorldPoint(owner, position);
+        const kb::scene::Vec3 direction = WorldDirection(owner, normal);
         output.lines.push_back(AnimationPreviewOverlayLine{
             .from = start, .to = start + direction * 0.075F, .color = { 0.28F, 0.88F, 1.0F },
         });
+        ++emitted;
+    };
+
+    if (lod.indices.empty() || lod.sections.empty()) {
+        for (std::size_t vertexIndex = 0U;
+             vertexIndex < lod.vertices.size() && emitted < kMaximumNormalLines;
+             vertexIndex += stride) {
+            appendVertex(lod.vertices[vertexIndex], nullptr);
+        }
+        return;
+    }
+
+    std::size_t candidateIndex = 0U;
+    for (const kb::scene::SkeletalMeshSection& section : lod.sections) {
+        const std::size_t sectionEnd = std::min<std::size_t>(
+            lod.indices.size(), static_cast<std::size_t>(section.firstIndex) + section.indexCount);
+        for (std::size_t indexOffset = section.firstIndex;
+             indexOffset < sectionEnd && emitted < kMaximumNormalLines;
+             ++indexOffset, ++candidateIndex) {
+            if ((candidateIndex % stride) != 0U) continue;
+            const std::uint32_t vertexIndex = lod.indices[indexOffset];
+            if (vertexIndex < lod.vertices.size()) appendVertex(lod.vertices[vertexIndex], &section);
+        }
     }
 }
 
@@ -159,8 +218,12 @@ void EditorAnimationPreviewScene::Focus(float durationSeconds) noexcept {
     SynchronizeCamera();
 }
 
-bool EditorAnimationPreviewScene::TickCamera(float deltaSeconds) noexcept {
-    const bool changed = camera_.ApplyQueuedPointer() || camera_.TickFocus(deltaSeconds);
+bool EditorAnimationPreviewScene::TickCamera(
+    float deltaSeconds,
+    const EditorViewportCameraFlightInput& flightInput) noexcept {
+    bool changed = camera_.ApplyQueuedPointer();
+    changed = camera_.ApplyKeyboardFlight(flightInput, deltaSeconds) || changed;
+    changed = camera_.TickFocus(deltaSeconds) || changed;
     if (changed) {
         SynchronizeCamera();
     }
@@ -194,11 +257,13 @@ AnimationPreviewOverlaySnapshot EditorAnimationPreviewScene::BuildOverlays(
         : kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset>{};
     if (mesh.IsLoaded()) {
         output.lodCount = static_cast<std::uint32_t>(mesh->lods.size());
-        if (settings.NormalsVisible()) AppendNormalLines(output, *mesh, owner);
+        if (settings.NormalsVisible()) {
+            AppendNormalLines(output, *mesh, owner, skeletonView.has_value() ? &*skeletonView : nullptr);
+        }
     }
     if (settings.LodVisible()) {
         output.labels.push_back(AnimationPreviewOverlayLabel{
-            .position = WorldPoint(owner, focusCenter_),
+            .position = focusCenter_,
             .text = "LODs: " + std::to_string(output.lodCount),
         });
     }
@@ -213,7 +278,9 @@ AnimationPreviewOverlaySnapshot EditorAnimationPreviewScene::BuildOverlays(
                 if (bone == skeleton->bones.end()) continue;
                 const kb::scene::Vec3 position = WorldPoint(owner, positions[index]);
                 if (settings.BoneNamesVisible()) {
-                    output.labels.push_back(AnimationPreviewOverlayLabel{ .position = position, .text = bone->name });
+                    output.labels.push_back(AnimationPreviewOverlayLabel{
+                        .position = position, .text = bone->name,
+                    });
                 }
                 if (settings.BonesVisible() && bone->parentIndex >= 0 &&
                     static_cast<std::size_t>(bone->parentIndex) < skeleton->bones.size()) {
@@ -236,7 +303,9 @@ AnimationPreviewOverlaySnapshot EditorAnimationPreviewScene::BuildOverlays(
                 output.lines.push_back(AnimationPreviewOverlayLine{
                     .from = origin, .to = root, .color = { 0.94F, 0.16F, 0.78F },
                 });
-                output.labels.push_back(AnimationPreviewOverlayLabel{ .position = root, .text = "Root motion" });
+                output.labels.push_back(AnimationPreviewOverlayLabel{
+                    .position = root, .text = "Root motion",
+                });
             }
         }
         if (settings.SocketsVisible() && skeleton.IsLoaded()) {
@@ -250,7 +319,9 @@ AnimationPreviewOverlaySnapshot EditorAnimationPreviewScene::BuildOverlays(
                 output.lines.push_back(AnimationPreviewOverlayLine{ .from = start, .to = start + x, .color = { 1.0F, 0.2F, 0.2F } });
                 output.lines.push_back(AnimationPreviewOverlayLine{ .from = start, .to = start + y, .color = { 0.2F, 1.0F, 0.2F } });
                 output.lines.push_back(AnimationPreviewOverlayLine{ .from = start, .to = start + z, .color = { 0.2F, 0.4F, 1.0F } });
-                output.labels.push_back(AnimationPreviewOverlayLabel{ .position = start, .text = socket.name });
+                output.labels.push_back(AnimationPreviewOverlayLabel{
+                    .position = start, .text = socket.name,
+                });
             }
         }
     }
@@ -396,7 +467,7 @@ void EditorAnimationPreviewScene::Rebuild(
     kb::scene::SceneObjectDesc floorDesc{ .name = "Animation Preview Floor" };
     floorDesc.transform.localPosition = kb::scene::Vec3{ 0.0F, kPreviewFloorHeight, 0.0F };
     floorDesc.transform.localRotation = kb::math::FromToRotation(
-        kb::scene::Vec3{ 0.0F, 0.0F, -1.0F }, kb::scene::Vec3{ 0.0F, 1.0F, 0.0F });
+        kb::scene::Vec3{ 0.0F, 0.0F, 1.0F }, kb::scene::Vec3{ 0.0F, 1.0F, 0.0F });
     floorDesc.transform.localScale = kb::scene::Vec3{ kPreviewFloorExtent, kPreviewFloorExtent, 1.0F };
     floorEntity_ = scene_->Entities().CreateEntity(floorDesc);
     static_cast<void>(scene_->Components().MeshRenderers().Set(floorEntity_, kb::scene::MeshRendererComponent{
@@ -449,8 +520,9 @@ void EditorAnimationPreviewScene::Rebuild(
         // Asset editors open on an orthographic-looking front view. The shared scene-camera default
         // is intentionally a three-quarter view, but it made imported rigs appear tilted even after
         // their legacy up-axis was corrected.
-        // Imported characters face -Z after the legacy up-axis correction. Place the asset-editor
-        // camera on the opposite side so the reference pose opens facing the programmer.
+        // The canonical imported character convention presents the authored front when viewed
+        // from +Z toward -Z. In this camera state yaw 180 places the camera on +Z; yaw 0 shows
+        // the character's back and exposes the open spaces between Y Bot's rear armour panels.
         camera_.SetViewAngles(180.0F, 0.0F);
     }
     Focus(0.0F);

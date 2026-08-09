@@ -127,6 +127,52 @@ void RunSkeletalGltfImportAcceptsSkinnedMeshAndSkinNodeTest() {
     std::filesystem::remove_all(root, error);
 }
 
+void RunLegacyFbxInwardWindingMigrationTest(const std::filesystem::path& root) {
+    kb::scene::SkeletalMeshAsset mesh{};
+    mesh.skeletonAssetId = 1U;
+    mesh.skeletonCompatibilitySignature = 1U;
+    mesh.conservativeBounds = {.center = {0.0F, -2.0F, 0.0F}, .extents = {1.0F, 1.0F, 1.0F}};
+    mesh.fixedBounds = mesh.conservativeBounds;
+
+    kb::scene::SkeletalMeshLod lod{};
+    lod.requiredBones = {1U};
+    lod.vertices.resize(8U);
+    const std::array<kb::math::Vec3, 8U> positions{
+        kb::math::Vec3{-1.0F, -3.0F, -1.0F}, kb::math::Vec3{1.0F, -3.0F, -1.0F},
+        kb::math::Vec3{1.0F, -1.0F, -1.0F}, kb::math::Vec3{-1.0F, -1.0F, -1.0F},
+        kb::math::Vec3{-1.0F, -3.0F, 1.0F}, kb::math::Vec3{1.0F, -3.0F, 1.0F},
+        kb::math::Vec3{1.0F, -1.0F, 1.0F}, kb::math::Vec3{-1.0F, -1.0F, 1.0F},
+    };
+    for (std::size_t index = 0U; index < positions.size(); ++index) {
+        lod.vertices[index].position = positions[index];
+        lod.vertices[index].normal = {0.0F, 0.0F, 1.0F};
+    }
+    // These are the reverse of the engine's outward cube convention.
+    lod.indices = {
+        0U, 2U, 3U, 0U, 1U, 2U, 4U, 6U, 5U, 4U, 7U, 6U,
+        0U, 7U, 4U, 0U, 3U, 7U, 1U, 6U, 2U, 1U, 5U, 6U,
+        0U, 5U, 1U, 0U, 4U, 5U, 3U, 6U, 7U, 3U, 2U, 6U,
+    };
+    lod.sections = {{.firstIndex = 0U, .indexCount = static_cast<std::uint32_t>(lod.indices.size()), .boneMap = {1U}}};
+    mesh.lods = {lod};
+    mesh.morphTargets = {{
+        .name = "LegacyNormal",
+        .lodIndex = 0U,
+        .deltas = {{.vertexIndex = 0U, .normalDelta = {0.0F, 1.0F, 0.0F}}},
+    }};
+
+    const std::filesystem::path path = root / "RoundTrip/LegacyInward.kbskeletalmesh";
+    kb::tests::Require(kb::scene::SkeletalMeshAssetIO::Save(path, mesh),
+        "Legacy inward-winding fixture could not be saved");
+    const auto loaded = kb::scene::SkeletalMeshAssetIO::Load(path);
+    kb::tests::Require(loaded.has_value() &&
+            loaded->lods[0U].indices[1U] == 3U && loaded->lods[0U].indices[2U] == 2U &&
+            loaded->lods[0U].vertices[0U].normal.z == -1.0F &&
+            loaded->lods[0U].vertices[0U].tangent.w == -1.0F &&
+            loaded->morphTargets[0U].deltas[0U].normalDelta.y == -1.0F,
+        "Legacy FBX load did not canonicalize inward triangle winding, normals, and tangent handedness");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -135,6 +181,7 @@ void RunSkeletalMeshAssetTests() {
     RunSkeletalGltfImportAcceptsSkinnedMeshAndSkinNodeTest();
     const auto root=std::filesystem::temp_directory_path()/"21kb-skeletal-mesh-asset-tests";
     std::filesystem::remove_all(root); const auto path=root/"Assets/Characters/Hero.kbskeletalmesh";
+    RunLegacyFbxInwardWindingMigrationTest(root);
     kb::scene::SkeletonAsset skeleton{};
     skeleton.bones = {
         { .id = 1U, .parentIndex = -1, .name = "Root", .referencePose = {}, .inverseBind = {} },
