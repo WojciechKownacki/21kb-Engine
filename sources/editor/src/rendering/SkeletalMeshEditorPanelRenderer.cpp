@@ -7,12 +7,15 @@
 #include "rendering/SkeletalMeshEditorSceneLabelBuilder.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
+#include "engine/assets/AssetMetadata.hpp"
 #include "engine/math/EngineMath.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <string>
 #include <vector>
 
 #include <bx/math.h>
@@ -39,6 +42,119 @@ void PaintPanel(HDC dc, const RECT& rect, const char* title, const char* subtitl
 constexpr int kTreeHeaderHeight = 56;
 constexpr int kTreeRowHeight = 20;
 constexpr int kTreeAuxiliaryHeight = 76;
+
+[[nodiscard]] std::string AssetLabel(
+    const EditorSceneContext& sceneContext,
+    kb::assets::AssetId id,
+    const char* missing) {
+    if (!id.IsValid()) return missing;
+    const kb::assets::AssetMetadata* metadata =
+        sceneContext.Scene().Assets().Manager().Registry().Find(id);
+    if (metadata == nullptr) return missing;
+    const std::string filename = metadata->virtualPath.filename().string();
+    return filename.empty() ? metadata->name : filename;
+}
+
+void PaintLinkedDocuments(
+    HDC dc,
+    const SkeletalMeshEditorPanelLayout& layout,
+    const EditorSceneContext& sceneContext) {
+    const RECT& rect = layout.documentBar;
+    GdiDrawing::FillRectColor(dc, rect, RGB(24, 26, 30));
+    GdiDrawing::DrawSharpFrame(dc, rect, RGB(24, 26, 30), RGB(53, 57, 64));
+    SetBkMode(dc, TRANSPARENT);
+    const ScopedFont labelFont{ 11, FW_SEMIBOLD };
+    const ScopedGdiObject selectedLabelFont(dc, labelFont.handle);
+    SetTextColor(dc, RGB(139, 149, 161));
+    RECT familyLabel{ rect.left + 10, rect.top, std::min(rect.right, rect.left + 106), rect.bottom };
+    DrawTextA(dc, "RELATED ASSETS", -1, &familyLabel,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+
+    const std::array<RECT, 2U> buttons{ layout.meshDocument, layout.skeletonDocument };
+    const bool skeletonActive = sceneContext.IsSkeletalMeshEditorSkeletonDocument();
+    const bool meshAvailable = sceneContext.SkeletalMeshEditorAssetId().IsValid();
+    const std::array<bool, 2U> active{ !skeletonActive, skeletonActive };
+    const std::array<bool, 2U> enabled{ meshAvailable, true };
+    const std::array<std::string, 2U> labels{
+        "Skeletal Mesh  |  " + AssetLabel(
+            sceneContext, sceneContext.SkeletalMeshEditorAssetId(), "No compatible mesh"),
+        "Skeleton  |  " + AssetLabel(
+            sceneContext, sceneContext.SkeletalMeshEditorSkeletonAssetId(), "Unavailable"),
+    };
+    const ScopedFont buttonFont{ 11, FW_NORMAL };
+    const ScopedGdiObject selectedButtonFont(dc, buttonFont.handle);
+    for (std::size_t index = 0U; index < buttons.size(); ++index) {
+        const COLORREF fill = !enabled[index]
+            ? RGB(31, 34, 39)
+            : (active[index] ? RGB(35, 75, 112) : RGB(38, 41, 47));
+        const COLORREF border = active[index] ? RGB(77, 143, 204) : RGB(59, 64, 72);
+        GdiDrawing::DrawSharpFrame(dc, buttons[index], fill, border);
+        SetTextColor(dc, !enabled[index] ? RGB(92, 99, 109) : RGB(211, 217, 225));
+        RECT text{ buttons[index].left + 10, buttons[index].top,
+            buttons[index].right - 8, buttons[index].bottom };
+        DrawTextA(dc, labels[index].c_str(), -1, &text,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    }
+}
+
+struct CommandDescriptor {
+    SkeletalAssetCommand command = SkeletalAssetCommand::Focus;
+    const char* label = "";
+    int width = 72;
+    bool enabled = true;
+};
+
+[[nodiscard]] std::vector<CommandDescriptor> BuildCommands(const EditorSceneContext& sceneContext) {
+    const bool skeleton = sceneContext.IsSkeletalMeshEditorSkeletonDocument();
+    std::vector<CommandDescriptor> commands{
+        { SkeletalAssetCommand::Save, "Save", 62, sceneContext.HasDirtySkeletalMeshEditorAssetEdit() },
+        { SkeletalAssetCommand::Undo, "Undo", 62, sceneContext.CanUndoSkeletalMeshEditorAssetEdit() },
+        { SkeletalAssetCommand::Redo, "Redo", 62, sceneContext.CanRedoSkeletalMeshEditorAssetEdit() },
+    };
+    if (skeleton) {
+        commands.push_back({ SkeletalAssetCommand::PreviewMesh, "Preview Mesh...", 104, true });
+        commands.push_back({ SkeletalAssetCommand::AddSocket, "Add Socket", 86,
+            sceneContext.CanAddSkeletonEditorSocket() });
+        commands.push_back({ SkeletalAssetCommand::DuplicateSocket, "Duplicate", 78,
+            sceneContext.CanDuplicateSkeletonEditorSocket() });
+        commands.push_back({ SkeletalAssetCommand::DeleteSocket, "Delete", 66,
+            sceneContext.CanDeleteSkeletonEditorSocket() });
+    } else {
+        commands.push_back({ SkeletalAssetCommand::Reimport, "Reload", 70, true });
+        commands.push_back({ SkeletalAssetCommand::BoundsMode, "Bounds Mode", 92, true });
+    }
+    commands.push_back({ SkeletalAssetCommand::ReferencePose, "Reference Pose", 100, true });
+    commands.push_back({ SkeletalAssetCommand::Focus, "Focus", 64, true });
+    return commands;
+}
+
+[[nodiscard]] RECT CommandRect(const RECT& bar, const std::vector<CommandDescriptor>& commands, std::size_t index) {
+    LONG left = bar.left + 10;
+    for (std::size_t preceding = 0U; preceding < index; ++preceding) {
+        left += commands[preceding].width + 5;
+    }
+    return RECT{ left, bar.top + 5, left + commands[index].width, bar.bottom - 5 };
+}
+
+void PaintCommands(HDC dc, const SkeletalMeshEditorPanelLayout& layout, const EditorSceneContext& sceneContext) {
+    GdiDrawing::FillRectColor(dc, layout.commandBar, RGB(24, 26, 30));
+    GdiDrawing::DrawSharpFrame(dc, layout.commandBar, RGB(24, 26, 30), RGB(53, 57, 64));
+    const std::vector<CommandDescriptor> commands = BuildCommands(sceneContext);
+    const ScopedFont font{ 11, FW_NORMAL };
+    const ScopedGdiObject selectedFont(dc, font.handle);
+    SetBkMode(dc, TRANSPARENT);
+    for (std::size_t index = 0U; index < commands.size(); ++index) {
+        const RECT button = CommandRect(layout.commandBar, commands, index);
+        if (button.left >= layout.commandBar.right - 8) break;
+        const RECT clipped{ button.left, button.top, std::min(button.right, layout.commandBar.right - 8), button.bottom };
+        const COLORREF fill = commands[index].enabled ? RGB(38, 41, 47) : RGB(31, 34, 39);
+        GdiDrawing::DrawSharpFrame(dc, clipped, fill, RGB(59, 64, 72));
+        SetTextColor(dc, commands[index].enabled ? RGB(211, 217, 225) : RGB(92, 99, 109));
+        RECT text{ clipped.left + 7, clipped.top, clipped.right - 7, clipped.bottom };
+        DrawTextA(dc, commands[index].label, -1, &text,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    }
+}
 
 [[nodiscard]] kb::render::SceneRenderCamera BuildPreviewCamera(
     const EditorViewportCameraState& camera,
@@ -135,7 +251,9 @@ void PaintTree(HDC dc, const RECT& rect, const EditorSceneContext& sceneContext)
     DrawTextA(dc, morphPanelTitle, -1, &morphTitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     const std::vector<kb::scene::SkeletalMeshMorphTarget>& morphs = sceneContext.SkeletalMeshEditorMorphTargets();
     const std::string morphSummary = skeletonDocument
-        ? "Compatible mesh is preview-only."
+        ? (sceneContext.SkeletalMeshEditorAssetId().IsValid()
+            ? "Compatible mesh is preview-only."
+            : "None. Skeleton-only reference pose.")
         : (morphs.empty()
         ? "None"
         : morphs.front().name + " (LOD " + std::to_string(morphs.front().lodIndex) + ", " +
@@ -311,6 +429,8 @@ void SkeletalMeshEditorPanelRenderer::Paint(
         return;
     }
     const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
+    PaintLinkedDocuments(dc, layout, sceneContext);
+    PaintCommands(dc, layout, sceneContext);
     PaintAdvancedPreview(dc, layout.toolbox, sceneContext);
     PaintTree(dc, layout.skeletonTree, sceneContext);
     PaintDetails(dc, layout.assetDetails, sceneContext);
@@ -407,6 +527,36 @@ std::optional<kb::scene::SkeletonBoneId> SkeletalMeshEditorPanelRenderer::BoneAt
         overlays.lines,
         static_cast<float>(x),
         static_cast<float>(y));
+}
+
+std::optional<SkeletalAssetDocument> SkeletalMeshEditorPanelRenderer::LinkedDocumentAt(
+    const RECT& content, int x, int y) noexcept {
+    const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
+    const std::array<RECT, 2U> buttons{ layout.meshDocument, layout.skeletonDocument };
+    for (std::size_t index = 0U; index < buttons.size(); ++index) {
+        if (x >= buttons[index].left && x < buttons[index].right &&
+            y >= buttons[index].top && y < buttons[index].bottom) {
+            return index == 0U ? SkeletalAssetDocument::Mesh : SkeletalAssetDocument::Skeleton;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<SkeletalAssetCommand> SkeletalMeshEditorPanelRenderer::CommandAt(
+    const RECT& content, const EditorSceneContext& sceneContext, int x, int y) {
+    const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
+    if (x < layout.commandBar.left || x >= layout.commandBar.right ||
+        y < layout.commandBar.top || y >= layout.commandBar.bottom) return std::nullopt;
+    const std::vector<CommandDescriptor> commands = BuildCommands(sceneContext);
+    for (std::size_t index = 0U; index < commands.size(); ++index) {
+        const RECT button = CommandRect(layout.commandBar, commands, index);
+        if (x >= button.left && x < button.right && y >= button.top && y < button.bottom) {
+            return commands[index].enabled
+                ? std::optional<SkeletalAssetCommand>{ commands[index].command }
+                : std::nullopt;
+        }
+    }
+    return std::nullopt;
 }
 
 } // namespace kb::editor

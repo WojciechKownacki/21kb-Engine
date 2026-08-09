@@ -31,6 +31,7 @@
 #include "scene/SkeletalMeshEditorTreeState.hpp"
 #include "scene/SkeletalMeshEditorDetailsState.hpp"
 #include "scene/SkeletalMeshEditorDocumentState.hpp"
+#include "scene/SkeletonEditorDocumentState.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
 #include "scene/material/MaterialEditorState.hpp"
 #include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
@@ -479,8 +480,10 @@ public:
     [[nodiscard]] bool HasPendingSkeletalMeshEditorOpen() const noexcept;
     [[nodiscard]] bool OpenSkeletalMeshEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] kb::assets::AssetId SkeletalMeshEditorAssetId() const noexcept;
+    [[nodiscard]] kb::assets::AssetId SkeletalMeshEditorSkeletonAssetId() const noexcept;
     [[nodiscard]] kb::assets::AssetId RequestedSkeletalMeshEditorAssetId() const noexcept;
     [[nodiscard]] bool IsSkeletalMeshEditorSkeletonDocument() const noexcept;
+    [[nodiscard]] bool SwitchSkeletalMeshEditorDocument(bool skeletonDocument);
     [[nodiscard]] bool HasSkeletalMeshEditorAsset() const noexcept;
     [[nodiscard]] const kb::scene::Scene* SkeletalMeshEditorPreviewScene() const noexcept;
     [[nodiscard]] std::uint64_t SkeletalMeshEditorPreviewRevision() const noexcept;
@@ -504,7 +507,17 @@ public:
     [[nodiscard]] bool HasDirtySkeletalMeshEditorAssetEdit() const noexcept;
     [[nodiscard]] bool CanUndoSkeletalMeshEditorAssetEdit() const noexcept;
     [[nodiscard]] bool CanRedoSkeletalMeshEditorAssetEdit() const noexcept;
+    [[nodiscard]] bool CanAddSkeletonEditorSocket() const noexcept;
+    [[nodiscard]] bool CanDuplicateSkeletonEditorSocket() const noexcept;
+    [[nodiscard]] bool CanDeleteSkeletonEditorSocket() const noexcept;
     [[nodiscard]] bool SetSkeletalMeshEditorBoundsMode(kb::scene::SkeletalMeshBoundsMode mode);
+    [[nodiscard]] bool ToggleSkeletalMeshEditorBoundsMode();
+    [[nodiscard]] bool FocusSkeletalMeshEditorPreview() noexcept;
+    [[nodiscard]] bool ShowSkeletalMeshEditorReferencePose();
+    [[nodiscard]] bool SetSkeletonEditorPreviewMesh(kb::assets::AssetId meshId);
+    [[nodiscard]] bool AddSkeletonEditorSocket();
+    [[nodiscard]] bool DuplicateSkeletonEditorSocket();
+    [[nodiscard]] bool DeleteSkeletonEditorSocket();
     [[nodiscard]] bool UndoSkeletalMeshEditorAssetEdit();
     [[nodiscard]] bool RedoSkeletalMeshEditorAssetEdit();
     [[nodiscard]] bool SaveSkeletalMeshEditorAsset();
@@ -989,6 +1002,8 @@ private:
         kb::assets::AssetId skeletonId,
         std::uint64_t diagnosticEventId,
         kb::assets::AssetId primarySkeletonId = {});
+    [[nodiscard]] bool PublishSkeletonEditorWorkingCopy();
+    void RefreshSkeletalEditorDetails();
     [[nodiscard]] bool PublishAnimationClipEditorWorkingCopy();
     [[nodiscard]] bool RefreshAnimatorEditorWorkingPreview();
     [[nodiscard]] EditorSceneCommandController SceneCommands() noexcept;
@@ -1087,6 +1102,7 @@ private:
     SkeletalMeshEditorTreeState skeletalMeshEditorTree_;
     SkeletalMeshEditorDetailsState skeletalMeshEditorDetails_;
     SkeletalMeshEditorDocumentState skeletalMeshEditorDocument_;
+    SkeletonEditorDocumentState skeletonEditorDocument_;
     InspectorPanelState inspector_;
     MaterialEditorState materialEditor_;
     kb::assets::AssetId materialRuntimePreviewAssetId_{};
