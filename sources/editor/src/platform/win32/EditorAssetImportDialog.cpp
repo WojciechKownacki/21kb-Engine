@@ -75,9 +75,11 @@ void DrawCheckMark(HDC dc, const RECT& rect) {
 
 class MeshImportOptionsWindow {
 public:
-    MeshImportOptionsWindow(std::size_t fileCount, bool materialSlotsAvailable)
+    MeshImportOptionsWindow(std::size_t fileCount, bool materialSlotsAvailable, bool skeletalImportAvailable)
         : fileCount_(fileCount)
-        , materialSlotsAvailable_(materialSlotsAvailable) {}
+        , materialSlotsAvailable_(materialSlotsAvailable)
+        , skeletalImportAvailable_(skeletalImportAvailable)
+        , importSkeletalMesh_(skeletalImportAvailable) {}
 
     [[nodiscard]] std::optional<kb::assets::AssetImportOptions> Show(HWND owner) {
         owner_ = owner;
@@ -96,7 +98,17 @@ public:
         EnableOwner(true);
         if (owner_ != nullptr && IsWindow(owner_) != 0) SetForegroundWindow(owner_);
         // An app quit or a window destroyed under the pump must not start an import.
-        return exit == EditorModalLoopExit::Completed && accepted_ ? std::optional<kb::assets::AssetImportOptions>{ kb::assets::AssetImportOptions{ .mesh = { .importMaterialSlots = importMaterialSlots_ } } } : std::nullopt;
+        return exit == EditorModalLoopExit::Completed && accepted_
+            ? std::optional<kb::assets::AssetImportOptions>{ kb::assets::AssetImportOptions{
+                .mesh = {
+                    .importMaterialSlots = importMaterialSlots_,
+                    .importTextures = importTextures_,
+                    .importMaterials = importMaterials_,
+                    .combineMeshes = combineMeshes_,
+                    .importSkeletalMesh = importSkeletalMesh_,
+                },
+            } }
+            : std::nullopt;
     }
 
 private:
@@ -117,6 +129,10 @@ private:
     [[nodiscard]] RECT Client() const noexcept { RECT rect{}; GetClientRect(window_, &rect); return rect; }
     [[nodiscard]] RECT Viewport() const noexcept { const RECT client = Client(); return Rect(kPadding, kHeaderHeight + 12, client.right - kPadding, client.bottom - kFooterHeight - 10); }
     [[nodiscard]] RECT MaterialSlotsRow() const noexcept { const RECT viewport = Viewport(); return Rect(viewport.left, viewport.top + 68 - scrollOffset_, viewport.right - 12, viewport.top + 68 - scrollOffset_ + kRowHeight); }
+    [[nodiscard]] RECT TexturesRow() const noexcept { const RECT viewport = Viewport(); return Rect(viewport.left, viewport.top + 162 - scrollOffset_, viewport.right - 12, viewport.top + 162 - scrollOffset_ + kRowHeight); }
+    [[nodiscard]] RECT MaterialsRow() const noexcept { const RECT viewport = Viewport(); return Rect(viewport.left, viewport.top + 212 - scrollOffset_, viewport.right - 12, viewport.top + 212 - scrollOffset_ + kRowHeight); }
+    [[nodiscard]] RECT CombineMeshesRow() const noexcept { const RECT viewport = Viewport(); return Rect(viewport.left, viewport.top + 262 - scrollOffset_, viewport.right - 12, viewport.top + 262 - scrollOffset_ + kRowHeight); }
+    [[nodiscard]] RECT SkeletonRow() const noexcept { const RECT viewport = Viewport(); return Rect(viewport.left, viewport.top + 312 - scrollOffset_, viewport.right - 12, viewport.top + 312 - scrollOffset_ + kRowHeight); }
     [[nodiscard]] int MaxScroll() const noexcept { return std::max(0, 430 - Height(Viewport())); }
     void Scroll(int delta) noexcept { scrollOffset_ = std::clamp(scrollOffset_ + delta, 0, MaxScroll()); InvalidateRect(window_, nullptr, FALSE); }
 
@@ -127,7 +143,8 @@ private:
         GdiDrawing::FillRectColor(dc, Rect(1, 1, client.right - 1, kHeaderHeight), Rgb(23, 28, 37));
         GdiDrawing::FillRectColor(dc, Rect(1, kHeaderHeight - 1, client.right - 1, kHeaderHeight), Rgb(55, 86, 124));
         { ScopedFont font(15, FW_SEMIBOLD); Text(dc, Rect(kPadding, 12, client.right - 64, 36), "Import Mesh", Rgb(236, 241, 248)); }
-        Text(dc, Rect(kPadding, 36, client.right - 64, 54), ("STATIC MESH  /  " + std::to_string(fileCount_) + " FILE(S)").c_str(), Rgb(117, 159, 208));
+        Text(dc, Rect(kPadding, 36, client.right - 64, 54),
+            ((importSkeletalMesh_ ? "SKELETAL MESH  /  " : "STATIC MESH  /  ") + std::to_string(fileCount_) + " FILE(S)").c_str(), Rgb(117, 159, 208));
         Text(dc, Rect(client.right - 43, 13, client.right - 13, 43), "×", Rgb(190, 199, 213), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
         const RECT viewport = Viewport();
@@ -135,20 +152,36 @@ private:
         IntersectClipRect(dc, viewport.left, viewport.top, viewport.right, viewport.bottom);
         const int y = viewport.top - scrollOffset_;
         { ScopedFont font(12, FW_SEMIBOLD); Text(dc, Rect(viewport.left, y, viewport.right, y + 24), "MESH", Rgb(124, 167, 220)); }
-        Text(dc, Rect(viewport.left, y + 25, viewport.right, y + 48), "Static mesh import", Rgb(181, 191, 207));
+        Text(dc, Rect(viewport.left, y + 25, viewport.right, y + 48),
+            importSkeletalMesh_ ? "Skeletal glTF import" : "Static mesh import", Rgb(181, 191, 207));
         DrawCheckRow(
             dc,
             MaterialSlotsRow(),
             importMaterialSlots_,
             "Import material slots",
             materialSlotsAvailable_ ? "Preserve FBX material names and per-section assignments" : "Available only when every selected mesh is an FBX source",
-            materialSlotsAvailable_);
+            materialSlotsAvailable_ && !importSkeletalMesh_);
         { ScopedFont font(12, FW_SEMIBOLD); Text(dc, Rect(viewport.left, y + 132, viewport.right, y + 156), "IMPORT PIPELINE", Rgb(124, 167, 220)); }
-        DrawDisabledRow(dc, Rect(viewport.left, y + 162, viewport.right - 12, y + 206), "Import textures", "Requires source texture extraction and texture-asset dependencies");
-        DrawDisabledRow(dc, Rect(viewport.left, y + 212, viewport.right - 12, y + 256), "Import materials", "Requires generated material assets and FBX material translation");
-        DrawDisabledRow(dc, Rect(viewport.left, y + 262, viewport.right - 12, y + 306), "Combine meshes", "Requires a multi-output FBX asset import pipeline");
-        DrawDisabledRow(dc, Rect(viewport.left, y + 312, viewport.right - 12, y + 356), "Import skeleton", "Unavailable until the skinning and animation runtime ships");
-        { ScopedFont font(11, FW_NORMAL); Text(dc, Rect(viewport.left, y + 374, viewport.right - 12, y + 416), "Unavailable options are disabled deliberately. The editor never records settings it cannot execute deterministically.", Rgb(126, 136, 151), DT_LEFT | DT_WORDBREAK | DT_NOPREFIX); }
+        DrawCheckRow(dc, TexturesRow(), importTextures_, "Import textures",
+            "Copies external images and extracts embedded FBX, glTF, or GLB image data", skeletalImportAvailable_);
+        DrawCheckRow(dc, MaterialsRow(), importMaterials_, "Import materials",
+            "Creates PBR Material assets and assigns them to imported mesh sections", skeletalImportAvailable_);
+        DrawCheckRow(dc, CombineMeshesRow(), combineMeshes_, "Combine meshes",
+            "Merges all compatible mesh nodes bound to the imported skin into one asset", skeletalImportAvailable_);
+        DrawCheckRow(
+            dc,
+            SkeletonRow(),
+            importSkeletalMesh_,
+            "Import skeleton",
+            skeletalImportAvailable_
+                ? "Creates Skeleton, Skeletal Mesh and Animation Clips from FBX, glTF, or GLB"
+                : "Requires every selected source to use one supported skeletal format: FBX, glTF, or GLB",
+            skeletalImportAvailable_);
+        { ScopedFont font(11, FW_NORMAL); Text(dc, Rect(viewport.left, y + 374, viewport.right - 12, y + 416),
+            importSkeletalMesh_
+                ? "The importer publishes textures, materials, rig, skinned mesh and clips as one deterministic import operation."
+                : "Static mesh import uses the same texture and material asset pipeline.",
+            Rgb(126, 136, 151), DT_LEFT | DT_WORDBREAK | DT_NOPREFIX); }
         RestoreDC(dc, saved);
 
         if (MaxScroll() > 0) {
@@ -186,7 +219,25 @@ private:
     void OnClick(int x, int y) {
         const RECT client = Client();
         if (Contains(Rect(client.right - 52, 6, client.right - 6, 52), x, y)) { Close(false); return; }
-        if (materialSlotsAvailable_ && Contains(MaterialSlotsRow(), x, y)) { importMaterialSlots_ = !importMaterialSlots_; InvalidateRect(window_, nullptr, FALSE); return; }
+        if (materialSlotsAvailable_ && !importSkeletalMesh_ && Contains(MaterialSlotsRow(), x, y)) { importMaterialSlots_ = !importMaterialSlots_; InvalidateRect(window_, nullptr, FALSE); return; }
+        if (skeletalImportAvailable_ && Contains(TexturesRow(), x, y)) {
+            importTextures_ = !importTextures_;
+            if (!importTextures_) importMaterials_ = false;
+            InvalidateRect(window_, nullptr, FALSE);
+            return;
+        }
+        if (skeletalImportAvailable_ && Contains(MaterialsRow(), x, y)) {
+            importMaterials_ = !importMaterials_;
+            if (importMaterials_) importTextures_ = true;
+            InvalidateRect(window_, nullptr, FALSE);
+            return;
+        }
+        if (skeletalImportAvailable_ && Contains(CombineMeshesRow(), x, y)) {
+            combineMeshes_ = !combineMeshes_;
+            InvalidateRect(window_, nullptr, FALSE);
+            return;
+        }
+        if (skeletalImportAvailable_ && Contains(SkeletonRow(), x, y)) { importSkeletalMesh_ = !importSkeletalMesh_; InvalidateRect(window_, nullptr, FALSE); return; }
         if (Contains(Rect(client.right - 198, client.bottom - 43, client.right - 106, client.bottom - 15), x, y)) { Close(false); return; }
         if (Contains(Rect(client.right - 96, client.bottom - 43, client.right - 16, client.bottom - 15), x, y)) Close(true);
     }
@@ -214,7 +265,12 @@ private:
     std::size_t fileCount_ = 0U;
     int scrollOffset_ = 0;
     bool materialSlotsAvailable_ = false;
+    bool skeletalImportAvailable_ = false;
     bool importMaterialSlots_ = true;
+    bool importTextures_ = true;
+    bool importMaterials_ = true;
+    bool combineMeshes_ = true;
+    bool importSkeletalMesh_ = false;
     bool accepted_ = false;
     bool running_ = true;
 };
@@ -236,7 +292,12 @@ std::optional<EditorAssetImportSelection> EditorAssetImportDialog::Open(HWND own
         std::ranges::transform(extension, extension.begin(), [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
         return extension == ".fbx";
     });
-    if (containsMesh) { const std::optional<kb::assets::AssetImportOptions> meshOptions = MeshImportOptionsWindow{ files.size(), materialSlotsAvailable }.Show(owner); if (!meshOptions.has_value()) return std::nullopt; options = *meshOptions; }
+    const bool skeletalImportAvailable = !files.empty() && std::ranges::all_of(files, [](const std::filesystem::path& path) {
+        std::string extension = path.extension().string();
+        std::ranges::transform(extension, extension.begin(), [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+        return extension == ".fbx" || extension == ".gltf" || extension == ".glb";
+    });
+    if (containsMesh) { const std::optional<kb::assets::AssetImportOptions> meshOptions = MeshImportOptionsWindow{ files.size(), materialSlotsAvailable, skeletalImportAvailable }.Show(owner); if (!meshOptions.has_value()) return std::nullopt; options = *meshOptions; }
     return EditorAssetImportSelection{ .files = std::move(files), .options = options };
 }
 

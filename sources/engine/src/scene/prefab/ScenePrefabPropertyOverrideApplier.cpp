@@ -406,6 +406,12 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     if (property.propertyPath == "audioListener") {
         return ApplyComponentPresence(property.value, node.components.audioListener);
     }
+    if (property.propertyPath == "audioListener.priority") {
+        return ParseNumber(property.value, Ensure(node.components.audioListener).priority);
+    }
+    if (property.propertyPath == "audioListener.localUser") {
+        return ParseNumber(property.value, Ensure(node.components.audioListener).localUser.value);
+    }
     if (property.propertyPath == "audioListener.primary") {
         return ParseBool(property.value, Ensure(node.components.audioListener).primary);
     }

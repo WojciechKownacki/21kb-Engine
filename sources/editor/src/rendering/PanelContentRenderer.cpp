@@ -302,7 +302,7 @@ void PanelContentRenderer::Paint(
     const DockPanel& panel,
     const EditorTheme& theme,
     const EditorMetrics& metrics,
-    const EditorSceneContext& sceneContext,
+    EditorSceneContext& sceneContext,
     const EditorRenderBackendSettings& renderBackendSettings,
     bool floating,
     EditorSceneBgfxViewport* sceneViewport,

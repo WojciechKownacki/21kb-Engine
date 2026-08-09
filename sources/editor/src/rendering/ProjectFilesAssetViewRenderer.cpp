@@ -15,7 +15,7 @@ void ProjectFilesAssetViewRenderer::Paint(
     const EditorAssetBrowserLayoutRects& layout,
     const EditorTheme& theme,
     const EditorAssetBrowserState& state,
-    const kb::assets::AssetManager& manager,
+    kb::assets::AssetManager& manager,
     EditorMeshThumbnailService& meshThumbnails,
     const std::vector<EditorAssetFolderRow>& folders,
     const std::vector<EditorAssetItemRow>& assets) {

@@ -30,7 +30,9 @@ struct SceneDocument {
     // v27: scene-owned tag definitions persist independently from assignments.
     // v28: SkeletonBinding and DeformedGeometry authoring components persist.
     // v29: Animator pose update-rate policy persists.
-    static constexpr std::uint32_t CurrentFileVersion = 29U;
+    // v30: MotionSkeletonRule per-entity pose rule persists.
+    // v31: AudioListener priority and local-user binding persist.
+    static constexpr std::uint32_t CurrentFileVersion = 31U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

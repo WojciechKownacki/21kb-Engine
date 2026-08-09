@@ -37,6 +37,12 @@ enum class AssetImportItemStatus : std::uint8_t {
 
 struct AssetMeshImportOptions {
     bool importMaterialSlots = true;
+    bool importTextures = false;
+    bool importMaterials = false;
+    bool combineMeshes = false;
+    // The editor routes this mode through the canonical skeletal publication
+    // pipeline rather than the generic static-mesh container importer.
+    bool importSkeletalMesh = false;
 };
 
 struct AssetImportOptions {
@@ -44,9 +50,15 @@ struct AssetImportOptions {
 };
 
 inline constexpr std::uint16_t kAssetImportOptionMeshDisableMaterialSlots = 1U << 0U;
+inline constexpr std::uint16_t kAssetImportOptionMeshImportTextures = 1U << 1U;
+inline constexpr std::uint16_t kAssetImportOptionMeshImportMaterials = 1U << 2U;
+inline constexpr std::uint16_t kAssetImportOptionMeshCombineMeshes = 1U << 3U;
 
 [[nodiscard]] constexpr std::uint16_t AssetImportOptionFlags(const AssetImportOptions& options) noexcept {
-    return options.mesh.importMaterialSlots ? 0U : kAssetImportOptionMeshDisableMaterialSlots;
+    return (options.mesh.importMaterialSlots ? 0U : kAssetImportOptionMeshDisableMaterialSlots) |
+        (options.mesh.importTextures ? kAssetImportOptionMeshImportTextures : 0U) |
+        (options.mesh.importMaterials ? kAssetImportOptionMeshImportMaterials : 0U) |
+        (options.mesh.combineMeshes ? kAssetImportOptionMeshCombineMeshes : 0U);
 }
 
 struct AssetImportItemResult {
@@ -65,8 +77,7 @@ struct AssetImportItemResult {
         return error.empty() &&
             (status == AssetImportItemStatus::Created || status == AssetImportItemStatus::Reused) &&
             id.IsValid() &&
-            !assetPhysicalPath.empty() &&
-            !metaPhysicalPath.empty();
+            !assetPhysicalPath.empty();
     }
 };
 

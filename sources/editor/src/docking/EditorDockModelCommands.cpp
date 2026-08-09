@@ -115,6 +115,24 @@ bool EditorDockModelCommands::ActivatePanelKind(DockPanelKind kind, DockArea fal
     return true;
 }
 
+bool EditorDockModelCommands::SetPanelTitle(DockPanelKind kind, std::string title) {
+    if (title.empty()) {
+        return false;
+    }
+    for (const DockPanel& candidate : panels_.All()) {
+        if (candidate.kind != kind) {
+            continue;
+        }
+        DockPanel* panel = panels_.Find(candidate.id);
+        if (panel == nullptr || panel->title == title) {
+            return panel != nullptr;
+        }
+        panel->title = std::move(title);
+        return true;
+    }
+    return false;
+}
+
 void EditorDockModelCommands::MoveFloatingPanel(std::uint32_t panelId, int x, int y) {
     panels_.MoveFloatingPanel(panelId, x, y);
 }

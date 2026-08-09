@@ -86,6 +86,12 @@ void RevertComponentProperty(Scene& scene, SceneObject object, const ScenePrefab
         } else {
             components.SkeletonBindings().Remove(entity);
         }
+    } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "motionSkeletonRule")) {
+        if (node.components.motionSkeletonRule.has_value()) {
+            static_cast<void>(components.MotionSkeletonRules().Set(entity, *node.components.motionSkeletonRule));
+        } else {
+            components.MotionSkeletonRules().Remove(entity);
+        }
     } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "deformedGeometry")) {
         if (node.components.deformedGeometry.has_value()) {
             static_cast<void>(components.DeformedGeometries().Set(entity, *node.components.deformedGeometry));

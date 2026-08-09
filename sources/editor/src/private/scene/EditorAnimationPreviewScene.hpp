@@ -17,6 +17,9 @@ struct AnimationPreviewOverlayLine {
     kb::scene::Vec3 from{};
     kb::scene::Vec3 to{};
     kb::scene::Vec3 color{ 1.0F, 1.0F, 1.0F };
+    // Bone owning the start joint. This makes branch/root hit-testing deterministic; boneId owns
+    // the end joint and the shaft leading into it.
+    kb::scene::SkeletonBoneId fromBoneId = 0U;
     kb::scene::SkeletonBoneId boneId = 0U;
 };
 
@@ -45,7 +48,9 @@ public:
     [[nodiscard]] kb::scene::SceneEntity FloorEntity() const noexcept { return floorEntity_; }
     [[nodiscard]] kb::scene::SceneEntity EnvironmentEntity() const noexcept { return environmentEntity_; }
     void Focus(float durationSeconds = 0.0F) noexcept;
-    [[nodiscard]] bool TickCamera(float deltaSeconds) noexcept;
+    [[nodiscard]] bool TickCamera(
+        float deltaSeconds,
+        const EditorViewportCameraFlightInput& flightInput = {}) noexcept;
     [[nodiscard]] bool TickPlayback(AnimationPreviewContext& context, float deltaSeconds) noexcept;
     [[nodiscard]] AnimationPreviewOverlaySnapshot BuildOverlays(const AnimationPreviewContext& context) const;
     [[nodiscard]] std::uint64_t Revision() const noexcept { return revision_; }
@@ -65,6 +70,8 @@ private:
     kb::scene::Vec3 focusCenter_{};
     float focusRadius_ = 1.0F;
     std::uint64_t sourceSceneId_ = 0U;
+    kb::assets::AssetId framedMeshAsset_{};
+    kb::assets::AssetId framedSkeletonAsset_{};
     std::uint64_t contextRevision_ = 0U;
     std::uint64_t playbackRevision_ = 0U;
     std::uint64_t revision_ = 1U;

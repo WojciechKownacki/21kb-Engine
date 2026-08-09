@@ -342,6 +342,8 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
 
     output << "audioListener=" << (components.audioListener.has_value() ? 1 : 0) << '\n';
     if (components.audioListener.has_value()) {
+        output << "audioListener.priority=" << components.audioListener->priority << '\n';
+        output << "audioListener.localUser=" << components.audioListener->localUser.value << '\n';
         output << "audioListener.primary=" << (components.audioListener->primary ? 1 : 0) << '\n';
         output << "audioListener.enabled=" << (components.audioListener->enabled ? 1 : 0) << '\n';
     }

@@ -11,6 +11,10 @@ namespace kb::render {
 
 class RenderMeshGltfMaterialImporter final {
 public:
+    [[nodiscard]] static RenderMeshEmbeddedMaterial BuildEmbeddedMaterial(
+        std::string_view materialName,
+        const cgltf_material* material);
+
     [[nodiscard]] static std::uint32_t EnsureMaterialSlot(
         RenderMeshAssetData& asset,
         std::string_view materialName,

@@ -1,14 +1,12 @@
 #include "kb/render/post/ScenePostProcessTargets.hpp"
 
+#include "renderer/RendererDebugLog.hpp"
+
 #include <algorithm>
-#include <chrono>
 #include <cstdio>
-#include <filesystem>
-#include <fstream>
 #include <span>
 #include <string>
 #include <string_view>
-#include <thread>
 
 namespace kb::render {
 namespace {
@@ -45,22 +43,11 @@ constexpr std::array<const char*, ScenePostProcessTargets::kTargetCount> kTarget
 }
 
 void WriteBreadcrumb(std::string_view category, std::string_view message) {
-    try {
-        std::error_code error;
-        const std::filesystem::path path = std::filesystem::current_path() / "Saved" / "Logs" / "editor-crash-breadcrumbs.log";
-        std::filesystem::create_directories(path.parent_path(), error);
-        std::ofstream output{path, std::ios::out | std::ios::app};
-        if (!output.is_open()) {
-            return;
-        }
-        const auto now = std::chrono::system_clock::now();
-        const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-        output << millis
-               << " tid=" << static_cast<std::uint64_t>(std::hash<std::thread::id>{}(std::this_thread::get_id()))
-               << " [" << category << "] " << message << '\n';
-        output.flush();
-    } catch (...) {
-    }
+    // Post-process diagnostics used to bypass the renderer-wide opt-in gate and synchronously
+    // open, flush and close the breadcrumb file twice for every rendered viewport. Keep the
+    // diagnostics available, but route them through the zero-I/O default path shared by the
+    // rest of the renderer.
+    WriteRendererDebugLog(category, message);
 }
 
 } // namespace

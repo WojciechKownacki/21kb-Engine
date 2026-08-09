@@ -15,7 +15,7 @@ namespace kb::editor {
 
 class ProjectFilesPanelRenderer {
 public:
-    void Paint(HDC dc, const RECT& content, const RECT& overlayBounds, const EditorTheme& theme, const EditorSceneContext& sceneContext) const;
+    void Paint(HDC dc, const RECT& content, const RECT& overlayBounds, const EditorTheme& theme, EditorSceneContext& sceneContext) const;
 };
 
 #endif

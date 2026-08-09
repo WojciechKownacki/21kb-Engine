@@ -763,6 +763,8 @@ add_executable(kb_editor WIN32
     src/scene/EditorPluginCatalog.cpp
     src/scene/EditorScriptAssetGateway.cpp
     src/scene/EditorSceneAssetBrowserCommands.cpp
+    src/private/scene/EditorMeshImportArtifacts.hpp
+    src/scene/EditorMeshImportArtifacts.cpp
     src/scene/EditorSceneAudioAssetActions.cpp
     src/scene/EditorSceneCommandController.cpp
     src/scene/EditorSceneContext.cpp
@@ -982,6 +984,7 @@ if(BUILD_TESTING)
         tests/SvgPathTests.cpp
         src/rendering/MaterialEditorPanelLayout.cpp
         src/rendering/EditorTexturePreviewService.cpp
+        src/rendering/EditorBgfxBackendSelector.cpp
         src/rendering/HeroIconGdiplusRuntime.cpp
         src/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.cpp
         src/rendering/material_graph/MaterialGraphCanvas.cpp
@@ -1064,6 +1067,8 @@ if(BUILD_TESTING)
         src/scene/EditorHierarchySelectionState.cpp
         src/scene/EditorPluginCatalog.cpp
         src/scene/EditorSceneAssetBrowserCommands.cpp
+        src/private/scene/EditorMeshImportArtifacts.hpp
+        src/scene/EditorMeshImportArtifacts.cpp
         src/scene/EditorSceneSelectionPivot.cpp
         src/scene/EditorSceneAudioAssetActions.cpp
           src/scene/EditorSceneMaterialAssetActions.cpp
@@ -1096,6 +1101,10 @@ if(BUILD_TESTING)
         src/rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.cpp
         src/rendering/ProjectFilesAssetIconResolver.cpp
         src/rendering/ProjectFilesMaterialPreviewThumbnailModel.cpp
+        src/rendering/EditorMeshPreviewRasterizer.cpp
+        src/rendering/EditorMeshPreviewService.cpp
+        src/rendering/EditorMeshThumbnailDiskCache.cpp
+        src/rendering/EditorMeshThumbnailService.cpp
         src/rendering/MaterialPreviewAppearanceResolver.cpp
         src/inspection/InspectorAudioTextBuilder.cpp
         src/inspection/InspectorComponentCatalog.cpp

@@ -58,6 +58,8 @@ HeroIconGlyph HeroIconCatalog::Glyph(HeroIconKind icon) noexcept {
         return HeroIconAssets::RotationSnap();
     case HeroIconKind::Camera:
         return HeroIconAssets::Camera();
+    case HeroIconKind::Skeleton:
+        return HeroIconAssets::Skeleton();
     default:
         return {};
     }

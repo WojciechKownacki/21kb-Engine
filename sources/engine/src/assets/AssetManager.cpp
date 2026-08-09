@@ -66,11 +66,19 @@ bool AssetManager::RegisterLoader(std::unique_ptr<IAssetLoader> loader) {
     if (loader == nullptr || loader->Type().empty()) {
         return false;
     }
+    const bool replacesExistingType = HasLoaderForType(loader->Type());
     // A queued job stores the loader address. Finish the active job and
-    // discard queued work before a same-type registration can destroy that
-    // loader. Cached payloads are invalid after changing loader code.
+    // discard queued work before registration can mutate the loader registry.
+    // Replacing an existing loader invalidates decoded payloads because their
+    // producing code changed. Adding a genuinely new type cannot invalidate an
+    // existing payload: publishing/loading that type was impossible without a
+    // loader. Keeping unrelated retained assets resident is critical for
+    // renderer plug-in discovery, which installs its loaders lazily after an
+    // editor preview has already published engine-owned mesh/skeleton assets.
     StopAsyncWorker();
-    ClearRuntimeCache();
+    if (replacesExistingType) {
+        ClearRuntimeCache();
+    }
     const bool registered = AssetLoaderRegistry::Register(loaders_, std::move(loader));
     if (registered) {
         RestartAsyncLoads();

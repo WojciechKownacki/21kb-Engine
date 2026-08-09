@@ -345,7 +345,9 @@ void Renderer::Shutdown() {
     editorPassSubmitter_.Shutdown();
     defaultShadowMap_.Shutdown();
     defaultPostProcessTargets_.Shutdown();
-    defaultSceneGBuffer_.Shutdown();
+    for (SceneGBuffer& gbuffer : sceneGBuffers_) {
+        gbuffer.Shutdown();
+    }
     defaultSceneTarget_.Shutdown();
     renderSceneSynchronizer_.reset();
     particleRenderSynchronizer_.reset();
@@ -383,6 +385,7 @@ bool Renderer::BeginFrame() {
 
     frameActive_ = context_->BeginFrame();
     if (frameActive_) {
+        skinningSynchronizedSceneIds_.clear();
         frameState_.Begin(static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL);
         if (sceneRenderer_ != nullptr) {
             static_cast<void>(sceneRenderer_->BeginSkinningFrame(
@@ -745,9 +748,14 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport RenderSceneFor begin");
     RenderScene& renderScene = RenderSceneFor(scene);
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport RenderSceneFor end");
+    const bool skinningAlreadySynchronized = std::ranges::find(
+        skinningSynchronizedSceneIds_, scene.Id()) != skinningSynchronizedSceneIds_.end();
     if (desc.synchronizeScene) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Sync full begin");
         renderSceneSynchronizer_->Sync(scene, renderScene);
+        if (!skinningAlreadySynchronized) {
+            skinningSynchronizedSceneIds_.push_back(scene.Id());
+        }
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Sync full end");
     } else {
         if (desc.transformAffineSync) {
@@ -789,6 +797,13 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             WriteRendererBreadcrumb("renderer", message.str());
             renderSceneSynchronizer_->SyncMeshRendererUpdates(scene, renderScene);
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncMeshRendererUpdates end");
+        }
+        // Deformed proxies store frame-local palette handles. Even when the ECS scene and its
+        // transforms are unchanged, a new renderer frame needs fresh palette uploads; retaining
+        // the previous handle made a Skeletal Mesh visible for two frames and then disappear.
+        if (!skinningAlreadySynchronized) {
+            renderSceneSynchronizer_->SyncDeformedMeshPalettes(scene, renderScene);
+            skinningSynchronizedSceneIds_.push_back(scene.Id());
         }
     }
     // History ribbons own transient samples in the render synchronizer. Full
@@ -898,7 +913,12 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 << " debugView=" << DebugViewName(effectiveLightingConfig.debugView);
         WriteRendererBreadcrumb("renderer", message.str());
     }
-    if (deferredLighting && !defaultSceneGBuffer_.Ensure(SceneGBufferDesc{ .extent = desc.target.viewport.extent })) {
+    if (desc.target.viewport.viewportIndex >= sceneGBuffers_.size()) {
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport viewport index has no GBuffer owner");
+        return false;
+    }
+    SceneGBuffer& sceneGBuffer = sceneGBuffers_[desc.target.viewport.viewportIndex];
+    if (deferredLighting && !sceneGBuffer.Ensure(SceneGBufferDesc{ .extent = desc.target.viewport.extent })) {
         lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
             .severity = SceneRenderDiagnosticSeverity::Error,
             .kind = SceneRenderDiagnosticKind::DeferredRendererUnavailable,
@@ -908,16 +928,16 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         return false;
     }
     if (deferredLighting) {
-        const SceneGBufferFormatSelection selection = defaultSceneGBuffer_.FormatSelection();
+        const SceneGBufferFormatSelection selection = sceneGBuffer.FormatSelection();
         std::ostringstream message;
         message << "SubmitSceneToViewport GBuffer Ensure end ok"
-                << " fb=" << HandleValue(defaultSceneGBuffer_.FrameBuffer())
-                << " albedoTex=" << HandleValue(defaultSceneGBuffer_.AlbedoTexture())
-                << " normalTex=" << HandleValue(defaultSceneGBuffer_.NormalTexture())
-                << " materialTex=" << HandleValue(defaultSceneGBuffer_.MaterialTexture())
-                << " surfaceTex=" << HandleValue(defaultSceneGBuffer_.SurfaceTexture())
-                << " depthTex=" << HandleValue(defaultSceneGBuffer_.DepthTexture())
-                << " extent=" << defaultSceneGBuffer_.Width() << 'x' << defaultSceneGBuffer_.Height()
+                << " fb=" << HandleValue(sceneGBuffer.FrameBuffer())
+                << " albedoTex=" << HandleValue(sceneGBuffer.AlbedoTexture())
+                << " normalTex=" << HandleValue(sceneGBuffer.NormalTexture())
+                << " materialTex=" << HandleValue(sceneGBuffer.MaterialTexture())
+                << " surfaceTex=" << HandleValue(sceneGBuffer.SurfaceTexture())
+                << " depthTex=" << HandleValue(sceneGBuffer.DepthTexture())
+                << " extent=" << sceneGBuffer.Width() << 'x' << sceneGBuffer.Height()
                 << " formats=(" << SceneTextureFormatName(selection.albedoFormat)
                 << ',' << SceneTextureFormatName(selection.normalFormat)
                 << ',' << SceneTextureFormatName(selection.materialFormat)
@@ -971,7 +991,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure GBuffer clear begin");
         RendererViewConfigurator::ConfigureGBufferClear(
             viewportPlan.viewIds.gbufferGeometry,
-            defaultSceneGBuffer_.FrameBuffer(),
+            sceneGBuffer.FrameBuffer(),
             desc.target.viewport.extent,
             desc.clearDepth,
             desc.clearStencil);
@@ -988,7 +1008,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     // MAT-80/#18b: expose the opaque scene depth to the transparent pass so depth-sampling graph materials
     // (SceneDepth / DepthFade) read real geometry depth. Deferred uses the GBuffer depth attachment.
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport scene texture bindings begin");
-    sceneRenderer_->SetSceneDepthTexture(deferredLighting ? defaultSceneGBuffer_.DepthTexture() : desc.target.depthTexture);
+    sceneRenderer_->SetSceneDepthTexture(deferredLighting ? sceneGBuffer.DepthTexture() : desc.target.depthTexture);
     sceneRenderer_->SetSceneColorTexture(BGFX_INVALID_HANDLE);
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport scene texture bindings end");
 
@@ -1170,7 +1190,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         if (!deferredLightingPass_->Submit(SceneDeferredLightingPassDesc{
                 .viewId = viewportPlan.viewIds.deferredLighting,
                 .frameBuffer = desc.target.frameBuffer,
-                .gbuffer = &defaultSceneGBuffer_,
+                .gbuffer = &sceneGBuffer,
                 .renderScene = &renderScene,
                 .camera = sceneCamera,
                 .lightingConfig = effectiveLightingConfig,
@@ -1236,7 +1256,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
 
     RenderSceneSubmitDesc editorOverlayDesc = desc;
     if (deferredLighting) {
-        editorOverlayDesc.editorOverlayDepthTexture = defaultSceneGBuffer_.DepthTexture();
+        editorOverlayDesc.editorOverlayDepthTexture = sceneGBuffer.DepthTexture();
     }
     {
         std::ostringstream message;
@@ -1527,7 +1547,9 @@ void Renderer::OnResize(std::uint32_t width, std::uint32_t height) {
 
     editorPassSubmitter_.InvalidateFrameBuffers();
     defaultPostProcessTargets_.Shutdown();
-    defaultSceneGBuffer_.Shutdown();
+    for (SceneGBuffer& gbuffer : sceneGBuffers_) {
+        gbuffer.Shutdown();
+    }
     defaultSceneTarget_.Shutdown();
     temporalViewportStates_.clear();
     context_->Reset(width, height, displayConfig_.ComputeResetFlags());

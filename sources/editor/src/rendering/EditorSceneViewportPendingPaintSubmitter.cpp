@@ -3,8 +3,10 @@
 #if defined(_WIN32)
 #include "rendering/EditorSceneViewportGeometry.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
+#include "diagnostics/EditorLagTrace.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <sstream>
 #include <span>
@@ -44,15 +46,34 @@ EditorSceneBgfxViewport::PendingPaintSubmitter::PendingPaintSubmitter(EditorScen
     : viewport_(viewport) {}
 
 bool EditorSceneBgfxViewport::PendingPaintSubmitter::Submit(std::span<const PendingPresent> pendingPresents) {
+    const std::uint64_t eventId = diagnostics::EditorLagTrace::NextEventId();
+    const auto batchStart = std::chrono::steady_clock::now();
     const std::vector<PendingPresentBatch> batches = PendingPresentBatchBuilder::Build(pendingPresents);
+    const double batchMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - batchStart).count();
+    std::ostringstream detail;
+    detail << "presents=" << pendingPresents.size() << " batches=" << batches.size();
+    diagnostics::EditorLagTrace::Slow("viewport-batch-build", eventId, batchMs, detail.str(), 8.0);
+    const auto prepareStart = std::chrono::steady_clock::now();
     if (!BuildPendingSubmissions(std::span<const PendingPresentBatch>{batches.data(), batches.size()})) {
         return false;
     }
+    const double prepareMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - prepareStart).count();
+    diagnostics::EditorLagTrace::Slow("viewport-prepare", eventId, prepareMs, detail.str(), 8.0);
+    const auto submitStart = std::chrono::steady_clock::now();
     if (!SubmitPreparedSubmissions()) {
         return false;
     }
+    const double submitMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - submitStart).count();
+    diagnostics::EditorLagTrace::Slow("viewport-render-frame", eventId, submitMs, detail.str(), 8.0);
 
+    const auto showStart = std::chrono::steady_clock::now();
     viewport_.hostSurfaceStore_.ShowPresentedWindows();
+    const double showMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - showStart).count();
+    diagnostics::EditorLagTrace::Slow("viewport-show-windows", eventId, showMs, detail.str(), 8.0);
     return true;
 }
 
@@ -141,13 +162,45 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions()
                     << " confirmedBloom=" << BoolText(confirmed.bloomEnabled);
         }
     }
+    const std::uint64_t eventId = diagnostics::EditorLagTrace::NextEventId();
+    std::ostringstream frameDetail;
+    frameDetail << "submissions=" << viewport_.pendingSubmissions_.size()
+                << " presents=" << viewport_.pendingPresents_.size()
+                << " backend=" << viewport_.ActiveBackendLabel();
+    const auto beginStart = std::chrono::steady_clock::now();
     if (!viewport_.renderer_.BeginFrame()) {
         viewport_.SetFailureDetail("Renderer BeginFrame failed while presenting queued editor viewports.");
         return false;
     }
+    const double beginMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - beginStart).count();
+    diagnostics::EditorLagTrace::Slow("renderer-begin-frame", eventId, beginMs, frameDetail.str(), 4.0);
 
+    const auto submitStart = std::chrono::steady_clock::now();
     const bool submitted = viewport_.renderer_.SubmitScenes(viewport_.pendingSubmissions_);
+    const double submitMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - submitStart).count();
+    diagnostics::EditorLagTrace::Slow("renderer-submit-scenes", eventId, submitMs, frameDetail.str(), 4.0);
+    const auto endStart = std::chrono::steady_clock::now();
     viewport_.renderer_.EndFrame();
+    const double endMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - endStart).count();
+    if (endMs >= 4.0) {
+        if (const bgfx::Stats* stats = bgfx::getStats(); stats != nullptr) {
+            const double timerToMs = stats->cpuTimerFreq > 0
+                ? 1000.0 / static_cast<double>(stats->cpuTimerFreq)
+                : 0.0;
+            frameDetail << " waitSubmit=" << static_cast<double>(stats->waitSubmit) * timerToMs << "ms"
+                        << " waitRender=" << static_cast<double>(stats->waitRender) * timerToMs << "ms"
+                        << " cpuFrame=" << static_cast<double>(stats->cpuTimeFrame) * timerToMs << "ms"
+                        << " draws=" << stats->numDraw
+                        << " compute=" << stats->numCompute
+                        << " blit=" << stats->numBlit
+                        << " views=" << stats->numViews
+                        << " framebuffers=" << stats->numFrameBuffers;
+        }
+        diagnostics::EditorLagTrace::Slow("renderer-end-frame", eventId, endMs, frameDetail.str(), 4.0);
+    }
     if (!submitted) {
         viewport_.SetFailureDetail("Renderer SubmitScenes failed while presenting queued editor viewports.");
         return false;

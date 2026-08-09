@@ -15,9 +15,14 @@
 #include "rendering/MaterialPreviewRenderPolicy.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
+#include "rendering/SkeletalMeshEditorPanelLayout.hpp"
+#include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
+#include "diagnostics/EditorLagTrace.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <optional>
+#include <sstream>
 #include <span>
 #include <vector>
 
@@ -201,17 +206,24 @@ void AppendMaterialPreviewLayout(
                 continue;
             }
             const DockPanel* panel = dockModel.Queries().FindPanel(panelLayout.panelId);
-            if (panel == nullptr || panel->kind != DockPanelKind::Scene) {
+            if (panel == nullptr) {
                 continue;
             }
             const RECT content = IntersectRectOrEmpty(ToRect(panelLayout.content), ToRect(panelLayout.contentClip));
             if (RectWidth(content) == 0U || RectHeight(content) == 0U) {
                 continue;
             }
-            layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
-                .viewportKey = panelLayout.panelId,
-                .bounds = SceneViewportToolbarRenderer::Resolve(content, sceneContext.ViewportPreview(panelLayout.panelId), sceneContext).renderArea,
-            });
+            if (panel->kind == DockPanelKind::Scene) {
+                layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
+                    .viewportKey = panelLayout.panelId,
+                    .bounds = SceneViewportToolbarRenderer::Resolve(content, sceneContext.ViewportPreview(panelLayout.panelId), sceneContext).renderArea,
+                });
+            } else if (panel->kind == DockPanelKind::SkeletalMeshEditor && sceneContext.HasSkeletalMeshEditorAsset()) {
+                layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
+                    .viewportKey = panelLayout.panelId,
+                    .bounds = SkeletalMeshEditorPanelLayoutResolver::Resolve(content).viewport,
+                });
+            }
         }
     } else {
         const DockPanel* panel = dockModel.Queries().FindPanel(floatingWindows.Queries().PanelId(paintWindow));
@@ -222,6 +234,14 @@ void AppendMaterialPreviewLayout(
             layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
                 .viewportKey = panel->id,
                 .bounds = SceneViewportToolbarRenderer::Resolve(content, sceneContext.ViewportPreview(panel->id), sceneContext).renderArea,
+            });
+        } else if (panel != nullptr && panel->kind == DockPanelKind::SkeletalMeshEditor && sceneContext.HasSkeletalMeshEditorAsset()) {
+            RECT content{};
+            GetClientRect(paintWindow, &content);
+            content.top += metrics.floatingChromeHeight;
+            layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
+                .viewportKey = panel->id,
+                .bounds = SkeletalMeshEditorPanelLayoutResolver::Resolve(content).viewport,
             });
         }
     }
@@ -268,6 +288,7 @@ void AppendMaterialPreviewLayout(
         ResolvePaintHostSurfaceLayouts(paintWindow, mainWindow, dockModel, floatingWindows, metrics, sceneContext);
 
     bool scenePresented = false;
+    bool documentPresented = false;
     sceneViewport.BeginPaintLayout(paintWindow);
     sceneViewport.SyncHostSurfaceLayouts(
         paintWindow,
@@ -320,14 +341,20 @@ void AppendMaterialPreviewLayout(
                 continue;
             }
             const DockPanel* panel = dockModel.Queries().FindPanel(panelLayout.panelId);
-            if (panel == nullptr || panel->kind != DockPanelKind::Scene) {
+            if (panel == nullptr) {
                 continue;
             }
             const RECT content = IntersectRectOrEmpty(ToRect(panelLayout.content), ToRect(panelLayout.contentClip));
             if (RectWidth(content) == 0U || RectHeight(content) == 0U) {
                 continue;
             }
-            scenePresented = PresentScenePanel(sceneViewport, mainWindow, *panel, content, sceneContext, renderBackendSettings) || scenePresented;
+            if (panel->kind == DockPanelKind::Scene) {
+                scenePresented = PresentScenePanel(sceneViewport, mainWindow, *panel, content, sceneContext, renderBackendSettings) || scenePresented;
+            } else if (panel->kind == DockPanelKind::SkeletalMeshEditor) {
+                documentPresented = SkeletalMeshEditorPanelRenderer::PresentViewport(
+                    sceneViewport, mainWindow, content, *panel, sceneContext,
+                    renderBackendSettings) || documentPresented;
+            }
         }
     } else {
         const DockPanel* panel = dockModel.Queries().FindPanel(floatingWindows.Queries().PanelId(paintWindow));
@@ -336,16 +363,23 @@ void AppendMaterialPreviewLayout(
             GetClientRect(paintWindow, &content);
             content.top += metrics.floatingChromeHeight;
             scenePresented = PresentScenePanel(sceneViewport, paintWindow, *panel, content, sceneContext, renderBackendSettings);
+        } else if (panel != nullptr && panel->kind == DockPanelKind::SkeletalMeshEditor) {
+            RECT content{};
+            GetClientRect(paintWindow, &content);
+            content.top += metrics.floatingChromeHeight;
+            documentPresented = SkeletalMeshEditorPanelRenderer::PresentViewport(
+                sceneViewport, paintWindow, content, *panel, sceneContext,
+                renderBackendSettings);
         }
     }
     sceneViewport.EndPaintLayout();
-    if (scenePresented || coldPreviewPresented) {
+    if (scenePresented || documentPresented || coldPreviewPresented) {
         sceneViewport.ClearPresentRequest();
     }
     if (scenePresented) {
         sceneContext.AcknowledgeSceneRenderSubmitted();
     }
-    return scenePresented || coldPreviewPresented;
+    return scenePresented || documentPresented || coldPreviewPresented;
 }
 
 } // namespace
@@ -379,20 +413,39 @@ EditorPaintDispatcher::EditorPaintDispatcher(
     , pointerDrag_(pointerDrag) {}
 
 void EditorPaintDispatcher::Paint(HWND paintWindow) const {
+    const std::uint64_t paintEventId = diagnostics::EditorLagTrace::NextEventId();
     if (paintWindow == nullptr || IsMainWindow(paintWindow)) {
+        const auto gdiStart = std::chrono::steady_clock::now();
         renderer_.Paint(mainWindow_, dockModel_, theme_, metrics_, sceneContext_, dockController_.DropPreview(), dockController_.ActiveDrag(), pointerDrag_, renderBackendSettings_, playMode_, shellInteraction_, sceneViewport_);
+        const double gdiMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - gdiStart).count();
+        diagnostics::EditorLagTrace::Slow("paint-gdi", paintEventId, gdiMs, "host=main", 8.0);
         const DockPointerDrag* activeDrag = dockController_.ActiveDrag();
         const bool draggingSplitter = activeDrag != nullptr && activeDrag->kind == DockHitKind::Splitter;
         if (EditorWindowResizeInteraction::IsWindowResizing(mainWindow_) || draggingSplitter) {
+            const auto presentStart = std::chrono::steady_clock::now();
             static_cast<void>(PresentPaintHostViewports(mainWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, renderBackendSettings_, sceneViewport_));
+            const double presentMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - presentStart).count();
+            diagnostics::EditorLagTrace::Slow("paint-resize-present", paintEventId, presentMs, "host=main", 8.0);
         }
         return;
     }
 
     if (const DockPanel* panel = dockModel_.Queries().FindPanel(floatingWindows_.Queries().PanelId(paintWindow)); panel != nullptr) {
+        const auto gdiStart = std::chrono::steady_clock::now();
         renderer_.PaintFloating(paintWindow, *panel, theme_, metrics_, sceneContext_, renderBackendSettings_, sceneViewport_);
+        const double gdiMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - gdiStart).count();
+        std::ostringstream paintDetail;
+        paintDetail << "host=floating panelKind=" << static_cast<unsigned>(panel->kind);
+        diagnostics::EditorLagTrace::Slow("paint-gdi", paintEventId, gdiMs, paintDetail.str(), 8.0);
         if (EditorWindowResizeInteraction::IsWindowResizing(paintWindow)) {
+            const auto presentStart = std::chrono::steady_clock::now();
             static_cast<void>(PresentPaintHostViewports(paintWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, renderBackendSettings_, sceneViewport_));
+            const double presentMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - presentStart).count();
+            diagnostics::EditorLagTrace::Slow("paint-resize-present", paintEventId, presentMs, paintDetail.str(), 8.0);
         }
     }
 }

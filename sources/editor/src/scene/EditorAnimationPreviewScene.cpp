@@ -23,6 +23,7 @@
 #include "engine/scene/WorldBackdropComponent.hpp"
 #include "scene/material_preview/EditorMaterialPreviewMeshLoader.hpp"
 #include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
+#include "diagnostics/EditorLagTrace.hpp"
 
 #include <algorithm>
 #include <array>
@@ -37,6 +38,17 @@ namespace {
 constexpr float kPreviewFloorExtent = 12.0F;
 constexpr float kPreviewFloorHeight = -0.01F;
 
+[[nodiscard]] bool RequiresLegacyFbxUpAxisCorrection(
+    const kb::scene::SkeletalMeshBounds& bounds) noexcept {
+    // Skeletal FBX assets produced before the explicit ufbx mirror-axis conversion were reflected
+    // below Y=0: their complete AABB is below the preview floor and the character faces downward.
+    // Limit this compatibility correction to that unambiguous legacy shape. Assets that cross the
+    // ground plane, including intentionally off-centre rigs, retain their authored orientation.
+    const float tolerance = std::max(0.001F, bounds.extents.y * 0.01F);
+    return bounds.center.y < -tolerance &&
+        bounds.center.y + bounds.extents.y <= tolerance;
+}
+
 void RegisterPreviewFloorAsset(kb::assets::AssetManager& manager) {
     const kb::assets::AssetId planeAssetId =
         EditorMaterialPreviewPrimitivePolicy::GeneratedMeshAssetId(EditorMaterialPreviewPrimitiveKind::Plane);
@@ -49,6 +61,25 @@ void RegisterPreviewFloorAsset(kb::assets::AssetManager& manager) {
         .physicalPath = "__editor_animation_preview_floor__",
         .runtimeLoadable = true,
     }));
+}
+
+template <typename T>
+[[nodiscard]] kb::assets::AssetHandle<T> ShareOrLoadPreviewAsset(
+    const kb::scene::Scene& source,
+    kb::assets::AssetManager& previewAssets,
+    kb::assets::AssetId id) {
+    if (!id.IsValid()) return {};
+    const kb::assets::AssetHandle<T> sourceAsset = source.Assets().Manager().AcquireLoaded<T>(id);
+    if (sourceAsset.IsLoaded()) {
+        // Runtime assets are exposed as immutable handles. PublishRuntimeAsset takes
+        // mutable ownership only to erase the payload type; neither manager exposes a
+        // mutable asset after publication, so both scenes can safely share the payload.
+        std::shared_ptr<T> shared = std::const_pointer_cast<T>(sourceAsset.Shared());
+        if (previewAssets.PublishRuntimeAsset(id, std::move(shared))) {
+            return previewAssets.AcquireLoaded<T>(id);
+        }
+    }
+    return previewAssets.Load<T>(id);
 }
 
 [[nodiscard]] float BoundsRadius(const kb::scene::SkeletalMeshBounds& bounds) noexcept {
@@ -96,18 +127,77 @@ void AppendBoundsLines(
 void AppendNormalLines(
     AnimationPreviewOverlaySnapshot& output,
     const kb::scene::SkeletalMeshAsset& mesh,
-    const kb::scene::WorldTransform& owner) {
+    const kb::scene::WorldTransform& owner,
+    const kb::scene::AnimatorInstanceSkeletonView* skeletonView) {
     if (mesh.lods.empty() || mesh.lods.front().vertices.empty()) return;
-    const std::vector<kb::scene::SkeletalMeshVertex>& vertices = mesh.lods.front().vertices;
+    const kb::scene::SkeletalMeshLod& lod = mesh.lods.front();
     constexpr std::size_t kMaximumNormalLines = 128U;
-    const std::size_t stride = std::max<std::size_t>(1U, (vertices.size() + kMaximumNormalLines - 1U) / kMaximumNormalLines);
-    for (std::size_t index = 0U; index < vertices.size(); index += stride) {
-        const kb::scene::SkeletalMeshVertex& vertex = vertices[index];
-        const kb::scene::Vec3 start = WorldPoint(owner, vertex.position);
-        const kb::scene::Vec3 direction = WorldDirection(owner, vertex.normal);
+    const std::size_t candidateCount = lod.indices.empty() ? lod.vertices.size() : lod.indices.size();
+    const std::size_t stride = std::max<std::size_t>(
+        1U, (candidateCount + kMaximumNormalLines - 1U) / kMaximumNormalLines);
+    std::size_t emitted = 0U;
+
+    const auto appendVertex = [&](const kb::scene::SkeletalMeshVertex& vertex,
+                                  const kb::scene::SkeletalMeshSection* section) {
+        kb::scene::Vec3 position = vertex.position;
+        kb::scene::Vec3 normal = vertex.normal;
+        if (section != nullptr && skeletonView != nullptr &&
+            skeletonView->boneIds.size() == skeletonView->currentSkinMatrices.size()) {
+            kb::scene::Vec3 skinnedPosition{};
+            kb::scene::Vec3 skinnedNormal{};
+            float accumulatedWeight = 0.0F;
+            for (std::size_t influence = 0U; influence < vertex.jointWeights.size(); ++influence) {
+                const float weight = vertex.jointWeights[influence];
+                const std::uint16_t joint = vertex.jointIndices[influence];
+                if (weight <= 0.0F || joint >= section->boneMap.size()) continue;
+                const kb::scene::SkeletonBoneId boneId = section->boneMap[joint];
+                const auto poseBone = std::find(skeletonView->boneIds.begin(), skeletonView->boneIds.end(), boneId);
+                if (poseBone == skeletonView->boneIds.end()) continue;
+                const std::size_t poseIndex = static_cast<std::size_t>(poseBone - skeletonView->boneIds.begin());
+                const kb::math::Mat4& skin = skeletonView->currentSkinMatrices[poseIndex];
+                const kb::math::Vec4 transformedPosition = skin * kb::math::Vec4{
+                    vertex.position.x, vertex.position.y, vertex.position.z, 1.0F };
+                const kb::math::Vec4 transformedNormal = skin * kb::math::Vec4{
+                    vertex.normal.x, vertex.normal.y, vertex.normal.z, 0.0F };
+                skinnedPosition = skinnedPosition + kb::scene::Vec3{
+                    transformedPosition.x, transformedPosition.y, transformedPosition.z } * weight;
+                skinnedNormal = skinnedNormal + kb::scene::Vec3{
+                    transformedNormal.x, transformedNormal.y, transformedNormal.z } * weight;
+                accumulatedWeight += weight;
+            }
+            if (accumulatedWeight > 0.000001F) {
+                position = skinnedPosition * (1.0F / accumulatedWeight);
+                normal = kb::math::Normalize(skinnedNormal);
+            }
+        }
+        const kb::scene::Vec3 start = WorldPoint(owner, position);
+        const kb::scene::Vec3 direction = WorldDirection(owner, normal);
         output.lines.push_back(AnimationPreviewOverlayLine{
             .from = start, .to = start + direction * 0.075F, .color = { 0.28F, 0.88F, 1.0F },
         });
+        ++emitted;
+    };
+
+    if (lod.indices.empty() || lod.sections.empty()) {
+        for (std::size_t vertexIndex = 0U;
+             vertexIndex < lod.vertices.size() && emitted < kMaximumNormalLines;
+             vertexIndex += stride) {
+            appendVertex(lod.vertices[vertexIndex], nullptr);
+        }
+        return;
+    }
+
+    std::size_t candidateIndex = 0U;
+    for (const kb::scene::SkeletalMeshSection& section : lod.sections) {
+        const std::size_t sectionEnd = std::min<std::size_t>(
+            lod.indices.size(), static_cast<std::size_t>(section.firstIndex) + section.indexCount);
+        for (std::size_t indexOffset = section.firstIndex;
+             indexOffset < sectionEnd && emitted < kMaximumNormalLines;
+             ++indexOffset, ++candidateIndex) {
+            if ((candidateIndex % stride) != 0U) continue;
+            const std::uint32_t vertexIndex = lod.indices[indexOffset];
+            if (vertexIndex < lod.vertices.size()) appendVertex(lod.vertices[vertexIndex], &section);
+        }
     }
 }
 
@@ -128,10 +218,16 @@ void EditorAnimationPreviewScene::Focus(float durationSeconds) noexcept {
     SynchronizeCamera();
 }
 
-bool EditorAnimationPreviewScene::TickCamera(float deltaSeconds) noexcept {
-    const bool animating = camera_.TickFocus(deltaSeconds);
-    SynchronizeCamera();
-    return animating;
+bool EditorAnimationPreviewScene::TickCamera(
+    float deltaSeconds,
+    const EditorViewportCameraFlightInput& flightInput) noexcept {
+    bool changed = camera_.ApplyQueuedPointer();
+    changed = camera_.ApplyKeyboardFlight(flightInput, deltaSeconds) || changed;
+    changed = camera_.TickFocus(deltaSeconds) || changed;
+    if (changed) {
+        SynchronizeCamera();
+    }
+    return changed;
 }
 
 bool EditorAnimationPreviewScene::TickPlayback(AnimationPreviewContext& context, float deltaSeconds) noexcept {
@@ -161,11 +257,13 @@ AnimationPreviewOverlaySnapshot EditorAnimationPreviewScene::BuildOverlays(
         : kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset>{};
     if (mesh.IsLoaded()) {
         output.lodCount = static_cast<std::uint32_t>(mesh->lods.size());
-        if (settings.NormalsVisible()) AppendNormalLines(output, *mesh, owner);
+        if (settings.NormalsVisible()) {
+            AppendNormalLines(output, *mesh, owner, skeletonView.has_value() ? &*skeletonView : nullptr);
+        }
     }
     if (settings.LodVisible()) {
         output.labels.push_back(AnimationPreviewOverlayLabel{
-            .position = WorldPoint(owner, focusCenter_),
+            .position = focusCenter_,
             .text = "LODs: " + std::to_string(output.lodCount),
         });
     }
@@ -180,7 +278,9 @@ AnimationPreviewOverlaySnapshot EditorAnimationPreviewScene::BuildOverlays(
                 if (bone == skeleton->bones.end()) continue;
                 const kb::scene::Vec3 position = WorldPoint(owner, positions[index]);
                 if (settings.BoneNamesVisible()) {
-                    output.labels.push_back(AnimationPreviewOverlayLabel{ .position = position, .text = bone->name });
+                    output.labels.push_back(AnimationPreviewOverlayLabel{
+                        .position = position, .text = bone->name,
+                    });
                 }
                 if (settings.BonesVisible() && bone->parentIndex >= 0 &&
                     static_cast<std::size_t>(bone->parentIndex) < skeleton->bones.size()) {
@@ -191,6 +291,7 @@ AnimationPreviewOverlaySnapshot EditorAnimationPreviewScene::BuildOverlays(
                             .from = WorldPoint(owner, positions[static_cast<std::size_t>(parent - boneIds.begin())]),
                             .to = position,
                             .color = { 0.96F, 0.35F, 0.12F },
+                            .fromBoneId = parentId,
                             .boneId = boneIds[index],
                         });
                     }
@@ -202,7 +303,9 @@ AnimationPreviewOverlaySnapshot EditorAnimationPreviewScene::BuildOverlays(
                 output.lines.push_back(AnimationPreviewOverlayLine{
                     .from = origin, .to = root, .color = { 0.94F, 0.16F, 0.78F },
                 });
-                output.labels.push_back(AnimationPreviewOverlayLabel{ .position = root, .text = "Root motion" });
+                output.labels.push_back(AnimationPreviewOverlayLabel{
+                    .position = root, .text = "Root motion",
+                });
             }
         }
         if (settings.SocketsVisible() && skeleton.IsLoaded()) {
@@ -216,7 +319,9 @@ AnimationPreviewOverlaySnapshot EditorAnimationPreviewScene::BuildOverlays(
                 output.lines.push_back(AnimationPreviewOverlayLine{ .from = start, .to = start + x, .color = { 1.0F, 0.2F, 0.2F } });
                 output.lines.push_back(AnimationPreviewOverlayLine{ .from = start, .to = start + y, .color = { 0.2F, 1.0F, 0.2F } });
                 output.lines.push_back(AnimationPreviewOverlayLine{ .from = start, .to = start + z, .color = { 0.2F, 0.4F, 1.0F } });
-                output.labels.push_back(AnimationPreviewOverlayLabel{ .position = start, .text = socket.name });
+                output.labels.push_back(AnimationPreviewOverlayLabel{
+                    .position = start, .text = socket.name,
+                });
             }
         }
     }
@@ -232,6 +337,8 @@ AnimationPreviewOverlaySnapshot EditorAnimationPreviewScene::BuildOverlays(
 
 void EditorAnimationPreviewScene::Rebuild(
     const kb::scene::Scene& source, const AnimationPreviewContext& context) {
+    const bool openingDifferentAsset = framedMeshAsset_ != context.SkeletalMeshAsset() ||
+        framedSkeletonAsset_ != context.SkeletonAsset();
     scene_ = std::make_unique<kb::scene::Scene>(kb::scene::SceneMode::Runtime);
     for (const kb::assets::AssetMetadata& metadata : source.Assets().Manager().Registry().All()) {
         static_cast<void>(scene_->Assets().Manager().RegisterAsset(metadata));
@@ -239,28 +346,53 @@ void EditorAnimationPreviewScene::Rebuild(
     RegisterPreviewFloorAsset(scene_->Assets().Manager());
     previewEntity_ = scene_->Entities().CreateEntity(
         kb::scene::SceneObjectDesc{ .name = "Animation Preview" });
+    kb::assets::AssetManager& previewAssets = scene_->Assets().Manager();
     const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> mesh =
-        context.SkeletalMeshAsset().IsValid()
-        ? scene_->Assets().Manager().Load<kb::scene::SkeletalMeshAsset>(context.SkeletalMeshAsset())
-        : kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset>{};
-    bool compatible = mesh.IsLoaded();
-    std::uint64_t skeletonSignature = 0U;
-    if (compatible && context.SkeletonAsset().IsValid()) {
-        const kb::assets::AssetHandle<kb::scene::SkeletonAsset> skeleton =
-            scene_->Assets().Manager().Load<kb::scene::SkeletonAsset>(context.SkeletonAsset());
-        skeletonSignature = skeleton.IsLoaded() ? kb::scene::SkeletonCompatibilitySignature(*skeleton) : 0U;
-        compatible = skeletonSignature != 0U &&
+        ShareOrLoadPreviewAsset<kb::scene::SkeletalMeshAsset>(source, previewAssets, context.SkeletalMeshAsset());
+    const kb::assets::AssetHandle<kb::scene::SkeletonAsset> skeleton =
+        ShareOrLoadPreviewAsset<kb::scene::SkeletonAsset>(source, previewAssets, context.SkeletonAsset());
+    const bool correctLegacyFbxUpAxis = mesh.IsLoaded() &&
+        RequiresLegacyFbxUpAxisCorrection(mesh->conservativeBounds);
+    if (mesh.IsLoaded()) {
+        diagnostics::EditorLagTrace::Marker(
+            "skeletal-orientation",
+            "assetId=" + std::to_string(context.SkeletalMeshAsset().value) +
+            " legacyCorrection=" + (correctLegacyFbxUpAxis ? "1" : "0") +
+            " centerY=" + std::to_string(mesh->conservativeBounds.center.y) +
+            " extentY=" + std::to_string(mesh->conservativeBounds.extents.y));
+    }
+    const kb::scene::Quat previewRotation = correctLegacyFbxUpAxis
+        ? kb::scene::Quat{ 0.0F, 0.0F, 1.0F, 0.0F }
+        : kb::scene::Quat{};
+    if (correctLegacyFbxUpAxis) {
+        kb::scene::TransformComponent previewTransform = scene_->Transforms().Get(previewEntity_);
+        previewTransform.localRotation = previewRotation;
+        scene_->Transforms().Set(previewEntity_, previewTransform);
+    }
+    const std::uint64_t skeletonSignature = skeleton.IsLoaded()
+        ? kb::scene::SkeletonCompatibilitySignature(*skeleton)
+        : 0U;
+    bool compatible = skeletonSignature != 0U;
+    if (compatible && mesh.IsLoaded()) {
+        compatible =
             mesh->skeletonAssetId == context.SkeletonAsset().value &&
             mesh->skeletonCompatibilitySignature == skeletonSignature;
     }
-    static_cast<void>(scene_->Components().MeshRenderers().Set(previewEntity_, kb::scene::MeshRendererComponent{
-        .meshAssetId = context.SkeletalMeshAsset().value,
-    }));
-    static_cast<void>(scene_->Components().DeformedGeometries().Set(previewEntity_, kb::scene::DrawD3DeformedGeometryComponent{
-        .skeletalMeshAssetId = context.SkeletalMeshAsset().value,
-        .enabled = compatible,
-    }));
-    if (compatible && context.SkeletonAsset().IsValid()) {
+    if (mesh.IsLoaded()) {
+        static_cast<void>(scene_->Components().MeshRenderers().Set(previewEntity_, kb::scene::MeshRendererComponent{
+            .meshAssetId = context.SkeletalMeshAsset().value,
+        }));
+        static_cast<void>(scene_->Components().DeformedGeometries().Set(previewEntity_, kb::scene::DrawD3DeformedGeometryComponent{
+            .skeletalMeshAssetId = context.SkeletalMeshAsset().value,
+            // Asset-editor previews contain exactly one inspected character. Use its imported
+            // conservative bounds instead of deriving animated bounds for frustum culling: a bad or
+            // incomplete imported per-bone bound must never make the model disappear while its bones
+            // remain visible, and there is no crowd-scale culling benefit in this viewport.
+            .fixedBounds = true,
+            .enabled = compatible,
+        }));
+    }
+    if (compatible) {
         static_cast<void>(scene_->Components().SkeletonBindings().Set(previewEntity_, kb::scene::SkeletonBindingComponent{
             .skeletonAssetId = context.SkeletonAsset().value,
             .skeletonCompatibilitySignature = skeletonSignature,
@@ -275,7 +407,7 @@ void EditorAnimationPreviewScene::Rebuild(
     if (compatible && context.PoseMode() == AnimationPreviewPoseMode::Animated &&
         !controllerId.IsValid() && context.ClipAsset().IsValid()) {
         const kb::assets::AssetHandle<kb::scene::AnimationClip> clip =
-            scene_->Assets().Manager().Load<kb::scene::AnimationClip>(context.ClipAsset());
+            ShareOrLoadPreviewAsset<kb::scene::AnimationClip>(source, previewAssets, context.ClipAsset());
         compatible = clip.IsLoaded() &&
             clip->targetSkeletonAssetId == context.SkeletonAsset().value &&
             clip->targetSkeletonCompatibilitySignature == skeletonSignature;
@@ -320,7 +452,9 @@ void EditorAnimationPreviewScene::Rebuild(
         }));
     }
 
-    focusCenter_ = mesh.IsLoaded() ? mesh->conservativeBounds.center : kb::scene::Vec3{};
+    focusCenter_ = mesh.IsLoaded()
+        ? kb::math::Rotate(previewRotation, mesh->conservativeBounds.center)
+        : kb::scene::Vec3{};
     focusRadius_ = mesh.IsLoaded() ? BoundsRadius(mesh->conservativeBounds) : 1.0F;
 
     kb::scene::SceneObjectDesc cameraDesc{ .name = "Animation Preview Camera" };
@@ -337,7 +471,7 @@ void EditorAnimationPreviewScene::Rebuild(
     kb::scene::SceneObjectDesc floorDesc{ .name = "Animation Preview Floor" };
     floorDesc.transform.localPosition = kb::scene::Vec3{ 0.0F, kPreviewFloorHeight, 0.0F };
     floorDesc.transform.localRotation = kb::math::FromToRotation(
-        kb::scene::Vec3{ 0.0F, 0.0F, -1.0F }, kb::scene::Vec3{ 0.0F, 1.0F, 0.0F });
+        kb::scene::Vec3{ 0.0F, 0.0F, 1.0F }, kb::scene::Vec3{ 0.0F, 1.0F, 0.0F });
     floorDesc.transform.localScale = kb::scene::Vec3{ kPreviewFloorExtent, kPreviewFloorExtent, 1.0F };
     floorEntity_ = scene_->Entities().CreateEntity(floorDesc);
     static_cast<void>(scene_->Components().MeshRenderers().Set(floorEntity_, kb::scene::MeshRendererComponent{
@@ -386,9 +520,38 @@ void EditorAnimationPreviewScene::Rebuild(
     }));
     kb::scene::SceneLightingAccess::SetBasicLightingEnabled(*scene_, true);
 
-    Focus(0.0F);
+    if (openingDifferentAsset) {
+        // Asset editors open on an orthographic-looking front view. The shared scene-camera default
+        // is intentionally a three-quarter view, but it made imported rigs appear tilted even after
+        // their legacy up-axis was corrected.
+        // The canonical imported character convention presents the authored front when viewed
+        // from +Z toward -Z. In this camera state yaw 180 places the camera on +Z; yaw 0 shows
+        // the character's back and exposes the open spaces between Y Bot's rear armour panels.
+        camera_.SetViewAngles(180.0F, 0.0F);
+    }
     static_cast<void>(scene_->Runtime().Update(0.0F));
+    if (!mesh.IsLoaded()) {
+        if (const std::optional<kb::scene::AnimatorInstanceSkeletonView> pose =
+                scene_->Animators().InstanceSkeleton(previewEntity_);
+            pose.has_value() && !pose->currentComponentPose.positions.empty()) {
+            kb::scene::Vec3 minimum = pose->currentComponentPose.positions.front();
+            kb::scene::Vec3 maximum = minimum;
+            for (const kb::scene::Vec3 position : pose->currentComponentPose.positions) {
+                minimum.x = std::min(minimum.x, position.x);
+                minimum.y = std::min(minimum.y, position.y);
+                minimum.z = std::min(minimum.z, position.z);
+                maximum.x = std::max(maximum.x, position.x);
+                maximum.y = std::max(maximum.y, position.y);
+                maximum.z = std::max(maximum.z, position.z);
+            }
+            focusCenter_ = (minimum + maximum) * 0.5F;
+            focusRadius_ = std::max(0.1F, kb::math::Length(maximum - minimum) * 0.5F);
+        }
+    }
+    Focus(0.0F);
     sourceSceneId_ = source.Id();
+    framedMeshAsset_ = context.SkeletalMeshAsset();
+    framedSkeletonAsset_ = context.SkeletonAsset();
     contextRevision_ = context.Revision();
     playbackRevision_ = 0U;
     ++revision_;
@@ -430,6 +593,8 @@ void EditorAnimationPreviewScene::Clear() noexcept {
     focusCenter_ = {};
     focusRadius_ = 1.0F;
     sourceSceneId_ = 0U;
+    framedMeshAsset_ = {};
+    framedSkeletonAsset_ = {};
     contextRevision_ = 0U;
     playbackRevision_ = 0U;
     ++revision_;

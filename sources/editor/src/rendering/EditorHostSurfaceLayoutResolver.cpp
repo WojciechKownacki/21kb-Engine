@@ -5,6 +5,7 @@
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/MaterialPreviewViewportKeys.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
+#include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 
 #include <optional>
 #include <span>
@@ -85,6 +86,17 @@ std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> EditorHostSurfaceLayoutR
                 .viewportKey = panelLayout.panelId,
                 .bounds = SceneViewportToolbarRenderer::Resolve(content, sceneContext.ViewportPreview(panelLayout.panelId), sceneContext).renderArea,
             });
+            continue;
+        }
+        if (panel->kind == DockPanelKind::SkeletalMeshEditor &&
+            sceneContext.HasSkeletalMeshEditorAsset()) {
+            const RECT viewport = SkeletalMeshEditorPanelLayoutResolver::Resolve(content).viewport;
+            if (viewport.right > viewport.left && viewport.bottom > viewport.top) {
+                layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
+                    .viewportKey = panelLayout.panelId,
+                    .bounds = viewport,
+                });
+            }
             continue;
         }
         if (panel->kind == DockPanelKind::Inspector) {

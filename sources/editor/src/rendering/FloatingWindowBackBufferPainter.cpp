@@ -13,6 +13,7 @@
 #include "rendering/MaterialPreviewViewportKeys.hpp"
 #include "rendering/SceneViewportToolbarDropdownOverlayWindow.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
+#include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 #include "scene/EditorTerrainService.hpp"
 
 #include <vector>
@@ -66,6 +67,12 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
                 .bounds = *preview,
             });
         }
+    } else if (paintContext->panel->kind == DockPanelKind::SkeletalMeshEditor &&
+        paintContext->sceneContext->HasSkeletalMeshEditorAsset()) {
+        layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
+            .viewportKey = paintContext->panel->id,
+            .bounds = SkeletalMeshEditorPanelLayoutResolver::Resolve(content).viewport,
+        });
     }
     const std::span<const EditorSceneBgfxViewport::HostSurfaceLayout> layoutSpan{layouts.data(), layouts.size()};
     if (EditorWindowResizeInteraction::IsWindowResizing(paintContext->window)) {
@@ -90,6 +97,11 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
 }
 
 } // namespace
+
+void FloatingWindowBackBufferPainter::HideAllOverlays() noexcept {
+    FloatingSceneToolbarDropdownOverlay().Hide();
+    FloatingAddComponentOverlay().Hide();
+}
 
 void FloatingWindowBackBufferPainter::Paint(HWND window, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings, EditorSceneBgfxViewport& sceneViewport) {
     FloatingWindowPaintContext context{

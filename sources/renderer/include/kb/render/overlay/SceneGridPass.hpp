@@ -2,8 +2,11 @@
 
 #include "kb/render/frame/RenderTargetDesc.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
+#include "kb/render/ViewIdPolicy.hpp"
 
 #include <bgfx/bgfx.h>
+
+#include <array>
 
 namespace kb::render {
 
@@ -42,6 +45,14 @@ public:
     [[nodiscard]] bool IsInitialized() const noexcept;
 
 private:
+    struct DepthFrameBufferEntry {
+        bgfx::FrameBufferHandle frameBuffer = BGFX_INVALID_HANDLE;
+        bgfx::FrameBufferHandle sourceFrameBuffer = BGFX_INVALID_HANDLE;
+        bgfx::TextureHandle color = BGFX_INVALID_HANDLE;
+        bgfx::TextureHandle depth = BGFX_INVALID_HANDLE;
+        RenderExtent extent{};
+    };
+
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle cameraPosUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle basisRightUniform_ = BGFX_INVALID_HANDLE;
@@ -54,9 +65,10 @@ private:
     bgfx::UniformHandle depthParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle viewProjectionUniform_ = BGFX_INVALID_HANDLE;
     bgfx::VertexLayout fullscreenLayout_{};
-    mutable bgfx::FrameBufferHandle depthFrameBuffer_ = BGFX_INVALID_HANDLE;
-    mutable bgfx::TextureHandle depthFrameBufferColor_ = BGFX_INVALID_HANDLE;
-    mutable bgfx::TextureHandle depthFrameBufferDepth_ = BGFX_INVALID_HANDLE;
+    // A frame can submit several editor viewports. Each bgfx view must retain its own attachment
+    // wrapper until the frame is consumed; replacing one global framebuffer while assembling the
+    // next viewport destroyed resources that the earlier grid submission still referenced.
+    mutable std::array<DepthFrameBufferEntry, ViewId::Max> depthFrameBuffers_{};
     bool initialized_ = false;
 };
 

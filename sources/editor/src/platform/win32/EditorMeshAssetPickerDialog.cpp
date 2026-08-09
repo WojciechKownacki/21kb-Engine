@@ -212,7 +212,7 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
 
 [[nodiscard]] std::vector<AssetPickerRow> BuildAnimatorControllerRows(const EditorSceneContext& sceneContext) {
     std::vector<AssetPickerRow> rows;
-    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
         if (metadata.type != kb::scene::kAnimatorControllerAssetType) {
             continue;
@@ -395,7 +395,7 @@ public:
         std::string description,
         std::string clearDescription,
         HeroIconKind icon,
-        const kb::assets::AssetManager* assetManager = nullptr,
+        kb::assets::AssetManager* assetManager = nullptr,
         bool textureThumbnails = false,
         AssetPickerTileKind tileKind = AssetPickerTileKind::None,
         bool allowClear = true,
@@ -421,8 +421,11 @@ public:
         if (!EnsureWindow()) {
             return {};
         }
-        if (tileKind_ == AssetPickerTileKind::Material && sceneContext_ != nullptr && sceneViewport_ != nullptr) {
-            lastMaterialThumbnailRevision_ = EditorMaterialThumbnailCache().Revision();
+        if (tileKind_ == AssetPickerTileKind::Mesh ||
+            (tileKind_ == AssetPickerTileKind::Material && sceneContext_ != nullptr && sceneViewport_ != nullptr)) {
+            if (tileKind_ == AssetPickerTileKind::Material) {
+                lastMaterialThumbnailRevision_ = EditorMaterialThumbnailCache().Revision();
+            }
             static_cast<void>(SetTimer(window_, kMaterialThumbnailTimerId, kMaterialThumbnailTimerPeriodMs, nullptr));
         }
         const RECT bounds = CenteredWindowRect(owner, DialogWidth(), DialogHeight());
@@ -1209,7 +1212,10 @@ private:
         return ch == 8 || ch == 13;
     }
 
-    void TickMaterialThumbnailRenderer() {
+    void TickThumbnailRenderers() {
+        if (window_ != nullptr && EditorMeshPreviewCache().PumpCompletedPreviews() > 0U) {
+            InvalidateRect(window_, nullptr, FALSE);
+        }
         if (window_ == nullptr || sceneContext_ == nullptr || sceneViewport_ == nullptr) {
             return;
         }
@@ -1342,7 +1348,7 @@ private:
             break;
         case WM_TIMER:
             if (picker != nullptr && wparam == kMaterialThumbnailTimerId) {
-                picker->TickMaterialThumbnailRenderer();
+                picker->TickThumbnailRenderers();
                 return 0;
             }
             break;
@@ -1374,7 +1380,7 @@ private:
     std::string description_;
     std::string clearDescription_;
     HeroIconKind icon_ = HeroIconKind::Cube;
-    const kb::assets::AssetManager* assetManager_ = nullptr;
+    kb::assets::AssetManager* assetManager_ = nullptr;
     bool textureThumbnails_ = false;
     AssetPickerTileKind tileKind_ = AssetPickerTileKind::None;
     bool allowClear_ = true;
@@ -1398,9 +1404,9 @@ private:
 EditorMeshAssetPickerDialog::Result EditorMeshAssetPickerDialog::Show(
     HWND owner,
     const EditorTheme& theme,
-    const EditorSceneContext& sceneContext,
+    EditorSceneContext& sceneContext,
     kb::assets::AssetId currentMesh) {
-    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     AssetPickerWindow window{
         theme,
         BuildMeshRows(sceneContext),
@@ -1424,7 +1430,7 @@ EditorMaterialAssetPickerDialog::Result EditorMaterialAssetPickerDialog::Show(
     EditorSceneBgfxViewport& sceneViewport,
     kb::assets::AssetId currentMaterial,
     bool allowClear) {
-    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     AssetPickerWindow window{
         theme,
         BuildMaterialRows(sceneContext),
@@ -1507,7 +1513,7 @@ EditorTextureAssetPickerDialog::Result EditorTextureAssetPickerDialog::Show(
     const EditorSceneContext& sceneContext,
     kb::assets::AssetId currentTexture,
     EditorTextureAssetPickerFilter filter) {
-    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     AssetPickerWindow window{
         theme,
         BuildTextureRows(sceneContext, filter),

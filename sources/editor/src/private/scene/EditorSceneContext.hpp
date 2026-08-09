@@ -31,6 +31,7 @@
 #include "scene/SkeletalMeshEditorTreeState.hpp"
 #include "scene/SkeletalMeshEditorDetailsState.hpp"
 #include "scene/SkeletalMeshEditorDocumentState.hpp"
+#include "scene/SkeletonEditorDocumentState.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
 #include "scene/material/MaterialEditorState.hpp"
 #include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
@@ -44,6 +45,7 @@
 #include "rendering/material_graph/MaterialGraphInteractionPolicy.hpp"
 
 #include <array>
+#include <atomic>
 #include <string>
 #include <string_view>
 #include <cstddef>
@@ -51,8 +53,10 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -182,7 +186,9 @@ public:
     [[nodiscard]] EditorViewportCameraState& AnimationPreviewCamera() noexcept;
     [[nodiscard]] const EditorViewportCameraState& AnimationPreviewCamera() const noexcept;
     void FocusAnimationPreview(float durationSeconds = 0.0F) noexcept;
-    [[nodiscard]] bool TickAnimationPreviewCamera(float deltaSeconds) noexcept;
+    [[nodiscard]] bool TickAnimationPreviewCamera(
+        float deltaSeconds,
+        const EditorViewportCameraFlightInput& flightInput = {}) noexcept;
     [[nodiscard]] bool TickAnimationPreviewPlayback(float deltaSeconds) noexcept;
     [[nodiscard]] AnimationPreviewOverlaySnapshot AnimationPreviewOverlays() const;
     [[nodiscard]] EditorViewportCameraState& ViewportCamera() noexcept;
@@ -385,6 +391,9 @@ public:
     [[nodiscard]] bool ImportAssetFiles(std::span<const std::filesystem::path> sourceFiles);
     [[nodiscard]] bool ImportAssetFiles(std::span<const std::filesystem::path> sourceFiles, const std::filesystem::path& destinationVirtualFolder);
     [[nodiscard]] bool ImportAssetFiles(std::span<const std::filesystem::path> sourceFiles, const std::filesystem::path& destinationVirtualFolder, const kb::assets::AssetImportOptions& options);
+    [[nodiscard]] bool BeginAssetImport(std::span<const std::filesystem::path> sourceFiles, const std::filesystem::path& destinationVirtualFolder, const kb::assets::AssetImportOptions& options);
+    [[nodiscard]] std::size_t PumpAssetImportResults();
+    [[nodiscard]] bool AssetImportInProgress() const noexcept;
 
     [[nodiscard]] bool ToggleHierarchyRowExpanded(std::size_t rowIndex);
     [[nodiscard]] bool ToggleEntityVisibility(kb::scene::SceneEntity entity);
@@ -461,8 +470,20 @@ public:
     [[nodiscard]] bool SaveAnimationClipEditorAsset();
     [[nodiscard]] std::vector<kb::assets::AssetId> AnimationClipEditorCompatiblePreviewMeshes();
     [[nodiscard]] bool SetAnimationClipEditorPreviewMesh(kb::assets::AssetId meshId);
+    // Interactive opens are staged through AssetManager's worker so the Win32
+    // double-click handler never parses a Skeletal Mesh on the message thread.
+    // OpenSkeletalMeshEditorAsset intentionally remains synchronous for headless
+    // automation and callers that require the document to be ready on return.
+    [[nodiscard]] bool RequestOpenSkeletalMeshEditorAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool RequestOpenSkeletalMeshEditorSkeletonAsset(kb::assets::AssetId skeletonId);
+    [[nodiscard]] bool PumpPendingSkeletalMeshEditorOpen();
+    [[nodiscard]] bool HasPendingSkeletalMeshEditorOpen() const noexcept;
     [[nodiscard]] bool OpenSkeletalMeshEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] kb::assets::AssetId SkeletalMeshEditorAssetId() const noexcept;
+    [[nodiscard]] kb::assets::AssetId SkeletalMeshEditorSkeletonAssetId() const noexcept;
+    [[nodiscard]] kb::assets::AssetId RequestedSkeletalMeshEditorAssetId() const noexcept;
+    [[nodiscard]] bool IsSkeletalMeshEditorSkeletonDocument() const noexcept;
+    [[nodiscard]] bool SwitchSkeletalMeshEditorDocument(bool skeletonDocument);
     [[nodiscard]] bool HasSkeletalMeshEditorAsset() const noexcept;
     [[nodiscard]] const kb::scene::Scene* SkeletalMeshEditorPreviewScene() const noexcept;
     [[nodiscard]] std::uint64_t SkeletalMeshEditorPreviewRevision() const noexcept;
@@ -486,7 +507,17 @@ public:
     [[nodiscard]] bool HasDirtySkeletalMeshEditorAssetEdit() const noexcept;
     [[nodiscard]] bool CanUndoSkeletalMeshEditorAssetEdit() const noexcept;
     [[nodiscard]] bool CanRedoSkeletalMeshEditorAssetEdit() const noexcept;
+    [[nodiscard]] bool CanAddSkeletonEditorSocket() const noexcept;
+    [[nodiscard]] bool CanDuplicateSkeletonEditorSocket() const noexcept;
+    [[nodiscard]] bool CanDeleteSkeletonEditorSocket() const noexcept;
     [[nodiscard]] bool SetSkeletalMeshEditorBoundsMode(kb::scene::SkeletalMeshBoundsMode mode);
+    [[nodiscard]] bool ToggleSkeletalMeshEditorBoundsMode();
+    [[nodiscard]] bool FocusSkeletalMeshEditorPreview() noexcept;
+    [[nodiscard]] bool ShowSkeletalMeshEditorReferencePose();
+    [[nodiscard]] bool SetSkeletonEditorPreviewMesh(kb::assets::AssetId meshId);
+    [[nodiscard]] bool AddSkeletonEditorSocket();
+    [[nodiscard]] bool DuplicateSkeletonEditorSocket();
+    [[nodiscard]] bool DeleteSkeletonEditorSocket();
     [[nodiscard]] bool UndoSkeletalMeshEditorAssetEdit();
     [[nodiscard]] bool RedoSkeletalMeshEditorAssetEdit();
     [[nodiscard]] bool SaveSkeletalMeshEditorAsset();
@@ -966,6 +997,13 @@ public:
     [[nodiscard]] bool HasActiveTransformEdit() const noexcept;
 
 private:
+    [[nodiscard]] bool FinalizeLoadedSkeletalMeshEditorAsset(
+        kb::assets::AssetId meshId,
+        kb::assets::AssetId skeletonId,
+        std::uint64_t diagnosticEventId,
+        kb::assets::AssetId primarySkeletonId = {});
+    [[nodiscard]] bool PublishSkeletonEditorWorkingCopy();
+    void RefreshSkeletalEditorDetails();
     [[nodiscard]] bool PublishAnimationClipEditorWorkingCopy();
     [[nodiscard]] bool RefreshAnimatorEditorWorkingPreview();
     [[nodiscard]] EditorSceneCommandController SceneCommands() noexcept;
@@ -1041,6 +1079,10 @@ private:
     std::filesystem::path currentScenePath_;
     EditorAssetBrowserState assetBrowser_;
     EditorConsoleState console_;
+    std::mutex assetImportMutex_;
+    std::thread assetImportWorker_;
+    std::optional<kb::assets::AssetImportResult> completedAssetImport_;
+    std::atomic_bool assetImportRunning_{ false };
     EditorSceneViewportStateStore viewportState_;
     AnimationPreviewContext animationPreview_;
     std::unique_ptr<EditorAnimationPreviewScene> animationPreviewScene_;
@@ -1052,9 +1094,15 @@ private:
     AnimationClipTimelineState animationClipEditorTimeline_;
     AnimationClipEditorDocumentState animationClipEditorDocument_;
     kb::assets::AssetId skeletalMeshEditorAssetId_{};
+    kb::assets::AssetId skeletalMeshEditorPrimarySkeletonId_{};
+    kb::assets::AssetId pendingSkeletalMeshEditorAssetId_{};
+    kb::assets::AssetId pendingSkeletalMeshEditorSkeletonId_{};
+    kb::assets::AssetId pendingSkeletalMeshEditorPrimarySkeletonId_{};
+    std::uint64_t pendingSkeletalMeshEditorOpenEventId_ = 0U;
     SkeletalMeshEditorTreeState skeletalMeshEditorTree_;
     SkeletalMeshEditorDetailsState skeletalMeshEditorDetails_;
     SkeletalMeshEditorDocumentState skeletalMeshEditorDocument_;
+    SkeletonEditorDocumentState skeletonEditorDocument_;
     InspectorPanelState inspector_;
     MaterialEditorState materialEditor_;
     kb::assets::AssetId materialRuntimePreviewAssetId_{};

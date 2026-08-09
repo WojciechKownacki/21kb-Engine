@@ -8,6 +8,7 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/scene/MotionSkeletonRuleComponent.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/SkeletonAsset.hpp"
@@ -126,6 +127,52 @@ void RunSkeletalGltfImportAcceptsSkinnedMeshAndSkinNodeTest() {
     std::filesystem::remove_all(root, error);
 }
 
+void RunLegacyFbxInwardWindingMigrationTest(const std::filesystem::path& root) {
+    kb::scene::SkeletalMeshAsset mesh{};
+    mesh.skeletonAssetId = 1U;
+    mesh.skeletonCompatibilitySignature = 1U;
+    mesh.conservativeBounds = {.center = {0.0F, -2.0F, 0.0F}, .extents = {1.0F, 1.0F, 1.0F}};
+    mesh.fixedBounds = mesh.conservativeBounds;
+
+    kb::scene::SkeletalMeshLod lod{};
+    lod.requiredBones = {1U};
+    lod.vertices.resize(8U);
+    const std::array<kb::math::Vec3, 8U> positions{
+        kb::math::Vec3{-1.0F, -3.0F, -1.0F}, kb::math::Vec3{1.0F, -3.0F, -1.0F},
+        kb::math::Vec3{1.0F, -1.0F, -1.0F}, kb::math::Vec3{-1.0F, -1.0F, -1.0F},
+        kb::math::Vec3{-1.0F, -3.0F, 1.0F}, kb::math::Vec3{1.0F, -3.0F, 1.0F},
+        kb::math::Vec3{1.0F, -1.0F, 1.0F}, kb::math::Vec3{-1.0F, -1.0F, 1.0F},
+    };
+    for (std::size_t index = 0U; index < positions.size(); ++index) {
+        lod.vertices[index].position = positions[index];
+        lod.vertices[index].normal = {0.0F, 0.0F, 1.0F};
+    }
+    // These are the reverse of the engine's outward cube convention.
+    lod.indices = {
+        0U, 2U, 3U, 0U, 1U, 2U, 4U, 6U, 5U, 4U, 7U, 6U,
+        0U, 7U, 4U, 0U, 3U, 7U, 1U, 6U, 2U, 1U, 5U, 6U,
+        0U, 5U, 1U, 0U, 4U, 5U, 3U, 6U, 7U, 3U, 2U, 6U,
+    };
+    lod.sections = {{.firstIndex = 0U, .indexCount = static_cast<std::uint32_t>(lod.indices.size()), .boneMap = {1U}}};
+    mesh.lods = {lod};
+    mesh.morphTargets = {{
+        .name = "LegacyNormal",
+        .lodIndex = 0U,
+        .deltas = {{.vertexIndex = 0U, .normalDelta = {0.0F, 1.0F, 0.0F}}},
+    }};
+
+    const std::filesystem::path path = root / "RoundTrip/LegacyInward.kbskeletalmesh";
+    kb::tests::Require(kb::scene::SkeletalMeshAssetIO::Save(path, mesh),
+        "Legacy inward-winding fixture could not be saved");
+    const auto loaded = kb::scene::SkeletalMeshAssetIO::Load(path);
+    kb::tests::Require(loaded.has_value() &&
+            loaded->lods[0U].indices[1U] == 3U && loaded->lods[0U].indices[2U] == 2U &&
+            loaded->lods[0U].vertices[0U].normal.z == -1.0F &&
+            loaded->lods[0U].vertices[0U].tangent.w == -1.0F &&
+            loaded->morphTargets[0U].deltas[0U].normalDelta.y == -1.0F,
+        "Legacy FBX load did not canonicalize inward triangle winding, normals, and tangent handedness");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -134,6 +181,7 @@ void RunSkeletalMeshAssetTests() {
     RunSkeletalGltfImportAcceptsSkinnedMeshAndSkinNodeTest();
     const auto root=std::filesystem::temp_directory_path()/"21kb-skeletal-mesh-asset-tests";
     std::filesystem::remove_all(root); const auto path=root/"Assets/Characters/Hero.kbskeletalmesh";
+    RunLegacyFbxInwardWindingMigrationTest(root);
     kb::scene::SkeletonAsset skeleton{};
     skeleton.bones = {
         { .id = 1U, .parentIndex = -1, .name = "Root", .referencePose = {}, .inverseBind = {} },
@@ -153,6 +201,42 @@ void RunSkeletalMeshAssetTests() {
     mesh.morphTargets={{.name="Smile",.lodIndex=0,.deltas={{.vertexIndex=1,.positionDelta={0,0.1F,0}}}}};
     Require(kb::scene::ValidateSkeletalMeshAsset(mesh).valid,"Valid SkeletalMeshAsset was rejected");
     Require(kb::scene::SkeletalMeshAssetIO::Save(path,mesh),"SkeletalMeshAsset production save failed");
+    kb::scene::Scene derivedDataScene;
+    Require(derivedDataScene.Assets().MountProject(root) && derivedDataScene.Assets().Discover() == 2U,
+        "SkeletalMeshAsset derived-data fixture could not discover its source assets");
+    const kb::assets::AssetMetadata* derivedMetadata =
+        derivedDataScene.Assets().Manager().Registry().FindByPath("/Game/Characters/Hero.kbskeletalmesh");
+    const auto derivedLoaded = derivedMetadata == nullptr
+        ? std::optional<kb::scene::SkeletalMeshAsset>{}
+        : kb::scene::SkeletalMeshAssetIO::LoadDerivedData(path, derivedMetadata->contentHash);
+    Require(derivedMetadata != nullptr && derivedLoaded.has_value() &&
+            derivedLoaded->lods.size() == mesh.lods.size() &&
+            derivedLoaded->lods.front().vertices.size() == mesh.lods.front().vertices.size() &&
+            derivedLoaded->morphTargets.size() == mesh.morphTargets.size(),
+        "SkeletalMeshAsset binary derived-data cache did not preserve the runtime payload");
+    Require(!kb::scene::SkeletalMeshAssetIO::LoadDerivedData(
+            path, derivedMetadata == nullptr ? 1U : derivedMetadata->contentHash + 1U).has_value(),
+        "SkeletalMeshAsset derived-data cache accepted a different source content hash");
+    if (derivedMetadata != nullptr) {
+        const std::filesystem::path cachePath = root / "Saved" / "Cache" / "SkeletalMesh" /
+            (std::to_string(derivedMetadata->contentHash) + ".kbskeletalmesh.ddc");
+        std::string damagedCache = ReadTextFile(cachePath);
+        Require(damagedCache.size() > 64U,
+            "SkeletalMeshAsset derived-data cache was not written to the project cache");
+        damagedCache[40U] = static_cast<char>(damagedCache[40U] ^ 0x5A);
+        WriteTextFile(cachePath, damagedCache);
+        Require(!kb::scene::SkeletalMeshAssetIO::LoadDerivedData(
+                path, derivedMetadata->contentHash).has_value(),
+            "SkeletalMeshAsset derived-data cache accepted checksum-corrupted bytes");
+        Require(kb::scene::SkeletalMeshAssetIO::SaveDerivedData(
+                path, derivedMetadata->contentHash, mesh),
+            "SkeletalMeshAsset derived-data cache could not be rebuilt after corruption");
+    }
+    const auto serializedBinding = kb::scene::SkeletalMeshAssetIO::LoadBinding(path);
+    Require(serializedBinding &&
+            serializedBinding->skeletonAssetId == mesh.skeletonAssetId &&
+            serializedBinding->skeletonCompatibilitySignature == mesh.skeletonCompatibilitySignature,
+        "SkeletalMeshAsset lightweight binding load lost the skeleton dependency");
     const auto loaded=kb::scene::SkeletalMeshAssetIO::Load(path);
     Require(loaded && loaded->lods.size()==1U && loaded->lods[0].sections[0].materialAssetId==42U && loaded->morphTargets[0].deltas.size()==1U &&
             loaded->boundsMode == kb::scene::SkeletalMeshBoundsMode::ImportedConservative &&
@@ -174,6 +258,10 @@ void RunSkeletalMeshAssetTests() {
     const auto corruptPath = root / "RoundTrip/Corrupt.kbskeletalmesh";
     WriteTextFile(corruptPath, "21kb SkeletalMesh 99\n");
     std::string corruptError;
+    Require(!kb::scene::SkeletalMeshAssetIO::LoadBinding(corruptPath, &corruptError).has_value() &&
+            !corruptError.empty(),
+        "SkeletalMeshAsset lightweight binding load accepted an unsupported schema");
+    corruptError.clear();
     Require(!kb::scene::SkeletalMeshAssetIO::Load(corruptPath, &corruptError).has_value() &&
             corruptError.find("line 1") != std::string::npos,
         "SkeletalMeshAsset accepted an unsupported schema version without a diagnostic");
@@ -267,6 +355,35 @@ void RunSkeletalMeshAssetTests() {
             createPlan->skeletonVirtualPath == "/Game/Characters/Hero.kbskeleton" &&
             createPlan->imported.mesh.skeletonAssetId == createPlan->skeletonAssetId.value,
         "Skeletal glTF import planner did not deterministically plan a new Skeleton asset");
+    const auto replacementRoot = root / "GltfImportReplacementPlanner";
+    std::filesystem::create_directories(replacementRoot / "Assets" / "Characters");
+    kb::scene::Scene replacementScene;
+    Require(replacementScene.Assets().MountProject(replacementRoot),
+        "Skeletal glTF replacement planner mount failed");
+    kb::scene::SkeletonAsset incompatibleSkeleton = imported->skeleton;
+    incompatibleSkeleton.bones.back().name += "_Outdated";
+    const auto replacementSkeletonPath =
+        replacementRoot / "Assets" / "Characters" / "Hero.kbskeleton";
+    Require(kb::scene::SkeletonAssetIO::Save(replacementSkeletonPath, incompatibleSkeleton) &&
+            replacementScene.Assets().Discover() == 1U,
+        "Skeletal glTF replacement planner could not register the outdated Skeleton asset");
+    const kb::assets::AssetMetadata* outdatedMetadata =
+        replacementScene.Assets().Manager().Registry().FindByPath("/Game/Characters/Hero.kbskeleton");
+    Require(outdatedMetadata != nullptr, "Outdated Skeleton metadata was not registered");
+    const kb::assets::AssetId outdatedSkeletonId = outdatedMetadata->id;
+    const auto replacementPlan = kb::scene::SkeletalMeshGltfImportPlanner::Plan(
+        replacementScene.Assets().Manager(), importRoot / "Hero.gltf", "/Game/Characters", {}, &importError);
+    Require(replacementPlan.has_value() && !replacementPlan->reusesSkeleton &&
+            replacementPlan->updatesSkeleton && replacementPlan->skeletonAssetId == outdatedSkeletonId,
+        "Skeletal glTF reimport did not plan an in-place Skeleton update");
+    const auto replacementPublished = replacementPlan ? kb::scene::SkeletalMeshGltfImportPublisher::Publish(
+        replacementScene.Assets().Manager(), *replacementPlan, &importError) : std::nullopt;
+    const auto replacedSkeleton = kb::scene::SkeletonAssetIO::Load(replacementSkeletonPath);
+    Require(replacementPublished.has_value() && !replacementPublished->createdSkeleton &&
+            replacementPublished->skeletonAssetId == outdatedSkeletonId && replacedSkeleton.has_value() &&
+            kb::scene::SkeletonCompatibilitySignature(*replacedSkeleton) ==
+                kb::scene::SkeletonCompatibilitySignature(imported->skeleton),
+        "Skeletal glTF reimport did not atomically replace the outdated Skeleton while preserving its identity");
     Require(kb::scene::SkeletonAssetIO::Save(
                 plannerRoot / "Assets" / "Characters" / "Shared.kbskeleton", imported->skeleton) &&
             plannerScene.Assets().Discover() == 1U,
@@ -305,6 +422,17 @@ void RunSkeletalMeshAssetTests() {
         "Skeletal glTF reimport did not retain the mesh reference while publishing new content");
     const auto extendedImportRoot = root / "GltfExtendedImport";
     WriteExtendedSkeletalGltfFixture(extendedImportRoot);
+    kb::scene::SkeletalMeshGltfImportReport unassignedMaterialReport;
+    const auto importedWithUnassignedMaterial = kb::scene::SkeletalMeshGltfImporter::Import(
+        extendedImportRoot / "HeroExtended.gltf", 777U, {}, &importError,
+        &unassignedMaterialReport);
+    Require(importedWithUnassignedMaterial.has_value() &&
+            importedWithUnassignedMaterial->mesh.lods[0].sections[0].materialAssetId == 0U &&
+            std::ranges::any_of(unassignedMaterialReport.diagnostics, [](const auto& diagnostic) {
+                return diagnostic.severity == kb::scene::SkeletalMeshGltfImportDiagnosticSeverity::Warning &&
+                    diagnostic.message.find("unassigned material slot") != std::string::npos;
+            }),
+        "Skeletal glTF import without a material resolver did not retain an explicit unassigned material slot diagnostic");
     kb::scene::SkeletalMeshGltfImportOptions extendedOptions{};
     extendedOptions.coordinateConversion.unitScale = 100.0F;
     extendedOptions.materialResolver = ResolveFixtureMaterial;
@@ -420,6 +548,16 @@ void RunSkeletalMeshAssetTests() {
         "Skeleton binding accepted an incomplete authoritative configuration");
     Require(scene.Components().SkeletonBindings().TryGet(bindingObject.Entity())->skeletonAssetId == binding.skeletonAssetId,
         "Skeleton binding mutation changed the last valid authoritative configuration");
+    const kb::scene::MotionSkeletonRuleComponent twistRule{
+        .kind = kb::scene::MotionSkeletonRuleKind::Twist,
+        .constrainedBoneId = 1U,
+        .sourceBoneId = 2U,
+        .axis = { 0.0F, 1.0F, 0.0F },
+        .enabled = true,
+    };
+    Require(kb::scene::IsMotionSkeletonRuleComponentValid(twistRule) &&
+            scene.Components().MotionSkeletonRules().Set(bindingObject.Entity(), twistRule),
+        "Motion Skeleton Rule rejected a valid twist configuration");
     scene.Components().SkeletonBindings().Remove(bindingObject.Entity());
     Require(!scene.Components().SkeletonBindings().Has(bindingObject.Entity()),
         "Skeleton binding component was not removed from its live entity");
@@ -477,6 +615,19 @@ void RunSkeletalMeshAssetTests() {
     Require(restoredComponent != nullptr && restoredComponent->skeletalMeshAssetId == 999U &&
             !restoredComponent->poseSource.IsValid(),
         "Deformed Geometry scene round trip did not preserve the canonical owner pose source");
+    const auto restoredBinding = std::find_if(restoredRoots.begin(), restoredRoots.end(), [&restoredScene](kb::scene::SceneEntity entity) {
+        return restoredScene.Entities().Name(entity) == "Skeletal binding";
+    });
+    const kb::scene::MotionSkeletonRuleComponent* restoredRule = restoredBinding == restoredRoots.end()
+        ? nullptr
+        : restoredScene.Components().MotionSkeletonRules().TryGet(*restoredBinding);
+    Require(restoredBinding != restoredRoots.end(),
+        "Motion Skeleton Rule scene round trip did not restore its owner entity");
+    Require(restoredRule != nullptr,
+        "Motion Skeleton Rule scene round trip did not restore the component");
+    Require(restoredRule->kind == kb::scene::MotionSkeletonRuleKind::Twist &&
+            restoredRule->sourceBoneId == twistRule.sourceBoneId && restoredRule->axis.y == twistRule.axis.y,
+        "Motion Skeleton Rule scene round trip did not preserve a valid twist configuration");
     const auto persistedPrefabPath = root / "RoundTrip" / "DeformedGeometry.21kbprefab";
     const kb::scene::ScenePrefabHandle persistedPrefab = scene.Prefabs().CaptureRegistered(
         persistedGeometryObject, "PersistedDeformedGeometry");
