@@ -372,6 +372,23 @@ void RunAnimationPreviewExactScrubTest() {
     if (skeletonMetadata == nullptr) return;
     const kb::assets::AssetId skeletonId = skeletonMetadata->id;
 
+    const auto skeletonOnlySource = source.Assets().Manager().Load<kb::scene::SkeletonAsset>(skeletonId);
+    kb::editor::tests::Require(skeletonOnlySource.IsLoaded(),
+        "Skeleton-only preview fixture could not load its Skeleton");
+    kb::editor::AnimationPreviewContext skeletonOnlyContext;
+    skeletonOnlyContext.SetAssets(skeletonId, {}, {}, {});
+    static_cast<void>(skeletonOnlyContext.Overlays().SetBonesVisible(true));
+    kb::editor::EditorAnimationPreviewScene skeletonOnlyPreview;
+    const kb::scene::Scene& skeletonOnlyScene = skeletonOnlyPreview.SceneFor(source, skeletonOnlyContext);
+    const auto skeletonOnlyPose = skeletonOnlyScene.Animators().InstanceSkeleton(
+        skeletonOnlyPreview.PreviewEntity());
+    kb::editor::tests::Require(
+        skeletonOnlyPose.has_value() &&
+            skeletonOnlyPose->currentComponentPose.positions.size() == skeleton.bones.size() &&
+            !skeletonOnlyScene.Components().MeshRenderers().Has(skeletonOnlyPreview.PreviewEntity()) &&
+            !skeletonOnlyScene.Components().DeformedGeometries().Has(skeletonOnlyPreview.PreviewEntity()),
+        "Skeleton-only preview should evaluate and display the rig without inventing mesh geometry");
+
     const std::uint64_t signature = kb::scene::SkeletonCompatibilitySignature(skeleton);
     kb::scene::SkeletalMeshAsset mesh{};
     mesh.skeletonAssetId = skeletonId.value;

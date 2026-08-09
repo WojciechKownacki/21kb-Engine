@@ -71,6 +71,7 @@ private:
     float focusRadius_ = 1.0F;
     std::uint64_t sourceSceneId_ = 0U;
     kb::assets::AssetId framedMeshAsset_{};
+    kb::assets::AssetId framedSkeletonAsset_{};
     std::uint64_t contextRevision_ = 0U;
     std::uint64_t playbackRevision_ = 0U;
     std::uint64_t revision_ = 1U;

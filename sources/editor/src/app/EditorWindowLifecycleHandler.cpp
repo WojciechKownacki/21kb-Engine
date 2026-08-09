@@ -64,10 +64,10 @@ namespace {
 
 [[nodiscard]] bool ResolveDirtySkeletalMeshEditorClose(HWND owner, EditorSceneContext& sceneContext, std::wstring_view action) {
     if (!sceneContext.HasDirtySkeletalMeshEditorAssetEdit()) return true;
-    std::wstring text = L"Save changes to the open Skeletal Mesh before ";
+    std::wstring text = L"Save changes to the open skeletal assets before ";
     text += action;
     text += L"?\n\nYes = Save\nNo = Discard changes\nCancel = keep editing";
-    switch (MessageBoxW(owner, text.c_str(), L"Unsaved Skeletal Mesh", MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1 | MB_APPLMODAL)) {
+    switch (MessageBoxW(owner, text.c_str(), L"Unsaved Skeletal Asset", MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1 | MB_APPLMODAL)) {
     case IDYES:
         return sceneContext.SaveSkeletalMeshEditorAsset();
     case IDNO:

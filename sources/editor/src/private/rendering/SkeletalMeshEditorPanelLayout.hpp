@@ -6,10 +6,16 @@
 #include <Windows.h>
 #endif
 
+#include <algorithm>
+
 namespace kb::editor {
 
 #if defined(_WIN32)
 struct SkeletalMeshEditorPanelLayout {
+    RECT documentBar{};
+    RECT meshDocument{};
+    RECT skeletonDocument{};
+    RECT commandBar{};
     RECT toolbox{};
     RECT viewport{};
     RECT skeletonTree{};
@@ -20,15 +26,29 @@ class SkeletalMeshEditorPanelLayoutResolver {
 public:
     [[nodiscard]] static SkeletalMeshEditorPanelLayout Resolve(const RECT& content) noexcept {
         const int width = content.right > content.left ? content.right - content.left : 0;
-        const int height = content.bottom > content.top ? content.bottom - content.top : 0;
+        constexpr int documentBarHeight = 38;
+        constexpr int commandBarHeight = 36;
+        const int documentBarBottom = std::min(content.bottom, content.top + documentBarHeight);
+        const int workspaceTop = std::min(static_cast<int>(content.bottom), documentBarBottom + commandBarHeight);
+        const int workspaceHeight = content.bottom - workspaceTop;
+        const LONG buttonsLeft = std::min(content.right, content.left + 112);
+        const LONG buttonsRight = std::max(buttonsLeft, content.right - 8);
+        const LONG buttonsTop = std::min(documentBarBottom, static_cast<int>(content.top + 5));
+        const LONG buttonsBottom = std::max(buttonsTop, static_cast<LONG>(documentBarBottom - 5));
+        const int buttonsWidth = static_cast<int>(buttonsRight - buttonsLeft);
+        const int documentWidth = buttonsWidth / 2;
         const int sideWidth = width / 5;
         const int viewportWidth = width - 2 * sideWidth;
-        const int skeletonTreeHeight = (height * 3) / 5;
+        const int skeletonTreeHeight = (workspaceHeight * 3) / 5;
         return SkeletalMeshEditorPanelLayout{
-            .toolbox = { content.left, content.top, content.left + sideWidth, content.bottom },
-            .viewport = { content.left + sideWidth, content.top, content.left + sideWidth + viewportWidth, content.bottom },
-            .skeletonTree = { content.left + sideWidth + viewportWidth, content.top, content.right, content.top + skeletonTreeHeight },
-            .assetDetails = { content.left + sideWidth + viewportWidth, content.top + skeletonTreeHeight, content.right, content.bottom },
+            .documentBar = { content.left, content.top, content.right, documentBarBottom },
+            .meshDocument = { buttonsLeft, buttonsTop, buttonsLeft + documentWidth, buttonsBottom },
+            .skeletonDocument = { buttonsLeft + documentWidth, buttonsTop, buttonsRight, buttonsBottom },
+            .commandBar = { content.left, documentBarBottom, content.right, workspaceTop },
+            .toolbox = { content.left, workspaceTop, content.left + sideWidth, content.bottom },
+            .viewport = { content.left + sideWidth, workspaceTop, content.left + sideWidth + viewportWidth, content.bottom },
+            .skeletonTree = { content.left + sideWidth + viewportWidth, workspaceTop, content.right, workspaceTop + skeletonTreeHeight },
+            .assetDetails = { content.left + sideWidth + viewportWidth, workspaceTop + skeletonTreeHeight, content.right, content.bottom },
         };
     }
 };
