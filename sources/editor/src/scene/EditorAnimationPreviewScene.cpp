@@ -337,7 +337,8 @@ AnimationPreviewOverlaySnapshot EditorAnimationPreviewScene::BuildOverlays(
 
 void EditorAnimationPreviewScene::Rebuild(
     const kb::scene::Scene& source, const AnimationPreviewContext& context) {
-    const bool openingDifferentMesh = framedMeshAsset_ != context.SkeletalMeshAsset();
+    const bool openingDifferentAsset = framedMeshAsset_ != context.SkeletalMeshAsset() ||
+        framedSkeletonAsset_ != context.SkeletonAsset();
     scene_ = std::make_unique<kb::scene::Scene>(kb::scene::SceneMode::Runtime);
     for (const kb::assets::AssetMetadata& metadata : source.Assets().Manager().Registry().All()) {
         static_cast<void>(scene_->Assets().Manager().RegisterAsset(metadata));
@@ -348,6 +349,8 @@ void EditorAnimationPreviewScene::Rebuild(
     kb::assets::AssetManager& previewAssets = scene_->Assets().Manager();
     const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> mesh =
         ShareOrLoadPreviewAsset<kb::scene::SkeletalMeshAsset>(source, previewAssets, context.SkeletalMeshAsset());
+    const kb::assets::AssetHandle<kb::scene::SkeletonAsset> skeleton =
+        ShareOrLoadPreviewAsset<kb::scene::SkeletonAsset>(source, previewAssets, context.SkeletonAsset());
     const bool correctLegacyFbxUpAxis = mesh.IsLoaded() &&
         RequiresLegacyFbxUpAxisCorrection(mesh->conservativeBounds);
     if (mesh.IsLoaded()) {
@@ -366,29 +369,30 @@ void EditorAnimationPreviewScene::Rebuild(
         previewTransform.localRotation = previewRotation;
         scene_->Transforms().Set(previewEntity_, previewTransform);
     }
-    bool compatible = mesh.IsLoaded();
-    std::uint64_t skeletonSignature = 0U;
-    if (compatible && context.SkeletonAsset().IsValid()) {
-        const kb::assets::AssetHandle<kb::scene::SkeletonAsset> skeleton =
-            ShareOrLoadPreviewAsset<kb::scene::SkeletonAsset>(source, previewAssets, context.SkeletonAsset());
-        skeletonSignature = skeleton.IsLoaded() ? kb::scene::SkeletonCompatibilitySignature(*skeleton) : 0U;
-        compatible = skeletonSignature != 0U &&
+    const std::uint64_t skeletonSignature = skeleton.IsLoaded()
+        ? kb::scene::SkeletonCompatibilitySignature(*skeleton)
+        : 0U;
+    bool compatible = skeletonSignature != 0U;
+    if (compatible && mesh.IsLoaded()) {
+        compatible =
             mesh->skeletonAssetId == context.SkeletonAsset().value &&
             mesh->skeletonCompatibilitySignature == skeletonSignature;
     }
-    static_cast<void>(scene_->Components().MeshRenderers().Set(previewEntity_, kb::scene::MeshRendererComponent{
-        .meshAssetId = context.SkeletalMeshAsset().value,
-    }));
-    static_cast<void>(scene_->Components().DeformedGeometries().Set(previewEntity_, kb::scene::DrawD3DeformedGeometryComponent{
-        .skeletalMeshAssetId = context.SkeletalMeshAsset().value,
-        // Asset-editor previews contain exactly one inspected character. Use its imported
-        // conservative bounds instead of deriving animated bounds for frustum culling: a bad or
-        // incomplete imported per-bone bound must never make the model disappear while its bones
-        // remain visible, and there is no crowd-scale culling benefit in this viewport.
-        .fixedBounds = true,
-        .enabled = compatible,
-    }));
-    if (compatible && context.SkeletonAsset().IsValid()) {
+    if (mesh.IsLoaded()) {
+        static_cast<void>(scene_->Components().MeshRenderers().Set(previewEntity_, kb::scene::MeshRendererComponent{
+            .meshAssetId = context.SkeletalMeshAsset().value,
+        }));
+        static_cast<void>(scene_->Components().DeformedGeometries().Set(previewEntity_, kb::scene::DrawD3DeformedGeometryComponent{
+            .skeletalMeshAssetId = context.SkeletalMeshAsset().value,
+            // Asset-editor previews contain exactly one inspected character. Use its imported
+            // conservative bounds instead of deriving animated bounds for frustum culling: a bad or
+            // incomplete imported per-bone bound must never make the model disappear while its bones
+            // remain visible, and there is no crowd-scale culling benefit in this viewport.
+            .fixedBounds = true,
+            .enabled = compatible,
+        }));
+    }
+    if (compatible) {
         static_cast<void>(scene_->Components().SkeletonBindings().Set(previewEntity_, kb::scene::SkeletonBindingComponent{
             .skeletonAssetId = context.SkeletonAsset().value,
             .skeletonCompatibilitySignature = skeletonSignature,
@@ -516,7 +520,7 @@ void EditorAnimationPreviewScene::Rebuild(
     }));
     kb::scene::SceneLightingAccess::SetBasicLightingEnabled(*scene_, true);
 
-    if (openingDifferentMesh) {
+    if (openingDifferentAsset) {
         // Asset editors open on an orthographic-looking front view. The shared scene-camera default
         // is intentionally a three-quarter view, but it made imported rigs appear tilted even after
         // their legacy up-axis was corrected.
@@ -525,10 +529,29 @@ void EditorAnimationPreviewScene::Rebuild(
         // the character's back and exposes the open spaces between Y Bot's rear armour panels.
         camera_.SetViewAngles(180.0F, 0.0F);
     }
-    Focus(0.0F);
     static_cast<void>(scene_->Runtime().Update(0.0F));
+    if (!mesh.IsLoaded()) {
+        if (const std::optional<kb::scene::AnimatorInstanceSkeletonView> pose =
+                scene_->Animators().InstanceSkeleton(previewEntity_);
+            pose.has_value() && !pose->currentComponentPose.positions.empty()) {
+            kb::scene::Vec3 minimum = pose->currentComponentPose.positions.front();
+            kb::scene::Vec3 maximum = minimum;
+            for (const kb::scene::Vec3 position : pose->currentComponentPose.positions) {
+                minimum.x = std::min(minimum.x, position.x);
+                minimum.y = std::min(minimum.y, position.y);
+                minimum.z = std::min(minimum.z, position.z);
+                maximum.x = std::max(maximum.x, position.x);
+                maximum.y = std::max(maximum.y, position.y);
+                maximum.z = std::max(maximum.z, position.z);
+            }
+            focusCenter_ = (minimum + maximum) * 0.5F;
+            focusRadius_ = std::max(0.1F, kb::math::Length(maximum - minimum) * 0.5F);
+        }
+    }
+    Focus(0.0F);
     sourceSceneId_ = source.Id();
     framedMeshAsset_ = context.SkeletalMeshAsset();
+    framedSkeletonAsset_ = context.SkeletonAsset();
     contextRevision_ = context.Revision();
     playbackRevision_ = 0U;
     ++revision_;
@@ -571,6 +594,7 @@ void EditorAnimationPreviewScene::Clear() noexcept {
     focusRadius_ = 1.0F;
     sourceSceneId_ = 0U;
     framedMeshAsset_ = {};
+    framedSkeletonAsset_ = {};
     contextRevision_ = 0U;
     playbackRevision_ = 0U;
     ++revision_;

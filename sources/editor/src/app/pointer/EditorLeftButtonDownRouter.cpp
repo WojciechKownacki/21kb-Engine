@@ -21,6 +21,7 @@
 #include "app/scene_viewport/EditorTerrainViewportInteraction.hpp"
 #include "docking/DockMainLayoutResolver.hpp"
 #include "diagnostics/EditorLagTrace.hpp"
+#include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -168,8 +169,8 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
     if (!sceneContext.HasDirtySkeletalMeshEditorAssetEdit()) return true;
     const int result = MessageBoxW(
         owner,
-        L"Save changes to the open Skeletal Mesh before closing the editor?\n\nYes = Save\nNo = Discard changes\nCancel = keep editing",
-        L"Unsaved Skeletal Mesh",
+        L"Save changes to the open skeletal assets before closing the editor?\n\nYes = Save\nNo = Discard changes\nCancel = keep editing",
+        L"Unsaved Skeletal Asset",
         MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1 | MB_APPLMODAL);
     if (result == IDYES) return sceneContext.SaveSkeletalMeshEditorAsset();
     if (result == IDNO) return sceneContext.RevertSkeletalMeshEditorAsset();
@@ -888,7 +889,79 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             DockPanelKind::SkeletalMeshEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         skeletalMeshEditorContent.has_value() && PointInRect(*skeletalMeshEditorContent, x, y) &&
         sceneContext_.HasSkeletalMeshEditorAsset()) {
-        if (const std::optional<std::uint8_t> overlay = SkeletalMeshEditorPanelRenderer::AdvancedPreviewOverlayAt(
+        if (const std::optional<SkeletalAssetDocument> document =
+                SkeletalMeshEditorPanelRenderer::LinkedDocumentAt(*skeletalMeshEditorContent, x, y);
+            document.has_value()) {
+            const bool skeletonDocument = *document == SkeletalAssetDocument::Skeleton;
+            if (sceneContext_.SwitchSkeletalMeshEditorDocument(skeletonDocument)) {
+                const kb::assets::AssetId assetId = sceneContext_.RequestedSkeletalMeshEditorAssetId();
+                const kb::assets::AssetMetadata* metadata =
+                    sceneContext_.Scene().Assets().Manager().Registry().Find(assetId);
+                if (metadata != nullptr) {
+                    const std::string filename = metadata->virtualPath.filename().string();
+                    static_cast<void>(dockModel_.Commands().SetPanelTitle(
+                        DockPanelKind::SkeletalMeshEditor,
+                        filename.empty() ? metadata->name : filename));
+                }
+            }
+        } else if (const std::optional<SkeletalAssetCommand> command =
+                SkeletalMeshEditorPanelRenderer::CommandAt(
+                    *skeletalMeshEditorContent, sceneContext_, x, y);
+            command.has_value()) {
+            switch (*command) {
+            case SkeletalAssetCommand::Save:
+                static_cast<void>(sceneContext_.SaveSkeletalMeshEditorAsset());
+                break;
+            case SkeletalAssetCommand::Undo:
+                static_cast<void>(sceneContext_.UndoSkeletalMeshEditorAssetEdit());
+                break;
+            case SkeletalAssetCommand::Redo:
+                static_cast<void>(sceneContext_.RedoSkeletalMeshEditorAssetEdit());
+                break;
+            case SkeletalAssetCommand::Reimport:
+                if (!sceneContext_.HasDirtySkeletalMeshEditorAssetEdit() || MessageBoxW(
+                        mainWindow_,
+                        L"Reload will discard unsaved Skeletal Mesh edits. Continue?",
+                        L"Reload Skeletal Mesh",
+                        MB_ICONWARNING | MB_YESNO | MB_DEFBUTTON2 | MB_APPLMODAL) == IDYES) {
+                    static_cast<void>(sceneContext_.ReimportSkeletalMeshEditorAsset());
+                }
+                break;
+            case SkeletalAssetCommand::PreviewMesh: {
+                const EditorSkeletalMeshAssetPickerDialog::Result result =
+                    EditorSkeletalMeshAssetPickerDialog::Show(
+                        mainWindow_, MakeEditorDarkTheme(), sceneContext_,
+                        sceneContext_.SkeletalMeshEditorAssetId());
+                if (result.accepted) {
+                    static_cast<void>(sceneContext_.SetSkeletonEditorPreviewMesh(result.assetId));
+                }
+                break;
+            }
+            case SkeletalAssetCommand::AddSocket:
+                static_cast<void>(sceneContext_.AddSkeletonEditorSocket());
+                break;
+            case SkeletalAssetCommand::DuplicateSocket:
+                static_cast<void>(sceneContext_.DuplicateSkeletonEditorSocket());
+                break;
+            case SkeletalAssetCommand::DeleteSocket:
+                if (MessageBoxW(
+                        mainWindow_, L"Delete the selected socket from this Skeleton?",
+                        L"Delete Skeleton Socket",
+                        MB_ICONWARNING | MB_YESNO | MB_DEFBUTTON2 | MB_APPLMODAL) == IDYES) {
+                    static_cast<void>(sceneContext_.DeleteSkeletonEditorSocket());
+                }
+                break;
+            case SkeletalAssetCommand::BoundsMode:
+                static_cast<void>(sceneContext_.ToggleSkeletalMeshEditorBoundsMode());
+                break;
+            case SkeletalAssetCommand::ReferencePose:
+                static_cast<void>(sceneContext_.ShowSkeletalMeshEditorReferencePose());
+                break;
+            case SkeletalAssetCommand::Focus:
+                static_cast<void>(sceneContext_.FocusSkeletalMeshEditorPreview());
+                break;
+            }
+        } else if (const std::optional<std::uint8_t> overlay = SkeletalMeshEditorPanelRenderer::AdvancedPreviewOverlayAt(
                 *skeletalMeshEditorContent, x, y);
             overlay.has_value()) {
             AnimationPreviewOverlayState& overlays = sceneContext_.AnimationPreview().Overlays();

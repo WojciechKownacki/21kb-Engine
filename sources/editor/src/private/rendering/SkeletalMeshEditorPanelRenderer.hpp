@@ -17,6 +17,25 @@
 
 namespace kb::editor {
 
+enum class SkeletalAssetDocument : std::uint8_t {
+    Mesh,
+    Skeleton,
+};
+
+enum class SkeletalAssetCommand : std::uint8_t {
+    Save,
+    Undo,
+    Redo,
+    Reimport,
+    PreviewMesh,
+    AddSocket,
+    DuplicateSocket,
+    DeleteSocket,
+    BoundsMode,
+    ReferencePose,
+    Focus,
+};
+
 class SkeletalMeshEditorPanelRenderer {
 public:
 #if defined(_WIN32)
@@ -41,6 +60,10 @@ public:
     [[nodiscard]] static bool IsTreeSearchAt(const RECT& content, int x, int y) noexcept;
     [[nodiscard]] static std::optional<std::uint8_t> AdvancedPreviewOverlayAt(
         const RECT& content, int x, int y) noexcept;
+    [[nodiscard]] static std::optional<SkeletalAssetDocument> LinkedDocumentAt(
+        const RECT& content, int x, int y) noexcept;
+    [[nodiscard]] static std::optional<SkeletalAssetCommand> CommandAt(
+        const RECT& content, const EditorSceneContext& sceneContext, int x, int y);
     [[nodiscard]] static std::optional<kb::scene::SkeletonBoneId> BoneAt(
         const RECT& content, const EditorSceneContext& sceneContext, int x, int y) noexcept;
 #endif
