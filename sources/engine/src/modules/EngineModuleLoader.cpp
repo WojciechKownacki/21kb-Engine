@@ -17,6 +17,9 @@
 #else
 #include <dlfcn.h>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 #endif
 
 namespace kb::modules {
@@ -88,6 +91,16 @@ void CloseNativeLibrary(void* library) noexcept {
     wchar_t path[MAX_PATH]{};
     const DWORD length = GetModuleFileNameW(nullptr, path, MAX_PATH);
     return length == 0U ? std::filesystem::path{} : std::filesystem::path{ std::wstring(path, length) };
+#elif defined(__APPLE__)
+    std::uint32_t size = 1024U;
+    std::vector<char> buffer(size, '\0');
+    if (_NSGetExecutablePath(buffer.data(), &size) != 0) {
+        buffer.assign(size, '\0');
+        if (_NSGetExecutablePath(buffer.data(), &size) != 0) {
+            return {};
+        }
+    }
+    return std::filesystem::path{ buffer.data() };
 #else
     std::vector<char> buffer(1024, '\0');
     const ssize_t length = readlink("/proc/self/exe", buffer.data(), buffer.size() - 1U);

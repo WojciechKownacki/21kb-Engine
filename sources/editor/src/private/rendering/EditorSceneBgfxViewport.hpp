@@ -113,6 +113,10 @@ public:
     void Present(HDC dc, HWND parent, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme, const PresentSettings& settings);
     void Present(HWND parent, const RECT& rect, const kb::scene::Scene& scene, const PresentSettings& settings);
     [[nodiscard]] bool IsHostSurfaceVisible(HWND host, std::uint64_t key) noexcept;
+    // Every host surface key registered for a host window, in registration
+    // order. Headless automation asserts the suspend/resume invariants over
+    // all surfaces of a host instead of a single hardcoded viewport key.
+    [[nodiscard]] std::vector<std::uint64_t> HostSurfaceKeysForHost(HWND host) const;
     void Hide() noexcept;
 
 private:
@@ -135,6 +139,7 @@ private:
         [[nodiscard]] HostSurface* Ensure(HWND host, std::uint64_t key);
         [[nodiscard]] HostSurface* Find(HWND host, std::uint64_t key) noexcept;
         [[nodiscard]] HostSurface* FindByWindow(HWND window) noexcept;
+        [[nodiscard]] std::vector<std::uint64_t> KeysForHost(HWND host) const;
         void MarkHostNotPresented(HWND host) noexcept;
         [[nodiscard]] bool HasVisibleUnpresentedForHost(HWND host) const noexcept;
         void MarkLayoutActive(HostSurface& surface) noexcept;
@@ -145,6 +150,7 @@ private:
         void ReleaseWindow(HWND window) noexcept;
         void ShutdownPresentTargets() noexcept;
         void DestroyWindows() noexcept;
+        void Show(HostSurface& surface) noexcept;
         void ShowPresentedWindows() noexcept;
 
     private:

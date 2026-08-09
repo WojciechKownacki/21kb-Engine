@@ -211,7 +211,7 @@ SceneGridPass::~SceneGridPass() {
 }
 
 bool SceneGridPassDesc::IsValid() const noexcept {
-    return extent.IsValid() && (!outputRect.extent.IsValid() || outputRect.IsValid()) && camera != nullptr &&
+    return ViewId::IsValid(viewId) && extent.IsValid() && (!outputRect.extent.IsValid() || outputRect.IsValid()) && camera != nullptr &&
            std::isfinite(minorSpacingMeters) && minorSpacingMeters > 0.0F && majorEvery >= 2U &&
            (buildDepthFrameBuffer ? (bgfx::isValid(colorTexture) && bgfx::isValid(depthTexture)) : bgfx::isValid(frameBuffer));
 }
@@ -265,13 +265,13 @@ void SceneGridPass::Shutdown() noexcept {
 }
 
 void SceneGridPass::InvalidateFrameBuffers() noexcept {
-    if (bgfx::isValid(depthFrameBuffer_)) {
-        bgfx::destroy(depthFrameBuffer_);
-        WriteRendererDebugLog("grid_trace", "Invalidated depth-tested grid framebuffer");
+    for (DepthFrameBufferEntry& entry : depthFrameBuffers_) {
+        if (bgfx::isValid(entry.frameBuffer)) {
+            bgfx::destroy(entry.frameBuffer);
+        }
+        entry = {};
     }
-    depthFrameBuffer_ = BGFX_INVALID_HANDLE;
-    depthFrameBufferColor_ = BGFX_INVALID_HANDLE;
-    depthFrameBufferDepth_ = BGFX_INVALID_HANDLE;
+    WriteRendererDebugLog("grid_trace", "Invalidated depth-tested grid framebuffers");
 }
 
 bool SceneGridPass::Submit(const SceneGridPassDesc& desc) const {
@@ -310,27 +310,31 @@ bool SceneGridPass::Submit(const SceneGridPassDesc& desc) const {
     const std::array<float, 4> depthParams{ 1.0F, 0.0F, SceneDepthPolicy::HomogeneousDepth() ? 1.0F : 0.0F, 0.0F };
     bgfx::FrameBufferHandle frameBuffer = desc.frameBuffer;
     if (desc.buildDepthFrameBuffer) {
-        if (!bgfx::isValid(depthFrameBuffer_) ||
-            !SameHandle(depthFrameBufferColor_, desc.colorTexture) ||
-            !SameHandle(depthFrameBufferDepth_, desc.depthTexture)) {
-            if (bgfx::isValid(depthFrameBuffer_)) {
-                bgfx::destroy(depthFrameBuffer_);
-                depthFrameBuffer_ = BGFX_INVALID_HANDLE;
+        DepthFrameBufferEntry& entry = depthFrameBuffers_[desc.viewId];
+        if (!bgfx::isValid(entry.frameBuffer) ||
+            entry.sourceFrameBuffer.idx != desc.frameBuffer.idx ||
+            !SameHandle(entry.color, desc.colorTexture) ||
+            !SameHandle(entry.depth, desc.depthTexture) ||
+            entry.extent.width != desc.extent.width || entry.extent.height != desc.extent.height) {
+            if (bgfx::isValid(entry.frameBuffer)) {
+                bgfx::destroy(entry.frameBuffer);
             }
             bgfx::Attachment attachments[2]{};
             attachments[0].init(desc.colorTexture);
             attachments[1].init(desc.depthTexture);
-            depthFrameBuffer_ = bgfx::createFrameBuffer(2U, attachments, false);
-            depthFrameBufferColor_ = desc.colorTexture;
-            depthFrameBufferDepth_ = desc.depthTexture;
+            entry.frameBuffer = bgfx::createFrameBuffer(2U, attachments, false);
+            entry.sourceFrameBuffer = desc.frameBuffer;
+            entry.color = desc.colorTexture;
+            entry.depth = desc.depthTexture;
+            entry.extent = desc.extent;
             std::ostringstream message;
             message << "Created depth-tested grid framebuffer"
-                    << " fb=" << HandleValue(depthFrameBuffer_)
-                    << " colorTex=" << HandleValue(depthFrameBufferColor_)
-                    << " depthTex=" << HandleValue(depthFrameBufferDepth_);
+                    << " fb=" << HandleValue(entry.frameBuffer)
+                    << " colorTex=" << HandleValue(entry.color)
+                    << " depthTex=" << HandleValue(entry.depth);
             WriteRendererDebugLog("grid_trace", message.str());
         }
-        frameBuffer = depthFrameBuffer_;
+        frameBuffer = entry.frameBuffer;
     }
 
     if (!bgfx::isValid(frameBuffer)) {

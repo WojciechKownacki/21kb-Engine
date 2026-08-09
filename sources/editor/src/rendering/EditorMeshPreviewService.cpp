@@ -2,15 +2,19 @@
 
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/IAssetLoader.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "rendering/EditorMeshPreviewRasterizer.hpp"
 #include "rendering/EditorMeshThumbnailDiskCache.hpp"
+#include "diagnostics/EditorLagTrace.hpp"
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
@@ -20,6 +24,8 @@ namespace kb::editor {
 namespace {
 
 constexpr std::size_t kMaxCachedPreviewVariants = 16U;
+constexpr std::size_t kMaxConcurrentSkeletalPreviewJobs = 1U;
+constexpr std::size_t kMaxConcurrentSkeletalEntryJobs = 1U;
 
 [[nodiscard]] bool HasKnownMeshExtension(const std::filesystem::path& path) {
     std::string extension = path.extension().string();
@@ -30,7 +36,14 @@ constexpr std::size_t kMaxCachedPreviewVariants = 16U;
         || extension == ".obj"
         || extension == ".gltf"
         || extension == ".glb"
-        || extension == ".fbx";
+        || extension == ".fbx"
+        || extension == kb::scene::kSkeletalMeshAssetExtension;
+}
+
+[[nodiscard]] bool IsSkeletalMeshAsset(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == kb::scene::kSkeletalMeshAssetType ||
+        metadata.physicalPath.extension() == kb::scene::kSkeletalMeshAssetExtension ||
+        metadata.virtualPath.extension() == kb::scene::kSkeletalMeshAssetExtension;
 }
 
 [[nodiscard]] std::optional<kb::render::RenderMeshAssetData> LoadMesh(const kb::assets::AssetMetadata& metadata) {
@@ -59,12 +72,66 @@ constexpr std::size_t kMaxCachedPreviewVariants = 16U;
     return image.width > 0 && image.height > 0 && !image.bgra.empty();
 }
 
-[[nodiscard]] std::uint64_t PreviewMaterialCacheKey(const kb::assets::AssetManager* manager) noexcept {
-    return manager == nullptr ? 0U : manager->Revision();
+[[nodiscard]] std::optional<EditorMeshPreviewGeometry> ExtractSkeletalMeshGeometry(
+    const kb::scene::SkeletalMeshAsset& mesh) {
+    if (mesh.lods.empty() || mesh.lods.front().vertices.size() < 3U) {
+        return std::nullopt;
+    }
+
+    const kb::scene::SkeletalMeshLod& lod = mesh.lods.front();
+    const float orientationTolerance = std::max(0.001F, mesh.conservativeBounds.extents.y * 0.01F);
+    const bool correctLegacyFbxUpAxis = mesh.conservativeBounds.center.y < -orientationTolerance &&
+        mesh.conservativeBounds.center.y + mesh.conservativeBounds.extents.y <= orientationTolerance;
+    EditorMeshPreviewGeometry geometry{};
+    geometry.positions.reserve(lod.vertices.size());
+    geometry.normals.reserve(lod.vertices.size());
+    for (const kb::scene::SkeletalMeshVertex& vertex : lod.vertices) {
+        geometry.positions.push_back({
+            correctLegacyFbxUpAxis ? -vertex.position.x : vertex.position.x,
+            correctLegacyFbxUpAxis ? -vertex.position.y : vertex.position.y,
+            vertex.position.z,
+        });
+        geometry.normals.push_back({
+            correctLegacyFbxUpAxis ? -vertex.normal.x : vertex.normal.x,
+            correctLegacyFbxUpAxis ? -vertex.normal.y : vertex.normal.y,
+            vertex.normal.z,
+        });
+    }
+    geometry.indices = lod.indices;
+    geometry.stats.vertexCount = static_cast<std::uint32_t>(geometry.positions.size());
+    geometry.stats.indexCount = static_cast<std::uint32_t>(geometry.indices.size());
+    geometry.stats.triangleCount = geometry.stats.indexCount / 3U;
+    geometry.stats.materialSlotCount = static_cast<std::uint32_t>(lod.sections.size());
+    geometry.stats.boundsCenter[0] = correctLegacyFbxUpAxis
+        ? -mesh.conservativeBounds.center.x : mesh.conservativeBounds.center.x;
+    geometry.stats.boundsCenter[1] = correctLegacyFbxUpAxis
+        ? -mesh.conservativeBounds.center.y : mesh.conservativeBounds.center.y;
+    geometry.stats.boundsCenter[2] = mesh.conservativeBounds.center.z;
+    const kb::math::Vec3 extents = mesh.conservativeBounds.extents;
+    geometry.stats.boundsRadius = std::sqrt(
+        extents.x * extents.x + extents.y * extents.y + extents.z * extents.z);
+    return geometry;
+}
+
+[[nodiscard]] std::optional<EditorMeshPreviewGeometry> LoadSkeletalMeshGeometry(
+    const kb::assets::AssetMetadata& metadata) {
+    if (metadata.physicalPath.empty()) return std::nullopt;
+    const std::optional<kb::scene::SkeletalMeshAsset> mesh =
+        kb::scene::SkeletalMeshAssetIO::Load(metadata.physicalPath);
+    return mesh.has_value() ? ExtractSkeletalMeshGeometry(*mesh) : std::nullopt;
+}
+
+[[nodiscard]] std::uint64_t PreviewMaterialCacheKey(
+    const kb::assets::AssetManager* manager,
+    const kb::assets::AssetMetadata& metadata) noexcept {
+    // Skeletal thumbnails currently use their neutral preview material, so an AssetManager revision
+    // cannot change their pixels. Treating it as part of the key made Project Files (no manager) and
+    // Inspector (manager supplied) continuously evict and rebuild the same 24 MB mesh.
+    return manager == nullptr || IsSkeletalMeshAsset(metadata) ? 0U : manager->Revision();
 }
 
 void ApplyResolvedPreviewMaterial(
-    const kb::assets::AssetManager* manager,
+    kb::assets::AssetManager* manager,
     const kb::render::RenderMeshAssetData& mesh,
     EditorMeshPreviewGeometry& geometry) {
     if (manager == nullptr || mesh.materialSlots.empty()) {
@@ -76,8 +143,7 @@ void ApplyResolvedPreviewMaterial(
         return;
     }
 
-    kb::assets::AssetManager& mutableManager = const_cast<kb::assets::AssetManager&>(*manager);
-    const kb::render::ResolvedRuntimeMaterialAsset resolved = kb::render::RuntimeMaterialResolver{}.ResolveAsset(mutableManager, kb::assets::AssetId{ materialAssetId });
+    const kb::render::ResolvedRuntimeMaterialAsset resolved = kb::render::RuntimeMaterialResolver{}.ResolveAsset(*manager, kb::assets::AssetId{ materialAssetId });
     if (!resolved.resolved) {
         return;
     }
@@ -221,7 +287,39 @@ const EditorMeshThumbnailImage* EditorMeshPreviewService::ThumbnailFor(const kb:
         if (!EnsureGeometry(metadata, entry)) {
             return nullptr;
         }
+        const std::uint64_t eventId = diagnostics::EditorLagTrace::NextEventId();
+        const auto rasterStart = std::chrono::steady_clock::now();
         entry.thumbnail = EditorMeshPreviewRasterizer::Render(entry.geometry, kEditorMeshThumbnailSize, EditorMeshPreviewSettings{});
+        const double rasterMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - rasterStart).count();
+        diagnostics::EditorLagTrace::Slow(
+            "mesh-thumbnail-raster-ui",
+            eventId,
+            rasterMs,
+            "assetId=" + std::to_string(metadata.id.value),
+            4.0);
+        ++revision_;
+    }
+    return HasImage(entry.thumbnail) ? &entry.thumbnail : nullptr;
+}
+
+const EditorMeshThumbnailImage* EditorMeshPreviewService::ThumbnailFor(
+    kb::assets::AssetManager& manager,
+    const kb::assets::AssetMetadata& metadata) {
+    if (!IsMeshAsset(metadata)) {
+        return nullptr;
+    }
+
+    Entry& entry = EnsureEntry(&manager, metadata);
+    if (entry.state != EntryState::Ready) {
+        return nullptr;
+    }
+    if (!HasImage(entry.thumbnail)) {
+        if (!EnsureGeometry(&manager, metadata, entry)) {
+            return nullptr;
+        }
+        entry.thumbnail = EditorMeshPreviewRasterizer::Render(
+            entry.geometry, kEditorMeshThumbnailSize, EditorMeshPreviewSettings{});
         ++revision_;
     }
     return HasImage(entry.thumbnail) ? &entry.thumbnail : nullptr;
@@ -235,11 +333,11 @@ const EditorMeshThumbnailImage* EditorMeshPreviewService::PreviewFor(const kb::a
     return PreviewFor(nullptr, metadata, settings);
 }
 
-const EditorMeshThumbnailImage* EditorMeshPreviewService::PreviewFor(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata, const EditorMeshPreviewSettings& settings) {
+const EditorMeshThumbnailImage* EditorMeshPreviewService::PreviewFor(kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata, const EditorMeshPreviewSettings& settings) {
     return PreviewFor(&manager, metadata, settings);
 }
 
-const EditorMeshThumbnailImage* EditorMeshPreviewService::PreviewFor(const kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata, const EditorMeshPreviewSettings& settings) {
+const EditorMeshThumbnailImage* EditorMeshPreviewService::PreviewFor(kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata, const EditorMeshPreviewSettings& settings) {
     if (!IsMeshAsset(metadata)) {
         return nullptr;
     }
@@ -250,10 +348,24 @@ const EditorMeshThumbnailImage* EditorMeshPreviewService::PreviewFor(const kb::a
     }
     if (settings == EditorMeshPreviewSettings{}) {
         if (!HasImage(entry.preview)) {
-            if (!EnsureGeometry(metadata, entry)) {
+            if (!EnsureGeometry(manager, metadata, entry)) {
                 return nullptr;
             }
+            if (IsSkeletalMeshAsset(metadata)) {
+                static_cast<void>(QueueSkeletalPreview(metadata, entry, settings));
+                return HasImage(entry.thumbnail) ? &entry.thumbnail : nullptr;
+            }
+            const std::uint64_t eventId = diagnostics::EditorLagTrace::NextEventId();
+            const auto rasterStart = std::chrono::steady_clock::now();
             entry.preview = EditorMeshPreviewRasterizer::Render(entry.geometry, kEditorMeshPreviewSize, settings);
+            const double rasterMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - rasterStart).count();
+            diagnostics::EditorLagTrace::Slow(
+                "mesh-preview-raster-ui",
+                eventId,
+                rasterMs,
+                "assetId=" + std::to_string(metadata.id.value),
+                4.0);
             ++revision_;
         }
         return HasImage(entry.preview) ? &entry.preview : nullptr;
@@ -263,14 +375,31 @@ const EditorMeshThumbnailImage* EditorMeshPreviewService::PreviewFor(const kb::a
             return &variant.image;
         }
     }
-    if (!EnsureGeometry(metadata, entry)) {
+    if (!EnsureGeometry(manager, metadata, entry)) {
         return &entry.preview;
     }
+    if (IsSkeletalMeshAsset(metadata)) {
+        static_cast<void>(QueueSkeletalPreview(metadata, entry, settings));
+        if (HasImage(entry.preview)) {
+            return &entry.preview;
+        }
+        return HasImage(entry.thumbnail) ? &entry.thumbnail : nullptr;
+    }
 
+    const std::uint64_t eventId = diagnostics::EditorLagTrace::NextEventId();
+    const auto rasterStart = std::chrono::steady_clock::now();
     Entry::PreviewVariant variant{
         .settings = settings,
         .image = EditorMeshPreviewRasterizer::Render(entry.geometry, kEditorMeshPreviewSize, settings),
     };
+    const double rasterMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - rasterStart).count();
+    diagnostics::EditorLagTrace::Slow(
+        "mesh-preview-variant-raster-ui",
+        eventId,
+        rasterMs,
+        "assetId=" + std::to_string(metadata.id.value),
+        4.0);
     if (entry.previewVariants.size() >= kMaxCachedPreviewVariants) {
         entry.previewVariants.erase(entry.previewVariants.begin());
     }
@@ -283,11 +412,11 @@ const EditorMeshThumbnailStats* EditorMeshPreviewService::StatsFor(const kb::ass
     return StatsFor(nullptr, metadata);
 }
 
-const EditorMeshThumbnailStats* EditorMeshPreviewService::StatsFor(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata) {
+const EditorMeshThumbnailStats* EditorMeshPreviewService::StatsFor(kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata) {
     return StatsFor(&manager, metadata);
 }
 
-const EditorMeshThumbnailStats* EditorMeshPreviewService::StatsFor(const kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata) {
+const EditorMeshThumbnailStats* EditorMeshPreviewService::StatsFor(kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata) {
     if (!IsMeshAsset(metadata)) {
         return nullptr;
     }
@@ -300,17 +429,21 @@ const EditorMeshValidationResult* EditorMeshPreviewService::ValidationFor(const 
     return ValidationFor(nullptr, metadata);
 }
 
-const EditorMeshValidationResult* EditorMeshPreviewService::ValidationFor(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata) {
+const EditorMeshValidationResult* EditorMeshPreviewService::ValidationFor(kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata) {
     return ValidationFor(&manager, metadata);
 }
 
-const EditorMeshValidationResult* EditorMeshPreviewService::ValidationFor(const kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata) {
+const EditorMeshValidationResult* EditorMeshPreviewService::ValidationFor(kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata) {
     if (!IsMeshAsset(metadata)) {
         return nullptr;
     }
 
     Entry& entry = EnsureEntry(manager, metadata);
     if (entry.state != EntryState::Ready) {
+        return nullptr;
+    }
+    if (entry.validation.issues.empty() && !entry.geometryLoaded && IsSkeletalMeshAsset(metadata)) {
+        QueueSkeletalEntryLoad(manager, metadata);
         return nullptr;
     }
     if (entry.validation.issues.empty() && EnsureGeometry(manager, metadata, entry)) {
@@ -345,6 +478,16 @@ const EditorMeshThumbnailStats* EditorMeshPreviewService::CachedStatsFor(const k
     return &existing->second.stats;
 }
 
+const EditorMeshValidationResult* EditorMeshPreviewService::CachedValidationFor(
+    const kb::assets::AssetMetadata& metadata) const noexcept {
+    const auto existing = entries_.find(metadata.id.value);
+    if (existing == entries_.end() || existing->second.contentHash != metadata.contentHash ||
+        existing->second.state != EntryState::Ready || !existing->second.geometryLoaded) {
+        return nullptr;
+    }
+    return &existing->second.validation;
+}
+
 std::uint64_t EditorMeshPreviewService::Revision() const noexcept {
     return revision_;
 }
@@ -352,6 +495,122 @@ std::uint64_t EditorMeshPreviewService::Revision() const noexcept {
 void EditorMeshPreviewService::Clear() noexcept {
     entries_.clear();
     ++revision_;
+}
+
+std::size_t EditorMeshPreviewService::PumpCompletedPreviews() {
+    std::size_t completed = 0U;
+    for (auto pending = pendingEntries_.begin(); pending != pendingEntries_.end();) {
+        if (pending->future.wait_for(std::chrono::seconds{0}) != std::future_status::ready) {
+            ++pending;
+            continue;
+        }
+
+        std::optional<Entry> loaded;
+        try {
+            loaded = pending->future.get();
+        } catch (...) {
+            loaded = std::nullopt;
+        }
+        const auto existing = entries_.find(pending->metadata.id.value);
+        if (existing != entries_.end() &&
+            existing->second.contentHash == pending->metadata.contentHash) {
+            if (loaded.has_value()) {
+                if (existing->second.state == EntryState::Loading) {
+                    existing->second = std::move(*loaded);
+                } else {
+                    existing->second.geometry = std::move(loaded->geometry);
+                    existing->second.validation = std::move(loaded->validation);
+                    existing->second.stats = loaded->stats;
+                    existing->second.geometryLoaded = loaded->geometryLoaded;
+                }
+            } else if (existing->second.state == EntryState::Loading) {
+                existing->second.state = EntryState::Failed;
+            }
+            ++revision_;
+        }
+        pending = pendingEntries_.erase(pending);
+        ++completed;
+    }
+    for (auto pending = pendingPreviews_.begin(); pending != pendingPreviews_.end();) {
+        if (pending->future.wait_for(std::chrono::seconds{0}) != std::future_status::ready) {
+            ++pending;
+            continue;
+        }
+
+        EditorMeshThumbnailImage image{};
+        try {
+            image = pending->future.get();
+        } catch (...) {
+            image = {};
+        }
+
+        const auto existing = entries_.find(pending->metadata.id.value);
+        if (existing != entries_.end() &&
+            existing->second.contentHash == pending->metadata.contentHash &&
+            existing->second.materialContentHash == pending->materialContentHash &&
+            HasImage(image)) {
+            StoreCompletedPreview(existing->second, pending->settings, std::move(image));
+            if (HasImage(existing->second.thumbnail) && HasImage(existing->second.preview)) {
+                EditorMeshThumbnailDiskCache::Save(
+                    pending->metadata,
+                    existing->second.thumbnail,
+                    existing->second.preview,
+                    existing->second.stats);
+            }
+            ++revision_;
+        }
+        pending = pendingPreviews_.erase(pending);
+        ++completed;
+    }
+    return completed;
+}
+
+std::size_t EditorMeshPreviewService::PumpCompletedPreviews(
+    kb::assets::AssetManager& manager) {
+    std::size_t completed = 0U;
+    for (auto pending = pendingManagerEntries_.begin(); pending != pendingManagerEntries_.end();) {
+        const kb::assets::AssetMetadata* registered = manager.Registry().Find(pending->metadata.id);
+        if (registered == nullptr || registered->contentHash != pending->metadata.contentHash) {
+            pending = pendingManagerEntries_.erase(pending);
+            ++completed;
+            continue;
+        }
+
+        const kb::assets::AsyncAssetLoadStatus status = manager.AsyncLoadStatus(pending->metadata.id);
+        if (status == kb::assets::AsyncAssetLoadStatus::Pending) {
+            ++pending;
+            continue;
+        }
+        if (status == kb::assets::AsyncAssetLoadStatus::Completed) {
+            const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> handle =
+                manager.AcquireLoaded<kb::scene::SkeletalMeshAsset>(pending->metadata.id);
+            if (handle.IsLoaded() && pendingEntries_.size() < kMaxConcurrentSkeletalEntryJobs) {
+                QueueSkeletalEntryBuild(pending->metadata, handle.Shared());
+                pending = pendingManagerEntries_.erase(pending);
+                ++completed;
+                continue;
+            }
+            if (handle.IsLoaded()) {
+                ++pending;
+                continue;
+            }
+        }
+
+        const auto existing = entries_.find(pending->metadata.id.value);
+        if (existing != entries_.end() &&
+            existing->second.contentHash == pending->metadata.contentHash &&
+            existing->second.state == EntryState::Loading) {
+            existing->second.state = EntryState::Failed;
+            ++revision_;
+        }
+        pending = pendingManagerEntries_.erase(pending);
+        ++completed;
+    }
+    return completed + PumpCompletedPreviews();
+}
+
+bool EditorMeshPreviewService::HasPendingPreviewWork() const noexcept {
+    return !pendingEntries_.empty() || !pendingManagerEntries_.empty() || !pendingPreviews_.empty();
 }
 
 bool EditorMeshPreviewService::IsMeshAsset(const kb::assets::AssetMetadata& metadata) {
@@ -365,34 +624,61 @@ std::optional<EditorMeshPreviewService::Entry> EditorMeshPreviewService::BuildEn
     return BuildEntry(nullptr, metadata);
 }
 
-std::optional<EditorMeshPreviewService::Entry> EditorMeshPreviewService::BuildEntry(const kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata) {
+std::optional<EditorMeshPreviewService::Entry> EditorMeshPreviewService::BuildEntry(kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata) {
+    const std::uint64_t eventId = diagnostics::EditorLagTrace::NextEventId();
+    const auto buildStart = std::chrono::steady_clock::now();
+    std::string detail = "assetId=" + std::to_string(metadata.id.value) + " type=" + metadata.type;
     Entry cached;
     cached.contentHash = metadata.contentHash;
-    cached.materialContentHash = PreviewMaterialCacheKey(manager);
+    cached.materialContentHash = PreviewMaterialCacheKey(manager, metadata);
     cached.state = EntryState::Ready;
-    if (manager == nullptr && EditorMeshThumbnailDiskCache::Load(metadata, cached.thumbnail, cached.preview, cached.stats)) {
-        return cached;
+    if (manager == nullptr || IsSkeletalMeshAsset(metadata)) {
+        const auto diskStart = std::chrono::steady_clock::now();
+        const bool diskLoaded = EditorMeshThumbnailDiskCache::Load(
+            metadata, cached.thumbnail, cached.preview, cached.stats);
+        const double diskMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - diskStart).count();
+        diagnostics::EditorLagTrace::Slow(
+            "mesh-preview-disk-cache", eventId, diskMs,
+            detail + " hit=" + (diskLoaded ? "1" : "0"), 4.0);
+        if (diskLoaded) {
+            const double buildMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - buildStart).count();
+            diagnostics::EditorLagTrace::Slow("mesh-preview-entry", eventId, buildMs, detail + " source=disk", 4.0);
+            return cached;
+        }
     }
 
-    std::optional<kb::render::RenderMeshAssetData> mesh = LoadMesh(metadata);
-    if (!mesh.has_value()) {
-        return std::nullopt;
+    const auto geometryStart = std::chrono::steady_clock::now();
+    std::optional<EditorMeshPreviewGeometry> loadedGeometry;
+    std::optional<kb::render::RenderMeshAssetData> mesh;
+    if (IsSkeletalMeshAsset(metadata)) {
+        loadedGeometry = LoadSkeletalMeshGeometry(metadata);
+    } else {
+        mesh = LoadMesh(metadata);
+        if (mesh) loadedGeometry = EditorMeshPreviewRasterizer::ExtractGeometry(*mesh);
     }
-
-    EditorMeshPreviewGeometry geometry = EditorMeshPreviewRasterizer::ExtractGeometry(*mesh);
+    const double geometryMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - geometryStart).count();
+    diagnostics::EditorLagTrace::Slow("mesh-preview-geometry-load", eventId, geometryMs, detail, 4.0);
+    if (!loadedGeometry) return std::nullopt;
+    EditorMeshPreviewGeometry geometry = std::move(*loadedGeometry);
     if (geometry.positions.size() < 3U) {
         return std::nullopt;
     }
 
     Entry entry;
     entry.contentHash = metadata.contentHash;
-    entry.materialContentHash = PreviewMaterialCacheKey(manager);
+    entry.materialContentHash = PreviewMaterialCacheKey(manager, metadata);
     entry.state = EntryState::Ready;
     entry.geometry = std::move(geometry);
-    ApplyResolvedPreviewMaterial(manager, *mesh, entry.geometry);
+    if (mesh) ApplyResolvedPreviewMaterial(manager, *mesh, entry.geometry);
     entry.geometryLoaded = true;
     entry.stats = entry.geometry.stats;
     entry.validation = ValidateGeometry(entry.geometry);
+    const double buildMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - buildStart).count();
+    diagnostics::EditorLagTrace::Slow("mesh-preview-entry", eventId, buildMs, detail + " source=asset", 4.0);
     return entry;
 }
 
@@ -400,11 +686,42 @@ EditorMeshPreviewService::Entry& EditorMeshPreviewService::EnsureEntry(const kb:
     return EnsureEntry(nullptr, metadata);
 }
 
-EditorMeshPreviewService::Entry& EditorMeshPreviewService::EnsureEntry(const kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata) {
-    const std::uint64_t materialContentHash = PreviewMaterialCacheKey(manager);
+EditorMeshPreviewService::Entry& EditorMeshPreviewService::EnsureEntry(kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata) {
+    const std::uint64_t materialContentHash = PreviewMaterialCacheKey(manager, metadata);
     const auto existing = entries_.find(metadata.id.value);
-    if (existing != entries_.end() && existing->second.contentHash == metadata.contentHash && existing->second.materialContentHash == materialContentHash) {
-        return existing->second;
+    if (existing != entries_.end() && existing->second.contentHash == metadata.contentHash) {
+        // A caller without an AssetManager cannot provide a newer material revision. Preserve an
+        // already material-resolved entry instead of replacing it with the neutral variant.
+        if (manager == nullptr || existing->second.materialContentHash == materialContentHash) {
+            if (existing->second.state == EntryState::Loading) {
+                QueueSkeletalEntryLoad(manager, metadata);
+            }
+            return existing->second;
+        }
+    }
+
+    if (IsSkeletalMeshAsset(metadata)) {
+        Entry cached;
+        cached.contentHash = metadata.contentHash;
+        cached.materialContentHash = materialContentHash;
+        cached.state = EntryState::Ready;
+        if (EditorMeshThumbnailDiskCache::Load(
+                metadata, cached.thumbnail, cached.preview, cached.stats)) {
+            auto [inserted, _] = entries_.insert_or_assign(metadata.id.value, std::move(cached));
+            static_cast<void>(_);
+            ++revision_;
+            return inserted->second;
+        }
+
+        Entry loading;
+        loading.contentHash = metadata.contentHash;
+        loading.materialContentHash = materialContentHash;
+        loading.state = EntryState::Loading;
+        auto [inserted, _] = entries_.insert_or_assign(metadata.id.value, std::move(loading));
+        static_cast<void>(_);
+        QueueSkeletalEntryLoad(manager, metadata);
+        ++revision_;
+        return inserted->second;
     }
 
     Entry entry;
@@ -426,23 +743,207 @@ bool EditorMeshPreviewService::EnsureGeometry(const kb::assets::AssetMetadata& m
     return EnsureGeometry(nullptr, metadata, entry);
 }
 
-bool EditorMeshPreviewService::EnsureGeometry(const kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata, Entry& entry) {
+bool EditorMeshPreviewService::EnsureGeometry(kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata, Entry& entry) {
     if (entry.geometryLoaded) {
         return !entry.geometry.positions.empty();
     }
 
-    std::optional<kb::render::RenderMeshAssetData> mesh = LoadMesh(metadata);
-    if (!mesh.has_value()) {
+    const std::uint64_t eventId = diagnostics::EditorLagTrace::NextEventId();
+    const auto start = std::chrono::steady_clock::now();
+    std::optional<kb::render::RenderMeshAssetData> mesh;
+    if (IsSkeletalMeshAsset(metadata)) {
+        QueueSkeletalEntryLoad(manager, metadata);
         return false;
+    } else {
+        mesh = LoadMesh(metadata);
+        if (!mesh) return false;
+        entry.geometry = EditorMeshPreviewRasterizer::ExtractGeometry(*mesh);
+        ApplyResolvedPreviewMaterial(manager, *mesh, entry.geometry);
     }
-    entry.geometry = EditorMeshPreviewRasterizer::ExtractGeometry(*mesh);
-    ApplyResolvedPreviewMaterial(manager, *mesh, entry.geometry);
     entry.geometryLoaded = true;
     entry.validation = ValidateGeometry(entry.geometry);
     if (entry.stats.vertexCount == 0U) {
         entry.stats = entry.geometry.stats;
     }
+    const double durationMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - start).count();
+    diagnostics::EditorLagTrace::Slow(
+        "mesh-preview-ensure-geometry",
+        eventId,
+        durationMs,
+        "assetId=" + std::to_string(metadata.id.value),
+        4.0);
     return !entry.geometry.positions.empty();
+}
+
+void EditorMeshPreviewService::QueueSkeletalEntryLoad(
+    kb::assets::AssetManager* manager,
+    const kb::assets::AssetMetadata& metadata) {
+    const bool alreadyPending =
+        std::ranges::find_if(pendingEntries_, [&](const PendingEntry& pending) {
+            return pending.metadata.id == metadata.id;
+        }) != pendingEntries_.end() ||
+        std::ranges::find_if(pendingManagerEntries_, [&](const PendingManagerEntry& pending) {
+            return pending.metadata.id == metadata.id;
+        }) != pendingManagerEntries_.end();
+    if (alreadyPending ||
+        pendingEntries_.size() + pendingManagerEntries_.size() >= kMaxConcurrentSkeletalEntryJobs) {
+        return;
+    }
+
+    if (manager != nullptr) {
+        const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> loaded =
+            manager->AcquireLoaded<kb::scene::SkeletalMeshAsset>(metadata.id);
+        if (loaded.IsLoaded()) {
+            QueueSkeletalEntryBuild(metadata, loaded.Shared());
+            return;
+        }
+
+        const bool requested = manager->LoadAsync<kb::scene::SkeletalMeshAsset>(metadata.id);
+        const kb::assets::AsyncAssetLoadStatus status = manager->AsyncLoadStatus(metadata.id);
+        if (requested && (status == kb::assets::AsyncAssetLoadStatus::Pending ||
+                          status == kb::assets::AsyncAssetLoadStatus::Completed)) {
+            pendingManagerEntries_.push_back(PendingManagerEntry{ .metadata = metadata });
+            return;
+        }
+        // Standalone tooling may supply an AssetManager without registering this editor-only asset.
+        // Keep that path functional while production editor previews use the retained manager payload.
+    }
+
+    try {
+        pendingEntries_.push_back(PendingEntry{
+            .metadata = metadata,
+            .future = std::async(std::launch::async, [metadata]() -> std::optional<Entry> {
+                std::optional<EditorMeshPreviewGeometry> geometry = LoadSkeletalMeshGeometry(metadata);
+                if (!geometry.has_value() || geometry->positions.size() < 3U) return std::nullopt;
+                Entry entry;
+                entry.contentHash = metadata.contentHash;
+                entry.materialContentHash = 0U;
+                entry.state = EntryState::Ready;
+                entry.geometry = std::move(*geometry);
+                entry.geometryLoaded = true;
+                entry.stats = entry.geometry.stats;
+                entry.validation = ValidateGeometry(entry.geometry);
+                entry.thumbnail = EditorMeshPreviewRasterizer::Render(
+                    entry.geometry, kEditorMeshThumbnailSize, EditorMeshPreviewSettings{});
+                return std::optional<Entry>{std::move(entry)};
+            }),
+        });
+    } catch (...) {
+        if (const auto existing = entries_.find(metadata.id.value); existing != entries_.end()) {
+            existing->second.state = EntryState::Failed;
+        }
+    }
+}
+
+void EditorMeshPreviewService::QueueSkeletalEntryBuild(
+    const kb::assets::AssetMetadata& metadata,
+    std::shared_ptr<const kb::scene::SkeletalMeshAsset> mesh) {
+    if (mesh == nullptr || pendingEntries_.size() >= kMaxConcurrentSkeletalEntryJobs ||
+        std::ranges::find_if(pendingEntries_, [&](const PendingEntry& pending) {
+            return pending.metadata.id == metadata.id;
+        }) != pendingEntries_.end()) {
+        return;
+    }
+
+    try {
+        pendingEntries_.push_back(PendingEntry{
+            .metadata = metadata,
+            .future = std::async(std::launch::async, [metadata, mesh = std::move(mesh)]() -> std::optional<Entry> {
+                std::optional<EditorMeshPreviewGeometry> geometry = ExtractSkeletalMeshGeometry(*mesh);
+                if (!geometry.has_value() || geometry->positions.size() < 3U) return std::nullopt;
+                Entry entry;
+                entry.contentHash = metadata.contentHash;
+                entry.materialContentHash = 0U;
+                entry.state = EntryState::Ready;
+                entry.geometry = std::move(*geometry);
+                entry.geometryLoaded = true;
+                entry.stats = entry.geometry.stats;
+                entry.validation = ValidateGeometry(entry.geometry);
+                entry.thumbnail = EditorMeshPreviewRasterizer::Render(
+                    entry.geometry, kEditorMeshThumbnailSize, EditorMeshPreviewSettings{});
+                return std::optional<Entry>{std::move(entry)};
+            }),
+        });
+    } catch (...) {
+        if (const auto existing = entries_.find(metadata.id.value); existing != entries_.end()) {
+            existing->second.state = EntryState::Failed;
+        }
+    }
+}
+
+bool EditorMeshPreviewService::QueueSkeletalPreview(
+    const kb::assets::AssetMetadata& metadata,
+    const Entry& entry,
+    const EditorMeshPreviewSettings& settings) {
+    const auto alreadyPending = std::ranges::find_if(pendingPreviews_, [&](const PendingPreview& pending) {
+        return pending.metadata.id == metadata.id;
+    });
+    if (alreadyPending != pendingPreviews_.end()) {
+        return true;
+    }
+    if (pendingPreviews_.size() >= kMaxConcurrentSkeletalPreviewJobs) {
+        return false;
+    }
+
+    try {
+        const std::uint64_t eventId = diagnostics::EditorLagTrace::NextEventId();
+        const auto queueStart = std::chrono::steady_clock::now();
+        EditorMeshPreviewGeometry geometry = entry.geometry;
+        pendingPreviews_.push_back(PendingPreview{
+            .metadata = metadata,
+            .materialContentHash = entry.materialContentHash,
+            .settings = settings,
+            .future = std::async(std::launch::async, [geometry = std::move(geometry), settings, eventId, assetId = metadata.id.value]() {
+                const auto renderStart = std::chrono::steady_clock::now();
+                EditorMeshThumbnailImage image = EditorMeshPreviewRasterizer::Render(
+                    geometry, kEditorMeshPreviewSize, settings);
+                const double renderMs = std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - renderStart).count();
+                diagnostics::EditorLagTrace::Slow(
+                    "mesh-preview-raster-worker",
+                    eventId,
+                    renderMs,
+                    "assetId=" + std::to_string(assetId),
+                    4.0);
+                return image;
+            }),
+        });
+        const double queueMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - queueStart).count();
+        diagnostics::EditorLagTrace::Slow(
+            "mesh-preview-queue",
+            eventId,
+            queueMs,
+            "assetId=" + std::to_string(metadata.id.value),
+            4.0);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+void EditorMeshPreviewService::StoreCompletedPreview(
+    Entry& entry,
+    const EditorMeshPreviewSettings& settings,
+    EditorMeshThumbnailImage image) {
+    if (settings == EditorMeshPreviewSettings{}) {
+        entry.preview = std::move(image);
+        return;
+    }
+    for (Entry::PreviewVariant& variant : entry.previewVariants) {
+        if (variant.settings == settings) {
+            variant.image = std::move(image);
+            return;
+        }
+    }
+    if (entry.previewVariants.size() >= kMaxCachedPreviewVariants) {
+        entry.previewVariants.erase(entry.previewVariants.begin());
+    }
+    entry.previewVariants.push_back(Entry::PreviewVariant{
+        .settings = settings,
+        .image = std::move(image),
+    });
 }
 
 EditorMeshPreviewService& EditorMeshPreviewCache() {

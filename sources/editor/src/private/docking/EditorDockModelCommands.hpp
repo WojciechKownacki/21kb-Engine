@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 
 namespace kb::editor {
 
@@ -20,6 +21,7 @@ public:
     void UndockPanel(std::uint32_t panelId, DockRect floatingRect);
     void DockPanelTo(std::uint32_t panelId, const DockDropPreview& target);
     [[nodiscard]] bool ActivatePanelKind(DockPanelKind kind, DockArea fallbackArea);
+    [[nodiscard]] bool SetPanelTitle(DockPanelKind kind, std::string title);
     void MoveFloatingPanel(std::uint32_t panelId, int x, int y);
     void ResizeFloatingPanel(std::uint32_t panelId, int width, int height);
     [[nodiscard]] bool ToggleMaximizedLeaf(std::uint32_t leafId) noexcept;

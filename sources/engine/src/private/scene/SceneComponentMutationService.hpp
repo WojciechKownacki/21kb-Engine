@@ -4,6 +4,7 @@
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
+#include "engine/scene/MotionSkeletonRuleComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
@@ -185,6 +186,10 @@ public:
     [[nodiscard]] static bool SetSkeletonBinding(Scene& scene, SceneEntity entity, const SkeletonBindingComponent& binding);
     static void RemoveSkeletonBinding(Scene& scene, SceneEntity entity) noexcept;
     static void MarkSkeletonBindingModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static MotionSkeletonRuleComponent* TryGetMotionSkeletonRule(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static bool SetMotionSkeletonRule(Scene& scene, SceneEntity entity, const MotionSkeletonRuleComponent& rule);
+    static void RemoveMotionSkeletonRule(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkMotionSkeletonRuleModified(Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static DrawD3DeformedGeometryComponent* TryGetDeformedGeometry(Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool SetDeformedGeometry(Scene& scene, SceneEntity entity, const DrawD3DeformedGeometryComponent& geometry);
     static void RemoveDeformedGeometry(Scene& scene, SceneEntity entity) noexcept;

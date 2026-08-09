@@ -183,8 +183,12 @@ void DetachedViewportIdsAreContiguousAndBounded() {
     Require(first.editorGizmoOverlay == ViewId::DetachedViewportStart + ViewId::DetachedViewportStride - 1U, "First detached viewport gizmo overlay view id is wrong");
     Require(second.shadowDepth == ViewId::DetachedViewportStart + ViewId::DetachedViewportStride, "Second detached viewport shadow view id is wrong");
     Require(second.opaqueScene == ViewId::DetachedViewportStart + ViewId::DetachedViewportStride + 1U, "Second detached viewport scene view id is wrong");
-    Require(RenderViewportViewIdAllocator::ForViewportIndex(6U).IsValid(), "Last supported detached viewport should be valid");
-    Require(!RenderViewportViewIdAllocator::ForViewportIndex(7U).IsValid(), "Out-of-range detached viewport should be invalid");
+    Require(RenderViewportViewIdAllocator::ForViewportIndex(
+                static_cast<std::uint32_t>(RenderViewportViewIdAllocator::kMaxViewportCount - 1U)).IsValid(),
+        "Last supported detached viewport should be valid");
+    Require(!RenderViewportViewIdAllocator::ForViewportIndex(
+                static_cast<std::uint32_t>(RenderViewportViewIdAllocator::kMaxViewportCount)).IsValid(),
+        "Out-of-range detached viewport should be invalid");
 }
 
 void FramePipelineBuildsCanonicalPassOrder() {

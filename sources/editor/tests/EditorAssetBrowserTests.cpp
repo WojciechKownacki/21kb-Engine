@@ -8,9 +8,15 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/scene/SkeletonAssetIO.hpp"
+#include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "scene/EditorSceneAssetBrowserCommands.hpp"
+#include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #if defined(_WIN32)
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
+#include "rendering/EditorMeshPreviewService.hpp"
 #include "rendering/ProjectFilesAssetIconResolver.hpp"
 #include "rendering/ProjectFilesMaterialPreviewThumbnailModel.hpp"
 #include "rendering/ProjectFilesMaterialPreviewThumbnailPolicy.hpp"
@@ -18,6 +24,8 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -25,6 +33,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -377,7 +386,157 @@ void RunImportCommandReturnsMaterialTextureReportTest() {
     ResetTempRoot();
 }
 
+void WriteSkeletalGltfImportFixture(const std::filesystem::path& folder) {
+    std::error_code error;
+    std::filesystem::create_directories(folder, error);
+    const std::array<float, 9U> positions{ 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F };
+    const std::array<std::uint16_t, 12U> joints{ 0U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 1U, 0U, 0U, 0U };
+    const std::array<float, 12U> weights{ 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F };
+    const std::array<std::uint16_t, 3U> indices{ 0U, 1U, 2U };
+    const std::array<float, 32U> inverseBinds{
+        1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F,
+        1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F, -1.0F, 0.0F, 1.0F,
+    };
+    std::ofstream binary{ folder / "Robot.bin", std::ios::binary | std::ios::trunc };
+    binary.write(reinterpret_cast<const char*>(positions.data()), sizeof(positions));
+    binary.write(reinterpret_cast<const char*>(joints.data()), sizeof(joints));
+    binary.write(reinterpret_cast<const char*>(weights.data()), sizeof(weights));
+    binary.write(reinterpret_cast<const char*>(indices.data()), sizeof(indices));
+    binary.write(reinterpret_cast<const char*>(inverseBinds.data()), sizeof(inverseBinds));
+    WriteTextFile(folder / "Robot.gltf", R"({"asset":{"version":"2.0"},"buffers":[{"uri":"Robot.bin","byteLength":242}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24},{"buffer":0,"byteOffset":60,"byteLength":48},{"buffer":0,"byteOffset":108,"byteLength":6},{"buffer":0,"byteOffset":114,"byteLength":128}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"MAT4"}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3}]}],"nodes":[{"name":"Root","children":[1]},{"name":"Spine","translation":[0,1,0]},{"mesh":0,"skin":0}],"skins":[{"joints":[0,1],"inverseBindMatrices":4}]})");
+}
+
+void RunImportCommandPublishesSkeletalGltfTest() {
+    ResetTempRoot();
+    const std::filesystem::path projectRoot = TempRoot() / "SkeletalProject";
+    const std::filesystem::path sourceRoot = TempRoot() / "SkeletalSources";
+    WriteSkeletalGltfImportFixture(sourceRoot);
+
+    kb::scene::Scene scene;
+    kb::editor::EditorAssetBrowserState browser;
+    kb::editor::tests::Require(scene.Assets().MountProject(projectRoot), "Skeletal import command test could not mount project assets");
+    kb::assets::AssetImportOptions options{};
+    options.mesh.importSkeletalMesh = true;
+    const std::array<std::filesystem::path, 1U> files{ sourceRoot / "Robot.gltf" };
+    const kb::assets::AssetImportResult report =
+        kb::editor::EditorSceneAssetBrowserCommands::ImportFilesWithReport(scene, browser, files, "/Game/Characters", options);
+    const kb::assets::AssetMetadata* mesh = scene.Assets().Manager().Registry().FindByPath("/Game/Characters/Robot.kbskeletalmesh");
+    const kb::assets::AssetMetadata* skeleton = scene.Assets().Manager().Registry().FindByPath("/Game/Characters/Robot.kbskeleton");
+    kb::editor::tests::Require(report.Succeeded() && report.CreatedCount() == 1U && mesh != nullptr &&
+            mesh->type == "SkeletalMesh" && skeleton != nullptr && skeleton->type == "Skeleton" &&
+            browser.SelectedAsset() == mesh->id,
+        "Skeletal glTF import command did not publish and select the Skeletal Mesh and Skeleton assets");
+    ResetTempRoot();
+}
+
+void WriteSkeletalGltfMaterialAndTextureFixture(const std::filesystem::path& folder) {
+    WriteSkeletalGltfImportFixture(folder);
+    std::filesystem::path current = std::filesystem::current_path();
+    std::filesystem::path pngFixture;
+    while (!current.empty()) {
+        const std::filesystem::path candidate =
+            current / "third_party/bgfx.cmake/bgfx/examples/runtime/images/SplashScreen.png";
+        if (std::filesystem::is_regular_file(candidate)) {
+            pngFixture = candidate;
+            break;
+        }
+        const std::filesystem::path parent = current.parent_path();
+        if (parent == current) {
+            break;
+        }
+        current = parent;
+    }
+    kb::editor::tests::Require(!pngFixture.empty(), "Skeletal material import PNG fixture was not found");
+    std::error_code copyError;
+    static_cast<void>(std::filesystem::copy_file(
+        pngFixture, folder / "Albedo.png", std::filesystem::copy_options::overwrite_existing, copyError));
+    kb::editor::tests::Require(!copyError, "Skeletal material import PNG fixture could not be copied");
+    WriteTextFile(folder / "Robot.gltf", R"({"asset":{"version":"2.0"},"buffers":[{"uri":"Robot.bin","byteLength":242}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24},{"buffer":0,"byteOffset":60,"byteLength":48},{"buffer":0,"byteOffset":108,"byteLength":6},{"buffer":0,"byteOffset":114,"byteLength":128}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5123,"count":3,"type":"VEC4"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"MAT4"}],"images":[{"name":"Albedo","uri":"Albedo.png"}],"textures":[{"source":0}],"materials":[{"name":"RobotSurface","pbrMetallicRoughness":{"baseColorTexture":{"index":0},"metallicFactor":0.25,"roughnessFactor":0.75}}],"meshes":[{"name":"RobotParts","primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3,"material":0}]}],"nodes":[{"name":"Root","children":[1]},{"name":"Spine","translation":[0,1,0]},{"name":"Body","mesh":0,"skin":0},{"name":"Armor","mesh":0,"skin":0}],"skins":[{"joints":[0,1],"inverseBindMatrices":4}]})");
+}
+
+void RunImportCommandPublishesCombinedSkeletalMeshMaterialsAndTexturesTest() {
+    ResetTempRoot();
+    const std::filesystem::path projectRoot = TempRoot() / "SkeletalMaterialProject";
+    const std::filesystem::path sourceRoot = TempRoot() / "SkeletalMaterialSources";
+    WriteSkeletalGltfMaterialAndTextureFixture(sourceRoot);
+
+    kb::scene::Scene scene;
+    kb::editor::EditorAssetBrowserState browser;
+    kb::editor::tests::Require(scene.Assets().MountProject(projectRoot),
+        "Skeletal material import test could not mount project assets");
+    kb::assets::AssetImportOptions options{};
+    options.mesh.importSkeletalMesh = true;
+    options.mesh.importTextures = true;
+    options.mesh.importMaterials = true;
+    options.mesh.combineMeshes = true;
+    const std::array<std::filesystem::path, 1U> files{ sourceRoot / "Robot.gltf" };
+    const kb::assets::AssetImportResult report =
+        kb::editor::EditorSceneAssetBrowserCommands::ImportFilesWithReport(
+            scene, browser, files, "/Game/Characters", options);
+
+    const kb::assets::AssetMetadata* meshMetadata =
+        scene.Assets().Manager().Registry().FindByPath("/Game/Characters/Robot.kbskeletalmesh");
+    const std::vector<kb::assets::AssetMetadata> materials =
+        scene.Assets().Manager().Registry().ByType("RenderMaterial");
+    const std::vector<kb::assets::AssetMetadata> textures =
+        scene.Assets().Manager().Registry().ByType("RenderTexture");
+    const auto mesh = meshMetadata == nullptr
+        ? std::nullopt
+        : kb::scene::SkeletalMeshAssetIO::Load(meshMetadata->physicalPath);
+    const auto material = materials.size() == 1U
+        ? kb::render::RenderMaterialAssetLoader::LoadMaterial(materials[0].physicalPath)
+        : std::nullopt;
+    kb::editor::tests::Require(material.has_value(),
+        "Skeletal mesh import did not publish a loadable material asset");
+    const auto texture = textures.size() == 1U
+        ? kb::render::RenderTextureAssetLoader::LoadTexture(textures[0].physicalPath)
+        : std::nullopt;
+    kb::editor::tests::Require(texture.has_value(),
+        "Skeletal mesh import did not publish a loadable texture asset");
+    const bool assigned = mesh.has_value() && materials.size() == 1U &&
+        mesh->lods.size() == 1U && mesh->lods[0].vertices.size() == 6U &&
+        mesh->lods[0].sections.size() == 2U &&
+        std::ranges::all_of(mesh->lods[0].sections, [&](const kb::scene::SkeletalMeshSection& section) {
+            return section.materialAssetId == materials[0].id.value;
+        });
+    kb::editor::tests::Require(report.Succeeded() && report.CreatedCount() == 1U &&
+            materials.size() == 1U && textures.size() == 1U && assigned &&
+            material->desc.albedoTextureAssetId == textures[0].id.value,
+        "Skeletal mesh import did not combine nodes and publish assigned material and texture assets");
+    ResetTempRoot();
+}
+
 #if defined(_WIN32)
+class CountingSkeletalMeshLoader final : public kb::assets::IAssetLoader {
+public:
+    CountingSkeletalMeshLoader(
+        kb::scene::SkeletalMeshAsset fixture,
+        std::shared_ptr<std::atomic_uint32_t> loadCount)
+        : fixture_(std::move(fixture))
+        , loadCount_(std::move(loadCount)) {}
+
+    [[nodiscard]] std::string_view Type() const noexcept override {
+        return kb::scene::kSkeletalMeshAssetType;
+    }
+
+    [[nodiscard]] std::type_index PayloadType() const noexcept override {
+        return typeid(kb::scene::SkeletalMeshAsset);
+    }
+
+    [[nodiscard]] std::vector<std::string> Extensions() const override {
+        return { kb::scene::kSkeletalMeshAssetExtension };
+    }
+
+    [[nodiscard]] kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest&) override {
+        loadCount_->fetch_add(1U, std::memory_order_relaxed);
+        return { .asset = std::make_shared<kb::scene::SkeletalMeshAsset>(fixture_) };
+    }
+
+private:
+    kb::scene::SkeletalMeshAsset fixture_{};
+    std::shared_ptr<std::atomic_uint32_t> loadCount_{};
+};
+
 [[nodiscard]] kb::assets::AssetMetadata MaterialMetadata(std::string name, const std::filesystem::path& path, std::uint64_t contentHash) {
     kb::assets::AssetMetadata metadata = Metadata(std::move(name), "RenderMaterial", "/Game/Materials/ThumbnailProbe.kbmat");
     metadata.id.value = 0x2100BEEF + contentHash;
@@ -683,6 +842,12 @@ void RunMaterialAssetIconResolverRecognizesPreviewMaterialsTest() {
     const kb::assets::AssetMetadata graph = Metadata("StudioGraph", "RenderMaterialGraph", "/Game/Materials/StudioGraph.kbmaterialgraph");
     const kb::assets::AssetMetadata type = Metadata("StudioType", "RenderMaterialType", "/Game/Materials/StudioType.kbmaterialtype");
     const kb::assets::AssetMetadata mesh = Metadata("StudioMesh", "RenderMesh", "/Game/Meshes/StudioMesh.gltf");
+    const kb::assets::AssetMetadata skeletalMesh = Metadata(
+        "Hero", kb::scene::kSkeletalMeshAssetType, "/Game/Characters/Hero.kbskeletalmesh");
+    const kb::assets::AssetMetadata skeleton = Metadata(
+        "Hero", kb::scene::kSkeletonAssetType, "/Game/Characters/Hero.kbskeleton");
+    const kb::assets::AssetMetadata animation = Metadata(
+        "Hero_Run", kb::scene::kAnimationClipAssetType, "/Game/Characters/Hero_Run.kbanim");
 
     kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsMaterial(material), "Project Files should classify material assets for the preview thumbnail path");
     kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsMaterial(instance), "Project Files should classify material instances for the preview thumbnail path");
@@ -691,6 +856,15 @@ void RunMaterialAssetIconResolverRecognizesPreviewMaterialsTest() {
     kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsMaterialGraph(graph), "Project Files should classify Material Graph assets");
     kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsMaterialType(type), "Project Files should classify Material Type assets");
     kb::editor::tests::Require(!kb::editor::ProjectFilesAssetIconResolver::IsMaterial(mesh), "Project Files should keep mesh assets on the mesh thumbnail path");
+    kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsMesh(skeletalMesh) &&
+            kb::editor::ProjectFilesAssetIconResolver::IsSkeletalMesh(skeletalMesh),
+        "Project Files should route Skeletal Mesh assets through the real geometry thumbnail path");
+    kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsSkeleton(skeleton) &&
+            kb::editor::ProjectFilesAssetIconResolver::Resolve(skeleton, false).kind == kb::editor::HeroIconKind::Skeleton,
+        "Project Files should use the dedicated Skeleton glyph instead of the generic cube");
+    kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsAnimationClip(animation) &&
+            kb::editor::ProjectFilesAssetIconResolver::Resolve(animation, false).kind == kb::editor::HeroIconKind::Play,
+        "Project Files should use an immediately recognizable playback glyph for Animation Clip assets");
     kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::Resolve(graph, false).kind == kb::editor::HeroIconKind::RectangleGroup,
         "KBMAT-GRAPH-0005: Material Graph should use a graph/document icon instead of the material preview sphere");
     kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::Resolve(type, false).kind == kb::editor::HeroIconKind::DocumentText,
@@ -715,6 +889,116 @@ void RunMaterialAssetIconResolverRecognizesPreviewMaterialsTest() {
         "KBMAT-UE-0007: Non-material assets should not use the material preview primitive thumbnail policy");
     kb::editor::tests::Require(!graphPolicy.usesPreviewScenePrimitive && !typePolicy.usesPreviewScenePrimitive,
         "KBMAT-GRAPH-0005: Raw Material Graph and Material Type assets should use metadata icons, not material preview thumbnails");
+}
+
+void RunSkeletalMeshThumbnailUsesAssetGeometryTest() {
+    const std::filesystem::path path = TempRoot() / "SkeletalThumbnail" / "Hero.kbskeletalmesh";
+    kb::scene::SkeletalMeshAsset mesh{};
+    mesh.skeletonAssetId = 7U;
+    mesh.skeletonCompatibilitySignature = 11U;
+    mesh.conservativeBounds = { .center = { 0.0F, 0.5F, 0.0F }, .extents = { 0.5F, 0.5F, 0.1F } };
+    mesh.fixedBounds = mesh.conservativeBounds;
+    kb::scene::SkeletalMeshLod lod{};
+    lod.vertices = {
+        { .position = { -0.5F, 0.0F, 0.0F }, .normal = { 0.0F, 0.0F, 1.0F } },
+        { .position = { 0.5F, 0.0F, 0.0F }, .normal = { 0.0F, 0.0F, 1.0F } },
+        { .position = { 0.0F, 1.0F, 0.0F }, .normal = { 0.0F, 0.0F, 1.0F } },
+    };
+    lod.indices = { 0U, 1U, 2U };
+    lod.sections = {{ .firstIndex = 0U, .indexCount = 3U, .boneMap = { 1U } }};
+    lod.requiredBones = { 1U };
+    mesh.lods.push_back(std::move(lod));
+    std::filesystem::create_directories(path.parent_path());
+    kb::editor::tests::Require(kb::scene::SkeletalMeshAssetIO::Save(path, mesh),
+        "Skeletal Mesh thumbnail fixture could not be saved");
+    kb::assets::AssetMetadata metadata = Metadata(
+        "Hero", kb::scene::kSkeletalMeshAssetType, "/Game/Characters/Hero.kbskeletalmesh");
+    metadata.id = kb::assets::AssetId{ 91U };
+    metadata.physicalPath = path;
+    metadata.contentHash = static_cast<std::uint64_t>(
+        std::filesystem::last_write_time(path).time_since_epoch().count());
+    kb::editor::EditorMeshPreviewService previews;
+    kb::editor::tests::Require(previews.ThumbnailFor(metadata) == nullptr && previews.HasPendingPreviewWork(),
+        "A cold Skeletal Mesh thumbnail load should leave the UI thread immediately");
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    while (previews.HasPendingPreviewWork() && std::chrono::steady_clock::now() < deadline) {
+        static_cast<void>(previews.PumpCompletedPreviews());
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    const kb::editor::EditorMeshThumbnailImage* thumbnail = previews.ThumbnailFor(metadata);
+    kb::editor::tests::Require(thumbnail != nullptr && thumbnail->width == kb::editor::kEditorMeshThumbnailSize &&
+            thumbnail->height == kb::editor::kEditorMeshThumbnailSize && !thumbnail->bgra.empty(),
+        "Project Files did not render a real Skeletal Mesh geometry thumbnail");
+
+    kb::assets::AssetManager manager;
+    const std::uint64_t revisionAfterThumbnail = previews.Revision();
+    kb::editor::tests::Require(previews.StatsFor(manager, metadata) != nullptr && previews.Revision() == revisionAfterThumbnail,
+        "Skeletal Mesh Inspector invalidated the Project Files cache solely because an AssetManager was supplied");
+
+    const kb::editor::EditorMeshThumbnailImage* immediatePreview = previews.PreviewFor(metadata);
+    kb::editor::tests::Require(immediatePreview != nullptr,
+        "Skeletal Mesh Inspector did not retain a thumbnail while its large preview was generated asynchronously");
+    deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    while (previews.HasPendingPreviewWork() && std::chrono::steady_clock::now() < deadline) {
+        static_cast<void>(previews.PumpCompletedPreviews());
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    const kb::editor::EditorMeshThumbnailImage* completedPreview = previews.PreviewFor(metadata);
+    kb::editor::tests::Require(!previews.HasPendingPreviewWork() && completedPreview != nullptr &&
+            completedPreview->width == kb::editor::kEditorMeshPreviewSize &&
+            completedPreview->height == kb::editor::kEditorMeshPreviewSize,
+        "Skeletal Mesh preview worker did not publish its completed 512px preview");
+}
+
+void RunSkeletalMeshPreviewRetainsAssetManagerPayloadTest() {
+    kb::scene::SkeletalMeshAsset mesh{};
+    mesh.conservativeBounds = { .center = { 0.0F, 0.5F, 0.0F }, .extents = { 0.5F, 0.5F, 0.1F } };
+    mesh.fixedBounds = mesh.conservativeBounds;
+    kb::scene::SkeletalMeshLod lod{};
+    lod.vertices = {
+        { .position = { -0.5F, 0.0F, 0.0F }, .normal = { 0.0F, 0.0F, 1.0F } },
+        { .position = { 0.5F, 0.0F, 0.0F }, .normal = { 0.0F, 0.0F, 1.0F } },
+        { .position = { 0.0F, 1.0F, 0.0F }, .normal = { 0.0F, 0.0F, 1.0F } },
+    };
+    lod.indices = { 0U, 1U, 2U };
+    lod.sections = {{ .firstIndex = 0U, .indexCount = 3U }};
+    mesh.lods.push_back(std::move(lod));
+
+    const auto loadCount = std::make_shared<std::atomic_uint32_t>(0U);
+    kb::assets::AssetManager manager;
+    kb::editor::tests::Require(
+        manager.RegisterLoader(std::make_unique<CountingSkeletalMeshLoader>(mesh, loadCount)),
+        "Skeletal Mesh preview counting loader registration failed");
+    kb::assets::AssetMetadata metadata = Metadata(
+        "RetainedHero", kb::scene::kSkeletalMeshAssetType, "/Game/Characters/RetainedHero.kbskeletalmesh");
+    metadata.id = kb::assets::AssetId{ 0x2100C01DU };
+    metadata.physicalPath = TempRoot() / "RetainedHero.kbskeletalmesh";
+    metadata.contentHash = 0xA55E7001U;
+    kb::editor::tests::Require(manager.RegisterAsset(metadata),
+        "Skeletal Mesh preview fixture registration failed");
+
+    kb::editor::EditorMeshPreviewService previews;
+    kb::editor::tests::Require(previews.ValidationFor(manager, metadata) == nullptr &&
+            previews.HasPendingPreviewWork(),
+        "Skeletal Mesh preview should enqueue one AssetManager cold load");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    while (previews.HasPendingPreviewWork() && std::chrono::steady_clock::now() < deadline) {
+        manager.PumpAsyncLoads();
+        static_cast<void>(previews.PumpCompletedPreviews(manager));
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+
+    const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> retained =
+        manager.AcquireLoaded<kb::scene::SkeletalMeshAsset>(metadata.id);
+    kb::editor::tests::Require(!previews.HasPendingPreviewWork() && retained.IsLoaded() &&
+            previews.ValidationFor(manager, metadata) != nullptr &&
+            loadCount->load(std::memory_order_relaxed) == 1U,
+        "Skeletal Mesh preview did not publish geometry from the retained AssetManager payload");
+    const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> reopened =
+        manager.Load<kb::scene::SkeletalMeshAsset>(metadata.id);
+    kb::editor::tests::Require(reopened.IsLoaded() && reopened.Shared().get() == retained.Shared().get() &&
+            loadCount->load(std::memory_order_relaxed) == 1U,
+        "Opening a previewed Skeletal Mesh parsed the asset a second time instead of reusing the retained payload");
 }
 
 void RunMaterialThumbnailPreviewRuntimeModelTest() {
@@ -765,6 +1049,8 @@ void RunEditorAssetBrowserTests() {
     RunDependencySafetyBlocksRenameAndDeleteTest();
     RunSearchTextShortcutStateTest();
     RunImportCommandReturnsMaterialTextureReportTest();
+    RunImportCommandPublishesSkeletalGltfTest();
+    RunImportCommandPublishesCombinedSkeletalMeshMaterialsAndTexturesTest();
 #if defined(_WIN32)
     RunProjectFilesEdgeToEdgeLayoutTest();
     RunTileHitTestUsesExactGridGeometryTest();
@@ -777,6 +1063,8 @@ void RunEditorAssetBrowserTests() {
     RunMaterialContextMenuCommandTest();
     RunMaterialAssetDoubleClickOpensMaterialEditorTest();
     RunMaterialAssetIconResolverRecognizesPreviewMaterialsTest();
+    RunSkeletalMeshThumbnailUsesAssetGeometryTest();
+    RunSkeletalMeshPreviewRetainsAssetManagerPayloadTest();
     RunMaterialThumbnailPreviewRuntimeModelTest();
 #endif
 }

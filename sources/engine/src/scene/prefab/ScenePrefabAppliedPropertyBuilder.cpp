@@ -76,6 +76,9 @@ namespace {
     if (StartsWith(propertyPath, "skeletonBinding")) {
         return ScenePrefabOverrideFlag::SkeletonBinding;
     }
+    if (StartsWith(propertyPath, "motionSkeletonRule")) {
+        return ScenePrefabOverrideFlag::MotionSkeletonRule;
+    }
     if (StartsWith(propertyPath, "deformedGeometry")) {
         return ScenePrefabOverrideFlag::DeformedGeometry;
     }
@@ -523,6 +526,14 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
         }
         if (audioListener == nullptr) {
             return false;
+        }
+        if (propertyPath == "audioListener.priority") {
+            property.value = std::to_string(audioListener->priority);
+            return true;
+        }
+        if (propertyPath == "audioListener.localUser") {
+            property.value = std::to_string(audioListener->localUser.value);
+            return true;
         }
         if (propertyPath == "audioListener.primary") {
             property.value = ToString(audioListener->primary);

@@ -12,9 +12,12 @@
 #include "app/EditorWindowPointerMessageDispatcher.hpp"
 #include "app/EditorWindowResizeHandler.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
+#include "app/scene_viewport/EditorViewportCameraNavigationInput.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
+#include "rendering/FloatingWindowBackBufferPainter.hpp"
+#include "rendering/MainWindowBackBufferPainter.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "scene/EditorTerrainService.hpp"
 
@@ -43,8 +46,17 @@ void FinishTerrainStroke(EditorWindowMessageContext& context) {
     }
 }
 
+void CancelAnimationPreviewCameraNavigation(EditorWindowMessageContext& context) noexcept {
+    if (!context.sceneContext.AnimationPreviewCamera().IsNavigating()) return;
+    context.sceneContext.AnimationPreviewCamera().EndNavigation();
+    RestoreEditorViewportNavigationCursor();
+    context.sceneViewport.RequestPresent();
+}
+
 [[nodiscard]] bool HandleTransformToolShortcut(EditorSceneContext& sceneContext, WPARAM key) noexcept {
-    if (ModifierDown(VK_CONTROL) || ModifierDown(VK_MENU) || sceneContext.HasActiveViewportCameraNavigation() || sceneContext.Gizmo().IsDragging()) {
+    if (ModifierDown(VK_CONTROL) || ModifierDown(VK_MENU) ||
+        sceneContext.HasActiveViewportCameraNavigation() ||
+        sceneContext.AnimationPreviewCamera().IsNavigating() || sceneContext.Gizmo().IsDragging()) {
         return false;
     }
     // A single letter W/E/R must not retarget the gizmo while the user is
@@ -468,15 +480,29 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         context_.sceneViewport.NotifyHostDpiChanged(messageWindow);
         return DefWindowProcW(messageWindow, message, wparam, lparam);
     case WM_ACTIVATEAPP:
-        context_.sceneViewport.SetAllHostSurfacesSuspended(wparam == FALSE);
-        if (wparam != FALSE && context_.mainWindow != nullptr) {
+        if (wparam == FALSE) {
+            // Native scene surfaces are WS_CHILD and therefore cannot escape
+            // their editor host. Keeping their last frame avoids flashing the
+            // Scene View gray while the editor is merely inactive. Owned
+            // WS_POPUP overlays are different: hide them explicitly.
+            MainWindowBackBufferPainter::HideAllOverlays();
+            FloatingWindowBackBufferPainter::HideAllOverlays();
+            return 0;
+        }
+        if (context_.mainWindow != nullptr) {
             InvalidateRect(context_.mainWindow, nullptr, FALSE);
+        }
+        for (const HWND floatingWindow : context_.floatingWindows.Queries().Windows()) {
+            if (floatingWindow != nullptr) {
+                InvalidateRect(floatingWindow, nullptr, FALSE);
+            }
         }
         return 0;
     case WM_EXITSIZEMOVE:
         return EditorWindowResizeHandler::HandlePlacementChanged(messageWindow, context_.sceneViewport);
     case WM_CANCELMODE:
         FinishTerrainStroke(context_);
+        CancelAnimationPreviewCameraNavigation(context_);
         static_cast<void>(context_.sceneContext.CancelMaterialGraphInteractions());
         EditorSceneViewportCameraController{
             context_.mainWindow,
@@ -499,6 +525,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         context_.dockController.HandleCaptureChanged(newCapture);
         if (newCapture != messageWindow) {
             FinishTerrainStroke(context_);
+            CancelAnimationPreviewCameraNavigation(context_);
             static_cast<void>(context_.sceneContext.CancelMaterialGraphInteractions());
             EditorSceneViewportCameraController{
                 context_.mainWindow,

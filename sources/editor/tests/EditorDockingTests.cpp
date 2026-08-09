@@ -9,6 +9,7 @@
 #include "scene/SkeletalMeshEditorTreeState.hpp"
 #include "scene/SkeletalMeshEditorDetailsState.hpp"
 #include "scene/SkeletalMeshEditorDocumentState.hpp"
+#include "scene/SkeletonEditorDocumentState.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
 #include "scene/AnimationClipEditorDocumentState.hpp"
 #include "scene/AnimatorEditorGraphDocumentState.hpp"
@@ -403,6 +404,10 @@ void RunSkeletalMeshEditorWorkspaceActivationTest() {
         sceneLeaf != nullptr && skeletalMeshLeaf != nullptr &&
             sceneLeaf->leafId == skeletalMeshLeaf->leafId,
         "Skeletal Mesh Editor should use the central workspace");
+    kb::editor::tests::Require(
+        model.Commands().SetPanelTitle(kb::editor::DockPanelKind::SkeletalMeshEditor, "Y Bot.kbskeletalmesh") &&
+            RequirePanel(model, 11U)->title == "Y Bot.kbskeletalmesh",
+        "Skeletal Mesh Editor tab should accept the opened asset filename");
 
     kb::editor::tests::Require(model.Commands().ClosePanel(11U),
         "Closing Skeletal Mesh Editor should succeed");
@@ -510,13 +515,24 @@ void RunSkeletalMeshEditorDefaultLayoutTest() {
             layout.skeletonTree.right - layout.skeletonTree.left == 240,
         "Skeletal Mesh Editor should keep the default 20/60/20 workspace split");
     kb::editor::tests::Require(
-        layout.toolbox.left == content.left && layout.viewport.left == layout.toolbox.right &&
+        layout.documentBar.left == content.left && layout.documentBar.right == content.right &&
+            layout.documentBar.top == content.top && layout.documentBar.bottom == content.top + 38 &&
+            layout.commandBar.top == layout.documentBar.bottom && layout.commandBar.bottom == content.top + 74 &&
+            layout.toolbox.top == layout.commandBar.bottom &&
+            layout.toolbox.left == content.left && layout.viewport.left == layout.toolbox.right &&
             layout.skeletonTree.left == layout.viewport.right && layout.skeletonTree.right == content.right,
-        "Skeletal Mesh Editor layout should tile the workspace without gaps");
+        "Skeletal Mesh Editor should place its linked-asset and command bars above the workspace without gaps");
     kb::editor::tests::Require(
         layout.skeletonTree.bottom == layout.assetDetails.top &&
-            layout.skeletonTree.top == content.top && layout.assetDetails.bottom == content.bottom,
+            layout.skeletonTree.top == layout.commandBar.bottom && layout.assetDetails.bottom == content.bottom,
         "Skeletal Mesh Editor right column should stack Skeleton Tree over Asset Details");
+    kb::editor::tests::Require(
+        layout.meshDocument.left == content.left + 112 &&
+            layout.meshDocument.right == layout.skeletonDocument.left &&
+            layout.skeletonDocument.right == content.right - 8 &&
+            layout.meshDocument.top == layout.skeletonDocument.top &&
+            layout.meshDocument.bottom == layout.skeletonDocument.bottom,
+        "Skeletal Mesh Editor linked-asset bar should expose separate Mesh and Skeleton hit targets");
 }
 
 void RunSkeletalMeshEditorTreeStateTest() {
@@ -549,13 +565,20 @@ void RunSkeletalMeshEditorTreeStateTest() {
 
 void RunSkeletalMeshEditorDetailsStateTest() {
     kb::scene::SkeletonAsset skeleton{};
-    skeleton.bones = {{ .id = 10U, .parentIndex = -1, .name = "Root" }};
+    skeleton.bones = {
+        { .id = 10U, .parentIndex = -1, .name = "Root" },
+        { .id = 20U, .parentIndex = 0, .name = "Child" },
+    };
     skeleton.sockets = {{ .name = "Weapon", .boneId = 10U }};
     kb::scene::SkeletalMeshAsset mesh{};
     mesh.skeletonAssetId = 99U;
     mesh.skeletonCompatibilitySignature = 456U;
-    mesh.lods = {{ .vertices = std::vector<kb::scene::SkeletalMeshVertex>(3U), .indices = { 0U, 1U, 2U },
-        .sections = {{ .firstIndex = 0U, .indexCount = 3U, .materialAssetId = 123U, .boneMap = { 10U } }}, .requiredBones = { 10U } }};
+    mesh.lods = {{ .vertices = std::vector<kb::scene::SkeletalMeshVertex>(3U), .indices = { 0U, 1U, 2U, 0U, 1U, 2U },
+        .sections = {{ .firstIndex = 0U, .indexCount = 6U, .materialAssetId = 123U, .boneMap = { 10U, 20U } }}, .requiredBones = { 10U, 20U } }};
+    mesh.lods[0].vertices[0].jointIndices = { 0U, 1U, 0U, 0U };
+    mesh.lods[0].vertices[0].jointWeights = { 0.25F, 0.75F, 0.0F, 0.0F };
+    mesh.lods[0].vertices[1].jointIndices = { 0U, 1U, 0U, 0U };
+    mesh.lods[0].vertices[1].jointWeights = { 0.5F, 0.5F, 0.0F, 0.0F };
     kb::assets::AssetMetadata metadata{};
     metadata.name = "Hero";
     metadata.virtualPath = "/Game/Hero.kbskeletalmesh";
@@ -569,13 +592,38 @@ void RunSkeletalMeshEditorDetailsStateTest() {
     kb::editor::tests::Require(bone.title == "Bone: Root" && bone.sections[0].fields[0].value == "10" &&
             bone.sections[0].fields[5].value == "3",
         "Skeletal Mesh Details should expose selected bone data");
+    const kb::editor::SkeletalMeshEditorDetailsModel child = details.Build(20U, {});
+    kb::editor::tests::Require(child.sections[0].fields[5].value == "2" &&
+            child.sections[0].fields[6].value == "0.625" && child.sections[0].fields[7].value == "0.75",
+        "Skeletal Mesh Details should precompute per-bone vertex counts and weights without counting repeated indices");
     const kb::editor::SkeletalMeshEditorDetailsModel socket = details.Build(0U, "Weapon");
     kb::editor::tests::Require(socket.title == "Socket: Weapon" && socket.sections[0].fields[1].value == "10",
         "Skeletal Mesh Details should expose selected socket data");
     mesh.morphTargets = {{ .name = "Smile", .lodIndex = 0U, .deltas = {{ .vertexIndex = 0U }} }};
+    mesh.lods[0].vertices[0].jointWeights = { 0.0F, 1.0F, 0.0F, 0.0F };
     details.SetDocument(mesh, skeleton, metadata);
     kb::editor::tests::Require(details.MorphTargets().size() == 1U && details.MorphTargets()[0].name == "Smile",
         "Skeletal Mesh editor Morph Targets panel should use the canonical mesh morph data");
+    kb::editor::tests::Require(details.Build(10U, {}).sections[0].fields[5].value == "2",
+        "Skeletal Mesh Details should rebuild cached bone influence statistics when the document changes");
+
+    kb::assets::AssetMetadata skeletonMetadata{};
+    skeletonMetadata.name = "Hero Skeleton";
+    skeletonMetadata.virtualPath = "/Game/Hero.kbskeleton";
+    details.SetSkeletonDocument(skeleton, skeletonMetadata, &metadata);
+    const kb::editor::SkeletalMeshEditorDetailsModel skeletonAsset = details.Build(0U, {});
+    kb::editor::tests::Require(
+        skeletonAsset.title == "Skeleton" && skeletonAsset.sections.size() == 3U &&
+            skeletonAsset.sections[0].fields[0].value == "Hero Skeleton" &&
+            skeletonAsset.sections[0].fields[2].value == "2" &&
+            skeletonAsset.sections[0].fields[5].value == "Hero.kbskeletalmesh" &&
+            details.MorphTargets().empty(),
+        "Skeleton document should expose rig data and identify mesh geometry as preview-only");
+    kb::editor::tests::Require(details.Build(10U, {}).sections[0].fields.size() == 5U,
+        "Skeleton document should not present preview-mesh skin weights as owned Skeleton data");
+    details.SetSkeletonDocument(skeleton, skeletonMetadata, nullptr);
+    kb::editor::tests::Require(details.Build(0U, {}).sections[0].fields[5].value == "None",
+        "Skeleton document should remain valid when no compatible preview mesh exists");
 }
 
 void RunSkeletalMeshEditorDocumentStateTest() {
@@ -596,6 +644,23 @@ void RunSkeletalMeshEditorDocumentStateTest() {
         "Skeletal Mesh document save should establish a new clean history baseline");
     kb::editor::tests::Require(document.RevertToSaved() && !document.Dirty(),
         "Skeletal Mesh document revert should discard unsaved history");
+}
+
+void RunSkeletonEditorDocumentStateTest() {
+    kb::scene::SkeletonAsset skeleton{};
+    skeleton.bones = {{ .id = 10U, .parentIndex = -1, .name = "Root" }};
+    kb::editor::SkeletonEditorDocumentState document;
+    document.Open(kb::assets::AssetId{ 77U }, skeleton);
+    kb::scene::SkeletonAsset withSocket = skeleton;
+    withSocket.sockets.push_back({ .name = "Root Socket", .boneId = 10U });
+    kb::editor::tests::Require(document.Apply(withSocket) && document.Dirty() && document.CanUndo() &&
+            document.WorkingCopy() != nullptr && document.WorkingCopy()->sockets.size() == 1U,
+        "Skeleton document should retain validated socket edits in its working-copy history");
+    kb::editor::tests::Require(document.Undo() && !document.Dirty() && document.CanRedo() &&
+            document.WorkingCopy() != nullptr && document.WorkingCopy()->sockets.empty(),
+        "Skeleton document undo should restore the saved rig");
+    kb::editor::tests::Require(document.Redo() && document.MarkSaved() && !document.Dirty(),
+        "Skeleton document save should establish a clean history baseline");
 }
 
 void RunAnimationClipTimelineStateTest() {
@@ -724,6 +789,7 @@ void RunEditorDockingTests() {
     RunSkeletalMeshEditorTreeStateTest();
     RunSkeletalMeshEditorDetailsStateTest();
     RunSkeletalMeshEditorDocumentStateTest();
+    RunSkeletonEditorDocumentStateTest();
     RunAnimationClipTimelineStateTest();
     RunAnimationClipEditorDocumentStateTest();
     RunTabClickIsDockInteractionTest();

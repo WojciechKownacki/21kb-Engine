@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "app/EditorWindowInvalidator.hpp"
 #include "app/panels/EditorPanelPointerHitContext.hpp"
+#include "app/scene_viewport/EditorViewportCameraNavigationInput.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "docking/EditorFloatingWindowManager.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
@@ -16,7 +17,6 @@ constexpr UINT_PTR kSceneViewportCameraTimerId = 0x210BU;
 constexpr UINT kSceneViewportCameraTimerMs = 16U;
 constexpr float kTimerDeltaSeconds = static_cast<float>(kSceneViewportCameraTimerMs) / 1000.0F;
 constexpr DWORD kToolbarFpsRefreshMs = 250U;
-bool g_viewportNavigationCursorHidden = false;
 
 [[nodiscard]] bool PointInRect(const RECT& rect, int x, int y) noexcept {
     return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
@@ -24,58 +24,6 @@ bool g_viewportNavigationCursorHidden = false;
 
 [[nodiscard]] bool KeyDown(int virtualKey) noexcept {
     return (GetKeyState(virtualKey) & 0x8000) != 0;
-}
-
-[[nodiscard]] bool AsyncKeyDown(int virtualKey) noexcept {
-    return (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
-}
-
-[[nodiscard]] EditorViewportCameraFlightInput ReadFlightInput() noexcept {
-    return EditorViewportCameraFlightInput{
-        .forward = AsyncKeyDown('W'),
-        .backward = AsyncKeyDown('S'),
-        .right = AsyncKeyDown('D'),
-        .left = AsyncKeyDown('A'),
-        .up = AsyncKeyDown('E'),
-        .down = AsyncKeyDown('Q'),
-        .boost = AsyncKeyDown(VK_SHIFT),
-        .slow = AsyncKeyDown(VK_CONTROL),
-    };
-}
-
-[[nodiscard]] EditorViewportCameraNavigationMode ResolveNavigationMode(bool left, bool right, bool middle) noexcept {
-    const bool alt = KeyDown(VK_MENU);
-    if (middle) {
-        return EditorViewportCameraNavigationMode::Pan;
-    }
-    if (left && right) {
-        return EditorViewportCameraNavigationMode::Track;
-    }
-    if (left) {
-        return alt ? EditorViewportCameraNavigationMode::Orbit : EditorViewportCameraNavigationMode::LeftYawDolly;
-    }
-    if (right) {
-        return alt ? EditorViewportCameraNavigationMode::Dolly : EditorViewportCameraNavigationMode::Look;
-    }
-    return EditorViewportCameraNavigationMode::None;
-}
-
-void HideViewportNavigationCursor() noexcept {
-    if (g_viewportNavigationCursorHidden) {
-        return;
-    }
-    while (ShowCursor(FALSE) >= 0) {
-    }
-    g_viewportNavigationCursorHidden = true;
-}
-
-void RestoreViewportNavigationCursor() noexcept {
-    if (!g_viewportNavigationCursorHidden) {
-        return;
-    }
-    while (ShowCursor(TRUE) < 0) {
-    }
-    g_viewportNavigationCursorHidden = false;
 }
 
 [[nodiscard]] RECT ToRect(const DockRect& rect) noexcept {
@@ -265,7 +213,8 @@ void EditorSceneViewportCameraController::Cancel(HWND messageWindow) noexcept {
 }
 
 bool EditorSceneViewportCameraController::BeginNavigation(HWND messageWindow, int x, int y, bool left, bool right, bool middle) {
-    const EditorViewportCameraNavigationMode mode = ResolveNavigationMode(left, right, middle);
+    const EditorViewportCameraNavigationMode mode = ResolveEditorViewportCameraNavigationMode(
+        left, right, middle, KeyDown(VK_MENU));
     if (mode == EditorViewportCameraNavigationMode::None) {
         return false;
     }
@@ -307,7 +256,7 @@ bool EditorSceneViewportCameraController::QueueActivePointerMove(HWND messageWin
 bool EditorSceneViewportCameraController::ApplyActiveKeyboardFlight(HWND messageWindow, float deltaSeconds) {
     static_cast<void>(messageWindow);
     EditorViewportCameraState* camera = sceneContext_.ActiveViewportCamera();
-    if (camera == nullptr || !camera->ApplyKeyboardFlight(ReadFlightInput(), deltaSeconds)) {
+    if (camera == nullptr || !camera->ApplyKeyboardFlight(ReadEditorViewportCameraFlightInput(), deltaSeconds)) {
         return false;
     }
 
@@ -339,13 +288,13 @@ void EditorSceneViewportCameraController::InvalidateActiveToolbar(HWND messageWi
 void EditorSceneViewportCameraController::StartCapture(HWND messageWindow, bool hideCursor) noexcept {
     SetCapture(messageWindow);
     if (hideCursor) {
-        HideViewportNavigationCursor();
+        HideEditorViewportNavigationCursor();
     }
 }
 
 void EditorSceneViewportCameraController::StopCapture(HWND messageWindow) noexcept {
     KillTimer(messageWindow, kSceneViewportCameraTimerId);
-    RestoreViewportNavigationCursor();
+    RestoreEditorViewportNavigationCursor();
     if (GetCapture() == messageWindow) {
         ReleaseCapture();
     }

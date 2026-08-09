@@ -8,6 +8,7 @@
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
+#include "engine/scene/MotionSkeletonRuleComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/CharacterControllerComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
@@ -78,8 +79,10 @@ void RegisterPhysicsReflection(kb::ecs::World& world) {
 
 void RegisterAudioReflection(kb::ecs::World& world) {
     static_cast<void>(world.RegisterComponentReflection<AudioListenerComponent>(
-        "kb.scene.AudioListenerComponent",
+        AudioListenerComponent::StableId,
         {
+            KB_ECS_FIELD(AudioListenerComponent, priority, kb::ecs::ComponentFieldType::Int32),
+            KB_ECS_FIELD(AudioListenerComponent, localUser, kb::ecs::ComponentFieldType::Bytes),
             KB_ECS_FIELD(AudioListenerComponent, primary, kb::ecs::ComponentFieldType::Bool),
             KB_ECS_FIELD(AudioListenerComponent, enabled, kb::ecs::ComponentFieldType::Bool),
         }));
@@ -357,9 +360,10 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , historyRibbonComponentId_(RegisterSceneComponent<HistoryRibbonComponent>(world, HistoryRibbonComponent::StableId))
     , lensEchoComponentId_(RegisterSceneComponent<LensEchoComponent>(world, LensEchoComponent::StableId))
     , audioSourceComponentId_(RegisterSceneComponent<AudioSourceComponent>(world, "kb.scene.AudioSourceComponent"))
-    , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, "kb.scene.AudioListenerComponent"))
+    , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, AudioListenerComponent::StableId))
     , animatorComponentId_(RegisterSceneComponent<Animator>(world, "kb.scene.AnimatorComponent"))
     , skeletonBindingComponentId_(RegisterSceneComponent<SkeletonBindingComponent>(world, SkeletonBindingComponent::StableId))
+    , motionSkeletonRuleComponentId_(RegisterSceneComponent<MotionSkeletonRuleComponent>(world, MotionSkeletonRuleComponent::StableId))
     , deformedGeometryComponentId_(RegisterSceneComponent<DrawD3DeformedGeometryComponent>(world, DrawD3DeformedGeometryComponent::StableId))
     , uiDocumentComponentId_(RegisterSceneComponent<UIDocumentComponent>(world, "kb.scene.UIDocumentComponent"))
     , navAgentComponentId_(RegisterSceneComponent<NavAgent>(world, "kb.scene.NavAgent"))
@@ -464,6 +468,7 @@ std::uint64_t SceneComponentRegistry::AudioListenerComponentId() const noexcept 
 
 std::uint64_t SceneComponentRegistry::AnimatorComponentId() const noexcept { return animatorComponentId_; }
 std::uint64_t SceneComponentRegistry::SkeletonBindingComponentId() const noexcept { return skeletonBindingComponentId_; }
+std::uint64_t SceneComponentRegistry::MotionSkeletonRuleComponentId() const noexcept { return motionSkeletonRuleComponentId_; }
 std::uint64_t SceneComponentRegistry::DeformedGeometryComponentId() const noexcept { return deformedGeometryComponentId_; }
 std::uint64_t SceneComponentRegistry::UIDocumentComponentId() const noexcept { return uiDocumentComponentId_; }
 std::uint64_t SceneComponentRegistry::NavAgentComponentId() const noexcept { return navAgentComponentId_; }

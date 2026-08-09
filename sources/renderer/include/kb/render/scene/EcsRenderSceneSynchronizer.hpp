@@ -77,6 +77,10 @@ public:
     void SyncEntities(const kb::scene::Scene& scene, RenderScene& renderScene, std::span<const std::uint64_t> entityIds) const;
     void SyncTransformUpdates(const kb::scene::Scene& scene, RenderScene& renderScene) const;
     void SyncMeshRendererUpdates(const kb::scene::Scene& scene, RenderScene& renderScene) const;
+    // Skinning palette handles address the renderer's current frame buffer and cannot be
+    // retained in a render proxy across frames. Refresh only deformed mesh proxies on an
+    // otherwise unchanged scene so camera-only presents keep their GPU skinning data alive.
+    void SyncDeformedMeshPalettes(const kb::scene::Scene& scene, RenderScene& renderScene) const;
     // Renderer-owned sample history is advanced once per submitted frame. It
     // consumes only canonical ECS policy and transform state; generated mesh
     // proxies are transient and never feed back into the scene.

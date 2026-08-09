@@ -777,7 +777,7 @@ void DrawMeshPreviewToolbar(HDC dc, RECT toolbar, const EditorTheme& theme, cons
     int y,
     const EditorTheme& theme,
     const InspectorPanelState& inspector,
-    const kb::assets::AssetManager& manager,
+    kb::assets::AssetManager& manager,
     const kb::assets::AssetMetadata& metadata,
     bool deferPreviewWork) {
     EditorMeshPreviewService& previews = EditorMeshPreviewCache();
@@ -1387,10 +1387,10 @@ void PaintMaterialAsset(HDC dc, RECT content, const EditorTheme& theme, const Ed
 }
 
 
-void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
+void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, EditorSceneContext& sceneContext) {
     const InspectorPanelState& inspector = sceneContext.Inspector();
     const EditorAssetBrowserState& state = sceneContext.AssetBrowser();
-    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     const bool deferMeshPreviewWork = sceneContext.HasActiveViewportCameraNavigation();
     int y = content.top;
 
@@ -2378,7 +2378,7 @@ void DrawTerrainLayerCard(
     DrawFrame(dc, card, fill, selected ? Color(theme.accent) : Color(theme.borderPanel));
 
     const RECT preview = Rect(card.left + 7, card.top + 13, card.left + 7 + kTerrainLayerPreviewSize, card.top + 13 + kTerrainLayerPreviewSize);
-    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     const kb::assets::AssetMetadata* materialMetadata = manager.Registry().Find(kb::assets::AssetId{ materialAssetId });
     if (materialMetadata != nullptr) {
         if (const EditorMaterialThumbnailImage* rendered = EditorMaterialThumbnailCache().ThumbnailFor(
@@ -3066,11 +3066,10 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     int rows = metadata.importCategory.empty() ? 0 : 1;
     const bool deferMeshPreviewWork = sceneContext.HasActiveViewportCameraNavigation();
     if (!deferMeshPreviewWork) {
-        const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
-        if (const EditorMeshThumbnailStats* stats = EditorMeshPreviewCache().StatsFor(manager, metadata); stats != nullptr) {
+        if (const EditorMeshThumbnailStats* stats = EditorMeshPreviewCache().CachedStatsFor(metadata); stats != nullptr) {
             rows += 6;
         }
-        if (const EditorMeshValidationResult* validation = EditorMeshPreviewCache().ValidationFor(manager, metadata); validation != nullptr) {
+        if (const EditorMeshValidationResult* validation = EditorMeshPreviewCache().CachedValidationFor(metadata); validation != nullptr) {
             rows += static_cast<int>(std::min<std::size_t>(validation->issues.size(), 6U));
         }
     }
@@ -3104,7 +3103,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             ? kSectionHeaderHeight + kSectionGap
             : kSectionHeaderHeight + kDividerHeight + imageHeight + 20 + kSectionGap;
     }
-    if (EditorMeshPreviewCache().StatsFor(sceneContext.Scene().Assets().Manager(), metadata) != nullptr) {
+    if (EditorMeshPreviewCache().CachedStatsFor(metadata) != nullptr) {
         height += MeshPreviewPanelHeight(content) + kSectionGap;
     }
     height += SectionHeight(inspector, InspectorSectionId::Asset, AssetSectionRows(sceneContext, metadata));
@@ -4147,7 +4146,7 @@ void InspectorPanelRenderer::Paint(
     HDC dc,
     const RECT& content,
     const EditorTheme& theme,
-    const EditorSceneContext& sceneContext) const {
+    EditorSceneContext& sceneContext) const {
     const int savedDc = SaveDC(dc);
     IntersectClipRect(dc, content.left, content.top, content.right, content.bottom);
 
@@ -4258,7 +4257,7 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                     y += kSectionGap;
                 }
             }
-            if (EditorMeshPreviewCache().StatsFor(sceneContext.Scene().Assets().Manager(), *metadata) != nullptr) {
+            if (EditorMeshPreviewCache().CachedStatsFor(*metadata) != nullptr) {
                 const RECT preview = MeshPreviewPanelRect(viewport, y);
                 const RECT toolbar = MeshPreviewToolbarRect(preview);
                 const std::array<InspectorPropertyId, 4> properties = MeshPreviewToolbarProperties();

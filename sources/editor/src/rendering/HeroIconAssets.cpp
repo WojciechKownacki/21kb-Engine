@@ -108,6 +108,12 @@ static constexpr std::array<HeroIconPath, 3> kRotationSnap{
 static constexpr std::array<HeroIconPath, 1> kCamera{
     HeroIconPath{ "M15.75 10.5 21 7.5v9l-5.25-3m-12-6.75h9a3 3 0 0 1 3 3v4.5a3 3 0 0 1-3 3h-9a3 3 0 0 1-3-3v-4.5a3 3 0 0 1 3-3Z", false },
 };
+// Original editor glyph: a compact humanoid joint hierarchy. Circles are
+// joints and the connected strokes make the asset type readable at tile size.
+static constexpr std::array<HeroIconPath, 2> kSkeleton{
+    HeroIconPath{ "M12 3.25a1.75 1.75 0 1 1 0 3.5 1.75 1.75 0 0 1 0-3.5ZM7 9.25a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5Zm10 0a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5ZM9 18a1.25 1.25 0 1 1 0 2.5A1.25 1.25 0 0 1 9 18Zm6 0a1.25 1.25 0 1 1 0 2.5A1.25 1.25 0 0 1 15 18Z", false },
+    HeroIconPath{ "M12 6.75v6.5m0-4.5-5 1.75m5-1.75 5 1.75m-5 2.75L9 18m3-4.75L15 18", false },
+};
 
 } // namespace
 
@@ -213,6 +219,10 @@ HeroIconGlyph HeroIconAssets::RotationSnap() noexcept {
 
 HeroIconGlyph HeroIconAssets::Camera() noexcept {
     return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kCamera } };
+}
+
+HeroIconGlyph HeroIconAssets::Skeleton() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kSkeleton }, .strokeWidth = 1.8F };
 }
 
 } // namespace kb::editor

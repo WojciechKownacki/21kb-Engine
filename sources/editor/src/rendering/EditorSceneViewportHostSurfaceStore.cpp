@@ -60,6 +60,19 @@ EditorSceneBgfxViewport::HostSurface* EditorSceneBgfxViewport::HostSurfaceStore:
     return iter == hostSurfaces_.end() ? nullptr : iter->get();
 }
 
+std::vector<std::uint64_t> EditorSceneBgfxViewport::HostSurfaceStore::KeysForHost(HWND host) const {
+    std::vector<std::uint64_t> keys;
+    if (host == nullptr) {
+        return keys;
+    }
+    for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
+        if (surface != nullptr && surface->host == host) {
+            keys.push_back(surface->key);
+        }
+    }
+    return keys;
+}
+
 void EditorSceneBgfxViewport::HostSurfaceStore::MarkHostNotPresented(HWND host) noexcept {
     for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
         if (surface != nullptr && surface->host == host) {
@@ -187,41 +200,43 @@ void EditorSceneBgfxViewport::HostSurfaceStore::DestroyWindows() noexcept {
     }
 }
 
+void EditorSceneBgfxViewport::HostSurfaceStore::Show(HostSurface& surface) noexcept {
+    if (surface.clipWindow == nullptr || surface.window == nullptr ||
+        IsWindow(surface.clipWindow) == 0 || IsWindow(surface.window) == 0) {
+        return;
+    }
+    UINT flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOREDRAW | SWP_SHOWWINDOW;
+    if (!EditorSceneBgfxViewport::ShouldPreserveHostSurfaceBits(surface.key)) {
+        flags |= SWP_NOCOPYBITS;
+    }
+    if (IsWindowVisible(surface.clipWindow) == 0) {
+        SetWindowPos(
+            surface.clipWindow,
+            HWND_BOTTOM,
+            surface.rect.left,
+            surface.rect.top,
+            static_cast<int>(RectWidth(surface.rect)),
+            static_cast<int>(RectHeight(surface.rect)),
+            flags);
+    }
+    if (IsWindowVisible(surface.window) == 0) {
+        SetWindowPos(
+            surface.window,
+            HWND_TOP,
+            0,
+            0,
+            static_cast<int>(RectWidth(surface.rect)),
+            static_cast<int>(RectHeight(surface.rect)),
+            flags);
+    }
+}
+
 void EditorSceneBgfxViewport::HostSurfaceStore::ShowPresentedWindows() noexcept {
     for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
-        if (surface == nullptr ||
-            !surface->presentedInCurrentPaint ||
-            surface->clipWindow == nullptr ||
-            surface->window == nullptr ||
-            IsWindow(surface->clipWindow) == 0 ||
-            IsWindow(surface->window) == 0) {
+        if (surface == nullptr || !surface->presentedInCurrentPaint) {
             continue;
         }
-
-        UINT flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOREDRAW | SWP_SHOWWINDOW;
-        if (!EditorSceneBgfxViewport::ShouldPreserveHostSurfaceBits(surface->key)) {
-            flags |= SWP_NOCOPYBITS;
-        }
-        if (IsWindowVisible(surface->clipWindow) == 0) {
-            SetWindowPos(
-                surface->clipWindow,
-                HWND_BOTTOM,
-                surface->rect.left,
-                surface->rect.top,
-                static_cast<int>(RectWidth(surface->rect)),
-                static_cast<int>(RectHeight(surface->rect)),
-                flags);
-        }
-        if (IsWindowVisible(surface->window) == 0) {
-            SetWindowPos(
-                surface->window,
-                HWND_TOP,
-                0,
-                0,
-                static_cast<int>(RectWidth(surface->rect)),
-                static_cast<int>(RectHeight(surface->rect)),
-                flags);
-        }
+        Show(*surface);
     }
 }
 

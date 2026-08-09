@@ -470,6 +470,10 @@ bool EditorSceneBgfxViewport::IsHostSurfaceVisible(HWND host, std::uint64_t key)
     return surface != nullptr && surface->clipWindow != nullptr && IsWindow(surface->clipWindow) != 0 && IsWindowVisible(surface->clipWindow) != 0;
 }
 
+std::vector<std::uint64_t> EditorSceneBgfxViewport::HostSurfaceKeysForHost(HWND host) const {
+    return hostSurfaceStore_.KeysForHost(host);
+}
+
 void EditorSceneBgfxViewport::Hide() noexcept {
     sessionStore_.MarkAllNotPresented();
 }

@@ -36,6 +36,14 @@ public:
         const kb::scene::SkeletalMeshAsset& asset,
         std::span<const std::string> morphTargetNames = {},
         std::span<const float> morphWeights = {});
+
+    // Precondition: ValidateSkeletalMeshAsset(asset).valid is true and the asset has not
+    // been mutated since validation. This entry point intentionally skips the full asset
+    // validation pass for assets supplied by a validating loader.
+    [[nodiscard]] static std::optional<SkeletalMeshRenderResourceData> BuildValidated(
+        const kb::scene::SkeletalMeshAsset& asset,
+        std::span<const std::string> morphTargetNames = {},
+        std::span<const float> morphWeights = {});
 };
 
 } // namespace kb::render

@@ -145,7 +145,8 @@ namespace {
 }
 
 [[nodiscard]] bool Equals(const AudioListenerComponent& lhs, const AudioListenerComponent& rhs) noexcept {
-    return lhs.primary == rhs.primary && lhs.enabled == rhs.enabled;
+    return lhs.priority == rhs.priority && lhs.localUser == rhs.localUser &&
+        lhs.primary == rhs.primary && lhs.enabled == rhs.enabled;
 }
 
 [[nodiscard]] bool Equals(const Animator& lhs, const Animator& rhs) noexcept {
@@ -201,6 +202,15 @@ namespace {
 [[nodiscard]] bool Equals(const SkeletonBindingComponent& lhs, const SkeletonBindingComponent& rhs) noexcept {
     return lhs.skeletonAssetId == rhs.skeletonAssetId &&
         lhs.skeletonCompatibilitySignature == rhs.skeletonCompatibilitySignature && lhs.enabled == rhs.enabled;
+}
+[[nodiscard]] bool Equals(const MotionSkeletonRuleComponent& lhs, const MotionSkeletonRuleComponent& rhs) noexcept {
+    return lhs.kind == rhs.kind && lhs.constrainedBoneId == rhs.constrainedBoneId &&
+        lhs.midBoneId == rhs.midBoneId && lhs.tipBoneId == rhs.tipBoneId && lhs.sourceBoneId == rhs.sourceBoneId &&
+        MotionSkeletonRuleTargetText(lhs) == MotionSkeletonRuleTargetText(rhs) &&
+        MotionSkeletonRulePoleTargetText(lhs) == MotionSkeletonRulePoleTargetText(rhs) &&
+        lhs.axis.x == rhs.axis.x && lhs.axis.y == rhs.axis.y && lhs.axis.z == rhs.axis.z &&
+        lhs.minAngleDegrees == rhs.minAngleDegrees && lhs.maxAngleDegrees == rhs.maxAngleDegrees &&
+        lhs.halfLifeSeconds == rhs.halfLifeSeconds && lhs.weight == rhs.weight && lhs.enabled == rhs.enabled;
 }
 [[nodiscard]] bool Equals(const DrawD3DeformedGeometryComponent& lhs, const DrawD3DeformedGeometryComponent& rhs) noexcept {
     return lhs.skeletalMeshAssetId == rhs.skeletalMeshAssetId && lhs.materialSlotAssetIds == rhs.materialSlotAssetIds &&
@@ -288,6 +298,7 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , audioListeners(scene.Components().AudioListeners())
     , animators(scene.Components().Animators())
     , skeletonBindings(scene.Components().SkeletonBindings())
+    , motionSkeletonRules(scene.Components().MotionSkeletonRules())
     , deformedGeometries(scene.Components().DeformedGeometries())
     , uiDocuments(scene.Components().UIDocuments())
     , navAgents(scene.Components().NavAgents())
@@ -383,6 +394,9 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     }
     if (!componentMask.available || !componentMask.matches || node.components.skeletonBinding.has_value()) {
         WriteOptionalComponent(context.skeletonBindings, entity, node.components.skeletonBinding);
+    }
+    if (!componentMask.available || !componentMask.matches || node.components.motionSkeletonRule.has_value()) {
+        WriteOptionalComponent(context.motionSkeletonRules, entity, node.components.motionSkeletonRule);
     }
     if (!componentMask.available || !componentMask.matches || node.components.deformedGeometry.has_value()) {
         WriteOptionalComponent(context.deformedGeometries, entity, node.components.deformedGeometry);
