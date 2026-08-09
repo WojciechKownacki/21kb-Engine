@@ -333,8 +333,12 @@ namespace {
 // +/-2.1e9 is astronomically far from any real sampling; saturating there
 // is a defined, benign result rather than UB.
 [[nodiscard]] std::int32_t FloorToLatticeInt(float flooredCoord) noexcept {
-    constexpr float kMaxLattice = 2147483646.0F; // INT32_MAX - 1, exactly representable as float
-    constexpr float kMinLattice = -2147483648.0F; // INT32_MIN, exactly representable as float
+    // A float has 256-unit spacing near INT32_MAX. Writing INT32_MAX - 1
+    // as a decimal float rounds up to 2^31, so the subsequent cast and
+    // neighbour +1 are both undefined. This is the greatest representable
+    // float strictly below 2^31 and therefore leaves defined +1 headroom.
+    constexpr float kMaxLattice = 0x1.fffffep+30F;
+    constexpr float kMinLattice = -0x1p+31F;
     const float clamped = flooredCoord > kMaxLattice ? kMaxLattice : (flooredCoord < kMinLattice ? kMinLattice : flooredCoord);
     return static_cast<std::int32_t>(clamped);
 }
