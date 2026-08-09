@@ -89,6 +89,7 @@ private:
     int pendingX_ = 0;
     int pendingY_ = 0;
     bool hasPendingPointer_ = false;
+    kb::scene::Vec3 flightVelocityLocal_{};
 
     bool focusAnimating_ = false;
     float focusElapsed_ = 0.0F;
