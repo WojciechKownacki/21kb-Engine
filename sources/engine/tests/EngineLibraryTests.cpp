@@ -5151,6 +5151,18 @@ void RunGameInstanceLifetimeTest() {
     const auto crash=kb::core::MakeCrashReport(1U,{7U},"failure",{"a","b","c"},2U);kb::tests::Require(crash.apiVersion==1U&&crash.assetIds==std::vector<std::uint64_t>{7U}&&crash.recentEvents==std::vector<std::string>({"b","c"}),"Crash report did not bound diagnostic events");
     kb::core::RuntimeInspector inspector; inspector.Publish({.entity=4U,.components=2U,.timers=1U}); kb::tests::Require(inspector.Snapshot().entity==4U&&inspector.Snapshot().timers==1U,"Runtime inspector did not retain read-only snapshot");
     const kb::core::ConsoleCommand command{.name="world.pause",.help="Pause world",.arguments={{"paused",kb::core::ConsoleArgumentType::Bool},{"frames",kb::core::ConsoleArgumentType::Integer}},.permission=kb::core::ConsolePermission::Developer};kb::tests::Require(kb::core::CanExecute(command,kb::core::ConsolePermission::Developer,{"true","2"})&&!kb::core::CanExecute(command,kb::core::ConsolePermission::User,{"true","2"})&&!kb::core::CanExecute(command,kb::core::ConsolePermission::Admin,{"yes","2"})&&kb::core::HelpFromManifest(command)=="world.pause <paused:bool> <frames:int> — Pause world","Console command did not validate typed arguments, permissions or manifest help");
+    const kb::core::ConsoleCommand floatCommand{
+        .name = "world.speed",
+        .arguments = {{ "scale", kb::core::ConsoleArgumentType::Float }},
+    };
+    kb::tests::Require(
+        kb::core::CanExecute(floatCommand, kb::core::ConsolePermission::User, { "3.25" }) &&
+            kb::core::CanExecute(floatCommand, kb::core::ConsolePermission::User, { "1e2" }) &&
+            !kb::core::CanExecute(floatCommand, kb::core::ConsolePermission::User, { "+1" }) &&
+            !kb::core::CanExecute(floatCommand, kb::core::ConsolePermission::User, { "nan" }) &&
+            !kb::core::CanExecute(floatCommand, kb::core::ConsolePermission::User, { "1,5" }) &&
+            !kb::core::CanExecute(floatCommand, kb::core::ConsolePermission::User, { "1.0x" }),
+        "Console float argument validation must use the invariant cross-platform numeric grammar");
     kb::core::ProfilerCounters profiler;profiler.Scope("tick");profiler.Timeline("step");profiler.Allocation();kb::tests::Require(profiler.scopes==1U&&profiler.timelineEvents==1U&&profiler.allocations==1U,"Profiler counters did not record scope, timeline, allocation");
     kb::core::DebugDrawBuffer draw{5U}; kb::tests::Require(draw.DrawLine({},{1.0F,0.0F,0.0F},1.0F,3U)&&draw.DrawRay({},{0.0F,1.0F,0.0F},1.0F,3U)&&draw.DrawBox({},{1.0F,1.0F,1.0F},1.0F,3U)&&draw.DrawSphere({},1.0F,1.0F,3U)&&draw.DrawText({},"probe",1.0F,3U)&&draw.Commands().size()==5U&&draw.Commands().back().text=="probe"&&!draw.DrawLine({},{},1.0F,3U),"Debug draw buffer did not retain bounded commands"); draw.Advance(1.0F); kb::tests::Require(draw.Commands().empty(),"Debug draw duration did not expire commands");
     kb::tests::Require(kb::core::Assert(false,kb::core::AssertionPolicy::Development,"x",{"lua:1"}).fatal&&!kb::core::Assert(false,kb::core::AssertionPolicy::Release,"x").fatal&&kb::core::Require(false,kb::core::AssertionPolicy::Release,"x").fatal&&!kb::core::SoftFail(false,kb::core::AssertionPolicy::Development,"x").fatal&&kb::core::Assert(false,kb::core::AssertionPolicy::Development,"x",{"lua:1"}).scriptStackTrace==std::vector<std::string>{"lua:1"}, "Assertion policy did not distinguish assert, require, soft-fail, or script stack traces");
