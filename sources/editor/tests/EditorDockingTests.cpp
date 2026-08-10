@@ -644,6 +644,13 @@ void RunSkeletalMeshEditorDocumentStateTest() {
         "Skeletal Mesh document save should establish a new clean history baseline");
     kb::editor::tests::Require(document.RevertToSaved() && !document.Dirty(),
         "Skeletal Mesh document revert should discard unsaved history");
+    kb::scene::SkeletalMeshAsset reloaded = mesh;
+    reloaded.boundsMode = kb::scene::SkeletalMeshBoundsMode::ImportedConservative;
+    kb::editor::tests::Require(
+        document.ReplaceFromReimport(reloaded) && !document.Dirty() && !document.CanUndo() && !document.CanRedo() &&
+            document.WorkingCopy() != nullptr &&
+            document.WorkingCopy()->boundsMode == kb::scene::SkeletalMeshBoundsMode::ImportedConservative,
+        "Skeletal Mesh reload should replace the saved baseline and clear stale history");
 }
 
 void RunSkeletonEditorDocumentStateTest() {
@@ -661,6 +668,13 @@ void RunSkeletonEditorDocumentStateTest() {
         "Skeleton document undo should restore the saved rig");
     kb::editor::tests::Require(document.Redo() && document.MarkSaved() && !document.Dirty(),
         "Skeleton document save should establish a clean history baseline");
+    kb::scene::SkeletonAsset reloaded = skeleton;
+    reloaded.sockets.push_back({ .name = "Reloaded Socket", .boneId = 10U });
+    kb::editor::tests::Require(
+        document.ReplaceFromReload(reloaded) && !document.Dirty() && !document.CanUndo() && !document.CanRedo() &&
+            document.WorkingCopy() != nullptr && document.WorkingCopy()->sockets.size() == 1U &&
+            document.WorkingCopy()->sockets.front().name == "Reloaded Socket",
+        "Skeleton document reload should atomically replace the saved baseline and clear stale history");
 }
 
 void RunAnimationClipTimelineStateTest() {
