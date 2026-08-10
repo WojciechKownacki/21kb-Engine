@@ -27,6 +27,7 @@
 #include "app/scene_viewport/EditorViewportCameraNavigationInput.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "app/scene_viewport/EditorTerrainViewportInteraction.hpp"
+#include "app/EditorWindowInvalidator.hpp"
 #include "scene/EditorTerrainService.hpp"
 #include "diagnostics/EditorLagTrace.hpp"
 
@@ -252,34 +253,21 @@ void CoalesceConsecutiveMouseMoveMessages(MSG& message) noexcept {
     }
 }
 
-void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
-    if (state.window != nullptr && IsWindow(state.window) != 0) {
-        if (const std::optional<RECT> inspector = EditorPanelContentResolver::Resolve(
-                DockPanelKind::Inspector,
-                state.window,
-                state.window,
-                state.dockModel,
-                state.floatingWindows,
-                state.metrics)) {
-            InvalidateRect(state.window, &*inspector, FALSE);
-        }
-    }
+void InvalidatePanelKind(EditorApplicationState& state, DockPanelKind kind) noexcept {
+    EditorWindowInvalidator::InvalidateDockPanel(
+        state.window, state.dockModel, state.floatingWindows, state.metrics, kind);
+}
 
-    const EditorFloatingWindowQueries queries = state.floatingWindows.Queries();
-    for (HWND window : queries.Windows()) {
-        if (window == nullptr || IsWindow(window) == 0) {
-            continue;
-        }
-        if (const std::optional<RECT> inspector = EditorPanelContentResolver::Resolve(
-                DockPanelKind::Inspector,
-                window,
-                state.window,
-                state.dockModel,
-                state.floatingWindows,
-                state.metrics)) {
-            InvalidateRect(window, &*inspector, FALSE);
-        }
-    }
+void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
+    InvalidatePanelKind(state, DockPanelKind::Inspector);
+}
+
+void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
+    // Mesh previews are CPU-rasterized and consumed only by Project Files and Inspector. Invalidating
+    // the whole native host here also dirtied the Scene child swapchain without submitting a new scene
+    // frame, allowing Windows to expose a stale back buffer as a stretched/duplicated grid.
+    InvalidatePanelKind(state, DockPanelKind::Assets);
+    InvalidatePanelKind(state, DockPanelKind::Inspector);
 }
 
 [[nodiscard]] bool PresentScenePanel(EditorApplicationState& state, HWND host, const DockPanel& panel, const RECT& content, bool refreshToolbar) {
@@ -480,14 +468,7 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
     const bool explicitPresentRequested = state.sceneViewport.PresentRequested();
     state.sceneViewport.SetGraphShaderCacheRoot(state.sceneContext.GraphShaderCacheRoot());
     if (EditorMeshPreviewCache().PumpCompletedPreviews(state.sceneContext.Scene().Assets().Manager()) > 0U) {
-        if (state.window != nullptr) {
-            InvalidateRect(state.window, nullptr, FALSE);
-        }
-        for (HWND window : state.floatingWindows.Queries().Windows()) {
-            if (window != nullptr && IsWindow(window) != 0) {
-                InvalidateRect(window, nullptr, FALSE);
-            }
-        }
+        InvalidateMeshPreviewPanels(state);
     }
     const std::size_t importedItems = state.sceneContext.PumpAssetImportResults();
     if (importedItems > 0U) {

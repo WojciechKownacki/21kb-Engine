@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/HeroIconPainter.hpp"
 #include "rendering/SkeletalMeshEditorBonePicker.hpp"
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 #include "rendering/SkeletalMeshEditorSceneLabelBuilder.hpp"
@@ -233,9 +234,11 @@ void PaintTree(HDC dc, const RECT& rect, const EditorSceneContext& sceneContext)
     const ScopedFont bodyFont{ 11, FW_NORMAL };
     const ScopedGdiObject selectedBodyFont(dc, bodyFont.handle);
     SetTextColor(dc, RGB(145, 155, 168));
-    RECT filter{ rect.left + 14, rect.top + 31, rect.right - 12, rect.top + 49 };
+    const RECT searchIcon{ rect.left + 13, rect.top + 34, rect.left + 25, rect.top + 46 };
+    HeroIconPainter::Draw(dc, searchIcon, HeroIconKind::MagnifyingGlass, RGB(125, 135, 147), 1);
+    RECT filter{ rect.left + 29, rect.top + 31, rect.right - 12, rect.top + 49 };
     const std::string filterText = sceneContext.SkeletalMeshEditorTreeFilter().empty()
-        ? "Search bones and sockets" : sceneContext.SkeletalMeshEditorTreeFilter();
+        ? "Search Skeleton Tree..." : sceneContext.SkeletalMeshEditorTreeFilter();
     DrawTextA(dc, filterText.c_str(), -1, &filter, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 
     const std::vector<SkeletalMeshEditorTreeRow> rows = sceneContext.SkeletalMeshEditorTreeRows();
@@ -244,8 +247,14 @@ void PaintTree(HDC dc, const RECT& rect, const EditorSceneContext& sceneContext)
             rect.right - 1, rect.top + kTreeHeaderHeight + static_cast<int>(index + 1U) * kTreeRowHeight };
         if (row.top >= rect.bottom - kTreeAuxiliaryHeight) break;
         if (rows[index].selected) GdiDrawing::FillRectColor(dc, row, RGB(35, 75, 112));
-        RECT label{ row.left + 10 + static_cast<int>(rows[index].depth) * 14, row.top, row.right - 6, row.bottom };
-        SetTextColor(dc, rows[index].kind == SkeletalMeshEditorTreeItemKind::Socket ? RGB(120, 196, 176) : RGB(211, 217, 225));
+        const int itemLeft = row.left + 8 + static_cast<int>(rows[index].depth) * 14;
+        const RECT itemIcon{ itemLeft, row.top + 3, itemLeft + 14, row.bottom - 3 };
+        const bool socket = rows[index].kind == SkeletalMeshEditorTreeItemKind::Socket;
+        const COLORREF itemColor = socket ? RGB(120, 196, 176) : RGB(171, 181, 194);
+        HeroIconPainter::Draw(
+            dc, itemIcon, socket ? HeroIconKind::Bolt : HeroIconKind::Skeleton, itemColor, 1);
+        RECT label{ itemIcon.right + 4, row.top, row.right - 6, row.bottom };
+        SetTextColor(dc, socket ? RGB(120, 196, 176) : RGB(211, 217, 225));
         DrawTextA(dc, rows[index].label.c_str(), -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
     const RECT morphPanel{ rect.left + 1, rect.bottom - kTreeAuxiliaryHeight, rect.right - 1, rect.bottom - 38 };

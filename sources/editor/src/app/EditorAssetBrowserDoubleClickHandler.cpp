@@ -12,6 +12,7 @@
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/TimelineAssetIO.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
+#include "rendering/ProjectFilesAssetIconResolver.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include <algorithm>
@@ -73,12 +74,14 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::Handle
                 ? EditorAssetBrowserDoubleClickResult::ScriptEditorOpened
                 : EditorAssetBrowserDoubleClickResult::None;
         }
-        if (metadata->type == kb::scene::kSkeletalMeshAssetType) {
+        // The Project Files glyph and its activation must classify the two
+        // skeletal document kinds identically.
+        if (ProjectFilesAssetIconResolver::IsSkeletalMesh(*metadata)) {
             return sceneContext.RequestOpenSkeletalMeshEditorAsset(metadata->id)
                 ? EditorAssetBrowserDoubleClickResult::SkeletalMeshEditorOpened
                 : EditorAssetBrowserDoubleClickResult::None;
         }
-        if (metadata->type == kb::scene::kSkeletonAssetType) {
+        if (ProjectFilesAssetIconResolver::IsSkeleton(*metadata)) {
             return sceneContext.RequestOpenSkeletalMeshEditorSkeletonAsset(metadata->id)
                 ? EditorAssetBrowserDoubleClickResult::SkeletalMeshEditorOpened
                 : EditorAssetBrowserDoubleClickResult::None;
