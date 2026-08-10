@@ -15,7 +15,7 @@
 namespace kb::editor {
 namespace {
 
-constexpr std::uint32_t kDiskCacheVersion = 3;
+constexpr std::uint32_t kDiskCacheVersion = 4;
 constexpr std::array<char, 12> kDiskCacheMagic{ '2', '1', 'K', 'B', 'T', 'H', 'U', 'M', 'B', '\r', '\n', '\0' };
 
 void WriteU32(std::ostream& output, std::uint32_t value) {
@@ -123,6 +123,26 @@ void WriteImage(std::ostream& output, const EditorMeshThumbnailImage& image) {
     return input.good();
 }
 
+[[nodiscard]] bool ReadOptionalImage(
+    std::istream& input,
+    EditorMeshThumbnailImage& image,
+    int expectedSize) {
+    const std::streampos start = input.tellg();
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::uint64_t pixelCount = 0;
+    if (!ReadU32(input, width) || !ReadU32(input, height) || !ReadU64(input, pixelCount)) {
+        return false;
+    }
+    if (width == 0U && height == 0U && pixelCount == 0U) {
+        image = {};
+        return true;
+    }
+    input.clear();
+    input.seekg(start);
+    return input.good() && ReadImage(input, image, expectedSize);
+}
+
 void WriteStats(std::ostream& output, const EditorMeshThumbnailStats& stats) {
     WriteU32(output, stats.vertexCount);
     WriteU32(output, stats.indexCount);
@@ -172,7 +192,7 @@ bool EditorMeshThumbnailDiskCache::Load(
         || contentHash != metadata.contentHash
         || !ReadStats(input, stats)
         || !ReadImage(input, thumbnail, kEditorMeshThumbnailSize)
-        || !ReadImage(input, preview, kEditorMeshPreviewSize)) {
+        || !ReadOptionalImage(input, preview, kEditorMeshPreviewSize)) {
         return false;
     }
     return true;

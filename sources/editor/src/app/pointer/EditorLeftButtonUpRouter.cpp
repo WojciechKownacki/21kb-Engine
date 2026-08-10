@@ -21,6 +21,17 @@ namespace kb::editor {
 
 namespace {
 
+void InvalidateAssetSelectionPanels(
+    HWND mainWindow,
+    const EditorDockModel& dockModel,
+    const EditorFloatingWindowManager& floatingWindows,
+    const EditorMetrics& metrics) noexcept {
+    EditorWindowInvalidator::InvalidateDockPanel(
+        mainWindow, dockModel, floatingWindows, metrics, DockPanelKind::Assets);
+    EditorWindowInvalidator::InvalidateDockPanel(
+        mainWindow, dockModel, floatingWindows, metrics, DockPanelKind::Inspector);
+}
+
 [[nodiscard]] POINT MaterialGraphDocumentPointFromWindow(const MaterialEditorPanelLayout& layout, const EditorSceneContext& sceneContext, int x, int y) noexcept {
     const float zoom = std::max(0.1F, sceneContext.MaterialGraphZoom());
     return POINT{
@@ -224,7 +235,7 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
             const kb::assets::AssetId pending = sceneContext_.AssetBrowser().TakePendingPreviewAsset();
             if (pending.IsValid() &&
                 sceneContext_.AssetBrowser().SelectAsset(pending, sceneContext_.Scene().Assets().Manager())) {
-                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                InvalidateAssetSelectionPanels(mainWindow_, dockModel_, floatingWindows_, metrics_);
             }
         } else {
             sceneContext_.AssetBrowser().ClearPendingPreviewAsset();
@@ -237,7 +248,8 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
 
     if (EditorAssetBrowserPointerHandler::HandlePointerUp(sceneContext_)) {
         ReleaseCapture();
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        EditorWindowInvalidator::InvalidateDockPanel(
+            mainWindow_, dockModel_, floatingWindows_, metrics_, DockPanelKind::Assets);
         return;
     }
     EditorConsolePointerController consolePointer(messageWindow, sceneContext_);

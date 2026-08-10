@@ -599,13 +599,24 @@ void AppendTerrainBrushRing(
     // (see Renderer::SubmitSceneToViewport's ResolveSceneColorForSampling + postProcessChain_.Evaluate),
     // so bloom/tonemap/selection outline must stay enabled under MSAA instead of being silently dropped.
     const bool postProcessEnabled = renderProfile.postProcessEnabled && renderBackendSettings.PostProcessEnabled();
+    // Edit mode is event-driven: a viewport may sit idle between isolated mouse events. Advancing
+    // temporal history or exposure only on those events makes a static grid jump in brightness and
+    // aliasing, which reads as camera motion. Runtime play renders continuously, so temporal sampling
+    // remains enabled there; edit mode uses deterministic FXAA when the project requests TAA.
+    const bool continuousRuntimeFrames = sceneContext.HasPlayModeSceneSession();
+    const bool requestedTemporalAntiAliasing = renderBackendSettings.TemporalAntiAliasingEnabled();
     kb::render::ScenePostProcessSettings postProcessSettings{};
-    postProcessSettings.fxaaEnabled = renderBackendSettings.FxaaEnabled();
-    postProcessSettings.temporalAntiAliasingEnabled = renderBackendSettings.TemporalAntiAliasingEnabled();
-    postProcessSettings.temporalJitterEnabled = renderBackendSettings.TemporalAntiAliasingEnabled();
+    postProcessSettings.fxaaEnabled = renderBackendSettings.FxaaEnabled() ||
+        (requestedTemporalAntiAliasing && !continuousRuntimeFrames);
+    postProcessSettings.temporalAntiAliasingEnabled =
+        requestedTemporalAntiAliasing && continuousRuntimeFrames;
+    postProcessSettings.temporalJitterEnabled =
+        requestedTemporalAntiAliasing && continuousRuntimeFrames;
     postProcessSettings.bloomEnabled = renderBackendSettings.BloomEnabled();
-    postProcessSettings.outputTransform.autoExposure.enabled = renderProfile.autoExposureEnabled;
-    postProcessSettings.outputTransform.autoExposure.temporalAdaptationEnabled = renderProfile.autoExposureEnabled;
+    postProcessSettings.outputTransform.autoExposure.enabled =
+        renderProfile.autoExposureEnabled && continuousRuntimeFrames;
+    postProcessSettings.outputTransform.autoExposure.temporalAdaptationEnabled =
+        renderProfile.autoExposureEnabled && continuousRuntimeFrames;
     kb::render::SceneRenderLightingConfig lightingConfig = BuildViewportLightingConfig(renderProfile, sceneContext.Project().sceneLightingPath);
     // SceneGBuffer has no MSAA-attachment support, so a multisampled Deferred G-buffer isn't an
     // option today; falling back to Forward is the only way to honor the MSAA request. This is a
