@@ -1422,20 +1422,24 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, EditorSceneConte
         if (!metadata->importCategory.empty()) {
             section.Field("Category", metadata->importCategory);
         }
-        if (!deferMeshPreviewWork) {
-            if (const EditorMeshThumbnailStats* stats = EditorMeshPreviewCache().StatsFor(manager, *metadata)) {
-                section.Field("Vertices", FormatUInt64(stats->vertexCount));
-                section.Field("Indices", FormatUInt64(stats->indexCount));
-                section.Field("Triangles", FormatUInt64(stats->triangleCount));
-                section.Field("Material Slots", FormatUInt64(stats->materialSlotCount));
-                section.Field("Bounds Center", FormatVec3(stats->boundsCenter));
-                section.Field("Bounds Radius", FormatFloat(stats->boundsRadius, 3));
-            }
-            if (const EditorMeshValidationResult* validation = EditorMeshPreviewCache().ValidationFor(manager, *metadata)) {
-                const std::size_t shown = std::min<std::size_t>(validation->issues.size(), 6U);
-                for (std::size_t index = 0; index < shown; ++index) {
-                    section.Field(index == 0U ? "Validation" : "", FormatValidationIssue(validation->issues[index]));
-                }
+        const EditorMeshThumbnailStats* stats = deferMeshPreviewWork
+            ? EditorMeshPreviewCache().CachedStatsFor(*metadata)
+            : EditorMeshPreviewCache().StatsFor(manager, *metadata);
+        if (stats != nullptr) {
+            section.Field("Vertices", FormatUInt64(stats->vertexCount));
+            section.Field("Indices", FormatUInt64(stats->indexCount));
+            section.Field("Triangles", FormatUInt64(stats->triangleCount));
+            section.Field("Material Slots", FormatUInt64(stats->materialSlotCount));
+            section.Field("Bounds Center", FormatVec3(stats->boundsCenter));
+            section.Field("Bounds Radius", FormatFloat(stats->boundsRadius, 3));
+        }
+        const EditorMeshValidationResult* validation = deferMeshPreviewWork
+            ? EditorMeshPreviewCache().CachedValidationFor(*metadata)
+            : EditorMeshPreviewCache().ValidationFor(manager, *metadata);
+        if (validation != nullptr) {
+            const std::size_t shown = std::min<std::size_t>(validation->issues.size(), 6U);
+            for (std::size_t index = 0; index < shown; ++index) {
+                section.Field(index == 0U ? "Validation" : "", FormatValidationIssue(validation->issues[index]));
             }
         }
         section.Field("Id", FormatUInt64(metadata->id.value));
@@ -3062,16 +3066,13 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
 }
 
 
-[[nodiscard]] int AssetSectionRows(const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
+[[nodiscard]] int AssetSectionRows(const kb::assets::AssetMetadata& metadata) {
     int rows = metadata.importCategory.empty() ? 0 : 1;
-    const bool deferMeshPreviewWork = sceneContext.HasActiveViewportCameraNavigation();
-    if (!deferMeshPreviewWork) {
-        if (const EditorMeshThumbnailStats* stats = EditorMeshPreviewCache().CachedStatsFor(metadata); stats != nullptr) {
-            rows += 6;
-        }
-        if (const EditorMeshValidationResult* validation = EditorMeshPreviewCache().CachedValidationFor(metadata); validation != nullptr) {
-            rows += static_cast<int>(std::min<std::size_t>(validation->issues.size(), 6U));
-        }
+    if (const EditorMeshThumbnailStats* stats = EditorMeshPreviewCache().CachedStatsFor(metadata); stats != nullptr) {
+        rows += 6;
+    }
+    if (const EditorMeshValidationResult* validation = EditorMeshPreviewCache().CachedValidationFor(metadata); validation != nullptr) {
+        rows += static_cast<int>(std::min<std::size_t>(validation->issues.size(), 6U));
     }
     rows += 6;
     return rows;
@@ -3106,7 +3107,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (EditorMeshPreviewCache().CachedStatsFor(metadata) != nullptr) {
         height += MeshPreviewPanelHeight(content) + kSectionGap;
     }
-    height += SectionHeight(inspector, InspectorSectionId::Asset, AssetSectionRows(sceneContext, metadata));
+    height += SectionHeight(inspector, InspectorSectionId::Asset, AssetSectionRows(metadata));
     return height;
 }
 

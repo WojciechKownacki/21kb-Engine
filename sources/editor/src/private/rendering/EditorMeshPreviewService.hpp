@@ -77,10 +77,6 @@ private:
         std::future<std::optional<Entry>> future{};
     };
 
-    struct PendingManagerEntry {
-        kb::assets::AssetMetadata metadata{};
-    };
-
     [[nodiscard]] static bool IsMeshAsset(const kb::assets::AssetMetadata& metadata);
     [[nodiscard]] static std::optional<Entry> BuildEntry(const kb::assets::AssetMetadata& metadata);
     [[nodiscard]] static std::optional<Entry> BuildEntry(kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata);
@@ -103,7 +99,6 @@ private:
 
     std::unordered_map<std::uint64_t, Entry> entries_;
     std::vector<PendingEntry> pendingEntries_;
-    std::vector<PendingManagerEntry> pendingManagerEntries_;
     std::vector<PendingPreview> pendingPreviews_;
     std::uint64_t revision_ = 1;
 };
