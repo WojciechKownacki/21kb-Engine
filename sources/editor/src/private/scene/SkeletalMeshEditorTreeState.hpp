@@ -105,17 +105,36 @@ public:
     [[nodiscard]] std::vector<SkeletalMeshEditorTreeRow> Rows() const {
         const std::string filter = Lower(filter_);
         std::vector<bool> visible(bones_.size(), filter.empty());
+        std::vector<bool> visibleSockets(sockets_.size(), filter.empty());
+        const auto revealBonePath = [this, &visible](std::size_t boneIndex) {
+            std::size_t remaining = bones_.size();
+            for (std::int32_t current = static_cast<std::int32_t>(boneIndex);
+                current >= 0 && static_cast<std::size_t>(current) < bones_.size() && remaining > 0U;
+                current = bones_[static_cast<std::size_t>(current)].parentIndex, --remaining) {
+                visible[static_cast<std::size_t>(current)] = true;
+            }
+        };
         for (std::size_t index = 0U; index < bones_.size(); ++index) {
             if (!filter.empty() && Lower(bones_[index].name).find(filter) != std::string::npos) {
-                for (std::int32_t parent = static_cast<std::int32_t>(index); parent >= 0;
-                    parent = bones_[static_cast<std::size_t>(parent)].parentIndex) {
-                    visible[static_cast<std::size_t>(parent)] = true;
+                revealBonePath(index);
+            }
+        }
+        if (!filter.empty()) {
+            for (std::size_t socketIndex = 0U; socketIndex < sockets_.size(); ++socketIndex) {
+                if (Lower(sockets_[socketIndex].name).find(filter) == std::string::npos) continue;
+                visibleSockets[socketIndex] = true;
+                const auto owner = std::ranges::find_if(bones_, [this, socketIndex](const kb::scene::SkeletonBone& bone) {
+                    return bone.id == sockets_[socketIndex].boneId;
+                });
+                if (owner != bones_.end()) {
+                    revealBonePath(static_cast<std::size_t>(std::distance(bones_.begin(), owner)));
                 }
             }
         }
 
         std::vector<SkeletalMeshEditorTreeRow> rows;
         rows.reserve(bones_.size() + sockets_.size());
+        std::vector<bool> emittedSockets(sockets_.size(), false);
         for (std::size_t index = 0U; index < bones_.size(); ++index) {
             if (!visible[index]) continue;
             std::uint32_t depth = 0U;
@@ -130,9 +149,23 @@ public:
                 .depth = depth,
                 .selected = selectedBone_ == bones_[index].id,
             });
+            for (std::size_t socketIndex = 0U; socketIndex < sockets_.size(); ++socketIndex) {
+                const kb::scene::SkeletonSocket& socket = sockets_[socketIndex];
+                if (!visibleSockets[socketIndex] || socket.boneId != bones_[index].id) continue;
+                rows.push_back(SkeletalMeshEditorTreeRow{
+                    .kind = SkeletalMeshEditorTreeItemKind::Socket,
+                    .boneId = socket.boneId,
+                    .socketName = socket.name,
+                    .label = socket.name,
+                    .depth = depth + 1U,
+                    .selected = selectedSocket_ == socket.name,
+                });
+                emittedSockets[socketIndex] = true;
+            }
         }
-        for (const kb::scene::SkeletonSocket& socket : sockets_) {
-            if (!filter.empty() && Lower(socket.name).find(filter) == std::string::npos) continue;
+        for (std::size_t socketIndex = 0U; socketIndex < sockets_.size(); ++socketIndex) {
+            if (!visibleSockets[socketIndex] || emittedSockets[socketIndex]) continue;
+            const kb::scene::SkeletonSocket& socket = sockets_[socketIndex];
             rows.push_back(SkeletalMeshEditorTreeRow{
                 .kind = SkeletalMeshEditorTreeItemKind::Socket,
                 .boneId = socket.boneId,

@@ -523,6 +523,16 @@ std::size_t EditorMeshPreviewService::PumpCompletedPreviews() {
                     existing->second.stats = loaded->stats;
                     existing->second.geometryLoaded = loaded->geometryLoaded;
                 }
+                if (HasImage(existing->second.thumbnail)) {
+                    // Project Files only needs the 128 px thumbnail. Persist it immediately instead of
+                    // waiting for an Inspector to request the unrelated 512 px preview; otherwise every
+                    // editor restart briefly falls back to a generic Skeletal Mesh glyph.
+                    EditorMeshThumbnailDiskCache::Save(
+                        pending->metadata,
+                        existing->second.thumbnail,
+                        existing->second.preview,
+                        existing->second.stats);
+                }
             } else if (existing->second.state == EntryState::Loading) {
                 existing->second.state = EntryState::Failed;
             }
@@ -567,50 +577,12 @@ std::size_t EditorMeshPreviewService::PumpCompletedPreviews() {
 
 std::size_t EditorMeshPreviewService::PumpCompletedPreviews(
     kb::assets::AssetManager& manager) {
-    std::size_t completed = 0U;
-    for (auto pending = pendingManagerEntries_.begin(); pending != pendingManagerEntries_.end();) {
-        const kb::assets::AssetMetadata* registered = manager.Registry().Find(pending->metadata.id);
-        if (registered == nullptr || registered->contentHash != pending->metadata.contentHash) {
-            pending = pendingManagerEntries_.erase(pending);
-            ++completed;
-            continue;
-        }
-
-        const kb::assets::AsyncAssetLoadStatus status = manager.AsyncLoadStatus(pending->metadata.id);
-        if (status == kb::assets::AsyncAssetLoadStatus::Pending) {
-            ++pending;
-            continue;
-        }
-        if (status == kb::assets::AsyncAssetLoadStatus::Completed) {
-            const kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset> handle =
-                manager.AcquireLoaded<kb::scene::SkeletalMeshAsset>(pending->metadata.id);
-            if (handle.IsLoaded() && pendingEntries_.size() < kMaxConcurrentSkeletalEntryJobs) {
-                QueueSkeletalEntryBuild(pending->metadata, handle.Shared());
-                pending = pendingManagerEntries_.erase(pending);
-                ++completed;
-                continue;
-            }
-            if (handle.IsLoaded()) {
-                ++pending;
-                continue;
-            }
-        }
-
-        const auto existing = entries_.find(pending->metadata.id.value);
-        if (existing != entries_.end() &&
-            existing->second.contentHash == pending->metadata.contentHash &&
-            existing->second.state == EntryState::Loading) {
-            existing->second.state = EntryState::Failed;
-            ++revision_;
-        }
-        pending = pendingManagerEntries_.erase(pending);
-        ++completed;
-    }
-    return completed + PumpCompletedPreviews();
+    static_cast<void>(manager);
+    return PumpCompletedPreviews();
 }
 
 bool EditorMeshPreviewService::HasPendingPreviewWork() const noexcept {
-    return !pendingEntries_.empty() || !pendingManagerEntries_.empty() || !pendingPreviews_.empty();
+    return !pendingEntries_.empty() || !pendingPreviews_.empty();
 }
 
 bool EditorMeshPreviewService::IsMeshAsset(const kb::assets::AssetMetadata& metadata) {
@@ -782,12 +754,8 @@ void EditorMeshPreviewService::QueueSkeletalEntryLoad(
     const bool alreadyPending =
         std::ranges::find_if(pendingEntries_, [&](const PendingEntry& pending) {
             return pending.metadata.id == metadata.id;
-        }) != pendingEntries_.end() ||
-        std::ranges::find_if(pendingManagerEntries_, [&](const PendingManagerEntry& pending) {
-            return pending.metadata.id == metadata.id;
-        }) != pendingManagerEntries_.end();
-    if (alreadyPending ||
-        pendingEntries_.size() + pendingManagerEntries_.size() >= kMaxConcurrentSkeletalEntryJobs) {
+        }) != pendingEntries_.end();
+    if (alreadyPending || pendingEntries_.size() >= kMaxConcurrentSkeletalEntryJobs) {
         return;
     }
 
@@ -798,18 +766,11 @@ void EditorMeshPreviewService::QueueSkeletalEntryLoad(
             QueueSkeletalEntryBuild(metadata, loaded.Shared());
             return;
         }
-
-        const bool requested = manager->LoadAsync<kb::scene::SkeletalMeshAsset>(metadata.id);
-        const kb::assets::AsyncAssetLoadStatus status = manager->AsyncLoadStatus(metadata.id);
-        if (requested && (status == kb::assets::AsyncAssetLoadStatus::Pending ||
-                          status == kb::assets::AsyncAssetLoadStatus::Completed)) {
-            pendingManagerEntries_.push_back(PendingManagerEntry{ .metadata = metadata });
-            return;
-        }
-        // Standalone tooling may supply an AssetManager without registering this editor-only asset.
-        // Keep that path functional while production editor previews use the retained manager payload.
     }
 
+    // Project Files thumbnails are editor-only data. Load them on the preview worker instead of
+    // retaining an entire runtime Skeletal Mesh through AssetManager; runtime/document I/O must not
+    // leave a visible tile stuck on its fallback glyph.
     try {
         pendingEntries_.push_back(PendingEntry{
             .metadata = metadata,

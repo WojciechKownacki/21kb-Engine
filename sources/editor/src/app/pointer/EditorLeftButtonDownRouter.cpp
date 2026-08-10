@@ -1167,7 +1167,10 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         if (EditorAssetBrowserPointerHandler::RequiresMouseCapture(sceneContext_)) {
             SetCapture(messageWindow);
         }
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        EditorWindowInvalidator::InvalidateDockPanel(
+            mainWindow_, dockModel_, floatingWindows_, metrics_, DockPanelKind::Assets);
+        EditorWindowInvalidator::InvalidateDockPanel(
+            mainWindow_, dockModel_, floatingWindows_, metrics_, DockPanelKind::Inspector);
         return;
     }
 

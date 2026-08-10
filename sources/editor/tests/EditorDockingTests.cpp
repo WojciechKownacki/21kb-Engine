@@ -542,9 +542,19 @@ void RunSkeletalMeshEditorTreeStateTest() {
         { .id = 20U, .parentIndex = 0, .name = "Spine" },
         { .id = 30U, .parentIndex = 1, .name = "Hand" },
     };
-    skeleton.sockets = {{ .name = "Weapon", .boneId = 30U }};
+    skeleton.sockets = {
+        { .name = "Weapon", .boneId = 30U },
+        { .name = "Root Socket", .boneId = 10U },
+    };
     kb::editor::SkeletalMeshEditorTreeState tree;
     tree.SetSkeleton(skeleton);
+    const std::vector<kb::editor::SkeletalMeshEditorTreeRow> unfilteredRows = tree.Rows();
+    kb::editor::tests::Require(
+        unfilteredRows.size() == 5U && unfilteredRows[0].label == "Root" &&
+            unfilteredRows[1].label == "Root Socket" && unfilteredRows[1].depth == 1U &&
+            unfilteredRows[3].label == "Hand" && unfilteredRows[4].label == "Weapon" &&
+            unfilteredRows[4].depth == 3U,
+        "Skeleton Tree should render sockets directly under their owning bones with UE-style indentation");
     kb::editor::tests::Require(tree.SelectBone(30U) && tree.SelectedBone() == 30U && tree.SelectedSocket().empty(),
         "Skeleton Tree should retain viewport-selected bones");
     kb::editor::tests::Require(tree.SelectSocket("Weapon") && tree.SelectedBone() == 0U && tree.SelectedSocket() == "Weapon",
@@ -553,6 +563,13 @@ void RunSkeletalMeshEditorTreeStateTest() {
     const std::vector<kb::editor::SkeletalMeshEditorTreeRow> rows = tree.Rows();
     kb::editor::tests::Require(rows.size() == 3U && rows[0].label == "Root" && rows[1].label == "Spine" && rows[2].label == "Hand",
         "Skeleton Tree filtering should retain matching bones and their hierarchy ancestors");
+    kb::editor::tests::Require(tree.SetFilter("weapon"), "Skeleton Tree should accept a socket filter");
+    const std::vector<kb::editor::SkeletalMeshEditorTreeRow> socketRows = tree.Rows();
+    kb::editor::tests::Require(
+        socketRows.size() == 4U && socketRows[0].label == "Root" && socketRows[1].label == "Spine" &&
+            socketRows[2].label == "Hand" && socketRows[3].label == "Weapon" && socketRows[3].depth == 3U,
+        "Skeleton Tree filtering should retain the owning bone path for a matching socket");
+    static_cast<void>(tree.SetFilter("hand"));
     tree.FocusSearch(true);
     tree.SelectAllSearch();
     tree.AppendSearchText(L's');
