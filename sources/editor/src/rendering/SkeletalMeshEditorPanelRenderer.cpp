@@ -99,17 +99,19 @@ void PaintLinkedDocuments(
 
 struct CommandDescriptor {
     SkeletalAssetCommand command = SkeletalAssetCommand::Focus;
-    const char* label = "";
+    std::string label;
     int width = 72;
     bool enabled = true;
+    bool active = false;
 };
 
 [[nodiscard]] std::vector<CommandDescriptor> BuildCommands(const EditorSceneContext& sceneContext) {
     const bool skeleton = sceneContext.IsSkeletalMeshEditorSkeletonDocument();
     std::vector<CommandDescriptor> commands{
-        { SkeletalAssetCommand::Save, "Save", 62, sceneContext.HasDirtySkeletalMeshEditorAssetEdit() },
+        { SkeletalAssetCommand::Save, "Save", 62, sceneContext.HasDirtySkeletalMeshEditorAssetEdit(), false },
         { SkeletalAssetCommand::Undo, "Undo", 62, sceneContext.CanUndoSkeletalMeshEditorAssetEdit() },
         { SkeletalAssetCommand::Redo, "Redo", 62, sceneContext.CanRedoSkeletalMeshEditorAssetEdit() },
+        { SkeletalAssetCommand::Reload, "Reload", 70, sceneContext.CanReloadSkeletalMeshEditorAsset() },
     };
     if (skeleton) {
         commands.push_back({ SkeletalAssetCommand::PreviewMesh, "Preview Mesh...", 104, true });
@@ -120,10 +122,13 @@ struct CommandDescriptor {
         commands.push_back({ SkeletalAssetCommand::DeleteSocket, "Delete", 66,
             sceneContext.CanDeleteSkeletonEditorSocket() });
     } else {
-        commands.push_back({ SkeletalAssetCommand::Reimport, "Reload", 70, true });
-        commands.push_back({ SkeletalAssetCommand::BoundsMode, "Bounds Mode", 92, true });
+        const bool fixedBounds = sceneContext.SkeletalMeshEditorBoundsMode() ==
+            kb::scene::SkeletalMeshBoundsMode::Fixed;
+        commands.push_back({ SkeletalAssetCommand::BoundsMode,
+            fixedBounds ? "Bounds: Fixed" : "Bounds: Imported", 118, true, fixedBounds });
     }
-    commands.push_back({ SkeletalAssetCommand::ReferencePose, "Reference Pose", 100, true });
+    commands.push_back({ SkeletalAssetCommand::ReferencePose, "Reference Pose", 100, true,
+        sceneContext.IsSkeletalMeshEditorReferencePose() });
     commands.push_back({ SkeletalAssetCommand::Focus, "Focus", 64, true });
     return commands;
 }
@@ -147,11 +152,14 @@ void PaintCommands(HDC dc, const SkeletalMeshEditorPanelLayout& layout, const Ed
         const RECT button = CommandRect(layout.commandBar, commands, index);
         if (button.left >= layout.commandBar.right - 8) break;
         const RECT clipped{ button.left, button.top, std::min(button.right, layout.commandBar.right - 8), button.bottom };
-        const COLORREF fill = commands[index].enabled ? RGB(38, 41, 47) : RGB(31, 34, 39);
-        GdiDrawing::DrawSharpFrame(dc, clipped, fill, RGB(59, 64, 72));
+        const COLORREF fill = !commands[index].enabled
+            ? RGB(31, 34, 39)
+            : (commands[index].active ? RGB(35, 75, 112) : RGB(38, 41, 47));
+        const COLORREF border = commands[index].active ? RGB(77, 143, 204) : RGB(59, 64, 72);
+        GdiDrawing::DrawSharpFrame(dc, clipped, fill, border);
         SetTextColor(dc, commands[index].enabled ? RGB(211, 217, 225) : RGB(92, 99, 109));
         RECT text{ clipped.left + 7, clipped.top, clipped.right - 7, clipped.bottom };
-        DrawTextA(dc, commands[index].label, -1, &text,
+        DrawTextA(dc, commands[index].label.c_str(), -1, &text,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
 }

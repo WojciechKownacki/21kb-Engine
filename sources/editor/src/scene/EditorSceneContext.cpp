@@ -10138,6 +10138,12 @@ bool EditorSceneContext::HasDirtySkeletalMeshEditorAssetEdit() const noexcept {
     return skeletalMeshEditorDocument_.Dirty() || skeletonEditorDocument_.Dirty();
 }
 
+bool EditorSceneContext::HasDirtyActiveSkeletalMeshEditorDocument() const noexcept {
+    return IsSkeletalMeshEditorSkeletonDocument()
+        ? skeletonEditorDocument_.Dirty()
+        : skeletalMeshEditorDocument_.Dirty();
+}
+
 bool EditorSceneContext::CanUndoSkeletalMeshEditorAssetEdit() const noexcept {
     return IsSkeletalMeshEditorSkeletonDocument()
         ? skeletonEditorDocument_.CanUndo()
@@ -10148,6 +10154,25 @@ bool EditorSceneContext::CanRedoSkeletalMeshEditorAssetEdit() const noexcept {
     return IsSkeletalMeshEditorSkeletonDocument()
         ? skeletonEditorDocument_.CanRedo()
         : skeletalMeshEditorDocument_.CanRedo();
+}
+
+bool EditorSceneContext::CanReloadSkeletalMeshEditorAsset() const noexcept {
+    return IsSkeletalMeshEditorSkeletonDocument()
+        ? skeletonEditorDocument_.IsOpen()
+        : skeletalMeshEditorDocument_.IsOpen();
+}
+
+kb::scene::SkeletalMeshBoundsMode EditorSceneContext::SkeletalMeshEditorBoundsMode() const noexcept {
+    const kb::scene::SkeletalMeshAsset* working = skeletalMeshEditorDocument_.WorkingCopy();
+    return working == nullptr
+        ? kb::scene::SkeletalMeshBoundsMode::ImportedConservative
+        : working->boundsMode;
+}
+
+bool EditorSceneContext::IsSkeletalMeshEditorReferencePose() const noexcept {
+    return animationPreview_.PoseMode() == AnimationPreviewPoseMode::Reference &&
+        !animationPreview_.Transport().IsPlaying() &&
+        animationPreview_.Transport().NormalizedTime() == 0.0F;
 }
 
 bool EditorSceneContext::CanAddSkeletonEditorSocket() const noexcept {
@@ -10198,8 +10223,7 @@ bool EditorSceneContext::FocusSkeletalMeshEditorPreview() noexcept {
 
 bool EditorSceneContext::ShowSkeletalMeshEditorReferencePose() {
     if (!HasSkeletalMeshEditorAsset()) return false;
-    const bool changed = animationPreview_.PoseMode() != AnimationPreviewPoseMode::Reference ||
-        animationPreview_.Transport().IsPlaying() || animationPreview_.Transport().NormalizedTime() != 0.0F;
+    const bool changed = !IsSkeletalMeshEditorReferencePose();
     animationPreview_.SetPoseMode(AnimationPreviewPoseMode::Reference);
     static_cast<void>(animationPreview_.Transport().SetPlaying(false));
     static_cast<void>(animationPreview_.Transport().Scrub(0.0F));
@@ -10207,7 +10231,9 @@ bool EditorSceneContext::ShowSkeletalMeshEditorReferencePose() {
         animationPreviewScene_->Clear();
         static_cast<void>(AnimationPreviewScene());
     }
-    return changed;
+    // The command is successful even when the preview was already at the reference pose. This is
+    // an idempotent state command, not a toggle, and callers still need to repaint its active state.
+    return true;
 }
 
 bool EditorSceneContext::SetSkeletonEditorPreviewMesh(kb::assets::AssetId meshId) {
@@ -10425,18 +10451,62 @@ bool EditorSceneContext::RevertSkeletalMeshEditorAsset() {
     return true;
 }
 
-bool EditorSceneContext::ReimportSkeletalMeshEditorAsset() {
+bool EditorSceneContext::ReloadSkeletalMeshEditorAsset() {
+    kb::assets::AssetManager& manager = scene_->Assets().Manager();
+    if (IsSkeletalMeshEditorSkeletonDocument()) {
+        if (!skeletonEditorDocument_.IsOpen()) return false;
+        const kb::assets::AssetId skeletonId = skeletonEditorDocument_.AssetId();
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(skeletonId);
+        std::string error;
+        const std::optional<kb::scene::SkeletonAsset> candidate = metadata == nullptr
+            ? std::nullopt : kb::scene::SkeletonAssetIO::Load(metadata->physicalPath, &error);
+        if (!candidate.has_value()) {
+            console_.Error("Skeleton Editor", error.empty() ? "Skeleton could not be reloaded." : error);
+            return false;
+        }
+
+        const kb::scene::SkeletalMeshAsset* linkedMesh = skeletalMeshEditorDocument_.WorkingCopy();
+        if (linkedMesh != nullptr &&
+            (linkedMesh->skeletonAssetId != skeletonId.value ||
+                linkedMesh->skeletonCompatibilitySignature != kb::scene::SkeletonCompatibilitySignature(*candidate))) {
+            console_.Error(
+                "Skeleton Editor",
+                "Reloaded Skeleton is incompatible with the linked Skeletal Mesh. Reload or reimport the matching mesh first.");
+            return false;
+        }
+        if (!skeletonEditorDocument_.ReplaceFromReload(*candidate) ||
+            !manager.PublishRuntimeAsset(skeletonId, std::make_shared<kb::scene::SkeletonAsset>(*candidate))) {
+            console_.Error("Skeleton Editor", "Skeleton runtime data could not be published after reload.");
+            return false;
+        }
+        RefreshSkeletalEditorDetails();
+        animationPreviewScene_->Clear();
+        static_cast<void>(AnimationPreviewScene());
+        console_.Info("Skeleton Editor", "Reloaded Skeleton from its authored asset.");
+        return true;
+    }
+
     if (!skeletalMeshEditorDocument_.IsOpen()) return false;
-    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(skeletalMeshEditorAssetId_);
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(skeletalMeshEditorAssetId_);
     std::string error;
     const std::optional<kb::scene::SkeletalMeshAsset> candidate = metadata == nullptr
         ? std::nullopt : kb::scene::SkeletalMeshAssetIO::Load(metadata->physicalPath, &error);
-    if (!candidate.has_value() || !skeletalMeshEditorDocument_.ReplaceFromReimport(*candidate)) {
+    const kb::scene::SkeletonAsset* skeleton = skeletonEditorDocument_.WorkingCopy();
+    if (!candidate.has_value()) {
         console_.Error("Skeletal Mesh Editor", error.empty() ? "Skeletal Mesh could not be reloaded." : error);
         return false;
     }
-    static_cast<void>(scene_->Assets().Manager().PublishRuntimeAsset(
-        skeletalMeshEditorAssetId_, std::make_shared<kb::scene::SkeletalMeshAsset>(*candidate)));
+    if (skeleton == nullptr || candidate->skeletonAssetId != skeletonEditorDocument_.AssetId().value ||
+        candidate->skeletonCompatibilitySignature != kb::scene::SkeletonCompatibilitySignature(*skeleton)) {
+        console_.Error("Skeletal Mesh Editor", "Reloaded Skeletal Mesh is incompatible with the open Skeleton.");
+        return false;
+    }
+    if (!skeletalMeshEditorDocument_.ReplaceFromReimport(*candidate) ||
+        !manager.PublishRuntimeAsset(
+            skeletalMeshEditorAssetId_, std::make_shared<kb::scene::SkeletalMeshAsset>(*candidate))) {
+        console_.Error("Skeletal Mesh Editor", "Skeletal Mesh runtime data could not be published after reload.");
+        return false;
+    }
     RefreshSkeletalEditorDetails();
     animationPreviewScene_->Clear();
     static_cast<void>(AnimationPreviewScene());

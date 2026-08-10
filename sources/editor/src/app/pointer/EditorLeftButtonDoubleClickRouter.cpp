@@ -36,11 +36,13 @@ EditorLeftButtonDoubleClickRouter::EditorLeftButtonDoubleClickRouter(
     EditorDockModel& dockModel,
     const EditorFloatingWindowManager& floatingWindows,
     EditorSceneContext& sceneContext,
+    EditorSceneBgfxViewport& sceneViewport,
     const EditorMetrics& metrics) noexcept
     : mainWindow_(mainWindow)
     , dockModel_(dockModel)
     , floatingWindows_(floatingWindows)
     , sceneContext_(sceneContext)
+    , sceneViewport_(sceneViewport)
     , metrics_(metrics) {}
 
 bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y) {
@@ -49,6 +51,7 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
         if (const DockPanelLayout* tab = TabHit(layout, x, y); tab != nullptr) {
             dockModel_.Commands().ActivatePanel(tab->panelId);
             static_cast<void>(dockModel_.Commands().ToggleMaximizedLeaf(tab->leafId));
+            sceneViewport_.RequestPresent();
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             return true;
         }
@@ -165,6 +168,10 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
     if (assetResult == EditorAssetBrowserDoubleClickResult::AnimatorEditorOpened) {
         static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::AnimatorEditor, DockArea::Center));
     }
+    // A GPU viewport is a native child window, so repainting the GDI dock host does not retire the
+    // surface belonging to the previously active tab. Without an explicit composition request the
+    // old Scene View remains over the newly activated asset editor until the next mouse event.
+    sceneViewport_.RequestPresent();
     EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     return true;
 }

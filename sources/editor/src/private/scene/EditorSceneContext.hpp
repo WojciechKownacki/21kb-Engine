@@ -505,8 +505,12 @@ public:
     [[nodiscard]] SkeletalMeshEditorDetailsModel SkeletalMeshEditorDetails() const;
     [[nodiscard]] const std::vector<kb::scene::SkeletalMeshMorphTarget>& SkeletalMeshEditorMorphTargets() const noexcept;
     [[nodiscard]] bool HasDirtySkeletalMeshEditorAssetEdit() const noexcept;
+    [[nodiscard]] bool HasDirtyActiveSkeletalMeshEditorDocument() const noexcept;
     [[nodiscard]] bool CanUndoSkeletalMeshEditorAssetEdit() const noexcept;
     [[nodiscard]] bool CanRedoSkeletalMeshEditorAssetEdit() const noexcept;
+    [[nodiscard]] bool CanReloadSkeletalMeshEditorAsset() const noexcept;
+    [[nodiscard]] kb::scene::SkeletalMeshBoundsMode SkeletalMeshEditorBoundsMode() const noexcept;
+    [[nodiscard]] bool IsSkeletalMeshEditorReferencePose() const noexcept;
     [[nodiscard]] bool CanAddSkeletonEditorSocket() const noexcept;
     [[nodiscard]] bool CanDuplicateSkeletonEditorSocket() const noexcept;
     [[nodiscard]] bool CanDeleteSkeletonEditorSocket() const noexcept;
@@ -522,7 +526,7 @@ public:
     [[nodiscard]] bool RedoSkeletalMeshEditorAssetEdit();
     [[nodiscard]] bool SaveSkeletalMeshEditorAsset();
     [[nodiscard]] bool RevertSkeletalMeshEditorAsset();
-    [[nodiscard]] bool ReimportSkeletalMeshEditorAsset();
+    [[nodiscard]] bool ReloadSkeletalMeshEditorAsset();
     [[nodiscard]] bool PrepareSkeletalMeshEditorClose(std::string_view reason);
     void CloseSkeletalMeshEditorAsset() noexcept;
     [[nodiscard]] bool OpenMaterialEditorAsset(kb::assets::AssetId id);

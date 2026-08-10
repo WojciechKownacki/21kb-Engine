@@ -2,6 +2,7 @@
 
 #include "docking/EditorDockModel.hpp"
 #include "docking/EditorFloatingWindowManager.hpp"
+#include "rendering/EditorSceneBgfxViewport.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #if defined(_WIN32)
@@ -20,6 +21,7 @@ public:
         EditorDockModel& dockModel,
         const EditorFloatingWindowManager& floatingWindows,
         EditorSceneContext& sceneContext,
+        EditorSceneBgfxViewport& sceneViewport,
         const EditorMetrics& metrics) noexcept;
 
     [[nodiscard]] bool Handle(HWND messageWindow, int x, int y);
@@ -29,6 +31,7 @@ private:
     EditorDockModel& dockModel_;
     const EditorFloatingWindowManager& floatingWindows_;
     EditorSceneContext& sceneContext_;
+    EditorSceneBgfxViewport& sceneViewport_;
     const EditorMetrics& metrics_;
 };
 #endif

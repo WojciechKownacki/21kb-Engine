@@ -74,6 +74,16 @@ public:
         return true;
     }
 
+    [[nodiscard]] bool ReplaceFromReload(kb::scene::SkeletonAsset candidate) {
+        if (!IsOpen() || !kb::scene::ValidateSkeletonAsset(candidate).valid) return false;
+        saved_ = std::move(candidate);
+        working_ = saved_;
+        history_.clear();
+        history_.push_back(*saved_);
+        historyCursor_ = 0U;
+        return true;
+    }
+
     [[nodiscard]] bool MarkSaved() {
         if (!IsOpen() || !working_.has_value()) return false;
         saved_ = *working_;
