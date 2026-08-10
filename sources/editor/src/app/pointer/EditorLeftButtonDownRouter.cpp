@@ -918,13 +918,17 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             case SkeletalAssetCommand::Redo:
                 static_cast<void>(sceneContext_.RedoSkeletalMeshEditorAssetEdit());
                 break;
-            case SkeletalAssetCommand::Reimport:
-                if (!sceneContext_.HasDirtySkeletalMeshEditorAssetEdit() || MessageBoxW(
+            case SkeletalAssetCommand::Reload:
+                if (!sceneContext_.HasDirtyActiveSkeletalMeshEditorDocument() || MessageBoxW(
                         mainWindow_,
-                        L"Reload will discard unsaved Skeletal Mesh edits. Continue?",
-                        L"Reload Skeletal Mesh",
+                        sceneContext_.IsSkeletalMeshEditorSkeletonDocument()
+                            ? L"Reload will discard unsaved Skeleton edits. Continue?"
+                            : L"Reload will discard unsaved Skeletal Mesh edits. Continue?",
+                        sceneContext_.IsSkeletalMeshEditorSkeletonDocument()
+                            ? L"Reload Skeleton"
+                            : L"Reload Skeletal Mesh",
                         MB_ICONWARNING | MB_YESNO | MB_DEFBUTTON2 | MB_APPLMODAL) == IDYES) {
-                    static_cast<void>(sceneContext_.ReimportSkeletalMeshEditorAsset());
+                    static_cast<void>(sceneContext_.ReloadSkeletalMeshEditorAsset());
                 }
                 break;
             case SkeletalAssetCommand::PreviewMesh: {
