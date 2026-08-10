@@ -26,7 +26,7 @@ enum class SkeletalAssetCommand : std::uint8_t {
     Save,
     Undo,
     Redo,
-    Reimport,
+    Reload,
     PreviewMesh,
     AddSocket,
     DuplicateSocket,

@@ -152,7 +152,8 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDoubleClick(HWND messageWind
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
 
-    EditorLeftButtonDoubleClickRouter doubleClick(mainWindow_, dockModel_, floatingWindows_, sceneContext_, metrics_);
+    EditorLeftButtonDoubleClickRouter doubleClick(
+        mainWindow_, dockModel_, floatingWindows_, sceneContext_, sceneViewport_, metrics_);
     if (doubleClick.Handle(messageWindow, x, y)) {
         return 0;
     }
