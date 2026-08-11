@@ -232,16 +232,32 @@ void EditorRightButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     const std::optional<RECT> skeletalMeshEditorContent = EditorPanelContentResolver::Resolve(
         DockPanelKind::SkeletalMeshEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     if (skeletalMeshEditorContent.has_value() && sceneContext_.HasSkeletalMeshEditorAsset()) {
+        const RECT treeList = SkeletalMeshEditorPanelRenderer::TreeListRect(
+            *skeletalMeshEditorContent, sceneContext_);
+        const RECT scrollbar = SkeletalMeshEditorPanelRenderer::TreeScrollbarTrack(
+            *skeletalMeshEditorContent, sceneContext_);
+        const bool insideTree = x >= treeList.left && x < treeList.right &&
+            y >= treeList.top && y < treeList.bottom;
+        const bool insideScrollbar = SkeletalMeshEditorPanelRenderer::TreeMaxScroll(
+            *skeletalMeshEditorContent, sceneContext_) > 0 &&
+            x >= scrollbar.left && x < scrollbar.right && y >= scrollbar.top && y < scrollbar.bottom;
         const std::optional<SkeletalMeshEditorTreeRow> row =
             SkeletalMeshEditorPanelRenderer::TreeRowAt(*skeletalMeshEditorContent, sceneContext_, x, y);
-        if (row.has_value()) {
-            bool changed = row->kind == SkeletalMeshEditorTreeItemKind::Bone
+        if (insideTree && !insideScrollbar) {
+            bool changed = row.has_value() && (row->kind == SkeletalMeshEditorTreeItemKind::Bone
                 ? sceneContext_.SelectSkeletalMeshEditorBone(row->boneId)
-                : sceneContext_.SelectSkeletalMeshEditorSocket(row->socketName);
+                : sceneContext_.SelectSkeletalMeshEditorSocket(row->socketName));
             const UINT command = ShowSkeletonTreeSystemMenu(
                 messageWindow, x, y, sceneContext_.CanAddSkeletonEditorSocket());
             if (command == kSkeletonTreeMenuAddSocket) {
                 changed = sceneContext_.AddSkeletonEditorSocket() || changed;
+                if (changed) {
+                    static_cast<void>(sceneContext_.SetSkeletalMeshEditorTreeScrollOffset(
+                        SkeletalMeshEditorPanelRenderer::TreeScrollOffsetToRevealSelection(
+                            *skeletalMeshEditorContent, sceneContext_),
+                        SkeletalMeshEditorPanelRenderer::TreeMaxScroll(
+                            *skeletalMeshEditorContent, sceneContext_)));
+                }
             }
             if (changed) {
                 sceneViewport_.RequestPresent();
