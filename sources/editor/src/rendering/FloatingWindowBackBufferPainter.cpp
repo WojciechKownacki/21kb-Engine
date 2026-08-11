@@ -71,7 +71,11 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
         paintContext->sceneContext->HasSkeletalMeshEditorAsset()) {
         layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
             .viewportKey = paintContext->panel->id,
-            .bounds = SkeletalMeshEditorPanelLayoutResolver::Resolve(content).viewport,
+            .bounds = SkeletalMeshEditorPanelLayoutResolver::Resolve(
+                content,
+                paintContext->sceneContext->SkeletalMeshEditorToolboxWidth(),
+                paintContext->sceneContext->SkeletalMeshEditorSkeletonTreeWidth(),
+                paintContext->sceneContext->SkeletalMeshEditorSkeletonTreeHeight()).viewport,
         });
     }
     const std::span<const EditorSceneBgfxViewport::HostSurfaceLayout> layoutSpan{layouts.data(), layouts.size()};

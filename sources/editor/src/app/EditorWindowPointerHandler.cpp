@@ -42,7 +42,11 @@ namespace {
     const std::optional<RECT> content = EditorPanelContentResolver::Resolve(
         DockPanelKind::SkeletalMeshEditor, messageWindow, mainWindow, dockModel, floatingWindows, metrics);
     if (!content.has_value()) return std::nullopt;
-    const RECT viewport = SkeletalMeshEditorPanelLayoutResolver::Resolve(*content).viewport;
+    const RECT viewport = SkeletalMeshEditorPanelLayoutResolver::Resolve(
+        *content,
+        sceneContext.SkeletalMeshEditorToolboxWidth(),
+        sceneContext.SkeletalMeshEditorSkeletonTreeWidth(),
+        sceneContext.SkeletalMeshEditorSkeletonTreeHeight()).viewport;
     return PointInRect(viewport, x, y) ? std::optional<RECT>{ viewport } : std::nullopt;
 }
 

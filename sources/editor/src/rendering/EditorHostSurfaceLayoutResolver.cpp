@@ -90,7 +90,11 @@ std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> EditorHostSurfaceLayoutR
         }
         if (panel->kind == DockPanelKind::SkeletalMeshEditor &&
             sceneContext.HasSkeletalMeshEditorAsset()) {
-            const RECT viewport = SkeletalMeshEditorPanelLayoutResolver::Resolve(content).viewport;
+            const RECT viewport = SkeletalMeshEditorPanelLayoutResolver::Resolve(
+                content,
+                sceneContext.SkeletalMeshEditorToolboxWidth(),
+                sceneContext.SkeletalMeshEditorSkeletonTreeWidth(),
+                sceneContext.SkeletalMeshEditorSkeletonTreeHeight()).viewport;
             if (viewport.right > viewport.left && viewport.bottom > viewport.top) {
                 layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
                     .viewportKey = panelLayout.panelId,

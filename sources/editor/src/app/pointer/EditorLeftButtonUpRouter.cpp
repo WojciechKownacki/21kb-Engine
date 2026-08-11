@@ -83,6 +83,34 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
         return;
     }
 
+    if (sceneContext_.IsSkeletalMeshEditorToolboxWidthDragging() ||
+        sceneContext_.IsSkeletalMeshEditorSkeletonTreeWidthDragging() ||
+        sceneContext_.IsSkeletalMeshEditorTreeDetailsHeightDragging()) {
+        sceneContext_.EndSkeletalMeshEditorPanelResizeDrag();
+        ReleaseCapture();
+        if (messageWindow == mainWindow_) {
+            EditorHostSurfaceLayoutResolver::SyncMainWindow(
+                mainWindow_, dockModel_, metrics_, sceneContext_, sceneViewport_);
+        }
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (sceneContext_.IsSkeletalMeshEditorTreeScrollbarDragging()) {
+        sceneContext_.EndSkeletalMeshEditorTreeScrollbarDrag();
+        ReleaseCapture();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (sceneContext_.IsSkeletalMeshEditorDetailsScrollbarDragging()) {
+        sceneContext_.EndSkeletalMeshEditorDetailsScrollbarDrag();
+        ReleaseCapture();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
     if (sceneContext_.IsHierarchyScrollbarDragging()) {
         sceneContext_.EndHierarchyScrollbarDrag();
         ReleaseCapture();

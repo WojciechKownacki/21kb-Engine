@@ -110,6 +110,23 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::PrepareHostSurfaceBatch(con
     if (!viewport_.EnsurePresentTarget(*surface, RectWidth(surface->rect), RectHeight(surface->rect))) {
         return false;
     }
+    const PresentSettings* overlaySettings = nullptr;
+    for (const PendingPresent* present : batch.presents) {
+        if (present != nullptr) overlaySettings = &present->settings;
+    }
+    if (overlaySettings == nullptr) {
+        viewport_.SetFailureDetail("Viewport text overlay settings were missing from its present batch.");
+        return false;
+    }
+    if (overlaySettings->viewportTextLabels.empty()) {
+        surface->textOverlay.Hide();
+    } else if (!surface->textOverlay.Ensure(
+                   viewport_.instance_, surface->clipWindow,
+                   RectWidth(surface->rect), RectHeight(surface->rect)) ||
+        !surface->textOverlay.Update(overlaySettings->viewportTextLabels)) {
+        viewport_.SetFailureDetail("Viewport text overlay could not rasterize or present its labels.");
+        return false;
+    }
     surface->presentedInCurrentPaint = true;
     return true;
 }

@@ -33,6 +33,7 @@
 #include "rendering/AnimationClipEditorPanelRenderer.hpp"
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
+#include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
 #include "platform/win32/EditorAnimatorControllerAssetPickerDialog.hpp"
@@ -41,6 +42,7 @@
 #include "platform/win32/EditorMaterialColorPickerDialog.hpp"
 #include "platform/win32/EditorMaterialParameterValueDialog.hpp"
 #include "platform/win32/EditorMeshAssetPickerDialog.hpp"
+#include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
 #include "scene/EditorTerrainService.hpp"
 
@@ -80,6 +82,14 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
 
 [[nodiscard]] bool PointInRect(const RECT& rect, int x, int y) noexcept {
     return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+}
+
+[[nodiscard]] std::string TupleEditorValue(std::string value) {
+    if (value.size() >= 2U && value.front() == '(' && value.back() == ')') {
+        value.erase(value.begin());
+        value.pop_back();
+    }
+    return value;
 }
 
 [[nodiscard]] bool LeftAltDown() noexcept {
@@ -889,8 +899,95 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             DockPanelKind::SkeletalMeshEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         skeletalMeshEditorContent.has_value() && PointInRect(*skeletalMeshEditorContent, x, y) &&
         sceneContext_.HasSkeletalMeshEditorAsset()) {
+        const SkeletalMeshEditorPanelLayout skeletalLayout =
+            SkeletalMeshEditorPanelLayoutResolver::Resolve(
+                *skeletalMeshEditorContent,
+                sceneContext_.SkeletalMeshEditorToolboxWidth(),
+                sceneContext_.SkeletalMeshEditorSkeletonTreeWidth(),
+                sceneContext_.SkeletalMeshEditorSkeletonTreeHeight());
+        if (PointInRect(skeletalLayout.toolboxSplitter, x, y)) {
+            sceneContext_.SetSkeletalMeshEditorToolboxWidth(
+                x - skeletalMeshEditorContent->left);
+            sceneContext_.BeginSkeletalMeshEditorToolboxWidthDrag();
+            SetCapture(messageWindow);
+            sceneViewport_.RequestPresent();
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+        if (PointInRect(skeletalLayout.treeDetailsSplitter, x, y)) {
+            sceneContext_.SetSkeletalMeshEditorSkeletonTreeHeight(
+                SkeletalMeshEditorPanelLayoutResolver::SkeletonTreeHeightFromPointer(
+                    *skeletalMeshEditorContent, y));
+            sceneContext_.BeginSkeletalMeshEditorTreeDetailsHeightDrag();
+            SetCapture(messageWindow);
+            sceneViewport_.RequestPresent();
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+        if (PointInRect(skeletalLayout.skeletonTreeSplitter, x, y)) {
+            sceneContext_.SetSkeletalMeshEditorSkeletonTreeWidth(
+                skeletalMeshEditorContent->right - x);
+            sceneContext_.BeginSkeletalMeshEditorSkeletonTreeWidthDrag();
+            SetCapture(messageWindow);
+            sceneViewport_.RequestPresent();
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+        const int treeMaxScroll = SkeletalMeshEditorPanelRenderer::TreeMaxScroll(
+            *skeletalMeshEditorContent, sceneContext_);
+        if (treeMaxScroll > 0) {
+            const RECT treeTrack = SkeletalMeshEditorPanelRenderer::TreeScrollbarTrack(
+                *skeletalMeshEditorContent, sceneContext_);
+            const RECT treeThumb = SkeletalMeshEditorPanelRenderer::TreeScrollbarThumb(
+                *skeletalMeshEditorContent, sceneContext_);
+            if (PointInRect(treeThumb, x, y)) {
+                sceneContext_.BeginSkeletalMeshEditorTreeScrollbarDrag(y);
+                SetCapture(messageWindow);
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return;
+            }
+            if (PointInRect(treeTrack, x, y)) {
+                const RECT treeList = SkeletalMeshEditorPanelRenderer::TreeListRect(
+                    *skeletalMeshEditorContent, sceneContext_);
+                const int page = std::max(
+                    SkeletalMeshEditorPanelRenderer::TreeRowHeight,
+                    RectHeight(treeList) - SkeletalMeshEditorPanelRenderer::TreeRowHeight);
+                const int offset = sceneContext_.SkeletalMeshEditorTreeScrollOffset() +
+                    (y < treeThumb.top ? -page : page);
+                static_cast<void>(sceneContext_.SetSkeletalMeshEditorTreeScrollOffset(
+                    offset, treeMaxScroll));
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return;
+            }
+        }
+        const int detailsMaxScroll = SkeletalMeshEditorPanelRenderer::DetailsMaxScroll(
+            *skeletalMeshEditorContent, sceneContext_);
+        if (detailsMaxScroll > 0) {
+            const RECT detailsTrack = SkeletalMeshEditorPanelRenderer::DetailsScrollbarTrack(
+                *skeletalMeshEditorContent, sceneContext_);
+            const RECT detailsThumb = SkeletalMeshEditorPanelRenderer::DetailsScrollbarThumb(
+                *skeletalMeshEditorContent, sceneContext_);
+            if (PointInRect(detailsThumb, x, y)) {
+                sceneContext_.BeginSkeletalMeshEditorDetailsScrollbarDrag(y);
+                SetCapture(messageWindow);
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return;
+            }
+            if (PointInRect(detailsTrack, x, y)) {
+                const RECT detailsList = SkeletalMeshEditorPanelRenderer::DetailsListRect(
+                    *skeletalMeshEditorContent, sceneContext_);
+                const int page = std::max(22, RectHeight(detailsList) - 22);
+                const int offset = sceneContext_.SkeletalMeshEditorDetailsScrollOffset() +
+                    (y < detailsThumb.top ? -page : page);
+                static_cast<void>(sceneContext_.SetSkeletalMeshEditorDetailsScrollOffset(
+                    offset, detailsMaxScroll));
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return;
+            }
+        }
         if (const std::optional<SkeletalAssetDocument> document =
-                SkeletalMeshEditorPanelRenderer::LinkedDocumentAt(*skeletalMeshEditorContent, x, y);
+                SkeletalMeshEditorPanelRenderer::LinkedDocumentAt(
+                    *skeletalMeshEditorContent, sceneContext_, x, y);
             document.has_value()) {
             const bool skeletonDocument = *document == SkeletalAssetDocument::Skeleton;
             if (sceneContext_.SwitchSkeletalMeshEditorDocument(skeletonDocument)) {
@@ -942,10 +1039,22 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 break;
             }
             case SkeletalAssetCommand::AddSocket:
-                static_cast<void>(sceneContext_.AddSkeletonEditorSocket());
+                if (sceneContext_.AddSkeletonEditorSocket()) {
+                    static_cast<void>(sceneContext_.SetSkeletalMeshEditorTreeScrollOffset(
+                        SkeletalMeshEditorPanelRenderer::TreeScrollOffsetToRevealSelection(
+                            *skeletalMeshEditorContent, sceneContext_),
+                        SkeletalMeshEditorPanelRenderer::TreeMaxScroll(
+                            *skeletalMeshEditorContent, sceneContext_)));
+                }
                 break;
             case SkeletalAssetCommand::DuplicateSocket:
-                static_cast<void>(sceneContext_.DuplicateSkeletonEditorSocket());
+                if (sceneContext_.DuplicateSkeletonEditorSocket()) {
+                    static_cast<void>(sceneContext_.SetSkeletalMeshEditorTreeScrollOffset(
+                        SkeletalMeshEditorPanelRenderer::TreeScrollOffsetToRevealSelection(
+                            *skeletalMeshEditorContent, sceneContext_),
+                        SkeletalMeshEditorPanelRenderer::TreeMaxScroll(
+                            *skeletalMeshEditorContent, sceneContext_)));
+                }
                 break;
             case SkeletalAssetCommand::DeleteSocket:
                 if (MessageBoxW(
@@ -966,7 +1075,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 break;
             }
         } else if (const std::optional<std::uint8_t> overlay = SkeletalMeshEditorPanelRenderer::AdvancedPreviewOverlayAt(
-                *skeletalMeshEditorContent, x, y);
+                *skeletalMeshEditorContent, sceneContext_, x, y);
             overlay.has_value()) {
             AnimationPreviewOverlayState& overlays = sceneContext_.AnimationPreview().Overlays();
             switch (*overlay) {
@@ -978,8 +1087,100 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             case 5U: static_cast<void>(overlays.SetNormalsVisible(!overlays.NormalsVisible())); break;
             default: break;
             }
-        } else if (SkeletalMeshEditorPanelRenderer::IsTreeSearchAt(*skeletalMeshEditorContent, x, y)) {
+        } else if (const std::optional<SkeletalMeshEditorDetailsHit> hit =
+                       SkeletalMeshEditorPanelRenderer::DetailsHitAt(
+                           *skeletalMeshEditorContent, sceneContext_, x, y);
+                   hit.has_value()) {
+            if (hit->kind == SkeletalMeshEditorDetailsHitKind::Section) {
+                static_cast<void>(sceneContext_.ToggleSkeletalMeshEditorDetailsSection(hit->sectionTitle));
+            } else {
+                const SkeletalMeshEditorDetailsField& field = hit->field;
+                switch (field.action) {
+                case SkeletalMeshEditorDetailsAction::PreviewLod: {
+                    HMENU menu = CreatePopupMenu();
+                    if (menu != nullptr) {
+                        const std::optional<std::uint32_t> forced =
+                            sceneContext_.SkeletalMeshEditorForcedPreviewLod();
+                        AppendMenuA(menu, MF_STRING | (!forced.has_value() ? MF_CHECKED : 0U), 1U, "Auto");
+                        const std::uint32_t lodCount = sceneContext_.SkeletalMeshEditorLodCount();
+                        for (std::uint32_t lod = 0U; lod < lodCount; ++lod) {
+                            const std::string label = "LOD " + std::to_string(lod);
+                            AppendMenuA(menu, MF_STRING | (forced == lod ? MF_CHECKED : 0U),
+                                100U + lod, label.c_str());
+                        }
+                        POINT point{ x, y };
+                        ClientToScreen(messageWindow, &point);
+                        SetForegroundWindow(messageWindow);
+                        const UINT choice = TrackPopupMenu(menu,
+                            TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+                            point.x, point.y, 0, messageWindow, nullptr);
+                        DestroyMenu(menu);
+                        if (choice == 1U) {
+                            static_cast<void>(sceneContext_.SetSkeletalMeshEditorPreviewLod(std::nullopt));
+                        } else if (choice >= 100U && choice < 100U + lodCount) {
+                            static_cast<void>(sceneContext_.SetSkeletalMeshEditorPreviewLod(choice - 100U));
+                        }
+                    }
+                    break;
+                }
+                case SkeletalMeshEditorDetailsAction::BoundsMode:
+                    static_cast<void>(sceneContext_.ToggleSkeletalMeshEditorBoundsMode());
+                    break;
+                case SkeletalMeshEditorDetailsAction::LodScreenCoverage: {
+                    const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
+                        mainWindow_, "LOD " + std::to_string(field.lodIndex) + " Min Screen Coverage", field.value);
+                    float parsed = 0.0F;
+                    if (value.has_value() && kb::render::ParseFiniteMaterialFloatToken(*value, parsed)) {
+                        static_cast<void>(sceneContext_.SetSkeletalMeshEditorLodScreenCoverage(field.lodIndex, parsed));
+                    } else if (value.has_value()) {
+                        MessageBoxW(mainWindow_, L"Enter a finite number from 0 to 1.",
+                            L"Invalid LOD Screen Coverage", MB_ICONWARNING | MB_OK | MB_APPLMODAL);
+                    }
+                    break;
+                }
+                case SkeletalMeshEditorDetailsAction::SectionMaterial: {
+                    const EditorMaterialAssetPickerDialog::Result result =
+                        EditorMaterialAssetPickerDialog::Show(
+                            mainWindow_, MakeEditorDarkTheme(), sceneContext_, sceneViewport_,
+                            kb::assets::AssetId{ field.assetId }, true);
+                    if (result.accepted) {
+                        static_cast<void>(sceneContext_.SetSkeletalMeshEditorSectionMaterial(
+                            field.lodIndex, field.sectionIndex, result.assetId));
+                    }
+                    break;
+                }
+                case SkeletalMeshEditorDetailsAction::FixedBoundsCenter:
+                case SkeletalMeshEditorDetailsAction::FixedBoundsExtents: {
+                    const bool extents = field.action == SkeletalMeshEditorDetailsAction::FixedBoundsExtents;
+                    const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
+                        mainWindow_, extents ? "Fixed Bounds Extents (X, Y, Z)" : "Fixed Bounds Center (X, Y, Z)",
+                        TupleEditorValue(field.value));
+                    std::array<float, 3U> parsed{};
+                    if (value.has_value() && kb::render::ParseExactFiniteMaterialFloatTuple(*value, parsed)) {
+                        const kb::scene::Vec3 vector{ parsed[0], parsed[1], parsed[2] };
+                        static_cast<void>(sceneContext_.SetSkeletalMeshEditorFixedBounds(
+                            extents ? std::nullopt : std::optional<kb::scene::Vec3>{ vector },
+                            extents ? std::optional<kb::scene::Vec3>{ vector } : std::nullopt));
+                    } else if (value.has_value()) {
+                        MessageBoxW(mainWindow_, L"Enter three finite values: X, Y, Z.",
+                            L"Invalid Fixed Bounds", MB_ICONWARNING | MB_OK | MB_APPLMODAL);
+                    }
+                    break;
+                }
+                case SkeletalMeshEditorDetailsAction::None:
+                default:
+                    break;
+                }
+            }
+        } else if (SkeletalMeshEditorPanelRenderer::IsTreeSearchAt(
+                       *skeletalMeshEditorContent, sceneContext_, x, y)) {
             sceneContext_.FocusSkeletalMeshEditorTreeSearch(true);
+        } else if (const std::optional<kb::scene::SkeletonBoneId> disclosure =
+                       SkeletalMeshEditorPanelRenderer::TreeDisclosureAt(
+                           *skeletalMeshEditorContent, sceneContext_, x, y);
+                   disclosure.has_value()) {
+            sceneContext_.FocusSkeletalMeshEditorTreeSearch(false);
+            static_cast<void>(sceneContext_.ToggleSkeletalMeshEditorTreeBoneExpanded(*disclosure));
         } else if (const std::optional<SkeletalMeshEditorTreeRow> row =
                 SkeletalMeshEditorPanelRenderer::TreeRowAt(*skeletalMeshEditorContent, sceneContext_, x, y);
             row.has_value()) {

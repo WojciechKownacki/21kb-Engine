@@ -9,6 +9,7 @@
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/DetailSwitchComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -239,6 +240,10 @@ bool EditorAnimationPreviewScene::TickPlayback(AnimationPreviewContext& context,
 AnimationPreviewOverlaySnapshot EditorAnimationPreviewScene::BuildOverlays(
     const AnimationPreviewContext& context) const {
     AnimationPreviewOverlaySnapshot output;
+    const float halfFovTangent = std::max(0.05F,
+        std::tan(camera_.VerticalFovDegrees() * 0.00872664625997164788F));
+    output.labelReferenceCameraDistance =
+        (std::max(0.25F, focusRadius_) / halfFovTangent) * 1.3F;
     if (scene_ == nullptr || !previewEntity_.IsValid()) return output;
     const AnimationPreviewOverlayState& settings = context.Overlays();
     if (!settings.BonesVisible() && !settings.BoneNamesVisible() && !settings.SocketsVisible() &&
@@ -257,6 +262,7 @@ AnimationPreviewOverlaySnapshot EditorAnimationPreviewScene::BuildOverlays(
         : kb::assets::AssetHandle<kb::scene::SkeletalMeshAsset>{};
     if (mesh.IsLoaded()) {
         output.lodCount = static_cast<std::uint32_t>(mesh->lods.size());
+        output.activeLod = ResolvePreviewLod(*mesh);
         if (settings.NormalsVisible()) {
             AppendNormalLines(output, *mesh, owner, skeletonView.has_value() ? &*skeletonView : nullptr);
         }
@@ -264,7 +270,10 @@ AnimationPreviewOverlaySnapshot EditorAnimationPreviewScene::BuildOverlays(
     if (settings.LodVisible()) {
         output.labels.push_back(AnimationPreviewOverlayLabel{
             .position = focusCenter_,
-            .text = "LODs: " + std::to_string(output.lodCount),
+            .text = "LOD " + std::to_string(output.activeLod) + " / " +
+                std::to_string(output.lodCount == 0U ? 0U : output.lodCount - 1U) +
+                (forcedLod_.has_value() ? " (Forced)" : " (Auto)"),
+            .kind = AnimationPreviewOverlayLabelKind::Diagnostic,
         });
     }
     if (skeletonView.has_value()) {
@@ -278,8 +287,11 @@ AnimationPreviewOverlaySnapshot EditorAnimationPreviewScene::BuildOverlays(
                 if (bone == skeleton->bones.end()) continue;
                 const kb::scene::Vec3 position = WorldPoint(owner, positions[index]);
                 if (settings.BoneNamesVisible()) {
+                    const std::size_t skeletonIndex =
+                        static_cast<std::size_t>(bone - skeleton->bones.begin());
                     output.labels.push_back(AnimationPreviewOverlayLabel{
-                        .position = position, .text = bone->name,
+                        .position = position,
+                        .text = std::to_string(skeletonIndex) + ": " + bone->name,
                     });
                 }
                 if (settings.BonesVisible() && bone->parentIndex >= 0 &&
@@ -305,6 +317,7 @@ AnimationPreviewOverlaySnapshot EditorAnimationPreviewScene::BuildOverlays(
                 });
                 output.labels.push_back(AnimationPreviewOverlayLabel{
                     .position = root, .text = "Root motion",
+                    .kind = AnimationPreviewOverlayLabelKind::Diagnostic,
                 });
             }
         }
@@ -321,6 +334,7 @@ AnimationPreviewOverlaySnapshot EditorAnimationPreviewScene::BuildOverlays(
                 output.lines.push_back(AnimationPreviewOverlayLine{ .from = start, .to = start + z, .color = { 0.2F, 0.4F, 1.0F } });
                 output.labels.push_back(AnimationPreviewOverlayLabel{
                     .position = start, .text = socket.name,
+                    .kind = AnimationPreviewOverlayLabelKind::Socket,
                 });
             }
         }
@@ -339,6 +353,7 @@ void EditorAnimationPreviewScene::Rebuild(
     const kb::scene::Scene& source, const AnimationPreviewContext& context) {
     const bool openingDifferentAsset = framedMeshAsset_ != context.SkeletalMeshAsset() ||
         framedSkeletonAsset_ != context.SkeletonAsset();
+    if (openingDifferentAsset) forcedLod_.reset();
     scene_ = std::make_unique<kb::scene::Scene>(kb::scene::SceneMode::Runtime);
     for (const kb::assets::AssetMetadata& metadata : source.Assets().Manager().Registry().All()) {
         static_cast<void>(scene_->Assets().Manager().RegisterAsset(metadata));
@@ -379,6 +394,10 @@ void EditorAnimationPreviewScene::Rebuild(
             mesh->skeletonCompatibilitySignature == skeletonSignature;
     }
     if (mesh.IsLoaded()) {
+        if (forcedLod_.has_value() && !mesh->lods.empty()) {
+            *forcedLod_ = std::min<std::uint32_t>(
+                *forcedLod_, static_cast<std::uint32_t>(mesh->lods.size() - 1U));
+        }
         static_cast<void>(scene_->Components().MeshRenderers().Set(previewEntity_, kb::scene::MeshRendererComponent{
             .meshAssetId = context.SkeletalMeshAsset().value,
         }));
@@ -391,6 +410,7 @@ void EditorAnimationPreviewScene::Rebuild(
             .fixedBounds = true,
             .enabled = compatible,
         }));
+        ApplyLodPolicy();
     }
     if (compatible) {
         static_cast<void>(scene_->Components().SkeletonBindings().Set(previewEntity_, kb::scene::SkeletonBindingComponent{
@@ -555,6 +575,56 @@ void EditorAnimationPreviewScene::Rebuild(
     contextRevision_ = context.Revision();
     playbackRevision_ = 0U;
     ++revision_;
+}
+
+bool EditorAnimationPreviewScene::SetForcedLod(
+    std::optional<std::uint32_t> lodIndex, std::uint32_t lodCount) noexcept {
+    if (lodIndex.has_value()) {
+        if (lodCount == 0U) return false;
+        *lodIndex = std::min(*lodIndex, lodCount - 1U);
+    }
+    if (forcedLod_ == lodIndex) return false;
+    forcedLod_ = lodIndex;
+    ApplyLodPolicy();
+    ++revision_;
+    return true;
+}
+
+std::uint32_t EditorAnimationPreviewScene::ResolvePreviewLod(
+    const kb::scene::SkeletalMeshAsset& mesh) const noexcept {
+    if (mesh.lods.empty()) return 0U;
+    if (forcedLod_.has_value()) {
+        return std::min<std::uint32_t>(*forcedLod_, static_cast<std::uint32_t>(mesh.lods.size() - 1U));
+    }
+    const EditorViewportCameraAxes axes = camera_.Axes();
+    const float depth = std::abs(kb::math::Dot(focusCenter_ - axes.position, axes.forward));
+    const float coverage = std::clamp(
+        focusRadius_ / std::max(std::max(depth, focusRadius_), 0.0001F), 0.0F, 1.0F);
+    std::uint32_t selected = static_cast<std::uint32_t>(mesh.lods.size() - 1U);
+    for (std::uint32_t index = 0U; index < mesh.lods.size(); ++index) {
+        if (coverage >= mesh.lods[index].minScreenCoverage) {
+            selected = index;
+            break;
+        }
+    }
+    return selected;
+}
+
+void EditorAnimationPreviewScene::ApplyLodPolicy() noexcept {
+    if (scene_ == nullptr || !previewEntity_.IsValid() ||
+        !scene_->Entities().IsAlive(previewEntity_)) return;
+    if (!forcedLod_.has_value()) {
+        scene_->Components().DetailSwitches().Remove(previewEntity_);
+        return;
+    }
+    scene_->Components().DetailSwitches().Set(previewEntity_, kb::scene::SceneDetailSwitchComponent{
+        .groupId = previewEntity_.Id(),
+        .minimumLod = *forcedLod_,
+        .maximumLod = *forcedLod_,
+        .promoteCoverage = 0.20F,
+        .demoteCoverage = 0.15F,
+        .enabled = true,
+    });
 }
 
 void EditorAnimationPreviewScene::SynchronizeCamera() noexcept {
