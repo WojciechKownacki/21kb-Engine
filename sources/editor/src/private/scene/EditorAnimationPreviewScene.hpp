@@ -6,8 +6,10 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SkeletonAsset.hpp"
+#include "engine/scene/SkeletalMeshAsset.hpp"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -23,15 +25,24 @@ struct AnimationPreviewOverlayLine {
     kb::scene::SkeletonBoneId boneId = 0U;
 };
 
+enum class AnimationPreviewOverlayLabelKind : std::uint8_t {
+    Bone,
+    Socket,
+    Diagnostic,
+};
+
 struct AnimationPreviewOverlayLabel {
     kb::scene::Vec3 position{};
     std::string text;
+    AnimationPreviewOverlayLabelKind kind = AnimationPreviewOverlayLabelKind::Bone;
 };
 
 struct AnimationPreviewOverlaySnapshot {
     std::vector<AnimationPreviewOverlayLine> lines;
     std::vector<AnimationPreviewOverlayLabel> labels;
+    float labelReferenceCameraDistance = 1.0F;
     std::uint32_t lodCount = 0U;
+    std::uint32_t activeLod = 0U;
     std::uint64_t poseEvaluationCount = 0U;
 };
 
@@ -53,6 +64,9 @@ public:
         const EditorViewportCameraFlightInput& flightInput = {}) noexcept;
     [[nodiscard]] bool TickPlayback(AnimationPreviewContext& context, float deltaSeconds) noexcept;
     [[nodiscard]] AnimationPreviewOverlaySnapshot BuildOverlays(const AnimationPreviewContext& context) const;
+    [[nodiscard]] bool SetForcedLod(std::optional<std::uint32_t> lodIndex, std::uint32_t lodCount) noexcept;
+    [[nodiscard]] std::optional<std::uint32_t> ForcedLod() const noexcept { return forcedLod_; }
+    [[nodiscard]] std::uint32_t ResolvePreviewLod(const kb::scene::SkeletalMeshAsset& mesh) const noexcept;
     [[nodiscard]] std::uint64_t Revision() const noexcept { return revision_; }
     void Clear() noexcept;
 
@@ -60,6 +74,7 @@ private:
     void Rebuild(const kb::scene::Scene& source, const AnimationPreviewContext& context);
     void SynchronizeCamera() noexcept;
     void SynchronizePlayback(AnimationPreviewContext& context) noexcept;
+    void ApplyLodPolicy() noexcept;
 
     std::unique_ptr<kb::scene::Scene> scene_;
     EditorViewportCameraState camera_;
@@ -69,6 +84,7 @@ private:
     kb::scene::SceneEntity environmentEntity_{};
     kb::scene::Vec3 focusCenter_{};
     float focusRadius_ = 1.0F;
+    std::optional<std::uint32_t> forcedLod_{};
     std::uint64_t sourceSceneId_ = 0U;
     kb::assets::AssetId framedMeshAsset_{};
     kb::assets::AssetId framedSkeletonAsset_{};

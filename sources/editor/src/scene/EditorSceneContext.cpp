@@ -9854,6 +9854,9 @@ bool EditorSceneContext::FinalizeLoadedSkeletalMeshEditorAsset(
     std::ostringstream assetDetail;
     assetDetail << "meshId=" << meshId.value << " skeletonId=" << skeletonId.value;
     const auto documentStart = std::chrono::steady_clock::now();
+    if (animationPreviewScene_ != nullptr) {
+        static_cast<void>(animationPreviewScene_->SetForcedLod(std::nullopt, 0U));
+    }
     animationPreview_.SetAssets(skeletonId, meshId, {}, {});
     animationPreview_.SetPoseMode(AnimationPreviewPoseMode::Reference);
     static_cast<void>(animationPreview_.Overlays().SetBonesVisible(true));
@@ -10088,6 +10091,94 @@ std::vector<SkeletalMeshEditorTreeRow> EditorSceneContext::SkeletalMeshEditorTre
     return skeletalMeshEditorTree_.Rows();
 }
 
+bool EditorSceneContext::ToggleSkeletalMeshEditorTreeBoneExpanded(
+    kb::scene::SkeletonBoneId boneId) {
+    return skeletalMeshEditorTree_.ToggleExpanded(boneId);
+}
+
+int EditorSceneContext::SkeletalMeshEditorTreeScrollOffset() const noexcept {
+    return skeletalMeshEditorTree_.ScrollOffset();
+}
+
+bool EditorSceneContext::IsSkeletalMeshEditorTreeScrollbarDragging() const noexcept {
+    return skeletalMeshEditorTree_.IsScrollbarDragging();
+}
+
+bool EditorSceneContext::SetSkeletalMeshEditorTreeScrollOffset(int offset, int maxOffset) noexcept {
+    return skeletalMeshEditorTree_.SetScrollOffset(offset, maxOffset);
+}
+
+void EditorSceneContext::BeginSkeletalMeshEditorTreeScrollbarDrag(int y) noexcept {
+    skeletalMeshEditorTree_.BeginScrollbarDrag(y);
+}
+
+void EditorSceneContext::DragSkeletalMeshEditorTreeScrollbar(
+    int y, int trackTravel, int maxOffset) noexcept {
+    skeletalMeshEditorTree_.DragScrollbar(y, trackTravel, maxOffset);
+}
+
+void EditorSceneContext::EndSkeletalMeshEditorTreeScrollbarDrag() noexcept {
+    skeletalMeshEditorTree_.EndScrollbarDrag();
+}
+
+int EditorSceneContext::SkeletalMeshEditorToolboxWidth() const noexcept {
+    return skeletalMeshEditorPanelResize_.ToolboxWidth();
+}
+
+int EditorSceneContext::SkeletalMeshEditorSkeletonTreeWidth() const noexcept {
+    return skeletalMeshEditorPanelResize_.SkeletonTreeWidth();
+}
+
+int EditorSceneContext::SkeletalMeshEditorSkeletonTreeHeight() const noexcept {
+    return skeletalMeshEditorPanelResize_.SkeletonTreeHeight();
+}
+
+bool EditorSceneContext::IsSkeletalMeshEditorToolboxWidthDragging() const noexcept {
+    return skeletalMeshEditorPanelResize_.IsDragging(
+        SkeletalMeshEditorPanelDrag::ToolboxWidth);
+}
+
+bool EditorSceneContext::IsSkeletalMeshEditorSkeletonTreeWidthDragging() const noexcept {
+    return skeletalMeshEditorPanelResize_.IsDragging(
+        SkeletalMeshEditorPanelDrag::SkeletonTreeWidth);
+}
+
+bool EditorSceneContext::IsSkeletalMeshEditorTreeDetailsHeightDragging() const noexcept {
+    return skeletalMeshEditorPanelResize_.IsDragging(
+        SkeletalMeshEditorPanelDrag::TreeDetailsHeight);
+}
+
+void EditorSceneContext::SetSkeletalMeshEditorToolboxWidth(int width) noexcept {
+    skeletalMeshEditorPanelResize_.SetToolboxWidth(width);
+}
+
+void EditorSceneContext::SetSkeletalMeshEditorSkeletonTreeWidth(int width) noexcept {
+    skeletalMeshEditorPanelResize_.SetSkeletonTreeWidth(width);
+}
+
+void EditorSceneContext::SetSkeletalMeshEditorSkeletonTreeHeight(int height) noexcept {
+    skeletalMeshEditorPanelResize_.SetSkeletonTreeHeight(height);
+}
+
+void EditorSceneContext::BeginSkeletalMeshEditorToolboxWidthDrag() noexcept {
+    skeletalMeshEditorPanelResize_.BeginDrag(
+        SkeletalMeshEditorPanelDrag::ToolboxWidth);
+}
+
+void EditorSceneContext::BeginSkeletalMeshEditorSkeletonTreeWidthDrag() noexcept {
+    skeletalMeshEditorPanelResize_.BeginDrag(
+        SkeletalMeshEditorPanelDrag::SkeletonTreeWidth);
+}
+
+void EditorSceneContext::BeginSkeletalMeshEditorTreeDetailsHeightDrag() noexcept {
+    skeletalMeshEditorPanelResize_.BeginDrag(
+        SkeletalMeshEditorPanelDrag::TreeDetailsHeight);
+}
+
+void EditorSceneContext::EndSkeletalMeshEditorPanelResizeDrag() noexcept {
+    skeletalMeshEditorPanelResize_.EndDrag();
+}
+
 bool EditorSceneContext::SelectSkeletalMeshEditorBone(kb::scene::SkeletonBoneId boneId) {
     const bool changed = skeletalMeshEditorTree_.SelectBone(boneId);
     if (animationClipEditorAssetId_.IsValid()) {
@@ -10118,6 +10209,28 @@ SkeletalMeshEditorDetailsModel EditorSceneContext::SkeletalMeshEditorDetails() c
     const kb::scene::SkeletonBoneId selectedBone = skeletalMeshEditorTree_.SelectedBone();
     const std::string& selectedSocket = skeletalMeshEditorTree_.SelectedSocket();
     SkeletalMeshEditorDetailsModel details = skeletalMeshEditorDetails_.Build(selectedBone, selectedSocket);
+    const kb::scene::SkeletalMeshAsset* working = skeletalMeshEditorDocument_.WorkingCopy();
+    for (SkeletalMeshEditorDetailsSection& section : details.sections) {
+        for (SkeletalMeshEditorDetailsField& field : section.fields) {
+            if (field.action == SkeletalMeshEditorDetailsAction::SectionMaterial && field.assetId != 0U) {
+                const kb::assets::AssetMetadata* material =
+                    scene_->Assets().Manager().Registry().Find(kb::assets::AssetId{ field.assetId });
+                if (material != nullptr) {
+                    const std::string filename = material->virtualPath.filename().string();
+                    field.value = filename.empty() ? material->name : filename;
+                } else {
+                    field.value = "Missing (" + std::to_string(field.assetId) + ")";
+                }
+            } else if (field.action == SkeletalMeshEditorDetailsAction::PreviewLod &&
+                       working != nullptr && animationPreviewScene_ != nullptr) {
+                const std::uint32_t resolved = animationPreviewScene_->ResolvePreviewLod(*working);
+                const std::optional<std::uint32_t> forced = animationPreviewScene_->ForcedLod();
+                field.value = forced.has_value()
+                    ? "LOD " + std::to_string(resolved)
+                    : "Auto (LOD " + std::to_string(resolved) + ")";
+            }
+        }
+    }
     const double durationMs = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - start).count();
     const char* selection = selectedBone != 0U ? "bone" : (!selectedSocket.empty() ? "socket" : "asset");
@@ -10128,6 +10241,115 @@ SkeletalMeshEditorDetailsModel EditorSceneContext::SkeletalMeshEditorDetails() c
         std::string{"selection="} + selection + " assetId=" + std::to_string(skeletalMeshEditorAssetId_.value),
         4.0);
     return details;
+}
+
+bool EditorSceneContext::ToggleSkeletalMeshEditorDetailsSection(std::string_view title) {
+    return skeletalMeshEditorDetails_.ToggleSection(title);
+}
+
+int EditorSceneContext::SkeletalMeshEditorDetailsScrollOffset() const noexcept {
+    return skeletalMeshEditorDetails_.ScrollOffset();
+}
+
+bool EditorSceneContext::IsSkeletalMeshEditorDetailsScrollbarDragging() const noexcept {
+    return skeletalMeshEditorDetails_.IsScrollbarDragging();
+}
+
+bool EditorSceneContext::SetSkeletalMeshEditorDetailsScrollOffset(int offset, int maxOffset) noexcept {
+    return skeletalMeshEditorDetails_.SetScrollOffset(offset, maxOffset);
+}
+
+void EditorSceneContext::BeginSkeletalMeshEditorDetailsScrollbarDrag(int y) noexcept {
+    skeletalMeshEditorDetails_.BeginScrollbarDrag(y);
+}
+
+void EditorSceneContext::DragSkeletalMeshEditorDetailsScrollbar(
+    int y, int trackTravel, int maxOffset) noexcept {
+    skeletalMeshEditorDetails_.DragScrollbar(y, trackTravel, maxOffset);
+}
+
+void EditorSceneContext::EndSkeletalMeshEditorDetailsScrollbarDrag() noexcept {
+    skeletalMeshEditorDetails_.EndScrollbarDrag();
+}
+
+std::uint32_t EditorSceneContext::SkeletalMeshEditorLodCount() const noexcept {
+    const kb::scene::SkeletalMeshAsset* working = skeletalMeshEditorDocument_.WorkingCopy();
+    return working == nullptr ? 0U : static_cast<std::uint32_t>(working->lods.size());
+}
+
+std::optional<std::uint32_t> EditorSceneContext::SkeletalMeshEditorForcedPreviewLod() const noexcept {
+    return animationPreviewScene_ == nullptr ? std::nullopt : animationPreviewScene_->ForcedLod();
+}
+
+bool EditorSceneContext::SetSkeletalMeshEditorPreviewLod(std::optional<std::uint32_t> lodIndex) {
+    if (IsSkeletalMeshEditorSkeletonDocument() || animationPreviewScene_ == nullptr) return false;
+    const std::uint32_t lodCount = SkeletalMeshEditorLodCount();
+    if (lodCount == 0U) return false;
+    return animationPreviewScene_->SetForcedLod(lodIndex, lodCount);
+}
+
+bool EditorSceneContext::CommitSkeletalMeshEditorCandidate(kb::scene::SkeletalMeshAsset candidate) {
+    if (IsSkeletalMeshEditorSkeletonDocument() || !skeletalMeshEditorDocument_.IsOpen() ||
+        !kb::scene::ValidateSkeletalMeshAsset(candidate).valid ||
+        !skeletalMeshEditorDocument_.Apply(std::move(candidate))) return false;
+    const kb::scene::SkeletalMeshAsset* updated = skeletalMeshEditorDocument_.WorkingCopy();
+    if (updated == nullptr || !scene_->Assets().Manager().PublishRuntimeAsset(
+            skeletalMeshEditorAssetId_, std::make_shared<kb::scene::SkeletalMeshAsset>(*updated))) {
+        static_cast<void>(skeletalMeshEditorDocument_.Undo());
+        const kb::scene::SkeletalMeshAsset* restored = skeletalMeshEditorDocument_.WorkingCopy();
+        if (restored != nullptr) {
+            static_cast<void>(scene_->Assets().Manager().PublishRuntimeAsset(
+                skeletalMeshEditorAssetId_, std::make_shared<kb::scene::SkeletalMeshAsset>(*restored)));
+        }
+        return false;
+    }
+    RefreshSkeletalEditorDetails();
+    animationPreviewScene_->Clear();
+    static_cast<void>(AnimationPreviewScene());
+    return true;
+}
+
+bool EditorSceneContext::SetSkeletalMeshEditorLodScreenCoverage(
+    std::uint32_t lodIndex, float coverage) {
+    const kb::scene::SkeletalMeshAsset* working = skeletalMeshEditorDocument_.WorkingCopy();
+    if (working == nullptr || lodIndex >= working->lods.size() || !std::isfinite(coverage) ||
+        coverage < 0.0F || coverage > 1.0F || working->lods[lodIndex].minScreenCoverage == coverage) return false;
+    if ((lodIndex > 0U && coverage > working->lods[lodIndex - 1U].minScreenCoverage) ||
+        (lodIndex + 1U < working->lods.size() && coverage < working->lods[lodIndex + 1U].minScreenCoverage)) {
+        console_.Warning("Skeletal Mesh Editor", "LOD screen coverage must remain non-increasing from LOD 0.");
+        return false;
+    }
+    kb::scene::SkeletalMeshAsset candidate = *working;
+    candidate.lods[lodIndex].minScreenCoverage = coverage;
+    return CommitSkeletalMeshEditorCandidate(std::move(candidate));
+}
+
+bool EditorSceneContext::SetSkeletalMeshEditorSectionMaterial(
+    std::uint32_t lodIndex, std::uint32_t sectionIndex, kb::assets::AssetId materialId) {
+    const kb::scene::SkeletalMeshAsset* working = skeletalMeshEditorDocument_.WorkingCopy();
+    if (working == nullptr || lodIndex >= working->lods.size() ||
+        sectionIndex >= working->lods[lodIndex].sections.size()) return false;
+    if (materialId.IsValid()) {
+        const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(materialId);
+        if (metadata == nullptr || !EditorSceneMaterialAssetActions::IsMaterialAsset(*metadata)) {
+            console_.Warning("Skeletal Mesh Editor", "Only compiled Material or Material Instance assets can be assigned.");
+            return false;
+        }
+    }
+    if (working->lods[lodIndex].sections[sectionIndex].materialAssetId == materialId.value) return false;
+    kb::scene::SkeletalMeshAsset candidate = *working;
+    candidate.lods[lodIndex].sections[sectionIndex].materialAssetId = materialId.value;
+    return CommitSkeletalMeshEditorCandidate(std::move(candidate));
+}
+
+bool EditorSceneContext::SetSkeletalMeshEditorFixedBounds(
+    std::optional<kb::scene::Vec3> center, std::optional<kb::scene::Vec3> extents) {
+    const kb::scene::SkeletalMeshAsset* working = skeletalMeshEditorDocument_.WorkingCopy();
+    if (working == nullptr || (!center.has_value() && !extents.has_value())) return false;
+    kb::scene::SkeletalMeshAsset candidate = *working;
+    if (center.has_value()) candidate.fixedBounds.center = *center;
+    if (extents.has_value()) candidate.fixedBounds.extents = *extents;
+    return CommitSkeletalMeshEditorCandidate(std::move(candidate));
 }
 
 const std::vector<kb::scene::SkeletalMeshMorphTarget>& EditorSceneContext::SkeletalMeshEditorMorphTargets() const noexcept {
@@ -10176,8 +10398,8 @@ bool EditorSceneContext::IsSkeletalMeshEditorReferencePose() const noexcept {
 }
 
 bool EditorSceneContext::CanAddSkeletonEditorSocket() const noexcept {
-    return IsSkeletalMeshEditorSkeletonDocument() && skeletonEditorDocument_.IsOpen() &&
-        skeletalMeshEditorTree_.SelectedBone() != 0U;
+    const kb::scene::SkeletonAsset* working = skeletonEditorDocument_.WorkingCopy();
+    return IsSkeletalMeshEditorSkeletonDocument() && working != nullptr && !working->bones.empty();
 }
 
 bool EditorSceneContext::CanDuplicateSkeletonEditorSocket() const noexcept {
@@ -10194,16 +10416,7 @@ bool EditorSceneContext::SetSkeletalMeshEditorBoundsMode(kb::scene::SkeletalMesh
     if (working == nullptr || working->boundsMode == mode) return false;
     kb::scene::SkeletalMeshAsset candidate = *working;
     candidate.boundsMode = mode;
-    if (!skeletalMeshEditorDocument_.Apply(std::move(candidate))) return false;
-    const kb::scene::SkeletalMeshAsset* updated = skeletalMeshEditorDocument_.WorkingCopy();
-    if (updated == nullptr || !scene_->Assets().Manager().PublishRuntimeAsset(
-            skeletalMeshEditorAssetId_, std::make_shared<kb::scene::SkeletalMeshAsset>(*updated))) {
-        return false;
-    }
-    RefreshSkeletalEditorDetails();
-    animationPreviewScene_->Clear();
-    static_cast<void>(AnimationPreviewScene());
-    return true;
+    return CommitSkeletalMeshEditorCandidate(std::move(candidate));
 }
 
 bool EditorSceneContext::ToggleSkeletalMeshEditorBoundsMode() {
@@ -10317,11 +10530,26 @@ bool EditorSceneContext::AddSkeletonEditorSocket() {
     const kb::scene::SkeletonAsset* working = skeletonEditorDocument_.WorkingCopy();
     if (working == nullptr) return false;
     kb::scene::SkeletonAsset candidate = *working;
-    const kb::scene::SkeletonBoneId boneId = skeletalMeshEditorTree_.SelectedBone();
-    const auto bone = std::ranges::find_if(candidate.bones, [boneId](const kb::scene::SkeletonBone& value) {
+    kb::scene::SkeletonBoneId boneId = skeletalMeshEditorTree_.SelectedBone();
+    if (boneId == 0U && !skeletalMeshEditorTree_.SelectedSocket().empty()) {
+        const std::string& selectedSocket = skeletalMeshEditorTree_.SelectedSocket();
+        const auto socket = std::ranges::find_if(
+            candidate.sockets,
+            [&selectedSocket](const kb::scene::SkeletonSocket& value) {
+                return value.name == selectedSocket;
+            });
+        if (socket != candidate.sockets.end()) boneId = socket->boneId;
+    }
+    auto bone = std::ranges::find_if(candidate.bones, [boneId](const kb::scene::SkeletonBone& value) {
         return value.id == boneId;
     });
-    if (bone == candidate.bones.end()) return false;
+    if (bone == candidate.bones.end()) {
+        bone = std::ranges::find_if(candidate.bones, [](const kb::scene::SkeletonBone& value) {
+            return value.parentIndex < 0;
+        });
+        if (bone == candidate.bones.end()) bone = candidate.bones.begin();
+        boneId = bone->id;
+    }
     const std::string base = bone->name + " Socket";
     std::string name = base;
     for (std::uint32_t suffix = 2U; std::ranges::any_of(candidate.sockets,

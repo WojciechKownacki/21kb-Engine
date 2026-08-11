@@ -7,7 +7,9 @@
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 #include "rendering/SkeletalMeshEditorSceneLabelBuilder.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
+#include "rendering/gdi/ScopedBrush.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
+#include "rendering/gdi/ScopedPen.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -41,8 +43,108 @@ void PaintPanel(HDC dc, const RECT& rect, const char* title, const char* subtitl
 }
 
 constexpr int kTreeHeaderHeight = 56;
-constexpr int kTreeRowHeight = 20;
-constexpr int kTreeAuxiliaryHeight = 76;
+constexpr int kTreeRowHeight = SkeletalMeshEditorPanelRenderer::TreeRowHeight;
+constexpr int kTreeIndentWidth = 16;
+constexpr int kTreeScrollbarWidth = 12;
+constexpr int kTreeScrollbarInset = 3;
+constexpr int kTreeScrollbarMinThumb = 24;
+constexpr int kDetailsTabHeight = 25;
+constexpr int kDetailsObjectHeaderHeight = 28;
+constexpr int kDetailsCategoryHeight = 22;
+constexpr int kDetailsFieldHeight = 22;
+
+[[nodiscard]] int RectHeight(const RECT& rect) noexcept {
+    return std::max(0L, rect.bottom - rect.top);
+}
+
+[[nodiscard]] SkeletalMeshEditorPanelLayout ResolvePanelLayout(
+    const RECT& content, const EditorSceneContext& sceneContext) noexcept {
+    return SkeletalMeshEditorPanelLayoutResolver::Resolve(
+        content,
+        sceneContext.SkeletalMeshEditorToolboxWidth(),
+        sceneContext.SkeletalMeshEditorSkeletonTreeWidth(),
+        sceneContext.SkeletalMeshEditorSkeletonTreeHeight());
+}
+
+[[nodiscard]] RECT TreeListRectForTree(const RECT& tree) noexcept {
+    return RECT{
+        tree.left + 1,
+        tree.top + kTreeHeaderHeight,
+        tree.right - 1,
+        std::max(tree.top + kTreeHeaderHeight, tree.bottom - 1),
+    };
+}
+
+void DrawTreeWire(HDC dc, int x1, int y1, int x2, int y2) {
+    const ScopedPen pen{ 1, RGB(68, 72, 79) };
+    const ScopedGdiObject selectedPen(dc, pen.handle);
+    MoveToEx(dc, x1, y1, nullptr);
+    LineTo(dc, x2, y2);
+}
+
+void DrawDisclosure(HDC dc, const RECT& rect, bool expanded) {
+    POINT points[3]{};
+    if (expanded) {
+        points[0] = POINT{ rect.left + 3, rect.top + 5 };
+        points[1] = POINT{ rect.right - 3, rect.top + 5 };
+        points[2] = POINT{ (rect.left + rect.right) / 2, rect.bottom - 4 };
+    } else {
+        points[0] = POINT{ rect.left + 5, rect.top + 3 };
+        points[1] = POINT{ rect.right - 4, (rect.top + rect.bottom) / 2 };
+        points[2] = POINT{ rect.left + 5, rect.bottom - 3 };
+    }
+    const ScopedPen pen{ 1, RGB(170, 178, 188) };
+    const ScopedBrush brush{ RGB(170, 178, 188) };
+    const ScopedGdiObject selectedPen(dc, pen.handle);
+    const ScopedGdiObject selectedBrush(dc, brush.handle);
+    Polygon(dc, points, 3);
+}
+
+[[nodiscard]] RECT ScrollbarTrackForList(const RECT& list) noexcept {
+    return RECT{
+        list.right - kTreeScrollbarWidth,
+        list.top + kTreeScrollbarInset,
+        list.right - kTreeScrollbarInset,
+        list.bottom - kTreeScrollbarInset,
+    };
+}
+
+[[nodiscard]] RECT ScrollbarThumbForList(
+    const RECT& list, int contentHeight, int offset) noexcept {
+    const int viewportHeight = RectHeight(list);
+    const RECT track = ScrollbarTrackForList(list);
+    const int trackHeight = RectHeight(track);
+    if (trackHeight <= 0 || contentHeight <= viewportHeight) return {};
+    const int thumbHeight = std::clamp(
+        (trackHeight * viewportHeight) / std::max(1, contentHeight),
+        kTreeScrollbarMinThumb,
+        trackHeight);
+    const int maxOffset = std::max(1, contentHeight - viewportHeight);
+    const int travel = std::max(0, trackHeight - thumbHeight);
+    const int thumbTop = track.top +
+        (travel * std::clamp(offset, 0, maxOffset)) / maxOffset;
+    return RECT{ track.left + 2, thumbTop, track.right - 2, thumbTop + thumbHeight };
+}
+
+[[nodiscard]] RECT DetailsListRectForPanel(const RECT& panel) noexcept {
+    return RECT{
+        panel.left + 1,
+        std::min(panel.bottom, panel.top + kDetailsTabHeight + kDetailsObjectHeaderHeight),
+        panel.right - 1,
+        std::max(panel.top + kDetailsTabHeight + kDetailsObjectHeaderHeight, panel.bottom - 1),
+    };
+}
+
+[[nodiscard]] int DetailsContentHeight(const SkeletalMeshEditorDetailsModel& model) noexcept {
+    int height = 0;
+    for (const SkeletalMeshEditorDetailsSection& section : model.sections) {
+        height += kDetailsCategoryHeight;
+        if (section.expanded) {
+            height += static_cast<int>(section.fields.size()) * kDetailsFieldHeight;
+        }
+    }
+    return height;
+}
 
 [[nodiscard]] std::string AssetLabel(
     const EditorSceneContext& sceneContext,
@@ -231,7 +333,7 @@ void PaintTree(HDC dc, const RECT& rect, const EditorSceneContext& sceneContext)
     DrawTextA(dc, "Skeleton Tree", -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     GdiDrawing::DrawSharpFrame(dc, RECT{ rect.left + 8, rect.top + 30, rect.right - 8, rect.top + 50 }, RGB(23, 25, 28),
         sceneContext.IsSkeletalMeshEditorTreeSearchFocused() ? RGB(77, 143, 204) : RGB(63, 68, 76));
-    const ScopedFont bodyFont{ 11, FW_NORMAL };
+    const ScopedFont bodyFont{ 10, FW_NORMAL };
     const ScopedGdiObject selectedBodyFont(dc, bodyFont.handle);
     SetTextColor(dc, RGB(145, 155, 168));
     const RECT searchIcon{ rect.left + 13, rect.top + 34, rect.left + 25, rect.top + 46 };
@@ -242,12 +344,42 @@ void PaintTree(HDC dc, const RECT& rect, const EditorSceneContext& sceneContext)
     DrawTextA(dc, filterText.c_str(), -1, &filter, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 
     const std::vector<SkeletalMeshEditorTreeRow> rows = sceneContext.SkeletalMeshEditorTreeRows();
-    for (std::size_t index = 0U; index < rows.size(); ++index) {
-        RECT row{ rect.left + 1, rect.top + kTreeHeaderHeight + static_cast<int>(index) * kTreeRowHeight,
-            rect.right - 1, rect.top + kTreeHeaderHeight + static_cast<int>(index + 1U) * kTreeRowHeight };
-        if (row.top >= rect.bottom - kTreeAuxiliaryHeight) break;
+    const RECT list = TreeListRectForTree(rect);
+    const int viewportHeight = RectHeight(list);
+    const int contentHeight = static_cast<int>(rows.size()) * kTreeRowHeight;
+    const int maxScroll = std::max(0, contentHeight - viewportHeight);
+    const int scroll = std::clamp(sceneContext.SkeletalMeshEditorTreeScrollOffset(), 0, maxScroll);
+    const bool hasScrollbar = contentHeight > viewportHeight;
+    const int rowsRight = hasScrollbar ? list.right - kTreeScrollbarWidth : list.right;
+    const std::size_t firstRow = static_cast<std::size_t>(scroll / kTreeRowHeight);
+    const int firstRowOffset = scroll % kTreeRowHeight;
+    const std::size_t visibleRows = static_cast<std::size_t>(
+        (viewportHeight + firstRowOffset + kTreeRowHeight - 1) / kTreeRowHeight);
+    const std::size_t lastRow = std::min(rows.size(), firstRow + visibleRows);
+    const int savedDc = SaveDC(dc);
+    IntersectClipRect(dc, list.left, list.top, list.right, list.bottom);
+    int rowTop = list.top - firstRowOffset;
+    for (std::size_t index = firstRow; index < lastRow; ++index, rowTop += kTreeRowHeight) {
+        RECT row{ list.left, rowTop, rowsRight, rowTop + kTreeRowHeight };
         if (rows[index].selected) GdiDrawing::FillRectColor(dc, row, RGB(35, 75, 112));
-        const int itemLeft = row.left + 8 + static_cast<int>(rows[index].depth) * 14;
+        const int branchBase = row.left + 10;
+        const int branchCenterY = (row.top + row.bottom) / 2;
+        for (std::uint32_t depth = 0U; depth < rows[index].depth && depth < 64U; ++depth) {
+            if ((rows[index].continuationMask & (std::uint64_t{ 1U } << depth)) != 0U) {
+                const int wireX = branchBase + static_cast<int>(depth) * kTreeIndentWidth;
+                DrawTreeWire(dc, wireX, row.top, wireX, row.bottom);
+            }
+        }
+        const int itemBranchX = branchBase + static_cast<int>(rows[index].depth) * kTreeIndentWidth;
+        if (rows[index].depth > 0U) {
+            DrawTreeWire(
+                dc, itemBranchX, row.top, itemBranchX,
+                rows[index].lastSibling ? branchCenterY : row.bottom);
+            DrawTreeWire(dc, itemBranchX, branchCenterY, itemBranchX + 7, branchCenterY);
+        }
+        const RECT disclosure{ itemBranchX + 1, row.top + 3, itemBranchX + 15, row.bottom - 3 };
+        if (rows[index].hasChildren) DrawDisclosure(dc, disclosure, rows[index].expanded);
+        const int itemLeft = itemBranchX + kTreeIndentWidth;
         const RECT itemIcon{ itemLeft, row.top + 3, itemLeft + 14, row.bottom - 3 };
         const bool socket = rows[index].kind == SkeletalMeshEditorTreeItemKind::Socket;
         const COLORREF itemColor = socket ? RGB(120, 196, 176) : RGB(171, 181, 194);
@@ -255,71 +387,110 @@ void PaintTree(HDC dc, const RECT& rect, const EditorSceneContext& sceneContext)
             dc, itemIcon, socket ? HeroIconKind::Bolt : HeroIconKind::Skeleton, itemColor, 1);
         RECT label{ itemIcon.right + 4, row.top, row.right - 6, row.bottom };
         SetTextColor(dc, socket ? RGB(120, 196, 176) : RGB(211, 217, 225));
-        DrawTextA(dc, rows[index].label.c_str(), -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        DrawTextA(dc, rows[index].label.c_str(), -1, &label,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
-    const RECT morphPanel{ rect.left + 1, rect.bottom - kTreeAuxiliaryHeight, rect.right - 1, rect.bottom - 38 };
-    const RECT curvesPanel{ rect.left + 1, rect.bottom - 38, rect.right - 1, rect.bottom - 1 };
-    GdiDrawing::DrawSharpFrame(dc, morphPanel, RGB(28, 30, 34), RGB(53, 57, 64));
-    GdiDrawing::DrawSharpFrame(dc, curvesPanel, RGB(28, 30, 34), RGB(53, 57, 64));
-    RECT morphTitle{ morphPanel.left + 8, morphPanel.top + 3, morphPanel.right - 8, morphPanel.top + 18 };
-    SetTextColor(dc, RGB(207, 214, 222));
-    const bool skeletonDocument = sceneContext.IsSkeletalMeshEditorSkeletonDocument();
-    const char* morphPanelTitle = skeletonDocument ? "Preview Geometry" : "Morph Targets";
-    DrawTextA(dc, morphPanelTitle, -1, &morphTitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-    const std::vector<kb::scene::SkeletalMeshMorphTarget>& morphs = sceneContext.SkeletalMeshEditorMorphTargets();
-    const std::string morphSummary = skeletonDocument
-        ? (sceneContext.SkeletalMeshEditorAssetId().IsValid()
-            ? "Compatible mesh is preview-only."
-            : "None. Skeleton-only reference pose.")
-        : (morphs.empty()
-        ? "None"
-        : morphs.front().name + " (LOD " + std::to_string(morphs.front().lodIndex) + ", " +
-            std::to_string(morphs.front().deltas.size()) + " deltas)" +
-            (morphs.size() > 1U ? " +" + std::to_string(morphs.size() - 1U) : ""));
-    RECT morphValue{ morphPanel.left + 8, morphPanel.top + 19, morphPanel.right - 8, morphPanel.bottom - 3 };
-    SetTextColor(dc, RGB(120, 196, 176));
-    DrawTextA(dc, morphSummary.c_str(), -1, &morphValue, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-    RECT curveTitle{ curvesPanel.left + 8, curvesPanel.top + 3, curvesPanel.right - 8, curvesPanel.top + 18 };
-    SetTextColor(dc, RGB(207, 214, 222));
-    DrawTextA(dc, "Curves", -1, &curveTitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-    RECT curveValue{ curvesPanel.left + 8, curvesPanel.top + 18, curvesPanel.right - 8, curvesPanel.bottom - 2 };
-    SetTextColor(dc, RGB(145, 155, 168));
-    const char* curves = sceneContext.AnimationPreview().ClipAsset().IsValid() ? "Clip curve channels are available." : "Reference pose: no active clip.";
-    DrawTextA(dc, curves, -1, &curveValue, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    RestoreDC(dc, savedDc);
+    if (hasScrollbar) {
+        const RECT track = ScrollbarTrackForList(list);
+        const RECT thumb = ScrollbarThumbForList(list, contentHeight, scroll);
+        GdiDrawing::DrawSharpFrame(dc, track, RGB(22, 24, 27), RGB(38, 42, 47));
+        const bool dragging = sceneContext.IsSkeletalMeshEditorTreeScrollbarDragging();
+        GdiDrawing::DrawSharpFrame(
+            dc,
+            thumb,
+            dragging ? RGB(104, 116, 130) : RGB(76, 86, 98),
+            dragging ? RGB(128, 142, 158) : RGB(94, 105, 118));
+    }
 }
 
 void PaintDetails(HDC dc, const RECT& rect, const EditorSceneContext& sceneContext) {
     GdiDrawing::FillRectColor(dc, rect, RGB(28, 30, 34));
     GdiDrawing::DrawSharpFrame(dc, rect, RGB(28, 30, 34), RGB(53, 57, 64));
     const SkeletalMeshEditorDetailsModel model = sceneContext.SkeletalMeshEditorDetails();
+    const RECT tabWell{ rect.left + 1, rect.top + 1, rect.right - 1,
+        std::min(rect.bottom, rect.top + kDetailsTabHeight) };
+    GdiDrawing::FillRectColor(dc, tabWell, RGB(22, 24, 28));
+    const RECT detailsTab{ tabWell.left + 5, tabWell.top, std::min(tabWell.right, tabWell.left + 84), tabWell.bottom };
+    GdiDrawing::DrawSharpFrame(dc, detailsTab, RGB(37, 40, 46), RGB(56, 61, 69));
+    GdiDrawing::FillRectColor(dc, RECT{ detailsTab.left, detailsTab.bottom - 2, detailsTab.right, detailsTab.bottom },
+        RGB(77, 143, 204));
     const ScopedFont titleFont{ 13, FW_SEMIBOLD };
     const ScopedGdiObject selectedTitleFont(dc, titleFont.handle);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(207, 214, 222));
-    RECT title{ rect.left + 10, rect.top + 8, rect.right - 8, rect.top + 26 };
+    RECT tabText{ detailsTab.left + 9, detailsTab.top, detailsTab.right - 6, detailsTab.bottom };
+    DrawTextA(dc, "Details", -1, &tabText,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    RECT title{ rect.left + 10, tabWell.bottom, rect.right - 8,
+        std::min(rect.bottom, tabWell.bottom + kDetailsObjectHeaderHeight) };
     const std::string titleText = (sceneContext.HasDirtySkeletalMeshEditorAssetEdit() ? "* " : "") +
         (model.title.empty() ? std::string{ "Asset Details" } : model.title);
     DrawTextA(dc, titleText.c_str(), -1, &title,
         DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     const ScopedFont bodyFont{ 11, FW_NORMAL };
     const ScopedGdiObject selectedBodyFont(dc, bodyFont.handle);
-    int y = rect.top + 30;
+    const RECT list = DetailsListRectForPanel(rect);
+    const int contentHeight = DetailsContentHeight(model);
+    const int viewportHeight = RectHeight(list);
+    const int maximum = std::max(0, contentHeight - viewportHeight);
+    const int scroll = std::clamp(sceneContext.SkeletalMeshEditorDetailsScrollOffset(), 0, maximum);
+    const bool hasScrollbar = contentHeight > viewportHeight;
+    const int rowsRight = hasScrollbar ? list.right - kTreeScrollbarWidth : list.right;
+    const int savedDc = SaveDC(dc);
+    IntersectClipRect(dc, list.left, list.top, list.right, list.bottom);
+    int y = list.top - scroll;
     for (const SkeletalMeshEditorDetailsSection& section : model.sections) {
-        if (y + 18 > rect.bottom) break;
-        RECT sectionRect{ rect.left + 8, y, rect.right - 8, y + 18 };
-        SetTextColor(dc, RGB(139, 149, 161));
-        DrawTextA(dc, section.title.c_str(), -1, &sectionRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-        y += 18;
+        RECT sectionRect{ list.left, y, rowsRight, y + kDetailsCategoryHeight };
+        GdiDrawing::DrawSharpFrame(dc, sectionRect, RGB(36, 39, 44), RGB(51, 55, 62));
+        DrawDisclosure(dc, RECT{ sectionRect.left + 4, sectionRect.top + 3,
+            sectionRect.left + 18, sectionRect.bottom - 3 }, section.expanded);
+        SetTextColor(dc, RGB(211, 217, 225));
+        RECT sectionText{ sectionRect.left + 22, sectionRect.top, sectionRect.right - 7, sectionRect.bottom };
+        DrawTextA(dc, section.title.c_str(), -1, &sectionText,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        y += kDetailsCategoryHeight;
+        if (!section.expanded) continue;
         for (const SkeletalMeshEditorDetailsField& field : section.fields) {
-            if (y + 18 > rect.bottom) return;
-            RECT label{ rect.left + 12, y, rect.left + 104, y + 18 };
-            RECT value{ rect.left + 106, y, rect.right - 8, y + 18 };
+            const int split = static_cast<int>(list.left) + std::max(
+                104, static_cast<int>(rowsRight - list.left) * 45 / 100);
+            RECT row{ list.left, y, rowsRight, y + kDetailsFieldHeight };
+            GdiDrawing::FillRectColor(dc, row, ((y - list.top + scroll) / kDetailsFieldHeight) % 2 == 0
+                ? RGB(28, 30, 34) : RGB(25, 27, 31));
+            DrawTreeWire(dc, split, row.top, split, row.bottom);
+            RECT label{ row.left + 10, row.top, split - 7, row.bottom };
+            RECT value{ split + 6, row.top + 2, row.right - 6, row.bottom - 2 };
             SetTextColor(dc, RGB(154, 164, 176));
             DrawTextA(dc, field.label.c_str(), -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-            SetTextColor(dc, RGB(211, 217, 225));
-            DrawTextA(dc, field.value.c_str(), -1, &value, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-            y += 18;
+            const bool editable = field.action != SkeletalMeshEditorDetailsAction::None;
+            if (editable) {
+                GdiDrawing::DrawSharpFrame(dc, value, RGB(20, 22, 25), RGB(67, 73, 82));
+                value.left += 6;
+                value.right -= 16;
+            }
+            SetTextColor(dc, editable ? RGB(225, 230, 236) : RGB(182, 190, 201));
+            DrawTextA(dc, field.value.c_str(), -1, &value,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            if (editable) {
+                SetTextColor(dc, RGB(132, 143, 156));
+                RECT affordance{ value.right + 3, row.top, row.right - 5, row.bottom };
+                DrawTextA(dc,
+                    field.action == SkeletalMeshEditorDetailsAction::SectionMaterial ||
+                    field.action == SkeletalMeshEditorDetailsAction::PreviewLod ? "v" : "...",
+                    -1, &affordance, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            }
+            y += kDetailsFieldHeight;
         }
+    }
+    RestoreDC(dc, savedDc);
+    if (hasScrollbar) {
+        const RECT track = ScrollbarTrackForList(list);
+        const RECT thumb = ScrollbarThumbForList(list, contentHeight, scroll);
+        GdiDrawing::DrawSharpFrame(dc, track, RGB(22, 24, 27), RGB(38, 42, 47));
+        const bool dragging = sceneContext.IsSkeletalMeshEditorDetailsScrollbarDragging();
+        GdiDrawing::DrawSharpFrame(dc, thumb,
+            dragging ? RGB(104, 116, 130) : RGB(76, 86, 98),
+            dragging ? RGB(128, 142, 158) : RGB(94, 105, 118));
     }
 }
 
@@ -387,9 +558,7 @@ void AppendSelectedJointMarker(
 
 [[nodiscard]] std::vector<kb::render::PhysicsDebugLine> BuildSkeletalPreviewLines(
     const AnimationPreviewOverlaySnapshot& overlays,
-    kb::scene::SkeletonBoneId selectedBone,
-    const EditorViewportCameraState& camera,
-    std::uint32_t viewportHeight) {
+    kb::scene::SkeletonBoneId selectedBone) {
     std::vector<kb::render::PhysicsDebugLine> output;
     output.reserve(overlays.lines.size() * 16U);
     const bool selectedBoneHasIncomingShape = selectedBone != 0U &&
@@ -413,7 +582,6 @@ void AppendSelectedJointMarker(
             AppendDebugSegment(output, line.from, line.to, line.color);
         }
     }
-    SkeletalMeshEditorSceneLabelBuilder::Append(output, overlays.labels, camera, viewportHeight);
     return output;
 }
 
@@ -445,12 +613,31 @@ void SkeletalMeshEditorPanelRenderer::Paint(
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         return;
     }
-    const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
+    const SkeletalMeshEditorPanelLayout layout = ResolvePanelLayout(content, sceneContext);
     PaintLinkedDocuments(dc, layout, sceneContext);
     PaintCommands(dc, layout, sceneContext);
     PaintAdvancedPreview(dc, layout.toolbox, sceneContext);
     PaintTree(dc, layout.skeletonTree, sceneContext);
     PaintDetails(dc, layout.assetDetails, sceneContext);
+    const COLORREF splitterColor = RGB(58, 63, 71);
+    const COLORREF activeSplitterColor = RGB(77, 143, 204);
+    GdiDrawing::FillRectColor(dc,
+        RECT{ layout.toolbox.right - 1, layout.toolbox.top, layout.toolbox.right + 1, layout.toolbox.bottom },
+        sceneContext.IsSkeletalMeshEditorToolboxWidthDragging()
+            ? activeSplitterColor
+            : splitterColor);
+    GdiDrawing::FillRectColor(dc,
+        RECT{ layout.skeletonTree.left - 1, layout.skeletonTree.top,
+            layout.skeletonTree.left + 1, layout.assetDetails.bottom },
+        sceneContext.IsSkeletalMeshEditorSkeletonTreeWidthDragging()
+            ? activeSplitterColor
+            : splitterColor);
+    GdiDrawing::FillRectColor(dc,
+        RECT{ layout.skeletonTree.left, layout.skeletonTree.bottom - 1,
+            layout.skeletonTree.right, layout.skeletonTree.bottom + 1 },
+        sceneContext.IsSkeletalMeshEditorTreeDetailsHeightDragging()
+            ? activeSplitterColor
+            : splitterColor);
     if (sceneViewport != nullptr) {
         static_cast<void>(PresentViewport(
             *sceneViewport, host, content, panel, sceneContext, renderBackendSettings));
@@ -471,7 +658,7 @@ bool SkeletalMeshEditorPanelRenderer::PresentViewport(
         return false;
     }
 
-    const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
+    const SkeletalMeshEditorPanelLayout layout = ResolvePanelLayout(content, sceneContext);
     if (layout.viewport.right <= layout.viewport.left || layout.viewport.bottom <= layout.viewport.top) {
         return false;
     }
@@ -485,9 +672,12 @@ bool SkeletalMeshEditorPanelRenderer::PresentViewport(
         sceneContext.AnimationPreviewCamera(), renderWidth, renderHeight);
     settings.viewportKey = panel.id;
     settings.editorSceneOverlaysEnabled = true;
+    const AnimationPreviewOverlaySnapshot overlays = sceneContext.AnimationPreviewOverlays();
     settings.physicsDebugLines = BuildSkeletalPreviewLines(
-        sceneContext.AnimationPreviewOverlays(), sceneContext.SelectedSkeletalMeshEditorBone(),
-        sceneContext.AnimationPreviewCamera(), renderHeight);
+        overlays, sceneContext.SelectedSkeletalMeshEditorBone());
+    SkeletalMeshEditorSceneLabelBuilder::Append(
+        settings.viewportTextLabels, overlays.labels, sceneContext.AnimationPreviewCamera(),
+        renderWidth, renderHeight, overlays.labelReferenceCameraDistance);
     settings.sceneRevision = revision;
     settings.sceneDirtyBaseRevision = revision;
     // The preview scene has its own monotonic revision. Re-synchronizing the complete 24 MB Y Bot
@@ -505,24 +695,92 @@ bool SkeletalMeshEditorPanelRenderer::PresentViewport(
 
 std::optional<SkeletalMeshEditorTreeRow> SkeletalMeshEditorPanelRenderer::TreeRowAt(
     const RECT& content, const EditorSceneContext& sceneContext, int x, int y) {
-    const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
-    if (x < layout.skeletonTree.left || x >= layout.skeletonTree.right ||
-        y < layout.skeletonTree.top + kTreeHeaderHeight || y >= layout.skeletonTree.bottom - kTreeAuxiliaryHeight) return std::nullopt;
-    const std::size_t index = static_cast<std::size_t>((y - (layout.skeletonTree.top + kTreeHeaderHeight)) / kTreeRowHeight);
+    const RECT list = TreeListRect(content, sceneContext);
+    if (x < list.left || x >= list.right || y < list.top || y >= list.bottom) {
+        return std::nullopt;
+    }
+    if (TreeMaxScroll(content, sceneContext) > 0 && x >= list.right - kTreeScrollbarWidth) {
+        return std::nullopt;
+    }
     const std::vector<SkeletalMeshEditorTreeRow> rows = sceneContext.SkeletalMeshEditorTreeRows();
+    const int scroll = std::clamp(
+        sceneContext.SkeletalMeshEditorTreeScrollOffset(), 0, TreeMaxScroll(content, sceneContext));
+    const std::size_t index = static_cast<std::size_t>(
+        (y - list.top + scroll) / kTreeRowHeight);
     return index < rows.size() ? std::optional<SkeletalMeshEditorTreeRow>{ rows[index] } : std::nullopt;
 }
 
-bool SkeletalMeshEditorPanelRenderer::IsTreeSearchAt(const RECT& content, int x, int y) noexcept {
-    const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
+std::optional<kb::scene::SkeletonBoneId> SkeletalMeshEditorPanelRenderer::TreeDisclosureAt(
+    const RECT& content, const EditorSceneContext& sceneContext, int x, int y) {
+    const std::optional<SkeletalMeshEditorTreeRow> row = TreeRowAt(content, sceneContext, x, y);
+    if (!row.has_value() || row->kind != SkeletalMeshEditorTreeItemKind::Bone || !row->hasChildren) {
+        return std::nullopt;
+    }
+    const RECT list = TreeListRect(content, sceneContext);
+    const int disclosureLeft = list.left + 10 + static_cast<int>(row->depth) * kTreeIndentWidth;
+    return x >= disclosureLeft - 3 && x < disclosureLeft + kTreeIndentWidth + 3
+        ? std::optional<kb::scene::SkeletonBoneId>{ row->boneId }
+        : std::nullopt;
+}
+
+RECT SkeletalMeshEditorPanelRenderer::TreeListRect(
+    const RECT& content, const EditorSceneContext& sceneContext) noexcept {
+    return TreeListRectForTree(ResolvePanelLayout(content, sceneContext).skeletonTree);
+}
+
+int SkeletalMeshEditorPanelRenderer::TreeMaxScroll(
+    const RECT& content, const EditorSceneContext& sceneContext) {
+    const RECT list = TreeListRect(content, sceneContext);
+    const int contentHeight =
+        static_cast<int>(sceneContext.SkeletalMeshEditorTreeRows().size()) * kTreeRowHeight;
+    return std::max(0, contentHeight - RectHeight(list));
+}
+
+RECT SkeletalMeshEditorPanelRenderer::TreeScrollbarTrack(
+    const RECT& content, const EditorSceneContext& sceneContext) noexcept {
+    return ScrollbarTrackForList(TreeListRect(content, sceneContext));
+}
+
+RECT SkeletalMeshEditorPanelRenderer::TreeScrollbarThumb(
+    const RECT& content, const EditorSceneContext& sceneContext) {
+    const RECT list = TreeListRect(content, sceneContext);
+    const int contentHeight =
+        static_cast<int>(sceneContext.SkeletalMeshEditorTreeRows().size()) * kTreeRowHeight;
+    return ScrollbarThumbForList(
+        list, contentHeight, sceneContext.SkeletalMeshEditorTreeScrollOffset());
+}
+
+int SkeletalMeshEditorPanelRenderer::TreeScrollOffsetToRevealSelection(
+    const RECT& content, const EditorSceneContext& sceneContext) {
+    const std::vector<SkeletalMeshEditorTreeRow> rows = sceneContext.SkeletalMeshEditorTreeRows();
+    const auto selected = std::ranges::find_if(rows, [](const SkeletalMeshEditorTreeRow& row) {
+        return row.selected;
+    });
+    const int maxScroll = TreeMaxScroll(content, sceneContext);
+    const int current = std::clamp(
+        sceneContext.SkeletalMeshEditorTreeScrollOffset(), 0, maxScroll);
+    if (selected == rows.end()) return current;
+    const int rowTop = static_cast<int>(std::distance(rows.begin(), selected)) * kTreeRowHeight;
+    const int rowBottom = rowTop + kTreeRowHeight;
+    const int viewportHeight = RectHeight(TreeListRect(content, sceneContext));
+    if (rowTop < current) return rowTop;
+    if (rowBottom > current + viewportHeight) {
+        return std::clamp(rowBottom - viewportHeight, 0, maxScroll);
+    }
+    return current;
+}
+
+bool SkeletalMeshEditorPanelRenderer::IsTreeSearchAt(
+    const RECT& content, const EditorSceneContext& sceneContext, int x, int y) noexcept {
+    const SkeletalMeshEditorPanelLayout layout = ResolvePanelLayout(content, sceneContext);
     const RECT search{ layout.skeletonTree.left + 8, layout.skeletonTree.top + 30,
         layout.skeletonTree.right - 8, layout.skeletonTree.top + 50 };
     return x >= search.left && x < search.right && y >= search.top && y < search.bottom;
 }
 
 std::optional<std::uint8_t> SkeletalMeshEditorPanelRenderer::AdvancedPreviewOverlayAt(
-    const RECT& content, int x, int y) noexcept {
-    const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
+    const RECT& content, const EditorSceneContext& sceneContext, int x, int y) noexcept {
+    const SkeletalMeshEditorPanelLayout layout = ResolvePanelLayout(content, sceneContext);
     if (x < layout.toolbox.left || x >= layout.toolbox.right || y < layout.toolbox.top + 32) return std::nullopt;
     const int index = (y - (layout.toolbox.top + 32)) / 20;
     return index >= 0 && index < 6 ? std::optional<std::uint8_t>{ static_cast<std::uint8_t>(index) } : std::nullopt;
@@ -530,7 +788,7 @@ std::optional<std::uint8_t> SkeletalMeshEditorPanelRenderer::AdvancedPreviewOver
 
 std::optional<kb::scene::SkeletonBoneId> SkeletalMeshEditorPanelRenderer::BoneAt(
     const RECT& content, const EditorSceneContext& sceneContext, int x, int y) noexcept {
-    const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
+    const SkeletalMeshEditorPanelLayout layout = ResolvePanelLayout(content, sceneContext);
     if (x < layout.viewport.left || x >= layout.viewport.right || y < layout.viewport.top || y >= layout.viewport.bottom) return std::nullopt;
     const AnimationPreviewOverlaySnapshot overlays = sceneContext.AnimationPreviewOverlays();
     return SkeletalMeshEditorBonePicker::Pick(
@@ -546,9 +804,71 @@ std::optional<kb::scene::SkeletonBoneId> SkeletalMeshEditorPanelRenderer::BoneAt
         static_cast<float>(y));
 }
 
+std::optional<SkeletalMeshEditorDetailsHit> SkeletalMeshEditorPanelRenderer::DetailsHitAt(
+    const RECT& content, const EditorSceneContext& sceneContext, int x, int y) {
+    const RECT list = DetailsListRect(content, sceneContext);
+    if (x < list.left || x >= list.right || y < list.top || y >= list.bottom) return std::nullopt;
+    if (DetailsMaxScroll(content, sceneContext) > 0 && x >= list.right - kTreeScrollbarWidth) {
+        return std::nullopt;
+    }
+    const SkeletalMeshEditorDetailsModel model = sceneContext.SkeletalMeshEditorDetails();
+    const int localY = y - list.top + std::clamp(
+        sceneContext.SkeletalMeshEditorDetailsScrollOffset(), 0,
+        DetailsMaxScroll(content, sceneContext));
+    int cursor = 0;
+    for (const SkeletalMeshEditorDetailsSection& section : model.sections) {
+        if (localY >= cursor && localY < cursor + kDetailsCategoryHeight) {
+            return SkeletalMeshEditorDetailsHit{
+                .kind = SkeletalMeshEditorDetailsHitKind::Section,
+                .sectionTitle = section.title,
+            };
+        }
+        cursor += kDetailsCategoryHeight;
+        if (!section.expanded) continue;
+        for (const SkeletalMeshEditorDetailsField& field : section.fields) {
+            if (localY >= cursor && localY < cursor + kDetailsFieldHeight) {
+                return field.action == SkeletalMeshEditorDetailsAction::None
+                    ? std::nullopt
+                    : std::optional<SkeletalMeshEditorDetailsHit>{ SkeletalMeshEditorDetailsHit{
+                        .kind = SkeletalMeshEditorDetailsHitKind::Field,
+                        .sectionTitle = section.title,
+                        .field = field,
+                    } };
+            }
+            cursor += kDetailsFieldHeight;
+        }
+    }
+    return std::nullopt;
+}
+
+RECT SkeletalMeshEditorPanelRenderer::DetailsListRect(
+    const RECT& content, const EditorSceneContext& sceneContext) noexcept {
+    return DetailsListRectForPanel(ResolvePanelLayout(content, sceneContext).assetDetails);
+}
+
+int SkeletalMeshEditorPanelRenderer::DetailsMaxScroll(
+    const RECT& content, const EditorSceneContext& sceneContext) {
+    const RECT list = DetailsListRect(content, sceneContext);
+    return std::max(0, DetailsContentHeight(sceneContext.SkeletalMeshEditorDetails()) - RectHeight(list));
+}
+
+RECT SkeletalMeshEditorPanelRenderer::DetailsScrollbarTrack(
+    const RECT& content, const EditorSceneContext& sceneContext) noexcept {
+    return ScrollbarTrackForList(DetailsListRect(content, sceneContext));
+}
+
+RECT SkeletalMeshEditorPanelRenderer::DetailsScrollbarThumb(
+    const RECT& content, const EditorSceneContext& sceneContext) {
+    const RECT list = DetailsListRect(content, sceneContext);
+    return ScrollbarThumbForList(
+        list,
+        DetailsContentHeight(sceneContext.SkeletalMeshEditorDetails()),
+        sceneContext.SkeletalMeshEditorDetailsScrollOffset());
+}
+
 std::optional<SkeletalAssetDocument> SkeletalMeshEditorPanelRenderer::LinkedDocumentAt(
-    const RECT& content, int x, int y) noexcept {
-    const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
+    const RECT& content, const EditorSceneContext& sceneContext, int x, int y) noexcept {
+    const SkeletalMeshEditorPanelLayout layout = ResolvePanelLayout(content, sceneContext);
     const std::array<RECT, 2U> buttons{ layout.meshDocument, layout.skeletonDocument };
     for (std::size_t index = 0U; index < buttons.size(); ++index) {
         if (x >= buttons[index].left && x < buttons[index].right &&
@@ -561,7 +881,7 @@ std::optional<SkeletalAssetDocument> SkeletalMeshEditorPanelRenderer::LinkedDocu
 
 std::optional<SkeletalAssetCommand> SkeletalMeshEditorPanelRenderer::CommandAt(
     const RECT& content, const EditorSceneContext& sceneContext, int x, int y) {
-    const SkeletalMeshEditorPanelLayout layout = SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
+    const SkeletalMeshEditorPanelLayout layout = ResolvePanelLayout(content, sceneContext);
     if (x < layout.commandBar.left || x >= layout.commandBar.right ||
         y < layout.commandBar.top || y >= layout.commandBar.bottom) return std::nullopt;
     const std::vector<CommandDescriptor> commands = BuildCommands(sceneContext);
