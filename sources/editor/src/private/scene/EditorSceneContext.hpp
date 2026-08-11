@@ -31,6 +31,7 @@
 #include "scene/SkeletalMeshEditorTreeState.hpp"
 #include "scene/SkeletalMeshEditorDetailsState.hpp"
 #include "scene/SkeletalMeshEditorDocumentState.hpp"
+#include "scene/SkeletalMeshEditorPanelResizeState.hpp"
 #include "scene/SkeletonEditorDocumentState.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
 #include "scene/material/MaterialEditorState.hpp"
@@ -497,12 +498,47 @@ public:
     void SelectAllSkeletalMeshEditorTreeSearch() noexcept;
     void ClearSkeletalMeshEditorTreeSearch();
     [[nodiscard]] std::vector<SkeletalMeshEditorTreeRow> SkeletalMeshEditorTreeRows() const;
+    [[nodiscard]] bool ToggleSkeletalMeshEditorTreeBoneExpanded(kb::scene::SkeletonBoneId boneId);
+    [[nodiscard]] int SkeletalMeshEditorTreeScrollOffset() const noexcept;
+    [[nodiscard]] bool IsSkeletalMeshEditorTreeScrollbarDragging() const noexcept;
+    [[nodiscard]] bool SetSkeletalMeshEditorTreeScrollOffset(int offset, int maxOffset) noexcept;
+    void BeginSkeletalMeshEditorTreeScrollbarDrag(int y) noexcept;
+    void DragSkeletalMeshEditorTreeScrollbar(int y, int trackTravel, int maxOffset) noexcept;
+    void EndSkeletalMeshEditorTreeScrollbarDrag() noexcept;
+    [[nodiscard]] int SkeletalMeshEditorToolboxWidth() const noexcept;
+    [[nodiscard]] int SkeletalMeshEditorSkeletonTreeWidth() const noexcept;
+    [[nodiscard]] int SkeletalMeshEditorSkeletonTreeHeight() const noexcept;
+    [[nodiscard]] bool IsSkeletalMeshEditorToolboxWidthDragging() const noexcept;
+    [[nodiscard]] bool IsSkeletalMeshEditorSkeletonTreeWidthDragging() const noexcept;
+    [[nodiscard]] bool IsSkeletalMeshEditorTreeDetailsHeightDragging() const noexcept;
+    void SetSkeletalMeshEditorToolboxWidth(int width) noexcept;
+    void SetSkeletalMeshEditorSkeletonTreeWidth(int width) noexcept;
+    void SetSkeletalMeshEditorSkeletonTreeHeight(int height) noexcept;
+    void BeginSkeletalMeshEditorToolboxWidthDrag() noexcept;
+    void BeginSkeletalMeshEditorSkeletonTreeWidthDrag() noexcept;
+    void BeginSkeletalMeshEditorTreeDetailsHeightDrag() noexcept;
+    void EndSkeletalMeshEditorPanelResizeDrag() noexcept;
     [[nodiscard]] bool SelectSkeletalMeshEditorBone(kb::scene::SkeletonBoneId boneId);
     [[nodiscard]] bool SelectSkeletalMeshEditorSocket(std::string socketName);
     [[nodiscard]] bool ClearSkeletalMeshEditorTreeSelection();
     [[nodiscard]] kb::scene::SkeletonBoneId SelectedSkeletalMeshEditorBone() const noexcept;
     [[nodiscard]] const std::string& SelectedSkeletalMeshEditorSocket() const noexcept;
     [[nodiscard]] SkeletalMeshEditorDetailsModel SkeletalMeshEditorDetails() const;
+    [[nodiscard]] bool ToggleSkeletalMeshEditorDetailsSection(std::string_view title);
+    [[nodiscard]] int SkeletalMeshEditorDetailsScrollOffset() const noexcept;
+    [[nodiscard]] bool IsSkeletalMeshEditorDetailsScrollbarDragging() const noexcept;
+    [[nodiscard]] bool SetSkeletalMeshEditorDetailsScrollOffset(int offset, int maxOffset) noexcept;
+    void BeginSkeletalMeshEditorDetailsScrollbarDrag(int y) noexcept;
+    void DragSkeletalMeshEditorDetailsScrollbar(int y, int trackTravel, int maxOffset) noexcept;
+    void EndSkeletalMeshEditorDetailsScrollbarDrag() noexcept;
+    [[nodiscard]] std::uint32_t SkeletalMeshEditorLodCount() const noexcept;
+    [[nodiscard]] std::optional<std::uint32_t> SkeletalMeshEditorForcedPreviewLod() const noexcept;
+    [[nodiscard]] bool SetSkeletalMeshEditorPreviewLod(std::optional<std::uint32_t> lodIndex);
+    [[nodiscard]] bool SetSkeletalMeshEditorLodScreenCoverage(std::uint32_t lodIndex, float coverage);
+    [[nodiscard]] bool SetSkeletalMeshEditorSectionMaterial(
+        std::uint32_t lodIndex, std::uint32_t sectionIndex, kb::assets::AssetId materialId);
+    [[nodiscard]] bool SetSkeletalMeshEditorFixedBounds(
+        std::optional<kb::scene::Vec3> center, std::optional<kb::scene::Vec3> extents);
     [[nodiscard]] const std::vector<kb::scene::SkeletalMeshMorphTarget>& SkeletalMeshEditorMorphTargets() const noexcept;
     [[nodiscard]] bool HasDirtySkeletalMeshEditorAssetEdit() const noexcept;
     [[nodiscard]] bool HasDirtyActiveSkeletalMeshEditorDocument() const noexcept;
@@ -1006,6 +1042,7 @@ private:
         kb::assets::AssetId skeletonId,
         std::uint64_t diagnosticEventId,
         kb::assets::AssetId primarySkeletonId = {});
+    [[nodiscard]] bool CommitSkeletalMeshEditorCandidate(kb::scene::SkeletalMeshAsset candidate);
     [[nodiscard]] bool PublishSkeletonEditorWorkingCopy();
     void RefreshSkeletalEditorDetails();
     [[nodiscard]] bool PublishAnimationClipEditorWorkingCopy();
@@ -1107,6 +1144,7 @@ private:
     SkeletalMeshEditorDetailsState skeletalMeshEditorDetails_;
     SkeletalMeshEditorDocumentState skeletalMeshEditorDocument_;
     SkeletonEditorDocumentState skeletonEditorDocument_;
+    SkeletalMeshEditorPanelResizeState skeletalMeshEditorPanelResize_;
     InspectorPanelState inspector_;
     MaterialEditorState materialEditor_;
     kb::assets::AssetId materialRuntimePreviewAssetId_{};

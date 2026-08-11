@@ -1310,6 +1310,17 @@ void RunMeshPipelineCoordinatesDetailSwitchGroupsWithHysteresisTest() {
     }, result);
     Require(result.commands.size() == 1U && result.commands[0].lodLevel == 1U,
         "Detail Switch did not demote after leaving its hysteresis band");
+
+    groups[0].instances[0].model = TranslationMatrix(0.0F, 0.0F, 0.0F);
+    groups[0].instances[0].detailSwitchMinimumLod = 1U;
+    groups[0].instances[0].detailSwitchMaximumLod = 1U;
+    MeshPipelineBuildResult forcedResult;
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque, .drawGroups = &groups, .resolvedMeshResource = &mesh, .camera = &camera,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, forcedResult);
+    Require(forcedResult.commands.size() == 1U && forcedResult.commands[0].lodLevel == 1U,
+        "Detail Switch minimum/maximum policy did not force the requested preview LOD");
 }
 
 void RunGpuDrivenFeatureClassifierGatesByCapabilitiesTest() {

@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -15,14 +16,29 @@
 
 namespace kb::editor {
 
+enum class SkeletalMeshEditorDetailsAction : std::uint8_t {
+    None,
+    PreviewLod,
+    BoundsMode,
+    FixedBoundsCenter,
+    FixedBoundsExtents,
+    LodScreenCoverage,
+    SectionMaterial,
+};
+
 struct SkeletalMeshEditorDetailsField {
     std::string label;
     std::string value;
+    SkeletalMeshEditorDetailsAction action = SkeletalMeshEditorDetailsAction::None;
+    std::uint32_t lodIndex = 0U;
+    std::uint32_t sectionIndex = 0U;
+    std::uint64_t assetId = 0U;
 };
 
 struct SkeletalMeshEditorDetailsSection {
     std::string title;
     std::vector<SkeletalMeshEditorDetailsField> fields;
+    bool expanded = true;
 };
 
 struct SkeletalMeshEditorDetailsModel {
@@ -82,6 +98,40 @@ public:
     [[nodiscard]] const std::vector<kb::scene::SkeletalMeshMorphTarget>& MorphTargets() const noexcept {
         return skeletonDocument_ ? emptyMorphTargets_ : mesh_.morphTargets;
     }
+
+    [[nodiscard]] bool ToggleSection(std::string_view title) {
+        const std::string key{ title };
+        if (collapsedSections_.erase(key) == 0U) collapsedSections_.insert(key);
+        cachedAssetModel_.reset();
+        cachedBoneModels_.clear();
+        scrollOffset_ = 0;
+        return true;
+    }
+
+    [[nodiscard]] bool IsSectionExpanded(std::string_view title) const {
+        return !collapsedSections_.contains(std::string{ title });
+    }
+
+    [[nodiscard]] int ScrollOffset() const noexcept { return scrollOffset_; }
+    [[nodiscard]] bool IsScrollbarDragging() const noexcept { return scrollbarDragging_; }
+    [[nodiscard]] bool SetScrollOffset(int offset, int maximum) noexcept {
+        const int clamped = std::clamp(offset, 0, std::max(0, maximum));
+        if (scrollOffset_ == clamped) return false;
+        scrollOffset_ = clamped;
+        return true;
+    }
+    void BeginScrollbarDrag(int y) noexcept {
+        scrollbarDragging_ = true;
+        scrollbarDragY_ = y;
+        scrollbarDragStartOffset_ = scrollOffset_;
+    }
+    void DragScrollbar(int y, int trackTravel, int maximum) noexcept {
+        if (!scrollbarDragging_) return;
+        const int delta = trackTravel <= 0 || maximum <= 0
+            ? 0 : ((y - scrollbarDragY_) * maximum) / trackTravel;
+        static_cast<void>(SetScrollOffset(scrollbarDragStartOffset_ + delta, maximum));
+    }
+    void EndScrollbarDrag() noexcept { scrollbarDragging_ = false; }
 
 private:
     struct BoneInfluenceStats {
@@ -204,6 +254,7 @@ private:
             model.sections.push_back({ "Validation", {
                 { "Skeleton", validation.valid ? "Valid" : validation.error },
             } });
+            ApplyExpansion(model);
             cachedAssetModel_ = model;
             return model;
         }
@@ -216,28 +267,76 @@ private:
             { "LODs", Number(mesh_.lods.size()) },
             { "Morph Targets", Number(mesh_.morphTargets.size()) },
         } });
+
+        model.sections.push_back({ "Materials", {} });
+        std::vector<SkeletalMeshEditorDetailsField>& materialFields = model.sections.back().fields;
+        for (std::size_t lodIndex = 0U; lodIndex < mesh_.lods.size(); ++lodIndex) {
+            const kb::scene::SkeletalMeshLod& lod = mesh_.lods[lodIndex];
+            for (std::size_t sectionIndex = 0U; sectionIndex < lod.sections.size(); ++sectionIndex) {
+                const kb::scene::SkeletalMeshSection& section = lod.sections[sectionIndex];
+                materialFields.push_back(SkeletalMeshEditorDetailsField{
+                    .label = "LOD " + Number(lodIndex) + " / Section " + Number(sectionIndex),
+                    .value = section.materialAssetId == 0U ? "None" : Number(section.materialAssetId),
+                    .action = SkeletalMeshEditorDetailsAction::SectionMaterial,
+                    .lodIndex = static_cast<std::uint32_t>(lodIndex),
+                    .sectionIndex = static_cast<std::uint32_t>(sectionIndex),
+                    .assetId = section.materialAssetId,
+                });
+            }
+        }
+
+        model.sections.push_back({ "LOD Picker", {
+            { "Preview LOD", "Auto", SkeletalMeshEditorDetailsAction::PreviewLod },
+            { "Number of LODs", Number(mesh_.lods.size()) },
+        } });
         for (std::size_t index = 0U; index < mesh_.lods.size(); ++index) {
             const kb::scene::SkeletalMeshLod& lod = mesh_.lods[index];
             model.sections.push_back({ "LOD " + Number(index), {
                 { "Vertices", Number(lod.vertices.size()) },
+                { "Indices", Number(lod.indices.size()) },
                 { "Triangles", Number(lod.indices.size() / 3U) },
                 { "Sections", Number(lod.sections.size()) },
                 { "Required Bones", Number(lod.requiredBones.size()) },
-                { "Min Screen Coverage", Number(lod.minScreenCoverage) },
+                { "Per-Bone Bounds", Number(lod.boneBounds.size()) },
+                { "Min Screen Coverage", Number(lod.minScreenCoverage),
+                    SkeletalMeshEditorDetailsAction::LodScreenCoverage,
+                    static_cast<std::uint32_t>(index) },
             } });
             for (std::size_t sectionIndex = 0U; sectionIndex < lod.sections.size(); ++sectionIndex) {
                 const kb::scene::SkeletalMeshSection& section = lod.sections[sectionIndex];
-                model.sections.push_back({ "LOD " + Number(index) + " Material " + Number(sectionIndex), {
-                    { "Material", Number(section.materialAssetId) },
-                    { "First Index", Number(static_cast<std::uint64_t>(section.firstIndex)) },
-                    { "Triangles", Number(static_cast<std::uint64_t>(section.indexCount / 3U)) },
-                    { "Palette Bones", Number(section.boneMap.size()) },
-                } });
+                std::vector<SkeletalMeshEditorDetailsField>& fields = model.sections.back().fields;
+                const std::string prefix = "Section " + Number(sectionIndex) + " ";
+                fields.push_back({ prefix + "Material", section.materialAssetId == 0U
+                    ? "None" : Number(section.materialAssetId),
+                    SkeletalMeshEditorDetailsAction::SectionMaterial,
+                    static_cast<std::uint32_t>(index), static_cast<std::uint32_t>(sectionIndex),
+                    section.materialAssetId });
+                fields.push_back({ prefix + "First Index", Number(static_cast<std::uint64_t>(section.firstIndex)) });
+                fields.push_back({ prefix + "Triangles", Number(static_cast<std::uint64_t>(section.indexCount / 3U)) });
+                fields.push_back({ prefix + "Palette Bones", Number(section.boneMap.size()) });
             }
         }
-        model.sections.push_back(BoundsSection(
-            mesh_.boundsMode == kb::scene::SkeletalMeshBoundsMode::Fixed ? "Bounds (Fixed)" : "Bounds (Imported Conservative)",
-            mesh_.boundsMode == kb::scene::SkeletalMeshBoundsMode::Fixed ? mesh_.fixedBounds : mesh_.conservativeBounds));
+
+        model.sections.push_back({ "Morph Targets", {
+            { "Count", Number(mesh_.morphTargets.size()) },
+        } });
+        for (const kb::scene::SkeletalMeshMorphTarget& morph : mesh_.morphTargets) {
+            model.sections.back().fields.push_back({
+                morph.name,
+                "LOD " + Number(static_cast<std::uint64_t>(morph.lodIndex)) + ", " +
+                    Number(morph.deltas.size()) + " deltas",
+            });
+        }
+        model.sections.push_back({ "Bounds", {
+            { "Mode", mesh_.boundsMode == kb::scene::SkeletalMeshBoundsMode::Fixed
+                ? "Fixed" : "Imported Conservative", SkeletalMeshEditorDetailsAction::BoundsMode },
+            { "Imported Center", Vector(mesh_.conservativeBounds.center) },
+            { "Imported Extents", Vector(mesh_.conservativeBounds.extents) },
+            { "Fixed Center", Vector(mesh_.fixedBounds.center),
+                SkeletalMeshEditorDetailsAction::FixedBoundsCenter },
+            { "Fixed Extents", Vector(mesh_.fixedBounds.extents),
+                SkeletalMeshEditorDetailsAction::FixedBoundsExtents },
+        } });
         model.sections.push_back({ "Import Settings", {
             { "Category", meshMetadata_.importCategory },
             { "Source", meshMetadata_.physicalPath.generic_string() },
@@ -250,8 +349,15 @@ private:
             { "Skeletal Mesh", meshValidation.valid ? "Valid" : meshValidation.error },
             { "Skeleton", skeletonValidation.valid ? "Valid" : skeletonValidation.error },
         } });
+        ApplyExpansion(model);
         cachedAssetModel_ = model;
         return model;
+    }
+
+    void ApplyExpansion(SkeletalMeshEditorDetailsModel& model) const {
+        for (SkeletalMeshEditorDetailsSection& section : model.sections) {
+            section.expanded = IsSectionExpanded(section.title);
+        }
     }
 
     [[nodiscard]] SkeletalMeshEditorDetailsModel BuildBone(const kb::scene::SkeletonBone& bone) const {
@@ -284,13 +390,14 @@ private:
                 : static_cast<float>(stats.totalWeight / stats.influencedVertices)) });
             fields.push_back({ "Peak Weight", Number(stats.peakWeight) });
         }
+        ApplyExpansion(model);
         cachedBoneModels_.emplace(bone.id, model);
         return model;
     }
 
     [[nodiscard]] SkeletalMeshEditorDetailsModel BuildSocket(const kb::scene::SkeletonSocket& socket) const {
         const kb::scene::SkeletonBone* bone = FindBone(socket.boneId);
-        return SkeletalMeshEditorDetailsModel{
+        SkeletalMeshEditorDetailsModel model{
             .title = "Socket: " + socket.name,
             .sections = {{ "Socket", {
                 { "Bone", bone == nullptr ? Number(socket.boneId) : bone->name },
@@ -300,6 +407,8 @@ private:
                 { "Local Scale", Vector(socket.localTransform.scale) },
             } }},
         };
+        ApplyExpansion(model);
+        return model;
     }
 
     kb::scene::SkeletalMeshAsset mesh_{};
@@ -311,6 +420,11 @@ private:
     mutable std::optional<SkeletalMeshEditorDetailsModel> cachedAssetModel_{};
     mutable std::unordered_map<kb::scene::SkeletonBoneId, SkeletalMeshEditorDetailsModel> cachedBoneModels_{};
     std::unordered_map<kb::scene::SkeletonBoneId, BoneInfluenceStats> boneInfluenceStats_{};
+    std::unordered_set<std::string> collapsedSections_{};
+    int scrollOffset_ = 0;
+    int scrollbarDragY_ = 0;
+    int scrollbarDragStartOffset_ = 0;
+    bool scrollbarDragging_ = false;
     bool hasDocument_ = false;
     bool skeletonDocument_ = false;
 };

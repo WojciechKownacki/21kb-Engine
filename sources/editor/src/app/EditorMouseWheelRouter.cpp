@@ -12,6 +12,7 @@
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/HierarchyToolbarLayout.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
 #include "scene/EditorSceneContext.hpp"
 #include "scene/EditorTerrainService.hpp"
@@ -83,6 +84,37 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
         return sceneContext_.SetHierarchyScrollOffset(
             sceneContext_.HierarchyScrollOffset() - direction * kHierarchyRowHeight * 3,
             maxOffset);
+    }
+
+    const std::optional<RECT> skeletalMeshEditorContent = EditorPanelContentResolver::Resolve(
+        DockPanelKind::SkeletalMeshEditor,
+        messageWindow_,
+        mainWindow_,
+        dockModel_,
+        floatingWindows_,
+        metrics_);
+    if (skeletalMeshEditorContent.has_value() && Contains(
+            SkeletalMeshEditorPanelRenderer::TreeListRect(
+                *skeletalMeshEditorContent, sceneContext_), x, y)) {
+        const int direction = wheelDelta > 0 ? 1 : -1;
+        const int maxOffset = SkeletalMeshEditorPanelRenderer::TreeMaxScroll(
+            *skeletalMeshEditorContent, sceneContext_);
+        static_cast<void>(sceneContext_.SetSkeletalMeshEditorTreeScrollOffset(
+            sceneContext_.SkeletalMeshEditorTreeScrollOffset() -
+                direction * SkeletalMeshEditorPanelRenderer::TreeRowHeight * 3,
+            maxOffset));
+        return true;
+    }
+    if (skeletalMeshEditorContent.has_value() && Contains(
+            SkeletalMeshEditorPanelRenderer::DetailsListRect(
+                *skeletalMeshEditorContent, sceneContext_), x, y)) {
+        const int direction = wheelDelta > 0 ? 1 : -1;
+        const int maxOffset = SkeletalMeshEditorPanelRenderer::DetailsMaxScroll(
+            *skeletalMeshEditorContent, sceneContext_);
+        static_cast<void>(sceneContext_.SetSkeletalMeshEditorDetailsScrollOffset(
+            sceneContext_.SkeletalMeshEditorDetailsScrollOffset() - direction * 22 * 3,
+            maxOffset));
+        return true;
     }
 
     const std::optional<RECT> materialEditorContent = EditorPanelContentResolver::Resolve(DockPanelKind::MaterialEditor, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);

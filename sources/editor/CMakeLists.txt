@@ -633,6 +633,7 @@ add_executable(kb_editor WIN32
     src/rendering/EditorSceneViewportPendingSubmissionBuilder.cpp
     src/rendering/EditorSceneViewportPendingPresentBatchBuilder.cpp
     src/rendering/EditorSceneViewportPendingPaintSubmitter.cpp
+    src/rendering/EditorSceneViewportTextOverlay.cpp
     src/rendering/EditorSceneViewportRegionBuilder.cpp
     src/rendering/EditorSceneViewportSessionStore.cpp
     src/rendering/EditorSurfacePainter.cpp
@@ -857,6 +858,9 @@ add_custom_command(TARGET kb_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Fonts/DejaVu-LICENSE.txt"
         "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Fonts/DejaVu-LICENSE.txt"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/third_party/jolt/Assets/Fonts/Roboto-Regular.ttf"
+        "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Fonts/Roboto-Regular.ttf"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Icons/SceneView"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Icons/SceneView/sun-solid.svg"
@@ -871,6 +875,9 @@ add_custom_command(TARGET kb_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Fonts/DejaVu-LICENSE.txt"
         "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Fonts/DejaVu-LICENSE.txt"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/third_party/jolt/Assets/Fonts/Roboto-Regular.ttf"
+        "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Fonts/Roboto-Regular.ttf"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Icons/SceneView"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Icons/SceneView/sun-solid.svg"
@@ -960,6 +967,13 @@ function(kb_apply_editor_graph_cook_defs _target)
 endfunction()
 
 kb_apply_editor_graph_cook_defs(kb_editor)
+
+# EditorSceneContext is an intentionally centralized Win32 orchestration translation unit. Its
+# generated debug object exceeds COFF's default section count once all production editor surfaces
+# are enabled; /bigobj changes only the object-file index width and has no runtime cost.
+if(MSVC)
+    set_source_files_properties(src/scene/EditorSceneContext.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
+endif()
 
 kb_target_copy_bgfx_runtime_shaders(kb_editor)
 kb_apply_quality_gates(kb_editor)
