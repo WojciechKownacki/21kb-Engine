@@ -1253,7 +1253,11 @@ struct StandaloneProjectRuntimeConfig {
         .spatial = true,
         .autoplay = true,
         .enabled = true};
-    kb::scene::SetAudioSourceOutputBus(audioSource, "World");
+    if (!kb::scene::SetAudioSourceOutputBus(audioSource, "World")) {
+        std::fprintf(stderr,
+            "kb_standalone_player: camera runtime audio bus is invalid\n");
+        return false;
+    }
     authoringScene.Components().AudioSources().Set(
         scriptedMesh.Entity(), audioSource);
     if (!kb::scene::SceneDocumentService::Save(

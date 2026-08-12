@@ -243,6 +243,75 @@ private:
     std::thread thread_;
 };
 
+[[nodiscard]] double MeasureSpatialOutputEnergy(
+    const std::filesystem::path& clipPath,
+    float sourceDistance) {
+    kb::audio_miniaudio::MiniaudioEngine engine;
+    engine.Initialize(true);
+    Require(engine.Status() == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
+        "Spatial attenuation probe did not create its offline engine");
+
+    kb::scene::Scene scene;
+    RegisterClip(scene, 8001U, clipPath);
+    const kb::scene::SceneObject listener = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Attenuation Listener",
+        .transform = TransformAt(0.0F),
+    });
+    scene.Components().AudioListeners().Set(listener.Entity(), kb::scene::AudioListenerComponent{
+        .primary = true,
+    });
+    const kb::scene::SceneObject source = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Attenuation Source",
+        .transform = TransformAt(sourceDistance),
+    });
+    scene.Components().AudioSources().Set(source.Entity(), kb::scene::AudioSourceComponent{
+        .clipAssetId = 8001U,
+        .volume = 1.0F,
+        .loop = true,
+        .spatial = true,
+        .autoplay = true,
+        .spatialBlend = 1.0F,
+        .attenuationModel = kb::audio::AudioAttenuationModel::Inverse,
+        .minDistance = 2.0F,
+        .maxDistance = 32.0F,
+        .rolloff = 1.0F,
+        .dopplerFactor = 0.0F,
+    });
+
+    kb::scene::SceneSystemContext context{ scene, 1.0F / 60.0F };
+    kb::audio_miniaudio::MiniaudioListenerSynchronizer listenerSynchronizer;
+    Require(listenerSynchronizer.Sync(engine.Native(), context).active,
+        "Spatial attenuation probe did not activate its scene listener");
+    kb::audio_miniaudio::MiniaudioClipResolver resolver;
+    kb::audio_miniaudio::MiniaudioBusRegistry buses;
+    kb::audio_miniaudio::MiniaudioSourceRegistry sources;
+    sources.Sync(engine.Native(), context, resolver, buses, nullptr, {}, true);
+    Require(sources.IsSourcePlaying(scene, source.Entity(), true).playing,
+        "Spatial attenuation probe did not autoplay its scene source");
+
+    std::array<float, 4096U * 2U> output{};
+    ma_uint64 framesRead = 0U;
+    const ma_result readResult = ma_engine_read_pcm_frames(
+        &engine.Native(), output.data(), output.size() / 2U, &framesRead);
+    Require((readResult == MA_SUCCESS || readResult == MA_AT_END) && framesRead > 0U,
+        "Spatial attenuation probe could not render output frames");
+    double energy = 0.0;
+    for (std::size_t sample = 0U; sample < static_cast<std::size_t>(framesRead) * 2U; ++sample) {
+        energy += std::abs(static_cast<double>(output[sample]));
+    }
+    return energy;
+}
+
+void RunSpatialDistanceAttenuationOutputTest() {
+    const std::filesystem::path clipPath = FixturePath(FixtureFor(".wav"));
+    const double nearEnergy = MeasureSpatialOutputEnergy(clipPath, 2.0F);
+    const double farEnergy = MeasureSpatialOutputEnergy(clipPath, 32.0F);
+    Require(nearEnergy > 1.0,
+        "Spatial attenuation probe did not render audible near-field output");
+    Require(farEnergy > 0.0 && farEnergy < nearEnergy * 0.12,
+        "Spatial attenuation did not reduce far-field output energy");
+}
+
 void RunAdvertisedFormatDecodeTest() {
     Require(kb::audio::kSupportedAudioClipExtensions.size() == kAudioFixtures.size(),
         "Advertised audio format count diverged from real decode fixtures");
@@ -2076,6 +2145,7 @@ int RunTests(int argc, char** argv) {
     }
     if (filter.empty() || filter == "sound") {
         RunSoundStateTest(clipPath);
+        RunSpatialDistanceAttenuationOutputTest();
     }
     if (filter.empty() || filter == "voice" || filter == "resolver") {
         RunVoiceStateTest(clipPath);
