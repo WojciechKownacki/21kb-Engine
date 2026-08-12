@@ -430,16 +430,6 @@ void AddMarker(
             .priority = 100,
             .enabled = true,
         });
-        scene.Components().AudioSources().Set(ship.Entity(), kb::scene::AudioSourceComponent{
-            .clipAssetId = engineClipId.value,
-            .volume = 0.14F,
-            .pitch = 1.0F,
-            .loop = true,
-            .spatial = false,
-            .autoplay = true,
-            .spatialBlend = 0.0F,
-        });
-
         kb::scene::SceneObjectDesc shipBodyDesc{ .name = "Ship Body", .parent = ship };
         shipBodyDesc.transform.localScale = kb::scene::Vec3{ 1.15F, 0.5F, 1.8F };
         const kb::scene::SceneObject shipBody = scene.Entities().CreateObject(shipBodyDesc);
@@ -487,6 +477,7 @@ void AddMarker(
             .spatial = true,
             .autoplay = true,
             .spatialBlend = 1.0F,
+            .attenuationModel = kb::audio::AudioAttenuationModel::Linear,
             .minDistance = 2.0F,
             .maxDistance = 32.0F,
             .rolloff = 1.0F,
