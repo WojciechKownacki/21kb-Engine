@@ -6,8 +6,10 @@
 
 #include <charconv>
 #include <cmath>
-#include <limits>
 #include <cstdint>
+#include <iomanip>
+#include <limits>
+#include <locale>
 #include <span>
 #include <sstream>
 #include <string>
@@ -18,6 +20,9 @@
 
 namespace kb::audio {
 namespace {
+
+inline constexpr std::string_view kFormatKeyword = "kbmixer";
+inline constexpr std::string_view kFormatHeader = "kbmixer 1\n";
 
 [[nodiscard]] std::string_view Trim(std::string_view text) noexcept {
     while (!text.empty() && (text.front() == ' ' || text.front() == '\t' || text.front() == '\r')) {
@@ -136,21 +141,41 @@ namespace {
     return true; // unknown keyword - forward compatible, ignored rather than a hard parse failure.
 }
 
+[[nodiscard]] bool IsAssetRecord(std::string_view keyword) noexcept {
+    return keyword == "bus" || keyword == "snapshot" || keyword == "snapshotVolume";
+}
+
 [[nodiscard]] std::optional<AudioMixerAsset> ParseAsset(std::string_view text) {
     AudioMixerAsset asset{};
     std::istringstream input{ std::string{ text } };
     std::string line;
+    bool sawContent = false;
+    bool sawHeader = false;
+    bool sawAssetRecord = false;
     while (std::getline(input, line)) {
         const std::string_view content = Trim(StripComment(line));
         if (content.empty()) {
             continue;
         }
-        const std::size_t separator = content.find(' ');
+        const std::size_t separator = content.find_first_of(" \t");
         const std::string_view keyword = separator == std::string_view::npos ? content : content.substr(0U, separator);
         const std::string_view rest = separator == std::string_view::npos ? std::string_view{} : Trim(content.substr(separator + 1U));
+        if (keyword == kFormatKeyword) {
+            if (sawContent || rest != "1") {
+                return std::nullopt;
+            }
+            sawContent = true;
+            sawHeader = true;
+            continue;
+        }
+        sawContent = true;
+        sawAssetRecord = sawAssetRecord || IsAssetRecord(keyword);
         if (!ApplyRecord(keyword, rest, asset)) {
             return std::nullopt;
         }
+    }
+    if (!sawHeader && !sawAssetRecord) {
+        return std::nullopt;
     }
     if (!ValidateAudioMixerAsset(asset).empty()) {
         return std::nullopt;
@@ -159,6 +184,8 @@ namespace {
 }
 
 void WriteAsset(std::ostream& output, const AudioMixerAsset& asset) {
+    output << kFormatHeader;
+    output << std::setprecision(std::numeric_limits<float>::max_digits10);
     for (const AudioMixerBus& bus : asset.buses) {
         output << "bus " << bus.name << ' ' << ParentToToken(bus.parentBus) << ' ' << bus.volume << ' ' << (bus.mute ? 1 : 0) << '\n';
     }
@@ -245,6 +272,7 @@ bool AudioMixerAssetIO::Save(const std::filesystem::path& path, const AudioMixer
         return false;
     }
     std::ostringstream output;
+    output.imbue(std::locale::classic());
     WriteAsset(output, asset);
     const std::string text = output.str();
     return kb::scene::SceneAssetBinaryIO::WriteBytesAtomically(

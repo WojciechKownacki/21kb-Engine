@@ -1,10 +1,17 @@
 #include "EditorTestSuites.hpp"
 
-int main() {
+#include <string_view>
+
+int main(int argumentCount, char** arguments) {
+    if (argumentCount == 2 && std::string_view{ arguments[1] } == "audio-mixer") {
+        kb::editor::tests::RunEditorAudioMixerAuthoringTests();
+        return 0;
+    }
     kb::editor::tests::RunEditorCommandStackTests();
     kb::editor::tests::RunEditorPlayModeSceneSessionTests();
     kb::editor::tests::RunEditorHierarchyTests();
     kb::editor::tests::RunEditorAssetBrowserTests();
+    kb::editor::tests::RunEditorAudioMixerAuthoringTests();
     kb::editor::tests::RunEditorViewportPreviewTests();
     kb::editor::tests::RunEditorMaterialGraphCanvasTests();
     kb::editor::tests::RunEditorMaterialGraphCookServiceTests();
