@@ -152,9 +152,13 @@ void MiniaudioSourceRegistry::SyncSource(
         return;
     }
 
-    const std::filesystem::path path = clipResolver.Resolve(scene, source->clipAssetId);
-    if (path.empty()) {
-        RemoveSound(entity.Id());
+    const MiniaudioClipResolver::Resolution resolution = clipResolver.Resolve(scene, source->clipAssetId);
+    if (!resolution.Succeeded()) {
+        // A changed asset that fails decode preflight is a rejected replacement,
+        // not removal of the last committed native source.
+        if (resolution.status != MiniaudioClipResolver::ResolutionStatus::DecodeRejected) {
+            RemoveSound(entity.Id());
+        }
         return;
     }
 
@@ -180,12 +184,13 @@ void MiniaudioSourceRegistry::SyncSource(
 
     const SoundSignature signature{
         .clipAssetId = source->clipAssetId,
-        .path = path,
+        .clipIdentity = resolution.clip.identity,
         .busName = busName,
         .busGeneration = busRegistry.Generation(),
         .spatial = source->spatial,
     };
-    SoundRecord* record = EnsureSound(engine, entity.Id(), signature, *source, transform, velocity, route.group);
+    SoundRecord* record = EnsureSound(
+        engine, entity.Id(), signature, resolution.clip, *source, transform, velocity, route.group);
     if (record == nullptr || record->sound == nullptr || !record->sound->IsInitialized()) {
         return;
     }
@@ -209,6 +214,7 @@ MiniaudioSourceRegistry::SoundRecord* MiniaudioSourceRegistry::EnsureSound(
     ma_engine& engine,
     std::uint64_t entityId,
     const SoundSignature& signature,
+    const ResolvedAudioClip& clip,
     const kb::scene::AudioSourceComponent& source,
     const kb::scene::TransformComponent& transform,
     const kb::scene::Vec3& velocity,
@@ -227,7 +233,8 @@ MiniaudioSourceRegistry::SoundRecord* MiniaudioSourceRegistry::EnsureSound(
     bool hasPreviousPosition = false;
     if (!isNew) {
         playbackState = iterator->second.playbackState;
-        const bool sameClip = iterator->second.signature.clipAssetId == signature.clipAssetId && iterator->second.signature.path == signature.path;
+        const bool sameClip = iterator->second.signature.clipAssetId == signature.clipAssetId
+            && iterator->second.signature.clipIdentity == signature.clipIdentity;
         if (sameClip && playbackState != SoundRecord::PlaybackState::Stopped) {
             playbackFrame = iterator->second.sound != nullptr
                 ? iterator->second.sound->PlaybackFrame()
@@ -238,7 +245,7 @@ MiniaudioSourceRegistry::SoundRecord* MiniaudioSourceRegistry::EnsureSound(
     }
 
     auto sound = std::make_unique<MiniaudioSound>();
-    if (sound->InitializeFromFile(engine, signature.path, signature.spatial, group, playbackFrame) != MA_SUCCESS) {
+    if (sound->Initialize(engine, clip, signature.spatial, group, playbackFrame) != MA_SUCCESS) {
         return nullptr;
     }
     const MiniaudioSoundSettings settings = ToSoundSettings(source, transform, velocity);
@@ -272,7 +279,7 @@ MiniaudioSourceRegistry::SoundRecord* MiniaudioSourceRegistry::EnsureSound(
 void MiniaudioSourceRegistry::SwapSoundRecords(SoundRecord& first, SoundRecord& second) noexcept {
     using std::swap;
     swap(first.signature.clipAssetId, second.signature.clipAssetId);
-    first.signature.path.swap(second.signature.path);
+    first.signature.clipIdentity.swap(second.signature.clipIdentity);
     first.signature.busName.swap(second.signature.busName);
     swap(first.signature.busGeneration, second.signature.busGeneration);
     swap(first.signature.spatial, second.signature.spatial);
@@ -324,8 +331,8 @@ kb::audio::AudioSourceControlResult MiniaudioSourceRegistry::PlaySource(
         return validation;
     }
     const kb::scene::AudioSourceComponent& source = *scene.Components().AudioSources().TryGet(entity);
-    const std::filesystem::path path = clipResolver.Resolve(scene, source.clipAssetId);
-    if (path.empty()) {
+    const MiniaudioClipResolver::Resolution resolution = clipResolver.Resolve(scene, source.clipAssetId);
+    if (!resolution.Succeeded()) {
         return { .status = kb::audio::AudioSourceControlStatus::ClipUnavailable };
     }
     const std::string busName{ kb::scene::AudioSourceOutputBus(source) };
@@ -339,12 +346,13 @@ kb::audio::AudioSourceControlResult MiniaudioSourceRegistry::PlaySource(
     }
     const SoundSignature signature{
         .clipAssetId = source.clipAssetId,
-        .path = path,
+        .clipIdentity = resolution.clip.identity,
         .busName = busName,
         .busGeneration = busRegistry.Generation(),
         .spatial = source.spatial,
     };
-    SoundRecord* record = EnsureSound(engine, entity.Id(), signature, source, *transform, {}, route.group);
+    SoundRecord* record = EnsureSound(
+        engine, entity.Id(), signature, resolution.clip, source, *transform, {}, route.group);
     if (record == nullptr || record->sound == nullptr) {
         return { .status = kb::audio::AudioSourceControlStatus::SoundInitializationFailed };
     }

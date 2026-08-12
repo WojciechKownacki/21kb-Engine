@@ -8,6 +8,8 @@ add_library(kb_audio_miniaudio_plugin ${KB_AUDIO_MINIAUDIO_PLUGIN_LIBRARY_TYPE}
     MiniaudioModule.cpp
     MiniaudioSceneSystem.hpp
     MiniaudioSceneSystem.cpp
+    assets/MiniaudioEncodingFormat.hpp
+    assets/ResolvedAudioClip.hpp
     assets/MiniaudioClipResolver.hpp
     assets/MiniaudioClipResolver.cpp
     playback/MiniaudioVoicePool.hpp
@@ -51,6 +53,8 @@ kb_apply_quality_gates(kb_audio_miniaudio_plugin)
 if(BUILD_TESTING)
     add_executable(kb_audio_runtime_tests
         tests/AudioRuntimeTests.cpp
+        assets/MiniaudioEncodingFormat.hpp
+        assets/ResolvedAudioClip.hpp
         assets/MiniaudioClipResolver.cpp
         playback/MiniaudioVoicePool.cpp
         runtime/MiniaudioEngine.cpp
@@ -70,6 +74,23 @@ if(BUILD_TESTING)
     target_compile_definitions(kb_audio_runtime_tests
         PRIVATE
             KB_AUDIO_MINIAUDIO_TESTING
+            KB_AUDIO_RUNTIME_TEST_ASSET_DIR="$<TARGET_FILE_DIR:kb_audio_runtime_tests>/assets"
+    )
+
+    set(KB_AUDIO_RUNTIME_TEST_ASSETS
+        tests/assets/tone.wav
+        tests/assets/tone.flac
+        tests/assets/tone.mp3
+    )
+    set_source_files_properties(${KB_AUDIO_RUNTIME_TEST_ASSETS} PROPERTIES HEADER_FILE_ONLY TRUE)
+    target_sources(kb_audio_runtime_tests PRIVATE ${KB_AUDIO_RUNTIME_TEST_ASSETS})
+    add_custom_command(TARGET kb_audio_runtime_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:kb_audio_runtime_tests>/assets"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${KB_AUDIO_RUNTIME_TEST_ASSETS}
+            "$<TARGET_FILE_DIR:kb_audio_runtime_tests>/assets"
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        VERBATIM
     )
 
     target_link_libraries(kb_audio_runtime_tests

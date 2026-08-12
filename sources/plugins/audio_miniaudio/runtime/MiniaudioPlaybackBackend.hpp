@@ -60,13 +60,25 @@ public:
         std::size_t sourceSounds = 0U;
         std::size_t voices = 0U;
         std::size_t buses = 0U;
+        std::size_t decoders = 0U;
+        std::size_t encodedPayloads = 0U;
     };
 
     [[nodiscard]] kb::audio::AudioDeviceStatus ReinitializeForTesting(kb::scene::Scene& scene, bool forceNoDevice) noexcept;
     [[nodiscard]] kb::audio::AudioPlayResult PlayOneShotForTesting(kb::scene::Scene& scene, const kb::audio::AudioPlayDesc& desc);
     [[nodiscard]] kb::audio::AudioSourceControlResult PlaySourceForTesting(kb::scene::Scene& scene, kb::scene::SceneEntity entity);
+    [[nodiscard]] kb::audio::AudioSourceControlResult IsSourcePlayingForTesting(
+        kb::scene::Scene& scene,
+        kb::scene::SceneEntity entity);
     [[nodiscard]] ResourceStateForTesting ResourcesForTesting() const noexcept;
     [[nodiscard]] bool StopPlaybackDeviceForTesting() noexcept;
+    struct PumpResultForTesting final {
+        std::uint64_t frames = 0U;
+        double energy = 0.0;
+    };
+    [[nodiscard]] PumpResultForTesting PumpFramesForTesting(std::uint32_t frameCount);
+    [[nodiscard]] float VoicePlaybackSecondsForTesting(std::uint64_t voiceId) noexcept;
+    [[nodiscard]] bool VoiceUsesResourceManagerStreamForTesting(std::uint64_t voiceId) noexcept;
 #endif
 
 private:
