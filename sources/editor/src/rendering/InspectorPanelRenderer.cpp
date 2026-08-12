@@ -2,6 +2,7 @@
 
 #include "rendering/MaterialPreviewAppearanceResolver.hpp"
 #include "rendering/MaterialPreviewTextureAverageColor.hpp"
+#include "rendering/InspectorAudioMixerAssetView.hpp"
 #include "rendering/InspectorPanelSectionRows.hpp"
 #include "rendering/EditorMaterialThumbnailService.hpp"
 
@@ -1394,6 +1395,16 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, EditorSceneConte
         }
         if (IsMaterialDocument(*metadata)) {
             PaintMaterialAsset(dc, content, theme, sceneContext, *metadata);
+            return;
+        }
+        if (InspectorAudioMixerAssetView::Supports(*metadata)) {
+            const kb::assets::AssetHandle<kb::audio::AudioMixerAsset> mixer =
+                InspectorAudioMixerAssetView::LoadCached(manager, metadata->id);
+            if (mixer.IsLoaded()) {
+                InspectorAudioMixerAssetView::Paint(dc, content, theme, inspector, *metadata, *mixer);
+            } else {
+                DrawEmpty(dc, content, theme);
+            }
             return;
         }
 
@@ -3106,6 +3117,15 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         height += MaterialPreviewSectionHeight(inspector, MaterialPreviewTelemetryFor(sceneContext, metadata), MaterialDebugChannelRowsFor(sceneContext, metadata).size());
         return height;
     }
+    if (InspectorAudioMixerAssetView::Supports(metadata)) {
+        kb::assets::AssetManager& manager = const_cast<kb::assets::AssetManager&>(
+            sceneContext.Scene().Assets().Manager());
+        const kb::assets::AssetHandle<kb::audio::AudioMixerAsset> mixer =
+            InspectorAudioMixerAssetView::LoadCached(manager, metadata.id);
+        return mixer.IsLoaded()
+            ? InspectorAudioMixerAssetView::ContentHeight(inspector, *mixer)
+            : height;
+    }
 
     if (EditorTexturePreviewService::IsTextureAsset(metadata)) {
         const EditorTexturePreviewImage* image = EditorTexturePreviewService::PreviewFor(metadata);
@@ -4286,6 +4306,23 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                 return hit;
             }
             return {};
+        }
+        if (metadata != nullptr && InspectorAudioMixerAssetView::Supports(*metadata)) {
+            kb::assets::AssetManager& mutableManager = const_cast<kb::assets::AssetManager&>(manager);
+            const kb::assets::AssetHandle<kb::audio::AudioMixerAsset> mixer =
+                InspectorAudioMixerAssetView::LoadCached(mutableManager, metadata->id);
+            if (!mixer.IsLoaded()) {
+                return {};
+            }
+            const InspectorAudioMixerAssetHit mixerHit =
+                InspectorAudioMixerAssetView::HitTest(viewport, state, *mixer, x, scrolledY);
+            return InspectorPanelRenderer::Hit{
+                .kind = mixerHit.kind,
+                .section = mixerHit.section,
+                .property = mixerHit.property,
+                .index = mixerHit.index,
+                .rect = mixerHit.rect,
+            };
         }
         if (metadata != nullptr) {
             if (EditorTexturePreviewService::IsTextureAsset(*metadata)) {

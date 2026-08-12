@@ -6,6 +6,7 @@
 #include "engine/scene/SceneAssets.hpp"
 
 #include "inspection/InspectorCameraTextBuilder.hpp"
+#include "inspection/InspectorAudioMixerAssetModel.hpp"
 #include "inspection/InspectorAudioTextBuilder.hpp"
 #include "inspection/InspectorColliderTextBuilder.hpp"
 #include "inspection/InspectorEntitySummaryTextBuilder.hpp"
@@ -14,6 +15,7 @@
 #include "inspection/InspectorMeshRendererTextBuilder.hpp"
 #include "inspection/InspectorMultiSelectionTextBuilder.hpp"
 #include "inspection/InspectorRigidbodyTextBuilder.hpp"
+#include "rendering/InspectorAudioMixerAssetView.hpp"
 
 #include <array>
 #include <cstdio>
@@ -137,6 +139,17 @@ void AppendMaterialInspectorText(std::ostringstream& text, const EditorSceneCont
              << "Loaded: " << (manager.IsLoaded(metadata->id) ? "true" : "false");
         if (metadata->type == "RenderMaterial") {
             AppendMaterialInspectorText(text, sceneContext, metadata->id);
+        }
+        if (InspectorAudioMixerAssetView::Supports(*metadata)) {
+            kb::assets::AssetManager& mutableManager = const_cast<kb::assets::AssetManager&>(manager);
+            const kb::assets::AssetHandle<kb::audio::AudioMixerAsset> mixer =
+                InspectorAudioMixerAssetView::LoadCached(mutableManager, metadata->id);
+            text << '\n';
+            if (mixer.IsLoaded()) {
+                text << InspectorAudioMixerAssetModel{ *mixer }.Text();
+            } else {
+                text << "Audio Mixer: failed to load" << '\n';
+            }
         }
         return text.str();
     }
