@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/ScenePrefab.hpp"
 
 #include <cstdint>
@@ -32,13 +33,17 @@ struct SceneDocument {
     // v29: Animator pose update-rate policy persists.
     // v30: MotionSkeletonRule per-entity pose rule persists.
     // v31: AudioListener priority and local-user binding persist.
-    static constexpr std::uint32_t CurrentFileVersion = 31U;
+    // v32: authored scene-global audio mixer, snapshot, and occlusion settings persist.
+    static constexpr std::uint32_t CurrentFileVersion = 32U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;
     std::string name = "Main";
     std::string worldType = "Editor";
     std::vector<std::string> tagDefinitions{ "Player", "Enemy", "Monster", "AI", "NPC", "Collision" };
+    std::uint64_t audioMixerAssetId = 0U;
+    std::string audioMixerSnapshot;
+    AudioOcclusionSettings audioOcclusionSettings{};
     ScenePrefab worldPrefab;
 };
 

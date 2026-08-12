@@ -8,6 +8,7 @@
 #include "scene/asset/io/SceneAssetIntegrity.hpp"
 #include "scene/asset/io/SceneAssetMetaWriter.hpp"
 #include "scene/asset/io/SceneAssetPrimitiveCodec.hpp"
+#include "scene/document/SceneDocumentAudioValidation.hpp"
 #include "scene/prefab/ScenePrefabValidator.hpp"
 
 #include <algorithm>
@@ -18,10 +19,13 @@ namespace kb::scene {
 namespace {
 
 using SceneAssetBinaryIO::WriteBytesAtomically;
+using SceneAssetBinaryIO::WriteBool;
+using SceneAssetBinaryIO::WriteFloat;
 using SceneAssetBinaryIO::WriteRaw;
 using SceneAssetBinaryIO::WriteString;
 using SceneAssetBinaryIO::WriteUInt8;
 using SceneAssetBinaryIO::WriteUInt32;
+using SceneAssetBinaryIO::WriteUInt64;
 
 [[nodiscard]] std::filesystem::path MetaPathFor(const std::filesystem::path& scenePath) {
     std::filesystem::path metaPath = scenePath;
@@ -81,10 +85,11 @@ void AddDependency(std::vector<SceneAssetDependency>& dependencies, std::set<std
     });
 }
 
-[[nodiscard]] std::vector<SceneAssetDependency> CollectDependencies(const ScenePrefab& prefab) {
+[[nodiscard]] std::vector<SceneAssetDependency> CollectDependencies(const SceneDocument& scene) {
     std::vector<SceneAssetDependency> dependencies;
     std::set<std::uint64_t> seen;
-    for (const ScenePrefabNodeDesc& node : prefab.Nodes()) {
+    AddDependency(dependencies, seen, scene.audioMixerAssetId, "audioMixer");
+    for (const ScenePrefabNodeDesc& node : scene.worldPrefab.Nodes()) {
         if (node.components.meshRenderer.has_value()) {
             AddDependency(dependencies, seen, node.components.meshRenderer->meshAssetId, "mesh");
             AddDependency(dependencies, seen, node.components.meshRenderer->materialAssetId, "material");
@@ -113,6 +118,7 @@ void AddDependency(std::vector<SceneAssetDependency>& dependencies, std::set<std
     return !scene.name.empty() &&
         !scene.guid.empty() &&
         scene.worldPrefab.NodeCount() <= SceneAssetFormat::MaxNodeCount &&
+        IsSceneDocumentAudioConfigurationValid(scene) &&
         ScenePrefabValidator::IsValid(scene.worldPrefab);
 }
 
@@ -133,6 +139,13 @@ void AddDependency(std::vector<SceneAssetDependency>& dependencies, std::set<std
     for (const ScenePrefabNodeDesc& node : scene.worldPrefab.Nodes()) {
         WriteNode(output, node);
     }
+    WriteUInt64(output, scene.audioMixerAssetId);
+    WriteString(output, scene.audioMixerSnapshot);
+    WriteBool(output, scene.audioOcclusionSettings.enabled);
+    WriteFloat(output, scene.audioOcclusionSettings.occludedVolumeScale);
+    WriteFloat(output, scene.audioOcclusionSettings.maxDistance);
+    WriteUInt32(output, scene.audioOcclusionSettings.layerMask);
+    WriteUInt32(output, scene.audioOcclusionSettings.maxRaycastsPerTick);
     return output;
 }
 
@@ -160,7 +173,7 @@ bool SceneAssetWriter::Write(const std::filesystem::path& path, const SceneDocum
         .contentChecksumCrc32 = integrity.contentChecksumCrc32,
         .rootCount = RootCount(scene.worldPrefab),
         .nodeCount = static_cast<std::uint32_t>(scene.worldPrefab.NodeCount()),
-        .dependencies = CollectDependencies(scene.worldPrefab),
+        .dependencies = CollectDependencies(scene),
     };
     return SceneAssetMetaWriter::Write(MetaPathFor(path), meta);
 }

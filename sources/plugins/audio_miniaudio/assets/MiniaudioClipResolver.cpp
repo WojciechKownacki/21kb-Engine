@@ -4,6 +4,8 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/ImportedAsset.hpp"
+#include "engine/assets/AssetImportCatalog.hpp"
+#include "engine/audio/AudioClipFormats.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 
@@ -21,11 +23,12 @@ namespace {
         return {};
     }
 
-    const std::filesystem::path extension = imported->sourceExtension.empty()
-        ? std::filesystem::path{ ".wav" }
-        : std::filesystem::path{ imported->sourceExtension };
+    const std::string_view extension = kb::audio::CanonicalAudioClipExtension(imported->sourceExtension);
+    if (extension.empty()) {
+        return {};
+    }
     const std::filesystem::path cacheRoot = std::filesystem::temp_directory_path() / "21kb_audio_miniaudio";
-    const std::filesystem::path resolved = cacheRoot / (kb::assets::ToString(metadata.id) + "_" + std::to_string(metadata.contentHash) + extension.string());
+    const std::filesystem::path resolved = cacheRoot / (kb::assets::ToString(metadata.id) + "_" + std::to_string(metadata.contentHash) + std::string{ extension });
 
     std::error_code error;
     std::filesystem::create_directories(cacheRoot, error);
@@ -76,10 +79,20 @@ std::filesystem::path MiniaudioClipResolver::Resolve(kb::scene::Scene& scene, st
         return {};
     }
 
-    if (metadata->type == "ImportedAsset" && metadata->importCategory == "Audio") {
+    const std::filesystem::path authoredPath = metadata->physicalPath.empty()
+        ? metadata->virtualPath
+        : metadata->physicalPath;
+    if (kb::assets::AssetImportCatalog::IsEngineAssetExtension(authoredPath.extension())) {
+        if (metadata->type != "ImportedAsset" || metadata->importCategory != "Audio") {
+            return {};
+        }
         return ResolveImportedAudio(scene, *metadata);
     }
 
+    if (metadata->type != "AudioClip" || !metadata->importCategory.empty()
+        || !kb::audio::IsSupportedAudioClipExtension(authoredPath.extension().string())) {
+        return {};
+    }
     return ResolveMountedAudio(scene, *metadata);
 }
 

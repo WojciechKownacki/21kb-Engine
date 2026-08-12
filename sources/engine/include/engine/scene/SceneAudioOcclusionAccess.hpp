@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 
 namespace kb::scene {
@@ -27,6 +29,29 @@ struct AudioOcclusionSettings {
     std::uint32_t layerMask = 0xFFFFFFFFU;
     std::uint32_t maxRaycastsPerTick = 8U;
 };
+
+inline constexpr std::uint32_t kMaxAudioOcclusionRaycastsPerTick = 4096U;
+
+[[nodiscard]] inline bool IsAudioOcclusionSettingsValid(const AudioOcclusionSettings& settings) noexcept {
+    return std::isfinite(settings.occludedVolumeScale)
+        && settings.occludedVolumeScale >= 0.0F
+        && settings.occludedVolumeScale <= 1.0F
+        && std::isfinite(settings.maxDistance)
+        && settings.maxDistance >= 0.0F
+        && settings.maxRaycastsPerTick <= kMaxAudioOcclusionRaycastsPerTick;
+}
+
+[[nodiscard]] inline AudioOcclusionSettings NormalizeAudioOcclusionSettings(AudioOcclusionSettings settings) noexcept {
+    const AudioOcclusionSettings defaults{};
+    settings.occludedVolumeScale = std::isfinite(settings.occludedVolumeScale)
+        ? std::clamp(settings.occludedVolumeScale, 0.0F, 1.0F)
+        : defaults.occludedVolumeScale;
+    settings.maxDistance = std::isfinite(settings.maxDistance)
+        ? std::max(settings.maxDistance, 0.0F)
+        : defaults.maxDistance;
+    settings.maxRaycastsPerTick = std::min(settings.maxRaycastsPerTick, kMaxAudioOcclusionRaycastsPerTick);
+    return settings;
+}
 
 // Per-tick production telemetry published by the active audio backend. It makes the hard
 // cost cap and actual collider hits observable without exposing plugin-private objects or

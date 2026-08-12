@@ -1,6 +1,7 @@
 #include "engine/scene/Scene.hpp"
 
 #include "engine/audio/AudioClipAssetLoader.hpp"
+#include "engine/audio/AudioMixerAsset.hpp"
 #include "engine/audio/AudioMixerAssetLoader.hpp"
 #include "engine/script/ScriptAssetLoader.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
@@ -38,6 +39,7 @@
 
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <memory>
 
 namespace kb::scene {
@@ -280,15 +282,19 @@ const std::string& SceneAudioMixerAccess::ActiveSnapshot(const Scene& scene) noe
     return SceneAccess::State(scene).audioMixerSnapshotName;
 }
 
-void SceneAudioMixerAccess::SetBusVolumeOverride(Scene& scene, std::string_view busName, float volume) {
+bool SceneAudioMixerAccess::SetBusVolumeOverride(Scene& scene, std::string_view busName, float volume) {
+    if (!kb::audio::IsAudioMixerNameTokenValid(busName) || !std::isfinite(volume) || volume < 0.0F) {
+        return false;
+    }
     SceneState& state = SceneAccess::State(scene);
     for (AudioMixerBusVolumeOverride& override_ : state.audioMixerBusVolumeOverrides) {
         if (override_.bus == busName) {
             override_.volume = volume;
-            return;
+            return true;
         }
     }
     state.audioMixerBusVolumeOverrides.push_back(AudioMixerBusVolumeOverride{ .bus = std::string{ busName }, .volume = volume });
+    return true;
 }
 
 bool SceneAudioMixerAccess::ClearBusVolumeOverride(Scene& scene, std::string_view busName) noexcept {
@@ -313,7 +319,7 @@ void SceneAudioMixerAccess::ResetRuntimeMixerState(Scene& scene) noexcept {
 }
 
 void SceneAudioOcclusionAccess::Configure(Scene& scene, const AudioOcclusionSettings& settings) noexcept {
-    SceneAccess::State(scene).audioOcclusionSettings = settings;
+    SceneAccess::State(scene).audioOcclusionSettings = NormalizeAudioOcclusionSettings(settings);
 }
 
 const AudioOcclusionSettings& SceneAudioOcclusionAccess::Settings(const Scene& scene) noexcept {
@@ -330,7 +336,10 @@ const AudioOcclusionRuntimeStats& SceneAudioOcclusionAccess::RuntimeStats(
     return SceneAccess::State(scene).audioOcclusionRuntimeStats;
 }
 
-void SceneAudioMixerAccess::BeginSnapshotTransition(Scene& scene, std::string_view toSnapshot, float durationSeconds) {
+bool SceneAudioMixerAccess::BeginSnapshotTransition(Scene& scene, std::string_view toSnapshot, float durationSeconds) {
+    if ((!toSnapshot.empty() && !kb::audio::IsAudioMixerNameTokenValid(toSnapshot)) || !std::isfinite(durationSeconds)) {
+        return false;
+    }
     SceneState& state = SceneAccess::State(scene);
     // A running transition completes instantly before retargeting - the new blend always
     // starts from a well-defined snapshot state, never from an unrepresentable mid-blend.
@@ -340,13 +349,14 @@ void SceneAudioMixerAccess::BeginSnapshotTransition(Scene& scene, std::string_vi
     }
     if (durationSeconds <= 0.0F) {
         state.audioMixerSnapshotName.assign(toSnapshot);
-        return;
+        return true;
     }
     state.audioMixerSnapshotTransition = AudioMixerSnapshotTransition{
         .toSnapshot = std::string{ toSnapshot },
         .elapsedSeconds = 0.0F,
         .durationSeconds = durationSeconds,
     };
+    return true;
 }
 
 const AudioMixerSnapshotTransition& SceneAudioMixerAccess::SnapshotTransition(const Scene& scene) noexcept {
@@ -358,8 +368,13 @@ bool SceneAudioMixerAccess::AdvanceSnapshotTransition(Scene& scene, float deltaS
     if (!state.audioMixerSnapshotTransition.IsActive()) {
         return false;
     }
-    state.audioMixerSnapshotTransition.elapsedSeconds += deltaSeconds < 0.0F ? 0.0F : deltaSeconds;
-    if (state.audioMixerSnapshotTransition.elapsedSeconds < state.audioMixerSnapshotTransition.durationSeconds) {
+    if (!std::isfinite(deltaSeconds) || deltaSeconds <= 0.0F) {
+        return false;
+    }
+    const float remainingSeconds = state.audioMixerSnapshotTransition.durationSeconds
+        - state.audioMixerSnapshotTransition.elapsedSeconds;
+    if (deltaSeconds < remainingSeconds) {
+        state.audioMixerSnapshotTransition.elapsedSeconds += deltaSeconds;
         return false;
     }
     state.audioMixerSnapshotName = state.audioMixerSnapshotTransition.toSnapshot;

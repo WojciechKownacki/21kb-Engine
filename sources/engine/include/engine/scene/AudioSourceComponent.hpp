@@ -40,16 +40,35 @@ struct AudioSourceComponent {
 };
 
 inline std::string_view AudioSourceOutputBus(const AudioSourceComponent& component) noexcept {
+    if (component.outputBusLength > AudioSourceComponent::MaxOutputBusBytes
+        || component.outputBus[component.outputBusLength] != '\0') {
+        return std::string_view{ "\0", 1U };
+    }
+    for (std::uint32_t index = 0U; index < component.outputBusLength; ++index) {
+        if (component.outputBus[index] == '\0') {
+            return std::string_view{ "\0", 1U };
+        }
+    }
     return std::string_view{ component.outputBus.data(), component.outputBusLength };
 }
 
-inline void SetAudioSourceOutputBus(AudioSourceComponent& component, std::string_view busName) noexcept {
-    const std::uint32_t length = static_cast<std::uint32_t>(std::min<std::size_t>(busName.size(), AudioSourceComponent::MaxOutputBusBytes));
+inline bool IsAudioSourceOutputBusValid(const AudioSourceComponent& component) noexcept {
+    const std::string_view bus = AudioSourceOutputBus(component);
+    return bus.empty() || bus.front() != '\0';
+}
+
+[[nodiscard]] inline bool SetAudioSourceOutputBus(AudioSourceComponent& component, std::string_view busName) noexcept {
+    if (busName.size() > AudioSourceComponent::MaxOutputBusBytes || busName.find('\0') != std::string_view::npos) {
+        return false;
+    }
+
+    const std::uint32_t length = static_cast<std::uint32_t>(busName.size());
     std::fill(component.outputBus.begin(), component.outputBus.end(), '\0');
     for (std::uint32_t index = 0U; index < length; ++index) {
         component.outputBus[index] = busName[index];
     }
     component.outputBusLength = length;
+    return true;
 }
 
 } // namespace kb::scene

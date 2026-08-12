@@ -170,26 +170,17 @@ void WriteAsset(std::ostream& output, const AudioMixerAsset& asset) {
     }
 }
 
-[[nodiscard]] bool IsSingleToken(const std::string& name) noexcept {
-    if (name.empty() || name == "-") {
-        return false;
-    }
-    for (const char character : name) {
-        if (character == ' ' || character == '\t' || character == '\r' || character == '\n' || character == '#') {
-            return false;
-        }
-    }
-    return true;
-}
-
 } // namespace
 
 std::string ValidateAudioMixerAsset(const AudioMixerAsset& asset) {
     std::unordered_map<std::string_view, const AudioMixerBus*> busesByName;
     busesByName.reserve(asset.buses.size());
     for (const AudioMixerBus& bus : asset.buses) {
-        if (!IsSingleToken(bus.name)) {
+        if (!IsAudioMixerNameTokenValid(bus.name)) {
             return "audio mixer bus name must be a non-empty, whitespace-free token (and not '-')";
+        }
+        if (!std::isfinite(bus.volume) || bus.volume < 0.0F) {
+            return "audio mixer bus volume must be finite and non-negative";
         }
         if (!busesByName.emplace(bus.name, &bus).second) {
             return "audio mixer bus name '" + bus.name + "' is declared more than once";
@@ -218,15 +209,23 @@ std::string ValidateAudioMixerAsset(const AudioMixerAsset& asset) {
     std::unordered_set<std::string_view> snapshotNames;
     snapshotNames.reserve(asset.snapshots.size());
     for (const AudioMixerSnapshot& snapshot : asset.snapshots) {
-        if (!IsSingleToken(snapshot.name)) {
+        if (!IsAudioMixerNameTokenValid(snapshot.name)) {
             return "audio mixer snapshot name must be a non-empty, whitespace-free token (and not '-')";
         }
         if (!snapshotNames.insert(snapshot.name).second) {
             return "audio mixer snapshot name '" + snapshot.name + "' is declared more than once";
         }
+        std::unordered_set<std::string_view> overriddenBuses;
+        overriddenBuses.reserve(snapshot.busVolumes.size());
         for (const AudioMixerSnapshotBusVolume& value : snapshot.busVolumes) {
+            if (!std::isfinite(value.volume) || value.volume < 0.0F) {
+                return "audio mixer snapshot volume must be finite and non-negative";
+            }
             if (busesByName.find(value.bus) == busesByName.end()) {
                 return "audio mixer snapshot '" + snapshot.name + "' overrides unknown bus '" + value.bus + "'";
+            }
+            if (!overriddenBuses.insert(value.bus).second) {
+                return "audio mixer snapshot '" + snapshot.name + "' overrides bus '" + value.bus + "' more than once";
             }
         }
     }

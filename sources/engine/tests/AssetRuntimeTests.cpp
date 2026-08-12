@@ -2,6 +2,9 @@
 #include "TestSuites.hpp"
 
 #include "engine/audio/AudioClipAsset.hpp"
+#include "engine/audio/AudioClipAssetLoader.hpp"
+#include "engine/audio/AudioClipFormats.hpp"
+#include "engine/assets/AssetImportCatalog.hpp"
 #include "engine/assets/AssetImportService.hpp"
 #include "engine/assets/AssetKind.hpp"
 #include "engine/assets/AssetManager.hpp"
@@ -19,6 +22,7 @@
 #include "engine/script/ScriptBehaviourBindingService.hpp"
 #include "engine/visual/VisualGraphTypes.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <filesystem>
@@ -880,6 +884,56 @@ void RunSceneAudioClipAssetDiscoveryTest() {
     kb::tests::Require(std::filesystem::equivalent(loaded->path, clipPath), "Audio clip asset did not preserve the resolved physical path");
 }
 
+void RunAudioClipFormatCatalogTest() {
+    const std::array<std::string_view, 12U> unsupported{
+        ".ogg", ".aac", ".m4a", ".wma", ".aiff", ".aif",
+        ".xm", ".mod", ".s3m", ".it", ".mid", ".midi",
+    };
+    const std::vector<std::string> catalog = kb::assets::AssetImportCatalog::SupportedSourceExtensions();
+    kb::audio::AudioClipAssetLoader loader;
+    const std::vector<std::string> loaderExtensions = loader.Extensions();
+    kb::tests::Require(loaderExtensions.size() == kb::audio::kSupportedAudioClipExtensions.size(),
+        "Audio clip loader advertised a format outside the decoder contract");
+    for (const std::string_view extension : kb::audio::kSupportedAudioClipExtensions) {
+        kb::tests::Require(kb::audio::IsSupportedAudioClipExtension(extension)
+                && kb::assets::AssetImportCatalog::ClassifyExtension(extension) == kb::assets::AssetImportCategory::Audio
+                && std::ranges::count(catalog, extension) == 1
+                && std::ranges::count(loaderExtensions, extension) == 1,
+            "A supported audio clip extension was not shared by catalog and loader");
+    }
+    kb::tests::Require(kb::audio::IsSupportedAudioClipExtension(".WAV")
+            && kb::assets::AssetImportCatalog::ClassifyExtension(".FLAC") == kb::assets::AssetImportCategory::Audio,
+        "Audio clip format matching must be case-insensitive");
+    for (const std::string_view extension : unsupported) {
+        kb::tests::Require(!kb::audio::IsSupportedAudioClipExtension(extension)
+                && kb::assets::AssetImportCatalog::ClassifyExtension(extension) != kb::assets::AssetImportCategory::Audio
+                && std::ranges::find(catalog, extension) == catalog.end()
+                && std::ranges::find(loaderExtensions, extension) == loaderExtensions.end(),
+            "An unsupported audio format remained advertised by the import or loader catalog");
+    }
+
+    ResetTestRoot();
+    const std::filesystem::path supportedPath = TestRoot() / "Format.WAV";
+    const std::filesystem::path unsupportedPath = TestRoot() / "Format.ogg";
+    WriteTextFile(supportedPath, "format fixture");
+    WriteTextFile(unsupportedPath, "format fixture");
+    const kb::assets::AssetMetadata metadata{
+        .id = kb::assets::AssetId{ 7001U },
+        .type = "AudioClip",
+        .name = "Format",
+        .virtualPath = "/Game/Format.WAV",
+        .physicalPath = supportedPath,
+    };
+    kb::tests::Require(loader.Load(kb::assets::AssetLoadRequest{ metadata, supportedPath }).Succeeded(),
+        "Audio clip loader rejected a supported case-insensitive extension");
+    kb::tests::Require(!loader.Load(kb::assets::AssetLoadRequest{ metadata, unsupportedPath }).Succeeded(),
+        "Audio clip loader accepted an unsupported physical extension");
+    kb::assets::AssetMetadata wrongType = metadata;
+    wrongType.type = "Texture";
+    kb::tests::Require(!loader.Load(kb::assets::AssetLoadRequest{ wrongType, supportedPath }).Succeeded(),
+        "Audio clip loader accepted mismatched asset metadata");
+}
+
 void RunScriptAssetPipelineTest() {
     ResetTestRoot();
 
@@ -1029,6 +1083,7 @@ void RunAssetRuntimeTests() {
     RunAssetImportServiceReportsCreatedReusedMissingAndUnsupportedTest();
     RunScenePrefabRuntimeAssetTest();
     RunSceneAudioClipAssetDiscoveryTest();
+    RunAudioClipFormatCatalogTest();
     RunScriptAssetPipelineTest();
     RunInspectorDeclarationParseTest();
 }
