@@ -386,6 +386,23 @@ void RunImportCommandReturnsMaterialTextureReportTest() {
     ResetTempRoot();
 }
 
+#if defined(_WIN32)
+void RunAudioAssetIconResolverTest() {
+    const kb::assets::AssetMetadata nativeClip = Metadata("Tone", "AudioClip", "/Game/Audio/Tone.wav");
+    const kb::editor::ProjectFilesAssetIcon nativeIcon = kb::editor::ProjectFilesAssetIconResolver::Resolve(nativeClip, false);
+    kb::editor::tests::Require(
+        kb::editor::ProjectFilesAssetIconResolver::IsAudio(nativeClip) && nativeIcon.kind == kb::editor::HeroIconKind::SpeakerWave,
+        "Project Files should use the speaker icon for native AudioClip assets");
+
+    kb::assets::AssetMetadata importedClip = Metadata("Tone Imported", "ImportedAsset", "/Game/Audio/Tone.21kbasset");
+    importedClip.importCategory = "Audio";
+    const kb::editor::ProjectFilesAssetIcon importedIcon = kb::editor::ProjectFilesAssetIconResolver::Resolve(importedClip, true);
+    kb::editor::tests::Require(
+        kb::editor::ProjectFilesAssetIconResolver::IsAudio(importedClip) && importedIcon.kind == kb::editor::HeroIconKind::SpeakerWave,
+        "Project Files should use the speaker icon for imported audio assets");
+}
+#endif
+
 void WriteSkeletalGltfImportFixture(const std::filesystem::path& folder) {
     std::error_code error;
     std::filesystem::create_directories(folder, error);
@@ -1071,6 +1088,7 @@ void RunEditorAssetBrowserTests() {
     RunImportCommandPublishesSkeletalGltfTest();
     RunImportCommandPublishesCombinedSkeletalMeshMaterialsAndTexturesTest();
 #if defined(_WIN32)
+    RunAudioAssetIconResolverTest();
     RunProjectFilesEdgeToEdgeLayoutTest();
     RunTileHitTestUsesExactGridGeometryTest();
     RunTreeSplitterHitTestTest();

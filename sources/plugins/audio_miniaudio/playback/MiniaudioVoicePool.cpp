@@ -274,7 +274,8 @@ bool MiniaudioVoicePool::SetVoiceLoop(std::uint64_t voiceId, bool loop) noexcept
 
 bool MiniaudioVoicePool::IsVoicePlaying(std::uint64_t voiceId) noexcept {
     VoiceRecord* voice = FindVoice(voiceId);
-    return voice != nullptr && voice->sound != nullptr && !voice->paused && voice->sound->IsPlaying();
+    return voice != nullptr && voice->sound != nullptr && !voice->paused
+        && !voice->sound->AtEnd() && voice->sound->IsPlaying();
 }
 
 float MiniaudioVoicePool::VoicePlaybackSeconds(std::uint64_t voiceId) noexcept {

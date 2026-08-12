@@ -1,5 +1,6 @@
 #include <array>
 #include "app/EditorApplicationMessageLoop.hpp"
+#include "app/EditorAudioAssetPreview.hpp"
 
 #if defined(_WIN32)
 
@@ -699,6 +700,12 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         state.sceneViewport.RequestPresent();
     }
 
+    const bool audioPreviewChanged = EditorAudioAssetPreview::Tick(state.sceneContext.Scene());
+    if (audioPreviewChanged) {
+        EditorWindowInvalidator::InvalidateDockPanel(
+            state.window, state.dockModel, state.floatingWindows, state.metrics, DockPanelKind::Assets);
+    }
+
     // Saving a script in the Script Editor (Ctrl+S) writes the file but leaves the
     // cached asset stale; detect the save here and reload it so the Inspector's
     // exposed-variable schema reflects the edit immediately (no editor/scene save
@@ -723,7 +730,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     const bool viewportsPresented = PresentVisibleViewports(state);
     return viewportsPresented || navigationChanged || gizmoChanged || focusChanged ||
         animationPreviewCameraChanged || animationPreviewPlaybackChanged || scriptSaved ||
-        addComponentSliding || disclosureSliding || skeletalMeshEditorOpenChanged ||
+        audioPreviewChanged || addComponentSliding || disclosureSliding || skeletalMeshEditorOpenChanged ||
         EditorTerrainService::ToolState().strokeActive;
 }
 
@@ -883,6 +890,7 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
             // async graph cook results keep pumping; time-driven preview animation (MAT-72) is
             // carried by the per-frame preview presents in TickEditorFrame.
             if (state.sceneContext.MaterialEditor().OpenAssetId().IsValid() ||
+                EditorAudioAssetPreview::HasActivePreview() ||
                 state.sceneContext.AssetImportInProgress() ||
                 state.sceneContext.HasPendingSkeletalMeshEditorOpen() ||
                 EditorMeshPreviewCache().HasPendingPreviewWork()) {

@@ -17,6 +17,7 @@ Vendored subset used by the Win32 editor:
 - `optimized/24/outline/eye.svg`
 - `optimized/24/outline/magnifying-glass.svg`
 - `optimized/24/outline/plus.svg`
+- `optimized/24/outline/speaker-wave.svg`
 - `optimized/16/solid/adjustments-horizontal.svg`
 - `optimized/16/solid/command-line.svg`
 - `optimized/16/solid/eye.svg`
