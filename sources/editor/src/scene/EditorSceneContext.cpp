@@ -84,6 +84,7 @@
 #include "scene/input/EditorInputActionAuthoring.hpp"
 #include "scene/input/EditorInputAssetGateway.hpp"
 #include "scene/input/EditorInputMappingContextAuthoring.hpp"
+#include "scene/audio/EditorAudioMixerAuthoring.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
 #include "scene/EditorDefaultSceneFactory.hpp"
@@ -3064,6 +3065,10 @@ EditorInputMappingContextAuthoring EditorSceneContext::InputMappingContextAuthor
     return EditorInputMappingContextAuthoring{ *scene_, assetBrowser_, console_ };
 }
 
+EditorAudioMixerAuthoring EditorSceneContext::AudioMixerAuthoring() noexcept {
+    return EditorAudioMixerAuthoring{ *scene_, assetBrowser_, console_ };
+}
+
 EditorMaterialAssetAuthoring EditorSceneContext::MaterialAssetAuthoring() noexcept {
     return EditorMaterialAssetAuthoring{ *scene_, assetBrowser_, console_ };
 }
@@ -3078,6 +3083,10 @@ bool EditorSceneContext::CreateInputAxisAsset(const std::filesystem::path& virtu
 
 bool EditorSceneContext::CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder) {
     return InputMappingContextAuthoring().Create(virtualFolder);
+}
+
+bool EditorSceneContext::CreateAudioMixerAsset(const std::filesystem::path& virtualFolder) {
+    return AudioMixerAuthoring().Create(virtualFolder);
 }
 
 bool EditorSceneContext::CreateMaterialAsset(const std::filesystem::path& virtualFolder) {
@@ -3537,6 +3546,84 @@ bool EditorSceneContext::SetInputActionValueType(kb::assets::AssetId id, kb::inp
 
 bool EditorSceneContext::ToggleInputActionConsume(kb::assets::AssetId id) {
     return InputActionAuthoring().ToggleConsume(id);
+}
+
+std::optional<kb::audio::AudioMixerAsset> EditorSceneContext::ReadAudioMixerAsset(kb::assets::AssetId id) const {
+    return EditorAudioMixerAssetGateway::Read(*scene_, id);
+}
+
+bool EditorSceneContext::AddAudioMixerBus(kb::assets::AssetId id, std::string_view name) {
+    return AudioMixerAuthoring().AddBus(id, name);
+}
+
+bool EditorSceneContext::RemoveAudioMixerBus(kb::assets::AssetId id, std::string_view name) {
+    return AudioMixerAuthoring().RemoveBus(id, name);
+}
+
+bool EditorSceneContext::RenameAudioMixerBus(
+    kb::assets::AssetId id,
+    std::string_view name,
+    std::string_view replacement) {
+    return AudioMixerAuthoring().RenameBus(id, name, replacement);
+}
+
+bool EditorSceneContext::SetAudioMixerBusParent(
+    kb::assets::AssetId id,
+    std::string_view name,
+    std::string_view parent) {
+    return AudioMixerAuthoring().SetBusParent(id, name, parent);
+}
+
+bool EditorSceneContext::SetAudioMixerBusVolume(
+    kb::assets::AssetId id,
+    std::string_view name,
+    float volume) {
+    return AudioMixerAuthoring().SetBusVolume(id, name, volume);
+}
+
+bool EditorSceneContext::SetAudioMixerBusMute(
+    kb::assets::AssetId id,
+    std::string_view name,
+    bool mute) {
+    return AudioMixerAuthoring().SetBusMute(id, name, mute);
+}
+
+bool EditorSceneContext::AddAudioMixerSnapshot(kb::assets::AssetId id, std::string_view name) {
+    return AudioMixerAuthoring().AddSnapshot(id, name);
+}
+
+bool EditorSceneContext::RemoveAudioMixerSnapshot(kb::assets::AssetId id, std::string_view name) {
+    return AudioMixerAuthoring().RemoveSnapshot(id, name);
+}
+
+bool EditorSceneContext::RenameAudioMixerSnapshot(
+    kb::assets::AssetId id,
+    std::string_view name,
+    std::string_view replacement) {
+    return AudioMixerAuthoring().RenameSnapshot(id, name, replacement);
+}
+
+bool EditorSceneContext::AddAudioMixerSnapshotOverride(
+    kb::assets::AssetId id,
+    std::string_view snapshot,
+    std::string_view bus,
+    float volume) {
+    return AudioMixerAuthoring().AddSnapshotOverride(id, snapshot, bus, volume);
+}
+
+bool EditorSceneContext::RemoveAudioMixerSnapshotOverride(
+    kb::assets::AssetId id,
+    std::string_view snapshot,
+    std::string_view bus) {
+    return AudioMixerAuthoring().RemoveSnapshotOverride(id, snapshot, bus);
+}
+
+bool EditorSceneContext::SetAudioMixerSnapshotOverrideVolume(
+    kb::assets::AssetId id,
+    std::string_view snapshot,
+    std::string_view bus,
+    float volume) {
+    return AudioMixerAuthoring().SetSnapshotOverrideVolume(id, snapshot, bus, volume);
 }
 
 std::optional<kb::render::RenderMaterialAssetData> EditorSceneContext::ReadMaterialAsset(kb::assets::AssetId id) const {

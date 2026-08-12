@@ -88,6 +88,10 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateInputMappingContextAsset(destinationFolder);
     }
+    case EditorAssetContextCommand::NewAudioMixer: {
+        const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
+        return sceneContext.CreateAudioMixerAsset(destinationFolder);
+    }
     case EditorAssetContextCommand::ExtractMaterials:
         if (targetKind == EditorAssetContextTargetKind::Asset) {
             return sceneContext.ExtractEmbeddedMaterials(targetAsset);
