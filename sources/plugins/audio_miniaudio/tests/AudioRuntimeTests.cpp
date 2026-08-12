@@ -8,6 +8,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
+#include "engine/scene/SceneAudioListenerAccess.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObject.hpp"
@@ -206,8 +207,29 @@ void RunVoiceStateTest(const std::filesystem::path& clipPath) {
         "One-shot volume setter changed mute state");
     Require(pool.SetVoiceMute(played.voiceId, false) && Near(ma_sound_get_volume(voiceSound->PrimaryForTesting()), 0.5F),
         "One-shot mute setter did not restore normalized volume");
-    Require(pool.SetVoicePan(played.voiceId, 5.0F) && Near(ma_sound_get_pan(voiceSound->PrimaryForTesting()), 1.0F),
+    Require(pool.SetVoicePan(played.voiceId, 0.5F) && Near(ma_sound_get_pan(voiceSound->PrimaryForTesting()), 0.5F),
         "One-shot pan setter was not propagated to native state");
+    Require(pool.SetVoicePitch(played.voiceId, 1.25F)
+            && Near(ma_sound_get_pitch(voiceSound->PrimaryForTesting()), 1.25F),
+        "One-shot pitch setter was not propagated to native state");
+    const float nativeVolume = ma_sound_get_volume(voiceSound->PrimaryForTesting());
+    const float nativePan = ma_sound_get_pan(voiceSound->PrimaryForTesting());
+    const float nativePitch = ma_sound_get_pitch(voiceSound->PrimaryForTesting());
+    const float nativePlaybackSeconds = voiceSound->PlaybackSeconds();
+    Require(!pool.SeekVoice(played.voiceId, -0.01F)
+            && !pool.SeekVoice(played.voiceId, std::numeric_limits<float>::quiet_NaN())
+            && !pool.SetVoiceVolume(played.voiceId, -0.01F)
+            && !pool.SetVoiceVolume(played.voiceId, std::numeric_limits<float>::infinity())
+            && !pool.SetVoicePan(played.voiceId, -1.01F)
+            && !pool.SetVoicePan(played.voiceId, std::numeric_limits<float>::quiet_NaN())
+            && !pool.SetVoicePitch(played.voiceId, 0.009F)
+            && !pool.SetVoicePitch(played.voiceId, std::numeric_limits<float>::infinity()),
+        "Invalid direct voice controls were accepted by the pool");
+    Require(Near(ma_sound_get_volume(voiceSound->PrimaryForTesting()), nativeVolume)
+            && Near(ma_sound_get_pan(voiceSound->PrimaryForTesting()), nativePan)
+            && Near(ma_sound_get_pitch(voiceSound->PrimaryForTesting()), nativePitch)
+            && Near(voiceSound->PlaybackSeconds(), nativePlaybackSeconds, 0.02F),
+        "Rejected direct voice controls mutated native sound state");
     Require(pool.PauseVoice(played.voiceId), "Playing one-shot could not be paused");
     Require(!pool.PauseVoice(played.voiceId), "Already paused one-shot accepted a second pause");
     Require(pool.ResumeVoice(played.voiceId), "Paused one-shot could not be resumed");
@@ -229,6 +251,56 @@ void RunVoiceStateTest(const std::filesystem::path& clipPath) {
     Require(endedSound->AtEnd(), "Finite one-shot did not reach its natural end");
     Require(!pool.PauseVoice(ended.voiceId) && !pool.ResumeVoice(ended.voiceId),
         "Naturally ended one-shot accepted pause or resume");
+
+    const std::size_t voiceCountBeforeInvalidPlay = pool.VoiceCountForTesting();
+    const auto rejectedPlay = [&engine, &scene, &resolver, &pool](kb::audio::AudioPlayDesc desc) {
+        return pool.PlayOneShot(engine.Native(), scene, desc, resolver, nullptr);
+    };
+    kb::audio::AudioPlayDesc invalidPlay{
+        .clipAssetId = 8101U,
+        .loop = true,
+        .spatial = false,
+    };
+    invalidPlay.pan = 2.0F;
+    Require(!rejectedPlay(invalidPlay).Succeeded(), "Out-of-range one-shot pan was accepted");
+    invalidPlay.pan = 0.0F;
+    invalidPlay.position.x = std::numeric_limits<float>::infinity();
+    Require(!rejectedPlay(invalidPlay).Succeeded(), "Non-finite one-shot position was accepted");
+    invalidPlay.position = {};
+    invalidPlay.attenuationModel = static_cast<kb::audio::AudioAttenuationModel>(99);
+    Require(!rejectedPlay(invalidPlay).Succeeded(), "Unknown one-shot attenuation model was accepted");
+    invalidPlay.attenuationModel = kb::audio::AudioAttenuationModel::Inverse;
+    invalidPlay.outputBus = "invalid bus";
+    Require(!rejectedPlay(invalidPlay).Succeeded(), "Invalid one-shot route token was accepted");
+    invalidPlay.outputBus.clear();
+    invalidPlay.clipAssetId = 0U;
+    const kb::audio::AudioPlayResult invalidClip = rejectedPlay(invalidPlay);
+    Require(!invalidClip.Succeeded() && invalidClip.error == "audio clip id is invalid",
+        "Direct pool validation did not distinguish an invalid clip");
+    Require(pool.VoiceCountForTesting() == voiceCountBeforeInvalidPlay
+            && pool.IsVoicePlaying(played.voiceId),
+        "Rejected one-shot request changed the voice pool or stole a live voice");
+
+    const kb::scene::SceneObject markerTarget = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{ .name = "Pool Marker Target" });
+    Require(pool.AddVoiceMarker(scene, played.voiceId, "beat", 0.25F, markerTarget.Entity())
+            && pool.MarkerCountForTesting(played.voiceId) == 1U,
+        "Valid direct pool marker was rejected");
+    const kb::scene::SceneObject deadTarget = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{ .name = "Dead Pool Marker Target" });
+    scene.Entities().Destroy(deadTarget.Entity());
+    const std::string embeddedNullMarker{ "bad\0name", 8U };
+    const std::string controlMarker{ "bad\nname" };
+    const std::string oversizedMarker(kb::audio::kMaxAudioVoiceMarkerNameBytes + 1U, 'm');
+    Require(!pool.AddVoiceMarker(scene, played.voiceId, {}, 0.25F, markerTarget.Entity())
+            && !pool.AddVoiceMarker(scene, played.voiceId, embeddedNullMarker, 0.25F, markerTarget.Entity())
+            && !pool.AddVoiceMarker(scene, played.voiceId, controlMarker, 0.25F, markerTarget.Entity())
+            && !pool.AddVoiceMarker(scene, played.voiceId, oversizedMarker, 0.25F, markerTarget.Entity())
+            && !pool.AddVoiceMarker(scene, played.voiceId, "late", -0.01F, markerTarget.Entity())
+            && !pool.AddVoiceMarker(scene, played.voiceId, "late", std::numeric_limits<float>::quiet_NaN(), markerTarget.Entity())
+            && !pool.AddVoiceMarker(scene, played.voiceId, "dead", 0.25F, deadTarget.Entity())
+            && pool.MarkerCountForTesting(played.voiceId) == 1U,
+        "Invalid direct pool marker mutated marker state");
     RunClipResolverValidationTest(clipPath, resolver);
 }
 
@@ -265,6 +337,73 @@ void RunListenerAndAttachedVelocityTest(const std::filesystem::path& clipPath) {
     const ma_vec3f up = ma_engine_listener_get_world_up(&engine.Native(), 0U);
     Require(Near(listenerVelocity.x, 4.0F), "Listener velocity did not use scene delta");
     Require(std::abs(up.x) > 0.9F && std::abs(up.y) < 0.1F, "Listener up vector did not rotate with its transform");
+
+    const kb::scene::SceneObject preferredPrimaryUser = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{ .name = "Preferred Primary User Listener", .transform = TransformAt(8.0F) });
+    scene.Components().AudioListeners().Set(preferredPrimaryUser.Entity(), kb::scene::AudioListenerComponent{
+        .priority = 10,
+        .localUser = kb::input::kPrimaryLocalUser,
+        .primary = false,
+        .enabled = true,
+    });
+    const kb::scene::SceneObject secondUser = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{ .name = "Second User Listener", .transform = TransformAt(20.0F) });
+    scene.Components().AudioListeners().Set(secondUser.Entity(), kb::scene::AudioListenerComponent{
+        .priority = 100,
+        .localUser = kb::input::LocalUserId{ 1U },
+        .primary = true,
+        .enabled = true,
+    });
+    kb::scene::SceneSystemContext userSelectionContext{ scene, 0.5F };
+    static_cast<void>(synchronizer.Sync(engine.Native(), userSelectionContext));
+    Require(Near(ma_engine_listener_get_position(&engine.Native(), 0U).x, 8.0F),
+        "Listener priority was not resolved within the selected local user");
+
+    kb::scene::SceneAudioListenerAccess::SetLocalUser(scene, kb::input::LocalUserId{ 1U });
+    static_cast<void>(synchronizer.Sync(engine.Native(), userSelectionContext));
+    Require(Near(ma_engine_listener_get_position(&engine.Native(), 0U).x, 20.0F)
+            && Near(ma_engine_listener_get_velocity(&engine.Native(), 0U).x, 0.0F),
+        "Switching listener local user did not select its listener with zero velocity");
+    // Rebind the same entity across a local-user switch. Entity equality alone must not
+    // carry velocity across the selection boundary.
+    kb::scene::AudioListenerComponent rebound = *scene.Components().AudioListeners().TryGet(secondUser.Entity());
+    rebound.localUser = kb::input::LocalUserId{ 2U };
+    scene.Components().AudioListeners().Set(secondUser.Entity(), rebound);
+    scene.Transforms().Set(secondUser.Entity(), TransformAt(24.0F));
+    kb::scene::SceneAudioListenerAccess::SetLocalUser(scene, kb::input::LocalUserId{ 2U });
+    static_cast<void>(synchronizer.Sync(engine.Native(), userSelectionContext));
+    Require(Near(ma_engine_listener_get_position(&engine.Native(), 0U).x, 24.0F)
+            && Near(ma_engine_listener_get_velocity(&engine.Native(), 0U).x, 0.0F),
+        "Listener rebinding across a local-user switch produced a velocity spike");
+    kb::scene::SceneAudioListenerAccess::SetLocalUser(scene, kb::input::LocalUserId{ 3U });
+    Require(!synchronizer.Sync(engine.Native(), userSelectionContext).active
+            && ma_engine_listener_is_enabled(&engine.Native(), 0U) == MA_FALSE,
+        "A local user without a matching listener retained stale listener state");
+    kb::scene::SceneAudioListenerAccess::SetLocalUser(scene, kb::input::LocalUserId{ 2U });
+    static_cast<void>(synchronizer.Sync(engine.Native(), userSelectionContext));
+    rebound.enabled = false;
+    scene.Components().AudioListeners().Set(secondUser.Entity(), rebound);
+    Require(!synchronizer.Sync(engine.Native(), userSelectionContext).active,
+        "Disabled matching listener remained active");
+    rebound.enabled = true;
+    scene.Components().AudioListeners().Set(secondUser.Entity(), rebound);
+    scene.Entities().SetActive(secondUser.Entity(), false);
+    Require(!synchronizer.Sync(engine.Native(), userSelectionContext).active,
+        "Inactive matching listener remained active");
+    scene.Entities().SetActive(secondUser.Entity(), true);
+
+    kb::scene::SceneAudioListenerAccess::SetLocalUser(scene, kb::input::kPrimaryLocalUser);
+    static_cast<void>(synchronizer.Sync(engine.Native(), userSelectionContext));
+    Require(Near(ma_engine_listener_get_position(&engine.Native(), 0U).x, 8.0F)
+            && Near(ma_engine_listener_get_velocity(&engine.Native(), 0U).x, 0.0F),
+        "Returning to the primary local user did not reset listener velocity");
+    scene.Entities().SetActive(preferredPrimaryUser.Entity(), false);
+    static_cast<void>(synchronizer.Sync(engine.Native(), userSelectionContext));
+    Require(Near(ma_engine_listener_get_position(&engine.Native(), 0U).x, 3.0F)
+            && Near(ma_engine_listener_get_velocity(&engine.Native(), 0U).x, 0.0F),
+        "Inactive preferred listener did not fall back within its local user");
+    scene.Entities().Destroy(preferredPrimaryUser.Entity());
+    scene.Entities().Destroy(secondUser.Entity());
 
     scene.Entities().SetActive(listener.Entity(), false);
     kb::scene::SceneSystemContext inactiveContext{ scene, 0.5F };
@@ -343,6 +482,17 @@ void RunSourceLifecycleAndRoutingTest(const std::filesystem::path& clipPath, std
     });
     const kb::audio::AudioSourceControlResult beforeTick = sources.PlaySource(engine.Native(), scene, sourceObject.Entity(), resolver, buses, true);
     Require(beforeTick.Succeeded() && beforeTick.playing, "Source Play did not work before its first audio tick");
+    kb::scene::AudioSourceComponent* invalidSettingsSource = scene.Components().AudioSources().TryGet(sourceObject.Entity());
+    invalidSettingsSource->pan = 2.0F;
+    scene.Components().AudioSources().MarkModified(sourceObject.Entity());
+    const kb::audio::AudioSourceControlResult invalidSettings =
+        sources.PlaySource(engine.Native(), scene, sourceObject.Entity(), resolver, buses, true);
+    Require(invalidSettings.status == kb::audio::AudioSourceControlStatus::InvalidSettings
+            && sources.IsSourcePlaying(scene, sourceObject.Entity(), true).status
+                == kb::audio::AudioSourceControlStatus::InvalidSettings,
+        "Source transport did not reject an invalid component settings contract");
+    invalidSettingsSource->pan = 0.0F;
+    scene.Components().AudioSources().MarkModified(sourceObject.Entity());
     Require(sources.PauseSource(scene, sourceObject.Entity(), true).Succeeded(), "Source Pause failed");
     Require(sources.PauseSource(scene, sourceObject.Entity(), true).status == kb::audio::AudioSourceControlStatus::NotPlaying,
         "Already paused source accepted a second pause");
@@ -548,6 +698,33 @@ void RunBackendRestartTest(const std::filesystem::path& clipPath) {
     const kb::audio_miniaudio::MiniaudioPlaybackBackend::ResourceStateForTesting resources = backend.ResourcesForTesting();
     Require(resources.sourceSounds == 1U && resources.voices == 1U && resources.buses == 1U,
         "Restart test did not create source, voice and bus resources");
+    kb::audio::AudioPlayDesc invalidVoiceDesc = voiceDesc;
+    invalidVoiceDesc.volume = std::numeric_limits<float>::quiet_NaN();
+    Require(!backend.PlayOneShotForTesting(scene, invalidVoiceDesc).Succeeded(),
+        "Backend accepted invalid one-shot settings");
+    const kb::audio::AudioPlayResult liveVoice = backend.PlayOneShotForTesting(scene, voiceDesc);
+    Require(liveVoice.Succeeded(), "Backend control validation fixture voice could not be created");
+    const kb::scene::SceneObject markerTarget = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{ .name = "Backend Marker Target" });
+    const kb::scene::SceneObject deadMarkerTarget = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{ .name = "Dead Backend Marker Target" });
+    scene.Entities().Destroy(deadMarkerTarget.Entity());
+    const kb::audio_miniaudio::MiniaudioPlaybackBackend::ResourceStateForTesting resourcesBeforeRejectedControls =
+        backend.ResourcesForTesting();
+    Require(!backend.SeekVoice(scene, liveVoice.voiceId, -0.01F)
+            && !backend.SetVoiceVolume(scene, liveVoice.voiceId, std::numeric_limits<float>::infinity())
+            && !backend.SetVoicePan(scene, liveVoice.voiceId, 1.01F)
+            && !backend.SetVoicePitch(scene, liveVoice.voiceId, 0.009F)
+            && !backend.AddVoiceMarker(
+                scene, liveVoice.voiceId, "late", std::numeric_limits<float>::quiet_NaN(), markerTarget.Entity())
+            && !backend.AddVoiceMarker(scene, liveVoice.voiceId, "dead", 0.25F, deadMarkerTarget.Entity()),
+        "Backend accepted an invalid direct voice control or marker");
+    const kb::audio_miniaudio::MiniaudioPlaybackBackend::ResourceStateForTesting resourcesAfterRejectedControls =
+        backend.ResourcesForTesting();
+    Require(resourcesAfterRejectedControls.sourceSounds == resourcesBeforeRejectedControls.sourceSounds
+            && resourcesAfterRejectedControls.voices == resourcesBeforeRejectedControls.voices
+            && resourcesAfterRejectedControls.buses == resourcesBeforeRejectedControls.buses,
+        "Rejected backend controls changed native resource ownership");
     Require(backend.ReinitializeForTesting(scene, true) == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
         "Controlled no-device restart failed with active resources");
     const kb::audio_miniaudio::MiniaudioPlaybackBackend::ResourceStateForTesting released = backend.ResourcesForTesting();

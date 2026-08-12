@@ -4,7 +4,9 @@
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TransformComponent.hpp"
 
+#include <cstddef>
 #include <cstdint>
+#include <cmath>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -51,6 +53,60 @@ struct AudioPlayDesc {
     std::uint64_t ownerEntityId = 0U;
 };
 
+enum class AudioPlayDescValidationStatus : std::uint8_t {
+    Valid,
+    InvalidClip,
+    InvalidSettings,
+    InvalidOwner,
+};
+
+struct AudioPlayResult;
+
+// Canonical public validation boundary for one-shot playback. Every public facade and
+// backend path rejects a non-Valid request before routing, voice stealing or native
+// sound mutation.
+[[nodiscard]] AudioPlayDescValidationStatus ValidateAudioPlayDesc(
+    const kb::scene::Scene& scene, const AudioPlayDesc& desc) noexcept;
+[[nodiscard]] AudioPlayResult AudioPlayDescValidationResult(
+    AudioPlayDescValidationStatus status);
+
+inline constexpr std::size_t kMaxAudioVoiceMarkerNameBytes = 255U;
+
+[[nodiscard]] inline bool IsAudioVoiceSeekPositionValid(float positionSeconds) noexcept {
+    return std::isfinite(positionSeconds) && positionSeconds >= 0.0F;
+}
+
+[[nodiscard]] inline bool IsAudioVoiceVolumeValid(float volume) noexcept {
+    return std::isfinite(volume) && volume >= 0.0F;
+}
+
+[[nodiscard]] inline bool IsAudioVoicePanValid(float pan) noexcept {
+    return std::isfinite(pan) && pan >= -1.0F && pan <= 1.0F;
+}
+
+[[nodiscard]] inline bool IsAudioVoicePitchValid(float pitch) noexcept {
+    return std::isfinite(pitch) && pitch >= 0.01F;
+}
+
+[[nodiscard]] inline bool IsAudioVoiceMarkerNameValid(std::string_view marker) noexcept {
+    if (marker.empty() || marker.size() > kMaxAudioVoiceMarkerNameBytes) {
+        return false;
+    }
+    for (const char character : marker) {
+        const unsigned char code = static_cast<unsigned char>(character);
+        if (code < 0x20U || code == 0x7FU) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool IsAudioVoiceMarkerRequestValid(
+    const kb::scene::Scene& scene,
+    std::string_view marker,
+    float positionSeconds,
+    kb::scene::SceneEntity target) noexcept;
+
 enum class AudioDeviceStatus : std::uint8_t {
     BackendUnavailable,
     Uninitialized,
@@ -75,6 +131,7 @@ enum class AudioSourceControlStatus : std::uint8_t {
     PlaybackOperationFailed,
     NotPlaying,
     NotPaused,
+    InvalidSettings,
 };
 
 struct AudioSourceControlResult {
@@ -113,8 +170,9 @@ public:
     // existed, was stopped/stolen, or was reclaimed after finishing is never resurrected.
     // Pause succeeds only while the
     // voice is playing and keeps the play cursor; Resume succeeds only while paused and
-    // continues from it. Seek positions in SECONDS from the clip start (clamped by the
-    // backend); volume/mute/pan/pitch/loop mirror AudioPlayDesc's semantics live.
+    // continues from it. Seek positions in SECONDS from the clip start; invalid values
+    // are rejected without mutation. Volume/mute/pan/pitch/loop mirror AudioPlayDesc's
+    // semantics live.
     [[nodiscard]] virtual bool StopVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept = 0;
     [[nodiscard]] virtual bool PauseVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept = 0;
     [[nodiscard]] virtual bool ResumeVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept = 0;

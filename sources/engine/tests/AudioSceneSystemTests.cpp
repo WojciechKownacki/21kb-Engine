@@ -258,7 +258,8 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
                            }),
             "Audio scene system test mixer asset registration failed");
         kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, mixerAssetId.value);
-        kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "Quiet");
+        kb::tests::Require(kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "Quiet"),
+            "Audio mixer snapshot fixture setup failed");
         // LIB-150: runtime override + a mid-flight snapshot transition exercise the full
         // volume-resolution stack (authored -> snapshot lerp -> override) on the real
         // plugin across the ticks below.
@@ -270,13 +271,13 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
         // LIB-151: occlusion against the real collider raycast geometry - a wall between
         // the listener (origin) and the routed source exercises the budget-capped sampler
         // on the real plugin across the ticks below.
-        kb::scene::SceneAudioOcclusionAccess::Configure(scene, kb::scene::AudioOcclusionSettings{
+        kb::tests::Require(kb::scene::SceneAudioOcclusionAccess::Configure(scene, kb::scene::AudioOcclusionSettings{
                                                                    .enabled = true,
                                                                    .occludedVolumeScale = 0.25F,
                                                                    .maxDistance = 100.0F,
                                                                    .layerMask = 0xFFFFFFFFU,
                                                                    .maxRaycastsPerTick = 4U,
-                                                               });
+                                                               }), "Audio occlusion fixture setup failed");
         const kb::scene::SceneObject wall = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
             .name = "Occluding Wall",
             .transform = kb::scene::TransformComponent{

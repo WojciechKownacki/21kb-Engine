@@ -51,7 +51,7 @@ public:
 
     static void SetActiveMixer(Scene& scene, std::uint64_t mixerAssetId) noexcept;
     [[nodiscard]] static std::uint64_t ActiveMixer(const Scene& scene) noexcept;
-    static void SetActiveSnapshot(Scene& scene, std::string_view snapshotName);
+    [[nodiscard]] static bool SetActiveSnapshot(Scene& scene, std::string_view snapshotName);
     [[nodiscard]] static const std::string& ActiveSnapshot(const Scene& scene) noexcept;
 
     // LIB-150: runtime per-bus volume overrides - upsert-by-name / remove-by-name (false
