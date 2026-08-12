@@ -116,12 +116,11 @@ struct CommandFixture {
     kb::editor::tests::Require(kb::audio::AudioMixerAssetIO::Save(path, mixer),
         "Scene Audio Inspector mixer fixture save failed");
     static_cast<void>(fixture.scene.Assets().Discover());
-    const auto metadataIt = std::ranges::find_if(
-        fixture.scene.Assets().Manager().Registry().All(),
-        [&path](const kb::assets::AssetMetadata& metadata) { return metadata.physicalPath == path; });
-    const kb::assets::AssetMetadata* metadata = metadataIt == fixture.scene.Assets().Manager().Registry().All().end()
-        ? nullptr
-        : std::addressof(*metadataIt);
+    const std::optional<std::filesystem::path> virtualPath =
+        fixture.scene.Assets().Manager().Mounts().ToVirtual(path);
+    const kb::assets::AssetMetadata* metadata = virtualPath.has_value()
+        ? fixture.scene.Assets().Manager().Registry().FindByPath(*virtualPath)
+        : nullptr;
     kb::editor::tests::Require(metadata != nullptr && metadata->type == kb::audio::kAudioMixerAssetType,
         "Scene Audio Inspector mixer fixture was not discovered");
     const auto loaded = fixture.scene.Assets().Manager().Load<kb::audio::AudioMixerAsset>(metadata->id);
