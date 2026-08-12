@@ -2,12 +2,12 @@
 
 #if defined(_WIN32)
 #include "assets/EditorAssetBrowserHitTester.hpp"
-#include "engine/assets/AssetImportTypes.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "scene/EditorHierarchyRowPicker.hpp"
 #include "scene/EditorSceneMeshAssetActions.hpp"
+#include "scene/EditorSceneAudioAssetActions.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -25,10 +25,6 @@ namespace {
 
 [[nodiscard]] bool IsPrefabLike(const kb::assets::AssetMetadata& metadata) {
     return metadata.type == "ScenePrefab" || Lower(metadata.virtualPath.extension().string()) == ".kbprefab";
-}
-
-[[nodiscard]] bool IsAudioAsset(const kb::assets::AssetMetadata& metadata) {
-    return metadata.type == "AudioClip" || metadata.importCategory == kb::assets::ToString(kb::assets::AssetImportCategory::Audio);
 }
 
 [[nodiscard]] bool IsMaterialAsset(const kb::assets::AssetMetadata& metadata) {
@@ -104,7 +100,7 @@ void EditorPointerDragSourceResolver::Resolve(
             drag.assetInstantiatesPrefab = IsPrefabLike(*metadata);
             drag.assetCreatesMeshEntity = EditorSceneMeshAssetActions::IsScenePlaceableAsset(*metadata);
             drag.assetAddsBehaviour = kb::script::ScriptBehaviourAsset::IsBehaviourAsset(*metadata);
-            drag.assetAssignsAudioClip = IsAudioAsset(*metadata);
+            drag.assetAssignsAudioClip = EditorSceneAudioAssetActions::IsAudioAsset(*metadata);
             drag.assetAssignsMaterial = IsMaterialAsset(*metadata);
             drag.assetAssignsMaterialGraph = IsMaterialGraphAsset(*metadata);
             drag.assetAssignsTexture = IsTextureAsset(*metadata);
