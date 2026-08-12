@@ -74,6 +74,8 @@ constexpr auto kFunctionDocumentation = std::to_array<FunctionDocumentation>({
     { "Audio.IsSourcePlaying", "Returns the playback and transport status of an entity audio source." },
     { "Audio.DeviceStatus", "Returns the current audio playback device status." },
     { "Audio.Reinitialize", "Restarts the audio playback backend and returns the resulting device status." },
+    { "Audio.SetListenerLocalUser", "Selects which local user's audio listeners participate in runtime playback." },
+    { "Audio.ListenerLocalUser", "Returns the local user currently selected for audio listener playback." },
     { "Audio.SetMixer", "Assigns the active audio mixer asset used by the scene." },
     { "Audio.ActiveMixer", "Returns the runtime identifier of the active audio mixer." },
     { "Audio.SetSnapshot", "Applies an audio mixer snapshot immediately." },

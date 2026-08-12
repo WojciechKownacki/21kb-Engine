@@ -11,4 +11,15 @@ enum class AudioAttenuationModel : std::int32_t {
     Exponential = 3,
 };
 
+[[nodiscard]] inline constexpr bool IsAudioAttenuationModelValid(AudioAttenuationModel model) noexcept {
+    switch (model) {
+    case AudioAttenuationModel::None:
+    case AudioAttenuationModel::Inverse:
+    case AudioAttenuationModel::Linear:
+    case AudioAttenuationModel::Exponential:
+        return true;
+    }
+    return false;
+}
+
 } // namespace kb::audio

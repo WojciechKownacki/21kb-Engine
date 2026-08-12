@@ -22,6 +22,7 @@
 #include "engine/scene/UIAssetLoaders.hpp"
 #include "engine/scene/PhysicsLayersAssetLoader.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneAudioListenerAccess.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
@@ -267,15 +268,28 @@ std::uint64_t ScenePostProcessAccess::ActiveProfile(const Scene& scene) noexcept
 }
 
 void SceneAudioMixerAccess::SetActiveMixer(Scene& scene, std::uint64_t mixerAssetId) noexcept {
-    SceneAccess::State(scene).audioMixerAssetId = mixerAssetId;
+    SceneState& state = SceneAccess::State(scene);
+    if (state.audioMixerAssetId == mixerAssetId) {
+        return;
+    }
+    state.audioMixerAssetId = mixerAssetId;
+    state.audioMixerSnapshotName.clear();
+    state.audioMixerBusVolumeOverrides.clear();
+    state.audioMixerSnapshotTransition = {};
 }
 
 std::uint64_t SceneAudioMixerAccess::ActiveMixer(const Scene& scene) noexcept {
     return SceneAccess::State(scene).audioMixerAssetId;
 }
 
-void SceneAudioMixerAccess::SetActiveSnapshot(Scene& scene, std::string_view snapshotName) {
-    SceneAccess::State(scene).audioMixerSnapshotName.assign(snapshotName);
+bool SceneAudioMixerAccess::SetActiveSnapshot(Scene& scene, std::string_view snapshotName) {
+    if (!snapshotName.empty() && !kb::audio::IsAudioMixerNameTokenValid(snapshotName)) {
+        return false;
+    }
+    SceneState& state = SceneAccess::State(scene);
+    state.audioMixerSnapshotName.assign(snapshotName);
+    state.audioMixerSnapshotTransition = {};
+    return true;
 }
 
 const std::string& SceneAudioMixerAccess::ActiveSnapshot(const Scene& scene) noexcept {
@@ -318,8 +332,20 @@ void SceneAudioMixerAccess::ResetRuntimeMixerState(Scene& scene) noexcept {
     state.audioMixerSnapshotTransition = {};
 }
 
-void SceneAudioOcclusionAccess::Configure(Scene& scene, const AudioOcclusionSettings& settings) noexcept {
-    SceneAccess::State(scene).audioOcclusionSettings = NormalizeAudioOcclusionSettings(settings);
+bool SceneAudioOcclusionAccess::Configure(Scene& scene, const AudioOcclusionSettings& settings) noexcept {
+    if (!IsAudioOcclusionSettingsValid(settings)) {
+        return false;
+    }
+    SceneAccess::State(scene).audioOcclusionSettings = settings;
+    return true;
+}
+
+void SceneAudioListenerAccess::SetLocalUser(Scene& scene, kb::input::LocalUserId localUser) noexcept {
+    SceneAccess::State(scene).audioListenerLocalUser = localUser;
+}
+
+kb::input::LocalUserId SceneAudioListenerAccess::LocalUser(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).audioListenerLocalUser;
 }
 
 const AudioOcclusionSettings& SceneAudioOcclusionAccess::Settings(const Scene& scene) noexcept {

@@ -3,6 +3,7 @@
 
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAudioListenerAccess.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -85,10 +86,15 @@ bool SceneDocumentService::LoadIntoScene(Scene& scene, const SceneDocument& docu
     kb::audio::AudioPlayback::StopAll(scene);
     static_cast<void>(
         kb::audio::AudioPlayback::DrainPendingMarkerEvents(scene));
+    SceneAudioListenerAccess::SetLocalUser(scene, kb::input::kPrimaryLocalUser);
     SceneAudioMixerAccess::SetActiveMixer(scene, document.audioMixerAssetId);
-    SceneAudioMixerAccess::SetActiveSnapshot(scene, document.audioMixerSnapshot);
+    if (!SceneAudioMixerAccess::SetActiveSnapshot(scene, document.audioMixerSnapshot)) {
+        return false;
+    }
     SceneAudioMixerAccess::ResetRuntimeMixerState(scene);
-    SceneAudioOcclusionAccess::Configure(scene, document.audioOcclusionSettings);
+    if (!SceneAudioOcclusionAccess::Configure(scene, document.audioOcclusionSettings)) {
+        return false;
+    }
     SceneAudioOcclusionAccess::PublishRuntimeStats(scene, {});
     ClearSceneRoots(scene);
     if (!scene.Tags().ReplaceDefinitions(document.tagDefinitions)) {

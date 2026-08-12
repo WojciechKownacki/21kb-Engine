@@ -1,6 +1,5 @@
 #pragma once
 
-#include <algorithm>
 #include <cmath>
 #include <cstdint>
 
@@ -41,18 +40,6 @@ inline constexpr std::uint32_t kMaxAudioOcclusionRaycastsPerTick = 4096U;
         && settings.maxRaycastsPerTick <= kMaxAudioOcclusionRaycastsPerTick;
 }
 
-[[nodiscard]] inline AudioOcclusionSettings NormalizeAudioOcclusionSettings(AudioOcclusionSettings settings) noexcept {
-    const AudioOcclusionSettings defaults{};
-    settings.occludedVolumeScale = std::isfinite(settings.occludedVolumeScale)
-        ? std::clamp(settings.occludedVolumeScale, 0.0F, 1.0F)
-        : defaults.occludedVolumeScale;
-    settings.maxDistance = std::isfinite(settings.maxDistance)
-        ? std::max(settings.maxDistance, 0.0F)
-        : defaults.maxDistance;
-    settings.maxRaycastsPerTick = std::min(settings.maxRaycastsPerTick, kMaxAudioOcclusionRaycastsPerTick);
-    return settings;
-}
-
 // Per-tick production telemetry published by the active audio backend. It makes the hard
 // cost cap and actual collider hits observable without exposing plugin-private objects or
 // inferring occlusion from an audio device's physical output.
@@ -66,7 +53,7 @@ class SceneAudioOcclusionAccess {
 public:
     SceneAudioOcclusionAccess() = delete;
 
-    static void Configure(Scene& scene, const AudioOcclusionSettings& settings) noexcept;
+    [[nodiscard]] static bool Configure(Scene& scene, const AudioOcclusionSettings& settings) noexcept;
     [[nodiscard]] static const AudioOcclusionSettings& Settings(const Scene& scene) noexcept;
     static void PublishRuntimeStats(
         Scene& scene, const AudioOcclusionRuntimeStats& stats) noexcept;

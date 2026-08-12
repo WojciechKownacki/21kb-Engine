@@ -60,16 +60,6 @@ inline bool IsAudioSourceOutputBusValid(const AudioSourceComponent& component) n
 }
 
 [[nodiscard]] inline bool IsAudioSourceComponentPersistable(const AudioSourceComponent& component) noexcept {
-    const bool attenuationModelValid = [model = component.attenuationModel]() noexcept {
-        switch (model) {
-        case kb::audio::AudioAttenuationModel::None:
-        case kb::audio::AudioAttenuationModel::Inverse:
-        case kb::audio::AudioAttenuationModel::Linear:
-        case kb::audio::AudioAttenuationModel::Exponential:
-            return true;
-        }
-        return false;
-    }();
     return std::isfinite(component.volume) && component.volume >= 0.0F
         && std::isfinite(component.pitch) && component.pitch >= 0.01F
         && std::isfinite(component.pan) && component.pan >= -1.0F && component.pan <= 1.0F
@@ -78,7 +68,7 @@ inline bool IsAudioSourceOutputBusValid(const AudioSourceComponent& component) n
         && std::isfinite(component.maxDistance) && component.maxDistance >= component.minDistance
         && std::isfinite(component.rolloff) && component.rolloff >= 0.0F
         && std::isfinite(component.dopplerFactor) && component.dopplerFactor >= 0.0F
-        && attenuationModelValid
+        && kb::audio::IsAudioAttenuationModelValid(component.attenuationModel)
         && IsAudioSourceOutputBusValid(component);
 }
 

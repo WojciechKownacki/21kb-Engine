@@ -93,16 +93,16 @@ void MiniaudioPlaybackBackend::SyncRouting(kb::scene::Scene& scene, bool routing
 }
 
 kb::audio::AudioPlayResult MiniaudioPlaybackBackend::PlayOneShot(kb::scene::Scene& scene, const kb::audio::AudioPlayDesc& desc) {
+    const kb::audio::AudioPlayDescValidationStatus validation = kb::audio::ValidateAudioPlayDesc(scene, desc);
+    if (validation != kb::audio::AudioPlayDescValidationStatus::Valid) {
+        return kb::audio::AudioPlayDescValidationResult(validation);
+    }
     if (!engine_.IsInitialized()) {
         return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio backend is not initialized" };
     }
     if (!engine_.IsPlaybackAvailable()) {
         return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio playback device is not available" };
     }
-    if (desc.clipAssetId == 0U) {
-        return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio clip id is invalid" };
-    }
-
     return PlayOneShotInternal(scene, desc, true);
 }
 
@@ -110,6 +110,10 @@ kb::audio::AudioPlayResult MiniaudioPlaybackBackend::PlayOneShotInternal(
     kb::scene::Scene& scene,
     const kb::audio::AudioPlayDesc& desc,
     bool playbackAvailable) {
+    const kb::audio::AudioPlayDescValidationStatus validation = kb::audio::ValidateAudioPlayDesc(scene, desc);
+    if (validation != kb::audio::AudioPlayDescValidationStatus::Valid) {
+        return kb::audio::AudioPlayDescValidationResult(validation);
+    }
     SyncRouting(scene, playbackAvailable);
     const MiniaudioBusRegistry::Route route = busRegistry_.Resolve(desc.outputBus);
     if (!route.Succeeded()) {
@@ -192,8 +196,12 @@ kb::audio::AudioDeviceStatus MiniaudioPlaybackBackend::ReinitializeForTesting(kb
 }
 
 kb::audio::AudioPlayResult MiniaudioPlaybackBackend::PlayOneShotForTesting(kb::scene::Scene& scene, const kb::audio::AudioPlayDesc& desc) {
-    if (!engine_.IsInitialized() || desc.clipAssetId == 0U) {
-        return { .started = false, .voiceId = 0U, .error = "audio backend test resource is invalid" };
+    const kb::audio::AudioPlayDescValidationStatus validation = kb::audio::ValidateAudioPlayDesc(scene, desc);
+    if (validation != kb::audio::AudioPlayDescValidationStatus::Valid) {
+        return kb::audio::AudioPlayDescValidationResult(validation);
+    }
+    if (!engine_.IsInitialized()) {
+        return { .started = false, .voiceId = 0U, .error = "audio backend is not initialized" };
     }
     return PlayOneShotInternal(scene, desc, true);
 }
@@ -238,11 +246,17 @@ bool MiniaudioPlaybackBackend::ResumeVoice(kb::scene::Scene& scene, std::uint64_
 
 bool MiniaudioPlaybackBackend::SeekVoice(kb::scene::Scene& scene, std::uint64_t voiceId, float positionSeconds) noexcept {
     static_cast<void>(scene);
+    if (!kb::audio::IsAudioVoiceSeekPositionValid(positionSeconds)) {
+        return false;
+    }
     return voicePool_.SeekVoice(voiceId, positionSeconds);
 }
 
 bool MiniaudioPlaybackBackend::SetVoiceVolume(kb::scene::Scene& scene, std::uint64_t voiceId, float volume) noexcept {
     static_cast<void>(scene);
+    if (!kb::audio::IsAudioVoiceVolumeValid(volume)) {
+        return false;
+    }
     return voicePool_.SetVoiceVolume(voiceId, volume);
 }
 
@@ -253,11 +267,17 @@ bool MiniaudioPlaybackBackend::SetVoiceMute(kb::scene::Scene& scene, std::uint64
 
 bool MiniaudioPlaybackBackend::SetVoicePan(kb::scene::Scene& scene, std::uint64_t voiceId, float pan) noexcept {
     static_cast<void>(scene);
+    if (!kb::audio::IsAudioVoicePanValid(pan)) {
+        return false;
+    }
     return voicePool_.SetVoicePan(voiceId, pan);
 }
 
 bool MiniaudioPlaybackBackend::SetVoicePitch(kb::scene::Scene& scene, std::uint64_t voiceId, float pitch) noexcept {
     static_cast<void>(scene);
+    if (!kb::audio::IsAudioVoicePitchValid(pitch)) {
+        return false;
+    }
     return voicePool_.SetVoicePitch(voiceId, pitch);
 }
 
@@ -277,8 +297,10 @@ float MiniaudioPlaybackBackend::VoicePlaybackSeconds(kb::scene::Scene& scene, st
 }
 
 bool MiniaudioPlaybackBackend::AddVoiceMarker(kb::scene::Scene& scene, std::uint64_t voiceId, std::string_view marker, float positionSeconds, kb::scene::SceneEntity target) {
-    static_cast<void>(scene);
-    return voicePool_.AddVoiceMarker(voiceId, marker, positionSeconds, target);
+    if (!kb::audio::IsAudioVoiceMarkerRequestValid(scene, marker, positionSeconds, target)) {
+        return false;
+    }
+    return voicePool_.AddVoiceMarker(scene, voiceId, marker, positionSeconds, target);
 }
 
 } // namespace kb::audio_miniaudio
