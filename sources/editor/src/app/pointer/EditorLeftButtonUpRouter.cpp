@@ -2,12 +2,14 @@
 
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserPointerHandler.hpp"
+#include "app/EditorAudioAssetPreview.hpp"
 #include "app/EditorPointerDragInteraction.hpp"
 #include "app/EditorWindowInvalidator.hpp"
 #include "app/console/EditorConsolePointerController.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
+#include "engine/assets/AssetKind.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
@@ -263,6 +265,11 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
             const kb::assets::AssetId pending = sceneContext_.AssetBrowser().TakePendingPreviewAsset();
             if (pending.IsValid() &&
                 sceneContext_.AssetBrowser().SelectAsset(pending, sceneContext_.Scene().Assets().Manager())) {
+                const kb::assets::AssetMetadata* metadata = sceneContext_.Scene().Assets().Manager().Registry().Find(pending);
+                const bool audioPreviewStarted = EditorAudioAssetPreview::Play(sceneContext_.Scene(), pending);
+                if (metadata != nullptr && kb::assets::AssetMatchesKind(*metadata, kb::assets::AssetKind::Audio) && !audioPreviewStarted) {
+                    sceneContext_.Console().Warning("Audio", "Could not start preview for the selected audio asset.");
+                }
                 InvalidateAssetSelectionPanels(mainWindow_, dockModel_, floatingWindows_, metrics_);
             }
         } else {

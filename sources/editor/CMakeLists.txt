@@ -17,6 +17,8 @@ add_executable(kb_editor WIN32
     src/app/EditorAssetBrowserContextCommandExecutor.cpp
     src/private/app/EditorAssetBrowserNativeCommandMap.hpp
     src/app/EditorAssetBrowserNativeCommandMap.cpp
+    src/private/app/EditorAudioAssetPreview.hpp
+    src/app/EditorAudioAssetPreview.cpp
     src/app/EditorAudioAssetInspectorDropHandler.cpp
     src/app/EditorAudioInspectorDropPolicy.cpp
     src/app/EditorAnimatorAssetInspectorDropHandler.cpp
@@ -848,6 +850,7 @@ add_executable(kb_editor WIN32
     ../../third_party/heroicons/optimized/24/outline/eye.svg
     ../../third_party/heroicons/optimized/24/outline/magnifying-glass.svg
     ../../third_party/heroicons/optimized/24/outline/plus.svg
+    ../../third_party/heroicons/optimized/24/outline/speaker-wave.svg
     ../../third_party/heroicons/optimized/16/solid/adjustments-horizontal.svg
     ../../third_party/heroicons/optimized/16/solid/command-line.svg
     ../../third_party/heroicons/optimized/16/solid/eye.svg

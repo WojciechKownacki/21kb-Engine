@@ -637,6 +637,25 @@ void RunImportedMemoryLifecycleTest() {
             evidence + " validation voice could not be stopped");
         Require(SameResources(backend.ResourcesForTesting(), resourcesBefore),
             evidence + " validation voice retained a native resource after stop");
+
+        const kb::audio::AudioPlayResult finiteVoice = backend.PlayOneShotForTesting(scene, kb::audio::AudioPlayDesc{
+            .clipAssetId = id.value,
+            .volume = 0.0F,
+            .loop = false,
+            .spatial = false,
+        });
+        Require(finiteVoice.Succeeded(), evidence + " finite voice did not start");
+        for (std::uint32_t attempt = 0U;
+             attempt < 512U && backend.IsVoicePlaying(scene, finiteVoice.voiceId);
+             ++attempt) {
+            static_cast<void>(backend.PumpFramesForTesting(512U));
+        }
+        Require(!backend.IsVoicePlaying(scene, finiteVoice.voiceId),
+            evidence + " finite voice remained playing after its imported decoder reached the end");
+        Require(backend.StopVoice(scene, finiteVoice.voiceId),
+            evidence + " finite validation voice could not be released");
+        Require(SameResources(backend.ResourcesForTesting(), resourcesBefore),
+            evidence + " finite validation voice retained a native resource after stop");
     }
 
     const kb::scene::SceneObject source = scene.Entities().CreateObject(
@@ -1029,8 +1048,23 @@ void RunVoiceStateTest(const std::filesystem::path& clipPath) {
         std::this_thread::sleep_for(std::chrono::milliseconds{ 2 });
     }
     Require(endedSound->AtEnd(), "Finite one-shot did not reach its natural end");
+    Require(!pool.IsVoicePlaying(ended.voiceId),
+        "Naturally ended one-shot remained visible as playing");
     Require(!pool.PauseVoice(ended.voiceId) && !pool.ResumeVoice(ended.voiceId),
         "Naturally ended one-shot accepted pause or resume");
+
+    const kb::audio::AudioPlayResult naturallyEnded = pool.PlayOneShot(engine.Native(), scene, kb::audio::AudioPlayDesc{
+        .clipAssetId = 8101U,
+        .volume = 0.0F,
+        .loop = false,
+        .spatial = false,
+    }, resolver, nullptr);
+    Require(naturallyEnded.Succeeded(), "Finite one-shot could not start for natural completion verification");
+    for (std::uint32_t attempt = 0U; attempt < 1000U && pool.IsVoicePlaying(naturallyEnded.voiceId); ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{ 2 });
+    }
+    Require(!pool.IsVoicePlaying(naturallyEnded.voiceId),
+        "Finite one-shot remained visible as playing after natural playback completion");
 
     const std::size_t voiceCountBeforeInvalidPlay = pool.VoiceCountForTesting();
     const auto rejectedPlay = [&engine, &scene, &resolver, &pool](kb::audio::AudioPlayDesc desc) {
