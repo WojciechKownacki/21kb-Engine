@@ -372,6 +372,8 @@ add_executable(kb_editor WIN32
     src/private/app/EditorWindowResizeInteraction.hpp
     src/private/app/EditorWindowResizeHandler.hpp
     src/private/inspection/InspectorInputInteraction.hpp
+    src/private/inspection/InspectorAudioComponentModel.hpp
+    src/private/inspection/InspectorAudioScrubController.hpp
     src/private/inspection/InspectorAudioTextBuilder.hpp
     src/private/inspection/InspectorCameraTextBuilder.hpp
     src/private/inspection/InspectorColliderTextBuilder.hpp
@@ -731,6 +733,8 @@ add_executable(kb_editor WIN32
     src/rendering/SvgPathFigureBuilder.cpp
     src/inspection/InspectorCameraTextBuilder.cpp
     src/inspection/InspectorAudioTextBuilder.cpp
+    src/inspection/InspectorAudioComponentModel.cpp
+    src/inspection/InspectorAudioScrubController.cpp
     src/inspection/InspectorColliderTextBuilder.cpp
     src/inspection/InspectorComponentCatalog.cpp
     src/inspection/InspectorComponentLabelFormatter.cpp
@@ -1071,6 +1075,7 @@ if(BUILD_TESTING)
         src/assets/EditorAssetBrowserTreeHitTester.cpp
         src/assets/EditorAssetBrowserViewState.cpp
         src/commands/EditorCommandStack.cpp
+        src/commands/EditorSceneHistoryCommand.cpp
         src/scene/EditorDefaultSceneFactory.cpp
         src/scene/EditorHierarchyExpansionState.cpp
         src/scene/EditorHierarchyRowBuilder.cpp
@@ -1085,6 +1090,8 @@ if(BUILD_TESTING)
         src/scene/EditorMeshImportArtifacts.cpp
         src/scene/EditorSceneSelectionPivot.cpp
         src/scene/EditorSceneAudioAssetActions.cpp
+        src/scene/EditorSceneCommandController.cpp
+        src/scene/EditorSceneViewportStateStore.cpp
           src/scene/EditorSceneMaterialAssetActions.cpp
           src/scene/EditorSceneMeshAssetActions.cpp
           src/scene/EditorScenePrefabActions.cpp
@@ -1121,6 +1128,8 @@ if(BUILD_TESTING)
         src/rendering/EditorMeshThumbnailService.cpp
         src/rendering/MaterialPreviewAppearanceResolver.cpp
         src/inspection/InspectorAudioTextBuilder.cpp
+        src/inspection/InspectorAudioComponentModel.cpp
+        src/inspection/InspectorAudioScrubController.cpp
         src/inspection/InspectorComponentCatalog.cpp
         src/inspection/InspectorComponentLabelFormatter.cpp
         src/inspection/InspectorPhysicsModel.cpp

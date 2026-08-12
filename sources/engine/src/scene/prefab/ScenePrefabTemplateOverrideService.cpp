@@ -6,6 +6,8 @@
 #include "scene/prefab/ScenePrefabOverrideApplier.hpp"
 #include "scene/prefab/ScenePrefabPropertyMutator.hpp"
 
+#include <utility>
+
 namespace kb::scene {
 
 bool ScenePrefabTemplateOverrideService::ApplyAll(Scene& scene, ScenePrefabRegistry& registry, ScenePrefabInstanceRecord& instance, ScenePrefabRecord& record) {
@@ -40,9 +42,13 @@ bool ScenePrefabTemplateOverrideService::ApplyChildren(Scene& scene, ScenePrefab
 }
 
 bool ScenePrefabTemplateOverrideService::ApplyProperty(Scene& scene, ScenePrefabRegistry& registry, ScenePrefabInstanceRecord& instance, ScenePrefabNodeDesc& node, SceneObject object, std::string_view propertyPath) {
-    if (!ScenePrefabPropertyMutator::Apply(scene, node, object, propertyPath)) {
+    ScenePrefabNodeDesc candidate = node;
+    if (!ScenePrefabPropertyMutator::Apply(scene, candidate, object, propertyPath)
+        || (candidate.components.audioSource.has_value()
+            && !IsAudioSourceComponentPersistable(*candidate.components.audioSource))) {
         return false;
     }
+    node = std::move(candidate);
 
     registry.RefreshContentHash(instance.prefab);
     registry.RefreshDerivedPrefabs(instance.prefab);

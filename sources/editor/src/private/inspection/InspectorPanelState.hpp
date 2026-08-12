@@ -1,5 +1,6 @@
 #pragma once
 
+#include "inspection/InspectorAudioScrubController.hpp"
 #include "rendering/EditorMeshPreviewTypes.hpp"
 
 #include <array>
@@ -203,6 +204,8 @@ enum class InspectorPropertyId : std::uint16_t {
     // The Collider section's "Fit to Mesh" action button.
     ColliderFitToMesh,
     AudioSourceClip,
+    AudioSourceClipPicker,
+    AudioSourceClipClear,
     AudioSourceVolume,
     AudioSourcePitch,
     AudioSourceEnabled,
@@ -210,8 +213,16 @@ enum class InspectorPropertyId : std::uint16_t {
     AudioSourceLoop,
     AudioSourceMute,
     AudioSourceSpatial,
+    AudioSourcePan,
+    AudioSourceSpatialBlend,
     AudioSourceAttenuation,
-    AudioSourceRange,
+    AudioSourceMinDistance,
+    AudioSourceMaxDistance,
+    AudioSourceRolloff,
+    AudioSourceDopplerFactor,
+    AudioSourceOutputBus,
+    AudioListenerPriority,
+    AudioListenerLocalUser,
     AudioListenerEnabled,
     AudioListenerPrimary,
     AnimatorController,
@@ -524,8 +535,11 @@ struct InspectorPanelState {
     [[nodiscard]] int DragStartY() const noexcept;
     [[nodiscard]] bool FloatDragMoved() const noexcept;
     void BeginFloatDrag(InspectorPropertyId property, float startValue, int x, int y) noexcept;
+    void BeginIntegerDrag(InspectorPropertyId property, int x, int y) noexcept;
     void MarkFloatDragMoved() noexcept;
     void EndFloatDrag() noexcept;
+    [[nodiscard]] InspectorAudioScrubState& AudioScrub() noexcept;
+    [[nodiscard]] const InspectorAudioScrubState& AudioScrub() const noexcept;
     [[nodiscard]] bool IsDraggingMeshPreview() const noexcept;
     [[nodiscard]] float MeshPreviewYaw() const noexcept;
     [[nodiscard]] float MeshPreviewPitch() const noexcept;
@@ -591,6 +605,7 @@ private:
     int dragStartX_ = 0;
     int dragStartY_ = 0;
     bool floatDragMoved_ = false;
+    InspectorAudioScrubState audioScrub_{};
     bool meshPreviewDragging_ = false;
     int meshPreviewDragStartX_ = 0;
     int meshPreviewDragStartY_ = 0;

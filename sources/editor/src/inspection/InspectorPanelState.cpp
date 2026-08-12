@@ -363,6 +363,15 @@ void InspectorPanelState::BeginFloatDrag(InspectorPropertyId property, float sta
     EndTextEdit();
 }
 
+void InspectorPanelState::BeginIntegerDrag(InspectorPropertyId property, int x, int y) noexcept {
+    draggedProperty_ = property;
+    dragStartValue_ = 0.0F;
+    dragStartX_ = x;
+    dragStartY_ = y;
+    floatDragMoved_ = false;
+    EndTextEdit();
+}
+
 void InspectorPanelState::MarkFloatDragMoved() noexcept {
     floatDragMoved_ = true;
 }
@@ -373,6 +382,14 @@ void InspectorPanelState::EndFloatDrag() noexcept {
     dragStartX_ = 0;
     dragStartY_ = 0;
     floatDragMoved_ = false;
+}
+
+InspectorAudioScrubState& InspectorPanelState::AudioScrub() noexcept {
+    return audioScrub_;
+}
+
+const InspectorAudioScrubState& InspectorPanelState::AudioScrub() const noexcept {
+    return audioScrub_;
 }
 
 bool InspectorPanelState::IsDraggingMeshPreview() const noexcept {

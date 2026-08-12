@@ -39,6 +39,7 @@
 #include "engine/scene/TagsComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
+#include "inspection/InspectorAudioComponentModel.hpp"
 #include "inspection/InspectorComponentLabelFormatter.hpp"
 #include "inspection/InspectorMeshRendererMaterialSlotModel.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
@@ -184,24 +185,6 @@ struct InspectorRowDefinition {
     InspectorPropertyId property = InspectorPropertyId::None;
     InspectorRowValueKind kind = InspectorRowValueKind::Text;
 };
-
-constexpr std::array<InspectorRowDefinition, 10> kAudioSourceRows{ {
-    { InspectorPropertyId::AudioSourceClip, InspectorRowValueKind::Text },
-    { InspectorPropertyId::AudioSourceVolume, InspectorRowValueKind::Text },
-    { InspectorPropertyId::AudioSourcePitch, InspectorRowValueKind::Text },
-    { InspectorPropertyId::AudioSourceEnabled, InspectorRowValueKind::Bool },
-    { InspectorPropertyId::AudioSourceAutoplay, InspectorRowValueKind::Bool },
-    { InspectorPropertyId::AudioSourceLoop, InspectorRowValueKind::Bool },
-    { InspectorPropertyId::AudioSourceMute, InspectorRowValueKind::Bool },
-    { InspectorPropertyId::AudioSourceSpatial, InspectorRowValueKind::Bool },
-    { InspectorPropertyId::AudioSourceAttenuation, InspectorRowValueKind::Text },
-    { InspectorPropertyId::AudioSourceRange, InspectorRowValueKind::Text },
-} };
-
-constexpr std::array<InspectorRowDefinition, 2> kAudioListenerRows{ {
-    { InspectorPropertyId::AudioListenerEnabled, InspectorRowValueKind::Bool },
-    { InspectorPropertyId::AudioListenerPrimary, InspectorRowValueKind::Bool },
-} };
 
 constexpr std::array<InspectorRowDefinition, 3> kAnimatorRows{ {
     { InspectorPropertyId::AnimatorSpeed, InspectorRowValueKind::Float },
@@ -1463,17 +1446,36 @@ void PaintAudioSourceSection(
     const InspectorPanelState& inspector,
     const EditorSceneContext& sceneContext,
     const kb::scene::AudioSourceComponent& audioSource) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AudioSource, HeroIconKind::SpeakerWave, "Audio Source");
-    section.Field("Clip", AssetDisplayName(sceneContext, audioSource.clipAssetId), InspectorPropertyId::AudioSourceClip);
-    section.Field("Volume", FormatFloat(audioSource.volume, 2), InspectorPropertyId::AudioSourceVolume);
-    section.Field("Pitch", FormatFloat(audioSource.pitch, 2), InspectorPropertyId::AudioSourcePitch);
-    section.Bool("Enabled", audioSource.enabled, InspectorPropertyId::AudioSourceEnabled);
-    section.Bool("Autoplay", audioSource.autoplay, InspectorPropertyId::AudioSourceAutoplay);
-    section.Bool("Loop", audioSource.loop, InspectorPropertyId::AudioSourceLoop);
-    section.Bool("Mute", audioSource.mute, InspectorPropertyId::AudioSourceMute);
-    section.Bool("Spatial", audioSource.spatial, InspectorPropertyId::AudioSourceSpatial);
-    section.Field("Attenuation", InspectorComponentLabelFormatter::AudioAttenuationModelName(audioSource.attenuationModel), InspectorPropertyId::AudioSourceAttenuation);
-    section.Field("Range", FormatFloat(audioSource.minDistance, 2) + " - " + FormatFloat(audioSource.maxDistance, 2), InspectorPropertyId::AudioSourceRange);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AudioSource, HeroIconKind::SpeakerWave, "Audio Source",
+        InspectorAudioComponentModel::HasRemoveControl(InspectorSectionId::AudioSource));
+    for (const InspectorAudioRow& row : InspectorAudioComponentModel::SourceRows()) {
+        switch (row.property) {
+        case InspectorPropertyId::AudioSourceClip:
+            section.AssetField(row.label, InspectorAudioComponentModel::ClipDisplay(sceneContext.Scene(), audioSource), row.property, row.pickerProperty);
+            break;
+        case InspectorPropertyId::AudioSourceClipClear: section.Action(row.label, row.property); break;
+        case InspectorPropertyId::AudioSourceVolume: section.Float(row.label, FormatFloat(audioSource.volume, 3), row.property); break;
+        case InspectorPropertyId::AudioSourcePitch: section.Float(row.label, FormatFloat(audioSource.pitch, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceEnabled: section.Bool(row.label, audioSource.enabled, row.property); break;
+        case InspectorPropertyId::AudioSourceAutoplay: section.Bool(row.label, audioSource.autoplay, row.property); break;
+        case InspectorPropertyId::AudioSourceLoop: section.Bool(row.label, audioSource.loop, row.property); break;
+        case InspectorPropertyId::AudioSourceMute: section.Bool(row.label, audioSource.mute, row.property); break;
+        case InspectorPropertyId::AudioSourceSpatial: section.Bool(row.label, audioSource.spatial, row.property); break;
+        case InspectorPropertyId::AudioSourcePan: section.Float(row.label, FormatFloat(audioSource.pan, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceSpatialBlend: section.Float(row.label, FormatFloat(audioSource.spatialBlend, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceAttenuation:
+            section.Field(row.label, InspectorComponentLabelFormatter::AudioAttenuationModelName(audioSource.attenuationModel), row.property);
+            break;
+        case InspectorPropertyId::AudioSourceMinDistance: section.Float(row.label, FormatFloat(audioSource.minDistance, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceMaxDistance: section.Float(row.label, FormatFloat(audioSource.maxDistance, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceRolloff: section.Float(row.label, FormatFloat(audioSource.rolloff, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceDopplerFactor: section.Float(row.label, FormatFloat(audioSource.dopplerFactor, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceOutputBus:
+            section.Field(row.label, InspectorAudioComponentModel::OutputBusDisplay(sceneContext.Scene(), audioSource), row.property);
+            break;
+        default: break;
+        }
+    }
     y = section.Bottom() + kSectionGap;
 }
 
@@ -1484,9 +1486,17 @@ void PaintAudioListenerSection(
     const EditorTheme& theme,
     const InspectorPanelState& inspector,
     const kb::scene::AudioListenerComponent& audioListener) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AudioListener, HeroIconKind::SpeakerWave, "Audio Listener");
-    section.Bool("Enabled", audioListener.enabled, InspectorPropertyId::AudioListenerEnabled);
-    section.Bool("Primary", audioListener.primary, InspectorPropertyId::AudioListenerPrimary);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AudioListener, HeroIconKind::SpeakerWave, "Audio Listener",
+        InspectorAudioComponentModel::HasRemoveControl(InspectorSectionId::AudioListener));
+    for (const InspectorAudioRow& row : InspectorAudioComponentModel::ListenerRows()) {
+        switch (row.property) {
+        case InspectorPropertyId::AudioListenerPriority: section.Field(row.label, std::to_string(audioListener.priority), row.property); break;
+        case InspectorPropertyId::AudioListenerLocalUser: section.Field(row.label, std::to_string(audioListener.localUser.value), row.property); break;
+        case InspectorPropertyId::AudioListenerPrimary: section.Bool(row.label, audioListener.primary, row.property); break;
+        case InspectorPropertyId::AudioListenerEnabled: section.Bool(row.label, audioListener.enabled, row.property); break;
+        default: break;
+        }
+    }
     y = section.Bottom() + kSectionGap;
 }
 
@@ -2936,7 +2946,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         }
     }
     if (const kb::scene::AudioSourceComponent* audioSource = scene.Components().AudioSources().TryGet(selected); audioSource != nullptr) {
-        const int h = SectionHeight(inspector, InspectorSectionId::AudioSource, 10);
+        const int h = SectionHeight(inspector, InspectorSectionId::AudioSource, static_cast<int>(InspectorAudioComponentModel::SourceRows().size()));
         if (sectionVisible(y, h)) {
             PaintAudioSourceSection(dc, content, y, theme, inspector, sceneContext, *audioSource);
         } else {
@@ -2944,7 +2954,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         }
     }
     if (const kb::scene::AudioListenerComponent* audioListener = scene.Components().AudioListeners().TryGet(selected); audioListener != nullptr) {
-        const int h = SectionHeight(inspector, InspectorSectionId::AudioListener, 2);
+        const int h = SectionHeight(inspector, InspectorSectionId::AudioListener, static_cast<int>(InspectorAudioComponentModel::ListenerRows().size()));
         if (sectionVisible(y, h)) {
             PaintAudioListenerSection(dc, content, y, theme, inspector, *audioListener);
         } else {
@@ -3182,10 +3192,10 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         }
     }
     if (scene.Components().AudioSources().TryGet(selected) != nullptr) {
-        height += SectionHeight(inspector, InspectorSectionId::AudioSource, 10) + kSectionGap;
+        height += SectionHeight(inspector, InspectorSectionId::AudioSource, static_cast<int>(InspectorAudioComponentModel::SourceRows().size())) + kSectionGap;
     }
     if (scene.Components().AudioListeners().TryGet(selected) != nullptr) {
-        height += SectionHeight(inspector, InspectorSectionId::AudioListener, 2) + kSectionGap;
+        height += SectionHeight(inspector, InspectorSectionId::AudioListener, static_cast<int>(InspectorAudioComponentModel::ListenerRows().size())) + kSectionGap;
     }
     if (scene.Components().Animators().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::Animator, 4) + kSectionGap;
@@ -3686,6 +3696,38 @@ void AdvanceGroup(int& y) noexcept {
                     x,
                     yPoint);
             hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        AdvanceRow(y);
+    }
+    return {};
+}
+
+[[nodiscard]] InspectorPanelRenderer::Hit HitAudioRows(
+    RECT content,
+    int& y,
+    InspectorSectionId section,
+    std::span<const InspectorAudioRow> rows,
+    int x,
+    int yPoint) noexcept {
+    for (const InspectorAudioRow& row : rows) {
+        const RECT rect = RowRect(content, y);
+        InspectorPanelRenderer::Hit hit{};
+        if (row.kind == InspectorAudioControlKind::Asset) {
+            hit = HitAssetFieldRow(rect, section, row.property, row.pickerProperty, x, yPoint);
+        } else if (row.kind == InspectorAudioControlKind::Action) {
+            hit = Contains(rect, x, yPoint)
+                ? MakeHit(InspectorAudioComponentModel::HitKindForControl(row.kind), section, row.property, rect)
+                : InspectorPanelRenderer::Hit{};
+        } else {
+            switch (InspectorAudioComponentModel::HitKindForControl(row.kind)) {
+            case InspectorHitKind::BoolField: hit = HitBool(rect, section, row.property, x, yPoint); break;
+            case InspectorHitKind::FloatField: hit = HitFloatRow(rect, section, row.property, x, yPoint); break;
+            case InspectorHitKind::TextField: hit = HitTextRow(rect, section, row.property, x, yPoint); break;
+            default: break;
+            }
+        }
+        if (hit.kind != InspectorHitKind::None) {
             return hit;
         }
         AdvanceRow(y);
@@ -4689,11 +4731,12 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     }
 
     if (sceneContext.Scene().Components().AudioSources().Has(selected)) {
-        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::AudioSource, x, scrolledY); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::AudioSource, x, scrolledY,
+                InspectorAudioComponentModel::HasRemoveControl(InspectorSectionId::AudioSource)); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         if (!state.IsCollapsed(InspectorSectionId::AudioSource)) {
-            if (InspectorPanelRenderer::Hit hit = HitRows(viewport, y, InspectorSectionId::AudioSource, kAudioSourceRows, x, scrolledY); hit.kind != InspectorHitKind::None) {
+            if (InspectorPanelRenderer::Hit hit = HitAudioRows(viewport, y, InspectorSectionId::AudioSource, InspectorAudioComponentModel::SourceRows(), x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
         }
@@ -4701,11 +4744,12 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     }
 
     if (sceneContext.Scene().Components().AudioListeners().Has(selected)) {
-        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::AudioListener, x, scrolledY); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::AudioListener, x, scrolledY,
+                InspectorAudioComponentModel::HasRemoveControl(InspectorSectionId::AudioListener)); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         if (!state.IsCollapsed(InspectorSectionId::AudioListener)) {
-            if (InspectorPanelRenderer::Hit hit = HitRows(viewport, y, InspectorSectionId::AudioListener, kAudioListenerRows, x, scrolledY); hit.kind != InspectorHitKind::None) {
+            if (InspectorPanelRenderer::Hit hit = HitAudioRows(viewport, y, InspectorSectionId::AudioListener, InspectorAudioComponentModel::ListenerRows(), x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
         }

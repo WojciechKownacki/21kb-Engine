@@ -9073,19 +9073,21 @@ bool EditorSceneContext::DeleteSceneTag(std::string_view tagText) {
 }
 
 bool EditorSceneContext::SetAudioSourceClipAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {
-    if (!entity.IsValid() || !assetId.IsValid()) {
+    if (!entity.IsValid()) {
         return false;
     }
-    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
-    if (metadata == nullptr || !EditorSceneAudioAssetActions::IsAudioAsset(*metadata)) {
-        console_.Warning("Inspector", "Only audio assets can be assigned to an Audio Source.");
-        return false;
+    if (assetId.IsValid()) {
+        const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
+        if (metadata == nullptr || !EditorSceneAudioAssetActions::IsAudioAsset(*metadata)) {
+            console_.Warning("Inspector", "Only audio assets can be assigned to an Audio Source.");
+            return false;
+        }
     }
     if (!scene_->Components().AudioSources().Has(entity)) {
         console_.Warning("Inspector", "Selected entity does not have an Audio Source component.");
         return false;
     }
-    return ExecuteSceneCommand("Assign Audio Clip", [this, entity, assetId]() {
+    return ExecuteSceneCommand(assetId.IsValid() ? "Assign Audio Clip" : "Clear Audio Clip", [this, entity, assetId]() {
         return EditorSceneAudioAssetActions::AssignAudioClip(*scene_, entity, assetId);
     });
 }

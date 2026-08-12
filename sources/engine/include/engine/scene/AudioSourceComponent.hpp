@@ -1,11 +1,13 @@
 #pragma once
 
+#include "engine/audio/AudioRoutingContract.hpp"
 #include "engine/audio/AudioSettings.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
 #include <string_view>
 
 namespace kb::scene {
@@ -54,11 +56,35 @@ inline std::string_view AudioSourceOutputBus(const AudioSourceComponent& compone
 
 inline bool IsAudioSourceOutputBusValid(const AudioSourceComponent& component) noexcept {
     const std::string_view bus = AudioSourceOutputBus(component);
-    return bus.empty() || bus.front() != '\0';
+    return bus.empty() || (bus.front() != '\0' && kb::audio::IsAudioMixerNameTokenValid(bus));
+}
+
+[[nodiscard]] inline bool IsAudioSourceComponentPersistable(const AudioSourceComponent& component) noexcept {
+    const bool attenuationModelValid = [model = component.attenuationModel]() noexcept {
+        switch (model) {
+        case kb::audio::AudioAttenuationModel::None:
+        case kb::audio::AudioAttenuationModel::Inverse:
+        case kb::audio::AudioAttenuationModel::Linear:
+        case kb::audio::AudioAttenuationModel::Exponential:
+            return true;
+        }
+        return false;
+    }();
+    return std::isfinite(component.volume) && component.volume >= 0.0F
+        && std::isfinite(component.pitch) && component.pitch >= 0.01F
+        && std::isfinite(component.pan) && component.pan >= -1.0F && component.pan <= 1.0F
+        && std::isfinite(component.spatialBlend) && component.spatialBlend >= 0.0F && component.spatialBlend <= 1.0F
+        && std::isfinite(component.minDistance) && component.minDistance >= 0.01F
+        && std::isfinite(component.maxDistance) && component.maxDistance >= component.minDistance
+        && std::isfinite(component.rolloff) && component.rolloff >= 0.0F
+        && std::isfinite(component.dopplerFactor) && component.dopplerFactor >= 0.0F
+        && attenuationModelValid
+        && IsAudioSourceOutputBusValid(component);
 }
 
 [[nodiscard]] inline bool SetAudioSourceOutputBus(AudioSourceComponent& component, std::string_view busName) noexcept {
-    if (busName.size() > AudioSourceComponent::MaxOutputBusBytes || busName.find('\0') != std::string_view::npos) {
+    if (busName.size() > AudioSourceComponent::MaxOutputBusBytes
+        || (!busName.empty() && !kb::audio::IsAudioMixerNameTokenValid(busName))) {
         return false;
     }
 
