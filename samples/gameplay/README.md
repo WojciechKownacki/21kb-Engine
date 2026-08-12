@@ -10,7 +10,7 @@ sample-only runtime system.
 - `TopDownController.lua`: screen-plane movement; requires Transform and Move input.
 - `PlatformerController.lua`: side-scroll movement and jump; requires CharacterController, Move and Jump input.
 - `SimpleShooterController.lua`: character-relative movement and projectile spawning; requires CharacterController, Move, Fire and the shipped Projectile prefab.
-- `AudioShooterDemo.21kbscene`: a ready-to-run forward-flight scene. Space fires visible cube projectiles and a spatial one-shot; the ship demonstrates a non-spatial looping source, while the beacon demonstrates spatial attenuation. Its scripts, input assets, prefab, mesh and generated WAV clips live in `Assets/Samples/AudioShooter/`.
+- `AudioShooterDemo.21kbscene`: a ready-to-run forward-flight scene. Space fires visible cube projectiles and a spatial one-shot; the beacon demonstrates fully spatial linear distance attenuation without a masking 2D copy. Its scripts, input assets, prefab, mesh and generated WAV clips live in `Assets/Samples/AudioShooter/`.
 
 Attach a sample to a scene entity, bind the named input actions, save/reopen
 the scene and enter Play Mode. `AudioShooterDemo.21kbscene` is already wired and
