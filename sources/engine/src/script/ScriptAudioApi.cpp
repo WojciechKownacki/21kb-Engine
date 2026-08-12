@@ -15,6 +15,7 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <span>
@@ -161,6 +162,11 @@ ScriptFunctionCallResult AudioPlay(const ScriptFunctionCallContext& context, std
         .rolloff = FloatArg(arguments, "rolloff", 1.0F),
         .dopplerFactor = FloatArg(arguments, "dopplerFactor", 1.0F),
         .position = PlaybackPosition(context, arguments),
+        .velocity = kb::scene::Vec3{
+            FloatArg(arguments, "velocityX", 0.0F),
+            FloatArg(arguments, "velocityY", 0.0F),
+            FloatArg(arguments, "velocityZ", 0.0F),
+        },
         // LIB-148: voice-stealing priority, clamped to the desc's 0-255 range.
         .priority = static_cast<std::uint8_t>(std::clamp(IntArg(arguments, "priority", 128), 0, 255)),
         .ownerEntityId = ownerEntityId,
@@ -180,7 +186,7 @@ ScriptFunctionCallResult AudioPlay(const ScriptFunctionCallContext& context, std
     };
 }
 
-// LIB-148: the eight per-voice controls share one shape - a required `voice` handle from
+// LIB-148: the ten per-voice controls share one shape - a required `voice` handle from
 // Audio.Play, a single result boolean that is HONESTLY false for a dead/finished/stolen
 // voice (executed=true - "that voice is gone" is an answer, not a failure), plus the
 // operation-specific value argument where one exists.
@@ -229,6 +235,20 @@ ScriptFunctionCallResult AudioSetVolume(const ScriptFunctionCallContext& context
     });
 }
 
+ScriptFunctionCallResult AudioSetMute(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    const bool mute = BoolArg(arguments, "mute", false);
+    return VoiceCall(context, arguments, "applied", [mute](kb::scene::Scene& scene, std::uint64_t voice) {
+        return kb::audio::AudioPlayback::SetVoiceMute(scene, voice, mute);
+    });
+}
+
+ScriptFunctionCallResult AudioSetPan(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    const float pan = FloatArg(arguments, "pan", 0.0F);
+    return VoiceCall(context, arguments, "applied", [pan](kb::scene::Scene& scene, std::uint64_t voice) {
+        return kb::audio::AudioPlayback::SetVoicePan(scene, voice, pan);
+    });
+}
+
 ScriptFunctionCallResult AudioSetPitch(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     const float pitch = FloatArg(arguments, "pitch", 1.0F);
     return VoiceCall(context, arguments, "applied", [pitch](kb::scene::Scene& scene, std::uint64_t voice) {
@@ -247,6 +267,74 @@ ScriptFunctionCallResult AudioIsPlaying(const ScriptFunctionCallContext& context
     return VoiceCall(context, arguments, "playing", [](kb::scene::Scene& scene, std::uint64_t voice) {
         return kb::audio::AudioPlayback::IsVoicePlaying(scene, voice);
     });
+}
+
+template <typename Operation>
+ScriptFunctionCallResult SourceCall(
+    const ScriptFunctionCallContext& context,
+    std::span<const ScriptFunctionArgument> arguments,
+    Operation operation) {
+    if (context.scene == nullptr) {
+        return Error("audio api requires an active scene");
+    }
+    const kb::audio::AudioSourceControlResult result = operation(
+        *context.scene, ParentEntity(context, arguments));
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "succeeded", ScriptValue{ result.Succeeded() } },
+            ScriptFunctionArgument{ "playing", ScriptValue{ result.playing } },
+            ScriptFunctionArgument{ "status", ScriptValue{ static_cast<int>(result.status) } },
+        },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult AudioPlaySource(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SourceCall(context, arguments, &kb::audio::AudioPlayback::PlaySource);
+}
+
+ScriptFunctionCallResult AudioPauseSource(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SourceCall(context, arguments, &kb::audio::AudioPlayback::PauseSource);
+}
+
+ScriptFunctionCallResult AudioResumeSource(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SourceCall(context, arguments, &kb::audio::AudioPlayback::ResumeSource);
+}
+
+ScriptFunctionCallResult AudioStopSource(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SourceCall(context, arguments, &kb::audio::AudioPlayback::StopSource);
+}
+
+ScriptFunctionCallResult AudioIsSourcePlaying(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SourceCall(context, arguments, &kb::audio::AudioPlayback::IsSourcePlaying);
+}
+
+[[nodiscard]] ScriptFunctionCallResult DeviceStatusResult(kb::audio::AudioDeviceStatus status) {
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "status", ScriptValue{ static_cast<int>(status) } },
+            ScriptFunctionArgument{ "available", ScriptValue{ status == kb::audio::AudioDeviceStatus::PlaybackAvailable } },
+        },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult AudioDeviceStatus(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    static_cast<void>(arguments);
+    if (context.scene == nullptr) {
+        return Error("audio api requires an active scene");
+    }
+    return DeviceStatusResult(kb::audio::AudioPlayback::DeviceStatus(*context.scene));
+}
+
+ScriptFunctionCallResult AudioReinitialize(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    static_cast<void>(arguments);
+    if (context.scene == nullptr) {
+        return Error("audio api requires an active scene");
+    }
+    return DeviceStatusResult(kb::audio::AudioPlayback::Reinitialize(*context.scene));
 }
 
 // LIB-152: audio-clock playback position - `valid=false` (seconds 0) for a dead voice,
@@ -423,10 +511,11 @@ ScriptFunctionCallResult AudioSetBusVolume(const ScriptFunctionCallContext& cont
         return Error("audio bus name is not declared by the active mixer");
     }
 
-    kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(*context.scene, bus, FloatArg(arguments, "volume", 1.0F));
+    const bool applied = kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(
+        *context.scene, bus, FloatArg(arguments, "volume", 1.0F));
     return ScriptFunctionCallResult{
         .executed = true,
-        .outputs = { ScriptFunctionArgument{ "applied", ScriptValue{ true } } },
+        .outputs = { ScriptFunctionArgument{ "applied", ScriptValue{ applied } } },
         .errors = {},
     };
 }
@@ -461,10 +550,11 @@ ScriptFunctionCallResult AudioTransitionToSnapshot(const ScriptFunctionCallConte
         return Error("audio snapshot name is not declared by the active mixer");
     }
 
-    kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(*context.scene, snapshot, FloatArg(arguments, "durationSeconds", 0.0F));
+    const bool started = kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(
+        *context.scene, snapshot, FloatArg(arguments, "durationSeconds", 0.0F));
     return ScriptFunctionCallResult{
         .executed = true,
-        .outputs = { ScriptFunctionArgument{ "started", ScriptValue{ true } } },
+        .outputs = { ScriptFunctionArgument{ "started", ScriptValue{ started } } },
         .errors = {},
     };
 }
@@ -483,13 +573,25 @@ ScriptFunctionCallResult AudioConfigureOcclusion(const ScriptFunctionCallContext
     }
     kb::scene::AudioOcclusionSettings settings = kb::scene::SceneAudioOcclusionAccess::Settings(*context.scene);
     settings.enabled = enabledArgument->AsBool(false);
-    settings.occludedVolumeScale = std::clamp(FloatArg(arguments, "occludedVolume", settings.occludedVolumeScale), 0.0F, 1.0F);
-    settings.maxDistance = std::max(0.0F, FloatArg(arguments, "maxDistance", settings.maxDistance));
+    const float occludedVolumeScale = FloatArg(arguments, "occludedVolume", settings.occludedVolumeScale);
+    const float maxDistance = FloatArg(arguments, "maxDistance", settings.maxDistance);
+    if (!std::isfinite(occludedVolumeScale) || !std::isfinite(maxDistance)) {
+        return ScriptFunctionCallResult{
+            .executed = true,
+            .outputs = { ScriptFunctionArgument{ "applied", ScriptValue{ false } } },
+            .errors = {},
+        };
+    }
+    settings.occludedVolumeScale = std::clamp(occludedVolumeScale, 0.0F, 1.0F);
+    settings.maxDistance = std::max(0.0F, maxDistance);
     const ScriptValue* layerMaskArgument = FindArg(arguments, "layerMask");
     if (layerMaskArgument != nullptr) {
         settings.layerMask = static_cast<std::uint32_t>(layerMaskArgument->AsInt64(static_cast<std::int64_t>(settings.layerMask)));
     }
-    settings.maxRaycastsPerTick = static_cast<std::uint32_t>(std::clamp(IntArg(arguments, "maxRaycastsPerTick", static_cast<int>(settings.maxRaycastsPerTick)), 0, 1024));
+    settings.maxRaycastsPerTick = static_cast<std::uint32_t>(std::clamp(
+        IntArg(arguments, "maxRaycastsPerTick", static_cast<int>(settings.maxRaycastsPerTick)),
+        0,
+        static_cast<int>(kb::scene::kMaxAudioOcclusionRaycastsPerTick)));
 
     kb::scene::SceneAudioOcclusionAccess::Configure(*context.scene, settings);
     return ScriptFunctionCallResult{
@@ -542,6 +644,9 @@ bool ScriptAudioApi::Register(ScriptRuntimeHost& host) {
         ScriptFunctionPin{ "maxDistance", ScriptValueType::Float, false },
         ScriptFunctionPin{ "rolloff", ScriptValueType::Float, false },
         ScriptFunctionPin{ "dopplerFactor", ScriptValueType::Float, false },
+        ScriptFunctionPin{ "velocityX", ScriptValueType::Float, false },
+        ScriptFunctionPin{ "velocityY", ScriptValueType::Float, false },
+        ScriptFunctionPin{ "velocityZ", ScriptValueType::Float, false },
         ScriptFunctionPin{ "outputBus", ScriptValueType::String, false },
         ScriptFunctionPin{ "priority", ScriptValueType::Int, false },
         ScriptFunctionPin{ "attach", ScriptValueType::Bool, false },
@@ -556,7 +661,7 @@ bool ScriptAudioApi::Register(ScriptRuntimeHost& host) {
         return false;
     }
 
-    // LIB-148: the eight per-voice controls - one required `voice` handle, the
+    // LIB-148: the ten per-voice controls - one required `voice` handle, the
     // operation-specific value where one exists, one honest result boolean.
     struct VoiceFunctionSpec {
         const char* name;
@@ -571,6 +676,8 @@ bool ScriptAudioApi::Register(ScriptRuntimeHost& host) {
         { "Audio.Resume", nullptr, ScriptValueType::Bool, "resumed", &AudioResume },
         { "Audio.Seek", "positionSeconds", ScriptValueType::Float, "applied", &AudioSeek },
         { "Audio.SetVolume", "volume", ScriptValueType::Float, "applied", &AudioSetVolume },
+        { "Audio.SetMute", "mute", ScriptValueType::Bool, "applied", &AudioSetMute },
+        { "Audio.SetPan", "pan", ScriptValueType::Float, "applied", &AudioSetPan },
         { "Audio.SetPitch", "pitch", ScriptValueType::Float, "applied", &AudioSetPitch },
         { "Audio.SetLoop", "loop", ScriptValueType::Bool, "applied", &AudioSetLoop },
         { "Audio.IsPlaying", nullptr, ScriptValueType::Bool, "playing", &AudioIsPlaying },
@@ -587,6 +694,54 @@ bool ScriptAudioApi::Register(ScriptRuntimeHost& host) {
         if (!host.RegisterFunction(std::move(voiceDesc))) {
             return false;
         }
+    }
+
+    struct SourceFunctionSpec {
+        const char* name;
+        ScriptFunctionCallback callback;
+    };
+    const SourceFunctionSpec sourceFunctions[] = {
+        { "Audio.PlaySource", &AudioPlaySource },
+        { "Audio.PauseSource", &AudioPauseSource },
+        { "Audio.ResumeSource", &AudioResumeSource },
+        { "Audio.StopSource", &AudioStopSource },
+        { "Audio.IsSourcePlaying", &AudioIsSourcePlaying },
+    };
+    for (const SourceFunctionSpec& spec : sourceFunctions) {
+        ScriptFunctionDesc sourceDesc;
+        sourceDesc.signature.name = spec.name;
+        sourceDesc.signature.inputs = { ScriptFunctionPin{ "entity", ScriptValueType::Entity, false } };
+        sourceDesc.signature.outputs = {
+            ScriptFunctionPin{ "succeeded", ScriptValueType::Bool, true },
+            ScriptFunctionPin{ "playing", ScriptValueType::Bool, true },
+            ScriptFunctionPin{ "status", ScriptValueType::Int, true },
+        };
+        sourceDesc.callback = spec.callback;
+        if (!host.RegisterFunction(std::move(sourceDesc))) {
+            return false;
+        }
+    }
+
+    ScriptFunctionDesc deviceStatus;
+    deviceStatus.signature.name = "Audio.DeviceStatus";
+    deviceStatus.signature.outputs = {
+        ScriptFunctionPin{ "status", ScriptValueType::Int, true },
+        ScriptFunctionPin{ "available", ScriptValueType::Bool, true },
+    };
+    deviceStatus.callback = &AudioDeviceStatus;
+    if (!host.RegisterFunction(std::move(deviceStatus))) {
+        return false;
+    }
+
+    ScriptFunctionDesc reinitialize;
+    reinitialize.signature.name = "Audio.Reinitialize";
+    reinitialize.signature.outputs = {
+        ScriptFunctionPin{ "status", ScriptValueType::Int, true },
+        ScriptFunctionPin{ "available", ScriptValueType::Bool, true },
+    };
+    reinitialize.callback = &AudioReinitialize;
+    if (!host.RegisterFunction(std::move(reinitialize))) {
+        return false;
     }
 
     ScriptFunctionDesc setMixer;

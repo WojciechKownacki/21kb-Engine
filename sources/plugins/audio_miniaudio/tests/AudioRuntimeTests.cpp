@@ -1,4 +1,5 @@
 #include "assets/MiniaudioClipResolver.hpp"
+#include "engine/assets/AssetImportService.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/audio/AudioMixerAsset.hpp"
 #include "engine/audio/AudioMixerAssetIO.hpp"
@@ -21,6 +22,7 @@
 #include "scene/MiniaudioSourceRegistry.hpp"
 
 #include <cmath>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -28,6 +30,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -104,6 +107,9 @@ void RegisterClip(kb::scene::Scene& scene, std::uint64_t id, const std::filesyst
             }),
         "Audio test clip registration failed");
 }
+
+template <typename Resolver>
+void RunClipResolverValidationTest(const std::filesystem::path& clipPath, Resolver& resolver);
 
 [[nodiscard]] kb::scene::TransformComponent TransformAt(float x, float y = 0.0F, float z = 0.0F) noexcept {
     return kb::scene::TransformComponent{
@@ -223,6 +229,7 @@ void RunVoiceStateTest(const std::filesystem::path& clipPath) {
     Require(endedSound->AtEnd(), "Finite one-shot did not reach its natural end");
     Require(!pool.PauseVoice(ended.voiceId) && !pool.ResumeVoice(ended.voiceId),
         "Naturally ended one-shot accepted pause or resume");
+    RunClipResolverValidationTest(clipPath, resolver);
 }
 
 void RunInitialFrameSoundTest(const std::filesystem::path& clipPath) {
@@ -465,7 +472,8 @@ void RunSourceLifecycleAndRoutingTest(const std::filesystem::path& clipPath, std
     }
 
     kb::scene::AudioSourceComponent routed{ .clipAssetId = 8301U, .loop = true, .spatial = false, .autoplay = false };
-    kb::scene::SetAudioSourceOutputBus(routed, "Effects");
+    Require(kb::scene::SetAudioSourceOutputBus(routed, "Effects"),
+        "Routed source fixture bus was invalid");
     scene.Components().AudioSources().Set(sourceObject.Entity(), routed);
     Require(sources.PlaySource(engine.Native(), scene, sourceObject.Entity(), resolver, buses, true).status
             == kb::audio::AudioSourceControlStatus::MixerUnavailable,
@@ -489,7 +497,9 @@ void RunSourceLifecycleAndRoutingTest(const std::filesystem::path& clipPath, std
     Require(buses.Resolve("Effects").status == kb::audio_miniaudio::MiniaudioBusRegistry::RouteStatus::Routed
             && buses.Resolve("Missing").status == kb::audio_miniaudio::MiniaudioBusRegistry::RouteStatus::UnknownBus,
         "Mixer route query did not distinguish routed and unknown buses");
-    kb::scene::SetAudioSourceOutputBus(*scene.Components().AudioSources().TryGet(sourceObject.Entity()), "Missing");
+    Require(kb::scene::SetAudioSourceOutputBus(
+                *scene.Components().AudioSources().TryGet(sourceObject.Entity()), "Missing"),
+        "Missing-route source fixture bus was invalid");
     Require(sources.PlaySource(engine.Native(), scene, sourceObject.Entity(), resolver, buses, true).status
             == kb::audio::AudioSourceControlStatus::UnknownBus,
         "Unknown source route did not fail explicitly");
@@ -524,7 +534,8 @@ void RunBackendRestartTest(const std::filesystem::path& clipPath) {
         .loop = true,
         .spatial = false,
     };
-    kb::scene::SetAudioSourceOutputBus(sourceComponent, "Effects");
+    Require(kb::scene::SetAudioSourceOutputBus(sourceComponent, "Effects"),
+        "Restart source fixture bus was invalid");
     scene.Components().AudioSources().Set(source.Entity(), sourceComponent);
 
     kb::audio_miniaudio::MiniaudioPlaybackBackend backend;
@@ -544,7 +555,9 @@ void RunBackendRestartTest(const std::filesystem::path& clipPath) {
         "Restart retained native source, voice or bus resources");
 
     kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 0U);
-    kb::scene::SetAudioSourceOutputBus(*scene.Components().AudioSources().TryGet(source.Entity()), {});
+    Require(kb::scene::SetAudioSourceOutputBus(
+                *scene.Components().AudioSources().TryGet(source.Entity()), {}),
+        "Unavailable source fixture master route was invalid");
     voiceDesc.outputBus.clear();
     Require(backend.PlaySourceForTesting(scene, source.Entity()).Succeeded(), "Backend was not reusable after active-resource restart");
     const kb::audio::AudioPlayResult unavailableVoice = backend.PlayOneShotForTesting(scene, voiceDesc);
@@ -560,7 +573,9 @@ void RunBackendRestartTest(const std::filesystem::path& clipPath) {
         "No-device tick without a mixer retained a native source or paused looping voice");
 
     kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 8499U);
-    kb::scene::SetAudioSourceOutputBus(*scene.Components().AudioSources().TryGet(source.Entity()), "Effects");
+    Require(kb::scene::SetAudioSourceOutputBus(
+                *scene.Components().AudioSources().TryGet(source.Entity()), "Effects"),
+        "Unavailable source fixture bus was invalid");
     voiceDesc.outputBus = "Effects";
     Require(backend.PlaySourceForTesting(scene, source.Entity()).Succeeded(), "Bus-routed source was not reusable after unavailable cleanup");
     Require(backend.PlayOneShotForTesting(scene, voiceDesc).Succeeded(), "Bus-routed voice was not reusable after unavailable cleanup");
@@ -590,6 +605,91 @@ void RunBackendRestartTest(const std::filesystem::path& clipPath) {
     backend.Shutdown();
 }
 
+template <typename Resolver>
+void RunClipResolverValidationTest(const std::filesystem::path& clipPath, Resolver& resolver) {
+    kb::scene::Scene scene;
+    RegisterClip(scene, 8601U, clipPath);
+    Require(resolver.Resolve(scene, 8601U) == clipPath,
+        "Audio clip resolver rejected a valid native wave asset");
+
+    Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                .id = kb::assets::AssetId{ 8602U },
+                .type = "Texture",
+                .name = "WrongType",
+                .virtualPath = "/Audio/WrongType.wav",
+                .physicalPath = clipPath,
+                .contentHash = 8602U,
+            }),
+        "Wrong-type resolver fixture registration failed");
+    Require(resolver.Resolve(scene, 8602U).empty(),
+        "Audio clip resolver accepted wrong metadata type");
+
+    Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                .id = kb::assets::AssetId{ 8603U },
+                .type = "AudioClip",
+                .importCategory = "Audio",
+                .name = "WrongCategoryShape",
+                .virtualPath = "/Audio/WrongCategoryShape.wav",
+                .physicalPath = clipPath,
+                .contentHash = 8603U,
+            }),
+        "Wrong-category resolver fixture registration failed");
+    Require(resolver.Resolve(scene, 8603U).empty(),
+        "Audio clip resolver accepted imported metadata on a native source file");
+
+    const std::filesystem::path unsupportedPath = TestRoot() / "Unsupported.ogg";
+    std::filesystem::copy_file(clipPath, unsupportedPath, std::filesystem::copy_options::overwrite_existing);
+    Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                .id = kb::assets::AssetId{ 8604U },
+                .type = "AudioClip",
+                .name = "UnsupportedPhysical",
+                .virtualPath = "/Audio/Unsupported.ogg",
+                .physicalPath = unsupportedPath,
+                .contentHash = 8604U,
+            }),
+        "Unsupported-physical resolver fixture registration failed");
+    Require(resolver.Resolve(scene, 8604U).empty(),
+        "Audio clip resolver accepted an unsupported physical extension");
+
+    const std::filesystem::path projectRoot = TestRoot() / "ResolverProject";
+    Require(scene.Assets().MountProject(projectRoot), "Audio resolver import project did not mount");
+    const std::array<std::filesystem::path, 1U> sourceFiles{ clipPath };
+    const kb::assets::AssetImportResult imported = kb::assets::AssetImportService::ImportFiles(
+        scene.Assets().Manager(), sourceFiles, "/Game/Audio");
+    Require(imported.Succeeded() && imported.items.size() == 1U,
+        "Supported audio resolver import fixture failed");
+    const std::filesystem::path resolvedImported = resolver.Resolve(scene, imported.items[0].id.value);
+    Require(!resolvedImported.empty() && resolvedImported.extension() == ".wav"
+            && std::filesystem::is_regular_file(resolvedImported),
+        "Audio clip resolver rejected a supported imported source extension");
+
+    const std::filesystem::path secondSource = TestRoot() / "UnsupportedSource.wav";
+    std::filesystem::copy_file(clipPath, secondSource, std::filesystem::copy_options::overwrite_existing);
+    const std::array<std::filesystem::path, 1U> secondFiles{ secondSource };
+    const kb::assets::AssetImportResult unsupportedImported = kb::assets::AssetImportService::ImportFiles(
+        scene.Assets().Manager(), secondFiles, "/Game/Audio");
+    Require(unsupportedImported.Succeeded() && unsupportedImported.items.size() == 1U,
+        "Unsupported source-extension resolver fixture failed to import");
+    std::vector<char> container;
+    {
+        std::ifstream input{ unsupportedImported.items[0].assetPhysicalPath, std::ios::binary };
+        container.assign(std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{});
+    }
+    const std::array<char, 4U> supportedExtension{ '.', 'w', 'a', 'v' };
+    const auto extensionPosition = std::find_end(
+        container.begin(), container.end(), supportedExtension.begin(), supportedExtension.end());
+    Require(extensionPosition != container.end(), "Imported audio fixture source extension was not found");
+    const std::array<char, 4U> unsupportedExtension{ '.', 'o', 'g', 'g' };
+    std::copy(unsupportedExtension.begin(), unsupportedExtension.end(), extensionPosition);
+    {
+        std::ofstream output{ unsupportedImported.items[0].assetPhysicalPath, std::ios::binary | std::ios::trunc };
+        output.write(container.data(), static_cast<std::streamsize>(container.size()));
+        Require(output.good(), "Imported audio fixture source extension could not be corrupted");
+    }
+    Require(resolver.Resolve(scene, unsupportedImported.items[0].id.value).empty(),
+        "Audio clip resolver accepted an unsupported imported source extension");
+}
+
 } // namespace
 
 int RunTests(int argc, char** argv) {
@@ -603,7 +703,7 @@ int RunTests(int argc, char** argv) {
     if (filter.empty() || filter == "sound") {
         RunSoundStateTest(clipPath);
     }
-    if (filter.empty() || filter == "voice") {
+    if (filter.empty() || filter == "voice" || filter == "resolver") {
         RunVoiceStateTest(clipPath);
     }
     if (filter.empty() || filter == "initial-frame") {

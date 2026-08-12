@@ -7,6 +7,7 @@
 #include "scene/asset/io/SceneAssetIntegrity.hpp"
 #include "scene/asset/io/SceneAssetMetaReader.hpp"
 #include "scene/asset/io/SceneAssetPrimitiveCodec.hpp"
+#include "scene/document/SceneDocumentAudioValidation.hpp"
 #include "scene/prefab/ScenePrefabValidator.hpp"
 
 #include <array>
@@ -165,8 +166,25 @@ SceneDocumentLoadResult SceneAssetReader::Read(const std::filesystem::path& path
         static_cast<void>(scene.worldPrefab.AddNode(std::move(node)));
     }
 
+    if (fileVersion >= 32U) {
+        bool occlusionEnabled = false;
+        if (!input.ReadUInt64(scene.audioMixerAssetId)
+            || !input.ReadString(scene.audioMixerSnapshot, static_cast<std::uint32_t>(kb::audio::kMaxAudioMixerNameBytes))
+            || !input.ReadBool(occlusionEnabled)
+            || !input.ReadFloat(scene.audioOcclusionSettings.occludedVolumeScale)
+            || !input.ReadFloat(scene.audioOcclusionSettings.maxDistance)
+            || !input.ReadUInt32(scene.audioOcclusionSettings.layerMask)
+            || !input.ReadUInt32(scene.audioOcclusionSettings.maxRaycastsPerTick)) {
+            return SceneDocumentLoadResult{ .succeeded = false, .document = {}, .error = "Scene asset audio configuration is invalid." };
+        }
+        scene.audioOcclusionSettings.enabled = occlusionEnabled;
+    }
+
     if (!input.Exhausted()) {
         return SceneDocumentLoadResult{ .succeeded = false, .document = {}, .error = "Scene asset contains trailing data." };
+    }
+    if (!IsSceneDocumentAudioConfigurationValid(scene)) {
+        return SceneDocumentLoadResult{ .succeeded = false, .document = {}, .error = "Scene asset audio configuration is invalid." };
     }
     if (!ScenePrefabValidator::IsValid(scene.worldPrefab) || RootCount(scene.worldPrefab) != rootCount) {
         return SceneDocumentLoadResult{ .succeeded = false, .document = {}, .error = "Scene asset hierarchy is invalid." };

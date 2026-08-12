@@ -1,6 +1,8 @@
 #include "scene/document/SceneDocumentCaptureService.hpp"
 
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAudioMixerAccess.hpp"
+#include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneTagCatalog.hpp"
 #include "scene/prefab/ScenePrefabCaptureService.hpp"
@@ -27,6 +29,9 @@ SceneDocument SceneDocumentCaptureService::Capture(Scene& scene, std::string nam
 
     const std::vector<SceneObject> roots = scene.Hierarchy().RootObjects();
     document.tagDefinitions.assign(scene.Tags().Names().begin(), scene.Tags().Names().end());
+    document.audioMixerAssetId = SceneAudioMixerAccess::ActiveMixer(scene);
+    document.audioMixerSnapshot = SceneAudioMixerAccess::ActiveSnapshot(scene);
+    document.audioOcclusionSettings = SceneAudioOcclusionAccess::Settings(scene);
     document.worldPrefab = ScenePrefabCaptureService::CaptureRoots(scene, std::span<const SceneObject>{ roots }, ScenePrefabCaptureSettings{});
     return document;
 }
