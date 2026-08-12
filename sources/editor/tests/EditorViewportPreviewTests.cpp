@@ -24,6 +24,7 @@
 #include "rendering/SkeletalMeshEditorBonePicker.hpp"
 #include "rendering/SkeletalMeshEditorSceneLabelBuilder.hpp"
 #include "rendering/EditorTexturePreviewService.hpp"
+#include "rendering/SceneViewportPresentationPolicy.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLabelFormat.hpp"
 #include "scene/EditorViewportCameraState.hpp"
@@ -50,6 +51,34 @@ namespace {
 
 void RequireNear(float actual, float expected, float tolerance, const char* message) {
     kb::editor::tests::Require(std::fabs(actual - expected) <= tolerance, message);
+}
+
+void RunSceneViewportPresentationPolicyTest() {
+    using kb::editor::SceneViewportCameraSource;
+    using kb::editor::SceneViewportPresentationPolicy;
+
+    kb::editor::tests::Require(
+        SceneViewportPresentationPolicy::CameraSource(false) == SceneViewportCameraSource::Editor,
+        "Stopped Scene View must use the editor fly camera");
+    kb::editor::tests::Require(
+        SceneViewportPresentationPolicy::CameraSource(true) == SceneViewportCameraSource::PrimaryScene,
+        "Play mode Scene View must use the primary scene camera");
+    kb::editor::tests::Require(
+        SceneViewportPresentationPolicy::EditorOverlaysEnabled(false),
+        "Stopped Scene View must retain authoring overlays");
+    kb::editor::tests::Require(
+        !SceneViewportPresentationPolicy::EditorOverlaysEnabled(true),
+        "Play mode Scene View must not draw editor overlays over the game camera");
+    kb::editor::tests::Require(
+        SceneViewportPresentationPolicy::RequiresPresent(false, true),
+        "Entering Play mode must request a Scene View present");
+    kb::editor::tests::Require(
+        SceneViewportPresentationPolicy::RequiresPresent(true, false),
+        "Stopping Play mode must request a Scene View present");
+    kb::editor::tests::Require(
+        !SceneViewportPresentationPolicy::RequiresPresent(true, true) &&
+            !SceneViewportPresentationPolicy::RequiresPresent(false, false),
+        "An unchanged Scene View camera mode must not manufacture a present");
 }
 
 void RunProfileCycleAndResolutionTest() {
@@ -1151,6 +1180,7 @@ void RunTexturePreviewLockBitsDecodeTest() {
 namespace kb::editor::tests {
 
 void RunEditorViewportPreviewTests() {
+    RunSceneViewportPresentationPolicyTest();
     RunViewportCameraNavigationBindingPolicyTest();
     RunSkeletalMeshSceneLabelBuilderTest();
     RunAnimationPreviewContextTracksSharedBindingTest();
