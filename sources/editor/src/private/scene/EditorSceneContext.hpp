@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetImportTypes.hpp"
 #include "engine/assets/TerrainAsset.hpp"
+#include "engine/audio/AudioMixerAsset.hpp"
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
@@ -98,6 +99,7 @@ enum class PhysicsComponentKind; // inspection/InspectorPhysicsModel.hpp
 class EditorSceneCommandController;
 class EditorInputActionAuthoring;
 class EditorInputMappingContextAuthoring;
+class EditorAudioMixerAuthoring;
 class IEditorMaterialAssetPropertyEdit;
 class EditorMaterialAssetAuthoring;
 class EditorMaterialPreviewScene;
@@ -412,6 +414,7 @@ public:
     [[nodiscard]] bool CreateInputActionAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateInputAxisAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool CreateAudioMixerAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialFunctionAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialGraphAsset(const std::filesystem::path& virtualFolder);
@@ -577,6 +580,30 @@ public:
     [[nodiscard]] bool CycleInputActionValueType(kb::assets::AssetId id);
     [[nodiscard]] bool SetInputActionValueType(kb::assets::AssetId id, kb::input::InputActionValueType valueType);
     [[nodiscard]] bool ToggleInputActionConsume(kb::assets::AssetId id);
+    [[nodiscard]] std::optional<kb::audio::AudioMixerAsset> ReadAudioMixerAsset(kb::assets::AssetId id) const;
+    [[nodiscard]] bool AddAudioMixerBus(kb::assets::AssetId id, std::string_view name);
+    [[nodiscard]] bool RemoveAudioMixerBus(kb::assets::AssetId id, std::string_view name);
+    [[nodiscard]] bool RenameAudioMixerBus(kb::assets::AssetId id, std::string_view name, std::string_view replacement);
+    [[nodiscard]] bool SetAudioMixerBusParent(kb::assets::AssetId id, std::string_view name, std::string_view parent);
+    [[nodiscard]] bool SetAudioMixerBusVolume(kb::assets::AssetId id, std::string_view name, float volume);
+    [[nodiscard]] bool SetAudioMixerBusMute(kb::assets::AssetId id, std::string_view name, bool mute);
+    [[nodiscard]] bool AddAudioMixerSnapshot(kb::assets::AssetId id, std::string_view name);
+    [[nodiscard]] bool RemoveAudioMixerSnapshot(kb::assets::AssetId id, std::string_view name);
+    [[nodiscard]] bool RenameAudioMixerSnapshot(kb::assets::AssetId id, std::string_view name, std::string_view replacement);
+    [[nodiscard]] bool AddAudioMixerSnapshotOverride(
+        kb::assets::AssetId id,
+        std::string_view snapshot,
+        std::string_view bus,
+        float volume);
+    [[nodiscard]] bool RemoveAudioMixerSnapshotOverride(
+        kb::assets::AssetId id,
+        std::string_view snapshot,
+        std::string_view bus);
+    [[nodiscard]] bool SetAudioMixerSnapshotOverrideVolume(
+        kb::assets::AssetId id,
+        std::string_view snapshot,
+        std::string_view bus,
+        float volume);
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadMaterialAsset(kb::assets::AssetId id) const;
     [[nodiscard]] std::optional<kb::render::RenderMaterialInstanceAssetData> ReadMaterialInstanceAsset(kb::assets::AssetId id) const;
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadEffectiveMaterialAsset(kb::assets::AssetId id) const;
@@ -1092,6 +1119,7 @@ private:
     void RefreshOpenMaterialEditorFromSource();
     [[nodiscard]] EditorInputActionAuthoring InputActionAuthoring() noexcept;
     [[nodiscard]] EditorInputMappingContextAuthoring InputMappingContextAuthoring() noexcept;
+    [[nodiscard]] EditorAudioMixerAuthoring AudioMixerAuthoring() noexcept;
     [[nodiscard]] EditorMaterialAssetAuthoring MaterialAssetAuthoring() noexcept;
     void ActivateProjectInput();
     [[nodiscard]] bool ActivateProjectPhysicsLayers(kb::scene::Scene& scene);
