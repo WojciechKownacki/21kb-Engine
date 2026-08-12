@@ -1,6 +1,7 @@
 #include "engine/audio/AudioClipAssetLoader.hpp"
 
 #include "engine/audio/AudioClipAsset.hpp"
+#include "engine/audio/AudioClipFormats.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -16,27 +17,18 @@ std::type_index AudioClipAssetLoader::PayloadType() const noexcept {
 }
 
 std::vector<std::string> AudioClipAssetLoader::Extensions() const {
-    return {
-        ".wav",
-        ".mp3",
-        ".ogg",
-        ".flac",
-        ".aac",
-        ".m4a",
-        ".wma",
-        ".aiff",
-        ".aif",
-        ".xm",
-        ".mod",
-        ".s3m",
-        ".it",
-        ".mid",
-        ".midi",
-    };
+    std::vector<std::string> extensions;
+    extensions.reserve(kSupportedAudioClipExtensions.size());
+    for (const std::string_view extension : kSupportedAudioClipExtensions) {
+        extensions.emplace_back(extension);
+    }
+    return extensions;
 }
 
 kb::assets::AssetLoadResult AudioClipAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    if (!std::filesystem::is_regular_file(request.resolvedPath)) {
+    if (request.metadata.type != "AudioClip" || !request.metadata.importCategory.empty()
+        || !IsSupportedAudioClipExtension(request.resolvedPath.extension().string())
+        || !std::filesystem::is_regular_file(request.resolvedPath)) {
         return kb::assets::AssetLoadResult{ .asset = {}, .error = "Audio clip asset could not be opened." };
     }
     return kb::assets::AssetLoadResult{

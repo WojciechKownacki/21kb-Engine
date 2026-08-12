@@ -48,8 +48,7 @@ bool SceneAssetAudioComponentCodec::ReadSource(SceneAssetBinaryIO::ByteReader& i
     if (!input.ReadString(outputBus, AudioSourceComponent::MaxOutputBusBytes)) {
         return false;
     }
-    SetAudioSourceOutputBus(output, outputBus);
-    return true;
+    return SetAudioSourceOutputBus(output, outputBus);
 }
 
 void SceneAssetAudioComponentCodec::WriteSource(std::vector<std::uint8_t>& output, const AudioSourceComponent& audioSource) {
