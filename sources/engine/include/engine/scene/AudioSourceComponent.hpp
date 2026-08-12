@@ -16,9 +16,8 @@ struct AudioSourceComponent {
     // behavior every source authored before LIB-147 keeps). Fixed-capacity char storage
     // because scene components must stay trivially copyable (the archetype storage moves
     // them bytewise) - the exact TagsComponent convention; use the
-    // AudioSourceOutputBus/SetAudioSourceOutputBus helpers below. An unknown bus name
-    // honestly falls back to master at the backend, mirroring how an unresolvable
-    // clipAssetId already behaves.
+    // AudioSourceOutputBus/SetAudioSourceOutputBus helpers below. Empty selects master;
+    // a non-empty unknown bus is unavailable and never silently reaches master.
     static constexpr std::uint32_t MaxOutputBusBytes = 63U;
 
     std::uint64_t clipAssetId = 0;

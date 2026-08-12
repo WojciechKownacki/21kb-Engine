@@ -9,9 +9,21 @@
 #include "scene/MiniaudioOcclusionSampler.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 
 namespace kb::audio_miniaudio {
+namespace {
+
+[[nodiscard]] float FiniteOrZero(float value) noexcept {
+    return std::isfinite(value) ? value : 0.0F;
+}
+
+[[nodiscard]] kb::scene::Vec3 FiniteOrZero(kb::scene::Vec3 value) noexcept {
+    return { FiniteOrZero(value.x), FiniteOrZero(value.y), FiniteOrZero(value.z) };
+}
+
+} // namespace
 
 kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
     ma_engine& engine,
@@ -19,6 +31,17 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
     const kb::audio::AudioPlayDesc& desc,
     const MiniaudioClipResolver& clipResolver,
     ma_sound_group* group) {
+    kb::scene::Vec3 initialPosition = desc.position;
+    bool attached = false;
+    if (desc.ownerEntityId != 0U) {
+        const kb::scene::SceneEntity owner{ desc.ownerEntityId };
+        const kb::scene::TransformComponent* ownerTransform = scene.Transforms().TryGet(owner);
+        if (!scene.Entities().IsAlive(owner) || !scene.Entities().IsActive(owner) || ownerTransform == nullptr) {
+            return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio voice owner is unavailable" };
+        }
+        initialPosition = FiniteOrZero(ownerTransform->worldPosition);
+        attached = true;
+    }
     const std::filesystem::path path = clipResolver.Resolve(scene, desc.clipAssetId);
     if (path.empty()) {
         return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio clip file could not be resolved" };
@@ -33,7 +56,7 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
 
     auto sound = std::make_unique<MiniaudioSound>();
     if (sound->InitializeFromFile(engine, path, desc.spatial, group) != MA_SUCCESS) {
-        return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "miniaudio sound could not be created" };
+        return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio voice could not be created" };
     }
 
     sound->Apply(MiniaudioSoundSettings{
@@ -49,11 +72,12 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
         .maxDistance = desc.maxDistance,
         .rolloff = desc.rolloff,
         .dopplerFactor = desc.dopplerFactor,
-        .position = desc.position,
+        .position = initialPosition,
+        .velocity = attached ? kb::scene::Vec3{} : desc.velocity,
     });
 
     if (sound->Start() != MA_SUCCESS) {
-        return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "miniaudio sound could not be started" };
+        return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio voice could not be started" };
     }
 
     const std::uint64_t voiceId = AllocateVoiceId();
@@ -63,9 +87,11 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
         .looping = desc.loop,
         .priority = desc.priority,
         .ownerEntityId = desc.ownerEntityId,
-        .baseVolume = desc.volume,
+        .baseVolume = MiniaudioSound::NormalizeVolume(desc.volume),
         .muted = desc.mute,
         .spatial = desc.spatial,
+        .previousOwnerPosition = initialPosition,
+        .hasPreviousOwnerPosition = false,
         .sound = std::move(sound),
     });
     return kb::audio::AudioPlayResult{ .started = true, .voiceId = voiceId, .error = {} };
@@ -74,7 +100,9 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
 void MiniaudioVoicePool::SyncAttachedVoices(
     kb::scene::Scene& scene,
     MiniaudioOcclusionSampler* occlusionSampler,
-    const kb::scene::Vec3& listenerPosition) {
+    const kb::scene::Vec3& listenerPosition,
+    float deltaSeconds) {
+    const bool validDelta = std::isfinite(deltaSeconds) && deltaSeconds > 0.0F;
     for (auto iter = voices_.begin(); iter != voices_.end();) {
         if (iter->ownerEntityId == 0U) {
             ++iter;
@@ -88,9 +116,28 @@ void MiniaudioVoicePool::SyncAttachedVoices(
             iter = voices_.erase(iter);
             continue;
         }
+        const kb::scene::TransformComponent* ownerTransform = scene.Transforms().TryGet(owner);
+        if (ownerTransform == nullptr) {
+            iter = voices_.erase(iter);
+            continue;
+        }
         if (iter->sound != nullptr) {
-            const kb::scene::Vec3 position = scene.Transforms().Get(owner).worldPosition;
+            const kb::scene::Vec3 position = FiniteOrZero(ownerTransform->worldPosition);
+            kb::scene::Vec3 velocity{};
+            if (validDelta && iter->hasPreviousOwnerPosition) {
+                velocity = kb::scene::Vec3{
+                    (position.x - iter->previousOwnerPosition.x) / deltaSeconds,
+                    (position.y - iter->previousOwnerPosition.y) / deltaSeconds,
+                    (position.z - iter->previousOwnerPosition.z) / deltaSeconds,
+                };
+                velocity = FiniteOrZero(velocity);
+            }
+            iter->previousOwnerPosition = position;
+            iter->hasPreviousOwnerPosition = true;
             iter->sound->SetPosition(position);
+            iter->sound->SetVelocity(velocity);
+            iter->sound->SetVolume(iter->baseVolume);
+            iter->sound->SetMute(iter->muted);
             // LIB-151: budget-capped occlusion for spatial attached voices, keyed by
             // voiceId; the owner's own collider never occludes its voice.
             if (occlusionSampler != nullptr && iter->spatial) {
@@ -101,7 +148,7 @@ void MiniaudioVoicePool::SyncAttachedVoices(
                     listenerPosition,
                     position,
                     iter->ownerEntityId);
-                iter->sound->SetVolume(iter->muted ? 0.0F : iter->baseVolume * scale);
+                iter->sound->SetVolume(iter->baseVolume * scale);
             }
         }
         ++iter;
@@ -120,7 +167,7 @@ bool MiniaudioVoicePool::StopVoice(std::uint64_t voiceId) noexcept {
 
 bool MiniaudioVoicePool::PauseVoice(std::uint64_t voiceId) noexcept {
     VoiceRecord* voice = FindVoice(voiceId);
-    if (voice == nullptr || voice->sound == nullptr) {
+    if (voice == nullptr || voice->sound == nullptr || voice->paused || voice->sound->AtEnd() || !voice->sound->IsPlaying()) {
         return false;
     }
     voice->sound->Stop();
@@ -130,11 +177,14 @@ bool MiniaudioVoicePool::PauseVoice(std::uint64_t voiceId) noexcept {
 
 bool MiniaudioVoicePool::ResumeVoice(std::uint64_t voiceId) noexcept {
     VoiceRecord* voice = FindVoice(voiceId);
-    if (voice == nullptr || voice->sound == nullptr) {
+    if (voice == nullptr || voice->sound == nullptr || !voice->paused || voice->sound->AtEnd()) {
+        return false;
+    }
+    if (voice->sound->Start() != MA_SUCCESS) {
         return false;
     }
     voice->paused = false;
-    return voice->sound->Start() == MA_SUCCESS;
+    return true;
 }
 
 bool MiniaudioVoicePool::SeekVoice(std::uint64_t voiceId, float positionSeconds) noexcept {
@@ -147,9 +197,27 @@ bool MiniaudioVoicePool::SetVoiceVolume(std::uint64_t voiceId, float volume) noe
     if (voice == nullptr || voice->sound == nullptr) {
         return false;
     }
-    voice->baseVolume = volume;
-    voice->muted = false;
-    voice->sound->SetVolume(volume);
+    voice->baseVolume = MiniaudioSound::NormalizeVolume(volume);
+    voice->sound->SetVolume(voice->baseVolume);
+    return true;
+}
+
+bool MiniaudioVoicePool::SetVoiceMute(std::uint64_t voiceId, bool mute) noexcept {
+    VoiceRecord* voice = FindVoice(voiceId);
+    if (voice == nullptr || voice->sound == nullptr) {
+        return false;
+    }
+    voice->muted = mute;
+    voice->sound->SetMute(mute);
+    return true;
+}
+
+bool MiniaudioVoicePool::SetVoicePan(std::uint64_t voiceId, float pan) noexcept {
+    VoiceRecord* voice = FindVoice(voiceId);
+    if (voice == nullptr || voice->sound == nullptr) {
+        return false;
+    }
+    voice->sound->SetPan(pan);
     return true;
 }
 

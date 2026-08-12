@@ -47,3 +47,38 @@ if(NOT KB_BUILD_PROVIDER_MODULES_AS_DLL)
 endif()
 
 kb_apply_quality_gates(kb_audio_miniaudio_plugin)
+
+if(BUILD_TESTING)
+    add_executable(kb_audio_runtime_tests
+        tests/AudioRuntimeTests.cpp
+        assets/MiniaudioClipResolver.cpp
+        playback/MiniaudioVoicePool.cpp
+        runtime/MiniaudioEngine.cpp
+        runtime/MiniaudioPlaybackBackend.cpp
+        runtime/MiniaudioSound.cpp
+        scene/MiniaudioBusRegistry.cpp
+        scene/MiniaudioListenerSynchronizer.cpp
+        scene/MiniaudioOcclusionSampler.cpp
+        scene/MiniaudioSourceRegistry.cpp
+    )
+
+    target_include_directories(kb_audio_runtime_tests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+
+    target_compile_definitions(kb_audio_runtime_tests
+        PRIVATE
+            KB_AUDIO_MINIAUDIO_TESTING
+    )
+
+    target_link_libraries(kb_audio_runtime_tests
+        PRIVATE
+            kb_engine
+            miniaudio
+    )
+
+    add_test(NAME kb_audio_runtime_tests COMMAND $<TARGET_FILE:kb_audio_runtime_tests>)
+    set_tests_properties(kb_audio_runtime_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    kb_apply_quality_gates(kb_audio_runtime_tests)
+endif()
