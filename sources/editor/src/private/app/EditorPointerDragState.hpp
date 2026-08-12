@@ -31,6 +31,7 @@ struct EditorPointerDragState {
     bool assetCreatesMeshEntity = false;
     bool assetAddsBehaviour = false;
     bool assetAssignsAudioClip = false;
+    bool assetAssignsAudioMixer = false;
     bool assetAssignsMaterial = false;
     bool assetAssignsMaterialGraph = false;
     bool assetAssignsTexture = false;
@@ -68,6 +69,7 @@ struct EditorPointerDragState {
         assetCreatesMeshEntity = false;
         assetAddsBehaviour = false;
         assetAssignsAudioClip = false;
+        assetAssignsAudioMixer = false;
         assetAssignsMaterial = false;
         assetAssignsMaterialGraph = false;
         assetAssignsTexture = false;

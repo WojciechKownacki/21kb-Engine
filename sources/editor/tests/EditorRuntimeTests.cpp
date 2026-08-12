@@ -11,12 +11,17 @@ int main(int argumentCount, char** arguments) {
         kb::editor::tests::RunEditorAudioMixerInspectorTests();
         return 0;
     }
+    if (argumentCount == 2 && std::string_view{ arguments[1] } == "scene-audio-inspector") {
+        kb::editor::tests::RunEditorSceneAudioInspectorTests();
+        return 0;
+    }
     kb::editor::tests::RunEditorCommandStackTests();
     kb::editor::tests::RunEditorPlayModeSceneSessionTests();
     kb::editor::tests::RunEditorHierarchyTests();
     kb::editor::tests::RunEditorAssetBrowserTests();
     kb::editor::tests::RunEditorAudioMixerAuthoringTests();
     kb::editor::tests::RunEditorAudioMixerInspectorTests();
+    kb::editor::tests::RunEditorSceneAudioInspectorTests();
     kb::editor::tests::RunEditorViewportPreviewTests();
     kb::editor::tests::RunEditorMaterialGraphCanvasTests();
     kb::editor::tests::RunEditorMaterialGraphCookServiceTests();

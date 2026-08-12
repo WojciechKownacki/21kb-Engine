@@ -52,6 +52,8 @@ enum class InspectorSectionId : std::uint8_t {
     MaterialPreview,
     AudioMixerBuses,
     AudioMixerSnapshots,
+    SceneAudioRouting,
+    SceneAudioOcclusion,
     Script,
     Rigidbody,
     Collider,
@@ -142,6 +144,16 @@ enum class InspectorPropertyId : std::uint16_t {
     AudioMixerOverrideVolume,
     AudioMixerOverrideRemove,
     AudioMixerOverrideAdd,
+    SceneAudioMixer,
+    SceneAudioMixerPicker,
+    SceneAudioMixerClear,
+    SceneAudioSnapshot,
+    SceneAudioSnapshotOption,
+    SceneAudioOcclusionEnabled,
+    SceneAudioOcclusionVolumeScale,
+    SceneAudioOcclusionMaxDistance,
+    SceneAudioOcclusionLayerMask,
+    SceneAudioOcclusionMaxRaycasts,
     MeshRendererMesh,
     MeshRendererMeshPicker,
     MeshRendererMaterial,
@@ -469,6 +481,7 @@ enum class InspectorPropertyId : std::uint16_t {
 
 struct InspectorDynamicRowIdentity {
     std::uint64_t ownerAssetId = 0U;
+    std::uint64_t ownerDocumentGeneration = 0U;
     std::uint32_t kind = 0U;
     std::string first;
     std::string second;

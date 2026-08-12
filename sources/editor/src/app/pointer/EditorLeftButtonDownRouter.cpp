@@ -25,10 +25,12 @@
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "rendering/HierarchyToolbarLayout.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "inspection/TerrainMaterialLayerMenuState.hpp"
+#include "inspection/InspectorSceneAudioInteraction.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/AnimationClipEditorPanelRenderer.hpp"
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
@@ -42,6 +44,7 @@
 #include "platform/win32/EditorMaterialColorPickerDialog.hpp"
 #include "platform/win32/EditorMaterialParameterValueDialog.hpp"
 #include "platform/win32/EditorMeshAssetPickerDialog.hpp"
+#include "platform/win32/EditorAudioMixerAssetPickerDialog.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
 #include "scene/EditorTerrainService.hpp"
@@ -1396,6 +1399,23 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     }
     if (panelHit.inInspectorPanel) {
         const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(*panelHit.inspectorContent, sceneContext_, x, y);
+        if (hit.section == InspectorSectionId::SceneAudioRouting
+            && hit.property == InspectorPropertyId::SceneAudioMixerPicker) {
+            const EditorAudioMixerAssetPickerDialog::Result result =
+                EditorAudioMixerAssetPickerDialog::Show(
+                    mainWindow_,
+                    MakeEditorDarkTheme(),
+                    sceneContext_,
+                    kb::assets::AssetId{
+                        kb::scene::SceneAudioMixerAccess::ActiveMixer(sceneContext_.Scene()) });
+            if (const std::optional<InspectorSceneAudioCommand> command =
+                    InspectorSceneAudioInteraction::ResolvePicker(result.accepted, result.assetId)) {
+                static_cast<void>(InspectorSceneAudioInteraction::Apply(sceneContext_, *command));
+                sceneViewport_.RequestPresent();
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
         if (hit.section == InspectorSectionId::Terrain && hit.property == InspectorPropertyId::TerrainImportHeightmap) {
             if (const std::optional<std::filesystem::path> path = ShowTerrainHeightmapDialog(mainWindow_)) {
                 std::string error;

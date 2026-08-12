@@ -50,6 +50,7 @@
 #include "rendering/EditorMeshPreviewService.hpp"
 #include "rendering/EditorMeshPreviewTypes.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
+#include "scene/audio/EditorSceneAudioSettingsService.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
@@ -1206,6 +1207,7 @@ EditorSceneContext::EditorSceneContext()
     currentScenePath_ = ResolveDefaultScenePath();
     std::error_code error;
     if (!currentScenePath_.empty() && std::filesystem::is_regular_file(currentScenePath_, error) && !error && kb::scene::SceneDocumentService::LoadFileIntoScene(*scene_, currentScenePath_)) {
+        EditorSceneAudioSettingsService::PrepareDocument(*scene_);
         SelectFirstSceneEntityOrClear();
         console_.Info("Project", "Opened default scene: " + currentScenePath_.generic_string());
     } else {
@@ -1623,6 +1625,10 @@ const std::filesystem::path& EditorSceneContext::ProjectFile() const noexcept {
 
 const std::filesystem::path& EditorSceneContext::CurrentScenePath() const noexcept {
     return currentScenePath_;
+}
+
+std::uint64_t EditorSceneContext::SceneDocumentGeneration() const noexcept {
+    return sceneDocumentIdentity_.Generation();
 }
 
 std::uint64_t EditorSceneContext::SceneRenderRevision() const noexcept {
@@ -3069,6 +3075,12 @@ EditorAudioMixerAuthoring EditorSceneContext::AudioMixerAuthoring() noexcept {
     return EditorAudioMixerAuthoring{ *scene_, assetBrowser_, console_ };
 }
 
+EditorSceneAudioSettingsService EditorSceneContext::SceneAudioSettings() noexcept {
+    return EditorSceneAudioSettingsService{ *scene_, [this](std::string label, EditorSceneAudioSettingsService::Mutation mutation) {
+        return ExecuteSceneCommand(std::move(label), std::move(mutation));
+    } };
+}
+
 EditorMaterialAssetAuthoring EditorSceneContext::MaterialAssetAuthoring() noexcept {
     return EditorMaterialAssetAuthoring{ *scene_, assetBrowser_, console_ };
 }
@@ -3624,6 +3636,19 @@ bool EditorSceneContext::SetAudioMixerSnapshotOverrideVolume(
     std::string_view bus,
     float volume) {
     return AudioMixerAuthoring().SetSnapshotOverrideVolume(id, snapshot, bus, volume);
+}
+
+bool EditorSceneContext::SetSceneAudioMixer(kb::assets::AssetId id) {
+    return SceneAudioSettings().SetSceneAudioMixer(id);
+}
+
+bool EditorSceneContext::SetSceneAudioSnapshot(std::string_view snapshot) {
+    return SceneAudioSettings().SetSceneAudioSnapshot(snapshot);
+}
+
+bool EditorSceneContext::SetSceneAudioOcclusion(
+    const kb::scene::AudioOcclusionSettings& settings) {
+    return SceneAudioSettings().SetSceneAudioOcclusion(settings);
 }
 
 std::optional<kb::render::RenderMaterialAssetData> EditorSceneContext::ReadMaterialAsset(kb::assets::AssetId id) const {
