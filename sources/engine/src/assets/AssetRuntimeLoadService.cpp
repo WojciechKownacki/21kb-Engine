@@ -28,7 +28,7 @@ std::shared_ptr<void> AssetRuntimeLoadService::LoadUntyped(
     AssetUnloadPolicy policy = AssetUnloadPolicy::Retain;
     const auto cached = cache.find(id.value);
     if (cached != cache.end()) {
-        if (cached->second.type != expectedType) {
+        if (cached->second.typeName != expectedType.name()) {
             errorMessage = "Cached asset payload type mismatch";
             return {};
         }
@@ -82,7 +82,7 @@ std::shared_ptr<void> AssetRuntimeLoadService::LoadUntyped(
     cache[id.value] = AssetManager::CachedAsset{
         .retained = policy == AssetUnloadPolicy::Retain ? result.asset : std::shared_ptr<void>{},
         .weak = result.asset,
-        .type = expectedType,
+        .typeName = expectedType.name(),
         .policy = policy,
     };
     return result.asset;

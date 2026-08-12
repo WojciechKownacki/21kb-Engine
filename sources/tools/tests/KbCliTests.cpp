@@ -2073,17 +2073,18 @@ void RunApiCommandTests() {
             shipNode->components.behaviour.has_value() && shipNode->components.input.has_value() &&
             shipNode->components.behaviour->behaviourAssetId == expectedControllerId.value &&
             shipNode->components.input->mappingContextAssetId == expectedInputContextId.value &&
-            shipNode->components.audioSource.has_value() && shipNode->components.audioSource->autoplay &&
-            shipNode->components.audioSource->loop && !shipNode->components.audioSource->spatial,
-        "Audio Shooter ship is not wired to mesh, flight, input and looping engine audio");
+            !shipNode->components.audioSource.has_value(),
+        "Audio Shooter ship is not wired to mesh, flight and input without a masking 2D audio source");
     Require(cameraNode != nullptr && cameraNode->parentNode == shipNodeIndex &&
             cameraNode->components.camera.has_value() && cameraNode->components.camera->primary &&
             cameraNode->components.audioListener.has_value() && cameraNode->components.audioListener->primary,
         "Audio Shooter follow camera is not wired to the primary audio listener");
     Require(beaconNode != nullptr && beaconNode->components.audioSource.has_value() &&
             beaconNode->components.audioSource->autoplay && beaconNode->components.audioSource->loop &&
-            beaconNode->components.audioSource->spatial && beaconNode->components.audioSource->maxDistance >
-                beaconNode->components.audioSource->minDistance,
+            beaconNode->components.audioSource->spatial &&
+            beaconNode->components.audioSource->spatialBlend == 1.0F &&
+            beaconNode->components.audioSource->attenuationModel == kb::audio::AudioAttenuationModel::Linear &&
+            beaconNode->components.audioSource->maxDistance > beaconNode->components.audioSource->minDistance,
         "Audio Shooter spatial beacon does not demonstrate distance attenuation");
 
     // LIB-013 regression: init-agent internally rebuilds its catalog and
