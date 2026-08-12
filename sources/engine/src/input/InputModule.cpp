@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 
 namespace kb::input {
 
@@ -26,6 +27,9 @@ kb::modules::EngineModuleMetadata InputModule::Metadata() const {
 }
 
 void InputModule::OnSceneAttach(kb::scene::Scene& scene) {
+    if (sceneSystems_.contains(&scene)) {
+        return;
+    }
     // Resolve action / mapping-context asset references straight from this scene's
     // asset manager, then register the polling system (Input phase). Mirrors the
     // wiring previously performed in Scene's constructor.
@@ -40,7 +44,22 @@ void InputModule::OnSceneAttach(kb::scene::Scene& scene) {
             const kb::library::InputMapRef mapping = assetManager.Load<InputMappingContextAsset>(kb::assets::AssetId{ id });
             return mapping.Shared();
         });
-    scene.Runtime().AddSceneSystem(std::make_unique<InputPollingSystem>());
+    const kb::scene::SceneSystemHandle handle = scene.Runtime().AddSceneSystem(std::make_unique<InputPollingSystem>());
+    if (handle.IsValid()) {
+        sceneSystems_.emplace(&scene, handle);
+    }
+}
+
+void InputModule::OnSceneDetach(kb::scene::Scene& scene) {
+    const auto iterator = sceneSystems_.find(&scene);
+    if (iterator == sceneSystems_.end()) {
+        return;
+    }
+    if (!scene.Runtime().RemoveSceneSystem(iterator->second)
+        && scene.Runtime().HasSceneSystem(iterator->second)) {
+        throw std::logic_error("input scene system could not detach during active dispatch");
+    }
+    sceneSystems_.erase(iterator);
 }
 
 } // namespace kb::input

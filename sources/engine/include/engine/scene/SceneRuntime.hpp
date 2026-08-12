@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/scene/SceneEntity.hpp"
+#include "engine/scene/SceneSystemHandle.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/core/ReadSnapshotQueue.hpp"
 
@@ -153,7 +154,10 @@ public:
     explicit SceneRuntime(Scene& scene) noexcept;
 
     void AddSystem(std::unique_ptr<kb::ecs::System> system);
-    void AddSceneSystem(std::unique_ptr<SceneSystem> system);
+    SceneSystemHandle AddSceneSystem(std::unique_ptr<SceneSystem> system);
+    [[nodiscard]] bool RemoveSceneSystem(SceneSystemHandle handle) noexcept;
+    [[nodiscard]] bool HasSceneSystem(SceneSystemHandle handle) const noexcept;
+    [[nodiscard]] std::size_t SceneSystemCount() const noexcept;
     // Drains errors thrown by scene systems during the last Update/FixedUpdate/
     // Add (e.g. a plugin's system faulting) so the host can surface them; the
     // scheduler isolates such faults so later systems (scripts) still run.

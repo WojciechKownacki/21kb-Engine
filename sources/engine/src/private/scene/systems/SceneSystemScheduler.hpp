@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/scene/SceneSystem.hpp"
+#include "engine/scene/SceneSystemHandle.hpp"
 
 #include <memory>
 #include <string>
@@ -13,15 +14,19 @@ class Scene;
 
 class SceneSystemScheduler {
 public:
-    SceneSystemScheduler() = default;
+    SceneSystemScheduler();
     ~SceneSystemScheduler();
 
     SceneSystemScheduler(const SceneSystemScheduler&) = delete;
     SceneSystemScheduler& operator=(const SceneSystemScheduler&) = delete;
-    SceneSystemScheduler(SceneSystemScheduler&&) noexcept = default;
-    SceneSystemScheduler& operator=(SceneSystemScheduler&&) noexcept = default;
+    SceneSystemScheduler(SceneSystemScheduler&&) = delete;
+    SceneSystemScheduler& operator=(SceneSystemScheduler&&) = delete;
 
-    void Add(std::unique_ptr<SceneSystem> system, Scene& scene);
+    SceneSystemHandle Add(std::unique_ptr<SceneSystem> system, Scene& scene);
+    [[nodiscard]] bool Remove(SceneSystemHandle handle, Scene& scene) noexcept;
+    [[nodiscard]] bool Contains(SceneSystemHandle handle) const noexcept;
+    [[nodiscard]] bool RequiresFixedStep() const noexcept;
+    [[nodiscard]] std::size_t Size() const noexcept { return systems_.size(); }
     void BeginFrame(Scene& scene, float deltaSeconds);
     void Update(Scene& scene, float deltaSeconds, SceneUpdatePhase phase);
     void FixedUpdate(Scene& scene, float fixedDeltaSeconds, SceneFixedUpdatePhase phase);
@@ -36,9 +41,18 @@ public:
     [[nodiscard]] std::vector<std::string> DrainSystemErrors();
 
 private:
+    struct Entry final {
+        SceneSystemHandle handle{};
+        std::unique_ptr<SceneSystem> system;
+        bool requiresFixedStep = false;
+    };
+
     void RecordSystemError(std::string phase, const char* what);
 
-    std::vector<std::unique_ptr<SceneSystem>> systems_;
+    std::vector<Entry> systems_;
+    std::uint64_t schedulerLifetime_ = 0U;
+    std::uint64_t nextHandle_ = 1U;
+    bool dispatching_ = false;
     std::vector<std::string> systemErrors_;
     std::unordered_set<std::string> reportedSystemErrors_;
 };

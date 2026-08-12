@@ -47,6 +47,9 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#if !defined(NDEBUG)
+#include <thread>
+#endif
 
 struct ecs_query_t;
 
@@ -657,6 +660,9 @@ public:
     mutable ecs_query_t* physicsBodyIterationQuery = nullptr;
     std::uint64_t nextHierarchyOrder = 1;
     kb::audio::IAudioPlaybackBackend* audioPlaybackBackend = nullptr;
+#if !defined(NDEBUG)
+    const std::thread::id audioPlaybackOwnerThread = std::this_thread::get_id();
+#endif
     // LIB-153: host-registered haptics actuator (mirror of audioPlaybackBackend - the
     // editor's Win32/XInput layer registers it for Play Mode; nullptr = every haptics
     // query honestly reports unsupported).

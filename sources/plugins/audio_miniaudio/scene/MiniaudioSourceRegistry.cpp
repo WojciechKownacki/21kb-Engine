@@ -14,6 +14,7 @@
 #include "scene/MiniaudioOcclusionSampler.hpp"
 
 #include <cmath>
+#include <utility>
 
 namespace kb::audio_miniaudio {
 namespace {
@@ -234,27 +235,52 @@ MiniaudioSourceRegistry::SoundRecord* MiniaudioSourceRegistry::EnsureSound(
         }
         previousPosition = iterator->second.previousPosition;
         hasPreviousPosition = iterator->second.hasPreviousPosition;
-        sounds_.erase(iterator);
     }
 
     auto sound = std::make_unique<MiniaudioSound>();
     if (sound->InitializeFromFile(engine, signature.path, signature.spatial, group, playbackFrame) != MA_SUCCESS) {
         return nullptr;
     }
-    sound->Apply(ToSoundSettings(source, transform, velocity));
+    const MiniaudioSoundSettings settings = ToSoundSettings(source, transform, velocity);
+    MiniaudioSoundSettings candidateSettings = settings;
+    candidateSettings.mute = true;
+    sound->Apply(candidateSettings);
     if (playbackState == SoundRecord::PlaybackState::Playing && sound->Start() != MA_SUCCESS) {
         return nullptr;
     }
 
-    auto [inserted, _] = sounds_.try_emplace(entityId, SoundRecord{
+    SoundRecord candidate{
         .signature = signature,
         .sound = std::move(sound),
         .playbackState = playbackState,
         .resumeFrame = playbackFrame,
         .previousPosition = previousPosition,
         .hasPreviousPosition = hasPreviousPosition,
-    });
-    return &inserted->second;
+    };
+    SoundRecord* committed = nullptr;
+    if (isNew) {
+        auto [inserted, _] = sounds_.try_emplace(entityId, std::move(candidate));
+        committed = &inserted->second;
+    } else {
+        SwapSoundRecords(iterator->second, candidate);
+        committed = &iterator->second;
+    }
+    committed->sound->Apply(settings);
+    return committed;
+}
+
+void MiniaudioSourceRegistry::SwapSoundRecords(SoundRecord& first, SoundRecord& second) noexcept {
+    using std::swap;
+    swap(first.signature.clipAssetId, second.signature.clipAssetId);
+    first.signature.path.swap(second.signature.path);
+    first.signature.busName.swap(second.signature.busName);
+    swap(first.signature.busGeneration, second.signature.busGeneration);
+    swap(first.signature.spatial, second.signature.spatial);
+    first.sound.swap(second.sound);
+    swap(first.playbackState, second.playbackState);
+    swap(first.resumeFrame, second.resumeFrame);
+    swap(first.previousPosition, second.previousPosition);
+    swap(first.hasPreviousPosition, second.hasPreviousPosition);
 }
 
 kb::audio::AudioSourceControlResult MiniaudioSourceRegistry::ValidateSource(
