@@ -532,6 +532,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/scene_viewport_toolbar/SceneViewportToolbarState.hpp
     src/private/rendering/SceneViewportToolbarDropdownOverlayWindow.hpp
     src/private/rendering/ScenePanelContentRenderer.hpp
+    src/private/rendering/SceneViewportPresentationPolicy.hpp
     src/private/rendering/HierarchyRowLayout.hpp
     src/private/rendering/HierarchyToolbarLayout.hpp
     src/private/rendering/SvgGraphicsPathBuilder.hpp

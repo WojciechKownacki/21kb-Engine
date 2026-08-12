@@ -18,6 +18,7 @@
 #include "rendering/MaterialPreviewRenderPolicy.hpp"
 #include "rendering/EditorHostSurfaceLayoutResolver.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
+#include "rendering/SceneViewportPresentationPolicy.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "rendering/EditorMaterialThumbnailService.hpp"
@@ -623,8 +624,17 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     ConfigurePlayModePointerViewport(state);
     state.inputCollector.Collect(input.MutableDeviceState(), state.window);
     if (!state.sceneContext.TickPlayModeSceneSession(deltaSeconds)) {
+        const bool previousPlayModeSceneActive = state.sceneContext.HasPlayModeSceneSession();
         state.playMode.Stop();
         static_cast<void>(state.sceneContext.RestorePlayModeSceneSession());
+        if (SceneViewportPresentationPolicy::RequiresPresent(
+                previousPlayModeSceneActive,
+                state.sceneContext.HasPlayModeSceneSession())) {
+            state.sceneViewport.RequestPresent();
+            if (state.window != nullptr) {
+                InvalidateRect(state.window, nullptr, FALSE);
+            }
+        }
     }
 }
 
