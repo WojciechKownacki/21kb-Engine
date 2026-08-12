@@ -97,12 +97,20 @@ void WriteSilentWav(const std::filesystem::path& path) {
     Require(output.good(), "Audio test wave could not be written");
 }
 
+void WriteTruncatedAudio(const std::filesystem::path& path) {
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
+    Require(output.is_open(), "Truncated audio fixture could not be opened");
+    output.write("RIFF", 4);
+    Require(output.good(), "Truncated audio fixture could not be written");
+}
+
 void RegisterClip(kb::scene::Scene& scene, std::uint64_t id, const std::filesystem::path& path) {
     Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
                 .id = kb::assets::AssetId{ id },
                 .type = "AudioClip",
                 .name = "RuntimeClip",
-                .virtualPath = "/Audio/Runtime.wav",
+                .virtualPath = "/Audio/Runtime" + std::to_string(id) + ".wav",
                 .physicalPath = path.string(),
                 .contentHash = id,
             }),
@@ -304,6 +312,91 @@ void RunVoiceStateTest(const std::filesystem::path& clipPath) {
     RunClipResolverValidationTest(clipPath, resolver);
 }
 
+void RunTransactionalPlaybackFailureTest(const std::filesystem::path& clipPath) {
+    const std::filesystem::path corruptPath = TestRoot() / "Truncated.wav";
+    WriteTruncatedAudio(corruptPath);
+
+    kb::audio_miniaudio::MiniaudioEngine engine;
+    engine.Initialize(true);
+    OfflineEnginePump pump{ engine };
+    kb::scene::Scene scene;
+    kb::audio_miniaudio::MiniaudioClipResolver resolver;
+    kb::audio_miniaudio::MiniaudioVoicePool pool;
+
+    constexpr std::uint64_t firstClip = 8500U;
+    constexpr std::size_t clipCount = 8U;
+    constexpr std::size_t voicesPerClip = 8U;
+    for (std::size_t clipIndex = 0U; clipIndex < clipCount; ++clipIndex) {
+        const std::uint64_t clipId = firstClip + clipIndex;
+        RegisterClip(scene, clipId, clipPath);
+        for (std::size_t voiceIndex = 0U; voiceIndex < voicesPerClip; ++voiceIndex) {
+            const kb::audio::AudioPlayResult result = pool.PlayOneShot(
+                engine.Native(), scene,
+                kb::audio::AudioPlayDesc{
+                    .clipAssetId = clipId,
+                    .volume = 0.4F,
+                    .pitch = 1.2F,
+                    .loop = true,
+                    .spatial = false,
+                    .pan = 0.3F,
+                    .priority = 100U,
+                },
+                resolver, nullptr);
+            Require(result.Succeeded(), "Transactional pool fixture did not fill to capacity");
+        }
+    }
+
+    const std::vector<std::uint64_t> idsBefore = pool.VoiceIdsForTesting();
+    Require(idsBefore.size() == clipCount * voicesPerClip,
+        "Transactional pool fixture did not retain its full capacity");
+    kb::audio_miniaudio::MiniaudioSound* retainedSound = pool.SoundForTesting(idsBefore.front());
+    Require(retainedSound != nullptr, "Transactional pool fixture lost its oldest voice");
+    const float volumeBefore = ma_sound_get_volume(retainedSound->PrimaryForTesting());
+    const float panBefore = ma_sound_get_pan(retainedSound->PrimaryForTesting());
+    const float pitchBefore = ma_sound_get_pitch(retainedSound->PrimaryForTesting());
+
+    constexpr std::uint64_t corruptClip = 8598U;
+    RegisterClip(scene, corruptClip, corruptPath);
+    const kb::audio::AudioPlayResult rejected = pool.PlayOneShot(
+        engine.Native(), scene,
+        kb::audio::AudioPlayDesc{
+            .clipAssetId = corruptClip,
+            .volume = 0.9F,
+            .pitch = 1.5F,
+            .loop = true,
+            .spatial = false,
+            .priority = 255U,
+        },
+        resolver, nullptr);
+    Require(!rejected.Succeeded() && rejected.error == "audio voice could not be created",
+        "Truncated one-shot payload was not rejected during candidate initialization");
+    Require(pool.VoiceIdsForTesting() == idsBefore && pool.VoiceCountForTesting() == idsBefore.size(),
+        "Rejected one-shot initialization evicted or reordered a live voice");
+    Require(pool.SoundForTesting(idsBefore.front()) == retainedSound
+            && pool.IsVoicePlaying(idsBefore.front())
+            && Near(ma_sound_get_volume(retainedSound->PrimaryForTesting()), volumeBefore)
+            && Near(ma_sound_get_pan(retainedSound->PrimaryForTesting()), panBefore)
+            && Near(ma_sound_get_pitch(retainedSound->PrimaryForTesting()), pitchBefore),
+        "Rejected one-shot initialization changed the retained native voice state");
+
+    constexpr std::uint64_t validCandidateClip = 8599U;
+    RegisterClip(scene, validCandidateClip, clipPath);
+    const kb::audio::AudioPlayResult admitted = pool.PlayOneShot(
+        engine.Native(), scene,
+        kb::audio::AudioPlayDesc{
+            .clipAssetId = validCandidateClip,
+            .volume = 0.0F,
+            .loop = true,
+            .spatial = false,
+            .priority = 255U,
+        },
+        resolver, nullptr);
+    Require(admitted.Succeeded() && pool.VoiceCountForTesting() == idsBefore.size()
+            && !pool.IsVoicePlaying(idsBefore.front())
+            && pool.IsVoicePlaying(admitted.voiceId),
+        "A valid one-shot candidate did not commit after a rejected corrupt candidate");
+}
+
 void RunInitialFrameSoundTest(const std::filesystem::path& clipPath) {
     kb::audio_miniaudio::MiniaudioEngine engine;
     engine.Initialize(true);
@@ -469,6 +562,9 @@ void RunSourceLifecycleAndRoutingTest(const std::filesystem::path& clipPath, std
     kb::scene::Scene scene;
     RegisterClip(scene, 8301U, clipPath);
     RegisterClip(scene, 8302U, clipPath);
+    const std::filesystem::path corruptPath = TestRoot() / "SourceTruncated.wav";
+    WriteTruncatedAudio(corruptPath);
+    RegisterClip(scene, 8303U, corruptPath);
     kb::audio_miniaudio::MiniaudioClipResolver resolver;
     kb::audio_miniaudio::MiniaudioBusRegistry buses;
     kb::audio_miniaudio::MiniaudioSourceRegistry sources;
@@ -592,12 +688,36 @@ void RunSourceLifecycleAndRoutingTest(const std::filesystem::path& clipPath, std
     }
 
     component = scene.Components().AudioSources().TryGet(sourceObject.Entity());
+    component->loop = true;
+    component->clipAssetId = 8303U;
+    scene.Components().AudioSources().MarkModified(sourceObject.Entity());
+    kb::audio_miniaudio::MiniaudioSound* retainedSource = sources.SoundForTesting(sourceObject.Entity().Id());
+    const float retainedVolume = ma_sound_get_volume(retainedSource->PrimaryForTesting());
+    const float retainedPan = ma_sound_get_pan(retainedSource->PrimaryForTesting());
+    const float retainedPitch = ma_sound_get_pitch(retainedSource->PrimaryForTesting());
+    Require(sources.PlaySource(engine.Native(), scene, sourceObject.Entity(), resolver, buses, true).status
+            == kb::audio::AudioSourceControlStatus::SoundInitializationFailed,
+        "Explicit source transport masked a corrupt changed-clip initialization failure");
+    kb::scene::SceneSystemContext corruptClipContext{ scene, 0.25F };
+    sources.Sync(engine.Native(), corruptClipContext, resolver, buses, nullptr, {}, true);
+    Require(sources.SoundCountForTesting() == 1U
+            && sources.SoundForTesting(sourceObject.Entity().Id()) == retainedSource
+            && sources.IsSourcePlaying(scene, sourceObject.Entity(), true).playing,
+        "A corrupt changed clip removed the live component-source record");
+    Require(Near(ma_sound_get_volume(retainedSource->PrimaryForTesting()), retainedVolume)
+            && Near(ma_sound_get_pan(retainedSource->PrimaryForTesting()), retainedPan)
+            && Near(ma_sound_get_pitch(retainedSource->PrimaryForTesting()), retainedPitch),
+        "A corrupt changed clip mutated the retained component-source native settings");
+
+    component = scene.Components().AudioSources().TryGet(sourceObject.Entity());
     component->clipAssetId = 8302U;
     scene.Components().AudioSources().MarkModified(sourceObject.Entity());
     kb::scene::SceneSystemContext changedClipContext{ scene, 0.25F };
     sources.Sync(engine.Native(), changedClipContext, resolver, buses, nullptr, {}, true);
-    Require(sources.SoundForTesting(sourceObject.Entity().Id())->PlaybackSeconds() < 0.05F,
-        "Changing a source clip did not reset the cursor to the new clip start");
+    Require(sources.SoundForTesting(sourceObject.Entity().Id()) != retainedSource
+            && sources.SoundForTesting(sourceObject.Entity().Id())->PlaybackSeconds() < 0.05F
+            && sources.IsSourcePlaying(scene, sourceObject.Entity(), true).playing,
+        "A valid changed clip did not replace and restart after a corrupt candidate");
     if (checkpoint == "source-clip") {
         return;
     }
@@ -779,7 +899,16 @@ void RunBackendRestartTest(const std::filesystem::path& clipPath) {
     backend.Shutdown();
     Require(backend.ReinitializeForTesting(scene, true) == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
         "Controlled no-device restart did not recover after shutdown");
+    Require(backend.PlaySourceForTesting(scene, source.Entity()).Succeeded()
+            && backend.PlayOneShotForTesting(scene, voiceDesc).Succeeded(),
+        "Controlled shutdown fixture could not recreate source, voice and bus resources");
+    const kb::audio_miniaudio::MiniaudioPlaybackBackend::ResourceStateForTesting beforeShutdown = backend.ResourcesForTesting();
+    Require(beforeShutdown.sourceSounds == 1U && beforeShutdown.voices == 1U && beforeShutdown.buses == 1U,
+        "Controlled shutdown fixture did not own every native resource type");
     backend.Shutdown();
+    const kb::audio_miniaudio::MiniaudioPlaybackBackend::ResourceStateForTesting afterShutdown = backend.ResourcesForTesting();
+    Require(afterShutdown.sourceSounds == 0U && afterShutdown.voices == 0U && afterShutdown.buses == 0U,
+        "Backend shutdown retained a native source, voice or bus resource");
 }
 
 template <typename Resolver>
@@ -882,6 +1011,9 @@ int RunTests(int argc, char** argv) {
     }
     if (filter.empty() || filter == "voice" || filter == "resolver") {
         RunVoiceStateTest(clipPath);
+    }
+    if (filter.empty() || filter == "transaction") {
+        RunTransactionalPlaybackFailureTest(clipPath);
     }
     if (filter.empty() || filter == "initial-frame") {
         RunInitialFrameSoundTest(clipPath);

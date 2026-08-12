@@ -51,11 +51,16 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
         return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio clip file could not be resolved" };
     }
 
-    if (!PruneVoicesForClip(desc.clipAssetId, desc.priority)) {
-        return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio clip pool is full of higher-priority voices" };
-    }
-    if (!PruneVoiceCapacity(desc.priority)) {
-        return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio one-shot pool is full of higher-priority voices" };
+    Admission admission{ .clipVictim = voices_.end(), .capacityVictim = voices_.end() };
+    bool clipRejected = false;
+    if (!PlanAdmission(desc.clipAssetId, desc.priority, admission, clipRejected)) {
+        return kb::audio::AudioPlayResult{
+            .started = false,
+            .voiceId = 0U,
+            .error = clipRejected
+                ? "audio clip pool is full of higher-priority voices"
+                : "audio one-shot pool is full of higher-priority voices",
+        };
     }
 
     auto sound = std::make_unique<MiniaudioSound>();
@@ -63,7 +68,7 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
         return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio voice could not be created" };
     }
 
-    sound->Apply(MiniaudioSoundSettings{
+    MiniaudioSoundSettings settings{
         .volume = desc.volume,
         .pitch = desc.pitch,
         .mute = desc.mute,
@@ -78,14 +83,18 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
         .dopplerFactor = desc.dopplerFactor,
         .position = initialPosition,
         .velocity = attached ? kb::scene::Vec3{} : desc.velocity,
-    });
+    };
+    MiniaudioSoundSettings candidateSettings = settings;
+    candidateSettings.mute = true;
+    sound->Apply(candidateSettings);
 
     if (sound->Start() != MA_SUCCESS) {
         return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio voice could not be started" };
     }
 
     const std::uint64_t voiceId = AllocateVoiceId();
-    voices_.push_back(VoiceRecord{
+    std::list<VoiceRecord> committedCandidate;
+    committedCandidate.push_back(VoiceRecord{
         .voiceId = voiceId,
         .clipAssetId = desc.clipAssetId,
         .looping = desc.loop,
@@ -98,6 +107,14 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
         .hasPreviousOwnerPosition = false,
         .sound = std::move(sound),
     });
+    if (admission.clipVictim != voices_.end()) {
+        voices_.erase(admission.clipVictim);
+    }
+    if (admission.capacityVictim != voices_.end()) {
+        voices_.erase(admission.capacityVictim);
+    }
+    voices_.splice(voices_.end(), committedCandidate);
+    voices_.back().sound->Apply(settings);
     return kb::audio::AudioPlayResult{ .started = true, .voiceId = voiceId, .error = {} };
 }
 
@@ -343,58 +360,46 @@ std::uint64_t MiniaudioVoicePool::AllocateVoiceId() noexcept {
     return voiceId;
 }
 
-bool MiniaudioVoicePool::PruneVoicesForClip(std::uint64_t clipAssetId, std::uint8_t incomingPriority) noexcept {
+bool MiniaudioVoicePool::PlanAdmission(
+    std::uint64_t clipAssetId,
+    std::uint8_t incomingPriority,
+    Admission& admission,
+    bool& clipRejected) noexcept {
+    admission = Admission{ .clipVictim = voices_.end(), .capacityVictim = voices_.end() };
+    clipRejected = false;
+
     std::size_t count = 0U;
-    for (const VoiceRecord& voice : voices_) {
-        if (voice.clipAssetId == clipAssetId) {
+    for (auto iterator = voices_.begin(); iterator != voices_.end(); ++iterator) {
+        if (iterator->clipAssetId == clipAssetId) {
             ++count;
+            if (admission.clipVictim == voices_.end() || iterator->priority < admission.clipVictim->priority) {
+                admission.clipVictim = iterator;
+            }
         }
     }
 
-    while (count >= kMaxOneShotVoicesPerClip) {
-        // LIB-148: steal the lowest-priority voice of this clip (ties: oldest, list order
-        // is age order). Per-clip stealing keeps the historical clamp semantics - the
-        // newest request wins its slot even at equal priority, mirroring the pre-LIB-148
-        // oldest-first behavior - but never silences a strictly higher-priority voice
-        // when a lower one is available.
-        auto victim = voices_.end();
-        for (auto iter = voices_.begin(); iter != voices_.end(); ++iter) {
-            if (iter->clipAssetId != clipAssetId) {
+    if (count >= kMaxOneShotVoicesPerClip) {
+        if (admission.clipVictim == voices_.end() || admission.clipVictim->priority > incomingPriority) {
+            clipRejected = true;
+            return false;
+        }
+    } else {
+        admission.clipVictim = voices_.end();
+    }
+
+    const std::size_t sizeAfterClipCommit = voices_.size() - (admission.clipVictim == voices_.end() ? 0U : 1U);
+    if (sizeAfterClipCommit >= kMaxOneShotVoices) {
+        for (auto iterator = voices_.begin(); iterator != voices_.end(); ++iterator) {
+            if (iterator == admission.clipVictim) {
                 continue;
             }
-            if (victim == voices_.end() || iter->priority < victim->priority) {
-                victim = iter;
+            if (admission.capacityVictim == voices_.end() || iterator->priority < admission.capacityVictim->priority) {
+                admission.capacityVictim = iterator;
             }
         }
-        if (victim == voices_.end()) {
-            return true;
-        }
-        if (victim->priority > incomingPriority) {
+        if (admission.capacityVictim == voices_.end() || admission.capacityVictim->priority > incomingPriority) {
             return false;
         }
-        voices_.erase(victim);
-        --count;
-    }
-    return true;
-}
-
-bool MiniaudioVoicePool::PruneVoiceCapacity(std::uint8_t incomingPriority) noexcept {
-    while (voices_.size() >= kMaxOneShotVoices) {
-        auto victim = voices_.end();
-        for (auto iter = voices_.begin(); iter != voices_.end(); ++iter) {
-            if (victim == voices_.end() || iter->priority < victim->priority) {
-                victim = iter;
-            }
-        }
-        if (victim == voices_.end()) {
-            return false;
-        }
-        if (victim->priority > incomingPriority) {
-            // Every live voice outranks the incoming request - refuse it honestly instead
-            // of stealing a higher-priority voice.
-            return false;
-        }
-        voices_.erase(victim);
     }
     return true;
 }

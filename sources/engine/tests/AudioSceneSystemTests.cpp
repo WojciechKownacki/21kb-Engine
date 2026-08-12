@@ -22,6 +22,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 
 #include <cstdint>
+#include <cstddef>
 #include <array>
 #include <filesystem>
 #include <fstream>
@@ -582,6 +583,79 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
         kb::tests::Require(restartedStatus == kb::audio::AudioDeviceStatus::PlaybackAvailable
                 || restartedStatus == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
             "Audio backend did not recover through its public restart path");
+
+        // Hot reload uses the production shadow-copy module path. The module-owned scene
+        // system must detach (destroying source, voice and bus natives) before its DLL is
+        // unloaded, then attach exactly one replacement system.
+        const kb::assets::AssetId reloadClipId{ 9901U };
+        kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                               .id = reloadClipId,
+                               .type = "AudioClip",
+                               .name = "ReloadClip",
+                               .virtualPath = "/Game/Audio/Reload.wav",
+                               .physicalPath = clipPath.string(),
+                               .contentHash = 1U,
+                           }),
+            "Audio reload clip registration failed");
+        kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, mixerAssetId.value);
+        const kb::scene::SceneObject reloadSource = scene.Entities().CreateObject(
+            kb::scene::SceneObjectDesc{ .name = "Reload Source" });
+        kb::scene::AudioSourceComponent reloadSourceComponent{
+            .clipAssetId = reloadClipId.value,
+            .volume = 0.0F,
+            .loop = true,
+            .spatial = false,
+            .autoplay = true,
+        };
+        kb::tests::Require(kb::scene::SetAudioSourceOutputBus(reloadSourceComponent, "Weapons"),
+            "Audio reload source route setup failed");
+        scene.Components().AudioSources().Set(reloadSource.Entity(), reloadSourceComponent);
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        kb::audio::AudioPlayDesc reloadVoiceDesc{
+            .clipAssetId = reloadClipId.value,
+            .volume = 0.0F,
+            .loop = true,
+            .spatial = false,
+        };
+        reloadVoiceDesc.outputBus = "Weapons";
+        const kb::audio::AudioPlayResult reloadVoice = kb::audio::AudioPlayback::PlayOneShot(scene, reloadVoiceDesc);
+        if (restartedStatus == kb::audio::AudioDeviceStatus::PlaybackAvailable) {
+            kb::tests::Require(reloadVoice.Succeeded()
+                    && kb::audio::AudioPlayback::IsSourcePlaying(scene, reloadSource.Entity()).playing,
+                "Audio reload fixture did not create a live source, voice and routed bus");
+        } else {
+            kb::tests::Require(!reloadVoice.Succeeded()
+                    && reloadVoice.error == "audio playback device is not available",
+                "Audio reload no-device fixture did not report controlled unavailability");
+        }
+
+        const std::size_t sceneSystemCountBeforeReload = scene.Runtime().SceneSystemCount();
+        scene.ReloadModules();
+        kb::tests::Require(kb::audio::AudioPlayback::HasBackend(scene)
+                && scene.Runtime().SceneSystemCount() == sceneSystemCountBeforeReload,
+            "Audio module reload did not replace exactly one scene system/backend");
+        if (reloadVoice.Succeeded()) {
+            kb::tests::Require(!kb::audio::AudioPlayback::IsVoicePlaying(scene, reloadVoice.voiceId)
+                    && !kb::audio::AudioPlayback::StopVoice(scene, reloadVoice.voiceId),
+                "Audio module detach retained an old native voice across DLL unload");
+        }
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
+        const kb::audio::AudioDeviceStatus reloadedStatus = kb::audio::AudioPlayback::DeviceStatus(scene);
+        if (reloadedStatus == kb::audio::AudioDeviceStatus::PlaybackAvailable) {
+            kb::tests::Require(kb::audio::AudioPlayback::IsSourcePlaying(scene, reloadSource.Entity()).playing,
+                "Reloaded audio backend did not recreate the component source");
+            const kb::audio::AudioPlayResult recreatedVoice = kb::audio::AudioPlayback::PlayOneShot(scene, reloadVoiceDesc);
+            kb::tests::Require(recreatedVoice.Succeeded(),
+                "Reloaded audio backend did not recreate a routed one-shot voice");
+            kb::tests::Require(kb::audio::AudioPlayback::StopVoice(scene, recreatedVoice.voiceId),
+                "Reloaded one-shot voice could not be cleaned up");
+        } else {
+            kb::tests::Require(reloadedStatus == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
+                "Reloaded audio backend did not expose an honest device status");
+        }
+        scene.Entities().Destroy(reloadSource.Entity());
+        kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 0U);
+        static_cast<void>(scene.Runtime().Update(1.0F / 60.0F));
 
         kb::audio::AudioPlayback::StopAll(scene);
     }

@@ -125,6 +125,7 @@ private:
         kb::scene::Scene& scene,
         kb::scene::SceneEntity entity,
         bool playbackAvailable) noexcept;
+    static void SwapSoundRecords(SoundRecord& first, SoundRecord& second) noexcept;
 
 #if defined(KB_AUDIO_MINIAUDIO_TESTING)
 public:

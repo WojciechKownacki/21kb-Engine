@@ -3,17 +3,37 @@
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
 
+#include <cassert>
+#if !defined(NDEBUG)
+#include <thread>
+#endif
+
 namespace kb::audio_miniaudio {
+
+MiniaudioPlaybackBackend::MiniaudioPlaybackBackend()
+#if !defined(NDEBUG)
+    : ownerThread_(std::this_thread::get_id())
+#endif
+{}
 
 MiniaudioPlaybackBackend::~MiniaudioPlaybackBackend() {
     Shutdown();
 }
 
+void MiniaudioPlaybackBackend::AssertOwnerThread() const noexcept {
+#if !defined(NDEBUG)
+    const std::thread::id current = std::this_thread::get_id();
+    assert(ownerThread_ == current && "audio backend must be accessed from its owner thread");
+#endif
+}
+
 void MiniaudioPlaybackBackend::OnCreate() {
+    AssertOwnerThread();
     engine_.Initialize();
 }
 
 void MiniaudioPlaybackBackend::OnUpdate(kb::scene::SceneSystemContext& context) {
+    AssertOwnerThread();
     if (!engine_.IsInitialized()) {
         return;
     }
@@ -76,6 +96,7 @@ void MiniaudioPlaybackBackend::OnUpdate(kb::scene::SceneSystemContext& context) 
 }
 
 void MiniaudioPlaybackBackend::Shutdown() noexcept {
+    AssertOwnerThread();
     sourceRegistry_.StopAll();
     voicePool_.StopAll();
     busRegistry_.StopAll();
@@ -93,6 +114,7 @@ void MiniaudioPlaybackBackend::SyncRouting(kb::scene::Scene& scene, bool routing
 }
 
 kb::audio::AudioPlayResult MiniaudioPlaybackBackend::PlayOneShot(kb::scene::Scene& scene, const kb::audio::AudioPlayDesc& desc) {
+    AssertOwnerThread();
     const kb::audio::AudioPlayDescValidationStatus validation = kb::audio::ValidateAudioPlayDesc(scene, desc);
     if (validation != kb::audio::AudioPlayDescValidationStatus::Valid) {
         return kb::audio::AudioPlayDescValidationResult(validation);
@@ -134,12 +156,14 @@ kb::audio::AudioPlayResult MiniaudioPlaybackBackend::PlayOneShotInternal(
 }
 
 void MiniaudioPlaybackBackend::StopAll(kb::scene::Scene& scene) noexcept {
+    AssertOwnerThread();
     static_cast<void>(scene);
     sourceRegistry_.StopAll();
     voicePool_.StopAll();
 }
 
 kb::audio::AudioSourceControlResult MiniaudioPlaybackBackend::PlaySource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    AssertOwnerThread();
     if (!engine_.IsInitialized()) {
         return { .status = kb::audio::AudioSourceControlStatus::DeviceUnavailable };
     }
@@ -155,26 +179,32 @@ kb::audio::AudioSourceControlResult MiniaudioPlaybackBackend::PlaySourceInternal
 }
 
 kb::audio::AudioSourceControlResult MiniaudioPlaybackBackend::PauseSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    AssertOwnerThread();
     return sourceRegistry_.PauseSource(scene, entity, engine_.IsPlaybackAvailable());
 }
 
 kb::audio::AudioSourceControlResult MiniaudioPlaybackBackend::ResumeSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    AssertOwnerThread();
     return sourceRegistry_.ResumeSource(scene, entity, engine_.IsPlaybackAvailable());
 }
 
 kb::audio::AudioSourceControlResult MiniaudioPlaybackBackend::StopSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    AssertOwnerThread();
     return sourceRegistry_.StopSource(scene, entity, engine_.IsPlaybackAvailable());
 }
 
 kb::audio::AudioSourceControlResult MiniaudioPlaybackBackend::IsSourcePlaying(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    AssertOwnerThread();
     return sourceRegistry_.IsSourcePlaying(scene, entity, engine_.IsPlaybackAvailable());
 }
 
 kb::audio::AudioDeviceStatus MiniaudioPlaybackBackend::DeviceStatus() const noexcept {
+    AssertOwnerThread();
     return engine_.Status();
 }
 
 kb::audio::AudioDeviceStatus MiniaudioPlaybackBackend::Reinitialize(kb::scene::Scene& scene) noexcept {
+    AssertOwnerThread();
     return ReinitializeInternal(scene, false);
 }
 
@@ -192,10 +222,12 @@ kb::audio::AudioDeviceStatus MiniaudioPlaybackBackend::ReinitializeInternal(kb::
 
 #if defined(KB_AUDIO_MINIAUDIO_TESTING)
 kb::audio::AudioDeviceStatus MiniaudioPlaybackBackend::ReinitializeForTesting(kb::scene::Scene& scene, bool forceNoDevice) noexcept {
+    AssertOwnerThread();
     return ReinitializeInternal(scene, forceNoDevice);
 }
 
 kb::audio::AudioPlayResult MiniaudioPlaybackBackend::PlayOneShotForTesting(kb::scene::Scene& scene, const kb::audio::AudioPlayDesc& desc) {
+    AssertOwnerThread();
     const kb::audio::AudioPlayDescValidationStatus validation = kb::audio::ValidateAudioPlayDesc(scene, desc);
     if (validation != kb::audio::AudioPlayDescValidationStatus::Valid) {
         return kb::audio::AudioPlayDescValidationResult(validation);
@@ -207,12 +239,14 @@ kb::audio::AudioPlayResult MiniaudioPlaybackBackend::PlayOneShotForTesting(kb::s
 }
 
 kb::audio::AudioSourceControlResult MiniaudioPlaybackBackend::PlaySourceForTesting(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    AssertOwnerThread();
     return engine_.IsInitialized()
         ? PlaySourceInternal(scene, entity, true)
         : kb::audio::AudioSourceControlResult{ .status = kb::audio::AudioSourceControlStatus::DeviceUnavailable };
 }
 
 MiniaudioPlaybackBackend::ResourceStateForTesting MiniaudioPlaybackBackend::ResourcesForTesting() const noexcept {
+    AssertOwnerThread();
     return ResourceStateForTesting{
         .sourceSounds = sourceRegistry_.NativeSoundCountForTesting(),
         .voices = voicePool_.VoiceCountForTesting(),
@@ -221,6 +255,7 @@ MiniaudioPlaybackBackend::ResourceStateForTesting MiniaudioPlaybackBackend::Reso
 }
 
 bool MiniaudioPlaybackBackend::StopPlaybackDeviceForTesting() noexcept {
+    AssertOwnerThread();
     if (!engine_.IsPlaybackAvailable()) {
         return false;
     }
@@ -230,21 +265,25 @@ bool MiniaudioPlaybackBackend::StopPlaybackDeviceForTesting() noexcept {
 #endif
 
 bool MiniaudioPlaybackBackend::StopVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
+    AssertOwnerThread();
     static_cast<void>(scene);
     return voicePool_.StopVoice(voiceId);
 }
 
 bool MiniaudioPlaybackBackend::PauseVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
+    AssertOwnerThread();
     static_cast<void>(scene);
     return voicePool_.PauseVoice(voiceId);
 }
 
 bool MiniaudioPlaybackBackend::ResumeVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
+    AssertOwnerThread();
     static_cast<void>(scene);
     return voicePool_.ResumeVoice(voiceId);
 }
 
 bool MiniaudioPlaybackBackend::SeekVoice(kb::scene::Scene& scene, std::uint64_t voiceId, float positionSeconds) noexcept {
+    AssertOwnerThread();
     static_cast<void>(scene);
     if (!kb::audio::IsAudioVoiceSeekPositionValid(positionSeconds)) {
         return false;
@@ -253,6 +292,7 @@ bool MiniaudioPlaybackBackend::SeekVoice(kb::scene::Scene& scene, std::uint64_t 
 }
 
 bool MiniaudioPlaybackBackend::SetVoiceVolume(kb::scene::Scene& scene, std::uint64_t voiceId, float volume) noexcept {
+    AssertOwnerThread();
     static_cast<void>(scene);
     if (!kb::audio::IsAudioVoiceVolumeValid(volume)) {
         return false;
@@ -261,11 +301,13 @@ bool MiniaudioPlaybackBackend::SetVoiceVolume(kb::scene::Scene& scene, std::uint
 }
 
 bool MiniaudioPlaybackBackend::SetVoiceMute(kb::scene::Scene& scene, std::uint64_t voiceId, bool mute) noexcept {
+    AssertOwnerThread();
     static_cast<void>(scene);
     return voicePool_.SetVoiceMute(voiceId, mute);
 }
 
 bool MiniaudioPlaybackBackend::SetVoicePan(kb::scene::Scene& scene, std::uint64_t voiceId, float pan) noexcept {
+    AssertOwnerThread();
     static_cast<void>(scene);
     if (!kb::audio::IsAudioVoicePanValid(pan)) {
         return false;
@@ -274,6 +316,7 @@ bool MiniaudioPlaybackBackend::SetVoicePan(kb::scene::Scene& scene, std::uint64_
 }
 
 bool MiniaudioPlaybackBackend::SetVoicePitch(kb::scene::Scene& scene, std::uint64_t voiceId, float pitch) noexcept {
+    AssertOwnerThread();
     static_cast<void>(scene);
     if (!kb::audio::IsAudioVoicePitchValid(pitch)) {
         return false;
@@ -282,21 +325,25 @@ bool MiniaudioPlaybackBackend::SetVoicePitch(kb::scene::Scene& scene, std::uint6
 }
 
 bool MiniaudioPlaybackBackend::SetVoiceLoop(kb::scene::Scene& scene, std::uint64_t voiceId, bool loop) noexcept {
+    AssertOwnerThread();
     static_cast<void>(scene);
     return voicePool_.SetVoiceLoop(voiceId, loop);
 }
 
 bool MiniaudioPlaybackBackend::IsVoicePlaying(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
+    AssertOwnerThread();
     static_cast<void>(scene);
     return voicePool_.IsVoicePlaying(voiceId);
 }
 
 float MiniaudioPlaybackBackend::VoicePlaybackSeconds(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
+    AssertOwnerThread();
     static_cast<void>(scene);
     return voicePool_.VoicePlaybackSeconds(voiceId);
 }
 
 bool MiniaudioPlaybackBackend::AddVoiceMarker(kb::scene::Scene& scene, std::uint64_t voiceId, std::string_view marker, float positionSeconds, kb::scene::SceneEntity target) {
+    AssertOwnerThread();
     if (!kb::audio::IsAudioVoiceMarkerRequestValid(scene, marker, positionSeconds, target)) {
         return false;
     }

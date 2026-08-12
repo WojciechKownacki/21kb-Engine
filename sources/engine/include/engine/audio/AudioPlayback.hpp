@@ -157,6 +157,11 @@ class IAudioPlaybackBackend {
 public:
     virtual ~IAudioPlaybackBackend() = default;
 
+    // Every lifecycle, playback and control entry is owner-thread-only: the same scene
+    // thread that registers the backend must drive it until unregister. Native audio
+    // callbacks own only backend/native data; they must never enter this interface or
+    // access ECS. A caller originating elsewhere must marshal work to the owner thread.
+
     [[nodiscard]] virtual AudioPlayResult PlayOneShot(kb::scene::Scene& scene, const AudioPlayDesc& desc) = 0;
     virtual void StopAll(kb::scene::Scene& scene) noexcept = 0;
     [[nodiscard]] virtual AudioSourceControlResult PlaySource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) = 0;
@@ -209,6 +214,9 @@ struct PendingAudioMarkerEvent {
 class AudioPlayback final {
 public:
     AudioPlayback() = delete;
+
+    // Owner-thread-only facade. A scene captures its owner thread during construction;
+    // debug builds assert every register, lifecycle and control call stays there.
 
     static void RegisterBackend(kb::scene::Scene& scene, IAudioPlaybackBackend& backend);
     static void UnregisterBackend(kb::scene::Scene& scene, IAudioPlaybackBackend& backend) noexcept;
