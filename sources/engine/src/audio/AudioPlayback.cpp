@@ -45,6 +45,41 @@ void AudioPlayback::StopAll(kb::scene::Scene& scene) noexcept {
     }
 }
 
+AudioSourceControlResult AudioPlayback::PlaySource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend == nullptr ? AudioSourceControlResult{} : backend->PlaySource(scene, entity);
+}
+
+AudioSourceControlResult AudioPlayback::PauseSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend == nullptr ? AudioSourceControlResult{} : backend->PauseSource(scene, entity);
+}
+
+AudioSourceControlResult AudioPlayback::ResumeSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend == nullptr ? AudioSourceControlResult{} : backend->ResumeSource(scene, entity);
+}
+
+AudioSourceControlResult AudioPlayback::StopSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend == nullptr ? AudioSourceControlResult{} : backend->StopSource(scene, entity);
+}
+
+AudioSourceControlResult AudioPlayback::IsSourcePlaying(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend == nullptr ? AudioSourceControlResult{} : backend->IsSourcePlaying(scene, entity);
+}
+
+AudioDeviceStatus AudioPlayback::DeviceStatus(kb::scene::Scene& scene) noexcept {
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend == nullptr ? AudioDeviceStatus::BackendUnavailable : backend->DeviceStatus();
+}
+
+AudioDeviceStatus AudioPlayback::Reinitialize(kb::scene::Scene& scene) noexcept {
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend == nullptr ? AudioDeviceStatus::BackendUnavailable : backend->Reinitialize(scene);
+}
+
 bool AudioPlayback::StopVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend != nullptr && backend->StopVoice(scene, voiceId);
@@ -68,6 +103,16 @@ bool AudioPlayback::SeekVoice(kb::scene::Scene& scene, std::uint64_t voiceId, fl
 bool AudioPlayback::SetVoiceVolume(kb::scene::Scene& scene, std::uint64_t voiceId, float volume) noexcept {
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend != nullptr && backend->SetVoiceVolume(scene, voiceId, volume);
+}
+
+bool AudioPlayback::SetVoiceMute(kb::scene::Scene& scene, std::uint64_t voiceId, bool mute) noexcept {
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->SetVoiceMute(scene, voiceId, mute);
+}
+
+bool AudioPlayback::SetVoicePan(kb::scene::Scene& scene, std::uint64_t voiceId, float pan) noexcept {
+    IAudioPlaybackBackend* backend = FindBackend(scene);
+    return backend != nullptr && backend->SetVoicePan(scene, voiceId, pan);
 }
 
 bool AudioPlayback::SetVoicePitch(kb::scene::Scene& scene, std::uint64_t voiceId, float pitch) noexcept {
