@@ -1,4 +1,5 @@
 #include "inspection/InspectorPanelInteraction.hpp"
+#include "inspection/InspectorAudioMixerAssetInteraction.hpp"
 #include "inspection/TerrainMaterialLayerMenuState.hpp"
 
 #if defined(_WIN32)
@@ -34,6 +35,7 @@
 #include "inspection/InspectorAudioScrubController.hpp"
 #include "inspection/InspectorInputInteraction.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
+#include "rendering/InspectorAudioMixerAssetView.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "scene/transform_edit/EditorTransformProperty.hpp"
 #include "scene/EditorTerrainService.hpp"
@@ -52,6 +54,46 @@
 
 namespace kb::editor {
 namespace {
+
+class SceneAudioMixerInspectorActions {
+public:
+    explicit SceneAudioMixerInspectorActions(EditorSceneContext& context) noexcept
+        : context_(context) {}
+
+    [[nodiscard]] bool AddBus(kb::assets::AssetId id, std::string_view name) { return context_.AddAudioMixerBus(id, name); }
+    [[nodiscard]] bool RemoveBus(kb::assets::AssetId id, std::string_view name) { return context_.RemoveAudioMixerBus(id, name); }
+    [[nodiscard]] bool RenameBus(kb::assets::AssetId id, std::string_view name, std::string_view replacement) { return context_.RenameAudioMixerBus(id, name, replacement); }
+    [[nodiscard]] bool SetBusParent(kb::assets::AssetId id, std::string_view name, std::string_view parent) { return context_.SetAudioMixerBusParent(id, name, parent); }
+    [[nodiscard]] bool SetBusVolume(kb::assets::AssetId id, std::string_view name, float volume) { return context_.SetAudioMixerBusVolume(id, name, volume); }
+    [[nodiscard]] bool SetBusMute(kb::assets::AssetId id, std::string_view name, bool mute) { return context_.SetAudioMixerBusMute(id, name, mute); }
+    [[nodiscard]] bool AddSnapshot(kb::assets::AssetId id, std::string_view name) { return context_.AddAudioMixerSnapshot(id, name); }
+    [[nodiscard]] bool RemoveSnapshot(kb::assets::AssetId id, std::string_view name) { return context_.RemoveAudioMixerSnapshot(id, name); }
+    [[nodiscard]] bool RenameSnapshot(kb::assets::AssetId id, std::string_view name, std::string_view replacement) { return context_.RenameAudioMixerSnapshot(id, name, replacement); }
+    [[nodiscard]] bool AddSnapshotOverride(kb::assets::AssetId id, std::string_view snapshot, std::string_view bus, float volume) { return context_.AddAudioMixerSnapshotOverride(id, snapshot, bus, volume); }
+    [[nodiscard]] bool RemoveSnapshotOverride(kb::assets::AssetId id, std::string_view snapshot, std::string_view bus) { return context_.RemoveAudioMixerSnapshotOverride(id, snapshot, bus); }
+    [[nodiscard]] bool SetSnapshotOverrideVolume(kb::assets::AssetId id, std::string_view snapshot, std::string_view bus, float volume) { return context_.SetAudioMixerSnapshotOverrideVolume(id, snapshot, bus, volume); }
+
+private:
+    EditorSceneContext& context_;
+};
+
+[[nodiscard]] bool IsAudioMixerInspectorSection(InspectorSectionId section) noexcept {
+    return section == InspectorSectionId::AudioMixerBuses
+        || section == InspectorSectionId::AudioMixerSnapshots;
+}
+
+[[nodiscard]] kb::assets::AssetHandle<kb::audio::AudioMixerAsset> SelectedAudioMixer(
+    EditorSceneContext& sceneContext) {
+    const kb::assets::AssetId id = sceneContext.AssetBrowser().InspectorAsset();
+    if (!id.IsValid()) {
+        return {};
+    }
+    kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(id);
+    return metadata != nullptr && InspectorAudioMixerAssetView::Supports(*metadata)
+        ? InspectorAudioMixerAssetView::LoadCached(manager, id)
+        : kb::assets::AssetHandle<kb::audio::AudioMixerAsset>{};
+}
 
 [[nodiscard]] std::string FormatCompactFloat(float value);
 
@@ -3066,6 +3108,25 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     if (assetSelected && hit.section == InspectorSectionId::Material) {
         return HandleMaterialClick(sceneContext, hit, x, y);
     }
+    if (assetSelected && IsAudioMixerInspectorSection(hit.section)) {
+        const kb::assets::AssetHandle<kb::audio::AudioMixerAsset> mixer = SelectedAudioMixer(sceneContext);
+        if (!mixer.IsLoaded()) {
+            sceneContext.Inspector().EndTextEdit();
+            return true;
+        }
+        SceneAudioMixerInspectorActions actions{ sceneContext };
+        return InspectorAudioMixerAssetInteraction::HandlePointerDown(
+            sceneContext.Inspector(),
+            *mixer,
+            InspectorAudioMixerAssetTarget{
+                .kind = hit.kind,
+                .section = hit.section,
+                .property = hit.property,
+                .index = hit.index,
+            },
+            actions,
+            mixer.Id());
+    }
     if (!sceneContext.Scene().Entities().IsAlive(entity)) {
         return true;
     }
@@ -3475,6 +3536,17 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             IsNavAgentProperty(inspector.EditedProperty())) {
             static_cast<void>(ApplyNavAgentText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
             inspector.EndTextEdit();
+            return true;
+        }
+        if (InspectorAudioMixerAssetInteraction::IsTextProperty(inspector.EditedProperty())) {
+            const kb::assets::AssetHandle<kb::audio::AudioMixerAsset> mixer = SelectedAudioMixer(sceneContext);
+            if (mixer.IsLoaded()) {
+                SceneAudioMixerInspectorActions actions{ sceneContext };
+                static_cast<void>(InspectorAudioMixerAssetInteraction::CommitTextEdit(
+                    inspector, *mixer, actions, mixer.Id()));
+            } else {
+                inspector.EndTextEdit();
+            }
             return true;
         }
         if (sceneContext.Scene().Entities().IsAlive(entity) &&

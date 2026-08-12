@@ -375,6 +375,8 @@ add_executable(kb_editor WIN32
     src/private/app/EditorWindowResizeHandler.hpp
     src/private/inspection/InspectorInputInteraction.hpp
     src/private/inspection/InspectorAudioComponentModel.hpp
+    src/private/inspection/InspectorAudioMixerAssetInteraction.hpp
+    src/private/inspection/InspectorAudioMixerAssetModel.hpp
     src/private/inspection/InspectorAudioScrubController.hpp
     src/private/inspection/InspectorAudioTextBuilder.hpp
     src/private/inspection/InspectorCameraTextBuilder.hpp
@@ -476,6 +478,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/HeroIconPathPainter.hpp
     src/private/rendering/HeroIconPainter.hpp
     src/private/rendering/InspectorPanelRenderer.hpp
+    src/private/rendering/InspectorAudioMixerAssetView.hpp
     src/private/rendering/InspectorAddComponentOverlayWindow.hpp
     src/private/rendering/MaterialEditorPanelRenderer.hpp
     src/private/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.hpp
@@ -676,6 +679,7 @@ add_executable(kb_editor WIN32
     src/rendering/HeroIconPathPainter.cpp
     src/rendering/HeroIconPainter.cpp
     src/rendering/InspectorPanelRenderer.cpp
+    src/rendering/InspectorAudioMixerAssetView.cpp
     src/rendering/InspectorAddComponentOverlayWindow.cpp
     src/rendering/MaterialEditorPanelRenderer.cpp
     src/rendering/EditorMaterialThumbnailService.cpp
@@ -737,6 +741,8 @@ add_executable(kb_editor WIN32
     src/rendering/SvgPathFigureBuilder.cpp
     src/inspection/InspectorCameraTextBuilder.cpp
     src/inspection/InspectorAudioTextBuilder.cpp
+    src/inspection/InspectorAudioMixerAssetInteraction.cpp
+    src/inspection/InspectorAudioMixerAssetModel.cpp
     src/inspection/InspectorAudioComponentModel.cpp
     src/inspection/InspectorAudioScrubController.cpp
     src/inspection/InspectorColliderTextBuilder.cpp
@@ -993,6 +999,7 @@ if(BUILD_TESTING)
         tests/EditorHierarchyTests.cpp
         tests/EditorAssetBrowserTests.cpp
         tests/EditorAudioMixerAuthoringTests.cpp
+        tests/EditorAudioMixerInspectorTests.cpp
         tests/EditorViewportPreviewTests.cpp
         tests/EditorMaterialGraphCookServiceTests.cpp
         tests/EditorDockingTests.cpp
@@ -1009,6 +1016,7 @@ if(BUILD_TESTING)
         tests/SvgPathTests.cpp
         src/rendering/MaterialEditorPanelLayout.cpp
         src/rendering/EditorTexturePreviewService.cpp
+        src/rendering/InspectorAudioMixerAssetView.cpp
         src/rendering/EditorBgfxBackendSelector.cpp
         src/rendering/HeroIconGdiplusRuntime.cpp
         src/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.cpp
@@ -1138,6 +1146,8 @@ if(BUILD_TESTING)
         src/rendering/EditorMeshThumbnailService.cpp
         src/rendering/MaterialPreviewAppearanceResolver.cpp
         src/inspection/InspectorAudioTextBuilder.cpp
+        src/inspection/InspectorAudioMixerAssetInteraction.cpp
+        src/inspection/InspectorAudioMixerAssetModel.cpp
         src/inspection/InspectorAudioComponentModel.cpp
         src/inspection/InspectorAudioScrubController.cpp
         src/inspection/InspectorComponentCatalog.cpp

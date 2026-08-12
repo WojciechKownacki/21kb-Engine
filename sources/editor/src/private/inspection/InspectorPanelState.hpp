@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -49,6 +50,8 @@ enum class InspectorSectionId : std::uint8_t {
     InputMappings,
     Material,
     MaterialPreview,
+    AudioMixerBuses,
+    AudioMixerSnapshots,
     Script,
     Rigidbody,
     Collider,
@@ -126,6 +129,19 @@ enum class InspectorPropertyId : std::uint16_t {
     InputMappingTrigger,
     InputMappingRemove,
     InputMappingAdd,
+    AudioMixerBusAdd,
+    AudioMixerBusName,
+    AudioMixerBusParent,
+    AudioMixerBusVolume,
+    AudioMixerBusMute,
+    AudioMixerBusRemove,
+    AudioMixerSnapshotAdd,
+    AudioMixerSnapshotName,
+    AudioMixerSnapshotRemove,
+    AudioMixerOverrideBus,
+    AudioMixerOverrideVolume,
+    AudioMixerOverrideRemove,
+    AudioMixerOverrideAdd,
     MeshRendererMesh,
     MeshRendererMeshPicker,
     MeshRendererMaterial,
@@ -451,6 +467,16 @@ enum class InspectorPropertyId : std::uint16_t {
     DeformedGeometryMaterialSlotPicker7,
 };
 
+struct InspectorDynamicRowIdentity {
+    std::uint64_t ownerAssetId = 0U;
+    std::uint32_t kind = 0U;
+    std::string first;
+    std::string second;
+    std::string third;
+
+    [[nodiscard]] bool operator==(const InspectorDynamicRowIdentity&) const noexcept = default;
+};
+
 struct InspectorPanelState {
     [[nodiscard]] bool IsCollapsed(InspectorSectionId section) const noexcept;
     void ToggleCollapsed(InspectorSectionId section) noexcept;
@@ -505,12 +531,19 @@ struct InspectorPanelState {
     [[nodiscard]] bool IsTextEditing() const noexcept;
     [[nodiscard]] bool IsTextEditDirty() const noexcept;
     [[nodiscard]] InspectorPropertyId EditedProperty() const noexcept;
+    [[nodiscard]] const std::string& EditOriginalBuffer() const noexcept;
     [[nodiscard]] const std::string& EditBuffer() const noexcept;
     // Row index the current text edit targets in a dynamic list (e.g. which
     // mapping's scale is being edited). -1 when not applicable.
     [[nodiscard]] int EditIndex() const noexcept;
+    [[nodiscard]] const std::optional<InspectorDynamicRowIdentity>& EditRowIdentity() const noexcept;
     void SetEditIndex(int index) noexcept;
     void BeginTextEdit(InspectorPropertyId property, std::string value);
+    void BeginTextEdit(
+        InspectorPropertyId property,
+        std::string value,
+        int index,
+        InspectorDynamicRowIdentity rowIdentity);
     void AppendText(wchar_t character);
     void InsertText(std::string_view text);
     void BackspaceText();
@@ -593,6 +626,7 @@ private:
     std::string editOriginalBuffer_;
     std::string editBuffer_;
     int editIndex_ = -1;
+    std::optional<InspectorDynamicRowIdentity> editRowIdentity_;
     bool valueTypeDropdownOpen_ = false;
     int valueTypeDropdownHover_ = -1;
     bool tagsDropdownOpen_ = false;
