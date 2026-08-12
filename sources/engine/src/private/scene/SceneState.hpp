@@ -691,6 +691,7 @@ public:
     // SceneAudioMixerAccess.hpp's own doc comment.
     std::uint64_t audioMixerAssetId = 0U;
     std::string audioMixerSnapshotName;
+    kb::input::LocalUserId audioListenerLocalUser = kb::input::kPrimaryLocalUser;
     // LIB-150: runtime per-bus volume overrides (strongest layer) + the active snapshot
     // transition (advanced with scene delta time by the audio backend each tick).
     std::vector<AudioMixerBusVolumeOverride> audioMixerBusVolumeOverrides;

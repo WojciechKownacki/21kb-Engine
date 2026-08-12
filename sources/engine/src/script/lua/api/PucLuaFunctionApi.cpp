@@ -301,6 +301,38 @@ int LuaAudioDeviceCall(lua_State* state, const char* function) {
 int LuaAudioDeviceStatus(lua_State* state) { return LuaAudioDeviceCall(state, "Audio.DeviceStatus"); }
 int LuaAudioReinitialize(lua_State* state) { return LuaAudioDeviceCall(state, "Audio.Reinitialize"); }
 
+int LuaAudioSetListenerLocalUser(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const lua_Integer localUser = luaL_checkinteger(state, 1);
+    luaL_argcheck(
+        state,
+        localUser >= 0 && static_cast<std::uint64_t>(localUser) <= std::numeric_limits<std::uint32_t>::max(),
+        1,
+        "local user must be an unsigned 32-bit value");
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("localUser", ScriptValue{ static_cast<std::uint32_t>(localUser) }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.SetListenerLocalUser", arguments);
+    lua_pushboolean(state, result.Output("applied").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaAudioListenerLocalUser(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushinteger(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.ListenerLocalUser", {});
+    lua_pushinteger(state, static_cast<lua_Integer>(
+        result.Output("localUser").value_or(ScriptValue{ std::uint32_t{ 0U } }).AsUInt32()));
+    return 1;
+}
+
 int LuaAudioActiveSnapshot(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -3103,7 +3135,7 @@ void SetClosure(lua_State* state, const char* name, lua_CFunction function, Scri
 // marshalling.  Their position follows ScriptApiCatalog::LuaBindingDefinitions
 // excluding Task and global bindings; table and Lua field names deliberately
 // live only in that catalog.
-constexpr std::array<lua_CFunction, 186> kCatalogBindingAdapters{ {
+constexpr std::array<lua_CFunction, 188> kCatalogBindingAdapters{ {
     &LuaAudioPlay,
     &LuaAudioSetMixer,
     &LuaAudioActiveMixer,
@@ -3126,6 +3158,8 @@ constexpr std::array<lua_CFunction, 186> kCatalogBindingAdapters{ {
     &LuaAudioIsSourcePlaying,
     &LuaAudioDeviceStatus,
     &LuaAudioReinitialize,
+    &LuaAudioSetListenerLocalUser,
+    &LuaAudioListenerLocalUser,
     &LuaAudioSetBusVolume,
     &LuaAudioClearBusVolume,
     &LuaAudioTransitionToSnapshot,

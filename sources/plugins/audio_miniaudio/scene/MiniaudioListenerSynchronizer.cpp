@@ -3,6 +3,7 @@
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAudioListenerAccess.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
@@ -39,6 +40,7 @@ using kb::math::Rotate;
 
 struct ListenerScan {
     kb::scene::Scene* scene = nullptr;
+    kb::input::LocalUserId localUser = kb::input::kPrimaryLocalUser;
     bool found = false;
     std::int32_t priority = 0;
     bool primary = false;
@@ -49,7 +51,8 @@ struct ListenerScan {
 void ScanListener(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, void* rawContext) {
     auto* scan = static_cast<ListenerScan*>(rawContext);
     const kb::scene::AudioListenerComponent* listener = scan->scene->Components().AudioListeners().TryGet(entity);
-    if (listener == nullptr || !listener->enabled || !scan->scene->Entities().IsActive(entity)) {
+    if (listener == nullptr || !listener->enabled || listener->localUser != scan->localUser
+        || !scan->scene->Entities().IsActive(entity)) {
         return;
     }
     const bool preferred = !scan->found || listener->priority > scan->priority ||
@@ -75,7 +78,10 @@ void ScanListener(kb::scene::SceneEntity entity, const kb::scene::TransformCompo
 } // namespace
 
 MiniaudioListenerSynchronizer::State MiniaudioListenerSynchronizer::Sync(ma_engine& engine, kb::scene::SceneSystemContext& context) {
-    ListenerScan scan{ .scene = &context.GetScene() };
+    ListenerScan scan{
+        .scene = &context.GetScene(),
+        .localUser = kb::scene::SceneAudioListenerAccess::LocalUser(context.GetScene()),
+    };
     context.Transforms().ForEach(&ScanListener, &scan);
 
     if (!scan.found) {
@@ -92,7 +98,8 @@ MiniaudioListenerSynchronizer::State MiniaudioListenerSynchronizer::Sync(ma_engi
         kb::scene::Vec3{ 0.0F, 1.0F, 0.0F });
     kb::scene::Vec3 velocity{};
     const float deltaSeconds = context.DeltaSeconds();
-    if (hasPreviousPosition_ && previousEntity_ == scan.entity && std::isfinite(deltaSeconds) && deltaSeconds > 0.0F) {
+    if (hasPreviousPosition_ && previousEntity_ == scan.entity && previousLocalUser_ == scan.localUser
+        && std::isfinite(deltaSeconds) && deltaSeconds > 0.0F) {
         velocity = kb::scene::Vec3{
             (position.x - previousPosition_.x) / deltaSeconds,
             (position.y - previousPosition_.y) / deltaSeconds,
@@ -106,6 +113,7 @@ MiniaudioListenerSynchronizer::State MiniaudioListenerSynchronizer::Sync(ma_engi
     ma_engine_listener_set_world_up(&engine, 0U, up.x, up.y, up.z);
     ma_engine_listener_set_velocity(&engine, 0U, velocity.x, velocity.y, velocity.z);
     previousEntity_ = scan.entity;
+    previousLocalUser_ = scan.localUser;
     previousPosition_ = position;
     hasPreviousPosition_ = true;
     return State{ .active = true, .position = position };
@@ -119,6 +127,7 @@ void MiniaudioListenerSynchronizer::Disable(ma_engine& engine) noexcept {
 
 void MiniaudioListenerSynchronizer::Reset() noexcept {
     previousEntity_ = {};
+    previousLocalUser_ = kb::input::kPrimaryLocalUser;
     previousPosition_ = {};
     hasPreviousPosition_ = false;
 }

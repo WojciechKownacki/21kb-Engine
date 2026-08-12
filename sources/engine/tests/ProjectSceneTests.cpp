@@ -22,6 +22,7 @@
 #include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneAudioListenerAccess.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -244,18 +245,19 @@ void RunSceneDocumentRoundTripTest() {
     Require(source.Tags().Define("Boss") && source.Tags().SetAssigned(root, "Boss", true),
         "Scene tag catalogue fixture was not created");
     kb::scene::SceneAudioMixerAccess::SetActiveMixer(source, 0xA17D10U);
-    kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(source, "Gameplay");
+    Require(kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(source, "Gameplay"),
+        "Audio snapshot fixture setup failed");
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(source, "Music", 0.4F),
         "Audio mixer override fixture setup failed");
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(source, "Quiet", 2.0F),
         "Audio mixer transition fixture setup failed");
-    kb::scene::SceneAudioOcclusionAccess::Configure(source, kb::scene::AudioOcclusionSettings{
+    Require(kb::scene::SceneAudioOcclusionAccess::Configure(source, kb::scene::AudioOcclusionSettings{
         .enabled = true,
         .occludedVolumeScale = 0.2F,
         .maxDistance = 75.0F,
         .layerMask = 0x0000000FU,
         .maxRaycastsPerTick = 17U,
-    });
+    }), "Audio occlusion fixture setup failed");
     kb::scene::SceneAudioOcclusionAccess::PublishRuntimeStats(source, kb::scene::AudioOcclusionRuntimeStats{
         .sampleRequests = 9U,
         .raycasts = 8U,
@@ -969,16 +971,18 @@ void RunSceneAudioListenerPrefabRoundTripTest() {
 
 void RunSceneAudioDocumentLoadSemanticsTest() {
     kb::scene::Scene scene;
+    kb::scene::SceneAudioListenerAccess::SetLocalUser(scene, kb::input::LocalUserId{ 7U });
     kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 101U);
-    kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "Existing");
+    Require(kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "Existing"),
+        "Audio snapshot fixture setup failed");
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "ExistingBus", 0.6F),
         "Additive audio mixer override fixture setup failed");
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "Later", 3.0F),
         "Additive audio mixer transition fixture setup failed");
-    kb::scene::SceneAudioOcclusionAccess::Configure(scene, kb::scene::AudioOcclusionSettings{
+    Require(kb::scene::SceneAudioOcclusionAccess::Configure(scene, kb::scene::AudioOcclusionSettings{
         .enabled = true, .occludedVolumeScale = 0.4F, .maxDistance = 40.0F,
         .layerMask = 3U, .maxRaycastsPerTick = 6U,
-    });
+    }), "Audio occlusion fixture setup failed");
     kb::scene::SceneAudioOcclusionAccess::PublishRuntimeStats(scene, kb::scene::AudioOcclusionRuntimeStats{ .sampleRequests = 5U, .raycasts = 4U, .occludedSamples = 2U });
 
     kb::scene::Scene additiveSource;
@@ -995,8 +999,9 @@ void RunSceneAudioDocumentLoadSemanticsTest() {
             && kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene).size() == 1U
             && kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).IsActive()
             && kb::scene::SceneAudioOcclusionAccess::Settings(scene).enabled
+            && kb::scene::SceneAudioListenerAccess::LocalUser(scene) == kb::input::LocalUserId{ 7U }
             && additiveStats.sampleRequests == 5U && additiveStats.raycasts == 4U,
-        "Additive scene load overwrote scene-global authored or runtime audio state");
+        "Additive scene load overwrote scene-global authored or transient runtime audio state");
 
     kb::scene::SceneDocument invalid = additive;
     invalid.audioMixerSnapshot = "invalid snapshot";
@@ -1009,6 +1014,11 @@ void RunSceneAudioDocumentLoadSemanticsTest() {
     invalid.audioOcclusionSettings.maxDistance = std::numeric_limits<float>::infinity();
     Require(!kb::scene::SceneDocumentService::LoadIntoScene(scene, invalid),
         "Non-additive scene load accepted non-finite authored occlusion settings");
+
+    Require(kb::scene::SceneDocumentService::LoadIntoScene(scene, additive),
+        "Valid non-additive audio scene fixture did not load");
+    Require(kb::scene::SceneAudioListenerAccess::LocalUser(scene) == kb::input::kPrimaryLocalUser,
+        "Non-additive scene load retained the transient listener local user selection");
 }
 
 void RunSceneAudioDocumentBackwardCompatibilityTest() {
@@ -1054,8 +1064,10 @@ void RunSceneAudioDocumentBackwardCompatibilityTest() {
 
     kb::scene::Scene target;
     kb::scene::SceneAudioMixerAccess::SetActiveMixer(target, 44U);
-    kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(target, "Stale");
-    kb::scene::SceneAudioOcclusionAccess::Configure(target, kb::scene::AudioOcclusionSettings{ .enabled = true });
+    Require(kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(target, "Stale"),
+        "Audio snapshot fixture setup failed");
+    Require(kb::scene::SceneAudioOcclusionAccess::Configure(target, kb::scene::AudioOcclusionSettings{ .enabled = true }),
+        "Audio occlusion fixture setup failed");
     Require(kb::scene::SceneDocumentService::LoadFileIntoScene(target, sceneFile),
         "Pre-v32 scene could not be reloaded into a runtime scene");
     Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(target) == 0U

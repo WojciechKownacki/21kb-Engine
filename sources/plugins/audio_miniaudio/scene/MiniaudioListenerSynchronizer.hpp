@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/input/InputLocalUser.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TransformComponent.hpp"
 
@@ -26,6 +27,7 @@ public:
 
 private:
     kb::scene::SceneEntity previousEntity_{};
+    kb::input::LocalUserId previousLocalUser_ = kb::input::kPrimaryLocalUser;
     kb::scene::Vec3 previousPosition_{};
     bool hasPreviousPosition_ = false;
 };
