@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <filesystem>
 
 namespace kb::audio_miniaudio {
 namespace {
@@ -46,8 +45,8 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
         initialPosition = FiniteOrZero(ownerTransform->worldPosition);
         attached = true;
     }
-    const std::filesystem::path path = clipResolver.Resolve(scene, desc.clipAssetId);
-    if (path.empty()) {
+    const MiniaudioClipResolver::Resolution resolution = clipResolver.Resolve(scene, desc.clipAssetId);
+    if (!resolution.Succeeded()) {
         return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio clip file could not be resolved" };
     }
 
@@ -64,7 +63,7 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
     }
 
     auto sound = std::make_unique<MiniaudioSound>();
-    if (sound->InitializeFromFile(engine, path, desc.spatial, group) != MA_SUCCESS) {
+    if (sound->Initialize(engine, resolution.clip, desc.spatial, group) != MA_SUCCESS) {
         return kb::audio::AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio voice could not be created" };
     }
 
