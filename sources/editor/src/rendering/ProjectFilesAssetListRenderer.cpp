@@ -1,6 +1,7 @@
 #include "rendering/ProjectFilesAssetListRenderer.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorAudioAssetPreview.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "rendering/GdiDrawing.hpp"
@@ -59,7 +60,11 @@ void DrawAssetRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAssetI
         Draw::DrawLabel(dc, name, asset.metadata.name.c_str(), Draw::Color(theme.textPrimary));
     }
     RECT type{ row.left + 270, row.top, row.left + 410, row.bottom };
-    Draw::DrawLabel(dc, type, asset.metadata.type.c_str(), Draw::Color(theme.textSecondary));
+    if (EditorAudioAssetPreview::IsPlaying(asset.metadata.id)) {
+        Draw::DrawLabel(dc, type, "Playing", RGB(116, 232, 205));
+    } else {
+        Draw::DrawLabel(dc, type, asset.metadata.type.c_str(), Draw::Color(theme.textSecondary));
+    }
     RECT path{ row.left + 420, row.top, row.right, row.bottom };
     Draw::DrawLabel(dc, path, kb::assets::NormalizeAssetPath(asset.metadata.virtualPath).c_str(), Draw::Color(theme.textDisabled));
 }

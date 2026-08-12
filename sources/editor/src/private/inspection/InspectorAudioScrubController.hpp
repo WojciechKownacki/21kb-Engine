@@ -3,6 +3,7 @@
 #include "engine/scene/SceneEntity.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -57,6 +58,15 @@ public:
         kb::scene::SceneEntity selectedEntity,
         std::int64_t pixelDelta,
         InspectorAudioScrubState& state) noexcept;
+
+    // Numeric audio fields are horizontal scrub controls. A click or vertical
+    // pointer jitter must not mutate the authored value.
+    [[nodiscard]] static std::optional<std::int64_t> ResolveHorizontalDragDelta(
+        int startX,
+        int startY,
+        int x,
+        int y,
+        bool dragActive) noexcept;
 
     template <typename Transactions>
     [[nodiscard]] static bool Finish(

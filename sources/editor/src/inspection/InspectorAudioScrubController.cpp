@@ -8,6 +8,11 @@
 #include <limits>
 
 namespace kb::editor {
+namespace {
+
+constexpr std::int64_t kHorizontalDragActivationPixels = 4;
+
+} // namespace
 
 bool InspectorAudioScrubController::Prepare(
     const kb::scene::Scene& scene,
@@ -72,6 +77,21 @@ InspectorAudioScrubUpdate InspectorAudioScrubController::Update(
     return InspectorAudioComponentModel::ApplyFloat(scene, state.entity, state.property, candidate)
         ? InspectorAudioScrubUpdate::Changed
         : InspectorAudioScrubUpdate::Invalid;
+}
+
+std::optional<std::int64_t> InspectorAudioScrubController::ResolveHorizontalDragDelta(
+    int startX,
+    int startY,
+    int x,
+    int y,
+    bool dragActive) noexcept {
+    const std::int64_t dx = static_cast<std::int64_t>(x) - startX;
+    const std::int64_t dy = static_cast<std::int64_t>(y) - startY;
+    if (!dragActive
+        && (std::abs(dx) < kHorizontalDragActivationPixels || std::abs(dx) <= std::abs(dy))) {
+        return std::nullopt;
+    }
+    return dx;
 }
 
 bool InspectorAudioScrubController::HasNetChange(

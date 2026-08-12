@@ -1,5 +1,6 @@
 #include "rendering/ProjectFilesAssetIconResolver.hpp"
 
+#include "engine/assets/AssetKind.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
@@ -56,6 +57,10 @@ bool ProjectFilesAssetIconResolver::IsAnimationClip(const kb::assets::AssetMetad
         metadata.virtualPath.extension() == kb::scene::kAnimationClipAssetExtension;
 }
 
+bool ProjectFilesAssetIconResolver::IsAudio(const kb::assets::AssetMetadata& metadata) noexcept {
+    return kb::assets::AssetMatchesKind(metadata, kb::assets::AssetKind::Audio);
+}
+
 bool ProjectFilesAssetIconResolver::IsMaterial(const kb::assets::AssetMetadata& metadata) noexcept {
     return metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance";
 }
@@ -69,6 +74,9 @@ bool ProjectFilesAssetIconResolver::IsMaterialType(const kb::assets::AssetMetada
 }
 
 ProjectFilesAssetIcon ProjectFilesAssetIconResolver::Resolve(const kb::assets::AssetMetadata& metadata, bool selected) noexcept {
+    if (IsAudio(metadata)) {
+        return ProjectFilesAssetIcon{ .kind = HeroIconKind::SpeakerWave, .color = selected ? RGB(116, 232, 205) : RGB(59, 190, 165), .strokeWidth = 2 };
+    }
     if (IsAnimationClip(metadata)) {
         return ProjectFilesAssetIcon{ .kind = HeroIconKind::Play, .color = selected ? RGB(196, 174, 255) : RGB(143, 112, 232), .strokeWidth = 2 };
     }
