@@ -131,6 +131,14 @@ public:
         ++stopAllCount;
     }
 
+    [[nodiscard]] kb::audio::AudioSourceControlResult PlaySource(kb::scene::Scene&, kb::scene::SceneEntity) override { return { .status = kb::audio::AudioSourceControlStatus::Success, .playing = true }; }
+    [[nodiscard]] kb::audio::AudioSourceControlResult PauseSource(kb::scene::Scene&, kb::scene::SceneEntity) override { return { .status = kb::audio::AudioSourceControlStatus::Success }; }
+    [[nodiscard]] kb::audio::AudioSourceControlResult ResumeSource(kb::scene::Scene&, kb::scene::SceneEntity) override { return { .status = kb::audio::AudioSourceControlStatus::Success, .playing = true }; }
+    [[nodiscard]] kb::audio::AudioSourceControlResult StopSource(kb::scene::Scene&, kb::scene::SceneEntity) override { return { .status = kb::audio::AudioSourceControlStatus::Success }; }
+    [[nodiscard]] kb::audio::AudioSourceControlResult IsSourcePlaying(kb::scene::Scene&, kb::scene::SceneEntity) override { return { .status = kb::audio::AudioSourceControlStatus::Success, .playing = true }; }
+    [[nodiscard]] kb::audio::AudioDeviceStatus DeviceStatus() const noexcept override { return kb::audio::AudioDeviceStatus::PlaybackAvailable; }
+    [[nodiscard]] kb::audio::AudioDeviceStatus Reinitialize(kb::scene::Scene&) noexcept override { return DeviceStatus(); }
+
     // LIB-148: minimal honest per-voice contract for this probe - any voice id below
     // nextVoiceId was handed out by PlayOneShot and counts as live.
     [[nodiscard]] bool StopVoice(kb::scene::Scene&, std::uint64_t voiceId) noexcept override { return IsLive(voiceId); }
@@ -138,6 +146,8 @@ public:
     [[nodiscard]] bool ResumeVoice(kb::scene::Scene&, std::uint64_t voiceId) noexcept override { return IsLive(voiceId); }
     [[nodiscard]] bool SeekVoice(kb::scene::Scene&, std::uint64_t voiceId, float) noexcept override { return IsLive(voiceId); }
     [[nodiscard]] bool SetVoiceVolume(kb::scene::Scene&, std::uint64_t voiceId, float) noexcept override { return IsLive(voiceId); }
+    [[nodiscard]] bool SetVoiceMute(kb::scene::Scene&, std::uint64_t voiceId, bool) noexcept override { return IsLive(voiceId); }
+    [[nodiscard]] bool SetVoicePan(kb::scene::Scene&, std::uint64_t voiceId, float) noexcept override { return IsLive(voiceId); }
     [[nodiscard]] bool SetVoicePitch(kb::scene::Scene&, std::uint64_t voiceId, float) noexcept override { return IsLive(voiceId); }
     [[nodiscard]] bool SetVoiceLoop(kb::scene::Scene&, std::uint64_t voiceId, bool) noexcept override { return IsLive(voiceId); }
     [[nodiscard]] bool IsVoicePlaying(kb::scene::Scene&, std::uint64_t voiceId) noexcept override { return IsLive(voiceId); }
@@ -4338,6 +4348,13 @@ void RunScriptAudioVoiceControlApiTest() {
             return kb::audio::AudioPlayResult{ .started = true, .voiceId = liveVoice, .error = {} };
         }
         void StopAll(kb::scene::Scene&) noexcept override {}
+        [[nodiscard]] kb::audio::AudioSourceControlResult PlaySource(kb::scene::Scene&, kb::scene::SceneEntity) override { return { .status = kb::audio::AudioSourceControlStatus::Success, .playing = true }; }
+        [[nodiscard]] kb::audio::AudioSourceControlResult PauseSource(kb::scene::Scene&, kb::scene::SceneEntity) override { return { .status = kb::audio::AudioSourceControlStatus::Success }; }
+        [[nodiscard]] kb::audio::AudioSourceControlResult ResumeSource(kb::scene::Scene&, kb::scene::SceneEntity) override { return { .status = kb::audio::AudioSourceControlStatus::Success, .playing = true }; }
+        [[nodiscard]] kb::audio::AudioSourceControlResult StopSource(kb::scene::Scene&, kb::scene::SceneEntity) override { return { .status = kb::audio::AudioSourceControlStatus::Success }; }
+        [[nodiscard]] kb::audio::AudioSourceControlResult IsSourcePlaying(kb::scene::Scene&, kb::scene::SceneEntity) override { return { .status = kb::audio::AudioSourceControlStatus::Success, .playing = !paused }; }
+        [[nodiscard]] kb::audio::AudioDeviceStatus DeviceStatus() const noexcept override { return kb::audio::AudioDeviceStatus::PlaybackAvailable; }
+        [[nodiscard]] kb::audio::AudioDeviceStatus Reinitialize(kb::scene::Scene&) noexcept override { return DeviceStatus(); }
         [[nodiscard]] bool StopVoice(kb::scene::Scene&, std::uint64_t voiceId) noexcept override {
             if (voiceId != liveVoice) {
                 return false;
@@ -4367,6 +4384,8 @@ void RunScriptAudioVoiceControlApiTest() {
             lastVolume = volume;
             return true;
         }
+        [[nodiscard]] bool SetVoiceMute(kb::scene::Scene&, std::uint64_t voiceId, bool) noexcept override { return voiceId == liveVoice; }
+        [[nodiscard]] bool SetVoicePan(kb::scene::Scene&, std::uint64_t voiceId, float) noexcept override { return voiceId == liveVoice; }
         [[nodiscard]] bool SetVoicePitch(kb::scene::Scene&, std::uint64_t voiceId, float pitch) noexcept override {
             if (voiceId != liveVoice) {
                 return false;

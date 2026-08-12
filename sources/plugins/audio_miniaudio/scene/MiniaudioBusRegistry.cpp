@@ -33,15 +33,14 @@ bool MiniaudioBusRegistry::Sync(ma_engine& engine, kb::scene::Scene& scene, bool
     const kb::assets::AssetHandle<kb::audio::AudioMixerAsset> mixer =
         scene.Assets().Manager().Load<kb::audio::AudioMixerAsset>(kb::assets::AssetId{ mixerAssetId });
     if (!mixer.IsLoaded()) {
-        // Unresolvable/wrong-type mixer: honest fallback to the implicit master, exactly
-        // like an unresolvable clipAssetId silently plays nothing rather than crashing.
+        // A requested named route remains unavailable until the selected mixer resolves.
         return TearDown();
     }
 
-    bool structureMatches = mixerAssetId == activeMixerAssetId_ && buses_.size() == mixer->buses.size();
+    bool structureMatches = mixerLoaded_ && mixerAssetId == activeMixerAssetId_ && topology_.size() == mixer->buses.size();
     if (structureMatches) {
-        for (std::size_t index = 0U; index < buses_.size(); ++index) {
-            if (buses_[index].name != mixer->buses[index].name || buses_[index].parent != mixer->buses[index].parentBus) {
+        for (std::size_t index = 0U; index < topology_.size(); ++index) {
+            if (topology_[index].name != mixer->buses[index].name || topology_[index].parent != mixer->buses[index].parentBus) {
                 structureMatches = false;
                 break;
             }
@@ -51,25 +50,35 @@ bool MiniaudioBusRegistry::Sync(ma_engine& engine, kb::scene::Scene& scene, bool
     bool rebuilt = false;
     if (!structureMatches) {
         DestroyGroups();
+        topology_.clear();
+        topology_.reserve(mixer->buses.size());
+        for (const kb::audio::AudioMixerBus& bus : mixer->buses) {
+            topology_.push_back(BusTopology{ .name = bus.name, .parent = bus.parentBus });
+        }
         buses_.reserve(mixer->buses.size());
         // Parent-before-child creation. The asset is validated acyclic with every parent
         // authored, so each pass over the pending list resolves at least one bus and the
-        // loop terminates; a failed ma_sound_group_init degrades that bus (and, since its
-        // children then never find their parent, its whole subtree) to the implicit
-        // master rather than aborting the mixer.
+        // loop terminates. Any initialization failure rejects the whole routing graph;
+        // partial routing could otherwise send children to an unintended output.
         std::vector<const kb::audio::AudioMixerBus*> pending;
         pending.reserve(mixer->buses.size());
         for (const kb::audio::AudioMixerBus& bus : mixer->buses) {
             pending.push_back(&bus);
         }
         bool progressed = true;
+        bool initializationFailed = false;
         while (!pending.empty() && progressed) {
             progressed = false;
             for (auto iterator = pending.begin(); iterator != pending.end();) {
                 const kb::audio::AudioMixerBus& bus = **iterator;
                 ma_sound_group* parentGroup = nullptr;
                 if (!bus.parentBus.empty()) {
-                    parentGroup = FindGroup(bus.parentBus);
+                    for (BusRecord& record : buses_) {
+                        if (record.name == bus.parentBus) {
+                            parentGroup = record.group.get();
+                            break;
+                        }
+                    }
                     if (parentGroup == nullptr) {
                         ++iterator; // parent not created yet - a later pass picks this bus up.
                         continue;
@@ -78,12 +87,20 @@ bool MiniaudioBusRegistry::Sync(ma_engine& engine, kb::scene::Scene& scene, bool
                 auto group = std::make_unique<ma_sound_group>();
                 if (ma_sound_group_init(&engine, 0U, parentGroup, group.get()) == MA_SUCCESS) {
                     buses_.push_back(BusRecord{ .name = bus.name, .parent = bus.parentBus, .group = std::move(group) });
+                } else {
+                    initializationFailed = true;
                 }
                 iterator = pending.erase(iterator);
                 progressed = true;
             }
         }
+        initializationFailed = initializationFailed || !pending.empty() || buses_.size() != mixer->buses.size();
+        if (initializationFailed) {
+            DestroyGroups();
+        }
         activeMixerAssetId_ = mixerAssetId;
+        mixerLoaded_ = true;
+        groupsInitialized_ = !initializationFailed;
         ++generation_;
         rebuilt = true;
     }
@@ -131,16 +148,43 @@ bool MiniaudioBusRegistry::Sync(ma_engine& engine, kb::scene::Scene& scene, bool
     return rebuilt;
 }
 
-ma_sound_group* MiniaudioBusRegistry::FindGroup(std::string_view busName) noexcept {
+bool MiniaudioBusRegistry::RoutingWillChange(kb::scene::Scene& scene, bool playbackAvailable) const {
+    const std::uint64_t mixerAssetId = kb::scene::SceneAudioMixerAccess::ActiveMixer(scene);
+    if (!playbackAvailable || mixerAssetId == 0U) {
+        return mixerLoaded_ || activeMixerAssetId_ != 0U || !topology_.empty() || !buses_.empty();
+    }
+    const kb::assets::AssetHandle<kb::audio::AudioMixerAsset> mixer =
+        scene.Assets().Manager().Load<kb::audio::AudioMixerAsset>(kb::assets::AssetId{ mixerAssetId });
+    if (!mixer.IsLoaded()) {
+        return mixerLoaded_ || activeMixerAssetId_ != 0U || !topology_.empty() || !buses_.empty();
+    }
+    if (!mixerLoaded_ || mixerAssetId != activeMixerAssetId_ || topology_.size() != mixer->buses.size()) {
+        return true;
+    }
+    for (std::size_t index = 0U; index < topology_.size(); ++index) {
+        if (topology_[index].name != mixer->buses[index].name || topology_[index].parent != mixer->buses[index].parentBus) {
+            return true;
+        }
+    }
+    return false;
+}
+
+MiniaudioBusRegistry::Route MiniaudioBusRegistry::Resolve(std::string_view busName) noexcept {
     if (busName.empty()) {
-        return nullptr;
+        return Route{ .status = RouteStatus::Master, .group = nullptr };
+    }
+    if (!mixerLoaded_) {
+        return Route{ .status = RouteStatus::MixerUnavailable, .group = nullptr };
+    }
+    if (!groupsInitialized_) {
+        return Route{ .status = RouteStatus::InitializationFailed, .group = nullptr };
     }
     for (BusRecord& record : buses_) {
         if (record.name == busName) {
-            return record.group.get();
+            return Route{ .status = RouteStatus::Routed, .group = record.group.get() };
         }
     }
-    return nullptr;
+    return Route{ .status = RouteStatus::UnknownBus, .group = nullptr };
 }
 
 void MiniaudioBusRegistry::StopAll() noexcept {
@@ -158,11 +202,14 @@ void MiniaudioBusRegistry::DestroyGroups() noexcept {
 }
 
 bool MiniaudioBusRegistry::TearDown() noexcept {
-    if (buses_.empty() && activeMixerAssetId_ == 0U) {
+    if (buses_.empty() && activeMixerAssetId_ == 0U && topology_.empty() && !mixerLoaded_) {
         return false;
     }
     DestroyGroups();
+    topology_.clear();
     activeMixerAssetId_ = 0U;
+    mixerLoaded_ = false;
+    groupsInitialized_ = false;
     ++generation_;
     return true;
 }

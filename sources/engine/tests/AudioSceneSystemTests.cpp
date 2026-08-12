@@ -139,9 +139,86 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
             .autoplay = false,
         });
 
+        const kb::audio::AudioSourceControlResult invalidEntity = kb::audio::AudioPlayback::PlaySource(scene, {});
+        kb::tests::Require(invalidEntity.status == kb::audio::AudioSourceControlStatus::InvalidEntity,
+            "Source control did not reject an invalid entity explicitly");
+        const kb::audio::AudioDeviceStatus deviceStatus = kb::audio::AudioPlayback::DeviceStatus(scene);
+        const kb::audio::AudioSourceControlResult sourceBeforeTick = kb::audio::AudioPlayback::PlaySource(scene, source.Entity());
+        if (deviceStatus == kb::audio::AudioDeviceStatus::PlaybackAvailable) {
+            kb::tests::Require(sourceBeforeTick.Succeeded() && sourceBeforeTick.playing,
+                "Component source did not start before its first audio tick");
+            kb::tests::Require(kb::audio::AudioPlayback::PauseSource(scene, source.Entity()).Succeeded()
+                    && !kb::audio::AudioPlayback::IsSourcePlaying(scene, source.Entity()).playing,
+                "Component source pause did not preserve a controllable source");
+            kb::tests::Require(kb::audio::AudioPlayback::ResumeSource(scene, source.Entity()).Succeeded()
+                    && kb::audio::AudioPlayback::IsSourcePlaying(scene, source.Entity()).playing,
+                "Component source resume failed");
+            kb::tests::Require(kb::audio::AudioPlayback::StopSource(scene, source.Entity()).Succeeded()
+                    && !kb::audio::AudioPlayback::IsSourcePlaying(scene, source.Entity()).playing,
+                "Component source stop did not reset playback");
+        } else {
+            kb::tests::Require(deviceStatus == kb::audio::AudioDeviceStatus::NoPlaybackDevice
+                    && sourceBeforeTick.status == kb::audio::AudioSourceControlStatus::DeviceUnavailable,
+                "No-device source control did not return an explicit unavailable result");
+        }
+
         for (int i = 0; i < 3; ++i) {
             [[maybe_unused]] const bool progressed = scene.Runtime().Update(1.0F / 60.0F);
         }
+
+        scene.Entities().SetActive(listener.Entity(), false);
+        [[maybe_unused]] const bool inactiveListenerTick = scene.Runtime().Update(1.0F / 60.0F);
+        kb::tests::Require(kb::scene::SceneAudioOcclusionAccess::RuntimeStats(scene).raycasts == 0U,
+            "Occlusion performed raycasts without an active listener");
+        scene.Entities().SetActive(listener.Entity(), true);
+        [[maybe_unused]] const bool reactivatedListenerTick = scene.Runtime().Update(1.0F / 60.0F);
+        scene.Components().AudioListeners().Remove(listener.Entity());
+        [[maybe_unused]] const bool removedListenerTick = scene.Runtime().Update(1.0F / 60.0F);
+        kb::tests::Require(kb::scene::SceneAudioOcclusionAccess::RuntimeStats(scene).raycasts == 0U,
+            "Occlusion retained a removed listener position");
+        scene.Components().AudioListeners().Set(listener.Entity(), kb::scene::AudioListenerComponent{});
+
+        const kb::scene::SceneObject lifecycleSource = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lifecycle Source" });
+        scene.Components().AudioSources().Set(lifecycleSource.Entity(), kb::scene::AudioSourceComponent{
+            .clipAssetId = importedClip.id.value,
+            .volume = 0.0F,
+            .loop = true,
+            .spatial = false,
+            .autoplay = true,
+        });
+        [[maybe_unused]] const bool createdSourceTick = scene.Runtime().Update(1.0F / 60.0F);
+        if (deviceStatus == kb::audio::AudioDeviceStatus::PlaybackAvailable) {
+            kb::tests::Require(kb::audio::AudioPlayback::IsSourcePlaying(scene, lifecycleSource.Entity()).playing,
+                "Autoplay source did not start after component creation");
+        }
+        scene.Entities().SetActive(lifecycleSource.Entity(), false);
+        [[maybe_unused]] const bool inactiveSourceTick = scene.Runtime().Update(1.0F / 60.0F);
+        kb::tests::Require(kb::audio::AudioPlayback::IsSourcePlaying(scene, lifecycleSource.Entity()).status
+                == kb::audio::AudioSourceControlStatus::InactiveEntity,
+            "Inactive source did not leave playback in the same tick");
+        scene.Entities().SetActive(lifecycleSource.Entity(), true);
+        [[maybe_unused]] const bool reactivatedSourceTick = scene.Runtime().Update(1.0F / 60.0F);
+        if (deviceStatus == kb::audio::AudioDeviceStatus::PlaybackAvailable) {
+            kb::tests::Require(kb::audio::AudioPlayback::IsSourcePlaying(scene, lifecycleSource.Entity()).playing,
+                "Reactivated autoplay source did not restart deterministically");
+        }
+        scene.Components().AudioSources().Remove(lifecycleSource.Entity());
+        [[maybe_unused]] const bool removedSourceTick = scene.Runtime().Update(1.0F / 60.0F);
+        kb::tests::Require(kb::audio::AudioPlayback::IsSourcePlaying(scene, lifecycleSource.Entity()).status
+                == kb::audio::AudioSourceControlStatus::MissingComponent,
+            "Removed source component remained controllable");
+        scene.Components().AudioSources().Set(lifecycleSource.Entity(), kb::scene::AudioSourceComponent{
+            .clipAssetId = importedClip.id.value,
+            .volume = 0.0F,
+            .loop = true,
+            .spatial = false,
+            .autoplay = true,
+        });
+        scene.Entities().Destroy(lifecycleSource.Entity());
+        [[maybe_unused]] const bool destroyedSourceTick = scene.Runtime().Update(1.0F / 60.0F);
+        kb::tests::Require(kb::audio::AudioPlayback::IsSourcePlaying(scene, lifecycleSource.Entity()).status
+                == kb::audio::AudioSourceControlStatus::InvalidEntity,
+            "Destroyed source entity retained a backend handle");
 
         const kb::audio::AudioPlayResult played = kb::audio::AudioPlayback::PlayOneShot(scene, kb::audio::AudioPlayDesc{
             .clipAssetId = importedClip.id.value,
@@ -151,7 +228,7 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
             .spatial = false,
         });
         kb::tests::Require(
-            played.Succeeded() || played.error == "miniaudio playback device is not available",
+            played.Succeeded() || played.error == "audio playback device is not available",
             "Audio playback backend did not start a one-shot voice or report a controlled no-device error");
 
         // LIB-147: the mixer bus path against the REAL plugin - authored .kbmixer asset,
@@ -246,8 +323,29 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
         routedOneShot.outputBus = "Weapons";
         const kb::audio::AudioPlayResult routedPlayed = kb::audio::AudioPlayback::PlayOneShot(scene, routedOneShot);
         kb::tests::Require(
-            routedPlayed.Succeeded() || routedPlayed.error == "miniaudio playback device is not available",
+            routedPlayed.Succeeded() || routedPlayed.error == "audio playback device is not available",
             "Bus-routed one-shot did not start or report a controlled no-device error");
+        if (deviceStatus == kb::audio::AudioDeviceStatus::PlaybackAvailable) {
+            kb::audio::AudioPlayDesc unknownBus = routedOneShot;
+            unknownBus.outputBus = "Missing";
+            const kb::audio::AudioPlayResult unknownBusResult = kb::audio::AudioPlayback::PlayOneShot(scene, unknownBus);
+            kb::tests::Require(!unknownBusResult.Succeeded() && unknownBusResult.error == "audio output bus is unknown",
+                "Unknown one-shot output bus silently reached master");
+
+            const kb::scene::SceneObject invalidRouteSource = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Invalid Route Source" });
+            kb::scene::AudioSourceComponent invalidRouteComponent{
+                .clipAssetId = importedClip.id.value,
+                .volume = 0.0F,
+                .loop = true,
+                .spatial = false,
+            };
+            kb::scene::SetAudioSourceOutputBus(invalidRouteComponent, "Missing");
+            scene.Components().AudioSources().Set(invalidRouteSource.Entity(), invalidRouteComponent);
+            kb::tests::Require(kb::audio::AudioPlayback::PlaySource(scene, invalidRouteSource.Entity()).status
+                    == kb::audio::AudioSourceControlStatus::UnknownBus,
+                "Unknown component-source output bus silently reached master");
+            scene.Entities().Destroy(invalidRouteSource.Entity());
+        }
 
         // LIB-148: per-voice control against the REAL plugin (only when a device exists -
         // the honest no-device error above already covered the headless case).
@@ -260,8 +358,12 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
             kb::tests::Require(kb::audio::AudioPlayback::ResumeVoice(scene, voice), "ResumeVoice failed for a paused voice (it must survive the frame tick, never be reclaimed)");
             kb::tests::Require(kb::audio::AudioPlayback::SeekVoice(scene, voice, 0.01F), "SeekVoice failed for a live voice");
             kb::tests::Require(kb::audio::AudioPlayback::SetVoiceVolume(scene, voice, 0.0F) && kb::audio::AudioPlayback::SetVoicePitch(scene, voice, 1.1F)
+                    && kb::audio::AudioPlayback::SetVoiceMute(scene, voice, true)
+                    && kb::audio::AudioPlayback::SetVoiceVolume(scene, voice, 0.5F)
+                    && kb::audio::AudioPlayback::SetVoiceMute(scene, voice, false)
+                    && kb::audio::AudioPlayback::SetVoicePan(scene, voice, 0.25F)
                     && kb::audio::AudioPlayback::SetVoiceLoop(scene, voice, true),
-                "Per-voice volume/pitch/loop setters failed for a live voice");
+                "Per-voice volume/mute/pan/pitch/loop setters failed for a live voice");
             kb::tests::Require(kb::audio::AudioPlayback::StopVoice(scene, voice), "StopVoice failed for a live voice");
             kb::tests::Require(!kb::audio::AudioPlayback::StopVoice(scene, voice) && !kb::audio::AudioPlayback::IsVoicePlaying(scene, voice)
                     && !kb::audio::AudioPlayback::PauseVoice(scene, voice),
@@ -458,6 +560,22 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
         for (int i = 0; i < 3; ++i) {
             [[maybe_unused]] const bool progressed = scene.Runtime().Update(1.0F / 60.0F);
         }
+
+        if (deviceStatus == kb::audio::AudioDeviceStatus::PlaybackAvailable) {
+            const kb::audio::AudioPlayResult missingMixer = kb::audio::AudioPlayback::PlayOneShot(scene, routedOneShot);
+            kb::tests::Require(!missingMixer.Succeeded() && missingMixer.error == "audio mixer is not available",
+                "Named route without an active mixer silently reached master");
+        }
+
+        scene.Entities().Destroy(listener.Entity());
+        [[maybe_unused]] const bool destroyedListenerTick = scene.Runtime().Update(1.0F / 60.0F);
+        kb::tests::Require(kb::scene::SceneAudioOcclusionAccess::RuntimeStats(scene).raycasts == 0U,
+            "Destroyed listener left stale occlusion state");
+
+        const kb::audio::AudioDeviceStatus restartedStatus = kb::audio::AudioPlayback::Reinitialize(scene);
+        kb::tests::Require(restartedStatus == kb::audio::AudioDeviceStatus::PlaybackAvailable
+                || restartedStatus == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
+            "Audio backend did not recover through its public restart path");
 
         kb::audio::AudioPlayback::StopAll(scene);
     }
