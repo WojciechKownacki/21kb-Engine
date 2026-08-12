@@ -142,8 +142,8 @@ ScriptFunctionCallResult AudioPlay(const ScriptFunctionCallContext& context, std
         ownerEntityId = owner.Id();
     }
 
-    // LIB-147: optional mixer-bus routing (empty/unknown = implicit master, see
-    // AudioPlayDesc::outputBus).
+    // LIB-147: optional mixer-bus routing (empty = implicit master; a non-empty unknown
+    // route is rejected, see AudioPlayDesc::outputBus).
     const ScriptValue* outputBusArgument = FindArg(arguments, "outputBus");
     const kb::audio::AudioPlayDesc playDesc{
         .clipAssetId = clipAssetId.value,

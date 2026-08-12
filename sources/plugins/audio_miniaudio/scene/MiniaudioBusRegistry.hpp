@@ -21,8 +21,8 @@ namespace kb::audio_miniaudio {
 // parent feeds the engine's own endpoint, the implicit master). Synced once per audio
 // tick from the scene's active mixer selection (kb::scene::SceneAudioMixerAccess):
 // resolving the asset lazily through AssetManager keeps a hot-reloaded .kbmixer live, an
-// unresolvable/absent mixer honestly tears the groups down (everything falls back to
-// master, the pre-mixer behavior), and the active snapshot's per-bus volumes are applied
+// unresolvable/absent mixer tears the groups down (only explicitly empty routes still
+// select master), and the active snapshot's per-bus volumes are applied
 // over the authored ones every tick (an unknown snapshot name applies nothing).
 //
 // Topology changes (different mixer asset, or the same asset re-authored with different
@@ -32,6 +32,23 @@ namespace kb::audio_miniaudio {
 // signatures.
 class MiniaudioBusRegistry final {
 public:
+    enum class RouteStatus : std::uint8_t {
+        Master,
+        Routed,
+        MixerUnavailable,
+        UnknownBus,
+        InitializationFailed,
+    };
+
+    struct Route {
+        RouteStatus status = RouteStatus::MixerUnavailable;
+        ma_sound_group* group = nullptr;
+
+        [[nodiscard]] bool Succeeded() const noexcept {
+            return status == RouteStatus::Master || status == RouteStatus::Routed;
+        }
+    };
+
     ~MiniaudioBusRegistry();
 
     MiniaudioBusRegistry() = default;
@@ -43,13 +60,14 @@ public:
     // Returns true when the bus topology was rebuilt (or torn down) this sync - every
     // ma_sound attached to a previous group must be dropped by the caller.
     [[nodiscard]] bool Sync(ma_engine& engine, kb::scene::Scene& scene, bool playbackAvailable);
-    // The group for a bus name, or nullptr for the implicit master (empty or unknown name
-    // - the honest fallback AudioSourceComponent::outputBus documents).
-    [[nodiscard]] ma_sound_group* FindGroup(std::string_view busName) noexcept;
+    [[nodiscard]] bool RoutingWillChange(kb::scene::Scene& scene, bool playbackAvailable) const;
+    [[nodiscard]] Route Resolve(std::string_view busName) noexcept;
     // Monotonic, bumped on every topology rebuild/teardown - baked into the source
     // registry's sound signatures so live entity sounds recreate against fresh groups.
     [[nodiscard]] std::uint64_t Generation() const noexcept { return generation_; }
+#if defined(KB_AUDIO_MINIAUDIO_TESTING)
     [[nodiscard]] std::size_t BusCount() const noexcept { return buses_.size(); }
+#endif
     void StopAll() noexcept;
 
 private:
@@ -59,12 +77,22 @@ private:
         std::unique_ptr<ma_sound_group> group;
     };
 
+    struct BusTopology {
+        std::string name;
+        std::string parent;
+
+        [[nodiscard]] friend bool operator==(const BusTopology&, const BusTopology&) noexcept = default;
+    };
+
     void DestroyGroups() noexcept;
     [[nodiscard]] bool TearDown() noexcept;
 
     std::vector<BusRecord> buses_;
+    std::vector<BusTopology> topology_;
     std::uint64_t activeMixerAssetId_ = 0U;
     std::uint64_t generation_ = 0U;
+    bool mixerLoaded_ = false;
+    bool groupsInitialized_ = false;
 };
 
 } // namespace kb::audio_miniaudio
