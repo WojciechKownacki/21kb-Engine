@@ -27,7 +27,7 @@ constexpr std::array kLifecycleEvents{
 // PucLuaFunctionApi and PucLuaTaskApi install module tables directly from this
 // list.  The names and each wrapper's return shape therefore stay true to the
 // callable sandbox and generated stubs cannot drift from it.
-constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 194> kLuaBindings{ {
+constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 196> kLuaBindings{ {
     { "Audio", "Play", "Audio.Play", ScriptApiCatalogLuaReturnKind::SingleOutput, "voice" },
     { "Audio", "SetMixer", "Audio.SetMixer", ScriptApiCatalogLuaReturnKind::SingleOutput, "assigned" },
     { "Audio", "ActiveMixer", "Audio.ActiveMixer", ScriptApiCatalogLuaReturnKind::Default, "" },
@@ -50,6 +50,8 @@ constexpr std::array<ScriptApiCatalogLuaBindingDefinition, 194> kLuaBindings{ {
     { "Audio", "IsSourcePlaying", "Audio.IsSourcePlaying", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Audio", "DeviceStatus", "Audio.DeviceStatus", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
     { "Audio", "Reinitialize", "Audio.Reinitialize", ScriptApiCatalogLuaReturnKind::OutputsTable, "" },
+    { "Audio", "SetListenerLocalUser", "Audio.SetListenerLocalUser", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
+    { "Audio", "ListenerLocalUser", "Audio.ListenerLocalUser", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Audio", "SetBusVolume", "Audio.SetBusVolume", ScriptApiCatalogLuaReturnKind::SingleOutput, "applied" },
     { "Audio", "ClearBusVolume", "Audio.ClearBusVolume", ScriptApiCatalogLuaReturnKind::Default, "" },
     { "Audio", "TransitionToSnapshot", "Audio.TransitionToSnapshot", ScriptApiCatalogLuaReturnKind::SingleOutput, "started" },

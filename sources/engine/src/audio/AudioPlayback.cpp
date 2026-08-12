@@ -1,10 +1,14 @@
 #include "engine/audio/AudioPlayback.hpp"
 
+#include "engine/audio/AudioRoutingContract.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 
 #include <utility>
+#include <cmath>
 
 namespace kb::audio {
 namespace {
@@ -13,7 +17,64 @@ namespace {
     return kb::scene::SceneAccess::State(scene).audioPlaybackBackend;
 }
 
+[[nodiscard]] bool IsFinite(kb::scene::Vec3 value) noexcept {
+    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
 } // namespace
+
+AudioPlayDescValidationStatus ValidateAudioPlayDesc(
+    const kb::scene::Scene& scene, const AudioPlayDesc& desc) noexcept {
+    if (desc.clipAssetId == 0U) {
+        return AudioPlayDescValidationStatus::InvalidClip;
+    }
+    if ((!desc.outputBus.empty() && !IsAudioMixerNameTokenValid(desc.outputBus))
+        || !std::isfinite(desc.volume) || desc.volume < 0.0F
+        || !std::isfinite(desc.pitch) || desc.pitch < 0.01F
+        || !std::isfinite(desc.pan) || desc.pan < -1.0F || desc.pan > 1.0F
+        || !std::isfinite(desc.spatialBlend) || desc.spatialBlend < 0.0F || desc.spatialBlend > 1.0F
+        || !IsAudioAttenuationModelValid(desc.attenuationModel)
+        || !std::isfinite(desc.minDistance) || desc.minDistance < 0.01F
+        || !std::isfinite(desc.maxDistance) || desc.maxDistance < desc.minDistance
+        || !std::isfinite(desc.rolloff) || desc.rolloff < 0.0F
+        || !std::isfinite(desc.dopplerFactor) || desc.dopplerFactor < 0.0F
+        || !IsFinite(desc.position) || !IsFinite(desc.velocity)) {
+        return AudioPlayDescValidationStatus::InvalidSettings;
+    }
+    if (desc.ownerEntityId != 0U) {
+        const kb::scene::SceneEntity owner{ desc.ownerEntityId };
+        if (!scene.Entities().IsAlive(owner) || !scene.Entities().IsActive(owner)
+            || scene.Transforms().TryGet(owner) == nullptr) {
+            return AudioPlayDescValidationStatus::InvalidOwner;
+        }
+    }
+    return AudioPlayDescValidationStatus::Valid;
+}
+
+AudioPlayResult AudioPlayDescValidationResult(AudioPlayDescValidationStatus status) {
+    switch (status) {
+    case AudioPlayDescValidationStatus::InvalidClip:
+        return { .started = false, .voiceId = 0U, .error = "audio clip id is invalid" };
+    case AudioPlayDescValidationStatus::InvalidOwner:
+        return { .started = false, .voiceId = 0U, .error = "audio voice owner is unavailable" };
+    case AudioPlayDescValidationStatus::InvalidSettings:
+        return { .started = false, .voiceId = 0U, .error = "audio playback settings are invalid" };
+    case AudioPlayDescValidationStatus::Valid:
+        break;
+    }
+    return {};
+}
+
+bool IsAudioVoiceMarkerRequestValid(
+    const kb::scene::Scene& scene,
+    std::string_view marker,
+    float positionSeconds,
+    kb::scene::SceneEntity target) noexcept {
+    return IsAudioVoiceMarkerNameValid(marker)
+        && IsAudioVoiceSeekPositionValid(positionSeconds)
+        && target.IsValid()
+        && scene.Entities().IsAlive(target);
+}
 
 void AudioPlayback::RegisterBackend(kb::scene::Scene& scene, IAudioPlaybackBackend& backend) {
     kb::scene::SceneAccess::State(scene).audioPlaybackBackend = &backend;
@@ -31,6 +92,10 @@ bool AudioPlayback::HasBackend(kb::scene::Scene& scene) noexcept {
 }
 
 AudioPlayResult AudioPlayback::PlayOneShot(kb::scene::Scene& scene, const AudioPlayDesc& desc) {
+    const AudioPlayDescValidationStatus validation = ValidateAudioPlayDesc(scene, desc);
+    if (validation != AudioPlayDescValidationStatus::Valid) {
+        return AudioPlayDescValidationResult(validation);
+    }
     IAudioPlaybackBackend* backend = FindBackend(scene);
     if (backend == nullptr) {
         return AudioPlayResult{ .started = false, .voiceId = 0U, .error = "audio playback backend is not active" };
@@ -96,11 +161,17 @@ bool AudioPlayback::ResumeVoice(kb::scene::Scene& scene, std::uint64_t voiceId) 
 }
 
 bool AudioPlayback::SeekVoice(kb::scene::Scene& scene, std::uint64_t voiceId, float positionSeconds) noexcept {
+    if (!IsAudioVoiceSeekPositionValid(positionSeconds)) {
+        return false;
+    }
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend != nullptr && backend->SeekVoice(scene, voiceId, positionSeconds);
 }
 
 bool AudioPlayback::SetVoiceVolume(kb::scene::Scene& scene, std::uint64_t voiceId, float volume) noexcept {
+    if (!IsAudioVoiceVolumeValid(volume)) {
+        return false;
+    }
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend != nullptr && backend->SetVoiceVolume(scene, voiceId, volume);
 }
@@ -111,11 +182,17 @@ bool AudioPlayback::SetVoiceMute(kb::scene::Scene& scene, std::uint64_t voiceId,
 }
 
 bool AudioPlayback::SetVoicePan(kb::scene::Scene& scene, std::uint64_t voiceId, float pan) noexcept {
+    if (!IsAudioVoicePanValid(pan)) {
+        return false;
+    }
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend != nullptr && backend->SetVoicePan(scene, voiceId, pan);
 }
 
 bool AudioPlayback::SetVoicePitch(kb::scene::Scene& scene, std::uint64_t voiceId, float pitch) noexcept {
+    if (!IsAudioVoicePitchValid(pitch)) {
+        return false;
+    }
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend != nullptr && backend->SetVoicePitch(scene, voiceId, pitch);
 }
@@ -136,6 +213,9 @@ float AudioPlayback::VoicePlaybackSeconds(kb::scene::Scene& scene, std::uint64_t
 }
 
 bool AudioPlayback::AddVoiceMarker(kb::scene::Scene& scene, std::uint64_t voiceId, std::string_view marker, float positionSeconds, kb::scene::SceneEntity target) {
+    if (!IsAudioVoiceMarkerRequestValid(scene, marker, positionSeconds, target)) {
+        return false;
+    }
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend != nullptr && backend->AddVoiceMarker(scene, voiceId, marker, positionSeconds, target);
 }

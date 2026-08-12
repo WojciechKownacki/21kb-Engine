@@ -31,6 +31,10 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
     const kb::audio::AudioPlayDesc& desc,
     const MiniaudioClipResolver& clipResolver,
     ma_sound_group* group) {
+    const kb::audio::AudioPlayDescValidationStatus validation = kb::audio::ValidateAudioPlayDesc(scene, desc);
+    if (validation != kb::audio::AudioPlayDescValidationStatus::Valid) {
+        return kb::audio::AudioPlayDescValidationResult(validation);
+    }
     kb::scene::Vec3 initialPosition = desc.position;
     bool attached = false;
     if (desc.ownerEntityId != 0U) {
@@ -188,11 +192,17 @@ bool MiniaudioVoicePool::ResumeVoice(std::uint64_t voiceId) noexcept {
 }
 
 bool MiniaudioVoicePool::SeekVoice(std::uint64_t voiceId, float positionSeconds) noexcept {
+    if (!kb::audio::IsAudioVoiceSeekPositionValid(positionSeconds)) {
+        return false;
+    }
     VoiceRecord* voice = FindVoice(voiceId);
     return voice != nullptr && voice->sound != nullptr && voice->sound->SeekSeconds(positionSeconds) == MA_SUCCESS;
 }
 
 bool MiniaudioVoicePool::SetVoiceVolume(std::uint64_t voiceId, float volume) noexcept {
+    if (!kb::audio::IsAudioVoiceVolumeValid(volume)) {
+        return false;
+    }
     VoiceRecord* voice = FindVoice(voiceId);
     if (voice == nullptr || voice->sound == nullptr) {
         return false;
@@ -213,6 +223,9 @@ bool MiniaudioVoicePool::SetVoiceMute(std::uint64_t voiceId, bool mute) noexcept
 }
 
 bool MiniaudioVoicePool::SetVoicePan(std::uint64_t voiceId, float pan) noexcept {
+    if (!kb::audio::IsAudioVoicePanValid(pan)) {
+        return false;
+    }
     VoiceRecord* voice = FindVoice(voiceId);
     if (voice == nullptr || voice->sound == nullptr) {
         return false;
@@ -222,6 +235,9 @@ bool MiniaudioVoicePool::SetVoicePan(std::uint64_t voiceId, float pan) noexcept 
 }
 
 bool MiniaudioVoicePool::SetVoicePitch(std::uint64_t voiceId, float pitch) noexcept {
+    if (!kb::audio::IsAudioVoicePitchValid(pitch)) {
+        return false;
+    }
     VoiceRecord* voice = FindVoice(voiceId);
     if (voice == nullptr || voice->sound == nullptr) {
         return false;
@@ -250,14 +266,17 @@ float MiniaudioVoicePool::VoicePlaybackSeconds(std::uint64_t voiceId) noexcept {
     return voice == nullptr || voice->sound == nullptr ? -1.0F : voice->sound->PlaybackSeconds();
 }
 
-bool MiniaudioVoicePool::AddVoiceMarker(std::uint64_t voiceId, std::string_view marker, float positionSeconds, kb::scene::SceneEntity target) {
+bool MiniaudioVoicePool::AddVoiceMarker(kb::scene::Scene& scene, std::uint64_t voiceId, std::string_view marker, float positionSeconds, kb::scene::SceneEntity target) {
+    if (!kb::audio::IsAudioVoiceMarkerRequestValid(scene, marker, positionSeconds, target)) {
+        return false;
+    }
     VoiceRecord* voice = FindVoice(voiceId);
-    if (voice == nullptr || voice->sound == nullptr || marker.empty()) {
+    if (voice == nullptr || voice->sound == nullptr) {
         return false;
     }
     voice->markers.push_back(VoiceMarker{
         .name = std::string{ marker },
-        .positionSeconds = positionSeconds < 0.0F ? 0.0F : positionSeconds,
+        .positionSeconds = positionSeconds,
         .target = target,
         .fired = false,
     });

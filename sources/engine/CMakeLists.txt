@@ -258,6 +258,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneParticleSystems.hpp
     include/engine/scene/ScenePrefabs.hpp
     include/engine/input/InputHaptics.hpp
+    include/engine/scene/SceneAudioListenerAccess.hpp
     include/engine/scene/SceneAudioMixerAccess.hpp
     include/engine/scene/SceneAudioOcclusionAccess.hpp
     include/engine/scene/SceneRenderFeedback.hpp

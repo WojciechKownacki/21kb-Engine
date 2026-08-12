@@ -64,7 +64,7 @@ public:
     // markers. Fired markers queue "OnAudioMarker" events through
     // AudioPlayback::QueueMarkerEvent inside DispatchMarkers (called once per tick).
     [[nodiscard]] float VoicePlaybackSeconds(std::uint64_t voiceId) noexcept;
-    [[nodiscard]] bool AddVoiceMarker(std::uint64_t voiceId, std::string_view marker, float positionSeconds, kb::scene::SceneEntity target);
+    [[nodiscard]] bool AddVoiceMarker(kb::scene::Scene& scene, std::uint64_t voiceId, std::string_view marker, float positionSeconds, kb::scene::SceneEntity target);
     void DispatchMarkers(kb::scene::Scene& scene);
 
 private:
@@ -112,6 +112,10 @@ public:
         return voice == nullptr ? nullptr : voice->sound.get();
     }
     [[nodiscard]] std::size_t VoiceCountForTesting() const noexcept { return voices_.size(); }
+    [[nodiscard]] std::size_t MarkerCountForTesting(std::uint64_t voiceId) noexcept {
+        VoiceRecord* voice = FindVoice(voiceId);
+        return voice == nullptr ? 0U : voice->markers.size();
+    }
 #endif
 
     static constexpr std::size_t kMaxOneShotVoices = 64U;

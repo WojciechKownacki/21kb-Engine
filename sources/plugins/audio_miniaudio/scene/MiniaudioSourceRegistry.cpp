@@ -146,7 +146,7 @@ void MiniaudioSourceRegistry::SyncSource(
     }
 
     seenEntities_.insert(entity.Id());
-    if (!source->enabled || !playbackAvailable) {
+    if (!source->enabled || !kb::scene::IsAudioSourceComponentPersistable(*source) || !playbackAvailable) {
         RemoveSound(entity.Id());
         return;
     }
@@ -273,6 +273,9 @@ kb::audio::AudioSourceControlResult MiniaudioSourceRegistry::ValidateSource(
     }
     if (!source->enabled) {
         return { .status = kb::audio::AudioSourceControlStatus::Disabled };
+    }
+    if (!kb::scene::IsAudioSourceComponentPersistable(*source)) {
+        return { .status = kb::audio::AudioSourceControlStatus::InvalidSettings };
     }
     if (source->clipAssetId == 0U) {
         return { .status = kb::audio::AudioSourceControlStatus::InvalidClip };
