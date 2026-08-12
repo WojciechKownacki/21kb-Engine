@@ -104,6 +104,8 @@ void RegisterAudioReflection(kb::ecs::World& world) {
             KB_ECS_FIELD(AudioSourceComponent, maxDistance, kb::ecs::ComponentFieldType::Float32),
             KB_ECS_FIELD(AudioSourceComponent, rolloff, kb::ecs::ComponentFieldType::Float32),
             KB_ECS_FIELD(AudioSourceComponent, dopplerFactor, kb::ecs::ComponentFieldType::Float32),
+            KB_ECS_FIELD(AudioSourceComponent, outputBus, kb::ecs::ComponentFieldType::Bytes),
+            KB_ECS_FIELD(AudioSourceComponent, outputBusLength, kb::ecs::ComponentFieldType::UInt32),
         }));
 }
 

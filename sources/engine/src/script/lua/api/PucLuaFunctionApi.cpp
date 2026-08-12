@@ -225,7 +225,7 @@ int LuaAudioSetSnapshot(lua_State* state) {
 
 [[nodiscard]] ScriptFunctionArgument Arg(std::string name, ScriptValue value);
 
-// LIB-148: the eight per-voice wrappers share one shape - voice handle at index 1, the
+// LIB-148: the ten per-voice wrappers share one shape - voice handle at index 1, the
 // operation value (when any) at index 2, one boolean back (honest false for a dead voice).
 int LuaAudioVoiceCall(lua_State* state, const char* function, const char* resultPin, const char* valuePin, bool valueIsBool) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
@@ -253,9 +253,53 @@ int LuaAudioPause(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.Pau
 int LuaAudioResume(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.Resume", "resumed", nullptr, false); }
 int LuaAudioSeek(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.Seek", "applied", "positionSeconds", false); }
 int LuaAudioSetVolume(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.SetVolume", "applied", "volume", false); }
+int LuaAudioSetMute(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.SetMute", "applied", "mute", true); }
+int LuaAudioSetPan(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.SetPan", "applied", "pan", false); }
 int LuaAudioSetPitch(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.SetPitch", "applied", "pitch", false); }
 int LuaAudioSetLoop(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.SetLoop", "applied", "loop", true); }
 int LuaAudioIsPlaying(lua_State* state) { return LuaAudioVoiceCall(state, "Audio.IsPlaying", "playing", nullptr, false); }
+
+int PushAudioResultTable(lua_State* state, const ScriptFunctionCallResult& result) {
+    lua_createtable(state, 0, static_cast<int>(result.outputs.size()));
+    for (const ScriptFunctionArgument& output : result.outputs) {
+        PucLuaValueBridge::Push(state, output.value);
+        lua_setfield(state, -2, output.name.c_str());
+    }
+    return 1;
+}
+
+int LuaAudioSourceCall(lua_State* state, const char* function) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_gettop(state) >= 1 && lua_isnil(state, 1) == 0) {
+        arguments.push_back(Arg(
+            "entity",
+            ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Entity }));
+    }
+    return PushAudioResultTable(state, context->CallFunction(function, arguments));
+}
+
+int LuaAudioPlaySource(lua_State* state) { return LuaAudioSourceCall(state, "Audio.PlaySource"); }
+int LuaAudioPauseSource(lua_State* state) { return LuaAudioSourceCall(state, "Audio.PauseSource"); }
+int LuaAudioResumeSource(lua_State* state) { return LuaAudioSourceCall(state, "Audio.ResumeSource"); }
+int LuaAudioStopSource(lua_State* state) { return LuaAudioSourceCall(state, "Audio.StopSource"); }
+int LuaAudioIsSourcePlaying(lua_State* state) { return LuaAudioSourceCall(state, "Audio.IsSourcePlaying"); }
+
+int LuaAudioDeviceCall(lua_State* state, const char* function) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    return PushAudioResultTable(state, context->CallFunction(function, {}));
+}
+
+int LuaAudioDeviceStatus(lua_State* state) { return LuaAudioDeviceCall(state, "Audio.DeviceStatus"); }
+int LuaAudioReinitialize(lua_State* state) { return LuaAudioDeviceCall(state, "Audio.Reinitialize"); }
 
 int LuaAudioActiveSnapshot(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
@@ -3059,7 +3103,7 @@ void SetClosure(lua_State* state, const char* name, lua_CFunction function, Scri
 // marshalling.  Their position follows ScriptApiCatalog::LuaBindingDefinitions
 // excluding Task and global bindings; table and Lua field names deliberately
 // live only in that catalog.
-constexpr std::array<lua_CFunction, 177> kCatalogBindingAdapters{ {
+constexpr std::array<lua_CFunction, 186> kCatalogBindingAdapters{ {
     &LuaAudioPlay,
     &LuaAudioSetMixer,
     &LuaAudioActiveMixer,
@@ -3070,9 +3114,18 @@ constexpr std::array<lua_CFunction, 177> kCatalogBindingAdapters{ {
     &LuaAudioResume,
     &LuaAudioSeek,
     &LuaAudioSetVolume,
+    &LuaAudioSetMute,
+    &LuaAudioSetPan,
     &LuaAudioSetPitch,
     &LuaAudioSetLoop,
     &LuaAudioIsPlaying,
+    &LuaAudioPlaySource,
+    &LuaAudioPauseSource,
+    &LuaAudioResumeSource,
+    &LuaAudioStopSource,
+    &LuaAudioIsSourcePlaying,
+    &LuaAudioDeviceStatus,
+    &LuaAudioReinitialize,
     &LuaAudioSetBusVolume,
     &LuaAudioClearBusVolume,
     &LuaAudioTransitionToSnapshot,

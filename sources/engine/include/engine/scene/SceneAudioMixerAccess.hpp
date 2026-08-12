@@ -41,9 +41,8 @@ struct AudioMixerSnapshotTransition {
 // kb::scene deliberately stores only the SELECTION; the mixer's actual content
 // (kb::audio::AudioMixerAsset - bus routing graph, snapshot volume sets) is resolved
 // lazily, every frame, by the audio backend (the miniaudio plugin's bus registry) through
-// AssetManager::Load - an unresolvable mixer id or an unknown snapshot name honestly falls
-// back to "no mixer"/"no snapshot" instead of crashing, the same convention every other
-// renderer/audio-consumed asset reference already follows. Timed snapshot TRANSITIONS are
+// AssetManager::Load. An unresolvable mixer keeps named routes unavailable; an empty
+// route continues to target the implicit master output. Timed snapshot TRANSITIONS are
 // LIB-150's own explicitly-named scope; setting the active snapshot here applies its
 // volumes from the next audio tick (an immediate switch).
 class SceneAudioMixerAccess {
@@ -58,9 +57,9 @@ public:
     // LIB-150: runtime per-bus volume overrides - upsert-by-name / remove-by-name (false
     // when clearing a bus that has no override). Name validation against the mixer asset
     // happens at the script layer (the asset lives engine-side, so unlike material
-    // parameters an unknown bus IS an honest error there); this storage itself stays
-    // deliberately permissive so native systems can pre-stage overrides.
-    static void SetBusVolumeOverride(Scene& scene, std::string_view busName, float volume);
+    // parameters an unknown bus IS an honest error there). Empty names and invalid
+    // gains are rejected without changing the existing override state.
+    [[nodiscard]] static bool SetBusVolumeOverride(Scene& scene, std::string_view busName, float volume);
     [[nodiscard]] static bool ClearBusVolumeOverride(Scene& scene, std::string_view busName) noexcept;
     // Drops every runtime override and any running transition - called when the ACTIVE
     // MIXER changes (another mixer's bus/snapshot names are unrelated state).
@@ -72,7 +71,8 @@ public:
     // (plain SetActiveSnapshot). Starting a new transition while one runs retargets from
     // the current blended state's source snapshot (the previous transition completes
     // instantly first - deliberate v1 simplification, documented at the script layer).
-    static void BeginSnapshotTransition(Scene& scene, std::string_view toSnapshot, float durationSeconds);
+    // Returns false without changing state when the snapshot token or duration is invalid.
+    [[nodiscard]] static bool BeginSnapshotTransition(Scene& scene, std::string_view toSnapshot, float durationSeconds);
     [[nodiscard]] static const AudioMixerSnapshotTransition& SnapshotTransition(const Scene& scene) noexcept;
     // Advances the running transition with the scene's own delta time (called once per
     // audio tick by the backend). Returns true when this call COMPLETED the transition

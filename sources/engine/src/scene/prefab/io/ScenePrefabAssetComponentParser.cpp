@@ -531,7 +531,9 @@ template <typename T>
     // LIB-147: optional mixer-routing bus token (absent in every pre-LIB-147 prefab -
     // backward compatible, the default empty token routes to the implicit master).
     if (const auto outputBusField = fields.find("audioSource.outputBus"); outputBusField != fields.end()) {
-        SetAudioSourceOutputBus(audioSource, outputBusField->second);
+        if (!SetAudioSourceOutputBus(audioSource, outputBusField->second)) {
+            return false;
+        }
     }
     components.audioSource = audioSource;
     return true;

@@ -66,7 +66,8 @@ void WriteSilentWav(const std::filesystem::path& path) {
     constexpr std::uint16_t channels = 1U;
     constexpr std::uint32_t sampleRate = 44100U;
     constexpr std::uint16_t bitsPerSample = 16U;
-    constexpr std::uint32_t sampleCount = 64U;
+    // Keep non-looping voices alive throughout immediate routing and transport probes.
+    constexpr std::uint32_t sampleCount = sampleRate * 2U;
     constexpr std::uint32_t bytesPerSample = bitsPerSample / 8U;
     constexpr std::uint32_t dataSize = sampleCount * channels * bytesPerSample;
     constexpr std::uint32_t byteRate = sampleRate * channels * bytesPerSample;
@@ -261,8 +262,10 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
         // LIB-150: runtime override + a mid-flight snapshot transition exercise the full
         // volume-resolution stack (authored -> snapshot lerp -> override) on the real
         // plugin across the ticks below.
-        kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "Weapons", 0.2F);
-        kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "", 0.25F);
+        kb::tests::Require(kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "Weapons", 0.2F),
+            "Audio mixer override fixture setup failed");
+        kb::tests::Require(kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "", 0.25F),
+            "Audio mixer transition fixture setup failed");
 
         // LIB-151: occlusion against the real collider raycast geometry - a wall between
         // the listener (origin) and the routed source exercises the budget-capped sampler
@@ -309,7 +312,8 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
             .spatial = false,
             .autoplay = true,
         };
-        kb::scene::SetAudioSourceOutputBus(routedSource, "Weapons");
+        kb::tests::Require(kb::scene::SetAudioSourceOutputBus(routedSource, "Weapons"),
+            "Audio routed-source fixture setup failed");
         scene.Components().AudioSources().Set(source.Entity(), routedSource);
         for (int i = 0; i < 3; ++i) {
             [[maybe_unused]] const bool progressed = scene.Runtime().Update(1.0F / 60.0F);
@@ -339,7 +343,8 @@ void RunMiniaudioPluginUpdatesSceneSourcesTest() {
                 .loop = true,
                 .spatial = false,
             };
-            kb::scene::SetAudioSourceOutputBus(invalidRouteComponent, "Missing");
+            kb::tests::Require(kb::scene::SetAudioSourceOutputBus(invalidRouteComponent, "Missing"),
+                "Audio invalid-route fixture setup failed");
             scene.Components().AudioSources().Set(invalidRouteSource.Entity(), invalidRouteComponent);
             kb::tests::Require(kb::audio::AudioPlayback::PlaySource(scene, invalidRouteSource.Entity()).status
                     == kb::audio::AudioSourceControlStatus::UnknownBus,

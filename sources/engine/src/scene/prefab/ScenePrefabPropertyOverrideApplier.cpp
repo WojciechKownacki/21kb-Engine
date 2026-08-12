@@ -400,8 +400,7 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
         return ParseNumber(property.value, Ensure(node.components.audioSource).dopplerFactor);
     }
     if (property.propertyPath == "audioSource.outputBus") {
-        SetAudioSourceOutputBus(Ensure(node.components.audioSource), property.value);
-        return true;
+        return SetAudioSourceOutputBus(Ensure(node.components.audioSource), property.value);
     }
     if (property.propertyPath == "audioListener") {
         return ApplyComponentPresence(property.value, node.components.audioListener);
