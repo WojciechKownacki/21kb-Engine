@@ -9,7 +9,6 @@
 #include <miniaudio.h>
 
 #include <cstdint>
-#include <filesystem>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -60,10 +59,10 @@ public:
 private:
     // LIB-147: busName/busGeneration are part of the identity - re-routing a source to a
     // different bus, or a mixer topology rebuild invalidating every ma_sound_group,
-    // recreates the ma_sound exactly like a clip path change already does.
+    // recreates the ma_sound exactly like a clip identity change already does.
     struct SoundSignature {
         std::uint64_t clipAssetId = 0U;
-        std::filesystem::path path;
+        std::string clipIdentity;
         std::string busName;
         std::uint64_t busGeneration = 0U;
         bool spatial = true;
@@ -116,6 +115,7 @@ private:
         ma_engine& engine,
         std::uint64_t entityId,
         const SoundSignature& signature,
+        const ResolvedAudioClip& clip,
         const kb::scene::AudioSourceComponent& source,
         const kb::scene::TransformComponent& transform,
         const kb::scene::Vec3& velocity,
@@ -130,10 +130,34 @@ private:
 #if defined(KB_AUDIO_MINIAUDIO_TESTING)
 public:
     [[nodiscard]] std::size_t SoundCountForTesting() const noexcept { return sounds_.size(); }
+    [[nodiscard]] std::size_t DecoderCountForTesting() const noexcept {
+        std::size_t count = 0U;
+        for (const auto& [_, record] : sounds_) {
+            count += record.sound == nullptr ? 0U : record.sound->DecoderCountForTesting();
+        }
+        return count;
+    }
+    [[nodiscard]] std::size_t EncodedPayloadCountForTesting() const noexcept {
+        std::size_t count = 0U;
+        for (const auto& [_, record] : sounds_) {
+            count += record.sound != nullptr && record.sound->OwnsEncodedPayloadForTesting() ? 1U : 0U;
+        }
+        return count;
+    }
     [[nodiscard]] std::size_t NativeSoundCountForTesting() const noexcept {
         std::size_t count = 0U;
         for (const auto& [_, record] : sounds_) {
             count += record.sound != nullptr ? 1U : 0U;
+        }
+        return count;
+    }
+    [[nodiscard]] std::size_t NativeSoundBranchCountForTesting() const noexcept {
+        std::size_t count = 0U;
+        for (const auto& [_, record] : sounds_) {
+            if (record.sound != nullptr) {
+                count += record.sound->PrimaryForTesting() != nullptr ? 1U : 0U;
+                count += record.sound->FlatForTesting() != nullptr ? 1U : 0U;
+            }
         }
         return count;
     }
