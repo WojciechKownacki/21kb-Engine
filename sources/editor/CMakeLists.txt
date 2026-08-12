@@ -18,6 +18,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorAssetBrowserNativeCommandMap.hpp
     src/app/EditorAssetBrowserNativeCommandMap.cpp
     src/app/EditorAudioAssetInspectorDropHandler.cpp
+    src/app/EditorAudioInspectorDropPolicy.cpp
     src/app/EditorAnimatorAssetInspectorDropHandler.cpp
     src/app/EditorAssetBrowserContextMenuPointerHandler.cpp
     src/app/EditorAssetBrowserDeleteConfirmPointerHandler.cpp
@@ -301,6 +302,7 @@ add_executable(kb_editor WIN32
     src/private/app/docking/EditorMainDockSplitterPointerController.hpp
     src/private/app/EditorAssetFolderProjectFilesDropHandler.hpp
     src/private/app/EditorAudioAssetInspectorDropHandler.hpp
+    src/private/app/EditorAudioInspectorDropPolicy.hpp
     src/private/app/EditorAnimatorAssetInspectorDropHandler.hpp
     src/private/app/EditorBehaviourAssetHierarchyDropHandler.hpp
     src/private/app/EditorBehaviourAssetInspectorDropHandler.hpp
@@ -377,6 +379,8 @@ add_executable(kb_editor WIN32
     src/private/inspection/InspectorAudioComponentModel.hpp
     src/private/inspection/InspectorAudioMixerAssetInteraction.hpp
     src/private/inspection/InspectorAudioMixerAssetModel.hpp
+    src/private/inspection/InspectorSceneAudioInteraction.hpp
+    src/private/inspection/InspectorSceneAudioModel.hpp
     src/private/inspection/InspectorAudioScrubController.hpp
     src/private/inspection/InspectorAudioTextBuilder.hpp
     src/private/inspection/InspectorCameraTextBuilder.hpp
@@ -403,6 +407,7 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorMaterialParameterValueDialog.hpp
     src/private/platform/win32/EditorTagNameDialog.hpp
     src/private/platform/win32/EditorMeshAssetPickerDialog.hpp
+    src/private/platform/win32/EditorAudioMixerAssetPickerDialog.hpp
     src/private/platform/win32/EditorDebugLogGate.hpp
     src/private/platform/win32/EditorModalMessageLoop.hpp
     src/private/platform/win32/EditorModalWindowScope.hpp
@@ -479,6 +484,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/HeroIconPainter.hpp
     src/private/rendering/InspectorPanelRenderer.hpp
     src/private/rendering/InspectorAudioMixerAssetView.hpp
+    src/private/rendering/InspectorSceneAudioView.hpp
     src/private/rendering/InspectorAddComponentOverlayWindow.hpp
     src/private/rendering/MaterialEditorPanelRenderer.hpp
     src/private/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.hpp
@@ -604,6 +610,8 @@ add_executable(kb_editor WIN32
     src/private/scene/input/EditorInputMappingContextAuthoring.hpp
     src/private/scene/audio/EditorAudioMixerAssetGateway.hpp
     src/private/scene/audio/EditorAudioMixerAuthoring.hpp
+    src/private/scene/audio/EditorSceneAudioSettingsService.hpp
+    src/private/scene/EditorSceneDocumentIdentity.hpp
     src/private/windowing/FloatingWindowControlActions.hpp
     src/private/windowing/FloatingWindowControlHitTester.hpp
     src/private/windowing/FloatingWindowControlInteractor.hpp
@@ -680,6 +688,7 @@ add_executable(kb_editor WIN32
     src/rendering/HeroIconPainter.cpp
     src/rendering/InspectorPanelRenderer.cpp
     src/rendering/InspectorAudioMixerAssetView.cpp
+    src/rendering/InspectorSceneAudioView.cpp
     src/rendering/InspectorAddComponentOverlayWindow.cpp
     src/rendering/MaterialEditorPanelRenderer.cpp
     src/rendering/EditorMaterialThumbnailService.cpp
@@ -743,6 +752,8 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorAudioTextBuilder.cpp
     src/inspection/InspectorAudioMixerAssetInteraction.cpp
     src/inspection/InspectorAudioMixerAssetModel.cpp
+    src/inspection/InspectorSceneAudioInteraction.cpp
+    src/inspection/InspectorSceneAudioModel.cpp
     src/inspection/InspectorAudioComponentModel.cpp
     src/inspection/InspectorAudioScrubController.cpp
     src/inspection/InspectorColliderTextBuilder.cpp
@@ -820,6 +831,7 @@ add_executable(kb_editor WIN32
     src/scene/input/EditorInputMappingContextAuthoring.cpp
     src/scene/audio/EditorAudioMixerAssetGateway.cpp
     src/scene/audio/EditorAudioMixerAuthoring.cpp
+    src/scene/audio/EditorSceneAudioSettingsService.cpp
     src/windowing/FloatingWindowControlActions.cpp
     src/windowing/FloatingWindowFactory.cpp
     src/windowing/FloatingWindowHitTestResolver.cpp
@@ -1000,6 +1012,7 @@ if(BUILD_TESTING)
         tests/EditorAssetBrowserTests.cpp
         tests/EditorAudioMixerAuthoringTests.cpp
         tests/EditorAudioMixerInspectorTests.cpp
+        tests/EditorSceneAudioInspectorTests.cpp
         tests/EditorViewportPreviewTests.cpp
         tests/EditorMaterialGraphCookServiceTests.cpp
         tests/EditorDockingTests.cpp
@@ -1017,6 +1030,7 @@ if(BUILD_TESTING)
         src/rendering/MaterialEditorPanelLayout.cpp
         src/rendering/EditorTexturePreviewService.cpp
         src/rendering/InspectorAudioMixerAssetView.cpp
+        src/rendering/InspectorSceneAudioView.cpp
         src/rendering/EditorBgfxBackendSelector.cpp
         src/rendering/HeroIconGdiplusRuntime.cpp
         src/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.cpp
@@ -1066,6 +1080,7 @@ if(BUILD_TESTING)
         src/assets/EditorAssetBrowserContentLayout.cpp
         src/assets/EditorAssetBrowserContextMenuState.cpp
         src/app/EditorAssetBrowserNativeCommandMap.cpp
+        src/app/EditorAudioInspectorDropPolicy.cpp
         src/assets/EditorAssetBrowserContextMenuLayout.cpp
         src/assets/EditorAssetBrowserContentHitTester.cpp
         src/assets/EditorAssetBrowserDeleteConfirmState.cpp
@@ -1104,6 +1119,7 @@ if(BUILD_TESTING)
         src/scene/EditorSceneAssetBrowserCommands.cpp
         src/scene/audio/EditorAudioMixerAssetGateway.cpp
         src/scene/audio/EditorAudioMixerAuthoring.cpp
+        src/scene/audio/EditorSceneAudioSettingsService.cpp
         src/private/scene/EditorMeshImportArtifacts.hpp
         src/scene/EditorMeshImportArtifacts.cpp
         src/scene/EditorSceneSelectionPivot.cpp
@@ -1148,6 +1164,8 @@ if(BUILD_TESTING)
         src/inspection/InspectorAudioTextBuilder.cpp
         src/inspection/InspectorAudioMixerAssetInteraction.cpp
         src/inspection/InspectorAudioMixerAssetModel.cpp
+        src/inspection/InspectorSceneAudioInteraction.cpp
+        src/inspection/InspectorSceneAudioModel.cpp
         src/inspection/InspectorAudioComponentModel.cpp
         src/inspection/InspectorAudioScrubController.cpp
         src/inspection/InspectorComponentCatalog.cpp

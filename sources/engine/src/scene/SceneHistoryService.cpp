@@ -1,5 +1,7 @@
 #include "scene/SceneHistoryService.hpp"
 
+#include "engine/scene/SceneAudioMixerAccess.hpp"
+#include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/ScenePrefabInstance.hpp"
 #include "scene/SceneAccess.hpp"
@@ -103,6 +105,9 @@ void IndexObjectPath(SceneObject object, SceneHistoryObjectPath path, SceneHisto
 
     output = SceneHistoryEntry{
         .label = std::move(label),
+        .audioMixerAssetId = SceneAudioMixerAccess::ActiveMixer(scene),
+        .audioMixerSnapshot = SceneAudioMixerAccess::ActiveSnapshot(scene),
+        .audioOcclusionSettings = SceneAudioOcclusionAccess::Settings(scene),
         .roots = std::move(roots),
         .prefabInstances = std::move(prefabInstances),
     };
@@ -149,6 +154,13 @@ void IndexObjectPath(SceneObject object, SceneHistoryObjectPath path, SceneHisto
             return false;
         }
     }
+
+    SceneAudioMixerAccess::SetActiveMixer(scene, entry.audioMixerAssetId);
+    if (!SceneAudioMixerAccess::SetActiveSnapshot(scene, entry.audioMixerSnapshot)
+        || !SceneAudioOcclusionAccess::Configure(scene, entry.audioOcclusionSettings)) {
+        return false;
+    }
+    SceneAudioMixerAccess::ResetRuntimeMixerState(scene);
     return true;
 }
 

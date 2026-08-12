@@ -5,6 +5,7 @@
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/modules/EngineModuleHost.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "scene/audio/EditorSceneAudioSettingsService.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
@@ -218,9 +219,11 @@ bool EditorSceneContext::ReloadSceneFromProject() {
         console_.Error("Project", "Scene could not be reloaded: " + currentScenePath_.generic_string());
         return false;
     }
+    EditorSceneAudioSettingsService::PrepareDocument(*nextScene);
 
     ReleaseRenderedSceneResources();
     scene_ = std::move(nextScene);
+    AdvanceSceneDocumentGeneration();
     plugins_.ClearPendingReload();
     SelectFirstSceneEntityOrClear();
     ResetSceneEditState();
@@ -241,10 +244,12 @@ bool EditorSceneContext::NewScene(EditorDirtySceneResolution dirtyResolution) {
     for (const kb::scene::SceneEntity root : roots) {
         scene_->Entities().Destroy(root);
     }
+    EditorSceneAudioSettingsService::ResetForNewDocument(*scene_);
     ReleaseRenderedSceneResources();
 
     hierarchySelection_.SelectEntity(EditorDefaultSceneFactory::Seed(*scene_));
     currentScenePath_ = EditorProjectPaths::UniqueScenePath("Untitled");
+    AdvanceSceneDocumentGeneration();
     ResetSceneEditState();
     MarkSceneDocumentDirty();
     console_.Info("Project", "New scene created: " + currentScenePath_.generic_string());
@@ -269,14 +274,20 @@ bool EditorSceneContext::OpenScene(const std::filesystem::path& path, EditorDirt
         console_.Error("Project", "Scene could not be opened: " + scenePath.generic_string());
         return false;
     }
+    EditorSceneAudioSettingsService::PrepareDocument(*scene_);
     ReleaseRenderedSceneResources();
 
     currentScenePath_ = scenePath;
+    AdvanceSceneDocumentGeneration();
     SelectFirstSceneEntityOrClear();
     ResetSceneEditState();
     ClearSceneDocumentDirty();
     console_.Info("Project", "Opened scene: " + currentScenePath_.generic_string());
     return true;
+}
+
+void EditorSceneContext::AdvanceSceneDocumentGeneration() noexcept {
+    sceneDocumentIdentity_.Advance();
 }
 
 bool EditorSceneContext::SaveCurrentScene() {

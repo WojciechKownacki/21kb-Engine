@@ -5,6 +5,7 @@
 #include "engine/audio/AudioMixerAsset.hpp"
 
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/LightComponent.hpp"
@@ -23,6 +24,7 @@
 #include "scene/EditorProjectSettingsState.hpp"
 #include "scene/EditorScriptEditorState.hpp"
 #include "scene/EditorSceneObjectEditTypes.hpp"
+#include "scene/EditorSceneDocumentIdentity.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
 #include "scene/AnimationPreviewContext.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
@@ -100,6 +102,7 @@ class EditorSceneCommandController;
 class EditorInputActionAuthoring;
 class EditorInputMappingContextAuthoring;
 class EditorAudioMixerAuthoring;
+class EditorSceneAudioSettingsService;
 class IEditorMaterialAssetPropertyEdit;
 class EditorMaterialAssetAuthoring;
 class EditorMaterialPreviewScene;
@@ -231,6 +234,7 @@ public:
     [[nodiscard]] const kb::project::ProjectDescriptor& Project() const noexcept;
     [[nodiscard]] const std::filesystem::path& ProjectFile() const noexcept;
     [[nodiscard]] const std::filesystem::path& CurrentScenePath() const noexcept;
+    [[nodiscard]] std::uint64_t SceneDocumentGeneration() const noexcept;
     [[nodiscard]] std::uint64_t SceneRenderRevision() const noexcept;
     [[nodiscard]] std::uint64_t SceneRenderDirtyBaseRevision() const noexcept;
     [[nodiscard]] bool SceneRenderFullDirty() const noexcept;
@@ -604,6 +608,9 @@ public:
         std::string_view snapshot,
         std::string_view bus,
         float volume);
+    [[nodiscard]] bool SetSceneAudioMixer(kb::assets::AssetId id);
+    [[nodiscard]] bool SetSceneAudioSnapshot(std::string_view snapshot);
+    [[nodiscard]] bool SetSceneAudioOcclusion(const kb::scene::AudioOcclusionSettings& settings);
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadMaterialAsset(kb::assets::AssetId id) const;
     [[nodiscard]] std::optional<kb::render::RenderMaterialInstanceAssetData> ReadMaterialInstanceAsset(kb::assets::AssetId id) const;
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadEffectiveMaterialAsset(kb::assets::AssetId id) const;
@@ -1120,6 +1127,7 @@ private:
     [[nodiscard]] EditorInputActionAuthoring InputActionAuthoring() noexcept;
     [[nodiscard]] EditorInputMappingContextAuthoring InputMappingContextAuthoring() noexcept;
     [[nodiscard]] EditorAudioMixerAuthoring AudioMixerAuthoring() noexcept;
+    [[nodiscard]] EditorSceneAudioSettingsService SceneAudioSettings() noexcept;
     [[nodiscard]] EditorMaterialAssetAuthoring MaterialAssetAuthoring() noexcept;
     void ActivateProjectInput();
     [[nodiscard]] bool ActivateProjectPhysicsLayers(kb::scene::Scene& scene);
@@ -1132,6 +1140,7 @@ private:
     void InvalidateHierarchyRows() noexcept;
     void RebuildHierarchyRowsIfNeeded() const;
     void ResetSceneEditState();
+    void AdvanceSceneDocumentGeneration() noexcept;
     void SelectFirstSceneEntityOrClear() noexcept;
     [[nodiscard]] bool SaveSceneToPath(const std::filesystem::path& path);
     [[nodiscard]] std::filesystem::path ResolveProjectVirtualPath(const std::filesystem::path& virtualPath) const;
@@ -1146,6 +1155,7 @@ private:
     std::unique_ptr<kb::scene::Scene> scene_;
     std::function<void(const kb::scene::Scene&)> renderSceneReleaseHandler_;
     std::filesystem::path currentScenePath_;
+    EditorSceneDocumentIdentity sceneDocumentIdentity_;
     EditorAssetBrowserState assetBrowser_;
     EditorConsoleState console_;
     std::mutex assetImportMutex_;
