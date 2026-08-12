@@ -16,6 +16,7 @@
 #include "inspection/InspectorMultiSelectionTextBuilder.hpp"
 #include "inspection/InspectorRigidbodyTextBuilder.hpp"
 #include "rendering/InspectorAudioMixerAssetView.hpp"
+#include "inspection/InspectorSceneAudioModel.hpp"
 
 #include <array>
 #include <cstdio>
@@ -170,7 +171,10 @@ std::optional<std::string> InspectorPanelTextBuilder::Build(const EditorSceneCon
 
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
     if (!sceneContext.Scene().Entities().IsAlive(selected)) {
-        return std::nullopt;
+        return InspectorSceneAudioModel::ShouldDisplay(
+                   sceneContext.Scene(), sceneContext.AssetBrowser().InspectorAsset(), selected)
+            ? std::optional<std::string>{ InspectorSceneAudioModel{ sceneContext.Scene() }.Text() }
+            : std::nullopt;
     }
 
     std::string text = InspectorEntitySummaryTextBuilder{}.Build(sceneContext, selected);

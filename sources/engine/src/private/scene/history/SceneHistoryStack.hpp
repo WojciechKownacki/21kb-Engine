@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/ScenePrefabHandle.hpp"
 #include "engine/scene/ScenePrefabInstanceHandle.hpp"
@@ -24,6 +25,9 @@ struct SceneHistoryPrefabInstanceSnapshot {
 
 struct SceneHistoryEntry {
     std::string label;
+    std::uint64_t audioMixerAssetId = 0U;
+    std::string audioMixerSnapshot;
+    AudioOcclusionSettings audioOcclusionSettings;
     std::vector<ScenePrefab> roots;
     std::vector<SceneHistoryPrefabInstanceSnapshot> prefabInstances;
 };

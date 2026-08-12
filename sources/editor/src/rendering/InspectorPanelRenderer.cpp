@@ -3,6 +3,7 @@
 #include "rendering/MaterialPreviewAppearanceResolver.hpp"
 #include "rendering/MaterialPreviewTextureAverageColor.hpp"
 #include "rendering/InspectorAudioMixerAssetView.hpp"
+#include "rendering/InspectorSceneAudioView.hpp"
 #include "rendering/InspectorPanelSectionRows.hpp"
 #include "rendering/EditorMaterialThumbnailService.hpp"
 
@@ -4000,8 +4001,10 @@ int InspectorPanelRenderer::ContentHeight(const RECT& content, const EditorScene
     }
 
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
-    if (!sceneContext.Scene().Entities().IsAlive(selected)) {
-        return RectHeight(content);
+    if (InspectorSceneAudioModel::ShouldDisplay(
+            sceneContext.Scene(), assetBrowser.InspectorAsset(), selected)) {
+        return InspectorSceneAudioView::ContentHeight(
+            sceneContext.Inspector(), InspectorSceneAudioModel{ sceneContext.Scene() });
     }
     if (sceneContext.SelectedHierarchyEntities().size() > 1U) {
         return MultiSelectionContentHeight(sceneContext);
@@ -4238,9 +4241,23 @@ void InspectorPanelRenderer::Paint(
     }
 
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
-    if (!sceneContext.Scene().Entities().IsAlive(selected)) {
-        DrawEmpty(dc, inner, theme);
+    if (InspectorSceneAudioModel::ShouldDisplay(
+            sceneContext.Scene(), sceneContext.AssetBrowser().InspectorAsset(), selected)) {
+        const InspectorSceneAudioModel model{ sceneContext.Scene() };
+        InspectorSceneAudioView::Paint(
+            dc,
+            inner,
+            theme,
+            sceneContext.Inspector(),
+            sceneContext.SceneDocumentGeneration(),
+            model);
         RestoreDC(dc, -1);
+        if (scrollable) {
+            const RECT track = ScrollbarTrackRect(content);
+            const RECT thumb = ScrollbarThumbRect(content, sceneContext);
+            DrawFrame(dc, track, Rgb(18, 20, 24), Rgb(38, 43, 50));
+            DrawFrame(dc, thumb, sceneContext.Inspector().IsScrollbarDragging() ? Rgb(104, 116, 130) : Rgb(76, 86, 98), Rgb(94, 105, 118));
+        }
         RestoreDC(dc, savedDc);
         return;
     }
@@ -4269,7 +4286,7 @@ void InspectorPanelRenderer::Paint(
     RestoreDC(dc, savedDc);
 }
 
-InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int yPoint) noexcept {
+InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int yPoint) {
     if (!Contains(content, x, yPoint)) {
         return {};
     }
@@ -4360,8 +4377,21 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     }
 
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
-    if (!sceneContext.Scene().Entities().IsAlive(selected)) {
-        return {};
+    if (InspectorSceneAudioModel::ShouldDisplay(
+            sceneContext.Scene(), sceneContext.AssetBrowser().InspectorAsset(), selected)) {
+        const InspectorSceneAudioHit hit = InspectorSceneAudioView::HitTest(
+            viewport,
+            state,
+            InspectorSceneAudioModel{ sceneContext.Scene() },
+            x,
+            scrolledY);
+        return InspectorPanelRenderer::Hit{
+            .kind = hit.kind,
+            .section = hit.section,
+            .property = hit.property,
+            .index = hit.index,
+            .rect = hit.rect,
+        };
     }
 
     if (sceneContext.SelectedHierarchyEntities().size() > 1U) {

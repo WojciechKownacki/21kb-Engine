@@ -1,5 +1,6 @@
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "inspection/InspectorAudioMixerAssetInteraction.hpp"
+#include "inspection/InspectorSceneAudioInteraction.hpp"
 #include "inspection/TerrainMaterialLayerMenuState.hpp"
 
 #if defined(_WIN32)
@@ -3127,6 +3128,37 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
             actions,
             mixer.Id());
     }
+    if (!assetSelected && InspectorSceneAudioInteraction::IsSection(hit.section)
+        && InspectorSceneAudioModel::ShouldDisplay(
+            sceneContext.Scene(), sceneContext.AssetBrowser().InspectorAsset(), entity)) {
+        if (hit.property == InspectorPropertyId::SceneAudioMixerPicker) {
+            sceneContext.Inspector().EndTextEdit();
+            return true;
+        }
+        const InspectorSceneAudioModel model{ sceneContext.Scene() };
+        if (hit.property == InspectorPropertyId::SceneAudioMixer) {
+            sceneContext.Inspector().EndTextEdit();
+            if (const std::optional<kb::assets::AssetId> reveal =
+                    InspectorSceneAudioInteraction::ResolveReveal(
+                        model,
+                        { hit.kind, hit.section, hit.property, hit.index })) {
+                SelectAssetInProjectFiles(sceneContext, *reveal);
+            }
+            return true;
+        }
+        return InspectorSceneAudioInteraction::HandlePointerDown(
+            sceneContext.Inspector(),
+            sceneContext.Scene(),
+            model,
+            InspectorSceneAudioTarget{
+                .kind = hit.kind,
+                .section = hit.section,
+                .property = hit.property,
+                .index = hit.index,
+            },
+            sceneContext,
+            sceneContext.SceneDocumentGeneration());
+    }
     if (!sceneContext.Scene().Entities().IsAlive(entity)) {
         return true;
     }
@@ -3544,6 +3576,24 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
                 SceneAudioMixerInspectorActions actions{ sceneContext };
                 static_cast<void>(InspectorAudioMixerAssetInteraction::CommitTextEdit(
                     inspector, *mixer, actions, mixer.Id()));
+            } else {
+                inspector.EndTextEdit();
+            }
+            return true;
+        }
+        if (InspectorSceneAudioInteraction::IsTextProperty(inspector.EditedProperty())) {
+            const bool sceneAudioVisible = InspectorSceneAudioModel::ShouldDisplay(
+                sceneContext.Scene(),
+                sceneContext.AssetBrowser().InspectorAsset(),
+                sceneContext.SelectedEntity());
+            if (sceneAudioVisible) {
+                const InspectorSceneAudioModel model{ sceneContext.Scene() };
+                static_cast<void>(InspectorSceneAudioInteraction::CommitTextEdit(
+                    inspector,
+                    sceneContext.Scene(),
+                    model,
+                    sceneContext,
+                    sceneContext.SceneDocumentGeneration()));
             } else {
                 inspector.EndTextEdit();
             }

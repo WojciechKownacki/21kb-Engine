@@ -3,6 +3,9 @@
 
 #include "engine/ecs/World.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAudioListenerAccess.hpp"
+#include "engine/scene/SceneAudioMixerAccess.hpp"
+#include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
@@ -957,16 +960,88 @@ void RunSceneBatchDuplicateTest() {
 void RunSceneHistoryUndoRedoTest() {
     kb::scene::Scene scene;
     kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Initial" });
+
+    constexpr std::uint64_t initialMixer = 101U;
+    const kb::scene::AudioOcclusionSettings initialOcclusion{
+        .enabled = true,
+        .occludedVolumeScale = 0.25F,
+        .maxDistance = 120.5F,
+        .layerMask = 0x0F0F00FFU,
+        .maxRaycastsPerTick = 17U,
+    };
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, initialMixer);
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "InitialSnapshot"),
+        "Scene history setup rejected the initial audio snapshot");
+    kb::tests::Require(kb::scene::SceneAudioOcclusionAccess::Configure(scene, initialOcclusion),
+        "Scene history setup rejected the initial audio occlusion settings");
+    kb::scene::SceneAudioListenerAccess::SetLocalUser(scene, kb::input::LocalUserId{ 3U });
+
     kb::tests::Require(scene.History().Record("before rename"), "Scene history did not record initial snapshot");
     scene.Entities().SetName(object, "Changed");
+    constexpr std::uint64_t changedMixer = 202U;
+    const kb::scene::AudioOcclusionSettings changedOcclusion{
+        .enabled = false,
+        .occludedVolumeScale = 0.75F,
+        .maxDistance = 240.25F,
+        .layerMask = 0xFF0000FFU,
+        .maxRaycastsPerTick = 31U,
+    };
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, changedMixer);
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "ChangedSnapshot"),
+        "Scene history setup rejected the changed audio snapshot");
+    kb::tests::Require(kb::scene::SceneAudioOcclusionAccess::Configure(scene, changedOcclusion),
+        "Scene history setup rejected the changed audio occlusion settings");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "RuntimeBus", 0.5F),
+        "Scene history setup rejected the runtime bus override");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "RuntimeSnapshot", 2.0F),
+        "Scene history setup rejected the runtime snapshot transition");
+    kb::scene::SceneAudioListenerAccess::SetLocalUser(scene, kb::input::LocalUserId{ 9U });
+
     kb::tests::Require(scene.History().CanUndo(), "Scene history should be able to undo after record");
     kb::tests::Require(scene.History().Undo(), "Scene history undo failed");
     object = scene.Hierarchy().RootObjects().front();
     kb::tests::Require(scene.Entities().Name(object) == "Initial", "Scene history undo did not restore entity name");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(scene) == initialMixer,
+        "Scene history undo did not restore the audio mixer");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "InitialSnapshot",
+        "Scene history undo did not restore the audio snapshot");
+    const kb::scene::AudioOcclusionSettings& restoredInitialOcclusion = kb::scene::SceneAudioOcclusionAccess::Settings(scene);
+    kb::tests::Require(restoredInitialOcclusion.enabled == initialOcclusion.enabled
+            && kb::tests::NearlyEqual(restoredInitialOcclusion.occludedVolumeScale, initialOcclusion.occludedVolumeScale)
+            && kb::tests::NearlyEqual(restoredInitialOcclusion.maxDistance, initialOcclusion.maxDistance)
+            && restoredInitialOcclusion.layerMask == initialOcclusion.layerMask
+            && restoredInitialOcclusion.maxRaycastsPerTick == initialOcclusion.maxRaycastsPerTick,
+        "Scene history undo did not restore every audio occlusion field");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene).empty()
+            && !kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).IsActive(),
+        "Scene history undo did not clear transient mixer state");
+    kb::tests::Require(kb::scene::SceneAudioListenerAccess::LocalUser(scene) == kb::input::LocalUserId{ 9U },
+        "Scene history undo restored transient listener local-user selection");
+
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "RedoRuntimeBus", 0.4F),
+        "Scene history redo setup rejected the runtime bus override");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "RedoRuntimeSnapshot", 3.0F),
+        "Scene history redo setup rejected the runtime snapshot transition");
     kb::tests::Require(scene.History().CanRedo(), "Scene history should be able to redo after undo");
     kb::tests::Require(scene.History().Redo(), "Scene history redo failed");
     object = scene.Hierarchy().RootObjects().front();
     kb::tests::Require(scene.Entities().Name(object) == "Changed", "Scene history redo did not restore entity name");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(scene) == changedMixer,
+        "Scene history redo did not restore the audio mixer");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "ChangedSnapshot",
+        "Scene history redo did not restore the audio snapshot");
+    const kb::scene::AudioOcclusionSettings& restoredChangedOcclusion = kb::scene::SceneAudioOcclusionAccess::Settings(scene);
+    kb::tests::Require(restoredChangedOcclusion.enabled == changedOcclusion.enabled
+            && kb::tests::NearlyEqual(restoredChangedOcclusion.occludedVolumeScale, changedOcclusion.occludedVolumeScale)
+            && kb::tests::NearlyEqual(restoredChangedOcclusion.maxDistance, changedOcclusion.maxDistance)
+            && restoredChangedOcclusion.layerMask == changedOcclusion.layerMask
+            && restoredChangedOcclusion.maxRaycastsPerTick == changedOcclusion.maxRaycastsPerTick,
+        "Scene history redo did not restore every audio occlusion field");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene).empty()
+            && !kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).IsActive(),
+        "Scene history redo did not clear transient mixer state");
+    kb::tests::Require(kb::scene::SceneAudioListenerAccess::LocalUser(scene) == kb::input::LocalUserId{ 9U },
+        "Scene history redo restored transient listener local-user selection");
 
     kb::tests::Require(scene.History().Undo(), "Scene history second undo failed");
     object = scene.Hierarchy().RootObjects().front();
