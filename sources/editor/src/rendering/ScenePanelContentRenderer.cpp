@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
+#include "rendering/SceneViewportPresentationPolicy.hpp"
 
 #include "engine/ecs/SystemSchedulerTrace.hpp"
 #include "engine/math/EngineMath.hpp"
@@ -604,6 +605,9 @@ void AppendTerrainBrushRing(
     // aliasing, which reads as camera motion. Runtime play renders continuously, so temporal sampling
     // remains enabled there; edit mode uses deterministic FXAA when the project requests TAA.
     const bool continuousRuntimeFrames = sceneContext.HasPlayModeSceneSession();
+    const bool presentPrimarySceneCamera =
+        SceneViewportPresentationPolicy::CameraSource(continuousRuntimeFrames) == SceneViewportCameraSource::PrimaryScene;
+    const bool editorOverlaysEnabled = SceneViewportPresentationPolicy::EditorOverlaysEnabled(continuousRuntimeFrames);
     const bool requestedTemporalAntiAliasing = renderBackendSettings.TemporalAntiAliasingEnabled();
     kb::render::ScenePostProcessSettings postProcessSettings{};
     postProcessSettings.fxaaEnabled = renderBackendSettings.FxaaEnabled() ||
@@ -655,28 +659,30 @@ void AppendTerrainBrushRing(
         .renderHeight = renderHeight,
         .fitMode = viewportState.FitMode(),
         .safeArea = profile.safeArea,
-        .cameraOverride = BuildEditorCamera(viewportCamera, renderWidth, renderHeight),
-        .selectedEntityIds = SelectedEntityIds(sceneContext),
+        .cameraOverride = presentPrimarySceneCamera
+            ? std::optional<kb::render::SceneRenderCamera>{}
+            : std::optional<kb::render::SceneRenderCamera>{ BuildEditorCamera(viewportCamera, renderWidth, renderHeight) },
+        .selectedEntityIds = editorOverlaysEnabled ? SelectedEntityIds(sceneContext) : std::vector<std::uint64_t>{},
         .viewportKey = panelId,
-        .editorSceneOverlaysEnabled = true,
+        .editorSceneOverlaysEnabled = editorOverlaysEnabled,
         .editorGrid = kb::render::RenderSceneSubmitDesc::EditorGridDesc{
             .minorSpacingMeters = viewportState.GridSpacing(),
             .majorEvery = viewportState.GridMajorEvery(),
-            .visible = viewportState.GridVisible(),
+            .visible = editorOverlaysEnabled && viewportState.GridVisible(),
         },
-        .editorGizmo = gizmo,
-        .editorCameraWireframes = BuildCameraWireframes(sceneContext),
-        .editorLightWireframes = BuildLightWireframes(sceneContext, viewportCamera, axes, renderHeight),
-        .physicsDebugLines = BuildPhysicsDebugLines(sceneContext),
-        .editorSelectionBox = SelectionBoxDesc(sceneContext, panelId),
+        .editorGizmo = editorOverlaysEnabled ? gizmo : kb::render::RenderSceneSubmitDesc::EditorGizmoDesc{},
+        .editorCameraWireframes = editorOverlaysEnabled ? BuildCameraWireframes(sceneContext) : std::vector<kb::render::EditorCameraWireframeDesc>{},
+        .editorLightWireframes = editorOverlaysEnabled ? BuildLightWireframes(sceneContext, viewportCamera, axes, renderHeight) : std::vector<kb::render::EditorLightWireframeDesc>{},
+        .physicsDebugLines = editorOverlaysEnabled ? BuildPhysicsDebugLines(sceneContext) : std::vector<kb::render::PhysicsDebugLine>{},
+        .editorSelectionBox = editorOverlaysEnabled ? SelectionBoxDesc(sceneContext, panelId) : kb::render::RenderSceneSubmitDesc::EditorSelectionBoxDesc{},
         .meshPassMode = renderProfile.meshPassMode,
         .lightingConfig = lightingConfig,
         .postProcessSettings = postProcessSettings,
         .msaaSamples = renderBackendSettings.MsaaSamples(),
         .shadowPassEnabled = renderProfile.shadowPassEnabled && renderBackendSettings.ShadowsEnabled(),
         .postProcessEnabled = postProcessEnabled,
-        .selectionMaskEnabled = postProcessEnabled && renderProfile.selectionMaskEnabled,
-        .selectionOutlineEnabled = postProcessEnabled && renderProfile.selectionOutlineEnabled && renderBackendSettings.SelectionOutlineEnabled(),
+        .selectionMaskEnabled = editorOverlaysEnabled && postProcessEnabled && renderProfile.selectionMaskEnabled,
+        .selectionOutlineEnabled = editorOverlaysEnabled && postProcessEnabled && renderProfile.selectionOutlineEnabled && renderBackendSettings.SelectionOutlineEnabled(),
         .gpuDrivenRuntimeDispatchEnabled = renderProfile.gpuDrivenRuntimeDispatchEnabled && renderBackendSettings.GpuDrivenEnabled(),
         .drawSafeArea = profile.devicePreview,
         .sceneRevision = sceneContext.SceneRenderRevision(),

@@ -14,8 +14,8 @@ struct ScriptAgentProjectFilesResult {
     std::vector<std::filesystem::path> skippedFiles;
     std::string error;
     // LIB-013: true if this call wrote a file under projectRoot/Assets/
-    // (currently starter scripts, the projectile prefab, and gameplay
-    // samples on a project's
+    // (currently starter scripts, projectile prefabs, gameplay samples, and
+    // the Audio Shooter demo scene/assets on a project's
     // first run — it is write-once). Such a file becomes a newly
     // discoverable project asset, which the catalog THIS call already
     // wrote kb.lua/script_api.md/script_api.json/manifest.json from does
@@ -34,7 +34,7 @@ struct ScriptAgentProjectFilesResult {
 // the Lua Language Server, generated API artifacts under .kb/api/, and a
 // minimal Assets/Logic/PlayerController.lua starter behaviour (LIB-013) —
 // the exact script AGENTS.md's own worked example references. AGENTS.md,
-// .luarc.json, and PlayerController.lua are only created when missing
+// .luarc.json, PlayerController.lua, and demo assets are only created when missing
 // (users may customize them); everything under .kb/api/ is always
 // regenerated.
 class ScriptAgentProjectFiles final {
