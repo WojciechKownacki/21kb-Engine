@@ -32,6 +32,7 @@ public:
     [[nodiscard]] static bool IsSkeletalMesh(const kb::assets::AssetMetadata& metadata) noexcept;
     [[nodiscard]] static bool IsSkeleton(const kb::assets::AssetMetadata& metadata) noexcept;
     [[nodiscard]] static bool IsAnimationClip(const kb::assets::AssetMetadata& metadata) noexcept;
+    [[nodiscard]] static bool IsAudio(const kb::assets::AssetMetadata& metadata) noexcept;
 };
 
 #endif

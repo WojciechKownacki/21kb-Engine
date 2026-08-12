@@ -1,5 +1,6 @@
 #include "rendering/ProjectFilesPanelRenderer.hpp"
 
+#include "app/EditorAudioAssetPreview.hpp"
 #include "rendering/EditorMaterialThumbnailService.hpp"
 
 #if defined(_WIN32)
@@ -86,6 +87,9 @@ void AppendRect(std::ostringstream& out, const RECT& rect) {
     for (const EditorAssetItemRow& asset : assets) {
         if (asset.selected) {
             out << ";selAsset=" << asset.metadata.id.value;
+        }
+        if (EditorAudioAssetPreview::IsPlaying(asset.metadata.id)) {
+            out << ";playingAudioAsset=" << asset.metadata.id.value;
         }
     }
     return out.str();

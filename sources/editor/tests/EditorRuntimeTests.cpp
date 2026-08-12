@@ -15,6 +15,10 @@ int main(int argumentCount, char** arguments) {
         kb::editor::tests::RunEditorSceneAudioInspectorTests();
         return 0;
     }
+    if (argumentCount == 2 && std::string_view{ arguments[1] } == "inspector") {
+        kb::editor::tests::RunEditorInspectorTests();
+        return 0;
+    }
     kb::editor::tests::RunEditorCommandStackTests();
     kb::editor::tests::RunEditorPlayModeSceneSessionTests();
     kb::editor::tests::RunEditorHierarchyTests();

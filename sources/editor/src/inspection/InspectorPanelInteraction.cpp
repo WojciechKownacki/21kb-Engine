@@ -3331,16 +3331,16 @@ bool InspectorPanelInteraction::HandlePointerDrag(EditorSceneContext& sceneConte
             CancelAudioScrub(sceneContext);
             return true;
         }
-        const int dx = x - inspector.DragStartX();
-        const int dy = y - inspector.DragStartY();
-        if (std::abs(dx) + std::abs(dy) < 2) {
+        const std::optional<std::int64_t> pixelDelta = InspectorAudioScrubController::ResolveHorizontalDragDelta(
+            inspector.DragStartX(), inspector.DragStartY(), x, y, inspector.FloatDragMoved());
+        if (!pixelDelta.has_value()) {
             return true;
         }
-        inspector.MarkFloatDragMoved();
-        const std::int64_t pixelDelta = (static_cast<std::int64_t>(x) - inspector.DragStartX())
-            - (static_cast<std::int64_t>(y) - inspector.DragStartY());
+        if (!inspector.FloatDragMoved()) {
+            inspector.MarkFloatDragMoved();
+        }
         const InspectorAudioScrubUpdate update = InspectorAudioScrubController::Update(
-            sceneContext.Scene(), entity, pixelDelta, inspector.AudioScrub());
+            sceneContext.Scene(), entity, *pixelDelta, inspector.AudioScrub());
         if (update == InspectorAudioScrubUpdate::LostTarget) {
             CancelAudioScrub(sceneContext);
         }

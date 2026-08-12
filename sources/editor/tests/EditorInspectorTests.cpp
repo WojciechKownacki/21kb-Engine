@@ -730,6 +730,19 @@ void RunAudioInspectorScrubTransactionTest() {
     using kb::editor::InspectorAudioScrubUpdate;
     using kb::editor::InspectorPropertyId;
 
+    kb::editor::tests::Require(
+        !InspectorAudioScrubController::ResolveHorizontalDragDelta(100, 100, 101, 103, false).has_value()
+            && !InspectorAudioScrubController::ResolveHorizontalDragDelta(100, 100, 103, 100, false).has_value()
+            && !InspectorAudioScrubController::ResolveHorizontalDragDelta(100, 100, 104, 110, false).has_value(),
+        "Audio numeric click and vertical pointer jitter must not activate value scrubbing");
+    const std::optional<std::int64_t> activatedDelta =
+        InspectorAudioScrubController::ResolveHorizontalDragDelta(100, 100, 104, 102, false);
+    const std::optional<std::int64_t> continuedDelta =
+        InspectorAudioScrubController::ResolveHorizontalDragDelta(100, 100, 102, 120, true);
+    kb::editor::tests::Require(
+        activatedDelta == 4 && continuedDelta == 2,
+        "Audio numeric scrub must activate horizontally and remain based only on horizontal displacement");
+
     {
         AudioScrubTransactionFixture fixture;
         const kb::scene::SceneEntity entity = fixture.AddAudioEntity();
