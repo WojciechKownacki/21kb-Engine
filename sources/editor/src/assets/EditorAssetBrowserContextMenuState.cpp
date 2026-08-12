@@ -59,7 +59,8 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserContextMenuState::Item
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterialType, .label = "New Material Type" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputAction, .label = "New Input Action" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputAxis, .label = "New Input Axis" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputMappingContext, .label = "New Input Mapping Context", .separatorAfter = true });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputMappingContext, .label = "New Input Mapping Context" });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewAudioMixer, .label = "New Audio Mixer", .separatorAfter = true });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::AddLighting, .label = "Add", .separatorAfter = true });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Refresh, .label = "Refresh" });
         break;
@@ -72,7 +73,8 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserContextMenuState::Item
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterialType, .label = "New Material Type" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputAction, .label = "New Input Action" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputAxis, .label = "New Input Axis" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputMappingContext, .label = "New Input Mapping Context", .separatorAfter = true });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputMappingContext, .label = "New Input Mapping Context" });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewAudioMixer, .label = "New Audio Mixer", .separatorAfter = true });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::AddLighting, .label = "Add", .separatorAfter = true });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Refresh, .label = "Refresh" });
         break;

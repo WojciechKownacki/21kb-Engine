@@ -4228,9 +4228,47 @@ void RunAudioMixerAssetIOAndAccessTest() {
     ResetTestRoot();
     const std::filesystem::path mixerPath = TestRoot() / "MainMixer.kbmixer";
 
+    const std::filesystem::path emptyMixerPath = TestRoot() / "EmptyMixer.kbmixer";
+    const kb::audio::AudioMixerAsset emptyMixer{};
+    kb::tests::Require(kb::audio::AudioMixerAssetIO::Save(emptyMixerPath, emptyMixer),
+        "An empty audio mixer asset must save successfully");
+    std::error_code fileSizeError;
+    kb::tests::Require(std::filesystem::file_size(emptyMixerPath, fileSizeError) > 0U && !fileSizeError,
+        "An empty audio mixer asset must persist its format header");
+    const std::optional<kb::audio::AudioMixerAsset> loadedEmpty = kb::audio::AudioMixerAssetIO::Load(emptyMixerPath);
+    kb::tests::Require(loadedEmpty.has_value() && loadedEmpty->buses.empty() && loadedEmpty->snapshots.empty(),
+        "An empty audio mixer asset must round-trip through its versioned format");
+
+    const std::filesystem::path legacyMixerPath = TestRoot() / "LegacyMixer.kbmixer";
+    WriteTextFile(legacyMixerPath, "bus Legacy - 0.75 1\nsnapshot Default\nsnapshotVolume Default Legacy 0.5\n");
+    const std::optional<kb::audio::AudioMixerAsset> loadedLegacy = kb::audio::AudioMixerAssetIO::Load(legacyMixerPath);
+    kb::tests::Require(loadedLegacy.has_value() && loadedLegacy->FindBus("Legacy") != nullptr
+            && loadedLegacy->FindSnapshot("Default") != nullptr,
+        "A legacy headerless audio mixer asset must remain loadable");
+
+    const std::filesystem::path zeroByteMixerPath = TestRoot() / "ZeroByteMixer.kbmixer";
+    WriteTextFile(zeroByteMixerPath, {});
+    kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(zeroByteMixerPath).has_value(),
+        "A zero-byte audio mixer asset must be rejected as missing data");
+    WriteTextFile(TestRoot() / "CommentsOnlyMixer.kbmixer", "# no mixer records\n\t# still no data\n");
+    kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(TestRoot() / "CommentsOnlyMixer.kbmixer").has_value(),
+        "A comments-only legacy mixer must be rejected as missing data");
+    WriteTextFile(TestRoot() / "UnknownOnlyMixer.kbmixer", "futureRecord value\n");
+    kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(TestRoot() / "UnknownOnlyMixer.kbmixer").has_value(),
+        "An unknown-record-only legacy mixer must not masquerade as a valid empty asset");
+    WriteTextFile(TestRoot() / "FutureMixer.kbmixer", "kbmixer 2\n");
+    kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(TestRoot() / "FutureMixer.kbmixer").has_value(),
+        "An unsupported audio mixer format version must be rejected");
+    WriteTextFile(TestRoot() / "TabbedMixer.kbmixer", "kbmixer\t1\n");
+    kb::tests::Require(kb::audio::AudioMixerAssetIO::Load(TestRoot() / "TabbedMixer.kbmixer").has_value(),
+        "A tab-separated current audio mixer header must parse consistently");
+    WriteTextFile(TestRoot() / "TabbedFutureMixer.kbmixer", "kbmixer\t2\n");
+    kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(TestRoot() / "TabbedFutureMixer.kbmixer").has_value(),
+        "A tab-separated unsupported mixer version must not bypass header validation");
+
     kb::audio::AudioMixerAsset mixer;
     mixer.buses = {
-        kb::audio::AudioMixerBus{ .name = "Music", .parentBus = "", .volume = 0.8F, .mute = false },
+        kb::audio::AudioMixerBus{ .name = "Music", .parentBus = "", .volume = 0.123456791F, .mute = false },
         kb::audio::AudioMixerBus{ .name = "Sfx", .parentBus = "", .volume = 1.0F, .mute = false },
         kb::audio::AudioMixerBus{ .name = "Weapons", .parentBus = "Sfx", .volume = 0.6F, .mute = true },
     };
@@ -4250,6 +4288,8 @@ void RunAudioMixerAssetIOAndAccessTest() {
     const std::optional<kb::audio::AudioMixerAsset> loaded = kb::audio::AudioMixerAssetIO::Load(mixerPath);
     kb::tests::Require(loaded.has_value(), "Audio mixer asset load failed");
     kb::tests::Require(loaded->buses.size() == 3U && loaded->snapshots.size() == 2U, "Audio mixer asset did not round-trip its record counts");
+    kb::tests::Require(loaded->buses[0].volume == mixer.buses[0].volume,
+        "Audio mixer serialization must preserve an authored float exactly");
     const kb::audio::AudioMixerBus* weapons = loaded->FindBus("Weapons");
     kb::tests::Require(weapons != nullptr && weapons->parentBus == "Sfx" && kb::tests::NearlyEqual(weapons->volume, 0.6F) && weapons->mute,
         "Audio mixer bus fields did not round-trip");

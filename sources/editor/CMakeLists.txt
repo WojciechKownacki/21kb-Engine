@@ -15,6 +15,8 @@ add_executable(kb_editor WIN32
     src/app/EditorEditCommandPolicy.cpp
     src/app/EditorEditCommandInputHandler.cpp
     src/app/EditorAssetBrowserContextCommandExecutor.cpp
+    src/private/app/EditorAssetBrowserNativeCommandMap.hpp
+    src/app/EditorAssetBrowserNativeCommandMap.cpp
     src/app/EditorAudioAssetInspectorDropHandler.cpp
     src/app/EditorAnimatorAssetInspectorDropHandler.cpp
     src/app/EditorAssetBrowserContextMenuPointerHandler.cpp
@@ -597,6 +599,8 @@ add_executable(kb_editor WIN32
     src/private/scene/input/EditorInputAssetCatalog.hpp
     src/private/scene/input/EditorInputActionAuthoring.hpp
     src/private/scene/input/EditorInputMappingContextAuthoring.hpp
+    src/private/scene/audio/EditorAudioMixerAssetGateway.hpp
+    src/private/scene/audio/EditorAudioMixerAuthoring.hpp
     src/private/windowing/FloatingWindowControlActions.hpp
     src/private/windowing/FloatingWindowControlHitTester.hpp
     src/private/windowing/FloatingWindowControlInteractor.hpp
@@ -808,6 +812,8 @@ add_executable(kb_editor WIN32
     src/scene/input/EditorInputAssetCatalog.cpp
     src/scene/input/EditorInputActionAuthoring.cpp
     src/scene/input/EditorInputMappingContextAuthoring.cpp
+    src/scene/audio/EditorAudioMixerAssetGateway.cpp
+    src/scene/audio/EditorAudioMixerAuthoring.cpp
     src/windowing/FloatingWindowControlActions.cpp
     src/windowing/FloatingWindowFactory.cpp
     src/windowing/FloatingWindowHitTestResolver.cpp
@@ -986,6 +992,7 @@ if(BUILD_TESTING)
     add_executable(kb_editor_tests
         tests/EditorHierarchyTests.cpp
         tests/EditorAssetBrowserTests.cpp
+        tests/EditorAudioMixerAuthoringTests.cpp
         tests/EditorViewportPreviewTests.cpp
         tests/EditorMaterialGraphCookServiceTests.cpp
         tests/EditorDockingTests.cpp
@@ -1050,6 +1057,7 @@ if(BUILD_TESTING)
         src/assets/EditorAssetBrowserChromeHitTester.cpp
         src/assets/EditorAssetBrowserContentLayout.cpp
         src/assets/EditorAssetBrowserContextMenuState.cpp
+        src/app/EditorAssetBrowserNativeCommandMap.cpp
         src/assets/EditorAssetBrowserContextMenuLayout.cpp
         src/assets/EditorAssetBrowserContentHitTester.cpp
         src/assets/EditorAssetBrowserDeleteConfirmState.cpp
@@ -1086,6 +1094,8 @@ if(BUILD_TESTING)
         src/scene/EditorHierarchySelectionState.cpp
         src/scene/EditorPluginCatalog.cpp
         src/scene/EditorSceneAssetBrowserCommands.cpp
+        src/scene/audio/EditorAudioMixerAssetGateway.cpp
+        src/scene/audio/EditorAudioMixerAuthoring.cpp
         src/private/scene/EditorMeshImportArtifacts.hpp
         src/scene/EditorMeshImportArtifacts.cpp
         src/scene/EditorSceneSelectionPivot.cpp
