@@ -38,6 +38,8 @@
 #include "engine/ecs/ComponentSerialization.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
+#include "scene/asset/io/SceneAssetBinaryIO.hpp"
+#include "scene/asset/io/components/SceneAssetAudioComponentCodec.hpp"
 
 #include <array>
 #include <filesystem>
@@ -803,10 +805,113 @@ void RunSceneAudioSourceOutputBusValidationTest() {
             && kb::scene::AudioSourceOutputBus(component) == maximum,
         "Audio source output bus accepted an embedded null byte");
 
+    for (const std::string_view invalidToken : { std::string_view{ "-" }, std::string_view{ "two words" }, std::string_view{ "bad#bus" }, std::string_view{ "bad\tbus" } }) {
+        Require(!kb::scene::SetAudioSourceOutputBus(component, invalidToken)
+                && kb::scene::AudioSourceOutputBus(component) == maximum,
+            "Audio source output bus accepted an invalid mixer-name token or changed state after rejection");
+    }
+
     component.outputBusLength = kb::scene::AudioSourceComponent::MaxOutputBusBytes + 1U;
     Require(!kb::scene::IsAudioSourceOutputBusValid(component)
             && !kb::scene::AudioSourceOutputBus(component).empty(),
         "Corrupted audio source output bus length was exposed as master routing");
+}
+
+void RunSceneAudioSourcePersistenceContractTest() {
+    const kb::scene::AudioSourceComponent valid{};
+    Require(kb::scene::IsAudioSourceComponentPersistable(valid), "Default audio source should satisfy the authored persistence contract");
+
+    const auto requireInvalid = [&valid](auto mutate) {
+        kb::scene::AudioSourceComponent candidate = valid;
+        mutate(candidate);
+        Require(!kb::scene::IsAudioSourceComponentPersistable(candidate), "Invalid audio source authored state passed the persistence contract");
+    };
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.volume = std::numeric_limits<float>::quiet_NaN(); });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.volume = -0.01F; });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.pitch = std::numeric_limits<float>::infinity(); });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.pitch = 0.009F; });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.pan = 1.01F; });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.spatialBlend = -0.01F; });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.minDistance = 0.0F; });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.maxDistance = 0.5F; });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.rolloff = -0.01F; });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.dopplerFactor = std::numeric_limits<float>::infinity(); });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.attenuationModel = static_cast<kb::audio::AudioAttenuationModel>(99); });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) {
+        value.outputBus[0] = '#';
+        value.outputBus[1] = '\0';
+        value.outputBusLength = 1U;
+    });
+
+    const std::filesystem::path invalidSceneFile = TempRoot() / "InvalidAudioSource.21kbscene";
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Invalid Audio" });
+    kb::scene::AudioSourceComponent invalid = valid;
+    invalid.volume = std::numeric_limits<float>::quiet_NaN();
+    scene.Components().AudioSources().Set(entity, invalid);
+    Require(!kb::scene::SceneDocumentService::Save(scene, invalidSceneFile, "InvalidAudioSource"), "Scene writer accepted an invalid authored audio source");
+}
+
+[[nodiscard]] std::vector<std::uint8_t> EncodeAudioSourcePayload(
+    const kb::scene::AudioSourceComponent& source,
+    std::uint32_t fileVersion,
+    std::string_view outputBus = {}) {
+    std::vector<std::uint8_t> bytes;
+    kb::scene::SceneAssetBinaryIO::WriteUInt64(bytes, source.clipAssetId);
+    kb::scene::SceneAssetBinaryIO::WriteFloat(bytes, source.volume);
+    kb::scene::SceneAssetBinaryIO::WriteFloat(bytes, source.pitch);
+    kb::scene::SceneAssetBinaryIO::WriteBool(bytes, source.loop);
+    kb::scene::SceneAssetBinaryIO::WriteBool(bytes, source.spatial);
+    kb::scene::SceneAssetBinaryIO::WriteBool(bytes, source.autoplay);
+    if (fileVersion >= 2U) {
+        kb::scene::SceneAssetBinaryIO::WriteBool(bytes, source.enabled);
+        kb::scene::SceneAssetBinaryIO::WriteBool(bytes, source.mute);
+        kb::scene::SceneAssetBinaryIO::WriteFloat(bytes, source.pan);
+        kb::scene::SceneAssetBinaryIO::WriteFloat(bytes, source.spatialBlend);
+        kb::scene::SceneAssetBinaryIO::WriteUInt32(bytes, static_cast<std::uint32_t>(source.attenuationModel));
+        kb::scene::SceneAssetBinaryIO::WriteFloat(bytes, source.minDistance);
+        kb::scene::SceneAssetBinaryIO::WriteFloat(bytes, source.maxDistance);
+        kb::scene::SceneAssetBinaryIO::WriteFloat(bytes, source.rolloff);
+        kb::scene::SceneAssetBinaryIO::WriteFloat(bytes, source.dopplerFactor);
+    }
+    if (fileVersion >= 3U) {
+        kb::scene::SceneAssetBinaryIO::WriteString(bytes, outputBus);
+    }
+    return bytes;
+}
+
+[[nodiscard]] bool DecodeAudioSourcePayload(
+    const kb::scene::AudioSourceComponent& source,
+    std::uint32_t fileVersion,
+    kb::scene::AudioSourceComponent& decoded,
+    std::string_view outputBus = {}) {
+    kb::scene::SceneAssetBinaryIO::ByteReader reader{ EncodeAudioSourcePayload(source, fileVersion, outputBus) };
+    return kb::scene::SceneAssetAudioComponentCodec::ReadSource(reader, fileVersion, decoded) && reader.Exhausted();
+}
+
+void RunSceneAudioSourceBinaryReadValidationTest() {
+    kb::scene::AudioSourceComponent source{};
+    kb::scene::AudioSourceComponent decoded{};
+    Require(DecodeAudioSourcePayload(source, 1U, decoded) && kb::scene::IsAudioSourceComponentPersistable(decoded), "Backward-valid v1 audio source payload was rejected");
+    Require(DecodeAudioSourcePayload(source, 2U, decoded) && kb::scene::IsAudioSourceComponentPersistable(decoded), "Backward-valid v2 audio source payload was rejected");
+    Require(DecodeAudioSourcePayload(source, 3U, decoded, "FutureBus") && kb::scene::AudioSourceOutputBus(decoded) == "FutureBus", "Valid v3 unknown route token was rejected");
+
+    source.volume = std::numeric_limits<float>::quiet_NaN();
+    Require(!DecodeAudioSourcePayload(source, 1U, decoded), "v1 audio source reader accepted a non-finite volume");
+    source = {};
+    source.pan = std::numeric_limits<float>::infinity();
+    Require(!DecodeAudioSourcePayload(source, 2U, decoded), "v2 audio source reader accepted a non-finite pan");
+    source = {};
+    source.minDistance = 4.0F;
+    source.maxDistance = 2.0F;
+    Require(!DecodeAudioSourcePayload(source, 2U, decoded), "v2 audio source reader accepted an inverted distance range");
+    source = {};
+    source.attenuationModel = static_cast<kb::audio::AudioAttenuationModel>(99);
+    Require(!DecodeAudioSourcePayload(source, 2U, decoded), "v2 audio source reader accepted an unknown attenuation enum");
+    source = {};
+    Require(!DecodeAudioSourcePayload(source, 3U, decoded, "bad#bus"), "v3 audio source reader accepted an invalid output bus token");
+    const std::string overlongBus(kb::scene::AudioSourceComponent::MaxOutputBusBytes + 1U, 'B');
+    Require(!DecodeAudioSourcePayload(source, 3U, decoded, overlongBus), "v3 audio source reader accepted an overlong output bus token");
 }
 
 void RunSceneAudioSourcePrefabRoundTripTest() {
@@ -1169,6 +1274,8 @@ void RunProjectSceneTests() {
     RunSceneAudioListenerComponentReflectionSerializationTest();
     RunSceneAudioSourceComponentReflectionSerializationTest();
     RunSceneAudioSourceOutputBusValidationTest();
+    RunSceneAudioSourcePersistenceContractTest();
+    RunSceneAudioSourceBinaryReadValidationTest();
     RunSceneAudioListenerPrefabRoundTripTest();
     RunSceneAudioSourcePrefabRoundTripTest();
     RunSceneAudioDocumentLoadSemanticsTest();

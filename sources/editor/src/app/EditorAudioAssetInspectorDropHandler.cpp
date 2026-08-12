@@ -38,7 +38,8 @@ bool EditorAudioAssetInspectorDropHandler::Drop(
     }
 
     const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(*inspector, sceneContext, x, y);
-    if (hit.section != InspectorSectionId::AudioSource || hit.property != InspectorPropertyId::AudioSourceClip) {
+    if (hit.section != InspectorSectionId::AudioSource
+        || (hit.property != InspectorPropertyId::AudioSourceClip && hit.property != InspectorPropertyId::AudioSourceClipPicker)) {
         return false;
     }
 

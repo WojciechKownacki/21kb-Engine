@@ -1,29 +1,14 @@
 #pragma once
 
-#include <cstddef>
+#include "engine/audio/AudioRoutingContract.hpp"
+
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace kb::audio {
 
 inline constexpr const char* kAudioMixerAssetExtension = ".kbmixer";
 inline constexpr const char* kAudioMixerAssetType = "AudioMixer";
-inline constexpr std::size_t kMaxAudioMixerNameBytes = 255U;
-
-[[nodiscard]] inline bool IsAudioMixerNameTokenValid(std::string_view name) noexcept {
-    if (name.empty() || name == "-" || name.size() > kMaxAudioMixerNameBytes) {
-        return false;
-    }
-    for (const char character : name) {
-        const unsigned char code = static_cast<unsigned char>(character);
-        if (code <= 0x20U || character == '#') {
-            return false;
-        }
-    }
-    return true;
-}
-
 // LIB-147: one authored routing bus. `parentBus` names another authored bus this one
 // feeds into; empty means it feeds the implicit master output directly (the master bus is
 // NOT authored - it always exists as the backend engine's endpoint, exactly like

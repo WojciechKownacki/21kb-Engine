@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -1579,6 +1580,26 @@ void RunRegisteredPrefabFullComponentOverrideLifecycleTest() {
     kb::tests::Require(appliedRoute != nullptr && kb::scene::AudioSourceOutputBus(*appliedRoute) == "AppliedBus",
         "Full component prefab apply did not update future audio source routes");
 
+    const kb::scene::AudioSourceComponent validOverrideSource = *scene.Components().AudioSources().TryGet(entity);
+    const auto requireRejectedAudioOverride = [&](std::string_view propertyPath, auto mutate) {
+        kb::scene::AudioSourceComponent invalidSource = validOverrideSource;
+        mutate(invalidSource);
+        scene.Components().AudioSources().Set(entity, invalidSource);
+        kb::tests::Require(!scene.Prefabs().ApplyOverride(instance.Handle(), rootNode, std::string{ propertyPath }), "Prefab apply accepted an invalid audio source property override");
+    };
+    requireRejectedAudioOverride("audioSource.volume", [](kb::scene::AudioSourceComponent& value) { value.volume = std::numeric_limits<float>::quiet_NaN(); });
+    requireRejectedAudioOverride("audioSource.pitch", [](kb::scene::AudioSourceComponent& value) { value.pitch = std::numeric_limits<float>::infinity(); });
+    requireRejectedAudioOverride("audioSource.pan", [](kb::scene::AudioSourceComponent& value) { value.pan = 2.0F; });
+    requireRejectedAudioOverride("audioSource.minDistance", [](kb::scene::AudioSourceComponent& value) { value.minDistance = 0.0F; });
+    requireRejectedAudioOverride("audioSource.attenuationModel", [](kb::scene::AudioSourceComponent& value) { value.attenuationModel = static_cast<kb::audio::AudioAttenuationModel>(99); });
+    scene.Components().AudioSources().Set(entity, validOverrideSource);
+    const kb::scene::ScenePrefabInstance unchangedAudioInstance = scene.Prefabs().Instantiate(prefabHandle);
+    const kb::scene::AudioSourceComponent* unchangedAudioSource = scene.Components().AudioSources().TryGet(unchangedAudioInstance.ObjectAt(rootNode).Entity());
+    kb::tests::Require(unchangedAudioSource != nullptr && kb::scene::IsAudioSourceComponentPersistable(*unchangedAudioSource)
+            && kb::tests::NearlyEqual(unchangedAudioSource->volume, validOverrideSource.volume)
+            && kb::scene::AudioSourceOutputBus(*unchangedAudioSource) == kb::scene::AudioSourceOutputBus(validOverrideSource),
+        "Rejected audio source overrides changed the prefab baseline");
+
     scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{ .meshAssetId = 40, .materialAssetId = 77, .materialSlotAssetIds = { 42, 99 }, .materialSlotOverrideCount = 2 });
     kb::tests::Require(scene.Prefabs().ApplyOverride(instance.Handle(), rootNode, "meshRenderer.materialAssetId"), "Full component prefab apply did not accept mesh renderer materialAssetId");
     kb::tests::Require(scene.Prefabs().ApplyOverride(instance.Handle(), rootNode, "meshRenderer.materialSlotOverrideCount"), "Full component prefab apply did not accept mesh renderer material slot override count");
@@ -2275,6 +2296,60 @@ void RunPrefabApplyOverrideToAssetTest() {
     std::filesystem::remove(prefabPath, removeError);
 }
 
+void RunPrefabAudioSourceAssetValidationTest() {
+    const std::filesystem::path prefabPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_audio_validation.kbprefab";
+    std::error_code removeError;
+    std::filesystem::remove(prefabPath, removeError);
+
+    kb::scene::Scene scene;
+    kb::scene::AudioSourceComponent source{};
+    kb::tests::Require(kb::scene::SetAudioSourceOutputBus(source, "ValidBus"), "Audio prefab validation route fixture was invalid");
+    kb::scene::ScenePrefab prefab;
+    static_cast<void>(prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Audio Validation",
+        .components = kb::scene::ScenePrefabNodeComponents{ .audioSource = source },
+    }));
+    const kb::scene::ScenePrefabHandle handle = scene.Prefabs().Register("AudioValidationPrefab", std::move(prefab));
+    kb::tests::Require(handle.IsValid() && scene.Prefabs().Save(handle, prefabPath), "Valid audio prefab asset could not be saved");
+    const std::string validAsset = ReadTextFile(prefabPath);
+
+    const auto replaceField = [](std::string asset, std::string_view key, std::string_view value) {
+        const std::string prefix = std::string{ key } + '=';
+        const std::size_t begin = asset.find(prefix);
+        kb::tests::Require(begin != std::string::npos, "Audio prefab validation fixture field was missing");
+        const std::size_t valueBegin = begin + prefix.size();
+        const std::size_t end = asset.find('\n', valueBegin);
+        kb::tests::Require(end != std::string::npos, "Audio prefab validation fixture field was unterminated");
+        asset.replace(valueBegin, end - valueBegin, value);
+        return asset;
+    };
+    const std::array<std::pair<std::string_view, std::string_view>, 6U> invalidFields{ {
+        { "audioSource.volume", "nan" },
+        { "audioSource.pitch", "inf" },
+        { "audioSource.pan", "2" },
+        { "audioSource.minDistance", "0" },
+        { "audioSource.attenuationModel", "99" },
+        { "audioSource.outputBus", "bad#bus" },
+    } };
+    for (const auto& [key, value] : invalidFields) {
+        WriteTextFile(prefabPath, replaceField(validAsset, key, value));
+        kb::scene::Scene invalidScene;
+        kb::tests::Require(!invalidScene.Prefabs().Load(prefabPath).IsValid(), "Audio prefab parser accepted invalid authored source state");
+    }
+
+    WriteTextFile(prefabPath, validAsset);
+    kb::scene::Scene validScene;
+    const kb::scene::ScenePrefabHandle loaded = validScene.Prefabs().Load(prefabPath);
+    kb::tests::Require(loaded.IsValid(), "Backward-valid audio prefab asset was rejected after invalid fixtures");
+    const kb::scene::ScenePrefabInstance instance = validScene.Prefabs().Instantiate(loaded);
+    const kb::scene::AudioSourceComponent* restored = validScene.Components().AudioSources().TryGet(instance.RootObject().Entity());
+    kb::tests::Require(restored != nullptr && kb::scene::IsAudioSourceComponentPersistable(*restored)
+            && kb::scene::AudioSourceOutputBus(*restored) == "ValidBus",
+        "Valid audio prefab asset did not restore its persistable source state");
+
+    std::filesystem::remove(prefabPath, removeError);
+}
+
 // LIB-135: exercises the actual on-disk text asset round trip (ScenePrefabAssetComponentWriter
 // -> ScenePrefabAssetCameraParser), not just the in-memory ScenePrefabBakedData copy the other
 // Camera-bearing prefab tests use - proves viewportId/priority (and every pre-existing Camera
@@ -2921,6 +2996,7 @@ void RunScenePrefabInstantiationTests() {
     run("RunPrefabAddedRemovedMissingNodesStableAfterRefreshAndSaveTest", RunPrefabAddedRemovedMissingNodesStableAfterRefreshAndSaveTest);
     run("RunPrefabRefreshLargeInstanceSetTest", RunPrefabRefreshLargeInstanceSetTest);
     run("RunPrefabApplyOverrideToAssetTest", RunPrefabApplyOverrideToAssetTest);
+    run("RunPrefabAudioSourceAssetValidationTest", RunPrefabAudioSourceAssetValidationTest);
     run("RunPrefabCameraAssetSaveLoadRoundTripTest", RunPrefabCameraAssetSaveLoadRoundTripTest);
     run("RunPrefabLightAssetSaveLoadRoundTripTest", RunPrefabLightAssetSaveLoadRoundTripTest);
     run("RunPrefabAssetLoadMigratesMissingNodeStableIdsTest", RunPrefabAssetLoadMigratesMissingNodeStableIdsTest);
