@@ -535,6 +535,9 @@ template <typename T>
             return false;
         }
     }
+    if (!IsAudioSourceComponentPersistable(audioSource)) {
+        return false;
+    }
     components.audioSource = audioSource;
     return true;
 }

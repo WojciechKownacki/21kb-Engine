@@ -4,18 +4,24 @@
 #include "assets/EditorAssetBrowserState.hpp"
 #include "console/EditorConsoleState.hpp"
 #include "engine/assets/AssetManager.hpp"
+#include "engine/assets/AssetKind.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/audio/AudioMixerAsset.hpp"
+#include "engine/audio/AudioMixerAssetIO.hpp"
 #include "engine/audio/AudioSettings.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneHistory.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "inspection/InspectorAudioTextBuilder.hpp"
+#include "inspection/InspectorAudioComponentModel.hpp"
+#include "inspection/InspectorAudioScrubController.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorComponentLabelFormatter.hpp"
 #include "inspection/InspectorMeshRendererMaterialSlotModel.hpp"
@@ -36,6 +42,11 @@
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "scene/EditorSceneAudioAssetActions.hpp"
+#include "scene/EditorSceneCommandController.hpp"
+#include "scene/EditorSceneViewportStateStore.hpp"
+#include "scene/EditorHierarchyExpansionState.hpp"
+#include "scene/EditorHierarchySearchState.hpp"
+#include "scene/EditorHierarchySelectionState.hpp"
 #include "scene/EditorSceneMaterialAssetActions.hpp"
 #include "scene/EditorSceneMeshAssetActions.hpp"
 #include "scene/material/EditorMaterialReferenceFinder.hpp"
@@ -62,7 +73,9 @@
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -180,6 +193,11 @@ void RunInspectorTextEditDirtyStateTest() {
     kb::editor::tests::Require(state.TagsDropdownHover() == 2, "Tags dropdown should retain its hovered option");
     state.CloseTagsDropdown();
     kb::editor::tests::Require(!state.IsTagsDropdownOpen(), "Tags dropdown should close on request");
+
+    state.BeginIntegerDrag(kb::editor::InspectorPropertyId::AudioListenerLocalUser, 10, 20);
+    kb::editor::tests::Require(state.IsDraggingFloat(), "Inspector integer scrub should enter shared numeric drag state");
+    state.EndFloatDrag();
+    kb::editor::tests::Require(!state.IsDraggingFloat(), "Inspector integer scrub should clear its drag state");
 }
 
 void RunAudioComponentCatalogTest() {
@@ -220,18 +238,33 @@ void RunAudioInspectorTextTest() {
         .loop = true,
         .spatial = false,
         .autoplay = true,
+        .enabled = false,
+        .mute = true,
+        .pan = -0.4F,
+        .spatialBlend = 0.3F,
         .attenuationModel = kb::audio::AudioAttenuationModel::Linear,
         .minDistance = 2.0F,
         .maxDistance = 25.0F,
+        .rolloff = 0.6F,
+        .dopplerFactor = 1.5F,
     };
+    kb::editor::tests::Require(kb::scene::SetAudioSourceOutputBus(source, "Dialogue"), "Audio inspector text route fixture should be valid");
     kb::editor::InspectorAudioSourceTextBuilder{}.Append(text, source);
-    kb::editor::InspectorAudioListenerTextBuilder{}.Append(text, kb::scene::AudioListenerComponent{ .primary = false, .enabled = true });
+    kb::editor::InspectorAudioListenerTextBuilder{}.Append(text, kb::scene::AudioListenerComponent{ .priority = -7, .localUser = kb::input::LocalUserId{ 3U }, .primary = false, .enabled = true });
 
     kb::editor::tests::Require(text.find("Audio Source") != std::string::npos, "Inspector text should include Audio Source");
     kb::editor::tests::Require(text.find("Clip: 123") != std::string::npos, "Inspector text should include audio clip id");
     kb::editor::tests::Require(text.find("Attenuation: Linear") != std::string::npos, "Inspector text should include attenuation model");
+    kb::editor::tests::Require(text.find("Mute: true") != std::string::npos && text.find("Pan: -0.40") != std::string::npos && text.find("Spatial Blend: 0.30") != std::string::npos, "Inspector text should include independent source controls");
+    kb::editor::tests::Require(text.find("Rolloff: 0.60") != std::string::npos && text.find("Doppler Factor: 1.50") != std::string::npos && text.find("Output Bus: Dialogue") != std::string::npos, "Inspector text should include source distance and output controls");
     kb::editor::tests::Require(text.find("Audio Listener") != std::string::npos, "Inspector text should include Audio Listener");
+    kb::editor::tests::Require(text.find("Priority: -7") != std::string::npos && text.find("Local User: 3") != std::string::npos, "Inspector text should include listener routing controls");
     kb::editor::tests::Require(kb::editor::InspectorComponentLabelFormatter::AudioAttenuationModelName(kb::audio::AudioAttenuationModel::Exponential) == std::string_view{ "Exponential" }, "Audio attenuation label should resolve");
+
+    source.outputBusLength = kb::scene::AudioSourceComponent::MaxOutputBusBytes + 1U;
+    std::string corrupt;
+    kb::editor::InspectorAudioSourceTextBuilder{}.Append(corrupt, source);
+    kb::editor::tests::Require(corrupt.find("Output Bus: (invalid)") != std::string::npos, "Inspector text should diagnose corrupt output bus storage safely");
 }
 
 void RunMaterialTextureSlotDiagnosticTest() {
@@ -269,14 +302,538 @@ void RunAudioAssetAssignmentTest() {
     };
     kb::editor::tests::Require(kb::editor::EditorSceneAudioAssetActions::IsAudioAsset(audioMetadata), "Audio asset action should accept imported audio assets");
     kb::editor::tests::Require(!kb::editor::EditorSceneAudioAssetActions::IsAudioAsset(meshMetadata), "Audio asset action should reject non-audio assets");
+    kb::editor::tests::Require(!kb::editor::EditorSceneAudioAssetActions::IsAudioAsset(kb::assets::AssetMetadata{ .type = "RenderMesh", .importCategory = "Audio" }), "Audio asset action should reject a wrong metadata type even when its category is misleading");
 
     kb::scene::Scene scene;
+    static_cast<void>(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+        .id = kb::assets::AssetId{ 123U },
+        .type = "ImportedAsset",
+        .importCategory = "Audio",
+        .name = "Drip",
+        .virtualPath = "/Game/Audio/Drip.wav",
+    }));
+    static_cast<void>(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+        .id = kb::assets::AssetId{ 124U },
+        .type = "RenderMesh",
+        .importCategory = "Mesh",
+        .name = "Cube",
+        .virtualPath = "/Game/Cube.asset",
+    }));
     const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Emitter" });
     scene.Components().AudioSources().Set(entity, kb::scene::AudioSourceComponent{});
     kb::editor::tests::Require(kb::editor::EditorSceneAudioAssetActions::AssignAudioClip(scene, entity, kb::assets::AssetId{ 123 }), "Audio asset action should assign a clip to an Audio Source");
 
     const kb::scene::AudioSourceComponent* source = scene.Components().AudioSources().TryGet(entity);
     kb::editor::tests::Require(source != nullptr && source->clipAssetId == 123, "Audio Source clip asset id was not assigned");
+    kb::editor::tests::Require(!kb::editor::EditorSceneAudioAssetActions::AssignAudioClip(scene, entity, kb::assets::AssetId{ 123 }) && source->clipAssetId == 123U, "Audio Source should report an identical clip assignment as a no-op");
+    kb::editor::tests::Require(!kb::editor::EditorSceneAudioAssetActions::AssignAudioClip(scene, entity, kb::assets::AssetId{ 124U }) && source->clipAssetId == 123U, "Audio Source should reject non-audio assets without changing its clip");
+    kb::editor::tests::Require(!kb::editor::EditorSceneAudioAssetActions::AssignAudioClip(scene, entity, kb::assets::AssetId{ 999U }) && source->clipAssetId == 123U, "Audio Source should reject missing assets without changing its clip");
+    kb::editor::tests::Require(kb::editor::EditorSceneAudioAssetActions::AssignAudioClip(scene, entity, {}) && source->clipAssetId == 0U, "Audio Source should support clearing its clip safely");
+    kb::editor::tests::Require(!kb::editor::EditorSceneAudioAssetActions::AssignAudioClip(scene, entity, {}) && source->clipAssetId == 0U, "Audio Source should report clearing an already empty clip as a no-op");
+}
+
+void RunAudioInspectorComponentModelTest() {
+    using kb::editor::InspectorAudioComponentModel;
+    using kb::editor::InspectorAudioControlKind;
+    using kb::editor::InspectorHitKind;
+    using kb::editor::InspectorAudioRouteStatus;
+    using kb::editor::InspectorPropertyId;
+
+    const std::array<std::pair<InspectorPropertyId, InspectorAudioControlKind>, 17U> expectedSourceRows{ {
+        { InspectorPropertyId::AudioSourceClip, InspectorAudioControlKind::Asset },
+        { InspectorPropertyId::AudioSourceClipClear, InspectorAudioControlKind::Action },
+        { InspectorPropertyId::AudioSourceVolume, InspectorAudioControlKind::Float },
+        { InspectorPropertyId::AudioSourcePitch, InspectorAudioControlKind::Float },
+        { InspectorPropertyId::AudioSourceEnabled, InspectorAudioControlKind::Bool },
+        { InspectorPropertyId::AudioSourceAutoplay, InspectorAudioControlKind::Bool },
+        { InspectorPropertyId::AudioSourceLoop, InspectorAudioControlKind::Bool },
+        { InspectorPropertyId::AudioSourceMute, InspectorAudioControlKind::Bool },
+        { InspectorPropertyId::AudioSourceSpatial, InspectorAudioControlKind::Bool },
+        { InspectorPropertyId::AudioSourcePan, InspectorAudioControlKind::Float },
+        { InspectorPropertyId::AudioSourceSpatialBlend, InspectorAudioControlKind::Float },
+        { InspectorPropertyId::AudioSourceAttenuation, InspectorAudioControlKind::Enum },
+        { InspectorPropertyId::AudioSourceMinDistance, InspectorAudioControlKind::Float },
+        { InspectorPropertyId::AudioSourceMaxDistance, InspectorAudioControlKind::Float },
+        { InspectorPropertyId::AudioSourceRolloff, InspectorAudioControlKind::Float },
+        { InspectorPropertyId::AudioSourceDopplerFactor, InspectorAudioControlKind::Float },
+        { InspectorPropertyId::AudioSourceOutputBus, InspectorAudioControlKind::Route },
+    } };
+    const std::span<const kb::editor::InspectorAudioRow> sourceRows = InspectorAudioComponentModel::SourceRows();
+    kb::editor::tests::Require(sourceRows.size() == expectedSourceRows.size(), "Audio Source Inspector should expose every authored field exactly once");
+    for (std::size_t index = 0U; index < expectedSourceRows.size(); ++index) {
+        kb::editor::tests::Require(sourceRows[index].property == expectedSourceRows[index].first && sourceRows[index].kind == expectedSourceRows[index].second && !sourceRows[index].label.empty(), "Audio Source Inspector row order, kind, or label is inconsistent");
+    }
+    kb::editor::tests::Require(sourceRows.front().pickerProperty == InspectorPropertyId::AudioSourceClipPicker, "Audio clip row should use the shared asset picker affordance");
+    kb::editor::tests::Require(InspectorAudioComponentModel::HitKindForControl(InspectorAudioControlKind::Asset) == InspectorHitKind::TextField
+            && InspectorAudioComponentModel::HitKindForControl(InspectorAudioControlKind::Float) == InspectorHitKind::FloatField
+            && InspectorAudioComponentModel::HitKindForControl(InspectorAudioControlKind::Bool) == InspectorHitKind::BoolField
+            && InspectorAudioComponentModel::HitKindForControl(InspectorAudioControlKind::Enum) == InspectorHitKind::TextField
+            && InspectorAudioComponentModel::HitKindForControl(InspectorAudioControlKind::Integer) == InspectorHitKind::FloatField
+            && InspectorAudioComponentModel::HitKindForControl(InspectorAudioControlKind::Route) == InspectorHitKind::TextField
+            && InspectorAudioComponentModel::HitKindForControl(InspectorAudioControlKind::Action) == InspectorHitKind::TextField,
+        "Audio Inspector row controls should map to the hit kinds used by interaction");
+    kb::editor::tests::Require(InspectorAudioComponentModel::HasRemoveControl(kb::editor::InspectorSectionId::AudioSource)
+            && InspectorAudioComponentModel::HasRemoveControl(kb::editor::InspectorSectionId::AudioListener)
+            && !InspectorAudioComponentModel::HasRemoveControl(kb::editor::InspectorSectionId::General),
+        "Audio component sections should expose their shared remove affordance only on removable sections");
+
+    const std::array<std::pair<InspectorPropertyId, InspectorAudioControlKind>, 4U> expectedListenerRows{ {
+        { InspectorPropertyId::AudioListenerPriority, InspectorAudioControlKind::Integer },
+        { InspectorPropertyId::AudioListenerLocalUser, InspectorAudioControlKind::Integer },
+        { InspectorPropertyId::AudioListenerPrimary, InspectorAudioControlKind::Bool },
+        { InspectorPropertyId::AudioListenerEnabled, InspectorAudioControlKind::Bool },
+    } };
+    const std::span<const kb::editor::InspectorAudioRow> listenerRows = InspectorAudioComponentModel::ListenerRows();
+    kb::editor::tests::Require(listenerRows.size() == expectedListenerRows.size(), "Audio Listener Inspector should expose every authored field exactly once");
+    for (std::size_t index = 0U; index < expectedListenerRows.size(); ++index) {
+        kb::editor::tests::Require(listenerRows[index].property == expectedListenerRows[index].first && listenerRows[index].kind == expectedListenerRows[index].second && !listenerRows[index].label.empty(), "Audio Listener Inspector row order, kind, or label is inconsistent");
+    }
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Audio Inspector" });
+    scene.Components().AudioSources().Set(entity, kb::scene::AudioSourceComponent{});
+    scene.Components().AudioListeners().Set(entity, kb::scene::AudioListenerComponent{});
+    const auto source = [&]() -> const kb::scene::AudioSourceComponent& {
+        const kb::scene::AudioSourceComponent* value = scene.Components().AudioSources().TryGet(entity);
+        kb::editor::tests::Require(value != nullptr, "Audio Source Inspector model lost its component");
+        return *value;
+    };
+    const auto listener = [&]() -> const kb::scene::AudioListenerComponent& {
+        const kb::scene::AudioListenerComponent* value = scene.Components().AudioListeners().TryGet(entity);
+        kb::editor::tests::Require(value != nullptr, "Audio Listener Inspector model lost its component");
+        return *value;
+    };
+
+    const std::array<InspectorPropertyId, 5U> sourceBools{
+        InspectorPropertyId::AudioSourceEnabled,
+        InspectorPropertyId::AudioSourceAutoplay,
+        InspectorPropertyId::AudioSourceLoop,
+        InspectorPropertyId::AudioSourceMute,
+        InspectorPropertyId::AudioSourceSpatial,
+    };
+    for (const InspectorPropertyId property : sourceBools) {
+        kb::editor::tests::Require(InspectorAudioComponentModel::Toggle(scene, entity, property), "Audio Source Inspector bool control should mutate its component");
+    }
+    kb::editor::tests::Require(!source().enabled && source().autoplay && source().loop && source().mute && !source().spatial, "Audio Source Inspector bool controls mutated the wrong fields");
+    kb::editor::tests::Require(InspectorAudioComponentModel::Toggle(scene, entity, InspectorPropertyId::AudioListenerPrimary) && InspectorAudioComponentModel::Toggle(scene, entity, InspectorPropertyId::AudioListenerEnabled), "Audio Listener Inspector bool controls should mutate their component");
+    kb::editor::tests::Require(!listener().primary && !listener().enabled, "Audio Listener Inspector bool controls mutated the wrong fields");
+
+    struct FloatCase {
+        InspectorPropertyId property;
+        float valid;
+        float invalid;
+    };
+    const std::array<FloatCase, 8U> floatCases{ {
+        { InspectorPropertyId::AudioSourceVolume, 0.25F, -0.01F },
+        { InspectorPropertyId::AudioSourcePitch, 0.5F, 0.009F },
+        { InspectorPropertyId::AudioSourcePan, -0.75F, 1.01F },
+        { InspectorPropertyId::AudioSourceSpatialBlend, 0.4F, -0.01F },
+        { InspectorPropertyId::AudioSourceMinDistance, 2.0F, 501.0F },
+        { InspectorPropertyId::AudioSourceMaxDistance, 20.0F, 1.0F },
+        { InspectorPropertyId::AudioSourceRolloff, 0.6F, -0.01F },
+        { InspectorPropertyId::AudioSourceDopplerFactor, 1.5F, -0.01F },
+    } };
+    for (const FloatCase& test : floatCases) {
+        kb::editor::tests::Require(InspectorAudioComponentModel::ApplyFloat(scene, entity, test.property, test.valid), "Audio Source Inspector float control should accept an in-contract value");
+        float before = 0.0F;
+        float after = 0.0F;
+        kb::editor::tests::Require(InspectorAudioComponentModel::ReadFloat(scene, entity, test.property, before), "Audio Source Inspector should read back its float control");
+        kb::editor::tests::Require(!InspectorAudioComponentModel::ApplyFloat(scene, entity, test.property, test.valid), "Audio Source Inspector should report an identical float edit as a no-op");
+        kb::editor::tests::Require(!InspectorAudioComponentModel::ApplyFloat(scene, entity, test.property, test.invalid), "Audio Source Inspector float control should reject an out-of-contract value");
+        kb::editor::tests::Require(InspectorAudioComponentModel::ReadFloat(scene, entity, test.property, after) && after == before, "Rejected Audio Source float authoring should leave state unchanged");
+        kb::editor::tests::Require(!InspectorAudioComponentModel::ApplyFloat(scene, entity, test.property, std::numeric_limits<float>::quiet_NaN()) && InspectorAudioComponentModel::ReadFloat(scene, entity, test.property, after) && after == before, "Audio Source Inspector float control should reject non-finite authoring without changing state");
+    }
+    kb::editor::tests::Require(!InspectorAudioComponentModel::ApplyText(scene, entity, InspectorPropertyId::AudioSourceVolume, {}) && source().volume == 0.25F, "Audio Source Inspector should reject empty numeric text");
+    kb::editor::tests::Require(!InspectorAudioComponentModel::ApplyText(scene, entity, InspectorPropertyId::AudioSourceVolume, "broken") && source().volume == 0.25F, "Audio Source Inspector should reject malformed numeric text");
+    kb::editor::tests::Require(!InspectorAudioComponentModel::ApplyText(scene, entity, InspectorPropertyId::AudioSourceVolume, "inf") && source().volume == 0.25F, "Audio Source Inspector should reject non-finite numeric text");
+    kb::scene::AudioSourceComponent* invalidCandidate = scene.Components().AudioSources().TryGet(entity);
+    invalidCandidate->minDistance = 3.0F;
+    invalidCandidate->maxDistance = 2.0F;
+    kb::editor::tests::Require(!InspectorAudioComponentModel::ApplyFloat(scene, entity, InspectorPropertyId::AudioSourceVolume, 1.0F) && source().volume == 0.25F, "Audio Source Inspector should reject a candidate whose cross-field range remains invalid");
+    invalidCandidate->minDistance = 2.0F;
+    invalidCandidate->maxDistance = 20.0F;
+
+    kb::editor::tests::Require(InspectorAudioComponentModel::ApplyInteger(scene, entity, InspectorPropertyId::AudioListenerPriority, std::numeric_limits<std::int32_t>::min()), "Listener priority should accept the full signed 32-bit range");
+    kb::editor::tests::Require(InspectorAudioComponentModel::ApplyInteger(scene, entity, InspectorPropertyId::AudioListenerPriority, std::numeric_limits<std::int32_t>::max()), "Listener priority should accept the full signed 32-bit range upper bound");
+    kb::editor::tests::Require(!InspectorAudioComponentModel::ApplyInteger(scene, entity, InspectorPropertyId::AudioListenerPriority, std::numeric_limits<std::int32_t>::max()), "Listener priority should report an identical edit as a no-op");
+    kb::editor::tests::Require(!InspectorAudioComponentModel::ApplyInteger(scene, entity, InspectorPropertyId::AudioListenerPriority, static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()) + 1LL) && listener().priority == std::numeric_limits<std::int32_t>::max(), "Listener priority should reject overflow without changing state");
+    kb::editor::tests::Require(InspectorAudioComponentModel::ApplyInteger(scene, entity, InspectorPropertyId::AudioListenerLocalUser, std::numeric_limits<std::uint32_t>::max()), "Listener local user should accept the full unsigned 32-bit range");
+    kb::editor::tests::Require(!InspectorAudioComponentModel::ApplyInteger(scene, entity, InspectorPropertyId::AudioListenerLocalUser, std::numeric_limits<std::uint32_t>::max()), "Listener local user should report an identical edit as a no-op");
+    kb::editor::tests::Require(!InspectorAudioComponentModel::ApplyInteger(scene, entity, InspectorPropertyId::AudioListenerLocalUser, -1) && listener().localUser.value == std::numeric_limits<std::uint32_t>::max(), "Listener local user should reject negative authoring without changing state");
+    kb::editor::tests::Require(!InspectorAudioComponentModel::ApplyText(scene, entity, InspectorPropertyId::AudioListenerLocalUser, "4294967296") && listener().localUser.value == std::numeric_limits<std::uint32_t>::max(), "Listener local user text should reject overflow without changing state");
+
+    kb::editor::tests::Require(source().attenuationModel == kb::audio::AudioAttenuationModel::Inverse, "Audio attenuation fixture should start at Inverse");
+    kb::editor::tests::Require(InspectorAudioComponentModel::CycleAttenuation(scene, entity) && source().attenuationModel == kb::audio::AudioAttenuationModel::Linear, "Audio attenuation control should cycle to Linear");
+    kb::editor::tests::Require(InspectorAudioComponentModel::CycleAttenuation(scene, entity) && source().attenuationModel == kb::audio::AudioAttenuationModel::Exponential, "Audio attenuation control should cycle to Exponential");
+    kb::editor::tests::Require(InspectorAudioComponentModel::CycleAttenuation(scene, entity) && source().attenuationModel == kb::audio::AudioAttenuationModel::None, "Audio attenuation control should cycle to None");
+    kb::editor::tests::Require(InspectorAudioComponentModel::CycleAttenuation(scene, entity) && source().attenuationModel == kb::audio::AudioAttenuationModel::Inverse, "Audio attenuation control should cycle back to Inverse");
+
+    const kb::editor::InspectorAudioRouteChoices noMixer = InspectorAudioComponentModel::RouteChoices(scene);
+    kb::editor::tests::Require(noMixer.status == InspectorAudioRouteStatus::MasterOnly && noMixer.names.size() == 1U && noMixer.names.front().empty(), "Audio output control should offer only master without an active mixer");
+    kb::editor::tests::Require(!InspectorAudioComponentModel::CycleOutputBus(scene, entity) && kb::scene::AudioSourceOutputBus(source()).empty(), "Audio output control should avoid recording a no-op when master is the only route");
+    kb::editor::tests::Require(kb::scene::SetAudioSourceOutputBus(*scene.Components().AudioSources().TryGet(entity), "Stale"), "Stale audio route fixture should fit component storage");
+    kb::editor::tests::Require(InspectorAudioComponentModel::OutputBusDisplay(scene, source()) == "Stale (missing)", "Audio output control should visibly diagnose a stale route");
+    kb::editor::tests::Require(!InspectorAudioComponentModel::SetOutputBus(scene, entity, "Unknown") && kb::scene::AudioSourceOutputBus(source()) == "Stale", "Audio output control should not save an unknown route");
+    kb::editor::tests::Require(InspectorAudioComponentModel::CycleOutputBus(scene, entity) && kb::scene::AudioSourceOutputBus(source()).empty(), "Audio output control should recover a stale route to master");
+
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 700U);
+    const kb::editor::InspectorAudioRouteChoices missingMixer = InspectorAudioComponentModel::RouteChoices(scene);
+    kb::editor::tests::Require(missingMixer.status == InspectorAudioRouteStatus::Unavailable && missingMixer.names.size() == 1U, "Audio output control should expose unavailable active mixer state without inventing buses");
+    static_cast<void>(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+        .id = kb::assets::AssetId{ 701U },
+        .type = "RenderMesh",
+        .name = "Wrong Mixer Type",
+        .physicalPath = std::filesystem::temp_directory_path() / "wrong-mixer.asset",
+    }));
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 701U);
+    kb::editor::tests::Require(InspectorAudioComponentModel::RouteChoices(scene).status == InspectorAudioRouteStatus::Unavailable, "Audio output control should reject active assets with the wrong type");
+    static_cast<void>(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+        .id = kb::assets::AssetId{ 703U },
+        .type = kb::audio::kAudioMixerAssetType,
+        .name = "Unavailable Mixer",
+        .physicalPath = std::filesystem::temp_directory_path() / "missing-audio-inspector-mixer.kbmixer",
+    }));
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 703U);
+    kb::editor::tests::Require(InspectorAudioComponentModel::RouteChoices(scene).status == InspectorAudioRouteStatus::Unavailable, "Audio output control should expose a mixer load failure without inventing buses");
+
+    const std::filesystem::path mixerFile = std::filesystem::temp_directory_path() / "audio-inspector-routing.kbmixer";
+    const std::filesystem::path sceneFile = std::filesystem::temp_directory_path() / "audio-inspector-roundtrip.21kbscene";
+    std::error_code cleanupError;
+    std::filesystem::remove(mixerFile, cleanupError);
+    std::filesystem::remove(sceneFile, cleanupError);
+    std::filesystem::remove(sceneFile.string() + ".meta", cleanupError);
+    kb::audio::AudioMixerAsset mixer;
+    mixer.buses.push_back(kb::audio::AudioMixerBus{ .name = "Dialogue" });
+    mixer.buses.push_back(kb::audio::AudioMixerBus{ .name = "Effects" });
+    kb::editor::tests::Require(kb::audio::AudioMixerAssetIO::Save(mixerFile, mixer), "Audio Inspector mixer fixture should save");
+    static_cast<void>(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+        .id = kb::assets::AssetId{ 702U },
+        .type = kb::audio::kAudioMixerAssetType,
+        .name = "Scene Mixer",
+        .virtualPath = "/Game/Audio/SceneMixer.kbmixer",
+        .physicalPath = mixerFile,
+        .runtimeLoadable = true,
+    }));
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 702U);
+    const kb::editor::InspectorAudioRouteChoices routes = InspectorAudioComponentModel::RouteChoices(scene);
+    kb::editor::tests::Require(routes.status == InspectorAudioRouteStatus::Available && routes.names == std::vector<std::string>{ "", "Dialogue", "Effects" }, "Audio output control should expose master followed by authored mixer buses");
+    kb::editor::tests::Require(InspectorAudioComponentModel::SetOutputBus(scene, entity, "Dialogue") && kb::scene::AudioSourceOutputBus(source()) == "Dialogue", "Audio output control should save an authored mixer bus");
+    kb::editor::tests::Require(!InspectorAudioComponentModel::SetOutputBus(scene, entity, "Dialogue") && kb::scene::AudioSourceOutputBus(source()) == "Dialogue", "Audio output control should report an identical route as a no-op");
+    kb::editor::tests::Require(!InspectorAudioComponentModel::SetOutputBus(scene, entity, "Unknown") && kb::scene::AudioSourceOutputBus(source()) == "Dialogue", "Audio output control should preserve its route after rejecting an unknown bus");
+
+    kb::scene::AudioSourceComponent corrupt = source();
+    corrupt.outputBusLength = kb::scene::AudioSourceComponent::MaxOutputBusBytes + 1U;
+    kb::editor::tests::Require(InspectorAudioComponentModel::OutputBusDisplay(scene, corrupt) == "(invalid)", "Audio output control should safely diagnose corrupt component storage");
+
+    static_cast<void>(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+        .id = kb::assets::AssetId{ 800U },
+        .type = "AudioClip",
+        .name = "Voice",
+        .virtualPath = "/Game/Audio/Voice.wav",
+    }));
+    static_cast<void>(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+        .id = kb::assets::AssetId{ 801U },
+        .type = "RenderMesh",
+        .name = "Geometry",
+        .virtualPath = "/Game/Geometry.asset",
+    }));
+    kb::editor::tests::Require(InspectorAudioComponentModel::ClipDisplay(scene, kb::scene::AudioSourceComponent{}) == "(none)", "Audio clip control should display an empty assignment safely");
+    kb::scene::AudioSourceComponent missingClip{ .clipAssetId = 999U };
+    kb::editor::tests::Require(InspectorAudioComponentModel::ClipDisplay(scene, missingClip) == "(missing)", "Audio clip control should diagnose a missing assignment");
+    kb::scene::AudioSourceComponent wrongClip{ .clipAssetId = 801U };
+    kb::editor::tests::Require(InspectorAudioComponentModel::ClipDisplay(scene, wrongClip) == "(invalid audio asset)", "Audio clip control should diagnose a non-audio assignment");
+    kb::editor::tests::Require(kb::editor::EditorSceneAudioAssetActions::AssignAudioClip(scene, entity, kb::assets::AssetId{ 800U }) && InspectorAudioComponentModel::ClipDisplay(scene, source()) == "Voice", "Audio clip control should assign and display a valid audio asset");
+    kb::editor::tests::Require(!kb::editor::EditorSceneAudioAssetActions::AssignAudioClip(scene, entity, kb::assets::AssetId{ 800U }) && source().clipAssetId == 800U, "Audio clip control should report an identical assignment as a no-op");
+
+    kb::editor::tests::Require(kb::scene::SceneDocumentService::Save(scene, sceneFile, "AudioInspector"), "Audio Inspector values should save with the scene");
+    kb::scene::Scene loaded;
+    kb::editor::tests::Require(kb::scene::SceneDocumentService::LoadFileIntoScene(loaded, sceneFile), "Audio Inspector values should reload with the scene");
+    const std::vector<kb::scene::SceneEntity> loadedRoots = loaded.Hierarchy().RootEntities();
+    kb::editor::tests::Require(loadedRoots.size() == 1U, "Audio Inspector roundtrip should restore one entity");
+    const kb::scene::AudioSourceComponent* loadedSource = loaded.Components().AudioSources().TryGet(loadedRoots.front());
+    const kb::scene::AudioListenerComponent* loadedListener = loaded.Components().AudioListeners().TryGet(loadedRoots.front());
+    kb::editor::tests::Require(loadedSource != nullptr && loadedSource->clipAssetId == 800U && loadedSource->volume == 0.25F && loadedSource->pitch == 0.5F && !loadedSource->enabled && loadedSource->autoplay && loadedSource->loop && loadedSource->mute && !loadedSource->spatial && loadedSource->pan == -0.75F && loadedSource->spatialBlend == 0.4F && loadedSource->attenuationModel == kb::audio::AudioAttenuationModel::Inverse && loadedSource->minDistance == 2.0F && loadedSource->maxDistance == 20.0F && loadedSource->rolloff == 0.6F && loadedSource->dopplerFactor == 1.5F && kb::scene::AudioSourceOutputBus(*loadedSource) == "Dialogue", "Audio Source Inspector values should survive save and reload");
+    kb::editor::tests::Require(loadedListener != nullptr && loadedListener->priority == std::numeric_limits<std::int32_t>::max() && loadedListener->localUser.value == std::numeric_limits<std::uint32_t>::max() && !loadedListener->primary && !loadedListener->enabled, "Audio Listener Inspector values should survive save and reload");
+
+    const auto currentEntity = [&scene]() {
+        const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+        kb::editor::tests::Require(roots.size() == 1U, "Audio Inspector history should retain one entity");
+        return roots.front();
+    };
+    kb::editor::tests::Require(scene.History().Record("Toggle Audio Mute") && InspectorAudioComponentModel::Toggle(scene, currentEntity(), InspectorPropertyId::AudioSourceMute), "Audio Inspector bool edit should record history");
+    const bool mutedAfterEdit = scene.Components().AudioSources().TryGet(currentEntity())->mute;
+    kb::editor::tests::Require(scene.History().Undo() && scene.Components().AudioSources().TryGet(currentEntity())->mute != mutedAfterEdit, "Audio Inspector bool edit should undo");
+    kb::editor::tests::Require(scene.History().Redo() && scene.Components().AudioSources().TryGet(currentEntity())->mute == mutedAfterEdit, "Audio Inspector bool edit should redo");
+
+    const float volumeBefore = scene.Components().AudioSources().TryGet(currentEntity())->volume;
+    kb::editor::tests::Require(scene.History().Record("Edit Audio Volume") && InspectorAudioComponentModel::ApplyFloat(scene, currentEntity(), InspectorPropertyId::AudioSourceVolume, 2.0F), "Audio Inspector float edit should record history");
+    kb::editor::tests::Require(scene.History().Undo() && scene.Components().AudioSources().TryGet(currentEntity())->volume == volumeBefore, "Audio Inspector float edit should undo");
+    kb::editor::tests::Require(scene.History().Redo() && scene.Components().AudioSources().TryGet(currentEntity())->volume == 2.0F, "Audio Inspector float edit should redo");
+
+    const std::int32_t priorityBefore = scene.Components().AudioListeners().TryGet(currentEntity())->priority;
+    kb::editor::tests::Require(scene.History().Record("Edit Listener Priority") && InspectorAudioComponentModel::ApplyInteger(scene, currentEntity(), InspectorPropertyId::AudioListenerPriority, -12), "Audio Inspector integer edit should record history");
+    kb::editor::tests::Require(scene.History().Undo() && scene.Components().AudioListeners().TryGet(currentEntity())->priority == priorityBefore, "Audio Inspector integer edit should undo");
+    kb::editor::tests::Require(scene.History().Redo() && scene.Components().AudioListeners().TryGet(currentEntity())->priority == -12, "Audio Inspector integer edit should redo");
+
+    const kb::audio::AudioAttenuationModel attenuationBefore = scene.Components().AudioSources().TryGet(currentEntity())->attenuationModel;
+    kb::editor::tests::Require(scene.History().Record("Edit Audio Attenuation") && InspectorAudioComponentModel::CycleAttenuation(scene, currentEntity()), "Audio Inspector enum edit should record history");
+    kb::editor::tests::Require(scene.History().Undo() && scene.Components().AudioSources().TryGet(currentEntity())->attenuationModel == attenuationBefore, "Audio Inspector enum edit should undo");
+    kb::editor::tests::Require(scene.History().Redo() && scene.Components().AudioSources().TryGet(currentEntity())->attenuationModel != attenuationBefore, "Audio Inspector enum edit should redo");
+
+    kb::editor::tests::Require(scene.History().Record("Edit Audio Output") && InspectorAudioComponentModel::SetOutputBus(scene, currentEntity(), "Effects"), "Audio Inspector route edit should record history");
+    kb::editor::tests::Require(scene.History().Undo() && kb::scene::AudioSourceOutputBus(*scene.Components().AudioSources().TryGet(currentEntity())) == "Dialogue", "Audio Inspector route edit should undo");
+    kb::editor::tests::Require(scene.History().Redo() && kb::scene::AudioSourceOutputBus(*scene.Components().AudioSources().TryGet(currentEntity())) == "Effects", "Audio Inspector route edit should redo");
+
+    kb::editor::tests::Require(scene.History().Record("Clear Audio Clip") && kb::editor::EditorSceneAudioAssetActions::AssignAudioClip(scene, currentEntity(), {}), "Audio Inspector clear action should record history");
+    kb::editor::tests::Require(scene.History().Undo() && scene.Components().AudioSources().TryGet(currentEntity())->clipAssetId == 800U, "Audio Inspector clear action should undo");
+    kb::editor::tests::Require(scene.History().Redo() && scene.Components().AudioSources().TryGet(currentEntity())->clipAssetId == 0U, "Audio Inspector clear action should redo");
+
+    kb::scene::Scene prefabScene;
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t prefabNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Audio Prefab",
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .audioSource = kb::scene::AudioSourceComponent{},
+            .audioListener = kb::scene::AudioListenerComponent{},
+        },
+    });
+    const kb::scene::ScenePrefabHandle prefabHandle = prefabScene.Prefabs().Register("AudioInspectorPrefab", std::move(prefab));
+    const kb::scene::ScenePrefabInstance prefabInstance = prefabScene.Prefabs().Instantiate(prefabHandle);
+    const kb::scene::SceneEntity prefabEntity = prefabInstance.ObjectAt(prefabNode).Entity();
+    kb::editor::tests::Require(InspectorAudioComponentModel::ApplyFloat(prefabScene, prefabEntity, InspectorPropertyId::AudioSourceVolume, 0.45F), "Audio Inspector model should edit prefab source data");
+    kb::editor::tests::Require(InspectorAudioComponentModel::ApplyInteger(prefabScene, prefabEntity, InspectorPropertyId::AudioListenerPriority, 4), "Audio Inspector model should edit prefab listener data");
+    const kb::scene::ScenePrefabOverrideReport overrideReport = prefabScene.Prefabs().Overrides(prefabInstance.Handle());
+    kb::editor::tests::Require(std::ranges::any_of(overrideReport.properties, [](const kb::scene::ScenePrefabPropertyOverride& property) { return property.propertyPath == "audioSource.volume"; }), "Audio Inspector mutation should mark the component so prefab override reporting observes it");
+    kb::editor::tests::Require(std::ranges::any_of(overrideReport.properties, [](const kb::scene::ScenePrefabPropertyOverride& property) { return property.propertyPath == "audioListener.priority"; }), "Audio Inspector mutation should mark the listener so prefab override reporting observes it");
+
+    const std::filesystem::path removedSceneFile = std::filesystem::temp_directory_path() / "audio-inspector-removed-components.21kbscene";
+    std::filesystem::remove(removedSceneFile, cleanupError);
+    std::filesystem::remove(removedSceneFile.string() + ".meta", cleanupError);
+    kb::scene::Scene lifecycleScene;
+    const kb::scene::SceneEntity lifecycleEntity = lifecycleScene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Audio Lifecycle" });
+    const auto currentLifecycleEntity = [&lifecycleScene]() {
+        const std::vector<kb::scene::SceneEntity> roots = lifecycleScene.Hierarchy().RootEntities();
+        kb::editor::tests::Require(roots.size() == 1U, "Audio component lifecycle history should retain one entity");
+        return roots.front();
+    };
+    kb::editor::tests::Require(lifecycleScene.History().Record("Add Audio Components"), "Audio component add should record history");
+    lifecycleScene.Components().AudioSources().Set(lifecycleEntity, kb::scene::AudioSourceComponent{});
+    lifecycleScene.Components().AudioListeners().Set(lifecycleEntity, kb::scene::AudioListenerComponent{});
+    kb::editor::tests::Require(lifecycleScene.History().Undo()
+            && !lifecycleScene.Components().AudioSources().Has(currentLifecycleEntity())
+            && !lifecycleScene.Components().AudioListeners().Has(currentLifecycleEntity()),
+        "Audio component add should undo");
+    kb::editor::tests::Require(lifecycleScene.History().Redo()
+            && lifecycleScene.Components().AudioSources().Has(currentLifecycleEntity())
+            && lifecycleScene.Components().AudioListeners().Has(currentLifecycleEntity()),
+        "Audio component add should redo");
+    kb::editor::tests::Require(lifecycleScene.History().Record("Remove Audio Source")
+            && InspectorAudioComponentModel::RemoveComponent(lifecycleScene, currentLifecycleEntity(), kb::editor::InspectorSectionId::AudioSource),
+        "Audio Source remove control should remove through the shared model");
+    kb::editor::tests::Require(lifecycleScene.History().Undo() && lifecycleScene.Components().AudioSources().Has(currentLifecycleEntity()), "Audio Source removal should undo");
+    kb::editor::tests::Require(lifecycleScene.History().Redo() && !lifecycleScene.Components().AudioSources().Has(currentLifecycleEntity()), "Audio Source removal should redo");
+    kb::editor::tests::Require(!InspectorAudioComponentModel::RemoveComponent(lifecycleScene, currentLifecycleEntity(), kb::editor::InspectorSectionId::AudioSource), "Removing a missing Audio Source should be a no-op");
+    kb::editor::tests::Require(lifecycleScene.History().Record("Remove Audio Listener")
+            && InspectorAudioComponentModel::RemoveComponent(lifecycleScene, currentLifecycleEntity(), kb::editor::InspectorSectionId::AudioListener),
+        "Audio Listener remove control should remove through the shared model");
+    kb::editor::tests::Require(lifecycleScene.History().Undo() && lifecycleScene.Components().AudioListeners().Has(currentLifecycleEntity()), "Audio Listener removal should undo");
+    kb::editor::tests::Require(lifecycleScene.History().Redo() && !lifecycleScene.Components().AudioListeners().Has(currentLifecycleEntity()), "Audio Listener removal should redo");
+    kb::editor::tests::Require(!InspectorAudioComponentModel::RemoveComponent(lifecycleScene, currentLifecycleEntity(), kb::editor::InspectorSectionId::AudioListener), "Removing a missing Audio Listener should be a no-op");
+    kb::editor::tests::Require(kb::scene::SceneDocumentService::Save(lifecycleScene, removedSceneFile, "AudioLifecycle"), "Scene without removed Audio components should save");
+    kb::scene::Scene reloadedLifecycleScene;
+    kb::editor::tests::Require(kb::scene::SceneDocumentService::LoadFileIntoScene(reloadedLifecycleScene, removedSceneFile), "Scene without removed Audio components should reload");
+    const std::vector<kb::scene::SceneEntity> lifecycleRoots = reloadedLifecycleScene.Hierarchy().RootEntities();
+    kb::editor::tests::Require(lifecycleRoots.size() == 1U
+            && !reloadedLifecycleScene.Components().AudioSources().Has(lifecycleRoots.front())
+            && !reloadedLifecycleScene.Components().AudioListeners().Has(lifecycleRoots.front()),
+        "Removed Audio components should stay absent after save and reload");
+
+    std::filesystem::remove(mixerFile, cleanupError);
+    std::filesystem::remove(sceneFile, cleanupError);
+    std::filesystem::remove(sceneFile.string() + ".meta", cleanupError);
+    std::filesystem::remove(removedSceneFile, cleanupError);
+    std::filesystem::remove(removedSceneFile.string() + ".meta", cleanupError);
+}
+
+struct AudioScrubTransactionFixture {
+    struct TransactionGateway {
+        kb::editor::EditorSceneCommandController& controller;
+
+        [[nodiscard]] bool Begin(std::string label) {
+            return controller.BeginTransaction(std::move(label));
+        }
+
+        [[nodiscard]] bool Commit() {
+            return controller.CommitTransaction();
+        }
+
+        void Cancel() {
+            controller.CancelTransaction();
+        }
+    };
+
+    kb::scene::Scene scene;
+    kb::editor::EditorCommandStack commandStack;
+    kb::editor::EditorConsoleState console;
+    kb::editor::EditorSceneViewportStateStore viewportState;
+    kb::editor::EditorHierarchySelectionState hierarchySelection;
+    kb::editor::EditorAssetBrowserState assetBrowser;
+    kb::editor::EditorHierarchyExpansionState hierarchyExpansion;
+    kb::editor::EditorHierarchySearchState hierarchySearch;
+    std::optional<std::string> pendingLabel;
+    std::uint64_t renderRevision = 1U;
+    std::uint64_t renderDirtyBaseRevision = 1U;
+    std::vector<std::uint64_t> renderDirtyEntityIds;
+    bool renderFullDirty = false;
+    bool documentDirty = false;
+    bool hierarchyRowsDirty = false;
+    kb::editor::EditorSceneCommandController commandController;
+    TransactionGateway transactions;
+
+    AudioScrubTransactionFixture()
+        : commandController(
+              scene,
+              commandStack,
+              console,
+              viewportState,
+              hierarchySelection,
+              assetBrowser,
+              hierarchyExpansion,
+              hierarchySearch,
+              pendingLabel,
+              renderRevision,
+              renderDirtyBaseRevision,
+              renderDirtyEntityIds,
+              renderFullDirty,
+              documentDirty,
+              hierarchyRowsDirty)
+        , transactions{ commandController } {}
+
+    [[nodiscard]] kb::scene::SceneEntity AddAudioEntity(kb::scene::AudioSourceComponent source = {}, kb::scene::AudioListenerComponent listener = {}) {
+        const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Audio Scrub" });
+        scene.Components().AudioSources().Set(entity, source);
+        scene.Components().AudioListeners().Set(entity, listener);
+        hierarchySelection.SelectEntity(entity);
+        return entity;
+    }
+
+    [[nodiscard]] kb::scene::SceneEntity RootEntity() const {
+        const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+        kb::editor::tests::Require(roots.size() == 1U, "Audio scrub transaction should retain one scene root");
+        return roots.front();
+    }
+};
+
+void RunAudioInspectorScrubTransactionTest() {
+    using kb::editor::InspectorAudioScrubController;
+    using kb::editor::InspectorAudioScrubState;
+    using kb::editor::InspectorAudioScrubUpdate;
+    using kb::editor::InspectorPropertyId;
+
+    {
+        AudioScrubTransactionFixture fixture;
+        const kb::scene::SceneEntity entity = fixture.AddAudioEntity();
+        InspectorAudioScrubState scrub;
+        kb::editor::tests::Require(InspectorAudioScrubController::Begin(
+                fixture.scene, entity, InspectorPropertyId::AudioSourceVolume, fixture.transactions, scrub),
+            "Audio float scrub should begin one scene transaction");
+        kb::editor::tests::Require(InspectorAudioScrubController::Update(fixture.scene, entity, 12, scrub) == InspectorAudioScrubUpdate::Changed
+                && InspectorAudioScrubController::Update(fixture.scene, entity, 60, scrub) == InspectorAudioScrubUpdate::Changed
+                && InspectorAudioScrubController::Update(fixture.scene, entity, 120, scrub) == InspectorAudioScrubUpdate::Changed,
+            "Audio float scrub should apply every pointer step through one active transaction");
+        kb::editor::tests::Require(InspectorAudioScrubController::Finish(fixture.scene, entity, true, fixture.transactions, scrub),
+            "Changed Audio float scrub should commit");
+        kb::editor::tests::Require(fixture.commandStack.UndoCount(kb::editor::EditorCommandHistoryKey::Scene()) == 1U
+                && fixture.documentDirty,
+            "Multiple Audio scrub moves should create exactly one dirty undo entry");
+        kb::editor::tests::Require(fixture.commandController.Undo(), "Audio scrub transaction should undo once");
+        const kb::scene::AudioSourceComponent* restored = fixture.scene.Components().AudioSources().TryGet(fixture.RootEntity());
+        kb::editor::tests::Require(restored != nullptr && restored->volume == 1.0F,
+            "One Audio scrub undo should restore the gesture start value");
+    }
+
+    {
+        AudioScrubTransactionFixture fixture;
+        const kb::scene::SceneEntity entity = fixture.AddAudioEntity(
+            {}, kb::scene::AudioListenerComponent{ .localUser = kb::input::LocalUserId{ std::numeric_limits<std::uint32_t>::max() } });
+        InspectorAudioScrubState scrub;
+        kb::editor::tests::Require(InspectorAudioScrubController::Begin(
+                fixture.scene, entity, InspectorPropertyId::AudioListenerLocalUser, fixture.transactions, scrub)
+                && scrub.integer && scrub.startInteger == static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max()),
+            "Audio integer scrub should preserve its exact 64-bit start value");
+        kb::editor::tests::Require(InspectorAudioScrubController::Update(fixture.scene, entity, -6, scrub) == InspectorAudioScrubUpdate::Changed
+                && InspectorAudioScrubController::Finish(fixture.scene, entity, true, fixture.transactions, scrub),
+            "Audio integer scrub should commit an in-contract exact step");
+        kb::editor::tests::Require(fixture.commandStack.UndoCount(kb::editor::EditorCommandHistoryKey::Scene()) == 1U
+                && fixture.commandController.Undo(),
+            "Audio integer scrub should produce one undo entry");
+        const kb::scene::AudioListenerComponent* restored = fixture.scene.Components().AudioListeners().TryGet(fixture.RootEntity());
+        kb::editor::tests::Require(restored != nullptr && restored->localUser.value == std::numeric_limits<std::uint32_t>::max(),
+            "Audio integer scrub undo should restore the exact start value");
+    }
+
+    {
+        AudioScrubTransactionFixture fixture;
+        const kb::scene::SceneEntity entity = fixture.AddAudioEntity();
+        InspectorAudioScrubState scrub;
+        kb::editor::tests::Require(InspectorAudioScrubController::Begin(
+                fixture.scene, entity, InspectorPropertyId::AudioSourceVolume, fixture.transactions, scrub),
+            "No-movement Audio scrub fixture should begin");
+        kb::editor::tests::Require(!InspectorAudioScrubController::Finish(fixture.scene, entity, false, fixture.transactions, scrub)
+                && fixture.commandStack.UndoCount(kb::editor::EditorCommandHistoryKey::Scene()) == 0U
+                && !fixture.documentDirty
+                && fixture.scene.Components().AudioSources().TryGet(fixture.RootEntity())->volume == 1.0F,
+            "Audio scrub without movement should cancel without history or document dirtiness");
+    }
+
+    {
+        AudioScrubTransactionFixture fixture;
+        kb::scene::AudioSourceComponent source;
+        source.volume = 0.0F;
+        const kb::scene::SceneEntity entity = fixture.AddAudioEntity(source);
+        InspectorAudioScrubState scrub;
+        kb::editor::tests::Require(InspectorAudioScrubController::Begin(
+                fixture.scene, entity, InspectorPropertyId::AudioSourceVolume, fixture.transactions, scrub),
+            "Invalid Audio scrub fixture should begin");
+        kb::editor::tests::Require(InspectorAudioScrubController::Update(fixture.scene, entity, -60, scrub) == InspectorAudioScrubUpdate::Invalid
+                && !InspectorAudioScrubController::Finish(fixture.scene, entity, true, fixture.transactions, scrub)
+                && fixture.commandStack.UndoCount(kb::editor::EditorCommandHistoryKey::Scene()) == 0U
+                && !fixture.documentDirty
+                && fixture.scene.Components().AudioSources().TryGet(fixture.RootEntity())->volume == 0.0F,
+            "Invalid Audio scrub should cancel without history, dirtiness, or state change");
+    }
+
+    {
+        AudioScrubTransactionFixture fixture;
+        const kb::scene::SceneEntity entity = fixture.AddAudioEntity();
+        InspectorAudioScrubState scrub;
+        kb::editor::tests::Require(InspectorAudioScrubController::Begin(
+                fixture.scene, entity, InspectorPropertyId::AudioSourceVolume, fixture.transactions, scrub)
+                && InspectorAudioScrubController::Update(fixture.scene, entity, 60, scrub) == InspectorAudioScrubUpdate::Changed
+                && InspectorAudioScrubController::Update(fixture.scene, entity, 0, scrub) == InspectorAudioScrubUpdate::Changed,
+            "Audio scrub return-to-start fixture should apply both pointer positions");
+        kb::editor::tests::Require(!InspectorAudioScrubController::Finish(fixture.scene, entity, true, fixture.transactions, scrub)
+                && fixture.commandStack.UndoCount(kb::editor::EditorCommandHistoryKey::Scene()) == 0U
+                && !fixture.documentDirty,
+            "Audio scrub ending at its exact start should cancel as a no-op");
+    }
+
+    {
+        AudioScrubTransactionFixture fixture;
+        const kb::scene::SceneEntity entity = fixture.AddAudioEntity();
+        InspectorAudioScrubState scrub;
+        kb::editor::tests::Require(InspectorAudioScrubController::Begin(
+                fixture.scene, entity, InspectorPropertyId::AudioSourceVolume, fixture.transactions, scrub),
+            "Lost-target Audio scrub fixture should begin");
+        fixture.scene.Entities().Destroy(entity);
+        kb::editor::tests::Require(InspectorAudioScrubController::Update(fixture.scene, entity, 60, scrub) == InspectorAudioScrubUpdate::LostTarget,
+            "Audio scrub should detect a destroyed target in the same gesture");
+        InspectorAudioScrubController::Cancel(fixture.transactions, scrub);
+        kb::editor::tests::Require(fixture.commandStack.UndoCount(kb::editor::EditorCommandHistoryKey::Scene()) == 0U
+                && !fixture.documentDirty
+                && fixture.scene.Components().AudioSources().Has(fixture.RootEntity()),
+            "Cancelling a lost-target Audio scrub should restore the transaction snapshot without history or dirtiness");
+    }
 }
 
 void RunMaterialAssetAssignmentSavesInSceneTest() {
@@ -2345,6 +2902,8 @@ void RunEditorInspectorTests() {
     RunAudioComponentCatalogTest();
     RunObjectClassificationCatalogTest();
     RunAudioInspectorTextTest();
+    RunAudioInspectorComponentModelTest();
+    RunAudioInspectorScrubTransactionTest();
     RunMaterialTextureSlotDiagnosticTest();
     RunAudioAssetAssignmentTest();
     RunMaterialAssetAssignmentSavesInSceneTest();

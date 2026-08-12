@@ -30,6 +30,8 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
+#include "inspection/InspectorAudioComponentModel.hpp"
+#include "inspection/InspectorAudioScrubController.hpp"
 #include "inspection/InspectorInputInteraction.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
@@ -753,41 +755,6 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
         }
     }
     return text == "-0" ? "0" : text;
-}
-
-[[nodiscard]] bool ToggleAudioSourceProperty(kb::scene::AudioSourceComponent& source, InspectorPropertyId property) noexcept {
-    switch (property) {
-    case InspectorPropertyId::AudioSourceEnabled:
-        source.enabled = !source.enabled;
-        return true;
-    case InspectorPropertyId::AudioSourceAutoplay:
-        source.autoplay = !source.autoplay;
-        return true;
-    case InspectorPropertyId::AudioSourceLoop:
-        source.loop = !source.loop;
-        return true;
-    case InspectorPropertyId::AudioSourceMute:
-        source.mute = !source.mute;
-        return true;
-    case InspectorPropertyId::AudioSourceSpatial:
-        source.spatial = !source.spatial;
-        return true;
-    default:
-        return false;
-    }
-}
-
-[[nodiscard]] bool ToggleAudioListenerProperty(kb::scene::AudioListenerComponent& listener, InspectorPropertyId property) noexcept {
-    switch (property) {
-    case InspectorPropertyId::AudioListenerEnabled:
-        listener.enabled = !listener.enabled;
-        return true;
-    case InspectorPropertyId::AudioListenerPrimary:
-        listener.primary = !listener.primary;
-        return true;
-    default:
-        return false;
-    }
 }
 
 [[nodiscard]] kb::scene::LightKind NextLightKind(kb::scene::LightKind kind) noexcept {
@@ -2535,27 +2502,91 @@ template <typename Mutator>
         return true;
     }
 
-    bool changed = false;
-    if (kb::scene::AudioSourceComponent* source = sceneContext.Scene().Components().AudioSources().TryGet(entity); source != nullptr) {
-        changed = ToggleAudioSourceProperty(*source, property);
-        if (changed) {
-            sceneContext.Scene().Components().AudioSources().MarkModified(entity);
-        }
-    }
-
-    if (!changed) {
-        if (kb::scene::AudioListenerComponent* listener = sceneContext.Scene().Components().AudioListeners().TryGet(entity); listener != nullptr) {
-            changed = ToggleAudioListenerProperty(*listener, property);
-            if (changed) {
-                sceneContext.Scene().Components().AudioListeners().MarkModified(entity);
-            }
-        }
-    }
+    const bool changed = InspectorAudioComponentModel::Toggle(sceneContext.Scene(), entity, property);
 
     if (changed) {
         static_cast<void>(sceneContext.CommitSceneEditTransaction());
     } else {
         sceneContext.CancelSceneEditTransaction();
+    }
+    return true;
+}
+
+template <typename Mutation>
+[[nodiscard]] bool ApplyAudioMutation(EditorSceneContext& sceneContext, std::string_view label, Mutation mutation) {
+    if (!sceneContext.BeginSceneEditTransaction(std::string{ label })) {
+        return false;
+    }
+    if (!mutation()) {
+        sceneContext.CancelSceneEditTransaction();
+        return false;
+    }
+    return sceneContext.CommitSceneEditTransaction();
+}
+
+[[nodiscard]] bool ApplyAudioFloat(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, float value) {
+    return ApplyAudioMutation(sceneContext, "Edit Audio Component", [&]() {
+        return InspectorAudioComponentModel::ApplyFloat(sceneContext.Scene(), entity, property, value);
+    });
+}
+
+class EditorAudioScrubTransactions {
+public:
+    explicit EditorAudioScrubTransactions(EditorSceneContext& sceneContext) noexcept
+        : sceneContext_(sceneContext) {}
+
+    [[nodiscard]] bool Begin(std::string label) {
+        return sceneContext_.BeginSceneEditTransaction(std::move(label));
+    }
+
+    [[nodiscard]] bool Commit() {
+        return sceneContext_.CommitSceneEditTransaction();
+    }
+
+    void Cancel() {
+        sceneContext_.CancelSceneEditTransaction();
+    }
+
+private:
+    EditorSceneContext& sceneContext_;
+};
+
+void CancelAudioScrub(EditorSceneContext& sceneContext) noexcept {
+    InspectorPanelState& inspector = sceneContext.Inspector();
+    EditorAudioScrubTransactions transactions{ sceneContext };
+    InspectorAudioScrubController::Cancel(transactions, inspector.AudioScrub());
+    inspector.EndFloatDrag();
+}
+
+[[nodiscard]] bool HandleAudioClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    sceneContext.Inspector().EndTextEdit();
+    if (hit.kind == InspectorHitKind::BoolField) {
+        return ToggleAudioProperty(sceneContext, entity, hit.property);
+    }
+    if (hit.kind != InspectorHitKind::TextField) {
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::AudioSourceClipClear) {
+        static_cast<void>(sceneContext.SetAudioSourceClipAsset(entity, {}));
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::AudioSourceClip || hit.property == InspectorPropertyId::AudioSourceClipPicker) {
+        if (const kb::scene::AudioSourceComponent* source = sceneContext.Scene().Components().AudioSources().TryGet(entity)) {
+            SelectAssetInProjectFiles(sceneContext, kb::assets::AssetId{ source->clipAssetId });
+        }
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::AudioSourceAttenuation) {
+        static_cast<void>(ApplyAudioMutation(sceneContext, "Edit Audio Attenuation", [&]() {
+            return InspectorAudioComponentModel::CycleAttenuation(sceneContext.Scene(), entity);
+        }));
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::AudioSourceOutputBus) {
+        static_cast<void>(ApplyAudioMutation(sceneContext, "Edit Audio Output", [&]() {
+            return InspectorAudioComponentModel::CycleOutputBus(sceneContext.Scene(), entity);
+        }));
+        return true;
     }
     return true;
 }
@@ -2737,6 +2768,8 @@ template <typename Store, typename Op>
     return PhysicsKindForProperty(property).has_value() ||
         IsLightFloatProperty(property) ||
         IsCameraFloatProperty(property) ||
+        InspectorAudioComponentModel::IsFloatProperty(property) ||
+        InspectorAudioComponentModel::IsIntegerProperty(property) ||
         property == InspectorPropertyId::AnimatorSpeed;
 }
 
@@ -2755,6 +2788,16 @@ template <typename Store, typename Op>
             return ReadCameraFloat(*camera, property, out);
         }
     }
+    if (InspectorAudioComponentModel::IsFloatProperty(property)) {
+        return InspectorAudioComponentModel::ReadFloat(sceneContext.Scene(), entity, property, out);
+    }
+    if (InspectorAudioComponentModel::IsIntegerProperty(property)) {
+        std::int64_t value = 0;
+        if (InspectorAudioComponentModel::ReadInteger(sceneContext.Scene(), entity, property, value)) {
+            out = static_cast<float>(value);
+            return true;
+        }
+    }
     if (property == InspectorPropertyId::AnimatorSpeed) {
         if (const kb::scene::Animator* animator =
                 sceneContext.Scene().Components().Animators().TryGet(entity)) {
@@ -2765,8 +2808,8 @@ template <typename Store, typename Op>
     return false;
 }
 
-// Writes the value through the field's own undoable path (each is a self-contained
-// begin+commit, so no held transaction conflicts with the click/commit handlers).
+// Writes non-audio fields through their existing edit paths. Audio fields use the
+// gesture controller below so all pointer moves share one scene transaction.
 void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property, int index, float value) {
     if (const std::optional<PhysicsComponentKind> kind = PhysicsKindForProperty(property); kind.has_value()) {
         static_cast<void>(ApplyPhysicsFloat(sceneContext, entity, *kind, index, value));
@@ -2797,9 +2840,27 @@ void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEnt
     const bool isComponentFloat =
         IsLightFloatProperty(hit.property) ||
         IsCameraFloatProperty(hit.property) ||
+        InspectorAudioComponentModel::IsFloatProperty(hit.property) ||
+        InspectorAudioComponentModel::IsIntegerProperty(hit.property) ||
         hit.property == InspectorPropertyId::AnimatorSpeed;
     if (!isPhysicsFloat && !isComponentFloat) {
         return false;
+    }
+    if (InspectorAudioComponentModel::IsFloatProperty(hit.property)
+        || InspectorAudioComponentModel::IsIntegerProperty(hit.property)) {
+        InspectorPanelState& inspector = sceneContext.Inspector();
+        EditorAudioScrubTransactions transactions{ sceneContext };
+        if (!InspectorAudioScrubController::Begin(sceneContext.Scene(), entity, hit.property, transactions, inspector.AudioScrub())) {
+            return false;
+        }
+        const InspectorAudioScrubState& scrub = inspector.AudioScrub();
+        if (scrub.integer) {
+            inspector.BeginIntegerDrag(hit.property, x, y);
+        } else {
+            inspector.BeginFloatDrag(hit.property, scrub.startFloat, x, y);
+        }
+        inspector.SetEditIndex(hit.index);
+        return true;
     }
     float value = 0.0F;
     if (!ReadEntityFloatField(sceneContext, entity, hit.property, hit.index, value)) {
@@ -2885,6 +2946,13 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                 static_cast<void>(sceneContext.RemoveMeshRendererFromEntity(entity));
             } else if (hit.section == InspectorSectionId::Camera) {
                 static_cast<void>(RemoveCameraComponent(sceneContext, entity));
+            } else if (InspectorAudioComponentModel::HasRemoveControl(hit.section)) {
+                const std::string_view label = hit.section == InspectorSectionId::AudioSource
+                    ? "Remove Audio Source"
+                    : "Remove Audio Listener";
+                static_cast<void>(ApplyAudioMutation(sceneContext, label, [&]() {
+                    return InspectorAudioComponentModel::RemoveComponent(sceneContext.Scene(), entity, hit.section);
+                }));
             } else if (hit.section == InspectorSectionId::Animator) {
                 static_cast<void>(sceneContext.RemoveAnimatorFromEntity(entity));
             } else if (hit.section == InspectorSectionId::SkeletonBinding) {
@@ -3036,6 +3104,10 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         return true;
     }
 
+    if (hit.section == InspectorSectionId::AudioSource || hit.section == InspectorSectionId::AudioListener) {
+        return HandleAudioClick(sceneContext, entity, hit);
+    }
+
     if (hit.section == InspectorSectionId::Script) {
         return HandleScriptClick(sceneContext, entity, hit);
     }
@@ -3159,7 +3231,28 @@ bool InspectorPanelInteraction::HandlePointerDrag(EditorSceneContext& sceneConte
         static_cast<void>(sceneContext.ApplyActiveMaterialAssetFloatEdit(sceneContext.Inspector().DragStartValue() + delta));
         return true;
     }
+    InspectorPanelState& inspector = sceneContext.Inspector();
     const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
+    if (inspector.AudioScrub().active) {
+        if (!sceneContext.Scene().Entities().IsAlive(entity) || entity != inspector.AudioScrub().entity) {
+            CancelAudioScrub(sceneContext);
+            return true;
+        }
+        const int dx = x - inspector.DragStartX();
+        const int dy = y - inspector.DragStartY();
+        if (std::abs(dx) + std::abs(dy) < 2) {
+            return true;
+        }
+        inspector.MarkFloatDragMoved();
+        const std::int64_t pixelDelta = (static_cast<std::int64_t>(x) - inspector.DragStartX())
+            - (static_cast<std::int64_t>(y) - inspector.DragStartY());
+        const InspectorAudioScrubUpdate update = InspectorAudioScrubController::Update(
+            sceneContext.Scene(), entity, pixelDelta, inspector.AudioScrub());
+        if (update == InspectorAudioScrubUpdate::LostTarget) {
+            CancelAudioScrub(sceneContext);
+        }
+        return true;
+    }
     if (!sceneContext.Scene().Entities().IsAlive(entity)) {
         if (!IsGenericEntityFloatProperty(property)) {
             sceneContext.CancelActiveTransformEdit();
@@ -3173,7 +3266,7 @@ bool InspectorPanelInteraction::HandlePointerDrag(EditorSceneContext& sceneConte
         return true;
     }
     sceneContext.Inspector().MarkFloatDragMoved();
-    // Physics/light floats: scrub in 0.1 steps (~6 px per step) as requested.
+    // Entity numeric fields scrub in stable increments without entering a Transform edit.
     if (IsGenericEntityFloatProperty(property)) {
         const float delta = std::round(static_cast<float>(dx - dy) / 6.0F) * 0.1F;
         ApplyEntityFloatField(sceneContext, entity, property, sceneContext.Inspector().EditIndex(), sceneContext.Inspector().DragStartValue() + delta);
@@ -3196,8 +3289,22 @@ bool InspectorPanelInteraction::HandlePointerUp(EditorSceneContext& sceneContext
     const InspectorPropertyId property = inspector.DraggedProperty();
     const bool moved = inspector.FloatDragMoved();
     const float startValue = inspector.DragStartValue();
+    const bool audioScrubActive = inspector.AudioScrub().active;
+    const bool audioInteger = inspector.AudioScrub().integer;
+    const std::int64_t audioStartInteger = inspector.AudioScrub().startInteger;
+    const float audioStartFloat = inspector.AudioScrub().startFloat;
     const int dragIndex = inspector.EditIndex(); // captured before EndFloatDrag clears it
     inspector.EndFloatDrag();
+    if (audioScrubActive) {
+        EditorAudioScrubTransactions transactions{ sceneContext };
+        static_cast<void>(InspectorAudioScrubController::Finish(
+            sceneContext.Scene(), sceneContext.SelectedEntity(), moved, transactions, inspector.AudioScrub()));
+        if (!moved && property != InspectorPropertyId::None) {
+            inspector.BeginTextEdit(property, audioInteger ? std::to_string(audioStartInteger) : FormatCompactFloat(audioStartFloat));
+            inspector.SetEditIndex(dragIndex);
+        }
+        return true;
+    }
     if (IsMaterialFloatProperty(property)) {
         if (moved) {
             static_cast<void>(sceneContext.CommitActiveMaterialAssetEdit());
@@ -3214,7 +3321,16 @@ bool InspectorPanelInteraction::HandlePointerUp(EditorSceneContext& sceneContext
         // without movement opens the inline editor (restoring the row index that
         // BeginTextEdit clears).
         if (!moved && property != InspectorPropertyId::None) {
-            inspector.BeginTextEdit(property, FormatCompactFloat(startValue));
+            if (InspectorAudioComponentModel::IsIntegerProperty(property)) {
+                std::int64_t value = 0;
+                inspector.BeginTextEdit(
+                    property,
+                    InspectorAudioComponentModel::ReadInteger(sceneContext.Scene(), sceneContext.SelectedEntity(), property, value)
+                        ? std::to_string(value)
+                        : std::string{});
+            } else {
+                inspector.BeginTextEdit(property, FormatCompactFloat(startValue));
+            }
             inspector.SetEditIndex(dragIndex);
         }
         return true;
@@ -3228,6 +3344,23 @@ bool InspectorPanelInteraction::HandlePointerUp(EditorSceneContext& sceneContext
         inspector.BeginTextEdit(property, FormatCompactFloat(startValue));
     }
     return true;
+}
+
+void InspectorPanelInteraction::CancelPointerDrag(EditorSceneContext& sceneContext) noexcept {
+    InspectorPanelState& inspector = sceneContext.Inspector();
+    if (!inspector.IsDraggingFloat()) {
+        return;
+    }
+    if (inspector.AudioScrub().active) {
+        CancelAudioScrub(sceneContext);
+        return;
+    }
+    if (IsMaterialFloatProperty(inspector.DraggedProperty())) {
+        sceneContext.CancelActiveMaterialAssetEdit();
+    } else if (!IsGenericEntityFloatProperty(inspector.DraggedProperty())) {
+        sceneContext.CancelActiveTransformEdit();
+    }
+    inspector.EndFloatDrag();
 }
 
 bool InspectorPanelInteraction::HandleChar(EditorSceneContext& sceneContext, wchar_t character) {
@@ -3429,6 +3562,25 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         }
         if (sceneContext.Scene().Entities().IsAlive(entity) && IsHistoryRibbonProperty(inspector.EditedProperty())) {
             static_cast<void>(ApplyHistoryRibbonText(sceneContext, entity, inspector.EditedProperty(), inspector.EditBuffer()));
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (sceneContext.Scene().Entities().IsAlive(entity) &&
+            (InspectorAudioComponentModel::IsFloatProperty(inspector.EditedProperty()) ||
+                InspectorAudioComponentModel::IsIntegerProperty(inspector.EditedProperty()))) {
+            const InspectorPropertyId property = inspector.EditedProperty();
+            if (InspectorAudioComponentModel::IsFloatProperty(property)) {
+                float currentValue = 0.0F;
+                float value = 0.0F;
+                if (InspectorAudioComponentModel::ReadFloat(sceneContext.Scene(), entity, property, currentValue) &&
+                    EvaluateMath(inspector.EditBuffer(), currentValue, value)) {
+                    static_cast<void>(ApplyAudioFloat(sceneContext, entity, property, value));
+                }
+            } else {
+                static_cast<void>(ApplyAudioMutation(sceneContext, "Edit Audio Listener", [&]() {
+                    return InspectorAudioComponentModel::ApplyText(sceneContext.Scene(), entity, property, inspector.EditBuffer());
+                }));
+            }
             inspector.EndTextEdit();
             return true;
         }
