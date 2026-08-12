@@ -267,6 +267,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneTasks.hpp
     include/engine/scene/SceneTimers.hpp
     include/engine/scene/SceneSystem.hpp
+    include/engine/scene/SceneSystemHandle.hpp
     include/engine/scene/SceneSystemContext.hpp
     include/engine/scene/SceneSystemQueryAccess.hpp
     include/engine/scene/SceneSystemTransformAccess.hpp

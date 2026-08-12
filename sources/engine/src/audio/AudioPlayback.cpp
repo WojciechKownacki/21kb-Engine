@@ -9,12 +9,26 @@
 
 #include <utility>
 #include <cmath>
+#include <cassert>
+#if !defined(NDEBUG)
+#include <thread>
+#endif
 
 namespace kb::audio {
 namespace {
 
 [[nodiscard]] IAudioPlaybackBackend* FindBackend(kb::scene::Scene& scene) noexcept {
     return kb::scene::SceneAccess::State(scene).audioPlaybackBackend;
+}
+
+void AssertOwnerThread(kb::scene::Scene& scene) noexcept {
+#if !defined(NDEBUG)
+    const kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);
+    const std::thread::id current = std::this_thread::get_id();
+    assert(state.audioPlaybackOwnerThread == current && "audio playback must be accessed from its scene owner thread");
+#else
+    static_cast<void>(scene);
+#endif
 }
 
 [[nodiscard]] bool IsFinite(kb::scene::Vec3 value) noexcept {
@@ -77,10 +91,12 @@ bool IsAudioVoiceMarkerRequestValid(
 }
 
 void AudioPlayback::RegisterBackend(kb::scene::Scene& scene, IAudioPlaybackBackend& backend) {
+    AssertOwnerThread(scene);
     kb::scene::SceneAccess::State(scene).audioPlaybackBackend = &backend;
 }
 
 void AudioPlayback::UnregisterBackend(kb::scene::Scene& scene, IAudioPlaybackBackend& backend) noexcept {
+    AssertOwnerThread(scene);
     kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);
     if (state.audioPlaybackBackend == &backend) {
         state.audioPlaybackBackend = nullptr;
@@ -88,10 +104,12 @@ void AudioPlayback::UnregisterBackend(kb::scene::Scene& scene, IAudioPlaybackBac
 }
 
 bool AudioPlayback::HasBackend(kb::scene::Scene& scene) noexcept {
+    AssertOwnerThread(scene);
     return FindBackend(scene) != nullptr;
 }
 
 AudioPlayResult AudioPlayback::PlayOneShot(kb::scene::Scene& scene, const AudioPlayDesc& desc) {
+    AssertOwnerThread(scene);
     const AudioPlayDescValidationStatus validation = ValidateAudioPlayDesc(scene, desc);
     if (validation != AudioPlayDescValidationStatus::Valid) {
         return AudioPlayDescValidationResult(validation);
@@ -104,6 +122,7 @@ AudioPlayResult AudioPlayback::PlayOneShot(kb::scene::Scene& scene, const AudioP
 }
 
 void AudioPlayback::StopAll(kb::scene::Scene& scene) noexcept {
+    AssertOwnerThread(scene);
     IAudioPlaybackBackend* backend = FindBackend(scene);
     if (backend != nullptr) {
         backend->StopAll(scene);
@@ -111,56 +130,67 @@ void AudioPlayback::StopAll(kb::scene::Scene& scene) noexcept {
 }
 
 AudioSourceControlResult AudioPlayback::PlaySource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    AssertOwnerThread(scene);
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend == nullptr ? AudioSourceControlResult{} : backend->PlaySource(scene, entity);
 }
 
 AudioSourceControlResult AudioPlayback::PauseSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    AssertOwnerThread(scene);
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend == nullptr ? AudioSourceControlResult{} : backend->PauseSource(scene, entity);
 }
 
 AudioSourceControlResult AudioPlayback::ResumeSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    AssertOwnerThread(scene);
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend == nullptr ? AudioSourceControlResult{} : backend->ResumeSource(scene, entity);
 }
 
 AudioSourceControlResult AudioPlayback::StopSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    AssertOwnerThread(scene);
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend == nullptr ? AudioSourceControlResult{} : backend->StopSource(scene, entity);
 }
 
 AudioSourceControlResult AudioPlayback::IsSourcePlaying(kb::scene::Scene& scene, kb::scene::SceneEntity entity) {
+    AssertOwnerThread(scene);
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend == nullptr ? AudioSourceControlResult{} : backend->IsSourcePlaying(scene, entity);
 }
 
 AudioDeviceStatus AudioPlayback::DeviceStatus(kb::scene::Scene& scene) noexcept {
+    AssertOwnerThread(scene);
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend == nullptr ? AudioDeviceStatus::BackendUnavailable : backend->DeviceStatus();
 }
 
 AudioDeviceStatus AudioPlayback::Reinitialize(kb::scene::Scene& scene) noexcept {
+    AssertOwnerThread(scene);
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend == nullptr ? AudioDeviceStatus::BackendUnavailable : backend->Reinitialize(scene);
 }
 
 bool AudioPlayback::StopVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
+    AssertOwnerThread(scene);
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend != nullptr && backend->StopVoice(scene, voiceId);
 }
 
 bool AudioPlayback::PauseVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
+    AssertOwnerThread(scene);
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend != nullptr && backend->PauseVoice(scene, voiceId);
 }
 
 bool AudioPlayback::ResumeVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
+    AssertOwnerThread(scene);
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend != nullptr && backend->ResumeVoice(scene, voiceId);
 }
 
 bool AudioPlayback::SeekVoice(kb::scene::Scene& scene, std::uint64_t voiceId, float positionSeconds) noexcept {
+    AssertOwnerThread(scene);
     if (!IsAudioVoiceSeekPositionValid(positionSeconds)) {
         return false;
     }
@@ -169,6 +199,7 @@ bool AudioPlayback::SeekVoice(kb::scene::Scene& scene, std::uint64_t voiceId, fl
 }
 
 bool AudioPlayback::SetVoiceVolume(kb::scene::Scene& scene, std::uint64_t voiceId, float volume) noexcept {
+    AssertOwnerThread(scene);
     if (!IsAudioVoiceVolumeValid(volume)) {
         return false;
     }
@@ -177,11 +208,13 @@ bool AudioPlayback::SetVoiceVolume(kb::scene::Scene& scene, std::uint64_t voiceI
 }
 
 bool AudioPlayback::SetVoiceMute(kb::scene::Scene& scene, std::uint64_t voiceId, bool mute) noexcept {
+    AssertOwnerThread(scene);
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend != nullptr && backend->SetVoiceMute(scene, voiceId, mute);
 }
 
 bool AudioPlayback::SetVoicePan(kb::scene::Scene& scene, std::uint64_t voiceId, float pan) noexcept {
+    AssertOwnerThread(scene);
     if (!IsAudioVoicePanValid(pan)) {
         return false;
     }
@@ -190,6 +223,7 @@ bool AudioPlayback::SetVoicePan(kb::scene::Scene& scene, std::uint64_t voiceId, 
 }
 
 bool AudioPlayback::SetVoicePitch(kb::scene::Scene& scene, std::uint64_t voiceId, float pitch) noexcept {
+    AssertOwnerThread(scene);
     if (!IsAudioVoicePitchValid(pitch)) {
         return false;
     }
@@ -198,21 +232,25 @@ bool AudioPlayback::SetVoicePitch(kb::scene::Scene& scene, std::uint64_t voiceId
 }
 
 bool AudioPlayback::SetVoiceLoop(kb::scene::Scene& scene, std::uint64_t voiceId, bool loop) noexcept {
+    AssertOwnerThread(scene);
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend != nullptr && backend->SetVoiceLoop(scene, voiceId, loop);
 }
 
 bool AudioPlayback::IsVoicePlaying(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
+    AssertOwnerThread(scene);
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend != nullptr && backend->IsVoicePlaying(scene, voiceId);
 }
 
 float AudioPlayback::VoicePlaybackSeconds(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {
+    AssertOwnerThread(scene);
     IAudioPlaybackBackend* backend = FindBackend(scene);
     return backend == nullptr ? -1.0F : backend->VoicePlaybackSeconds(scene, voiceId);
 }
 
 bool AudioPlayback::AddVoiceMarker(kb::scene::Scene& scene, std::uint64_t voiceId, std::string_view marker, float positionSeconds, kb::scene::SceneEntity target) {
+    AssertOwnerThread(scene);
     if (!IsAudioVoiceMarkerRequestValid(scene, marker, positionSeconds, target)) {
         return false;
     }
@@ -221,10 +259,12 @@ bool AudioPlayback::AddVoiceMarker(kb::scene::Scene& scene, std::uint64_t voiceI
 }
 
 void AudioPlayback::QueueMarkerEvent(kb::scene::Scene& scene, PendingAudioMarkerEvent event) {
+    AssertOwnerThread(scene);
     kb::scene::SceneAccess::State(scene).pendingAudioMarkerEvents.push_back(std::move(event));
 }
 
 std::vector<PendingAudioMarkerEvent> AudioPlayback::DrainPendingMarkerEvents(kb::scene::Scene& scene) {
+    AssertOwnerThread(scene);
     return std::exchange(kb::scene::SceneAccess::State(scene).pendingAudioMarkerEvents, {});
 }
 

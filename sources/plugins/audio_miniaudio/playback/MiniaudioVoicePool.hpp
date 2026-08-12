@@ -99,11 +99,17 @@ private:
 
     [[nodiscard]] std::uint64_t AllocateVoiceId() noexcept;
     [[nodiscard]] VoiceRecord* FindVoice(std::uint64_t voiceId) noexcept;
-    [[nodiscard]] bool PruneVoicesForClip(std::uint64_t clipAssetId, std::uint8_t incomingPriority) noexcept;
-    // LIB-148: evicts the lowest-priority (ties: oldest) voice while at capacity. Returns
-    // false when every live voice outranks `incomingPriority` - the caller must then
-    // honestly refuse the new voice instead of stealing a higher-priority one.
-    [[nodiscard]] bool PruneVoiceCapacity(std::uint8_t incomingPriority) noexcept;
+
+    using VoiceIterator = std::list<VoiceRecord>::iterator;
+    struct Admission final {
+        VoiceIterator clipVictim;
+        VoiceIterator capacityVictim;
+    };
+    [[nodiscard]] bool PlanAdmission(
+        std::uint64_t clipAssetId,
+        std::uint8_t incomingPriority,
+        Admission& admission,
+        bool& clipRejected) noexcept;
 
 #if defined(KB_AUDIO_MINIAUDIO_TESTING)
 public:
@@ -112,6 +118,14 @@ public:
         return voice == nullptr ? nullptr : voice->sound.get();
     }
     [[nodiscard]] std::size_t VoiceCountForTesting() const noexcept { return voices_.size(); }
+    [[nodiscard]] std::vector<std::uint64_t> VoiceIdsForTesting() const {
+        std::vector<std::uint64_t> ids;
+        ids.reserve(voices_.size());
+        for (const VoiceRecord& voice : voices_) {
+            ids.push_back(voice.voiceId);
+        }
+        return ids;
+    }
     [[nodiscard]] std::size_t MarkerCountForTesting(std::uint64_t voiceId) noexcept {
         VoiceRecord* voice = FindVoice(voiceId);
         return voice == nullptr ? 0U : voice->markers.size();

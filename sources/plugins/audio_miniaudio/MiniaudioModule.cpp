@@ -7,6 +7,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 
 #include <memory>
+#include <stdexcept>
 
 namespace kb::audio_miniaudio {
 
@@ -20,7 +21,25 @@ kb::modules::EngineModuleMetadata MiniaudioModule::Metadata() const {
 }
 
 void MiniaudioModule::OnSceneAttach(kb::scene::Scene& scene) {
-    scene.Runtime().AddSceneSystem(std::make_unique<MiniaudioSceneSystem>());
+    if (sceneSystems_.contains(&scene)) {
+        return;
+    }
+    const kb::scene::SceneSystemHandle handle = scene.Runtime().AddSceneSystem(std::make_unique<MiniaudioSceneSystem>());
+    if (handle.IsValid()) {
+        sceneSystems_.emplace(&scene, handle);
+    }
+}
+
+void MiniaudioModule::OnSceneDetach(kb::scene::Scene& scene) {
+    const auto iterator = sceneSystems_.find(&scene);
+    if (iterator == sceneSystems_.end()) {
+        return;
+    }
+    if (!scene.Runtime().RemoveSceneSystem(iterator->second)
+        && scene.Runtime().HasSceneSystem(iterator->second)) {
+        throw std::logic_error("audio scene system could not detach during active dispatch");
+    }
+    sceneSystems_.erase(iterator);
 }
 
 } // namespace kb::audio_miniaudio

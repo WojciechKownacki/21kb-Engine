@@ -23,6 +23,7 @@
 #include <span>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -174,6 +175,74 @@ private:
     float lastVariableDeltaSeconds_ = 0.0F;
     float lastFixedDeltaSeconds_ = 0.0F;
 };
+
+class RemovableSceneSystem final : public kb::scene::SceneSystem {
+public:
+    RemovableSceneSystem(SceneSystemCounters& counters, bool fixed, bool throwOnDestroy = false) noexcept
+        : counters_(counters)
+        , fixed_(fixed)
+        , throwOnDestroy_(throwOnDestroy) {}
+
+    void OnCreate(kb::scene::SceneSystemContext&) override { ++counters_.created; }
+    void OnUpdate(kb::scene::SceneSystemContext&) override { ++counters_.updated; }
+    void OnDestroy(kb::scene::SceneSystemContext&) override {
+        ++counters_.destroyed;
+        if (throwOnDestroy_) {
+            throw std::runtime_error("remove lifecycle probe");
+        }
+    }
+    [[nodiscard]] bool RequiresFixedStep() const override { return fixed_; }
+
+private:
+    SceneSystemCounters& counters_;
+    bool fixed_ = false;
+    bool throwOnDestroy_ = false;
+};
+
+void RunSceneSystemHandleRemovalTest() {
+    SceneSystemCounters firstCounters;
+    SceneSystemCounters secondCounters;
+    SceneSystemCounters throwingCounters;
+    kb::scene::Scene firstScene;
+    kb::scene::Scene secondScene;
+
+    const kb::scene::SceneSystemHandle first = firstScene.Runtime().AddSceneSystem(
+        std::make_unique<RemovableSceneSystem>(firstCounters, true));
+    const kb::scene::SceneSystemHandle second = secondScene.Runtime().AddSceneSystem(
+        std::make_unique<RemovableSceneSystem>(secondCounters, false));
+    kb::tests::Require(first.IsValid() && second.IsValid() && first != second,
+        "Scene-system handles must encode distinct scheduler lifetimes");
+    kb::tests::Require(!secondScene.Runtime().RemoveSceneSystem(first)
+            && firstScene.Runtime().HasSceneSystem(first)
+            && secondScene.Runtime().HasSceneSystem(second),
+        "A foreign scene-system handle affected a different scheduler");
+    kb::tests::Require(firstScene.Runtime().RemoveSceneSystem(first)
+            && firstCounters.destroyed == 1
+            && !firstScene.Runtime().HasSceneSystem(first),
+        "Scene-system removal did not run OnDestroy exactly once");
+
+    const kb::scene::SceneSystemHandle throwing = firstScene.Runtime().AddSceneSystem(
+        std::make_unique<RemovableSceneSystem>(throwingCounters, false, true));
+    kb::tests::Require(!firstScene.Runtime().RemoveSceneSystem(first)
+            && firstCounters.destroyed == 1
+            && firstScene.Runtime().HasSceneSystem(throwing),
+        "A stale scene-system handle destroyed a later system or repeated OnDestroy");
+    kb::tests::Require(firstScene.Runtime().RemoveSceneSystem(throwing)
+            && throwingCounters.destroyed == 1
+            && !firstScene.Runtime().HasSceneSystem(throwing),
+        "A throwing OnDestroy escaped removal or retained its scene system");
+
+    firstScene.Runtime().SetFixedStepSettings(kb::scene::SceneRuntimeFixedStepSettings{
+        .fixedDeltaSeconds = 0.01F,
+        .maxFrameDeltaSeconds = 0.1F,
+        .maxFixedStepsPerFrame = 4U,
+    });
+    static_cast<void>(firstScene.Runtime().Update(0.05F));
+    kb::tests::Require(firstScene.Runtime().LastFixedStepCount() == 0U,
+        "Removing the final fixed-step scene system did not recompute scheduler demand");
+    kb::tests::Require(secondScene.Runtime().RemoveSceneSystem(second) && secondCounters.destroyed == 1,
+        "The independently owned scene system could not be removed");
+}
 
 class FixedMoveSceneSystem final : public kb::scene::SceneSystem {
 public:
@@ -1073,6 +1142,7 @@ void RunSceneBulkCreateObjectsTest() {
 }
 
 void RunSceneSystemTransformSyncTests() {
+    RunSceneSystemHandleRemovalTest();
     RunSceneSystemTransformSyncTest();
     RunTransformSyncContractScriptsRequireExplicitSyncAcrossSystemsTest();
     RunTransformSyncContractFixedStepGetsFreshDataAutomaticallyTest();
