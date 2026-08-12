@@ -23,7 +23,10 @@ public:
     SceneRuntimeService() = delete;
 
     static void AddSystem(Scene& scene, std::unique_ptr<kb::ecs::System> system);
-    static void AddSceneSystem(Scene& scene, std::unique_ptr<SceneSystem> system);
+    static SceneSystemHandle AddSceneSystem(Scene& scene, std::unique_ptr<SceneSystem> system);
+    [[nodiscard]] static bool RemoveSceneSystem(Scene& scene, SceneSystemHandle handle) noexcept;
+    [[nodiscard]] static bool HasSceneSystem(const Scene& scene, SceneSystemHandle handle) noexcept;
+    [[nodiscard]] static std::size_t SceneSystemCount(const Scene& scene) noexcept;
     [[nodiscard]] static std::vector<std::string> DrainSceneSystemErrors(Scene& scene);
     static void SynchronizeTransforms(Scene& scene);
     static void SetFixedStepSettings(Scene& scene, SceneRuntimeFixedStepSettings settings) noexcept;

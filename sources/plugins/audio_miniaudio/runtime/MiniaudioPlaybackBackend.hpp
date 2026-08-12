@@ -10,6 +10,9 @@
 #include "scene/MiniaudioSourceRegistry.hpp"
 
 #include <cstddef>
+#if !defined(NDEBUG)
+#include <thread>
+#endif
 
 namespace kb::scene {
 
@@ -21,6 +24,7 @@ namespace kb::audio_miniaudio {
 
 class MiniaudioPlaybackBackend final : public kb::audio::IAudioPlaybackBackend {
 public:
+    MiniaudioPlaybackBackend();
     ~MiniaudioPlaybackBackend() override;
 
     void OnCreate();
@@ -66,6 +70,7 @@ public:
 #endif
 
 private:
+    void AssertOwnerThread() const noexcept;
     void SyncRouting(kb::scene::Scene& scene, bool routingAvailable);
     [[nodiscard]] kb::audio::AudioPlayResult PlayOneShotInternal(kb::scene::Scene& scene, const kb::audio::AudioPlayDesc& desc, bool playbackAvailable);
     [[nodiscard]] kb::audio::AudioSourceControlResult PlaySourceInternal(kb::scene::Scene& scene, kb::scene::SceneEntity entity, bool playbackAvailable);
@@ -78,6 +83,9 @@ private:
     MiniaudioOcclusionSampler occlusionSampler_;
     MiniaudioSourceRegistry sourceRegistry_;
     MiniaudioVoicePool voicePool_;
+#if !defined(NDEBUG)
+    const std::thread::id ownerThread_;
+#endif
 };
 
 } // namespace kb::audio_miniaudio
