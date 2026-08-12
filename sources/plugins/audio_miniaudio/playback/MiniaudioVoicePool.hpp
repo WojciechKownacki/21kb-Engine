@@ -118,6 +118,20 @@ public:
         return voice == nullptr ? nullptr : voice->sound.get();
     }
     [[nodiscard]] std::size_t VoiceCountForTesting() const noexcept { return voices_.size(); }
+    [[nodiscard]] std::size_t DecoderCountForTesting() const noexcept {
+        std::size_t count = 0U;
+        for (const VoiceRecord& voice : voices_) {
+            count += voice.sound == nullptr ? 0U : voice.sound->DecoderCountForTesting();
+        }
+        return count;
+    }
+    [[nodiscard]] std::size_t EncodedPayloadCountForTesting() const noexcept {
+        std::size_t count = 0U;
+        for (const VoiceRecord& voice : voices_) {
+            count += voice.sound != nullptr && voice.sound->OwnsEncodedPayloadForTesting() ? 1U : 0U;
+        }
+        return count;
+    }
     [[nodiscard]] std::vector<std::uint64_t> VoiceIdsForTesting() const {
         std::vector<std::uint64_t> ids;
         ids.reserve(voices_.size());

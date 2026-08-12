@@ -7,6 +7,10 @@
 #if !defined(NDEBUG)
 #include <thread>
 #endif
+#if defined(KB_AUDIO_MINIAUDIO_TESTING)
+#include <cmath>
+#include <vector>
+#endif
 
 namespace kb::audio_miniaudio {
 
@@ -100,6 +104,7 @@ void MiniaudioPlaybackBackend::Shutdown() noexcept {
     sourceRegistry_.StopAll();
     voicePool_.StopAll();
     busRegistry_.StopAll();
+    clipResolver_.Reset();
     occlusionSampler_.Clear();
     listenerSynchronizer_.Reset();
     engine_.Shutdown();
@@ -213,6 +218,7 @@ kb::audio::AudioDeviceStatus MiniaudioPlaybackBackend::ReinitializeInternal(kb::
     sourceRegistry_.ReleaseNativeResources();
     voicePool_.StopAll();
     busRegistry_.StopAll();
+    clipResolver_.Reset();
     occlusionSampler_.Clear();
     listenerSynchronizer_.Reset();
     engine_.Shutdown();
@@ -245,12 +251,26 @@ kb::audio::AudioSourceControlResult MiniaudioPlaybackBackend::PlaySourceForTesti
         : kb::audio::AudioSourceControlResult{ .status = kb::audio::AudioSourceControlStatus::DeviceUnavailable };
 }
 
+kb::audio::AudioSourceControlResult MiniaudioPlaybackBackend::IsSourcePlayingForTesting(
+    kb::scene::Scene& scene,
+    kb::scene::SceneEntity entity) {
+    AssertOwnerThread();
+    return engine_.IsInitialized()
+        ? sourceRegistry_.IsSourcePlaying(scene, entity, true)
+        : kb::audio::AudioSourceControlResult{
+              .status = kb::audio::AudioSourceControlStatus::DeviceUnavailable,
+          };
+}
+
 MiniaudioPlaybackBackend::ResourceStateForTesting MiniaudioPlaybackBackend::ResourcesForTesting() const noexcept {
     AssertOwnerThread();
     return ResourceStateForTesting{
         .sourceSounds = sourceRegistry_.NativeSoundCountForTesting(),
         .voices = voicePool_.VoiceCountForTesting(),
         .buses = busRegistry_.BusCount(),
+        .decoders = sourceRegistry_.DecoderCountForTesting() + voicePool_.DecoderCountForTesting(),
+        .encodedPayloads = sourceRegistry_.EncodedPayloadCountForTesting()
+            + voicePool_.EncodedPayloadCountForTesting(),
     };
 }
 
@@ -262,6 +282,38 @@ bool MiniaudioPlaybackBackend::StopPlaybackDeviceForTesting() noexcept {
     ma_device* device = ma_engine_get_device(&engine_.Native());
     return device != nullptr && ma_device_stop(device) == MA_SUCCESS;
 }
+
+MiniaudioPlaybackBackend::PumpResultForTesting MiniaudioPlaybackBackend::PumpFramesForTesting(
+    std::uint32_t frameCount) {
+    AssertOwnerThread();
+    if (!engine_.IsInitialized() || frameCount == 0U) {
+        return {};
+    }
+    std::vector<float> samples(static_cast<std::size_t>(frameCount) * 2U);
+    ma_uint64 framesRead = 0U;
+    const ma_result result = ma_engine_read_pcm_frames(&engine_.Native(), samples.data(), frameCount, &framesRead);
+    if ((result != MA_SUCCESS && result != MA_AT_END) || framesRead == 0U) {
+        return {};
+    }
+    double energy = 0.0;
+    for (std::size_t index = 0U; index < static_cast<std::size_t>(framesRead) * 2U; ++index) {
+        energy += std::abs(static_cast<double>(samples[index]));
+    }
+    return { .frames = framesRead, .energy = energy };
+}
+
+float MiniaudioPlaybackBackend::VoicePlaybackSecondsForTesting(std::uint64_t voiceId) noexcept {
+    AssertOwnerThread();
+    return voicePool_.VoicePlaybackSeconds(voiceId);
+}
+
+bool MiniaudioPlaybackBackend::VoiceUsesResourceManagerStreamForTesting(
+    std::uint64_t voiceId) noexcept {
+    AssertOwnerThread();
+    MiniaudioSound* sound = voicePool_.SoundForTesting(voiceId);
+    return sound != nullptr && sound->UsesResourceManagerStreamForTesting();
+}
+
 #endif
 
 bool MiniaudioPlaybackBackend::StopVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept {

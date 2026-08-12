@@ -1,6 +1,7 @@
 #include "assets/MiniaudioClipResolver.hpp"
 #include "engine/assets/AssetImportService.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/audio/AudioClipFormats.hpp"
 #include "engine/audio/AudioMixerAsset.hpp"
 #include "engine/audio/AudioMixerAssetIO.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
@@ -27,16 +28,21 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <ranges>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -52,6 +58,57 @@ void Require(bool condition, std::string_view message) {
 
 [[nodiscard]] std::filesystem::path TestRoot() {
     return std::filesystem::temp_directory_path() / "21kb_audio_runtime_tests";
+}
+
+[[nodiscard]] std::filesystem::path FixtureRoot() {
+    return std::filesystem::path{ KB_AUDIO_RUNTIME_TEST_ASSET_DIR };
+}
+
+struct AudioFixture final {
+    std::string_view extension;
+    std::string_view filename;
+    std::uintmax_t expectedBytes = 0U;
+    std::array<unsigned char, 4U> magic{};
+    std::size_t firstFrameBytes = 0U;
+};
+
+constexpr std::array<AudioFixture, 3U> kAudioFixtures{
+    AudioFixture{ .extension = ".wav", .filename = "tone.wav", .expectedBytes = 22094U, .magic = { 'R', 'I', 'F', 'F' } },
+    AudioFixture{ .extension = ".flac", .filename = "tone.flac", .expectedBytes = 4999U, .magic = { 'f', 'L', 'a', 'C' } },
+    AudioFixture{ .extension = ".mp3", .filename = "tone.mp3", .expectedBytes = 3448U, .magic = { 0xFFU, 0xFBU, 0x70U, 0xC4U }, .firstFrameBytes = 313U },
+};
+
+[[nodiscard]] const AudioFixture& FixtureFor(std::string_view extension) {
+    const auto iterator = std::ranges::find(kAudioFixtures, extension, &AudioFixture::extension);
+    Require(iterator != kAudioFixtures.end(), "Advertised audio format has no decode fixture");
+    return *iterator;
+}
+
+[[nodiscard]] std::filesystem::path FixturePath(const AudioFixture& fixture) {
+    return FixtureRoot() / fixture.filename;
+}
+
+[[nodiscard]] kb::audio_miniaudio::ResolvedAudioClip DirectTestClip(
+    const std::filesystem::path& path) {
+    return kb::audio_miniaudio::ResolvedAudioClip{
+        .path = path,
+        .extension = path.extension().string(),
+        .identity = path.generic_string(),
+    };
+}
+
+[[nodiscard]] std::vector<char> ReadFileBytes(const std::filesystem::path& path) {
+    std::ifstream input{ path, std::ios::binary };
+    Require(input.is_open(), "Audio fixture could not be opened");
+    return { std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+}
+
+void WriteBytes(const std::filesystem::path& path, std::span<const char> bytes) {
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
+    Require(output.is_open(), "Audio payload output could not be opened");
+    output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    Require(output.good(), "Audio payload output could not be written");
 }
 
 void WriteU16(std::ofstream& output, std::uint16_t value) {
@@ -97,6 +154,33 @@ void WriteSilentWav(const std::filesystem::path& path) {
     Require(output.good(), "Audio test wave could not be written");
 }
 
+void WriteLongSparseWav(const std::filesystem::path& path) {
+    std::filesystem::create_directories(path.parent_path());
+    constexpr std::uint16_t channels = 1U;
+    constexpr std::uint32_t sampleRate = 44100U;
+    constexpr std::uint16_t bitsPerSample = 16U;
+    constexpr std::uint32_t durationSeconds = 120U;
+    constexpr std::uint32_t bytesPerSample = bitsPerSample / 8U;
+    constexpr std::uint32_t dataSize = sampleRate * durationSeconds * channels * bytesPerSample;
+    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
+    Require(output.is_open(), "Long audio probe fixture could not be opened");
+    output.write("RIFF", 4);
+    WriteU32(output, 36U + dataSize);
+    output.write("WAVEfmt ", 8);
+    WriteU32(output, 16U);
+    WriteU16(output, 1U);
+    WriteU16(output, channels);
+    WriteU32(output, sampleRate);
+    WriteU32(output, sampleRate * channels * bytesPerSample);
+    WriteU16(output, channels * bytesPerSample);
+    WriteU16(output, bitsPerSample);
+    output.write("data", 4);
+    WriteU32(output, dataSize);
+    output.seekp(static_cast<std::streamoff>(dataSize - 1U), std::ios::cur);
+    output.put('\0');
+    Require(output.good(), "Long sparse audio probe fixture could not be completed");
+}
+
 void WriteTruncatedAudio(const std::filesystem::path& path) {
     std::filesystem::create_directories(path.parent_path());
     std::ofstream output{ path, std::ios::binary | std::ios::trunc };
@@ -110,7 +194,7 @@ void RegisterClip(kb::scene::Scene& scene, std::uint64_t id, const std::filesyst
                 .id = kb::assets::AssetId{ id },
                 .type = "AudioClip",
                 .name = "RuntimeClip",
-                .virtualPath = "/Audio/Runtime" + std::to_string(id) + ".wav",
+                .virtualPath = "/Audio/Runtime" + std::to_string(id) + path.extension().string(),
                 .physicalPath = path.string(),
                 .contentHash = id,
             }),
@@ -140,6 +224,13 @@ public:
           }) {}
 
     ~OfflineEnginePump() {
+        Stop();
+    }
+
+    void Stop() {
+        if (!thread_.joinable()) {
+            return;
+        }
         stop_.store(true, std::memory_order_relaxed);
         thread_.join();
     }
@@ -152,13 +243,694 @@ private:
     std::thread thread_;
 };
 
+void RunAdvertisedFormatDecodeTest() {
+    Require(kb::audio::kSupportedAudioClipExtensions.size() == kAudioFixtures.size(),
+        "Advertised audio format count diverged from real decode fixtures");
+
+    kb::audio_miniaudio::MiniaudioEngine engine;
+    engine.Initialize(true);
+    Require(engine.Status() == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
+        "Format decode test did not create its offline engine");
+
+    std::size_t fixtureIndex = 0U;
+    for (const std::string_view extension : kb::audio::kSupportedAudioClipExtensions) {
+        const AudioFixture& fixture = FixtureFor(extension);
+        const std::filesystem::path path = FixturePath(fixture);
+        const std::vector<char> bytes = ReadFileBytes(path);
+        Require(bytes.size() == fixture.expectedBytes && bytes.size() > fixture.magic.size(),
+            "Audio decode fixture size changed unexpectedly");
+        Require(std::equal(fixture.magic.begin(), fixture.magic.end(), bytes.begin(),
+                    [](unsigned char expected, char actual) {
+                        return expected == static_cast<unsigned char>(actual);
+                    }),
+            "Audio decode fixture magic is invalid");
+
+        const bool spatial = fixtureIndex++ == 1U;
+        kb::audio_miniaudio::MiniaudioSound sound;
+        Require(sound.Initialize(engine.Native(), DirectTestClip(path), spatial) == MA_SUCCESS,
+            "Advertised audio fixture could not initialize through the production sound");
+        Require(sound.DecoderCountForTesting() == 0U
+                && !sound.OwnsEncodedPayloadForTesting()
+                && sound.UsesResourceManagerStreamForTesting(),
+            "Advertised direct audio fixture did not use resource-manager streaming");
+        sound.Apply(kb::audio_miniaudio::MiniaudioSoundSettings{
+            .volume = 1.0F,
+            .spatial = spatial,
+            .spatialBlend = spatial ? 0.75F : 1.0F,
+        });
+        Require(sound.Start() == MA_SUCCESS,
+            "Advertised audio fixture could not start through the production sound");
+
+        std::array<float, 4096U * 2U> output{};
+        double energy = 0.0;
+        ma_uint64 pumpedFrames = 0U;
+        for (std::uint32_t read = 0U; read < 4U; ++read) {
+            ma_uint64 framesRead = 0U;
+            const ma_result result = ma_engine_read_pcm_frames(
+                &engine.Native(), output.data(), output.size() / 2U, &framesRead);
+            Require(result == MA_SUCCESS || result == MA_AT_END,
+                "Offline engine rejected an advertised decoded stream");
+            pumpedFrames += framesRead;
+            for (std::size_t sample = 0U; sample < static_cast<std::size_t>(framesRead) * 2U; ++sample) {
+                energy += std::abs(static_cast<double>(output[sample]));
+            }
+        }
+        Require(pumpedFrames > 0U && sound.PlaybackFrame() > 0U && energy > 1.0,
+            "Advertised audio fixture start did not produce decoded nonzero PCM");
+        sound.Reset();
+    }
+
+    const std::filesystem::path longPath = TestRoot() / "LongProbe.wav";
+    WriteLongSparseWav(longPath);
+    kb::scene::Scene validationScene;
+    RegisterClip(validationScene, 8699U, longPath);
+    kb::audio_miniaudio::MiniaudioClipResolver boundedResolver;
+    Require(boundedResolver.Resolve(validationScene, 8699U).Succeeded(),
+        "Long audio input failed bounded decode-readiness validation");
+    const auto validationStats = boundedResolver.StatsForTesting();
+    Require(validationStats.attempts == 1U
+            && validationStats.maxDecodedProbeFrames <= 256U
+            && validationStats.maxTailBytesInspected == 0U
+            && validationStats.cacheEntries == 1U,
+        "Long audio input caused validation work proportional to decoded duration");
+    Require(boundedResolver.Resolve(validationScene, 8699U).Succeeded()
+            && boundedResolver.StatsForTesting().attempts == 1U,
+        "Repeated direct resolve did not reuse the bounded validation result");
+    kb::assets::AssetMetadata revisedLongMetadata =
+        *validationScene.Assets().Manager().Registry().Find(kb::assets::AssetId{ 8699U });
+    ++revisedLongMetadata.contentHash;
+    Require(validationScene.Assets().Manager().Registry().Upsert(std::move(revisedLongMetadata))
+            && boundedResolver.Resolve(validationScene, 8699U).Succeeded(),
+        "Changed direct asset revision did not refresh bounded validation");
+    const auto revisedStats = boundedResolver.StatsForTesting();
+    Require(revisedStats.attempts == 2U && revisedStats.cacheEntries == 1U,
+        "Direct asset revision grew the per-asset validation cache");
+    Require(validationScene.Assets().Manager().Registry().Remove(kb::assets::AssetId{ 8699U })
+            && !boundedResolver.Resolve(validationScene, 8699U).Succeeded()
+            && boundedResolver.StatsForTesting().cacheEntries == 0U,
+        "Missing direct asset retained its validation cache entry");
+    constexpr std::uint64_t cacheAssetBase = 900000U;
+    const std::size_t cacheFixtureCount =
+        kb::audio_miniaudio::MiniaudioClipResolver::ValidationCacheCapacityForTesting() + 5U;
+    for (std::size_t index = 0U; index < cacheFixtureCount; ++index) {
+        const std::uint64_t assetId = cacheAssetBase + index;
+        RegisterClip(validationScene, assetId, longPath);
+        Require(boundedResolver.Resolve(validationScene, assetId).Succeeded(),
+            "Bounded validation cache fixture did not resolve");
+    }
+    const auto cappedStats = boundedResolver.StatsForTesting();
+    Require(cappedStats.cacheEntries
+                == kb::audio_miniaudio::MiniaudioClipResolver::ValidationCacheCapacityForTesting()
+            && cappedStats.maxCacheEntries
+                == kb::audio_miniaudio::MiniaudioClipResolver::ValidationCacheCapacityForTesting(),
+        "Per-asset decode validation cache exceeded its deterministic capacity");
+}
+
+[[nodiscard]] bool SameResources(
+    const kb::audio_miniaudio::MiniaudioPlaybackBackend::ResourceStateForTesting& left,
+    const kb::audio_miniaudio::MiniaudioPlaybackBackend::ResourceStateForTesting& right) noexcept {
+    return left.sourceSounds == right.sourceSounds && left.voices == right.voices
+        && left.buses == right.buses && left.decoders == right.decoders
+        && left.encodedPayloads == right.encodedPayloads;
+}
+
+[[nodiscard]] std::string DescribeResources(
+    const kb::audio_miniaudio::MiniaudioPlaybackBackend::ResourceStateForTesting& resources) {
+    return "sources=" + std::to_string(resources.sourceSounds)
+        + ", voices=" + std::to_string(resources.voices)
+        + ", buses=" + std::to_string(resources.buses)
+        + ", decoders=" + std::to_string(resources.decoders)
+        + ", payloads=" + std::to_string(resources.encodedPayloads);
+}
+
+void RequireVoiceDecodeEvidence(
+    kb::audio_miniaudio::MiniaudioPlaybackBackend& backend,
+    kb::scene::Scene& scene,
+    std::uint64_t voiceId,
+    std::string_view label) {
+    std::uint64_t frames = 0U;
+    double energy = 0.0;
+    float previousCursor = backend.VoicePlaybackSecondsForTesting(voiceId);
+    Require(previousCursor >= 0.0F, std::string{ label } + " voice does not exist before offline pump");
+    bool cursorChanged = false;
+    for (std::uint32_t attempt = 0U; attempt < 32U; ++attempt) {
+        const auto pump = backend.PumpFramesForTesting(256U);
+        frames += pump.frames;
+        energy += pump.energy;
+        const float cursor = backend.VoicePlaybackSecondsForTesting(voiceId);
+        Require(cursor >= 0.0F, std::string{ label } + " voice disappeared during offline pump");
+        Require(backend.IsVoicePlaying(scene, voiceId),
+            std::string{ label } + " voice stopped during offline pump");
+        cursorChanged = cursorChanged || cursor != previousCursor;
+        previousCursor = cursor;
+        if (frames > 0U && energy > 1.0 && cursorChanged) {
+            break;
+        }
+    }
+    Require(frames > 0U, std::string{ label } + " voice produced no offline PCM frames");
+    Require(energy > 1.0, std::string{ label } + " voice produced no nonzero offline PCM energy");
+    Require(cursorChanged, std::string{ label } + " voice playback cursor never changed");
+}
+
+void RunFormatRejectionTest() {
+    kb::scene::Scene scene;
+    kb::audio_miniaudio::MiniaudioPlaybackBackend backend;
+    Require(backend.ReinitializeForTesting(scene, true) == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
+        "Format rejection backend did not initialize offline");
+
+    constexpr std::uint64_t validBase = 8700U;
+    kb::audio_miniaudio::MiniaudioClipResolver resolver;
+    for (std::size_t index = 0U; index < kAudioFixtures.size(); ++index) {
+        RegisterClip(scene, validBase + index, FixturePath(kAudioFixtures[index]));
+        Require(resolver.Resolve(scene, validBase + index).Succeeded(),
+            "Advertised direct audio asset failed bounded resolver validation");
+        const kb::audio::AudioPlayResult result = backend.PlayOneShotForTesting(scene, kb::audio::AudioPlayDesc{
+            .clipAssetId = validBase + index,
+            .volume = 0.0F,
+            .loop = true,
+            .spatial = false,
+        });
+        Require(result.Succeeded(), "Advertised direct audio asset did not play through the production backend");
+        Require(backend.StopVoice(scene, result.voiceId),
+            "Advertised direct audio validation voice could not be released");
+    }
+
+    const kb::scene::SceneObject retainedSource = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{ .name = "Retained Format Source" });
+    scene.Components().AudioSources().Set(retainedSource.Entity(), kb::scene::AudioSourceComponent{
+        .clipAssetId = validBase,
+        .volume = 0.0F,
+        .loop = true,
+        .spatial = false,
+    });
+    Require(backend.PlaySourceForTesting(scene, retainedSource.Entity()).Succeeded(),
+        "Format rejection fixture did not create its retained source");
+    const kb::audio::AudioPlayResult retainedVoice = backend.PlayOneShotForTesting(scene, kb::audio::AudioPlayDesc{
+        .clipAssetId = validBase + 1U,
+        .volume = 0.0F,
+        .loop = true,
+        .spatial = false,
+    });
+    Require(retainedVoice.Succeeded(), "Format rejection fixture did not create its retained voice");
+
+    std::uint64_t corruptId = 8750U;
+    for (const AudioFixture& fixture : kAudioFixtures) {
+        const std::vector<char> validBytes = ReadFileBytes(FixturePath(fixture));
+        const std::filesystem::path invalidMagic = TestRoot() /
+            ("InvalidMagic" + std::string{ fixture.extension });
+        const std::array<char, 32U> invalidBytes{};
+        WriteBytes(invalidMagic, invalidBytes);
+
+        const std::filesystem::path truncated = TestRoot() /
+            ("Truncated" + std::string{ fixture.extension });
+        WriteBytes(truncated, std::span<const char>{ validBytes.data(), validBytes.size() / 2U });
+
+        for (const std::filesystem::path& rejectedPath : { invalidMagic, truncated }) {
+            const std::uint64_t id = corruptId++;
+            RegisterClip(scene, id, rejectedPath);
+            const auto before = backend.ResourcesForTesting();
+            Require(!resolver.Resolve(scene, id).Succeeded(),
+                "Corrupt advertised audio payload passed resolver decode preflight");
+            Require(!backend.PlayOneShotForTesting(scene, kb::audio::AudioPlayDesc{
+                        .clipAssetId = id,
+                        .volume = 0.0F,
+                        .loop = true,
+                        .spatial = false,
+                    }).Succeeded(),
+                "Corrupt advertised audio payload created a production one-shot");
+            kb::scene::AudioSourceComponent* component =
+                scene.Components().AudioSources().TryGet(retainedSource.Entity());
+            Require(component != nullptr, "Retained format source component disappeared");
+            component->clipAssetId = id;
+            Require(!backend.PlaySourceForTesting(scene, retainedSource.Entity()).Succeeded(),
+                "Corrupt advertised audio payload replaced a production source");
+            Require(SameResources(before, backend.ResourcesForTesting()),
+                "Rejected advertised audio payload mutated live backend resources");
+        }
+    }
+
+    const std::filesystem::path mismatched = TestRoot() / "Mismatched.mp3";
+    std::filesystem::copy_file(FixturePath(FixtureFor(".wav")), mismatched,
+        std::filesystem::copy_options::overwrite_existing);
+    const std::uint64_t mismatchedId = corruptId++;
+    RegisterClip(scene, mismatchedId, mismatched);
+    const auto beforeMismatch = backend.ResourcesForTesting();
+    Require(!resolver.Resolve(scene, mismatchedId).Succeeded()
+            && !backend.PlayOneShotForTesting(scene, kb::audio::AudioPlayDesc{
+                    .clipAssetId = mismatchedId,
+                    .volume = 0.0F,
+                    .loop = true,
+                    .spatial = false,
+                }).Succeeded()
+            && SameResources(beforeMismatch, backend.ResourcesForTesting()),
+        "Extension-mismatched audio payload was accepted or mutated live resources");
+
+    const std::vector<char> compressedBytes = ReadFileBytes(FixturePath(FixtureFor(".mp3")));
+    std::vector<char> isolatedSync(1024U, '\0');
+    std::copy_n(compressedBytes.begin(), 4U, isolatedSync.begin() + 137U);
+    const std::filesystem::path isolatedSyncPath = TestRoot() / "IsolatedSync.mp3";
+    WriteBytes(isolatedSyncPath, isolatedSync);
+    const std::uint64_t isolatedSyncId = corruptId++;
+    RegisterClip(scene, isolatedSyncId, isolatedSyncPath);
+    const auto beforeIsolatedSync = backend.ResourcesForTesting();
+    Require(!resolver.Resolve(scene, isolatedSyncId).Succeeded()
+            && !backend.PlayOneShotForTesting(scene, kb::audio::AudioPlayDesc{
+                    .clipAssetId = isolatedSyncId,
+                    .volume = 0.0F,
+                    .loop = true,
+                    .spatial = false,
+                }).Succeeded()
+            && SameResources(beforeIsolatedSync, backend.ResourcesForTesting()),
+        "An isolated compressed-frame sync was accepted as an audio stream");
+
+    std::vector<char> withDeclaredTag(10U, '\0');
+    withDeclaredTag[0] = 'I';
+    withDeclaredTag[1] = 'D';
+    withDeclaredTag[2] = '3';
+    withDeclaredTag[3] = 4;
+    withDeclaredTag.insert(withDeclaredTag.end(), compressedBytes.begin(), compressedBytes.end());
+    const std::filesystem::path declaredTagPath = TestRoot() / "DeclaredTag.mp3";
+    WriteBytes(declaredTagPath, withDeclaredTag);
+    const std::uint64_t declaredTagId = corruptId++;
+    RegisterClip(scene, declaredTagId, declaredTagPath);
+    Require(resolver.Resolve(scene, declaredTagId).Succeeded(),
+        "A legal declared compressed-audio prefix was rejected");
+
+    std::vector<char> withTrailingTag = compressedBytes;
+    const std::size_t tagOffset = withTrailingTag.size();
+    withTrailingTag.resize(tagOffset + 128U, '\0');
+    withTrailingTag[tagOffset] = 'T';
+    withTrailingTag[tagOffset + 1U] = 'A';
+    withTrailingTag[tagOffset + 2U] = 'G';
+    const std::filesystem::path trailingTagPath = TestRoot() / "TrailingTag.mp3";
+    WriteBytes(trailingTagPath, withTrailingTag);
+    const std::uint64_t trailingTagId = corruptId++;
+    RegisterClip(scene, trailingTagId, trailingTagPath);
+    Require(resolver.Resolve(scene, trailingTagId).Succeeded(),
+        "Legal trailing compressed-audio metadata was rejected");
+
+    std::vector<char> withDisconnectedTail = compressedBytes;
+    const std::size_t disconnectedTailOffset = withDisconnectedTail.size();
+    const std::size_t fixtureFrameBytes = FixtureFor(".mp3").firstFrameBytes;
+    Require(fixtureFrameBytes > 4U,
+        "Compressed fixture did not declare its first frame length");
+    withDisconnectedTail.resize(disconnectedTailOffset + fixtureFrameBytes + 32U, '\0');
+    std::copy_n(compressedBytes.begin(), 4U,
+        withDisconnectedTail.begin() + static_cast<std::ptrdiff_t>(disconnectedTailOffset + 7U));
+    std::copy_n(compressedBytes.begin(), 4U,
+        withDisconnectedTail.begin()
+            + static_cast<std::ptrdiff_t>(disconnectedTailOffset + 7U + fixtureFrameBytes));
+    const std::filesystem::path disconnectedTailPath = TestRoot() / "DisconnectedTail.mp3";
+    WriteBytes(disconnectedTailPath, withDisconnectedTail);
+    const std::uint64_t disconnectedTailId = corruptId++;
+    RegisterClip(scene, disconnectedTailId, disconnectedTailPath);
+    Require(resolver.Resolve(scene, disconnectedTailId).Succeeded(),
+        "Disconnected exact-linked tail headers overrode forced native format validation");
+
+    const std::filesystem::path revised = TestRoot() / "Revised.wav";
+    std::filesystem::copy_file(FixturePath(FixtureFor(".wav")), revised,
+        std::filesystem::copy_options::overwrite_existing);
+    constexpr std::uint64_t revisedId = 8799U;
+    RegisterClip(scene, revisedId, revised);
+    Require(resolver.Resolve(scene, revisedId).Succeeded(),
+        "Valid content revision fixture did not pass initial preflight");
+    const std::array<char, 32U> revisedInvalid{};
+    WriteBytes(revised, revisedInvalid);
+    kb::assets::AssetMetadata revisedMetadata =
+        *scene.Assets().Manager().Registry().Find(kb::assets::AssetId{ revisedId });
+    ++revisedMetadata.contentHash;
+    Require(scene.Assets().Manager().Registry().Upsert(std::move(revisedMetadata))
+            && !resolver.Resolve(scene, revisedId).Succeeded(),
+        "Changed authoritative asset revision reused a stale decode validation");
+    const auto formatValidationStats = resolver.StatsForTesting();
+    Require(formatValidationStats.maxDecodedProbeFrames <= 256U
+            && formatValidationStats.maxTailBytesInspected <= 64U * 1024U,
+        "Compressed format validation exceeded its fixed probe or tail bounds");
+}
+
+[[nodiscard]] std::vector<kb::assets::AssetId> ImportFixtures(
+    kb::scene::Scene& scene,
+    const std::filesystem::path& projectRoot) {
+    Require(scene.Assets().MountProject(projectRoot), "Imported audio memory project did not mount");
+    std::vector<kb::assets::AssetId> ids;
+    ids.reserve(kAudioFixtures.size());
+    for (const AudioFixture& fixture : kAudioFixtures) {
+        const std::array<std::filesystem::path, 1U> source{ FixturePath(fixture) };
+        const kb::assets::AssetImportResult result = kb::assets::AssetImportService::ImportFiles(
+            scene.Assets().Manager(), source, "/Game/Audio");
+        Require(result.Succeeded() && result.items.size() == 1U,
+            "Advertised audio fixture could not be imported");
+        ids.push_back(result.items.front().id);
+    }
+    return ids;
+}
+
+void RunImportedMemoryLifecycleTest() {
+    kb::scene::Scene scene;
+    const std::vector<kb::assets::AssetId> importedIds =
+        ImportFixtures(scene, TestRoot() / "ImportedFormatsProject");
+
+    kb::audio_miniaudio::MiniaudioClipResolver integrityResolver;
+    Require(integrityResolver.Resolve(scene, importedIds.front().value).Succeeded(),
+        "Imported payload failed its first integrity validation");
+    const auto firstIntegrityStats = integrityResolver.StatsForTesting();
+    Require(firstIntegrityStats.attempts == 1U
+            && firstIntegrityStats.payloadHashAttempts == 1U
+            && firstIntegrityStats.payloadBytesHashed > 0U
+            && firstIntegrityStats.cacheEntries == 1U,
+        "First imported resolve did not perform exactly one payload integrity pass");
+    Require(integrityResolver.Resolve(scene, importedIds.front().value).Succeeded(),
+        "Repeated imported resolve failed");
+    const auto repeatedIntegrityStats = integrityResolver.StatsForTesting();
+    Require(repeatedIntegrityStats.attempts == firstIntegrityStats.attempts
+            && repeatedIntegrityStats.payloadHashAttempts == firstIntegrityStats.payloadHashAttempts
+            && repeatedIntegrityStats.payloadBytesHashed == firstIntegrityStats.payloadBytesHashed,
+        "Imported validation cache hit rehashed or reprobed the encoded payload");
+
+    kb::audio_miniaudio::MiniaudioPlaybackBackend backend;
+    Require(backend.ReinitializeForTesting(scene, true) == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
+        "Imported format backend did not initialize offline");
+
+    for (std::size_t index = 0U; index < importedIds.size(); ++index) {
+        const kb::assets::AssetId id = importedIds[index];
+        const std::string evidence = "Imported " + std::string{ kAudioFixtures[index].extension };
+        const bool spatial = index == 1U;
+        const auto resourcesBefore = backend.ResourcesForTesting();
+        const kb::audio::AudioPlayResult voice = backend.PlayOneShotForTesting(scene, kb::audio::AudioPlayDesc{
+            .clipAssetId = id.value,
+            .volume = 1.0F,
+            .loop = true,
+            .spatial = spatial,
+        });
+        Require(voice.Succeeded(), evidence + " voice did not start through the production backend");
+        const auto resourcesStarted = backend.ResourcesForTesting();
+        Require(resourcesStarted.sourceSounds == resourcesBefore.sourceSounds
+                && resourcesStarted.voices == resourcesBefore.voices + 1U
+                && resourcesStarted.buses == resourcesBefore.buses
+                && resourcesStarted.decoders == resourcesBefore.decoders + (spatial ? 2U : 1U)
+                && resourcesStarted.encodedPayloads == resourcesBefore.encodedPayloads + 1U
+                && !backend.VoiceUsesResourceManagerStreamForTesting(voice.voiceId),
+            evidence + " voice start produced an unexpected native resource state");
+
+        RequireVoiceDecodeEvidence(backend, scene, voice.voiceId, evidence);
+        Require(backend.StopVoice(scene, voice.voiceId),
+            evidence + " validation voice could not be stopped");
+        Require(SameResources(backend.ResourcesForTesting(), resourcesBefore),
+            evidence + " validation voice retained a native resource after stop");
+    }
+
+    const kb::scene::SceneObject source = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{ .name = "Imported Memory Source" });
+    scene.Components().AudioSources().Set(source.Entity(), kb::scene::AudioSourceComponent{
+        .clipAssetId = importedIds.front().value,
+        .volume = 0.0F,
+        .loop = true,
+        .spatial = false,
+    });
+    Require(backend.PlaySourceForTesting(scene, source.Entity()).Succeeded(),
+        "Imported memory reinitialize source could not be created");
+    const kb::audio::AudioPlayResult memoryVoice = backend.PlayOneShotForTesting(scene, kb::audio::AudioPlayDesc{
+        .clipAssetId = importedIds.front().value,
+        .volume = 0.0F,
+        .loop = true,
+        .spatial = false,
+    });
+    const auto memoryPump = backend.PumpFramesForTesting(512U);
+    Require(memoryVoice.Succeeded() && memoryPump.frames > 0U,
+        "Imported memory reinitialize voice could not be pumped");
+    Require(backend.ReinitializeForTesting(scene, true) == kb::audio::AudioDeviceStatus::NoPlaybackDevice
+            && SameResources(backend.ResourcesForTesting(), {}),
+        "Backend reinitialize did not release imported sounds, decoders and payload owners");
+    Require(backend.PlaySourceForTesting(scene, source.Entity()).Succeeded(),
+        "Backend did not recreate imported component playback after reinitialize");
+    const kb::audio::AudioPlayResult recreatedVoice = backend.PlayOneShotForTesting(scene, kb::audio::AudioPlayDesc{
+        .clipAssetId = importedIds.front().value,
+        .volume = 0.0F,
+        .loop = true,
+        .spatial = false,
+    });
+    const auto recreatedResources = backend.ResourcesForTesting();
+    Require(recreatedVoice.Succeeded() && backend.PumpFramesForTesting(512U).frames > 0U
+            && recreatedResources.sourceSounds == 1U && recreatedResources.voices == 1U
+            && recreatedResources.decoders == 2U && recreatedResources.encodedPayloads == 2U,
+        "Backend did not recreate exact imported decoder and payload ownership after reinitialize");
+    backend.Shutdown();
+    Require(SameResources(backend.ResourcesForTesting(), {}),
+        "Backend shutdown retained an imported sound, decoder or payload owner");
+
+    kb::assets::AssetMetadata revisedImportedMetadata =
+        *scene.Assets().Manager().Registry().Find(importedIds.front());
+    const std::filesystem::path revisedImportedPath = revisedImportedMetadata.physicalPath;
+    std::vector<char> revisedImportedContainer = ReadFileBytes(revisedImportedPath);
+    Require(!revisedImportedContainer.empty(),
+        "Imported integrity revision container was empty");
+    revisedImportedContainer.back() = static_cast<char>(revisedImportedContainer.back() ^ 0x5A);
+    WriteBytes(revisedImportedPath, revisedImportedContainer);
+    ++revisedImportedMetadata.contentHash;
+    Require(scene.Assets().Manager().Registry().Upsert(std::move(revisedImportedMetadata)),
+        "Imported integrity revision metadata could not be updated");
+    static_cast<void>(scene.Assets().Manager().Unload(importedIds.front()));
+    Require(!integrityResolver.Resolve(scene, importedIds.front().value).Succeeded(),
+        "Changed imported revision reused stale payload integrity validation");
+    const auto revisedIntegrityStats = integrityResolver.StatsForTesting();
+    Require(revisedIntegrityStats.attempts == 2U
+            && revisedIntegrityStats.payloadHashAttempts == 2U
+            && revisedIntegrityStats.cacheEntries == 1U,
+        "Changed imported revision did not replace its per-asset validation entry");
+    revisedImportedContainer.back() = static_cast<char>(revisedImportedContainer.back() ^ 0x5A);
+    WriteBytes(revisedImportedPath, revisedImportedContainer);
+    kb::assets::AssetMetadata repairedImportedMetadata =
+        *scene.Assets().Manager().Registry().Find(importedIds.front());
+    ++repairedImportedMetadata.contentHash;
+    Require(scene.Assets().Manager().Registry().Upsert(std::move(repairedImportedMetadata)),
+        "Repaired imported integrity revision metadata could not be updated");
+    static_cast<void>(scene.Assets().Manager().Unload(importedIds.front()));
+    Require(integrityResolver.Resolve(scene, importedIds.front().value).Succeeded(),
+        "Repaired imported asset did not validate after an invalid revision");
+    const auto repairedIntegrityStats = integrityResolver.StatsForTesting();
+    Require(repairedIntegrityStats.attempts == 3U
+            && repairedIntegrityStats.payloadHashAttempts == 3U
+            && repairedIntegrityStats.cacheEntries == 1U,
+        "Invalid-to-repaired imported revision retained or grew stale validation state");
+    const std::array<char, 1U> invalidContainer{ '\0' };
+    WriteBytes(revisedImportedPath, invalidContainer);
+    static_cast<void>(scene.Assets().Manager().Unload(importedIds.front()));
+    Require(!integrityResolver.Resolve(scene, importedIds.front().value).Succeeded()
+            && integrityResolver.StatsForTesting().cacheEntries == 0U,
+        "Invalid imported container retained a stale per-asset validation entry");
+    WriteBytes(revisedImportedPath, revisedImportedContainer);
+    static_cast<void>(scene.Assets().Manager().Unload(importedIds.front()));
+    Require(integrityResolver.Resolve(scene, importedIds.front().value).Succeeded(),
+        "Imported container repair with stable metadata identity reused stale invalid state");
+    const auto stableRepairStats = integrityResolver.StatsForTesting();
+    Require(stableRepairStats.attempts == 4U
+            && stableRepairStats.payloadHashAttempts == 4U
+            && stableRepairStats.cacheEntries == 1U,
+        "Stable-identity imported repair was not fully revalidated");
+
+    kb::scene::Scene firstScene;
+    kb::scene::Scene secondScene;
+    const std::vector<kb::assets::AssetId> firstIds =
+        ImportFixtures(firstScene, TestRoot() / "ConcurrentImportedProjectA");
+    const std::vector<kb::assets::AssetId> secondIds =
+        ImportFixtures(secondScene, TestRoot() / "ConcurrentImportedProjectB");
+    kb::audio_miniaudio::MiniaudioPlaybackBackend firstBackend;
+    kb::audio_miniaudio::MiniaudioPlaybackBackend secondBackend;
+    Require(firstBackend.ReinitializeForTesting(firstScene, true) == kb::audio::AudioDeviceStatus::NoPlaybackDevice
+            && secondBackend.ReinitializeForTesting(secondScene, true) == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
+        "Concurrent imported backends did not initialize offline");
+    const kb::audio::AudioPlayResult firstVoice = firstBackend.PlayOneShotForTesting(firstScene, kb::audio::AudioPlayDesc{
+        .clipAssetId = firstIds.front().value,
+        .volume = 1.0F,
+        .loop = true,
+        .spatial = false,
+    });
+    const kb::audio::AudioPlayResult secondVoice = secondBackend.PlayOneShotForTesting(secondScene, kb::audio::AudioPlayDesc{
+        .clipAssetId = secondIds.front().value,
+        .volume = 1.0F,
+        .loop = true,
+        .spatial = false,
+    });
+    const auto firstResources = firstBackend.ResourcesForTesting();
+    const auto secondResources = secondBackend.ResourcesForTesting();
+    Require(firstVoice.Succeeded() && secondVoice.Succeeded()
+            && firstResources.voices == 1U && firstResources.decoders == 1U
+            && firstResources.encodedPayloads == 1U
+            && secondResources.voices == 1U && secondResources.decoders == 1U
+            && secondResources.encodedPayloads == 1U,
+        "Concurrent production backends did not own independent imported decoders");
+
+    const kb::assets::AssetMetadata* secondMetadata =
+        secondScene.Assets().Manager().Registry().Find(secondIds.front());
+    Require(secondMetadata != nullptr, "Concurrent imported metadata disappeared");
+    const std::filesystem::path secondContainer = secondMetadata->physicalPath;
+    Require(secondScene.Assets().Manager().DeleteAsset(secondIds.front()),
+        "Live imported asset container could not be deleted");
+    Require(secondScene.Assets().Manager().Registry().Find(secondIds.front()) == nullptr
+            && !std::filesystem::exists(secondContainer),
+        "Deleted live imported asset retained metadata or its container");
+    Require(secondBackend.PumpFramesForTesting(2048U).energy > 1.0,
+        "Deleting a live imported asset interrupted its payload-owned decoder");
+    firstBackend.Shutdown();
+    Require(SameResources(firstBackend.ResourcesForTesting(), {})
+            && secondBackend.ResourcesForTesting().voices == 1U
+            && secondBackend.ResourcesForTesting().decoders == 1U
+            && secondBackend.ResourcesForTesting().encodedPayloads == 1U,
+        "First backend shutdown released another backend's decoder or payload owner");
+    RequireVoiceDecodeEvidence(secondBackend, secondScene, secondVoice.voiceId,
+        "Second isolated imported backend");
+    secondBackend.Shutdown();
+    Require(SameResources(secondBackend.ResourcesForTesting(), {}),
+        "Second backend retained its decoder or encoded payload owner after shutdown");
+
+    kb::scene::Scene corruptScene;
+    Require(corruptScene.Assets().MountProject(TestRoot() / "CorruptImportedProject"),
+        "Corrupt imported audio project did not mount");
+    kb::audio_miniaudio::MiniaudioClipResolver corruptResolver;
+    kb::audio_miniaudio::MiniaudioPlaybackBackend corruptBackend;
+    Require(corruptBackend.ReinitializeForTesting(corruptScene, true) == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
+        "Corrupt imported backend did not initialize offline");
+    const kb::scene::SceneObject corruptSourceEntity = corruptScene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{ .name = "Corrupt Imported Source" });
+    const std::array<std::filesystem::path, 1U> retainedSourcePath{
+        FixturePath(FixtureFor(".wav")),
+    };
+    const kb::assets::AssetImportResult retainedImport = kb::assets::AssetImportService::ImportFiles(
+        corruptScene.Assets().Manager(), retainedSourcePath, "/Game/Audio");
+    Require(retainedImport.Succeeded() && retainedImport.items.size() == 1U,
+        "Retained imported source fixture could not be imported");
+    const std::uint64_t retainedClipId = retainedImport.items.front().id.value;
+    corruptScene.Components().AudioSources().Set(corruptSourceEntity.Entity(), kb::scene::AudioSourceComponent{
+        .clipAssetId = retainedClipId,
+        .volume = 0.0F,
+        .loop = true,
+        .spatial = false,
+    });
+    Require(corruptBackend.PlaySourceForTesting(corruptScene, corruptSourceEntity.Entity()).Succeeded(),
+        "Retained imported source could not be created");
+    const kb::audio::AudioPlayResult retainedImportedVoice =
+        corruptBackend.PlayOneShotForTesting(corruptScene, kb::audio::AudioPlayDesc{
+            .clipAssetId = retainedClipId,
+            .volume = 0.0F,
+            .loop = true,
+            .spatial = false,
+        });
+    Require(retainedImportedVoice.Succeeded(),
+        "Retained imported one-shot could not be created");
+    std::uint32_t corruptIndex = 0U;
+    for (const AudioFixture& fixture : kAudioFixtures) {
+        const std::vector<char> validBytes = ReadFileBytes(FixturePath(fixture));
+        const std::array<char, 32U> invalid{};
+        const std::array<std::span<const char>, 2U> rejectedPayloads{
+            std::span<const char>{ invalid },
+            std::span<const char>{ validBytes.data(), validBytes.size() / 2U },
+        };
+        for (std::size_t payloadIndex = 0U; payloadIndex < rejectedPayloads.size(); ++payloadIndex) {
+            const std::span<const char> rejectedPayload = rejectedPayloads[payloadIndex];
+            const std::string rejectionLabel = std::string{ fixture.extension }
+                + (payloadIndex == 0U ? " invalid-magic" : " truncated");
+            const std::filesystem::path corruptSource = TestRoot() /
+                ("ImportedCorrupt" + std::to_string(corruptIndex++) + std::string{ fixture.extension });
+            WriteBytes(corruptSource, rejectedPayload);
+            const std::array<std::filesystem::path, 1U> sourcePath{ corruptSource };
+            const kb::assets::AssetImportResult imported = kb::assets::AssetImportService::ImportFiles(
+                corruptScene.Assets().Manager(), sourcePath, "/Game/Audio");
+            Require(imported.Succeeded() && imported.items.size() == 1U,
+                "Corrupt advertised payload could not enter the imported container path");
+            const std::uint64_t corruptId = imported.items.front().id.value;
+            const auto resolution = corruptResolver.Resolve(corruptScene, corruptId);
+            Require(!resolution.Succeeded(), rejectionLabel
+                    + " resolver unexpectedly succeeded; status="
+                    + std::to_string(static_cast<unsigned int>(resolution.status)));
+            corruptScene.Components().AudioSources().Set(corruptSourceEntity.Entity(), kb::scene::AudioSourceComponent{
+                .clipAssetId = corruptId,
+                .volume = 0.0F,
+                .loop = true,
+                .spatial = false,
+            });
+            const auto before = corruptBackend.ResourcesForTesting();
+            const kb::audio::AudioPlayResult oneShotResult =
+                corruptBackend.PlayOneShotForTesting(corruptScene, kb::audio::AudioPlayDesc{
+                    .clipAssetId = corruptId,
+                    .volume = 0.0F,
+                    .loop = true,
+                    .spatial = false,
+                });
+            Require(!oneShotResult.Succeeded(), rejectionLabel
+                    + " one-shot unexpectedly succeeded; voiceId="
+                    + std::to_string(oneShotResult.voiceId) + ", error=" + oneShotResult.error);
+            const kb::audio::AudioSourceControlResult sourceResult =
+                corruptBackend.PlaySourceForTesting(corruptScene, corruptSourceEntity.Entity());
+            Require(!sourceResult.Succeeded(), rejectionLabel
+                    + " source replacement unexpectedly succeeded; status="
+                    + std::to_string(static_cast<unsigned int>(sourceResult.status))
+                    + ", playing=" + (sourceResult.playing ? "true" : "false"));
+            const auto after = corruptBackend.ResourcesForTesting();
+            Require(SameResources(before, after), rejectionLabel
+                    + " changed resources; before {" + DescribeResources(before)
+                    + "}, after {" + DescribeResources(after) + "}");
+            const bool retainedVoicePlaying =
+                corruptBackend.IsVoicePlaying(corruptScene, retainedImportedVoice.voiceId);
+            Require(retainedVoicePlaying, rejectionLabel
+                    + " stopped the retained voice; voiceId="
+                    + std::to_string(retainedImportedVoice.voiceId)
+                    + ", resources {" + DescribeResources(after) + "}");
+            const kb::audio::AudioSourceControlResult retainedSourceState =
+                corruptBackend.IsSourcePlayingForTesting(
+                    corruptScene, corruptSourceEntity.Entity());
+            Require(retainedSourceState.Succeeded() && retainedSourceState.playing,
+                rejectionLabel + " changed retained source transport; status="
+                    + std::to_string(static_cast<unsigned int>(retainedSourceState.status))
+                    + ", playing=" + (retainedSourceState.playing ? "true" : "false")
+                    + ", resources {" + DescribeResources(after) + "}");
+        }
+    }
+    const std::filesystem::path mismatchedSource = TestRoot() / "ImportedMismatch.mp3";
+    std::filesystem::copy_file(FixturePath(FixtureFor(".wav")), mismatchedSource,
+        std::filesystem::copy_options::overwrite_existing);
+    const std::array<std::filesystem::path, 1U> mismatchedSourcePath{ mismatchedSource };
+    const kb::assets::AssetImportResult mismatchedImported = kb::assets::AssetImportService::ImportFiles(
+        corruptScene.Assets().Manager(), mismatchedSourcePath, "/Game/Audio");
+    Require(mismatchedImported.Succeeded() && mismatchedImported.items.size() == 1U
+            && !corruptResolver.Resolve(corruptScene, mismatchedImported.items.front().id.value).Succeeded()
+            && !corruptBackend.PlayOneShotForTesting(corruptScene, kb::audio::AudioPlayDesc{
+                    .clipAssetId = mismatchedImported.items.front().id.value,
+                    .volume = 0.0F,
+                    .loop = true,
+                    .spatial = false,
+                }).Succeeded(),
+        "Imported extension-mismatched payload passed production decode preflight");
+    const std::array<std::filesystem::path, 1U> replacementSourcePath{
+        FixturePath(FixtureFor(".flac")),
+    };
+    const kb::assets::AssetImportResult replacementImport = kb::assets::AssetImportService::ImportFiles(
+        corruptScene.Assets().Manager(), replacementSourcePath, "/Game/Audio");
+    Require(replacementImport.Succeeded() && replacementImport.items.size() == 1U,
+        "Valid imported replacement fixture could not be imported");
+    kb::scene::AudioSourceComponent* corruptComponent =
+        corruptScene.Components().AudioSources().TryGet(corruptSourceEntity.Entity());
+    Require(corruptComponent != nullptr, "Imported replacement source component disappeared");
+    corruptComponent->clipAssetId = replacementImport.items.front().id.value;
+    corruptScene.Components().AudioSources().MarkModified(corruptSourceEntity.Entity());
+    const auto beforeValidReplacement = corruptBackend.ResourcesForTesting();
+    Require(corruptBackend.PlaySourceForTesting(corruptScene, corruptSourceEntity.Entity()).Succeeded()
+            && SameResources(beforeValidReplacement, corruptBackend.ResourcesForTesting())
+            && corruptBackend.IsSourcePlayingForTesting(
+                   corruptScene, corruptSourceEntity.Entity()).playing,
+        "Valid imported candidate did not replace the retained corrupt-candidate source");
+    corruptResolver.Reset();
+    corruptBackend.Shutdown();
+    Require(SameResources(corruptBackend.ResourcesForTesting(), {}),
+        "Audio memory playback retained corrupt native ownership");
+}
+
 void RunSoundStateTest(const std::filesystem::path& clipPath) {
     kb::audio_miniaudio::MiniaudioEngine engine;
     engine.Initialize(true);
     Require(engine.Status() == kb::audio::AudioDeviceStatus::NoPlaybackDevice, "Controlled no-device engine did not report its state");
 
     kb::audio_miniaudio::MiniaudioSound sound;
-    Require(sound.InitializeFromFile(engine.Native(), clipPath, true) == MA_SUCCESS, "Spatial audio test sound could not be initialized");
+    Require(sound.Initialize(engine.Native(), DirectTestClip(clipPath), true) == MA_SUCCESS, "Spatial audio test sound could not be initialized");
     Require(sound.FlatForTesting() != nullptr, "Spatial blend did not allocate its flat branch");
     sound.Apply(kb::audio_miniaudio::MiniaudioSoundSettings{
         .volume = 2.0F,
@@ -187,18 +959,18 @@ void RunSoundStateTest(const std::filesystem::path& clipPath) {
     Require(Near(normalizedVelocity.x, 0.0F) && Near(normalizedVelocity.y, 1.0F), "Non-finite native sound velocity was not normalized");
 
     kb::audio_miniaudio::MiniaudioSound flatSound;
-    Require(flatSound.InitializeFromFile(engine.Native(), clipPath, false) == MA_SUCCESS && flatSound.FlatForTesting() == nullptr,
+    Require(flatSound.Initialize(engine.Native(), DirectTestClip(clipPath), false) == MA_SUCCESS && flatSound.FlatForTesting() == nullptr,
         "A purely flat sound allocated an unnecessary second branch");
 }
 
 void RunVoiceStateTest(const std::filesystem::path& clipPath) {
     kb::audio_miniaudio::MiniaudioEngine engine;
     engine.Initialize(true);
-    OfflineEnginePump pump{ engine };
     kb::scene::Scene scene;
     RegisterClip(scene, 8101U, clipPath);
     kb::audio_miniaudio::MiniaudioClipResolver resolver;
     kb::audio_miniaudio::MiniaudioVoicePool pool;
+    OfflineEnginePump pump{ engine };
     const kb::audio::AudioPlayResult played = pool.PlayOneShot(engine.Native(), scene, kb::audio::AudioPlayDesc{
         .clipAssetId = 8101U,
         .volume = 0.75F,
@@ -318,10 +1090,10 @@ void RunTransactionalPlaybackFailureTest(const std::filesystem::path& clipPath) 
 
     kb::audio_miniaudio::MiniaudioEngine engine;
     engine.Initialize(true);
-    OfflineEnginePump pump{ engine };
     kb::scene::Scene scene;
     kb::audio_miniaudio::MiniaudioClipResolver resolver;
     kb::audio_miniaudio::MiniaudioVoicePool pool;
+    OfflineEnginePump pump{ engine };
 
     constexpr std::uint64_t firstClip = 8500U;
     constexpr std::size_t clipCount = 8U;
@@ -368,8 +1140,8 @@ void RunTransactionalPlaybackFailureTest(const std::filesystem::path& clipPath) 
             .priority = 255U,
         },
         resolver, nullptr);
-    Require(!rejected.Succeeded() && rejected.error == "audio voice could not be created",
-        "Truncated one-shot payload was not rejected during candidate initialization");
+    Require(!rejected.Succeeded() && rejected.error == "audio clip file could not be resolved",
+        "Truncated one-shot payload was not rejected by decode preflight");
     Require(pool.VoiceIdsForTesting() == idsBefore && pool.VoiceCountForTesting() == idsBefore.size(),
         "Rejected one-shot initialization evicted or reordered a live voice");
     Require(pool.SoundForTesting(idsBefore.front()) == retainedSound
@@ -379,29 +1151,66 @@ void RunTransactionalPlaybackFailureTest(const std::filesystem::path& clipPath) 
             && Near(ma_sound_get_pitch(retainedSound->PrimaryForTesting()), pitchBefore),
         "Rejected one-shot initialization changed the retained native voice state");
 
-    constexpr std::uint64_t validCandidateClip = 8599U;
-    RegisterClip(scene, validCandidateClip, clipPath);
-    const kb::audio::AudioPlayResult admitted = pool.PlayOneShot(
+    constexpr std::uint64_t lowerPriorityClip = 8597U;
+    RegisterClip(scene, lowerPriorityClip, clipPath);
+    const kb::audio::AudioPlayResult lowerPriority = pool.PlayOneShot(
         engine.Native(), scene,
         kb::audio::AudioPlayDesc{
-            .clipAssetId = validCandidateClip,
+            .clipAssetId = lowerPriorityClip,
+            .volume = 0.0F,
+            .loop = true,
+            .spatial = false,
+            .priority = 99U,
+        },
+        resolver, nullptr);
+    Require(!lowerPriority.Succeeded() && pool.VoiceIdsForTesting() == idsBefore,
+        "Lower-priority capacity request changed the exact live voice order");
+
+    constexpr std::uint64_t equalPriorityClip = 8599U;
+    RegisterClip(scene, equalPriorityClip, clipPath);
+    const kb::audio::AudioPlayResult equalPriority = pool.PlayOneShot(
+        engine.Native(), scene,
+        kb::audio::AudioPlayDesc{
+            .clipAssetId = equalPriorityClip,
+            .volume = 0.0F,
+            .loop = true,
+            .spatial = false,
+            .priority = 100U,
+        },
+        resolver, nullptr);
+    std::vector<std::uint64_t> expectedAfterEqual(idsBefore.begin() + 1, idsBefore.end());
+    expectedAfterEqual.push_back(equalPriority.voiceId);
+    Require(equalPriority.Succeeded() && pool.VoiceIdsForTesting() == expectedAfterEqual
+            && !pool.IsVoicePlaying(idsBefore.front()),
+        "Equal-priority capacity request did not evict the deterministic oldest voice");
+
+    constexpr std::uint64_t highPriorityClip = 8596U;
+    RegisterClip(scene, highPriorityClip, clipPath);
+    const kb::audio::AudioPlayResult highPriority = pool.PlayOneShot(
+        engine.Native(), scene,
+        kb::audio::AudioPlayDesc{
+            .clipAssetId = highPriorityClip,
             .volume = 0.0F,
             .loop = true,
             .spatial = false,
             .priority = 255U,
         },
         resolver, nullptr);
-    Require(admitted.Succeeded() && pool.VoiceCountForTesting() == idsBefore.size()
-            && !pool.IsVoicePlaying(idsBefore.front())
-            && pool.IsVoicePlaying(admitted.voiceId),
-        "A valid one-shot candidate did not commit after a rejected corrupt candidate");
+    std::vector<std::uint64_t> expectedAfterHigh(expectedAfterEqual.begin() + 1, expectedAfterEqual.end());
+    expectedAfterHigh.push_back(highPriority.voiceId);
+    Require(highPriority.Succeeded() && pool.VoiceIdsForTesting() == expectedAfterHigh
+            && !pool.IsVoicePlaying(idsBefore[1U]),
+        "High-priority capacity request did not evict the deterministic oldest voice");
+    pool.StopAll();
+    Require(pool.VoiceCountForTesting() == 0U,
+        "StopAll did not release the full offline one-shot capacity");
 }
 
 void RunInitialFrameSoundTest(const std::filesystem::path& clipPath) {
     kb::audio_miniaudio::MiniaudioEngine engine;
     engine.Initialize(true);
     kb::audio_miniaudio::MiniaudioSound sound;
-    Require(sound.InitializeFromFile(engine.Native(), clipPath, true, nullptr, 11025U) == MA_SUCCESS,
+    Require(sound.Initialize(engine.Native(), DirectTestClip(clipPath), true, nullptr, 11025U) == MA_SUCCESS,
         "Audio test sound could not initialize at a preserved frame");
 }
 
@@ -558,16 +1367,31 @@ void RunListenerAndAttachedVelocityTest(const std::filesystem::path& clipPath) {
 void RunSourceLifecycleAndRoutingTest(const std::filesystem::path& clipPath, std::string_view checkpoint = {}) {
     kb::audio_miniaudio::MiniaudioEngine engine;
     engine.Initialize(true);
-    OfflineEnginePump pump{ engine };
     kb::scene::Scene scene;
     RegisterClip(scene, 8301U, clipPath);
     RegisterClip(scene, 8302U, clipPath);
+    Require(scene.Assets().MountProject(TestRoot() / "SourceLifecycleProject"),
+        "Source lifecycle deletion project did not mount");
+    const std::array<std::filesystem::path, 1U> deletableSource{ clipPath };
+    const kb::assets::AssetImportResult deletableImport = kb::assets::AssetImportService::ImportFiles(
+        scene.Assets().Manager(), deletableSource, "/Game/Audio");
+    Require(deletableImport.Succeeded() && deletableImport.items.size() == 1U,
+        "Source lifecycle deletion fixture did not enter the production asset pipeline");
+    const kb::assets::AssetId deletableClipId = deletableImport.items.front().id;
+    const kb::assets::AssetMetadata* deletableMetadata =
+        scene.Assets().Manager().Registry().Find(deletableClipId);
+    Require(deletableMetadata != nullptr,
+        "Source lifecycle deletion fixture has no authoritative metadata");
+    const std::filesystem::path deletableContainer = deletableMetadata->physicalPath;
+    Require(std::filesystem::is_regular_file(deletableContainer),
+        "Source lifecycle deletion fixture has no owned asset container");
     const std::filesystem::path corruptPath = TestRoot() / "SourceTruncated.wav";
     WriteTruncatedAudio(corruptPath);
     RegisterClip(scene, 8303U, corruptPath);
     kb::audio_miniaudio::MiniaudioClipResolver resolver;
     kb::audio_miniaudio::MiniaudioBusRegistry buses;
     kb::audio_miniaudio::MiniaudioSourceRegistry sources;
+    OfflineEnginePump pump{ engine };
 
     const kb::scene::SceneObject sourceObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Source", .transform = TransformAt(0.0F) });
     scene.Components().AudioSources().Set(sourceObject.Entity(), kb::scene::AudioSourceComponent{
@@ -696,8 +1520,8 @@ void RunSourceLifecycleAndRoutingTest(const std::filesystem::path& clipPath, std
     const float retainedPan = ma_sound_get_pan(retainedSource->PrimaryForTesting());
     const float retainedPitch = ma_sound_get_pitch(retainedSource->PrimaryForTesting());
     Require(sources.PlaySource(engine.Native(), scene, sourceObject.Entity(), resolver, buses, true).status
-            == kb::audio::AudioSourceControlStatus::SoundInitializationFailed,
-        "Explicit source transport masked a corrupt changed-clip initialization failure");
+            == kb::audio::AudioSourceControlStatus::ClipUnavailable,
+        "Explicit source transport masked a corrupt changed-clip decode failure");
     kb::scene::SceneSystemContext corruptClipContext{ scene, 0.25F };
     sources.Sync(engine.Native(), corruptClipContext, resolver, buses, nullptr, {}, true);
     Require(sources.SoundCountForTesting() == 1U
@@ -733,6 +1557,30 @@ void RunSourceLifecycleAndRoutingTest(const std::filesystem::path& clipPath, std
     sources.Sync(engine.Native(), reactivatedContext, resolver, buses, nullptr, {}, true);
     Require(sources.SoundCountForTesting() == 1U && sources.IsSourcePlaying(scene, sourceObject.Entity(), true).playing,
         "Reactivated autoplay source did not recreate and start");
+    component = scene.Components().AudioSources().TryGet(sourceObject.Entity());
+    component->clipAssetId = 0U;
+    scene.Components().AudioSources().MarkModified(sourceObject.Entity());
+    kb::scene::SceneSystemContext emptyClipContext{ scene, 0.25F };
+    sources.Sync(engine.Native(), emptyClipContext, resolver, buses, nullptr, {}, true);
+    Require(sources.SoundCountForTesting() == 0U,
+        "A component with an empty clip retained its previous native source");
+    component->clipAssetId = deletableClipId.value;
+    scene.Components().AudioSources().MarkModified(sourceObject.Entity());
+    kb::scene::SceneSystemContext deletableClipContext{ scene, 0.25F };
+    sources.Sync(engine.Native(), deletableClipContext, resolver, buses, nullptr, {}, true);
+    Require(sources.SoundCountForTesting() == 1U
+            && sources.SoundForTesting(sourceObject.Entity().Id()) != nullptr,
+        "Imported audio source was not live before asset deletion");
+    Require(scene.Assets().Manager().DeleteAsset(deletableClipId),
+        "Production asset deletion rejected the live imported audio fixture");
+    Require(scene.Assets().Manager().Registry().Find(deletableClipId) == nullptr,
+        "Deleted audio asset retained authoritative metadata");
+    Require(!std::filesystem::exists(deletableContainer),
+        "Deleted audio asset retained its owned container");
+    kb::scene::SceneSystemContext deletedAssetContext{ scene, 0.25F };
+    sources.Sync(engine.Native(), deletedAssetContext, resolver, buses, nullptr, {}, true);
+    Require(sources.SoundCountForTesting() == 0U,
+        "A deleted audio asset retained its previous native source");
     scene.Components().AudioSources().Remove(sourceObject.Entity());
     kb::scene::SceneSystemContext removedContext{ scene, 0.25F };
     sources.Sync(engine.Native(), removedContext, resolver, buses, nullptr, {}, true);
@@ -740,6 +1588,7 @@ void RunSourceLifecycleAndRoutingTest(const std::filesystem::path& clipPath, std
     if (checkpoint == "source-lifecycle") {
         return;
     }
+    pump.Stop();
 
     kb::scene::AudioSourceComponent routed{ .clipAssetId = 8301U, .loop = true, .spatial = false, .autoplay = false };
     Require(kb::scene::SetAudioSourceOutputBus(routed, "Effects"),
@@ -816,7 +1665,8 @@ void RunBackendRestartTest(const std::filesystem::path& clipPath) {
     voiceDesc.outputBus = "Effects";
     Require(backend.PlayOneShotForTesting(scene, voiceDesc).Succeeded(), "Restart test voice could not be created");
     const kb::audio_miniaudio::MiniaudioPlaybackBackend::ResourceStateForTesting resources = backend.ResourcesForTesting();
-    Require(resources.sourceSounds == 1U && resources.voices == 1U && resources.buses == 1U,
+    Require(resources.sourceSounds == 1U && resources.voices == 1U && resources.buses == 1U
+            && resources.decoders == 0U && resources.encodedPayloads == 0U,
         "Restart test did not create source, voice and bus resources");
     kb::audio::AudioPlayDesc invalidVoiceDesc = voiceDesc;
     invalidVoiceDesc.volume = std::numeric_limits<float>::quiet_NaN();
@@ -841,14 +1691,12 @@ void RunBackendRestartTest(const std::filesystem::path& clipPath) {
         "Backend accepted an invalid direct voice control or marker");
     const kb::audio_miniaudio::MiniaudioPlaybackBackend::ResourceStateForTesting resourcesAfterRejectedControls =
         backend.ResourcesForTesting();
-    Require(resourcesAfterRejectedControls.sourceSounds == resourcesBeforeRejectedControls.sourceSounds
-            && resourcesAfterRejectedControls.voices == resourcesBeforeRejectedControls.voices
-            && resourcesAfterRejectedControls.buses == resourcesBeforeRejectedControls.buses,
+    Require(SameResources(resourcesAfterRejectedControls, resourcesBeforeRejectedControls),
         "Rejected backend controls changed native resource ownership");
     Require(backend.ReinitializeForTesting(scene, true) == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
         "Controlled no-device restart failed with active resources");
     const kb::audio_miniaudio::MiniaudioPlaybackBackend::ResourceStateForTesting released = backend.ResourcesForTesting();
-    Require(released.sourceSounds == 0U && released.voices == 0U && released.buses == 0U,
+    Require(SameResources(released, {}),
         "Restart retained native source, voice or bus resources");
 
     kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 0U);
@@ -866,7 +1714,7 @@ void RunBackendRestartTest(const std::filesystem::path& clipPath) {
     kb::scene::SceneSystemContext unavailableContext{ scene, 1.0F / 60.0F };
     backend.OnUpdate(unavailableContext);
     const kb::audio_miniaudio::MiniaudioPlaybackBackend::ResourceStateForTesting afterUnavailableTick = backend.ResourcesForTesting();
-    Require(afterUnavailableTick.sourceSounds == 0U && afterUnavailableTick.voices == 0U && afterUnavailableTick.buses == 0U,
+    Require(SameResources(afterUnavailableTick, {}),
         "No-device tick without a mixer retained a native source or paused looping voice");
 
     kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 8499U);
@@ -881,7 +1729,7 @@ void RunBackendRestartTest(const std::filesystem::path& clipPath) {
         "Unavailable bus-tick test did not recreate every native resource type");
     backend.OnUpdate(unavailableContext);
     const kb::audio_miniaudio::MiniaudioPlaybackBackend::ResourceStateForTesting afterUnavailableBusTick = backend.ResourcesForTesting();
-    Require(afterUnavailableBusTick.sourceSounds == 0U && afterUnavailableBusTick.voices == 0U && afterUnavailableBusTick.buses == 0U,
+    Require(SameResources(afterUnavailableBusTick, {}),
         "No-device tick retained a native source, voice or bus group");
 
     const kb::audio::AudioDeviceStatus initial = backend.Reinitialize(scene);
@@ -903,19 +1751,196 @@ void RunBackendRestartTest(const std::filesystem::path& clipPath) {
             && backend.PlayOneShotForTesting(scene, voiceDesc).Succeeded(),
         "Controlled shutdown fixture could not recreate source, voice and bus resources");
     const kb::audio_miniaudio::MiniaudioPlaybackBackend::ResourceStateForTesting beforeShutdown = backend.ResourcesForTesting();
-    Require(beforeShutdown.sourceSounds == 1U && beforeShutdown.voices == 1U && beforeShutdown.buses == 1U,
+    Require(beforeShutdown.sourceSounds == 1U && beforeShutdown.voices == 1U && beforeShutdown.buses == 1U
+            && beforeShutdown.decoders == 0U && beforeShutdown.encodedPayloads == 0U,
         "Controlled shutdown fixture did not own every native resource type");
     backend.Shutdown();
     const kb::audio_miniaudio::MiniaudioPlaybackBackend::ResourceStateForTesting afterShutdown = backend.ResourcesForTesting();
-    Require(afterShutdown.sourceSounds == 0U && afterShutdown.voices == 0U && afterShutdown.buses == 0U,
+    Require(SameResources(afterShutdown, {}),
         "Backend shutdown retained a native source, voice or bus resource");
+}
+
+void RunMultiSourceStressTest(const std::filesystem::path& clipPath) {
+    kb::audio_miniaudio::MiniaudioEngine engine;
+    engine.Initialize(true);
+    kb::scene::Scene scene;
+    RegisterClip(scene, 8801U, clipPath);
+
+    const std::filesystem::path mixerPath = TestRoot() / "StressMixer.kbmixer";
+    kb::audio::AudioMixerAsset mixer;
+    mixer.buses.push_back(kb::audio::AudioMixerBus{ .name = "Effects" });
+    Require(kb::audio::AudioMixerAssetIO::Save(mixerPath, mixer),
+        "Multi-source stress mixer could not be saved");
+    Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                .id = kb::assets::AssetId{ 8899U },
+                .type = kb::audio::kAudioMixerAssetType,
+                .name = "StressMixer",
+                .virtualPath = "/Audio/Stress.kbmixer",
+                .physicalPath = mixerPath,
+                .contentHash = 1U,
+            }),
+        "Multi-source stress mixer could not be registered");
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 8899U);
+
+    constexpr std::size_t kSourceCount = 32U;
+    std::array<kb::scene::SceneEntity, kSourceCount> entities{};
+    std::array<bool, kSourceCount> expectedPlaying{};
+    for (std::size_t index = 0U; index < kSourceCount; ++index) {
+        const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Stress Source " + std::to_string(index),
+            .transform = TransformAt(static_cast<float>(index)),
+        });
+        entities[index] = object.Entity();
+        kb::scene::AudioSourceComponent source{
+            .clipAssetId = 8801U,
+            .volume = 0.25F + static_cast<float>(index) * 0.01F,
+            .pitch = 1.0F + static_cast<float>(index % 4U) * 0.05F,
+            .loop = true,
+            .spatial = (index % 2U) != 0U,
+            .autoplay = (index % 3U) != 0U,
+            .pan = static_cast<float>(static_cast<int>(index % 5U) - 2) * 0.2F,
+            .spatialBlend = 0.5F,
+        };
+        if ((index % 2U) != 0U) {
+            Require(kb::scene::SetAudioSourceOutputBus(source, "Effects"),
+                "Multi-source stress route token was rejected");
+        }
+        scene.Components().AudioSources().Set(object.Entity(), source);
+        expectedPlaying[index] = source.autoplay;
+    }
+
+    kb::audio_miniaudio::MiniaudioClipResolver resolver;
+    kb::audio_miniaudio::MiniaudioBusRegistry buses;
+    kb::audio_miniaudio::MiniaudioSourceRegistry sources;
+    OfflineEnginePump pump{ engine };
+    Require(buses.Sync(engine.Native(), scene, true),
+        "Multi-source stress routing graph was not created");
+    for (std::size_t index = 0U; index < kSourceCount; index += 6U) {
+        Require(sources.PlaySource(engine.Native(), scene, entities[index], resolver, buses, true).Succeeded(),
+            "Multi-source stress manual transport could not start before the batch sync");
+        expectedPlaying[index] = true;
+    }
+    kb::scene::SceneSystemContext firstContext{ scene, 0.25F };
+    sources.Sync(engine.Native(), firstContext, resolver, buses, nullptr, {}, true);
+    Require(sources.NativeSoundCountForTesting() == kSourceCount
+            && sources.NativeSoundBranchCountForTesting() == 48U,
+        "One source sync did not create all simultaneous native sources");
+    for (std::size_t index = 0U; index < kSourceCount; index += 7U) {
+        kb::audio_miniaudio::MiniaudioSound* sound = sources.SoundForTesting(entities[index].Id());
+        const kb::scene::AudioSourceComponent* component = scene.Components().AudioSources().TryGet(entities[index]);
+        const float expectedPrimaryVolume = component != nullptr && component->spatial
+            ? component->volume * component->spatialBlend
+            : component != nullptr ? component->volume : 0.0F;
+        Require(sound != nullptr && component != nullptr
+                && Near(ma_sound_get_volume(sound->PrimaryForTesting()), expectedPrimaryVolume)
+                && Near(ma_sound_get_pitch(sound->PrimaryForTesting()), component->pitch),
+            "Multi-source stress settings did not reach selected native sounds");
+        const ma_vec3f position = ma_sound_get_position(sound->PrimaryForTesting());
+        Require(Near(position.x, static_cast<float>(index)),
+            "Multi-source stress transform did not reach a selected native sound");
+        Require(sources.IsSourcePlaying(scene, entities[index], true).playing == expectedPlaying[index],
+            "Multi-source stress autoplay/manual transport diverged");
+    }
+
+    for (std::size_t index = 0U; index < 8U; ++index) {
+        scene.Entities().SetActive(entities[index], false);
+    }
+    for (std::size_t index = 8U; index < 16U; ++index) {
+        scene.Components().AudioSources().Remove(entities[index]);
+    }
+    for (std::size_t index = 16U; index < 24U; ++index) {
+        scene.Entities().Destroy(entities[index]);
+    }
+    kb::scene::SceneSystemContext cleanupContext{ scene, 0.25F };
+    sources.Sync(engine.Native(), cleanupContext, resolver, buses, nullptr, {}, true);
+    Require(sources.NativeSoundCountForTesting() == 8U
+            && sources.NativeSoundBranchCountForTesting() == 12U,
+        "Mixed deactivate/remove/destroy cleanup retained the wrong native-source count");
+    for (std::size_t index = 24U; index < kSourceCount; ++index) {
+        scene.Entities().Destroy(entities[index]);
+    }
+    kb::scene::SceneSystemContext finalContext{ scene, 0.25F };
+    sources.Sync(engine.Native(), finalContext, resolver, buses, nullptr, {}, true);
+    Require(sources.NativeSoundCountForTesting() == 0U
+            && sources.NativeSoundBranchCountForTesting() == 0U
+            && sources.SoundCountForTesting() == 0U,
+        "Multi-source stress final cleanup retained source records or natives");
+}
+
+void RunBackendCycleStressTest(const std::filesystem::path& clipPath) {
+    kb::scene::Scene scene;
+    RegisterClip(scene, 8901U, clipPath);
+    const std::filesystem::path mixerPath = TestRoot() / "CycleMixer.kbmixer";
+    kb::audio::AudioMixerAsset mixer;
+    mixer.buses.push_back(kb::audio::AudioMixerBus{ .name = "Effects" });
+    Require(kb::audio::AudioMixerAssetIO::Save(mixerPath, mixer)
+            && scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                .id = kb::assets::AssetId{ 8999U },
+                .type = kb::audio::kAudioMixerAssetType,
+                .name = "CycleMixer",
+                .virtualPath = "/Audio/Cycle.kbmixer",
+                .physicalPath = mixerPath,
+                .contentHash = 1U,
+            }),
+        "Backend-cycle mixer fixture could not be prepared");
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 8999U);
+    const kb::scene::SceneObject source = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{ .name = "Cycle Source" });
+    kb::scene::AudioSourceComponent sourceComponent{
+        .clipAssetId = 8901U,
+        .volume = 0.0F,
+        .loop = true,
+        .spatial = false,
+    };
+    Require(kb::scene::SetAudioSourceOutputBus(sourceComponent, "Effects"),
+        "Backend-cycle source route was rejected");
+    scene.Components().AudioSources().Set(source.Entity(), sourceComponent);
+    kb::audio::AudioPlayDesc voice{
+        .clipAssetId = 8901U,
+        .volume = 0.0F,
+        .loop = true,
+        .spatial = false,
+    };
+    voice.outputBus = "Effects";
+
+    kb::audio_miniaudio::MiniaudioPlaybackBackend backend;
+    for (std::size_t cycle = 0U; cycle < 24U; ++cycle) {
+        Require(backend.ReinitializeForTesting(scene, true) == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
+            "Backend-cycle offline reinitialize failed");
+        Require(backend.PlaySourceForTesting(scene, source.Entity()).Succeeded()
+                && backend.PlayOneShotForTesting(scene, voice).Succeeded()
+                && backend.PumpFramesForTesting(256U).frames > 0U,
+            "Backend-cycle could not create and pump its live resources");
+        const auto live = backend.ResourcesForTesting();
+        Require(live.sourceSounds == 1U && live.voices == 1U && live.buses == 1U
+                && live.decoders == 0U && live.encodedPayloads == 0U,
+            "Backend-cycle did not own exact source, voice and bus resources");
+        if ((cycle % 2U) == 0U) {
+            Require(backend.ReinitializeForTesting(scene, true) == kb::audio::AudioDeviceStatus::NoPlaybackDevice,
+                "Backend-cycle active-resource reinitialize failed");
+        } else {
+            backend.Shutdown();
+        }
+        Require(SameResources(backend.ResourcesForTesting(), {}),
+            "Backend-cycle teardown retained a native source, voice or bus");
+    }
+    Require(backend.ReinitializeForTesting(scene, true) == kb::audio::AudioDeviceStatus::NoPlaybackDevice
+            && backend.PlaySourceForTesting(scene, source.Entity()).Succeeded()
+            && backend.PlayOneShotForTesting(scene, voice).Succeeded()
+            && backend.PumpFramesForTesting(256U).frames > 0U,
+        "Backend was not reusable after 24 complete lifecycle cycles");
+    backend.Shutdown();
+    Require(SameResources(backend.ResourcesForTesting(), {}),
+        "Final backend-cycle shutdown retained native resources");
 }
 
 template <typename Resolver>
 void RunClipResolverValidationTest(const std::filesystem::path& clipPath, Resolver& resolver) {
     kb::scene::Scene scene;
     RegisterClip(scene, 8601U, clipPath);
-    Require(resolver.Resolve(scene, 8601U) == clipPath,
+    const auto resolvedDirect = resolver.Resolve(scene, 8601U);
+    Require(resolvedDirect.Succeeded() && !resolvedDirect.clip.IsMemoryBacked()
+            && resolvedDirect.clip.path == clipPath,
         "Audio clip resolver rejected a valid native wave asset");
 
     Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
@@ -927,7 +1952,7 @@ void RunClipResolverValidationTest(const std::filesystem::path& clipPath, Resolv
                 .contentHash = 8602U,
             }),
         "Wrong-type resolver fixture registration failed");
-    Require(resolver.Resolve(scene, 8602U).empty(),
+    Require(!resolver.Resolve(scene, 8602U).Succeeded(),
         "Audio clip resolver accepted wrong metadata type");
 
     Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
@@ -940,7 +1965,7 @@ void RunClipResolverValidationTest(const std::filesystem::path& clipPath, Resolv
                 .contentHash = 8603U,
             }),
         "Wrong-category resolver fixture registration failed");
-    Require(resolver.Resolve(scene, 8603U).empty(),
+    Require(!resolver.Resolve(scene, 8603U).Succeeded(),
         "Audio clip resolver accepted imported metadata on a native source file");
 
     const std::filesystem::path unsupportedPath = TestRoot() / "Unsupported.ogg";
@@ -954,7 +1979,7 @@ void RunClipResolverValidationTest(const std::filesystem::path& clipPath, Resolv
                 .contentHash = 8604U,
             }),
         "Unsupported-physical resolver fixture registration failed");
-    Require(resolver.Resolve(scene, 8604U).empty(),
+    Require(!resolver.Resolve(scene, 8604U).Succeeded(),
         "Audio clip resolver accepted an unsupported physical extension");
 
     const std::filesystem::path projectRoot = TestRoot() / "ResolverProject";
@@ -964,9 +1989,11 @@ void RunClipResolverValidationTest(const std::filesystem::path& clipPath, Resolv
         scene.Assets().Manager(), sourceFiles, "/Game/Audio");
     Require(imported.Succeeded() && imported.items.size() == 1U,
         "Supported audio resolver import fixture failed");
-    const std::filesystem::path resolvedImported = resolver.Resolve(scene, imported.items[0].id.value);
-    Require(!resolvedImported.empty() && resolvedImported.extension() == ".wav"
-            && std::filesystem::is_regular_file(resolvedImported),
+    const auto resolvedImported = resolver.Resolve(scene, imported.items[0].id.value);
+    Require(resolvedImported.Succeeded() && resolvedImported.clip.IsMemoryBacked()
+            && resolvedImported.clip.path.empty()
+            && resolvedImported.clip.extension == ".wav"
+            && resolvedImported.clip.EncodedBytes().size() == std::filesystem::file_size(clipPath),
         "Audio clip resolver rejected a supported imported source extension");
 
     const std::filesystem::path secondSource = TestRoot() / "UnsupportedSource.wav";
@@ -992,7 +2019,7 @@ void RunClipResolverValidationTest(const std::filesystem::path& clipPath, Resolv
         output.write(container.data(), static_cast<std::streamsize>(container.size()));
         Require(output.good(), "Imported audio fixture source extension could not be corrupted");
     }
-    Require(resolver.Resolve(scene, unsupportedImported.items[0].id.value).empty(),
+    Require(!resolver.Resolve(scene, unsupportedImported.items[0].id.value).Succeeded(),
         "Audio clip resolver accepted an unsupported imported source extension");
 }
 
@@ -1006,6 +2033,13 @@ int RunTests(int argc, char** argv) {
     const std::filesystem::path clipPath = TestRoot() / "Runtime.wav";
     WriteSilentWav(clipPath);
     const std::string_view filter = argc > 1 ? std::string_view{ argv[1] } : std::string_view{};
+    if (filter.empty() || filter == "formats") {
+        RunAdvertisedFormatDecodeTest();
+        RunFormatRejectionTest();
+    }
+    if (filter.empty() || filter == "import-memory") {
+        RunImportedMemoryLifecycleTest();
+    }
     if (filter.empty() || filter == "sound") {
         RunSoundStateTest(clipPath);
     }
@@ -1028,6 +2062,12 @@ int RunTests(int argc, char** argv) {
     }
     if (filter.empty() || filter == "backend-restart") {
         RunBackendRestartTest(clipPath);
+    }
+    if (filter.empty() || filter == "source-stress") {
+        RunMultiSourceStressTest(clipPath);
+    }
+    if (filter.empty() || filter == "cycle-stress") {
+        RunBackendCycleStressTest(clipPath);
     }
     return 0;
 }
