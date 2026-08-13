@@ -35,6 +35,7 @@
 #include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
 #include "engine/scene/HistoryRibbonComponent.hpp"
+#include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
@@ -215,6 +216,20 @@ void RegisterHistoryRibbonReflection(kb::ecs::World& world) {
     }));
 }
 
+void RegisterParticleEffectReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<ParticleEffectComponent>(ParticleEffectComponent::StableId, {
+        KB_ECS_FIELD(ParticleEffectComponent, effectAssetId, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(ParticleEffectComponent, deterministicSeed, kb::ecs::ComponentFieldType::Bytes),
+        KB_ECS_FIELD(ParticleEffectComponent, rateMultiplier, kb::ecs::ComponentFieldType::Float32),
+        KB_ECS_FIELD(ParticleEffectComponent, maxParticlesOverride, kb::ecs::ComponentFieldType::UInt32),
+        KB_ECS_FIELD(ParticleEffectComponent, ownerDeathPolicy, kb::ecs::ComponentFieldType::Enum32),
+        KB_ECS_FIELD(ParticleEffectComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(ParticleEffectComponent, autoPlay, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(ParticleEffectComponent, followTransform, kb::ecs::ComponentFieldType::Bool),
+        KB_ECS_FIELD(ParticleEffectComponent, restartOnActivate, kb::ecs::ComponentFieldType::Bool),
+    }));
+}
+
 void RegisterLensEchoReflection(kb::ecs::World& world) {
     static_cast<void>(world.RegisterComponentReflection<LensEchoComponent>(LensEchoComponent::StableId, {
         KB_ECS_FIELD(LensEchoComponent, sourceEntityId, kb::ecs::ComponentFieldType::Bytes),
@@ -360,6 +375,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , facingPanelComponentId_(RegisterSceneComponent<FacingPanelComponent>(world, FacingPanelComponent::StableId))
     , spaceStrokeComponentId_(RegisterSceneComponent<SpaceStrokeComponent>(world, SpaceStrokeComponent::StableId))
     , historyRibbonComponentId_(RegisterSceneComponent<HistoryRibbonComponent>(world, HistoryRibbonComponent::StableId))
+    , particleEffectComponentId_(RegisterSceneComponent<ParticleEffectComponent>(world, ParticleEffectComponent::StableId))
     , lensEchoComponentId_(RegisterSceneComponent<LensEchoComponent>(world, LensEchoComponent::StableId))
     , audioSourceComponentId_(RegisterSceneComponent<AudioSourceComponent>(world, "kb.scene.AudioSourceComponent"))
     , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, AudioListenerComponent::StableId))
@@ -389,6 +405,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     RegisterFacingPanelReflection(world);
     RegisterSpaceStrokeReflection(world);
     RegisterHistoryRibbonReflection(world);
+    RegisterParticleEffectReflection(world);
     RegisterLensEchoReflection(world);
 }
 
@@ -458,6 +475,7 @@ std::uint64_t SceneComponentRegistry::SurfaceCastComponentId() const noexcept { 
 std::uint64_t SceneComponentRegistry::FacingPanelComponentId() const noexcept { return facingPanelComponentId_; }
 std::uint64_t SceneComponentRegistry::SpaceStrokeComponentId() const noexcept { return spaceStrokeComponentId_; }
 std::uint64_t SceneComponentRegistry::HistoryRibbonComponentId() const noexcept { return historyRibbonComponentId_; }
+std::uint64_t SceneComponentRegistry::ParticleEffectComponentId() const noexcept { return particleEffectComponentId_; }
 std::uint64_t SceneComponentRegistry::LensEchoComponentId() const noexcept { return lensEchoComponentId_; }
 
 std::uint64_t SceneComponentRegistry::AudioSourceComponentId() const noexcept {

@@ -193,7 +193,7 @@ const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::s
     DispatchPendingSceneLifecycleEvents(scene, clampedDeltaSeconds);
     DispatchFiredTimers(scene, clampedDeltaSeconds);
     DispatchCompletedTasks(scene, clampedDeltaSeconds);
-    AdvanceParticleSystems(scene, clampedDeltaSeconds);
+    DispatchPendingParticleEvents(scene, clampedDeltaSeconds);
     DispatchPendingCollisionEvents(scene, clampedDeltaSeconds);
     DispatchPendingAudioMarkerEvents(scene, clampedDeltaSeconds);
     DispatchPendingPrefabInstantiatedEvents(scene, clampedDeltaSeconds);
@@ -248,7 +248,7 @@ void ScriptRuntimeSceneSystem::BeginFrame(kb::scene::Scene& scene, float deltaSe
     DispatchPendingSceneLifecycleEvents(scene, clampedDeltaSeconds);
     DispatchFiredTimers(scene, clampedDeltaSeconds);
     DispatchCompletedTasks(scene, clampedDeltaSeconds);
-    AdvanceParticleSystems(scene, clampedDeltaSeconds);
+    DispatchPendingParticleEvents(scene, clampedDeltaSeconds);
     DispatchPendingAudioMarkerEvents(scene, clampedDeltaSeconds);
     DispatchPendingPrefabInstantiatedEvents(scene, clampedDeltaSeconds);
     DispatchPendingAnimationEvents(scene, clampedDeltaSeconds);
@@ -272,6 +272,7 @@ void ScriptRuntimeSceneSystem::ExecuteVariableFrame(kb::scene::Scene& scene, flo
     const float clampedDeltaSeconds = std::max(deltaSeconds, 0.0F);
     // Physics contact events are queued during the Simulation phase. The
     // post-fixed script update drains them before Tick in the same frame.
+    DispatchPendingParticleEvents(scene, clampedDeltaSeconds);
     DispatchPendingCollisionEvents(scene, clampedDeltaSeconds);
     DispatchPendingAnimationEvents(scene, clampedDeltaSeconds);
     DispatchPendingTimelineMarkerEvents(scene, clampedDeltaSeconds);
@@ -455,8 +456,7 @@ void ScriptRuntimeSceneSystem::DispatchCompletedTasks(kb::scene::Scene& scene, f
     }
 }
 
-void ScriptRuntimeSceneSystem::AdvanceParticleSystems(kb::scene::Scene& scene, float deltaSeconds) {
-    scene.Particles().Advance(deltaSeconds);
+void ScriptRuntimeSceneSystem::DispatchPendingParticleEvents(kb::scene::Scene& scene, float deltaSeconds) {
     for (const kb::scene::ParticleSystemFinishedEvent& pending : scene.Particles().DrainFinishedEvents()) {
         ScriptEvent event;
         event.name = "OnParticleSystemFinished";

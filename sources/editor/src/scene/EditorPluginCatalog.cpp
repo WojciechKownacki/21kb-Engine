@@ -30,6 +30,14 @@ namespace {
 #endif
 #endif
 
+#if !defined(KB_21KB_PARTICLE_PLUGIN_PATH)
+#if defined(_WIN32)
+#define KB_21KB_PARTICLE_PLUGIN_PATH "kb_21kb_particle_plugin.dll"
+#else
+#define KB_21KB_PARTICLE_PLUGIN_PATH "libkb_21kb_particle_plugin.so"
+#endif
+#endif
+
 #if !defined(KB_TERRAIN_EDITOR_PLUGIN_PATH)
 #if defined(_WIN32)
 #define KB_TERRAIN_EDITOR_PLUGIN_PATH "kb_terrain_editor_plugin.dll"
@@ -38,7 +46,7 @@ namespace {
 #endif
 #endif
 
-constexpr std::array<EditorPluginDescriptor, 4> kPlugins{{
+constexpr std::array<EditorPluginDescriptor, 5> kPlugins{{
     EditorPluginDescriptor{
         .id = "Physics.Jolt",
         .displayName = "Jolt Physics",
@@ -54,6 +62,14 @@ constexpr std::array<EditorPluginDescriptor, 4> kPlugins{{
         .provider = "miniaudio",
         .description = "Audio playback provider loaded as an engine plugin.",
         .binaryPath = KB_AUDIO_MINIAUDIO_PLUGIN_PATH,
+    },
+    EditorPluginDescriptor{
+        .id = "Rendering.21kbParticle",
+        .displayName = "21kb Particle System",
+        .category = "Rendering",
+        .provider = "21kb",
+        .description = "Particle effect authoring and runtime provider.",
+        .binaryPath = KB_21KB_PARTICLE_PLUGIN_PATH,
     },
     EditorPluginDescriptor{
         .id = "Rendering.BasicLighting",

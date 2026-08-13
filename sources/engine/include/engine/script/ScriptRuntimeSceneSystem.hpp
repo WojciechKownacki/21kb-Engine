@@ -99,12 +99,7 @@ private:
     // instead of Advance. Production calls it after each authoritative scene
     // FixedTick; direct ExecuteFrame uses the same per-step path.
     void DispatchCompletedFixedStepTasks(kb::scene::Scene& scene, std::size_t stepCount, float deltaSeconds);
-    // LIB-143: advances every live Particles.Create instance in the scene
-    // (kb::scene::SceneParticleSystems::Advance) - spawn/integrate/kill, same
-    // scale/pause-aware deltaSeconds as DispatchFiredTimers above, then drains real,
-    // entity-local OnParticleSystemFinished events once emission has stopped and the last
-    // live particle has expired.
-    void AdvanceParticleSystems(kb::scene::Scene& scene, float deltaSeconds);
+    void DispatchPendingParticleEvents(kb::scene::Scene& scene, float deltaSeconds);
     // LIB-105: delivers every kb::script::ScriptEventBus::EmitDeferred call
     // queued since the last frame — the deferred half of the pub/sub bus's
     // sync/deferred pair. Unlike DispatchFiredTimers/DispatchCompletedTasks

@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/project/ProjectManager.hpp"
+#include "engine/project/ParticleProjectPolicy.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -155,6 +156,12 @@ int RunRunCommand(const ArgumentList& arguments, CommandIo io) {
     if (!loadedProject.succeeded) {
         io.err << "error: could not load project descriptor "
                << projectFile.generic_string() << ": " << loadedProject.error << '\n';
+        return 1;
+    }
+    const kb::project::ParticleProjectPolicyResult particlePolicy =
+        kb::project::ParticleProjectPolicy::Inspect(projectRoot, loadedProject.descriptor);
+    if (!particlePolicy.IsRunnable()) {
+        io.err << "error: " << particlePolicy.diagnostic << '\n';
         return 1;
     }
 

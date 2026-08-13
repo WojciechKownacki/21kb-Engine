@@ -1,0 +1,53 @@
+21kb ParticleEffect 2
+effect.formatVersion 2
+effect.id 42
+effect.displayName "Żar \"A\"\\B\n"
+effect.recipeCategory ""
+effect.determinismSeed 18446744073709551615
+effect.durationSeconds 2.5
+effect.looping false
+effect.backendPolicy CpuDeterministic
+effect.gpuCatchupPolicy RestartFromSeed
+effect.emitterCount 1
+effect.emitter[0].id 7
+effect.emitter[0].name "Emitter Ω"
+effect.emitter[0].enabled true
+effect.emitter[0].localPosition 0 0 0
+effect.emitter[0].localRotation 0 0 0 1
+effect.emitter[0].localScale 1 1 1
+effect.emitter[0].maxParticles 64
+effect.emitter[0].simulationSpace World
+effect.emitter[0].spawn.mode Continuous
+effect.emitter[0].spawn.rate.keyCount 1
+effect.emitter[0].spawn.rate.key[0].time 0
+effect.emitter[0].spawn.rate.key[0].value 0.100000001
+effect.emitter[0].spawn.rate.key[0].easing Linear
+effect.emitter[0].spawn.burstCount 0
+effect.emitter[0].spawn.lifetimeMin 1
+effect.emitter[0].spawn.lifetimeMax 2
+effect.emitter[0].spawn.speedMin 0
+effect.emitter[0].spawn.speedMax 3
+effect.emitter[0].spawn.direction 0 1 0
+effect.emitter[0].spawn.spreadDegrees 15
+effect.emitter[0].spawn.randomization 1
+effect.emitter[0].spawn.prewarmSeconds 0
+effect.emitter[0].moduleCount 0
+effect.emitter[0].output.type Billboard
+effect.emitter[0].output.material.assetId 0
+effect.emitter[0].output.material.path "/Game/Materials/Particle.kbmat"
+effect.emitter[0].output.mesh.assetId 0
+effect.emitter[0].output.mesh.path ""
+effect.emitter[0].output.textureAtlas.assetId 0
+effect.emitter[0].output.textureAtlas.path ""
+effect.emitter[0].output.blend Alpha
+effect.emitter[0].output.sort BackToFront
+effect.emitter[0].output.depthTest true
+effect.emitter[0].output.depthWrite false
+effect.emitter[0].output.softParticles false
+effect.emitter[0].output.antiAliasing false
+effect.emitter[0].output.alignment CameraFacing
+effect.emitter[0].output.payload.flipbook.columns 1
+effect.emitter[0].output.payload.flipbook.rows 1
+effect.emitter[0].output.payload.flipbook.framesPerSecond 0
+effect.emitter[0].output.payload.flipbook.looping true
+effect.eventBindingCount 0
