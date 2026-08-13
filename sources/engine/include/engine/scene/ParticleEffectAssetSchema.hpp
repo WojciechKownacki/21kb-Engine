@@ -42,6 +42,14 @@ inline constexpr std::uint32_t kParticleEffectMaxGpuParticlesPerScene = 1'048'57
 inline constexpr std::uint32_t kParticleEffectMaxCommandsPerStep = 8'192U;
 inline constexpr std::uint32_t kParticleEffectMaxSpawnsPerStep = 65'536U;
 inline constexpr std::uint32_t kParticleEffectMaxEventsPerStep = 8'192U;
+inline constexpr std::uint32_t kParticleEffectMaxPrewarmSteps = 65'536U;
+inline constexpr std::uint32_t kParticleEffectFixedStepsPerSecond = 60U;
+inline constexpr float kParticleEffectMaxPrewarmSeconds =
+    static_cast<float>(kParticleEffectMaxPrewarmSteps) /
+    static_cast<float>(kParticleEffectFixedStepsPerSecond);
+inline constexpr float kParticleEffectMaxContinuousRatePerSecond =
+    static_cast<float>(kParticleEffectMaxSpawnsPerStep) *
+    static_cast<float>(kParticleEffectFixedStepsPerSecond);
 inline constexpr std::uint32_t kParticleEffectMaxSubEmitterDepth = 3U;
 inline constexpr std::uint32_t kParticleEffectMaxTrailSamplesPerParticle = 64U;
 inline constexpr std::uint32_t kParticleEffectMaxStripSegmentsPerEmitter = 4'096U;

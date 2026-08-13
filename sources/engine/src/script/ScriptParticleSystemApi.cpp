@@ -40,6 +40,8 @@ ScriptFunctionCallResult Error(std::string message) {
     case kb::particles::ParticleRuntimeStatus::InvalidInstance: return "particle system instance is invalid";
     case kb::particles::ParticleRuntimeStatus::InvalidParameter: return "particle parameter is invalid";
     case kb::particles::ParticleRuntimeStatus::InstanceLimitReached: return "particle system instance limit was reached";
+    case kb::particles::ParticleRuntimeStatus::ParticleCapacityReached: return "particle capacity was reached";
+    case kb::particles::ParticleRuntimeStatus::SpawnBudgetExceeded: return "particle spawn budget was exceeded";
     case kb::particles::ParticleRuntimeStatus::UnsupportedOutput: return "particle effect output is unsupported";
     case kb::particles::ParticleRuntimeStatus::InvalidRequest: return "particle runtime request is invalid";
     case kb::particles::ParticleRuntimeStatus::Success: break;

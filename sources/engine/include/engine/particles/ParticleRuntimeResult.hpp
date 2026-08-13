@@ -21,6 +21,8 @@ enum class ParticleRuntimeStatus : std::uint8_t {
     InvalidRequest,
     BackendAlreadyRegistered,
     EventQueueFull,
+    ParticleCapacityReached,
+    SpawnBudgetExceeded,
 };
 
 struct ParticleRuntimeResult {
