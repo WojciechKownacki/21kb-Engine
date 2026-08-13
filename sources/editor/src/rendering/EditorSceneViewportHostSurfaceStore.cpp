@@ -108,9 +108,18 @@ void EditorSceneBgfxViewport::HostSurfaceStore::Hide(HostSurface& surface) noexc
     if (surface.window != nullptr && IsWindow(surface.window) != 0) {
         ShowWindow(surface.window, SW_HIDE);
     }
+    surface.textOverlay.Hide();
     if (surface.clipWindow != nullptr && IsWindow(surface.clipWindow) != 0) {
         ShowWindow(surface.clipWindow, SW_HIDE);
     }
+    // A bgfx native-window framebuffer owns a multi-buffered swapchain. Keeping that swapchain
+    // alive while its dock tab is hidden lets unrelated viewport frames advance its back buffers
+    // without submitting this surface. When the tab is shown again, Windows can expose one of
+    // those undefined buffers for the first frame (the Scene grid appears duplicated/corrupted)
+    // and only the next mouse-driven present repairs it. Retire only the native presentation
+    // target here; the per-session scene/post-process targets and renderer scene resources remain
+    // alive, so reactivation recreates a clean swapchain without re-uploading the scene.
+    surface.presentTarget.Shutdown();
     if (wasVisible && surface.host != nullptr && IsWindow(surface.host) != 0 && RectWidth(surface.rect) > 0U && RectHeight(surface.rect) > 0U) {
         InvalidateRect(surface.host, &surface.rect, FALSE);
     }
@@ -155,6 +164,7 @@ void EditorSceneBgfxViewport::HostSurfaceStore::ReleaseWindow(HWND window) noexc
     }
     if (surface->clipWindow == window) {
         surface->presentTarget.Shutdown();
+        surface->textOverlay.Destroy();
         surface->clipWindow = nullptr;
         surface->window = nullptr;
     }
@@ -178,6 +188,7 @@ void EditorSceneBgfxViewport::HostSurfaceStore::DestroyWindows() noexcept {
         if (surface == nullptr) {
             continue;
         }
+        surface->textOverlay.Destroy();
         if (surface->window != nullptr && IsWindow(surface->window) != 0) {
             const HWND window = surface->window;
             surface->window = nullptr;
@@ -229,6 +240,7 @@ void EditorSceneBgfxViewport::HostSurfaceStore::Show(HostSurface& surface) noexc
             static_cast<int>(RectHeight(surface.rect)),
             flags);
     }
+    surface.textOverlay.Show();
 }
 
 void EditorSceneBgfxViewport::HostSurfaceStore::ShowPresentedWindows() noexcept {

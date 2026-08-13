@@ -26,6 +26,8 @@ bool ScenePrefabValidator::IsValid(const ScenePrefab& prefab) noexcept {
         return false;
     }
     for (const ScenePrefabNodeDesc& node : nodes) {
+        if (node.components.audioSource.has_value()
+            && !IsAudioSourceComponentPersistable(*node.components.audioSource)) return false;
         if (node.components.joint.has_value()) {
             const std::uint64_t targetStableId = node.components.joint->connectedNodeStableId;
             if (targetStableId != ScenePrefabJointComponent::InvalidConnectedNodeStableId &&

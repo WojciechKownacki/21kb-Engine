@@ -246,12 +246,20 @@ InspectorPropertyId InspectorPanelState::EditedProperty() const noexcept {
     return editedProperty_;
 }
 
+const std::string& InspectorPanelState::EditOriginalBuffer() const noexcept {
+    return editOriginalBuffer_;
+}
+
 const std::string& InspectorPanelState::EditBuffer() const noexcept {
     return editBuffer_;
 }
 
 int InspectorPanelState::EditIndex() const noexcept {
     return editIndex_;
+}
+
+const std::optional<InspectorDynamicRowIdentity>& InspectorPanelState::EditRowIdentity() const noexcept {
+    return editRowIdentity_;
 }
 
 void InspectorPanelState::SetEditIndex(int index) noexcept {
@@ -263,6 +271,21 @@ void InspectorPanelState::BeginTextEdit(InspectorPropertyId property, std::strin
     editOriginalBuffer_ = value;
     editBuffer_ = std::move(value);
     editIndex_ = -1;
+    editRowIdentity_.reset();
+    editSelectingAll_ = false;
+    EndFloatDrag();
+}
+
+void InspectorPanelState::BeginTextEdit(
+    InspectorPropertyId property,
+    std::string value,
+    int index,
+    InspectorDynamicRowIdentity rowIdentity) {
+    editedProperty_ = property;
+    editOriginalBuffer_ = value;
+    editBuffer_ = std::move(value);
+    editIndex_ = index;
+    editRowIdentity_ = std::move(rowIdentity);
     editSelectingAll_ = false;
     EndFloatDrag();
 }
@@ -327,6 +350,7 @@ void InspectorPanelState::EndTextEdit() noexcept {
     editOriginalBuffer_.clear();
     editBuffer_.clear();
     editIndex_ = -1;
+    editRowIdentity_.reset();
     editSelectingAll_ = false;
 }
 
@@ -363,6 +387,15 @@ void InspectorPanelState::BeginFloatDrag(InspectorPropertyId property, float sta
     EndTextEdit();
 }
 
+void InspectorPanelState::BeginIntegerDrag(InspectorPropertyId property, int x, int y) noexcept {
+    draggedProperty_ = property;
+    dragStartValue_ = 0.0F;
+    dragStartX_ = x;
+    dragStartY_ = y;
+    floatDragMoved_ = false;
+    EndTextEdit();
+}
+
 void InspectorPanelState::MarkFloatDragMoved() noexcept {
     floatDragMoved_ = true;
 }
@@ -373,6 +406,14 @@ void InspectorPanelState::EndFloatDrag() noexcept {
     dragStartX_ = 0;
     dragStartY_ = 0;
     floatDragMoved_ = false;
+}
+
+InspectorAudioScrubState& InspectorPanelState::AudioScrub() noexcept {
+    return audioScrub_;
+}
+
+const InspectorAudioScrubState& InspectorPanelState::AudioScrub() const noexcept {
+    return audioScrub_;
 }
 
 bool InspectorPanelState::IsDraggingMeshPreview() const noexcept {

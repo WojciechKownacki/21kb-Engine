@@ -38,6 +38,7 @@
 #include "engine/audio/AudioMixerAssetIO.hpp"
 #include "engine/input/InputHaptics.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
+#include "engine/scene/SceneAudioListenerAccess.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/ScenePostProcessAccess.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
@@ -131,6 +132,17 @@ public:
         ++stopAllCount;
     }
 
+    [[nodiscard]] kb::audio::AudioSourceControlResult PlaySource(kb::scene::Scene&, kb::scene::SceneEntity entity) override { return SourceResult(entity, "play", true); }
+    [[nodiscard]] kb::audio::AudioSourceControlResult PauseSource(kb::scene::Scene&, kb::scene::SceneEntity entity) override { return SourceResult(entity, "pause", false); }
+    [[nodiscard]] kb::audio::AudioSourceControlResult ResumeSource(kb::scene::Scene&, kb::scene::SceneEntity entity) override { return SourceResult(entity, "resume", true); }
+    [[nodiscard]] kb::audio::AudioSourceControlResult StopSource(kb::scene::Scene&, kb::scene::SceneEntity entity) override { return SourceResult(entity, "stop", false); }
+    [[nodiscard]] kb::audio::AudioSourceControlResult IsSourcePlaying(kb::scene::Scene&, kb::scene::SceneEntity entity) override { return SourceResult(entity, "query", true); }
+    [[nodiscard]] kb::audio::AudioDeviceStatus DeviceStatus() const noexcept override { return deviceStatus; }
+    [[nodiscard]] kb::audio::AudioDeviceStatus Reinitialize(kb::scene::Scene&) noexcept override {
+        ++reinitializeCount;
+        return deviceStatus;
+    }
+
     // LIB-148: minimal honest per-voice contract for this probe - any voice id below
     // nextVoiceId was handed out by PlayOneShot and counts as live.
     [[nodiscard]] bool StopVoice(kb::scene::Scene&, std::uint64_t voiceId) noexcept override { return IsLive(voiceId); }
@@ -138,6 +150,8 @@ public:
     [[nodiscard]] bool ResumeVoice(kb::scene::Scene&, std::uint64_t voiceId) noexcept override { return IsLive(voiceId); }
     [[nodiscard]] bool SeekVoice(kb::scene::Scene&, std::uint64_t voiceId, float) noexcept override { return IsLive(voiceId); }
     [[nodiscard]] bool SetVoiceVolume(kb::scene::Scene&, std::uint64_t voiceId, float) noexcept override { return IsLive(voiceId); }
+    [[nodiscard]] bool SetVoiceMute(kb::scene::Scene&, std::uint64_t voiceId, bool) noexcept override { return IsLive(voiceId); }
+    [[nodiscard]] bool SetVoicePan(kb::scene::Scene&, std::uint64_t voiceId, float) noexcept override { return IsLive(voiceId); }
     [[nodiscard]] bool SetVoicePitch(kb::scene::Scene&, std::uint64_t voiceId, float) noexcept override { return IsLive(voiceId); }
     [[nodiscard]] bool SetVoiceLoop(kb::scene::Scene&, std::uint64_t voiceId, bool) noexcept override { return IsLive(voiceId); }
     [[nodiscard]] bool IsVoicePlaying(kb::scene::Scene&, std::uint64_t voiceId) noexcept override { return IsLive(voiceId); }
@@ -149,9 +163,21 @@ public:
     std::vector<kb::audio::AudioPlayDesc> played;
     std::uint64_t nextVoiceId = 1U;
     int stopAllCount = 0;
+    kb::scene::SceneEntity lastSourceEntity{};
+    std::string lastSourceOperation;
+    kb::audio::AudioDeviceStatus deviceStatus = kb::audio::AudioDeviceStatus::PlaybackAvailable;
+    int reinitializeCount = 0;
 
 private:
     [[nodiscard]] bool IsLive(std::uint64_t voiceId) const noexcept { return voiceId != 0U && voiceId < nextVoiceId; }
+    [[nodiscard]] kb::audio::AudioSourceControlResult SourceResult(
+        kb::scene::SceneEntity entity, std::string operation, bool playing) {
+        lastSourceEntity = entity;
+        lastSourceOperation = std::move(operation);
+        return entity.IsValid()
+            ? kb::audio::AudioSourceControlResult{ .status = kb::audio::AudioSourceControlStatus::Success, .playing = playing }
+            : kb::audio::AudioSourceControlResult{ .status = kb::audio::AudioSourceControlStatus::InvalidEntity, .playing = false };
+    }
 };
 
 // LIB-124: mirrors ProbeAudioPlaybackBackend above - a real, deterministic
@@ -2661,6 +2687,10 @@ void RunScriptAudioApiTest() {
         kb::script::ScriptFunctionArgument{ .name = "maxDistance", .value = kb::script::ScriptValue{ 75.0F } },
         kb::script::ScriptFunctionArgument{ .name = "rolloff", .value = kb::script::ScriptValue{ 0.5F } },
         kb::script::ScriptFunctionArgument{ .name = "dopplerFactor", .value = kb::script::ScriptValue{ 0.1F } },
+        kb::script::ScriptFunctionArgument{ .name = "velocityX", .value = kb::script::ScriptValue{ 3.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "velocityY", .value = kb::script::ScriptValue{ -2.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "velocityZ", .value = kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "priority", .value = kb::script::ScriptValue{ 231 } },
     };
     const kb::script::ScriptFunctionCallResult direct = host.Functions().Call(
         "Audio.Play",
@@ -2680,7 +2710,46 @@ void RunScriptAudioApiTest() {
     kb::tests::Require(directPlay.mute && directPlay.loop && !directPlay.spatial, "Script audio API direct call did not preserve playback flags");
     kb::tests::Require(kb::tests::NearlyEqual(directPlay.pan, -0.5F) && kb::tests::NearlyEqual(directPlay.spatialBlend, 0.25F), "Script audio API direct call did not preserve pan or spatial blend");
     kb::tests::Require(directPlay.attenuationModel == kb::audio::AudioAttenuationModel::Linear && kb::tests::NearlyEqual(directPlay.minDistance, 2.0F) && kb::tests::NearlyEqual(directPlay.maxDistance, 75.0F) && kb::tests::NearlyEqual(directPlay.rolloff, 0.5F) && kb::tests::NearlyEqual(directPlay.dopplerFactor, 0.1F), "Script audio API direct call did not preserve attenuation settings");
+    kb::tests::Require(kb::tests::NearlyEqual(directPlay.velocity.x, 3.0F)
+            && kb::tests::NearlyEqual(directPlay.velocity.y, -2.0F)
+            && kb::tests::NearlyEqual(directPlay.velocity.z, 1.0F)
+            && directPlay.priority == 231U,
+        "Script audio API direct call did not preserve free-standing velocity or voice priority");
     kb::tests::Require(directPlay.ownerEntityId == 0U, "An unattached Audio.Play must not carry an owner entity");
+
+    const std::size_t playCountBeforeInvalidPriority = audioBackend.played.size();
+    const auto priorityCall = [&host, &scene, &caller](int priority) {
+        const std::vector<kb::script::ScriptFunctionArgument> arguments{
+            kb::script::ScriptFunctionArgument{ .name = "clip", .value = kb::script::ScriptValue{ std::string{ "/Game/Audio/Ping.wav" } } },
+            kb::script::ScriptFunctionArgument{ .name = "priority", .value = kb::script::ScriptValue{ priority } },
+        };
+        return host.Functions().Call(
+            "Audio.Play",
+            std::span<const kb::script::ScriptFunctionArgument>{ arguments },
+            kb::script::ScriptFunctionCallContext{ .scene = &scene, .caller = caller.Entity() });
+    };
+    kb::tests::Require(!priorityCall(-1).Succeeded() && !priorityCall(256).Succeeded()
+            && audioBackend.played.size() == playCountBeforeInvalidPriority,
+        "Out-of-range direct script audio priority reached the backend");
+    kb::tests::Require(priorityCall(0).Succeeded() && audioBackend.played.back().priority == 0U
+            && priorityCall(255).Succeeded() && audioBackend.played.back().priority == 255U,
+        "Boundary direct script audio priorities were not preserved exactly");
+    const std::size_t playCountBeforeInvalidSettings = audioBackend.played.size();
+    const auto invalidSettingsCall = [&host, &scene, &caller](std::string_view name, kb::script::ScriptValue value) {
+        const std::vector<kb::script::ScriptFunctionArgument> arguments{
+            kb::script::ScriptFunctionArgument{ .name = "clip", .value = kb::script::ScriptValue{ std::string{ "/Game/Audio/Ping.wav" } } },
+            kb::script::ScriptFunctionArgument{ .name = std::string{ name }, .value = std::move(value) },
+        };
+        return host.Functions().Call(
+            "Audio.Play",
+            std::span<const kb::script::ScriptFunctionArgument>{ arguments },
+            kb::script::ScriptFunctionCallContext{ .scene = &scene, .caller = caller.Entity() });
+    };
+    kb::tests::Require(!invalidSettingsCall("volume", kb::script::ScriptValue{ std::numeric_limits<float>::quiet_NaN() }).Succeeded()
+            && !invalidSettingsCall("pan", kb::script::ScriptValue{ 2.0F }).Succeeded()
+            && !invalidSettingsCall("attenuationModel", kb::script::ScriptValue{ 99 }).Succeeded()
+            && audioBackend.played.size() == playCountBeforeInvalidSettings,
+        "Invalid public Audio.Play settings reached the playback backend");
 
     // LIB-149: attach=true binds the one-shot to the caller (or explicit entity); a dead
     // target is an honest error.
@@ -2711,12 +2780,19 @@ void RunScriptAudioApiTest() {
     });
     const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
 function Tick(self, dt)
-    local voice, err = Audio.Play("/Game/Audio/Ping.wav", { volume = 0.75, spatial = false, pan = 0.5, spatialBlend = 0.6, attenuationModel = 3, minDistance = 4.0, maxDistance = 120.0, rolloff = 1.4, dopplerFactor = 0.2 })
+    local voice, err = Audio.Play("/Game/Audio/Ping.wav", { volume = 0.75, spatial = false, pan = 0.5, spatialBlend = 0.6, attenuationModel = 3, minDistance = 4.0, maxDistance = 120.0, rolloff = 1.4, dopplerFactor = 0.2, velocityX = -4.0, velocityY = 2.0, velocityZ = 0.5, priority = 17 })
     if voice == nil then
         Emit("AudioPlayFailed", { error = err })
         return
     end
     SetShared("luaAudioVoice", voice)
+    local invalidLowVoice, invalidLowError = Audio.Play("/Game/Audio/Ping.wav", { priority = -1 })
+    local invalidHighVoice, invalidHighError = Audio.Play("/Game/Audio/Ping.wav", { priority = 256 })
+    SetShared("luaInvalidPriorityRejected",
+        invalidLowVoice == nil and type(invalidLowError) == "string"
+        and invalidHighVoice == nil and type(invalidHighError) == "string")
+    Audio.Play("/Game/Audio/Ping.wav", { priority = 0 })
+    Audio.Play("/Game/Audio/Ping.wav", { priority = 255 })
 end
 )");
     kb::tests::Require(loadedLua.succeeded, "Script audio API Lua wrapper script did not load");
@@ -2724,17 +2800,162 @@ end
     const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
     kb::tests::Require(tick.Succeeded(), "Script audio API Lua wrapper execution failed");
     const std::optional<kb::script::ScriptValue> luaVoiceValue = host.SharedState().Get("luaAudioVoice");
-    // Voice 3: the direct call took 1, LIB-149's attached-play probe above took 2 (the
+    // Voice 5: the direct call took 1, the priority boundary probes took 2 and 3,
+    // LIB-149's attached-play probe below took 4 (the
     // dead-owner attempt errors before ever reaching the backend, so it takes none).
-    kb::tests::Require(luaVoiceValue.has_value() && luaVoiceValue->AsInt() == 3, "Script audio API Lua wrapper did not return a voice");
-    kb::tests::Require(audioBackend.played.size() == 3U, "Script audio API Lua wrapper did not reach audio backend");
-    const kb::audio::AudioPlayDesc& luaPlay = audioBackend.played.back();
+    kb::tests::Require(luaVoiceValue.has_value() && luaVoiceValue->AsInt() == 5, "Script audio API Lua wrapper did not return a voice");
+    kb::tests::Require(audioBackend.played.size() == 7U, "Script audio API Lua wrapper did not reach audio backend");
+    kb::tests::Require(host.SharedState().Get("luaInvalidPriorityRejected").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && audioBackend.played[5].priority == 0U && audioBackend.played[6].priority == 255U,
+        "Lua audio priority did not reject invalid values or preserve both boundaries exactly");
+    const kb::audio::AudioPlayDesc& luaPlay = audioBackend.played[4];
     kb::tests::Require(luaPlay.clipAssetId == clipId.value, "Script audio API Lua wrapper sent the wrong clip id");
     kb::tests::Require(kb::tests::NearlyEqual(luaPlay.volume, 0.75F), "Script audio API Lua wrapper did not preserve volume");
     kb::tests::Require(!luaPlay.spatial, "Script audio API Lua wrapper did not preserve flags");
     kb::tests::Require(kb::tests::NearlyEqual(luaPlay.pan, 0.5F) && kb::tests::NearlyEqual(luaPlay.spatialBlend, 0.6F), "Script audio API Lua wrapper did not preserve pan or spatial blend");
     kb::tests::Require(luaPlay.attenuationModel == kb::audio::AudioAttenuationModel::Exponential && kb::tests::NearlyEqual(luaPlay.minDistance, 4.0F) && kb::tests::NearlyEqual(luaPlay.maxDistance, 120.0F) && kb::tests::NearlyEqual(luaPlay.rolloff, 1.4F) && kb::tests::NearlyEqual(luaPlay.dopplerFactor, 0.2F), "Script audio API Lua wrapper did not preserve attenuation settings");
+    kb::tests::Require(kb::tests::NearlyEqual(luaPlay.velocity.x, -4.0F)
+            && kb::tests::NearlyEqual(luaPlay.velocity.y, 2.0F)
+            && kb::tests::NearlyEqual(luaPlay.velocity.z, 0.5F)
+            && luaPlay.priority == 17U,
+        "Script audio API Lua wrapper did not preserve free-standing velocity or voice priority");
     kb::audio::AudioPlayback::UnregisterBackend(scene, audioBackend);
+}
+
+void RunScriptAudioSourceAndDeviceApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script audio source/device API host did not initialize");
+    for (const char* name : { "Audio.PlaySource", "Audio.PauseSource", "Audio.ResumeSource", "Audio.StopSource", "Audio.IsSourcePlaying", "Audio.DeviceStatus", "Audio.Reinitialize", "Audio.SetListenerLocalUser", "Audio.ListenerLocalUser" }) {
+        kb::tests::Require(host.Functions().FindSignature(name) != nullptr,
+            "Script audio source/device API did not register a function");
+        kb::tests::Require(host.VisualGraphRuntimeBindings().Find(
+                               kb::visual::VisualGraphIrOpcode::CallNative,
+                               std::string{ "Function." } + name) != nullptr,
+            "Script audio source/device API did not register its graph runtime binding");
+    }
+
+    const kb::scene::SceneObject caller = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Audio Source Caller" });
+    scene.Components().AudioSources().Set(caller.Entity(), kb::scene::AudioSourceComponent{ .clipAssetId = 81U });
+    const kb::script::ScriptFunctionCallContext context{ .scene = &scene, .caller = caller.Entity() };
+    const auto statusOf = [](const kb::script::ScriptFunctionCallResult& result) {
+        return result.Output("status").value_or(kb::script::ScriptValue{ -1 }).AsInt(-1);
+    };
+
+    kb::tests::Require(kb::scene::SceneAudioListenerAccess::LocalUser(scene) == kb::input::kPrimaryLocalUser,
+        "Audio listener local user did not default to the primary user");
+    const std::vector<kb::script::ScriptFunctionArgument> listenerUserArguments{
+        kb::script::ScriptFunctionArgument{ "localUser", kb::script::ScriptValue{ std::uint32_t{ 7U } } },
+    };
+    const kb::script::ScriptFunctionCallResult setListenerUser = host.Functions().Call(
+        "Audio.SetListenerLocalUser",
+        std::span<const kb::script::ScriptFunctionArgument>{ listenerUserArguments },
+        context);
+    const kb::script::ScriptFunctionCallResult getListenerUser = host.Functions().Call(
+        "Audio.ListenerLocalUser", {}, context);
+    kb::tests::Require(setListenerUser.Succeeded()
+            && setListenerUser.Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && getListenerUser.Succeeded()
+            && getListenerUser.Output("localUser").value_or(kb::script::ScriptValue{ std::uint32_t{ 0U } }).AsUInt32() == 7U
+            && kb::scene::SceneAudioListenerAccess::LocalUser(scene) == kb::input::LocalUserId{ 7U },
+        "Direct script listener local-user set/get did not preserve the UInt32 value");
+
+    const kb::script::ScriptFunctionCallResult noBackend = host.Functions().Call("Audio.PlaySource", {}, context);
+    kb::tests::Require(noBackend.Succeeded()
+            && !noBackend.Output("succeeded").value_or(kb::script::ScriptValue{ true }).AsBool()
+            && statusOf(noBackend) == static_cast<int>(kb::audio::AudioSourceControlStatus::BackendUnavailable),
+        "Script source control fabricated success without an audio backend");
+    const kb::script::ScriptFunctionCallResult noBackendDevice = host.Functions().Call("Audio.DeviceStatus", {}, context);
+    kb::tests::Require(noBackendDevice.Succeeded()
+            && statusOf(noBackendDevice) == static_cast<int>(kb::audio::AudioDeviceStatus::BackendUnavailable)
+            && !noBackendDevice.Output("available").value_or(kb::script::ScriptValue{ true }).AsBool(),
+        "Script device status fabricated availability without an audio backend");
+
+    ProbeAudioPlaybackBackend backend;
+    kb::audio::AudioPlayback::RegisterBackend(scene, backend);
+    const kb::script::ScriptFunctionCallResult selfPlay = host.Functions().Call("Audio.PlaySource", {}, context);
+    kb::tests::Require(selfPlay.Output("succeeded").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && selfPlay.Output("playing").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && backend.lastSourceEntity == caller.Entity() && backend.lastSourceOperation == "play",
+        "Script source control did not dispatch the caller entity to the facade");
+
+    const std::vector<kb::script::ScriptFunctionArgument> explicitArguments{
+        kb::script::ScriptFunctionArgument{ "entity", kb::script::ScriptValue{ caller.Entity().Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult explicitPause = host.Functions().Call(
+        "Audio.PauseSource", std::span<const kb::script::ScriptFunctionArgument>{ explicitArguments }, context);
+    kb::tests::Require(explicitPause.Output("succeeded").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && !explicitPause.Output("playing").value_or(kb::script::ScriptValue{ true }).AsBool()
+            && backend.lastSourceEntity == caller.Entity() && backend.lastSourceOperation == "pause",
+        "Script source control did not dispatch an explicit entity or preserve the backend result");
+
+    const std::vector<kb::script::ScriptFunctionArgument> invalidArguments{
+        kb::script::ScriptFunctionArgument{ "entity", kb::script::ScriptValue{ 0U, kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult invalid = host.Functions().Call(
+        "Audio.StopSource", std::span<const kb::script::ScriptFunctionArgument>{ invalidArguments }, context);
+    kb::tests::Require(!invalid.Output("succeeded").value_or(kb::script::ScriptValue{ true }).AsBool()
+            && statusOf(invalid) == static_cast<int>(kb::audio::AudioSourceControlStatus::InvalidEntity),
+        "Script source control hid the backend invalid-entity result");
+
+    backend.deviceStatus = kb::audio::AudioDeviceStatus::NoPlaybackDevice;
+    const kb::script::ScriptFunctionCallResult device = host.Functions().Call("Audio.DeviceStatus", {}, context);
+    const kb::script::ScriptFunctionCallResult restarted = host.Functions().Call("Audio.Reinitialize", {}, context);
+    kb::tests::Require(statusOf(device) == static_cast<int>(kb::audio::AudioDeviceStatus::NoPlaybackDevice)
+            && !device.Output("available").value_or(kb::script::ScriptValue{ true }).AsBool()
+            && statusOf(restarted) == static_cast<int>(kb::audio::AudioDeviceStatus::NoPlaybackDevice)
+            && backend.reinitializeCount == 1,
+        "Script device status/reinitialize did not preserve the real facade result");
+
+    const kb::assets::AssetId luaAsset{ 8803U };
+    scene.Components().Behaviours().Set(caller.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local own = Audio.PlaySource()
+    local explicit = Audio.IsSourcePlaying(self.entity)
+    local invalid = Audio.StopSource(0)
+    local device = Audio.DeviceStatus()
+    local restarted = Audio.Reinitialize()
+    local listenerApplied = Audio.SetListenerLocalUser(9)
+    local listenerUser = Audio.ListenerLocalUser()
+    local invalidListenerUserAccepted = pcall(function() Audio.SetListenerLocalUser(-1) end)
+    SetShared("luaSourceOwn", own.succeeded and own.playing)
+    SetShared("luaSourceExplicit", explicit.succeeded and explicit.playing)
+    SetShared("luaSourceInvalidStatus", invalid.status)
+    SetShared("luaDeviceStatus", device.status)
+    SetShared("luaDeviceAvailable", device.available)
+    SetShared("luaReinitializeStatus", restarted.status)
+    SetShared("luaListenerApplied", listenerApplied)
+    SetShared("luaListenerUser", listenerUser)
+    SetShared("luaInvalidListenerUserRejected", not invalidListenerUserAccepted)
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script audio source/device Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(
+        scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded()
+            && host.SharedState().Get("luaSourceOwn").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && host.SharedState().Get("luaSourceExplicit").value_or(kb::script::ScriptValue{ false }).AsBool(),
+        "Lua audio source control did not support self and explicit entity dispatch");
+    kb::tests::Require(host.SharedState().Get("luaSourceInvalidStatus").value_or(kb::script::ScriptValue{ -1 }).AsInt(-1)
+                == static_cast<int>(kb::audio::AudioSourceControlStatus::InvalidEntity)
+            && host.SharedState().Get("luaDeviceStatus").value_or(kb::script::ScriptValue{ -1 }).AsInt(-1)
+                == static_cast<int>(kb::audio::AudioDeviceStatus::NoPlaybackDevice)
+            && !host.SharedState().Get("luaDeviceAvailable").value_or(kb::script::ScriptValue{ true }).AsBool()
+            && host.SharedState().Get("luaReinitializeStatus").value_or(kb::script::ScriptValue{ -1 }).AsInt(-1)
+                == static_cast<int>(kb::audio::AudioDeviceStatus::NoPlaybackDevice)
+            && backend.reinitializeCount == 2,
+        "Lua audio source/device wrappers did not preserve invalid and unavailable statuses");
+    kb::tests::Require(host.SharedState().Get("luaListenerApplied").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && host.SharedState().Get("luaListenerUser").value_or(kb::script::ScriptValue{ 0 }).AsInt() == 9
+            && host.SharedState().Get("luaInvalidListenerUserRejected").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && kb::scene::SceneAudioListenerAccess::LocalUser(scene) == kb::input::LocalUserId{ 9U },
+        "Lua listener local-user set/get did not propagate or reject an invalid value");
+    kb::audio::AudioPlayback::UnregisterBackend(scene, backend);
 }
 
 // LIB-137: MeshRenderer.SetMesh/SetMaterial - meshAssetId/materialAssetId are deliberately
@@ -4007,9 +4228,47 @@ void RunAudioMixerAssetIOAndAccessTest() {
     ResetTestRoot();
     const std::filesystem::path mixerPath = TestRoot() / "MainMixer.kbmixer";
 
+    const std::filesystem::path emptyMixerPath = TestRoot() / "EmptyMixer.kbmixer";
+    const kb::audio::AudioMixerAsset emptyMixer{};
+    kb::tests::Require(kb::audio::AudioMixerAssetIO::Save(emptyMixerPath, emptyMixer),
+        "An empty audio mixer asset must save successfully");
+    std::error_code fileSizeError;
+    kb::tests::Require(std::filesystem::file_size(emptyMixerPath, fileSizeError) > 0U && !fileSizeError,
+        "An empty audio mixer asset must persist its format header");
+    const std::optional<kb::audio::AudioMixerAsset> loadedEmpty = kb::audio::AudioMixerAssetIO::Load(emptyMixerPath);
+    kb::tests::Require(loadedEmpty.has_value() && loadedEmpty->buses.empty() && loadedEmpty->snapshots.empty(),
+        "An empty audio mixer asset must round-trip through its versioned format");
+
+    const std::filesystem::path legacyMixerPath = TestRoot() / "LegacyMixer.kbmixer";
+    WriteTextFile(legacyMixerPath, "bus Legacy - 0.75 1\nsnapshot Default\nsnapshotVolume Default Legacy 0.5\n");
+    const std::optional<kb::audio::AudioMixerAsset> loadedLegacy = kb::audio::AudioMixerAssetIO::Load(legacyMixerPath);
+    kb::tests::Require(loadedLegacy.has_value() && loadedLegacy->FindBus("Legacy") != nullptr
+            && loadedLegacy->FindSnapshot("Default") != nullptr,
+        "A legacy headerless audio mixer asset must remain loadable");
+
+    const std::filesystem::path zeroByteMixerPath = TestRoot() / "ZeroByteMixer.kbmixer";
+    WriteTextFile(zeroByteMixerPath, {});
+    kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(zeroByteMixerPath).has_value(),
+        "A zero-byte audio mixer asset must be rejected as missing data");
+    WriteTextFile(TestRoot() / "CommentsOnlyMixer.kbmixer", "# no mixer records\n\t# still no data\n");
+    kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(TestRoot() / "CommentsOnlyMixer.kbmixer").has_value(),
+        "A comments-only legacy mixer must be rejected as missing data");
+    WriteTextFile(TestRoot() / "UnknownOnlyMixer.kbmixer", "futureRecord value\n");
+    kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(TestRoot() / "UnknownOnlyMixer.kbmixer").has_value(),
+        "An unknown-record-only legacy mixer must not masquerade as a valid empty asset");
+    WriteTextFile(TestRoot() / "FutureMixer.kbmixer", "kbmixer 2\n");
+    kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(TestRoot() / "FutureMixer.kbmixer").has_value(),
+        "An unsupported audio mixer format version must be rejected");
+    WriteTextFile(TestRoot() / "TabbedMixer.kbmixer", "kbmixer\t1\n");
+    kb::tests::Require(kb::audio::AudioMixerAssetIO::Load(TestRoot() / "TabbedMixer.kbmixer").has_value(),
+        "A tab-separated current audio mixer header must parse consistently");
+    WriteTextFile(TestRoot() / "TabbedFutureMixer.kbmixer", "kbmixer\t2\n");
+    kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(TestRoot() / "TabbedFutureMixer.kbmixer").has_value(),
+        "A tab-separated unsupported mixer version must not bypass header validation");
+
     kb::audio::AudioMixerAsset mixer;
     mixer.buses = {
-        kb::audio::AudioMixerBus{ .name = "Music", .parentBus = "", .volume = 0.8F, .mute = false },
+        kb::audio::AudioMixerBus{ .name = "Music", .parentBus = "", .volume = 0.123456791F, .mute = false },
         kb::audio::AudioMixerBus{ .name = "Sfx", .parentBus = "", .volume = 1.0F, .mute = false },
         kb::audio::AudioMixerBus{ .name = "Weapons", .parentBus = "Sfx", .volume = 0.6F, .mute = true },
     };
@@ -4029,6 +4288,8 @@ void RunAudioMixerAssetIOAndAccessTest() {
     const std::optional<kb::audio::AudioMixerAsset> loaded = kb::audio::AudioMixerAssetIO::Load(mixerPath);
     kb::tests::Require(loaded.has_value(), "Audio mixer asset load failed");
     kb::tests::Require(loaded->buses.size() == 3U && loaded->snapshots.size() == 2U, "Audio mixer asset did not round-trip its record counts");
+    kb::tests::Require(loaded->buses[0].volume == mixer.buses[0].volume,
+        "Audio mixer serialization must preserve an authored float exactly");
     const kb::audio::AudioMixerBus* weapons = loaded->FindBus("Weapons");
     kb::tests::Require(weapons != nullptr && weapons->parentBus == "Sfx" && kb::tests::NearlyEqual(weapons->volume, 0.6F) && weapons->mute,
         "Audio mixer bus fields did not round-trip");
@@ -4057,6 +4318,35 @@ void RunAudioMixerAssetIOAndAccessTest() {
     kb::audio::AudioMixerAsset badName = mixer;
     badName.buses[0].name = "two words";
     kb::tests::Require(!kb::audio::ValidateAudioMixerAsset(badName).empty(), "A whitespace bus name must fail validation (single-token text format)");
+    kb::audio::AudioMixerAsset invalidBusVolume = mixer;
+    invalidBusVolume.buses[0].volume = std::numeric_limits<float>::quiet_NaN();
+    kb::tests::Require(!kb::audio::ValidateAudioMixerAsset(invalidBusVolume).empty(), "A non-finite bus volume must fail validation");
+    invalidBusVolume.buses[0].volume = -0.1F;
+    kb::tests::Require(!kb::audio::ValidateAudioMixerAsset(invalidBusVolume).empty(), "A negative bus volume must fail validation");
+    kb::audio::AudioMixerAsset invalidSnapshotVolume = mixer;
+    invalidSnapshotVolume.snapshots[0].busVolumes[0].volume = std::numeric_limits<float>::infinity();
+    kb::tests::Require(!kb::audio::ValidateAudioMixerAsset(invalidSnapshotVolume).empty(), "A non-finite snapshot volume must fail validation");
+    invalidSnapshotVolume.snapshots[0].busVolumes[0].volume = -1.0F;
+    kb::tests::Require(!kb::audio::ValidateAudioMixerAsset(invalidSnapshotVolume).empty(), "A negative snapshot volume must fail validation");
+    kb::audio::AudioMixerAsset duplicateSnapshotOverride = mixer;
+    duplicateSnapshotOverride.snapshots[0].busVolumes.push_back(
+        kb::audio::AudioMixerSnapshotBusVolume{ .bus = "Music", .volume = 0.5F });
+    kb::tests::Require(!kb::audio::ValidateAudioMixerAsset(duplicateSnapshotOverride).empty(),
+        "A duplicate bus override in one snapshot must fail validation");
+    kb::tests::Require(!kb::audio::AudioMixerAssetIO::Save(mixerPath, invalidBusVolume),
+        "Save must refuse an invalid mixer volume");
+    kb::tests::Require(!kb::audio::AudioMixerAssetIO::Save(mixerPath, duplicateSnapshotOverride),
+        "Save must refuse a duplicate bus override in one snapshot");
+    WriteTextFile(TestRoot() / "negative-volume.kbmixer", "bus Music - -1 0\n");
+    WriteTextFile(TestRoot() / "nonfinite-volume.kbmixer", "bus Music - inf 0\n");
+    WriteTextFile(TestRoot() / "duplicate-override.kbmixer",
+        "bus Music - 1 0\nsnapshot Calm\nsnapshotVolume Calm Music 0.5\nsnapshotVolume Calm Music 0.25\n");
+    kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(TestRoot() / "negative-volume.kbmixer").has_value(),
+        "Loading a negative mixer volume must fail");
+    kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(TestRoot() / "nonfinite-volume.kbmixer").has_value(),
+        "Loading a non-finite mixer volume must fail");
+    kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(TestRoot() / "duplicate-override.kbmixer").has_value(),
+        "Loading a duplicate snapshot override must fail");
     kb::tests::Require(!kb::audio::AudioMixerAssetIO::Load(TestRoot() / "missing.kbmixer").has_value(), "Loading a missing mixer file must fail honestly");
 
     // SceneAudioMixerAccess - defaults, round-trip, per-scene isolation.
@@ -4065,30 +4355,67 @@ void RunAudioMixerAssetIOAndAccessTest() {
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(scene) == 0U && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene).empty(),
         "A fresh scene must have no active mixer and no active snapshot");
     kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 777U);
-    kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "Combat");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "Combat"),
+        "Audio snapshot fixture setup failed");
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(scene) == 777U && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Combat",
         "SceneAudioMixerAccess set/get did not round-trip");
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(otherScene) == 0U, "SceneAudioMixerAccess must be isolated per scene");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "Music", 0.5F)
+            && kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "Quiet", 2.0F),
+        "Mixer change reset fixture setup failed");
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 777U);
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Combat"
+            && kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene).size() == 1U
+            && kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).IsActive(),
+        "Setting the same active mixer cleared runtime mixer state");
+    const kb::scene::AudioMixerSnapshotTransition transitionBeforeInvalidSnapshot =
+        kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene);
+    kb::tests::Require(!kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "invalid snapshot")
+            && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Combat"
+            && kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).toSnapshot
+                == transitionBeforeInvalidSnapshot.toSnapshot
+            && kb::tests::NearlyEqual(
+                kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).durationSeconds,
+                transitionBeforeInvalidSnapshot.durationSeconds),
+        "Invalid active snapshot mutated snapshot or transition state");
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 778U);
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene).empty()
+            && kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene).empty()
+            && !kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).IsActive(),
+        "Changing the active mixer did not clear snapshot, override, and transition state");
     kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 0U);
-    kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, {});
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, {}),
+        "Audio snapshot reset fixture failed");
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(scene) == 0U && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene).empty(),
         "SceneAudioMixerAccess must clear back to the defaults");
 
     // LIB-150: runtime bus volume overrides - upsert-by-name, remove-by-name.
-    kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "Music", 0.5F);
-    kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "Music", 0.25F);
-    kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "Sfx", 0.75F);
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "Music", 0.5F),
+        "A valid bus volume override must be accepted");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "Music", 0.25F),
+        "A valid bus volume override update must be accepted");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "Sfx", 0.75F),
+        "A second valid bus volume override must be accepted");
     const std::span<const kb::scene::AudioMixerBusVolumeOverride> overrides = kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene);
     kb::tests::Require(overrides.size() == 2U && overrides[0].bus == "Music" && kb::tests::NearlyEqual(overrides[0].volume, 0.25F),
         "Bus volume overrides must upsert by name, not duplicate");
+    kb::tests::Require(!kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(
+                           scene, "Music", std::numeric_limits<float>::quiet_NaN())
+            && !kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "Music", std::numeric_limits<float>::infinity())
+            && !kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "Music", -0.1F)
+            && !kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "", 1.0F)
+            && kb::tests::NearlyEqual(kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene)[0].volume, 0.25F),
+        "Invalid bus volume overrides must be rejected without mutating the prior value");
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::ClearBusVolumeOverride(scene, "Music"), "Clearing a set bus override must report true");
     kb::tests::Require(!kb::scene::SceneAudioMixerAccess::ClearBusVolumeOverride(scene, "Music"), "Clearing an unset bus override must be idempotent-false");
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene).size() == 1U, "Clearing must remove exactly the named override");
 
     // LIB-150: snapshot transition - deterministic scene-delta advance, FROM state stays
     // active until completion, retarget completes the previous transition first.
-    kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "Calm");
-    kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "Combat", 1.0F);
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "Calm"),
+        "Audio snapshot fixture setup failed");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "Combat", 1.0F),
+        "A valid snapshot transition must start");
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).IsActive()
             && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Calm",
         "A running transition must keep the FROM snapshot active");
@@ -4099,12 +4426,27 @@ void RunAudioMixerAssetIOAndAccessTest() {
             && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Combat"
             && !kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).IsActive(),
         "Completing a transition must promote the TO snapshot and clear the transition");
-    kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "Calm", 2.0F);
-    kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "", 1.0F);
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "Calm", 2.0F),
+        "A valid snapshot transition must start");
+    kb::tests::Require(!kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(
+                           scene, "Combat", std::numeric_limits<float>::quiet_NaN())
+            && !kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(
+                scene, "Combat", std::numeric_limits<float>::infinity())
+            && kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).toSnapshot == "Calm",
+        "A non-finite transition duration must not change an active transition");
+    kb::tests::Require(!kb::scene::SceneAudioMixerAccess::AdvanceSnapshotTransition(
+                           scene, std::numeric_limits<float>::quiet_NaN())
+            && !kb::scene::SceneAudioMixerAccess::AdvanceSnapshotTransition(
+                scene, std::numeric_limits<float>::infinity())
+            && kb::tests::NearlyEqual(kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).Progress(), 0.0F),
+        "A non-finite transition delta must be a non-mutating no-op");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "", 1.0F),
+        "A transition back to authored volumes must start");
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Calm"
             && kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).toSnapshot.empty(),
         "Retargeting mid-transition must complete the previous transition instantly first");
-    kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "Combat", 0.0F);
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "Combat", 0.0F),
+        "A valid immediate snapshot transition must succeed");
     kb::tests::Require(kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Combat"
             && !kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).IsActive(),
         "A non-positive duration must apply the snapshot immediately");
@@ -4117,17 +4459,29 @@ void RunAudioMixerAssetIOAndAccessTest() {
     kb::tests::Require(!defaults.enabled && kb::tests::NearlyEqual(defaults.occludedVolumeScale, 0.35F)
             && kb::tests::NearlyEqual(defaults.maxDistance, 100.0F) && defaults.maxRaycastsPerTick == 8U,
         "Audio occlusion must default to disabled with the documented tuning");
-    kb::scene::SceneAudioOcclusionAccess::Configure(scene, kb::scene::AudioOcclusionSettings{
+    kb::tests::Require(kb::scene::SceneAudioOcclusionAccess::Configure(scene, kb::scene::AudioOcclusionSettings{
                                                                .enabled = true,
                                                                .occludedVolumeScale = 0.2F,
                                                                .maxDistance = 50.0F,
                                                                .layerMask = 0x3U,
                                                                .maxRaycastsPerTick = 4U,
-                                                           });
+                                                           }), "Audio occlusion fixture setup failed");
     const kb::scene::AudioOcclusionSettings& configured = kb::scene::SceneAudioOcclusionAccess::Settings(scene);
     kb::tests::Require(configured.enabled && kb::tests::NearlyEqual(configured.occludedVolumeScale, 0.2F)
             && kb::tests::NearlyEqual(configured.maxDistance, 50.0F) && configured.layerMask == 0x3U && configured.maxRaycastsPerTick == 4U,
         "Audio occlusion Configure/Settings did not round-trip");
+    kb::tests::Require(!kb::scene::SceneAudioOcclusionAccess::Configure(scene, kb::scene::AudioOcclusionSettings{
+                                                               .enabled = true,
+                                                               .occludedVolumeScale = std::numeric_limits<float>::quiet_NaN(),
+                                                               .maxDistance = std::numeric_limits<float>::infinity(),
+                                                               .layerMask = 0x7U,
+                                                               .maxRaycastsPerTick = std::numeric_limits<std::uint32_t>::max(),
+                                                           }), "Invalid audio occlusion settings were accepted");
+    const kb::scene::AudioOcclusionSettings& unchanged = kb::scene::SceneAudioOcclusionAccess::Settings(scene);
+    kb::tests::Require(unchanged.enabled && kb::tests::NearlyEqual(unchanged.occludedVolumeScale, 0.2F)
+            && kb::tests::NearlyEqual(unchanged.maxDistance, 50.0F) && unchanged.layerMask == 0x3U
+            && unchanged.maxRaycastsPerTick == 4U,
+        "Rejected audio occlusion settings mutated the previous state");
     kb::tests::Require(!kb::scene::SceneAudioOcclusionAccess::Settings(otherScene).enabled,
         "Audio occlusion settings must be isolated per scene");
     kb::scene::SceneAudioOcclusionAccess::PublishRuntimeStats(
@@ -4276,6 +4630,12 @@ end
             && kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene).size() == 1U
             && kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene)[0].bus == "Music",
         "Audio.SetBusVolume did not store the runtime override in the scene's own state");
+    const kb::script::ScriptFunctionCallResult rejectedVolume =
+        callBusVolume("Music", std::numeric_limits<float>::quiet_NaN());
+    kb::tests::Require(rejectedVolume.Succeeded()
+            && !rejectedVolume.Output("applied").value_or(kb::script::ScriptValue{ true }).AsBool()
+            && kb::tests::NearlyEqual(kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene)[0].volume, 0.5F),
+        "Audio.SetBusVolume must report and preserve state after a rejected non-finite volume");
     kb::tests::Require(callString("Audio.ClearBusVolume", "bus", "Music").Succeeded()
             && kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene).empty(),
         "Audio.ClearBusVolume did not remove the runtime override");
@@ -4293,6 +4653,14 @@ end
             && kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).IsActive()
             && kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).toSnapshot == "Calm",
         "Audio.TransitionToSnapshot did not start the scene's transition state");
+    const kb::script::ScriptFunctionCallResult rejectedTransition =
+        callTransition("Calm", std::numeric_limits<float>::infinity());
+    kb::tests::Require(rejectedTransition.Succeeded()
+            && !rejectedTransition.Output("started").value_or(kb::script::ScriptValue{ true }).AsBool()
+            && kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).IsActive()
+            && kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).toSnapshot == "Calm"
+            && kb::tests::NearlyEqual(kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).durationSeconds, 1.0F),
+        "Audio.TransitionToSnapshot must report and preserve state after a rejected non-finite duration");
     kb::tests::Require(callString("Audio.SetMixer", "mixer", "").Succeeded(), "Clearing the mixer after the transition probe failed");
     kb::tests::Require(!callBusVolume("Music", 0.5F).Succeeded() && !callTransition("Calm", 1.0F).Succeeded(),
         "Bus volume and transition requests must honestly error without an active mixer");
@@ -4314,6 +4682,18 @@ end
     kb::tests::Require(configure.Succeeded() && scriptConfigured.enabled && kb::tests::NearlyEqual(scriptConfigured.occludedVolumeScale, 0.1F)
             && scriptConfigured.maxRaycastsPerTick == 3U && kb::tests::NearlyEqual(scriptConfigured.maxDistance, 100.0F),
         "Audio.ConfigureOcclusion must apply given values and keep omitted ones");
+    const kb::script::ScriptFunctionCallResult rejectedOcclusion = host.Functions().Call(
+        "Audio.ConfigureOcclusion",
+        std::span<const kb::script::ScriptFunctionArgument>{ std::vector<kb::script::ScriptFunctionArgument>{
+            kb::script::ScriptFunctionArgument{ .name = "enabled", .value = kb::script::ScriptValue{ false } },
+            kb::script::ScriptFunctionArgument{ .name = "maxDistance", .value = kb::script::ScriptValue{ std::numeric_limits<float>::infinity() } },
+        } },
+        context);
+    kb::tests::Require(rejectedOcclusion.Succeeded()
+            && !rejectedOcclusion.Output("applied").value_or(kb::script::ScriptValue{ true }).AsBool()
+            && kb::scene::SceneAudioOcclusionAccess::Settings(scene).enabled
+            && kb::tests::NearlyEqual(kb::scene::SceneAudioOcclusionAccess::Settings(scene).maxDistance, 100.0F),
+        "Audio.ConfigureOcclusion must report and preserve state after a rejected non-finite value");
     const kb::script::ScriptFunctionCallResult occlusionEnabled = host.Functions().Call("Audio.OcclusionEnabled", std::span<const kb::script::ScriptFunctionArgument>{}, context);
     kb::tests::Require(occlusionEnabled.Succeeded() && occlusionEnabled.Output("enabled").value_or(kb::script::ScriptValue{ false }).AsBool(),
         "Audio.OcclusionEnabled must report the configured state");
@@ -4321,7 +4701,7 @@ end
 
 // LIB-148: per-voice playback control - the AudioPlayback facade contract without a
 // backend (everything honestly false), the full per-voice flow through a fake backend
-// (no plugin required), registration of all eight functions on Native+VisualGraph, and
+// (no plugin required), registration of all ten functions on Native+VisualGraph, and
 // the real Lua wrappers.
 void RunScriptAudioVoiceControlApiTest() {
     // A minimal recording backend - one live voice id, every operation notes its call.
@@ -4329,7 +4709,9 @@ void RunScriptAudioVoiceControlApiTest() {
         std::uint64_t liveVoice = 7U;
         float lastSeekSeconds = -1.0F;
         float lastVolume = -1.0F;
+        float lastPan = 0.0F;
         float lastPitch = -1.0F;
+        bool lastMute = false;
         bool lastLoop = false;
         bool paused = false;
 
@@ -4338,6 +4720,13 @@ void RunScriptAudioVoiceControlApiTest() {
             return kb::audio::AudioPlayResult{ .started = true, .voiceId = liveVoice, .error = {} };
         }
         void StopAll(kb::scene::Scene&) noexcept override {}
+        [[nodiscard]] kb::audio::AudioSourceControlResult PlaySource(kb::scene::Scene&, kb::scene::SceneEntity) override { return { .status = kb::audio::AudioSourceControlStatus::Success, .playing = true }; }
+        [[nodiscard]] kb::audio::AudioSourceControlResult PauseSource(kb::scene::Scene&, kb::scene::SceneEntity) override { return { .status = kb::audio::AudioSourceControlStatus::Success }; }
+        [[nodiscard]] kb::audio::AudioSourceControlResult ResumeSource(kb::scene::Scene&, kb::scene::SceneEntity) override { return { .status = kb::audio::AudioSourceControlStatus::Success, .playing = true }; }
+        [[nodiscard]] kb::audio::AudioSourceControlResult StopSource(kb::scene::Scene&, kb::scene::SceneEntity) override { return { .status = kb::audio::AudioSourceControlStatus::Success }; }
+        [[nodiscard]] kb::audio::AudioSourceControlResult IsSourcePlaying(kb::scene::Scene&, kb::scene::SceneEntity) override { return { .status = kb::audio::AudioSourceControlStatus::Success, .playing = !paused }; }
+        [[nodiscard]] kb::audio::AudioDeviceStatus DeviceStatus() const noexcept override { return kb::audio::AudioDeviceStatus::PlaybackAvailable; }
+        [[nodiscard]] kb::audio::AudioDeviceStatus Reinitialize(kb::scene::Scene&) noexcept override { return DeviceStatus(); }
         [[nodiscard]] bool StopVoice(kb::scene::Scene&, std::uint64_t voiceId) noexcept override {
             if (voiceId != liveVoice) {
                 return false;
@@ -4365,6 +4754,16 @@ void RunScriptAudioVoiceControlApiTest() {
                 return false;
             }
             lastVolume = volume;
+            return true;
+        }
+        [[nodiscard]] bool SetVoiceMute(kb::scene::Scene&, std::uint64_t voiceId, bool mute) noexcept override {
+            if (voiceId != liveVoice) return false;
+            lastMute = mute;
+            return true;
+        }
+        [[nodiscard]] bool SetVoicePan(kb::scene::Scene&, std::uint64_t voiceId, float pan) noexcept override {
+            if (voiceId != liveVoice) return false;
+            lastPan = pan;
             return true;
         }
         [[nodiscard]] bool SetVoicePitch(kb::scene::Scene&, std::uint64_t voiceId, float pitch) noexcept override {
@@ -4402,6 +4801,8 @@ void RunScriptAudioVoiceControlApiTest() {
     };
 
     kb::scene::Scene scene;
+    const kb::scene::SceneObject markerTarget = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{ .name = "Audio Marker Target" });
     // Without a backend every facade call is honestly false.
     kb::tests::Require(!kb::audio::AudioPlayback::StopVoice(scene, 7U) && !kb::audio::AudioPlayback::PauseVoice(scene, 7U)
             && !kb::audio::AudioPlayback::SeekVoice(scene, 7U, 1.0F) && !kb::audio::AudioPlayback::IsVoicePlaying(scene, 7U),
@@ -4411,7 +4812,7 @@ void RunScriptAudioVoiceControlApiTest() {
     kb::audio::AudioPlayback::RegisterBackend(scene, backend);
     kb::script::ScriptRuntimeHost host{ scene };
     kb::tests::Require(host.Succeeded(), "Script audio voice control API host did not initialize");
-    for (const char* name : { "Audio.Stop", "Audio.Pause", "Audio.Resume", "Audio.Seek", "Audio.SetVolume", "Audio.SetPitch", "Audio.SetLoop", "Audio.IsPlaying" }) {
+    for (const char* name : { "Audio.Stop", "Audio.Pause", "Audio.Resume", "Audio.Seek", "Audio.SetVolume", "Audio.SetMute", "Audio.SetPan", "Audio.SetPitch", "Audio.SetLoop", "Audio.IsPlaying" }) {
         kb::tests::Require(host.Functions().FindSignature(name) != nullptr, "Script audio voice control API did not register a LIB-148 function");
     }
     kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Audio.Stop") != nullptr,
@@ -4436,9 +4837,59 @@ void RunScriptAudioVoiceControlApiTest() {
     kb::tests::Require(callVoice("Audio.SetVolume", { kb::script::ScriptFunctionArgument{ .name = "volume", .value = kb::script::ScriptValue{ 0.4F } } }).Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool()
             && kb::tests::NearlyEqual(backend.lastVolume, 0.4F),
         "Audio.SetVolume did not carry its value to the backend");
+    kb::tests::Require(callVoice("Audio.SetMute", { kb::script::ScriptFunctionArgument{ .name = "mute", .value = kb::script::ScriptValue{ true } } }).Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && backend.lastMute && kb::tests::NearlyEqual(backend.lastVolume, 0.4F),
+        "Audio.SetMute did not carry its independent value to the backend");
+    kb::tests::Require(callVoice("Audio.SetPan", { kb::script::ScriptFunctionArgument{ .name = "pan", .value = kb::script::ScriptValue{ -0.65F } } }).Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool()
+            && kb::tests::NearlyEqual(backend.lastPan, -0.65F) && backend.lastMute,
+        "Audio.SetPan did not carry its independent value to the backend");
     kb::tests::Require(callVoice("Audio.SetPitch", { kb::script::ScriptFunctionArgument{ .name = "pitch", .value = kb::script::ScriptValue{ 1.2F } } }).Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool()
             && kb::tests::NearlyEqual(backend.lastPitch, 1.2F),
         "Audio.SetPitch did not carry its value to the backend");
+    const float previousSeek = backend.lastSeekSeconds;
+    const float previousVolume = backend.lastVolume;
+    const float previousPan = backend.lastPan;
+    const float previousPitch = backend.lastPitch;
+    const auto rejectedValue = [&callVoice](const char* function, const char* valueName, float value) {
+        return !callVoice(function, { kb::script::ScriptFunctionArgument{ .name = valueName, .value = kb::script::ScriptValue{ value } } })
+                    .Output("applied")
+                    .value_or(kb::script::ScriptValue{ true })
+                    .AsBool();
+    };
+    kb::tests::Require(rejectedValue("Audio.Seek", "positionSeconds", -0.01F)
+            && rejectedValue("Audio.Seek", "positionSeconds", std::numeric_limits<float>::quiet_NaN())
+            && rejectedValue("Audio.SetVolume", "volume", -0.01F)
+            && rejectedValue("Audio.SetVolume", "volume", std::numeric_limits<float>::infinity())
+            && rejectedValue("Audio.SetPan", "pan", -1.01F)
+            && rejectedValue("Audio.SetPan", "pan", std::numeric_limits<float>::quiet_NaN())
+            && rejectedValue("Audio.SetPitch", "pitch", 0.009F)
+            && rejectedValue("Audio.SetPitch", "pitch", std::numeric_limits<float>::infinity())
+            && kb::tests::NearlyEqual(backend.lastSeekSeconds, previousSeek)
+            && kb::tests::NearlyEqual(backend.lastVolume, previousVolume)
+            && kb::tests::NearlyEqual(backend.lastPan, previousPan)
+            && kb::tests::NearlyEqual(backend.lastPitch, previousPitch),
+        "Invalid public voice control values reached or mutated the backend");
+
+    kb::tests::Require(kb::audio::AudioPlayback::AddVoiceMarker(scene, 7U, "stable", 0.25F, markerTarget.Entity()),
+        "Valid audio marker fixture was rejected");
+    const std::string previousMarker = backend.lastMarker;
+    const float previousMarkerSeconds = backend.lastMarkerSeconds;
+    const kb::scene::SceneObject deadMarkerTarget = scene.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{ .name = "Dead Audio Marker Target" });
+    scene.Entities().Destroy(deadMarkerTarget.Entity());
+    const std::string embeddedNullMarker{ "bad\0name", 8U };
+    const std::string controlMarker{ "bad\nname" };
+    const std::string oversizedMarker(kb::audio::kMaxAudioVoiceMarkerNameBytes + 1U, 'm');
+    kb::tests::Require(!kb::audio::AudioPlayback::AddVoiceMarker(scene, 7U, {}, 0.25F, markerTarget.Entity())
+            && !kb::audio::AudioPlayback::AddVoiceMarker(scene, 7U, embeddedNullMarker, 0.25F, markerTarget.Entity())
+            && !kb::audio::AudioPlayback::AddVoiceMarker(scene, 7U, controlMarker, 0.25F, markerTarget.Entity())
+            && !kb::audio::AudioPlayback::AddVoiceMarker(scene, 7U, oversizedMarker, 0.25F, markerTarget.Entity())
+            && !kb::audio::AudioPlayback::AddVoiceMarker(scene, 7U, "late", -0.01F, markerTarget.Entity())
+            && !kb::audio::AudioPlayback::AddVoiceMarker(scene, 7U, "late", std::numeric_limits<float>::quiet_NaN(), markerTarget.Entity())
+            && !kb::audio::AudioPlayback::AddVoiceMarker(scene, 7U, "dead", 0.25F, deadMarkerTarget.Entity())
+            && backend.lastMarker == previousMarker
+            && kb::tests::NearlyEqual(backend.lastMarkerSeconds, previousMarkerSeconds),
+        "Invalid public audio markers reached or mutated the backend");
     kb::tests::Require(callVoice("Audio.SetLoop", { kb::script::ScriptFunctionArgument{ .name = "loop", .value = kb::script::ScriptValue{ true } } }).Output("applied").value_or(kb::script::ScriptValue{ false }).AsBool()
             && backend.lastLoop,
         "Audio.SetLoop did not carry its value to the backend");
@@ -4463,6 +4914,8 @@ function Tick(self, dt)
     SetShared("luaResumed", Audio.Resume(7))
     SetShared("luaSeeked", Audio.Seek(7, 1.5))
     SetShared("luaVolume", Audio.SetVolume(7, 0.6))
+    SetShared("luaMute", Audio.SetMute(7, true))
+    SetShared("luaPan", Audio.SetPan(7, 0.25))
     SetShared("luaPlaying", Audio.IsPlaying(7))
     local position = Audio.GetPosition(7)
     SetShared("luaPositionValid", position.valid)
@@ -4481,11 +4934,14 @@ end
     kb::tests::Require(loadedLua.succeeded, "Script audio voice control Lua wrapper script did not load");
     const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
     kb::tests::Require(tick.Succeeded(), "Script audio voice control Lua wrapper execution failed");
-    for (const char* key : { "luaPaused", "luaResumed", "luaSeeked", "luaVolume", "luaPlaying", "luaStopped" }) {
+    for (const char* key : { "luaPaused", "luaResumed", "luaSeeked", "luaVolume", "luaMute", "luaPan", "luaPlaying", "luaStopped" }) {
         kb::tests::Require(host.SharedState().Get(key).value_or(kb::script::ScriptValue{ false }).AsBool(), "Lua per-voice wrapper did not report success");
     }
     kb::tests::Require(!host.SharedState().Get("luaDeadStop").value_or(kb::script::ScriptValue{ true }).AsBool(),
         "Lua Audio.Stop on an already-stopped voice must be honestly false");
+    kb::tests::Require(backend.lastMute && kb::tests::NearlyEqual(backend.lastPan, 0.25F)
+            && kb::tests::NearlyEqual(backend.lastVolume, 0.6F),
+        "Lua Audio.SetMute/SetPan did not keep mute, pan, and volume independent");
 
     // LIB-152: position + markers through the Lua wrappers (values recorded by the fake).
     kb::tests::Require(host.SharedState().Get("luaPositionValid").value_or(kb::script::ScriptValue{ false }).AsBool()
@@ -15101,6 +15557,7 @@ void RunScriptRuntimeTests() {
     RunCrossBackendLifecycleOrderParityTest();
     RunPlayerControllerTemplateMovesTransformWithRealInputTest();
     RunScriptAudioApiTest();
+    RunScriptAudioSourceAndDeviceApiTest();
     RunScriptMeshRendererApiTest();
     RunScriptMeshRendererMaterialSlotApiTest();
     RunSceneMaterialInstancesLifecycleAndLimitTest();

@@ -1,8 +1,8 @@
 #include "engine/assets/AssetImportCatalog.hpp"
 
 #include "assets/AssetPathUtilities.hpp"
+#include "engine/audio/AudioClipFormats.hpp"
 
-#include <algorithm>
 #include <array>
 #include <string>
 
@@ -14,7 +14,7 @@ struct ExtensionCategory {
     AssetImportCategory category = AssetImportCategory::Unknown;
 };
 
-constexpr std::array KnownExtensions{
+constexpr std::array KnownExtensionsBeforeAudio{
     ExtensionCategory{ ".fbx", AssetImportCategory::Model },
     ExtensionCategory{ ".gltf", AssetImportCategory::Model },
     ExtensionCategory{ ".glb", AssetImportCategory::Model },
@@ -55,21 +55,9 @@ constexpr std::array KnownExtensions{
     ExtensionCategory{ ".svg", AssetImportCategory::Texture },
     ExtensionCategory{ ".ico", AssetImportCategory::Texture },
     ExtensionCategory{ ".gif", AssetImportCategory::Texture },
-    ExtensionCategory{ ".wav", AssetImportCategory::Audio },
-    ExtensionCategory{ ".ogg", AssetImportCategory::Audio },
-    ExtensionCategory{ ".mp3", AssetImportCategory::Audio },
-    ExtensionCategory{ ".flac", AssetImportCategory::Audio },
-    ExtensionCategory{ ".aac", AssetImportCategory::Audio },
-    ExtensionCategory{ ".m4a", AssetImportCategory::Audio },
-    ExtensionCategory{ ".wma", AssetImportCategory::Audio },
-    ExtensionCategory{ ".aiff", AssetImportCategory::Audio },
-    ExtensionCategory{ ".aif", AssetImportCategory::Audio },
-    ExtensionCategory{ ".xm", AssetImportCategory::Audio },
-    ExtensionCategory{ ".mod", AssetImportCategory::Audio },
-    ExtensionCategory{ ".s3m", AssetImportCategory::Audio },
-    ExtensionCategory{ ".it", AssetImportCategory::Audio },
-    ExtensionCategory{ ".mid", AssetImportCategory::Audio },
-    ExtensionCategory{ ".midi", AssetImportCategory::Audio },
+};
+
+constexpr std::array KnownExtensionsAfterAudio{
     ExtensionCategory{ ".mp4", AssetImportCategory::Video },
     ExtensionCategory{ ".mov", AssetImportCategory::Video },
     ExtensionCategory{ ".avi", AssetImportCategory::Video },
@@ -143,15 +131,28 @@ constexpr std::array KnownExtensions{
     ExtensionCategory{ ".import", AssetImportCategory::Data },
 };
 
+template <typename Visitor>
+void ForEachKnownExtension(Visitor&& visitor) {
+    for (const ExtensionCategory& entry : KnownExtensionsBeforeAudio) {
+        visitor(entry);
+    }
+    for (const std::string_view extension : kb::audio::kSupportedAudioClipExtensions) {
+        visitor(ExtensionCategory{ extension, AssetImportCategory::Audio });
+    }
+    for (const ExtensionCategory& entry : KnownExtensionsAfterAudio) {
+        visitor(entry);
+    }
+}
+
 [[nodiscard]] std::string JoinExtensionsForFilter() {
     std::string filter;
-    for (const ExtensionCategory& entry : KnownExtensions) {
+    ForEachKnownExtension([&filter](const ExtensionCategory& entry) {
         if (!filter.empty()) {
             filter += ';';
         }
         filter += '*';
         filter += entry.extension;
-    }
+    });
     return filter;
 }
 
@@ -159,10 +160,13 @@ constexpr std::array KnownExtensions{
 
 AssetImportCategory AssetImportCatalog::ClassifyExtension(const std::filesystem::path& extension) {
     const std::string normalized = AssetPathUtilities::LowerExtension(extension);
-    const auto item = std::ranges::find_if(KnownExtensions, [&normalized](const ExtensionCategory& entry) {
-        return entry.extension == normalized;
+    AssetImportCategory result = AssetImportCategory::Unknown;
+    ForEachKnownExtension([&normalized, &result](const ExtensionCategory& entry) {
+        if (entry.extension == normalized) {
+            result = entry.category;
+        }
     });
-    return item == KnownExtensions.end() ? AssetImportCategory::Unknown : item->category;
+    return result;
 }
 
 bool AssetImportCatalog::IsMetaExtension(const std::filesystem::path& extension) {
@@ -175,10 +179,12 @@ bool AssetImportCatalog::IsEngineAssetExtension(const std::filesystem::path& ext
 
 std::vector<std::string> AssetImportCatalog::SupportedSourceExtensions() {
     std::vector<std::string> output;
-    output.reserve(KnownExtensions.size());
-    for (const ExtensionCategory& entry : KnownExtensions) {
+    output.reserve(KnownExtensionsBeforeAudio.size()
+        + kb::audio::kSupportedAudioClipExtensions.size()
+        + KnownExtensionsAfterAudio.size());
+    ForEachKnownExtension([&output](const ExtensionCategory& entry) {
         output.emplace_back(entry.extension);
-    }
+    });
     return output;
 }
 

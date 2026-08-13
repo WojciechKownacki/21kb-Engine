@@ -2,6 +2,9 @@
 
 #include "engine/modules/IEngineModule.hpp"
 #include "engine/modules/EngineModuleMetadata.hpp"
+#include "engine/scene/SceneSystemHandle.hpp"
+
+#include <unordered_map>
 
 namespace kb::input {
 
@@ -14,6 +17,10 @@ class InputModule final : public kb::modules::IEngineModule {
 public:
     [[nodiscard]] kb::modules::EngineModuleMetadata Metadata() const override;
     void OnSceneAttach(kb::scene::Scene& scene) override;
+    void OnSceneDetach(kb::scene::Scene& scene) override;
+
+private:
+    std::unordered_map<kb::scene::Scene*, kb::scene::SceneSystemHandle> sceneSystems_;
 };
 
 } // namespace kb::input

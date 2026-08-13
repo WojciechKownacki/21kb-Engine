@@ -143,7 +143,7 @@ public:
         cache_[id.value] = CachedAsset{
             .retained = erased,
             .weak = erased,
-            .type = typeid(T),
+            .typeName = typeid(T).name(),
             .policy = AssetUnloadPolicy::Retain,
         };
         return true;
@@ -189,7 +189,7 @@ public:
     template <typename T>
     [[nodiscard]] AssetHandle<T> AcquireLoaded(AssetId id) const {
         const auto cached = cache_.find(id.value);
-        if (cached == cache_.end() || cached->second.type != typeid(T)) {
+        if (cached == cache_.end() || cached->second.typeName != typeid(T).name()) {
             return {};
         }
         std::shared_ptr<void> payload = cached->second.weak.lock();
@@ -239,7 +239,7 @@ public:
     template <typename T>
     [[nodiscard]] WeakAssetHandle<T> WeakHandle(AssetId id) const {
         const auto cached = cache_.find(id.value);
-        if (cached == cache_.end() || cached->second.type != typeid(T)) {
+        if (cached == cache_.end() || cached->second.typeName != typeid(T).name()) {
             return {};
         }
         std::shared_ptr<void> alive = cached->second.weak.lock();
@@ -287,13 +287,16 @@ private:
         // source of truth for "is this asset still alive" (IsLoaded) and the
         // holder count (ReferenceCount).
         std::weak_ptr<void> weak;
-        std::type_index type = typeid(void);
+        // Own the RTTI name instead of retaining std::type_index. A type_info
+        // object emitted by a hot-reloaded module stops existing when that
+        // module is unloaded, while the cache intentionally survives reloads.
+        std::string typeName;
         AssetUnloadPolicy policy = AssetUnloadPolicy::Retain;
     };
 
     struct AsyncPreparedAsset {
         AssetLoadResult result;
-        std::type_index type = typeid(void);
+        std::string typeName;
     };
 
     struct AsyncPreparedState {
@@ -311,7 +314,7 @@ private:
         IAssetLoader* loader = nullptr;
         AssetMetadata metadata;
         std::filesystem::path resolvedPath;
-        std::type_index type = typeid(void);
+        std::string typeName;
         std::shared_ptr<AsyncPreparedState> state;
     };
 

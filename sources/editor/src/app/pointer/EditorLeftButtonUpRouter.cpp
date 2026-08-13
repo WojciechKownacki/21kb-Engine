@@ -2,12 +2,14 @@
 
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserPointerHandler.hpp"
+#include "app/EditorAudioAssetPreview.hpp"
 #include "app/EditorPointerDragInteraction.hpp"
 #include "app/EditorWindowInvalidator.hpp"
 #include "app/console/EditorConsolePointerController.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
+#include "engine/assets/AssetKind.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
@@ -20,6 +22,17 @@
 namespace kb::editor {
 
 namespace {
+
+void InvalidateAssetSelectionPanels(
+    HWND mainWindow,
+    const EditorDockModel& dockModel,
+    const EditorFloatingWindowManager& floatingWindows,
+    const EditorMetrics& metrics) noexcept {
+    EditorWindowInvalidator::InvalidateDockPanel(
+        mainWindow, dockModel, floatingWindows, metrics, DockPanelKind::Assets);
+    EditorWindowInvalidator::InvalidateDockPanel(
+        mainWindow, dockModel, floatingWindows, metrics, DockPanelKind::Inspector);
+}
 
 [[nodiscard]] POINT MaterialGraphDocumentPointFromWindow(const MaterialEditorPanelLayout& layout, const EditorSceneContext& sceneContext, int x, int y) noexcept {
     const float zoom = std::max(0.1F, sceneContext.MaterialGraphZoom());
@@ -67,6 +80,34 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
         const MaterialEditorGraphMenuCommand command = pointerDrag_.materialGraphCommand;
         pointerDrag_.Clear();
         static_cast<void>(sceneContext_.ExecuteMaterialGraphContextMenuCommand(command));
+        ReleaseCapture();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (sceneContext_.IsSkeletalMeshEditorToolboxWidthDragging() ||
+        sceneContext_.IsSkeletalMeshEditorSkeletonTreeWidthDragging() ||
+        sceneContext_.IsSkeletalMeshEditorTreeDetailsHeightDragging()) {
+        sceneContext_.EndSkeletalMeshEditorPanelResizeDrag();
+        ReleaseCapture();
+        if (messageWindow == mainWindow_) {
+            EditorHostSurfaceLayoutResolver::SyncMainWindow(
+                mainWindow_, dockModel_, metrics_, sceneContext_, sceneViewport_);
+        }
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (sceneContext_.IsSkeletalMeshEditorTreeScrollbarDragging()) {
+        sceneContext_.EndSkeletalMeshEditorTreeScrollbarDrag();
+        ReleaseCapture();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (sceneContext_.IsSkeletalMeshEditorDetailsScrollbarDragging()) {
+        sceneContext_.EndSkeletalMeshEditorDetailsScrollbarDrag();
         ReleaseCapture();
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return;
@@ -224,7 +265,12 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
             const kb::assets::AssetId pending = sceneContext_.AssetBrowser().TakePendingPreviewAsset();
             if (pending.IsValid() &&
                 sceneContext_.AssetBrowser().SelectAsset(pending, sceneContext_.Scene().Assets().Manager())) {
-                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                const kb::assets::AssetMetadata* metadata = sceneContext_.Scene().Assets().Manager().Registry().Find(pending);
+                const bool audioPreviewStarted = EditorAudioAssetPreview::Play(sceneContext_.Scene(), pending);
+                if (metadata != nullptr && kb::assets::AssetMatchesKind(*metadata, kb::assets::AssetKind::Audio) && !audioPreviewStarted) {
+                    sceneContext_.Console().Warning("Audio", "Could not start preview for the selected audio asset.");
+                }
+                InvalidateAssetSelectionPanels(mainWindow_, dockModel_, floatingWindows_, metrics_);
             }
         } else {
             sceneContext_.AssetBrowser().ClearPendingPreviewAsset();
@@ -237,7 +283,8 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
 
     if (EditorAssetBrowserPointerHandler::HandlePointerUp(sceneContext_)) {
         ReleaseCapture();
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        EditorWindowInvalidator::InvalidateDockPanel(
+            mainWindow_, dockModel_, floatingWindows_, metrics_, DockPanelKind::Assets);
         return;
     }
     EditorConsolePointerController consolePointer(messageWindow, sceneContext_);

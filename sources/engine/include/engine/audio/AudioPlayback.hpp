@@ -4,7 +4,9 @@
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TransformComponent.hpp"
 
+#include <cstddef>
 #include <cstdint>
+#include <cmath>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -20,8 +22,8 @@ namespace kb::audio {
 struct AudioPlayDesc {
     std::uint64_t clipAssetId = 0U;
     // LIB-147: names an AudioMixerBus of the scene's active AudioMixer asset
-    // (SceneAudioMixerAccess); empty or unknown routes to the implicit master output -
-    // the same honest fallback AudioSourceComponent::outputBus documents.
+    // (SceneAudioMixerAccess); empty routes to the implicit master output. A non-empty
+    // unknown bus is rejected so authored routing can never silently reach master.
     std::string outputBus;
     float volume = 1.0F;
     float pitch = 1.0F;
@@ -36,6 +38,7 @@ struct AudioPlayDesc {
     float rolloff = 1.0F;
     float dopplerFactor = 1.0F;
     kb::scene::Vec3 position{};
+    kb::scene::Vec3 velocity{};
     // LIB-148: voice-stealing priority. When the one-shot pool is full, the LOWEST
     // priority voice is evicted first (ties evict the oldest); a new request that is
     // itself lower-priority than every live voice is honestly refused instead of
@@ -48,6 +51,96 @@ struct AudioPlayDesc {
     // voice can never outlive (leak past) its owner, mirroring SceneTimerService's exact
     // owner-gone convention.
     std::uint64_t ownerEntityId = 0U;
+};
+
+enum class AudioPlayDescValidationStatus : std::uint8_t {
+    Valid,
+    InvalidClip,
+    InvalidSettings,
+    InvalidOwner,
+};
+
+struct AudioPlayResult;
+
+// Canonical public validation boundary for one-shot playback. Every public facade and
+// backend path rejects a non-Valid request before routing, voice stealing or native
+// sound mutation.
+[[nodiscard]] AudioPlayDescValidationStatus ValidateAudioPlayDesc(
+    const kb::scene::Scene& scene, const AudioPlayDesc& desc) noexcept;
+[[nodiscard]] AudioPlayResult AudioPlayDescValidationResult(
+    AudioPlayDescValidationStatus status);
+
+inline constexpr std::size_t kMaxAudioVoiceMarkerNameBytes = 255U;
+
+[[nodiscard]] inline bool IsAudioVoiceSeekPositionValid(float positionSeconds) noexcept {
+    return std::isfinite(positionSeconds) && positionSeconds >= 0.0F;
+}
+
+[[nodiscard]] inline bool IsAudioVoiceVolumeValid(float volume) noexcept {
+    return std::isfinite(volume) && volume >= 0.0F;
+}
+
+[[nodiscard]] inline bool IsAudioVoicePanValid(float pan) noexcept {
+    return std::isfinite(pan) && pan >= -1.0F && pan <= 1.0F;
+}
+
+[[nodiscard]] inline bool IsAudioVoicePitchValid(float pitch) noexcept {
+    return std::isfinite(pitch) && pitch >= 0.01F;
+}
+
+[[nodiscard]] inline bool IsAudioVoiceMarkerNameValid(std::string_view marker) noexcept {
+    if (marker.empty() || marker.size() > kMaxAudioVoiceMarkerNameBytes) {
+        return false;
+    }
+    for (const char character : marker) {
+        const unsigned char code = static_cast<unsigned char>(character);
+        if (code < 0x20U || code == 0x7FU) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool IsAudioVoiceMarkerRequestValid(
+    const kb::scene::Scene& scene,
+    std::string_view marker,
+    float positionSeconds,
+    kb::scene::SceneEntity target) noexcept;
+
+enum class AudioDeviceStatus : std::uint8_t {
+    BackendUnavailable,
+    Uninitialized,
+    NoPlaybackDevice,
+    PlaybackAvailable,
+};
+
+enum class AudioSourceControlStatus : std::uint8_t {
+    Success,
+    BackendUnavailable,
+    DeviceUnavailable,
+    InvalidEntity,
+    InactiveEntity,
+    MissingComponent,
+    Disabled,
+    InvalidClip,
+    ClipUnavailable,
+    MixerUnavailable,
+    UnknownBus,
+    RoutingInitializationFailed,
+    SoundInitializationFailed,
+    PlaybackOperationFailed,
+    NotPlaying,
+    NotPaused,
+    InvalidSettings,
+};
+
+struct AudioSourceControlResult {
+    AudioSourceControlStatus status = AudioSourceControlStatus::BackendUnavailable;
+    bool playing = false;
+
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return status == AudioSourceControlStatus::Success;
+    }
 };
 
 struct AudioPlayResult {
@@ -64,18 +157,34 @@ class IAudioPlaybackBackend {
 public:
     virtual ~IAudioPlaybackBackend() = default;
 
+    // Every lifecycle, playback and control entry is owner-thread-only: the same scene
+    // thread that registers the backend must drive it until unregister. Native audio
+    // callbacks own only backend/native data; they must never enter this interface or
+    // access ECS. A caller originating elsewhere must marshal work to the owner thread.
+
     [[nodiscard]] virtual AudioPlayResult PlayOneShot(kb::scene::Scene& scene, const AudioPlayDesc& desc) = 0;
     virtual void StopAll(kb::scene::Scene& scene) noexcept = 0;
-    // LIB-148: per-voice control of a PlayOneShot result. Every call returns false for a
-    // voiceId that is 0, never existed, or already finished/was stolen (a one-shot voice's
-    // lifetime is honest - no operation resurrects it). Pause keeps the play cursor;
-    // Resume continues from it; Seek positions in SECONDS from the clip start (clamped by
-    // the backend); volume/pitch/loop mirror AudioPlayDesc's semantics live.
+    [[nodiscard]] virtual AudioSourceControlResult PlaySource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) = 0;
+    [[nodiscard]] virtual AudioSourceControlResult PauseSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) = 0;
+    [[nodiscard]] virtual AudioSourceControlResult ResumeSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) = 0;
+    [[nodiscard]] virtual AudioSourceControlResult StopSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity) = 0;
+    [[nodiscard]] virtual AudioSourceControlResult IsSourcePlaying(kb::scene::Scene& scene, kb::scene::SceneEntity entity) = 0;
+    [[nodiscard]] virtual AudioDeviceStatus DeviceStatus() const noexcept = 0;
+    [[nodiscard]] virtual AudioDeviceStatus Reinitialize(kb::scene::Scene& scene) noexcept = 0;
+    // LIB-148: per-voice control of a PlayOneShot result. A voiceId that is 0, never
+    // existed, was stopped/stolen, or was reclaimed after finishing is never resurrected.
+    // Pause succeeds only while the
+    // voice is playing and keeps the play cursor; Resume succeeds only while paused and
+    // continues from it. Seek positions in SECONDS from the clip start; invalid values
+    // are rejected without mutation. Volume/mute/pan/pitch/loop mirror AudioPlayDesc's
+    // semantics live.
     [[nodiscard]] virtual bool StopVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept = 0;
     [[nodiscard]] virtual bool PauseVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept = 0;
     [[nodiscard]] virtual bool ResumeVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept = 0;
     [[nodiscard]] virtual bool SeekVoice(kb::scene::Scene& scene, std::uint64_t voiceId, float positionSeconds) noexcept = 0;
     [[nodiscard]] virtual bool SetVoiceVolume(kb::scene::Scene& scene, std::uint64_t voiceId, float volume) noexcept = 0;
+    [[nodiscard]] virtual bool SetVoiceMute(kb::scene::Scene& scene, std::uint64_t voiceId, bool mute) noexcept = 0;
+    [[nodiscard]] virtual bool SetVoicePan(kb::scene::Scene& scene, std::uint64_t voiceId, float pan) noexcept = 0;
     [[nodiscard]] virtual bool SetVoicePitch(kb::scene::Scene& scene, std::uint64_t voiceId, float pitch) noexcept = 0;
     [[nodiscard]] virtual bool SetVoiceLoop(kb::scene::Scene& scene, std::uint64_t voiceId, bool loop) noexcept = 0;
     [[nodiscard]] virtual bool IsVoicePlaying(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept = 0;
@@ -106,11 +215,21 @@ class AudioPlayback final {
 public:
     AudioPlayback() = delete;
 
+    // Owner-thread-only facade. A scene captures its owner thread during construction;
+    // debug builds assert every register, lifecycle and control call stays there.
+
     static void RegisterBackend(kb::scene::Scene& scene, IAudioPlaybackBackend& backend);
     static void UnregisterBackend(kb::scene::Scene& scene, IAudioPlaybackBackend& backend) noexcept;
     [[nodiscard]] static bool HasBackend(kb::scene::Scene& scene) noexcept;
     [[nodiscard]] static AudioPlayResult PlayOneShot(kb::scene::Scene& scene, const AudioPlayDesc& desc);
     static void StopAll(kb::scene::Scene& scene) noexcept;
+    [[nodiscard]] static AudioSourceControlResult PlaySource(kb::scene::Scene& scene, kb::scene::SceneEntity entity);
+    [[nodiscard]] static AudioSourceControlResult PauseSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity);
+    [[nodiscard]] static AudioSourceControlResult ResumeSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity);
+    [[nodiscard]] static AudioSourceControlResult StopSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity);
+    [[nodiscard]] static AudioSourceControlResult IsSourcePlaying(kb::scene::Scene& scene, kb::scene::SceneEntity entity);
+    [[nodiscard]] static AudioDeviceStatus DeviceStatus(kb::scene::Scene& scene) noexcept;
+    [[nodiscard]] static AudioDeviceStatus Reinitialize(kb::scene::Scene& scene) noexcept;
     // LIB-148: per-voice facade - false when no backend is registered or the backend
     // reports the voice dead (see IAudioPlaybackBackend's own contract above).
     [[nodiscard]] static bool StopVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept;
@@ -118,6 +237,8 @@ public:
     [[nodiscard]] static bool ResumeVoice(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept;
     [[nodiscard]] static bool SeekVoice(kb::scene::Scene& scene, std::uint64_t voiceId, float positionSeconds) noexcept;
     [[nodiscard]] static bool SetVoiceVolume(kb::scene::Scene& scene, std::uint64_t voiceId, float volume) noexcept;
+    [[nodiscard]] static bool SetVoiceMute(kb::scene::Scene& scene, std::uint64_t voiceId, bool mute) noexcept;
+    [[nodiscard]] static bool SetVoicePan(kb::scene::Scene& scene, std::uint64_t voiceId, float pan) noexcept;
     [[nodiscard]] static bool SetVoicePitch(kb::scene::Scene& scene, std::uint64_t voiceId, float pitch) noexcept;
     [[nodiscard]] static bool SetVoiceLoop(kb::scene::Scene& scene, std::uint64_t voiceId, bool loop) noexcept;
     [[nodiscard]] static bool IsVoicePlaying(kb::scene::Scene& scene, std::uint64_t voiceId) noexcept;

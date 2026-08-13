@@ -133,13 +133,34 @@ void SceneRuntimeService::AddSystem(Scene& scene, std::unique_ptr<kb::ecs::Syste
     state.systemScheduler.Add(std::move(system), state.world);
 }
 
-void SceneRuntimeService::AddSceneSystem(Scene& scene, std::unique_ptr<SceneSystem> system) {
+SceneSystemHandle SceneRuntimeService::AddSceneSystem(Scene& scene, std::unique_ptr<SceneSystem> system) {
     SceneState& state = SceneAccess::State(scene);
     if (state.mode == SceneMode::PrefabPrivate) {
         throw std::logic_error("Cannot register scene runtime systems in a prefab private scene");
     }
-    state.requiresFixedStep = state.requiresFixedStep || system->RequiresFixedStep();
-    state.sceneSystemScheduler.Add(std::move(system), scene);
+    if (system == nullptr) {
+        return {};
+    }
+    const SceneSystemHandle handle = state.sceneSystemScheduler.Add(std::move(system), scene);
+    state.requiresFixedStep = state.sceneSystemScheduler.RequiresFixedStep();
+    return handle;
+}
+
+bool SceneRuntimeService::RemoveSceneSystem(Scene& scene, SceneSystemHandle handle) noexcept {
+    SceneState& state = SceneAccess::State(scene);
+    const bool removed = state.sceneSystemScheduler.Remove(handle, scene);
+    if (removed) {
+        state.requiresFixedStep = state.sceneSystemScheduler.RequiresFixedStep();
+    }
+    return removed;
+}
+
+bool SceneRuntimeService::HasSceneSystem(const Scene& scene, SceneSystemHandle handle) noexcept {
+    return SceneAccess::State(scene).sceneSystemScheduler.Contains(handle);
+}
+
+std::size_t SceneRuntimeService::SceneSystemCount(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).sceneSystemScheduler.Size();
 }
 
 std::vector<std::string> SceneRuntimeService::DrainSceneSystemErrors(Scene& scene) {

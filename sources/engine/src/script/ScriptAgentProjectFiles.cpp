@@ -18,6 +18,7 @@
 #include "engine/scene/ScenePrefabHandle.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/script/ScriptApiExport.hpp"
+#include "script/AudioShooterDemoProjectFiles.hpp"
 
 #include <fstream>
 #include <system_error>
@@ -81,12 +82,17 @@ kb_cli scene-attach --project . --scene Assets/Scenes/Main.21kbscene --node Play
 
 ## Shipped gameplay samples
 
-`kb_cli init-agent` also provisions four runnable scripts under
+`kb_cli init-agent` also provisions four runnable controller scripts under
 `Assets/Samples/`: `ThirdPersonController.lua`, `TopDownController.lua`,
 `PlatformerController.lua`, and `SimpleShooterController.lua`. They use the
 same Input, Physics, Transform, World, and prefab APIs as ordinary gameplay
 scripts. Add the documented components, attach one script to a player entity,
 and bind its named input actions before entering Play Mode.
+
+It also provisions a complete `Assets/Scenes/AudioShooterDemo.21kbscene`.
+Open it and enter Play Mode: the ship flies with its camera, Space fires cube
+projectiles and a spatial one-shot, and looping ship/beacon sources demonstrate
+2D playback and distance attenuation.
 
 ## Verifying your work (always do this before finishing)
 
@@ -428,6 +434,10 @@ ScriptAgentProjectFilesResult ScriptAgentProjectFiles::Write(
         }
         result.writtenFiles.push_back(prefabPath);
         result.wroteProjectAsset = true;
+    }
+
+    if (!WriteAudioShooterDemoProjectFiles(projectRoot, result)) {
+        return result;
     }
 
     result.succeeded = true;

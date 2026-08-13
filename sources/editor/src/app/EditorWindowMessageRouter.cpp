@@ -501,6 +501,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
     case WM_EXITSIZEMOVE:
         return EditorWindowResizeHandler::HandlePlacementChanged(messageWindow, context_.sceneViewport);
     case WM_CANCELMODE:
+        InspectorPanelInteraction::CancelPointerDrag(context_.sceneContext);
         FinishTerrainStroke(context_);
         CancelAnimationPreviewCameraNavigation(context_);
         static_cast<void>(context_.sceneContext.CancelMaterialGraphInteractions());
@@ -524,6 +525,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         HWND newCapture = reinterpret_cast<HWND>(lparam);
         context_.dockController.HandleCaptureChanged(newCapture);
         if (newCapture != messageWindow) {
+            InspectorPanelInteraction::CancelPointerDrag(context_.sceneContext);
             FinishTerrainStroke(context_);
             CancelAnimationPreviewCameraNavigation(context_);
             static_cast<void>(context_.sceneContext.CancelMaterialGraphInteractions());

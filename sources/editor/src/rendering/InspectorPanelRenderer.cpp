@@ -2,6 +2,8 @@
 
 #include "rendering/MaterialPreviewAppearanceResolver.hpp"
 #include "rendering/MaterialPreviewTextureAverageColor.hpp"
+#include "rendering/InspectorAudioMixerAssetView.hpp"
+#include "rendering/InspectorSceneAudioView.hpp"
 #include "rendering/InspectorPanelSectionRows.hpp"
 #include "rendering/EditorMaterialThumbnailService.hpp"
 
@@ -39,6 +41,7 @@
 #include "engine/scene/TagsComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorAddComponentBrowserModel.hpp"
+#include "inspection/InspectorAudioComponentModel.hpp"
 #include "inspection/InspectorComponentLabelFormatter.hpp"
 #include "inspection/InspectorMeshRendererMaterialSlotModel.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
@@ -184,24 +187,6 @@ struct InspectorRowDefinition {
     InspectorPropertyId property = InspectorPropertyId::None;
     InspectorRowValueKind kind = InspectorRowValueKind::Text;
 };
-
-constexpr std::array<InspectorRowDefinition, 10> kAudioSourceRows{ {
-    { InspectorPropertyId::AudioSourceClip, InspectorRowValueKind::Text },
-    { InspectorPropertyId::AudioSourceVolume, InspectorRowValueKind::Text },
-    { InspectorPropertyId::AudioSourcePitch, InspectorRowValueKind::Text },
-    { InspectorPropertyId::AudioSourceEnabled, InspectorRowValueKind::Bool },
-    { InspectorPropertyId::AudioSourceAutoplay, InspectorRowValueKind::Bool },
-    { InspectorPropertyId::AudioSourceLoop, InspectorRowValueKind::Bool },
-    { InspectorPropertyId::AudioSourceMute, InspectorRowValueKind::Bool },
-    { InspectorPropertyId::AudioSourceSpatial, InspectorRowValueKind::Bool },
-    { InspectorPropertyId::AudioSourceAttenuation, InspectorRowValueKind::Text },
-    { InspectorPropertyId::AudioSourceRange, InspectorRowValueKind::Text },
-} };
-
-constexpr std::array<InspectorRowDefinition, 2> kAudioListenerRows{ {
-    { InspectorPropertyId::AudioListenerEnabled, InspectorRowValueKind::Bool },
-    { InspectorPropertyId::AudioListenerPrimary, InspectorRowValueKind::Bool },
-} };
 
 constexpr std::array<InspectorRowDefinition, 3> kAnimatorRows{ {
     { InspectorPropertyId::AnimatorSpeed, InspectorRowValueKind::Float },
@@ -1413,6 +1398,16 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, EditorSceneConte
             PaintMaterialAsset(dc, content, theme, sceneContext, *metadata);
             return;
         }
+        if (InspectorAudioMixerAssetView::Supports(*metadata)) {
+            const kb::assets::AssetHandle<kb::audio::AudioMixerAsset> mixer =
+                InspectorAudioMixerAssetView::LoadCached(manager, metadata->id);
+            if (mixer.IsLoaded()) {
+                InspectorAudioMixerAssetView::Paint(dc, content, theme, inspector, *metadata, *mixer);
+            } else {
+                DrawEmpty(dc, content, theme);
+            }
+            return;
+        }
 
         DrawHeader(dc, content, theme, HeroIconKind::Cube, metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name, metadata->type.empty() ? "Asset" : metadata->type);
         y += kHeaderHeight + kPanelPadTop;
@@ -1422,20 +1417,24 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, EditorSceneConte
         if (!metadata->importCategory.empty()) {
             section.Field("Category", metadata->importCategory);
         }
-        if (!deferMeshPreviewWork) {
-            if (const EditorMeshThumbnailStats* stats = EditorMeshPreviewCache().StatsFor(manager, *metadata)) {
-                section.Field("Vertices", FormatUInt64(stats->vertexCount));
-                section.Field("Indices", FormatUInt64(stats->indexCount));
-                section.Field("Triangles", FormatUInt64(stats->triangleCount));
-                section.Field("Material Slots", FormatUInt64(stats->materialSlotCount));
-                section.Field("Bounds Center", FormatVec3(stats->boundsCenter));
-                section.Field("Bounds Radius", FormatFloat(stats->boundsRadius, 3));
-            }
-            if (const EditorMeshValidationResult* validation = EditorMeshPreviewCache().ValidationFor(manager, *metadata)) {
-                const std::size_t shown = std::min<std::size_t>(validation->issues.size(), 6U);
-                for (std::size_t index = 0; index < shown; ++index) {
-                    section.Field(index == 0U ? "Validation" : "", FormatValidationIssue(validation->issues[index]));
-                }
+        const EditorMeshThumbnailStats* stats = deferMeshPreviewWork
+            ? EditorMeshPreviewCache().CachedStatsFor(*metadata)
+            : EditorMeshPreviewCache().StatsFor(manager, *metadata);
+        if (stats != nullptr) {
+            section.Field("Vertices", FormatUInt64(stats->vertexCount));
+            section.Field("Indices", FormatUInt64(stats->indexCount));
+            section.Field("Triangles", FormatUInt64(stats->triangleCount));
+            section.Field("Material Slots", FormatUInt64(stats->materialSlotCount));
+            section.Field("Bounds Center", FormatVec3(stats->boundsCenter));
+            section.Field("Bounds Radius", FormatFloat(stats->boundsRadius, 3));
+        }
+        const EditorMeshValidationResult* validation = deferMeshPreviewWork
+            ? EditorMeshPreviewCache().CachedValidationFor(*metadata)
+            : EditorMeshPreviewCache().ValidationFor(manager, *metadata);
+        if (validation != nullptr) {
+            const std::size_t shown = std::min<std::size_t>(validation->issues.size(), 6U);
+            for (std::size_t index = 0; index < shown; ++index) {
+                section.Field(index == 0U ? "Validation" : "", FormatValidationIssue(validation->issues[index]));
             }
         }
         section.Field("Id", FormatUInt64(metadata->id.value));
@@ -1459,17 +1458,36 @@ void PaintAudioSourceSection(
     const InspectorPanelState& inspector,
     const EditorSceneContext& sceneContext,
     const kb::scene::AudioSourceComponent& audioSource) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AudioSource, HeroIconKind::SpeakerWave, "Audio Source");
-    section.Field("Clip", AssetDisplayName(sceneContext, audioSource.clipAssetId), InspectorPropertyId::AudioSourceClip);
-    section.Field("Volume", FormatFloat(audioSource.volume, 2), InspectorPropertyId::AudioSourceVolume);
-    section.Field("Pitch", FormatFloat(audioSource.pitch, 2), InspectorPropertyId::AudioSourcePitch);
-    section.Bool("Enabled", audioSource.enabled, InspectorPropertyId::AudioSourceEnabled);
-    section.Bool("Autoplay", audioSource.autoplay, InspectorPropertyId::AudioSourceAutoplay);
-    section.Bool("Loop", audioSource.loop, InspectorPropertyId::AudioSourceLoop);
-    section.Bool("Mute", audioSource.mute, InspectorPropertyId::AudioSourceMute);
-    section.Bool("Spatial", audioSource.spatial, InspectorPropertyId::AudioSourceSpatial);
-    section.Field("Attenuation", InspectorComponentLabelFormatter::AudioAttenuationModelName(audioSource.attenuationModel), InspectorPropertyId::AudioSourceAttenuation);
-    section.Field("Range", FormatFloat(audioSource.minDistance, 2) + " - " + FormatFloat(audioSource.maxDistance, 2), InspectorPropertyId::AudioSourceRange);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AudioSource, HeroIconKind::SpeakerWave, "Audio Source",
+        InspectorAudioComponentModel::HasRemoveControl(InspectorSectionId::AudioSource));
+    for (const InspectorAudioRow& row : InspectorAudioComponentModel::SourceRows()) {
+        switch (row.property) {
+        case InspectorPropertyId::AudioSourceClip:
+            section.AssetField(row.label, InspectorAudioComponentModel::ClipDisplay(sceneContext.Scene(), audioSource), row.property, row.pickerProperty);
+            break;
+        case InspectorPropertyId::AudioSourceClipClear: section.Action(row.label, row.property); break;
+        case InspectorPropertyId::AudioSourceVolume: section.Float(row.label, FormatFloat(audioSource.volume, 3), row.property); break;
+        case InspectorPropertyId::AudioSourcePitch: section.Float(row.label, FormatFloat(audioSource.pitch, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceEnabled: section.Bool(row.label, audioSource.enabled, row.property); break;
+        case InspectorPropertyId::AudioSourceAutoplay: section.Bool(row.label, audioSource.autoplay, row.property); break;
+        case InspectorPropertyId::AudioSourceLoop: section.Bool(row.label, audioSource.loop, row.property); break;
+        case InspectorPropertyId::AudioSourceMute: section.Bool(row.label, audioSource.mute, row.property); break;
+        case InspectorPropertyId::AudioSourceSpatial: section.Bool(row.label, audioSource.spatial, row.property); break;
+        case InspectorPropertyId::AudioSourcePan: section.Float(row.label, FormatFloat(audioSource.pan, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceSpatialBlend: section.Float(row.label, FormatFloat(audioSource.spatialBlend, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceAttenuation:
+            section.Field(row.label, InspectorComponentLabelFormatter::AudioAttenuationModelName(audioSource.attenuationModel), row.property);
+            break;
+        case InspectorPropertyId::AudioSourceMinDistance: section.Float(row.label, FormatFloat(audioSource.minDistance, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceMaxDistance: section.Float(row.label, FormatFloat(audioSource.maxDistance, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceRolloff: section.Float(row.label, FormatFloat(audioSource.rolloff, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceDopplerFactor: section.Float(row.label, FormatFloat(audioSource.dopplerFactor, 3), row.property); break;
+        case InspectorPropertyId::AudioSourceOutputBus:
+            section.Field(row.label, InspectorAudioComponentModel::OutputBusDisplay(sceneContext.Scene(), audioSource), row.property);
+            break;
+        default: break;
+        }
+    }
     y = section.Bottom() + kSectionGap;
 }
 
@@ -1480,9 +1498,17 @@ void PaintAudioListenerSection(
     const EditorTheme& theme,
     const InspectorPanelState& inspector,
     const kb::scene::AudioListenerComponent& audioListener) {
-    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AudioListener, HeroIconKind::SpeakerWave, "Audio Listener");
-    section.Bool("Enabled", audioListener.enabled, InspectorPropertyId::AudioListenerEnabled);
-    section.Bool("Primary", audioListener.primary, InspectorPropertyId::AudioListenerPrimary);
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AudioListener, HeroIconKind::SpeakerWave, "Audio Listener",
+        InspectorAudioComponentModel::HasRemoveControl(InspectorSectionId::AudioListener));
+    for (const InspectorAudioRow& row : InspectorAudioComponentModel::ListenerRows()) {
+        switch (row.property) {
+        case InspectorPropertyId::AudioListenerPriority: section.Field(row.label, std::to_string(audioListener.priority), row.property); break;
+        case InspectorPropertyId::AudioListenerLocalUser: section.Field(row.label, std::to_string(audioListener.localUser.value), row.property); break;
+        case InspectorPropertyId::AudioListenerPrimary: section.Bool(row.label, audioListener.primary, row.property); break;
+        case InspectorPropertyId::AudioListenerEnabled: section.Bool(row.label, audioListener.enabled, row.property); break;
+        default: break;
+        }
+    }
     y = section.Bottom() + kSectionGap;
 }
 
@@ -2932,7 +2958,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         }
     }
     if (const kb::scene::AudioSourceComponent* audioSource = scene.Components().AudioSources().TryGet(selected); audioSource != nullptr) {
-        const int h = SectionHeight(inspector, InspectorSectionId::AudioSource, 10);
+        const int h = SectionHeight(inspector, InspectorSectionId::AudioSource, static_cast<int>(InspectorAudioComponentModel::SourceRows().size()));
         if (sectionVisible(y, h)) {
             PaintAudioSourceSection(dc, content, y, theme, inspector, sceneContext, *audioSource);
         } else {
@@ -2940,7 +2966,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         }
     }
     if (const kb::scene::AudioListenerComponent* audioListener = scene.Components().AudioListeners().TryGet(selected); audioListener != nullptr) {
-        const int h = SectionHeight(inspector, InspectorSectionId::AudioListener, 2);
+        const int h = SectionHeight(inspector, InspectorSectionId::AudioListener, static_cast<int>(InspectorAudioComponentModel::ListenerRows().size()));
         if (sectionVisible(y, h)) {
             PaintAudioListenerSection(dc, content, y, theme, inspector, *audioListener);
         } else {
@@ -3062,16 +3088,13 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
 }
 
 
-[[nodiscard]] int AssetSectionRows(const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
+[[nodiscard]] int AssetSectionRows(const kb::assets::AssetMetadata& metadata) {
     int rows = metadata.importCategory.empty() ? 0 : 1;
-    const bool deferMeshPreviewWork = sceneContext.HasActiveViewportCameraNavigation();
-    if (!deferMeshPreviewWork) {
-        if (const EditorMeshThumbnailStats* stats = EditorMeshPreviewCache().CachedStatsFor(metadata); stats != nullptr) {
-            rows += 6;
-        }
-        if (const EditorMeshValidationResult* validation = EditorMeshPreviewCache().CachedValidationFor(metadata); validation != nullptr) {
-            rows += static_cast<int>(std::min<std::size_t>(validation->issues.size(), 6U));
-        }
+    if (const EditorMeshThumbnailStats* stats = EditorMeshPreviewCache().CachedStatsFor(metadata); stats != nullptr) {
+        rows += 6;
+    }
+    if (const EditorMeshValidationResult* validation = EditorMeshPreviewCache().CachedValidationFor(metadata); validation != nullptr) {
+        rows += static_cast<int>(std::min<std::size_t>(validation->issues.size(), 6U));
     }
     rows += 6;
     return rows;
@@ -3095,6 +3118,15 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         height += MaterialPreviewSectionHeight(inspector, MaterialPreviewTelemetryFor(sceneContext, metadata), MaterialDebugChannelRowsFor(sceneContext, metadata).size());
         return height;
     }
+    if (InspectorAudioMixerAssetView::Supports(metadata)) {
+        kb::assets::AssetManager& manager = const_cast<kb::assets::AssetManager&>(
+            sceneContext.Scene().Assets().Manager());
+        const kb::assets::AssetHandle<kb::audio::AudioMixerAsset> mixer =
+            InspectorAudioMixerAssetView::LoadCached(manager, metadata.id);
+        return mixer.IsLoaded()
+            ? InspectorAudioMixerAssetView::ContentHeight(inspector, *mixer)
+            : height;
+    }
 
     if (EditorTexturePreviewService::IsTextureAsset(metadata)) {
         const EditorTexturePreviewImage* image = EditorTexturePreviewService::PreviewFor(metadata);
@@ -3106,7 +3138,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (EditorMeshPreviewCache().CachedStatsFor(metadata) != nullptr) {
         height += MeshPreviewPanelHeight(content) + kSectionGap;
     }
-    height += SectionHeight(inspector, InspectorSectionId::Asset, AssetSectionRows(sceneContext, metadata));
+    height += SectionHeight(inspector, InspectorSectionId::Asset, AssetSectionRows(metadata));
     return height;
 }
 
@@ -3181,10 +3213,10 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         }
     }
     if (scene.Components().AudioSources().TryGet(selected) != nullptr) {
-        height += SectionHeight(inspector, InspectorSectionId::AudioSource, 10) + kSectionGap;
+        height += SectionHeight(inspector, InspectorSectionId::AudioSource, static_cast<int>(InspectorAudioComponentModel::SourceRows().size())) + kSectionGap;
     }
     if (scene.Components().AudioListeners().TryGet(selected) != nullptr) {
-        height += SectionHeight(inspector, InspectorSectionId::AudioListener, 2) + kSectionGap;
+        height += SectionHeight(inspector, InspectorSectionId::AudioListener, static_cast<int>(InspectorAudioComponentModel::ListenerRows().size())) + kSectionGap;
     }
     if (scene.Components().Animators().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::Animator, 4) + kSectionGap;
@@ -3692,6 +3724,38 @@ void AdvanceGroup(int& y) noexcept {
     return {};
 }
 
+[[nodiscard]] InspectorPanelRenderer::Hit HitAudioRows(
+    RECT content,
+    int& y,
+    InspectorSectionId section,
+    std::span<const InspectorAudioRow> rows,
+    int x,
+    int yPoint) noexcept {
+    for (const InspectorAudioRow& row : rows) {
+        const RECT rect = RowRect(content, y);
+        InspectorPanelRenderer::Hit hit{};
+        if (row.kind == InspectorAudioControlKind::Asset) {
+            hit = HitAssetFieldRow(rect, section, row.property, row.pickerProperty, x, yPoint);
+        } else if (row.kind == InspectorAudioControlKind::Action) {
+            hit = Contains(rect, x, yPoint)
+                ? MakeHit(InspectorAudioComponentModel::HitKindForControl(row.kind), section, row.property, rect)
+                : InspectorPanelRenderer::Hit{};
+        } else {
+            switch (InspectorAudioComponentModel::HitKindForControl(row.kind)) {
+            case InspectorHitKind::BoolField: hit = HitBool(rect, section, row.property, x, yPoint); break;
+            case InspectorHitKind::FloatField: hit = HitFloatRow(rect, section, row.property, x, yPoint); break;
+            case InspectorHitKind::TextField: hit = HitTextRow(rect, section, row.property, x, yPoint); break;
+            default: break;
+            }
+        }
+        if (hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        AdvanceRow(y);
+    }
+    return {};
+}
+
 [[nodiscard]] InspectorPanelRenderer::Hit HitTestLightSection(
     const RECT& content,
     const InspectorPanelState& state,
@@ -3937,8 +4001,10 @@ int InspectorPanelRenderer::ContentHeight(const RECT& content, const EditorScene
     }
 
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
-    if (!sceneContext.Scene().Entities().IsAlive(selected)) {
-        return RectHeight(content);
+    if (InspectorSceneAudioModel::ShouldDisplay(
+            sceneContext.Scene(), assetBrowser.InspectorAsset(), selected)) {
+        return InspectorSceneAudioView::ContentHeight(
+            sceneContext.Inspector(), InspectorSceneAudioModel{ sceneContext.Scene() });
     }
     if (sceneContext.SelectedHierarchyEntities().size() > 1U) {
         return MultiSelectionContentHeight(sceneContext);
@@ -4175,9 +4241,23 @@ void InspectorPanelRenderer::Paint(
     }
 
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
-    if (!sceneContext.Scene().Entities().IsAlive(selected)) {
-        DrawEmpty(dc, inner, theme);
+    if (InspectorSceneAudioModel::ShouldDisplay(
+            sceneContext.Scene(), sceneContext.AssetBrowser().InspectorAsset(), selected)) {
+        const InspectorSceneAudioModel model{ sceneContext.Scene() };
+        InspectorSceneAudioView::Paint(
+            dc,
+            inner,
+            theme,
+            sceneContext.Inspector(),
+            sceneContext.SceneDocumentGeneration(),
+            model);
         RestoreDC(dc, -1);
+        if (scrollable) {
+            const RECT track = ScrollbarTrackRect(content);
+            const RECT thumb = ScrollbarThumbRect(content, sceneContext);
+            DrawFrame(dc, track, Rgb(18, 20, 24), Rgb(38, 43, 50));
+            DrawFrame(dc, thumb, sceneContext.Inspector().IsScrollbarDragging() ? Rgb(104, 116, 130) : Rgb(76, 86, 98), Rgb(94, 105, 118));
+        }
         RestoreDC(dc, savedDc);
         return;
     }
@@ -4206,7 +4286,7 @@ void InspectorPanelRenderer::Paint(
     RestoreDC(dc, savedDc);
 }
 
-InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int yPoint) noexcept {
+InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int yPoint) {
     if (!Contains(content, x, yPoint)) {
         return {};
     }
@@ -4244,6 +4324,23 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             }
             return {};
         }
+        if (metadata != nullptr && InspectorAudioMixerAssetView::Supports(*metadata)) {
+            kb::assets::AssetManager& mutableManager = const_cast<kb::assets::AssetManager&>(manager);
+            const kb::assets::AssetHandle<kb::audio::AudioMixerAsset> mixer =
+                InspectorAudioMixerAssetView::LoadCached(mutableManager, metadata->id);
+            if (!mixer.IsLoaded()) {
+                return {};
+            }
+            const InspectorAudioMixerAssetHit mixerHit =
+                InspectorAudioMixerAssetView::HitTest(viewport, state, *mixer, x, scrolledY);
+            return InspectorPanelRenderer::Hit{
+                .kind = mixerHit.kind,
+                .section = mixerHit.section,
+                .property = mixerHit.property,
+                .index = mixerHit.index,
+                .rect = mixerHit.rect,
+            };
+        }
         if (metadata != nullptr) {
             if (EditorTexturePreviewService::IsTextureAsset(*metadata)) {
                 const EditorTexturePreviewImage* image = EditorTexturePreviewService::PreviewFor(*metadata);
@@ -4280,8 +4377,21 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     }
 
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
-    if (!sceneContext.Scene().Entities().IsAlive(selected)) {
-        return {};
+    if (InspectorSceneAudioModel::ShouldDisplay(
+            sceneContext.Scene(), sceneContext.AssetBrowser().InspectorAsset(), selected)) {
+        const InspectorSceneAudioHit hit = InspectorSceneAudioView::HitTest(
+            viewport,
+            state,
+            InspectorSceneAudioModel{ sceneContext.Scene() },
+            x,
+            scrolledY);
+        return InspectorPanelRenderer::Hit{
+            .kind = hit.kind,
+            .section = hit.section,
+            .property = hit.property,
+            .index = hit.index,
+            .rect = hit.rect,
+        };
     }
 
     if (sceneContext.SelectedHierarchyEntities().size() > 1U) {
@@ -4688,11 +4798,12 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     }
 
     if (sceneContext.Scene().Components().AudioSources().Has(selected)) {
-        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::AudioSource, x, scrolledY); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::AudioSource, x, scrolledY,
+                InspectorAudioComponentModel::HasRemoveControl(InspectorSectionId::AudioSource)); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         if (!state.IsCollapsed(InspectorSectionId::AudioSource)) {
-            if (InspectorPanelRenderer::Hit hit = HitRows(viewport, y, InspectorSectionId::AudioSource, kAudioSourceRows, x, scrolledY); hit.kind != InspectorHitKind::None) {
+            if (InspectorPanelRenderer::Hit hit = HitAudioRows(viewport, y, InspectorSectionId::AudioSource, InspectorAudioComponentModel::SourceRows(), x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
         }
@@ -4700,11 +4811,12 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     }
 
     if (sceneContext.Scene().Components().AudioListeners().Has(selected)) {
-        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::AudioListener, x, scrolledY); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::AudioListener, x, scrolledY,
+                InspectorAudioComponentModel::HasRemoveControl(InspectorSectionId::AudioListener)); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         if (!state.IsCollapsed(InspectorSectionId::AudioListener)) {
-            if (InspectorPanelRenderer::Hit hit = HitRows(viewport, y, InspectorSectionId::AudioListener, kAudioListenerRows, x, scrolledY); hit.kind != InspectorHitKind::None) {
+            if (InspectorPanelRenderer::Hit hit = HitAudioRows(viewport, y, InspectorSectionId::AudioListener, InspectorAudioComponentModel::ListenerRows(), x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
         }

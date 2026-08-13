@@ -1,10 +1,12 @@
 #pragma once
 
+#include "inspection/InspectorAudioScrubController.hpp"
 #include "rendering/EditorMeshPreviewTypes.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -48,6 +50,10 @@ enum class InspectorSectionId : std::uint8_t {
     InputMappings,
     Material,
     MaterialPreview,
+    AudioMixerBuses,
+    AudioMixerSnapshots,
+    SceneAudioRouting,
+    SceneAudioOcclusion,
     Script,
     Rigidbody,
     Collider,
@@ -125,6 +131,29 @@ enum class InspectorPropertyId : std::uint16_t {
     InputMappingTrigger,
     InputMappingRemove,
     InputMappingAdd,
+    AudioMixerBusAdd,
+    AudioMixerBusName,
+    AudioMixerBusParent,
+    AudioMixerBusVolume,
+    AudioMixerBusMute,
+    AudioMixerBusRemove,
+    AudioMixerSnapshotAdd,
+    AudioMixerSnapshotName,
+    AudioMixerSnapshotRemove,
+    AudioMixerOverrideBus,
+    AudioMixerOverrideVolume,
+    AudioMixerOverrideRemove,
+    AudioMixerOverrideAdd,
+    SceneAudioMixer,
+    SceneAudioMixerPicker,
+    SceneAudioMixerClear,
+    SceneAudioSnapshot,
+    SceneAudioSnapshotOption,
+    SceneAudioOcclusionEnabled,
+    SceneAudioOcclusionVolumeScale,
+    SceneAudioOcclusionMaxDistance,
+    SceneAudioOcclusionLayerMask,
+    SceneAudioOcclusionMaxRaycasts,
     MeshRendererMesh,
     MeshRendererMeshPicker,
     MeshRendererMaterial,
@@ -203,6 +232,8 @@ enum class InspectorPropertyId : std::uint16_t {
     // The Collider section's "Fit to Mesh" action button.
     ColliderFitToMesh,
     AudioSourceClip,
+    AudioSourceClipPicker,
+    AudioSourceClipClear,
     AudioSourceVolume,
     AudioSourcePitch,
     AudioSourceEnabled,
@@ -210,8 +241,16 @@ enum class InspectorPropertyId : std::uint16_t {
     AudioSourceLoop,
     AudioSourceMute,
     AudioSourceSpatial,
+    AudioSourcePan,
+    AudioSourceSpatialBlend,
     AudioSourceAttenuation,
-    AudioSourceRange,
+    AudioSourceMinDistance,
+    AudioSourceMaxDistance,
+    AudioSourceRolloff,
+    AudioSourceDopplerFactor,
+    AudioSourceOutputBus,
+    AudioListenerPriority,
+    AudioListenerLocalUser,
     AudioListenerEnabled,
     AudioListenerPrimary,
     AnimatorController,
@@ -440,6 +479,17 @@ enum class InspectorPropertyId : std::uint16_t {
     DeformedGeometryMaterialSlotPicker7,
 };
 
+struct InspectorDynamicRowIdentity {
+    std::uint64_t ownerAssetId = 0U;
+    std::uint64_t ownerDocumentGeneration = 0U;
+    std::uint32_t kind = 0U;
+    std::string first;
+    std::string second;
+    std::string third;
+
+    [[nodiscard]] bool operator==(const InspectorDynamicRowIdentity&) const noexcept = default;
+};
+
 struct InspectorPanelState {
     [[nodiscard]] bool IsCollapsed(InspectorSectionId section) const noexcept;
     void ToggleCollapsed(InspectorSectionId section) noexcept;
@@ -494,12 +544,19 @@ struct InspectorPanelState {
     [[nodiscard]] bool IsTextEditing() const noexcept;
     [[nodiscard]] bool IsTextEditDirty() const noexcept;
     [[nodiscard]] InspectorPropertyId EditedProperty() const noexcept;
+    [[nodiscard]] const std::string& EditOriginalBuffer() const noexcept;
     [[nodiscard]] const std::string& EditBuffer() const noexcept;
     // Row index the current text edit targets in a dynamic list (e.g. which
     // mapping's scale is being edited). -1 when not applicable.
     [[nodiscard]] int EditIndex() const noexcept;
+    [[nodiscard]] const std::optional<InspectorDynamicRowIdentity>& EditRowIdentity() const noexcept;
     void SetEditIndex(int index) noexcept;
     void BeginTextEdit(InspectorPropertyId property, std::string value);
+    void BeginTextEdit(
+        InspectorPropertyId property,
+        std::string value,
+        int index,
+        InspectorDynamicRowIdentity rowIdentity);
     void AppendText(wchar_t character);
     void InsertText(std::string_view text);
     void BackspaceText();
@@ -524,8 +581,11 @@ struct InspectorPanelState {
     [[nodiscard]] int DragStartY() const noexcept;
     [[nodiscard]] bool FloatDragMoved() const noexcept;
     void BeginFloatDrag(InspectorPropertyId property, float startValue, int x, int y) noexcept;
+    void BeginIntegerDrag(InspectorPropertyId property, int x, int y) noexcept;
     void MarkFloatDragMoved() noexcept;
     void EndFloatDrag() noexcept;
+    [[nodiscard]] InspectorAudioScrubState& AudioScrub() noexcept;
+    [[nodiscard]] const InspectorAudioScrubState& AudioScrub() const noexcept;
     [[nodiscard]] bool IsDraggingMeshPreview() const noexcept;
     [[nodiscard]] float MeshPreviewYaw() const noexcept;
     [[nodiscard]] float MeshPreviewPitch() const noexcept;
@@ -579,6 +639,7 @@ private:
     std::string editOriginalBuffer_;
     std::string editBuffer_;
     int editIndex_ = -1;
+    std::optional<InspectorDynamicRowIdentity> editRowIdentity_;
     bool valueTypeDropdownOpen_ = false;
     int valueTypeDropdownHover_ = -1;
     bool tagsDropdownOpen_ = false;
@@ -591,6 +652,7 @@ private:
     int dragStartX_ = 0;
     int dragStartY_ = 0;
     bool floatDragMoved_ = false;
+    InspectorAudioScrubState audioScrub_{};
     bool meshPreviewDragging_ = false;
     int meshPreviewDragStartX_ = 0;
     int meshPreviewDragStartY_ = 0;

@@ -6,6 +6,7 @@
 #include "engine/scene/SceneAssets.hpp"
 
 #include "inspection/InspectorCameraTextBuilder.hpp"
+#include "inspection/InspectorAudioMixerAssetModel.hpp"
 #include "inspection/InspectorAudioTextBuilder.hpp"
 #include "inspection/InspectorColliderTextBuilder.hpp"
 #include "inspection/InspectorEntitySummaryTextBuilder.hpp"
@@ -14,6 +15,8 @@
 #include "inspection/InspectorMeshRendererTextBuilder.hpp"
 #include "inspection/InspectorMultiSelectionTextBuilder.hpp"
 #include "inspection/InspectorRigidbodyTextBuilder.hpp"
+#include "rendering/InspectorAudioMixerAssetView.hpp"
+#include "inspection/InspectorSceneAudioModel.hpp"
 
 #include <array>
 #include <cstdio>
@@ -138,6 +141,17 @@ void AppendMaterialInspectorText(std::ostringstream& text, const EditorSceneCont
         if (metadata->type == "RenderMaterial") {
             AppendMaterialInspectorText(text, sceneContext, metadata->id);
         }
+        if (InspectorAudioMixerAssetView::Supports(*metadata)) {
+            kb::assets::AssetManager& mutableManager = const_cast<kb::assets::AssetManager&>(manager);
+            const kb::assets::AssetHandle<kb::audio::AudioMixerAsset> mixer =
+                InspectorAudioMixerAssetView::LoadCached(mutableManager, metadata->id);
+            text << '\n';
+            if (mixer.IsLoaded()) {
+                text << InspectorAudioMixerAssetModel{ *mixer }.Text();
+            } else {
+                text << "Audio Mixer: failed to load" << '\n';
+            }
+        }
         return text.str();
     }
 
@@ -157,7 +171,10 @@ std::optional<std::string> InspectorPanelTextBuilder::Build(const EditorSceneCon
 
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
     if (!sceneContext.Scene().Entities().IsAlive(selected)) {
-        return std::nullopt;
+        return InspectorSceneAudioModel::ShouldDisplay(
+                   sceneContext.Scene(), sceneContext.AssetBrowser().InspectorAsset(), selected)
+            ? std::optional<std::string>{ InspectorSceneAudioModel{ sceneContext.Scene() }.Text() }
+            : std::nullopt;
     }
 
     std::string text = InspectorEntitySummaryTextBuilder{}.Build(sceneContext, selected);

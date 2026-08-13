@@ -19,6 +19,7 @@ public:
     [[nodiscard]] static bool HandlePointerDown(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit, int x, int y) noexcept;
     [[nodiscard]] static bool HandlePointerDrag(EditorSceneContext& sceneContext, int x, int y) noexcept;
     [[nodiscard]] static bool HandlePointerUp(EditorSceneContext& sceneContext) noexcept;
+    static void CancelPointerDrag(EditorSceneContext& sceneContext) noexcept;
     [[nodiscard]] static bool HandleChar(EditorSceneContext& sceneContext, wchar_t character);
     [[nodiscard]] static bool HandleKeyDown(HWND owner, EditorSceneContext& sceneContext, WPARAM key);
     // Consumes the next key/mouse-button while the inspector is in key-capture mode

@@ -11,6 +11,7 @@
 #include "engine/scene/LightComponent.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "scene/EditorHierarchyRowPicker.hpp"
 
 #include <algorithm>
@@ -26,6 +27,9 @@ constexpr UINT_PTR kHierarchyMenuRename = 1004;
 constexpr UINT_PTR kHierarchyMenuDirectionalLight = 1101;
 constexpr UINT_PTR kHierarchyMenuPointLight = 1102;
 constexpr UINT_PTR kHierarchyMenuSpotLight = 1103;
+constexpr UINT_PTR kSkeletonTreeMenuAddSocket = 1201;
+constexpr UINT_PTR kSkeletonTreeMenuRenameSocket = 1202;
+constexpr UINT_PTR kSkeletonTreeMenuDeleteSocket = 1203;
 
 void AppendDisabled(HMENU menu, const char* label) {
     AppendMenuA(menu, MF_STRING | MF_GRAYED, 0, label);
@@ -95,6 +99,38 @@ void AppendSeparator(HMENU menu) {
     default:
         return false;
     }
+}
+
+[[nodiscard]] HMENU CreateSkeletonTreeSystemMenu(bool canAddSocket) {
+    HMENU menu = CreatePopupMenu();
+    if (menu == nullptr) return nullptr;
+    AppendMenuA(
+        menu,
+        MF_STRING | (canAddSocket ? MF_ENABLED : MF_GRAYED),
+        kSkeletonTreeMenuAddSocket,
+        "Add Socket");
+    AppendMenuA(menu, MF_STRING | MF_GRAYED, kSkeletonTreeMenuRenameSocket, "Rename Socket");
+    AppendMenuA(menu, MF_STRING | MF_GRAYED, kSkeletonTreeMenuDeleteSocket, "Delete Socket");
+    return menu;
+}
+
+[[nodiscard]] UINT ShowSkeletonTreeSystemMenu(HWND window, int x, int y, bool canAddSocket) {
+    HMENU menu = CreateSkeletonTreeSystemMenu(canAddSocket);
+    if (menu == nullptr) return 0;
+
+    POINT screenPoint{ x, y };
+    ClientToScreen(window, &screenPoint);
+    SetForegroundWindow(window);
+    const UINT command = TrackPopupMenu(
+        menu,
+        TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN,
+        screenPoint.x,
+        screenPoint.y,
+        0,
+        window,
+        nullptr);
+    DestroyMenu(menu);
+    return command;
 }
 
 } // namespace
@@ -191,6 +227,44 @@ void EditorRightButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     if (consoleContent.has_value() && consolePointer.HandleContextMenu(*consoleContent, x, y)) {
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return;
+    }
+
+    const std::optional<RECT> skeletalMeshEditorContent = EditorPanelContentResolver::Resolve(
+        DockPanelKind::SkeletalMeshEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    if (skeletalMeshEditorContent.has_value() && sceneContext_.HasSkeletalMeshEditorAsset()) {
+        const RECT treeList = SkeletalMeshEditorPanelRenderer::TreeListRect(
+            *skeletalMeshEditorContent, sceneContext_);
+        const RECT scrollbar = SkeletalMeshEditorPanelRenderer::TreeScrollbarTrack(
+            *skeletalMeshEditorContent, sceneContext_);
+        const bool insideTree = x >= treeList.left && x < treeList.right &&
+            y >= treeList.top && y < treeList.bottom;
+        const bool insideScrollbar = SkeletalMeshEditorPanelRenderer::TreeMaxScroll(
+            *skeletalMeshEditorContent, sceneContext_) > 0 &&
+            x >= scrollbar.left && x < scrollbar.right && y >= scrollbar.top && y < scrollbar.bottom;
+        const std::optional<SkeletalMeshEditorTreeRow> row =
+            SkeletalMeshEditorPanelRenderer::TreeRowAt(*skeletalMeshEditorContent, sceneContext_, x, y);
+        if (insideTree && !insideScrollbar) {
+            bool changed = row.has_value() && (row->kind == SkeletalMeshEditorTreeItemKind::Bone
+                ? sceneContext_.SelectSkeletalMeshEditorBone(row->boneId)
+                : sceneContext_.SelectSkeletalMeshEditorSocket(row->socketName));
+            const UINT command = ShowSkeletonTreeSystemMenu(
+                messageWindow, x, y, sceneContext_.CanAddSkeletonEditorSocket());
+            if (command == kSkeletonTreeMenuAddSocket) {
+                changed = sceneContext_.AddSkeletonEditorSocket() || changed;
+                if (changed) {
+                    static_cast<void>(sceneContext_.SetSkeletalMeshEditorTreeScrollOffset(
+                        SkeletalMeshEditorPanelRenderer::TreeScrollOffsetToRevealSelection(
+                            *skeletalMeshEditorContent, sceneContext_),
+                        SkeletalMeshEditorPanelRenderer::TreeMaxScroll(
+                            *skeletalMeshEditorContent, sceneContext_)));
+                }
+            }
+            if (changed) {
+                sceneViewport_.RequestPresent();
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
     }
 
     const std::optional<RECT> hierarchyContent = EditorPanelContentResolver::Resolve(DockPanelKind::Hierarchy, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);

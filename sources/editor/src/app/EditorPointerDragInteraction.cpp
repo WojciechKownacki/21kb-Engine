@@ -78,8 +78,9 @@ bool EditorPointerDragInteraction::Complete(
     drag.x = dropPoint.x;
     drag.y = dropPoint.y;
 
+    const bool wasActive = drag.Active();
     bool handledDrop = false;
-    if (drag.Active()) {
+    if (wasActive) {
         handledDrop = drag.assetCreatesMeshEntity
             && EditorSceneViewportObjectInteraction::CommitMeshDragPreview(dropWindow, mainWindow, dropPoint.x, dropPoint.y, dockModel, floatingWindows, metrics, sceneContext, drag);
         if (!handledDrop) {
@@ -92,7 +93,9 @@ bool EditorPointerDragInteraction::Complete(
     if (GetCapture() == sourceWindow) {
         ReleaseCapture();
     }
-    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow, sourceWindow);
+    if (wasActive) {
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow, sourceWindow);
+    }
     return handledDrop;
 }
 

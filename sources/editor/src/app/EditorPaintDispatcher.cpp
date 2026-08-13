@@ -221,7 +221,11 @@ void AppendMaterialPreviewLayout(
             } else if (panel->kind == DockPanelKind::SkeletalMeshEditor && sceneContext.HasSkeletalMeshEditorAsset()) {
                 layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
                     .viewportKey = panelLayout.panelId,
-                    .bounds = SkeletalMeshEditorPanelLayoutResolver::Resolve(content).viewport,
+                    .bounds = SkeletalMeshEditorPanelLayoutResolver::Resolve(
+                        content,
+                        sceneContext.SkeletalMeshEditorToolboxWidth(),
+                        sceneContext.SkeletalMeshEditorSkeletonTreeWidth(),
+                        sceneContext.SkeletalMeshEditorSkeletonTreeHeight()).viewport,
                 });
             }
         }
@@ -241,7 +245,11 @@ void AppendMaterialPreviewLayout(
             content.top += metrics.floatingChromeHeight;
             layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
                 .viewportKey = panel->id,
-                .bounds = SkeletalMeshEditorPanelLayoutResolver::Resolve(content).viewport,
+                .bounds = SkeletalMeshEditorPanelLayoutResolver::Resolve(
+                    content,
+                    sceneContext.SkeletalMeshEditorToolboxWidth(),
+                    sceneContext.SkeletalMeshEditorSkeletonTreeWidth(),
+                    sceneContext.SkeletalMeshEditorSkeletonTreeHeight()).viewport,
             });
         }
     }

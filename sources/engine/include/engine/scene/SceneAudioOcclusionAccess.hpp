@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 
 namespace kb::scene {
@@ -28,6 +29,17 @@ struct AudioOcclusionSettings {
     std::uint32_t maxRaycastsPerTick = 8U;
 };
 
+inline constexpr std::uint32_t kMaxAudioOcclusionRaycastsPerTick = 4096U;
+
+[[nodiscard]] inline bool IsAudioOcclusionSettingsValid(const AudioOcclusionSettings& settings) noexcept {
+    return std::isfinite(settings.occludedVolumeScale)
+        && settings.occludedVolumeScale >= 0.0F
+        && settings.occludedVolumeScale <= 1.0F
+        && std::isfinite(settings.maxDistance)
+        && settings.maxDistance >= 0.0F
+        && settings.maxRaycastsPerTick <= kMaxAudioOcclusionRaycastsPerTick;
+}
+
 // Per-tick production telemetry published by the active audio backend. It makes the hard
 // cost cap and actual collider hits observable without exposing plugin-private objects or
 // inferring occlusion from an audio device's physical output.
@@ -41,7 +53,7 @@ class SceneAudioOcclusionAccess {
 public:
     SceneAudioOcclusionAccess() = delete;
 
-    static void Configure(Scene& scene, const AudioOcclusionSettings& settings) noexcept;
+    [[nodiscard]] static bool Configure(Scene& scene, const AudioOcclusionSettings& settings) noexcept;
     [[nodiscard]] static const AudioOcclusionSettings& Settings(const Scene& scene) noexcept;
     static void PublishRuntimeStats(
         Scene& scene, const AudioOcclusionRuntimeStats& stats) noexcept;

@@ -16,6 +16,7 @@ add_library(kb_engine STATIC
     include/engine/audio/AudioClipAsset.hpp
     include/engine/audio/AudioClipAssetLoader.hpp
     include/engine/audio/AudioMixerAsset.hpp
+    include/engine/audio/AudioRoutingContract.hpp
     include/engine/audio/AudioMixerAssetIO.hpp
     include/engine/audio/AudioMixerAssetLoader.hpp
     include/engine/audio/AudioPlayback.hpp
@@ -257,6 +258,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneParticleSystems.hpp
     include/engine/scene/ScenePrefabs.hpp
     include/engine/input/InputHaptics.hpp
+    include/engine/scene/SceneAudioListenerAccess.hpp
     include/engine/scene/SceneAudioMixerAccess.hpp
     include/engine/scene/SceneAudioOcclusionAccess.hpp
     include/engine/scene/SceneRenderFeedback.hpp
@@ -265,6 +267,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneTasks.hpp
     include/engine/scene/SceneTimers.hpp
     include/engine/scene/SceneSystem.hpp
+    include/engine/scene/SceneSystemHandle.hpp
     include/engine/scene/SceneSystemContext.hpp
     include/engine/scene/SceneSystemQueryAccess.hpp
     include/engine/scene/SceneSystemTransformAccess.hpp
@@ -954,6 +957,7 @@ add_library(kb_engine STATIC
     src/script/lua/PucLuaStateUtilities.cpp
     src/script/lua/PucLuaValueBridge.cpp
     src/script/PucLuaScriptRuntime.cpp
+    src/script/AudioShooterDemoProjectFiles.cpp
     src/script/ScriptAgentProjectFiles.cpp
     src/script/ScriptApiCatalog.cpp
     src/script/ScriptApiExport.cpp
@@ -1526,6 +1530,7 @@ if(BUILD_TESTING)
             kb_engine
             flecs::flecs_static
     )
+    target_include_directories(kb_engine_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/private)
 
     add_dependencies(kb_engine_tests kb_native_script_test_plugin)
     target_compile_definitions(kb_engine_tests

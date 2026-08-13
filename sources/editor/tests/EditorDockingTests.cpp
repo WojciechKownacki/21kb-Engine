@@ -8,6 +8,7 @@
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
 #include "scene/SkeletalMeshEditorTreeState.hpp"
 #include "scene/SkeletalMeshEditorDetailsState.hpp"
+#include "scene/SkeletalMeshEditorPanelResizeState.hpp"
 #include "scene/SkeletalMeshEditorDocumentState.hpp"
 #include "scene/SkeletonEditorDocumentState.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
@@ -511,9 +512,9 @@ void RunSkeletalMeshEditorDefaultLayoutTest() {
         kb::editor::SkeletalMeshEditorPanelLayoutResolver::Resolve(content);
     kb::editor::tests::Require(
         layout.toolbox.right - layout.toolbox.left == 240 &&
-            layout.viewport.right - layout.viewport.left == 720 &&
-            layout.skeletonTree.right - layout.skeletonTree.left == 240,
-        "Skeletal Mesh Editor should keep the default 20/60/20 workspace split");
+            layout.viewport.right - layout.viewport.left == 560 &&
+            layout.skeletonTree.right - layout.skeletonTree.left == 400,
+        "Skeletal Mesh Editor should reserve enough default width for complete nested bone names");
     kb::editor::tests::Require(
         layout.documentBar.left == content.left && layout.documentBar.right == content.right &&
             layout.documentBar.top == content.top && layout.documentBar.bottom == content.top + 38 &&
@@ -527,12 +528,88 @@ void RunSkeletalMeshEditorDefaultLayoutTest() {
             layout.skeletonTree.top == layout.commandBar.bottom && layout.assetDetails.bottom == content.bottom,
         "Skeletal Mesh Editor right column should stack Skeleton Tree over Asset Details");
     kb::editor::tests::Require(
+        layout.skeletonTree.bottom - layout.skeletonTree.top == 375 &&
+            layout.assetDetails.bottom - layout.assetDetails.top == 251 &&
+            layout.treeDetailsSplitter.top < layout.skeletonTree.bottom &&
+            layout.treeDetailsSplitter.bottom > layout.skeletonTree.bottom,
+        "Skeletal Mesh Editor should expose a wide horizontal hit target at its default 3/5 Tree split");
+    kb::editor::tests::Require(
         layout.meshDocument.left == content.left + 112 &&
             layout.meshDocument.right == layout.skeletonDocument.left &&
             layout.skeletonDocument.right == content.right - 8 &&
             layout.meshDocument.top == layout.skeletonDocument.top &&
             layout.meshDocument.bottom == layout.skeletonDocument.bottom,
         "Skeletal Mesh Editor linked-asset bar should expose separate Mesh and Skeleton hit targets");
+
+    const kb::editor::SkeletalMeshEditorPanelLayout resized =
+        kb::editor::SkeletalMeshEditorPanelLayoutResolver::Resolve(content, 320, 300);
+    kb::editor::tests::Require(
+        resized.toolbox.right - resized.toolbox.left == 320 &&
+            resized.viewport.right - resized.viewport.left == 580 &&
+            resized.skeletonTree.right - resized.skeletonTree.left == 300,
+        "Skeletal Mesh Editor should honor independent left and right panel widths");
+    kb::editor::tests::Require(
+        resized.toolboxSplitter.left < resized.toolbox.right &&
+            resized.toolboxSplitter.right > resized.toolbox.right &&
+            resized.skeletonTreeSplitter.left < resized.skeletonTree.left &&
+            resized.skeletonTreeSplitter.right > resized.skeletonTree.left,
+        "Skeletal Mesh Editor splitters should expose wide hit targets around both panel edges");
+
+    kb::editor::SkeletalMeshEditorPanelResizeState resizeState;
+    resizeState.SetToolboxWidth(320);
+    resizeState.SetSkeletonTreeWidth(300);
+    resizeState.BeginDrag(kb::editor::SkeletalMeshEditorPanelDrag::TreeDetailsHeight);
+    const int pointerHeight = kb::editor::SkeletalMeshEditorPanelLayoutResolver::
+        SkeletonTreeHeightFromPointer(content, 524);
+    resizeState.SetSkeletonTreeHeight(pointerHeight);
+    const kb::editor::SkeletalMeshEditorPanelLayout verticallyResized =
+        kb::editor::SkeletalMeshEditorPanelLayoutResolver::Resolve(
+            content,
+            resizeState.ToolboxWidth(),
+            resizeState.SkeletonTreeWidth(),
+            resizeState.SkeletonTreeHeight());
+    kb::editor::tests::Require(
+        resizeState.IsDragging(kb::editor::SkeletalMeshEditorPanelDrag::TreeDetailsHeight) &&
+            !resizeState.IsDragging(kb::editor::SkeletalMeshEditorPanelDrag::SkeletonTreeWidth) &&
+            pointerHeight == 420 &&
+            verticallyResized.skeletonTree.bottom - verticallyResized.skeletonTree.top == 420 &&
+            verticallyResized.assetDetails.bottom - verticallyResized.assetDetails.top == 206,
+        "Skeletal Mesh Editor pointer routing should resize Tree and Details through one exclusive session drag");
+    resizeState.EndDrag();
+    kb::editor::tests::Require(
+        !resizeState.IsDragging(kb::editor::SkeletalMeshEditorPanelDrag::TreeDetailsHeight),
+        "Skeletal Mesh Editor pointer release should end the horizontal splitter capture state");
+
+    const kb::editor::SkeletalMeshEditorPanelLayout clampedTop =
+        kb::editor::SkeletalMeshEditorPanelLayoutResolver::Resolve(content, 320, 300, 1);
+    const kb::editor::SkeletalMeshEditorPanelLayout clampedBottom =
+        kb::editor::SkeletalMeshEditorPanelLayoutResolver::Resolve(content, 320, 300, 10000);
+    kb::editor::tests::Require(
+        clampedTop.skeletonTree.bottom - clampedTop.skeletonTree.top == 120 &&
+            clampedBottom.assetDetails.bottom - clampedBottom.assetDetails.top == 120,
+        "Skeletal Mesh Editor horizontal splitter should preserve the minimum height of both panels");
+
+    const kb::editor::SkeletalMeshEditorPanelLayout tallerWindow =
+        kb::editor::SkeletalMeshEditorPanelLayoutResolver::Resolve(
+            RECT{ 20, 30, 1220, 930 }, 320, 300, pointerHeight);
+    kb::editor::tests::Require(
+        tallerWindow.skeletonTree.bottom - tallerWindow.skeletonTree.top == pointerHeight,
+        "Skeletal Mesh Editor should retain its session splitter height after resizing the host window");
+
+    const kb::editor::SkeletalMeshEditorPanelLayout tinyHeight =
+        kb::editor::SkeletalMeshEditorPanelLayoutResolver::Resolve(
+            RECT{ 0, 0, 600, 200 }, 160, 180, pointerHeight);
+    kb::editor::tests::Require(
+        tinyHeight.skeletonTree.bottom - tinyHeight.skeletonTree.top == 63 &&
+            tinyHeight.assetDetails.bottom - tinyHeight.assetDetails.top == 63,
+        "Skeletal Mesh Editor should share an undersized right stack without hiding either panel");
+
+    const kb::editor::SkeletalMeshEditorPanelLayout constrained =
+        kb::editor::SkeletalMeshEditorPanelLayoutResolver::Resolve(
+            RECT{ 0, 0, 600, 500 }, 400, 400);
+    kb::editor::tests::Require(
+        constrained.viewport.right - constrained.viewport.left == 280,
+        "Skeletal Mesh Editor panel resizing should preserve the minimum viewport width");
 }
 
 void RunSkeletalMeshEditorTreeStateTest() {
@@ -542,17 +619,54 @@ void RunSkeletalMeshEditorTreeStateTest() {
         { .id = 20U, .parentIndex = 0, .name = "Spine" },
         { .id = 30U, .parentIndex = 1, .name = "Hand" },
     };
-    skeleton.sockets = {{ .name = "Weapon", .boneId = 30U }};
+    skeleton.sockets = {
+        { .name = "Weapon", .boneId = 30U },
+        { .name = "Root Socket", .boneId = 10U },
+    };
     kb::editor::SkeletalMeshEditorTreeState tree;
     tree.SetSkeleton(skeleton);
+    const std::vector<kb::editor::SkeletalMeshEditorTreeRow> unfilteredRows = tree.Rows();
+    kb::editor::tests::Require(
+        unfilteredRows.size() == 5U && unfilteredRows[0].label == "Root" &&
+            unfilteredRows[1].label == "Root Socket" && unfilteredRows[1].depth == 1U &&
+            unfilteredRows[3].label == "Hand" && unfilteredRows[4].label == "Weapon" &&
+            unfilteredRows[4].depth == 3U,
+        "Skeleton Tree should render sockets directly under their owning bones with UE-style indentation");
+    kb::editor::tests::Require(
+        unfilteredRows[0].hasChildren && unfilteredRows[0].expanded &&
+            unfilteredRows[2].hasChildren && unfilteredRows[2].expanded &&
+            unfilteredRows[3].hasChildren && unfilteredRows[3].expanded,
+        "Skeleton Tree should initially expand every hierarchy branch like UE Persona");
+    kb::editor::tests::Require(tree.ToggleExpanded(20U) && !tree.IsExpanded(20U),
+        "Skeleton Tree disclosure should retain an independent collapsed state per bone");
+    const std::vector<kb::editor::SkeletalMeshEditorTreeRow> collapsedRows = tree.Rows();
+    kb::editor::tests::Require(
+        collapsedRows.size() == 3U && collapsedRows.back().label == "Spine" &&
+            collapsedRows.back().hasChildren && !collapsedRows.back().expanded,
+        "Collapsing a hierarchy branch should hide all descendants without removing the branch row");
     kb::editor::tests::Require(tree.SelectBone(30U) && tree.SelectedBone() == 30U && tree.SelectedSocket().empty(),
         "Skeleton Tree should retain viewport-selected bones");
     kb::editor::tests::Require(tree.SelectSocket("Weapon") && tree.SelectedBone() == 0U && tree.SelectedSocket() == "Weapon",
         "Skeleton Tree should retain selected sockets independently from bones");
+    kb::editor::tests::Require(tree.ToggleExpanded(20U) && !tree.IsExpanded(20U),
+        "Skeleton Tree should allow a branch revealed by selection to be collapsed again");
     kb::editor::tests::Require(tree.SetFilter("hand"), "Skeleton Tree should accept a case-insensitive search filter");
     const std::vector<kb::editor::SkeletalMeshEditorTreeRow> rows = tree.Rows();
     kb::editor::tests::Require(rows.size() == 3U && rows[0].label == "Root" && rows[1].label == "Spine" && rows[2].label == "Hand",
         "Skeleton Tree filtering should retain matching bones and their hierarchy ancestors");
+    kb::editor::tests::Require(!tree.IsExpanded(20U),
+        "Skeleton Tree filtering should not overwrite the persistent expansion state");
+    kb::editor::tests::Require(tree.SetFilter("") && tree.Rows().size() == 3U,
+        "Clearing a Skeleton Tree filter should restore the remembered collapsed view");
+    kb::editor::tests::Require(tree.SelectBone(30U) && tree.IsExpanded(20U) && tree.Rows().size() == 5U,
+        "Viewport selection should reveal a hidden bone by expanding its ancestors");
+    kb::editor::tests::Require(tree.SetFilter("weapon"), "Skeleton Tree should accept a socket filter");
+    const std::vector<kb::editor::SkeletalMeshEditorTreeRow> socketRows = tree.Rows();
+    kb::editor::tests::Require(
+        socketRows.size() == 4U && socketRows[0].label == "Root" && socketRows[1].label == "Spine" &&
+            socketRows[2].label == "Hand" && socketRows[3].label == "Weapon" && socketRows[3].depth == 3U,
+        "Skeleton Tree filtering should retain the owning bone path for a matching socket");
+    static_cast<void>(tree.SetFilter("hand"));
     tree.FocusSearch(true);
     tree.SelectAllSearch();
     tree.AppendSearchText(L's');
@@ -561,6 +675,17 @@ void RunSkeletalMeshEditorTreeStateTest() {
         "Skeleton Tree search should accept focused text input");
     tree.BackspaceSearch();
     kb::editor::tests::Require(tree.Filter() == "s", "Skeleton Tree search should handle backspace");
+    kb::editor::tests::Require(tree.SetScrollOffset(80, 200) && tree.ScrollOffset() == 80,
+        "Skeleton Tree should retain a clamped pixel scroll offset");
+    tree.BeginScrollbarDrag(100);
+    tree.DragScrollbar(150, 100, 200);
+    kb::editor::tests::Require(tree.IsScrollbarDragging() && tree.ScrollOffset() == 180,
+        "Skeleton Tree scrollbar drag should map track travel to the full row range");
+    tree.EndScrollbarDrag();
+    kb::editor::tests::Require(!tree.IsScrollbarDragging(),
+        "Skeleton Tree scrollbar drag should terminate cleanly");
+    kb::editor::tests::Require(tree.SetFilter("root") && tree.ScrollOffset() == 0,
+        "Changing the Skeleton Tree filter should reveal results from the top");
 }
 
 void RunSkeletalMeshEditorDetailsStateTest() {
@@ -586,8 +711,27 @@ void RunSkeletalMeshEditorDetailsStateTest() {
     kb::editor::SkeletalMeshEditorDetailsState details;
     details.SetDocument(mesh, skeleton, metadata);
     const kb::editor::SkeletalMeshEditorDetailsModel asset = details.Build(0U, {});
-    kb::editor::tests::Require(asset.sections.size() >= 5U && asset.sections[1].title == "LOD 0" && asset.sections[2].title == "LOD 0 Material 0",
-        "Skeletal Mesh Details should expose asset LOD and material-section data");
+    kb::editor::tests::Require(
+        asset.sections.size() >= 8U && asset.sections[1].title == "Materials" &&
+            asset.sections[1].fields.size() == 1U &&
+            asset.sections[1].fields[0].action == kb::editor::SkeletalMeshEditorDetailsAction::SectionMaterial &&
+            asset.sections[2].title == "LOD Picker" &&
+            asset.sections[2].fields[0].action == kb::editor::SkeletalMeshEditorDetailsAction::PreviewLod &&
+            asset.sections[3].title == "LOD 0" &&
+            asset.sections[3].fields[6].action == kb::editor::SkeletalMeshEditorDetailsAction::LodScreenCoverage,
+        "Skeletal Mesh Details should expose typed material, preview LOD and authored LOD controls");
+    kb::editor::tests::Require(details.ToggleSection("Materials") &&
+            !details.Build(0U, {}).sections[1].expanded,
+        "Skeletal Mesh Details categories should retain an independent collapsed state");
+    kb::editor::tests::Require(details.SetScrollOffset(80, 200) && details.ScrollOffset() == 80,
+        "Skeletal Mesh Details should retain a clamped pixel scroll offset");
+    details.BeginScrollbarDrag(100);
+    details.DragScrollbar(150, 100, 200);
+    kb::editor::tests::Require(details.IsScrollbarDragging() && details.ScrollOffset() == 180,
+        "Skeletal Mesh Details scrollbar drag should map track travel to content range");
+    details.EndScrollbarDrag();
+    kb::editor::tests::Require(!details.IsScrollbarDragging(),
+        "Skeletal Mesh Details scrollbar drag should terminate cleanly");
     const kb::editor::SkeletalMeshEditorDetailsModel bone = details.Build(10U, {});
     kb::editor::tests::Require(bone.title == "Bone: Root" && bone.sections[0].fields[0].value == "10" &&
             bone.sections[0].fields[5].value == "3",
@@ -636,14 +780,26 @@ void RunSkeletalMeshEditorDocumentStateTest() {
     document.Open(kb::assets::AssetId{ 42U }, mesh);
     kb::scene::SkeletalMeshAsset fixed = mesh;
     fixed.boundsMode = kb::scene::SkeletalMeshBoundsMode::Fixed;
+    fixed.lods[0].minScreenCoverage = 0.65F;
+    fixed.lods[0].sections[0].materialAssetId = 9001U;
     kb::editor::tests::Require(document.Apply(fixed) && document.Dirty() && document.CanUndo(),
         "Skeletal Mesh document should retain a dirty working-copy history");
-    kb::editor::tests::Require(document.Undo() && !document.Dirty() && document.CanRedo(),
-        "Skeletal Mesh document undo should restore the saved working copy");
+    kb::editor::tests::Require(document.Undo() && !document.Dirty() && document.CanRedo() &&
+            document.WorkingCopy() != nullptr &&
+            document.WorkingCopy()->lods[0].minScreenCoverage == 0.0F &&
+            document.WorkingCopy()->lods[0].sections[0].materialAssetId == 0U,
+        "Skeletal Mesh document undo should atomically restore material, LOD and bounds edits");
     kb::editor::tests::Require(document.Redo() && document.MarkSaved() && !document.Dirty(),
         "Skeletal Mesh document save should establish a new clean history baseline");
     kb::editor::tests::Require(document.RevertToSaved() && !document.Dirty(),
         "Skeletal Mesh document revert should discard unsaved history");
+    kb::scene::SkeletalMeshAsset reloaded = mesh;
+    reloaded.boundsMode = kb::scene::SkeletalMeshBoundsMode::ImportedConservative;
+    kb::editor::tests::Require(
+        document.ReplaceFromReimport(reloaded) && !document.Dirty() && !document.CanUndo() && !document.CanRedo() &&
+            document.WorkingCopy() != nullptr &&
+            document.WorkingCopy()->boundsMode == kb::scene::SkeletalMeshBoundsMode::ImportedConservative,
+        "Skeletal Mesh reload should replace the saved baseline and clear stale history");
 }
 
 void RunSkeletonEditorDocumentStateTest() {
@@ -661,6 +817,13 @@ void RunSkeletonEditorDocumentStateTest() {
         "Skeleton document undo should restore the saved rig");
     kb::editor::tests::Require(document.Redo() && document.MarkSaved() && !document.Dirty(),
         "Skeleton document save should establish a clean history baseline");
+    kb::scene::SkeletonAsset reloaded = skeleton;
+    reloaded.sockets.push_back({ .name = "Reloaded Socket", .boneId = 10U });
+    kb::editor::tests::Require(
+        document.ReplaceFromReload(reloaded) && !document.Dirty() && !document.CanUndo() && !document.CanRedo() &&
+            document.WorkingCopy() != nullptr && document.WorkingCopy()->sockets.size() == 1U &&
+            document.WorkingCopy()->sockets.front().name == "Reloaded Socket",
+        "Skeleton document reload should atomically replace the saved baseline and clear stale history");
 }
 
 void RunAnimationClipTimelineStateTest() {

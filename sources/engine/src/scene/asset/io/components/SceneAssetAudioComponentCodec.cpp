@@ -18,7 +18,7 @@ bool SceneAssetAudioComponentCodec::ReadSource(SceneAssetBinaryIO::ByteReader& i
     output.spatial = spatial;
     output.autoplay = autoplay;
     if (fileVersion < 2U) {
-        return true;
+        return IsAudioSourceComponentPersistable(output);
     }
 
     bool enabled = true;
@@ -39,7 +39,7 @@ bool SceneAssetAudioComponentCodec::ReadSource(SceneAssetBinaryIO::ByteReader& i
     output.mute = mute;
     output.attenuationModel = static_cast<kb::audio::AudioAttenuationModel>(attenuationModel);
     if (fileVersion < 3U) {
-        return true;
+        return IsAudioSourceComponentPersistable(output);
     }
 
     // v3 (LIB-147): the mixer-routing bus token (empty = implicit master, the value every
@@ -48,8 +48,7 @@ bool SceneAssetAudioComponentCodec::ReadSource(SceneAssetBinaryIO::ByteReader& i
     if (!input.ReadString(outputBus, AudioSourceComponent::MaxOutputBusBytes)) {
         return false;
     }
-    SetAudioSourceOutputBus(output, outputBus);
-    return true;
+    return SetAudioSourceOutputBus(output, outputBus) && IsAudioSourceComponentPersistable(output);
 }
 
 void SceneAssetAudioComponentCodec::WriteSource(std::vector<std::uint8_t>& output, const AudioSourceComponent& audioSource) {

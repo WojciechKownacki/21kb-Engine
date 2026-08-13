@@ -1,6 +1,7 @@
 #include "rendering/ProjectFilesAssetTileRenderer.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorAudioAssetPreview.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
 #include "rendering/EditorMeshThumbnailService.hpp"
 #include "rendering/GdiDrawing.hpp"
@@ -428,6 +429,21 @@ void DrawThumbnailBitmap(HDC dc, const RECT& target, const EditorMeshThumbnailIm
     Rectangle(dc, target.left, target.top, target.right, target.bottom);
 }
 
+void DrawSkeletalMeshThumbnailLoading(HDC dc, const RECT& target, bool selected) {
+    const COLORREF fill = selected ? RGB(31, 34, 39) : RGB(24, 27, 31);
+    const COLORREF border = selected ? RGB(83, 96, 112) : RGB(48, 54, 62);
+    GdiDrawing::DrawSharpFrame(dc, target, fill, border);
+
+    const int insetX = std::max(1, Draw::RectWidth(target) / 3);
+    const int insetY = std::max(1, Draw::RectHeight(target) / 3);
+    Draw::DrawIconWithShadow(
+        dc,
+        Draw::Inset(target, insetX, insetY),
+        HeroIconKind::EllipsisHorizontal,
+        selected ? RGB(166, 175, 187) : RGB(111, 121, 134),
+        1);
+}
+
 void DrawTextureThumbnailBitmap(HDC dc, const RECT& target, const ProjectFilesTextureThumbnailImage& image) {
     if (image.width <= 0 || image.height <= 0 || image.bgra.empty() || target.right <= target.left || target.bottom <= target.top) {
         return;
@@ -593,14 +609,27 @@ void DrawAssetTile(
     } else if (const ProjectFilesMaterialPreviewStyle* materialStyle = MaterialPreviewStyleCache().StyleFor(asset.metadata, manager)) {
         // Painted stand-in, shown only until that render lands (and if it never can).
         DrawMaterialPreviewBall(dc, MaterialPreviewRect(tile, visual), *materialStyle, asset.selected);
-    } else if (const EditorMeshThumbnailImage* thumbnail =
-                   ProjectFilesAssetIconResolver::IsSkeletalMesh(asset.metadata)
-                       ? meshThumbnails.ThumbnailFor(manager, asset.metadata)
-                       : meshThumbnails.PreviewFor(manager, asset.metadata)) {
+    } else if (ProjectFilesAssetIconResolver::IsSkeletalMesh(asset.metadata)) {
+        const RECT thumbnailRect = ThumbnailRect(tile, visual);
+        if (const EditorMeshThumbnailImage* thumbnail = meshThumbnails.ThumbnailFor(manager, asset.metadata)) {
+            DrawThumbnailBitmap(dc, thumbnailRect, *thumbnail);
+        } else {
+            // A Skeletal Mesh is represented by its geometry, never by the Skeleton asset glyph.
+            // The neutral pending frame is replaced as soon as the asynchronous thumbnail lands.
+            DrawSkeletalMeshThumbnailLoading(dc, thumbnailRect, asset.selected);
+        }
+    } else if (const EditorMeshThumbnailImage* thumbnail = meshThumbnails.PreviewFor(manager, asset.metadata)) {
         DrawThumbnailBitmap(dc, ThumbnailRect(tile, visual), *thumbnail);
     } else {
         const ProjectFilesAssetIcon icon = ProjectFilesAssetIconResolver::Resolve(asset.metadata, asset.selected);
         Draw::DrawIconWithShadow(dc, LargeIconRect(tile, visual), icon.kind, icon.color, icon.strokeWidth);
+    }
+    if (EditorAudioAssetPreview::IsPlaying(asset.metadata.id)) {
+        const int badgeHeight = 32;
+        const int badgeTop = (visual.icon.top + visual.icon.bottom - badgeHeight) / 2;
+        const RECT badge{ tile.left + 6, badgeTop, tile.right - 6, badgeTop + badgeHeight };
+        GdiDrawing::DrawSharpFrame(dc, badge, RGB(20, 72, 65), RGB(88, 232, 203));
+        Draw::DrawTextWithFont(dc, badge, "PLAYING", RGB(183, 255, 235), 12, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
     if (state.TextEditMode() == EditorAssetTextEditMode::RenameAsset && state.TextEditTargetAsset() == asset.metadata.id) {
         Draw::DrawCenteredEditField(dc, visual.label, theme, state.TextEditValue());

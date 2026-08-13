@@ -15,7 +15,12 @@ add_executable(kb_editor WIN32
     src/app/EditorEditCommandPolicy.cpp
     src/app/EditorEditCommandInputHandler.cpp
     src/app/EditorAssetBrowserContextCommandExecutor.cpp
+    src/private/app/EditorAssetBrowserNativeCommandMap.hpp
+    src/app/EditorAssetBrowserNativeCommandMap.cpp
+    src/private/app/EditorAudioAssetPreview.hpp
+    src/app/EditorAudioAssetPreview.cpp
     src/app/EditorAudioAssetInspectorDropHandler.cpp
+    src/app/EditorAudioInspectorDropPolicy.cpp
     src/app/EditorAnimatorAssetInspectorDropHandler.cpp
     src/app/EditorAssetBrowserContextMenuPointerHandler.cpp
     src/app/EditorAssetBrowserDeleteConfirmPointerHandler.cpp
@@ -299,6 +304,7 @@ add_executable(kb_editor WIN32
     src/private/app/docking/EditorMainDockSplitterPointerController.hpp
     src/private/app/EditorAssetFolderProjectFilesDropHandler.hpp
     src/private/app/EditorAudioAssetInspectorDropHandler.hpp
+    src/private/app/EditorAudioInspectorDropPolicy.hpp
     src/private/app/EditorAnimatorAssetInspectorDropHandler.hpp
     src/private/app/EditorBehaviourAssetHierarchyDropHandler.hpp
     src/private/app/EditorBehaviourAssetInspectorDropHandler.hpp
@@ -372,6 +378,12 @@ add_executable(kb_editor WIN32
     src/private/app/EditorWindowResizeInteraction.hpp
     src/private/app/EditorWindowResizeHandler.hpp
     src/private/inspection/InspectorInputInteraction.hpp
+    src/private/inspection/InspectorAudioComponentModel.hpp
+    src/private/inspection/InspectorAudioMixerAssetInteraction.hpp
+    src/private/inspection/InspectorAudioMixerAssetModel.hpp
+    src/private/inspection/InspectorSceneAudioInteraction.hpp
+    src/private/inspection/InspectorSceneAudioModel.hpp
+    src/private/inspection/InspectorAudioScrubController.hpp
     src/private/inspection/InspectorAudioTextBuilder.hpp
     src/private/inspection/InspectorCameraTextBuilder.hpp
     src/private/inspection/InspectorColliderTextBuilder.hpp
@@ -397,6 +409,7 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorMaterialParameterValueDialog.hpp
     src/private/platform/win32/EditorTagNameDialog.hpp
     src/private/platform/win32/EditorMeshAssetPickerDialog.hpp
+    src/private/platform/win32/EditorAudioMixerAssetPickerDialog.hpp
     src/private/platform/win32/EditorDebugLogGate.hpp
     src/private/platform/win32/EditorModalMessageLoop.hpp
     src/private/platform/win32/EditorModalWindowScope.hpp
@@ -472,6 +485,8 @@ add_executable(kb_editor WIN32
     src/private/rendering/HeroIconPathPainter.hpp
     src/private/rendering/HeroIconPainter.hpp
     src/private/rendering/InspectorPanelRenderer.hpp
+    src/private/rendering/InspectorAudioMixerAssetView.hpp
+    src/private/rendering/InspectorSceneAudioView.hpp
     src/private/rendering/InspectorAddComponentOverlayWindow.hpp
     src/private/rendering/MaterialEditorPanelRenderer.hpp
     src/private/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.hpp
@@ -517,6 +532,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/scene_viewport_toolbar/SceneViewportToolbarState.hpp
     src/private/rendering/SceneViewportToolbarDropdownOverlayWindow.hpp
     src/private/rendering/ScenePanelContentRenderer.hpp
+    src/private/rendering/SceneViewportPresentationPolicy.hpp
     src/private/rendering/HierarchyRowLayout.hpp
     src/private/rendering/HierarchyToolbarLayout.hpp
     src/private/rendering/SvgGraphicsPathBuilder.hpp
@@ -595,6 +611,10 @@ add_executable(kb_editor WIN32
     src/private/scene/input/EditorInputAssetCatalog.hpp
     src/private/scene/input/EditorInputActionAuthoring.hpp
     src/private/scene/input/EditorInputMappingContextAuthoring.hpp
+    src/private/scene/audio/EditorAudioMixerAssetGateway.hpp
+    src/private/scene/audio/EditorAudioMixerAuthoring.hpp
+    src/private/scene/audio/EditorSceneAudioSettingsService.hpp
+    src/private/scene/EditorSceneDocumentIdentity.hpp
     src/private/windowing/FloatingWindowControlActions.hpp
     src/private/windowing/FloatingWindowControlHitTester.hpp
     src/private/windowing/FloatingWindowControlInteractor.hpp
@@ -633,6 +653,7 @@ add_executable(kb_editor WIN32
     src/rendering/EditorSceneViewportPendingSubmissionBuilder.cpp
     src/rendering/EditorSceneViewportPendingPresentBatchBuilder.cpp
     src/rendering/EditorSceneViewportPendingPaintSubmitter.cpp
+    src/rendering/EditorSceneViewportTextOverlay.cpp
     src/rendering/EditorSceneViewportRegionBuilder.cpp
     src/rendering/EditorSceneViewportSessionStore.cpp
     src/rendering/EditorSurfacePainter.cpp
@@ -669,6 +690,8 @@ add_executable(kb_editor WIN32
     src/rendering/HeroIconPathPainter.cpp
     src/rendering/HeroIconPainter.cpp
     src/rendering/InspectorPanelRenderer.cpp
+    src/rendering/InspectorAudioMixerAssetView.cpp
+    src/rendering/InspectorSceneAudioView.cpp
     src/rendering/InspectorAddComponentOverlayWindow.cpp
     src/rendering/MaterialEditorPanelRenderer.cpp
     src/rendering/EditorMaterialThumbnailService.cpp
@@ -730,6 +753,12 @@ add_executable(kb_editor WIN32
     src/rendering/SvgPathFigureBuilder.cpp
     src/inspection/InspectorCameraTextBuilder.cpp
     src/inspection/InspectorAudioTextBuilder.cpp
+    src/inspection/InspectorAudioMixerAssetInteraction.cpp
+    src/inspection/InspectorAudioMixerAssetModel.cpp
+    src/inspection/InspectorSceneAudioInteraction.cpp
+    src/inspection/InspectorSceneAudioModel.cpp
+    src/inspection/InspectorAudioComponentModel.cpp
+    src/inspection/InspectorAudioScrubController.cpp
     src/inspection/InspectorColliderTextBuilder.cpp
     src/inspection/InspectorComponentCatalog.cpp
     src/inspection/InspectorComponentLabelFormatter.cpp
@@ -803,6 +832,9 @@ add_executable(kb_editor WIN32
     src/scene/input/EditorInputAssetCatalog.cpp
     src/scene/input/EditorInputActionAuthoring.cpp
     src/scene/input/EditorInputMappingContextAuthoring.cpp
+    src/scene/audio/EditorAudioMixerAssetGateway.cpp
+    src/scene/audio/EditorAudioMixerAuthoring.cpp
+    src/scene/audio/EditorSceneAudioSettingsService.cpp
     src/windowing/FloatingWindowControlActions.cpp
     src/windowing/FloatingWindowFactory.cpp
     src/windowing/FloatingWindowHitTestResolver.cpp
@@ -819,6 +851,7 @@ add_executable(kb_editor WIN32
     ../../third_party/heroicons/optimized/24/outline/eye.svg
     ../../third_party/heroicons/optimized/24/outline/magnifying-glass.svg
     ../../third_party/heroicons/optimized/24/outline/plus.svg
+    ../../third_party/heroicons/optimized/24/outline/speaker-wave.svg
     ../../third_party/heroicons/optimized/16/solid/adjustments-horizontal.svg
     ../../third_party/heroicons/optimized/16/solid/command-line.svg
     ../../third_party/heroicons/optimized/16/solid/eye.svg
@@ -857,6 +890,9 @@ add_custom_command(TARGET kb_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Fonts/DejaVu-LICENSE.txt"
         "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Fonts/DejaVu-LICENSE.txt"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/third_party/jolt/Assets/Fonts/Roboto-Regular.ttf"
+        "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Fonts/Roboto-Regular.ttf"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Icons/SceneView"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Icons/SceneView/sun-solid.svg"
@@ -871,6 +907,9 @@ add_custom_command(TARGET kb_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Fonts/DejaVu-LICENSE.txt"
         "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Fonts/DejaVu-LICENSE.txt"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/third_party/jolt/Assets/Fonts/Roboto-Regular.ttf"
+        "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Fonts/Roboto-Regular.ttf"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Icons/SceneView"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Icons/SceneView/sun-solid.svg"
@@ -961,6 +1000,13 @@ endfunction()
 
 kb_apply_editor_graph_cook_defs(kb_editor)
 
+# EditorSceneContext is an intentionally centralized Win32 orchestration translation unit. Its
+# generated debug object exceeds COFF's default section count once all production editor surfaces
+# are enabled; /bigobj changes only the object-file index width and has no runtime cost.
+if(MSVC)
+    set_source_files_properties(src/scene/EditorSceneContext.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
+endif()
+
 kb_target_copy_bgfx_runtime_shaders(kb_editor)
 kb_apply_quality_gates(kb_editor)
 
@@ -968,6 +1014,9 @@ if(BUILD_TESTING)
     add_executable(kb_editor_tests
         tests/EditorHierarchyTests.cpp
         tests/EditorAssetBrowserTests.cpp
+        tests/EditorAudioMixerAuthoringTests.cpp
+        tests/EditorAudioMixerInspectorTests.cpp
+        tests/EditorSceneAudioInspectorTests.cpp
         tests/EditorViewportPreviewTests.cpp
         tests/EditorMaterialGraphCookServiceTests.cpp
         tests/EditorDockingTests.cpp
@@ -984,6 +1033,8 @@ if(BUILD_TESTING)
         tests/SvgPathTests.cpp
         src/rendering/MaterialEditorPanelLayout.cpp
         src/rendering/EditorTexturePreviewService.cpp
+        src/rendering/InspectorAudioMixerAssetView.cpp
+        src/rendering/InspectorSceneAudioView.cpp
         src/rendering/EditorBgfxBackendSelector.cpp
         src/rendering/HeroIconGdiplusRuntime.cpp
         src/rendering/material_graph/MaterialGraphCanvasDocumentAdapter.cpp
@@ -1032,6 +1083,8 @@ if(BUILD_TESTING)
         src/assets/EditorAssetBrowserChromeHitTester.cpp
         src/assets/EditorAssetBrowserContentLayout.cpp
         src/assets/EditorAssetBrowserContextMenuState.cpp
+        src/app/EditorAssetBrowserNativeCommandMap.cpp
+        src/app/EditorAudioInspectorDropPolicy.cpp
         src/assets/EditorAssetBrowserContextMenuLayout.cpp
         src/assets/EditorAssetBrowserContentHitTester.cpp
         src/assets/EditorAssetBrowserDeleteConfirmState.cpp
@@ -1057,6 +1110,7 @@ if(BUILD_TESTING)
         src/assets/EditorAssetBrowserTreeHitTester.cpp
         src/assets/EditorAssetBrowserViewState.cpp
         src/commands/EditorCommandStack.cpp
+        src/commands/EditorSceneHistoryCommand.cpp
         src/scene/EditorDefaultSceneFactory.cpp
         src/scene/EditorHierarchyExpansionState.cpp
         src/scene/EditorHierarchyRowBuilder.cpp
@@ -1067,10 +1121,15 @@ if(BUILD_TESTING)
         src/scene/EditorHierarchySelectionState.cpp
         src/scene/EditorPluginCatalog.cpp
         src/scene/EditorSceneAssetBrowserCommands.cpp
+        src/scene/audio/EditorAudioMixerAssetGateway.cpp
+        src/scene/audio/EditorAudioMixerAuthoring.cpp
+        src/scene/audio/EditorSceneAudioSettingsService.cpp
         src/private/scene/EditorMeshImportArtifacts.hpp
         src/scene/EditorMeshImportArtifacts.cpp
         src/scene/EditorSceneSelectionPivot.cpp
         src/scene/EditorSceneAudioAssetActions.cpp
+        src/scene/EditorSceneCommandController.cpp
+        src/scene/EditorSceneViewportStateStore.cpp
           src/scene/EditorSceneMaterialAssetActions.cpp
           src/scene/EditorSceneMeshAssetActions.cpp
           src/scene/EditorScenePrefabActions.cpp
@@ -1107,6 +1166,12 @@ if(BUILD_TESTING)
         src/rendering/EditorMeshThumbnailService.cpp
         src/rendering/MaterialPreviewAppearanceResolver.cpp
         src/inspection/InspectorAudioTextBuilder.cpp
+        src/inspection/InspectorAudioMixerAssetInteraction.cpp
+        src/inspection/InspectorAudioMixerAssetModel.cpp
+        src/inspection/InspectorSceneAudioInteraction.cpp
+        src/inspection/InspectorSceneAudioModel.cpp
+        src/inspection/InspectorAudioComponentModel.cpp
+        src/inspection/InspectorAudioScrubController.cpp
         src/inspection/InspectorComponentCatalog.cpp
         src/inspection/InspectorComponentLabelFormatter.cpp
         src/inspection/InspectorPhysicsModel.cpp

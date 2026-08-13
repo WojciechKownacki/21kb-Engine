@@ -6,6 +6,7 @@
 #include "app/EditorSceneLifecycleGuard.hpp"
 #include "platform/win32/EditorSceneFileDialog.hpp"
 #include "project/EditorProjectPaths.hpp"
+#include "rendering/SceneViewportPresentationPolicy.hpp"
 #include "rendering/EditorToolbarRenderer.hpp"
 
 #include <filesystem>
@@ -231,6 +232,7 @@ struct TransportClickResult {
     int y,
     const DockLayout& layout,
     EditorSceneContext& sceneContext,
+    EditorSceneBgfxViewport& sceneViewport,
     EditorPlayModeState& playMode,
     EditorShellInteractionState& shellInteraction) {
     const EditorToolbarRects toolbar = EditorToolbarRenderer::ResolveToolbar(ToRect(layout.toolbar));
@@ -243,7 +245,13 @@ struct TransportClickResult {
         static_cast<void>(shellInteraction.SetPressedTransport(transport));
     }
 
+    const bool previousPlayModeSceneActive = sceneContext.HasPlayModeSceneSession();
     const TransportClickResult result = ExecuteTransportCommand(transport, playMode, sceneContext);
+    if (SceneViewportPresentationPolicy::RequiresPresent(
+            previousPlayModeSceneActive,
+            sceneContext.HasPlayModeSceneSession())) {
+        sceneViewport.RequestPresent();
+    }
     if (result.invalidates) {
         InvalidateToolbar(mainWindow, layout);
         // Transport commands write to the Console — snapshot capture/restore and,
@@ -311,7 +319,7 @@ bool EditorWindowToolbarPointerHandler::HandleLeftButtonDown(
         return true;
     }
 
-    return HandleTransportLeftButtonDown(mainWindow, x, y, *layout, sceneContext, playMode, shellInteraction);
+    return HandleTransportLeftButtonDown(mainWindow, x, y, *layout, sceneContext, sceneViewport, playMode, shellInteraction);
 }
 
 bool EditorWindowToolbarPointerHandler::HandleMouseMove(

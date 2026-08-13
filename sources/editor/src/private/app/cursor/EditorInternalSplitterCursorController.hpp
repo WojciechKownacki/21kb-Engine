@@ -30,6 +30,8 @@ public:
 private:
     [[nodiscard]] bool HitsProjectFilesTreeSplitter(int x, int y) const;
     [[nodiscard]] bool HitsConsoleDetailSplitter(int x, int y) const;
+    [[nodiscard]] bool HitsSkeletalMeshEditorWidthSplitter(int x, int y) const;
+    [[nodiscard]] bool HitsSkeletalMeshEditorTreeDetailsSplitter(int x, int y) const;
 
     HWND messageWindow_ = nullptr;
     HWND mainWindow_ = nullptr;

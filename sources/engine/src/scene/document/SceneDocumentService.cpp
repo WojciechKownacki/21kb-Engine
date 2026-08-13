@@ -3,6 +3,9 @@
 
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAudioListenerAccess.hpp"
+#include "engine/scene/SceneAudioMixerAccess.hpp"
+#include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
@@ -10,6 +13,7 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "scene/document/SceneDocumentCaptureService.hpp"
+#include "scene/document/SceneDocumentAudioValidation.hpp"
 #include "scene/asset/io/SceneAssetFormat.hpp"
 #include "scene/asset/io/SceneAssetReader.hpp"
 #include "scene/asset/io/SceneAssetWriter.hpp"
@@ -72,6 +76,9 @@ SceneDocumentLoadResult SceneDocumentService::Load(const std::filesystem::path& 
 }
 
 bool SceneDocumentService::LoadIntoScene(Scene& scene, const SceneDocument& document) {
+    if (!IsSceneDocumentAudioConfigurationValid(document)) {
+        return false;
+    }
     // A non-additive load replaces the gameplay world while reusing the Scene
     // container and its module backends. Stop scene-owned voices before their
     // source entities disappear, then discard marker events produced by the
@@ -79,6 +86,16 @@ bool SceneDocumentService::LoadIntoScene(Scene& scene, const SceneDocument& docu
     kb::audio::AudioPlayback::StopAll(scene);
     static_cast<void>(
         kb::audio::AudioPlayback::DrainPendingMarkerEvents(scene));
+    SceneAudioListenerAccess::SetLocalUser(scene, kb::input::kPrimaryLocalUser);
+    SceneAudioMixerAccess::SetActiveMixer(scene, document.audioMixerAssetId);
+    if (!SceneAudioMixerAccess::SetActiveSnapshot(scene, document.audioMixerSnapshot)) {
+        return false;
+    }
+    SceneAudioMixerAccess::ResetRuntimeMixerState(scene);
+    if (!SceneAudioOcclusionAccess::Configure(scene, document.audioOcclusionSettings)) {
+        return false;
+    }
+    SceneAudioOcclusionAccess::PublishRuntimeStats(scene, {});
     ClearSceneRoots(scene);
     if (!scene.Tags().ReplaceDefinitions(document.tagDefinitions)) {
         return false;

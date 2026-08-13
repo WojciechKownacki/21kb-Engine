@@ -40,18 +40,23 @@ public:
     void SyncAttachedVoices(
         kb::scene::Scene& scene,
         MiniaudioOcclusionSampler* occlusionSampler,
-        const kb::scene::Vec3& listenerPosition);
+        const kb::scene::Vec3& listenerPosition,
+        float deltaSeconds);
 
-    // LIB-148: per-voice control - false for a voiceId that is 0, never existed, or
-    // already finished/was stolen. Stop REMOVES the record immediately (a stopped
-    // ma_sound never reaches at_end, so RemoveFinishedVoices would leak it otherwise);
-    // Pause keeps the record alive (guarded by `paused` - a paused sound is not playing
-    // and not at_end, but must not be reclaimed) until Resume or Stop.
+    // LIB-148: per-voice control - false for a voiceId that is 0, never existed, was
+    // stolen, or has already been reclaimed after finishing. Stop REMOVES the record
+    // immediately (a stopped ma_sound never reaches at_end, so RemoveFinishedVoices
+    // would leak it otherwise);
+    // Pause succeeds only for an actively playing sound and keeps the record alive
+    // (guarded by `paused` - a paused sound is not playing and not at_end, but must not
+    // be reclaimed) until a successful Resume or Stop.
     [[nodiscard]] bool StopVoice(std::uint64_t voiceId) noexcept;
     [[nodiscard]] bool PauseVoice(std::uint64_t voiceId) noexcept;
     [[nodiscard]] bool ResumeVoice(std::uint64_t voiceId) noexcept;
     [[nodiscard]] bool SeekVoice(std::uint64_t voiceId, float positionSeconds) noexcept;
     [[nodiscard]] bool SetVoiceVolume(std::uint64_t voiceId, float volume) noexcept;
+    [[nodiscard]] bool SetVoiceMute(std::uint64_t voiceId, bool mute) noexcept;
+    [[nodiscard]] bool SetVoicePan(std::uint64_t voiceId, float pan) noexcept;
     [[nodiscard]] bool SetVoicePitch(std::uint64_t voiceId, float pitch) noexcept;
     [[nodiscard]] bool SetVoiceLoop(std::uint64_t voiceId, bool loop) noexcept;
     [[nodiscard]] bool IsVoicePlaying(std::uint64_t voiceId) noexcept;
@@ -59,7 +64,7 @@ public:
     // markers. Fired markers queue "OnAudioMarker" events through
     // AudioPlayback::QueueMarkerEvent inside DispatchMarkers (called once per tick).
     [[nodiscard]] float VoicePlaybackSeconds(std::uint64_t voiceId) noexcept;
-    [[nodiscard]] bool AddVoiceMarker(std::uint64_t voiceId, std::string_view marker, float positionSeconds, kb::scene::SceneEntity target);
+    [[nodiscard]] bool AddVoiceMarker(kb::scene::Scene& scene, std::uint64_t voiceId, std::string_view marker, float positionSeconds, kb::scene::SceneEntity target);
     void DispatchMarkers(kb::scene::Scene& scene);
 
 private:
@@ -85,6 +90,8 @@ private:
         float baseVolume = 1.0F;
         bool muted = false;
         bool spatial = true;
+        kb::scene::Vec3 previousOwnerPosition{};
+        bool hasPreviousOwnerPosition = false;
         // LIB-152: named playback markers (see AddVoiceMarker/DispatchMarkers).
         std::vector<VoiceMarker> markers;
         std::unique_ptr<MiniaudioSound> sound;
@@ -92,11 +99,52 @@ private:
 
     [[nodiscard]] std::uint64_t AllocateVoiceId() noexcept;
     [[nodiscard]] VoiceRecord* FindVoice(std::uint64_t voiceId) noexcept;
-    [[nodiscard]] bool PruneVoicesForClip(std::uint64_t clipAssetId, std::uint8_t incomingPriority) noexcept;
-    // LIB-148: evicts the lowest-priority (ties: oldest) voice while at capacity. Returns
-    // false when every live voice outranks `incomingPriority` - the caller must then
-    // honestly refuse the new voice instead of stealing a higher-priority one.
-    [[nodiscard]] bool PruneVoiceCapacity(std::uint8_t incomingPriority) noexcept;
+
+    using VoiceIterator = std::list<VoiceRecord>::iterator;
+    struct Admission final {
+        VoiceIterator clipVictim;
+        VoiceIterator capacityVictim;
+    };
+    [[nodiscard]] bool PlanAdmission(
+        std::uint64_t clipAssetId,
+        std::uint8_t incomingPriority,
+        Admission& admission,
+        bool& clipRejected) noexcept;
+
+#if defined(KB_AUDIO_MINIAUDIO_TESTING)
+public:
+    [[nodiscard]] MiniaudioSound* SoundForTesting(std::uint64_t voiceId) noexcept {
+        VoiceRecord* voice = FindVoice(voiceId);
+        return voice == nullptr ? nullptr : voice->sound.get();
+    }
+    [[nodiscard]] std::size_t VoiceCountForTesting() const noexcept { return voices_.size(); }
+    [[nodiscard]] std::size_t DecoderCountForTesting() const noexcept {
+        std::size_t count = 0U;
+        for (const VoiceRecord& voice : voices_) {
+            count += voice.sound == nullptr ? 0U : voice.sound->DecoderCountForTesting();
+        }
+        return count;
+    }
+    [[nodiscard]] std::size_t EncodedPayloadCountForTesting() const noexcept {
+        std::size_t count = 0U;
+        for (const VoiceRecord& voice : voices_) {
+            count += voice.sound != nullptr && voice.sound->OwnsEncodedPayloadForTesting() ? 1U : 0U;
+        }
+        return count;
+    }
+    [[nodiscard]] std::vector<std::uint64_t> VoiceIdsForTesting() const {
+        std::vector<std::uint64_t> ids;
+        ids.reserve(voices_.size());
+        for (const VoiceRecord& voice : voices_) {
+            ids.push_back(voice.voiceId);
+        }
+        return ids;
+    }
+    [[nodiscard]] std::size_t MarkerCountForTesting(std::uint64_t voiceId) noexcept {
+        VoiceRecord* voice = FindVoice(voiceId);
+        return voice == nullptr ? 0U : voice->markers.size();
+    }
+#endif
 
     static constexpr std::size_t kMaxOneShotVoices = 64U;
     static constexpr std::size_t kMaxOneShotVoicesPerClip = 8U;

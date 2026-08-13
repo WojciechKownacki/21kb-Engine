@@ -230,10 +230,13 @@ void RunPrefabAssetRoundTripTest() {
                     .dopplerFactor = 0.4F,
                 };
                 // LIB-147: exercises the prefab TEXT writer/parser outputBus round-trip.
-                kb::scene::SetAudioSourceOutputBus(audioSourceFixture, "Ambience");
+                kb::tests::Require(kb::scene::SetAudioSourceOutputBus(audioSourceFixture, "Ambience"),
+                    "Prefab audio source bus fixture was invalid");
                 return audioSourceFixture;
             }(),
             .audioListener = kb::scene::AudioListenerComponent{
+                .priority = -6,
+                .localUser = kb::input::LocalUserId{ 4U },
                 .primary = false,
                 .enabled = false,
             },
@@ -304,7 +307,10 @@ void RunPrefabAssetRoundTripTest() {
     kb::tests::Require(light != nullptr && !light->castsShadow, "Loaded prefab light shadow flag was not preserved");
     kb::tests::Require(behaviour != nullptr && behaviour->behaviourAssetId == 404 && behaviour->backend == kb::scene::BehaviourBackend::Lua && !behaviour->enabled && behaviour->tickGroup == kb::scene::BehaviourTickGroup::Physics && behaviour->executionOrder == -12, "Loaded prefab behaviour was not preserved");
     kb::tests::Require(audioSource != nullptr && audioSource->clipAssetId == 505 && kb::tests::NearlyEqual(audioSource->volume, 0.35F) && kb::tests::NearlyEqual(audioSource->pitch, 1.25F) && audioSource->loop && !audioSource->spatial && audioSource->autoplay && !audioSource->enabled && audioSource->mute && audioSource->attenuationModel == kb::audio::AudioAttenuationModel::Linear && kb::tests::NearlyEqual(audioSource->maxDistance, 80.0F) && kb::scene::AudioSourceOutputBus(*audioSource) == "Ambience", "Loaded prefab audio source was not preserved");
-    kb::tests::Require(audioListener != nullptr && !audioListener->primary && !audioListener->enabled, "Loaded prefab audio listener was not preserved");
+    kb::tests::Require(audioListener != nullptr && audioListener->priority == -6
+            && audioListener->localUser == kb::input::LocalUserId{ 4U }
+            && !audioListener->primary && !audioListener->enabled,
+        "Loaded prefab audio listener was not preserved");
     kb::tests::Require(animator != nullptr && animator->controllerAssetId == 606 &&
             kb::tests::NearlyEqual(animator->speed, 1.5F) && !animator->enabled &&
             animator->rootMotionOwner == kb::scene::AnimatorRootMotionOwner::Rigidbody,
