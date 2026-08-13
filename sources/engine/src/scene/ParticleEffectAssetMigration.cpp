@@ -69,7 +69,7 @@ ParticleEffectAsset ParticleEffectAssetMigration::FromLegacy(const LegacyParticl
         .moduleId = kLegacyGravityModuleId,
         .type = ParticleModuleType::Gravity,
         .enabled = true,
-        .payload = ParticleGravityModule{.acceleration = kb::math::Vec3{0.0F, -9.81F, 0.0F},
+        .payload = ParticleGravityModule{.acceleration = kb::math::Vec3{},
                                          .sceneGravityScale = legacy.gravityScale},
     });
     kb::math::Curve size = legacy.sizeOverLifetime;
