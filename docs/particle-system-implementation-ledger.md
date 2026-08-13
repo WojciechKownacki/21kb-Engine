@@ -10,7 +10,7 @@
 ## Current package
 
 - Stage: `3` — deterministic CPU fixed-step simulation and baseline modules.
-- Status: `in_progress`; checkpoint 3.1 is accepted.
+- Status: `in_progress`; checkpoint 3.2 is accepted.
 - Scope: Stage 3 builds deterministic CPU fixed-step simulation, dense runtime state, bounded queues, baseline modules, owner policies, and telemetry on top of the delivered provider ABI.
 - Next gate: fixed-step compiler/kernel, baseline module evaluation, spawn/event ordering, hashes, and zero heap allocations per fixed step after warmup.
 
@@ -60,6 +60,14 @@
 - Real lifecycle, validation, query, and bounded-copy behavior are present before simulation; non-zero `Emit` explicitly returns `UnsupportedOutput` until the fixed-step kernel exists.
 - Focused tests prove limits, stale handles, backend ownership/reload, caller-span bounds, and zero global allocations after warmup for the lifecycle/query path.
 
+### Stage 3.2 â€” deterministic fixed-step CPU kernel: `accepted`
+
+- `ParticleSceneSystem` participates in the engine-owned post-simulation fixed scheduler at exactly 1/60 seconds with the shared eight-step catch-up ceiling; no second accumulator exists.
+- The CPU backend compiles and generation-caches validated v2 assets into bounded runtime data, then simulates continuous and burst spawning, lifetime expiry, duration, looping, draining, and per-emitter authored prewarm through the same fixed-step kernel.
+- Per-instance state owns its time, emission remainders, burst cursors, random stream, and live-particle counts; particle storage remains bounded SoA with no heap allocation in a fixed step after warmup.
+- Explicit schema and runtime limits bound prewarm, continuous spawn rate, per-step spawn budget, per-emitter capacity, and the 262,144-particle scene capacity; telemetry reports admitted and rejected spawn demand.
+- Focused tests cover 30/60/144 Hz fixed-step parity, catch-up, seeded instance independence, one- and two-emitter prewarm, burst/lifetime/duration/loop/drain behavior, capacity boundaries, and allocation-free stepping.
+
 ## Accepted decisions and mappings
 
 - Plugin identifier: `Rendering.21kbParticle`.
@@ -107,4 +115,4 @@
 - Stage 1A attempt 1 was rejected after independent review despite a green focused test; every listed defect was repaired and the second attempt was accepted.
 - No open stage 0 defect remains.
 - No open stage 1 defect remains.
-- Next gate: stage 2 completes scene/prefab component persistence, typed provider ABI and results, lifecycle ownership, and explicit project enablement/migration without retaining a silent legacy backend.
+- Next gate: stage 3.3 adds baseline particle modules, owner policies, event ordering, and deterministic runtime coverage without widening the fixed-step contract.
