@@ -198,6 +198,11 @@ void DestroyRemovedObjects(Scene& scene, std::span<const SceneObject> oldObjects
         } else {
             components.HistoryRibbons().Remove(owner.Entity());
         }
+        if (nodes[nodeIndex].components.particleEffect.has_value()) {
+            components.ParticleEffects().Set(owner.Entity(), *nodes[nodeIndex].components.particleEffect);
+        } else {
+            components.ParticleEffects().Remove(owner.Entity());
+        }
         const std::optional<ScenePrefabLensEchoComponent>& prefabEcho = nodes[nodeIndex].components.lensEcho;
         if (!prefabEcho.has_value()) {
             components.LensEchoes().Remove(owner.Entity());

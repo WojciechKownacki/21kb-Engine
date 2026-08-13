@@ -71,6 +71,9 @@ SceneSurfaceCastComponentQueries SceneComponentQueries::SurfaceCasts() const noe
 SceneFacingPanelComponentQueries SceneComponentQueries::FacingPanels() const noexcept { return SceneFacingPanelComponentQueries{ scene_ }; }
 SceneSpaceStrokeComponentQueries SceneComponentQueries::SpaceStrokes() const noexcept { return SceneSpaceStrokeComponentQueries{ scene_ }; }
 SceneHistoryRibbonComponentQueries SceneComponentQueries::HistoryRibbons() const noexcept { return SceneHistoryRibbonComponentQueries{ scene_ }; }
+SceneParticleEffectComponentQueries SceneComponentQueries::ParticleEffects() const noexcept {
+    return SceneParticleEffectComponentQueries{scene_};
+}
 SceneLensEchoComponentQueries SceneComponentQueries::LensEchoes() const noexcept { return SceneLensEchoComponentQueries{ scene_ }; }
 
 SceneAudioSourceComponentQueries SceneComponentQueries::AudioSources() const noexcept {
@@ -165,6 +168,9 @@ SceneSurfaceCastComponents SceneComponents::SurfaceCasts() const noexcept { retu
 SceneFacingPanelComponents SceneComponents::FacingPanels() const noexcept { return SceneFacingPanelComponents{ scene_ }; }
 SceneSpaceStrokeComponents SceneComponents::SpaceStrokes() const noexcept { return SceneSpaceStrokeComponents{ scene_ }; }
 SceneHistoryRibbonComponents SceneComponents::HistoryRibbons() const noexcept { return SceneHistoryRibbonComponents{ scene_ }; }
+SceneParticleEffectComponents SceneComponents::ParticleEffects() const noexcept {
+    return SceneParticleEffectComponents{scene_};
+}
 SceneLensEchoComponents SceneComponents::LensEchoes() const noexcept { return SceneLensEchoComponents{ scene_ }; }
 
 SceneAudioSourceComponents SceneComponents::AudioSources() const noexcept {

@@ -19,6 +19,7 @@
 #include "scene/components/SceneFacingPanelComponentStore.hpp"
 #include "scene/components/SceneSpaceStrokeComponentStore.hpp"
 #include "scene/components/SceneHistoryRibbonComponentStore.hpp"
+#include "scene/components/SceneParticleEffectComponentStore.hpp"
 #include "scene/components/SceneLensEchoComponentStore.hpp"
 #include "scene/components/SceneAudioListenerComponentStore.hpp"
 #include "scene/components/SceneAudioSourceComponentStore.hpp"
@@ -113,6 +114,8 @@ public:
     [[nodiscard]] SceneSpaceStrokeComponentStore& SpaceStrokes() noexcept;
     [[nodiscard]] const SceneHistoryRibbonComponentStore& HistoryRibbons() const noexcept;
     [[nodiscard]] SceneHistoryRibbonComponentStore& HistoryRibbons() noexcept;
+    [[nodiscard]] const SceneParticleEffectComponentStore& ParticleEffects() const noexcept;
+    [[nodiscard]] SceneParticleEffectComponentStore& ParticleEffects() noexcept;
     [[nodiscard]] const SceneLensEchoComponentStore& LensEchoes() const noexcept;
     [[nodiscard]] SceneLensEchoComponentStore& LensEchoes() noexcept;
     [[nodiscard]] const SceneAudioSourceComponentStore& AudioSources() const noexcept;
@@ -161,6 +164,7 @@ private:
     SceneFacingPanelComponentStore facingPanels_;
     SceneSpaceStrokeComponentStore spaceStrokes_;
     SceneHistoryRibbonComponentStore historyRibbons_;
+    SceneParticleEffectComponentStore particleEffects_;
     SceneLensEchoComponentStore lensEchoes_;
     SceneAudioSourceComponentStore audioSources_;
     SceneAudioListenerComponentStore audioListeners_;

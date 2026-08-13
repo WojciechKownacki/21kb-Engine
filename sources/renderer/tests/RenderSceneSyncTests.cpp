@@ -2,11 +2,13 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/ParticleEffectAsset.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
+#include "engine/scene/ParticleEffectAssetMigration.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -2592,10 +2594,82 @@ void RunSyncFallsBackToResolveForDirtyTransformTest() {
 
 // LIB-143: proves SceneParticleRenderSynchronizer actually produces real, GPU-visible
 // MeshRenderProxy entries for live particles (mesh/material/shadow flags correct) and
-// correctly removes stale proxy slots both when particles die naturally (count shrinks) and
-// when the whole instance is released (owner destroyed) - the exact two cleanup paths the
+// correctly removes stale proxy slots both when the backend reports a smaller live set and
+// when the whole instance is released - the exact two cleanup paths the
 // class's own doc comment calls out as necessary because synthetic particle proxy ids are not
 // real ECS entities.
+class ParticleRenderTestBackend final : public kb::particles::IParticleSimulationBackend {
+public:
+    [[nodiscard]] kb::particles::ParticleRuntimeResult Create(kb::scene::Scene&, std::uint64_t effectAssetId, kb::scene::SceneEntity owner) override {
+        if (!owner.IsValid()) return { .status = kb::particles::ParticleRuntimeStatus::InvalidOwner };
+        alive_ = true;
+        effectAssetId_ = effectAssetId;
+        return { .status = kb::particles::ParticleRuntimeStatus::Success, .instanceId = 1U };
+    }
+    [[nodiscard]] kb::particles::ParticleRuntimeResult Release(kb::scene::Scene&, std::uint64_t id) noexcept override {
+        if (!alive_ || id != 1U) return Invalid();
+        alive_ = false;
+        states_.clear();
+        return Success();
+    }
+    [[nodiscard]] kb::particles::ParticleRuntimeResult Play(kb::scene::Scene&, std::uint64_t id) noexcept override {
+        if (!alive_ || id != 1U) return Invalid();
+        playing_ = true;
+        return Success();
+    }
+    [[nodiscard]] kb::particles::ParticleRuntimeResult Pause(kb::scene::Scene&, std::uint64_t id) noexcept override {
+        if (!alive_ || id != 1U) return Invalid();
+        playing_ = false;
+        return Success();
+    }
+    [[nodiscard]] kb::particles::ParticleRuntimeResult Stop(kb::scene::Scene&, std::uint64_t id) noexcept override {
+        if (!alive_ || id != 1U) return Invalid();
+        playing_ = false;
+        return Success();
+    }
+    [[nodiscard]] kb::particles::ParticleRuntimeResult Restart(kb::scene::Scene&, std::uint64_t id) noexcept override {
+        if (!alive_ || id != 1U) return Invalid();
+        playing_ = true;
+        states_.clear();
+        return Success();
+    }
+    [[nodiscard]] kb::particles::ParticleRuntimeResult SetSeed(kb::scene::Scene&, std::uint64_t id, std::uint64_t) noexcept override { return alive_ && id == 1U ? Success() : Invalid(); }
+    [[nodiscard]] kb::particles::ParticleRuntimeResult SetParameterScalar(kb::scene::Scene&, std::uint64_t id, std::string_view, float) noexcept override { return alive_ && id == 1U ? Success() : Invalid(); }
+    [[nodiscard]] kb::particles::ParticleRuntimeResult ClearParameter(kb::scene::Scene&, std::uint64_t id, std::string_view) noexcept override { return alive_ && id == 1U ? Success() : Invalid(); }
+    [[nodiscard]] kb::particles::ParticleRuntimeResult Emit(kb::scene::Scene&, std::uint64_t id, std::uint32_t count) override {
+        if (!alive_ || id != 1U) return Invalid();
+        for (std::uint32_t index = 0U; index < count; ++index) {
+            states_.push_back({ .position = { static_cast<float>(index + 1U), 0.0F, 0.0F }, .lifetime = 1.0F });
+        }
+        return Success();
+    }
+    [[nodiscard]] kb::particles::ParticleRuntimeQueryResult Query(const kb::scene::Scene&, std::uint64_t id) const noexcept override {
+        if (!alive_ || id != 1U) return { .status = kb::particles::ParticleRuntimeStatus::InvalidInstance };
+        return { .status = kb::particles::ParticleRuntimeStatus::Success, .state = playing_, .assetId = effectAssetId_,
+            .materialAssetId = 535353U, .liveParticleCount = static_cast<std::uint32_t>(states_.size()) };
+    }
+    [[nodiscard]] std::size_t CopyLiveInstanceIds(const kb::scene::Scene&, std::span<std::uint64_t> output) const noexcept override {
+        if (!alive_) return 0U;
+        if (!output.empty()) output[0] = 1U;
+        return 1U;
+    }
+    [[nodiscard]] std::size_t CopyLiveParticleStates(const kb::scene::Scene&, std::uint64_t id, std::span<kb::particles::ParticleRuntimeState> output) const noexcept override {
+        if (!alive_ || id != 1U) return 0U;
+        const std::size_t copied = std::min(output.size(), states_.size());
+        std::copy_n(states_.begin(), copied, output.begin());
+        return states_.size();
+    }
+    void SetParticleCount(std::size_t count) { states_.resize(count); }
+
+private:
+    [[nodiscard]] static kb::particles::ParticleRuntimeResult Success() noexcept { return { .status = kb::particles::ParticleRuntimeStatus::Success, .instanceId = 1U }; }
+    [[nodiscard]] static kb::particles::ParticleRuntimeResult Invalid() noexcept { return { .status = kb::particles::ParticleRuntimeStatus::InvalidInstance, .instanceId = 1U }; }
+    std::vector<kb::particles::ParticleRuntimeState> states_;
+    std::uint64_t effectAssetId_ = 0U;
+    bool alive_ = false;
+    bool playing_ = false;
+};
+
 void RunSceneParticleRenderSynchronizerTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_particle_sync_lib143";
     std::error_code resetError;
@@ -2603,7 +2677,7 @@ void RunSceneParticleRenderSynchronizerTest() {
     std::filesystem::create_directories(root / "Assets" / "Fx", resetError);
     Require(!resetError, "LIB-143 particle render sync test project root could not be prepared");
 
-    kb::scene::ParticleEffectAsset effect{};
+    kb::scene::LegacyParticleEffectAsset effect{};
     effect.materialReference = kb::assets::ToString(kb::assets::AssetId{ 535353U });
     effect.looping = true;
     effect.emissionRatePerSecond = 1000.0F;
@@ -2614,10 +2688,13 @@ void RunSceneParticleRenderSynchronizerTest() {
     effect.spreadDegrees = 0.0F;
     effect.gravityScale = 0.0F;
     effect.maxParticles = 4U;
+    const kb::scene::ParticleEffectAsset versionedEffect = kb::scene::ParticleEffectAssetMigration::FromLegacy(effect);
     const std::filesystem::path effectPath = root / "Assets" / "Fx" / "Sync.kbvfx";
-    Require(kb::scene::ParticleEffectAssetIO::Save(effectPath, effect), "LIB-143 particle render sync test effect asset must write to disk");
+    Require(kb::scene::ParticleEffectAssetIO::Save(effectPath, versionedEffect), "LIB-143 particle render sync test effect asset must write to disk");
 
     kb::scene::Scene scene;
+    ParticleRenderTestBackend backend;
+    Require(kb::particles::ParticlePlayback::RegisterBackend(scene, backend).Succeeded(), "particle render test backend registration failed");
     Require(scene.Assets().MountProject(root), "LIB-143 particle render sync test project mount failed");
     Require(scene.Assets().Discover() == 1U, "LIB-143 particle render sync test did not discover exactly the effect asset");
     const kb::assets::AssetMetadata* effectMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Fx/Sync.kbvfx");
@@ -2646,8 +2723,7 @@ void RunSceneParticleRenderSynchronizerTest() {
     const std::uint64_t instance = scene.Particles().Create(effectAssetId, owner);
     Require(instance != 0U, "LIB-143 particle render sync test instance creation failed");
     Require(scene.Particles().Play(instance), "LIB-143 particle render sync test Play failed");
-    scene.Particles().Advance(0.01F);
-    scene.Particles().Advance(0.01F);
+    Require(scene.Particles().Emit(instance, 4U), "LIB-143 particle render sync test Emit failed");
     const std::uint32_t liveAfterSpawn = scene.Particles().LiveParticleCount(instance);
     Require(liveAfterSpawn > 0U && liveAfterSpawn <= 4U, "LIB-143 particle render sync test did not spawn any particles to sync");
 
@@ -2673,6 +2749,8 @@ void RunSceneParticleRenderSynchronizerTest() {
     // A second scene starts its instance ids at 1 too. Synchronizing it through the same
     // renderer-owned bridge must not overwrite scene A's stale-slot history.
     kb::scene::Scene secondScene;
+    ParticleRenderTestBackend secondBackend;
+    Require(kb::particles::ParticlePlayback::RegisterBackend(secondScene, secondBackend).Succeeded(), "second particle render test backend registration failed");
     Require(secondScene.Assets().MountProject(root), "LIB-143 second-scene project mount failed");
     Require(secondScene.Assets().Discover() == 1U, "LIB-143 second-scene discovery failed");
     Require(secondScene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
@@ -2693,31 +2771,29 @@ void RunSceneParticleRenderSynchronizerTest() {
     synchronizer.Sync(secondScene, secondRenderScene, 0U);
     Require(secondRenderScene.MeshProxyCount() == 1U, "LIB-143 second scene did not synchronize independently");
 
-    // Stop first (halts new emission only, per SceneParticleSystems::Stop's own contract) -
-    // otherwise emissionRatePerSecond=1000 would keep replacing dying particles with new
-    // ones and LiveParticleCount would never reach 0. All particles' lifetime is 0.05s, so
-    // advancing well past that kills the already-live batch (count shrinks to 0 while the
-    // instance itself stays alive), proving the "currentCount < previousCount" stale-slot
-    // cleanup path.
+    // The test backend reports a smaller live set while the instance remains valid, proving
+    // the "currentCount < previousCount" stale-slot cleanup path without a production
+    // simulation implementation in stage 2.
     Require(scene.Particles().Stop(instance), "LIB-143 particle render sync test Stop failed");
-    scene.Particles().Advance(0.2F);
+    backend.SetParticleCount(0U);
     Require(scene.Particles().LiveParticleCount(instance) == 0U, "LIB-143 particle render sync test particles did not die as expected");
     synchronizer.Sync(scene, renderScene, 0U);
     Require(renderScene.MeshProxyCount() == 0U, "SceneParticleRenderSynchronizer must remove stale proxy slots once particles die");
 
-    // Re-spawn, sync once so proxies exist again, then release the whole instance via owner
-    // destruction - proving the OTHER cleanup path (an instance disappearing between frames
-    // entirely, not just shrinking).
+    // Re-spawn, sync once so proxies exist again, then release the whole instance, proving
+    // the other cleanup path (an instance disappearing between frames entirely).
     Require(scene.Particles().Emit(instance, 2U), "LIB-143 particle render sync test re-emit failed");
     Require(scene.Particles().LiveParticleCount(instance) == 2U, "LIB-143 particle render sync test re-emit did not spawn the requested count");
     synchronizer.Sync(scene, renderScene, 0U);
     Require(renderScene.MeshProxyCount() == 2U, "LIB-143 particle render sync test re-emitted particles were not synced");
 
     scene.Entities().Destroy(owner);
-    scene.Particles().Advance(0.01F);
-    Require(!scene.Particles().Exists(instance), "LIB-143 particle render sync test instance did not auto-release with its owner");
+    Require(scene.Particles().Release(instance), "LIB-143 particle render sync test instance release failed");
+    Require(!scene.Particles().Exists(instance), "LIB-143 particle render sync test instance survived release");
     synchronizer.Sync(scene, renderScene, 0U);
     Require(renderScene.MeshProxyCount() == 0U, "SceneParticleRenderSynchronizer must remove all proxy slots for an instance released since last frame");
+    Require(kb::particles::ParticlePlayback::UnregisterBackend(scene, backend).Succeeded(), "particle render test backend unregister failed");
+    Require(kb::particles::ParticlePlayback::UnregisterBackend(secondScene, secondBackend).Succeeded(), "second particle render test backend unregister failed");
 }
 
 // LIB-144: SceneRenderVisibilityPublisher's frame construction against a hand-built

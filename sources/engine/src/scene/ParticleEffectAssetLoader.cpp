@@ -3,6 +3,7 @@
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 
 #include <memory>
+#include <sstream>
 #include <utility>
 
 namespace kb::scene {
@@ -16,18 +17,43 @@ std::type_index ParticleEffectAssetLoader::PayloadType() const noexcept {
 }
 
 std::vector<std::string> ParticleEffectAssetLoader::Extensions() const {
-    return { kParticleEffectAssetExtension };
+    return {kParticleEffectAssetExtension};
 }
 
 kb::assets::AssetLoadResult ParticleEffectAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    std::optional<ParticleEffectAsset> asset = ParticleEffectAssetIO::Load(request.resolvedPath);
-    if (!asset.has_value()) {
-        return kb::assets::AssetLoadResult{ .asset = {}, .error = "Particle effect asset could not be loaded or parsed." };
+    ParticleEffectLoadResult result = ParticleEffectAssetIO::LoadDetailed(request.resolvedPath);
+    if (!result.Succeeded()) {
+        std::string error;
+        for (const ParticleEffectDiagnostic& diagnostic : result.diagnostics) {
+            if (!error.empty())
+                error.push_back('\n');
+            error += FormatParticleEffectDiagnostic(diagnostic);
+        }
+        return kb::assets::AssetLoadResult{.asset = {}, .error = std::move(error)};
     }
-    return kb::assets::AssetLoadResult{
-        .asset = std::make_shared<ParticleEffectAsset>(std::move(*asset)),
-        .error = {},
-    };
+    return kb::assets::AssetLoadResult{.asset = std::make_shared<ParticleEffectAsset>(std::move(*result.asset))};
+}
+
+std::vector<kb::assets::AssetId>
+ParticleEffectAssetLoader::DiscoverDependencies(const kb::assets::AssetMetadata& metadata,
+                                                const kb::assets::AssetRegistry& registry) const {
+    return ParticleEffectAssetValidator::ValidateDependencies(metadata, registry).dependencies;
+}
+
+std::optional<std::string>
+ParticleEffectAssetLoader::ValidateDependencies(const kb::assets::AssetMetadata& metadata,
+                                                const kb::assets::AssetRegistry& registry) const {
+    const ParticleEffectDependencyResult result =
+        ParticleEffectAssetValidator::ValidateDependencies(metadata, registry);
+    if (result.diagnostics.empty())
+        return std::nullopt;
+    std::ostringstream message;
+    for (std::size_t index = 0U; index < result.diagnostics.size(); ++index) {
+        if (index != 0U)
+            message << '\n';
+        message << FormatParticleEffectDiagnostic(result.diagnostics[index]);
+    }
+    return message.str();
 }
 
 } // namespace kb::scene

@@ -51,6 +51,7 @@ bool ScenePrefabValidator::IsValid(const ScenePrefab& prefab) noexcept {
         if (node.components.facingPanel.has_value() && !IsFacingPanelComponentPersistable(*node.components.facingPanel)) return false;
         if (node.components.spaceStroke.has_value() && !IsSpaceStrokeComponentPersistable(*node.components.spaceStroke)) return false;
         if (node.components.historyRibbon.has_value() && !IsHistoryRibbonComponentPersistable(*node.components.historyRibbon)) return false;
+        if (node.components.particleEffect.has_value() && !IsParticleEffectComponentPersistable(*node.components.particleEffect)) return false;
         if (node.components.deformedGeometry.has_value()) {
             const DrawD3DeformedGeometryComponent& geometry = *node.components.deformedGeometry;
             if (geometry.poseSource.IsValid() || !IsDrawD3DeformedGeometryComponentPersistable(geometry)) return false;

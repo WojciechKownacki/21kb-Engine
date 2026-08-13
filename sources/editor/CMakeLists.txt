@@ -1007,6 +1007,16 @@ if(MSVC)
     set_source_files_properties(src/scene/EditorSceneContext.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
 endif()
 
+if(TARGET kb_21kb_particle_plugin)
+    add_dependencies(kb_editor kb_21kb_particle_plugin)
+    if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
+        set(KB_21KB_PARTICLE_EDITOR_PLUGIN_PATH "$<TARGET_FILE:kb_21kb_particle_plugin>")
+    else()
+        set(KB_21KB_PARTICLE_EDITOR_PLUGIN_PATH "")
+    endif()
+    target_compile_definitions(kb_editor PRIVATE "KB_21KB_PARTICLE_PLUGIN_PATH=\"${KB_21KB_PARTICLE_EDITOR_PLUGIN_PATH}\"")
+endif()
+
 kb_target_copy_bgfx_runtime_shaders(kb_editor)
 kb_apply_quality_gates(kb_editor)
 

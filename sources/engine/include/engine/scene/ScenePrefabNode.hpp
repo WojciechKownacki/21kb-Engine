@@ -30,6 +30,7 @@
 #include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
 #include "engine/scene/HistoryRibbonComponent.hpp"
+#include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/ScenePrefabOverrides.hpp"
 #include "engine/scene/SkeletonBindingComponent.hpp"
@@ -115,6 +116,7 @@ struct ScenePrefabNodeComponents {
     std::optional<FacingPanelComponent> facingPanel;
     std::optional<SpaceStrokeComponent> spaceStroke;
     std::optional<HistoryRibbonComponent> historyRibbon;
+    std::optional<ParticleEffectComponent> particleEffect;
     std::optional<ScenePrefabLensEchoComponent> lensEcho;
     std::optional<BehaviourComponent> behaviour;
     std::optional<AudioSourceComponent> audioSource;

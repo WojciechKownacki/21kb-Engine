@@ -4,6 +4,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/math/EngineMath.hpp"
 #include "engine/scene/ParticleEffectAsset.hpp"
+#include "engine/scene/ParticleEffectAssetMigration.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneParticleSystems.hpp"
@@ -81,13 +82,15 @@ void SceneParticleRenderSynchronizer::Sync(const kb::scene::Scene& scene, Render
             scene.Assets().Manager().Load<kb::scene::ParticleEffectAsset>(kb::assets::AssetId{ particles.EffectAsset(instanceId) });
 
         if (effect.IsLoaded() && materialAssetId != 0U) {
+            const kb::scene::ParticleEffectLegacyView view = kb::scene::BuildParticleEffectLegacyView(*effect);
             for (std::uint32_t slot = 0U; slot < currentCount; ++slot) {
                 const kb::scene::ParticleState& particle = liveParticles[slot];
                 const float normalizedAge = particle.lifetime > 0.0F
                     ? kb::math::Clamp(particle.age / particle.lifetime, 0.0F, 1.0F)
                     : 0.0F;
-                const float size = kb::math::Evaluate(effect->sizeOverLifetime, normalizedAge);
-                const kb::math::Color color = kb::math::Evaluate(effect->colorOverLifetime, normalizedAge);
+                const float size = view.sizeOverLifetime == nullptr ? 1.0F : kb::math::Evaluate(*view.sizeOverLifetime, normalizedAge);
+                const kb::math::Color color = view.colorOverLifetime == nullptr ? kb::math::Color{ 1.0F, 1.0F, 1.0F, 1.0F }
+                                                                                : kb::math::Evaluate(*view.colorOverLifetime, normalizedAge);
 
                 const kb::math::Vec3 towardCamera = cameraPosition - particle.position;
                 const kb::math::Quat billboardRotation = kb::math::LookRotation(towardCamera, cameraUp);

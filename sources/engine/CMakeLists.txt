@@ -255,6 +255,9 @@ add_library(kb_engine STATIC
     include/engine/scene/ParticleEffectAsset.hpp
     include/engine/scene/ParticleEffectAssetIO.hpp
     include/engine/scene/ParticleEffectAssetLoader.hpp
+    include/engine/scene/ParticleEffectAssetMigration.hpp
+    include/engine/scene/ParticleEffectAssetSchema.hpp
+    include/engine/scene/ParticleEffectAssetValidation.hpp
     include/engine/scene/SceneParticleSystems.hpp
     include/engine/scene/ScenePrefabs.hpp
     include/engine/input/InputHaptics.hpp
@@ -313,6 +316,12 @@ add_library(kb_engine STATIC
         include/engine/scene/SceneSpaceStrokeComponents.hpp
         include/engine/scene/HistoryRibbonComponent.hpp
         include/engine/scene/SceneHistoryRibbonComponents.hpp
+        include/engine/scene/ParticleEffectComponent.hpp
+        include/engine/particles/ParticleRuntimeResult.hpp
+        include/engine/particles/IParticleSimulationBackend.hpp
+        include/engine/particles/ParticlePlayback.hpp
+        include/engine/project/ParticleProjectPolicy.hpp
+        include/engine/scene/SceneParticleEffectComponents.hpp
         include/engine/scene/LensEchoComponent.hpp
         include/engine/scene/SceneLensEchoComponents.hpp
     include/engine/scene/SceneVisibilityComponents.hpp
@@ -631,7 +640,12 @@ add_library(kb_engine STATIC
     src/localization/LocalizationCatalogAssetLoader.cpp
     src/scene/ParticleEffectAssetIO.cpp
     src/scene/ParticleEffectAssetLoader.cpp
-    src/scene/SceneParticleSystemService.cpp
+    src/scene/ParticleEffectAssetMigration.cpp
+    src/scene/ParticleEffectAssetSchema.cpp
+    src/scene/ParticleEffectAssetValidation.cpp
+    src/scene/ParticleEffectDependencyValidation.cpp
+    src/particles/ParticlePlayback.cpp
+    src/project/ParticleProjectPolicy.cpp
     src/scene/SceneModules.cpp
     src/scene/SceneTagCatalog.cpp
     src/scene/SceneObject.cpp
@@ -738,6 +752,8 @@ add_library(kb_engine STATIC
         src/scene/components/SceneSpaceStrokeStorage.cpp
         src/scene/components/SceneHistoryRibbonApi.cpp
         src/scene/components/SceneHistoryRibbonStorage.cpp
+        src/scene/components/SceneParticleEffectApi.cpp
+        src/scene/components/SceneParticleEffectStorage.cpp
         src/scene/components/SceneLensEchoApi.cpp
         src/scene/components/SceneLensEchoStorage.cpp
       src/scene/SceneContentInstanceService.cpp
@@ -1093,6 +1109,7 @@ add_library(kb_engine STATIC
         src/private/scene/components/SceneFacingPanelComponentStore.hpp
         src/private/scene/components/SceneSpaceStrokeComponentStore.hpp
         src/private/scene/components/SceneHistoryRibbonComponentStore.hpp
+        src/private/scene/components/SceneParticleEffectComponentStore.hpp
         src/private/scene/components/SceneLensEchoComponentStore.hpp
       src/private/scene/SceneContentInstanceService.hpp
       src/private/scene/systems/ContentInstanceSceneSystem.hpp
@@ -1128,7 +1145,6 @@ add_library(kb_engine STATIC
     src/private/scene/SceneMaterialInstanceService.hpp
     src/private/scene/SceneAnimatorService.hpp
     src/private/scene/SceneUIDocumentService.hpp
-    src/private/scene/SceneParticleSystemService.hpp
     src/private/scene/SceneRuntimeService.hpp
     src/private/save/SaveGameBinaryIO.hpp
     src/private/save/SaveGameCodec.hpp
@@ -1462,6 +1478,33 @@ endif()
 kb_apply_quality_gates(kb_engine)
 
 if(BUILD_TESTING)
+    add_executable(kb_21kb_particle_asset_tests
+        tests/ParticleEffectAssetTests.cpp
+    )
+    target_link_libraries(kb_21kb_particle_asset_tests PRIVATE kb_engine)
+    target_compile_definitions(kb_21kb_particle_asset_tests
+        PRIVATE
+            "KB_PARTICLE_ASSET_TEST_SOURCE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests\""
+            "KB_21KB_PARTICLE_RECIPE_DIR=\"${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle/content/Recipes\""
+    )
+    add_test(NAME kb_21kb_particle_asset_tests COMMAND $<TARGET_FILE:kb_21kb_particle_asset_tests>)
+    set_tests_properties(kb_21kb_particle_asset_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    kb_apply_quality_gates(kb_21kb_particle_asset_tests)
+
+    add_executable(kb_21kb_particle_stage2_tests
+        tests/ParticleStage2Tests.cpp
+        ${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle/ParticleModule.cpp
+        ${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle/ParticleSceneSystem.cpp
+    )
+    target_include_directories(kb_21kb_particle_stage2_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/private
+        ${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle
+    )
+    target_link_libraries(kb_21kb_particle_stage2_tests PRIVATE kb_engine)
+    add_test(NAME kb_21kb_particle_stage2_tests COMMAND $<TARGET_FILE:kb_21kb_particle_stage2_tests>)
+    set_tests_properties(kb_21kb_particle_stage2_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    kb_apply_quality_gates(kb_21kb_particle_stage2_tests)
+
     add_library(kb_native_script_test_plugin SHARED
         tests/NativeScriptTestPlugin.cpp
     )

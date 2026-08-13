@@ -114,6 +114,15 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseRequiredBool(const ScenePrefabAssetFieldMap& fields, std::string_view key, bool& output) {
+    const auto iterator = fields.find(std::string{ key });
+    if (iterator == fields.end()) return false;
+    int value = 0;
+    if (!ScenePrefabAssetFieldParser::ParseNumber(iterator->second, value) || (value != 0 && value != 1)) return false;
+    output = value != 0;
+    return true;
+}
+
 [[nodiscard]] bool ParseRegionShape(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool hasRegionShape = false;
     if (!ParseOptionalComponentFlag(fields, "regionShape", hasRegionShape)) return false;
@@ -394,6 +403,29 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseParticleEffect(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
+    bool present = false;
+    if (!ParseOptionalComponentFlag(fields, "particleEffect", present)) return false;
+    if (!present) return true;
+
+    ParticleEffectComponent particleEffect{};
+    std::uint32_t ownerDeathPolicy = 0U;
+    if (!ParseField(fields, "particleEffect.effectAssetId", particleEffect.effectAssetId) ||
+        !ParseField(fields, "particleEffect.deterministicSeed", particleEffect.deterministicSeed) ||
+        !ParseField(fields, "particleEffect.rateMultiplier", particleEffect.rateMultiplier) ||
+        !ParseField(fields, "particleEffect.maxParticlesOverride", particleEffect.maxParticlesOverride) ||
+        !ParseField(fields, "particleEffect.ownerDeathPolicy", ownerDeathPolicy) ||
+        !ParseRequiredBool(fields, "particleEffect.enabled", particleEffect.enabled) ||
+        !ParseRequiredBool(fields, "particleEffect.autoPlay", particleEffect.autoPlay) ||
+        !ParseRequiredBool(fields, "particleEffect.followTransform", particleEffect.followTransform) ||
+        !ParseRequiredBool(fields, "particleEffect.restartOnActivate", particleEffect.restartOnActivate) ||
+        ownerDeathPolicy > static_cast<std::uint32_t>(ParticleOwnerDeathPolicy::Clear)) return false;
+    particleEffect.ownerDeathPolicy = static_cast<ParticleOwnerDeathPolicy>(ownerDeathPolicy);
+    if (!IsParticleEffectComponentPersistable(particleEffect)) return false;
+    components.particleEffect = particleEffect;
+    return true;
+}
+
 [[nodiscard]] bool ParseLensEcho(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
     bool present = false;
     if (!ParseOptionalComponentFlag(fields, "lensEcho", present)) return false;
@@ -655,6 +687,7 @@ bool ScenePrefabAssetComponentParser::Parse(const ScenePrefabAssetFieldMap& fiel
         && ParseFacingPanel(fields, components)
         && ParseSpaceStroke(fields, components)
         && ParseHistoryRibbon(fields, components)
+        && ParseParticleEffect(fields, components)
         && ParseLensEcho(fields, components)
         && ParseCharacterController(fields, components)
         && ParseJoint(fields, components)

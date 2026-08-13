@@ -955,6 +955,9 @@ public:
     [[nodiscard]] bool IsProjectPluginEnabled(std::string_view pluginId) const noexcept;
     [[nodiscard]] std::string ProjectPluginBinaryPath(std::string_view pluginId) const;
     [[nodiscard]] bool ToggleProjectPlugin(std::size_t catalogIndex);
+    [[nodiscard]] bool HasPendingParticleProviderMigration() const noexcept;
+    [[nodiscard]] bool AcceptParticleProviderMigration();
+    void CancelParticleProviderMigration() noexcept;
 
     [[nodiscard]] std::optional<kb::input::InputMappingContextAsset> ReadInputMappingContextAsset(kb::assets::AssetId id) const;
     [[nodiscard]] bool AddInputMapping(kb::assets::AssetId id);
@@ -1193,6 +1196,7 @@ private:
     bool materialPreviewNodePreviewEnabled_ = false;
     EditorProjectSettingsState projectSettings_;
     EditorPluginsState plugins_;
+    bool particleProviderMigrationResolved_ = false;
     EditorScriptEditorState scriptEditor_;
     bool physicsGizmosVisible_ = true;
     // Inspector and Material Editor can display different assets in the same paint batch. Each queued

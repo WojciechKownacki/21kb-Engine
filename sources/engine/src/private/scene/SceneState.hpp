@@ -9,6 +9,7 @@
 #include "engine/ecs/World.hpp"
 #include "engine/input/InputLocalUser.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/particles/ParticleRuntimeResult.hpp"
 #include "engine/localization/LocalizationCatalog.hpp"
 #include "engine/scene/BehaviourVariableOverride.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
@@ -21,6 +22,7 @@
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneParticleSystems.hpp"
+#include "engine/scene/ParticleEffectAssetSchema.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -64,6 +66,12 @@ namespace kb::input {
 class IInputHapticsBackend;
 
 } // namespace kb::input
+
+namespace kb::particles {
+
+class IParticleSimulationBackend;
+
+} // namespace kb::particles
 
 namespace kb::scene {
 
@@ -755,47 +763,12 @@ public:
     // argument.
     bool physicsDebugDrawEnabled = false;
     PhysicsDebugQueryTrace physicsDebugQueryTrace{};
-    // LIB-143: one live particle system instance started through
-    // kb::scene::SceneParticleSystems::Create. `id` is assigned from
-    // nextParticleSystemInstanceId, never reused within a scene's lifetime (same convention
-    // as nextTimerId/nextMaterialInstanceId above). `owner` follows the exact same
-    // auto-release-on-death/deactivation convention SceneTimerService::OwnerGone already
-    // establishes (see SceneParticleSystemService.cpp's own copy of that check).
-    // `resolvedMaterialAssetId` is resolved once at Create() time (see
-    // ParticleEffectAsset.hpp's own doc comment for why); everything else needed for
-    // simulation is re-read fresh from the effect asset every Advance() call (keeps hot
-    // reload of the .kbvfx file live, mirrors RuntimeMeshResourceEnsurer's own
-    // every-frame-Load() convention), with any per-instance `overrides` applied on top.
-    struct ParticleSystemParameterOverrides {
-        std::optional<float> emissionRatePerSecond;
-        std::optional<float> startSpeedMin;
-        std::optional<float> startSpeedMax;
-        std::optional<float> startLifetimeMin;
-        std::optional<float> startLifetimeMax;
-        std::optional<float> spreadDegrees;
-        std::optional<float> gravityScale;
-    };
-    struct ParticleSystemInstanceRecord {
-        std::uint64_t id = 0U;
-        std::uint64_t effectAssetId = 0U;
-        std::uint64_t resolvedMaterialAssetId = 0U;
-        SceneEntity owner{};
-        bool playing = false;
-        bool completionArmed = false;
-        kb::math::RandomStream rng{};
-        // Fractional particle carried between Advance() calls so a non-integer
-        // emissionRatePerSecond*deltaSeconds still emits at the correct long-run average
-        // rate instead of silently truncating every frame.
-        float emissionAccumulator = 0.0F;
-        // Seconds since Play() was last called - drives the non-looping `durationSeconds`
-        // auto-stop; reset to 0 every Play() call.
-        float elapsedSeconds = 0.0F;
-        ParticleSystemParameterOverrides overrides;
-        std::vector<ParticleState> particles;
-    };
-    std::vector<ParticleSystemInstanceRecord> particleSystems;
-    std::vector<ParticleSystemFinishedEvent> pendingParticleSystemFinishedEvents;
-    std::uint64_t nextParticleSystemInstanceId = 1U;
+    kb::particles::IParticleSimulationBackend* particleSimulationBackend = nullptr;
+#if !defined(NDEBUG)
+    const std::thread::id particlePlaybackOwnerThread = std::this_thread::get_id();
+#endif
+    std::vector<kb::particles::PendingParticleRuntimeEvent> pendingParticleRuntimeEvents;
+    mutable std::vector<kb::particles::ParticleRuntimeState> particleRuntimeStateScratch;
     // LIB-144: the renderer-published per-entity visibility/bounds feedback frame
     // (Renderer.IsVisible/GetBounds/TestFrustum's backing state) - written by
     // kb::render::Renderer at every SubmitScene through SceneRenderFeedback::Publish

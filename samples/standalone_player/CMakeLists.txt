@@ -15,6 +15,16 @@ target_link_libraries(kb_standalone_player
         gdi32
 )
 
+add_dependencies(kb_standalone_player kb_21kb_particle_plugin)
+if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
+    add_custom_command(TARGET kb_standalone_player POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:kb_21kb_particle_plugin>
+            $<TARGET_FILE_DIR:kb_standalone_player>
+        VERBATIM
+    )
+endif()
+
 set_target_properties(kb_standalone_player PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
