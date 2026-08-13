@@ -27,4 +27,17 @@ void ParticleSceneSystem::OnDestroy(kb::scene::SceneSystemContext& context) {
     registered_ = false;
 }
 
+void ParticleSceneSystem::OnFixedUpdate(kb::scene::SceneSystemContext& context) {
+    const kb::particles::ParticleRuntimeResult result = backend_.Step(context.GetScene(), context.DeltaSeconds());
+    if (!result.Succeeded()) {
+        throw std::logic_error("particle CPU backend rejected the authoritative fixed step");
+    }
+}
+
+kb::scene::SceneFixedUpdatePhase ParticleSceneSystem::FixedUpdatePhase() const noexcept {
+    return kb::scene::SceneFixedUpdatePhase::PostSimulation;
+}
+
+bool ParticleSceneSystem::RequiresFixedStep() const { return true; }
+
 } // namespace kb::particle_plugin

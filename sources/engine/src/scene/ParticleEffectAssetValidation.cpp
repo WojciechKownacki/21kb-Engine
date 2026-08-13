@@ -200,6 +200,12 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
             Add(result, ParticleEffectDiagnosticCode::LimitExceeded, base + ".moduleCount",
                 "module count exceeds the hard limit", emitter.emitterId);
         ValidateCurve(emitter.spawn.rateOverTime, base + ".spawn.rate", result, emitter.emitterId, 0U, true);
+        if (std::any_of(emitter.spawn.rateOverTime.keyframes.begin(), emitter.spawn.rateOverTime.keyframes.end(),
+                [](const kb::math::CurveKeyframe& key) {
+                    return key.value > kParticleEffectMaxContinuousRatePerSecond;
+                }))
+            Add(result, ParticleEffectDiagnosticCode::LimitExceeded, base + ".spawn.rate",
+                "continuous spawn rate exceeds the fixed-step spawn ceiling", emitter.emitterId);
         if (emitter.spawn.bursts.size() > kParticleEffectMaxBursts)
             Add(result, ParticleEffectDiagnosticCode::LimitExceeded, base + ".spawn.burstCount",
                 "burst count exceeds the hard limit", emitter.emitterId);
@@ -223,7 +229,8 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
             emitter.spawn.spreadDegrees < 0.0F || emitter.spawn.spreadDegrees > 180.0F ||
             !Finite(emitter.spawn.randomization) || emitter.spawn.randomization < 0.0F ||
             emitter.spawn.randomization > 1.0F || !Finite(emitter.spawn.prewarmSeconds) ||
-            emitter.spawn.prewarmSeconds < 0.0F)
+            emitter.spawn.prewarmSeconds < 0.0F ||
+            emitter.spawn.prewarmSeconds > kParticleEffectMaxPrewarmSeconds)
             Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".spawn",
                 "spawn values are outside the supported range", emitter.emitterId);
 
