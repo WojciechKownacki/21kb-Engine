@@ -10,9 +10,9 @@
 ## Current package
 
 - Stage: `3` — deterministic CPU fixed-step simulation and baseline modules.
-- Status: `accepted`; Stage 3 is pending.
-- Scope: Stage 2 delivered persistent scene/prefab component integration, typed backend API, provider attach/detach/reload, script ownership correction, and explicit project enablement/migration.
-- Next gate: deterministic CPU fixed-step simulation, dense runtime state, bounded queues, all baseline modules, and zero heap allocations after warmup.
+- Status: `in_progress`; checkpoint 3.1 is accepted.
+- Scope: Stage 3 builds deterministic CPU fixed-step simulation, dense runtime state, bounded queues, baseline modules, owner policies, and telemetry on top of the delivered provider ABI.
+- Next gate: fixed-step compiler/kernel, baseline module evaluation, spawn/event ordering, hashes, and zero heap allocations per fixed step after warmup.
 
 ## Accepted stages
 
@@ -52,6 +52,14 @@
 - The old engine-owned particle simulator was removed from `ScriptRuntimeSceneSystem`; particle completion events use the core-owned bounded queue and drain post-fixed before `Tick`.
 - The plugin DLL is staged for editor and standalone targets; the editor headless boundary test verifies the exact unavailable-backend diagnostic until Stage 3 supplies the real backend.
 
+### Stage 3.1 â€” CPU backend lifecycle and preallocated storage: `accepted`
+
+- Plugin-owned `CpuParticleBackend` registers only while its `ParticleSceneSystem` is attached and unregisters only its own backend during detach/reload.
+- Instances use generation-safe IDs over a dense 256-instance store; stale handles cannot address a reused slot.
+- Particle SoA capacity, command/event buffers, and per-instance scalar overrides derive from shared schema ceilings and are reserved by explicit `Warmup()`.
+- Real lifecycle, validation, query, and bounded-copy behavior are present before simulation; non-zero `Emit` explicitly returns `UnsupportedOutput` until the fixed-step kernel exists.
+- Focused tests prove limits, stale handles, backend ownership/reload, caller-span bounds, and zero global allocations after warmup for the lifecycle/query path.
+
 ## Accepted decisions and mappings
 
 - Plugin identifier: `Rendering.21kbParticle`.
@@ -59,7 +67,7 @@
 - Stable asset/type terminology: `ParticleEffect` and `.kbvfx`.
 - Existing flat asset model maps to `sources/engine/include/engine/scene/ParticleEffectAsset.hpp`.
 - Existing parser/writer maps to `sources/engine/src/scene/ParticleEffectAssetIO.cpp`.
-- Existing CPU simulation maps to `sources/engine/src/scene/SceneParticleSystemService.cpp`.
+- The pre-Stage-2 CPU simulation mapped to `sources/engine/src/scene/SceneParticleSystemService.cpp`; that legacy owner was removed and is retained only in repository history.
 - Existing render bridge maps to `sources/renderer/src/scene/SceneParticleRenderSynchronizer.cpp`.
 - Existing script and lifecycle characterization resides in `sources/engine/tests/ScriptRuntimeTests.cpp`; renderer characterization resides in `sources/renderer/tests/RenderSceneSyncTests.cpp`.
 
