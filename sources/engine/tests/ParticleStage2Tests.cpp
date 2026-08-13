@@ -241,11 +241,12 @@ void TestModuleMetadataAndLifecycle() {
     for (int cycle = 0; cycle < 100; ++cycle) {
         module.OnSceneAttach(scene);
         Require(scene.Runtime().SceneSystemCount() == baseline + 1U, "provider scene system was not attached exactly once");
+        Require(kb::particles::ParticlePlayback::HasBackend(scene), "provider scene system did not register its CPU backend");
         module.OnSceneAttach(scene);
         Require(scene.Runtime().SceneSystemCount() == baseline + 1U, "duplicate provider attach was not idempotent");
         module.OnSceneDetach(scene);
         Require(scene.Runtime().SceneSystemCount() == baseline, "provider scene system survived detach");
-        Require(!kb::particles::ParticlePlayback::HasBackend(scene), "stage 2 provider registered a simulation backend");
+        Require(!kb::particles::ParticlePlayback::HasBackend(scene), "provider CPU backend survived detach");
     }
 }
 
@@ -267,11 +268,12 @@ void TestDynamicModuleHostLifecycle() {
         Require(scene.ModuleDiagnostics().empty(), "produced provider module emitted load diagnostics");
         const std::size_t stableSystemCount = scene.Runtime().SceneSystemCount();
         Require(stableSystemCount >= 1U, "produced provider module did not attach its scene system");
+        Require(kb::particles::ParticlePlayback::HasBackend(scene), "produced provider module did not register its CPU backend");
         for (int cycle = 0; cycle < 100; ++cycle) {
             scene.ReloadModules();
             Require(scene.IsModuleActive("Rendering.21kbParticle"), "provider module did not reactivate after reload");
             Require(scene.Runtime().SceneSystemCount() == stableSystemCount, "provider reload leaked or lost a scene system");
-            Require(!kb::particles::ParticlePlayback::HasBackend(scene), "stage 2 dynamic provider registered a simulation backend");
+            Require(kb::particles::ParticlePlayback::HasBackend(scene), "provider reload lost its CPU backend");
             Require(kb::particles::ParticlePlayback::DrainEvents(scene).empty(), "provider reload left particle events queued");
         }
     };
