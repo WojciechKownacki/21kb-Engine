@@ -10,9 +10,9 @@
 ## Current package
 
 - Stage: `3` — deterministic CPU fixed-step simulation and baseline modules.
-- Status: `in_progress`; checkpoint 3.3A is accepted.
+- Status: `in_progress`; checkpoint 3.3B1 is accepted.
 - Scope: Stage 3 builds deterministic CPU fixed-step simulation, dense runtime state, bounded queues, baseline modules, owner policies, and telemetry on top of the delivered provider ABI.
-- Next gate: remaining baseline modules, owner policies, event ordering, reload behavior, and their deterministic coverage.
+- Next gate: collision and sub-emitter execution with bounded ordered events, followed by owner policies and reload behavior.
 
 ## Accepted stages
 
@@ -75,6 +75,12 @@
 - Gravity has one engine-owned default scene-gravity constant and mutually exclusive custom-acceleration or scene-scale channels. Legacy migration now maps its historical gravity scale exactly to the scene-scale channel.
 - The focused CPU backend suite independently passed after build: solid-angle statistics plus golden `10334376869005698480`, force ordering/enables, invalid payload rejection, legacy runtime mapping, 30/60/144 Hz module parity, prewarm parity, and allocation-free module stepping.
 
+### Stage 3.3B1 â€” CPU visual-over-life modules and module ABI guard: `accepted checkpoint`
+
+- `ColorOverLife`, `SizeOverLife`, and `AlphaOverLife` compile into fixed-size engine-schema arrays and execute in the shared fixed-step/prewarm kernel. Their output uses preallocated SoA channels and is copied into the core-owned runtime state as color and size; final alpha is gradient alpha multiplied by the alpha curve.
+- The state layout change is protected by the actually enforced engine-module ABI version. A deliberately old test DLL is rejected by the production host before its `create` entry point executes; the current `Rendering.21kbParticle` DLL still completes the 100-reload lifecycle test.
+- Focused tests cover exact curve/gradient values and golden `3957020943848305260`, disabled defaults, malformed payload rejection, visual 30/60/144 Hz and prewarm parity, allocation-free stepping, and explicit unsupported results for the remaining CollisionPlane and SubEmitter variants.
+
 ## Accepted decisions and mappings
 
 - Plugin identifier: `Rendering.21kbParticle`.
@@ -122,4 +128,4 @@
 - Stage 1A attempt 1 was rejected after independent review despite a green focused test; every listed defect was repaired and the second attempt was accepted.
 - No open stage 0 defect remains.
 - No open stage 1 defect remains.
-- Next gate: stage 3.3B adds ColorOverLife, SizeOverLife, AlphaOverLife, CollisionPlane, and SubEmitter execution with bounded ordered events; owner policies and reload remain separate Stage 3 checkpoints.
+- Next gate: stage 3.3B2 adds CollisionPlane and SubEmitter execution with bounded ordered events; owner policies and reload remain separate Stage 3 checkpoints.
