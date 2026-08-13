@@ -199,6 +199,12 @@ namespace {
         lhs.sampleIntervalSeconds == rhs.sampleIntervalSeconds && lhs.layer == rhs.layer &&
         lhs.castsShadow == rhs.castsShadow && lhs.receivesShadow == rhs.receivesShadow && lhs.enabled == rhs.enabled;
 }
+[[nodiscard]] bool Equals(const ParticleEffectComponent& lhs, const ParticleEffectComponent& rhs) noexcept {
+    return lhs.effectAssetId == rhs.effectAssetId && lhs.deterministicSeed == rhs.deterministicSeed &&
+        lhs.rateMultiplier == rhs.rateMultiplier && lhs.maxParticlesOverride == rhs.maxParticlesOverride &&
+        lhs.ownerDeathPolicy == rhs.ownerDeathPolicy && lhs.enabled == rhs.enabled && lhs.autoPlay == rhs.autoPlay &&
+        lhs.followTransform == rhs.followTransform && lhs.restartOnActivate == rhs.restartOnActivate;
+}
 [[nodiscard]] bool Equals(const SkeletonBindingComponent& lhs, const SkeletonBindingComponent& rhs) noexcept {
     return lhs.skeletonAssetId == rhs.skeletonAssetId &&
         lhs.skeletonCompatibilitySignature == rhs.skeletonCompatibilitySignature && lhs.enabled == rhs.enabled;
@@ -292,6 +298,7 @@ ScenePrefabNodeStateWriterContext::ScenePrefabNodeStateWriterContext(Scene& scen
     , facingPanels(scene.Components().FacingPanels())
     , spaceStrokes(scene.Components().SpaceStrokes())
     , historyRibbons(scene.Components().HistoryRibbons())
+    , particleEffects(scene.Components().ParticleEffects())
     , lensEchoes(scene.Components().LensEchoes())
     , behaviours(scene.Components().Behaviours())
     , audioSources(scene.Components().AudioSources())
@@ -378,6 +385,7 @@ void ScenePrefabNodeStateWriter::Write(ScenePrefabNodeStateWriterContext& contex
     WriteOptionalComponent(context.facingPanels, entity, node.components.facingPanel);
     WriteOptionalComponent(context.spaceStrokes, entity, node.components.spaceStroke);
     WriteOptionalComponent(context.historyRibbons, entity, node.components.historyRibbon);
+    WriteOptionalComponent(context.particleEffects, entity, node.components.particleEffect);
     // Echo source references are resolved after every prefab node exists.
     if (!node.components.lensEcho.has_value()) context.lensEchoes.Remove(entity);
     if (!componentMask.available || !componentMask.matches || node.components.behaviour.has_value()) {

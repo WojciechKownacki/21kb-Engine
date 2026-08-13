@@ -1191,6 +1191,10 @@ EditorSceneContext::EditorSceneContext()
     , materialGraphCookService_(std::make_unique<EditorMaterialGraphCookService>(EditorMaterialGraphCookConfig::Resolve(graphShaderCacheRoot_))) {
     if (projectBootstrap_.succeeded) {
         console_.Info("Project", projectBootstrap_.created ? "Created project descriptor." : "Loaded project descriptor.");
+        if (!projectBootstrap_.particlePolicy.IsRunnable()) {
+            console_.Warning("Project", projectBootstrap_.particlePolicy.diagnostic +
+                " Choose Add Rendering.21kbParticle or Cancel before running the project.");
+        }
     } else {
         console_.Error("Project", projectBootstrap_.error.empty() ? "Project descriptor bootstrap failed." : projectBootstrap_.error);
     }
@@ -9759,6 +9763,29 @@ bool EditorSceneContext::RequestOpenSkeletalMeshEditorAsset(kb::assets::AssetId 
     }
     console_.Info("Skeletal Mesh Editor", "Loading document: " + meshMetadata->virtualPath.generic_string());
     return true;
+}
+
+bool EditorSceneContext::HasPendingParticleProviderMigration() const noexcept {
+    return !particleProviderMigrationResolved_ && !projectBootstrap_.created &&
+        !projectBootstrap_.particlePolicy.IsRunnable();
+}
+
+bool EditorSceneContext::AcceptParticleProviderMigration() {
+    if (!HasPendingParticleProviderMigration()) return false;
+    if (!EditorProjectBootstrap::AcceptParticleProvider(projectFile_, project_)) {
+        console_.Error("Project", "Rendering.21kbParticle could not be added to the project descriptor.");
+        return false;
+    }
+    particleProviderMigrationResolved_ = true;
+    plugins_.MarkPendingReload();
+    console_.Info("Project", "Rendering.21kbParticle added. Reload the scene to activate it.");
+    return true;
+}
+
+void EditorSceneContext::CancelParticleProviderMigration() noexcept {
+    if (!HasPendingParticleProviderMigration()) return;
+    particleProviderMigrationResolved_ = true;
+    console_.Info("Project", "Rendering.21kbParticle migration canceled; the project descriptor was not changed.");
 }
 
 bool EditorSceneContext::RequestOpenSkeletalMeshEditorSkeletonAsset(kb::assets::AssetId skeletonId) {

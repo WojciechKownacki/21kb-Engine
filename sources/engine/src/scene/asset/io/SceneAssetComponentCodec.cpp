@@ -53,6 +53,7 @@ enum SceneNodeComponentBits : std::uint64_t {
       SkeletonBindingBit = 1ULL << 33U,
       DeformedGeometryBit = 1ULL << 34U,
       MotionSkeletonRuleBit = 1ULL << 35U,
+      ParticleEffectBit = 1ULL << 36U,
 };
 
 constexpr std::uint64_t KnownComponentBits = CameraBit |
@@ -73,7 +74,7 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     NavObstacleBit |
     RegionShapeBit |
     GuideCurveBit |
-      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit;
+      ContentInstanceBit | StreamFocusBit | WorldBackdropBit | AmbientRadianceBit | DetailSwitchBit | VisibilityBlockerBit | VisibilityCellBit | RegionPortalBit | AuxFrameBit | GeometrySwarmBit | SurfaceCastBit | FacingPanelBit | SpaceStrokeBit | HistoryRibbonBit | LensEchoBit | SkeletonBindingBit | DeformedGeometryBit | MotionSkeletonRuleBit | ParticleEffectBit;
 
 [[nodiscard]] std::uint64_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint64_t componentBits = 0;
@@ -112,6 +113,7 @@ constexpr std::uint64_t KnownComponentBits = CameraBit |
     include(components.facingPanel.has_value(), FacingPanelBit);
     include(components.spaceStroke.has_value(), SpaceStrokeBit);
     include(components.historyRibbon.has_value(), HistoryRibbonBit);
+    include(components.particleEffect.has_value(), ParticleEffectBit);
     include(components.lensEcho.has_value(), LensEchoBit);
     include(components.skeletonBinding.has_value(), SkeletonBindingBit);
     include(components.motionSkeletonRule.has_value(), MotionSkeletonRuleBit);
@@ -498,6 +500,20 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
             !input.ReadBool(ribbon.enabled) || !IsHistoryRibbonComponentPersistable(ribbon)) return false;
         output.historyRibbon = ribbon;
     }
+    if ((componentBits & ParticleEffectBit) != 0U) {
+        if (fileVersion < 33U) return false;
+        ParticleEffectComponent particleEffect{};
+        std::uint32_t ownerDeathPolicy = 0U;
+        if (!input.ReadUInt64(particleEffect.effectAssetId) || !input.ReadUInt64(particleEffect.deterministicSeed) ||
+            !input.ReadFloat(particleEffect.rateMultiplier) || !input.ReadUInt32(particleEffect.maxParticlesOverride) ||
+            !input.ReadUInt32(ownerDeathPolicy) || !input.ReadBool(particleEffect.enabled) ||
+            !input.ReadBool(particleEffect.autoPlay) || !input.ReadBool(particleEffect.followTransform) ||
+            !input.ReadBool(particleEffect.restartOnActivate) ||
+            ownerDeathPolicy > static_cast<std::uint32_t>(ParticleOwnerDeathPolicy::Clear)) return false;
+        particleEffect.ownerDeathPolicy = static_cast<ParticleOwnerDeathPolicy>(ownerDeathPolicy);
+        if (!IsParticleEffectComponentPersistable(particleEffect)) return false;
+        output.particleEffect = particleEffect;
+    }
     if ((componentBits & LensEchoBit) != 0U) {
         if (fileVersion < 26U) return false;
         ScenePrefabLensEchoComponent echo{};
@@ -781,6 +797,18 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
         SceneAssetBinaryIO::WriteBool(output, ribbon.castsShadow);
         SceneAssetBinaryIO::WriteBool(output, ribbon.receivesShadow);
         SceneAssetBinaryIO::WriteBool(output, ribbon.enabled);
+    }
+    if (components.particleEffect.has_value()) {
+        const ParticleEffectComponent& particleEffect = *components.particleEffect;
+        SceneAssetBinaryIO::WriteUInt64(output, particleEffect.effectAssetId);
+        SceneAssetBinaryIO::WriteUInt64(output, particleEffect.deterministicSeed);
+        SceneAssetBinaryIO::WriteFloat(output, particleEffect.rateMultiplier);
+        SceneAssetBinaryIO::WriteUInt32(output, particleEffect.maxParticlesOverride);
+        SceneAssetBinaryIO::WriteUInt32(output, static_cast<std::uint32_t>(particleEffect.ownerDeathPolicy));
+        SceneAssetBinaryIO::WriteBool(output, particleEffect.enabled);
+        SceneAssetBinaryIO::WriteBool(output, particleEffect.autoPlay);
+        SceneAssetBinaryIO::WriteBool(output, particleEffect.followTransform);
+        SceneAssetBinaryIO::WriteBool(output, particleEffect.restartOnActivate);
     }
     if (components.lensEcho.has_value()) {
         const ScenePrefabLensEchoComponent& echo = *components.lensEcho;

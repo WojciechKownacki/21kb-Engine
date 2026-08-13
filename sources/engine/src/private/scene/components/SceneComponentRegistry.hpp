@@ -42,6 +42,7 @@ public:
     [[nodiscard]] std::uint64_t FacingPanelComponentId() const noexcept;
     [[nodiscard]] std::uint64_t SpaceStrokeComponentId() const noexcept;
     [[nodiscard]] std::uint64_t HistoryRibbonComponentId() const noexcept;
+    [[nodiscard]] std::uint64_t ParticleEffectComponentId() const noexcept;
     [[nodiscard]] std::uint64_t LensEchoComponentId() const noexcept;
     [[nodiscard]] std::uint64_t AudioSourceComponentId() const noexcept;
     [[nodiscard]] std::uint64_t AudioListenerComponentId() const noexcept;
@@ -82,6 +83,7 @@ private:
     std::uint64_t facingPanelComponentId_ = 0;
     std::uint64_t spaceStrokeComponentId_ = 0;
     std::uint64_t historyRibbonComponentId_ = 0;
+    std::uint64_t particleEffectComponentId_ = 0;
     std::uint64_t lensEchoComponentId_ = 0;
     std::uint64_t audioSourceComponentId_ = 0;
     std::uint64_t audioListenerComponentId_ = 0;

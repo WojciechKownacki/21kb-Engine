@@ -1,0 +1,19 @@
+# 21kb test-owned legacy ParticleEffect fixture shared with headless automation.
+material /Game/Vfx/Particle.kbmat
+looping 1
+durationSeconds 2
+maxParticles 128
+emissionRatePerSecond 16
+startSpeedMin 0.5
+startSpeedMax 1.5
+startLifetimeMin 0.5
+startLifetimeMax 1.0
+directionX 0
+directionY 1
+directionZ 0
+spreadDegrees 20
+gravityScale 0.1
+sizeCurveKeyframe 0 0.25 Linear
+sizeCurveKeyframe 1 0.05 Linear
+colorGradientStop 0 1 0.35 0.05 1
+colorGradientStop 1 1 0.05 0.01 0

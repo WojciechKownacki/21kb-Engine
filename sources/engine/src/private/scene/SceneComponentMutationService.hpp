@@ -30,6 +30,7 @@
 #include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
 #include "engine/scene/HistoryRibbonComponent.hpp"
+#include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/VisibilityCellComponent.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
@@ -164,6 +165,10 @@ public:
     static void SetHistoryRibbon(Scene& scene, SceneEntity entity, const HistoryRibbonComponent& component);
     static void RemoveHistoryRibbon(Scene& scene, SceneEntity entity) noexcept;
     static void MarkHistoryRibbonModified(Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static ParticleEffectComponent* TryGetParticleEffect(Scene& scene, SceneEntity entity) noexcept;
+    static void SetParticleEffect(Scene& scene, SceneEntity entity, const ParticleEffectComponent& component);
+    static void RemoveParticleEffect(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkParticleEffectModified(Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static LensEchoComponent* TryGetLensEcho(Scene& scene, SceneEntity entity) noexcept;
     static void SetLensEcho(Scene& scene, SceneEntity entity, const LensEchoComponent& component);
     static void RemoveLensEcho(Scene& scene, SceneEntity entity) noexcept;

@@ -173,7 +173,12 @@ ScriptRuntimeHost::ScriptRuntimeHost(kb::scene::Scene& scene, ScriptRuntimeHostO
     }
 }
 
-ScriptRuntimeHost::~ScriptRuntimeHost() = default;
+ScriptRuntimeHost::~ScriptRuntimeHost() {
+    if (state_->installedSceneSystem != nullptr && sceneSystemHandle_.IsValid() &&
+        state_->scene.Runtime().HasSceneSystem(sceneSystemHandle_)) {
+        static_cast<void>(state_->scene.Runtime().RemoveSceneSystem(sceneSystemHandle_));
+    }
+}
 
 bool ScriptRuntimeHost::Succeeded() const noexcept {
     return diagnostics_.empty();
@@ -208,9 +213,9 @@ bool ScriptRuntimeHost::InstallSceneSystem() {
     if (!Succeeded()) {
         return false;
     }
-    state_->scene.Runtime().AddSceneSystem(std::make_unique<ScriptRuntimeHostSceneSystem>(state_));
-    sceneSystemInstalled_ = true;
-    return true;
+    sceneSystemHandle_ = state_->scene.Runtime().AddSceneSystem(std::make_unique<ScriptRuntimeHostSceneSystem>(state_));
+    sceneSystemInstalled_ = sceneSystemHandle_.IsValid();
+    return sceneSystemInstalled_;
 }
 
 bool ScriptRuntimeHost::DispatchShutdownLifecycle(float deltaSeconds) {

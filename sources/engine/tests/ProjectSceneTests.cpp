@@ -1076,6 +1076,32 @@ void RunSceneAudioDocumentBackwardCompatibilityTest() {
         "Pre-v32 scene reload leaked scene-global audio state");
 }
 
+void RunSceneV32BackwardCompatibilityTest() {
+    CleanTempRoot();
+    const std::filesystem::path sceneFile = TempRoot() / "Version32.21kbscene";
+    kb::scene::SceneDocument current;
+    current.guid = "scene:v32-compatibility";
+    current.name = "Version32";
+    Require(kb::scene::SceneDocumentService::Save(current, sceneFile), "v32 compatibility fixture could not be saved");
+
+    std::vector<std::uint8_t> sceneBytes = ReadBytes(sceneFile);
+    WriteUInt32(sceneBytes, kSceneMagic.size(), 32U);
+    Require(WriteBytes(sceneFile, sceneBytes), "v32 compatibility scene could not be rewritten");
+    const TestIntegrity integrity = ComputeIntegrity(sceneBytes);
+    const std::filesystem::path metaFile = sceneFile.parent_path() / "Version32.meta";
+    std::vector<std::uint8_t> metaBytes = ReadBytes(metaFile);
+    std::size_t integrityOffset = 12U;
+    for (std::uint32_t stringIndex = 0U; stringIndex < 4U; ++stringIndex) integrityOffset = SkipString(metaBytes, integrityOffset);
+    WriteUInt64(metaBytes, integrityOffset, sceneBytes.size());
+    WriteUInt64(metaBytes, integrityOffset + sizeof(std::uint64_t), integrity.hash);
+    WriteUInt32(metaBytes, integrityOffset + sizeof(std::uint64_t) * 2U, integrity.checksum);
+    Require(WriteBytes(metaFile, metaBytes), "v32 compatibility metadata could not be rewritten");
+
+    const kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(sceneFile);
+    Require(loaded.succeeded && loaded.document.fileVersion == 32U && loaded.document.worldPrefab.Empty(),
+        "v32 scene did not load after the v33 component extension");
+}
+
 void RunScenePhysicsComponentReflectionSerializationTest() {
     kb::scene::Scene source;
     const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "PhysicsSource" });
@@ -1292,6 +1318,7 @@ void RunProjectSceneTests() {
     RunSceneAudioSourcePrefabRoundTripTest();
     RunSceneAudioDocumentLoadSemanticsTest();
     RunSceneAudioDocumentBackwardCompatibilityTest();
+    RunSceneV32BackwardCompatibilityTest();
     RunScenePhysicsComponentReflectionSerializationTest();
     RunEmptySceneDocumentClearsRuntimeSceneTest();
     RunSceneTagSingleSelectionTest();

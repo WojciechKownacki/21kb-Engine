@@ -53,6 +53,7 @@ struct LivePrefabComponentReaders {
     SceneAudioSourceComponents audioSources;
     SceneAudioListenerComponents audioListeners;
     SceneAnimatorComponents animators;
+    SceneParticleEffectComponents particleEffects;
     SceneUIDocumentComponents uiDocuments;
 };
 
@@ -101,6 +102,7 @@ struct LivePrefabComponentReaders {
         .audioSources = components.AudioSources(),
         .audioListeners = components.AudioListeners(),
         .animators = components.Animators(),
+        .particleEffects = components.ParticleEffects(),
         .uiDocuments = components.UIDocuments(),
     };
 }
@@ -223,6 +225,13 @@ struct LivePrefabComponentReaders {
     return lhs.documentAssetId == rhs.documentAssetId && lhs.enabled == rhs.enabled;
 }
 
+[[nodiscard]] bool Equals(const ParticleEffectComponent& lhs, const ParticleEffectComponent& rhs) noexcept {
+    return lhs.effectAssetId == rhs.effectAssetId && lhs.deterministicSeed == rhs.deterministicSeed &&
+        lhs.rateMultiplier == rhs.rateMultiplier && lhs.maxParticlesOverride == rhs.maxParticlesOverride &&
+        lhs.ownerDeathPolicy == rhs.ownerDeathPolicy && lhs.enabled == rhs.enabled && lhs.autoPlay == rhs.autoPlay &&
+        lhs.followTransform == rhs.followTransform && lhs.restartOnActivate == rhs.restartOnActivate;
+}
+
 template <typename T, typename Components>
 [[nodiscard]] bool OptionalComponentMatches(Components components, SceneEntity entity, const std::optional<T>& expected) {
     const T* current = components.TryGet(entity);
@@ -249,6 +258,7 @@ template <typename T, typename Components>
             (!expected.audioSource.has_value() || OptionalComponentMatches(readers.audioSources, entity, expected.audioSource)) &&
             (!expected.audioListener.has_value() || OptionalComponentMatches(readers.audioListeners, entity, expected.audioListener)) &&
             (!expected.animator.has_value() || OptionalComponentMatches(readers.animators, entity, expected.animator)) &&
+            (!expected.particleEffect.has_value() || OptionalComponentMatches(readers.particleEffects, entity, expected.particleEffect)) &&
             (!expected.uiDocument.has_value() || OptionalComponentMatches(readers.uiDocuments, entity, expected.uiDocument));
     }
 
@@ -263,6 +273,7 @@ template <typename T, typename Components>
         OptionalComponentMatches(readers.audioSources, entity, expected.audioSource) &&
         OptionalComponentMatches(readers.audioListeners, entity, expected.audioListener) &&
         OptionalComponentMatches(readers.animators, entity, expected.animator) &&
+        OptionalComponentMatches(readers.particleEffects, entity, expected.particleEffect) &&
         OptionalComponentMatches(readers.uiDocuments, entity, expected.uiDocument);
 }
 

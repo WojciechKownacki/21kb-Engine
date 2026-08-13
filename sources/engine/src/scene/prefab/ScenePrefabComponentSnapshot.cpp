@@ -104,6 +104,9 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
     if (const HistoryRibbonComponent* historyRibbon = sceneComponents.HistoryRibbons().TryGet(entity)) {
         components.historyRibbon = *historyRibbon;
     }
+    if (const ParticleEffectComponent* particleEffect = sceneComponents.ParticleEffects().TryGet(entity)) {
+        components.particleEffect = *particleEffect;
+    }
     if (const LensEchoComponent* lensEcho = sceneComponents.LensEchoes().TryGet(entity)) {
         components.lensEcho = ScenePrefabLensEchoComponent{
             .sourceNodeStableId = lensEcho->sourceEntityId,

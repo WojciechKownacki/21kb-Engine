@@ -25,6 +25,7 @@
 #include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
 #include "engine/scene/HistoryRibbonComponent.hpp"
+#include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
@@ -54,6 +55,7 @@
 #include "engine/scene/SceneFacingPanelComponents.hpp"
 #include "engine/scene/SceneSpaceStrokeComponents.hpp"
 #include "engine/scene/SceneHistoryRibbonComponents.hpp"
+#include "engine/scene/SceneParticleEffectComponents.hpp"
 #include "engine/scene/SceneLensEchoComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
@@ -251,7 +253,7 @@ struct ComponentAccess {
 
 // clang-format on
 
-constexpr std::array<std::string_view, 31> kComponentNames{
+constexpr std::array<std::string_view, 32> kComponentNames{
     "Transform",
     "Visibility",
     "Camera",
@@ -282,6 +284,7 @@ constexpr std::array<std::string_view, 31> kComponentNames{
     "Facing Panel",
     "Kreska przestrzenna",
     "Wst\xC4\x99" "ga historii",
+    "Particle Effect",
     "Echo soczewki",
 };
 
@@ -409,6 +412,17 @@ constexpr std::array<ScriptSceneComponentPropertyDesc, 9> kHistoryRibbonProperty
     ScriptSceneComponentPropertyDesc{ "sampleIntervalSeconds", ScriptValueType::Float }, ScriptSceneComponentPropertyDesc{ "layer", ScriptValueType::UInt32 },
     ScriptSceneComponentPropertyDesc{ "castsShadow", ScriptValueType::Bool }, ScriptSceneComponentPropertyDesc{ "receivesShadow", ScriptValueType::Bool },
     ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+};
+constexpr std::array<ScriptSceneComponentPropertyDesc, 9> kParticleEffectPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "effectAssetId", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "deterministicSeed", ScriptValueType::Hash },
+    ScriptSceneComponentPropertyDesc{ "rateMultiplier", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "maxParticlesOverride", ScriptValueType::UInt32 },
+    ScriptSceneComponentPropertyDesc{ "ownerDeathPolicy", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "autoPlay", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "followTransform", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "restartOnActivate", ScriptValueType::Bool },
 };
 constexpr std::array<ScriptSceneComponentPropertyDesc, 7> kLensEchoPropertyDescs{
     ScriptSceneComponentPropertyDesc{ "sourceEntityId", ScriptValueType::Hash }, ScriptSceneComponentPropertyDesc{ "profileMaterialAssetId", ScriptValueType::Hash },
@@ -994,6 +1008,17 @@ constexpr std::array<FieldBinding, 9> kHistoryRibbonFields{
     FieldBinding{ "layer", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::HistoryRibbonComponent*>(c)->layer }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::UInt32) return false; static_cast<kb::scene::HistoryRibbonComponent*>(c)->layer = v.AsUInt32(); return true; } },
     KB_BOOL(kb::scene::HistoryRibbonComponent, castsShadow), KB_BOOL(kb::scene::HistoryRibbonComponent, receivesShadow), KB_BOOL(kb::scene::HistoryRibbonComponent, enabled),
 };
+constexpr std::array<FieldBinding, 9> kParticleEffectFields{
+    FieldBinding{ "effectAssetId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::ParticleEffectComponent*>(c)->effectAssetId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::ParticleEffectComponent*>(c)->effectAssetId = v.AsUInt64(); return true; } },
+    FieldBinding{ "deterministicSeed", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::ParticleEffectComponent*>(c)->deterministicSeed, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::ParticleEffectComponent*>(c)->deterministicSeed = v.AsUInt64(); return true; } },
+    FieldBinding{ "rateMultiplier", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::ParticleEffectComponent*>(c)->rateMultiplier }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Float || !std::isfinite(v.AsFloat())) return false; static_cast<kb::scene::ParticleEffectComponent*>(c)->rateMultiplier = v.AsFloat(); return true; } },
+    FieldBinding{ "maxParticlesOverride", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::ParticleEffectComponent*>(c)->maxParticlesOverride }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::UInt32) return false; static_cast<kb::scene::ParticleEffectComponent*>(c)->maxParticlesOverride = v.AsUInt32(); return true; } },
+    FieldBinding{ "ownerDeathPolicy", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<int>(static_cast<const kb::scene::ParticleEffectComponent*>(c)->ownerDeathPolicy) }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Int || v.AsInt() < 0 || v.AsInt() > static_cast<int>(kb::scene::ParticleOwnerDeathPolicy::Clear)) return false; static_cast<kb::scene::ParticleEffectComponent*>(c)->ownerDeathPolicy = static_cast<kb::scene::ParticleOwnerDeathPolicy>(v.AsInt()); return true; } },
+    KB_BOOL(kb::scene::ParticleEffectComponent, enabled),
+    KB_BOOL(kb::scene::ParticleEffectComponent, autoPlay),
+    KB_BOOL(kb::scene::ParticleEffectComponent, followTransform),
+    KB_BOOL(kb::scene::ParticleEffectComponent, restartOnActivate),
+};
 constexpr std::array<FieldBinding, 7> kLensEchoFields{
     FieldBinding{ "sourceEntityId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::LensEchoComponent*>(c)->sourceEntityId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::LensEchoComponent*>(c)->sourceEntityId = v.AsUInt64(); return true; } },
     FieldBinding{ "profileMaterialAssetId", [](const void* c) noexcept -> ScriptValue { return ScriptValue{ static_cast<const kb::scene::LensEchoComponent*>(c)->profileMaterialAssetId, ScriptValueType::Hash }; }, [](void* c, const ScriptValue& v) noexcept -> bool { if (v.Type() != ScriptValueType::Hash) return false; static_cast<kb::scene::LensEchoComponent*>(c)->profileMaterialAssetId = v.AsUInt64(); return true; } },
@@ -1093,6 +1118,7 @@ void MarkSurfaceCastModified(kb::scene::Scene& scene, kb::scene::SceneEntity ent
 void MarkFacingPanelModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().FacingPanels().MarkModified(entity); }
 void MarkSpaceStrokeModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().SpaceStrokes().MarkModified(entity); }
 void MarkHistoryRibbonModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().HistoryRibbons().MarkModified(entity); }
+void MarkParticleEffectModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().ParticleEffects().MarkModified(entity); }
 void MarkLensEchoModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { scene.Components().LensEchoes().MarkModified(entity); }
 
 [[nodiscard]] ComponentAccess AccessComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
@@ -1215,6 +1241,10 @@ void MarkLensEchoModified(kb::scene::Scene& scene, kb::scene::SceneEntity entity
         kb::scene::HistoryRibbonComponent* component = scene.Components().HistoryRibbons().TryGet(entity);
         return ComponentAccess{ component, component, kHistoryRibbonFields, &MarkHistoryRibbonModified };
     }
+    if (componentName == "Particle Effect") {
+        kb::scene::ParticleEffectComponent* component = scene.Components().ParticleEffects().TryGet(entity);
+        return ComponentAccess{ component, component, kParticleEffectFields, &MarkParticleEffectModified };
+    }
     if (componentName == "Echo soczewki") {
         kb::scene::LensEchoComponent* component = scene.Components().LensEchoes().TryGet(entity);
         return ComponentAccess{ component, component, kLensEchoFields, &MarkLensEchoModified };
@@ -1253,6 +1283,7 @@ std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::Compo
     if (componentName == "Facing Panel") return kFacingPanelPropertyDescs;
     if (componentName == "Kreska przestrzenna") return kSpaceStrokePropertyDescs;
     if (componentName == "Wst\xC4\x99" "ga historii") return kHistoryRibbonPropertyDescs;
+    if (componentName == "Particle Effect") return kParticleEffectPropertyDescs;
     if (componentName == "Echo soczewki") return kLensEchoPropertyDescs;
     if (componentName == "Camera") {
         return kCameraPropertyDescs;
@@ -1389,6 +1420,12 @@ ScriptSceneComponentMutationResult ScriptSceneComponentApi::SetProperty(
         kb::scene::HistoryRibbonComponent candidate = ribbon;
         if (!field->write(&candidate, value)) return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
         if (!kb::scene::IsHistoryRibbonComponentPersistable(candidate)) return ScriptSceneComponentMutationResult{ .error = "Wst\xC4\x99" "ga historii values must remain valid" };
+    }
+    if (componentName == "Particle Effect") {
+        const kb::scene::ParticleEffectComponent& particleEffect = *static_cast<const kb::scene::ParticleEffectComponent*>(component.immutable);
+        kb::scene::ParticleEffectComponent candidate = particleEffect;
+        if (!field->write(&candidate, value)) return ScriptSceneComponentMutationResult{ .error = "script value type does not match component property" };
+        if (!kb::scene::IsParticleEffectComponentPersistable(candidate)) return ScriptSceneComponentMutationResult{ .error = "Particle Effect values must remain valid" };
     }
     if (componentName == "Echo soczewki") {
         const kb::scene::LensEchoComponent& echo = *static_cast<const kb::scene::LensEchoComponent*>(component.immutable);

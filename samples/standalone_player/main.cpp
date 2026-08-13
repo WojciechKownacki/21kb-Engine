@@ -10,6 +10,7 @@
 #include "engine/platform/win32/Win32XInputHapticsBackend.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/project/ProjectManager.hpp"
+#include "engine/project/ParticleProjectPolicy.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
@@ -18,6 +19,7 @@
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
+#include "engine/scene/ParticleEffectAssetMigration.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -723,6 +725,13 @@ struct StandaloneProjectRuntimeConfig {
         return false;
     }
 
+    const kb::project::ParticleProjectPolicyResult particlePolicy =
+        kb::project::ParticleProjectPolicy::Inspect(projectFile.parent_path(), loaded.descriptor);
+    if (!particlePolicy.IsRunnable()) {
+        std::fprintf(stderr, "kb_standalone_player: %s\n", particlePolicy.diagnostic.c_str());
+        return false;
+    }
+
     config.projectRoot = projectFile.parent_path();
     for (kb::project::ProjectPluginReference& plugin : loaded.descriptor.plugins) {
         if (!plugin.enabled) {
@@ -926,16 +935,18 @@ struct StandaloneProjectRuntimeConfig {
             "kb_standalone_player: camera runtime post-process profile write failed\n");
         return false;
     }
-    kb::scene::ParticleEffectAsset particleEffect{};
-    particleEffect.materialReference = "/Game/graph.kbmat";
-    particleEffect.looping = true;
-    particleEffect.maxParticles = 8U;
-    particleEffect.emissionRatePerSecond = 0.0F;
-    particleEffect.startSpeedMin = 0.5F;
-    particleEffect.startSpeedMax = 0.5F;
-    particleEffect.startLifetimeMin = 2.0F;
-    particleEffect.startLifetimeMax = 2.0F;
-    particleEffect.spreadDegrees = 0.0F;
+    kb::scene::LegacyParticleEffectAsset legacyParticleEffect{};
+    legacyParticleEffect.materialReference = "/Game/graph.kbmat";
+    legacyParticleEffect.looping = true;
+    legacyParticleEffect.maxParticles = 8U;
+    legacyParticleEffect.emissionRatePerSecond = 0.0F;
+    legacyParticleEffect.startSpeedMin = 0.5F;
+    legacyParticleEffect.startSpeedMax = 0.5F;
+    legacyParticleEffect.startLifetimeMin = 2.0F;
+    legacyParticleEffect.startLifetimeMax = 2.0F;
+    legacyParticleEffect.spreadDegrees = 0.0F;
+    const kb::scene::ParticleEffectAsset particleEffect =
+        kb::scene::ParticleEffectAssetMigration::FromLegacy(legacyParticleEffect);
     if (!kb::scene::ParticleEffectAssetIO::Save(
             packageRoot / "Assets" / "runtime.kbvfx",
             particleEffect)) {
@@ -943,12 +954,14 @@ struct StandaloneProjectRuntimeConfig {
             "kb_standalone_player: camera runtime particle effect write failed\n");
         return false;
     }
-    kb::scene::ParticleEffectAsset completionEffect = particleEffect;
-    completionEffect.looping = false;
-    completionEffect.durationSeconds = 0.03F;
-    completionEffect.emissionRatePerSecond = 120.0F;
-    completionEffect.startLifetimeMin = 0.01F;
-    completionEffect.startLifetimeMax = 0.01F;
+    kb::scene::LegacyParticleEffectAsset legacyCompletionEffect = legacyParticleEffect;
+    legacyCompletionEffect.looping = false;
+    legacyCompletionEffect.durationSeconds = 0.03F;
+    legacyCompletionEffect.emissionRatePerSecond = 120.0F;
+    legacyCompletionEffect.startLifetimeMin = 0.01F;
+    legacyCompletionEffect.startLifetimeMax = 0.01F;
+    const kb::scene::ParticleEffectAsset completionEffect =
+        kb::scene::ParticleEffectAssetMigration::FromLegacy(legacyCompletionEffect);
     if (!kb::scene::ParticleEffectAssetIO::Save(
             packageRoot / "Assets" / "runtime_completion.kbvfx",
             completionEffect)) {
@@ -1081,6 +1094,11 @@ struct StandaloneProjectRuntimeConfig {
             ExeDirectory().parent_path().parent_path() /
             "audio_miniaudio" / "Debug" /
             "kb_audio_miniaudio_plugin.dll").string(),
+        .enabled = true,
+    });
+    descriptor.plugins.push_back(kb::project::ProjectPluginReference{
+        .name = "Rendering.21kbParticle",
+        .binaryPath = "kb_21kb_particle_plugin.dll",
         .enabled = true,
     });
     if (!kb::project::ProjectManager::SaveProject(
@@ -1258,6 +1276,7 @@ struct StandaloneProjectRuntimeConfig {
             "kb_standalone_player: camera runtime audio bus is invalid\n");
         return false;
     }
+
     authoringScene.Components().AudioSources().Set(
         scriptedMesh.Entity(), audioSource);
     if (!kb::scene::SceneDocumentService::Save(
@@ -1458,12 +1477,10 @@ struct StandaloneProjectRuntimeConfig {
             .Particles()
             .LiveInstanceIds();
     const bool particleRuntimeValid =
-        particleInstances.size() == 1U &&
-        scene.Particles().IsPlaying(particleInstances.front()) &&
-        scene.Particles().LiveParticleCount(particleInstances.front()) ==
-            2U &&
-        stats.renderSceneMeshProxyCount >= 3U &&
-        stats.referencedMeshAssetCount >= 2U;
+        !kb::particles::ParticlePlayback::HasBackend(scene) &&
+        scene.Particles().CreateDetailed(1U, {}).status ==
+            kb::particles::ParticleRuntimeStatus::BackendUnavailable &&
+        particleInstances.empty();
     const bool scriptHasRenderFrame = scriptHost != nullptr &&
         scriptHost->SharedState()
             .Get("runtimeHasRenderFrame")
@@ -1661,7 +1678,6 @@ struct StandaloneProjectRuntimeConfig {
     const bool fullySucceeded =
         succeeded && lightRuntimeValid && postProcessRuntimeValid &&
         particleRuntimeValid && scriptRenderFeedbackValid &&
-        sharedBool("runtimeParticleFinished") &&
         scriptConversionsValid && scriptCaptureValid && audioRuntimeValid &&
         hapticsRuntimeValid;
     std::fprintf(fullySucceeded ? stdout : stderr,

@@ -295,6 +295,19 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "historyRibbon.receivesShadow=" << (ribbon.receivesShadow ? 1 : 0) << '\n';
         output << "historyRibbon.enabled=" << (ribbon.enabled ? 1 : 0) << '\n';
     }
+    output << "particleEffect=" << (components.particleEffect.has_value() ? 1 : 0) << '\n';
+    if (components.particleEffect.has_value()) {
+        const ParticleEffectComponent& particleEffect = *components.particleEffect;
+        output << "particleEffect.effectAssetId=" << particleEffect.effectAssetId << '\n';
+        output << "particleEffect.deterministicSeed=" << particleEffect.deterministicSeed << '\n';
+        output << "particleEffect.rateMultiplier=" << particleEffect.rateMultiplier << '\n';
+        output << "particleEffect.maxParticlesOverride=" << particleEffect.maxParticlesOverride << '\n';
+        output << "particleEffect.ownerDeathPolicy=" << static_cast<std::uint32_t>(particleEffect.ownerDeathPolicy) << '\n';
+        output << "particleEffect.enabled=" << (particleEffect.enabled ? 1 : 0) << '\n';
+        output << "particleEffect.autoPlay=" << (particleEffect.autoPlay ? 1 : 0) << '\n';
+        output << "particleEffect.followTransform=" << (particleEffect.followTransform ? 1 : 0) << '\n';
+        output << "particleEffect.restartOnActivate=" << (particleEffect.restartOnActivate ? 1 : 0) << '\n';
+    }
     output << "lensEcho=" << (components.lensEcho.has_value() ? 1 : 0) << '\n';
     if (components.lensEcho.has_value()) {
         const ScenePrefabLensEchoComponent& echo = *components.lensEcho;

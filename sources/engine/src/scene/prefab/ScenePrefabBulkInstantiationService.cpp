@@ -157,6 +157,7 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<FacingPanelComponent> facingPanels;
     std::vector<SpaceStrokeComponent> spaceStrokes;
     std::vector<HistoryRibbonComponent> historyRibbons;
+    std::vector<ParticleEffectComponent> particleEffects;
     std::vector<BehaviourComponent> behaviours;
     std::vector<AudioSourceComponent> audioSources;
     std::vector<AudioListenerComponent> audioListeners;
@@ -282,6 +283,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::HistoryRibbon)) {
             RepeatComponents(historyRibbons, std::span<const HistoryRibbonComponent>{ archetype.historyRibbons }, instanceCount);
             AddComponentViews(views, worldViews, std::span<const HistoryRibbonComponent>{ historyRibbons });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::ParticleEffect)) {
+            RepeatComponents(particleEffects, std::span<const ParticleEffectComponent>{ archetype.particleEffects }, instanceCount);
+            AddComponentViews(views, worldViews, std::span<const ParticleEffectComponent>{ particleEffects });
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Behaviour)) {
             RepeatComponents(behaviours, std::span<const BehaviourComponent>{ archetype.behaviours }, instanceCount);
@@ -435,6 +440,10 @@ struct ScenePrefabArchetypeSpawnPayload {
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::HistoryRibbon)) {
             AddCommandComponentPatternView(views, std::span<const HistoryRibbonComponent>{ archetype.historyRibbons }, instanceCount);
             AddWorldComponentPatternView(worldViews, std::span<const HistoryRibbonComponent>{ archetype.historyRibbons }, instanceCount);
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::ParticleEffect)) {
+            AddCommandComponentPatternView(views, std::span<const ParticleEffectComponent>{ archetype.particleEffects }, instanceCount);
+            AddWorldComponentPatternView(worldViews, std::span<const ParticleEffectComponent>{ archetype.particleEffects }, instanceCount);
         }
         if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Behaviour)) {
             AddCommandComponentPatternView(views, std::span<const BehaviourComponent>{ archetype.behaviours }, instanceCount);

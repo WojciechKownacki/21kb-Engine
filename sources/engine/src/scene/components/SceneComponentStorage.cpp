@@ -33,6 +33,7 @@ SceneComponentStorage::SceneComponentStorage(kb::ecs::World& world, const SceneC
     , facingPanels_(world, components.FacingPanelComponentId())
     , spaceStrokes_(world, components.SpaceStrokeComponentId())
     , historyRibbons_(world, components.HistoryRibbonComponentId())
+    , particleEffects_(world, components.ParticleEffectComponentId())
     , lensEchoes_(world, components.LensEchoComponentId())
     , audioSources_(world, components.AudioSourceComponentId())
     , audioListeners_(world, components.AudioListenerComponentId())
@@ -181,6 +182,10 @@ const SceneSpaceStrokeComponentStore& SceneComponentStorage::SpaceStrokes() cons
 SceneSpaceStrokeComponentStore& SceneComponentStorage::SpaceStrokes() noexcept { return spaceStrokes_; }
 const SceneHistoryRibbonComponentStore& SceneComponentStorage::HistoryRibbons() const noexcept { return historyRibbons_; }
 SceneHistoryRibbonComponentStore& SceneComponentStorage::HistoryRibbons() noexcept { return historyRibbons_; }
+const SceneParticleEffectComponentStore& SceneComponentStorage::ParticleEffects() const noexcept {
+    return particleEffects_;
+}
+SceneParticleEffectComponentStore& SceneComponentStorage::ParticleEffects() noexcept { return particleEffects_; }
 const SceneLensEchoComponentStore& SceneComponentStorage::LensEchoes() const noexcept { return lensEchoes_; }
 SceneLensEchoComponentStore& SceneComponentStorage::LensEchoes() noexcept { return lensEchoes_; }
 

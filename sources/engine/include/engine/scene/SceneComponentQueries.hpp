@@ -33,6 +33,7 @@
 #include "engine/scene/SceneFacingPanelComponents.hpp"
 #include "engine/scene/SceneSpaceStrokeComponents.hpp"
 #include "engine/scene/SceneHistoryRibbonComponents.hpp"
+#include "engine/scene/SceneParticleEffectComponents.hpp"
 #include "engine/scene/SceneLensEchoComponents.hpp"
 #include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -73,6 +74,7 @@ public:
     [[nodiscard]] SceneFacingPanelComponentQueries FacingPanels() const noexcept;
     [[nodiscard]] SceneSpaceStrokeComponentQueries SpaceStrokes() const noexcept;
     [[nodiscard]] SceneHistoryRibbonComponentQueries HistoryRibbons() const noexcept;
+    [[nodiscard]] SceneParticleEffectComponentQueries ParticleEffects() const noexcept;
     [[nodiscard]] SceneLensEchoComponentQueries LensEchoes() const noexcept;
     [[nodiscard]] SceneAudioSourceComponentQueries AudioSources() const noexcept;
     [[nodiscard]] SceneAudioListenerComponentQueries AudioListeners() const noexcept;
