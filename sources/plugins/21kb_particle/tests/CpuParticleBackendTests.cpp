@@ -5,12 +5,14 @@
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/ParticleEffectAsset.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
+#include "engine/scene/ParticleEffectAssetMigration.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <bit>
@@ -89,14 +91,21 @@ struct Fixture {
     }
 };
 
-[[nodiscard]] std::uint64_t HashParticles(
-    const kb::scene::Scene& scene,
-    std::uint64_t instanceId) {
-    const auto query = kb::particles::ParticlePlayback::Query(scene, instanceId);
-    Require(query.Succeeded(), "snapshot query failed");
-    const auto states = kb::particles::ParticlePlayback::LiveParticleStates(scene, instanceId);
-    Require(states.size() == query.liveParticleCount,
-        "snapshot live-state count mismatch");
+template <typename Payload>
+void AddModule(kb::scene::ParticleEmitterAsset& emitter,
+               kb::scene::ParticleStableId moduleId,
+               kb::scene::ParticleModuleType type,
+               Payload payload,
+               bool enabled = true) {
+    emitter.modules.push_back(kb::scene::ParticleModuleAsset{
+        .moduleId = moduleId,
+        .type = type,
+        .enabled = enabled,
+        .payload = std::move(payload),
+    });
+}
+
+[[nodiscard]] std::uint64_t HashStateSpan(std::span<const kb::particles::ParticleRuntimeState> states) {
     std::uint64_t hash = 1469598103934665603ULL;
     const auto mix = [&](std::uint32_t value) {
         for (std::uint32_t byte = 0U; byte < 4U; ++byte) {
@@ -115,6 +124,41 @@ struct Fixture {
         mix(std::bit_cast<std::uint32_t>(state.lifetime));
     }
     return hash;
+}
+
+[[nodiscard]] std::uint64_t HashParticles(
+    const kb::scene::Scene& scene,
+    std::uint64_t instanceId) {
+    const auto query = kb::particles::ParticlePlayback::Query(scene, instanceId);
+    Require(query.Succeeded(), "snapshot query failed");
+    const auto states = kb::particles::ParticlePlayback::LiveParticleStates(scene, instanceId);
+    Require(states.size() == query.liveParticleCount,
+        "snapshot live-state count mismatch");
+    return HashStateSpan(states);
+}
+
+[[nodiscard]] kb::scene::ParticleEffectAsset MakeFourModuleEffect(float prewarmSeconds = 0.0F) {
+    auto effect = Fixture::MakeEffect(60.0F, 4096U);
+    effect.durationSeconds = 8.0F;
+    kb::scene::ParticleEmitterAsset& emitter = effect.emitters[0];
+    emitter.spawn.prewarmSeconds = prewarmSeconds;
+    emitter.spawn.lifetimeMin = 6.0F;
+    emitter.spawn.lifetimeMax = 7.0F;
+    AddModule(emitter, 1U, kb::scene::ParticleModuleType::InitialVelocity,
+        kb::scene::ParticleInitialVelocityModule{
+            .direction = {0.0F, 1.0F, 0.0F},
+            .speedMin = 2.0F,
+            .speedMax = 5.0F,
+            .randomization = 1.0F,
+            .spreadDegrees = 45.0F,
+        });
+    AddModule(emitter, 2U, kb::scene::ParticleModuleType::Gravity,
+        kb::scene::ParticleGravityModule{.acceleration = {}, .sceneGravityScale = 0.25F});
+    AddModule(emitter, 3U, kb::scene::ParticleModuleType::Wind,
+        kb::scene::ParticleWindModule{.acceleration = {0.75F, 0.0F, -0.5F}});
+    AddModule(emitter, 4U, kb::scene::ParticleModuleType::Drag,
+        kb::scene::ParticleDragModule{.coefficient = 0.35F});
+    return effect;
 }
 
 struct RuntimeFixture {
@@ -153,6 +197,22 @@ struct RuntimeFixture {
     return HashParticles(runtime.fixture.scene, runtime.instanceId);
 }
 
+[[nodiscard]] std::uint64_t RunModuleFrameFeedHash(float frameDeltaSeconds) {
+    RuntimeFixture runtime(MakeFourModuleEffect());
+    Require(kb::particles::ParticlePlayback::SetSeed(runtime.fixture.scene, runtime.instanceId,
+                0xA55A1234FEDC9876ULL).Succeeded() &&
+            kb::particles::ParticlePlayback::Play(runtime.fixture.scene, runtime.instanceId).Succeeded(),
+        "module frame-feed setup failed");
+    std::uint32_t frames = 0U;
+    while (runtime.fixture.scene.Runtime().FixedStepIndex() < 120U && frames < 512U) {
+        static_cast<void>(runtime.fixture.scene.Runtime().Update(frameDeltaSeconds));
+        ++frames;
+    }
+    Require(runtime.fixture.scene.Runtime().FixedStepIndex() == 120U,
+        "module frame feed did not produce exactly 120 fixed steps");
+    return HashParticles(runtime.fixture.scene, runtime.instanceId);
+}
+
 void TestSharedFixedSchedulerDeterminism() {
     Fixture settingsFixture;
     const auto settings = settingsFixture.scene.Runtime().FixedStepSettings();
@@ -171,6 +231,259 @@ void TestSharedFixedSchedulerDeterminism() {
     const std::uint64_t at144 = RunFrameFeedHash(1.0F / 144.0F);
     Require(at30 == at60 && at60 == at144,
         "equal authoritative fixed-step counts diverged across frame feeds");
+
+    const std::uint64_t modulesAt30 = RunModuleFrameFeedHash(1.0F / 30.0F);
+    const std::uint64_t modulesAt60 = RunModuleFrameFeedHash(1.0F / 60.0F);
+    const std::uint64_t modulesAt144 = RunModuleFrameFeedHash(1.0F / 144.0F);
+    Require(modulesAt30 == modulesAt60 && modulesAt60 == modulesAt144,
+        "module executors diverged across equal authoritative fixed-step feeds");
+}
+
+[[nodiscard]] std::vector<kb::particles::ParticleRuntimeState> CopyBackendStates(
+    const kb::particle_plugin::CpuParticleBackend& backend,
+    const Fixture& fixture,
+    std::uint64_t instanceId) {
+    const auto query = backend.Query(fixture.scene, instanceId);
+    Require(query.Succeeded(), "backend state-copy query failed");
+    std::vector<kb::particles::ParticleRuntimeState> states(query.liveParticleCount);
+    Require(backend.CopyLiveParticleStates(fixture.scene, instanceId, states) == states.size(),
+        "backend state-copy total mismatch");
+    return states;
+}
+
+void TestUniformSolidAngleConeGolden() {
+    auto effect = Fixture::MakeEffect(0.0F, 8192U);
+    kb::scene::ParticleEmitterAsset& emitter = effect.emitters[0];
+    emitter.spawn.lifetimeMin = 10.0F;
+    emitter.spawn.lifetimeMax = 10.0F;
+    AddModule(emitter, 1U, kb::scene::ParticleModuleType::InitialVelocity,
+        kb::scene::ParticleInitialVelocityModule{
+            .direction = {0.0F, 1.0F, 0.0F},
+            .speedMin = 1.0F,
+            .speedMax = 1.0F,
+            .randomization = 1.0F,
+            .spreadDegrees = 60.0F,
+        });
+    Fixture fixture(std::move(effect));
+    kb::particle_plugin::CpuParticleBackend backend;
+    backend.Warmup();
+    const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    Require(created.Succeeded() && backend.SetSeed(fixture.scene, created.instanceId, 0x2468ACE013579BDFULL).Succeeded() &&
+            backend.Emit(fixture.scene, created.instanceId, 8192U).Succeeded(),
+        "uniform cone fixture setup failed");
+    const auto states = CopyBackendStates(backend, fixture, created.instanceId);
+    double cosineSum = 0.0;
+    for (const auto& state : states) cosineSum += static_cast<double>(state.velocity.y);
+    const double meanCosine = cosineSum / static_cast<double>(states.size());
+    Require(std::abs(meanCosine - 0.75) < 0.01,
+        "cone samples do not follow a uniform solid-angle distribution");
+    constexpr std::uint64_t kExpectedConeHash = 10334376869005698480ULL;
+    const std::uint64_t actualHash = HashStateSpan(states);
+    Require(actualHash == kExpectedConeHash,
+        ("uniform cone deterministic golden changed: actual=" + std::to_string(actualHash)).c_str());
+}
+
+void TestModuleOrderEnableAndGravityContracts() {
+    const auto makeOrdered = [](bool dragFirst, bool windEnabled) {
+        auto effect = Fixture::MakeEffect(0.0F, 8U);
+        kb::scene::ParticleEmitterAsset& emitter = effect.emitters[0];
+        emitter.spawn.speedMin = 0.0F;
+        emitter.spawn.speedMax = 0.0F;
+        emitter.spawn.lifetimeMin = 10.0F;
+        emitter.spawn.lifetimeMax = 10.0F;
+        if (dragFirst) {
+            AddModule(emitter, 1U, kb::scene::ParticleModuleType::Drag,
+                kb::scene::ParticleDragModule{.coefficient = 6.0F});
+            AddModule(emitter, 2U, kb::scene::ParticleModuleType::Wind,
+                kb::scene::ParticleWindModule{.acceleration = {60.0F, 0.0F, 0.0F}}, windEnabled);
+        } else {
+            AddModule(emitter, 1U, kb::scene::ParticleModuleType::Wind,
+                kb::scene::ParticleWindModule{.acceleration = {60.0F, 0.0F, 0.0F}}, windEnabled);
+            AddModule(emitter, 2U, kb::scene::ParticleModuleType::Drag,
+                kb::scene::ParticleDragModule{.coefficient = 6.0F});
+        }
+        return effect;
+    };
+    const auto sampleVelocityX = [&](kb::scene::ParticleEffectAsset effect) {
+        Fixture fixture(std::move(effect));
+        kb::particle_plugin::CpuParticleBackend backend;
+        backend.Warmup();
+        const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+        Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded() &&
+                backend.Emit(fixture.scene, created.instanceId, 1U).Succeeded() &&
+                backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+            "ordered module fixture execution failed");
+        return CopyBackendStates(backend, fixture, created.instanceId).front().velocity.x;
+    };
+    const float windThenDrag = sampleVelocityX(makeOrdered(false, true));
+    const float dragThenWind = sampleVelocityX(makeOrdered(true, true));
+    const float disabledWind = sampleVelocityX(makeOrdered(false, false));
+    Require(windThenDrag < dragThenWind && std::abs(windThenDrag - std::exp(-0.1F)) < 0.00001F &&
+            std::abs(dragThenWind - 1.0F) < 0.00001F,
+        "repeatable force modules did not preserve authored source order");
+    Require(std::abs(disabledWind) < 0.000001F,
+        "disabled force module affected particle velocity");
+
+    const auto sampleInitialVelocity = [&](bool enabled) {
+        auto effect = Fixture::MakeEffect(0.0F, 4U);
+        effect.emitters[0].spawn.lifetimeMin = 10.0F;
+        effect.emitters[0].spawn.lifetimeMax = 10.0F;
+        effect.emitters[0].spawn.randomization = 0.0F;
+        effect.emitters[0].spawn.spreadDegrees = 0.0F;
+        AddModule(effect.emitters[0], 1U, kb::scene::ParticleModuleType::InitialVelocity,
+            kb::scene::ParticleInitialVelocityModule{
+                .direction = {0.0F, 1.0F, 0.0F},
+                .speedMin = 2.0F,
+                .speedMax = 2.0F,
+                .randomization = 0.0F,
+                .spreadDegrees = 80.0F,
+            }, enabled);
+        Fixture fixture(std::move(effect));
+        kb::particle_plugin::CpuParticleBackend backend;
+        backend.Warmup();
+        const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+        Require(created.Succeeded() && backend.Emit(fixture.scene, created.instanceId, 1U).Succeeded(),
+            "initial velocity enable fixture execution failed");
+        return CopyBackendStates(backend, fixture, created.instanceId).front().velocity;
+    };
+    const kb::math::Vec3 enabledInitial = sampleInitialVelocity(true);
+    const kb::math::Vec3 disabledInitial = sampleInitialVelocity(false);
+    Require(std::abs(enabledInitial.y - 2.0F) < 0.000001F && std::abs(enabledInitial.x) < 0.000001F,
+        "enabled InitialVelocity did not replace base spawn velocity");
+    Require(std::abs(disabledInitial.x - 1.0F) < 0.000001F && std::abs(disabledInitial.y) < 0.000001F,
+        "disabled InitialVelocity replaced base spawn velocity");
+
+    kb::scene::LegacyParticleEffectAsset legacy;
+    legacy.materialReference = "/Game/Materials/ParticleTest.21kb";
+    legacy.gravityScale = 1.0F;
+    const kb::scene::ParticleEffectAsset migrated = kb::scene::ParticleEffectAssetMigration::FromLegacy(legacy);
+    const auto gravityModule = std::find_if(migrated.emitters[0].modules.begin(), migrated.emitters[0].modules.end(),
+        [](const kb::scene::ParticleModuleAsset& module) {
+            return module.type == kb::scene::ParticleModuleType::Gravity;
+        });
+    Require(gravityModule != migrated.emitters[0].modules.end(), "legacy gravity module was not migrated");
+    const auto* migratedGravity = std::get_if<kb::scene::ParticleGravityModule>(&gravityModule->payload);
+    Require(migratedGravity != nullptr && migratedGravity->acceleration.x == 0.0F &&
+            migratedGravity->acceleration.y == 0.0F && migratedGravity->acceleration.z == 0.0F &&
+            migratedGravity->sceneGravityScale == 1.0F,
+        "legacy gravity did not migrate to the exclusive scene-gravity channel");
+
+    const auto sampleGravityY = [&](kb::scene::ParticleGravityModule gravity) {
+        auto effect = Fixture::MakeEffect(0.0F, 4U);
+        effect.emitters[0].spawn.speedMin = 0.0F;
+        effect.emitters[0].spawn.speedMax = 0.0F;
+        effect.emitters[0].spawn.lifetimeMin = 10.0F;
+        effect.emitters[0].spawn.lifetimeMax = 10.0F;
+        AddModule(effect.emitters[0], 1U, kb::scene::ParticleModuleType::Gravity, gravity);
+        Fixture fixture(std::move(effect));
+        kb::particle_plugin::CpuParticleBackend backend;
+        backend.Warmup();
+        const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+        Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded() &&
+                backend.Emit(fixture.scene, created.instanceId, 1U).Succeeded() &&
+                backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+            "gravity channel fixture execution failed");
+        return CopyBackendStates(backend, fixture, created.instanceId).front().velocity.y;
+    };
+    Require(std::abs(sampleGravityY({.acceleration = {}, .sceneGravityScale = 0.0F})) < 0.000001F,
+        "zero legacy gravity scale applied gravity");
+    Require(std::abs(sampleGravityY({.acceleration = {}, .sceneGravityScale = 1.0F}) + 9.81F / 60.0F) < 0.000001F,
+        "unit scene gravity scale did not apply exactly -9.81 acceleration");
+    Require(std::abs(sampleGravityY({.acceleration = {0.0F, 3.0F, 0.0F}, .sceneGravityScale = 0.0F}) -
+            3.0F / 60.0F) < 0.000001F,
+        "custom gravity acceleration channel was not executed");
+
+    auto migratedRuntime = migrated;
+    std::erase_if(migratedRuntime.emitters[0].modules, [](const kb::scene::ParticleModuleAsset& module) {
+        return module.type != kb::scene::ParticleModuleType::Gravity;
+    });
+    migratedRuntime.emitters[0].spawn.rateOverTime.keyframes.front().value = 0.0F;
+    migratedRuntime.emitters[0].spawn.speedMin = 0.0F;
+    migratedRuntime.emitters[0].spawn.speedMax = 0.0F;
+    Fixture migratedFixture(std::move(migratedRuntime));
+    kb::particle_plugin::CpuParticleBackend migratedBackend;
+    migratedBackend.Warmup();
+    const auto migratedInstance = migratedBackend.Create(
+        migratedFixture.scene, migratedFixture.effectAssetId, migratedFixture.owner);
+    Require(migratedInstance.Succeeded() &&
+            migratedBackend.Play(migratedFixture.scene, migratedInstance.instanceId).Succeeded() &&
+            migratedBackend.Emit(migratedFixture.scene, migratedInstance.instanceId, 1U).Succeeded() &&
+            migratedBackend.Step(migratedFixture.scene,
+                kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "migrated gravity runtime fixture execution failed");
+    Require(std::abs(CopyBackendStates(migratedBackend, migratedFixture, migratedInstance.instanceId)
+                .front().velocity.y + 9.81F / 60.0F) < 0.000001F,
+        "migrated gravityScale=1 did not execute as exactly -9.81 acceleration");
+}
+
+void TestModuleCompileRejection() {
+    const auto createStatus = [](kb::scene::ParticleEffectAsset effect) {
+        Fixture fixture(std::move(effect));
+        kb::particle_plugin::CpuParticleBackend backend;
+        backend.Warmup();
+        return backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner).status;
+    };
+
+    auto unsupported = Fixture::MakeEffect();
+    AddModule(unsupported.emitters[0], 1U, kb::scene::ParticleModuleType::SizeOverLife,
+        kb::scene::ParticleSizeOverLifeModule{});
+    Require(createStatus(std::move(unsupported)) == kb::particles::ParticleRuntimeStatus::UnsupportedOutput,
+        "unsupported typed module was accepted by the 3.3A compiler");
+
+    auto bothGravityChannels = Fixture::MakeEffect();
+    AddModule(bothGravityChannels.emitters[0], 1U, kb::scene::ParticleModuleType::Gravity,
+        kb::scene::ParticleGravityModule{.acceleration = {0.0F, -1.0F, 0.0F}, .sceneGravityScale = 1.0F});
+    Require(createStatus(std::move(bothGravityChannels)) == kb::particles::ParticleRuntimeStatus::InvalidAsset,
+        "mutually exclusive gravity channels compiled together");
+
+    auto invalidGravity = Fixture::MakeEffect();
+    AddModule(invalidGravity.emitters[0], 1U, kb::scene::ParticleModuleType::Gravity,
+        kb::scene::ParticleGravityModule{
+            .acceleration = {},
+            .sceneGravityScale = std::numeric_limits<float>::quiet_NaN(),
+        });
+    Require(createStatus(std::move(invalidGravity)) == kb::particles::ParticleRuntimeStatus::InvalidAsset,
+        "non-finite Gravity payload reached the executor");
+
+    auto invalidVelocity = Fixture::MakeEffect();
+    AddModule(invalidVelocity.emitters[0], 1U, kb::scene::ParticleModuleType::InitialVelocity,
+        kb::scene::ParticleInitialVelocityModule{
+            .direction = {0.0F, 1.0F, 0.0F},
+            .speedMin = std::numeric_limits<float>::quiet_NaN(),
+            .speedMax = 1.0F,
+            .randomization = 1.0F,
+            .spreadDegrees = 15.0F,
+        });
+    Require(createStatus(std::move(invalidVelocity)) == kb::particles::ParticleRuntimeStatus::InvalidAsset,
+        "NaN InitialVelocity payload reached the executor");
+
+    auto invalidWind = Fixture::MakeEffect();
+    AddModule(invalidWind.emitters[0], 1U, kb::scene::ParticleModuleType::Wind,
+        kb::scene::ParticleWindModule{.acceleration = {std::numeric_limits<float>::infinity(), 0.0F, 0.0F}});
+    Require(createStatus(std::move(invalidWind)) == kb::particles::ParticleRuntimeStatus::InvalidAsset,
+        "non-finite Wind payload reached the executor");
+
+    auto invalidDrag = Fixture::MakeEffect();
+    AddModule(invalidDrag.emitters[0], 1U, kb::scene::ParticleModuleType::Drag,
+        kb::scene::ParticleDragModule{.coefficient = -1.0F});
+    Require(createStatus(std::move(invalidDrag)) == kb::particles::ParticleRuntimeStatus::InvalidAsset,
+        "negative Drag payload reached the executor");
+}
+
+void TestModulePrewarmParity() {
+    RuntimeFixture prewarmed(MakeFourModuleEffect(1.0F));
+    RuntimeFixture manual(MakeFourModuleEffect());
+    Require(kb::particles::ParticlePlayback::SetSeed(prewarmed.fixture.scene, prewarmed.instanceId, 913U).Succeeded() &&
+            kb::particles::ParticlePlayback::SetSeed(manual.fixture.scene, manual.instanceId, 913U).Succeeded() &&
+            kb::particles::ParticlePlayback::Play(prewarmed.fixture.scene, prewarmed.instanceId).Succeeded() &&
+            kb::particles::ParticlePlayback::Play(manual.fixture.scene, manual.instanceId).Succeeded(),
+        "module prewarm parity setup failed");
+    for (std::uint32_t step = 0U; step < 60U; ++step) {
+        static_cast<void>(manual.fixture.scene.Runtime().Update(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds));
+    }
+    Require(HashParticles(prewarmed.fixture.scene, prewarmed.instanceId) ==
+            HashParticles(manual.fixture.scene, manual.instanceId),
+        "module prewarm diverged from the shared fixed-step kernel");
 }
 
 void TestIndependentInstancesAndPrewarm() {
@@ -227,6 +540,9 @@ void TestIndependentInstancesAndPrewarm() {
     auto twoEmitterManual = Fixture::MakeEffect(60.0F);
     twoEmitterManual.emitters[0].spawn.lifetimeMin = 5.0F;
     twoEmitterManual.emitters[0].spawn.lifetimeMax = 5.0F;
+    twoEmitterManual.emitters[0].spawn.direction = {1.0F, 0.0F, 0.0F};
+    twoEmitterManual.emitters[0].spawn.spreadDegrees = 0.0F;
+    twoEmitterManual.emitters[0].spawn.randomization = 0.0F;
     kb::scene::ParticleEmitterAsset secondEmitter = twoEmitterManual.emitters[0];
     secondEmitter.emitterId = 2U;
     secondEmitter.name = "Secondary";
@@ -401,7 +717,7 @@ void TestGlobalCapacityAndCompileRejection() {
 }
 
 void TestNoAllocationPerFixedStep() {
-    Fixture fixture(Fixture::MakeEffect(60.0F));
+    Fixture fixture(MakeFourModuleEffect());
     kb::particle_plugin::CpuParticleBackend backend;
     backend.Warmup();
     const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
@@ -636,6 +952,10 @@ int main() {
         TestRegistrationOwnershipAndCycles();
         TestNoAllocationAfterWarmup();
         TestSharedFixedSchedulerDeterminism();
+        TestUniformSolidAngleConeGolden();
+        TestModuleOrderEnableAndGravityContracts();
+        TestModuleCompileRejection();
+        TestModulePrewarmParity();
         TestIndependentInstancesAndPrewarm();
         TestBurstLifetimeDurationLoopAndCapacity();
         TestGlobalCapacityAndCompileRejection();
