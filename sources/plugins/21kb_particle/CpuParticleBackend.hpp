@@ -118,6 +118,21 @@ private:
         kb::math::Easing easing = kb::math::Easing::Linear;
     };
 
+    struct CompiledCurve {
+        std::uint8_t keyCount = 0U;
+        std::array<CompiledCurveKey, kb::scene::kParticleEffectMaxCurveKeys> keys{};
+    };
+
+    struct CompiledGradientStop {
+        float time = 0.0F;
+        kb::math::Color color{};
+    };
+
+    struct CompiledGradient {
+        std::uint8_t stopCount = 0U;
+        std::array<CompiledGradientStop, kb::scene::kParticleEffectMaxGradientStops> stops{};
+    };
+
     struct CompiledEmitter {
         bool enabled = false;
         kb::scene::ParticleSpawnMode mode = kb::scene::ParticleSpawnMode::Continuous;
@@ -131,6 +146,9 @@ private:
         std::uint8_t burstCount = 0U;
         std::array<CompiledCurveKey, kb::scene::kParticleEffectMaxCurveKeys> rateKeys{};
         std::array<kb::scene::ParticleBurstAsset, kb::scene::kParticleEffectMaxBursts> bursts{};
+        CompiledGradient colorOverLife{};
+        CompiledCurve sizeOverLife{};
+        CompiledCurve alphaOverLife{};
         using ModulePayload = std::variant<kb::scene::ParticleInitialVelocityModule,
                                            kb::scene::ParticleGravityModule,
                                            kb::scene::ParticleWindModule,
@@ -193,6 +211,10 @@ private:
     void ExecuteForcesAndIntegrate(float fixedDeltaSeconds, std::uint64_t onlyInstanceId = 0U,
                                    std::uint8_t onlyEmitterIndex = UINT8_MAX) noexcept;
     [[nodiscard]] float EvaluateRate(const CompiledEmitter& emitter, float timeSeconds) const noexcept;
+    [[nodiscard]] static float EvaluateCurve(const CompiledCurve& curve, float normalizedAge) noexcept;
+    [[nodiscard]] static kb::math::Color EvaluateGradient(
+        const CompiledGradient& gradient,
+        float normalizedAge) noexcept;
     [[nodiscard]] float NextRandom01(InstanceRuntime& runtime) noexcept;
     [[nodiscard]] kb::math::Vec3 SampleInitialVelocity(
         const CompiledEmitter& emitter,
@@ -220,6 +242,8 @@ private:
     std::vector<kb::math::Vec3> particleVelocities_;
     std::vector<float> particleAges_;
     std::vector<float> particleLifetimes_;
+    std::vector<kb::math::Color> particleColors_;
+    std::vector<float> particleSizes_;
     StepTelemetry stepTelemetry_{};
 };
 
