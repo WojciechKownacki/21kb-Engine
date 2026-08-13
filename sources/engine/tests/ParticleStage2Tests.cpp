@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <iostream>
 #include <filesystem>
 #include <fstream>
@@ -31,7 +32,59 @@
 #define KB_21KB_PARTICLE_PLUGIN_PATH ""
 #endif
 
+#ifndef KB_OLD_ENGINE_MODULE_ABI_PLUGIN_PATH
+#define KB_OLD_ENGINE_MODULE_ABI_PLUGIN_PATH ""
+#endif
+
 namespace {
+
+void Require(bool condition, std::string_view message);
+
+class ScopedEnvironmentVariable final {
+public:
+    ScopedEnvironmentVariable(std::string name, std::string value)
+        : name_(std::move(name)) {
+#if defined(_WIN32)
+        char* previous = nullptr;
+        std::size_t previousLength = 0U;
+        static_cast<void>(_dupenv_s(&previous, &previousLength, name_.c_str()));
+        if (previous != nullptr) {
+            previous_ = previous;
+            hadPrevious_ = true;
+        }
+        std::free(previous);
+#else
+        if (const char* previous = std::getenv(name_.c_str()); previous != nullptr) {
+            previous_ = previous;
+            hadPrevious_ = true;
+        }
+#endif
+#if defined(_WIN32)
+        Require(_putenv_s(name_.c_str(), value.c_str()) == 0, "test environment variable could not be set");
+#else
+        Require(setenv(name_.c_str(), value.c_str(), 1) == 0, "test environment variable could not be set");
+#endif
+    }
+
+    ~ScopedEnvironmentVariable() {
+#if defined(_WIN32)
+        static_cast<void>(_putenv_s(name_.c_str(), hadPrevious_ ? previous_.c_str() : ""));
+#else
+        if (hadPrevious_)
+            static_cast<void>(setenv(name_.c_str(), previous_.c_str(), 1));
+        else
+            static_cast<void>(unsetenv(name_.c_str()));
+#endif
+    }
+
+    ScopedEnvironmentVariable(const ScopedEnvironmentVariable&) = delete;
+    ScopedEnvironmentVariable& operator=(const ScopedEnvironmentVariable&) = delete;
+
+private:
+    std::string name_;
+    std::string previous_;
+    bool hadPrevious_ = false;
+};
 
 void Require(bool condition, std::string_view message) {
     if (!condition) throw std::runtime_error{ std::string{ message } };
@@ -250,6 +303,34 @@ void TestModuleMetadataAndLifecycle() {
     }
 }
 
+void TestOldEngineModuleAbiRejectedBeforeCreate() {
+    const std::filesystem::path pluginPath = KB_OLD_ENGINE_MODULE_ABI_PLUGIN_PATH;
+    Require(!pluginPath.empty() && std::filesystem::is_regular_file(pluginPath),
+        "old ABI module fixture is missing");
+    const std::filesystem::path markerPath =
+        std::filesystem::temp_directory_path() / "21kb_old_engine_module_abi_create.marker";
+    std::error_code error;
+    std::filesystem::remove(markerPath, error);
+    Require(!error, "old ABI create marker could not be prepared");
+    const ScopedEnvironmentVariable markerEnvironment{
+        "KB_OLD_ENGINE_MODULE_ABI_CREATE_MARKER", markerPath.string()};
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.disableEnginePluginsByDefault = true;
+    descriptor.plugins.push_back({
+        .name = "Tests.OldEngineModuleAbi",
+        .binaryPath = pluginPath.string(),
+        .enabled = true,
+    });
+    kb::scene::Scene scene{std::move(descriptor)};
+    Require(!scene.IsModuleActive("Tests.OldEngineModuleAbi"),
+        "module host activated a module built against the previous engine ABI");
+    Require(std::ranges::any_of(scene.ModuleDiagnostics(), [](const std::string& diagnostic) {
+        return diagnostic.find("unsupported engine module ABI version") != std::string::npos;
+    }), "module host did not report the rejected engine ABI before module creation");
+    Require(!std::filesystem::exists(markerPath),
+        "module host called create before rejecting the previous engine ABI");
+}
+
 void TestDynamicModuleHostLifecycle() {
     const std::filesystem::path pluginPath = KB_21KB_PARTICLE_PLUGIN_PATH;
     if (pluginPath.empty()) return;
@@ -332,6 +413,7 @@ int main() {
         TestPlaybackOwnershipAndBounds();
         TestSceneAndPrefabRoundTrips();
         TestModuleMetadataAndLifecycle();
+        TestOldEngineModuleAbiRejectedBeforeCreate();
         TestDynamicModuleHostLifecycle();
         TestProjectPolicy();
         std::cout << "Particle stage 2 tests passed\n";

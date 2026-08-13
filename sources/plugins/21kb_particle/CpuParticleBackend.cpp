@@ -51,6 +51,8 @@ void CpuParticleBackend::Warmup() {
     particleVelocities_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     particleAges_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     particleLifetimes_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
+    particleColors_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
+    particleSizes_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     warmedUp_ = true;
 }
 
@@ -352,6 +354,8 @@ std::size_t CpuParticleBackend::CopyLiveParticleStates(
                 .velocity = particleVelocities_[index],
                 .age = particleAges_[index],
                 .lifetime = particleLifetimes_[index],
+                .color = particleColors_[index],
+                .size = particleSizes_[index],
             };
         }
         ++total;
@@ -391,12 +395,16 @@ void CpuParticleBackend::RemoveParticles(std::uint64_t instanceId) noexcept {
         particleVelocities_[index] = particleVelocities_[last];
         particleAges_[index] = particleAges_[last];
         particleLifetimes_[index] = particleLifetimes_[last];
+        particleColors_[index] = particleColors_[last];
+        particleSizes_[index] = particleSizes_[last];
         particleInstanceIds_.pop_back();
         particleEmitterIndices_.pop_back();
         particlePositions_.pop_back();
         particleVelocities_.pop_back();
         particleAges_.pop_back();
         particleLifetimes_.pop_back();
+        particleColors_.pop_back();
+        particleSizes_.pop_back();
     }
 }
 
@@ -431,7 +439,10 @@ std::uint32_t CpuParticleBackend::AcquireCompiledEffect(
                 return module.type != kb::scene::ParticleModuleType::InitialVelocity &&
                        module.type != kb::scene::ParticleModuleType::Gravity &&
                        module.type != kb::scene::ParticleModuleType::Wind &&
-                       module.type != kb::scene::ParticleModuleType::Drag;
+                       module.type != kb::scene::ParticleModuleType::Drag &&
+                       module.type != kb::scene::ParticleModuleType::ColorOverLife &&
+                       module.type != kb::scene::ParticleModuleType::SizeOverLife &&
+                       module.type != kb::scene::ParticleModuleType::AlphaOverLife;
             })) {
             failureStatus = kb::particles::ParticleRuntimeStatus::UnsupportedOutput;
             return kInvalidDenseIndex;
@@ -503,6 +514,46 @@ std::uint32_t CpuParticleBackend::AcquireCompiledEffect(
             case kb::scene::ParticleModuleType::Drag:
                 destinationModule.payload = std::get<kb::scene::ParticleDragModule>(sourceModule.payload);
                 break;
+            case kb::scene::ParticleModuleType::ColorOverLife: {
+                const kb::math::Gradient& gradient =
+                    std::get<kb::scene::ParticleColorOverLifeModule>(sourceModule.payload).gradient;
+                destination.colorOverLife.stopCount = static_cast<std::uint8_t>(gradient.stops.size());
+                for (std::size_t stopIndex = 0U; stopIndex < gradient.stops.size(); ++stopIndex) {
+                    destination.colorOverLife.stops[stopIndex] = {
+                        .time = gradient.stops[stopIndex].time,
+                        .color = gradient.stops[stopIndex].color,
+                    };
+                }
+                break;
+            }
+            case kb::scene::ParticleModuleType::SizeOverLife: {
+                const kb::math::Curve& curve =
+                    std::get<kb::scene::ParticleSizeOverLifeModule>(sourceModule.payload).curve;
+                destination.sizeOverLife.keyCount = static_cast<std::uint8_t>(curve.keyframes.size());
+                for (std::size_t keyIndex = 0U; keyIndex < curve.keyframes.size(); ++keyIndex) {
+                    const kb::math::CurveKeyframe& key = curve.keyframes[keyIndex];
+                    destination.sizeOverLife.keys[keyIndex] = {
+                        .time = key.time,
+                        .value = key.value,
+                        .easing = key.easing,
+                    };
+                }
+                break;
+            }
+            case kb::scene::ParticleModuleType::AlphaOverLife: {
+                const kb::math::Curve& curve =
+                    std::get<kb::scene::ParticleAlphaOverLifeModule>(sourceModule.payload).curve;
+                destination.alphaOverLife.keyCount = static_cast<std::uint8_t>(curve.keyframes.size());
+                for (std::size_t keyIndex = 0U; keyIndex < curve.keyframes.size(); ++keyIndex) {
+                    const kb::math::CurveKeyframe& key = curve.keyframes[keyIndex];
+                    destination.alphaOverLife.keys[keyIndex] = {
+                        .time = key.time,
+                        .value = key.value,
+                        .easing = key.easing,
+                    };
+                }
+                break;
+            }
             default:
                 break;
             }
@@ -563,6 +614,45 @@ float CpuParticleBackend::EvaluateRate(const CompiledEmitter& emitter, float tim
     return last.value;
 }
 
+float CpuParticleBackend::EvaluateCurve(const CompiledCurve& curve, float normalizedAge) noexcept {
+    if (curve.keyCount == 1U || normalizedAge <= curve.keys[0].time) return curve.keys[0].value;
+    const CompiledCurveKey& last = curve.keys[curve.keyCount - 1U];
+    if (normalizedAge >= last.time) return last.value;
+    for (std::uint8_t index = 0U; index + 1U < curve.keyCount; ++index) {
+        const CompiledCurveKey& from = curve.keys[index];
+        const CompiledCurveKey& to = curve.keys[index + 1U];
+        if (normalizedAge <= to.time) {
+            const float alpha = (normalizedAge - from.time) / (to.time - from.time);
+            return kb::math::Lerp(from.value, to.value, kb::math::Evaluate(from.easing, alpha));
+        }
+    }
+    return last.value;
+}
+
+kb::math::Color CpuParticleBackend::EvaluateGradient(
+    const CompiledGradient& gradient,
+    float normalizedAge) noexcept {
+    if (gradient.stopCount == 1U || normalizedAge <= gradient.stops[0].time) {
+        return gradient.stops[0].color;
+    }
+    const CompiledGradientStop& last = gradient.stops[gradient.stopCount - 1U];
+    if (normalizedAge >= last.time) return last.color;
+    for (std::uint8_t index = 0U; index + 1U < gradient.stopCount; ++index) {
+        const CompiledGradientStop& from = gradient.stops[index];
+        const CompiledGradientStop& to = gradient.stops[index + 1U];
+        if (normalizedAge <= to.time) {
+            const float alpha = (normalizedAge - from.time) / (to.time - from.time);
+            return {
+                kb::math::Lerp(from.color.r, to.color.r, alpha),
+                kb::math::Lerp(from.color.g, to.color.g, alpha),
+                kb::math::Lerp(from.color.b, to.color.b, alpha),
+                kb::math::Lerp(from.color.a, to.color.a, alpha),
+            };
+        }
+    }
+    return last.color;
+}
+
 float CpuParticleBackend::NextRandom01(InstanceRuntime& runtime) noexcept {
     runtime.randomState += 0x9E3779B97F4A7C15ULL;
     std::uint64_t value = runtime.randomState;
@@ -617,6 +707,8 @@ bool CpuParticleBackend::SpawnExact(std::uint32_t denseIndex, std::uint8_t emitt
         particleVelocities_.push_back(SampleInitialVelocity(emitter, runtime));
         particleAges_.push_back(0.0F);
         particleLifetimes_.push_back(lifetime);
+        particleColors_.push_back(kb::math::Color{});
+        particleSizes_.push_back(1.0F);
         ++runtime.spawnOrdinal;
     }
     runtime.liveParticles[emitterIndex] += count;
@@ -768,12 +860,16 @@ void CpuParticleBackend::AdvanceParticleAges(
         particleVelocities_[index] = particleVelocities_[last];
         particleAges_[index] = particleAges_[last];
         particleLifetimes_[index] = particleLifetimes_[last];
+        particleColors_[index] = particleColors_[last];
+        particleSizes_[index] = particleSizes_[last];
         particleInstanceIds_.pop_back();
         particleEmitterIndices_.pop_back();
         particlePositions_.pop_back();
         particleVelocities_.pop_back();
         particleAges_.pop_back();
         particleLifetimes_.pop_back();
+        particleColors_.pop_back();
+        particleSizes_.pop_back();
         ++stepTelemetry_.deaths;
     }
 }
@@ -795,6 +891,11 @@ void CpuParticleBackend::ExecuteForcesAndIntegrate(
         const CompiledEmitter& emitter =
             compiledEffects_[runtime.compiledEffectIndex].emitters[particleEmitterIndices_[index]];
         kb::math::Vec3& velocity = particleVelocities_[index];
+        kb::math::Color color{};
+        float size = 1.0F;
+        float alphaMultiplier = 1.0F;
+        const float normalizedAge = kb::math::Clamp(
+            particleAges_[index] / particleLifetimes_[index], 0.0F, 1.0F);
         for (std::uint8_t moduleIndex = 0U; moduleIndex < emitter.moduleCount; ++moduleIndex) {
             const CompiledEmitter::Module& module = emitter.modules[moduleIndex];
             if (!module.enabled) continue;
@@ -817,10 +918,22 @@ void CpuParticleBackend::ExecuteForcesAndIntegrate(
                 velocity = velocity * std::exp(
                     -std::get<kb::scene::ParticleDragModule>(module.payload).coefficient * fixedDeltaSeconds);
                 break;
+            case kb::scene::ParticleModuleType::ColorOverLife:
+                color = EvaluateGradient(emitter.colorOverLife, normalizedAge);
+                break;
+            case kb::scene::ParticleModuleType::SizeOverLife:
+                size = EvaluateCurve(emitter.sizeOverLife, normalizedAge);
+                break;
+            case kb::scene::ParticleModuleType::AlphaOverLife:
+                alphaMultiplier = EvaluateCurve(emitter.alphaOverLife, normalizedAge);
+                break;
             default:
                 break;
             }
         }
+        color.a *= alphaMultiplier;
+        particleColors_[index] = color;
+        particleSizes_[index] = size;
         particlePositions_[index] = particlePositions_[index] + velocity * fixedDeltaSeconds;
     }
 }
