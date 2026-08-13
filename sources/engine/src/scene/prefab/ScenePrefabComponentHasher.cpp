@@ -173,6 +173,19 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::Mix(hash, ribbon.receivesShadow ? 1U : 0U);
         ScenePrefabHashBuilder::Mix(hash, ribbon.enabled ? 1U : 0U);
     }
+    ScenePrefabHashBuilder::Mix(hash, components.particleEffect.has_value() ? 1U : 0U);
+    if (components.particleEffect.has_value()) {
+        const ParticleEffectComponent& particleEffect = *components.particleEffect;
+        ScenePrefabHashBuilder::Mix(hash, particleEffect.effectAssetId);
+        ScenePrefabHashBuilder::Mix(hash, particleEffect.deterministicSeed);
+        ScenePrefabHashBuilder::MixFloat(hash, particleEffect.rateMultiplier);
+        ScenePrefabHashBuilder::Mix(hash, particleEffect.maxParticlesOverride);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(particleEffect.ownerDeathPolicy));
+        ScenePrefabHashBuilder::Mix(hash, particleEffect.enabled ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, particleEffect.autoPlay ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, particleEffect.followTransform ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, particleEffect.restartOnActivate ? 1U : 0U);
+    }
     ScenePrefabHashBuilder::Mix(hash, components.lensEcho.has_value() ? 1U : 0U);
     if (components.lensEcho.has_value()) {
         const ScenePrefabLensEchoComponent& echo = *components.lensEcho;

@@ -1,9 +1,11 @@
 #pragma once
 
 #include "engine/scene/ParticleEffectAsset.hpp"
+#include "engine/scene/ParticleEffectAssetValidation.hpp"
 
 #include <filesystem>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace kb::scene {
@@ -11,17 +13,35 @@ namespace kb::scene {
 inline constexpr const char* kParticleEffectAssetExtension = ".kbvfx";
 inline constexpr const char* kParticleEffectAssetType = "ParticleEffect";
 
-// LIB-143: a flat `key value\n` text format, mirroring
-// kb::render::PostProcessProfileAssetLoader's own established convention for simple
-// (non-graph) assets - one line per scalar field, repeatable `sizeCurveKeyframe`/
-// `colorGradientStop` lines build up the Curve/Gradient, unknown keys are ignored (forward
-// compatible), a missing key leaves ParticleEffectAsset's own default member value in place.
+struct ParticleEffectLoadResult {
+    std::optional<ParticleEffectAsset> asset;
+    std::vector<ParticleEffectDiagnostic> diagnostics;
+    bool migratedFromLegacy = false;
+
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return asset.has_value() && diagnostics.empty();
+    }
+};
+
+struct ParticleEffectSaveResult {
+    std::vector<ParticleEffectDiagnostic> diagnostics;
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return diagnostics.empty();
+    }
+};
+
 class ParticleEffectAssetIO final {
-public:
+  public:
     ParticleEffectAssetIO() = delete;
 
+    [[nodiscard]] static ParticleEffectLoadResult LoadDetailed(const std::filesystem::path& path);
+    [[nodiscard]] static ParticleEffectLoadResult Parse(std::string_view source);
     [[nodiscard]] static std::optional<ParticleEffectAsset> Load(const std::filesystem::path& path);
+    [[nodiscard]] static ParticleEffectSaveResult SaveDetailed(const std::filesystem::path& path,
+                                                               const ParticleEffectAsset& asset);
     [[nodiscard]] static bool Save(const std::filesystem::path& path, const ParticleEffectAsset& asset);
+    [[nodiscard]] static std::optional<std::string> Serialize(const ParticleEffectAsset& asset,
+                                                              std::vector<ParticleEffectDiagnostic>& diagnostics);
 };
 
 } // namespace kb::scene

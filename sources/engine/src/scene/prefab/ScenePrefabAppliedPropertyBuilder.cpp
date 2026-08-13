@@ -82,6 +82,9 @@ namespace {
     if (StartsWith(propertyPath, "deformedGeometry")) {
         return ScenePrefabOverrideFlag::DeformedGeometry;
     }
+    if (StartsWith(propertyPath, "particleEffect")) {
+        return ScenePrefabOverrideFlag::ParticleEffect;
+    }
     if (StartsWith(propertyPath, "uiDocument")) {
         return ScenePrefabOverrideFlag::UIDocument;
     }
@@ -443,6 +446,25 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
             property.value = std::to_string(behaviour->executionOrder);
             return true;
         }
+    }
+    if (StartsWith(propertyPath, "particleEffect")) {
+        const ParticleEffectComponent* value = components.ParticleEffects().TryGet(entity);
+        if (propertyPath == "particleEffect") {
+            property.value = value == nullptr ? "null" : "present";
+            return true;
+        }
+        if (value == nullptr) return false;
+        if (propertyPath == "particleEffect.effectAssetId") property.value = std::to_string(value->effectAssetId);
+        else if (propertyPath == "particleEffect.deterministicSeed") property.value = std::to_string(value->deterministicSeed);
+        else if (propertyPath == "particleEffect.rateMultiplier") property.value = std::to_string(value->rateMultiplier);
+        else if (propertyPath == "particleEffect.maxParticlesOverride") property.value = std::to_string(value->maxParticlesOverride);
+        else if (propertyPath == "particleEffect.ownerDeathPolicy") property.value = std::to_string(static_cast<int>(value->ownerDeathPolicy));
+        else if (propertyPath == "particleEffect.enabled") property.value = ToString(value->enabled);
+        else if (propertyPath == "particleEffect.autoPlay") property.value = ToString(value->autoPlay);
+        else if (propertyPath == "particleEffect.followTransform") property.value = ToString(value->followTransform);
+        else if (propertyPath == "particleEffect.restartOnActivate") property.value = ToString(value->restartOnActivate);
+        else return false;
+        return true;
     }
     if (StartsWith(propertyPath, "audioSource")) {
         const AudioSourceComponent* audioSource = components.AudioSources().TryGet(entity);

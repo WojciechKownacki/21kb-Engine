@@ -98,6 +98,12 @@ void RevertComponentProperty(Scene& scene, SceneObject object, const ScenePrefab
         } else {
             components.DeformedGeometries().Remove(entity);
         }
+    } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "particleEffect")) {
+        if (node.components.particleEffect.has_value()) {
+            components.ParticleEffects().Set(entity, *node.components.particleEffect);
+        } else {
+            components.ParticleEffects().Remove(entity);
+        }
     } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "uiDocument")) {
         if (node.components.uiDocument.has_value()) {
             components.UIDocuments().Set(entity, *node.components.uiDocument);
