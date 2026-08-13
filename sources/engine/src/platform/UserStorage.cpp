@@ -1,5 +1,6 @@
 #include "engine/platform/UserStorage.hpp"
 
+#include <algorithm>
 #include <fstream>
 #if defined(_WIN32)
 #include <windows.h>
@@ -59,7 +60,7 @@ std::optional<std::string> UserStorage::Read(std::string_view key) const {
         std::istreambuf_iterator<char>{} };
 }
 bool UserStorage::Delete(std::string_view key) { const std::filesystem::path path = PathFor(key); if (path.empty()) return false; std::lock_guard lock{ mutex_ }; std::error_code error; return std::filesystem::remove(path, error); }
-std::vector<std::string> UserStorage::List() const { std::lock_guard lock{ mutex_ }; std::vector<std::string> result; std::error_code error; for (std::filesystem::recursive_directory_iterator iterator(root_, error), end; iterator != end && !error; iterator.increment(error)) if (iterator->is_regular_file(error)) result.push_back(std::filesystem::relative(iterator->path(), root_, error).generic_string()); return result; }
+std::vector<std::string> UserStorage::List() const { std::lock_guard lock{ mutex_ }; std::vector<std::string> result; std::error_code error; for (std::filesystem::recursive_directory_iterator iterator(root_, error), end; iterator != end && !error; iterator.increment(error)) if (iterator->is_regular_file(error)) result.push_back(std::filesystem::relative(iterator->path(), root_, error).generic_string()); std::ranges::sort(result); return result; }
 std::future<bool> UserStorage::WriteAsync(std::string key, std::string data) { return std::async(std::launch::async, [this, key = std::move(key), data = std::move(data)] { return Write(key, data); }); }
 
 } // namespace kb::platform
