@@ -57,6 +57,7 @@ inline constexpr std::uint32_t kParticleEffectRetainedSnapshotSlots = 4U;
 inline constexpr std::uint32_t kParticleEffectRetainedGpuSteps = 64U;
 inline constexpr std::uint64_t kParticleEffectMaxCpuSnapshotBytes = 64ULL * 1024ULL * 1024ULL;
 inline constexpr std::uint64_t kParticleEffectMaxGpuResourceBytes = 256ULL * 1024ULL * 1024ULL;
+inline constexpr kb::math::Vec3 kParticleEffectDefaultSceneGravity{0.0F, -9.81F, 0.0F};
 
 using ParticleStableId = std::uint64_t;
 

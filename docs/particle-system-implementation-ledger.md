@@ -10,9 +10,9 @@
 ## Current package
 
 - Stage: `3` — deterministic CPU fixed-step simulation and baseline modules.
-- Status: `in_progress`; checkpoint 3.2 is accepted.
+- Status: `in_progress`; checkpoint 3.3A is accepted.
 - Scope: Stage 3 builds deterministic CPU fixed-step simulation, dense runtime state, bounded queues, baseline modules, owner policies, and telemetry on top of the delivered provider ABI.
-- Next gate: fixed-step compiler/kernel, baseline module evaluation, spawn/event ordering, hashes, and zero heap allocations per fixed step after warmup.
+- Next gate: remaining baseline modules, owner policies, event ordering, reload behavior, and their deterministic coverage.
 
 ## Accepted stages
 
@@ -68,6 +68,13 @@
 - Explicit schema and runtime limits bound prewarm, continuous spawn rate, per-step spawn budget, per-emitter capacity, and the 262,144-particle scene capacity; telemetry reports admitted and rejected spawn demand.
 - Focused tests cover 30/60/144 Hz fixed-step parity, catch-up, seeded instance independence, one- and two-emitter prewarm, burst/lifetime/duration/loop/drain behavior, capacity boundaries, and allocation-free stepping.
 
+### Stage 3.3A â€” CPU initial velocity and force modules: `accepted checkpoint`
+
+- The compiler accepts and executes only `InitialVelocity`, `Gravity`, `Wind`, and `Drag` from the baseline module set; other module variants remain an explicit unsupported result until their executors arrive.
+- Initial velocity uses deterministic uniform solid-angle cone sampling; force execution preserves authored enabled-module order and runs in the shared spawn, age/death, force, and integration step used by prewarm.
+- Gravity has one engine-owned default scene-gravity constant and mutually exclusive custom-acceleration or scene-scale channels. Legacy migration now maps its historical gravity scale exactly to the scene-scale channel.
+- The focused CPU backend suite independently passed after build: solid-angle statistics plus golden `10334376869005698480`, force ordering/enables, invalid payload rejection, legacy runtime mapping, 30/60/144 Hz module parity, prewarm parity, and allocation-free module stepping.
+
 ## Accepted decisions and mappings
 
 - Plugin identifier: `Rendering.21kbParticle`.
@@ -115,4 +122,4 @@
 - Stage 1A attempt 1 was rejected after independent review despite a green focused test; every listed defect was repaired and the second attempt was accepted.
 - No open stage 0 defect remains.
 - No open stage 1 defect remains.
-- Next gate: stage 3.3 adds baseline particle modules, owner policies, event ordering, and deterministic runtime coverage without widening the fixed-step contract.
+- Next gate: stage 3.3B adds ColorOverLife, SizeOverLife, AlphaOverLife, CollisionPlane, and SubEmitter execution with bounded ordered events; owner policies and reload remain separate Stage 3 checkpoints.

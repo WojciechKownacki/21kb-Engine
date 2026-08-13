@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace kb::particle_plugin {
@@ -122,16 +123,25 @@ private:
         kb::scene::ParticleSpawnMode mode = kb::scene::ParticleSpawnMode::Continuous;
         std::uint32_t maxParticles = 0U;
         kb::math::Vec3 localPosition{};
-        kb::math::Vec3 direction{0.0F, 1.0F, 0.0F};
+        kb::scene::ParticleInitialVelocityModule initialVelocity{};
         float lifetimeMin = 1.0F;
         float lifetimeMax = 1.0F;
-        float speedMin = 0.0F;
-        float speedMax = 0.0F;
         float prewarmSeconds = 0.0F;
         std::uint8_t rateKeyCount = 0U;
         std::uint8_t burstCount = 0U;
         std::array<CompiledCurveKey, kb::scene::kParticleEffectMaxCurveKeys> rateKeys{};
         std::array<kb::scene::ParticleBurstAsset, kb::scene::kParticleEffectMaxBursts> bursts{};
+        using ModulePayload = std::variant<kb::scene::ParticleInitialVelocityModule,
+                                           kb::scene::ParticleGravityModule,
+                                           kb::scene::ParticleWindModule,
+                                           kb::scene::ParticleDragModule>;
+        struct Module {
+            kb::scene::ParticleModuleType type = kb::scene::ParticleModuleType::InitialVelocity;
+            bool enabled = false;
+            ModulePayload payload = kb::scene::ParticleInitialVelocityModule{};
+        };
+        std::uint8_t moduleCount = 0U;
+        std::array<Module, kb::scene::kParticleEffectMaxModulesPerEmitter> modules{};
     };
 
     struct CompiledEffect {
@@ -180,8 +190,13 @@ private:
     [[nodiscard]] bool SpawnExact(std::uint32_t denseIndex, std::uint8_t emitterIndex, std::uint32_t count) noexcept;
     void AdvanceParticleAges(float fixedDeltaSeconds, std::uint64_t onlyInstanceId = 0U,
                              std::uint8_t onlyEmitterIndex = UINT8_MAX) noexcept;
+    void ExecuteForcesAndIntegrate(float fixedDeltaSeconds, std::uint64_t onlyInstanceId = 0U,
+                                   std::uint8_t onlyEmitterIndex = UINT8_MAX) noexcept;
     [[nodiscard]] float EvaluateRate(const CompiledEmitter& emitter, float timeSeconds) const noexcept;
     [[nodiscard]] float NextRandom01(InstanceRuntime& runtime) noexcept;
+    [[nodiscard]] kb::math::Vec3 SampleInitialVelocity(
+        const CompiledEmitter& emitter,
+        InstanceRuntime& runtime) noexcept;
 
     bool warmedUp_ = false;
     std::uint32_t denseInstanceCount_ = 0U;
