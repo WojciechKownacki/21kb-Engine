@@ -301,13 +301,14 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Step(
         return Result(kb::particles::ParticleRuntimeStatus::InvalidRequest);
     }
     stepTelemetry_ = {};
-    AdvanceParticleAges(fixedDeltaSeconds);
     std::uint32_t remainingSpawnBudget = kb::scene::kParticleEffectMaxSpawnsPerStep;
     for (std::uint32_t denseIndex = 0U; denseIndex < denseInstanceCount_; ++denseIndex) {
         if (playbackStates_[denseIndex] == PlaybackState::Playing) {
             StepInstance(denseIndex, fixedDeltaSeconds, remainingSpawnBudget);
         }
     }
+    AdvanceParticleAges(fixedDeltaSeconds);
+    ExecuteForcesAndIntegrate(fixedDeltaSeconds);
     return Result(kb::particles::ParticleRuntimeStatus::Success);
 }
 
@@ -426,7 +427,12 @@ std::uint32_t CpuParticleBackend::AcquireCompiledEffect(
         return kInvalidDenseIndex;
     }
     for (const kb::scene::ParticleEmitterAsset& emitter : handle->emitters) {
-        if (!emitter.modules.empty()) {
+        if (std::any_of(emitter.modules.begin(), emitter.modules.end(), [](const kb::scene::ParticleModuleAsset& module) {
+                return module.type != kb::scene::ParticleModuleType::InitialVelocity &&
+                       module.type != kb::scene::ParticleModuleType::Gravity &&
+                       module.type != kb::scene::ParticleModuleType::Wind &&
+                       module.type != kb::scene::ParticleModuleType::Drag;
+            })) {
             failureStatus = kb::particles::ParticleRuntimeStatus::UnsupportedOutput;
             return kInvalidDenseIndex;
         }
@@ -456,11 +462,15 @@ std::uint32_t CpuParticleBackend::AcquireCompiledEffect(
         destination.mode = source.spawn.mode;
         destination.maxParticles = source.maxParticles;
         destination.localPosition = source.localPosition;
-        destination.direction = kb::math::Normalize(source.spawn.direction);
+        destination.initialVelocity = {
+            .direction = kb::math::Normalize(source.spawn.direction),
+            .speedMin = source.spawn.speedMin,
+            .speedMax = source.spawn.speedMax,
+            .randomization = source.spawn.randomization,
+            .spreadDegrees = source.spawn.spreadDegrees,
+        };
         destination.lifetimeMin = source.spawn.lifetimeMin;
         destination.lifetimeMax = source.spawn.lifetimeMax;
-        destination.speedMin = source.spawn.speedMin;
-        destination.speedMax = source.spawn.speedMax;
         destination.prewarmSeconds = source.spawn.prewarmSeconds;
         destination.rateKeyCount = static_cast<std::uint8_t>(source.spawn.rateOverTime.keyframes.size());
         destination.burstCount = static_cast<std::uint8_t>(source.spawn.bursts.size());
@@ -469,6 +479,34 @@ std::uint32_t CpuParticleBackend::AcquireCompiledEffect(
             destination.rateKeys[keyIndex] = { .time = key.time, .value = key.value, .easing = key.easing };
         }
         std::copy(source.spawn.bursts.begin(), source.spawn.bursts.end(), destination.bursts.begin());
+        destination.moduleCount = static_cast<std::uint8_t>(source.modules.size());
+        for (std::size_t moduleIndex = 0U; moduleIndex < source.modules.size(); ++moduleIndex) {
+            const kb::scene::ParticleModuleAsset& sourceModule = source.modules[moduleIndex];
+            CompiledEmitter::Module& destinationModule = destination.modules[moduleIndex];
+            destinationModule.type = sourceModule.type;
+            destinationModule.enabled = sourceModule.enabled;
+            switch (sourceModule.type) {
+            case kb::scene::ParticleModuleType::InitialVelocity:
+                destinationModule.payload = std::get<kb::scene::ParticleInitialVelocityModule>(sourceModule.payload);
+                if (sourceModule.enabled) {
+                    destination.initialVelocity =
+                        std::get<kb::scene::ParticleInitialVelocityModule>(sourceModule.payload);
+                    destination.initialVelocity.direction = kb::math::Normalize(destination.initialVelocity.direction);
+                }
+                break;
+            case kb::scene::ParticleModuleType::Gravity:
+                destinationModule.payload = std::get<kb::scene::ParticleGravityModule>(sourceModule.payload);
+                break;
+            case kb::scene::ParticleModuleType::Wind:
+                destinationModule.payload = std::get<kb::scene::ParticleWindModule>(sourceModule.payload);
+                break;
+            case kb::scene::ParticleModuleType::Drag:
+                destinationModule.payload = std::get<kb::scene::ParticleDragModule>(sourceModule.payload);
+                break;
+            default:
+                break;
+            }
+        }
     }
     compiledEffects_[freeIndex] = compiled;
     return freeIndex;
@@ -500,8 +538,10 @@ void CpuParticleBackend::PrewarmInstance(std::uint32_t denseIndex) noexcept {
         for (std::uint32_t step = 0U; step < steps; ++step) {
             stepTelemetry_ = {};
             std::uint32_t budget = kb::scene::kParticleEffectMaxSpawnsPerStep;
-            AdvanceParticleAges(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds, instanceId, emitterIndex);
             StepEmitter(denseIndex, emitterIndex, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds, budget);
+            AdvanceParticleAges(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds, instanceId, emitterIndex);
+            ExecuteForcesAndIntegrate(
+                kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds, instanceId, emitterIndex);
         }
     }
 }
@@ -532,6 +572,32 @@ float CpuParticleBackend::NextRandom01(InstanceRuntime& runtime) noexcept {
     return static_cast<float>(value >> 40U) * (1.0F / 16'777'216.0F);
 }
 
+kb::math::Vec3 CpuParticleBackend::SampleInitialVelocity(
+    const CompiledEmitter& emitter,
+    InstanceRuntime& runtime) noexcept {
+    const kb::scene::ParticleInitialVelocityModule& initial = emitter.initialVelocity;
+    const float speedSample = NextRandom01(runtime);
+    const float coneSample = NextRandom01(runtime);
+    const float azimuthSample = NextRandom01(runtime);
+    const float randomizedSpeedSample = 0.5F + (speedSample - 0.5F) * initial.randomization;
+    const float speed = initial.speedMin + (initial.speedMax - initial.speedMin) * randomizedSpeedSample;
+    const float coneRadians = kb::math::ToRadians(
+        kb::math::Degrees{initial.spreadDegrees * initial.randomization}).Value();
+    const float minimumCosine = std::cos(coneRadians);
+    const float cosine = 1.0F - coneSample * (1.0F - minimumCosine);
+    const float sine = std::sqrt(std::max(0.0F, 1.0F - cosine * cosine));
+    const float azimuth = 2.0F * kb::math::kPi * azimuthSample;
+    const kb::math::Vec3 axis = initial.direction;
+    const kb::math::Vec3 reference = std::abs(axis.z) < 0.999F
+        ? kb::math::Vec3{0.0F, 0.0F, 1.0F}
+        : kb::math::Vec3{0.0F, 1.0F, 0.0F};
+    const kb::math::Vec3 tangent = kb::math::Normalize(kb::math::Cross(reference, axis));
+    const kb::math::Vec3 bitangent = kb::math::Cross(axis, tangent);
+    const kb::math::Vec3 direction = axis * cosine +
+        tangent * (sine * std::cos(azimuth)) + bitangent * (sine * std::sin(azimuth));
+    return direction * speed;
+}
+
 bool CpuParticleBackend::SpawnExact(std::uint32_t denseIndex, std::uint8_t emitterIndex, std::uint32_t count) noexcept {
     InstanceRuntime& runtime = instanceRuntime_[denseIndex];
     const CompiledEffect& effect = compiledEffects_[runtime.compiledEffectIndex];
@@ -545,11 +611,10 @@ bool CpuParticleBackend::SpawnExact(std::uint32_t denseIndex, std::uint8_t emitt
     for (std::uint32_t index = 0U; index < count; ++index) {
         const float lifetime = emitter.lifetimeMin +
             (emitter.lifetimeMax - emitter.lifetimeMin) * NextRandom01(runtime);
-        const float speed = emitter.speedMin + (emitter.speedMax - emitter.speedMin) * NextRandom01(runtime);
         particleInstanceIds_.push_back(instanceId);
         particleEmitterIndices_.push_back(emitterIndex);
         particlePositions_.push_back(emitter.localPosition);
-        particleVelocities_.push_back(emitter.direction * speed);
+        particleVelocities_.push_back(SampleInitialVelocity(emitter, runtime));
         particleAges_.push_back(0.0F);
         particleLifetimes_.push_back(lifetime);
         ++runtime.spawnOrdinal;
@@ -682,7 +747,6 @@ void CpuParticleBackend::AdvanceParticleAges(
         }
         particleAges_[index] += fixedDeltaSeconds;
         if (particleAges_[index] < particleLifetimes_[index]) {
-            particlePositions_[index] = particlePositions_[index] + particleVelocities_[index] * fixedDeltaSeconds;
             ++index;
             continue;
         }
@@ -711,6 +775,53 @@ void CpuParticleBackend::AdvanceParticleAges(
         particleAges_.pop_back();
         particleLifetimes_.pop_back();
         ++stepTelemetry_.deaths;
+    }
+}
+
+void CpuParticleBackend::ExecuteForcesAndIntegrate(
+    float fixedDeltaSeconds,
+    std::uint64_t onlyInstanceId,
+    std::uint8_t onlyEmitterIndex) noexcept {
+    for (std::size_t index = 0U; index < particleInstanceIds_.size(); ++index) {
+        if (onlyInstanceId != 0U && particleInstanceIds_[index] != onlyInstanceId) continue;
+        if (onlyEmitterIndex != UINT8_MAX && particleEmitterIndices_[index] != onlyEmitterIndex) continue;
+        const std::uint32_t denseIndex = ResolveDenseIndex(particleInstanceIds_[index]);
+        if (denseIndex == kInvalidDenseIndex ||
+            (playbackStates_[denseIndex] != PlaybackState::Playing &&
+             playbackStates_[denseIndex] != PlaybackState::Draining)) {
+            continue;
+        }
+        const InstanceRuntime& runtime = instanceRuntime_[denseIndex];
+        const CompiledEmitter& emitter =
+            compiledEffects_[runtime.compiledEffectIndex].emitters[particleEmitterIndices_[index]];
+        kb::math::Vec3& velocity = particleVelocities_[index];
+        for (std::uint8_t moduleIndex = 0U; moduleIndex < emitter.moduleCount; ++moduleIndex) {
+            const CompiledEmitter::Module& module = emitter.modules[moduleIndex];
+            if (!module.enabled) continue;
+            switch (module.type) {
+            case kb::scene::ParticleModuleType::InitialVelocity:
+                break;
+            case kb::scene::ParticleModuleType::Gravity: {
+                const kb::scene::ParticleGravityModule& gravity =
+                    std::get<kb::scene::ParticleGravityModule>(module.payload);
+                velocity = velocity +
+                    (gravity.acceleration + kb::scene::kParticleEffectDefaultSceneGravity *
+                        gravity.sceneGravityScale) * fixedDeltaSeconds;
+                break;
+            }
+            case kb::scene::ParticleModuleType::Wind:
+                velocity = velocity + std::get<kb::scene::ParticleWindModule>(module.payload).acceleration *
+                    fixedDeltaSeconds;
+                break;
+            case kb::scene::ParticleModuleType::Drag:
+                velocity = velocity * std::exp(
+                    -std::get<kb::scene::ParticleDragModule>(module.payload).coefficient * fixedDeltaSeconds);
+                break;
+            default:
+                break;
+            }
+        }
+        particlePositions_[index] = particlePositions_[index] + velocity * fixedDeltaSeconds;
     }
 }
 
