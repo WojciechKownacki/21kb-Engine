@@ -7,8 +7,6 @@
 
 namespace kb::particles {
 
-inline constexpr std::uint32_t kParticleSimulationBackendAbiVersion = 1U;
-
 enum class ParticleRuntimeStatus : std::uint8_t {
     Success,
     BackendUnavailable,
@@ -51,6 +49,8 @@ struct ParticleRuntimeState {
     kb::math::Vec3 velocity{};
     float age = 0.0F;
     float lifetime = 1.0F;
+    kb::math::Color color{};
+    float size = 1.0F;
 };
 
 struct PendingParticleRuntimeEvent {

@@ -1478,6 +1478,12 @@ endif()
 kb_apply_quality_gates(kb_engine)
 
 if(BUILD_TESTING)
+    add_library(kb_engine_old_abi_test_plugin SHARED
+        tests/OldEngineModuleAbiPlugin.cpp
+    )
+    target_include_directories(kb_engine_old_abi_test_plugin PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    kb_apply_quality_gates(kb_engine_old_abi_test_plugin)
+
     add_executable(kb_21kb_particle_asset_tests
         tests/ParticleEffectAssetTests.cpp
     )
@@ -1502,6 +1508,10 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle
     )
     target_link_libraries(kb_21kb_particle_stage2_tests PRIVATE kb_engine)
+    add_dependencies(kb_21kb_particle_stage2_tests kb_engine_old_abi_test_plugin)
+    target_compile_definitions(kb_21kb_particle_stage2_tests PRIVATE
+        "KB_OLD_ENGINE_MODULE_ABI_PLUGIN_PATH=\"$<TARGET_FILE:kb_engine_old_abi_test_plugin>\""
+    )
     add_test(NAME kb_21kb_particle_stage2_tests COMMAND $<TARGET_FILE:kb_21kb_particle_stage2_tests>)
     set_tests_properties(kb_21kb_particle_stage2_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     kb_apply_quality_gates(kb_21kb_particle_stage2_tests)

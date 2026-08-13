@@ -126,6 +126,25 @@ void AddModule(kb::scene::ParticleEmitterAsset& emitter,
     return hash;
 }
 
+[[nodiscard]] std::uint64_t HashVisualStateSpan(std::span<const kb::particles::ParticleRuntimeState> states) {
+    std::uint64_t hash = HashStateSpan(states);
+    const auto mix = [&](float value) {
+        const std::uint32_t bits = std::bit_cast<std::uint32_t>(value);
+        for (std::uint32_t byte = 0U; byte < 4U; ++byte) {
+            hash ^= (bits >> (byte * 8U)) & 0xFFU;
+            hash *= 1099511628211ULL;
+        }
+    };
+    for (const auto& state : states) {
+        mix(state.color.r);
+        mix(state.color.g);
+        mix(state.color.b);
+        mix(state.color.a);
+        mix(state.size);
+    }
+    return hash;
+}
+
 [[nodiscard]] std::uint64_t HashParticles(
     const kb::scene::Scene& scene,
     std::uint64_t instanceId) {
@@ -158,6 +177,29 @@ void AddModule(kb::scene::ParticleEmitterAsset& emitter,
         kb::scene::ParticleWindModule{.acceleration = {0.75F, 0.0F, -0.5F}});
     AddModule(emitter, 4U, kb::scene::ParticleModuleType::Drag,
         kb::scene::ParticleDragModule{.coefficient = 0.35F});
+    return effect;
+}
+
+[[nodiscard]] kb::scene::ParticleEffectAsset MakeVisualModuleEffect(float prewarmSeconds = 0.0F) {
+    auto effect = MakeFourModuleEffect(prewarmSeconds);
+    kb::scene::ParticleEmitterAsset& emitter = effect.emitters[0];
+    AddModule(emitter, 5U, kb::scene::ParticleModuleType::ColorOverLife,
+        kb::scene::ParticleColorOverLifeModule{.gradient = {.stops = {
+            {.time = 0.0F, .color = {1.0F, 0.2F, 0.0F, 0.8F}},
+            {.time = 0.5F, .color = {0.4F, 0.8F, 0.2F, 0.6F}},
+            {.time = 1.0F, .color = {0.0F, 0.1F, 1.0F, 0.3F}},
+        }}});
+    AddModule(emitter, 6U, kb::scene::ParticleModuleType::SizeOverLife,
+        kb::scene::ParticleSizeOverLifeModule{.curve = {.keyframes = {
+            {.time = 0.0F, .value = 0.5F, .easing = kb::math::Easing::Linear},
+            {.time = 0.5F, .value = 2.0F, .easing = kb::math::Easing::InQuad},
+            {.time = 1.0F, .value = 0.25F, .easing = kb::math::Easing::Linear},
+        }}});
+    AddModule(emitter, 7U, kb::scene::ParticleModuleType::AlphaOverLife,
+        kb::scene::ParticleAlphaOverLifeModule{.curve = {.keyframes = {
+            {.time = 0.0F, .value = 0.25F, .easing = kb::math::Easing::OutQuad},
+            {.time = 1.0F, .value = 1.0F, .easing = kb::math::Easing::Linear},
+        }}});
     return effect;
 }
 
@@ -198,7 +240,7 @@ struct RuntimeFixture {
 }
 
 [[nodiscard]] std::uint64_t RunModuleFrameFeedHash(float frameDeltaSeconds) {
-    RuntimeFixture runtime(MakeFourModuleEffect());
+    RuntimeFixture runtime(MakeVisualModuleEffect());
     Require(kb::particles::ParticlePlayback::SetSeed(runtime.fixture.scene, runtime.instanceId,
                 0xA55A1234FEDC9876ULL).Succeeded() &&
             kb::particles::ParticlePlayback::Play(runtime.fixture.scene, runtime.instanceId).Succeeded(),
@@ -210,7 +252,8 @@ struct RuntimeFixture {
     }
     Require(runtime.fixture.scene.Runtime().FixedStepIndex() == 120U,
         "module frame feed did not produce exactly 120 fixed steps");
-    return HashParticles(runtime.fixture.scene, runtime.instanceId);
+    return HashVisualStateSpan(
+        kb::particles::ParticlePlayback::LiveParticleStates(runtime.fixture.scene, runtime.instanceId));
 }
 
 void TestSharedFixedSchedulerDeterminism() {
@@ -281,6 +324,67 @@ void TestUniformSolidAngleConeGolden() {
     const std::uint64_t actualHash = HashStateSpan(states);
     Require(actualHash == kExpectedConeHash,
         ("uniform cone deterministic golden changed: actual=" + std::to_string(actualHash)).c_str());
+}
+
+void TestVisualModulesObservableGoldenAndDefaults() {
+    const auto makeVisual = [](bool enabled) {
+        auto effect = Fixture::MakeEffect(0.0F, 4U);
+        kb::scene::ParticleEmitterAsset& emitter = effect.emitters[0];
+        emitter.spawn.lifetimeMin = 1.0F;
+        emitter.spawn.lifetimeMax = 1.0F;
+        emitter.spawn.speedMin = 0.0F;
+        emitter.spawn.speedMax = 0.0F;
+        AddModule(emitter, 1U, kb::scene::ParticleModuleType::ColorOverLife,
+            kb::scene::ParticleColorOverLifeModule{.gradient = {.stops = {
+                {.time = 0.0F, .color = {1.0F, 0.2F, 0.0F, 0.8F}},
+                {.time = 1.0F, .color = {0.0F, 0.6F, 1.0F, 0.4F}},
+            }}}, enabled);
+        AddModule(emitter, 2U, kb::scene::ParticleModuleType::SizeOverLife,
+            kb::scene::ParticleSizeOverLifeModule{.curve = {.keyframes = {
+                {.time = 0.0F, .value = 1.0F, .easing = kb::math::Easing::Linear},
+                {.time = 1.0F, .value = 3.0F, .easing = kb::math::Easing::Linear},
+            }}}, enabled);
+        AddModule(emitter, 3U, kb::scene::ParticleModuleType::AlphaOverLife,
+            kb::scene::ParticleAlphaOverLifeModule{.curve = {.keyframes = {
+                {.time = 0.0F, .value = 0.5F, .easing = kb::math::Easing::Linear},
+                {.time = 1.0F, .value = 1.0F, .easing = kb::math::Easing::Linear},
+            }}}, enabled);
+        return effect;
+    };
+    const auto sample = [&](bool enabled) {
+        Fixture fixture(makeVisual(enabled));
+        kb::particle_plugin::CpuParticleBackend backend;
+        backend.Warmup();
+        const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+        Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded() &&
+                backend.Emit(fixture.scene, created.instanceId, 1U).Succeeded(),
+            "visual module observable fixture setup failed");
+        for (std::uint32_t step = 0U; step < 30U; ++step) {
+            Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+                "visual module observable step failed");
+        }
+        return CopyBackendStates(backend, fixture, created.instanceId);
+    };
+
+    const auto enabled = sample(true);
+    Require(enabled.size() == 1U, "visual module fixture particle count changed");
+    const auto& state = enabled.front();
+    Require(std::abs(state.color.r - 0.5F) < 0.00001F &&
+            std::abs(state.color.g - 0.4F) < 0.00001F &&
+            std::abs(state.color.b - 0.5F) < 0.00001F &&
+            std::abs(state.color.a - 0.45F) < 0.00001F &&
+            std::abs(state.size - 2.0F) < 0.00001F,
+        "curve, gradient, size, or composed alpha state is not publicly observable");
+    constexpr std::uint64_t kExpectedVisualHash = 3957020943848305260ULL;
+    const std::uint64_t actualHash = HashVisualStateSpan(enabled);
+    Require(actualHash == kExpectedVisualHash,
+        ("visual curve and gradient deterministic golden changed: actual=" + std::to_string(actualHash)).c_str());
+
+    const auto disabled = sample(false);
+    Require(disabled.size() == 1U && disabled.front().color.r == 1.0F &&
+            disabled.front().color.g == 1.0F && disabled.front().color.b == 1.0F &&
+            disabled.front().color.a == 1.0F && disabled.front().size == 1.0F,
+        "disabled visual modules changed opaque-white unit-size defaults");
 }
 
 void TestModuleOrderEnableAndGravityContracts() {
@@ -424,11 +528,22 @@ void TestModuleCompileRejection() {
         return backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner).status;
     };
 
-    auto unsupported = Fixture::MakeEffect();
-    AddModule(unsupported.emitters[0], 1U, kb::scene::ParticleModuleType::SizeOverLife,
-        kb::scene::ParticleSizeOverLifeModule{});
-    Require(createStatus(std::move(unsupported)) == kb::particles::ParticleRuntimeStatus::UnsupportedOutput,
-        "unsupported typed module was accepted by the 3.3A compiler");
+    auto unsupportedCollision = Fixture::MakeEffect();
+    AddModule(unsupportedCollision.emitters[0], 1U, kb::scene::ParticleModuleType::CollisionPlane,
+        kb::scene::ParticleCollisionPlaneModule{});
+    Require(createStatus(std::move(unsupportedCollision)) == kb::particles::ParticleRuntimeStatus::UnsupportedOutput,
+        "unsupported CollisionPlane module was accepted by the compiler");
+
+    auto unsupportedSubEmitter = Fixture::MakeEffect();
+    kb::scene::ParticleEmitterAsset subEmitterTarget = unsupportedSubEmitter.emitters[0];
+    subEmitterTarget.emitterId = 2U;
+    subEmitterTarget.name = "SubEmitterTarget";
+    AddModule(unsupportedSubEmitter.emitters[0], 1U, kb::scene::ParticleModuleType::SubEmitter,
+        kb::scene::ParticleSubEmitterModule{.targetEmitterId = 2U});
+    unsupportedSubEmitter.emitters.push_back(std::move(subEmitterTarget));
+    Require(createStatus(std::move(unsupportedSubEmitter)) ==
+            kb::particles::ParticleRuntimeStatus::UnsupportedOutput,
+        "unsupported SubEmitter module was accepted by the compiler");
 
     auto bothGravityChannels = Fixture::MakeEffect();
     AddModule(bothGravityChannels.emitters[0], 1U, kb::scene::ParticleModuleType::Gravity,
@@ -468,11 +583,31 @@ void TestModuleCompileRejection() {
         kb::scene::ParticleDragModule{.coefficient = -1.0F});
     Require(createStatus(std::move(invalidDrag)) == kb::particles::ParticleRuntimeStatus::InvalidAsset,
         "negative Drag payload reached the executor");
+
+    auto invalidColor = Fixture::MakeEffect();
+    AddModule(invalidColor.emitters[0], 1U, kb::scene::ParticleModuleType::ColorOverLife,
+        kb::scene::ParticleColorOverLifeModule{});
+    Require(createStatus(std::move(invalidColor)) == kb::particles::ParticleRuntimeStatus::InvalidAsset,
+        "empty ColorOverLife gradient reached the executor");
+
+    auto invalidSize = Fixture::MakeEffect();
+    AddModule(invalidSize.emitters[0], 1U, kb::scene::ParticleModuleType::SizeOverLife,
+        kb::scene::ParticleSizeOverLifeModule{.curve = {}});
+    Require(createStatus(std::move(invalidSize)) == kb::particles::ParticleRuntimeStatus::InvalidAsset,
+        "empty SizeOverLife curve reached the executor");
+
+    auto invalidAlpha = Fixture::MakeEffect();
+    AddModule(invalidAlpha.emitters[0], 1U, kb::scene::ParticleModuleType::AlphaOverLife,
+        kb::scene::ParticleAlphaOverLifeModule{.curve = {.keyframes = {
+            {.time = 0.0F, .value = std::numeric_limits<float>::quiet_NaN()},
+        }}});
+    Require(createStatus(std::move(invalidAlpha)) == kb::particles::ParticleRuntimeStatus::InvalidAsset,
+        "non-finite AlphaOverLife curve reached the executor");
 }
 
 void TestModulePrewarmParity() {
-    RuntimeFixture prewarmed(MakeFourModuleEffect(1.0F));
-    RuntimeFixture manual(MakeFourModuleEffect());
+    RuntimeFixture prewarmed(MakeVisualModuleEffect(1.0F));
+    RuntimeFixture manual(MakeVisualModuleEffect());
     Require(kb::particles::ParticlePlayback::SetSeed(prewarmed.fixture.scene, prewarmed.instanceId, 913U).Succeeded() &&
             kb::particles::ParticlePlayback::SetSeed(manual.fixture.scene, manual.instanceId, 913U).Succeeded() &&
             kb::particles::ParticlePlayback::Play(prewarmed.fixture.scene, prewarmed.instanceId).Succeeded() &&
@@ -481,8 +616,10 @@ void TestModulePrewarmParity() {
     for (std::uint32_t step = 0U; step < 60U; ++step) {
         static_cast<void>(manual.fixture.scene.Runtime().Update(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds));
     }
-    Require(HashParticles(prewarmed.fixture.scene, prewarmed.instanceId) ==
-            HashParticles(manual.fixture.scene, manual.instanceId),
+    Require(HashVisualStateSpan(kb::particles::ParticlePlayback::LiveParticleStates(
+                prewarmed.fixture.scene, prewarmed.instanceId)) ==
+            HashVisualStateSpan(kb::particles::ParticlePlayback::LiveParticleStates(
+                manual.fixture.scene, manual.instanceId)),
         "module prewarm diverged from the shared fixed-step kernel");
 }
 
@@ -717,7 +854,7 @@ void TestGlobalCapacityAndCompileRejection() {
 }
 
 void TestNoAllocationPerFixedStep() {
-    Fixture fixture(MakeFourModuleEffect());
+    Fixture fixture(MakeVisualModuleEffect());
     kb::particle_plugin::CpuParticleBackend backend;
     backend.Warmup();
     const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
@@ -953,6 +1090,7 @@ int main() {
         TestNoAllocationAfterWarmup();
         TestSharedFixedSchedulerDeterminism();
         TestUniformSolidAngleConeGolden();
+        TestVisualModulesObservableGoldenAndDefaults();
         TestModuleOrderEnableAndGravityContracts();
         TestModuleCompileRejection();
         TestModulePrewarmParity();
