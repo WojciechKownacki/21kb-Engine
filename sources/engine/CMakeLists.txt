@@ -1493,6 +1493,7 @@ if(BUILD_TESTING)
 
     add_executable(kb_21kb_particle_stage2_tests
         tests/ParticleStage2Tests.cpp
+        ${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle/CpuParticleBackend.cpp
         ${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle/ParticleModule.cpp
         ${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle/ParticleSceneSystem.cpp
     )
