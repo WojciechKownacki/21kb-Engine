@@ -1,14 +1,14 @@
 #pragma once
 
+#include "engine/audio/AudioRoutingContract.hpp"
+
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace kb::audio {
 
 inline constexpr const char* kAudioMixerAssetExtension = ".kbmixer";
 inline constexpr const char* kAudioMixerAssetType = "AudioMixer";
-
 // LIB-147: one authored routing bus. `parentBus` names another authored bus this one
 // feeds into; empty means it feeds the implicit master output directly (the master bus is
 // NOT authored - it always exists as the backend engine's endpoint, exactly like
@@ -69,10 +69,11 @@ struct AudioMixerAsset {
 
 // LIB-147: structural validation shared by save, load, and tests. Returns an empty string
 // for a valid asset, otherwise a human-readable description of the FIRST problem found:
-// empty/whitespace/duplicate bus or snapshot names, a parentBus naming no authored bus, a
-// parent cycle, or a snapshot override naming no authored bus. Load honestly fails on any
-// of these (a mixer with a broken routing graph must never reach the backend), unlike
-// unknown KEYWORDS in the text format, which stay forward-compatible-ignored.
+// empty/whitespace/duplicate bus or snapshot names, invalid volumes, a parentBus naming
+// no authored bus, a parent cycle, a snapshot override naming no authored bus, or a
+// duplicate override in one snapshot. Load honestly fails on any of these (a mixer with a
+// broken routing graph must never reach the backend), unlike unknown KEYWORDS in the text
+// format, which stay forward-compatible-ignored.
 [[nodiscard]] std::string ValidateAudioMixerAsset(const AudioMixerAsset& asset);
 
 } // namespace kb::audio

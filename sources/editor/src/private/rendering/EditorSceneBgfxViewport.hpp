@@ -10,6 +10,7 @@
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
 #include "rendering/EditorHostSurfaceLifecycle.hpp"
+#include "rendering/EditorSceneViewportTextOverlay.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
 
 #include <bgfx/bgfx.h>
@@ -54,6 +55,7 @@ public:
         std::vector<render::EditorCameraWireframeDesc> editorCameraWireframes;
         std::vector<render::EditorLightWireframeDesc> editorLightWireframes;
         std::vector<render::PhysicsDebugLine> physicsDebugLines;
+        std::vector<EditorSceneViewportTextLabel> viewportTextLabels;
         render::RenderSceneSubmitDesc::EditorSelectionBoxDesc editorSelectionBox{};
         render::SceneRenderMeshPassMode meshPassMode = render::SceneRenderMeshPassMode::OpaqueAndTransparent;
         render::SceneRenderLightingConfig lightingConfig{};
@@ -125,6 +127,7 @@ private:
         std::uint64_t key = 0;
         HWND clipWindow = nullptr;
         HWND window = nullptr;
+        EditorSceneViewportTextOverlay textOverlay;
         RECT rect{};
         RECT layoutBounds{};
         bool presentedInCurrentPaint = false;

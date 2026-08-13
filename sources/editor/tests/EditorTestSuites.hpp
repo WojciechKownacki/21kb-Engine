@@ -4,6 +4,9 @@ namespace kb::editor::tests {
 
 void RunEditorHierarchyTests();
 void RunEditorAssetBrowserTests();
+void RunEditorAudioMixerAuthoringTests();
+void RunEditorAudioMixerInspectorTests();
+void RunEditorSceneAudioInspectorTests();
 void RunEditorCommandStackTests();
 void RunEditorPlayModeSceneSessionTests();
 void RunEditorViewportPreviewTests();

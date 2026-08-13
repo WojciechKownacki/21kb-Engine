@@ -6,6 +6,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAudioListenerAccess.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
@@ -14,7 +15,7 @@
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
-#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <span>
@@ -68,6 +69,25 @@ ScriptFunctionCallResult Error(std::string message) {
     return value == nullptr ? fallback : value->AsInt(fallback);
 }
 
+[[nodiscard]] bool TryPriorityArg(
+    std::span<const ScriptFunctionArgument> arguments,
+    std::uint8_t& outPriority) noexcept {
+    const ScriptValue* value = FindArg(arguments, "priority");
+    if (value == nullptr) {
+        outPriority = 128U;
+        return true;
+    }
+    if (value->Type() != ScriptValueType::Int) {
+        return false;
+    }
+    const int priority = value->AsInt(-1);
+    if (priority < 0 || priority > 255) {
+        return false;
+    }
+    outPriority = static_cast<std::uint8_t>(priority);
+    return true;
+}
+
 [[nodiscard]] std::uint64_t VoiceArg(std::span<const ScriptFunctionArgument> arguments) noexcept {
     const ScriptValue* value = FindArg(arguments, "voice");
     if (value == nullptr) {
@@ -91,9 +111,6 @@ ScriptFunctionCallResult Error(std::string message) {
         return fallback;
     }
     const int rawValue = value->AsInt(static_cast<int>(fallback));
-    if (rawValue < static_cast<int>(kb::audio::AudioAttenuationModel::None) || rawValue > static_cast<int>(kb::audio::AudioAttenuationModel::Exponential)) {
-        return fallback;
-    }
     return static_cast<kb::audio::AudioAttenuationModel>(rawValue);
 }
 
@@ -127,6 +144,10 @@ ScriptFunctionCallResult AudioPlay(const ScriptFunctionCallContext& context, std
     if (!clipAssetId.IsValid()) {
         return Error("audio clip asset could not be resolved");
     }
+    std::uint8_t priority = 128U;
+    if (!TryPriorityArg(arguments, priority)) {
+        return Error("audio priority must be an integer from 0 through 255");
+    }
 
     // LIB-149: attach=true binds the one-shot to the target entity (the explicit `entity`
     // argument, or the calling entity) - position follows the owner every audio tick and
@@ -142,8 +163,8 @@ ScriptFunctionCallResult AudioPlay(const ScriptFunctionCallContext& context, std
         ownerEntityId = owner.Id();
     }
 
-    // LIB-147: optional mixer-bus routing (empty/unknown = implicit master, see
-    // AudioPlayDesc::outputBus).
+    // LIB-147: optional mixer-bus routing (empty = implicit master; a non-empty unknown
+    // route is rejected, see AudioPlayDesc::outputBus).
     const ScriptValue* outputBusArgument = FindArg(arguments, "outputBus");
     const kb::audio::AudioPlayDesc playDesc{
         .clipAssetId = clipAssetId.value,
@@ -161,8 +182,12 @@ ScriptFunctionCallResult AudioPlay(const ScriptFunctionCallContext& context, std
         .rolloff = FloatArg(arguments, "rolloff", 1.0F),
         .dopplerFactor = FloatArg(arguments, "dopplerFactor", 1.0F),
         .position = PlaybackPosition(context, arguments),
-        // LIB-148: voice-stealing priority, clamped to the desc's 0-255 range.
-        .priority = static_cast<std::uint8_t>(std::clamp(IntArg(arguments, "priority", 128), 0, 255)),
+        .velocity = kb::scene::Vec3{
+            FloatArg(arguments, "velocityX", 0.0F),
+            FloatArg(arguments, "velocityY", 0.0F),
+            FloatArg(arguments, "velocityZ", 0.0F),
+        },
+        .priority = priority,
         .ownerEntityId = ownerEntityId,
     };
     const kb::audio::AudioPlayResult played = kb::audio::AudioPlayback::PlayOneShot(*context.scene, playDesc);
@@ -180,7 +205,7 @@ ScriptFunctionCallResult AudioPlay(const ScriptFunctionCallContext& context, std
     };
 }
 
-// LIB-148: the eight per-voice controls share one shape - a required `voice` handle from
+// LIB-148: the ten per-voice controls share one shape - a required `voice` handle from
 // Audio.Play, a single result boolean that is HONESTLY false for a dead/finished/stolen
 // voice (executed=true - "that voice is gone" is an answer, not a failure), plus the
 // operation-specific value argument where one exists.
@@ -229,6 +254,20 @@ ScriptFunctionCallResult AudioSetVolume(const ScriptFunctionCallContext& context
     });
 }
 
+ScriptFunctionCallResult AudioSetMute(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    const bool mute = BoolArg(arguments, "mute", false);
+    return VoiceCall(context, arguments, "applied", [mute](kb::scene::Scene& scene, std::uint64_t voice) {
+        return kb::audio::AudioPlayback::SetVoiceMute(scene, voice, mute);
+    });
+}
+
+ScriptFunctionCallResult AudioSetPan(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    const float pan = FloatArg(arguments, "pan", 0.0F);
+    return VoiceCall(context, arguments, "applied", [pan](kb::scene::Scene& scene, std::uint64_t voice) {
+        return kb::audio::AudioPlayback::SetVoicePan(scene, voice, pan);
+    });
+}
+
 ScriptFunctionCallResult AudioSetPitch(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
     const float pitch = FloatArg(arguments, "pitch", 1.0F);
     return VoiceCall(context, arguments, "applied", [pitch](kb::scene::Scene& scene, std::uint64_t voice) {
@@ -247,6 +286,110 @@ ScriptFunctionCallResult AudioIsPlaying(const ScriptFunctionCallContext& context
     return VoiceCall(context, arguments, "playing", [](kb::scene::Scene& scene, std::uint64_t voice) {
         return kb::audio::AudioPlayback::IsVoicePlaying(scene, voice);
     });
+}
+
+template <typename Operation>
+ScriptFunctionCallResult SourceCall(
+    const ScriptFunctionCallContext& context,
+    std::span<const ScriptFunctionArgument> arguments,
+    Operation operation) {
+    if (context.scene == nullptr) {
+        return Error("audio api requires an active scene");
+    }
+    const kb::audio::AudioSourceControlResult result = operation(
+        *context.scene, ParentEntity(context, arguments));
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "succeeded", ScriptValue{ result.Succeeded() } },
+            ScriptFunctionArgument{ "playing", ScriptValue{ result.playing } },
+            ScriptFunctionArgument{ "status", ScriptValue{ static_cast<int>(result.status) } },
+        },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult AudioPlaySource(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SourceCall(context, arguments, &kb::audio::AudioPlayback::PlaySource);
+}
+
+ScriptFunctionCallResult AudioPauseSource(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SourceCall(context, arguments, &kb::audio::AudioPlayback::PauseSource);
+}
+
+ScriptFunctionCallResult AudioResumeSource(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SourceCall(context, arguments, &kb::audio::AudioPlayback::ResumeSource);
+}
+
+ScriptFunctionCallResult AudioStopSource(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SourceCall(context, arguments, &kb::audio::AudioPlayback::StopSource);
+}
+
+ScriptFunctionCallResult AudioIsSourcePlaying(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    return SourceCall(context, arguments, &kb::audio::AudioPlayback::IsSourcePlaying);
+}
+
+[[nodiscard]] ScriptFunctionCallResult DeviceStatusResult(kb::audio::AudioDeviceStatus status) {
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = {
+            ScriptFunctionArgument{ "status", ScriptValue{ static_cast<int>(status) } },
+            ScriptFunctionArgument{ "available", ScriptValue{ status == kb::audio::AudioDeviceStatus::PlaybackAvailable } },
+        },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult AudioDeviceStatus(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    static_cast<void>(arguments);
+    if (context.scene == nullptr) {
+        return Error("audio api requires an active scene");
+    }
+    return DeviceStatusResult(kb::audio::AudioPlayback::DeviceStatus(*context.scene));
+}
+
+ScriptFunctionCallResult AudioReinitialize(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+    static_cast<void>(arguments);
+    if (context.scene == nullptr) {
+        return Error("audio api requires an active scene");
+    }
+    return DeviceStatusResult(kb::audio::AudioPlayback::Reinitialize(*context.scene));
+}
+
+ScriptFunctionCallResult AudioSetListenerLocalUser(
+    const ScriptFunctionCallContext& context,
+    std::span<const ScriptFunctionArgument> arguments) {
+    if (context.scene == nullptr) {
+        return Error("audio api requires an active scene");
+    }
+    const ScriptValue* localUser = FindArg(arguments, "localUser");
+    if (localUser == nullptr || localUser->Type() != ScriptValueType::UInt32) {
+        return Error("audio listener local user must be an unsigned 32-bit value");
+    }
+    kb::scene::SceneAudioListenerAccess::SetLocalUser(
+        *context.scene, kb::input::LocalUserId{ localUser->AsUInt32() });
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{ "applied", ScriptValue{ true } } },
+        .errors = {},
+    };
+}
+
+ScriptFunctionCallResult AudioListenerLocalUser(
+    const ScriptFunctionCallContext& context,
+    std::span<const ScriptFunctionArgument> arguments) {
+    static_cast<void>(arguments);
+    if (context.scene == nullptr) {
+        return Error("audio api requires an active scene");
+    }
+    return ScriptFunctionCallResult{
+        .executed = true,
+        .outputs = { ScriptFunctionArgument{
+            "localUser",
+            ScriptValue{ kb::scene::SceneAudioListenerAccess::LocalUser(*context.scene).value },
+        } },
+        .errors = {},
+    };
 }
 
 // LIB-152: audio-clock playback position - `valid=false` (seconds 0) for a dead voice,
@@ -319,8 +462,6 @@ ScriptFunctionCallResult AudioSetMixer(const ScriptFunctionCallContext& context,
         // Explicitly clearing the mixer is a valid request (back to the implicit master),
         // mirroring PostProcess.ClearProfile's semantics without a second function.
         kb::scene::SceneAudioMixerAccess::SetActiveMixer(*context.scene, 0U);
-        kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(*context.scene, {});
-        kb::scene::SceneAudioMixerAccess::ResetRuntimeMixerState(*context.scene);
         return ScriptFunctionCallResult{
             .executed = true,
             .outputs = { ScriptFunctionArgument{ "assigned", ScriptValue{ true } } },
@@ -333,11 +474,6 @@ ScriptFunctionCallResult AudioSetMixer(const ScriptFunctionCallContext& context,
     }
 
     kb::scene::SceneAudioMixerAccess::SetActiveMixer(*context.scene, mixerAssetId.value);
-    // A different mixer's snapshot names are unrelated - reset the active snapshot to the
-    // authored volumes instead of silently carrying a stale name across mixers; LIB-150's
-    // runtime overrides and any running transition are dropped for the same reason.
-    kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(*context.scene, {});
-    kb::scene::SceneAudioMixerAccess::ResetRuntimeMixerState(*context.scene);
     return ScriptFunctionCallResult{
         .executed = true,
         .outputs = { ScriptFunctionArgument{ "assigned", ScriptValue{ true } } },
@@ -383,10 +519,10 @@ ScriptFunctionCallResult AudioSetSnapshot(const ScriptFunctionCallContext& conte
         }
     }
 
-    kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(*context.scene, snapshot);
+    const bool applied = kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(*context.scene, snapshot);
     return ScriptFunctionCallResult{
         .executed = true,
-        .outputs = { ScriptFunctionArgument{ "applied", ScriptValue{ true } } },
+        .outputs = { ScriptFunctionArgument{ "applied", ScriptValue{ applied } } },
         .errors = {},
     };
 }
@@ -423,10 +559,11 @@ ScriptFunctionCallResult AudioSetBusVolume(const ScriptFunctionCallContext& cont
         return Error("audio bus name is not declared by the active mixer");
     }
 
-    kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(*context.scene, bus, FloatArg(arguments, "volume", 1.0F));
+    const bool applied = kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(
+        *context.scene, bus, FloatArg(arguments, "volume", 1.0F));
     return ScriptFunctionCallResult{
         .executed = true,
-        .outputs = { ScriptFunctionArgument{ "applied", ScriptValue{ true } } },
+        .outputs = { ScriptFunctionArgument{ "applied", ScriptValue{ applied } } },
         .errors = {},
     };
 }
@@ -461,10 +598,11 @@ ScriptFunctionCallResult AudioTransitionToSnapshot(const ScriptFunctionCallConte
         return Error("audio snapshot name is not declared by the active mixer");
     }
 
-    kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(*context.scene, snapshot, FloatArg(arguments, "durationSeconds", 0.0F));
+    const bool started = kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(
+        *context.scene, snapshot, FloatArg(arguments, "durationSeconds", 0.0F));
     return ScriptFunctionCallResult{
         .executed = true,
-        .outputs = { ScriptFunctionArgument{ "started", ScriptValue{ true } } },
+        .outputs = { ScriptFunctionArgument{ "started", ScriptValue{ started } } },
         .errors = {},
     };
 }
@@ -483,18 +621,21 @@ ScriptFunctionCallResult AudioConfigureOcclusion(const ScriptFunctionCallContext
     }
     kb::scene::AudioOcclusionSettings settings = kb::scene::SceneAudioOcclusionAccess::Settings(*context.scene);
     settings.enabled = enabledArgument->AsBool(false);
-    settings.occludedVolumeScale = std::clamp(FloatArg(arguments, "occludedVolume", settings.occludedVolumeScale), 0.0F, 1.0F);
-    settings.maxDistance = std::max(0.0F, FloatArg(arguments, "maxDistance", settings.maxDistance));
+    const float occludedVolumeScale = FloatArg(arguments, "occludedVolume", settings.occludedVolumeScale);
+    const float maxDistance = FloatArg(arguments, "maxDistance", settings.maxDistance);
+    settings.occludedVolumeScale = occludedVolumeScale;
+    settings.maxDistance = maxDistance;
     const ScriptValue* layerMaskArgument = FindArg(arguments, "layerMask");
     if (layerMaskArgument != nullptr) {
         settings.layerMask = static_cast<std::uint32_t>(layerMaskArgument->AsInt64(static_cast<std::int64_t>(settings.layerMask)));
     }
-    settings.maxRaycastsPerTick = static_cast<std::uint32_t>(std::clamp(IntArg(arguments, "maxRaycastsPerTick", static_cast<int>(settings.maxRaycastsPerTick)), 0, 1024));
+    settings.maxRaycastsPerTick = static_cast<std::uint32_t>(
+        IntArg(arguments, "maxRaycastsPerTick", static_cast<int>(settings.maxRaycastsPerTick)));
 
-    kb::scene::SceneAudioOcclusionAccess::Configure(*context.scene, settings);
+    const bool applied = kb::scene::SceneAudioOcclusionAccess::Configure(*context.scene, settings);
     return ScriptFunctionCallResult{
         .executed = true,
-        .outputs = { ScriptFunctionArgument{ "applied", ScriptValue{ true } } },
+        .outputs = { ScriptFunctionArgument{ "applied", ScriptValue{ applied } } },
         .errors = {},
     };
 }
@@ -542,6 +683,9 @@ bool ScriptAudioApi::Register(ScriptRuntimeHost& host) {
         ScriptFunctionPin{ "maxDistance", ScriptValueType::Float, false },
         ScriptFunctionPin{ "rolloff", ScriptValueType::Float, false },
         ScriptFunctionPin{ "dopplerFactor", ScriptValueType::Float, false },
+        ScriptFunctionPin{ "velocityX", ScriptValueType::Float, false },
+        ScriptFunctionPin{ "velocityY", ScriptValueType::Float, false },
+        ScriptFunctionPin{ "velocityZ", ScriptValueType::Float, false },
         ScriptFunctionPin{ "outputBus", ScriptValueType::String, false },
         ScriptFunctionPin{ "priority", ScriptValueType::Int, false },
         ScriptFunctionPin{ "attach", ScriptValueType::Bool, false },
@@ -556,7 +700,7 @@ bool ScriptAudioApi::Register(ScriptRuntimeHost& host) {
         return false;
     }
 
-    // LIB-148: the eight per-voice controls - one required `voice` handle, the
+    // LIB-148: the ten per-voice controls - one required `voice` handle, the
     // operation-specific value where one exists, one honest result boolean.
     struct VoiceFunctionSpec {
         const char* name;
@@ -571,6 +715,8 @@ bool ScriptAudioApi::Register(ScriptRuntimeHost& host) {
         { "Audio.Resume", nullptr, ScriptValueType::Bool, "resumed", &AudioResume },
         { "Audio.Seek", "positionSeconds", ScriptValueType::Float, "applied", &AudioSeek },
         { "Audio.SetVolume", "volume", ScriptValueType::Float, "applied", &AudioSetVolume },
+        { "Audio.SetMute", "mute", ScriptValueType::Bool, "applied", &AudioSetMute },
+        { "Audio.SetPan", "pan", ScriptValueType::Float, "applied", &AudioSetPan },
         { "Audio.SetPitch", "pitch", ScriptValueType::Float, "applied", &AudioSetPitch },
         { "Audio.SetLoop", "loop", ScriptValueType::Bool, "applied", &AudioSetLoop },
         { "Audio.IsPlaying", nullptr, ScriptValueType::Bool, "playing", &AudioIsPlaying },
@@ -587,6 +733,77 @@ bool ScriptAudioApi::Register(ScriptRuntimeHost& host) {
         if (!host.RegisterFunction(std::move(voiceDesc))) {
             return false;
         }
+    }
+
+    struct SourceFunctionSpec {
+        const char* name;
+        ScriptFunctionCallback callback;
+    };
+    const SourceFunctionSpec sourceFunctions[] = {
+        { "Audio.PlaySource", &AudioPlaySource },
+        { "Audio.PauseSource", &AudioPauseSource },
+        { "Audio.ResumeSource", &AudioResumeSource },
+        { "Audio.StopSource", &AudioStopSource },
+        { "Audio.IsSourcePlaying", &AudioIsSourcePlaying },
+    };
+    for (const SourceFunctionSpec& spec : sourceFunctions) {
+        ScriptFunctionDesc sourceDesc;
+        sourceDesc.signature.name = spec.name;
+        sourceDesc.signature.inputs = { ScriptFunctionPin{ "entity", ScriptValueType::Entity, false } };
+        sourceDesc.signature.outputs = {
+            ScriptFunctionPin{ "succeeded", ScriptValueType::Bool, true },
+            ScriptFunctionPin{ "playing", ScriptValueType::Bool, true },
+            ScriptFunctionPin{ "status", ScriptValueType::Int, true },
+        };
+        sourceDesc.callback = spec.callback;
+        if (!host.RegisterFunction(std::move(sourceDesc))) {
+            return false;
+        }
+    }
+
+    ScriptFunctionDesc deviceStatus;
+    deviceStatus.signature.name = "Audio.DeviceStatus";
+    deviceStatus.signature.outputs = {
+        ScriptFunctionPin{ "status", ScriptValueType::Int, true },
+        ScriptFunctionPin{ "available", ScriptValueType::Bool, true },
+    };
+    deviceStatus.callback = &AudioDeviceStatus;
+    if (!host.RegisterFunction(std::move(deviceStatus))) {
+        return false;
+    }
+
+    ScriptFunctionDesc reinitialize;
+    reinitialize.signature.name = "Audio.Reinitialize";
+    reinitialize.signature.outputs = {
+        ScriptFunctionPin{ "status", ScriptValueType::Int, true },
+        ScriptFunctionPin{ "available", ScriptValueType::Bool, true },
+    };
+    reinitialize.callback = &AudioReinitialize;
+    if (!host.RegisterFunction(std::move(reinitialize))) {
+        return false;
+    }
+
+    ScriptFunctionDesc setListenerLocalUser;
+    setListenerLocalUser.signature.name = "Audio.SetListenerLocalUser";
+    setListenerLocalUser.signature.inputs = {
+        ScriptFunctionPin{ "localUser", ScriptValueType::UInt32, true },
+    };
+    setListenerLocalUser.signature.outputs = {
+        ScriptFunctionPin{ "applied", ScriptValueType::Bool, true },
+    };
+    setListenerLocalUser.callback = &AudioSetListenerLocalUser;
+    if (!host.RegisterFunction(std::move(setListenerLocalUser))) {
+        return false;
+    }
+
+    ScriptFunctionDesc listenerLocalUser;
+    listenerLocalUser.signature.name = "Audio.ListenerLocalUser";
+    listenerLocalUser.signature.outputs = {
+        ScriptFunctionPin{ "localUser", ScriptValueType::UInt32, true },
+    };
+    listenerLocalUser.callback = &AudioListenerLocalUser;
+    if (!host.RegisterFunction(std::move(listenerLocalUser))) {
+        return false;
     }
 
     ScriptFunctionDesc setMixer;

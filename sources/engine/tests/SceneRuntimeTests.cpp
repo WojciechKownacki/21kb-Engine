@@ -18,6 +18,8 @@ bool RunSuite(std::string_view suite) {
         kb::tests::RunSceneHierarchyTests();
     } else if (suite == "scene-system") {
         kb::tests::RunSceneSystemTests();
+    } else if (suite == "audio") {
+        kb::tests::RunAudioSceneSystemTests();
     } else if (suite == "scene-runtime") {
         kb::tests::RunSceneSystemTransformSyncTests();
     } else if (suite == "scene-prefab") {

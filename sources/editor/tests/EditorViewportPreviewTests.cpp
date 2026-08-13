@@ -24,6 +24,7 @@
 #include "rendering/SkeletalMeshEditorBonePicker.hpp"
 #include "rendering/SkeletalMeshEditorSceneLabelBuilder.hpp"
 #include "rendering/EditorTexturePreviewService.hpp"
+#include "rendering/SceneViewportPresentationPolicy.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLabelFormat.hpp"
 #include "scene/EditorViewportCameraState.hpp"
@@ -33,6 +34,7 @@
 
 #include "engine/assets/AssetMetadata.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -49,6 +51,34 @@ namespace {
 
 void RequireNear(float actual, float expected, float tolerance, const char* message) {
     kb::editor::tests::Require(std::fabs(actual - expected) <= tolerance, message);
+}
+
+void RunSceneViewportPresentationPolicyTest() {
+    using kb::editor::SceneViewportCameraSource;
+    using kb::editor::SceneViewportPresentationPolicy;
+
+    kb::editor::tests::Require(
+        SceneViewportPresentationPolicy::CameraSource(false) == SceneViewportCameraSource::Editor,
+        "Stopped Scene View must use the editor fly camera");
+    kb::editor::tests::Require(
+        SceneViewportPresentationPolicy::CameraSource(true) == SceneViewportCameraSource::PrimaryScene,
+        "Play mode Scene View must use the primary scene camera");
+    kb::editor::tests::Require(
+        SceneViewportPresentationPolicy::EditorOverlaysEnabled(false),
+        "Stopped Scene View must retain authoring overlays");
+    kb::editor::tests::Require(
+        !SceneViewportPresentationPolicy::EditorOverlaysEnabled(true),
+        "Play mode Scene View must not draw editor overlays over the game camera");
+    kb::editor::tests::Require(
+        SceneViewportPresentationPolicy::RequiresPresent(false, true),
+        "Entering Play mode must request a Scene View present");
+    kb::editor::tests::Require(
+        SceneViewportPresentationPolicy::RequiresPresent(true, false),
+        "Stopping Play mode must request a Scene View present");
+    kb::editor::tests::Require(
+        !SceneViewportPresentationPolicy::RequiresPresent(true, true) &&
+            !SceneViewportPresentationPolicy::RequiresPresent(false, false),
+        "An unchanged Scene View camera mode must not manufacture a present");
 }
 
 void RunProfileCycleAndResolutionTest() {
@@ -176,6 +206,29 @@ void RunAnimationPreviewScenePresentationTest() {
     preview.Camera().EndNavigation();
 }
 
+void RunAnimationPreviewLodPolicyTest() {
+    kb::editor::EditorAnimationPreviewScene preview;
+    kb::scene::SkeletalMeshAsset mesh{};
+    mesh.lods.resize(2U);
+    mesh.lods[0].minScreenCoverage = 0.5F;
+    mesh.lods[1].minScreenCoverage = 0.0F;
+
+    kb::editor::tests::Require(
+        preview.SetForcedLod(99U, static_cast<std::uint32_t>(mesh.lods.size())) &&
+            preview.ForcedLod() == 1U && preview.ResolvePreviewLod(mesh) == 1U,
+        "Skeletal Mesh preview LOD picker should clamp and resolve its session-only forced LOD");
+    kb::editor::tests::Require(
+        !preview.SetForcedLod(1U, static_cast<std::uint32_t>(mesh.lods.size())),
+        "Skeletal Mesh preview LOD picker should not invalidate the viewport for an unchanged selection");
+    kb::editor::tests::Require(
+        preview.SetForcedLod(std::nullopt, static_cast<std::uint32_t>(mesh.lods.size())) &&
+            !preview.ForcedLod().has_value(),
+        "Skeletal Mesh preview LOD picker should return to automatic runtime selection");
+    kb::editor::EditorAnimationPreviewScene emptyPreview;
+    kb::editor::tests::Require(!emptyPreview.SetForcedLod(0U, 0U) && !emptyPreview.ForcedLod().has_value(),
+        "Skeletal Mesh preview LOD picker should reject a forced LOD when the asset has no LODs");
+}
+
 void RunViewportCameraNavigationBindingPolicyTest() {
     using kb::editor::EditorViewportCameraNavigationMode;
     kb::editor::tests::Require(
@@ -189,34 +242,76 @@ void RunViewportCameraNavigationBindingPolicyTest() {
 }
 
 void RunSkeletalMeshSceneLabelBuilderTest() {
+    constexpr std::uint32_t kViewportWidth = 1280U;
+    constexpr std::uint32_t kViewportHeight = 720U;
+    constexpr float kReferenceCameraDistance = 5.0F;
     kb::editor::EditorViewportCameraState camera;
     const kb::editor::EditorViewportCameraAxes axes = camera.Axes();
-    const kb::scene::Vec3 visiblePosition = axes.position + axes.forward * 5.0F;
+    const kb::scene::Vec3 visiblePosition =
+        axes.position + axes.forward * kReferenceCameraDistance;
     const std::array<kb::editor::AnimationPreviewOverlayLabel, 1U> visibleLabels{{
+        { .position = visiblePosition, .text = "mixamorig:Hips" },
+    }};
+    std::vector<kb::editor::EditorSceneViewportTextLabel> labels;
+    kb::editor::SkeletalMeshEditorSceneLabelBuilder::Append(
+        labels, visibleLabels, camera, kViewportWidth, kViewportHeight,
+        kReferenceCameraDistance);
+    kb::editor::tests::Require(
+        labels.size() == 1U && labels.front().text == "mixamorig:Hips",
+        "A visible bone name must preserve its source text in the native font overlay");
+    RequireNear(labels.front().x, 640.0F, 0.001F,
+        "A centered bone must project to the horizontal viewport center");
+    RequireNear(labels.front().y, 360.0F, 0.001F,
+        "A centered bone must project to the vertical viewport center");
+    RequireNear(labels.front().pixelHeight, 10.0F, 0.001F,
+        "The reference camera distance must use Unreal's SmallFont size 10");
+    kb::editor::tests::Require(
+        labels.front().color == std::array<std::uint8_t, 4U>{ 255U, 255U, 255U, 255U },
+        "Unreal-style bone names must use a white foreground");
+
+    const auto pixelHeightAtDepth = [&](float depth) {
+        const kb::scene::Vec3 position = axes.position + axes.forward * depth;
+        const std::array<kb::editor::AnimationPreviewOverlayLabel, 1U> depthLabel{{
+            { .position = position, .text = "Bone" },
+        }};
+        std::vector<kb::editor::EditorSceneViewportTextLabel> projected;
+        kb::editor::SkeletalMeshEditorSceneLabelBuilder::Append(
+            projected, depthLabel, camera, kViewportWidth, kViewportHeight,
+            kReferenceCameraDistance);
+        kb::editor::tests::Require(projected.size() == 1U,
+            "A visible bone label must render at every valid camera depth");
+        return projected.front().pixelHeight;
+    };
+    RequireNear(pixelHeightAtDepth(2.0F), 25.0F, 0.001F,
+        "Bone labels should grow as the camera approaches");
+    RequireNear(pixelHeightAtDepth(20.0F), 2.5F, 0.001F,
+        "Bone labels should shrink as the camera recedes");
+
+    const std::array<kb::editor::AnimationPreviewOverlayLabel, 1U> socketLabels{{
         {
             .position = visiblePosition,
-            .text = "mixamorig:Hips",
+            .text = "WeaponSocket",
+            .kind = kb::editor::AnimationPreviewOverlayLabelKind::Socket,
         },
     }};
-    std::vector<kb::render::PhysicsDebugLine> lines;
-    kb::editor::SkeletalMeshEditorSceneLabelBuilder::Append(lines, visibleLabels, camera, 720U);
-    kb::editor::tests::Require(!lines.empty(), "A visible bone name must produce scene label geometry");
-    for (const kb::render::PhysicsDebugLine& line : lines) {
-        kb::editor::tests::Require(
-            std::isfinite(line.from[0]) && std::isfinite(line.from[1]) && std::isfinite(line.from[2]) &&
-                std::isfinite(line.to[0]) && std::isfinite(line.to[1]) && std::isfinite(line.to[2]),
-            "Scene label geometry must remain finite");
-        RequireNear(line.color[0], 1.0F, 0.0001F, "Scene label must preserve its diagnostic color");
-        RequireNear(line.color[1], 0.58F, 0.0001F, "Scene label must preserve its diagnostic color");
-        RequireNear(line.color[2], 0.24F, 0.0001F, "Scene label must preserve its diagnostic color");
-    }
+    std::vector<kb::editor::EditorSceneViewportTextLabel> socketText;
+    kb::editor::SkeletalMeshEditorSceneLabelBuilder::Append(
+        socketText, socketLabels, camera, kViewportWidth, kViewportHeight,
+        kReferenceCameraDistance);
+    kb::editor::tests::Require(
+        socketText.size() == 1U &&
+            socketText.front().color == std::array<std::uint8_t, 4U>{ 71U, 235U, 199U, 255U },
+        "Socket labels should retain their semantic viewport color");
 
     const std::array<kb::editor::AnimationPreviewOverlayLabel, 1U> hiddenLabels{{
         { .position = axes.position - axes.forward * 2.0F, .text = "Behind camera" },
     }};
-    std::vector<kb::render::PhysicsDebugLine> hiddenLines;
-    kb::editor::SkeletalMeshEditorSceneLabelBuilder::Append(hiddenLines, hiddenLabels, camera, 720U);
-    kb::editor::tests::Require(hiddenLines.empty(), "Labels behind the preview camera must be culled");
+    std::vector<kb::editor::EditorSceneViewportTextLabel> hiddenText;
+    kb::editor::SkeletalMeshEditorSceneLabelBuilder::Append(
+        hiddenText, hiddenLabels, camera, kViewportWidth, kViewportHeight,
+        kReferenceCameraDistance);
+    kb::editor::tests::Require(hiddenText.empty(),
+        "Labels behind the preview camera must be culled");
 }
 
 void RunAnimationPreviewLegacyFbxOrientationTest() {
@@ -286,7 +381,8 @@ void RunAnimationPreviewLegacyFbxOrientationTest() {
             });
     };
     kb::editor::tests::Require(
-        hasLabel("Hips") && hasLabel("Head") && hasLabel("HeadSocket") && hasLabel("LODs: 1"),
+        hasLabel("0: Hips") && hasLabel("1: Head") && hasLabel("HeadSocket") &&
+            hasLabel("LOD 0 / 0 (Auto)"),
         "Bone names, sockets and LOD diagnostics must publish visible scene labels");
     kb::editor::tests::Require(
         hasLineColor({ 1.0F, 0.76F, 0.12F }) && hasLineColor({ 0.28F, 0.88F, 1.0F }) &&
@@ -1084,12 +1180,14 @@ void RunTexturePreviewLockBitsDecodeTest() {
 namespace kb::editor::tests {
 
 void RunEditorViewportPreviewTests() {
+    RunSceneViewportPresentationPolicyTest();
     RunViewportCameraNavigationBindingPolicyTest();
     RunSkeletalMeshSceneLabelBuilderTest();
     RunAnimationPreviewContextTracksSharedBindingTest();
     RunAnimationPreviewTransportTest();
     RunAnimationPreviewOverlayStateTest();
     RunAnimationPreviewScenePresentationTest();
+    RunAnimationPreviewLodPolicyTest();
     RunAnimationPreviewLegacyFbxOrientationTest();
     RunSkeletalMeshEditorBonePickerTest();
     RunAnimationPreviewExactScrubTest();

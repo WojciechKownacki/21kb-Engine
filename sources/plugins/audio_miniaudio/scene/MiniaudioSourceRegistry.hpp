@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/scene/AudioSourceComponent.hpp"
+#include "engine/audio/AudioPlayback.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "runtime/MiniaudioSound.hpp"
@@ -8,7 +9,6 @@
 #include <miniaudio.h>
 
 #include <cstdint>
-#include <filesystem>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -42,23 +42,47 @@ public:
         bool playbackAvailable);
 
     void StopAll() noexcept;
+    void ReleaseNativeResources() noexcept;
+
+    [[nodiscard]] kb::audio::AudioSourceControlResult PlaySource(
+        ma_engine& engine,
+        kb::scene::Scene& scene,
+        kb::scene::SceneEntity entity,
+        const MiniaudioClipResolver& clipResolver,
+        MiniaudioBusRegistry& busRegistry,
+        bool playbackAvailable);
+    [[nodiscard]] kb::audio::AudioSourceControlResult PauseSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity, bool playbackAvailable);
+    [[nodiscard]] kb::audio::AudioSourceControlResult ResumeSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity, bool playbackAvailable);
+    [[nodiscard]] kb::audio::AudioSourceControlResult StopSource(kb::scene::Scene& scene, kb::scene::SceneEntity entity, bool playbackAvailable);
+    [[nodiscard]] kb::audio::AudioSourceControlResult IsSourcePlaying(kb::scene::Scene& scene, kb::scene::SceneEntity entity, bool playbackAvailable);
 
 private:
     // LIB-147: busName/busGeneration are part of the identity - re-routing a source to a
     // different bus, or a mixer topology rebuild invalidating every ma_sound_group,
-    // recreates the ma_sound exactly like a clip path change already does.
+    // recreates the ma_sound exactly like a clip identity change already does.
     struct SoundSignature {
         std::uint64_t clipAssetId = 0U;
-        std::filesystem::path path;
+        std::string clipIdentity;
         std::string busName;
         std::uint64_t busGeneration = 0U;
+        bool spatial = true;
 
         [[nodiscard]] friend bool operator==(const SoundSignature&, const SoundSignature&) noexcept = default;
     };
 
     struct SoundRecord {
+        enum class PlaybackState : std::uint8_t {
+            Stopped,
+            Playing,
+            Paused,
+        };
+
         SoundSignature signature{};
         std::unique_ptr<MiniaudioSound> sound;
+        PlaybackState playbackState = PlaybackState::Stopped;
+        ma_uint64 resumeFrame = 0U;
+        kb::scene::Vec3 previousPosition{};
+        bool hasPreviousPosition = false;
     };
 
     struct SourceSyncContext {
@@ -70,6 +94,7 @@ private:
         MiniaudioOcclusionSampler* occlusionSampler = nullptr;
         kb::scene::Vec3 listenerPosition{};
         bool playbackAvailable = false;
+        float deltaSeconds = 0.0F;
     };
 
     static void SyncSourceFromTransform(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, void* context);
@@ -83,15 +108,64 @@ private:
         MiniaudioBusRegistry& busRegistry,
         MiniaudioOcclusionSampler* occlusionSampler,
         const kb::scene::Vec3& listenerPosition,
-        bool playbackAvailable);
+        bool playbackAvailable,
+        float deltaSeconds);
 
     [[nodiscard]] SoundRecord* EnsureSound(
         ma_engine& engine,
         std::uint64_t entityId,
         const SoundSignature& signature,
+        const ResolvedAudioClip& clip,
         const kb::scene::AudioSourceComponent& source,
         const kb::scene::TransformComponent& transform,
+        const kb::scene::Vec3& velocity,
         ma_sound_group* group);
+
+    [[nodiscard]] static kb::audio::AudioSourceControlResult ValidateSource(
+        kb::scene::Scene& scene,
+        kb::scene::SceneEntity entity,
+        bool playbackAvailable) noexcept;
+    static void SwapSoundRecords(SoundRecord& first, SoundRecord& second) noexcept;
+
+#if defined(KB_AUDIO_MINIAUDIO_TESTING)
+public:
+    [[nodiscard]] std::size_t SoundCountForTesting() const noexcept { return sounds_.size(); }
+    [[nodiscard]] std::size_t DecoderCountForTesting() const noexcept {
+        std::size_t count = 0U;
+        for (const auto& [_, record] : sounds_) {
+            count += record.sound == nullptr ? 0U : record.sound->DecoderCountForTesting();
+        }
+        return count;
+    }
+    [[nodiscard]] std::size_t EncodedPayloadCountForTesting() const noexcept {
+        std::size_t count = 0U;
+        for (const auto& [_, record] : sounds_) {
+            count += record.sound != nullptr && record.sound->OwnsEncodedPayloadForTesting() ? 1U : 0U;
+        }
+        return count;
+    }
+    [[nodiscard]] std::size_t NativeSoundCountForTesting() const noexcept {
+        std::size_t count = 0U;
+        for (const auto& [_, record] : sounds_) {
+            count += record.sound != nullptr ? 1U : 0U;
+        }
+        return count;
+    }
+    [[nodiscard]] std::size_t NativeSoundBranchCountForTesting() const noexcept {
+        std::size_t count = 0U;
+        for (const auto& [_, record] : sounds_) {
+            if (record.sound != nullptr) {
+                count += record.sound->PrimaryForTesting() != nullptr ? 1U : 0U;
+                count += record.sound->FlatForTesting() != nullptr ? 1U : 0U;
+            }
+        }
+        return count;
+    }
+    [[nodiscard]] MiniaudioSound* SoundForTesting(std::uint64_t entityId) noexcept {
+        const auto iterator = sounds_.find(entityId);
+        return iterator == sounds_.end() ? nullptr : iterator->second.sound.get();
+    }
+#endif
 
     void RemoveUnseenSounds();
     void RemoveSound(std::uint64_t entityId);

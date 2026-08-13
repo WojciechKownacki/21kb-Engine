@@ -42,7 +42,11 @@ namespace {
     const std::optional<RECT> content = EditorPanelContentResolver::Resolve(
         DockPanelKind::SkeletalMeshEditor, messageWindow, mainWindow, dockModel, floatingWindows, metrics);
     if (!content.has_value()) return std::nullopt;
-    const RECT viewport = SkeletalMeshEditorPanelLayoutResolver::Resolve(*content).viewport;
+    const RECT viewport = SkeletalMeshEditorPanelLayoutResolver::Resolve(
+        *content,
+        sceneContext.SkeletalMeshEditorToolboxWidth(),
+        sceneContext.SkeletalMeshEditorSkeletonTreeWidth(),
+        sceneContext.SkeletalMeshEditorSkeletonTreeHeight()).viewport;
     return PointInRect(viewport, x, y) ? std::optional<RECT>{ viewport } : std::nullopt;
 }
 
@@ -152,7 +156,8 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDoubleClick(HWND messageWind
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
 
-    EditorLeftButtonDoubleClickRouter doubleClick(mainWindow_, dockModel_, floatingWindows_, sceneContext_, metrics_);
+    EditorLeftButtonDoubleClickRouter doubleClick(
+        mainWindow_, dockModel_, floatingWindows_, sceneContext_, sceneViewport_, metrics_);
     if (doubleClick.Handle(messageWindow, x, y)) {
         return 0;
     }

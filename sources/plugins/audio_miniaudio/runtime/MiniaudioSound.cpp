@@ -1,10 +1,33 @@
 #include "runtime/MiniaudioSound.hpp"
 
+#include "assets/MiniaudioEncodingFormat.hpp"
+#include "assets/ResolvedAudioClip.hpp"
+
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <span>
 #include <string>
 
 namespace kb::audio_miniaudio {
+
+struct MiniaudioSound::MemoryDecoderState final {
+    ma_decoder decoder{};
+    ma_decoder flatDecoder{};
+    std::shared_ptr<const kb::assets::ImportedAsset> payload;
+    bool decoderInitialized = false;
+    bool flatDecoderInitialized = false;
+
+    ~MemoryDecoderState() {
+        if (flatDecoderInitialized) {
+            ma_decoder_uninit(&flatDecoder);
+        }
+        if (decoderInitialized) {
+            ma_decoder_uninit(&decoder);
+        }
+    }
+};
+
 namespace {
 
 [[nodiscard]] ma_attenuation_model ToMiniaudioAttenuationModel(kb::audio::AudioAttenuationModel model) noexcept {
@@ -25,22 +48,52 @@ namespace {
     return std::isfinite(value) ? value : fallback;
 }
 
-[[nodiscard]] ma_uint32 SoundFlags(bool spatial) noexcept {
-    static_cast<void>(spatial);
-    return MA_SOUND_FLAG_STREAM;
+[[nodiscard]] ma_result InitDecoder(
+    std::span<const std::byte> bytes,
+    std::string_view extension,
+    ma_decoder& decoder) {
+    const ma_encoding_format encodingFormat = EncodingFormatForAudioExtension(extension);
+    if (encodingFormat == ma_encoding_format_unknown) {
+        return MA_INVALID_ARGS;
+    }
+    ma_decoder_config config = ma_decoder_config_init(ma_format_f32, 0U, 0U);
+    config.encodingFormat = encodingFormat;
+    return ma_decoder_init_memory(bytes.data(), bytes.size(), &config, &decoder);
 }
 
-[[nodiscard]] ma_result InitSoundFromFile(ma_engine& engine, const std::filesystem::path& path, ma_uint32 flags, ma_sound_group* group, ma_sound& sound) {
+[[nodiscard]] ma_result InitStreamingSoundFromFile(
+    ma_engine& engine,
+    const std::filesystem::path& path,
+    ma_sound_group* group,
+    ma_uint64 initialFrame,
+    ma_sound& sound) {
+    ma_sound_config config = ma_sound_config_init_2(&engine);
+    config.flags = MA_SOUND_FLAG_STREAM;
+    config.pInitialAttachment = group;
+    config.initialSeekPointInPCMFrames = initialFrame;
 #if defined(_WIN32)
     const std::wstring nativePath = path.wstring();
-    return ma_sound_init_from_file_w(&engine, nativePath.c_str(), flags, group, nullptr, &sound);
+    config.pFilePathW = nativePath.c_str();
+    return ma_sound_init_ex(&engine, &config, &sound);
 #else
     const std::string nativePath = path.string();
-    return ma_sound_init_from_file(&engine, nativePath.c_str(), flags, group, nullptr, &sound);
+    config.pFilePath = nativePath.c_str();
+    return ma_sound_init_ex(&engine, &config, &sound);
 #endif
 }
 
+[[nodiscard]] ma_result InitSoundFromDecoder(
+    ma_engine& engine,
+    ma_decoder& decoder,
+    ma_sound_group* group,
+    ma_sound& sound) {
+    return ma_sound_init_from_data_source(
+        &engine, reinterpret_cast<ma_data_source*>(&decoder), 0U, group, &sound);
+}
+
 } // namespace
+
+MiniaudioSound::MiniaudioSound() = default;
 
 MiniaudioSound::~MiniaudioSound() {
     Reset();
@@ -65,9 +118,8 @@ ma_result MiniaudioSound::SeekSeconds(float positionSeconds) noexcept {
     if (!initialized_) {
         return MA_INVALID_OPERATION;
     }
-    const ma_engine* engine = ma_sound_get_engine(const_cast<ma_sound*>(&sound_));
-    const ma_uint32 sampleRate = engine == nullptr ? 0U : ma_engine_get_sample_rate(const_cast<ma_engine*>(engine));
-    if (sampleRate == 0U) {
+    ma_uint32 sampleRate = 0U;
+    if (ma_sound_get_data_format(&sound_, nullptr, nullptr, &sampleRate, nullptr, 0U) != MA_SUCCESS || sampleRate == 0U) {
         return MA_INVALID_OPERATION;
     }
     const float clamped = std::max(0.0F, ValidOr(positionSeconds, 0.0F));
@@ -81,8 +133,26 @@ ma_result MiniaudioSound::SeekSeconds(float positionSeconds) noexcept {
 
 void MiniaudioSound::SetVolume(float volume) noexcept {
     if (initialized_) {
-        volume_ = std::max(0.0F, ValidOr(volume, 1.0F));
+        volume_ = NormalizeVolume(volume);
         ApplyVolumes();
+    }
+}
+
+void MiniaudioSound::SetMute(bool mute) noexcept {
+    if (initialized_) {
+        muted_ = mute;
+        ApplyVolumes();
+    }
+}
+
+void MiniaudioSound::SetPan(float pan) noexcept {
+    if (!initialized_) {
+        return;
+    }
+    const float normalized = NormalizePan(pan);
+    ma_sound_set_pan(&sound_, flatInitialized_ ? 0.0F : normalized);
+    if (flatInitialized_) {
+        ma_sound_set_pan(&flatSound_, normalized);
     }
 }
 
@@ -110,33 +180,114 @@ void MiniaudioSound::SetPosition(const kb::scene::Vec3& position) noexcept {
     }
 }
 
+void MiniaudioSound::SetVelocity(const kb::scene::Vec3& velocity) noexcept {
+    if (initialized_) {
+        ma_sound_set_velocity(&sound_, ValidOr(velocity.x, 0.0F), ValidOr(velocity.y, 0.0F), ValidOr(velocity.z, 0.0F));
+    }
+}
+
+float MiniaudioSound::NormalizeVolume(float volume) noexcept {
+    return std::max(0.0F, ValidOr(volume, 1.0F));
+}
+
+float MiniaudioSound::NormalizePan(float pan) noexcept {
+    return std::clamp(ValidOr(pan, 0.0F), -1.0F, 1.0F);
+}
+
 float MiniaudioSound::PlaybackSeconds() const noexcept {
     if (!initialized_) {
         return -1.0F;
     }
-    const ma_engine* engine = ma_sound_get_engine(const_cast<ma_sound*>(&sound_));
-    const ma_uint32 sampleRate = engine == nullptr ? 0U : ma_engine_get_sample_rate(const_cast<ma_engine*>(engine));
-    if (sampleRate == 0U) {
+    ma_uint32 sampleRate = 0U;
+    if (ma_sound_get_data_format(&sound_, nullptr, nullptr, &sampleRate, nullptr, 0U) != MA_SUCCESS || sampleRate == 0U) {
         return -1.0F;
     }
-    return static_cast<float>(static_cast<double>(ma_sound_get_time_in_pcm_frames(&sound_)) / sampleRate);
+    return static_cast<float>(static_cast<double>(PlaybackFrame()) / sampleRate);
 }
 
-ma_result MiniaudioSound::InitializeFromFile(ma_engine& engine, const std::filesystem::path& path, bool spatial, ma_sound_group* group) {
+ma_uint64 MiniaudioSound::PlaybackFrame() const noexcept {
+    if (!initialized_ || sound_.pDataSource == nullptr) {
+        return 0U;
+    }
+    ma_uint64 frame = 0U;
+    return ma_data_source_get_cursor_in_pcm_frames(sound_.pDataSource, &frame) == MA_SUCCESS ? frame : 0U;
+}
+
+ma_result MiniaudioSound::Initialize(
+    ma_engine& engine,
+    const ResolvedAudioClip& clip,
+    bool spatial,
+    ma_sound_group* group,
+    ma_uint64 initialFrame) {
     Reset();
-    const ma_result result = InitSoundFromFile(engine, path, SoundFlags(spatial), group, sound_);
-    initialized_ = result == MA_SUCCESS;
-    if (!initialized_ || !spatial) {
+    if (!clip.IsValid()) {
+        return MA_INVALID_ARGS;
+    }
+    if (!clip.IsMemoryBacked()) {
+        ma_result result = InitStreamingSoundFromFile(
+            engine, clip.path, group, initialFrame, sound_);
+        initialized_ = result == MA_SUCCESS;
+        if (!initialized_ || !spatial) {
+            if (!initialized_) {
+                Reset();
+            }
+            return result;
+        }
+        result = InitStreamingSoundFromFile(
+            engine, clip.path, group, initialFrame, flatSound_);
+        flatInitialized_ = result == MA_SUCCESS;
+        if (!flatInitialized_) {
+            Reset();
+            return result;
+        }
+        return MA_SUCCESS;
+    }
+    memoryDecoder_ = std::make_unique<MemoryDecoderState>();
+    memoryDecoder_->payload = clip.imported;
+    ma_result result = InitDecoder(
+        clip.EncodedBytes(), clip.extension, memoryDecoder_->decoder);
+    memoryDecoder_->decoderInitialized = result == MA_SUCCESS;
+    if (!memoryDecoder_->decoderInitialized) {
+        Reset();
         return result;
     }
-    const ma_result flatResult = InitSoundFromFile(engine, path, SoundFlags(false), group, flatSound_);
+    if (initialFrame != 0U) {
+        result = ma_decoder_seek_to_pcm_frame(&memoryDecoder_->decoder, initialFrame);
+        if (result != MA_SUCCESS) {
+            Reset();
+            return result;
+        }
+    }
+    result = InitSoundFromDecoder(engine, memoryDecoder_->decoder, group, sound_);
+    initialized_ = result == MA_SUCCESS;
+    if (!initialized_ || !spatial) {
+        if (!initialized_) {
+            Reset();
+        }
+        return result;
+    }
+    result = InitDecoder(
+        clip.EncodedBytes(), clip.extension, memoryDecoder_->flatDecoder);
+    memoryDecoder_->flatDecoderInitialized = result == MA_SUCCESS;
+    if (!memoryDecoder_->flatDecoderInitialized) {
+        Reset();
+        return result;
+    }
+    if (initialFrame != 0U) {
+        result = ma_decoder_seek_to_pcm_frame(&memoryDecoder_->flatDecoder, initialFrame);
+        if (result != MA_SUCCESS) {
+            Reset();
+            return result;
+        }
+    }
+    const ma_result flatResult = InitSoundFromDecoder(
+        engine, memoryDecoder_->flatDecoder, group, flatSound_);
     flatInitialized_ = flatResult == MA_SUCCESS;
     if (!flatInitialized_) {
-        ma_sound_uninit(&sound_);
-        initialized_ = false;
+        Reset();
         return flatResult;
     }
-    return result;
+    return MA_SUCCESS;
 }
 
 void MiniaudioSound::Reset() noexcept {
@@ -150,17 +301,36 @@ void MiniaudioSound::Reset() noexcept {
         ma_sound_uninit(&sound_);
         initialized_ = false;
     }
+    memoryDecoder_.reset();
     volume_ = 1.0F;
+    muted_ = false;
     spatialBlend_ = 1.0F;
 }
+
+#if defined(KB_AUDIO_MINIAUDIO_TESTING)
+std::size_t MiniaudioSound::DecoderCountForTesting() const noexcept {
+    return memoryDecoder_ == nullptr
+        ? 0U
+        : (memoryDecoder_->decoderInitialized ? 1U : 0U)
+            + (memoryDecoder_->flatDecoderInitialized ? 1U : 0U);
+}
+
+bool MiniaudioSound::OwnsEncodedPayloadForTesting() const noexcept {
+    return memoryDecoder_ != nullptr && memoryDecoder_->payload != nullptr;
+}
+
+bool MiniaudioSound::UsesResourceManagerStreamForTesting() const noexcept {
+    return initialized_ && memoryDecoder_ == nullptr;
+}
+#endif
 
 void MiniaudioSound::Apply(const MiniaudioSoundSettings& settings) noexcept {
     if (!initialized_) {
         return;
     }
-    const float volume = settings.mute ? 0.0F : std::max(0.0F, ValidOr(settings.volume, 1.0F));
+    const float volume = NormalizeVolume(settings.volume);
     const float pitch = std::max(0.01F, ValidOr(settings.pitch, 1.0F));
-    const float pan = std::clamp(ValidOr(settings.pan, 0.0F), -1.0F, 1.0F);
+    const float pan = NormalizePan(settings.pan);
     const float spatialBlend = std::clamp(ValidOr(settings.spatialBlend, 1.0F), 0.0F, 1.0F);
     const float minDistance = std::max(0.01F, ValidOr(settings.minDistance, 1.0F));
     const float maxDistance = std::max(minDistance, ValidOr(settings.maxDistance, 500.0F));
@@ -168,6 +338,7 @@ void MiniaudioSound::Apply(const MiniaudioSoundSettings& settings) noexcept {
     const float dopplerFactor = std::max(0.0F, ValidOr(settings.dopplerFactor, 1.0F));
 
     volume_ = volume;
+    muted_ = settings.mute;
     spatialBlend_ = flatInitialized_ && settings.spatial ? spatialBlend : 1.0F;
     ApplyVolumes();
     ma_sound_set_pitch(&sound_, pitch);
@@ -179,7 +350,8 @@ void MiniaudioSound::Apply(const MiniaudioSoundSettings& settings) noexcept {
     ma_sound_set_max_distance(&sound_, maxDistance);
     ma_sound_set_rolloff(&sound_, rolloff);
     ma_sound_set_doppler_factor(&sound_, dopplerFactor);
-    ma_sound_set_position(&sound_, settings.position.x, settings.position.y, settings.position.z);
+    ma_sound_set_position(&sound_, ValidOr(settings.position.x, 0.0F), ValidOr(settings.position.y, 0.0F), ValidOr(settings.position.z, 0.0F));
+    ma_sound_set_velocity(&sound_, ValidOr(settings.velocity.x, 0.0F), ValidOr(settings.velocity.y, 0.0F), ValidOr(settings.velocity.z, 0.0F));
     if (flatInitialized_) {
         ma_sound_set_pitch(&flatSound_, pitch);
         ma_sound_set_pan(&flatSound_, pan);
@@ -216,11 +388,12 @@ void MiniaudioSound::ApplyVolumes() noexcept {
         return;
     }
     if (!flatInitialized_) {
-        ma_sound_set_volume(&sound_, volume_);
+        ma_sound_set_volume(&sound_, muted_ ? 0.0F : volume_);
         return;
     }
-    ma_sound_set_volume(&sound_, volume_ * spatialBlend_);
-    ma_sound_set_volume(&flatSound_, volume_ * (1.0F - spatialBlend_));
+    const float volume = muted_ ? 0.0F : volume_;
+    ma_sound_set_volume(&sound_, volume * spatialBlend_);
+    ma_sound_set_volume(&flatSound_, volume * (1.0F - spatialBlend_));
 }
 
 } // namespace kb::audio_miniaudio

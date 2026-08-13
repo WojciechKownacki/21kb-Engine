@@ -1,5 +1,6 @@
 #include "platform/win32/EditorMeshAssetPickerDialog.hpp"
 #include "platform/win32/EditorAnimatorControllerAssetPickerDialog.hpp"
+#include "platform/win32/EditorAudioMixerAssetPickerDialog.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
 #include "platform/win32/EditorSkeletonAssetPickerDialog.hpp"
 #include "platform/win32/EditorSkeletalMeshAssetPickerDialog.hpp"
@@ -206,6 +207,25 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
             return lhs.name < rhs.name;
         }
         return lhs.assetId.value < rhs.assetId.value;
+    });
+    return rows;
+}
+
+[[nodiscard]] std::vector<AssetPickerRow> BuildAudioMixerRows(const EditorSceneContext& sceneContext) {
+    std::vector<AssetPickerRow> rows;
+    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
+        if (!EditorAudioMixerAssetPickerDialog::MatchesFilter(metadata)) {
+            continue;
+        }
+        rows.push_back(AssetPickerRow{
+            .assetId = metadata.id,
+            .name = DisplayName(metadata, "Audio Mixer"),
+            .path = DisplayPath(metadata),
+        });
+    }
+    std::ranges::sort(rows, [](const AssetPickerRow& lhs, const AssetPickerRow& rhs) {
+        return lhs.name != rhs.name ? lhs.name < rhs.name : lhs.assetId.value < rhs.assetId.value;
     });
     return rows;
 }
@@ -1448,6 +1468,27 @@ EditorMaterialAssetPickerDialog::Result EditorMaterialAssetPickerDialog::Show(
     };
     const AssetPickerResult result = window.Show(owner);
     return EditorMaterialAssetPickerDialog::Result{ .accepted = result.accepted, .assetId = result.assetId };
+}
+
+EditorAudioMixerAssetPickerDialog::Result EditorAudioMixerAssetPickerDialog::Show(
+    HWND owner,
+    const EditorTheme& theme,
+    const EditorSceneContext& sceneContext,
+    kb::assets::AssetId currentMixer) {
+    AssetPickerWindow window{
+        theme,
+        BuildAudioMixerRows(sceneContext),
+        currentMixer,
+        "Select Audio Mixer",
+        "Choose an audio mixer for this scene.",
+        "Clear scene audio mixer",
+        HeroIconKind::AdjustmentsHorizontal,
+    };
+    const AssetPickerResult result = window.Show(owner);
+    return EditorAudioMixerAssetPickerDialog::Result{
+        .accepted = result.accepted,
+        .assetId = result.assetId,
+    };
 }
 
 EditorAnimatorControllerAssetPickerDialog::Result EditorAnimatorControllerAssetPickerDialog::Show(

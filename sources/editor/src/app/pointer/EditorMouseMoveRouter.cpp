@@ -18,6 +18,8 @@
 #include "rendering/HierarchyToolbarLayout.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
+#include "rendering/SkeletalMeshEditorPanelLayout.hpp"
+#include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
 #include "scene/EditorTerrainService.hpp"
 
@@ -147,6 +149,94 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
     static_cast<void>(EditorWindowToolbarPointerHandler::HandleMouseMove(mainWindow_, messageWindow, x, y, dockModel_, shellInteraction_, metrics_));
     EditorInspectorPointerController inspectorPointer(sceneContext_);
     const std::optional<RECT> inspectorContent = EditorPanelContentResolver::Resolve(DockPanelKind::Inspector, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+
+    if (sceneContext_.IsSkeletalMeshEditorToolboxWidthDragging() ||
+        sceneContext_.IsSkeletalMeshEditorSkeletonTreeWidthDragging() ||
+        sceneContext_.IsSkeletalMeshEditorTreeDetailsHeightDragging()) {
+        if (!leftButtonDown) {
+            sceneContext_.EndSkeletalMeshEditorPanelResizeDrag();
+            ReleaseCapture();
+        } else if (const std::optional<RECT> skeletalMeshEditorContent =
+                       EditorPanelContentResolver::Resolve(
+                           DockPanelKind::SkeletalMeshEditor,
+                           messageWindow,
+                           mainWindow_,
+                           dockModel_,
+                           floatingWindows_,
+                           metrics_);
+                   skeletalMeshEditorContent.has_value()) {
+            if (sceneContext_.IsSkeletalMeshEditorTreeDetailsHeightDragging()) {
+                sceneContext_.SetSkeletalMeshEditorSkeletonTreeHeight(
+                    SkeletalMeshEditorPanelLayoutResolver::SkeletonTreeHeightFromPointer(
+                        *skeletalMeshEditorContent, y));
+            } else if (sceneContext_.IsSkeletalMeshEditorToolboxWidthDragging()) {
+                sceneContext_.SetSkeletalMeshEditorToolboxWidth(
+                    x - skeletalMeshEditorContent->left);
+            } else {
+                sceneContext_.SetSkeletalMeshEditorSkeletonTreeWidth(
+                    skeletalMeshEditorContent->right - x);
+            }
+            const SkeletalMeshEditorPanelLayout layout =
+                SkeletalMeshEditorPanelLayoutResolver::Resolve(
+                    *skeletalMeshEditorContent,
+                    sceneContext_.SkeletalMeshEditorToolboxWidth(),
+                    sceneContext_.SkeletalMeshEditorSkeletonTreeWidth(),
+                    sceneContext_.SkeletalMeshEditorSkeletonTreeHeight());
+            sceneContext_.SetSkeletalMeshEditorToolboxWidth(
+                static_cast<int>(layout.toolbox.right - layout.toolbox.left));
+            sceneContext_.SetSkeletalMeshEditorSkeletonTreeWidth(
+                static_cast<int>(layout.skeletonTree.right - layout.skeletonTree.left));
+            sceneContext_.SetSkeletalMeshEditorSkeletonTreeHeight(
+                static_cast<int>(layout.skeletonTree.bottom - layout.skeletonTree.top));
+            if (messageWindow == mainWindow_) {
+                EditorHostSurfaceLayoutResolver::SyncMainWindow(
+                    mainWindow_, dockModel_, metrics_, sceneContext_, sceneViewport_);
+            }
+        }
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (sceneContext_.IsSkeletalMeshEditorTreeScrollbarDragging()) {
+        if (!leftButtonDown) {
+            sceneContext_.EndSkeletalMeshEditorTreeScrollbarDrag();
+            ReleaseCapture();
+        } else if (const std::optional<RECT> skeletalMeshEditorContent = EditorPanelContentResolver::Resolve(
+                       DockPanelKind::SkeletalMeshEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+                   skeletalMeshEditorContent.has_value()) {
+            const RECT track = SkeletalMeshEditorPanelRenderer::TreeScrollbarTrack(
+                *skeletalMeshEditorContent, sceneContext_);
+            const RECT thumb = SkeletalMeshEditorPanelRenderer::TreeScrollbarThumb(
+                *skeletalMeshEditorContent, sceneContext_);
+            sceneContext_.DragSkeletalMeshEditorTreeScrollbar(
+                y,
+                std::max(1, RectHeight(track) - RectHeight(thumb)),
+                SkeletalMeshEditorPanelRenderer::TreeMaxScroll(*skeletalMeshEditorContent, sceneContext_));
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (sceneContext_.IsSkeletalMeshEditorDetailsScrollbarDragging()) {
+        if (!leftButtonDown) {
+            sceneContext_.EndSkeletalMeshEditorDetailsScrollbarDrag();
+            ReleaseCapture();
+        } else if (const std::optional<RECT> skeletalMeshEditorContent = EditorPanelContentResolver::Resolve(
+                       DockPanelKind::SkeletalMeshEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+                   skeletalMeshEditorContent.has_value()) {
+            const RECT track = SkeletalMeshEditorPanelRenderer::DetailsScrollbarTrack(
+                *skeletalMeshEditorContent, sceneContext_);
+            const RECT thumb = SkeletalMeshEditorPanelRenderer::DetailsScrollbarThumb(
+                *skeletalMeshEditorContent, sceneContext_);
+            sceneContext_.DragSkeletalMeshEditorDetailsScrollbar(
+                y,
+                std::max(1, RectHeight(track) - RectHeight(thumb)),
+                SkeletalMeshEditorPanelRenderer::DetailsMaxScroll(*skeletalMeshEditorContent, sceneContext_));
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
 
     if (sceneContext_.IsHierarchyScrollbarDragging()) {
         if (!leftButtonDown) {

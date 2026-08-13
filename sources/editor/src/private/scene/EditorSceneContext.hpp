@@ -2,8 +2,10 @@
 
 #include "engine/assets/AssetImportTypes.hpp"
 #include "engine/assets/TerrainAsset.hpp"
+#include "engine/audio/AudioMixerAsset.hpp"
 
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/LightComponent.hpp"
@@ -22,6 +24,7 @@
 #include "scene/EditorProjectSettingsState.hpp"
 #include "scene/EditorScriptEditorState.hpp"
 #include "scene/EditorSceneObjectEditTypes.hpp"
+#include "scene/EditorSceneDocumentIdentity.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
 #include "scene/AnimationPreviewContext.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
@@ -31,6 +34,7 @@
 #include "scene/SkeletalMeshEditorTreeState.hpp"
 #include "scene/SkeletalMeshEditorDetailsState.hpp"
 #include "scene/SkeletalMeshEditorDocumentState.hpp"
+#include "scene/SkeletalMeshEditorPanelResizeState.hpp"
 #include "scene/SkeletonEditorDocumentState.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
 #include "scene/material/MaterialEditorState.hpp"
@@ -97,6 +101,8 @@ enum class PhysicsComponentKind; // inspection/InspectorPhysicsModel.hpp
 class EditorSceneCommandController;
 class EditorInputActionAuthoring;
 class EditorInputMappingContextAuthoring;
+class EditorAudioMixerAuthoring;
+class EditorSceneAudioSettingsService;
 class IEditorMaterialAssetPropertyEdit;
 class EditorMaterialAssetAuthoring;
 class EditorMaterialPreviewScene;
@@ -228,6 +234,7 @@ public:
     [[nodiscard]] const kb::project::ProjectDescriptor& Project() const noexcept;
     [[nodiscard]] const std::filesystem::path& ProjectFile() const noexcept;
     [[nodiscard]] const std::filesystem::path& CurrentScenePath() const noexcept;
+    [[nodiscard]] std::uint64_t SceneDocumentGeneration() const noexcept;
     [[nodiscard]] std::uint64_t SceneRenderRevision() const noexcept;
     [[nodiscard]] std::uint64_t SceneRenderDirtyBaseRevision() const noexcept;
     [[nodiscard]] bool SceneRenderFullDirty() const noexcept;
@@ -411,6 +418,7 @@ public:
     [[nodiscard]] bool CreateInputActionAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateInputAxisAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool CreateAudioMixerAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialFunctionAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialGraphAsset(const std::filesystem::path& virtualFolder);
@@ -497,16 +505,55 @@ public:
     void SelectAllSkeletalMeshEditorTreeSearch() noexcept;
     void ClearSkeletalMeshEditorTreeSearch();
     [[nodiscard]] std::vector<SkeletalMeshEditorTreeRow> SkeletalMeshEditorTreeRows() const;
+    [[nodiscard]] bool ToggleSkeletalMeshEditorTreeBoneExpanded(kb::scene::SkeletonBoneId boneId);
+    [[nodiscard]] int SkeletalMeshEditorTreeScrollOffset() const noexcept;
+    [[nodiscard]] bool IsSkeletalMeshEditorTreeScrollbarDragging() const noexcept;
+    [[nodiscard]] bool SetSkeletalMeshEditorTreeScrollOffset(int offset, int maxOffset) noexcept;
+    void BeginSkeletalMeshEditorTreeScrollbarDrag(int y) noexcept;
+    void DragSkeletalMeshEditorTreeScrollbar(int y, int trackTravel, int maxOffset) noexcept;
+    void EndSkeletalMeshEditorTreeScrollbarDrag() noexcept;
+    [[nodiscard]] int SkeletalMeshEditorToolboxWidth() const noexcept;
+    [[nodiscard]] int SkeletalMeshEditorSkeletonTreeWidth() const noexcept;
+    [[nodiscard]] int SkeletalMeshEditorSkeletonTreeHeight() const noexcept;
+    [[nodiscard]] bool IsSkeletalMeshEditorToolboxWidthDragging() const noexcept;
+    [[nodiscard]] bool IsSkeletalMeshEditorSkeletonTreeWidthDragging() const noexcept;
+    [[nodiscard]] bool IsSkeletalMeshEditorTreeDetailsHeightDragging() const noexcept;
+    void SetSkeletalMeshEditorToolboxWidth(int width) noexcept;
+    void SetSkeletalMeshEditorSkeletonTreeWidth(int width) noexcept;
+    void SetSkeletalMeshEditorSkeletonTreeHeight(int height) noexcept;
+    void BeginSkeletalMeshEditorToolboxWidthDrag() noexcept;
+    void BeginSkeletalMeshEditorSkeletonTreeWidthDrag() noexcept;
+    void BeginSkeletalMeshEditorTreeDetailsHeightDrag() noexcept;
+    void EndSkeletalMeshEditorPanelResizeDrag() noexcept;
     [[nodiscard]] bool SelectSkeletalMeshEditorBone(kb::scene::SkeletonBoneId boneId);
     [[nodiscard]] bool SelectSkeletalMeshEditorSocket(std::string socketName);
     [[nodiscard]] bool ClearSkeletalMeshEditorTreeSelection();
     [[nodiscard]] kb::scene::SkeletonBoneId SelectedSkeletalMeshEditorBone() const noexcept;
     [[nodiscard]] const std::string& SelectedSkeletalMeshEditorSocket() const noexcept;
     [[nodiscard]] SkeletalMeshEditorDetailsModel SkeletalMeshEditorDetails() const;
+    [[nodiscard]] bool ToggleSkeletalMeshEditorDetailsSection(std::string_view title);
+    [[nodiscard]] int SkeletalMeshEditorDetailsScrollOffset() const noexcept;
+    [[nodiscard]] bool IsSkeletalMeshEditorDetailsScrollbarDragging() const noexcept;
+    [[nodiscard]] bool SetSkeletalMeshEditorDetailsScrollOffset(int offset, int maxOffset) noexcept;
+    void BeginSkeletalMeshEditorDetailsScrollbarDrag(int y) noexcept;
+    void DragSkeletalMeshEditorDetailsScrollbar(int y, int trackTravel, int maxOffset) noexcept;
+    void EndSkeletalMeshEditorDetailsScrollbarDrag() noexcept;
+    [[nodiscard]] std::uint32_t SkeletalMeshEditorLodCount() const noexcept;
+    [[nodiscard]] std::optional<std::uint32_t> SkeletalMeshEditorForcedPreviewLod() const noexcept;
+    [[nodiscard]] bool SetSkeletalMeshEditorPreviewLod(std::optional<std::uint32_t> lodIndex);
+    [[nodiscard]] bool SetSkeletalMeshEditorLodScreenCoverage(std::uint32_t lodIndex, float coverage);
+    [[nodiscard]] bool SetSkeletalMeshEditorSectionMaterial(
+        std::uint32_t lodIndex, std::uint32_t sectionIndex, kb::assets::AssetId materialId);
+    [[nodiscard]] bool SetSkeletalMeshEditorFixedBounds(
+        std::optional<kb::scene::Vec3> center, std::optional<kb::scene::Vec3> extents);
     [[nodiscard]] const std::vector<kb::scene::SkeletalMeshMorphTarget>& SkeletalMeshEditorMorphTargets() const noexcept;
     [[nodiscard]] bool HasDirtySkeletalMeshEditorAssetEdit() const noexcept;
+    [[nodiscard]] bool HasDirtyActiveSkeletalMeshEditorDocument() const noexcept;
     [[nodiscard]] bool CanUndoSkeletalMeshEditorAssetEdit() const noexcept;
     [[nodiscard]] bool CanRedoSkeletalMeshEditorAssetEdit() const noexcept;
+    [[nodiscard]] bool CanReloadSkeletalMeshEditorAsset() const noexcept;
+    [[nodiscard]] kb::scene::SkeletalMeshBoundsMode SkeletalMeshEditorBoundsMode() const noexcept;
+    [[nodiscard]] bool IsSkeletalMeshEditorReferencePose() const noexcept;
     [[nodiscard]] bool CanAddSkeletonEditorSocket() const noexcept;
     [[nodiscard]] bool CanDuplicateSkeletonEditorSocket() const noexcept;
     [[nodiscard]] bool CanDeleteSkeletonEditorSocket() const noexcept;
@@ -522,7 +569,7 @@ public:
     [[nodiscard]] bool RedoSkeletalMeshEditorAssetEdit();
     [[nodiscard]] bool SaveSkeletalMeshEditorAsset();
     [[nodiscard]] bool RevertSkeletalMeshEditorAsset();
-    [[nodiscard]] bool ReimportSkeletalMeshEditorAsset();
+    [[nodiscard]] bool ReloadSkeletalMeshEditorAsset();
     [[nodiscard]] bool PrepareSkeletalMeshEditorClose(std::string_view reason);
     void CloseSkeletalMeshEditorAsset() noexcept;
     [[nodiscard]] bool OpenMaterialEditorAsset(kb::assets::AssetId id);
@@ -537,6 +584,33 @@ public:
     [[nodiscard]] bool CycleInputActionValueType(kb::assets::AssetId id);
     [[nodiscard]] bool SetInputActionValueType(kb::assets::AssetId id, kb::input::InputActionValueType valueType);
     [[nodiscard]] bool ToggleInputActionConsume(kb::assets::AssetId id);
+    [[nodiscard]] std::optional<kb::audio::AudioMixerAsset> ReadAudioMixerAsset(kb::assets::AssetId id) const;
+    [[nodiscard]] bool AddAudioMixerBus(kb::assets::AssetId id, std::string_view name);
+    [[nodiscard]] bool RemoveAudioMixerBus(kb::assets::AssetId id, std::string_view name);
+    [[nodiscard]] bool RenameAudioMixerBus(kb::assets::AssetId id, std::string_view name, std::string_view replacement);
+    [[nodiscard]] bool SetAudioMixerBusParent(kb::assets::AssetId id, std::string_view name, std::string_view parent);
+    [[nodiscard]] bool SetAudioMixerBusVolume(kb::assets::AssetId id, std::string_view name, float volume);
+    [[nodiscard]] bool SetAudioMixerBusMute(kb::assets::AssetId id, std::string_view name, bool mute);
+    [[nodiscard]] bool AddAudioMixerSnapshot(kb::assets::AssetId id, std::string_view name);
+    [[nodiscard]] bool RemoveAudioMixerSnapshot(kb::assets::AssetId id, std::string_view name);
+    [[nodiscard]] bool RenameAudioMixerSnapshot(kb::assets::AssetId id, std::string_view name, std::string_view replacement);
+    [[nodiscard]] bool AddAudioMixerSnapshotOverride(
+        kb::assets::AssetId id,
+        std::string_view snapshot,
+        std::string_view bus,
+        float volume);
+    [[nodiscard]] bool RemoveAudioMixerSnapshotOverride(
+        kb::assets::AssetId id,
+        std::string_view snapshot,
+        std::string_view bus);
+    [[nodiscard]] bool SetAudioMixerSnapshotOverrideVolume(
+        kb::assets::AssetId id,
+        std::string_view snapshot,
+        std::string_view bus,
+        float volume);
+    [[nodiscard]] bool SetSceneAudioMixer(kb::assets::AssetId id);
+    [[nodiscard]] bool SetSceneAudioSnapshot(std::string_view snapshot);
+    [[nodiscard]] bool SetSceneAudioOcclusion(const kb::scene::AudioOcclusionSettings& settings);
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadMaterialAsset(kb::assets::AssetId id) const;
     [[nodiscard]] std::optional<kb::render::RenderMaterialInstanceAssetData> ReadMaterialInstanceAsset(kb::assets::AssetId id) const;
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadEffectiveMaterialAsset(kb::assets::AssetId id) const;
@@ -1002,6 +1076,7 @@ private:
         kb::assets::AssetId skeletonId,
         std::uint64_t diagnosticEventId,
         kb::assets::AssetId primarySkeletonId = {});
+    [[nodiscard]] bool CommitSkeletalMeshEditorCandidate(kb::scene::SkeletalMeshAsset candidate);
     [[nodiscard]] bool PublishSkeletonEditorWorkingCopy();
     void RefreshSkeletalEditorDetails();
     [[nodiscard]] bool PublishAnimationClipEditorWorkingCopy();
@@ -1051,6 +1126,8 @@ private:
     void RefreshOpenMaterialEditorFromSource();
     [[nodiscard]] EditorInputActionAuthoring InputActionAuthoring() noexcept;
     [[nodiscard]] EditorInputMappingContextAuthoring InputMappingContextAuthoring() noexcept;
+    [[nodiscard]] EditorAudioMixerAuthoring AudioMixerAuthoring() noexcept;
+    [[nodiscard]] EditorSceneAudioSettingsService SceneAudioSettings() noexcept;
     [[nodiscard]] EditorMaterialAssetAuthoring MaterialAssetAuthoring() noexcept;
     void ActivateProjectInput();
     [[nodiscard]] bool ActivateProjectPhysicsLayers(kb::scene::Scene& scene);
@@ -1063,6 +1140,7 @@ private:
     void InvalidateHierarchyRows() noexcept;
     void RebuildHierarchyRowsIfNeeded() const;
     void ResetSceneEditState();
+    void AdvanceSceneDocumentGeneration() noexcept;
     void SelectFirstSceneEntityOrClear() noexcept;
     [[nodiscard]] bool SaveSceneToPath(const std::filesystem::path& path);
     [[nodiscard]] std::filesystem::path ResolveProjectVirtualPath(const std::filesystem::path& virtualPath) const;
@@ -1077,6 +1155,7 @@ private:
     std::unique_ptr<kb::scene::Scene> scene_;
     std::function<void(const kb::scene::Scene&)> renderSceneReleaseHandler_;
     std::filesystem::path currentScenePath_;
+    EditorSceneDocumentIdentity sceneDocumentIdentity_;
     EditorAssetBrowserState assetBrowser_;
     EditorConsoleState console_;
     std::mutex assetImportMutex_;
@@ -1103,6 +1182,7 @@ private:
     SkeletalMeshEditorDetailsState skeletalMeshEditorDetails_;
     SkeletalMeshEditorDocumentState skeletalMeshEditorDocument_;
     SkeletonEditorDocumentState skeletonEditorDocument_;
+    SkeletalMeshEditorPanelResizeState skeletalMeshEditorPanelResize_;
     InspectorPanelState inspector_;
     MaterialEditorState materialEditor_;
     kb::assets::AssetId materialRuntimePreviewAssetId_{};

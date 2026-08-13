@@ -22,6 +22,9 @@
 #include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneAudioListenerAccess.hpp"
+#include "engine/scene/SceneAudioMixerAccess.hpp"
+#include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
@@ -36,10 +39,14 @@
 #include "engine/ecs/ComponentSerialization.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
+#include "scene/asset/io/SceneAssetBinaryIO.hpp"
+#include "scene/asset/io/components/SceneAssetAudioComponentCodec.hpp"
 
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -62,6 +69,9 @@ void CleanTempRoot() {
     std::filesystem::remove_all(TempRoot(), error);
     std::filesystem::create_directories(TempRoot(), error);
 }
+
+[[nodiscard]] bool MetaContainsDependency(
+    const std::filesystem::path& path, std::uint64_t expectedAssetId, std::string_view expectedRole);
 
 struct SceneDocumentSystemProbe {
     int updateCount = 0;
@@ -219,7 +229,7 @@ void RunSceneDocumentRoundTripTest() {
         .rolloff = 0.5F,
         .dopplerFactor = 0.25F,
     };
-    kb::scene::SetAudioSourceOutputBus(roundTripAudioSource, "Music");
+    Require(kb::scene::SetAudioSourceOutputBus(roundTripAudioSource, "Music"), "Scene audio source bus fixture was invalid");
     source.Components().AudioSources().Set(child, roundTripAudioSource);
     source.Components().AudioListeners().Set(secondRoot, kb::scene::AudioListenerComponent{
         .primary = true,
@@ -234,11 +244,37 @@ void RunSceneDocumentRoundTripTest() {
     });
     Require(source.Tags().Define("Boss") && source.Tags().SetAssigned(root, "Boss", true),
         "Scene tag catalogue fixture was not created");
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(source, 0xA17D10U);
+    Require(kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(source, "Gameplay"),
+        "Audio snapshot fixture setup failed");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(source, "Music", 0.4F),
+        "Audio mixer override fixture setup failed");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(source, "Quiet", 2.0F),
+        "Audio mixer transition fixture setup failed");
+    Require(kb::scene::SceneAudioOcclusionAccess::Configure(source, kb::scene::AudioOcclusionSettings{
+        .enabled = true,
+        .occludedVolumeScale = 0.2F,
+        .maxDistance = 75.0F,
+        .layerMask = 0x0000000FU,
+        .maxRaycastsPerTick = 17U,
+    }), "Audio occlusion fixture setup failed");
+    kb::scene::SceneAudioOcclusionAccess::PublishRuntimeStats(source, kb::scene::AudioOcclusionRuntimeStats{
+        .sampleRequests = 9U,
+        .raycasts = 8U,
+        .occludedSamples = 3U,
+    });
 
     Require(kb::scene::SceneDocumentService::Save(source, sceneFile, "RoundTrip"), "Scene document was not saved");
+    Require(MetaContainsDependency(sceneFile.parent_path() / "RoundTrip.meta", 0xA17D10U, "audioMixer"),
+        "Scene metadata omitted the authored audio mixer dependency");
 
     kb::scene::Scene target;
     static_cast<void>(target.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "OldRoot" }));
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(target, "OldBus", 0.1F),
+        "Target audio mixer override fixture setup failed");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(target, "OldSnapshot", 4.0F),
+        "Target audio mixer transition fixture setup failed");
+    kb::scene::SceneAudioOcclusionAccess::PublishRuntimeStats(target, kb::scene::AudioOcclusionRuntimeStats{ .sampleRequests = 4U, .raycasts = 3U, .occludedSamples = 2U });
     Require(kb::scene::SceneDocumentService::LoadFileIntoScene(target, sceneFile), "Scene document was not loaded into target scene");
 
     const std::vector<kb::scene::SceneEntity> roots = target.Hierarchy().RootEntities();
@@ -290,12 +326,128 @@ void RunSceneDocumentRoundTripTest() {
     Require(behaviour != nullptr && behaviour->behaviourAssetId == 91 && behaviour->backend == kb::scene::BehaviourBackend::Lua && behaviour->tickGroup == kb::scene::BehaviourTickGroup::Gameplay && behaviour->executionOrder == -3, "Scene document behaviour did not roundtrip");
     Require(target.Tags().Contains("Boss") && target.Tags().IsAssigned(roots[0], "Boss"),
         "Scene document tag catalogue and assignment did not roundtrip");
+    Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(target) == 0xA17D10U
+            && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(target) == "Gameplay",
+        "Scene document authored audio mixer selection did not roundtrip");
+    const kb::scene::AudioOcclusionSettings& occlusion = kb::scene::SceneAudioOcclusionAccess::Settings(target);
+    Require(occlusion.enabled && NearlyEqual(occlusion.occludedVolumeScale, 0.2F)
+            && NearlyEqual(occlusion.maxDistance, 75.0F) && occlusion.layerMask == 0x0000000FU
+            && occlusion.maxRaycastsPerTick == 17U,
+        "Scene document authored audio occlusion settings did not roundtrip");
+    const kb::scene::AudioOcclusionRuntimeStats& stats = kb::scene::SceneAudioOcclusionAccess::RuntimeStats(target);
+    Require(kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(target).empty()
+            && !kb::scene::SceneAudioMixerAccess::SnapshotTransition(target).IsActive()
+            && stats.sampleRequests == 0U && stats.raycasts == 0U && stats.occludedSamples == 0U,
+        "Non-additive scene load retained runtime-only audio state");
+}
+
+[[nodiscard]] std::vector<std::uint8_t> ReadBytes(const std::filesystem::path& path) {
+    std::ifstream input{ path, std::ios::binary };
+    return std::vector<std::uint8_t>{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+}
+
+[[nodiscard]] bool WriteBytes(const std::filesystem::path& path, const std::vector<std::uint8_t>& bytes) {
+    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
+    output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    return output.good();
+}
+
+[[nodiscard]] std::uint32_t ReadUInt32(const std::vector<std::uint8_t>& bytes, std::size_t offset) {
+    Require(offset + sizeof(std::uint32_t) <= bytes.size(), "Binary fixture uint32 read exceeded its buffer");
+    return static_cast<std::uint32_t>(bytes[offset])
+        | (static_cast<std::uint32_t>(bytes[offset + 1U]) << 8U)
+        | (static_cast<std::uint32_t>(bytes[offset + 2U]) << 16U)
+        | (static_cast<std::uint32_t>(bytes[offset + 3U]) << 24U);
+}
+
+[[nodiscard]] std::uint64_t ReadUInt64(const std::vector<std::uint8_t>& bytes, std::size_t offset) {
+    Require(offset + sizeof(std::uint64_t) <= bytes.size(), "Binary fixture uint64 read exceeded its buffer");
+    std::uint64_t value = 0U;
+    for (std::uint32_t byte = 0U; byte < 8U; ++byte) {
+        value |= static_cast<std::uint64_t>(bytes[offset + byte]) << (byte * 8U);
+    }
+    return value;
+}
+
+void WriteUInt32(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32_t value) {
+    Require(offset + sizeof(value) <= bytes.size(), "Binary fixture uint32 write exceeded its buffer");
+    for (std::uint32_t byte = 0U; byte < 4U; ++byte) {
+        bytes[offset + byte] = static_cast<std::uint8_t>((value >> (byte * 8U)) & 0xFFU);
+    }
+}
+
+void WriteUInt64(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint64_t value) {
+    Require(offset + sizeof(value) <= bytes.size(), "Binary fixture uint64 write exceeded its buffer");
+    for (std::uint32_t byte = 0U; byte < 8U; ++byte) {
+        bytes[offset + byte] = static_cast<std::uint8_t>((value >> (byte * 8U)) & 0xFFU);
+    }
+}
+
+[[nodiscard]] std::size_t SkipString(const std::vector<std::uint8_t>& bytes, std::size_t offset) {
+    const std::uint32_t length = ReadUInt32(bytes, offset);
+    const std::size_t next = offset + sizeof(std::uint32_t) + length;
+    Require(next <= bytes.size(), "Binary fixture string exceeded its buffer");
+    return next;
+}
+
+struct TestIntegrity {
+    std::uint64_t hash = 14695981039346656037ULL;
+    std::uint32_t checksum = 0xFFFFFFFFU;
+};
+
+[[nodiscard]] TestIntegrity ComputeIntegrity(const std::vector<std::uint8_t>& bytes) noexcept {
+    TestIntegrity result;
+    for (const std::uint8_t byte : bytes) {
+        result.hash ^= byte;
+        result.hash *= 1099511628211ULL;
+        result.checksum ^= byte;
+        for (std::uint32_t bit = 0U; bit < 8U; ++bit) {
+            result.checksum = (result.checksum & 1U) != 0U
+                ? (0xEDB88320U ^ (result.checksum >> 1U))
+                : (result.checksum >> 1U);
+        }
+    }
+    result.checksum ^= 0xFFFFFFFFU;
+    if (result.hash == 0U) {
+        result.hash = 1099511628211ULL;
+    }
+    return result;
+}
+
+[[nodiscard]] bool MetaContainsDependency(
+    const std::filesystem::path& path, std::uint64_t expectedAssetId, std::string_view expectedRole) {
+    const std::vector<std::uint8_t> bytes = ReadBytes(path);
+    if (bytes.size() < 12U) {
+        return false;
+    }
+    std::size_t offset = 12U;
+    for (std::uint32_t stringIndex = 0U; stringIndex < 4U; ++stringIndex) {
+        offset = SkipString(bytes, offset);
+    }
+    offset += sizeof(std::uint64_t) * 2U + sizeof(std::uint32_t) * 3U;
+    const std::uint32_t dependencyCount = ReadUInt32(bytes, offset);
+    offset += sizeof(std::uint32_t);
+    for (std::uint32_t index = 0U; index < dependencyCount; ++index) {
+        const std::uint64_t assetId = ReadUInt64(bytes, offset);
+        offset += sizeof(std::uint64_t);
+        const std::uint32_t roleLength = ReadUInt32(bytes, offset);
+        offset += sizeof(std::uint32_t);
+        Require(offset + roleLength <= bytes.size(), "Scene meta dependency role exceeded its buffer");
+        const std::string_view role{ reinterpret_cast<const char*>(bytes.data() + offset), roleLength };
+        offset += roleLength;
+        if (assetId == expectedAssetId && role == expectedRole) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void RunSceneAudioListenerComponentReflectionSerializationTest() {
     kb::scene::Scene source;
     const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "AudioListener" });
     source.Components().AudioListeners().Set(sourceEntity, kb::scene::AudioListenerComponent{
+        .priority = -11,
+        .localUser = kb::input::LocalUserId{ 3U },
         .primary = false,
         .enabled = true,
     });
@@ -313,7 +465,9 @@ void RunSceneAudioListenerComponentReflectionSerializationTest() {
     Require(target.Runtime().EcsWorld().ApplySerializedComponent(targetEntity, serialized), "AudioListenerComponent reflection apply failed");
 
     const kb::scene::AudioListenerComponent* restored = target.Components().AudioListeners().TryGet(targetEntity);
-    Require(restored != nullptr && !restored->primary && restored->enabled, "AudioListenerComponent reflection did not roundtrip");
+    Require(restored != nullptr && restored->priority == -11 && restored->localUser == kb::input::LocalUserId{ 3U }
+            && !restored->primary && restored->enabled,
+        "AudioListenerComponent reflection did not roundtrip");
 }
 
 void RunSceneRadianceEmitterReflectionSerializationTest() {
@@ -597,7 +751,7 @@ void RunSceneHistoryRibbonPrefabRoundTripTest() {
 void RunSceneAudioSourceComponentReflectionSerializationTest() {
     kb::scene::Scene source;
     const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "AudioSource" });
-    source.Components().AudioSources().Set(sourceEntity, kb::scene::AudioSourceComponent{
+    kb::scene::AudioSourceComponent sourceComponent{
         .clipAssetId = 777,
         .volume = 0.6F,
         .pitch = 0.8F,
@@ -613,13 +767,17 @@ void RunSceneAudioSourceComponentReflectionSerializationTest() {
         .maxDistance = 30.0F,
         .rolloff = 2.0F,
         .dopplerFactor = 0.75F,
-    });
+    };
+    Require(kb::scene::SetAudioSourceOutputBus(sourceComponent, "Dialogue"), "Audio source reflection bus fixture was invalid");
+    source.Components().AudioSources().Set(sourceEntity, sourceComponent);
 
     kb::ecs::World& sourceWorld = source.Runtime().EcsWorld();
     const kb::ecs::ComponentReflection* reflection = sourceWorld.Reflection("kb.scene.AudioSourceComponent");
     Require(reflection != nullptr, "AudioSourceComponent reflection was not registered");
     Require(reflection->FindField("clipAssetId") != nullptr, "AudioSourceComponent reflection is missing clipAssetId");
     Require(reflection->FindField("spatialBlend") != nullptr, "AudioSourceComponent reflection is missing spatialBlend");
+    Require(reflection->FindField("outputBus") != nullptr && reflection->FindField("outputBusLength") != nullptr,
+        "AudioSourceComponent reflection is missing output bus storage");
 
     kb::ecs::SerializedComponent serialized;
     Require(sourceWorld.SerializeComponent(sourceEntity, sourceWorld.Component<kb::scene::AudioSourceComponent>(), serialized), "AudioSourceComponent reflection serialization failed");
@@ -629,13 +787,139 @@ void RunSceneAudioSourceComponentReflectionSerializationTest() {
     Require(target.Runtime().EcsWorld().ApplySerializedComponent(targetEntity, serialized), "AudioSourceComponent reflection apply failed");
 
     const kb::scene::AudioSourceComponent* restored = target.Components().AudioSources().TryGet(targetEntity);
-    Require(restored != nullptr && restored->clipAssetId == 777 && NearlyEqual(restored->volume, 0.6F) && NearlyEqual(restored->pitch, 0.8F) && restored->loop && !restored->spatial && restored->autoplay && !restored->enabled && restored->mute && NearlyEqual(restored->pan, 0.45F) && NearlyEqual(restored->spatialBlend, 0.2F) && restored->attenuationModel == kb::audio::AudioAttenuationModel::Exponential && NearlyEqual(restored->minDistance, 3.0F) && NearlyEqual(restored->maxDistance, 30.0F) && NearlyEqual(restored->rolloff, 2.0F) && NearlyEqual(restored->dopplerFactor, 0.75F), "AudioSourceComponent reflection did not roundtrip");
+    Require(restored != nullptr && restored->clipAssetId == 777 && NearlyEqual(restored->volume, 0.6F) && NearlyEqual(restored->pitch, 0.8F) && restored->loop && !restored->spatial && restored->autoplay && !restored->enabled && restored->mute && NearlyEqual(restored->pan, 0.45F) && NearlyEqual(restored->spatialBlend, 0.2F) && restored->attenuationModel == kb::audio::AudioAttenuationModel::Exponential && NearlyEqual(restored->minDistance, 3.0F) && NearlyEqual(restored->maxDistance, 30.0F) && NearlyEqual(restored->rolloff, 2.0F) && NearlyEqual(restored->dopplerFactor, 0.75F) && kb::scene::AudioSourceOutputBus(*restored) == "Dialogue", "AudioSourceComponent reflection did not roundtrip");
+}
+
+void RunSceneAudioSourceOutputBusValidationTest() {
+    kb::scene::AudioSourceComponent component;
+    const std::string maximum(kb::scene::AudioSourceComponent::MaxOutputBusBytes, 'B');
+    Require(kb::scene::SetAudioSourceOutputBus(component, maximum)
+            && kb::scene::AudioSourceOutputBus(component) == maximum,
+        "Audio source output bus rejected its maximum supported length");
+
+    const std::string tooLong(kb::scene::AudioSourceComponent::MaxOutputBusBytes + 1U, 'C');
+    Require(!kb::scene::SetAudioSourceOutputBus(component, tooLong)
+            && kb::scene::AudioSourceOutputBus(component) == maximum,
+        "Audio source output bus silently truncated an overlong name");
+
+    const std::string embeddedNull{ "Effects\0Hidden", 14U };
+    Require(!kb::scene::SetAudioSourceOutputBus(component, embeddedNull)
+            && kb::scene::AudioSourceOutputBus(component) == maximum,
+        "Audio source output bus accepted an embedded null byte");
+
+    for (const std::string_view invalidToken : { std::string_view{ "-" }, std::string_view{ "two words" }, std::string_view{ "bad#bus" }, std::string_view{ "bad\tbus" } }) {
+        Require(!kb::scene::SetAudioSourceOutputBus(component, invalidToken)
+                && kb::scene::AudioSourceOutputBus(component) == maximum,
+            "Audio source output bus accepted an invalid mixer-name token or changed state after rejection");
+    }
+
+    component.outputBusLength = kb::scene::AudioSourceComponent::MaxOutputBusBytes + 1U;
+    Require(!kb::scene::IsAudioSourceOutputBusValid(component)
+            && !kb::scene::AudioSourceOutputBus(component).empty(),
+        "Corrupted audio source output bus length was exposed as master routing");
+}
+
+void RunSceneAudioSourcePersistenceContractTest() {
+    const kb::scene::AudioSourceComponent valid{};
+    Require(kb::scene::IsAudioSourceComponentPersistable(valid), "Default audio source should satisfy the authored persistence contract");
+
+    const auto requireInvalid = [&valid](auto mutate) {
+        kb::scene::AudioSourceComponent candidate = valid;
+        mutate(candidate);
+        Require(!kb::scene::IsAudioSourceComponentPersistable(candidate), "Invalid audio source authored state passed the persistence contract");
+    };
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.volume = std::numeric_limits<float>::quiet_NaN(); });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.volume = -0.01F; });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.pitch = std::numeric_limits<float>::infinity(); });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.pitch = 0.009F; });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.pan = 1.01F; });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.spatialBlend = -0.01F; });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.minDistance = 0.0F; });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.maxDistance = 0.5F; });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.rolloff = -0.01F; });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.dopplerFactor = std::numeric_limits<float>::infinity(); });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) { value.attenuationModel = static_cast<kb::audio::AudioAttenuationModel>(99); });
+    requireInvalid([](kb::scene::AudioSourceComponent& value) {
+        value.outputBus[0] = '#';
+        value.outputBus[1] = '\0';
+        value.outputBusLength = 1U;
+    });
+
+    const std::filesystem::path invalidSceneFile = TempRoot() / "InvalidAudioSource.21kbscene";
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Invalid Audio" });
+    kb::scene::AudioSourceComponent invalid = valid;
+    invalid.volume = std::numeric_limits<float>::quiet_NaN();
+    scene.Components().AudioSources().Set(entity, invalid);
+    Require(!kb::scene::SceneDocumentService::Save(scene, invalidSceneFile, "InvalidAudioSource"), "Scene writer accepted an invalid authored audio source");
+}
+
+[[nodiscard]] std::vector<std::uint8_t> EncodeAudioSourcePayload(
+    const kb::scene::AudioSourceComponent& source,
+    std::uint32_t fileVersion,
+    std::string_view outputBus = {}) {
+    std::vector<std::uint8_t> bytes;
+    kb::scene::SceneAssetBinaryIO::WriteUInt64(bytes, source.clipAssetId);
+    kb::scene::SceneAssetBinaryIO::WriteFloat(bytes, source.volume);
+    kb::scene::SceneAssetBinaryIO::WriteFloat(bytes, source.pitch);
+    kb::scene::SceneAssetBinaryIO::WriteBool(bytes, source.loop);
+    kb::scene::SceneAssetBinaryIO::WriteBool(bytes, source.spatial);
+    kb::scene::SceneAssetBinaryIO::WriteBool(bytes, source.autoplay);
+    if (fileVersion >= 2U) {
+        kb::scene::SceneAssetBinaryIO::WriteBool(bytes, source.enabled);
+        kb::scene::SceneAssetBinaryIO::WriteBool(bytes, source.mute);
+        kb::scene::SceneAssetBinaryIO::WriteFloat(bytes, source.pan);
+        kb::scene::SceneAssetBinaryIO::WriteFloat(bytes, source.spatialBlend);
+        kb::scene::SceneAssetBinaryIO::WriteUInt32(bytes, static_cast<std::uint32_t>(source.attenuationModel));
+        kb::scene::SceneAssetBinaryIO::WriteFloat(bytes, source.minDistance);
+        kb::scene::SceneAssetBinaryIO::WriteFloat(bytes, source.maxDistance);
+        kb::scene::SceneAssetBinaryIO::WriteFloat(bytes, source.rolloff);
+        kb::scene::SceneAssetBinaryIO::WriteFloat(bytes, source.dopplerFactor);
+    }
+    if (fileVersion >= 3U) {
+        kb::scene::SceneAssetBinaryIO::WriteString(bytes, outputBus);
+    }
+    return bytes;
+}
+
+[[nodiscard]] bool DecodeAudioSourcePayload(
+    const kb::scene::AudioSourceComponent& source,
+    std::uint32_t fileVersion,
+    kb::scene::AudioSourceComponent& decoded,
+    std::string_view outputBus = {}) {
+    kb::scene::SceneAssetBinaryIO::ByteReader reader{ EncodeAudioSourcePayload(source, fileVersion, outputBus) };
+    return kb::scene::SceneAssetAudioComponentCodec::ReadSource(reader, fileVersion, decoded) && reader.Exhausted();
+}
+
+void RunSceneAudioSourceBinaryReadValidationTest() {
+    kb::scene::AudioSourceComponent source{};
+    kb::scene::AudioSourceComponent decoded{};
+    Require(DecodeAudioSourcePayload(source, 1U, decoded) && kb::scene::IsAudioSourceComponentPersistable(decoded), "Backward-valid v1 audio source payload was rejected");
+    Require(DecodeAudioSourcePayload(source, 2U, decoded) && kb::scene::IsAudioSourceComponentPersistable(decoded), "Backward-valid v2 audio source payload was rejected");
+    Require(DecodeAudioSourcePayload(source, 3U, decoded, "FutureBus") && kb::scene::AudioSourceOutputBus(decoded) == "FutureBus", "Valid v3 unknown route token was rejected");
+
+    source.volume = std::numeric_limits<float>::quiet_NaN();
+    Require(!DecodeAudioSourcePayload(source, 1U, decoded), "v1 audio source reader accepted a non-finite volume");
+    source = {};
+    source.pan = std::numeric_limits<float>::infinity();
+    Require(!DecodeAudioSourcePayload(source, 2U, decoded), "v2 audio source reader accepted a non-finite pan");
+    source = {};
+    source.minDistance = 4.0F;
+    source.maxDistance = 2.0F;
+    Require(!DecodeAudioSourcePayload(source, 2U, decoded), "v2 audio source reader accepted an inverted distance range");
+    source = {};
+    source.attenuationModel = static_cast<kb::audio::AudioAttenuationModel>(99);
+    Require(!DecodeAudioSourcePayload(source, 2U, decoded), "v2 audio source reader accepted an unknown attenuation enum");
+    source = {};
+    Require(!DecodeAudioSourcePayload(source, 3U, decoded, "bad#bus"), "v3 audio source reader accepted an invalid output bus token");
+    const std::string overlongBus(kb::scene::AudioSourceComponent::MaxOutputBusBytes + 1U, 'B');
+    Require(!DecodeAudioSourcePayload(source, 3U, decoded, overlongBus), "v3 audio source reader accepted an overlong output bus token");
 }
 
 void RunSceneAudioSourcePrefabRoundTripTest() {
     kb::scene::Scene source;
     const kb::scene::SceneObject root = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "AudioPrefab" });
-    source.Components().AudioSources().Set(root.Entity(), kb::scene::AudioSourceComponent{
+    kb::scene::AudioSourceComponent sourceComponent{
         .clipAssetId = 1234,
         .volume = 0.7F,
         .pitch = 1.2F,
@@ -651,7 +935,9 @@ void RunSceneAudioSourcePrefabRoundTripTest() {
         .maxDistance = 150.0F,
         .rolloff = 0.8F,
         .dopplerFactor = 1.5F,
-    });
+    };
+    Require(kb::scene::SetAudioSourceOutputBus(sourceComponent, "Effects"), "Audio prefab bus fixture was invalid");
+    source.Components().AudioSources().Set(root.Entity(), sourceComponent);
 
     kb::scene::ScenePrefab prefab = source.Prefabs().Capture(root);
     kb::scene::Scene target;
@@ -659,13 +945,15 @@ void RunSceneAudioSourcePrefabRoundTripTest() {
     Require(!instance.Empty(), "Audio source prefab did not instantiate");
 
     const kb::scene::AudioSourceComponent* restored = target.Components().AudioSources().TryGet(instance.ObjectAt(0).Entity());
-    Require(restored != nullptr && restored->clipAssetId == 1234 && NearlyEqual(restored->volume, 0.7F) && NearlyEqual(restored->pitch, 1.2F) && restored->loop && restored->spatial && !restored->autoplay && restored->enabled && !restored->mute && NearlyEqual(restored->pan, -0.25F) && NearlyEqual(restored->spatialBlend, 0.9F) && restored->attenuationModel == kb::audio::AudioAttenuationModel::None && NearlyEqual(restored->minDistance, 1.5F) && NearlyEqual(restored->maxDistance, 150.0F) && NearlyEqual(restored->rolloff, 0.8F) && NearlyEqual(restored->dopplerFactor, 1.5F), "Audio source prefab component did not roundtrip");
+    Require(restored != nullptr && restored->clipAssetId == 1234 && NearlyEqual(restored->volume, 0.7F) && NearlyEqual(restored->pitch, 1.2F) && restored->loop && restored->spatial && !restored->autoplay && restored->enabled && !restored->mute && NearlyEqual(restored->pan, -0.25F) && NearlyEqual(restored->spatialBlend, 0.9F) && restored->attenuationModel == kb::audio::AudioAttenuationModel::None && NearlyEqual(restored->minDistance, 1.5F) && NearlyEqual(restored->maxDistance, 150.0F) && NearlyEqual(restored->rolloff, 0.8F) && NearlyEqual(restored->dopplerFactor, 1.5F) && kb::scene::AudioSourceOutputBus(*restored) == "Effects", "Audio source prefab component did not roundtrip");
 }
 
 void RunSceneAudioListenerPrefabRoundTripTest() {
     kb::scene::Scene source;
     const kb::scene::SceneObject root = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "AudioListenerPrefab" });
     source.Components().AudioListeners().Set(root.Entity(), kb::scene::AudioListenerComponent{
+        .priority = 7,
+        .localUser = kb::input::LocalUserId{ 2U },
         .primary = false,
         .enabled = false,
     });
@@ -676,7 +964,116 @@ void RunSceneAudioListenerPrefabRoundTripTest() {
     Require(!instance.Empty(), "Audio listener prefab did not instantiate");
 
     const kb::scene::AudioListenerComponent* restored = target.Components().AudioListeners().TryGet(instance.ObjectAt(0).Entity());
-    Require(restored != nullptr && !restored->primary && !restored->enabled, "Audio listener prefab component did not roundtrip");
+    Require(restored != nullptr && restored->priority == 7 && restored->localUser == kb::input::LocalUserId{ 2U }
+            && !restored->primary && !restored->enabled,
+        "Audio listener prefab component did not roundtrip");
+}
+
+void RunSceneAudioDocumentLoadSemanticsTest() {
+    kb::scene::Scene scene;
+    kb::scene::SceneAudioListenerAccess::SetLocalUser(scene, kb::input::LocalUserId{ 7U });
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(scene, 101U);
+    Require(kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(scene, "Existing"),
+        "Audio snapshot fixture setup failed");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::SetBusVolumeOverride(scene, "ExistingBus", 0.6F),
+        "Additive audio mixer override fixture setup failed");
+    kb::tests::Require(kb::scene::SceneAudioMixerAccess::BeginSnapshotTransition(scene, "Later", 3.0F),
+        "Additive audio mixer transition fixture setup failed");
+    Require(kb::scene::SceneAudioOcclusionAccess::Configure(scene, kb::scene::AudioOcclusionSettings{
+        .enabled = true, .occludedVolumeScale = 0.4F, .maxDistance = 40.0F,
+        .layerMask = 3U, .maxRaycastsPerTick = 6U,
+    }), "Audio occlusion fixture setup failed");
+    kb::scene::SceneAudioOcclusionAccess::PublishRuntimeStats(scene, kb::scene::AudioOcclusionRuntimeStats{ .sampleRequests = 5U, .raycasts = 4U, .occludedSamples = 2U });
+
+    kb::scene::Scene additiveSource;
+    static_cast<void>(additiveSource.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "AdditiveRoot" }));
+    kb::scene::SceneDocument additive = kb::scene::SceneDocumentService::Capture(additiveSource, "Additive");
+    additive.audioMixerAssetId = 202U;
+    additive.audioMixerSnapshot = "Incoming";
+    additive.audioOcclusionSettings = {};
+    Require(kb::scene::SceneDocumentService::LoadIntoSceneAdditive(scene, additive).succeeded,
+        "Additive scene audio semantics fixture did not load");
+    const kb::scene::AudioOcclusionRuntimeStats additiveStats = kb::scene::SceneAudioOcclusionAccess::RuntimeStats(scene);
+    Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(scene) == 101U
+            && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(scene) == "Existing"
+            && kb::scene::SceneAudioMixerAccess::BusVolumeOverrides(scene).size() == 1U
+            && kb::scene::SceneAudioMixerAccess::SnapshotTransition(scene).IsActive()
+            && kb::scene::SceneAudioOcclusionAccess::Settings(scene).enabled
+            && kb::scene::SceneAudioListenerAccess::LocalUser(scene) == kb::input::LocalUserId{ 7U }
+            && additiveStats.sampleRequests == 5U && additiveStats.raycasts == 4U,
+        "Additive scene load overwrote scene-global authored or transient runtime audio state");
+
+    kb::scene::SceneDocument invalid = additive;
+    invalid.audioMixerSnapshot = "invalid snapshot";
+    Require(!kb::scene::SceneDocumentService::LoadIntoScene(scene, invalid),
+        "Non-additive scene load accepted an invalid authored audio snapshot name");
+    Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(scene) == 101U,
+        "Rejected scene audio configuration mutated the current scene");
+
+    invalid.audioMixerSnapshot = "Valid";
+    invalid.audioOcclusionSettings.maxDistance = std::numeric_limits<float>::infinity();
+    Require(!kb::scene::SceneDocumentService::LoadIntoScene(scene, invalid),
+        "Non-additive scene load accepted non-finite authored occlusion settings");
+
+    Require(kb::scene::SceneDocumentService::LoadIntoScene(scene, additive),
+        "Valid non-additive audio scene fixture did not load");
+    Require(kb::scene::SceneAudioListenerAccess::LocalUser(scene) == kb::input::kPrimaryLocalUser,
+        "Non-additive scene load retained the transient listener local user selection");
+}
+
+void RunSceneAudioDocumentBackwardCompatibilityTest() {
+    CleanTempRoot();
+    const std::filesystem::path sceneFile = TempRoot() / "LegacyAudioDefaults.21kbscene";
+
+    kb::scene::SceneDocument current;
+    current.guid = "scene:legacy-audio-defaults";
+    current.name = "LegacyAudioDefaults";
+    Require(kb::scene::SceneDocumentService::Save(current, sceneFile),
+        "Legacy scene audio compatibility fixture could not be saved");
+
+    std::vector<std::uint8_t> sceneBytes = ReadBytes(sceneFile);
+    constexpr std::size_t authoredAudioBlockBytes = sizeof(std::uint64_t) + sizeof(std::uint32_t)
+        + sizeof(std::uint8_t) + sizeof(float) * 2U + sizeof(std::uint32_t) * 2U;
+    Require(sceneBytes.size() > authoredAudioBlockBytes,
+        "Legacy scene audio compatibility fixture is shorter than the v32 audio block");
+    sceneBytes.resize(sceneBytes.size() - authoredAudioBlockBytes);
+    WriteUInt32(sceneBytes, kSceneMagic.size(), 31U);
+    Require(WriteBytes(sceneFile, sceneBytes), "Legacy scene audio compatibility fixture could not be rewritten");
+
+    const TestIntegrity integrity = ComputeIntegrity(sceneBytes);
+    const std::filesystem::path metaFile = sceneFile.parent_path() / "LegacyAudioDefaults.meta";
+    std::vector<std::uint8_t> metaBytes = ReadBytes(metaFile);
+    std::size_t integrityOffset = 12U;
+    for (std::uint32_t stringIndex = 0U; stringIndex < 4U; ++stringIndex) {
+        integrityOffset = SkipString(metaBytes, integrityOffset);
+    }
+    WriteUInt64(metaBytes, integrityOffset, sceneBytes.size());
+    WriteUInt64(metaBytes, integrityOffset + sizeof(std::uint64_t), integrity.hash);
+    WriteUInt32(metaBytes, integrityOffset + sizeof(std::uint64_t) * 2U, integrity.checksum);
+    Require(WriteBytes(metaFile, metaBytes), "Legacy scene audio meta fixture could not be rewritten");
+
+    const kb::scene::SceneDocumentLoadResult loaded = kb::scene::SceneDocumentService::Load(sceneFile);
+    Require(loaded.succeeded && loaded.document.fileVersion == 31U
+            && loaded.document.audioMixerAssetId == 0U && loaded.document.audioMixerSnapshot.empty()
+            && !loaded.document.audioOcclusionSettings.enabled
+            && NearlyEqual(loaded.document.audioOcclusionSettings.occludedVolumeScale, 0.35F)
+            && NearlyEqual(loaded.document.audioOcclusionSettings.maxDistance, 100.0F)
+            && loaded.document.audioOcclusionSettings.layerMask == 0xFFFFFFFFU
+            && loaded.document.audioOcclusionSettings.maxRaycastsPerTick == 8U,
+        "Pre-v32 scene did not load explicit authored audio defaults");
+
+    kb::scene::Scene target;
+    kb::scene::SceneAudioMixerAccess::SetActiveMixer(target, 44U);
+    Require(kb::scene::SceneAudioMixerAccess::SetActiveSnapshot(target, "Stale"),
+        "Audio snapshot fixture setup failed");
+    Require(kb::scene::SceneAudioOcclusionAccess::Configure(target, kb::scene::AudioOcclusionSettings{ .enabled = true }),
+        "Audio occlusion fixture setup failed");
+    Require(kb::scene::SceneDocumentService::LoadFileIntoScene(target, sceneFile),
+        "Pre-v32 scene could not be reloaded into a runtime scene");
+    Require(kb::scene::SceneAudioMixerAccess::ActiveMixer(target) == 0U
+            && kb::scene::SceneAudioMixerAccess::ActiveSnapshot(target).empty()
+            && !kb::scene::SceneAudioOcclusionAccess::Settings(target).enabled,
+        "Pre-v32 scene reload leaked scene-global audio state");
 }
 
 void RunScenePhysicsComponentReflectionSerializationTest() {
@@ -888,8 +1285,13 @@ void RunProjectSceneTests() {
     RunSceneHistoryRibbonPrefabRoundTripTest();
     RunSceneAudioListenerComponentReflectionSerializationTest();
     RunSceneAudioSourceComponentReflectionSerializationTest();
+    RunSceneAudioSourceOutputBusValidationTest();
+    RunSceneAudioSourcePersistenceContractTest();
+    RunSceneAudioSourceBinaryReadValidationTest();
     RunSceneAudioListenerPrefabRoundTripTest();
     RunSceneAudioSourcePrefabRoundTripTest();
+    RunSceneAudioDocumentLoadSemanticsTest();
+    RunSceneAudioDocumentBackwardCompatibilityTest();
     RunScenePhysicsComponentReflectionSerializationTest();
     RunEmptySceneDocumentClearsRuntimeSceneTest();
     RunSceneTagSingleSelectionTest();

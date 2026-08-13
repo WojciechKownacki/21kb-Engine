@@ -1,5 +1,6 @@
 #include <array>
 #include "app/EditorApplicationMessageLoop.hpp"
+#include "app/EditorAudioAssetPreview.hpp"
 
 #if defined(_WIN32)
 
@@ -17,6 +18,7 @@
 #include "rendering/MaterialPreviewRenderPolicy.hpp"
 #include "rendering/EditorHostSurfaceLayoutResolver.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
+#include "rendering/SceneViewportPresentationPolicy.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "rendering/EditorMaterialThumbnailService.hpp"
@@ -27,6 +29,7 @@
 #include "app/scene_viewport/EditorViewportCameraNavigationInput.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "app/scene_viewport/EditorTerrainViewportInteraction.hpp"
+#include "app/EditorWindowInvalidator.hpp"
 #include "scene/EditorTerrainService.hpp"
 #include "diagnostics/EditorLagTrace.hpp"
 
@@ -252,34 +255,21 @@ void CoalesceConsecutiveMouseMoveMessages(MSG& message) noexcept {
     }
 }
 
-void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
-    if (state.window != nullptr && IsWindow(state.window) != 0) {
-        if (const std::optional<RECT> inspector = EditorPanelContentResolver::Resolve(
-                DockPanelKind::Inspector,
-                state.window,
-                state.window,
-                state.dockModel,
-                state.floatingWindows,
-                state.metrics)) {
-            InvalidateRect(state.window, &*inspector, FALSE);
-        }
-    }
+void InvalidatePanelKind(EditorApplicationState& state, DockPanelKind kind) noexcept {
+    EditorWindowInvalidator::InvalidateDockPanel(
+        state.window, state.dockModel, state.floatingWindows, state.metrics, kind);
+}
 
-    const EditorFloatingWindowQueries queries = state.floatingWindows.Queries();
-    for (HWND window : queries.Windows()) {
-        if (window == nullptr || IsWindow(window) == 0) {
-            continue;
-        }
-        if (const std::optional<RECT> inspector = EditorPanelContentResolver::Resolve(
-                DockPanelKind::Inspector,
-                window,
-                state.window,
-                state.dockModel,
-                state.floatingWindows,
-                state.metrics)) {
-            InvalidateRect(window, &*inspector, FALSE);
-        }
-    }
+void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
+    InvalidatePanelKind(state, DockPanelKind::Inspector);
+}
+
+void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
+    // Mesh previews are CPU-rasterized and consumed only by Project Files and Inspector. Invalidating
+    // the whole native host here also dirtied the Scene child swapchain without submitting a new scene
+    // frame, allowing Windows to expose a stale back buffer as a stretched/duplicated grid.
+    InvalidatePanelKind(state, DockPanelKind::Assets);
+    InvalidatePanelKind(state, DockPanelKind::Inspector);
 }
 
 [[nodiscard]] bool PresentScenePanel(EditorApplicationState& state, HWND host, const DockPanel& panel, const RECT& content, bool refreshToolbar) {
@@ -480,14 +470,7 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
     const bool explicitPresentRequested = state.sceneViewport.PresentRequested();
     state.sceneViewport.SetGraphShaderCacheRoot(state.sceneContext.GraphShaderCacheRoot());
     if (EditorMeshPreviewCache().PumpCompletedPreviews(state.sceneContext.Scene().Assets().Manager()) > 0U) {
-        if (state.window != nullptr) {
-            InvalidateRect(state.window, nullptr, FALSE);
-        }
-        for (HWND window : state.floatingWindows.Queries().Windows()) {
-            if (window != nullptr && IsWindow(window) != 0) {
-                InvalidateRect(window, nullptr, FALSE);
-            }
-        }
+        InvalidateMeshPreviewPanels(state);
     }
     const std::size_t importedItems = state.sceneContext.PumpAssetImportResults();
     if (importedItems > 0U) {
@@ -641,8 +624,17 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     ConfigurePlayModePointerViewport(state);
     state.inputCollector.Collect(input.MutableDeviceState(), state.window);
     if (!state.sceneContext.TickPlayModeSceneSession(deltaSeconds)) {
+        const bool previousPlayModeSceneActive = state.sceneContext.HasPlayModeSceneSession();
         state.playMode.Stop();
         static_cast<void>(state.sceneContext.RestorePlayModeSceneSession());
+        if (SceneViewportPresentationPolicy::RequiresPresent(
+                previousPlayModeSceneActive,
+                state.sceneContext.HasPlayModeSceneSession())) {
+            state.sceneViewport.RequestPresent();
+            if (state.window != nullptr) {
+                InvalidateRect(state.window, nullptr, FALSE);
+            }
+        }
     }
 }
 
@@ -718,6 +710,12 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         state.sceneViewport.RequestPresent();
     }
 
+    const bool audioPreviewChanged = EditorAudioAssetPreview::Tick(state.sceneContext.Scene());
+    if (audioPreviewChanged) {
+        EditorWindowInvalidator::InvalidateDockPanel(
+            state.window, state.dockModel, state.floatingWindows, state.metrics, DockPanelKind::Assets);
+    }
+
     // Saving a script in the Script Editor (Ctrl+S) writes the file but leaves the
     // cached asset stale; detect the save here and reload it so the Inspector's
     // exposed-variable schema reflects the edit immediately (no editor/scene save
@@ -742,7 +740,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     const bool viewportsPresented = PresentVisibleViewports(state);
     return viewportsPresented || navigationChanged || gizmoChanged || focusChanged ||
         animationPreviewCameraChanged || animationPreviewPlaybackChanged || scriptSaved ||
-        addComponentSliding || disclosureSliding || skeletalMeshEditorOpenChanged ||
+        audioPreviewChanged || addComponentSliding || disclosureSliding || skeletalMeshEditorOpenChanged ||
         EditorTerrainService::ToolState().strokeActive;
 }
 
@@ -902,6 +900,7 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
             // async graph cook results keep pumping; time-driven preview animation (MAT-72) is
             // carried by the per-frame preview presents in TickEditorFrame.
             if (state.sceneContext.MaterialEditor().OpenAssetId().IsValid() ||
+                EditorAudioAssetPreview::HasActivePreview() ||
                 state.sceneContext.AssetImportInProgress() ||
                 state.sceneContext.HasPendingSkeletalMeshEditorOpen() ||
                 EditorMeshPreviewCache().HasPendingPreviewWork()) {

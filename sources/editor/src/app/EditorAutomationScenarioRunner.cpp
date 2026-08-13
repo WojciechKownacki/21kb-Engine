@@ -69,6 +69,7 @@
 #include "engine/visual/VisualGraphRuntimeBindingRegistry.hpp"
 #include "engine/visual/VisualGraphRuntimeRegistry.hpp"
 #include "rendering/EditorMeshThumbnailService.hpp"
+#include "rendering/EditorMeshPreviewService.hpp"
 #include "engine/visual/VisualGraphDebugSession.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "scene/EditorPluginCatalog.hpp"
@@ -2344,8 +2345,17 @@ ReadScriptValue(
         if (metadata == nullptr) return { false, "thumbnail asset was not found" };
         EditorMeshThumbnailService& thumbnails = EditorMeshThumbnailCache();
         thumbnails.Clear();
-        const EditorMeshThumbnailImage* image = thumbnails.ThumbnailFor(*metadata);
-        const EditorMeshThumbnailStats* stats = thumbnails.StatsFor(*metadata);
+        const EditorMeshThumbnailImage* image = thumbnails.ThumbnailFor(manager, *metadata);
+        const EditorMeshThumbnailStats* stats = thumbnails.StatsFor(manager, *metadata);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 10 };
+        while ((image == nullptr || stats == nullptr) && EditorMeshPreviewCache().HasPendingPreviewWork() &&
+               std::chrono::steady_clock::now() < deadline) {
+            manager.PumpAsyncLoads();
+            static_cast<void>(EditorMeshPreviewCache().PumpCompletedPreviews(manager));
+            image = thumbnails.ThumbnailFor(manager, *metadata);
+            stats = thumbnails.StatsFor(manager, *metadata);
+            std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
+        }
         const bool matched = image != nullptr && image->width == kEditorMeshThumbnailSize &&
             image->height == kEditorMeshThumbnailSize && !image->bgra.empty() &&
             stats != nullptr && stats->vertexCount >= 3U && stats->triangleCount >= 1U;
@@ -3149,7 +3159,9 @@ ReadScriptValue(
         if (metadata->type == "LuaScript") {
             opened = state.context.OpenLuaScript(id);
         } else if (metadata->type == "SkeletalMesh") {
-            opened = state.context.OpenSkeletalMeshEditorAsset(id);
+            opened = state.context.RequestOpenSkeletalMeshEditorAsset(id);
+        } else if (metadata->type == "Skeleton") {
+            opened = state.context.RequestOpenSkeletalMeshEditorSkeletonAsset(id);
         } else if (metadata->type == "AnimationClip") {
             opened = state.context.OpenAnimationClipEditorAsset(id);
         } else if (metadata->type == "AnimatorController") {
@@ -3161,6 +3173,24 @@ ReadScriptValue(
             metadata->type == "RenderMaterialInstance" ||
             metadata->type == "RenderMaterialGraph") {
             opened = state.context.OpenMaterialEditorAsset(id);
+        }
+        if (opened && state.context.HasPendingSkeletalMeshEditorOpen()) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 10 };
+            while (state.context.HasPendingSkeletalMeshEditorOpen() &&
+                   std::chrono::steady_clock::now() < deadline) {
+                state.context.Scene().Assets().Manager().PumpAsyncLoads();
+                static_cast<void>(state.context.PumpPendingSkeletalMeshEditorOpen());
+                std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
+            }
+            opened = !state.context.HasPendingSkeletalMeshEditorOpen() &&
+                state.context.HasSkeletalMeshEditorAsset();
+        }
+        if (opened && metadata->type == kb::scene::kSkeletonAssetType) {
+            opened = state.context.IsSkeletalMeshEditorSkeletonDocument() &&
+                state.context.SkeletalMeshEditorSkeletonAssetId() == id;
+        } else if (opened && metadata->type == kb::scene::kSkeletalMeshAssetType) {
+            opened = !state.context.IsSkeletalMeshEditorSkeletonDocument() &&
+                state.context.SkeletalMeshEditorAssetId() == id;
         }
         return { opened, opened ? metadata->type : "unsupported asset" };
     }

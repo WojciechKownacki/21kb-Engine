@@ -1,6 +1,10 @@
 #include "CliCommands.hpp"
 #include "engine/core/JsonValue.hpp"
 
+#include "engine/assets/AssetId.hpp"
+#include "engine/assets/AssetMetadata.hpp"
+#include "engine/input/InputAssetIO.hpp"
+#include "engine/input/InputKey.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -19,6 +23,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <span>
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -2004,6 +2009,83 @@ void RunApiCommandTests() {
         const std::string source{ std::istreambuf_iterator<char>{ sampleStream }, std::istreambuf_iterator<char>{} };
         Require(Contains(source, "function Tick(self, dt)"), "LIB-203 gameplay sample was not a runnable Tick behaviour");
     }
+
+    const std::filesystem::path audioDemoRoot = TestRoot() / "Assets" / "Samples" / "AudioShooter";
+    const std::filesystem::path audioDemoScenePath = TestRoot() / "Assets" / "Scenes" / "AudioShooterDemo.21kbscene";
+    for (const std::filesystem::path& demoAsset : {
+             audioDemoRoot / "AudioShooterController.lua",
+             audioDemoRoot / "AudioProjectile.lua",
+             audioDemoRoot / "AudioProjectile.kbprefab",
+             audioDemoRoot / "DemoCube.obj",
+             audioDemoRoot / "Shot.wav",
+             audioDemoRoot / "EngineLoop.wav",
+             audioDemoRoot / "Fire.21kbinputaction",
+             audioDemoRoot / "AudioShooter.21kbinputcontext",
+             audioDemoScenePath,
+         }) {
+        Require(std::filesystem::is_regular_file(demoAsset), "init-agent did not write a complete Audio Shooter demo asset set");
+    }
+
+    const CommandRun validateAudioController = Run(&kb::cli::RunValidateCommand, {
+        "--project", root, "Assets/Samples/AudioShooter/AudioShooterController.lua",
+    });
+    const CommandRun validateAudioProjectile = Run(&kb::cli::RunValidateCommand, {
+        "--project", root, "Assets/Samples/AudioShooter/AudioProjectile.lua",
+    });
+    Require(validateAudioController.exitCode == 0 && validateAudioProjectile.exitCode == 0,
+        "Audio Shooter demo scripts did not pass production Lua validation");
+
+    const kb::input::InputAssetLoadResult<kb::input::InputActionAsset> fireAction =
+        kb::input::ReadInputAction(audioDemoRoot / "Fire.21kbinputaction");
+    const kb::input::InputAssetLoadResult<kb::input::InputMappingContextAsset> audioInputContext =
+        kb::input::ReadInputMappingContext(audioDemoRoot / "AudioShooter.21kbinputcontext");
+    Require(fireAction.succeeded && fireAction.asset.name == "Fire" &&
+            fireAction.asset.valueType == kb::input::InputActionValueType::Bool,
+        "Audio Shooter demo Fire input action is invalid");
+    const kb::assets::AssetId expectedFireActionId = kb::assets::MakeAssetId(
+        kb::assets::NormalizeAssetPath("/Game/Samples/AudioShooter/Fire.21kbinputaction") + ":InputAction");
+    const kb::assets::AssetId expectedInputContextId = kb::assets::MakeAssetId(
+        kb::assets::NormalizeAssetPath("/Game/Samples/AudioShooter/AudioShooter.21kbinputcontext") + ":InputMappingContext");
+    const kb::assets::AssetId expectedControllerId = kb::assets::MakeAssetId(
+        kb::assets::NormalizeAssetPath("/Game/Samples/AudioShooter/AudioShooterController.lua") + ":LuaScript");
+    Require(audioInputContext.succeeded && audioInputContext.asset.mappings.size() == 1U &&
+            audioInputContext.asset.mappings.front().key == kb::input::InputKey::Space &&
+            audioInputContext.asset.mappings.front().actionId == expectedFireActionId.value,
+        "Audio Shooter demo Fire action is not bound to Space");
+
+    const kb::scene::SceneDocumentLoadResult audioDemoScene = kb::scene::SceneDocumentService::Load(audioDemoScenePath);
+    Require(audioDemoScene.succeeded, "Audio Shooter demo scene could not be loaded");
+    const auto findDemoNode = [&audioDemoScene](std::string_view name) -> const kb::scene::ScenePrefabNodeDesc* {
+        for (const kb::scene::ScenePrefabNodeDesc& node : audioDemoScene.document.worldPrefab.Nodes()) {
+            if (node.name == name) return &node;
+        }
+        return nullptr;
+    };
+    const kb::scene::ScenePrefabNodeDesc* shipNode = findDemoNode("Player Ship");
+    const kb::scene::ScenePrefabNodeDesc* shipBodyNode = findDemoNode("Ship Body");
+    const kb::scene::ScenePrefabNodeDesc* cameraNode = findDemoNode("Follow Camera");
+    const kb::scene::ScenePrefabNodeDesc* beaconNode = findDemoNode("Spatial Audio Beacon");
+    const std::span<const kb::scene::ScenePrefabNodeDesc> demoNodes = audioDemoScene.document.worldPrefab.Nodes();
+    const std::uint32_t shipNodeIndex = shipNode == nullptr
+        ? kb::scene::ScenePrefabNodeDesc::NoParent
+        : static_cast<std::uint32_t>(shipNode - demoNodes.data());
+    Require(shipNode != nullptr && shipBodyNode != nullptr && shipBodyNode->components.meshRenderer.has_value() &&
+            shipNode->components.behaviour.has_value() && shipNode->components.input.has_value() &&
+            shipNode->components.behaviour->behaviourAssetId == expectedControllerId.value &&
+            shipNode->components.input->mappingContextAssetId == expectedInputContextId.value &&
+            !shipNode->components.audioSource.has_value(),
+        "Audio Shooter ship is not wired to mesh, flight and input without a masking 2D audio source");
+    Require(cameraNode != nullptr && cameraNode->parentNode == shipNodeIndex &&
+            cameraNode->components.camera.has_value() && cameraNode->components.camera->primary &&
+            cameraNode->components.audioListener.has_value() && cameraNode->components.audioListener->primary,
+        "Audio Shooter follow camera is not wired to the primary audio listener");
+    Require(beaconNode != nullptr && beaconNode->components.audioSource.has_value() &&
+            beaconNode->components.audioSource->autoplay && beaconNode->components.audioSource->loop &&
+            beaconNode->components.audioSource->spatial &&
+            beaconNode->components.audioSource->spatialBlend == 1.0F &&
+            beaconNode->components.audioSource->attenuationModel == kb::audio::AudioAttenuationModel::Linear &&
+            beaconNode->components.audioSource->maxDistance > beaconNode->components.audioSource->minDistance,
+        "Audio Shooter spatial beacon does not demonstrate distance attenuation");
 
     // LIB-013 regression: init-agent internally rebuilds its catalog and
     // calls ScriptAgentProjectFiles::Write() a second time whenever the

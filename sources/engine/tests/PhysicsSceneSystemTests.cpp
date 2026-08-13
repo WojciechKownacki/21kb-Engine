@@ -741,8 +741,8 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     kb::tests::Require(std::filesystem::exists(sampleProjectRoot / "Assets" / "Prefabs" / "Projectile.kbprefab"), "LIB-014 shipped Projectile.kbprefab missing on disk");
 
     kb::tests::Require(scene.Assets().MountProject(sampleProjectRoot), "LIB-014/015 sample project mount failed");
-    kb::tests::Require(scene.Assets().Discover() == 7U,
-        "LIB-014/015 sample project did not discover the six shipped Lua templates plus Projectile.kbprefab");
+    kb::tests::Require(scene.Assets().Discover() == 15U,
+        "LIB-014/015 sample project did not discover the shipped gameplay and Audio Shooter assets supported by the core runtime");
 
     kb::assets::AssetHandle<kb::scene::ScenePrefab> projectilePrefabAsset = scene.Assets().LoadPrefab("/Game/Prefabs/Projectile.kbprefab");
     kb::tests::Require(projectilePrefabAsset.IsLoaded(), "LIB-014 shipped Projectile.kbprefab could not be loaded as a real project asset");

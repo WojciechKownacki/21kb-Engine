@@ -12,6 +12,7 @@
 #include "scene/prefab/ScenePrefabInstanceTopology.hpp"
 #include "scene/prefab/ScenePrefabNestedResolver.hpp"
 #include "scene/prefab/ScenePrefabOverrideDetector.hpp"
+#include "scene/prefab/ScenePrefabPropertyOverrideApplier.hpp"
 #include "scene/prefab/ScenePrefabRegistry.hpp"
 
 #include <algorithm>
@@ -107,6 +108,22 @@ bool ScenePrefabVariantOverrideService::ApplyProperty(Scene& scene, ScenePrefabR
         const std::span<const std::uint64_t> nodeIds = instance.NodeIds();
         if (nodeIndex < nodeIds.size()) {
             property.nodeId = nodeIds[nodeIndex];
+        }
+    }
+    const bool audioSourceProperty = propertyPath == "audioSource" || propertyPath.starts_with("audioSource.");
+    if (audioSourceProperty) {
+        if (resolvedPrefab == nullptr) {
+            return false;
+        }
+        const ScenePrefabNodeDesc* resolvedNode = resolvedPrefab->TryGetNode(nodeIndex);
+        if (resolvedNode == nullptr) {
+            return false;
+        }
+        ScenePrefabNodeDesc candidate = *resolvedNode;
+        if (!ScenePrefabPropertyOverrideApplier::Apply(candidate, property)
+            || (candidate.components.audioSource.has_value()
+                && !IsAudioSourceComponentPersistable(*candidate.components.audioSource))) {
+            return false;
         }
     }
     if (!registry.UpsertVariantOverride(instance.prefab, std::move(property))) {

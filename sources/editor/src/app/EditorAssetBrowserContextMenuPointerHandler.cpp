@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserContextCommandExecutor.hpp"
+#include "app/EditorAssetBrowserNativeCommandMap.hpp"
 #include "assets/EditorAssetBrowserHitPayloadResolver.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -10,128 +11,14 @@
 namespace kb::editor {
 namespace {
 
-constexpr UINT_PTR kAssetMenuImport = 2001;
-constexpr UINT_PTR kAssetMenuNewFolder = 2002;
-constexpr UINT_PTR kAssetMenuNewLuaScript = 2003;
-constexpr UINT_PTR kAssetMenuNewInputAction = 2004;
-constexpr UINT_PTR kAssetMenuNewInputAxis = 2006;
-constexpr UINT_PTR kAssetMenuNewInputMappingContext = 2005;
-constexpr UINT_PTR kAssetMenuNewMaterial = 2007;
-constexpr UINT_PTR kAssetMenuCreateMaterialInstance = 2008;
-constexpr UINT_PTR kAssetMenuNewMaterialGraph = 2009;
-constexpr UINT_PTR kAssetMenuNewMaterialType = 2010;
-constexpr UINT_PTR kAssetMenuCreateMaterialFromGraph = 2011;
-constexpr UINT_PTR kAssetMenuCreateMaterialFromMaterialType = 2012;
-constexpr UINT_PTR kAssetMenuNewMaterialFunction = 2013;
-constexpr UINT_PTR kAssetMenuDirectionalLight = 2101;
-constexpr UINT_PTR kAssetMenuPointLight = 2102;
-constexpr UINT_PTR kAssetMenuSpotLight = 2103;
-constexpr UINT_PTR kAssetMenuRename = 2201;
-constexpr UINT_PTR kAssetMenuDelete = 2202;
-constexpr UINT_PTR kAssetMenuRefresh = 2203;
-constexpr UINT_PTR kAssetMenuExtractMaterials = 2301;
-
-[[nodiscard]] UINT_PTR CommandId(EditorAssetContextCommand command) noexcept {
-    switch (command) {
-    case EditorAssetContextCommand::Import:
-        return kAssetMenuImport;
-    case EditorAssetContextCommand::NewFolder:
-        return kAssetMenuNewFolder;
-    case EditorAssetContextCommand::NewLuaScript:
-        return kAssetMenuNewLuaScript;
-    case EditorAssetContextCommand::NewMaterial:
-        return kAssetMenuNewMaterial;
-    case EditorAssetContextCommand::NewMaterialFunction:
-        return kAssetMenuNewMaterialFunction;
-    case EditorAssetContextCommand::NewMaterialGraph:
-        return kAssetMenuNewMaterialGraph;
-    case EditorAssetContextCommand::NewMaterialType:
-        return kAssetMenuNewMaterialType;
-    case EditorAssetContextCommand::CreateMaterialInstance:
-        return kAssetMenuCreateMaterialInstance;
-    case EditorAssetContextCommand::CreateMaterialFromGraph:
-        return kAssetMenuCreateMaterialFromGraph;
-    case EditorAssetContextCommand::CreateMaterialFromMaterialType:
-        return kAssetMenuCreateMaterialFromMaterialType;
-    case EditorAssetContextCommand::NewInputAction:
-        return kAssetMenuNewInputAction;
-    case EditorAssetContextCommand::NewInputAxis:
-        return kAssetMenuNewInputAxis;
-    case EditorAssetContextCommand::NewInputMappingContext:
-        return kAssetMenuNewInputMappingContext;
-    case EditorAssetContextCommand::ExtractMaterials:
-        return kAssetMenuExtractMaterials;
-    case EditorAssetContextCommand::AddDirectionalLight:
-        return kAssetMenuDirectionalLight;
-    case EditorAssetContextCommand::AddPointLight:
-        return kAssetMenuPointLight;
-    case EditorAssetContextCommand::AddSpotLight:
-        return kAssetMenuSpotLight;
-    case EditorAssetContextCommand::Rename:
-        return kAssetMenuRename;
-    case EditorAssetContextCommand::Delete:
-        return kAssetMenuDelete;
-    case EditorAssetContextCommand::Refresh:
-        return kAssetMenuRefresh;
-    case EditorAssetContextCommand::AddLighting:
-    case EditorAssetContextCommand::None:
-    default:
-        return 0;
-    }
-}
-
-[[nodiscard]] EditorAssetContextCommand CommandFromId(UINT command) noexcept {
-    switch (command) {
-    case kAssetMenuImport:
-        return EditorAssetContextCommand::Import;
-    case kAssetMenuNewFolder:
-        return EditorAssetContextCommand::NewFolder;
-    case kAssetMenuNewLuaScript:
-        return EditorAssetContextCommand::NewLuaScript;
-    case kAssetMenuNewMaterial:
-        return EditorAssetContextCommand::NewMaterial;
-    case kAssetMenuNewMaterialFunction:
-        return EditorAssetContextCommand::NewMaterialFunction;
-    case kAssetMenuNewMaterialGraph:
-        return EditorAssetContextCommand::NewMaterialGraph;
-    case kAssetMenuNewMaterialType:
-        return EditorAssetContextCommand::NewMaterialType;
-    case kAssetMenuCreateMaterialInstance:
-        return EditorAssetContextCommand::CreateMaterialInstance;
-    case kAssetMenuCreateMaterialFromGraph:
-        return EditorAssetContextCommand::CreateMaterialFromGraph;
-    case kAssetMenuCreateMaterialFromMaterialType:
-        return EditorAssetContextCommand::CreateMaterialFromMaterialType;
-    case kAssetMenuNewInputAction:
-        return EditorAssetContextCommand::NewInputAction;
-    case kAssetMenuNewInputAxis:
-        return EditorAssetContextCommand::NewInputAxis;
-    case kAssetMenuNewInputMappingContext:
-        return EditorAssetContextCommand::NewInputMappingContext;
-    case kAssetMenuExtractMaterials:
-        return EditorAssetContextCommand::ExtractMaterials;
-    case kAssetMenuDirectionalLight:
-        return EditorAssetContextCommand::AddDirectionalLight;
-    case kAssetMenuPointLight:
-        return EditorAssetContextCommand::AddPointLight;
-    case kAssetMenuSpotLight:
-        return EditorAssetContextCommand::AddSpotLight;
-    case kAssetMenuRename:
-        return EditorAssetContextCommand::Rename;
-    case kAssetMenuDelete:
-        return EditorAssetContextCommand::Delete;
-    case kAssetMenuRefresh:
-        return EditorAssetContextCommand::Refresh;
-    default:
-        return EditorAssetContextCommand::None;
-    }
-}
-
 [[nodiscard]] HMENU CreateLightingSubmenu() {
     HMENU lighting = CreatePopupMenu();
-    AppendMenuA(lighting, MF_STRING, kAssetMenuDirectionalLight, "Directional Light");
-    AppendMenuA(lighting, MF_STRING, kAssetMenuPointLight, "Point Light");
-    AppendMenuA(lighting, MF_STRING, kAssetMenuSpotLight, "Spot Light");
+    AppendMenuA(lighting, MF_STRING,
+        EditorAssetBrowserNativeCommandMap::Id(EditorAssetContextCommand::AddDirectionalLight), "Directional Light");
+    AppendMenuA(lighting, MF_STRING,
+        EditorAssetBrowserNativeCommandMap::Id(EditorAssetContextCommand::AddPointLight), "Point Light");
+    AppendMenuA(lighting, MF_STRING,
+        EditorAssetBrowserNativeCommandMap::Id(EditorAssetContextCommand::AddSpotLight), "Spot Light");
     return lighting;
 }
 
@@ -150,7 +37,7 @@ void AppendAddSubmenu(HMENU menu) {
     for (const EditorAssetContextMenuItem& item : items) {
         if (item.command == EditorAssetContextCommand::AddLighting) {
             continue;
-        } else if (const UINT_PTR id = CommandId(item.command); id != 0) {
+        } else if (const UINT_PTR id = EditorAssetBrowserNativeCommandMap::Id(item.command); id != 0) {
             AppendMenuA(menu, MF_STRING, id, item.label);
         }
         if (item.separatorAfter) {
@@ -179,7 +66,8 @@ void AppendAddSubmenu(HMENU menu) {
     state.CloseContextMenu();
     InvalidateRect(window, nullptr, FALSE);
     UpdateWindow(window);
-    const EditorAssetContextCommand command = CommandFromId(ShowProjectFilesSystemMenu(window, x, y, items));
+    const EditorAssetContextCommand command = EditorAssetBrowserNativeCommandMap::Command(
+        ShowProjectFilesSystemMenu(window, x, y, items));
     if (command == EditorAssetContextCommand::None) {
         return true;
     }

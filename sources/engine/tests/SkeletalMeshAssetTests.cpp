@@ -275,6 +275,7 @@ void RunSkeletalMeshAssetTests() {
     kb::scene::SkeletalMeshLod lowerLod = lod;
     lowerLod.requiredBones = { 2U };
     lowerLod.sections[0].boneMap = { 2U };
+    lowerLod.sections[0].materialAssetId = 84U;
     lowerLod.minScreenCoverage = 0.0F;
     lodPaletteMesh.lods.push_back(lowerLod);
     const std::array<kb::scene::SkeletonBoneId, 2U> paletteBoneIds{ 1U, 2U };
@@ -289,6 +290,28 @@ void RunSkeletalMeshAssetTests() {
             stablePalette.size() == 2U && stablePalette[0].columns[3].x == 1.0F &&
             stablePalette[1].columns[3].x == 2.0F,
         "SkeletalMeshAsset did not build a stable palette shared by every LOD");
+    const auto multiLodPath = root / "RoundTrip/MultiLod.kbskeletalmesh";
+    Require(kb::scene::SkeletalMeshAssetIO::Save(multiLodPath, lodPaletteMesh),
+        "SkeletalMeshAsset could not serialize a canonical multi-LOD asset");
+    const auto loadedMultiLod = kb::scene::SkeletalMeshAssetIO::Load(multiLodPath);
+    Require(loadedMultiLod && loadedMultiLod->lods.size() == 2U &&
+            loadedMultiLod->lods[0].minScreenCoverage == 0.5F &&
+            loadedMultiLod->lods[1].minScreenCoverage == 0.0F &&
+            loadedMultiLod->lods[0].sections[0].materialAssetId == 42U &&
+            loadedMultiLod->lods[1].sections[0].materialAssetId == 84U &&
+            loadedMultiLod->lods[1].requiredBones == std::vector<kb::scene::SkeletonBoneId>{ 2U },
+        "SkeletalMeshAsset multi-LOD round trip lost coverage, material mapping, or the reduced palette");
+    kb::scene::SkeletalMeshAsset legacyCoverageOrder = lodPaletteMesh;
+    legacyCoverageOrder.lods[1].minScreenCoverage = 0.75F;
+    const auto legacyCoveragePath = root / "RoundTrip/LegacyCoverageOrder.kbskeletalmesh";
+    Require(kb::scene::ValidateSkeletalMeshAsset(legacyCoverageOrder).valid &&
+            kb::scene::SkeletalMeshAssetIO::Save(legacyCoveragePath, legacyCoverageOrder),
+        "SkeletalMeshAsset rejected a valid legacy multi-LOD coverage order");
+    const auto loadedLegacyCoverage = kb::scene::SkeletalMeshAssetIO::Load(legacyCoveragePath);
+    Require(loadedLegacyCoverage && loadedLegacyCoverage->lods.size() == 2U &&
+            loadedLegacyCoverage->lods[0].minScreenCoverage == 0.5F &&
+            loadedLegacyCoverage->lods[1].minScreenCoverage == 0.75F,
+        "SkeletalMeshAsset legacy multi-LOD migration changed authored coverage values");
     const std::array<kb::scene::SkeletonBoneId, 1U> incompletePaletteIds{ 1U };
     const std::array<kb::math::Mat4, 1U> incompletePaletteMatrices{ paletteMatrices[0] };
     Require(!kb::scene::BuildSkeletalMeshSkinningPalette(

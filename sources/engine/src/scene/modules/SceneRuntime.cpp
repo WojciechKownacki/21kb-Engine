@@ -98,8 +98,20 @@ void SceneRuntime::AddSystem(std::unique_ptr<kb::ecs::System> system) {
     SceneRuntimeService::AddSystem(scene_, std::move(system));
 }
 
-void SceneRuntime::AddSceneSystem(std::unique_ptr<SceneSystem> system) {
-    SceneRuntimeService::AddSceneSystem(scene_, std::move(system));
+SceneSystemHandle SceneRuntime::AddSceneSystem(std::unique_ptr<SceneSystem> system) {
+    return SceneRuntimeService::AddSceneSystem(scene_, std::move(system));
+}
+
+bool SceneRuntime::RemoveSceneSystem(SceneSystemHandle handle) noexcept {
+    return SceneRuntimeService::RemoveSceneSystem(scene_, handle);
+}
+
+bool SceneRuntime::HasSceneSystem(SceneSystemHandle handle) const noexcept {
+    return SceneRuntimeService::HasSceneSystem(scene_, handle);
+}
+
+std::size_t SceneRuntime::SceneSystemCount() const noexcept {
+    return SceneRuntimeService::SceneSystemCount(scene_);
 }
 
 std::vector<std::string> SceneRuntime::DrainSceneSystemErrors() {

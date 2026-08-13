@@ -1,6 +1,7 @@
 #include "engine/scene/Scene.hpp"
 
 #include "engine/audio/AudioClipAssetLoader.hpp"
+#include "engine/audio/AudioMixerAsset.hpp"
 #include "engine/audio/AudioMixerAssetLoader.hpp"
 #include "engine/script/ScriptAssetLoader.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
@@ -21,6 +22,7 @@
 #include "engine/scene/UIAssetLoaders.hpp"
 #include "engine/scene/PhysicsLayersAssetLoader.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneAudioListenerAccess.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
 #include "engine/scene/SceneAudioOcclusionAccess.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
@@ -38,6 +40,7 @@
 
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <memory>
 
 namespace kb::scene {
@@ -265,30 +268,47 @@ std::uint64_t ScenePostProcessAccess::ActiveProfile(const Scene& scene) noexcept
 }
 
 void SceneAudioMixerAccess::SetActiveMixer(Scene& scene, std::uint64_t mixerAssetId) noexcept {
-    SceneAccess::State(scene).audioMixerAssetId = mixerAssetId;
+    SceneState& state = SceneAccess::State(scene);
+    if (state.audioMixerAssetId == mixerAssetId) {
+        return;
+    }
+    state.audioMixerAssetId = mixerAssetId;
+    state.audioMixerSnapshotName.clear();
+    state.audioMixerBusVolumeOverrides.clear();
+    state.audioMixerSnapshotTransition = {};
 }
 
 std::uint64_t SceneAudioMixerAccess::ActiveMixer(const Scene& scene) noexcept {
     return SceneAccess::State(scene).audioMixerAssetId;
 }
 
-void SceneAudioMixerAccess::SetActiveSnapshot(Scene& scene, std::string_view snapshotName) {
-    SceneAccess::State(scene).audioMixerSnapshotName.assign(snapshotName);
+bool SceneAudioMixerAccess::SetActiveSnapshot(Scene& scene, std::string_view snapshotName) {
+    if (!snapshotName.empty() && !kb::audio::IsAudioMixerNameTokenValid(snapshotName)) {
+        return false;
+    }
+    SceneState& state = SceneAccess::State(scene);
+    state.audioMixerSnapshotName.assign(snapshotName);
+    state.audioMixerSnapshotTransition = {};
+    return true;
 }
 
 const std::string& SceneAudioMixerAccess::ActiveSnapshot(const Scene& scene) noexcept {
     return SceneAccess::State(scene).audioMixerSnapshotName;
 }
 
-void SceneAudioMixerAccess::SetBusVolumeOverride(Scene& scene, std::string_view busName, float volume) {
+bool SceneAudioMixerAccess::SetBusVolumeOverride(Scene& scene, std::string_view busName, float volume) {
+    if (!kb::audio::IsAudioMixerNameTokenValid(busName) || !std::isfinite(volume) || volume < 0.0F) {
+        return false;
+    }
     SceneState& state = SceneAccess::State(scene);
     for (AudioMixerBusVolumeOverride& override_ : state.audioMixerBusVolumeOverrides) {
         if (override_.bus == busName) {
             override_.volume = volume;
-            return;
+            return true;
         }
     }
     state.audioMixerBusVolumeOverrides.push_back(AudioMixerBusVolumeOverride{ .bus = std::string{ busName }, .volume = volume });
+    return true;
 }
 
 bool SceneAudioMixerAccess::ClearBusVolumeOverride(Scene& scene, std::string_view busName) noexcept {
@@ -312,8 +332,20 @@ void SceneAudioMixerAccess::ResetRuntimeMixerState(Scene& scene) noexcept {
     state.audioMixerSnapshotTransition = {};
 }
 
-void SceneAudioOcclusionAccess::Configure(Scene& scene, const AudioOcclusionSettings& settings) noexcept {
+bool SceneAudioOcclusionAccess::Configure(Scene& scene, const AudioOcclusionSettings& settings) noexcept {
+    if (!IsAudioOcclusionSettingsValid(settings)) {
+        return false;
+    }
     SceneAccess::State(scene).audioOcclusionSettings = settings;
+    return true;
+}
+
+void SceneAudioListenerAccess::SetLocalUser(Scene& scene, kb::input::LocalUserId localUser) noexcept {
+    SceneAccess::State(scene).audioListenerLocalUser = localUser;
+}
+
+kb::input::LocalUserId SceneAudioListenerAccess::LocalUser(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).audioListenerLocalUser;
 }
 
 const AudioOcclusionSettings& SceneAudioOcclusionAccess::Settings(const Scene& scene) noexcept {
@@ -330,7 +362,10 @@ const AudioOcclusionRuntimeStats& SceneAudioOcclusionAccess::RuntimeStats(
     return SceneAccess::State(scene).audioOcclusionRuntimeStats;
 }
 
-void SceneAudioMixerAccess::BeginSnapshotTransition(Scene& scene, std::string_view toSnapshot, float durationSeconds) {
+bool SceneAudioMixerAccess::BeginSnapshotTransition(Scene& scene, std::string_view toSnapshot, float durationSeconds) {
+    if ((!toSnapshot.empty() && !kb::audio::IsAudioMixerNameTokenValid(toSnapshot)) || !std::isfinite(durationSeconds)) {
+        return false;
+    }
     SceneState& state = SceneAccess::State(scene);
     // A running transition completes instantly before retargeting - the new blend always
     // starts from a well-defined snapshot state, never from an unrepresentable mid-blend.
@@ -340,13 +375,14 @@ void SceneAudioMixerAccess::BeginSnapshotTransition(Scene& scene, std::string_vi
     }
     if (durationSeconds <= 0.0F) {
         state.audioMixerSnapshotName.assign(toSnapshot);
-        return;
+        return true;
     }
     state.audioMixerSnapshotTransition = AudioMixerSnapshotTransition{
         .toSnapshot = std::string{ toSnapshot },
         .elapsedSeconds = 0.0F,
         .durationSeconds = durationSeconds,
     };
+    return true;
 }
 
 const AudioMixerSnapshotTransition& SceneAudioMixerAccess::SnapshotTransition(const Scene& scene) noexcept {
@@ -358,8 +394,13 @@ bool SceneAudioMixerAccess::AdvanceSnapshotTransition(Scene& scene, float deltaS
     if (!state.audioMixerSnapshotTransition.IsActive()) {
         return false;
     }
-    state.audioMixerSnapshotTransition.elapsedSeconds += deltaSeconds < 0.0F ? 0.0F : deltaSeconds;
-    if (state.audioMixerSnapshotTransition.elapsedSeconds < state.audioMixerSnapshotTransition.durationSeconds) {
+    if (!std::isfinite(deltaSeconds) || deltaSeconds <= 0.0F) {
+        return false;
+    }
+    const float remainingSeconds = state.audioMixerSnapshotTransition.durationSeconds
+        - state.audioMixerSnapshotTransition.elapsedSeconds;
+    if (deltaSeconds < remainingSeconds) {
+        state.audioMixerSnapshotTransition.elapsedSeconds += deltaSeconds;
         return false;
     }
     state.audioMixerSnapshotName = state.audioMixerSnapshotTransition.toSnapshot;

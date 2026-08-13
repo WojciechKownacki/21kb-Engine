@@ -2,6 +2,9 @@
 
 #if defined(_WIN32)
 #include "app/EditorDropPanelResolver.hpp"
+#include "app/EditorAudioInspectorDropPolicy.hpp"
+#include "engine/assets/AssetManager.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "inspection/InspectorPanelState.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
@@ -32,17 +35,30 @@ bool EditorAudioAssetInspectorDropHandler::Drop(
         return false;
     }
 
+    const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(*inspector, sceneContext, x, y);
+    if (hit.section == InspectorSectionId::SceneAudioRouting
+        && (hit.property == InspectorPropertyId::SceneAudioMixer
+            || hit.property == InspectorPropertyId::SceneAudioMixerPicker)) {
+        const kb::assets::AssetMetadata* metadata =
+            sceneContext.Scene().Assets().Manager().Registry().Find(assetId);
+        return metadata != nullptr
+            && EditorAudioInspectorDropPolicy::Accepts(*metadata, hit.section, hit.property)
+            && sceneContext.SetSceneAudioMixer(assetId);
+    }
+
     const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
     if (!entity.IsValid() || !sceneContext.Scene().Entities().IsAlive(entity)) {
         return false;
     }
-
-    const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(*inspector, sceneContext, x, y);
-    if (hit.section != InspectorSectionId::AudioSource || hit.property != InspectorPropertyId::AudioSourceClip) {
+    if (hit.section != InspectorSectionId::AudioSource
+        || (hit.property != InspectorPropertyId::AudioSourceClip && hit.property != InspectorPropertyId::AudioSourceClipPicker)) {
         return false;
     }
-
-    return sceneContext.SetAudioSourceClipAsset(entity, assetId);
+    const kb::assets::AssetMetadata* metadata =
+        sceneContext.Scene().Assets().Manager().Registry().Find(assetId);
+    return metadata != nullptr
+        && EditorAudioInspectorDropPolicy::Accepts(*metadata, hit.section, hit.property)
+        && sceneContext.SetAudioSourceClipAsset(entity, assetId);
 }
 
 } // namespace kb::editor
