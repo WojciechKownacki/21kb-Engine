@@ -9,10 +9,10 @@
 
 ## Current package
 
-- Stage: `3` — deterministic CPU fixed-step simulation and baseline modules.
-- Status: `accepted`; checkpoints 3.1 through 3.3C are accepted.
-- Scope: Stage 3 builds deterministic CPU fixed-step simulation, dense runtime state, bounded queues, baseline modules, owner policies, and telemetry on top of the delivered provider ABI.
-- Next gate: Stage 4 GPU simulation architecture; the CPU backend remains preview, diagnostics, and deterministic verification only.
+- Stage: `4` — core-owned immutable render snapshot.
+- Status: `in_progress`; Stage 3 is accepted.
+- Scope: Stage 4 adds a renderer-neutral packed stream and bounded retained snapshot channel with revision, backend epoch, fixed-step index, tombstone, and no DLL-owned destruction path.
+- Next gate: prove retained snapshot publication, reader lifetime, backpressure, and teardown before the Stage 5 GPU renderer consumes it.
 - Rendering direction: normal game-facing simulation and rendering must move to GPU. The CPU backend is retained only as the deterministic validation, diagnostics, and preview path; it is not the intended final gameplay path.
 
 ## Accepted stages
