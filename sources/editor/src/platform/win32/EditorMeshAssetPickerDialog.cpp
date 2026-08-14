@@ -172,7 +172,7 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
 }
 
 [[nodiscard]] std::string TextureFilterDescription(EditorTextureAssetPickerFilter filter) {
-    return "Choose a " + TextureFilterLabel(filter) + " asset for this material graph node.";
+    return "Choose a " + TextureFilterLabel(filter) + " asset.";
 }
 
 [[nodiscard]] std::vector<AssetPickerRow> BuildMeshRows(const EditorSceneContext& sceneContext) {
@@ -1432,8 +1432,8 @@ EditorMeshAssetPickerDialog::Result EditorMeshAssetPickerDialog::Show(
         BuildMeshRows(sceneContext),
         currentMesh,
         "Select Mesh",
-        "Choose a mesh asset for the selected Mesh Renderer.",
-        "Clear Mesh Renderer mesh",
+        "Choose a mesh asset.",
+        "Clear mesh selection",
         HeroIconKind::Cube,
         &manager,
         false, // textureThumbnails
@@ -1561,7 +1561,7 @@ EditorTextureAssetPickerDialog::Result EditorTextureAssetPickerDialog::Show(
         currentTexture,
         "Select " + TextureFilterLabel(filter),
         TextureFilterDescription(filter),
-        "Clear material graph texture",
+        "Clear texture selection",
         HeroIconKind::RectangleGroup,
         &manager,
         true,

@@ -85,9 +85,10 @@ void ParticleEditorPanelRenderer::Paint(
     EditorSceneBgfxViewport* sceneViewport) const {
     const unsigned int dpi = WindowDpi(host);
     const auto rows = sceneContext.ParticleEditorEmitterRows();
+    const auto inspector = sceneContext.ParticleEditorInspector();
     const auto& workspace = sceneContext.ParticleEditorWorkspace();
     const ParticleEditorPanelLayout layout = ParticleEditorPanelLayoutResolver::Resolve(
-        content, rows, workspace.ComposerScrollOffset(), dpi);
+        content, rows, workspace.ComposerScrollOffset(), dpi, &inspector);
     GdiDrawing::FillRectColor(dc, content, RGB(27, 29, 33));
     GdiDrawing::FillRectColor(dc, layout.toolbar, RGB(34, 37, 43));
     GdiDrawing::FillRectColor(dc, layout.composer, RGB(30, 33, 38));
@@ -140,6 +141,77 @@ void ParticleEditorPanelRenderer::Paint(
         DrawButton(dc, rowLayout.moveUp, "^");
         DrawButton(dc, rowLayout.moveDown, "v");
         DrawButton(dc, rowLayout.remove, "x");
+    }
+    SetTextColor(dc, RGB(219, 225, 233));
+    RECT outputHeader = layout.outputHeader;
+    DrawTextA(dc, "Output", -1, &outputHeader, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    DrawButton(dc, layout.materialPicker, "Material...");
+    DrawButton(dc, layout.meshPicker, "Mesh...");
+    DrawButton(dc, layout.texturePicker, "Texture Atlas...");
+    for (std::size_t index = 0U; index < layout.outputChoiceCount; ++index) {
+        const auto& choice = inspector.outputChoices[index];
+        const auto* asset = sceneContext.ParticleEditorWorkingAsset();
+        const auto* emitter = asset == nullptr ? nullptr : kb::particle_editor::ParticleEmitterListModel::Find(*asset, inspector.emitterId);
+        const bool active = emitter != nullptr && emitter->output.type == choice.type;
+        DrawButton(dc, layout.outputChoices[index], choice.label.c_str(), active && choice.enabled);
+        if (!choice.enabled) {
+            SetTextColor(dc, RGB(161, 124, 124));
+            RECT mark = layout.outputChoices[index]; mark.left = mark.right - 28;
+            DrawTextA(dc, "N/A", -1, &mark, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        }
+    }
+    for (std::size_t index = 0U; index < layout.propertyRowCount; ++index) {
+        const auto& property = inspector.properties[index];
+        GdiDrawing::FillRectColor(dc, layout.propertyRows[index], RGB(36, 40, 46));
+        RECT label = layout.propertyRows[index]; label.left += 3; label.right = (label.left + label.right) / 2;
+        RECT value = layout.propertyRows[index]; value.left = label.right + 4; value.right -= 3;
+        SetTextColor(dc, RGB(180, 190, 202));
+        DrawTextA(dc, property.label.c_str(), -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        SetTextColor(dc, property.editable ? RGB(226, 231, 238) : RGB(135, 144, 156));
+        DrawTextA(dc, property.value.c_str(), -1, &value, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    }
+    SetTextColor(dc, RGB(219, 225, 233));
+    RECT moduleHeader = layout.moduleHeader;
+    DrawTextA(dc, "Modules", -1, &moduleHeader, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    DrawButton(dc, layout.addModule, "+ Add Module",
+        inspector.modules.size() < kb::scene::kParticleEffectMaxModulesPerEmitter);
+    for (std::size_t index = 0U; index < layout.moduleRowCount; ++index) {
+        const auto& module = inspector.modules[index];
+        const auto& row = layout.moduleRows[index];
+        GdiDrawing::FillRectColor(dc, row.bounds, module.selected ? RGB(51, 72, 98) : RGB(39, 43, 50));
+        RECT grip = row.dragGrip; SetTextColor(dc, RGB(140, 151, 165));
+        DrawTextA(dc, "::", -1, &grip, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        RECT name = row.name; name.left += 3;
+        const std::string text = module.label + "  " + module.summary;
+        SetTextColor(dc, module.enabled ? RGB(226, 231, 238) : RGB(135, 144, 156));
+        DrawTextA(dc, text.c_str(), -1, &name, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        DrawButton(dc, row.enabledToggle, module.enabled ? "On" : "Off", module.enabled);
+        DrawButton(dc, row.moveUp, "^"); DrawButton(dc, row.moveDown, "v"); DrawButton(dc, row.remove, "x");
+    }
+    if (workspace.ModuleDragActive() && layout.moduleRowCount != 0U) {
+        const std::uint32_t order = std::min<std::uint32_t>(workspace.ModuleDragTargetOrder(),
+            static_cast<std::uint32_t>(layout.moduleRowCount - 1U));
+        const RECT& target = layout.moduleRows[order].bounds;
+        GdiDrawing::FillRectColor(dc, {target.left, target.top - 1, target.right, target.top + 2}, RGB(80, 157, 230));
+    }
+    SetTextColor(dc, RGB(219, 225, 233));
+    RECT dependencies = layout.dependencyHeader;
+    const std::string dependencyTitle = "Dependencies (" + std::to_string(inspector.dependencies.size()) + ")";
+    DrawTextA(dc, dependencyTitle.c_str(), -1, &dependencies, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    for (std::size_t index = 0U; index < layout.dependencyRowCount; ++index) {
+        SetTextColor(dc, RGB(155, 194, 232));
+        RECT row = layout.dependencyRows[index];
+        DrawTextA(dc, inspector.dependencies[index].virtualPath.c_str(), -1, &row,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    }
+    RECT diagnostics = layout.diagnosticHeader;
+    const std::string diagnosticTitle = "Diagnostics (" + std::to_string(inspector.diagnostics.size()) + ")";
+    DrawTextA(dc, diagnosticTitle.c_str(), -1, &diagnostics, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    for (std::size_t index = 0U; index < layout.diagnosticRowCount; ++index) {
+        SetTextColor(dc, RGB(214, 143, 143));
+        RECT row = layout.diagnosticRows[index];
+        const std::string text = kb::scene::FormatParticleEffectDiagnostic(inspector.diagnostics[index]);
+        DrawTextA(dc, text.c_str(), -1, &row, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
     if (workspace.EmitterDragActive() && layout.emitterRowCount != 0U) {
         const std::uint32_t order = std::min<std::uint32_t>(

@@ -207,3 +207,4 @@
 - No open stage 0 defect remains.
 - No open stage 1 defect remains.
 - No open defect remains in Stages 0 through 6 or Stage 7A. Next gate: Stage 7B typed module and output authoring over the accepted emitter workspace.
+- Stage 7B is a validated session snapshot, not an accepted checkpoint: `ColorOverLife` still has no valid default gradient and `SubEmitter` has no explicit target-selection flow, so those two module menu entries cannot create a valid history transaction. The focused asset/editor/CPU/authoring/headless gates passed, but the all-nine-module add contract remains open for the next repair.

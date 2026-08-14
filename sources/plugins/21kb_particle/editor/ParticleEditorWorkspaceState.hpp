@@ -38,6 +38,23 @@ public:
     [[nodiscard]] kb::scene::ParticleStableId DraggedEmitterId() const noexcept;
     [[nodiscard]] std::uint32_t DragTargetOrder() const noexcept;
 
+    [[nodiscard]] bool SelectModule(const kb::scene::ParticleEffectAsset& asset,
+                                    kb::scene::ParticleStableId emitterId,
+                                    kb::scene::ParticleStableId moduleId) noexcept;
+    void ClearSelectedModule() noexcept;
+    [[nodiscard]] kb::scene::ParticleStableId SelectedModuleId() const noexcept;
+    [[nodiscard]] bool BeginModuleDrag(const kb::scene::ParticleEffectAsset& asset,
+                                       kb::scene::ParticleStableId emitterId,
+                                       kb::scene::ParticleStableId moduleId) noexcept;
+    void UpdateModuleDrag(std::uint32_t targetOrder) noexcept;
+    void EndModuleDrag() noexcept;
+    [[nodiscard]] bool ModuleDragActive() const noexcept;
+    [[nodiscard]] kb::scene::ParticleStableId DraggedModuleId() const noexcept;
+    [[nodiscard]] std::uint32_t ModuleDragTargetOrder() const noexcept;
+    void FocusDiagnostic(std::string propertyPath, kb::scene::ParticleStableId emitterId,
+                         kb::scene::ParticleStableId moduleId) noexcept;
+    [[nodiscard]] const std::string& FocusedPropertyPath() const noexcept;
+
 private:
     kb::scene::ParticleStableId selectedEmitterId_ = 0U;
     bool focused_ = false;
@@ -46,6 +63,10 @@ private:
     std::string renameText_;
     kb::scene::ParticleStableId draggedEmitterId_ = 0U;
     std::uint32_t dragTargetOrder_ = 0U;
+    kb::scene::ParticleStableId selectedModuleId_ = 0U;
+    kb::scene::ParticleStableId draggedModuleId_ = 0U;
+    std::uint32_t moduleDragTargetOrder_ = 0U;
+    std::string focusedPropertyPath_;
 };
 
 } // namespace kb::particle_editor

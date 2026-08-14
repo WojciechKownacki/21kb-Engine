@@ -23,7 +23,7 @@ inline constexpr std::size_t kParticleEffectMaxBursts = 64U;
 inline constexpr std::size_t kParticleEffectMaxCurveRecords = 1U + 3U * kParticleEffectMaxCurveKeys;
 inline constexpr std::size_t kParticleEffectMaxGradientRecords = 1U + 3U * kParticleEffectMaxGradientStops;
 inline constexpr std::size_t kParticleEffectMaxBurstRecords = 1U + 2U * kParticleEffectMaxBursts;
-inline constexpr std::size_t kParticleEffectMaxModuleRecords = 4U + kParticleEffectMaxGradientRecords;
+inline constexpr std::size_t kParticleEffectMaxModuleRecords = 5U + kParticleEffectMaxGradientRecords;
 inline constexpr std::size_t kParticleEffectMaxEmitterRecords =
     64U + kParticleEffectMaxCurveRecords + kParticleEffectMaxBurstRecords +
     kParticleEffectMaxModulesPerEmitter * kParticleEffectMaxModuleRecords;
@@ -167,6 +167,7 @@ using ParticleModulePayload =
 
 struct ParticleModuleAsset {
     ParticleStableId moduleId = 0U;
+    std::uint32_t authoringOrder = 0U;
     ParticleModuleType type = ParticleModuleType::InitialVelocity;
     bool enabled = true;
     ParticleModulePayload payload = ParticleInitialVelocityModule{};

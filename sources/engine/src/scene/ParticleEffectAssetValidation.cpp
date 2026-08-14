@@ -241,6 +241,7 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
 
         std::set<ParticleStableId> moduleIds;
         std::set<ParticleModuleType> singletonTypes;
+        std::set<std::uint32_t> moduleAuthoringOrders;
         ParticleStableId previousModuleId = 0U;
         for (std::size_t moduleIndex = 0U; moduleIndex < emitter.modules.size(); ++moduleIndex) {
             const ParticleModuleAsset& module = emitter.modules[moduleIndex];
@@ -252,6 +253,10 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
                 Add(result, ParticleEffectDiagnosticCode::UnsortedStableId, path + ".id",
                     "module ids must be strictly increasing", emitter.emitterId, module.moduleId);
             previousModuleId = module.moduleId;
+            if (module.authoringOrder >= static_cast<std::uint32_t>(emitter.modules.size()) ||
+                !moduleAuthoringOrders.insert(module.authoringOrder).second)
+                Add(result, ParticleEffectDiagnosticCode::InvalidValue, path + ".authoringOrder",
+                    "module authoring order must be a contiguous permutation", emitter.emitterId, module.moduleId);
             if (!EnumInRange(module.type, ParticleModuleType::SubEmitter))
                 Add(result, ParticleEffectDiagnosticCode::InvalidEnum, path + ".type", "module type is invalid",
                     emitter.emitterId, module.moduleId);

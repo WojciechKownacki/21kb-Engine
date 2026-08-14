@@ -38,6 +38,8 @@ add_library(kb_21kb_particle_editor_core STATIC
     editor/ParticleEditorWorkspaceState.cpp
     editor/ParticleEditorCommands.hpp
     editor/ParticleEditorCommands.cpp
+    editor/ParticleEmitterInspectorModel.hpp
+    editor/ParticleEmitterInspectorModel.cpp
     editor/ParticleAssetGateway.hpp
     editor/ParticleAssetGateway.cpp
     editor/ParticleDocumentCloseGuard.hpp

@@ -7,8 +7,13 @@
 namespace kb::particle_editor {
 
 void ParticleEditorWorkspaceState::Synchronize(const kb::scene::ParticleEffectAsset& asset) noexcept {
-    if (ParticleEmitterListModel::Find(asset, selectedEmitterId_) != nullptr)
+    if (const auto* selected = ParticleEmitterListModel::Find(asset, selectedEmitterId_); selected != nullptr) {
+        if (selectedModuleId_ == 0U || std::any_of(selected->modules.begin(), selected->modules.end(),
+                [this](const auto& module) { return module.moduleId == selectedModuleId_; }))
+            return;
+        ClearSelectedModule();
         return;
+    }
     selectedEmitterId_ = 0U;
     if (!asset.emitters.empty()) {
         const auto first = std::min_element(asset.emitters.begin(), asset.emitters.end(),
@@ -19,12 +24,17 @@ void ParticleEditorWorkspaceState::Synchronize(const kb::scene::ParticleEffectAs
     }
     CancelRename();
     EndEmitterDrag();
+    ClearSelectedModule();
 }
 
 bool ParticleEditorWorkspaceState::Select(const kb::scene::ParticleEffectAsset& asset,
                                           kb::scene::ParticleStableId emitterId) noexcept {
     if (ParticleEmitterListModel::Find(asset, emitterId) == nullptr)
         return false;
+    if (selectedEmitterId_ != emitterId) {
+        selectedModuleId_ = 0U;
+        focusedPropertyPath_.clear();
+    }
     selectedEmitterId_ = emitterId;
     if (renameEmitterId_ != emitterId)
         CancelRename();
@@ -109,5 +119,71 @@ kb::scene::ParticleStableId ParticleEditorWorkspaceState::DraggedEmitterId() con
     return draggedEmitterId_;
 }
 std::uint32_t ParticleEditorWorkspaceState::DragTargetOrder() const noexcept { return dragTargetOrder_; }
+
+bool ParticleEditorWorkspaceState::SelectModule(const kb::scene::ParticleEffectAsset& asset,
+                                                kb::scene::ParticleStableId emitterId,
+                                                kb::scene::ParticleStableId moduleId) noexcept {
+    const auto* emitter = ParticleEmitterListModel::Find(asset, emitterId);
+    if (emitter == nullptr || std::none_of(emitter->modules.begin(), emitter->modules.end(),
+            [moduleId](const auto& module) { return module.moduleId == moduleId; }))
+        return false;
+    selectedEmitterId_ = emitterId;
+    selectedModuleId_ = moduleId;
+    focusedPropertyPath_.clear();
+    return true;
+}
+
+void ParticleEditorWorkspaceState::ClearSelectedModule() noexcept {
+    selectedModuleId_ = 0U;
+    draggedModuleId_ = 0U;
+    moduleDragTargetOrder_ = 0U;
+    focusedPropertyPath_.clear();
+}
+
+kb::scene::ParticleStableId ParticleEditorWorkspaceState::SelectedModuleId() const noexcept {
+    return selectedModuleId_;
+}
+
+bool ParticleEditorWorkspaceState::BeginModuleDrag(const kb::scene::ParticleEffectAsset& asset,
+                                                   kb::scene::ParticleStableId emitterId,
+                                                   kb::scene::ParticleStableId moduleId) noexcept {
+    if (!SelectModule(asset, emitterId, moduleId)) return false;
+    const auto* emitter = ParticleEmitterListModel::Find(asset, emitterId);
+    const auto module = std::find_if(emitter->modules.begin(), emitter->modules.end(),
+        [moduleId](const auto& value) { return value.moduleId == moduleId; });
+    draggedModuleId_ = moduleId;
+    moduleDragTargetOrder_ = module->authoringOrder;
+    CancelRename();
+    return true;
+}
+
+void ParticleEditorWorkspaceState::UpdateModuleDrag(std::uint32_t targetOrder) noexcept {
+    if (draggedModuleId_ != 0U) moduleDragTargetOrder_ = targetOrder;
+}
+
+void ParticleEditorWorkspaceState::EndModuleDrag() noexcept {
+    draggedModuleId_ = 0U;
+    moduleDragTargetOrder_ = 0U;
+}
+
+bool ParticleEditorWorkspaceState::ModuleDragActive() const noexcept { return draggedModuleId_ != 0U; }
+kb::scene::ParticleStableId ParticleEditorWorkspaceState::DraggedModuleId() const noexcept {
+    return draggedModuleId_;
+}
+std::uint32_t ParticleEditorWorkspaceState::ModuleDragTargetOrder() const noexcept {
+    return moduleDragTargetOrder_;
+}
+
+void ParticleEditorWorkspaceState::FocusDiagnostic(std::string propertyPath,
+                                                   kb::scene::ParticleStableId emitterId,
+                                                   kb::scene::ParticleStableId moduleId) noexcept {
+    selectedEmitterId_ = emitterId != 0U ? emitterId : selectedEmitterId_;
+    selectedModuleId_ = moduleId;
+    focusedPropertyPath_ = std::move(propertyPath);
+}
+
+const std::string& ParticleEditorWorkspaceState::FocusedPropertyPath() const noexcept {
+    return focusedPropertyPath_;
+}
 
 } // namespace kb::particle_editor

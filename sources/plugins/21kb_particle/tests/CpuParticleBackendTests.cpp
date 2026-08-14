@@ -134,6 +134,7 @@ void AddModule(kb::scene::ParticleEmitterAsset& emitter,
                bool enabled = true) {
     emitter.modules.push_back(kb::scene::ParticleModuleAsset{
         .moduleId = moduleId,
+        .authoringOrder = static_cast<std::uint32_t>(emitter.modules.size()),
         .type = type,
         .enabled = enabled,
         .payload = std::move(payload),
@@ -1055,6 +1056,7 @@ void TestModuleOrderEnableAndGravityContracts() {
     std::erase_if(migratedRuntime.emitters[0].modules, [](const kb::scene::ParticleModuleAsset& module) {
         return module.type != kb::scene::ParticleModuleType::Gravity;
     });
+    migratedRuntime.emitters[0].modules.front().authoringOrder = 0U;
     migratedRuntime.emitters[0].spawn.rateOverTime.keyframes.front().value = 0.0F;
     migratedRuntime.emitters[0].spawn.speedMin = 0.0F;
     migratedRuntime.emitters[0].spawn.speedMax = 0.0F;

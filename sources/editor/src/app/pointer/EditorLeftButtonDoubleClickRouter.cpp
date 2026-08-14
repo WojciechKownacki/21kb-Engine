@@ -69,11 +69,12 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
     if (particleEditorContent.has_value()) {
         const std::vector<kb::particle_editor::ParticleEmitterListRow> rows =
             sceneContext_.ParticleEditorEmitterRows();
+        const auto inspector = sceneContext_.ParticleEditorInspector();
         const ParticleEditorPanelLayout particleLayout = ParticleEditorPanelLayoutResolver::Resolve(
             *particleEditorContent,
             rows,
             sceneContext_.ParticleEditorWorkspace().ComposerScrollOffset(),
-            GetDpiForWindow(messageWindow));
+            GetDpiForWindow(messageWindow), &inspector);
         for (std::size_t index = 0U; index < particleLayout.emitterRowCount; ++index) {
             const ParticleEditorEmitterRowLayout& row = particleLayout.emitterRows[index];
             if (x >= row.name.left && x < row.name.right && y >= row.name.top && y < row.name.bottom &&

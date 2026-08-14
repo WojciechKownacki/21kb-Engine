@@ -10,6 +10,11 @@
 #include "project/EditorProjectPaths.hpp"
 
 #include <memory>
+#include <charconv>
+#include <cmath>
+#include <sstream>
+#include <locale>
+#include <type_traits>
 #include <optional>
 #include <stdexcept>
 #include <utility>
@@ -38,6 +43,32 @@ void LogParticleResult(
     }
     for (const kb::scene::ParticleEffectDiagnostic& diagnostic : result.diagnostics)
         console.Error("Particles", kb::scene::FormatParticleEffectDiagnostic(diagnostic));
+}
+
+template <typename T>
+[[nodiscard]] bool ParseNumber(std::string_view text, T& value) noexcept {
+    const char* end = text.data() + text.size();
+    const auto result = std::from_chars(text.data(), end, value);
+    if (result.ec != std::errc{} || result.ptr != end) return false;
+    if constexpr (std::is_floating_point_v<T>) {
+        return std::isfinite(value);
+    } else {
+        return true;
+    }
+}
+
+[[nodiscard]] bool ParseBool(std::string_view text, bool& value) noexcept {
+    if (text == "true") { value = true; return true; }
+    if (text == "false") { value = false; return true; }
+    return false;
+}
+
+[[nodiscard]] bool ParseVec3(std::string_view text, kb::math::Vec3& value) {
+    std::istringstream input{std::string{text}};
+    input.imbue(std::locale::classic());
+    input >> value.x >> value.y >> value.z;
+    input >> std::ws;
+    return input && input.eof() && std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
 
 } // namespace
@@ -184,6 +215,16 @@ std::vector<kb::particle_editor::ParticleEmitterListRow> EditorSceneContext::Par
                                   *asset, particleEditorWorkspace_.SelectedEmitterId());
 }
 
+kb::particle_editor::ParticleEmitterInspectorView EditorSceneContext::ParticleEditorInspector() const {
+    const auto* asset = ParticleEditorWorkingAsset();
+    if (asset == nullptr) return {};
+    const auto& registry = scene_->Assets().Manager().Registry();
+    const auto* owner = registry.Find(particleEditorAssetId_);
+    return kb::particle_editor::ParticleEmitterInspectorModel::Build(
+        *asset, particleEditorWorkspace_.SelectedEmitterId(), particleEditorWorkspace_.SelectedModuleId(),
+        owner, &registry);
+}
+
 const kb::particle_editor::ParticleEditorWorkspaceState& EditorSceneContext::ParticleEditorWorkspace() const noexcept {
     return particleEditorWorkspace_;
 }
@@ -254,6 +295,251 @@ bool EditorSceneContext::RemoveParticleEditorEmitter(kb::scene::ParticleStableId
     return HasParticleEditorAsset() && FinalizeParticleEditorCommand(
         kb::particle_editor::ParticleEditorCommands::RemoveEmitter(
             particleEditorDocument_, particleEditorWorkspace_, emitterId));
+}
+
+bool EditorSceneContext::SelectParticleEditorModule(kb::scene::ParticleStableId emitterId,
+                                                    kb::scene::ParticleStableId moduleId) noexcept {
+    const auto* asset = ParticleEditorWorkingAsset();
+    return asset != nullptr && particleEditorWorkspace_.SelectModule(*asset, emitterId, moduleId);
+}
+
+bool EditorSceneContext::AddParticleEditorModule(kb::scene::ParticleModuleType type) {
+    return HasParticleEditorAsset() && FinalizeParticleEditorCommand(
+        kb::particle_editor::ParticleEditorCommands::AddModule(particleEditorDocument_, particleEditorWorkspace_,
+            particleEditorWorkspace_.SelectedEmitterId(), type));
+}
+
+bool EditorSceneContext::ToggleParticleEditorModule(kb::scene::ParticleStableId moduleId) {
+    const auto* asset = ParticleEditorWorkingAsset();
+    if (asset == nullptr) return false;
+    const auto* emitter = kb::particle_editor::ParticleEmitterListModel::Find(
+        *asset, particleEditorWorkspace_.SelectedEmitterId());
+    if (emitter == nullptr) return false;
+    const auto module = std::find_if(emitter->modules.begin(), emitter->modules.end(),
+        [moduleId](const auto& value) { return value.moduleId == moduleId; });
+    return module != emitter->modules.end() && FinalizeParticleEditorCommand(
+        kb::particle_editor::ParticleEditorCommands::SetModuleEnabled(particleEditorDocument_,
+            particleEditorWorkspace_, emitter->emitterId, moduleId, !module->enabled));
+}
+
+bool EditorSceneContext::MoveParticleEditorModule(kb::scene::ParticleStableId moduleId,
+                                                  std::uint32_t targetOrder) {
+    return HasParticleEditorAsset() && FinalizeParticleEditorCommand(
+        kb::particle_editor::ParticleEditorCommands::ReorderModule(particleEditorDocument_,
+            particleEditorWorkspace_, particleEditorWorkspace_.SelectedEmitterId(), moduleId, targetOrder));
+}
+
+bool EditorSceneContext::BeginParticleEditorModuleDrag(kb::scene::ParticleStableId moduleId) noexcept {
+    const auto* asset = ParticleEditorWorkingAsset();
+    return asset != nullptr && particleEditorWorkspace_.BeginModuleDrag(
+        *asset, particleEditorWorkspace_.SelectedEmitterId(), moduleId);
+}
+void EditorSceneContext::UpdateParticleEditorModuleDrag(std::uint32_t targetOrder) noexcept {
+    particleEditorWorkspace_.UpdateModuleDrag(targetOrder);
+}
+bool EditorSceneContext::CommitParticleEditorModuleDrag() {
+    if (!particleEditorWorkspace_.ModuleDragActive()) return false;
+    const auto moduleId = particleEditorWorkspace_.DraggedModuleId();
+    const auto targetOrder = particleEditorWorkspace_.ModuleDragTargetOrder();
+    particleEditorWorkspace_.EndModuleDrag();
+    return MoveParticleEditorModule(moduleId, targetOrder);
+}
+void EditorSceneContext::CancelParticleEditorModuleDrag() noexcept { particleEditorWorkspace_.EndModuleDrag(); }
+
+bool EditorSceneContext::RemoveParticleEditorModule(kb::scene::ParticleStableId moduleId) {
+    return HasParticleEditorAsset() && FinalizeParticleEditorCommand(
+        kb::particle_editor::ParticleEditorCommands::RemoveModule(particleEditorDocument_,
+            particleEditorWorkspace_, particleEditorWorkspace_.SelectedEmitterId(), moduleId));
+}
+
+bool EditorSceneContext::SetParticleEditorOutputType(kb::scene::ParticleOutputType type) {
+    const auto* asset = ParticleEditorWorkingAsset();
+    if (asset == nullptr) return false;
+    const auto* emitter = kb::particle_editor::ParticleEmitterListModel::Find(
+        *asset, particleEditorWorkspace_.SelectedEmitterId());
+    if (emitter == nullptr) return false;
+    auto output = emitter->output;
+    output.type = type;
+    output.payload = kb::scene::DefaultParticleOutputPayload(type);
+    auto capabilityCandidate = *asset;
+    auto candidateEmitter = std::find_if(capabilityCandidate.emitters.begin(), capabilityCandidate.emitters.end(),
+        [id = emitter->emitterId](const auto& value) { return value.emitterId == id; });
+    candidateEmitter->output = output;
+    const auto capabilities = kb::particle_plugin::ParticleEffectCompiler::ValidateCapabilities(capabilityCandidate);
+    const auto rejected = std::find_if(capabilities.begin(), capabilities.end(), [id = emitter->emitterId](const auto& diagnostic) {
+        return diagnostic.emitterId == id && diagnostic.propertyPath.find(".output.type") != std::string::npos;
+    });
+    if (rejected != capabilities.end()) {
+        console_.Error("Particles", kb::scene::FormatParticleEffectDiagnostic(*rejected));
+        return false;
+    }
+    output.mesh = {};
+    return FinalizeParticleEditorCommand(kb::particle_editor::ParticleEditorCommands::SetEmitterOutput(
+        particleEditorDocument_, particleEditorWorkspace_, emitter->emitterId, std::move(output)));
+}
+
+bool EditorSceneContext::SetParticleEditorOutputReference(kb::assets::AssetKind kind, kb::assets::AssetId id) {
+    const auto* asset = ParticleEditorWorkingAsset();
+    if (asset == nullptr || !id.IsValid()) return false;
+    const auto& registry = scene_->Assets().Manager().Registry();
+    const auto* metadata = registry.Find(id);
+    if (metadata == nullptr || !kb::assets::AssetMatchesKind(*metadata, kind)) {
+        console_.Error("Particles", "Particle output picker returned an asset of the wrong kind.");
+        return false;
+    }
+    const auto* emitter = kb::particle_editor::ParticleEmitterListModel::Find(
+        *asset, particleEditorWorkspace_.SelectedEmitterId());
+    if (emitter == nullptr) return false;
+    auto output = emitter->output;
+    const kb::scene::ParticleAssetReference reference{.assetId = id.value,
+        .virtualPath = metadata->virtualPath.generic_string()};
+    if (kind == kb::assets::AssetKind::Material) output.material = reference;
+    else if (kind == kb::assets::AssetKind::Mesh) output.mesh = reference;
+    else if (kind == kb::assets::AssetKind::Texture) output.textureAtlas = reference;
+    else return false;
+    return FinalizeParticleEditorCommand(kb::particle_editor::ParticleEditorCommands::SetEmitterOutput(
+        particleEditorDocument_, particleEditorWorkspace_, emitter->emitterId, std::move(output)));
+}
+
+bool EditorSceneContext::SetParticleEditorSpawn(kb::scene::ParticleSpawnAsset spawn) {
+    return HasParticleEditorAsset() && FinalizeParticleEditorCommand(
+        kb::particle_editor::ParticleEditorCommands::SetEmitterSpawn(particleEditorDocument_,
+            particleEditorWorkspace_, particleEditorWorkspace_.SelectedEmitterId(), std::move(spawn)));
+}
+
+bool EditorSceneContext::SetParticleEditorModulePayload(kb::scene::ParticleStableId moduleId,
+                                                       kb::scene::ParticleModulePayload payload) {
+    return HasParticleEditorAsset() && FinalizeParticleEditorCommand(
+        kb::particle_editor::ParticleEditorCommands::SetModulePayload(particleEditorDocument_,
+            particleEditorWorkspace_, particleEditorWorkspace_.SelectedEmitterId(), moduleId, std::move(payload)));
+}
+
+bool EditorSceneContext::FocusParticleEditorDiagnostic(std::size_t diagnosticIndex) noexcept {
+    const auto inspector = ParticleEditorInspector();
+    if (diagnosticIndex >= inspector.diagnostics.size()) return false;
+    const auto& diagnostic = inspector.diagnostics[diagnosticIndex];
+    particleEditorWorkspace_.FocusDiagnostic(diagnostic.propertyPath, diagnostic.emitterId, diagnostic.moduleId);
+    return true;
+}
+
+bool EditorSceneContext::NavigateParticleEditorDependency(std::size_t dependencyIndex) {
+    const auto inspector = ParticleEditorInspector();
+    return dependencyIndex < inspector.dependencies.size() &&
+        assetBrowser_.SelectAsset(inspector.dependencies[dependencyIndex].assetId, scene_->Assets().Manager());
+}
+
+bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, std::string_view text) {
+    const auto inspector = ParticleEditorInspector();
+    if (propertyIndex >= inspector.properties.size() || !inspector.properties[propertyIndex].editable) return false;
+    const auto& row = inspector.properties[propertyIndex];
+    const auto* asset = ParticleEditorWorkingAsset();
+    const auto* emitter = asset == nullptr ? nullptr : kb::particle_editor::ParticleEmitterListModel::Find(*asset, inspector.emitterId);
+    if (emitter == nullptr) return false;
+    auto spawn = emitter->spawn;
+    auto output = emitter->output;
+    float floatValue = 0.0F;
+    std::uint32_t uintValue = 0U;
+    bool boolValue = false;
+    kb::math::Vec3 vectorValue{};
+    const auto setFloat = [&](float& target) { return ParseNumber(text, floatValue) && (target = floatValue, true); };
+    const auto setUInt = [&](std::uint32_t& target) { return ParseNumber(text, uintValue) && (target = uintValue, true); };
+    const auto setBool = [&](bool& target) { return ParseBool(text, boolValue) && (target = boolValue, true); };
+    bool parsed = false;
+    bool editsSpawn = true;
+    switch (row.property) {
+    case kb::particle_editor::ParticleEditorProperty::SpawnLifetimeMin: parsed = setFloat(spawn.lifetimeMin); break;
+    case kb::particle_editor::ParticleEditorProperty::SpawnLifetimeMax: parsed = setFloat(spawn.lifetimeMax); break;
+    case kb::particle_editor::ParticleEditorProperty::SpawnSpeedMin: parsed = setFloat(spawn.speedMin); break;
+    case kb::particle_editor::ParticleEditorProperty::SpawnSpeedMax: parsed = setFloat(spawn.speedMax); break;
+    case kb::particle_editor::ParticleEditorProperty::SpawnDirection:
+        parsed = ParseVec3(text, vectorValue); if (parsed) spawn.direction = vectorValue; break;
+    case kb::particle_editor::ParticleEditorProperty::SpawnSpreadDegrees: parsed = setFloat(spawn.spreadDegrees); break;
+    case kb::particle_editor::ParticleEditorProperty::SpawnRandomization: parsed = setFloat(spawn.randomization); break;
+    case kb::particle_editor::ParticleEditorProperty::SpawnPrewarmSeconds: parsed = setFloat(spawn.prewarmSeconds); break;
+    default: editsSpawn = false; break;
+    }
+    if (editsSpawn) {
+        if (!parsed) { console_.Error("Particles", "Particle property value is malformed."); return false; }
+        return SetParticleEditorSpawn(std::move(spawn));
+    }
+    switch (row.property) {
+    case kb::particle_editor::ParticleEditorProperty::OutputBlend:
+        parsed = ParseNumber(text, uintValue) && uintValue <= static_cast<std::uint32_t>(kb::scene::ParticleBlendMode::Premultiplied);
+        if (parsed) output.blend = static_cast<kb::scene::ParticleBlendMode>(uintValue); break;
+    case kb::particle_editor::ParticleEditorProperty::OutputSort:
+        parsed = ParseNumber(text, uintValue) && uintValue <= static_cast<std::uint32_t>(kb::scene::ParticleSortMode::Age);
+        if (parsed) output.sort = static_cast<kb::scene::ParticleSortMode>(uintValue); break;
+    case kb::particle_editor::ParticleEditorProperty::OutputDepthTest: parsed = setBool(output.depthTest); break;
+    case kb::particle_editor::ParticleEditorProperty::OutputDepthWrite: parsed = setBool(output.depthWrite); break;
+    case kb::particle_editor::ParticleEditorProperty::OutputSoftParticles: parsed = setBool(output.softParticles); break;
+    case kb::particle_editor::ParticleEditorProperty::OutputAntiAliasing: parsed = setBool(output.antiAliasing); break;
+    case kb::particle_editor::ParticleEditorProperty::OutputAlignment:
+        parsed = ParseNumber(text, uintValue) && uintValue <= static_cast<std::uint32_t>(kb::scene::ParticleAlignment::Local);
+        if (parsed) output.alignment = static_cast<kb::scene::ParticleAlignment>(uintValue); break;
+    case kb::particle_editor::ParticleEditorProperty::FlipbookColumns:
+    case kb::particle_editor::ParticleEditorProperty::FlipbookRows:
+    case kb::particle_editor::ParticleEditorProperty::FlipbookFramesPerSecond:
+    case kb::particle_editor::ParticleEditorProperty::FlipbookLooping:
+    case kb::particle_editor::ParticleEditorProperty::OutputVelocityScale:
+    case kb::particle_editor::ParticleEditorProperty::OutputMinimumLength:
+    case kb::particle_editor::ParticleEditorProperty::OutputPointDiameter:
+        std::visit([&](auto& payload) {
+            using T = std::decay_t<decltype(payload)>;
+            if constexpr (std::is_same_v<T, kb::scene::ParticleBillboardOutput> ||
+                          std::is_same_v<T, kb::scene::ParticleStretchedBillboardOutput> ||
+                          std::is_same_v<T, kb::scene::ParticlePointSpriteOutput>) {
+                if (row.property == kb::particle_editor::ParticleEditorProperty::FlipbookColumns) parsed = setUInt(payload.flipbook.columns);
+                else if (row.property == kb::particle_editor::ParticleEditorProperty::FlipbookRows) parsed = setUInt(payload.flipbook.rows);
+                else if (row.property == kb::particle_editor::ParticleEditorProperty::FlipbookFramesPerSecond) parsed = setFloat(payload.flipbook.framesPerSecond);
+                else if (row.property == kb::particle_editor::ParticleEditorProperty::FlipbookLooping) parsed = setBool(payload.flipbook.looping);
+                else if constexpr (std::is_same_v<T, kb::scene::ParticleStretchedBillboardOutput>) {
+                    if (row.property == kb::particle_editor::ParticleEditorProperty::OutputVelocityScale) parsed = setFloat(payload.velocityScale);
+                    else if (row.property == kb::particle_editor::ParticleEditorProperty::OutputMinimumLength) parsed = setFloat(payload.minimumLength);
+                } else if constexpr (std::is_same_v<T, kb::scene::ParticlePointSpriteOutput>)
+                    if (row.property == kb::particle_editor::ParticleEditorProperty::OutputPointDiameter) parsed = setFloat(payload.diameter);
+            }
+        }, output.payload);
+        break;
+    case kb::particle_editor::ParticleEditorProperty::ModulePayload: {
+        const auto module = std::find_if(emitter->modules.begin(), emitter->modules.end(),
+            [id = row.moduleId](const auto& value) { return value.moduleId == id; });
+        if (module == emitter->modules.end()) return false;
+        auto payload = module->payload;
+        std::visit([&](auto& value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, kb::scene::ParticleInitialVelocityModule>) {
+                if (row.payloadField == 0U) { parsed = ParseVec3(text, vectorValue); if (parsed) value.direction = vectorValue; }
+                else if (row.payloadField == 1U) parsed = setFloat(value.speedMin);
+                else if (row.payloadField == 2U) parsed = setFloat(value.speedMax);
+                else if (row.payloadField == 3U) parsed = setFloat(value.randomization);
+                else if (row.payloadField == 4U) parsed = setFloat(value.spreadDegrees);
+            } else if constexpr (std::is_same_v<T, kb::scene::ParticleGravityModule>) {
+                if (row.payloadField == 0U) { parsed = ParseVec3(text, vectorValue); if (parsed) value.acceleration = vectorValue; }
+                else if (row.payloadField == 1U) parsed = setFloat(value.sceneGravityScale);
+            } else if constexpr (std::is_same_v<T, kb::scene::ParticleWindModule>) {
+                parsed = ParseVec3(text, vectorValue); if (parsed) value.acceleration = vectorValue;
+            } else if constexpr (std::is_same_v<T, kb::scene::ParticleDragModule>) parsed = setFloat(value.coefficient);
+            else if constexpr (std::is_same_v<T, kb::scene::ParticleCollisionPlaneModule>) {
+                if (row.payloadField == 0U) { parsed = ParseVec3(text, vectorValue); if (parsed) value.normal = vectorValue; }
+                else if (row.payloadField == 1U) parsed = setFloat(value.distance);
+                else if (row.payloadField == 2U) parsed = setFloat(value.restitution);
+                else if (row.payloadField == 3U) parsed = setFloat(value.friction);
+                else if (row.payloadField == 4U) parsed = setUInt(value.maxEventsPerStep);
+            } else if constexpr (std::is_same_v<T, kb::scene::ParticleSubEmitterModule>) {
+                if (row.payloadField == 0U) { std::uint64_t id = 0U; parsed = ParseNumber(text, id); if (parsed) value.targetEmitterId = id; }
+                else if (row.payloadField == 1U) { parsed = ParseNumber(text, uintValue) && uintValue <= 2U; if (parsed) value.trigger = static_cast<kb::scene::ParticleEventTrigger>(uintValue); }
+                else if (row.payloadField == 2U) parsed = setUInt(value.count);
+                else if (row.payloadField == 3U) parsed = setUInt(value.maxDepth);
+            }
+        }, payload);
+        if (!parsed) { console_.Error("Particles", "Particle module property value is malformed."); return false; }
+        return SetParticleEditorModulePayload(row.moduleId, std::move(payload));
+    }
+    default: break;
+    }
+    if (!parsed) { console_.Error("Particles", "Particle property value is malformed."); return false; }
+    return FinalizeParticleEditorCommand(kb::particle_editor::ParticleEditorCommands::SetEmitterOutput(
+        particleEditorDocument_, particleEditorWorkspace_, emitter->emitterId, std::move(output)));
 }
 
 bool EditorSceneContext::UndoParticleEditorCommand() {

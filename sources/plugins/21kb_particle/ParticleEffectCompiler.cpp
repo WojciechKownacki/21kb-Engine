@@ -12,11 +12,11 @@
 namespace kb::particle_plugin {
 namespace {
 
-void Add(ParticleCompileResult& result, kb::scene::ParticleEffectDiagnosticCode code, std::string path,
-         std::string message, kb::scene::ParticleStableId emitterId = 0U,
-         kb::scene::ParticleStableId moduleId = 0U) {
-    result.diagnostics.push_back({.code = code, .propertyPath = std::move(path), .emitterId = emitterId,
-                                  .moduleId = moduleId, .message = std::move(message)});
+void Add(std::vector<kb::scene::ParticleEffectDiagnostic>& diagnostics,
+         kb::scene::ParticleEffectDiagnosticCode code, std::string path, std::string message,
+         kb::scene::ParticleStableId emitterId = 0U, kb::scene::ParticleStableId moduleId = 0U) {
+    diagnostics.push_back({.code = code, .propertyPath = std::move(path), .emitterId = emitterId,
+                           .moduleId = moduleId, .message = std::move(message)});
 }
 
 [[nodiscard]] std::uint64_t Resolve(const kb::scene::ParticleAssetReference& reference,
@@ -47,6 +47,50 @@ std::uint64_t ParticleCompilerCapabilities::StableKey() const noexcept {
     return (billboard ? 1ULL : 0ULL) | (stretchedBillboard ? 2ULL : 0ULL) | (pointSprite ? 4ULL : 0ULL);
 }
 
+std::vector<kb::scene::ParticleEffectDiagnostic> ParticleEffectCompiler::ValidateCapabilities(
+    const kb::scene::ParticleEffectAsset& asset, const ParticleCompileRequest& request) {
+    std::vector<kb::scene::ParticleEffectDiagnostic> diagnostics;
+    diagnostics.reserve(1U + asset.emitters.size() + asset.eventBindings.size());
+    if (asset.backendPolicy == kb::scene::ParticleBackendPolicy::GpuVisualRequired) {
+        Add(diagnostics, kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability, "effect.backendPolicy",
+            "GPU-required effects are not executable by the current compiler capability set");
+    }
+    for (std::size_t bindingIndex = 0U; bindingIndex < asset.eventBindings.size(); ++bindingIndex) {
+        const auto& binding = asset.eventBindings[bindingIndex];
+        if (binding.action == kb::scene::ParticleEventAction::EmitEffectAsset) {
+            Add(diagnostics, kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
+                "effect.eventBinding[" + std::to_string(bindingIndex) + "].action",
+                "external particle effect events are not executable by the current compiler", binding.sourceEmitterId,
+                binding.sourceModuleId);
+        }
+        if (binding.sourceModuleId == 0U) continue;
+        const auto emitter = std::find_if(asset.emitters.begin(), asset.emitters.end(), [&](const auto& candidate) {
+            return candidate.emitterId == binding.sourceEmitterId;
+        });
+        if (emitter == asset.emitters.end()) continue;
+        const auto module = std::find_if(emitter->modules.begin(), emitter->modules.end(), [&](const auto& candidate) {
+            return candidate.moduleId == binding.sourceModuleId;
+        });
+        if (module == emitter->modules.end()) continue;
+        if (module->type != kb::scene::ParticleModuleType::CollisionPlane ||
+            binding.trigger != kb::scene::ParticleEventTrigger::Collision) {
+            Add(diagnostics, kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
+                "effect.eventBinding[" + std::to_string(bindingIndex) + "].sourceModuleId",
+                "the selected source module cannot emit runtime events", binding.sourceEmitterId,
+                binding.sourceModuleId);
+        }
+    }
+    for (std::size_t emitterIndex = 0U; emitterIndex < asset.emitters.size(); ++emitterIndex) {
+        const auto& emitter = asset.emitters[emitterIndex];
+        if (!Supports(emitter.output.type, request.capabilities)) {
+            Add(diagnostics, kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
+                "effect.emitter[" + std::to_string(emitterIndex) + "].output.type",
+                "particle output is not executable by the current compiler capability set", emitter.emitterId);
+        }
+    }
+    return diagnostics;
+}
+
 ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleEffectAsset& asset,
                                                       const kb::assets::AssetMetadata& owner,
                                                       const kb::assets::AssetRegistry& registry,
@@ -55,61 +99,8 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
     result.diagnostics = kb::scene::ParticleEffectAssetValidator::ValidateStructure(asset).diagnostics;
     if (!result.diagnostics.empty()) return result;
 
-    if (asset.backendPolicy == kb::scene::ParticleBackendPolicy::GpuVisualRequired) {
-        Add(result, kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability, "effect.backendPolicy",
-            "GPU-required effects are not executable by the current compiler capability set");
-        return result;
-    }
-    for (std::size_t bindingIndex = 0U; bindingIndex < asset.eventBindings.size(); ++bindingIndex) {
-        const auto& binding = asset.eventBindings[bindingIndex];
-        if (binding.action == kb::scene::ParticleEventAction::EmitEffectAsset) {
-            Add(result, kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
-                "effect.eventBinding[" + std::to_string(bindingIndex) + "].action",
-                "external particle effect events are not executable by the current compiler", binding.sourceEmitterId,
-                binding.sourceModuleId);
-            return result;
-        }
-        if (binding.sourceModuleId == 0U) continue;
-        const auto emitter = std::find_if(asset.emitters.begin(), asset.emitters.end(), [&](const auto& candidate) {
-            return candidate.emitterId == binding.sourceEmitterId;
-        });
-        const auto module = std::find_if(emitter->modules.begin(), emitter->modules.end(), [&](const auto& candidate) {
-            return candidate.moduleId == binding.sourceModuleId;
-        });
-        if (module->type != kb::scene::ParticleModuleType::CollisionPlane ||
-            binding.trigger != kb::scene::ParticleEventTrigger::Collision) {
-            Add(result, kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
-                "effect.eventBinding[" + std::to_string(bindingIndex) + "].sourceModuleId",
-                "the selected source module cannot emit runtime events", binding.sourceEmitterId,
-                binding.sourceModuleId);
-            return result;
-        }
-    }
-    for (std::size_t emitterIndex = 0U; emitterIndex < asset.emitters.size(); ++emitterIndex) {
-        const auto& emitter = asset.emitters[emitterIndex];
-        if (!Supports(emitter.output.type, request.capabilities)) {
-            Add(result, kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
-                "effect.emitter[" + std::to_string(emitterIndex) + "].output.type",
-                "particle output is not executable by the current compiler capability set", emitter.emitterId);
-            return result;
-        }
-        if (std::any_of(emitter.modules.begin(), emitter.modules.end(), [](const auto& module) {
-            return module.type != kb::scene::ParticleModuleType::InitialVelocity &&
-                   module.type != kb::scene::ParticleModuleType::Gravity &&
-                   module.type != kb::scene::ParticleModuleType::Wind &&
-                   module.type != kb::scene::ParticleModuleType::Drag &&
-                   module.type != kb::scene::ParticleModuleType::ColorOverLife &&
-                   module.type != kb::scene::ParticleModuleType::SizeOverLife &&
-                   module.type != kb::scene::ParticleModuleType::AlphaOverLife &&
-                   module.type != kb::scene::ParticleModuleType::CollisionPlane &&
-                   module.type != kb::scene::ParticleModuleType::SubEmitter;
-        })) {
-            Add(result, kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
-                "effect.emitter[" + std::to_string(emitterIndex) + "].module",
-                "particle module is not executable by the current compiler", emitter.emitterId);
-            return result;
-        }
-    }
+    result.diagnostics = ValidateCapabilities(asset, request);
+    if (!result.diagnostics.empty()) return result;
 
     const kb::scene::ParticleEffectDependencyResult dependencies =
         kb::scene::ParticleEffectAssetValidator::ValidateDependencies(asset, owner, registry);
@@ -181,8 +172,12 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
         }
         std::copy(source.spawn.bursts.begin(), source.spawn.bursts.end(), destination.bursts.begin());
         destination.moduleCount = static_cast<std::uint8_t>(source.modules.size());
+        std::array<const kb::scene::ParticleModuleAsset*, kb::scene::kParticleEffectMaxModulesPerEmitter>
+            modulesByAuthoringOrder{};
+        for (const kb::scene::ParticleModuleAsset& module : source.modules)
+            modulesByAuthoringOrder[module.authoringOrder] = &module;
         for (std::size_t moduleIndex = 0U; moduleIndex < source.modules.size(); ++moduleIndex) {
-            const auto& sourceModule = source.modules[moduleIndex];
+            const auto& sourceModule = *modulesByAuthoringOrder[moduleIndex];
             auto& destinationModule = destination.modules[moduleIndex];
             destinationModule.moduleId = sourceModule.moduleId;
             destinationModule.type = sourceModule.type;
