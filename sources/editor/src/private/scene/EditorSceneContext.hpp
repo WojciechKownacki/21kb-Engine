@@ -50,6 +50,8 @@
 #include "editor/ParticleAssetGateway.hpp"
 #include "editor/ParticleDocumentCloseGuard.hpp"
 #include "editor/ParticleEditorDocument.hpp"
+#include "editor/ParticleEmitterListModel.hpp"
+#include "editor/ParticleEditorWorkspaceState.hpp"
 #include "editor/ParticlePreviewSession.hpp"
 #include "editor/ParticleBakeService.hpp"
 
@@ -449,6 +451,28 @@ public:
     [[nodiscard]] kb::particle_editor::ParticleBakeResult BakeParticleEditorAsset();
     [[nodiscard]] bool RevertParticleEditorAsset();
     [[nodiscard]] bool ApplyParticleEditorWorkingCopy(kb::scene::ParticleEffectAsset asset);
+    [[nodiscard]] const kb::scene::ParticleEffectAsset* ParticleEditorWorkingAsset() const noexcept;
+    [[nodiscard]] std::vector<kb::particle_editor::ParticleEmitterListRow> ParticleEditorEmitterRows() const;
+    [[nodiscard]] const kb::particle_editor::ParticleEditorWorkspaceState& ParticleEditorWorkspace() const noexcept;
+    void SetParticleEditorFocused(bool focused) noexcept;
+    [[nodiscard]] bool SelectParticleEditorEmitter(kb::scene::ParticleStableId emitterId) noexcept;
+    [[nodiscard]] bool AddParticleEditorEmitter(kb::assets::AssetId materialId);
+    [[nodiscard]] bool RenameParticleEditorEmitter(kb::scene::ParticleStableId emitterId, std::string name);
+    [[nodiscard]] bool ToggleParticleEditorEmitter(kb::scene::ParticleStableId emitterId);
+    [[nodiscard]] bool MoveParticleEditorEmitter(kb::scene::ParticleStableId emitterId, std::uint32_t targetOrder);
+    [[nodiscard]] bool RemoveParticleEditorEmitter(kb::scene::ParticleStableId emitterId);
+    [[nodiscard]] bool UndoParticleEditorCommand();
+    [[nodiscard]] bool RedoParticleEditorCommand();
+    [[nodiscard]] bool BeginParticleEditorEmitterRename(kb::scene::ParticleStableId emitterId);
+    void AppendParticleEditorRenameText(std::string_view text);
+    void RemoveParticleEditorRenameCharacter() noexcept;
+    void CancelParticleEditorEmitterRename() noexcept;
+    [[nodiscard]] bool CommitParticleEditorEmitterRename();
+    [[nodiscard]] bool BeginParticleEditorEmitterDrag(kb::scene::ParticleStableId emitterId) noexcept;
+    void UpdateParticleEditorEmitterDrag(std::uint32_t targetOrder) noexcept;
+    [[nodiscard]] bool CommitParticleEditorEmitterDrag();
+    void CancelParticleEditorEmitterDrag() noexcept;
+    void SetParticleEditorComposerScrollOffset(int offset) noexcept;
     [[nodiscard]] kb::particle_editor::ParticleDocumentCloseResult RequestParticleEditorTransition(
         kb::particle_editor::ParticleDocumentTransition transition) noexcept;
     [[nodiscard]] kb::particle_editor::ParticleDocumentCloseResult ResolveParticleEditorTransition(
@@ -1098,6 +1122,7 @@ public:
     [[nodiscard]] bool HasActiveTransformEdit() const noexcept;
 
 private:
+    [[nodiscard]] bool FinalizeParticleEditorCommand(kb::particle_editor::ParticleEditorResult result);
     [[nodiscard]] bool FinalizeLoadedSkeletalMeshEditorAsset(
         kb::assets::AssetId meshId,
         kb::assets::AssetId skeletonId,
@@ -1194,6 +1219,7 @@ private:
     std::unique_ptr<EditorAnimationPreviewScene> animationPreviewScene_;
     kb::particle_editor::ParticleAssetGateway particleEditorGateway_;
     kb::particle_editor::ParticleEditorDocument particleEditorDocument_;
+    kb::particle_editor::ParticleEditorWorkspaceState particleEditorWorkspace_;
     kb::particle_editor::ParticleDocumentCloseGuard particleEditorCloseGuard_;
     std::unique_ptr<kb::particle_editor::ParticlePreviewSession> particlePreviewSession_;
     std::function<void(const kb::scene::Scene&)> particlePreviewReleaseHandler_;

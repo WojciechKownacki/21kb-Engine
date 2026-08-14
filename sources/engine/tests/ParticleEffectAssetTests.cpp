@@ -84,6 +84,7 @@ void ReplaceLine(std::string& source, std::string_view key, std::string_view rep
     for (std::size_t index = 0U; index < 8U; ++index) {
         ParticleEmitterAsset emitter{};
         emitter.emitterId = 10U + index;
+        emitter.authoringOrder = static_cast<std::uint32_t>(index);
         emitter.name = "Emitter " + std::to_string(index);
         emitter.simulationSpace = index % 2U == 0U ? ParticleSimulationSpace::Local : ParticleSimulationSpace::World;
         emitter.spawn.mode = index % 2U == 0U ? ParticleSpawnMode::Continuous : ParticleSpawnMode::Burst;
@@ -951,6 +952,48 @@ void RunDependencyValidationTest() {
             "external dependency graph boundary plus one was accepted");
 }
 
+void RunAuthoringOrderTest() {
+    using namespace kb::scene;
+    ParticleEffectAsset asset = MakeComprehensiveAsset();
+    asset.emitters[0].authoringOrder = 2U;
+    asset.emitters[1].authoringOrder = 0U;
+    asset.emitters[2].authoringOrder = 1U;
+    Require(ParticleEffectAssetValidator::ValidateStructure(asset).Succeeded(),
+            "valid authored emitter order was rejected");
+    std::vector<ParticleEffectDiagnostic> diagnostics;
+    const auto serialized = ParticleEffectAssetIO::Serialize(asset, diagnostics);
+    Require(serialized.has_value() && diagnostics.empty() &&
+            serialized->find("effect.emitter[0].authoringOrder 2\n") != std::string::npos,
+            "writer did not persist authored emitter order");
+    const ParticleEffectLoadResult loaded = ParticleEffectAssetIO::Parse(*serialized);
+    Require(loaded.Succeeded() && loaded.asset->emitters[0].emitterId == 10U &&
+            loaded.asset->emitters[0].authoringOrder == 2U &&
+            loaded.asset->emitters[1].emitterId == 11U &&
+            loaded.asset->emitters[1].authoringOrder == 0U,
+            "authored order roundtrip changed stable-id storage order");
+
+    ParticleEffectAsset duplicate = asset;
+    duplicate.emitters[0].authoringOrder = duplicate.emitters[1].authoringOrder;
+    Require(HasDiagnostic(ParticleEffectAssetValidator::ValidateStructure(duplicate).diagnostics,
+                          ParticleEffectDiagnosticCode::InvalidValue,
+                          "effect.emitter[1].authoringOrder"),
+            "duplicate authored emitter order was accepted");
+    ParticleEffectAsset outside = asset;
+    outside.emitters[0].authoringOrder = static_cast<std::uint32_t>(outside.emitters.size());
+    Require(HasDiagnostic(ParticleEffectAssetValidator::ValidateStructure(outside).diagnostics,
+                          ParticleEffectDiagnosticCode::InvalidValue,
+                          "effect.emitter[0].authoringOrder"),
+            "out-of-range authored emitter order was accepted");
+
+    std::string compatibleV2 = ReadText(
+        std::filesystem::path{KB_PARTICLE_ASSET_TEST_SOURCE_DIR} /
+        "fixtures" / "CanonicalParticleEffectV2.kbvfx");
+    ReplaceOnce(compatibleV2, "effect.emitter[0].authoringOrder 0\n", "");
+    const ParticleEffectLoadResult compatible = ParticleEffectAssetIO::Parse(compatibleV2);
+    Require(compatible.Succeeded() && compatible.asset->emitters[0].authoringOrder == 0U,
+            "v2 source without authored order did not map to canonical vector order");
+}
+
 void RunRecipeAssetTest() {
     using namespace kb::scene;
     struct RecipeExpectation {
@@ -1010,6 +1053,7 @@ int main() {
     try {
         RunCanonicalGoldenTest();
         RunComprehensiveSchemaTest();
+        RunAuthoringOrderTest();
         RunHardLimitBoundaryTest();
         RunBoundedFileLoadTest();
         RunLegacyMigrationTest();

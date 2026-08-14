@@ -12,6 +12,7 @@
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/HierarchyToolbarLayout.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/ParticleEditorPanelLayout.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -19,6 +20,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <vector>
 
 namespace kb::editor {
 namespace {
@@ -75,6 +77,33 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
     EditorConsolePointerController consolePointer(messageWindow_, sceneContext_);
     if (consoleContent.has_value() && consolePointer.HandleMouseWheel(*consoleContent, x, y, wheelDelta)) {
         return true;
+    }
+
+    const std::optional<RECT> particleContent = EditorPanelContentResolver::Resolve(
+        DockPanelKind::ParticleEditor,
+        messageWindow_,
+        mainWindow_,
+        dockModel_,
+        floatingWindows_,
+        metrics_);
+    if (particleContent.has_value()) {
+        const std::vector<kb::particle_editor::ParticleEmitterListRow> rows =
+            sceneContext_.ParticleEditorEmitterRows();
+        const ParticleEditorPanelLayout layout = ParticleEditorPanelLayoutResolver::Resolve(
+            *particleContent,
+            rows,
+            sceneContext_.ParticleEditorWorkspace().ComposerScrollOffset(),
+            GetDpiForWindow(messageWindow_));
+        if (Contains(layout.composer, x, y)) {
+            const int direction = wheelDelta > 0 ? -1 : 1;
+            const int maximum = ParticleEditorPanelLayoutResolver::MaximumComposerScroll(
+                layout, GetDpiForWindow(messageWindow_));
+            sceneContext_.SetParticleEditorComposerScrollOffset(std::clamp(
+                sceneContext_.ParticleEditorWorkspace().ComposerScrollOffset() + direction * 108,
+                0,
+                maximum));
+            return true;
+        }
     }
 
     const std::optional<RECT> hierarchyContent = EditorPanelContentResolver::Resolve(DockPanelKind::Hierarchy, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);

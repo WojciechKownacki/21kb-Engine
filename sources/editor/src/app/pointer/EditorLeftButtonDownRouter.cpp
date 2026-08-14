@@ -4,6 +4,7 @@
 #include "app/EditorAssetBrowserPointerHandler.hpp"
 #include "app/EditorPendingTextEditCommitter.hpp"
 #include "app/EditorParticleDocumentLifecycle.hpp"
+#include "app/ParticleEditorPanelInteraction.hpp"
 #include "app/EditorPointerDragInteraction.hpp"
 #include "app/EditorPointerDragSourceResolver.hpp"
 #include "app/EditorWindowInvalidator.hpp"
@@ -33,6 +34,7 @@
 #include "inspection/TerrainMaterialLayerMenuState.hpp"
 #include "inspection/InspectorSceneAudioInteraction.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/ParticleEditorPanelLayout.hpp"
 #include "rendering/AnimationClipEditorPanelRenderer.hpp"
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
@@ -468,6 +470,37 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
 
     const EditorPanelPointerHitContext panelHit =
         EditorPanelPointerHitContextResolver::Resolve(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, x, y);
+
+    if (const std::optional<RECT> particleEditorContent = EditorPanelContentResolver::Resolve(
+            DockPanelKind::ParticleEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        particleEditorContent.has_value() && PointInRect(*particleEditorContent, x, y)) {
+        sceneContext_.SetParticleEditorFocused(true);
+        if (!sceneContext_.HasParticleEditorAsset())
+            return;
+        const auto rows = sceneContext_.ParticleEditorEmitterRows();
+        const ParticleEditorPanelLayout layout = ParticleEditorPanelLayoutResolver::Resolve(
+            *particleEditorContent, rows,
+            sceneContext_.ParticleEditorWorkspace().ComposerScrollOffset(), GetDpiForWindow(messageWindow));
+        const ParticleEditorPanelHit hit = ParticleEditorPanelLayoutResolver::HitTest(layout, x, y);
+        if (hit.action != ParticleEditorPanelAction::None) {
+            kb::assets::AssetId selectedMaterial{};
+            if (hit.action == ParticleEditorPanelAction::AddEmitter) {
+                const auto selected = EditorMaterialAssetPickerDialog::Show(
+                    mainWindow_, MakeEditorDarkTheme(), sceneContext_, sceneViewport_, {}, false);
+                if (!selected.accepted) return;
+                selectedMaterial = selected.assetId;
+            }
+            if (ParticleEditorPanelInteraction::Execute(sceneContext_, hit, selectedMaterial) &&
+                hit.action == ParticleEditorPanelAction::BeginEmitterDrag) {
+                SetCapture(messageWindow);
+            }
+            sceneViewport_.RequestPresent();
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+    } else {
+        sceneContext_.SetParticleEditorFocused(false);
+    }
 
     if (const std::optional<RECT> materialEditorContent = EditorPanelContentResolver::Resolve(DockPanelKind::MaterialEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         materialEditorContent.has_value() && PointInRect(*materialEditorContent, x, y)) {
