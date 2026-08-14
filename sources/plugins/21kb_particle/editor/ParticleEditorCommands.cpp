@@ -39,6 +39,12 @@ namespace {
     return result;
 }
 
+[[nodiscard]] auto FindModuleMutable(kb::scene::ParticleEmitterAsset& emitter,
+                                     kb::scene::ParticleStableId moduleId) {
+    return std::find_if(emitter.modules.begin(), emitter.modules.end(),
+        [moduleId](const auto& module) { return module.moduleId == moduleId; });
+}
+
 } // namespace
 
 ParticleEditorResult ParticleEditorCommands::AddEmitter(
@@ -151,10 +157,20 @@ ParticleEditorResult ParticleEditorCommands::RemoveEmitter(
     for (auto& emitter : candidate.emitters) {
         if (emitter.authoringOrder > removedOrder)
             --emitter.authoringOrder;
+        std::vector<std::uint32_t> removedModuleOrders;
+        for (const auto& module : emitter.modules) {
+            const auto* payload = std::get_if<kb::scene::ParticleSubEmitterModule>(&module.payload);
+            if (payload != nullptr && payload->targetEmitterId == emitterId)
+                removedModuleOrders.push_back(module.authoringOrder);
+        }
         std::erase_if(emitter.modules, [emitterId](const kb::scene::ParticleModuleAsset& module) {
             const auto* payload = std::get_if<kb::scene::ParticleSubEmitterModule>(&module.payload);
             return payload != nullptr && payload->targetEmitterId == emitterId;
         });
+        for (auto& module : emitter.modules)
+            module.authoringOrder -= static_cast<std::uint32_t>(std::count_if(
+                removedModuleOrders.begin(), removedModuleOrders.end(),
+                [&](std::uint32_t order) { return order < module.authoringOrder; }));
     }
     std::erase_if(candidate.eventBindings, [emitterId](const kb::scene::ParticleEventBindingAsset& binding) {
         return binding.sourceEmitterId == emitterId ||
@@ -163,6 +179,157 @@ ParticleEditorResult ParticleEditorCommands::RemoveEmitter(
     const auto next = std::min_element(candidate.emitters.begin(), candidate.emitters.end(),
         [](const auto& left, const auto& right) { return left.authoringOrder < right.authoringOrder; });
     return Apply(document, workspace, std::move(candidate), next->emitterId);
+}
+
+ParticleEditorResult ParticleEditorCommands::SetEmitterSpawn(
+    ParticleEditorDocument& document, ParticleEditorWorkspaceState& workspace,
+    kb::scene::ParticleStableId emitterId, kb::scene::ParticleSpawnAsset spawn) {
+    auto candidate = document.Asset();
+    const auto emitter = FindMutable(candidate, emitterId);
+    if (emitter == candidate.emitters.end())
+        return CommandError(ParticleEditorStatus::InvalidSelection,
+            kb::scene::ParticleEffectDiagnosticCode::InvalidReference, "effect.emitter",
+            "emitter does not exist", emitterId);
+    emitter->spawn = std::move(spawn);
+    return Apply(document, workspace, std::move(candidate), emitterId);
+}
+
+ParticleEditorResult ParticleEditorCommands::SetEmitterOutput(
+    ParticleEditorDocument& document, ParticleEditorWorkspaceState& workspace,
+    kb::scene::ParticleStableId emitterId, kb::scene::ParticleOutputAsset output) {
+    auto candidate = document.Asset();
+    const auto emitter = FindMutable(candidate, emitterId);
+    if (emitter == candidate.emitters.end())
+        return CommandError(ParticleEditorStatus::InvalidSelection,
+            kb::scene::ParticleEffectDiagnosticCode::InvalidReference, "effect.emitter",
+            "emitter does not exist", emitterId);
+    emitter->output = std::move(output);
+    return Apply(document, workspace, std::move(candidate), emitterId);
+}
+
+ParticleEditorResult ParticleEditorCommands::AddModule(
+    ParticleEditorDocument& document, ParticleEditorWorkspaceState& workspace,
+    kb::scene::ParticleStableId emitterId, kb::scene::ParticleModuleType type) {
+    auto candidate = document.Asset();
+    const auto emitter = FindMutable(candidate, emitterId);
+    if (emitter == candidate.emitters.end())
+        return CommandError(ParticleEditorStatus::InvalidSelection,
+            kb::scene::ParticleEffectDiagnosticCode::InvalidReference, "effect.emitter",
+            "emitter does not exist", emitterId);
+    if (emitter->modules.size() >= kb::scene::kParticleEffectMaxModulesPerEmitter)
+        return CommandError(ParticleEditorStatus::LimitExceeded,
+            kb::scene::ParticleEffectDiagnosticCode::LimitExceeded, "effect.emitter.moduleCount",
+            "emitter already contains the maximum number of modules", emitterId);
+    if (!kb::scene::IsRepeatableParticleModule(type) &&
+        std::any_of(emitter->modules.begin(), emitter->modules.end(),
+            [type](const auto& module) { return module.type == type; }))
+        return CommandError(ParticleEditorStatus::InvalidAsset,
+            kb::scene::ParticleEffectDiagnosticCode::DuplicateModule, "effect.emitter.module.type",
+            "this module type may occur only once", emitterId);
+    kb::scene::ParticleStableId nextId = 1U;
+    for (const auto& module : emitter->modules) {
+        if (module.moduleId != nextId) break;
+        ++nextId;
+    }
+    kb::scene::ParticleModuleAsset module{.moduleId = nextId,
+        .authoringOrder = static_cast<std::uint32_t>(emitter->modules.size()), .type = type,
+        .payload = kb::scene::DefaultParticleModulePayload(type)};
+    emitter->modules.insert(std::lower_bound(emitter->modules.begin(), emitter->modules.end(), nextId,
+        [](const auto& value, kb::scene::ParticleStableId id) { return value.moduleId < id; }), std::move(module));
+    auto result = Apply(document, workspace, std::move(candidate), emitterId);
+    if (result.Succeeded()) static_cast<void>(workspace.SelectModule(document.Asset(), emitterId, nextId));
+    return result;
+}
+
+ParticleEditorResult ParticleEditorCommands::SetModuleEnabled(
+    ParticleEditorDocument& document, ParticleEditorWorkspaceState& workspace,
+    kb::scene::ParticleStableId emitterId, kb::scene::ParticleStableId moduleId, bool enabled) {
+    auto candidate = document.Asset();
+    const auto emitter = FindMutable(candidate, emitterId);
+    if (emitter == candidate.emitters.end())
+        return CommandError(ParticleEditorStatus::InvalidSelection,
+            kb::scene::ParticleEffectDiagnosticCode::InvalidReference, "effect.emitter",
+            "emitter does not exist", emitterId);
+    const auto module = FindModuleMutable(*emitter, moduleId);
+    if (module == emitter->modules.end())
+        return CommandError(ParticleEditorStatus::InvalidSelection,
+            kb::scene::ParticleEffectDiagnosticCode::InvalidReference, "effect.emitter.module",
+            "module does not exist", emitterId);
+    module->enabled = enabled;
+    return Apply(document, workspace, std::move(candidate), emitterId);
+}
+
+ParticleEditorResult ParticleEditorCommands::SetModulePayload(
+    ParticleEditorDocument& document, ParticleEditorWorkspaceState& workspace,
+    kb::scene::ParticleStableId emitterId, kb::scene::ParticleStableId moduleId,
+    kb::scene::ParticleModulePayload payload) {
+    auto candidate = document.Asset();
+    const auto emitter = FindMutable(candidate, emitterId);
+    if (emitter == candidate.emitters.end())
+        return CommandError(ParticleEditorStatus::InvalidSelection,
+            kb::scene::ParticleEffectDiagnosticCode::InvalidReference, "effect.emitter",
+            "emitter does not exist", emitterId);
+    const auto module = FindModuleMutable(*emitter, moduleId);
+    if (module == emitter->modules.end())
+        return CommandError(ParticleEditorStatus::InvalidSelection,
+            kb::scene::ParticleEffectDiagnosticCode::InvalidReference, "effect.emitter.module",
+            "module does not exist", emitterId);
+    module->payload = std::move(payload);
+    return Apply(document, workspace, std::move(candidate), emitterId);
+}
+
+ParticleEditorResult ParticleEditorCommands::ReorderModule(
+    ParticleEditorDocument& document, ParticleEditorWorkspaceState& workspace,
+    kb::scene::ParticleStableId emitterId, kb::scene::ParticleStableId moduleId,
+    std::uint32_t targetOrder) {
+    auto candidate = document.Asset();
+    const auto emitter = FindMutable(candidate, emitterId);
+    if (emitter == candidate.emitters.end() || targetOrder >= emitter->modules.size())
+        return CommandError(ParticleEditorStatus::InvalidSelection,
+            kb::scene::ParticleEffectDiagnosticCode::InvalidValue, "effect.emitter.module.authoringOrder",
+            "module reorder target is outside the authored list", emitterId);
+    const auto moved = FindModuleMutable(*emitter, moduleId);
+    if (moved == emitter->modules.end())
+        return CommandError(ParticleEditorStatus::InvalidSelection,
+            kb::scene::ParticleEffectDiagnosticCode::InvalidReference, "effect.emitter.module",
+            "module does not exist", emitterId);
+    const std::uint32_t sourceOrder = moved->authoringOrder;
+    if (sourceOrder == targetOrder) return {.status = ParticleEditorStatus::NoChange};
+    for (auto& module : emitter->modules) {
+        if (module.moduleId == moduleId) continue;
+        if (sourceOrder < targetOrder && module.authoringOrder > sourceOrder && module.authoringOrder <= targetOrder)
+            --module.authoringOrder;
+        else if (targetOrder < sourceOrder && module.authoringOrder >= targetOrder && module.authoringOrder < sourceOrder)
+            ++module.authoringOrder;
+    }
+    moved->authoringOrder = targetOrder;
+    return Apply(document, workspace, std::move(candidate), emitterId);
+}
+
+ParticleEditorResult ParticleEditorCommands::RemoveModule(
+    ParticleEditorDocument& document, ParticleEditorWorkspaceState& workspace,
+    kb::scene::ParticleStableId emitterId, kb::scene::ParticleStableId moduleId) {
+    auto candidate = document.Asset();
+    const auto emitter = FindMutable(candidate, emitterId);
+    if (emitter == candidate.emitters.end())
+        return CommandError(ParticleEditorStatus::InvalidSelection,
+            kb::scene::ParticleEffectDiagnosticCode::InvalidReference, "effect.emitter",
+            "emitter does not exist", emitterId);
+    const auto removed = FindModuleMutable(*emitter, moduleId);
+    if (removed == emitter->modules.end())
+        return CommandError(ParticleEditorStatus::InvalidSelection,
+            kb::scene::ParticleEffectDiagnosticCode::InvalidReference, "effect.emitter.module",
+            "module does not exist", emitterId);
+    const std::uint32_t order = removed->authoringOrder;
+    emitter->modules.erase(removed);
+    for (auto& module : emitter->modules)
+        if (module.authoringOrder > order) --module.authoringOrder;
+    std::erase_if(candidate.eventBindings, [emitterId, moduleId](const auto& binding) {
+        return binding.sourceEmitterId == emitterId && binding.sourceModuleId == moduleId;
+    });
+    auto result = Apply(document, workspace, std::move(candidate), emitterId);
+    if (result.Succeeded()) workspace.ClearSelectedModule();
+    return result;
 }
 
 } // namespace kb::particle_editor

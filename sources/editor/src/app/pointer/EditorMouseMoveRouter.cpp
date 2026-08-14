@@ -98,7 +98,8 @@ void InvalidateMaterialGraphPanel(
 } // namespace
 
 void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftButtonDown, bool rightButtonDown) {
-    if (sceneContext_.ParticleEditorWorkspace().EmitterDragActive()) {
+    if (sceneContext_.ParticleEditorWorkspace().EmitterDragActive() ||
+        sceneContext_.ParticleEditorWorkspace().ModuleDragActive()) {
         const std::optional<RECT> content = EditorPanelContentResolver::Resolve(
             DockPanelKind::ParticleEditor,
             messageWindow,
@@ -108,15 +109,17 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
             metrics_);
         if (!leftButtonDown || !content.has_value()) {
             sceneContext_.CancelParticleEditorEmitterDrag();
+            sceneContext_.CancelParticleEditorModuleDrag();
             ReleaseCapture();
         } else {
             const std::vector<kb::particle_editor::ParticleEmitterListRow> rows =
                 sceneContext_.ParticleEditorEmitterRows();
+            const auto inspector = sceneContext_.ParticleEditorInspector();
             const ParticleEditorPanelLayout layout = ParticleEditorPanelLayoutResolver::Resolve(
                 *content,
                 rows,
                 sceneContext_.ParticleEditorWorkspace().ComposerScrollOffset(),
-                GetDpiForWindow(messageWindow));
+                GetDpiForWindow(messageWindow), &inspector);
             ParticleEditorPanelInteraction::UpdateDrag(sceneContext_, layout, y);
             EditorWindowInvalidator::InvalidatePanel(messageWindow, *content);
         }

@@ -118,23 +118,23 @@ void ReplaceLine(std::string& source, std::string_view key, std::string_view rep
     ParticleEmitterAsset& first = asset.emitters.front();
     first.modules = {
         ParticleModuleAsset{
-            .moduleId = 1U, .type = ParticleModuleType::InitialVelocity, .payload = ParticleInitialVelocityModule{}},
-        ParticleModuleAsset{.moduleId = 2U, .type = ParticleModuleType::Gravity, .payload = ParticleGravityModule{}},
-        ParticleModuleAsset{.moduleId = 3U, .type = ParticleModuleType::Wind, .payload = ParticleWindModule{}},
+            .moduleId = 1U, .authoringOrder = 0U, .type = ParticleModuleType::InitialVelocity, .payload = ParticleInitialVelocityModule{}},
+        ParticleModuleAsset{.moduleId = 2U, .authoringOrder = 1U, .type = ParticleModuleType::Gravity, .payload = ParticleGravityModule{}},
+        ParticleModuleAsset{.moduleId = 3U, .authoringOrder = 2U, .type = ParticleModuleType::Wind, .payload = ParticleWindModule{}},
         ParticleModuleAsset{
-            .moduleId = 4U, .type = ParticleModuleType::Drag, .payload = ParticleDragModule{.coefficient = 0.25F}},
-        ParticleModuleAsset{.moduleId = 5U,
+            .moduleId = 4U, .authoringOrder = 3U, .type = ParticleModuleType::Drag, .payload = ParticleDragModule{.coefficient = 0.25F}},
+        ParticleModuleAsset{.moduleId = 5U, .authoringOrder = 4U,
                             .type = ParticleModuleType::ColorOverLife,
                             .payload = ParticleColorOverLifeModule{.gradient = UnitGradient()}},
-        ParticleModuleAsset{.moduleId = 6U,
+        ParticleModuleAsset{.moduleId = 6U, .authoringOrder = 5U,
                             .type = ParticleModuleType::SizeOverLife,
                             .payload = ParticleSizeOverLifeModule{.curve = UnitCurve()}},
-        ParticleModuleAsset{.moduleId = 7U,
+        ParticleModuleAsset{.moduleId = 7U, .authoringOrder = 6U,
                             .type = ParticleModuleType::AlphaOverLife,
                             .payload = ParticleAlphaOverLifeModule{.curve = UnitCurve()}},
         ParticleModuleAsset{
-            .moduleId = 8U, .type = ParticleModuleType::CollisionPlane, .payload = ParticleCollisionPlaneModule{}},
-        ParticleModuleAsset{.moduleId = 9U,
+            .moduleId = 8U, .authoringOrder = 7U, .type = ParticleModuleType::CollisionPlane, .payload = ParticleCollisionPlaneModule{}},
+        ParticleModuleAsset{.moduleId = 9U, .authoringOrder = 8U,
                             .type = ParticleModuleType::SubEmitter,
                             .payload = ParticleSubEmitterModule{.targetEmitterId = 17U,
                                                                 .trigger = ParticleEventTrigger::Death,
@@ -240,7 +240,9 @@ void RunHardLimitBoundaryTest() {
     first.maxParticles = kParticleEffectMaxCpuParticlesPerEmitter;
     for (ParticleStableId id = 10U; id <= 16U; ++id)
         first.modules.push_back(
-            ParticleModuleAsset{.moduleId = id, .type = ParticleModuleType::Wind, .payload = ParticleWindModule{}});
+            ParticleModuleAsset{.moduleId = id,
+                .authoringOrder = static_cast<std::uint32_t>(first.modules.size()),
+                .type = ParticleModuleType::Wind, .payload = ParticleWindModule{}});
     first.spawn.bursts.clear();
     first.spawn.rateOverTime.keyframes.clear();
     auto& gradient = std::get<ParticleColorOverLifeModule>(first.modules[4].payload).gradient;
@@ -290,13 +292,13 @@ void RunHardLimitBoundaryTest() {
                 kb::math::GradientStop{.time = time, .color = kb::math::Color{time, time, time, time}});
         }
         emitter.modules = {
-            ParticleModuleAsset{.moduleId = 1U,
+            ParticleModuleAsset{.moduleId = 1U, .authoringOrder = 0U,
                                 .type = ParticleModuleType::ColorOverLife,
                                 .payload = ParticleColorOverLifeModule{.gradient = fullGradient}},
-            ParticleModuleAsset{.moduleId = 2U,
+            ParticleModuleAsset{.moduleId = 2U, .authoringOrder = 1U,
                                 .type = ParticleModuleType::SizeOverLife,
                                 .payload = ParticleSizeOverLifeModule{.curve = fullCurve}},
-            ParticleModuleAsset{.moduleId = 3U,
+            ParticleModuleAsset{.moduleId = 3U, .authoringOrder = 2U,
                                 .type = ParticleModuleType::AlphaOverLife,
                                 .payload = ParticleAlphaOverLifeModule{.curve = fullCurve}},
         };
@@ -992,6 +994,43 @@ void RunAuthoringOrderTest() {
     const ParticleEffectLoadResult compatible = ParticleEffectAssetIO::Parse(compatibleV2);
     Require(compatible.Succeeded() && compatible.asset->emitters[0].authoringOrder == 0U,
             "v2 source without authored order did not map to canonical vector order");
+
+    ParticleEffectAsset modules = MakeComprehensiveAsset();
+    modules.emitters[0].modules[0].authoringOrder = 2U;
+    modules.emitters[0].modules[1].authoringOrder = 0U;
+    modules.emitters[0].modules[2].authoringOrder = 1U;
+    diagnostics.clear();
+    const auto moduleText = ParticleEffectAssetIO::Serialize(modules, diagnostics);
+    Require(moduleText.has_value() && diagnostics.empty() &&
+            moduleText->find("effect.emitter[0].module[0].authoringOrder 2\n") != std::string::npos,
+        "writer did not persist module authoring order");
+    const auto moduleLoaded = ParticleEffectAssetIO::Parse(*moduleText);
+    Require(moduleLoaded.Succeeded() && moduleLoaded.asset->emitters[0].modules[0].moduleId == 1U &&
+            moduleLoaded.asset->emitters[0].modules[0].authoringOrder == 2U &&
+            moduleLoaded.asset->emitters[0].modules[1].moduleId == 2U &&
+            moduleLoaded.asset->emitters[0].modules[1].authoringOrder == 0U,
+        "module authoring order roundtrip changed stable-id storage order");
+    auto duplicateModule = modules;
+    duplicateModule.emitters[0].modules[0].authoringOrder =
+        duplicateModule.emitters[0].modules[1].authoringOrder;
+    Require(HasDiagnostic(ParticleEffectAssetValidator::ValidateStructure(duplicateModule).diagnostics,
+            ParticleEffectDiagnosticCode::InvalidValue, "effect.emitter[0].module[1].authoringOrder"),
+        "duplicate module authoring order was accepted");
+    auto outsideModule = modules;
+    outsideModule.emitters[0].modules[0].authoringOrder =
+        static_cast<std::uint32_t>(outsideModule.emitters[0].modules.size());
+    Require(HasDiagnostic(ParticleEffectAssetValidator::ValidateStructure(outsideModule).diagnostics,
+            ParticleEffectDiagnosticCode::InvalidValue, "effect.emitter[0].module[0].authoringOrder"),
+        "out-of-range module authoring order was accepted");
+    std::string compatibleModules = *moduleText;
+    ReplaceOnce(compatibleModules, "effect.emitter[0].module[0].authoringOrder 2\n", "");
+    ReplaceOnce(compatibleModules, "effect.emitter[0].module[1].authoringOrder 0\n", "");
+    ReplaceOnce(compatibleModules, "effect.emitter[0].module[2].authoringOrder 1\n", "");
+    const auto compatibleModuleLoad = ParticleEffectAssetIO::Parse(compatibleModules);
+    Require(compatibleModuleLoad.Succeeded() &&
+            compatibleModuleLoad.asset->emitters[0].modules[0].authoringOrder == 0U &&
+            compatibleModuleLoad.asset->emitters[0].modules[2].authoringOrder == 2U,
+        "v2 source without module authoring order did not map to canonical vector order");
 }
 
 void RunRecipeAssetTest() {
