@@ -54,6 +54,7 @@ add_executable(kb_editor WIN32
     src/app/inspector/EditorInspectorPointerController.cpp
     src/app/plugins/EditorPluginsPointerController.cpp
     src/app/EditorWindowLifecycleHandler.cpp
+    src/app/EditorParticleDocumentLifecycle.cpp
     src/app/EditorWindowHitTestHandler.cpp
     src/app/EditorPaintDispatcher.cpp
     src/app/EditorPendingTextEditCommitter.cpp
@@ -705,6 +706,7 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorPanelState.cpp
     src/rendering/MainWindowBackBufferPainter.cpp
     src/rendering/PanelContentRenderer.cpp
+    src/rendering/ParticleEditorPanelRenderer.cpp
     src/rendering/AnimationClipEditorPanelRenderer.cpp
     src/rendering/AnimatorEditorPanelRenderer.cpp
     src/rendering/SkeletalMeshEditorPanelRenderer.cpp
@@ -797,6 +799,8 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneAudioAssetActions.cpp
     src/scene/EditorSceneCommandController.cpp
     src/scene/EditorSceneContext.cpp
+    src/scene/EditorParticleEditorHost.cpp
+    src/scene/ParticleEditorHostSessionStore.cpp
     src/scene/EditorSceneDocumentLifecycle.cpp
     src/scene/EditorSceneHierarchyActions.cpp
     src/scene/EditorSceneMaterialAssetActions.cpp
@@ -925,6 +929,7 @@ target_link_libraries(kb_editor
         kb_engine
         kb_renderer
         kb_terrain_editor_core
+        kb_21kb_particle_editor_core
 )
 
 if(TARGET kb_physics_jolt_plugin)
@@ -1085,6 +1090,7 @@ if(BUILD_TESTING)
         src/docking/EditorDockModel.cpp
         src/docking/EditorDockModelCommands.cpp
         src/docking/EditorDockModelQueries.cpp
+        src/scene/ParticleEditorHostSessionStore.cpp
         src/rendering/SvgPathArcMath.cpp
         src/rendering/SvgPathCursor.cpp
         src/assets/EditorAssetBrowserAssetRows.cpp
@@ -1204,6 +1210,7 @@ if(BUILD_TESTING)
         PRIVATE
             kb_engine
             kb_renderer
+            kb_21kb_particle_editor_core
             gdiplus
             ole32
     )

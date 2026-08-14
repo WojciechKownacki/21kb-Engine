@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserPointerHandler.hpp"
 #include "app/EditorPendingTextEditCommitter.hpp"
+#include "app/EditorParticleDocumentLifecycle.hpp"
 #include "app/EditorPointerDragInteraction.hpp"
 #include "app/EditorPointerDragSourceResolver.hpp"
 #include "app/EditorWindowInvalidator.hpp"
@@ -436,12 +437,22 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             if (panel != nullptr && panel->kind == DockPanelKind::AnimatorEditor && !ResolveDirtyAnimatorEditorTabClose(messageWindow, sceneContext_)) {
                 return;
             }
+            if (panel != nullptr && panel->kind == DockPanelKind::ParticleEditor &&
+                !EditorParticleDocumentLifecycle::Resolve(
+                    messageWindow, sceneContext_,
+                    kb::particle_editor::ParticleDocumentTransition::CloseTab,
+                    L"closing the particle editor tab")) {
+                return;
+            }
             if (dockModel_.Commands().ClosePanel(closeTab->panelId)) {
                 if (panel != nullptr && panel->kind == DockPanelKind::MaterialEditor) {
                     sceneContext_.CloseMaterialEditorAsset();
                 }
                 if (panel != nullptr && panel->kind == DockPanelKind::SkeletalMeshEditor) {
                     sceneContext_.CloseSkeletalMeshEditorAsset();
+                }
+                if (panel != nullptr && panel->kind == DockPanelKind::ParticleEditor) {
+                    sceneContext_.CloseParticleEditorAsset();
                 }
                 sceneViewport_.RequestPresent();
                 EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
