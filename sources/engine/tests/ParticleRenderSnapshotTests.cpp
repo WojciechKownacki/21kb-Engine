@@ -339,6 +339,51 @@ void TestConcurrentReadsAreCompleteAndMonotonic() {
         "concurrent snapshot fixture backend cleanup failed");
 }
 
+void TestTwoViewportConsumersRetainTheSameImmutableRevision() {
+    kb::particles::ParticleRenderSnapshotChannel channel;
+    Require(channel.Warmup(808U).Succeeded(),
+        "two-viewport snapshot channel warmup failed");
+    const std::array firstParticles{Record(31U), Record(32U)};
+    const std::array firstEmitters{Emitter(31U, 0U, 2U)};
+    Require(channel.Publish(7U, {
+                .revision = 11U,
+                .fixedStepIndex = 101U,
+                .emitters = firstEmitters,
+                .particles = firstParticles,
+            }).Succeeded(),
+        "two-viewport source snapshot publication failed");
+
+    const std::shared_ptr<const kb::particles::ParticleRenderSnapshot> viewportA = channel.Read();
+    const std::shared_ptr<const kb::particles::ParticleRenderSnapshot> viewportB = channel.Read();
+    Require(viewportA && viewportB && viewportA.get() == viewportB.get() &&
+            viewportA->Revision() == viewportB->Revision() &&
+            viewportA->BackendEpoch() == viewportB->BackendEpoch() &&
+            viewportA->FixedStepIndex() == viewportB->FixedStepIndex() &&
+            viewportA->Revision() == 11U && viewportA->BackendEpoch() == 7U &&
+            viewportA->FixedStepIndex() == 101U && viewportA->Emitters().size() == 1U &&
+            viewportA->Particles().size() == 2U && viewportA->Emitters()[0].effectAssetId == 1031U &&
+            viewportA->Particles()[0].particleId == 31U && viewportA->Particles()[1].particleId == 32U,
+        "two viewport consumers did not retain one identical complete scene snapshot");
+
+    const std::array nextParticles{Record(90U)};
+    const std::array nextEmitters{Emitter(90U, 0U, 1U)};
+    Require(channel.Publish(7U, {
+                .revision = 12U,
+                .fixedStepIndex = 102U,
+                .emitters = nextEmitters,
+                .particles = nextParticles,
+            }).Succeeded(),
+        "next scene snapshot publication failed while two viewports retained the previous revision");
+    const std::shared_ptr<const kb::particles::ParticleRenderSnapshot> newest = channel.Read();
+    Require(newest && newest->Revision() == 12U && newest->FixedStepIndex() == 102U &&
+            newest->Particles()[0].particleId == 90U &&
+            viewportA->Revision() == 11U && viewportB->Revision() == 11U &&
+            viewportA->FixedStepIndex() == 101U && viewportB->FixedStepIndex() == 101U &&
+            viewportA->Particles().size() == 2U && viewportB->Particles().size() == 2U &&
+            viewportA->Particles()[0].particleId == 31U && viewportB->Particles()[1].particleId == 32U,
+        "next publication mutated a snapshot retained independently by two viewport consumers");
+}
+
 void TestRetainedSnapshotOutlivesBackendAndScene() {
     std::atomic<std::uint32_t> backendDestructions{0U};
     std::shared_ptr<const kb::particles::ParticleRenderSnapshot> retained;
@@ -390,6 +435,7 @@ int main() {
         TestCompleteContractAndMalformedRanges();
         TestRetentionBackpressureAllocationAndEpoch();
         TestConcurrentReadsAreCompleteAndMonotonic();
+        TestTwoViewportConsumersRetainTheSameImmutableRevision();
         TestRetainedSnapshotOutlivesBackendAndScene();
         std::cout << "21kb Particle System render snapshot tests passed\n";
         return EXIT_SUCCESS;

@@ -81,6 +81,15 @@ struct Fixture {
 
     explicit Fixture(kb::scene::ParticleEffectAsset effect = MakeEffect()) {
         Require(scene.Assets().Manager().RegisterAsset({
+                    .id = kb::assets::AssetId{ 72U },
+                    .type = "RenderMaterial",
+                    .name = "Particle Test Material",
+                    .virtualPath = "/Game/Materials/ParticleTest.21kb",
+                    .physicalPath = "ParticleTest.21kb",
+                    .contentHash = 1U,
+                }),
+            "particle material metadata registration failed");
+        Require(scene.Assets().Manager().RegisterAsset({
                     .id = kb::assets::AssetId{ effectAssetId },
                     .type = kb::scene::kParticleEffectAssetType,
                     .name = "Lifecycle Effect",
@@ -2115,6 +2124,167 @@ void TestNoAllocationAfterWarmup() {
         "lifecycle command/query path allocated after explicit warmup");
 }
 
+void TestCpuPreviewRenderSnapshotPublicationAndLifecycle() {
+    auto effect = Fixture::MakeEffect(60.0F, 64U);
+    effect.emitters[0].spawn.lifetimeMin = 10.0F;
+    effect.emitters[0].spawn.lifetimeMax = 10.0F;
+    effect.emitters[0].spawn.speedMin = 1.0F;
+    effect.emitters[0].spawn.speedMax = 1.0F;
+    effect.emitters[0].spawn.direction = {1.0F, 0.0F, 0.0F};
+    effect.emitters[0].output.material.assetId = 72U;
+    effect.emitters[0].output.type = kb::scene::ParticleOutputType::Mesh;
+    effect.emitters[0].output.mesh.assetId = 73U;
+    effect.emitters[0].output.blend = kb::scene::ParticleBlendMode::Opaque;
+    effect.emitters[0].output.sort = kb::scene::ParticleSortMode::None;
+    effect.emitters[0].output.depthTest = true;
+    effect.emitters[0].output.depthWrite = true;
+    effect.emitters[0].output.payload = kb::scene::ParticleMeshOutput{};
+    auto second = effect.emitters[0];
+    second.emitterId = 2U;
+    second.name = "Preview Secondary";
+    second.output.type = kb::scene::ParticleOutputType::StretchedBillboard;
+    second.output.mesh = {};
+    second.output.textureAtlas.assetId = 74U;
+    second.output.blend = kb::scene::ParticleBlendMode::Add;
+    second.output.sort = kb::scene::ParticleSortMode::BackToFront;
+    second.output.depthWrite = false;
+    second.output.payload = kb::scene::ParticleStretchedBillboardOutput{
+        .flipbook = {.columns = 2U, .rows = 2U, .framesPerSecond = 60.0F, .looping = true},
+        .velocityScale = 2.0F,
+        .minimumLength = 0.5F,
+    };
+    effect.emitters.push_back(std::move(second));
+
+    Fixture fixture(std::move(effect));
+    fixture.scene.Components().ParticleEffects().Set(fixture.owner, {
+        .effectAssetId = fixture.effectAssetId,
+    });
+    std::shared_ptr<const kb::particles::ParticleRenderSnapshot> retainedPayload;
+    std::shared_ptr<const kb::particles::ParticleRenderSnapshot> retainedTombstone;
+    {
+        kb::particle_plugin::ParticleSceneSystem system;
+        kb::scene::SceneSystemContext context{
+            fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds};
+        system.OnCreate(context);
+        Require(kb::particles::ParticlePlayback::BackendEpoch(fixture.scene) == 1U,
+            "CPU preview snapshot backend epoch was not established");
+
+        std::array<std::shared_ptr<const kb::particles::ParticleRenderSnapshot>,
+            kb::particles::kParticleRenderSnapshotSlotCount> heldPayloads{};
+        system.OnFixedUpdate(context);
+        heldPayloads[0] = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+        const auto first = heldPayloads[0];
+        Require(first && first->Revision() == 1U && first->FixedStepIndex() == 1U &&
+                first->BackendEpoch() == 1U && first->Emitters().size() == 2U &&
+                first->Particles().size() == 2U,
+            "first CPU preview snapshot header or grouping was incomplete");
+        Require(first->Emitters()[0].emitterId == 1U && first->Emitters()[0].firstParticle == 0U &&
+                first->Emitters()[0].particleCount == 1U && first->Emitters()[0].materialAssetId == 72U &&
+                first->Emitters()[0].meshAssetId == 73U && first->Emitters()[0].assetGeneration != 0U &&
+                first->Emitters()[0].output == kb::particles::ParticleRenderOutput::Mesh &&
+                first->Emitters()[0].depth == kb::particles::ParticleRenderDepthMode::ReadWrite &&
+                first->Emitters()[0].status == kb::particles::ParticleRenderEmitterStatus::Playing &&
+                first->Emitters()[1].emitterId == 2U && first->Emitters()[1].firstParticle == 1U &&
+                first->Emitters()[1].particleCount == 1U && first->Emitters()[1].textureAtlasAssetId == 74U &&
+                first->Emitters()[1].output == kb::particles::ParticleRenderOutput::StretchedBillboard &&
+                first->Emitters()[1].blend == kb::particles::ParticleRenderBlendMode::Add &&
+                first->Emitters()[1].boundsMinimum.x <= first->Emitters()[1].boundsMaximum.x,
+            "compiled output metadata or two-emitter ranges were not retained");
+        const std::uint64_t stableParticleId = first->Particles()[0].particleId;
+        const float firstPosition = first->Particles()[0].position.x;
+        Require(stableParticleId != 0U && firstPosition > first->Particles()[0].previousPosition.x &&
+                first->Particles()[1].stretch == 2.0F && first->Particles()[1].frame == 1U,
+            "stable ID, previous position, stretch, or flipbook frame was not published");
+
+        g_allocationCount.store(0U, std::memory_order_relaxed);
+        g_countAllocations.store(true, std::memory_order_release);
+        system.OnFixedUpdate(context);
+        g_countAllocations.store(false, std::memory_order_release);
+        Require(g_allocationCount.load(std::memory_order_relaxed) == 0U,
+            "CPU preview fixed-step snapshot publication allocated after warmup");
+        heldPayloads[1] = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+        const auto secondSnapshot = heldPayloads[1];
+        Require(secondSnapshot->Revision() == 2U && secondSnapshot->Emitters()[0].particleCount == 2U &&
+                secondSnapshot->Particles()[0].particleId == stableParticleId &&
+                secondSnapshot->Particles()[0].previousPosition.x == firstPosition &&
+                secondSnapshot->Particles()[0].position.x > firstPosition,
+            "stable particle identity or previous-position history changed across fixed steps");
+
+        system.OnFixedUpdate(context);
+        heldPayloads[2] = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+        system.OnFixedUpdate(context);
+        heldPayloads[3] = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+        system.OnFixedUpdate(context);
+        Require(kb::particles::ParticlePlayback::LastRenderSnapshotPublicationResult(fixture.scene).status ==
+                    kb::particles::ParticleRenderSnapshotStatus::SnapshotBackpressure &&
+                kb::particles::ParticlePlayback::Query(fixture.scene,
+                    kb::particles::ParticlePlayback::LiveInstanceIds(fixture.scene).front()).liveParticleCount == 10U &&
+                kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene)->Revision() == 4U,
+            "snapshot backpressure did not preserve simulation and the last complete payload");
+
+        retainedPayload = heldPayloads[0];
+        system.OnDestroy(context);
+        retainedTombstone = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+        Require(retainedTombstone && retainedTombstone->IsTombstone() &&
+                retainedTombstone->Emitters().empty() && retainedTombstone->Particles().empty() &&
+                retainedTombstone->Revision() == 6U && retainedTombstone->BackendEpoch() == 1U &&
+                kb::particles::ParticlePlayback::BackendEpoch(fixture.scene) == 2U &&
+                kb::particles::ParticlePlayback::LastRenderSnapshotPublicationResult(fixture.scene).Succeeded(),
+            "terminal snapshot was not published before detach with every payload slot retained");
+    }
+    Require(retainedPayload && retainedPayload->Particles()[0].particleId != 0U &&
+            retainedTombstone && retainedTombstone->IsTombstone(),
+        "engine-owned payload or terminal snapshot did not survive CPU provider destruction");
+
+    RuntimeFixture runtime(Fixture::MakeEffect(0.0F));
+    Require(kb::particles::ParticlePlayback::Play(runtime.fixture.scene, runtime.instanceId).Succeeded(),
+        "runtime-index snapshot fixture play failed");
+    static_cast<void>(runtime.fixture.scene.Runtime().Update(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds));
+    const auto runtimeSnapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(runtime.fixture.scene);
+    Require(runtimeSnapshot && runtimeSnapshot->FixedStepIndex() ==
+            runtime.fixture.scene.Runtime().FixedStepIndex() && runtimeSnapshot->Revision() == 1U,
+        "published snapshot fixed-step index did not match the completed SceneRuntime step");
+}
+
+void TestTerminalSnapshotRetentionFailurePreservesBackendOwnership() {
+    Fixture fixture;
+    std::array<std::shared_ptr<const kb::particles::ParticleRenderSnapshot>,
+        kb::particles::kParticleRenderSnapshotSlotCount> retainedTerminals{};
+    for (std::size_t index = 0U; index < retainedTerminals.size(); ++index) {
+        auto system = std::make_unique<kb::particle_plugin::ParticleSceneSystem>();
+        kb::scene::SceneSystemContext context{
+            fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds};
+        system->OnCreate(context);
+        system->OnDestroy(context);
+        retainedTerminals[index] = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+        Require(retainedTerminals[index] && retainedTerminals[index]->IsTombstone() &&
+                !kb::particles::ParticlePlayback::HasBackend(fixture.scene),
+            "terminal retention fixture did not complete a clean detach");
+    }
+
+    kb::particle_plugin::ParticleSceneSystem blockedSystem;
+    kb::scene::SceneSystemContext blockedContext{
+        fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds};
+    blockedSystem.OnCreate(blockedContext);
+    bool reported = false;
+    try {
+        blockedSystem.OnDestroy(blockedContext);
+    } catch (const std::logic_error& error) {
+        reported = std::string_view{error.what()} ==
+            "particle terminal snapshot retention capacity is exhausted";
+    }
+    Require(reported && kb::particles::ParticlePlayback::HasBackend(fixture.scene) &&
+            kb::particles::ParticlePlayback::LastRenderSnapshotPublicationResult(fixture.scene).status ==
+                kb::particles::ParticleRenderSnapshotStatus::SnapshotBackpressure,
+        "terminal retention exhaustion silently detached the active backend");
+
+    retainedTerminals[0].reset();
+    blockedSystem.OnDestroy(blockedContext);
+    Require(!kb::particles::ParticlePlayback::HasBackend(fixture.scene) &&
+            kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene)->IsTombstone(),
+        "terminal publication did not recover and detach after retained capacity was released");
+}
+
 } // namespace
 
 void* operator new(std::size_t size) {
@@ -2135,6 +2305,8 @@ int main() {
         TestCapacityGenerationAndCopyBounds();
         TestRegistrationOwnershipAndCycles();
         TestNoAllocationAfterWarmup();
+        TestCpuPreviewRenderSnapshotPublicationAndLifecycle();
+        TestTerminalSnapshotRetentionFailurePreservesBackendOwnership();
         TestSharedFixedSchedulerDeterminism();
         TestUniformSolidAngleConeGolden();
         TestVisualModulesObservableGoldenAndDefaults();

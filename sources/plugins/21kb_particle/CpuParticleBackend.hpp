@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/particles/IParticleSimulationBackend.hpp"
+#include "engine/particles/ParticleRenderSnapshot.hpp"
 #include "engine/scene/ParticleEffectAsset.hpp"
 #include "engine/scene/ParticleEffectAssetSchema.hpp"
 #include "engine/scene/ParticleEffectComponent.hpp"
@@ -153,6 +154,18 @@ private:
     struct CompiledEmitter {
         kb::scene::ParticleStableId emitterId = 0U;
         kb::scene::ParticleOutputType outputType = kb::scene::ParticleOutputType::Billboard;
+        std::uint64_t materialAssetId = 0U;
+        std::uint64_t meshAssetId = 0U;
+        std::uint64_t textureAtlasAssetId = 0U;
+        kb::scene::ParticleBlendMode blendMode = kb::scene::ParticleBlendMode::Alpha;
+        kb::scene::ParticleSortMode sortMode = kb::scene::ParticleSortMode::BackToFront;
+        bool depthTest = true;
+        bool depthWrite = false;
+        std::uint16_t flipbookFrameCount = 1U;
+        float flipbookFramesPerSecond = 0.0F;
+        bool flipbookLooping = true;
+        float stretchVelocityScale = 0.0F;
+        float stretchMinimumLength = 0.0F;
         kb::scene::ParticleSimulationSpace simulationSpace = kb::scene::ParticleSimulationSpace::World;
         bool enabled = false;
         kb::scene::ParticleSpawnMode mode = kb::scene::ParticleSpawnMode::Continuous;
@@ -274,6 +287,15 @@ private:
         std::uint32_t denseIndex,
         const kb::scene::WorldTransform& previous,
         const kb::scene::WorldTransform& current) noexcept;
+    void CapturePreviousParticlePositions() noexcept;
+    [[nodiscard]] kb::particles::ParticleRenderSnapshotResult PublishRenderSnapshot(
+        kb::scene::Scene& scene,
+        std::uint64_t fixedStepIndex,
+        std::uint64_t revision) noexcept;
+    [[nodiscard]] kb::particles::ParticleRenderSnapshotResult PublishRenderTombstone(
+        kb::scene::Scene& scene,
+        std::uint64_t fixedStepIndex,
+        std::uint64_t revision) noexcept;
     [[nodiscard]] std::uint32_t InstanceParticleLimit(std::uint32_t denseIndex) const noexcept;
     [[nodiscard]] float EvaluateRate(const CompiledEmitter& emitter, float timeSeconds) const noexcept;
     [[nodiscard]] static float EvaluateCurve(const CompiledCurve& curve, float normalizedAge) noexcept;
@@ -313,8 +335,10 @@ private:
     std::uint64_t prewarmingInstanceId_ = 0U;
 
     std::vector<std::uint64_t> particleInstanceIds_;
+    std::vector<std::uint64_t> particleIds_;
     std::vector<std::uint8_t> particleEmitterIndices_;
     std::vector<kb::math::Vec3> particlePositions_;
+    std::vector<kb::math::Vec3> particlePreviousPositions_;
     std::vector<kb::math::Vec3> particleVelocities_;
     std::vector<float> particleAges_;
     std::vector<float> particleLifetimes_;
@@ -322,6 +346,27 @@ private:
     std::vector<float> particleSizes_;
     std::vector<std::uint8_t> particleEventDepths_;
     std::vector<std::uint8_t> particlePrewarmGroups_;
+    std::vector<kb::particles::ParticleRenderEmitterRecord> renderEmitterScratch_;
+    std::vector<kb::particles::ParticleRenderRecord> renderParticleScratch_;
+    std::array<std::uint32_t, kb::scene::kParticleEffectMaxInstancesPerScene *
+                                  kb::scene::kParticleEffectMaxEmitters>
+        renderGroupCounts_{};
+    std::array<std::uint32_t, kb::scene::kParticleEffectMaxInstancesPerScene *
+                                  kb::scene::kParticleEffectMaxEmitters>
+        renderGroupWriteOffsets_{};
+    std::array<std::uint16_t, kb::scene::kParticleEffectMaxInstancesPerScene *
+                                  kb::scene::kParticleEffectMaxEmitters>
+        renderGroupRecordIndices_{};
+    std::array<std::uint32_t, kb::scene::kParticleEffectMaxInstancesPerScene *
+                                  kb::scene::kParticleEffectMaxEmitters>
+        renderRejectedByCapacity_{};
+    std::array<std::uint32_t, kb::scene::kParticleEffectMaxInstancesPerScene *
+                                  kb::scene::kParticleEffectMaxEmitters>
+        renderRejectedBySpawnBudget_{};
+    std::array<std::uint32_t, kb::scene::kParticleEffectMaxInstancesPerScene *
+                                  kb::scene::kParticleEffectMaxEmitters>
+        renderRejectedByEventBudget_{};
+    std::uint64_t nextParticleId_ = 1U;
     std::array<std::uint32_t, kb::scene::kParticleEffectMaxInstancesPerScene *
                                   kb::scene::kParticleEffectMaxEmitters *
                                   kb::scene::kParticleEffectMaxModulesPerEmitter>
