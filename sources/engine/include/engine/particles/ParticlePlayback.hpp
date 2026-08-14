@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/particles/IParticleSimulationBackend.hpp"
+#include "engine/particles/ParticleRenderCapabilities.hpp"
 #include "engine/particles/ParticleRenderSnapshot.hpp"
 
 #include <cstdint>
@@ -28,6 +29,18 @@ public:
         const kb::scene::Scene& scene) noexcept;
     [[nodiscard]] static ParticleRenderSnapshotResult LastRenderSnapshotPublicationResult(
         const kb::scene::Scene& scene) noexcept;
+    [[nodiscard]] static ParticleRenderCapabilityResult PublishRenderCapabilities(
+        kb::scene::Scene& scene,
+        std::uint64_t consumerId,
+        ParticleRenderCapabilities capabilities) noexcept;
+    [[nodiscard]] static ParticleRenderCapabilityResult AcknowledgeRenderedFixedStep(
+        kb::scene::Scene& scene,
+        std::uint64_t consumerId,
+        std::uint64_t fixedStepIndex) noexcept;
+    [[nodiscard]] static ParticleRenderCapabilityResult ClearRenderCapabilities(
+        kb::scene::Scene& scene,
+        std::uint64_t consumerId) noexcept;
+    [[nodiscard]] static ParticleRenderCapabilities RenderCapabilities(const kb::scene::Scene& scene) noexcept;
 
     [[nodiscard]] static ParticleRuntimeResult Create(kb::scene::Scene& scene, std::uint64_t effectAssetId, kb::scene::SceneEntity owner);
     [[nodiscard]] static ParticleRuntimeResult Release(kb::scene::Scene& scene, std::uint64_t instanceId) noexcept;

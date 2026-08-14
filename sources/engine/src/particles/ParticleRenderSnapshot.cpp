@@ -40,6 +40,11 @@ template <typename Enum>
             !EnumAtMost(emitter.sort, ParticleRenderSortMode::Age) ||
             !EnumAtMost(emitter.status, ParticleRenderEmitterStatus::Stopped) ||
             !EnumAtMost(emitter.droppedReason, ParticleRenderDropReason::SnapshotBudget) ||
+            !EnumAtMost(emitter.alignment, ParticleRenderAlignment::Local) ||
+            (static_cast<std::uint8_t>(emitter.flags) &
+                ~static_cast<std::uint8_t>(ParticleRenderEmitterFlag::SoftParticles |
+                    ParticleRenderEmitterFlag::AntiAliasing)) != 0U ||
+            !std::isfinite(emitter.pointSpriteDiameter) || emitter.pointSpriteDiameter <= 0.0F ||
             ((emitter.droppedParticleCount == 0U) !=
                 (emitter.droppedReason == ParticleRenderDropReason::None)) ||
             !IsFinite(emitter.boundsMinimum) || !IsFinite(emitter.boundsMaximum) ||

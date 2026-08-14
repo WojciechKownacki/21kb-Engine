@@ -79,7 +79,7 @@ private:
         .particleId = identity,
         .packedColor = 0xA1B2C3D4U,
         .frame = 17U,
-        .flags = 3U,
+        .normalizedAgeUnorm = 49'152U,
     };
 }
 
@@ -108,6 +108,13 @@ private:
         .sort = kb::particles::ParticleRenderSortMode::Age,
         .status = kb::particles::ParticleRenderEmitterStatus::Playing,
         .droppedReason = kb::particles::ParticleRenderDropReason::EventBudget,
+        .alignment = kb::particles::ParticleRenderAlignment::Local,
+        .flags = kb::particles::ParticleRenderEmitterFlag::SoftParticles |
+            kb::particles::ParticleRenderEmitterFlag::AntiAliasing,
+        .flipbookColumnsEncoded = 8U,
+        .flipbookRowsEncoded = 4U,
+        .localBasisQuaternionSnorm = {0, 16'384, 0, 28'377},
+        .pointSpriteDiameter = 0.75F,
         .boundsMinimum = {-10.0F, -20.0F, -30.0F},
         .boundsMaximum = {10.0F, 20.0F, 30.0F},
     };
@@ -149,13 +156,21 @@ void TestCompleteContractAndMalformedRanges() {
             emitter.sort == kb::particles::ParticleRenderSortMode::Age &&
             emitter.status == kb::particles::ParticleRenderEmitterStatus::Playing &&
             emitter.droppedReason == kb::particles::ParticleRenderDropReason::EventBudget &&
+            emitter.alignment == kb::particles::ParticleRenderAlignment::Local &&
+            kb::particles::HasParticleRenderEmitterFlag(
+                emitter.flags, kb::particles::ParticleRenderEmitterFlag::SoftParticles) &&
+            kb::particles::HasParticleRenderEmitterFlag(
+                emitter.flags, kb::particles::ParticleRenderEmitterFlag::AntiAliasing) &&
+            emitter.FlipbookColumns() == 8U && emitter.FlipbookRows() == 4U &&
+            emitter.localBasisQuaternionSnorm[1] == 16'384 && emitter.pointSpriteDiameter == 0.75F &&
             emitter.boundsMinimum.x == -10.0F && emitter.boundsMaximum.z == 30.0F,
         "per-emitter render metadata was incomplete or changed");
     const auto& particle = snapshot->Particles()[0];
     Require(particle.particleId == 11U && particle.position.x == 11.0F &&
             particle.previousPosition.x == 10.75F && particle.velocity.z == 7.0F &&
             particle.size == 4.0F && particle.rotationRadians == 0.5F && particle.stretch == 1.5F &&
-            particle.frame == 17U && particle.flags == 3U && particle.packedColor == 0xA1B2C3D4U,
+            particle.frame == 17U && particle.normalizedAgeUnorm == 49'152U &&
+            particle.packedColor == 0xA1B2C3D4U,
         "compact stable particle payload was incomplete or changed");
 
     const auto invalid = [&](std::span<const kb::particles::ParticleRenderEmitterRecord> candidateEmitters,
@@ -187,6 +202,14 @@ void TestCompleteContractAndMalformedRanges() {
     malformed[0].output = static_cast<kb::particles::ParticleRenderOutput>(255U);
     Require(invalid(malformed, particles) == kb::particles::ParticleRenderSnapshotStatus::InvalidSnapshot,
         "unknown output enum was accepted");
+    malformed = emitters;
+    malformed[0].alignment = static_cast<kb::particles::ParticleRenderAlignment>(255U);
+    Require(invalid(malformed, particles) == kb::particles::ParticleRenderSnapshotStatus::InvalidSnapshot,
+        "unknown alignment enum was accepted");
+    malformed = emitters;
+    malformed[0].pointSpriteDiameter = 0.0F;
+    Require(invalid(malformed, particles) == kb::particles::ParticleRenderSnapshotStatus::InvalidSnapshot,
+        "non-positive point-sprite diameter was accepted");
     malformed = emitters;
     malformed[0].droppedReason = kb::particles::ParticleRenderDropReason::None;
     Require(invalid(malformed, particles) == kb::particles::ParticleRenderSnapshotStatus::InvalidSnapshot,
@@ -414,6 +437,42 @@ void TestRetainedSnapshotOutlivesBackendAndScene() {
         "snapshot destruction invoked provider-owned lifetime code");
 }
 
+void TestRendererCapabilityOwnershipAndProgress() {
+    kb::scene::Scene scene;
+    constexpr std::uint64_t rendererA = 101U;
+    constexpr std::uint64_t rendererB = 202U;
+    const kb::particles::ParticleRenderCapabilities capabilities{
+        .capabilityEpoch = 7U,
+        .lastConsumedFixedStep = 0U,
+        .outputs = kb::particles::ParticleRenderOutputCapability::Billboard |
+            kb::particles::ParticleRenderOutputCapability::StretchedBillboard |
+            kb::particles::ParticleRenderOutputCapability::PointSprite,
+        .gpuDrawing = true,
+        .instancing = true,
+        .softParticles = true,
+        .subtractiveBlend = true,
+    };
+    Require(kb::particles::ParticlePlayback::PublishRenderCapabilities(scene, rendererA, capabilities).Succeeded(),
+        "renderer capability publication failed");
+    Require(kb::particles::ParticlePlayback::PublishRenderCapabilities(scene, rendererB, capabilities).status ==
+            kb::particles::ParticleRenderCapabilityStatus::ConsumerConflict,
+        "a second renderer silently replaced the active capability owner");
+    Require(kb::particles::ParticlePlayback::AcknowledgeRenderedFixedStep(scene, rendererA, 19U).Succeeded(),
+        "renderer fixed-step acknowledgement failed");
+    const auto observed = kb::particles::ParticlePlayback::RenderCapabilities(scene);
+    Require(observed.capabilityEpoch == 7U && observed.lastConsumedFixedStep == 19U &&
+            observed.gpuDrawing && observed.instancing && observed.softParticles &&
+            observed.subtractiveBlend &&
+            kb::particles::HasParticleRenderOutputCapability(
+                observed.outputs, kb::particles::ParticleRenderOutputCapability::PointSprite),
+        "renderer capabilities or consumed fixed-step progress were not retained");
+    Require(kb::particles::ParticlePlayback::ClearRenderCapabilities(scene, rendererB).status ==
+            kb::particles::ParticleRenderCapabilityStatus::ConsumerConflict &&
+            kb::particles::ParticlePlayback::ClearRenderCapabilities(scene, rendererA).Succeeded() &&
+            !kb::particles::ParticlePlayback::RenderCapabilities(scene).gpuDrawing,
+        "renderer capability ownership was not enforced during teardown");
+}
+
 } // namespace
 
 void* operator new(std::size_t size) {
@@ -437,6 +496,7 @@ int main() {
         TestConcurrentReadsAreCompleteAndMonotonic();
         TestTwoViewportConsumersRetainTheSameImmutableRevision();
         TestRetainedSnapshotOutlivesBackendAndScene();
+        TestRendererCapabilityOwnershipAndProgress();
         std::cout << "21kb Particle System render snapshot tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {

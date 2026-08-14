@@ -1,6 +1,7 @@
 #include "kb/render/scene/SceneRenderer.hpp"
 
 #include "kb/render/scene/RenderScene.hpp"
+#include "kb/render/particles/ParticleGpuRenderer.hpp"
 #include "scene/SceneMeshSubmitter.hpp"
 #include "renderer/RendererDebugLog.hpp"
 
@@ -97,6 +98,11 @@ bool SceneRenderer::Initialize() {
         meshSubmitter_.reset();
         return false;
     }
+    particleRenderer_ = std::make_unique<ParticleGpuRenderer>();
+    if (!particleRenderer_->Initialize()) {
+        Shutdown();
+        return false;
+    }
     if (!graphShaderCacheRoot_.empty()) {
         meshSubmitter_->SetGraphShaderCacheRoot(graphShaderCacheRoot_);
     }
@@ -107,6 +113,10 @@ bool SceneRenderer::Initialize() {
 }
 
 void SceneRenderer::Shutdown() {
+    if (particleRenderer_ != nullptr) {
+        particleRenderer_->Shutdown();
+        particleRenderer_.reset();
+    }
     if (meshSubmitter_ != nullptr) {
         meshSubmitter_->Shutdown();
         meshSubmitter_.reset();
@@ -208,6 +218,7 @@ void SceneRenderer::SubmitMeshPass(
     }
 
     if (meshSubmitter_ != nullptr) {
+        const auto& particleSnapshot = renderScene.ParticleRenderSnapshot();
         lastSubmitStats_ = meshSubmitter_->Submit(
             viewId,
             renderScene,
@@ -227,7 +238,16 @@ void SceneRenderer::SubmitMeshPass(
                 ? sceneDepthTexture_ : bgfx::TextureHandle{ bgfx::kInvalidHandle },
             pass == MeshPassType::BaseTransparent ? sceneColorTexture_ : bgfx::TextureHandle{ bgfx::kInvalidHandle },
             terrainLayersOnly,
-            motionVectorPreviousViewProjection_);
+            motionVectorPreviousViewProjection_,
+            pass == MeshPassType::BaseTransparent ? particleRenderer_.get() : nullptr,
+            pass == MeshPassType::BaseTransparent ? particleSnapshot.get() : nullptr);
+        if (lastSubmitStats_.failedParticleBatchCount != 0U) {
+            lastDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
+                .severity = SceneRenderDiagnosticSeverity::Error,
+                .kind = SceneRenderDiagnosticKind::ParticleSubmissionFailed,
+                .instanceCount = lastSubmitStats_.droppedParticleCount,
+            });
+        }
     }
     {
         std::ostringstream message;

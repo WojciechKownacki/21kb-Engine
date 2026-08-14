@@ -10,6 +10,7 @@
 #include "engine/input/InputLocalUser.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/particles/ParticleRuntimeResult.hpp"
+#include "engine/particles/ParticleRenderCapabilities.hpp"
 #include "engine/particles/ParticleRenderSnapshot.hpp"
 #include "engine/localization/LocalizationCatalog.hpp"
 #include "engine/scene/BehaviourVariableOverride.hpp"
@@ -768,6 +769,8 @@ public:
     std::uint64_t particleSimulationBackendEpoch = 0U;
     kb::particles::ParticleRenderSnapshotChannel particleRenderSnapshots;
     kb::particles::ParticleRenderSnapshotResult lastParticleRenderSnapshotPublication{};
+    kb::particles::ParticleRenderCapabilities particleRenderCapabilities{};
+    std::uint64_t particleRenderConsumerId = 0U;
 #if !defined(NDEBUG)
     const std::thread::id particlePlaybackOwnerThread = std::this_thread::get_id();
 #endif
