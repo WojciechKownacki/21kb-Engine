@@ -60,7 +60,9 @@ std::uint64_t ParticlePlayback::BackendEpoch(const kb::scene::Scene& scene) noex
 
 ParticleRenderSnapshotResult ParticlePlayback::WarmupRenderSnapshots(kb::scene::Scene& scene) noexcept {
     AssertOwnerThread(scene);
-    return kb::scene::SceneAccess::State(scene).particleRenderSnapshots.Warmup(scene.Id());
+    kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);
+    state.lastParticleRenderSnapshotPublication = state.particleRenderSnapshots.Warmup(scene.Id());
+    return state.lastParticleRenderSnapshotPublication;
 }
 
 ParticleRenderSnapshotResult ParticlePlayback::PublishRenderSnapshot(
@@ -70,14 +72,23 @@ ParticleRenderSnapshotResult ParticlePlayback::PublishRenderSnapshot(
     AssertOwnerThread(scene);
     kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);
     if (state.particleSimulationBackend != &backend) {
-        return {ParticleRenderSnapshotStatus::BackendMismatch};
+        state.lastParticleRenderSnapshotPublication = {ParticleRenderSnapshotStatus::BackendMismatch};
+        return state.lastParticleRenderSnapshotPublication;
     }
-    return state.particleRenderSnapshots.Publish(state.particleSimulationBackendEpoch, desc);
+    state.lastParticleRenderSnapshotPublication =
+        state.particleRenderSnapshots.Publish(state.particleSimulationBackendEpoch, desc);
+    return state.lastParticleRenderSnapshotPublication;
 }
 
 std::shared_ptr<const ParticleRenderSnapshot> ParticlePlayback::ReadRenderSnapshot(
     const kb::scene::Scene& scene) noexcept {
     return kb::scene::SceneAccess::State(scene).particleRenderSnapshots.Read();
+}
+
+ParticleRenderSnapshotResult ParticlePlayback::LastRenderSnapshotPublicationResult(
+    const kb::scene::Scene& scene) noexcept {
+    AssertOwnerThread(scene);
+    return kb::scene::SceneAccess::State(scene).lastParticleRenderSnapshotPublication;
 }
 
 #define KB_PARTICLE_FORWARD(Method, ...)                                                                                \

@@ -77,9 +77,13 @@ struct ParticleRenderSnapshot::Storage {
 };
 
 struct ParticleRenderSnapshotChannel::Impl {
+    enum class LatestKind : std::uint8_t { None, Payload, Terminal };
+
     mutable std::mutex mutex;
-    std::array<std::shared_ptr<ParticleRenderSnapshot>, kParticleRenderSnapshotSlotCount> slots;
-    std::size_t latestSlot = kParticleRenderSnapshotSlotCount;
+    std::array<std::shared_ptr<ParticleRenderSnapshot>, kParticleRenderSnapshotSlotCount> payloadSlots;
+    std::array<std::shared_ptr<ParticleRenderSnapshot>, kParticleRenderSnapshotSlotCount> terminalSlots;
+    LatestKind latestKind = LatestKind::None;
+    std::size_t latestSlot = 0U;
     std::uint64_t sceneId = 0U;
     bool warmedUp = false;
 };
@@ -118,12 +122,17 @@ ParticleRenderSnapshotResult ParticleRenderSnapshotChannel::Warmup(std::uint64_t
             : ParticleRenderSnapshotStatus::InvalidSnapshot};
     }
     try {
-        std::array<std::shared_ptr<ParticleRenderSnapshot>, kParticleRenderSnapshotSlotCount> prepared;
-        for (std::shared_ptr<ParticleRenderSnapshot>& slot : prepared) {
+        std::array<std::shared_ptr<ParticleRenderSnapshot>, kParticleRenderSnapshotSlotCount> payloadSlots;
+        std::array<std::shared_ptr<ParticleRenderSnapshot>, kParticleRenderSnapshotSlotCount> terminalSlots;
+        for (std::shared_ptr<ParticleRenderSnapshot>& slot : payloadSlots) {
             slot = std::make_shared<ParticleRenderSnapshot>();
             slot->storage_->payload = std::make_unique_for_overwrite<std::byte[]>(kParticleRenderSnapshotBytesPerSlot);
         }
-        impl_->slots = std::move(prepared);
+        for (std::shared_ptr<ParticleRenderSnapshot>& slot : terminalSlots) {
+            slot = std::make_shared<ParticleRenderSnapshot>();
+        }
+        impl_->payloadSlots = std::move(payloadSlots);
+        impl_->terminalSlots = std::move(terminalSlots);
         impl_->sceneId = sceneId;
         impl_->warmedUp = true;
         return {ParticleRenderSnapshotStatus::Success};
@@ -157,23 +166,29 @@ ParticleRenderSnapshotResult ParticleRenderSnapshotChannel::Publish(
         !ValidateParticleRecords(desc.particles)) {
         return {ParticleRenderSnapshotStatus::InvalidSnapshot};
     }
-    if (impl_->latestSlot < impl_->slots.size()) {
-        const ParticleRenderSnapshotHeader& latest = impl_->slots[impl_->latestSlot]->storage_->header;
+    const auto latestSnapshot = [&]() -> const std::shared_ptr<ParticleRenderSnapshot>* {
+        if (impl_->latestKind == Impl::LatestKind::Payload) return &impl_->payloadSlots[impl_->latestSlot];
+        if (impl_->latestKind == Impl::LatestKind::Terminal) return &impl_->terminalSlots[impl_->latestSlot];
+        return nullptr;
+    }();
+    if (latestSnapshot != nullptr) {
+        const ParticleRenderSnapshotHeader& latest = (*latestSnapshot)->storage_->header;
         if (desc.revision <= latest.revision || desc.fixedStepIndex < latest.fixedStepIndex) {
             return {ParticleRenderSnapshotStatus::StaleRevision};
         }
     }
 
-    std::size_t freeSlot = impl_->slots.size();
-    for (std::size_t index = 0U; index < impl_->slots.size(); ++index) {
-        if (index != impl_->latestSlot && impl_->slots[index].use_count() == 1L) {
+    auto& candidateSlots = desc.tombstone ? impl_->terminalSlots : impl_->payloadSlots;
+    std::size_t freeSlot = candidateSlots.size();
+    for (std::size_t index = 0U; index < candidateSlots.size(); ++index) {
+        if (candidateSlots[index].use_count() == 1L) {
             freeSlot = index;
             break;
         }
     }
-    if (freeSlot == impl_->slots.size()) return {ParticleRenderSnapshotStatus::SnapshotBackpressure};
+    if (freeSlot == candidateSlots.size()) return {ParticleRenderSnapshotStatus::SnapshotBackpressure};
 
-    ParticleRenderSnapshot::Storage& destination = *impl_->slots[freeSlot]->storage_;
+    ParticleRenderSnapshot::Storage& destination = *candidateSlots[freeSlot]->storage_;
     if (emitterBytes != 0U) std::memcpy(destination.payload.get(), desc.emitters.data(), emitterBytes);
     if (!desc.particles.empty()) {
         std::memcpy(destination.payload.get() + particleOffset, desc.particles.data(), desc.particles.size_bytes());
@@ -188,14 +203,16 @@ ParticleRenderSnapshotResult ParticleRenderSnapshotChannel::Publish(
         .fixedStepIndex = desc.fixedStepIndex,
         .tombstone = desc.tombstone,
     };
+    impl_->latestKind = desc.tombstone ? Impl::LatestKind::Terminal : Impl::LatestKind::Payload;
     impl_->latestSlot = freeSlot;
     return {ParticleRenderSnapshotStatus::Success};
 }
 
 std::shared_ptr<const ParticleRenderSnapshot> ParticleRenderSnapshotChannel::Read() const noexcept {
     std::lock_guard lock{impl_->mutex};
-    if (impl_->latestSlot >= impl_->slots.size()) return {};
-    return impl_->slots[impl_->latestSlot];
+    if (impl_->latestKind == Impl::LatestKind::Payload) return impl_->payloadSlots[impl_->latestSlot];
+    if (impl_->latestKind == Impl::LatestKind::Terminal) return impl_->terminalSlots[impl_->latestSlot];
+    return {};
 }
 
 } // namespace kb::particles
