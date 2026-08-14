@@ -9,10 +9,10 @@
 
 ## Current package
 
-- Stage: `4` — core-owned immutable render snapshot.
-- Status: `accepted`; Stages 3 and 4 are accepted.
-- Scope: Stage 4 adds a renderer-neutral packed stream and bounded retained snapshot channel with revision, backend epoch, fixed-step index, tombstone, and no DLL-owned destruction path.
-- Next gate: Stage 5 GPU particle renderer consumes retained snapshots and replaces proxy-per-particle rendering.
+- Stage: `5` — GPU particle renderer baseline.
+- Status: `in_progress`; Stages 3 and 4 are accepted.
+- Scope: Stage 5 consumes retained snapshots through renderer-owned GPU resources, replaces proxy-per-particle rendering with compact batches, and delivers billboard, stretched billboard, point sprite, flipbook, and soft-particle paths.
+- Next gate: characterize the real renderer submit/shader/resource seams before implementing the first batch bridge.
 - Rendering direction: normal game-facing simulation and rendering must move to GPU. The CPU backend is retained only as the deterministic validation, diagnostics, and preview path; it is not the intended final gameplay path.
 
 ## Accepted stages
