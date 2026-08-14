@@ -12,7 +12,7 @@
 - Stage: `7` — complete particle authoring UX.
 - Status: `in_progress`; Stages 0 through 6 are accepted.
 - Scope: Stage 7 adds typed authoring controls and workflow over the accepted document, compiler, Bake, isolated preview, and GPU renderer, without a second preview kernel.
-- Next gate: characterize the closest existing editor control, picker, curve/gradient, recipe, and diagnostic-navigation seams before the first authoring package.
+- Next gate: Stage 7B module and output-property authoring over the accepted emitter workspace, including explicit capability states before curves, gradients, recipes, and dependency navigation.
 - Rendering direction: normal game-facing simulation and rendering must move to GPU. The CPU backend is retained only as the deterministic validation, diagnostics, and preview path; it is not the intended final gameplay path.
 
 ## Accepted stages
@@ -144,6 +144,14 @@
 - Mesh, trail, ribbon, beam, volumetric, external-effect events, and GPU-required policy are rejected explicitly by the current compiler/Bake capability gate. They are never silently downgraded or cached as a supported artifact.
 - Full authoring controls remain Stage 7 work; the accepted Bake command is intentionally a thin host operation, not a second panel workflow.
 
+### Stage 7A — emitter workspace and interaction: `accepted checkpoint`
+
+- Stable emitter IDs remain physically sorted and reference-safe. The persisted `authoringOrder` field is a validated contiguous permutation; missing v2 fields map deterministically to the existing vector order, while the canonical writer always emits it. The shared compiler executes that authored order and resolves event references by stable ID.
+- The editor now has a typed emitter workspace and commands for selection, rename, enable, reorder, removal, and valid material-backed creation. Reorder drags mutate only on release and produce one document-history entry; preview publication failure rolls the document/workspace back to the prior valid state.
+- The 2:1 particle workspace renders a DPI-scaled, scrollable emitter stack with status, limit feedback, keyboard controls, hit testing, and docked/floating routing. The source-backed material picker is revalidated by the host; cancellation makes no mutation and the 8-emitter ceiling disables Add before a document mutation.
+- Automation recognizes `ParticleEffect` assets and supports a bounded, catalog-validated `initial_plugins` setup before editor construction. The editor target stages the current provider DLL beside its executable, so portable normalized project descriptors resolve the current binary rather than a stale neighbor.
+- Focused visual automation passed all eight steps and produced six docked/floating/DPI BMPs. Manual inspection confirmed the expected authoring layout at 1366×768 docked and 150-DPI floating. Module, output, curve, gradient, recipe, picker, and diagnostic-navigation controls remain later Stage 7 work.
+
 ## Accepted decisions and mappings
 
 - Plugin identifier: `Rendering.21kbParticle`.
@@ -163,6 +171,7 @@
 - `sources/editor/tests/fixtures/LegacyAutomationParticleEffect.kbvfx` — test-owned legacy source fixture.
 - `sources/engine/tests/ScriptRuntimeTests.cpp` — stage 0 characterization coverage.
 - Stage 6C1 adds the engine compiled-effect/cache sources, shared plugin compiler, production Bake service, host command, and their focused asset, CPU, editor, and host regressions.
+- Stage 7A adds emitter workspace/model/commands, panel layout/interaction/routing, automation setup, provider staging, and focused authoring/headless regressions.
 
 ## Validation evidence
 
@@ -187,6 +196,8 @@
 - Final stage 1B headless CTest — exit `0`, `1/1`, `83.11 s`.
 - Stage 6C1 final focused CTest matrix — exit `0`, `5/5`, `22.71 s`: asset `1.43 s`, DLL lifecycle `17.71 s`, CPU backend `3.35 s`, editor core `0.20 s`, host Bake `0.01 s`.
 - Stage 6C1 host integration build — `cmake --build build --config Debug --target kb_editor -- /m:1`, exit `0`; the focused host target also built exit `0`.
+- Stage 7A independent focused CTest matrix — exit `0`, `5/5`, `5.95 s`: asset `1.59 s`, CPU `3.81 s`, editor core `0.24 s`, authoring layout `0.02 s`, headless authoring `0.30 s`.
+- Stage 7A editor integration build — `cmake --build build --config Debug --target kb_editor -- /m:1`, exit `0`, `6.8 s`; the post-build provider copy hash matched the provider target.
 
 ## Rejected attempts, open defects, and next gate
 
@@ -195,4 +206,4 @@
 - Stage 1A attempt 1 was rejected after independent review despite a green focused test; every listed defect was repaired and the second attempt was accepted.
 - No open stage 0 defect remains.
 - No open stage 1 defect remains.
-- No open defect remains in Stages 0 through 6. Next gate: Stage 7 typed authoring UX and host interaction over the accepted editor, Bake, preview, and GPU-rendered path.
+- No open defect remains in Stages 0 through 6 or Stage 7A. Next gate: Stage 7B typed module and output authoring over the accepted emitter workspace.

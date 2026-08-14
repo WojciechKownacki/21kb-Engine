@@ -1,8 +1,12 @@
 #include "editor/ParticleAssetGateway.hpp"
 #include "editor/ParticleDocumentCloseGuard.hpp"
 #include "editor/ParticleEditorDocument.hpp"
+#include "editor/ParticleEditorCommands.hpp"
+#include "editor/ParticleEditorWorkspaceState.hpp"
+#include "editor/ParticleEmitterListModel.hpp"
 #include "editor/ParticlePreviewSession.hpp"
 #include "editor/ParticleBakeService.hpp"
+#include "ParticleEffectCompiler.hpp"
 
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
@@ -18,6 +22,7 @@
 
 #include <bgfx/bgfx.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <filesystem>
@@ -51,6 +56,7 @@ void Require(bool condition, std::string_view message) {
     effect.looping = true;
     kb::scene::ParticleEmitterAsset emitter;
     emitter.emitterId = 11U;
+    emitter.authoringOrder = 0U;
     emitter.name = "Preview Emitter";
     emitter.maxParticles = 512U;
     emitter.spawn.rateOverTime.keyframes = {{.time = 0.0F, .value = rate}};
@@ -133,6 +139,104 @@ void TestDocumentHistorySavePointAndAtomicFailure() {
     Require(!opened.Open(gateway, malformed).Succeeded() && opened.SessionPath() == savedPath &&
             opened.Asset().displayName == "Changed Preview Effect",
         "failed open damaged the active document session");
+}
+
+void TestEmitterListCommandsAndAuthoredCompileOrder() {
+    using namespace kb::particle_editor;
+    ParticleEditorDocument limited;
+    ParticleEditorWorkspaceState limitedWorkspace;
+    Require(limited.Create(MakeEffect()).Succeeded(), "emitter command fixture creation failed");
+    limitedWorkspace.Synchronize(limited.Asset());
+    const ParticleEditorResult cancelled = ParticleEditorCommands::AddEmitter(
+        limited, limitedWorkspace, {});
+    Require(cancelled.status == ParticleEditorStatus::InvalidAsset && !limited.CanUndo() &&
+            limited.Asset().emitters.size() == 1U,
+        "cancelled material selection mutated emitter history");
+    for (std::uint32_t index = 1U; index < kb::scene::kParticleEffectMaxEmitters; ++index) {
+        Require(ParticleEditorCommands::AddEmitter(limited, limitedWorkspace,
+                    {.virtualPath = "/Game/Materials/Emitter" + std::to_string(index) + ".kbmat"}).Succeeded(),
+            "valid material selection did not add an emitter");
+    }
+    const ParticleEditorResult overflow = ParticleEditorCommands::AddEmitter(
+        limited, limitedWorkspace, {.virtualPath = "/Game/Materials/Overflow.kbmat"});
+    Require(overflow.status == ParticleEditorStatus::LimitExceeded &&
+            limited.Asset().emitters.size() == kb::scene::kParticleEffectMaxEmitters,
+        "emitter limit boundary plus one was accepted");
+    std::array<bool, kb::scene::kParticleEffectMaxEmitters> observedOrders{};
+    for (std::size_t index = 0U; index < limited.Asset().emitters.size(); ++index) {
+        const auto& emitter = limited.Asset().emitters[index];
+        Require(emitter.authoringOrder < observedOrders.size() &&
+                !observedOrders[emitter.authoringOrder] &&
+                (index == 0U || limited.Asset().emitters[index - 1U].emitterId < emitter.emitterId),
+            "add did not preserve stable-id storage and contiguous authoring order");
+        observedOrders[emitter.authoringOrder] = true;
+    }
+    Require(std::all_of(observedOrders.begin(), observedOrders.end(), [](bool value) { return value; }),
+        "add did not produce a complete authored-order permutation");
+
+    auto ordered = MakeEffect();
+    ordered.emitters[0].name = "First";
+    for (std::uint32_t index = 1U; index < 3U; ++index) {
+        auto emitter = ordered.emitters[0];
+        emitter.emitterId = 11U + index;
+        emitter.authoringOrder = index;
+        emitter.name = index == 1U ? "Second" : "Third";
+        ordered.emitters.push_back(std::move(emitter));
+    }
+    ParticleEditorDocument document;
+    ParticleEditorWorkspaceState workspace;
+    Require(document.Create(ordered).Succeeded(), "ordered emitter fixture creation failed");
+    workspace.Synchronize(document.Asset());
+    workspace.SetFocused(true);
+    Require(workspace.Select(document.Asset(), 12U) && workspace.Focused() &&
+            workspace.SelectedEmitterId() == 12U,
+        "emitter selection did not establish stable-id keyboard focus");
+    Require(ParticleEditorCommands::RenameEmitter(document, workspace, 12U, "Renamed").Succeeded() &&
+            ParticleEditorCommands::SetEmitterEnabled(document, workspace, 12U, false).Succeeded(),
+        "rename or enable command failed");
+    Require(!document.Asset().emitters[1].enabled && document.Asset().emitters[1].name == "Renamed",
+        "rename or enable command did not update the selected stable emitter");
+
+    ParticleEditorDocument reorderDocument;
+    ParticleEditorWorkspaceState reorderWorkspace;
+    Require(reorderDocument.Create(ordered).Succeeded(), "reorder fixture creation failed");
+    reorderWorkspace.Synchronize(reorderDocument.Asset());
+    Require(ParticleEditorCommands::ReorderEmitter(reorderDocument, reorderWorkspace, 13U, 0U).Succeeded() &&
+            reorderDocument.CanUndo() && reorderDocument.Asset().emitters[2].authoringOrder == 0U,
+        "drag reorder did not record the authored order");
+    Require(reorderDocument.Undo() && !reorderDocument.CanUndo() &&
+            reorderDocument.Asset().emitters[2].authoringOrder == 2U,
+        "one drag reorder did not produce exactly one history command");
+    Require(reorderDocument.Redo(), "reorder redo failed");
+
+    kb::assets::AssetRegistry registry;
+    Require(registry.Upsert({.id = kb::assets::AssetId{80U}, .type = "RenderMaterial",
+                .virtualPath = "/Game/Materials/PreviewParticle.21kb", .contentHash = 1U}),
+        "compiler order material registration failed");
+    auto compilable = reorderDocument.Asset();
+    for (auto& emitter : compilable.emitters)
+        emitter.output.material = {.assetId = 80U,
+                                   .virtualPath = "/Game/Materials/PreviewParticle.21kb"};
+    const kb::assets::AssetMetadata owner{.id = kb::assets::AssetId{79U},
+        .type = kb::scene::kParticleEffectAssetType,
+        .virtualPath = "/Game/Effects/AuthoredOrder.kbvfx", .contentHash = 1U};
+    const kb::particle_plugin::ParticleCompileResult compiled =
+        kb::particle_plugin::ParticleEffectCompiler::Compile(compilable, owner, registry);
+    Require(compiled.Succeeded() && compiled.effect->emitterCount == 3U &&
+            compiled.effect->emitters[0].emitterId == 13U &&
+            compiled.effect->emitters[1].emitterId == 11U &&
+            compiled.effect->emitters[2].emitterId == 12U,
+        "shared compiler ignored persisted authoring order");
+
+    Require(ParticleEditorCommands::RemoveEmitter(reorderDocument, reorderWorkspace, 11U).Succeeded() &&
+            reorderDocument.Asset().emitters.size() == 2U &&
+            reorderDocument.Asset().emitters[0].emitterId == 12U &&
+            reorderDocument.Asset().emitters[1].emitterId == 13U,
+        "remove changed stable-id storage order or left the emitter present");
+    const auto rows = ParticleEmitterListModel::Build(
+        reorderDocument.Asset(), reorderWorkspace.SelectedEmitterId());
+    Require(rows.size() == 2U && rows[0].authoringOrder == 0U && rows[1].authoringOrder == 1U,
+        "emitter list model did not expose contiguous authored order");
 }
 
 void TestCloseGuardAllDirtyTransitions() {
@@ -413,6 +517,7 @@ void TestIsolatedRuntimePreviewAndGpuRelease() {
 int main() {
     try {
         TestDocumentHistorySavePointAndAtomicFailure();
+        TestEmitterListCommandsAndAuthoredCompileOrder();
         TestCloseGuardAllDirtyTransitions();
         TestProductionBakeCacheAndCapabilityGates();
         TestIsolatedRuntimePreviewAndGpuRelease();

@@ -239,6 +239,18 @@ class Reader {
     }
 
     template <typename T, typename Parse>
+    bool Optional(const std::string& key, T& output, Parse parse,
+                  ParticleEffectDiagnosticCode code = ParticleEffectDiagnosticCode::InvalidValue) {
+        auto it = Find(key);
+        if (it == records_.end())
+            return false;
+        if (!parse(it->value, output))
+            Error(result_, code, it->line, key, "property value is invalid");
+        it->consumed = true;
+        return true;
+    }
+
+    template <typename T, typename Parse>
     void RequiredIndexAnchor(const std::string& key, T& output, Parse parse,
                              ParticleEffectDiagnosticCode code = ParticleEffectDiagnosticCode::InvalidValue) {
         auto it = Find(key);
@@ -457,6 +469,9 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
     for (std::size_t emitterIndex = 0U; emitterIndex < asset.emitters.size(); ++emitterIndex) {
         ParticleEmitterAsset& emitter = asset.emitters[emitterIndex];
         reader.RequiredIndexAnchor(IndexPath(emitterIndex, "id"), emitter.emitterId, ParseUInt<std::uint64_t>);
+        emitter.authoringOrder = static_cast<std::uint32_t>(emitterIndex);
+        static_cast<void>(reader.Optional(IndexPath(emitterIndex, "authoringOrder"), emitter.authoringOrder,
+                                          ParseUInt<std::uint32_t>));
         reader.Required(IndexPath(emitterIndex, "name"), emitter.name, ParseQuoted,
                         ParticleEffectDiagnosticCode::InvalidEscape);
         reader.Required(IndexPath(emitterIndex, "enabled"), emitter.enabled, ParseBool);
@@ -1012,6 +1027,7 @@ std::optional<std::string> ParticleEffectAssetIO::Serialize(const ParticleEffect
     for (std::size_t ei = 0; ei < asset.emitters.size(); ++ei) {
         const auto& e = asset.emitters[ei];
         Line(out, IndexPath(ei, "id"), std::to_string(e.emitterId));
+        Line(out, IndexPath(ei, "authoringOrder"), std::to_string(e.authoringOrder));
         Line(out, IndexPath(ei, "name"), Quote(e.name));
         BoolLine(out, IndexPath(ei, "enabled"), e.enabled);
         VecLine(out, IndexPath(ei, "localPosition"), e.localPosition);

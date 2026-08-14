@@ -33,6 +33,7 @@
 #include "engine/platform/PlatformServices.hpp"
 #include "engine/platform/PlatformAdapters.hpp"
 #include "engine/platform/SettingsTransaction.hpp"
+#include "engine/project/ProjectDescriptorWriter.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/platform/UserStorage.hpp"
@@ -41,6 +42,7 @@
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/PhysicsLayersAssetIO.hpp"
+#include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SkeletonAsset.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
@@ -3173,6 +3175,8 @@ ReadScriptValue(
             metadata->type == "RenderMaterialInstance" ||
             metadata->type == "RenderMaterialGraph") {
             opened = state.context.OpenMaterialEditorAsset(id);
+        } else if (metadata->type == kb::scene::kParticleEffectAssetType) {
+            opened = state.context.OpenParticleEditorAsset(id);
         }
         if (opened && state.context.HasPendingSkeletalMeshEditorOpen()) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 10 };
@@ -3898,6 +3902,33 @@ int EditorAutomationScenarioRunner::Run(
     const bool continueOnFailure =
         BoolMember(root, "continueOnFailure", error, false)
             .value_or(false);
+    std::vector<const EditorPluginDescriptor*> initialPlugins;
+    if (const JsonValue* configured = root.Find("initial_plugins"); configured != nullptr) {
+        if (configured->GetKind() != JsonValue::Kind::Array ||
+            configured->Size() > EditorPluginCatalog::Count()) {
+            error = "'initial_plugins' must be a bounded array";
+        } else {
+            initialPlugins.reserve(configured->Size());
+            for (std::size_t index = 0U; index < configured->Size() && error.empty(); ++index) {
+                const JsonValue* value = configured->At(index);
+                if (value == nullptr || value->GetKind() != JsonValue::Kind::String) {
+                    error = "'initial_plugins' entries must be plugin id strings";
+                    break;
+                }
+                const EditorPluginDescriptor* descriptor =
+                    EditorPluginCatalog::FindById(value->AsString());
+                if (descriptor == nullptr) {
+                    error = "'initial_plugins' contains an unknown plugin id";
+                    break;
+                }
+                if (std::ranges::find(initialPlugins, descriptor) != initialPlugins.end()) {
+                    error = "'initial_plugins' contains a duplicate plugin id";
+                    break;
+                }
+                initialPlugins.push_back(descriptor);
+            }
+        }
+    }
     if (!error.empty()) {
         WriteFailureArtifact(artifactRoot, error);
         return 1;
@@ -3922,8 +3953,24 @@ int EditorAutomationScenarioRunner::Run(
         if (!copy.good()) return 1;
     }
 
-    const ScopedProjectFile projectScope{
-        absoluteArtifacts / "workspace" / "Project.21kbproject" };
+    const std::filesystem::path projectFile =
+        absoluteArtifacts / "workspace" / "Project.21kbproject";
+    const ScopedProjectFile projectScope{projectFile};
+    if (!initialPlugins.empty()) {
+        kb::project::ProjectDescriptor descriptor;
+        descriptor.plugins.reserve(initialPlugins.size());
+        for (const EditorPluginDescriptor* plugin : initialPlugins) {
+            descriptor.plugins.push_back({
+                .name = std::string{plugin->id},
+                .binaryPath = std::string{plugin->binaryPath},
+                .enabled = true,
+            });
+        }
+        if (!kb::project::ProjectDescriptorWriter::Write(projectFile, descriptor)) {
+            WriteFailureArtifact(absoluteArtifacts, "initial plugin project descriptor could not be written");
+            return 1;
+        }
+    }
 
     std::vector<std::string> reportLines;
     bool passed = true;

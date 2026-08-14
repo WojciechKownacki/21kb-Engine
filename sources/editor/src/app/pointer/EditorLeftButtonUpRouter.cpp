@@ -4,6 +4,7 @@
 #include "app/EditorAssetBrowserPointerHandler.hpp"
 #include "app/EditorAudioAssetPreview.hpp"
 #include "app/EditorPointerDragInteraction.hpp"
+#include "app/ParticleEditorPanelInteraction.hpp"
 #include "app/EditorWindowInvalidator.hpp"
 #include "app/console/EditorConsolePointerController.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
@@ -69,6 +70,14 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
     static_cast<void>(y);
     shellInteraction_.ClearPressedSave();
     shellInteraction_.ClearPressedTransport();
+
+    if (sceneContext_.ParticleEditorWorkspace().EmitterDragActive()) {
+        static_cast<void>(ParticleEditorPanelInteraction::CommitDrag(sceneContext_));
+        ReleaseCapture();
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
 
     // A palette command armed by clicking the graph context menu (e.g. picking a node from the menu that
     // opens when a wire is dropped on empty canvas) must run as a menu selection. The wire-drop case keeps

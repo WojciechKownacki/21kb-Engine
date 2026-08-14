@@ -22,7 +22,7 @@ public:
                const EditorTheme& theme, const EditorSceneContext& sceneContext,
                const EditorRenderBackendSettings& renderBackendSettings,
                EditorSceneBgfxViewport* sceneViewport) const;
-    [[nodiscard]] static RECT ViewportRect(const RECT& content) noexcept;
+    [[nodiscard]] static RECT ViewportRect(const RECT& content, unsigned int dpi = 96U) noexcept;
     [[nodiscard]] static bool PresentViewport(EditorSceneBgfxViewport& viewport, HWND host,
                                               const RECT& content, const DockPanel& panel,
                                               const EditorSceneContext& sceneContext,

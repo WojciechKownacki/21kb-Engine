@@ -32,6 +32,12 @@ kb_apply_quality_gates(kb_21kb_particle_plugin)
 add_library(kb_21kb_particle_editor_core STATIC
     editor/ParticleEditorDocument.hpp
     editor/ParticleEditorDocument.cpp
+    editor/ParticleEmitterListModel.hpp
+    editor/ParticleEmitterListModel.cpp
+    editor/ParticleEditorWorkspaceState.hpp
+    editor/ParticleEditorWorkspaceState.cpp
+    editor/ParticleEditorCommands.hpp
+    editor/ParticleEditorCommands.cpp
     editor/ParticleAssetGateway.hpp
     editor/ParticleAssetGateway.cpp
     editor/ParticleDocumentCloseGuard.hpp

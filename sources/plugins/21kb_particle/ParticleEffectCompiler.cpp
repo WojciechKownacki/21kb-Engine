@@ -5,6 +5,7 @@
 #include "engine/assets/AssetRegistry.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <string>
 
@@ -121,8 +122,12 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
     compiled.durationSeconds = asset.durationSeconds;
     compiled.looping = asset.looping;
     compiled.emitterCount = static_cast<std::uint8_t>(asset.emitters.size());
+    std::array<const kb::scene::ParticleEmitterAsset*, kb::scene::kParticleEffectMaxEmitters>
+        emittersByAuthoringOrder{};
+    for (const kb::scene::ParticleEmitterAsset& emitter : asset.emitters)
+        emittersByAuthoringOrder[emitter.authoringOrder] = &emitter;
     for (std::size_t emitterIndex = 0U; emitterIndex < asset.emitters.size(); ++emitterIndex) {
-        const kb::scene::ParticleEmitterAsset& source = asset.emitters[emitterIndex];
+        const kb::scene::ParticleEmitterAsset& source = *emittersByAuthoringOrder[emitterIndex];
         auto& destination = compiled.emitters[emitterIndex];
         destination.emitterId = source.emitterId;
         destination.outputType = source.output.type;
