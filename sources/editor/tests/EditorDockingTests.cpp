@@ -14,12 +14,14 @@
 #include "scene/AnimationClipTimelineState.hpp"
 #include "scene/AnimationClipEditorDocumentState.hpp"
 #include "scene/AnimatorEditorGraphDocumentState.hpp"
+#include "scene/ParticleEditorHostSessionStore.hpp"
 #include "windowing/FloatingWindowControlHitTester.hpp"
 #include "windowing/FloatingWindowControlLayout.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <vector>
 
@@ -612,6 +614,62 @@ void RunSkeletalMeshEditorDefaultLayoutTest() {
         "Skeletal Mesh Editor panel resizing should preserve the minimum viewport width");
 }
 
+void RunParticleEditorWorkspaceAndSessionPersistenceTest() {
+    kb::editor::EditorDockModel model;
+    const kb::editor::DockPanel* panel = RequirePanel(model, 14U);
+    kb::editor::tests::Require(
+        panel->kind == kb::editor::DockPanelKind::ParticleEditor &&
+            panel->title == "21kb Particle System",
+        "Panel 14 must be the typed 21kb Particle System editor panel");
+    const kb::editor::DockLayout initial = BuildDefaultLayout(model);
+    const kb::editor::DockPanelLayout* particle = FindPanelLayout(initial, 14U);
+    const kb::editor::DockPanelLayout* scene = FindPanelLayout(initial, 2U);
+    kb::editor::tests::Require(
+        particle != nullptr && scene != nullptr && particle->leafId == scene->leafId,
+        "particle editor must start in the center document workspace");
+    kb::editor::tests::Require(model.Commands().ClosePanel(14U) &&
+            model.Commands().ActivatePanelKind(
+                kb::editor::DockPanelKind::ParticleEditor, kb::editor::DockArea::Center),
+        "particle editor close/open routing did not restore panel 14");
+    model.Commands().UndockPanel(14U, {180, 160, 920, 660});
+    model.Commands().MoveFloatingPanel(14U, 210, 190);
+    model.Commands().ResizeFloatingPanel(14U, 940, 680);
+    panel = RequirePanel(model, 14U);
+    kb::editor::tests::Require(
+        panel->area == kb::editor::DockArea::Floating && panel->floatingRect.x == 210 &&
+            panel->floatingRect.y == 190 && panel->floatingRect.width == 940 &&
+            panel->floatingRect.height == 680,
+        "particle editor floating move/resize layout was not retained");
+
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() / "21kb_particle_editor_host_session";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root / "Assets", error);
+    kb::editor::ParticleEditorHostSession session{
+        .visible = true,
+        .area = panel->area,
+        .floatingRect = panel->floatingRect,
+        .documentPath = root / "Assets" / "Open.kbvfx",
+    };
+    std::string saveError;
+    const std::filesystem::path statePath = root / ".21kb" / "ParticleEditorSession.txt";
+    kb::editor::tests::Require(
+        kb::editor::ParticleEditorHostSessionStore::Save(statePath, root, session, saveError),
+        "particle editor host session could not be saved atomically");
+    const auto loaded = kb::editor::ParticleEditorHostSessionStore::Load(statePath, root);
+    kb::editor::tests::Require(
+        loaded.Succeeded() && loaded.found && loaded.session.visible &&
+            loaded.session.area == kb::editor::DockArea::Floating &&
+            loaded.session.floatingRect.width == 940 &&
+            loaded.session.documentPath.lexically_normal() == session.documentPath.lexically_normal(),
+        "particle editor layout/session path did not survive persistence roundtrip");
+    session.documentPath = root.parent_path() / "Outside.kbvfx";
+    kb::editor::tests::Require(
+        !kb::editor::ParticleEditorHostSessionStore::Save(statePath, root, session, saveError),
+        "particle editor host session accepted a document path outside the project");
+}
+
 void RunSkeletalMeshEditorTreeStateTest() {
     kb::scene::SkeletonAsset skeleton{};
     skeleton.bones = {
@@ -946,6 +1004,7 @@ void RunEditorDockingTests() {
     RunSkeletalMeshEditorWorkspaceActivationTest();
     RunAnimationClipEditorWorkspaceActivationTest();
     RunAnimatorEditorWorkspaceActivationTest();
+    RunParticleEditorWorkspaceAndSessionPersistenceTest();
     RunAnimatorEditorDefaultLayoutTest();
     RunAnimatorEditorGraphDocumentStateTest();
     RunSkeletalMeshEditorDefaultLayoutTest();

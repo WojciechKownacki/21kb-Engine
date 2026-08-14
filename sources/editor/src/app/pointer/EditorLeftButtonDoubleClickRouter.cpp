@@ -168,6 +168,17 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
     if (assetResult == EditorAssetBrowserDoubleClickResult::AnimatorEditorOpened) {
         static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::AnimatorEditor, DockArea::Center));
     }
+    if (assetResult == EditorAssetBrowserDoubleClickResult::ParticleEditorOpened) {
+        if (const kb::assets::AssetMetadata* metadata =
+                sceneContext_.Scene().Assets().Manager().Registry().Find(sceneContext_.ParticleEditorAssetId());
+            metadata != nullptr) {
+            const std::string filename = metadata->virtualPath.filename().string();
+            static_cast<void>(dockModel_.Commands().SetPanelTitle(
+                DockPanelKind::ParticleEditor,
+                filename.empty() ? metadata->name : filename));
+        }
+        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::ParticleEditor, DockArea::Center));
+    }
     // A GPU viewport is a native child window, so repainting the GDI dock host does not retire the
     // surface belonging to the previously active tab. Without an explicit composition request the
     // old Scene View remains over the newly activated asset editor until the next mouse event.

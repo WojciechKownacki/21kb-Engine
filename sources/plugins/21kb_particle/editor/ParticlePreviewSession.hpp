@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 
 namespace kb::assets { class AssetRegistry; }
@@ -32,6 +33,7 @@ public:
     [[nodiscard]] ParticleEditorResult Tick(float wallDeltaSeconds);
     [[nodiscard]] bool Submit(kb::render::Renderer& renderer) const;
     void Release(kb::render::Renderer& renderer);
+    void Release(const std::function<void(const kb::scene::Scene&)>& releaseRendererScene);
 
     [[nodiscard]] bool Active() const noexcept;
     [[nodiscard]] const kb::scene::Scene& PreviewScene() const;

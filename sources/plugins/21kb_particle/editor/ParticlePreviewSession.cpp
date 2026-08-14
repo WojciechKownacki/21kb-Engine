@@ -154,7 +154,17 @@ bool ParticlePreviewSession::Submit(kb::render::Renderer& renderer) const {
 }
 
 void ParticlePreviewSession::Release(kb::render::Renderer& renderer) {
-    if (scene_ != nullptr) renderer.ReleaseScene(*scene_);
+    Release([&renderer](const kb::scene::Scene& scene) { renderer.ReleaseScene(scene); });
+}
+
+void ParticlePreviewSession::Release(
+    const std::function<void(const kb::scene::Scene&)>& releaseRendererScene) {
+    if (scene_ != nullptr) {
+        if (!releaseRendererScene) {
+            throw std::logic_error{"particle preview release requires the renderer scene-release callback"};
+        }
+        releaseRendererScene(*scene_);
+    }
     scene_.reset();
     assetId_ = {};
     virtualPath_.clear();
