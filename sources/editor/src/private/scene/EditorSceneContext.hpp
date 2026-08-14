@@ -51,6 +51,7 @@
 #include "editor/ParticleDocumentCloseGuard.hpp"
 #include "editor/ParticleEditorDocument.hpp"
 #include "editor/ParticlePreviewSession.hpp"
+#include "editor/ParticleBakeService.hpp"
 
 #include <array>
 #include <atomic>
@@ -445,6 +446,7 @@ public:
     [[nodiscard]] std::uint64_t ParticleEditorPreviewRevision() const noexcept;
     [[nodiscard]] bool TickParticleEditorPreview(float deltaSeconds);
     [[nodiscard]] bool SaveParticleEditorAsset();
+    [[nodiscard]] kb::particle_editor::ParticleBakeResult BakeParticleEditorAsset();
     [[nodiscard]] bool RevertParticleEditorAsset();
     [[nodiscard]] bool ApplyParticleEditorWorkingCopy(kb::scene::ParticleEffectAsset asset);
     [[nodiscard]] kb::particle_editor::ParticleDocumentCloseResult RequestParticleEditorTransition(

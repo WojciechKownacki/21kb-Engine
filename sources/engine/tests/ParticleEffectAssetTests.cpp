@@ -821,6 +821,25 @@ void RunDependencyValidationTest() {
                 asset.eventBindings[0].targetEffect.virtualPath == "/Effects/Child.kbvfx",
             "dependency validation mutated authored asset references");
 
+    ParticleEffectAsset savedRootWithoutExternal = asset;
+    savedRootWithoutExternal.eventBindings.clear();
+    Require(ParticleEffectAssetIO::Save(rootPath, savedRootWithoutExternal),
+            "working dependency seam disk fixture save failed");
+    const ParticleEffectDependencyResult diskAnalysis =
+        ParticleEffectAssetValidator::ValidateDependencies(rootMetadata, registry);
+    const ParticleEffectDependencyResult workingAnalysis =
+        ParticleEffectAssetValidator::ValidateDependencies(asset, rootMetadata, registry);
+    Require(diskAnalysis.Succeeded() && workingAnalysis.Succeeded() &&
+                std::find(diskAnalysis.dependencies.begin(), diskAnalysis.dependencies.end(),
+                          kb::assets::AssetId{201U}) == diskAnalysis.dependencies.end() &&
+                std::find(workingAnalysis.dependencies.begin(), workingAnalysis.dependencies.end(),
+                          kb::assets::AssetId{201U}) != workingAnalysis.dependencies.end() &&
+                std::is_sorted(workingAnalysis.transitiveDependencies.begin(),
+                               workingAnalysis.transitiveDependencies.end(),
+                               [](kb::assets::AssetId lhs, kb::assets::AssetId rhs) { return lhs.value < rhs.value; }),
+            "unsaved working asset dependency analysis reloaded the root from disk or was non-deterministic");
+    Require(ParticleEffectAssetIO::Save(rootPath, asset), "working dependency seam root restore failed");
+
     const auto rejects = [&](std::string_view label, auto mutate, ParticleEffectDiagnosticCode expected,
                              std::string_view path, ParticleStableId emitterId = 10U, ParticleStableId moduleId = 0U) {
         ParticleEffectAsset candidate = asset;

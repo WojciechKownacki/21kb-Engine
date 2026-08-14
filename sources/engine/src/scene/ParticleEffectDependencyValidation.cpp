@@ -132,11 +132,12 @@ struct DependencyReference {
 
 } // namespace
 
-ParticleEffectDependencyResult
-ParticleEffectAssetValidator::ValidateDependencies(const kb::assets::AssetMetadata& metadata,
-                                                   const kb::assets::AssetRegistry& registry) {
+static ParticleEffectDependencyResult
+ValidateDependenciesImpl(const ParticleEffectAsset& rootAsset, const kb::assets::AssetMetadata& metadata,
+                         const kb::assets::AssetRegistry& registry) {
     ParticleEffectDependencyResult analysis;
     std::set<std::uint64_t> directDependencyIds;
+    std::set<std::uint64_t> transitiveDependencyIds;
     std::set<std::uint64_t> visited;
     std::vector<std::uint64_t> active;
     std::function<void(const kb::assets::AssetMetadata&, const ParticleEffectAsset&)> visit;
@@ -154,6 +155,7 @@ ParticleEffectAssetValidator::ValidateDependencies(const kb::assets::AssetMetada
                 continue;
             if (owner.id == metadata.id)
                 directDependencyIds.insert(resolved->id.value);
+            transitiveDependencyIds.insert(resolved->id.value);
             if (!dependency.expectsParticleEffect)
                 continue;
             if (std::find(active.begin(), active.end(), resolved->id.value) != active.end()) {
@@ -176,17 +178,35 @@ ParticleEffectAssetValidator::ValidateDependencies(const kb::assets::AssetMetada
         active.pop_back();
     };
 
-    ParticleEffectLoadResult loaded = ParticleEffectAssetIO::LoadDetailed(metadata.physicalPath);
-    if (!loaded.Succeeded()) {
-        analysis.diagnostics = std::move(loaded.diagnostics);
-        return analysis;
-    }
-    visit(metadata, *loaded.asset);
+    visit(metadata, rootAsset);
     directDependencyIds.erase(metadata.id.value);
+    transitiveDependencyIds.erase(metadata.id.value);
     analysis.dependencies.reserve(directDependencyIds.size());
     for (std::uint64_t id : directDependencyIds)
         analysis.dependencies.push_back(kb::assets::AssetId{id});
+    analysis.transitiveDependencies.reserve(transitiveDependencyIds.size());
+    for (std::uint64_t id : transitiveDependencyIds)
+        analysis.transitiveDependencies.push_back(kb::assets::AssetId{id});
     return analysis;
+}
+
+ParticleEffectDependencyResult
+ParticleEffectAssetValidator::ValidateDependencies(const kb::assets::AssetMetadata& metadata,
+                                                   const kb::assets::AssetRegistry& registry) {
+    ParticleEffectLoadResult loaded = ParticleEffectAssetIO::LoadDetailed(metadata.physicalPath);
+    if (!loaded.Succeeded()) {
+        ParticleEffectDependencyResult result;
+        result.diagnostics = std::move(loaded.diagnostics);
+        return result;
+    }
+    return ValidateDependenciesImpl(*loaded.asset, metadata, registry);
+}
+
+ParticleEffectDependencyResult
+ParticleEffectAssetValidator::ValidateDependencies(const ParticleEffectAsset& workingAsset,
+                                                   const kb::assets::AssetMetadata& metadata,
+                                                   const kb::assets::AssetRegistry& registry) {
+    return ValidateDependenciesImpl(workingAsset, metadata, registry);
 }
 
 } // namespace kb::scene
