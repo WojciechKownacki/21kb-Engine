@@ -1,4 +1,5 @@
 #include "CpuParticleBackend.hpp"
+#include "ParticleEffectCompiler.hpp"
 #include "ParticleSceneSystem.hpp"
 
 #include "engine/assets/AssetMetadata.hpp"
@@ -30,6 +31,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -104,6 +106,24 @@ struct Fixture {
             "effect runtime payload publication failed");
     }
 };
+
+void TestSharedImmutableCompilerArtifact() {
+    auto authored = Fixture::MakeEffect(12.0F, 128U);
+    Fixture fixture{authored};
+    const kb::assets::AssetMetadata* owner =
+        fixture.scene.Assets().Manager().Registry().Find(kb::assets::AssetId{fixture.effectAssetId});
+    Require(owner != nullptr, "shared compiler owner metadata is missing");
+    const kb::particle_plugin::ParticleCompileResult compiled =
+        kb::particle_plugin::ParticleEffectCompiler::Compile(
+            authored, *owner, fixture.scene.Assets().Manager().Registry());
+    static_assert(std::is_const_v<typename kb::particles::ParticleCompiledEffectHandle::element_type>);
+    Require(compiled.Succeeded() && compiled.effect->emitterCount == 1U &&
+            compiled.effect->emitters[0].emitterId == 1U &&
+            compiled.effect->emitters[0].materialAssetId == 72U &&
+            compiled.effect->emitters[0].rateKeyCount == 1U &&
+            compiled.effect->emitters[0].rateKeys[0].value == 12.0F,
+        "shared compiler did not produce the complete immutable runtime artifact");
+}
 
 template <typename Payload>
 void AddModule(kb::scene::ParticleEmitterAsset& emitter,
@@ -2132,13 +2152,12 @@ void TestCpuPreviewRenderSnapshotPublicationAndLifecycle() {
     effect.emitters[0].spawn.speedMax = 1.0F;
     effect.emitters[0].spawn.direction = {1.0F, 0.0F, 0.0F};
     effect.emitters[0].output.material.assetId = 72U;
-    effect.emitters[0].output.type = kb::scene::ParticleOutputType::Mesh;
-    effect.emitters[0].output.mesh.assetId = 73U;
+    effect.emitters[0].output.type = kb::scene::ParticleOutputType::PointSprite;
     effect.emitters[0].output.blend = kb::scene::ParticleBlendMode::Opaque;
     effect.emitters[0].output.sort = kb::scene::ParticleSortMode::None;
     effect.emitters[0].output.depthTest = true;
     effect.emitters[0].output.depthWrite = true;
-    effect.emitters[0].output.payload = kb::scene::ParticleMeshOutput{};
+    effect.emitters[0].output.payload = kb::scene::ParticlePointSpriteOutput{.diameter = 2.0F};
     auto second = effect.emitters[0];
     second.emitterId = 2U;
     second.name = "Preview Secondary";
@@ -2160,6 +2179,15 @@ void TestCpuPreviewRenderSnapshotPublicationAndLifecycle() {
     effect.emitters.push_back(std::move(second));
 
     Fixture fixture(std::move(effect));
+    Require(fixture.scene.Assets().Manager().RegisterAsset({
+                .id = kb::assets::AssetId{74U},
+                .type = "RenderTexture",
+                .name = "Preview Particle Atlas",
+                .virtualPath = "/Game/Textures/PreviewParticle.kbtex",
+                .physicalPath = "PreviewParticle.kbtex",
+                .contentHash = 1U,
+            }),
+        "preview atlas metadata registration failed");
     fixture.scene.Components().ParticleEffects().Set(fixture.owner, {
         .effectAssetId = fixture.effectAssetId,
     });
@@ -2184,8 +2212,8 @@ void TestCpuPreviewRenderSnapshotPublicationAndLifecycle() {
             "first CPU preview snapshot header or grouping was incomplete");
         Require(first->Emitters()[0].emitterId == 1U && first->Emitters()[0].firstParticle == 0U &&
                 first->Emitters()[0].particleCount == 1U && first->Emitters()[0].materialAssetId == 72U &&
-                first->Emitters()[0].meshAssetId == 73U && first->Emitters()[0].assetGeneration != 0U &&
-                first->Emitters()[0].output == kb::particles::ParticleRenderOutput::Mesh &&
+                first->Emitters()[0].meshAssetId == 0U && first->Emitters()[0].assetGeneration != 0U &&
+                first->Emitters()[0].output == kb::particles::ParticleRenderOutput::PointSprite &&
                 first->Emitters()[0].depth == kb::particles::ParticleRenderDepthMode::ReadWrite &&
                 first->Emitters()[0].status == kb::particles::ParticleRenderEmitterStatus::Playing &&
                 first->Emitters()[1].emitterId == 2U && first->Emitters()[1].firstParticle == 1U &&
@@ -2313,6 +2341,7 @@ void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); 
 
 int main() {
     try {
+        TestSharedImmutableCompilerArtifact();
         TestValidationAndLifecycle();
         TestCapacityGenerationAndCopyBounds();
         TestRegistrationOwnershipAndCycles();

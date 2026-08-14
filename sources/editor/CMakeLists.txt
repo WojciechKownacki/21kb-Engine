@@ -800,6 +800,8 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneCommandController.cpp
     src/scene/EditorSceneContext.cpp
     src/scene/EditorParticleEditorHost.cpp
+    src/private/scene/ParticleEditorBakeHostCommand.hpp
+    src/scene/ParticleEditorBakeHostCommand.cpp
     src/scene/ParticleEditorHostSessionStore.cpp
     src/scene/EditorSceneDocumentLifecycle.cpp
     src/scene/EditorSceneHierarchyActions.cpp
@@ -1026,6 +1028,17 @@ kb_target_copy_bgfx_runtime_shaders(kb_editor)
 kb_apply_quality_gates(kb_editor)
 
 if(BUILD_TESTING)
+    add_executable(kb_editor_particle_bake_host_tests
+        tests/EditorParticleBakeHostTests.cpp
+        src/scene/ParticleEditorBakeHostCommand.cpp
+    )
+    target_include_directories(kb_editor_particle_bake_host_tests PRIVATE src/private)
+    target_link_libraries(kb_editor_particle_bake_host_tests PRIVATE kb_21kb_particle_editor_core)
+    add_test(NAME kb_editor_particle_bake_host_tests
+        COMMAND $<TARGET_FILE:kb_editor_particle_bake_host_tests>)
+    set_tests_properties(kb_editor_particle_bake_host_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    kb_apply_quality_gates(kb_editor_particle_bake_host_tests)
+
     add_executable(kb_editor_tests
         tests/EditorHierarchyTests.cpp
         tests/EditorAssetBrowserTests.cpp

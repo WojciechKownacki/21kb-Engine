@@ -1,4 +1,5 @@
 #include "CpuParticleBackend.hpp"
+#include "ParticleEffectCompiler.hpp"
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetManager.hpp"
@@ -68,15 +69,6 @@ static_assert(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds ==
         lhs.rotation.y == rhs.rotation.y && lhs.rotation.z == rhs.rotation.z &&
         lhs.rotation.w == rhs.rotation.w && lhs.scale.x == rhs.scale.x &&
         lhs.scale.y == rhs.scale.y && lhs.scale.z == rhs.scale.z;
-}
-
-[[nodiscard]] std::uint64_t ResolveAssetReference(
-    const kb::assets::AssetManager& manager,
-    const kb::scene::ParticleAssetReference& reference) noexcept {
-    if (reference.assetId != 0U) return reference.assetId;
-    if (reference.virtualPath.empty()) return 0U;
-    const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath(reference.virtualPath);
-    return metadata != nullptr ? metadata->id.value : 0U;
 }
 
 [[nodiscard]] kb::particles::ParticleRenderOutput ToRenderOutput(
@@ -228,7 +220,7 @@ std::size_t CpuParticleBackend::BufferedEventCount() const noexcept {
 CpuParticleBackend::StepTelemetry CpuParticleBackend::LastStepTelemetry() const noexcept { return stepTelemetry_; }
 std::size_t CpuParticleBackend::CompiledEffectCount() const noexcept {
     return static_cast<std::size_t>(std::count_if(compiledEffects_.begin(), compiledEffects_.end(),
-        [](const CompiledEffect& effect) { return effect.referenceCount != 0U; }));
+        [](const CompiledEffectEntry& effect) { return effect.referenceCount != 0U; }));
 }
 
 kb::particles::ParticleRuntimeResult CpuParticleBackend::ConfigureOwnerDeathPolicy(
@@ -333,7 +325,7 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Create(
     followTransforms_[denseIndex] = 0U;
     ownerTransforms_[denseIndex] = {};
     reloadRestarted_[denseIndex] = 0U;
-    seeds_[denseIndex] = compiledEffects_[compiledEffectIndex].determinismSeed;
+    seeds_[denseIndex] = compiledEffects_[compiledEffectIndex].effect->determinismSeed;
     playbackStates_[denseIndex] = PlaybackState::Stopped;
     const std::uint64_t instanceId = MakeInstanceId(slot, slotGenerations_[slot]);
     instanceRuntime_[denseIndex] = {};
@@ -704,7 +696,7 @@ std::uint32_t CpuParticleBackend::AcquireCompiledEffect(
     const kb::assets::AssetId assetId{effectAssetId};
     const std::uint64_t generation = manager.LoadGeneration(assetId);
     for (std::uint32_t index = 0U; index < compiledEffects_.size(); ++index) {
-        CompiledEffect& cached = compiledEffects_[index];
+        CompiledEffectEntry& cached = compiledEffects_[index];
         if (cached.referenceCount != 0U && cached.assetId == effectAssetId &&
             cached.assetGeneration == generation) {
             ++cached.referenceCount;
@@ -712,49 +704,17 @@ std::uint32_t CpuParticleBackend::AcquireCompiledEffect(
         }
     }
 
-    const auto handle = manager.Load<kb::scene::ParticleEffectAsset>(assetId);
-    if (!handle.IsLoaded() || handle->formatVersion != kb::scene::kParticleEffectFormatVersion ||
-        !kb::scene::ParticleEffectAssetValidator::ValidateStructure(*handle).Succeeded()) {
+    const auto asset = manager.Load<kb::scene::ParticleEffectAsset>(assetId);
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(assetId);
+    if (!asset.IsLoaded() || metadata == nullptr) return kInvalidDenseIndex;
+
+    const ParticleCompileResult compiled = ParticleEffectCompiler::Compile(*asset, *metadata, manager.Registry());
+    if (!compiled.Succeeded()) {
+        failureStatus = std::any_of(compiled.diagnostics.begin(), compiled.diagnostics.end(), [](const auto& diagnostic) {
+            return diagnostic.code == kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability;
+        }) ? kb::particles::ParticleRuntimeStatus::UnsupportedOutput
+           : kb::particles::ParticleRuntimeStatus::InvalidAsset;
         return kInvalidDenseIndex;
-    }
-    if (handle->backendPolicy == kb::scene::ParticleBackendPolicy::GpuVisualRequired ||
-        std::any_of(handle->eventBindings.begin(), handle->eventBindings.end(), [](const auto& binding) {
-            return binding.action == kb::scene::ParticleEventAction::EmitEffectAsset;
-        })) {
-        failureStatus = kb::particles::ParticleRuntimeStatus::UnsupportedOutput;
-        return kInvalidDenseIndex;
-    }
-    for (const kb::scene::ParticleEventBindingAsset& binding : handle->eventBindings) {
-        if (binding.sourceModuleId == 0U) continue;
-        const auto emitter = std::find_if(handle->emitters.begin(), handle->emitters.end(),
-            [&](const kb::scene::ParticleEmitterAsset& candidate) {
-                return candidate.emitterId == binding.sourceEmitterId;
-            });
-        const auto module = std::find_if(emitter->modules.begin(), emitter->modules.end(),
-            [&](const kb::scene::ParticleModuleAsset& candidate) {
-                return candidate.moduleId == binding.sourceModuleId;
-            });
-        if (module->type != kb::scene::ParticleModuleType::CollisionPlane ||
-            binding.trigger != kb::scene::ParticleEventTrigger::Collision) {
-            failureStatus = kb::particles::ParticleRuntimeStatus::UnsupportedOutput;
-            return kInvalidDenseIndex;
-        }
-    }
-    for (const kb::scene::ParticleEmitterAsset& emitter : handle->emitters) {
-        if (std::any_of(emitter.modules.begin(), emitter.modules.end(), [](const kb::scene::ParticleModuleAsset& module) {
-                return module.type != kb::scene::ParticleModuleType::InitialVelocity &&
-                       module.type != kb::scene::ParticleModuleType::Gravity &&
-                       module.type != kb::scene::ParticleModuleType::Wind &&
-                       module.type != kb::scene::ParticleModuleType::Drag &&
-                       module.type != kb::scene::ParticleModuleType::ColorOverLife &&
-                       module.type != kb::scene::ParticleModuleType::SizeOverLife &&
-                       module.type != kb::scene::ParticleModuleType::AlphaOverLife &&
-                       module.type != kb::scene::ParticleModuleType::CollisionPlane &&
-                       module.type != kb::scene::ParticleModuleType::SubEmitter;
-            })) {
-            failureStatus = kb::particles::ParticleRuntimeStatus::UnsupportedOutput;
-            return kInvalidDenseIndex;
-        }
     }
 
     std::uint32_t freeIndex = kInvalidDenseIndex;
@@ -766,181 +726,12 @@ std::uint32_t CpuParticleBackend::AcquireCompiledEffect(
     }
     if (freeIndex == kInvalidDenseIndex) return kInvalidDenseIndex;
 
-    CompiledEffect compiled{};
-    compiled.assetId = effectAssetId;
-    compiled.assetGeneration = generation;
-    compiled.determinismSeed = handle->determinismSeed;
-    compiled.durationSeconds = handle->durationSeconds;
-    compiled.looping = handle->looping;
-    compiled.emitterCount = static_cast<std::uint8_t>(handle->emitters.size());
-    compiled.referenceCount = 1U;
-    for (std::size_t emitterIndex = 0U; emitterIndex < handle->emitters.size(); ++emitterIndex) {
-        const kb::scene::ParticleEmitterAsset& source = handle->emitters[emitterIndex];
-        CompiledEmitter& destination = compiled.emitters[emitterIndex];
-        destination.emitterId = source.emitterId;
-        destination.outputType = source.output.type;
-        destination.materialAssetId = ResolveAssetReference(manager, source.output.material);
-        destination.meshAssetId = ResolveAssetReference(manager, source.output.mesh);
-        destination.textureAtlasAssetId = ResolveAssetReference(manager, source.output.textureAtlas);
-        destination.blendMode = source.output.blend;
-        destination.sortMode = source.output.sort;
-        destination.alignment = source.output.alignment;
-        destination.depthTest = source.output.depthTest;
-        destination.depthWrite = source.output.depthWrite;
-        destination.softParticles = source.output.softParticles;
-        destination.antiAliasing = source.output.antiAliasing;
-        const auto compileFlipbook = [&](const kb::scene::ParticleFlipbookAsset& flipbook) noexcept {
-            destination.flipbookColumns = static_cast<std::uint16_t>(flipbook.columns);
-            destination.flipbookRows = static_cast<std::uint16_t>(flipbook.rows);
-            destination.flipbookFrameCount = flipbook.columns * flipbook.rows;
-            destination.flipbookFramesPerSecond = flipbook.framesPerSecond;
-            destination.flipbookLooping = flipbook.looping;
-        };
-        switch (source.output.type) {
-        case kb::scene::ParticleOutputType::Billboard:
-            compileFlipbook(std::get<kb::scene::ParticleBillboardOutput>(source.output.payload).flipbook);
-            break;
-        case kb::scene::ParticleOutputType::StretchedBillboard: {
-            const auto& stretched = std::get<kb::scene::ParticleStretchedBillboardOutput>(source.output.payload);
-            compileFlipbook(stretched.flipbook);
-            destination.stretchVelocityScale = stretched.velocityScale;
-            destination.stretchMinimumLength = stretched.minimumLength;
-            break;
-        }
-        case kb::scene::ParticleOutputType::PointSprite: {
-            const auto& point = std::get<kb::scene::ParticlePointSpriteOutput>(source.output.payload);
-            compileFlipbook(point.flipbook);
-            destination.pointSpriteDiameter = point.diameter;
-            break;
-        }
-        default:
-            break;
-        }
-        destination.simulationSpace = source.simulationSpace;
-        destination.enabled = source.enabled;
-        destination.mode = source.spawn.mode;
-        destination.maxParticles = source.maxParticles;
-        destination.localPosition = source.localPosition;
-        destination.localRotation = source.localRotation;
-        destination.initialVelocity = {
-            .direction = kb::math::Normalize(source.spawn.direction),
-            .speedMin = source.spawn.speedMin,
-            .speedMax = source.spawn.speedMax,
-            .randomization = source.spawn.randomization,
-            .spreadDegrees = source.spawn.spreadDegrees,
-        };
-        destination.lifetimeMin = source.spawn.lifetimeMin;
-        destination.lifetimeMax = source.spawn.lifetimeMax;
-        destination.prewarmSeconds = source.spawn.prewarmSeconds;
-        destination.rateKeyCount = static_cast<std::uint8_t>(source.spawn.rateOverTime.keyframes.size());
-        destination.burstCount = static_cast<std::uint8_t>(source.spawn.bursts.size());
-        for (std::size_t keyIndex = 0U; keyIndex < source.spawn.rateOverTime.keyframes.size(); ++keyIndex) {
-            const kb::math::CurveKeyframe& key = source.spawn.rateOverTime.keyframes[keyIndex];
-            destination.rateKeys[keyIndex] = { .time = key.time, .value = key.value, .easing = key.easing };
-        }
-        std::copy(source.spawn.bursts.begin(), source.spawn.bursts.end(), destination.bursts.begin());
-        destination.moduleCount = static_cast<std::uint8_t>(source.modules.size());
-        for (std::size_t moduleIndex = 0U; moduleIndex < source.modules.size(); ++moduleIndex) {
-            const kb::scene::ParticleModuleAsset& sourceModule = source.modules[moduleIndex];
-            CompiledEmitter::Module& destinationModule = destination.modules[moduleIndex];
-            destinationModule.moduleId = sourceModule.moduleId;
-            destinationModule.type = sourceModule.type;
-            destinationModule.enabled = sourceModule.enabled;
-            switch (sourceModule.type) {
-            case kb::scene::ParticleModuleType::InitialVelocity:
-                destinationModule.payload = std::get<kb::scene::ParticleInitialVelocityModule>(sourceModule.payload);
-                if (sourceModule.enabled) {
-                    destination.initialVelocity =
-                        std::get<kb::scene::ParticleInitialVelocityModule>(sourceModule.payload);
-                    destination.initialVelocity.direction = kb::math::Normalize(destination.initialVelocity.direction);
-                }
-                break;
-            case kb::scene::ParticleModuleType::Gravity:
-                destinationModule.payload = std::get<kb::scene::ParticleGravityModule>(sourceModule.payload);
-                break;
-            case kb::scene::ParticleModuleType::Wind:
-                destinationModule.payload = std::get<kb::scene::ParticleWindModule>(sourceModule.payload);
-                break;
-            case kb::scene::ParticleModuleType::Drag:
-                destinationModule.payload = std::get<kb::scene::ParticleDragModule>(sourceModule.payload);
-                break;
-            case kb::scene::ParticleModuleType::ColorOverLife: {
-                const kb::math::Gradient& gradient =
-                    std::get<kb::scene::ParticleColorOverLifeModule>(sourceModule.payload).gradient;
-                destination.colorOverLife.stopCount = static_cast<std::uint8_t>(gradient.stops.size());
-                for (std::size_t stopIndex = 0U; stopIndex < gradient.stops.size(); ++stopIndex) {
-                    destination.colorOverLife.stops[stopIndex] = {
-                        .time = gradient.stops[stopIndex].time,
-                        .color = gradient.stops[stopIndex].color,
-                    };
-                }
-                break;
-            }
-            case kb::scene::ParticleModuleType::SizeOverLife: {
-                const kb::math::Curve& curve =
-                    std::get<kb::scene::ParticleSizeOverLifeModule>(sourceModule.payload).curve;
-                destination.sizeOverLife.keyCount = static_cast<std::uint8_t>(curve.keyframes.size());
-                for (std::size_t keyIndex = 0U; keyIndex < curve.keyframes.size(); ++keyIndex) {
-                    const kb::math::CurveKeyframe& key = curve.keyframes[keyIndex];
-                    destination.sizeOverLife.keys[keyIndex] = {
-                        .time = key.time,
-                        .value = key.value,
-                        .easing = key.easing,
-                    };
-                }
-                break;
-            }
-            case kb::scene::ParticleModuleType::AlphaOverLife: {
-                const kb::math::Curve& curve =
-                    std::get<kb::scene::ParticleAlphaOverLifeModule>(sourceModule.payload).curve;
-                destination.alphaOverLife.keyCount = static_cast<std::uint8_t>(curve.keyframes.size());
-                for (std::size_t keyIndex = 0U; keyIndex < curve.keyframes.size(); ++keyIndex) {
-                    const kb::math::CurveKeyframe& key = curve.keyframes[keyIndex];
-                    destination.alphaOverLife.keys[keyIndex] = {
-                        .time = key.time,
-                        .value = key.value,
-                        .easing = key.easing,
-                    };
-                }
-                break;
-            }
-            case kb::scene::ParticleModuleType::CollisionPlane: {
-                kb::scene::ParticleCollisionPlaneModule collision =
-                    std::get<kb::scene::ParticleCollisionPlaneModule>(sourceModule.payload);
-                const float normalLength = std::sqrt(kb::math::Dot(collision.normal, collision.normal));
-                collision.normal = collision.normal * (1.0F / normalLength);
-                collision.distance /= normalLength;
-                destinationModule.payload = collision;
-                break;
-            }
-            case kb::scene::ParticleModuleType::SubEmitter:
-                destinationModule.payload = std::get<kb::scene::ParticleSubEmitterModule>(sourceModule.payload);
-                break;
-            default:
-                break;
-            }
-        }
-    }
-    compiled.eventBindingCount = static_cast<std::uint8_t>(handle->eventBindings.size());
-    for (std::size_t bindingIndex = 0U; bindingIndex < handle->eventBindings.size(); ++bindingIndex) {
-        const kb::scene::ParticleEventBindingAsset& source = handle->eventBindings[bindingIndex];
-        const auto sourceEmitter = std::find_if(compiled.emitters.begin(),
-            compiled.emitters.begin() + compiled.emitterCount,
-            [&](const CompiledEmitter& emitter) { return emitter.emitterId == source.sourceEmitterId; });
-        const auto targetEmitter = std::find_if(compiled.emitters.begin(),
-            compiled.emitters.begin() + compiled.emitterCount,
-            [&](const CompiledEmitter& emitter) { return emitter.emitterId == source.targetEmitterId; });
-        compiled.eventBindings[bindingIndex] = {
-            .sourceEmitterIndex = static_cast<std::uint8_t>(sourceEmitter - compiled.emitters.begin()),
-            .trigger = source.trigger,
-            .sourceModuleId = source.sourceModuleId,
-            .targetEmitterIndex = static_cast<std::uint8_t>(targetEmitter - compiled.emitters.begin()),
-            .count = source.count,
-            .maxDepth = static_cast<std::uint8_t>(source.maxDepth),
-            .perStepBudget = source.perStepBudget,
-        };
-    }
-    compiledEffects_[freeIndex] = compiled;
+    compiledEffects_[freeIndex] = {
+        .assetId = effectAssetId,
+        .assetGeneration = generation,
+        .referenceCount = 1U,
+        .effect = compiled.effect,
+    };
     return freeIndex;
 }
 
@@ -990,7 +781,7 @@ bool CpuParticleBackend::TopologyCompatible(
 void CpuParticleBackend::RefreshCompiledEffects(kb::scene::Scene& scene) {
     kb::assets::AssetManager& manager = scene.Assets().Manager();
     for (std::uint32_t previousIndex = 0U; previousIndex < compiledEffects_.size(); ++previousIndex) {
-        CompiledEffect& previous = compiledEffects_[previousIndex];
+        CompiledEffectEntry& previous = compiledEffects_[previousIndex];
         if (previous.referenceCount == 0U) continue;
         const std::uint64_t generation = manager.LoadGeneration(kb::assets::AssetId{previous.assetId});
         if (previous.assetGeneration == generation || previous.invalidCandidateGeneration == generation) continue;
@@ -1001,9 +792,9 @@ void CpuParticleBackend::RefreshCompiledEffects(kb::scene::Scene& scene) {
             previous.invalidCandidateGeneration = generation;
             continue;
         }
-        CompiledEffect& candidate = compiledEffects_[candidateIndex];
+        CompiledEffectEntry& candidate = compiledEffects_[candidateIndex];
         --candidate.referenceCount;
-        const bool compatible = TopologyCompatible(previous, candidate);
+        const bool compatible = TopologyCompatible(*previous.effect, *candidate.effect);
         const std::uint16_t transferredReferences = previous.referenceCount;
         previous.referenceCount = 0U;
         candidate.referenceCount = static_cast<std::uint16_t>(candidate.referenceCount + transferredReferences);
@@ -1078,7 +869,7 @@ void CpuParticleBackend::ResetInstance(std::uint32_t denseIndex) noexcept {
 }
 
 kb::particles::ParticleRuntimeStatus CpuParticleBackend::PrewarmInstance(std::uint32_t denseIndex) noexcept {
-    const CompiledEffect& effect = compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex];
+    const CompiledEffect& effect = *compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].effect;
     const std::uint64_t instanceId =
         MakeInstanceId(denseToSlot_[denseIndex], slotGenerations_[denseToSlot_[denseIndex]]);
     prewarmingInstanceId_ = instanceId;
@@ -1220,7 +1011,7 @@ bool CpuParticleBackend::SpawnExact(
     std::uint8_t prewarmGroup,
     const kb::math::Vec3* eventPosition) noexcept {
     InstanceRuntime& runtime = instanceRuntime_[denseIndex];
-    const CompiledEffect& effect = compiledEffects_[runtime.compiledEffectIndex];
+    const CompiledEffect& effect = *compiledEffects_[runtime.compiledEffectIndex].effect;
     if (emitterIndex >= effect.emitterCount) return false;
     const CompiledEmitter& emitter = effect.emitters[emitterIndex];
     const std::uint32_t instanceLive = LiveParticleCount(
@@ -1299,7 +1090,7 @@ void CpuParticleBackend::SpawnRequested(
     remainingSpawnBudget -= withinBudget;
     if (withinBudget == 0U) return;
     InstanceRuntime& runtime = instanceRuntime_[denseIndex];
-    const CompiledEmitter& emitter = compiledEffects_[runtime.compiledEffectIndex].emitters[emitterIndex];
+    const CompiledEmitter& emitter = compiledEffects_[runtime.compiledEffectIndex].effect->emitters[emitterIndex];
     const std::uint32_t emitterSpace = emitter.maxParticles - runtime.liveParticles[emitterIndex];
     const std::uint64_t instanceId = MakeInstanceId(
         denseToSlot_[denseIndex], slotGenerations_[denseToSlot_[denseIndex]]);
@@ -1321,7 +1112,7 @@ void CpuParticleBackend::StepInstance(
     float fixedDeltaSeconds,
     std::uint32_t& remainingSpawnBudget) noexcept {
     InstanceRuntime& runtime = instanceRuntime_[denseIndex];
-    const CompiledEffect& effect = compiledEffects_[runtime.compiledEffectIndex];
+    const CompiledEffect& effect = *compiledEffects_[runtime.compiledEffectIndex].effect;
     const bool finiteDuration = !effect.looping && effect.durationSeconds > 0.0F;
     bool canEmit = false;
     for (std::uint8_t emitterIndex = 0U; emitterIndex < effect.emitterCount; ++emitterIndex) {
@@ -1345,7 +1136,7 @@ void CpuParticleBackend::StepEmitter(
     std::uint32_t& remainingSpawnBudget,
     std::uint8_t prewarmGroup) noexcept {
     InstanceRuntime& runtime = instanceRuntime_[denseIndex];
-    const CompiledEffect& effect = compiledEffects_[runtime.compiledEffectIndex];
+    const CompiledEffect& effect = *compiledEffects_[runtime.compiledEffectIndex].effect;
     const CompiledEmitter& emitter = effect.emitters[emitterIndex];
     if (!emitter.enabled) return;
     const bool finiteDuration = !effect.looping && effect.durationSeconds > 0.0F;
@@ -1485,7 +1276,7 @@ void CpuParticleBackend::ExecuteForcesAndIntegrate(
         }
         const InstanceRuntime& runtime = instanceRuntime_[denseIndex];
         const CompiledEmitter& emitter =
-            compiledEffects_[runtime.compiledEffectIndex].emitters[particleEmitterIndices_[index]];
+            compiledEffects_[runtime.compiledEffectIndex].effect->emitters[particleEmitterIndices_[index]];
         kb::math::Vec3& velocity = particleVelocities_[index];
         kb::math::Color color{};
         float size = 1.0F;
@@ -1590,7 +1381,7 @@ bool CpuParticleBackend::QueueInternalEvent(const InternalEvent& event) noexcept
 bool CpuParticleBackend::EventHasAction(const InternalEvent& event) const noexcept {
     const std::uint32_t denseIndex = ResolveDenseIndex(event.instanceId);
     if (denseIndex == kInvalidDenseIndex) return false;
-    const CompiledEffect& effect = compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex];
+    const CompiledEffect& effect = *compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].effect;
     const CompiledEmitter& emitter = effect.emitters[event.sourceEmitterIndex];
     const bool hasModuleAction = std::any_of(emitter.modules.begin(),
         emitter.modules.begin() + emitter.moduleCount, [&](const CompiledEmitter::Module& module) {
@@ -1617,7 +1408,7 @@ kb::particles::ParticleRuntimeStatus CpuParticleBackend::ProcessInternalEvents(
         remainingSpawnBudget -= withinBudget;
         if (withinBudget == 0U) return;
         InstanceRuntime& runtime = instanceRuntime_[denseIndex];
-        const CompiledEmitter& target = compiledEffects_[runtime.compiledEffectIndex].emitters[emitterIndex];
+        const CompiledEmitter& target = compiledEffects_[runtime.compiledEffectIndex].effect->emitters[emitterIndex];
         const std::uint32_t emitterSpace = target.maxParticles - runtime.liveParticles[emitterIndex];
         const std::uint64_t instanceId = MakeInstanceId(
             denseToSlot_[denseIndex], slotGenerations_[denseToSlot_[denseIndex]]);
@@ -1642,7 +1433,7 @@ kb::particles::ParticleRuntimeStatus CpuParticleBackend::ProcessInternalEvents(
         const std::uint32_t denseIndex = ResolveDenseIndex(event.instanceId);
         if (denseIndex == kInvalidDenseIndex) continue;
         InstanceRuntime& runtime = instanceRuntime_[denseIndex];
-        const CompiledEffect& effect = compiledEffects_[runtime.compiledEffectIndex];
+        const CompiledEffect& effect = *compiledEffects_[runtime.compiledEffectIndex].effect;
         const CompiledEmitter& source = effect.emitters[event.sourceEmitterIndex];
         ++stepTelemetry_.processedEvents;
         for (std::uint8_t moduleIndex = 0U; moduleIndex < source.moduleCount; ++moduleIndex) {
@@ -1710,7 +1501,7 @@ void CpuParticleBackend::ApplyOwnerTransformDelta(
     const kb::scene::WorldTransform& current) noexcept {
     const std::uint64_t instanceId = MakeInstanceId(
         denseToSlot_[denseIndex], slotGenerations_[denseToSlot_[denseIndex]]);
-    const CompiledEffect& effect = compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex];
+    const CompiledEffect& effect = *compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].effect;
     for (std::size_t index = 0U; index < particleInstanceIds_.size(); ++index) {
         if (particleInstanceIds_[index] != instanceId ||
             effect.emitters[particleEmitterIndices_[index]].simulationSpace !=
@@ -1761,7 +1552,8 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
         const std::uint32_t denseIndex = slotToDense_[slot];
         if (denseIndex == kInvalidDenseIndex) continue;
         const InstanceRuntime& runtime = instanceRuntime_[denseIndex];
-        const CompiledEffect& effect = compiledEffects_[runtime.compiledEffectIndex];
+        const CompiledEffectEntry& effectEntry = compiledEffects_[runtime.compiledEffectIndex];
+        const CompiledEffect& effect = *effectEntry.effect;
         const std::uint64_t instanceId = MakeInstanceId(slot, slotGenerations_[slot]);
         kb::particles::ParticleRenderEmitterStatus playbackStatus =
             kb::particles::ParticleRenderEmitterStatus::Stopped;
@@ -1797,9 +1589,9 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
             renderGroupRecordIndices_[groupIndex] = static_cast<std::uint16_t>(emitterRecordCount);
             renderEmitterScratch_[emitterRecordCount++] = {
                 .instanceId = instanceId,
-                .effectAssetId = effect.assetId,
+                .effectAssetId = effectEntry.assetId,
                 .emitterId = emitter.emitterId,
-                .assetGeneration = effect.assetGeneration,
+                .assetGeneration = effectEntry.assetGeneration,
                 .materialAssetId = emitter.materialAssetId,
                 .meshAssetId = emitter.meshAssetId,
                 .textureAtlasAssetId = emitter.textureAtlasAssetId,
@@ -1853,7 +1645,7 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
         const std::size_t groupIndex = RenderGroupIndex(denseIndex, emitterIndex);
         const std::uint32_t destinationIndex = renderGroupWriteOffsets_[groupIndex]++;
         const CompiledEmitter& emitter =
-            compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].emitters[emitterIndex];
+            compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].effect->emitters[emitterIndex];
         std::uint16_t frame = 0U;
         if (emitter.flipbookFrameCount > 1U && emitter.flipbookFramesPerSecond > 0.0F) {
             const std::uint32_t unboundedFrame = static_cast<std::uint32_t>(
@@ -1915,7 +1707,7 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderTom
 
 std::uint32_t CpuParticleBackend::InstanceParticleLimit(std::uint32_t denseIndex) const noexcept {
     if (maxParticlesOverrides_[denseIndex] != 0U) return maxParticlesOverrides_[denseIndex];
-    const CompiledEffect& effect = compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex];
+    const CompiledEffect& effect = *compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].effect;
     std::uint32_t limit = 0U;
     for (std::uint8_t emitterIndex = 0U; emitterIndex < effect.emitterCount; ++emitterIndex) {
         limit += effect.emitters[emitterIndex].maxParticles;
