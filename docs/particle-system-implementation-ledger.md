@@ -10,9 +10,9 @@
 ## Current package
 
 - Stage: `4` — core-owned immutable render snapshot.
-- Status: `in_progress`; Stage 3 is accepted.
+- Status: `accepted`; Stages 3 and 4 are accepted.
 - Scope: Stage 4 adds a renderer-neutral packed stream and bounded retained snapshot channel with revision, backend epoch, fixed-step index, tombstone, and no DLL-owned destruction path.
-- Next gate: publish CPU-preview snapshots and lifecycle tombstones through the retained channel before the Stage 5 GPU renderer consumes it.
+- Next gate: Stage 5 GPU particle renderer consumes retained snapshots and replaces proxy-per-particle rendering.
 - Rendering direction: normal game-facing simulation and rendering must move to GPU. The CPU backend is retained only as the deterministic validation, diagnostics, and preview path; it is not the intended final gameplay path.
 
 ## Accepted stages
@@ -106,6 +106,13 @@
 - Publication validates batch ranges, capacity, enums, finite bounds, compact particle payload, and drop diagnostics before replacing the retained revision. Exhaustion is explicit `SnapshotBackpressure` and leaves the last complete snapshot intact.
 - The channel owns all control blocks and storage in `kb_engine`, so a retained reader remains valid after provider unload and scene destruction. Focused tests prove concurrent readers, no-allocation publish after warmup, metadata retention, and lifecycle safety.
 
+### Stage 4B — CPU-preview snapshot publication and tombstone: `accepted checkpoint`
+
+- The CPU preview backend captures previous positions, stable particle IDs, compiled output metadata, bounds, per-emitter ranges, and overflow telemetry into preallocated scratch, then publishes exactly one immutable snapshot after each fixed step.
+- Each publication is stamped with a monotonically increasing revision, the completed scene fixed-step index, and the current backend epoch. Typed snapshot backpressure remains observable while preview simulation continues and the last complete revision is retained.
+- Terminal snapshots use small engine-owned header slots, so teardown can publish a tombstone even when all four 16 MiB payload slots are retained. If terminal retention itself is exhausted, detach fails explicitly before backend ownership changes and can be retried after a reader releases a snapshot.
+- Focused tests prove two independent viewport reads see one immutable fixed-step revision, stable previous/current particle data and two-emitter ranges, payload and terminal backpressure, scene/provider lifetime, and allocation-free warm paths.
+
 ## Accepted decisions and mappings
 
 - Plugin identifier: `Rendering.21kbParticle`.
@@ -154,4 +161,4 @@
 - Stage 1A attempt 1 was rejected after independent review despite a green focused test; every listed defect was repaired and the second attempt was accepted.
 - No open stage 0 defect remains.
 - No open stage 1 defect remains.
-- Stage 3 is accepted. Next gate: Stage 4 GPU simulation architecture and GPU-facing runtime preparation; CPU remains a non-gameplay verification and preview path.
+- Stages 3 and 4 are accepted. Next gate: Stage 5 GPU particle renderer; CPU remains a non-gameplay verification and preview path.

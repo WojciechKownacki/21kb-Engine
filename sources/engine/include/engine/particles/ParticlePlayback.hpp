@@ -26,6 +26,8 @@ public:
         const ParticleRenderSnapshotPublishDesc& desc) noexcept;
     [[nodiscard]] static std::shared_ptr<const ParticleRenderSnapshot> ReadRenderSnapshot(
         const kb::scene::Scene& scene) noexcept;
+    [[nodiscard]] static ParticleRenderSnapshotResult LastRenderSnapshotPublicationResult(
+        const kb::scene::Scene& scene) noexcept;
 
     [[nodiscard]] static ParticleRuntimeResult Create(kb::scene::Scene& scene, std::uint64_t effectAssetId, kb::scene::SceneEntity owner);
     [[nodiscard]] static ParticleRuntimeResult Release(kb::scene::Scene& scene, std::uint64_t instanceId) noexcept;

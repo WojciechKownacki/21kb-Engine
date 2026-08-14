@@ -767,6 +767,7 @@ public:
     kb::particles::IParticleSimulationBackend* particleSimulationBackend = nullptr;
     std::uint64_t particleSimulationBackendEpoch = 0U;
     kb::particles::ParticleRenderSnapshotChannel particleRenderSnapshots;
+    kb::particles::ParticleRenderSnapshotResult lastParticleRenderSnapshotPublication{};
 #if !defined(NDEBUG)
     const std::thread::id particlePlaybackOwnerThread = std::this_thread::get_id();
 #endif
