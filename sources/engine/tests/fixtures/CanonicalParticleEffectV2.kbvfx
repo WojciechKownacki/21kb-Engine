@@ -10,6 +10,7 @@ effect.backendPolicy CpuDeterministic
 effect.gpuCatchupPolicy RestartFromSeed
 effect.emitterCount 1
 effect.emitter[0].id 7
+effect.emitter[0].authoringOrder 0
 effect.emitter[0].name "Emitter Ω"
 effect.emitter[0].enabled true
 effect.emitter[0].localPosition 0 0 0

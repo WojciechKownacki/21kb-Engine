@@ -1,6 +1,8 @@
 #include "scene/EditorSceneContext.hpp"
 #include "scene/ParticleEditorBakeHostCommand.hpp"
 
+#include "editor/ParticleEditorCommands.hpp"
+#include "engine/assets/AssetKind.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
@@ -24,6 +26,18 @@ namespace {
     return metadata.physicalPath.empty()
         ? std::nullopt
         : std::optional<std::filesystem::path>{metadata.physicalPath};
+}
+
+void LogParticleResult(
+    EditorConsoleState& console,
+    const kb::particle_editor::ParticleEditorResult& result) {
+    if (result.diagnostics.empty()) {
+        console.Error("Particles", result.message.empty()
+            ? "Particle editor command failed without a diagnostic." : result.message);
+        return;
+    }
+    for (const kb::scene::ParticleEffectDiagnostic& diagnostic : result.diagnostics)
+        console.Error("Particles", kb::scene::FormatParticleEffectDiagnostic(diagnostic));
 }
 
 } // namespace
@@ -60,6 +74,8 @@ bool EditorSceneContext::OpenParticleEditorAsset(kb::assets::AssetId id) {
         particlePreviewSession_->Release(particlePreviewReleaseHandler_);
     }
     particleEditorDocument_ = std::move(candidateDocument);
+    particleEditorWorkspace_ = {};
+    particleEditorWorkspace_.Synchronize(particleEditorDocument_.Asset());
     particlePreviewSession_ = std::move(candidatePreview);
     particleEditorAssetId_ = id;
     console_.Info("Particles", "Opened 21kb Particle System document: " + metadata->virtualPath.generic_string());
@@ -130,6 +146,7 @@ kb::particle_editor::ParticleBakeResult EditorSceneContext::BakeParticleEditorAs
 
 bool EditorSceneContext::RevertParticleEditorAsset() {
     if (!HasParticleEditorAsset() || !particleEditorDocument_.Revert()) return false;
+    particleEditorWorkspace_.Synchronize(particleEditorDocument_.Asset());
     const auto published = particlePreviewSession_->PublishWorkingCopy(particleEditorDocument_.Asset());
     if (!published.Succeeded()) {
         console_.Error("Particles", published.message);
@@ -146,6 +163,7 @@ bool EditorSceneContext::ApplyParticleEditorWorkingCopy(kb::scene::ParticleEffec
         return false;
     }
     if (applied.status == kb::particle_editor::ParticleEditorStatus::NoChange) return true;
+    particleEditorWorkspace_.Synchronize(particleEditorDocument_.Asset());
     const auto published = particlePreviewSession_->PublishWorkingCopy(particleEditorDocument_.Asset());
     if (!published.Succeeded()) {
         static_cast<void>(particleEditorDocument_.Undo());
@@ -153,6 +171,171 @@ bool EditorSceneContext::ApplyParticleEditorWorkingCopy(kb::scene::ParticleEffec
         return false;
     }
     return true;
+}
+
+const kb::scene::ParticleEffectAsset* EditorSceneContext::ParticleEditorWorkingAsset() const noexcept {
+    return HasParticleEditorAsset() ? &particleEditorDocument_.Asset() : nullptr;
+}
+
+std::vector<kb::particle_editor::ParticleEmitterListRow> EditorSceneContext::ParticleEditorEmitterRows() const {
+    const kb::scene::ParticleEffectAsset* asset = ParticleEditorWorkingAsset();
+    return asset == nullptr ? std::vector<kb::particle_editor::ParticleEmitterListRow>{}
+                            : kb::particle_editor::ParticleEmitterListModel::Build(
+                                  *asset, particleEditorWorkspace_.SelectedEmitterId());
+}
+
+const kb::particle_editor::ParticleEditorWorkspaceState& EditorSceneContext::ParticleEditorWorkspace() const noexcept {
+    return particleEditorWorkspace_;
+}
+
+void EditorSceneContext::SetParticleEditorFocused(bool focused) noexcept {
+    particleEditorWorkspace_.SetFocused(focused);
+}
+
+bool EditorSceneContext::SelectParticleEditorEmitter(kb::scene::ParticleStableId emitterId) noexcept {
+    const kb::scene::ParticleEffectAsset* asset = ParticleEditorWorkingAsset();
+    return asset != nullptr && particleEditorWorkspace_.Select(*asset, emitterId);
+}
+
+bool EditorSceneContext::FinalizeParticleEditorCommand(kb::particle_editor::ParticleEditorResult result) {
+    if (!result.Succeeded()) {
+        LogParticleResult(console_, result);
+        return false;
+    }
+    if (result.status == kb::particle_editor::ParticleEditorStatus::NoChange)
+        return true;
+    const auto published = particlePreviewSession_->PublishWorkingCopy(particleEditorDocument_.Asset());
+    if (!published.Succeeded()) {
+        static_cast<void>(particleEditorDocument_.Undo());
+        particleEditorWorkspace_.Synchronize(particleEditorDocument_.Asset());
+        LogParticleResult(console_, published);
+        return false;
+    }
+    return true;
+}
+
+bool EditorSceneContext::AddParticleEditorEmitter(kb::assets::AssetId materialId) {
+    if (!HasParticleEditorAsset())
+        return false;
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(materialId);
+    if (metadata == nullptr || !kb::assets::AssetMatchesKind(*metadata, kb::assets::AssetKind::Material)) {
+        console_.Error("Particles", "Add Emitter requires a valid material selection.");
+        return false;
+    }
+    return FinalizeParticleEditorCommand(kb::particle_editor::ParticleEditorCommands::AddEmitter(
+        particleEditorDocument_, particleEditorWorkspace_,
+        {.assetId = materialId.value, .virtualPath = metadata->virtualPath.generic_string()}));
+}
+
+bool EditorSceneContext::RenameParticleEditorEmitter(
+    kb::scene::ParticleStableId emitterId, std::string name) {
+    return HasParticleEditorAsset() && FinalizeParticleEditorCommand(
+        kb::particle_editor::ParticleEditorCommands::RenameEmitter(
+            particleEditorDocument_, particleEditorWorkspace_, emitterId, std::move(name)));
+}
+
+bool EditorSceneContext::ToggleParticleEditorEmitter(kb::scene::ParticleStableId emitterId) {
+    const kb::scene::ParticleEffectAsset* asset = ParticleEditorWorkingAsset();
+    const kb::scene::ParticleEmitterAsset* emitter = asset == nullptr
+        ? nullptr : kb::particle_editor::ParticleEmitterListModel::Find(*asset, emitterId);
+    return emitter != nullptr && FinalizeParticleEditorCommand(
+        kb::particle_editor::ParticleEditorCommands::SetEmitterEnabled(
+            particleEditorDocument_, particleEditorWorkspace_, emitterId, !emitter->enabled));
+}
+
+bool EditorSceneContext::MoveParticleEditorEmitter(
+    kb::scene::ParticleStableId emitterId, std::uint32_t targetOrder) {
+    return HasParticleEditorAsset() && FinalizeParticleEditorCommand(
+        kb::particle_editor::ParticleEditorCommands::ReorderEmitter(
+            particleEditorDocument_, particleEditorWorkspace_, emitterId, targetOrder));
+}
+
+bool EditorSceneContext::RemoveParticleEditorEmitter(kb::scene::ParticleStableId emitterId) {
+    return HasParticleEditorAsset() && FinalizeParticleEditorCommand(
+        kb::particle_editor::ParticleEditorCommands::RemoveEmitter(
+            particleEditorDocument_, particleEditorWorkspace_, emitterId));
+}
+
+bool EditorSceneContext::UndoParticleEditorCommand() {
+    if (!HasParticleEditorAsset() || !particleEditorDocument_.Undo())
+        return false;
+    particleEditorWorkspace_.Synchronize(particleEditorDocument_.Asset());
+    const auto published = particlePreviewSession_->PublishWorkingCopy(particleEditorDocument_.Asset());
+    if (!published.Succeeded()) {
+        static_cast<void>(particleEditorDocument_.Redo());
+        particleEditorWorkspace_.Synchronize(particleEditorDocument_.Asset());
+        LogParticleResult(console_, published);
+        return false;
+    }
+    return true;
+}
+
+bool EditorSceneContext::RedoParticleEditorCommand() {
+    if (!HasParticleEditorAsset() || !particleEditorDocument_.Redo())
+        return false;
+    particleEditorWorkspace_.Synchronize(particleEditorDocument_.Asset());
+    const auto published = particlePreviewSession_->PublishWorkingCopy(particleEditorDocument_.Asset());
+    if (!published.Succeeded()) {
+        static_cast<void>(particleEditorDocument_.Undo());
+        particleEditorWorkspace_.Synchronize(particleEditorDocument_.Asset());
+        LogParticleResult(console_, published);
+        return false;
+    }
+    return true;
+}
+
+bool EditorSceneContext::BeginParticleEditorEmitterRename(kb::scene::ParticleStableId emitterId) {
+    const kb::scene::ParticleEffectAsset* asset = ParticleEditorWorkingAsset();
+    return asset != nullptr && particleEditorWorkspace_.BeginRename(*asset, emitterId);
+}
+
+void EditorSceneContext::AppendParticleEditorRenameText(std::string_view text) {
+    particleEditorWorkspace_.AppendRenameText(text);
+}
+
+void EditorSceneContext::RemoveParticleEditorRenameCharacter() noexcept {
+    particleEditorWorkspace_.RemoveRenameCharacter();
+}
+
+void EditorSceneContext::CancelParticleEditorEmitterRename() noexcept {
+    particleEditorWorkspace_.CancelRename();
+}
+
+bool EditorSceneContext::CommitParticleEditorEmitterRename() {
+    if (!particleEditorWorkspace_.RenameActive())
+        return false;
+    const kb::scene::ParticleStableId emitterId = particleEditorWorkspace_.RenameEmitterId();
+    std::string name = particleEditorWorkspace_.RenameText();
+    const bool renamed = RenameParticleEditorEmitter(emitterId, std::move(name));
+    if (renamed)
+        particleEditorWorkspace_.CancelRename();
+    return renamed;
+}
+
+bool EditorSceneContext::BeginParticleEditorEmitterDrag(kb::scene::ParticleStableId emitterId) noexcept {
+    const kb::scene::ParticleEffectAsset* asset = ParticleEditorWorkingAsset();
+    return asset != nullptr && particleEditorWorkspace_.BeginEmitterDrag(*asset, emitterId);
+}
+
+void EditorSceneContext::UpdateParticleEditorEmitterDrag(std::uint32_t targetOrder) noexcept {
+    particleEditorWorkspace_.UpdateEmitterDrag(targetOrder);
+}
+
+bool EditorSceneContext::CommitParticleEditorEmitterDrag() {
+    if (!particleEditorWorkspace_.EmitterDragActive())
+        return false;
+    const kb::scene::ParticleStableId emitterId = particleEditorWorkspace_.DraggedEmitterId();
+    const std::uint32_t targetOrder = particleEditorWorkspace_.DragTargetOrder();
+    particleEditorWorkspace_.EndEmitterDrag();
+    return MoveParticleEditorEmitter(emitterId, targetOrder);
+}
+
+void EditorSceneContext::CancelParticleEditorEmitterDrag() noexcept {
+    particleEditorWorkspace_.EndEmitterDrag();
+}
+
+void EditorSceneContext::SetParticleEditorComposerScrollOffset(int offset) noexcept {
+    particleEditorWorkspace_.SetComposerScrollOffset(offset);
 }
 
 kb::particle_editor::ParticleDocumentCloseResult EditorSceneContext::RequestParticleEditorTransition(
@@ -173,6 +356,7 @@ void EditorSceneContext::CloseParticleEditorAsset() {
         particlePreviewSession_.reset();
     }
     particleEditorDocument_ = {};
+    particleEditorWorkspace_ = {};
     particleEditorCloseGuard_ = {};
     particleEditorAssetId_ = {};
 }

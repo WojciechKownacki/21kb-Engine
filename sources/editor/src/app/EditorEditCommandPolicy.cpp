@@ -10,7 +10,8 @@ namespace {
 [[nodiscard]] bool TextInputActive(const EditorSceneContext& sceneContext) noexcept {
     return sceneContext.Inspector().IsTextEditing() || sceneContext.AssetBrowser().IsTextEditing() || sceneContext.IsHierarchyRenaming() ||
         sceneContext.IsHierarchySearchFocused() || sceneContext.IsMaterialGraphConstantInlineEditing() ||
-        sceneContext.IsMaterialGraphNodeRenameEditing() || sceneContext.IsMaterialEditorFindFocused();
+        sceneContext.IsMaterialGraphNodeRenameEditing() || sceneContext.IsMaterialEditorFindFocused() ||
+        sceneContext.ParticleEditorWorkspace().RenameActive();
 }
 
 // A graph gesture owns the working copy until the mouse-up, in one of two ways:
@@ -56,8 +57,12 @@ void WarnIfGestureRefused(EditorSceneContext& sceneContext, EditorEditCommand co
 [[nodiscard]] bool Run(EditorSceneContext& sceneContext, EditorEditCommand command) {
     switch (command) {
     case EditorEditCommand::Undo:
+        if (sceneContext.HasParticleEditorAsset() && sceneContext.ParticleEditorWorkspace().Focused())
+            return sceneContext.UndoParticleEditorCommand();
         return sceneContext.UndoSceneCommand();
     case EditorEditCommand::Redo:
+        if (sceneContext.HasParticleEditorAsset() && sceneContext.ParticleEditorWorkspace().Focused())
+            return sceneContext.RedoParticleEditorCommand();
         return sceneContext.RedoSceneCommand();
     case EditorEditCommand::Duplicate:
         return sceneContext.DuplicateSelectedHierarchyEntities();

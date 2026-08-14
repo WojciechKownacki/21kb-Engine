@@ -163,6 +163,7 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
             "event binding count exceeds the hard limit");
 
     std::set<ParticleStableId> emitterIds;
+    std::set<std::uint32_t> emitterAuthoringOrders;
     ParticleStableId previousEmitterId = 0U;
     std::uint64_t totalParticleCapacity = 0U;
     for (std::size_t emitterIndex = 0U; emitterIndex < asset.emitters.size(); ++emitterIndex) {
@@ -176,6 +177,10 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
             Add(result, ParticleEffectDiagnosticCode::UnsortedStableId, base + ".id",
                 "emitter ids must be strictly increasing", emitter.emitterId);
         previousEmitterId = emitter.emitterId;
+        if (emitter.authoringOrder >= static_cast<std::uint32_t>(asset.emitters.size()) ||
+            !emitterAuthoringOrders.insert(emitter.authoringOrder).second)
+            Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".authoringOrder",
+                "emitter authoring order must be a unique contiguous permutation", emitter.emitterId);
         if (emitter.name.empty() || emitter.name.size() > kParticleEffectMaxStringBytes)
             Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".name",
                 "emitter name must be non-empty and bounded", emitter.emitterId);

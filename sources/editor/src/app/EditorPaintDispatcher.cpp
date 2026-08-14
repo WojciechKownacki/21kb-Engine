@@ -231,7 +231,7 @@ void AppendMaterialPreviewLayout(
             } else if (panel->kind == DockPanelKind::ParticleEditor && sceneContext.HasParticleEditorAsset()) {
                 layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
                     .viewportKey = panel->id,
-                    .bounds = ParticleEditorPanelRenderer::ViewportRect(content),
+                    .bounds = ParticleEditorPanelRenderer::ViewportRect(content, GetDpiForWindow(paintWindow)),
                 });
             }
         }
@@ -263,7 +263,7 @@ void AppendMaterialPreviewLayout(
             content.top += metrics.floatingChromeHeight;
             layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
                 .viewportKey = panel->id,
-                .bounds = ParticleEditorPanelRenderer::ViewportRect(content),
+                .bounds = ParticleEditorPanelRenderer::ViewportRect(content, GetDpiForWindow(paintWindow)),
             });
         }
     }

@@ -241,6 +241,7 @@ struct ParticleOutputAsset {
 
 struct ParticleEmitterAsset {
     ParticleStableId emitterId = 0U;
+    std::uint32_t authoringOrder = 0U;
     std::string name;
     bool enabled = true;
     kb::math::Vec3 localPosition{};
