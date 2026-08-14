@@ -10,9 +10,9 @@
 ## Current package
 
 - Stage: `3` — deterministic CPU fixed-step simulation and baseline modules.
-- Status: `in_progress`; checkpoint 3.3B2 is accepted.
+- Status: `accepted`; checkpoints 3.1 through 3.3C are accepted.
 - Scope: Stage 3 builds deterministic CPU fixed-step simulation, dense runtime state, bounded queues, baseline modules, owner policies, and telemetry on top of the delivered provider ABI.
-- Next gate: owner policies and reload behavior.
+- Next gate: Stage 4 GPU simulation architecture; the CPU backend remains preview, diagnostics, and deterministic verification only.
 - Rendering direction: normal game-facing simulation and rendering must move to GPU. The CPU backend is retained only as the deterministic validation, diagnostics, and preview path; it is not the intended final gameplay path.
 
 ## Accepted stages
@@ -90,6 +90,15 @@
 - Failed `Play` or `Restart` prewarm atomically rolls back to a stopped, empty instance. Runtime state carries bounded event depth and prewarm group channels without fixed-step heap allocation.
 - Focused tests cover collision enable/disable physics, ordering, all triggers, queue and action boundaries, depth, script diagnostics, automatic-limit telemetry, prewarm rollback, and allocation-free event handling.
 
+### Stage 3.3C — component ownership, reload, and runtime overrides: `accepted checkpoint`
+
+- Enabled active components own one runtime instance; activation, disable/removal, `Clear`/`Drain` owner death, and exactly-once finished events have explicit lifecycle behavior. Destroyed-owner bindings free their fixed reconciliation slots without cancelling backend-owned draining.
+- Asset generation refresh preserves compatible state, deterministically restarts incompatible topology, retains the last known good runtime for invalid candidates, and exposes query-only `Restarted` and `StaleAfterInvalidReload` states.
+- Component rate multiplier, total instance capacity override, and transform-follow policy are applied on the fixed boundary. Local-space particles follow full owner transforms; world-space particles and frozen transforms do not move retroactively.
+- Internal event actions are deferred to the next fixed step with bounded FIFO queues, authored module-before-binding order, and one level of expansion per step. Raw instances keep explicit identity/default component behavior.
+- Missing or non-executable component effects now fail explicitly, and a failed asset replacement leaves the previous live instance intact.
+- Focused tests cover 256-instance atomic turnover, reload/LKG, lifecycle, event timing/depth, transform and override semantics, and allocation-free warmed paths.
+
 ## Accepted decisions and mappings
 
 - Plugin identifier: `Rendering.21kbParticle`.
@@ -138,4 +147,4 @@
 - Stage 1A attempt 1 was rejected after independent review despite a green focused test; every listed defect was repaired and the second attempt was accepted.
 - No open stage 0 defect remains.
 - No open stage 1 defect remains.
-- Next gate: Stage 3 owner policies and reload behavior; GPU simulation and rendering preparation remain separate later checkpoints.
+- Stage 3 is accepted. Next gate: Stage 4 GPU simulation architecture and GPU-facing runtime preparation; CPU remains a non-gameplay verification and preview path.

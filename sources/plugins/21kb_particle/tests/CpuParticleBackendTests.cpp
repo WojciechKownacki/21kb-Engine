@@ -8,9 +8,12 @@
 #include "engine/scene/ParticleEffectAssetMigration.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneParticleSystems.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
@@ -273,6 +276,15 @@ struct RuntimeFixture {
     }
 };
 
+class NoopFixedSceneSystem final : public kb::scene::SceneSystem {
+public:
+    void OnFixedUpdate(kb::scene::SceneSystemContext&) override {}
+    [[nodiscard]] kb::scene::SceneFixedUpdatePhase FixedUpdatePhase() const noexcept override {
+        return kb::scene::SceneFixedUpdatePhase::PostSimulation;
+    }
+    [[nodiscard]] bool RequiresFixedStep() const override { return true; }
+};
+
 [[nodiscard]] std::uint64_t RunFrameFeedHash(float frameDeltaSeconds) {
     auto effect = Fixture::MakeEffect(60.0F);
     effect.durationSeconds = 8.0F;
@@ -519,7 +531,10 @@ void TestInternalEventTriggersOrderingAndBounds() {
     const auto orderedInstance = orderedBackend.Create(
         orderedFixture.scene, orderedFixture.effectAssetId, orderedFixture.owner);
     Require(orderedInstance.Succeeded() && orderedBackend.Emit(
-                orderedFixture.scene, orderedInstance.instanceId, 1U).Succeeded(),
+                orderedFixture.scene, orderedInstance.instanceId, 1U).Succeeded() &&
+            orderedBackend.Query(orderedFixture.scene, orderedInstance.instanceId).liveParticleCount == 1U &&
+            orderedBackend.Step(orderedFixture.scene,
+                kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
         "ordered internal event fixture failed");
     const auto orderedStates = CopyBackendStates(orderedBackend, orderedFixture, orderedInstance.instanceId);
     Require(orderedStates.size() == 3U && orderedStates[0].position.y == 0.0F &&
@@ -542,6 +557,10 @@ void TestInternalEventTriggersOrderingAndBounds() {
             deathBackend.Emit(deathFixture.scene, deathInstance.instanceId, 1U).Succeeded() &&
             deathBackend.Step(deathFixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
         "death-trigger internal event fixture failed");
+    Require(deathBackend.Query(deathFixture.scene, deathInstance.instanceId).liveParticleCount == 0U &&
+            deathBackend.Step(deathFixture.scene,
+                kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "death-trigger action did not wait until the next fixed step");
     const auto deathStates = CopyBackendStates(deathBackend, deathFixture, deathInstance.instanceId);
     Require(deathStates.size() == 1U && deathStates.front().position.y == 4.0F,
         "death trigger did not replace the source with its target particle");
@@ -569,6 +588,10 @@ void TestInternalEventTriggersOrderingAndBounds() {
             collisionBackend.Step(collisionFixture.scene,
                 kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
         "collision-trigger internal event fixture failed");
+    Require(collisionBackend.Query(collisionFixture.scene, collisionInstance.instanceId).liveParticleCount == 1U &&
+            collisionBackend.Step(collisionFixture.scene,
+                kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "collision-trigger action did not wait until the next fixed step");
     Require(collisionBackend.Query(collisionFixture.scene, collisionInstance.instanceId).liveParticleCount == 2U,
         "collision trigger did not emit the target particle");
 
@@ -585,9 +608,18 @@ void TestInternalEventTriggersOrderingAndBounds() {
     depthBackend.Warmup();
     const auto depthInstance = depthBackend.Create(depthFixture.scene, depthFixture.effectAssetId, depthFixture.owner);
     Require(depthInstance.Succeeded() && depthBackend.Emit(
-                depthFixture.scene, depthInstance.instanceId, 1U).Succeeded() &&
+                depthFixture.scene, depthInstance.instanceId, 1U).Succeeded(),
+        "breadth-first depth fixture setup failed");
+    for (std::uint32_t expected = 2U; expected <= 4U; ++expected) {
+        Require(depthBackend.Step(depthFixture.scene,
+                    kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
+                depthBackend.Query(depthFixture.scene, depthInstance.instanceId).liveParticleCount == expected,
+            "breadth-first internal event depth did not advance exactly one level per fixed step");
+    }
+    Require(depthBackend.Step(depthFixture.scene,
+                kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
             depthBackend.Query(depthFixture.scene, depthInstance.instanceId).liveParticleCount == 4U,
-        "breadth-first internal event depth three did not execute exactly once per level");
+        "breadth-first internal event depth cap emitted depth plus one");
 
     auto capped = Fixture::MakeEffect(0.0F, 4U);
     capped.emitters[0] = makeEmitter(1U, 0.0F, 4U);
@@ -599,10 +631,14 @@ void TestInternalEventTriggersOrderingAndBounds() {
     kb::particle_plugin::CpuParticleBackend cappedBackend;
     cappedBackend.Warmup();
     const auto cappedInstance = cappedBackend.Create(cappedFixture.scene, cappedFixture.effectAssetId, cappedFixture.owner);
-    Require(cappedInstance.Succeeded() && cappedBackend.Emit(cappedFixture.scene, cappedInstance.instanceId, 1U).status ==
-            kb::particles::ParticleRuntimeStatus::ParticleCapacityReached &&
+    Require(cappedInstance.Succeeded() && cappedBackend.Emit(
+                cappedFixture.scene, cappedInstance.instanceId, 1U).Succeeded() &&
+            cappedBackend.Step(cappedFixture.scene,
+                kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
             cappedBackend.Query(cappedFixture.scene, cappedInstance.instanceId).liveParticleCount == 3U,
-        "target emitter capacity rejection was not explicit and bounded");
+        "target emitter capacity rejection was not bounded");
+    Require(cappedBackend.LastStepTelemetry().rejectedByCapacity == 1U,
+        "target emitter capacity rejection telemetry was not exact");
 }
 
 void TestInternalEventBudgetsAndCollisionLocalLimit() {
@@ -647,10 +683,16 @@ void TestInternalEventBudgetsAndCollisionLocalLimit() {
     spawnCap.emitters.clear();
     spawnCap.emitters.push_back(makeEmitter(1U, 1U));
     spawnCap.emitters.push_back(makeEmitter(2U, kb::scene::kParticleEffectMaxCpuParticlesPerEmitter));
+    spawnCap.emitters.push_back(makeEmitter(3U, kb::scene::kParticleEffectMaxCpuParticlesPerEmitter));
     spawnCap.eventBindings.push_back({.sourceEmitterId = 1U,
         .trigger = kb::scene::ParticleEventTrigger::Birth,
         .action = kb::scene::ParticleEventAction::EmitTargetEmitter,
         .targetEmitterId = 2U, .count = kb::scene::kParticleEffectMaxSpawnsPerStep,
+        .maxDepth = 1U, .perStepBudget = 1U});
+    spawnCap.eventBindings.push_back({.sourceEmitterId = 1U,
+        .trigger = kb::scene::ParticleEventTrigger::Birth,
+        .action = kb::scene::ParticleEventAction::EmitTargetEmitter,
+        .targetEmitterId = 3U, .count = kb::scene::kParticleEffectMaxSpawnsPerStep,
         .maxDepth = 1U, .perStepBudget = 1U});
     Fixture spawnCapFixture(std::move(spawnCap));
     kb::particle_plugin::CpuParticleBackend spawnCapBackend;
@@ -658,10 +700,12 @@ void TestInternalEventBudgetsAndCollisionLocalLimit() {
     const auto spawnCapInstance = spawnCapBackend.Create(
         spawnCapFixture.scene, spawnCapFixture.effectAssetId, spawnCapFixture.owner);
     Require(spawnCapInstance.Succeeded() && spawnCapBackend.Emit(
-                spawnCapFixture.scene, spawnCapInstance.instanceId, 1U).status ==
-            kb::particles::ParticleRuntimeStatus::SpawnBudgetExceeded &&
-            spawnCapBackend.LastStepTelemetry().rejectedByStepBudget == 1U,
-        "internal action spawn boundary plus one was not explicit in result and telemetry");
+                spawnCapFixture.scene, spawnCapInstance.instanceId, 1U).Succeeded() &&
+            spawnCapBackend.Step(spawnCapFixture.scene,
+                kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
+            spawnCapBackend.LastStepTelemetry().rejectedByStepBudget ==
+                kb::scene::kParticleEffectMaxSpawnsPerStep,
+        "deferred internal action spawn overflow was fatal or telemetry was not exact");
 
     auto collisionCap = Fixture::MakeEffect();
     collisionCap.emitters.clear();
@@ -692,6 +736,10 @@ void TestInternalEventBudgetsAndCollisionLocalLimit() {
         "collision module local event overflow made the automatic fixed step fatal");
     const auto collisionTelemetry = collisionCapBackend.LastStepTelemetry();
     Require(collisionTelemetry.collisions == 2U && collisionTelemetry.rejectedByEventBudget == 1U &&
+            collisionCapBackend.Query(collisionCapFixture.scene, collisionCapInstance.instanceId)
+                .liveParticleCount == 2U &&
+            collisionCapBackend.Step(collisionCapFixture.scene,
+                kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
             collisionCapBackend.Query(collisionCapFixture.scene, collisionCapInstance.instanceId)
                 .liveParticleCount == 3U,
         "collision event local budget telemetry or accepted action count was incorrect");
@@ -775,6 +823,8 @@ void TestAutomaticLimitTelemetryPrewarmRollbackAndScriptDiagnostic() {
     Require(eventInstance.Succeeded() && eventBackend.Play(eventFixture.scene, eventInstance.instanceId).Succeeded() &&
             eventBackend.Step(eventFixture.scene,
                 kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
+            eventBackend.Step(eventFixture.scene,
+                kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
             eventBackend.LastStepTelemetry().rejectedByEventBudget == 1U,
         "automatic event action budget overflow was fatal or telemetry was not exact");
     RuntimeFixture eventRuntime(std::move(eventEffect));
@@ -784,7 +834,7 @@ void TestAutomaticLimitTelemetryPrewarmRollbackAndScriptDiagnostic() {
         kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds));
 
     Fixture prewarmFixture(MakeCollisionBindingEffect(120.0F,
-        kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds, 1U));
+        2.0F * kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds, 1U));
     kb::particle_plugin::CpuParticleBackend prewarmBackend;
     prewarmBackend.Warmup();
     const auto prewarmInstance = prewarmBackend.Create(
@@ -798,7 +848,8 @@ void TestAutomaticLimitTelemetryPrewarmRollbackAndScriptDiagnostic() {
             prewarmBackend.BufferedEventCount() == 0U,
         "failed prewarm did not roll back to a clean stopped instance");
 
-    auto scriptEffect = Fixture::MakeEffect(0.0F, 4U);
+    auto scriptEffect = Fixture::MakeEffect(0.0F,
+        static_cast<std::uint32_t>(kb::scene::kParticleEffectMaxEventsPerStep + 1U));
     auto scriptTarget = scriptEffect.emitters[0];
     scriptTarget.emitterId = 2U;
     scriptTarget.name = "ScriptEventTarget";
@@ -821,13 +872,14 @@ void TestAutomaticLimitTelemetryPrewarmRollbackAndScriptDiagnostic() {
     const std::array arguments{
         kb::script::ScriptFunctionArgument{.name = "instance",
             .value = kb::script::ScriptValue{scriptInstance.instanceId, kb::script::ScriptValueType::Hash}},
-        kb::script::ScriptFunctionArgument{.name = "count", .value = kb::script::ScriptValue{2}},
+        kb::script::ScriptFunctionArgument{.name = "count", .value = kb::script::ScriptValue{
+            static_cast<std::int32_t>(kb::scene::kParticleEffectMaxEventsPerStep + 1U)}},
     };
     const kb::script::ScriptFunctionCallResult emit = host.Functions().Call(
         "Particles.Emit", arguments, kb::script::ScriptFunctionCallContext{.scene = &scriptFixture.scene});
     Require(!emit.Succeeded() && emit.errors.size() == 1U &&
-            emit.errors.front() == "particle event action budget was exceeded",
-        "script API did not preserve the exact EventBudgetExceeded diagnostic");
+            emit.errors.front() == "particle event queue capacity was reached",
+        "script API did not preserve the exact EventQueueFull diagnostic");
     Require(kb::particles::ParticlePlayback::UnregisterBackend(scriptFixture.scene, scriptBackend).Succeeded(),
         "script event-budget backend unregister failed");
 }
@@ -1340,6 +1392,536 @@ void TestNoAllocationPerFixedStep() {
         "fixed-step simulation allocated after explicit warmup and compile");
 }
 
+void TestComponentReconciliationAndOwnerPolicies() {
+    const auto addSystem = [](Fixture& fixture) {
+        const auto handle = fixture.scene.Runtime().AddSceneSystem(
+            std::make_unique<kb::particle_plugin::ParticleSceneSystem>());
+        Require(handle.IsValid(), "component reconciliation system registration failed");
+    };
+    const auto fixed = [](Fixture& fixture) {
+        static_cast<void>(fixture.scene.Runtime().Update(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds));
+    };
+
+    Fixture directFixture;
+    directFixture.scene.Components().ParticleEffects().Set(directFixture.owner, {
+        .effectAssetId = directFixture.effectAssetId,
+    });
+    kb::particle_plugin::ParticleSceneSystem directSystem;
+    kb::scene::SceneSystemContext directContext{
+        directFixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds};
+    directSystem.OnCreate(directContext);
+    directSystem.OnFixedUpdate(directContext);
+    directSystem.OnFixedUpdate(directContext);
+    g_allocationCount.store(0U, std::memory_order_relaxed);
+    g_countAllocations.store(true, std::memory_order_release);
+    directSystem.OnFixedUpdate(directContext);
+    g_countAllocations.store(false, std::memory_order_release);
+    const std::size_t directFixedAllocations = g_allocationCount.load(std::memory_order_relaxed);
+    directSystem.OnDestroy(directContext);
+    Require(directFixedAllocations == 0U,
+        "direct stable particle component reconcile allocated after warmup");
+
+    Fixture baselineFixture;
+    const auto baselineSystem = baselineFixture.scene.Runtime().AddSceneSystem(
+        std::make_unique<NoopFixedSceneSystem>());
+    Require(baselineSystem.IsValid(), "allocation baseline system registration failed");
+    fixed(baselineFixture);
+    fixed(baselineFixture);
+    g_allocationCount.store(0U, std::memory_order_relaxed);
+    g_countAllocations.store(true, std::memory_order_release);
+    for (std::uint32_t step = 0U; step < 8U; ++step) fixed(baselineFixture);
+    g_countAllocations.store(false, std::memory_order_release);
+    const std::size_t baselineRuntimeAllocations = g_allocationCount.load(std::memory_order_relaxed);
+
+    Fixture lifecycleFixture;
+    kb::scene::ParticleEffectComponent component{
+        .effectAssetId = lifecycleFixture.effectAssetId,
+        .deterministicSeed = 44U,
+        .ownerDeathPolicy = kb::scene::ParticleOwnerDeathPolicy::Drain,
+        .enabled = true,
+        .autoPlay = false,
+        .restartOnActivate = false,
+    };
+    lifecycleFixture.scene.Components().ParticleEffects().Set(lifecycleFixture.owner, component);
+    addSystem(lifecycleFixture);
+    fixed(lifecycleFixture);
+    auto ids = kb::particles::ParticlePlayback::LiveInstanceIds(lifecycleFixture.scene);
+    Require(ids.size() == 1U && !kb::particles::ParticlePlayback::Query(lifecycleFixture.scene, ids[0]).state,
+        "enabled component did not create one stopped autoPlay=false instance");
+    const std::uint64_t stableInstance = ids[0];
+    component.autoPlay = true;
+    lifecycleFixture.scene.Components().ParticleEffects().Set(lifecycleFixture.owner, component);
+    fixed(lifecycleFixture);
+    Require(kb::particles::ParticlePlayback::Query(lifecycleFixture.scene, stableInstance).state,
+        "autoPlay false-to-true transition did not start the component instance");
+    lifecycleFixture.scene.Entities().SetActive(lifecycleFixture.owner, false);
+    fixed(lifecycleFixture);
+    Require(kb::particles::ParticlePlayback::Query(lifecycleFixture.scene, stableInstance).Succeeded() &&
+            !kb::particles::ParticlePlayback::Query(lifecycleFixture.scene, stableInstance).state,
+        "restartOnActivate=false did not pause and retain the component instance");
+    lifecycleFixture.scene.Entities().SetActive(lifecycleFixture.owner, true);
+    fixed(lifecycleFixture);
+    Require(kb::particles::ParticlePlayback::Query(lifecycleFixture.scene, stableInstance).state,
+        "restartOnActivate=false did not resume the retained instance");
+    g_allocationCount.store(0U, std::memory_order_relaxed);
+    g_countAllocations.store(true, std::memory_order_release);
+    for (std::uint32_t step = 0U; step < 8U; ++step) fixed(lifecycleFixture);
+    g_countAllocations.store(false, std::memory_order_release);
+    const std::size_t runtimeUpdateAllocations = g_allocationCount.load(std::memory_order_relaxed);
+    Require(runtimeUpdateAllocations == baselineRuntimeAllocations,
+        "stable particle component system added allocations above the warmed fixed-runtime baseline");
+    component.restartOnActivate = true;
+    lifecycleFixture.scene.Components().ParticleEffects().Set(lifecycleFixture.owner, component);
+    lifecycleFixture.scene.Entities().SetActive(lifecycleFixture.owner, false);
+    fixed(lifecycleFixture);
+    Require(kb::particles::ParticlePlayback::Query(lifecycleFixture.scene, stableInstance).status ==
+            kb::particles::ParticleRuntimeStatus::InvalidInstance,
+        "restartOnActivate=true retained the inactive instance");
+    lifecycleFixture.scene.Entities().SetActive(lifecycleFixture.owner, true);
+    fixed(lifecycleFixture);
+    ids = kb::particles::ParticlePlayback::LiveInstanceIds(lifecycleFixture.scene);
+    Require(ids.size() == 1U && ids[0] != stableInstance &&
+            kb::particles::ParticlePlayback::Query(lifecycleFixture.scene, ids[0]).state,
+        "restartOnActivate=true did not create and autoplay a fresh instance");
+    component.enabled = false;
+    lifecycleFixture.scene.Components().ParticleEffects().Set(lifecycleFixture.owner, component);
+    fixed(lifecycleFixture);
+    Require(kb::particles::ParticlePlayback::LiveInstanceIds(lifecycleFixture.scene).empty(),
+        "disabled component retained a runtime instance");
+    Require(lifecycleFixture.scene.Particles().DrainFinishedEvents().empty(),
+        "ordinary component disable emitted an owner-finished event");
+    component.enabled = true;
+    lifecycleFixture.scene.Components().ParticleEffects().Set(lifecycleFixture.owner, component);
+    fixed(lifecycleFixture);
+    Require(kb::particles::ParticlePlayback::LiveInstanceIds(lifecycleFixture.scene).size() == 1U,
+        "re-enabled component did not recreate its runtime instance");
+    lifecycleFixture.scene.Components().ParticleEffects().Remove(lifecycleFixture.owner);
+    fixed(lifecycleFixture);
+    Require(kb::particles::ParticlePlayback::LiveInstanceIds(lifecycleFixture.scene).empty() &&
+            lifecycleFixture.scene.Particles().DrainFinishedEvents().empty(),
+        "component removal retained an instance or emitted a terminal owner event");
+    lifecycleFixture.scene.Components().ParticleEffects().Set(lifecycleFixture.owner, component);
+    fixed(lifecycleFixture);
+    Require(kb::particles::ParticlePlayback::LiveInstanceIds(lifecycleFixture.scene).size() == 1U,
+        "structural component add was not reconciled at the next fixed boundary");
+    lifecycleFixture.scene.Components().ParticleEffects().Remove(lifecycleFixture.owner);
+    fixed(lifecycleFixture);
+    Require(kb::particles::ParticlePlayback::LiveInstanceIds(lifecycleFixture.scene).empty(),
+        "structural component removal was not reconciled at the next fixed boundary");
+
+    auto clearEffect = Fixture::MakeEffect(0.0F, 8U);
+    clearEffect.emitters[0].spawn.lifetimeMin = 0.05F;
+    clearEffect.emitters[0].spawn.lifetimeMax = 0.05F;
+    Fixture clearFixture(std::move(clearEffect));
+    clearFixture.scene.Components().ParticleEffects().Set(clearFixture.owner, {
+        .effectAssetId = clearFixture.effectAssetId,
+        .ownerDeathPolicy = kb::scene::ParticleOwnerDeathPolicy::Clear,
+    });
+    addSystem(clearFixture);
+    fixed(clearFixture);
+    const std::uint64_t clearInstance = kb::particles::ParticlePlayback::LiveInstanceIds(clearFixture.scene).front();
+    Require(kb::particles::ParticlePlayback::Emit(clearFixture.scene, clearInstance, 1U).Succeeded(),
+        "Clear owner fixture could not emit");
+    clearFixture.scene.Entities().Destroy(clearFixture.owner);
+    fixed(clearFixture);
+    Require(kb::particles::ParticlePlayback::Query(clearFixture.scene, clearInstance).status ==
+            kb::particles::ParticleRuntimeStatus::InvalidInstance,
+        "Clear owner policy did not release immediately");
+    Require(clearFixture.scene.Particles().DrainFinishedEvents().size() == 1U &&
+            clearFixture.scene.Particles().DrainFinishedEvents().empty(),
+        "Clear owner policy did not emit exactly one terminal event");
+
+    auto drainEffect = Fixture::MakeEffect(0.0F, 8U);
+    drainEffect.emitters[0].spawn.lifetimeMin = 0.05F;
+    drainEffect.emitters[0].spawn.lifetimeMax = 0.05F;
+    Fixture drainFixture(std::move(drainEffect));
+    drainFixture.scene.Components().ParticleEffects().Set(drainFixture.owner, {
+        .effectAssetId = drainFixture.effectAssetId,
+        .ownerDeathPolicy = kb::scene::ParticleOwnerDeathPolicy::Drain,
+    });
+    addSystem(drainFixture);
+    fixed(drainFixture);
+    const std::uint64_t drainInstance = kb::particles::ParticlePlayback::LiveInstanceIds(drainFixture.scene).front();
+    Require(kb::particles::ParticlePlayback::Emit(drainFixture.scene, drainInstance, 1U).Succeeded(),
+        "Drain owner fixture could not emit");
+    drainFixture.scene.Entities().Destroy(drainFixture.owner);
+    fixed(drainFixture);
+    Require(kb::particles::ParticlePlayback::Query(drainFixture.scene, drainInstance).Succeeded() &&
+            drainFixture.scene.Particles().DrainFinishedEvents().empty(),
+        "Drain owner policy cleared live particles immediately");
+    for (std::uint32_t step = 0U; step < 4U; ++step) fixed(drainFixture);
+    Require(kb::particles::ParticlePlayback::Query(drainFixture.scene, drainInstance).status ==
+            kb::particles::ParticleRuntimeStatus::InvalidInstance,
+        "Drain owner policy retained an empty terminal instance");
+    Require(drainFixture.scene.Particles().DrainFinishedEvents().size() == 1U &&
+            drainFixture.scene.Particles().DrainFinishedEvents().empty(),
+        "Drain owner policy did not emit exactly one terminal event");
+
+    auto rawEffect = Fixture::MakeEffect(0.0F, 8U);
+    rawEffect.emitters[0].spawn.lifetimeMin = 0.05F;
+    rawEffect.emitters[0].spawn.lifetimeMax = 0.05F;
+    Fixture rawFixture(std::move(rawEffect));
+    addSystem(rawFixture);
+    const auto raw = kb::particles::ParticlePlayback::Create(
+        rawFixture.scene, rawFixture.effectAssetId, rawFixture.owner);
+    Require(raw.Succeeded() && kb::particles::ParticlePlayback::Play(rawFixture.scene, raw.instanceId).Succeeded() &&
+            kb::particles::ParticlePlayback::Emit(rawFixture.scene, raw.instanceId, 1U).Succeeded(),
+        "raw owner fallback fixture setup failed");
+    rawFixture.scene.Entities().Destroy(rawFixture.owner);
+    fixed(rawFixture);
+    Require(kb::particles::ParticlePlayback::Query(rawFixture.scene, raw.instanceId).Succeeded(),
+        "componentless instance did not use the documented Drain default");
+}
+
+void TestActiveReloadContracts() {
+    auto original = Fixture::MakeEffect(0.0F, 32U);
+    original.emitters[0].spawn.speedMin = 1.0F;
+    original.emitters[0].spawn.speedMax = 3.0F;
+    original.emitters[0].spawn.randomization = 1.0F;
+    original.emitters[0].spawn.lifetimeMin = 10.0F;
+    original.emitters[0].spawn.lifetimeMax = 10.0F;
+    Fixture fixture(original);
+    kb::particle_plugin::CpuParticleBackend backend;
+    backend.Warmup();
+    const auto first = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    const auto second = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    Require(first.Succeeded() && second.Succeeded() && backend.CompiledEffectCount() == 1U,
+        "instances did not share one compiled effect revision");
+    Require(backend.SetSeed(fixture.scene, first.instanceId, 77U).Succeeded() &&
+            backend.SetParameterScalar(fixture.scene, first.instanceId, "gain", 2.0F).Succeeded() &&
+            backend.Play(fixture.scene, first.instanceId).Succeeded() &&
+            backend.Emit(fixture.scene, first.instanceId, 2U).Succeeded(),
+        "reload preservation fixture setup failed");
+    const auto before = CopyBackendStates(backend, fixture, first.instanceId);
+
+    auto compatible = original;
+    compatible.displayName = "Compatible revision";
+    compatible.emitters[0].spawn.lifetimeMin = 20.0F;
+    compatible.emitters[0].spawn.lifetimeMax = 20.0F;
+    Require(fixture.scene.Assets().Manager().PublishRuntimeAsset(
+                kb::assets::AssetId{fixture.effectAssetId},
+                std::make_shared<kb::scene::ParticleEffectAsset>(compatible)) &&
+            backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "compatible asset revision did not refresh at the fixed boundary");
+    const auto afterCompatible = CopyBackendStates(backend, fixture, first.instanceId);
+    Require(afterCompatible.size() == before.size() && backend.Query(fixture.scene, first.instanceId).state &&
+            backend.CompiledEffectCount() == 1U &&
+            backend.ClearParameter(fixture.scene, first.instanceId, "gain").Succeeded(),
+        "compatible reload did not preserve particles, playback, parameters, and shared compilation");
+    Require(backend.Emit(fixture.scene, first.instanceId, 1U).Succeeded(),
+        "compatible reload could not emit from the new revision");
+    const auto afterEmit = CopyBackendStates(backend, fixture, first.instanceId);
+    Require(afterEmit.size() == 3U && afterEmit.back().lifetime == 20.0F,
+        "compatible reload did not activate the new immutable revision");
+
+    auto topology = compatible;
+    auto addedEmitter = topology.emitters[0];
+    addedEmitter.emitterId = 2U;
+    addedEmitter.name = "Topology Added";
+    addedEmitter.spawn.rateOverTime.keyframes.front().value = 0.0F;
+    topology.emitters.push_back(std::move(addedEmitter));
+    Require(backend.SetParameterScalar(fixture.scene, first.instanceId, "kept", 3.0F).Succeeded() &&
+            fixture.scene.Assets().Manager().PublishRuntimeAsset(
+                kb::assets::AssetId{fixture.effectAssetId},
+                std::make_shared<kb::scene::ParticleEffectAsset>(topology)) &&
+            backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "topology revision did not refresh at the fixed boundary");
+    Require(backend.Query(fixture.scene, first.instanceId).state &&
+            backend.Query(fixture.scene, first.instanceId).status ==
+                kb::particles::ParticleRuntimeStatus::Restarted &&
+            backend.Query(fixture.scene, first.instanceId).Succeeded() &&
+            !kb::particles::ParticleRuntimeResult{
+                .status = kb::particles::ParticleRuntimeStatus::Restarted}.Succeeded() &&
+            backend.Query(fixture.scene, first.instanceId).liveParticleCount == 0U &&
+            backend.ClearParameter(fixture.scene, first.instanceId, "kept").Succeeded() &&
+            backend.CompiledEffectCount() == 1U,
+        "topology reload did not deterministically restart while preserving intent and parameters");
+    Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
+            backend.Query(fixture.scene, first.instanceId).status ==
+                kb::particles::ParticleRuntimeStatus::Success,
+        "query-only topology restart observation persisted beyond its fixed step");
+
+    auto invalid = topology;
+    invalid.emitters[0].maxParticles = 0U;
+    Require(fixture.scene.Assets().Manager().PublishRuntimeAsset(
+                kb::assets::AssetId{fixture.effectAssetId},
+                std::make_shared<kb::scene::ParticleEffectAsset>(invalid)) &&
+            backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "invalid reload candidate was not processed nonfatally");
+    const auto stale = backend.Query(fixture.scene, first.instanceId);
+    Require(stale.status == kb::particles::ParticleRuntimeStatus::StaleAfterInvalidReload && stale.Succeeded() &&
+            !kb::particles::ParticleRuntimeResult{
+                .status = kb::particles::ParticleRuntimeStatus::StaleAfterInvalidReload}.Succeeded(),
+        "invalid reload did not expose query-only last-known-good status");
+    Require(backend.Emit(fixture.scene, first.instanceId, 1U).Succeeded() &&
+            backend.Query(fixture.scene, first.instanceId).liveParticleCount == 1U,
+        "invalid candidate damaged the last-known-good revision");
+
+    topology.displayName = "Recovered revision";
+    Require(fixture.scene.Assets().Manager().PublishRuntimeAsset(
+                kb::assets::AssetId{fixture.effectAssetId},
+                std::make_shared<kb::scene::ParticleEffectAsset>(topology)) &&
+            backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
+            backend.Query(fixture.scene, first.instanceId).status == kb::particles::ParticleRuntimeStatus::Success &&
+            backend.Query(fixture.scene, first.instanceId).liveParticleCount == 1U,
+        "valid reload did not recover from stale last-known-good state");
+}
+
+void TestComponentRateCapacityAndFollowTransformContracts() {
+    const auto makeTwoEmitter = [] {
+        auto effect = Fixture::MakeEffect(60.0F, 4U);
+        effect.emitters[0].spawn.speedMin = 0.0F;
+        effect.emitters[0].spawn.speedMax = 0.0F;
+        effect.emitters[0].spawn.lifetimeMin = 10.0F;
+        effect.emitters[0].spawn.lifetimeMax = 10.0F;
+        auto second = effect.emitters[0];
+        second.emitterId = 2U;
+        second.name = "Secondary";
+        effect.emitters.push_back(std::move(second));
+        return effect;
+    };
+    const auto setOwnerX = [](Fixture& fixture, float x) {
+        kb::scene::TransformComponent transform = fixture.scene.Transforms().Get(fixture.owner);
+        transform.localPosition.x = x;
+        transform.worldPosition.x = x;
+        fixture.scene.Transforms().Set(fixture.owner, transform);
+    };
+
+    Fixture configured(makeTwoEmitter());
+    configured.scene.Components().ParticleEffects().Set(configured.owner, {
+        .effectAssetId = configured.effectAssetId,
+        .rateMultiplier = 2.0F,
+        .maxParticlesOverride = 3U,
+    });
+    kb::particle_plugin::ParticleSceneSystem configuredSystem;
+    kb::scene::SceneSystemContext configuredContext{
+        configured.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds};
+    configuredSystem.OnCreate(configuredContext);
+    configuredSystem.OnFixedUpdate(configuredContext);
+    const std::uint64_t configuredId = kb::particles::ParticlePlayback::LiveInstanceIds(configured.scene).front();
+    Require(kb::particles::ParticlePlayback::Query(configured.scene, configuredId).liveParticleCount == 3U,
+        "rateMultiplier did not deterministically scale continuous rate or maxParticlesOverride did not cap the cross-emitter total");
+    auto component = *configured.scene.Components().ParticleEffects().TryGet(configured.owner);
+    component.maxParticlesOverride = 1U;
+    configured.scene.Components().ParticleEffects().Set(configured.owner, component);
+    configuredSystem.OnFixedUpdate(configuredContext);
+    Require(kb::particles::ParticlePlayback::Query(configured.scene, configuredId).liveParticleCount == 3U,
+        "lowering maxParticlesOverride deleted particles that were already alive");
+    configuredSystem.OnDestroy(configuredContext);
+
+    Fixture rateMutation(makeTwoEmitter());
+    kb::scene::ParticleEffectComponent rateComponent{
+        .effectAssetId = rateMutation.effectAssetId,
+        .rateMultiplier = 1.0F,
+        .maxParticlesOverride = 8U,
+    };
+    rateMutation.scene.Components().ParticleEffects().Set(rateMutation.owner, rateComponent);
+    kb::particle_plugin::ParticleSceneSystem rateSystem;
+    kb::scene::SceneSystemContext rateContext{
+        rateMutation.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds};
+    rateSystem.OnCreate(rateContext);
+    rateSystem.OnFixedUpdate(rateContext);
+    const std::uint64_t rateId = kb::particles::ParticlePlayback::LiveInstanceIds(rateMutation.scene).front();
+    Require(kb::particles::ParticlePlayback::Query(rateMutation.scene, rateId).liveParticleCount == 2U,
+        "unit component rate did not emit one particle per authored 60-per-second emitter");
+    rateComponent.rateMultiplier = 2.0F;
+    rateMutation.scene.Components().ParticleEffects().Set(rateMutation.owner, rateComponent);
+    rateSystem.OnFixedUpdate(rateContext);
+    Require(kb::particles::ParticlePlayback::Query(rateMutation.scene, rateId).liveParticleCount == 6U,
+        "rateMultiplier mutation was not applied at the next fixed boundary");
+    rateSystem.OnDestroy(rateContext);
+
+    Fixture raw(makeTwoEmitter());
+    kb::particle_plugin::CpuParticleBackend rawBackend;
+    rawBackend.Warmup();
+    const auto rawInstance = rawBackend.Create(raw.scene, raw.effectAssetId, raw.owner);
+    Require(rawInstance.Succeeded() && rawBackend.Play(raw.scene, rawInstance.instanceId).Succeeded() &&
+            rawBackend.Step(raw.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
+            rawBackend.Query(raw.scene, rawInstance.instanceId).liveParticleCount == 2U,
+        "raw-create defaults did not retain authored capacity, unit rate, and frozen identity transform");
+    setOwnerX(raw, 50.0F);
+    Require(rawBackend.Step(raw.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "raw-create default second fixed step failed");
+    const auto rawStates = CopyBackendStates(rawBackend, raw, rawInstance.instanceId);
+    Require(rawStates.size() == 4U && std::all_of(rawStates.begin(), rawStates.end(),
+                [](const auto& state) { return state.position.x < 1.0F; }),
+        "raw-create default transform followed owner mutations without component configuration");
+
+    auto followEffect = makeTwoEmitter();
+    followEffect.emitters[0].localPosition = {1.0F, 0.0F, 0.0F};
+    followEffect.emitters[0].simulationSpace = kb::scene::ParticleSimulationSpace::Local;
+    followEffect.emitters[1].localPosition = {1.0F, 0.0F, 0.0F};
+    followEffect.emitters[1].simulationSpace = kb::scene::ParticleSimulationSpace::World;
+    Fixture follow(std::move(followEffect));
+    setOwnerX(follow, 10.0F);
+    kb::scene::ParticleEffectComponent followComponent{.effectAssetId = follow.effectAssetId};
+    follow.scene.Components().ParticleEffects().Set(follow.owner, followComponent);
+    kb::particle_plugin::ParticleSceneSystem followSystem;
+    kb::scene::SceneSystemContext followContext{
+        follow.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds};
+    followSystem.OnCreate(followContext);
+    followSystem.OnFixedUpdate(followContext);
+    const std::uint64_t followId = kb::particles::ParticlePlayback::LiveInstanceIds(follow.scene).front();
+    setOwnerX(follow, 20.0F);
+    followSystem.OnFixedUpdate(followContext);
+    auto states = kb::particles::ParticlePlayback::LiveParticleStates(follow.scene, followId);
+    Require(states.size() == 4U &&
+            std::count_if(states.begin(), states.end(), [](const auto& state) { return state.position.x == 11.0F; }) == 1 &&
+            std::count_if(states.begin(), states.end(), [](const auto& state) { return state.position.x == 21.0F; }) == 3,
+        "followTransform=true did not move existing Local-space particles while leaving existing World-space particles fixed and transforming new spawns");
+    followComponent.followTransform = false;
+    follow.scene.Components().ParticleEffects().Set(follow.owner, followComponent);
+    followSystem.OnFixedUpdate(followContext);
+    states = kb::particles::ParticlePlayback::LiveParticleStates(follow.scene, followId);
+    Require(states.size() == 6U &&
+            std::count_if(states.begin(), states.end(), [](const auto& state) { return state.position.x == 21.0F; }) == 5,
+        "followTransform=false changed particles while freezing the owner transform at the fixed-boundary toggle");
+    setOwnerX(follow, 30.0F);
+    followSystem.OnFixedUpdate(followContext);
+    states = kb::particles::ParticlePlayback::LiveParticleStates(follow.scene, followId);
+    Require(states.size() == 8U &&
+            std::none_of(states.begin(), states.end(), [](const auto& state) { return state.position.x == 31.0F; }) &&
+            std::count_if(states.begin(), states.end(), [](const auto& state) { return state.position.x == 21.0F; }) == 7,
+        "followTransform=false did not preserve its frozen transform after the owner moved");
+    g_allocationCount.store(0U, std::memory_order_relaxed);
+    g_countAllocations.store(true, std::memory_order_release);
+    followSystem.OnFixedUpdate(followContext);
+    g_countAllocations.store(false, std::memory_order_release);
+    Require(g_allocationCount.load(std::memory_order_relaxed) == 0U,
+        "stable rate/cap/follow component configuration allocated after warmup");
+    followSystem.OnDestroy(followContext);
+}
+
+void TestComponentBindingCapacityIsAtomic() {
+    const auto populate = [](Fixture& fixture, std::size_t count) {
+        std::vector<kb::scene::SceneEntity> entities;
+        entities.reserve(count);
+        entities.push_back(fixture.owner);
+        while (entities.size() < count) entities.push_back(fixture.scene.Entities().CreateEntity());
+        for (const kb::scene::SceneEntity entity : entities) {
+            fixture.scene.Components().ParticleEffects().Set(entity, {
+                .effectAssetId = fixture.effectAssetId,
+                .autoPlay = false,
+            });
+        }
+    };
+    Fixture boundary;
+    populate(boundary, kb::scene::kParticleEffectMaxInstancesPerScene);
+    kb::particle_plugin::ParticleSceneSystem boundarySystem;
+    kb::scene::SceneSystemContext boundaryContext{
+        boundary.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds};
+    boundarySystem.OnCreate(boundaryContext);
+    boundarySystem.OnFixedUpdate(boundaryContext);
+    Require(kb::particles::ParticlePlayback::LiveInstanceIds(boundary.scene).size() ==
+            kb::scene::kParticleEffectMaxInstancesPerScene,
+        "component binding hard boundary was rejected");
+    boundarySystem.OnDestroy(boundaryContext);
+
+    Fixture overflow;
+    populate(overflow, kb::scene::kParticleEffectMaxInstancesPerScene + 1U);
+    kb::particle_plugin::ParticleSceneSystem overflowSystem;
+    kb::scene::SceneSystemContext overflowContext{
+        overflow.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds};
+    overflowSystem.OnCreate(overflowContext);
+    bool rejected = false;
+    try {
+        overflowSystem.OnFixedUpdate(overflowContext);
+    } catch (const std::length_error& error) {
+        rejected = std::string_view{error.what()} == "particle component binding capacity exceeded";
+    }
+    Require(rejected && kb::particles::ParticlePlayback::LiveInstanceIds(overflow.scene).empty(),
+        "component binding boundary plus one was not rejected before backend mutation");
+    overflowSystem.OnDestroy(overflowContext);
+
+    Fixture turnover;
+    std::vector<kb::scene::SceneEntity> previousOwners;
+    previousOwners.reserve(kb::scene::kParticleEffectMaxInstancesPerScene);
+    previousOwners.push_back(turnover.owner);
+    while (previousOwners.size() < kb::scene::kParticleEffectMaxInstancesPerScene) {
+        previousOwners.push_back(turnover.scene.Entities().CreateEntity());
+    }
+    for (const kb::scene::SceneEntity owner : previousOwners) {
+        turnover.scene.Components().ParticleEffects().Set(owner, {
+            .effectAssetId = turnover.effectAssetId,
+            .autoPlay = false,
+        });
+    }
+    kb::particle_plugin::ParticleSceneSystem turnoverSystem;
+    kb::scene::SceneSystemContext turnoverContext{
+        turnover.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds};
+    turnoverSystem.OnCreate(turnoverContext);
+    turnoverSystem.OnFixedUpdate(turnoverContext);
+    Require(kb::particles::ParticlePlayback::LiveInstanceIds(turnover.scene).size() ==
+            kb::scene::kParticleEffectMaxInstancesPerScene,
+        "dead-binding turnover fixture did not fill its initial capacity");
+    for (const kb::scene::SceneEntity owner : previousOwners) turnover.scene.Entities().Destroy(owner);
+    for (std::size_t index = 0U; index < kb::scene::kParticleEffectMaxInstancesPerScene; ++index) {
+        const kb::scene::SceneEntity owner = turnover.scene.Entities().CreateEntity();
+        turnover.scene.Components().ParticleEffects().Set(owner, {
+            .effectAssetId = turnover.effectAssetId,
+            .autoPlay = false,
+        });
+    }
+    turnoverSystem.OnFixedUpdate(turnoverContext);
+    Require(kb::particles::ParticlePlayback::LiveInstanceIds(turnover.scene).size() ==
+            kb::scene::kParticleEffectMaxInstancesPerScene,
+        "dead draining bindings were not reclaimed before full-capacity component turnover");
+    Require(turnover.scene.Particles().DrainFinishedEvents().size() ==
+            kb::scene::kParticleEffectMaxInstancesPerScene,
+        "dead draining binding turnover did not complete backend-owned terminal lifecycle exactly once");
+    turnoverSystem.OnDestroy(turnoverContext);
+}
+
+void TestComponentCreateFailureIsExplicitAndPreservesLiveInstance() {
+    const auto fixed = [](kb::particle_plugin::ParticleSceneSystem& system, Fixture& fixture) {
+        kb::scene::SceneSystemContext context{
+            fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds};
+        system.OnFixedUpdate(context);
+    };
+    const auto expectInvalidAsset = [&](kb::particle_plugin::ParticleSceneSystem& system, Fixture& fixture) {
+        bool rejected = false;
+        try {
+            fixed(system, fixture);
+        } catch (const std::logic_error& error) {
+            rejected = std::string_view{error.what()} ==
+                "particle component effectAssetId does not resolve to an executable particle effect";
+        }
+        Require(rejected, "invalid enabled particle component did not produce its actionable failure");
+    };
+
+    Fixture missing;
+    missing.scene.Components().ParticleEffects().Set(missing.owner, {.effectAssetId = 999U});
+    kb::particle_plugin::ParticleSceneSystem missingSystem;
+    kb::scene::SceneSystemContext missingContext{
+        missing.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds};
+    missingSystem.OnCreate(missingContext);
+    expectInvalidAsset(missingSystem, missing);
+    Require(kb::particles::ParticlePlayback::LiveInstanceIds(missing.scene).empty(),
+        "failed initial component creation left a partial runtime instance");
+    missingSystem.OnDestroy(missingContext);
+
+    Fixture replacement;
+    replacement.scene.Components().ParticleEffects().Set(replacement.owner, {
+        .effectAssetId = replacement.effectAssetId,
+        .autoPlay = false,
+    });
+    kb::particle_plugin::ParticleSceneSystem replacementSystem;
+    kb::scene::SceneSystemContext replacementContext{
+        replacement.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds};
+    replacementSystem.OnCreate(replacementContext);
+    fixed(replacementSystem, replacement);
+    const std::uint64_t liveId = kb::particles::ParticlePlayback::LiveInstanceIds(replacement.scene).front();
+    auto component = *replacement.scene.Components().ParticleEffects().TryGet(replacement.owner);
+    component.effectAssetId = 999U;
+    replacement.scene.Components().ParticleEffects().Set(replacement.owner, component);
+    expectInvalidAsset(replacementSystem, replacement);
+    const auto ids = kb::particles::ParticlePlayback::LiveInstanceIds(replacement.scene);
+    Require(ids.size() == 1U && ids.front() == liveId &&
+            kb::particles::ParticlePlayback::Query(replacement.scene, liveId).Succeeded(),
+        "failed component asset replacement damaged its live last-known-good instance");
+    replacementSystem.OnDestroy(replacementContext);
+}
+
 void TestValidationAndLifecycle() {
     Fixture fixture;
     kb::particle_plugin::CpuParticleBackend backend;
@@ -1567,6 +2149,11 @@ int main() {
         TestBurstLifetimeDurationLoopAndCapacity();
         TestGlobalCapacityAndCompileRejection();
         TestNoAllocationPerFixedStep();
+        TestComponentReconciliationAndOwnerPolicies();
+        TestComponentRateCapacityAndFollowTransformContracts();
+        TestComponentBindingCapacityIsAtomic();
+        TestComponentCreateFailureIsExplicitAndPreservesLiveInstance();
+        TestActiveReloadContracts();
         std::cout << "21kb Particle System CPU backend tests passed\n";
         return 0;
     } catch (const std::exception& error) {
