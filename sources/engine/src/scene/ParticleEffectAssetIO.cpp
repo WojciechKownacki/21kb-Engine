@@ -510,6 +510,9 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
             ParticleModuleAsset& module = emitter.modules[moduleIndex];
             reader.RequiredIndexAnchor(ModulePath(emitterIndex, moduleIndex, "id"), module.moduleId,
                                        ParseUInt<std::uint64_t>);
+            module.authoringOrder = static_cast<std::uint32_t>(moduleIndex);
+            static_cast<void>(reader.Optional(ModulePath(emitterIndex, moduleIndex, "authoringOrder"),
+                                              module.authoringOrder, ParseUInt<std::uint32_t>));
             reader.Required(ModulePath(emitterIndex, moduleIndex, "type"), module.type, ParseEnum<ParticleModuleType>,
                             ParticleEffectDiagnosticCode::InvalidEnum);
             reader.Required(ModulePath(emitterIndex, moduleIndex, "enabled"), module.enabled, ParseBool);
@@ -1055,6 +1058,7 @@ std::optional<std::string> ParticleEffectAssetIO::Serialize(const ParticleEffect
         for (std::size_t mi = 0; mi < e.modules.size(); ++mi) {
             const auto& m = e.modules[mi];
             Line(out, ModulePath(ei, mi, "id"), std::to_string(m.moduleId));
+            Line(out, ModulePath(ei, mi, "authoringOrder"), std::to_string(m.authoringOrder));
             Line(out, ModulePath(ei, mi, "type"), EnumText(m.type));
             BoolLine(out, ModulePath(ei, mi, "enabled"), m.enabled);
             auto base = ModulePath(ei, mi, "payload");

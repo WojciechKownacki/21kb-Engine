@@ -1,9 +1,11 @@
 #pragma once
 
 #include "engine/assets/AssetId.hpp"
+#include "engine/assets/AssetKind.hpp"
 #include "rendering/ParticleEditorPanelLayout.hpp"
 
 #include <cstdint>
+#include <string_view>
 
 namespace kb::editor {
 
@@ -15,7 +17,7 @@ public:
     [[nodiscard]] static bool Execute(
         EditorSceneContext& sceneContext,
         const ParticleEditorPanelHit& hit,
-        kb::assets::AssetId selectedMaterial = {});
+        kb::assets::AssetId selectedMaterial = {}, std::string_view editedValue = {});
     static void UpdateDrag(EditorSceneContext& sceneContext,
                            const ParticleEditorPanelLayout& layout,
                            int y) noexcept;
