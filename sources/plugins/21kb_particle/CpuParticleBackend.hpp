@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/particles/IParticleSimulationBackend.hpp"
+#include "engine/particles/ParticleCompiledEffect.hpp"
 #include "engine/particles/ParticleRenderSnapshot.hpp"
 #include "engine/scene/ParticleEffectAsset.hpp"
 #include "engine/scene/ParticleEffectAssetSchema.hpp"
@@ -130,102 +131,19 @@ private:
         RuntimeParameter parameter{};
     };
 
-    struct CompiledCurveKey {
-        float time = 0.0F;
-        float value = 0.0F;
-        kb::math::Easing easing = kb::math::Easing::Linear;
-    };
+    using CompiledCurveKey = kb::particles::ParticleCompiledCurveKey;
+    using CompiledCurve = kb::particles::ParticleCompiledCurve;
+    using CompiledGradientStop = kb::particles::ParticleCompiledGradientStop;
+    using CompiledGradient = kb::particles::ParticleCompiledGradient;
+    using CompiledEmitter = kb::particles::ParticleCompiledEmitter;
+    using CompiledEffect = kb::particles::ParticleCompiledEffect;
 
-    struct CompiledCurve {
-        std::uint8_t keyCount = 0U;
-        std::array<CompiledCurveKey, kb::scene::kParticleEffectMaxCurveKeys> keys{};
-    };
-
-    struct CompiledGradientStop {
-        float time = 0.0F;
-        kb::math::Color color{};
-    };
-
-    struct CompiledGradient {
-        std::uint8_t stopCount = 0U;
-        std::array<CompiledGradientStop, kb::scene::kParticleEffectMaxGradientStops> stops{};
-    };
-
-    struct CompiledEmitter {
-        kb::scene::ParticleStableId emitterId = 0U;
-        kb::scene::ParticleOutputType outputType = kb::scene::ParticleOutputType::Billboard;
-        std::uint64_t materialAssetId = 0U;
-        std::uint64_t meshAssetId = 0U;
-        std::uint64_t textureAtlasAssetId = 0U;
-        kb::scene::ParticleBlendMode blendMode = kb::scene::ParticleBlendMode::Alpha;
-        kb::scene::ParticleSortMode sortMode = kb::scene::ParticleSortMode::BackToFront;
-        kb::scene::ParticleAlignment alignment = kb::scene::ParticleAlignment::CameraFacing;
-        bool depthTest = true;
-        bool depthWrite = false;
-        bool softParticles = false;
-        bool antiAliasing = false;
-        std::uint16_t flipbookColumns = 1U;
-        std::uint16_t flipbookRows = 1U;
-        std::uint32_t flipbookFrameCount = 1U;
-        float flipbookFramesPerSecond = 0.0F;
-        bool flipbookLooping = true;
-        float stretchVelocityScale = 0.0F;
-        float stretchMinimumLength = 0.0F;
-        float pointSpriteDiameter = 1.0F;
-        kb::scene::ParticleSimulationSpace simulationSpace = kb::scene::ParticleSimulationSpace::World;
-        bool enabled = false;
-        kb::scene::ParticleSpawnMode mode = kb::scene::ParticleSpawnMode::Continuous;
-        std::uint32_t maxParticles = 0U;
-        kb::math::Vec3 localPosition{};
-        kb::math::Quat localRotation{};
-        kb::scene::ParticleInitialVelocityModule initialVelocity{};
-        float lifetimeMin = 1.0F;
-        float lifetimeMax = 1.0F;
-        float prewarmSeconds = 0.0F;
-        std::uint8_t rateKeyCount = 0U;
-        std::uint8_t burstCount = 0U;
-        std::array<CompiledCurveKey, kb::scene::kParticleEffectMaxCurveKeys> rateKeys{};
-        std::array<kb::scene::ParticleBurstAsset, kb::scene::kParticleEffectMaxBursts> bursts{};
-        CompiledGradient colorOverLife{};
-        CompiledCurve sizeOverLife{};
-        CompiledCurve alphaOverLife{};
-        using ModulePayload = std::variant<kb::scene::ParticleInitialVelocityModule,
-                                           kb::scene::ParticleGravityModule,
-                                           kb::scene::ParticleWindModule,
-                                           kb::scene::ParticleDragModule,
-                                           kb::scene::ParticleCollisionPlaneModule,
-                                           kb::scene::ParticleSubEmitterModule>;
-        struct Module {
-            kb::scene::ParticleStableId moduleId = 0U;
-            kb::scene::ParticleModuleType type = kb::scene::ParticleModuleType::InitialVelocity;
-            bool enabled = false;
-            ModulePayload payload = kb::scene::ParticleInitialVelocityModule{};
-        };
-        std::uint8_t moduleCount = 0U;
-        std::array<Module, kb::scene::kParticleEffectMaxModulesPerEmitter> modules{};
-    };
-
-    struct CompiledEffect {
-        struct EventBinding {
-            std::uint8_t sourceEmitterIndex = 0U;
-            kb::scene::ParticleEventTrigger trigger = kb::scene::ParticleEventTrigger::Death;
-            kb::scene::ParticleStableId sourceModuleId = 0U;
-            std::uint8_t targetEmitterIndex = 0U;
-            std::uint32_t count = 1U;
-            std::uint8_t maxDepth = 1U;
-            std::uint32_t perStepBudget = 1U;
-        };
+    struct CompiledEffectEntry {
         std::uint64_t assetId = 0U;
         std::uint64_t assetGeneration = 0U;
         std::uint64_t invalidCandidateGeneration = 0U;
-        std::uint64_t determinismSeed = 0U;
-        float durationSeconds = 0.0F;
-        bool looping = false;
-        std::uint8_t emitterCount = 0U;
-        std::uint8_t eventBindingCount = 0U;
         std::uint16_t referenceCount = 0U;
-        std::array<CompiledEmitter, kb::scene::kParticleEffectMaxEmitters> emitters{};
-        std::array<EventBinding, kb::scene::kParticleEffectMaxEventBindings> eventBindings{};
+        kb::particles::ParticleCompiledEffectHandle effect;
     };
 
     struct InstanceRuntime {
@@ -331,7 +249,7 @@ private:
     std::vector<std::uint64_t> seeds_;
     std::vector<PlaybackState> playbackStates_;
     std::vector<InstanceRuntime> instanceRuntime_;
-    std::vector<CompiledEffect> compiledEffects_;
+    std::vector<CompiledEffectEntry> compiledEffects_;
     std::vector<ParameterEntry> parameters_;
 
     std::vector<Command> commands_;

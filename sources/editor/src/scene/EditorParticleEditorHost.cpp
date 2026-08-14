@@ -1,9 +1,11 @@
 #include "scene/EditorSceneContext.hpp"
+#include "scene/ParticleEditorBakeHostCommand.hpp"
 
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "project/EditorProjectPaths.hpp"
 
 #include <memory>
 #include <optional>
@@ -103,6 +105,27 @@ bool EditorSceneContext::SaveParticleEditorAsset() {
         return false;
     }
     return true;
+}
+
+kb::particle_editor::ParticleBakeResult EditorSceneContext::BakeParticleEditorAsset() {
+    if (!HasParticleEditorAsset()) {
+        kb::particle_editor::ParticleBakeResult result;
+        result.diagnostics.push_back({.code = kb::scene::ParticleEffectDiagnosticCode::InvalidReference,
+            .propertyPath = "effect", .message = "no particle editor document is open"});
+        console_.Error("Particles", kb::scene::FormatParticleEffectDiagnostic(result.diagnostics.front()));
+        return result;
+    }
+    const kb::assets::AssetRegistry& registry = scene_->Assets().Manager().Registry();
+    const kb::assets::AssetMetadata* metadata = registry.Find(particleEditorAssetId_);
+    if (metadata == nullptr) {
+        kb::particle_editor::ParticleBakeResult result;
+        result.diagnostics.push_back({.code = kb::scene::ParticleEffectDiagnosticCode::InvalidReference,
+            .propertyPath = "effect", .message = "open particle document metadata is no longer registered"});
+        console_.Error("Particles", kb::scene::FormatParticleEffectDiagnostic(result.diagnostics.front()));
+        return result;
+    }
+    return ParticleEditorBakeHostCommand::Execute(particleEditorDocument_.Asset(), *metadata, registry,
+                                                   EditorProjectPaths::ProjectRoot(), console_);
 }
 
 bool EditorSceneContext::RevertParticleEditorAsset() {

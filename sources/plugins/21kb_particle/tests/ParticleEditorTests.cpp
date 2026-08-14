@@ -2,6 +2,7 @@
 #include "editor/ParticleDocumentCloseGuard.hpp"
 #include "editor/ParticleEditorDocument.hpp"
 #include "editor/ParticlePreviewSession.hpp"
+#include "editor/ParticleBakeService.hpp"
 
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
@@ -17,6 +18,7 @@
 
 #include <bgfx/bgfx.h>
 
+#include <array>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -26,6 +28,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #ifndef KB_21KB_PARTICLE_PLUGIN_PATH
 #define KB_21KB_PARTICLE_PLUGIN_PATH ""
@@ -164,6 +168,161 @@ void TestCloseGuardAllDirtyTransitions() {
         "explicit discard did not release the pending transition");
 }
 
+void TestProductionBakeCacheAndCapabilityGates() {
+    using namespace kb::particle_editor;
+    const std::filesystem::path root = TestRoot() / "bake";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "bake fixture directory creation failed");
+
+    kb::assets::AssetRegistry registry;
+    Require(registry.Upsert({.id = kb::assets::AssetId{72U}, .type = "RenderMaterial",
+                .virtualPath = "/Game/Materials/PreviewParticle.21kb", .physicalPath = root / "Material.21kb",
+                .contentHash = 10U}) &&
+            registry.Upsert({.id = kb::assets::AssetId{73U}, .type = "RenderMesh",
+                .virtualPath = "/Game/Meshes/Particle.kbmesh", .physicalPath = root / "Mesh.kbmesh",
+                .contentHash = 20U}),
+        "bake dependency registration failed");
+    const std::filesystem::path sourcePath = root / "Working.kbvfx";
+    {
+        std::ofstream source{sourcePath, std::ios::binary};
+        source << "source bytes must not be changed by Bake";
+    }
+    const std::string originalSource = ReadBytes(sourcePath);
+    const kb::assets::AssetMetadata owner{.id = kb::assets::AssetId{71U},
+        .type = kb::scene::kParticleEffectAssetType, .virtualPath = "/Game/Effects/Working.kbvfx",
+        .physicalPath = sourcePath, .contentHash = 30U};
+    auto effect = MakeEffect();
+    effect.emitters[0].spawn.bursts.push_back({.timeSeconds = 0.25F, .count = 3U});
+    effect.emitters[0].modules.push_back({.moduleId = 1U, .type = kb::scene::ParticleModuleType::Gravity,
+        .payload = kb::scene::ParticleGravityModule{.acceleration = {0.0F, -2.0F, 0.0F}}});
+    kb::math::Gradient colorGradient;
+    colorGradient.stops = {{.time = 0.0F, .color = {1.0F, 0.0F, 0.0F, 1.0F}},
+                           {.time = 1.0F, .color = {0.0F, 0.0F, 1.0F, 0.5F}}};
+    effect.emitters[0].modules.push_back({.moduleId = 2U, .type = kb::scene::ParticleModuleType::ColorOverLife,
+        .payload = kb::scene::ParticleColorOverLifeModule{.gradient = std::move(colorGradient)}});
+    const std::filesystem::path cacheRoot = root / "Saved" / "21kbParticleCache";
+
+    const auto bake = [&](const kb::scene::ParticleEffectAsset& working) {
+        return ParticleBakeService::Bake({.workingAsset = working, .owner = owner,
+            .registry = registry, .cacheRoot = cacheRoot});
+    };
+    const ParticleBakeResult first = bake(effect);
+    Require(first.Succeeded() && first.status == ParticleBakeStatus::Baked && first.effect != nullptr &&
+            std::filesystem::is_regular_file(first.cachePath) && ReadBytes(sourcePath) == originalSource,
+        "first production Bake failed or modified the source asset");
+    const ParticleBakeResult hit = bake(effect);
+    Require(hit.status == ParticleBakeStatus::UpToDate && hit.key == first.key &&
+            hit.effect->emitters[0].materialAssetId == 72U && hit.effect->emitters[0].burstCount == 1U &&
+            hit.effect->emitters[0].moduleCount == 2U && hit.effect->emitters[0].colorOverLife.stopCount == 2U &&
+            std::get<kb::scene::ParticleGravityModule>(hit.effect->emitters[0].modules[0].payload).acceleration.y == -2.0F,
+        "canonical Bake cache did not return a validated immutable artifact hit");
+    const ParticleBakeResult alternatePlatform = ParticleBakeService::Bake({.workingAsset = effect, .owner = owner,
+        .registry = registry, .cacheRoot = cacheRoot,
+        .compile = {.platform = kb::particles::ParticleCompilePlatform::WindowsVulkan}});
+    Require(alternatePlatform.status == ParticleBakeStatus::Baked &&
+            alternatePlatform.key.platform != first.key.platform && alternatePlatform.cachePath != first.cachePath,
+        "typed compiler platform was omitted from the Bake cache key");
+    kb::particle_plugin::ParticleCompilerCapabilities reducedCapabilities;
+    reducedCapabilities.pointSprite = false;
+    const ParticleBakeResult alternateCapabilities = ParticleBakeService::Bake({.workingAsset = effect, .owner = owner,
+        .registry = registry, .cacheRoot = cacheRoot,
+        .compile = {.capabilities = reducedCapabilities}});
+    Require(alternateCapabilities.status == ParticleBakeStatus::Baked &&
+            alternateCapabilities.key.capabilityKey != first.key.capabilityKey &&
+            alternateCapabilities.cachePath != first.cachePath,
+        "typed compiler capability set was omitted from the Bake cache key");
+
+    auto edited = effect;
+    edited.durationSeconds = 7.0F;
+    const ParticleBakeResult sourceChanged = bake(edited);
+    Require(sourceChanged.status == ParticleBakeStatus::Baked && sourceChanged.key.sourceHash != first.key.sourceHash &&
+            sourceChanged.cachePath != first.cachePath,
+        "unsaved canonical source change did not invalidate the Bake cache key");
+    Require(registry.Upsert({.id = kb::assets::AssetId{999U}, .type = "RenderTexture",
+                .virtualPath = "/Game/Unrelated.kbtex", .contentHash = 1U}),
+        "unrelated bake registry mutation failed");
+    Require(bake(effect).status == ParticleBakeStatus::UpToDate,
+        "unrelated registry metadata invalidated the particle Bake cache");
+    Require(registry.Upsert({.id = kb::assets::AssetId{72U}, .type = "RenderMaterial",
+                .virtualPath = "/Game/Materials/PreviewParticle.21kb", .physicalPath = root / "Material.21kb",
+                .contentHash = 11U}),
+        "dependency content mutation failed");
+    const ParticleBakeResult dependencyChanged = bake(effect);
+    Require(dependencyChanged.status == ParticleBakeStatus::Baked &&
+            dependencyChanged.key.dependencyHash != first.key.dependencyHash,
+        "transitive dependency content change did not invalidate the Bake cache key");
+
+    {
+        std::ofstream corrupt{dependencyChanged.cachePath, std::ios::binary | std::ios::trunc};
+        corrupt << "corrupt";
+    }
+    const std::string corruptBytes = ReadBytes(dependencyChanged.cachePath);
+    std::filesystem::create_directory(dependencyChanged.cachePath.string() + ".tmp", error);
+    Require(!error, "atomic Bake failure fixture could not reserve temporary path");
+    const ParticleBakeResult blockedRebuild = bake(effect);
+    Require(blockedRebuild.status == ParticleBakeStatus::CacheWriteFailed &&
+            ReadBytes(dependencyChanged.cachePath) == corruptBytes &&
+            std::filesystem::is_directory(dependencyChanged.cachePath.string() + ".tmp"),
+        "failed atomic compiled-cache rebuild changed its existing destination or prepared conflict");
+    std::filesystem::remove(dependencyChanged.cachePath.string() + ".tmp", error);
+    Require(!error, "atomic Bake failure fixture cleanup failed");
+    const ParticleBakeResult rebuilt = bake(effect);
+    Require(rebuilt.status == ParticleBakeStatus::Baked && rebuilt.effect != nullptr &&
+            kb::particles::ParticleCompiledEffectCache::Load(rebuilt.cachePath, rebuilt.key).Succeeded(),
+        "corrupt compiled cache was accepted or not atomically rebuilt");
+    {
+        std::ofstream oversized{rebuilt.cachePath, std::ios::binary | std::ios::trunc};
+        oversized.seekp(static_cast<std::streamoff>(kb::particles::kParticleCompiledEffectCacheMaxBytes));
+        oversized.put('x');
+    }
+    Require(bake(effect).status == ParticleBakeStatus::Baked,
+        "oversized compiled cache was read unboundedly or not rebuilt");
+    {
+        std::fstream future{rebuilt.cachePath, std::ios::binary | std::ios::in | std::ios::out};
+        const std::array<char, 8U> versionTwo{2, 0, 0, 0, 0, 0, 0, 0};
+        future.seekp(8, std::ios::beg);
+        future.write(versionTwo.data(), static_cast<std::streamsize>(versionTwo.size()));
+    }
+    Require(bake(effect).status == ParticleBakeStatus::Baked,
+        "future compiled cache format was accepted instead of atomically rebuilt");
+
+    for (const kb::scene::ParticleOutputType unsupported : {kb::scene::ParticleOutputType::Mesh,
+             kb::scene::ParticleOutputType::Trail, kb::scene::ParticleOutputType::Ribbon,
+             kb::scene::ParticleOutputType::Beam, kb::scene::ParticleOutputType::Volumetric}) {
+        auto candidate = effect;
+        candidate.emitters[0].output.type = unsupported;
+        candidate.emitters[0].output.payload = kb::scene::DefaultParticleOutputPayload(unsupported);
+        candidate.emitters[0].output.mesh = unsupported == kb::scene::ParticleOutputType::Mesh
+            ? kb::scene::ParticleAssetReference{.assetId = 73U} : kb::scene::ParticleAssetReference{};
+        const ParticleBakeResult rejected = bake(candidate);
+        Require(rejected.status == ParticleBakeStatus::UnsupportedCapability && !rejected.diagnostics.empty() &&
+                rejected.diagnostics.front().code == kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
+            "unsupported output was silently downgraded by Bake");
+    }
+    auto gpuRequired = effect;
+    gpuRequired.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualRequired;
+    Require(bake(gpuRequired).status == ParticleBakeStatus::UnsupportedCapability,
+        "GPU-required policy was silently downgraded by the current compiler");
+
+    auto child = effect;
+    child.effectId = 74U;
+    const std::filesystem::path childPath = root / "Child.kbvfx";
+    Require(kb::scene::ParticleEffectAssetIO::Save(childPath, child) &&
+            registry.Upsert({.id = kb::assets::AssetId{74U}, .type = kb::scene::kParticleEffectAssetType,
+                .virtualPath = "/Game/Effects/Child.kbvfx", .physicalPath = childPath, .contentHash = 1U}),
+        "external effect gate fixture setup failed");
+    auto external = effect;
+    external.eventBindings.push_back({.sourceEmitterId = 11U,
+        .trigger = kb::scene::ParticleEventTrigger::Death,
+        .action = kb::scene::ParticleEventAction::EmitEffectAsset,
+        .targetEffect = {.assetId = 74U}, .count = 1U, .maxDepth = 1U, .perStepBudget = 1U});
+    Require(bake(external).status == ParticleBakeStatus::UnsupportedCapability,
+        "external particle effect event was silently accepted by Bake");
+    Require(ReadBytes(sourcePath) == originalSource, "Bake changed source bytes while exercising failure paths");
+}
+
 class HeadlessSurface final : public kb::render::RenderSurface {
 public:
     [[nodiscard]] std::uint32_t Width() const noexcept override { return 32U; }
@@ -255,6 +414,7 @@ int main() {
     try {
         TestDocumentHistorySavePointAndAtomicFailure();
         TestCloseGuardAllDirtyTransitions();
+        TestProductionBakeCacheAndCapabilityGates();
         TestIsolatedRuntimePreviewAndGpuRelease();
         std::cout << "21kb Particle System editor core tests passed\n";
         return EXIT_SUCCESS;
