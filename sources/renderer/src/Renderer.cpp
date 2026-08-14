@@ -811,14 +811,21 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     // transform/dirty-entity incremental path.
     renderSceneSynchronizer_->AdvanceHistoryRibbons(scene, renderScene);
     renderSceneSynchronizer_->SyncLensEchoes(scene, renderScene, desc.target.viewport.id.value);
-    // LIB-143: injects one real MeshRenderProxyDesc per live particle (billboard quad,
-    // camera-facing) into renderScene, BEFORE EnsureSceneResources below so those new
-    // proxies' mesh/material get resolved this same frame - deliberately AFTER the ECS
-    // mesh/camera/light sync above (so FindPrimaryCameraProxy sees this frame's resolved
-    // camera) and independent of desc.synchronizeScene (particles are not ECS entities, so
-    // the partial-sync dirty-entity-list path above never covers them).
+    // Retain one view-independent, immutable simulation snapshot in renderer state.
+    // GPU batching and alignment remain per-view work in the transparent pass.
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle sync begin");
-    particleRenderSynchronizer_->Sync(scene, renderScene, desc.target.viewport.id.value);
+    particleRenderSynchronizer_->Sync(scene, renderScene);
+    if (const auto& particleSnapshot = renderScene.ParticleRenderSnapshot(); particleSnapshot != nullptr) {
+        for (const kb::particles::ParticleRenderEmitterRecord& emitter : particleSnapshot->Emitters()) {
+            if (emitter.textureAtlasAssetId != 0U) {
+                frameReferences_.MarkTexture(RuntimeTextureAssetKey{
+                    .sceneId = scene.Id(),
+                    .assetId = emitter.textureAtlasAssetId,
+                    .colorSpace = RenderTextureColorSpace::Srgb,
+                });
+            }
+        }
+    }
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle sync end");
     SceneRenderLightingConfig effectiveLightingConfig = ApplyAmbientRadiance(
         RendererSceneLightingConfigResolver::Resolve(desc.lightingConfig, defaultSceneLightingConfig_), renderScene.AmbientRadiance());
@@ -1250,6 +1257,12 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             MeshPassType::BaseTransparent,
             shadowBinding.IsValid() ? &shadowBinding : nullptr,
             terrainLayersOnly);
+        if (!terrainLayersOnly && sceneRenderer_->LastSubmitStats().failedParticleBatchCount == 0U) {
+            const auto& particleSnapshot = renderScene.ParticleRenderSnapshot();
+            if (particleSnapshot != nullptr) {
+                particleRenderSynchronizer_->Acknowledge(scene, particleSnapshot->FixedStepIndex());
+            }
+        }
         sceneRenderer_->SetSceneColorTexture(BGFX_INVALID_HANDLE);
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent pass end");
     }
@@ -1866,7 +1879,7 @@ void Renderer::ReleaseScene(const kb::scene::Scene& scene) noexcept {
         auxFrameRenderer_->ReleaseScene(scene.Id(), sceneRenderer_.get());
     }
     screenCapture_->ReleaseScene(mutableScene);
-    particleRenderSynchronizer_->ReleaseScene(scene.Id());
+    particleRenderSynchronizer_->ReleaseScene(scene);
     kb::scene::SceneRenderFeedback::Clear(mutableScene);
     runtimeResourceCache_.ReleaseScene(mutableScene, sceneRenderer_.get());
     renderSceneStore_.Release(scene.Id());

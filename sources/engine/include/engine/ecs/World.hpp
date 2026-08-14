@@ -93,6 +93,7 @@ public:
     // guard's lifetime.
     [[nodiscard]] StructuralChangeValidator::Guard EnterIteration() const noexcept;
     void ValidateStructuralChangeAllowed(std::string_view operation) const;
+    void ReleaseUnusedQueryPlans();
 
 #include "engine/ecs/world/WorldEntityApi.inl"
 #include "engine/ecs/world/WorldComponentApi.inl"

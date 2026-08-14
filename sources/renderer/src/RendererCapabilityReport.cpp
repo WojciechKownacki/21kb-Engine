@@ -91,12 +91,17 @@ RendererCapabilityReport BuildRendererCapabilityReport(bgfx::RendererType::Enum 
     report.gpuDrivenComputeCullingSupported = report.computeSupported;
     report.gpuDrivenIndirectSubmitSupported = report.computeSupported && report.indirectDrawSupported;
     report.gpuDrivenMeshletSubmitSupported = false;
+    report.particleInstancingSupported = SupportedFlagsContain(caps->supported, BGFX_CAPS_INSTANCING);
+    report.particleGpuDrawingSupported = report.particleInstancingSupported;
+    report.particleSubtractiveBlendSupported = report.particleGpuDrawingSupported;
     report.multipleWindowsSupported = SupportedFlagsContain(caps->supported, BGFX_CAPS_SWAP_CHAIN);
     report.nativePresentColor = bgfx::TextureFormat::BGRA8;
     report.nativePresentDepth = bgfx::TextureFormat::Count;
     report.nativePresentColorOnly = report.nativePresentDepth == bgfx::TextureFormat::Count;
     report.sceneColor = SelectSceneColorFormat(SceneColorFormatPolicy::Auto, kSceneColorTextureFlags);
     report.sceneDepth = SelectSceneDepthFormat(kSceneDepthTextureFlags);
+    report.particleSoftDepthFadeSupported = report.particleGpuDrawingSupported &&
+        report.sceneDepth.status != SceneTargetFormatSelectionStatus::Unsupported;
     report.hdrTextureSupported = report.sceneColor.format == bgfx::TextureFormat::RGBA16F;
     report.depthPreferredSupported = report.sceneDepth.IsPreferred();
     report.limits = RendererCapabilityLimits{
@@ -133,6 +138,9 @@ RendererCapabilityReport BuildRendererCapabilityReport(bgfx::RendererType::Enum 
     }
     if (!report.gpuDrivenMeshletSubmitSupported) {
         AddFallbackReason(report, "meshlet submit is not implemented for the selected renderer path");
+    }
+    if (!report.particleGpuDrawingSupported) {
+        AddFallbackReason(report, "GPU particle drawing requires instancing on the selected backend");
     }
     if (!report.textureBlitSupported) {
         AddFallbackReason(report, "texture blit is unsupported on selected backend");

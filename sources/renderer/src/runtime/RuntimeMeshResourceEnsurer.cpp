@@ -523,6 +523,16 @@ void RuntimeMeshResourceEnsurer::Ensure(
         static_cast<void>(entityId);
         ensureMesh(proxy.desc.meshAssetId);
     }
+    if (const auto& snapshot = context.renderScene.ParticleRenderSnapshot(); snapshot != nullptr) {
+        bool requiresQuad = false;
+        for (const kb::particles::ParticleRenderEmitterRecord& emitter : snapshot->Emitters()) {
+            requiresQuad = requiresQuad || emitter.output == kb::particles::ParticleRenderOutput::Billboard ||
+                emitter.output == kb::particles::ParticleRenderOutput::StretchedBillboard ||
+                emitter.output == kb::particles::ParticleRenderOutput::PointSprite;
+            if (emitter.output == kb::particles::ParticleRenderOutput::Mesh) ensureMesh(emitter.meshAssetId);
+        }
+        if (requiresQuad) ensureMesh(BuiltInParticleQuadMeshAssetId().value);
+    }
 }
 
 } // namespace kb::render

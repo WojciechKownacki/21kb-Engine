@@ -1,7 +1,6 @@
 #include "scene/SceneRenderVisibilityPublisher.hpp"
 
 #include "kb/render/resources/RenderResourceRegistry.hpp"
-#include "kb/render/scene/SceneParticleRenderSynchronizer.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "scene/pipeline/MeshPipelineVisibility.hpp"
 
@@ -41,10 +40,6 @@ void SceneRenderVisibilityPublisher::BuildFrame(
     outFrame.entries.clear();
     outFrame.entries.reserve(renderScene.MeshProxyCount());
     for (const auto& [entityId, proxy] : renderScene.MeshProxies()) {
-        if (entityId >= SceneParticleRenderSynchronizer::kSyntheticProxyIdBase) {
-            continue;
-        }
-
         RenderBoundsSphere localBounds{};
         if (resources != nullptr && resourceMap != nullptr) {
             const RenderMeshHandle meshHandle = resourceMap->ResolveMesh(proxy.desc.meshAssetId);

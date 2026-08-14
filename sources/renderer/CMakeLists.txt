@@ -33,6 +33,8 @@ add_library(kb_renderer STATIC
     include/kb/render/overlay/PhysicsDebugLine.hpp
     include/kb/render/overlay/SceneGridPass.hpp
     include/kb/render/overlay/SelectionOutlineCompositePass.hpp
+    include/kb/render/particles/ParticleGpuRenderer.hpp
+    include/kb/render/particles/ParticleRenderBatcher.hpp
     include/kb/render/post/PostProcessChain.hpp
     include/kb/render/post/PostProcessRenderTarget.hpp
     include/kb/render/post/SceneExposureMeter.hpp
@@ -89,6 +91,7 @@ add_library(kb_renderer STATIC
     include/kb/render/scene/SceneRenderResourceMap.hpp
     include/kb/render/scene/SceneRenderExtractor.hpp
     include/kb/render/scene/SceneRenderTypes.hpp
+    include/kb/render/scene/TransparentDepthKey.hpp
     include/kb/render/scene/SceneRenderer.hpp
     include/kb/render/scene/RenderSceneStore.hpp
     include/kb/render/shadow/DirectionalShadowPassPlanner.hpp
@@ -157,6 +160,8 @@ add_library(kb_renderer STATIC
     src/post/ScenePostProcessRenderer.cpp
     src/post/ScenePostProcessSubmitter.cpp
     src/post/ScenePostProcessTargets.cpp
+    src/particles/ParticleGpuRenderer.cpp
+    src/particles/ParticleRenderBatcher.cpp
     src/resources/NativeWindowFramebuffer.cpp
     src/resources/RenderMaterialAssetLoader.cpp
     src/resources/RenderMaterialAssetFieldParser.cpp
@@ -360,6 +365,7 @@ set(KB_RENDERER_SHADER_MANIFEST
     fs_post_fxaa.sc
     fs_post_motion_vectors.sc
     fs_post_taa_resolve.sc
+    fs_particle_instanced.sc
     fs_present_tex.sc
     vs_editor_gizmo.sc
     vs_editor_grid.sc
@@ -373,6 +379,7 @@ set(KB_RENDERER_SHADER_MANIFEST
     vs_mesh_instanced.sc
     vs_mesh_shadow_instanced.sc
     vs_present.sc
+    vs_particle_instanced.sc
 )
 
 file(GLOB_RECURSE KB_RENDERER_PREBUILT_SHADER_FILES CONFIGURE_DEPENDS
@@ -401,6 +408,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_shadow_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_shadow_skinned_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_present.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_particle_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_editor_grid.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_editor_gizmo.sc
         VARYING_DEF ${KB_RENDERER_SHADER_VARYING_DEF}
@@ -421,6 +429,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_selection_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_shadow_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_present_tex.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_particle_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_bloom_prefilter.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_bloom_blur.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_bloom_combine.sc
@@ -611,6 +620,14 @@ if(BUILD_TESTING)
     endif()
 
     kb_apply_quality_gates(kb_renderer_tests)
+
+    add_executable(kb_21kb_particle_renderer_tests
+        tests/ParticleRendererTests.cpp
+    )
+    target_link_libraries(kb_21kb_particle_renderer_tests PRIVATE kb_renderer)
+    kb_apply_quality_gates(kb_21kb_particle_renderer_tests)
+    add_test(NAME kb_21kb_particle_renderer_tests COMMAND $<TARGET_FILE:kb_21kb_particle_renderer_tests>)
+    set_tests_properties(kb_21kb_particle_renderer_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
     add_executable(kb_skeletal_animator_benchmarks
         tests/SkeletalAnimatorPerformanceBenchmarks.cpp

@@ -344,6 +344,11 @@ struct SceneRenderSubmitStats {
     std::uint32_t gpuDrivenParityCpuDroppedInstanceCount = 0;
     std::uint32_t gpuDrivenParityGpuDroppedInstanceCount = 0;
     std::uint64_t instanceUploadBytes = 0;
+    std::uint32_t submittedParticleCount = 0U;
+    std::uint32_t submittedParticleDrawCallCount = 0U;
+    std::uint32_t droppedParticleCount = 0U;
+    std::uint32_t failedParticleBatchCount = 0U;
+    std::uint64_t particleInstanceUploadBytes = 0U;
     std::uint32_t sceneLightCount = 0;
     std::uint32_t submittedForwardLightCount = 0;
     std::uint32_t skippedForwardLightCount = 0;
@@ -443,6 +448,8 @@ enum class SceneRenderDiagnosticKind : std::uint8_t {
     GraphMaterialProgramUnavailable,
     DeferredRendererUnavailable,
     TextureDimensionMismatch,
+    UnsupportedParticleOutput,
+    ParticleSubmissionFailed,
 };
 
 enum class SceneRenderMaterialProgramStatus : std::uint8_t {
@@ -459,6 +466,8 @@ struct SceneRenderDiagnosticEvent {
     std::uint64_t meshAssetId = 0;
     std::uint64_t materialAssetId = 0;
     std::uint64_t textureAssetId = 0;
+    std::uint64_t particleEffectAssetId = 0;
+    std::uint64_t particleEmitterId = 0;
     std::uint32_t instanceCount = 0;
     RenderTextureDimension expectedTextureDimension = RenderTextureDimension::Texture2D;
     RenderTextureDimension actualTextureDimension = RenderTextureDimension::Texture2D;
@@ -537,6 +546,11 @@ struct SceneRenderDiagnostics {
     lhs.gpuDrivenParityCpuDroppedInstanceCount += rhs.gpuDrivenParityCpuDroppedInstanceCount;
     lhs.gpuDrivenParityGpuDroppedInstanceCount += rhs.gpuDrivenParityGpuDroppedInstanceCount;
     lhs.instanceUploadBytes += rhs.instanceUploadBytes;
+    lhs.submittedParticleCount += rhs.submittedParticleCount;
+    lhs.submittedParticleDrawCallCount += rhs.submittedParticleDrawCallCount;
+    lhs.droppedParticleCount += rhs.droppedParticleCount;
+    lhs.failedParticleBatchCount += rhs.failedParticleBatchCount;
+    lhs.particleInstanceUploadBytes += rhs.particleInstanceUploadBytes;
     lhs.sceneLightCount += rhs.sceneLightCount;
     lhs.submittedForwardLightCount += rhs.submittedForwardLightCount;
     lhs.skippedForwardLightCount += rhs.skippedForwardLightCount;

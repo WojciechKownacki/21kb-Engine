@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <array>
 #include <memory>
 #include <span>
 #include <type_traits>
@@ -46,6 +47,30 @@ enum class ParticleRenderSortMode : std::uint8_t {
     Age,
 };
 
+enum class ParticleRenderAlignment : std::uint8_t {
+    CameraFacing,
+    Velocity,
+    WorldUp,
+    Local,
+};
+
+enum class ParticleRenderEmitterFlag : std::uint8_t {
+    None = 0U,
+    SoftParticles = 1U << 0U,
+    AntiAliasing = 1U << 1U,
+};
+
+[[nodiscard]] constexpr ParticleRenderEmitterFlag operator|(
+    ParticleRenderEmitterFlag lhs, ParticleRenderEmitterFlag rhs) noexcept {
+    return static_cast<ParticleRenderEmitterFlag>(
+        static_cast<std::uint8_t>(lhs) | static_cast<std::uint8_t>(rhs));
+}
+
+[[nodiscard]] constexpr bool HasParticleRenderEmitterFlag(
+    ParticleRenderEmitterFlag value, ParticleRenderEmitterFlag flag) noexcept {
+    return (static_cast<std::uint8_t>(value) & static_cast<std::uint8_t>(flag)) != 0U;
+}
+
 enum class ParticleRenderEmitterStatus : std::uint8_t {
     Playing,
     Paused,
@@ -71,7 +96,7 @@ struct ParticleRenderRecord {
     std::uint64_t particleId = 0U;
     std::uint32_t packedColor = 0xFFFFFFFFU;
     std::uint16_t frame = 0U;
-    std::uint16_t flags = 0U;
+    std::uint16_t normalizedAgeUnorm = 0U;
 };
 
 static_assert(sizeof(ParticleRenderRecord) >= 48U && sizeof(ParticleRenderRecord) <= 64U);
@@ -99,13 +124,28 @@ struct ParticleRenderEmitterRecord {
     ParticleRenderSortMode sort = ParticleRenderSortMode::BackToFront;
     ParticleRenderEmitterStatus status = ParticleRenderEmitterStatus::Stopped;
     ParticleRenderDropReason droppedReason = ParticleRenderDropReason::None;
-    std::uint8_t reserved[2]{};
+    ParticleRenderAlignment alignment = ParticleRenderAlignment::CameraFacing;
+    ParticleRenderEmitterFlag flags = ParticleRenderEmitterFlag::None;
+    // A zero encoded axis represents 256, preserving the authored 1..256 grid
+    // without widening the renderer ABI for the common 1x1 case.
+    std::uint8_t flipbookColumnsEncoded = 1U;
+    std::uint8_t flipbookRowsEncoded = 1U;
+    std::array<std::int16_t, 4U> localBasisQuaternionSnorm{};
+    float pointSpriteDiameter = 1.0F;
     kb::math::Vec3 boundsMinimum{};
     kb::math::Vec3 boundsMaximum{};
+
+    [[nodiscard]] constexpr std::uint16_t FlipbookColumns() const noexcept {
+        return flipbookColumnsEncoded == 0U ? 256U : flipbookColumnsEncoded;
+    }
+
+    [[nodiscard]] constexpr std::uint16_t FlipbookRows() const noexcept {
+        return flipbookRowsEncoded == 0U ? 256U : flipbookRowsEncoded;
+    }
 };
 
 static_assert(std::is_trivially_copyable_v<ParticleRenderEmitterRecord>);
-static_assert(sizeof(ParticleRenderEmitterRecord) <= 128U);
+static_assert(sizeof(ParticleRenderEmitterRecord) <= 144U);
 
 struct ParticleRenderSnapshotHeader {
     std::uint64_t revision = 0U;

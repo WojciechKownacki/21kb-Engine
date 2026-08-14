@@ -18,6 +18,7 @@
 namespace kb::render {
 
 class SceneMeshSubmitter;
+class ParticleGpuRenderer;
 class RenderScene;
 
 class SceneRenderer {
@@ -94,6 +95,7 @@ private:
     RenderSkinningPaletteAllocator skinningPalettes_{
         RenderSkinningPaletteAllocatorDesc{ .matrixCapacityPerFrame = 4096U } };
     std::unique_ptr<SceneMeshSubmitter> meshSubmitter_;
+    std::unique_ptr<ParticleGpuRenderer> particleRenderer_;
     mutable MeshPipelineBuildResult validationPipelineScratch_;
     mutable SceneRenderSubmitStats lastSubmitStats_{};
     mutable SceneRenderDiagnostics lastDiagnostics_{};

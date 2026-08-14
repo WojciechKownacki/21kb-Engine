@@ -91,6 +91,63 @@ ParticleRenderSnapshotResult ParticlePlayback::LastRenderSnapshotPublicationResu
     return kb::scene::SceneAccess::State(scene).lastParticleRenderSnapshotPublication;
 }
 
+ParticleRenderCapabilityResult ParticlePlayback::PublishRenderCapabilities(
+    kb::scene::Scene& scene,
+    std::uint64_t consumerId,
+    ParticleRenderCapabilities capabilities) noexcept {
+    AssertOwnerThread(scene);
+    if (consumerId == 0U || capabilities.capabilityEpoch == 0U) {
+        return {ParticleRenderCapabilityStatus::InvalidConsumer};
+    }
+    kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);
+    if (state.particleRenderConsumerId != 0U && state.particleRenderConsumerId != consumerId) {
+        return {ParticleRenderCapabilityStatus::ConsumerConflict};
+    }
+    if (state.particleRenderConsumerId == consumerId &&
+        capabilities.capabilityEpoch < state.particleRenderCapabilities.capabilityEpoch) {
+        return {ParticleRenderCapabilityStatus::InvalidConsumer};
+    }
+    state.particleRenderConsumerId = consumerId;
+    capabilities.lastConsumedFixedStep = state.particleRenderCapabilities.lastConsumedFixedStep;
+    state.particleRenderCapabilities = capabilities;
+    return {ParticleRenderCapabilityStatus::Success};
+}
+
+ParticleRenderCapabilityResult ParticlePlayback::AcknowledgeRenderedFixedStep(
+    kb::scene::Scene& scene,
+    std::uint64_t consumerId,
+    std::uint64_t fixedStepIndex) noexcept {
+    AssertOwnerThread(scene);
+    kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);
+    if (consumerId == 0U || state.particleRenderConsumerId != consumerId) {
+        return {state.particleRenderConsumerId == 0U
+            ? ParticleRenderCapabilityStatus::InvalidConsumer
+            : ParticleRenderCapabilityStatus::ConsumerConflict};
+    }
+    state.particleRenderCapabilities.lastConsumedFixedStep =
+        std::max(state.particleRenderCapabilities.lastConsumedFixedStep, fixedStepIndex);
+    return {ParticleRenderCapabilityStatus::Success};
+}
+
+ParticleRenderCapabilityResult ParticlePlayback::ClearRenderCapabilities(
+    kb::scene::Scene& scene,
+    std::uint64_t consumerId) noexcept {
+    AssertOwnerThread(scene);
+    kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);
+    if (consumerId == 0U || state.particleRenderConsumerId != consumerId) {
+        return {state.particleRenderConsumerId == 0U
+            ? ParticleRenderCapabilityStatus::InvalidConsumer
+            : ParticleRenderCapabilityStatus::ConsumerConflict};
+    }
+    state.particleRenderCapabilities = {};
+    state.particleRenderConsumerId = 0U;
+    return {ParticleRenderCapabilityStatus::Success};
+}
+
+ParticleRenderCapabilities ParticlePlayback::RenderCapabilities(const kb::scene::Scene& scene) noexcept {
+    return kb::scene::SceneAccess::State(scene).particleRenderCapabilities;
+}
+
 #define KB_PARTICLE_FORWARD(Method, ...)                                                                                \
     AssertOwnerThread(scene);                                                                                           \
     IParticleSimulationBackend* backend = Backend(scene);                                                               \

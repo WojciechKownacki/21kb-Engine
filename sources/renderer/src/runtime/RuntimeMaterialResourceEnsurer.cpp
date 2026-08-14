@@ -412,6 +412,11 @@ void RuntimeMaterialResourceEnsurer::Ensure(
         static_cast<void>(entityId);
         ensureMaterial(proxy.desc.materialAssetId);
     }
+    if (const auto& snapshot = context.renderScene.ParticleRenderSnapshot(); snapshot != nullptr) {
+        for (const kb::particles::ParticleRenderEmitterRecord& emitter : snapshot->Emitters()) {
+            ensureMaterial(emitter.materialAssetId);
+        }
+    }
 }
 
 } // namespace kb::render

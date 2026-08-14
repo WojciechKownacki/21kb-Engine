@@ -9,10 +9,10 @@
 
 ## Current package
 
-- Stage: `5` — GPU particle renderer baseline.
-- Status: `in_progress`; Stages 3 and 4 are accepted.
-- Scope: Stage 5 consumes retained snapshots through renderer-owned GPU resources, replaces proxy-per-particle rendering with compact batches, and delivers billboard, stretched billboard, point sprite, flipbook, and soft-particle paths.
-- Next gate: characterize the real renderer submit/shader/resource seams before implementing the first batch bridge.
+- Stage: `6` — editor document shell and shared preview.
+- Status: `ready`; Stages 3, 4, and 5 are accepted.
+- Scope: Stage 6 adds the editor document shell and isolated preview through the accepted runtime backend and GPU renderer, without a second preview kernel.
+- Next gate: characterize the editor document, docking, history, and preview-scene seams before the first integration package.
 - Rendering direction: normal game-facing simulation and rendering must move to GPU. The CPU backend is retained only as the deterministic validation, diagnostics, and preview path; it is not the intended final gameplay path.
 
 ## Accepted stages
@@ -112,6 +112,14 @@
 - Each publication is stamped with a monotonically increasing revision, the completed scene fixed-step index, and the current backend epoch. Typed snapshot backpressure remains observable while preview simulation continues and the last complete revision is retained.
 - Terminal snapshots use small engine-owned header slots, so teardown can publish a tombstone even when all four 16 MiB payload slots are retained. If terminal retention itself is exhausted, detach fails explicitly before backend ownership changes and can be retried after a reader releases a snapshot.
 - Focused tests prove two independent viewport reads see one immutable fixed-step revision, stable previous/current particle data and two-emitter ranges, payload and terminal backpressure, scene/provider lifetime, and allocation-free warm paths.
+
+### Stage 5 — GPU particle renderer baseline: `accepted`
+
+- The renderer consumes immutable snapshots directly, replaces proxy-per-particle rendering with GPU-instanced compact batches, and keeps `RenderScene::MeshProxyCount` independent of particle count.
+- Billboard, stretched billboard, point sprite, flipbook, soft-depth fade, six blend modes including exact Subtractive semantics, per-view alignment, and deterministic sort policies are implemented in renderer-owned shaders and resources across all staged shader profiles.
+- Mesh and particle transparent draws share one camera-depth key and queue; supported mixed-effect emitters continue rendering while unsupported outputs generate typed per-emitter diagnostics and drops.
+- Two viewport consumers read the same snapshot revision without repeating simulation. Warmed batch construction is allocation-free; transient instance limits are split or reported as drops.
+- The core owns snapshot allocation before dynamic provider attachment, and unused ECS query plans are released before module unload. The real DLL regression passes 100 reloads plus scene destruction with and without scripts.
 
 ## Accepted decisions and mappings
 
