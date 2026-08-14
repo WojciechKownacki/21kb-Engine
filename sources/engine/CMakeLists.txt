@@ -321,6 +321,8 @@ add_library(kb_engine STATIC
         include/engine/particles/ParticleRuntimeResult.hpp
         include/engine/particles/IParticleSimulationBackend.hpp
         include/engine/particles/ParticlePlayback.hpp
+        include/engine/particles/ParticleCompiledEffect.hpp
+        include/engine/particles/ParticleCompiledEffectCache.hpp
         include/engine/particles/ParticleRenderSnapshot.hpp
         include/engine/project/ParticleProjectPolicy.hpp
         include/engine/scene/SceneParticleEffectComponents.hpp
@@ -647,6 +649,8 @@ add_library(kb_engine STATIC
     src/scene/ParticleEffectAssetValidation.cpp
     src/scene/ParticleEffectDependencyValidation.cpp
     src/particles/ParticlePlayback.cpp
+    src/particles/ParticleCompiledEffect.cpp
+    src/particles/ParticleCompiledEffectCache.cpp
     src/particles/ParticleRenderSnapshot.cpp
     src/project/ParticleProjectPolicy.cpp
     src/scene/SceneModules.cpp

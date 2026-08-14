@@ -43,6 +43,8 @@ enum class ParticleEffectDiagnosticCode : std::uint16_t {
     InvalidCurve,
     InvalidGradient,
     AtomicWriteFailed,
+    UnsupportedCapability,
+    InvalidCompiledCache,
 };
 
 struct ParticleEffectDiagnostic {
@@ -63,6 +65,7 @@ struct ParticleEffectValidationResult {
 
 struct ParticleEffectDependencyResult {
     std::vector<kb::assets::AssetId> dependencies;
+    std::vector<kb::assets::AssetId> transitiveDependencies;
     std::vector<ParticleEffectDiagnostic> diagnostics;
 
     [[nodiscard]] bool Succeeded() const noexcept {
@@ -75,6 +78,9 @@ class ParticleEffectAssetValidator final {
     ParticleEffectAssetValidator() = delete;
     [[nodiscard]] static ParticleEffectValidationResult ValidateStructure(const ParticleEffectAsset& asset);
     [[nodiscard]] static ParticleEffectDependencyResult ValidateDependencies(const kb::assets::AssetMetadata& metadata,
+                                                                             const kb::assets::AssetRegistry& registry);
+    [[nodiscard]] static ParticleEffectDependencyResult ValidateDependencies(const ParticleEffectAsset& workingAsset,
+                                                                             const kb::assets::AssetMetadata& metadata,
                                                                              const kb::assets::AssetRegistry& registry);
 };
 

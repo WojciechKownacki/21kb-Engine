@@ -9,10 +9,10 @@
 
 ## Current package
 
-- Stage: `6` — editor document shell and shared preview.
-- Status: `in_progress`; Stages 3, 4, and 5 plus Stages 6A and 6B are accepted.
-- Scope: Stage 6 adds the editor document shell and isolated preview through the accepted runtime backend and GPU renderer, without a second preview kernel.
-- Next gate: characterize the editor document, docking, history, and preview-scene seams before the first integration package.
+- Stage: `7` — complete particle authoring UX.
+- Status: `in_progress`; Stages 0 through 6 are accepted.
+- Scope: Stage 7 adds typed authoring controls and workflow over the accepted document, compiler, Bake, isolated preview, and GPU renderer, without a second preview kernel.
+- Next gate: characterize the closest existing editor control, picker, curve/gradient, recipe, and diagnostic-navigation seams before the first authoring package.
 - Rendering direction: normal game-facing simulation and rendering must move to GPU. The CPU backend is retained only as the deterministic validation, diagnostics, and preview path; it is not the intended final gameplay path.
 
 ## Accepted stages
@@ -133,7 +133,16 @@
 - The editor hosts panel 14, `21kb Particle System`, in the center document workspace with dock/floating behavior, asset activation, shared preview presentation, and close routes that all use the 6A dirty guard.
 - The host owns no simulation path: its viewport release callback clears renderer scene state before the accepted preview session destroys its runtime scene and provider. Resize, docking, and floating preserve the existing preview session and camera.
 - A bounded, strict, atomic in-project session store preserves panel visibility, placement, floating rectangle, and session path. The editor tests cover panel presence, layout movement, persistence, and escape rejection.
-- Full authoring controls and Bake remain outside 6B.
+- Full authoring controls remain outside 6B; production Bake is delivered separately in Stage 6C1.
+
+### Stage 6C1 — shared compiler and production Bake: `accepted checkpoint`
+
+- `kb_engine` owns the immutable `ParticleCompiledEffect` value and its const handle. The provider and editor use one static compiler rather than reaching into the CPU backend's private compiled representation; backend generation/LKG entries retain that handle.
+- The compiled cache is field-wise, checksummed, bounded to 512 KiB, versioned, verified after atomic replacement, and keyed by canonical working-copy bytes, sorted transitive dependency metadata, compiler version, target platform, and renderer capability flags. It never writes the source asset.
+- Dependency validation accepts an unsaved working asset while preserving loader publication of direct edges only; its separately exposed transitive result is deterministic and bounded.
+- `EditorSceneContext::BakeParticleEditorAsset()` is the production host path. It compiles the current working copy into `<projectRoot>/Saved/21kbParticleCache`, leaves document, preview, and source bytes untouched, and reports every typed diagnostic to the editor console.
+- Mesh, trail, ribbon, beam, volumetric, external-effect events, and GPU-required policy are rejected explicitly by the current compiler/Bake capability gate. They are never silently downgraded or cached as a supported artifact.
+- Full authoring controls remain Stage 7 work; the accepted Bake command is intentionally a thin host operation, not a second panel workflow.
 
 ## Accepted decisions and mappings
 
@@ -153,6 +162,7 @@
 - `sources/editor/tests/HeadlessAutomationScenario.json` — consumes the shared legacy fixture.
 - `sources/editor/tests/fixtures/LegacyAutomationParticleEffect.kbvfx` — test-owned legacy source fixture.
 - `sources/engine/tests/ScriptRuntimeTests.cpp` — stage 0 characterization coverage.
+- Stage 6C1 adds the engine compiled-effect/cache sources, shared plugin compiler, production Bake service, host command, and their focused asset, CPU, editor, and host regressions.
 
 ## Validation evidence
 
@@ -175,6 +185,8 @@
 - Final stage 1B focused CTest — independent exit `0`, `1/1`, `1.36 s`.
 - Final stage 1B `kb_engine_tests.exe script` — independent exit `0`.
 - Final stage 1B headless CTest — exit `0`, `1/1`, `83.11 s`.
+- Stage 6C1 final focused CTest matrix — exit `0`, `5/5`, `22.71 s`: asset `1.43 s`, DLL lifecycle `17.71 s`, CPU backend `3.35 s`, editor core `0.20 s`, host Bake `0.01 s`.
+- Stage 6C1 host integration build — `cmake --build build --config Debug --target kb_editor -- /m:1`, exit `0`; the focused host target also built exit `0`.
 
 ## Rejected attempts, open defects, and next gate
 
@@ -183,4 +195,4 @@
 - Stage 1A attempt 1 was rejected after independent review despite a green focused test; every listed defect was repaired and the second attempt was accepted.
 - No open stage 0 defect remains.
 - No open stage 1 defect remains.
-- Stages 3 and 4 are accepted. Next gate: Stage 5 GPU particle renderer; CPU remains a non-gameplay verification and preview path.
+- No open defect remains in Stages 0 through 6. Next gate: Stage 7 typed authoring UX and host interaction over the accepted editor, Bake, preview, and GPU-rendered path.
