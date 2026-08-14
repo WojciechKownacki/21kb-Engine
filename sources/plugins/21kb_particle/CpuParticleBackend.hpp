@@ -21,7 +21,10 @@ public:
         std::uint32_t spawned = 0U;
         std::uint32_t rejectedByCapacity = 0U;
         std::uint32_t rejectedByStepBudget = 0U;
+        std::uint32_t rejectedByEventBudget = 0U;
         std::uint32_t deaths = 0U;
+        std::uint32_t collisions = 0U;
+        std::uint32_t processedEvents = 0U;
     };
 
     CpuParticleBackend() = default;
@@ -134,6 +137,7 @@ private:
     };
 
     struct CompiledEmitter {
+        kb::scene::ParticleStableId emitterId = 0U;
         bool enabled = false;
         kb::scene::ParticleSpawnMode mode = kb::scene::ParticleSpawnMode::Continuous;
         std::uint32_t maxParticles = 0U;
@@ -152,8 +156,11 @@ private:
         using ModulePayload = std::variant<kb::scene::ParticleInitialVelocityModule,
                                            kb::scene::ParticleGravityModule,
                                            kb::scene::ParticleWindModule,
-                                           kb::scene::ParticleDragModule>;
+                                           kb::scene::ParticleDragModule,
+                                           kb::scene::ParticleCollisionPlaneModule,
+                                           kb::scene::ParticleSubEmitterModule>;
         struct Module {
+            kb::scene::ParticleStableId moduleId = 0U;
             kb::scene::ParticleModuleType type = kb::scene::ParticleModuleType::InitialVelocity;
             bool enabled = false;
             ModulePayload payload = kb::scene::ParticleInitialVelocityModule{};
@@ -163,14 +170,25 @@ private:
     };
 
     struct CompiledEffect {
+        struct EventBinding {
+            std::uint8_t sourceEmitterIndex = 0U;
+            kb::scene::ParticleEventTrigger trigger = kb::scene::ParticleEventTrigger::Death;
+            kb::scene::ParticleStableId sourceModuleId = 0U;
+            std::uint8_t targetEmitterIndex = 0U;
+            std::uint32_t count = 1U;
+            std::uint8_t maxDepth = 1U;
+            std::uint32_t perStepBudget = 1U;
+        };
         std::uint64_t assetId = 0U;
         std::uint64_t assetGeneration = 0U;
         std::uint64_t determinismSeed = 0U;
         float durationSeconds = 0.0F;
         bool looping = false;
         std::uint8_t emitterCount = 0U;
+        std::uint8_t eventBindingCount = 0U;
         std::uint16_t referenceCount = 0U;
         std::array<CompiledEmitter, kb::scene::kParticleEffectMaxEmitters> emitters{};
+        std::array<EventBinding, kb::scene::kParticleEffectMaxEventBindings> eventBindings{};
     };
 
     struct InstanceRuntime {
@@ -182,6 +200,17 @@ private:
         std::array<float, kb::scene::kParticleEffectMaxEmitters> emissionFractions{};
         std::array<std::uint8_t, kb::scene::kParticleEffectMaxEmitters> nextBurst{};
         std::array<std::uint32_t, kb::scene::kParticleEffectMaxEmitters> liveParticles{};
+        std::array<std::uint32_t, kb::scene::kParticleEffectMaxEventBindings> bindingEventsThisStep{};
+    };
+
+    struct InternalEvent {
+        std::uint64_t instanceId = 0U;
+        std::uint8_t sourceEmitterIndex = 0U;
+        kb::scene::ParticleStableId sourceModuleId = 0U;
+        kb::scene::ParticleEventTrigger trigger = kb::scene::ParticleEventTrigger::Birth;
+        std::uint8_t depth = 0U;
+        std::uint8_t prewarmGroup = UINT8_MAX;
+        kb::math::Vec3 position{};
     };
 
     static constexpr std::uint32_t kInvalidDenseIndex = UINT32_MAX;
@@ -199,17 +228,23 @@ private:
         kb::particles::ParticleRuntimeStatus& failureStatus);
     void ReleaseCompiledEffect(std::uint32_t index) noexcept;
     void ResetInstance(std::uint32_t denseIndex) noexcept;
-    void PrewarmInstance(std::uint32_t denseIndex) noexcept;
+    [[nodiscard]] kb::particles::ParticleRuntimeStatus PrewarmInstance(std::uint32_t denseIndex) noexcept;
     void StepInstance(std::uint32_t denseIndex, float fixedDeltaSeconds, std::uint32_t& remainingSpawnBudget) noexcept;
     void StepEmitter(std::uint32_t denseIndex, std::uint8_t emitterIndex, float fixedDeltaSeconds,
-                     std::uint32_t& remainingSpawnBudget) noexcept;
+                     std::uint32_t& remainingSpawnBudget, std::uint8_t prewarmGroup = UINT8_MAX) noexcept;
     void SpawnRequested(std::uint32_t denseIndex, std::uint8_t emitterIndex, std::uint32_t count,
-                        std::uint32_t& remainingSpawnBudget) noexcept;
-    [[nodiscard]] bool SpawnExact(std::uint32_t denseIndex, std::uint8_t emitterIndex, std::uint32_t count) noexcept;
+                        std::uint32_t& remainingSpawnBudget, std::uint8_t prewarmGroup = UINT8_MAX) noexcept;
+    [[nodiscard]] bool SpawnExact(std::uint32_t denseIndex, std::uint8_t emitterIndex, std::uint32_t count,
+                                  std::uint8_t eventDepth = 0U, std::uint8_t prewarmGroup = UINT8_MAX,
+                                  const kb::math::Vec3* eventPosition = nullptr) noexcept;
     void AdvanceParticleAges(float fixedDeltaSeconds, std::uint64_t onlyInstanceId = 0U,
-                             std::uint8_t onlyEmitterIndex = UINT8_MAX) noexcept;
+                             std::uint8_t onlyPrewarmGroup = UINT8_MAX) noexcept;
     void ExecuteForcesAndIntegrate(float fixedDeltaSeconds, std::uint64_t onlyInstanceId = 0U,
-                                   std::uint8_t onlyEmitterIndex = UINT8_MAX) noexcept;
+                                   std::uint8_t onlyPrewarmGroup = UINT8_MAX) noexcept;
+    [[nodiscard]] bool QueueInternalEvent(const InternalEvent& event) noexcept;
+    [[nodiscard]] kb::particles::ParticleRuntimeStatus ProcessInternalEvents(
+        std::uint32_t& remainingSpawnBudget) noexcept;
+    void ResetStepEventState() noexcept;
     [[nodiscard]] float EvaluateRate(const CompiledEmitter& emitter, float timeSeconds) const noexcept;
     [[nodiscard]] static float EvaluateCurve(const CompiledCurve& curve, float normalizedAge) noexcept;
     [[nodiscard]] static kb::math::Color EvaluateGradient(
@@ -234,7 +269,7 @@ private:
     std::vector<ParameterEntry> parameters_;
 
     std::vector<Command> commands_;
-    std::vector<kb::particles::PendingParticleRuntimeEvent> events_;
+    std::vector<InternalEvent> events_;
 
     std::vector<std::uint64_t> particleInstanceIds_;
     std::vector<std::uint8_t> particleEmitterIndices_;
@@ -244,6 +279,14 @@ private:
     std::vector<float> particleLifetimes_;
     std::vector<kb::math::Color> particleColors_;
     std::vector<float> particleSizes_;
+    std::vector<std::uint8_t> particleEventDepths_;
+    std::vector<std::uint8_t> particlePrewarmGroups_;
+    std::array<std::uint32_t, kb::scene::kParticleEffectMaxInstancesPerScene *
+                                  kb::scene::kParticleEffectMaxEmitters *
+                                  kb::scene::kParticleEffectMaxModulesPerEmitter>
+        collisionEventsThisStep_{};
+    bool eventQueueOverflowed_ = false;
+    bool eventActionBudgetExceeded_ = false;
     StepTelemetry stepTelemetry_{};
 };
 
