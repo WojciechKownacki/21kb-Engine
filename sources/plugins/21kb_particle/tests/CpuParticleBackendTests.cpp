@@ -11,6 +11,8 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
+#include "engine/script/ScriptFunctionRegistry.hpp"
+#include "engine/script/ScriptRuntimeHost.hpp"
 
 #include <algorithm>
 #include <array>
@@ -203,6 +205,57 @@ void AddModule(kb::scene::ParticleEmitterAsset& emitter,
     return effect;
 }
 
+[[nodiscard]] kb::scene::ParticleEffectAsset MakeInternalEventEffect(float prewarmSeconds = 0.0F) {
+    auto effect = MakeVisualModuleEffect(prewarmSeconds);
+    kb::scene::ParticleEmitterAsset target = effect.emitters[0];
+    target.emitterId = 2U;
+    target.name = "InternalTarget";
+    target.localPosition = {0.0F, 5.0F, 0.0F};
+    target.spawn.prewarmSeconds = 0.0F;
+    target.spawn.rateOverTime.keyframes.front().value = 0.0F;
+    target.modules.clear();
+    AddModule(effect.emitters[0], 8U, kb::scene::ParticleModuleType::SubEmitter,
+        kb::scene::ParticleSubEmitterModule{
+            .targetEmitterId = 2U,
+            .trigger = kb::scene::ParticleEventTrigger::Birth,
+            .count = 1U,
+            .maxDepth = 1U,
+        });
+    effect.emitters.push_back(std::move(target));
+    return effect;
+}
+
+[[nodiscard]] kb::scene::ParticleEffectAsset MakeCollisionBindingEffect(
+    float rate,
+    float prewarmSeconds = 0.0F,
+    std::uint32_t perStepBudget = 64U) {
+    auto effect = Fixture::MakeEffect(rate, 256U);
+    auto& source = effect.emitters[0];
+    source.localPosition = {0.0F, -0.1F, 0.0F};
+    source.spawn.prewarmSeconds = prewarmSeconds;
+    source.spawn.speedMin = 0.0F;
+    source.spawn.speedMax = 0.0F;
+    source.spawn.lifetimeMin = 10.0F;
+    source.spawn.lifetimeMax = 10.0F;
+    AddModule(source, 1U, kb::scene::ParticleModuleType::CollisionPlane,
+        kb::scene::ParticleCollisionPlaneModule{.normal = {0.0F, 1.0F, 0.0F}, .distance = 0.0F,
+            .restitution = 0.0F, .friction = 0.0F,
+            .maxEventsPerStep = kb::scene::kParticleEffectMaxEventsPerStep});
+    auto target = source;
+    target.emitterId = 2U;
+    target.name = "CollisionTarget";
+    target.localPosition = {0.0F, 3.0F, 0.0F};
+    target.spawn.prewarmSeconds = 0.0F;
+    target.spawn.rateOverTime.keyframes.front().value = 0.0F;
+    target.modules.clear();
+    effect.emitters.push_back(std::move(target));
+    effect.eventBindings.push_back({.sourceEmitterId = 1U,
+        .trigger = kb::scene::ParticleEventTrigger::Collision, .sourceModuleId = 1U,
+        .action = kb::scene::ParticleEventAction::EmitTargetEmitter,
+        .targetEmitterId = 2U, .count = 1U, .maxDepth = 1U, .perStepBudget = perStepBudget});
+    return effect;
+}
+
 struct RuntimeFixture {
     Fixture fixture;
     kb::scene::SceneSystemHandle systemHandle{};
@@ -240,7 +293,7 @@ struct RuntimeFixture {
 }
 
 [[nodiscard]] std::uint64_t RunModuleFrameFeedHash(float frameDeltaSeconds) {
-    RuntimeFixture runtime(MakeVisualModuleEffect());
+    RuntimeFixture runtime(MakeInternalEventEffect());
     Require(kb::particles::ParticlePlayback::SetSeed(runtime.fixture.scene, runtime.instanceId,
                 0xA55A1234FEDC9876ULL).Succeeded() &&
             kb::particles::ParticlePlayback::Play(runtime.fixture.scene, runtime.instanceId).Succeeded(),
@@ -387,6 +440,398 @@ void TestVisualModulesObservableGoldenAndDefaults() {
         "disabled visual modules changed opaque-white unit-size defaults");
 }
 
+void TestCollisionPlaneExecutionAndDisable() {
+    const auto sample = [](bool enabled) {
+        auto effect = Fixture::MakeEffect(0.0F, 4U);
+        auto& emitter = effect.emitters[0];
+        emitter.localPosition = {0.0F, 0.1F, 0.0F};
+        emitter.spawn.lifetimeMin = 2.0F;
+        emitter.spawn.lifetimeMax = 2.0F;
+        emitter.spawn.direction = {0.0F, -1.0F, 0.0F};
+        emitter.spawn.speedMin = 12.0F;
+        emitter.spawn.speedMax = 12.0F;
+        emitter.spawn.randomization = 0.0F;
+        emitter.spawn.spreadDegrees = 0.0F;
+        AddModule(emitter, 1U, kb::scene::ParticleModuleType::Wind,
+            kb::scene::ParticleWindModule{.acceleration = {60.0F, 0.0F, 0.0F}});
+        AddModule(emitter, 2U, kb::scene::ParticleModuleType::CollisionPlane,
+            kb::scene::ParticleCollisionPlaneModule{
+                .normal = {0.0F, 2.0F, 0.0F},
+                .distance = 0.0F,
+                .restitution = 0.5F,
+                .friction = 0.25F,
+                .maxEventsPerStep = 4U,
+            }, enabled);
+        Fixture fixture(std::move(effect));
+        kb::particle_plugin::CpuParticleBackend backend;
+        backend.Warmup();
+        const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+        Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded() &&
+                backend.Emit(fixture.scene, created.instanceId, 1U).Succeeded() &&
+                backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+            "collision plane fixture execution failed");
+        return CopyBackendStates(backend, fixture, created.instanceId).front();
+    };
+    const auto collided = sample(true);
+    Require(std::abs(collided.position.x - 1.0F / 60.0F) < 0.000001F &&
+            std::abs(collided.position.y) < 0.000001F &&
+            std::abs(collided.velocity.x - 0.75F) < 0.000001F &&
+            std::abs(collided.velocity.y - 6.0F) < 0.000001F,
+        "collision plane did not correct penetration and reflect normal velocity");
+    const auto disabled = sample(false);
+    Require(std::abs(disabled.position.x - 1.0F / 60.0F) < 0.000001F &&
+            std::abs(disabled.position.y + 0.1F) < 0.000001F &&
+            std::abs(disabled.velocity.x - 1.0F) < 0.000001F &&
+            std::abs(disabled.velocity.y + 12.0F) < 0.000001F,
+        "disabled collision plane changed position or velocity");
+}
+
+void TestInternalEventTriggersOrderingAndBounds() {
+    const auto makeEmitter = [](std::uint64_t id, float y, std::uint32_t capacity = 256U) {
+        auto emitter = Fixture::MakeEffect().emitters[0];
+        emitter.emitterId = id;
+        emitter.name = "EventEmitter" + std::to_string(id);
+        emitter.localPosition = {0.0F, y, 0.0F};
+        emitter.maxParticles = capacity;
+        emitter.spawn.rateOverTime.keyframes.front().value = 0.0F;
+        emitter.spawn.speedMin = 0.0F;
+        emitter.spawn.speedMax = 0.0F;
+        emitter.spawn.lifetimeMin = 10.0F;
+        emitter.spawn.lifetimeMax = 10.0F;
+        emitter.modules.clear();
+        return emitter;
+    };
+
+    auto ordered = Fixture::MakeEffect(0.0F, 8U);
+    ordered.emitters[0] = makeEmitter(1U, 0.0F, 8U);
+    ordered.emitters.push_back(makeEmitter(2U, 10.0F, 8U));
+    ordered.emitters.push_back(makeEmitter(3U, 20.0F, 8U));
+    AddModule(ordered.emitters[0], 1U, kb::scene::ParticleModuleType::SubEmitter,
+        kb::scene::ParticleSubEmitterModule{.targetEmitterId = 2U,
+            .trigger = kb::scene::ParticleEventTrigger::Birth, .count = 1U, .maxDepth = 1U});
+    ordered.eventBindings.push_back({.sourceEmitterId = 1U,
+        .trigger = kb::scene::ParticleEventTrigger::Birth,
+        .action = kb::scene::ParticleEventAction::EmitTargetEmitter,
+        .targetEmitterId = 3U, .count = 1U, .maxDepth = 1U, .perStepBudget = 8U});
+    Fixture orderedFixture(std::move(ordered));
+    kb::particle_plugin::CpuParticleBackend orderedBackend;
+    orderedBackend.Warmup();
+    const auto orderedInstance = orderedBackend.Create(
+        orderedFixture.scene, orderedFixture.effectAssetId, orderedFixture.owner);
+    Require(orderedInstance.Succeeded() && orderedBackend.Emit(
+                orderedFixture.scene, orderedInstance.instanceId, 1U).Succeeded(),
+        "ordered internal event fixture failed");
+    const auto orderedStates = CopyBackendStates(orderedBackend, orderedFixture, orderedInstance.instanceId);
+    Require(orderedStates.size() == 3U && orderedStates[0].position.y == 0.0F &&
+            orderedStates[1].position.y == 10.0F && orderedStates[2].position.y == 20.0F,
+        "module actions did not execute before authored event bindings");
+
+    auto death = Fixture::MakeEffect(0.0F, 4U);
+    death.emitters[0] = makeEmitter(1U, 0.0F, 4U);
+    death.emitters[0].spawn.lifetimeMin = kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds;
+    death.emitters[0].spawn.lifetimeMax = kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds;
+    death.emitters.push_back(makeEmitter(2U, 4.0F, 4U));
+    AddModule(death.emitters[0], 1U, kb::scene::ParticleModuleType::SubEmitter,
+        kb::scene::ParticleSubEmitterModule{.targetEmitterId = 2U,
+            .trigger = kb::scene::ParticleEventTrigger::Death, .count = 1U, .maxDepth = 1U});
+    Fixture deathFixture(std::move(death));
+    kb::particle_plugin::CpuParticleBackend deathBackend;
+    deathBackend.Warmup();
+    const auto deathInstance = deathBackend.Create(deathFixture.scene, deathFixture.effectAssetId, deathFixture.owner);
+    Require(deathInstance.Succeeded() && deathBackend.Play(deathFixture.scene, deathInstance.instanceId).Succeeded() &&
+            deathBackend.Emit(deathFixture.scene, deathInstance.instanceId, 1U).Succeeded() &&
+            deathBackend.Step(deathFixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "death-trigger internal event fixture failed");
+    const auto deathStates = CopyBackendStates(deathBackend, deathFixture, deathInstance.instanceId);
+    Require(deathStates.size() == 1U && deathStates.front().position.y == 4.0F,
+        "death trigger did not replace the source with its target particle");
+
+    auto collision = Fixture::MakeEffect(0.0F, 4U);
+    collision.emitters[0] = makeEmitter(1U, 0.1F, 4U);
+    collision.emitters[0].spawn.direction = {0.0F, -1.0F, 0.0F};
+    collision.emitters[0].spawn.speedMin = 12.0F;
+    collision.emitters[0].spawn.speedMax = 12.0F;
+    collision.emitters.push_back(makeEmitter(2U, 7.0F, 4U));
+    AddModule(collision.emitters[0], 1U, kb::scene::ParticleModuleType::CollisionPlane,
+        kb::scene::ParticleCollisionPlaneModule{.normal = {0.0F, 1.0F, 0.0F}, .distance = 0.0F,
+            .restitution = 0.0F, .friction = 0.0F, .maxEventsPerStep = 4U});
+    AddModule(collision.emitters[0], 2U, kb::scene::ParticleModuleType::SubEmitter,
+        kb::scene::ParticleSubEmitterModule{.targetEmitterId = 2U,
+            .trigger = kb::scene::ParticleEventTrigger::Collision, .count = 1U, .maxDepth = 1U});
+    Fixture collisionFixture(std::move(collision));
+    kb::particle_plugin::CpuParticleBackend collisionBackend;
+    collisionBackend.Warmup();
+    const auto collisionInstance = collisionBackend.Create(
+        collisionFixture.scene, collisionFixture.effectAssetId, collisionFixture.owner);
+    Require(collisionInstance.Succeeded() && collisionBackend.Play(
+                collisionFixture.scene, collisionInstance.instanceId).Succeeded() &&
+            collisionBackend.Emit(collisionFixture.scene, collisionInstance.instanceId, 1U).Succeeded() &&
+            collisionBackend.Step(collisionFixture.scene,
+                kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "collision-trigger internal event fixture failed");
+    Require(collisionBackend.Query(collisionFixture.scene, collisionInstance.instanceId).liveParticleCount == 2U,
+        "collision trigger did not emit the target particle");
+
+    auto depth = Fixture::MakeEffect(0.0F, 8U);
+    depth.emitters.clear();
+    for (std::uint64_t id = 1U; id <= 5U; ++id) depth.emitters.push_back(makeEmitter(id, float(id), 8U));
+    for (std::uint64_t id = 1U; id <= 4U; ++id) {
+        AddModule(depth.emitters[id - 1U], 1U, kb::scene::ParticleModuleType::SubEmitter,
+            kb::scene::ParticleSubEmitterModule{.targetEmitterId = id + 1U,
+                .trigger = kb::scene::ParticleEventTrigger::Birth, .count = 1U, .maxDepth = 3U});
+    }
+    Fixture depthFixture(std::move(depth));
+    kb::particle_plugin::CpuParticleBackend depthBackend;
+    depthBackend.Warmup();
+    const auto depthInstance = depthBackend.Create(depthFixture.scene, depthFixture.effectAssetId, depthFixture.owner);
+    Require(depthInstance.Succeeded() && depthBackend.Emit(
+                depthFixture.scene, depthInstance.instanceId, 1U).Succeeded() &&
+            depthBackend.Query(depthFixture.scene, depthInstance.instanceId).liveParticleCount == 4U,
+        "breadth-first internal event depth three did not execute exactly once per level");
+
+    auto capped = Fixture::MakeEffect(0.0F, 4U);
+    capped.emitters[0] = makeEmitter(1U, 0.0F, 4U);
+    capped.emitters.push_back(makeEmitter(2U, 1.0F, 2U));
+    AddModule(capped.emitters[0], 1U, kb::scene::ParticleModuleType::SubEmitter,
+        kb::scene::ParticleSubEmitterModule{.targetEmitterId = 2U,
+            .trigger = kb::scene::ParticleEventTrigger::Birth, .count = 3U, .maxDepth = 1U});
+    Fixture cappedFixture(std::move(capped));
+    kb::particle_plugin::CpuParticleBackend cappedBackend;
+    cappedBackend.Warmup();
+    const auto cappedInstance = cappedBackend.Create(cappedFixture.scene, cappedFixture.effectAssetId, cappedFixture.owner);
+    Require(cappedInstance.Succeeded() && cappedBackend.Emit(cappedFixture.scene, cappedInstance.instanceId, 1U).status ==
+            kb::particles::ParticleRuntimeStatus::ParticleCapacityReached &&
+            cappedBackend.Query(cappedFixture.scene, cappedInstance.instanceId).liveParticleCount == 3U,
+        "target emitter capacity rejection was not explicit and bounded");
+}
+
+void TestInternalEventBudgetsAndCollisionLocalLimit() {
+    const auto makeEmitter = [](std::uint64_t id, std::uint32_t capacity) {
+        auto emitter = Fixture::MakeEffect().emitters[0];
+        emitter.emitterId = id;
+        emitter.name = "BudgetEmitter" + std::to_string(id);
+        emitter.maxParticles = capacity;
+        emitter.spawn.rateOverTime.keyframes.front().value = 0.0F;
+        emitter.spawn.speedMin = 0.0F;
+        emitter.spawn.speedMax = 0.0F;
+        emitter.spawn.lifetimeMin = 10.0F;
+        emitter.spawn.lifetimeMax = 10.0F;
+        emitter.modules.clear();
+        return emitter;
+    };
+
+    auto eventCap = Fixture::MakeEffect();
+    eventCap.emitters.clear();
+    eventCap.emitters.push_back(makeEmitter(1U,
+        static_cast<std::uint32_t>(kb::scene::kParticleEffectMaxEventsPerStep + 1U)));
+    eventCap.emitters.push_back(makeEmitter(2U, kb::scene::kParticleEffectMaxCpuParticlesPerEmitter));
+    eventCap.eventBindings.push_back({.sourceEmitterId = 1U,
+        .trigger = kb::scene::ParticleEventTrigger::Birth,
+        .action = kb::scene::ParticleEventAction::EmitTargetEmitter,
+        .targetEmitterId = 2U, .count = 1U, .maxDepth = 1U,
+        .perStepBudget = kb::scene::kParticleEffectMaxEventsPerStep});
+    Fixture eventCapFixture(std::move(eventCap));
+    kb::particle_plugin::CpuParticleBackend eventCapBackend;
+    eventCapBackend.Warmup();
+    const auto eventCapInstance = eventCapBackend.Create(
+        eventCapFixture.scene, eventCapFixture.effectAssetId, eventCapFixture.owner);
+    Require(eventCapInstance.Succeeded() && eventCapBackend.Emit(eventCapFixture.scene,
+                eventCapInstance.instanceId,
+                static_cast<std::uint32_t>(kb::scene::kParticleEffectMaxEventsPerStep + 1U)).status ==
+            kb::particles::ParticleRuntimeStatus::EventQueueFull,
+        "internal event queue boundary plus one was not rejected explicitly");
+    Require(eventCapBackend.LastStepTelemetry().rejectedByEventBudget == 1U,
+        "internal event queue overflow telemetry was not exact");
+
+    auto spawnCap = Fixture::MakeEffect();
+    spawnCap.emitters.clear();
+    spawnCap.emitters.push_back(makeEmitter(1U, 1U));
+    spawnCap.emitters.push_back(makeEmitter(2U, kb::scene::kParticleEffectMaxCpuParticlesPerEmitter));
+    spawnCap.eventBindings.push_back({.sourceEmitterId = 1U,
+        .trigger = kb::scene::ParticleEventTrigger::Birth,
+        .action = kb::scene::ParticleEventAction::EmitTargetEmitter,
+        .targetEmitterId = 2U, .count = kb::scene::kParticleEffectMaxSpawnsPerStep,
+        .maxDepth = 1U, .perStepBudget = 1U});
+    Fixture spawnCapFixture(std::move(spawnCap));
+    kb::particle_plugin::CpuParticleBackend spawnCapBackend;
+    spawnCapBackend.Warmup();
+    const auto spawnCapInstance = spawnCapBackend.Create(
+        spawnCapFixture.scene, spawnCapFixture.effectAssetId, spawnCapFixture.owner);
+    Require(spawnCapInstance.Succeeded() && spawnCapBackend.Emit(
+                spawnCapFixture.scene, spawnCapInstance.instanceId, 1U).status ==
+            kb::particles::ParticleRuntimeStatus::SpawnBudgetExceeded &&
+            spawnCapBackend.LastStepTelemetry().rejectedByStepBudget == 1U,
+        "internal action spawn boundary plus one was not explicit in result and telemetry");
+
+    auto collisionCap = Fixture::MakeEffect();
+    collisionCap.emitters.clear();
+    auto source = makeEmitter(1U, 4U);
+    source.localPosition = {0.0F, 0.1F, 0.0F};
+    source.spawn.direction = {0.0F, -1.0F, 0.0F};
+    source.spawn.speedMin = 12.0F;
+    source.spawn.speedMax = 12.0F;
+    AddModule(source, 1U, kb::scene::ParticleModuleType::CollisionPlane,
+        kb::scene::ParticleCollisionPlaneModule{.normal = {0.0F, 1.0F, 0.0F}, .distance = 0.0F,
+            .restitution = 0.0F, .friction = 0.0F, .maxEventsPerStep = 1U});
+    collisionCap.emitters.push_back(std::move(source));
+    collisionCap.emitters.push_back(makeEmitter(2U, 4U));
+    collisionCap.eventBindings.push_back({.sourceEmitterId = 1U,
+        .trigger = kb::scene::ParticleEventTrigger::Collision, .sourceModuleId = 1U,
+        .action = kb::scene::ParticleEventAction::EmitTargetEmitter,
+        .targetEmitterId = 2U, .count = 1U, .maxDepth = 1U, .perStepBudget = 4U});
+    Fixture collisionCapFixture(std::move(collisionCap));
+    kb::particle_plugin::CpuParticleBackend collisionCapBackend;
+    collisionCapBackend.Warmup();
+    const auto collisionCapInstance = collisionCapBackend.Create(
+        collisionCapFixture.scene, collisionCapFixture.effectAssetId, collisionCapFixture.owner);
+    Require(collisionCapInstance.Succeeded() && collisionCapBackend.Play(
+                collisionCapFixture.scene, collisionCapInstance.instanceId).Succeeded() &&
+            collisionCapBackend.Emit(collisionCapFixture.scene, collisionCapInstance.instanceId, 2U).Succeeded() &&
+            collisionCapBackend.Step(collisionCapFixture.scene,
+                kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "collision module local event overflow made the automatic fixed step fatal");
+    const auto collisionTelemetry = collisionCapBackend.LastStepTelemetry();
+    Require(collisionTelemetry.collisions == 2U && collisionTelemetry.rejectedByEventBudget == 1U &&
+            collisionCapBackend.Query(collisionCapFixture.scene, collisionCapInstance.instanceId)
+                .liveParticleCount == 3U,
+        "collision event local budget telemetry or accepted action count was incorrect");
+
+    auto collisionPrewarm = Fixture::MakeEffect(120.0F, 4U);
+    collisionPrewarm.emitters[0] = makeEmitter(1U, 4U);
+    collisionPrewarm.emitters[0].localPosition = {0.0F, -0.1F, 0.0F};
+    collisionPrewarm.emitters[0].spawn.prewarmSeconds = kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds;
+    collisionPrewarm.emitters[0].spawn.rateOverTime.keyframes.front().value = 120.0F;
+    AddModule(collisionPrewarm.emitters[0], 1U, kb::scene::ParticleModuleType::CollisionPlane,
+        kb::scene::ParticleCollisionPlaneModule{.normal = {0.0F, 1.0F, 0.0F}, .distance = 0.0F,
+            .restitution = 0.0F, .friction = 0.0F, .maxEventsPerStep = 1U});
+    collisionPrewarm.emitters.push_back(makeEmitter(2U, 4U));
+    collisionPrewarm.eventBindings.push_back({.sourceEmitterId = 1U,
+        .trigger = kb::scene::ParticleEventTrigger::Collision, .sourceModuleId = 1U,
+        .action = kb::scene::ParticleEventAction::EmitTargetEmitter,
+        .targetEmitterId = 2U, .count = 1U, .maxDepth = 1U, .perStepBudget = 4U});
+    Fixture collisionPrewarmFixture(std::move(collisionPrewarm));
+    kb::particle_plugin::CpuParticleBackend collisionPrewarmBackend;
+    collisionPrewarmBackend.Warmup();
+    const auto collisionPrewarmInstance = collisionPrewarmBackend.Create(
+        collisionPrewarmFixture.scene, collisionPrewarmFixture.effectAssetId, collisionPrewarmFixture.owner);
+    Require(collisionPrewarmInstance.Succeeded() && collisionPrewarmBackend.Play(
+                collisionPrewarmFixture.scene, collisionPrewarmInstance.instanceId).status ==
+                kb::particles::ParticleRuntimeStatus::EventBudgetExceeded &&
+            !collisionPrewarmBackend.Query(collisionPrewarmFixture.scene,
+                collisionPrewarmInstance.instanceId).state &&
+            collisionPrewarmBackend.Query(collisionPrewarmFixture.scene,
+                collisionPrewarmInstance.instanceId).liveParticleCount == 0U &&
+            collisionPrewarmBackend.LastStepTelemetry().rejectedByEventBudget == 1U,
+        "CollisionPlane event budget did not return its typed prewarm result and roll back cleanly");
+}
+
+void TestAutomaticLimitTelemetryPrewarmRollbackAndScriptDiagnostic() {
+    auto capacityEffect = Fixture::MakeEffect(120.0F, 1U);
+    Fixture capacityFixture(capacityEffect);
+    kb::particle_plugin::CpuParticleBackend capacityBackend;
+    capacityBackend.Warmup();
+    const auto capacityInstance = capacityBackend.Create(
+        capacityFixture.scene, capacityFixture.effectAssetId, capacityFixture.owner);
+    Require(capacityInstance.Succeeded() && capacityBackend.Play(
+                capacityFixture.scene, capacityInstance.instanceId).Succeeded() &&
+            capacityBackend.Step(capacityFixture.scene,
+                kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "automatic capacity overflow was treated as a fatal fixed-step failure");
+    Require(capacityBackend.LastStepTelemetry().spawned == 1U &&
+            capacityBackend.LastStepTelemetry().rejectedByCapacity == 1U,
+        "automatic capacity overflow telemetry was not exact");
+    RuntimeFixture capacityRuntime(std::move(capacityEffect));
+    Require(kb::particles::ParticlePlayback::Play(
+                capacityRuntime.fixture.scene, capacityRuntime.instanceId).Succeeded(),
+        "scene-system capacity fixture play failed");
+    static_cast<void>(capacityRuntime.fixture.scene.Runtime().Update(
+        kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds));
+
+    auto spawnBudgetEffect = Fixture::MakeEffect(0.0F,
+        kb::scene::kParticleEffectMaxCpuParticlesPerEmitter);
+    spawnBudgetEffect.emitters[0].spawn.mode = kb::scene::ParticleSpawnMode::Burst;
+    spawnBudgetEffect.emitters[0].spawn.bursts = {
+        {.timeSeconds = 0.0F, .count = kb::scene::kParticleEffectMaxSpawnsPerStep},
+        {.timeSeconds = 0.001F, .count = 1U},
+    };
+    Fixture spawnBudgetFixture(std::move(spawnBudgetEffect));
+    kb::particle_plugin::CpuParticleBackend spawnBudgetBackend;
+    spawnBudgetBackend.Warmup();
+    const auto spawnBudgetInstance = spawnBudgetBackend.Create(
+        spawnBudgetFixture.scene, spawnBudgetFixture.effectAssetId, spawnBudgetFixture.owner);
+    Require(spawnBudgetInstance.Succeeded() && spawnBudgetBackend.Play(
+                spawnBudgetFixture.scene, spawnBudgetInstance.instanceId).Succeeded() &&
+            spawnBudgetBackend.Step(spawnBudgetFixture.scene,
+                kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
+            spawnBudgetBackend.LastStepTelemetry().spawned == kb::scene::kParticleEffectMaxSpawnsPerStep &&
+            spawnBudgetBackend.LastStepTelemetry().rejectedByStepBudget == 1U,
+        "automatic spawn budget overflow was fatal or telemetry was not exact");
+
+    auto eventEffect = MakeCollisionBindingEffect(120.0F, 0.0F, 1U);
+    Fixture eventFixture(eventEffect);
+    kb::particle_plugin::CpuParticleBackend eventBackend;
+    eventBackend.Warmup();
+    const auto eventInstance = eventBackend.Create(eventFixture.scene, eventFixture.effectAssetId, eventFixture.owner);
+    Require(eventInstance.Succeeded() && eventBackend.Play(eventFixture.scene, eventInstance.instanceId).Succeeded() &&
+            eventBackend.Step(eventFixture.scene,
+                kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
+            eventBackend.LastStepTelemetry().rejectedByEventBudget == 1U,
+        "automatic event action budget overflow was fatal or telemetry was not exact");
+    RuntimeFixture eventRuntime(std::move(eventEffect));
+    Require(kb::particles::ParticlePlayback::Play(eventRuntime.fixture.scene, eventRuntime.instanceId).Succeeded(),
+        "scene-system event fixture play failed");
+    static_cast<void>(eventRuntime.fixture.scene.Runtime().Update(
+        kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds));
+
+    Fixture prewarmFixture(MakeCollisionBindingEffect(120.0F,
+        kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds, 1U));
+    kb::particle_plugin::CpuParticleBackend prewarmBackend;
+    prewarmBackend.Warmup();
+    const auto prewarmInstance = prewarmBackend.Create(
+        prewarmFixture.scene, prewarmFixture.effectAssetId, prewarmFixture.owner);
+    Require(prewarmInstance.Succeeded() && prewarmBackend.Play(
+                prewarmFixture.scene, prewarmInstance.instanceId).status ==
+            kb::particles::ParticleRuntimeStatus::EventBudgetExceeded,
+        "prewarm event budget failure did not return its typed result");
+    const auto prewarmQuery = prewarmBackend.Query(prewarmFixture.scene, prewarmInstance.instanceId);
+    Require(prewarmQuery.Succeeded() && !prewarmQuery.state && prewarmQuery.liveParticleCount == 0U &&
+            prewarmBackend.BufferedEventCount() == 0U,
+        "failed prewarm did not roll back to a clean stopped instance");
+
+    auto scriptEffect = Fixture::MakeEffect(0.0F, 4U);
+    auto scriptTarget = scriptEffect.emitters[0];
+    scriptTarget.emitterId = 2U;
+    scriptTarget.name = "ScriptEventTarget";
+    scriptTarget.spawn.rateOverTime.keyframes.front().value = 0.0F;
+    scriptEffect.emitters.push_back(std::move(scriptTarget));
+    scriptEffect.eventBindings.push_back({.sourceEmitterId = 1U,
+        .trigger = kb::scene::ParticleEventTrigger::Birth,
+        .action = kb::scene::ParticleEventAction::EmitTargetEmitter,
+        .targetEmitterId = 2U, .count = 1U, .maxDepth = 1U, .perStepBudget = 1U});
+    Fixture scriptFixture(std::move(scriptEffect));
+    kb::particle_plugin::CpuParticleBackend scriptBackend;
+    scriptBackend.Warmup();
+    Require(kb::particles::ParticlePlayback::RegisterBackend(scriptFixture.scene, scriptBackend).Succeeded(),
+        "script event-budget backend registration failed");
+    const auto scriptInstance = scriptBackend.Create(
+        scriptFixture.scene, scriptFixture.effectAssetId, scriptFixture.owner);
+    Require(scriptInstance.Succeeded(), "script event-budget instance creation failed");
+    kb::script::ScriptRuntimeHost host{scriptFixture.scene};
+    Require(host.Succeeded(), "script event-budget host initialization failed");
+    const std::array arguments{
+        kb::script::ScriptFunctionArgument{.name = "instance",
+            .value = kb::script::ScriptValue{scriptInstance.instanceId, kb::script::ScriptValueType::Hash}},
+        kb::script::ScriptFunctionArgument{.name = "count", .value = kb::script::ScriptValue{2}},
+    };
+    const kb::script::ScriptFunctionCallResult emit = host.Functions().Call(
+        "Particles.Emit", arguments, kb::script::ScriptFunctionCallContext{.scene = &scriptFixture.scene});
+    Require(!emit.Succeeded() && emit.errors.size() == 1U &&
+            emit.errors.front() == "particle event action budget was exceeded",
+        "script API did not preserve the exact EventBudgetExceeded diagnostic");
+    Require(kb::particles::ParticlePlayback::UnregisterBackend(scriptFixture.scene, scriptBackend).Succeeded(),
+        "script event-budget backend unregister failed");
+}
+
 void TestModuleOrderEnableAndGravityContracts() {
     const auto makeOrdered = [](bool dragFirst, bool windEnabled) {
         auto effect = Fixture::MakeEffect(0.0F, 8U);
@@ -528,22 +973,42 @@ void TestModuleCompileRejection() {
         return backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner).status;
     };
 
-    auto unsupportedCollision = Fixture::MakeEffect();
-    AddModule(unsupportedCollision.emitters[0], 1U, kb::scene::ParticleModuleType::CollisionPlane,
-        kb::scene::ParticleCollisionPlaneModule{});
-    Require(createStatus(std::move(unsupportedCollision)) == kb::particles::ParticleRuntimeStatus::UnsupportedOutput,
-        "unsupported CollisionPlane module was accepted by the compiler");
-
-    auto unsupportedSubEmitter = Fixture::MakeEffect();
-    kb::scene::ParticleEmitterAsset subEmitterTarget = unsupportedSubEmitter.emitters[0];
-    subEmitterTarget.emitterId = 2U;
-    subEmitterTarget.name = "SubEmitterTarget";
-    AddModule(unsupportedSubEmitter.emitters[0], 1U, kb::scene::ParticleModuleType::SubEmitter,
-        kb::scene::ParticleSubEmitterModule{.targetEmitterId = 2U});
-    unsupportedSubEmitter.emitters.push_back(std::move(subEmitterTarget));
-    Require(createStatus(std::move(unsupportedSubEmitter)) ==
+    auto unsupportedExternalEffect = Fixture::MakeEffect();
+    unsupportedExternalEffect.eventBindings.push_back({
+        .sourceEmitterId = 1U,
+        .trigger = kb::scene::ParticleEventTrigger::Death,
+        .action = kb::scene::ParticleEventAction::EmitEffectAsset,
+        .targetEffect = {.virtualPath = "/Game/Effects/External.kbvfx"},
+    });
+    Require(createStatus(std::move(unsupportedExternalEffect)) ==
             kb::particles::ParticleRuntimeStatus::UnsupportedOutput,
-        "unsupported SubEmitter module was accepted by the compiler");
+        "external effect event action was accepted by the internal-event compiler");
+
+    const auto addTargetAndBinding = [](kb::scene::ParticleEffectAsset& effect,
+                                        kb::scene::ParticleEventTrigger trigger) {
+        auto target = effect.emitters[0];
+        target.emitterId = 2U;
+        target.name = "BindingTarget";
+        target.modules.clear();
+        target.spawn.rateOverTime.keyframes.front().value = 0.0F;
+        effect.emitters.push_back(std::move(target));
+        effect.eventBindings.push_back({.sourceEmitterId = 1U, .trigger = trigger, .sourceModuleId = 1U,
+            .action = kb::scene::ParticleEventAction::EmitTargetEmitter,
+            .targetEmitterId = 2U, .count = 1U, .maxDepth = 1U, .perStepBudget = 1U});
+    };
+    auto gravitySourceBinding = Fixture::MakeEffect();
+    AddModule(gravitySourceBinding.emitters[0], 1U, kb::scene::ParticleModuleType::Gravity,
+        kb::scene::ParticleGravityModule{.acceleration = {}, .sceneGravityScale = 1.0F});
+    addTargetAndBinding(gravitySourceBinding, kb::scene::ParticleEventTrigger::Collision);
+    Require(createStatus(std::move(gravitySourceBinding)) == kb::particles::ParticleRuntimeStatus::UnsupportedOutput,
+        "event binding sourced from a non-emitting Gravity module was compiled");
+
+    auto birthModuleBinding = Fixture::MakeEffect();
+    AddModule(birthModuleBinding.emitters[0], 1U, kb::scene::ParticleModuleType::CollisionPlane,
+        kb::scene::ParticleCollisionPlaneModule{});
+    addTargetAndBinding(birthModuleBinding, kb::scene::ParticleEventTrigger::Birth);
+    Require(createStatus(std::move(birthModuleBinding)) == kb::particles::ParticleRuntimeStatus::UnsupportedOutput,
+        "Birth binding with a CollisionPlane source module was compiled");
 
     auto bothGravityChannels = Fixture::MakeEffect();
     AddModule(bothGravityChannels.emitters[0], 1U, kb::scene::ParticleModuleType::Gravity,
@@ -606,8 +1071,8 @@ void TestModuleCompileRejection() {
 }
 
 void TestModulePrewarmParity() {
-    RuntimeFixture prewarmed(MakeVisualModuleEffect(1.0F));
-    RuntimeFixture manual(MakeVisualModuleEffect());
+    RuntimeFixture prewarmed(MakeInternalEventEffect(1.0F));
+    RuntimeFixture manual(MakeInternalEventEffect());
     Require(kb::particles::ParticlePlayback::SetSeed(prewarmed.fixture.scene, prewarmed.instanceId, 913U).Succeeded() &&
             kb::particles::ParticlePlayback::SetSeed(manual.fixture.scene, manual.instanceId, 913U).Succeeded() &&
             kb::particles::ParticlePlayback::Play(prewarmed.fixture.scene, prewarmed.instanceId).Succeeded() &&
@@ -854,7 +1319,7 @@ void TestGlobalCapacityAndCompileRejection() {
 }
 
 void TestNoAllocationPerFixedStep() {
-    Fixture fixture(MakeVisualModuleEffect());
+    Fixture fixture(MakeCollisionBindingEffect(60.0F));
     kb::particle_plugin::CpuParticleBackend backend;
     backend.Warmup();
     const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
@@ -1091,6 +1556,10 @@ int main() {
         TestSharedFixedSchedulerDeterminism();
         TestUniformSolidAngleConeGolden();
         TestVisualModulesObservableGoldenAndDefaults();
+        TestCollisionPlaneExecutionAndDisable();
+        TestInternalEventTriggersOrderingAndBounds();
+        TestInternalEventBudgetsAndCollisionLocalLimit();
+        TestAutomaticLimitTelemetryPrewarmRollbackAndScriptDiagnostic();
         TestModuleOrderEnableAndGravityContracts();
         TestModuleCompileRejection();
         TestModulePrewarmParity();

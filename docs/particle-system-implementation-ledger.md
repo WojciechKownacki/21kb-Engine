@@ -10,9 +10,10 @@
 ## Current package
 
 - Stage: `3` — deterministic CPU fixed-step simulation and baseline modules.
-- Status: `in_progress`; checkpoint 3.3B1 is accepted.
+- Status: `in_progress`; checkpoint 3.3B2 is accepted.
 - Scope: Stage 3 builds deterministic CPU fixed-step simulation, dense runtime state, bounded queues, baseline modules, owner policies, and telemetry on top of the delivered provider ABI.
-- Next gate: collision and sub-emitter execution with bounded ordered events, followed by owner policies and reload behavior.
+- Next gate: owner policies and reload behavior.
+- Rendering direction: normal game-facing simulation and rendering must move to GPU. The CPU backend is retained only as the deterministic validation, diagnostics, and preview path; it is not the intended final gameplay path.
 
 ## Accepted stages
 
@@ -81,10 +82,19 @@
 - The state layout change is protected by the actually enforced engine-module ABI version. A deliberately old test DLL is rejected by the production host before its `create` entry point executes; the current `Rendering.21kbParticle` DLL still completes the 100-reload lifecycle test.
 - Focused tests cover exact curve/gradient values and golden `3957020943848305260`, disabled defaults, malformed payload rejection, visual 30/60/144 Hz and prewarm parity, allocation-free stepping, and explicit unsupported results for the remaining CollisionPlane and SubEmitter variants.
 
+### Stage 3.3B2 — CPU collision and ordered internal events: `accepted checkpoint`
+
+- `CollisionPlane` corrects penetration, applies normal restitution and tangential friction, then produces bounded collision events. `SubEmitter` and internal target-emitter bindings execute breadth-first in authored order for birth, death, and collision triggers.
+- The event queue has the schema hard ceiling; queue overflow and per-action exhaustion return distinct typed outcomes for explicit commands. Automatic fixed simulation remains non-fatal and reports exact event, spawn-budget, and capacity telemetry.
+- Structural validation always rejects emitter cycles, while acyclic paths respect each action's local depth limit. A five-emitter birth graph with depth three consequently emits exactly four particles.
+- Failed `Play` or `Restart` prewarm atomically rolls back to a stopped, empty instance. Runtime state carries bounded event depth and prewarm group channels without fixed-step heap allocation.
+- Focused tests cover collision enable/disable physics, ordering, all triggers, queue and action boundaries, depth, script diagnostics, automatic-limit telemetry, prewarm rollback, and allocation-free event handling.
+
 ## Accepted decisions and mappings
 
 - Plugin identifier: `Rendering.21kbParticle`.
 - Product display name: `21kb Particle System`.
+- Production rendering policy: GPU simulation and GPU rendering are mandatory for the normal runtime path; CPU execution is limited to explicit preview, diagnostics, and deterministic verification duties.
 - Stable asset/type terminology: `ParticleEffect` and `.kbvfx`.
 - Existing flat asset model maps to `sources/engine/include/engine/scene/ParticleEffectAsset.hpp`.
 - Existing parser/writer maps to `sources/engine/src/scene/ParticleEffectAssetIO.cpp`.
@@ -128,4 +138,4 @@
 - Stage 1A attempt 1 was rejected after independent review despite a green focused test; every listed defect was repaired and the second attempt was accepted.
 - No open stage 0 defect remains.
 - No open stage 1 defect remains.
-- Next gate: stage 3.3B2 adds CollisionPlane and SubEmitter execution with bounded ordered events; owner policies and reload remain separate Stage 3 checkpoints.
+- Next gate: Stage 3 owner policies and reload behavior; GPU simulation and rendering preparation remain separate later checkpoints.
