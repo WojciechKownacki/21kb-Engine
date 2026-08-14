@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/particles/IParticleSimulationBackend.hpp"
+#include "engine/particles/ParticleRenderSnapshot.hpp"
 
 #include <cstdint>
 #include <span>
@@ -16,6 +17,15 @@ public:
     [[nodiscard]] static ParticleRuntimeResult RegisterBackend(kb::scene::Scene& scene, IParticleSimulationBackend& backend) noexcept;
     [[nodiscard]] static ParticleRuntimeResult UnregisterBackend(kb::scene::Scene& scene, IParticleSimulationBackend& backend) noexcept;
     [[nodiscard]] static bool HasBackend(const kb::scene::Scene& scene) noexcept;
+    [[nodiscard]] static std::uint64_t BackendEpoch(const kb::scene::Scene& scene) noexcept;
+
+    [[nodiscard]] static ParticleRenderSnapshotResult WarmupRenderSnapshots(kb::scene::Scene& scene) noexcept;
+    [[nodiscard]] static ParticleRenderSnapshotResult PublishRenderSnapshot(
+        kb::scene::Scene& scene,
+        IParticleSimulationBackend& backend,
+        const ParticleRenderSnapshotPublishDesc& desc) noexcept;
+    [[nodiscard]] static std::shared_ptr<const ParticleRenderSnapshot> ReadRenderSnapshot(
+        const kb::scene::Scene& scene) noexcept;
 
     [[nodiscard]] static ParticleRuntimeResult Create(kb::scene::Scene& scene, std::uint64_t effectAssetId, kb::scene::SceneEntity owner);
     [[nodiscard]] static ParticleRuntimeResult Release(kb::scene::Scene& scene, std::uint64_t instanceId) noexcept;

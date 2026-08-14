@@ -12,7 +12,7 @@
 - Stage: `4` — core-owned immutable render snapshot.
 - Status: `in_progress`; Stage 3 is accepted.
 - Scope: Stage 4 adds a renderer-neutral packed stream and bounded retained snapshot channel with revision, backend epoch, fixed-step index, tombstone, and no DLL-owned destruction path.
-- Next gate: prove retained snapshot publication, reader lifetime, backpressure, and teardown before the Stage 5 GPU renderer consumes it.
+- Next gate: publish CPU-preview snapshots and lifecycle tombstones through the retained channel before the Stage 5 GPU renderer consumes it.
 - Rendering direction: normal game-facing simulation and rendering must move to GPU. The CPU backend is retained only as the deterministic validation, diagnostics, and preview path; it is not the intended final gameplay path.
 
 ## Accepted stages
@@ -98,6 +98,13 @@
 - Internal event actions are deferred to the next fixed step with bounded FIFO queues, authored module-before-binding order, and one level of expansion per step. Raw instances keep explicit identity/default component behavior.
 - Missing or non-executable component effects now fail explicitly, and a failed asset replacement leaves the previous live instance intact.
 - Focused tests cover 256-instance atomic turnover, reload/LKG, lifecycle, event timing/depth, transform and override semantics, and allocation-free warmed paths.
+
+### Stage 4A — immutable render snapshot core: `accepted checkpoint`
+
+- `kb_engine` owns the renderer-neutral 64-byte packed particle stream and the complete per-emitter batch metadata; no renderer or provider type is part of either DTO.
+- A scene-owned channel preallocates four immutable 16 MiB retained slots. Its header carries monotonic revision, scene ID, backend epoch, fixed-step index, and tombstone state.
+- Publication validates batch ranges, capacity, enums, finite bounds, compact particle payload, and drop diagnostics before replacing the retained revision. Exhaustion is explicit `SnapshotBackpressure` and leaves the last complete snapshot intact.
+- The channel owns all control blocks and storage in `kb_engine`, so a retained reader remains valid after provider unload and scene destruction. Focused tests prove concurrent readers, no-allocation publish after warmup, metadata retention, and lifecycle safety.
 
 ## Accepted decisions and mappings
 
