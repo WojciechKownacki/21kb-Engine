@@ -479,6 +479,16 @@ const RenderScene::GeometrySwarmProxyMap& RenderScene::GeometrySwarmProxies() co
 const RenderScene::SurfaceCastProxyMap& RenderScene::SurfaceCastProxies() const noexcept { return surfaceCasts_; }
 const RenderScene::SpaceStrokeProxyMap& RenderScene::SpaceStrokeProxies() const noexcept { return spaceStrokes_; }
 
+void RenderScene::SetParticleRenderSnapshot(
+    std::shared_ptr<const kb::particles::ParticleRenderSnapshot> snapshot) noexcept {
+    particleRenderSnapshot_ = std::move(snapshot);
+}
+
+const std::shared_ptr<const kb::particles::ParticleRenderSnapshot>&
+RenderScene::ParticleRenderSnapshot() const noexcept {
+    return particleRenderSnapshot_;
+}
+
 void RenderScene::ClearDirty() noexcept {
     for (auto& [entityId, proxy] : meshes_) {
         proxy.dirty = RenderProxyDirtyFlag::None;

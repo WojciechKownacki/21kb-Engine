@@ -1,5 +1,6 @@
 #include "engine/modules/EngineModuleHost.hpp"
 
+#include "engine/ecs/World.hpp"
 #include "engine/modules/EngineModuleContext.hpp"
 #include "engine/modules/EngineModuleExports.hpp"
 
@@ -346,6 +347,7 @@ void EngineModuleHost::Reload(kb::ecs::World& world, std::span<kb::scene::Scene*
                 DetachScene(**it);
             }
         }
+        world.ReleaseUnusedQueryPlans();
         Unload();
     }
 

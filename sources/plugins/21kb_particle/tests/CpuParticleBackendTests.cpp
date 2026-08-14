@@ -2148,6 +2148,10 @@ void TestCpuPreviewRenderSnapshotPublicationAndLifecycle() {
     second.output.blend = kb::scene::ParticleBlendMode::Add;
     second.output.sort = kb::scene::ParticleSortMode::BackToFront;
     second.output.depthWrite = false;
+    second.output.softParticles = true;
+    second.output.antiAliasing = true;
+    second.output.alignment = kb::scene::ParticleAlignment::Local;
+    second.localRotation = {0.0F, 0.0F, 0.0F, 1.0F};
     second.output.payload = kb::scene::ParticleStretchedBillboardOutput{
         .flipbook = {.columns = 2U, .rows = 2U, .framesPerSecond = 60.0F, .looping = true},
         .velocityScale = 2.0F,
@@ -2188,12 +2192,20 @@ void TestCpuPreviewRenderSnapshotPublicationAndLifecycle() {
                 first->Emitters()[1].particleCount == 1U && first->Emitters()[1].textureAtlasAssetId == 74U &&
                 first->Emitters()[1].output == kb::particles::ParticleRenderOutput::StretchedBillboard &&
                 first->Emitters()[1].blend == kb::particles::ParticleRenderBlendMode::Add &&
+                first->Emitters()[1].alignment == kb::particles::ParticleRenderAlignment::Local &&
+                kb::particles::HasParticleRenderEmitterFlag(first->Emitters()[1].flags,
+                    kb::particles::ParticleRenderEmitterFlag::SoftParticles) &&
+                kb::particles::HasParticleRenderEmitterFlag(first->Emitters()[1].flags,
+                    kb::particles::ParticleRenderEmitterFlag::AntiAliasing) &&
+                first->Emitters()[1].FlipbookColumns() == 2U &&
+                first->Emitters()[1].FlipbookRows() == 2U &&
                 first->Emitters()[1].boundsMinimum.x <= first->Emitters()[1].boundsMaximum.x,
             "compiled output metadata or two-emitter ranges were not retained");
         const std::uint64_t stableParticleId = first->Particles()[0].particleId;
         const float firstPosition = first->Particles()[0].position.x;
         Require(stableParticleId != 0U && firstPosition > first->Particles()[0].previousPosition.x &&
-                first->Particles()[1].stretch == 2.0F && first->Particles()[1].frame == 1U,
+                first->Particles()[1].stretch == 2.0F && first->Particles()[1].frame == 1U &&
+                first->Particles()[1].normalizedAgeUnorm > 0U,
             "stable ID, previous position, stretch, or flipbook frame was not published");
 
         g_allocationCount.store(0U, std::memory_order_relaxed);
