@@ -70,6 +70,9 @@ void DrawTabChrome(HDC dc, const RECT& tab, bool active, const EditorTheme& them
     case DockPanelKind::MaterialEditor:
         icon = HeroIconKind::RectangleGroup;
         return true;
+    case DockPanelKind::ParticleEditor:
+        icon = HeroIconKind::Bolt;
+        return true;
     default:
         return false;
     }

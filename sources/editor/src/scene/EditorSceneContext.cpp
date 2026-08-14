@@ -1227,6 +1227,9 @@ EditorSceneContext::~EditorSceneContext() {
     if (assetImportWorker_.joinable()) {
         assetImportWorker_.join();
     }
+    if (particlePreviewSession_ != nullptr && particlePreviewReleaseHandler_) {
+        CloseParticleEditorAsset();
+    }
     // Scene shutdown dispatches the script Destroyed lifecycle and scripts may
     // legitimately call the editor-provided Log function from that callback.
     // Destroy the scene explicitly while console_ is still alive; the default
@@ -1733,6 +1736,10 @@ bool EditorSceneContext::SaveOpenDocuments() {
         " sceneDirty=" + std::string{ sceneDocumentDirty_ ? "true" : "false" });
     if (HasDirtyMaterialAssetEdit() && !SaveMaterialEditorAsset(materialEditor_.OpenAssetId())) {
         LogMaterialGraphDebug(console_, "save-open-documents-failed material editor save failed");
+        return false;
+    }
+    if (ParticleEditorDirty() && !SaveParticleEditorAsset()) {
+        console_.Error("Particles", "Global Save could not persist the open particle effect.");
         return false;
     }
     if (!sceneDocumentDirty_) {
@@ -2832,7 +2839,6 @@ bool EditorSceneContext::BeginAssetImport(
         console_.Warning("Assets", "An asset import is already running.");
         return false;
     }
-
     const std::vector<std::filesystem::path> files{ sourceFiles.begin(), sourceFiles.end() };
     const std::filesystem::path projectRoot = EditorProjectPaths::ProjectRoot();
     assetImportRunning_.store(true, std::memory_order_release);

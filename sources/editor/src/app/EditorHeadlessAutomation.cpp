@@ -245,6 +245,9 @@ FindInspectorHit(
     if (panel == "animator_editor") {
         return DockPanelKind::AnimatorEditor;
     }
+    if (panel == "particle_editor") {
+        return DockPanelKind::ParticleEditor;
+    }
     return std::nullopt;
 }
 
@@ -1009,7 +1012,8 @@ bool EditorHeadlessAutomation::CapturePanelScreenshotMatrix(
         (*kind != DockPanelKind::MaterialEditor &&
          *kind != DockPanelKind::SkeletalMeshEditor &&
          *kind != DockPanelKind::AnimationClipEditor &&
-         *kind != DockPanelKind::AnimatorEditor)) {
+         *kind != DockPanelKind::AnimatorEditor &&
+         *kind != DockPanelKind::ParticleEditor)) {
         Trace("capture_panel_screenshot_matrix", false, panel);
         return false;
     }

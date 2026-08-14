@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "app/EditorSceneLifecycleGuard.hpp"
+#include "app/EditorParticleDocumentLifecycle.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -118,7 +119,21 @@ LRESULT EditorWindowLifecycleHandler::HandleClose(HWND messageWindow) {
             !ResolveDirtyAnimatorEditorClose(messageWindow, sceneContext_, L"closing the Animator Editor")) {
             return 0;
         }
+        if (panel != nullptr && panel->kind == DockPanelKind::ParticleEditor &&
+            !EditorParticleDocumentLifecycle::Resolve(
+                messageWindow, sceneContext_,
+                kb::particle_editor::ParticleDocumentTransition::CloseWindow,
+                L"closing the particle editor window")) {
+            return 0;
+        }
         floatingWindows_.Commands().Destroy(panelId);
+        if (panel != nullptr && panel->kind == DockPanelKind::ParticleEditor) {
+            dockModel_.Commands().DockPanelTo(panelId, DockDropPreview{ .zone = DockDropZone::Bottom });
+            static_cast<void>(dockModel_.Commands().ClosePanel(panelId));
+            sceneContext_.CloseParticleEditorAsset();
+            InvalidateRect(mainWindow_, nullptr, FALSE);
+            return 0;
+        }
         dockModel_.Commands().DockPanelTo(panelId, DockDropPreview{ .zone = DockDropZone::Bottom });
         InvalidateRect(mainWindow_, nullptr, FALSE);
         return 0;
@@ -132,6 +147,12 @@ LRESULT EditorWindowLifecycleHandler::HandleClose(HWND messageWindow) {
         return 0;
     }
     if (!ResolveDirtyAnimatorEditorClose(messageWindow, sceneContext_, L"closing the editor")) {
+        return 0;
+    }
+    if (!EditorParticleDocumentLifecycle::Resolve(
+            messageWindow, sceneContext_,
+            kb::particle_editor::ParticleDocumentTransition::ExitApplication,
+            L"closing the editor")) {
         return 0;
     }
     const std::optional<EditorDirtySceneResolution> resolution =

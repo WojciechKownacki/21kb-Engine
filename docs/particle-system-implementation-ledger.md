@@ -10,7 +10,7 @@
 ## Current package
 
 - Stage: `6` — editor document shell and shared preview.
-- Status: `in_progress`; Stages 3, 4, and 5 plus Stage 6A are accepted.
+- Status: `in_progress`; Stages 3, 4, and 5 plus Stages 6A and 6B are accepted.
 - Scope: Stage 6 adds the editor document shell and isolated preview through the accepted runtime backend and GPU renderer, without a second preview kernel.
 - Next gate: characterize the editor document, docking, history, and preview-scene seams before the first integration package.
 - Rendering direction: normal game-facing simulation and rendering must move to GPU. The CPU backend is retained only as the deterministic validation, diagnostics, and preview path; it is not the intended final gameplay path.
@@ -127,6 +127,13 @@
 - The isolated preview publishes an unsaved working copy as a runtime asset in a real runtime scene with the enabled provider, normal `SceneRuntime`, and the accepted GPU renderer; it has no second accumulator or simulation kernel.
 - First-save session paths commit only after successful atomic IO. Reopen, undo/redo/revert, save failure preservation, unsaved preview no-disk-write, provider-backed runtime snapshots, Noop GPU submit, and scene/backend/snapshot/renderer teardown are covered by the dedicated focused suite.
 - Host panel/docking routing and Bake remain deliberately outside 6A. Bake requires a future public core-owned immutable compiled-effect artifact rather than access to private CPU backend state.
+
+### Stage 6B — host panel and preview lifecycle: `accepted checkpoint`
+
+- The editor hosts panel 14, `21kb Particle System`, in the center document workspace with dock/floating behavior, asset activation, shared preview presentation, and close routes that all use the 6A dirty guard.
+- The host owns no simulation path: its viewport release callback clears renderer scene state before the accepted preview session destroys its runtime scene and provider. Resize, docking, and floating preserve the existing preview session and camera.
+- A bounded, strict, atomic in-project session store preserves panel visibility, placement, floating rectangle, and session path. The editor tests cover panel presence, layout movement, persistence, and escape rejection.
+- Full authoring controls and Bake remain outside 6B.
 
 ## Accepted decisions and mappings
 

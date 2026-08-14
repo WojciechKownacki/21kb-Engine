@@ -2,12 +2,14 @@
 
 #if defined(_WIN32)
 #include "app/EditorSceneLifecycleGuard.hpp"
+#include "app/EditorParticleDocumentLifecycle.hpp"
 #include "assets/EditorAssetBrowserHitPayloadResolver.hpp"
 #include "assets/EditorAssetBrowserHitTester.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/TimelineAssetIO.hpp"
@@ -94,6 +96,17 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::Handle
         if (metadata->type == kb::scene::kAnimatorControllerAssetType) {
             return sceneContext.OpenAnimatorEditorAsset(metadata->id)
                 ? EditorAssetBrowserDoubleClickResult::AnimatorEditorOpened
+                : EditorAssetBrowserDoubleClickResult::None;
+        }
+        if (metadata->type == kb::scene::kParticleEffectAssetType) {
+            if (!EditorParticleDocumentLifecycle::Resolve(
+                    owner, sceneContext,
+                    kb::particle_editor::ParticleDocumentTransition::Open,
+                    L"opening another particle effect")) {
+                return EditorAssetBrowserDoubleClickResult::None;
+            }
+            return sceneContext.OpenParticleEditorAsset(metadata->id)
+                ? EditorAssetBrowserDoubleClickResult::ParticleEditorOpened
                 : EditorAssetBrowserDoubleClickResult::None;
         }
         if (metadata->type == kb::scene::kTimelineAssetType) {

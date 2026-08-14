@@ -11,6 +11,7 @@
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/ParticleEditorPanelRenderer.hpp"
 #include "rendering/PluginsPanelRenderer.hpp"
 #include "rendering/ProjectFilesPanelRenderer.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
@@ -337,6 +338,11 @@ void PanelContentRenderer::Paint(
         break;
     case DockPanelKind::AnimatorEditor:
         AnimatorEditorPanelRenderer{}.Paint(
+            dc, sceneViewportHost, visibleContent, panel, theme, sceneContext,
+            renderBackendSettings, sceneViewport);
+        break;
+    case DockPanelKind::ParticleEditor:
+        ParticleEditorPanelRenderer{}.Paint(
             dc, sceneViewportHost, visibleContent, panel, theme, sceneContext,
             renderBackendSettings, sceneViewport);
         break;

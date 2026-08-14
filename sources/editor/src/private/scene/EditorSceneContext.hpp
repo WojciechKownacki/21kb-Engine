@@ -47,6 +47,10 @@
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "rendering/material_graph/MaterialGraphInteractionPolicy.hpp"
+#include "editor/ParticleAssetGateway.hpp"
+#include "editor/ParticleDocumentCloseGuard.hpp"
+#include "editor/ParticleEditorDocument.hpp"
+#include "editor/ParticlePreviewSession.hpp"
 
 #include <array>
 #include <atomic>
@@ -432,6 +436,24 @@ public:
     [[nodiscard]] bool CreateLuaScriptAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
     [[nodiscard]] bool OpenAnimationAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool OpenParticleEditorAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool HasParticleEditorAsset() const noexcept;
+    [[nodiscard]] kb::assets::AssetId ParticleEditorAssetId() const noexcept;
+    [[nodiscard]] bool ParticleEditorDirty() const noexcept;
+    [[nodiscard]] const std::optional<std::filesystem::path>& ParticleEditorSessionPath() const noexcept;
+    [[nodiscard]] const kb::scene::Scene* ParticleEditorPreviewScene() const noexcept;
+    [[nodiscard]] std::uint64_t ParticleEditorPreviewRevision() const noexcept;
+    [[nodiscard]] bool TickParticleEditorPreview(float deltaSeconds);
+    [[nodiscard]] bool SaveParticleEditorAsset();
+    [[nodiscard]] bool RevertParticleEditorAsset();
+    [[nodiscard]] bool ApplyParticleEditorWorkingCopy(kb::scene::ParticleEffectAsset asset);
+    [[nodiscard]] kb::particle_editor::ParticleDocumentCloseResult RequestParticleEditorTransition(
+        kb::particle_editor::ParticleDocumentTransition transition) noexcept;
+    [[nodiscard]] kb::particle_editor::ParticleDocumentCloseResult ResolveParticleEditorTransition(
+        kb::particle_editor::ParticleDocumentCloseDecision decision,
+        std::optional<std::filesystem::path> savePath = std::nullopt);
+    void CloseParticleEditorAsset();
+    void SetParticlePreviewReleaseHandler(std::function<void(const kb::scene::Scene&)> handler);
     [[nodiscard]] bool OpenAnimationClipEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenAnimatorEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] kb::assets::AssetId AnimatorEditorAssetId() const noexcept;
@@ -1168,6 +1190,12 @@ private:
     EditorSceneViewportStateStore viewportState_;
     AnimationPreviewContext animationPreview_;
     std::unique_ptr<EditorAnimationPreviewScene> animationPreviewScene_;
+    kb::particle_editor::ParticleAssetGateway particleEditorGateway_;
+    kb::particle_editor::ParticleEditorDocument particleEditorDocument_;
+    kb::particle_editor::ParticleDocumentCloseGuard particleEditorCloseGuard_;
+    std::unique_ptr<kb::particle_editor::ParticlePreviewSession> particlePreviewSession_;
+    std::function<void(const kb::scene::Scene&)> particlePreviewReleaseHandler_;
+    kb::assets::AssetId particleEditorAssetId_{};
     kb::assets::AssetId animatorEditorAssetId_{};
     kb::scene::SceneEntity animatorEditorDebugTarget_{};
     std::optional<kb::scene::AnimatorController> animatorEditorController_;
