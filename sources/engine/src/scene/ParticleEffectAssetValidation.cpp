@@ -469,6 +469,7 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
         std::string path;
         ParticleStableId emitterId = 0U;
         ParticleStableId moduleId = 0U;
+        std::uint32_t maxDepth = 1U;
     };
     std::unordered_map<ParticleStableId, std::size_t> emitterIndexById;
     for (std::size_t index = 0U; index < asset.emitters.size(); ++index)
@@ -486,6 +487,7 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
                         "].payload.targetEmitterId",
                 .emitterId = emitter.emitterId,
                 .moduleId = emitter.modules[moduleIndex].moduleId,
+                .maxDepth = sub->maxDepth,
             });
         }
     }
@@ -499,12 +501,12 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
             .path = "effect.eventBinding[" + std::to_string(bindingIndex) + "].targetEmitterId",
             .emitterId = binding.sourceEmitterId,
             .moduleId = binding.sourceModuleId,
+            .maxDepth = binding.maxDepth,
         });
     }
     std::vector<bool> pathStack(graph.size(), false);
     std::set<std::string> reportedCycles;
-    std::set<std::string> reportedDepthOverflows;
-    std::function<void(std::size_t, std::uint32_t)> visit = [&](std::size_t node, std::uint32_t depth) {
+    std::function<void(std::size_t)> visitCycles = [&](std::size_t node) {
         pathStack[node] = true;
         for (const InternalEdge& edge : graph[node]) {
             if (pathStack[edge.target]) {
@@ -513,18 +515,28 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
                         "internal emitter graph contains a cycle", edge.emitterId, edge.moduleId);
                 continue;
             }
+            visitCycles(edge.target);
+        }
+        pathStack[node] = false;
+    };
+    for (std::size_t index = 0U; index < graph.size(); ++index)
+        visitCycles(index);
+
+    std::set<std::string> reportedDepthOverflows;
+    std::function<void(std::size_t, std::uint32_t)> visitDepth = [&](std::size_t node, std::uint32_t depth) {
+        for (const InternalEdge& edge : graph[node]) {
+            if (depth >= edge.maxDepth) continue;
             if (depth >= kParticleEffectMaxSubEmitterDepth) {
                 if (reportedDepthOverflows.insert(edge.path).second)
                     Add(result, ParticleEffectDiagnosticCode::LimitExceeded, edge.path,
                         "internal emitter graph exceeds the supported recursion depth", edge.emitterId, edge.moduleId);
                 continue;
             }
-            visit(edge.target, depth + 1U);
+            visitDepth(edge.target, depth + 1U);
         }
-        pathStack[node] = false;
     };
     for (std::size_t index = 0U; index < graph.size(); ++index)
-        visit(index, 0U);
+        visitDepth(index, 0U);
     return result;
 }
 
