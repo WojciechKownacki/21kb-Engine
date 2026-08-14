@@ -21,6 +21,8 @@ enum class ParticleEditorStatus : std::uint8_t {
     ProviderUnavailable,
     PublicationFailed,
     RuntimeFailure,
+    LimitExceeded,
+    InvalidSelection,
 };
 
 struct ParticleEditorResult {

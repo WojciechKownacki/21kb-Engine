@@ -26,6 +26,8 @@ add_executable(kb_editor WIN32
     src/app/EditorAssetBrowserDeleteConfirmPointerHandler.cpp
     src/app/EditorAssetBrowserDoubleClickHandler.cpp
     src/app/EditorAssetBrowserInputHandler.cpp
+    src/private/app/ParticleEditorPanelInteraction.hpp
+    src/app/ParticleEditorPanelInteraction.cpp
     src/app/EditorAssetBrowserPointerHandler.cpp
     src/app/EditorAssetBrowserPointerPanelResolver.cpp
     src/app/EditorAssetBrowserPrimaryClickHandler.cpp
@@ -707,6 +709,8 @@ add_executable(kb_editor WIN32
     src/rendering/MainWindowBackBufferPainter.cpp
     src/rendering/PanelContentRenderer.cpp
     src/rendering/ParticleEditorPanelRenderer.cpp
+    src/private/rendering/ParticleEditorPanelLayout.hpp
+    src/rendering/ParticleEditorPanelLayout.cpp
     src/rendering/AnimationClipEditorPanelRenderer.cpp
     src/rendering/AnimatorEditorPanelRenderer.cpp
     src/rendering/SkeletalMeshEditorPanelRenderer.cpp
@@ -1018,6 +1022,12 @@ if(TARGET kb_21kb_particle_plugin)
     add_dependencies(kb_editor kb_21kb_particle_plugin)
     if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
         set(KB_21KB_PARTICLE_EDITOR_PLUGIN_PATH "$<TARGET_FILE:kb_21kb_particle_plugin>")
+        add_custom_command(TARGET kb_editor POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:kb_21kb_particle_plugin>"
+                "$<TARGET_FILE_DIR:kb_editor>"
+            VERBATIM
+        )
     else()
         set(KB_21KB_PARTICLE_EDITOR_PLUGIN_PATH "")
     endif()
@@ -1028,6 +1038,17 @@ kb_target_copy_bgfx_runtime_shaders(kb_editor)
 kb_apply_quality_gates(kb_editor)
 
 if(BUILD_TESTING)
+    add_executable(kb_editor_particle_authoring_tests
+        tests/ParticleEditorAuthoringTests.cpp
+        src/rendering/ParticleEditorPanelLayout.cpp
+    )
+    target_include_directories(kb_editor_particle_authoring_tests PRIVATE src/private)
+    target_link_libraries(kb_editor_particle_authoring_tests PRIVATE kb_21kb_particle_editor_core)
+    add_test(NAME kb_editor_particle_authoring_tests
+        COMMAND $<TARGET_FILE:kb_editor_particle_authoring_tests>)
+    set_tests_properties(kb_editor_particle_authoring_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    kb_apply_quality_gates(kb_editor_particle_authoring_tests)
+
     add_executable(kb_editor_particle_bake_host_tests
         tests/EditorParticleBakeHostTests.cpp
         src/scene/ParticleEditorBakeHostCommand.cpp
@@ -1255,6 +1276,24 @@ if(BUILD_TESTING)
         PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             LABELS "editor;runtime;headless"
+    )
+
+    add_test(
+        NAME kb_editor_particle_authoring_headless
+        COMMAND $<TARGET_FILE:kb_editor>
+            --selftest-scenario
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/ParticleEditorAuthoringScenario.json"
+            --selftest-root
+            "${CMAKE_BINARY_DIR}/ParticleAuthoringSelfTest"
+            --selftest-task
+            "PARTICLE-EDITOR-7A"
+    )
+    set_tests_properties(
+        kb_editor_particle_authoring_headless
+        PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            LABELS "editor;particle;headless"
+            TIMEOUT 180
     )
 
     kb_apply_quality_gates(kb_editor_tests)

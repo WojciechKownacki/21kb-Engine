@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserPointerHandler.hpp"
 #include "app/EditorPointerDragInteraction.hpp"
+#include "app/ParticleEditorPanelInteraction.hpp"
 #include "app/EditorWindowInvalidator.hpp"
 #include "app/EditorWindowToolbarPointerHandler.hpp"
 #include "app/console/EditorConsolePointerController.hpp"
@@ -17,6 +18,7 @@
 #include "rendering/EditorHostSurfaceLayoutResolver.hpp"
 #include "rendering/HierarchyToolbarLayout.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/ParticleEditorPanelLayout.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
@@ -25,6 +27,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <vector>
 
 namespace kb::editor {
 namespace {
@@ -95,6 +98,31 @@ void InvalidateMaterialGraphPanel(
 } // namespace
 
 void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftButtonDown, bool rightButtonDown) {
+    if (sceneContext_.ParticleEditorWorkspace().EmitterDragActive()) {
+        const std::optional<RECT> content = EditorPanelContentResolver::Resolve(
+            DockPanelKind::ParticleEditor,
+            messageWindow,
+            mainWindow_,
+            dockModel_,
+            floatingWindows_,
+            metrics_);
+        if (!leftButtonDown || !content.has_value()) {
+            sceneContext_.CancelParticleEditorEmitterDrag();
+            ReleaseCapture();
+        } else {
+            const std::vector<kb::particle_editor::ParticleEmitterListRow> rows =
+                sceneContext_.ParticleEditorEmitterRows();
+            const ParticleEditorPanelLayout layout = ParticleEditorPanelLayoutResolver::Resolve(
+                *content,
+                rows,
+                sceneContext_.ParticleEditorWorkspace().ComposerScrollOffset(),
+                GetDpiForWindow(messageWindow));
+            ParticleEditorPanelInteraction::UpdateDrag(sceneContext_, layout, y);
+            EditorWindowInvalidator::InvalidatePanel(messageWindow, *content);
+        }
+        return;
+    }
+
     const std::optional<RECT> sceneContent = EditorPanelContentResolver::Resolve(DockPanelKind::Scene, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     if (SceneViewportToolbarRenderer::UpdateInfoHover(sceneContent.value_or(RECT{}), x, y)) {
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);

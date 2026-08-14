@@ -66,6 +66,7 @@ struct Fixture {
         effect.looping = true;
         kb::scene::ParticleEmitterAsset emitter;
         emitter.emitterId = 1U;
+        emitter.authoringOrder = 0U;
         emitter.name = "Primary";
         emitter.maxParticles = maxParticles;
         emitter.spawn.rateOverTime.keyframes = {
@@ -241,6 +242,7 @@ void AddModule(kb::scene::ParticleEmitterAsset& emitter,
     auto effect = MakeVisualModuleEffect(prewarmSeconds);
     kb::scene::ParticleEmitterAsset target = effect.emitters[0];
     target.emitterId = 2U;
+    target.authoringOrder = 1U;
     target.name = "InternalTarget";
     target.localPosition = {0.0F, 5.0F, 0.0F};
     target.spawn.prewarmSeconds = 0.0F;
@@ -275,6 +277,7 @@ void AddModule(kb::scene::ParticleEmitterAsset& emitter,
             .maxEventsPerStep = kb::scene::kParticleEffectMaxEventsPerStep});
     auto target = source;
     target.emitterId = 2U;
+    target.authoringOrder = 1U;
     target.name = "CollisionTarget";
     target.localPosition = {0.0F, 3.0F, 0.0F};
     target.spawn.prewarmSeconds = 0.0F;
@@ -304,6 +307,28 @@ struct RuntimeFixture {
         instanceId = created.instanceId;
     }
 };
+
+void TestAuthoredEmitterOrderDrivesRuntime() {
+    auto effect = Fixture::MakeEffect(0.0F, 8U);
+    effect.emitters[0].authoringOrder = 1U;
+    effect.emitters[0].localPosition = {0.0F, 1.0F, 0.0F};
+    auto authoredFirst = effect.emitters[0];
+    authoredFirst.emitterId = 2U;
+    authoredFirst.authoringOrder = 0U;
+    authoredFirst.name = "Authored First";
+    authoredFirst.localPosition = {0.0F, 7.0F, 0.0F};
+    effect.emitters.push_back(std::move(authoredFirst));
+    RuntimeFixture runtime(std::move(effect));
+    Require(kb::particles::ParticlePlayback::Play(
+                runtime.fixture.scene, runtime.instanceId).Succeeded() &&
+            kb::particles::ParticlePlayback::Emit(
+                runtime.fixture.scene, runtime.instanceId, 1U).Succeeded(),
+        "authored order runtime fixture did not play and emit");
+    const auto particles = kb::particles::ParticlePlayback::LiveParticleStates(
+        runtime.fixture.scene, runtime.instanceId);
+    Require(particles.size() == 1U && std::abs(particles[0].position.y - 7.0F) < 0.000001F,
+        "runtime did not use persisted authoring order for emitter index zero");
+}
 
 class NoopFixedSceneSystem final : public kb::scene::SceneSystem {
 public:
@@ -531,6 +556,7 @@ void TestInternalEventTriggersOrderingAndBounds() {
     const auto makeEmitter = [](std::uint64_t id, float y, std::uint32_t capacity = 256U) {
         auto emitter = Fixture::MakeEffect().emitters[0];
         emitter.emitterId = id;
+        emitter.authoringOrder = static_cast<std::uint32_t>(id - 1U);
         emitter.name = "EventEmitter" + std::to_string(id);
         emitter.localPosition = {0.0F, y, 0.0F};
         emitter.maxParticles = capacity;
@@ -674,6 +700,7 @@ void TestInternalEventBudgetsAndCollisionLocalLimit() {
     const auto makeEmitter = [](std::uint64_t id, std::uint32_t capacity) {
         auto emitter = Fixture::MakeEffect().emitters[0];
         emitter.emitterId = id;
+        emitter.authoringOrder = static_cast<std::uint32_t>(id - 1U);
         emitter.name = "BudgetEmitter" + std::to_string(id);
         emitter.maxParticles = capacity;
         emitter.spawn.rateOverTime.keyframes.front().value = 0.0F;
@@ -881,6 +908,7 @@ void TestAutomaticLimitTelemetryPrewarmRollbackAndScriptDiagnostic() {
         static_cast<std::uint32_t>(kb::scene::kParticleEffectMaxEventsPerStep + 1U));
     auto scriptTarget = scriptEffect.emitters[0];
     scriptTarget.emitterId = 2U;
+    scriptTarget.authoringOrder = 1U;
     scriptTarget.name = "ScriptEventTarget";
     scriptTarget.spawn.rateOverTime.keyframes.front().value = 0.0F;
     scriptEffect.emitters.push_back(std::move(scriptTarget));
@@ -1069,6 +1097,7 @@ void TestModuleCompileRejection() {
                                         kb::scene::ParticleEventTrigger trigger) {
         auto target = effect.emitters[0];
         target.emitterId = 2U;
+        target.authoringOrder = 1U;
         target.name = "BindingTarget";
         target.modules.clear();
         target.spawn.rateOverTime.keyframes.front().value = 0.0F;
@@ -1228,6 +1257,7 @@ void TestIndependentInstancesAndPrewarm() {
     twoEmitterManual.emitters[0].spawn.randomization = 0.0F;
     kb::scene::ParticleEmitterAsset secondEmitter = twoEmitterManual.emitters[0];
     secondEmitter.emitterId = 2U;
+    secondEmitter.authoringOrder = 1U;
     secondEmitter.name = "Secondary";
     secondEmitter.localPosition = {0.0F, 3.0F, 0.0F};
     twoEmitterManual.emitters.push_back(secondEmitter);
@@ -1646,6 +1676,7 @@ void TestActiveReloadContracts() {
     auto topology = compatible;
     auto addedEmitter = topology.emitters[0];
     addedEmitter.emitterId = 2U;
+    addedEmitter.authoringOrder = 1U;
     addedEmitter.name = "Topology Added";
     addedEmitter.spawn.rateOverTime.keyframes.front().value = 0.0F;
     topology.emitters.push_back(std::move(addedEmitter));
@@ -1705,6 +1736,7 @@ void TestComponentRateCapacityAndFollowTransformContracts() {
         effect.emitters[0].spawn.lifetimeMax = 10.0F;
         auto second = effect.emitters[0];
         second.emitterId = 2U;
+        second.authoringOrder = 1U;
         second.name = "Secondary";
         effect.emitters.push_back(std::move(second));
         return effect;
@@ -2160,6 +2192,7 @@ void TestCpuPreviewRenderSnapshotPublicationAndLifecycle() {
     effect.emitters[0].output.payload = kb::scene::ParticlePointSpriteOutput{.diameter = 2.0F};
     auto second = effect.emitters[0];
     second.emitterId = 2U;
+    second.authoringOrder = 1U;
     second.name = "Preview Secondary";
     second.output.type = kb::scene::ParticleOutputType::StretchedBillboard;
     second.output.mesh = {};
@@ -2342,6 +2375,7 @@ void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); 
 int main() {
     try {
         TestSharedImmutableCompilerArtifact();
+        TestAuthoredEmitterOrderDrivesRuntime();
         TestValidationAndLifecycle();
         TestCapacityGenerationAndCopyBounds();
         TestRegistrationOwnershipAndCycles();
