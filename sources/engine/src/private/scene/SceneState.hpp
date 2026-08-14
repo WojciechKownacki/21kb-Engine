@@ -10,6 +10,7 @@
 #include "engine/input/InputLocalUser.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/particles/ParticleRuntimeResult.hpp"
+#include "engine/particles/ParticleRenderSnapshot.hpp"
 #include "engine/localization/LocalizationCatalog.hpp"
 #include "engine/scene/BehaviourVariableOverride.hpp"
 #include "engine/scene/ContentInstanceComponent.hpp"
@@ -764,6 +765,8 @@ public:
     bool physicsDebugDrawEnabled = false;
     PhysicsDebugQueryTrace physicsDebugQueryTrace{};
     kb::particles::IParticleSimulationBackend* particleSimulationBackend = nullptr;
+    std::uint64_t particleSimulationBackendEpoch = 0U;
+    kb::particles::ParticleRenderSnapshotChannel particleRenderSnapshots;
 #if !defined(NDEBUG)
     const std::thread::id particlePlaybackOwnerThread = std::this_thread::get_id();
 #endif
