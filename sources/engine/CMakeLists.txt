@@ -12,6 +12,7 @@ add_library(kb_engine STATIC
     include/engine/core/AllocationBudget.hpp
     include/engine/core/BindingCache.hpp
     include/engine/core/ReadSnapshotQueue.hpp
+    include/engine/particles/ParticleRenderCapabilities.hpp
     include/engine/core/RuntimeInspector.hpp
     include/engine/audio/AudioClipAsset.hpp
     include/engine/audio/AudioClipAssetLoader.hpp

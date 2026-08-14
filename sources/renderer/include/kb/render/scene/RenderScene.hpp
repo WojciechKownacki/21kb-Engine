@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/particles/ParticleRenderSnapshot.hpp"
+
 #include "kb/render/scene/RenderProxyId.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
 #include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
@@ -7,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <unordered_map>
@@ -353,6 +356,9 @@ public:
     [[nodiscard]] const SurfaceCastProxyMap& SurfaceCastProxies() const noexcept;
     [[nodiscard]] const SpaceStrokeProxyMap& SpaceStrokeProxies() const noexcept;
 
+    void SetParticleRenderSnapshot(std::shared_ptr<const kb::particles::ParticleRenderSnapshot> snapshot) noexcept;
+    [[nodiscard]] const std::shared_ptr<const kb::particles::ParticleRenderSnapshot>& ParticleRenderSnapshot() const noexcept;
+
     void ClearDirty() noexcept;
     // LIB-135: targetViewportId selects among cameras whose viewportId either
     // matches exactly or is 0 ("any viewport" - the default every camera
@@ -400,6 +406,7 @@ private:
     SpaceStrokeProxyMap spaceStrokes_;
     std::optional<SceneRenderWorldBackdrop> worldBackdrop_;
     std::optional<SceneRenderAmbientRadiance> ambientRadiance_;
+    std::shared_ptr<const kb::particles::ParticleRenderSnapshot> particleRenderSnapshot_;
     mutable std::vector<SceneRenderDrawGroup> drawGroups_;
     mutable std::unordered_map<DrawGroupKey, std::size_t, DrawGroupKeyHash> drawGroupLookupScratch_;
     std::uint64_t nextProxyId_ = 1U;

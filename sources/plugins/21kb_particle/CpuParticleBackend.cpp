@@ -144,6 +144,28 @@ static_assert(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds ==
         (channel(color.b) << 16U) | (channel(color.a) << 24U);
 }
 
+[[nodiscard]] std::array<std::int16_t, 4U> PackQuaternion(kb::math::Quat value) noexcept {
+    value = kb::math::Normalize(value);
+    const auto pack = [](float component) noexcept {
+        return static_cast<std::int16_t>(std::lround(
+            kb::math::Clamp(component, -1.0F, 1.0F) * 32767.0F));
+    };
+    return {pack(value.x), pack(value.y), pack(value.z), pack(value.w)};
+}
+
+[[nodiscard]] kb::particles::ParticleRenderAlignment ToRenderAlignment(
+    kb::scene::ParticleAlignment alignment) noexcept {
+    using Source = kb::scene::ParticleAlignment;
+    using Target = kb::particles::ParticleRenderAlignment;
+    switch (alignment) {
+    case Source::CameraFacing: return Target::CameraFacing;
+    case Source::Velocity: return Target::Velocity;
+    case Source::WorldUp: return Target::WorldUp;
+    case Source::Local: return Target::Local;
+    }
+    std::terminate();
+}
+
 [[nodiscard]] constexpr std::size_t RenderGroupIndex(
     std::uint32_t denseIndex,
     std::uint8_t emitterIndex) noexcept {
@@ -762,10 +784,15 @@ std::uint32_t CpuParticleBackend::AcquireCompiledEffect(
         destination.textureAtlasAssetId = ResolveAssetReference(manager, source.output.textureAtlas);
         destination.blendMode = source.output.blend;
         destination.sortMode = source.output.sort;
+        destination.alignment = source.output.alignment;
         destination.depthTest = source.output.depthTest;
         destination.depthWrite = source.output.depthWrite;
+        destination.softParticles = source.output.softParticles;
+        destination.antiAliasing = source.output.antiAliasing;
         const auto compileFlipbook = [&](const kb::scene::ParticleFlipbookAsset& flipbook) noexcept {
-            destination.flipbookFrameCount = static_cast<std::uint16_t>(flipbook.columns * flipbook.rows);
+            destination.flipbookColumns = static_cast<std::uint16_t>(flipbook.columns);
+            destination.flipbookRows = static_cast<std::uint16_t>(flipbook.rows);
+            destination.flipbookFrameCount = flipbook.columns * flipbook.rows;
             destination.flipbookFramesPerSecond = flipbook.framesPerSecond;
             destination.flipbookLooping = flipbook.looping;
         };
@@ -780,9 +807,12 @@ std::uint32_t CpuParticleBackend::AcquireCompiledEffect(
             destination.stretchMinimumLength = stretched.minimumLength;
             break;
         }
-        case kb::scene::ParticleOutputType::PointSprite:
-            compileFlipbook(std::get<kb::scene::ParticlePointSpriteOutput>(source.output.payload).flipbook);
+        case kb::scene::ParticleOutputType::PointSprite: {
+            const auto& point = std::get<kb::scene::ParticlePointSpriteOutput>(source.output.payload);
+            compileFlipbook(point.flipbook);
+            destination.pointSpriteDiameter = point.diameter;
             break;
+        }
         default:
             break;
         }
@@ -791,6 +821,7 @@ std::uint32_t CpuParticleBackend::AcquireCompiledEffect(
         destination.mode = source.spawn.mode;
         destination.maxParticles = source.maxParticles;
         destination.localPosition = source.localPosition;
+        destination.localRotation = source.localRotation;
         destination.initialVelocity = {
             .direction = kb::math::Normalize(source.spawn.direction),
             .speedMin = source.spawn.speedMin,
@@ -1788,6 +1819,18 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
                     ? playbackStatus
                     : kb::particles::ParticleRenderEmitterStatus::Stopped,
                 .droppedReason = dropReason,
+                .alignment = ToRenderAlignment(emitter.alignment),
+                .flags = (emitter.softParticles
+                    ? kb::particles::ParticleRenderEmitterFlag::SoftParticles
+                    : kb::particles::ParticleRenderEmitterFlag::None) |
+                    (emitter.antiAliasing
+                        ? kb::particles::ParticleRenderEmitterFlag::AntiAliasing
+                        : kb::particles::ParticleRenderEmitterFlag::None),
+                .flipbookColumnsEncoded = static_cast<std::uint8_t>(emitter.flipbookColumns),
+                .flipbookRowsEncoded = static_cast<std::uint8_t>(emitter.flipbookRows),
+                .localBasisQuaternionSnorm = PackQuaternion(kb::math::Normalize(
+                    ownerTransforms_[denseIndex].rotation * emitter.localRotation)),
+                .pointSpriteDiameter = emitter.pointSpriteDiameter,
                 .boundsMinimum = count == 0U
                     ? emptyBounds
                     : kb::math::Vec3{std::numeric_limits<float>::max(),
@@ -1831,6 +1874,12 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
             .particleId = particleIds_[particleIndex],
             .packedColor = PackColor(particleColors_[particleIndex]),
             .frame = frame,
+            .normalizedAgeUnorm = static_cast<std::uint16_t>(std::lround(
+                kb::math::Clamp(particleLifetimes_[particleIndex] > 0.0F
+                        ? particleAges_[particleIndex] / particleLifetimes_[particleIndex]
+                        : 0.0F,
+                    0.0F,
+                    1.0F) * 65535.0F)),
         };
         kb::particles::ParticleRenderEmitterRecord& batch =
             renderEmitterScratch_[renderGroupRecordIndices_[groupIndex]];

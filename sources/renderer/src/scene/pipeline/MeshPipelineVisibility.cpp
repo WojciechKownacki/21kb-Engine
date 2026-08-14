@@ -1,5 +1,7 @@
 #include "scene/pipeline/MeshPipelineVisibility.hpp"
 
+#include "kb/render/scene/TransparentDepthKey.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -168,8 +170,7 @@ bool MeshPipelineVisibility::IsOccludedByVisibilityBlockers(
 }
 
 std::uint16_t MeshPipelineVisibility::DepthBucket(float depth) noexcept {
-    const float shifted = std::clamp((std::abs(depth) * 16.0F), 0.0F, 65535.0F);
-    return static_cast<std::uint16_t>(shifted);
+    return QuantizeTransparentViewDepth(depth);
 }
 
 std::uint8_t MeshPipelineVisibility::SelectLodLevel(

@@ -48,6 +48,10 @@ struct RendererCapabilityReport {
     bool gpuDrivenComputeCullingSupported = false;
     bool gpuDrivenIndirectSubmitSupported = false;
     bool gpuDrivenMeshletSubmitSupported = false;
+    bool particleGpuDrawingSupported = false;
+    bool particleInstancingSupported = false;
+    bool particleSoftDepthFadeSupported = false;
+    bool particleSubtractiveBlendSupported = false;
     bool multipleWindowsSupported = false;
     bool nativePresentColorOnly = true;
     bool homogeneousDepth = false;
