@@ -3,6 +3,8 @@
 #include "engine/particles/IParticleSimulationBackend.hpp"
 #include "engine/scene/ParticleEffectAsset.hpp"
 #include "engine/scene/ParticleEffectAssetSchema.hpp"
+#include "engine/scene/ParticleEffectComponent.hpp"
+#include "engine/scene/TransformComponent.hpp"
 
 #include <array>
 #include <cstddef>
@@ -15,6 +17,8 @@
 namespace kb::particle_plugin {
 
 class CpuParticleBackend final : public kb::particles::IParticleSimulationBackend {
+    friend class ParticleSceneSystem;
+
 public:
     struct StepTelemetry {
         std::uint32_t requestedSpawns = 0U;
@@ -42,9 +46,19 @@ public:
     [[nodiscard]] std::size_t BufferedCommandCount() const noexcept;
     [[nodiscard]] std::size_t BufferedEventCount() const noexcept;
     [[nodiscard]] StepTelemetry LastStepTelemetry() const noexcept;
+    [[nodiscard]] std::size_t CompiledEffectCount() const noexcept;
+    [[nodiscard]] kb::particles::ParticleRuntimeResult ConfigureOwnerDeathPolicy(
+        std::uint64_t instanceId,
+        kb::scene::ParticleOwnerDeathPolicy policy) noexcept;
+    [[nodiscard]] kb::particles::ParticleRuntimeResult ConfigureComponent(
+        std::uint64_t instanceId,
+        float rateMultiplier,
+        std::uint32_t maxParticlesOverride,
+        bool followTransform,
+        const kb::scene::WorldTransform& ownerTransform) noexcept;
     [[nodiscard]] kb::particles::ParticleRuntimeResult Step(
         kb::scene::Scene& scene,
-        float fixedDeltaSeconds) noexcept;
+        float fixedDeltaSeconds);
 
     [[nodiscard]] kb::particles::ParticleRuntimeResult Create(
         kb::scene::Scene& scene,
@@ -138,6 +152,8 @@ private:
 
     struct CompiledEmitter {
         kb::scene::ParticleStableId emitterId = 0U;
+        kb::scene::ParticleOutputType outputType = kb::scene::ParticleOutputType::Billboard;
+        kb::scene::ParticleSimulationSpace simulationSpace = kb::scene::ParticleSimulationSpace::World;
         bool enabled = false;
         kb::scene::ParticleSpawnMode mode = kb::scene::ParticleSpawnMode::Continuous;
         std::uint32_t maxParticles = 0U;
@@ -181,6 +197,7 @@ private:
         };
         std::uint64_t assetId = 0U;
         std::uint64_t assetGeneration = 0U;
+        std::uint64_t invalidCandidateGeneration = 0U;
         std::uint64_t determinismSeed = 0U;
         float durationSeconds = 0.0F;
         bool looping = false;
@@ -227,6 +244,12 @@ private:
         std::uint64_t effectAssetId,
         kb::particles::ParticleRuntimeStatus& failureStatus);
     void ReleaseCompiledEffect(std::uint32_t index) noexcept;
+    void RefreshCompiledEffects(kb::scene::Scene& scene);
+    [[nodiscard]] static bool TopologyCompatible(
+        const CompiledEffect& previous,
+        const CompiledEffect& candidate) noexcept;
+    void ProcessOwnerLifecycle(kb::scene::Scene& scene) noexcept;
+    [[nodiscard]] bool FinishOwnerLifecycle(kb::scene::Scene& scene, std::uint32_t denseIndex) noexcept;
     void ResetInstance(std::uint32_t denseIndex) noexcept;
     [[nodiscard]] kb::particles::ParticleRuntimeStatus PrewarmInstance(std::uint32_t denseIndex) noexcept;
     void StepInstance(std::uint32_t denseIndex, float fixedDeltaSeconds, std::uint32_t& remainingSpawnBudget) noexcept;
@@ -244,7 +267,14 @@ private:
     [[nodiscard]] bool QueueInternalEvent(const InternalEvent& event) noexcept;
     [[nodiscard]] kb::particles::ParticleRuntimeStatus ProcessInternalEvents(
         std::uint32_t& remainingSpawnBudget) noexcept;
-    void ResetStepEventState() noexcept;
+    void BeginEventStep() noexcept;
+    void RemoveQueuedEvents(std::uint64_t instanceId) noexcept;
+    [[nodiscard]] bool EventHasAction(const InternalEvent& event) const noexcept;
+    void ApplyOwnerTransformDelta(
+        std::uint32_t denseIndex,
+        const kb::scene::WorldTransform& previous,
+        const kb::scene::WorldTransform& current) noexcept;
+    [[nodiscard]] std::uint32_t InstanceParticleLimit(std::uint32_t denseIndex) const noexcept;
     [[nodiscard]] float EvaluateRate(const CompiledEmitter& emitter, float timeSeconds) const noexcept;
     [[nodiscard]] static float EvaluateCurve(const CompiledCurve& curve, float normalizedAge) noexcept;
     [[nodiscard]] static kb::math::Color EvaluateGradient(
@@ -262,6 +292,13 @@ private:
     std::vector<std::uint32_t> denseToSlot_;
     std::vector<std::uint64_t> effectAssetIds_;
     std::vector<kb::scene::SceneEntity> owners_;
+    std::vector<kb::scene::ParticleOwnerDeathPolicy> ownerDeathPolicies_;
+    std::vector<std::uint8_t> ownerTerminalPending_;
+    std::vector<float> rateMultipliers_;
+    std::vector<std::uint32_t> maxParticlesOverrides_;
+    std::vector<std::uint8_t> followTransforms_;
+    std::vector<kb::scene::WorldTransform> ownerTransforms_;
+    std::vector<std::uint8_t> reloadRestarted_;
     std::vector<std::uint64_t> seeds_;
     std::vector<PlaybackState> playbackStates_;
     std::vector<InstanceRuntime> instanceRuntime_;
@@ -269,7 +306,11 @@ private:
     std::vector<ParameterEntry> parameters_;
 
     std::vector<Command> commands_;
-    std::vector<InternalEvent> events_;
+    std::vector<InternalEvent> currentEvents_;
+    std::vector<InternalEvent> nextEvents_;
+    std::vector<InternalEvent> prewarmCurrentEvents_;
+    std::vector<InternalEvent> prewarmNextEvents_;
+    std::uint64_t prewarmingInstanceId_ = 0U;
 
     std::vector<std::uint64_t> particleInstanceIds_;
     std::vector<std::uint8_t> particleEmitterIndices_;

@@ -22,6 +22,8 @@ enum class ParticleRuntimeStatus : std::uint8_t {
     EventBudgetExceeded,
     ParticleCapacityReached,
     SpawnBudgetExceeded,
+    Restarted,
+    StaleAfterInvalidReload,
 };
 
 struct ParticleRuntimeResult {
@@ -41,7 +43,9 @@ struct ParticleRuntimeQueryResult {
     std::uint32_t liveParticleCount = 0U;
 
     [[nodiscard]] constexpr bool Succeeded() const noexcept {
-        return status == ParticleRuntimeStatus::Success;
+        return status == ParticleRuntimeStatus::Success ||
+            status == ParticleRuntimeStatus::Restarted ||
+            status == ParticleRuntimeStatus::StaleAfterInvalidReload;
     }
 };
 
