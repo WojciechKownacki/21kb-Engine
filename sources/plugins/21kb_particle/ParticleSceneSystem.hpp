@@ -36,6 +36,7 @@ private:
     kb::ecs::UnsafeHotReadQuery<kb::scene::ParticleEffectComponent> componentHotQuery_;
     std::array<ComponentInstance, kb::scene::kParticleEffectMaxInstancesPerScene> componentInstances_{};
     std::size_t componentInstanceCount_ = 0U;
+    std::uint64_t snapshotRevision_ = 0U;
     bool registered_ = false;
 };
 

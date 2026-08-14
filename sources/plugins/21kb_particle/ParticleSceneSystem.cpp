@@ -6,9 +6,11 @@
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace kb::particle_plugin {
@@ -29,6 +31,28 @@ namespace {
     }
 }
 
+[[noreturn]] void ThrowTerminalSnapshotFailure(kb::particles::ParticleRenderSnapshotStatus status) {
+    switch (status) {
+    case kb::particles::ParticleRenderSnapshotStatus::NotWarmed:
+        throw std::logic_error("particle terminal snapshot channel is not warmed");
+    case kb::particles::ParticleRenderSnapshotStatus::InvalidSnapshot:
+        throw std::logic_error("particle terminal snapshot metadata is invalid");
+    case kb::particles::ParticleRenderSnapshotStatus::StaleRevision:
+        throw std::logic_error("particle terminal snapshot revision is stale");
+    case kb::particles::ParticleRenderSnapshotStatus::SnapshotBackpressure:
+        throw std::logic_error("particle terminal snapshot retention capacity is exhausted");
+    case kb::particles::ParticleRenderSnapshotStatus::SnapshotTooLarge:
+        throw std::logic_error("particle terminal snapshot exceeded its header-only payload contract");
+    case kb::particles::ParticleRenderSnapshotStatus::AllocationFailed:
+        throw std::logic_error("particle terminal snapshot storage allocation failed");
+    case kb::particles::ParticleRenderSnapshotStatus::BackendMismatch:
+        throw std::logic_error("particle terminal snapshot publisher no longer owns the scene backend");
+    case kb::particles::ParticleRenderSnapshotStatus::Success:
+        break;
+    }
+    throw std::logic_error("particle terminal snapshot publication failed with an unknown status");
+}
+
 } // namespace
 
 void ParticleSceneSystem::OnCreate(kb::scene::SceneSystemContext& context) {
@@ -45,10 +69,26 @@ void ParticleSceneSystem::OnCreate(kb::scene::SceneSystemContext& context) {
         throw std::logic_error("particle CPU backend registration conflicted with an existing scene provider");
     }
     registered_ = true;
+    const kb::particles::ParticleRenderSnapshotResult snapshotWarmup =
+        kb::particles::ParticlePlayback::WarmupRenderSnapshots(context.GetScene());
+    if (!snapshotWarmup.Succeeded()) {
+        static_cast<void>(kb::particles::ParticlePlayback::UnregisterBackend(context.GetScene(), backend_));
+        registered_ = false;
+        throw std::logic_error("particle render snapshot channel warmup failed");
+    }
+    const auto existingSnapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(context.GetScene());
+    snapshotRevision_ = existingSnapshot ? existingSnapshot->Revision() : 0U;
 }
 
 void ParticleSceneSystem::OnDestroy(kb::scene::SceneSystemContext& context) {
     if (!registered_) return;
+    const auto latestSnapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(context.GetScene());
+    const std::uint64_t terminalFixedStepIndex = latestSnapshot
+        ? std::max(context.GetScene().Runtime().FixedStepIndex(), latestSnapshot->FixedStepIndex())
+        : context.GetScene().Runtime().FixedStepIndex();
+    const kb::particles::ParticleRenderSnapshotResult terminal = backend_.PublishRenderTombstone(
+        context.GetScene(), terminalFixedStepIndex, ++snapshotRevision_);
+    if (!terminal.Succeeded()) ThrowTerminalSnapshotFailure(terminal.status);
     for (std::size_t index = 0U; index < componentInstanceCount_; ++index) {
         if (componentInstances_[index].instanceId != 0U) {
             static_cast<void>(backend_.Release(context.GetScene(), componentInstances_[index].instanceId));
@@ -66,12 +106,15 @@ void ParticleSceneSystem::OnDestroy(kb::scene::SceneSystemContext& context) {
 }
 
 void ParticleSceneSystem::OnFixedUpdate(kb::scene::SceneSystemContext& context) {
+    backend_.CapturePreviousParticlePositions();
     backend_.ProcessOwnerLifecycle(context.GetScene());
     ReconcileComponents(context.GetScene());
     const kb::particles::ParticleRuntimeResult result = backend_.Step(context.GetScene(), context.DeltaSeconds());
     if (!result.Succeeded()) {
         throw std::logic_error("particle CPU backend rejected the authoritative fixed step");
     }
+    static_cast<void>(backend_.PublishRenderSnapshot(
+        context.GetScene(), context.GetScene().Runtime().FixedStepIndex() + 1U, ++snapshotRevision_));
     std::size_t index = 0U;
     while (index < componentInstanceCount_) {
         const ComponentInstance& binding = componentInstances_[index];
