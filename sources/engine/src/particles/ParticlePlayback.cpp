@@ -34,6 +34,7 @@ ParticleRuntimeResult ParticlePlayback::RegisterBackend(kb::scene::Scene& scene,
     if (state.particleSimulationBackend != nullptr && state.particleSimulationBackend != &backend) {
         return { .status = ParticleRuntimeStatus::BackendAlreadyRegistered };
     }
+    if (state.particleSimulationBackend == nullptr) ++state.particleSimulationBackendEpoch;
     state.particleSimulationBackend = &backend;
     return { .status = ParticleRuntimeStatus::Success };
 }
@@ -43,6 +44,7 @@ ParticleRuntimeResult ParticlePlayback::UnregisterBackend(kb::scene::Scene& scen
     kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);
     if (state.particleSimulationBackend != &backend) return { .status = ParticleRuntimeStatus::InvalidRequest };
     state.particleSimulationBackend = nullptr;
+    ++state.particleSimulationBackendEpoch;
     state.pendingParticleRuntimeEvents.clear();
     return { .status = ParticleRuntimeStatus::Success };
 }
@@ -50,6 +52,32 @@ ParticleRuntimeResult ParticlePlayback::UnregisterBackend(kb::scene::Scene& scen
 bool ParticlePlayback::HasBackend(const kb::scene::Scene& scene) noexcept {
     AssertOwnerThread(scene);
     return Backend(scene) != nullptr;
+}
+
+std::uint64_t ParticlePlayback::BackendEpoch(const kb::scene::Scene& scene) noexcept {
+    return kb::scene::SceneAccess::State(scene).particleSimulationBackendEpoch;
+}
+
+ParticleRenderSnapshotResult ParticlePlayback::WarmupRenderSnapshots(kb::scene::Scene& scene) noexcept {
+    AssertOwnerThread(scene);
+    return kb::scene::SceneAccess::State(scene).particleRenderSnapshots.Warmup(scene.Id());
+}
+
+ParticleRenderSnapshotResult ParticlePlayback::PublishRenderSnapshot(
+    kb::scene::Scene& scene,
+    IParticleSimulationBackend& backend,
+    const ParticleRenderSnapshotPublishDesc& desc) noexcept {
+    AssertOwnerThread(scene);
+    kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);
+    if (state.particleSimulationBackend != &backend) {
+        return {ParticleRenderSnapshotStatus::BackendMismatch};
+    }
+    return state.particleRenderSnapshots.Publish(state.particleSimulationBackendEpoch, desc);
+}
+
+std::shared_ptr<const ParticleRenderSnapshot> ParticlePlayback::ReadRenderSnapshot(
+    const kb::scene::Scene& scene) noexcept {
+    return kb::scene::SceneAccess::State(scene).particleRenderSnapshots.Read();
 }
 
 #define KB_PARTICLE_FORWARD(Method, ...)                                                                                \

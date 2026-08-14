@@ -320,6 +320,7 @@ add_library(kb_engine STATIC
         include/engine/particles/ParticleRuntimeResult.hpp
         include/engine/particles/IParticleSimulationBackend.hpp
         include/engine/particles/ParticlePlayback.hpp
+        include/engine/particles/ParticleRenderSnapshot.hpp
         include/engine/project/ParticleProjectPolicy.hpp
         include/engine/scene/SceneParticleEffectComponents.hpp
         include/engine/scene/LensEchoComponent.hpp
@@ -645,6 +646,7 @@ add_library(kb_engine STATIC
     src/scene/ParticleEffectAssetValidation.cpp
     src/scene/ParticleEffectDependencyValidation.cpp
     src/particles/ParticlePlayback.cpp
+    src/particles/ParticleRenderSnapshot.cpp
     src/project/ParticleProjectPolicy.cpp
     src/scene/SceneModules.cpp
     src/scene/SceneTagCatalog.cpp
@@ -1496,6 +1498,14 @@ if(BUILD_TESTING)
     add_test(NAME kb_21kb_particle_asset_tests COMMAND $<TARGET_FILE:kb_21kb_particle_asset_tests>)
     set_tests_properties(kb_21kb_particle_asset_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     kb_apply_quality_gates(kb_21kb_particle_asset_tests)
+
+    add_executable(kb_21kb_particle_snapshot_tests
+        tests/ParticleRenderSnapshotTests.cpp
+    )
+    target_link_libraries(kb_21kb_particle_snapshot_tests PRIVATE kb_engine)
+    add_test(NAME kb_21kb_particle_snapshot_tests COMMAND $<TARGET_FILE:kb_21kb_particle_snapshot_tests>)
+    set_tests_properties(kb_21kb_particle_snapshot_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    kb_apply_quality_gates(kb_21kb_particle_snapshot_tests)
 
     add_executable(kb_21kb_particle_stage2_tests
         tests/ParticleStage2Tests.cpp
