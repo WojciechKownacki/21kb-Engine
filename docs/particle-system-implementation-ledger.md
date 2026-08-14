@@ -10,7 +10,7 @@
 ## Current package
 
 - Stage: `6` — editor document shell and shared preview.
-- Status: `ready`; Stages 3, 4, and 5 are accepted.
+- Status: `in_progress`; Stages 3, 4, and 5 plus Stage 6A are accepted.
 - Scope: Stage 6 adds the editor document shell and isolated preview through the accepted runtime backend and GPU renderer, without a second preview kernel.
 - Next gate: characterize the editor document, docking, history, and preview-scene seams before the first integration package.
 - Rendering direction: normal game-facing simulation and rendering must move to GPU. The CPU backend is retained only as the deterministic validation, diagnostics, and preview path; it is not the intended final gameplay path.
@@ -120,6 +120,13 @@
 - Mesh and particle transparent draws share one camera-depth key and queue; supported mixed-effect emitters continue rendering while unsupported outputs generate typed per-emitter diagnostics and drops.
 - Two viewport consumers read the same snapshot revision without repeating simulation. Warmed batch construction is allocation-free; transient instance limits are split or reported as drops.
 - The core owns snapshot allocation before dynamic provider attachment, and unused ECS query plans are released before module unload. The real DLL regression passes 100 reloads plus scene destruction with and without scripts.
+
+### Stage 6A — document core and shared runtime preview: `accepted checkpoint`
+
+- Plugin-local, platform-neutral document state has canonical bounded history, an explicit save point, strict atomic save semantics, and a pure dirty-transition guard for open, revert, tab/window/project close, and application exit.
+- The isolated preview publishes an unsaved working copy as a runtime asset in a real runtime scene with the enabled provider, normal `SceneRuntime`, and the accepted GPU renderer; it has no second accumulator or simulation kernel.
+- First-save session paths commit only after successful atomic IO. Reopen, undo/redo/revert, save failure preservation, unsaved preview no-disk-write, provider-backed runtime snapshots, Noop GPU submit, and scene/backend/snapshot/renderer teardown are covered by the dedicated focused suite.
+- Host panel/docking routing and Bake remain deliberately outside 6A. Bake requires a future public core-owned immutable compiled-effect artifact rather than access to private CPU backend state.
 
 ## Accepted decisions and mappings
 
