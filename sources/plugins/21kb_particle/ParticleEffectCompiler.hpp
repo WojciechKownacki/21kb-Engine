@@ -37,6 +37,8 @@ struct ParticleCompileResult {
 class ParticleEffectCompiler final {
   public:
     ParticleEffectCompiler() = delete;
+    [[nodiscard]] static std::vector<kb::scene::ParticleEffectDiagnostic> ValidateCapabilities(
+        const kb::scene::ParticleEffectAsset& asset, const ParticleCompileRequest& request = {});
     [[nodiscard]] static ParticleCompileResult Compile(const kb::scene::ParticleEffectAsset& asset,
                                                        const kb::assets::AssetMetadata& owner,
                                                        const kb::assets::AssetRegistry& registry,

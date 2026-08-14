@@ -71,7 +71,8 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
     shellInteraction_.ClearPressedSave();
     shellInteraction_.ClearPressedTransport();
 
-    if (sceneContext_.ParticleEditorWorkspace().EmitterDragActive()) {
+    if (sceneContext_.ParticleEditorWorkspace().EmitterDragActive() ||
+        sceneContext_.ParticleEditorWorkspace().ModuleDragActive()) {
         static_cast<void>(ParticleEditorPanelInteraction::CommitDrag(sceneContext_));
         ReleaseCapture();
         sceneViewport_.RequestPresent();

@@ -10,6 +10,7 @@
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/assets/AssetKind.hpp"
 #include "engine/script/ScriptValue.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "project/EditorProjectBootstrap.hpp"
@@ -51,6 +52,7 @@
 #include "editor/ParticleDocumentCloseGuard.hpp"
 #include "editor/ParticleEditorDocument.hpp"
 #include "editor/ParticleEmitterListModel.hpp"
+#include "editor/ParticleEmitterInspectorModel.hpp"
 #include "editor/ParticleEditorWorkspaceState.hpp"
 #include "editor/ParticlePreviewSession.hpp"
 #include "editor/ParticleBakeService.hpp"
@@ -453,6 +455,7 @@ public:
     [[nodiscard]] bool ApplyParticleEditorWorkingCopy(kb::scene::ParticleEffectAsset asset);
     [[nodiscard]] const kb::scene::ParticleEffectAsset* ParticleEditorWorkingAsset() const noexcept;
     [[nodiscard]] std::vector<kb::particle_editor::ParticleEmitterListRow> ParticleEditorEmitterRows() const;
+    [[nodiscard]] kb::particle_editor::ParticleEmitterInspectorView ParticleEditorInspector() const;
     [[nodiscard]] const kb::particle_editor::ParticleEditorWorkspaceState& ParticleEditorWorkspace() const noexcept;
     void SetParticleEditorFocused(bool focused) noexcept;
     [[nodiscard]] bool SelectParticleEditorEmitter(kb::scene::ParticleStableId emitterId) noexcept;
@@ -461,6 +464,24 @@ public:
     [[nodiscard]] bool ToggleParticleEditorEmitter(kb::scene::ParticleStableId emitterId);
     [[nodiscard]] bool MoveParticleEditorEmitter(kb::scene::ParticleStableId emitterId, std::uint32_t targetOrder);
     [[nodiscard]] bool RemoveParticleEditorEmitter(kb::scene::ParticleStableId emitterId);
+    [[nodiscard]] bool SelectParticleEditorModule(kb::scene::ParticleStableId emitterId,
+                                                  kb::scene::ParticleStableId moduleId) noexcept;
+    [[nodiscard]] bool AddParticleEditorModule(kb::scene::ParticleModuleType type);
+    [[nodiscard]] bool ToggleParticleEditorModule(kb::scene::ParticleStableId moduleId);
+    [[nodiscard]] bool MoveParticleEditorModule(kb::scene::ParticleStableId moduleId, std::uint32_t targetOrder);
+    [[nodiscard]] bool BeginParticleEditorModuleDrag(kb::scene::ParticleStableId moduleId) noexcept;
+    void UpdateParticleEditorModuleDrag(std::uint32_t targetOrder) noexcept;
+    [[nodiscard]] bool CommitParticleEditorModuleDrag();
+    void CancelParticleEditorModuleDrag() noexcept;
+    [[nodiscard]] bool RemoveParticleEditorModule(kb::scene::ParticleStableId moduleId);
+    [[nodiscard]] bool SetParticleEditorOutputType(kb::scene::ParticleOutputType type);
+    [[nodiscard]] bool SetParticleEditorOutputReference(kb::assets::AssetKind kind, kb::assets::AssetId id);
+    [[nodiscard]] bool SetParticleEditorSpawn(kb::scene::ParticleSpawnAsset spawn);
+    [[nodiscard]] bool SetParticleEditorModulePayload(kb::scene::ParticleStableId moduleId,
+                                                     kb::scene::ParticleModulePayload payload);
+    [[nodiscard]] bool FocusParticleEditorDiagnostic(std::size_t diagnosticIndex) noexcept;
+    [[nodiscard]] bool NavigateParticleEditorDependency(std::size_t dependencyIndex);
+    [[nodiscard]] bool EditParticleEditorProperty(std::size_t propertyIndex, std::string_view value);
     [[nodiscard]] bool UndoParticleEditorCommand();
     [[nodiscard]] bool RedoParticleEditorCommand();
     [[nodiscard]] bool BeginParticleEditorEmitterRename(kb::scene::ParticleStableId emitterId);

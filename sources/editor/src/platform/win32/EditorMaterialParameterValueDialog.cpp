@@ -144,7 +144,7 @@ std::optional<std::string> EditorMaterialParameterValueDialog::Show(
     HWND window = CreateWindowExW(
         WS_EX_DLGMODALFRAME,
         kDialogClassName,
-        L"Edit Material Graph Parameter",
+        L"Edit Value",
         WS_CAPTION | WS_SYSMENU,
         CW_USEDEFAULT,
         CW_USEDEFAULT,

@@ -11,7 +11,8 @@ namespace kb::editor {
 bool ParticleEditorPanelInteraction::Execute(
     EditorSceneContext& sceneContext,
     const ParticleEditorPanelHit& hit,
-    kb::assets::AssetId selectedMaterial) {
+    kb::assets::AssetId selectedMaterial,
+    std::string_view editedValue) {
     switch (hit.action) {
     case ParticleEditorPanelAction::AddEmitter:
         return selectedMaterial.IsValid() && sceneContext.AddParticleEditorEmitter(selectedMaterial);
@@ -31,6 +32,41 @@ bool ParticleEditorPanelInteraction::Execute(
         return sceneContext.RemoveParticleEditorEmitter(hit.emitterId);
     case ParticleEditorPanelAction::BeginEmitterDrag:
         return sceneContext.BeginParticleEditorEmitterDrag(hit.emitterId);
+    case ParticleEditorPanelAction::SelectOutputType:
+        return sceneContext.SetParticleEditorOutputType(hit.outputType);
+    case ParticleEditorPanelAction::PickOutputMaterial:
+        return selectedMaterial.IsValid() &&
+            sceneContext.SetParticleEditorOutputReference(kb::assets::AssetKind::Material, selectedMaterial);
+    case ParticleEditorPanelAction::PickOutputMesh:
+        return selectedMaterial.IsValid() &&
+            sceneContext.SetParticleEditorOutputReference(kb::assets::AssetKind::Mesh, selectedMaterial);
+    case ParticleEditorPanelAction::PickOutputTexture:
+        return selectedMaterial.IsValid() &&
+            sceneContext.SetParticleEditorOutputReference(kb::assets::AssetKind::Texture, selectedMaterial);
+    case ParticleEditorPanelAction::EditProperty:
+        return sceneContext.EditParticleEditorProperty(hit.propertyIndex, editedValue);
+    case ParticleEditorPanelAction::AddModule:
+        return sceneContext.AddParticleEditorModule(hit.moduleType);
+    case ParticleEditorPanelAction::SelectModule:
+        return sceneContext.SelectParticleEditorModule(hit.emitterId, hit.moduleId);
+    case ParticleEditorPanelAction::BeginModuleDrag:
+        return sceneContext.BeginParticleEditorModuleDrag(hit.moduleId);
+    case ParticleEditorPanelAction::ToggleModule:
+        return sceneContext.ToggleParticleEditorModule(hit.moduleId);
+    case ParticleEditorPanelAction::MoveModuleUp:
+        return hit.authoringOrder != 0U &&
+            sceneContext.MoveParticleEditorModule(hit.moduleId, hit.authoringOrder - 1U);
+    case ParticleEditorPanelAction::MoveModuleDown: {
+        const auto inspector = sceneContext.ParticleEditorInspector();
+        return hit.authoringOrder + 1U < inspector.modules.size() &&
+            sceneContext.MoveParticleEditorModule(hit.moduleId, hit.authoringOrder + 1U);
+    }
+    case ParticleEditorPanelAction::RemoveModule:
+        return sceneContext.RemoveParticleEditorModule(hit.moduleId);
+    case ParticleEditorPanelAction::NavigateDiagnostic:
+        return sceneContext.FocusParticleEditorDiagnostic(hit.diagnosticIndex);
+    case ParticleEditorPanelAction::NavigateDependency:
+        return sceneContext.NavigateParticleEditorDependency(hit.dependencyIndex);
     case ParticleEditorPanelAction::None:
         break;
     }
@@ -43,9 +79,14 @@ void ParticleEditorPanelInteraction::UpdateDrag(
     int y) noexcept {
     sceneContext.UpdateParticleEditorEmitterDrag(
         ParticleEditorPanelLayoutResolver::ReorderTargetAt(layout, y));
+    if (sceneContext.ParticleEditorWorkspace().ModuleDragActive())
+        sceneContext.UpdateParticleEditorModuleDrag(
+            ParticleEditorPanelLayoutResolver::ModuleReorderTargetAt(layout, y));
 }
 
 bool ParticleEditorPanelInteraction::CommitDrag(EditorSceneContext& sceneContext) {
+    if (sceneContext.ParticleEditorWorkspace().ModuleDragActive())
+        return sceneContext.CommitParticleEditorModuleDrag();
     return sceneContext.CommitParticleEditorEmitterDrag();
 }
 
@@ -111,9 +152,13 @@ bool ParticleEditorPanelInteraction::HandleKeyDown(
     if (key == VK_F2)
         return sceneContext.BeginParticleEditorEmitterRename(selected);
     if (key == VK_DELETE)
-        return sceneContext.RemoveParticleEditorEmitter(selected);
+        return workspace.SelectedModuleId() != 0U
+            ? sceneContext.RemoveParticleEditorModule(workspace.SelectedModuleId())
+            : sceneContext.RemoveParticleEditorEmitter(selected);
     if (key == VK_SPACE)
-        return sceneContext.ToggleParticleEditorEmitter(selected);
+        return workspace.SelectedModuleId() != 0U
+            ? sceneContext.ToggleParticleEditorModule(workspace.SelectedModuleId())
+            : sceneContext.ToggleParticleEditorEmitter(selected);
     if (key != VK_UP && key != VK_DOWN)
         return false;
     const auto rows = sceneContext.ParticleEditorEmitterRows();

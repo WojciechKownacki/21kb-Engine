@@ -4,6 +4,7 @@
 #include "editor/ParticleEditorCommands.hpp"
 #include "editor/ParticleEditorWorkspaceState.hpp"
 #include "editor/ParticleEmitterListModel.hpp"
+#include "editor/ParticleEmitterInspectorModel.hpp"
 #include "editor/ParticlePreviewSession.hpp"
 #include "editor/ParticleBakeService.hpp"
 #include "ParticleEffectCompiler.hpp"
@@ -239,6 +240,76 @@ void TestEmitterListCommandsAndAuthoredCompileOrder() {
         "emitter list model did not expose contiguous authored order");
 }
 
+void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
+    using namespace kb::particle_editor;
+    ParticleEditorDocument document;
+    ParticleEditorWorkspaceState workspace;
+    Require(document.Create(MakeEffect()).Succeeded(), "module command fixture creation failed");
+    workspace.Synchronize(document.Asset());
+    Require(ParticleEditorCommands::AddModule(document, workspace, 11U,
+                kb::scene::ParticleModuleType::Gravity).Succeeded() &&
+            ParticleEditorCommands::AddModule(document, workspace, 11U,
+                kb::scene::ParticleModuleType::Wind).Succeeded() &&
+            ParticleEditorCommands::AddModule(document, workspace, 11U,
+                kb::scene::ParticleModuleType::Drag).Succeeded(),
+        "typed module add command failed");
+    Require(document.Asset().emitters[0].modules.size() == 3U &&
+            document.Asset().emitters[0].modules[0].moduleId == 1U &&
+            document.Asset().emitters[0].modules[2].authoringOrder == 2U,
+        "module add did not preserve stable-id storage and contiguous authoring order");
+    const auto duplicate = ParticleEditorCommands::AddModule(document, workspace, 11U,
+        kb::scene::ParticleModuleType::Gravity);
+    Require(duplicate.status == ParticleEditorStatus::InvalidAsset,
+        "singleton module duplicate was accepted");
+    Require(ParticleEditorCommands::ReorderModule(document, workspace, 11U, 3U, 0U).Succeeded() &&
+            document.CanUndo() && document.Asset().emitters[0].modules[2].authoringOrder == 0U,
+        "module drag reorder did not create one authored-order command");
+    Require(document.Undo() && document.Asset().emitters[0].modules[2].authoringOrder == 2U &&
+            document.Redo(), "module reorder did not undo and redo as one command");
+    Require(workspace.SelectModule(document.Asset(), 11U, 2U), "module stable-id selection failed");
+
+    kb::assets::AssetRegistry registry;
+    Require(registry.Upsert({.id = kb::assets::AssetId{72U}, .type = "RenderMaterial",
+                .virtualPath = "/Game/Materials/PreviewParticle.21kb", .contentHash = 1U}),
+        "module compiler material registration failed");
+    auto compilable = document.Asset();
+    compilable.emitters[0].output.material = {.assetId = 72U,
+        .virtualPath = "/Game/Materials/PreviewParticle.21kb"};
+    const kb::assets::AssetMetadata owner{.id = kb::assets::AssetId{71U},
+        .type = kb::scene::kParticleEffectAssetType, .virtualPath = "/Game/Effects/Modules.kbvfx"};
+    const auto compiled = kb::particle_plugin::ParticleEffectCompiler::Compile(compilable, owner, registry);
+    Require(compiled.Succeeded() && compiled.effect->emitters[0].modules[0].moduleId == 3U &&
+            compiled.effect->emitters[0].modules[1].moduleId == 1U &&
+            compiled.effect->emitters[0].modules[2].moduleId == 2U,
+        "compiler did not execute modules in persisted authoring order");
+
+    auto unsupported = compilable;
+    unsupported.emitters[0].output.type = kb::scene::ParticleOutputType::Mesh;
+    unsupported.emitters[0].output.payload = kb::scene::ParticleMeshOutput{};
+    unsupported.emitters[0].output.mesh = {.assetId = 100U};
+    unsupported.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualRequired;
+    unsupported.eventBindings.push_back({.sourceEmitterId = 11U,
+        .action = kb::scene::ParticleEventAction::EmitEffectAsset,
+        .targetEffect = {.assetId = 200U}});
+    const auto capabilityDiagnostics =
+        kb::particle_plugin::ParticleEffectCompiler::ValidateCapabilities(unsupported);
+    Require(capabilityDiagnostics.size() == 3U &&
+            std::all_of(capabilityDiagnostics.begin(), capabilityDiagnostics.end(), [](const auto& diagnostic) {
+                return diagnostic.code == kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability;
+            }), "public capability validator did not aggregate GPU policy, external event, and output failures");
+    const auto inspector = ParticleEmitterInspectorModel::Build(unsupported, 11U, 2U, nullptr, nullptr);
+    Require(inspector.outputChoices.size() == 8U && !inspector.outputChoices[3].enabled &&
+            inspector.outputChoices[3].diagnostics.size() == 1U &&
+            inspector.modules.size() == 3U && inspector.modules[2].selected &&
+            unsupported.emitters[0].output.type == kb::scene::ParticleOutputType::Mesh,
+        "inspector did not expose disabled capability diagnostics or preserve authored unsupported data");
+    Require(ParticleEditorCommands::RemoveModule(document, workspace, 11U, 2U).Succeeded() &&
+            document.Asset().emitters[0].modules.size() == 2U &&
+            document.Asset().emitters[0].modules[0].authoringOrder == 1U &&
+            document.Asset().emitters[0].modules[1].authoringOrder == 0U,
+        "module removal did not preserve stable storage and close authored-order permutation");
+}
+
 void TestCloseGuardAllDirtyTransitions() {
     kb::particle_editor::ParticleAssetGateway gateway;
     kb::particle_editor::ParticleEditorDocument document;
@@ -299,12 +370,12 @@ void TestProductionBakeCacheAndCapabilityGates() {
         .physicalPath = sourcePath, .contentHash = 30U};
     auto effect = MakeEffect();
     effect.emitters[0].spawn.bursts.push_back({.timeSeconds = 0.25F, .count = 3U});
-    effect.emitters[0].modules.push_back({.moduleId = 1U, .type = kb::scene::ParticleModuleType::Gravity,
+    effect.emitters[0].modules.push_back({.moduleId = 1U, .authoringOrder = 0U, .type = kb::scene::ParticleModuleType::Gravity,
         .payload = kb::scene::ParticleGravityModule{.acceleration = {0.0F, -2.0F, 0.0F}}});
     kb::math::Gradient colorGradient;
     colorGradient.stops = {{.time = 0.0F, .color = {1.0F, 0.0F, 0.0F, 1.0F}},
                            {.time = 1.0F, .color = {0.0F, 0.0F, 1.0F, 0.5F}}};
-    effect.emitters[0].modules.push_back({.moduleId = 2U, .type = kb::scene::ParticleModuleType::ColorOverLife,
+    effect.emitters[0].modules.push_back({.moduleId = 2U, .authoringOrder = 1U, .type = kb::scene::ParticleModuleType::ColorOverLife,
         .payload = kb::scene::ParticleColorOverLifeModule{.gradient = std::move(colorGradient)}});
     const std::filesystem::path cacheRoot = root / "Saved" / "21kbParticleCache";
 
@@ -518,6 +589,7 @@ int main() {
     try {
         TestDocumentHistorySavePointAndAtomicFailure();
         TestEmitterListCommandsAndAuthoredCompileOrder();
+        TestModuleStackCommandsCapabilitiesAndAuthoredOrder();
         TestCloseGuardAllDirtyTransitions();
         TestProductionBakeCacheAndCapabilityGates();
         TestIsolatedRuntimePreviewAndGpuRelease();

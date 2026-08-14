@@ -94,12 +94,66 @@ void TestHitTestingScrollAndSelectionFocus() {
         "drag target hit test did not resolve authored order");
 }
 
+void TestUnifiedInspectorStreamAndModuleHitTargets() {
+    const auto rows = Rows(2U);
+    kb::particle_editor::ParticleEmitterInspectorView inspector;
+    inspector.emitterId = rows[0].emitterId;
+    for (std::uint8_t index = 0U; index < 8U; ++index) {
+        inspector.outputChoices.push_back({.type = static_cast<kb::scene::ParticleOutputType>(index),
+            .label = "Output", .enabled = index < 3U});
+    }
+    inspector.properties.push_back({.property = kb::particle_editor::ParticleEditorProperty::SpawnLifetimeMin,
+        .label = "Lifetime min", .value = "1", .editable = true});
+    inspector.modules.push_back({.moduleId = 41U, .authoringOrder = 0U,
+        .type = kb::scene::ParticleModuleType::Gravity, .label = "Gravity", .enabled = true});
+    inspector.modules.push_back({.moduleId = 99U, .authoringOrder = 1U,
+        .type = kb::scene::ParticleModuleType::Drag, .label = "Drag", .enabled = true});
+    inspector.dependencies.push_back({.assetId = kb::assets::AssetId{7U}, .virtualPath = "/Game/Material.21kb"});
+    inspector.diagnostics.push_back({.code = kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
+        .propertyPath = "effect.emitter[0].output.type", .emitterId = rows[0].emitterId,
+        .message = "unavailable"});
+    const RECT content{0, 0, 1280, 720};
+    const auto layout = kb::editor::ParticleEditorPanelLayoutResolver::Resolve(
+        content, rows, 0, 96U, &inspector);
+    Require(layout.outputChoiceCount == 8U && layout.propertyRowCount == 1U &&
+            layout.moduleRowCount == 2U && layout.dependencyRowCount == 1U &&
+            layout.diagnosticRowCount == 1U,
+        "particle inspector did not form one complete bounded composer stream");
+    const POINT unsupported = Center(layout.outputChoices[3]);
+    Require(kb::editor::ParticleEditorPanelLayoutResolver::HitTest(layout, unsupported.x, unsupported.y).outputType ==
+            kb::scene::ParticleOutputType::Mesh,
+        "visible disabled output choice lost its typed identity");
+    const POINT property = Center(layout.propertyRows[0]);
+    Require(kb::editor::ParticleEditorPanelLayoutResolver::HitTest(layout, property.x, property.y).action ==
+            kb::editor::ParticleEditorPanelAction::EditProperty,
+        "typed property row was not routed");
+    const int maximumScroll = kb::editor::ParticleEditorPanelLayoutResolver::MaximumComposerScroll(layout, 96U);
+    const auto scrolled = kb::editor::ParticleEditorPanelLayoutResolver::Resolve(
+        content, rows, maximumScroll, 96U, &inspector);
+    const POINT grip = Center(scrolled.moduleRows[1].dragGrip);
+    const auto moduleHit = kb::editor::ParticleEditorPanelLayoutResolver::HitTest(scrolled, grip.x, grip.y);
+    Require(moduleHit.action == kb::editor::ParticleEditorPanelAction::BeginModuleDrag &&
+            moduleHit.moduleId == 99U && moduleHit.authoringOrder == 1U &&
+            kb::editor::ParticleEditorPanelLayoutResolver::ModuleReorderTargetAt(
+                scrolled, scrolled.moduleRows[0].bounds.top) == 0U,
+        "module drag hit lost stable identity or authored order");
+    const POINT dependency = Center(scrolled.dependencyRows[0]);
+    const POINT diagnostic = Center(scrolled.diagnosticRows[0]);
+    Require(kb::editor::ParticleEditorPanelLayoutResolver::HitTest(scrolled, dependency.x, dependency.y).action ==
+                kb::editor::ParticleEditorPanelAction::NavigateDependency &&
+            kb::editor::ParticleEditorPanelLayoutResolver::HitTest(scrolled, diagnostic.x, diagnostic.y).action ==
+                kb::editor::ParticleEditorPanelAction::NavigateDiagnostic &&
+            maximumScroll > 0,
+        "dependency/diagnostic navigation or unified stream scrolling was not exposed");
+}
+
 } // namespace
 
 int main() {
     try {
         TestTwoToOneResponsiveGeometry();
         TestHitTestingScrollAndSelectionFocus();
+        TestUnifiedInspectorStreamAndModuleHitTargets();
         std::cout << "21kb Particle System editor authoring tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {

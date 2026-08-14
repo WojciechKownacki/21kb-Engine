@@ -54,6 +54,7 @@ ParticleEffectAsset ParticleEffectAssetMigration::FromLegacy(const LegacyParticl
 
     emitter.modules.push_back(ParticleModuleAsset{
         .moduleId = kLegacyInitialVelocityModuleId,
+        .authoringOrder = 0U,
         .type = ParticleModuleType::InitialVelocity,
         .enabled = true,
         .payload =
@@ -67,6 +68,7 @@ ParticleEffectAsset ParticleEffectAssetMigration::FromLegacy(const LegacyParticl
     });
     emitter.modules.push_back(ParticleModuleAsset{
         .moduleId = kLegacyGravityModuleId,
+        .authoringOrder = 1U,
         .type = ParticleModuleType::Gravity,
         .enabled = true,
         .payload = ParticleGravityModule{.acceleration = kb::math::Vec3{},
@@ -79,6 +81,7 @@ ParticleEffectAsset ParticleEffectAssetMigration::FromLegacy(const LegacyParticl
     }
     emitter.modules.push_back(ParticleModuleAsset{
         .moduleId = kLegacySizeModuleId,
+        .authoringOrder = 2U,
         .type = ParticleModuleType::SizeOverLife,
         .enabled = true,
         .payload = ParticleSizeOverLifeModule{.curve = std::move(size)},
@@ -86,6 +89,7 @@ ParticleEffectAsset ParticleEffectAssetMigration::FromLegacy(const LegacyParticl
     if (!legacy.colorOverLifetime.stops.empty()) {
         emitter.modules.push_back(ParticleModuleAsset{
             .moduleId = kLegacyColorModuleId,
+            .authoringOrder = 3U,
             .type = ParticleModuleType::ColorOverLife,
             .enabled = true,
             .payload = ParticleColorOverLifeModule{.gradient = legacy.colorOverLifetime},
