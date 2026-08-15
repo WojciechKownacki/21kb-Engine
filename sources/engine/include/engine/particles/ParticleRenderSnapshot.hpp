@@ -58,6 +58,9 @@ enum class ParticleRenderEmitterFlag : std::uint8_t {
     None = 0U,
     SoftParticles = 1U << 0U,
     AntiAliasing = 1U << 1U,
+    // Mesh output only (ParticleRenderOutput::Mesh); ignored by every other output type.
+    CastsShadow = 1U << 2U,
+    ReceivesShadow = 1U << 3U,
 };
 
 [[nodiscard]] constexpr ParticleRenderEmitterFlag operator|(
@@ -132,6 +135,11 @@ struct ParticleRenderEmitterRecord {
     std::uint8_t flipbookRowsEncoded = 1U;
     std::array<std::int16_t, 4U> localBasisQuaternionSnorm{};
     float pointSpriteDiameter = 1.0F;
+    // Mesh output only: additive LOD level bias, matching SceneRenderMeshInstance::lodBias's
+    // integer-level semantics (the schema's authored ParticleMeshOutput::lodBias is a float,
+    // rounded to the nearest level once at compile time rather than carried as a float through
+    // the tightly budgeted retained snapshot).
+    std::int8_t meshLodLevel = 0;
     kb::math::Vec3 boundsMinimum{};
     kb::math::Vec3 boundsMaximum{};
 

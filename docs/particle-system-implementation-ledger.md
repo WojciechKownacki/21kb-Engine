@@ -17,6 +17,104 @@
 - Next gate: Stage 8 gate criteria (audit section 11, "Etap 8"): N particles of one mesh/material render as one draw per section/LOD; a wrong/missing mesh reference blocks compile/Bake; LOD and shadow policy have renderer tests/goldens; hot reload and scene release leave no resource refs.
 - Rendering direction unchanged: normal game-facing simulation and rendering must move to GPU. The CPU backend is retained only as the deterministic validation, diagnostics, and preview path; it is not the intended final gameplay path.
 
+### Stage 8 package 1 of 2 — data plumbing and capability gate: closed, independently verified
+
+Schema (`ParticleMeshOutput.lodBias/castsShadow/receivesShadow`), structural validation, and dependency
+validation for the mesh reference already existed before this stage (confirmed by reading the code, not
+assumed). This package makes `ParticleOutputType::Mesh` a real, compilable, cacheable, simulatable
+capability end-to-end through every layer *except* the renderer actually drawing anything for it yet:
+
+- `ParticleCompiledEmitter` (`sources/engine/include/engine/particles/ParticleCompiledEffect.hpp`) gained
+  `meshLodBias`/`meshCastsShadow`/`meshReceivesShadow`.
+- `ParticleEffectCompiler.cpp`/`.hpp` (`sources/plugins/21kb_particle`): `ParticleCompilerCapabilities` gained
+  `mesh = true`; `Supports()`/`StableKey()` updated; a **latent bug found and fixed**: the output-payload
+  copy block's `if (Billboard) ... else if (StretchedBillboard) ... else` unconditionally treated the
+  `else` branch as `PointSprite` and called `std::get<ParticlePointSpriteOutput>` — reaching this with
+  `Mesh` (a variant holding `ParticleMeshOutput`) would have thrown `std::bad_variant_access` the moment
+  the capability gate opened. Replaced with explicit `else if (PointSprite)` / `else if (Mesh)` branches.
+- `ParticleRenderEmitterRecord` (`sources/engine/include/engine/particles/ParticleRenderSnapshot.hpp`)
+  gained a compact `std::int8_t meshLodLevel` (the schema's float `lodBias` rounded once at compile time
+  to match `SceneRenderMeshInstance::lodBias`'s integer-level semantics — carrying a float through the
+  tightly budgeted, `<=144U`-byte-per-record retained snapshot wasn't worth it) and two new
+  `ParticleRenderEmitterFlag` bits, `CastsShadow`/`ReceivesShadow` (zero extra bytes, same idiom as the
+  existing `SoftParticles`/`AntiAliasing` bits).
+- `CpuParticleBackend.cpp` (`sources/plugins/21kb_particle`) populates the new snapshot fields, gated to
+  `outputType == Mesh` specifically (not unconditionally — see the regression below).
+- `ParticleRenderBatcher.cpp` (`sources/renderer`): Mesh-output emitters are explicitly excluded from the
+  quad/billboard batch loop (`continue` before the `SupportedOutput()` check) — they are handled by a
+  separate mesh-instancing path (package 2, not yet built) that reuses the existing scene mesh pipeline,
+  not this 80-byte `ParticleGpuInstance` quad format. Excluding them must not count them as
+  dropped/unsupported, since they are not actually unsupported once package 2 lands.
+- Three independent regressions were found by rerunning the focused suite after each change (not assumed
+  clean from compilation alone) and fixed, each with new/updated test coverage:
+  1. **`ParticleRenderSnapshot.cpp`'s `ValidateEmitterRecords`** hard-allowlists which `.flags` bits are
+     legal and rejects any other bit — it did not know about the two new bits, so *any* emitter
+     record (any output type, since `meshReceivesShadow` defaults `true`) failed validation and every
+     snapshot publish silently failed. Fixed the allowlist; added a negative test
+     (unknown flag bit rejected) to `ParticleRenderSnapshotTests.cpp`.
+  2. **`sources/renderer/tests/ParticleRendererTests.cpp`**'s mixed-effect drop-contract test used `Mesh`
+     purely as a stand-in for "any unsupported output type" (true before this stage). Swapped the
+     exemplar to `Trail` (still genuinely unsupported) and added a dedicated new test asserting Mesh is
+     silently excluded from batch/drop/unsupported counts rather than reported as dropped.
+  3. **`ParticleCompiledEffectCache.cpp`** (`sources/engine/src/particles`) — the compiled-effect cache's
+     own hand-rolled field-wise binary reader independently capped `outputType` at `PointSprite` and its
+     `ValidEffect()` integrity check unconditionally rejected any non-zero `meshAssetId`. Both are gates
+     entirely separate from the compiler's capability check and from the schema/validation layers; opening
+     the compiler capability alone was not sufficient. Fixed: writer/reader now round-trip the three new
+     fields, the output ceiling is `Mesh`, and the `meshAssetId` check is now an
+     `outputType == Mesh` ⟺ `meshAssetId != 0` consistency check instead of an unconditional ban.
+     `EditorParticleBakeHostTests.cpp`'s existing "Mesh is unsupported" case was swapped to `Trail`; new
+     positive (valid mesh reference bakes successfully) and negative (unregistered mesh reference is
+     rejected) cases were added.
+- Independent focused matrix after all fixes — exit `0`, `7/7`, `10.95 s`:
+  `ctest --test-dir build -C Debug -R "^(kb_21kb_particle_asset_tests|kb_21kb_particle_cpu_backend_tests|kb_21kb_particle_editor_tests|kb_21kb_particle_snapshot_tests|kb_21kb_particle_renderer_tests|kb_editor_particle_authoring_tests|kb_editor_particle_bake_host_tests)$" --output-on-failure`.
+  Individual: asset `3.55 s`, snapshot `0.19 s`, CPU `5.98 s`, editor core `0.68 s`, GPU renderer `0.48 s`,
+  authoring layout `0.02 s`, host Bake `0.03 s`.
+- `cmake --build build --config Debug --target kb_editor` — exit `0`, confirming nothing else in the
+  editor/renderer/engine link graph was broken by these changes.
+- **Not yet true**: Mesh-output particles do not render anything yet — no code submits mesh instances to
+  the GPU. The capability gate being open means an author can now save/Bake a Mesh-output effect without
+  an error, but it will render as nothing until package 2 lands. This is a deliberate, tracked intermediate
+  state of a single in-progress stage, not a claim that Stage 8 is done.
+
+### Stage 8 package 2 of 2 — mesh instance submission: not started
+
+Investigated and designed, not yet implemented. Findings, to avoid re-discovery:
+- Full reuse of the existing non-particle instanced-mesh pipeline is possible and is what the audit itself
+  specifies ("bez mesh proxy map"): `MeshPipelineProcessor::BuildInto`/`SceneMeshDrawCommandSubmitter::Submit`
+  do not require input sourced from `RenderScene`'s per-entity mesh proxies — `MeshPipelineBuildDesc.meshBatches`
+  (a plain `std::vector<SceneMeshBatch>`, each `{meshAssetId, materialAssetId, span<SceneRenderMeshInstance>}`)
+  is accepted independent of `RenderScene` entirely. `SceneRenderMeshInstance` can be built directly from
+  particle position/rotation/size (its `model`/`color`/`castsShadow`/`receivesShadow`/`lodBias`/`entityId`
+  fields need no scene-graph type); `worldBounds`/`depthBucket` are computed by the pipeline itself, not
+  required from the caller. No new shaders are needed for plain PBR/unlit materials — program selection is
+  driven entirely by the `RenderMaterial`'s own shader assignment, identically to regular scene meshes,
+  including automatic participation in whichever pass (opaque/transparent/shadow) the material's blend
+  state already routes it to via the existing `MeshPipelinePassPolicy`.
+- Real per-particle 3D orientation is not tracked by the CPU sim today — `ParticleRenderRecord.rotationRadians`
+  is a single scalar (billboard spin), not a quaternion. Decision (not yet implemented): mesh instance
+  rotation = emitter's `localBasisQuaternionSnorm` (already in the snapshot record) composed with a
+  `rotationRadians` spin around that basis's local axis, uniform scale from `.size`. This is a genuine,
+  documented scope boundary of the current particle data model, not an oversight — a future stage adding
+  full 3D per-particle orientation would need a new field in `ParticleRenderRecord`.
+- Integration point: `SceneMeshSubmitter::Submit()` (`sources/renderer/src/scene/SceneMeshSubmitter.cpp`),
+  which currently wires the *existing* quad-billboard particle path only into `pass == BaseTransparent`.
+  For Mesh output, plan is a second, independent `MeshPipelineProcessor::BuildInto` call per `Submit()`
+  invocation (i.e. per pass, since the caller — `SceneRenderer::SubmitMeshPass` — calls `Submit()` once per
+  pass already) with `.meshBatches` set to the particle-mesh-derived list and `.drawGroups = nullptr`,
+  sharing the same `resources`/`resourceMap`/`camera`/`diagnostics`/budgets already assembled for the pass,
+  submitting its resulting `MeshDrawCommand`s via the same `SceneMeshDrawCommandSubmitter::Submit` call —
+  letting the existing per-pass policy (`MeshPipelinePassPolicy`) decide participation per pass exactly as
+  it already does for ordinary scene meshes, rather than hand-routing by blend mode.
+- Remaining work: build the particle→`SceneRenderMeshInstance` conversion (from the render snapshot's Mesh-
+  output emitter records + particle array), wire the second `BuildInto`/`Submit` call into
+  `SceneMeshSubmitter::Submit()`, resolve `RenderMeshResource`/`RenderMaterialResource` for `meshAssetId`/
+  `materialAssetId` (already ensured into the resource cache by `RuntimeMeshResourceEnsurer`/
+  `RuntimeMaterialResourceEnsurer` ahead of this stage, per investigation — not yet verified by a
+  passing test), hot-reload/scene-release cleanup, and the renderer test/golden coverage the gate requires
+  (draw-count assertion for "N particles same mesh/material = one draw per section/LOD", LOD selection,
+  shadow-cast toggle).
+
 ## Accepted stages
 
 ### Stage 0 — characterization: `accepted`
@@ -189,6 +287,7 @@
 - Curve/gradient editing follow-up touches `sources/plugins/21kb_particle/editor/ParticleEmitterInspectorModel.cpp` (`CurveText`/`GradientText` formatting, editable rows), `sources/editor/src/scene/EditorParticleEditorHost.cpp` (`ParseCurve`/`ParseGradient`, dispatch wiring for `ColorOverLife`/`SizeOverLife`/`AlphaOverLife`/`SpawnRateSummary`), and `sources/plugins/21kb_particle/tests/ParticleEditorTests.cpp` (inspector-row and command-level round-trip coverage).
 - Recipe browsing follow-up touches `sources/engine/include/engine/assets/IAssetLoader.hpp` (`DiscoverBrowseTag` hook), `sources/engine/include/engine/scene/ParticleEffectAssetLoader.hpp`/`.cpp` (override), `sources/engine/src/assets/AssetDiscoveryService.cpp` (wiring into the existing discovery scan), and `sources/engine/tests/ParticleEffectAssetTests.cpp` (`RunRecipeAssetTest` extended to assert the discovered category for all 15 recipes).
 - The subsequent code-review fix pass additionally touches `sources/engine/include/engine/assets/AssetMetadata.hpp` (`browseTag` field, separate from `importCategory`), `sources/editor/src/assets/EditorAssetBrowserAssetRows.cpp` (`SearchText` folds in `browseTag`), `sources/plugins/21kb_particle/editor/ParticleEmitterInspectorModel.cpp`/`.hpp` (`FloatText`, `SpawnRateCurve` rename), `sources/editor/src/scene/EditorParticleEditorHost.cpp` (`ParseCurve`/`ParseGradient` robustness, `SpawnRateCurve` rename), `sources/editor/src/private/platform/win32/EditorMaterialParameterValueDialog.hpp`/`sources/editor/src/platform/win32/EditorMaterialParameterValueDialog.cpp` (optional hint parameter), and `sources/editor/src/app/pointer/EditorLeftButtonDownRouter.cpp` (curve/gradient-specific hint text).
+- Stage 8 package 1 (data plumbing) touches `sources/engine/include/engine/particles/ParticleCompiledEffect.hpp` (new `ParticleCompiledEmitter` mesh fields), `sources/engine/include/engine/particles/ParticleRenderSnapshot.hpp` (new `ParticleRenderEmitterRecord`/`ParticleRenderEmitterFlag` fields), `sources/engine/src/particles/ParticleRenderSnapshot.cpp` (flags allowlist fix), `sources/engine/src/particles/ParticleCompiledEffectCache.cpp` (cache serializer: new fields, output ceiling, `meshAssetId` consistency check), `sources/engine/tests/ParticleRenderSnapshotTests.cpp` (new field coverage), `sources/plugins/21kb_particle/ParticleEffectCompiler.hpp`/`.cpp` (capability gate, latent variant-access bug fix), `sources/plugins/21kb_particle/CpuParticleBackend.cpp` (populates the new fields, Mesh-gated), `sources/renderer/src/particles/ParticleRenderBatcher.cpp` (Mesh exclusion from the quad batcher), `sources/renderer/tests/ParticleRendererTests.cpp` (stale exemplar swap, new exclusion test), and `sources/editor/tests/EditorParticleBakeHostTests.cpp` (stale exemplar swap, new positive/negative Mesh Bake cases).
 
 ## Validation evidence
 
