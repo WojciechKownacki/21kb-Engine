@@ -4,8 +4,11 @@
 #include "engine/assets/AssetRegistry.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <iterator>
+#include <limits>
 #include <sstream>
+#include <system_error>
 
 namespace kb::particle_editor {
 namespace {
@@ -58,12 +61,23 @@ namespace {
 template <typename T>
 [[nodiscard]] std::string ScalarText(T value) { return std::to_string(value); }
 
+// Round-trip-safe and locale-independent (std::to_chars never consults the process locale), unlike
+// std::to_string(float)'s fixed 6-decimal truncation: two keyframe/stop times that differ only past
+// the 6th decimal would otherwise print identically, and the field-separator ',' this format uses
+// would itself corrupt under a comma-decimal locale. Mirrors ParticleEffectAssetIO.cpp's Float().
+[[nodiscard]] std::string FloatText(float value) {
+    char buffer[64]{};
+    const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value, std::chars_format::general,
+                                      std::numeric_limits<float>::max_digits10);
+    return result.ec == std::errc{} ? std::string(buffer, result.ptr) : std::string{};
+}
+
 [[nodiscard]] std::string CurveText(const kb::math::Curve& curve) {
     std::string text;
     for (std::size_t index = 0U; index < curve.keyframes.size(); ++index) {
         if (index != 0U) text += ';';
         const auto& key = curve.keyframes[index];
-        text += std::to_string(key.time) + ',' + std::to_string(key.value) + ',' +
+        text += FloatText(key.time) + ',' + FloatText(key.value) + ',' +
             std::to_string(static_cast<std::uint32_t>(key.easing));
     }
     return text;
@@ -74,8 +88,8 @@ template <typename T>
     for (std::size_t index = 0U; index < gradient.stops.size(); ++index) {
         if (index != 0U) text += ';';
         const auto& stop = gradient.stops[index];
-        text += std::to_string(stop.time) + ',' + std::to_string(stop.color.r) + ',' +
-            std::to_string(stop.color.g) + ',' + std::to_string(stop.color.b) + ',' + std::to_string(stop.color.a);
+        text += FloatText(stop.time) + ',' + FloatText(stop.color.r) + ',' +
+            FloatText(stop.color.g) + ',' + FloatText(stop.color.b) + ',' + FloatText(stop.color.a);
     }
     return text;
 }
@@ -153,7 +167,7 @@ ParticleEmitterInspectorView ParticleEmitterInspectorModel::Build(
             view.properties.push_back({.property = property, .label = std::move(label),
                                        .value = std::move(value), .editable = editable});
         };
-        addProperty(ParticleEditorProperty::SpawnRateSummary, "Rate curve", CurveText(spawn.rateOverTime));
+        addProperty(ParticleEditorProperty::SpawnRateCurve, "Rate curve", CurveText(spawn.rateOverTime));
         addProperty(ParticleEditorProperty::SpawnBurstsSummary, "Bursts",
             std::to_string(spawn.bursts.size()) + " entries", false);
         addProperty(ParticleEditorProperty::SpawnLifetimeMin, "Lifetime min", ScalarText(spawn.lifetimeMin));

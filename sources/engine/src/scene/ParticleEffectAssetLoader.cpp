@@ -56,7 +56,7 @@ ParticleEffectAssetLoader::ValidateDependencies(const kb::assets::AssetMetadata&
     return message.str();
 }
 
-std::string ParticleEffectAssetLoader::DiscoverImportCategory(const std::filesystem::path& path) const {
+std::string ParticleEffectAssetLoader::DiscoverBrowseTag(const std::filesystem::path& path) const {
     const ParticleEffectLoadResult result = ParticleEffectAssetIO::LoadDetailed(path);
     return result.Succeeded() ? result.asset->recipeCategory : std::string{};
 }
