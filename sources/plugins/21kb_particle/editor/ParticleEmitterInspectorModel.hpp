@@ -15,7 +15,7 @@ struct AssetMetadata;
 namespace kb::particle_editor {
 
 enum class ParticleEditorProperty : std::uint16_t {
-    SpawnRateSummary, SpawnBurstsSummary, SpawnLifetimeMin, SpawnLifetimeMax, SpawnSpeedMin, SpawnSpeedMax, SpawnDirection,
+    SpawnRateCurve, SpawnBurstsSummary, SpawnLifetimeMin, SpawnLifetimeMax, SpawnSpeedMin, SpawnSpeedMax, SpawnDirection,
     SpawnSpreadDegrees, SpawnRandomization, SpawnPrewarmSeconds,
     OutputBlend, OutputSort, OutputDepthTest, OutputDepthWrite, OutputSoftParticles,
     OutputAntiAliasing, OutputAlignment, FlipbookColumns, FlipbookRows,

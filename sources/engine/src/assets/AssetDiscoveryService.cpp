@@ -57,15 +57,28 @@ std::size_t AssetDiscoveryService::DiscoverMountedAssets(
                 continue;
             }
 
+            const std::uint64_t contentHash = AssetFileSystem::HashFile(entry.path());
             std::string assetType{ loader->Type() };
             std::string importCategory;
+            std::string browseTag;
             if (assetType == "ImportedAsset") {
                 if (const std::optional<AssetImportCategory> category = ImportedAssetHeaderReader::ReadCategory(entry.path())) {
                     importCategory = std::string{ ToString(*category) };
                     assetType = std::string{ RuntimeAssetType(*category) };
                 }
             } else {
-                importCategory = loader->DiscoverImportCategory(entry.path());
+                // DiscoverBrowseTag is only cheap relative to a full AssetManager::Load<T>() - for
+                // loaders backed by a text/document format (e.g. ParticleEffectAssetLoader) it still
+                // fully parses the file, so it is only re-run when the file's content actually
+                // changed since the previous scan; an unchanged file reuses its previously discovered
+                // tag instead of paying that parse again on every rescan (including the runtime's
+                // periodically-throttled re-discovery, not just editor-triggered ones).
+                const AssetId provisionalId = MakeAssetId(NormalizeAssetPath(*virtualPath) + ":" + assetType);
+                const auto previousForTag = previousById.find(provisionalId.value);
+                browseTag = (previousForTag != previousById.end() &&
+                            previousForTag->second.contentHash == contentHash)
+                    ? previousForTag->second.browseTag
+                    : loader->DiscoverBrowseTag(entry.path());
             }
 
             const AssetId id = MakeAssetId(NormalizeAssetPath(*virtualPath) + ":" + assetType);
@@ -73,10 +86,11 @@ std::size_t AssetDiscoveryService::DiscoverMountedAssets(
                 .id = id,
                 .type = assetType,
                 .importCategory = importCategory,
+                .browseTag = browseTag,
                 .name = entry.path().stem().string(),
                 .virtualPath = *virtualPath,
                 .physicalPath = entry.path(),
-                .contentHash = AssetFileSystem::HashFile(entry.path()),
+                .contentHash = contentHash,
                 .dependencies = {},
                 .runtimeLoadable = true,
             };
