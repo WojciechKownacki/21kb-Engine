@@ -20,7 +20,8 @@ public:
     [[nodiscard]] static std::optional<std::string> Show(
         HWND owner,
         std::string_view parameterName,
-        std::string_view currentValue);
+        std::string_view currentValue,
+        std::string_view hint = "Use numbers like: 0.25 or 1 0 0 1");
 #endif
 };
 

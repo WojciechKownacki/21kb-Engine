@@ -300,19 +300,18 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
     const auto gradientRow = std::find_if(colorInspector.properties.begin(), colorInspector.properties.end(),
         [](const auto& row) { return row.label == "Gradient"; });
     Require(gradientRow != colorInspector.properties.end() && gradientRow->editable &&
-            gradientRow->value == "0.000000,1.000000,1.000000,1.000000,1.000000;"
-                                   "1.000000,1.000000,1.000000,1.000000,1.000000",
+            gradientRow->value == "0,1,1,1,1;1,1,1,1,1",
         "ColorOverLife gradient property row was not editable or did not encode the default gradient");
     const auto sizeInspector =
         ParticleEmitterInspectorModel::Build(allTypesDocument.Asset(), 11U, sizeModuleId, nullptr, nullptr);
     const auto curveRow = std::find_if(sizeInspector.properties.begin(), sizeInspector.properties.end(),
         [](const auto& row) { return row.label == "Curve"; });
-    Require(curveRow != sizeInspector.properties.end() && curveRow->editable && curveRow->value == "0.000000,1.000000,0",
+    Require(curveRow != sizeInspector.properties.end() && curveRow->editable && curveRow->value == "0,1,0",
         "SizeOverLife curve property row was not editable or did not encode the default curve");
     const auto rateInspector = ParticleEmitterInspectorModel::Build(allTypesDocument.Asset(), 11U, 0U, nullptr, nullptr);
     const auto rateRow = std::find_if(rateInspector.properties.begin(), rateInspector.properties.end(),
         [](const auto& row) { return row.label == "Rate curve"; });
-    Require(rateRow != rateInspector.properties.end() && rateRow->editable && rateRow->value == "0.000000,60.000000,0",
+    Require(rateRow != rateInspector.properties.end() && rateRow->editable && rateRow->value == "0,60,0",
         "spawn rate curve property row was not editable or did not encode the authored curve");
 
     auto editedGradient = std::get<kb::scene::ParticleColorOverLifeModule>(color->payload);
