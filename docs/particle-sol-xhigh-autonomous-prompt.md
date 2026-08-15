@@ -1,6 +1,6 @@
 # /goal
 
-Zaimplementuj produkcyjnie plugin **Particli** w `H:\23kb\21kb-Engine`, end to end, aż do pełnego spełnienia Definition of Done z kanonicznego audytu. To jest zadanie implementacyjne, nie kolejny audyt ani roadmapa. Pracuj autonomicznie do przejścia wszystkich etapów 0–11; nie zatrzymuj się po MVP, częściowym rendererze, samym edytorze ani raporcie postępu.
+Zaimplementuj produkcyjnie plugin **Particle** w `H:\23kb\21kb-Engine`, end to end, aż do pełnego spełnienia Definition of Done z kanonicznego audytu. To jest zadanie implementacyjne, nie kolejny audyt ani roadmapa. Pracuj autonomicznie do przejścia wszystkich etapów 0–11; nie zatrzymuj się po MVP, częściowym rendererze, samym edytorze ani raporcie postępu.
 
 ## Konfiguracja wykonania
 
@@ -15,14 +15,14 @@ Zaimplementuj produkcyjnie plugin **Particli** w `H:\23kb\21kb-Engine`, end to e
 
 ### Orkiestrator
 
-Jesteś właścicielem celu, jakości, kolejności prac i kontekstu. Nie piszesz kodu produkcyjnego ani testów. Możesz wykonywać dowolne odczyty, niezależnie uruchamiać buildy/testy/benchmarki, analizować diff i aktualizować wyłącznie `docs/particli-implementation-ledger.md`. Twoje obowiązki:
+Jesteś właścicielem celu, jakości, kolejności prac i kontekstu. Nie piszesz kodu produkcyjnego ani testów. Możesz wykonywać dowolne odczyty, niezależnie uruchamiać buildy/testy/benchmarki, analizować diff i aktualizować wyłącznie `docs/particle-implementation-ledger.md`. Twoje obowiązki:
 
 1. Przeczytaj w całości, przed pierwszym zleceniem:
    - `AGENTS.md`;
-   - `docs/particli-kanku-audit-plan.md`;
+   - `docs/particle-kanku-audit-plan.md`;
    - aktualny `git status`, branch, konfigurację buildów i tylko kod konieczny do potwierdzenia pierwszego etapu.
 2. Traktuj audyt jako kanoniczną specyfikację: sekcje 5–10 definiują architekturę, asset, lifecycle, UI i manifest plików; sekcja 11 kolejność i bramy; sekcja 12 testy; sekcja 15 zamknięte decyzje; sekcja 16 finalne DoD. Nie zlecaj ponownego odkrywania tej architektury.
-3. Utwórz dokładnie jednego subagenta `particli_implementer`. Przekaż mu pełną historię i pozwól odziedziczyć model oraz reasoning effort orkiestratora; nie ustawiaj niezgodnego override modelu przy full-history fork. Przekaż mu cel, niezmienne reguły, odnośnik do całego audytu i pierwszy ograniczony pakiet pracy. Używaj tego samego subagenta przez wszystkie etapy, wznawiając go kolejnymi follow-up tasks zamiast spawnować zastępcę.
+3. Utwórz dokładnie jednego subagenta `particle_implementer`. Przekaż mu pełną historię i pozwól odziedziczyć model oraz reasoning effort orkiestratora; nie ustawiaj niezgodnego override modelu przy full-history fork. Przekaż mu cel, niezmienne reguły, odnośnik do całego audytu i pierwszy ograniczony pakiet pracy. Używaj tego samego subagenta przez wszystkie etapy, wznawiając go kolejnymi follow-up tasks zamiast spawnować zastępcę.
 4. Samodzielnie pisz każdy kolejny prompt dla implementera. Dopasuj go do aktualnego diffu i wyników, nie kopiuj bezmyślnie generycznego szablonu.
 5. Dziel duży etap na zamknięte pakiety, jeżeli poprawia to kontrolę ryzyka, lecz przyjmij etap dopiero po spełnieniu całej jego bramy. W danej chwili tylko jeden pakiet może być `in_progress`.
 6. Po każdym raporcie implementera niezależnie przeczytaj zmieniony kod, testy i diff oraz powtórz najmniejszą miarodajną weryfikację. Raport subagenta nie jest dowodem.
@@ -36,7 +36,7 @@ Jesteś jedynym autorem zmian kodu, testów, shaderów, contentu i wymaganej dok
 ## Niezmienne granice i uprawnienia
 
 - Repozytorium `E:\VerthEngineProd` jest bezwzględnie **read only**. Żaden agent nie może tam tworzyć, edytować, formatować, generować, budować, testować, naprawiać, commitować ani zmieniać żadnego pliku, metadanych lub worktree. Implementer w ogóle z niego nie korzysta; wystarczającym źródłem jest kanoniczny audyt. Tylko orkiestrator może wykonać odczyt konkretnego pliku, gdy wykaże realną lukę dowodową w audycie. Nigdy nie ustawiaj tego repozytorium jako katalogu roboczego komendy mutującej.
-- W `H:\23kb\21kb-Engine` wolno autonomicznie czytać i zmieniać pliki objęte Particli, uruchamiać niedestrukcyjne generowanie, najmniejsze buildy, testy, headless E2E, walidatory i benchmarki. Te działania nie wymagają pytań o zgodę.
+- W `H:\23kb\21kb-Engine` wolno autonomicznie czytać i zmieniać pliki objęte Particle, uruchamiać niedestrukcyjne generowanie, najmniejsze buildy, testy, headless E2E, walidatory i benchmarki. Te działania nie wymagają pytań o zgodę.
 - Przed pierwszą zmianą zapisz w ledgerze wyjściowy `git status`. Wszystkie wcześniejsze zmiany i untracked files są własnością użytkownika. Nie nadpisuj, nie usuwaj, nie formatuj i nie włączaj ich przypadkiem do zakresu.
 - Zakazane są: `git reset --hard`, checkout plików w celu kasowania zmian, clean, rebase, zmiana brancha, commit, push, PR, publikacja i zewnętrzne zapisy. Nie dodawaj zależności bez konieczności wynikającej ze specyfikacji i jawnej akceptacji orkiestratora.
 - Nie wykonuj pełnego buildu silnika jako domyślnej weryfikacji. Buduj zmienione pliki i najmniejszy właściwy target. Pełny build jest dopuszczalny wyłącznie przy finalnym release candidate, jeżeli focused targety nie dowodzą konkretnej zależności packaging/linkage; orkiestrator musi przed komendą zapisać tę niepokrytą zależność i uzasadnienie.
@@ -46,9 +46,9 @@ Jesteś jedynym autorem zmian kodu, testów, shaderów, contentu i wymaganej dok
 
 Nazwy obcych silników i referencyjnego systemu są dozwolone wyłącznie w istniejącym kanonicznym audycie i w tej sekcji kontraktu. Nie mogą pojawić się w żadnym nowym ani zmodyfikowanym artefakcie implementacji, w szczególności w nazwach plików, katalogów, klas, symboli, namespace'ów, makr, komentarzy, UI, tooltipach, komunikatach błędów, logach, assetach, shaderach, testach, goldenach, dokumentacji, ledgerze ani przyszłych commit messages. Dotyczy to między innymi tokenów `Verth`, `Unity`, `Unreal`, `Niagara`, `Godot`, `CryEngine` i `Kanku`, bez względu na wielkość liter.
 
-Używaj wyłącznie terminologii produktu: `21kb`, `Particli`, `ParticleEffect` oraz nazw domenowych wynikających z kodu. Nie kopiuj kodu, assetów, shaderów ani tekstów z repozytorium referencyjnego. Odtwórz wymagane zachowanie we własnej architekturze i z assetów o jednoznacznym prawie użycia.
+Używaj wyłącznie terminologii produktu: `21kb`, `Particle`, `ParticleEffect` oraz nazw domenowych wynikających z kodu. Nie kopiuj kodu, assetów, shaderów ani tekstów z repozytorium referencyjnego. Odtwórz wymagane zachowanie we własnej architekturze i z assetów o jednoznacznym prawie użycia.
 
-Przed przyjęciem każdego etapu orkiestrator sprawdza co najmniej dodane linie diffu i nowe pliki, z wyłączeniem dwóch istniejących dokumentów źródłowych `docs/particli-kanku-audit-plan.md` oraz `docs/particli-sol-xhigh-autonomous-prompt.md`. Dopasowanie zakazanego tokenu odrzuca etap. Nie „naprawiaj” historycznego audytu tylko po to, by przejść tę bramę.
+Przed przyjęciem każdego etapu orkiestrator sprawdza co najmniej dodane linie diffu i nowe pliki, z wyłączeniem dwóch istniejących dokumentów źródłowych `docs/particle-kanku-audit-plan.md` oraz `docs/particle-sol-xhigh-autonomous-prompt.md`. Dopasowanie zakazanego tokenu odrzuca etap. Nie „naprawiaj” historycznego audytu tylko po to, by przejść tę bramę.
 
 ## Zamrożony kontrakt techniczny
 
@@ -56,7 +56,7 @@ Implementacja ma realizować dokładnie architekturę audytu. W szczególności:
 
 - Rozwijaj istniejący `ParticleEffect` i `.kbvfx`; nie twórz równoległego systemu cząstek ani drugiego formatu.
 - Stabilne typy assetu, komponent, loader, publiczna fasada/backend ABI i retained render snapshot należą do `kb_engine`. Kod unloadowalnej DLL nie może być właścicielem obiektów przeżywających plugin.
-- Plugin ma ID `Rendering.Particli`, fazę `PreDefault` i jest jedynym jawnym providerem symulacji. Brak providera jest typed error, nigdy no-op ani freeze. Symulacja nie należy do systemu skryptowego.
+- Plugin ma ID `Rendering.Particle`, fazę `PreDefault` i jest jedynym jawnym providerem symulacji. Brak providera jest typed error, nigdy no-op ani freeze. Symulacja nie należy do systemu skryptowego.
 - Integruj `ParticleEffectComponent` z pełną ścieżką scene/prefab/reflection/override/variant/Inspector. Zachowaj migrację wersji i napraw tylko udowodnioną lukę optional component mask.
 - `.kbvfx` v2 ma strict, versioned, canonical i atomowy IO, kompletną walidację, migrację v1 bez zapisu podczas load, dependency discovery i realny bake/cache. Każde pole dostępne w authoringu musi mieć runtime executor/output albo nie może być widoczne.
 - CPU runtime działa deterministycznie w fixed step, używa niezależnych instancji, dense SoA, jawnych limitów, stabilnego RNG i typed commands/events. Po warmup hot path nie alokuje.
@@ -89,12 +89,12 @@ Nie rozpoczynaj etapu przed przyjęciem wszystkich jego poprzedników. Jedyny do
 
 ## Pętla orkiestracji i trwały kontekst
 
-Orkiestrator utrzymuje `docs/particli-implementation-ledger.md` jako zwięzłe źródło stanu. Ledger nie zastępuje audytu i zawiera tylko:
+Orkiestrator utrzymuje `docs/particle-implementation-ledger.md` jako zwięzłe źródło stanu. Ledger nie zastępuje audytu i zawiera tylko:
 
 - branch, bazowy commit i wyjściowy dirty state;
 - bieżący etap/pakiet i status;
 - przyjęte decyzje oraz mapowania nazw plików;
-- pliki zmienione przez Particli;
+- pliki zmienione przez Particle;
 - dokładne komendy walidacji, exit codes i istotne wyniki;
 - benchmark baseline/medianę/p95 i nazwę runnera;
 - odrzucone próby, otwarte defekty oraz następny warunek bramy.

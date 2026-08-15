@@ -1,4 +1,4 @@
-# Particli — audyt Kanku i kanoniczny plan implementacji
+# Particle — audyt Kanku i kanoniczny plan implementacji
 
 Status: plan implementacyjny, bez implementacji produkcyjnej  
 Repozytorium docelowe: H:\23kb\21kb-Engine, gałąź 1.0  
@@ -34,7 +34,7 @@ Nazwy nowych klas i plików w dalszej części są decyzją tego planu, a nie do
 
 ## 2. Wniosek kanoniczny
 
-Particli nie może być drugim, równoległym systemem cząstek. 21kb już ma:
+Particle nie może być drugim, równoległym systemem cząstek. 21kb już ma:
 
 - typ assetu ParticleEffect i rozszerzenie .kbvfx;
 - loader oraz atomowy zapis;
@@ -43,7 +43,7 @@ Particli nie może być drugim, równoległym systemem cząstek. 21kb już ma:
 - most SceneParticleRenderSynchronizer;
 - billboard quad i integrację z materiałem.
 
-Plan zachowuje ten publiczny kontrakt i ewoluuje .kbvfx z płaskiego v1 do wieloemiterowego v2. Stabilne typy assetu, komponentu, loadera, publicznego facade i neutralnego render snapshotu pozostają w kb_engine, ponieważ AssetManager przechowuje loader i payload dłużej niż może żyć przeładowywana DLL. Implementacja symulacji, kompilacja efektu i system sceny należą do pluginu Rendering.Particli. Renderer jest jedynym właścicielem uchwytów bgfx. Edytor dostaje testowalny Particli authoring core oraz cienki adapter do obecnego, zamkniętego systemu paneli.
+Plan zachowuje ten publiczny kontrakt i ewoluuje .kbvfx z płaskiego v1 do wieloemiterowego v2. Stabilne typy assetu, komponentu, loadera, publicznego facade i neutralnego render snapshotu pozostają w kb_engine, ponieważ AssetManager przechowuje loader i payload dłużej niż może żyć przeładowywana DLL. Implementacja symulacji, kompilacja efektu i system sceny należą do pluginu Rendering.Particle. Renderer jest jedynym właścicielem uchwytów bgfx. Edytor dostaje testowalny Particle authoring core oraz cienki adapter do obecnego, zamkniętego systemu paneli.
 
 Ta granica eliminuje cztery obecne problemy:
 
@@ -64,7 +64,7 @@ CPU pool jest strukturą SoA, ma pojemność 4096 i deterministyczny LCG. Kolejn
 
 Instancje komponentów współdzielą pule według effect/params, zatem odtwarzanie i czas nie są niezależne. Render produkcyjny jest billboardowym overlayem; material/texture, depth, AA i większość outputów są ignorowane. GPU path jest nieosiągalny: próg wynosi 10 000 przy maksymalnej puli 4096, pipeline nie jest instancjonowany, shader jest pusty, CPU pozostaje źródłem prawdy. Nie ma bezpiecznej synchronizacji simulation/render.
 
-W Particli należy zachować SoA, twarde limity, liczniki overflow, stabilne ID, deterministyczny seed i wspólny kernel preview/runtime. Nie wolno kopiować współdzielonego stanu playback, nieaktywnego GPU, niewykonywanych pól ani cichych fallbacków.
+W Particle należy zachować SoA, twarde limity, liczniki overflow, stabilne ID, deterministyczny seed i wspólny kernel preview/runtime. Nie wolno kopiować współdzielonego stanu playback, nieaktywnego GPU, niewykonywanych pól ani cichych fallbacków.
 
 ### 3.2. Pełne drzewo okien i powierzchni użytkownika
 
@@ -180,7 +180,7 @@ Inspector i Scene:
 - brak dropu .kanku na pole Inspectora;
 - Apply to Selection oraz drop w Scene tworzą/modyfikują komponent.
 
-Kanku nie ma timeline, curve editora, gradient editora, keyframe editora, multi-document tabs, Save As, lokalnego undo/redo, skrótów, emitter rename, card reorder, menu kontekstowych stosu, async loading ani event-binding UI. Particli nie może przedstawiać tych funkcji jako zgodności 1:1. Edycja curve/gradient będzie świadomym rozszerzeniem wymaganym przez już istniejące dane .kbvfx.
+Kanku nie ma timeline, curve editora, gradient editora, keyframe editora, multi-document tabs, Save As, lokalnego undo/redo, skrótów, emitter rename, card reorder, menu kontekstowych stosu, async loading ani event-binding UI. Particle nie może przedstawiać tych funkcji jako zgodności 1:1. Edycja curve/gradient będzie świadomym rozszerzeniem wymaganym przez już istniejące dane .kbvfx.
 
 ### 3.3. Defekty UX, których nie kopiujemy
 
@@ -231,25 +231,25 @@ DockPanelKind w sources/editor/include/kb/editor/docking/DockTypes.hpp jest zamk
 
 Właściwa minimalna integracja:
 
-- dodać DockPanelKind::ParticliEditor i panel ID 14 w center leaf;
+- dodać DockPanelKind::ParticleEditor i panel ID 14 w center leaf;
 - wpiąć paint/hit/input/present w istniejące routery;
-- trzymać dokument, command stack, walidację, recipes i preview session w kb_particli_editor_core;
+- trzymać dokument, command stack, walidację, recipes i preview session w kb_particle_editor_core;
 - nie tworzyć w tym zadaniu ogólnego systemu editor panels z DLL, ponieważ byłby to niezależny refactor hosta.
 
-Project Files ma jawne enumy create/context/double-click/icon. Drag state jest wspólny dla assetów i ma flagi typów. Inspector jest jawnie spięty z komponentami. Każde z tych miejsc wymaga cienkiego wpisu Particli, nie nowego równoległego asset browsera.
+Project Files ma jawne enumy create/context/double-click/icon. Drag state jest wspólny dla assetów i ma flagi typów. Inspector jest jawnie spięty z komponentami. Każde z tych miejsc wymaga cienkiego wpisu Particle, nie nowego równoległego asset browsera.
 
-## 5. Docelowa architektura Particli
+## 5. Docelowa architektura Particle
 
 ### 5.1. Targety i granice
 
 | Target | Zawartość | Dozwolone zależności |
 |---|---|---|
 | kb_engine | stabilny asset v2, IO/validation, komponent, publiczny facade/backend ABI, neutralny render snapshot | STL, istniejący engine |
-| kb_particli_core | compiler, CPU kernel, SoA pools, module executors, instancje, snapshot builder | kb_engine |
-| kb_particli_plugin | ParticliModule, ParticliSceneSystem, ParticliSimulationBackend; dynamiczny lub static zgodnie KB_BUILD_PROVIDER_MODULES_AS_DLL | kb_particli_core, kb_engine |
-| kb_particli_editor_core | document/commands, gateway, recipes, diagnostics, preview controller, curve/gradient models | kb_particli_core, kb_engine; bez Win32 |
+| kb_particle_core | compiler, CPU kernel, SoA pools, module executors, instancje, snapshot builder | kb_engine |
+| kb_particle_plugin | ParticleModule, ParticleSceneSystem, ParticleSimulationBackend; dynamiczny lub static zgodnie KB_BUILD_PROVIDER_MODULES_AS_DLL | kb_particle_core, kb_engine |
+| kb_particle_editor_core | document/commands, gateway, recipes, diagnostics, preview controller, curve/gradient models | kb_particle_core, kb_engine; bez Win32 |
 | kb_renderer | particle batch storage, GPU resources, submittery outputów, shaders | istniejący renderer i bgfx; bez zależności do pluginu |
-| kb_editor | wyłącznie adaptery dock/render/input/D&D/Inspector i host viewport | kb_particli_editor_core, kb_renderer |
+| kb_editor | wyłącznie adaptery dock/render/input/D&D/Inspector i host viewport | kb_particle_editor_core, kb_renderer |
 
 Nie wolno przekazywać przez granicę DLL std::type_index, raw pointerów do asset payloadów ani bgfx handles. Backend jest rejestrowany na Scene i musi zostać odłączony przed zniszczeniem modułu. Snapshot zawiera engine-owned typy wartościowe i kopie/spany do bufora o jasno określonej generacji.
 
@@ -267,31 +267,31 @@ Engine:
 - ParticleRenderSnapshot — value DTO opisujący gotowe zakresy cząstek, output/material i diagnostics; nie zawiera rendererowych typów ani DLL-owned deletera.
 - ParticleRenderCapabilities — core DTO publikowany przez renderer do snapshot channel: consumer epoch, output/shader/compute/indirect support i budgets. Plugin może jawnie odrzucić GpuVisualRequired bez zależności do kb_renderer.
 
-Particli core/runtime:
+Particle core/runtime:
 
-- ParticliEffectCompiler — waliduje source i buduje immutable CompiledParticleEffect: plan modułów, LUT krzywych/gradientów, limity, dependency IDs i pipeline keys.
-- ParticliSimulationKernel — jedyna implementacja fixed-step; wspólna dla preview i runtime.
-- ParticliParticlePool — prealokowany SoA z dense live range i swap-remove; positions, previousPositions, velocities, ages, lifetimes, colors, sizes, rotations, seeds i output data.
-- ParticliEffectInstance — niezależny playback state, seed stream, per-emitter emission accumulators, owner/follow policy, pools i compiled revision; nie ma drugiego fixed-time accumulatora.
-- ParticliModuleExecutorRegistry — jawna tabela type → executor; compiler odrzuca moduł bez executora.
+- ParticleEffectCompiler — waliduje source i buduje immutable CompiledParticleEffect: plan modułów, LUT krzywych/gradientów, limity, dependency IDs i pipeline keys.
+- ParticleSimulationKernel — jedyna implementacja fixed-step; wspólna dla preview i runtime.
+- ParticleParticlePool — prealokowany SoA z dense live range i swap-remove; positions, previousPositions, velocities, ages, lifetimes, colors, sizes, rotations, seeds i output data.
+- ParticleEffectInstance — niezależny playback state, seed stream, per-emitter emission accumulators, owner/follow policy, pools i compiled revision; nie ma drugiego fixed-time accumulatora.
+- ParticleModuleExecutorRegistry — jawna tabela type → executor; compiler odrzuca moduł bez executora.
 - executory Gravity, Wind, Drag, InitialVelocity, ColorOverLife, SizeOverLife, AlphaOverLife, CollisionPlane i SubEmitter — wykonują tylko własną fazę.
-- ParticliRenderSnapshotBuilder — wypełnia wolny core-owned snapshot slot i publikuje kompletną revision albo zgłasza backpressure.
-- ParticliSimulationBackend — zarządza instancjami sceny, asset generations, typed results, events i snapshotami.
-- ParticliSceneSystem — rejestruje backend, skanuje ParticleEffectComponent, wykonuje fixed update i wyrejestrowuje/cleanuje.
-- ParticliModule — provider Rendering.Particli, dodaje/usuwa ParticliSceneSystem per scene.
+- ParticleRenderSnapshotBuilder — wypełnia wolny core-owned snapshot slot i publikuje kompletną revision albo zgłasza backpressure.
+- ParticleSimulationBackend — zarządza instancjami sceny, asset generations, typed results, events i snapshotami.
+- ParticleSceneSystem — rejestruje backend, skanuje ParticleEffectComponent, wykonuje fixed update i wyrejestrowuje/cleanuje.
+- ParticleModule — provider Rendering.Particle, dodaje/usuwa ParticleSceneSystem per scene.
 
 Editor core:
 
-- ParticliEditorDocument — source asset, path/id, clean revision, selected emitter/module, dirty i pending-open.
-- ParticliEditorCommandStack — wszystkie mutacje jako undoable commands; save mark i history coalescing sliderów.
-- ParticliAssetGateway — load/migrate/save/publish/unload, conflict detection i aktualizacja session path.
-- ParticliEditorValidator — scala engine diagnostics z editor-only checks i nawigacją.
-- ParticliRecipeLibrary — ładuje read-only .kbvfx z Content/Particli/Recipes tym samym IO; filtruje metadata; append robi deep copy i świeże ID.
-- ParticliPreviewSession — izolowana scena/owner, ten sam compiler/kernel/backend i normalny renderer snapshot; deleguje czas do SceneRuntime fixed loop (1/60, max 8), bez własnego accumulatora, i zbiera HUD telemetry.
-- ParticliBakeService — rzeczywiście kompiluje immutable runtime data i zapisuje content-hash cache atomowo; nie zmienia source assetu.
-- ParticliCurveEditorModel i ParticliGradientEditorModel — editują typy kb::math, walidują key order/range i emitują commands.
-- ParticliPanelLayout — wylicza toolbar, preview, composer, sections, status i hit rects dla docked/floating.
-- ParticliPanelController — mapuje input, D&D i commands bez malowania.
+- ParticleEditorDocument — source asset, path/id, clean revision, selected emitter/module, dirty i pending-open.
+- ParticleEditorCommandStack — wszystkie mutacje jako undoable commands; save mark i history coalescing sliderów.
+- ParticleAssetGateway — load/migrate/save/publish/unload, conflict detection i aktualizacja session path.
+- ParticleEditorValidator — scala engine diagnostics z editor-only checks i nawigacją.
+- ParticleRecipeLibrary — ładuje read-only .kbvfx z Content/Particle/Recipes tym samym IO; filtruje metadata; append robi deep copy i świeże ID.
+- ParticlePreviewSession — izolowana scena/owner, ten sam compiler/kernel/backend i normalny renderer snapshot; deleguje czas do SceneRuntime fixed loop (1/60, max 8), bez własnego accumulatora, i zbiera HUD telemetry.
+- ParticleBakeService — rzeczywiście kompiluje immutable runtime data i zapisuje content-hash cache atomowo; nie zmienia source assetu.
+- ParticleCurveEditorModel i ParticleGradientEditorModel — editują typy kb::math, walidują key order/range i emitują commands.
+- ParticlePanelLayout — wylicza toolbar, preview, composer, sections, status i hit rects dla docked/floating.
+- ParticlePanelController — mapuje input, D&D i commands bez malowania.
 
 Renderer:
 
@@ -441,7 +441,7 @@ Backend policy:
 - GpuVisualPreferred — GPU tylko po capability + conformance; jawnie raportuje wybraną ścieżkę i fallback reason;
 - GpuVisualRequired — typed failure BackendUnavailable, nigdy cichy CPU fallback.
 
-Recipes nie mają drugiego formatu. Są normalnymi, read-only .kbvfx w sources/plugins/particli/content/Recipes i po buildzie Content/Particli/Recipes. Klik deep-copy emiterów do dokumentu; runtime nie zna recipe library.
+Recipes nie mają drugiego formatu. Są normalnymi, read-only .kbvfx w sources/plugins/particle/content/Recipes i po buildzie Content/Particle/Recipes. Klik deep-copy emiterów do dokumentu; runtime nie zna recipe library.
 
 ## 7. Przepływ danych i lifecycle
 
@@ -450,17 +450,17 @@ Recipes nie mają drugiego formatu. Są normalnymi, read-only .kbvfx w sources/p
     Project Files / Inspector / Scene drop
                     │
                     ▼
-        ParticliEditorDocument + CommandStack
+        ParticleEditorDocument + CommandStack
                     │ każda zaakceptowana mutacja
                     ├── ParticleEffectAssetValidator
                     ├── AssetManager::PublishRuntimeAsset
-                    └── ParticliEffectCompiler
+                    └── ParticleEffectCompiler
                                 │
                                 ▼
-                    ParticliPreviewSession
+                    ParticlePreviewSession
                                 │ fixed 1/60
                                 ▼
-                    ParticliSimulationKernel
+                    ParticleSimulationKernel
                                 │ complete back buffer
                                 ▼
                     ParticleRenderSnapshot generation N
@@ -484,10 +484,10 @@ Runtime:
         ParticleEffectAssetLoader + dependencies
                     │
                     ▼
-          ParticliEffectCompiler / cache
+          ParticleEffectCompiler / cache
                     │ immutable CompiledParticleEffect
                     ▼
-          ParticliSimulationBackend instance
+          ParticleSimulationBackend instance
                     │ fixed PostSimulation step
                     ▼
           core-owned ReadSnapshotPublisher<ParticleRenderSnapshot>
@@ -499,19 +499,19 @@ Scripts wywołują nadal Particles.Create/Play/Stop/SetSeed/SetParameterScalar/E
 
 ### 7.2. Kolejność systemów
 
-ParticliModule ma EngineModuleLoadingPhase::PreDefault. Dzięki temu backend jest podłączony przed modułem skryptów niezależnie od kolejności wpisów dynamicznych. ParticliSceneSystem:
+ParticleModule ma EngineModuleLoadingPhase::PreDefault. Dzięki temu backend jest podłączony przed modułem skryptów niezależnie od kolejności wpisów dynamicznych. ParticleSceneSystem:
 
 - w OnFrameStart rejestruje bieżące asset generations i wykonuje pierwszy reconcile komponentów;
 - RequiresFixedStep() = true;
 - FixedUpdatePhase() = SceneFixedUpdatePhase::PostSimulation, gdzie ponawia tani revision/reconcile check po komendach strukturalnych PreSimulation, drenuje kolejkę i symuluje na bieżącym transformie po physics write-back;
 - UpdatePhase() = PostFixed wyłącznie publikuje tombstone/diagnostics przy klatce bez fixed step i finalizuje telemetrykę, bez drugiej symulacji.
 
-Script FixedTick działa w PreSimulation i może Emit/Play/Stop; Particli konsumuje te polecenia w PostSimulation tego samego substepu. ScriptRuntimeSceneSystem usuwa AdvanceParticleSystems z BeginFrame/ExecuteFrame. Drain OnParticleSystemFinished przenosi do ExecuteVariableFrame, obok pending collision events, przed Tick — zdarzenie utworzone w PostSimulation jest więc widoczne skryptowi w tym samym render frame. Bez ScriptModule Particli nadal symuluje.
+Script FixedTick działa w PreSimulation i może Emit/Play/Stop; Particle konsumuje te polecenia w PostSimulation tego samego substepu. ScriptRuntimeSceneSystem usuwa AdvanceParticleSystems z BeginFrame/ExecuteFrame. Drain OnParticleSystemFinished przenosi do ExecuteVariableFrame, obok pending collision events, przed Tick — zdarzenie utworzone w PostSimulation jest więc widoczne skryptowi w tym samym render frame. Bez ScriptModule Particle nadal symuluje.
 
 ### 7.3. Lifecycle instancji
 
-1. Module load: brak zasobów sceny i GPU; rejestruje wyłącznie metadata Rendering.Particli.
-2. Scene attach: ParticliModule dodaje ParticliSceneSystem i zapamiętuje SceneSystemHandle.
+1. Module load: brak zasobów sceny i GPU; rejestruje wyłącznie metadata Rendering.Particle.
+2. Scene attach: ParticleModule dodaje ParticleSceneSystem i zapamiętuje SceneSystemHandle.
 3. System OnCreate: tworzy backend/pools, rejestruje go przez ParticlePlayback, skanuje istniejące komponenty.
 4. Component reconcile: Enabled + AutoPlay tworzy niezależną instancję; effectAssetId 0 lub invalid daje jawny diagnostic.
 5. Create/Play: ładuje i kompiluje asset, alokuje per-emitter pule do validated caps, wyprowadza seed z component seed/effect seed/instance/emitter.
@@ -541,13 +541,13 @@ Renderer odsyła lastConsumedFixedStep w capability state. Najnowszy snapshot za
 
 Determinism oznacza identyczny wynik dla tego samego asset hash, seed, command stream, fixed dt i wspieranego build/config. Bitowa identyczność float między różnymi ISA/kompilatorami nie jest obiecywana bez osobnego strict-FP gate. CPU jest ścieżką referencyjną dla conformance GPU.
 
-## 8. Kanoniczny layout i mapowanie UI Kanku → Particli
+## 8. Kanoniczny layout i mapowanie UI Kanku → Particle
 
-### 8.1. Particli Editor
+### 8.1. Particle Editor
 
-Particli Editor jest jednym closable panelem dokumentowym w center leaf. Otwiera jeden .kbvfx naraz, tak jak Kanku, ale hostowa session path jest aktualizowana po pierwszym Save. Default layout zachowuje 2/3 preview i 1/3 scroll composer. Nie dodaje wewnętrznego splittera w etapie parity; resizing odbywa się przez istniejący docking/floating/splittery hosta. Minimalny wspierany rozmiar panelu to 900×560; poniżej composer pozostaje 300 px, preview się kurczy, a toolbar przechodzi do overflow menu bez utraty akcji.
+Particle Editor jest jednym closable panelem dokumentowym w center leaf. Otwiera jeden .kbvfx naraz, tak jak Kanku, ale hostowa session path jest aktualizowana po pierwszym Save. Default layout zachowuje 2/3 preview i 1/3 scroll composer. Nie dodaje wewnętrznego splittera w etapie parity; resizing odbywa się przez istniejący docking/floating/splittery hosta. Minimalny wspierany rozmiar panelu to 900×560; poniżej composer pozostaje 300 px, preview się kurczy, a toolbar przechodzi do overflow menu bez utraty akcji.
 
-    Particli Editor
+    Particle Editor
     ├── Toolbar
     ├── body
     │   ├── Preview
@@ -567,18 +567,18 @@ Particli Editor jest jednym closable panelem dokumentowym w center leaf. Otwiera
     ├── Curve/Gradient drawer, tylko przy edycji właściwego modułu
     └── Status Bar
 
-Events oraz Curve/Gradient drawer są jawnie oznaczonym rozszerzeniem Particli. Kanku ma dane dla eventów/krzywych, ale nie ma ich edytorów.
+Events oraz Curve/Gradient drawer są jawnie oznaczonym rozszerzeniem Particle. Kanku ma dane dla eventów/krzywych, ale nie ma ich edytorów.
 
 ### 8.2. Toolbar i dokument
 
 | Kanku reference | 21kb target | Sposób implementacji | Pliki/klasy | Test akceptacyjny |
 |---|---|---|---|---|
-| Play/Pause, Restart, Stop; KankuEffectEditorPanel.cpp:519-538 | Particli toolbar | Te same ikony/kolejność; sterują wyłącznie PreviewSession | ParticliPanelRenderer, ParticliPanelController, ParticliPreviewSession | sekwencja Play→Pause→Restart→Stop daje dokładne stany, Restart odtwarza hash seed |
-| Save, Revert, Validate | dokument .kbvfx | Save atomowy i blokowany przez errors; Revert przeładowuje oraz resetuje preview/selection; Validate nie mutuje | ParticliAssetGateway, ParticliEditorValidator | fault-injection Save nie narusza starego pliku; Revert przywraca source i preview |
-| Bake jest flagą | realny compile/cache | compiler + dependency/output capability gate + content-hash cache | ParticliBakeService, ParticliEffectCompiler | po Bake istnieje poprawny cache; zmiana source unieważnia hash; zły output blokuje Bake |
-| Apply to Selection raportuje fałszywy sukces | undoable component mutation | disabled bez selection; wynik Added/Updated/NoSelection/Rejected; jedna transakcja dla multi-selection | EditorSceneParticliAssetActions | undo przywraca wszystkie poprzednie komponenty, status odpowiada wynikowi |
-| nazwa/GUID/dirty | document metadata | AssetId/path, emitter count, dirty revision; dirty obejmuje wszystkie commands | ParticliEditorDocument | każdy typ mutacji ustawia dirty, undo do save point je czyści |
-| inline dirty-open warning | kompletna loss protection | modal/inline policy wspólna dla Open, Close, Revert, shutdown i project switch: Save/Discard/Cancel | ParticliDocumentCloseGuard, host close router | żadna ścieżka zamknięcia nie traci niezapisanej zmiany bez wyboru |
+| Play/Pause, Restart, Stop; KankuEffectEditorPanel.cpp:519-538 | Particle toolbar | Te same ikony/kolejność; sterują wyłącznie PreviewSession | ParticlePanelRenderer, ParticlePanelController, ParticlePreviewSession | sekwencja Play→Pause→Restart→Stop daje dokładne stany, Restart odtwarza hash seed |
+| Save, Revert, Validate | dokument .kbvfx | Save atomowy i blokowany przez errors; Revert przeładowuje oraz resetuje preview/selection; Validate nie mutuje | ParticleAssetGateway, ParticleEditorValidator | fault-injection Save nie narusza starego pliku; Revert przywraca source i preview |
+| Bake jest flagą | realny compile/cache | compiler + dependency/output capability gate + content-hash cache | ParticleBakeService, ParticleEffectCompiler | po Bake istnieje poprawny cache; zmiana source unieważnia hash; zły output blokuje Bake |
+| Apply to Selection raportuje fałszywy sukces | undoable component mutation | disabled bez selection; wynik Added/Updated/NoSelection/Rejected; jedna transakcja dla multi-selection | EditorSceneParticleAssetActions | undo przywraca wszystkie poprzednie komponenty, status odpowiada wynikowi |
+| nazwa/GUID/dirty | document metadata | AssetId/path, emitter count, dirty revision; dirty obejmuje wszystkie commands | ParticleEditorDocument | każdy typ mutacji ustawia dirty, undo do save point je czyści |
+| inline dirty-open warning | kompletna loss protection | modal/inline policy wspólna dla Open, Close, Revert, shutdown i project switch: Save/Discard/Cancel | ParticleDocumentCloseGuard, host close router | żadna ścieżka zamknięcia nie traci niezapisanej zmiany bez wyboru |
 
 Ctrl+S, Ctrl+Z, Ctrl+Y, Space i R są podpięte przez hostowy command routing, choć Kanku ich nie miał. Nie zmieniają wizualnej hierarchii toolbara.
 
@@ -586,11 +586,11 @@ Ctrl+S, Ctrl+Z, Ctrl+Y, Space i R są podpięte przez hostowy command routing, c
 
 | Kanku reference | 21kb target | Sposób implementacji | Pliki/klasy | Test akceptacyjny |
 |---|---|---|---|---|
-| GPU Preview 2/3, 768² offscreen | EditorSceneBgfxViewport surface | izolowana preview Scene z unique viewport key dla docked/floating; normalny Renderer path | ParticliPreviewSession, ParticliPanelRenderer, EditorApplicationMessageLoop | panel docked i floating prezentuje ten sam frame bez kolizji viewport key |
-| Playing/time/alive/FPS | HUD | dodatkowo backend CPU/GPU, dropped, warnings; semantyczne kolory zachowane | ParticliPreviewTelemetry | wartości odpowiadają backend counters w 600 krokach |
-| variable dt clamp 0.1 | SceneRuntime fixed 1/60 | preview przekazuje wall dt do SceneRuntime; max 8 substeps/frame i dropped-time warning, bez drugiego accumulatora | ParticliPreviewSession | różne render dt dają ten sam hash po równej liczbie fixed steps |
-| LMB orbit, wheel zoom | preview camera | azymut 45°, elewacja 20°, zoom 1; clamp Kanku; input tylko w preview rect | ParticliPreviewCameraController | drag/wheel zmienia tylko kamerę Particli i respektuje clamps |
-| czarny brak renderera | jawne stany | Loading asset/compile, Renderer unavailable, Compile error, Empty, Ready | ParticliPanelRenderer | screenshot każdego stanu; error zawiera actionable diagnostic |
+| GPU Preview 2/3, 768² offscreen | EditorSceneBgfxViewport surface | izolowana preview Scene z unique viewport key dla docked/floating; normalny Renderer path | ParticlePreviewSession, ParticlePanelRenderer, EditorApplicationMessageLoop | panel docked i floating prezentuje ten sam frame bez kolizji viewport key |
+| Playing/time/alive/FPS | HUD | dodatkowo backend CPU/GPU, dropped, warnings; semantyczne kolory zachowane | ParticlePreviewTelemetry | wartości odpowiadają backend counters w 600 krokach |
+| variable dt clamp 0.1 | SceneRuntime fixed 1/60 | preview przekazuje wall dt do SceneRuntime; max 8 substeps/frame i dropped-time warning, bez drugiego accumulatora | ParticlePreviewSession | różne render dt dają ten sam hash po równej liczbie fixed steps |
+| LMB orbit, wheel zoom | preview camera | azymut 45°, elewacja 20°, zoom 1; clamp Kanku; input tylko w preview rect | ParticlePreviewCameraController | drag/wheel zmienia tylko kamerę Particle i respektuje clamps |
+| czarny brak renderera | jawne stany | Loading asset/compile, Renderer unavailable, Compile error, Empty, Ready | ParticlePanelRenderer | screenshot każdego stanu; error zawiera actionable diagnostic |
 
 Preview renderuje wszystkie emitery recipe/effect. Nie ma prywatnej uproszczonej mini-symulacji.
 
@@ -598,12 +598,12 @@ Preview renderuje wszystkie emitery recipe/effect. Nie ma prywatnej uproszczonej
 
 | Kanku reference | 21kb target | Sposób implementacji | Pliki/klasy | Test akceptacyjny |
 |---|---|---|---|---|
-| row: name, off/max, eye, up/down/remove | emitter row | identyczne elementy; double-click nazwy daje inline rename; buttons zachowane | ParticliEmitterListModel, ParticliPanelRenderer/Controller | selection, toggle, rename, reorder i remove przechodzą save/reload |
-| brak emitter D&D | rozszerzenie funkcjonalne | grip + insertion line; up/down pozostają dla parity i klawiatury | ParticliEmitterDragController | drop zmienia source order, undo go odwraca, invalid self-drop no-op |
-| + Add Emitter | typed default | default zgodny wizualnie z Kanku, ale pełny v2 i świeże stable ID | ParticliEditorCommands | 8 emitter limit blokuje dziewiąty z diagnostic |
-| ustawienia scalar/color | typed property rows | zachowane etykiety i zakresy Kanku jako domyślne UI ranges; hard validation niezależne | ParticliEmitterSettingsModel | min/max, NaN paste i lifetime inversion są poprawnie obsłużone |
-| Fade/Size/Color jako scalars | moduły z curve/gradient | proste wartości mapują do 2-key curves; Advanced otwiera drawer | ParticliCurveEditorModel, ParticliGradientEditorModel | keys są sortowane, endpoints zachowane i runtime evaluation zgodna z EngineMath |
-| Prewarm authored, runtime ignored | prawdziwy prewarm | compiler wylicza bounded step count, preview/runtime ten sam wynik | ParticliSimulationKernel | prewarm hash = ręczne N kroków, budget overflow jawny |
+| row: name, off/max, eye, up/down/remove | emitter row | identyczne elementy; double-click nazwy daje inline rename; buttons zachowane | ParticleEmitterListModel, ParticlePanelRenderer/Controller | selection, toggle, rename, reorder i remove przechodzą save/reload |
+| brak emitter D&D | rozszerzenie funkcjonalne | grip + insertion line; up/down pozostają dla parity i klawiatury | ParticleEmitterDragController | drop zmienia source order, undo go odwraca, invalid self-drop no-op |
+| + Add Emitter | typed default | default zgodny wizualnie z Kanku, ale pełny v2 i świeże stable ID | ParticleEditorCommands | 8 emitter limit blokuje dziewiąty z diagnostic |
+| ustawienia scalar/color | typed property rows | zachowane etykiety i zakresy Kanku jako domyślne UI ranges; hard validation niezależne | ParticleEmitterSettingsModel | min/max, NaN paste i lifetime inversion są poprawnie obsłużone |
+| Fade/Size/Color jako scalars | moduły z curve/gradient | proste wartości mapują do 2-key curves; Advanced otwiera drawer | ParticleCurveEditorModel, ParticleGradientEditorModel | keys są sortowane, endpoints zachowane i runtime evaluation zgodna z EngineMath |
+| Prewarm authored, runtime ignored | prawdziwy prewarm | compiler wylicza bounded step count, preview/runtime ten sam wynik | ParticleSimulationKernel | prewarm hash = ręczne N kroków, budget overflow jawny |
 
 Zakresy UI Kanku pozostają presetami sliderów. Wartość wpisana tekstowo może wyjść poza soft range tylko do hard range asset validatora.
 
@@ -611,11 +611,11 @@ Zakresy UI Kanku pozostają presetami sliderów. Wartość wpisana tekstowo moż
 
 | Kanku reference | 21kb target | Sposób implementacji | Pliki/klasy | Test akceptacyjny |
 |---|---|---|---|---|
-| search + 12 category chips | Particli Recipe Library | te same chips i 3-column grid; rzeczywiste kategorie zapisane w recipe .kbvfx | ParticliRecipeLibrary, ParticliRecipeBrowserModel | każdy recipe pojawia się w oczekiwanej kategorii, filter empty state poprawny |
-| 15 built-in recipes | 15 read-only .kbvfx | osobne normalne assety w Content/Particli/Recipes, walidowane tym samym loaderem | content/Recipes/*.kbvfx | test ładuje/kompiluje wszystkie 15 bez warnings |
-| tile preview tylko emitter 0 | pełny tile preview | thumbnail job renderuje wszystkie emitery przez PreviewSession z ograniczonym budgetem | ParticliRecipeThumbnailService | multi-emitter golden pokazuje oba emitery |
+| search + 12 category chips | Particle Recipe Library | te same chips i 3-column grid; rzeczywiste kategorie zapisane w recipe .kbvfx | ParticleRecipeLibrary, ParticleRecipeBrowserModel | każdy recipe pojawia się w oczekiwanej kategorii, filter empty state poprawny |
+| 15 built-in recipes | 15 read-only .kbvfx | osobne normalne assety w Content/Particle/Recipes, walidowane tym samym loaderem | content/Recipes/*.kbvfx | test ładuje/kompiluje wszystkie 15 bez warnings |
+| tile preview tylko emitter 0 | pełny tile preview | thumbnail job renderuje wszystkie emitery przez PreviewSession z ograniczonym budgetem | ParticleRecipeThumbnailService | multi-emitter golden pokazuje oba emitery |
 | click append | undoable deep copy | świeże emitter/module IDs, selection last, jedna komenda | AppendRecipeCommand | append i undo są atomowe; source recipe bez zmian |
-| drag recipe do Scene | undoable entity create | drag payload zawiera recipe asset; drop tworzy nowy project .kbvfx z kopią recipe, potem entity+component; cancel usuwa niezapisany candidate | EditorPointerDragState, EditorPointerDropHandler, EditorSceneParticliAssetActions | drop/cancel/undo nie zostawia orphan asset/entity |
+| drag recipe do Scene | undoable entity create | drag payload zawiera recipe asset; drop tworzy nowy project .kbvfx z kopią recipe, potem entity+component; cancel usuwa niezapisany candidate | EditorPointerDragState, EditorPointerDropHandler, EditorSceneParticleAssetActions | drop/cancel/undo nie zostawia orphan asset/entity |
 
 Ostatni punkt świadomie różni się od Kanku in-memory recipe GUID: scena 21kb zawsze wskazuje trwały ParticleEffect asset.
 
@@ -623,24 +623,24 @@ Ostatni punkt świadomie różni się od Kanku in-memory recipe GUID: scena 21kb
 
 | Kanku reference | 21kb target | Sposób implementacji | Pliki/klasy | Test akceptacyjny |
 |---|---|---|---|---|
-| applied cards, enable/remove/body | module stack | ten sam card chrome; body generowany z typed payload schema | ParticliModuleStackModel, ParticliPanelRenderer | każda wspierana karta add/edit/toggle/remove zapisuje i kompiluje |
-| library chips 3/row | module library | tylko executory z registry; outputy są wyłącznie w Output, nie dublowane jako karty | ParticliModuleDefinitionCatalog | nie da się dodać niewykonywanego typu |
-| martwy card drag | funkcjonalny insert/reorder | library drag pokazuje insertion line; applied card drag zmienia order; click-add pozostaje | ParticliModuleDragController | drag insert/reorder, escape cancel i undo test |
-| tylko Float działa | typed controls | Vec3, Color, asset ref, Curve, Gradient, enum, bool mają właściwe edytory | ParticliModulePropertyModel | round-trip każdej variant payload |
+| applied cards, enable/remove/body | module stack | ten sam card chrome; body generowany z typed payload schema | ParticleModuleStackModel, ParticlePanelRenderer | każda wspierana karta add/edit/toggle/remove zapisuje i kompiluje |
+| library chips 3/row | module library | tylko executory z registry; outputy są wyłącznie w Output, nie dublowane jako karty | ParticleModuleDefinitionCatalog | nie da się dodać niewykonywanego typu |
+| martwy card drag | funkcjonalny insert/reorder | library drag pokazuje insertion line; applied card drag zmienia order; click-add pozostaje | ParticleModuleDragController | drag insert/reorder, escape cancel i undo test |
+| tylko Float działa | typed controls | Vec3, Color, asset ref, Curve, Gradient, enum, bool mają właściwe edytory | ParticleModulePropertyModel | round-trip każdej variant payload |
 | duplicate card diagnostics | compiler rule | repeatability zależy od typu: singleton odrzucony, additive może wystąpić wiele razy | ParticleEffectAssetValidator | duplicate Gravity odrzucony; dwa dozwolone modifiers zachowują source order |
 
-Kanku nie ma lokalnego context menu. Particli parity również nie wymaga menu na kartach; wszystkie akcje są widoczne. Ogólne Project Files context menu pozostaje pełne.
+Kanku nie ma lokalnego context menu. Particle parity również nie wymaga menu na kartach; wszystkie akcje są widoczne. Ogólne Project Files context menu pozostaje pełne.
 
 ### 8.7. Output, curves, gradients i events
 
 | Kanku reference | 21kb target | Sposób implementacji | Pliki/klasy | Test akceptacyjny |
 |---|---|---|---|---|
-| pole Material akceptujące Texture | Material + opcjonalny Atlas | dwa type-correct asset fields; picker, reveal, clear i D&D; invalid type rejected | EditorMaterialAssetPickerDialog, ParticliOutputModel, drop policy | material/texture drop trafiają wyłącznie w poprawne sloty |
-| Blend i Sort segmented controls | pełne enumy v2 | zachować kolejność/labels; zmiana aktualizuje pipeline key | ParticliOutputModel, ParticleEffectCompiler | save/load i render pipeline selection test każdego enumu |
-| brak Output Type/depth/AA | rozszerzenie v2 | Output Type, alignment, depth test/write, soft particles, AA; pola warunkowe | ParticliOutputModel | zmiana typu pokazuje właściwe pola; unsupported capability blokuje Bake |
-| brak curve UI | Curve drawer | plot, add/remove/move key, tangent mode, numeric fields, reset; command coalescing | ParticliCurveEditorModel/Renderer/HitTester | geometry/input tests plus Eval golden |
-| tylko start color | Gradient drawer + color picker | stop add/remove/move, RGBA/HSV, numeric position; uogólniony EditorColorPickerDialog | ParticliGradientEditorModel, EditorColorPickerDialog | gradient round-trip, cancel nie mutuje, alpha zachowana |
-| event data bez UI | Events section | source trigger, target emitter/effect picker, count/depth/budget, reorder/remove | ParticliEventBindingModel | cycle/depth validation i runtime birth/death/collision event tests |
+| pole Material akceptujące Texture | Material + opcjonalny Atlas | dwa type-correct asset fields; picker, reveal, clear i D&D; invalid type rejected | EditorMaterialAssetPickerDialog, ParticleOutputModel, drop policy | material/texture drop trafiają wyłącznie w poprawne sloty |
+| Blend i Sort segmented controls | pełne enumy v2 | zachować kolejność/labels; zmiana aktualizuje pipeline key | ParticleOutputModel, ParticleEffectCompiler | save/load i render pipeline selection test każdego enumu |
+| brak Output Type/depth/AA | rozszerzenie v2 | Output Type, alignment, depth test/write, soft particles, AA; pola warunkowe | ParticleOutputModel | zmiana typu pokazuje właściwe pola; unsupported capability blokuje Bake |
+| brak curve UI | Curve drawer | plot, add/remove/move key, tangent mode, numeric fields, reset; command coalescing | ParticleCurveEditorModel/Renderer/HitTester | geometry/input tests plus Eval golden |
+| tylko start color | Gradient drawer + color picker | stop add/remove/move, RGBA/HSV, numeric position; uogólniony EditorColorPickerDialog | ParticleGradientEditorModel, EditorColorPickerDialog | gradient round-trip, cancel nie mutuje, alpha zachowana |
+| event data bez UI | Events section | source trigger, target emitter/effect picker, count/depth/budget, reorder/remove | ParticleEventBindingModel | cycle/depth validation i runtime birth/death/collision event tests |
 
 Nie powstaje timeline, ponieważ Kanku go nie ma, a v2 nie potrzebuje globalnej ścieżki czasu. Duration, bursts, curves i gradients są edytowane w swoich właściwościach.
 
@@ -648,10 +648,10 @@ Nie powstaje timeline, ponieważ Kanku go nie ma, a v2 nie potrzebuje globalnej 
 
 | Kanku reference | 21kb target | Sposób implementacji | Pliki/klasy | Test akceptacyjny |
 |---|---|---|---|---|
-| lista GUID/material deps | typed dependency tree | effect → emitter → output/module → asset; Missing i wrong-type jawne; reveal | ParticliDependencyModel | tree odpowiada DiscoverDependencies |
+| lista GUID/material deps | typed dependency tree | effect → emitter → output/module → asset; Missing i wrong-type jawne; reveal | ParticleDependencyModel | tree odpowiada DiscoverDependencies |
 | Find References zawsze zero | prawdziwe reference query | przeszukuje scene/prefab component dependencies i otwarte working copies | EditorParticleEffectReferenceFinder | zapisany i niesaved reference są odnalezione |
-| clickable diagnostics | stable property path | klik wybiera emitter/module i scroll/focusuje field; header faktycznie collapsible | ParticliEditorValidator, ParticliPanelController | każda diagnostic path nawiguje do właściwej kontrolki |
-| status bar chips | pełna telemetria | errors/warnings/valid, alive, emitters, backend, overflow/dropped, command result, dirty | ParticliPreviewTelemetry | kolory i tekst wynikają z aktualnego modelu, nie starej flagi |
+| clickable diagnostics | stable property path | klik wybiera emitter/module i scroll/focusuje field; header faktycznie collapsible | ParticleEditorValidator, ParticlePanelController | każda diagnostic path nawiguje do właściwej kontrolki |
+| status bar chips | pełna telemetria | errors/warnings/valid, alive, emitters, backend, overflow/dropped, command result, dirty | ParticlePreviewTelemetry | kolory i tekst wynikają z aktualnego modelu, nie starej flagi |
 
 ### 8.9. Project Files, Inspector, Scene i docking
 
@@ -660,12 +660,12 @@ Nie powstaje timeline, ponieważ Kanku go nie ma, a v2 nie potrzebuje globalnej 
 | [+] Kanku Effect | New Particle Effect | tworzy minimalny, poprawny v2, select + inline rename; double-click otwiera/focusuje | EditorAssetBrowserTypes, ContextCommandExecutor, DoubleClickHandler | unique create, rename, open i reload |
 | generic context menu | istniejący Project Files | Open, Rename, Cut/Copy/Paste, Duplicate, Delete, Find References; duplicate nadaje nowe effect/emitter/module IDs | EditorAssetBrowserContextCommandExecutor | duplicate nie koliduje ID; delete dependency warning |
 | Kanku icon | HeroIconKind::Bolt | mapowanie ParticleEffect → Bolt, bez nowego assetu ikony | ProjectFilesAssetIconResolver | resolver test zwraca Bolt dla ParticleEffect |
-| .kanku drag do Scene | .kbvfx drag | ghost/ground placement, entity + ParticleEffectComponent w jednej undo transaction | EditorPointerDragSourceResolver, EditorPointerDropHandler, EditorSceneParticliAssetActions | drop, cancel, undo/redo i invalid asset |
+| .kanku drag do Scene | .kbvfx drag | ghost/ground placement, entity + ParticleEffectComponent w jednej undo transaction | EditorPointerDragSourceResolver, EditorPointerDropHandler, EditorSceneParticleAssetActions | drop, cancel, undo/redo i invalid asset |
 | Inspector dropdown/reveal | picker + D&D + reveal | None/search/Missing; EditorParticleEffectAssetPickerDialog używa istniejącego generic AssetPickerWindow; drop .kbvfx działa | InspectorParticleEffectComponentModel, EditorParticleEffectAssetPickerDialog | picker, missing, reveal i D&D |
 | komponent fields | ParticleEffectComponent | Effect, Enabled, Auto Play, Rate, Max, Seed, Follow oraz Owner Death policy | InspectorParticleEffectComponentModel/Interaction | edit → scene save/load → prefab instantiate → runtime |
-| host docking/floating | DockPanelKind::ParticliEditor | panel ID 14 w center; istniejący reorder/detach/redock/split resize/session persistence | DockTypes, DefaultDockWorkspace, PanelContentRenderer, message loop | layout i open asset wracają po restart; viewport działa floating |
+| host docking/floating | DockPanelKind::ParticleEditor | panel ID 14 w center; istniejący reorder/detach/redock/split resize/session persistence | DockTypes, DefaultDockWorkspace, PanelContentRenderer, message loop | layout i open asset wracają po restart; viewport działa floating |
 
-Stany Particli:
+Stany Particle:
 
 - Empty document: no effect;
 - Empty effect: no emitters, disabled Play/Bake, actionable Add/Recipe;
@@ -684,15 +684,15 @@ Oznaczenia: M — modyfikacja istniejącego pliku, N — nowy plik. Lista jest o
 
 | Plik | Zmiana |
 |---|---|
-| M CMakeLists.txt | add_subdirectory(sources/plugins/particli particli), dependencies/paths dla engine tests; Particli przed renderer/editor |
-| N sources/plugins/particli/CMakeLists.txt | kb_particli_core, kb_particli_plugin, kb_particli_editor_core oraz focused tests/benchmarks; STATIC/SHARED według KB_BUILD_PROVIDER_MODULES_AS_DLL |
+| M CMakeLists.txt | add_subdirectory(sources/plugins/particle particle), dependencies/paths dla engine tests; Particle przed renderer/editor |
+| N sources/plugins/particle/CMakeLists.txt | kb_particle_core, kb_particle_plugin, kb_particle_editor_core oraz focused tests/benchmarks; STATIC/SHARED według KB_BUILD_PROVIDER_MODULES_AS_DLL |
 | M sources/editor/CMakeLists.txt | link editor core, plugin dependency/path, adapter sources, recipe content staging i focused editor test |
-| M sources/editor/src/scene/EditorPluginCatalog.cpp | descriptor Rendering.Particli, category Rendering/VFX, binary path |
-| M sources/editor/src/project/EditorProjectBootstrap.cpp | Rendering.Particli enabled w nowych projektach |
-| M sources/editor/src/private/project/EditorProjectPaths.hpp i src/project/EditorProjectPaths.cpp | SavedRoot()/Saved/ParticliCache jako cache pochodny, nigdy Content |
+| M sources/editor/src/scene/EditorPluginCatalog.cpp | descriptor Rendering.Particle, category Rendering/VFX, binary path |
+| M sources/editor/src/project/EditorProjectBootstrap.cpp | Rendering.Particle enabled w nowych projektach |
+| M sources/editor/src/private/project/EditorProjectPaths.hpp i src/project/EditorProjectPaths.cpp | SavedRoot()/Saved/ParticleCache jako cache pochodny, nigdy Content |
 | M samples/standalone_player/CMakeLists.txt i main.cpp | plugin path/dependency w dystrybucji/test harness; bez hardcoded static simulation |
 
-Istniejące projekty nie są cicho mutowane. Editor po discovery .kbvfx bez włączonego providera pokazuje jednorazową migrację Add Rendering.Particli / Cancel. CLI i standalone validation kończą start jasnym błędem z komendą naprawczą. Dopiero zaakceptowana migracja zapisuje ProjectDescriptor.
+Istniejące projekty nie są cicho mutowane. Editor po discovery .kbvfx bez włączonego providera pokazuje jednorazową migrację Add Rendering.Particle / Cancel. CLI i standalone validation kończą start jasnym błędem z komendą naprawczą. Dopiero zaakceptowana migracja zapisuje ProjectDescriptor.
 
 ### 9.2. Engine: asset, backend ABI i snapshot
 
@@ -724,7 +724,7 @@ Istniejące projekty nie są cicho mutowane. Editor po discovery .kbvfx bez wł�
 | M sources/engine/src/script/ScriptRuntimeSceneSystem.cpp | bez Advance; drain finished w PostFixed przed Tick |
 | M sources/engine/src/script/ScriptParticleSystemApi.cpp | typed errors przy zachowaniu nazw Particles.* |
 | M sources/engine/src/scene/Scene.cpp | loader nadal core-owned; lifecycle invariant tests |
-| M sources/engine/CMakeLists.txt | pliki oraz focused kb_particli_asset_tests |
+| M sources/engine/CMakeLists.txt | pliki oraz focused kb_particle_asset_tests |
 
 ### 9.3. Engine: ParticleEffectComponent, scene i prefab
 
@@ -742,7 +742,7 @@ Nowy komponent:
         bool restartOnActivate = true;
     };
 
-Musi pozostać trivially copyable i przechowywać tylko authoring state; runtime handle należy do ParticliSceneSystem.
+Musi pozostać trivially copyable i przechowywać tylko authoring state; runtime handle należy do ParticleSceneSystem.
 
 Nowe pliki:
 
@@ -770,22 +770,22 @@ Obowiązkowe istniejące punkty integracji:
 
 HistoryRibbonComponent jest checklistowym analogiem ścieżki prefab, AudioSourceComponent analogiem edytowalnego asset-reference component. Akceptacja etapu komponentu ma wymusić, że żaden z powyższych adapterów nie został pominięty.
 
-### 9.4. Particli core i plugin
+### 9.4. Particle core i plugin
 
 | Plik | Klasa/odpowiedzialność |
 |---|---|
-| N sources/plugins/particli/ParticliModule.hpp/.cpp | metadata Rendering.Particli/PreDefault, Scene*→handle, ABI exports |
-| N sources/plugins/particli/ParticliSceneSystem.hpp/.cpp | backend register/reconcile/fixed PostSimulation/detach |
-| N runtime/ParticliCompiledEffect.hpp | immutable program i dependency/pipeline keys |
-| N runtime/ParticliEffectCompiler.hpp/.cpp | source → compiled, capability-independent validation |
-| N runtime/ParticliSimulationBackend.hpp/.cpp | instances, command/event queues, queries, revisions |
-| N runtime/ParticliEffectInstance.hpp/.cpp | niezależny czas/RNG/emitter pools/reload |
-| N runtime/ParticliEmitterPool.hpp/.cpp | dense SoA, capacity, stable compaction/history links |
-| N runtime/ParticliModuleProgram.hpp/.cpp | fazowane typed operations |
-| N runtime/ParticliSimulationStep.hpp/.cpp | wspólny fixed-step kernel |
-| N runtime/ParticliSpawnSampler.hpp/.cpp | uniform solid-angle cone i deterministic seed derivation |
-| N runtime/ParticliEventQueue.hpp/.cpp | ordered bounded events/sub-emitter depth |
-| N runtime/ParticliRenderSnapshotBuilder.hpp/.cpp | packed value snapshot i tombstone |
+| N sources/plugins/particle/ParticleModule.hpp/.cpp | metadata Rendering.Particle/PreDefault, Scene*→handle, ABI exports |
+| N sources/plugins/particle/ParticleSceneSystem.hpp/.cpp | backend register/reconcile/fixed PostSimulation/detach |
+| N runtime/ParticleCompiledEffect.hpp | immutable program i dependency/pipeline keys |
+| N runtime/ParticleEffectCompiler.hpp/.cpp | source → compiled, capability-independent validation |
+| N runtime/ParticleSimulationBackend.hpp/.cpp | instances, command/event queues, queries, revisions |
+| N runtime/ParticleEffectInstance.hpp/.cpp | niezależny czas/RNG/emitter pools/reload |
+| N runtime/ParticleEmitterPool.hpp/.cpp | dense SoA, capacity, stable compaction/history links |
+| N runtime/ParticleModuleProgram.hpp/.cpp | fazowane typed operations |
+| N runtime/ParticleSimulationStep.hpp/.cpp | wspólny fixed-step kernel |
+| N runtime/ParticleSpawnSampler.hpp/.cpp | uniform solid-angle cone i deterministic seed derivation |
+| N runtime/ParticleEventQueue.hpp/.cpp | ordered bounded events/sub-emitter depth |
+| N runtime/ParticleRenderSnapshotBuilder.hpp/.cpp | packed value snapshot i tombstone |
 | N runtime/modules/InitialVelocityModule.cpp, GravityModule.cpp, WindModule.cpp, DragModule.cpp, ColorOverLifeModule.cpp, SizeOverLifeModule.cpp, AlphaOverLifeModule.cpp, CollisionPlaneModule.cpp, SubEmitterModule.cpp | komplet executorów v2 |
 
 ### 9.5. Renderer i shadery
@@ -816,28 +816,28 @@ Modyfikowane:
 
 ### 9.6. Editor core, adaptery i content
 
-Editor core w sources/plugins/particli/editor:
+Editor core w sources/plugins/particle/editor:
 
-- N ParticliEditorDocument.hpp/.cpp, ParticliEditorCommandStack.hpp/.cpp.
-- N ParticliAssetGateway.hpp/.cpp, ParticliEditorValidator.hpp/.cpp, ParticliBakeService.hpp/.cpp.
-- N ParticliRecipeLibrary.hpp/.cpp, ParticliPreviewSession.hpp/.cpp, ParticliPreviewTelemetry.hpp.
-- N ParticliCurveEditorModel.hpp/.cpp, ParticliGradientEditorModel.hpp/.cpp.
-- N ParticliEmitterListModel.hpp/.cpp, ParticliModuleStackModel.hpp/.cpp, ParticliOutputModel.hpp/.cpp, ParticliEventBindingModel.hpp/.cpp, ParticliDependencyModel.hpp/.cpp.
+- N ParticleEditorDocument.hpp/.cpp, ParticleEditorCommandStack.hpp/.cpp.
+- N ParticleAssetGateway.hpp/.cpp, ParticleEditorValidator.hpp/.cpp, ParticleBakeService.hpp/.cpp.
+- N ParticleRecipeLibrary.hpp/.cpp, ParticlePreviewSession.hpp/.cpp, ParticlePreviewTelemetry.hpp.
+- N ParticleCurveEditorModel.hpp/.cpp, ParticleGradientEditorModel.hpp/.cpp.
+- N ParticleEmitterListModel.hpp/.cpp, ParticleModuleStackModel.hpp/.cpp, ParticleOutputModel.hpp/.cpp, ParticleEventBindingModel.hpp/.cpp, ParticleDependencyModel.hpp/.cpp.
 
 Adaptery w sources/editor:
 
-- N src/private/rendering/ParticliEditorPanelLayout.hpp, ParticliEditorPanelRenderer.hpp, ParticliCurveEditorRenderer.hpp, ParticliGradientEditorRenderer.hpp oraz odpowiadające src/rendering/*.cpp.
-- N src/private/app/particli/EditorParticliPointerController.hpp, EditorParticliInputHandler.hpp, EditorParticliAssetDropHandler.hpp i odpowiadające src/app/particli/*.cpp.
-- N src/private/scene/particli/EditorParticliSession.hpp, EditorParticliPreviewScene.hpp, EditorParticliEditCommand.hpp, EditorParticleEffectReferenceFinder.hpp i odpowiadające src/scene/particli/*.cpp.
+- N src/private/rendering/ParticleEditorPanelLayout.hpp, ParticleEditorPanelRenderer.hpp, ParticleCurveEditorRenderer.hpp, ParticleGradientEditorRenderer.hpp oraz odpowiadające src/rendering/*.cpp.
+- N src/private/app/particle/EditorParticlePointerController.hpp, EditorParticleInputHandler.hpp, EditorParticleAssetDropHandler.hpp i odpowiadające src/app/particle/*.cpp.
+- N src/private/scene/particle/EditorParticleSession.hpp, EditorParticlePreviewScene.hpp, EditorParticleEditCommand.hpp, EditorParticleEffectReferenceFinder.hpp i odpowiadające src/scene/particle/*.cpp.
 - N src/private/inspection/InspectorParticleEffectComponentModel.hpp/.cpp oraz Interaction.
 - N src/private/platform/win32/EditorParticleEffectAssetPickerDialog.hpp; implementacja korzysta z istniejącego AssetPickerWindow w EditorMeshAssetPickerDialog.cpp.
-- N ParticliDocumentCloseGuard — wspólna decyzja Save/Discard/Cancel.
+- N ParticleDocumentCloseGuard — wspólna decyzja Save/Discard/Cancel.
 
 Modyfikowane dokładne punkty hosta:
 
 - DockTypes.hpp, DefaultDockWorkspace.cpp, PanelContentRenderer.cpp, EditorHostSurfaceLayoutResolver.cpp, FloatingWindowBackBufferPainter.cpp, DockPanelChromeRenderer.cpp, DockWorkspaceTabStripRenderer.cpp.
 - EditorApplicationMessageLoop.cpp i EditorWindowMessageRouter.cpp; wszystkie left/right/down/up/double-click/move/wheel routery dotykane tylko przez delegację do feature controller.
-- EditorSceneContext.hpp/.cpp i EditorSceneDocumentLifecycle.cpp; Context nie zawiera logiki Particli.
+- EditorSceneContext.hpp/.cpp i EditorSceneDocumentLifecycle.cpp; Context nie zawiera logiki Particle.
 - EditorWindowLifecycleHandler.cpp i tab-close route dla complete dirty guard.
 - EditorAssetBrowserTypes.hpp, EditorAssetBrowserContextMenuState.cpp, EditorAssetBrowserContextCommandExecutor.cpp, EditorAssetBrowserDoubleClickHandler.hpp/.cpp.
 - ProjectFilesAssetIconResolver.hpp/.cpp; używa istniejącego HeroIconKind::Bolt.
@@ -850,21 +850,21 @@ Modyfikowane dokładne punkty hosta:
 
 Content:
 
-- N sources/plugins/particli/content/Recipes/{BloodSplatter,MuzzleFlash,BulletTrail,Explosion,ImpactSparks,Rain,Snow,Leaves,FireBurst,FrostNova,ArcaneSparks,CoinBurst,LevelUpAura,SmokeStack,SparksShower}.kbvfx.
-- N tylko wymagane Particli materials/textures oraz ich licencje; żadnych kopii z VerthEngineProd bez jawnej weryfikacji licencji.
+- N sources/plugins/particle/content/Recipes/{BloodSplatter,MuzzleFlash,BulletTrail,Explosion,ImpactSparks,Rain,Snow,Leaves,FireBurst,FrostNova,ArcaneSparks,CoinBurst,LevelUpAura,SmokeStack,SparksShower}.kbvfx.
+- N tylko wymagane Particle materials/textures oraz ich licencje; żadnych kopii z VerthEngineProd bez jawnej weryfikacji licencji.
 
-ParticliBakeService zapisuje wyłącznie atomowe pliki pochodne do Project/Saved/ParticliCache/<compilerVersion>/<semanticHash>.kbvfxc. Cache key obejmuje canonical source, resolved dependency hashes, compiler version, platform i renderer capability schema. Runtime source load pozostaje poprawny bez cache; błędny cache jest usuwany i kompilowany ponownie z jawnym diagnostic, nie traktowany jak source fallback.
+ParticleBakeService zapisuje wyłącznie atomowe pliki pochodne do Project/Saved/ParticleCache/<compilerVersion>/<semanticHash>.kbvfxc. Cache key obejmuje canonical source, resolved dependency hashes, compiler version, platform i renderer capability schema. Runtime source load pozostaje poprawny bez cache; błędny cache jest usuwany i kompilowany ponownie z jawnym diagnostic, nie traktowany jak source fallback.
 
 ## 10. Rendering/runtime — mapowanie większych elementów
 
 | Kanku reference | 21kb target | Sposób implementacji | Pliki/klasy | Test akceptacyjny |
 |---|---|---|---|---|
-| global g_pool_manager i shared pool | ParticliEffectInstance | immutable compiled effect może być shared; czas/RNG/SoA wyłącznie per handle | SimulationBackend, EffectInstance, EmitterPool | dwa playbacki tego samego assetu nigdy nie współdzielą live state |
-| variable ctx delta | Scene fixed loop | PostSimulation, dokładny scene fixedDelta/stepIndex, bez lokalnego catch-up | ParticliSceneSystem/SimulationStep | 30/60/144 render Hz daje ten sam hash N steps |
+| global g_pool_manager i shared pool | ParticleEffectInstance | immutable compiled effect może być shared; czas/RNG/SoA wyłącznie per handle | SimulationBackend, EffectInstance, EmitterPool | dwa playbacki tego samego assetu nigdy nie współdzielą live state |
+| variable ctx delta | Scene fixed loop | PostSimulation, dokładny scene fixedDelta/stepIndex, bez lokalnego catch-up | ParticleSceneSystem/SimulationStep | 30/60/144 render Hz daje ten sam hash N steps |
 | Kanku LCG/SoA | dense preallocated SoA | RNG hash effect/instance/emitter/spawn ordinal; stable compaction zachowuje links | EmitterPool, SpawnSampler | scheduling order nie zmienia hash; zero steady allocations |
 | pełny-cap scan/first dead | dense [0,liveCount) | spawn append, stable-compaction lub swap-remove zależnie od output; explicit cap overflow | EmitterPool | koszt zależy od live, nie capacity; deterministic overflow |
 | aktywne Gravity/Wind/Drag/Plane | typed module plan | komplet authorowanych modułów albo compile reject | ModuleProgram/modules | każdy accepted module ma behavior golden |
-| event bus depth 3, niewpięty | bounded event queue | depth 3, per-step budget, deterministic order | ParticliEventQueue | cycle/depth/overflow jawnie raportowane |
+| event bus depth 3, niewpięty | bounded event queue | depth 3, per-step budget, deterministic order | ParticleEventQueue | cycle/depth/overflow jawnie raportowane |
 | CPU 6 vertices/particle | instanced compact stream | quad expand w vertex shader | BillboardSubmitter/shaders | 100k nie zwiększa meshProxyCount, 1 compatible draw |
 | sort tylko per pool | per-view stable sort + common transparent queue | additive bez sortu; alpha stable depth/id; mesh interleave | ParticleSorter, SceneTransparentDrawQueue | camera-dependent order poprawny dla 2 viewportów |
 | output enum Billboard/Mesh/Ribbon/PointSprite i test-only modes | pełne output executors | implementować etapami; validator nie akceptuje niewpiętego executora | output submitters | output capability matrix i goldens |
@@ -883,7 +883,7 @@ Etapy outputów:
 4. GPU visual simulation po CPU conformance i capability matrix.
 5. Volumetric jako rzeczywisty raymarch; do tego momentu output jest Unsupported, nie billboard fallback.
 
-Subtractive nie ma obecnie pełnego odpowiednika w RenderResources. Particli dodaje RenderMaterialBlendMode::Subtractive o zdefiniowanej semantyce RGB = dstRGB - srcRGB × srcAlpha, alpha bez zmiany, z depth read/no write. Shader/pipeline i golden testy są częścią etapu bazowego; żadne mapowanie na Alpha nie jest dozwolone.
+Subtractive nie ma obecnie pełnego odpowiednika w RenderResources. Particle dodaje RenderMaterialBlendMode::Subtractive o zdefiniowanej semantyce RGB = dstRGB - srcRGB × srcAlpha, alpha bez zmiany, z depth read/no write. Shader/pipeline i golden testy są częścią etapu bazowego; żadne mapowanie na Alpha nie jest dozwolone.
 
 ## 11. Kolejność implementacji, zależności i bramy
 
@@ -946,7 +946,7 @@ Zakres:
 
 - ParticleEffectComponent w całej scene/prefab/reflection/override ścieżce;
 - ParticlePlayback/IParticleSimulationBackend i typed results;
-- Rendering.Particli PreDefault, attach/detach/reload;
+- Rendering.Particle PreDefault, attach/detach/reload;
 - usunięcie ownership symulacji ze ScriptRuntimeSceneSystem;
 - project bootstrap i jawna migracja istniejącego projektu.
 
@@ -957,7 +957,7 @@ Kryteria:
 - optional component matching wykrywa extra/missing ParticleEffect oraz późniejsze istniejące komponenty;
 - scena bez providera zwraca BackendUnavailable, a nie no-op/freeze;
 - 100 attach/detach/reload pozostawia null backend, pusty event queue i brak DLL-owned objectów;
-- system Particli rejestruje się PreDefault; script-only i no-script scene mają poprawny lifecycle;
+- system Particle rejestruje się PreDefault; script-only i no-script scene mają poprawny lifecycle;
 - editor/CLI nie uruchamia starego .kbvfx bez jawnego wpisu/migration action.
 
 ### Etap 3 — deterministyczny CPU fixed-step i wszystkie baseline modules
@@ -1154,12 +1154,12 @@ Kryteria:
 
 | Target | Zakres |
 |---|---|
-| kb_particli_asset_tests | schema, parser, migration, validation, dependencies, component/prefab codec |
-| kb_particli_runtime_tests | module lifecycle, backend API, fixed-step, pools, modules, events, hot reload |
-| kb_particli_renderer_tests | snapshot consumption, batches, sort, outputs, resources, offscreen goldens |
-| kb_particli_editor_tests | document/model/layout/hit/input/dirty/D&D/picker/preview |
-| kb_particli_sim_benchmarks | SoA step/spawn/modules/events 10k/100k/many emitter |
-| kb_particli_renderer_benchmarks | upload/sort/batch/submit/multi-viewport/output |
+| kb_particle_asset_tests | schema, parser, migration, validation, dependencies, component/prefab codec |
+| kb_particle_runtime_tests | module lifecycle, backend API, fixed-step, pools, modules, events, hot reload |
+| kb_particle_renderer_tests | snapshot consumption, batches, sort, outputs, resources, offscreen goldens |
+| kb_particle_editor_tests | document/model/layout/hit/input/dirty/D&D/picker/preview |
+| kb_particle_sim_benchmarks | SoA step/spawn/modules/events 10k/100k/many emitter |
+| kb_particle_renderer_benchmarks | upload/sort/batch/submit/multi-viewport/output |
 
 Istniejące suites dostają tylko przekrojowe regresje:
 
@@ -1192,7 +1192,7 @@ Integration:
 Editor/E2E:
 
 1. create .kbvfx;
-2. open Particli;
+2. open Particle;
 3. add/rename/reorder emitter;
 4. add/reorder/edit every module category, curve i gradient;
 5. recipe filter/append/drag;
@@ -1217,40 +1217,40 @@ Performance:
 
 Przykład dla istniejącego katalogu build; konfigurację należy dostosować tylko do używanego presetu:
 
-    cmake --build build --config Debug --target kb_particli_asset_tests
-    ctest --test-dir build -C Debug -R "^kb_particli_asset_tests$" --output-on-failure
+    cmake --build build --config Debug --target kb_particle_asset_tests
+    ctest --test-dir build -C Debug -R "^kb_particle_asset_tests$" --output-on-failure
 
 Następne etapy budują tylko właściwe targety:
 
-    cmake --build build --config Debug --target kb_particli_runtime_tests
-    cmake --build build --config Debug --target kb_particli_renderer_tests
-    cmake --build build --config Debug --target kb_particli_editor_tests
+    cmake --build build --config Debug --target kb_particle_runtime_tests
+    cmake --build build --config Debug --target kb_particle_renderer_tests
+    cmake --build build --config Debug --target kb_particle_editor_tests
 
 Po zmianach w cienkich host adapters dodatkowo najmniejszy właściwy host target:
 
     cmake --build build --config Debug --target kb_editor
-    ctest --test-dir build -C Debug -R "kb_particli_|kb_editor_headless_automation_scenario" --output-on-failure
+    ctest --test-dir build -C Debug -R "kb_particle_|kb_editor_headless_automation_scenario" --output-on-failure
 
 Nie wykonywać pełnego buildu silnika. Pełny build jest dopuszczalny dopiero przed release candidate, jeżeli focused targets i ich link graphs nie potwierdzają packagingu; przed uruchomieniem trzeba wskazać konkretną niepokrytą zależność.
 
-## 13. Kanoniczne mapowanie architektoniczne Kanku → Particli
+## 13. Kanoniczne mapowanie architektoniczne Kanku → Particle
 
 | Kanku reference | 21kb target | Sposób implementacji | Pliki/klasy | Test akceptacyjny |
 |---|---|---|---|---|
-| prywatna DLL i descriptor | IEngineModule provider | Rendering.Particli, PreDefault, per-scene handle, ABI v1 | ParticliModule, root/plugin CMake, EditorPluginCatalog | dynamic/static load, dependency order, 100 reload cycles |
+| prywatna DLL i descriptor | IEngineModule provider | Rendering.Particle, PreDefault, per-scene handle, ABI v1 | ParticleModule, root/plugin CMake, EditorPluginCatalog | dynamic/static load, dependency order, 100 reload cycles |
 | KankuEffectDocument, 8 emitters/16 kart/32 events | ParticleEffectAsset v2 | typed variants, stable IDs, ordered records, istniejące Curve/Gradient | AssetSchema/IO/Validation/Migration | legacy + v2 roundtrip i full invalid matrix |
 | słaby line parser, panel direct write | asset_io header + atomic IO | strict 21kb ParticleEffect 2, max size, diagnostics, canonical writer | ParticleEffectAssetIO | fault-injection nie narusza starego pliku |
-| cooker/runtime payload niepodpięty i tracący pola | ParticliEffectCompiler | jedno immutable compiled source dla preview/runtime, realny bake cache | Compiler, BakeService | każdy accepted field ma executor/output; cache hash invalidation |
+| cooker/runtime payload niepodpięty i tracący pola | ParticleEffectCompiler | jedno immutable compiled source dla preview/runtime, realny bake cache | Compiler, BakeService | każdy accepted field ma executor/output; cache hash invalidation |
 | in-memory recipes ograniczone do 4 emiterów | zwykłe read-only .kbvfx | ten sam loader/compiler, deep-copy wszystkich emiterów | RecipeLibrary/content | wszystkie 15 kompiluje; append zachowuje komplet |
 | Kanku global/shared pools | per-instance backend state | immutable program shared, mutable state per handle | SimulationBackend/EffectInstance/EmitterPool | independent playback test |
-| Kanku variable frame tick | Scene fixed-step | PostSimulation, command boundary i PostFixed script event drain | ParticliSceneSystem, ScriptRuntimeSceneSystem | cross-render-rate hash i same-frame event |
+| Kanku variable frame tick | Scene fixed-step | PostSimulation, command boundary i PostFixed script event drain | ParticleSceneSystem, ScriptRuntimeSceneSystem | cross-render-rate hash i same-frame event |
 | Kanku ParticleEffect component | core ParticleEffectComponent | scene/prefab/reflection/Inspector, runtime handle side table | component manifest sekcji 9.3 | v33/prefab/override/Inspector/runtime E2E |
-| preview używa podobnych pul, ale osobnej logiki czasu | isolated preview Scene | PublishRuntimeAsset + dokładnie ten sam compiler/kernel/snapshot/renderer | PreviewSession/EditorParticliPreviewScene | preview/runtime hash parity |
+| preview używa podobnych pul, ale osobnej logiki czasu | isolated preview Scene | PublishRuntimeAsset + dokładnie ten sam compiler/kernel/snapshot/renderer | PreviewSession/EditorParticlePreviewScene | preview/runtime hash parity |
 | overlay czyta mutable pool | core retained snapshot | bounded immutable generations, tombstone/epoch | SnapshotChannel/SnapshotBuilder | concurrent read i DLL unload lifetime |
 | billboard CPU vertices | particle batch renderer | compact streams, VS expansion, common transparency | ParticleRenderer/output submitters | no mesh proxy, batch/draw/golden gates |
 | martwa GPU path | renderer-owned GPU visual | capability classifier, fixed-step commands, no fence/readback | GpuSimulation/Classifier | capability/fault/multi-viewport gates |
 | asset browser/scene/inspector hostowe | istniejące 21kb surfaces | jawne adaptery zamkniętych enumów/routerów | editor manifest sekcji 9.6 | create/open/drop/apply/inspect/save E2E |
-| jeden centralny panel | DockPanelKind::ParticliEditor | center ID 14, dock/float/resize/session | Dock/Panel/MessageLoop adapters | layout/session/viewport tests |
+| jeden centralny panel | DockPanelKind::ParticleEditor | center ID 14, dock/float/resize/session | Dock/Panel/MessageLoop adapters | layout/session/viewport tests |
 
 ## 14. Evidence index
 
@@ -1283,15 +1283,15 @@ Najważniejsze dowody 21kb:
 
 ## 15. Ryzyka, ograniczenia i decyzje zamknięte
 
-- Renderer i editor 21kb są obecnie Win32-only; potwierdza to główny CMakeLists.txt:284-319. CPU core ma pozostać przenośny, shadery mają komplet profili, ale release E2E Particli jest Win32, dopóki osobny projekt nie usunie hostowego gate.
+- Renderer i editor 21kb są obecnie Win32-only; potwierdza to główny CMakeLists.txt:284-319. CPU core ma pozostać przenośny, shadery mają komplet profili, ale release E2E Particle jest Win32, dopóki osobny projekt nie usunie hostowego gate.
 - 21kb nie ma editor-panel ABI. W tej implementacji statyczny adapter hosta jest decyzją ostateczną; budowa ogólnego plugin UI ABI byłaby scope creep.
 - Loader/payload/component/snapshot ABI pozostają w kb_engine. Umieszczenie ich w unloadowalnej DLL jest zakazane przez lifetime AssetManager.
-- Rendering.Particli jest obowiązkowym providerem dla runtime .kbvfx. Nowe projekty mają go enabled; stare dostają jawną migrację. Nie utrzymujemy drugiego, cichego legacy backendu.
+- Rendering.Particle jest obowiązkowym providerem dla runtime .kbvfx. Nowe projekty mają go enabled; stare dostają jawną migrację. Nie utrzymujemy drugiego, cichego legacy backendu.
 - Timeline nie powstaje: nie istnieje w Kanku. Curve/Gradient/Events powstają jako udokumentowane rozszerzenia, ponieważ ich dane już istnieją albo są potrzebne kompletnemu v2.
 - Kanku graph schema, AutoBake, GPU pipeline i zaawansowane output prototypes nie są dowodem działającego UX/runtime. Plan bierze ich intencję, ale wymaga osobnych capability i acceptance gates.
 - Assety graficzne/dźwiękowe z VerthEngineProd nie są kopiowane bez osobnej weryfikacji praw. Recipes odtwarzają zachowanie w nowym .kbvfx i używają assetów z jednoznaczną licencją.
 - PrefabOptionalComponentMask ma obecnie niespójne mapowanie bit/index dla późniejszych komponentów. Etap 2 zawiera najmniejszą potrzebną korektę i test; bez niej nie wolno uznać component integration za poprawną.
-- Shader generation jest opcjonalne w obecnym buildzie, więc Particli musi dostarczyć i manifestowo sprawdzić prebuilt profiles. Brak wariantu jest błędem packagingu.
+- Shader generation jest opcjonalne w obecnym buildzie, więc Particle musi dostarczyć i manifestowo sprawdzić prebuilt profiles. Brak wariantu jest błędem packagingu.
 - Absolutny budżet milisekund zostanie ustalony dopiero na nazwanym runnerze. Niezależnie od sprzętu obowiązują bramy strukturalne: bounded memory, zero steady allocations, brak per-particle proxy, brak sync readback i draw count od batch keys.
 
 ## 16. Handoff / Definition of Done implementacji
@@ -1305,4 +1305,4 @@ Agent implementujący nie musi ponownie odkrywać architektury. Powinien realizo
 5. przeglądzie diffu, ownership, error paths, determinism i cleanup;
 6. spełnieniu wszystkich kryteriów bramy etapu.
 
-Release Particli jest gotowy dopiero po przejściu etapu 11, pełnego E2E z sekcji 12.2, clean-install content/shader testu oraz braku niewspieranego authoring field. Do tego czasu UI może udostępniać wyłącznie outputy/moduły, których etapowa capability jest zarejestrowana i przeszła bramę.
+Release Particle jest gotowy dopiero po przejściu etapu 11, pełnego E2E z sekcji 12.2, clean-install content/shader testu oraz braku niewspieranego authoring field. Do tego czasu UI może udostępniać wyłącznie outputy/moduły, których etapowa capability jest zarejestrowana i przeszła bramę.
