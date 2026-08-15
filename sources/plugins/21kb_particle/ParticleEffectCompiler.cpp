@@ -32,7 +32,7 @@ void Add(std::vector<kb::scene::ParticleEffectDiagnostic>& diagnostics,
     case kb::scene::ParticleOutputType::Billboard: return capabilities.billboard;
     case kb::scene::ParticleOutputType::StretchedBillboard: return capabilities.stretchedBillboard;
     case kb::scene::ParticleOutputType::PointSprite: return capabilities.pointSprite;
-    case kb::scene::ParticleOutputType::Mesh:
+    case kb::scene::ParticleOutputType::Mesh: return capabilities.mesh;
     case kb::scene::ParticleOutputType::Trail:
     case kb::scene::ParticleOutputType::Ribbon:
     case kb::scene::ParticleOutputType::Beam:
@@ -44,7 +44,8 @@ void Add(std::vector<kb::scene::ParticleEffectDiagnostic>& diagnostics,
 } // namespace
 
 std::uint64_t ParticleCompilerCapabilities::StableKey() const noexcept {
-    return (billboard ? 1ULL : 0ULL) | (stretchedBillboard ? 2ULL : 0ULL) | (pointSprite ? 4ULL : 0ULL);
+    return (billboard ? 1ULL : 0ULL) | (stretchedBillboard ? 2ULL : 0ULL) | (pointSprite ? 4ULL : 0ULL) |
+        (mesh ? 8ULL : 0ULL);
 }
 
 std::vector<kb::scene::ParticleEffectDiagnostic> ParticleEffectCompiler::ValidateCapabilities(
@@ -146,10 +147,15 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
             compileFlipbook(value.flipbook);
             destination.stretchVelocityScale = value.velocityScale;
             destination.stretchMinimumLength = value.minimumLength;
-        } else {
+        } else if (source.output.type == kb::scene::ParticleOutputType::PointSprite) {
             const auto& value = std::get<kb::scene::ParticlePointSpriteOutput>(source.output.payload);
             compileFlipbook(value.flipbook);
             destination.pointSpriteDiameter = value.diameter;
+        } else if (source.output.type == kb::scene::ParticleOutputType::Mesh) {
+            const auto& value = std::get<kb::scene::ParticleMeshOutput>(source.output.payload);
+            destination.meshLodBias = value.lodBias;
+            destination.meshCastsShadow = value.castsShadow;
+            destination.meshReceivesShadow = value.receivesShadow;
         }
         destination.simulationSpace = source.simulationSpace;
         destination.enabled = source.enabled;
