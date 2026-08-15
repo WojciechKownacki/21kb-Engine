@@ -1,6 +1,7 @@
 #include "engine/particles/ParticleRenderSnapshot.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
+#include "kb/render/particles/ParticleMeshBatchBuilder.hpp"
 #include "kb/render/particles/ParticleRenderBatcher.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/TransparentDepthKey.hpp"
@@ -318,6 +319,56 @@ void TestAllBlendAndOutputContracts() {
         "far mesh, particle batch, and near mesh did not interleave on the shared view-depth key");
 }
 
+void TestMeshBatchBuilderInstancesLodShadowAndExclusion() {
+    kb::particles::ParticleRenderEmitterRecord meshEmitter = Emitter(
+        0U, 3U, kb::particles::ParticleRenderSortMode::None);
+    meshEmitter.output = kb::particles::ParticleRenderOutput::Mesh;
+    meshEmitter.meshAssetId = 4008U;
+    meshEmitter.materialAssetId = 3008U;
+    meshEmitter.meshLodLevel = -2;
+    meshEmitter.flags = kb::particles::ParticleRenderEmitterFlag::CastsShadow |
+        kb::particles::ParticleRenderEmitterFlag::ReceivesShadow;
+    meshEmitter.localBasisQuaternionSnorm = {0, 0, 0, 32'767}; // identity
+
+    kb::particles::ParticleRenderEmitterRecord billboardEmitter = Emitter(
+        3U, 1U, kb::particles::ParticleRenderSortMode::None);
+    billboardEmitter.instanceId = 2U;
+    billboardEmitter.emitterId = 4U;
+    billboardEmitter.output = kb::particles::ParticleRenderOutput::Billboard;
+
+    const std::array emitters{meshEmitter, billboardEmitter};
+    const std::array particles{
+        Particle(101U, 1.0F, 2.0F, 0U), Particle(102U, 3.0F, 4.0F, 0U),
+        Particle(103U, 5.0F, 6.0F, 0U), Particle(201U, 7.0F, 8.0F, 0U)};
+
+    kb::render::ParticleMeshBatchBuilder builder;
+    builder.Warmup(16U);
+    builder.Build(*Snapshot(emitters, particles));
+    const auto& batches = builder.Batches();
+    Require(batches.size() == 1U && batches[0].meshAssetId == 4008U && batches[0].materialAssetId == 3008U &&
+            batches[0].instances.size() == 3U,
+        "mesh batch builder did not produce exactly one batch for the Mesh emitter, excluding Billboard");
+    const auto& instance = batches[0].instances[1];
+    Require(instance.entityId == 102U && instance.meshAssetId == 4008U && instance.materialAssetId == 3008U &&
+            instance.castsShadow && instance.receivesShadow && instance.lodBias == -2,
+        "mesh instance did not carry identity, shadow flags, or LOD level from its emitter record");
+    Require(std::fabs(instance.model[12] - 3.0F) < 0.0001F && std::fabs(instance.model[13] - 0.0F) < 0.0001F &&
+            std::fabs(instance.model[14] - 4.0F) < 0.0001F && std::fabs(instance.model[0] - 1.0F) < 0.0001F &&
+            std::fabs(instance.model[5] - 1.0F) < 0.0001F && std::fabs(instance.model[10] - 1.0F) < 0.0001F,
+        "mesh instance model matrix did not place an identity-oriented, unit-size particle at its position");
+    Require(instance.color[0] > 0.0F && instance.color[3] > 0.0F,
+        "mesh instance color was not unpacked from the particle's packed color");
+
+    kb::particles::ParticleRenderEmitterRecord soloBillboardEmitter = Emitter(
+        0U, 1U, kb::particles::ParticleRenderSortMode::None);
+    const std::array soloEmitters{soloBillboardEmitter};
+    const std::array soloParticles{Particle(301U, 9.0F, 10.0F, 0U)};
+    kb::render::ParticleMeshBatchBuilder emptyBuilder;
+    emptyBuilder.Warmup(4U);
+    emptyBuilder.Build(*Snapshot(soloEmitters, soloParticles));
+    Require(emptyBuilder.Batches().empty(), "mesh batch builder produced a batch for a non-Mesh-only snapshot");
+}
+
 } // namespace
 
 void* operator new(std::size_t size) {
@@ -339,6 +390,7 @@ int main() {
         TestSortBlendFlipbookAndSoftContract();
         TestCapacitySplitNoProxyGrowthTwoViewsAndNoAllocation();
         TestAllBlendAndOutputContracts();
+        TestMeshBatchBuilderInstancesLodShadowAndExclusion();
         std::cout << "21kb Particle System GPU renderer tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
