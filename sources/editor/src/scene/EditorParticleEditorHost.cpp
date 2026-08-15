@@ -72,40 +72,47 @@ template <typename T>
 }
 
 // Compact single-line encoding for the shared value-edit dialog: keyframes/stops separated by
-// ';', fields within one keyframe/stop separated by ','. Ordering, range, and count limits are
-// left to ParticleEffectAssetValidator::ValidateStructure (run by ParticleEditorDocument::Apply),
-// the single source of truth for those constraints; this only rejects syntactically malformed text.
+// ';', fields within one keyframe/stop separated by ','. A single trailing ';' (a common fat-finger
+// on a hand-edited list) is tolerated; anything else malformed is rejected outright. The per-item
+// count is capped defensively here to bound work on a pathological paste - ordering, per-item
+// range, and the authoritative count limit still belong to
+// ParticleEffectAssetValidator::ValidateStructure (run by every ParticleEditorDocument::Apply),
+// the single source of truth for those constraints.
 [[nodiscard]] bool ParseCurve(std::string_view text, kb::math::Curve& value) {
+    if (text.size() > 1U && text.back() == ';') text.remove_suffix(1U);
     std::vector<kb::math::CurveKeyframe> keyframes;
     std::size_t start = 0U;
     while (true) {
+        if (keyframes.size() >= kb::scene::kParticleEffectMaxCurveKeys) return false;
         const std::size_t end = text.find(';', start);
         const std::string_view token = text.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
         std::istringstream input{std::string{token}};
         input.imbue(std::locale::classic());
         kb::math::CurveKeyframe keyframe;
-        std::uint32_t easing = 0U;
+        long long easing = -1;
         char separatorA = 0, separatorB = 0;
         input >> keyframe.time >> separatorA >> keyframe.value >> separatorB >> easing;
         input >> std::ws;
         if (!input || !input.eof() || separatorA != ',' || separatorB != ',' ||
             !std::isfinite(keyframe.time) || !std::isfinite(keyframe.value) ||
-            easing > static_cast<std::uint32_t>(kb::math::Easing::InOutBounce))
+            easing < 0 || easing > static_cast<long long>(kb::math::Easing::InOutBounce))
             return false;
         keyframe.easing = static_cast<kb::math::Easing>(easing);
         keyframes.push_back(keyframe);
         if (end == std::string_view::npos) break;
         start = end + 1U;
     }
-    if (keyframes.empty() || keyframes.size() > kb::scene::kParticleEffectMaxCurveKeys) return false;
+    if (keyframes.empty()) return false;
     value.keyframes = std::move(keyframes);
     return true;
 }
 
 [[nodiscard]] bool ParseGradient(std::string_view text, kb::math::Gradient& value) {
+    if (text.size() > 1U && text.back() == ';') text.remove_suffix(1U);
     std::vector<kb::math::GradientStop> stops;
     std::size_t start = 0U;
     while (true) {
+        if (stops.size() >= kb::scene::kParticleEffectMaxGradientStops) return false;
         const std::size_t end = text.find(';', start);
         const std::string_view token = text.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
         std::istringstream input{std::string{token}};
@@ -123,7 +130,7 @@ template <typename T>
         if (end == std::string_view::npos) break;
         start = end + 1U;
     }
-    if (stops.empty() || stops.size() > kb::scene::kParticleEffectMaxGradientStops) return false;
+    if (stops.empty()) return false;
     value.stops = std::move(stops);
     return true;
 }
@@ -505,7 +512,7 @@ bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, s
     bool parsed = false;
     bool editsSpawn = true;
     switch (row.property) {
-    case kb::particle_editor::ParticleEditorProperty::SpawnRateSummary: parsed = ParseCurve(text, spawn.rateOverTime); break;
+    case kb::particle_editor::ParticleEditorProperty::SpawnRateCurve: parsed = ParseCurve(text, spawn.rateOverTime); break;
     case kb::particle_editor::ParticleEditorProperty::SpawnLifetimeMin: parsed = setFloat(spawn.lifetimeMin); break;
     case kb::particle_editor::ParticleEditorProperty::SpawnLifetimeMax: parsed = setFloat(spawn.lifetimeMax); break;
     case kb::particle_editor::ParticleEditorProperty::SpawnSpeedMin: parsed = setFloat(spawn.speedMin); break;

@@ -35,7 +35,8 @@ constexpr std::string_view kMaterialTypeFilter = "Materials";
 }
 
 [[nodiscard]] std::string SearchText(const kb::assets::AssetMetadata& metadata) {
-    std::string text = metadata.name + " " + metadata.type + " " + metadata.importCategory + " " + asset_browser::Normalize(metadata.virtualPath);
+    std::string text = metadata.name + " " + metadata.type + " " + metadata.importCategory + " " +
+        metadata.browseTag + " " + asset_browser::Normalize(metadata.virtualPath);
     if (IsMaterialAsset(metadata)) {
         text += " material materials materialy pbr shader surface .kbmat";
         if (metadata.type == "RenderMaterialInstance") {

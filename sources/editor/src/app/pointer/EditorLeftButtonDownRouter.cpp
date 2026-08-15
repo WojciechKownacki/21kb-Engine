@@ -546,8 +546,13 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 if (hit.propertyIndex >= inspector.properties.size() || !inspector.properties[hit.propertyIndex].editable)
                     return;
                 const auto& property = inspector.properties[hit.propertyIndex];
+                const bool isGradient = property.label == "Gradient";
+                const bool isCurve = property.label == "Curve" || property.label == "Rate curve";
                 const auto edited = EditorMaterialParameterValueDialog::Show(
-                    mainWindow_, property.label, property.value);
+                    mainWindow_, property.label, property.value,
+                    isGradient ? "Stops as time,r,g,b,a; separated by ';', e.g. 0,1,1,1,1;1,0,0,0,0"
+                    : isCurve ? "Keys as time,value,easing; separated by ';', e.g. 0,1,0;1,0.5,3"
+                    : "Use numbers like: 0.25 or 1 0 0 1");
                 if (!edited.has_value()) return;
                 editedValue = *edited;
             }
