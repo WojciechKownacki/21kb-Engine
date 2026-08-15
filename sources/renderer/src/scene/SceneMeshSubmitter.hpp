@@ -3,6 +3,7 @@
 #include "engine/particles/ParticleRenderSnapshot.hpp"
 
 #include "kb/render/resources/RenderResourceRegistry.hpp"
+#include "kb/render/particles/ParticleMeshBatchBuilder.hpp"
 #include "kb/render/particles/ParticleRenderBatcher.hpp"
 #include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
 #include "kb/render/scene/MeshPipeline.hpp"
@@ -78,6 +79,8 @@ private:
     mutable MeshPipelineBuildResult pipelineScratch_;
     mutable std::vector<SceneRenderVisibilityBlocker> visibilityBlockerScratch_;
     mutable std::vector<TransparentDrawOrderEntry> transparentSubmissionScratch_;
+    mutable ParticleMeshBatchBuilder particleMeshBatchBuilder_;
+    mutable MeshPipelineBuildResult particleMeshPipelineScratch_;
     // Derived renderer state only. The authored detail-switch policy remains in ECS.
     mutable const RenderScene* detailSwitchScene_ = nullptr;
     const RenderSkinningPaletteAllocator* skinningPaletteAllocator_ = nullptr;
