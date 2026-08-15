@@ -466,7 +466,8 @@ public:
     [[nodiscard]] bool RemoveParticleEditorEmitter(kb::scene::ParticleStableId emitterId);
     [[nodiscard]] bool SelectParticleEditorModule(kb::scene::ParticleStableId emitterId,
                                                   kb::scene::ParticleStableId moduleId) noexcept;
-    [[nodiscard]] bool AddParticleEditorModule(kb::scene::ParticleModuleType type);
+    [[nodiscard]] bool AddParticleEditorModule(kb::scene::ParticleModuleType type,
+                                               kb::scene::ParticleStableId targetEmitterId = 0U);
     [[nodiscard]] bool ToggleParticleEditorModule(kb::scene::ParticleStableId moduleId);
     [[nodiscard]] bool MoveParticleEditorModule(kb::scene::ParticleStableId moduleId, std::uint32_t targetOrder);
     [[nodiscard]] bool BeginParticleEditorModuleDrag(kb::scene::ParticleStableId moduleId) noexcept;

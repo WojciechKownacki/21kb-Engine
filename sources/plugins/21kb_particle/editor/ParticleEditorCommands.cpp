@@ -209,7 +209,8 @@ ParticleEditorResult ParticleEditorCommands::SetEmitterOutput(
 
 ParticleEditorResult ParticleEditorCommands::AddModule(
     ParticleEditorDocument& document, ParticleEditorWorkspaceState& workspace,
-    kb::scene::ParticleStableId emitterId, kb::scene::ParticleModuleType type) {
+    kb::scene::ParticleStableId emitterId, kb::scene::ParticleModuleType type,
+    kb::scene::ParticleStableId targetEmitterId) {
     auto candidate = document.Asset();
     const auto emitter = FindMutable(candidate, emitterId);
     if (emitter == candidate.emitters.end())
@@ -226,14 +227,26 @@ ParticleEditorResult ParticleEditorCommands::AddModule(
         return CommandError(ParticleEditorStatus::InvalidAsset,
             kb::scene::ParticleEffectDiagnosticCode::DuplicateModule, "effect.emitter.module.type",
             "this module type may occur only once", emitterId);
+    if (type == kb::scene::ParticleModuleType::SubEmitter) {
+        const auto target = std::find_if(candidate.emitters.begin(), candidate.emitters.end(),
+            [targetEmitterId](const auto& value) { return value.emitterId == targetEmitterId; });
+        if (targetEmitterId == 0U || targetEmitterId == emitterId || target == candidate.emitters.end())
+            return CommandError(ParticleEditorStatus::InvalidSelection,
+                kb::scene::ParticleEffectDiagnosticCode::InvalidReference,
+                "effect.emitter.module.payload.targetEmitterId",
+                "Sub Emitter requires an explicit different target emitter", emitterId);
+    }
     kb::scene::ParticleStableId nextId = 1U;
     for (const auto& module : emitter->modules) {
         if (module.moduleId != nextId) break;
         ++nextId;
     }
+    auto payload = kb::scene::DefaultParticleModulePayload(type);
+    if (type == kb::scene::ParticleModuleType::SubEmitter)
+        std::get<kb::scene::ParticleSubEmitterModule>(payload).targetEmitterId = targetEmitterId;
     kb::scene::ParticleModuleAsset module{.moduleId = nextId,
         .authoringOrder = static_cast<std::uint32_t>(emitter->modules.size()), .type = type,
-        .payload = kb::scene::DefaultParticleModulePayload(type)};
+        .payload = std::move(payload)};
     emitter->modules.insert(std::lower_bound(emitter->modules.begin(), emitter->modules.end(), nextId,
         [](const auto& value, kb::scene::ParticleStableId id) { return value.moduleId < id; }), std::move(module));
     auto result = Apply(document, workspace, std::move(candidate), emitterId);

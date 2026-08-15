@@ -303,10 +303,11 @@ bool EditorSceneContext::SelectParticleEditorModule(kb::scene::ParticleStableId 
     return asset != nullptr && particleEditorWorkspace_.SelectModule(*asset, emitterId, moduleId);
 }
 
-bool EditorSceneContext::AddParticleEditorModule(kb::scene::ParticleModuleType type) {
+bool EditorSceneContext::AddParticleEditorModule(kb::scene::ParticleModuleType type,
+                                                 kb::scene::ParticleStableId targetEmitterId) {
     return HasParticleEditorAsset() && FinalizeParticleEditorCommand(
         kb::particle_editor::ParticleEditorCommands::AddModule(particleEditorDocument_, particleEditorWorkspace_,
-            particleEditorWorkspace_.SelectedEmitterId(), type));
+            particleEditorWorkspace_.SelectedEmitterId(), type, targetEmitterId));
 }
 
 bool EditorSceneContext::ToggleParticleEditorModule(kb::scene::ParticleStableId moduleId) {
