@@ -58,6 +58,9 @@ struct ParticleCompiledEmitter {
     std::uint64_t materialAssetId = 0U;
     std::uint64_t meshAssetId = 0U;
     std::uint64_t textureAtlasAssetId = 0U;
+    float meshLodBias = 0.0F;
+    bool meshCastsShadow = false;
+    bool meshReceivesShadow = true;
     kb::scene::ParticleBlendMode blendMode = kb::scene::ParticleBlendMode::Alpha;
     kb::scene::ParticleSortMode sortMode = kb::scene::ParticleSortMode::BackToFront;
     kb::scene::ParticleAlignment alignment = kb::scene::ParticleAlignment::CameraFacing;

@@ -51,6 +51,7 @@ void WriteEffect(std::vector<std::uint8_t>& bytes, const ParticleCompiledEffect&
         const auto& e = effect.emitters[emitterIndex];
         WriteUInt64(bytes, e.emitterId); WriteUInt8(bytes, static_cast<std::uint8_t>(e.outputType));
         WriteUInt64(bytes, e.materialAssetId); WriteUInt64(bytes, e.meshAssetId); WriteUInt64(bytes, e.textureAtlasAssetId);
+        WriteFloat(bytes, e.meshLodBias); WriteBool(bytes, e.meshCastsShadow); WriteBool(bytes, e.meshReceivesShadow);
         WriteUInt8(bytes, static_cast<std::uint8_t>(e.blendMode)); WriteUInt8(bytes, static_cast<std::uint8_t>(e.sortMode));
         WriteUInt8(bytes, static_cast<std::uint8_t>(e.alignment)); WriteBool(bytes, e.depthTest); WriteBool(bytes, e.depthWrite);
         WriteBool(bytes, e.softParticles); WriteBool(bytes, e.antiAliasing); WriteUInt32(bytes, e.flipbookColumns);
@@ -149,8 +150,9 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
         auto& e = effect.emitters[emitterIndex];
         std::uint8_t output = 0U, blend = 0U, sort = 0U, alignment = 0U, space = 0U, mode = 0U;
         std::uint32_t columns = 0U, rows = 0U;
-        if (!reader.U64(e.emitterId) || !reader.U8(output) || output > static_cast<std::uint8_t>(kb::scene::ParticleOutputType::PointSprite) ||
+        if (!reader.U64(e.emitterId) || !reader.U8(output) || output > static_cast<std::uint8_t>(kb::scene::ParticleOutputType::Mesh) ||
             !reader.U64(e.materialAssetId) || !reader.U64(e.meshAssetId) || !reader.U64(e.textureAtlasAssetId) ||
+            !reader.F(e.meshLodBias) || !reader.Bool(e.meshCastsShadow) || !reader.Bool(e.meshReceivesShadow) ||
             !reader.U8(blend) || blend > static_cast<std::uint8_t>(kb::scene::ParticleBlendMode::Premultiplied) ||
             !reader.U8(sort) || sort > static_cast<std::uint8_t>(kb::scene::ParticleSortMode::Age) ||
             !reader.U8(alignment) || alignment > static_cast<std::uint8_t>(kb::scene::ParticleAlignment::Local) ||
@@ -209,7 +211,8 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
     for (std::uint8_t emitterIndex = 0U; emitterIndex < effect.emitterCount; ++emitterIndex) {
         const auto& emitter = effect.emitters[emitterIndex];
         if (emitter.emitterId == 0U || emitter.emitterId <= previousEmitterId || emitter.materialAssetId == 0U ||
-            emitter.meshAssetId != 0U || emitter.maxParticles == 0U ||
+            ((emitter.outputType == kb::scene::ParticleOutputType::Mesh) != (emitter.meshAssetId != 0U)) ||
+            emitter.maxParticles == 0U ||
             emitter.maxParticles > kb::scene::kParticleEffectMaxCpuParticlesPerEmitter || emitter.rateKeyCount == 0U ||
             emitter.lifetimeMin <= 0.0F || emitter.lifetimeMax < emitter.lifetimeMin ||
             emitter.prewarmSeconds < 0.0F || emitter.prewarmSeconds > kb::scene::kParticleEffectMaxPrewarmSeconds ||

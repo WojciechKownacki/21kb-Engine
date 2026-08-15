@@ -142,6 +142,12 @@ ParticleRenderBatchBuildResult ParticleRenderBatcher::Build(
             emitter.particleCount > particles.size() - emitter.firstParticle) {
             return {.status = ParticleRenderBatchStatus::InvalidSnapshot};
         }
+        if (emitter.output == kb::particles::ParticleRenderOutput::Mesh) {
+            // Handled by the separate mesh-instancing path (ParticleMeshBatchBuilder), which reuses
+            // the existing scene mesh pipeline rather than this quad/billboard instance format - not
+            // a drop, so it must not count against droppedParticleCount/unsupportedEmitterCount.
+            continue;
+        }
         if (!SupportedOutput(emitter.output)) {
             droppedParticleCount += emitter.particleCount;
             unsupportedEmitterScratch_.push_back(emitterIndex);
