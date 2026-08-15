@@ -10,9 +10,9 @@
 ## Current package
 
 - Stage: `7` — complete particle authoring UX.
-- Status: `in_progress`; Stages 0 through 6 are accepted.
-- Scope: Stage 7 adds typed authoring controls and workflow over the accepted document, compiler, Bake, isolated preview, and GPU renderer, without a second preview kernel.
-- Next gate: Stage 7B module and output-property authoring over the accepted emitter workspace, including explicit capability states before curves, gradients, recipes, and dependency navigation.
+- Status: `accepted`; Stages 0 through 7 are accepted.
+- Scope: Stage 7 added typed authoring controls and workflow over the accepted document, compiler, Bake, isolated preview, and GPU renderer, without a second preview kernel.
+- Next gate: none defined beyond Stage 7 in this ledger; no further stage is in scope until a new package is opened.
 - Rendering direction: normal game-facing simulation and rendering must move to GPU. The CPU backend is retained only as the deterministic validation, diagnostics, and preview path; it is not the intended final gameplay path.
 
 ## Accepted stages
@@ -152,6 +152,13 @@
 - Automation recognizes `ParticleEffect` assets and supports a bounded, catalog-validated `initial_plugins` setup before editor construction. The editor target stages the current provider DLL beside its executable, so portable normalized project descriptors resolve the current binary rather than a stale neighbor.
 - Focused visual automation passed all eight steps and produced six docked/floating/DPI BMPs. Manual inspection confirmed the expected authoring layout at 1366×768 docked and 150-DPI floating. Module, output, curve, gradient, recipe, picker, and diagnostic-navigation controls remain later Stage 7 work.
 
+### Stage 7B — module and output-property authoring: `accepted checkpoint`
+
+- Typed module and output-property authoring is live over the accepted Stage 7A emitter workspace: typed property rows cover spawn, output, and module-payload fields; output-choice rows carry per-type diagnostics; the module stack supports add/toggle/reorder/select through `ParticleEditorCommands`; dependency rows and diagnostic rows give explicit capability states ahead of dedicated curve, gradient, recipe, and dependency-navigation editors, which remain out of scope for this checkpoint.
+- All nine module types (`InitialVelocity`, `Gravity`, `Wind`, `Drag`, `ColorOverLife`, `SizeOverLife`, `AlphaOverLife`, `CollisionPlane`, `SubEmitter`) can be added to a valid document/history transaction with bounded, structurally valid defaults. `ColorOverLife` now defaults to a two-stop opaque-white gradient instead of an empty (structurally invalid) one. `SubEmitter` requires an explicit, different target emitter: the Add Module menu disables the Sub Emitter entry when fewer than two emitters exist, a follow-up popup collects the target from the other emitters, and the command rejects a missing/self/unknown target before mutating history.
+- Two defects independent of the two tracked gaps were found and repaired while re-verifying this checkpoint in a fresh checkout of this session: (1) `kb_editor` failed to compile (`error C2039: 'targetEmitterId' is not a member of 'kb::editor::ParticleEditorPanelHit'`, `EditorLeftButtonDownRouter.cpp:543`) because the Sub Emitter target-selection commit added `targetEmitterId` to `ParticleEditorEmitterRowLayout` but not to `ParticleEditorPanelHit`, which the router and `ParticleEditorPanelInteraction::Execute` actually populate and read; the focused unit suite never caught this because it exercises `ParticleEditorCommands` directly and never re-links `kb_editor`. Repaired by adding the missing field. (2) `kb_21kb_particle_asset_tests` failed (`hand-authored canonical fixture is not byte stable`) because this Windows checkout's `core.autocrlf=true`, with no `.gitattributes` override, smudged the LF-only committed `CanonicalParticleEffectV2.kbvfx` fixture to CRLF on disk; the writer is unconditionally LF-only, so the round-trip comparison could never match. Repaired by normalizing the working copy back to LF (no content change; the committed blob was already LF) and adding `.gitattributes` to pin that path to `text eol=lf` so a future checkout in this or any other environment cannot silently reintroduce the corruption.
+- Focused asset, CPU backend, editor-core, authoring-layout, and headless-authoring gates passed together after both repairs, with `kb_editor` rebuilt and re-linked.
+
 ## Accepted decisions and mappings
 
 - Plugin identifier: `Rendering.21kbParticle`.
@@ -172,6 +179,7 @@
 - `sources/engine/tests/ScriptRuntimeTests.cpp` — stage 0 characterization coverage.
 - Stage 6C1 adds the engine compiled-effect/cache sources, shared plugin compiler, production Bake service, host command, and their focused asset, CPU, editor, and host regressions.
 - Stage 7A adds emitter workspace/model/commands, panel layout/interaction/routing, automation setup, provider staging, and focused authoring/headless regressions.
+- Stage 7B adds module/output-property authoring, the `ColorOverLife` default gradient, and the `SubEmitter` target-selection flow (schema, editor commands, panel interaction/routing, focused asset/editor tests). This session additionally touches `sources/editor/src/private/rendering/ParticleEditorPanelLayout.hpp` (`ParticleEditorPanelHit.targetEmitterId`, closing a `kb_editor` compile break) and adds root `.gitattributes` (pins `sources/engine/tests/fixtures/CanonicalParticleEffectV2.kbvfx` to LF against `core.autocrlf` checkout corruption).
 
 ## Validation evidence
 
@@ -198,6 +206,13 @@
 - Stage 6C1 host integration build — `cmake --build build --config Debug --target kb_editor -- /m:1`, exit `0`; the focused host target also built exit `0`.
 - Stage 7A independent focused CTest matrix — exit `0`, `5/5`, `5.95 s`: asset `1.59 s`, CPU `3.81 s`, editor core `0.24 s`, authoring layout `0.02 s`, headless authoring `0.30 s`.
 - Stage 7A editor integration build — `cmake --build build --config Debug --target kb_editor -- /m:1`, exit `0`, `6.8 s`; the post-build provider copy hash matched the provider target.
+- Stage 7B verification, commit `2e588553` on top of the `b8c6de26` WIP snapshot: `cmake -S . -B build` — exit `0` (reconfigure to register test targets absent from the stale build cache).
+- `cmake --build build --config Debug --target kb_21kb_particle_asset_tests kb_21kb_particle_cpu_backend_tests kb_21kb_particle_editor_tests kb_editor_particle_authoring_tests --parallel 4` — exit `0`.
+- First `ctest --test-dir build -C Debug -R "^(kb_21kb_particle_asset_tests|kb_21kb_particle_cpu_backend_tests|kb_21kb_particle_editor_tests|kb_editor_particle_authoring_tests)$" --output-on-failure` — `kb_21kb_particle_asset_tests` failed (`hand-authored canonical fixture is not byte stable`); the other three passed. Root-caused to `core.autocrlf` checkout corruption of the LF-only fixture; repaired per the Stage 7B entry above.
+- `build/engine/Debug/kb_21kb_particle_asset_tests.exe` after the LF fixture fix — exit `0`, "21kb Particle System asset tests passed".
+- `cmake --build build --config Debug --target kb_editor -- /m:1` — failed, `error C2039: 'targetEmitterId': nie jest składową elementu 'kb::editor::ParticleEditorPanelHit'` at `EditorLeftButtonDownRouter.cpp(543,25)`; root-caused and repaired per the Stage 7B entry above.
+- `cmake --build build --config Debug --target kb_editor` after the `ParticleEditorPanelHit` fix — exit `0`.
+- Final Stage 7B independent focused CTest matrix — `ctest --test-dir build -C Debug -R "^(kb_21kb_particle_asset_tests|kb_21kb_particle_cpu_backend_tests|kb_21kb_particle_editor_tests|kb_editor_particle_authoring_tests|kb_editor_particle_authoring_headless)$" --output-on-failure`, exit `0`, `5/5`, `10.77 s`: asset `3.41 s`, CPU `5.81 s`, editor core `0.47 s`, authoring layout `0.03 s`, headless authoring `1.03 s`.
 
 ## Rejected attempts, open defects, and next gate
 
@@ -206,5 +221,7 @@
 - Stage 1A attempt 1 was rejected after independent review despite a green focused test; every listed defect was repaired and the second attempt was accepted.
 - No open stage 0 defect remains.
 - No open stage 1 defect remains.
-- No open defect remains in Stages 0 through 6 or Stage 7A. Next gate: Stage 7B typed module and output authoring over the accepted emitter workspace.
-- Stage 7B is a validated session snapshot, not an accepted checkpoint: `ColorOverLife` still has no valid default gradient and `SubEmitter` has no explicit target-selection flow, so those two module menu entries cannot create a valid history transaction. The focused asset/editor/CPU/authoring/headless gates passed, but the all-nine-module add contract remains open for the next repair.
+- No open defect remains in Stages 0 through 6 or Stage 7A.
+- The previously open Stage 7B gap — `ColorOverLife` had no valid default gradient and `SubEmitter` had no explicit target-selection flow, so those two module menu entries could not create a valid history transaction — is closed. The default-gradient and target-selection-flow repair landed in commit `2e588553`; this session independently re-verified the all-nine-module add contract and found it holds (see Stage 7B evidence).
+- Two additional, previously undetected defects were found while re-verifying Stage 7B in this session (a `kb_editor` compile break from the same commit, and a `core.autocrlf` checkout corruption of the byte-stability fixture) and are repaired; see the Stage 7B entry under Accepted stages for root cause and evidence. No open defect remains in Stage 7B.
+- No open defect remains anywhere in Stage 7. Stage 7 (`complete particle authoring UX`) is `accepted`.

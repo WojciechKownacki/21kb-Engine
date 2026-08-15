@@ -90,6 +90,7 @@ struct ParticleEditorPanelHit {
     kb::scene::ParticleStableId emitterId = 0U;
     std::uint32_t authoringOrder = 0U;
     kb::scene::ParticleStableId moduleId = 0U;
+    kb::scene::ParticleStableId targetEmitterId = 0U;
     kb::scene::ParticleOutputType outputType = kb::scene::ParticleOutputType::Billboard;
     kb::scene::ParticleModuleType moduleType = kb::scene::ParticleModuleType::InitialVelocity;
     std::size_t diagnosticIndex = 0U;
