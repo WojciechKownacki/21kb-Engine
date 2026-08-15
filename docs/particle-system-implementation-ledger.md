@@ -9,11 +9,13 @@
 
 ## Current package
 
-- Stage: `7` — complete particle authoring UX.
-- Status: `accepted`; Stages 0 through 7 are accepted.
-- Scope: Stage 7 added typed authoring controls and workflow over the accepted document, compiler, Bake, isolated preview, and GPU renderer, without a second preview kernel.
-- Next gate: none defined beyond Stage 7 in this ledger; no further stage is in scope until a new package is opened.
-- Rendering direction: normal game-facing simulation and rendering must move to GPU. The CPU backend is retained only as the deterministic validation, diagnostics, and preview path; it is not the intended final gameplay path.
+- Stage: `8` — mesh output.
+- Status: `in_progress`; Stages 0 through 7 are accepted.
+- Scope: Stage 8 adds real `ParticleOutputType::Mesh` rendering — instanced particle-mesh sections using existing `RenderMesh`/`RenderMaterial`, with LOD and shadow policy, without a per-particle mesh proxy — per `docs/particle-kanku-audit-plan.md` section 9.5 (renderer manifest), section 10 ("Etapy outputów" step 2), and section 11 ("Etap 8 — Mesh output").
+- Canonical spec source: `docs/particle-kanku-audit-plan.md`. Its own naming (`Particle`/`kb_particle_core`/etc., after the `Particli`→`Particle` document-only rename on 2026-08-15) is not literal — this project's frozen naming (`Rendering.21kbParticle`, `kb_21kb_particle_*` targets, `ParticleEffect`/`Particle*` class names without the `21kb` prefix where the existing code already uses that shorter form) stays as-is. Where the audit's file/class names differ from what actually exists in this repo, map to the real equivalent and record it here rather than renaming existing code to match the audit.
+- Orchestration: single-agent (no 2-agent orchestrator/implementer split — `docs/archive/particle-sol-xhigh-autonomous-prompt.md`'s mechanics are archived/unused, per explicit user decision 2026-08-15).
+- Next gate: Stage 8 gate criteria (audit section 11, "Etap 8"): N particles of one mesh/material render as one draw per section/LOD; a wrong/missing mesh reference blocks compile/Bake; LOD and shadow policy have renderer tests/goldens; hot reload and scene release leave no resource refs.
+- Rendering direction unchanged: normal game-facing simulation and rendering must move to GPU. The CPU backend is retained only as the deterministic validation, diagnostics, and preview path; it is not the intended final gameplay path.
 
 ## Accepted stages
 
