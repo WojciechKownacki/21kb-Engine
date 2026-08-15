@@ -46,7 +46,7 @@ bool ParticleEditorPanelInteraction::Execute(
     case ParticleEditorPanelAction::EditProperty:
         return sceneContext.EditParticleEditorProperty(hit.propertyIndex, editedValue);
     case ParticleEditorPanelAction::AddModule:
-        return sceneContext.AddParticleEditorModule(hit.moduleType);
+        return sceneContext.AddParticleEditorModule(hit.moduleType, hit.targetEmitterId);
     case ParticleEditorPanelAction::SelectModule:
         return sceneContext.SelectParticleEditorModule(hit.emitterId, hit.moduleId);
     case ParticleEditorPanelAction::BeginModuleDrag:

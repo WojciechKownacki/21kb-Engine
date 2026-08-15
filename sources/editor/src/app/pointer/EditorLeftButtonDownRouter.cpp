@@ -514,14 +514,34 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 if (menu == nullptr) return;
                 constexpr const char* labels[] = {"Initial Velocity", "Gravity", "Wind", "Drag", "Color Over Life",
                     "Size Over Life", "Alpha Over Life", "Collision Plane", "Sub Emitter"};
-                for (UINT index = 0U; index < static_cast<UINT>(std::size(labels)); ++index)
-                    AppendMenuA(menu, MF_STRING, 100U + index, labels[index]);
+                for (UINT index = 0U; index < static_cast<UINT>(std::size(labels)); ++index) {
+                    const UINT flags = index == static_cast<UINT>(kb::scene::ParticleModuleType::SubEmitter) &&
+                        rows.size() < 2U ? MF_STRING | MF_GRAYED : MF_STRING;
+                    AppendMenuA(menu, flags, 100U + index, labels[index]);
+                }
                 POINT point{x, y}; ClientToScreen(messageWindow, &point);
                 const UINT choice = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD |
                     TPM_NONOTIFY | TPM_RIGHTBUTTON, point.x, point.y, 0, messageWindow, nullptr);
                 DestroyMenu(menu);
                 if (choice < 100U || choice >= 109U) return;
                 hit.moduleType = static_cast<kb::scene::ParticleModuleType>(choice - 100U);
+                if (hit.moduleType == kb::scene::ParticleModuleType::SubEmitter) {
+                    HMENU targets = CreatePopupMenu();
+                    if (targets == nullptr) return;
+                    std::array<kb::scene::ParticleStableId, kb::scene::kParticleEffectMaxEmitters> targetIds{};
+                    UINT targetCount = 0U;
+                    for (const auto& row : rows) {
+                        if (row.emitterId == inspector.emitterId) continue;
+                        targetIds[targetCount] = row.emitterId;
+                        AppendMenuA(targets, MF_STRING, 200U + targetCount, row.name.c_str());
+                        ++targetCount;
+                    }
+                    const UINT targetChoice = TrackPopupMenu(targets, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD |
+                        TPM_NONOTIFY | TPM_RIGHTBUTTON, point.x, point.y, 0, messageWindow, nullptr);
+                    DestroyMenu(targets);
+                    if (targetChoice < 200U || targetChoice >= 200U + targetCount) return;
+                    hit.targetEmitterId = targetIds[targetChoice - 200U];
+                }
             } else if (hit.action == ParticleEditorPanelAction::EditProperty) {
                 if (hit.propertyIndex >= inspector.properties.size() || !inspector.properties[hit.propertyIndex].editable)
                     return;
