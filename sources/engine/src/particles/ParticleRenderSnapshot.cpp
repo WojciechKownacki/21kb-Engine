@@ -43,7 +43,8 @@ template <typename Enum>
             !EnumAtMost(emitter.alignment, ParticleRenderAlignment::Local) ||
             (static_cast<std::uint8_t>(emitter.flags) &
                 ~static_cast<std::uint8_t>(ParticleRenderEmitterFlag::SoftParticles |
-                    ParticleRenderEmitterFlag::AntiAliasing)) != 0U ||
+                    ParticleRenderEmitterFlag::AntiAliasing | ParticleRenderEmitterFlag::CastsShadow |
+                    ParticleRenderEmitterFlag::ReceivesShadow)) != 0U ||
             !std::isfinite(emitter.pointSpriteDiameter) || emitter.pointSpriteDiameter <= 0.0F ||
             ((emitter.droppedParticleCount == 0U) !=
                 (emitter.droppedReason == ParticleRenderDropReason::None)) ||

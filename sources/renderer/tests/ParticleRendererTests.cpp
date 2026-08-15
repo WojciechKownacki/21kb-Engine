@@ -186,13 +186,25 @@ void TestSortBlendFlipbookAndSoftContract() {
         "compatible emitters were not globally age sorted across emitter ranges");
 
     crossEmitters[0].sort = crossEmitters[1].sort = kb::particles::ParticleRenderSortMode::BackToFront;
-    crossEmitters[0].output = kb::particles::ParticleRenderOutput::Mesh;
+    crossEmitters[0].output = kb::particles::ParticleRenderOutput::Trail;
     const auto mixed = batcher.Build(*Snapshot(crossEmitters, crossEmitterParticles), camera);
     Require(mixed.Succeeded() && mixed.unsupportedEmitterCount == 1U &&
             mixed.droppedParticleCount == 2U && mixed.instances.size() == 2U &&
             mixed.unsupportedEmitterRecordIndices.size() == 1U &&
             mixed.unsupportedEmitterRecordIndices[0] == 0U,
         "one unsupported emitter hid supported GPU particle batches in a mixed effect");
+
+    // Mesh output is handled by the separate mesh-instancing path (reusing the scene mesh
+    // pipeline), not this quad/billboard batcher - it must be silently excluded here, counted
+    // neither as a rendered GPU batch nor as a dropped/unsupported emitter.
+    auto meshMixedEmitters = crossEmitters;
+    meshMixedEmitters[0].output = kb::particles::ParticleRenderOutput::Mesh;
+    meshMixedEmitters[1].output = kb::particles::ParticleRenderOutput::Billboard;
+    const auto meshMixed = batcher.Build(*Snapshot(meshMixedEmitters, crossEmitterParticles), camera);
+    Require(meshMixed.Succeeded() && meshMixed.unsupportedEmitterCount == 0U &&
+            meshMixed.droppedParticleCount == 0U && meshMixed.unsupportedEmitterRecordIndices.empty() &&
+            meshMixed.batches.size() == 1U && meshMixed.instances.size() == 2U,
+        "mesh output emitter was misreported as dropped/unsupported instead of silently excluded");
 }
 
 void TestCapacitySplitNoProxyGrowthTwoViewsAndNoAllocation() {

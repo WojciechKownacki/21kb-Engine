@@ -1617,12 +1617,20 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
                     : kb::particles::ParticleRenderEmitterFlag::None) |
                     (emitter.antiAliasing
                         ? kb::particles::ParticleRenderEmitterFlag::AntiAliasing
+                        : kb::particles::ParticleRenderEmitterFlag::None) |
+                    (emitter.outputType == kb::scene::ParticleOutputType::Mesh && emitter.meshCastsShadow
+                        ? kb::particles::ParticleRenderEmitterFlag::CastsShadow
+                        : kb::particles::ParticleRenderEmitterFlag::None) |
+                    (emitter.outputType == kb::scene::ParticleOutputType::Mesh && emitter.meshReceivesShadow
+                        ? kb::particles::ParticleRenderEmitterFlag::ReceivesShadow
                         : kb::particles::ParticleRenderEmitterFlag::None),
                 .flipbookColumnsEncoded = static_cast<std::uint8_t>(emitter.flipbookColumns),
                 .flipbookRowsEncoded = static_cast<std::uint8_t>(emitter.flipbookRows),
                 .localBasisQuaternionSnorm = PackQuaternion(kb::math::Normalize(
                     ownerTransforms_[denseIndex].rotation * emitter.localRotation)),
                 .pointSpriteDiameter = emitter.pointSpriteDiameter,
+                .meshLodLevel = static_cast<std::int8_t>(std::clamp(
+                    std::lround(emitter.meshLodBias), -128L, 127L)),
                 .boundsMinimum = count == 0U
                     ? emptyBounds
                     : kb::math::Vec3{std::numeric_limits<float>::max(),

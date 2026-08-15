@@ -110,11 +110,14 @@ private:
         .droppedReason = kb::particles::ParticleRenderDropReason::EventBudget,
         .alignment = kb::particles::ParticleRenderAlignment::Local,
         .flags = kb::particles::ParticleRenderEmitterFlag::SoftParticles |
-            kb::particles::ParticleRenderEmitterFlag::AntiAliasing,
+            kb::particles::ParticleRenderEmitterFlag::AntiAliasing |
+            kb::particles::ParticleRenderEmitterFlag::CastsShadow |
+            kb::particles::ParticleRenderEmitterFlag::ReceivesShadow,
         .flipbookColumnsEncoded = 8U,
         .flipbookRowsEncoded = 4U,
         .localBasisQuaternionSnorm = {0, 16'384, 0, 28'377},
         .pointSpriteDiameter = 0.75F,
+        .meshLodLevel = -3,
         .boundsMinimum = {-10.0F, -20.0F, -30.0F},
         .boundsMaximum = {10.0F, 20.0F, 30.0F},
     };
@@ -161,8 +164,13 @@ void TestCompleteContractAndMalformedRanges() {
                 emitter.flags, kb::particles::ParticleRenderEmitterFlag::SoftParticles) &&
             kb::particles::HasParticleRenderEmitterFlag(
                 emitter.flags, kb::particles::ParticleRenderEmitterFlag::AntiAliasing) &&
+            kb::particles::HasParticleRenderEmitterFlag(
+                emitter.flags, kb::particles::ParticleRenderEmitterFlag::CastsShadow) &&
+            kb::particles::HasParticleRenderEmitterFlag(
+                emitter.flags, kb::particles::ParticleRenderEmitterFlag::ReceivesShadow) &&
             emitter.FlipbookColumns() == 8U && emitter.FlipbookRows() == 4U &&
             emitter.localBasisQuaternionSnorm[1] == 16'384 && emitter.pointSpriteDiameter == 0.75F &&
+            emitter.meshLodLevel == -3 &&
             emitter.boundsMinimum.x == -10.0F && emitter.boundsMaximum.z == 30.0F,
         "per-emitter render metadata was incomplete or changed");
     const auto& particle = snapshot->Particles()[0];
@@ -206,6 +214,10 @@ void TestCompleteContractAndMalformedRanges() {
     malformed[0].alignment = static_cast<kb::particles::ParticleRenderAlignment>(255U);
     Require(invalid(malformed, particles) == kb::particles::ParticleRenderSnapshotStatus::InvalidSnapshot,
         "unknown alignment enum was accepted");
+    malformed = emitters;
+    malformed[0].flags = static_cast<kb::particles::ParticleRenderEmitterFlag>(1U << 7U);
+    Require(invalid(malformed, particles) == kb::particles::ParticleRenderSnapshotStatus::InvalidSnapshot,
+        "unknown emitter flag bit was accepted");
     malformed = emitters;
     malformed[0].pointSpriteDiameter = 0.0F;
     Require(invalid(malformed, particles) == kb::particles::ParticleRenderSnapshotStatus::InvalidSnapshot,

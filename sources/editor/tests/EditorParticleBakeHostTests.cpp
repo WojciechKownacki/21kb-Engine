@@ -79,9 +79,8 @@ void RunHostBakeCommandTest() {
         "production host Bake did not use the project cache root or mutated the source document");
 
     auto unsupported = working;
-    unsupported.emitters[0].output.type = kb::scene::ParticleOutputType::Mesh;
-    unsupported.emitters[0].output.mesh = {.assetId = 3U};
-    unsupported.emitters[0].output.payload = kb::scene::ParticleMeshOutput{};
+    unsupported.emitters[0].output.type = kb::scene::ParticleOutputType::Trail;
+    unsupported.emitters[0].output.payload = kb::scene::ParticleTrailOutput{};
     const auto rejected = kb::editor::ParticleEditorBakeHostCommand::Execute(
         unsupported, owner, registry, root, console);
     const kb::editor::EditorConsoleEntry& diagnostic = console.Entries().back();
@@ -92,6 +91,28 @@ void RunHostBakeCommandTest() {
             diagnostic.message.find("effect.emitter[0].output.type") != std::string::npos &&
             ReadBytes(sourcePath) == sourceBytes,
         "host Bake did not surface the typed unsupported diagnostic or changed source bytes");
+
+    // Stage 8: Mesh output is a supported capability now, so a valid mesh reference must Bake
+    // successfully instead of being rejected as unsupported.
+    auto meshSupported = working;
+    meshSupported.emitters[0].output.type = kb::scene::ParticleOutputType::Mesh;
+    meshSupported.emitters[0].output.mesh = {.assetId = 3U};
+    meshSupported.emitters[0].output.payload = kb::scene::ParticleMeshOutput{};
+    const auto meshBaked = kb::editor::ParticleEditorBakeHostCommand::Execute(
+        meshSupported, owner, registry, root, console);
+    Require(meshBaked.Succeeded() && std::filesystem::is_regular_file(meshBaked.cachePath),
+        "Mesh output with a valid mesh reference was rejected by production host Bake");
+
+    // A missing/unregistered mesh reference must still block compile/Bake explicitly.
+    auto meshMissing = working;
+    meshMissing.emitters[0].output.type = kb::scene::ParticleOutputType::Mesh;
+    meshMissing.emitters[0].output.mesh = {.assetId = 999U};
+    meshMissing.emitters[0].output.payload = kb::scene::ParticleMeshOutput{};
+    const auto meshRejected = kb::editor::ParticleEditorBakeHostCommand::Execute(
+        meshMissing, owner, registry, root, console);
+    Require(!meshRejected.Succeeded() && !meshRejected.diagnostics.empty() &&
+            ReadBytes(sourcePath) == sourceBytes,
+        "Mesh output with a missing mesh reference was not rejected by production host Bake");
 }
 
 } // namespace
