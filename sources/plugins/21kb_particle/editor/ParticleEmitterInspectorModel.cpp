@@ -58,6 +58,28 @@ namespace {
 template <typename T>
 [[nodiscard]] std::string ScalarText(T value) { return std::to_string(value); }
 
+[[nodiscard]] std::string CurveText(const kb::math::Curve& curve) {
+    std::string text;
+    for (std::size_t index = 0U; index < curve.keyframes.size(); ++index) {
+        if (index != 0U) text += ';';
+        const auto& key = curve.keyframes[index];
+        text += std::to_string(key.time) + ',' + std::to_string(key.value) + ',' +
+            std::to_string(static_cast<std::uint32_t>(key.easing));
+    }
+    return text;
+}
+
+[[nodiscard]] std::string GradientText(const kb::math::Gradient& gradient) {
+    std::string text;
+    for (std::size_t index = 0U; index < gradient.stops.size(); ++index) {
+        if (index != 0U) text += ';';
+        const auto& stop = gradient.stops[index];
+        text += std::to_string(stop.time) + ',' + std::to_string(stop.color.r) + ',' +
+            std::to_string(stop.color.g) + ',' + std::to_string(stop.color.b) + ',' + std::to_string(stop.color.a);
+    }
+    return text;
+}
+
 void AddModuleProperties(ParticleEmitterInspectorView& view, const kb::scene::ParticleModuleAsset& module) {
     std::uint8_t field = 0U;
     const auto add = [&](std::string label, std::string value, bool editable = true) {
@@ -76,11 +98,11 @@ void AddModuleProperties(ParticleEmitterInspectorView& view, const kb::scene::Pa
         } else if constexpr (std::is_same_v<T, kb::scene::ParticleWindModule>) add("Acceleration", VecText(payload.acceleration));
         else if constexpr (std::is_same_v<T, kb::scene::ParticleDragModule>) add("Coefficient", ScalarText(payload.coefficient));
         else if constexpr (std::is_same_v<T, kb::scene::ParticleColorOverLifeModule>)
-            add("Gradient", std::to_string(payload.gradient.stops.size()) + " stops", false);
+            add("Gradient", GradientText(payload.gradient));
         else if constexpr (std::is_same_v<T, kb::scene::ParticleSizeOverLifeModule>)
-            add("Curve", std::to_string(payload.curve.keyframes.size()) + " keys", false);
+            add("Curve", CurveText(payload.curve));
         else if constexpr (std::is_same_v<T, kb::scene::ParticleAlphaOverLifeModule>)
-            add("Curve", std::to_string(payload.curve.keyframes.size()) + " keys", false);
+            add("Curve", CurveText(payload.curve));
         else if constexpr (std::is_same_v<T, kb::scene::ParticleCollisionPlaneModule>) {
             add("Normal", VecText(payload.normal)); add("Distance", ScalarText(payload.distance));
             add("Restitution", ScalarText(payload.restitution)); add("Friction", ScalarText(payload.friction));
@@ -131,8 +153,7 @@ ParticleEmitterInspectorView ParticleEmitterInspectorModel::Build(
             view.properties.push_back({.property = property, .label = std::move(label),
                                        .value = std::move(value), .editable = editable});
         };
-        addProperty(ParticleEditorProperty::SpawnRateSummary, "Rate curve",
-            std::to_string(spawn.rateOverTime.keyframes.size()) + " keys", false);
+        addProperty(ParticleEditorProperty::SpawnRateSummary, "Rate curve", CurveText(spawn.rateOverTime));
         addProperty(ParticleEditorProperty::SpawnBurstsSummary, "Bursts",
             std::to_string(spawn.bursts.size()) + " entries", false);
         addProperty(ParticleEditorProperty::SpawnLifetimeMin, "Lifetime min", ScalarText(spawn.lifetimeMin));
