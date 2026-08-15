@@ -71,6 +71,63 @@ template <typename T>
     return input && input.eof() && std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
 
+// Compact single-line encoding for the shared value-edit dialog: keyframes/stops separated by
+// ';', fields within one keyframe/stop separated by ','. Ordering, range, and count limits are
+// left to ParticleEffectAssetValidator::ValidateStructure (run by ParticleEditorDocument::Apply),
+// the single source of truth for those constraints; this only rejects syntactically malformed text.
+[[nodiscard]] bool ParseCurve(std::string_view text, kb::math::Curve& value) {
+    std::vector<kb::math::CurveKeyframe> keyframes;
+    std::size_t start = 0U;
+    while (true) {
+        const std::size_t end = text.find(';', start);
+        const std::string_view token = text.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
+        std::istringstream input{std::string{token}};
+        input.imbue(std::locale::classic());
+        kb::math::CurveKeyframe keyframe;
+        std::uint32_t easing = 0U;
+        char separatorA = 0, separatorB = 0;
+        input >> keyframe.time >> separatorA >> keyframe.value >> separatorB >> easing;
+        input >> std::ws;
+        if (!input || !input.eof() || separatorA != ',' || separatorB != ',' ||
+            !std::isfinite(keyframe.time) || !std::isfinite(keyframe.value) ||
+            easing > static_cast<std::uint32_t>(kb::math::Easing::InOutBounce))
+            return false;
+        keyframe.easing = static_cast<kb::math::Easing>(easing);
+        keyframes.push_back(keyframe);
+        if (end == std::string_view::npos) break;
+        start = end + 1U;
+    }
+    if (keyframes.empty() || keyframes.size() > kb::scene::kParticleEffectMaxCurveKeys) return false;
+    value.keyframes = std::move(keyframes);
+    return true;
+}
+
+[[nodiscard]] bool ParseGradient(std::string_view text, kb::math::Gradient& value) {
+    std::vector<kb::math::GradientStop> stops;
+    std::size_t start = 0U;
+    while (true) {
+        const std::size_t end = text.find(';', start);
+        const std::string_view token = text.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
+        std::istringstream input{std::string{token}};
+        input.imbue(std::locale::classic());
+        kb::math::GradientStop stop;
+        char separatorA = 0, separatorB = 0, separatorC = 0, separatorD = 0;
+        input >> stop.time >> separatorA >> stop.color.r >> separatorB >> stop.color.g >> separatorC >>
+            stop.color.b >> separatorD >> stop.color.a;
+        input >> std::ws;
+        if (!input || !input.eof() || separatorA != ',' || separatorB != ',' || separatorC != ',' || separatorD != ',' ||
+            !std::isfinite(stop.time) || !std::isfinite(stop.color.r) || !std::isfinite(stop.color.g) ||
+            !std::isfinite(stop.color.b) || !std::isfinite(stop.color.a))
+            return false;
+        stops.push_back(stop);
+        if (end == std::string_view::npos) break;
+        start = end + 1U;
+    }
+    if (stops.empty() || stops.size() > kb::scene::kParticleEffectMaxGradientStops) return false;
+    value.stops = std::move(stops);
+    return true;
+}
+
 } // namespace
 
 bool EditorSceneContext::OpenParticleEditorAsset(kb::assets::AssetId id) {
@@ -448,6 +505,7 @@ bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, s
     bool parsed = false;
     bool editsSpawn = true;
     switch (row.property) {
+    case kb::particle_editor::ParticleEditorProperty::SpawnRateSummary: parsed = ParseCurve(text, spawn.rateOverTime); break;
     case kb::particle_editor::ParticleEditorProperty::SpawnLifetimeMin: parsed = setFloat(spawn.lifetimeMin); break;
     case kb::particle_editor::ParticleEditorProperty::SpawnLifetimeMax: parsed = setFloat(spawn.lifetimeMax); break;
     case kb::particle_editor::ParticleEditorProperty::SpawnSpeedMin: parsed = setFloat(spawn.speedMin); break;
@@ -520,6 +578,10 @@ bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, s
             } else if constexpr (std::is_same_v<T, kb::scene::ParticleWindModule>) {
                 parsed = ParseVec3(text, vectorValue); if (parsed) value.acceleration = vectorValue;
             } else if constexpr (std::is_same_v<T, kb::scene::ParticleDragModule>) parsed = setFloat(value.coefficient);
+            else if constexpr (std::is_same_v<T, kb::scene::ParticleColorOverLifeModule>) parsed = ParseGradient(text, value.gradient);
+            else if constexpr (std::is_same_v<T, kb::scene::ParticleSizeOverLifeModule> ||
+                                std::is_same_v<T, kb::scene::ParticleAlphaOverLifeModule>)
+                parsed = ParseCurve(text, value.curve);
             else if constexpr (std::is_same_v<T, kb::scene::ParticleCollisionPlaneModule>) {
                 if (row.payloadField == 0U) { parsed = ParseVec3(text, vectorValue); if (parsed) value.normal = vectorValue; }
                 else if (row.payloadField == 1U) parsed = setFloat(value.distance);

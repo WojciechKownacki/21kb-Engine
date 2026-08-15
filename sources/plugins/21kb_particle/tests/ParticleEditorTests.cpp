@@ -288,6 +288,67 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
             std::get<kb::scene::ParticleSubEmitterModule>(subEmitter->payload).targetEmitterId == 12U &&
             kb::scene::ParticleEffectAssetValidator::ValidateStructure(allTypesDocument.Asset()).Succeeded(),
         "all-nine module add did not produce bounded valid defaults and an explicit Sub Emitter target");
+    const auto sizeModule = std::find_if(allModules.begin(), allModules.end(), [](const auto& module) {
+        return module.type == kb::scene::ParticleModuleType::SizeOverLife;
+    });
+    Require(sizeModule != allModules.end(), "size over life module was not added by the all-nine-module loop");
+    const kb::scene::ParticleStableId colorModuleId = color->moduleId;
+    const kb::scene::ParticleStableId sizeModuleId = sizeModule->moduleId;
+
+    const auto colorInspector =
+        ParticleEmitterInspectorModel::Build(allTypesDocument.Asset(), 11U, colorModuleId, nullptr, nullptr);
+    const auto gradientRow = std::find_if(colorInspector.properties.begin(), colorInspector.properties.end(),
+        [](const auto& row) { return row.label == "Gradient"; });
+    Require(gradientRow != colorInspector.properties.end() && gradientRow->editable &&
+            gradientRow->value == "0.000000,1.000000,1.000000,1.000000,1.000000;"
+                                   "1.000000,1.000000,1.000000,1.000000,1.000000",
+        "ColorOverLife gradient property row was not editable or did not encode the default gradient");
+    const auto sizeInspector =
+        ParticleEmitterInspectorModel::Build(allTypesDocument.Asset(), 11U, sizeModuleId, nullptr, nullptr);
+    const auto curveRow = std::find_if(sizeInspector.properties.begin(), sizeInspector.properties.end(),
+        [](const auto& row) { return row.label == "Curve"; });
+    Require(curveRow != sizeInspector.properties.end() && curveRow->editable && curveRow->value == "0.000000,1.000000,0",
+        "SizeOverLife curve property row was not editable or did not encode the default curve");
+    const auto rateInspector = ParticleEmitterInspectorModel::Build(allTypesDocument.Asset(), 11U, 0U, nullptr, nullptr);
+    const auto rateRow = std::find_if(rateInspector.properties.begin(), rateInspector.properties.end(),
+        [](const auto& row) { return row.label == "Rate curve"; });
+    Require(rateRow != rateInspector.properties.end() && rateRow->editable && rateRow->value == "0.000000,60.000000,0",
+        "spawn rate curve property row was not editable or did not encode the authored curve");
+
+    auto editedGradient = std::get<kb::scene::ParticleColorOverLifeModule>(color->payload);
+    editedGradient.gradient.stops.insert(editedGradient.gradient.stops.begin() + 1,
+        kb::math::GradientStop{.time = 0.5F, .color = {1.0F, 0.5F, 0.0F, 1.0F}});
+    Require(ParticleEditorCommands::SetModulePayload(
+                allTypesDocument, allTypesWorkspace, 11U, colorModuleId, editedGradient)
+                .Succeeded(),
+        "gradient stop insertion via SetModulePayload was rejected");
+    const auto& colorAfterEdit = allTypesDocument.Asset().emitters[0].modules;
+    const auto colorEdited = std::find_if(colorAfterEdit.begin(), colorAfterEdit.end(),
+        [colorModuleId](const auto& module) { return module.moduleId == colorModuleId; });
+    Require(colorEdited != colorAfterEdit.end() &&
+            std::get<kb::scene::ParticleColorOverLifeModule>(colorEdited->payload).gradient.stops.size() == 3U,
+        "gradient stop insertion did not persist a genuine three-stop edit");
+
+    auto editedCurve = std::get<kb::scene::ParticleSizeOverLifeModule>(sizeModule->payload);
+    editedCurve.curve.keyframes.push_back(kb::math::CurveKeyframe{
+        .time = 1.0F, .value = 2.0F, .easing = kb::math::Easing::OutQuad});
+    Require(ParticleEditorCommands::SetModulePayload(
+                allTypesDocument, allTypesWorkspace, 11U, sizeModuleId, editedCurve)
+                .Succeeded(),
+        "curve keyframe insertion via SetModulePayload was rejected");
+    const auto& sizeAfterEdit = allTypesDocument.Asset().emitters[0].modules;
+    const auto sizeEdited = std::find_if(sizeAfterEdit.begin(), sizeAfterEdit.end(),
+        [sizeModuleId](const auto& module) { return module.moduleId == sizeModuleId; });
+    Require(sizeEdited != sizeAfterEdit.end() &&
+            std::get<kb::scene::ParticleSizeOverLifeModule>(sizeEdited->payload).curve.keyframes.size() == 2U,
+        "curve keyframe insertion did not persist a genuine two-key edit");
+
+    auto editedSpawn = allTypesDocument.Asset().emitters[0].spawn;
+    editedSpawn.rateOverTime.keyframes.push_back(
+        kb::math::CurveKeyframe{.time = 1.0F, .value = 120.0F, .easing = kb::math::Easing::Linear});
+    Require(ParticleEditorCommands::SetEmitterSpawn(allTypesDocument, allTypesWorkspace, 11U, editedSpawn).Succeeded() &&
+            allTypesDocument.Asset().emitters[0].spawn.rateOverTime.keyframes.size() == 2U,
+        "spawn rate curve keyframe insertion via SetEmitterSpawn did not persist a genuine two-key edit");
 
     ParticleEditorDocument document;
     ParticleEditorWorkspaceState workspace;
