@@ -240,7 +240,11 @@ void SceneRenderer::SubmitMeshPass(
             terrainLayersOnly,
             motionVectorPreviousViewProjection_,
             pass == MeshPassType::BaseTransparent ? particleRenderer_.get() : nullptr,
-            pass == MeshPassType::BaseTransparent ? particleSnapshot.get() : nullptr);
+            // Mesh-output particles (submitted internally through the ordinary mesh pipeline, not
+            // particleRenderer_'s quad/billboard path above) need the snapshot in every pass - their
+            // material determines opaque/GBuffer/transparent/ShadowDepth participation the same way
+            // it already does for ordinary meshes, so this cannot stay gated to BaseTransparent only.
+            particleSnapshot.get());
         if (lastSubmitStats_.failedParticleBatchCount != 0U) {
             lastDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
                 .severity = SceneRenderDiagnosticSeverity::Error,

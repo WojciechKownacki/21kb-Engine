@@ -77,43 +77,65 @@ capability end-to-end through every layer *except* the renderer actually drawing
   an error, but it will render as nothing until package 2 lands. This is a deliberate, tracked intermediate
   state of a single in-progress stage, not a claim that Stage 8 is done.
 
-### Stage 8 package 2 of 2 — mesh instance submission: not started
+### Stage 8 package 2 of 2 — mesh instance submission: implemented, partially verified
 
-Investigated and designed, not yet implemented. Findings, to avoid re-discovery:
-- Full reuse of the existing non-particle instanced-mesh pipeline is possible and is what the audit itself
-  specifies ("bez mesh proxy map"): `MeshPipelineProcessor::BuildInto`/`SceneMeshDrawCommandSubmitter::Submit`
-  do not require input sourced from `RenderScene`'s per-entity mesh proxies — `MeshPipelineBuildDesc.meshBatches`
-  (a plain `std::vector<SceneMeshBatch>`, each `{meshAssetId, materialAssetId, span<SceneRenderMeshInstance>}`)
-  is accepted independent of `RenderScene` entirely. `SceneRenderMeshInstance` can be built directly from
-  particle position/rotation/size (its `model`/`color`/`castsShadow`/`receivesShadow`/`lodBias`/`entityId`
-  fields need no scene-graph type); `worldBounds`/`depthBucket` are computed by the pipeline itself, not
-  required from the caller. No new shaders are needed for plain PBR/unlit materials — program selection is
-  driven entirely by the `RenderMaterial`'s own shader assignment, identically to regular scene meshes,
-  including automatic participation in whichever pass (opaque/transparent/shadow) the material's blend
-  state already routes it to via the existing `MeshPipelinePassPolicy`.
-- Real per-particle 3D orientation is not tracked by the CPU sim today — `ParticleRenderRecord.rotationRadians`
-  is a single scalar (billboard spin), not a quaternion. Decision (not yet implemented): mesh instance
-  rotation = emitter's `localBasisQuaternionSnorm` (already in the snapshot record) composed with a
-  `rotationRadians` spin around that basis's local axis, uniform scale from `.size`. This is a genuine,
-  documented scope boundary of the current particle data model, not an oversight — a future stage adding
-  full 3D per-particle orientation would need a new field in `ParticleRenderRecord`.
-- Integration point: `SceneMeshSubmitter::Submit()` (`sources/renderer/src/scene/SceneMeshSubmitter.cpp`),
-  which currently wires the *existing* quad-billboard particle path only into `pass == BaseTransparent`.
-  For Mesh output, plan is a second, independent `MeshPipelineProcessor::BuildInto` call per `Submit()`
-  invocation (i.e. per pass, since the caller — `SceneRenderer::SubmitMeshPass` — calls `Submit()` once per
-  pass already) with `.meshBatches` set to the particle-mesh-derived list and `.drawGroups = nullptr`,
-  sharing the same `resources`/`resourceMap`/`camera`/`diagnostics`/budgets already assembled for the pass,
-  submitting its resulting `MeshDrawCommand`s via the same `SceneMeshDrawCommandSubmitter::Submit` call —
-  letting the existing per-pass policy (`MeshPipelinePassPolicy`) decide participation per pass exactly as
-  it already does for ordinary scene meshes, rather than hand-routing by blend mode.
-- Remaining work: build the particle→`SceneRenderMeshInstance` conversion (from the render snapshot's Mesh-
-  output emitter records + particle array), wire the second `BuildInto`/`Submit` call into
-  `SceneMeshSubmitter::Submit()`, resolve `RenderMeshResource`/`RenderMaterialResource` for `meshAssetId`/
-  `materialAssetId` (already ensured into the resource cache by `RuntimeMeshResourceEnsurer`/
-  `RuntimeMaterialResourceEnsurer` ahead of this stage, per investigation — not yet verified by a
-  passing test), hot-reload/scene-release cleanup, and the renderer test/golden coverage the gate requires
-  (draw-count assertion for "N particles same mesh/material = one draw per section/LOD", LOD selection,
-  shadow-cast toggle).
+Mesh-output particles now actually render through the real GPU mesh pipeline. Design confirmed by
+investigation before writing code: full reuse of the existing non-particle instanced-mesh pipeline is
+possible and is what the audit itself specifies ("bez mesh proxy map") — `MeshPipelineProcessor::BuildInto`/
+`SceneMeshDrawCommandSubmitter::Submit` do not require input sourced from `RenderScene`'s per-entity mesh
+proxies; `MeshPipelineBuildDesc.meshBatches` is accepted independent of `RenderScene` entirely, and program
+selection is driven entirely by the `RenderMaterial`'s own shader assignment — no new shaders needed.
+
+- New `sources/renderer/include/kb/render/particles/ParticleMeshBatchBuilder.hpp` / `src/particles/ParticleMeshBatchBuilder.cpp`:
+  builds `SceneMeshBatch`/`SceneRenderMeshInstance` values directly from Mesh-output emitter records and
+  their particles in a `ParticleRenderSnapshot` — one batch per Mesh-output emitter (multiple particles of
+  the same emitter already batch into few draws via the reused pipeline's own instancing; merging identical
+  mesh/material *across different* emitters is a possible future optimization, not attempted here). Built
+  with a two-pass count-then-fill approach specifically to avoid a real hazard: `SceneMeshBatch::instances`
+  is a `std::span` into the builder's own growing vector, so a mid-build reallocation would leave every
+  earlier batch's span dangling; capacity is reserved to the exact total before any span is taken.
+  Per-instance model matrix: `kb::math::FromTRS(particle.position, emitterBasis * spin(particle.rotationRadians), uniformScale)`,
+  reusing existing `FromTRS`/`Quat` operator* / the same snorm-unpack formula `ParticleRenderBatcher.cpp`
+  already uses for billboard alignment (`value/32767`) — no new math. **Documented scope boundary**: the CPU
+  sim only tracks a single scalar spin per particle (`rotationRadians`, the same value billboards use), not
+  a full 3D orientation; mesh instances get the emitter's authored local orientation plus that spin around
+  its local Z axis, not independent per-particle 3D tumbling. A future stage adding real per-particle 3D
+  orientation would need a new `ParticleRenderRecord` field, not a fix here.
+- `SceneMeshSubmitter::Submit()` (`sources/renderer/src/scene/SceneMeshSubmitter.cpp`) now runs a second,
+  independent `MeshPipelineProcessor::BuildInto` + `SceneMeshDrawCommandSubmitter::Submit` call whenever a
+  particle snapshot is supplied, submitting `particleMeshBatchBuilder_`'s batches for the *current* pass —
+  letting the existing per-pass policy (`MeshPipelinePassPolicy`) decide opaque/transparent/shadow
+  participation exactly as it already does for ordinary meshes, rather than hand-routing by blend mode.
+  `SceneRenderer.cpp`'s call site was changed to pass the particle snapshot for *every* pass (previously
+  gated to `BaseTransparent` only, matching the pre-existing quad-billboard `particleRenderer_` path, which
+  stays `BaseTransparent`-only and unchanged) — mesh particles need `ShadowDepth`/`BaseOpaque`/`GBuffer` too.
+  **Documented scope boundary**: particle-mesh draw commands are submitted as their own call, not merged into
+  the shared mesh/quad-particle transparent depth-sort queue (`TransparentDrawOrderEntry`) — they render with
+  correct per-material blend/depth state but are not perfectly camera-depth-interleaved against unrelated
+  mesh/billboard draws in the same pass in this first cut. Extending the shared queue with a third source
+  kind is future work, not a silent bug.
+- New test `TestMeshBatchBuilderInstancesLodShadowAndExclusion` (`sources/renderer/tests/ParticleRendererTests.cpp`)
+  verifies: a Mesh emitter's particles produce exactly one batch with the right mesh/material IDs and
+  instance count; a Billboard emitter in the same snapshot produces none; each instance carries the right
+  `entityId`/`castsShadow`/`receivesShadow`/`lodBias`; the model matrix places an identity-oriented,
+  unit-scale particle at its authored position (translation in indices [12,13,14], matching `FromTRS`'s
+  column-major layout, confirmed against `vs_mesh_instanced.sc`'s `i_data0..3` convention); color unpacks
+  from the packed particle color; an all-non-Mesh snapshot produces zero batches.
+- Verification performed: full focused matrix (7 targets, listed below) green; `kb_editor` full dependency
+  graph rebuild green; **the real headless editor automation scenario** (`kb_editor_particle_authoring_headless`,
+  which drives the actual `kb_editor.exe` and its live bgfx headless rendering path) passes, exercising the
+  new `SceneMeshSubmitter`/`SceneRenderer` integration end-to-end without crashing.
+- **Not yet verified — genuinely open, not silently claimed done**: (1) no test asserts an actual GPU draw
+  *count* through `SceneMeshDrawCommandSubmitter` for "N particles of one mesh/material = one draw per
+  section/LOD" — this requires registering a real `RenderMeshResource`/`RenderMaterialResource` fixture in a
+  `RenderResourceRegistry`, a test pattern used elsewhere (`MeshPipelineTests.cpp`) but not yet adapted here;
+  (2) no test confirms `meshLodLevel`/`lodBias` actually selects the correct mesh section/LOD (only that the
+  value is correctly threaded into the instance); (3) no dedicated hot-reload/scene-release stress test for
+  this specific new path (the architecture has no persistent per-scene resource ownership of its own —
+  batches are transient, rebuilt every `Submit()` call from the snapshot, so there is nothing stage-specific
+  to leak by construction, but this claim has not been proven by a 100-cycle test the way other stages'
+  lifetime guarantees were); (4) no visual/golden coverage. These four remain before Stage 8's gate (audit
+  section 11) can be marked `accepted`.
 
 ## Accepted stages
 
@@ -288,6 +310,7 @@ Investigated and designed, not yet implemented. Findings, to avoid re-discovery:
 - Recipe browsing follow-up touches `sources/engine/include/engine/assets/IAssetLoader.hpp` (`DiscoverBrowseTag` hook), `sources/engine/include/engine/scene/ParticleEffectAssetLoader.hpp`/`.cpp` (override), `sources/engine/src/assets/AssetDiscoveryService.cpp` (wiring into the existing discovery scan), and `sources/engine/tests/ParticleEffectAssetTests.cpp` (`RunRecipeAssetTest` extended to assert the discovered category for all 15 recipes).
 - The subsequent code-review fix pass additionally touches `sources/engine/include/engine/assets/AssetMetadata.hpp` (`browseTag` field, separate from `importCategory`), `sources/editor/src/assets/EditorAssetBrowserAssetRows.cpp` (`SearchText` folds in `browseTag`), `sources/plugins/21kb_particle/editor/ParticleEmitterInspectorModel.cpp`/`.hpp` (`FloatText`, `SpawnRateCurve` rename), `sources/editor/src/scene/EditorParticleEditorHost.cpp` (`ParseCurve`/`ParseGradient` robustness, `SpawnRateCurve` rename), `sources/editor/src/private/platform/win32/EditorMaterialParameterValueDialog.hpp`/`sources/editor/src/platform/win32/EditorMaterialParameterValueDialog.cpp` (optional hint parameter), and `sources/editor/src/app/pointer/EditorLeftButtonDownRouter.cpp` (curve/gradient-specific hint text).
 - Stage 8 package 1 (data plumbing) touches `sources/engine/include/engine/particles/ParticleCompiledEffect.hpp` (new `ParticleCompiledEmitter` mesh fields), `sources/engine/include/engine/particles/ParticleRenderSnapshot.hpp` (new `ParticleRenderEmitterRecord`/`ParticleRenderEmitterFlag` fields), `sources/engine/src/particles/ParticleRenderSnapshot.cpp` (flags allowlist fix), `sources/engine/src/particles/ParticleCompiledEffectCache.cpp` (cache serializer: new fields, output ceiling, `meshAssetId` consistency check), `sources/engine/tests/ParticleRenderSnapshotTests.cpp` (new field coverage), `sources/plugins/21kb_particle/ParticleEffectCompiler.hpp`/`.cpp` (capability gate, latent variant-access bug fix), `sources/plugins/21kb_particle/CpuParticleBackend.cpp` (populates the new fields, Mesh-gated), `sources/renderer/src/particles/ParticleRenderBatcher.cpp` (Mesh exclusion from the quad batcher), `sources/renderer/tests/ParticleRendererTests.cpp` (stale exemplar swap, new exclusion test), and `sources/editor/tests/EditorParticleBakeHostTests.cpp` (stale exemplar swap, new positive/negative Mesh Bake cases).
+- Stage 8 package 2 (mesh instance submission) adds `sources/renderer/include/kb/render/particles/ParticleMeshBatchBuilder.hpp` and `sources/renderer/src/particles/ParticleMeshBatchBuilder.cpp` (new), touches `sources/renderer/CMakeLists.txt` (registers the new source), `sources/renderer/src/scene/SceneMeshSubmitter.hpp`/`.cpp` (second `MeshPipelineProcessor::BuildInto`/`SceneMeshDrawCommandSubmitter::Submit` call for particle-mesh batches, every pass), `sources/renderer/src/scene/SceneRenderer.cpp` (passes the particle snapshot for every pass, not just `BaseTransparent`), and `sources/renderer/tests/ParticleRendererTests.cpp` (`TestMeshBatchBuilderInstancesLodShadowAndExclusion`).
 
 ## Validation evidence
 
@@ -328,6 +351,8 @@ Investigated and designed, not yet implemented. Findings, to avoid re-discovery:
 - `cmake --build build --config Debug --target kb_editor` — exit `0` (full dependency graph, including every other `IAssetLoader` implementation across engine/renderer/plugins, rebuilt clean against the new virtual hook).
 - Repeat of the full focused Stage 7B CTest matrix — exit `0`, `5/5`, `10.82 s`.
 - Broader regression check (this change touches shared `IAssetLoader`/`AssetDiscoveryService`, not just particle-scoped files): `cmake --build build --config Debug --target kb_engine_tests` — exit `0`. `ctest --test-dir build -C Debug -R "^kb_engine_tests$" --output-on-failure` — exit `8`, `0/1`, `251.73 s`, two failures: `LIB-134 determinism rigs diverged: max abs difference=0.0121757` (`PhysicsSceneSystemTests.cpp`) and a component-registry/script-API count mismatch (`RunEngineLibraryComponentRegistryTest`, `EngineLibraryTests.cpp:2690-2695`, comparing `EngineLibraryComponentRegistry::Catalog().size()` against `ScriptSceneComponentApi::ComponentNames().size()`). Both assertions are in physics-determinism and script-component-catalog code with no dependency on `IAssetLoader`/`AssetDiscoveryService`/`ParticleEffectAssetLoader`/asset discovery in general, confirmed by reading both failing checks directly — neither touches, calls, or is called by anything this session changed. Read as pre-existing and unrelated to the particle system work in this ledger; left unfixed as out of scope (matching this session's explicit instruction not to chase CI/broader-suite issues while particle implementation is in progress). The particle-scoped focused matrix above is unaffected and green.
+- Stage 8 package 1 (capability gate + data plumbing): `cmake --build build --config Debug --target kb_engine` — exit `0`. Three regressions found and fixed in sequence, each independently rebuilt and reverified (see the package-1 ledger entry for detail): `kb_21kb_particle_cpu_backend_tests.exe` failing → fixed the `.flags` allowlist in `ParticleRenderSnapshot.cpp` → passing; `kb_21kb_particle_renderer_tests.exe` failing (`"one unsupported emitter hid supported GPU particle batches..."`) → swapped the stale `Mesh` exemplar to `Trail`, added a dedicated exclusion test → passing; `kb_editor_particle_bake_host_tests.exe` failing (`"Mesh Bake rejected: ... rebuilt compiled particle effect cache failed verification"`) → fixed `ParticleCompiledEffectCache.cpp`'s output ceiling and `meshAssetId` consistency check → passing. Final independent focused matrix — `ctest --test-dir build -C Debug -R "^(kb_21kb_particle_asset_tests|kb_21kb_particle_cpu_backend_tests|kb_21kb_particle_editor_tests|kb_21kb_particle_snapshot_tests|kb_21kb_particle_renderer_tests|kb_editor_particle_authoring_tests|kb_editor_particle_bake_host_tests)$" --output-on-failure`, exit `0`, `7/7`, `10.95 s`. `cmake --build build --config Debug --target kb_editor` — exit `0`.
+- Stage 8 package 2 (mesh instance submission): `cmake --build build --config Debug --target kb_renderer` — exit `0` (new `ParticleMeshBatchBuilder.cpp` compiled standalone first, before wiring). `cmake --build build --config Debug --target kb_renderer_tests kb_21kb_particle_renderer_tests` — exit `0`; `build/renderer/Debug/kb_21kb_particle_renderer_tests.exe` — exit `0` including the new `TestMeshBatchBuilderInstancesLodShadowAndExclusion`; `kb_renderer_tests.exe mesh-pipeline` — exit `0`; `kb_renderer_tests.exe scene-sync` — exit `0`. After wiring into `SceneMeshSubmitter`/`SceneRenderer`: full focused matrix repeat — exit `0`, `7/7`, `14.81 s`. `cmake --build build --config Debug --target kb_editor` — exit `0`. `ctest --test-dir build -C Debug -R "^kb_editor_particle_authoring_headless$" --output-on-failure` — exit `0`, `1/1`, `3.16 s` — the real headless `kb_editor.exe` automation scenario, exercising live bgfx headless rendering through the new `SceneMeshSubmitter` integration, not just unit tests.
 
 ## Rejected attempts, open defects, and next gate
 
@@ -343,3 +368,4 @@ Investigated and designed, not yet implemented. Findings, to avoid re-discovery:
 - Dependency navigation (`NavigateDependency`) was independently code-read this session and found fully wired end-to-end (hit test → router → `ParticleEditorPanelInteraction::Execute` → `EditorSceneContext::NavigateParticleEditorDependency` → real `EditorAssetBrowserState::SelectAsset`, `EditorParticleEditorHost.cpp:426-430`) — not a defect. It reveals the referenced asset in the Asset Browser rather than opening a `ParticleEffect` dependency directly in the Particle Editor panel; that is standing, intended behavior, not a gap. No automated test exercises `NavigateParticleEditorDependency` itself yet (only that the layout hit test produces the right action/index); still open as a coverage gap, not a functional one.
 - Recipe browsing/categorization is closed: `recipeCategory` is now discovered cheaply at scan time (`ParticleEffectAssetLoader::DiscoverImportCategory`) and surfaces through the Asset Browser's existing search; see the Stage 7B second follow-up entry under Accepted stages. Recipes remain ordinary `ParticleEffect` assets opened through the generic asset-open flow (no separate "apply recipe" merge command exists, and none was requested) — browsing/filtering by category was the concrete gap, and it is closed.
 - No open defect and no unimplemented item remains from the original Stage 7 scope list (modules, output properties, curves, gradients, recipes, dependency navigation states).
+- Stage 8 (mesh output) is `in_progress`, not `accepted`. Package 1 (capability gate, full data-path plumbing through schema/compiler/cache/CPU-backend/snapshot/batcher-exclusion) is closed and independently verified. Package 2 (actual GPU mesh instance submission, reusing the existing scene mesh pipeline) is implemented, compiles clean across the whole dependency graph, passes the full focused test matrix, and passes the real headless editor automation scenario end-to-end — but four items remain open before the audit's Stage 8 gate criteria (section 11) can be marked `accepted`: (1) no test asserts an actual GPU draw *count* ("N particles of one mesh/material = one draw per section/LOD" — the gate's own headline criterion); (2) no test confirms `meshLodLevel` actually selects the correct mesh section/LOD, only that the value is threaded through correctly; (3) no dedicated hot-reload/scene-release stress test for this specific new path; (4) no visual/golden coverage. See the Stage 8 package 2 ledger entry for exactly what would be needed to close each.

@@ -161,6 +161,7 @@ add_library(kb_renderer STATIC
     src/post/ScenePostProcessSubmitter.cpp
     src/post/ScenePostProcessTargets.cpp
     src/particles/ParticleGpuRenderer.cpp
+    src/particles/ParticleMeshBatchBuilder.cpp
     src/particles/ParticleRenderBatcher.cpp
     src/resources/NativeWindowFramebuffer.cpp
     src/resources/RenderMaterialAssetLoader.cpp
