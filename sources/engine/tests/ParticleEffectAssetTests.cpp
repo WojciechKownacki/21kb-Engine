@@ -1073,6 +1073,8 @@ void RunRecipeAssetTest() {
                 "recipe did not load and structurally validate without diagnostics");
         Require(loaded.asset->displayName == recipe.displayName && loaded.asset->recipeCategory == recipe.category,
                 "recipe display name or browser category differs from the canonical mapping");
+        Require(loader.DiscoverImportCategory(path) == recipe.category,
+                "loader did not discover the recipe's browser category at scan time");
         categories.insert(loaded.asset->recipeCategory);
         const kb::assets::AssetMetadata metadata =
             DependencyMetadata(600U + index, kParticleEffectAssetType,

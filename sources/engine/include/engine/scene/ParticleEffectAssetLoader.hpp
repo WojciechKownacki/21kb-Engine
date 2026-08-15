@@ -17,6 +17,7 @@ class ParticleEffectAssetLoader final : public kb::assets::IAssetLoader {
     [[nodiscard]] std::optional<std::string>
     ValidateDependencies(const kb::assets::AssetMetadata& metadata,
                          const kb::assets::AssetRegistry& registry) const override;
+    [[nodiscard]] std::string DiscoverImportCategory(const std::filesystem::path& path) const override;
 };
 
 } // namespace kb::scene

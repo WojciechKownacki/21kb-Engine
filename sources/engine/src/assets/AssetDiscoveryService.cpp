@@ -64,6 +64,8 @@ std::size_t AssetDiscoveryService::DiscoverMountedAssets(
                     importCategory = std::string{ ToString(*category) };
                     assetType = std::string{ RuntimeAssetType(*category) };
                 }
+            } else {
+                importCategory = loader->DiscoverImportCategory(entry.path());
             }
 
             const AssetId id = MakeAssetId(NormalizeAssetPath(*virtualPath) + ":" + assetType);
