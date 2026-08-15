@@ -40,7 +40,8 @@ public:
         kb::scene::ParticleStableId emitterId, kb::scene::ParticleOutputAsset output);
     [[nodiscard]] static ParticleEditorResult AddModule(
         ParticleEditorDocument& document, ParticleEditorWorkspaceState& workspace,
-        kb::scene::ParticleStableId emitterId, kb::scene::ParticleModuleType type);
+        kb::scene::ParticleStableId emitterId, kb::scene::ParticleModuleType type,
+        kb::scene::ParticleStableId targetEmitterId = 0U);
     [[nodiscard]] static ParticleEditorResult SetModuleEnabled(
         ParticleEditorDocument& document, ParticleEditorWorkspaceState& workspace,
         kb::scene::ParticleStableId emitterId, kb::scene::ParticleStableId moduleId, bool enabled);

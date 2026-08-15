@@ -44,6 +44,7 @@ enum class ParticleEditorPanelAction : std::uint8_t {
 struct ParticleEditorEmitterRowLayout {
     kb::scene::ParticleStableId emitterId = 0U;
     kb::scene::ParticleStableId moduleId = 0U;
+    kb::scene::ParticleStableId targetEmitterId = 0U;
     std::uint32_t authoringOrder = 0U;
     RECT bounds{};
     RECT dragGrip{};

@@ -242,6 +242,53 @@ void TestEmitterListCommandsAndAuthoredCompileOrder() {
 
 void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
     using namespace kb::particle_editor;
+    ParticleEditorDocument singleEmitterDocument;
+    ParticleEditorWorkspaceState singleEmitterWorkspace;
+    Require(singleEmitterDocument.Create(MakeEffect()).Succeeded(),
+        "single-emitter module fixture creation failed");
+    singleEmitterWorkspace.Synchronize(singleEmitterDocument.Asset());
+    const auto unavailableSingleEmitterSub = ParticleEditorCommands::AddModule(
+        singleEmitterDocument, singleEmitterWorkspace, 11U,
+        kb::scene::ParticleModuleType::SubEmitter, 0U);
+    Require(unavailableSingleEmitterSub.status == ParticleEditorStatus::InvalidSelection &&
+            !singleEmitterDocument.CanUndo() && singleEmitterDocument.Asset().emitters[0].modules.empty(),
+        "single-emitter effect exposed an invalid Sub Emitter add or mutated history");
+
+    auto allTypesEffect = MakeEffect();
+    auto target = allTypesEffect.emitters[0];
+    target.emitterId = 12U;
+    target.authoringOrder = 1U;
+    target.name = "Sub Emitter Target";
+    allTypesEffect.emitters.push_back(std::move(target));
+    ParticleEditorDocument allTypesDocument;
+    ParticleEditorWorkspaceState allTypesWorkspace;
+    Require(allTypesDocument.Create(allTypesEffect).Succeeded(), "all-module-types fixture creation failed");
+    allTypesWorkspace.Synchronize(allTypesDocument.Asset());
+    const auto cancelledSubEmitter = ParticleEditorCommands::AddModule(allTypesDocument, allTypesWorkspace, 11U,
+        kb::scene::ParticleModuleType::SubEmitter, 0U);
+    Require(cancelledSubEmitter.status == ParticleEditorStatus::InvalidSelection &&
+            !allTypesDocument.CanUndo() && allTypesDocument.Asset().emitters[0].modules.empty(),
+        "cancelled Sub Emitter target selection mutated document history");
+    for (std::uint8_t raw = 0U; raw <= static_cast<std::uint8_t>(kb::scene::ParticleModuleType::SubEmitter); ++raw) {
+        const auto type = static_cast<kb::scene::ParticleModuleType>(raw);
+        const auto added = ParticleEditorCommands::AddModule(allTypesDocument, allTypesWorkspace, 11U, type,
+            type == kb::scene::ParticleModuleType::SubEmitter ? 12U : 0U);
+        Require(added.Succeeded(), "one of the nine executable module types could not be added validly");
+    }
+    const auto& allModules = allTypesDocument.Asset().emitters[0].modules;
+    const auto color = std::find_if(allModules.begin(), allModules.end(), [](const auto& module) {
+        return module.type == kb::scene::ParticleModuleType::ColorOverLife;
+    });
+    const auto subEmitter = std::find_if(allModules.begin(), allModules.end(), [](const auto& module) {
+        return module.type == kb::scene::ParticleModuleType::SubEmitter;
+    });
+    Require(allModules.size() == 9U && color != allModules.end() &&
+            std::get<kb::scene::ParticleColorOverLifeModule>(color->payload).gradient.stops.size() == 2U &&
+            subEmitter != allModules.end() &&
+            std::get<kb::scene::ParticleSubEmitterModule>(subEmitter->payload).targetEmitterId == 12U &&
+            kb::scene::ParticleEffectAssetValidator::ValidateStructure(allTypesDocument.Asset()).Succeeded(),
+        "all-nine module add did not produce bounded valid defaults and an explicit Sub Emitter target");
+
     ParticleEditorDocument document;
     ParticleEditorWorkspaceState workspace;
     Require(document.Create(MakeEffect()).Succeeded(), "module command fixture creation failed");
