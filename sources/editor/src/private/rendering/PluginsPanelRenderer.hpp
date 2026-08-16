@@ -21,6 +21,8 @@ enum class PluginsPanelHitKind : std::uint8_t {
     Row,
     ScrollbarThumb,
     ScrollbarTrack,
+    ParticleProviderAdd,
+    ParticleProviderCancel,
 };
 #endif
 

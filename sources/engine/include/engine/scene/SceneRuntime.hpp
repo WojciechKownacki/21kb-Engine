@@ -26,10 +26,13 @@ namespace kb::scene {
 class Scene;
 class SceneSystem;
 
+inline constexpr float kSceneRuntimeDefaultFixedDeltaSeconds = 1.0F / 60.0F;
+inline constexpr std::size_t kSceneRuntimeDefaultMaxFixedStepsPerFrame = 8U;
+
 struct SceneRuntimeFixedStepSettings {
-    float fixedDeltaSeconds = 1.0F / 60.0F;
+    float fixedDeltaSeconds = kSceneRuntimeDefaultFixedDeltaSeconds;
     float maxFrameDeltaSeconds = 0.25F;
-    std::size_t maxFixedStepsPerFrame = 8U;
+    std::size_t maxFixedStepsPerFrame = kSceneRuntimeDefaultMaxFixedStepsPerFrame;
 };
 
 struct SceneTransformPropagationBudget {

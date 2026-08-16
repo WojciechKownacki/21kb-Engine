@@ -4,6 +4,7 @@
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/MaterialPreviewViewportKeys.hpp"
+#include "rendering/ParticleEditorPanelRenderer.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 
@@ -115,6 +116,13 @@ std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> EditorHostSurfaceLayoutR
                 layouts,
                 kMaterialEditorPreviewViewportKey,
                 MaterialEditorPanelRenderer::MaterialPreviewRect(content, sceneContext));
+            continue;
+        }
+        if (panel->kind == DockPanelKind::ParticleEditor && sceneContext.HasParticleEditorAsset()) {
+            layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
+                .viewportKey = panelLayout.panelId,
+                .bounds = ParticleEditorPanelRenderer::ViewportRect(content),
+            });
         }
     }
 

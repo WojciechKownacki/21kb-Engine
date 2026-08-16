@@ -32,6 +32,26 @@ ScriptFunctionCallResult Error(std::string message) {
     return ScriptFunctionCallResult{ .executed = false, .outputs = {}, .errors = { std::move(message) } };
 }
 
+[[nodiscard]] std::string ParticleRuntimeError(kb::particles::ParticleRuntimeStatus status) {
+    switch (status) {
+    case kb::particles::ParticleRuntimeStatus::BackendUnavailable: return "particle simulation backend is unavailable; ensure Rendering.21kbParticle is enabled and loaded";
+    case kb::particles::ParticleRuntimeStatus::InvalidAsset: return "particle effect asset is invalid";
+    case kb::particles::ParticleRuntimeStatus::InvalidOwner: return "particles owner entity is invalid";
+    case kb::particles::ParticleRuntimeStatus::InvalidInstance: return "particle system instance is invalid";
+    case kb::particles::ParticleRuntimeStatus::InvalidParameter: return "particle parameter is invalid";
+    case kb::particles::ParticleRuntimeStatus::InstanceLimitReached: return "particle system instance limit was reached";
+    case kb::particles::ParticleRuntimeStatus::ParticleCapacityReached: return "particle capacity was reached";
+    case kb::particles::ParticleRuntimeStatus::SpawnBudgetExceeded: return "particle spawn budget was exceeded";
+    case kb::particles::ParticleRuntimeStatus::EventQueueFull: return "particle event queue capacity was reached";
+    case kb::particles::ParticleRuntimeStatus::EventBudgetExceeded: return "particle event action budget was exceeded";
+    case kb::particles::ParticleRuntimeStatus::BackendAlreadyRegistered: return "particle simulation backend is already registered";
+    case kb::particles::ParticleRuntimeStatus::UnsupportedOutput: return "particle effect output is unsupported";
+    case kb::particles::ParticleRuntimeStatus::InvalidRequest: return "particle runtime request is invalid";
+    case kb::particles::ParticleRuntimeStatus::Success: break;
+    }
+    return "particle runtime request failed";
+}
+
 [[nodiscard]] kb::scene::SceneEntity TargetEntity(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) noexcept {
     const ScriptValue* explicitEntity = FindArg(arguments, "entity");
     if (explicitEntity != nullptr) {
@@ -75,14 +95,12 @@ ScriptFunctionCallResult ParticlesCreate(const ScriptFunctionCallContext& contex
         return Error("particle effect asset could not be resolved");
     }
 
-    const std::uint64_t instance = context.scene->Particles().Create(effectAssetId.value, owner);
-    if (instance == 0U) {
-        return Error("particle system could not be created (unresolvable material reference or instance limit reached)");
-    }
+    const kb::particles::ParticleRuntimeResult result = context.scene->Particles().CreateDetailed(effectAssetId.value, owner);
+    if (!result.Succeeded()) return Error(ParticleRuntimeError(result.status));
 
     return ScriptFunctionCallResult{
         .executed = true,
-        .outputs = { ScriptFunctionArgument{ "instance", ScriptValue{ instance, ScriptValueType::Hash } } },
+        .outputs = { ScriptFunctionArgument{ "instance", ScriptValue{ result.instanceId, ScriptValueType::Hash } } },
         .errors = {},
     };
 }
@@ -93,11 +111,12 @@ ScriptFunctionCallResult ParticlesRelease(const ScriptFunctionCallContext& conte
     }
     const ScriptValue* instanceArgument = FindArg(arguments, "instance");
     const std::uint64_t instance = instanceArgument == nullptr ? 0U : instanceArgument->AsUInt64();
-    const bool released = instance != 0U && context.scene->Particles().Release(instance);
+    const kb::particles::ParticleRuntimeResult result = context.scene->Particles().ReleaseDetailed(instance);
+    if (!result.Succeeded()) return Error(ParticleRuntimeError(result.status));
 
     return ScriptFunctionCallResult{
         .executed = true,
-        .outputs = { ScriptFunctionArgument{ "released", ScriptValue{ released } } },
+        .outputs = { ScriptFunctionArgument{ "released", ScriptValue{ true } } },
         .errors = {},
     };
 }
@@ -108,7 +127,9 @@ ScriptFunctionCallResult ParticlesExists(const ScriptFunctionCallContext& contex
     }
     const ScriptValue* instanceArgument = FindArg(arguments, "instance");
     const std::uint64_t instance = instanceArgument == nullptr ? 0U : instanceArgument->AsUInt64();
-    const bool exists = instance != 0U && context.scene->Particles().Exists(instance);
+    const kb::particles::ParticleRuntimeQueryResult result = kb::particles::ParticlePlayback::Query(*context.scene, instance);
+    if (result.status == kb::particles::ParticleRuntimeStatus::BackendUnavailable) return Error(ParticleRuntimeError(result.status));
+    const bool exists = result.Succeeded();
 
     return ScriptFunctionCallResult{
         .executed = true,
@@ -123,11 +144,12 @@ ScriptFunctionCallResult ParticlesPlay(const ScriptFunctionCallContext& context,
     }
     const ScriptValue* instanceArgument = FindArg(arguments, "instance");
     const std::uint64_t instance = instanceArgument == nullptr ? 0U : instanceArgument->AsUInt64();
-    const bool set = instance != 0U && context.scene->Particles().Play(instance);
+    const kb::particles::ParticleRuntimeResult result = context.scene->Particles().PlayDetailed(instance);
+    if (!result.Succeeded()) return Error(ParticleRuntimeError(result.status));
 
     return ScriptFunctionCallResult{
         .executed = true,
-        .outputs = { ScriptFunctionArgument{ "set", ScriptValue{ set } } },
+        .outputs = { ScriptFunctionArgument{ "set", ScriptValue{ true } } },
         .errors = {},
     };
 }
@@ -138,11 +160,12 @@ ScriptFunctionCallResult ParticlesStop(const ScriptFunctionCallContext& context,
     }
     const ScriptValue* instanceArgument = FindArg(arguments, "instance");
     const std::uint64_t instance = instanceArgument == nullptr ? 0U : instanceArgument->AsUInt64();
-    const bool set = instance != 0U && context.scene->Particles().Stop(instance);
+    const kb::particles::ParticleRuntimeResult result = context.scene->Particles().StopDetailed(instance);
+    if (!result.Succeeded()) return Error(ParticleRuntimeError(result.status));
 
     return ScriptFunctionCallResult{
         .executed = true,
-        .outputs = { ScriptFunctionArgument{ "set", ScriptValue{ set } } },
+        .outputs = { ScriptFunctionArgument{ "set", ScriptValue{ true } } },
         .errors = {},
     };
 }
@@ -153,7 +176,9 @@ ScriptFunctionCallResult ParticlesIsPlaying(const ScriptFunctionCallContext& con
     }
     const ScriptValue* instanceArgument = FindArg(arguments, "instance");
     const std::uint64_t instance = instanceArgument == nullptr ? 0U : instanceArgument->AsUInt64();
-    const bool playing = instance != 0U && context.scene->Particles().IsPlaying(instance);
+    const kb::particles::ParticleRuntimeQueryResult result = kb::particles::ParticlePlayback::Query(*context.scene, instance);
+    if (!result.Succeeded()) return Error(ParticleRuntimeError(result.status));
+    const bool playing = result.state;
 
     return ScriptFunctionCallResult{
         .executed = true,
@@ -170,11 +195,12 @@ ScriptFunctionCallResult ParticlesSetSeed(const ScriptFunctionCallContext& conte
     const ScriptValue* seedArgument = FindArg(arguments, "seed");
     const std::uint64_t instance = instanceArgument == nullptr ? 0U : instanceArgument->AsUInt64();
     const std::uint64_t seed = seedArgument == nullptr ? 0U : seedArgument->AsUInt64();
-    const bool set = instance != 0U && context.scene->Particles().SetSeed(instance, seed);
+    const kb::particles::ParticleRuntimeResult result = context.scene->Particles().SetSeedDetailed(instance, seed);
+    if (!result.Succeeded()) return Error(ParticleRuntimeError(result.status));
 
     return ScriptFunctionCallResult{
         .executed = true,
-        .outputs = { ScriptFunctionArgument{ "set", ScriptValue{ set } } },
+        .outputs = { ScriptFunctionArgument{ "set", ScriptValue{ true } } },
         .errors = {},
     };
 }
@@ -189,11 +215,12 @@ ScriptFunctionCallResult ParticlesSetParameterScalar(const ScriptFunctionCallCon
     const std::uint64_t instance = instanceArgument == nullptr ? 0U : instanceArgument->AsUInt64();
     const std::string name = nameArgument == nullptr ? std::string{} : nameArgument->AsString();
     const float value = valueArgument == nullptr ? 0.0F : valueArgument->AsFloat();
-    const bool applied = instance != 0U && context.scene->Particles().SetParameterScalar(instance, name, value);
+    const kb::particles::ParticleRuntimeResult result = context.scene->Particles().SetParameterScalarDetailed(instance, name, value);
+    if (!result.Succeeded()) return Error(ParticleRuntimeError(result.status));
 
     return ScriptFunctionCallResult{
         .executed = true,
-        .outputs = { ScriptFunctionArgument{ "applied", ScriptValue{ applied } } },
+        .outputs = { ScriptFunctionArgument{ "applied", ScriptValue{ true } } },
         .errors = {},
     };
 }
@@ -206,11 +233,12 @@ ScriptFunctionCallResult ParticlesClearParameter(const ScriptFunctionCallContext
     const ScriptValue* nameArgument = FindArg(arguments, "name");
     const std::uint64_t instance = instanceArgument == nullptr ? 0U : instanceArgument->AsUInt64();
     const std::string name = nameArgument == nullptr ? std::string{} : nameArgument->AsString();
-    const bool cleared = instance != 0U && context.scene->Particles().ClearParameter(instance, name);
+    const kb::particles::ParticleRuntimeResult result = context.scene->Particles().ClearParameterDetailed(instance, name);
+    if (!result.Succeeded()) return Error(ParticleRuntimeError(result.status));
 
     return ScriptFunctionCallResult{
         .executed = true,
-        .outputs = { ScriptFunctionArgument{ "cleared", ScriptValue{ cleared } } },
+        .outputs = { ScriptFunctionArgument{ "cleared", ScriptValue{ true } } },
         .errors = {},
     };
 }
@@ -223,11 +251,13 @@ ScriptFunctionCallResult ParticlesEmit(const ScriptFunctionCallContext& context,
     const ScriptValue* countArgument = FindArg(arguments, "count");
     const std::uint64_t instance = instanceArgument == nullptr ? 0U : instanceArgument->AsUInt64();
     const int count = countArgument == nullptr ? 0 : countArgument->AsInt();
-    const bool emitted = instance != 0U && count > 0 && context.scene->Particles().Emit(instance, static_cast<std::uint32_t>(count));
+    if (instance == 0U || count <= 0) return Error("particle emit request is invalid");
+    const kb::particles::ParticleRuntimeResult result = context.scene->Particles().EmitDetailed(instance, static_cast<std::uint32_t>(count));
+    if (!result.Succeeded()) return Error(ParticleRuntimeError(result.status));
 
     return ScriptFunctionCallResult{
         .executed = true,
-        .outputs = { ScriptFunctionArgument{ "emitted", ScriptValue{ emitted } } },
+        .outputs = { ScriptFunctionArgument{ "emitted", ScriptValue{ true } } },
         .errors = {},
     };
 }
@@ -238,7 +268,9 @@ ScriptFunctionCallResult ParticlesLiveCount(const ScriptFunctionCallContext& con
     }
     const ScriptValue* instanceArgument = FindArg(arguments, "instance");
     const std::uint64_t instance = instanceArgument == nullptr ? 0U : instanceArgument->AsUInt64();
-    const int count = instance == 0U ? 0 : static_cast<int>(context.scene->Particles().LiveParticleCount(instance));
+    const kb::particles::ParticleRuntimeQueryResult result = kb::particles::ParticlePlayback::Query(*context.scene, instance);
+    if (!result.Succeeded()) return Error(ParticleRuntimeError(result.status));
+    const int count = static_cast<int>(result.liveParticleCount);
 
     return ScriptFunctionCallResult{
         .executed = true,

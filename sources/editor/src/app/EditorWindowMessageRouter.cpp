@@ -9,6 +9,7 @@
 #include "app/EditorWindowHitTestHandler.hpp"
 #include "app/EditorWindowLifecycleHandler.hpp"
 #include "app/EditorPaintDispatcher.hpp"
+#include "app/ParticleEditorPanelInteraction.hpp"
 #include "app/EditorWindowPointerMessageDispatcher.hpp"
 #include "app/EditorWindowResizeHandler.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
@@ -555,6 +556,14 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         return 0;
     }
     case WM_CHAR:
+        if (ParticleEditorPanelInteraction::HandleCharacter(
+                context_.sceneContext, static_cast<wchar_t>(wparam))) {
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != context_.mainWindow) {
+                InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            }
+            return 0;
+        }
         if (HandleMaterialGraphChar(context_.mainWindow, messageWindow, context_.sceneContext, static_cast<wchar_t>(wparam))) {
             return 0;
         }
@@ -576,6 +585,13 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         break;
     case WM_KEYDOWN:
+        if (ParticleEditorPanelInteraction::HandleKeyDown(context_.sceneContext, wparam)) {
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != context_.mainWindow) {
+                InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            }
+            return 0;
+        }
         if (InspectorPanelInteraction::HandleKeyCapture(context_.sceneContext, wparam)) {
             context_.sceneViewport.RequestPresent();
             InvalidateRect(messageWindow, nullptr, FALSE);

@@ -6,11 +6,8 @@
 #include "engine/scene/ScenePrefabNode.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
-#include "scene/prefab/ScenePrefabBakedData.hpp"
 
 #include <array>
-#include <cstdint>
-#include <span>
 
 namespace kb::scene {
 
@@ -19,88 +16,54 @@ struct ScenePrefabOptionalComponentMaskMatch {
     bool matches = false;
 };
 
-[[nodiscard]] inline std::uint64_t ScenePrefabOptionalComponentMask(const ScenePrefabNodeComponents& components) noexcept {
-    std::uint64_t mask = 0U;
-    if (components.camera.has_value()) {
-        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Camera);
-    }
-    if (components.meshRenderer.has_value()) {
-        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::MeshRenderer);
-    }
-    if (components.light.has_value()) {
-        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Light);
-    }
-    if (components.input.has_value()) {
-        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Input);
-    }
-    if (components.rigidbody.has_value()) {
-        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Rigidbody);
-    }
-    if (components.collider.has_value()) {
-        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Collider);
-    }
-    if (components.tags.has_value()) {
-        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Tags);
-    }
-    if (components.behaviour.has_value()) {
-        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Behaviour);
-    }
-    if (components.audioSource.has_value()) {
-        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::AudioSource);
-    }
-    if (components.audioListener.has_value()) {
-        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::AudioListener);
-    }
-    if (components.characterController.has_value()) {
-        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::CharacterController);
-    }
-    if (components.joint.has_value()) {
-        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Joint);
-    }
-    if (components.animator.has_value()) {
-        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::Animator);
-    }
-    if (components.skeletonBinding.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::SkeletonBinding);
-    if (components.motionSkeletonRule.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::MotionSkeletonRule);
-    if (components.deformedGeometry.has_value()) mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::DeformedGeometry);
-    if (components.uiDocument.has_value()) {
-        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::UIDocument);
-    }
-    if (components.navAgent.has_value()) {
-        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::NavAgent);
-    }
-    if (components.navObstacle.has_value()) {
-        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::NavObstacle);
-    }
-    if (components.regionShape.has_value()) {
-        mask |= ScenePrefabBakedMask(ScenePrefabBakedComponentMask::RegionShape);
-    }
-    return mask;
-}
+struct ScenePrefabOptionalComponentExpectation {
+    kb::ecs::ComponentId componentId = 0U;
+    bool expectedPresent = false;
+};
 
-[[nodiscard]] inline std::array<kb::ecs::ComponentId, 20U> ScenePrefabOptionalComponentIds(const SceneComponentRegistry& registry) noexcept {
-    return std::array<kb::ecs::ComponentId, 20U>{
-        registry.CameraComponentId(),
-        registry.MeshRendererComponentId(),
-        registry.LightComponentId(),
-        registry.InputComponentId(),
-        registry.RigidbodyComponentId(),
-        registry.ColliderComponentId(),
-        registry.TagsComponentId(),
-        registry.BehaviourComponentId(),
-        registry.AudioSourceComponentId(),
-        registry.AudioListenerComponentId(),
-        registry.CharacterControllerComponentId(),
-        registry.JointComponentId(),
-        registry.AnimatorComponentId(),
-        registry.SkeletonBindingComponentId(),
-        registry.MotionSkeletonRuleComponentId(),
-        registry.DeformedGeometryComponentId(),
-        registry.UIDocumentComponentId(),
-        registry.NavAgentComponentId(),
-        registry.NavObstacleComponentId(),
-        registry.RegionShapeComponentId(),
-    };
+[[nodiscard]] inline std::array<ScenePrefabOptionalComponentExpectation, 37U>
+ScenePrefabOptionalComponentExpectations(
+    const ScenePrefabNodeComponents& components,
+    const SceneComponentRegistry& registry) noexcept {
+    return {{
+        { registry.CameraComponentId(), components.camera.has_value() },
+        { registry.MeshRendererComponentId(), components.meshRenderer.has_value() },
+        { registry.LightComponentId(), components.light.has_value() },
+        { registry.InputComponentId(), components.input.has_value() },
+        { registry.RigidbodyComponentId(), components.rigidbody.has_value() },
+        { registry.ColliderComponentId(), components.collider.has_value() },
+        { registry.CharacterControllerComponentId(), components.characterController.has_value() },
+        { registry.JointComponentId(), components.joint.has_value() },
+        { registry.TagsComponentId(), components.tags.has_value() },
+        { registry.RegionShapeComponentId(), components.regionShape.has_value() },
+        { registry.GuideCurveComponentId(), components.guideCurve.has_value() },
+        { registry.ContentInstanceComponentId(), components.contentInstance.has_value() },
+        { registry.StreamFocusComponentId(), components.streamFocus.has_value() },
+        { registry.WorldBackdropComponentId(), components.worldBackdrop.has_value() },
+        { registry.AmbientRadianceComponentId(), components.ambientRadiance.has_value() },
+        { registry.DetailSwitchComponentId(), components.detailSwitch.has_value() },
+        { registry.VisibilityBlockerComponentId(), components.visibilityBlocker.has_value() },
+        { registry.VisibilityCellComponentId(), components.visibilityCell.has_value() },
+        { registry.RegionPortalComponentId(), components.regionPortal.has_value() },
+        { registry.AuxFrameComponentId(), components.auxFrame.has_value() },
+        { registry.GeometrySwarmComponentId(), components.geometrySwarm.has_value() },
+        { registry.SurfaceCastComponentId(), components.surfaceCast.has_value() },
+        { registry.FacingPanelComponentId(), components.facingPanel.has_value() },
+        { registry.SpaceStrokeComponentId(), components.spaceStroke.has_value() },
+        { registry.HistoryRibbonComponentId(), components.historyRibbon.has_value() },
+        { registry.ParticleEffectComponentId(), components.particleEffect.has_value() },
+        { registry.LensEchoComponentId(), components.lensEcho.has_value() },
+        { registry.BehaviourComponentId(), components.behaviour.has_value() },
+        { registry.AudioSourceComponentId(), components.audioSource.has_value() },
+        { registry.AudioListenerComponentId(), components.audioListener.has_value() },
+        { registry.AnimatorComponentId(), components.animator.has_value() },
+        { registry.SkeletonBindingComponentId(), components.skeletonBinding.has_value() },
+        { registry.MotionSkeletonRuleComponentId(), components.motionSkeletonRule.has_value() },
+        { registry.DeformedGeometryComponentId(), components.deformedGeometry.has_value() },
+        { registry.UIDocumentComponentId(), components.uiDocument.has_value() },
+        { registry.NavAgentComponentId(), components.navAgent.has_value() },
+        { registry.NavObstacleComponentId(), components.navObstacle.has_value() },
+    }};
 }
 
 [[nodiscard]] inline ScenePrefabOptionalComponentMaskMatch ScenePrefabOptionalComponentMaskMatches(
@@ -108,36 +71,16 @@ struct ScenePrefabOptionalComponentMaskMatch {
     SceneEntity entity,
     const ScenePrefabNodeComponents& expected) noexcept {
     const kb::ecs::NativeArchetypeStorage& storage = state.world.NativeStorage();
-    if (!storage.IsAlive(entity)) {
-        return {};
-    }
+    if (!storage.IsAlive(entity)) return {};
 
-    const std::uint64_t expectedMask = ScenePrefabOptionalComponentMask(expected);
-    const auto componentIds = ScenePrefabOptionalComponentIds(state.components);
-    std::array<kb::ecs::ComponentId, componentIds.size()> required{};
-    std::array<kb::ecs::ComponentId, componentIds.size()> excluded{};
-    std::size_t requiredCount = 0U;
-    std::size_t excludedCount = 0U;
-    for (std::size_t index = 0U; index < componentIds.size(); ++index) {
-        const kb::ecs::ComponentId componentId = componentIds[index];
-        if (componentId == 0U) {
-            return {};
-        }
-        const std::uint32_t bit = static_cast<std::uint32_t>(1U << index);
-        if ((expectedMask & bit) != 0U) {
-            required[requiredCount++] = componentId;
-        } else {
-            excluded[excludedCount++] = componentId;
+    const auto expectations = ScenePrefabOptionalComponentExpectations(expected, state.components);
+    for (const ScenePrefabOptionalComponentExpectation& expectation : expectations) {
+        if (expectation.componentId == 0U) return {};
+        if (storage.HasComponent(entity, expectation.componentId) != expectation.expectedPresent) {
+            return { .available = true, .matches = false };
         }
     }
-
-    return ScenePrefabOptionalComponentMaskMatch{
-        .available = true,
-        .matches = storage.EntityArchetypeMatches(
-            entity,
-            std::span<const kb::ecs::ComponentId>{ required.data(), requiredCount },
-            std::span<const kb::ecs::ComponentId>{ excluded.data(), excludedCount }),
-    };
+    return { .available = true, .matches = true };
 }
 
 } // namespace kb::scene

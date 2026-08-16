@@ -57,6 +57,11 @@ namespace {
         .binaryPath = EditorPluginCatalog::PersistentBinaryPath("Rendering.BasicLighting"),
         .enabled = true,
     });
+    descriptor.plugins.push_back(kb::project::ProjectPluginReference{
+        .name = "Rendering.21kbParticle",
+        .binaryPath = EditorPluginCatalog::PersistentBinaryPath("Rendering.21kbParticle"),
+        .enabled = true,
+    });
     return descriptor;
 }
 
@@ -105,12 +110,16 @@ EditorProjectBootstrapResult EditorProjectBootstrap::BootstrapDefaultProject() {
                 loaded.error = "Project descriptor plugin paths could not be normalized.";
             }
         }
+        const kb::project::ParticleProjectPolicyResult particlePolicy = loaded.succeeded
+            ? kb::project::ParticleProjectPolicy::Inspect(projectFile.parent_path(), loaded.descriptor)
+            : kb::project::ParticleProjectPolicyResult{};
         return EditorProjectBootstrapResult{
             .succeeded = loaded.succeeded,
             .descriptor = loaded.descriptor,
             .projectFile = projectFile,
             .error = loaded.error,
             .created = false,
+            .particlePolicy = particlePolicy,
         };
     }
 
@@ -132,6 +141,20 @@ EditorProjectBootstrapResult EditorProjectBootstrap::BootstrapDefaultProject() {
         .error = {},
         .created = true,
     };
+}
+
+bool EditorProjectBootstrap::AcceptParticleProvider(
+    const std::filesystem::path& projectFile,
+    kb::project::ProjectDescriptor& descriptor) {
+    kb::project::ProjectDescriptor candidate = descriptor;
+    if (!kb::project::ParticleProjectPolicy::Enable(
+            candidate,
+            EditorPluginCatalog::PersistentBinaryPath(kb::project::ParticleProjectPolicy::PluginId))) {
+        return true;
+    }
+    if (!kb::project::ProjectManager::SaveProject(projectFile, candidate)) return false;
+    descriptor = std::move(candidate);
+    return true;
 }
 
 } // namespace kb::editor

@@ -1,17 +1,23 @@
 #pragma once
 
 #include "engine/assets/IAssetLoader.hpp"
+#include "engine/scene/ParticleEffectAssetValidation.hpp"
 
 namespace kb::scene {
 
-// LIB-143: registers ParticleEffectAsset (`.kbvfx`) with AssetManager - mirrors
-// PhysicsLayersAssetLoader's own thin-wrapper-over-a-free-function-IO shape exactly.
 class ParticleEffectAssetLoader final : public kb::assets::IAssetLoader {
-public:
+  public:
     [[nodiscard]] std::string_view Type() const noexcept override;
     [[nodiscard]] std::type_index PayloadType() const noexcept override;
     [[nodiscard]] std::vector<std::string> Extensions() const override;
     [[nodiscard]] kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest& request) override;
+    [[nodiscard]] std::vector<kb::assets::AssetId>
+    DiscoverDependencies(const kb::assets::AssetMetadata& metadata,
+                         const kb::assets::AssetRegistry& registry) const override;
+    [[nodiscard]] std::optional<std::string>
+    ValidateDependencies(const kb::assets::AssetMetadata& metadata,
+                         const kb::assets::AssetRegistry& registry) const override;
+    [[nodiscard]] std::string DiscoverBrowseTag(const std::filesystem::path& path) const override;
 };
 
 } // namespace kb::scene

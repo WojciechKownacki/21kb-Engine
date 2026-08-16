@@ -1,6 +1,10 @@
 #pragma once
 
+#include "engine/particles/ParticleRenderSnapshot.hpp"
+
 #include "kb/render/resources/RenderResourceRegistry.hpp"
+#include "kb/render/particles/ParticleMeshBatchBuilder.hpp"
+#include "kb/render/particles/ParticleRenderBatcher.hpp"
 #include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
 #include "kb/render/scene/MeshPipeline.hpp"
 #include "kb/render/scene/RenderScene.hpp"
@@ -17,6 +21,8 @@
 #include <vector>
 
 namespace kb::render {
+
+class ParticleGpuRenderer;
 
 class SceneMeshSubmitter {
 public:
@@ -40,7 +46,9 @@ public:
         bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE,
         bgfx::TextureHandle sceneColorTexture = BGFX_INVALID_HANDLE,
         bool terrainLayersOnly = false,
-        std::array<float, 16> motionVectorPreviousViewProjection = {}) const;
+        std::array<float, 16> motionVectorPreviousViewProjection = {},
+        ParticleGpuRenderer* particleRenderer = nullptr,
+        const kb::particles::ParticleRenderSnapshot* particleSnapshot = nullptr) const;
     [[nodiscard]] static SceneRenderSubmitStats ValidateResourcesInto(
         const RenderScene& renderScene,
         const RenderResourceRegistry& resources,
@@ -70,6 +78,9 @@ private:
     mutable SceneGpuDrivenFrameResources gpuDrivenFrameResources_;
     mutable MeshPipelineBuildResult pipelineScratch_;
     mutable std::vector<SceneRenderVisibilityBlocker> visibilityBlockerScratch_;
+    mutable std::vector<TransparentDrawOrderEntry> transparentSubmissionScratch_;
+    mutable ParticleMeshBatchBuilder particleMeshBatchBuilder_;
+    mutable MeshPipelineBuildResult particleMeshPipelineScratch_;
     // Derived renderer state only. The authored detail-switch policy remains in ECS.
     mutable const RenderScene* detailSwitchScene_ = nullptr;
     const RenderSkinningPaletteAllocator* skinningPaletteAllocator_ = nullptr;

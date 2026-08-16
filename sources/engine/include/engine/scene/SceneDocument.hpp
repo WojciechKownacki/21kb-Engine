@@ -34,7 +34,8 @@ struct SceneDocument {
     // v30: MotionSkeletonRule per-entity pose rule persists.
     // v31: AudioListener priority and local-user binding persist.
     // v32: authored scene-global audio mixer, snapshot, and occlusion settings persist.
-    static constexpr std::uint32_t CurrentFileVersion = 32U;
+    // v33: ParticleEffectComponent persists particle-effect authoring policy.
+    static constexpr std::uint32_t CurrentFileVersion = 33U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

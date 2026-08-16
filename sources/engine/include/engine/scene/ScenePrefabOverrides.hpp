@@ -64,6 +64,7 @@ enum class ScenePrefabOverrideFlag : std::uint32_t {
     SkeletonBinding = 1U << 25U,
     DeformedGeometry = 1U << 26U,
     MotionSkeletonRule = 1U << 27U,
+    ParticleEffect = 1U << 28U,
 };
 
 [[nodiscard]] constexpr ScenePrefabOverrideFlag operator|(ScenePrefabOverrideFlag lhs, ScenePrefabOverrideFlag rhs) noexcept {

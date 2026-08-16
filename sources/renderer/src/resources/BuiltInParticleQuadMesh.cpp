@@ -49,9 +49,8 @@ RenderMeshAssetData BuildBuiltInParticleQuadMesh() {
         .sectionCount = 1U,
         .minScreenCoverage = 0.0F,
     });
-    // Billboards face the camera by construction (SceneParticleRenderSynchronizer's own
-    // LookRotation-based model matrix) - doubleSided sidesteps any winding-order assumption
-    // about which side ends up front.
+    // Particle vertex shaders construct the alignment basis per view. Double-sided geometry
+    // keeps the canonical quad valid for every supported alignment and rotation.
     mesh.RefreshDesc().doubleSided = true;
     return mesh;
 }

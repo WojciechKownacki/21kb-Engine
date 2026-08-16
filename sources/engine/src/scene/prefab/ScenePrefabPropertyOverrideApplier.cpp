@@ -478,6 +478,21 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     if (property.propertyPath == "deformedGeometry.receivesShadow") return ParseBool(property.value, Ensure(node.components.deformedGeometry).receivesShadow);
     if (property.propertyPath == "deformedGeometry.layer") return ParseNumber(property.value, Ensure(node.components.deformedGeometry).layer);
     if (property.propertyPath == "deformedGeometry.enabled") return ParseBool(property.value, Ensure(node.components.deformedGeometry).enabled);
+    if (property.propertyPath == "particleEffect") return ApplyComponentPresence(property.value, node.components.particleEffect);
+    if (property.propertyPath == "particleEffect.effectAssetId") return ParseNumber(property.value, Ensure(node.components.particleEffect).effectAssetId);
+    if (property.propertyPath == "particleEffect.deterministicSeed") return ParseNumber(property.value, Ensure(node.components.particleEffect).deterministicSeed);
+    if (property.propertyPath == "particleEffect.rateMultiplier") return ParseNumber(property.value, Ensure(node.components.particleEffect).rateMultiplier);
+    if (property.propertyPath == "particleEffect.maxParticlesOverride") return ParseNumber(property.value, Ensure(node.components.particleEffect).maxParticlesOverride);
+    if (property.propertyPath == "particleEffect.ownerDeathPolicy") {
+        std::uint32_t policy = 0U;
+        if (!ParseNumber(property.value, policy) || policy > static_cast<std::uint32_t>(ParticleOwnerDeathPolicy::Clear)) return false;
+        Ensure(node.components.particleEffect).ownerDeathPolicy = static_cast<ParticleOwnerDeathPolicy>(policy);
+        return true;
+    }
+    if (property.propertyPath == "particleEffect.enabled") return ParseBool(property.value, Ensure(node.components.particleEffect).enabled);
+    if (property.propertyPath == "particleEffect.autoPlay") return ParseBool(property.value, Ensure(node.components.particleEffect).autoPlay);
+    if (property.propertyPath == "particleEffect.followTransform") return ParseBool(property.value, Ensure(node.components.particleEffect).followTransform);
+    if (property.propertyPath == "particleEffect.restartOnActivate") return ParseBool(property.value, Ensure(node.components.particleEffect).restartOnActivate);
     if (property.propertyPath == "uiDocument") {
         return ApplyComponentPresence(property.value, node.components.uiDocument);
     }

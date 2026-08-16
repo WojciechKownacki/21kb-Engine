@@ -1,9 +1,12 @@
 #include "scene/SceneMeshSubmitter.hpp"
 
+#include "engine/scene/ParticleEffectAssetSchema.hpp"
 #include "kb/render/ViewIdPolicy.hpp"
+#include "kb/render/particles/ParticleGpuRenderer.hpp"
 #include "scene/lighting/SceneLightingPacker.hpp"
 #include "scene/submit/SceneMeshDrawCommandSubmitter.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <span>
@@ -48,6 +51,8 @@ bool SceneMeshSubmitter::Initialize() {
         Shutdown();
         return false;
     }
+    transparentSubmissionScratch_.reserve(4'096U + kParticleGpuMaxBatches);
+    particleMeshBatchBuilder_.Warmup(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
 
     return true;
 }
@@ -146,7 +151,9 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     bgfx::TextureHandle sceneDepthTexture,
     bgfx::TextureHandle sceneColorTexture,
     bool terrainLayersOnly,
-    std::array<float, 16> motionVectorPreviousViewProjection) const {
+    std::array<float, 16> motionVectorPreviousViewProjection,
+    ParticleGpuRenderer* particleRenderer,
+    const kb::particles::ParticleRenderSnapshot* particleSnapshot) const {
     SceneRenderSubmitStats stats{};
     if (!IsInitialized()) {
         return stats;
@@ -216,9 +223,10 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
             .featureState = stats.gpuDrivenFeatureState,
         });
     }
-    SceneMeshDrawCommandSubmitter::Submit(SceneMeshDrawCommandSubmitDesc{
+    const auto submitMeshCommands = [&](std::span<const MeshDrawCommand> commands) {
+        SceneMeshDrawCommandSubmitter::Submit(SceneMeshDrawCommandSubmitDesc{
         .viewId = viewId,
-        .commands = pipelineScratch_.commands,
+        .commands = commands,
         .pass = pass,
         .resources = resources,
         .resourceMap = resourceMap,
@@ -234,7 +242,100 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .passResources = passResources_,
         .diagnostics = diagnostics,
         .stats = stats,
-    });
+        });
+    };
+
+    // Mesh-output particles reuse the ordinary scene mesh pipeline directly (no proxy, no second
+    // preview kernel, no new shaders) rather than the quad/billboard ParticleGpuRenderer path
+    // below, which cannot represent a full per-instance mesh transform. They participate in
+    // whichever pass their material's own blend/shadow state already routes ordinary meshes to
+    // (MeshPipelinePassPolicy decides that per pass, unchanged) - not gated to BaseTransparent
+    // the way the quad billboard path is, since opaque materials and shadow casting need the
+    // opaque/GBuffer/ShadowDepth passes too. Submitted as its own draw-command list rather than
+    // interleaved into the shared mesh/quad-particle transparent depth-sort queue below; this is a
+    // deliberate, documented scope boundary for the first working cut, not silent depth-order bugs.
+    if (particleSnapshot != nullptr) {
+        particleMeshBatchBuilder_.Build(*particleSnapshot);
+        const auto& particleMeshBatches = particleMeshBatchBuilder_.Batches();
+        if (!particleMeshBatches.empty()) {
+            MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+                .pass = pass,
+                .meshBatches = &particleMeshBatches,
+                .resources = &resources,
+                .resourceMap = &resourceMap,
+                .camera = camera,
+                .diagnostics = diagnostics,
+                .maxDrawCommands = drawBudget.maxDrawCommands,
+                .maxVisibleInstances = drawBudget.maxVisibleInstances,
+                .maxDroppedInstances = drawBudget.maxDroppedInstances,
+                .gpuDrivenSupport = {},
+            }, particleMeshPipelineScratch_);
+            MeshPipelineProcessor::CountCommandsAsSubmitted(stats, particleMeshPipelineScratch_.commands);
+            submitMeshCommands(particleMeshPipelineScratch_.commands);
+        }
+    }
+
+    if (pass == MeshPassType::BaseTransparent && particleRenderer != nullptr && particleSnapshot != nullptr) {
+        const ParticleRenderBatchBuildResult& particleBuild = particleRenderer->Build(*particleSnapshot, *camera);
+        transparentSubmissionScratch_.clear();
+        for (std::uint32_t index = 0U; index < pipelineScratch_.commands.size(); ++index) {
+            const MeshDrawCommand& command = pipelineScratch_.commands[index];
+            transparentSubmissionScratch_.push_back(TransparentDrawOrderEntry{
+                .source = TransparentDrawSource::Mesh,
+                .depthBucket = command.depthBucket,
+                .sourceIndex = index,
+                .stableTie = command.sortKey,
+            });
+        }
+        for (std::uint32_t index = 0U; index < particleBuild.batches.size(); ++index) {
+            const ParticleRenderBatch& batch = particleBuild.batches[index];
+            transparentSubmissionScratch_.push_back(TransparentDrawOrderEntry{
+                .source = TransparentDrawSource::Particle,
+                .unsorted = batch.blend == kb::particles::ParticleRenderBlendMode::Add ||
+                    batch.sort == kb::particles::ParticleRenderSortMode::None,
+                .depthBucket = batch.transparentDepthBucket,
+                .sourceIndex = index,
+                .stableTie = (static_cast<std::uint64_t>(batch.emitterRecordIndex) << 32U) | index,
+            });
+        }
+        SortTransparentDrawOrder(transparentSubmissionScratch_);
+        if (!particleBuild.Succeeded()) {
+            ++stats.failedParticleBatchCount;
+        }
+        stats.droppedParticleCount += particleBuild.droppedParticleCount;
+        if (diagnostics != nullptr) {
+            for (const std::uint32_t emitterRecordIndex : particleBuild.unsupportedEmitterRecordIndices) {
+                const auto& emitter = particleSnapshot->Emitters()[emitterRecordIndex];
+                diagnostics->events.push_back(SceneRenderDiagnosticEvent{
+                    .severity = SceneRenderDiagnosticSeverity::Error,
+                    .kind = SceneRenderDiagnosticKind::UnsupportedParticleOutput,
+                    .materialAssetId = emitter.materialAssetId,
+                    .particleEffectAssetId = emitter.effectAssetId,
+                    .particleEmitterId = emitter.emitterId,
+                    .instanceCount = emitter.particleCount,
+                });
+            }
+        }
+        for (const TransparentDrawOrderEntry& entry : transparentSubmissionScratch_) {
+            if (entry.source == TransparentDrawSource::Mesh) {
+                submitMeshCommands(std::span<const MeshDrawCommand>{
+                    &pipelineScratch_.commands[entry.sourceIndex], 1U});
+                continue;
+            }
+            if (particleBuild.Succeeded()) {
+                const ParticleGpuSubmitResult particleResult = particleRenderer->SubmitBatch(
+                    viewId, entry.sourceIndex, *particleSnapshot, *camera, resources, resourceMap, sceneDepthTexture);
+                stats.submittedParticleCount += particleResult.submittedParticles;
+                stats.submittedParticleDrawCallCount += particleResult.drawCalls;
+                stats.droppedParticleCount += particleResult.droppedParticles;
+                stats.particleInstanceUploadBytes +=
+                    static_cast<std::uint64_t>(particleResult.submittedParticles) * sizeof(ParticleGpuInstance);
+                if (!particleResult.succeeded) ++stats.failedParticleBatchCount;
+            }
+        }
+    } else {
+        submitMeshCommands(pipelineScratch_.commands);
+    }
 
     return stats;
 }

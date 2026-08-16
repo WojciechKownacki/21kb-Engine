@@ -10,9 +10,11 @@
 #include "platform/win32/EditorMaterialParameterValueDialog.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/ParticleEditorPanelLayout.hpp"
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
 
 #include <optional>
+#include <vector>
 
 namespace kb::editor {
 namespace {
@@ -54,6 +56,32 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
             sceneViewport_.RequestPresent();
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             return true;
+        }
+    }
+
+    const std::optional<RECT> particleEditorContent = EditorPanelContentResolver::Resolve(
+        DockPanelKind::ParticleEditor,
+        messageWindow,
+        mainWindow_,
+        dockModel_,
+        floatingWindows_,
+        metrics_);
+    if (particleEditorContent.has_value()) {
+        const std::vector<kb::particle_editor::ParticleEmitterListRow> rows =
+            sceneContext_.ParticleEditorEmitterRows();
+        const auto inspector = sceneContext_.ParticleEditorInspector();
+        const ParticleEditorPanelLayout particleLayout = ParticleEditorPanelLayoutResolver::Resolve(
+            *particleEditorContent,
+            rows,
+            sceneContext_.ParticleEditorWorkspace().ComposerScrollOffset(),
+            GetDpiForWindow(messageWindow), &inspector);
+        for (std::size_t index = 0U; index < particleLayout.emitterRowCount; ++index) {
+            const ParticleEditorEmitterRowLayout& row = particleLayout.emitterRows[index];
+            if (x >= row.name.left && x < row.name.right && y >= row.name.top && y < row.name.bottom &&
+                sceneContext_.BeginParticleEditorEmitterRename(row.emitterId)) {
+                EditorWindowInvalidator::InvalidatePanel(messageWindow, *particleEditorContent);
+                return true;
+            }
         }
     }
 
@@ -167,6 +195,17 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
     }
     if (assetResult == EditorAssetBrowserDoubleClickResult::AnimatorEditorOpened) {
         static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::AnimatorEditor, DockArea::Center));
+    }
+    if (assetResult == EditorAssetBrowserDoubleClickResult::ParticleEditorOpened) {
+        if (const kb::assets::AssetMetadata* metadata =
+                sceneContext_.Scene().Assets().Manager().Registry().Find(sceneContext_.ParticleEditorAssetId());
+            metadata != nullptr) {
+            const std::string filename = metadata->virtualPath.filename().string();
+            static_cast<void>(dockModel_.Commands().SetPanelTitle(
+                DockPanelKind::ParticleEditor,
+                filename.empty() ? metadata->name : filename));
+        }
+        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::ParticleEditor, DockArea::Center));
     }
     // A GPU viewport is a native child window, so repainting the GDI dock host does not retire the
     // surface belonging to the previously active tab. Without an explicit composition request the

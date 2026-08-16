@@ -23,6 +23,7 @@ struct DialogState {
     std::optional<std::string> result;
     std::string parameterName;
     std::string currentValue;
+    std::string hint;
 };
 
 // UTF-8, via the editor's shared conversion. The hand-rolled pair that used to live here was Latin-1 one
@@ -70,7 +71,7 @@ LRESULT CALLBACK DialogProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         state->edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", Widen(state->currentValue).c_str(),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
             14, 42, 340, 24, window, reinterpret_cast<HMENU>(kEditId), nullptr, nullptr);
-        CreateWindowExW(0, L"STATIC", L"Use numbers like: 0.25 or 1 0 0 1", WS_CHILD | WS_VISIBLE,
+        CreateWindowExW(0, L"STATIC", Widen(state->hint).c_str(), WS_CHILD | WS_VISIBLE,
             14, 72, 340, 20, window, nullptr, nullptr, nullptr);
         CreateWindowExW(0, L"BUTTON", L"OK", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
             174, 104, 86, 28, window, reinterpret_cast<HMENU>(kOkId), nullptr, nullptr);
@@ -134,17 +135,19 @@ void RegisterDialogClass() {
 std::optional<std::string> EditorMaterialParameterValueDialog::Show(
     HWND owner,
     std::string_view parameterName,
-    std::string_view currentValue) {
+    std::string_view currentValue,
+    std::string_view hint) {
     RegisterDialogClass();
     DialogState state{
         .parameterName = std::string{ parameterName },
         .currentValue = std::string{ currentValue },
+        .hint = std::string{ hint },
     };
 
     HWND window = CreateWindowExW(
         WS_EX_DLGMODALFRAME,
         kDialogClassName,
-        L"Edit Material Graph Parameter",
+        L"Edit Value",
         WS_CAPTION | WS_SYSMENU,
         CW_USEDEFAULT,
         CW_USEDEFAULT,

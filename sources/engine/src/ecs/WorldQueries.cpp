@@ -153,6 +153,12 @@ void World::StoreCachedQueryPlan(
     });
 }
 
+void World::ReleaseUnusedQueryPlans() {
+    std::erase_if(queryPlanCache_, [](const QueryPlanCacheEntry& entry) {
+        return entry.plan.use_count() == 1L;
+    });
+}
+
 ecs_table_t* World::EntityArchetype(Entity entity) const noexcept {
     if (world_ == nullptr || !entity.IsValid() || !ecs_is_alive(world_, FlecsEntityId(entity))) {
         return nullptr;

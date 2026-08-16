@@ -2,6 +2,7 @@
 
 #include "engine/library/EngineLibraryModule.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneSystemHandle.hpp"
 #include "engine/script/LuaScriptBackend.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
@@ -104,6 +105,7 @@ private:
     void AddDiagnostic(std::string message);
 
     std::shared_ptr<ScriptRuntimeHostState> state_;
+    kb::scene::SceneSystemHandle sceneSystemHandle_{};
     bool sceneSystemInstalled_ = false;
     std::vector<std::string> diagnostics_;
     std::vector<kb::library::EngineLibraryModuleReportEntry> libraryStartupReport_;

@@ -29,9 +29,8 @@ public:
 
     // Fills `outFrame` from the render scene's current mesh proxies (entries sorted by
     // entityId; reuses the vector's existing capacity - no steady-state allocation).
-    // Synthetic particle proxies (SceneParticleRenderSynchronizer::kSyntheticProxyIdBase
-    // namespace) are skipped: scripts can never hold a synthetic id, so entries for them
-    // would be dead weight. `camera` is the camera this submit actually renders with
+    // Particle snapshots are not mesh proxies and therefore never enter this entity-only
+    // feedback frame. `camera` is the camera this submit actually renders with
     // (pre-temporal-jitter; nullptr when the submit resolved none - the frame is still
     // published with frustumValid=false, matching the mesh pipeline's own "no camera =
     // nothing is culled" behavior). `resources`/`resourceMap` resolve each proxy's
