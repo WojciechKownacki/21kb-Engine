@@ -39,6 +39,11 @@ bool EditorPluginsPointerController::HandlePointerDown(const RECT& content, int 
             sceneContext_.Plugins().ScrollOffset() + (y < midpoint ? -page : page),
             PluginsPanelRenderer::MaxScrollOffset(content));
     }
+    case PluginsPanelHitKind::ParticleProviderAdd:
+        return sceneContext_.AcceptParticleProviderMigration();
+    case PluginsPanelHitKind::ParticleProviderCancel:
+        sceneContext_.CancelParticleProviderMigration();
+        return true;
     case PluginsPanelHitKind::None:
     default:
         return sceneContext_.Plugins().SetHoveredPluginIndex(std::numeric_limits<std::size_t>::max());

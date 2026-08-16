@@ -2,11 +2,13 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/ParticleEffectAsset.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
+#include "engine/scene/ParticleEffectAssetMigration.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -2534,6 +2536,31 @@ void RunScenesHaveStableUniqueIdsTest() {
     Require(first.Id() != second.Id(), "Scenes must not share render cache ids");
 }
 
+void RunParticleReleaseBeforeSyncIsOwnershipNeutralTest() {
+    kb::scene::Scene scene;
+    RenderScene renderScene;
+    renderScene.SetParticleRenderSnapshot(
+        std::make_shared<kb::particles::ParticleRenderSnapshot>());
+    SceneParticleRenderSynchronizer synchronizer;
+    const kb::particles::ParticleRenderCapabilities capabilitiesBefore =
+        kb::particles::ParticlePlayback::RenderCapabilities(scene);
+
+    synchronizer.ReleaseScene(scene, &renderScene);
+
+    Require(!renderScene.ParticleRenderSnapshot(),
+        "particle release before sync retained a stale render snapshot");
+    const kb::particles::ParticleRenderCapabilities capabilitiesAfter =
+        kb::particles::ParticlePlayback::RenderCapabilities(scene);
+    Require(capabilitiesAfter.capabilityEpoch == capabilitiesBefore.capabilityEpoch &&
+            capabilitiesAfter.lastConsumedFixedStep == capabilitiesBefore.lastConsumedFixedStep &&
+            capabilitiesAfter.outputs == capabilitiesBefore.outputs &&
+            capabilitiesAfter.gpuDrawing == capabilitiesBefore.gpuDrawing &&
+            capabilitiesAfter.instancing == capabilitiesBefore.instancing &&
+            capabilitiesAfter.softParticles == capabilitiesBefore.softParticles &&
+            capabilitiesAfter.subtractiveBlend == capabilitiesBefore.subtractiveBlend,
+        "particle release before sync mutated unowned renderer capabilities");
+}
+
 void RunSyncConsumesPrecomputedWorldTransformTest() {
     // H3: when the batched transform system has already produced world transforms
     // (worldDirty == false), the render bridge consumes them directly without a
@@ -2590,140 +2617,10 @@ void RunSyncFallsBackToResolveForDirtyTransformTest() {
     Require(stats.transformResolvedFallbackCount >= 1U, "Render bridge did not fall back to resolve for a dirty transform");
 }
 
-// LIB-143: proves SceneParticleRenderSynchronizer actually produces real, GPU-visible
-// MeshRenderProxy entries for live particles (mesh/material/shadow flags correct) and
-// correctly removes stale proxy slots both when particles die naturally (count shrinks) and
-// when the whole instance is released (owner destroyed) - the exact two cleanup paths the
-// class's own doc comment calls out as necessary because synthetic particle proxy ids are not
-// real ECS entities.
-void RunSceneParticleRenderSynchronizerTest() {
-    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_particle_sync_lib143";
-    std::error_code resetError;
-    std::filesystem::remove_all(root, resetError);
-    std::filesystem::create_directories(root / "Assets" / "Fx", resetError);
-    Require(!resetError, "LIB-143 particle render sync test project root could not be prepared");
-
-    kb::scene::ParticleEffectAsset effect{};
-    effect.materialReference = kb::assets::ToString(kb::assets::AssetId{ 535353U });
-    effect.looping = true;
-    effect.emissionRatePerSecond = 1000.0F;
-    effect.startSpeedMin = 0.0F;
-    effect.startSpeedMax = 0.0F;
-    effect.startLifetimeMin = 0.05F;
-    effect.startLifetimeMax = 0.05F;
-    effect.spreadDegrees = 0.0F;
-    effect.gravityScale = 0.0F;
-    effect.maxParticles = 4U;
-    const std::filesystem::path effectPath = root / "Assets" / "Fx" / "Sync.kbvfx";
-    Require(kb::scene::ParticleEffectAssetIO::Save(effectPath, effect), "LIB-143 particle render sync test effect asset must write to disk");
-
-    kb::scene::Scene scene;
-    Require(scene.Assets().MountProject(root), "LIB-143 particle render sync test project mount failed");
-    Require(scene.Assets().Discover() == 1U, "LIB-143 particle render sync test did not discover exactly the effect asset");
-    const kb::assets::AssetMetadata* effectMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Fx/Sync.kbvfx");
-    Require(effectMetadata != nullptr, "LIB-143 particle render sync test discovered wrong effect metadata");
-    const std::uint64_t effectAssetId = effectMetadata->id.value;
-
-    // Registered AFTER Discover() - see ScriptRuntimeTests.cpp's own note on why a synthetic,
-    // file-less asset would otherwise be swept away by DiscoverMountedAssets' cleanup pass.
-    Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
-                .id = kb::assets::AssetId{ 535353U },
-                .type = "RenderMaterial",
-                .name = "FakeParticleSyncMaterial",
-                .virtualPath = "/Game/FakeParticleSyncMaterial.kbmat",
-                .physicalPath = "FakeParticleSyncMaterial.kbmat",
-                .contentHash = 1U,
-            }),
-        "LIB-143 particle render sync test fake material registration failed");
-
-    const kb::scene::SceneEntity owner = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
-        .name = "ParticleSyncOwner",
-        .transform = LocalOnlyTransformAt(2.0F, 0.0F, 0.0F),
-    });
-    Require(owner.IsValid(), "LIB-143 particle render sync test owner entity creation failed");
-    scene.Runtime().SynchronizeTransforms();
-
-    const std::uint64_t instance = scene.Particles().Create(effectAssetId, owner);
-    Require(instance != 0U, "LIB-143 particle render sync test instance creation failed");
-    Require(scene.Particles().Play(instance), "LIB-143 particle render sync test Play failed");
-    scene.Particles().Advance(0.01F);
-    scene.Particles().Advance(0.01F);
-    const std::uint32_t liveAfterSpawn = scene.Particles().LiveParticleCount(instance);
-    Require(liveAfterSpawn > 0U && liveAfterSpawn <= 4U, "LIB-143 particle render sync test did not spawn any particles to sync");
-
-    RenderScene renderScene;
-    SceneParticleRenderSynchronizer synchronizer;
-    synchronizer.Sync(scene, renderScene, 0U);
-
-    const kb::assets::AssetId quadMeshAssetId = BuiltInParticleQuadMeshAssetId();
-    std::uint32_t particleProxyCount = 0U;
-    for (const auto& [proxyId, proxy] : renderScene.MeshProxies()) {
-        if (proxy.desc.meshAssetId != quadMeshAssetId.value) {
-            continue;
-        }
-        ++particleProxyCount;
-        Require(proxy.desc.materialAssetId == 535353U, "SceneParticleRenderSynchronizer must submit the instance's resolved material asset id");
-        Require(!proxy.desc.castsShadow, "SceneParticleRenderSynchronizer must submit particle billboards as non-shadow-casting");
-        Require(proxy.desc.receivesShadow, "SceneParticleRenderSynchronizer must submit particle billboards as shadow-receiving");
-        Require(proxy.desc.visible, "SceneParticleRenderSynchronizer must submit particle billboards as visible");
-    }
-    Require(particleProxyCount == liveAfterSpawn, "SceneParticleRenderSynchronizer must submit exactly one mesh proxy per live particle");
-    Require(renderScene.MeshProxyCount() == liveAfterSpawn, "SceneParticleRenderSynchronizer must not leave any unrelated mesh proxies behind");
-
-    // A second scene starts its instance ids at 1 too. Synchronizing it through the same
-    // renderer-owned bridge must not overwrite scene A's stale-slot history.
-    kb::scene::Scene secondScene;
-    Require(secondScene.Assets().MountProject(root), "LIB-143 second-scene project mount failed");
-    Require(secondScene.Assets().Discover() == 1U, "LIB-143 second-scene discovery failed");
-    Require(secondScene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
-                .id = kb::assets::AssetId{ 535353U },
-                .type = "RenderMaterial",
-                .name = "FakeParticleSyncMaterial",
-                .virtualPath = "/Game/FakeParticleSyncMaterial.kbmat",
-                .physicalPath = "FakeParticleSyncMaterial.kbmat",
-                .contentHash = 1U,
-            }),
-        "LIB-143 second-scene material registration failed");
-    const kb::scene::SceneEntity secondOwner = secondScene.Entities().CreateEntity();
-    secondScene.Runtime().SynchronizeTransforms();
-    const std::uint64_t secondInstance = secondScene.Particles().Create(effectAssetId, secondOwner);
-    Require(secondInstance == instance, "LIB-143 regression setup requires colliding per-scene instance ids");
-    Require(secondScene.Particles().Emit(secondInstance, 1U), "LIB-143 second-scene emit failed");
-    RenderScene secondRenderScene;
-    synchronizer.Sync(secondScene, secondRenderScene, 0U);
-    Require(secondRenderScene.MeshProxyCount() == 1U, "LIB-143 second scene did not synchronize independently");
-
-    // Stop first (halts new emission only, per SceneParticleSystems::Stop's own contract) -
-    // otherwise emissionRatePerSecond=1000 would keep replacing dying particles with new
-    // ones and LiveParticleCount would never reach 0. All particles' lifetime is 0.05s, so
-    // advancing well past that kills the already-live batch (count shrinks to 0 while the
-    // instance itself stays alive), proving the "currentCount < previousCount" stale-slot
-    // cleanup path.
-    Require(scene.Particles().Stop(instance), "LIB-143 particle render sync test Stop failed");
-    scene.Particles().Advance(0.2F);
-    Require(scene.Particles().LiveParticleCount(instance) == 0U, "LIB-143 particle render sync test particles did not die as expected");
-    synchronizer.Sync(scene, renderScene, 0U);
-    Require(renderScene.MeshProxyCount() == 0U, "SceneParticleRenderSynchronizer must remove stale proxy slots once particles die");
-
-    // Re-spawn, sync once so proxies exist again, then release the whole instance via owner
-    // destruction - proving the OTHER cleanup path (an instance disappearing between frames
-    // entirely, not just shrinking).
-    Require(scene.Particles().Emit(instance, 2U), "LIB-143 particle render sync test re-emit failed");
-    Require(scene.Particles().LiveParticleCount(instance) == 2U, "LIB-143 particle render sync test re-emit did not spawn the requested count");
-    synchronizer.Sync(scene, renderScene, 0U);
-    Require(renderScene.MeshProxyCount() == 2U, "LIB-143 particle render sync test re-emitted particles were not synced");
-
-    scene.Entities().Destroy(owner);
-    scene.Particles().Advance(0.01F);
-    Require(!scene.Particles().Exists(instance), "LIB-143 particle render sync test instance did not auto-release with its owner");
-    synchronizer.Sync(scene, renderScene, 0U);
-    Require(renderScene.MeshProxyCount() == 0U, "SceneParticleRenderSynchronizer must remove all proxy slots for an instance released since last frame");
-}
-
 // LIB-144: SceneRenderVisibilityPublisher's frame construction against a hand-built
 // RenderScene - no Scene, no bgfx, no resources needed. Proves: deterministic
-// entityId-sorted entries regardless of proxy-map iteration order, synthetic particle
-// proxies skipped, the VisibilityComponent flag and the camera cullingMask both reflected
+// entityId-sorted entries regardless of proxy-map iteration order, the VisibilityComponent
+// flag and the camera cullingMask both reflected
 // in `visible`, the "no camera = invalid frustum = nothing culled" rule, and the
 // "unresolvable mesh = invalid bounds = never frustum-culled" rule (real bounds resolution
 // and real frustum culling are proven end-to-end through Renderer::SubmitScene in
@@ -2737,7 +2634,7 @@ void RunSceneRenderVisibilityPublisherBuildsFrameTest() {
     static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{ .entityId = 3U, .meshAssetId = 1U, .model = identity, .visible = false, .layer = 1U }));
     static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{ .entityId = 6U, .meshAssetId = 1U, .model = identity, .visible = true, .layer = 2U }));
     static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
-        .entityId = SceneParticleRenderSynchronizer::kSyntheticProxyIdBase + 42U,
+        .entityId = 42U,
         .meshAssetId = 1U,
         .model = identity,
         .visible = true,
@@ -2751,8 +2648,9 @@ void RunSceneRenderVisibilityPublisherBuildsFrameTest() {
     Require(!frame.cameraValid, "LIB-145 publisher must report no camera for a camera-less submit");
     Require(frame.viewportWidth == 64U && frame.viewportHeight == 64U, "LIB-145 publisher must record the submitted viewport extent");
     Require(frame.viewportId == 5U, "LIB-144 publisher must record the submitted viewport id");
-    Require(frame.entries.size() == 3U, "LIB-144 publisher must skip synthetic particle proxies");
-    Require(frame.entries[0].entityId == 3U && frame.entries[1].entityId == 6U && frame.entries[2].entityId == 9U,
+    Require(frame.entries.size() == 4U, "visibility publisher must retain every real mesh proxy");
+    Require(frame.entries[0].entityId == 3U && frame.entries[1].entityId == 6U &&
+            frame.entries[2].entityId == 9U && frame.entries[3].entityId == 42U,
         "LIB-144 publisher entries must be sorted by entityId regardless of proxy-map iteration order");
     Require(!frame.entries[0].visible, "LIB-144 publisher must report a VisibilityComponent-hidden proxy as not visible");
     Require(frame.entries[1].visible && frame.entries[2].visible, "LIB-144 publisher must report visible proxies as visible under an all-bits default mask");
@@ -2768,7 +2666,7 @@ void RunSceneRenderVisibilityPublisherBuildsFrameTest() {
     Require(frame.frustumValid, "LIB-144 publisher must extract a valid frustum from a real camera");
     Require(frame.cameraValid && frame.view == identity && frame.projection == identity,
         "LIB-145 publisher must copy the submit camera's view/projection matrices into the frame");
-    Require(frame.entries.size() == 3U, "LIB-144 publisher must keep one entry per real mesh proxy under a camera");
+    Require(frame.entries.size() == 4U, "LIB-144 publisher must keep one entry per real mesh proxy under a camera");
     Require(!frame.entries[1].visible, "LIB-144 publisher must mask-reject a proxy whose layer is outside the camera's cullingMask");
     Require(frame.entries[2].visible, "LIB-144 publisher must keep a mask-passing, visible proxy visible (invalid bounds are never frustum-culled)");
 }
@@ -2849,7 +2747,7 @@ void RunRenderSceneSyncTests() {
     RunSyncMeshWorldAffinesParallelTest();
     RunRenderBridgeTelemetryAggregatesBridgeStatsTest();
     RunScenesHaveStableUniqueIdsTest();
-    RunSceneParticleRenderSynchronizerTest();
+    RunParticleReleaseBeforeSyncIsOwnershipNeutralTest();
     RunSceneRenderVisibilityPublisherBuildsFrameTest();
 }
 

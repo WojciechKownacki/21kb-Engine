@@ -54,6 +54,11 @@ private:
     return iter == descriptor.plugins.end() ? std::string{} : iter->binaryPath;
 }
 
+[[nodiscard]] std::string ReadFileBytes(const std::filesystem::path& path) {
+    std::ifstream input{ path, std::ios::binary };
+    return { std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+}
+
 void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
     std::error_code error;
     std::filesystem::create_directories(path.parent_path(), error);
@@ -162,6 +167,48 @@ void RunDefaultSceneFactorySeedsEmptySceneTest() {
     kb::editor::tests::Require(scene.Hierarchy().RootEntities().empty(), "Editor default scene should start without root entities");
 }
 
+void RunParticleProviderMigrationPolicyTest() {
+    std::error_code error;
+    const std::filesystem::path root = TempRoot() / "ParticleMigration";
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root / "Assets", error);
+    kb::editor::tests::Require(!error, "Particle provider migration fixture could not be created");
+    const ScopedCurrentPath currentPath{ root };
+    kb::editor::EditorProjectPaths::SetProjectFile(root / "Project.21kbproject");
+
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.plugins = {
+        { .name = "Physics.Jolt", .binaryPath = kb::editor::EditorPluginCatalog::PersistentBinaryPath("Physics.Jolt"), .enabled = true },
+        { .name = "Audio.Miniaudio", .binaryPath = kb::editor::EditorPluginCatalog::PersistentBinaryPath("Audio.Miniaudio"), .enabled = true },
+        { .name = "Rendering.BasicLighting", .binaryPath = kb::editor::EditorPluginCatalog::PersistentBinaryPath("Rendering.BasicLighting"), .enabled = true },
+    };
+    kb::editor::tests::Require(kb::project::ProjectManager::SaveProject(kb::editor::EditorProjectPaths::ProjectFile(), descriptor),
+        "Particle provider migration descriptor could not be saved");
+    WriteTextFile(root / "Assets" / "Existing.kbvfx", "21kb ParticleEffect 2\n");
+
+    const std::string before = ReadFileBytes(kb::editor::EditorProjectPaths::ProjectFile());
+    const auto timestamp = std::filesystem::last_write_time(kb::editor::EditorProjectPaths::ProjectFile(), error);
+    kb::editor::EditorProjectBootstrapResult pending = kb::editor::EditorProjectBootstrap::BootstrapDefaultProject();
+    kb::editor::tests::Require(pending.succeeded && !pending.created &&
+            pending.particlePolicy.requirement == kb::project::ParticleProjectRequirement::Missing,
+        "Existing project did not expose the explicit particle provider Add/Cancel migration");
+    kb::editor::tests::Require(ReadFileBytes(kb::editor::EditorProjectPaths::ProjectFile()) == before &&
+            std::filesystem::last_write_time(kb::editor::EditorProjectPaths::ProjectFile(), error) == timestamp,
+        "Cancel/no-action silently changed the existing project descriptor");
+
+    kb::editor::tests::Require(kb::editor::EditorProjectBootstrap::AcceptParticleProvider(pending.projectFile, pending.descriptor),
+        "Explicit particle provider Add could not persist the project descriptor");
+    const kb::project::ProjectDescriptorReadResult loaded = kb::project::ProjectManager::LoadProject(pending.projectFile);
+    kb::editor::tests::Require(loaded.succeeded && HasEnabledPlugin(loaded.descriptor, "Rendering.21kbParticle") &&
+            BinaryPathFor(loaded.descriptor, "Rendering.21kbParticle") ==
+                kb::editor::EditorPluginCatalog::PersistentBinaryPath("Rendering.21kbParticle"),
+        "Explicit particle provider Add persisted the wrong provider reference");
+
+    kb::editor::EditorProjectPaths::SetProjectFile({});
+    std::filesystem::current_path(TempRoot(), error);
+    std::filesystem::remove_all(root, error);
+}
+
 void RunTerrainEditorPluginCatalogTest() {
     const kb::editor::EditorPluginDescriptor* plugin =
         kb::editor::EditorPluginCatalog::FindById("Editor.Terrain");
@@ -185,6 +232,7 @@ namespace kb::editor::tests {
 void RunEditorProjectTests() {
     RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest();
     RunProjectPathsPreferRepositoryProjectWhenLaunchedFromBuildTreeTest();
+    RunParticleProviderMigrationPolicyTest();
     RunDefaultSceneFactorySeedsEmptySceneTest();
     RunTerrainEditorPluginCatalogTest();
 }

@@ -144,6 +144,13 @@ namespace {
         lhs.sampleIntervalSeconds == rhs.sampleIntervalSeconds && lhs.layer == rhs.layer &&
         lhs.castsShadow == rhs.castsShadow && lhs.receivesShadow == rhs.receivesShadow && lhs.enabled == rhs.enabled;
 }
+
+[[nodiscard]] bool Equal(const ParticleEffectComponent& lhs, const ParticleEffectComponent& rhs) noexcept {
+    return lhs.effectAssetId == rhs.effectAssetId && lhs.deterministicSeed == rhs.deterministicSeed &&
+        lhs.rateMultiplier == rhs.rateMultiplier && lhs.maxParticlesOverride == rhs.maxParticlesOverride &&
+        lhs.ownerDeathPolicy == rhs.ownerDeathPolicy && lhs.enabled == rhs.enabled && lhs.autoPlay == rhs.autoPlay &&
+        lhs.followTransform == rhs.followTransform && lhs.restartOnActivate == rhs.restartOnActivate;
+}
 [[nodiscard]] bool Equal(const SkeletonBindingComponent& lhs, const SkeletonBindingComponent& rhs) noexcept {
     return lhs.skeletonAssetId == rhs.skeletonAssetId &&
         lhs.skeletonCompatibilitySignature == rhs.skeletonCompatibilitySignature && lhs.enabled == rhs.enabled;
@@ -232,6 +239,7 @@ ScenePrefabOverrideFlag ScenePrefabComponentComparator::Compare(SceneComponents 
     if (!EqualOptionalComponent(components.FacingPanels().TryGet(entity), expected.facingPanel)) flags |= ScenePrefabOverrideFlag::FacingPanel;
     if (!EqualOptionalComponent(components.SpaceStrokes().TryGet(entity), expected.spaceStroke)) flags |= ScenePrefabOverrideFlag::SpaceStroke;
     if (!EqualOptionalComponent(components.HistoryRibbons().TryGet(entity), expected.historyRibbon)) flags |= ScenePrefabOverrideFlag::HistoryRibbon;
+    if (!EqualOptionalComponent(components.ParticleEffects().TryGet(entity), expected.particleEffect)) flags |= ScenePrefabOverrideFlag::ParticleEffect;
     const LensEchoComponent* actualLensEcho = components.LensEchoes().TryGet(entity);
     if (!expected.lensEcho.has_value()) {
         if (actualLensEcho != nullptr) flags |= ScenePrefabOverrideFlag::LensEcho;

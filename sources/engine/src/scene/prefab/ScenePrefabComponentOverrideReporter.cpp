@@ -446,6 +446,30 @@ void AppendUIDocument(SceneComponents components, SceneEntity entity, const std:
     }
 }
 
+void AppendParticleEffect(SceneComponents components, SceneEntity entity, const std::optional<ParticleEffectComponent>& expected, ScenePrefabOverrideReport& report, std::uint32_t nodeIndex, SceneObject object) {
+    const ParticleEffectComponent* actual = components.ParticleEffects().TryGet(entity);
+    const bool equal = actual == nullptr ? !expected.has_value() : expected.has_value() &&
+        actual->effectAssetId == expected->effectAssetId && actual->deterministicSeed == expected->deterministicSeed &&
+        actual->rateMultiplier == expected->rateMultiplier && actual->maxParticlesOverride == expected->maxParticlesOverride &&
+        actual->ownerDeathPolicy == expected->ownerDeathPolicy && actual->enabled == expected->enabled &&
+        actual->autoPlay == expected->autoPlay && actual->followTransform == expected->followTransform &&
+        actual->restartOnActivate == expected->restartOnActivate;
+    if (equal) return;
+    if (HasPresenceOverride(actual, expected, report, nodeIndex, object, "particleEffect", ScenePrefabOverrideFlag::ParticleEffect)) return;
+    const auto add = [&](std::string path, const auto& value) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, std::move(path), ScenePrefabOverrideValueFormatter::ToString(value), ScenePrefabOverrideFlag::ParticleEffect);
+    };
+    if (!expected.has_value() || actual->effectAssetId != expected->effectAssetId) add("particleEffect.effectAssetId", actual->effectAssetId);
+    if (!expected.has_value() || actual->deterministicSeed != expected->deterministicSeed) add("particleEffect.deterministicSeed", actual->deterministicSeed);
+    if (!expected.has_value() || actual->rateMultiplier != expected->rateMultiplier) add("particleEffect.rateMultiplier", actual->rateMultiplier);
+    if (!expected.has_value() || actual->maxParticlesOverride != expected->maxParticlesOverride) add("particleEffect.maxParticlesOverride", static_cast<std::uint64_t>(actual->maxParticlesOverride));
+    if (!expected.has_value() || actual->ownerDeathPolicy != expected->ownerDeathPolicy) add("particleEffect.ownerDeathPolicy", static_cast<std::uint64_t>(actual->ownerDeathPolicy));
+    if (!expected.has_value() || actual->enabled != expected->enabled) add("particleEffect.enabled", actual->enabled);
+    if (!expected.has_value() || actual->autoPlay != expected->autoPlay) add("particleEffect.autoPlay", actual->autoPlay);
+    if (!expected.has_value() || actual->followTransform != expected->followTransform) add("particleEffect.followTransform", actual->followTransform);
+    if (!expected.has_value() || actual->restartOnActivate != expected->restartOnActivate) add("particleEffect.restartOnActivate", actual->restartOnActivate);
+}
+
 } // namespace
 
 void ScenePrefabComponentOverrideReporter::Append(SceneComponents components, SceneEntity entity, const ScenePrefabNodeComponents& expected, ScenePrefabOverrideReport& report, std::uint32_t nodeIndex, SceneObject object) {
@@ -462,6 +486,7 @@ void ScenePrefabComponentOverrideReporter::Append(SceneComponents components, Sc
     AppendAnimator(components, entity, expected.animator, report, nodeIndex, object);
     AppendSkeletonBinding(components, entity, expected.skeletonBinding, report, nodeIndex, object);
     AppendDeformedGeometry(components, entity, expected.deformedGeometry, report, nodeIndex, object);
+    AppendParticleEffect(components, entity, expected.particleEffect, report, nodeIndex, object);
     AppendUIDocument(components, entity, expected.uiDocument, report, nodeIndex, object);
 }
 

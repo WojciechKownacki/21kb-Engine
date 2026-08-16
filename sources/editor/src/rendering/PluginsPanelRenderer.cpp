@@ -24,6 +24,14 @@ constexpr int kPluginColumnRight = 230;
 constexpr int kStatusColumnRight = 330;
 constexpr int kCategoryColumnRight = 430;
 
+[[nodiscard]] RECT ProviderAddRect(const RECT& content) noexcept {
+    return { content.right - 154, content.top + 9, content.right - 86, content.top + 33 };
+}
+
+[[nodiscard]] RECT ProviderCancelRect(const RECT& content) noexcept {
+    return { content.right - 78, content.top + 9, content.right - 10, content.top + 33 };
+}
+
 [[nodiscard]] bool PointInRect(const RECT& rect, int x, int y) noexcept {
     return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
 }
@@ -108,7 +116,15 @@ void DrawHeader(HDC dc, const RECT& content) {
 
 void DrawHeader(HDC dc, const RECT& content, const EditorSceneContext& sceneContext) {
     DrawHeader(dc, content);
-    if (sceneContext.Plugins().HasPendingReload()) {
+    if (sceneContext.HasPendingParticleProviderMigration()) {
+        const RECT header = HeaderRect(content);
+        DrawText(dc, RECT{ header.left + 92, header.top, header.right - 166, header.bottom },
+            "Particle effects detected", RGB(223, 178, 91), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        GdiDrawing::DrawSharpFrame(dc, ProviderAddRect(content), RGB(46, 95, 138), RGB(79, 129, 184));
+        GdiDrawing::DrawSharpFrame(dc, ProviderCancelRect(content), RGB(42, 45, 50), RGB(68, 72, 78));
+        DrawText(dc, ProviderAddRect(content), "Add", RGB(232, 236, 240), 11, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawText(dc, ProviderCancelRect(content), "Cancel", RGB(210, 214, 220), 11, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    } else if (sceneContext.Plugins().HasPendingReload()) {
         const RECT header = HeaderRect(content);
         DrawText(dc, RECT{ header.left + 110, header.top, header.right - kPadding, header.bottom }, "Pending scene reload", RGB(223, 178, 91), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     }
@@ -202,6 +218,12 @@ void PluginsPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme&
 }
 
 PluginsPanelRenderer::Hit PluginsPanelRenderer::HitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y) {
+    if (sceneContext.HasPendingParticleProviderMigration()) {
+        const RECT add = ProviderAddRect(content);
+        if (PointInRect(add, x, y)) return { .kind = PluginsPanelHitKind::ParticleProviderAdd, .rect = add };
+        const RECT cancel = ProviderCancelRect(content);
+        if (PointInRect(cancel, x, y)) return { .kind = PluginsPanelHitKind::ParticleProviderCancel, .rect = cancel };
+    }
     const RECT thumb = ScrollbarThumbRect(content, sceneContext);
     if (PointInRect(thumb, x, y)) {
         return Hit{ .kind = PluginsPanelHitKind::ScrollbarThumb, .index = 0, .rect = thumb };

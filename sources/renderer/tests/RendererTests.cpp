@@ -46,6 +46,10 @@ int main(int argc, char** argv) {
         kb::render::tests::RunSkinnedMeshGpuReadbackTests();
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && std::string_view{ argv[1] } == "scene-sync") {
+        kb::render::tests::RunRenderSceneSyncTests();
+        return EXIT_SUCCESS;
+    }
     if (argc != 1) {
         return EXIT_FAILURE;
     }

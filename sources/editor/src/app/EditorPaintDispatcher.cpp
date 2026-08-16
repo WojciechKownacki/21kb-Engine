@@ -12,6 +12,7 @@
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/MaterialPreviewViewportKeys.hpp"
+#include "rendering/ParticleEditorPanelRenderer.hpp"
 #include "rendering/MaterialPreviewRenderPolicy.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
@@ -227,6 +228,11 @@ void AppendMaterialPreviewLayout(
                         sceneContext.SkeletalMeshEditorSkeletonTreeWidth(),
                         sceneContext.SkeletalMeshEditorSkeletonTreeHeight()).viewport,
                 });
+            } else if (panel->kind == DockPanelKind::ParticleEditor && sceneContext.HasParticleEditorAsset()) {
+                layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
+                    .viewportKey = panel->id,
+                    .bounds = ParticleEditorPanelRenderer::ViewportRect(content, GetDpiForWindow(paintWindow)),
+                });
             }
         }
     } else {
@@ -250,6 +256,14 @@ void AppendMaterialPreviewLayout(
                     sceneContext.SkeletalMeshEditorToolboxWidth(),
                     sceneContext.SkeletalMeshEditorSkeletonTreeWidth(),
                     sceneContext.SkeletalMeshEditorSkeletonTreeHeight()).viewport,
+            });
+        } else if (panel != nullptr && panel->kind == DockPanelKind::ParticleEditor && sceneContext.HasParticleEditorAsset()) {
+            RECT content{};
+            GetClientRect(paintWindow, &content);
+            content.top += metrics.floatingChromeHeight;
+            layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
+                .viewportKey = panel->id,
+                .bounds = ParticleEditorPanelRenderer::ViewportRect(content, GetDpiForWindow(paintWindow)),
             });
         }
     }

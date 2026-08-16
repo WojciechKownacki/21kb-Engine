@@ -3,6 +3,8 @@
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserPointerHandler.hpp"
 #include "app/EditorPendingTextEditCommitter.hpp"
+#include "app/EditorParticleDocumentLifecycle.hpp"
+#include "app/ParticleEditorPanelInteraction.hpp"
 #include "app/EditorPointerDragInteraction.hpp"
 #include "app/EditorPointerDragSourceResolver.hpp"
 #include "app/EditorWindowInvalidator.hpp"
@@ -32,12 +34,15 @@
 #include "inspection/TerrainMaterialLayerMenuState.hpp"
 #include "inspection/InspectorSceneAudioInteraction.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/ParticleEditorPanelLayout.hpp"
 #include "rendering/AnimationClipEditorPanelRenderer.hpp"
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
+#include "platform/win32/EditorMeshAssetPickerDialog.hpp"
+#include "platform/win32/EditorMaterialParameterValueDialog.hpp"
 #include "platform/win32/EditorAnimatorControllerAssetPickerDialog.hpp"
 #include "platform/win32/EditorSkeletonAssetPickerDialog.hpp"
 #include "platform/win32/EditorSkeletalMeshAssetPickerDialog.hpp"
@@ -436,12 +441,22 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             if (panel != nullptr && panel->kind == DockPanelKind::AnimatorEditor && !ResolveDirtyAnimatorEditorTabClose(messageWindow, sceneContext_)) {
                 return;
             }
+            if (panel != nullptr && panel->kind == DockPanelKind::ParticleEditor &&
+                !EditorParticleDocumentLifecycle::Resolve(
+                    messageWindow, sceneContext_,
+                    kb::particle_editor::ParticleDocumentTransition::CloseTab,
+                    L"closing the particle editor tab")) {
+                return;
+            }
             if (dockModel_.Commands().ClosePanel(closeTab->panelId)) {
                 if (panel != nullptr && panel->kind == DockPanelKind::MaterialEditor) {
                     sceneContext_.CloseMaterialEditorAsset();
                 }
                 if (panel != nullptr && panel->kind == DockPanelKind::SkeletalMeshEditor) {
                     sceneContext_.CloseSkeletalMeshEditorAsset();
+                }
+                if (panel != nullptr && panel->kind == DockPanelKind::ParticleEditor) {
+                    sceneContext_.CloseParticleEditorAsset();
                 }
                 sceneViewport_.RequestPresent();
                 EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
@@ -457,6 +472,102 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
 
     const EditorPanelPointerHitContext panelHit =
         EditorPanelPointerHitContextResolver::Resolve(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, x, y);
+
+    if (const std::optional<RECT> particleEditorContent = EditorPanelContentResolver::Resolve(
+            DockPanelKind::ParticleEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        particleEditorContent.has_value() && PointInRect(*particleEditorContent, x, y)) {
+        sceneContext_.SetParticleEditorFocused(true);
+        if (!sceneContext_.HasParticleEditorAsset())
+            return;
+        const auto rows = sceneContext_.ParticleEditorEmitterRows();
+        const auto inspector = sceneContext_.ParticleEditorInspector();
+        const ParticleEditorPanelLayout layout = ParticleEditorPanelLayoutResolver::Resolve(
+            *particleEditorContent, rows,
+            sceneContext_.ParticleEditorWorkspace().ComposerScrollOffset(), GetDpiForWindow(messageWindow), &inspector);
+        ParticleEditorPanelHit hit = ParticleEditorPanelLayoutResolver::HitTest(layout, x, y);
+        if (hit.action != ParticleEditorPanelAction::None) {
+            kb::assets::AssetId selectedMaterial{};
+            std::string editedValue;
+            if (hit.action == ParticleEditorPanelAction::AddEmitter) {
+                const auto selected = EditorMaterialAssetPickerDialog::Show(
+                    mainWindow_, MakeEditorDarkTheme(), sceneContext_, sceneViewport_, {}, false);
+                if (!selected.accepted) return;
+                selectedMaterial = selected.assetId;
+            }
+            if (hit.action == ParticleEditorPanelAction::PickOutputMaterial) {
+                const auto selected = EditorMaterialAssetPickerDialog::Show(
+                    mainWindow_, MakeEditorDarkTheme(), sceneContext_, sceneViewport_, {}, false);
+                if (!selected.accepted) return;
+                selectedMaterial = selected.assetId;
+            } else if (hit.action == ParticleEditorPanelAction::PickOutputMesh) {
+                const auto selected = EditorMeshAssetPickerDialog::Show(
+                    mainWindow_, MakeEditorDarkTheme(), sceneContext_, {});
+                if (!selected.accepted) return;
+                selectedMaterial = selected.assetId;
+            } else if (hit.action == ParticleEditorPanelAction::PickOutputTexture) {
+                const auto selected = EditorTextureAssetPickerDialog::Show(
+                    mainWindow_, MakeEditorDarkTheme(), sceneContext_, {}, EditorTextureAssetPickerFilter::Texture2D);
+                if (!selected.accepted) return;
+                selectedMaterial = selected.assetId;
+            } else if (hit.action == ParticleEditorPanelAction::AddModule) {
+                HMENU menu = CreatePopupMenu();
+                if (menu == nullptr) return;
+                constexpr const char* labels[] = {"Initial Velocity", "Gravity", "Wind", "Drag", "Color Over Life",
+                    "Size Over Life", "Alpha Over Life", "Collision Plane", "Sub Emitter"};
+                for (UINT index = 0U; index < static_cast<UINT>(std::size(labels)); ++index) {
+                    const UINT flags = index == static_cast<UINT>(kb::scene::ParticleModuleType::SubEmitter) &&
+                        rows.size() < 2U ? MF_STRING | MF_GRAYED : MF_STRING;
+                    AppendMenuA(menu, flags, 100U + index, labels[index]);
+                }
+                POINT point{x, y}; ClientToScreen(messageWindow, &point);
+                const UINT choice = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD |
+                    TPM_NONOTIFY | TPM_RIGHTBUTTON, point.x, point.y, 0, messageWindow, nullptr);
+                DestroyMenu(menu);
+                if (choice < 100U || choice >= 109U) return;
+                hit.moduleType = static_cast<kb::scene::ParticleModuleType>(choice - 100U);
+                if (hit.moduleType == kb::scene::ParticleModuleType::SubEmitter) {
+                    HMENU targets = CreatePopupMenu();
+                    if (targets == nullptr) return;
+                    std::array<kb::scene::ParticleStableId, kb::scene::kParticleEffectMaxEmitters> targetIds{};
+                    UINT targetCount = 0U;
+                    for (const auto& row : rows) {
+                        if (row.emitterId == inspector.emitterId) continue;
+                        targetIds[targetCount] = row.emitterId;
+                        AppendMenuA(targets, MF_STRING, 200U + targetCount, row.name.c_str());
+                        ++targetCount;
+                    }
+                    const UINT targetChoice = TrackPopupMenu(targets, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD |
+                        TPM_NONOTIFY | TPM_RIGHTBUTTON, point.x, point.y, 0, messageWindow, nullptr);
+                    DestroyMenu(targets);
+                    if (targetChoice < 200U || targetChoice >= 200U + targetCount) return;
+                    hit.targetEmitterId = targetIds[targetChoice - 200U];
+                }
+            } else if (hit.action == ParticleEditorPanelAction::EditProperty) {
+                if (hit.propertyIndex >= inspector.properties.size() || !inspector.properties[hit.propertyIndex].editable)
+                    return;
+                const auto& property = inspector.properties[hit.propertyIndex];
+                const bool isGradient = property.label == "Gradient";
+                const bool isCurve = property.label == "Curve" || property.label == "Rate curve";
+                const auto edited = EditorMaterialParameterValueDialog::Show(
+                    mainWindow_, property.label, property.value,
+                    isGradient ? "Stops as time,r,g,b,a; separated by ';', e.g. 0,1,1,1,1;1,0,0,0,0"
+                    : isCurve ? "Keys as time,value,easing; separated by ';', e.g. 0,1,0;1,0.5,3"
+                    : "Use numbers like: 0.25 or 1 0 0 1");
+                if (!edited.has_value()) return;
+                editedValue = *edited;
+            }
+            if (ParticleEditorPanelInteraction::Execute(sceneContext_, hit, selectedMaterial, editedValue) &&
+                (hit.action == ParticleEditorPanelAction::BeginEmitterDrag ||
+                 hit.action == ParticleEditorPanelAction::BeginModuleDrag)) {
+                SetCapture(messageWindow);
+            }
+            sceneViewport_.RequestPresent();
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+    } else {
+        sceneContext_.SetParticleEditorFocused(false);
+    }
 
     if (const std::optional<RECT> materialEditorContent = EditorPanelContentResolver::Resolve(DockPanelKind::MaterialEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         materialEditorContent.has_value() && PointInRect(*materialEditorContent, x, y)) {

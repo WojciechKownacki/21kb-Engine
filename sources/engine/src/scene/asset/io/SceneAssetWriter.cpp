@@ -107,6 +107,9 @@ void AddDependency(std::vector<SceneAssetDependency>& dependencies, std::set<std
         if (node.components.behaviour.has_value()) {
             AddDependency(dependencies, seen, node.components.behaviour->behaviourAssetId, "behaviour");
         }
+        if (node.components.particleEffect.has_value()) {
+            AddDependency(dependencies, seen, node.components.particleEffect->effectAssetId, "particleEffect");
+        }
     }
     std::ranges::sort(dependencies, [](const SceneAssetDependency& left, const SceneAssetDependency& right) {
         return left.assetId.value < right.assetId.value;

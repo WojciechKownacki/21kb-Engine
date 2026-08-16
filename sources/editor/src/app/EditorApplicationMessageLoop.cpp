@@ -21,6 +21,7 @@
 #include "rendering/SceneViewportPresentationPolicy.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
+#include "rendering/ParticleEditorPanelRenderer.hpp"
 #include "rendering/EditorMaterialThumbnailService.hpp"
 #include "rendering/EditorMeshPreviewService.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
@@ -359,6 +360,10 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
             documentPresented = SkeletalMeshEditorPanelRenderer::PresentViewport(
                 state.sceneViewport, state.window, content, *panel,
                 state.sceneContext, state.renderBackendSettings) || documentPresented;
+        } else if (panel->kind == DockPanelKind::ParticleEditor) {
+            documentPresented = ParticleEditorPanelRenderer::PresentViewport(
+                state.sceneViewport, state.window, content, *panel,
+                state.sceneContext, state.renderBackendSettings) || documentPresented;
         }
     }
 
@@ -440,6 +445,15 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
                 state.metrics);
             if (content.has_value()) {
                 presented = SkeletalMeshEditorPanelRenderer::PresentViewport(
+                    state.sceneViewport, window, *content, *panel,
+                    state.sceneContext, state.renderBackendSettings) || presented;
+            }
+        } else if (panel != nullptr && panel->kind == DockPanelKind::ParticleEditor) {
+            const std::optional<RECT> content = EditorPanelContentResolver::Resolve(
+                DockPanelKind::ParticleEditor, window, state.window, state.dockModel,
+                state.floatingWindows, state.metrics);
+            if (content.has_value()) {
+                presented = ParticleEditorPanelRenderer::PresentViewport(
                     state.sceneViewport, window, *content, *panel,
                     state.sceneContext, state.renderBackendSettings) || presented;
             }
@@ -709,6 +723,8 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     if (animationPreviewCameraChanged || animationPreviewPlaybackChanged) {
         state.sceneViewport.RequestPresent();
     }
+    const bool particlePreviewChanged = state.sceneContext.TickParticleEditorPreview(deltaSeconds);
+    if (particlePreviewChanged) state.sceneViewport.RequestPresent();
 
     const bool audioPreviewChanged = EditorAudioAssetPreview::Tick(state.sceneContext.Scene());
     if (audioPreviewChanged) {
@@ -739,7 +755,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
 
     const bool viewportsPresented = PresentVisibleViewports(state);
     return viewportsPresented || navigationChanged || gizmoChanged || focusChanged ||
-        animationPreviewCameraChanged || animationPreviewPlaybackChanged || scriptSaved ||
+        animationPreviewCameraChanged || animationPreviewPlaybackChanged || particlePreviewChanged || scriptSaved ||
         audioPreviewChanged || addComponentSliding || disclosureSliding || skeletalMeshEditorOpenChanged ||
         EditorTerrainService::ToolState().strokeActive;
 }

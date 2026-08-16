@@ -12,6 +12,8 @@
 #include "engine/localization/LocalizationCatalogAssetLoader.hpp"
 #include "engine/input/InputModule.hpp"
 #include "engine/modules/EngineModuleHost.hpp"
+#include "engine/particles/ParticlePlayback.hpp"
+#include "engine/project/ParticleProjectPolicy.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/ParticleEffectAssetLoader.hpp"
 #include "engine/scene/AiBehaviourAssetLoader.hpp"
@@ -33,6 +35,7 @@
 #include "scene/SceneState.hpp"
 #include "scene/assets/SceneAssetLoader.hpp"
 #include "scene/assets/ScenePrefabAssetLoader.hpp"
+
 #include "scene/systems/AnimatorSceneSystem.hpp"
 #include "scene/systems/TimelineSceneSystem.hpp"
 #include "scene/systems/UIDocumentSceneSystem.hpp"
@@ -42,6 +45,7 @@
 #include <atomic>
 #include <cmath>
 #include <memory>
+#include <stdexcept>
 
 namespace kb::scene {
 namespace {
@@ -127,6 +131,19 @@ Scene::Scene(
         return;
     }
 
+    bool particleProviderEnabled = false;
+    for (const kb::project::ProjectPluginReference& plugin : descriptor.plugins) {
+        if (plugin.enabled && plugin.name == kb::project::ParticleProjectPolicy::PluginId) {
+            particleProviderEnabled = true;
+            break;
+        }
+    }
+    if (particleProviderEnabled &&
+        !kb::particles::ParticlePlayback::WarmupRenderSnapshots(*this).Succeeded()) {
+        throw std::logic_error{
+            "21kb Particle System render snapshot storage could not be initialized by the engine"};
+    }
+
     // Subsystems are driven through the engine module host instead of being wired
     // by hand, so the project's descriptor can enable or disable them. Input is a
     // built-in module whose OnSceneAttach binds the input resolvers to this scene's
@@ -153,6 +170,7 @@ Scene::~Scene() {
     state_->sceneSystemScheduler.Shutdown(*this);
     state_->systemScheduler.Shutdown(state_->world);
     if (moduleHost_ != nullptr) {
+        state_->world.ReleaseUnusedQueryPlans();
         moduleHost_->Unload();
     }
 }

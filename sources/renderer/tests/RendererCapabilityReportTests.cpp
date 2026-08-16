@@ -91,6 +91,9 @@ void RendererExposesRuntimeCapabilityReport() {
         report.gpuDrivenIndirectSubmitSupported == (report.computeSupported && report.indirectDrawSupported),
         "Capability report did not gate GPU-driven indirect submit on compute and indirect draw support");
     Require(!report.gpuDrivenMeshletSubmitSupported, "Capability report should keep meshlet submit disabled until a meshlet path exists");
+    Require(report.particleGpuDrawingSupported == report.particleInstancingSupported &&
+            report.particleSubtractiveBlendSupported == report.particleGpuDrawingSupported,
+        "capability report did not expose the GPU particle instancing/blend gate");
     Require(report.nativePresentColor == bgfx::TextureFormat::BGRA8, "Capability report did not expose native presentation color format");
     Require(report.nativePresentDepth == bgfx::TextureFormat::Count, "Capability report should expose color-only native presentation");
     Require(report.nativePresentColorOnly, "Capability report did not classify native presentation as color-only");
