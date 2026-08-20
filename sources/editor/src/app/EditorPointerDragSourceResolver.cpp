@@ -4,6 +4,7 @@
 #include "assets/EditorAssetBrowserHitTester.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/audio/AudioMixerAsset.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "scene/EditorHierarchyRowPicker.hpp"
@@ -100,6 +101,7 @@ void EditorPointerDragSourceResolver::Resolve(
             drag.assetLabel = metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name;
             drag.assetInstantiatesPrefab = IsPrefabLike(*metadata);
             drag.assetCreatesMeshEntity = EditorSceneMeshAssetActions::IsScenePlaceableAsset(*metadata);
+            drag.assetCreatesParticleEffectEntity = metadata->type == kb::scene::kParticleEffectAssetType;
             drag.assetAddsBehaviour = kb::script::ScriptBehaviourAsset::IsBehaviourAsset(*metadata);
             drag.assetAssignsAudioClip = EditorSceneAudioAssetActions::IsAudioAsset(*metadata);
             drag.assetAssignsAudioMixer = metadata->type == kb::audio::kAudioMixerAssetType;
