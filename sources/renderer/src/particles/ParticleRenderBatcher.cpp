@@ -23,6 +23,7 @@ namespace {
         lhs.textureAtlasAssetId == rhs.textureAtlasAssetId && lhs.output == rhs.output &&
         lhs.blend == rhs.blend && lhs.depth == rhs.depth && lhs.sort == rhs.sort &&
         lhs.alignment == rhs.alignment && lhs.flags == rhs.flags &&
+        lhs.backendPolicy == rhs.backendPolicy &&
         lhs.flipbookColumnsEncoded == rhs.flipbookColumnsEncoded &&
         lhs.flipbookRowsEncoded == rhs.flipbookRowsEncoded &&
         lhs.localBasisQuaternionSnorm == rhs.localBasisQuaternionSnorm &&

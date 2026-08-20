@@ -255,6 +255,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
 
     if (pass == MeshPassType::BaseTransparent && particleRenderer != nullptr && particleSnapshot != nullptr) {
         const ParticleRenderBatchBuildResult& particleBuild = particleRenderer->Build(*particleSnapshot, *camera);
+        static_cast<void>(particleRenderer->PrepareVisualSimulation(viewId, *particleSnapshot));
         const ParticleStripBuildResult& stripBuild = particleRenderer->BuildStrips(*particleSnapshot, *camera);
         transparentSubmissionScratch_.clear();
         for (std::uint32_t index = 0U; index < pipelineScratch_.commands.size(); ++index) {
