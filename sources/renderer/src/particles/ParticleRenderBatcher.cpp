@@ -142,10 +142,13 @@ ParticleRenderBatchBuildResult ParticleRenderBatcher::Build(
             emitter.particleCount > particles.size() - emitter.firstParticle) {
             return {.status = ParticleRenderBatchStatus::InvalidSnapshot};
         }
-        if (emitter.output == kb::particles::ParticleRenderOutput::Mesh) {
-            // Handled by the separate mesh-instancing path (ParticleMeshBatchBuilder), which reuses
-            // the existing scene mesh pipeline rather than this quad/billboard instance format - not
-            // a drop, so it must not count against droppedParticleCount/unsupportedEmitterCount.
+        if (emitter.output == kb::particles::ParticleRenderOutput::Mesh ||
+            emitter.output == kb::particles::ParticleRenderOutput::Trail ||
+            emitter.output == kb::particles::ParticleRenderOutput::Ribbon ||
+            emitter.output == kb::particles::ParticleRenderOutput::Beam) {
+            // Mesh uses the mesh-instancing path and strip outputs use renderer-owned dynamic geometry;
+            // neither uses this quad/billboard instance format. They are not drops, so they must not
+            // count against droppedParticleCount or unsupportedEmitterCount.
             continue;
         }
         if (!SupportedOutput(emitter.output)) {
