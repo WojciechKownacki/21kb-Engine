@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/particles/ParticleRenderCapabilities.hpp"
 #include "kb/render/MaterialProgramRegistry.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
@@ -82,6 +83,7 @@ public:
     [[nodiscard]] SceneRenderDiagnostics ValidateSceneDiagnostics(const RenderScene& renderScene) const;
     [[nodiscard]] SceneRenderDiagnostics ValidateSceneDiagnostics(const RenderScene& renderScene, MeshPassType pass) const;
     [[nodiscard]] SceneRenderSubmitStats LastSubmitStats() const noexcept;
+    [[nodiscard]] kb::particles::ParticleGpuVisualAvailability ParticleGpuVisualAvailability() const noexcept;
     [[nodiscard]] const SceneRenderDiagnostics& LastDiagnostics() const noexcept;
     [[nodiscard]] MaterialProgramRegistryStats MaterialProgramStats() const noexcept;
     // Draw-time, per-material graph render outcome for the last scene submit: the true GPU vs

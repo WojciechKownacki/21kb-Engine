@@ -2557,7 +2557,10 @@ void RunParticleReleaseBeforeSyncIsOwnershipNeutralTest() {
             capabilitiesAfter.gpuDrawing == capabilitiesBefore.gpuDrawing &&
             capabilitiesAfter.instancing == capabilitiesBefore.instancing &&
             capabilitiesAfter.softParticles == capabilitiesBefore.softParticles &&
-            capabilitiesAfter.subtractiveBlend == capabilitiesBefore.subtractiveBlend,
+            capabilitiesAfter.subtractiveBlend == capabilitiesBefore.subtractiveBlend &&
+            capabilitiesAfter.gpuVisualAvailability == capabilitiesBefore.gpuVisualAvailability &&
+            capabilitiesAfter.maxGpuVisualParticles == capabilitiesBefore.maxGpuVisualParticles &&
+            capabilitiesAfter.maxGpuResourceBytes == capabilitiesBefore.maxGpuResourceBytes,
         "particle release before sync mutated unowned renderer capabilities");
 }
 

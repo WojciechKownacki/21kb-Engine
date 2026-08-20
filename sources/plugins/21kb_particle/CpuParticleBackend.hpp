@@ -246,6 +246,10 @@ private:
     std::vector<std::uint8_t> followTransforms_;
     std::vector<kb::scene::WorldTransform> ownerTransforms_;
     std::vector<std::uint8_t> reloadRestarted_;
+    std::vector<kb::particles::ParticleRuntimeExecutionPath> executionPaths_;
+    std::vector<kb::particles::ParticleGpuVisualAvailability> gpuVisualAvailability_;
+    std::vector<std::uint64_t> gpuVisualCapabilityEpochs_;
+    std::vector<std::uint8_t> gpuVisualRestartRequired_;
     std::vector<std::uint64_t> seeds_;
     std::vector<PlaybackState> playbackStates_;
     std::vector<InstanceRuntime> instanceRuntime_;

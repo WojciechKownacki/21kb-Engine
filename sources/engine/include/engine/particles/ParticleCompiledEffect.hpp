@@ -9,7 +9,7 @@
 
 namespace kb::particles {
 
-inline constexpr std::uint32_t kParticleCompiledEffectVersion = 2U;
+inline constexpr std::uint32_t kParticleCompiledEffectVersion = 3U;
 
 enum class ParticleCompilePlatform : std::uint8_t {
     PlatformIndependent,
@@ -123,6 +123,8 @@ struct ParticleCompiledEffect {
     std::uint64_t determinismSeed = 0U;
     float durationSeconds = 0.0F;
     bool looping = false;
+    kb::scene::ParticleBackendPolicy backendPolicy = kb::scene::ParticleBackendPolicy::CpuDeterministic;
+    kb::scene::ParticleGpuCatchupPolicy gpuCatchupPolicy = kb::scene::ParticleGpuCatchupPolicy::RestartFromSeed;
     std::uint8_t emitterCount = 0U;
     std::uint8_t eventBindingCount = 0U;
     std::array<ParticleCompiledEmitter, kb::scene::kParticleEffectMaxEmitters> emitters{};

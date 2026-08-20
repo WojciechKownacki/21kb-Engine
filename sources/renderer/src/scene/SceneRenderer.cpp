@@ -431,6 +431,12 @@ SceneRenderSubmitStats SceneRenderer::LastSubmitStats() const noexcept {
     return lastSubmitStats_;
 }
 
+kb::particles::ParticleGpuVisualAvailability SceneRenderer::ParticleGpuVisualAvailability() const noexcept {
+    return particleRenderer_ == nullptr
+        ? kb::particles::ParticleGpuVisualAvailability::RendererUnavailable
+        : particleRenderer_->GpuVisualAvailability();
+}
+
 const SceneRenderDiagnostics& SceneRenderer::LastDiagnostics() const noexcept {
     return lastDiagnostics_;
 }

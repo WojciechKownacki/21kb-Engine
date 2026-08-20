@@ -33,6 +33,7 @@ bool ParticleGpuRenderer::Initialize() {
         Shutdown();
         return false;
     }
+    static_cast<void>(visualSimulation_.Initialize());
     if (!IsInitialized()) {
         Shutdown();
         return false;
@@ -42,6 +43,7 @@ bool ParticleGpuRenderer::Initialize() {
 }
 
 void ParticleGpuRenderer::Shutdown() noexcept {
+    visualSimulation_.Shutdown();
     stripRenderer_.Shutdown();
     if (bgfx::isValid(whiteTexture_)) bgfx::destroy(whiteTexture_);
     if (bgfx::isValid(depthParamsUniform_)) bgfx::destroy(depthParamsUniform_);
@@ -63,7 +65,10 @@ void ParticleGpuRenderer::Shutdown() noexcept {
     program_ = BGFX_INVALID_HANDLE;
 }
 
-void ParticleGpuRenderer::Warmup(std::uint32_t particleCapacity) { batcher_.Warmup(particleCapacity); }
+void ParticleGpuRenderer::Warmup(std::uint32_t particleCapacity) {
+    batcher_.Warmup(particleCapacity);
+    visualMaskScratch_.reserve(particleCapacity);
+}
 
 bool ParticleGpuRenderer::IsInitialized() const noexcept {
     return bgfx::isValid(program_) && bgfx::isValid(atlasSampler_) && bgfx::isValid(sceneDepthSampler_) &&
@@ -105,6 +110,30 @@ const ParticleRenderBatchBuildResult& ParticleGpuRenderer::Build(
     return lastBuild_;
 }
 
+kb::particles::ParticleGpuVisualAvailability ParticleGpuRenderer::GpuVisualAvailability() const noexcept {
+    return visualSimulation_.Availability();
+}
+
+bool ParticleGpuRenderer::PrepareVisualSimulation(
+    bgfx::ViewId viewId,
+    const kb::particles::ParticleRenderSnapshot& snapshot) noexcept {
+    if (!lastBuild_.Succeeded()) return false;
+    visualMaskScratch_.assign(lastBuild_.instances.size(), 0U);
+    bool hasVisualEmitter = false;
+    for (const ParticleRenderBatch& batch : lastBuild_.batches) {
+        const kb::particles::ParticleRenderEmitterRecord& emitter =
+        snapshot.Emitters()[batch.emitterRecordIndex];
+        if (emitter.backendPolicy == kb::scene::ParticleBackendPolicy::CpuDeterministic) continue;
+        hasVisualEmitter = true;
+        const std::uint32_t end = batch.firstInstance + batch.instanceCount;
+        if (end > visualMaskScratch_.size()) return false;
+        std::fill(visualMaskScratch_.begin() + batch.firstInstance, visualMaskScratch_.begin() + end, 1U);
+    }
+    if (!hasVisualEmitter) return false;
+    return visualSimulation_.Prepare(
+        viewId, snapshot.SceneId(), snapshot.FixedStepIndex(), lastBuild_.instances, visualMaskScratch_);
+}
+
 ParticleGpuSubmitResult ParticleGpuRenderer::SubmitBatch(
     bgfx::ViewId viewId,
     std::uint32_t batchIndex,
@@ -128,17 +157,24 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitBatch(
     bgfx::setUniform(cameraBasisUniform_, cameraBasis.data(), 3U);
     const ParticleRenderBatch& batch = lastBuild_.batches[batchIndex];
         const auto& emitter = snapshot.Emitters()[batch.emitterRecordIndex];
-        const std::uint32_t available = bgfx::getAvailInstanceDataBuffer(
-            batch.instanceCount, static_cast<std::uint16_t>(sizeof(ParticleGpuInstance)));
-        if (available == 0U) {
-            result.droppedParticles += batch.instanceCount;
-            return result;
+        const bool useVisualSimulation = visualSimulation_.HasPreparedView(
+            viewId, snapshot.SceneId(), snapshot.FixedStepIndex());
+        std::uint32_t available = batch.instanceCount;
+        if (useVisualSimulation) {
+            bgfx::setInstanceDataBuffer(visualSimulation_.InstanceBuffer(), batch.firstInstance, available);
+        } else {
+            available = bgfx::getAvailInstanceDataBuffer(
+                batch.instanceCount, static_cast<std::uint16_t>(sizeof(ParticleGpuInstance)));
+            if (available == 0U) {
+                result.droppedParticles += batch.instanceCount;
+                return result;
+            }
+            bgfx::InstanceDataBuffer buffer{};
+            bgfx::allocInstanceDataBuffer(&buffer, available, static_cast<std::uint16_t>(sizeof(ParticleGpuInstance)));
+            const auto source = lastBuild_.instances.subspan(batch.firstInstance, available);
+            std::copy(source.begin(), source.end(), reinterpret_cast<ParticleGpuInstance*>(buffer.data));
+            bgfx::setInstanceDataBuffer(&buffer, 0U, available);
         }
-        bgfx::InstanceDataBuffer buffer{};
-        bgfx::allocInstanceDataBuffer(&buffer, available, static_cast<std::uint16_t>(sizeof(ParticleGpuInstance)));
-        const auto source = lastBuild_.instances.subspan(batch.firstInstance, available);
-        std::copy(source.begin(), source.end(), reinterpret_cast<ParticleGpuInstance*>(buffer.data));
-        bgfx::setInstanceDataBuffer(&buffer, 0U, available);
         bgfx::setVertexBuffer(0U, quad->vertexBuffer);
         bgfx::setIndexBuffer(quad->indexBuffer);
 
@@ -195,10 +231,12 @@ ParticleStripSubmitResult ParticleGpuRenderer::SubmitStripDraw(bgfx::ViewId view
 }
 
 void ParticleGpuRenderer::ReleaseParticleScene(std::uint64_t sceneId) noexcept {
+    visualSimulation_.ReleaseScene(sceneId);
     stripRenderer_.ReleaseScene(sceneId);
 }
 
 void ParticleGpuRenderer::ReleaseAllParticleScenes() noexcept {
+    visualSimulation_.ReleaseAllScenes();
     stripRenderer_.ReleaseAllScenes();
 }
 
