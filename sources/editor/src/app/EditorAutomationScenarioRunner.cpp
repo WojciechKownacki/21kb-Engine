@@ -1644,6 +1644,29 @@ ReadScriptValue(
         return { true, *alias + '=' + std::to_string(entity.Id()) };
     }
 
+    if (*operation == "create_particle_effect_entity") {
+        const auto alias = StringMember(step, "id", error);
+        const auto asset = StringMember(step, "asset", error);
+        if (!alias || !asset) return { false, error };
+        if (state.entities.contains(*alias)) {
+            return { false, "entity alias already exists" };
+        }
+        const kb::assets::AssetId assetId = ResolveAsset(state, *asset);
+        if (!assetId.IsValid()) {
+            return { false, "particle effect asset was not found" };
+        }
+        const kb::scene::SceneEntity entity = state.context.CreateParticleEffectEntity(assetId);
+        if (!entity.IsValid()) {
+            return { false, "particle effect entity creation failed" };
+        }
+        state.entities.emplace(
+            *alias,
+            EntityAlias{
+                .entity = entity,
+                .name = state.context.Scene().Entities().Name(entity) });
+        return { true, *alias + '=' + std::to_string(entity.Id()) };
+    }
+
     if (*operation == "duplicate_entity") {
         const auto sourceAlias =
             StringMember(step, "entity", error);
