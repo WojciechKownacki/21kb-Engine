@@ -27,8 +27,10 @@ static_assert(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds ==
 
 [[nodiscard]] kb::particles::ParticleRuntimeResult Result(
     kb::particles::ParticleRuntimeStatus status,
-    std::uint64_t instanceId = 0U) noexcept {
-    return { .status = status, .instanceId = instanceId };
+    std::uint64_t instanceId = 0U,
+    kb::particles::ParticleGpuVisualAvailability gpuVisualAvailability =
+        kb::particles::ParticleGpuVisualAvailability::RendererUnavailable) noexcept {
+    return { .status = status, .instanceId = instanceId, .gpuVisualAvailability = gpuVisualAvailability };
 }
 
 [[nodiscard]] kb::math::Vec3 Scale(kb::math::Vec3 value, kb::math::Vec3 scale) noexcept {
@@ -181,6 +183,10 @@ void CpuParticleBackend::Warmup() {
     followTransforms_.resize(kb::scene::kParticleEffectMaxInstancesPerScene);
     ownerTransforms_.resize(kb::scene::kParticleEffectMaxInstancesPerScene);
     reloadRestarted_.resize(kb::scene::kParticleEffectMaxInstancesPerScene);
+    executionPaths_.resize(kb::scene::kParticleEffectMaxInstancesPerScene);
+    gpuVisualAvailability_.resize(kb::scene::kParticleEffectMaxInstancesPerScene);
+    gpuVisualCapabilityEpochs_.resize(kb::scene::kParticleEffectMaxInstancesPerScene);
+    gpuVisualRestartRequired_.resize(kb::scene::kParticleEffectMaxInstancesPerScene);
     seeds_.resize(kb::scene::kParticleEffectMaxInstancesPerScene);
     playbackStates_.resize(kb::scene::kParticleEffectMaxInstancesPerScene);
     instanceRuntime_.resize(kb::scene::kParticleEffectMaxInstancesPerScene);
@@ -307,6 +313,16 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Create(
     if (compiledEffectIndex == kInvalidDenseIndex) {
         return Result(compileFailure);
     }
+    const kb::particles::ParticleRenderCapabilities renderCapabilities =
+        kb::particles::ParticlePlayback::RenderCapabilities(scene);
+    const kb::particles::ParticleGpuVisualAvailability gpuVisualAvailability =
+        renderCapabilities.gpuVisualAvailability;
+    if (compiledEffects_[compiledEffectIndex].effect->backendPolicy ==
+            kb::scene::ParticleBackendPolicy::GpuVisualRequired &&
+        gpuVisualAvailability != kb::particles::ParticleGpuVisualAvailability::Ready) {
+        ReleaseCompiledEffect(compiledEffectIndex);
+        return Result(kb::particles::ParticleRuntimeStatus::BackendUnavailable, 0U, gpuVisualAvailability);
+    }
 
     std::uint32_t slot = 0U;
     while (slot < slotToDense_.size() && slotToDense_[slot] != kInvalidDenseIndex) ++slot;
@@ -327,6 +343,18 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Create(
     followTransforms_[denseIndex] = 0U;
     ownerTransforms_[denseIndex] = {};
     reloadRestarted_[denseIndex] = 0U;
+    const kb::scene::ParticleBackendPolicy backendPolicy =
+        compiledEffects_[compiledEffectIndex].effect->backendPolicy;
+    executionPaths_[denseIndex] = gpuVisualAvailability ==
+            kb::particles::ParticleGpuVisualAvailability::Ready &&
+            backendPolicy != kb::scene::ParticleBackendPolicy::CpuDeterministic
+        ? kb::particles::ParticleRuntimeExecutionPath::GpuVisual
+        : (backendPolicy == kb::scene::ParticleBackendPolicy::GpuVisualPreferred
+            ? kb::particles::ParticleRuntimeExecutionPath::CpuFallback
+            : kb::particles::ParticleRuntimeExecutionPath::CpuDeterministic);
+    gpuVisualAvailability_[denseIndex] = gpuVisualAvailability;
+    gpuVisualCapabilityEpochs_[denseIndex] = renderCapabilities.capabilityEpoch;
+    gpuVisualRestartRequired_[denseIndex] = 0U;
     seeds_[denseIndex] = compiledEffects_[compiledEffectIndex].effect->determinismSeed;
     playbackStates_[denseIndex] = PlaybackState::Stopped;
     const std::uint64_t instanceId = MakeInstanceId(slot, slotGenerations_[slot]);
@@ -447,8 +475,20 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Release(
     return Submit({ .type = CommandType::Release, .instanceId = instanceId });
 }
 kb::particles::ParticleRuntimeResult CpuParticleBackend::Play(
-    kb::scene::Scene&,
+    kb::scene::Scene& scene,
     std::uint64_t instanceId) noexcept {
+    const std::uint32_t denseIndex = ResolveDenseIndex(instanceId);
+    if (denseIndex == kInvalidDenseIndex) {
+        return Result(kb::particles::ParticleRuntimeStatus::InvalidInstance, instanceId);
+    }
+    if (compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].effect->backendPolicy ==
+            kb::scene::ParticleBackendPolicy::GpuVisualRequired) {
+        const kb::particles::ParticleGpuVisualAvailability availability =
+            kb::particles::ParticlePlayback::RenderCapabilities(scene).gpuVisualAvailability;
+        if (availability != kb::particles::ParticleGpuVisualAvailability::Ready) {
+            return Result(kb::particles::ParticleRuntimeStatus::BackendUnavailable, instanceId, availability);
+        }
+    }
     return Submit({ .type = CommandType::Play, .instanceId = instanceId });
 }
 kb::particles::ParticleRuntimeResult CpuParticleBackend::Pause(
@@ -462,9 +502,34 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Stop(
     return Submit({ .type = CommandType::Stop, .instanceId = instanceId });
 }
 kb::particles::ParticleRuntimeResult CpuParticleBackend::Restart(
-    kb::scene::Scene&,
+    kb::scene::Scene& scene,
     std::uint64_t instanceId) noexcept {
-    return Submit({ .type = CommandType::Restart, .instanceId = instanceId });
+    const std::uint32_t denseIndex = ResolveDenseIndex(instanceId);
+    if (denseIndex == kInvalidDenseIndex) {
+        return Result(kb::particles::ParticleRuntimeStatus::InvalidInstance, instanceId);
+    }
+    const kb::scene::ParticleBackendPolicy backendPolicy =
+        compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].effect->backendPolicy;
+    const kb::particles::ParticleRenderCapabilities renderCapabilities =
+        kb::particles::ParticlePlayback::RenderCapabilities(scene);
+    if (backendPolicy == kb::scene::ParticleBackendPolicy::GpuVisualRequired &&
+        renderCapabilities.gpuVisualAvailability != kb::particles::ParticleGpuVisualAvailability::Ready) {
+        return Result(kb::particles::ParticleRuntimeStatus::BackendUnavailable, instanceId,
+            renderCapabilities.gpuVisualAvailability);
+    }
+    const kb::particles::ParticleRuntimeResult result =
+        Submit({ .type = CommandType::Restart, .instanceId = instanceId });
+    if (!result.Succeeded() || backendPolicy == kb::scene::ParticleBackendPolicy::CpuDeterministic) {
+        return result;
+    }
+    executionPaths_[denseIndex] = renderCapabilities.gpuVisualAvailability ==
+            kb::particles::ParticleGpuVisualAvailability::Ready
+        ? kb::particles::ParticleRuntimeExecutionPath::GpuVisual
+        : kb::particles::ParticleRuntimeExecutionPath::CpuFallback;
+    gpuVisualAvailability_[denseIndex] = renderCapabilities.gpuVisualAvailability;
+    gpuVisualCapabilityEpochs_[denseIndex] = renderCapabilities.capabilityEpoch;
+    gpuVisualRestartRequired_[denseIndex] = 0U;
+    return result;
 }
 kb::particles::ParticleRuntimeResult CpuParticleBackend::SetSeed(
     kb::scene::Scene&,
@@ -544,6 +609,19 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Step(
     for (std::uint32_t denseIndex = 0U; denseIndex < denseInstanceCount_; ++denseIndex) {
         reloadRestarted_[denseIndex] = 0U;
     }
+    const kb::particles::ParticleRenderCapabilities renderCapabilities =
+        kb::particles::ParticlePlayback::RenderCapabilities(scene);
+    for (std::uint32_t denseIndex = 0U; denseIndex < denseInstanceCount_; ++denseIndex) {
+        const kb::scene::ParticleBackendPolicy backendPolicy =
+            compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].effect->backendPolicy;
+        if (backendPolicy == kb::scene::ParticleBackendPolicy::CpuDeterministic ||
+            gpuVisualCapabilityEpochs_[denseIndex] == renderCapabilities.capabilityEpoch) {
+            continue;
+        }
+        gpuVisualCapabilityEpochs_[denseIndex] = renderCapabilities.capabilityEpoch;
+        gpuVisualAvailability_[denseIndex] = renderCapabilities.gpuVisualAvailability;
+        gpuVisualRestartRequired_[denseIndex] = 1U;
+    }
     RefreshCompiledEffects(scene);
     ProcessOwnerLifecycle(scene);
     stepTelemetry_ = {};
@@ -581,6 +659,9 @@ kb::particles::ParticleRuntimeQueryResult CpuParticleBackend::Query(
         .assetId = effectAssetIds_[denseIndex],
         .materialAssetId = 0U,
         .liveParticleCount = LiveParticleCount(instanceId),
+        .executionPath = executionPaths_[denseIndex],
+        .gpuVisualAvailability = gpuVisualAvailability_[denseIndex],
+        .requiresBackendRestart = gpuVisualRestartRequired_[denseIndex] != 0U,
     };
 }
 
@@ -632,6 +713,10 @@ void CpuParticleBackend::RemoveDenseInstance(std::uint32_t denseIndex) noexcept 
         followTransforms_[denseIndex] = followTransforms_[last];
         ownerTransforms_[denseIndex] = ownerTransforms_[last];
         reloadRestarted_[denseIndex] = reloadRestarted_[last];
+        executionPaths_[denseIndex] = executionPaths_[last];
+        gpuVisualAvailability_[denseIndex] = gpuVisualAvailability_[last];
+        gpuVisualCapabilityEpochs_[denseIndex] = gpuVisualCapabilityEpochs_[last];
+        gpuVisualRestartRequired_[denseIndex] = gpuVisualRestartRequired_[last];
         seeds_[denseIndex] = seeds_[last];
         playbackStates_[denseIndex] = playbackStates_[last];
         instanceRuntime_[denseIndex] = instanceRuntime_[last];
@@ -1636,6 +1721,7 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
                     (emitter.outputType == kb::scene::ParticleOutputType::Mesh && emitter.meshReceivesShadow
                         ? kb::particles::ParticleRenderEmitterFlag::ReceivesShadow
                         : kb::particles::ParticleRenderEmitterFlag::None),
+                .backendPolicy = effect.backendPolicy,
                 .flipbookColumnsEncoded = static_cast<std::uint8_t>(emitter.flipbookColumns),
                 .flipbookRowsEncoded = static_cast<std::uint8_t>(emitter.flipbookRows),
                 .localBasisQuaternionSnorm = PackQuaternion(kb::math::Normalize(

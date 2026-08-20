@@ -115,6 +115,7 @@ private:
             kb::particles::ParticleRenderEmitterFlag::AntiAliasing |
             kb::particles::ParticleRenderEmitterFlag::CastsShadow |
             kb::particles::ParticleRenderEmitterFlag::ReceivesShadow,
+        .backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualRequired,
         .flipbookColumnsEncoded = 8U,
         .flipbookRowsEncoded = 4U,
         .localBasisQuaternionSnorm = {0, 16'384, 0, 28'377},
@@ -176,6 +177,7 @@ void TestCompleteContractAndMalformedRanges() {
             emitter.status == kb::particles::ParticleRenderEmitterStatus::Playing &&
             emitter.droppedReason == kb::particles::ParticleRenderDropReason::EventBudget &&
             emitter.alignment == kb::particles::ParticleRenderAlignment::Local &&
+            emitter.backendPolicy == kb::scene::ParticleBackendPolicy::GpuVisualRequired &&
             kb::particles::HasParticleRenderEmitterFlag(
                 emitter.flags, kb::particles::ParticleRenderEmitterFlag::SoftParticles) &&
             kb::particles::HasParticleRenderEmitterFlag(
@@ -486,6 +488,9 @@ void TestRendererCapabilityOwnershipAndProgress() {
         .instancing = true,
         .softParticles = true,
         .subtractiveBlend = true,
+        .gpuVisualAvailability = kb::particles::ParticleGpuVisualAvailability::Ready,
+        .maxGpuVisualParticles = 123U,
+        .maxGpuResourceBytes = 456U,
     };
     Require(kb::particles::ParticlePlayback::PublishRenderCapabilities(scene, rendererA, capabilities).Succeeded(),
         "renderer capability publication failed");
@@ -498,6 +503,8 @@ void TestRendererCapabilityOwnershipAndProgress() {
     Require(observed.capabilityEpoch == 7U && observed.lastConsumedFixedStep == 19U &&
             observed.gpuDrawing && observed.instancing && observed.softParticles &&
             observed.subtractiveBlend &&
+            observed.gpuVisualAvailability == kb::particles::ParticleGpuVisualAvailability::Ready &&
+            observed.maxGpuVisualParticles == 123U && observed.maxGpuResourceBytes == 456U &&
             kb::particles::HasParticleRenderOutputCapability(
                 observed.outputs, kb::particles::ParticleRenderOutputCapability::PointSprite),
         "renderer capabilities or consumed fixed-step progress were not retained");
@@ -506,6 +513,50 @@ void TestRendererCapabilityOwnershipAndProgress() {
             kb::particles::ParticlePlayback::ClearRenderCapabilities(scene, rendererA).Succeeded() &&
             !kb::particles::ParticlePlayback::RenderCapabilities(scene).gpuDrawing,
         "renderer capability ownership was not enforced during teardown");
+}
+
+void TestGpuVisualStepJournalAcknowledgesExactlyOnceAndOverflows() {
+    kb::scene::Scene scene;
+    TestBackend backend;
+    constexpr std::uint64_t renderer = 303U;
+    Require(kb::particles::ParticlePlayback::RegisterBackend(scene, backend).Succeeded() &&
+            kb::particles::ParticlePlayback::WarmupRenderSnapshots(scene).Succeeded(),
+        "GPU visual step journal fixture could not initialize the core channel");
+    Require(kb::particles::ParticlePlayback::PublishRenderCapabilities(scene, renderer, {
+                .capabilityEpoch = 1U,
+                .gpuVisualAvailability = kb::particles::ParticleGpuVisualAvailability::Ready,
+            }).Succeeded(),
+        "GPU visual step journal fixture could not register its renderer consumer");
+
+    const auto publish = [&](std::uint64_t step) {
+        return kb::particles::ParticlePlayback::PublishRenderSnapshot(scene, backend, {
+            .revision = step,
+            .fixedStepIndex = step,
+        });
+    };
+    Require(publish(1U).Succeeded() && publish(2U).Succeeded() &&
+            kb::particles::ParticlePlayback::PendingGpuVisualSteps(scene, renderer).size() == 2U &&
+            kb::particles::ParticlePlayback::AcknowledgeRenderedFixedStep(scene, renderer, 2U).Succeeded() &&
+            kb::particles::ParticlePlayback::RenderCapabilities(scene).lastConsumedFixedStep == 2U &&
+            kb::particles::ParticlePlayback::AcknowledgeRenderedFixedStep(scene, renderer, 2U).status ==
+                kb::particles::ParticleRenderCapabilityStatus::StaleFixedStep,
+        "GPU visual step journal did not consume each fixed step exactly once");
+
+    for (std::uint64_t step = 3U;
+         step < 3U + kb::scene::kParticleEffectRetainedGpuSteps;
+         ++step) {
+        Require(publish(step).Succeeded(), "GPU visual step journal could not retain a bounded fixed step");
+    }
+    Require(publish(3U + kb::scene::kParticleEffectRetainedGpuSteps).Succeeded() &&
+            kb::particles::ParticlePlayback::RenderCapabilities(scene).gpuVisualAvailability ==
+                kb::particles::ParticleGpuVisualAvailability::GpuCatchupOverflow &&
+            kb::particles::ParticlePlayback::AcknowledgeRenderedFixedStep(
+                scene, renderer, 3U + kb::scene::kParticleEffectRetainedGpuSteps).status ==
+                kb::particles::ParticleRenderCapabilityStatus::GpuCatchupOverflow,
+        "GPU visual step journal did not report its bounded catch-up overflow");
+    Require(kb::particles::ParticlePlayback::ClearRenderCapabilities(scene, renderer).Succeeded() &&
+            kb::particles::ParticlePlayback::UnregisterBackend(scene, backend).Succeeded(),
+        "GPU visual step journal fixture did not release its core ownership");
 }
 
 } // namespace
@@ -532,6 +583,7 @@ int main() {
         TestTwoViewportConsumersRetainTheSameImmutableRevision();
         TestRetainedSnapshotOutlivesBackendAndScene();
         TestRendererCapabilityOwnershipAndProgress();
+        TestGpuVisualStepJournalAcknowledgesExactlyOnceAndOverflows();
         std::cout << "21kb Particle System render snapshot tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {

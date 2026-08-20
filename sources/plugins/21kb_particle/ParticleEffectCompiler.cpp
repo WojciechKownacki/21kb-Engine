@@ -53,10 +53,6 @@ std::vector<kb::scene::ParticleEffectDiagnostic> ParticleEffectCompiler::Validat
     const kb::scene::ParticleEffectAsset& asset, const ParticleCompileRequest& request) {
     std::vector<kb::scene::ParticleEffectDiagnostic> diagnostics;
     diagnostics.reserve(1U + asset.emitters.size() + asset.eventBindings.size());
-    if (asset.backendPolicy == kb::scene::ParticleBackendPolicy::GpuVisualRequired) {
-        Add(diagnostics, kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability, "effect.backendPolicy",
-            "GPU-required effects are not executable by the current compiler capability set");
-    }
     for (std::size_t bindingIndex = 0U; bindingIndex < asset.eventBindings.size(); ++bindingIndex) {
         const auto& binding = asset.eventBindings[bindingIndex];
         if (binding.action == kb::scene::ParticleEventAction::EmitEffectAsset) {
@@ -114,6 +110,8 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
     compiled.determinismSeed = asset.determinismSeed;
     compiled.durationSeconds = asset.durationSeconds;
     compiled.looping = asset.looping;
+    compiled.backendPolicy = asset.backendPolicy;
+    compiled.gpuCatchupPolicy = asset.gpuCatchupPolicy;
     compiled.emitterCount = static_cast<std::uint8_t>(asset.emitters.size());
     std::array<const kb::scene::ParticleEmitterAsset*, kb::scene::kParticleEffectMaxEmitters>
         emittersByAuthoringOrder{};
