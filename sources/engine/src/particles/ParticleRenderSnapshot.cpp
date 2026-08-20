@@ -84,6 +84,14 @@ template <typename Enum>
              !std::isfinite(emitter.beamNoiseFrequency) || emitter.beamNoiseFrequency < 0.0F)) {
             return false;
         }
+        if (emitter.output == ParticleRenderOutput::Volumetric &&
+            (!std::isfinite(emitter.volumetricDensity) || emitter.volumetricDensity <= 0.0F ||
+             !std::isfinite(emitter.volumetricRadiusScale) || emitter.volumetricRadiusScale <= 0.0F ||
+             emitter.volumetricLowQualitySteps == 0U ||
+             emitter.volumetricHighQualitySteps < emitter.volumetricLowQualitySteps ||
+             emitter.volumetricHighQualitySteps > 256U)) {
+            return false;
+        }
         if (emitter.particleCount > particleCount - expectedFirst) return false;
         expectedFirst += emitter.particleCount;
     }

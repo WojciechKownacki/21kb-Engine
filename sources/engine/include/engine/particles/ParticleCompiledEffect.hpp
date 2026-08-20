@@ -9,7 +9,7 @@
 
 namespace kb::particles {
 
-inline constexpr std::uint32_t kParticleCompiledEffectVersion = 3U;
+inline constexpr std::uint32_t kParticleCompiledEffectVersion = 4U;
 
 enum class ParticleCompilePlatform : std::uint8_t {
     PlatformIndependent,
@@ -88,6 +88,10 @@ struct ParticleCompiledEmitter {
     float beamWidth = 1.0F;
     float beamNoiseAmplitude = 0.0F;
     float beamNoiseFrequency = 1.0F;
+    float volumetricDensity = 1.0F;
+    float volumetricRadiusScale = 1.0F;
+    std::uint32_t volumetricLowQualitySteps = 8U;
+    std::uint32_t volumetricHighQualitySteps = 24U;
     kb::scene::ParticleSimulationSpace simulationSpace = kb::scene::ParticleSimulationSpace::World;
     bool enabled = false;
     kb::scene::ParticleSpawnMode mode = kb::scene::ParticleSpawnMode::Continuous;

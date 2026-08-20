@@ -325,6 +325,8 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
                     viewId, entry.sourceIndex, *particleSnapshot, *camera, resources, resourceMap, sceneDepthTexture);
                 stats.submittedParticleCount += particleResult.submittedParticles;
                 stats.submittedParticleDrawCallCount += particleResult.drawCalls;
+                stats.submittedVolumetricParticleCount += particleResult.submittedVolumetricParticles;
+                stats.volumetricParticleRaymarchStepCount += particleResult.volumetricRaymarchSteps;
                 stats.droppedParticleCount += particleResult.droppedParticles;
                 stats.particleInstanceUploadBytes +=
                     static_cast<std::uint64_t>(particleResult.submittedParticles) * sizeof(ParticleGpuInstance);

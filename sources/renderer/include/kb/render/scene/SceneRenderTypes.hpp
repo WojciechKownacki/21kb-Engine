@@ -353,6 +353,8 @@ struct SceneRenderSubmitStats {
     std::uint32_t droppedParticleStripSegmentCount = 0U;
     std::uint32_t failedParticleStripBatchCount = 0U;
     std::uint64_t particleStripUploadBytes = 0U;
+    std::uint32_t submittedVolumetricParticleCount = 0U;
+    std::uint64_t volumetricParticleRaymarchStepCount = 0U;
     std::uint32_t sceneLightCount = 0;
     std::uint32_t submittedForwardLightCount = 0;
     std::uint32_t skippedForwardLightCount = 0;
@@ -559,6 +561,8 @@ struct SceneRenderDiagnostics {
     lhs.droppedParticleStripSegmentCount += rhs.droppedParticleStripSegmentCount;
     lhs.failedParticleStripBatchCount += rhs.failedParticleStripBatchCount;
     lhs.particleStripUploadBytes += rhs.particleStripUploadBytes;
+    lhs.submittedVolumetricParticleCount += rhs.submittedVolumetricParticleCount;
+    lhs.volumetricParticleRaymarchStepCount += rhs.volumetricParticleRaymarchStepCount;
     lhs.sceneLightCount += rhs.sceneLightCount;
     lhs.submittedForwardLightCount += rhs.submittedForwardLightCount;
     lhs.skippedForwardLightCount += rhs.skippedForwardLightCount;

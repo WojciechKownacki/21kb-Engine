@@ -36,7 +36,7 @@ void Add(std::vector<kb::scene::ParticleEffectDiagnostic>& diagnostics,
     case kb::scene::ParticleOutputType::Trail: return capabilities.trail;
     case kb::scene::ParticleOutputType::Ribbon: return capabilities.ribbon;
     case kb::scene::ParticleOutputType::Beam: return capabilities.beam;
-    case kb::scene::ParticleOutputType::Volumetric: return false;
+    case kb::scene::ParticleOutputType::Volumetric: return capabilities.volumetric;
     }
     return false;
 }
@@ -46,7 +46,7 @@ void Add(std::vector<kb::scene::ParticleEffectDiagnostic>& diagnostics,
 std::uint64_t ParticleCompilerCapabilities::StableKey() const noexcept {
     return (billboard ? 1ULL : 0ULL) | (stretchedBillboard ? 2ULL : 0ULL) | (pointSprite ? 4ULL : 0ULL) |
         (mesh ? 8ULL : 0ULL) | (trail ? 16ULL : 0ULL) | (ribbon ? 32ULL : 0ULL) |
-        (beam ? 64ULL : 0ULL);
+        (beam ? 64ULL : 0ULL) | (volumetric ? 128ULL : 0ULL);
 }
 
 std::vector<kb::scene::ParticleEffectDiagnostic> ParticleEffectCompiler::ValidateCapabilities(
@@ -173,6 +173,12 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
             destination.beamWidth = value.width;
             destination.beamNoiseAmplitude = value.noiseAmplitude;
             destination.beamNoiseFrequency = value.noiseFrequency;
+        } else if (source.output.type == kb::scene::ParticleOutputType::Volumetric) {
+            const auto& value = std::get<kb::scene::ParticleVolumetricOutput>(source.output.payload);
+            destination.volumetricDensity = value.density;
+            destination.volumetricRadiusScale = value.radiusScale;
+            destination.volumetricLowQualitySteps = value.lowQualitySteps;
+            destination.volumetricHighQualitySteps = value.highQualitySteps;
         }
         destination.simulationSpace = source.simulationSpace;
         destination.enabled = source.enabled;

@@ -13,7 +13,8 @@ namespace {
 [[nodiscard]] bool SupportedOutput(kb::particles::ParticleRenderOutput output) noexcept {
     return output == kb::particles::ParticleRenderOutput::Billboard ||
         output == kb::particles::ParticleRenderOutput::StretchedBillboard ||
-        output == kb::particles::ParticleRenderOutput::PointSprite;
+        output == kb::particles::ParticleRenderOutput::PointSprite ||
+        output == kb::particles::ParticleRenderOutput::Volumetric;
 }
 
 [[nodiscard]] bool BatchCompatible(
@@ -27,7 +28,11 @@ namespace {
         lhs.flipbookColumnsEncoded == rhs.flipbookColumnsEncoded &&
         lhs.flipbookRowsEncoded == rhs.flipbookRowsEncoded &&
         lhs.localBasisQuaternionSnorm == rhs.localBasisQuaternionSnorm &&
-        lhs.pointSpriteDiameter == rhs.pointSpriteDiameter;
+        lhs.pointSpriteDiameter == rhs.pointSpriteDiameter &&
+        lhs.volumetricDensity == rhs.volumetricDensity &&
+        lhs.volumetricRadiusScale == rhs.volumetricRadiusScale &&
+        lhs.volumetricLowQualitySteps == rhs.volumetricLowQualitySteps &&
+        lhs.volumetricHighQualitySteps == rhs.volumetricHighQualitySteps;
 }
 
 [[nodiscard]] std::array<float, 3> CameraPosition(const SceneRenderCamera& camera) noexcept {

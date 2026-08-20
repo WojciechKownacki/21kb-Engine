@@ -17,6 +17,7 @@ void RunSceneMeshPassProgramSelectionTests();
 void RunRendererRuntimeSubmitTests();
 void RunRendererParticleMeshSnapshotSubmitTest();
 void RunRendererParticleStripSnapshotSubmitTest();
+void RunRendererParticleVolumetricSnapshotSubmitTest();
 void RunRendererCapabilityReportTests();
 void RunMeshPipelineTests();
 void RunSceneDisplayCompositeTests();
@@ -61,6 +62,16 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string_view{ argv[1] } == "particle-strip-submit") {
         try {
             kb::render::tests::RunRendererParticleStripSnapshotSubmitTest();
+            return EXIT_SUCCESS;
+        } catch (const std::exception& error) {
+            std::fputs(error.what(), stderr);
+            std::fputc('\n', stderr);
+            return EXIT_FAILURE;
+        }
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "particle-volumetric-submit") {
+        try {
+            kb::render::tests::RunRendererParticleVolumetricSnapshotSubmitTest();
             return EXIT_SUCCESS;
         } catch (const std::exception& error) {
             std::fputs(error.what(), stderr);

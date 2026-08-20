@@ -65,6 +65,8 @@ void WriteEffect(std::vector<std::uint8_t>& bytes, const ParticleCompiledEffect&
         WriteUInt32(bytes, e.ribbonMaxSegments); WriteFloat(bytes, e.ribbonWidth); WriteBool(bytes, e.ribbonBreakOnDeath);
         WriteVec3(bytes, e.beamLocalEnd); WriteUInt32(bytes, e.beamSegments); WriteFloat(bytes, e.beamWidth);
         WriteFloat(bytes, e.beamNoiseAmplitude); WriteFloat(bytes, e.beamNoiseFrequency);
+        WriteFloat(bytes, e.volumetricDensity); WriteFloat(bytes, e.volumetricRadiusScale);
+        WriteUInt32(bytes, e.volumetricLowQualitySteps); WriteUInt32(bytes, e.volumetricHighQualitySteps);
         WriteUInt8(bytes, static_cast<std::uint8_t>(e.simulationSpace));
         WriteBool(bytes, e.enabled); WriteUInt8(bytes, static_cast<std::uint8_t>(e.mode)); WriteUInt32(bytes, e.maxParticles);
         WriteVec3(bytes, e.localPosition); WriteQuat(bytes, e.localRotation); WriteInitialVelocity(bytes, e.initialVelocity);
@@ -178,6 +180,8 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
             !reader.U32(e.ribbonMaxSegments) || !reader.F(e.ribbonWidth) || !reader.Bool(e.ribbonBreakOnDeath) ||
             !reader.Vec3(e.beamLocalEnd) || !reader.U32(e.beamSegments) || !reader.F(e.beamWidth) ||
             !reader.F(e.beamNoiseAmplitude) || !reader.F(e.beamNoiseFrequency) ||
+            !reader.F(e.volumetricDensity) || !reader.F(e.volumetricRadiusScale) ||
+            !reader.U32(e.volumetricLowQualitySteps) || !reader.U32(e.volumetricHighQualitySteps) ||
             !reader.U8(space) || space > static_cast<std::uint8_t>(kb::scene::ParticleSimulationSpace::World) ||
             !reader.Bool(e.enabled) || !reader.U8(mode) || mode > static_cast<std::uint8_t>(kb::scene::ParticleSpawnMode::Burst) ||
             !reader.U32(e.maxParticles) || !reader.Vec3(e.localPosition) || !reader.Quat(e.localRotation) ||
@@ -244,7 +248,11 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
             emitter.ribbonWidth <= 0.0F ||
             kb::math::Dot(emitter.beamLocalEnd, emitter.beamLocalEnd) <= 0.000001F ||
             emitter.beamSegments == 0U || emitter.beamSegments > kb::scene::kParticleEffectMaxStripSegmentsPerEmitter ||
-            emitter.beamWidth <= 0.0F || emitter.beamNoiseAmplitude < 0.0F || emitter.beamNoiseFrequency < 0.0F)
+            emitter.beamWidth <= 0.0F || emitter.beamNoiseAmplitude < 0.0F || emitter.beamNoiseFrequency < 0.0F ||
+            emitter.volumetricDensity <= 0.0F || emitter.volumetricRadiusScale <= 0.0F ||
+            emitter.volumetricLowQualitySteps == 0U ||
+            emitter.volumetricHighQualitySteps < emitter.volumetricLowQualitySteps ||
+            emitter.volumetricHighQualitySteps > 256U)
             return false;
         previousEmitterId = emitter.emitterId;
         totalCapacity += emitter.maxParticles;
