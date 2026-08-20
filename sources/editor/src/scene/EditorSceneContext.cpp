@@ -8810,6 +8810,22 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
             return true;
         });
     }
+    if (componentId == "Particle Effect") {
+        if (!IsProjectPluginEnabled("Rendering.21kbParticle")) {
+            console_.Warning("Particles", "Enable 21kb Particle System in Edit > Plugins before adding the component.");
+            return false;
+        }
+        if (scene_->Components().ParticleEffects().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Particle Effect component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Particle Effect Component", [this, entity]() {
+            kb::scene::ParticleEffectComponent component{};
+            component.enabled = false;
+            scene_->Components().ParticleEffects().Set(entity, component);
+            return true;
+        });
+    }
     if (componentId == "AudioSource") {
         if (scene_->Components().AudioSources().Has(entity)) {
             console_.Warning("Inspector", "Entity already has an Audio Source component.");
