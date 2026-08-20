@@ -21,6 +21,7 @@ struct ParticleCompilerCapabilities {
     bool trail = true;
     bool ribbon = true;
     bool beam = true;
+    bool volumetric = true;
 
     [[nodiscard]] std::uint64_t StableKey() const noexcept;
 };

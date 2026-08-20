@@ -9,13 +9,21 @@
 
 ## Current package
 
-- Stage: `9` — trail, ribbon, and beam output.
-- Status: `accepted`; Stages 0 through 9 are accepted.
-- Scope: Stage 9 adds bounded trail history, ordered ribbon breaks, fixed-step beam geometry, and renderer-owned dynamic strip buffers per `docs/particle-kanku-audit-plan.md` section 11 ("Etap 9 — Trail, Ribbon i Beam").
+- Stage: `11` — volumetric output and release hardening.
+- Status: `accepted`; Stages 0 through 11 are accepted.
+- Scope: Stage 11 makes the existing typed volumetric schema executable through compilation, cache, snapshot, runtime resource discovery, GPU rendering, quality selection, telemetry, and lifecycle validation per `docs/particle-kanku-audit-plan.md` section 11.
 - Canonical spec source: `docs/particle-kanku-audit-plan.md`. Its own naming (`Particle`/`kb_particle_core`/etc., after the `Particli`→`Particle` document-only rename on 2026-08-15) is not literal — this project's frozen naming (`Rendering.21kbParticle`, `kb_21kb_particle_*` targets, `ParticleEffect`/`Particle*` class names without the `21kb` prefix where the existing code already uses that shorter form) stays as-is. Where the audit's file/class names differ from what actually exists in this repo, map to the real equivalent and record it here rather than renaming existing code to match the audit.
 - Orchestration: single-agent (no 2-agent orchestrator/implementer split — `docs/archive/particle-sol-xhigh-autonomous-prompt.md`'s mechanics are archived/unused, per explicit user decision 2026-08-15).
-- Next gate: Stage 10 gate criteria (audit section 11, "Etap 10"); Stage 9 is closed only by the evidence recorded below.
+- Next gate: release conformance outside this implementation plan; the Stage 11 evidence is recorded below.
 - Rendering direction unchanged: normal game-facing simulation and rendering must move to GPU. The CPU backend is retained only as the deterministic validation, diagnostics, and preview path; it is not the intended final gameplay path.
+
+### Stage 11 acceptance evidence
+
+- The compiled-effect artifact format is versioned to `4`; volumetric density, radius scale, and the authored low/high raymarch counts are validated and round-trip through Bake cache and immutable render snapshots.
+- Runtime discovery provisions the renderer-owned particle quad for volumetric output. The transparent submit path rejects a volumetric batch when opaque scene depth is unavailable; it does not render a flat fallback.
+- The GPU impostor samples opaque depth, discards fully occluded intersections, terminates its chord at the opaque surface, and accumulates extinction in a bounded 1..256-step loop. Renderer statistics expose submitted volumetric particle count and total raymarch steps.
+- Existing material quality selection maps `Low` to the authored low step count; all other quality levels use the authored high count. Native readback coverage verifies high (24) and low (8) telemetry and non-clear pixels with a depth target; the no-depth contract is covered in the headless runtime path.
+- Focused verification passed: snapshot contract, CPU backend, editor core (including 100 preview/provider/scene/device lifecycle cycles), GPU particle batcher, shader staging/manifest, and the `particle-volumetric-submit` renderer selector.
 
 ### Stage 8 package 1 of 2 — data plumbing and capability gate: closed, independently verified
 
