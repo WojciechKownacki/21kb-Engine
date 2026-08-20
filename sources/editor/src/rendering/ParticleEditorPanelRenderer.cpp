@@ -14,9 +14,15 @@
 namespace kb::editor {
 namespace {
 
-void DrawButton(HDC dc, const RECT& rect, const char* label, bool active = false) {
-    GdiDrawing::FillRectColor(dc, rect, active ? RGB(65, 103, 148) : RGB(48, 52, 60));
-    SetTextColor(dc, RGB(225, 230, 237));
+void DrawButton(HDC dc, const RECT& rect, const char* label, bool active = false, bool enabled = true) {
+    GdiDrawing::FillRectColor(dc, rect, !enabled ? RGB(39, 42, 48) : active ? RGB(52, 107, 163) : RGB(45, 49, 57));
+    const HBRUSH border = CreateSolidBrush(
+        !enabled ? RGB(57, 61, 68) : active ? RGB(91, 157, 221) : RGB(69, 75, 85));
+    if (border != nullptr) {
+        FrameRect(dc, &rect, border);
+        DeleteObject(border);
+    }
+    SetTextColor(dc, enabled ? RGB(225, 230, 237) : RGB(128, 136, 147));
     RECT text = rect;
     DrawTextA(dc, label, -1, &text, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 }
@@ -94,11 +100,11 @@ void ParticleEditorPanelRenderer::Paint(
     GdiDrawing::FillRectColor(dc, layout.composer, RGB(30, 33, 38));
     GdiDrawing::FillRectColor(dc, layout.composerHeader, RGB(38, 42, 49));
     GdiDrawing::FillRectColor(dc, layout.statusBar, RGB(24, 26, 30));
-    const ScopedFont font{13, FW_SEMIBOLD};
+    const ScopedFont font{12, FW_SEMIBOLD};
     const ScopedGdiObject selectedFont(dc, font.handle);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(219, 225, 233));
-    RECT header{layout.toolbar.left + 10, layout.toolbar.top, layout.toolbar.right - 10, layout.toolbar.bottom};
+    RECT header{layout.toolbar.left + 8, layout.toolbar.top, layout.toolbar.right - 8, layout.toolbar.bottom};
     std::string title = "21kb Particle System";
     if (sceneContext.HasParticleEditorAsset()) {
         const auto* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(sceneContext.ParticleEditorAssetId());
@@ -114,10 +120,10 @@ void ParticleEditorPanelRenderer::Paint(
         return;
     }
     RECT composerTitle = layout.composerHeader;
-    composerTitle.left += 10;
+    composerTitle.left += 8;
     SetTextColor(dc, RGB(219, 225, 233));
     DrawTextA(dc, "Emitters", -1, &composerTitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-    DrawButton(dc, layout.addEmitter, "+ Add Emitter", rows.size() < kb::scene::kParticleEffectMaxEmitters);
+    DrawButton(dc, layout.addEmitter, "+ Add Emitter", true, rows.size() < kb::scene::kParticleEffectMaxEmitters);
     const int saved = SaveDC(dc);
     IntersectClipRect(dc, layout.emitterList.left, layout.emitterList.top,
                       layout.emitterList.right, layout.emitterList.bottom);
@@ -153,7 +159,7 @@ void ParticleEditorPanelRenderer::Paint(
         const auto* asset = sceneContext.ParticleEditorWorkingAsset();
         const auto* emitter = asset == nullptr ? nullptr : kb::particle_editor::ParticleEmitterListModel::Find(*asset, inspector.emitterId);
         const bool active = emitter != nullptr && emitter->output.type == choice.type;
-        DrawButton(dc, layout.outputChoices[index], choice.label.c_str(), active && choice.enabled);
+        DrawButton(dc, layout.outputChoices[index], choice.label.c_str(), active, choice.enabled);
         if (!choice.enabled) {
             SetTextColor(dc, RGB(161, 124, 124));
             RECT mark = layout.outputChoices[index]; mark.left = mark.right - 28;
@@ -173,7 +179,7 @@ void ParticleEditorPanelRenderer::Paint(
     SetTextColor(dc, RGB(219, 225, 233));
     RECT moduleHeader = layout.moduleHeader;
     DrawTextA(dc, "Modules", -1, &moduleHeader, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-    DrawButton(dc, layout.addModule, "+ Add Module",
+    DrawButton(dc, layout.addModule, "+ Add Module", true,
         inspector.modules.size() < kb::scene::kParticleEffectMaxModulesPerEmitter);
     for (std::size_t index = 0U; index < layout.moduleRowCount; ++index) {
         const auto& module = inspector.modules[index];
@@ -223,7 +229,7 @@ void ParticleEditorPanelRenderer::Paint(
     RestoreDC(dc, saved);
     SetTextColor(dc, RGB(166, 177, 190));
     RECT status = layout.statusBar;
-    status.left += 10;
+    status.left += 8;
     const std::string statusText = std::to_string(rows.size()) + "/" +
         std::to_string(kb::scene::kParticleEffectMaxEmitters) + " emitters" +
         (sceneContext.ParticleEditorDirty() ? "  Modified" : "  Saved");

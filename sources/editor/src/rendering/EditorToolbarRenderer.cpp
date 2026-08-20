@@ -22,8 +22,8 @@
 namespace kb::editor {
 namespace {
 
-constexpr int kTransportIconInset = 7;
-constexpr int kToolbarButtonRadius = 8;
+constexpr int kTransportIconInset = 6;
+constexpr int kToolbarButtonRadius = 6;
 constexpr int kSaveButtonRadius = 6;
 constexpr int kDropdownRadius = 7;
 constexpr int kToolbarStatusGap = 10;

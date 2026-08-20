@@ -29,6 +29,7 @@ struct EditorPointerDragState {
     std::string assetLabel{};
     bool assetInstantiatesPrefab = false;
     bool assetCreatesMeshEntity = false;
+    bool assetCreatesParticleEffectEntity = false;
     bool assetAddsBehaviour = false;
     bool assetAssignsAudioClip = false;
     bool assetAssignsAudioMixer = false;
@@ -67,6 +68,7 @@ struct EditorPointerDragState {
         assetLabel.clear();
         assetInstantiatesPrefab = false;
         assetCreatesMeshEntity = false;
+        assetCreatesParticleEffectEntity = false;
         assetAddsBehaviour = false;
         assetAssignsAudioClip = false;
         assetAssignsAudioMixer = false;

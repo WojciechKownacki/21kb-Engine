@@ -23,17 +23,17 @@ ParticleEditorPanelLayout ParticleEditorPanelLayoutResolver::Resolve(
     unsigned int dpi,
     const kb::particle_editor::ParticleEmitterInspectorView* inspector) noexcept {
     const int width = static_cast<int>(std::max<LONG>(0, content.right - content.left));
-    const int toolbarHeight = Scale(40, dpi);
-    const int statusHeight = Scale(24, dpi);
-    const int minimumComposerWidth = Scale(300, dpi);
+    const int toolbarHeight = Scale(32, dpi);
+    const int statusHeight = Scale(20, dpi);
+    const int minimumComposerWidth = Scale(280, dpi);
     const int composerWidth = std::min(width, std::max(minimumComposerWidth, width / 3));
     const LONG bodyTop = std::min(content.bottom, content.top + toolbarHeight);
     const LONG bodyBottom = std::max(bodyTop, content.bottom - statusHeight);
     const LONG composerLeft = std::max(content.left, content.right - composerWidth);
-    const int padding = Scale(8, dpi);
-    const int composerHeaderHeight = Scale(36, dpi);
-    const int addHeight = Scale(28, dpi);
-    const int rowHeight = Scale(36, dpi);
+    const int padding = Scale(6, dpi);
+    const int composerHeaderHeight = Scale(30, dpi);
+    const int addHeight = Scale(24, dpi);
+    const int rowHeight = Scale(30, dpi);
     const LONG headerBottom = std::min(bodyBottom, bodyTop + composerHeaderHeight);
     const LONG addTop = std::min(bodyBottom, headerBottom + padding);
     const LONG addBottom = std::min(bodyBottom, addTop + addHeight);
@@ -48,9 +48,9 @@ ParticleEditorPanelLayout ParticleEditorPanelLayoutResolver::Resolve(
         .emitterList = {composerLeft, listTop, content.right, bodyBottom},
         .statusBar = {content.left, bodyBottom, content.right, content.bottom},
     };
-    const int iconWidth = Scale(22, dpi);
-    const int gripWidth = Scale(18, dpi);
-    const int horizontalGap = Scale(4, dpi);
+    const int iconWidth = Scale(18, dpi);
+    const int gripWidth = Scale(14, dpi);
+    const int horizontalGap = Scale(3, dpi);
     const LONG rowsLeft = composerLeft + padding;
     const LONG rowsRight = content.right - padding;
     const LONG firstRowTop = listTop - std::max(0, composerScrollOffset);
@@ -215,7 +215,7 @@ int ParticleEditorPanelLayoutResolver::MaximumComposerScroll(
     const ParticleEditorPanelLayout& layout, unsigned int dpi) noexcept {
     int contentHeight = static_cast<int>(layout.emitterRowCount + layout.outputChoiceCount +
         layout.propertyRowCount + layout.moduleRowCount + layout.dependencyRowCount +
-        layout.diagnosticRowCount + 8U) * Scale(36, dpi) + Scale(8, dpi);
+        layout.diagnosticRowCount + 8U) * Scale(30, dpi) + Scale(6, dpi);
     const int visibleHeight = static_cast<int>(
         std::max<LONG>(0, layout.emitterList.bottom - layout.emitterList.top));
     return std::max(0, contentHeight - visibleHeight);

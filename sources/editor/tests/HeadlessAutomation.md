@@ -96,6 +96,7 @@ scenario-local aliases.
 | `assert_mesh_thumbnail` | `asset` alias or virtual path; renders the production 128x128 geometry thumbnail and requires non-empty mesh statistics |
 | `create_entity` | `id`; optional `name` |
 | `create_mesh_entity` | `id`, `asset` alias or virtual path |
+| `create_particle_effect_entity` | `id`, `asset` alias or virtual path |
 | `duplicate_entity` | `entity`, result `id`; optional `name` |
 | `delete_entity` | `entity` |
 | `rename_entity` | `entity`, `name`; uses the production Hierarchy rename transaction |

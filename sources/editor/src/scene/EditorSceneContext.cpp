@@ -32,6 +32,8 @@
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
+#include "engine/scene/ParticleEffectAssetIO.hpp"
+#include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
@@ -8106,6 +8108,43 @@ bool EditorSceneContext::InstantiatePrefabAssetAt(
 
 kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::AssetId assetId) {
     return CreateMeshAssetEntity(assetId, {}, true);
+}
+
+kb::scene::SceneEntity EditorSceneContext::CreateParticleEffectEntity(kb::assets::AssetId assetId) {
+    if (!assetId.IsValid()) {
+        console_.Warning("Particles", "Particle Effect entity creation ignored for invalid asset.");
+        return {};
+    }
+    if (!IsProjectPluginEnabled("Rendering.21kbParticle")) {
+        console_.Warning("Particles", "Enable 21kb Particle System in Edit > Plugins before placing an effect.");
+        return {};
+    }
+
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
+    if (metadata == nullptr || metadata->type != kb::scene::kParticleEffectAssetType) {
+        console_.Warning("Particles", "Only Particle Effect assets can be placed on the scene.");
+        return {};
+    }
+
+    kb::scene::SceneEntity entity{};
+    const bool created = ExecuteSceneCommand("Create Particle Effect Entity", [this, &entity, assetId, metadata]() {
+        entity = scene_->Entities().CreateEntity(kb::scene::SceneObjectDesc{.name = metadata->name});
+        if (!entity.IsValid()) {
+            return false;
+        }
+        scene_->Components().ParticleEffects().Set(entity, kb::scene::ParticleEffectComponent{
+            .effectAssetId = assetId.value,
+        });
+        SelectEntity(entity);
+        return true;
+    });
+    if (!created || !entity.IsValid()) {
+        console_.Error("Particles", "Particle Effect entity could not be created: " + metadata->name);
+        return {};
+    }
+
+    console_.Info("Particles", "Particle Effect entity created: " + metadata->name);
+    return entity;
 }
 
 kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation) {
