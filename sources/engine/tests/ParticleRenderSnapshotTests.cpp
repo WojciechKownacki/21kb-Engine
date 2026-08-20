@@ -133,6 +133,10 @@ private:
         .beamWidth = 0.8F,
         .beamNoiseAmplitude = 0.3F,
         .beamNoiseFrequency = 2.0F,
+        .volumetricDensity = 0.6F,
+        .volumetricRadiusScale = 1.25F,
+        .volumetricLowQualitySteps = 8U,
+        .volumetricHighQualitySteps = 32U,
         .outputOrigin = {4.0F, 5.0F, 6.0F},
         .beamEnd = {7.0F, 8.0F, 9.0F},
         .boundsMinimum = {-10.0F, -20.0F, -30.0F},
@@ -194,6 +198,8 @@ void TestCompleteContractAndMalformedRanges() {
             emitter.ribbonMaxSegments == 63U && emitter.ribbonWidth == 0.75F && !emitter.ribbonBreakOnDeath &&
             emitter.beamLocalEnd.z == 3.0F && emitter.beamSegments == 15U && emitter.beamWidth == 0.8F &&
             emitter.beamNoiseAmplitude == 0.3F && emitter.beamNoiseFrequency == 2.0F &&
+            emitter.volumetricDensity == 0.6F && emitter.volumetricRadiusScale == 1.25F &&
+            emitter.volumetricLowQualitySteps == 8U && emitter.volumetricHighQualitySteps == 32U &&
             emitter.outputOrigin.y == 5.0F && emitter.beamEnd.z == 9.0F &&
             emitter.boundsMinimum.x == -10.0F && emitter.boundsMaximum.z == 30.0F,
         "per-emitter render metadata was incomplete or changed");
@@ -251,6 +257,11 @@ void TestCompleteContractAndMalformedRanges() {
     malformed[0].droppedReason = kb::particles::ParticleRenderDropReason::None;
     Require(invalid(malformed, particles) == kb::particles::ParticleRenderSnapshotStatus::InvalidSnapshot,
         "overflow counters without a dropped reason were accepted");
+    malformed = emitters;
+    malformed[0].output = kb::particles::ParticleRenderOutput::Volumetric;
+    malformed[0].volumetricHighQualitySteps = 257U;
+    Require(invalid(malformed, particles) == kb::particles::ParticleRenderSnapshotStatus::InvalidSnapshot,
+        "out-of-range volumetric raymarch quality was accepted");
 
     std::vector<kb::particles::ParticleRenderRecord> fullParticleArena(
         kb::particles::kParticleRenderSnapshotRecordsPerSlot);

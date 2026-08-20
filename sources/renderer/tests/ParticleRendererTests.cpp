@@ -191,11 +191,16 @@ void TestSortBlendFlipbookAndSoftContract() {
     crossEmitters[0].sort = crossEmitters[1].sort = kb::particles::ParticleRenderSortMode::BackToFront;
     crossEmitters[0].output = kb::particles::ParticleRenderOutput::Volumetric;
     const auto mixed = batcher.Build(*Snapshot(crossEmitters, crossEmitterParticles), camera);
-    Require(mixed.Succeeded() && mixed.unsupportedEmitterCount == 1U &&
-            mixed.droppedParticleCount == 2U && mixed.instances.size() == 2U &&
-            mixed.unsupportedEmitterRecordIndices.size() == 1U &&
-            mixed.unsupportedEmitterRecordIndices[0] == 0U,
-        "one unsupported emitter hid supported GPU particle batches in a mixed effect");
+    Require(mixed.Succeeded() && mixed.unsupportedEmitterCount == 0U &&
+            mixed.droppedParticleCount == 0U && mixed.instances.size() == 4U &&
+            mixed.batches.size() == 2U && mixed.unsupportedEmitterRecordIndices.empty(),
+        "volumetric particles were not retained as a supported depth-aware GPU batch");
+    crossEmitters[1].output = kb::particles::ParticleRenderOutput::Volumetric;
+    crossEmitters[1].volumetricHighQualitySteps = 32U;
+    const auto distinctVolumetric = batcher.Build(*Snapshot(crossEmitters, crossEmitterParticles), camera);
+    Require(distinctVolumetric.Succeeded() && distinctVolumetric.batches.size() == 2U &&
+            distinctVolumetric.instances.size() == 4U,
+        "volumetric emitters with different raymarch quality merged into one draw");
 
     // Mesh output is handled by the separate mesh-instancing path (reusing the scene mesh
     // pipeline), not this quad/billboard batcher - it must be silently excluded here, counted

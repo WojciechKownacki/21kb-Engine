@@ -155,6 +155,10 @@ struct ParticleRenderEmitterRecord {
     float beamWidth = 1.0F;
     float beamNoiseAmplitude = 0.0F;
     float beamNoiseFrequency = 1.0F;
+    float volumetricDensity = 1.0F;
+    float volumetricRadiusScale = 1.0F;
+    std::uint32_t volumetricLowQualitySteps = 8U;
+    std::uint32_t volumetricHighQualitySteps = 24U;
     kb::math::Vec3 outputOrigin{};
     kb::math::Vec3 beamEnd{};
     kb::math::Vec3 boundsMinimum{};
@@ -170,7 +174,9 @@ struct ParticleRenderEmitterRecord {
 };
 
 static_assert(std::is_trivially_copyable_v<ParticleRenderEmitterRecord>);
-static_assert(sizeof(ParticleRenderEmitterRecord) <= 224U);
+// The bounded record carries all authored output contracts while remaining a
+// compact, fixed-stride GPU upload payload.
+static_assert(sizeof(ParticleRenderEmitterRecord) <= 240U);
 
 struct ParticleRenderSnapshotHeader {
     std::uint64_t revision = 0U;

@@ -18,8 +18,12 @@ struct ParticleGpuSubmitResult {
     std::uint32_t drawCalls = 0U;
     std::uint32_t submittedParticles = 0U;
     std::uint32_t droppedParticles = 0U;
+    std::uint32_t submittedVolumetricParticles = 0U;
+    std::uint64_t volumetricRaymarchSteps = 0U;
     ParticleRenderBatchStatus status = ParticleRenderBatchStatus::InvalidSnapshot;
 };
+
+enum class ParticleVolumetricQuality : std::uint8_t { Low, High };
 
 class ParticleGpuRenderer final {
 public:
@@ -28,6 +32,8 @@ public:
     void Warmup(std::uint32_t particleCapacity);
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] kb::particles::ParticleGpuVisualAvailability GpuVisualAvailability() const noexcept;
+    void SetVolumetricQuality(ParticleVolumetricQuality quality) noexcept;
+    [[nodiscard]] ParticleVolumetricQuality VolumetricQuality() const noexcept;
 
     [[nodiscard]] ParticleGpuSubmitResult Submit(
         bgfx::ViewId viewId,
@@ -73,7 +79,9 @@ private:
     bgfx::UniformHandle featureParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle localBasisUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle depthParamsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle volumetricParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle whiteTexture_ = BGFX_INVALID_HANDLE;
+    ParticleVolumetricQuality volumetricQuality_ = ParticleVolumetricQuality::High;
 };
 
 } // namespace kb::render
