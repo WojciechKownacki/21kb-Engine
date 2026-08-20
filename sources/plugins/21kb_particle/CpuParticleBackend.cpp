@@ -194,6 +194,8 @@ void CpuParticleBackend::Warmup() {
     prewarmNextEvents_.reserve(kb::scene::kParticleEffectMaxEventsPerStep);
     particleInstanceIds_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     particleIds_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
+    particleSpawnOrdinals_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
+    particleRibbonGroups_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     particleEmitterIndices_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     particlePositions_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     particlePreviousPositions_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
@@ -663,6 +665,8 @@ void CpuParticleBackend::RemoveParticles(std::uint64_t instanceId) noexcept {
         const std::size_t last = particleInstanceIds_.size() - 1U;
         particleInstanceIds_[index] = particleInstanceIds_[last];
         particleIds_[index] = particleIds_[last];
+        particleSpawnOrdinals_[index] = particleSpawnOrdinals_[last];
+        particleRibbonGroups_[index] = particleRibbonGroups_[last];
         particleEmitterIndices_[index] = particleEmitterIndices_[last];
         particlePositions_[index] = particlePositions_[last];
         particlePreviousPositions_[index] = particlePreviousPositions_[last];
@@ -675,6 +679,8 @@ void CpuParticleBackend::RemoveParticles(std::uint64_t instanceId) noexcept {
         particlePrewarmGroups_[index] = particlePrewarmGroups_[last];
         particleInstanceIds_.pop_back();
         particleIds_.pop_back();
+        particleSpawnOrdinals_.pop_back();
+        particleRibbonGroups_.pop_back();
         particleEmitterIndices_.pop_back();
         particlePositions_.pop_back();
         particlePreviousPositions_.pop_back();
@@ -1051,6 +1057,8 @@ bool CpuParticleBackend::SpawnExact(
         particleInstanceIds_.push_back(instanceId);
         particleIds_.push_back(nextParticleId_++);
         if (nextParticleId_ == 0U) nextParticleId_ = 1U;
+        particleSpawnOrdinals_.push_back(runtime.spawnOrdinals[emitterIndex]);
+        particleRibbonGroups_.push_back(0U);
         particleEmitterIndices_.push_back(emitterIndex);
         particlePositions_.push_back(eventPosition != nullptr
             ? *eventPosition + emitterOffset
@@ -1071,7 +1079,7 @@ bool CpuParticleBackend::SpawnExact(
             .prewarmGroup = prewarmGroup,
             .position = particlePositions_.back(),
         }));
-        ++runtime.spawnOrdinal;
+        ++runtime.spawnOrdinals[emitterIndex];
     }
     runtime.liveParticles[emitterIndex] += count;
     return true;
@@ -1235,6 +1243,8 @@ void CpuParticleBackend::AdvanceParticleAges(
         const std::size_t last = particleAges_.size() - 1U;
         particleInstanceIds_[index] = particleInstanceIds_[last];
         particleIds_[index] = particleIds_[last];
+        particleSpawnOrdinals_[index] = particleSpawnOrdinals_[last];
+        particleRibbonGroups_[index] = particleRibbonGroups_[last];
         particleEmitterIndices_[index] = particleEmitterIndices_[last];
         particlePositions_[index] = particlePositions_[last];
         particlePreviousPositions_[index] = particlePreviousPositions_[last];
@@ -1247,6 +1257,8 @@ void CpuParticleBackend::AdvanceParticleAges(
         particlePrewarmGroups_[index] = particlePrewarmGroups_[last];
         particleInstanceIds_.pop_back();
         particleIds_.pop_back();
+        particleSpawnOrdinals_.pop_back();
+        particleRibbonGroups_.pop_back();
         particleEmitterIndices_.pop_back();
         particlePositions_.pop_back();
         particlePreviousPositions_.pop_back();
@@ -1631,6 +1643,21 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
                 .pointSpriteDiameter = emitter.pointSpriteDiameter,
                 .meshLodLevel = static_cast<std::int8_t>(std::clamp(
                     std::lround(emitter.meshLodBias), -128L, 127L)),
+                .trailSampleIntervalSeconds = emitter.trailSampleIntervalSeconds,
+                .trailMinimumDistance = emitter.trailMinimumDistance,
+                .trailMaxSamplesPerParticle = emitter.trailMaxSamplesPerParticle,
+                .trailWidth = emitter.trailWidth,
+                .ribbonMaxSegments = emitter.ribbonMaxSegments,
+                .ribbonWidth = emitter.ribbonWidth,
+                .ribbonBreakOnDeath = emitter.ribbonBreakOnDeath,
+                .beamLocalEnd = emitter.beamLocalEnd,
+                .beamSegments = emitter.beamSegments,
+                .beamWidth = emitter.beamWidth,
+                .beamNoiseAmplitude = emitter.beamNoiseAmplitude,
+                .beamNoiseFrequency = emitter.beamNoiseFrequency,
+                .outputOrigin = emptyBounds,
+                .beamEnd = TransformPoint(ownerTransforms_[denseIndex],
+                    emitter.localPosition + emitter.beamLocalEnd),
                 .boundsMinimum = count == 0U
                     ? emptyBounds
                     : kb::math::Vec3{std::numeric_limits<float>::max(),
@@ -1672,7 +1699,9 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
             .velocity = particleVelocities_[particleIndex],
             .stretch = std::max(emitter.stretchMinimumLength, speed * emitter.stretchVelocityScale),
             .particleId = particleIds_[particleIndex],
+            .spawnOrdinal = particleSpawnOrdinals_[particleIndex],
             .packedColor = PackColor(particleColors_[particleIndex]),
+            .ribbonGroup = particleRibbonGroups_[particleIndex],
             .frame = frame,
             .normalizedAgeUnorm = static_cast<std::uint16_t>(std::lround(
                 kb::math::Clamp(particleLifetimes_[particleIndex] > 0.0F

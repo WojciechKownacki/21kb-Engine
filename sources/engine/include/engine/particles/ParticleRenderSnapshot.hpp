@@ -97,13 +97,15 @@ struct ParticleRenderRecord {
     kb::math::Vec3 velocity{};
     float stretch = 0.0F;
     std::uint64_t particleId = 0U;
+    std::uint64_t spawnOrdinal = 0U;
     std::uint32_t packedColor = 0xFFFFFFFFU;
+    std::uint32_t ribbonGroup = 0U;
     std::uint16_t frame = 0U;
     std::uint16_t normalizedAgeUnorm = 0U;
 };
 
-static_assert(sizeof(ParticleRenderRecord) >= 48U && sizeof(ParticleRenderRecord) <= 64U);
-static_assert(sizeof(ParticleRenderRecord) == 64U);
+static_assert(sizeof(ParticleRenderRecord) >= 48U && sizeof(ParticleRenderRecord) <= 80U);
+static_assert(sizeof(ParticleRenderRecord) == 80U);
 static_assert(std::is_trivially_copyable_v<ParticleRenderRecord>);
 
 struct ParticleRenderEmitterRecord {
@@ -140,6 +142,20 @@ struct ParticleRenderEmitterRecord {
     // rounded to the nearest level once at compile time rather than carried as a float through
     // the tightly budgeted retained snapshot).
     std::int8_t meshLodLevel = 0;
+    float trailSampleIntervalSeconds = 1.0F / 60.0F;
+    float trailMinimumDistance = 0.0F;
+    std::uint32_t trailMaxSamplesPerParticle = 16U;
+    float trailWidth = 1.0F;
+    std::uint32_t ribbonMaxSegments = 256U;
+    float ribbonWidth = 1.0F;
+    bool ribbonBreakOnDeath = true;
+    kb::math::Vec3 beamLocalEnd{0.0F, 1.0F, 0.0F};
+    std::uint32_t beamSegments = 16U;
+    float beamWidth = 1.0F;
+    float beamNoiseAmplitude = 0.0F;
+    float beamNoiseFrequency = 1.0F;
+    kb::math::Vec3 outputOrigin{};
+    kb::math::Vec3 beamEnd{};
     kb::math::Vec3 boundsMinimum{};
     kb::math::Vec3 boundsMaximum{};
 
@@ -153,7 +169,7 @@ struct ParticleRenderEmitterRecord {
 };
 
 static_assert(std::is_trivially_copyable_v<ParticleRenderEmitterRecord>);
-static_assert(sizeof(ParticleRenderEmitterRecord) <= 144U);
+static_assert(sizeof(ParticleRenderEmitterRecord) <= 224U);
 
 struct ParticleRenderSnapshotHeader {
     std::uint64_t revision = 0U;

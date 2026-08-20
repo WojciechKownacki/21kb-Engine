@@ -33,9 +33,9 @@ void Add(std::vector<kb::scene::ParticleEffectDiagnostic>& diagnostics,
     case kb::scene::ParticleOutputType::StretchedBillboard: return capabilities.stretchedBillboard;
     case kb::scene::ParticleOutputType::PointSprite: return capabilities.pointSprite;
     case kb::scene::ParticleOutputType::Mesh: return capabilities.mesh;
-    case kb::scene::ParticleOutputType::Trail:
-    case kb::scene::ParticleOutputType::Ribbon:
-    case kb::scene::ParticleOutputType::Beam:
+    case kb::scene::ParticleOutputType::Trail: return capabilities.trail;
+    case kb::scene::ParticleOutputType::Ribbon: return capabilities.ribbon;
+    case kb::scene::ParticleOutputType::Beam: return capabilities.beam;
     case kb::scene::ParticleOutputType::Volumetric: return false;
     }
     return false;
@@ -45,7 +45,8 @@ void Add(std::vector<kb::scene::ParticleEffectDiagnostic>& diagnostics,
 
 std::uint64_t ParticleCompilerCapabilities::StableKey() const noexcept {
     return (billboard ? 1ULL : 0ULL) | (stretchedBillboard ? 2ULL : 0ULL) | (pointSprite ? 4ULL : 0ULL) |
-        (mesh ? 8ULL : 0ULL);
+        (mesh ? 8ULL : 0ULL) | (trail ? 16ULL : 0ULL) | (ribbon ? 32ULL : 0ULL) |
+        (beam ? 64ULL : 0ULL);
 }
 
 std::vector<kb::scene::ParticleEffectDiagnostic> ParticleEffectCompiler::ValidateCapabilities(
@@ -156,6 +157,24 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
             destination.meshLodBias = value.lodBias;
             destination.meshCastsShadow = value.castsShadow;
             destination.meshReceivesShadow = value.receivesShadow;
+        } else if (source.output.type == kb::scene::ParticleOutputType::Trail) {
+            const auto& value = std::get<kb::scene::ParticleTrailOutput>(source.output.payload);
+            destination.trailSampleIntervalSeconds = value.sampleIntervalSeconds;
+            destination.trailMinimumDistance = value.minimumDistance;
+            destination.trailMaxSamplesPerParticle = value.maxSamplesPerParticle;
+            destination.trailWidth = value.width;
+        } else if (source.output.type == kb::scene::ParticleOutputType::Ribbon) {
+            const auto& value = std::get<kb::scene::ParticleRibbonOutput>(source.output.payload);
+            destination.ribbonMaxSegments = value.maxSegments;
+            destination.ribbonWidth = value.width;
+            destination.ribbonBreakOnDeath = value.breakOnDeath;
+        } else if (source.output.type == kb::scene::ParticleOutputType::Beam) {
+            const auto& value = std::get<kb::scene::ParticleBeamOutput>(source.output.payload);
+            destination.beamLocalEnd = value.localEnd;
+            destination.beamSegments = value.segments;
+            destination.beamWidth = value.width;
+            destination.beamNoiseAmplitude = value.noiseAmplitude;
+            destination.beamNoiseFrequency = value.noiseFrequency;
         }
         destination.simulationSpace = source.simulationSpace;
         destination.enabled = source.enabled;

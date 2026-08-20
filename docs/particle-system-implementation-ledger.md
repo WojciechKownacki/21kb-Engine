@@ -9,12 +9,12 @@
 
 ## Current package
 
-- Stage: `8` — mesh output.
-- Status: `in_progress`; Stages 0 through 7 are accepted.
-- Scope: Stage 8 adds real `ParticleOutputType::Mesh` rendering — instanced particle-mesh sections using existing `RenderMesh`/`RenderMaterial`, with LOD and shadow policy, without a per-particle mesh proxy — per `docs/particle-kanku-audit-plan.md` section 9.5 (renderer manifest), section 10 ("Etapy outputów" step 2), and section 11 ("Etap 8 — Mesh output").
+- Stage: `9` — trail, ribbon, and beam output.
+- Status: `accepted`; Stages 0 through 9 are accepted.
+- Scope: Stage 9 adds bounded trail history, ordered ribbon breaks, fixed-step beam geometry, and renderer-owned dynamic strip buffers per `docs/particle-kanku-audit-plan.md` section 11 ("Etap 9 — Trail, Ribbon i Beam").
 - Canonical spec source: `docs/particle-kanku-audit-plan.md`. Its own naming (`Particle`/`kb_particle_core`/etc., after the `Particli`→`Particle` document-only rename on 2026-08-15) is not literal — this project's frozen naming (`Rendering.21kbParticle`, `kb_21kb_particle_*` targets, `ParticleEffect`/`Particle*` class names without the `21kb` prefix where the existing code already uses that shorter form) stays as-is. Where the audit's file/class names differ from what actually exists in this repo, map to the real equivalent and record it here rather than renaming existing code to match the audit.
 - Orchestration: single-agent (no 2-agent orchestrator/implementer split — `docs/archive/particle-sol-xhigh-autonomous-prompt.md`'s mechanics are archived/unused, per explicit user decision 2026-08-15).
-- Next gate: Stage 8 gate criteria (audit section 11, "Etap 8"): N particles of one mesh/material render as one draw per section/LOD; a wrong/missing mesh reference blocks compile/Bake; LOD and shadow policy have renderer tests/goldens; hot reload and scene release leave no resource refs.
+- Next gate: Stage 10 gate criteria (audit section 11, "Etap 10"); Stage 9 is closed only by the evidence recorded below.
 - Rendering direction unchanged: normal game-facing simulation and rendering must move to GPU. The CPU backend is retained only as the deterministic validation, diagnostics, and preview path; it is not the intended final gameplay path.
 
 ### Stage 8 package 1 of 2 — data plumbing and capability gate: closed, independently verified
@@ -120,7 +120,17 @@ selection is driven entirely by the `RenderMaterial`'s own shader assignment —
   `entityId`/`castsShadow`/`receivesShadow`/`lodBias`; the model matrix places an identity-oriented,
   unit-scale particle at its authored position (translation in indices [12,13,14], matching `FromTRS`'s
   column-major layout, confirmed against `vs_mesh_instanced.sc`'s `i_data0..3` convention); color unpacks
-  from the packed particle color; an all-non-Mesh snapshot produces zero batches.
+  from the packed particle color; an all-non-Mesh snapshot produces zero batches. The test also supplies a
+  real two-LOD mesh resource to `MeshPipelineProcessor`: three instances with `lodBias == 1` produce exactly
+  one command for LOD 1, and the same three shadow-casting instances produce one ShadowDepth command.
+- Follow-up integration repair: particle-mesh batches are appended to the scene batches before the single
+  `MeshPipelineProcessor::BuildInto` call, rather than using a second pipeline build/submit. That makes
+  draw/visible-instance budgets apply across both sources, preserves aggregate command statistics, and puts
+  transparent mesh particles into the existing shared mesh/particle depth-order queue.
+- `RunRendererSubmitsParticleMeshSnapshotAsOneDrawTest` (`RendererRuntimeSubmitTests.cpp`) publishes a real
+  Mesh snapshot through `ParticlePlayback`, resolves a real mesh/material asset, and asserts through the
+  runtime scene submission path that three instances of one mesh/material submit as one draw. It repeats
+  publish -> submit -> `ReleaseScene` 100 times and asserts the mesh resource is released every cycle.
 - Verification performed: full focused matrix (7 targets, listed below) green; `kb_editor` full dependency
   graph rebuild green; **the real headless editor automation scenario** (`kb_editor_particle_authoring_headless`,
   which drives the actual `kb_editor.exe` and its live bgfx headless rendering path) passes, exercising the
@@ -136,6 +146,17 @@ selection is driven entirely by the `RenderMaterial`'s own shader assignment —
   to leak by construction, but this claim has not been proven by a 100-cycle test the way other stages'
   lifetime guarantees were); (4) no visual/golden coverage. These four remain before Stage 8's gate (audit
   section 11) can be marked `accepted`.
+- **Superseding verification update (2026-08-20)**: items (1), (2), and (3) above are closed by the
+  focused renderer tests documented immediately before this paragraph. The only remaining Stage 8 gate item
+  is visual pixel-readback/golden coverage through the complete runtime scene path; the headless Noop backend
+  proves command submission but cannot prove final pixels.
+- **Final acceptance update (2026-08-20)**: `RunRendererDrawsParticleMeshSnapshotPixelsTest` uses a native
+  hardware rendering surface and an offscreen RGBA8/depth target. It publishes the same real Mesh snapshot,
+  confirms three instances submit as one draw, reads the target back, and requires at least 32 pixels to differ
+  from the clear color. The fixture material is explicitly double-sided so the visual assertion is independent
+  of imported triangle winding. This closes the visual-readback gate; the current `SceneMeshSubmitter` path
+  combines ordinary and particle mesh batches before one pipeline build, so its budget, command statistics,
+  section/LOD grouping, and transparent order are shared.
 
 ## Accepted stages
 
@@ -354,8 +375,35 @@ selection is driven entirely by the `RenderMaterial`'s own shader assignment —
 - Stage 8 package 1 (capability gate + data plumbing): `cmake --build build --config Debug --target kb_engine` — exit `0`. Three regressions found and fixed in sequence, each independently rebuilt and reverified (see the package-1 ledger entry for detail): `kb_21kb_particle_cpu_backend_tests.exe` failing → fixed the `.flags` allowlist in `ParticleRenderSnapshot.cpp` → passing; `kb_21kb_particle_renderer_tests.exe` failing (`"one unsupported emitter hid supported GPU particle batches..."`) → swapped the stale `Mesh` exemplar to `Trail`, added a dedicated exclusion test → passing; `kb_editor_particle_bake_host_tests.exe` failing (`"Mesh Bake rejected: ... rebuilt compiled particle effect cache failed verification"`) → fixed `ParticleCompiledEffectCache.cpp`'s output ceiling and `meshAssetId` consistency check → passing. Final independent focused matrix — `ctest --test-dir build -C Debug -R "^(kb_21kb_particle_asset_tests|kb_21kb_particle_cpu_backend_tests|kb_21kb_particle_editor_tests|kb_21kb_particle_snapshot_tests|kb_21kb_particle_renderer_tests|kb_editor_particle_authoring_tests|kb_editor_particle_bake_host_tests)$" --output-on-failure`, exit `0`, `7/7`, `10.95 s`. `cmake --build build --config Debug --target kb_editor` — exit `0`.
 - Stage 8 package 2 (mesh instance submission): `cmake --build build --config Debug --target kb_renderer` — exit `0` (new `ParticleMeshBatchBuilder.cpp` compiled standalone first, before wiring). `cmake --build build --config Debug --target kb_renderer_tests kb_21kb_particle_renderer_tests` — exit `0`; `build/renderer/Debug/kb_21kb_particle_renderer_tests.exe` — exit `0` including the new `TestMeshBatchBuilderInstancesLodShadowAndExclusion`; `kb_renderer_tests.exe mesh-pipeline` — exit `0`; `kb_renderer_tests.exe scene-sync` — exit `0`. After wiring into `SceneMeshSubmitter`/`SceneRenderer`: full focused matrix repeat — exit `0`, `7/7`, `14.81 s`. `cmake --build build --config Debug --target kb_editor` — exit `0`. `ctest --test-dir build -C Debug -R "^kb_editor_particle_authoring_headless$" --output-on-failure` — exit `0`, `1/1`, `3.16 s` — the real headless `kb_editor.exe` automation scenario, exercising live bgfx headless rendering through the new `SceneMeshSubmitter` integration, not just unit tests.
 
+### Stage 9 — trail, ribbon, and beam output: accepted
+
+- The compiled-effect contract and cache format now carry bounded trail cadence/distance/ring fields,
+  ribbon segment/width/break policy, and authored beam endpoint/noise fields. The compiler capability
+  key, cache reader/writer, and snapshot validation all gate the new data; invalid ring, segment, endpoint,
+  and non-finite values fail before rendering.
+- CPU snapshot publication preserves a stable spawn ordinal and ribbon group through every compaction path,
+  publishes world-space beam endpoints bound to the emitter transform, and preserves the fixed simulation
+  step used for beam noise.
+- `ParticleStripGeometryBuilder` owns fixed-capacity scratch storage: 16,384 trail histories, 65,536
+  vertices, and 98,304 indices. History is keyed by scene, backend epoch, and particle identity, preventing
+  cross-scene collisions and stale samples after a renderer release or backend restart. Capacity exhaustion
+  returns an explicit status and exact dropped-segment count.
+- `ParticleStripRenderer` owns dynamic GPU vertex/index buffers and submits Trail, Ribbon, and Beam draws
+  through the transparent order shared with mesh and billboard particles. Scene statistics now separately
+  report strip submitted/dropped segments, failed strip batches, and upload bytes; scene and global release
+  clear retained history.
+- Verification: `ctest --test-dir build -C Debug -R "^(kb_21kb_particle_asset_tests|kb_21kb_particle_cpu_backend_tests|kb_21kb_particle_editor_tests|kb_21kb_particle_snapshot_tests|kb_21kb_particle_renderer_tests|kb_editor_particle_authoring_tests|kb_editor_particle_bake_host_tests)$" --output-on-failure` — exit `0`, `7/7`, `11.70 s`.
+  `kb_renderer_tests.exe particle-strip-submit`, `mesh-pipeline`, and `scene-sync` each exit `0`; the strip
+  submit test includes native offscreen pixel readback. Geometry tests cover compact-order preservation,
+  ribbon discontinuities, fixed-step beam output, camera crossing, endpoint motion, backend epoch restart,
+  and hard trail/GPU buffer limits.
+
 ## Rejected attempts, open defects, and next gate
 
+- **Current Stage 8 status (2026-08-20): accepted.** This supersedes the historical in-progress notes below:
+  wrong/missing mesh compile/Bake rejection was closed in package 1; the focused mesh-pipeline test covers
+  one draw per selected LOD and the shadow pass; the runtime test performs 100 publish/submit/release cycles;
+  and the native offscreen readback test proves final mesh pixels. Stage 9 is accepted above.
 - The first controlled CPU-golden run intentionally used an impossible expected hash and failed with actual `14160509741928470306`; the exact observed value is now frozen and passes.
 - The current cone distribution, upper-seed truncation, and successful no-op emit are characterized defects scheduled for runtime replacement, not accepted target behavior.
 - Stage 1A attempt 1 was rejected after independent review despite a green focused test; every listed defect was repaired and the second attempt was accepted.

@@ -9,7 +9,7 @@
 
 namespace kb::particles {
 
-inline constexpr std::uint32_t kParticleCompiledEffectVersion = 1U;
+inline constexpr std::uint32_t kParticleCompiledEffectVersion = 2U;
 
 enum class ParticleCompilePlatform : std::uint8_t {
     PlatformIndependent,
@@ -76,6 +76,18 @@ struct ParticleCompiledEmitter {
     float stretchVelocityScale = 0.0F;
     float stretchMinimumLength = 0.0F;
     float pointSpriteDiameter = 1.0F;
+    float trailSampleIntervalSeconds = 1.0F / 60.0F;
+    float trailMinimumDistance = 0.0F;
+    std::uint32_t trailMaxSamplesPerParticle = 16U;
+    float trailWidth = 1.0F;
+    std::uint32_t ribbonMaxSegments = 256U;
+    float ribbonWidth = 1.0F;
+    bool ribbonBreakOnDeath = true;
+    kb::math::Vec3 beamLocalEnd{0.0F, 1.0F, 0.0F};
+    std::uint32_t beamSegments = 16U;
+    float beamWidth = 1.0F;
+    float beamNoiseAmplitude = 0.0F;
+    float beamNoiseFrequency = 1.0F;
     kb::scene::ParticleSimulationSpace simulationSpace = kb::scene::ParticleSimulationSpace::World;
     bool enabled = false;
     kb::scene::ParticleSpawnMode mode = kb::scene::ParticleSpawnMode::Continuous;
