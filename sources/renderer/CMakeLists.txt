@@ -34,6 +34,8 @@ add_library(kb_renderer STATIC
     include/kb/render/overlay/SceneGridPass.hpp
     include/kb/render/overlay/SelectionOutlineCompositePass.hpp
     include/kb/render/particles/ParticleGpuRenderer.hpp
+    include/kb/render/particles/ParticleStripGeometryBuilder.hpp
+    include/kb/render/particles/ParticleStripRenderer.hpp
     include/kb/render/particles/ParticleRenderBatcher.hpp
     include/kb/render/post/PostProcessChain.hpp
     include/kb/render/post/PostProcessRenderTarget.hpp
@@ -161,6 +163,8 @@ add_library(kb_renderer STATIC
     src/post/ScenePostProcessSubmitter.cpp
     src/post/ScenePostProcessTargets.cpp
     src/particles/ParticleGpuRenderer.cpp
+    src/particles/ParticleStripGeometryBuilder.cpp
+    src/particles/ParticleStripRenderer.cpp
     src/particles/ParticleMeshBatchBuilder.cpp
     src/particles/ParticleRenderBatcher.cpp
     src/resources/NativeWindowFramebuffer.cpp

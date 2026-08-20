@@ -3,6 +3,8 @@
 #include "kb/render/RenderSurface.hpp"
 #include "kb/render/particles/ParticleMeshBatchBuilder.hpp"
 #include "kb/render/particles/ParticleRenderBatcher.hpp"
+#include "kb/render/particles/ParticleStripGeometryBuilder.hpp"
+#include "kb/render/scene/MeshPipeline.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/TransparentDepthKey.hpp"
 
@@ -187,7 +189,7 @@ void TestSortBlendFlipbookAndSoftContract() {
         "compatible emitters were not globally age sorted across emitter ranges");
 
     crossEmitters[0].sort = crossEmitters[1].sort = kb::particles::ParticleRenderSortMode::BackToFront;
-    crossEmitters[0].output = kb::particles::ParticleRenderOutput::Trail;
+    crossEmitters[0].output = kb::particles::ParticleRenderOutput::Volumetric;
     const auto mixed = batcher.Build(*Snapshot(crossEmitters, crossEmitterParticles), camera);
     Require(mixed.Succeeded() && mixed.unsupportedEmitterCount == 1U &&
             mixed.droppedParticleCount == 2U && mixed.instances.size() == 2U &&
@@ -359,6 +361,57 @@ void TestMeshBatchBuilderInstancesLodShadowAndExclusion() {
     Require(instance.color[0] > 0.0F && instance.color[3] > 0.0F,
         "mesh instance color was not unpacked from the particle's packed color");
 
+    kb::render::RenderMeshResource meshResource{};
+    meshResource.indexCount = 12U;
+    meshResource.bounds = kb::render::RenderBoundsSphere{
+        .center = {0.0F, 0.0F, 0.0F}, .radius = 0.1F};
+    meshResource.sections = {
+        kb::render::RenderMeshSection{
+            .indexStart = 0U, .indexCount = 6U, .bounds = meshResource.bounds, .lodLevel = 0U},
+        kb::render::RenderMeshSection{
+            .indexStart = 6U, .indexCount = 6U, .bounds = meshResource.bounds, .lodLevel = 1U},
+    };
+    meshResource.lods = {
+        kb::render::RenderMeshLodDesc{.firstSection = 0U, .sectionCount = 1U, .minScreenCoverage = 0.5F},
+        kb::render::RenderMeshLodDesc{.firstSection = 1U, .sectionCount = 1U, .minScreenCoverage = 0.0F},
+    };
+    auto lodEmitter = meshEmitter;
+    lodEmitter.meshLodLevel = 1;
+    const std::array lodEmitters{lodEmitter};
+    const std::array lodParticles{
+        Particle(101U, 0.1F, 0.2F, 0U), Particle(102U, 0.2F, 0.4F, 0U),
+        Particle(103U, 0.3F, 0.6F, 0U)};
+    kb::render::ParticleMeshBatchBuilder lodBuilder;
+    lodBuilder.Warmup(3U);
+    lodBuilder.Build(*Snapshot(lodEmitters, lodParticles));
+    const auto& lodBatches = lodBuilder.Batches();
+    kb::render::SceneRenderCamera meshCamera = IdentityCamera();
+    const kb::render::MeshPipelineBuildResult meshCommands = kb::render::MeshPipelineProcessor::Build(
+        kb::render::MeshPipelineBuildDesc{
+            .pass = kb::render::MeshPassType::BaseOpaque,
+            .meshBatches = &lodBatches,
+            .resolvedMeshResource = &meshResource,
+            .camera = &meshCamera,
+            .resourceValidation = kb::render::MeshPipelineResourceValidation::Skip,
+        });
+    Require(meshCommands.commands.size() == 1U && meshCommands.commands[0].lodLevel == 1U &&
+            meshCommands.commands[0].instances.size() == 3U,
+        "mesh particles did not resolve to one instanced draw command for their selected LOD");
+    kb::render::SceneRenderSubmitStats meshSubmitStats = meshCommands.stats;
+    kb::render::MeshPipelineProcessor::CountCommandsAsSubmitted(meshSubmitStats, meshCommands.commands);
+    Require(meshSubmitStats.submittedDrawCallCount == 1U && meshSubmitStats.submittedMeshCount == 3U,
+        "mesh particle draw accounting did not preserve one draw for three instances");
+    const kb::render::MeshPipelineBuildResult shadowCommands = kb::render::MeshPipelineProcessor::Build(
+        kb::render::MeshPipelineBuildDesc{
+            .pass = kb::render::MeshPassType::ShadowDepth,
+            .meshBatches = &lodBatches,
+            .resolvedMeshResource = &meshResource,
+            .camera = &meshCamera,
+            .resourceValidation = kb::render::MeshPipelineResourceValidation::Skip,
+        });
+    Require(shadowCommands.commands.size() == 1U && shadowCommands.commands[0].instances.size() == 3U,
+        "shadow-casting mesh particles were not retained by the shadow pass");
+
     kb::particles::ParticleRenderEmitterRecord soloBillboardEmitter = Emitter(
         0U, 1U, kb::particles::ParticleRenderSortMode::None);
     const std::array soloEmitters{soloBillboardEmitter};
@@ -367,6 +420,158 @@ void TestMeshBatchBuilderInstancesLodShadowAndExclusion() {
     emptyBuilder.Warmup(4U);
     emptyBuilder.Build(*Snapshot(soloEmitters, soloParticles));
     Require(emptyBuilder.Batches().empty(), "mesh batch builder produced a batch for a non-Mesh-only snapshot");
+}
+
+void TestStripGeometryHistoryOrderAndFixedStepDeterminism() {
+    auto emitter = Emitter(0U, 2U, kb::particles::ParticleRenderSortMode::None);
+    emitter.output = kb::particles::ParticleRenderOutput::Trail;
+    emitter.trailSampleIntervalSeconds = 1.0F / 60.0F;
+    emitter.trailMinimumDistance = 0.0F;
+    emitter.trailMaxSamplesPerParticle = 4U;
+    emitter.trailWidth = 0.5F;
+    std::array trailParticles{Particle(11U, 0.0F, 0.0F, 0U), Particle(12U, 1.0F, 0.0F, 0U)};
+    kb::particles::ParticleRenderSnapshotChannel channel;
+    Require(channel.Warmup(131U).Succeeded(), "strip snapshot warmup failed");
+    const auto publish = [&](std::uint64_t revision, std::uint64_t step) {
+        Require(channel.Publish(1U, {.revision = revision, .fixedStepIndex = step,
+                    .emitters = std::span{&emitter, 1U}, .particles = trailParticles}).Succeeded(),
+            "strip snapshot publication failed");
+        return channel.Read();
+    };
+    kb::render::ParticleStripGeometryBuilder builder;
+    builder.Warmup();
+    const auto first = publish(1U, 1U);
+    Require(builder.Build(*first, IdentityCamera()).Succeeded(), "first trail geometry build failed");
+    std::swap(trailParticles[0], trailParticles[1]);
+    trailParticles[0].position.x += 1.0F;
+    trailParticles[1].position.x += 1.0F;
+    const auto second = publish(2U, 2U);
+    const auto trails = builder.Build(*second, IdentityCamera());
+    Require(trails.Succeeded() && trails.draws.size() == 1U && trails.indices.size() == 12U,
+        "trail history was not retained by particle identity across compact-order changes");
+    kb::particles::ParticleRenderSnapshotChannel restartedTrailChannel;
+    Require(restartedTrailChannel.Warmup(131U).Succeeded(), "restarted trail snapshot warmup failed");
+    Require(restartedTrailChannel.Publish(2U, {.revision = 1U, .fixedStepIndex = 1U,
+                .emitters = std::span{&emitter, 1U}, .particles = trailParticles}).Succeeded(),
+        "restarted trail snapshot publication failed");
+    Require(builder.Build(*restartedTrailChannel.Read(), IdentityCamera()).Succeeded() &&
+            builder.Build(*restartedTrailChannel.Read(), IdentityCamera()).indices.empty(),
+        "trail history survived a backend epoch change");
+
+    emitter.output = kb::particles::ParticleRenderOutput::Ribbon;
+    emitter.ribbonMaxSegments = 8U;
+    emitter.ribbonWidth = 0.25F;
+    emitter.ribbonBreakOnDeath = true;
+    trailParticles[0].spawnOrdinal = 5U;
+    trailParticles[1].spawnOrdinal = 7U;
+    const auto ribbonSnapshot = publish(3U, 3U);
+    const auto ribbon = builder.Build(*ribbonSnapshot, IdentityCamera());
+    Require(ribbon.Succeeded() && ribbon.draws.empty(),
+        "ribbon connected a discontinuity after an ordered particle was removed");
+
+    emitter.output = kb::particles::ParticleRenderOutput::Beam;
+    emitter.particleCount = 0U;
+    emitter.liveParticleCount = 0U;
+    emitter.outputOrigin = {0.0F, 0.0F, 0.0F};
+    emitter.beamEnd = {0.0F, 4.0F, 0.0F};
+    emitter.beamSegments = 4U;
+    emitter.beamNoiseAmplitude = 0.5F;
+    emitter.beamNoiseFrequency = 1.25F;
+    kb::particles::ParticleRenderSnapshotChannel beamChannel;
+    Require(beamChannel.Warmup(132U).Succeeded(), "beam snapshot warmup failed");
+    Require(beamChannel.Publish(1U, {.revision = 1U, .fixedStepIndex = 77U,
+                .emitters = std::span{&emitter, 1U}, .particles = std::span<const kb::particles::ParticleRenderRecord>{}}).Succeeded(),
+        "beam snapshot publication failed");
+    const auto beamSnapshot = beamChannel.Read();
+    const auto beamA = builder.Build(*beamSnapshot, IdentityCamera());
+    const float beamNoiseY = beamA.vertices[6].y;
+    const float beamStartX = beamA.vertices[0].x;
+    const float beamEndX = beamA.vertices[14].x;
+    const auto beamB = builder.Build(*beamSnapshot, IdentityCamera());
+    Require(beamA.Succeeded() && beamA.vertices.size() == 16U && beamA.indices.size() == 24U &&
+            beamNoiseY == beamB.vertices[6].y && std::fabs(beamStartX - 0.5F) < 0.0001F,
+        "beam geometry changed without a fixed-step advance");
+    auto crossingCamera = IdentityCamera();
+    crossingCamera.view[0] = -1.0F;
+    crossingCamera.view[10] = -1.0F;
+    const auto crossed = builder.Build(*beamSnapshot, crossingCamera);
+    Require(crossed.Succeeded() && crossed.indices.size() == beamA.indices.size() &&
+            std::fabs(crossed.vertices[0].x + 0.5F) < 0.0001F && crossed.vertices[0].x != beamStartX,
+        "camera crossing did not rebuild the strip-facing geometry");
+    auto movedEmitter = emitter;
+    movedEmitter.beamEnd.x = 0.5F;
+    const std::array movedEmitters{movedEmitter};
+    Require(beamChannel.Publish(1U, {.revision = 2U, .fixedStepIndex = 77U,
+                .emitters = movedEmitters, .particles = std::span<const kb::particles::ParticleRenderRecord>{}}).Succeeded(),
+        "moved beam snapshot publication failed");
+    const auto moved = builder.Build(*beamChannel.Read(), IdentityCamera());
+    Require(moved.Succeeded() && moved.vertices[14].x != beamEndX,
+        "beam endpoint motion did not rebuild the dynamic strip geometry");
+}
+
+void TestStripGeometryCapacityIsHardAndDiagnostic() {
+    constexpr std::uint32_t segmentsPerEmitter = 256U;
+    constexpr std::uint32_t emitterCount =
+        kb::render::kParticleStripVertexBudget / (segmentsPerEmitter * 4U) + 1U;
+    std::vector<kb::particles::ParticleRenderEmitterRecord> emitters;
+    emitters.reserve(emitterCount);
+    for (std::uint32_t index = 0U; index < emitterCount; ++index) {
+        auto emitter = Emitter(0U, 0U, kb::particles::ParticleRenderSortMode::None);
+        emitter.instanceId = index + 1U;
+        emitter.emitterId = index + 1U;
+        emitter.output = kb::particles::ParticleRenderOutput::Beam;
+        emitter.outputOrigin = {static_cast<float>(index), 0.0F, 0.0F};
+        emitter.beamEnd = {static_cast<float>(index), 1.0F, 0.0F};
+        emitter.beamSegments = segmentsPerEmitter;
+        emitters.push_back(emitter);
+    }
+
+    kb::particles::ParticleRenderSnapshotChannel channel;
+    Require(channel.Warmup(133U).Succeeded(), "strip capacity snapshot warmup failed");
+    Require(channel.Publish(1U, {.revision = 1U, .fixedStepIndex = 1U,
+                .emitters = emitters, .particles = std::span<const kb::particles::ParticleRenderRecord>{}}).Succeeded(),
+        "strip capacity snapshot publication failed");
+    kb::render::ParticleStripGeometryBuilder builder;
+    builder.Warmup();
+    const auto built = builder.Build(*channel.Read(), IdentityCamera());
+    Require(built.status == kb::render::ParticleStripBuildStatus::CapacityExceeded &&
+            built.vertices.size() == kb::render::kParticleStripVertexBudget &&
+            built.indices.size() == kb::render::kParticleStripIndexBudget &&
+            built.droppedSegmentCount == segmentsPerEmitter &&
+            built.draws.size() == emitterCount - 1U,
+        "strip geometry exceeded its renderer-owned buffers without precise capacity diagnostics");
+}
+
+void TestTrailHistoryCapacityIsHardAndDiagnostic() {
+    const std::uint32_t particleCount = kb::render::kParticleTrailHistoryBudget + 1U;
+    std::vector<kb::particles::ParticleRenderRecord> particles;
+    particles.reserve(particleCount);
+    for (std::uint32_t index = 0U; index < particleCount; ++index) {
+        auto particle = Particle(index + 1U, static_cast<float>(index), 0.0F, 0U);
+        particles.push_back(particle);
+    }
+    auto emitter = Emitter(0U, particleCount, kb::particles::ParticleRenderSortMode::None);
+    emitter.output = kb::particles::ParticleRenderOutput::Trail;
+    emitter.trailMaxSamplesPerParticle = 2U;
+    emitter.trailWidth = 0.25F;
+    kb::particles::ParticleRenderSnapshotChannel channel;
+    Require(channel.Warmup(134U).Succeeded(), "trail capacity snapshot warmup failed");
+    Require(channel.Publish(1U, {.revision = 1U, .fixedStepIndex = 1U,
+                .emitters = std::span{&emitter, 1U}, .particles = particles}).Succeeded(),
+        "trail capacity first snapshot publication failed");
+    kb::render::ParticleStripGeometryBuilder builder;
+    builder.Warmup();
+    Require(builder.Build(*channel.Read(), IdentityCamera()).status == kb::render::ParticleStripBuildStatus::CapacityExceeded,
+        "trail history budget did not report the first rejected particle");
+    for (auto& particle : particles) particle.position.y += 1.0F;
+    Require(channel.Publish(1U, {.revision = 2U, .fixedStepIndex = 2U,
+                .emitters = std::span{&emitter, 1U}, .particles = particles}).Succeeded(),
+        "trail capacity second snapshot publication failed");
+    const auto built = builder.Build(*channel.Read(), IdentityCamera());
+    Require(built.status == kb::render::ParticleStripBuildStatus::CapacityExceeded &&
+            built.vertices.size() == kb::render::kParticleStripVertexBudget &&
+            built.indices.size() == kb::render::kParticleStripIndexBudget && built.droppedSegmentCount == 1U,
+        "trail history ring exceeded its hard limit without an exact diagnostic");
 }
 
 } // namespace
@@ -391,6 +596,9 @@ int main() {
         TestCapacitySplitNoProxyGrowthTwoViewsAndNoAllocation();
         TestAllBlendAndOutputContracts();
         TestMeshBatchBuilderInstancesLodShadowAndExclusion();
+        TestStripGeometryHistoryOrderAndFixedStepDeterminism();
+        TestStripGeometryCapacityIsHardAndDiagnostic();
+        TestTrailHistoryCapacityIsHardAndDiagnostic();
         std::cout << "21kb Particle System GPU renderer tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {

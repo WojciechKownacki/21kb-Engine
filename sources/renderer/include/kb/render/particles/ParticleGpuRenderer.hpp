@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/particles/ParticleRenderBatcher.hpp"
+#include "kb/render/particles/ParticleStripRenderer.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 
@@ -43,11 +44,18 @@ public:
         const RenderResourceRegistry& resources,
         const SceneRenderResourceMap& resourceMap,
         bgfx::TextureHandle sceneDepthTexture) noexcept;
+    [[nodiscard]] const ParticleStripBuildResult& BuildStrips(
+        const kb::particles::ParticleRenderSnapshot& snapshot,
+        const SceneRenderCamera& camera) noexcept;
+    [[nodiscard]] ParticleStripSubmitResult SubmitStripDraw(bgfx::ViewId viewId, std::uint32_t drawIndex) noexcept;
+    void ReleaseParticleScene(std::uint64_t sceneId) noexcept;
+    void ReleaseAllParticleScenes() noexcept;
 
     [[nodiscard]] const ParticleRenderBatchBuildResult& LastBuild() const noexcept;
 
 private:
     ParticleRenderBatcher batcher_;
+    ParticleStripRenderer stripRenderer_;
     ParticleRenderBatchBuildResult lastBuild_{};
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle atlasSampler_ = BGFX_INVALID_HANDLE;

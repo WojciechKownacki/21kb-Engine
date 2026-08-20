@@ -391,9 +391,8 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
         "compiler did not execute modules in persisted authoring order");
 
     auto unsupported = compilable;
-    unsupported.emitters[0].output.type = kb::scene::ParticleOutputType::Mesh;
-    unsupported.emitters[0].output.payload = kb::scene::ParticleMeshOutput{};
-    unsupported.emitters[0].output.mesh = {.assetId = 100U};
+    unsupported.emitters[0].output.type = kb::scene::ParticleOutputType::Volumetric;
+    unsupported.emitters[0].output.payload = kb::scene::ParticleVolumetricOutput{};
     unsupported.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualRequired;
     unsupported.eventBindings.push_back({.sourceEmitterId = 11U,
         .action = kb::scene::ParticleEventAction::EmitEffectAsset,
@@ -405,10 +404,10 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
                 return diagnostic.code == kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability;
             }), "public capability validator did not aggregate GPU policy, external event, and output failures");
     const auto inspector = ParticleEmitterInspectorModel::Build(unsupported, 11U, 2U, nullptr, nullptr);
-    Require(inspector.outputChoices.size() == 8U && !inspector.outputChoices[3].enabled &&
-            inspector.outputChoices[3].diagnostics.size() == 1U &&
+    Require(inspector.outputChoices.size() == 8U && !inspector.outputChoices[7].enabled &&
+            inspector.outputChoices[7].diagnostics.size() == 1U &&
             inspector.modules.size() == 3U && inspector.modules[2].selected &&
-            unsupported.emitters[0].output.type == kb::scene::ParticleOutputType::Mesh,
+            unsupported.emitters[0].output.type == kb::scene::ParticleOutputType::Volumetric,
         "inspector did not expose disabled capability diagnostics or preserve authored unsupported data");
     Require(ParticleEditorCommands::RemoveModule(document, workspace, 11U, 2U).Succeeded() &&
             document.Asset().emitters[0].modules.size() == 2U &&
@@ -570,9 +569,7 @@ void TestProductionBakeCacheAndCapabilityGates() {
     Require(bake(effect).status == ParticleBakeStatus::Baked,
         "future compiled cache format was accepted instead of atomically rebuilt");
 
-    for (const kb::scene::ParticleOutputType unsupported : {kb::scene::ParticleOutputType::Mesh,
-             kb::scene::ParticleOutputType::Trail, kb::scene::ParticleOutputType::Ribbon,
-             kb::scene::ParticleOutputType::Beam, kb::scene::ParticleOutputType::Volumetric}) {
+    for (const kb::scene::ParticleOutputType unsupported : {kb::scene::ParticleOutputType::Volumetric}) {
         auto candidate = effect;
         candidate.emitters[0].output.type = unsupported;
         candidate.emitters[0].output.payload = kb::scene::DefaultParticleOutputPayload(unsupported);
@@ -582,6 +579,50 @@ void TestProductionBakeCacheAndCapabilityGates() {
         Require(rejected.status == ParticleBakeStatus::UnsupportedCapability && !rejected.diagnostics.empty() &&
                 rejected.diagnostics.front().code == kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
             "unsupported output was silently downgraded by Bake");
+    }
+    {
+        auto candidate = effect;
+        candidate.emitters[0].output.type = kb::scene::ParticleOutputType::Trail;
+        candidate.emitters[0].output.payload = kb::scene::ParticleTrailOutput{
+            .sampleIntervalSeconds = 0.125F, .minimumDistance = 0.5F, .maxSamplesPerParticle = 23U, .width = 0.75F};
+        kb::particle_plugin::ParticleCompilerCapabilities capabilities;
+        capabilities.trail = true;
+        const ParticleBakeResult accepted = ParticleBakeService::Bake({.workingAsset = candidate, .owner = owner,
+            .registry = registry, .cacheRoot = cacheRoot, .compile = {.capabilities = capabilities}});
+        Require(accepted.Succeeded() && accepted.effect->emitters[0].trailSampleIntervalSeconds == 0.125F &&
+                accepted.effect->emitters[0].trailMinimumDistance == 0.5F &&
+                accepted.effect->emitters[0].trailMaxSamplesPerParticle == 23U &&
+                accepted.effect->emitters[0].trailWidth == 0.75F,
+            "Trail Bake did not preserve the validated output contract in the compiled cache");
+    }
+    {
+        auto candidate = effect;
+        candidate.emitters[0].output.type = kb::scene::ParticleOutputType::Ribbon;
+        candidate.emitters[0].output.payload = kb::scene::ParticleRibbonOutput{
+            .maxSegments = 127U, .width = 0.625F, .breakOnDeath = false};
+        kb::particle_plugin::ParticleCompilerCapabilities capabilities;
+        capabilities.ribbon = true;
+        const ParticleBakeResult accepted = ParticleBakeService::Bake({.workingAsset = candidate, .owner = owner,
+            .registry = registry, .cacheRoot = cacheRoot, .compile = {.capabilities = capabilities}});
+        Require(accepted.Succeeded() && accepted.effect->emitters[0].ribbonMaxSegments == 127U &&
+                accepted.effect->emitters[0].ribbonWidth == 0.625F && !accepted.effect->emitters[0].ribbonBreakOnDeath,
+            "Ribbon Bake did not preserve the validated output contract in the compiled cache");
+    }
+    {
+        auto candidate = effect;
+        candidate.emitters[0].output.type = kb::scene::ParticleOutputType::Beam;
+        candidate.emitters[0].output.payload = kb::scene::ParticleBeamOutput{
+            .localEnd = {2.0F, 3.0F, 4.0F}, .segments = 19U, .width = 0.875F,
+            .noiseAmplitude = 0.25F, .noiseFrequency = 1.5F};
+        kb::particle_plugin::ParticleCompilerCapabilities capabilities;
+        capabilities.beam = true;
+        const ParticleBakeResult accepted = ParticleBakeService::Bake({.workingAsset = candidate, .owner = owner,
+            .registry = registry, .cacheRoot = cacheRoot, .compile = {.capabilities = capabilities}});
+        Require(accepted.Succeeded() && accepted.effect->emitters[0].beamLocalEnd.z == 4.0F &&
+                accepted.effect->emitters[0].beamSegments == 19U && accepted.effect->emitters[0].beamWidth == 0.875F &&
+                accepted.effect->emitters[0].beamNoiseAmplitude == 0.25F &&
+                accepted.effect->emitters[0].beamNoiseFrequency == 1.5F,
+            "Beam Bake did not preserve the validated output contract in the compiled cache");
     }
     auto gpuRequired = effect;
     gpuRequired.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualRequired;

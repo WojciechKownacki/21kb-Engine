@@ -127,6 +127,14 @@ void SceneRenderer::Shutdown() {
     initialized_ = false;
 }
 
+void SceneRenderer::ReleaseParticleScene(std::uint64_t sceneId) noexcept {
+    if (particleRenderer_ != nullptr) particleRenderer_->ReleaseParticleScene(sceneId);
+}
+
+void SceneRenderer::ReleaseAllParticleScenes() noexcept {
+    if (particleRenderer_ != nullptr) particleRenderer_->ReleaseAllParticleScenes();
+}
+
 void SceneRenderer::Submit(bgfx::ViewId viewId, const RenderScene& renderScene, std::uint32_t viewportWidth, std::uint32_t viewportHeight, const SceneRenderCamera* cameraOverride, SceneRenderDrawBudget drawBudget, SceneRenderLightingConfig lightingConfig) const {
     SubmitMeshPass(viewId, MeshPassType::BaseOpaque, renderScene, viewportWidth, viewportHeight, cameraOverride, drawBudget, lightingConfig);
 }

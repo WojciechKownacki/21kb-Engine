@@ -1,4 +1,6 @@
 #include <cstdlib>
+#include <cstdio>
+#include <exception>
 #include <string_view>
 
 namespace kb::render::tests {
@@ -13,6 +15,8 @@ void RunGraphShaderArtifactCookTests();
 void RunMaterialProgramRegistryTests();
 void RunSceneMeshPassProgramSelectionTests();
 void RunRendererRuntimeSubmitTests();
+void RunRendererParticleMeshSnapshotSubmitTest();
+void RunRendererParticleStripSnapshotSubmitTest();
 void RunRendererCapabilityReportTests();
 void RunMeshPipelineTests();
 void RunSceneDisplayCompositeTests();
@@ -49,6 +53,20 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string_view{ argv[1] } == "scene-sync") {
         kb::render::tests::RunRenderSceneSyncTests();
         return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "particle-mesh-submit") {
+        kb::render::tests::RunRendererParticleMeshSnapshotSubmitTest();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "particle-strip-submit") {
+        try {
+            kb::render::tests::RunRendererParticleStripSnapshotSubmitTest();
+            return EXIT_SUCCESS;
+        } catch (const std::exception& error) {
+            std::fputs(error.what(), stderr);
+            std::fputc('\n', stderr);
+            return EXIT_FAILURE;
+        }
     }
     if (argc != 1) {
         return EXIT_FAILURE;
