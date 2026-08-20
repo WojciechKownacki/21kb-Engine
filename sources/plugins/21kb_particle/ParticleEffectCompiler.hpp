@@ -18,6 +18,9 @@ struct ParticleCompilerCapabilities {
     bool stretchedBillboard = true;
     bool pointSprite = true;
     bool mesh = true;
+    bool trail = true;
+    bool ribbon = true;
+    bool beam = true;
 
     [[nodiscard]] std::uint64_t StableKey() const noexcept;
 };

@@ -1880,6 +1880,7 @@ void Renderer::ReleaseScene(const kb::scene::Scene& scene) noexcept {
     }
     screenCapture_->ReleaseScene(mutableScene);
     particleRenderSynchronizer_->ReleaseScene(scene);
+    if (sceneRenderer_ != nullptr) sceneRenderer_->ReleaseParticleScene(scene.Id());
     kb::scene::SceneRenderFeedback::Clear(mutableScene);
     runtimeResourceCache_.ReleaseScene(mutableScene, sceneRenderer_.get());
     renderSceneStore_.Release(scene.Id());
@@ -1892,6 +1893,7 @@ void Renderer::ReleaseAllScenes() noexcept {
     }
     screenCapture_->Shutdown();
     particleRenderSynchronizer_->Clear();
+    if (sceneRenderer_ != nullptr) sceneRenderer_->ReleaseAllParticleScenes();
     renderSceneStore_.ReleaseAll();
     runtimeResourceCache_.DestroyAll(sceneRenderer_.get());
     runtimeAssetDiscovery_.Clear();

@@ -74,7 +74,7 @@ struct ParticleAlignmentBasis {
     std::array<float, 3> forward{};
 };
 
-enum class TransparentDrawSource : std::uint8_t { Mesh, Particle };
+enum class TransparentDrawSource : std::uint8_t { Mesh, Particle, ParticleStrip };
 struct TransparentDrawOrderEntry {
     TransparentDrawSource source = TransparentDrawSource::Mesh;
     bool unsorted = false;

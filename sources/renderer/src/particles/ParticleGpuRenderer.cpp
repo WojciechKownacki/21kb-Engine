@@ -29,6 +29,10 @@ bool ParticleGpuRenderer::Initialize() {
     constexpr std::uint32_t white = 0xFFFFFFFFU;
     whiteTexture_ = bgfx::createTexture2D(1U, 1U, false, 1U, bgfx::TextureFormat::RGBA8,
         BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP, bgfx::copy(&white, sizeof(white)));
+    if (!stripRenderer_.Initialize()) {
+        Shutdown();
+        return false;
+    }
     if (!IsInitialized()) {
         Shutdown();
         return false;
@@ -38,6 +42,7 @@ bool ParticleGpuRenderer::Initialize() {
 }
 
 void ParticleGpuRenderer::Shutdown() noexcept {
+    stripRenderer_.Shutdown();
     if (bgfx::isValid(whiteTexture_)) bgfx::destroy(whiteTexture_);
     if (bgfx::isValid(depthParamsUniform_)) bgfx::destroy(depthParamsUniform_);
     if (bgfx::isValid(localBasisUniform_)) bgfx::destroy(localBasisUniform_);
@@ -64,8 +69,7 @@ bool ParticleGpuRenderer::IsInitialized() const noexcept {
     return bgfx::isValid(program_) && bgfx::isValid(atlasSampler_) && bgfx::isValid(sceneDepthSampler_) &&
         bgfx::isValid(cameraBasisUniform_) && bgfx::isValid(emitterParamsUniform_) &&
         bgfx::isValid(featureParamsUniform_) && bgfx::isValid(localBasisUniform_) &&
-        bgfx::isValid(depthParamsUniform_) &&
-        bgfx::isValid(whiteTexture_);
+        bgfx::isValid(depthParamsUniform_) && bgfx::isValid(whiteTexture_) && stripRenderer_.IsInitialized();
 }
 
 ParticleGpuSubmitResult ParticleGpuRenderer::Submit(
@@ -179,5 +183,23 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitBatch(
 }
 
 const ParticleRenderBatchBuildResult& ParticleGpuRenderer::LastBuild() const noexcept { return lastBuild_; }
+
+const ParticleStripBuildResult& ParticleGpuRenderer::BuildStrips(
+    const kb::particles::ParticleRenderSnapshot& snapshot,
+    const SceneRenderCamera& camera) noexcept {
+    return stripRenderer_.Build(snapshot, camera);
+}
+
+ParticleStripSubmitResult ParticleGpuRenderer::SubmitStripDraw(bgfx::ViewId viewId, std::uint32_t drawIndex) noexcept {
+    return stripRenderer_.SubmitDraw(viewId, drawIndex);
+}
+
+void ParticleGpuRenderer::ReleaseParticleScene(std::uint64_t sceneId) noexcept {
+    stripRenderer_.ReleaseScene(sceneId);
+}
+
+void ParticleGpuRenderer::ReleaseAllParticleScenes() noexcept {
+    stripRenderer_.ReleaseAllScenes();
+}
 
 } // namespace kb::render

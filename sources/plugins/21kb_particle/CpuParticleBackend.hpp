@@ -149,7 +149,7 @@ private:
     struct InstanceRuntime {
         std::uint32_t compiledEffectIndex = UINT32_MAX;
         std::uint64_t randomState = 0U;
-        std::uint64_t spawnOrdinal = 0U;
+        std::array<std::uint64_t, kb::scene::kParticleEffectMaxEmitters> spawnOrdinals{};
         std::array<float, kb::scene::kParticleEffectMaxEmitters> elapsedSeconds{};
         std::array<bool, kb::scene::kParticleEffectMaxEmitters> cycleStarted{};
         std::array<float, kb::scene::kParticleEffectMaxEmitters> emissionFractions{};
@@ -261,6 +261,8 @@ private:
 
     std::vector<std::uint64_t> particleInstanceIds_;
     std::vector<std::uint64_t> particleIds_;
+    std::vector<std::uint64_t> particleSpawnOrdinals_;
+    std::vector<std::uint32_t> particleRibbonGroups_;
     std::vector<std::uint8_t> particleEmitterIndices_;
     std::vector<kb::math::Vec3> particlePositions_;
     std::vector<kb::math::Vec3> particlePreviousPositions_;

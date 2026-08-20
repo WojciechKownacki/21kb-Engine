@@ -77,7 +77,9 @@ private:
         .velocity = {5.0F, 6.0F, 7.0F},
         .stretch = 1.5F,
         .particleId = identity,
+        .spawnOrdinal = identity + 100U,
         .packedColor = 0xA1B2C3D4U,
+        .ribbonGroup = 23U,
         .frame = 17U,
         .normalizedAgeUnorm = 49'152U,
     };
@@ -118,13 +120,27 @@ private:
         .localBasisQuaternionSnorm = {0, 16'384, 0, 28'377},
         .pointSpriteDiameter = 0.75F,
         .meshLodLevel = -3,
+        .trailSampleIntervalSeconds = 0.05F,
+        .trailMinimumDistance = 0.25F,
+        .trailMaxSamplesPerParticle = 31U,
+        .trailWidth = 0.5F,
+        .ribbonMaxSegments = 63U,
+        .ribbonWidth = 0.75F,
+        .ribbonBreakOnDeath = false,
+        .beamLocalEnd = {1.0F, 2.0F, 3.0F},
+        .beamSegments = 15U,
+        .beamWidth = 0.8F,
+        .beamNoiseAmplitude = 0.3F,
+        .beamNoiseFrequency = 2.0F,
+        .outputOrigin = {4.0F, 5.0F, 6.0F},
+        .beamEnd = {7.0F, 8.0F, 9.0F},
         .boundsMinimum = {-10.0F, -20.0F, -30.0F},
         .boundsMaximum = {10.0F, 20.0F, 30.0F},
     };
 }
 
 void TestCompleteContractAndMalformedRanges() {
-    static_assert(sizeof(kb::particles::ParticleRenderRecord) == 64U);
+    static_assert(sizeof(kb::particles::ParticleRenderRecord) == 80U);
     static_assert(kb::particles::kParticleRenderSnapshotSlotCount == 4U);
     static_assert(kb::particles::kParticleRenderSnapshotBytesPerSlot == 16U * 1024U * 1024U);
     static_assert(kb::particles::kParticleRenderSnapshotBytesPerSlot *
@@ -171,10 +187,17 @@ void TestCompleteContractAndMalformedRanges() {
             emitter.FlipbookColumns() == 8U && emitter.FlipbookRows() == 4U &&
             emitter.localBasisQuaternionSnorm[1] == 16'384 && emitter.pointSpriteDiameter == 0.75F &&
             emitter.meshLodLevel == -3 &&
+            emitter.trailSampleIntervalSeconds == 0.05F && emitter.trailMinimumDistance == 0.25F &&
+            emitter.trailMaxSamplesPerParticle == 31U && emitter.trailWidth == 0.5F &&
+            emitter.ribbonMaxSegments == 63U && emitter.ribbonWidth == 0.75F && !emitter.ribbonBreakOnDeath &&
+            emitter.beamLocalEnd.z == 3.0F && emitter.beamSegments == 15U && emitter.beamWidth == 0.8F &&
+            emitter.beamNoiseAmplitude == 0.3F && emitter.beamNoiseFrequency == 2.0F &&
+            emitter.outputOrigin.y == 5.0F && emitter.beamEnd.z == 9.0F &&
             emitter.boundsMinimum.x == -10.0F && emitter.boundsMaximum.z == 30.0F,
         "per-emitter render metadata was incomplete or changed");
     const auto& particle = snapshot->Particles()[0];
-    Require(particle.particleId == 11U && particle.position.x == 11.0F &&
+    Require(particle.particleId == 11U && particle.spawnOrdinal == 111U && particle.ribbonGroup == 23U &&
+            particle.position.x == 11.0F &&
             particle.previousPosition.x == 10.75F && particle.velocity.z == 7.0F &&
             particle.size == 4.0F && particle.rotationRadians == 0.5F && particle.stretch == 1.5F &&
             particle.frame == 17U && particle.normalizedAgeUnorm == 49'152U &&
