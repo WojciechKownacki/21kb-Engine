@@ -6,12 +6,12 @@
 namespace kb::editor {
 namespace {
 
-constexpr int kTransportButtonSize = 36;
-constexpr int kTransportButtonGap = 6;
+constexpr int kTransportButtonSize = 30;
+constexpr int kTransportButtonGap = 5;
 constexpr int kToolbarSideInset = 12;
-constexpr int kSaveButtonWidth = 68;
-constexpr int kSaveButtonMinWidth = 54;
-constexpr int kSaveButtonHeight = 28;
+constexpr int kSaveButtonWidth = 60;
+constexpr int kSaveButtonMinWidth = 50;
+constexpr int kSaveButtonHeight = 26;
 constexpr int kMenuLeftInset = 10;
 constexpr int kMenuTopInset = 2;
 constexpr int kMenuItemHeightPad = 3;

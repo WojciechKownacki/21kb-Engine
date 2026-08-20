@@ -53,6 +53,19 @@ void TestTwoToOneResponsiveGeometry() {
     }
 }
 
+void TestCompactAuthoringMetrics() {
+    const auto layout = kb::editor::ParticleEditorPanelLayoutResolver::Resolve(
+        RECT{0, 0, 1280, 720}, Rows(2U), 0, 96U);
+    Require(layout.toolbar.bottom - layout.toolbar.top == 32,
+        "particle toolbar did not use the compact production height");
+    Require(layout.statusBar.bottom - layout.statusBar.top == 20,
+        "particle status bar did not use the compact production height");
+    Require(layout.addEmitter.bottom - layout.addEmitter.top == 24,
+        "particle primary action did not use the compact control height");
+    Require(layout.emitterRows[0].bounds.bottom - layout.emitterRows[0].bounds.top == 28,
+        "particle emitter row did not preserve compact spacing");
+}
+
 void TestHitTestingScrollAndSelectionFocus() {
     const auto rows = Rows(8U);
     const RECT content{0, 0, 900, 300};
@@ -152,6 +165,7 @@ void TestUnifiedInspectorStreamAndModuleHitTargets() {
 int main() {
     try {
         TestTwoToOneResponsiveGeometry();
+        TestCompactAuthoringMetrics();
         TestHitTestingScrollAndSelectionFocus();
         TestUnifiedInspectorStreamAndModuleHitTargets();
         std::cout << "21kb Particle System editor authoring tests passed\n";
