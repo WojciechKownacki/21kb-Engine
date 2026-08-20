@@ -399,16 +399,16 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
         .targetEffect = {.assetId = 200U}});
     const auto capabilityDiagnostics =
         kb::particle_plugin::ParticleEffectCompiler::ValidateCapabilities(unsupported);
-    Require(capabilityDiagnostics.size() == 2U &&
+    Require(capabilityDiagnostics.size() == 1U &&
             std::all_of(capabilityDiagnostics.begin(), capabilityDiagnostics.end(), [](const auto& diagnostic) {
                 return diagnostic.code == kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability;
-            }), "public capability validator did not aggregate external-event and output failures");
+            }), "public capability validator did not preserve the external-event failure");
     const auto inspector = ParticleEmitterInspectorModel::Build(unsupported, 11U, 2U, nullptr, nullptr);
-    Require(inspector.outputChoices.size() == 8U && !inspector.outputChoices[7].enabled &&
-            inspector.outputChoices[7].diagnostics.size() == 1U &&
+    Require(inspector.outputChoices.size() == 8U && inspector.outputChoices[7].enabled &&
+            inspector.outputChoices[7].diagnostics.empty() &&
             inspector.modules.size() == 3U && inspector.modules[2].selected &&
             unsupported.emitters[0].output.type == kb::scene::ParticleOutputType::Volumetric,
-        "inspector did not expose disabled capability diagnostics or preserve authored unsupported data");
+        "inspector did not expose the supported volumetric output or preserve authored data");
     Require(ParticleEditorCommands::RemoveModule(document, workspace, 11U, 2U).Succeeded() &&
             document.Asset().emitters[0].modules.size() == 2U &&
             document.Asset().emitters[0].modules[0].authoringOrder == 1U &&
@@ -569,16 +569,17 @@ void TestProductionBakeCacheAndCapabilityGates() {
     Require(bake(effect).status == ParticleBakeStatus::Baked,
         "future compiled cache format was accepted instead of atomically rebuilt");
 
-    for (const kb::scene::ParticleOutputType unsupported : {kb::scene::ParticleOutputType::Volumetric}) {
+    {
         auto candidate = effect;
-        candidate.emitters[0].output.type = unsupported;
-        candidate.emitters[0].output.payload = kb::scene::DefaultParticleOutputPayload(unsupported);
-        candidate.emitters[0].output.mesh = unsupported == kb::scene::ParticleOutputType::Mesh
-            ? kb::scene::ParticleAssetReference{.assetId = 73U} : kb::scene::ParticleAssetReference{};
-        const ParticleBakeResult rejected = bake(candidate);
+        candidate.emitters[0].output.type = kb::scene::ParticleOutputType::Volumetric;
+        candidate.emitters[0].output.payload = kb::scene::ParticleVolumetricOutput{};
+        kb::particle_plugin::ParticleCompilerCapabilities capabilities;
+        capabilities.volumetric = false;
+        const ParticleBakeResult rejected = ParticleBakeService::Bake({.workingAsset = candidate, .owner = owner,
+            .registry = registry, .cacheRoot = cacheRoot, .compile = {.capabilities = capabilities}});
         Require(rejected.status == ParticleBakeStatus::UnsupportedCapability && !rejected.diagnostics.empty() &&
                 rejected.diagnostics.front().code == kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
-            "unsupported output was silently downgraded by Bake");
+            "unsupported volumetric output was silently downgraded by Bake");
     }
     {
         auto candidate = effect;
@@ -623,6 +624,21 @@ void TestProductionBakeCacheAndCapabilityGates() {
                 accepted.effect->emitters[0].beamNoiseAmplitude == 0.25F &&
                 accepted.effect->emitters[0].beamNoiseFrequency == 1.5F,
             "Beam Bake did not preserve the validated output contract in the compiled cache");
+    }
+    {
+        auto candidate = effect;
+        candidate.emitters[0].output.type = kb::scene::ParticleOutputType::Volumetric;
+        candidate.emitters[0].output.payload = kb::scene::ParticleVolumetricOutput{
+            .density = 0.75F, .radiusScale = 1.25F, .lowQualitySteps = 8U, .highQualitySteps = 32U};
+        kb::particle_plugin::ParticleCompilerCapabilities capabilities;
+        capabilities.volumetric = true;
+        const ParticleBakeResult accepted = ParticleBakeService::Bake({.workingAsset = candidate, .owner = owner,
+            .registry = registry, .cacheRoot = cacheRoot, .compile = {.capabilities = capabilities}});
+        Require(accepted.Succeeded() && accepted.effect->emitters[0].volumetricDensity == 0.75F &&
+                accepted.effect->emitters[0].volumetricRadiusScale == 1.25F &&
+                accepted.effect->emitters[0].volumetricLowQualitySteps == 8U &&
+                accepted.effect->emitters[0].volumetricHighQualitySteps == 32U,
+            "Volumetric Bake did not preserve the validated output contract in the compiled cache");
     }
     auto gpuRequired = effect;
     gpuRequired.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualRequired;
@@ -731,6 +747,25 @@ void TestIsolatedRuntimePreviewAndGpuRelease() {
             snapshotLifetime.expired(),
         "preview release leaked its runtime scene, retained snapshot, or renderer-owned scene cache");
     renderer.Shutdown();
+
+    for (std::uint32_t cycle = 0U; cycle < 100U; ++cycle) {
+        kb::particle_editor::ParticlePreviewSession cyclePreview;
+        Require(cyclePreview.Start(project, sourceRegistry, kb::assets::AssetId{71U},
+                    "/Game/Effects/VolumetricLifecycle.kbvfx", effect).Succeeded(),
+            "preview lifecycle stress test did not reload the particle provider");
+        Require(cyclePreview.Tick(1.0F / 60.0F).Succeeded(),
+            "preview lifecycle stress test did not advance its isolated scene");
+
+        kb::render::Renderer cycleRenderer;
+        Require(cycleRenderer.Initialize(surface, &display) && cycleRenderer.BeginFrame() &&
+                cyclePreview.Submit(cycleRenderer),
+            "preview lifecycle stress test did not initialize, submit, and bind a renderer device");
+        cycleRenderer.EndFrame();
+        cyclePreview.Release(cycleRenderer);
+        Require(cycleRenderer.RuntimeResourceStats().renderSceneCount == 0U,
+            "preview lifecycle stress test retained a renderer scene after release");
+        cycleRenderer.Shutdown();
+    }
 }
 
 } // namespace

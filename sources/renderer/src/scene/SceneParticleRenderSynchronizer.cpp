@@ -26,7 +26,8 @@ void SceneParticleRenderSynchronizer::Sync(const kb::scene::Scene& scene, Render
             kb::particles::ParticleRenderOutputCapability::Mesh |
             kb::particles::ParticleRenderOutputCapability::Trail |
             kb::particles::ParticleRenderOutputCapability::Ribbon |
-            kb::particles::ParticleRenderOutputCapability::Beam,
+            kb::particles::ParticleRenderOutputCapability::Beam |
+            kb::particles::ParticleRenderOutputCapability::Volumetric,
         .gpuDrawing = true,
         .instancing = true,
         .softParticles = true,

@@ -866,6 +866,8 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         : effectiveLightingConfig.lightingPath == SceneRenderLightingPath::ClusteredForwardPlus
             ? RenderMaterialGraphShadingPath::ForwardPlus
             : RenderMaterialGraphShadingPath::Forward;
+    sceneRenderer_->SetParticleVolumetricLowQuality(
+        runtimeGraphContext.qualityLevel == RenderMaterialGraphQualityLevel::Low);
     runtimeMaterialResolver_.SetGraphBuildContext(std::move(runtimeGraphContext));
     if (!lastRuntimeMaterialLightingPath_.has_value() ||
         *lastRuntimeMaterialLightingPath_ != effectiveLightingConfig.lightingPath ||

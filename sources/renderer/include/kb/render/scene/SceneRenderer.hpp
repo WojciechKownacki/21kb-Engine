@@ -84,6 +84,8 @@ public:
     [[nodiscard]] SceneRenderDiagnostics ValidateSceneDiagnostics(const RenderScene& renderScene, MeshPassType pass) const;
     [[nodiscard]] SceneRenderSubmitStats LastSubmitStats() const noexcept;
     [[nodiscard]] kb::particles::ParticleGpuVisualAvailability ParticleGpuVisualAvailability() const noexcept;
+    void SetParticleVolumetricLowQuality(bool lowQuality) noexcept;
+    [[nodiscard]] bool ParticleVolumetricLowQuality() const noexcept;
     [[nodiscard]] const SceneRenderDiagnostics& LastDiagnostics() const noexcept;
     [[nodiscard]] MaterialProgramRegistryStats MaterialProgramStats() const noexcept;
     // Draw-time, per-material graph render outcome for the last scene submit: the true GPU vs
@@ -118,6 +120,7 @@ private:
     float frameDeltaSeconds_ = 0.0F;
     std::uint32_t frameTimeIndex_ = 0U;
     std::array<float, 4> dynamicParameter_{};
+    bool particleVolumetricLowQuality_ = false;
     bool initialized_ = false;
 };
 

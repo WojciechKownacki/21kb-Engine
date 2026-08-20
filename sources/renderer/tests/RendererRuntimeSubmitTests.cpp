@@ -2537,6 +2537,28 @@ void RunRendererSubmitsParticleStripSnapshotsTest() {
     submit(2U, kb::particles::ParticleRenderOutput::Trail, particles, true, true);
     submit(3U, kb::particles::ParticleRenderOutput::Ribbon, particles, true, true);
     submit(4U, kb::particles::ParticleRenderOutput::Beam, {}, true, true);
+    emitter.output = kb::particles::ParticleRenderOutput::Volumetric;
+    emitter.particleCount = 1U;
+    emitter.liveParticleCount = 1U;
+    emitter.volumetricDensity = 0.75F;
+    emitter.volumetricRadiusScale = 0.5F;
+    emitter.volumetricLowQualitySteps = 8U;
+    emitter.volumetricHighQualitySteps = 24U;
+    const std::array volumetricEmitters{emitter};
+    const std::array volumetricParticles{
+        kb::particles::ParticleRenderRecord{.position = {0.0F, 0.0F, 0.2F}, .size = 1.0F,
+            .particleId = 13U, .packedColor = 0xFFFFFFFFU}};
+    Require(kb::particles::ParticlePlayback::PublishRenderSnapshot(scene, backend, {
+                .revision = 5U, .fixedStepIndex = 5U, .emitters = volumetricEmitters,
+                .particles = volumetricParticles}).Succeeded(),
+        "Volumetric no-depth contract test could not publish its snapshot");
+    SubmitLifecycleFrame(renderer, scene, LifecycleSubmitDesc(17U),
+        "Volumetric no-depth contract test did not submit its scene");
+    const SceneRenderSubmitStats noDepthStats = renderer.LastSceneSubmitStats();
+    Require(noDepthStats.failedParticleBatchCount == 1U &&
+            noDepthStats.submittedVolumetricParticleCount == 0U &&
+            noDepthStats.volumetricParticleRaymarchStepCount == 0U,
+        "Volumetric particles fell back to a quad when the opaque depth texture was unavailable");
     renderer.Shutdown();
     Require(kb::particles::ParticlePlayback::UnregisterBackend(scene, backend).Succeeded(),
         "Particle strip submit test could not unregister its snapshot backend");
@@ -2697,6 +2719,88 @@ void RunRendererDrawsParticleStripSnapshotPixelsTest() {
     renderer.Shutdown();
     Require(kb::particles::ParticlePlayback::UnregisterBackend(scene, backend).Succeeded(),
         "Particle strip pixel test could not unregister its snapshot backend");
+}
+
+void RunRendererDrawsVolumetricParticleSnapshotPixelsTest() {
+    kb::scene::Scene scene;
+    SnapshotBackend backend;
+    Require(kb::particles::ParticlePlayback::RegisterBackend(scene, backend).Succeeded() &&
+            kb::particles::ParticlePlayback::WarmupRenderSnapshots(scene).Succeeded(),
+        "Volumetric pixel test could not initialize its snapshot channel");
+    kb::particles::ParticleRenderEmitterRecord emitter{};
+    emitter.instanceId = 1U;
+    emitter.effectAssetId = 2U;
+    emitter.emitterId = 3U;
+    emitter.assetGeneration = 1U;
+    emitter.materialAssetId = 1U;
+    emitter.firstParticle = 0U;
+    emitter.particleCount = 1U;
+    emitter.liveParticleCount = 1U;
+    emitter.output = kb::particles::ParticleRenderOutput::Volumetric;
+    emitter.status = kb::particles::ParticleRenderEmitterStatus::Playing;
+    emitter.volumetricDensity = 0.75F;
+    emitter.volumetricRadiusScale = 0.35F;
+    emitter.volumetricLowQualitySteps = 8U;
+    emitter.volumetricHighQualitySteps = 24U;
+    emitter.boundsMinimum = {-1.0F, -1.0F, -1.0F};
+    emitter.boundsMaximum = {1.0F, 1.0F, 1.0F};
+    const std::array emitters{emitter};
+    const std::array particles{
+        kb::particles::ParticleRenderRecord{.position = {0.0F, 0.0F, 0.2F}, .size = 1.0F,
+            .particleId = 11U, .packedColor = 0xFFFFFFFFU}};
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Volumetric pixel test could not create a native render surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Volumetric pixel test renderer did not initialize");
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(), "Volumetric pixel test could not create its readback target");
+        Require(kb::particles::ParticlePlayback::PublishRenderSnapshot(scene, backend, {
+                    .revision = 1U, .fixedStepIndex = 1U, .emitters = emitters,
+                    .particles = particles}).Succeeded(),
+            "Volumetric pixel test could not publish its snapshot");
+        const RenderSceneSubmitDesc desc{
+            .target = target.Binding(),
+            .cameraOverride = IdentityCamera(),
+            .lightingConfig = SceneRenderLightingConfig{.lightingPath = SceneRenderLightingPath::Forward},
+            .clearRgba = 0x101820FFU,
+            .editorSceneOverlaysEnabled = false, .postProcessEnabled = false,
+            .selectionMaskEnabled = false, .selectionOutlineEnabled = false,
+        };
+        SubmitLifecycleFrame(renderer, scene, desc, "Volumetric pixel test did not submit its snapshot");
+        const SceneRenderSubmitStats stats = renderer.LastSceneSubmitStats();
+        Require(stats.submittedParticleDrawCallCount == 1U &&
+                stats.submittedVolumetricParticleCount == 1U &&
+                stats.volumetricParticleRaymarchStepCount == 24U &&
+                stats.failedParticleBatchCount == 0U,
+            "Volumetric pixel test did not submit the depth-aware high-quality raymarch path");
+        RenderSceneSubmitDesc lowQualityDesc = desc;
+        lowQualityDesc.materialGraphContext.qualityLevel = RenderMaterialGraphQualityLevel::Low;
+        SubmitLifecycleFrame(renderer, scene, lowQualityDesc,
+            "Volumetric pixel test did not submit its low-quality snapshot");
+        const SceneRenderSubmitStats lowQualityStats = renderer.LastSceneSubmitStats();
+        Require(lowQualityStats.submittedParticleDrawCallCount == 1U &&
+                lowQualityStats.submittedVolumetricParticleCount == 1U &&
+                lowQualityStats.volumetricParticleRaymarchStepCount == 8U &&
+                lowQualityStats.failedParticleBatchCount == 0U,
+            "Volumetric low quality changed more than the authored raymarch step budget");
+        const std::vector<std::uint8_t> pixels = target.ReadPixels();
+        const std::array<std::uint8_t, 3U> background{pixels[0], pixels[1], pixels[2]};
+        std::size_t geometryPixelCount = 0U;
+        for (std::size_t offset = 0U; offset < pixels.size(); offset += 4U) {
+            if (pixels[offset] != background[0] || pixels[offset + 1U] != background[1] ||
+                pixels[offset + 2U] != background[2]) ++geometryPixelCount;
+        }
+        Require(geometryPixelCount >= 16U,
+            "Volumetric pixel test read back only the clear color instead of the raymarched impostor");
+    }
+    renderer.Shutdown();
+    Require(kb::particles::ParticlePlayback::UnregisterBackend(scene, backend).Succeeded(),
+        "Volumetric pixel test could not unregister its snapshot backend");
 }
 #endif
 
@@ -5267,6 +5371,13 @@ void RunRendererParticleStripSnapshotSubmitTest() {
 #endif
 }
 
+void RunRendererParticleVolumetricSnapshotSubmitTest() {
+    RunRendererSubmitsParticleStripSnapshotsTest();
+#if defined(_WIN32)
+    RunRendererDrawsVolumetricParticleSnapshotPixelsTest();
+#endif
+}
+
 void RunRendererRuntimeSubmitTests() {
     RunEditorCameraWireframesSubmitInHeadlessNoopTest();
     RunMaterialFrameTimeAdvanceTest();
@@ -5276,6 +5387,7 @@ void RunRendererRuntimeSubmitTests() {
     RunRendererPublishesSceneVisibilityFeedbackTest();
     RunRendererParticleMeshSnapshotSubmitTest();
     RunRendererParticleStripSnapshotSubmitTest();
+    RunRendererParticleVolumetricSnapshotSubmitTest();
     RunRendererReleaseSceneDropsRuntimeResourcesTest();
     RunRendererPrunesUnreferencedResourcesAfterRetentionTest();
     RunRendererReloadsChangedRuntimeMeshAssetTest();

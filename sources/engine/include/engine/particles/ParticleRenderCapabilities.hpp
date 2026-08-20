@@ -34,6 +34,7 @@ enum class ParticleRenderOutputCapability : std::uint32_t {
     Trail = 1U << 4U,
     Ribbon = 1U << 5U,
     Beam = 1U << 6U,
+    Volumetric = 1U << 7U,
 };
 
 [[nodiscard]] constexpr ParticleRenderOutputCapability operator|(

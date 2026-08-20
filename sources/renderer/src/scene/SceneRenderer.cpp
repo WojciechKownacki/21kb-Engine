@@ -103,6 +103,8 @@ bool SceneRenderer::Initialize() {
         Shutdown();
         return false;
     }
+    particleRenderer_->SetVolumetricQuality(particleVolumetricLowQuality_
+        ? ParticleVolumetricQuality::Low : ParticleVolumetricQuality::High);
     if (!graphShaderCacheRoot_.empty()) {
         meshSubmitter_->SetGraphShaderCacheRoot(graphShaderCacheRoot_);
     }
@@ -435,6 +437,18 @@ kb::particles::ParticleGpuVisualAvailability SceneRenderer::ParticleGpuVisualAva
     return particleRenderer_ == nullptr
         ? kb::particles::ParticleGpuVisualAvailability::RendererUnavailable
         : particleRenderer_->GpuVisualAvailability();
+}
+
+void SceneRenderer::SetParticleVolumetricLowQuality(bool lowQuality) noexcept {
+    particleVolumetricLowQuality_ = lowQuality;
+    if (particleRenderer_ != nullptr) {
+        particleRenderer_->SetVolumetricQuality(lowQuality
+            ? ParticleVolumetricQuality::Low : ParticleVolumetricQuality::High);
+    }
+}
+
+bool SceneRenderer::ParticleVolumetricLowQuality() const noexcept {
+    return particleVolumetricLowQuality_;
 }
 
 const SceneRenderDiagnostics& SceneRenderer::LastDiagnostics() const noexcept {

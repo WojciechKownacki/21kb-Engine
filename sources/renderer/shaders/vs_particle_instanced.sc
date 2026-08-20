@@ -62,5 +62,6 @@ void main()
     v_texcoord0 = (a_texcoord0 + cell) / vec2(columns, rows);
     v_color0 = i_data3;
     v_shadowPos = clip;
-    v_shadowFlags = vec4(abs(mul(u_view, vec4(world, 1.0)).z), 0.0, 0.0, 0.0);
+    v_shadowFlags = vec4(abs(mul(u_view, vec4(world, 1.0)).z), a_position.xy * 2.0,
+        i_data0.w * outputScale);
 }
