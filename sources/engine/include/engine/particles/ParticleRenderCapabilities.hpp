@@ -8,6 +8,21 @@ enum class ParticleRenderCapabilityStatus : std::uint8_t {
     Success,
     InvalidConsumer,
     ConsumerConflict,
+    StaleFixedStep,
+    GpuCatchupOverflow,
+};
+
+// Published by the renderer as the complete reason why visual GPU simulation
+// can or cannot be selected for a scene. The value is stable until the next
+// capability epoch; a backend must not change a live instance from it.
+enum class ParticleGpuVisualAvailability : std::uint8_t {
+    RendererUnavailable,
+    ComputeUnsupported,
+    ShaderUnavailable,
+    ResourceUnavailable,
+    DeviceFault,
+    GpuCatchupOverflow,
+    Ready,
 };
 
 enum class ParticleRenderOutputCapability : std::uint32_t {
@@ -15,6 +30,10 @@ enum class ParticleRenderOutputCapability : std::uint32_t {
     Billboard = 1U << 0U,
     StretchedBillboard = 1U << 1U,
     PointSprite = 1U << 2U,
+    Mesh = 1U << 3U,
+    Trail = 1U << 4U,
+    Ribbon = 1U << 5U,
+    Beam = 1U << 6U,
 };
 
 [[nodiscard]] constexpr ParticleRenderOutputCapability operator|(
@@ -36,6 +55,10 @@ struct ParticleRenderCapabilities {
     bool instancing = false;
     bool softParticles = false;
     bool subtractiveBlend = false;
+    ParticleGpuVisualAvailability gpuVisualAvailability =
+        ParticleGpuVisualAvailability::RendererUnavailable;
+    std::uint32_t maxGpuVisualParticles = 0U;
+    std::uint64_t maxGpuResourceBytes = 0U;
 };
 
 struct ParticleRenderCapabilityResult {

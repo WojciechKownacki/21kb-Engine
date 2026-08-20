@@ -131,6 +131,7 @@ struct ParticleRenderEmitterRecord {
     ParticleRenderDropReason droppedReason = ParticleRenderDropReason::None;
     ParticleRenderAlignment alignment = ParticleRenderAlignment::CameraFacing;
     ParticleRenderEmitterFlag flags = ParticleRenderEmitterFlag::None;
+    kb::scene::ParticleBackendPolicy backendPolicy = kb::scene::ParticleBackendPolicy::CpuDeterministic;
     // A zero encoded axis represents 256, preserving the authored 1..256 grid
     // without widening the renderer ABI for the common 1x1 case.
     std::uint8_t flipbookColumnsEncoded = 1U;

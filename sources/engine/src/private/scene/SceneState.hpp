@@ -769,6 +769,7 @@ public:
     std::uint64_t particleSimulationBackendEpoch = 0U;
     kb::particles::ParticleRenderSnapshotChannel particleRenderSnapshots;
     kb::particles::ParticleRenderSnapshotResult lastParticleRenderSnapshotPublication{};
+    kb::particles::ParticleGpuVisualStepJournal particleGpuVisualSteps;
     kb::particles::ParticleRenderCapabilities particleRenderCapabilities{};
     std::uint64_t particleRenderConsumerId = 0U;
 #if !defined(NDEBUG)

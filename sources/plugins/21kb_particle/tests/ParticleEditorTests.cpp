@@ -399,10 +399,10 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
         .targetEffect = {.assetId = 200U}});
     const auto capabilityDiagnostics =
         kb::particle_plugin::ParticleEffectCompiler::ValidateCapabilities(unsupported);
-    Require(capabilityDiagnostics.size() == 3U &&
+    Require(capabilityDiagnostics.size() == 2U &&
             std::all_of(capabilityDiagnostics.begin(), capabilityDiagnostics.end(), [](const auto& diagnostic) {
                 return diagnostic.code == kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability;
-            }), "public capability validator did not aggregate GPU policy, external event, and output failures");
+            }), "public capability validator did not aggregate external-event and output failures");
     const auto inspector = ParticleEmitterInspectorModel::Build(unsupported, 11U, 2U, nullptr, nullptr);
     Require(inspector.outputChoices.size() == 8U && !inspector.outputChoices[7].enabled &&
             inspector.outputChoices[7].diagnostics.size() == 1U &&
@@ -626,8 +626,10 @@ void TestProductionBakeCacheAndCapabilityGates() {
     }
     auto gpuRequired = effect;
     gpuRequired.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualRequired;
-    Require(bake(gpuRequired).status == ParticleBakeStatus::UnsupportedCapability,
-        "GPU-required policy was silently downgraded by the current compiler");
+    const ParticleBakeResult gpuRequiredBake = bake(gpuRequired);
+    Require(gpuRequiredBake.Succeeded() &&
+            gpuRequiredBake.effect->backendPolicy == kb::scene::ParticleBackendPolicy::GpuVisualRequired,
+        "GPU-required policy was not retained for the runtime capability classifier");
 
     auto child = effect;
     child.effectId = 74U;

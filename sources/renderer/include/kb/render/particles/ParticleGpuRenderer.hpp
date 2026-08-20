@@ -2,12 +2,14 @@
 
 #include "kb/render/particles/ParticleRenderBatcher.hpp"
 #include "kb/render/particles/ParticleStripRenderer.hpp"
+#include "kb/render/particles/ParticleGpuVisualSimulation.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 
 #include <bgfx/bgfx.h>
 
 #include <cstdint>
+#include <vector>
 
 namespace kb::render {
 
@@ -25,6 +27,7 @@ public:
     void Shutdown() noexcept;
     void Warmup(std::uint32_t particleCapacity);
     [[nodiscard]] bool IsInitialized() const noexcept;
+    [[nodiscard]] kb::particles::ParticleGpuVisualAvailability GpuVisualAvailability() const noexcept;
 
     [[nodiscard]] ParticleGpuSubmitResult Submit(
         bgfx::ViewId viewId,
@@ -47,6 +50,9 @@ public:
     [[nodiscard]] const ParticleStripBuildResult& BuildStrips(
         const kb::particles::ParticleRenderSnapshot& snapshot,
         const SceneRenderCamera& camera) noexcept;
+    [[nodiscard]] bool PrepareVisualSimulation(
+        bgfx::ViewId viewId,
+        const kb::particles::ParticleRenderSnapshot& snapshot) noexcept;
     [[nodiscard]] ParticleStripSubmitResult SubmitStripDraw(bgfx::ViewId viewId, std::uint32_t drawIndex) noexcept;
     void ReleaseParticleScene(std::uint64_t sceneId) noexcept;
     void ReleaseAllParticleScenes() noexcept;
@@ -56,7 +62,9 @@ public:
 private:
     ParticleRenderBatcher batcher_;
     ParticleStripRenderer stripRenderer_;
+    ParticleGpuVisualSimulation visualSimulation_;
     ParticleRenderBatchBuildResult lastBuild_{};
+    std::vector<std::uint32_t> visualMaskScratch_;
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle atlasSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle sceneDepthSampler_ = BGFX_INVALID_HANDLE;

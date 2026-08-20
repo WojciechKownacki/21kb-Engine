@@ -269,6 +269,7 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
     renderSceneSynchronizer_ = std::make_unique<EcsRenderSceneSynchronizer>();
     renderSceneSynchronizer_->SetSkinningPaletteAllocator(&sceneRenderer_->SkinningPalettes());
     particleRenderSynchronizer_ = std::make_unique<SceneParticleRenderSynchronizer>();
+    particleRenderSynchronizer_->SetGpuVisualAvailability(sceneRenderer_->ParticleGpuVisualAvailability());
     auxFrameRenderer_ = std::make_unique<AuxFrameRenderer>();
     screenCapture_ = std::make_unique<RendererScreenCapture>();
     ApplyRuntimeSceneResourceReserve();
@@ -814,6 +815,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     // Retain one view-independent, immutable simulation snapshot in renderer state.
     // GPU batching and alignment remain per-view work in the transparent pass.
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle sync begin");
+    particleRenderSynchronizer_->SetGpuVisualAvailability(sceneRenderer_->ParticleGpuVisualAvailability());
     particleRenderSynchronizer_->Sync(scene, renderScene);
     if (const auto& particleSnapshot = renderScene.ParticleRenderSnapshot(); particleSnapshot != nullptr) {
         for (const kb::particles::ParticleRenderEmitterRecord& emitter : particleSnapshot->Emitters()) {

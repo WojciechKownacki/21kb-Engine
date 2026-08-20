@@ -1077,11 +1077,14 @@ void TestModuleOrderEnableAndGravityContracts() {
 }
 
 void TestModuleCompileRejection() {
-    const auto createStatus = [](kb::scene::ParticleEffectAsset effect) {
+    const auto createResult = [](kb::scene::ParticleEffectAsset effect) {
         Fixture fixture(std::move(effect));
         kb::particle_plugin::CpuParticleBackend backend;
         backend.Warmup();
-        return backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner).status;
+        return backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    };
+    const auto createStatus = [&](kb::scene::ParticleEffectAsset effect) {
+        return createResult(std::move(effect)).status;
     };
 
     auto unsupportedExternalEffect = Fixture::MakeEffect();
@@ -1094,6 +1097,78 @@ void TestModuleCompileRejection() {
     Require(createStatus(std::move(unsupportedExternalEffect)) ==
             kb::particles::ParticleRuntimeStatus::UnsupportedOutput,
         "external effect event action was accepted by the internal-event compiler");
+
+    auto gpuRequired = Fixture::MakeEffect();
+    gpuRequired.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualRequired;
+    const kb::particles::ParticleRuntimeResult requiredResult = createResult(std::move(gpuRequired));
+    Require(requiredResult.status == kb::particles::ParticleRuntimeStatus::BackendUnavailable &&
+            requiredResult.gpuVisualAvailability ==
+                kb::particles::ParticleGpuVisualAvailability::RendererUnavailable,
+        "GPU-required effect silently created without a renderer-owned GPU visual pipeline");
+
+    Fixture preferredFixture(Fixture::MakeEffect());
+    kb::particle_plugin::CpuParticleBackend preferredBackend;
+    preferredBackend.Warmup();
+    auto preferredEffect = Fixture::MakeEffect();
+    preferredEffect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+    Require(preferredFixture.scene.Assets().Manager().PublishRuntimeAsset(
+                kb::assets::AssetId{preferredFixture.effectAssetId},
+                std::make_shared<kb::scene::ParticleEffectAsset>(std::move(preferredEffect))),
+        "GPU-preferred capability fixture could not publish its runtime asset");
+    const kb::particles::ParticleRuntimeResult preferredResult = preferredBackend.Create(
+        preferredFixture.scene, preferredFixture.effectAssetId, preferredFixture.owner);
+    Require(preferredResult.Succeeded(), "GPU-preferred effect did not explicitly select its CPU fallback");
+    const kb::particles::ParticleRuntimeQueryResult preferredQuery = preferredBackend.Query(
+        preferredFixture.scene, preferredResult.instanceId);
+    Require(preferredQuery.executionPath == kb::particles::ParticleRuntimeExecutionPath::CpuFallback &&
+            preferredQuery.gpuVisualAvailability ==
+                kb::particles::ParticleGpuVisualAvailability::RendererUnavailable,
+        "GPU-preferred effect did not report its CPU fallback reason");
+
+    Fixture deviceFaultFixture(Fixture::MakeEffect());
+    kb::particle_plugin::CpuParticleBackend deviceFaultBackend;
+    deviceFaultBackend.Warmup();
+    constexpr std::uint64_t gpuConsumer = 77U;
+    Require(kb::particles::ParticlePlayback::PublishRenderCapabilities(deviceFaultFixture.scene, gpuConsumer, {
+                .capabilityEpoch = 1U,
+                .gpuVisualAvailability = kb::particles::ParticleGpuVisualAvailability::Ready,
+            }).Succeeded(),
+        "GPU visual capability fixture could not publish its ready state");
+    auto requiredReady = Fixture::MakeEffect();
+    requiredReady.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualRequired;
+    Require(deviceFaultFixture.scene.Assets().Manager().PublishRuntimeAsset(
+                kb::assets::AssetId{deviceFaultFixture.effectAssetId},
+                std::make_shared<kb::scene::ParticleEffectAsset>(std::move(requiredReady))),
+        "GPU-required device fault fixture could not publish its runtime asset");
+    const kb::particles::ParticleRuntimeResult visualResult = deviceFaultBackend.Create(
+        deviceFaultFixture.scene, deviceFaultFixture.effectAssetId, deviceFaultFixture.owner);
+    Require(visualResult.Succeeded() &&
+            kb::particles::ParticlePlayback::PublishRenderCapabilities(deviceFaultFixture.scene, gpuConsumer, {
+                .capabilityEpoch = 2U,
+                .gpuVisualAvailability = kb::particles::ParticleGpuVisualAvailability::DeviceFault,
+            }).Succeeded() &&
+            deviceFaultBackend.Step(deviceFaultFixture.scene,
+                kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "GPU visual device-fault fixture could not cross a fixed-step boundary");
+    const kb::particles::ParticleRuntimeQueryResult faultQuery = deviceFaultBackend.Query(
+        deviceFaultFixture.scene, visualResult.instanceId);
+    Require(faultQuery.executionPath == kb::particles::ParticleRuntimeExecutionPath::GpuVisual &&
+            faultQuery.gpuVisualAvailability == kb::particles::ParticleGpuVisualAvailability::DeviceFault &&
+            faultQuery.requiresBackendRestart &&
+            deviceFaultBackend.Play(deviceFaultFixture.scene, visualResult.instanceId).status ==
+                kb::particles::ParticleRuntimeStatus::BackendUnavailable &&
+            deviceFaultBackend.Restart(deviceFaultFixture.scene, visualResult.instanceId).status ==
+                kb::particles::ParticleRuntimeStatus::BackendUnavailable &&
+            kb::particles::ParticlePlayback::PublishRenderCapabilities(deviceFaultFixture.scene, gpuConsumer, {
+                .capabilityEpoch = 3U,
+                .gpuVisualAvailability = kb::particles::ParticleGpuVisualAvailability::Ready,
+            }).Succeeded() &&
+            deviceFaultBackend.Restart(deviceFaultFixture.scene, visualResult.instanceId).Succeeded() &&
+            !deviceFaultBackend.Query(deviceFaultFixture.scene, visualResult.instanceId).requiresBackendRestart,
+        "device fault silently changed the GPU visual backend instead of requiring restart");
+    Require(kb::particles::ParticlePlayback::ClearRenderCapabilities(
+                deviceFaultFixture.scene, gpuConsumer).Succeeded(),
+        "GPU visual device-fault fixture did not release its capability consumer");
 
     const auto addTargetAndBinding = [](kb::scene::ParticleEffectAsset& effect,
                                         kb::scene::ParticleEventTrigger trigger) {

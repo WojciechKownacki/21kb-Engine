@@ -46,6 +46,8 @@ void WriteInitialVelocity(std::vector<std::uint8_t>& bytes, const kb::scene::Par
 
 void WriteEffect(std::vector<std::uint8_t>& bytes, const ParticleCompiledEffect& effect) {
     WriteUInt64(bytes, effect.determinismSeed); WriteFloat(bytes, effect.durationSeconds); WriteBool(bytes, effect.looping);
+    WriteUInt8(bytes, static_cast<std::uint8_t>(effect.backendPolicy));
+    WriteUInt8(bytes, static_cast<std::uint8_t>(effect.gpuCatchupPolicy));
     WriteUInt8(bytes, effect.emitterCount); WriteUInt8(bytes, effect.eventBindingCount);
     for (std::uint8_t emitterIndex = 0U; emitterIndex < effect.emitterCount; ++emitterIndex) {
         const auto& e = effect.emitters[emitterIndex];
@@ -149,9 +151,14 @@ class Reader {
 };
 
 bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
+    std::uint8_t backendPolicy = 0U, gpuCatchupPolicy = 0U;
     if (!reader.U64(effect.determinismSeed) || !reader.F(effect.durationSeconds) || !reader.Bool(effect.looping) ||
+        !reader.U8(backendPolicy) || backendPolicy > static_cast<std::uint8_t>(kb::scene::ParticleBackendPolicy::GpuVisualRequired) ||
+        !reader.U8(gpuCatchupPolicy) || gpuCatchupPolicy > static_cast<std::uint8_t>(kb::scene::ParticleGpuCatchupPolicy::BoundedWarmup) ||
         !reader.U8(effect.emitterCount) || effect.emitterCount > kb::scene::kParticleEffectMaxEmitters ||
         !reader.U8(effect.eventBindingCount) || effect.eventBindingCount > kb::scene::kParticleEffectMaxEventBindings) return false;
+    effect.backendPolicy = static_cast<kb::scene::ParticleBackendPolicy>(backendPolicy);
+    effect.gpuCatchupPolicy = static_cast<kb::scene::ParticleGpuCatchupPolicy>(gpuCatchupPolicy);
     for (std::uint8_t emitterIndex = 0U; emitterIndex < effect.emitterCount; ++emitterIndex) {
         auto& e = effect.emitters[emitterIndex];
         std::uint8_t output = 0U, blend = 0U, sort = 0U, alignment = 0U, space = 0U, mode = 0U;
