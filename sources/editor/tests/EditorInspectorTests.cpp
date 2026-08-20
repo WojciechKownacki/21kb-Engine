@@ -217,6 +217,9 @@ void RunAudioComponentCatalogTest() {
     kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::Find("Region Portal") != nullptr, "Region Portal component id should resolve");
     kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::Find("Secondary Frame") != nullptr, "Secondary Frame component id should resolve");
     kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::Find("TerrainEditor") != nullptr, "Terrain Editor component id should resolve");
+    const kb::editor::InspectorComponentTile* particleEffect = kb::editor::InspectorComponentCatalog::Find("Particle Effect");
+    kb::editor::tests::Require(particleEffect != nullptr && particleEffect->category == "Rendering", "Particle Effect component should be available in the Rendering catalog");
+    kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::RequiredPluginId("Particle Effect") == "Rendering.21kbParticle", "Particle Effect component should require the particle provider");
 }
 
 void RunObjectClassificationCatalogTest() {
