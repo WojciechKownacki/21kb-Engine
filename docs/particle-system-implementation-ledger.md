@@ -24,6 +24,7 @@
 - The GPU impostor samples opaque depth, discards fully occluded intersections, terminates its chord at the opaque surface, and accumulates extinction in a bounded 1..256-step loop. Renderer statistics expose submitted volumetric particle count and total raymarch steps.
 - Existing material quality selection maps `Low` to the authored low step count; all other quality levels use the authored high count. Native readback coverage verifies high (24) and low (8) telemetry and non-clear pixels with a depth target; the no-depth contract is covered in the headless runtime path.
 - Focused verification passed: snapshot contract, CPU backend, editor core (including 100 preview/provider/scene/device lifecycle cycles), GPU particle batcher, shader staging/manifest, and the `particle-volumetric-submit` renderer selector.
+- Windows ASan now auto-resolves the library, STL support, and runtime DLL from the same active MSVC toolset, copies the DLL beside each first-party binary, and is gated in CI for the particle and renderer targets. A dedicated local ASan build passed `kb_21kb_particle_snapshot_tests`.
 
 ### Stage 8 package 1 of 2 — data plumbing and capability gate: closed, independently verified
 

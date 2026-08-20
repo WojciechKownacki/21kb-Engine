@@ -37,29 +37,63 @@ option(KB_BUILD_PROVIDER_MODULES_AS_DLL "Build provider engine modules as hot-re
 
 set(KB_MSVC_ASAN_RUNTIME_DIR "" CACHE PATH "Directory containing the MSVC-compatible LLVM AddressSanitizer runtime")
 set(KB_MSVC_STL_ASAN_RUNTIME_DIR "" CACHE PATH "Directory containing the MSVC AddressSanitizer STL runtime")
+set(KB_MSVC_ASAN_DYNAMIC_RUNTIME "" CACHE FILEPATH "Path to the MSVC AddressSanitizer runtime DLL")
+
+if(MSVC)
+    get_filename_component(_kb_msvc_toolset_root "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    get_filename_component(_kb_msvc_toolset_root "${_kb_msvc_toolset_root}" DIRECTORY)
+    get_filename_component(_kb_msvc_toolset_root "${_kb_msvc_toolset_root}" DIRECTORY)
+    get_filename_component(_kb_msvc_toolset_root "${_kb_msvc_toolset_root}" DIRECTORY)
+endif()
 
 if(MSVC AND KB_ENABLE_SANITIZERS AND NOT KB_MSVC_ASAN_RUNTIME_DIR)
-    file(GLOB _kb_msvc_asan_runtime_candidates
-        "C:/Program Files/Microsoft Visual Studio/*/*/VC/Tools/Llvm/x64/lib/clang/*/lib/windows"
-    )
-    foreach(_kb_msvc_asan_runtime_candidate IN LISTS _kb_msvc_asan_runtime_candidates)
-        if(EXISTS "${_kb_msvc_asan_runtime_candidate}/clang_rt.asan_dynamic_runtime_thunk-x86_64.lib")
-            set(KB_MSVC_ASAN_RUNTIME_DIR "${_kb_msvc_asan_runtime_candidate}" CACHE PATH "Directory containing the MSVC-compatible LLVM AddressSanitizer runtime" FORCE)
-            break()
+    if(EXISTS "${_kb_msvc_toolset_root}/lib/x64/clang_rt.asan_dynamic_runtime_thunk-x86_64.lib")
+        set(KB_MSVC_ASAN_RUNTIME_DIR "${_kb_msvc_toolset_root}/lib/x64" CACHE PATH "Directory containing the MSVC-compatible LLVM AddressSanitizer runtime" FORCE)
+    else()
+        file(GLOB _kb_msvc_asan_runtime_candidates
+            "C:/Program Files/Microsoft Visual Studio/*/*/VC/Tools/Llvm/x64/lib/clang/*/lib/windows"
+            "C:/Program Files/Microsoft Visual Studio/*/*/VC/Tools/MSVC/*/lib/x64"
+        )
+        foreach(_kb_msvc_asan_runtime_candidate IN LISTS _kb_msvc_asan_runtime_candidates)
+            if(EXISTS "${_kb_msvc_asan_runtime_candidate}/clang_rt.asan_dynamic_runtime_thunk-x86_64.lib")
+                set(KB_MSVC_ASAN_RUNTIME_DIR "${_kb_msvc_asan_runtime_candidate}" CACHE PATH "Directory containing the MSVC-compatible LLVM AddressSanitizer runtime" FORCE)
+                break()
+            endif()
+        endforeach()
+    endif()
+endif()
+
+if(MSVC AND KB_ENABLE_SANITIZERS AND NOT KB_MSVC_ASAN_DYNAMIC_RUNTIME)
+    if(EXISTS "${_kb_msvc_toolset_root}/bin/Hostx64/x64/clang_rt.asan_dynamic-x86_64.dll")
+        set(KB_MSVC_ASAN_DYNAMIC_RUNTIME "${_kb_msvc_toolset_root}/bin/Hostx64/x64/clang_rt.asan_dynamic-x86_64.dll" CACHE FILEPATH "Path to the MSVC AddressSanitizer runtime DLL" FORCE)
+    else()
+        file(GLOB _kb_msvc_asan_dynamic_runtime_candidates
+            "C:/Program Files/Microsoft Visual Studio/*/*/VC/Tools/MSVC/*/bin/Hostx64/x64/clang_rt.asan_dynamic-x86_64.dll"
+        )
+        if(_kb_msvc_asan_dynamic_runtime_candidates)
+            list(SORT _kb_msvc_asan_dynamic_runtime_candidates COMPARE NATURAL ORDER DESCENDING)
+            list(GET _kb_msvc_asan_dynamic_runtime_candidates 0 _kb_msvc_asan_dynamic_runtime_candidate)
+            if(EXISTS "${_kb_msvc_asan_dynamic_runtime_candidate}")
+                set(KB_MSVC_ASAN_DYNAMIC_RUNTIME "${_kb_msvc_asan_dynamic_runtime_candidate}" CACHE FILEPATH "Path to the MSVC AddressSanitizer runtime DLL" FORCE)
+            endif()
         endif()
-    endforeach()
+    endif()
 endif()
 
 if(MSVC AND KB_ENABLE_SANITIZERS AND NOT KB_MSVC_STL_ASAN_RUNTIME_DIR)
-    file(GLOB _kb_msvc_stl_asan_runtime_candidates
-        "C:/Program Files/Microsoft Visual Studio/*/*/VC/Tools/MSVC/*/lib/x64"
-    )
-    foreach(_kb_msvc_stl_asan_runtime_candidate IN LISTS _kb_msvc_stl_asan_runtime_candidates)
-        if(EXISTS "${_kb_msvc_stl_asan_runtime_candidate}/stl_asan.lib")
-            set(KB_MSVC_STL_ASAN_RUNTIME_DIR "${_kb_msvc_stl_asan_runtime_candidate}" CACHE PATH "Directory containing the MSVC AddressSanitizer STL runtime" FORCE)
-            break()
-        endif()
-    endforeach()
+    if(EXISTS "${_kb_msvc_toolset_root}/lib/x64/stl_asan.lib")
+        set(KB_MSVC_STL_ASAN_RUNTIME_DIR "${_kb_msvc_toolset_root}/lib/x64" CACHE PATH "Directory containing the MSVC AddressSanitizer STL runtime" FORCE)
+    else()
+        file(GLOB _kb_msvc_stl_asan_runtime_candidates
+            "C:/Program Files/Microsoft Visual Studio/*/*/VC/Tools/MSVC/*/lib/x64"
+        )
+        foreach(_kb_msvc_stl_asan_runtime_candidate IN LISTS _kb_msvc_stl_asan_runtime_candidates)
+            if(EXISTS "${_kb_msvc_stl_asan_runtime_candidate}/stl_asan.lib")
+                set(KB_MSVC_STL_ASAN_RUNTIME_DIR "${_kb_msvc_stl_asan_runtime_candidate}" CACHE PATH "Directory containing the MSVC AddressSanitizer STL runtime" FORCE)
+                break()
+            endif()
+        endforeach()
+    endif()
 endif()
 
 if(WIN32 AND NOT KB_DXCOMPILER_RUNTIME AND DEFINED ENV{VULKAN_SDK})
@@ -129,20 +163,19 @@ function(kb_apply_quality_gates target_name)
             target_link_options(${target_name} PRIVATE -fsanitize=address,undefined -fno-sanitize=vptr)
         elseif(MSVC)
             if(NOT EXISTS "${KB_MSVC_ASAN_RUNTIME_DIR}/clang_rt.asan_dynamic_runtime_thunk-x86_64.lib" OR
-                NOT EXISTS "${KB_MSVC_STL_ASAN_RUNTIME_DIR}/stl_asan.lib")
-                message(FATAL_ERROR "KB_ENABLE_SANITIZERS requires LLVM and STL AddressSanitizer runtimes; set KB_MSVC_ASAN_RUNTIME_DIR and KB_MSVC_STL_ASAN_RUNTIME_DIR.")
+                NOT EXISTS "${KB_MSVC_STL_ASAN_RUNTIME_DIR}/stl_asan.lib" OR
+                NOT EXISTS "${KB_MSVC_ASAN_DYNAMIC_RUNTIME}")
+                message(FATAL_ERROR "KB_ENABLE_SANITIZERS requires MSVC AddressSanitizer libraries and runtime DLL; set KB_MSVC_ASAN_RUNTIME_DIR, KB_MSVC_STL_ASAN_RUNTIME_DIR, and KB_MSVC_ASAN_DYNAMIC_RUNTIME.")
             endif()
             target_compile_options(${target_name} PRIVATE /fsanitize=address /Zi)
             target_link_options(${target_name} PRIVATE /INCREMENTAL:NO)
             target_link_directories(${target_name} PRIVATE "${KB_MSVC_ASAN_RUNTIME_DIR}")
             target_link_directories(${target_name} PRIVATE "${KB_MSVC_STL_ASAN_RUNTIME_DIR}")
-            if(EXISTS "${KB_MSVC_ASAN_RUNTIME_DIR}/clang_rt.asan_dynamic-x86_64.dll")
-                add_custom_command(TARGET ${target_name} POST_BUILD
-                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                        "${KB_MSVC_ASAN_RUNTIME_DIR}/clang_rt.asan_dynamic-x86_64.dll"
-                        "$<TARGET_FILE_DIR:${target_name}>"
-                )
-            endif()
+            add_custom_command(TARGET ${target_name} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${KB_MSVC_ASAN_DYNAMIC_RUNTIME}"
+                    "$<TARGET_FILE_DIR:${target_name}>"
+            )
         else()
             message(WARNING "KB_ENABLE_SANITIZERS is not configured for ${CMAKE_CXX_COMPILER_ID}; continuing without sanitizer flags.")
         endif()
