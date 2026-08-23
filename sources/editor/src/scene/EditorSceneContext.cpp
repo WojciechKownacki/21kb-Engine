@@ -61,6 +61,8 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/UIAssetIO.hpp"
 #include "engine/assets/AssetManager.hpp"
+#include "engine/assets/AssetKind.hpp"
+#include "engine/assets/AssetMetadata.hpp"
 #include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/input/InputSubsystem.hpp"
@@ -72,6 +74,7 @@
 #include "engine/script/ScriptModule.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
+#include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
@@ -3113,6 +3116,78 @@ bool EditorSceneContext::CreateAudioMixerAsset(const std::filesystem::path& virt
     return AudioMixerAuthoring().Create(virtualFolder);
 }
 
+bool EditorSceneContext::CreateParticleEffectAsset(const std::filesystem::path& virtualFolder) {
+    kb::assets::AssetManager& manager = scene_->Assets().Manager();
+    if (virtualFolder.empty()) {
+        console_.Error("Particles", "Could not resolve a destination folder for the new particle effect.");
+        return false;
+    }
+    const std::optional<std::filesystem::path> probe = manager.Mounts().Resolve(virtualFolder / "probe");
+    if (!probe.has_value()) {
+        console_.Error("Particles", "Could not resolve a physical folder for the new particle effect.");
+        return false;
+    }
+    const std::filesystem::path folder = probe->parent_path();
+    std::filesystem::path path = folder / (std::string{"NewParticleEffect"} + kb::scene::kParticleEffectAssetExtension);
+    std::uint32_t suffix = 1U;
+    while (std::filesystem::exists(path)) {
+        path = folder / (std::string{"NewParticleEffect"} + std::to_string(suffix) + kb::scene::kParticleEffectAssetExtension);
+        ++suffix;
+    }
+
+    const std::filesystem::path materialPath = EditorMaterialAssetGateway::UniqueFilePath(folder, "NewParticleMaterial");
+    const std::optional<std::filesystem::path> materialVirtualPath = manager.Mounts().ToVirtual(materialPath);
+    if (!materialVirtualPath.has_value()) {
+        console_.Error("Particles", "Could not resolve the default output resource for the new particle effect.");
+        return false;
+    }
+
+    kb::render::RenderMaterialAssetData material{};
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    if (!kb::render::RenderMaterialAssetWriter::Save(materialPath, material)) {
+        console_.Error("Particles", "Default output resource could not be created for the new particle effect.");
+        return false;
+    }
+
+    kb::scene::ParticleEffectAsset effect;
+    effect.effectId = 1U;
+    effect.displayName = path.stem().string();
+    effect.recipeCategory = "General";
+    effect.determinismSeed = 0x6B62564150415254ULL;
+    effect.durationSeconds = 3.0F;
+    effect.looping = true;
+    kb::scene::ParticleEmitterAsset emitter;
+    emitter.emitterId = 1U;
+    emitter.authoringOrder = 0U;
+    emitter.name = "Emitter 1";
+    emitter.output.material = {.assetId = 0U, .virtualPath = materialVirtualPath->generic_string()};
+    effect.emitters.push_back(std::move(emitter));
+
+    const kb::particle_editor::ParticleEditorResult saved = particleEditorGateway_.Save(path, effect);
+    if (!saved.Succeeded()) {
+        std::error_code removeError;
+        static_cast<void>(std::filesystem::remove(materialPath, removeError));
+        console_.Error("Particles", "Particle effect could not be created: " + saved.message);
+        return false;
+    }
+    static_cast<void>(scene_->Assets().Discover());
+    const std::optional<std::filesystem::path> virtualPath = manager.Mounts().ToVirtual(path);
+    const kb::assets::AssetMetadata* metadata = virtualPath.has_value()
+        ? manager.Registry().FindByPath(*virtualPath) : nullptr;
+    if (metadata != nullptr && metadata->type == kb::scene::kParticleEffectAssetType
+        && assetBrowser_.SelectAsset(metadata->id, manager) && OpenParticleEditorAsset(metadata->id)) {
+        console_.Info("Particles", "Particle effect created: " + path.generic_string());
+        return true;
+    }
+
+    std::error_code removeError;
+    static_cast<void>(std::filesystem::remove(path, removeError));
+    static_cast<void>(std::filesystem::remove(materialPath, removeError));
+    static_cast<void>(scene_->Assets().Discover());
+    console_.Error("Particles", "Particle effect creation was rolled back because the asset could not be opened.");
+    return false;
+}
+
 bool EditorSceneContext::CreateMaterialAsset(const std::filesystem::path& virtualFolder) {
     return MaterialAssetAuthoring().Create(virtualFolder);
 }
@@ -5076,7 +5151,7 @@ bool EditorSceneContext::DragMaterialPreviewOrbit(int x, int y) {
         return false;
     }
     // Screen-pixel drag to degrees: a horizontal drag swings yaw, vertical drag swings pitch. Dragging right
-    // rotates the object so its right side turns toward the viewer (yaw decreases), the Unreal convention -
+    // rotates the object so its right side turns toward the viewer (yaw decreases), the established convention -
     // the horizontal axis is negated so left/right feels like grabbing and turning the object.
     constexpr float degreesPerPixel = 0.4F;
     const float deltaYaw = -static_cast<float>(x - materialPreviewOrbitLastX_) * degreesPerPixel;
@@ -8292,7 +8367,7 @@ bool EditorSceneContext::SetMeshRendererMeshAsset(kb::scene::SceneEntity entity,
         if (!EditorSceneMeshAssetActions::AssignMesh(*scene_, entity, assetId)) {
             return false;
         }
-        // Keep an existing Collider fitted to the new geometry (Unity-like: the
+        // Keep an existing Collider fitted to the new geometry (the
         // collision shape follows the mesh when you swap it). Skipped when the
         // mesh is being cleared.
         if (assetId.IsValid() && scene_->Components().Colliders().Has(entity)) {
@@ -8921,7 +8996,7 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
             return false;
         }
         // Auto-fit the new collider to the entity's mesh so it matches the visible
-        // geometry out of the box (Unity-style), instead of a default 0.5 sphere.
+        // geometry out of the box, instead of a default 0.5 sphere.
         // Per-axis, so a plane/quad becomes a thin slab rather than a cube.
         EntityMeshBounds bounds;
         std::string reason;

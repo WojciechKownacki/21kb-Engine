@@ -60,10 +60,13 @@ void TestCompactAuthoringMetrics() {
         "particle toolbar did not use the compact production height");
     Require(layout.statusBar.bottom - layout.statusBar.top == 20,
         "particle status bar did not use the compact production height");
-    Require(layout.addEmitter.bottom - layout.addEmitter.top == 24,
-        "particle primary action did not use the compact control height");
+    Require(layout.addEmitter.bottom - layout.addEmitter.top == 28,
+        "particle primary action did not use a usable compact control height");
     Require(layout.emitterRows[0].bounds.bottom - layout.emitterRows[0].bounds.top == 28,
         "particle emitter row did not preserve compact spacing");
+    Require(layout.emitterRows[0].enabledToggle.right - layout.emitterRows[0].enabledToggle.left >= 20 &&
+            layout.emitterRows[0].enabledToggle.bottom - layout.emitterRows[0].enabledToggle.top >= 20,
+        "emitter action target became too small for reliable pointer use");
 }
 
 void TestHitTestingScrollAndSelectionFocus() {
@@ -132,6 +135,12 @@ void TestUnifiedInspectorStreamAndModuleHitTargets() {
             layout.moduleRowCount == 2U && layout.dependencyRowCount == 1U &&
             layout.diagnosticRowCount == 1U,
         "particle inspector did not form one complete bounded composer stream");
+    Require(layout.outputChoices[0].top == layout.outputChoices[1].top &&
+            layout.outputChoices[0].bottom == layout.outputChoices[1].bottom &&
+            layout.outputChoices[2].top > layout.outputChoices[0].top &&
+            layout.outputChoices[0].right < layout.outputChoices[1].left &&
+            layout.propertyHeader.top > layout.outputChoices[7].bottom,
+        "output choices did not form a compact readable two-column grid before properties");
     const POINT unsupported = Center(layout.outputChoices[3]);
     Require(kb::editor::ParticleEditorPanelLayoutResolver::HitTest(layout, unsupported.x, unsupported.y).outputType ==
             kb::scene::ParticleOutputType::Mesh,
@@ -140,9 +149,14 @@ void TestUnifiedInspectorStreamAndModuleHitTargets() {
     Require(kb::editor::ParticleEditorPanelLayoutResolver::HitTest(layout, property.x, property.y).action ==
             kb::editor::ParticleEditorPanelAction::EditProperty,
         "typed property row was not routed");
-    const int maximumScroll = kb::editor::ParticleEditorPanelLayoutResolver::MaximumComposerScroll(layout, 96U);
+    Require(kb::editor::ParticleEditorPanelLayoutResolver::MaximumComposerScroll(layout, 96U) == 0,
+        "compact inspector still required scrolling at a standard authoring height");
+    const RECT compactContent{0, 0, 900, 300};
+    const auto compactLayout = kb::editor::ParticleEditorPanelLayoutResolver::Resolve(
+        compactContent, rows, 0, 96U, &inspector);
+    const int maximumScroll = kb::editor::ParticleEditorPanelLayoutResolver::MaximumComposerScroll(compactLayout, 96U);
     const auto scrolled = kb::editor::ParticleEditorPanelLayoutResolver::Resolve(
-        content, rows, maximumScroll, 96U, &inspector);
+        compactContent, rows, maximumScroll, 96U, &inspector);
     const POINT grip = Center(scrolled.moduleRows[1].dragGrip);
     const auto moduleHit = kb::editor::ParticleEditorPanelLayoutResolver::HitTest(scrolled, grip.x, grip.y);
     Require(moduleHit.action == kb::editor::ParticleEditorPanelAction::BeginModuleDrag &&

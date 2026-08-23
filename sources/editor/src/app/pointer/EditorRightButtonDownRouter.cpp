@@ -281,7 +281,8 @@ void EditorRightButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         return;
     }
 
-    if (EditorAssetBrowserPointerHandler::HandleRightButtonDown(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
+    if (EditorAssetBrowserPointerHandler::HandleRightButtonDown(
+            messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     }
 }
