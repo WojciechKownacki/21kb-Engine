@@ -289,6 +289,18 @@ kb::particle_editor::ParticleEmitterInspectorView EditorSceneContext::ParticleEd
         owner, &registry);
 }
 
+std::vector<kb::assets::AssetMetadata> EditorSceneContext::ParticleEditorRecipes() const {
+    const auto& registry = scene_->Assets().Manager().Registry();
+    std::vector<kb::assets::AssetMetadata> recipes = registry.ByType(kb::scene::kParticleEffectAssetType);
+    std::erase_if(recipes, [](const kb::assets::AssetMetadata& metadata) {
+        return metadata.virtualPath.parent_path().generic_string() != "/21kbParticle/Recipes";
+    });
+    std::sort(recipes.begin(), recipes.end(), [](const auto& left, const auto& right) {
+        return left.browseTag == right.browseTag ? left.name < right.name : left.browseTag < right.browseTag;
+    });
+    return recipes;
+}
+
 const kb::particle_editor::ParticleEditorWorkspaceState& EditorSceneContext::ParticleEditorWorkspace() const noexcept {
     return particleEditorWorkspace_;
 }
@@ -322,14 +334,40 @@ bool EditorSceneContext::FinalizeParticleEditorCommand(kb::particle_editor::Part
 bool EditorSceneContext::AddParticleEditorEmitter(kb::assets::AssetId materialId) {
     if (!HasParticleEditorAsset())
         return false;
-    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(materialId);
+    const kb::assets::AssetManager& manager = scene_->Assets().Manager();
+    const kb::assets::AssetMetadata* metadata = materialId.IsValid() ? manager.Registry().Find(materialId) :
+        manager.Registry().FindByPath("/21kbParticle/Materials/DefaultParticle.kbmat");
     if (metadata == nullptr || !kb::assets::AssetMatchesKind(*metadata, kb::assets::AssetKind::Material)) {
-        console_.Error("Particles", "Add Emitter requires a valid material selection.");
+        console_.Error("Particles", "The shared default particle material is unavailable.");
         return false;
     }
     return FinalizeParticleEditorCommand(kb::particle_editor::ParticleEditorCommands::AddEmitter(
         particleEditorDocument_, particleEditorWorkspace_,
         {.assetId = materialId.value, .virtualPath = metadata->virtualPath.generic_string()}));
+}
+
+bool EditorSceneContext::AppendParticleEditorRecipe(kb::assets::AssetId recipeId) {
+    if (!HasParticleEditorAsset() || !recipeId.IsValid())
+        return false;
+    const kb::assets::AssetManager& manager = scene_->Assets().Manager();
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(recipeId);
+    if (metadata == nullptr || metadata->type != kb::scene::kParticleEffectAssetType ||
+        metadata->virtualPath.parent_path().generic_string() != "/21kbParticle/Recipes") {
+        console_.Error("Particles", "The selected particle recipe is unavailable.");
+        return false;
+    }
+    const auto path = ResolveParticleAssetPath(*metadata, manager);
+    if (!path.has_value()) {
+        console_.Error("Particles", "The selected particle recipe could not be resolved.");
+        return false;
+    }
+    const auto loaded = particleEditorGateway_.Load(*path);
+    if (!loaded.result.Succeeded()) {
+        LogParticleResult(console_, loaded.result);
+        return false;
+    }
+    return FinalizeParticleEditorCommand(kb::particle_editor::ParticleEditorCommands::AppendRecipeEmitters(
+        particleEditorDocument_, particleEditorWorkspace_, *loaded.asset));
 }
 
 bool EditorSceneContext::RenameParticleEditorEmitter(
@@ -692,6 +730,12 @@ void EditorSceneContext::CancelParticleEditorEmitterDrag() noexcept {
 
 void EditorSceneContext::SetParticleEditorComposerScrollOffset(int offset) noexcept {
     particleEditorWorkspace_.SetComposerScrollOffset(offset);
+}
+
+void EditorSceneContext::ToggleParticleEditorComposerSection(
+    kb::particle_editor::ParticleEditorComposerSection section) noexcept {
+    particleEditorWorkspace_.ToggleComposerSection(section);
+    particleEditorWorkspace_.SetComposerScrollOffset(0);
 }
 
 kb::particle_editor::ParticleDocumentCloseResult EditorSceneContext::RequestParticleEditorTransition(

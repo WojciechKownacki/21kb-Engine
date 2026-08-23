@@ -1,6 +1,7 @@
 #include "rendering/ParticleEditorPanelLayout.hpp"
 
 #if defined(_WIN32)
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
@@ -139,8 +140,9 @@ void TestUnifiedInspectorStreamAndModuleHitTargets() {
             layout.outputChoices[0].bottom == layout.outputChoices[1].bottom &&
             layout.outputChoices[2].top > layout.outputChoices[0].top &&
             layout.outputChoices[0].right < layout.outputChoices[1].left &&
-            layout.propertyHeader.top > layout.outputChoices[7].bottom,
-        "output choices did not form a compact readable two-column grid before properties");
+            layout.propertyHeader.top < layout.moduleHeader.top &&
+            layout.moduleHeader.top < layout.outputHeader.top,
+        "composer did not preserve the settings, behavior, and output section order");
     const POINT unsupported = Center(layout.outputChoices[3]);
     Require(kb::editor::ParticleEditorPanelLayoutResolver::HitTest(layout, unsupported.x, unsupported.y).outputType ==
             kb::scene::ParticleOutputType::Mesh,
@@ -149,21 +151,48 @@ void TestUnifiedInspectorStreamAndModuleHitTargets() {
     Require(kb::editor::ParticleEditorPanelLayoutResolver::HitTest(layout, property.x, property.y).action ==
             kb::editor::ParticleEditorPanelAction::EditProperty,
         "typed property row was not routed");
+    const auto recipeLayout = kb::editor::ParticleEditorPanelLayoutResolver::Resolve(
+        content, rows, 0, 96U, &inspector, 2U);
+    const POINT recipe = Center(recipeLayout.recipeTiles[1]);
+    Require(recipeLayout.recipeTileCount == 2U &&
+            kb::editor::ParticleEditorPanelLayoutResolver::HitTest(recipeLayout, recipe.x, recipe.y).action ==
+                kb::editor::ParticleEditorPanelAction::AppendRecipe &&
+            kb::editor::ParticleEditorPanelLayoutResolver::HitTest(recipeLayout, recipe.x, recipe.y).recipeIndex == 1U,
+        "recipe tile did not preserve its registry ordering during hit testing");
+    kb::particle_editor::ParticleEditorWorkspaceState workspace;
+    workspace.ToggleComposerSection(kb::particle_editor::ParticleEditorComposerSection::Output);
+    const auto collapsedOutput = kb::editor::ParticleEditorPanelLayoutResolver::Resolve(
+        content, rows, 0, 96U, &inspector, 0U, &workspace);
+    const POINT outputHeader = Center(collapsedOutput.outputHeader);
+    Require(collapsedOutput.outputChoiceCount == 0U &&
+            kb::editor::ParticleEditorPanelLayoutResolver::HitTest(
+                collapsedOutput, outputHeader.x, outputHeader.y).action ==
+                kb::editor::ParticleEditorPanelAction::ToggleComposerSection &&
+            kb::editor::ParticleEditorPanelLayoutResolver::HitTest(
+                collapsedOutput, outputHeader.x, outputHeader.y).composerSection ==
+                kb::particle_editor::ParticleEditorComposerSection::Output,
+        "collapsed composer output section lost its state or header interaction");
     Require(kb::editor::ParticleEditorPanelLayoutResolver::MaximumComposerScroll(layout, 96U) == 0,
         "compact inspector still required scrolling at a standard authoring height");
     const RECT compactContent{0, 0, 900, 300};
     const auto compactLayout = kb::editor::ParticleEditorPanelLayoutResolver::Resolve(
-        compactContent, rows, 0, 96U, &inspector);
+        compactContent, rows, 0, 96U, &inspector, 2U);
     const int maximumScroll = kb::editor::ParticleEditorPanelLayoutResolver::MaximumComposerScroll(compactLayout, 96U);
-    const auto scrolled = kb::editor::ParticleEditorPanelLayoutResolver::Resolve(
-        compactContent, rows, maximumScroll, 96U, &inspector);
-    const POINT grip = Center(scrolled.moduleRows[1].dragGrip);
-    const auto moduleHit = kb::editor::ParticleEditorPanelLayoutResolver::HitTest(scrolled, grip.x, grip.y);
+    const int moduleScroll = std::clamp(
+        static_cast<int>(compactLayout.moduleRows[1].bounds.bottom - compactLayout.emitterList.bottom),
+        0,
+        maximumScroll);
+    const auto moduleScrolled = kb::editor::ParticleEditorPanelLayoutResolver::Resolve(
+        compactContent, rows, moduleScroll, 96U, &inspector, 2U);
+    const POINT grip = Center(moduleScrolled.moduleRows[1].dragGrip);
+    const auto moduleHit = kb::editor::ParticleEditorPanelLayoutResolver::HitTest(moduleScrolled, grip.x, grip.y);
     Require(moduleHit.action == kb::editor::ParticleEditorPanelAction::BeginModuleDrag &&
             moduleHit.moduleId == 99U && moduleHit.authoringOrder == 1U &&
             kb::editor::ParticleEditorPanelLayoutResolver::ModuleReorderTargetAt(
-                scrolled, scrolled.moduleRows[0].bounds.top) == 0U,
+                moduleScrolled, moduleScrolled.moduleRows[0].bounds.top) == 0U,
         "module drag hit lost stable identity or authored order");
+    const auto scrolled = kb::editor::ParticleEditorPanelLayoutResolver::Resolve(
+        compactContent, rows, maximumScroll, 96U, &inspector, 2U);
     const POINT dependency = Center(scrolled.dependencyRows[0]);
     const POINT diagnostic = Center(scrolled.diagnosticRows[0]);
     Require(kb::editor::ParticleEditorPanelLayoutResolver::HitTest(scrolled, dependency.x, dependency.y).action ==

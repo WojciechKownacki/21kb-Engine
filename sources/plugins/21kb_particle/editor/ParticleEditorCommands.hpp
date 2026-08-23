@@ -13,6 +13,10 @@ public:
         ParticleEditorDocument& document,
         ParticleEditorWorkspaceState& workspace,
         kb::scene::ParticleAssetReference material);
+    [[nodiscard]] static ParticleEditorResult AppendRecipeEmitters(
+        ParticleEditorDocument& document,
+        ParticleEditorWorkspaceState& workspace,
+        const kb::scene::ParticleEffectAsset& recipe);
     [[nodiscard]] static ParticleEditorResult RenameEmitter(
         ParticleEditorDocument& document,
         ParticleEditorWorkspaceState& workspace,

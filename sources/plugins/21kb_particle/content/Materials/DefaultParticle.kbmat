@@ -1,0 +1,13 @@
+# KB material
+version 1
+materialType builtin.pbr
+materialTypeVersion 1
+baseColor 1 0.55 0.12 1
+metallicFactor 0
+roughnessFactor 0.45
+emissiveColor 1 0.16 0.01
+emissiveStrength 2
+alphaMode BLEND
+translucencyBlend ADDITIVE
+doubleSided true
+writesDepth false

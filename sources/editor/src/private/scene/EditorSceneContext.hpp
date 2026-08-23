@@ -457,10 +457,12 @@ public:
     [[nodiscard]] const kb::scene::ParticleEffectAsset* ParticleEditorWorkingAsset() const noexcept;
     [[nodiscard]] std::vector<kb::particle_editor::ParticleEmitterListRow> ParticleEditorEmitterRows() const;
     [[nodiscard]] kb::particle_editor::ParticleEmitterInspectorView ParticleEditorInspector() const;
+    [[nodiscard]] std::vector<kb::assets::AssetMetadata> ParticleEditorRecipes() const;
     [[nodiscard]] const kb::particle_editor::ParticleEditorWorkspaceState& ParticleEditorWorkspace() const noexcept;
     void SetParticleEditorFocused(bool focused) noexcept;
     [[nodiscard]] bool SelectParticleEditorEmitter(kb::scene::ParticleStableId emitterId) noexcept;
     [[nodiscard]] bool AddParticleEditorEmitter(kb::assets::AssetId materialId);
+    [[nodiscard]] bool AppendParticleEditorRecipe(kb::assets::AssetId recipeId);
     [[nodiscard]] bool RenameParticleEditorEmitter(kb::scene::ParticleStableId emitterId, std::string name);
     [[nodiscard]] bool ToggleParticleEditorEmitter(kb::scene::ParticleStableId emitterId);
     [[nodiscard]] bool MoveParticleEditorEmitter(kb::scene::ParticleStableId emitterId, std::uint32_t targetOrder);
@@ -496,6 +498,7 @@ public:
     [[nodiscard]] bool CommitParticleEditorEmitterDrag();
     void CancelParticleEditorEmitterDrag() noexcept;
     void SetParticleEditorComposerScrollOffset(int offset) noexcept;
+    void ToggleParticleEditorComposerSection(kb::particle_editor::ParticleEditorComposerSection section) noexcept;
     [[nodiscard]] kb::particle_editor::ParticleDocumentCloseResult RequestParticleEditorTransition(
         kb::particle_editor::ParticleDocumentTransition transition) noexcept;
     [[nodiscard]] kb::particle_editor::ParticleDocumentCloseResult ResolveParticleEditorTransition(
