@@ -90,11 +90,12 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
         const std::vector<kb::particle_editor::ParticleEmitterListRow> rows =
             sceneContext_.ParticleEditorEmitterRows();
         const auto inspector = sceneContext_.ParticleEditorInspector();
+        const auto recipes = sceneContext_.ParticleEditorRecipes();
         const ParticleEditorPanelLayout layout = ParticleEditorPanelLayoutResolver::Resolve(
             *particleContent,
             rows,
             sceneContext_.ParticleEditorWorkspace().ComposerScrollOffset(),
-            GetDpiForWindow(messageWindow_), &inspector);
+            GetDpiForWindow(messageWindow_), &inspector, recipes.size(), &sceneContext_.ParticleEditorWorkspace());
         if (Contains(layout.composer, x, y)) {
             const int direction = wheelDelta > 0 ? -1 : 1;
             const int maximum = ParticleEditorPanelLayoutResolver::MaximumComposerScroll(

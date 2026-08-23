@@ -1209,6 +1209,13 @@ EditorSceneContext::EditorSceneContext()
     } else {
         console_.Error("Project", AssetErrorOr(scene_->Assets().Manager(), "Project assets could not be mounted."));
     }
+#if defined(KB_21KB_PARTICLE_CONTENT_ROOT)
+    if (scene_->Assets().Manager().Mounts().Mount("21kbParticle", KB_21KB_PARTICLE_CONTENT_ROOT)) {
+        console_.Info("Particles", "Mounted 21kb Particle System content.");
+    } else {
+        console_.Error("Particles", "21kb Particle System content could not be mounted.");
+    }
+#endif
     RegisterEditorSceneDocumentAssetLoaders(*scene_);
     const std::size_t discovered = scene_->Assets().Discover();
     console_.Info("Assets", "Asset discovery completed. Found " + std::to_string(discovered) + " asset(s).");
@@ -3135,20 +3142,6 @@ bool EditorSceneContext::CreateParticleEffectAsset(const std::filesystem::path& 
         ++suffix;
     }
 
-    const std::filesystem::path materialPath = EditorMaterialAssetGateway::UniqueFilePath(folder, "NewParticleMaterial");
-    const std::optional<std::filesystem::path> materialVirtualPath = manager.Mounts().ToVirtual(materialPath);
-    if (!materialVirtualPath.has_value()) {
-        console_.Error("Particles", "Could not resolve the default output resource for the new particle effect.");
-        return false;
-    }
-
-    kb::render::RenderMaterialAssetData material{};
-    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
-    if (!kb::render::RenderMaterialAssetWriter::Save(materialPath, material)) {
-        console_.Error("Particles", "Default output resource could not be created for the new particle effect.");
-        return false;
-    }
-
     kb::scene::ParticleEffectAsset effect;
     effect.effectId = 1U;
     effect.displayName = path.stem().string();
@@ -3160,13 +3153,11 @@ bool EditorSceneContext::CreateParticleEffectAsset(const std::filesystem::path& 
     emitter.emitterId = 1U;
     emitter.authoringOrder = 0U;
     emitter.name = "Emitter 1";
-    emitter.output.material = {.assetId = 0U, .virtualPath = materialVirtualPath->generic_string()};
+    emitter.output.material = {.assetId = 0U, .virtualPath = "/21kbParticle/Materials/DefaultParticle.kbmat"};
     effect.emitters.push_back(std::move(emitter));
 
     const kb::particle_editor::ParticleEditorResult saved = particleEditorGateway_.Save(path, effect);
     if (!saved.Succeeded()) {
-        std::error_code removeError;
-        static_cast<void>(std::filesystem::remove(materialPath, removeError));
         console_.Error("Particles", "Particle effect could not be created: " + saved.message);
         return false;
     }
@@ -3182,7 +3173,6 @@ bool EditorSceneContext::CreateParticleEffectAsset(const std::filesystem::path& 
 
     std::error_code removeError;
     static_cast<void>(std::filesystem::remove(path, removeError));
-    static_cast<void>(std::filesystem::remove(materialPath, removeError));
     static_cast<void>(scene_->Assets().Discover());
     console_.Error("Particles", "Particle effect creation was rolled back because the asset could not be opened.");
     return false;
