@@ -11,11 +11,23 @@
 
 - Stage: `11` — volumetric output and release hardening.
 - Status: `accepted`; Stages 0 through 11 are accepted.
-- Scope: Stage 11 makes the existing typed volumetric schema executable through compilation, cache, snapshot, runtime resource discovery, GPU rendering, quality selection, telemetry, and lifecycle validation per `docs/particle-kanku-audit-plan.md` section 11.
-- Canonical spec source: `docs/particle-kanku-audit-plan.md`. Its own naming (`Particle`/`kb_particle_core`/etc., after the `Particli`→`Particle` document-only rename on 2026-08-15) is not literal — this project's frozen naming (`Rendering.21kbParticle`, `kb_21kb_particle_*` targets, `ParticleEffect`/`Particle*` class names without the `21kb` prefix where the existing code already uses that shorter form) stays as-is. Where the audit's file/class names differ from what actually exists in this repo, map to the real equivalent and record it here rather than renaming existing code to match the audit.
+- Scope: Stage 11 makes the existing typed volumetric schema executable through compilation, cache, snapshot, runtime resource discovery, GPU rendering, quality selection, telemetry, and lifecycle validation under the internal particle implementation plan, section 11.
+- Canonical naming is the project's frozen naming: `Rendering.21kbParticle`, `kb_21kb_particle_*` targets, and the established `ParticleEffect`/`Particle*` class names where they already exist. Documentation terminology maps to these names; do not rename production code merely to mirror documentation.
 - Orchestration: single-agent (no 2-agent orchestrator/implementer split — `docs/archive/particle-sol-xhigh-autonomous-prompt.md`'s mechanics are archived/unused, per explicit user decision 2026-08-15).
-- Next gate: release conformance outside this implementation plan; the Stage 11 evidence is recorded below.
+- Next gate: finish the post-Stage 11 Particle Editor authoring UX pass, then resume release conformance outside this implementation plan.
 - Rendering direction unchanged: normal game-facing simulation and rendering must move to GPU. The CPU backend is retained only as the deterministic validation, diagnostics, and preview path; it is not the intended final gameplay path.
+
+### Post-Stage 11 follow-up: Particle Editor UX package 1 (`in_progress`)
+
+- The asset controls now share one compact row, the eight output types use a two-column grid, and properties have an explicit section header. This removes five full-width rows from the common viewport while preserving every existing hit target and command route.
+- Primary, selected, enabled, disabled, and destructive controls use distinct restrained tones; row actions are 22 logical pixels wide (33 at 150% DPI), avoiding both oversized controls and unreliable small targets. The status bar now exposes a concise saved/unsaved state with a color indicator.
+- `cmake --build build --config Debug --target kb_editor_particle_authoring_tests kb_editor --parallel 4` — exit `0`.
+- `ctest --test-dir build -C Debug -R "^kb_editor_particle_authoring_tests$|^kb_editor_particle_authoring_headless$" --output-on-failure` — exit `0`, `2/2`.
+- Visual inspection of the six automation BMPs (1366x768 and 1920x1080 docked/floating; 150% DPI docked/floating) confirmed no clipping, overlap, or undersized action targets. `git diff --check` — exit `0`.
+
+- Project Files now exposes direct `New Particle Effect` creation for folder and background menus. It writes a structurally valid looping billboard effect with one emitter and a locally owned default output resource, then discovers/selects it and opens it in the Particle Editor; any failed write or open rolls both files back and refreshes discovery.
+- The native command mapping and menu hit coverage include the new command. The headless authoring scenario creates the particle effect through the production editor path rather than copying a fixture, and visually confirms the generated `NewParticleEffect` with its first emitter.
+- Verification: `cmake --build build --config Debug --target kb_editor kb_editor_tests --parallel 4` — exit `0`; `ctest --test-dir build -C Debug -R "^kb_editor_tests$|^kb_editor_particle_authoring_tests$|^kb_editor_particle_authoring_headless$" --output-on-failure` — exit `0`, `3/3` (71.39 s). Fresh generated screenshot inspection confirmed the selected asset, compact editor layout, and visible `Emitter 1`.
 
 ### Stage 11 acceptance evidence
 

@@ -71,6 +71,7 @@ struct ParticleEditorPanelLayout {
     RECT texturePicker{};
     std::array<RECT, 8U> outputChoices{};
     std::size_t outputChoiceCount = 0U;
+    RECT propertyHeader{};
     std::array<RECT, 128U> propertyRows{};
     std::size_t propertyRowCount = 0U;
     RECT moduleHeader{};
@@ -83,6 +84,7 @@ struct ParticleEditorPanelLayout {
     RECT diagnosticHeader{};
     std::array<RECT, kb::scene::kParticleEffectMaxDiagnostics> diagnosticRows{};
     std::size_t diagnosticRowCount = 0U;
+    int composerContentHeight = 0;
 };
 
 struct ParticleEditorPanelHit {
