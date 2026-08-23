@@ -2,12 +2,9 @@
   "schema": "21kb.editor-automation/v1",
   "initial_plugins": ["Rendering.21kbParticle"],
   "steps": [
-    { "op": "write_file", "path": "Assets/Vfx/Particle.kbmat", "content": "baseColor 1.0 0.35 0.05 1.0\nroughnessFactor 0.5\nmetallicFactor 0.0\n" },
-    { "op": "copy_fixture", "source": "fixtures/LegacyAutomationParticleEffect.kbvfx", "destination": "Assets/Vfx/Automation.kbvfx" },
-    { "op": "discover_assets" },
-    { "op": "assert_asset", "path": "/Game/Vfx/Automation.kbvfx", "type": "ParticleEffect" },
+    { "op": "create_asset", "id": "particleEffect", "type": "particle_effect", "folder": "/Game/Vfx" },
+    { "op": "assert_asset", "path": "/Game/Vfx/NewParticleEffect.kbvfx", "type": "ParticleEffect" },
     { "op": "assert_plugin", "id": "Rendering.21kbParticle", "enabled": true },
-    { "op": "open_asset", "asset": "/Game/Vfx/Automation.kbvfx" },
     { "op": "capture_screenshot_matrix", "panel": "particle_editor", "checkpoint": "particle-emitter-list" },
     { "op": "assert_no_errors" }
   ]

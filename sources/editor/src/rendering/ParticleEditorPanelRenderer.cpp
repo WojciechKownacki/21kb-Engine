@@ -9,22 +9,59 @@
 #include "scene/EditorSceneContext.hpp"
 
 #include <bit>
+#include <cstdint>
 #include <string>
 
 namespace kb::editor {
 namespace {
 
-void DrawButton(HDC dc, const RECT& rect, const char* label, bool active = false, bool enabled = true) {
-    GdiDrawing::FillRectColor(dc, rect, !enabled ? RGB(39, 42, 48) : active ? RGB(52, 107, 163) : RGB(45, 49, 57));
-    const HBRUSH border = CreateSolidBrush(
-        !enabled ? RGB(57, 61, 68) : active ? RGB(91, 157, 221) : RGB(69, 75, 85));
-    if (border != nullptr) {
-        FrameRect(dc, &rect, border);
-        DeleteObject(border);
+enum class ParticleEditorButtonTone : std::uint8_t { Neutral, Primary, Selected, Toggle, Destructive };
+
+void DrawButton(HDC dc, const RECT& rect, const char* label,
+                ParticleEditorButtonTone tone = ParticleEditorButtonTone::Neutral, bool enabled = true) {
+    COLORREF fill = RGB(45, 49, 57);
+    COLORREF border = RGB(69, 75, 85);
+    COLORREF textColor = RGB(225, 230, 237);
+    if (!enabled) {
+        fill = RGB(39, 42, 48);
+        border = RGB(57, 61, 68);
+        textColor = RGB(128, 136, 147);
+    } else if (tone == ParticleEditorButtonTone::Primary) {
+        fill = RGB(45, 104, 157);
+        border = RGB(91, 157, 221);
+    } else if (tone == ParticleEditorButtonTone::Selected) {
+        fill = RGB(51, 82, 119);
+        border = RGB(94, 156, 219);
+    } else if (tone == ParticleEditorButtonTone::Toggle) {
+        fill = RGB(43, 91, 74);
+        border = RGB(83, 157, 125);
+    } else if (tone == ParticleEditorButtonTone::Destructive) {
+        fill = RGB(87, 52, 57);
+        border = RGB(171, 91, 99);
     }
-    SetTextColor(dc, enabled ? RGB(225, 230, 237) : RGB(128, 136, 147));
+    GdiDrawing::FillRectColor(dc, rect, fill);
+    const HBRUSH borderBrush = CreateSolidBrush(border);
+    if (borderBrush != nullptr) {
+        FrameRect(dc, &rect, borderBrush);
+        DeleteObject(borderBrush);
+    }
+    SetTextColor(dc, textColor);
     RECT text = rect;
     DrawTextA(dc, label, -1, &text, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+}
+
+void DrawSectionHeader(HDC dc, const RECT& rect, const char* label) {
+    GdiDrawing::FillRectColor(dc, rect, RGB(34, 38, 45));
+    const HBRUSH accent = CreateSolidBrush(RGB(82, 151, 214));
+    if (accent != nullptr) {
+        RECT rule{rect.left, rect.top + 5, rect.left + 2, rect.bottom - 5};
+        FillRect(dc, &rule, accent);
+        DeleteObject(accent);
+    }
+    RECT text = rect;
+    text.left += 8;
+    SetTextColor(dc, RGB(202, 213, 226));
+    DrawTextA(dc, label, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 }
 
 [[nodiscard]] unsigned int WindowDpi(HWND window) noexcept {
@@ -123,7 +160,8 @@ void ParticleEditorPanelRenderer::Paint(
     composerTitle.left += 8;
     SetTextColor(dc, RGB(219, 225, 233));
     DrawTextA(dc, "Emitters", -1, &composerTitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-    DrawButton(dc, layout.addEmitter, "+ Add Emitter", true, rows.size() < kb::scene::kParticleEffectMaxEmitters);
+    DrawButton(dc, layout.addEmitter, "+ Add Emitter", ParticleEditorButtonTone::Primary,
+        rows.size() < kb::scene::kParticleEffectMaxEmitters);
     const int saved = SaveDC(dc);
     IntersectClipRect(dc, layout.emitterList.left, layout.emitterList.top,
                       layout.emitterList.right, layout.emitterList.bottom);
@@ -143,29 +181,30 @@ void ParticleEditorPanelRenderer::Paint(
             ? workspace.RenameText() : row.name;
         DrawTextA(dc, name.c_str(), -1, &nameRect,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-        DrawButton(dc, rowLayout.enabledToggle, row.enabled ? "On" : "Off", row.enabled);
+        DrawButton(dc, rowLayout.enabledToggle, row.enabled ? "On" : "Off",
+            row.enabled ? ParticleEditorButtonTone::Toggle : ParticleEditorButtonTone::Neutral);
         DrawButton(dc, rowLayout.moveUp, "^");
         DrawButton(dc, rowLayout.moveDown, "v");
-        DrawButton(dc, rowLayout.remove, "x");
+        DrawButton(dc, rowLayout.remove, "x", ParticleEditorButtonTone::Destructive);
     }
-    SetTextColor(dc, RGB(219, 225, 233));
-    RECT outputHeader = layout.outputHeader;
-    DrawTextA(dc, "Output", -1, &outputHeader, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-    DrawButton(dc, layout.materialPicker, "Material...");
-    DrawButton(dc, layout.meshPicker, "Mesh...");
-    DrawButton(dc, layout.texturePicker, "Texture Atlas...");
+    DrawSectionHeader(dc, layout.outputHeader, "Output");
+    DrawButton(dc, layout.materialPicker, "Material");
+    DrawButton(dc, layout.meshPicker, "Mesh");
+    DrawButton(dc, layout.texturePicker, "Atlas");
     for (std::size_t index = 0U; index < layout.outputChoiceCount; ++index) {
         const auto& choice = inspector.outputChoices[index];
         const auto* asset = sceneContext.ParticleEditorWorkingAsset();
         const auto* emitter = asset == nullptr ? nullptr : kb::particle_editor::ParticleEmitterListModel::Find(*asset, inspector.emitterId);
         const bool active = emitter != nullptr && emitter->output.type == choice.type;
-        DrawButton(dc, layout.outputChoices[index], choice.label.c_str(), active, choice.enabled);
+        DrawButton(dc, layout.outputChoices[index], choice.label.c_str(),
+            active ? ParticleEditorButtonTone::Selected : ParticleEditorButtonTone::Neutral, choice.enabled);
         if (!choice.enabled) {
             SetTextColor(dc, RGB(161, 124, 124));
             RECT mark = layout.outputChoices[index]; mark.left = mark.right - 28;
             DrawTextA(dc, "N/A", -1, &mark, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         }
     }
+    DrawSectionHeader(dc, layout.propertyHeader, "Properties");
     for (std::size_t index = 0U; index < layout.propertyRowCount; ++index) {
         const auto& property = inspector.properties[index];
         GdiDrawing::FillRectColor(dc, layout.propertyRows[index], RGB(36, 40, 46));
@@ -176,10 +215,8 @@ void ParticleEditorPanelRenderer::Paint(
         SetTextColor(dc, property.editable ? RGB(226, 231, 238) : RGB(135, 144, 156));
         DrawTextA(dc, property.value.c_str(), -1, &value, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
-    SetTextColor(dc, RGB(219, 225, 233));
-    RECT moduleHeader = layout.moduleHeader;
-    DrawTextA(dc, "Modules", -1, &moduleHeader, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-    DrawButton(dc, layout.addModule, "+ Add Module", true,
+    DrawSectionHeader(dc, layout.moduleHeader, "Modules");
+    DrawButton(dc, layout.addModule, "+ Add Module", ParticleEditorButtonTone::Primary,
         inspector.modules.size() < kb::scene::kParticleEffectMaxModulesPerEmitter);
     for (std::size_t index = 0U; index < layout.moduleRowCount; ++index) {
         const auto& module = inspector.modules[index];
@@ -191,8 +228,10 @@ void ParticleEditorPanelRenderer::Paint(
         const std::string text = module.label + "  " + module.summary;
         SetTextColor(dc, module.enabled ? RGB(226, 231, 238) : RGB(135, 144, 156));
         DrawTextA(dc, text.c_str(), -1, &name, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-        DrawButton(dc, row.enabledToggle, module.enabled ? "On" : "Off", module.enabled);
-        DrawButton(dc, row.moveUp, "^"); DrawButton(dc, row.moveDown, "v"); DrawButton(dc, row.remove, "x");
+        DrawButton(dc, row.enabledToggle, module.enabled ? "On" : "Off",
+            module.enabled ? ParticleEditorButtonTone::Toggle : ParticleEditorButtonTone::Neutral);
+        DrawButton(dc, row.moveUp, "^"); DrawButton(dc, row.moveDown, "v");
+        DrawButton(dc, row.remove, "x", ParticleEditorButtonTone::Destructive);
     }
     if (workspace.ModuleDragActive() && layout.moduleRowCount != 0U) {
         const std::uint32_t order = std::min<std::uint32_t>(workspace.ModuleDragTargetOrder(),
@@ -200,7 +239,7 @@ void ParticleEditorPanelRenderer::Paint(
         const RECT& target = layout.moduleRows[order].bounds;
         GdiDrawing::FillRectColor(dc, {target.left, target.top - 1, target.right, target.top + 2}, RGB(80, 157, 230));
     }
-    SetTextColor(dc, RGB(219, 225, 233));
+    DrawSectionHeader(dc, layout.dependencyHeader, "Dependencies");
     RECT dependencies = layout.dependencyHeader;
     const std::string dependencyTitle = "Dependencies (" + std::to_string(inspector.dependencies.size()) + ")";
     DrawTextA(dc, dependencyTitle.c_str(), -1, &dependencies, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
@@ -210,6 +249,7 @@ void ParticleEditorPanelRenderer::Paint(
         DrawTextA(dc, inspector.dependencies[index].virtualPath.c_str(), -1, &row,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
+    DrawSectionHeader(dc, layout.diagnosticHeader, "Diagnostics");
     RECT diagnostics = layout.diagnosticHeader;
     const std::string diagnosticTitle = "Diagnostics (" + std::to_string(inspector.diagnostics.size()) + ")";
     DrawTextA(dc, diagnosticTitle.c_str(), -1, &diagnostics, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
@@ -227,12 +267,20 @@ void ParticleEditorPanelRenderer::Paint(
             {target.left, target.top - 1, target.right, target.top + 2}, RGB(80, 157, 230));
     }
     RestoreDC(dc, saved);
+    const bool dirty = sceneContext.ParticleEditorDirty();
+    const HBRUSH statusIndicator = CreateSolidBrush(dirty ? RGB(221, 161, 78) : RGB(89, 184, 136));
+    if (statusIndicator != nullptr) {
+        RECT dot{layout.statusBar.left + 8, layout.statusBar.top + 7,
+                 layout.statusBar.left + 14, layout.statusBar.bottom - 7};
+        FillRect(dc, &dot, statusIndicator);
+        DeleteObject(statusIndicator);
+    }
     SetTextColor(dc, RGB(166, 177, 190));
     RECT status = layout.statusBar;
-    status.left += 8;
+    status.left += 20;
     const std::string statusText = std::to_string(rows.size()) + "/" +
         std::to_string(kb::scene::kParticleEffectMaxEmitters) + " emitters" +
-        (sceneContext.ParticleEditorDirty() ? "  Modified" : "  Saved");
+        (dirty ? "  Unsaved changes" : "  Saved");
     DrawTextA(dc, statusText.c_str(), -1, &status,
               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     if (sceneViewport != nullptr) {

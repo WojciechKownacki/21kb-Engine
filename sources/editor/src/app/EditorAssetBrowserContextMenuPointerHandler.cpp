@@ -60,7 +60,11 @@ void AppendAddSubmenu(HMENU menu) {
     return command;
 }
 
-[[nodiscard]] bool ExecuteNativeProjectFilesMenu(HWND window, int x, int y, EditorSceneContext& sceneContext) {
+[[nodiscard]] bool ExecuteNativeProjectFilesMenu(
+    HWND window,
+    int x,
+    int y,
+    EditorSceneContext& sceneContext) {
     EditorAssetBrowserState& state = sceneContext.AssetBrowser();
     const std::vector<EditorAssetContextMenuItem> items = state.ContextMenuItems(sceneContext.Scene().Assets().Manager());
     state.CloseContextMenu();
@@ -99,7 +103,12 @@ std::optional<bool> EditorAssetBrowserContextMenuPointerHandler::HandleOpenMenuP
     return std::nullopt;
 }
 
-bool EditorAssetBrowserContextMenuPointerHandler::HandleRightButtonDown(HWND window, const RECT& content, int x, int y, EditorSceneContext& sceneContext) {
+bool EditorAssetBrowserContextMenuPointerHandler::HandleRightButtonDown(
+    HWND window,
+    const RECT& content,
+    int x,
+    int y,
+    EditorSceneContext& sceneContext) {
     EditorAssetBrowserState& state = sceneContext.AssetBrowser();
     if (state.IsTextEditing()) {
         static_cast<void>(sceneContext.CommitAssetTextEdit());

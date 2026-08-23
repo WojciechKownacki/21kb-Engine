@@ -2540,6 +2540,8 @@ ReadScriptValue(
         } else if (*type == "material_type") {
             created =
                 state.context.CreateMaterialTypeAsset(virtualFolder);
+        } else if (*type == "particle_effect") {
+            created = state.context.CreateParticleEffectAsset(virtualFolder);
         } else {
             return { false, "unsupported asset type" };
         }
@@ -2552,7 +2554,7 @@ ReadScriptValue(
                 before, [&metadata](const auto& candidate) {
                     return candidate.id == metadata.id;
                 });
-            if (!existed) {
+            if (!existed && (*type != "particle_effect" || metadata.type == kb::scene::kParticleEffectAssetType)) {
                 createdId = metadata.id;
                 break;
             }

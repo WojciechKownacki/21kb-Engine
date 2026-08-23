@@ -31,9 +31,12 @@ ParticleEditorPanelLayout ParticleEditorPanelLayoutResolver::Resolve(
     const LONG bodyBottom = std::max(bodyTop, content.bottom - statusHeight);
     const LONG composerLeft = std::max(content.left, content.right - composerWidth);
     const int padding = Scale(6, dpi);
-    const int composerHeaderHeight = Scale(30, dpi);
-    const int addHeight = Scale(24, dpi);
+    const int composerHeaderHeight = Scale(28, dpi);
+    const int sectionHeaderHeight = Scale(24, dpi);
+    const int addHeight = Scale(28, dpi);
     const int rowHeight = Scale(30, dpi);
+    const int compactRowHeight = Scale(28, dpi);
+    const int outputChoiceHeight = Scale(28, dpi);
     const LONG headerBottom = std::min(bodyBottom, bodyTop + composerHeaderHeight);
     const LONG addTop = std::min(bodyBottom, headerBottom + padding);
     const LONG addBottom = std::min(bodyBottom, addTop + addHeight);
@@ -48,7 +51,7 @@ ParticleEditorPanelLayout ParticleEditorPanelLayoutResolver::Resolve(
         .emitterList = {composerLeft, listTop, content.right, bodyBottom},
         .statusBar = {content.left, bodyBottom, content.right, content.bottom},
     };
-    const int iconWidth = Scale(18, dpi);
+    const int iconWidth = Scale(22, dpi);
     const int gripWidth = Scale(14, dpi);
     const int horizontalGap = Scale(3, dpi);
     const LONG rowsLeft = composerLeft + padding;
@@ -83,23 +86,37 @@ ParticleEditorPanelLayout ParticleEditorPanelLayoutResolver::Resolve(
         };
     }
     LONG streamTop = firstRowTop + static_cast<LONG>(layout.emitterRowCount * static_cast<std::size_t>(rowHeight)) + padding;
-    layout.outputHeader = {rowsLeft, streamTop, rowsRight, streamTop + rowHeight};
-    streamTop += rowHeight;
-    layout.materialPicker = {rowsLeft, streamTop, rowsRight, streamTop + rowHeight}; streamTop += rowHeight;
-    layout.meshPicker = {rowsLeft, streamTop, rowsRight, streamTop + rowHeight}; streamTop += rowHeight;
-    layout.texturePicker = {rowsLeft, streamTop, rowsRight, streamTop + rowHeight}; streamTop += rowHeight;
+    layout.outputHeader = {rowsLeft, streamTop, rowsRight, streamTop + sectionHeaderHeight};
+    streamTop += sectionHeaderHeight;
+    const LONG assetPickerGap = Scale(4, dpi);
+    const LONG assetPickerWidth = std::max<LONG>(0, (rowsRight - rowsLeft - assetPickerGap * 2) / 3);
+    layout.materialPicker = {rowsLeft, streamTop, rowsLeft + assetPickerWidth, streamTop + compactRowHeight};
+    layout.meshPicker = {layout.materialPicker.right + assetPickerGap, streamTop,
+        layout.materialPicker.right + assetPickerGap + assetPickerWidth, streamTop + compactRowHeight};
+    layout.texturePicker = {layout.meshPicker.right + assetPickerGap, streamTop, rowsRight, streamTop + compactRowHeight};
+    streamTop += compactRowHeight + padding;
     layout.outputChoiceCount = inspector == nullptr ? 0U : std::min(inspector->outputChoices.size(), layout.outputChoices.size());
     for (std::size_t index = 0U; index < layout.outputChoiceCount; ++index) {
-        layout.outputChoices[index] = {rowsLeft, streamTop, rowsRight, streamTop + rowHeight};
-        streamTop += rowHeight;
+        const std::size_t column = index % 2U;
+        const std::size_t row = index / 2U;
+        const LONG choiceGap = Scale(4, dpi);
+        const LONG choiceWidth = std::max<LONG>(0, (rowsRight - rowsLeft - choiceGap) / 2);
+        const LONG choiceLeft = rowsLeft + static_cast<LONG>(column) * (choiceWidth + choiceGap);
+        const LONG choiceTop = streamTop + static_cast<LONG>(row * static_cast<std::size_t>(outputChoiceHeight));
+        layout.outputChoices[index] = {choiceLeft, choiceTop,
+            column == 0U ? choiceLeft + choiceWidth : rowsRight, choiceTop + outputChoiceHeight - Scale(2, dpi)};
     }
+    streamTop += static_cast<LONG>((layout.outputChoiceCount + 1U) / 2U) * outputChoiceHeight + padding;
+    layout.propertyHeader = {rowsLeft, streamTop, rowsRight, streamTop + sectionHeaderHeight};
+    streamTop += sectionHeaderHeight;
     layout.propertyRowCount = inspector == nullptr ? 0U : std::min(inspector->properties.size(), layout.propertyRows.size());
     for (std::size_t index = 0U; index < layout.propertyRowCount; ++index) {
-        layout.propertyRows[index] = {rowsLeft, streamTop, rowsRight, streamTop + rowHeight};
-        streamTop += rowHeight;
+        layout.propertyRows[index] = {rowsLeft, streamTop, rowsRight, streamTop + compactRowHeight - Scale(1, dpi)};
+        streamTop += compactRowHeight;
     }
-    layout.moduleHeader = {rowsLeft, streamTop, rowsRight, streamTop + rowHeight}; streamTop += rowHeight;
-    layout.addModule = {rowsLeft, streamTop, rowsRight, streamTop + rowHeight}; streamTop += rowHeight;
+    streamTop += padding;
+    layout.moduleHeader = {rowsLeft, streamTop, rowsRight, streamTop + sectionHeaderHeight}; streamTop += sectionHeaderHeight;
+    layout.addModule = {rowsLeft, streamTop, rowsRight, streamTop + addHeight}; streamTop += addHeight + padding;
     layout.moduleRowCount = inspector == nullptr ? 0U : std::min(inspector->modules.size(), layout.moduleRows.size());
     for (std::size_t index = 0U; index < layout.moduleRowCount; ++index) {
         const RECT row{rowsLeft, streamTop, rowsRight, streamTop + rowHeight - Scale(2, dpi)};
@@ -123,19 +140,21 @@ ParticleEditorPanelLayout ParticleEditorPanelLayoutResolver::Resolve(
             .name = {row.left + horizontalGap * 2 + gripWidth, row.top, actionRight, row.bottom},
             .moveUp = up, .moveDown = down, .remove = remove};
     }
-    layout.dependencyHeader = {rowsLeft, streamTop, rowsRight, streamTop + rowHeight}; streamTop += rowHeight;
+    layout.dependencyHeader = {rowsLeft, streamTop, rowsRight, streamTop + sectionHeaderHeight}; streamTop += sectionHeaderHeight;
     layout.dependencyRowCount = inspector == nullptr ? 0U :
         std::min(inspector->dependencies.size(), layout.dependencyRows.size());
     for (std::size_t index = 0U; index < layout.dependencyRowCount; ++index) {
         layout.dependencyRows[index] = {rowsLeft, streamTop, rowsRight, streamTop + rowHeight};
         streamTop += rowHeight;
     }
-    layout.diagnosticHeader = {rowsLeft, streamTop, rowsRight, streamTop + rowHeight}; streamTop += rowHeight;
+    layout.diagnosticHeader = {rowsLeft, streamTop, rowsRight, streamTop + sectionHeaderHeight}; streamTop += sectionHeaderHeight;
     layout.diagnosticRowCount = inspector == nullptr ? 0U : std::min(inspector->diagnostics.size(), layout.diagnosticRows.size());
     for (std::size_t index = 0U; index < layout.diagnosticRowCount; ++index) {
         layout.diagnosticRows[index] = {rowsLeft, streamTop, rowsRight, streamTop + rowHeight};
         streamTop += rowHeight;
     }
+    layout.composerContentHeight = static_cast<int>(std::max<LONG>(0,
+        streamTop + std::max(0, composerScrollOffset) - listTop));
     return layout;
 }
 
@@ -213,12 +232,10 @@ std::uint32_t ParticleEditorPanelLayoutResolver::ModuleReorderTargetAt(
 
 int ParticleEditorPanelLayoutResolver::MaximumComposerScroll(
     const ParticleEditorPanelLayout& layout, unsigned int dpi) noexcept {
-    int contentHeight = static_cast<int>(layout.emitterRowCount + layout.outputChoiceCount +
-        layout.propertyRowCount + layout.moduleRowCount + layout.dependencyRowCount +
-        layout.diagnosticRowCount + 8U) * Scale(30, dpi) + Scale(6, dpi);
+    static_cast<void>(dpi);
     const int visibleHeight = static_cast<int>(
         std::max<LONG>(0, layout.emitterList.bottom - layout.emitterList.top));
-    return std::max(0, contentHeight - visibleHeight);
+    return std::max(0, layout.composerContentHeight - visibleHeight);
 }
 
 } // namespace kb::editor

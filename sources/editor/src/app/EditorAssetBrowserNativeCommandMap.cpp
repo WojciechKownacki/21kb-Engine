@@ -17,6 +17,7 @@ inline constexpr std::uint32_t kCreateMaterialFromGraph = 2011U;
 inline constexpr std::uint32_t kCreateMaterialFromMaterialType = 2012U;
 inline constexpr std::uint32_t kNewMaterialFunction = 2013U;
 inline constexpr std::uint32_t kNewAudioMixer = 2014U;
+inline constexpr std::uint32_t kNewParticleEffect = 2015U;
 inline constexpr std::uint32_t kDirectionalLight = 2101U;
 inline constexpr std::uint32_t kPointLight = 2102U;
 inline constexpr std::uint32_t kSpotLight = 2103U;
@@ -43,6 +44,7 @@ std::uint32_t EditorAssetBrowserNativeCommandMap::Id(EditorAssetContextCommand c
     case EditorAssetContextCommand::NewInputAxis: return kNewInputAxis;
     case EditorAssetContextCommand::NewInputMappingContext: return kNewInputMappingContext;
     case EditorAssetContextCommand::NewAudioMixer: return kNewAudioMixer;
+    case EditorAssetContextCommand::NewParticleEffect: return kNewParticleEffect;
     case EditorAssetContextCommand::ExtractMaterials: return kExtractMaterials;
     case EditorAssetContextCommand::AddDirectionalLight: return kDirectionalLight;
     case EditorAssetContextCommand::AddPointLight: return kPointLight;
@@ -75,6 +77,7 @@ EditorAssetContextCommand EditorAssetBrowserNativeCommandMap::Command(std::uint3
     case kNewInputAxis: return EditorAssetContextCommand::NewInputAxis;
     case kNewInputMappingContext: return EditorAssetContextCommand::NewInputMappingContext;
     case kNewAudioMixer: return EditorAssetContextCommand::NewAudioMixer;
+    case kNewParticleEffect: return EditorAssetContextCommand::NewParticleEffect;
     case kExtractMaterials: return EditorAssetContextCommand::ExtractMaterials;
     case kDirectionalLight: return EditorAssetContextCommand::AddDirectionalLight;
     case kPointLight: return EditorAssetContextCommand::AddPointLight;
