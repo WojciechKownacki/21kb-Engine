@@ -428,6 +428,7 @@ public:
     [[nodiscard]] bool CreateInputAxisAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateAudioMixerAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool CreateParticleEffectAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialFunctionAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialGraphAsset(const std::filesystem::path& virtualFolder);
@@ -700,7 +701,7 @@ public:
     [[nodiscard]] std::uint64_t MaterialThumbnailSceneRevision() const noexcept;
     [[nodiscard]] const EditorMaterialPreviewSceneSettings& MaterialPreviewSceneSettings() const noexcept;
     [[nodiscard]] bool SetMaterialPreviewSceneSettings(EditorMaterialPreviewSceneSettings settings);
-    // Orbit (drag) and dolly (wheel) the material preview camera around the framed object, Unreal-style.
+    // Orbit (drag) and dolly (wheel) the material preview camera around the framed object.
     // Camera-only: no re-cook, no scene rebuild.
     [[nodiscard]] bool OrbitMaterialPreviewCamera(float deltaYawDegrees, float deltaPitchDegrees);
     [[nodiscard]] bool ZoomMaterialPreviewCamera(float scale);
@@ -1072,10 +1073,10 @@ public:
     // via its section-header "×". Undoable; false if the entity lacks that one.
     [[nodiscard]] bool RemovePhysicsComponent(kb::scene::SceneEntity entity, PhysicsComponentKind kind);
     // Whether the green collider wireframes are drawn in the Scene Viewport (the
-    // Unity-style "Gizmos" toggle). Default on so colliders are visible.
+    // Gizmo visibility toggle. Default on so colliders are visible.
     [[nodiscard]] bool ArePhysicsGizmosVisible() const noexcept { return physicsGizmosVisible_; }
     void SetPhysicsGizmosVisible(bool visible) noexcept { physicsGizmosVisible_ = visible; }
-    // Sizes the entity's Collider to enclose its Mesh Renderer mesh (Unity-style
+    // Sizes the entity's Collider to enclose its Mesh Renderer mesh (matching
     // "Fit to Mesh"): center + radius/box-size/height from the mesh bounds.
     // Undoable; false if the entity has no Collider or no loadable mesh.
     [[nodiscard]] bool FitColliderToMesh(kb::scene::SceneEntity entity);
