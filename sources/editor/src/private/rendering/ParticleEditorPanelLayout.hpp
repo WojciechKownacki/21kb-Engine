@@ -2,6 +2,7 @@
 
 #include "editor/ParticleEmitterListModel.hpp"
 #include "editor/ParticleEmitterInspectorModel.hpp"
+#include "editor/ParticleEditorWorkspaceState.hpp"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -36,8 +37,10 @@ enum class ParticleEditorPanelAction : std::uint8_t {
     MoveModuleUp,
     MoveModuleDown,
     RemoveModule,
+    AppendRecipe,
     NavigateDiagnostic,
     NavigateDependency,
+    ToggleComposerSection,
 };
 
 #if defined(_WIN32)
@@ -59,6 +62,8 @@ struct ParticleEditorPanelLayout {
     RECT toolbar{};
     RECT preview{};
     RECT composer{};
+    RECT composerScrollTrack{};
+    RECT composerScrollThumb{};
     RECT composerHeader{};
     RECT addEmitter{};
     RECT emitterList{};
@@ -74,6 +79,9 @@ struct ParticleEditorPanelLayout {
     RECT propertyHeader{};
     std::array<RECT, 128U> propertyRows{};
     std::size_t propertyRowCount = 0U;
+    RECT recipeHeader{};
+    std::array<RECT, 32U> recipeTiles{};
+    std::size_t recipeTileCount = 0U;
     RECT moduleHeader{};
     RECT addModule{};
     std::array<ParticleEditorEmitterRowLayout, kb::scene::kParticleEffectMaxModulesPerEmitter> moduleRows{};
@@ -98,6 +106,9 @@ struct ParticleEditorPanelHit {
     std::size_t diagnosticIndex = 0U;
     std::size_t dependencyIndex = 0U;
     std::size_t propertyIndex = 0U;
+    std::size_t recipeIndex = 0U;
+    kb::particle_editor::ParticleEditorComposerSection composerSection =
+        kb::particle_editor::ParticleEditorComposerSection::Emitters;
 };
 
 class ParticleEditorPanelLayoutResolver final {
@@ -108,7 +119,9 @@ public:
         std::span<const kb::particle_editor::ParticleEmitterListRow> emitters,
         int composerScrollOffset,
         unsigned int dpi = 96U,
-        const kb::particle_editor::ParticleEmitterInspectorView* inspector = nullptr) noexcept;
+        const kb::particle_editor::ParticleEmitterInspectorView* inspector = nullptr,
+        std::size_t recipeCount = 0U,
+        const kb::particle_editor::ParticleEditorWorkspaceState* workspace = nullptr) noexcept;
     [[nodiscard]] static ParticleEditorPanelHit HitTest(
         const ParticleEditorPanelLayout& layout, int x, int y) noexcept;
     [[nodiscard]] static std::uint32_t ReorderTargetAt(

@@ -912,6 +912,9 @@ add_custom_command(TARGET kb_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Icons/SceneView/HEROICONS-LICENSE.txt"
         "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Icons/SceneView/HEROICONS-LICENSE.txt"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle/content"
+        "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/21kbParticle"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Fonts"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Fonts/DejaVuSans.ttf"
@@ -929,6 +932,9 @@ add_custom_command(TARGET kb_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Icons/SceneView/HEROICONS-LICENSE.txt"
         "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Icons/SceneView/HEROICONS-LICENSE.txt"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle/content"
+        "$<TARGET_FILE_DIR:kb_editor>/Content/21kbParticle"
     VERBATIM
 )
 
@@ -1033,7 +1039,10 @@ if(TARGET kb_21kb_particle_plugin)
     else()
         set(KB_21KB_PARTICLE_EDITOR_PLUGIN_PATH "")
     endif()
-    target_compile_definitions(kb_editor PRIVATE "KB_21KB_PARTICLE_PLUGIN_PATH=\"${KB_21KB_PARTICLE_EDITOR_PLUGIN_PATH}\"")
+    target_compile_definitions(kb_editor PRIVATE
+        "KB_21KB_PARTICLE_PLUGIN_PATH=\"${KB_21KB_PARTICLE_EDITOR_PLUGIN_PATH}\""
+        "KB_21KB_PARTICLE_CONTENT_ROOT=\"$<TARGET_FILE_DIR:kb_editor>/Content/21kbParticle\""
+    )
 endif()
 
 kb_target_copy_bgfx_runtime_shaders(kb_editor)
