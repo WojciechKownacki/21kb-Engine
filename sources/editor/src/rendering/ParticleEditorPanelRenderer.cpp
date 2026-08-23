@@ -50,7 +50,7 @@ void DrawButton(HDC dc, const RECT& rect, const char* label,
     DrawTextA(dc, label, -1, &text, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 }
 
-void DrawSectionHeader(HDC dc, const RECT& rect, const char* label) {
+void DrawSectionHeader(HDC dc, const RECT& rect, const char* label, bool expanded) {
     GdiDrawing::FillRectColor(dc, rect, RGB(34, 38, 45));
     const HBRUSH accent = CreateSolidBrush(RGB(82, 151, 214));
     if (accent != nullptr) {
@@ -60,8 +60,31 @@ void DrawSectionHeader(HDC dc, const RECT& rect, const char* label) {
     }
     RECT text = rect;
     text.left += 8;
+    text.right -= 20;
     SetTextColor(dc, RGB(202, 213, 226));
     DrawTextA(dc, label, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    RECT chevron = rect;
+    chevron.left = chevron.right - 18;
+    DrawTextA(dc, expanded ? "v" : ">", -1, &chevron, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+}
+
+void DrawRecipeTile(HDC dc, const RECT& rect, const kb::assets::AssetMetadata& recipe) {
+    GdiDrawing::FillRectColor(dc, rect, RGB(39, 44, 52));
+    RECT title = rect;
+    title.left += 6;
+    title.right -= 6;
+    title.top += 4;
+    title.bottom = title.top + 18;
+    SetTextColor(dc, RGB(226, 231, 238));
+    DrawTextA(dc, recipe.name.c_str(), -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    RECT category = rect;
+    category.left += 6;
+    category.right -= 6;
+    category.top = title.bottom;
+    category.bottom -= 4;
+    SetTextColor(dc, RGB(139, 177, 214));
+    DrawTextA(dc, recipe.browseTag.c_str(), -1, &category,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 }
 
 [[nodiscard]] unsigned int WindowDpi(HWND window) noexcept {
@@ -129,13 +152,13 @@ void ParticleEditorPanelRenderer::Paint(
     const unsigned int dpi = WindowDpi(host);
     const auto rows = sceneContext.ParticleEditorEmitterRows();
     const auto inspector = sceneContext.ParticleEditorInspector();
+    const auto recipes = sceneContext.ParticleEditorRecipes();
     const auto& workspace = sceneContext.ParticleEditorWorkspace();
     const ParticleEditorPanelLayout layout = ParticleEditorPanelLayoutResolver::Resolve(
-        content, rows, workspace.ComposerScrollOffset(), dpi, &inspector);
+        content, rows, workspace.ComposerScrollOffset(), dpi, &inspector, recipes.size(), &workspace);
     GdiDrawing::FillRectColor(dc, content, RGB(27, 29, 33));
     GdiDrawing::FillRectColor(dc, layout.toolbar, RGB(34, 37, 43));
     GdiDrawing::FillRectColor(dc, layout.composer, RGB(30, 33, 38));
-    GdiDrawing::FillRectColor(dc, layout.composerHeader, RGB(38, 42, 49));
     GdiDrawing::FillRectColor(dc, layout.statusBar, RGB(24, 26, 30));
     const ScopedFont font{12, FW_SEMIBOLD};
     const ScopedGdiObject selectedFont(dc, font.handle);
@@ -156,15 +179,18 @@ void ParticleEditorPanelRenderer::Paint(
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         return;
     }
-    RECT composerTitle = layout.composerHeader;
-    composerTitle.left += 8;
-    SetTextColor(dc, RGB(219, 225, 233));
-    DrawTextA(dc, "Emitters", -1, &composerTitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-    DrawButton(dc, layout.addEmitter, "+ Add Emitter", ParticleEditorButtonTone::Primary,
-        rows.size() < kb::scene::kParticleEffectMaxEmitters);
     const int saved = SaveDC(dc);
     IntersectClipRect(dc, layout.emitterList.left, layout.emitterList.top,
                       layout.emitterList.right, layout.emitterList.bottom);
+    const auto expanded = [&workspace](kb::particle_editor::ParticleEditorComposerSection section) noexcept {
+        return workspace.ComposerSectionExpanded(section);
+    };
+    DrawSectionHeader(dc, layout.composerHeader, "Emitters",
+        expanded(kb::particle_editor::ParticleEditorComposerSection::Emitters));
+    if (expanded(kb::particle_editor::ParticleEditorComposerSection::Emitters)) {
+        DrawButton(dc, layout.addEmitter, "+ Add Emitter", ParticleEditorButtonTone::Primary,
+            rows.size() < kb::scene::kParticleEffectMaxEmitters);
+    }
     for (std::size_t index = 0U; index < layout.emitterRowCount; ++index) {
         const auto& rowLayout = layout.emitterRows[index];
         const auto& row = rows[index];
@@ -187,24 +213,8 @@ void ParticleEditorPanelRenderer::Paint(
         DrawButton(dc, rowLayout.moveDown, "v");
         DrawButton(dc, rowLayout.remove, "x", ParticleEditorButtonTone::Destructive);
     }
-    DrawSectionHeader(dc, layout.outputHeader, "Output");
-    DrawButton(dc, layout.materialPicker, "Material");
-    DrawButton(dc, layout.meshPicker, "Mesh");
-    DrawButton(dc, layout.texturePicker, "Atlas");
-    for (std::size_t index = 0U; index < layout.outputChoiceCount; ++index) {
-        const auto& choice = inspector.outputChoices[index];
-        const auto* asset = sceneContext.ParticleEditorWorkingAsset();
-        const auto* emitter = asset == nullptr ? nullptr : kb::particle_editor::ParticleEmitterListModel::Find(*asset, inspector.emitterId);
-        const bool active = emitter != nullptr && emitter->output.type == choice.type;
-        DrawButton(dc, layout.outputChoices[index], choice.label.c_str(),
-            active ? ParticleEditorButtonTone::Selected : ParticleEditorButtonTone::Neutral, choice.enabled);
-        if (!choice.enabled) {
-            SetTextColor(dc, RGB(161, 124, 124));
-            RECT mark = layout.outputChoices[index]; mark.left = mark.right - 28;
-            DrawTextA(dc, "N/A", -1, &mark, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-        }
-    }
-    DrawSectionHeader(dc, layout.propertyHeader, "Properties");
+    DrawSectionHeader(dc, layout.propertyHeader, "Emitter Settings",
+        expanded(kb::particle_editor::ParticleEditorComposerSection::Settings));
     for (std::size_t index = 0U; index < layout.propertyRowCount; ++index) {
         const auto& property = inspector.properties[index];
         GdiDrawing::FillRectColor(dc, layout.propertyRows[index], RGB(36, 40, 46));
@@ -215,9 +225,18 @@ void ParticleEditorPanelRenderer::Paint(
         SetTextColor(dc, property.editable ? RGB(226, 231, 238) : RGB(135, 144, 156));
         DrawTextA(dc, property.value.c_str(), -1, &value, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
-    DrawSectionHeader(dc, layout.moduleHeader, "Modules");
-    DrawButton(dc, layout.addModule, "+ Add Module", ParticleEditorButtonTone::Primary,
-        inspector.modules.size() < kb::scene::kParticleEffectMaxModulesPerEmitter);
+    const std::string recipeTitle = "Recipes (" + std::to_string(recipes.size()) + ")";
+    DrawSectionHeader(dc, layout.recipeHeader, recipeTitle.c_str(),
+        expanded(kb::particle_editor::ParticleEditorComposerSection::Recipes));
+    for (std::size_t index = 0U; index < layout.recipeTileCount; ++index) {
+        DrawRecipeTile(dc, layout.recipeTiles[index], recipes[index]);
+    }
+    DrawSectionHeader(dc, layout.moduleHeader, "Behavior Modules",
+        expanded(kb::particle_editor::ParticleEditorComposerSection::Modules));
+    if (expanded(kb::particle_editor::ParticleEditorComposerSection::Modules)) {
+        DrawButton(dc, layout.addModule, "+ Add Module", ParticleEditorButtonTone::Primary,
+            inspector.modules.size() < kb::scene::kParticleEffectMaxModulesPerEmitter);
+    }
     for (std::size_t index = 0U; index < layout.moduleRowCount; ++index) {
         const auto& module = inspector.modules[index];
         const auto& row = layout.moduleRows[index];
@@ -233,26 +252,44 @@ void ParticleEditorPanelRenderer::Paint(
         DrawButton(dc, row.moveUp, "^"); DrawButton(dc, row.moveDown, "v");
         DrawButton(dc, row.remove, "x", ParticleEditorButtonTone::Destructive);
     }
+    DrawSectionHeader(dc, layout.outputHeader, "Output",
+        expanded(kb::particle_editor::ParticleEditorComposerSection::Output));
+    if (expanded(kb::particle_editor::ParticleEditorComposerSection::Output)) {
+        DrawButton(dc, layout.materialPicker, "Material");
+        DrawButton(dc, layout.meshPicker, "Mesh");
+        DrawButton(dc, layout.texturePicker, "Atlas");
+    }
+    for (std::size_t index = 0U; index < layout.outputChoiceCount; ++index) {
+        const auto& choice = inspector.outputChoices[index];
+        const auto* asset = sceneContext.ParticleEditorWorkingAsset();
+        const auto* emitter = asset == nullptr ? nullptr : kb::particle_editor::ParticleEmitterListModel::Find(*asset, inspector.emitterId);
+        const bool active = emitter != nullptr && emitter->output.type == choice.type;
+        DrawButton(dc, layout.outputChoices[index], choice.label.c_str(),
+            active ? ParticleEditorButtonTone::Selected : ParticleEditorButtonTone::Neutral, choice.enabled);
+        if (!choice.enabled) {
+            SetTextColor(dc, RGB(161, 124, 124));
+            RECT mark = layout.outputChoices[index]; mark.left = mark.right - 28;
+            DrawTextA(dc, "N/A", -1, &mark, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        }
+    }
     if (workspace.ModuleDragActive() && layout.moduleRowCount != 0U) {
         const std::uint32_t order = std::min<std::uint32_t>(workspace.ModuleDragTargetOrder(),
             static_cast<std::uint32_t>(layout.moduleRowCount - 1U));
         const RECT& target = layout.moduleRows[order].bounds;
         GdiDrawing::FillRectColor(dc, {target.left, target.top - 1, target.right, target.top + 2}, RGB(80, 157, 230));
     }
-    DrawSectionHeader(dc, layout.dependencyHeader, "Dependencies");
-    RECT dependencies = layout.dependencyHeader;
     const std::string dependencyTitle = "Dependencies (" + std::to_string(inspector.dependencies.size()) + ")";
-    DrawTextA(dc, dependencyTitle.c_str(), -1, &dependencies, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    DrawSectionHeader(dc, layout.dependencyHeader, dependencyTitle.c_str(),
+        expanded(kb::particle_editor::ParticleEditorComposerSection::Dependencies));
     for (std::size_t index = 0U; index < layout.dependencyRowCount; ++index) {
         SetTextColor(dc, RGB(155, 194, 232));
         RECT row = layout.dependencyRows[index];
         DrawTextA(dc, inspector.dependencies[index].virtualPath.c_str(), -1, &row,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
-    DrawSectionHeader(dc, layout.diagnosticHeader, "Diagnostics");
-    RECT diagnostics = layout.diagnosticHeader;
     const std::string diagnosticTitle = "Diagnostics (" + std::to_string(inspector.diagnostics.size()) + ")";
-    DrawTextA(dc, diagnosticTitle.c_str(), -1, &diagnostics, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    DrawSectionHeader(dc, layout.diagnosticHeader, diagnosticTitle.c_str(),
+        expanded(kb::particle_editor::ParticleEditorComposerSection::Diagnostics));
     for (std::size_t index = 0U; index < layout.diagnosticRowCount; ++index) {
         SetTextColor(dc, RGB(214, 143, 143));
         RECT row = layout.diagnosticRows[index];
@@ -267,6 +304,10 @@ void ParticleEditorPanelRenderer::Paint(
             {target.left, target.top - 1, target.right, target.top + 2}, RGB(80, 157, 230));
     }
     RestoreDC(dc, saved);
+    if (layout.composerScrollThumb.bottom > layout.composerScrollThumb.top) {
+        GdiDrawing::FillRectColor(dc, layout.composerScrollTrack, RGB(24, 27, 32));
+        GdiDrawing::FillRectColor(dc, layout.composerScrollThumb, RGB(75, 87, 103));
+    }
     const bool dirty = sceneContext.ParticleEditorDirty();
     const HBRUSH statusIndicator = CreateSolidBrush(dirty ? RGB(221, 161, 78) : RGB(89, 184, 136));
     if (statusIndicator != nullptr) {

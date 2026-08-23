@@ -481,19 +481,15 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             return;
         const auto rows = sceneContext_.ParticleEditorEmitterRows();
         const auto inspector = sceneContext_.ParticleEditorInspector();
+        const auto recipes = sceneContext_.ParticleEditorRecipes();
         const ParticleEditorPanelLayout layout = ParticleEditorPanelLayoutResolver::Resolve(
             *particleEditorContent, rows,
-            sceneContext_.ParticleEditorWorkspace().ComposerScrollOffset(), GetDpiForWindow(messageWindow), &inspector);
+            sceneContext_.ParticleEditorWorkspace().ComposerScrollOffset(), GetDpiForWindow(messageWindow), &inspector,
+            recipes.size(), &sceneContext_.ParticleEditorWorkspace());
         ParticleEditorPanelHit hit = ParticleEditorPanelLayoutResolver::HitTest(layout, x, y);
         if (hit.action != ParticleEditorPanelAction::None) {
             kb::assets::AssetId selectedMaterial{};
             std::string editedValue;
-            if (hit.action == ParticleEditorPanelAction::AddEmitter) {
-                const auto selected = EditorMaterialAssetPickerDialog::Show(
-                    mainWindow_, MakeEditorDarkTheme(), sceneContext_, sceneViewport_, {}, false);
-                if (!selected.accepted) return;
-                selectedMaterial = selected.assetId;
-            }
             if (hit.action == ParticleEditorPanelAction::PickOutputMaterial) {
                 const auto selected = EditorMaterialAssetPickerDialog::Show(
                     mainWindow_, MakeEditorDarkTheme(), sceneContext_, sceneViewport_, {}, false);

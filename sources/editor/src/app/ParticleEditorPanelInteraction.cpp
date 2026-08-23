@@ -15,7 +15,7 @@ bool ParticleEditorPanelInteraction::Execute(
     std::string_view editedValue) {
     switch (hit.action) {
     case ParticleEditorPanelAction::AddEmitter:
-        return selectedMaterial.IsValid() && sceneContext.AddParticleEditorEmitter(selectedMaterial);
+        return sceneContext.AddParticleEditorEmitter(selectedMaterial);
     case ParticleEditorPanelAction::SelectEmitter:
         return sceneContext.SelectParticleEditorEmitter(hit.emitterId);
     case ParticleEditorPanelAction::ToggleEmitter:
@@ -63,10 +63,18 @@ bool ParticleEditorPanelInteraction::Execute(
     }
     case ParticleEditorPanelAction::RemoveModule:
         return sceneContext.RemoveParticleEditorModule(hit.moduleId);
+    case ParticleEditorPanelAction::AppendRecipe: {
+        const auto recipes = sceneContext.ParticleEditorRecipes();
+        return hit.recipeIndex < recipes.size() &&
+            sceneContext.AppendParticleEditorRecipe(recipes[hit.recipeIndex].id);
+    }
     case ParticleEditorPanelAction::NavigateDiagnostic:
         return sceneContext.FocusParticleEditorDiagnostic(hit.diagnosticIndex);
     case ParticleEditorPanelAction::NavigateDependency:
         return sceneContext.NavigateParticleEditorDependency(hit.dependencyIndex);
+    case ParticleEditorPanelAction::ToggleComposerSection:
+        sceneContext.ToggleParticleEditorComposerSection(hit.composerSection);
+        return true;
     case ParticleEditorPanelAction::None:
         break;
     }

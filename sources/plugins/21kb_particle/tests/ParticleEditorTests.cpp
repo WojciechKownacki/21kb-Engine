@@ -144,6 +144,38 @@ void TestDocumentHistorySavePointAndAtomicFailure() {
 
 void TestEmitterListCommandsAndAuthoredCompileOrder() {
     using namespace kb::particle_editor;
+    ParticleEditorDocument recipeDocument;
+    ParticleEditorWorkspaceState recipeWorkspace;
+    Require(recipeDocument.Create(MakeEffect()).Succeeded(), "recipe append fixture creation failed");
+    recipeWorkspace.Synchronize(recipeDocument.Asset());
+    auto recipe = MakeEffect();
+    recipe.emitters[0].emitterId = 21U;
+    recipe.emitters[0].authoringOrder = 0U;
+    recipe.emitters[0].name = "Recipe Source";
+    auto recipeTarget = recipe.emitters[0];
+    recipeTarget.emitterId = 22U;
+    recipeTarget.authoringOrder = 1U;
+    recipeTarget.name = "Recipe Target";
+    recipe.emitters.push_back(std::move(recipeTarget));
+    recipe.emitters[0].modules.push_back({.moduleId = 1U, .authoringOrder = 0U,
+        .type = kb::scene::ParticleModuleType::SubEmitter,
+        .payload = kb::scene::ParticleSubEmitterModule{.targetEmitterId = 22U}});
+    recipe.eventBindings.push_back({.sourceEmitterId = 21U,
+        .action = kb::scene::ParticleEventAction::EmitTargetEmitter, .targetEmitterId = 22U});
+    Require(ParticleEditorCommands::AppendRecipeEmitters(recipeDocument, recipeWorkspace, recipe).Succeeded() &&
+            recipeDocument.Asset().emitters.size() == 3U &&
+            recipeDocument.Asset().emitters[0].emitterId == 1U &&
+            recipeDocument.Asset().emitters[1].emitterId == 2U &&
+            recipeDocument.Asset().emitters[0].authoringOrder == 1U &&
+            recipeDocument.Asset().emitters[1].authoringOrder == 2U &&
+            std::get<kb::scene::ParticleSubEmitterModule>(recipeDocument.Asset().emitters[0].modules[0].payload)
+                .targetEmitterId == 2U &&
+            recipeDocument.Asset().eventBindings[0].sourceEmitterId == 1U &&
+            recipeDocument.Asset().eventBindings[0].targetEmitterId == 2U,
+        "recipe append did not preserve authored order or remap internal emitter links");
+    Require(kb::scene::ParticleEffectAssetValidator::ValidateStructure(recipeDocument.Asset()).Succeeded(),
+        "recipe append did not produce a structurally valid working document");
+
     ParticleEditorDocument limited;
     ParticleEditorWorkspaceState limitedWorkspace;
     Require(limited.Create(MakeEffect()).Succeeded(), "emitter command fixture creation failed");

@@ -115,11 +115,12 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
             const std::vector<kb::particle_editor::ParticleEmitterListRow> rows =
                 sceneContext_.ParticleEditorEmitterRows();
             const auto inspector = sceneContext_.ParticleEditorInspector();
+            const auto recipes = sceneContext_.ParticleEditorRecipes();
             const ParticleEditorPanelLayout layout = ParticleEditorPanelLayoutResolver::Resolve(
                 *content,
                 rows,
                 sceneContext_.ParticleEditorWorkspace().ComposerScrollOffset(),
-                GetDpiForWindow(messageWindow), &inspector);
+                GetDpiForWindow(messageWindow), &inspector, recipes.size(), &sceneContext_.ParticleEditorWorkspace());
             ParticleEditorPanelInteraction::UpdateDrag(sceneContext_, layout, y);
             EditorWindowInvalidator::InvalidatePanel(messageWindow, *content);
         }

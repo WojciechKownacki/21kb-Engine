@@ -54,6 +54,31 @@ void ParticleEditorWorkspaceState::SetComposerScrollOffset(int offset) noexcept 
 
 int ParticleEditorWorkspaceState::ComposerScrollOffset() const noexcept { return composerScrollOffset_; }
 
+bool ParticleEditorWorkspaceState::ComposerSectionExpanded(ParticleEditorComposerSection section) const noexcept {
+    switch (section) {
+    case ParticleEditorComposerSection::Emitters: return emittersExpanded_;
+    case ParticleEditorComposerSection::Settings: return settingsExpanded_;
+    case ParticleEditorComposerSection::Recipes: return recipesExpanded_;
+    case ParticleEditorComposerSection::Modules: return modulesExpanded_;
+    case ParticleEditorComposerSection::Output: return outputExpanded_;
+    case ParticleEditorComposerSection::Dependencies: return dependenciesExpanded_;
+    case ParticleEditorComposerSection::Diagnostics: return diagnosticsExpanded_;
+    }
+    return false;
+}
+
+void ParticleEditorWorkspaceState::ToggleComposerSection(ParticleEditorComposerSection section) noexcept {
+    switch (section) {
+    case ParticleEditorComposerSection::Emitters: emittersExpanded_ = !emittersExpanded_; break;
+    case ParticleEditorComposerSection::Settings: settingsExpanded_ = !settingsExpanded_; break;
+    case ParticleEditorComposerSection::Recipes: recipesExpanded_ = !recipesExpanded_; break;
+    case ParticleEditorComposerSection::Modules: modulesExpanded_ = !modulesExpanded_; break;
+    case ParticleEditorComposerSection::Output: outputExpanded_ = !outputExpanded_; break;
+    case ParticleEditorComposerSection::Dependencies: dependenciesExpanded_ = !dependenciesExpanded_; break;
+    case ParticleEditorComposerSection::Diagnostics: diagnosticsExpanded_ = !diagnosticsExpanded_; break;
+    }
+}
+
 bool ParticleEditorWorkspaceState::BeginRename(const kb::scene::ParticleEffectAsset& asset,
                                                kb::scene::ParticleStableId emitterId) {
     const kb::scene::ParticleEmitterAsset* emitter = ParticleEmitterListModel::Find(asset, emitterId);

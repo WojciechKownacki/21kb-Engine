@@ -8,6 +8,16 @@
 
 namespace kb::particle_editor {
 
+enum class ParticleEditorComposerSection : std::uint8_t {
+    Emitters,
+    Settings,
+    Recipes,
+    Modules,
+    Output,
+    Dependencies,
+    Diagnostics,
+};
+
 class ParticleEditorWorkspaceState final {
 public:
     void Synchronize(const kb::scene::ParticleEffectAsset& asset) noexcept;
@@ -20,6 +30,8 @@ public:
 
     void SetComposerScrollOffset(int offset) noexcept;
     [[nodiscard]] int ComposerScrollOffset() const noexcept;
+    [[nodiscard]] bool ComposerSectionExpanded(ParticleEditorComposerSection section) const noexcept;
+    void ToggleComposerSection(ParticleEditorComposerSection section) noexcept;
 
     [[nodiscard]] bool BeginRename(const kb::scene::ParticleEffectAsset& asset,
                                    kb::scene::ParticleStableId emitterId);
@@ -59,6 +71,13 @@ private:
     kb::scene::ParticleStableId selectedEmitterId_ = 0U;
     bool focused_ = false;
     int composerScrollOffset_ = 0;
+    bool emittersExpanded_ = true;
+    bool settingsExpanded_ = true;
+    bool recipesExpanded_ = true;
+    bool modulesExpanded_ = true;
+    bool outputExpanded_ = true;
+    bool dependenciesExpanded_ = false;
+    bool diagnosticsExpanded_ = true;
     kb::scene::ParticleStableId renameEmitterId_ = 0U;
     std::string renameText_;
     kb::scene::ParticleStableId draggedEmitterId_ = 0U;
