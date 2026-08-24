@@ -13,10 +13,12 @@ namespace {
 
 } // namespace
 
-void RendererViewConfigurator::ApplyViewOrder(std::span<const std::uint16_t> viewOrder) {
-    if (!viewOrder.empty()) {
-        bgfx::setViewOrder(0U, static_cast<std::uint16_t>(viewOrder.size()), viewOrder.data());
-    }
+void RendererViewConfigurator::ApplyViewOrder(
+    const std::array<std::uint16_t, ViewId::Max>& viewRemap) {
+    bgfx::setViewOrder(
+        0U,
+        static_cast<std::uint16_t>(viewRemap.size()),
+        viewRemap.data());
 }
 
 void RendererViewConfigurator::ConfigureSceneClear(bgfx::ViewId viewId, const RenderSceneSubmitDesc& desc, std::uint16_t clearFlags, std::uint32_t clearRgba) {

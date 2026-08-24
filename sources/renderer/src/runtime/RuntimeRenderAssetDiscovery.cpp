@@ -92,12 +92,17 @@ RuntimeRenderAssetDiscoveryStats RuntimeRenderAssetDiscovery::Stats() const noex
 }
 
 void RuntimeRenderAssetDiscovery::Refresh(kb::scene::Scene& scene, std::uint64_t currentFrame) {
+    // The editor owns project discovery and disables renderer-side scanning. Respect that
+    // contract on the first frame too: the previous guard only returned after a scene already
+    // had a non-zero discovery frame, forcing one full mounted-asset scan during the first
+    // Scene View submit (and again after renderer recreation).
+    if (!discoveryEnabled_) {
+        return;
+    }
+
     kb::assets::AssetManager& manager = scene.Assets().Manager();
     std::uint64_t& lastDiscoveryFrame = lastDiscoveryFrames_[scene.Id()];
     if (lastDiscoveryFrame != 0ULL) {
-        if (!discoveryEnabled_) {
-            return;
-        }
         if (lastDiscoveryFrame == currentFrame) {
             return;
         }

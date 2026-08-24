@@ -3571,6 +3571,16 @@ ReadScriptValue(
             "minimize,deactivate,dpi,resize-move" };
     }
 
+    if (*operation == "verify_scene_render_target_after_secondary") {
+        const auto checkpoint =
+            StringMember(step, "checkpoint", error);
+        if (!checkpoint) return { false, error };
+        return {
+            state.automation.VerifySceneRenderTargetAfterSecondary(
+                *checkpoint),
+            *checkpoint };
+    }
+
     if (*operation == "snapshot") {
         const auto kind = StringMember(step, "kind", error);
         const auto checkpoint =

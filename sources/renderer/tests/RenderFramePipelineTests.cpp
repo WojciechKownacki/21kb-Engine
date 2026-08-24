@@ -421,6 +421,56 @@ void FrameStateRejectsInvalidLifecycleAndDuplicateViews() {
     Require(state.ViewOrder().empty(), "RenderFrameState retained view order after End");
 }
 
+void FrameStateBuildsCompleteBgfxRemapWhenSwitchingToDetachedViewport() {
+    RenderFrameDesc primaryFrame{};
+    primaryFrame.frameIndex = 1U;
+    primaryFrame.viewports.push_back(RenderViewportDesc{
+        .id = RenderViewportId{ 1U },
+        .extent = RenderExtent{ 640U, 360U },
+        .viewportIndex = 0U,
+    });
+    RenderFrameDesc detachedFrame{};
+    detachedFrame.frameIndex = 2U;
+    detachedFrame.viewports.push_back(RenderViewportDesc{
+        .id = RenderViewportId{ 2U },
+        .extent = RenderExtent{ 640U, 360U },
+        .viewportIndex = 1U,
+    });
+
+    const RenderFramePlan primaryPlan = RenderFramePipeline{}.Build(primaryFrame);
+    const RenderFramePlan detachedPlan = RenderFramePipeline{}.Build(detachedFrame);
+    Require(primaryPlan.Succeeded() && detachedPlan.Succeeded(),
+        "RenderFramePipeline did not build viewport-switch plans");
+
+    RenderFrameState state;
+    state.Begin(primaryFrame.frameIndex);
+    Require(state.RegisterViewportPlan(primaryPlan.viewports[0]),
+        "RenderFrameState rejected the primary viewport before a switch");
+    state.Begin(detachedFrame.frameIndex);
+    Require(state.RegisterViewportPlan(detachedPlan.viewports[0]),
+        "RenderFrameState rejected the detached viewport after a switch");
+
+    const std::span<const std::uint16_t> remap = state.BgfxViewRemap();
+    Require(remap.size() == ViewId::Max,
+        "RenderFrameState did not produce a complete bgfx view remap");
+    for (std::uint16_t viewId = 0U; viewId < ViewId::DetachedViewportStart; ++viewId) {
+        Require(remap[viewId] == viewId,
+            "Detached-only frame retained a stale primary viewport remap");
+    }
+    for (std::size_t index = 0U; index < detachedPlan.viewports[0].viewOrder.size(); ++index) {
+        Require(
+            remap[ViewId::DetachedViewportStart + index] ==
+                detachedPlan.viewports[0].viewOrder[index],
+            "Detached viewport order was written at the wrong bgfx remap offset");
+    }
+    std::array<bool, ViewId::Max> seen{};
+    for (const std::uint16_t viewId : remap) {
+        Require(ViewId::IsValid(viewId) && !seen[viewId],
+            "RenderFrameState produced a duplicate or invalid bgfx remap entry");
+        seen[viewId] = true;
+    }
+}
+
 void SceneSubmitDescValidatesViewportTarget() {
     RenderSceneSubmitDesc desc{};
     Require(!desc.IsValid(), "Default RenderSceneSubmitDesc should be invalid");
@@ -474,6 +524,7 @@ void RunRenderFramePipelineTests() {
     FramePipelineRejectsInvalidViewports();
     FrameStateAccumulatesMultipleViewportViewOrders();
     FrameStateRejectsInvalidLifecycleAndDuplicateViews();
+    FrameStateBuildsCompleteBgfxRemapWhenSwitchingToDetachedViewport();
     SceneSubmitDescValidatesViewportTarget();
     SceneSubmitDescCarriesMeshRuntimePolicy();
 }

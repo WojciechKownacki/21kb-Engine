@@ -189,6 +189,42 @@ FindInspectorHit(
     return std::nullopt;
 }
 
+[[nodiscard]] bool ValidateCapturedImage(
+    const std::filesystem::path& path,
+    bool requireNonUniform) {
+    if (!std::filesystem::is_regular_file(path)) {
+        return false;
+    }
+    if (!requireNonUniform) {
+        return true;
+    }
+
+    HeroIconGdiplusRuntime::EnsureStarted();
+    Gdiplus::Bitmap image(path.wstring().c_str());
+    bool valid = image.GetLastStatus() == Gdiplus::Ok &&
+        image.GetWidth() > 0U && image.GetHeight() > 0U;
+    Gdiplus::Color first{};
+    bool firstSet = false;
+    bool varied = false;
+    for (UINT y = 0U; valid && !varied && y < image.GetHeight(); ++y) {
+        for (UINT x = 0U; x < image.GetWidth(); ++x) {
+            Gdiplus::Color pixel{};
+            if (image.GetPixel(x, y, &pixel) != Gdiplus::Ok) {
+                valid = false;
+                break;
+            }
+            if (!firstSet) {
+                first = pixel;
+                firstSet = true;
+            } else if (pixel.GetValue() != first.GetValue()) {
+                varied = true;
+                break;
+            }
+        }
+    }
+    return valid && varied;
+}
+
 [[nodiscard]] InspectorSectionId PhysicsSection(
     PhysicsComponentKind component) noexcept {
     switch (component) {
@@ -422,17 +458,23 @@ struct EditorHeadlessAutomation::Impl {
         }
     }
 
-    [[nodiscard]] bool Render(EditorSceneContext& context) {
+    [[nodiscard]] bool RenderScene(
+        EditorSceneContext& context,
+        std::uint64_t viewportKey,
+        bool editorOverlaysEnabled) {
         if (window == nullptr) return false;
         constexpr RECT bounds{ 0, 0, 640, 360 };
         EditorSceneBgfxViewport::PresentSettings settings{};
         settings.renderWidth = 640U;
         settings.renderHeight = 360U;
-        settings.viewportKey = 1U;
+        settings.viewportKey = viewportKey;
         kb::render::SceneRenderCamera camera{};
+        const bx::Vec3 eye = editorOverlaysEnabled
+            ? bx::Vec3{ 4.0F, 3.0F, 4.0F }
+            : bx::Vec3{ 0.0F, 0.0F, 3.0F };
         bx::mtxLookAt(
             camera.view.data(),
-            bx::Vec3{ 0.0F, 0.0F, 3.0F },
+            eye,
             bx::Vec3{ 0.0F, 0.0F, 0.0F });
         kb::render::SceneDepthPolicy::MakePerspective(
             camera.projection.data(), 60.0F,
@@ -442,7 +484,7 @@ struct EditorHeadlessAutomation::Impl {
         settings.sceneRevision = context.SceneRenderRevision();
         settings.sceneDirtyBaseRevision = settings.sceneRevision;
         settings.sceneFullSyncRequired = true;
-        settings.editorSceneOverlaysEnabled = false;
+        settings.editorSceneOverlaysEnabled = editorOverlaysEnabled;
         settings.selectionMaskEnabled = false;
         settings.selectionOutlineEnabled = false;
         settings.drawSafeArea = false;
@@ -452,6 +494,10 @@ struct EditorHeadlessAutomation::Impl {
         viewport.EndPaintLayout();
         return std::string_view{ viewport.ActiveBackendLabel() } !=
             "Not initialized";
+    }
+
+    [[nodiscard]] bool Render(EditorSceneContext& context) {
+        return RenderScene(context, 1U, false);
     }
 
     // Renders the scene viewport and, when an Animator Controller asset is
@@ -833,34 +879,8 @@ bool EditorHeadlessAutomation::CaptureRuntime(
             kb::scene::SceneRenderFeedback::ScreenCaptureStatus(
                 context_.Scene(), capture);
         if (status == kb::scene::SceneScreenCaptureStatus::Completed) {
-            bool valid = std::filesystem::is_regular_file(output);
-            if (valid && requireNonUniform) {
-                HeroIconGdiplusRuntime::EnsureStarted();
-                Gdiplus::Bitmap image(output.wstring().c_str());
-                valid = image.GetLastStatus() == Gdiplus::Ok &&
-                    image.GetWidth() > 0U && image.GetHeight() > 0U;
-                Gdiplus::Color first{};
-                bool firstSet = false;
-                bool varied = false;
-                for (UINT y = 0U; valid && !varied &&
-                     y < image.GetHeight(); ++y) {
-                    for (UINT x = 0U; x < image.GetWidth(); ++x) {
-                        Gdiplus::Color pixel{};
-                        if (image.GetPixel(x, y, &pixel) != Gdiplus::Ok) {
-                            valid = false;
-                            break;
-                        }
-                        if (!firstSet) {
-                            first = pixel;
-                            firstSet = true;
-                        } else if (pixel.GetValue() != first.GetValue()) {
-                            varied = true;
-                            break;
-                        }
-                    }
-                }
-                valid = valid && varied;
-            }
+            const bool valid = ValidateCapturedImage(
+                output, requireNonUniform);
             Trace(
                 "capture_runtime", valid,
                 output.filename().string());
@@ -872,6 +892,62 @@ bool EditorHeadlessAutomation::CaptureRuntime(
         }
     }
     Trace("capture_runtime", false, "capture-timeout");
+    return false;
+}
+
+bool EditorHeadlessAutomation::VerifySceneRenderTargetAfterSecondary(
+    std::string_view checkpoint) {
+    constexpr std::uint64_t secondaryViewportKey = 14U;
+    constexpr std::uint64_t sceneViewportKey = 1U;
+    if (!impl_->RenderScene(
+            context_, secondaryViewportKey, true)) {
+        Trace(
+            "verify_scene_render_target_after_secondary", false,
+            "secondary-present-failed");
+        return false;
+    }
+
+    const std::filesystem::path output =
+        artifactRoot_ / "screenshots" /
+        (SafeCheckpoint(checkpoint) + ".png");
+    const std::uint64_t capture =
+        kb::scene::SceneRenderFeedback::RequestScreenCapture(
+            context_.Scene(), output.string());
+    if (capture == 0U) {
+        Trace(
+            "verify_scene_render_target_after_secondary", false,
+            "request-rejected");
+        return false;
+    }
+
+    for (std::size_t frame = 0U; frame < 120U; ++frame) {
+        if (!impl_->RenderScene(
+                context_, sceneViewportKey, true)) {
+            Trace(
+                "verify_scene_render_target_after_secondary", false,
+                "scene-present-failed");
+            return false;
+        }
+        const kb::scene::SceneScreenCaptureStatus status =
+            kb::scene::SceneRenderFeedback::ScreenCaptureStatus(
+                context_.Scene(), capture);
+        if (status == kb::scene::SceneScreenCaptureStatus::Completed) {
+            const bool valid = ValidateCapturedImage(output, true);
+            Trace(
+                "verify_scene_render_target_after_secondary", valid,
+                output.filename().string());
+            return valid;
+        }
+        if (status == kb::scene::SceneScreenCaptureStatus::Failed) {
+            Trace(
+                "verify_scene_render_target_after_secondary", false,
+                "capture-failed");
+            return false;
+        }
+    }
+    Trace(
+        "verify_scene_render_target_after_secondary", false,
+        "capture-timeout");
     return false;
 }
 

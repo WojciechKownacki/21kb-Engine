@@ -23,9 +23,12 @@ public:
     [[nodiscard]] bool IsActive() const noexcept;
     [[nodiscard]] std::uint64_t FrameIndex() const noexcept;
     [[nodiscard]] std::span<const std::uint16_t> ViewOrder() const noexcept;
+    [[nodiscard]] const std::array<std::uint16_t, ViewId::Max>&
+        BgfxViewRemap() const noexcept;
 
 private:
     std::array<bool, ViewId::Max> usedViews_{};
+    std::array<std::uint16_t, ViewId::Max> bgfxViewRemap_{};
     std::vector<std::uint16_t> viewOrder_;
     std::uint64_t frameIndex_ = 0;
     bool active_ = false;
