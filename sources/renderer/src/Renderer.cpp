@@ -818,6 +818,14 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     particleRenderSynchronizer_->SetGpuVisualAvailability(sceneRenderer_->ParticleGpuVisualAvailability());
     particleRenderSynchronizer_->Sync(scene, renderScene);
     if (const auto& particleSnapshot = renderScene.ParticleRenderSnapshot(); particleSnapshot != nullptr) {
+        {
+            std::ostringstream message;
+            message << "SubmitSceneToViewport particle snapshot revision=" << particleSnapshot->Revision()
+                    << " fixedStep=" << particleSnapshot->FixedStepIndex()
+                    << " emitters=" << particleSnapshot->Emitters().size()
+                    << " particles=" << particleSnapshot->Particles().size();
+            WriteRendererBreadcrumb("renderer", message.str());
+        }
         for (const kb::particles::ParticleRenderEmitterRecord& emitter : particleSnapshot->Emitters()) {
             if (emitter.textureAtlasAssetId != 0U) {
                 frameReferences_.MarkTexture(RuntimeTextureAssetKey{
@@ -827,6 +835,8 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 });
             }
         }
+    } else {
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle snapshot unavailable");
     }
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle sync end");
     SceneRenderLightingConfig effectiveLightingConfig = ApplyAmbientRadiance(
