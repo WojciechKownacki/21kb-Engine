@@ -280,6 +280,11 @@ void SceneRenderer::SubmitMeshPass(
                 << " missingTextureBinding=" << lastSubmitStats_.missingTextureBindingCount
                 << " missingTextureResource=" << lastSubmitStats_.missingTextureResourceCount
                 << " textureDimensionMismatch=" << lastSubmitStats_.textureDimensionMismatchCount
+                << " submittedParticles=" << lastSubmitStats_.submittedParticleCount
+                << " particleDrawCalls=" << lastSubmitStats_.submittedParticleDrawCallCount
+                << " failedParticleBatches=" << lastSubmitStats_.failedParticleBatchCount
+                << " droppedParticles=" << lastSubmitStats_.droppedParticleCount
+                << " particleUploadBytes=" << lastSubmitStats_.particleInstanceUploadBytes
                 << " diagnostics=" << lastDiagnostics_.events.size()
                 << " instanceUploadBytes=" << lastSubmitStats_.instanceUploadBytes;
         WriteRendererDebugLog("scene_renderer", message.str());

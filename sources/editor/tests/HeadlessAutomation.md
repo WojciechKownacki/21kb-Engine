@@ -142,7 +142,7 @@ scenario-local aliases.
 | `activate_input_context` | `asset`; optional `priority` |
 | `set_project_input_enabled` | `enabled` |
 | `set_plugin`, `assert_plugin` | catalog plugin `id`, `enabled` |
-| `assert_backend` | `backend` (`physics`, `audio`, `haptics`, `basic_lighting`), `available`; checks the live scene, not only project configuration |
+| `assert_backend` | `backend` (`physics`, `audio`, `haptics`, `particles`, `basic_lighting`), `available`; checks the live scene, not only project configuration |
 | `attach_script` | `entity`, `asset` |
 | `open_asset` | `asset` alias or virtual path |
 | `new_scene`, `reload_scene` | none |

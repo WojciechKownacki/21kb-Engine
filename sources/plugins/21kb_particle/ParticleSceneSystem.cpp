@@ -77,7 +77,7 @@ void ParticleSceneSystem::OnCreate(kb::scene::SceneSystemContext& context) {
         throw std::logic_error("particle render snapshot channel warmup failed");
     }
     const auto existingSnapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(context.GetScene());
-    snapshotRevision_ = existingSnapshot ? existingSnapshot->Revision() : 0U;
+    backend_.renderSnapshotRevision_ = existingSnapshot ? existingSnapshot->Revision() : 0U;
 }
 
 void ParticleSceneSystem::OnDestroy(kb::scene::SceneSystemContext& context) {
@@ -87,7 +87,7 @@ void ParticleSceneSystem::OnDestroy(kb::scene::SceneSystemContext& context) {
         ? std::max(context.GetScene().Runtime().FixedStepIndex(), latestSnapshot->FixedStepIndex())
         : context.GetScene().Runtime().FixedStepIndex();
     const kb::particles::ParticleRenderSnapshotResult terminal = backend_.PublishRenderTombstone(
-        context.GetScene(), terminalFixedStepIndex, ++snapshotRevision_);
+        context.GetScene(), terminalFixedStepIndex);
     if (!terminal.Succeeded()) ThrowTerminalSnapshotFailure(terminal.status);
     for (std::size_t index = 0U; index < componentInstanceCount_; ++index) {
         if (componentInstances_[index].instanceId != 0U) {
@@ -114,7 +114,7 @@ void ParticleSceneSystem::OnFixedUpdate(kb::scene::SceneSystemContext& context) 
         throw std::logic_error("particle CPU backend rejected the authoritative fixed step");
     }
     static_cast<void>(backend_.PublishRenderSnapshot(
-        context.GetScene(), context.GetScene().Runtime().FixedStepIndex() + 1U, ++snapshotRevision_));
+        context.GetScene(), context.GetScene().Runtime().FixedStepIndex() + 1U));
     std::size_t index = 0U;
     while (index < componentInstanceCount_) {
         const ComponentInstance& binding = componentInstances_[index];
@@ -176,8 +176,12 @@ void ParticleSceneSystem::ReconcileComponents(kb::scene::Scene& scene) {
         ParticleSceneSystem* system = nullptr;
         kb::scene::Scene* scene = nullptr;
     } context{this, &scene};
-    if (componentHotQuery_.IsStale(componentQuery_) &&
-        !componentHotQuery_.RebuildIfChanged(componentQuery_)) {
+    // Query::StructuralVersion is refreshed while preparing execution, so the
+    // cached query cannot reliably detect a component added since its previous
+    // preparation by comparing the old values first. Refresh its pointers and
+    // bounded range plan every fixed step; the query itself is rebuilt only when
+    // the prepared structural version changed.
+    if (!componentHotQuery_.RebuildIfChanged(componentQuery_)) {
         throw std::logic_error("particle component query refresh failed");
     }
     if (componentHotQuery_.EntityCount() > kb::scene::kParticleEffectMaxInstancesPerScene) {

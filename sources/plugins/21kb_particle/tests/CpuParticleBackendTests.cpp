@@ -2349,7 +2349,10 @@ void TestCpuPreviewRenderSnapshotPublicationAndLifecycle() {
             "first CPU preview snapshot header or grouping was incomplete");
         Require(first->Emitters()[0].emitterId == 1U && first->Emitters()[0].firstParticle == 0U &&
                 first->Emitters()[0].particleCount == 1U && first->Emitters()[0].materialAssetId == 72U &&
-                first->Emitters()[0].meshAssetId == 0U && first->Emitters()[0].assetGeneration != 0U &&
+                first->Emitters()[0].meshAssetId == 0U &&
+                first->Emitters()[0].assetGeneration ==
+                    fixture.scene.Assets().Manager().LoadGeneration(
+                        kb::assets::AssetId{fixture.effectAssetId}) + 1U &&
                 first->Emitters()[0].output == kb::particles::ParticleRenderOutput::PointSprite &&
                 first->Emitters()[0].depth == kb::particles::ParticleRenderDepthMode::ReadWrite &&
                 first->Emitters()[0].status == kb::particles::ParticleRenderEmitterStatus::Playing &&
@@ -2516,6 +2519,84 @@ void TestEditorStyleScenePulseFollowsOwner() {
         "editor-style playback backend unregister failed");
 }
 
+void TestEditorAndPlayModeShareRenderSnapshotRevision() {
+    auto effect = Fixture::MakeEffect(60.0F, 64U);
+    effect.emitters[0].spawn.lifetimeMin = 10.0F;
+    effect.emitters[0].spawn.lifetimeMax = 10.0F;
+    Fixture fixture(std::move(effect));
+    fixture.scene.Components().ParticleEffects().Set(fixture.owner, {
+        .effectAssetId = fixture.effectAssetId,
+    });
+
+    kb::particle_plugin::ParticleSceneSystem system;
+    kb::scene::SceneSystemContext context{
+        fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds};
+    system.OnCreate(context);
+
+    const auto created = kb::particles::ParticlePlayback::Create(
+        fixture.scene, fixture.effectAssetId, fixture.owner);
+    const kb::scene::TransformComponent& transform = fixture.scene.Transforms().Get(fixture.owner);
+    Require(created.Succeeded() &&
+            kb::particles::ParticlePlayback::ConfigureComponent(
+                fixture.scene, created.instanceId, 1.0F, 0U, true,
+                transform.WorldPayload()).Succeeded() &&
+            kb::particles::ParticlePlayback::Play(fixture.scene, created.instanceId).Succeeded(),
+        "editor-to-play snapshot fixture setup failed");
+    Require(kb::particles::ParticlePlayback::Simulate(
+                fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
+            kb::particles::ParticlePlayback::Simulate(
+                fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "editor preview pulses did not publish snapshots");
+    Require(kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene)->Revision() == 2U,
+        "editor preview snapshot revision was not monotonic");
+
+    system.OnFixedUpdate(context);
+    const auto playSnapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+    Require(playSnapshot && playSnapshot->Revision() == 3U && !playSnapshot->Particles().empty() &&
+            kb::particles::ParticlePlayback::LastRenderSnapshotPublicationResult(fixture.scene).Succeeded(),
+        "Play Mode reused a stale snapshot revision after editor preview simulation");
+
+    Require(kb::particles::ParticlePlayback::Simulate(
+                fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "editor preview did not resume after Play Mode simulation");
+    const auto resumedSnapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+    Require(resumedSnapshot && resumedSnapshot->Revision() == 4U && !resumedSnapshot->Particles().empty(),
+        "editor preview snapshot did not continue after Play Mode");
+    system.OnDestroy(context);
+}
+
+void TestPlayModeDiscoversComponentAddedAfterSystemCreation() {
+    auto effect = Fixture::MakeEffect(60.0F, 64U);
+    effect.emitters[0].spawn.lifetimeMin = 10.0F;
+    effect.emitters[0].spawn.lifetimeMax = 10.0F;
+    Fixture fixture(std::move(effect));
+
+    kb::particle_plugin::ParticleSceneSystem system;
+    kb::scene::SceneSystemContext context{
+        fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds};
+    system.OnCreate(context);
+    fixture.scene.Components().ParticleEffects().Set(fixture.owner, {
+        .effectAssetId = fixture.effectAssetId,
+    });
+    const auto editorCreated = kb::particles::ParticlePlayback::Create(
+        fixture.scene, fixture.effectAssetId, fixture.owner);
+    const kb::scene::TransformComponent& transform = fixture.scene.Transforms().Get(fixture.owner);
+    Require(editorCreated.Succeeded() &&
+            kb::particles::ParticlePlayback::ConfigureComponent(
+                fixture.scene, editorCreated.instanceId, 1.0F, 0U, true,
+                transform.WorldPayload()).Succeeded() &&
+            kb::particles::ParticlePlayback::Play(
+                fixture.scene, editorCreated.instanceId).Succeeded(),
+        "editor-created particle instance setup failed");
+
+    system.OnFixedUpdate(context);
+    const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+    Require(snapshot && snapshot->Emitters().size() == 1U && !snapshot->Particles().empty() &&
+            kb::particles::ParticlePlayback::LastRenderSnapshotPublicationResult(fixture.scene).Succeeded(),
+        "Play Mode did not discover a Particle Effect component added after system creation");
+    system.OnDestroy(context);
+}
+
 int main() {
     try {
         TestSharedImmutableCompilerArtifact();
@@ -2544,6 +2625,8 @@ int main() {
         TestComponentReconciliationAndOwnerPolicies();
         TestComponentRateCapacityAndFollowTransformContracts();
         TestEditorStyleScenePulseFollowsOwner();
+        TestEditorAndPlayModeShareRenderSnapshotRevision();
+        TestPlayModeDiscoversComponentAddedAfterSystemCreation();
         TestComponentBindingCapacityIsAtomic();
         TestComponentCreateFailureIsExplicitAndPreservesLiveInstance();
         TestActiveReloadContracts();
