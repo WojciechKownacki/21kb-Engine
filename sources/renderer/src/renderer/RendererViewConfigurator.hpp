@@ -1,17 +1,19 @@
 #pragma once
 
 #include "kb/render/frame/RenderSceneSubmitDesc.hpp"
+#include "kb/render/ViewIdPolicy.hpp"
 
 #include <bgfx/bgfx.h>
 
+#include <array>
 #include <cstdint>
-#include <span>
 
 namespace kb::render {
 
 class RendererViewConfigurator {
 public:
-    static void ApplyViewOrder(std::span<const std::uint16_t> viewOrder);
+    static void ApplyViewOrder(
+        const std::array<std::uint16_t, ViewId::Max>& viewRemap);
     static void ConfigureSceneClear(bgfx::ViewId viewId, const RenderSceneSubmitDesc& desc, std::uint16_t clearFlags, std::uint32_t clearRgba);
     static void ConfigureSceneNoClear(bgfx::ViewId viewId, const RenderSceneSubmitDesc& desc, const char* name);
     static void ConfigureFramebufferClear(

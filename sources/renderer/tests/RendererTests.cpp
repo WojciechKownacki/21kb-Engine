@@ -18,6 +18,7 @@ void RunRendererRuntimeSubmitTests();
 void RunRendererParticleMeshSnapshotSubmitTest();
 void RunRendererParticleStripSnapshotSubmitTest();
 void RunRendererParticleVolumetricSnapshotSubmitTest();
+void RunRendererDetachedViewportFinalCompositePixelsTest();
 void RunRendererCapabilityReportTests();
 void RunMeshPipelineTests();
 void RunSceneDisplayCompositeTests();
@@ -31,6 +32,10 @@ void RunShaderPrewarmParseTests();
 }
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view{ argv[1] } == "frame-pipeline") {
+        kb::render::tests::RunRenderFramePipelineTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "resource-registry") {
         kb::render::tests::RunRenderResourceRegistryTests();
         return EXIT_SUCCESS;
@@ -72,6 +77,16 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string_view{ argv[1] } == "particle-volumetric-submit") {
         try {
             kb::render::tests::RunRendererParticleVolumetricSnapshotSubmitTest();
+            return EXIT_SUCCESS;
+        } catch (const std::exception& error) {
+            std::fputs(error.what(), stderr);
+            std::fputc('\n', stderr);
+            return EXIT_FAILURE;
+        }
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "detached-final-composite") {
+        try {
+            kb::render::tests::RunRendererDetachedViewportFinalCompositePixelsTest();
             return EXIT_SUCCESS;
         } catch (const std::exception& error) {
             std::fputs(error.what(), stderr);
