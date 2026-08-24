@@ -1,12 +1,14 @@
 #include "scene/EditorSceneContext.hpp"
 
 #include "app/EditorPlayModeSceneSession.hpp"
+#include "diagnostics/EditorLagTrace.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/modules/EngineModuleHost.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "scene/audio/EditorSceneAudioSettingsService.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
+#include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneInputActivation.hpp"
@@ -24,6 +26,7 @@
 #include "scene/EditorDefaultSceneFactory.hpp"
 #include "scene/EditorSceneDocumentAssetLoaders.hpp"
 
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -36,6 +39,47 @@ namespace kb::editor {
 namespace {
 
 constexpr std::string_view kSceneDocumentExtension = ".21kbscene";
+
+class ScopedPlayTransitionTrace final {
+public:
+    explicit ScopedPlayTransitionTrace(std::string_view totalDetail) noexcept
+        : eventId_(diagnostics::EditorLagTrace::NextEventId())
+        , totalDetail_(totalDetail)
+        , started_(std::chrono::steady_clock::now()) {}
+
+    ~ScopedPlayTransitionTrace() {
+        diagnostics::EditorLagTrace::Slow(
+            "play-mode-transition", eventId_, ElapsedMs(started_), totalDetail_);
+    }
+
+    void Phase(
+        std::chrono::steady_clock::time_point started,
+        std::string_view detail) const noexcept {
+        diagnostics::EditorLagTrace::Slow(
+            "play-mode-transition", eventId_, ElapsedMs(started), detail);
+    }
+
+private:
+    [[nodiscard]] static double ElapsedMs(
+        std::chrono::steady_clock::time_point started) noexcept {
+        return std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - started).count();
+    }
+
+    std::uint64_t eventId_ = 0U;
+    std::string_view totalDetail_;
+    std::chrono::steady_clock::time_point started_{};
+};
+
+[[nodiscard]] bool HasSceneBehaviours(const kb::scene::Scene& scene) {
+    bool found = false;
+    scene.Components().Behaviours().ForEach(
+        [](kb::scene::SceneEntity, const kb::scene::BehaviourComponent&, void* opaque) {
+            *static_cast<bool*>(opaque) = true;
+        },
+        &found);
+    return found;
+}
 
 [[nodiscard]] std::string AssetErrorOr(const kb::assets::AssetManager& manager, const char* fallback) {
     const std::string error = manager.LastError();
@@ -112,68 +156,87 @@ bool EditorSceneContext::PrepareDirtySceneTransition(std::string_view reason, Ed
 }
 
 bool EditorSceneContext::BeginPlayModeSceneSession() {
+    ScopedPlayTransitionTrace trace{"transition=begin phase=total"};
     if (playModeSceneSession_.Active()) {
         return true;
     }
+    auto phaseStarted = std::chrono::steady_clock::now();
     if (plugins_.HasPendingReload() && !ReloadSceneFromProject()) {
         return false;
     }
+    trace.Phase(phaseStarted, "transition=begin phase=pending-plugin-reload");
+    phaseStarted = std::chrono::steady_clock::now();
     if (!SaveDirtySceneDocument("entering play mode")) {
         return false;
     }
+    trace.Phase(phaseStarted, "transition=begin phase=save-dirty-scene");
     kb::audio::AudioPlayback::StopAll(*scene_);
 
-    // Pick up on-disk asset edits made since the last play — most importantly a
-    // script saved in the Script Editor (which only writes the file, it does not
-    // touch the asset system). Discover re-hashes files, and on a content change
-    // evicts the cached asset and updates its contentHash, so the runtime's
-    // IsScriptCurrent check reloads the new source instead of re-running the
-    // stale compiled script.
-    static_cast<void>(scene_->Assets().Discover());
+    // Asset authoring paths publish or invalidate the edited asset at the mutation
+    // boundary. Entering Play must not rescan and re-hash every mounted file.
+    phaseStarted = std::chrono::steady_clock::now();
     if (!ActivateProjectPhysicsLayers(*scene_)) {
         return false;
     }
+    trace.Phase(phaseStarted, "transition=begin phase=physics-layers");
 
+    phaseStarted = std::chrono::steady_clock::now();
     const std::string name = currentScenePath_.stem().string().empty() ? std::string{ "Main" } : currentScenePath_.stem().string();
     if (!playModeSceneSession_.Begin(*scene_, name)) {
         console_.Error("Play Mode", "Scene snapshot could not be captured.");
         return false;
     }
+    trace.Phase(phaseStarted, "transition=begin phase=capture-snapshot");
+    phaseStarted = std::chrono::steady_clock::now();
     // Establish the complete play-session state before attaching the Script
     // module. On its first attachment the module immediately runs
     // Created/Activated/Ready, so clearing mapping contexts or Lua instances
     // afterwards invalidates state that Ready legitimately initialized.
     ResetScriptRuntimeStateForPlayMode();
+    trace.Phase(phaseStarted, "transition=begin phase=reset-script-state");
+    phaseStarted = std::chrono::steady_clock::now();
     kb::scene::SceneInputActivation::Apply(*scene_);
     ActivateProjectInput();
-    EnsureScriptRuntime();
+    trace.Phase(phaseStarted, "transition=begin phase=input-setup");
+    phaseStarted = std::chrono::steady_clock::now();
+    if (HasSceneBehaviours(*scene_)) {
+        EnsureScriptRuntime();
+    }
+    editorSceneParticleAccumulatorSeconds_ = 0.0;
+    trace.Phase(phaseStarted, "transition=begin phase=script-runtime");
     console_.Info("Play Mode", "Captured editor scene snapshot.");
     return true;
 }
 
 bool EditorSceneContext::RestorePlayModeSceneSession() {
+    ScopedPlayTransitionTrace trace{"transition=restore phase=total"};
     if (!playModeSceneSession_.Active()) {
         return true;
     }
-    // Fire each behaviour's Destroyed (OnDestroy-equivalent) hook while the play
-    // scene is still live, BEFORE reverting to the snapshot — matching Unity,
-    // where stopping play tears behaviours down. Surface any error a Destroyed
-    // handler raises to the Console.
+    auto phaseStarted = std::chrono::steady_clock::now();
+    // Fire each behaviour's shutdown hook while the play scene is still live,
+    // before reverting to the snapshot. Surface handler errors to the Console.
     if (scriptModule_ != nullptr && scriptModule_->Host() != nullptr) {
         static_cast<void>(scriptModule_->Host()->DispatchShutdownLifecycle(0.0F));
         SurfaceScriptDiagnostics();
     }
+    trace.Phase(phaseStarted, "transition=restore phase=script-shutdown");
     kb::audio::AudioPlayback::StopAll(*scene_);
     kb::scene::SceneInputActivation::Clear(*scene_);
+    phaseStarted = std::chrono::steady_clock::now();
     if (!playModeSceneSession_.Restore(*scene_)) {
         console_.Error("Play Mode", "Editor scene snapshot could not be restored.");
         return false;
     }
+    trace.Phase(phaseStarted, "transition=restore phase=restore-snapshot");
+    phaseStarted = std::chrono::steady_clock::now();
     ReleaseRenderedSceneResources();
 
     SelectFirstSceneEntityOrClear();
     ResetSceneEditState();
     ClearSceneDocumentDirty();
+    editorSceneParticleAccumulatorSeconds_ = 0.0;
+    trace.Phase(phaseStarted, "transition=restore phase=editor-reset");
     console_.Info("Play Mode", "Restored editor scene snapshot.");
     return true;
 }

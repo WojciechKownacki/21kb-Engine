@@ -1867,6 +1867,50 @@ ReadScriptValue(
             *component + " on " + *alias };
     }
 
+    if (*operation == "set_particle_effect_asset") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto asset = StringMember(step, "asset", error);
+        if (!alias || !asset) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        const kb::assets::AssetId assetId = ResolveAsset(state, *asset);
+        if (!state.context.Scene().Entities().IsAlive(entity) ||
+            !assetId.IsValid()) {
+            return { false, "particle entity or asset was not found" };
+        }
+        return {
+            state.context.SetParticleEffectAsset(entity, assetId),
+            *asset + " on " + *alias };
+    }
+
+    if (*operation == "set_entity_position") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto x = NumberMember(step, "x", error);
+        const auto y = NumberMember(step, "y", error);
+        const auto z = NumberMember(step, "z", error);
+        if (!alias || !x || !y || !z) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(entity)) {
+            return { false, "entity alias is not alive" };
+        }
+        state.context.SelectEntity(entity);
+        if (!state.context.BeginSelectedTransformEdit("Set Entity Position")) {
+            return { false, "transform edit did not begin" };
+        }
+        const kb::scene::Vec3 position{
+            static_cast<float>(*x),
+            static_cast<float>(*y),
+            static_cast<float>(*z) };
+        if (!state.context.ApplyActiveTransformEditPrimaryPosition(position) ||
+            !state.context.CommitActiveTransformEdit()) {
+            state.context.CancelActiveTransformEdit();
+            return { false, "transform edit did not commit" };
+        }
+        return {
+            true,
+            std::to_string(*x) + ',' + std::to_string(*y) + ',' +
+                std::to_string(*z) };
+    }
+
     if (*operation == "remove_component") {
         const auto alias = StringMember(step, "entity", error);
         const auto component = StringMember(step, "component", error);
@@ -3142,6 +3186,52 @@ ReadScriptValue(
             backendDetail.empty() ? (available ? "available" : "unavailable") : backendDetail };
     }
 
+    if (*operation == "assert_particle_origin") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto x = NumberMember(step, "x", error);
+        const auto y = NumberMember(step, "y", error);
+        const auto z = NumberMember(step, "z", error);
+        const double tolerance = NumberMember(
+            step, "tolerance", error, false).value_or(0.001);
+        if (!alias || !x || !y || !z || !error.empty() || tolerance < 0.0) {
+            return { false, error.empty() ? "invalid particle origin assertion" : error };
+        }
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        std::uint64_t instanceId = 0U;
+        for (const std::uint64_t candidate :
+             kb::particles::ParticlePlayback::LiveInstanceIds(state.context.Scene())) {
+            if (kb::particles::ParticlePlayback::Query(
+                    state.context.Scene(), candidate).owner == entity) {
+                instanceId = candidate;
+                break;
+            }
+        }
+        const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(
+            state.context.Scene());
+        const kb::particles::ParticleRenderEmitterRecord* emitter = nullptr;
+        if (snapshot != nullptr) {
+            const auto emitters = snapshot->Emitters();
+            const auto found = std::ranges::find_if(
+                emitters,
+                [instanceId](const auto& candidate) {
+                    return candidate.instanceId == instanceId;
+                });
+            if (found != emitters.end()) emitter = &*found;
+        }
+        if (emitter == nullptr) {
+            return { false, "particle emitter snapshot was not found" };
+        }
+        const bool matched =
+            std::abs(static_cast<double>(emitter->outputOrigin.x) - *x) <= tolerance &&
+            std::abs(static_cast<double>(emitter->outputOrigin.y) - *y) <= tolerance &&
+            std::abs(static_cast<double>(emitter->outputOrigin.z) - *z) <= tolerance;
+        return {
+            matched,
+            "actual=" + std::to_string(emitter->outputOrigin.x) + ',' +
+                std::to_string(emitter->outputOrigin.y) + ',' +
+                std::to_string(emitter->outputOrigin.z) };
+    }
+
     if (*operation == "attach_script") {
         const auto entityAlias =
             StringMember(step, "entity", error);
@@ -3332,14 +3422,32 @@ ReadScriptValue(
     }
 
     if (*operation == "play") {
+        const auto maximumMilliseconds = NumberMember(
+            step, "max_ms", error, false);
+        if (!error.empty() ||
+            (maximumMilliseconds.has_value() && *maximumMilliseconds <= 0.0)) {
+            return { false, error.empty() ? "max_ms must be positive" : error };
+        }
+        const auto started = std::chrono::steady_clock::now();
+        const bool entered = state.context.BeginPlayModeSceneSession();
+        const double elapsedMilliseconds =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - started).count();
+        const bool withinBudget = !maximumMilliseconds.has_value() ||
+            elapsedMilliseconds <= *maximumMilliseconds;
         return {
-            state.context.BeginPlayModeSceneSession(),
-            "play mode started" };
+            entered && withinBudget,
+            "play transition " + std::to_string(elapsedMilliseconds) + " ms" };
     }
     if (*operation == "stop") {
+        const auto started = std::chrono::steady_clock::now();
+        const bool restored = state.context.RestorePlayModeSceneSession();
+        const double elapsedMilliseconds =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - started).count();
         return {
-            state.context.RestorePlayModeSceneSession(),
-            "play mode stopped" };
+            restored,
+            "stop transition " + std::to_string(elapsedMilliseconds) + " ms" };
     }
 
     if (*operation == "key") {
@@ -3477,6 +3585,20 @@ ReadScriptValue(
                 static_cast<std::size_t>(*frames),
                 static_cast<float>(delta)),
             std::to_string(*frames) + " frame(s)" };
+    }
+
+    if (*operation == "step_editor_particles") {
+        const auto frames = NumberMember(step, "frames", error);
+        const auto delta = NumberMember(step, "dt", error, false)
+            .value_or(1.0 / 60.0);
+        if (!frames || *frames < 1.0 || std::floor(*frames) != *frames) {
+            return { false, "frames must be a positive integer" };
+        }
+        return {
+            state.automation.StepEditorParticles(
+                static_cast<std::size_t>(*frames),
+                static_cast<float>(delta)),
+            std::to_string(*frames) + " editor particle frame(s)" };
     }
 
     if (*operation == "inspector_pointer") {
