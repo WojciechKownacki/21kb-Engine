@@ -7,6 +7,7 @@
     { "op": "assert_plugin", "id": "Rendering.21kbParticle", "enabled": true },
     { "op": "assert_backend", "backend": "particles", "available": true },
     { "op": "capture_screenshot_matrix", "panel": "particle_editor", "checkpoint": "particle-emitter-list" },
+    { "op": "verify_scene_render_target_after_secondary", "checkpoint": "scene-after-particle" },
     { "op": "create_particle_effect_entity", "id": "particleEntity", "asset": "particleEffect" },
     { "op": "play" },
     { "op": "step", "frames": 60, "dt": 0.0166667 },
