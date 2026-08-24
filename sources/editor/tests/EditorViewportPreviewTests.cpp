@@ -58,16 +58,22 @@ void RunSceneViewportPresentationPolicyTest() {
     using kb::editor::SceneViewportPresentationPolicy;
 
     kb::editor::tests::Require(
-        SceneViewportPresentationPolicy::CameraSource(false) == SceneViewportCameraSource::Editor,
+        SceneViewportPresentationPolicy::CameraSource(false, false) == SceneViewportCameraSource::Editor &&
+            SceneViewportPresentationPolicy::CameraSource(false, true) == SceneViewportCameraSource::Editor,
         "Stopped Scene View must use the editor fly camera");
     kb::editor::tests::Require(
-        SceneViewportPresentationPolicy::CameraSource(true) == SceneViewportCameraSource::PrimaryScene,
-        "Play mode Scene View must use the primary scene camera");
+        SceneViewportPresentationPolicy::CameraSource(true, true) == SceneViewportCameraSource::PrimaryScene,
+        "Play mode Scene View must use an available primary scene camera");
     kb::editor::tests::Require(
-        SceneViewportPresentationPolicy::EditorOverlaysEnabled(false),
+        SceneViewportPresentationPolicy::CameraSource(true, false) == SceneViewportCameraSource::Editor &&
+            SceneViewportPresentationPolicy::EditorOverlaysEnabled(true, false),
+        "Play mode Scene View must retain the editor camera when no primary scene camera exists");
+    kb::editor::tests::Require(
+        SceneViewportPresentationPolicy::EditorOverlaysEnabled(false, false) &&
+            SceneViewportPresentationPolicy::EditorOverlaysEnabled(false, true),
         "Stopped Scene View must retain authoring overlays");
     kb::editor::tests::Require(
-        !SceneViewportPresentationPolicy::EditorOverlaysEnabled(true),
+        !SceneViewportPresentationPolicy::EditorOverlaysEnabled(true, true),
         "Play mode Scene View must not draw editor overlays over the game camera");
     kb::editor::tests::Require(
         SceneViewportPresentationPolicy::RequiresPresent(false, true),
@@ -264,10 +270,10 @@ void RunSkeletalMeshSceneLabelBuilderTest() {
     RequireNear(labels.front().y, 360.0F, 0.001F,
         "A centered bone must project to the vertical viewport center");
     RequireNear(labels.front().pixelHeight, 10.0F, 0.001F,
-        "The reference camera distance must use Unreal's SmallFont size 10");
+        "The reference camera distance must use the established font size 10");
     kb::editor::tests::Require(
         labels.front().color == std::array<std::uint8_t, 4U>{ 255U, 255U, 255U, 255U },
-        "Unreal-style bone names must use a white foreground");
+        "Bone names must use a white foreground");
 
     const auto pixelHeightAtDepth = [&](float depth) {
         const kb::scene::Vec3 position = axes.position + axes.forward * depth;

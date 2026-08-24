@@ -24,6 +24,7 @@
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputHaptics.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/particles/ParticlePlayback.hpp"
 #include "engine/platform/win32/Win32XInputHapticsBackend.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -851,6 +852,39 @@ bool EditorHeadlessAutomation::StepRuntime(
         std::to_string(frames) + "@" +
             std::to_string(deltaSeconds));
     return true;
+}
+
+bool EditorHeadlessAutomation::StepEditorParticles(
+    std::size_t frames, float deltaSeconds) {
+    if (frames == 0U || !std::isfinite(deltaSeconds) ||
+        deltaSeconds < 0.0F || context_.HasPlayModeSceneSession()) {
+        Trace("step_editor_particles", false, "invalid-step");
+        return false;
+    }
+    const auto before = kb::particles::ParticlePlayback::ReadRenderSnapshot(
+        context_.Scene());
+    const std::uint64_t revisionBefore = before == nullptr
+        ? 0U
+        : before->Revision();
+    for (std::size_t frame = 0U; frame < frames; ++frame) {
+        if (context_.TickEditorSceneParticles(deltaSeconds) &&
+            !impl_->RenderScene(context_, 1U, true)) {
+            Trace("step_editor_particles", false, "render-backend-failed");
+            return false;
+        }
+    }
+    const auto after = kb::particles::ParticlePlayback::ReadRenderSnapshot(
+        context_.Scene());
+    const std::uint64_t revisionAfter = after == nullptr
+        ? 0U
+        : after->Revision();
+    const bool advanced = revisionAfter > revisionBefore;
+    Trace(
+        "step_editor_particles",
+        advanced,
+        "revision=" + std::to_string(revisionBefore) + "->" +
+            std::to_string(revisionAfter));
+    return advanced;
 }
 
 bool EditorHeadlessAutomation::CaptureRuntime(
