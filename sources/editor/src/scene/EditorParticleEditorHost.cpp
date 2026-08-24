@@ -1,6 +1,7 @@
 #include "scene/EditorSceneContext.hpp"
 #include "scene/ParticleEditorBakeHostCommand.hpp"
 
+#include "diagnostics/EditorLagTrace.hpp"
 #include "editor/ParticleEditorCommands.hpp"
 #include "engine/assets/AssetKind.hpp"
 #include "engine/assets/AssetMetadata.hpp"
@@ -14,7 +15,9 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "project/EditorProjectPaths.hpp"
 
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <memory>
 #include <charconv>
 #include <cmath>
@@ -89,6 +92,18 @@ template <typename T>
 } // namespace
 
 bool EditorSceneContext::OpenParticleEditorAsset(kb::assets::AssetId id) {
+    const std::uint64_t traceEventId = diagnostics::EditorLagTrace::NextEventId();
+    const auto totalStarted = std::chrono::steady_clock::now();
+    const auto tracePhase = [traceEventId](
+        std::chrono::steady_clock::time_point started,
+        std::string_view detail) {
+        diagnostics::EditorLagTrace::Slow(
+            "particle-document-open",
+            traceEventId,
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - started).count(),
+            detail);
+    };
     if (!id.IsValid()) return false;
     kb::assets::AssetManager& manager = scene_->Assets().Manager();
     const kb::assets::AssetMetadata* metadata = manager.Registry().Find(id);
@@ -103,14 +118,18 @@ bool EditorSceneContext::OpenParticleEditorAsset(kb::assets::AssetId id) {
     }
 
     kb::particle_editor::ParticleEditorDocument candidateDocument;
+    auto phaseStarted = std::chrono::steady_clock::now();
     const auto opened = candidateDocument.Open(particleEditorGateway_, *path);
+    tracePhase(phaseStarted, "phase=document-read");
     if (!opened.Succeeded()) {
         console_.Error("Particles", opened.message);
         return false;
     }
     auto candidatePreview = std::make_unique<kb::particle_editor::ParticlePreviewSession>();
+    phaseStarted = std::chrono::steady_clock::now();
     const auto started = candidatePreview->Start(
         project_, manager.Registry(), id, metadata->virtualPath, candidateDocument.Asset());
+    tracePhase(phaseStarted, "phase=preview-start");
     if (!started.Succeeded()) {
         console_.Error("Particles", started.message);
         return false;
@@ -124,6 +143,7 @@ bool EditorSceneContext::OpenParticleEditorAsset(kb::assets::AssetId id) {
     particleEditorWorkspace_.Synchronize(particleEditorDocument_.Asset());
     particlePreviewSession_ = std::move(candidatePreview);
     particleEditorAssetId_ = id;
+    tracePhase(totalStarted, "phase=total");
     console_.Info("Particles", "Opened 21kb Particle System document: " + metadata->virtualPath.generic_string());
     return true;
 }
@@ -161,12 +181,25 @@ bool EditorSceneContext::TickParticleEditorPreview(float deltaSeconds) {
 
 bool EditorSceneContext::TickEditorSceneParticles(float deltaSeconds) {
     if (scene_ == nullptr || !IsProjectPluginEnabled("Rendering.21kbParticle") ||
-        !kb::particles::ParticlePlayback::HasBackend(*scene_)) {
+        !kb::particles::ParticlePlayback::HasBackend(*scene_) ||
+        !std::isfinite(deltaSeconds) || deltaSeconds < 0.0F) {
+        editorSceneParticleAccumulatorSeconds_ = 0.0;
         return false;
     }
-    const float stepSeconds = deltaSeconds > 0.0F
-        ? (deltaSeconds < 0.1F ? deltaSeconds : 0.1F)
-        : kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds;
+    constexpr double fixedStepSeconds =
+        static_cast<double>(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds);
+    constexpr double maximumAccumulatedSeconds = fixedStepSeconds * 4.0;
+    const double wallDeltaSeconds = deltaSeconds > 0.0F
+        ? std::min(static_cast<double>(deltaSeconds), maximumAccumulatedSeconds)
+        : fixedStepSeconds;
+    editorSceneParticleAccumulatorSeconds_ = std::min(
+        editorSceneParticleAccumulatorSeconds_ + wallDeltaSeconds,
+        maximumAccumulatedSeconds);
+    if (editorSceneParticleAccumulatorSeconds_ + 0.000000001 < fixedStepSeconds) {
+        return false;
+    }
+
+    scene_->Runtime().SynchronizeTransforms();
     const std::vector<std::uint64_t> liveIds = kb::particles::ParticlePlayback::LiveInstanceIds(*scene_);
     struct PulseContext {
         kb::scene::Scene* scene = nullptr;
@@ -181,11 +214,13 @@ bool EditorSceneContext::TickEditorSceneParticles(float deltaSeconds) {
             return;
         }
         std::uint64_t instanceId = 0U;
+        bool instancePlaying = false;
         for (const std::uint64_t liveId : *pulse->liveIds) {
             const auto query = kb::particles::ParticlePlayback::Query(*pulse->scene, liveId);
             if (query.owner != entity) continue;
             if (query.assetId == component.effectAssetId) {
                 instanceId = liveId;
+                instancePlaying = query.state;
                 break;
             }
             static_cast<void>(kb::particles::ParticlePlayback::Release(*pulse->scene, liveId));
@@ -211,7 +246,7 @@ bool EditorSceneContext::TickEditorSceneParticles(float deltaSeconds) {
             static_cast<void>(kb::particles::ParticlePlayback::SetSeed(
                 *pulse->scene, instanceId, component.deterministicSeed));
         }
-        if (component.autoPlay) {
+        if (component.autoPlay && !instancePlaying) {
             static_cast<void>(kb::particles::ParticlePlayback::Play(*pulse->scene, instanceId));
         }
         if (pulse->retainedCount < pulse->retained.size()) {
@@ -232,9 +267,27 @@ bool EditorSceneContext::TickEditorSceneParticles(float deltaSeconds) {
             static_cast<void>(kb::particles::ParticlePlayback::Release(*scene_, liveId));
         }
     }
-    if (!context.any) return false;
-    const auto simulated = kb::particles::ParticlePlayback::Simulate(*scene_, stepSeconds);
-    return simulated.Succeeded();
+    if (!context.any) {
+        editorSceneParticleAccumulatorSeconds_ = 0.0;
+        return false;
+    }
+
+    bool advanced = false;
+    while (editorSceneParticleAccumulatorSeconds_ + 0.000000001 >= fixedStepSeconds) {
+        const auto simulated = kb::particles::ParticlePlayback::Simulate(
+            *scene_, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds);
+        if (!simulated.Succeeded()) {
+            diagnostics::EditorLagTrace::Marker(
+                "particle-editor-scene",
+                "fixed-step simulation rejected status=" +
+                    std::to_string(static_cast<unsigned>(simulated.status)));
+            editorSceneParticleAccumulatorSeconds_ = 0.0;
+            return false;
+        }
+        editorSceneParticleAccumulatorSeconds_ -= fixedStepSeconds;
+        advanced = true;
+    }
+    return advanced;
 }
 
 bool EditorSceneContext::SetParticleEffectAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {

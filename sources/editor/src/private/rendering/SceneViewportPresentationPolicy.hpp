@@ -8,12 +8,19 @@ enum class SceneViewportCameraSource {
 };
 
 struct SceneViewportPresentationPolicy {
-    [[nodiscard]] static constexpr SceneViewportCameraSource CameraSource(bool playModeSceneActive) noexcept {
-        return playModeSceneActive ? SceneViewportCameraSource::PrimaryScene : SceneViewportCameraSource::Editor;
+    [[nodiscard]] static constexpr SceneViewportCameraSource CameraSource(
+        bool playModeSceneActive,
+        bool primarySceneCameraAvailable) noexcept {
+        return playModeSceneActive && primarySceneCameraAvailable
+            ? SceneViewportCameraSource::PrimaryScene
+            : SceneViewportCameraSource::Editor;
     }
 
-    [[nodiscard]] static constexpr bool EditorOverlaysEnabled(bool playModeSceneActive) noexcept {
-        return !playModeSceneActive;
+    [[nodiscard]] static constexpr bool EditorOverlaysEnabled(
+        bool playModeSceneActive,
+        bool primarySceneCameraAvailable) noexcept {
+        return CameraSource(playModeSceneActive, primarySceneCameraAvailable) ==
+            SceneViewportCameraSource::Editor;
     }
 
     [[nodiscard]] static constexpr bool RequiresPresent(

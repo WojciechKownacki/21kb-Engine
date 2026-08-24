@@ -1266,6 +1266,7 @@ private:
     std::unique_ptr<kb::particle_editor::ParticlePreviewSession> particlePreviewSession_;
     std::function<void(const kb::scene::Scene&)> particlePreviewReleaseHandler_;
     kb::assets::AssetId particleEditorAssetId_{};
+    double editorSceneParticleAccumulatorSeconds_ = 0.0;
     kb::assets::AssetId animatorEditorAssetId_{};
     kb::scene::SceneEntity animatorEditorDebugTarget_{};
     std::optional<kb::scene::AnimatorController> animatorEditorController_;

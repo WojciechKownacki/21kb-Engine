@@ -15,6 +15,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SceneVisibilityResolution.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/overlay/EditorCameraWireframe.hpp"
@@ -304,6 +305,21 @@ struct LightWireframeBasis {
 
 [[nodiscard]] kb::scene::Vec3 ResolveWorldPosition(const kb::scene::TransformComponent& transform) noexcept {
     return transform.worldDirty ? transform.localPosition : transform.worldPosition;
+}
+
+[[nodiscard]] bool HasVisiblePrimarySceneCamera(const EditorSceneContext& sceneContext) {
+    struct Context {
+        const EditorSceneContext* sceneContext = nullptr;
+        bool available = false;
+    } context{.sceneContext = &sceneContext};
+    sceneContext.Scene().Components().Visitors().ForEachCamera(
+        [](kb::scene::SceneEntity entity, const kb::scene::TransformComponent&, const kb::scene::CameraComponent& camera, void* opaque) {
+            auto& context = *static_cast<Context*>(opaque);
+            context.available = context.available || (camera.primary &&
+                kb::scene::ResolveVisibility(context.sceneContext->Scene(), entity).visible);
+        },
+        &context);
+    return context.available;
 }
 
 [[nodiscard]] kb::scene::Quat ResolveWorldRotation(const kb::scene::TransformComponent& transform) noexcept {
@@ -605,9 +621,12 @@ void AppendTerrainBrushRing(
     // aliasing, which reads as camera motion. Runtime play renders continuously, so temporal sampling
     // remains enabled there; edit mode uses deterministic FXAA when the project requests TAA.
     const bool continuousRuntimeFrames = sceneContext.HasPlayModeSceneSession();
+    const bool primarySceneCameraAvailable = HasVisiblePrimarySceneCamera(sceneContext);
     const bool presentPrimarySceneCamera =
-        SceneViewportPresentationPolicy::CameraSource(continuousRuntimeFrames) == SceneViewportCameraSource::PrimaryScene;
-    const bool editorOverlaysEnabled = SceneViewportPresentationPolicy::EditorOverlaysEnabled(continuousRuntimeFrames);
+        SceneViewportPresentationPolicy::CameraSource(continuousRuntimeFrames, primarySceneCameraAvailable) ==
+            SceneViewportCameraSource::PrimaryScene;
+    const bool editorOverlaysEnabled = SceneViewportPresentationPolicy::EditorOverlaysEnabled(
+        continuousRuntimeFrames, primarySceneCameraAvailable);
     const bool requestedTemporalAntiAliasing = renderBackendSettings.TemporalAntiAliasingEnabled();
     kb::render::ScenePostProcessSettings postProcessSettings{};
     postProcessSettings.fxaaEnabled = renderBackendSettings.FxaaEnabled() ||

@@ -756,7 +756,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             return;
         }
         if (opaqueOverlay.kind == MaterialEditorOpaqueOverlayKind::Preview) {
-            // Drag the preview to orbit the object around it, Unreal-style. Capture so the drag continues
+            // Drag the preview to orbit the object around it. Capture so the drag continues
             // even as the cursor leaves the small overlay.
             static_cast<void>(sceneContext_.BeginMaterialPreviewOrbit(x, y));
             SetCapture(messageWindow);
@@ -1613,7 +1613,10 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     sceneViewport_.RequestPresent();
                 }
             }
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            EditorWindowInvalidator::InvalidateDockPanel(
+                mainWindow_, dockModel_, floatingWindows_, metrics_, DockPanelKind::Inspector);
+            EditorWindowInvalidator::InvalidateDockPanel(
+                mainWindow_, dockModel_, floatingWindows_, metrics_, DockPanelKind::Scene);
             return;
         }
         if (hit.section == InspectorSectionId::Animator &&
