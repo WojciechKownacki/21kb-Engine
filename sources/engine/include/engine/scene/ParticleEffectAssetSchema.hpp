@@ -118,6 +118,8 @@ struct ParticleSpawnAsset {
     float spreadDegrees = 15.0F;
     float randomization = 1.0F;
     float prewarmSeconds = 0.0F;
+    kb::math::Color startColor{1.0F, 1.0F, 1.0F, 1.0F};
+    float startSize = 1.0F;
 };
 
 struct ParticleInitialVelocityModule {

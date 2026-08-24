@@ -1,5 +1,6 @@
 #include "platform/win32/EditorMeshAssetPickerDialog.hpp"
 #include "platform/win32/EditorAnimatorControllerAssetPickerDialog.hpp"
+#include "platform/win32/EditorParticleEffectAssetPickerDialog.hpp"
 #include "platform/win32/EditorAudioMixerAssetPickerDialog.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
 #include "platform/win32/EditorSkeletonAssetPickerDialog.hpp"
@@ -11,6 +12,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "rendering/EditorMeshPreviewService.hpp"
@@ -221,6 +223,23 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
         rows.push_back(AssetPickerRow{
             .assetId = metadata.id,
             .name = DisplayName(metadata, "Audio Mixer"),
+            .path = DisplayPath(metadata),
+        });
+    }
+    std::ranges::sort(rows, [](const AssetPickerRow& lhs, const AssetPickerRow& rhs) {
+        return lhs.name != rhs.name ? lhs.name < rhs.name : lhs.assetId.value < rhs.assetId.value;
+    });
+    return rows;
+}
+
+[[nodiscard]] std::vector<AssetPickerRow> BuildParticleEffectRows(const EditorSceneContext& sceneContext) {
+    std::vector<AssetPickerRow> rows;
+    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
+        if (metadata.type != kb::scene::kParticleEffectAssetType) continue;
+        rows.push_back(AssetPickerRow{
+            .assetId = metadata.id,
+            .name = DisplayName(metadata, "Particle Effect"),
             .path = DisplayPath(metadata),
         });
     }
@@ -1486,6 +1505,27 @@ EditorAudioMixerAssetPickerDialog::Result EditorAudioMixerAssetPickerDialog::Sho
     };
     const AssetPickerResult result = window.Show(owner);
     return EditorAudioMixerAssetPickerDialog::Result{
+        .accepted = result.accepted,
+        .assetId = result.assetId,
+    };
+}
+
+EditorParticleEffectAssetPickerDialog::Result EditorParticleEffectAssetPickerDialog::Show(
+    HWND owner,
+    const EditorTheme& theme,
+    const EditorSceneContext& sceneContext,
+    kb::assets::AssetId currentEffect) {
+    AssetPickerWindow window{
+        theme,
+        BuildParticleEffectRows(sceneContext),
+        currentEffect,
+        "Select Particle Effect",
+        "Choose a Particle Effect asset to play on this object.",
+        "Clear Particle Effect",
+        HeroIconKind::Bolt,
+    };
+    const AssetPickerResult result = window.Show(owner);
+    return EditorParticleEffectAssetPickerDialog::Result{
         .accepted = result.accepted,
         .assetId = result.assetId,
     };

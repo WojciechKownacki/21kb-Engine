@@ -133,8 +133,7 @@ ParticleRenderBatchBuildResult ParticleRenderBatcher::Build(
     const auto particles = snapshot.Particles();
     const auto emitters = snapshot.Emitters();
     if (particles.size() > capacity_) {
-        return {.status = ParticleRenderBatchStatus::CapacityExceeded,
-            .droppedParticleCount = static_cast<std::uint32_t>(particles.size() - capacity_)};
+        Warmup(std::max(capacity_ * 2U, static_cast<std::uint32_t>(particles.size())));
     }
 
     const std::array<float, 3> cameraPosition = CameraPosition(camera);

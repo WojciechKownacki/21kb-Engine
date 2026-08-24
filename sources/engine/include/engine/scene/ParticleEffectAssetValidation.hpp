@@ -3,6 +3,7 @@
 #include "engine/assets/AssetId.hpp"
 #include "engine/scene/ParticleEffectAsset.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -56,6 +57,13 @@ struct ParticleEffectDiagnostic {
     ParticleStableId moduleId = 0U;
     std::string message;
 };
+
+[[nodiscard]] inline bool ParticleEffectDiagnosticsHaveErrors(
+    const std::vector<ParticleEffectDiagnostic>& diagnostics) noexcept {
+    return std::any_of(diagnostics.begin(), diagnostics.end(), [](const ParticleEffectDiagnostic& diagnostic) {
+        return diagnostic.severity == ParticleEffectDiagnosticSeverity::Error;
+    });
+}
 
 struct ParticleEffectValidationResult {
     std::vector<ParticleEffectDiagnostic> diagnostics;

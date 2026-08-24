@@ -211,4 +211,29 @@ const std::string& ParticleEditorWorkspaceState::FocusedPropertyPath() const noe
     return focusedPropertyPath_;
 }
 
+void ParticleEditorWorkspaceState::BeginPropertySlider(
+    std::size_t propertyIndex, std::uint32_t choice) noexcept {
+    propertySliderActive_ = true;
+    propertySliderHasHistory_ = false;
+    propertySliderIndex_ = propertyIndex;
+    propertySliderChoice_ = choice;
+}
+
+void ParticleEditorWorkspaceState::MarkPropertySliderHistory() noexcept {
+    if (propertySliderActive_)
+        propertySliderHasHistory_ = true;
+}
+
+void ParticleEditorWorkspaceState::EndPropertySlider() noexcept {
+    propertySliderActive_ = false;
+    propertySliderHasHistory_ = false;
+    propertySliderIndex_ = 0U;
+    propertySliderChoice_ = 0xFFFFFFFFU;
+}
+
+bool ParticleEditorWorkspaceState::PropertySliderActive() const noexcept { return propertySliderActive_; }
+std::size_t ParticleEditorWorkspaceState::PropertySliderIndex() const noexcept { return propertySliderIndex_; }
+std::uint32_t ParticleEditorWorkspaceState::PropertySliderChoice() const noexcept { return propertySliderChoice_; }
+bool ParticleEditorWorkspaceState::PropertySliderHasHistory() const noexcept { return propertySliderHasHistory_; }
+
 } // namespace kb::particle_editor

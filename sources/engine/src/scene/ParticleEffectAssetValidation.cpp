@@ -12,10 +12,11 @@ namespace kb::scene {
 namespace {
 
 void Add(ParticleEffectValidationResult& result, ParticleEffectDiagnosticCode code, std::string path,
-         std::string message, ParticleStableId emitterId = 0U, ParticleStableId moduleId = 0U) {
+         std::string message, ParticleStableId emitterId = 0U, ParticleStableId moduleId = 0U,
+         ParticleEffectDiagnosticSeverity severity = ParticleEffectDiagnosticSeverity::Error) {
     result.diagnostics.push_back(ParticleEffectDiagnostic{
         .code = code,
-        .severity = ParticleEffectDiagnosticSeverity::Error,
+        .severity = severity,
         .line = 0U,
         .propertyPath = std::move(path),
         .emitterId = emitterId,
@@ -118,16 +119,15 @@ void ValidateFlipbook(const ParticleFlipbookAsset& flipbook, const ParticleAsset
     }
     if ((frameCount > 1U || flipbook.framesPerSecond > 0.0F) && atlas.Empty()) {
         Add(result, ParticleEffectDiagnosticCode::InvalidReference, path + ".textureAtlas",
-            "animated flipbook requires a texture atlas", emitterId);
+            "animated flipbook has no texture atlas; the default sprite is used until one is assigned",
+            emitterId, 0U, ParticleEffectDiagnosticSeverity::Warning);
     }
 }
 
 } // namespace
 
 bool ParticleEffectValidationResult::Succeeded() const noexcept {
-    return std::none_of(diagnostics.begin(), diagnostics.end(), [](const ParticleEffectDiagnostic& diagnostic) {
-        return diagnostic.severity == ParticleEffectDiagnosticSeverity::Error;
-    });
+    return !ParticleEffectDiagnosticsHaveErrors(diagnostics);
 }
 
 ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(const ParticleEffectAsset& asset) {
@@ -235,7 +235,14 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
             !Finite(emitter.spawn.randomization) || emitter.spawn.randomization < 0.0F ||
             emitter.spawn.randomization > 1.0F || !Finite(emitter.spawn.prewarmSeconds) ||
             emitter.spawn.prewarmSeconds < 0.0F ||
-            emitter.spawn.prewarmSeconds > kParticleEffectMaxPrewarmSeconds)
+            emitter.spawn.prewarmSeconds > kParticleEffectMaxPrewarmSeconds ||
+            !Finite(emitter.spawn.startColor.r) || !Finite(emitter.spawn.startColor.g) ||
+            !Finite(emitter.spawn.startColor.b) || !Finite(emitter.spawn.startColor.a) ||
+            emitter.spawn.startColor.r < 0.0F || emitter.spawn.startColor.r > 1.0F ||
+            emitter.spawn.startColor.g < 0.0F || emitter.spawn.startColor.g > 1.0F ||
+            emitter.spawn.startColor.b < 0.0F || emitter.spawn.startColor.b > 1.0F ||
+            emitter.spawn.startColor.a < 0.0F || emitter.spawn.startColor.a > 1.0F ||
+            !Finite(emitter.spawn.startSize) || emitter.spawn.startSize <= 0.0F)
             Add(result, ParticleEffectDiagnosticCode::InvalidValue, base + ".spawn",
                 "spawn values are outside the supported range", emitter.emitterId);
 

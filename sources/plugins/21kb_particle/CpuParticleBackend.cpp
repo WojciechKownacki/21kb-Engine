@@ -213,7 +213,7 @@ void CpuParticleBackend::Warmup() {
     particleEventDepths_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     particlePrewarmGroups_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     renderEmitterScratch_.resize(kb::particles::kParticleRenderSnapshotMaxEmitterRecords);
-    renderParticleScratch_.resize(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
+    renderParticleScratch_.reserve(4'096U);
     warmedUp_ = true;
 }
 
@@ -247,6 +247,7 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::ConfigureOwnerDeathPoli
 }
 
 kb::particles::ParticleRuntimeResult CpuParticleBackend::ConfigureComponent(
+    kb::scene::Scene&,
     std::uint64_t instanceId,
     float rateMultiplier,
     std::uint32_t maxParticlesOverride,
@@ -642,6 +643,19 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Step(
     return Result(kb::particles::ParticleRuntimeStatus::Success);
 }
 
+kb::particles::ParticleRuntimeResult CpuParticleBackend::Simulate(
+    kb::scene::Scene& scene,
+    float fixedDeltaSeconds) {
+    const auto stepped = Step(scene, fixedDeltaSeconds);
+    if (!stepped.Succeeded()) return stepped;
+    const auto published = PublishRenderSnapshot(
+        scene, scene.Runtime().FixedStepIndex() + 1U, ++simulateRevision_);
+    if (!published.Succeeded()) {
+        return Result(kb::particles::ParticleRuntimeStatus::InvalidRequest);
+    }
+    return stepped;
+}
+
 kb::particles::ParticleRuntimeQueryResult CpuParticleBackend::Query(
     const kb::scene::Scene&,
     std::uint64_t instanceId) const noexcept {
@@ -658,6 +672,7 @@ kb::particles::ParticleRuntimeQueryResult CpuParticleBackend::Query(
         .state = playbackStates_[denseIndex] == PlaybackState::Playing,
         .assetId = effectAssetIds_[denseIndex],
         .materialAssetId = 0U,
+        .owner = owners_[denseIndex],
         .liveParticleCount = LiveParticleCount(instanceId),
         .executionPath = executionPaths_[denseIndex],
         .gpuVisualAvailability = gpuVisualAvailability_[denseIndex],
@@ -1038,6 +1053,7 @@ float CpuParticleBackend::EvaluateCurve(const CompiledCurve& curve, float normal
 kb::math::Color CpuParticleBackend::EvaluateGradient(
     const CompiledGradient& gradient,
     float normalizedAge) noexcept {
+    if (gradient.stopCount == 0U) return {};
     if (gradient.stopCount == 1U || normalizedAge <= gradient.stops[0].time) {
         return gradient.stops[0].color;
     }
@@ -1152,8 +1168,9 @@ bool CpuParticleBackend::SpawnExact(
         particleVelocities_.push_back(TransformDirection(ownerTransform, SampleInitialVelocity(emitter, runtime)));
         particleAges_.push_back(0.0F);
         particleLifetimes_.push_back(lifetime);
-        particleColors_.push_back(kb::math::Color{});
-        particleSizes_.push_back(1.0F);
+        particleColors_.push_back(EvaluateGradient(emitter.colorOverLife, 0.0F));
+        particleSizes_.push_back(emitter.sizeOverLife.keyCount > 0U
+            ? EvaluateCurve(emitter.sizeOverLife, 0.0F) : 1.0F);
         particleEventDepths_.push_back(eventDepth);
         particlePrewarmGroups_.push_back(prewarmGroup);
         static_cast<void>(QueueInternalEvent({
@@ -1375,11 +1392,12 @@ void CpuParticleBackend::ExecuteForcesAndIntegrate(
         const CompiledEmitter& emitter =
             compiledEffects_[runtime.compiledEffectIndex].effect->emitters[particleEmitterIndices_[index]];
         kb::math::Vec3& velocity = particleVelocities_[index];
-        kb::math::Color color{};
-        float size = 1.0F;
-        float alphaMultiplier = 1.0F;
         const float normalizedAge = kb::math::Clamp(
             particleAges_[index] / particleLifetimes_[index], 0.0F, 1.0F);
+        kb::math::Color color = EvaluateGradient(emitter.colorOverLife, normalizedAge);
+        float size = emitter.sizeOverLife.keyCount > 0U
+            ? EvaluateCurve(emitter.sizeOverLife, normalizedAge) : 1.0F;
+        float alphaMultiplier = 1.0F;
         for (std::uint8_t moduleIndex = 0U; moduleIndex < emitter.moduleCount; ++moduleIndex) {
             const CompiledEmitter::Module& module = emitter.modules[moduleIndex];
             if (!module.enabled) continue;
@@ -1401,12 +1419,6 @@ void CpuParticleBackend::ExecuteForcesAndIntegrate(
             case kb::scene::ParticleModuleType::Drag:
                 velocity = velocity * std::exp(
                     -std::get<kb::scene::ParticleDragModule>(module.payload).coefficient * fixedDeltaSeconds);
-                break;
-            case kb::scene::ParticleModuleType::ColorOverLife:
-                color = EvaluateGradient(emitter.colorOverLife, normalizedAge);
-                break;
-            case kb::scene::ParticleModuleType::SizeOverLife:
-                size = EvaluateCurve(emitter.sizeOverLife, normalizedAge);
                 break;
             case kb::scene::ParticleModuleType::AlphaOverLife:
                 alphaMultiplier = EvaluateCurve(emitter.alphaOverLife, normalizedAge);
@@ -1763,6 +1775,7 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
     if (particleOffset != static_cast<std::uint32_t>(particleInstanceIds_.size())) {
         return {kb::particles::ParticleRenderSnapshotStatus::InvalidSnapshot};
     }
+    renderParticleScratch_.resize(particleInstanceIds_.size());
 
     for (std::size_t particleIndex = 0U; particleIndex < particleInstanceIds_.size(); ++particleIndex) {
         const std::uint32_t denseIndex = ResolveDenseIndex(particleInstanceIds_[particleIndex]);

@@ -81,6 +81,7 @@ private:
     bgfx::UniformHandle depthParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle volumetricParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle whiteTexture_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle streakTexture_ = BGFX_INVALID_HANDLE;
     ParticleVolumetricQuality volumetricQuality_ = ParticleVolumetricQuality::High;
 };
 

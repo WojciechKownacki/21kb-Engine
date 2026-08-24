@@ -2,6 +2,7 @@
 
 #include "engine/scene/ParticleEffectAsset.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -67,6 +68,14 @@ public:
                          kb::scene::ParticleStableId moduleId) noexcept;
     [[nodiscard]] const std::string& FocusedPropertyPath() const noexcept;
 
+    void BeginPropertySlider(std::size_t propertyIndex, std::uint32_t choice = 0xFFFFFFFFU) noexcept;
+    void MarkPropertySliderHistory() noexcept;
+    void EndPropertySlider() noexcept;
+    [[nodiscard]] bool PropertySliderActive() const noexcept;
+    [[nodiscard]] std::size_t PropertySliderIndex() const noexcept;
+    [[nodiscard]] std::uint32_t PropertySliderChoice() const noexcept;
+    [[nodiscard]] bool PropertySliderHasHistory() const noexcept;
+
 private:
     kb::scene::ParticleStableId selectedEmitterId_ = 0U;
     bool focused_ = false;
@@ -86,6 +95,10 @@ private:
     kb::scene::ParticleStableId draggedModuleId_ = 0U;
     std::uint32_t moduleDragTargetOrder_ = 0U;
     std::string focusedPropertyPath_;
+    bool propertySliderActive_ = false;
+    bool propertySliderHasHistory_ = false;
+    std::size_t propertySliderIndex_ = 0U;
+    std::uint32_t propertySliderChoice_ = 0xFFFFFFFFU;
 };
 
 } // namespace kb::particle_editor

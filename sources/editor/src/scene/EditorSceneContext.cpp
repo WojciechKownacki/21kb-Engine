@@ -32,8 +32,10 @@
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
+#include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/ParticleEffectComponent.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
@@ -3153,7 +3155,36 @@ bool EditorSceneContext::CreateParticleEffectAsset(const std::filesystem::path& 
     emitter.emitterId = 1U;
     emitter.authoringOrder = 0U;
     emitter.name = "Emitter 1";
+    emitter.maxParticles = 512U;
+    emitter.spawn.rateOverTime.keyframes = {{.time = 0.0F, .value = 28.0F}};
+    emitter.spawn.lifetimeMin = 1.1F;
+    emitter.spawn.lifetimeMax = 1.8F;
+    emitter.spawn.speedMin = 1.4F;
+    emitter.spawn.speedMax = 3.2F;
+    emitter.spawn.spreadDegrees = 22.0F;
     emitter.output.material = {.assetId = 0U, .virtualPath = "/21kbParticle/Materials/DefaultParticle.kbmat"};
+    emitter.output.blend = kb::scene::ParticleBlendMode::Add;
+    emitter.output.softParticles = true;
+    emitter.output.antiAliasing = true;
+    emitter.modules.push_back({
+        .moduleId = 1U,
+        .authoringOrder = 0U,
+        .type = kb::scene::ParticleModuleType::ColorOverLife,
+        .payload = kb::scene::ParticleColorOverLifeModule{.gradient = {.stops = {
+            {.time = 0.0F, .color = {1.0F, 0.78F, 0.32F, 1.0F}},
+            {.time = 0.45F, .color = {1.0F, 0.38F, 0.08F, 0.9F}},
+            {.time = 1.0F, .color = {0.28F, 0.05F, 0.01F, 0.0F}},
+        }}},
+    });
+    emitter.modules.push_back({
+        .moduleId = 2U,
+        .authoringOrder = 1U,
+        .type = kb::scene::ParticleModuleType::SizeOverLife,
+        .payload = kb::scene::ParticleSizeOverLifeModule{.curve = {.keyframes = {
+            {.time = 0.0F, .value = 1.0F},
+            {.time = 1.0F, .value = 0.18F},
+        }}},
+    });
     effect.emitters.push_back(std::move(emitter));
 
     const kb::particle_editor::ParticleEditorResult saved = particleEditorGateway_.Save(path, effect);
@@ -8200,6 +8231,21 @@ kb::scene::SceneEntity EditorSceneContext::CreateParticleEffectEntity(kb::assets
         scene_->Components().ParticleEffects().Set(entity, kb::scene::ParticleEffectComponent{
             .effectAssetId = assetId.value,
         });
+        if (kb::particles::ParticlePlayback::HasBackend(*scene_)) {
+            const auto created = kb::particles::ParticlePlayback::Create(*scene_, assetId.value, entity);
+            if (created.Succeeded()) {
+                if (const kb::scene::TransformComponent* transform = scene_->Transforms().TryGet(entity)) {
+                    static_cast<void>(kb::particles::ParticlePlayback::ConfigureComponent(
+                        *scene_,
+                        created.instanceId,
+                        1.0F,
+                        0U,
+                        true,
+                        transform->WorldPayload()));
+                }
+                static_cast<void>(kb::particles::ParticlePlayback::Play(*scene_, created.instanceId));
+            }
+        }
         SelectEntity(entity);
         return true;
     });

@@ -43,6 +43,7 @@ public:
 
     [[nodiscard]] ParticleEditorResult Reset(kb::scene::ParticleEffectAsset asset, bool saved);
     [[nodiscard]] ParticleEditorResult Apply(kb::scene::ParticleEffectAsset asset);
+    [[nodiscard]] ParticleEditorResult ReplaceLatest(kb::scene::ParticleEffectAsset asset);
     [[nodiscard]] bool CanUndo() const noexcept;
     [[nodiscard]] bool CanRedo() const noexcept;
     [[nodiscard]] bool Undo() noexcept;
@@ -69,6 +70,7 @@ public:
     [[nodiscard]] ParticleEditorResult Open(const ParticleAssetGateway& gateway,
                                             const std::filesystem::path& path);
     [[nodiscard]] ParticleEditorResult Apply(kb::scene::ParticleEffectAsset asset);
+    [[nodiscard]] ParticleEditorResult ReplaceLatest(kb::scene::ParticleEffectAsset asset);
     [[nodiscard]] bool Undo() noexcept;
     [[nodiscard]] bool Redo() noexcept;
     [[nodiscard]] bool Revert();

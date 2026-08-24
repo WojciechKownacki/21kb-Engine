@@ -19,14 +19,14 @@ struct ParticleEffectLoadResult {
     bool migratedFromLegacy = false;
 
     [[nodiscard]] bool Succeeded() const noexcept {
-        return asset.has_value() && diagnostics.empty();
+        return asset.has_value() && !ParticleEffectDiagnosticsHaveErrors(diagnostics);
     }
 };
 
 struct ParticleEffectSaveResult {
     std::vector<ParticleEffectDiagnostic> diagnostics;
     [[nodiscard]] bool Succeeded() const noexcept {
-        return diagnostics.empty();
+        return !ParticleEffectDiagnosticsHaveErrors(diagnostics);
     }
 };
 

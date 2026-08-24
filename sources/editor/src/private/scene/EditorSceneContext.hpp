@@ -450,6 +450,11 @@ public:
     [[nodiscard]] const kb::scene::Scene* ParticleEditorPreviewScene() const noexcept;
     [[nodiscard]] std::uint64_t ParticleEditorPreviewRevision() const noexcept;
     [[nodiscard]] bool TickParticleEditorPreview(float deltaSeconds);
+    [[nodiscard]] bool TickEditorSceneParticles(float deltaSeconds);
+    [[nodiscard]] bool SetParticleEffectAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
+    [[nodiscard]] bool ToggleParticleEffectEnabled(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool ToggleParticleEffectAutoPlay(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool RemoveParticleEffectFromEntity(kb::scene::SceneEntity entity);
     [[nodiscard]] bool SaveParticleEditorAsset();
     [[nodiscard]] kb::particle_editor::ParticleBakeResult BakeParticleEditorAsset();
     [[nodiscard]] bool RevertParticleEditorAsset();
@@ -480,12 +485,17 @@ public:
     [[nodiscard]] bool RemoveParticleEditorModule(kb::scene::ParticleStableId moduleId);
     [[nodiscard]] bool SetParticleEditorOutputType(kb::scene::ParticleOutputType type);
     [[nodiscard]] bool SetParticleEditorOutputReference(kb::assets::AssetKind kind, kb::assets::AssetId id);
-    [[nodiscard]] bool SetParticleEditorSpawn(kb::scene::ParticleSpawnAsset spawn);
+    [[nodiscard]] bool SetParticleEditorSpawn(kb::scene::ParticleSpawnAsset spawn, bool coalesceLatest = false);
     [[nodiscard]] bool SetParticleEditorModulePayload(kb::scene::ParticleStableId moduleId,
-                                                     kb::scene::ParticleModulePayload payload);
+                                                     kb::scene::ParticleModulePayload payload,
+                                                     bool coalesceLatest = false);
     [[nodiscard]] bool FocusParticleEditorDiagnostic(std::size_t diagnosticIndex) noexcept;
     [[nodiscard]] bool NavigateParticleEditorDependency(std::size_t dependencyIndex);
-    [[nodiscard]] bool EditParticleEditorProperty(std::size_t propertyIndex, std::string_view value);
+    [[nodiscard]] bool EditParticleEditorProperty(std::size_t propertyIndex, std::string_view value,
+                                                 bool coalesceLatest = false);
+    void BeginParticleEditorPropertySlider(
+        std::size_t propertyIndex, std::uint32_t choice = 0xFFFFFFFFU) noexcept;
+    void EndParticleEditorPropertySlider() noexcept;
     [[nodiscard]] bool UndoParticleEditorCommand();
     [[nodiscard]] bool RedoParticleEditorCommand();
     [[nodiscard]] bool BeginParticleEditorEmitterRename(kb::scene::ParticleStableId emitterId);
@@ -505,6 +515,11 @@ public:
         kb::particle_editor::ParticleDocumentCloseDecision decision,
         std::optional<std::filesystem::path> savePath = std::nullopt);
     void CloseParticleEditorAsset();
+    [[nodiscard]] bool BeginParticlePreviewOrbit(int x, int y) noexcept;
+    [[nodiscard]] bool DragParticlePreviewOrbit(int x, int y);
+    [[nodiscard]] bool EndParticlePreviewOrbit() noexcept;
+    [[nodiscard]] bool IsParticlePreviewOrbiting() const noexcept;
+    [[nodiscard]] bool ZoomParticlePreviewCamera(float scale);
     void SetParticlePreviewReleaseHandler(std::function<void(const kb::scene::Scene&)> handler);
     [[nodiscard]] bool OpenAnimationClipEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenAnimatorEditorAsset(kb::assets::AssetId id);
