@@ -507,6 +507,33 @@ void TestVisualModulesObservableGoldenAndDefaults() {
         "disabled visual modules changed opaque-white unit-size defaults");
 }
 
+void TestStartColorAndSizeWithoutModules() {
+    auto effect = Fixture::MakeEffect(0.0F, 4U);
+    effect.emitters[0].spawn.startColor = {0.25F, 0.5F, 0.75F, 0.8F};
+    effect.emitters[0].spawn.startSize = 2.5F;
+    effect.emitters[0].spawn.lifetimeMin = 1.0F;
+    effect.emitters[0].spawn.lifetimeMax = 1.0F;
+    effect.emitters[0].spawn.speedMin = 0.0F;
+    effect.emitters[0].spawn.speedMax = 0.0F;
+    Fixture fixture(std::move(effect));
+    kb::particle_plugin::CpuParticleBackend backend;
+    backend.Warmup();
+    const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded() &&
+            backend.Emit(fixture.scene, created.instanceId, 1U).Succeeded(),
+        "start color fixture setup failed");
+    Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "start color step failed");
+    const auto states = CopyBackendStates(backend, fixture, created.instanceId);
+    Require(states.size() == 1U &&
+            std::abs(states.front().color.r - 0.25F) < 0.00001F &&
+            std::abs(states.front().color.g - 0.5F) < 0.00001F &&
+            std::abs(states.front().color.b - 0.75F) < 0.00001F &&
+            std::abs(states.front().color.a - 0.8F) < 0.00001F &&
+            std::abs(states.front().size - 2.5F) < 0.00001F,
+        "start color and start size were not applied without Color/Size Over Life modules");
+}
+
 void TestCollisionPlaneExecutionAndDisable() {
     const auto sample = [](bool enabled) {
         auto effect = Fixture::MakeEffect(0.0F, 4U);
@@ -2449,6 +2476,46 @@ void operator delete[](void* memory) noexcept { std::free(memory); }
 void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
 void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); }
 
+void TestEditorStyleScenePulseFollowsOwner() {
+    auto effect = Fixture::MakeEffect(60.0F, 4U);
+    effect.emitters[0].spawn.speedMin = 0.0F;
+    effect.emitters[0].spawn.speedMax = 0.0F;
+    effect.emitters[0].spawn.lifetimeMin = 10.0F;
+    effect.emitters[0].spawn.lifetimeMax = 10.0F;
+    Fixture fixture(std::move(effect));
+    kb::scene::TransformComponent transform = fixture.scene.Transforms().Get(fixture.owner);
+    transform.localPosition.x = 12.0F;
+    transform.worldPosition.x = 12.0F;
+    fixture.scene.Transforms().Set(fixture.owner, transform);
+
+    kb::particle_plugin::CpuParticleBackend backend;
+    backend.Warmup();
+    Require(kb::particles::ParticlePlayback::RegisterBackend(fixture.scene, backend).Succeeded(),
+        "editor-style playback backend registration failed");
+    Require(kb::particles::ParticlePlayback::WarmupRenderSnapshots(fixture.scene).Succeeded(),
+        "editor-style snapshot warmup failed");
+    const auto created = kb::particles::ParticlePlayback::Create(
+        fixture.scene, fixture.effectAssetId, fixture.owner);
+    Require(created.Succeeded(), "editor-style instance create failed");
+    Require(kb::particles::ParticlePlayback::ConfigureComponent(
+                fixture.scene,
+                created.instanceId,
+                1.0F,
+                0U,
+                true,
+                transform.WorldPayload()).Succeeded() &&
+            kb::particles::ParticlePlayback::Play(fixture.scene, created.instanceId).Succeeded() &&
+            kb::particles::ParticlePlayback::Simulate(
+                fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "editor-style Create/Configure/Play/Simulate pulse failed");
+    const auto states = kb::particles::ParticlePlayback::LiveParticleStates(fixture.scene, created.instanceId);
+    Require(!states.empty() &&
+            std::all_of(states.begin(), states.end(), [](const auto& state) { return state.position.x >= 11.5F; }),
+        "editor scene pulse spawned particles at the world origin instead of the entity");
+    Require(kb::particles::ParticlePlayback::UnregisterBackend(fixture.scene, backend).Succeeded(),
+        "editor-style playback backend unregister failed");
+}
+
 int main() {
     try {
         TestSharedImmutableCompilerArtifact();
@@ -2462,6 +2529,7 @@ int main() {
         TestSharedFixedSchedulerDeterminism();
         TestUniformSolidAngleConeGolden();
         TestVisualModulesObservableGoldenAndDefaults();
+        TestStartColorAndSizeWithoutModules();
         TestCollisionPlaneExecutionAndDisable();
         TestInternalEventTriggersOrderingAndBounds();
         TestInternalEventBudgetsAndCollisionLocalLimit();
@@ -2475,6 +2543,7 @@ int main() {
         TestNoAllocationPerFixedStep();
         TestComponentReconciliationAndOwnerPolicies();
         TestComponentRateCapacityAndFollowTransformContracts();
+        TestEditorStyleScenePulseFollowsOwner();
         TestComponentBindingCapacityIsAtomic();
         TestComponentCreateFailureIsExplicitAndPreservesLiveInstance();
         TestActiveReloadContracts();

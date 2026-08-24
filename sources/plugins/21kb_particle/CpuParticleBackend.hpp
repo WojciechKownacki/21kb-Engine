@@ -53,11 +53,12 @@ public:
         std::uint64_t instanceId,
         kb::scene::ParticleOwnerDeathPolicy policy) noexcept;
     [[nodiscard]] kb::particles::ParticleRuntimeResult ConfigureComponent(
+        kb::scene::Scene& scene,
         std::uint64_t instanceId,
         float rateMultiplier,
         std::uint32_t maxParticlesOverride,
         bool followTransform,
-        const kb::scene::WorldTransform& ownerTransform) noexcept;
+        const kb::scene::WorldTransform& ownerTransform) noexcept override;
     [[nodiscard]] kb::particles::ParticleRuntimeResult Step(
         kb::scene::Scene& scene,
         float fixedDeltaSeconds);
@@ -98,6 +99,9 @@ public:
         kb::scene::Scene& scene,
         std::uint64_t instanceId,
         std::uint32_t count) override;
+    [[nodiscard]] kb::particles::ParticleRuntimeResult Simulate(
+        kb::scene::Scene& scene,
+        float fixedDeltaSeconds) override;
     [[nodiscard]] kb::particles::ParticleRuntimeQueryResult Query(
         const kb::scene::Scene& scene,
         std::uint64_t instanceId) const noexcept override;
@@ -298,6 +302,7 @@ private:
                                   kb::scene::kParticleEffectMaxEmitters>
         renderRejectedByEventBudget_{};
     std::uint64_t nextParticleId_ = 1U;
+    std::uint64_t simulateRevision_ = 0U;
     std::array<std::uint32_t, kb::scene::kParticleEffectMaxInstancesPerScene *
                                   kb::scene::kParticleEffectMaxEmitters *
                                   kb::scene::kParticleEffectMaxModulesPerEmitter>

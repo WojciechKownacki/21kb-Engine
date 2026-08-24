@@ -25,6 +25,7 @@
 #include "diagnostics/EditorLagTrace.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
@@ -44,11 +45,10 @@
 #include "platform/win32/EditorMeshAssetPickerDialog.hpp"
 #include "platform/win32/EditorMaterialParameterValueDialog.hpp"
 #include "platform/win32/EditorAnimatorControllerAssetPickerDialog.hpp"
+#include "platform/win32/EditorParticleEffectAssetPickerDialog.hpp"
 #include "platform/win32/EditorSkeletonAssetPickerDialog.hpp"
 #include "platform/win32/EditorSkeletalMeshAssetPickerDialog.hpp"
 #include "platform/win32/EditorMaterialColorPickerDialog.hpp"
-#include "platform/win32/EditorMaterialParameterValueDialog.hpp"
-#include "platform/win32/EditorMeshAssetPickerDialog.hpp"
 #include "platform/win32/EditorAudioMixerAssetPickerDialog.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
@@ -56,6 +56,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <commdlg.h>
 #include <cstdint>
 #include <filesystem>
@@ -538,19 +539,69 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     if (targetChoice < 200U || targetChoice >= 200U + targetCount) return;
                     hit.targetEmitterId = targetIds[targetChoice - 200U];
                 }
+            } else if (hit.action == ParticleEditorPanelAction::DragPropertySlider) {
+                if (ParticleEditorPanelInteraction::BeginPropertySlider(sceneContext_, layout, hit, x)) {
+                    SetCapture(messageWindow);
+                    sceneViewport_.RequestPresent();
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                }
+                return;
+            } else if (hit.action == ParticleEditorPanelAction::ToggleProperty) {
+                static_cast<void>(ParticleEditorPanelInteraction::Execute(sceneContext_, hit));
+                sceneViewport_.RequestPresent();
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return;
             } else if (hit.action == ParticleEditorPanelAction::EditProperty) {
                 if (hit.propertyIndex >= inspector.properties.size() || !inspector.properties[hit.propertyIndex].editable)
                     return;
                 const auto& property = inspector.properties[hit.propertyIndex];
-                const bool isGradient = property.label == "Gradient";
-                const bool isCurve = property.label == "Curve" || property.label == "Rate curve";
-                const auto edited = EditorMaterialParameterValueDialog::Show(
-                    mainWindow_, property.label, property.value,
-                    isGradient ? "Stops as time,r,g,b,a; separated by ';', e.g. 0,1,1,1,1;1,0,0,0,0"
-                    : isCurve ? "Keys as time,value,easing; separated by ';', e.g. 0,1,0;1,0.5,3"
-                    : "Use numbers like: 0.25 or 1 0 0 1");
-                if (!edited.has_value()) return;
-                editedValue = *edited;
+                if (hit.propertyChoice != 0xFFFFFFFFU) {
+                    editedValue = std::to_string(hit.propertyChoice);
+                } else if (property.widget == kb::particle_editor::ParticleEditorPropertyWidget::Color) {
+                    POINT screen{x, y};
+                    ClientToScreen(messageWindow, &screen);
+                    const auto picked = EditorMaterialColorPickerDialog::Show(
+                        mainWindow_, property.label,
+                        {property.colorValue.r, property.colorValue.g, property.colorValue.b, property.colorValue.a},
+                        &screen);
+                    if (!picked.has_value()) return;
+                    editedValue = kb::particle_editor::ParticleEmitterInspectorModel::FormatColor({
+                        (*picked)[0], (*picked)[1], (*picked)[2], (*picked)[3]});
+                } else if (property.widget == kb::particle_editor::ParticleEditorPropertyWidget::Gradient) {
+                    kb::math::Gradient gradient = property.gradient;
+                    if (gradient.stops.empty()) return;
+                    const RECT& preview = layout.propertyRows[hit.propertyIndex].curvePreview;
+                    const float width = static_cast<float>(std::max<LONG>(1, preview.right - preview.left));
+                    const float t = std::clamp(static_cast<float>(x - preview.left) / width, 0.0F, 1.0F);
+                    std::size_t nearest = 0U;
+                    float best = std::abs(gradient.stops[0].time - t);
+                    for (std::size_t index = 1U; index < gradient.stops.size(); ++index) {
+                        const float distance = std::abs(gradient.stops[index].time - t);
+                        if (distance < best) {
+                            best = distance;
+                            nearest = index;
+                        }
+                    }
+                    POINT screen{x, y};
+                    ClientToScreen(messageWindow, &screen);
+                    const auto& stop = gradient.stops[nearest];
+                    const auto picked = EditorMaterialColorPickerDialog::Show(
+                        mainWindow_, property.label,
+                        {stop.color.r, stop.color.g, stop.color.b, stop.color.a}, &screen);
+                    if (!picked.has_value()) return;
+                    gradient.stops[nearest].color = {
+                        (*picked)[0], (*picked)[1], (*picked)[2], (*picked)[3]};
+                    editedValue = kb::particle_editor::ParticleEmitterInspectorModel::FormatGradient(gradient);
+                } else {
+                    const bool isCurve = property.widget == kb::particle_editor::ParticleEditorPropertyWidget::Curve ||
+                        property.label == "Curve" || property.label == "Rate curve";
+                    const auto edited = EditorMaterialParameterValueDialog::Show(
+                        mainWindow_, property.label, property.value,
+                        isCurve ? "Keys as time,value,easing; separated by ';', e.g. 0,1,0;1,0.5,3"
+                        : "Use numbers like: 0.25 or 1 0 0 1");
+                    if (!edited.has_value()) return;
+                    editedValue = *edited;
+                }
             }
             if (ParticleEditorPanelInteraction::Execute(sceneContext_, hit, selectedMaterial, editedValue) &&
                 (hit.action == ParticleEditorPanelAction::BeginEmitterDrag ||
@@ -559,6 +610,12 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             }
             sceneViewport_.RequestPresent();
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+        if (PointInRect(layout.preview, x, y)) {
+            static_cast<void>(sceneContext_.BeginParticlePreviewOrbit(x, y));
+            SetCapture(messageWindow);
+            sceneViewport_.RequestPresent();
             return;
         }
     } else {
@@ -1534,6 +1591,26 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     sceneViewport_.RequestPresent();
                 } else {
                     sceneContext_.Console().Warning("Terrain", error.empty() ? "Heightmap import failed." : error);
+                }
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+        if (hit.section == InspectorSectionId::ParticleEffect &&
+            (hit.property == InspectorPropertyId::ParticleEffectAsset ||
+             hit.property == InspectorPropertyId::ParticleEffectAssetPicker)) {
+            const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+            const kb::scene::ParticleEffectComponent* particleEffect =
+                sceneContext_.Scene().Components().ParticleEffects().TryGet(entity);
+            if (particleEffect != nullptr) {
+                const EditorParticleEffectAssetPickerDialog::Result result =
+                    EditorParticleEffectAssetPickerDialog::Show(
+                        mainWindow_,
+                        MakeEditorDarkTheme(),
+                        sceneContext_,
+                        kb::assets::AssetId{ particleEffect->effectAssetId });
+                if (result.accepted && sceneContext_.SetParticleEffectAsset(entity, result.assetId)) {
+                    sceneViewport_.RequestPresent();
                 }
             }
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);

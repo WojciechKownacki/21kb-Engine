@@ -226,6 +226,33 @@ constexpr int kMaxMessagesPerPump = 128;
         state.metrics.panelPadding);
 }
 
+[[nodiscard]] bool ParticleEditorPanelIsVisible(const EditorApplicationState& state) {
+    if (!state.sceneContext.HasParticleEditorAsset()) return false;
+    RECT client{};
+    GetClientRect(state.window, &client);
+    const DockLayout layout = state.dockModel.Queries().BuildLayout(
+        client.right - client.left,
+        client.bottom - client.top,
+        state.metrics.menuHeight,
+        state.metrics.toolbarHeight,
+        state.metrics.tabStripHeight,
+        state.metrics.tabMinWidth,
+        state.metrics.tabWidth,
+        state.metrics.splitterSize,
+        state.metrics.panelPadding);
+    for (const DockPanelLayout& panelLayout : layout.panels) {
+        if (!panelLayout.active) continue;
+        const DockPanel* panel = state.dockModel.Queries().FindPanel(panelLayout.panelId);
+        if (panel != nullptr && panel->kind == DockPanelKind::ParticleEditor) return true;
+    }
+    for (HWND window : state.floatingWindows.Queries().Windows()) {
+        if (window == nullptr || IsWindowVisible(window) == 0) continue;
+        const DockPanel* panel = state.dockModel.Queries().FindPanel(state.floatingWindows.Queries().PanelId(window));
+        if (panel != nullptr && panel->kind == DockPanelKind::ParticleEditor) return true;
+    }
+    return false;
+}
+
 void InvalidateSceneToolbar(HWND window, const RECT& content, const EditorViewportPreviewState& preview) noexcept {
     const RECT toolbar = SceneViewportToolbarRenderer::Resolve(content, preview).toolbar;
     InvalidateRect(window, &toolbar, FALSE);
@@ -504,8 +531,9 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
     // intentionally time-driven preview and Play Mode advances the scene every tick.
     const bool playPresent = state.playMode.IsPlaying();
     const bool materialPresent = state.sceneContext.MaterialEditor().OpenAssetId().IsValid();
+    const bool particlePresent = ParticleEditorPanelIsVisible(state);
     const bool thumbnailPresent = EditorMaterialThumbnailCache().HasPendingWork();
-    const bool continuousPresent = playPresent || materialPresent;
+    const bool continuousPresent = playPresent || materialPresent || particlePresent;
     // The toolbar refresh only repaints cached counters. It must not manufacture a GPU frame:
     // doing so submitted every visible viewport exactly four times per second while idle.
     if (continuousPresent || thumbnailPresent) {
@@ -723,8 +751,13 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     if (animationPreviewCameraChanged || animationPreviewPlaybackChanged) {
         state.sceneViewport.RequestPresent();
     }
-    const bool particlePreviewChanged = state.sceneContext.TickParticleEditorPreview(deltaSeconds);
+    const bool particlePanelVisible = ParticleEditorPanelIsVisible(state);
+    const bool particlePreviewChanged =
+        particlePanelVisible && state.sceneContext.TickParticleEditorPreview(deltaSeconds);
     if (particlePreviewChanged) state.sceneViewport.RequestPresent();
+    const bool sceneParticlesChanged =
+        !state.playMode.IsPlaying() && state.sceneContext.TickEditorSceneParticles(deltaSeconds);
+    if (sceneParticlesChanged) state.sceneViewport.RequestPresent();
 
     const bool audioPreviewChanged = EditorAudioAssetPreview::Tick(state.sceneContext.Scene());
     if (audioPreviewChanged) {
@@ -755,7 +788,8 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
 
     const bool viewportsPresented = PresentVisibleViewports(state);
     return viewportsPresented || navigationChanged || gizmoChanged || focusChanged ||
-        animationPreviewCameraChanged || animationPreviewPlaybackChanged || particlePreviewChanged || scriptSaved ||
+        animationPreviewCameraChanged || animationPreviewPlaybackChanged || particlePreviewChanged ||
+        sceneParticlesChanged || scriptSaved ||
         audioPreviewChanged || addComponentSliding || disclosureSliding || skeletalMeshEditorOpenChanged ||
         EditorTerrainService::ToolState().strokeActive;
 }

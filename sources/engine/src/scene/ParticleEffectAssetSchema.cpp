@@ -69,7 +69,7 @@ ParticleModulePayload DefaultParticleModulePayload(ParticleModuleType type) {
     case ParticleModuleType::ColorOverLife:
         return ParticleColorOverLifeModule{.gradient = {.stops = {
             {.time = 0.0F, .color = {1.0F, 1.0F, 1.0F, 1.0F}},
-            {.time = 1.0F, .color = {1.0F, 1.0F, 1.0F, 1.0F}},
+            {.time = 1.0F, .color = {1.0F, 1.0F, 1.0F, 0.0F}},
         }}};
     case ParticleModuleType::SizeOverLife:
         return ParticleSizeOverLifeModule{};

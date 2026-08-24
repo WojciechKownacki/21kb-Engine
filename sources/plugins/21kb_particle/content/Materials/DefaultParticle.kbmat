@@ -2,11 +2,11 @@
 version 1
 materialType builtin.pbr
 materialTypeVersion 1
-baseColor 1 0.55 0.12 1
+baseColor 1 0.62 0.18 1
 metallicFactor 0
-roughnessFactor 0.45
-emissiveColor 1 0.16 0.01
-emissiveStrength 2
+roughnessFactor 0.38
+emissiveColor 1 0.28 0.04
+emissiveStrength 3.5
 alphaMode BLEND
 translucencyBlend ADDITIVE
 doubleSided true

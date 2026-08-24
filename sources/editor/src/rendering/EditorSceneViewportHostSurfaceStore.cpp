@@ -112,14 +112,11 @@ void EditorSceneBgfxViewport::HostSurfaceStore::Hide(HostSurface& surface) noexc
     if (surface.clipWindow != nullptr && IsWindow(surface.clipWindow) != 0) {
         ShowWindow(surface.clipWindow, SW_HIDE);
     }
-    // A bgfx native-window framebuffer owns a multi-buffered swapchain. Keeping that swapchain
-    // alive while its dock tab is hidden lets unrelated viewport frames advance its back buffers
-    // without submitting this surface. When the tab is shown again, Windows can expose one of
-    // those undefined buffers for the first frame (the Scene grid appears duplicated/corrupted)
-    // and only the next mouse-driven present repairs it. Retire only the native presentation
-    // target here; the per-session scene/post-process targets and renderer scene resources remain
-    // alive, so reactivation recreates a clean swapchain without re-uploading the scene.
-    surface.presentTarget.Shutdown();
+    // Keep the native swapchain. Particle Editor and Scene share the center dock leaf, so tab
+    // switches hide one surface and show the other every click. Destroying the framebuffer here
+    // forced a full D3D swapchain recreate plus a black first frame that lasted seconds. Hidden
+    // HWNDs are not shown until ShowPresentedWindows after a real submit of the newly active tab,
+    // so the last valid back buffer stays off-screen until that present replaces it.
     if (wasVisible && surface.host != nullptr && IsWindow(surface.host) != 0 && RectWidth(surface.rect) > 0U && RectHeight(surface.rect) > 0U) {
         InvalidateRect(surface.host, &surface.rect, FALSE);
     }

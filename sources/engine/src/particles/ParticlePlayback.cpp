@@ -204,6 +204,18 @@ ParticleRuntimeResult ParticlePlayback::SetSeed(kb::scene::Scene& scene, std::ui
 ParticleRuntimeResult ParticlePlayback::SetParameterScalar(kb::scene::Scene& scene, std::uint64_t instanceId, std::string_view name, float value) noexcept { KB_PARTICLE_FORWARD(SetParameterScalar, instanceId, name, value); }
 ParticleRuntimeResult ParticlePlayback::ClearParameter(kb::scene::Scene& scene, std::uint64_t instanceId, std::string_view name) noexcept { KB_PARTICLE_FORWARD(ClearParameter, instanceId, name); }
 ParticleRuntimeResult ParticlePlayback::Emit(kb::scene::Scene& scene, std::uint64_t instanceId, std::uint32_t count) { KB_PARTICLE_FORWARD(Emit, instanceId, count); }
+ParticleRuntimeResult ParticlePlayback::Simulate(kb::scene::Scene& scene, float fixedDeltaSeconds) {
+    KB_PARTICLE_FORWARD(Simulate, fixedDeltaSeconds);
+}
+ParticleRuntimeResult ParticlePlayback::ConfigureComponent(
+    kb::scene::Scene& scene,
+    std::uint64_t instanceId,
+    float rateMultiplier,
+    std::uint32_t maxParticlesOverride,
+    bool followTransform,
+    const kb::scene::WorldTransform& ownerTransform) noexcept {
+    KB_PARTICLE_FORWARD(ConfigureComponent, instanceId, rateMultiplier, maxParticlesOverride, followTransform, ownerTransform);
+}
 
 #undef KB_PARTICLE_FORWARD
 

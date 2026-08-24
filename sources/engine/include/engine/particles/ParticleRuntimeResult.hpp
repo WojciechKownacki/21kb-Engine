@@ -49,6 +49,7 @@ struct ParticleRuntimeQueryResult {
     bool state = false;
     std::uint64_t assetId = 0U;
     std::uint64_t materialAssetId = 0U;
+    kb::scene::SceneEntity owner{};
     std::uint32_t liveParticleCount = 0U;
     ParticleRuntimeExecutionPath executionPath = ParticleRuntimeExecutionPath::CpuDeterministic;
     ParticleGpuVisualAvailability gpuVisualAvailability =

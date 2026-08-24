@@ -14,6 +14,7 @@
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
+#include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -187,6 +188,11 @@ struct InspectorRowDefinition {
     InspectorPropertyId property = InspectorPropertyId::None;
     InspectorRowValueKind kind = InspectorRowValueKind::Text;
 };
+
+constexpr std::array<InspectorRowDefinition, 2> kParticleEffectRows{ {
+    { InspectorPropertyId::ParticleEffectEnabled, InspectorRowValueKind::Bool },
+    { InspectorPropertyId::ParticleEffectAutoPlay, InspectorRowValueKind::Bool },
+} };
 
 constexpr std::array<InspectorRowDefinition, 3> kAnimatorRows{ {
     { InspectorPropertyId::AnimatorSpeed, InspectorRowValueKind::Float },
@@ -1538,6 +1544,26 @@ void PaintAnimatorSection(
     section.Field("Speed", FormatFloat(animator.speed, 3), InspectorPropertyId::AnimatorSpeed);
     section.Bool("Enabled", animator.enabled, InspectorPropertyId::AnimatorEnabled);
     section.Field("Root Motion", rootMotionOwner, InspectorPropertyId::AnimatorRootMotionOwner);
+    y = section.Bottom() + kSectionGap;
+}
+
+void PaintParticleEffectSection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const EditorSceneContext& sceneContext,
+    const kb::scene::ParticleEffectComponent& particleEffect) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
+        InspectorSectionId::ParticleEffect, HeroIconKind::Bolt, "Particle Effect", true);
+    section.AssetField(
+        "Effect",
+        AssetDisplayName(sceneContext, particleEffect.effectAssetId),
+        InspectorPropertyId::ParticleEffectAsset,
+        InspectorPropertyId::ParticleEffectAssetPicker);
+    section.Bool("Enabled", particleEffect.enabled, InspectorPropertyId::ParticleEffectEnabled);
+    section.Bool("Auto Play", particleEffect.autoPlay, InspectorPropertyId::ParticleEffectAutoPlay);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -2941,6 +2967,16 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             y += h + kSectionGap;
         }
     }
+    if (const kb::scene::ParticleEffectComponent* particleEffect =
+            scene.Components().ParticleEffects().TryGet(selected);
+        particleEffect != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::ParticleEffect, 3);
+        if (sectionVisible(y, h)) {
+            PaintParticleEffectSection(dc, content, y, theme, inspector, sceneContext, *particleEffect);
+        } else {
+            y += h + kSectionGap;
+        }
+    }
     if (const kb::scene::MeshRendererComponent* meshRenderer = scene.Components().MeshRenderers().TryGet(selected); meshRenderer != nullptr) {
         const bool isTerrain = EditorTerrainService::IsTerrainEntity(scene, selected);
         if (!isTerrain || sceneContext.IsProjectPluginEnabled("Editor.Terrain")) {
@@ -3200,6 +3236,9 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     }
     if (const kb::scene::LightComponent* light = scene.Components().Lights().TryGet(selected); light != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::Light, LightSectionRows(*light)) + kSectionGap;
+    }
+    if (scene.Components().ParticleEffects().TryGet(selected) != nullptr) {
+        height += SectionHeight(inspector, InspectorSectionId::ParticleEffect, 3) + kSectionGap;
     }
     if (const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(selected); renderer != nullptr) {
         const bool terrain = EditorTerrainService::IsTerrainEntity(scene, selected);
@@ -4817,6 +4856,29 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         }
         if (!state.IsCollapsed(InspectorSectionId::AudioListener)) {
             if (InspectorPanelRenderer::Hit hit = HitAudioRows(viewport, y, InspectorSectionId::AudioListener, InspectorAudioComponentModel::ListenerRows(), x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+        }
+        y += kSectionGap;
+    }
+
+    if (sceneContext.Scene().Components().ParticleEffects().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::ParticleEffect, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::ParticleEffect)) {
+            if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(
+                    RowRect(viewport, y),
+                    InspectorSectionId::ParticleEffect,
+                    InspectorPropertyId::ParticleEffectAsset,
+                    InspectorPropertyId::ParticleEffectAssetPicker,
+                    x,
+                    scrolledY);
+                hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitRows(viewport, y, InspectorSectionId::ParticleEffect, kParticleEffectRows, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
         }

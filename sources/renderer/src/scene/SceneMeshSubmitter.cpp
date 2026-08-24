@@ -53,7 +53,7 @@ bool SceneMeshSubmitter::Initialize() {
     }
     transparentSubmissionScratch_.reserve(4'096U + kParticleGpuMaxBatches);
     meshBatchSubmissionScratch_.reserve(kb::particles::kParticleRenderSnapshotMaxEmitterRecords);
-    particleMeshBatchBuilder_.Warmup(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
+    particleMeshBatchBuilder_.Warmup(4'096U);
 
     return true;
 }

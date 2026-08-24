@@ -30,6 +30,8 @@ enum class ParticleEditorPanelAction : std::uint8_t {
     PickOutputMesh,
     PickOutputTexture,
     EditProperty,
+    DragPropertySlider,
+    ToggleProperty,
     AddModule,
     SelectModule,
     BeginModuleDrag,
@@ -58,6 +60,23 @@ struct ParticleEditorEmitterRowLayout {
     RECT remove{};
 };
 
+struct ParticleEditorPropertyRowLayout {
+    RECT bounds{};
+    RECT label{};
+    RECT sliderTrack{};
+    RECT sliderFill{};
+    RECT sliderThumb{};
+    RECT valueBox{};
+    RECT toggle{};
+    RECT curvePreview{};
+    RECT colorSwatch{};
+    std::array<RECT, 8U> enumChips{};
+    std::uint8_t enumChipCount = 0U;
+    std::array<RECT, 3U> vectorAxes{};
+    bool hasSlider = false;
+    bool hasToggle = false;
+};
+
 struct ParticleEditorPanelLayout {
     RECT toolbar{};
     RECT preview{};
@@ -77,7 +96,7 @@ struct ParticleEditorPanelLayout {
     std::array<RECT, 8U> outputChoices{};
     std::size_t outputChoiceCount = 0U;
     RECT propertyHeader{};
-    std::array<RECT, 128U> propertyRows{};
+    std::array<ParticleEditorPropertyRowLayout, 128U> propertyRows{};
     std::size_t propertyRowCount = 0U;
     RECT recipeHeader{};
     std::array<RECT, 32U> recipeTiles{};
@@ -107,6 +126,7 @@ struct ParticleEditorPanelHit {
     std::size_t dependencyIndex = 0U;
     std::size_t propertyIndex = 0U;
     std::size_t recipeIndex = 0U;
+    std::uint32_t propertyChoice = 0xFFFFFFFFU;
     kb::particle_editor::ParticleEditorComposerSection composerSection =
         kb::particle_editor::ParticleEditorComposerSection::Emitters;
 };
@@ -130,6 +150,8 @@ public:
         const ParticleEditorPanelLayout& layout, int y) noexcept;
     [[nodiscard]] static int MaximumComposerScroll(
         const ParticleEditorPanelLayout& layout, unsigned int dpi = 96U) noexcept;
+    [[nodiscard]] static float SliderValueAt(
+        const RECT& track, int x, float minimum, float maximum) noexcept;
 };
 #endif
 

@@ -33,7 +33,48 @@ effect.emitter[0].spawn.direction 0 1 0
 effect.emitter[0].spawn.spreadDegrees 88
 effect.emitter[0].spawn.randomization 1
 effect.emitter[0].spawn.prewarmSeconds 0
-effect.emitter[0].moduleCount 0
+effect.emitter[0].spawn.startColor 0.45 0.82 1 1
+effect.emitter[0].spawn.startSize 0.28
+effect.emitter[0].moduleCount 4
+effect.emitter[0].module[0].id 1
+effect.emitter[0].module[0].authoringOrder 0
+effect.emitter[0].module[0].type ColorOverLife
+effect.emitter[0].module[0].enabled true
+effect.emitter[0].module[0].payload.gradient.stopCount 3
+effect.emitter[0].module[0].payload.gradient.stop[0].time 0
+effect.emitter[0].module[0].payload.gradient.stop[0].rgb 0.82 0.95 1
+effect.emitter[0].module[0].payload.gradient.stop[0].alpha 1
+effect.emitter[0].module[0].payload.gradient.stop[1].time 0.45
+effect.emitter[0].module[0].payload.gradient.stop[1].rgb 0.22 0.62 1
+effect.emitter[0].module[0].payload.gradient.stop[1].alpha 0.75
+effect.emitter[0].module[0].payload.gradient.stop[2].time 1
+effect.emitter[0].module[0].payload.gradient.stop[2].rgb 0.04 0.12 0.35
+effect.emitter[0].module[0].payload.gradient.stop[2].alpha 0
+effect.emitter[0].module[1].id 2
+effect.emitter[0].module[1].authoringOrder 1
+effect.emitter[0].module[1].type SizeOverLife
+effect.emitter[0].module[1].enabled true
+effect.emitter[0].module[1].payload.curve.keyCount 3
+effect.emitter[0].module[1].payload.curve.key[0].time 0
+effect.emitter[0].module[1].payload.curve.key[0].value 0.4
+effect.emitter[0].module[1].payload.curve.key[0].easing Linear
+effect.emitter[0].module[1].payload.curve.key[1].time 0.35
+effect.emitter[0].module[1].payload.curve.key[1].value 1.2
+effect.emitter[0].module[1].payload.curve.key[1].easing Linear
+effect.emitter[0].module[1].payload.curve.key[2].time 1
+effect.emitter[0].module[1].payload.curve.key[2].value 0.15
+effect.emitter[0].module[1].payload.curve.key[2].easing Linear
+effect.emitter[0].module[2].id 3
+effect.emitter[0].module[2].authoringOrder 2
+effect.emitter[0].module[2].type Gravity
+effect.emitter[0].module[2].enabled true
+effect.emitter[0].module[2].payload.acceleration 0 0.4 0
+effect.emitter[0].module[2].payload.sceneGravityScale 0
+effect.emitter[0].module[3].id 4
+effect.emitter[0].module[3].authoringOrder 3
+effect.emitter[0].module[3].type Drag
+effect.emitter[0].module[3].enabled true
+effect.emitter[0].module[3].payload.coefficient 0.35
 effect.emitter[0].output.type Billboard
 effect.emitter[0].output.material.assetId 0
 effect.emitter[0].output.material.path "/21kbParticle/Materials/DefaultParticle.kbmat"

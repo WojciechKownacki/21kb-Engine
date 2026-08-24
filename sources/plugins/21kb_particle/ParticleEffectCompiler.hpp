@@ -36,7 +36,9 @@ struct ParticleCompileResult {
     std::vector<kb::assets::AssetId> transitiveDependencies;
     std::vector<kb::scene::ParticleEffectDiagnostic> diagnostics;
 
-    [[nodiscard]] bool Succeeded() const noexcept { return effect != nullptr && diagnostics.empty(); }
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return effect != nullptr && !kb::scene::ParticleEffectDiagnosticsHaveErrors(diagnostics);
+    }
 };
 
 class ParticleEffectCompiler final {
