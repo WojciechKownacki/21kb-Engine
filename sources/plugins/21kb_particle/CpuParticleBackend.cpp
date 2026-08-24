@@ -649,7 +649,7 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Simulate(
     const auto stepped = Step(scene, fixedDeltaSeconds);
     if (!stepped.Succeeded()) return stepped;
     const auto published = PublishRenderSnapshot(
-        scene, scene.Runtime().FixedStepIndex() + 1U, ++simulateRevision_);
+        scene, scene.Runtime().FixedStepIndex() + 1U);
     if (!published.Succeeded()) {
         return Result(kb::particles::ParticleRuntimeStatus::InvalidRequest);
     }
@@ -663,6 +663,8 @@ kb::particles::ParticleRuntimeQueryResult CpuParticleBackend::Query(
     if (denseIndex == kInvalidDenseIndex) {
         return { .status = kb::particles::ParticleRuntimeStatus::InvalidInstance };
     }
+    const CompiledEffect& effect =
+        *compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].effect;
     return {
         .status = compiledEffects_[instanceRuntime_[denseIndex].compiledEffectIndex].invalidCandidateGeneration != 0U
             ? kb::particles::ParticleRuntimeStatus::StaleAfterInvalidReload
@@ -671,7 +673,7 @@ kb::particles::ParticleRuntimeQueryResult CpuParticleBackend::Query(
                 : kb::particles::ParticleRuntimeStatus::Success),
         .state = playbackStates_[denseIndex] == PlaybackState::Playing,
         .assetId = effectAssetIds_[denseIndex],
-        .materialAssetId = 0U,
+        .materialAssetId = effect.emitterCount != 0U ? effect.emitters[0].materialAssetId : 0U,
         .owner = owners_[denseIndex],
         .liveParticleCount = LiveParticleCount(instanceId),
         .executionPath = executionPaths_[denseIndex],
@@ -1644,8 +1646,7 @@ void CpuParticleBackend::CapturePreviousParticlePositions() noexcept {
 
 kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSnapshot(
     kb::scene::Scene& scene,
-    std::uint64_t fixedStepIndex,
-    std::uint64_t revision) noexcept {
+    std::uint64_t fixedStepIndex) noexcept {
     renderGroupCounts_.fill(0U);
     for (std::size_t particleIndex = 0U; particleIndex < particleInstanceIds_.size(); ++particleIndex) {
         const std::uint32_t denseIndex = ResolveDenseIndex(particleInstanceIds_[particleIndex]);
@@ -1700,7 +1701,11 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
                 .instanceId = instanceId,
                 .effectAssetId = effectEntry.assetId,
                 .emitterId = emitter.emitterId,
-                .assetGeneration = effectEntry.assetGeneration,
+                // AssetManager generation zero is the canonical first load, while
+                // render snapshots reserve zero for malformed/uninitialized data.
+                .assetGeneration = effectEntry.assetGeneration == std::numeric_limits<std::uint64_t>::max()
+                    ? effectEntry.assetGeneration
+                    : effectEntry.assetGeneration + 1U,
                 .materialAssetId = emitter.materialAssetId,
                 .meshAssetId = emitter.meshAssetId,
                 .textureAtlasAssetId = emitter.textureAtlasAssetId,
@@ -1825,7 +1830,7 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
     }
 
     return kb::particles::ParticlePlayback::PublishRenderSnapshot(scene, *this, {
-        .revision = revision,
+        .revision = ++renderSnapshotRevision_,
         .fixedStepIndex = fixedStepIndex,
         .emitters = std::span<const kb::particles::ParticleRenderEmitterRecord>{
             renderEmitterScratch_.data(), emitterRecordCount},
@@ -1836,10 +1841,9 @@ kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSna
 
 kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderTombstone(
     kb::scene::Scene& scene,
-    std::uint64_t fixedStepIndex,
-    std::uint64_t revision) noexcept {
+    std::uint64_t fixedStepIndex) noexcept {
     return kb::particles::ParticlePlayback::PublishRenderSnapshot(scene, *this, {
-        .revision = revision,
+        .revision = ++renderSnapshotRevision_,
         .fixedStepIndex = fixedStepIndex,
         .tombstone = true,
     });
