@@ -9,6 +9,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
 namespace kb::editor::tests {
@@ -24,10 +25,12 @@ void RunRestoreRevertsRuntimeMutationTest() {
         },
     });
     Require(object.IsValid(), "Play mode test object was not created");
+    scene.Runtime().SetPlaying(false);
 
     EditorPlayModeSceneSession session;
     Require(session.Begin(scene, "PlayModeSnapshot"), "Play mode scene snapshot was not captured");
     Require(session.Active(), "Play mode scene session should be active after capture");
+    Require(scene.Runtime().IsPlaying(), "Play mode scene session did not enable runtime fixed updates");
 
     scene.Transforms().Set(object, kb::scene::TransformComponent{
         .localPosition = kb::scene::Vec3{ 10.0F, 20.0F, 30.0F },
@@ -37,6 +40,7 @@ void RunRestoreRevertsRuntimeMutationTest() {
 
     Require(session.Restore(scene), "Play mode scene snapshot was not restored");
     Require(!session.Active(), "Play mode scene session should clear after restore");
+    Require(!scene.Runtime().IsPlaying(), "Play mode scene session left runtime fixed updates enabled after stop");
     Require(scene.Entities().Count() == 1U, "Play mode restore did not remove runtime-created entities");
 
     const kb::scene::TransformComponent restored = scene.Transforms().Get(scene.Hierarchy().RootEntities().front());

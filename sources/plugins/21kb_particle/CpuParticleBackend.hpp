@@ -219,12 +219,10 @@ private:
     void CapturePreviousParticlePositions() noexcept;
     [[nodiscard]] kb::particles::ParticleRenderSnapshotResult PublishRenderSnapshot(
         kb::scene::Scene& scene,
-        std::uint64_t fixedStepIndex,
-        std::uint64_t revision) noexcept;
+        std::uint64_t fixedStepIndex) noexcept;
     [[nodiscard]] kb::particles::ParticleRenderSnapshotResult PublishRenderTombstone(
         kb::scene::Scene& scene,
-        std::uint64_t fixedStepIndex,
-        std::uint64_t revision) noexcept;
+        std::uint64_t fixedStepIndex) noexcept;
     [[nodiscard]] std::uint32_t InstanceParticleLimit(std::uint32_t denseIndex) const noexcept;
     [[nodiscard]] float EvaluateRate(const CompiledEmitter& emitter, float timeSeconds) const noexcept;
     [[nodiscard]] static float EvaluateCurve(const CompiledCurve& curve, float normalizedAge) noexcept;
@@ -302,7 +300,7 @@ private:
                                   kb::scene::kParticleEffectMaxEmitters>
         renderRejectedByEventBudget_{};
     std::uint64_t nextParticleId_ = 1U;
-    std::uint64_t simulateRevision_ = 0U;
+    std::uint64_t renderSnapshotRevision_ = 0U;
     std::array<std::uint32_t, kb::scene::kParticleEffectMaxInstancesPerScene *
                                   kb::scene::kParticleEffectMaxEmitters *
                                   kb::scene::kParticleEffectMaxModulesPerEmitter>

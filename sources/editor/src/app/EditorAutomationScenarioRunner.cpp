@@ -33,9 +33,11 @@
 #include "engine/platform/PlatformServices.hpp"
 #include "engine/platform/PlatformAdapters.hpp"
 #include "engine/platform/SettingsTransaction.hpp"
+#include "engine/particles/ParticlePlayback.hpp"
 #include "engine/project/ProjectDescriptorWriter.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/platform/UserStorage.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
@@ -3098,6 +3100,7 @@ ReadScriptValue(
         const auto expected = BoolMember(step, "available", error);
         if (!backend || !expected) return { false, error };
         bool available = false;
+        std::string backendDetail;
         if (*backend == "physics") {
             available = kb::scene::PhysicsBackend::HasBackend(
                 state.context.Scene());
@@ -3107,6 +3110,26 @@ ReadScriptValue(
         } else if (*backend == "haptics") {
             available = kb::input::InputHaptics::HasBackend(
                 state.context.Scene());
+        } else if (*backend == "particles") {
+            available = kb::particles::ParticlePlayback::HasBackend(
+                state.context.Scene());
+            const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(
+                state.context.Scene());
+            const auto publication = kb::particles::ParticlePlayback::LastRenderSnapshotPublicationResult(
+                state.context.Scene());
+            const std::vector<std::uint64_t> liveInstances =
+                kb::particles::ParticlePlayback::LiveInstanceIds(state.context.Scene());
+            const auto firstInstance = liveInstances.empty()
+                ? kb::particles::ParticleRuntimeQueryResult{}
+                : kb::particles::ParticlePlayback::Query(state.context.Scene(), liveInstances.front());
+            backendDetail = std::string{available ? "available" : "unavailable"} +
+                ", playing=" + (state.context.Scene().Runtime().IsPlaying() ? "true" : "false") +
+                ", fixedStep=" + std::to_string(state.context.Scene().Runtime().FixedStepIndex()) +
+                ", liveInstances=" + std::to_string(liveInstances.size()) +
+                ", material=" + std::to_string(firstInstance.materialAssetId) +
+                ", liveParticles=" + std::to_string(firstInstance.liveParticleCount) +
+                ", snapshotRevision=" + std::to_string(snapshot ? snapshot->Revision() : 0U) +
+                ", publicationStatus=" + std::to_string(static_cast<unsigned>(publication.status));
         } else if (*backend == "basic_lighting") {
             available =
                 kb::scene::SceneLightingAccess::BasicLightingEnabled(
@@ -3116,7 +3139,7 @@ ReadScriptValue(
         }
         return {
             available == *expected,
-            available ? "available" : "unavailable" };
+            backendDetail.empty() ? (available ? "available" : "unavailable") : backendDetail };
     }
 
     if (*operation == "attach_script") {
