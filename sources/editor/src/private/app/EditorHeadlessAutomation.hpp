@@ -43,6 +43,8 @@ public:
         std::uint8_t gamepadIndex, bool connected);
     [[nodiscard]] bool StepRuntime(
         std::size_t frames, float deltaSeconds);
+    [[nodiscard]] bool StepEditorParticles(
+        std::size_t frames, float deltaSeconds);
 
     [[nodiscard]] bool InspectorPointerDown(int x, int y);
     [[nodiscard]] bool InspectorPointerDrag(int x, int y);

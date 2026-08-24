@@ -1256,7 +1256,6 @@ EditorSceneContext::~EditorSceneContext() {
 
 void EditorSceneContext::EnsureScriptRuntime() {
     if (scriptModuleHost_ != nullptr) {
-        SurfaceScriptLibraryStartupReport();
         return;
     }
     EditorConsoleState* console = &console_;
@@ -12008,6 +12007,7 @@ void EditorSceneContext::ResetSceneEditState() {
     activeMaterialEditAsset_ = {};
     activeMaterialEditProperty_ = InspectorPropertyId::None;
     activeMaterialEditBefore_.reset();
+    editorSceneParticleAccumulatorSeconds_ = 0.0;
     CancelHierarchyRename();
     inspector_.EndTextEdit();
     MarkSceneRenderDirty();

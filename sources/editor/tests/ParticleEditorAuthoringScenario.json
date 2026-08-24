@@ -8,12 +8,21 @@
     { "op": "assert_backend", "backend": "particles", "available": true },
     { "op": "capture_screenshot_matrix", "panel": "particle_editor", "checkpoint": "particle-emitter-list" },
     { "op": "verify_scene_render_target_after_secondary", "checkpoint": "scene-after-particle" },
-    { "op": "create_particle_effect_entity", "id": "particleEntity", "asset": "particleEffect" },
-    { "op": "play" },
+    { "op": "create_entity", "id": "particleEntity", "name": "Particle Entity" },
+    { "op": "add_component", "entity": "particleEntity", "component": "Particle Effect" },
+    { "op": "set_particle_effect_asset", "entity": "particleEntity", "asset": "particleEffect" },
+    { "op": "step_editor_particles", "frames": 8, "dt": 0.019607843 },
+    { "op": "assert_particle_origin", "entity": "particleEntity", "x": 0.0, "y": 0.0, "z": 0.0 },
+    { "op": "play", "max_ms": 250.0 },
     { "op": "step", "frames": 60, "dt": 0.0166667 },
     { "op": "assert_backend", "backend": "particles", "available": true },
     { "op": "capture_runtime", "checkpoint": "particle-play", "require_non_uniform": true },
     { "op": "stop" },
+    { "op": "assert_backend", "backend": "particles", "available": true },
+    { "op": "step_editor_particles", "frames": 8, "dt": 0.019607843 },
+    { "op": "set_entity_position", "entity": "particleEntity", "x": 2.0, "y": 1.0, "z": 0.0 },
+    { "op": "step_editor_particles", "frames": 8, "dt": 0.019607843 },
+    { "op": "assert_particle_origin", "entity": "particleEntity", "x": 2.0, "y": 1.0, "z": 0.0 },
     { "op": "assert_no_errors" }
   ]
 }
