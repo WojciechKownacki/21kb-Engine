@@ -29,6 +29,7 @@
 #include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
 #include "kb/render/resources/BuiltInParticleQuadMesh.hpp"
+#include "kb/render/runtime/RuntimeRenderAssetDiscovery.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 #include "kb/render/scene/SceneParticleRenderSynchronizer.hpp"
 #include "kb/render/Renderer.hpp"
@@ -2304,6 +2305,24 @@ void RunRendererStoresRuntimeAssetDiscoveryIntervalTest() {
     Require(renderer.RuntimeResourceStats().assetDiscoveryIntervalFrames == 0U, "Renderer runtime stats did not reflect the configured discovery interval");
 }
 
+void RunDisabledRuntimeAssetDiscoverySkipsFirstRefreshTest() {
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    const std::uint64_t revisionBefore = manager.Revision();
+
+    RuntimeRenderAssetDiscovery discovery;
+    discovery.SetDiscoveryEnabled(false);
+    discovery.Ensure(scene, 1U);
+
+    const RuntimeRenderAssetDiscoveryStats stats = discovery.Stats();
+    Require(manager.Revision() == revisionBefore,
+        "Disabled runtime asset discovery performed a mounted-asset scan on its first frame");
+    Require(stats.registeredSceneCount == 1U,
+        "Disabled runtime asset discovery did not register the scene loaders");
+    Require(stats.discoverySceneCount == 0U,
+        "Disabled runtime asset discovery retained first-frame refresh state");
+}
+
 void RunSceneRenderDiagnosticsAggregateFrameSubmissionsTest() {
     SceneRenderDiagnostics first{};
     first.events.push_back(SceneRenderDiagnosticEvent{
@@ -2740,6 +2759,7 @@ void RunRenderSceneSyncTests() {
     RunSceneRendererReportsInvalidLightsSeparatelyFromBudgetSkipsTest();
     RunDirectionalShadowPlannerSkipsNonShadowCastingLightsTest();
     RunRendererStoresRuntimeAssetDiscoveryIntervalTest();
+    RunDisabledRuntimeAssetDiscoverySkipsFirstRefreshTest();
     RunSceneRenderDiagnosticsAggregateFrameSubmissionsTest();
     RunSyncUsesFreshLocalTransformsWithoutRuntimeUpdateTest();
     RunSyncComposesHierarchyWithoutRuntimeUpdateTest();

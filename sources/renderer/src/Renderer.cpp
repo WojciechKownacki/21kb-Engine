@@ -657,7 +657,7 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
         }
     }
     frameState_ = stagedFrameState;
-    RendererViewConfigurator::ApplyViewOrder(frameState_.ViewOrder());
+    RendererViewConfigurator::ApplyViewOrder(frameState_.BgfxViewRemap());
 
     for (std::size_t index = 0; index < submitList.size(); ++index) {
         {

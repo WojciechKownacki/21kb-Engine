@@ -23,7 +23,9 @@
 #include "engine/scene/TransformComponent.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
+#include "kb/render/SceneRenderTarget.hpp"
 #include "kb/render/overlay/SceneGizmoPass.hpp"
+#include "kb/render/post/ScenePostProcessTargets.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
@@ -39,6 +41,7 @@
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 
 #include <bgfx/bgfx.h>
+#include <bx/math.h>
 
 #include <algorithm>
 #include <array>
@@ -231,6 +234,112 @@ private:
     bgfx::FrameBufferHandle frameBuffer_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle color_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle depth_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle readback_ = BGFX_INVALID_HANDLE;
+};
+
+class FinalCompositeReadbackTarget final {
+public:
+    ~FinalCompositeReadbackTarget() {
+        Shutdown();
+    }
+
+    FinalCompositeReadbackTarget() = default;
+    FinalCompositeReadbackTarget(const FinalCompositeReadbackTarget&) = delete;
+    FinalCompositeReadbackTarget& operator=(const FinalCompositeReadbackTarget&) = delete;
+
+    [[nodiscard]] bool Initialize() {
+        output_ = bgfx::createTexture2D(
+            NativeTestSurface::kExtent,
+            NativeTestSurface::kExtent,
+            false,
+            1U,
+            bgfx::TextureFormat::RGBA8,
+            BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST);
+        readback_ = bgfx::createTexture2D(
+            NativeTestSurface::kExtent,
+            NativeTestSurface::kExtent,
+            false,
+            1U,
+            bgfx::TextureFormat::RGBA8,
+            BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST);
+        if (!bgfx::isValid(output_) || !bgfx::isValid(readback_)) {
+            Shutdown();
+            return false;
+        }
+        frameBuffer_ = bgfx::createFrameBuffer(1U, &output_, false);
+        if (!bgfx::isValid(frameBuffer_)) {
+            Shutdown();
+            return false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] RenderFinalCompositeTargetBinding Binding() const noexcept {
+        return RenderFinalCompositeTargetBinding{
+            .frameBuffer = frameBuffer_,
+            .extent = RenderExtent{
+                NativeTestSurface::kExtent,
+                NativeTestSurface::kExtent,
+            },
+            .outputRect = RenderViewportRect{
+                .extent = RenderExtent{
+                    NativeTestSurface::kExtent,
+                    NativeTestSurface::kExtent,
+                },
+            },
+            .enabled = true,
+            .clearTarget = true,
+        };
+    }
+
+    [[nodiscard]] std::vector<std::uint8_t> ReadPixels() const {
+        bgfx::blit(
+            kReadbackView,
+            readback_,
+            0U,
+            0U,
+            output_,
+            0U,
+            0U,
+            NativeTestSurface::kExtent,
+            NativeTestSurface::kExtent);
+        std::vector<std::uint8_t> pixels(
+            static_cast<std::size_t>(NativeTestSurface::kExtent) *
+            NativeTestSurface::kExtent * 4U);
+        const std::uint32_t readyFrame =
+            bgfx::readTexture(readback_, pixels.data());
+        std::uint32_t frame = bgfx::frame();
+        for (std::uint32_t guard = 0U;
+             frame < readyFrame && guard < 8U;
+             ++guard) {
+            frame = bgfx::frame();
+        }
+        Require(
+            frame >= readyFrame,
+            "Detached viewport final-composite readback timed out");
+        return pixels;
+    }
+
+    void Shutdown() noexcept {
+        if (bgfx::isValid(frameBuffer_)) {
+            bgfx::destroy(frameBuffer_);
+            frameBuffer_ = BGFX_INVALID_HANDLE;
+        }
+        if (bgfx::isValid(readback_)) {
+            bgfx::destroy(readback_);
+            readback_ = BGFX_INVALID_HANDLE;
+        }
+        if (bgfx::isValid(output_)) {
+            bgfx::destroy(output_);
+            output_ = BGFX_INVALID_HANDLE;
+        }
+    }
+
+private:
+    static constexpr bgfx::ViewId kReadbackView = 250U;
+
+    bgfx::FrameBufferHandle frameBuffer_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle output_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle readback_ = BGFX_INVALID_HANDLE;
 };
 #endif
@@ -2565,6 +2674,132 @@ void RunRendererSubmitsParticleStripSnapshotsTest() {
 }
 
 #if defined(_WIN32)
+void RunRendererDrawsDetachedViewportFinalCompositePixelsTest() {
+    kb::scene::Scene scene;
+    NativeTestSurface surface;
+    Require(
+        surface.IsValid(),
+        "Detached viewport final-composite test could not create a hidden native surface");
+
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType =
+        static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(
+        renderer.Initialize(surface, &config),
+        "Detached viewport final-composite renderer did not initialize");
+
+    const RenderSceneSubmitDesc primaryDesc{
+        .target = RenderSceneTargetBinding{
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+        .editorSceneOverlaysEnabled = false,
+        .shadowPassEnabled = false,
+        .postProcessEnabled = false,
+        .selectionMaskEnabled = false,
+        .selectionOutlineEnabled = false,
+    };
+    SubmitLifecycleFrame(
+        renderer,
+        scene,
+        primaryDesc,
+        "Detached viewport final-composite test could not seed the primary viewport frame");
+
+    {
+        SceneRenderTarget sceneTarget;
+        ScenePostProcessTargets postProcessTargets;
+        FinalCompositeReadbackTarget finalTarget;
+        Require(
+            sceneTarget.Ensure(SceneRenderTargetDesc{
+                .extent = RenderExtent{ 64U, 64U },
+            }) &&
+                postProcessTargets.Ensure(ScenePostProcessTargetsDesc{
+                    .extent = RenderExtent{ 64U, 64U },
+                }) &&
+                finalTarget.Initialize(),
+            "Detached viewport final-composite test could not allocate render targets");
+
+        SceneRenderCamera camera{};
+        bx::mtxLookAt(
+            camera.view.data(),
+            bx::Vec3{ 4.0F, 3.0F, 4.0F },
+            bx::Vec3{ 0.0F, 0.0F, 0.0F });
+        SceneDepthPolicy::MakePerspective(
+            camera.projection.data(),
+            60.0F,
+            1.0F,
+            0.05F,
+            100.0F,
+            SceneDepthPolicy::HomogeneousDepth());
+
+        ScenePostProcessSettings postProcessSettings{};
+        postProcessSettings.temporalAntiAliasingEnabled = false;
+        postProcessSettings.temporalJitterEnabled = false;
+        postProcessSettings.outputTransform.autoExposure.enabled = false;
+        const bgfx::TextureHandle sampledDepth =
+            sceneTarget.DepthTextureSampled()
+            ? sceneTarget.DepthTexture()
+            : bgfx::TextureHandle{ bgfx::kInvalidHandle };
+        const RenderSceneSubmitDesc detachedDesc{
+            .target = RenderSceneTargetBinding{
+                .frameBuffer = sceneTarget.FrameBuffer(),
+                .colorTexture = sceneTarget.ColorTexture(),
+                .resolvedColorTexture = sceneTarget.ResolvedColorTexture(),
+                .depthTexture = sampledDepth,
+                .viewport = RenderViewportDesc{
+                    .id = RenderViewportId{ 2U },
+                    .extent = RenderExtent{ 64U, 64U },
+                    .viewportIndex = 1U,
+                },
+                .msaaSamples = sceneTarget.MsaaSamples(),
+                .colorFormat = sceneTarget.ColorSelection().format,
+            },
+            .postProcess = postProcessTargets.Binding(),
+            .finalComposite = finalTarget.Binding(),
+            .cameraOverride = camera,
+            .postProcessSettings = postProcessSettings,
+            .clearRgba = 0x000000FFU,
+            .editorSceneOverlaysEnabled = true,
+            .shadowPassEnabled = false,
+            .postProcessEnabled = true,
+            .selectionMaskEnabled = true,
+            .selectionOutlineEnabled = true,
+            .gpuDrivenRuntimeDispatchEnabled = false,
+        };
+        SubmitLifecycleFrame(
+            renderer,
+            scene,
+            detachedDesc,
+            "Detached viewport final-composite test could not submit viewport index 1");
+
+        const std::vector<std::uint8_t> pixels = finalTarget.ReadPixels();
+        const std::array<std::uint8_t, 3U> first{
+            pixels[0], pixels[1], pixels[2],
+        };
+        std::size_t variedPixelCount = 0U;
+        for (std::size_t offset = 4U; offset < pixels.size(); offset += 4U) {
+            if (pixels[offset] != first[0] ||
+                pixels[offset + 1U] != first[1] ||
+                pixels[offset + 2U] != first[2]) {
+                ++variedPixelCount;
+            }
+        }
+        Require(
+            variedPixelCount >= 32U,
+            "Detached viewport final composite stayed uniform after switching from viewport index 0");
+
+        postProcessTargets.Shutdown();
+        sceneTarget.Shutdown();
+    }
+    renderer.Shutdown();
+}
+
 void RunRendererDrawsParticleMeshSnapshotPixelsTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_particle_mesh_pixels";
     std::error_code error;
@@ -5378,6 +5613,12 @@ void RunRendererParticleVolumetricSnapshotSubmitTest() {
 #endif
 }
 
+void RunRendererDetachedViewportFinalCompositePixelsTest() {
+#if defined(_WIN32)
+    RunRendererDrawsDetachedViewportFinalCompositePixelsTest();
+#endif
+}
+
 void RunRendererRuntimeSubmitTests() {
     RunEditorCameraWireframesSubmitInHeadlessNoopTest();
     RunMaterialFrameTimeAdvanceTest();
@@ -5388,6 +5629,7 @@ void RunRendererRuntimeSubmitTests() {
     RunRendererParticleMeshSnapshotSubmitTest();
     RunRendererParticleStripSnapshotSubmitTest();
     RunRendererParticleVolumetricSnapshotSubmitTest();
+    RunRendererDetachedViewportFinalCompositePixelsTest();
     RunRendererReleaseSceneDropsRuntimeResourcesTest();
     RunRendererPrunesUnreferencedResourcesAfterRetentionTest();
     RunRendererReloadsChangedRuntimeMeshAssetTest();
