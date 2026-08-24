@@ -65,6 +65,20 @@ ParticleEditorResult ParticleEditorCommandStack::Apply(kb::scene::ParticleEffect
     return result;
 }
 
+ParticleEditorResult ParticleEditorCommandStack::ReplaceLatest(kb::scene::ParticleEffectAsset asset) {
+    if (entries_.empty() || cursor_ == 0U || cursor_ + 1U != entries_.size())
+        return Apply(std::move(asset));
+    std::string canonical;
+    ParticleEditorResult result = ValidateAndCanonicalize(asset, canonical);
+    if (!result.Succeeded()) return result;
+    if (entries_[cursor_].canonical == canonical) {
+        result.status = ParticleEditorStatus::NoChange;
+        return result;
+    }
+    entries_[cursor_] = { .asset = std::move(asset), .canonical = std::move(canonical) };
+    return result;
+}
+
 bool ParticleEditorCommandStack::CanUndo() const noexcept { return !entries_.empty() && cursor_ != 0U; }
 bool ParticleEditorCommandStack::CanRedo() const noexcept { return cursor_ + 1U < entries_.size(); }
 bool ParticleEditorCommandStack::Undo() noexcept {
@@ -119,6 +133,11 @@ ParticleEditorResult ParticleEditorDocument::Open(
 ParticleEditorResult ParticleEditorDocument::Apply(kb::scene::ParticleEffectAsset asset) {
     if (!hasDocument_) return { .status = ParticleEditorStatus::InvalidAsset, .message = "no particle document is open" };
     return history_.Apply(std::move(asset));
+}
+
+ParticleEditorResult ParticleEditorDocument::ReplaceLatest(kb::scene::ParticleEffectAsset asset) {
+    if (!hasDocument_) return { .status = ParticleEditorStatus::InvalidAsset, .message = "no particle document is open" };
+    return history_.ReplaceLatest(std::move(asset));
 }
 bool ParticleEditorDocument::Undo() noexcept { return hasDocument_ && history_.Undo(); }
 bool ParticleEditorDocument::Redo() noexcept { return hasDocument_ && history_.Redo(); }

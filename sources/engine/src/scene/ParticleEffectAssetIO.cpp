@@ -142,6 +142,12 @@ template <typename UInt> [[nodiscard]] bool ParseUInt(std::string_view text, UIn
            ParseFloat(tokens[2], value.z);
 }
 
+[[nodiscard]] bool ParseColor(std::string_view text, kb::math::Color& value) {
+    const auto tokens = Tokens(text);
+    return tokens.size() == 4U && ParseFloat(tokens[0], value.r) && ParseFloat(tokens[1], value.g) &&
+           ParseFloat(tokens[2], value.b) && ParseFloat(tokens[3], value.a);
+}
+
 [[nodiscard]] bool ParseQuat(std::string_view text, kb::math::Quat& value) {
     const auto tokens = Tokens(text);
     return tokens.size() == 4U && ParseFloat(tokens[0], value.x) && ParseFloat(tokens[1], value.y) &&
@@ -501,6 +507,10 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
         reader.Required(IndexPath(emitterIndex, "spawn.spreadDegrees"), emitter.spawn.spreadDegrees, ParseFloat);
         reader.Required(IndexPath(emitterIndex, "spawn.randomization"), emitter.spawn.randomization, ParseFloat);
         reader.Required(IndexPath(emitterIndex, "spawn.prewarmSeconds"), emitter.spawn.prewarmSeconds, ParseFloat);
+        static_cast<void>(reader.Optional(IndexPath(emitterIndex, "spawn.startColor"), emitter.spawn.startColor,
+                                          ParseColor));
+        static_cast<void>(reader.Optional(IndexPath(emitterIndex, "spawn.startSize"), emitter.spawn.startSize,
+                                          ParseFloat));
         std::uint32_t moduleCount = 0U;
         reader.RequiredBoundedCount(IndexPath(emitterIndex, "moduleCount"), moduleCount,
                                     kParticleEffectMaxModulesPerEmitter);
@@ -644,7 +654,7 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
         result.diagnostics = std::move(validation.diagnostics);
     }
     AnnotateDiagnosticContext(result, asset);
-    if (!result.diagnostics.empty())
+    if (ParticleEffectDiagnosticsHaveErrors(result.diagnostics))
         result.asset.reset();
     return result;
 }
@@ -754,7 +764,7 @@ void AnnotateDiagnosticContext(ParticleEffectLoadResult& result, const ParticleE
         result.diagnostics = std::move(validation.diagnostics);
         result.migratedFromLegacy = true;
     }
-    if (!result.diagnostics.empty())
+    if (ParticleEffectDiagnosticsHaveErrors(result.diagnostics))
         result.asset.reset();
     return result;
 }
@@ -907,6 +917,9 @@ void BoolLine(std::string& out, std::string_view key, bool value) {
 void VecLine(std::string& out, std::string_view key, kb::math::Vec3 v) {
     Line(out, key, Float(v.x) + " " + Float(v.y) + " " + Float(v.z));
 }
+void ColorLine(std::string& out, std::string_view key, kb::math::Color color) {
+    Line(out, key, Float(color.r) + " " + Float(color.g) + " " + Float(color.b) + " " + Float(color.a));
+}
 void QuatLine(std::string& out, std::string_view key, kb::math::Quat v) {
     Line(out, key, Float(v.x) + " " + Float(v.y) + " " + Float(v.z) + " " + Float(v.w));
 }
@@ -1014,7 +1027,7 @@ std::optional<std::string> ParticleEffectAssetIO::Serialize(const ParticleEffect
                                                             std::vector<ParticleEffectDiagnostic>& diagnostics) {
     auto validation = ParticleEffectAssetValidator::ValidateStructure(asset);
     diagnostics = std::move(validation.diagnostics);
-    if (!diagnostics.empty())
+    if (!validation.Succeeded())
         return std::nullopt;
     std::string out = "21kb ParticleEffect 2\n";
     Line(out, "effect.formatVersion", std::to_string(asset.formatVersion));
@@ -1054,6 +1067,8 @@ std::optional<std::string> ParticleEffectAssetIO::Serialize(const ParticleEffect
         Line(out, IndexPath(ei, "spawn.spreadDegrees"), Float(e.spawn.spreadDegrees));
         Line(out, IndexPath(ei, "spawn.randomization"), Float(e.spawn.randomization));
         Line(out, IndexPath(ei, "spawn.prewarmSeconds"), Float(e.spawn.prewarmSeconds));
+        ColorLine(out, IndexPath(ei, "spawn.startColor"), e.spawn.startColor);
+        Line(out, IndexPath(ei, "spawn.startSize"), Float(e.spawn.startSize));
         Line(out, IndexPath(ei, "moduleCount"), std::to_string(e.modules.size()));
         for (std::size_t mi = 0; mi < e.modules.size(); ++mi) {
             const auto& m = e.modules[mi];
