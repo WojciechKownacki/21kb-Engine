@@ -106,6 +106,11 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
                 maximum));
             return true;
         }
+        if (Contains(layout.preview, x, y) && sceneContext_.HasParticleEditorAsset()) {
+            const float scale = wheelDelta > 0 ? 0.9F : (wheelDelta < 0 ? 1.0F / 0.9F : 1.0F);
+            static_cast<void>(sceneContext_.ZoomParticlePreviewCamera(scale));
+            return true;
+        }
     }
 
     const std::optional<RECT> hierarchyContent = EditorPanelContentResolver::Resolve(DockPanelKind::Hierarchy, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);

@@ -15,9 +15,11 @@
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/ParticleEffectAsset.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
+#include "engine/scene/ParticleEffectAssetValidation.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
 
@@ -25,6 +27,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -104,6 +107,20 @@ void TestDocumentHistorySavePointAndAtomicFailure() {
         "particle document redo did not restore the edit");
     Require(document.Apply(document.Asset()).status == kb::particle_editor::ParticleEditorStatus::NoChange,
         "canonical no-op edit polluted particle history");
+
+    auto coalesced = document.Asset();
+    coalesced.displayName = "Coalesced One";
+    Require(document.Apply(coalesced).Succeeded() && document.Asset().displayName == "Coalesced One",
+        "coalesced slider baseline apply failed");
+    coalesced.displayName = "Coalesced Two";
+    Require(document.ReplaceLatest(coalesced).Succeeded() && document.Asset().displayName == "Coalesced Two",
+        "replace latest did not overwrite the current history entry");
+    Require(document.Undo() && document.Asset().displayName == "Changed Preview Effect",
+        "replace latest created an extra undo step");
+    Require(document.Redo() && document.Asset().displayName == "Coalesced Two",
+        "replace latest redo did not restore the coalesced edit");
+    Require(document.Undo() && document.Asset().displayName == "Changed Preview Effect",
+        "coalesce coverage did not restore the surrounding document state");
 
     const std::filesystem::path failedPath = root / "CannotSave.kbvfx";
     const std::string oldBytes = "existing bytes remain";
@@ -332,7 +349,7 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
     const auto gradientRow = std::find_if(colorInspector.properties.begin(), colorInspector.properties.end(),
         [](const auto& row) { return row.label == "Gradient"; });
     Require(gradientRow != colorInspector.properties.end() && gradientRow->editable &&
-            gradientRow->value == "0,1,1,1,1;1,1,1,1,1",
+            gradientRow->value == "0,1,1,1,1;1,1,1,1,0",
         "ColorOverLife gradient property row was not editable or did not encode the default gradient");
     const auto sizeInspector =
         ParticleEmitterInspectorModel::Build(allTypesDocument.Asset(), 11U, sizeModuleId, nullptr, nullptr);
@@ -345,6 +362,30 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
         [](const auto& row) { return row.label == "Rate curve"; });
     Require(rateRow != rateInspector.properties.end() && rateRow->editable && rateRow->value == "0,60,0",
         "spawn rate curve property row was not editable or did not encode the authored curve");
+    const auto colorRow = std::find_if(rateInspector.properties.begin(), rateInspector.properties.end(),
+        [](const auto& row) { return row.property == ParticleEditorProperty::SpawnStartColor; });
+    Require(colorRow != rateInspector.properties.end() &&
+            colorRow->widget == ParticleEditorPropertyWidget::Color &&
+            colorRow->colorValue.r == 1.0F && colorRow->editable,
+        "start color was not exposed as an editable color property");
+    const kb::math::Color picked{128.0F / 255.0F, 0.0F, 1.0F, 1.0F};
+    kb::math::Color parsedColor{};
+    Require(ParticleEmitterInspectorModel::ParseColor(
+                ParticleEmitterInspectorModel::FormatColor(picked), parsedColor) &&
+            std::abs(parsedColor.r - picked.r) < 0.000001F && parsedColor.g == 0.0F &&
+            parsedColor.b == 1.0F && parsedColor.a == 1.0F,
+        "start color picker text did not round-trip through FormatColor/ParseColor");
+    kb::math::Gradient parsedGradient{};
+    Require(ParticleEmitterInspectorModel::ParseGradient(gradientRow->value, parsedGradient) &&
+            parsedGradient.stops.size() == 2U && parsedGradient.stops[0].color.r == 1.0F,
+        "ColorOverLife gradient text did not round-trip through ParseGradient");
+    auto tinted = allTypesDocument.Asset().emitters[0].spawn;
+    tinted.startColor = {0.2F, 0.4F, 0.8F, 1.0F};
+    tinted.startSize = 2.0F;
+    Require(ParticleEditorCommands::SetEmitterSpawn(allTypesDocument, allTypesWorkspace, 11U, tinted).Succeeded() &&
+            allTypesDocument.Asset().emitters[0].spawn.startColor.b == 0.8F &&
+            allTypesDocument.Asset().emitters[0].spawn.startSize == 2.0F,
+        "start color and start size did not persist through SetEmitterSpawn");
 
     auto editedGradient = std::get<kb::scene::ParticleColorOverLifeModule>(color->payload);
     editedGradient.gradient.stops.insert(editedGradient.gradient.stops.begin() + 1,
@@ -380,6 +421,51 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
     Require(ParticleEditorCommands::SetEmitterSpawn(allTypesDocument, allTypesWorkspace, 11U, editedSpawn).Succeeded() &&
             allTypesDocument.Asset().emitters[0].spawn.rateOverTime.keyframes.size() == 2U,
         "spawn rate curve keyframe insertion via SetEmitterSpawn did not persist a genuine two-key edit");
+
+    ParticleEditorDocument atlasDocument;
+    ParticleEditorWorkspaceState atlasWorkspace;
+    Require(atlasDocument.Create(MakeEffect()).Succeeded(), "atlas-column fixture creation failed");
+    atlasWorkspace.Synchronize(atlasDocument.Asset());
+    auto atlasOutput = atlasDocument.Asset().emitters[0].output;
+    auto* atlasBillboard = std::get_if<kb::scene::ParticleBillboardOutput>(&atlasOutput.payload);
+    Require(atlasBillboard != nullptr, "atlas-column fixture lost billboard output");
+    atlasBillboard->flipbook.columns = 4U;
+    const auto atlasColumns = ParticleEditorCommands::SetEmitterOutput(
+        atlasDocument, atlasWorkspace, 11U, atlasOutput);
+    Require(atlasColumns.Succeeded(),
+        atlasColumns.message.empty()
+            ? "atlas columns command failed without a message"
+            : atlasColumns.message.c_str());
+    Require(std::get<kb::scene::ParticleBillboardOutput>(
+                atlasDocument.Asset().emitters[0].output.payload).flipbook.columns == 4U,
+        "atlas columns did not persist on the working document");
+    const auto atlasValidation =
+        kb::scene::ParticleEffectAssetValidator::ValidateStructure(atlasDocument.Asset());
+    Require(atlasValidation.Succeeded(), "atlas columns left the particle effect structurally invalid");
+    Require(std::any_of(atlasValidation.diagnostics.begin(), atlasValidation.diagnostics.end(),
+                [](const auto& diagnostic) {
+                    return diagnostic.severity == kb::scene::ParticleEffectDiagnosticSeverity::Warning &&
+                           diagnostic.code == kb::scene::ParticleEffectDiagnosticCode::InvalidReference;
+                }),
+        "missing flipbook atlas did not remain a visible authoring warning");
+    kb::assets::AssetRegistry atlasRegistry;
+    Require(atlasRegistry.Upsert({.id = kb::assets::AssetId{80U}, .type = "RenderMaterial",
+                .virtualPath = "/Game/Materials/PreviewParticle.21kb", .contentHash = 1U}),
+        "atlas compiler material registration failed");
+    auto atlasCompilable = atlasDocument.Asset();
+    atlasCompilable.emitters[0].output.material = {
+        .assetId = 80U, .virtualPath = "/Game/Materials/PreviewParticle.21kb"};
+    atlasCompilable.emitters[0].spawn.startColor = {0.1F, 0.85F, 0.2F, 1.0F};
+    const kb::assets::AssetMetadata atlasOwner{.id = kb::assets::AssetId{81U},
+        .type = kb::scene::kParticleEffectAssetType,
+        .virtualPath = "/Game/Effects/AtlasColumns.kbvfx", .contentHash = 1U};
+    const auto atlasCompiled = kb::particle_plugin::ParticleEffectCompiler::Compile(
+        atlasCompilable, atlasOwner, atlasRegistry);
+    Require(atlasCompiled.Succeeded() && atlasCompiled.effect != nullptr &&
+            atlasCompiled.effect->emitters[0].colorOverLife.stopCount == 2U &&
+            atlasCompiled.effect->emitters[0].colorOverLife.stops[0].color.g > 0.8F &&
+            atlasCompiled.effect->emitters[0].colorOverLife.stops[0].color.r < 0.2F,
+        "flipbook atlas warning blocked compiled start color");
 
     ParticleEditorDocument document;
     ParticleEditorWorkspaceState workspace;
@@ -738,6 +824,17 @@ void TestIsolatedRuntimePreviewAndGpuRelease() {
             preview.PreviewScene().Components().ParticleEffects().Has(preview.EffectEntity()) &&
             preview.PreviewScene().Components().Cameras().Has(preview.CameraEntity()),
         "preview did not own the required runtime scene, provider, component, and camera");
+    const auto cameraBefore = preview.PreviewScene().Transforms().Get(preview.CameraEntity());
+    Require(preview.OrbitCamera(90.0F, 0.0F) &&
+            preview.OrbitYawDegrees() == 90.0F &&
+            preview.PreviewScene().Transforms().Get(preview.CameraEntity()).localPosition.x >
+                cameraBefore.localPosition.x + 1.0F,
+        "particle preview orbit did not swing the camera around the effect");
+    Require(preview.ZoomCamera(0.5F) && preview.CameraDistance() < 5.0F,
+        "particle preview zoom did not dolly the camera");
+    Require(preview.BeginOrbit(100, 100) && preview.IsOrbiting() &&
+            preview.DragOrbit(160, 100) && preview.EndOrbit() && !preview.IsOrbiting(),
+        "particle preview orbit gesture did not begin, drag, and end");
 
     for (int frame = 0; frame < 4; ++frame) {
         Require(preview.Tick(1.0F / 60.0F).Succeeded(), "preview SceneRuntime update failed");
@@ -754,11 +851,31 @@ void TestIsolatedRuntimePreviewAndGpuRelease() {
 
     auto workingCopy = effect;
     workingCopy.displayName = "Unsaved Runtime Working Copy";
-    workingCopy.emitters.front().spawn.rateOverTime.keyframes.front().value = 120.0F;
+    workingCopy.emitters.front().spawn.mode = kb::scene::ParticleSpawnMode::Burst;
+    workingCopy.emitters.front().spawn.rateOverTime.keyframes.front().value = 0.0F;
+    workingCopy.emitters.front().spawn.bursts = {{.timeSeconds = 0.0F, .count = 24U}};
+    workingCopy.emitters.front().spawn.speedMin = 8.0F;
+    workingCopy.emitters.front().spawn.speedMax = 8.0F;
+    workingCopy.emitters.front().spawn.startColor = {1.0F, 0.25F, 0.05F, 1.0F};
+    workingCopy.emitters.front().spawn.startSize = 0.35F;
     Require(preview.PublishWorkingCopy(workingCopy).Succeeded(),
         "unsaved working copy was not published through AssetManager");
-    Require(preview.Tick(1.0F / 60.0F).Succeeded(),
-        "preview did not reconcile the unsaved runtime publication");
+    for (int frame = 0; frame < 4; ++frame) {
+        Require(preview.Tick(1.0F / 60.0F).Succeeded(),
+            "preview did not reconcile the unsaved runtime publication");
+    }
+    const auto tintedStates =
+        kb::particles::ParticlePlayback::LiveParticleStates(preview.PreviewScene(), instances.front());
+    Require(tintedStates.size() == 24U,
+        "preview did not restart into the published burst count");
+    const float speed = std::sqrt(tintedStates.front().velocity.x * tintedStates.front().velocity.x +
+        tintedStates.front().velocity.y * tintedStates.front().velocity.y +
+        tintedStates.front().velocity.z * tintedStates.front().velocity.z);
+    Require(tintedStates.front().color.r > 0.9F &&
+            tintedStates.front().color.g < 0.4F && tintedStates.front().color.b < 0.2F &&
+            std::abs(tintedStates.front().size - 0.35F) < 0.0001F &&
+            std::abs(speed - 8.0F) < 0.05F,
+        "preview did not apply the published start color, size, and speed to live particles");
     Require(!std::filesystem::exists(TestRoot() / "UnsavedPreview.kbvfx"),
         "publishing an unsaved preview working copy touched disk");
 

@@ -133,6 +133,13 @@ void ParticleSceneSystem::CreateComponentInstance(
     kb::scene::Scene& scene,
     ComponentInstance& binding) {
     if (!binding.component.enabled || !scene.Entities().IsActive(binding.owner)) return;
+    for (const std::uint64_t instanceId : kb::particles::ParticlePlayback::LiveInstanceIds(scene)) {
+        const auto query = backend_.Query(scene, instanceId);
+        if (query.owner == binding.owner && query.assetId == binding.component.effectAssetId) {
+            binding.instanceId = instanceId;
+            return;
+        }
+    }
     const kb::particles::ParticleRuntimeResult created = backend_.Create(
         scene, binding.component.effectAssetId, binding.owner);
     if (!created.Succeeded()) ThrowComponentCreateFailure(created.status);
@@ -140,7 +147,7 @@ void ParticleSceneSystem::CreateComponentInstance(
     static_cast<void>(backend_.ConfigureOwnerDeathPolicy(
         binding.instanceId, binding.component.ownerDeathPolicy));
     const kb::scene::TransformComponent* transform = scene.Transforms().TryGet(binding.owner);
-    if (transform == nullptr || !backend_.ConfigureComponent(binding.instanceId,
+    if (transform == nullptr || !backend_.ConfigureComponent(scene, binding.instanceId,
             binding.component.rateMultiplier, binding.component.maxParticlesOverride,
             binding.component.followTransform, transform->WorldPayload()).Succeeded()) {
         static_cast<void>(backend_.Release(scene, binding.instanceId));
@@ -226,7 +233,7 @@ void ParticleSceneSystem::ReconcileComponents(kb::scene::Scene& scene) {
                 static_cast<void>(system.backend_.ConfigureOwnerDeathPolicy(
                     binding.instanceId, component.ownerDeathPolicy));
                 const kb::scene::TransformComponent* transform = visit.scene->Transforms().TryGet(owner);
-                if (transform == nullptr || !system.backend_.ConfigureComponent(binding.instanceId,
+                if (transform == nullptr || !system.backend_.ConfigureComponent(*visit.scene, binding.instanceId,
                         component.rateMultiplier, component.maxParticlesOverride,
                         component.followTransform, transform->WorldPayload()).Succeeded()) {
                     throw std::logic_error("particle component runtime configuration is invalid");
