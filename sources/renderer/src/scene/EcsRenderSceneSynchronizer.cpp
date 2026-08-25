@@ -532,7 +532,10 @@ void SyncLight(kb::scene::SceneEntity entity, const kb::scene::TransformComponen
 
 void SyncVisibilityBlocker(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::SceneVisibilityBlockerComponent& blocker, void* context) {
     auto* sync = static_cast<SyncContext*>(context);
-    if (!blocker.enabled || !kb::scene::IsSceneVisibilityBlockerComponentValid(blocker)) return;
+    if (!blocker.enabled || !kb::scene::IsSceneVisibilityBlockerComponentValid(blocker)) {
+        static_cast<void>(sync->renderScene->RemoveVisibilityBlocker(entity.Id()));
+        return;
+    }
     const kb::scene::TransformComponent renderTransform = sync->worldReader->Read(entity, transform);
     sync->visibilityBlockers->push_back(entity.Id());
     static_cast<void>(sync->renderScene->UpsertVisibilityBlocker(VisibilityBlockerRenderProxyDesc{
@@ -555,9 +558,15 @@ void SyncVisibilityBlocker(kb::scene::SceneEntity entity, const kb::scene::Trans
 
 void SyncGeometrySwarm(kb::scene::SceneEntity entity, const kb::scene::GeometrySwarmComponent& swarm, void* context) {
     auto* sync = static_cast<SyncContext*>(context);
-    if (!swarm.enabled || !kb::scene::IsGeometrySwarmComponentValid(swarm)) return;
+    if (!swarm.enabled || !kb::scene::IsGeometrySwarmComponentValid(swarm)) {
+        static_cast<void>(sync->renderScene->RemoveGeometrySwarm(entity.Id()));
+        return;
+    }
     const kb::scene::TransformComponent* transform = sync->scene->Transforms().TryGet(entity);
-    if (transform == nullptr) return;
+    if (transform == nullptr) {
+        static_cast<void>(sync->renderScene->RemoveGeometrySwarm(entity.Id()));
+        return;
+    }
     const kb::scene::TransformComponent renderTransform = sync->worldReader->Read(entity, *transform);
     sync->geometrySwarms->push_back(entity.Id());
     const kb::scene::ResolvedVisibility visibility = kb::scene::ResolveVisibility(*sync->scene, entity);
@@ -573,10 +582,16 @@ void SyncGeometrySwarm(kb::scene::SceneEntity entity, const kb::scene::GeometryS
 
 void SyncSurfaceCast(kb::scene::SceneEntity entity, const kb::scene::SurfaceCastComponent& surfaceCast, void* context) {
     auto* sync = static_cast<SyncContext*>(context);
-    if (!surfaceCast.enabled || !kb::scene::IsSurfaceCastComponentValid(surfaceCast)) return;
+    if (!surfaceCast.enabled || !kb::scene::IsSurfaceCastComponentValid(surfaceCast)) {
+        static_cast<void>(sync->renderScene->RemoveSurfaceCast(entity.Id()));
+        return;
+    }
     const kb::scene::RegionShapeComponent* shape = sync->scene->Components().RegionShapes().TryGet(entity);
     const kb::scene::TransformComponent* transform = sync->scene->Transforms().TryGet(entity);
-    if (shape == nullptr || transform == nullptr || !shape->enabled || !kb::scene::IsRegionShapeKindValid(shape->kind)) return;
+    if (shape == nullptr || transform == nullptr || !shape->enabled || !kb::scene::IsRegionShapeKindValid(shape->kind)) {
+        static_cast<void>(sync->renderScene->RemoveSurfaceCast(entity.Id()));
+        return;
+    }
     const kb::scene::TransformComponent renderTransform = sync->worldReader->Read(entity, *transform);
     sync->surfaceCasts->push_back(entity.Id());
     const kb::scene::ResolvedVisibility visibility = kb::scene::ResolveVisibility(*sync->scene, entity);
@@ -1003,9 +1018,10 @@ void EcsRenderSceneSynchronizer::SyncMeshWorldAffinesParallel(
     std::atomic<std::uint64_t> inPlace{ 0U };
     std::atomic<std::uint64_t> fallback{ 0U };
     std::atomic<bool> geometrySwarmChanged{ false };
+    std::atomic<bool> surfaceCastChanged{ false };
     std::atomic<bool> spaceStrokeChanged{ false };
     const std::size_t resolvedGrain = grainSize == 0U ? count : grainSize;
-    workerPool.ParallelForChunks(count, resolvedGrain, [&renderScene, entities, worldAffines, &inPlace, &fallback, &geometrySwarmChanged, &spaceStrokeChanged](
+    workerPool.ParallelForChunks(count, resolvedGrain, [&renderScene, entities, worldAffines, &inPlace, &fallback, &geometrySwarmChanged, &surfaceCastChanged, &spaceStrokeChanged](
         kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
         std::uint64_t localInPlace = 0U;
         std::uint64_t localFallback = 0U;
@@ -1015,6 +1031,9 @@ void EcsRenderSceneSynchronizer::SyncMeshWorldAffinesParallel(
             static_cast<void>(renderScene.UpdateVisibilityBlockerTransform(entities[index].Id(), model));
             if (renderScene.ApplyGeometrySwarmTransform(entities[index].Id(), model)) {
                 geometrySwarmChanged.store(true, std::memory_order_relaxed);
+            }
+            if (renderScene.ApplySurfaceCastTransform(entities[index].Id(), model)) {
+                surfaceCastChanged.store(true, std::memory_order_relaxed);
             }
             if (renderScene.ApplySpaceStrokeTransform(entities[index].Id(), model)) {
                 spaceStrokeChanged.store(true, std::memory_order_relaxed);
@@ -1040,6 +1059,9 @@ void EcsRenderSceneSynchronizer::SyncMeshWorldAffinesParallel(
     if (geometrySwarmChanged.load(std::memory_order_relaxed)) {
         renderScene.InvalidateDrawGroupsIfFallback(RenderScene::TransformUpdateOutcome::Fallback);
     }
+    if (surfaceCastChanged.load(std::memory_order_relaxed)) {
+        renderScene.InvalidateDrawGroupsIfFallback(RenderScene::TransformUpdateOutcome::Fallback);
+    }
     if (spaceStrokeChanged.load(std::memory_order_relaxed)) {
         renderScene.InvalidateDrawGroupsIfFallback(RenderScene::TransformUpdateOutcome::Fallback);
     }
@@ -1056,14 +1078,37 @@ void EcsRenderSceneSynchronizer::SyncTransformUpdates(const kb::scene::Scene& sc
     SyncEntities(scene, renderScene, std::span<const std::uint64_t>{ transformUpdateEntities_ });
 }
 
-void EcsRenderSceneSynchronizer::SyncMeshRendererUpdates(const kb::scene::Scene& scene, RenderScene& renderScene) const {
+void EcsRenderSceneSynchronizer::SyncRenderProxyUpdates(const kb::scene::Scene& scene, RenderScene& renderScene) const {
     transformUpdateEntities_.clear();
-    const std::span<const kb::scene::SceneEntity> entities = scene.Runtime().MeshRendererRenderProxyUpdateEntities();
+    const std::span<const kb::scene::SceneEntity> entities = scene.Runtime().RenderProxyUpdateEntities();
     transformUpdateEntities_.reserve(entities.size());
     for (const kb::scene::SceneEntity entity : entities) {
         transformUpdateEntities_.push_back(entity.Id());
     }
     SyncEntities(scene, renderScene, std::span<const std::uint64_t>{ transformUpdateEntities_ });
+}
+
+void EcsRenderSceneSynchronizer::SyncFacingPanelUpdates(
+    const kb::scene::Scene& scene,
+    RenderScene& renderScene,
+    bool primaryCameraChanged) const {
+    transformUpdateEntities_.clear();
+    if (primaryCameraChanged) {
+        scene.Components().FacingPanels().ForEach(
+            [](kb::scene::SceneEntity entity, const kb::scene::FacingPanelComponent&, void* context) {
+                static_cast<std::vector<std::uint64_t>*>(context)->push_back(entity.Id());
+            },
+            &transformUpdateEntities_);
+    } else {
+        for (const kb::scene::SceneEntity entity : scene.Runtime().TransformRenderProxyUpdateEntities()) {
+            if (scene.Components().FacingPanels().Has(entity)) {
+                transformUpdateEntities_.push_back(entity.Id());
+            }
+        }
+    }
+    if (!transformUpdateEntities_.empty()) {
+        SyncEntities(scene, renderScene, std::span<const std::uint64_t>{ transformUpdateEntities_ });
+    }
 }
 
 void EcsRenderSceneSynchronizer::SyncDeformedMeshPalettes(

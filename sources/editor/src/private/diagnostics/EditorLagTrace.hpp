@@ -46,7 +46,9 @@ public:
             return;
         }
         if (!Enabled()) return;
-        Instance().Write(category, eventId, durationMs, detail, true);
+        // Slow-path telemetry must never turn a late frame into a chain of late
+        // frames. Keep it buffered; explicit markers still flush transition data.
+        Instance().Write(category, eventId, durationMs, detail, false);
     }
 
     static void Marker(std::string_view category, std::string_view detail) noexcept {

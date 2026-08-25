@@ -54,7 +54,9 @@ public:
     [[nodiscard]] static std::optional<TransformComponent> InterpolatedTransform(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static std::span<const SceneEntity> TransformRenderProxyUpdateEntities(const Scene& scene) noexcept;
     [[nodiscard]] static std::span<const WorldTransformAffine3x4> TransformRenderProxyWorldAffine3x4(const Scene& scene) noexcept;
-    [[nodiscard]] static std::span<const SceneEntity> MeshRendererRenderProxyUpdateEntities(const Scene& scene) noexcept;
+    [[nodiscard]] static std::span<const SceneEntity> RenderProxyUpdateEntities(const Scene& scene) noexcept;
+    [[nodiscard]] static std::uint64_t RenderProxyUpdateRevision(const Scene& scene) noexcept;
+    [[nodiscard]] static std::uint64_t RenderTopologyVersion(const Scene& scene) noexcept;
     [[nodiscard]] static bool Update(Scene& scene, float deltaSeconds);
     static void RequestQuit(Scene& scene) noexcept;
     [[nodiscard]] static bool ShouldQuit(const Scene& scene) noexcept;

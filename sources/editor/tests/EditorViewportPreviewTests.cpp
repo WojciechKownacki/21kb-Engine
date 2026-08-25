@@ -26,6 +26,7 @@
 #include "rendering/SkeletalMeshEditorSceneLabelBuilder.hpp"
 #include "rendering/EditorTexturePreviewService.hpp"
 #include "rendering/SceneViewportPresentationPolicy.hpp"
+#include "rendering/SceneViewportSceneSyncPolicy.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLabelFormat.hpp"
 #include "scene/EditorViewportCameraState.hpp"
@@ -87,6 +88,30 @@ void RunSceneViewportPresentationPolicyTest() {
         !SceneViewportPresentationPolicy::RequiresPresent(true, true) &&
             !SceneViewportPresentationPolicy::RequiresPresent(false, false),
         "An unchanged Scene View camera mode must not manufacture a present");
+}
+
+void RunSceneViewportSceneSyncPolicyTest() {
+    using kb::editor::SceneViewportSceneSyncPolicy;
+
+    const auto initial = SceneViewportSceneSyncPolicy::Resolve(0U, 1U, 1U, false, false, true);
+    kb::editor::tests::Require(
+        initial.fullSync && !initial.incrementalEntitySync && !initial.runtimeTransformSync,
+        "The first viewport submission must establish one complete render scene");
+
+    const auto cameraFrame = SceneViewportSceneSyncPolicy::Resolve(7U, 7U, 7U, false, false, true);
+    kb::editor::tests::Require(
+        !cameraFrame.fullSync && !cameraFrame.incrementalEntitySync && cameraFrame.runtimeTransformSync,
+        "A Play camera frame must consume runtime transforms without rebuilding the scene");
+
+    const auto editedEntity = SceneViewportSceneSyncPolicy::Resolve(7U, 8U, 7U, false, true, false);
+    kb::editor::tests::Require(
+        !editedEntity.fullSync && editedEntity.incrementalEntitySync && !editedEntity.runtimeTransformSync,
+        "An authored entity edit must retain the incremental entity sync path");
+
+    const auto structuralRuntimeChange = SceneViewportSceneSyncPolicy::Resolve(7U, 8U, 8U, true, false, true);
+    kb::editor::tests::Require(
+        structuralRuntimeChange.fullSync && !structuralRuntimeChange.runtimeTransformSync,
+        "A runtime topology change must take precedence over affine-only synchronization");
 }
 
 void RunPlayCameraHierarchySelectionTest() {
@@ -1264,6 +1289,7 @@ namespace kb::editor::tests {
 
 void RunEditorViewportPreviewTests() {
     RunSceneViewportPresentationPolicyTest();
+    RunSceneViewportSceneSyncPolicyTest();
     RunPlayCameraHierarchySelectionTest();
     RunViewportCameraNavigationBindingPolicyTest();
     RunSkeletalMeshSceneLabelBuilderTest();

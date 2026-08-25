@@ -755,9 +755,12 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport RenderSceneFor end");
     const bool skinningAlreadySynchronized = std::ranges::find(
         skinningSynchronizedSceneIds_, scene.Id()) != skinningSynchronizedSceneIds_.end();
+    const std::uint64_t renderProxyUpdateRevision = scene.Runtime().RenderProxyUpdateRevision();
+    bool renderProxyUpdatesSynchronized = false;
     if (desc.synchronizeScene) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Sync full begin");
         renderSceneSynchronizer_->Sync(scene, renderScene);
+        renderProxySynchronizedRevisions_[scene.Id()] = renderProxyUpdateRevision;
         if (!skinningAlreadySynchronized) {
             skinningSynchronizedSceneIds_.push_back(scene.Id());
         }
@@ -796,12 +799,22 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             renderSceneSynchronizer_->SyncEntities(scene, renderScene, desc.dirtySceneEntityIds);
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncEntities end");
         }
-        if (!scene.Runtime().MeshRendererRenderProxyUpdateEntities().empty()) {
+        const auto synchronizedRevision = renderProxySynchronizedRevisions_.find(scene.Id());
+        if (!scene.Runtime().RenderProxyUpdateEntities().empty() &&
+            (synchronizedRevision == renderProxySynchronizedRevisions_.end() ||
+             synchronizedRevision->second != renderProxyUpdateRevision)) {
             std::ostringstream message;
-            message << "SubmitSceneToViewport SyncMeshRendererUpdates begin count=" << scene.Runtime().MeshRendererRenderProxyUpdateEntities().size();
+            message << "SubmitSceneToViewport SyncRenderProxyUpdates begin count=" << scene.Runtime().RenderProxyUpdateEntities().size();
             WriteRendererBreadcrumb("renderer", message.str());
-            renderSceneSynchronizer_->SyncMeshRendererUpdates(scene, renderScene);
-            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncMeshRendererUpdates end");
+            renderSceneSynchronizer_->SyncRenderProxyUpdates(scene, renderScene);
+            renderProxySynchronizedRevisions_[scene.Id()] = renderProxyUpdateRevision;
+            renderProxyUpdatesSynchronized = true;
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncRenderProxyUpdates end");
+        }
+        if (desc.transformAffineSync) {
+            const bool primaryCameraChanged = renderProxyUpdatesSynchronized ||
+                scene.Runtime().HotPathReport().transformRenderProxyCameraCount != 0U;
+            renderSceneSynchronizer_->SyncFacingPanelUpdates(scene, renderScene, primaryCameraChanged);
         }
         // Deformed proxies store frame-local palette handles. Even when the ECS scene and its
         // transforms are unchanged, a new renderer frame needs fresh palette uploads; retaining
@@ -1913,6 +1926,7 @@ void Renderer::ReleaseScene(const kb::scene::Scene& scene) noexcept {
     kb::scene::SceneRenderFeedback::Clear(mutableScene);
     runtimeResourceCache_.ReleaseScene(mutableScene, sceneRenderer_.get());
     renderSceneStore_.Release(scene.Id());
+    renderProxySynchronizedRevisions_.erase(scene.Id());
     runtimeAssetDiscovery_.ReleaseScene(scene.Id());
 }
 
@@ -1924,6 +1938,7 @@ void Renderer::ReleaseAllScenes() noexcept {
     particleRenderSynchronizer_->Clear();
     if (sceneRenderer_ != nullptr) sceneRenderer_->ReleaseAllParticleScenes();
     renderSceneStore_.ReleaseAll();
+    renderProxySynchronizedRevisions_.clear();
     runtimeResourceCache_.DestroyAll(sceneRenderer_.get());
     runtimeAssetDiscovery_.Clear();
 }

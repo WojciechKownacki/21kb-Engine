@@ -270,7 +270,11 @@ bool Scene::IsPrefabPrivate() const noexcept {
 }
 
 void SceneLightingAccess::SetBasicLightingEnabled(Scene& scene, bool enabled) noexcept {
-    SceneAccess::State(scene).basicLightingEnabled = enabled;
+    SceneState& state = SceneAccess::State(scene);
+    if (state.basicLightingEnabled == enabled) return;
+    state.basicLightingEnabled = enabled;
+    ++state.renderTopologyVersion;
+    if (state.renderTopologyVersion == 0U) state.renderTopologyVersion = 1U;
 }
 
 bool SceneLightingAccess::BasicLightingEnabled(const Scene& scene) noexcept {

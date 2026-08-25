@@ -25,6 +25,7 @@ void SceneComponentMutationService::SetLight(Scene& scene, SceneEntity entity, c
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.Lights().Set(entity, light);
         SetSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Light);
+        MarkSceneRenderProxyDirty(state, entity);
         MarkScenePrefabNodeDirty(state, entity);
     }
 }
@@ -34,6 +35,7 @@ void SceneComponentMutationService::RemoveLight(Scene& scene, SceneEntity entity
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.Lights().Remove(entity);
         ClearSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Light);
+        MarkSceneRenderProxyDirty(state, entity);
         MarkScenePrefabNodeDirty(state, entity);
     }
 }
@@ -42,6 +44,7 @@ void SceneComponentMutationService::MarkLightModified(Scene& scene, SceneEntity 
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.Lights().MarkModified(entity);
+        MarkSceneRenderProxyDirty(state, entity);
         MarkScenePrefabNodeDirty(state, entity);
     }
 }

@@ -216,6 +216,8 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
     phaseStarted = std::chrono::steady_clock::now();
     const std::string name = currentScenePath_.stem().string().empty() ? std::string{ "Main" } : currentScenePath_.stem().string();
     playModeSelectionSnapshot_.CaptureAuthoredHierarchy(*scene_);
+    playModeRenderTopologyVersion_ = 0U;
+    playModeRenderTopologyVersionInitialized_ = false;
     if (!playModeSceneSession_.Begin(*scene_, name)) {
         playModeSelectionSnapshot_.Clear();
         console_.Error("Play Mode", "Scene snapshot could not be captured.");
@@ -240,6 +242,10 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
     editorSceneParticleAccumulatorSeconds_ = 0.0;
     trace.Phase(phaseStarted, "transition=begin phase=script-runtime");
     playCameraEntity_ = EditorPlayCameraResolver::Resolve(*scene_);
+    // Lifecycle callbacks may create entities or modify renderable state before
+    // the first runtime tick. Establish one complete Play snapshot; subsequent
+    // frames use compact runtime proxy updates until topology changes again.
+    MarkSceneRenderDirty();
     console_.Info("Play Mode", "Captured editor scene snapshot.");
     return true;
 }
@@ -275,6 +281,8 @@ bool EditorSceneContext::RestorePlayModeSceneSession() {
     ResetSceneEditState();
     ClearSceneDocumentDirty();
     playCameraEntity_ = {};
+    playModeRenderTopologyVersion_ = 0U;
+    playModeRenderTopologyVersionInitialized_ = false;
     editorSceneParticleAccumulatorSeconds_ = 0.0;
     trace.Phase(phaseStarted, "transition=restore phase=editor-reset");
     console_.Info("Play Mode", "Restored editor scene snapshot.");

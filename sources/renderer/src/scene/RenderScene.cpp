@@ -328,6 +328,14 @@ bool RenderScene::UpdateGeometrySwarmTransform(std::uint64_t entityId, const std
     InvalidateDrawGroups();
     return true;
 }
+bool RenderScene::ApplySurfaceCastTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept {
+    const auto found = surfaceCasts_.find(entityId);
+    if (found == surfaceCasts_.end()) return false;
+    if (found->second.desc.model == model) return false;
+    found->second.desc.model = model;
+    found->second.dirty |= RenderProxyDirtyFlag::Transform;
+    return true;
+}
 bool RenderScene::ApplySpaceStrokeTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept {
     const auto found = spaceStrokes_.find(entityId);
     if (found == spaceStrokes_.end()) return false;
@@ -340,9 +348,8 @@ bool RenderScene::ApplySpaceStrokeTransform(std::uint64_t entityId, const std::a
     return false;
 }
 bool RenderScene::UpdateSurfaceCastTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept {
-    const auto found = surfaceCasts_.find(entityId);
-    if (found == surfaceCasts_.end()) return false;
-    if (found->second.desc.model != model) { found->second.desc.model = model; found->second.dirty |= RenderProxyDirtyFlag::Transform; InvalidateDrawGroups(); }
+    if (!ApplySurfaceCastTransform(entityId, model)) return false;
+    InvalidateDrawGroups();
     return true;
 }
 bool RenderScene::UpdateSpaceStrokeTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept {

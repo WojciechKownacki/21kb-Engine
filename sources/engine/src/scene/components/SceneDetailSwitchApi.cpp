@@ -4,6 +4,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -12,9 +13,9 @@ namespace kb::scene {
 bool SceneComponentQueryService::HasDetailSwitch(const Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) && SceneAccess::State(scene).componentStorage.DetailSwitches().Has(entity); }
 const SceneDetailSwitchComponent* SceneComponentQueryService::TryGetDetailSwitch(const Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.DetailSwitches().TryGet(entity) : nullptr; }
 SceneDetailSwitchComponent* SceneComponentMutationService::TryGetDetailSwitch(Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.DetailSwitches().TryGet(entity) : nullptr; }
-void SceneComponentMutationService::SetDetailSwitch(Scene& scene, SceneEntity entity, const SceneDetailSwitchComponent& component) { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state=SceneAccess::State(scene); state.componentStorage.DetailSwitches().Set(entity, component); MarkScenePrefabNodeDirty(state, entity); } }
-void SceneComponentMutationService::RemoveDetailSwitch(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state=SceneAccess::State(scene); state.componentStorage.DetailSwitches().Remove(entity); MarkScenePrefabNodeDirty(state, entity); } }
-void SceneComponentMutationService::MarkDetailSwitchModified(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state=SceneAccess::State(scene); state.componentStorage.DetailSwitches().MarkModified(entity); MarkScenePrefabNodeDirty(state, entity); } }
+void SceneComponentMutationService::SetDetailSwitch(Scene& scene, SceneEntity entity, const SceneDetailSwitchComponent& component) { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state=SceneAccess::State(scene); state.componentStorage.DetailSwitches().Set(entity, component); MarkSceneRenderProxyDirty(state, entity); MarkScenePrefabNodeDirty(state, entity); } }
+void SceneComponentMutationService::RemoveDetailSwitch(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state=SceneAccess::State(scene); state.componentStorage.DetailSwitches().Remove(entity); MarkSceneRenderProxyDirty(state, entity); MarkScenePrefabNodeDirty(state, entity); } }
+void SceneComponentMutationService::MarkDetailSwitchModified(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state=SceneAccess::State(scene); state.componentStorage.DetailSwitches().MarkModified(entity); MarkSceneRenderProxyDirty(state, entity); MarkScenePrefabNodeDirty(state, entity); } }
 
 SceneDetailSwitchComponentQueries::SceneDetailSwitchComponentQueries(const Scene& scene) noexcept : scene_(scene) {}
 bool SceneDetailSwitchComponentQueries::Has(SceneEntity entity) const noexcept { return SceneComponentQueryService::HasDetailSwitch(scene_, entity); }
