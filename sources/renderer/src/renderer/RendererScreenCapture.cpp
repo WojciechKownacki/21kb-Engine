@@ -94,22 +94,19 @@ void ConvertToRgba8(bgfx::TextureFormat::Enum format, const std::vector<std::uin
 
 } // namespace
 
+RendererScreenCapture::RendererScreenCapture()
+    : worker_{[this] { WorkerLoop(); }} {}
+
+RendererScreenCapture::~RendererScreenCapture() { StopWorker(); }
+
 void RendererScreenCapture::Process(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc, const RenderViewportViewIds& viewIds, std::uint32_t completedFrame) {
-    // Finish an in-flight capture once its readback bytes are valid. Completion is
-    // delivered on the captured scene's own next submit - a per-frame game/editor loop
-    // reaches this within a frame or two of GPU completion.
-    if (inFlight_ && sceneId_ == scene.Id() && completedFrame >= readyFrame_) {
-        const bool written = EncodeAndWritePng();
-        ReleaseStaging();
-        inFlight_ = false;
-        kb::scene::SceneRenderFeedback::CompleteScreenCapture(const_cast<kb::scene::Scene&>(scene), requestId_, written);
-    }
+    Poll(completedFrame);
 
     const kb::scene::SceneScreenCaptureRequest request = kb::scene::SceneRenderFeedback::PeekScreenCaptureRequest(scene);
     if (request.id == 0U) {
         return;
     }
-    if (inFlight_) {
+    if (inFlight_ || encoding_) {
         // One capture in flight globally - leave the request un-consumed so this scene's
         // next submit retries it.
         return;
@@ -154,17 +151,46 @@ void RendererScreenCapture::Process(const kb::scene::Scene& scene, const RenderS
     bgfx::blit(blitView, staging_, 0U, 0U, source);
     readyFrame_ = bgfx::readTexture(staging_, bytes_.data());
     inFlight_ = true;
+    activeScene_ = &const_cast<kb::scene::Scene&>(scene);
     sceneId_ = scene.Id();
     requestId_ = request.id;
+    activeGeneration_ = ++generationCounter_;
+    returnPixels_ = request.returnPixels;
     path_.assign(request.path);
     width_ = width;
     height_ = height;
     format_ = desc.target.colorFormat;
 }
 
+[[nodiscard]] kb::scene::SceneScreenCapturePixelFormat PixelFormat(
+    bgfx::TextureFormat::Enum format) noexcept;
+
+void RendererScreenCapture::Poll(std::uint32_t completedFrame) {
+    PumpEncodingCompletion();
+    if (!inFlight_ || completedFrame < readyFrame_) return;
+    ReleaseStaging();
+    inFlight_ = false;
+    if (returnPixels_) {
+        kb::scene::SceneScreenCapturePixels pixels{
+            .width = width_,
+            .height = height_,
+            .format = PixelFormat(format_),
+            .bytes = std::move(bytes_),
+        };
+        if (activeScene_ != nullptr) {
+            kb::scene::SceneRenderFeedback::CompleteScreenCapturePixels(
+                *activeScene_, requestId_, std::move(pixels));
+        }
+        ClearActiveCapture();
+        return;
+    }
+    QueueEncoding();
+}
+
 void RendererScreenCapture::Shutdown() noexcept {
     ReleaseStaging();
     inFlight_ = false;
+    activeScene_ = nullptr;
     bytes_.clear();
     path_.clear();
 }
@@ -176,31 +202,136 @@ void RendererScreenCapture::ReleaseScene(kb::scene::Scene& scene) noexcept {
         kb::scene::SceneRenderFeedback::ConsumeScreenCaptureRequest(scene, pending.id);
         kb::scene::SceneRenderFeedback::CompleteScreenCapture(scene, pending.id, false);
     }
-    if (!inFlight_ || sceneId_ != scene.Id()) {
+    if ((!inFlight_ && !encoding_) || sceneId_ != scene.Id()) {
         return;
     }
-    ReleaseStaging();
-    inFlight_ = false;
+    if (inFlight_) {
+        ReleaseStaging();
+        inFlight_ = false;
+    }
     kb::scene::SceneRenderFeedback::CompleteScreenCapture(scene, requestId_, false);
-    bytes_.clear();
-    path_.clear();
-    sceneId_ = 0U;
-    requestId_ = 0U;
+    activeScene_ = nullptr;
+    if (!encoding_) ClearActiveCapture();
 }
 
-bool RendererScreenCapture::EncodeAndWritePng() const {
+bool RendererScreenCapture::EncodeAndWritePng(const EncodeJob& job) {
     std::vector<std::uint8_t> rgba8;
-    ConvertToRgba8(format_, bytes_, width_ * height_, rgba8);
+    ConvertToRgba8(job.format, job.bytes, job.width * job.height, rgba8);
 
     bx::FileWriter writer;
     bx::Error openError;
-    if (!bx::open(&writer, path_.c_str(), false, &openError)) {
+    if (!bx::open(&writer, job.path.c_str(), false, &openError)) {
         return false;
     }
     bx::Error writeError;
-    bimg::imageWritePng(&writer, width_, height_, width_ * 4U, rgba8.data(), bimg::TextureFormat::RGBA8, false, &writeError);
+    bimg::imageWritePng(
+        &writer, job.width, job.height, job.width * 4U, rgba8.data(),
+        bimg::TextureFormat::RGBA8, false, &writeError);
     bx::close(&writer);
     return writeError.isOk();
+}
+
+void RendererScreenCapture::WorkerLoop() {
+    while (true) {
+        EncodeJob job;
+        {
+            std::unique_lock lock{workerMutex_};
+            workerWake_.wait(lock, [this] {
+                return stopWorker_ || pendingEncode_.has_value();
+            });
+            if (stopWorker_) return;
+            job = std::move(*pendingEncode_);
+            pendingEncode_.reset();
+        }
+        const EncodeCompletion completion{
+            .generation = job.generation,
+            .succeeded = EncodeAndWritePng(job),
+        };
+        {
+            std::scoped_lock lock{workerMutex_};
+            if (stopWorker_) return;
+            completedEncode_ = completion;
+        }
+    }
+}
+
+[[nodiscard]] kb::scene::SceneScreenCapturePixelFormat PixelFormat(
+    bgfx::TextureFormat::Enum format) noexcept {
+    switch (format) {
+    case bgfx::TextureFormat::BGRA8:
+        return kb::scene::SceneScreenCapturePixelFormat::Bgra8;
+    case bgfx::TextureFormat::RGBA16:
+        return kb::scene::SceneScreenCapturePixelFormat::Rgba16;
+    case bgfx::TextureFormat::RGBA16F:
+        return kb::scene::SceneScreenCapturePixelFormat::Rgba16Float;
+    case bgfx::TextureFormat::RGBA8:
+    default:
+        return kb::scene::SceneScreenCapturePixelFormat::Rgba8;
+    }
+}
+
+void RendererScreenCapture::StopWorker() noexcept {
+    {
+        std::scoped_lock lock{workerMutex_};
+        stopWorker_ = true;
+        pendingEncode_.reset();
+    }
+    workerWake_.notify_all();
+    if (worker_.joinable()) worker_.join();
+    {
+        std::scoped_lock lock{workerMutex_};
+        completedEncode_.reset();
+    }
+    encoding_ = false;
+}
+
+void RendererScreenCapture::QueueEncoding() {
+    EncodeJob job{
+        .generation = activeGeneration_,
+        .path = std::move(path_),
+        .width = width_,
+        .height = height_,
+        .format = format_,
+        .bytes = std::move(bytes_),
+    };
+    {
+        std::scoped_lock lock{workerMutex_};
+        pendingEncode_ = std::move(job);
+        encoding_ = true;
+    }
+    workerWake_.notify_one();
+}
+
+void RendererScreenCapture::PumpEncodingCompletion() {
+    std::optional<EncodeCompletion> completion;
+    {
+        std::scoped_lock lock{workerMutex_};
+        if (!completedEncode_.has_value()) return;
+        completion = completedEncode_;
+        completedEncode_.reset();
+    }
+    encoding_ = false;
+    if (completion->generation == activeGeneration_ &&
+        activeScene_ != nullptr) {
+        kb::scene::SceneRenderFeedback::CompleteScreenCapture(
+            *activeScene_, requestId_, completion->succeeded);
+    }
+    if (completion->generation == activeGeneration_) {
+        ClearActiveCapture();
+    }
+}
+
+void RendererScreenCapture::ClearActiveCapture() noexcept {
+    activeScene_ = nullptr;
+    sceneId_ = 0U;
+    requestId_ = 0U;
+    activeGeneration_ = 0U;
+    returnPixels_ = false;
+    path_.clear();
+    width_ = 0U;
+    height_ = 0U;
+    format_ = bgfx::TextureFormat::Count;
+    bytes_.clear();
 }
 
 void RendererScreenCapture::ReleaseStaging() noexcept {

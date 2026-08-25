@@ -800,9 +800,11 @@ public:
     std::uint64_t nextScreenCaptureId = 1U;
     std::uint64_t pendingScreenCaptureId = 0U;
     std::string pendingScreenCapturePath;
+    bool pendingScreenCaptureReturnsPixels = false;
     bool pendingScreenCaptureConsumed = false;
     std::uint64_t lastScreenCaptureId = 0U;
     bool lastScreenCaptureSucceeded = false;
+    std::optional<SceneScreenCapturePixels> lastScreenCapturePixels;
 };
 
 } // namespace kb::scene

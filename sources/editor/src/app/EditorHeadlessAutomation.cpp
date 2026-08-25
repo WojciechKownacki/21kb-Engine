@@ -63,7 +63,7 @@ namespace kb::editor {
 namespace {
 
 constexpr RECT kInspectorContent{ 0, 0, 900, 700 };
-constexpr std::uint64_t kParticlePickerAnimationTimerTicks = 4U;
+constexpr std::uint64_t kParticlePickerAnimationTimerTicks = 2U;
 
 struct ScreenshotDimensions {
     int logicalWidth = 0;
@@ -930,12 +930,14 @@ EditorHeadlessAutomation::VerifyParticleThumbnail(
         thumbnails.ThumbnailFor(*metadata);
     constexpr RECT staging{632, 352, 640, 360};
     while (thumbnails.HasPendingWork() && result.ticks < maximumTicks) {
-        impl_->viewport.BeginPaintLayout(impl_->window);
         static_cast<void>(thumbnails.Tick(
             context_, impl_->viewport, impl_->window, staging));
-        impl_->viewport.EndPaintLayout();
         ++result.ticks;
         image = thumbnails.ThumbnailFor(*metadata);
+        // The production path polls at 33 ms. Yield a small bounded slice so
+        // the automation exercises the asynchronous image workers instead of
+        // exhausting its renderer-tick budget in a tight CPU loop.
+        Sleep(10U);
     }
     const bool validStorage = image != nullptr && image->width > 0 &&
         image->height > 0 && image->bgra.size() ==
@@ -1039,9 +1041,11 @@ bool EditorHeadlessAutomation::VerifyParticlePickerInteraction() {
         // resulting real previews instead of the loading icons.
         static_cast<void>(RedrawWindow(
             picker, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW));
-        for (int tick = 0; tick < 32; ++tick) {
+        for (int tick = 0; tick < 128; ++tick) {
             static_cast<void>(SendMessageW(
                 picker, WM_TIMER, 1U, 0));
+            Sleep(1U);
+            if (!EditorParticleThumbnailCache().HasPendingWork()) break;
         }
         static_cast<void>(RedrawWindow(
             picker, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW));
@@ -1169,8 +1173,12 @@ bool EditorHeadlessAutomation::CaptureRuntime(
         Trace("capture_runtime", false, "request-rejected");
         return false;
     }
-    for (std::size_t frame = 0U; frame < 120U; ++frame) {
-        if (!impl_->Render(context_)) {
+    if (!impl_->Render(context_)) {
+        Trace("capture_runtime", false, "render-backend-failed");
+        return false;
+    }
+    for (std::size_t poll = 0U; poll < 240U; ++poll) {
+        if (!impl_->viewport.AdvanceAsyncReadbacks()) {
             Trace("capture_runtime", false, "render-backend-failed");
             return false;
         }
@@ -1189,6 +1197,7 @@ bool EditorHeadlessAutomation::CaptureRuntime(
             Trace("capture_runtime", false, "capture-failed");
             return false;
         }
+        Sleep(5U);
     }
     Trace("capture_runtime", false, "capture-timeout");
     return false;
@@ -1219,9 +1228,14 @@ bool EditorHeadlessAutomation::VerifySceneRenderTargetAfterSecondary(
         return false;
     }
 
-    for (std::size_t frame = 0U; frame < 120U; ++frame) {
-        if (!impl_->RenderScene(
-                context_, sceneViewportKey, true)) {
+    if (!impl_->RenderScene(context_, sceneViewportKey, true)) {
+        Trace(
+            "verify_scene_render_target_after_secondary", false,
+            "scene-present-failed");
+        return false;
+    }
+    for (std::size_t poll = 0U; poll < 240U; ++poll) {
+        if (!impl_->viewport.AdvanceAsyncReadbacks()) {
             Trace(
                 "verify_scene_render_target_after_secondary", false,
                 "scene-present-failed");
@@ -1243,6 +1257,7 @@ bool EditorHeadlessAutomation::VerifySceneRenderTargetAfterSecondary(
                 "capture-failed");
             return false;
         }
+        Sleep(5U);
     }
     Trace(
         "verify_scene_render_target_after_secondary", false,

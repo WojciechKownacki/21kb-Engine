@@ -404,6 +404,19 @@ void EditorSceneBgfxViewport::ReleaseScene(
     renderer_.ReleaseScene(scene);
 }
 
+std::uint32_t EditorSceneBgfxViewport::RendererCompletedFrame() const noexcept {
+    return renderer_.LastCompletedFrame();
+}
+
+bool EditorSceneBgfxViewport::AdvanceAsyncReadbacks() {
+    if (renderFailed_ || !renderer_.IsInitialized() ||
+        !renderer_.BeginFrame()) {
+        return false;
+    }
+    renderer_.EndFrame();
+    return true;
+}
+
 void EditorSceneBgfxViewport::EndPaintLayout() {
     if (!renderFailed_ && !SubmitPendingPaint()) {
         FailRender("Scene render/present failed during queued viewport submit. The editor will stay open, but the scene viewport was disabled.");

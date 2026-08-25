@@ -406,6 +406,10 @@ void Renderer::EndFrame() {
     }
 
     lastCompletedFrame_ = context_->EndFrame();
+    if (screenCapture_ != nullptr) {
+        screenCapture_->Poll(
+            static_cast<std::uint32_t>(lastCompletedFrame_));
+    }
     if (sceneRenderer_ != nullptr) {
         sceneRenderer_->TickFrame();
         sceneRenderer_->AdvanceFrameTime(frameDeltaSeconds_);

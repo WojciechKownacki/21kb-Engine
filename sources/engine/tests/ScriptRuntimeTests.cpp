@@ -5822,6 +5822,36 @@ void RunSceneRenderFeedbackTest() {
         "Only the latest terminal capture result is retained - an older id honestly reports Unknown");
     kb::tests::Require(kb::scene::SceneRenderFeedback::ScreenCaptureStatus(scene, 999U) == kb::scene::SceneScreenCaptureStatus::Unknown,
         "An id that never named a request must report Unknown");
+
+    const std::uint64_t pixelCapture =
+        kb::scene::SceneRenderFeedback::RequestScreenCapturePixels(scene);
+    kb::tests::Require(pixelCapture == secondCapture + 1U,
+        "In-memory capture must share the monotonic capture id channel");
+    const kb::scene::SceneScreenCaptureRequest pixelRequest =
+        kb::scene::SceneRenderFeedback::PeekScreenCaptureRequest(scene);
+    kb::tests::Require(pixelRequest.id == pixelCapture &&
+            pixelRequest.returnPixels && pixelRequest.path.empty(),
+        "In-memory capture request lost its delivery contract");
+    kb::scene::SceneRenderFeedback::ConsumeScreenCaptureRequest(
+        scene, pixelCapture);
+    kb::scene::SceneRenderFeedback::CompleteScreenCapturePixels(
+        scene,
+        pixelCapture,
+        kb::scene::SceneScreenCapturePixels{
+            .width = 1U,
+            .height = 1U,
+            .format = kb::scene::SceneScreenCapturePixelFormat::Rgba8,
+            .bytes = {1U, 2U, 3U, 4U},
+        });
+    std::optional<kb::scene::SceneScreenCapturePixels> capturedPixels =
+        kb::scene::SceneRenderFeedback::TakeScreenCapturePixels(
+            scene, pixelCapture);
+    kb::tests::Require(capturedPixels.has_value() &&
+            capturedPixels->width == 1U &&
+            capturedPixels->bytes == std::vector<std::uint8_t>{1U, 2U, 3U, 4U} &&
+            !kb::scene::SceneRenderFeedback::TakeScreenCapturePixels(
+                scene, pixelCapture).has_value(),
+        "In-memory capture pixels were not moved out exactly once");
 }
 
 // LIB-144: Renderer.IsVisible/GetBounds/TestFrustum/HasFrame's script layer - registration
