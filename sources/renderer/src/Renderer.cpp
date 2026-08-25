@@ -968,15 +968,26 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 << " finalFb=" << HandleValue(desc.finalComposite.frameBuffer);
         WriteRendererBreadcrumb("renderer", message.str());
     }
-    // LIB-136: resolve the selected ECS camera's clear settings (if any - cameraOverride
-    // callers, e.g. the editor's fly camera, keep desc's own submission-level clear) BEFORE
-    // configuring the opaque view's clear state below. This is a cheap, matrix-free lookup
-    // (FindPrimaryCameraProxy, not the full BuildPrimaryCamera) so it does not duplicate the
-    // real camera resolution work done later in this function. GBuffer/deferred clearing is
-    // intentionally NOT affected - see CameraComponent.hpp's CameraClearMode doc comment.
+    // Resolve the effective camera's clear settings before configuring the
+    // opaque view. An explicit camera carries the same authored contract as a
+    // scene-resolved camera; editor fly cameras simply retain their defaults.
+    // GBuffer/deferred clearing is intentionally unaffected.
     std::uint16_t opaqueClearFlags = BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL;
     std::uint32_t opaqueClearRgba = desc.clearRgba;
-    if (!desc.cameraOverride.has_value()) {
+    if (desc.cameraOverride.has_value()) {
+        switch (desc.cameraOverride->clearMode) {
+        case SceneRenderCameraClearMode::SolidColor:
+            opaqueClearFlags = BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL;
+            break;
+        case SceneRenderCameraClearMode::DepthOnly:
+            opaqueClearFlags = BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL;
+            break;
+        case SceneRenderCameraClearMode::DontClear:
+            opaqueClearFlags = BGFX_CLEAR_NONE;
+            break;
+        }
+        opaqueClearRgba = PackOpaqueRgba(desc.cameraOverride->clearColor);
+    } else {
         const CameraRenderProxyDesc* clearCameraProxy = renderScene.FindPrimaryCameraProxy(desc.target.viewport.id.value);
         if (clearCameraProxy != nullptr) {
             switch (clearCameraProxy->clearMode) {
