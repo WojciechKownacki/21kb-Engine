@@ -4,7 +4,7 @@
 #include "engine/assets/AssetImportCatalog.hpp"
 #include "platform/win32/EditorModalMessageLoop.hpp"
 #include "rendering/GdiDrawing.hpp"
-#include "rendering/gdi/ScopedFont.hpp"
+#include "rendering/components/EditorDialogStyle.hpp"
 
 #include <CommDlg.h>
 
@@ -22,38 +22,14 @@ namespace {
 constexpr wchar_t kMeshImportOptionsClass[] = L"KBEditorMeshImportOptions";
 constexpr int kDialogWidth = 640;
 constexpr int kDialogHeight = 560;
-constexpr int kHeaderHeight = 62;
-constexpr int kFooterHeight = 62;
-constexpr int kPadding = 18;
-constexpr int kRowHeight = 44;
+constexpr int kHeaderHeight = EditorDialogStyle::HeaderHeight;
+constexpr int kFooterHeight = EditorDialogStyle::FooterHeight;
+constexpr int kPadding = EditorDialogStyle::Padding;
+constexpr int kRowHeight = EditorDialogStyle::ListRowHeight;
 
 [[nodiscard]] RECT Rect(int left, int top, int right, int bottom) noexcept { return RECT{ left, top, right, bottom }; }
 [[nodiscard]] bool Contains(const RECT& rect, int x, int y) noexcept { return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom; }
 [[nodiscard]] int Height(const RECT& rect) noexcept { return std::max(0, static_cast<int>(rect.bottom - rect.top)); }
-[[nodiscard]] COLORREF Rgb(int red, int green, int blue) noexcept { return RGB(red, green, blue); }
-
-void Text(HDC dc, RECT rect, const char* value, COLORREF color, UINT format = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
-    SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, color);
-    DrawTextA(dc, value, -1, &rect, format | DT_NOPREFIX);
-}
-
-void DrawCheckMark(HDC dc, const RECT& rect) {
-    HPEN pen = CreatePen(PS_SOLID, 2, Rgb(239, 255, 248));
-    if (pen == nullptr) return;
-    const HGDIOBJ previousPen = SelectObject(dc, pen);
-    const int previousBackgroundMode = SetBkMode(dc, TRANSPARENT);
-    const POINT points[]{
-        POINT{ rect.left + 3, rect.top + 9 },
-        POINT{ rect.left + 7, rect.bottom - 4 },
-        POINT{ rect.right - 3, rect.top + 4 },
-    };
-    Polyline(dc, points, 3);
-    SetBkMode(dc, previousBackgroundMode);
-    SelectObject(dc, previousPen);
-    DeleteObject(pen);
-}
-
 [[nodiscard]] std::wstring WidenAsciiFilter(const std::string& filter) {
     std::wstring output;
     output.reserve(filter.size());
@@ -138,38 +114,49 @@ private:
 
     void Paint(HDC dc) const {
         const RECT client = Client();
-        GdiDrawing::FillRectColor(dc, client, Rgb(13, 16, 21));
-        GdiDrawing::DrawSharpFrame(dc, client, Rgb(13, 16, 21), Rgb(70, 92, 122));
-        GdiDrawing::FillRectColor(dc, Rect(1, 1, client.right - 1, kHeaderHeight), Rgb(23, 28, 37));
-        GdiDrawing::FillRectColor(dc, Rect(1, kHeaderHeight - 1, client.right - 1, kHeaderHeight), Rgb(55, 86, 124));
-        { ScopedFont font(15, FW_SEMIBOLD); Text(dc, Rect(kPadding, 12, client.right - 64, 36), "Import Mesh", Rgb(236, 241, 248)); }
-        Text(dc, Rect(kPadding, 36, client.right - 64, 54),
-            ((importSkeletalMesh_ ? "SKELETAL MESH  /  " : "STATIC MESH  /  ") + std::to_string(fileCount_) + " FILE(S)").c_str(), Rgb(117, 159, 208));
-        Text(dc, Rect(client.right - 43, 13, client.right - 13, 43), "×", Rgb(190, 199, 213), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
+        const EditorTheme theme = MakeEditorDarkTheme();
+        EditorDialogStyle::PaintSurface(dc, client, theme);
+        const std::string description = (importSkeletalMesh_ ? "Skeletal mesh  /  " : "Static mesh  /  ")
+            + std::to_string(fileCount_) + " file(s)";
+        EditorDialogStyle::PaintHeader(
+            dc,
+            theme,
+            EditorDialogHeaderDescriptor{
+                .bounds = Rect(1, 3, client.right - 1, kHeaderHeight),
+                .closeButton = Rect(client.right - 36, 6, client.right - 14, 28),
+                .title = "Import Mesh",
+                .description = description,
+                .icon = HeroIconKind::DocumentText,
+                .showIcon = true,
+            });
         const RECT viewport = Viewport();
         const int saved = SaveDC(dc);
         IntersectClipRect(dc, viewport.left, viewport.top, viewport.right, viewport.bottom);
         const int y = viewport.top - scrollOffset_;
-        { ScopedFont font(12, FW_SEMIBOLD); Text(dc, Rect(viewport.left, y, viewport.right, y + 24), "MESH", Rgb(124, 167, 220)); }
-        Text(dc, Rect(viewport.left, y + 25, viewport.right, y + 48),
-            importSkeletalMesh_ ? "Skeletal glTF import" : "Static mesh import", Rgb(181, 191, 207));
+        EditorDialogStyle::PaintText(dc, Rect(viewport.left, y, viewport.right, y + 24), "Mesh", EditorDialogStyle::Color(theme.accent), 12, FW_SEMIBOLD);
+        EditorDialogStyle::PaintText(
+            dc,
+            Rect(viewport.left, y + 25, viewport.right, y + 48),
+            importSkeletalMesh_ ? "Skeletal source import" : "Static mesh import",
+            EditorDialogStyle::Color(theme.textSecondary));
         DrawCheckRow(
             dc,
+            theme,
             MaterialSlotsRow(),
             importMaterialSlots_,
             "Import material slots",
             materialSlotsAvailable_ ? "Preserve FBX material names and per-section assignments" : "Available only when every selected mesh is an FBX source",
             materialSlotsAvailable_ && !importSkeletalMesh_);
-        { ScopedFont font(12, FW_SEMIBOLD); Text(dc, Rect(viewport.left, y + 132, viewport.right, y + 156), "IMPORT PIPELINE", Rgb(124, 167, 220)); }
-        DrawCheckRow(dc, TexturesRow(), importTextures_, "Import textures",
+        EditorDialogStyle::PaintText(dc, Rect(viewport.left, y + 132, viewport.right, y + 156), "Import pipeline", EditorDialogStyle::Color(theme.accent), 12, FW_SEMIBOLD);
+        DrawCheckRow(dc, theme, TexturesRow(), importTextures_, "Import textures",
             "Copies external images and extracts embedded FBX, glTF, or GLB image data", skeletalImportAvailable_);
-        DrawCheckRow(dc, MaterialsRow(), importMaterials_, "Import materials",
+        DrawCheckRow(dc, theme, MaterialsRow(), importMaterials_, "Import materials",
             "Creates PBR Material assets and assigns them to imported mesh sections", skeletalImportAvailable_);
-        DrawCheckRow(dc, CombineMeshesRow(), combineMeshes_, "Combine meshes",
+        DrawCheckRow(dc, theme, CombineMeshesRow(), combineMeshes_, "Combine meshes",
             "Merges all compatible mesh nodes bound to the imported skin into one asset", skeletalImportAvailable_);
         DrawCheckRow(
             dc,
+            theme,
             SkeletonRow(),
             importSkeletalMesh_,
             "Import skeleton",
@@ -177,44 +164,34 @@ private:
                 ? "Creates Skeleton, Skeletal Mesh and Animation Clips from FBX, glTF, or GLB"
                 : "Requires every selected source to use one supported skeletal format: FBX, glTF, or GLB",
             skeletalImportAvailable_);
-        { ScopedFont font(11, FW_NORMAL); Text(dc, Rect(viewport.left, y + 374, viewport.right - 12, y + 416),
+        EditorDialogStyle::PaintText(dc, Rect(viewport.left, y + 374, viewport.right - 12, y + 416),
             importSkeletalMesh_
                 ? "The importer publishes textures, materials, rig, skinned mesh and clips as one deterministic import operation."
                 : "Static mesh import uses the same texture and material asset pipeline.",
-            Rgb(126, 136, 151), DT_LEFT | DT_WORDBREAK | DT_NOPREFIX); }
+            EditorDialogStyle::Color(theme.textDisabled), 11, FW_NORMAL, DT_LEFT | DT_WORDBREAK);
         RestoreDC(dc, saved);
 
         if (MaxScroll() > 0) {
             const RECT track = Rect(viewport.right - 6, viewport.top, viewport.right - 2, viewport.bottom);
-            GdiDrawing::FillRectColor(dc, track, Rgb(28, 34, 43));
             const int thumb = std::max(30, Height(track) * Height(viewport) / std::max(1, Height(viewport) + MaxScroll()));
             const int top = track.top + (Height(track) - thumb) * scrollOffset_ / std::max(1, MaxScroll());
-            GdiDrawing::FillRectColor(dc, Rect(track.left, top, track.right, top + thumb), Rgb(77, 134, 204));
+            EditorDialogStyle::PaintScrollbar(dc, track, Rect(track.left, top, track.right, top + thumb), theme);
         }
-        GdiDrawing::FillRectColor(dc, Rect(1, client.bottom - kFooterHeight, client.right - 1, client.bottom - 1), Rgb(19, 24, 32));
-        GdiDrawing::FillRectColor(dc, Rect(client.right - 198, client.bottom - 43, client.right - 106, client.bottom - 15), Rgb(31, 42, 57));
-        GdiDrawing::DrawSharpFrame(dc, Rect(client.right - 198, client.bottom - 43, client.right - 106, client.bottom - 15), Rgb(31, 42, 57), Rgb(72, 93, 120));
-        Text(dc, Rect(client.right - 198, client.bottom - 43, client.right - 106, client.bottom - 15), "Cancel", Rgb(211, 219, 230), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        GdiDrawing::FillRectColor(dc, Rect(client.right - 96, client.bottom - 43, client.right - 16, client.bottom - 15), Rgb(45, 126, 104));
-        GdiDrawing::DrawSharpFrame(dc, Rect(client.right - 96, client.bottom - 43, client.right - 16, client.bottom - 15), Rgb(45, 126, 104), Rgb(101, 211, 168));
-        Text(dc, Rect(client.right - 96, client.bottom - 43, client.right - 16, client.bottom - 15), "Import", Rgb(244, 255, 250), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        const RECT footer = Rect(1, client.bottom - kFooterHeight, client.right - 1, client.bottom - 1);
+        EditorDialogStyle::PaintFooter(dc, footer, theme);
+        EditorDialogStyle::PaintButton(dc, Rect(client.right - 198, client.bottom - 27, client.right - 106, client.bottom - 3), theme, "Cancel");
+        EditorDialogStyle::PaintButton(dc, Rect(client.right - 96, client.bottom - 27, client.right - 16, client.bottom - 3), theme, "Import", EditorDialogButtonTone::Primary);
     }
 
-    static void DrawCheckRow(HDC dc, const RECT& rect, bool checked, const char* title, const char* subtitle, bool enabled) {
-        const COLORREF fill = enabled ? Rgb(24, 31, 41) : Rgb(18, 22, 29);
-        const COLORREF border = enabled ? Rgb(49, 67, 90) : Rgb(37, 45, 57);
-        GdiDrawing::FillRectColor(dc, rect, fill);
-        GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
-        const RECT check = Rect(rect.left + 12, rect.top + 12, rect.left + 29, rect.top + 29);
+    static void DrawCheckRow(HDC dc, const EditorTheme& theme, const RECT& rect, bool checked, const char* title, const char* subtitle, bool enabled) {
+        GdiDrawing::FillRectColor(dc, rect, EditorDialogStyle::Color(theme.panel));
+        EditorDialogStyle::PaintDivider(dc, Rect(rect.left, rect.bottom - 1, rect.right, rect.bottom), theme);
+        const RECT check = Rect(rect.left + 12, rect.top + 15, rect.left + 29, rect.top + 32);
         const bool activeCheck = enabled && checked;
-        GdiDrawing::FillRectColor(dc, check, activeCheck ? Rgb(48, 141, 114) : Rgb(16, 20, 27));
-        GdiDrawing::DrawSharpFrame(dc, check, activeCheck ? Rgb(48, 141, 114) : Rgb(16, 20, 27), activeCheck ? Rgb(112, 225, 180) : (enabled ? Rgb(83, 97, 117) : Rgb(62, 71, 84)));
-        if (activeCheck) DrawCheckMark(dc, check);
-        { ScopedFont font(12, FW_SEMIBOLD); Text(dc, Rect(rect.left + 42, rect.top + 6, rect.right - 10, rect.top + 24), title, enabled ? Rgb(226, 234, 244) : Rgb(117, 125, 137)); }
-        Text(dc, Rect(rect.left + 42, rect.top + 24, rect.right - 10, rect.bottom - 4), subtitle, Rgb(139, 153, 173));
+        EditorDialogStyle::PaintCheckbox(dc, check, theme, activeCheck, enabled);
+        EditorDialogStyle::PaintText(dc, Rect(rect.left + 42, rect.top + 5, rect.right - 10, rect.top + 25), title, EditorDialogStyle::Color(enabled ? theme.textPrimary : theme.textDisabled), 12, FW_SEMIBOLD);
+        EditorDialogStyle::PaintText(dc, Rect(rect.left + 42, rect.top + 24, rect.right - 10, rect.bottom - 4), subtitle, EditorDialogStyle::Color(enabled ? theme.textSecondary : theme.textDisabled), 11);
     }
-
-    static void DrawDisabledRow(HDC dc, const RECT& rect, const char* title, const char* subtitle) { DrawCheckRow(dc, rect, false, title, subtitle, false); }
 
     void OnClick(int x, int y) {
         const RECT client = Client();
@@ -238,8 +215,8 @@ private:
             return;
         }
         if (skeletalImportAvailable_ && Contains(SkeletonRow(), x, y)) { importSkeletalMesh_ = !importSkeletalMesh_; InvalidateRect(window_, nullptr, FALSE); return; }
-        if (Contains(Rect(client.right - 198, client.bottom - 43, client.right - 106, client.bottom - 15), x, y)) { Close(false); return; }
-        if (Contains(Rect(client.right - 96, client.bottom - 43, client.right - 16, client.bottom - 15), x, y)) Close(true);
+        if (Contains(Rect(client.right - 198, client.bottom - 27, client.right - 106, client.bottom - 3), x, y)) { Close(false); return; }
+        if (Contains(Rect(client.right - 96, client.bottom - 27, client.right - 16, client.bottom - 3), x, y)) Close(true);
     }
     void Close(bool accepted) noexcept { accepted_ = accepted; running_ = false; DestroyWindow(window_); }
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
