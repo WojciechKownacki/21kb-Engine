@@ -1,4 +1,5 @@
 #include "rendering/EditorSceneBgfxViewport.hpp"
+#include "rendering/SceneViewportSceneSyncPolicy.hpp"
 
 #if defined(_WIN32)
 #include <algorithm>
@@ -78,13 +79,14 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
     bool clearTarget) {
     const render::RenderExtent renderExtent{present.renderWidth, present.renderHeight};
     const render::RenderExtent surfaceExtent{RectWidth(surface.rect), RectHeight(surface.rect)};
-    const bool sceneChanged = session.submittedSceneRevision != present.settings.sceneRevision;
-    const bool canUseIncrementalSceneSync = sceneChanged &&
-        !present.settings.sceneFullSyncRequired &&
-        !present.settings.dirtySceneEntityIds.empty() &&
-        session.submittedSceneRevision >= present.settings.sceneDirtyBaseRevision;
-    const bool fullSceneSyncRequired = session.submittedSceneRevision == 0U || (sceneChanged && !canUseIncrementalSceneSync);
-    const std::span<const std::uint64_t> dirtySceneEntityIds = canUseIncrementalSceneSync
+    const SceneViewportSceneSyncDecision sync = SceneViewportSceneSyncPolicy::Resolve(
+        session.submittedSceneRevision,
+        present.settings.sceneRevision,
+        present.settings.sceneDirtyBaseRevision,
+        present.settings.sceneFullSyncRequired,
+        !present.settings.dirtySceneEntityIds.empty(),
+        present.settings.runtimeTransformSync);
+    const std::span<const std::uint64_t> dirtySceneEntityIds = sync.incrementalEntitySync
         ? std::span<const std::uint64_t>{ present.settings.dirtySceneEntityIds.data(), present.settings.dirtySceneEntityIds.size() }
         : std::span<const std::uint64_t>{};
     bgfx::TextureHandle depthTextureForSampling = BGFX_INVALID_HANDLE;
@@ -131,7 +133,8 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
         .selectionMaskEnabled = present.settings.selectionMaskEnabled,
         .selectionOutlineEnabled = present.settings.selectionOutlineEnabled,
         .gpuDrivenRuntimeDispatchEnabled = present.settings.gpuDrivenRuntimeDispatchEnabled,
-        .synchronizeScene = fullSceneSyncRequired,
+        .synchronizeScene = sync.fullSync,
+        .transformAffineSync = sync.runtimeTransformSync,
         .editorGrid = present.settings.editorGrid,
         .editorGizmo = present.settings.editorGizmo,
         .editorSelectionBox = present.settings.editorSelectionBox,

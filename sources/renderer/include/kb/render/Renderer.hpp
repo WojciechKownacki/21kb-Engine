@@ -34,6 +34,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace kb::render {
@@ -320,6 +321,7 @@ private:
     // A scene's frame-local skinning palettes are shared by all of its viewport submissions.
     // This avoids uploading the same crowd once per docked/floating viewport in one frame.
     std::vector<std::uint64_t> skinningSynchronizedSceneIds_;
+    std::unordered_map<std::uint64_t, std::uint64_t> renderProxySynchronizedRevisions_;
     DisplayConfig displayConfig_{};
     bool frameActive_ = false;
 };

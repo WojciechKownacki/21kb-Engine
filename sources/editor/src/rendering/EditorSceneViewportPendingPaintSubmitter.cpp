@@ -181,8 +181,23 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions()
     }
     const std::uint64_t eventId = diagnostics::EditorLagTrace::NextEventId();
     std::ostringstream frameDetail;
+    const std::size_t fullSyncCount = std::ranges::count_if(
+        viewport_.pendingSubmissions_, [](const render::Renderer::SceneFrameSubmission& submission) {
+            return submission.desc.synchronizeScene;
+        });
+    const std::size_t runtimeTransformSyncCount = std::ranges::count_if(
+        viewport_.pendingSubmissions_, [](const render::Renderer::SceneFrameSubmission& submission) {
+            return submission.desc.transformAffineSync;
+        });
+    std::size_t dirtyEntityCount = 0U;
+    for (const render::Renderer::SceneFrameSubmission& submission : viewport_.pendingSubmissions_) {
+        dirtyEntityCount += submission.desc.dirtySceneEntityIds.size();
+    }
     frameDetail << "submissions=" << viewport_.pendingSubmissions_.size()
                 << " presents=" << viewport_.pendingPresents_.size()
+                << " fullSync=" << fullSyncCount
+                << " runtimeTransformSync=" << runtimeTransformSyncCount
+                << " dirtyEntities=" << dirtyEntityCount
                 << " backend=" << viewport_.ActiveBackendLabel();
     const auto beginStart = std::chrono::steady_clock::now();
     if (!viewport_.renderer_.BeginFrame()) {

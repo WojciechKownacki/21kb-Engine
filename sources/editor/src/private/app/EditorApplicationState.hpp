@@ -51,6 +51,9 @@ struct EditorApplicationState {
     // saved a script (Ctrl+S), so the open script's asset is reloaded and any
     // Inspector showing its exposed variables is repainted.
     std::uint64_t lastScriptSaveSerial = 0;
+    std::uint64_t lastPlayConsoleEntrySequence = 0U;
+    std::uint64_t lastPlayConsoleEntryCount = 0U;
+    std::uint64_t lastPlaySceneRenderRevision = 0U;
     bool running = false;
 #endif
 };

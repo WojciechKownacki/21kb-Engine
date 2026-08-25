@@ -1429,13 +1429,25 @@ bool EditorSceneContext::TickPlayModeSceneSession(float deltaSeconds) {
     if (!runtime.EcsProfilerEnabled()) {
         runtime.SetEcsProfilerEnabled(true);
     }
+    if (!playModeRenderTopologyVersionInitialized_) {
+        playModeRenderTopologyVersion_ = runtime.RenderTopologyVersion();
+        playModeRenderTopologyVersionInitialized_ = true;
+    }
     static_cast<void>(runtime.Update(deltaSeconds));
     for (const std::string& systemError :
          runtime.DrainSceneSystemErrors()) {
         console_.Error("Scripts", systemError);
     }
     SurfaceScriptDiagnostics();
-    MarkSceneRenderDirty();
+    // Transforms and render-proxy value edits are published by SceneRuntime as
+    // compact render-proxy update lists and are consumed directly by the
+    // renderer. Only a render hierarchy/topology change requires rebuilding
+    // the full proxy set (spawn, destroy, reparent, or a global render toggle).
+    const std::uint64_t topologyVersion = runtime.RenderTopologyVersion();
+    if (topologyVersion != playModeRenderTopologyVersion_) {
+        MarkSceneRenderDirty();
+    }
+    playModeRenderTopologyVersion_ = topologyVersion;
     return !runtime.ShouldQuit();
 }
 
