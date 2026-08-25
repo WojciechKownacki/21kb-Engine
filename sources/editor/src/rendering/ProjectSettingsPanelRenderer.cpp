@@ -25,7 +25,7 @@ constexpr int kTooltipPaddingY = 10;
     case ProjectSettingsCategory::Inputs:
         return "Inputs";
     case ProjectSettingsCategory::Graphics:
-        return "Graphics";
+        return "Rendering";
     case ProjectSettingsCategory::Physics:
         return "Physics";
     case ProjectSettingsCategory::Count:
@@ -139,52 +139,10 @@ struct TooltipContent {
             "Input Enabled",
             "Enables or disables project input processing. Disable it for scenes that should ignore gameplay input.",
         };
-    case ProjectSettingsTooltipKind::RenderBackend:
-        return TooltipContent{
-            "bgfx Backend",
-            "Chooses the rendering backend for the editor viewport. Changing it recreates renderer resources.",
-        };
     case ProjectSettingsTooltipKind::LightingPath:
         return TooltipContent{
             "Lighting Path",
             "Chooses Forward or Deferred scene lighting for opaque geometry. Transparent objects still render in the forward transparent pass.",
-        };
-    case ProjectSettingsTooltipKind::PostProcess:
-        return TooltipContent{
-            "Post FX",
-            "Master switch for scene post-processing such as anti-aliasing, bloom, selection outline and final composition.",
-        };
-    case ProjectSettingsTooltipKind::AntiAliasing:
-        return TooltipContent{
-            "Anti-Aliasing",
-            "Chooses exactly one AA path for the scene. TAA and FXAA run in post-process alongside your configured lighting path. "
-            "MSAA multisamples the render target instead; on a Deferred-lit project it also forces per-sample Forward shading for "
-            "this preview, since the G-buffer cannot be multisampled, so expect lower FPS than TAA/FXAA at the same resolution.",
-        };
-    case ProjectSettingsTooltipKind::MsaaSamples:
-        return TooltipContent{
-            "MSAA Samples",
-            "Controls the hardware multisample count when Anti-Aliasing is set to MSAA. It is inactive for None, FXAA and TAA.",
-        };
-    case ProjectSettingsTooltipKind::Bloom:
-        return TooltipContent{
-            "Bloom",
-            "Adds a soft glow around bright pixels in the post-process chain. It depends on Post FX being enabled.",
-        };
-    case ProjectSettingsTooltipKind::Shadows:
-        return TooltipContent{
-            "Shadows",
-            "Enables shadow submission for scene lighting. Turning it off reduces rendering cost while previewing layout or materials.",
-        };
-    case ProjectSettingsTooltipKind::SelectionOutline:
-        return TooltipContent{
-            "Selection Outline",
-            "Draws the editor outline around selected objects through the post-process chain. It depends on Post FX being enabled.",
-        };
-    case ProjectSettingsTooltipKind::GpuDriven:
-        return TooltipContent{
-            "GPU Driven",
-            "Enables runtime GPU-driven scene submission where supported. The renderer falls back when the selected backend lacks required features.",
         };
     case ProjectSettingsTooltipKind::None:
     default:
@@ -259,16 +217,9 @@ void DrawInputsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const 
 void DrawGraphicsPage(
     HDC dc,
     const ProjectSettingsPanelLayoutRects& rects,
-    const EditorSceneContext& sceneContext,
-    const EditorRenderBackendSettings& renderBackendSettings) {
+    const EditorSceneContext& sceneContext) {
     GdiDrawing::FillRectColor(dc, rects.sectionHeader, RGB(34, 37, 42));
-    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom }, "GRAPHICS", RGB(150, 158, 168), 11, FW_SEMIBOLD);
-
-    DrawText(dc, RECT{ rects.backendLabel.left, rects.backendLabel.top, rects.backendLabel.right - 8, rects.backendLabel.bottom }, "bgfx Backend", RGB(196, 205, 214), 12);
-    const EditorRenderBackend backend = renderBackendSettings.Backend();
-    DrawOptionButton(dc, rects.backendAutoButton, "Auto", backend == EditorRenderBackend::Auto);
-    DrawOptionButton(dc, rects.backendDx12Button, "DX12", backend == EditorRenderBackend::DirectX12);
-    DrawOptionButton(dc, rects.backendVulkanButton, "Vulkan", backend == EditorRenderBackend::Vulkan);
+    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom }, "RENDERING", RGB(150, 158, 168), 11, FW_SEMIBOLD);
 
     DrawText(dc, RECT{ rects.lightingPathLabel.left, rects.lightingPathLabel.top, rects.lightingPathLabel.right - 8, rects.lightingPathLabel.bottom }, "Lighting Path", RGB(196, 205, 214), 12);
     const kb::project::ProjectSceneLightingPath lightingPath = sceneContext.Project().sceneLightingPath;
@@ -276,29 +227,6 @@ void DrawGraphicsPage(
     DrawOptionButton(dc, rects.lightingPathForwardPlusButton, "Forward+", lightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus);
     DrawOptionButton(dc, rects.lightingPathDeferredButton, "Deferred", lightingPath == kb::project::ProjectSceneLightingPath::Deferred);
 
-    DrawText(dc, rects.postProcessLabel, "Post FX", RGB(196, 205, 214), 12);
-    DrawCheckbox(dc, rects.postProcessCheckbox, renderBackendSettings.PostProcessEnabled());
-    DrawText(dc, rects.antiAliasingLabel, "Anti-Aliasing", RGB(196, 205, 214), 12);
-    const EditorAntiAliasingMode aaMode = renderBackendSettings.AntiAliasingMode();
-    DrawOptionButton(dc, rects.antiAliasingNoneButton, "None", aaMode == EditorAntiAliasingMode::None);
-    DrawOptionButton(dc, rects.antiAliasingFxaaButton, "FXAA", aaMode == EditorAntiAliasingMode::Fxaa);
-    DrawOptionButton(dc, rects.antiAliasingTaaButton, "TAA", aaMode == EditorAntiAliasingMode::Taa);
-    DrawOptionButton(dc, rects.antiAliasingMsaaButton, "MSAA", aaMode == EditorAntiAliasingMode::Msaa);
-    const bool msaaActive = aaMode == EditorAntiAliasingMode::Msaa;
-    DrawText(dc, rects.msaaLabel, "MSAA Samples", msaaActive ? RGB(196, 205, 214) : RGB(104, 111, 121), 12);
-    DrawOptionButton(dc, rects.msaaOffButton, "Off", msaaActive && renderBackendSettings.MsaaSamples() == 0U, msaaActive);
-    DrawOptionButton(dc, rects.msaa2xButton, "2x", msaaActive && renderBackendSettings.MsaaSamples() == 2U, msaaActive);
-    DrawOptionButton(dc, rects.msaa4xButton, "4x", msaaActive && renderBackendSettings.MsaaSamples() == 4U, msaaActive);
-    DrawOptionButton(dc, rects.msaa8xButton, "8x", msaaActive && renderBackendSettings.MsaaSamples() == 8U, msaaActive);
-    DrawOptionButton(dc, rects.msaa16xButton, "16x", msaaActive && renderBackendSettings.MsaaSamples() == 16U, msaaActive);
-    DrawText(dc, rects.bloomLabel, "Bloom", RGB(196, 205, 214), 12);
-    DrawCheckbox(dc, rects.bloomCheckbox, renderBackendSettings.BloomEnabled());
-    DrawText(dc, rects.shadowsLabel, "Shadows", RGB(196, 205, 214), 12);
-    DrawCheckbox(dc, rects.shadowsCheckbox, renderBackendSettings.ShadowsEnabled());
-    DrawText(dc, rects.selectionOutlineLabel, "Selection Outline", RGB(196, 205, 214), 12);
-    DrawCheckbox(dc, rects.selectionOutlineCheckbox, renderBackendSettings.SelectionOutlineEnabled());
-    DrawText(dc, rects.gpuDrivenLabel, "GPU Driven", RGB(196, 205, 214), 12);
-    DrawCheckbox(dc, rects.gpuDrivenCheckbox, renderBackendSettings.GpuDrivenEnabled());
 }
 
 void DrawPhysicsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorSceneContext& sceneContext) {
@@ -321,8 +249,7 @@ void ProjectSettingsPanelRenderer::Paint(
     HDC dc,
     const RECT& content,
     const EditorTheme& theme,
-    const EditorSceneContext& sceneContext,
-    const EditorRenderBackendSettings& renderBackendSettings) const {
+    const EditorSceneContext& sceneContext) const {
     static_cast<void>(theme);
     const ProjectSettingsPanelLayoutRects rects = ProjectSettingsPanelLayout::Resolve(content);
     const int selectedCategory = sceneContext.ProjectSettings().SelectedCategory();
@@ -341,7 +268,7 @@ void ProjectSettingsPanelRenderer::Paint(
         DrawInputsPage(dc, rects, sceneContext);
         break;
     case ProjectSettingsCategory::Graphics:
-        DrawGraphicsPage(dc, rects, sceneContext, renderBackendSettings);
+        DrawGraphicsPage(dc, rects, sceneContext);
         break;
     case ProjectSettingsCategory::Physics:
         DrawPhysicsPage(dc, rects, sceneContext);
@@ -368,34 +295,9 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
     const ProjectSettingsCategory category = static_cast<ProjectSettingsCategory>(sceneContext.ProjectSettings().SelectedCategory());
     if (category == ProjectSettingsCategory::Graphics) {
         for (int index = 0; index < 3; ++index) {
-            const RECT button = ProjectSettingsPanelLayout::BackendOptionButton(rects, index);
-            if (PointInRect(button, x, y)) {
-                return Hit{ .kind = ProjectSettingsHitKind::RenderBackendOption, .index = index, .rect = button };
-            }
-        }
-        for (int index = 0; index < 3; ++index) {
             const RECT button = ProjectSettingsPanelLayout::LightingPathOptionButton(rects, index);
             if (PointInRect(button, x, y)) {
                 return Hit{ .kind = ProjectSettingsHitKind::LightingPathOption, .index = index, .rect = button };
-            }
-        }
-        for (int index = 0; index < 5; ++index) {
-            const RECT checkbox = ProjectSettingsPanelLayout::GraphicsToggleCheckbox(rects, index);
-            const RECT label = ProjectSettingsPanelLayout::GraphicsToggleLabel(rects, index);
-            if (PointInRect(checkbox, x, y) || PointInRect(label, x, y)) {
-                return Hit{ .kind = ProjectSettingsHitKind::GraphicsToggle, .index = index, .rect = checkbox };
-            }
-        }
-        for (int index = 0; index < 4; ++index) {
-            const RECT button = ProjectSettingsPanelLayout::AntiAliasingModeButton(rects, index);
-            if (PointInRect(button, x, y)) {
-                return Hit{ .kind = ProjectSettingsHitKind::AntiAliasingMode, .index = index, .rect = button };
-            }
-        }
-        for (int index = 0; index < 5; ++index) {
-            const RECT button = ProjectSettingsPanelLayout::MsaaOptionButton(rects, index);
-            if (PointInRect(button, x, y)) {
-                return Hit{ .kind = ProjectSettingsHitKind::MsaaOption, .index = index, .rect = button };
             }
         }
         return Hit{};
@@ -462,17 +364,8 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::TooltipHitTest(c
     }
 
     if (category == ProjectSettingsCategory::Graphics) {
-        if (PointInRect(rects.backendLabel, x, y)) {
-            return Hit{ .kind = ProjectSettingsHitKind::RenderBackendOption, .index = -1, .rect = rects.backendLabel };
-        }
         if (PointInRect(rects.lightingPathLabel, x, y)) {
             return Hit{ .kind = ProjectSettingsHitKind::LightingPathOption, .index = -1, .rect = rects.lightingPathLabel };
-        }
-        if (PointInRect(rects.antiAliasingLabel, x, y)) {
-            return Hit{ .kind = ProjectSettingsHitKind::AntiAliasingMode, .index = -1, .rect = rects.antiAliasingLabel };
-        }
-        if (PointInRect(rects.msaaLabel, x, y)) {
-            return Hit{ .kind = ProjectSettingsHitKind::MsaaOption, .index = -1, .rect = rects.msaaLabel };
         }
     }
 
