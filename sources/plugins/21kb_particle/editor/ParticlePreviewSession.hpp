@@ -30,6 +30,10 @@ public:
         std::filesystem::path virtualPath,
         const kb::scene::ParticleEffectAsset& asset);
     [[nodiscard]] ParticleEditorResult PublishWorkingCopy(const kb::scene::ParticleEffectAsset& asset);
+    [[nodiscard]] ParticleEditorResult RetargetWorkingCopy(
+        kb::assets::AssetId assetId,
+        std::filesystem::path virtualPath,
+        const kb::scene::ParticleEffectAsset& asset);
     [[nodiscard]] ParticleEditorResult Tick(float wallDeltaSeconds);
     [[nodiscard]] bool Submit(kb::render::Renderer& renderer) const;
     void Release(kb::render::Renderer& renderer);
