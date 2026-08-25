@@ -25,6 +25,7 @@ public:
     static constexpr std::uint32_t kMaximumFrameCount = 240U;
     static constexpr float kUnboundedPreviewSeconds = 5.0F;
     static constexpr float kMaximumPreviewSeconds = 10.0F;
+    static constexpr float kPosterTargetSeconds = 0.2F;
 
     [[nodiscard]] static ParticleThumbnailTimelinePlan Plan(
         float authoredDurationSeconds,
@@ -147,6 +148,20 @@ public:
                 (static_cast<std::uint64_t>(clampedFrame + 1U) *
                     plan.simulationSteps) /
                 plan.frameCount));
+    }
+
+    [[nodiscard]] static std::uint32_t PosterFrame(
+        const ParticleThumbnailTimelinePlan& plan) noexcept {
+        if (plan.frameCount <= 1U || !(plan.durationSeconds > 0.0F)) {
+            return 0U;
+        }
+        const float targetSeconds = std::min(
+            kPosterTargetSeconds, plan.durationSeconds * 0.35F);
+        return std::min(
+            plan.frameCount - 1U,
+            static_cast<std::uint32_t>(std::floor(
+                static_cast<double>(targetSeconds) *
+                static_cast<double>(kFramesPerSecond))));
     }
 
     [[nodiscard]] static std::uint32_t FrameAtSeconds(
