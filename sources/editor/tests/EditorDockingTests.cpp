@@ -6,6 +6,9 @@
 #include "rendering/EditorToolbarLayout.hpp"
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
+#include "rendering/components/CategoryHeader.hpp"
+#include "rendering/components/DenseListRow.hpp"
+#include "rendering/components/PropertyRow.hpp"
 #include "scene/SkeletalMeshEditorTreeState.hpp"
 #include "scene/SkeletalMeshEditorDetailsState.hpp"
 #include "scene/SkeletalMeshEditorPanelResizeState.hpp"
@@ -983,6 +986,50 @@ void RunAutosaveStateTest() {
         "A failed autosave must expose an explicit failure notification");
 }
 
+void RunSharedEditorRowComponentLayoutTest() {
+    const RECT bounds{10, 20, 410, 44};
+    const kb::editor::CategoryHeaderLayout category =
+        kb::editor::CategoryHeader::Resolve(bounds, true, true, true);
+    kb::editor::tests::Require(
+        category.disclosure.left >= bounds.left && category.icon.left > category.disclosure.left &&
+            category.title.left > category.icon.right && category.title.right < category.trailingText.left &&
+            category.trailingText.right < category.trailingAction.left && category.trailingAction.right <= bounds.right,
+        "CategoryHeader layout overlapped disclosure, title, count, or trailing action");
+
+    const kb::editor::DenseListRowLayout dense =
+        kb::editor::DenseListRow::Resolve(bounds, 28, 72, true);
+    kb::editor::tests::Require(
+        dense.icon.left == bounds.left + 28 && dense.text.left == dense.icon.right + kb::editor::DenseListRow::IconGap &&
+            dense.text.right == bounds.right - 72,
+        "DenseListRow layout did not preserve leading content and trailing action reservations");
+
+    const kb::editor::PropertyRowLayout property = kb::editor::PropertyRow::Resolve(bounds);
+    const int expectedSplit = bounds.left + (bounds.right - bounds.left) *
+        kb::editor::PropertyRow::LabelWidthPercent / 100;
+    kb::editor::tests::Require(
+        property.label.left == bounds.left + kb::editor::PropertyRow::HorizontalPadding &&
+            property.label.right == expectedSplit && property.value.left == expectedSplit &&
+            property.value.right == bounds.right - kb::editor::PropertyRow::HorizontalPadding &&
+            property.value.bottom - property.value.top == kb::editor::PropertyRow::ValueHeight,
+        "PropertyRow layout did not preserve the shared 36/64 field geometry");
+
+    const RECT narrowBounds{0, 0, 32, 12};
+    const kb::editor::CategoryHeaderLayout narrowCategory =
+        kb::editor::CategoryHeader::Resolve(narrowBounds, true, true, true);
+    const kb::editor::DenseListRowLayout narrowDense =
+        kb::editor::DenseListRow::Resolve(narrowBounds, 40, 40, true);
+    const kb::editor::PropertyRowLayout narrowProperty =
+        kb::editor::PropertyRow::Resolve(narrowBounds);
+    const auto valid = [](const RECT& rect) noexcept {
+        return rect.right >= rect.left && rect.bottom >= rect.top;
+    };
+    kb::editor::tests::Require(
+        valid(narrowCategory.title) && valid(narrowCategory.trailingText) &&
+            valid(narrowCategory.trailingAction) && valid(narrowDense.icon) &&
+            valid(narrowDense.text) && valid(narrowProperty.label) && valid(narrowProperty.value),
+        "Shared row layouts produced inverted rectangles in a narrow panel");
+}
+
 // A click on any tab — the active one or an inactive sibling — must hit-test as a
 // dock Tab. The pointer router relies on this: a dock hit means the click is a
 // layout action (switch tabs), so it must NOT clear the scene selection and blank
@@ -1050,6 +1097,7 @@ void RunEditorDockingTests() {
     RunAnimationClipTimelineStateTest();
     RunAnimationClipEditorDocumentStateTest();
     RunAutosaveStateTest();
+    RunSharedEditorRowComponentLayoutTest();
     RunTabClickIsDockInteractionTest();
 }
 

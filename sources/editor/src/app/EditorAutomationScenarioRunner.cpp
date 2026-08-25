@@ -3681,6 +3681,30 @@ ReadScriptValue(
             std::to_string(*frames) + " editor particle frame(s)" };
     }
 
+    if (*operation == "verify_particle_picker") {
+        return {
+            state.automation.VerifyParticlePickerInteraction(),
+            "modeless selection contract" };
+    }
+
+    if (*operation == "assert_particle_thumbnail") {
+        const auto asset = StringMember(step, "asset", error);
+        const double maxTicksValue = NumberMember(
+            step, "max_ticks", error, false).value_or(64.0);
+        if (!asset || maxTicksValue < 1.0 || maxTicksValue > 1000.0 ||
+            std::floor(maxTicksValue) != maxTicksValue) {
+            return { false, error.empty() ? "invalid thumbnail assertion" : error };
+        }
+        const kb::assets::AssetId assetId = ResolveAsset(state, *asset);
+        const auto verification = state.automation.VerifyParticleThumbnail(
+            assetId, static_cast<std::size_t>(maxTicksValue));
+        return {
+            verification.succeeded,
+            std::to_string(verification.ticks) +
+                " renderer thumbnail tick(s), animated=" +
+                (verification.animated ? "true" : "false") };
+    }
+
     if (*operation == "inspector_pointer") {
         const auto action = StringMember(step, "action", error);
         if (!action) return { false, error };

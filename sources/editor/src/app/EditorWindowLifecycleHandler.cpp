@@ -7,6 +7,8 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/editor/docking/DockTypes.hpp"
+#include "platform/win32/EditorChoiceDialog.hpp"
+#include "rendering/script_editor/ScriptEditorTextEncoding.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include <optional>
@@ -28,7 +30,7 @@ namespace {
     text += materialName;
     text += L" before ";
     text += action;
-    text += L"?\n\nYes = Save\nNo = Discard changes\nCancel = keep editing";
+    text += L"?";
     return text;
 }
 
@@ -45,19 +47,23 @@ namespace {
         return true;
     }
 
-    const int result = MessageBoxW(
-        owner,
-        DirtyMaterialPromptText(sceneContext, action).c_str(),
-        L"Unsaved Material",
-        MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1 | MB_APPLMODAL);
+    const EditorChoiceDialogResult result = EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
+        .title = "Unsaved Material",
+        .message = ScriptEditorTextEncoding::Narrow(DirtyMaterialPromptText(sceneContext, action)),
+        .supportingText = "Choose whether to preserve the current material changes.",
+        .primaryLabel = "Save",
+        .secondaryLabel = "Discard",
+        .cancelLabel = "Cancel",
+        .icon = HeroIconKind::RectangleGroup,
+    });
 
     const kb::assets::AssetId materialId = sceneContext.MaterialEditor().OpenAssetId();
     switch (result) {
-    case IDYES:
+    case EditorChoiceDialogResult::Primary:
         return sceneContext.SaveMaterialEditorAsset(materialId);
-    case IDNO:
+    case EditorChoiceDialogResult::Secondary:
         return sceneContext.RevertMaterialEditorAsset(materialId);
-    case IDCANCEL:
+    case EditorChoiceDialogResult::Cancel:
     default:
         return false;
     }
@@ -67,13 +73,21 @@ namespace {
     if (!sceneContext.HasDirtySkeletalMeshEditorAssetEdit()) return true;
     std::wstring text = L"Save changes to the open skeletal assets before ";
     text += action;
-    text += L"?\n\nYes = Save\nNo = Discard changes\nCancel = keep editing";
-    switch (MessageBoxW(owner, text.c_str(), L"Unsaved Skeletal Asset", MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1 | MB_APPLMODAL)) {
-    case IDYES:
+    text += L"?";
+    switch (EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
+        .title = "Unsaved Skeletal Asset",
+        .message = ScriptEditorTextEncoding::Narrow(text),
+        .supportingText = "Choose whether to preserve the current asset changes.",
+        .primaryLabel = "Save",
+        .secondaryLabel = "Discard",
+        .cancelLabel = "Cancel",
+        .icon = HeroIconKind::Skeleton,
+    })) {
+    case EditorChoiceDialogResult::Primary:
         return sceneContext.SaveSkeletalMeshEditorAsset();
-    case IDNO:
+    case EditorChoiceDialogResult::Secondary:
         return sceneContext.RevertSkeletalMeshEditorAsset();
-    case IDCANCEL:
+    case EditorChoiceDialogResult::Cancel:
     default:
         return false;
     }
@@ -83,13 +97,21 @@ namespace {
     if (!sceneContext.HasDirtyAnimatorEditorAssetEdit()) return true;
     std::wstring text = L"Save changes to the open Animator Controller before ";
     text += action;
-    text += L"?\n\nYes = Save\nNo = Discard changes\nCancel = keep editing";
-    switch (MessageBoxW(owner, text.c_str(), L"Unsaved Animator Controller", MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1 | MB_APPLMODAL)) {
-    case IDYES:
+    text += L"?";
+    switch (EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
+        .title = "Unsaved Animator Controller",
+        .message = ScriptEditorTextEncoding::Narrow(text),
+        .supportingText = "Choose whether to preserve the current controller changes.",
+        .primaryLabel = "Save",
+        .secondaryLabel = "Discard",
+        .cancelLabel = "Cancel",
+        .icon = HeroIconKind::Gamepad2,
+    })) {
+    case EditorChoiceDialogResult::Primary:
         return sceneContext.SaveAnimatorEditorAsset();
-    case IDNO:
+    case EditorChoiceDialogResult::Secondary:
         return sceneContext.RevertAnimatorEditorAsset();
-    case IDCANCEL:
+    case EditorChoiceDialogResult::Cancel:
     default:
         return false;
     }
