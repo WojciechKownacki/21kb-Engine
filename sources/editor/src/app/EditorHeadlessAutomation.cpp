@@ -7,10 +7,12 @@
 #include "docking/EditorDockModel.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
+#include "platform/win32/EditorParticleEffectAssetPickerDialog.hpp"
 #include "rendering/DockWorkspaceRenderer.hpp"
 #include "rendering/FloatingWindowBackBufferPainter.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
+#include "rendering/EditorParticleThumbnailService.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "rendering/FloatingEditorWindowRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
@@ -27,6 +29,8 @@
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/platform/win32/Win32XInputHapticsBackend.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/ParticleEffectAssetIO.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
@@ -59,6 +63,7 @@ namespace kb::editor {
 namespace {
 
 constexpr RECT kInspectorContent{ 0, 0, 900, 700 };
+constexpr std::uint64_t kParticlePickerAnimationTimerTicks = 4U;
 
 struct ScreenshotDimensions {
     int logicalWidth = 0;
@@ -425,6 +430,19 @@ template <typename Paint>
         },
         reinterpret_cast<LPARAM>(&context));
     return context.found;
+}
+
+[[nodiscard]] HWND FindOwnedWindowByClass(
+    HWND owner, const wchar_t* className) noexcept {
+    for (HWND window = FindWindowExW(nullptr, nullptr, className, nullptr);
+         window != nullptr;
+         window = FindWindowExW(nullptr, window, className, nullptr)) {
+        if (reinterpret_cast<HWND>(
+                GetWindowLongPtrW(window, GWLP_HWNDPARENT)) == owner) {
+            return window;
+        }
+    }
+    return nullptr;
 }
 
 } // namespace
@@ -885,6 +903,253 @@ bool EditorHeadlessAutomation::StepEditorParticles(
         "revision=" + std::to_string(revisionBefore) + "->" +
             std::to_string(revisionAfter));
     return advanced;
+}
+
+EditorHeadlessAutomation::ParticleThumbnailVerification
+EditorHeadlessAutomation::VerifyParticleThumbnail(
+    kb::assets::AssetId assetId,
+    std::size_t maximumTicks) {
+    ParticleThumbnailVerification result{};
+    if (impl_ == nullptr || impl_->window == nullptr ||
+        !assetId.IsValid() || maximumTicks == 0U) {
+        return result;
+    }
+    kb::assets::AssetManager& manager =
+        context_.Scene().Assets().Manager();
+    const kb::assets::AssetMetadata* metadata =
+        manager.Registry().Find(assetId);
+    if (metadata == nullptr ||
+        metadata->type != kb::scene::kParticleEffectAssetType) {
+        return result;
+    }
+
+    EditorParticleThumbnailService& thumbnails =
+        EditorParticleThumbnailCache();
+    thumbnails.Clear(&impl_->viewport);
+    const EditorParticleThumbnailImage* image =
+        thumbnails.ThumbnailFor(*metadata);
+    constexpr RECT staging{632, 352, 640, 360};
+    while (thumbnails.HasPendingWork() && result.ticks < maximumTicks) {
+        impl_->viewport.BeginPaintLayout(impl_->window);
+        static_cast<void>(thumbnails.Tick(
+            context_, impl_->viewport, impl_->window, staging));
+        impl_->viewport.EndPaintLayout();
+        ++result.ticks;
+        image = thumbnails.ThumbnailFor(*metadata);
+    }
+    const bool validStorage = image != nullptr && image->width > 0 &&
+        image->height > 0 && image->bgra.size() ==
+            static_cast<std::size_t>(image->width * image->height);
+    const auto frameHash = [](const EditorParticleThumbnailImage& frame) {
+        std::uint64_t hash = 1469598103934665603ULL;
+        for (const std::uint32_t pixel : frame.bgra) {
+            hash ^= pixel;
+            hash *= 1099511628211ULL;
+        }
+        return hash;
+    };
+    const std::uint64_t firstFrameHash = validStorage
+        ? frameHash(*image)
+        : 0U;
+    for (std::uint64_t frame = 1U;
+         validStorage && frame < 8U; ++frame) {
+        const EditorParticleThumbnailImage* candidate =
+            thumbnails.ThumbnailFor(*metadata, frame);
+        if (candidate != nullptr &&
+            frameHash(*candidate) != firstFrameHash) {
+            result.animated = true;
+            break;
+        }
+    }
+    result.succeeded = validStorage && result.animated &&
+        !thumbnails.HasPendingWork();
+    if (!result.succeeded) {
+        thumbnails.CancelPendingWork(&impl_->viewport);
+    }
+    return result;
+}
+
+bool EditorHeadlessAutomation::VerifyParticlePickerInteraction() {
+    if (impl_ == nullptr || impl_->window == nullptr) {
+        Trace("verify_particle_picker", false, "missing-host-window");
+        return false;
+    }
+
+    const kb::scene::SceneEntity previousSelection =
+        context_.SelectedEntity();
+    const kb::scene::SceneEntity assignmentTarget =
+        context_.CreateHierarchyObject();
+    if (!assignmentTarget.IsValid() ||
+        !context_.AddComponentToEntity(
+            assignmentTarget, "Particle Effect")) {
+        if (assignmentTarget.IsValid()) {
+            context_.SelectEntity(assignmentTarget);
+            static_cast<void>(context_.DeleteSelectedHierarchyEntity());
+        }
+        Trace("verify_particle_picker", false, "assignment-target-failed");
+        return false;
+    }
+
+    RECT originalBounds{};
+    static_cast<void>(GetWindowRect(impl_->window, &originalBounds));
+    const int width = std::max(1L, originalBounds.right - originalBounds.left);
+    const int height = std::max(1L, originalBounds.bottom - originalBounds.top);
+    static_cast<void>(SetWindowPos(
+        impl_->window, nullptr, -16000, -16000, width, height,
+        SWP_NOACTIVATE | SWP_NOZORDER));
+
+    bool accepted = false;
+    bool assignmentSucceeded = false;
+    kb::assets::AssetId acceptedAsset{};
+    const bool opened = EditorParticleEffectAssetPickerDialog::Open(
+        impl_->window,
+        MakeEditorDarkTheme(),
+        context_,
+        impl_->viewport,
+        {},
+        [this, assignmentTarget, &accepted, &acceptedAsset,
+         &assignmentSucceeded](kb::assets::AssetId assetId) {
+            accepted = true;
+            acceptedAsset = assetId;
+            assignmentSucceeded = context_.SetParticleEffectAsset(
+                assignmentTarget, assetId);
+        });
+    constexpr wchar_t kPickerClassName[] =
+        L"KBEditorMeshAssetPickerDialog";
+    HWND picker = opened
+        ? FindOwnedWindowByClass(impl_->window, kPickerClassName)
+        : nullptr;
+    const bool ownerRemainedEnabled =
+        IsWindowEnabled(impl_->window) != 0;
+    bool draggableHeader = false;
+    bool pickerCaptured = false;
+    bool pickerAnimationCaptured = false;
+    if (picker != nullptr) {
+        RECT pickerBounds{};
+        static_cast<void>(GetWindowRect(picker, &pickerBounds));
+        const LRESULT headerHit = SendMessageW(
+            picker, WM_NCHITTEST, 0U,
+            MAKELPARAM(pickerBounds.left + 80, pickerBounds.top + 14));
+        const LRESULT closeHit = SendMessageW(
+            picker, WM_NCHITTEST, 0U,
+            MAKELPARAM(pickerBounds.right - 24, pickerBounds.top + 14));
+        draggableHeader = headerHit == HTCAPTION && closeHit != HTCAPTION;
+        // The first paint queues only the visible recipes. Drive the same
+        // bounded timer path used by the interactive editor, then capture the
+        // resulting real previews instead of the loading icons.
+        static_cast<void>(RedrawWindow(
+            picker, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW));
+        for (int tick = 0; tick < 32; ++tick) {
+            static_cast<void>(SendMessageW(
+                picker, WM_TIMER, 1U, 0));
+        }
+        static_cast<void>(RedrawWindow(
+            picker, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW));
+        RECT client{};
+        static_cast<void>(GetClientRect(picker, &client));
+        const auto capturePicker = [picker, client](
+                                       const std::filesystem::path& path) {
+            bool printSucceeded = false;
+            return CaptureBitmap(
+                       path,
+                       ScreenshotDimensions{
+                           .logicalWidth = client.right - client.left,
+                           .logicalHeight = client.bottom - client.top,
+                           .dpi = 96,
+                       },
+                       [picker, &printSucceeded](HDC destination) {
+                           printSucceeded = PrintWindow(
+                               picker, destination, PW_CLIENTONLY) != 0;
+                       }) &&
+                printSucceeded;
+        };
+        const std::filesystem::path firstFrame =
+            artifactRoot_ / "screenshots" / "particle-picker.bmp";
+        const std::filesystem::path nextFrame =
+            artifactRoot_ / "screenshots" / "particle-picker-next.bmp";
+        pickerCaptured = capturePicker(firstFrame);
+        for (std::uint64_t tick = 0U;
+             tick < kParticlePickerAnimationTimerTicks;
+             ++tick) {
+            static_cast<void>(SendMessageW(picker, WM_TIMER, 1U, 0));
+        }
+        static_cast<void>(RedrawWindow(
+            picker, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW));
+        const bool nextFrameCaptured = capturePicker(nextFrame);
+        const auto fileHash = [](const std::filesystem::path& path) {
+            std::ifstream input{path, std::ios::binary};
+            std::uint64_t hash = 1469598103934665603ULL;
+            char byte = '\0';
+            while (input.get(byte)) {
+                hash ^= static_cast<unsigned char>(byte);
+                hash *= 1099511628211ULL;
+            }
+            return std::pair{input.eof(), hash};
+        };
+        pickerAnimationCaptured = pickerCaptured && nextFrameCaptured &&
+            fileHash(firstFrame) != fileHash(nextFrame);
+    }
+
+    bool singleClickDidNotAccept = false;
+    bool doubleClickAccepted = false;
+    if (picker != nullptr) {
+        // Tile zero clears the field; tile one is the first real asset. The
+        // crash regression must exercise the delayed valid-asset callback.
+        constexpr LPARAM kFirstAssetTilePoint = MAKELPARAM(280, 150);
+        static_cast<void>(SendMessageW(
+            picker, WM_LBUTTONDOWN, MK_LBUTTON, kFirstAssetTilePoint));
+        singleClickDidNotAccept = !accepted &&
+            IsWindowEnabled(impl_->window) != 0;
+        static_cast<void>(SendMessageW(
+            picker, WM_LBUTTONDBLCLK, MK_LBUTTON, kFirstAssetTilePoint));
+        doubleClickAccepted = accepted && acceptedAsset.IsValid() &&
+            assignmentSucceeded;
+
+        for (int iteration = 0;
+             iteration < 64 && IsWindow(picker) != 0;
+             ++iteration) {
+            MSG message{};
+            if (PeekMessageW(
+                    &message, picker, 0U, 0U, PM_REMOVE) == 0) {
+                break;
+            }
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+        if (IsWindow(picker) != 0) {
+            static_cast<void>(SendMessageW(picker, WM_CLOSE, 0U, 0));
+        }
+    }
+
+    static_cast<void>(SetWindowPos(
+        impl_->window, nullptr, originalBounds.left, originalBounds.top,
+        width, height, SWP_NOACTIVATE | SWP_NOZORDER));
+    context_.SelectEntity(assignmentTarget);
+    const bool assignmentTargetRemoved =
+        context_.DeleteSelectedHierarchyEntity();
+    if (context_.Scene().Entities().IsAlive(previousSelection)) {
+        context_.SelectEntity(previousSelection);
+    } else {
+        context_.ClearHierarchySelection();
+    }
+    const bool succeeded = opened && picker != nullptr &&
+        ownerRemainedEnabled && draggableHeader && pickerCaptured &&
+        pickerAnimationCaptured &&
+        singleClickDidNotAccept && doubleClickAccepted &&
+        IsWindow(picker) == 0 && assignmentTargetRemoved;
+    std::ostringstream detail;
+    detail << "opened=" << opened
+           << ";picker=" << (picker != nullptr)
+           << ";owner-enabled=" << ownerRemainedEnabled
+           << ";floating=" << draggableHeader
+           << ";captured=" << pickerCaptured
+           << ";animated=" << pickerAnimationCaptured
+           << ";single-select=" << singleClickDidNotAccept
+           << ";double-accept=" << doubleClickAccepted
+           << ";closed=" << (picker == nullptr || IsWindow(picker) == 0)
+           << ";cleanup=" << assignmentTargetRemoved;
+    Trace("verify_particle_picker", succeeded, detail.str());
+    return succeeded;
 }
 
 bool EditorHeadlessAutomation::CaptureRuntime(

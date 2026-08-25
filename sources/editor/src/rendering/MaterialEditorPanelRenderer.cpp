@@ -15,6 +15,8 @@
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "rendering/ProjectFilesPanelDrawing.hpp"
+#include "rendering/components/CategoryHeader.hpp"
+#include "rendering/components/EditorDialogStyle.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
@@ -2462,23 +2464,29 @@ void DrawGraphContextMenu(HDC dc, const EditorSceneContext& sceneContext) {
     }
 
     const RECT menu = MaterialEditorPanelRenderer::GraphContextMenuRect(sceneContext);
-    GdiDrawing::DrawSharpFrame(dc, menu, RGB(28, 31, 36), RGB(47, 52, 61));
+    const EditorTheme theme = MakeEditorDarkTheme();
+    EditorDialogStyle::PaintSurface(dc, menu, theme);
     const RECT search{
         menu.left + kMaterialEditorGraphMenuPadding + 8,
         menu.top + kMaterialEditorGraphMenuPadding,
         menu.right - kMaterialEditorGraphMenuPadding - 8,
         menu.top + kMaterialEditorGraphMenuPadding + 22,
     };
-    StrokeRoundedRect(dc, search, RGB(55, 111, 197), 12, 1);
+    EditorDialogStyle::PaintField(
+        dc,
+        search,
+        theme,
+        {},
+        !sceneContext.MaterialGraphContextMenuSearchQuery().empty());
     const std::string searchText = sceneContext.MaterialGraphContextMenuSearchQuery().empty()
         ? std::string{ "Search nodes..." }
         : std::string{ sceneContext.MaterialGraphContextMenuSearchQuery() };
-    DrawText(
+    EditorDialogStyle::PaintText(
         dc,
         RECT{ search.left + 10, search.top, search.right - 10, search.bottom },
-        searchText.c_str(),
-        sceneContext.MaterialGraphContextMenuSearchQuery().empty() ? RGB(172, 184, 198) : RGB(236, 242, 249),
-        10);
+        searchText,
+        EditorDialogStyle::Color(sceneContext.MaterialGraphContextMenuSearchQuery().empty() ? theme.textDisabled : theme.textPrimary),
+        11);
 
     const RECT viewport = MaterialEditorGraphContextMenuViewportRect(menu);
     const int maxScroll = MaterialEditorGraphContextMenuMaxScroll(sceneContext);
@@ -2502,12 +2510,7 @@ void DrawGraphContextMenu(HDC dc, const EditorSceneContext& sceneContext) {
         const bool commandHovered = sceneContext.IsMaterialGraphContextMenuCommandHovered(categoryIndex, command);
         const bool favorite = sceneContext.IsMaterialGraphPaletteFavorite(command);
         const RECT commandFill{ menu.left + 8, y, menu.right - 8, y + kMaterialEditorGraphMenuCommandHeight };
-        GdiDrawing::FillRectColor(
-            dc,
-            commandFill,
-            commandHovered
-                ? ProjectFilesPanelDrawing::Blend(RGB(24, 27, 33), RGB(166, 178, 193), 14)
-                : RGB(24, 27, 33));
+        GdiDrawing::FillRectColor(dc, commandFill, EditorDialogStyle::Color(commandHovered ? theme.toolbarButton : theme.panel));
         const RECT favoriteRect{ menu.left + 11, y + 5, menu.left + 23, y + 17 };
         GdiDrawing::DrawSharpFrame(dc, favoriteRect, favorite ? RGB(92, 145, 224) : RGB(66, 74, 86), RGB(32, 36, 43));
         if (favorite) {
@@ -2518,7 +2521,7 @@ void DrawGraphContextMenu(HDC dc, const EditorSceneContext& sceneContext) {
             dc,
             commandRow,
             std::string{ MaterialEditorGraphContextMenuCommandName(command) }.c_str(),
-            enabled ? (commandHovered ? RGB(248, 250, 252) : RGB(213, 222, 235)) : RGB(102, 112, 126),
+            EditorDialogStyle::Color(enabled ? (commandHovered ? theme.textPrimary : theme.textSecondary) : theme.textDisabled),
             10,
             commandHovered ? FW_SEMIBOLD : FW_NORMAL);
         y += kMaterialEditorGraphMenuCommandHeight;
@@ -2540,18 +2543,17 @@ void DrawGraphContextMenu(HDC dc, const EditorSceneContext& sceneContext) {
         if (rowOnScreen(y, kMaterialEditorGraphMenuCategoryHeight)) {
             const bool categoryHovered = sceneContext.IsMaterialGraphContextMenuCategoryHovered(categoryIndex);
             const RECT categoryFill{ menu.left + 8, y, menu.right - 8, y + kMaterialEditorGraphMenuCategoryHeight };
-            GdiDrawing::FillRectColor(
-                dc,
-                categoryFill,
-                categoryHovered
-                    ? ProjectFilesPanelDrawing::Blend(RGB(31, 35, 42), RGB(166, 178, 193), 12)
-                    : RGB(31, 35, 42));
-            GdiDrawing::FillRectColor(dc, RECT{ categoryFill.left, categoryFill.bottom - 1, categoryFill.right, categoryFill.bottom }, RGB(20, 23, 28));
-            const RECT disclosure{ categoryFill.left + 4, categoryFill.top + 3, categoryFill.left + 18, categoryFill.bottom - 3 };
-            ProjectFilesPanelDrawing::DrawDisclosureTriangle(dc, disclosure, categoryHovered ? RGB(224, 235, 247) : RGB(180, 191, 206), expanded);
-            const RECT categoryText{ categoryFill.left + 22, categoryFill.top, categoryFill.right - 8, categoryFill.bottom };
             const std::string label{ MaterialEditorGraphContextMenuCategoryName(categoryIndex) };
-            DrawText(dc, categoryText, label.c_str(), categoryHovered ? RGB(246, 249, 252) : RGB(231, 237, 245), 11, FW_SEMIBOLD);
+            CategoryHeader::Paint(
+                dc,
+                theme,
+                CategoryHeaderDescriptor{
+                    .bounds = categoryFill,
+                    .title = label,
+                    .expanded = expanded,
+                    .hovered = categoryHovered,
+                    .showIcon = false,
+                });
         }
         y += kMaterialEditorGraphMenuCategoryHeight;
         if (!expanded) {
@@ -2564,12 +2566,12 @@ void DrawGraphContextMenu(HDC dc, const EditorSceneContext& sceneContext) {
     RestoreDC(dc, savedDc);
     if (maxScroll > 0) {
         const int trackLeft = menu.right - 7;
-        GdiDrawing::FillRectColor(dc, RECT{ trackLeft, viewport.top, trackLeft + 3, viewport.bottom }, RGB(36, 41, 49));
+        const RECT track{ trackLeft - 1, viewport.top, trackLeft + 4, viewport.bottom };
         const int viewportHeight = std::max(1L, viewport.bottom - viewport.top);
         const int contentHeight = std::max(1, MaterialEditorGraphContextMenuScrollableContentHeight(sceneContext));
         const int thumbHeight = std::max(28, viewportHeight * viewportHeight / contentHeight);
         const int thumbTop = viewport.top + (viewportHeight - thumbHeight) * scrollOffset / std::max(1, maxScroll);
-        GdiDrawing::FillRectColor(dc, RECT{ trackLeft - 1, thumbTop, trackLeft + 4, thumbTop + thumbHeight }, RGB(96, 111, 130));
+        EditorDialogStyle::PaintScrollbar(dc, track, RECT{ trackLeft, thumbTop, trackLeft + 3, thumbTop + thumbHeight }, theme);
     }
 }
 
@@ -2810,17 +2812,8 @@ struct MaterialGraphTexturePickerRow {
 }
 
 void DrawMaterialGraphTexturePickerButton(HDC dc, const RECT& rect, const char* label, bool enabled) {
-    const COLORREF fill = enabled ? RGB(38, 43, 51) : RGB(30, 33, 38);
-    const COLORREF border = enabled ? RGB(83, 128, 165) : RGB(59, 65, 75);
-    GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
-    DrawText(
-        dc,
-        RECT{ rect.left + 6, rect.top, rect.right - 6, rect.bottom },
-        label,
-        enabled ? RGB(236, 242, 249) : RGB(126, 135, 149),
-        10,
-        FW_SEMIBOLD,
-        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    const EditorTheme theme = MakeEditorDarkTheme();
+    EditorDialogStyle::PaintButton(dc, rect, theme, label, EditorDialogButtonTone::Neutral, false, enabled);
 }
 
 void DrawMaterialGraphTexturePickerTile(
@@ -2829,8 +2822,17 @@ void DrawMaterialGraphTexturePickerTile(
     const MaterialGraphTexturePickerRow& row,
     bool selected,
     const EditorSceneContext& sceneContext) {
-    FillRoundedRect(dc, tile, selected ? RGB(38, 73, 88) : RGB(19, 20, 24), 4);
-    StrokeRoundedRect(dc, tile, selected ? RGB(92, 176, 207) : RGB(0, 0, 0), 4, selected ? 2 : 1);
+    const EditorTheme theme = MakeEditorDarkTheme();
+    GdiDrawing::FillRectColor(
+        dc,
+        tile,
+        selected
+            ? EditorDialogStyle::Blend(EditorDialogStyle::Color(theme.panel), EditorDialogStyle::Color(theme.accent), 18)
+            : EditorDialogStyle::Color(theme.panel));
+    if (selected) {
+        GdiDrawing::FillRectColor(dc, RECT{tile.left, tile.top, tile.left + 3, tile.bottom}, EditorDialogStyle::Color(theme.accent));
+    }
+    EditorDialogStyle::PaintDivider(dc, RECT{tile.left, tile.bottom - 1, tile.right, tile.bottom}, theme);
 
     const RECT image{
         tile.left + 6,
@@ -2887,20 +2889,19 @@ void DrawMaterialGraphTexturePickerOverlay(
             rows.size(),
             sceneContext.MaterialGraphTexturePickerScrollOffset());
     const RECT picker = layout.picker;
-    GdiDrawing::DrawSharpFrame(dc, picker, RGB(28, 31, 36), RGB(47, 52, 61));
+    const EditorTheme theme = MakeEditorDarkTheme();
+    EditorDialogStyle::PaintSurface(dc, picker, theme);
 
     const RECT search = layout.search;
-    FillRoundedRect(dc, search, RGB(17, 20, 26), 4);
-    StrokeRoundedRect(dc, search, RGB(83, 128, 165), 4, 1);
+    EditorDialogStyle::PaintField(dc, search, theme, {}, true);
     std::string searchText{ sceneContext.MaterialGraphTexturePickerSearchQuery() };
     searchText += "|";
-    DrawText(
+    EditorDialogStyle::PaintText(
         dc,
         RECT{ search.left + 10, search.top, search.right - 10, search.bottom },
-        searchText.c_str(),
-        RGB(236, 242, 249),
-        10,
-        FW_NORMAL);
+        searchText,
+        EditorDialogStyle::Color(theme.textPrimary),
+        11);
 
     DrawMaterialGraphTexturePickerButton(dc, layout.accept, "Accept", layout.acceptEnabled);
     DrawMaterialGraphTexturePickerButton(dc, layout.cancel, "Cancel", true);
@@ -2938,7 +2939,7 @@ void DrawMaterialGraphTexturePickerOverlay(
 
     if (maxScroll > 0) {
         const int trackLeft = picker.right - 7;
-        GdiDrawing::FillRectColor(dc, RECT{ trackLeft, viewport.top, trackLeft + 3, viewport.bottom }, RGB(36, 41, 49));
+        const RECT track{ trackLeft - 1, viewport.top, trackLeft + 4, viewport.bottom };
         const int viewportHeight = std::max(1, RectHeight(viewport));
         const std::size_t rowCount = rows.empty()
             ? 0U
@@ -2947,7 +2948,7 @@ void DrawMaterialGraphTexturePickerOverlay(
         const int contentHeight = std::max(1, MaterialGraphTexturePickerContentHeight(rowCount));
         const int thumbHeight = std::max(28, viewportHeight * viewportHeight / contentHeight);
         const int thumbTop = viewport.top + (viewportHeight - thumbHeight) * scrollOffset / std::max(1, maxScroll);
-        GdiDrawing::FillRectColor(dc, RECT{ trackLeft - 1, thumbTop, trackLeft + 4, thumbTop + thumbHeight }, RGB(96, 111, 130));
+        EditorDialogStyle::PaintScrollbar(dc, track, RECT{ trackLeft, thumbTop, trackLeft + 3, thumbTop + thumbHeight }, theme);
     }
 }
 

@@ -5,6 +5,7 @@
 #include "rendering/HeroIconPainter.hpp"
 #include "rendering/HierarchyPanelStyle.hpp"
 #include "rendering/HierarchyRowLayout.hpp"
+#include "rendering/components/DenseListRow.hpp"
 #include "rendering/gdi/ScopedBrush.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
@@ -69,23 +70,27 @@ void DrawRenameField(HDC dc, RECT labelRect, std::string_view value, bool select
 
 } // namespace
 
-void HierarchyRowRenderer::Paint(HDC dc, const RECT& rowRect, const EditorTheme&, const EditorHierarchyRow& row, const EditorSceneContext& sceneContext) const {
+void HierarchyRowRenderer::Paint(HDC dc, const RECT& rowRect, const EditorTheme& theme, const EditorHierarchyRow& row, const EditorSceneContext& sceneContext) const {
     const bool selected = sceneContext.IsHierarchyEntitySelected(row.entity);
-    if (selected) {
-        GdiDrawing::FillRectColor(dc, rowRect, HierarchyPanelStyle::RowSelected());
-    }
+    const HierarchyRowLayoutRects layout = HierarchyRowLayout::Resolve(rowRect, row);
+    DenseListRow::Paint(dc, theme, DenseListRowDescriptor{
+        .bounds = rowRect,
+        .title = sceneContext.IsHierarchyRenaming(row.entity) ? std::string_view{} : std::string_view{row.name},
+        .contentLeftInset = static_cast<int>(layout.label.left - rowRect.left),
+        .contentRightInset = static_cast<int>(rowRect.right - layout.label.right),
+        .selected = selected,
+        .enabled = row.visible,
+        .showDivider = false,
+    });
 
     ScopedFont font{ 12, FW_NORMAL };
     const ScopedGdiObject selectedFont(dc, font.handle);
-
-    const HierarchyRowLayoutRects layout = HierarchyRowLayout::Resolve(rowRect, row);
     DrawVisibilityCell(dc, layout, row.visible);
 
     if (row.hasChildren) {
         DrawExpander(dc, layout.expanderIcon, row.expanded);
     }
 
-    const COLORREF rowInk = row.visible ? (selected ? HierarchyPanelStyle::RowTextSelected() : HierarchyPanelStyle::RowText()) : HierarchyPanelStyle::RowTextHidden();
     const COLORREF entityIcon = row.prefabRoot ? HierarchyPanelStyle::PrefabCubeStroke() : HierarchyPanelStyle::CubeStroke();
     HeroIconPainter::Draw(
         dc,
@@ -95,8 +100,6 @@ void HierarchyRowRenderer::Paint(HDC dc, const RECT& rowRect, const EditorTheme&
         2);
     if (sceneContext.IsHierarchyRenaming(row.entity)) {
         DrawRenameField(dc, layout.label, sceneContext.HierarchyRenameBuffer(), sceneContext.IsHierarchyRenameSelectingAll());
-    } else {
-        GdiDrawing::DrawTextBlock(dc, layout.label, row.name.c_str(), rowInk);
     }
 }
 

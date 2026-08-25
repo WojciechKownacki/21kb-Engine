@@ -1,8 +1,8 @@
 #include "rendering/SceneViewportToolbarDropdownOverlayWindow.hpp"
 
 #if defined(_WIN32)
-#include "rendering/GdiDrawing.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
+#include "rendering/components/EditorDialogStyle.hpp"
 #include "scene/EditorTerrainService.hpp"
 
 #include <algorithm>
@@ -15,7 +15,6 @@ namespace {
 constexpr wchar_t kSceneViewportToolbarDropdownOverlayClassName[] = L"KBEditorSceneViewportToolbarDropdownOverlay";
 constexpr int kDropdownPadding = 5;
 constexpr int kDropdownItemHeight = 24;
-constexpr int kDropdownRadius = 6;
 
 [[nodiscard]] bool TerrainPopupOpen() noexcept {
     const EditorTerrainToolState& tool = EditorTerrainService::ToolState();
@@ -30,28 +29,8 @@ constexpr int kDropdownRadius = 6;
     return rect.right <= rect.left || rect.bottom <= rect.top;
 }
 
-[[nodiscard]] COLORREF Blend(COLORREF a, COLORREF b, int numerator, int denominator) noexcept {
-    const int inv = denominator - numerator;
-    return RGB(
-        (GetRValue(a) * inv + GetRValue(b) * numerator) / denominator,
-        (GetGValue(a) * inv + GetGValue(b) * numerator) / denominator,
-        (GetBValue(a) * inv + GetBValue(b) * numerator) / denominator);
-}
-
 [[nodiscard]] bool NearlyEqual(float a, float b) noexcept {
     return std::abs(a - b) <= 0.001F;
-}
-
-void FillRound(HDC dc, const RECT& rect, COLORREF fill, COLORREF border, int radius) {
-    HBRUSH brush = CreateSolidBrush(fill);
-    HPEN pen = CreatePen(PS_SOLID, 1, border);
-    HGDIOBJ oldBrush = SelectObject(dc, brush);
-    HGDIOBJ oldPen = SelectObject(dc, pen);
-    RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius, radius);
-    SelectObject(dc, oldPen);
-    SelectObject(dc, oldBrush);
-    DeleteObject(pen);
-    DeleteObject(brush);
 }
 
 [[nodiscard]] RECT ItemRect(const RECT& client, std::size_t index, std::size_t count) noexcept {
@@ -223,12 +202,7 @@ void SceneViewportToolbarDropdownOverlayWindow::Paint(HDC dc) const {
         SceneViewportToolbarRenderer::PaintTerrainPopup(dc, client, theme_, *sceneContext_, hoveredItem_);
         return;
     }
-    FillRound(
-        dc,
-        client,
-        Blend(GdiDrawing::ToColorRef(theme_.panel), RGB(0, 0, 0), 1, 5),
-        Blend(GdiDrawing::ToColorRef(theme_.borderPanel), RGB(88, 105, 128), 1, 4),
-        kDropdownRadius);
+    EditorDialogStyle::PaintSurface(dc, client, theme_);
 
     const EditorViewportPreviewState& state = sceneContext_->ViewportPreview(panelId_);
     const EditorViewportToolbarDropdown dropdown = state.ToolbarDropdown();
@@ -247,18 +221,15 @@ void SceneViewportToolbarDropdownOverlayWindow::Paint(HDC dc) const {
         RECT item = ItemRect(client, index, count);
         item.top += 1;
         item.bottom -= 1;
-        if (selected) {
-            FillRound(dc, item, RGB(39, 100, 124), RGB(87, 173, 207), kDropdownRadius);
-        } else if (hovered) {
-            FillRound(dc, item, RGB(46, 78, 104), RGB(96, 140, 178), kDropdownRadius);
-        }
-        GdiDrawing::DrawCenteredText(
+        EditorDialogStyle::PaintButton(
             dc,
             item,
+            theme_,
             gridDropdown
                 ? EditorViewportGridSpacingLabel(value)
                 : (rotationDropdown ? EditorViewportRotationSnapLabel(value) : EditorViewportSnapStepLabel(value)),
-            selected ? RGB(235, 250, 255) : (hovered ? RGB(226, 236, 246) : GdiDrawing::ToColorRef(theme_.textPrimary)));
+            selected ? EditorDialogButtonTone::Primary : EditorDialogButtonTone::Neutral,
+            hovered);
     }
 }
 

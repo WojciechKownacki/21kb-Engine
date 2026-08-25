@@ -1,6 +1,8 @@
 #include "rendering/ParticleEditorPanelLayout.hpp"
 
 #if defined(_WIN32)
+#include "rendering/components/CategoryHeader.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -166,8 +168,8 @@ ParticleEditorPanelLayout ParticleEditorPanelLayoutResolver::Resolve(
     const LONG bodyBottom = std::max(bodyTop, content.bottom - statusHeight);
     const LONG composerLeft = std::max(content.left, content.right - composerWidth);
     const int padding = Scale(8, dpi);
-    const int composerHeaderHeight = Scale(28, dpi);
-    const int sectionHeaderHeight = Scale(26, dpi);
+    const int composerHeaderHeight = Scale(CategoryHeader::PreferredHeight, dpi);
+    const int sectionHeaderHeight = Scale(CategoryHeader::PreferredHeight, dpi);
     const int addHeight = Scale(30, dpi);
     const int rowHeight = Scale(32, dpi);
     const int recipeTileHeight = Scale(56, dpi);

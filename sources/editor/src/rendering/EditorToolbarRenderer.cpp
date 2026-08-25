@@ -6,6 +6,7 @@
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "rendering/HeroIconPainter.hpp"
+#include "rendering/components/EditorDialogStyle.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #pragma warning(push, 0)
@@ -206,19 +207,20 @@ void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorThem
 
     const RECT shadow = OffsetRectCopy(menu.dropdown, 2, 3);
     FillRound(dc, shadow, RGB(0, 0, 0), RGB(0, 0, 0), kDropdownRadius);
-    FillRound(dc, menu.dropdown, RGB(19, 22, 28), RGB(78, 91, 115), kDropdownRadius);
+    EditorDialogStyle::PaintSurface(dc, menu.dropdown, theme);
 
     for (int row = 0; row < 4; ++row) {
         const RECT rowRect = menu.dropdownRows[static_cast<std::size_t>(row)];
-        if (interaction.HoveredMenuRow().has_value() && *interaction.HoveredMenuRow() == row) {
-            FillRound(dc, RECT{ rowRect.left + 4, rowRect.top + 3, rowRect.right - 4, rowRect.bottom - 3 }, RGB(37, 44, 55), RGB(56, 68, 86), 5);
-        }
-        DrawMenuText(
+        const bool hovered = interaction.HoveredMenuRow().has_value() && *interaction.HoveredMenuRow() == row;
+        EditorDialogStyle::PaintMenuRow(
             dc,
-            RECT{ rowRect.left + 12, rowRect.top, rowRect.right - 12, rowRect.bottom },
+            RECT{ rowRect.left + 4, rowRect.top + 1, rowRect.right - 4, rowRect.bottom - 1 },
+            theme,
             EditorToolbarLayout::DropdownLabel(interaction.OpenMenu(), row),
-            textPrimary,
-            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            HeroIconKind::RectangleGroup,
+            hovered,
+            true,
+            false);
     }
 }
 

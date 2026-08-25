@@ -8,6 +8,7 @@
 #include "app/plugins/EditorPluginsPointerController.hpp"
 #include "app/project_settings/EditorProjectSettingsPointerController.hpp"
 #include "assets/EditorAssetBrowserHitPayloadResolver.hpp"
+#include "platform/win32/EditorChoiceDialog.hpp"
 #include "platform/win32/EditorDebugLogGate.hpp"
 #include "rendering/script_editor/ScriptEditorTextEncoding.hpp"
 #include "platform/win32/EditorMaterialParameterValueDialog.hpp"
@@ -4516,7 +4517,7 @@ void RunModalMessageLoopQuitSuite(Report& report) {
     struct DialogSearch {
         const wchar_t* className;
         bool found;
-    } search{ L"KBEditorMaterialParameterValueDialog", false };
+    } search{ L"KBEditorTextEntryDialog", false };
     EnumThreadWindows(
         GetCurrentThreadId(),
         [](HWND window, LPARAM parameter) -> BOOL {
@@ -4535,6 +4536,47 @@ void RunModalMessageLoopQuitSuite(Report& report) {
     MSG dialogQuit{};
     report.Check(PeekMessageW(&dialogQuit, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE) != 0 && dialogQuit.wParam == 3U,
         "Finding 21: the quit survives the parameter dialog");
+
+    report.Check(PostThreadMessageW(GetCurrentThreadId(), WM_APP, 0, 0) != 0,
+        "Finding 21: queue the choice-dialog pump canary");
+    PostQuitMessage(7);
+    const EditorChoiceDialogResult choice = EditorChoiceDialog::Show(nullptr, EditorChoiceDialogDescriptor{
+        .title = "Unsaved Scene",
+        .message = "Save the current changes?",
+        .supportingText = "Choice-dialog shutdown contract test.",
+        .primaryLabel = "Save",
+        .secondaryLabel = "Discard",
+        .cancelLabel = "Cancel",
+    });
+    MSG choiceCanary{};
+    const bool choiceCanaryLeft =
+        PeekMessageW(&choiceCanary, nullptr, WM_APP, WM_APP, PM_NOREMOVE) != 0 && choiceCanary.message == WM_APP;
+    report.Check(!choiceCanaryLeft, "Finding 21: the choice dialog really ran its message pump");
+    if (choiceCanaryLeft) {
+        static_cast<void>(PeekMessageW(&choiceCanary, nullptr, WM_APP, WM_APP, PM_REMOVE));
+    }
+    report.Check(choice == EditorChoiceDialogResult::Cancel,
+        "Finding 21: a choice dialog abandoned by a quit returns Cancel");
+    search.className = L"KBEditorChoiceDialog";
+    search.found = false;
+    EnumThreadWindows(
+        GetCurrentThreadId(),
+        [](HWND window, LPARAM parameter) -> BOOL {
+            DialogSearch& state = *reinterpret_cast<DialogSearch*>(parameter);
+            std::array<wchar_t, 64U> className{};
+            if (GetClassNameW(window, className.data(), static_cast<int>(className.size())) > 0 &&
+                std::wcscmp(className.data(), state.className) == 0) {
+                state.found = true;
+                return FALSE;
+            }
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&search));
+    report.Check(!search.found,
+        "Finding 21: the abandoned choice-dialog window is destroyed with its state");
+    MSG choiceQuit{};
+    report.Check(PeekMessageW(&choiceQuit, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE) != 0 && choiceQuit.wParam == 7U,
+        "Finding 21: the quit survives the choice dialog");
 }
 
 // Finding 15 (undocked panels must be resizable): the border strip already hit-tests as a resize edge, but

@@ -7,6 +7,9 @@
 #include "rendering/HeroIconKind.hpp"
 #include "rendering/HeroIconPainter.hpp"
 #include "rendering/ParticleEditorPanelLayout.hpp"
+#include "rendering/components/CategoryHeader.hpp"
+#include "rendering/components/DenseListRow.hpp"
+#include "rendering/components/PropertyRow.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -29,9 +32,6 @@
 namespace kb::editor {
 namespace {
 
-constexpr COLORREF kStudioBg = RGB(16, 17, 20);
-constexpr COLORREF kStudioChrome = RGB(24, 26, 31);
-constexpr COLORREF kStudioPanel = RGB(22, 24, 29);
 constexpr COLORREF kStudioSurface = RGB(32, 35, 42);
 constexpr COLORREF kStudioSelected = RGB(54, 46, 30);
 constexpr COLORREF kStudioBorder = RGB(58, 62, 72);
@@ -213,16 +213,21 @@ void DrawToggle(HDC dc, const RECT& rect, bool on) {
     FillEllipse(dc, knob, on ? RGB(214, 236, 222) : RGB(176, 182, 192), RGB(8, 8, 10));
 }
 
-void DrawSectionHeader(HDC dc, const RECT& rect, const char* label, bool expanded) {
-    GdiDrawing::FillRectColor(dc, rect, RGB(28, 31, 37));
-    RECT accent{rect.left, rect.top + 6, rect.left + 3, rect.bottom - 6};
-    FillRound(dc, accent, kStudioGold, kStudioGoldSoft, 1.5F);
-    RECT text = rect;
-    text.left += 12;
-    text.right -= 22;
-    DrawTextUtf8(dc, text, label, kStudioText, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    RECT chevron{rect.right - 20, rect.top, rect.right - 4, rect.bottom};
-    HeroIconPainter::Draw(dc, chevron, expanded ? HeroIconKind::ChevronDown : HeroIconKind::ChevronRight, kStudioMuted, 2);
+void DrawSectionHeader(
+    HDC dc,
+    const RECT& rect,
+    const EditorTheme& theme,
+    std::string_view label,
+    HeroIconKind icon,
+    bool expanded,
+    std::string_view trailingText = {}) {
+    CategoryHeader::Paint(dc, theme, CategoryHeaderDescriptor{
+        .bounds = rect,
+        .title = label,
+        .trailingText = trailingText,
+        .icon = icon,
+        .expanded = expanded,
+    });
 }
 
 void DrawRecipeTile(HDC dc, const RECT& rect, const kb::assets::AssetMetadata& recipe) {
@@ -337,22 +342,13 @@ void DrawSlider(HDC dc, const RECT& track, const RECT& fill, const RECT& thumb) 
     FillEllipse(dc, thumb, RGB(236, 214, 150), kStudioGold);
 }
 
-void DrawValueBox(HDC dc, const RECT& rect, const char* value, bool editable) {
-    FillRound(dc, rect, RGB(18, 20, 24), kStudioBorder, 4.0F);
-    RECT text = rect;
-    text.left += 4;
-    text.right -= 4;
-    DrawTextUtf8(dc, text, value, editable ? kStudioText : kStudioDim, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-}
-
 void DrawProperty(HDC dc, const ParticleEditorPropertyRowLayout& row,
-                  const kb::particle_editor::ParticleEditorPropertyRow& property) {
+                  const kb::particle_editor::ParticleEditorPropertyRow& property,
+                  const EditorTheme& theme) {
     if (row.bounds.right <= row.bounds.left) return;
-    GdiDrawing::FillRectColor(dc, row.bounds, RGB(26, 29, 34));
-    const UINT labelFormat = row.enumChipCount != 0U
-        ? DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS
-        : DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS;
-    DrawTextUtf8(dc, row.label, property.label.c_str(), kStudioMuted, labelFormat);
+    PropertyRow::PaintBackground(dc, theme, row.bounds, false);
+    PropertyRow::PaintLabel(
+        dc, theme, row.label, property.label, true, row.enumChipCount != 0U);
     using kb::particle_editor::ParticleEditorPropertyWidget;
     if (row.hasSlider) {
         DrawSlider(dc, row.sliderTrack, row.sliderFill, row.sliderThumb);
@@ -361,7 +357,8 @@ void DrawProperty(HDC dc, const ParticleEditorPropertyRowLayout& row,
             std::snprintf(display, sizeof(display), "%g", static_cast<double>(std::round(property.numericValue)));
         else
             std::snprintf(display, sizeof(display), "%.3g", static_cast<double>(property.numericValue));
-        DrawValueBox(dc, row.valueBox, display, property.editable);
+        PropertyRow::PaintValue(
+            dc, theme, row.valueBox, display, false, property.editable, PropertyRowValueAlignment::Right);
         return;
     }
     if (row.hasToggle) {
@@ -399,7 +396,8 @@ void DrawProperty(HDC dc, const ParticleEditorPropertyRowLayout& row,
         return;
     }
     if (row.valueBox.right > row.valueBox.left)
-        DrawValueBox(dc, row.valueBox, property.value.c_str(), property.editable);
+        PropertyRow::PaintValue(
+            dc, theme, row.valueBox, property.value, false, property.editable, PropertyRowValueAlignment::Right);
 }
 
 [[nodiscard]] unsigned int WindowDpi(HWND window) noexcept {
@@ -473,9 +471,9 @@ void ParticleEditorPanelRenderer::Paint(
     const auto& workspace = sceneContext.ParticleEditorWorkspace();
     const ParticleEditorPanelLayout layout = ParticleEditorPanelLayoutResolver::Resolve(
         content, rows, workspace.ComposerScrollOffset(), dpi, &inspector, recipes.size(), &workspace);
-    GdiDrawing::FillRectColor(dc, content, kStudioBg);
-    GdiDrawing::FillRectColor(dc, layout.toolbar, kStudioChrome);
-    GdiDrawing::FillRectColor(dc, layout.composer, kStudioPanel);
+    GdiDrawing::FillRectColor(dc, content, GdiDrawing::ToColorRef(theme.background));
+    GdiDrawing::FillRectColor(dc, layout.toolbar, GdiDrawing::ToColorRef(theme.chrome));
+    GdiDrawing::FillRectColor(dc, layout.composer, GdiDrawing::ToColorRef(theme.panel));
     GdiDrawing::FillRectColor(dc, layout.statusBar, RGB(14, 15, 18));
     const ScopedFont font{12, FW_SEMIBOLD};
     const ScopedGdiObject selectedFont(dc, font.handle);
@@ -504,8 +502,9 @@ void ParticleEditorPanelRenderer::Paint(
     const auto expanded = [&workspace](kb::particle_editor::ParticleEditorComposerSection section) noexcept {
         return workspace.ComposerSectionExpanded(section);
     };
-    DrawSectionHeader(dc, layout.composerHeader, "Emitters",
-        expanded(kb::particle_editor::ParticleEditorComposerSection::Emitters));
+    const std::string emitterCount = std::to_string(rows.size());
+    DrawSectionHeader(dc, layout.composerHeader, theme, "Emitters", HeroIconKind::Bolt,
+        expanded(kb::particle_editor::ParticleEditorComposerSection::Emitters), emitterCount);
     if (expanded(kb::particle_editor::ParticleEditorComposerSection::Emitters)) {
         DrawButton(dc, layout.addEmitter, "+  Add Emitter", ParticleEditorButtonTone::Primary,
             rows.size() < kb::scene::kParticleEffectMaxEmitters);
@@ -513,32 +512,35 @@ void ParticleEditorPanelRenderer::Paint(
     for (std::size_t index = 0U; index < layout.emitterRowCount; ++index) {
         const auto& rowLayout = layout.emitterRows[index];
         const auto& row = rows[index];
-        FillRound(dc, rowLayout.bounds, row.selected ? kStudioSelected : kStudioSurface,
-            row.selected ? kStudioGold : kStudioBorder, 6.0F);
-        DrawGrip(dc, rowLayout.dragGrip);
-        RECT nameRect = rowLayout.name;
-        nameRect.left += 4;
         const std::string& name = workspace.RenameActive() &&
                 workspace.RenameEmitterId() == row.emitterId
             ? workspace.RenameText() : row.name;
-        DrawTextUtf8(dc, nameRect, name.c_str(), row.enabled ? kStudioText : kStudioDim,
-            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        DenseListRow::Paint(dc, theme, DenseListRowDescriptor{
+            .bounds = rowLayout.bounds,
+            .title = name,
+            .contentLeftInset = static_cast<int>(rowLayout.name.left - rowLayout.bounds.left) + 4,
+            .contentRightInset = static_cast<int>(rowLayout.bounds.right - rowLayout.name.right),
+            .selected = row.selected,
+            .enabled = row.enabled,
+        });
+        DrawGrip(dc, rowLayout.dragGrip);
         DrawToggle(dc, rowLayout.enabledToggle, row.enabled);
         DrawMoveChevron(dc, rowLayout.moveUp, true);
         DrawMoveChevron(dc, rowLayout.moveDown, false);
         DrawIconButton(dc, rowLayout.remove, HeroIconKind::XMark, ParticleEditorButtonTone::Destructive);
     }
-    DrawSectionHeader(dc, layout.propertyHeader, "Emitter Settings",
+    DrawSectionHeader(dc, layout.propertyHeader, theme, "Emitter Settings", HeroIconKind::AdjustmentsHorizontal,
         expanded(kb::particle_editor::ParticleEditorComposerSection::Settings));
     for (std::size_t index = 0U; index < layout.propertyRowCount; ++index)
-        DrawProperty(dc, layout.propertyRows[index], inspector.properties[index]);
-    const std::string recipeTitle = "Recipes  " + std::to_string(recipes.size());
-    DrawSectionHeader(dc, layout.recipeHeader, recipeTitle.c_str(),
-        expanded(kb::particle_editor::ParticleEditorComposerSection::Recipes));
+        DrawProperty(dc, layout.propertyRows[index], inspector.properties[index], theme);
+    const std::string recipeCount = std::to_string(recipes.size());
+    DrawSectionHeader(dc, layout.recipeHeader, theme, "Recipes", HeroIconKind::ListBullet,
+        expanded(kb::particle_editor::ParticleEditorComposerSection::Recipes), recipeCount);
     for (std::size_t index = 0U; index < layout.recipeTileCount; ++index)
         DrawRecipeTile(dc, layout.recipeTiles[index], recipes[index]);
-    DrawSectionHeader(dc, layout.moduleHeader, "Behavior Modules",
-        expanded(kb::particle_editor::ParticleEditorComposerSection::Modules));
+    const std::string moduleCount = std::to_string(inspector.modules.size());
+    DrawSectionHeader(dc, layout.moduleHeader, theme, "Behavior Modules", HeroIconKind::RectangleGroup,
+        expanded(kb::particle_editor::ParticleEditorComposerSection::Modules), moduleCount);
     if (expanded(kb::particle_editor::ParticleEditorComposerSection::Modules)) {
         DrawButton(dc, layout.addModule, "+  Add Module", ParticleEditorButtonTone::Primary,
             inspector.modules.size() < kb::scene::kParticleEffectMaxModulesPerEmitter);
@@ -546,20 +548,22 @@ void ParticleEditorPanelRenderer::Paint(
     for (std::size_t index = 0U; index < layout.moduleRowCount; ++index) {
         const auto& module = inspector.modules[index];
         const auto& row = layout.moduleRows[index];
-        FillRound(dc, row.bounds, module.selected ? kStudioSelected : kStudioSurface,
-            module.selected ? kStudioGold : kStudioBorder, 6.0F);
+        DenseListRow::Paint(dc, theme, DenseListRowDescriptor{
+            .bounds = row.bounds,
+            .title = module.label,
+            .summary = module.summary,
+            .contentLeftInset = static_cast<int>(row.name.left - row.bounds.left) + 4,
+            .contentRightInset = static_cast<int>(row.bounds.right - row.name.right),
+            .selected = module.selected,
+            .enabled = module.enabled,
+        });
         DrawGrip(dc, row.dragGrip);
-        RECT name = row.name;
-        name.left += 4;
-        const std::string text = module.label + "  ·  " + module.summary;
-        DrawTextUtf8(dc, name, text.c_str(), module.enabled ? kStudioText : kStudioDim,
-            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         DrawToggle(dc, row.enabledToggle, module.enabled);
         DrawMoveChevron(dc, row.moveUp, true);
         DrawMoveChevron(dc, row.moveDown, false);
         DrawIconButton(dc, row.remove, HeroIconKind::XMark, ParticleEditorButtonTone::Destructive);
     }
-    DrawSectionHeader(dc, layout.outputHeader, "Renderer",
+    DrawSectionHeader(dc, layout.outputHeader, theme, "Renderer", HeroIconKind::Cube,
         expanded(kb::particle_editor::ParticleEditorComposerSection::Output));
     if (expanded(kb::particle_editor::ParticleEditorComposerSection::Output)) {
         DrawButton(dc, layout.materialPicker, "Material");
@@ -585,19 +589,20 @@ void ParticleEditorPanelRenderer::Paint(
         const RECT& target = layout.moduleRows[order].bounds;
         GdiDrawing::FillRectColor(dc, {target.left, target.top - 1, target.right, target.top + 2}, kStudioGold);
     }
-    const std::string dependencyTitle = "Dependencies  " + std::to_string(inspector.dependencies.size());
-    DrawSectionHeader(dc, layout.dependencyHeader, dependencyTitle.c_str(),
-        expanded(kb::particle_editor::ParticleEditorComposerSection::Dependencies));
+    const std::string dependencyCount = std::to_string(inspector.dependencies.size());
+    DrawSectionHeader(dc, layout.dependencyHeader, theme, "Dependencies", HeroIconKind::Folder,
+        expanded(kb::particle_editor::ParticleEditorComposerSection::Dependencies), dependencyCount);
     for (std::size_t index = 0U; index < layout.dependencyRowCount; ++index) {
-        FillRound(dc, layout.dependencyRows[index], kStudioSurface, kStudioBorder, 4.0F);
-        RECT text = layout.dependencyRows[index];
-        text.left += 8;
-        DrawTextUtf8(dc, text, inspector.dependencies[index].virtualPath.c_str(), RGB(168, 198, 226),
-            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        DenseListRow::Paint(dc, theme, DenseListRowDescriptor{
+            .bounds = layout.dependencyRows[index],
+            .title = inspector.dependencies[index].virtualPath,
+            .icon = HeroIconKind::Folder,
+            .showIcon = true,
+        });
     }
-    const std::string diagnosticTitle = "Diagnostics  " + std::to_string(inspector.diagnostics.size());
-    DrawSectionHeader(dc, layout.diagnosticHeader, diagnosticTitle.c_str(),
-        expanded(kb::particle_editor::ParticleEditorComposerSection::Diagnostics));
+    const std::string diagnosticCount = std::to_string(inspector.diagnostics.size());
+    DrawSectionHeader(dc, layout.diagnosticHeader, theme, "Diagnostics", HeroIconKind::CommandLine,
+        expanded(kb::particle_editor::ParticleEditorComposerSection::Diagnostics), diagnosticCount);
     for (std::size_t index = 0U; index < layout.diagnosticRowCount; ++index) {
         FillRound(dc, layout.diagnosticRows[index], RGB(48, 28, 30), RGB(128, 72, 76), 4.0F);
         RECT text = layout.diagnosticRows[index];
@@ -629,7 +634,6 @@ void ParticleEditorPanelRenderer::Paint(
     DrawTextUtf8(dc, status, statusText.c_str(), kStudioMuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     if (sceneViewport != nullptr)
         static_cast<void>(PresentViewport(*sceneViewport, host, content, panel, sceneContext, renderBackendSettings));
-    static_cast<void>(theme);
 }
 
 } // namespace kb::editor
