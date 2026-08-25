@@ -422,6 +422,7 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorModalWindowScope.hpp
     src/private/rendering/EditorMaterialThumbnailService.hpp
     src/private/rendering/EditorParticleThumbnailService.hpp
+    src/private/rendering/ParticleThumbnailTimeline.hpp
     src/private/rendering/MaterialPreviewAppearanceResolver.hpp
     src/private/rendering/MaterialPreviewTextureAverageColor.hpp
     src/private/platform/win32/EditorSceneDirtyPrompt.hpp

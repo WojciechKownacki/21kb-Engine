@@ -1,4 +1,5 @@
 #include "rendering/EditorParticleThumbnailService.hpp"
+#include "rendering/ParticleThumbnailTimeline.hpp"
 
 #include "app/EditorCrashBreadcrumbs.hpp"
 #include "diagnostics/EditorLagTrace.hpp"
@@ -7,6 +8,7 @@
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/ParticleEffectAsset.hpp"
+#include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneRenderFeedback.hpp"
@@ -38,13 +40,12 @@
 namespace kb::editor {
 namespace {
 
-constexpr std::uint32_t kThumbnailRenderSize = 512U;
+constexpr std::uint32_t kThumbnailRenderSize = 256U;
 constexpr int kThumbnailSize = 128;
-constexpr int kMinimumSimulationSteps = 6;
-constexpr int kMaximumSimulationSteps = 30;
-constexpr int kAnimationFrameCount = 3;
 constexpr int kCaptureFrameBudget = 600;
 constexpr std::size_t kImageWorkerCount = 2U;
+constexpr int kMaximumSimulationStepsPerEditorFrame = 4;
+constexpr double kSimulationBudgetMilliseconds = 1.5;
 constexpr std::uint64_t kParticleThumbnailCaptureViewportKey =
     0x5041525454484D42ULL;
 
@@ -67,7 +68,10 @@ struct ImageWorkItem {
     std::uint64_t assetId = 0U;
     std::uint64_t contentHash = 0U;
     int frame = 0;
+    std::uint64_t generation = 0U;
     std::filesystem::path cacheDirectory;
+    std::filesystem::path assetPath;
+    std::shared_ptr<std::atomic_bool> cancelled;
     kb::scene::SceneScreenCapturePixels pixels;
 };
 
@@ -76,8 +80,11 @@ struct ImageWorkResult {
     std::uint64_t assetId = 0U;
     std::uint64_t contentHash = 0U;
     int frame = 0;
+    std::uint64_t generation = 0U;
     bool succeeded = false;
     bool cacheWriteSucceeded = true;
+    std::shared_ptr<const kb::scene::ParticleEffectAsset> asset;
+    ParticleThumbnailTimelinePlan timeline{};
     std::vector<EditorParticleThumbnailImage> frames;
 };
 
@@ -102,7 +109,7 @@ struct ImageWorkResult {
     int frame) {
     return cacheDirectory /
         ("particle_" + Hex64(assetId) + "_" + Hex64(contentHash) +
-            "_f" + std::to_string(frame) + "_v4.kbthumb");
+            "_f" + std::to_string(frame) + "_v5.kbthumb");
 }
 
 constexpr std::array<char, 8U> kThumbnailCacheMagic{
@@ -168,7 +175,7 @@ constexpr std::array<char, 8U> kThumbnailCacheMagic{
     output.close();
     if (!written || MoveFileExW(
             temporary.c_str(), path.c_str(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == 0) {
+            MOVEFILE_REPLACE_EXISTING) == 0) {
         std::error_code removeError;
         std::filesystem::remove(temporary, removeError);
         return false;
@@ -449,8 +456,13 @@ void Downsample(EditorParticleThumbnailImage& image, int target) {
 struct EditorParticleThumbnailService::Impl {
     struct Entry {
         std::uint64_t contentHash = 0U;
+        std::uint64_t generation = 0U;
         std::filesystem::path cacheDirectory;
         EntryState state = EntryState::CacheLoading;
+        std::shared_ptr<const kb::scene::ParticleEffectAsset> asset;
+        std::shared_ptr<std::atomic_bool> cancelled =
+            std::make_shared<std::atomic_bool>(false);
+        ParticleThumbnailTimelinePlan timeline{};
         std::vector<EditorParticleThumbnailImage> frames;
         int processedFrames = 0;
     };
@@ -473,14 +485,15 @@ struct EditorParticleThumbnailService::Impl {
     std::unique_ptr<kb::particle_editor::ParticlePreviewSession> session;
     kb::assets::AssetId activeAsset{};
     std::uint64_t activeContentHash = 0U;
+    std::uint64_t activeGeneration = 0U;
     int simulatedSteps = 0;
-    int targetSteps = kMinimumSimulationSteps;
-    std::array<int, kAnimationFrameCount> captureSteps{};
+    std::vector<int> captureSteps;
     int nextFrame = 0;
     bool fullSyncRequired = true;
     bool presented = false;
     Capture capture{};
     std::uint64_t revision = 1U;
+    std::uint64_t nextGeneration = 1U;
 
     Impl() {
         for (std::thread& worker : imageWorkers) {
@@ -517,33 +530,78 @@ struct EditorParticleThumbnailService::Impl {
                 .assetId = work.assetId,
                 .contentHash = work.contentHash,
                 .frame = work.frame,
+                .generation = work.generation,
             };
             const auto workStarted = std::chrono::steady_clock::now();
             double decodeMs = 0.0;
             double displayMs = 0.0;
             double downsampleMs = 0.0;
             double cacheMs = 0.0;
-            if (work.kind == ImageWorkKind::LoadCache) {
+            const auto cancelled = [&work]() noexcept {
+                return work.cancelled != nullptr &&
+                    work.cancelled->load(std::memory_order_acquire);
+            };
+            if (cancelled()) {
+                result.succeeded = false;
+            } else if (work.kind == ImageWorkKind::LoadCache) {
                 const auto cacheStarted = std::chrono::steady_clock::now();
                 std::error_code directoryError;
                 std::filesystem::create_directories(
                     work.cacheDirectory,
                     directoryError);
-                result.frames.reserve(kAnimationFrameCount);
-                for (int frame = 0; frame < kAnimationFrameCount; ++frame) {
-                    EditorParticleThumbnailImage image;
-                    if (!LoadThumbnailCache(
-                            ThumbnailPath(
-                                work.cacheDirectory, work.assetId,
-                                work.contentHash, frame),
-                            image)) {
-                        result.frames.clear();
-                        break;
+                kb::scene::ParticleEffectLoadResult loaded =
+                    kb::scene::ParticleEffectAssetIO::LoadDetailed(
+                        work.assetPath);
+                if (loaded.Succeeded()) {
+                    result.asset = std::make_shared<
+                        const kb::scene::ParticleEffectAsset>(
+                        std::move(*loaded.asset));
+                    result.timeline = ParticleThumbnailTimeline::Plan(
+                        *result.asset);
+                    if (result.timeline.usesBoundedPreviewWindow) {
+                        std::ostringstream detail;
+                        detail << "asset=" << work.assetId
+                               << " authoredSeconds="
+                               << result.asset->durationSeconds
+                               << " previewSeconds="
+                               << result.timeline.durationSeconds;
+                        diagnostics::EditorLagTrace::Marker(
+                            "particle-thumbnail-bounded-window",
+                            detail.str());
                     }
-                    result.frames.push_back(std::move(image));
+                    result.frames.reserve(result.timeline.frameCount);
+                    for (std::uint32_t frame = 0U;
+                         frame < result.timeline.frameCount; ++frame) {
+                        if (cancelled()) {
+                            result.frames.clear();
+                            break;
+                        }
+                        EditorParticleThumbnailImage image;
+                        if (!LoadThumbnailCache(
+                                ThumbnailPath(
+                                    work.cacheDirectory, work.assetId,
+                                    work.contentHash,
+                                    static_cast<int>(frame)),
+                                image)) {
+                            result.frames.clear();
+                            break;
+                        }
+                        result.frames.push_back(std::move(image));
+                    }
+                } else {
+                    std::ostringstream detail;
+                    detail << "asset=" << work.assetId
+                           << " path=" << work.assetPath.generic_string();
+                    if (!loaded.diagnostics.empty()) {
+                        detail << " reason="
+                               << loaded.diagnostics.front().message;
+                    }
+                    diagnostics::EditorLagTrace::Marker(
+                        "particle-thumbnail-load-failed",
+                        detail.str());
                 }
-                result.succeeded =
-                    result.frames.size() == kAnimationFrameCount;
+                result.succeeded = result.asset != nullptr &&
+                    result.frames.size() == result.timeline.frameCount;
                 cacheMs = std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - cacheStarted).count();
             } else {
@@ -554,7 +612,7 @@ struct EditorParticleThumbnailService::Impl {
                     std::move(work.pixels), image, displayEncoded);
                 decodeMs = std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - decodeStarted).count();
-                if (result.succeeded) {
+                if (result.succeeded && !cancelled()) {
                     const auto downsampleStarted =
                         std::chrono::steady_clock::now();
                     Downsample(image, kThumbnailSize);
@@ -566,11 +624,15 @@ struct EditorParticleThumbnailService::Impl {
                     displayMs = std::chrono::duration<double, std::milli>(
                         std::chrono::steady_clock::now() - displayStarted).count();
                     const auto cacheStarted = std::chrono::steady_clock::now();
-                    result.cacheWriteSucceeded = SaveThumbnailCache(
-                        ThumbnailPath(
-                            work.cacheDirectory, work.assetId,
-                            work.contentHash, work.frame),
-                        image);
+                    if (!cancelled()) {
+                        result.cacheWriteSucceeded = SaveThumbnailCache(
+                            ThumbnailPath(
+                                work.cacheDirectory, work.assetId,
+                                work.contentHash, work.frame),
+                            image);
+                    } else {
+                        result.succeeded = false;
+                    }
                     cacheMs = std::chrono::duration<double, std::milli>(
                         std::chrono::steady_clock::now() - cacheStarted).count();
                     result.frames.push_back(std::move(image));
@@ -608,6 +670,10 @@ struct EditorParticleThumbnailService::Impl {
     }
 
     void StopImageWorkers() noexcept {
+        for (auto& [assetId, entry] : entries) {
+            static_cast<void>(assetId);
+            entry.cancelled->store(true, std::memory_order_release);
+        }
         {
             std::scoped_lock lock{imageMutex};
             stopImageWorkers = true;
@@ -624,6 +690,34 @@ struct EditorParticleThumbnailService::Impl {
         pendingImageWork.store(0U, std::memory_order_release);
     }
 
+    void CancelOutstandingImageWork(bool includeReadyEntries) noexcept {
+        for (auto& [assetId, entry] : entries) {
+            static_cast<void>(assetId);
+            if (includeReadyEntries || entry.state != EntryState::Ready) {
+                entry.cancelled->store(true, std::memory_order_release);
+            }
+        }
+        std::uint32_t discarded = 0U;
+        {
+            std::scoped_lock lock{imageMutex};
+            const auto queuedBefore = imageWork.size();
+            std::erase_if(imageWork, [](const ImageWorkItem& work) {
+                return work.cancelled != nullptr &&
+                    work.cancelled->load(std::memory_order_acquire);
+            });
+            discarded += static_cast<std::uint32_t>(
+                queuedBefore - imageWork.size());
+            // Results have already completed their worker slot. All results
+            // present during cancellation belong to entries that are about to
+            // be removed or invalidated, so retire their accounting now.
+            discarded += static_cast<std::uint32_t>(imageResults.size());
+            imageResults.clear();
+        }
+        if (discarded != 0U) {
+            pendingImageWork.fetch_sub(discarded, std::memory_order_acq_rel);
+        }
+    }
+
     void PumpImageResults() {
         std::deque<ImageWorkResult> completed;
         {
@@ -634,15 +728,21 @@ struct EditorParticleThumbnailService::Impl {
             pendingImageWork.fetch_sub(1U, std::memory_order_acq_rel);
             const auto found = entries.find(result.assetId);
             if (found == entries.end() ||
-                found->second.contentHash != result.contentHash) {
+                found->second.contentHash != result.contentHash ||
+                found->second.generation != result.generation) {
                 continue;
             }
             Entry& entry = found->second;
             if (result.kind == ImageWorkKind::LoadCache) {
                 if (entry.state != EntryState::CacheLoading) continue;
-                if (result.succeeded) {
+                entry.asset = std::move(result.asset);
+                entry.timeline = result.timeline;
+                if (entry.asset == nullptr) {
+                    entry.state = EntryState::Failed;
+                } else if (result.succeeded) {
                     entry.frames = std::move(result.frames);
-                    entry.processedFrames = kAnimationFrameCount;
+                    entry.processedFrames = static_cast<int>(
+                        entry.timeline.frameCount);
                     entry.state = EntryState::Ready;
                 } else {
                     entry.state = EntryState::Queued;
@@ -661,7 +761,8 @@ struct EditorParticleThumbnailService::Impl {
                 continue;
             }
             if (!result.succeeded || result.frames.size() != 1U ||
-                result.frame < 0 || result.frame >= kAnimationFrameCount) {
+                result.frame < 0 ||
+                result.frame >= static_cast<int>(entry.timeline.frameCount)) {
                 entry.state = EntryState::Failed;
                 ++revision;
                 continue;
@@ -671,8 +772,8 @@ struct EditorParticleThumbnailService::Impl {
                     "particle_thumbnail", "cache write failed",
                     result.assetId);
             }
-            if (entry.frames.size() != kAnimationFrameCount) {
-                entry.frames.resize(kAnimationFrameCount);
+            if (entry.frames.size() != entry.timeline.frameCount) {
+                entry.frames.resize(entry.timeline.frameCount);
             }
             EditorParticleThumbnailImage& target =
                 entry.frames[static_cast<std::size_t>(result.frame)];
@@ -680,7 +781,8 @@ struct EditorParticleThumbnailService::Impl {
                 target = std::move(result.frames.front());
                 ++entry.processedFrames;
             }
-            if (entry.processedFrames == kAnimationFrameCount) {
+            if (entry.processedFrames == static_cast<int>(
+                    entry.timeline.frameCount)) {
                 entry.state = EntryState::Ready;
                 EditorCrashBreadcrumbs::WriteValue(
                     "particle_thumbnail", "capture sequence ready",
@@ -703,7 +805,9 @@ struct EditorParticleThumbnailService::Impl {
         session.reset();
         activeAsset = {};
         activeContentHash = 0U;
+        activeGeneration = 0U;
         simulatedSteps = 0;
+        captureSteps.clear();
         nextFrame = 0;
         fullSyncRequired = true;
         presented = false;
@@ -717,7 +821,9 @@ struct EditorParticleThumbnailService::Impl {
         }
         activeAsset = {};
         activeContentHash = 0U;
+        activeGeneration = 0U;
         simulatedSteps = 0;
+        captureSteps.clear();
         nextFrame = 0;
         capture = {};
         ++revision;
@@ -745,12 +851,13 @@ struct EditorParticleThumbnailService::Impl {
                 ++revision;
                 continue;
             }
-            const auto asset = manager.Load<kb::scene::ParticleEffectAsset>(id);
-            if (!asset.IsLoaded()) {
+            if (entry->second.asset == nullptr) {
                 entry->second.state = EntryState::Failed;
                 ++revision;
                 continue;
             }
+            const kb::scene::ParticleEffectAsset& asset =
+                *entry->second.asset;
 
             kb::particle_editor::ParticleEditorResult started;
             if (session == nullptr) {
@@ -758,11 +865,12 @@ struct EditorParticleThumbnailService::Impl {
                     kb::particle_editor::ParticlePreviewSession>();
                 started = session->Start(
                     sceneContext.Project(), manager.Registry(), id,
-                    metadata->virtualPath, *asset);
+                    metadata->virtualPath, asset);
                 fullSyncRequired = true;
                 presented = false;
             } else {
-                started = session->PublishWorkingCopy(*asset);
+                started = session->RetargetWorkingCopy(
+                    id, metadata->virtualPath, asset);
             }
             if (!started.Succeeded()) {
                 entry->second.state = EntryState::Failed;
@@ -773,22 +881,20 @@ struct EditorParticleThumbnailService::Impl {
 
             activeAsset = id;
             activeContentHash = metadata->contentHash;
+            activeGeneration = entry->second.generation;
             simulatedSteps = 0;
-            targetSteps = std::clamp(
-                static_cast<int>(std::lround(
-                    asset->durationSeconds * 0.35F /
-                    kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds)),
-                kMinimumSimulationSteps,
-                kMaximumSimulationSteps);
-            for (int frame = 0; frame < kAnimationFrameCount; ++frame) {
-                captureSteps[static_cast<std::size_t>(frame)] =
-                    std::max(1, ((frame + 1) * targetSteps) /
-                        kAnimationFrameCount);
+            captureSteps.resize(entry->second.timeline.frameCount);
+            for (std::uint32_t frame = 0U;
+                 frame < entry->second.timeline.frameCount; ++frame) {
+                captureSteps[frame] = static_cast<int>(
+                    ParticleThumbnailTimeline::CaptureStep(
+                        entry->second.timeline, frame));
             }
             nextFrame = 0;
             capture = {};
             entry->second.frames.assign(
-                kAnimationFrameCount, EditorParticleThumbnailImage{});
+                entry->second.timeline.frameCount,
+                EditorParticleThumbnailImage{});
             entry->second.processedFrames = 0;
             entry->second.state = EntryState::Capturing;
             EditorCrashBreadcrumbs::WriteValue(
@@ -799,11 +905,12 @@ struct EditorParticleThumbnailService::Impl {
         return false;
     }
 
-    void BeginPresent(
+    void BeginCaptureFrame(
         EditorSceneBgfxViewport& viewport,
         HWND host,
-        const RECT& stagingRect) {
-        viewport.BeginPaintLayout(host);
+        const RECT& stagingRect,
+        bool ownsPaintLayout) {
+        if (ownsPaintLayout) viewport.BeginPaintLayout(host);
         viewport.Present(
             host, stagingRect, session->PreviewScene(),
             ThumbnailSettings(*session, fullSyncRequired));
@@ -811,8 +918,135 @@ struct EditorParticleThumbnailService::Impl {
         presented = true;
     }
 
-    static void EndPresent(EditorSceneBgfxViewport& viewport) {
-        viewport.EndPaintLayout();
+    [[nodiscard]] bool Tick(
+        EditorSceneContext& sceneContext,
+        EditorSceneBgfxViewport& viewport,
+        HWND host,
+        const RECT& stagingRect,
+        bool ownsPaintLayout) {
+        PumpImageResults();
+        if (host == nullptr || IsWindow(host) == 0 ||
+            stagingRect.right <= stagingRect.left ||
+            stagingRect.bottom <= stagingRect.top) {
+            return false;
+        }
+        if (activeAsset.IsValid()) {
+            const auto active = entries.find(activeAsset.value);
+            if (active == entries.end() ||
+                active->second.contentHash != activeContentHash ||
+                active->second.generation != activeGeneration) {
+                ResetSession(&viewport);
+            }
+        }
+        if (!activeAsset.IsValid() &&
+            !BeginNext(sceneContext, viewport)) {
+            return pendingImageWork.load(std::memory_order_acquire) != 0U;
+        }
+        if (session == nullptr) return false;
+
+        auto entry = entries.find(activeAsset.value);
+        if (entry == entries.end()) {
+            FinishActive(viewport, EntryState::Failed);
+            return true;
+        }
+        if (entry->second.state == EntryState::Failed) {
+            FinishActive(viewport, EntryState::Failed);
+            return true;
+        }
+
+        if (capture.id != 0U) {
+            const kb::scene::SceneScreenCaptureStatus status =
+                kb::scene::SceneRenderFeedback::ScreenCaptureStatus(
+                    session->PreviewScene(), capture.id);
+            if (status == kb::scene::SceneScreenCaptureStatus::Completed) {
+                std::optional<kb::scene::SceneScreenCapturePixels> pixels =
+                    kb::scene::SceneRenderFeedback::TakeScreenCapturePixels(
+                        session->PreviewScene(), capture.id);
+                if (!pixels.has_value()) {
+                    FinishActive(viewport, EntryState::Failed);
+                    return true;
+                }
+                EnqueueImageWork(ImageWorkItem{
+                    .kind = ImageWorkKind::ProcessCapture,
+                    .assetId = activeAsset.value,
+                    .contentHash = activeContentHash,
+                    .frame = nextFrame,
+                    .generation = activeGeneration,
+                    .cacheDirectory = entry->second.cacheDirectory,
+                    .cancelled = entry->second.cancelled,
+                    .pixels = std::move(*pixels),
+                });
+                ++nextFrame;
+                capture = {};
+                ++revision;
+                if (nextFrame >= static_cast<int>(
+                        entry->second.timeline.frameCount)) {
+                    FinishActive(viewport, EntryState::Processing);
+                }
+                return true;
+            }
+            ++capture.framesWaited;
+            if (status == kb::scene::SceneScreenCaptureStatus::Failed ||
+                capture.framesWaited > kCaptureFrameBudget) {
+                EditorCrashBreadcrumbs::WriteValue(
+                    "particle_thumbnail",
+                    status == kb::scene::SceneScreenCaptureStatus::Failed
+                        ? "capture failed"
+                        : "capture timed out",
+                    activeAsset.value);
+                FinishActive(viewport, EntryState::Failed);
+                return true;
+            }
+            const std::uint32_t completedFrame =
+                viewport.RendererCompletedFrame();
+            if (ownsPaintLayout && completedFrame ==
+                    capture.lastObservedRendererFrame) {
+                static_cast<void>(viewport.AdvanceAsyncReadbacks());
+            }
+            capture.lastObservedRendererFrame =
+                viewport.RendererCompletedFrame();
+            return true;
+        }
+
+        if (nextFrame < 0 ||
+            nextFrame >= static_cast<int>(captureSteps.size())) {
+            FinishActive(viewport, EntryState::Failed);
+            return true;
+        }
+        const int captureAt = captureSteps[static_cast<std::size_t>(nextFrame)];
+        const auto simulationStarted = std::chrono::steady_clock::now();
+        int stepsThisFrame = 0;
+        while (simulatedSteps < captureAt &&
+               stepsThisFrame < kMaximumSimulationStepsPerEditorFrame) {
+            const auto ticked = session->Tick(
+                kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds);
+            if (!ticked.Succeeded()) {
+                FinishActive(viewport, EntryState::Failed);
+                return true;
+            }
+            ++simulatedSteps;
+            ++stepsThisFrame;
+            if (std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - simulationStarted)
+                    .count() >= kSimulationBudgetMilliseconds) {
+                break;
+            }
+        }
+        if (simulatedSteps < captureAt) return true;
+
+        BeginCaptureFrame(
+            viewport, host, stagingRect, ownsPaintLayout);
+        const std::uint64_t captureId =
+            kb::scene::SceneRenderFeedback::RequestScreenCapturePixels(
+                session->PreviewScene());
+        if (ownsPaintLayout) viewport.EndPaintLayout();
+        if (captureId == 0U) return true;
+        capture = Capture{
+            .id = captureId,
+            .framesWaited = 0,
+            .lastObservedRendererFrame = viewport.RendererCompletedFrame(),
+        };
+        return true;
     }
 };
 
@@ -831,8 +1065,11 @@ EditorParticleThumbnailService::ThumbnailFor(
     auto found = impl_->entries.find(metadata.id.value);
     if (found != impl_->entries.end() &&
         found->second.contentHash != metadata.contentHash) {
+        found->second.cancelled->store(true, std::memory_order_release);
+        const std::uint64_t generation = impl_->nextGeneration++;
         found->second = Impl::Entry{
             .contentHash = metadata.contentHash,
+            .generation = generation,
             .cacheDirectory = ThumbnailCacheDirectory(),
             .state = EntryState::CacheLoading,
         };
@@ -840,12 +1077,17 @@ EditorParticleThumbnailService::ThumbnailFor(
             .kind = ImageWorkKind::LoadCache,
             .assetId = metadata.id.value,
             .contentHash = metadata.contentHash,
+            .generation = generation,
             .cacheDirectory = found->second.cacheDirectory,
+            .assetPath = metadata.physicalPath,
+            .cancelled = found->second.cancelled,
         });
         ++impl_->revision;
     } else if (found == impl_->entries.end()) {
+        const std::uint64_t generation = impl_->nextGeneration++;
         Impl::Entry entry{
             .contentHash = metadata.contentHash,
+            .generation = generation,
             .cacheDirectory = ThumbnailCacheDirectory(),
             .state = EntryState::CacheLoading,
         };
@@ -854,7 +1096,10 @@ EditorParticleThumbnailService::ThumbnailFor(
             .kind = ImageWorkKind::LoadCache,
             .assetId = metadata.id.value,
             .contentHash = metadata.contentHash,
+            .generation = generation,
             .cacheDirectory = found->second.cacheDirectory,
+            .assetPath = metadata.physicalPath,
+            .cancelled = found->second.cancelled,
         });
         ++impl_->revision;
     }
@@ -873,116 +1118,114 @@ EditorParticleThumbnailService::ThumbnailFor(
         &*available;
 }
 
+const EditorParticleThumbnailImage*
+EditorParticleThumbnailService::ThumbnailForTime(
+    const kb::assets::AssetMetadata& metadata,
+    double elapsedSeconds) {
+    static_cast<void>(ThumbnailFor(metadata, 0U));
+    const auto found = impl_->entries.find(metadata.id.value);
+    if (found == impl_->entries.end() ||
+        found->second.contentHash != metadata.contentHash ||
+        found->second.frames.empty()) {
+        return nullptr;
+    }
+    const Impl::Entry& entry = found->second;
+    const std::uint32_t frame = entry.state == EntryState::Ready
+        ? ParticleThumbnailTimeline::FrameAtSeconds(
+              entry.timeline, elapsedSeconds)
+        : 0U;
+    if (frame < entry.frames.size() &&
+        !entry.frames[frame].bgra.empty()) {
+        return &entry.frames[frame];
+    }
+    const auto available = std::ranges::find_if(
+        entry.frames,
+        [](const EditorParticleThumbnailImage& image) {
+            return !image.bgra.empty();
+        });
+    return available == entry.frames.end() ? nullptr : &*available;
+}
+
+std::uint32_t EditorParticleThumbnailService::AnimationFrameForTime(
+    const kb::assets::AssetMetadata& metadata,
+    double elapsedSeconds) const noexcept {
+    const auto found = impl_->entries.find(metadata.id.value);
+    if (found == impl_->entries.end() ||
+        found->second.contentHash != metadata.contentHash ||
+        found->second.state != EntryState::Ready) {
+        return 0U;
+    }
+    return ParticleThumbnailTimeline::FrameAtSeconds(
+        found->second.timeline, elapsedSeconds);
+}
+
+std::uint32_t EditorParticleThumbnailService::AnimationFrameCount(
+    const kb::assets::AssetMetadata& metadata) const noexcept {
+    const auto found = impl_->entries.find(metadata.id.value);
+    return found == impl_->entries.end() ||
+            found->second.contentHash != metadata.contentHash ||
+            found->second.state != EntryState::Ready
+        ? 0U
+        : static_cast<std::uint32_t>(found->second.frames.size());
+}
+
+float EditorParticleThumbnailService::AnimationDurationSeconds(
+    const kb::assets::AssetMetadata& metadata) const noexcept {
+    const auto found = impl_->entries.find(metadata.id.value);
+    return found == impl_->entries.end() ||
+            found->second.contentHash != metadata.contentHash
+        ? 0.0F
+        : found->second.timeline.durationSeconds;
+}
+
 bool EditorParticleThumbnailService::Tick(
     EditorSceneContext& sceneContext,
     EditorSceneBgfxViewport& viewport,
     HWND host,
     const RECT& stagingRect) {
-    impl_->PumpImageResults();
-    if (host == nullptr || IsWindow(host) == 0 ||
-        stagingRect.right <= stagingRect.left ||
-        stagingRect.bottom <= stagingRect.top) {
-        return false;
+    const auto started = std::chrono::steady_clock::now();
+    const bool progressed = impl_->Tick(
+        sceneContext, viewport, host, stagingRect, true);
+    const double elapsedMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - started).count();
+    if (elapsedMs >= 2.0) {
+        std::ostringstream detail;
+        detail << "mode=standalone progressed=" << (progressed ? 1 : 0)
+               << " active=" << (impl_->activeAsset.IsValid() ? 1 : 0)
+               << " queued=" << impl_->queue.size()
+               << " worker="
+               << impl_->pendingImageWork.load(std::memory_order_acquire);
+        diagnostics::EditorLagTrace::Slow(
+            "particle-thumbnail-scheduler",
+            diagnostics::EditorLagTrace::NextEventId(),
+            elapsedMs, detail.str(), 2.0);
     }
-    if (impl_->activeAsset.IsValid()) {
-        const auto active = impl_->entries.find(impl_->activeAsset.value);
-        if (active == impl_->entries.end() ||
-            active->second.contentHash != impl_->activeContentHash) {
-            impl_->ResetSession(&viewport);
-        }
-    }
-    if (!impl_->activeAsset.IsValid() &&
-        !impl_->BeginNext(sceneContext, viewport)) {
-        return impl_->pendingImageWork.load(std::memory_order_acquire) != 0U;
-    }
-    if (impl_->session == nullptr) return false;
+    return progressed;
+}
 
-    auto entry = impl_->entries.find(impl_->activeAsset.value);
-    if (entry == impl_->entries.end()) {
-        impl_->FinishActive(viewport, EntryState::Failed);
-        return true;
+bool EditorParticleThumbnailService::TickWithinFrame(
+    EditorSceneContext& sceneContext,
+    EditorSceneBgfxViewport& viewport,
+    HWND host,
+    const RECT& stagingRect) {
+    const auto started = std::chrono::steady_clock::now();
+    const bool progressed = impl_->Tick(
+        sceneContext, viewport, host, stagingRect, false);
+    const double elapsedMs = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - started).count();
+    if (elapsedMs >= 2.0) {
+        std::ostringstream detail;
+        detail << "mode=shared-frame progressed=" << (progressed ? 1 : 0)
+               << " active=" << (impl_->activeAsset.IsValid() ? 1 : 0)
+               << " queued=" << impl_->queue.size()
+               << " worker="
+               << impl_->pendingImageWork.load(std::memory_order_acquire);
+        diagnostics::EditorLagTrace::Slow(
+            "particle-thumbnail-scheduler",
+            diagnostics::EditorLagTrace::NextEventId(),
+            elapsedMs, detail.str(), 2.0);
     }
-    if (entry->second.state == EntryState::Failed) {
-        impl_->FinishActive(viewport, EntryState::Failed);
-        return true;
-    }
-
-    if (impl_->capture.id != 0U) {
-        const kb::scene::SceneScreenCaptureStatus status =
-            kb::scene::SceneRenderFeedback::ScreenCaptureStatus(
-                impl_->session->PreviewScene(), impl_->capture.id);
-        if (status == kb::scene::SceneScreenCaptureStatus::Completed) {
-            std::optional<kb::scene::SceneScreenCapturePixels> pixels =
-                kb::scene::SceneRenderFeedback::TakeScreenCapturePixels(
-                    impl_->session->PreviewScene(), impl_->capture.id);
-            if (!pixels.has_value()) {
-                impl_->FinishActive(viewport, EntryState::Failed);
-                return true;
-            }
-            impl_->EnqueueImageWork(ImageWorkItem{
-                .kind = ImageWorkKind::ProcessCapture,
-                .assetId = impl_->activeAsset.value,
-                .contentHash = impl_->activeContentHash,
-                .frame = impl_->nextFrame,
-                .cacheDirectory = entry->second.cacheDirectory,
-                .pixels = std::move(*pixels),
-            });
-            ++impl_->nextFrame;
-            impl_->capture = {};
-            ++impl_->revision;
-            if (impl_->nextFrame >= kAnimationFrameCount) {
-                impl_->FinishActive(viewport, EntryState::Processing);
-            }
-            return true;
-        }
-        ++impl_->capture.framesWaited;
-        if (status == kb::scene::SceneScreenCaptureStatus::Failed ||
-            impl_->capture.framesWaited > kCaptureFrameBudget) {
-            EditorCrashBreadcrumbs::WriteValue(
-                "particle_thumbnail",
-                status == kb::scene::SceneScreenCaptureStatus::Failed
-                    ? "capture failed"
-                    : "capture timed out",
-                impl_->activeAsset.value);
-            impl_->FinishActive(viewport, EntryState::Failed);
-            return true;
-        }
-        const std::uint32_t completedFrame =
-            viewport.RendererCompletedFrame();
-        if (completedFrame ==
-            impl_->capture.lastObservedRendererFrame) {
-            static_cast<void>(viewport.AdvanceAsyncReadbacks());
-        }
-        impl_->capture.lastObservedRendererFrame =
-            viewport.RendererCompletedFrame();
-        return true;
-    }
-
-    const int captureAt = impl_->captureSteps[
-        static_cast<std::size_t>(impl_->nextFrame)];
-    if (impl_->simulatedSteps < captureAt) {
-        const auto ticked = impl_->session->Tick(
-            kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds);
-        if (!ticked.Succeeded()) {
-            impl_->FinishActive(viewport, EntryState::Failed);
-            return true;
-        }
-        ++impl_->simulatedSteps;
-    }
-    if (impl_->simulatedSteps < captureAt) return true;
-
-    impl_->BeginPresent(viewport, host, stagingRect);
-    const std::uint64_t captureId =
-        kb::scene::SceneRenderFeedback::RequestScreenCapturePixels(
-            impl_->session->PreviewScene());
-    impl_->EndPresent(viewport);
-    if (captureId == 0U) return true;
-    impl_->capture = Impl::Capture{
-        .id = captureId,
-        .framesWaited = 0,
-        .lastObservedRendererFrame = viewport.RendererCompletedFrame(),
-    };
-    return true;
+    return progressed;
 }
 
 bool EditorParticleThumbnailService::HasPendingWork() const noexcept {
@@ -997,7 +1240,9 @@ std::uint64_t EditorParticleThumbnailService::Revision() const noexcept {
 void EditorParticleThumbnailService::CancelPendingWork(
     EditorSceneBgfxViewport* viewport) noexcept {
     const bool changed = impl_->activeAsset.IsValid() ||
-        !impl_->queue.empty();
+        !impl_->queue.empty() ||
+        impl_->pendingImageWork.load(std::memory_order_acquire) != 0U;
+    impl_->CancelOutstandingImageWork(false);
     impl_->ResetSession(viewport);
     impl_->queue.clear();
     for (auto entry = impl_->entries.begin();
@@ -1013,6 +1258,7 @@ void EditorParticleThumbnailService::CancelPendingWork(
 
 void EditorParticleThumbnailService::Clear(
     EditorSceneBgfxViewport* viewport) noexcept {
+    impl_->CancelOutstandingImageWork(true);
     impl_->ResetSession(viewport);
     impl_->entries.clear();
     impl_->queue.clear();

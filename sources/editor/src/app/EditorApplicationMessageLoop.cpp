@@ -24,6 +24,7 @@
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "rendering/ParticleEditorPanelRenderer.hpp"
 #include "rendering/EditorMaterialThumbnailService.hpp"
+#include "rendering/EditorParticleThumbnailService.hpp"
 #include "rendering/EditorMeshPreviewService.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/script_editor/ScriptEditorWindow.hpp"
@@ -425,11 +426,43 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
         state.floatingWindows,
         state.metrics);
     const std::optional<RECT>& thumbnailHost = assets.has_value() ? assets : inspector;
+    std::optional<RECT> particleThumbnailHost = thumbnailHost;
+    if (!particleThumbnailHost.has_value()) {
+        RECT client{};
+        if (GetClientRect(state.window, &client) != 0 &&
+            client.right > client.left && client.bottom > client.top) {
+            particleThumbnailHost = RECT{
+                std::max(client.left, client.right - 8),
+                std::max(client.top, client.bottom - 8),
+                client.right,
+                client.bottom,
+            };
+        }
+    }
+    if (particleThumbnailHost.has_value() &&
+        EditorParticleThumbnailCache().HasPendingWork()) {
+        const RECT staging{
+            particleThumbnailHost->left,
+            particleThumbnailHost->top,
+            std::min(
+                particleThumbnailHost->right,
+                particleThumbnailHost->left + 8),
+            std::min(
+                particleThumbnailHost->bottom,
+                particleThumbnailHost->top + 8),
+        };
+        static_cast<void>(EditorParticleThumbnailCache().TickWithinFrame(
+            state.sceneContext,
+            state.sceneViewport,
+            state.window,
+            staging));
+        thumbnailPresented = true;
+    }
     if (thumbnailHost.has_value() && EditorMaterialThumbnailCache().HasPendingWork()) {
         const RECT staging{
-            thumbnailHost->left,
-            thumbnailHost->top,
             thumbnailHost->left + 8,
+            thumbnailHost->top,
+            thumbnailHost->left + 16,
             thumbnailHost->top + 8,
         };
         const std::uint64_t revisionBefore = EditorMaterialThumbnailCache().Revision();
@@ -535,7 +568,9 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
     const bool playPresent = state.playMode.IsPlaying();
     const bool materialPresent = state.sceneContext.MaterialEditor().OpenAssetId().IsValid();
     const bool particlePresent = ParticleEditorPanelIsVisible(state);
-    const bool thumbnailPresent = EditorMaterialThumbnailCache().HasPendingWork();
+    const bool thumbnailPresent =
+        EditorMaterialThumbnailCache().HasPendingWork() ||
+        EditorParticleThumbnailCache().HasPendingWork();
     const bool continuousPresent = playPresent || materialPresent || particlePresent;
     // The toolbar refresh only repaints cached counters. It must not manufacture a GPU frame:
     // doing so submitted every visible viewport exactly four times per second while idle.

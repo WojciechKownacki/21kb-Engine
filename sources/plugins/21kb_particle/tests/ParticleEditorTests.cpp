@@ -17,6 +17,7 @@
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/ParticleEffectAssetValidation.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
@@ -812,6 +813,15 @@ void TestIsolatedRuntimePreviewAndGpuRelease() {
                 .contentHash = 1U,
             }),
         "preview dependency metadata registration failed");
+    Require(sourceRegistry.Upsert({
+                .id = kb::assets::AssetId{73U},
+                .type = kb::scene::kParticleEffectAssetType,
+                .name = "Retargeted Preview",
+                .virtualPath = "/Game/Effects/RetargetedPreview.kbvfx",
+                .physicalPath = "RetargetedPreview.kbvfx",
+                .contentHash = 1U,
+            }),
+        "preview retarget metadata registration failed");
 
     kb::particle_editor::ParticlePreviewSession preview;
     const auto effect = MakeEffect();
@@ -878,6 +888,35 @@ void TestIsolatedRuntimePreviewAndGpuRelease() {
         "preview did not apply the published start color, size, and speed to live particles");
     Require(!std::filesystem::exists(TestRoot() / "UnsavedPreview.kbvfx"),
         "publishing an unsaved preview working copy touched disk");
+
+    auto retargeted = effect;
+    retargeted.displayName = "Retargeted Preview";
+    retargeted.determinismSeed = 730073U;
+    Require(preview.RetargetWorkingCopy(
+                kb::assets::AssetId{73U},
+                "/Game/Effects/RetargetedPreview.kbvfx",
+                retargeted).Succeeded(),
+        "preview did not retarget to a different asset identity");
+    for (int frame = 0; frame < 4; ++frame) {
+        Require(preview.Tick(1.0F / 60.0F).Succeeded(),
+            "retargeted preview did not advance");
+    }
+    const auto retargetedInstances =
+        kb::particles::ParticlePlayback::LiveInstanceIds(
+            preview.PreviewScene());
+    const kb::scene::ParticleEffectComponent* retargetedComponent =
+        preview.PreviewScene().Components().ParticleEffects().TryGet(
+            preview.EffectEntity());
+    Require(retargetedInstances.size() == 1U &&
+            kb::particles::ParticlePlayback::Query(
+                preview.PreviewScene(), retargetedInstances.front())
+                    .assetId == 73U &&
+            retargetedComponent != nullptr &&
+            retargetedComponent->effectAssetId == 73U &&
+            retargetedComponent->deterministicSeed == 730073U &&
+            preview.PreviewScene().Assets().Manager().Registry().FindByPath(
+                "/Game/Effects/RetargetedPreview.kbvfx") != nullptr,
+        "preview retarget kept the previous asset id or deterministic seed");
 
     HeadlessSurface surface;
     kb::render::DisplayConfig display{};

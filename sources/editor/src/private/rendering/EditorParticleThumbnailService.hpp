@@ -36,10 +36,28 @@ public:
     [[nodiscard]] const EditorParticleThumbnailImage* ThumbnailFor(
         const kb::assets::AssetMetadata& metadata,
         std::uint64_t animationFrame = 0U);
+    [[nodiscard]] const EditorParticleThumbnailImage* ThumbnailForTime(
+        const kb::assets::AssetMetadata& metadata,
+        double elapsedSeconds);
+    [[nodiscard]] std::uint32_t AnimationFrameForTime(
+        const kb::assets::AssetMetadata& metadata,
+        double elapsedSeconds) const noexcept;
+    [[nodiscard]] std::uint32_t AnimationFrameCount(
+        const kb::assets::AssetMetadata& metadata) const noexcept;
+    [[nodiscard]] float AnimationDurationSeconds(
+        const kb::assets::AssetMetadata& metadata) const noexcept;
     // Advances one bounded simulation/capture stage. Frames come from the
     // production renderer's asynchronous capture channel; the UI thread never
     // waits for the GPU.
     [[nodiscard]] bool Tick(
+        EditorSceneContext& sceneContext,
+        EditorSceneBgfxViewport& viewport,
+        HWND host,
+        const RECT& stagingRect);
+    // Queues one bounded stage into an EditorSceneBgfxViewport paint layout
+    // already owned by the editor frame. This avoids a nested BeginFrame /
+    // EndFrame from a popup timer while the main Scene surface is active.
+    [[nodiscard]] bool TickWithinFrame(
         EditorSceneContext& sceneContext,
         EditorSceneBgfxViewport& viewport,
         HWND host,
