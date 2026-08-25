@@ -127,6 +127,10 @@ void RunParticleThumbnailTimelineTest() {
         ParticleThumbnailTimeline::CaptureStep(longLoop, 143U) >= 357U,
         "Particle thumbnail timeline stopped before the end of a looping lifecycle");
     kb::editor::tests::Require(
+        ParticleThumbnailTimeline::PosterFrame(longLoop) == 4U &&
+            ParticleThumbnailTimeline::CaptureStep(longLoop, 4U) <= 12U,
+        "Particle thumbnail poster did not stay inside the bounded fast-start window");
+    kb::editor::tests::Require(
         ParticleThumbnailTimeline::FrameAtSeconds(longLoop, 0.19) == 4U &&
             ParticleThumbnailTimeline::FrameAtSeconds(longLoop, 6.19) == 4U,
         "Particle thumbnail timeline did not loop by authored duration");
@@ -142,7 +146,8 @@ void RunParticleThumbnailTimelineTest() {
     const auto shortFlash = ParticleThumbnailTimeline::Plan(0.08F, false);
     kb::editor::tests::Require(
         shortFlash.frameCount == 2U &&
-            ParticleThumbnailTimeline::CaptureStep(shortFlash, 1U) == 5U,
+            ParticleThumbnailTimeline::CaptureStep(shortFlash, 1U) == 5U &&
+            ParticleThumbnailTimeline::PosterFrame(shortFlash) == 0U,
         "Particle thumbnail timeline did not keep a short one-shot bounded and complete");
 
     kb::scene::ParticleEffectAsset drainingEffect;
