@@ -433,9 +433,9 @@ void RunSceneAudioInspectorTest() {
               revealMixer.flatIndex }) == mixerId,
         "Mixer asset-value action must reveal the exact assigned mixer");
     kb::editor::tests::Require(
-        kb::editor::InspectorSceneAudioModel::ShouldDisplay(fixture.scene, {}, {})
+        !kb::editor::InspectorSceneAudioModel::ShouldDisplay(fixture.scene, {}, {})
             && !kb::editor::InspectorSceneAudioModel::ShouldDisplay(fixture.scene, mixerId, {}),
-        "Scene Audio Inspector discoverability must require no selected asset");
+        "An empty selection must keep the Inspector empty instead of selecting scene-global audio settings");
     const kb::scene::SceneObject liveObject =
         fixture.scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Selected" });
     kb::editor::tests::Require(liveObject.IsValid()

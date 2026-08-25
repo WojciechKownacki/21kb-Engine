@@ -4,6 +4,7 @@
 #include "app/EditorAssetBrowserDoubleClickHandler.hpp"
 #include "app/EditorEditCommandPolicy.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
+#include "app/EditorPlayModeState.hpp"
 #include "app/plugins/EditorPluginsPointerController.hpp"
 #include "app/project_settings/EditorProjectSettingsPointerController.hpp"
 #include "assets/EditorAssetBrowserHitPayloadResolver.hpp"
@@ -718,6 +719,22 @@ void RunHeadlessAutomationWorkflowSuite(Report& report) {
         context.BeginPlayModeSceneSession(),
         "Automation enters real editor Play Mode scene session");
     report.Check(
+        context.SelectedEntity() == actor &&
+            context.IsHierarchyEntitySelected(actor),
+        "Play transport preserves the selected hierarchy entity");
+    EditorPlayModeState playModeSelectionContract;
+    playModeSelectionContract.Play();
+    playModeSelectionContract.Pause();
+    report.Check(
+        context.SelectedEntity() == actor &&
+            context.IsHierarchyEntitySelected(actor),
+        "Pause transport preserves the selected hierarchy entity");
+    playModeSelectionContract.Resume();
+    report.Check(
+        context.SelectedEntity() == actor &&
+            context.IsHierarchyEntitySelected(actor),
+        "Resume transport preserves the selected hierarchy entity");
+    report.Check(
         automation.CaptureInspector("03-play-started"),
         "Automation captures Play Mode Inspector");
     report.Check(
@@ -754,6 +771,10 @@ void RunHeadlessAutomationWorkflowSuite(Report& report) {
     report.Check(
         context.RestorePlayModeSceneSession(),
         "Automation stops Play and restores authoring scene");
+    report.Check(
+        context.SelectedEntity() == actor &&
+            context.IsHierarchyEntitySelected(actor),
+        "Stop transport preserves the selected hierarchy entity");
     report.Check(
         std::abs(ActorX(context, actor, authoredStartX) -
                  authoredStartX) <= 0.001F,
@@ -1123,6 +1144,11 @@ void RunCameraInspectorSuite(Report& report) {
     report.Check(
         context.Scene().Components().Cameras().Has(actor),
         "LIB-135 Camera component is present after editor add");
+    const kb::scene::CameraComponent* addedCamera =
+        context.Scene().Components().Cameras().TryGet(actor);
+    report.Check(
+        addedCamera != nullptr && addedCamera->primary,
+        "A newly added Camera is active for Play by default");
     const std::vector<EditorHierarchyRow> cameraRows = context.HierarchyRows();
     const auto actorRow = std::ranges::find(
         cameraRows, actor, &EditorHierarchyRow::entity);
@@ -1252,7 +1278,7 @@ void RunCameraInspectorSuite(Report& report) {
         selectionStayedOnActor(),
         "LIB-135 Camera primary edit preserves hierarchy selection");
     report.Check(
-        camera() != nullptr && camera()->primary,
+        camera() != nullptr && !camera()->primary,
         "LIB-135 Camera primary edit reaches the live component");
     report.Check(
         editText(
@@ -1320,6 +1346,17 @@ void RunCameraInspectorSuite(Report& report) {
                 std::abs(camera()->verticalFovDegrees - 60.0F) < 0.001F,
             "LIB-135 Camera undo restores the previous runtime value");
     }
+
+    context.AssetBrowser().ClearSelection();
+    context.ClearHierarchySelection();
+    report.Check(
+        InspectorPanelRenderer::ContentHeight(kContent, context) ==
+            kContent.bottom - kContent.top,
+        "An empty selection leaves the Inspector content empty");
+    report.Check(
+        InspectorPanelRenderer::HitTest(kContent, context, 100, 100).kind ==
+            InspectorHitKind::None,
+        "An empty Inspector exposes no implicit scene settings controls");
 }
 
 void RunSelectionTransformSuite(Report& report) {

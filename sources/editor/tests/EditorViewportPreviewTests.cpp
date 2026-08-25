@@ -8,6 +8,7 @@
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -29,6 +30,7 @@
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLabelFormat.hpp"
 #include "scene/EditorViewportCameraState.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
+#include "scene/EditorPlayCameraResolver.hpp"
 #include "scene/AnimationPreviewContext.hpp"
 #include "scene/EditorAnimationPreviewScene.hpp"
 
@@ -85,6 +87,43 @@ void RunSceneViewportPresentationPolicyTest() {
         !SceneViewportPresentationPolicy::RequiresPresent(true, true) &&
             !SceneViewportPresentationPolicy::RequiresPresent(false, false),
         "An unchanged Scene View camera mode must not manufacture a present");
+}
+
+void RunPlayCameraHierarchySelectionTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity first = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "First Camera" });
+    const kb::scene::SceneEntity container = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Container" });
+    const kb::scene::SceneEntity last = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{
+            .name = "Last Camera",
+            .parent = scene.Entities().Object(container),
+        });
+    scene.Components().Cameras().Set(
+        first, kb::scene::CameraComponent{ .primary = true, .priority = 100 });
+    scene.Components().Cameras().Set(
+        last, kb::scene::CameraComponent{ .primary = true, .priority = -100 });
+
+    kb::editor::tests::Require(
+        kb::editor::EditorPlayCameraResolver::Resolve(scene) == last,
+        "Play camera must be the last active camera in visible Hierarchy order, independent of priority");
+
+    kb::scene::CameraComponent inactive =
+        *scene.Components().Cameras().TryGet(last);
+    inactive.primary = false;
+    scene.Components().Cameras().Set(last, inactive);
+    kb::editor::tests::Require(
+        kb::editor::EditorPlayCameraResolver::Resolve(scene) == first,
+        "An inactive camera must not replace the preceding active Play camera");
+
+    kb::scene::CameraComponent firstInactive =
+        *scene.Components().Cameras().TryGet(first);
+    firstInactive.primary = false;
+    scene.Components().Cameras().Set(first, firstInactive);
+    kb::editor::tests::Require(
+        !kb::editor::EditorPlayCameraResolver::Resolve(scene).IsValid(),
+        "A scene without an active camera must retain free Scene View during Play");
 }
 
 void RunProfileCycleAndResolutionTest() {
@@ -1037,6 +1076,44 @@ void RunRenderBackendSettingsTest() {
     kb::editor::tests::Require(settings.Generation() == 3U, "Third render backend cycle should bump generation");
 }
 
+void RunViewportParticleIconPickerSelectsParticleEffectTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity particle = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Particle Icon" });
+    scene.Components().ParticleEffects().Set(
+        particle,
+        kb::scene::ParticleEffectComponent{
+            .effectAssetId = 99U,
+            .enabled = true,
+        });
+
+    const kb::editor::EditorViewportCameraState camera;
+    const kb::editor::EditorViewportCameraAxes axes = camera.Axes();
+    const kb::scene::Vec3 position = axes.position + axes.forward * 5.0F;
+    scene.Transforms().Set(
+        particle,
+        kb::scene::TransformComponent{ .localPosition = position });
+    const RECT renderArea{0, 0, 960, 540};
+    float screenX = 0.0F;
+    float screenY = 0.0F;
+    kb::editor::tests::Require(
+        kb::editor::EditorSceneViewportMath::WorldToScreen(
+            camera, renderArea, position, screenX, screenY),
+        "Particle icon test point should project into the viewport");
+
+    const kb::editor::EditorSceneViewportPickResult pick =
+        kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+            scene,
+            camera,
+            renderArea,
+            screenX + 12.0F,
+            screenY,
+            BuildViewportRay(camera, renderArea, screenX + 12.0F, screenY));
+    kb::editor::tests::Require(
+        pick.IsValid() && pick.entity == particle,
+        "Viewport picker should select the visible particle icon with the same forgiving target as light icons");
+}
+
 void RunEditorBackendSelectionTest() {
     constexpr std::array supported{
         bgfx::RendererType::Direct3D12,
@@ -1187,6 +1264,7 @@ namespace kb::editor::tests {
 
 void RunEditorViewportPreviewTests() {
     RunSceneViewportPresentationPolicyTest();
+    RunPlayCameraHierarchySelectionTest();
     RunViewportCameraNavigationBindingPolicyTest();
     RunSkeletalMeshSceneLabelBuilderTest();
     RunAnimationPreviewContextTracksSharedBindingTest();
@@ -1213,6 +1291,7 @@ void RunEditorViewportPreviewTests() {
     RunViewportMeshPickerNearestMeshRendererTest();
     RunViewportLightWireframePickerChoosesNestedInnerWireframeTest();
     RunViewportLightIconPickerSelectsLightIconsTest();
+    RunViewportParticleIconPickerSelectsParticleEffectTest();
     RunViewportMeshPickerWinsInsideLightWireframeVolumeTest();
     RunRenderBackendSettingsTest();
     RunEditorBackendSelectionTest();
