@@ -225,6 +225,10 @@ private:
         if (state.hierarchyTopologyVersion == 0U) {
             state.hierarchyTopologyVersion = 1U;
         }
+        ++state.renderTopologyVersion;
+        if (state.renderTopologyVersion == 0U) {
+            state.renderTopologyVersion = 1U;
+        }
     }
 
     [[nodiscard]] static std::uint32_t DenseIndex(SceneEntity entity) noexcept {

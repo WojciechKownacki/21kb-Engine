@@ -627,7 +627,11 @@ public:
     std::vector<std::size_t> transformRenderProxyVisibleMeshRendererIndices;
     std::vector<std::size_t> transformRenderProxyCameraIndices;
     std::vector<std::size_t> transformRenderProxyLightIndices;
-    std::vector<SceneEntity> meshRendererRenderProxyUpdateEntities;
+    std::vector<SceneEntity> renderProxyUpdateEntities;
+    std::unordered_set<SceneEntity::IdType> renderProxyUpdateEntityIds;
+    std::vector<SceneEntity> renderProxyDirtyTraversalScratch;
+    std::uint64_t renderProxyUpdateRevision = 1U;
+    std::uint64_t renderTopologyVersion = 1U;
     std::vector<std::size_t> transformRenderProxyIdentityAffineChunkCountsScratch;
     std::size_t lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
     std::unique_ptr<kb::ecs::WorkerPool> transformWorkerPool;

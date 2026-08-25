@@ -2,6 +2,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -23,6 +24,7 @@ void SceneComponentMutationService::SetRegionShape(Scene& scene, SceneEntity ent
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.RegionShapes().Set(entity, shape);
+        MarkSceneRenderProxyDirty(state, entity);
         MarkScenePrefabNodeDirty(state, entity);
     }
 }
@@ -31,6 +33,7 @@ void SceneComponentMutationService::RemoveRegionShape(Scene& scene, SceneEntity 
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.RegionShapes().Remove(entity);
+        MarkSceneRenderProxyDirty(state, entity);
         MarkScenePrefabNodeDirty(state, entity);
     }
 }
@@ -39,6 +42,7 @@ void SceneComponentMutationService::MarkRegionShapeModified(Scene& scene, SceneE
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.RegionShapes().MarkModified(entity);
+        MarkSceneRenderProxyDirty(state, entity);
         MarkScenePrefabNodeDirty(state, entity);
     }
 }

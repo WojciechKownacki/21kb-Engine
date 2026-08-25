@@ -1513,7 +1513,7 @@ void RunMaterialAssignmentPathRenderSyncTest() {
     const kb::scene::MeshRendererComponent* allSlots = scene.Components().MeshRenderers().TryGet(entity);
     kb::editor::tests::Require(allSlots != nullptr && allSlots->materialAssetId == graphBackedMaterialId.value && allSlots->materialSlotOverrideCount == 0U,
         "KBMAT-GRAPH-0401: Graph-backed all-slots assignment should clear previous slot overrides");
-    synchronizer.SyncMeshRendererUpdates(scene, renderScene);
+    synchronizer.SyncRenderProxyUpdates(scene, renderScene);
     const kb::render::MeshRenderProxy* allSlotsProxy = renderScene.FindMeshByEntity(entity.Id());
     kb::editor::tests::Require(allSlotsProxy != nullptr && kb::render::HasDirtyFlag(allSlotsProxy->dirty, kb::render::RenderProxyDirtyFlag::Material),
         "KBMAT-UE-0013: All-slots assignment should dirty the render material proxy");
@@ -1543,7 +1543,7 @@ void RunMaterialAssignmentPathRenderSyncTest() {
     const kb::scene::MeshRendererComponent* slotAssigned = scene.Components().MeshRenderers().TryGet(slotEntity);
     kb::editor::tests::Require(slotAssigned != nullptr && slotAssigned->materialSlotOverrideCount == 2U && slotAssigned->materialSlotAssetIds[1] == graphBackedSlotMaterialId.value,
         "KBMAT-GRAPH-0401: Graph-backed slot assignment should store the slot override");
-    synchronizer.SyncMeshRendererUpdates(scene, renderScene);
+    synchronizer.SyncRenderProxyUpdates(scene, renderScene);
     const kb::render::MeshRenderProxy* slotProxy = renderScene.FindMeshByEntity(slotEntity.Id());
     kb::editor::tests::Require(slotProxy != nullptr && kb::render::HasDirtyFlag(slotProxy->dirty, kb::render::RenderProxyDirtyFlag::Material),
         "KBMAT-UE-0013: Slot assignment should dirty the render material proxy");

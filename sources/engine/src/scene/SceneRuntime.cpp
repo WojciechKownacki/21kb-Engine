@@ -347,8 +347,16 @@ std::span<const WorldTransformAffine3x4> SceneRuntimeService::TransformRenderPro
     return SceneAccess::State(scene).transformRenderProxyWorldAffine3x4;
 }
 
-std::span<const SceneEntity> SceneRuntimeService::MeshRendererRenderProxyUpdateEntities(const Scene& scene) noexcept {
-    return SceneAccess::State(scene).meshRendererRenderProxyUpdateEntities;
+std::span<const SceneEntity> SceneRuntimeService::RenderProxyUpdateEntities(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).renderProxyUpdateEntities;
+}
+
+std::uint64_t SceneRuntimeService::RenderProxyUpdateRevision(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).renderProxyUpdateRevision;
+}
+
+std::uint64_t SceneRuntimeService::RenderTopologyVersion(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).renderTopologyVersion;
 }
 
 bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
@@ -370,7 +378,8 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
         state.transformRenderProxyVisibleMeshRendererIndices.clear();
         state.transformRenderProxyCameraIndices.clear();
         state.transformRenderProxyLightIndices.clear();
-        state.meshRendererRenderProxyUpdateEntities.clear();
+        state.renderProxyUpdateEntities.clear();
+        state.renderProxyUpdateEntityIds.clear();
         state.lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
         SynchronizeTransformHierarchy(state);
         PublishRuntimeSnapshot(state);
@@ -385,7 +394,8 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     state.transformRenderProxyVisibleMeshRendererIndices.clear();
     state.transformRenderProxyCameraIndices.clear();
     state.transformRenderProxyLightIndices.clear();
-    state.meshRendererRenderProxyUpdateEntities.clear();
+    state.renderProxyUpdateEntities.clear();
+    state.renderProxyUpdateEntityIds.clear();
     state.lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
     state.transformRenderProxyUpdateEntities.reserve(HierarchyTrackedSlotCount(state));
     state.transformRenderProxyWorldAffine3x4.reserve(HierarchyTrackedSlotCount(state));
@@ -393,6 +403,9 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     state.transformRenderProxyVisibleMeshRendererIndices.reserve(HierarchyTrackedSlotCount(state));
     state.transformRenderProxyCameraIndices.reserve(HierarchyTrackedSlotCount(state));
     state.transformRenderProxyLightIndices.reserve(HierarchyTrackedSlotCount(state));
+    state.renderProxyUpdateEntities.reserve(HierarchyTrackedSlotCount(state));
+    state.renderProxyUpdateEntityIds.reserve(HierarchyTrackedSlotCount(state));
+    state.renderProxyDirtyTraversalScratch.reserve(HierarchyTrackedSlotCount(state));
 
     SynchronizeTransformHierarchy(state);
     state.sceneSystemScheduler.BeginFrame(scene, deltaSeconds);

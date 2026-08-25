@@ -685,9 +685,11 @@ void CacheRenderProxyUpdatesAfterTransformsWithResolver(
         }
         if (SceneRenderProxyMaskHas(componentMask, SceneRenderProxyComponentMask::Camera)) {
             state.transformRenderProxyCameraIndices.push_back(proxyIndex);
+            MarkSceneRenderProxyDirty(state, entity);
         }
         if (SceneRenderProxyMaskHas(componentMask, SceneRenderProxyComponentMask::Light)) {
             state.transformRenderProxyLightIndices.push_back(proxyIndex);
+            MarkSceneRenderProxyDirty(state, entity);
         }
     }
 }
