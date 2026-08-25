@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserPointerHandler.hpp"
+#include "app/EditorCrashBreadcrumbs.hpp"
 #include "app/EditorPendingTextEditCommitter.hpp"
 #include "app/EditorParticleDocumentLifecycle.hpp"
 #include "app/ParticleEditorPanelInteraction.hpp"
@@ -50,6 +51,7 @@
 #include "platform/win32/EditorSkeletalMeshAssetPickerDialog.hpp"
 #include "platform/win32/EditorMaterialColorPickerDialog.hpp"
 #include "platform/win32/EditorAudioMixerAssetPickerDialog.hpp"
+#include "platform/win32/EditorChoiceDialog.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
 #include "scene/EditorTerrainService.hpp"
@@ -167,18 +169,22 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
     if (!sceneContext.HasDirtyMaterialAssetEdit()) {
         return true;
     }
-    const int result = MessageBoxW(
-        owner,
-        L"Save changes to the open material before closing the Material Editor?\n\nYes = Save\nNo = Discard changes\nCancel = keep editing",
-        L"Unsaved Material",
-        MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1 | MB_APPLMODAL);
+    const EditorChoiceDialogResult result = EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
+        .title = "Unsaved Material",
+        .message = "Save changes to the open material before closing the Material Editor?",
+        .supportingText = "Choose whether to preserve the current material changes.",
+        .primaryLabel = "Save",
+        .secondaryLabel = "Discard",
+        .cancelLabel = "Cancel",
+        .icon = HeroIconKind::RectangleGroup,
+    });
     const kb::assets::AssetId materialId = sceneContext.MaterialEditor().OpenAssetId();
     switch (result) {
-    case IDYES:
+    case EditorChoiceDialogResult::Primary:
         return sceneContext.SaveMaterialEditorAsset(materialId);
-    case IDNO:
+    case EditorChoiceDialogResult::Secondary:
         return sceneContext.RevertMaterialEditorAsset(materialId);
-    case IDCANCEL:
+    case EditorChoiceDialogResult::Cancel:
     default:
         return false;
     }
@@ -186,25 +192,33 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
 
 [[nodiscard]] bool ResolveDirtySkeletalMeshEditorTabClose(HWND owner, EditorSceneContext& sceneContext) {
     if (!sceneContext.HasDirtySkeletalMeshEditorAssetEdit()) return true;
-    const int result = MessageBoxW(
-        owner,
-        L"Save changes to the open skeletal assets before closing the editor?\n\nYes = Save\nNo = Discard changes\nCancel = keep editing",
-        L"Unsaved Skeletal Asset",
-        MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1 | MB_APPLMODAL);
-    if (result == IDYES) return sceneContext.SaveSkeletalMeshEditorAsset();
-    if (result == IDNO) return sceneContext.RevertSkeletalMeshEditorAsset();
+    const EditorChoiceDialogResult result = EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
+        .title = "Unsaved Skeletal Asset",
+        .message = "Save changes to the open skeletal assets before closing the editor?",
+        .supportingText = "Choose whether to preserve the current asset changes.",
+        .primaryLabel = "Save",
+        .secondaryLabel = "Discard",
+        .cancelLabel = "Cancel",
+        .icon = HeroIconKind::Skeleton,
+    });
+    if (result == EditorChoiceDialogResult::Primary) return sceneContext.SaveSkeletalMeshEditorAsset();
+    if (result == EditorChoiceDialogResult::Secondary) return sceneContext.RevertSkeletalMeshEditorAsset();
     return false;
 }
 
 [[nodiscard]] bool ResolveDirtyAnimatorEditorTabClose(HWND owner, EditorSceneContext& sceneContext) {
     if (!sceneContext.HasDirtyAnimatorEditorAssetEdit()) return true;
-    const int result = MessageBoxW(
-        owner,
-        L"Save changes to the open Animator Controller before closing the editor?\n\nYes = Save\nNo = Discard changes\nCancel = keep editing",
-        L"Unsaved Animator Controller",
-        MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1 | MB_APPLMODAL);
-    if (result == IDYES) return sceneContext.SaveAnimatorEditorAsset();
-    if (result == IDNO) return sceneContext.RevertAnimatorEditorAsset();
+    const EditorChoiceDialogResult result = EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
+        .title = "Unsaved Animator Controller",
+        .message = "Save changes to the open Animator Controller before closing the editor?",
+        .supportingText = "Choose whether to preserve the current controller changes.",
+        .primaryLabel = "Save",
+        .secondaryLabel = "Discard",
+        .cancelLabel = "Cancel",
+        .icon = HeroIconKind::Gamepad2,
+    });
+    if (result == EditorChoiceDialogResult::Primary) return sceneContext.SaveAnimatorEditorAsset();
+    if (result == EditorChoiceDialogResult::Secondary) return sceneContext.RevertAnimatorEditorAsset();
     return false;
 }
 
@@ -1183,15 +1197,20 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 static_cast<void>(sceneContext_.RedoSkeletalMeshEditorAssetEdit());
                 break;
             case SkeletalAssetCommand::Reload:
-                if (!sceneContext_.HasDirtyActiveSkeletalMeshEditorDocument() || MessageBoxW(
-                        mainWindow_,
-                        sceneContext_.IsSkeletalMeshEditorSkeletonDocument()
-                            ? L"Reload will discard unsaved Skeleton edits. Continue?"
-                            : L"Reload will discard unsaved Skeletal Mesh edits. Continue?",
-                        sceneContext_.IsSkeletalMeshEditorSkeletonDocument()
-                            ? L"Reload Skeleton"
-                            : L"Reload Skeletal Mesh",
-                        MB_ICONWARNING | MB_YESNO | MB_DEFBUTTON2 | MB_APPLMODAL) == IDYES) {
+                if (!sceneContext_.HasDirtyActiveSkeletalMeshEditorDocument() || EditorChoiceDialog::Show(
+                        mainWindow_, EditorChoiceDialogDescriptor{
+                            .title = sceneContext_.IsSkeletalMeshEditorSkeletonDocument()
+                                ? "Reload Skeleton"
+                                : "Reload Skeletal Mesh",
+                            .message = sceneContext_.IsSkeletalMeshEditorSkeletonDocument()
+                                ? "Reload will discard unsaved Skeleton edits."
+                                : "Reload will discard unsaved Skeletal Mesh edits.",
+                            .supportingText = "This action cannot be undone.",
+                            .primaryLabel = "Reload",
+                            .secondaryLabel = "Keep Editing",
+                            .icon = HeroIconKind::Skeleton,
+                            .primaryTone = EditorDialogButtonTone::Destructive,
+                        }) == EditorChoiceDialogResult::Primary) {
                     static_cast<void>(sceneContext_.ReloadSkeletalMeshEditorAsset());
                 }
                 break;
@@ -1224,10 +1243,15 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 }
                 break;
             case SkeletalAssetCommand::DeleteSocket:
-                if (MessageBoxW(
-                        mainWindow_, L"Delete the selected socket from this Skeleton?",
-                        L"Delete Skeleton Socket",
-                        MB_ICONWARNING | MB_YESNO | MB_DEFBUTTON2 | MB_APPLMODAL) == IDYES) {
+                if (EditorChoiceDialog::Show(mainWindow_, EditorChoiceDialogDescriptor{
+                        .title = "Delete Skeleton Socket",
+                        .message = "Delete the selected socket from this Skeleton?",
+                        .supportingText = "This action cannot be undone.",
+                        .primaryLabel = "Delete",
+                        .secondaryLabel = "Cancel",
+                        .icon = HeroIconKind::XMark,
+                        .primaryTone = EditorDialogButtonTone::Destructive,
+                    }) == EditorChoiceDialogResult::Primary) {
                     static_cast<void>(sceneContext_.DeleteSkeletonEditorSocket());
                 }
                 break;
@@ -1300,8 +1324,13 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     if (value.has_value() && kb::render::ParseFiniteMaterialFloatToken(*value, parsed)) {
                         static_cast<void>(sceneContext_.SetSkeletalMeshEditorLodScreenCoverage(field.lodIndex, parsed));
                     } else if (value.has_value()) {
-                        MessageBoxW(mainWindow_, L"Enter a finite number from 0 to 1.",
-                            L"Invalid LOD Screen Coverage", MB_ICONWARNING | MB_OK | MB_APPLMODAL);
+                        static_cast<void>(EditorChoiceDialog::Show(mainWindow_, EditorChoiceDialogDescriptor{
+                            .title = "Invalid LOD Screen Coverage",
+                            .message = "Enter a finite number from 0 to 1.",
+                            .supportingText = "The previous value was not applied.",
+                            .primaryLabel = "OK",
+                            .icon = HeroIconKind::AdjustmentsHorizontal,
+                        }));
                     }
                     break;
                 }
@@ -1329,8 +1358,13 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                             extents ? std::nullopt : std::optional<kb::scene::Vec3>{ vector },
                             extents ? std::optional<kb::scene::Vec3>{ vector } : std::nullopt));
                     } else if (value.has_value()) {
-                        MessageBoxW(mainWindow_, L"Enter three finite values: X, Y, Z.",
-                            L"Invalid Fixed Bounds", MB_ICONWARNING | MB_OK | MB_APPLMODAL);
+                        static_cast<void>(EditorChoiceDialog::Show(mainWindow_, EditorChoiceDialogDescriptor{
+                            .title = "Invalid Fixed Bounds",
+                            .message = "Enter three finite values: X, Y, Z.",
+                            .supportingText = "The previous value was not applied.",
+                            .primaryLabel = "OK",
+                            .icon = HeroIconKind::AdjustmentsHorizontal,
+                        }));
                     }
                     break;
                 }
@@ -1603,15 +1637,31 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             const kb::scene::ParticleEffectComponent* particleEffect =
                 sceneContext_.Scene().Components().ParticleEffects().TryGet(entity);
             if (particleEffect != nullptr) {
-                const EditorParticleEffectAssetPickerDialog::Result result =
-                    EditorParticleEffectAssetPickerDialog::Show(
-                        mainWindow_,
-                        MakeEditorDarkTheme(),
-                        sceneContext_,
-                        kb::assets::AssetId{ particleEffect->effectAssetId });
-                if (result.accepted && sceneContext_.SetParticleEffectAsset(entity, result.assetId)) {
-                    sceneViewport_.RequestPresent();
-                }
+                EditorSceneContext* const persistentSceneContext = &sceneContext_;
+                EditorSceneBgfxViewport* const persistentSceneViewport = &sceneViewport_;
+                const HWND persistentMainWindow = mainWindow_;
+                EditorCrashBreadcrumbs::WriteValue(
+                    "particle_picker", "open entity", entity.Id());
+                static_cast<void>(EditorParticleEffectAssetPickerDialog::Open(
+                    mainWindow_,
+                    MakeEditorDarkTheme(),
+                    sceneContext_,
+                    sceneViewport_,
+                    kb::assets::AssetId{ particleEffect->effectAssetId },
+                    [persistentSceneContext, persistentSceneViewport,
+                     persistentMainWindow, entity](kb::assets::AssetId assetId) {
+                        EditorCrashBreadcrumbs::WriteValue(
+                            "particle_picker", "assign asset", assetId.value);
+                        if (persistentSceneContext->SetParticleEffectAsset(entity, assetId)) {
+                            EditorCrashBreadcrumbs::Write(
+                                "particle_picker", "assignment completed");
+                            persistentSceneViewport->RequestPresent();
+                            InvalidateRect(persistentMainWindow, nullptr, FALSE);
+                        } else {
+                            EditorCrashBreadcrumbs::Write(
+                                "particle_picker", "assignment rejected");
+                        }
+                    }));
             }
             EditorWindowInvalidator::InvalidateDockPanel(
                 mainWindow_, dockModel_, floatingWindows_, metrics_, DockPanelKind::Inspector);

@@ -61,6 +61,7 @@
 #include "rendering/HeroIconKind.hpp"
 #include "rendering/ProjectFilesMaterialPreviewThumbnailModel.hpp"
 #include "rendering/ProjectFilesPanelDrawing.hpp"
+#include "rendering/components/EditorDialogStyle.hpp"
 #include "rendering/gdi/ScopedBrush.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "rendering/gdi/ScopedPen.hpp"
@@ -166,7 +167,7 @@ constexpr int kMeshPreviewToolbarHeight = 30;
 constexpr int kMeshPreviewToolbarButtonSize = 22;
 constexpr int kMeshPreviewToolbarButtonGap = 4;
 constexpr int kAddComponentButtonHeight = 24;
-constexpr int kAddComponentBrowserWidth = 240;   // narrow, Unity-style popup width
+constexpr int kAddComponentBrowserWidth = 240;
 constexpr int kAddComponentBrowserMaxHeight = 300;
 constexpr int kAddComponentSearchHeight = 24;
 constexpr int kAddComponentRowHeight = 26;
@@ -405,9 +406,8 @@ void DrawDivider(HDC dc, int left, int right, int y) {
 [[nodiscard]] RECT AddComponentBrowserRect(RECT content, int y) noexcept {
     const RECT button = AddComponentButtonRect(content, y);
     const int top = button.bottom + 8;
-    // Narrow, fixed-width popup (Unity-style) centred under the button. Always the
-    // full height: it is part of the scrollable inspector content (reserved by
-    // EntityContentHeight), so the viewport clip + scroll reveal it.
+    // The fixed-width popup remains part of the scrollable Inspector content, so
+    // the viewport clip and scroll position reveal it deterministically.
     const int panelWidth = static_cast<int>(content.right - content.left);
     const int width = std::min(kAddComponentBrowserWidth, std::max(160, panelWidth - 24));
     const int left = content.left + std::max(12, (panelWidth - width) / 2);
@@ -463,19 +463,8 @@ void DrawDivider(HDC dc, int left, int right, int y) {
     return inspector.EditedProperty() == InspectorPropertyId::AddComponentSearch ? std::string_view{ inspector.EditBuffer() } : std::string_view{};
 }
 
-// Draws one Add Component row: icon (HeroIconPainter, the tab/section icon
-// source) + label, a trailing "›" chevron for a category, blue highlight when
-// hovered — matching the Unity component picker.
 void DrawAddComponentBrowserRow(HDC dc, RECT row, const EditorTheme& theme, HeroIconKind icon, std::string_view label, bool isCategory, bool hovered) {
-    if (hovered) {
-        // The same subtle row-hover fill as the Project Files list.
-        GdiDrawing::FillRectColor(dc, row, BlendColor(Color(theme.strip), Color(theme.textSecondary), 12));
-    }
-    const int iconSize = 15;
-    const int iconTop = row.top + (static_cast<int>(row.bottom - row.top) - iconSize) / 2;
-    const RECT iconRect{ row.left + 8, iconTop, row.left + 8 + iconSize, iconTop + iconSize };
-    HeroIconPainter::Draw(dc, iconRect, icon, Color(theme.textPrimary), 1);
-    Text(dc, Rect(iconRect.right + 8, row.top, row.right - 18, row.bottom), label, Color(theme.textPrimary));
+    EditorDialogStyle::PaintMenuRow(dc, row, theme, label, icon, hovered);
     if (isCategory) {
         const int chevronSize = 12;
         const int chevronTop = row.top + (static_cast<int>(row.bottom - row.top) - chevronSize) / 2;
@@ -489,24 +478,24 @@ void DrawAddComponentBrowser(
     const EditorTheme& theme,
     const InspectorPanelState& inspector,
     const EditorSceneContext& sceneContext) {
-    DrawFrame(dc, browser, Rgb(30, 33, 38), Rgb(70, 78, 88));
-
-    {
-        ScopedFont titleFont(12, FW_SEMIBOLD);
-        const ScopedGdiObject selectedTitleFont(dc, titleFont.handle);
-        Text(dc, Rect(browser.left + 10, browser.top + 4, browser.right - 10, browser.top + 28), "Add Component", Color(theme.textPrimary), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    }
+    EditorDialogStyle::PaintSurface(dc, browser, theme);
+    EditorDialogStyle::PaintTitleBar(dc, theme, EditorDialogHeaderDescriptor{
+        .bounds = Rect(browser.left + 1, browser.top + 1, browser.right - 1, browser.top + 30),
+        .title = "Add Component",
+        .icon = HeroIconKind::Plus,
+        .showIcon = true,
+    });
 
     const RECT search = AddComponentSearchRect(browser);
     const bool searchFocused = inspector.EditedProperty() == InspectorPropertyId::AddComponentSearch;
-    DrawFrame(dc, search, Rgb(20, 22, 25), searchFocused ? Color(theme.accent) : Rgb(54, 60, 68));
     const std::string_view query = AddComponentQuery(inspector);
-    if (query.empty()) {
-        Text(dc, Shrink(search, 24, 0, 8, 0), "Search", Rgb(110, 118, 130));
-    } else {
-        Text(dc, Shrink(search, 8, 0, 8, 0), query, Color(theme.textPrimary));
-    }
+    EditorDialogStyle::PaintField(dc, search, theme, {}, searchFocused, false);
     HeroIconPainter::Draw(dc, Rect(search.left + 4, search.top + 5, search.left + 18, search.top + 19), HeroIconKind::MagnifyingGlass, Rgb(120, 128, 140), 1);
+    EditorDialogStyle::PaintText(
+        dc,
+        Rect(search.left + 24, search.top, search.right - 7, search.bottom),
+        query.empty() ? "Search" : query,
+        EditorDialogStyle::Color(query.empty() ? theme.textDisabled : theme.textPrimary));
 
     const std::string& category = inspector.AddComponentBrowserCategory();
     const bool showBack = query.empty() && !category.empty();
@@ -573,11 +562,9 @@ void DrawAddComponentBrowser(
 
     if (scrollable) {
         const RECT track = AddComponentScrollbarTrackRect(list);
-        DrawFrame(dc, track, Rgb(22, 24, 28), Rgb(40, 45, 52));
         const RECT thumb = AddComponentScrollbarThumbRect(list, rowCount, scroll);
-        if (thumb.bottom > thumb.top) {
-            DrawFrame(dc, thumb, inspector.IsAddComponentScrollbarDragging() ? Rgb(104, 116, 130) : Rgb(76, 86, 98), Rgb(94, 105, 118));
-        }
+        EditorDialogStyle::PaintScrollbar(
+            dc, track, thumb, theme, inspector.IsAddComponentScrollbarDragging());
     }
 }
 

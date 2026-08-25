@@ -9,25 +9,27 @@
 #include <Windows.h>
 #endif
 
+#include <functional>
+
 namespace kb::editor {
 
 class EditorSceneContext;
+class EditorSceneBgfxViewport;
 
 class EditorParticleEffectAssetPickerDialog {
 public:
     EditorParticleEffectAssetPickerDialog() = delete;
 
 #if defined(_WIN32)
-    struct Result {
-        bool accepted = false;
-        kb::assets::AssetId assetId{};
-    };
+    using AcceptedCallback = std::function<void(kb::assets::AssetId)>;
 
-    [[nodiscard]] static Result Show(
+    [[nodiscard]] static bool Open(
         HWND owner,
         const EditorTheme& theme,
-        const EditorSceneContext& sceneContext,
-        kb::assets::AssetId currentEffect);
+        EditorSceneContext& sceneContext,
+        EditorSceneBgfxViewport& sceneViewport,
+        kb::assets::AssetId currentEffect,
+        AcceptedCallback onAccepted);
 #endif
 };
 

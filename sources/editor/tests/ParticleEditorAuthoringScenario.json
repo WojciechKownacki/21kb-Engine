@@ -6,6 +6,8 @@
     { "op": "assert_asset", "path": "/Game/Vfx/NewParticleEffect.kbvfx", "type": "ParticleEffect" },
     { "op": "assert_plugin", "id": "Rendering.21kbParticle", "enabled": true },
     { "op": "assert_backend", "backend": "particles", "available": true },
+    { "op": "assert_particle_thumbnail", "asset": "particleEffect", "max_ticks": 64 },
+    { "op": "verify_particle_picker" },
     { "op": "capture_screenshot_matrix", "panel": "particle_editor", "checkpoint": "particle-emitter-list" },
     { "op": "verify_scene_render_target_after_secondary", "checkpoint": "scene-after-particle" },
     { "op": "create_entity", "id": "particleEntity", "name": "Particle Entity" },
