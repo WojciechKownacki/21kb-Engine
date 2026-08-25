@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/particles/ParticleRuntimeResult.hpp"
+#include "engine/scene/TransformComponent.hpp"
 
 #include <cstdint>
 #include <span>
@@ -41,6 +42,28 @@ public:
         kb::scene::Scene& scene,
         std::uint64_t instanceId,
         std::uint32_t count) = 0;
+    [[nodiscard]] virtual ParticleRuntimeResult Simulate(
+        kb::scene::Scene& scene,
+        float fixedDeltaSeconds) {
+        static_cast<void>(scene);
+        static_cast<void>(fixedDeltaSeconds);
+        return {.status = ParticleRuntimeStatus::InvalidRequest};
+    }
+    [[nodiscard]] virtual ParticleRuntimeResult ConfigureComponent(
+        kb::scene::Scene& scene,
+        std::uint64_t instanceId,
+        float rateMultiplier,
+        std::uint32_t maxParticlesOverride,
+        bool followTransform,
+        const kb::scene::WorldTransform& ownerTransform) noexcept {
+        static_cast<void>(scene);
+        static_cast<void>(instanceId);
+        static_cast<void>(rateMultiplier);
+        static_cast<void>(maxParticlesOverride);
+        static_cast<void>(followTransform);
+        static_cast<void>(ownerTransform);
+        return {.status = ParticleRuntimeStatus::InvalidRequest};
+    }
     [[nodiscard]] virtual ParticleRuntimeQueryResult Query(
         const kb::scene::Scene& scene,
         std::uint64_t instanceId) const noexcept = 0;

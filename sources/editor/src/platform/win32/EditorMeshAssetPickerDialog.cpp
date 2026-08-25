@@ -1,28 +1,34 @@
 #include "platform/win32/EditorMeshAssetPickerDialog.hpp"
 #include "platform/win32/EditorAnimatorControllerAssetPickerDialog.hpp"
+#include "platform/win32/EditorParticleEffectAssetPickerDialog.hpp"
 #include "platform/win32/EditorAudioMixerAssetPickerDialog.hpp"
 #include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
 #include "platform/win32/EditorSkeletonAssetPickerDialog.hpp"
 #include "platform/win32/EditorSkeletalMeshAssetPickerDialog.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorCrashBreadcrumbs.hpp"
 #include "platform/win32/EditorModalMessageLoop.hpp"
 #include "platform/win32/EditorModalWindowScope.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
+#include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
 #include "engine/scene/SkeletalMeshAssetIO.hpp"
 #include "rendering/EditorMeshPreviewService.hpp"
 #include "rendering/EditorMeshPreviewTypes.hpp"
 #include "rendering/EditorMaterialThumbnailService.hpp"
+#include "rendering/EditorParticleThumbnailService.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "rendering/EditorTexturePreviewService.hpp"
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/GdiBackBufferRenderer.hpp"
 #include "rendering/HeroIconKind.hpp"
 #include "rendering/HeroIconPainter.hpp"
 #include "rendering/MaterialPreviewTextureAverageColor.hpp"
 #include "rendering/ProjectFilesMaterialPreviewThumbnailModel.hpp"
+#include "rendering/components/EditorDialogStyle.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -31,7 +37,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -47,19 +55,17 @@ constexpr int kListDialogWidth = 480;
 constexpr int kListDialogHeight = 420;
 constexpr int kTextureDialogWidth = 720;
 constexpr int kTextureDialogHeight = 560;
-constexpr int kListHeaderHeight = 58;
-constexpr int kFooterHeight = 42;
-constexpr int kRowHeight = 48;
-constexpr int kPad = 14;
-constexpr int kCloseSize = 24;
-constexpr int kScrollbarWidth = 10;
-constexpr int kTextureHeaderHeight = 34;
+constexpr int kListHeaderHeight = EditorDialogStyle::HeaderHeight;
+constexpr int kFooterHeight = EditorDialogStyle::FooterHeight;
+constexpr int kRowHeight = EditorDialogStyle::ListRowHeight;
+constexpr int kPad = EditorDialogStyle::Padding;
+constexpr int kCloseSize = EditorDialogStyle::CloseButtonSize;
+constexpr int kScrollbarWidth = EditorDialogStyle::ScrollbarWidth;
 constexpr int kTextureTileWidth = 158;
 constexpr int kTextureTileHeight = 150;
 constexpr int kTextureTileGap = 10;
 constexpr int kTextureColumns = 4;
-constexpr int kTextureViewportHeight = kTextureDialogHeight - 62;
-constexpr int kTextureSearchHeight = 28;
+constexpr int kTextureSearchHeight = EditorDialogStyle::ControlHeight;
 constexpr int kTextureButtonWidth = 82;
 // Shared asset grid used by mesh and material pickers.
 constexpr int kAssetGridDialogWidth = 588;
@@ -70,7 +76,8 @@ constexpr int kAssetTilePreviewHeight = 130;
 constexpr int kAssetTileGap = 12;
 constexpr int kAssetTileColumns = 3;
 constexpr UINT_PTR kMaterialThumbnailTimerId = 1U;
-constexpr UINT kMaterialThumbnailTimerPeriodMs = 16U;
+constexpr UINT kMaterialThumbnailTimerPeriodMs = 33U;
+constexpr UINT kParticleAnimationTimerPeriodMs = 16U;
 
 struct AssetPickerRow {
     kb::assets::AssetId assetId{};
@@ -87,6 +94,7 @@ enum class AssetPickerTileKind : std::uint8_t {
     None,
     Mesh,
     Material,
+    Particle,
 };
 
 [[nodiscard]] COLORREF Color(EditorColor color) {
@@ -111,27 +119,6 @@ enum class AssetPickerTileKind : std::uint8_t {
 
 [[nodiscard]] RECT Rect(int left, int top, int right, int bottom) noexcept {
     return RECT{ left, top, right, bottom };
-}
-
-[[nodiscard]] int LerpChannel(int a, int b, int num, int den) noexcept {
-    return a + ((b - a) * num) / std::max(1, den);
-}
-
-[[nodiscard]] COLORREF BlendColor(COLORREF a, COLORREF b, int num, int den) noexcept {
-    return RGB(
-        LerpChannel(GetRValue(a), GetRValue(b), num, den),
-        LerpChannel(GetGValue(a), GetGValue(b), num, den),
-        LerpChannel(GetBValue(a), GetBValue(b), num, den));
-}
-
-void FillVerticalGradient(HDC dc, RECT rect, COLORREF top, COLORREF bottom) {
-    const int height = RectHeight(rect);
-    for (int y = 0; y < height; ++y) {
-        GdiDrawing::FillRectColor(
-            dc,
-            Rect(rect.left, rect.top + y, rect.right, rect.top + y + 1),
-            BlendColor(top, bottom, y, std::max(1, height - 1)));
-    }
 }
 
 void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
@@ -221,6 +208,23 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
         rows.push_back(AssetPickerRow{
             .assetId = metadata.id,
             .name = DisplayName(metadata, "Audio Mixer"),
+            .path = DisplayPath(metadata),
+        });
+    }
+    std::ranges::sort(rows, [](const AssetPickerRow& lhs, const AssetPickerRow& rhs) {
+        return lhs.name != rhs.name ? lhs.name < rhs.name : lhs.assetId.value < rhs.assetId.value;
+    });
+    return rows;
+}
+
+[[nodiscard]] std::vector<AssetPickerRow> BuildParticleEffectRows(const EditorSceneContext& sceneContext) {
+    std::vector<AssetPickerRow> rows;
+    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
+        if (metadata.type != kb::scene::kParticleEffectAssetType) continue;
+        rows.push_back(AssetPickerRow{
+            .assetId = metadata.id,
+            .name = DisplayName(metadata, "Particle Effect"),
             .path = DisplayPath(metadata),
         });
     }
@@ -393,6 +397,45 @@ void DrawRenderedMaterialThumbnail(
     DeleteDC(sourceDc);
 }
 
+[[nodiscard]] bool Intersects(const RECT& lhs, const RECT& rhs) noexcept {
+    return lhs.left < rhs.right && lhs.right > rhs.left &&
+        lhs.top < rhs.bottom && lhs.bottom > rhs.top;
+}
+
+void DrawParticleThumbnail(
+    HDC dc,
+    const RECT& target,
+    const EditorParticleThumbnailImage& image) {
+    if (image.width <= 0 || image.height <= 0 || image.bgra.empty() ||
+        RectWidth(target) <= 0 || RectHeight(target) <= 0) {
+        return;
+    }
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = image.width;
+    info.bmiHeader.biHeight = -image.height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    const int previousMode = SetStretchBltMode(dc, HALFTONE);
+    SetBrushOrgEx(dc, 0, 0, nullptr);
+    static_cast<void>(StretchDIBits(
+        dc,
+        target.left,
+        target.top,
+        RectWidth(target),
+        RectHeight(target),
+        0,
+        0,
+        image.width,
+        image.height,
+        image.bgra.data(),
+        &info,
+        DIB_RGB_COLORS,
+        SRCCOPY));
+    SetStretchBltMode(dc, previousMode);
+}
+
 [[nodiscard]] RECT CenteredWindowRect(HWND owner, int width, int height) {
     RECT base{};
     if (owner != nullptr && IsWindow(owner) != 0) {
@@ -404,6 +447,9 @@ void DrawRenderedMaterialThumbnail(
     const int top = base.top + std::max(0, (RectHeight(base) - height) / 2);
     return Rect(left, top, left + width, top + height);
 }
+
+class AssetPickerWindow;
+AssetPickerWindow* gModelessParticlePicker = nullptr;
 
 class AssetPickerWindow {
 public:
@@ -469,6 +515,31 @@ public:
         return exit == EditorModalLoopExit::Completed ? result_ : AssetPickerResult{};
     }
 
+    [[nodiscard]] bool OpenModeless(
+        HWND owner,
+        EditorParticleEffectAssetPickerDialog::AcceptedCallback onAccepted) {
+        owner_ = owner;
+        onAccepted_ = std::move(onAccepted);
+        if (!EnsureWindow()) return false;
+        deleteOnDestroy_ = true;
+        lastParticleThumbnailRevision_ = EditorParticleThumbnailCache().Revision();
+        particleAnimationEpoch_ = std::chrono::steady_clock::now();
+        particleAnimationFrames_.clear();
+        particleAnimationStartSeconds_.clear();
+        static_cast<void>(SetTimer(window_, kMaterialThumbnailTimerId, kParticleAnimationTimerPeriodMs, nullptr));
+        const RECT bounds = CenteredWindowRect(owner, DialogWidth(), DialogHeight());
+        SetWindowPos(
+            window_, HWND_TOP,
+            bounds.left, bounds.top, RectWidth(bounds), RectHeight(bounds),
+            SWP_SHOWWINDOW);
+        SetForegroundWindow(window_);
+        return true;
+    }
+
+    void Close() noexcept {
+        if (window_ != nullptr && IsWindow(window_) != 0) DestroyWindow(window_);
+    }
+
 private:
     [[nodiscard]] bool EnsureWindow() {
         WNDCLASSEXW windowClass{};
@@ -526,12 +597,13 @@ private:
 
     [[nodiscard]] RECT CloseButton() const noexcept {
         const RECT client = Client();
-        return Rect(client.right - kPad - kCloseSize, kPad, client.right - kPad, kPad + kCloseSize);
+        const int top = 4;
+        return Rect(client.right - kPad - kCloseSize, top, client.right - kPad, top + kCloseSize);
     }
 
     [[nodiscard]] RECT ListRect() const noexcept {
         const RECT client = Client();
-        return Rect(kPad, kListHeaderHeight, client.right - kPad, client.bottom - kFooterHeight);
+        return Rect(kPad, kListHeaderHeight + 8, client.right - kPad, client.bottom - kFooterHeight - 8);
     }
 
     [[nodiscard]] int RowCount() const noexcept {
@@ -563,12 +635,24 @@ private:
     }
 
     void AcceptRow(int row) noexcept {
-        if (row < 0 || row >= RowCount()) {
-            return;
-        }
+        if (row < 0 || row >= RowCount() || acceptPending_) return;
         result_.accepted = true;
         const AssetPickerRow* asset = AssetAtRow(row);
         result_.assetId = asset != nullptr ? asset->assetId : kb::assets::AssetId{};
+        if (deleteOnDestroy_) {
+            acceptPending_ = true;
+            const HWND windowToClose = window_;
+            const kb::assets::AssetId acceptedAsset = result_.assetId;
+            EditorCrashBreadcrumbs::WriteValue(
+                "particle_picker", "accepted asset", acceptedAsset.value);
+            auto accepted = std::move(onAccepted_);
+            if (accepted) accepted(acceptedAsset);
+            if (windowToClose != nullptr && IsWindow(windowToClose) != 0 &&
+                PostMessageW(windowToClose, WM_CLOSE, 0U, 0) == 0) {
+                DestroyWindow(windowToClose);
+            }
+            return;
+        }
         running_ = false;
         DestroyWindow(window_);
     }
@@ -576,13 +660,15 @@ private:
     [[nodiscard]] RECT TextureSearchRect() const noexcept {
         const RECT client = Client();
         const int right = client.right - kTextureTileGap - (kTextureButtonWidth * 2) - kTextureTileGap;
-        return Rect(kTextureTileGap, kTextureTileGap, right, kTextureTileGap + kTextureSearchHeight);
+        const int top = kListHeaderHeight + 8;
+        return Rect(kTextureTileGap, top, right, top + kTextureSearchHeight);
     }
 
     [[nodiscard]] RECT TextureAcceptRect() const noexcept {
         const RECT client = Client();
         const int left = client.right - kTextureTileGap - (kTextureButtonWidth * 2) - kTextureTileGap;
-        return Rect(left, kTextureTileGap, left + kTextureButtonWidth, kTextureTileGap + kTextureSearchHeight);
+        const RECT search = TextureSearchRect();
+        return Rect(left, search.top, left + kTextureButtonWidth, search.bottom);
     }
 
     [[nodiscard]] RECT TextureCancelRect() const noexcept {
@@ -592,8 +678,8 @@ private:
 
     [[nodiscard]] RECT TextureViewportRect() const noexcept {
         const RECT client = Client();
-        const int top = kTextureTileGap + kTextureHeaderHeight;
-        return Rect(kTextureTileGap, top, client.right - kTextureTileGap, top + kTextureViewportHeight);
+        const int top = TextureSearchRect().bottom + 8;
+        return Rect(kTextureTileGap, top, client.right - kTextureTileGap, client.bottom - kFooterHeight);
     }
 
     [[nodiscard]] std::vector<std::size_t> FilteredTextureRows() const {
@@ -617,7 +703,7 @@ private:
 
     [[nodiscard]] int MaxTextureScroll() const {
         const std::vector<std::size_t> indices = FilteredTextureRows();
-        return std::max(0, TextureContentHeight(indices) - kTextureViewportHeight);
+        return std::max(0, TextureContentHeight(indices) - RectHeight(TextureViewportRect()));
     }
 
     [[nodiscard]] int TextureGridLeft(const RECT& viewport) const noexcept {
@@ -664,12 +750,14 @@ private:
     }
 
     void PaintTextureButton(HDC dc, RECT rect, std::string_view label, bool enabled, bool hovered) const {
-        const COLORREF fill = enabled
-            ? (hovered ? Rgb(58, 64, 76) : Rgb(51, 55, 65))
-            : Rgb(31, 33, 38);
-        const COLORREF border = enabled ? Rgb(64, 120, 217) : Rgb(0, 0, 0);
-        GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
-        Text(dc, rect, label, enabled ? Rgb(209, 214, 224) : Rgb(128, 133, 145), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        EditorDialogStyle::PaintButton(
+            dc,
+            rect,
+            theme_,
+            label,
+            label == "Accept" ? EditorDialogButtonTone::Primary : EditorDialogButtonTone::Neutral,
+            hovered,
+            enabled);
     }
 
     void PaintTextureTile(
@@ -679,15 +767,14 @@ private:
         int tileIndex,
         bool selected,
         bool hovered) const {
-        const COLORREF fill = selected || hovered ? Rgb(51, 55, 65) : Rgb(19, 20, 24);
-        const COLORREF border = selected ? Rgb(64, 120, 217) : Rgb(0, 0, 0);
+        const COLORREF fill = selected
+            ? EditorDialogStyle::Blend(Color(theme_.panel), Color(theme_.accent), 18)
+            : Color(hovered ? theme_.toolbarButton : theme_.panel);
+        const COLORREF border = Color(selected ? theme_.accent : theme_.borderPanel);
         GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
-        if (selected) {
-            GdiDrawing::DrawSharpFrame(dc, GdiDrawing::Inset(rect, 1), fill, Rgb(64, 120, 217));
-        }
 
         const RECT image = Rect(rect.left + 6, rect.top + 6, rect.right - 6, rect.top + 110);
-        GdiDrawing::DrawSharpFrame(dc, image, Rgb(0, 0, 0), Rgb(0, 0, 0));
+        GdiDrawing::DrawSharpFrame(dc, image, Color(theme_.chrome), Color(theme_.borderChrome));
         bool drewTexturePreview = false;
         if (assetManager_ != nullptr) {
             const kb::assets::AssetMetadata* metadata = assetManager_->Registry().Find(row.assetId);
@@ -699,52 +786,66 @@ private:
             }
         }
         if (!drewTexturePreview) {
-            HeroIconPainter::Draw(dc, GdiDrawing::Inset(image, 32), icon_, selected ? Rgb(64, 120, 217) : Rgb(128, 133, 145), 2);
+            HeroIconPainter::Draw(dc, GdiDrawing::Inset(image, 32), icon_, Color(selected ? theme_.accent : theme_.textSecondary), 2);
         }
 
         RECT label = Rect(rect.left + 6, rect.top + 116, rect.right - 6, rect.bottom - 6);
-        ScopedFont labelFont(12, FW_NORMAL);
-        const ScopedGdiObject selectedFont(dc, labelFont.handle);
-        SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, Rgb(209, 214, 224));
-        DrawTextA(dc, row.name.c_str(), static_cast<int>(row.name.size()), &label, DT_LEFT | DT_TOP | DT_END_ELLIPSIS | DT_NOPREFIX);
+        EditorDialogStyle::PaintText(
+            dc, label, row.name, Color(theme_.textPrimary), 12, FW_NORMAL,
+            DT_LEFT | DT_TOP | DT_END_ELLIPSIS);
         (void)tileIndex;
     }
 
     void PaintTextureScrollbar(HDC dc, RECT viewport, int contentHeight) const {
-        const int maxScroll = std::max(0, contentHeight - kTextureViewportHeight);
+        const int viewportHeight = RectHeight(viewport);
+        const int maxScroll = std::max(0, contentHeight - viewportHeight);
         if (maxScroll <= 0) {
             return;
         }
         const RECT track = Rect(viewport.right - kScrollbarWidth, viewport.top, viewport.right - 3, viewport.bottom);
-        GdiDrawing::FillRectColor(dc, track, Rgb(17, 18, 22));
-        const int thumbHeight = std::clamp((RectHeight(track) * kTextureViewportHeight) / std::max(1, contentHeight), 28, RectHeight(track));
+        const int thumbHeight = std::clamp((RectHeight(track) * viewportHeight) / std::max(1, contentHeight), 28, RectHeight(track));
         const int travel = std::max(0, RectHeight(track) - thumbHeight);
         const int thumbTop = track.top + (travel * std::clamp(textureScrollOffset_, 0, maxScroll)) / std::max(1, maxScroll);
-        GdiDrawing::FillRectColor(dc, Rect(track.left + 1, thumbTop, track.right - 1, thumbTop + thumbHeight), Rgb(83, 96, 113));
+        EditorDialogStyle::PaintScrollbar(
+            dc,
+            track,
+            Rect(track.left + 1, thumbTop, track.right - 1, thumbTop + thumbHeight),
+            theme_);
     }
 
     void PaintTextureBrowser(HDC dc) const {
         const RECT client = Client();
-        GdiDrawing::DrawSharpFrame(dc, client, Rgb(30, 33, 39), Rgb(0, 0, 0));
-        FillVerticalGradient(dc, GdiDrawing::Inset(client, 1), Rgb(30, 33, 39), Rgb(23, 25, 31));
+        EditorDialogStyle::PaintSurface(dc, client, theme_);
+        EditorDialogStyle::PaintHeader(dc, theme_, EditorDialogHeaderDescriptor{
+            .bounds = Rect(client.left + 1, client.top + 1, client.right - 1, client.top + kListHeaderHeight),
+            .closeButton = CloseButton(),
+            .title = title_,
+            .description = description_,
+            .icon = icon_,
+            .showIcon = true,
+            .closeHovered = hoveredRow_ == -2,
+        });
 
         const RECT search = TextureSearchRect();
-        GdiDrawing::DrawSharpFrame(dc, search, Rgb(17, 18, 22), textureSearchFocused_ ? Rgb(64, 120, 217) : Rgb(0, 0, 0));
         const std::string searchText = textureQuery_.empty()
             ? (textureSearchFocused_ ? std::string{ "|" } : std::string{ "Search textures" })
             : (textureSearchFocused_ ? textureQuery_ + "|" : textureQuery_);
-        Text(dc, Rect(search.left + 10, search.top, search.right - 10, search.bottom),
+        EditorDialogStyle::PaintField(
+            dc,
+            search,
+            theme_,
             searchText,
-            textureQuery_.empty() && !textureSearchFocused_ ? Rgb(128, 133, 145) : Rgb(209, 214, 224));
+            textureSearchFocused_,
+            textureQuery_.empty() && !textureSearchFocused_);
 
         PaintTextureButton(dc, TextureAcceptRect(), "Accept", ValidAsset(selectedTextureAsset_), hoveredRow_ == -3);
         PaintTextureButton(dc, TextureCancelRect(), "Cancel", true, hoveredRow_ == -4);
 
         const RECT viewport = TextureViewportRect();
+        EditorDialogStyle::PaintListFrame(dc, viewport, theme_);
         const std::vector<std::size_t> indices = FilteredTextureRows();
         const int contentHeight = TextureContentHeight(indices);
-        const int maxScroll = std::max(0, contentHeight - kTextureViewportHeight);
+        const int maxScroll = std::max(0, contentHeight - RectHeight(viewport));
         const int scroll = std::clamp(textureScrollOffset_, 0, maxScroll);
         const int saved = SaveDC(dc);
         IntersectClipRect(dc, viewport.left, viewport.top, viewport.right - kScrollbarWidth, viewport.bottom);
@@ -772,13 +873,21 @@ private:
         }
         RestoreDC(dc, saved);
         PaintTextureScrollbar(dc, viewport, contentHeight);
+        const RECT footer{client.left + 1, client.bottom - kFooterHeight, client.right - 1, client.bottom - 1};
+        EditorDialogStyle::PaintFooter(dc, footer, theme_);
+        EditorDialogStyle::PaintText(
+            dc,
+            Rect(kPad, footer.top, client.right - kPad, footer.bottom),
+            "Select an item, then confirm the assignment.",
+            Color(theme_.textSecondary),
+            10);
     }
 
     // --- Asset tile grid (mesh or material previews) ---
 
     [[nodiscard]] RECT TileGridViewportRect() const noexcept {
         const RECT client = Client();
-        return Rect(kPad, kListHeaderHeight, client.right - kPad, client.bottom - kFooterHeight);
+        return Rect(kPad, kListHeaderHeight + 8, client.right - kPad, client.bottom - kFooterHeight - 8);
     }
 
     [[nodiscard]] int TileGridLeft(const RECT& viewport) const noexcept {
@@ -803,6 +912,17 @@ private:
         const int left = TileGridLeft(viewport) + (column * (kAssetTileWidth + kAssetTileGap));
         const int top = viewport.top + (row * (kAssetTileHeight + kAssetTileGap)) - scrollOffset_;
         return Rect(left, top, left + kAssetTileWidth, top + kAssetTileHeight);
+    }
+
+    [[nodiscard]] RECT TileGridPreviewRect(
+        const RECT& viewport,
+        int index) const noexcept {
+        const RECT tile = TileGridRect(viewport, index);
+        return Rect(
+            tile.left + 7,
+            tile.top + 7,
+            tile.right - 7,
+            tile.top + 5 + kAssetTilePreviewHeight);
     }
 
     [[nodiscard]] int TileGridAt(int x, int y) const noexcept {
@@ -866,15 +986,14 @@ private:
     }
 
     void PaintTileGridItem(HDC dc, RECT rect, int tileIndex, bool selected, bool hovered) const {
-        const COLORREF fill = selected || hovered ? Rgb(51, 55, 65) : Rgb(19, 20, 24);
-        const COLORREF border = selected ? Color(theme_.accent) : Rgb(0, 0, 0);
+        const COLORREF fill = selected
+            ? EditorDialogStyle::Blend(Color(theme_.panel), Color(theme_.accent), 18)
+            : Color(hovered ? theme_.toolbarButton : theme_.panel);
+        const COLORREF border = Color(selected ? theme_.accent : theme_.borderPanel);
         GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
-        if (selected) {
-            GdiDrawing::DrawSharpFrame(dc, GdiDrawing::Inset(rect, 1), fill, Color(theme_.accent));
-        }
 
         const RECT image = Rect(rect.left + 6, rect.top + 6, rect.right - 6, rect.top + 6 + kAssetTilePreviewHeight);
-        GdiDrawing::DrawSharpFrame(dc, image, Rgb(10, 11, 14), Rgb(0, 0, 0));
+        GdiDrawing::DrawSharpFrame(dc, image, Color(theme_.chrome), Color(theme_.borderChrome));
 
         bool drewPreview = false;
         const AssetPickerRow* asset = AssetAtRow(tileIndex);
@@ -929,19 +1048,36 @@ private:
                 }
             }
         }
+        if (asset != nullptr && tileKind_ == AssetPickerTileKind::Particle && assetManager_ != nullptr) {
+            const kb::assets::AssetMetadata* metadata = assetManager_->Registry().Find(asset->assetId);
+            if (metadata != nullptr) {
+                double assetElapsedSeconds = 0.0;
+                if (const auto started = particleAnimationStartSeconds_.find(
+                        asset->assetId.value);
+                    started != particleAnimationStartSeconds_.end()) {
+                    assetElapsedSeconds = std::max(
+                        0.0, particleAnimationSeconds_ - started->second);
+                }
+                const EditorParticleThumbnailImage* preview =
+                    EditorParticleThumbnailCache().ThumbnailForTime(
+                        *metadata, assetElapsedSeconds);
+                if (preview != nullptr) {
+                    DrawParticleThumbnail(dc, GdiDrawing::Inset(image, 1), *preview);
+                    drewPreview = true;
+                }
+            }
+        }
         if (!drewPreview) {
             // The "None" tile, or an asset whose preview could not be rasterised.
-            const COLORREF iconColor = selected ? Color(theme_.accent) : Rgb(128, 133, 145);
+            const COLORREF iconColor = Color(selected ? theme_.accent : theme_.textSecondary);
             HeroIconPainter::Draw(dc, GdiDrawing::Inset(image, 42), icon_, iconColor, 2);
         }
 
         const std::string name = asset != nullptr ? asset->name : std::string{ "None" };
         RECT label = Rect(rect.left + 8, rect.top + kAssetTilePreviewHeight + 12, rect.right - 8, rect.bottom - 6);
-        ScopedFont labelFont(12, FW_SEMIBOLD);
-        const ScopedGdiObject selectedFont(dc, labelFont.handle);
-        SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, selected ? Color(theme_.textPrimary) : Rgb(209, 214, 224));
-        DrawTextA(dc, name.c_str(), static_cast<int>(name.size()), &label, DT_CENTER | DT_TOP | DT_END_ELLIPSIS | DT_NOPREFIX | DT_SINGLELINE);
+        EditorDialogStyle::PaintText(
+            dc, label, name, Color(theme_.textPrimary), 12, FW_SEMIBOLD,
+            DT_CENTER | DT_TOP | DT_END_ELLIPSIS | DT_SINGLELINE);
     }
 
     void PaintTileGridScrollbar(HDC dc, RECT viewport) const {
@@ -951,29 +1087,32 @@ private:
         }
         const int contentHeight = TileGridContentHeight();
         const RECT track = Rect(viewport.right - kScrollbarWidth, viewport.top, viewport.right - 3, viewport.bottom);
-        GdiDrawing::FillRectColor(dc, track, Rgb(17, 18, 22));
         const int thumbHeight = std::clamp((RectHeight(track) * RectHeight(viewport)) / std::max(1, contentHeight), 28, RectHeight(track));
         const int travel = std::max(0, RectHeight(track) - thumbHeight);
         const int thumbTop = track.top + (travel * std::clamp(scrollOffset_, 0, maxScroll)) / std::max(1, maxScroll);
-        GdiDrawing::FillRectColor(dc, Rect(track.left + 1, thumbTop, track.right - 1, thumbTop + thumbHeight), Rgb(83, 96, 113));
+        EditorDialogStyle::PaintScrollbar(
+            dc,
+            track,
+            Rect(track.left + 1, thumbTop, track.right - 1, thumbTop + thumbHeight),
+            theme_);
     }
 
-    void PaintTileGrid(HDC dc) const {
+    void PaintTileGrid(HDC dc, const RECT& dirty) const {
         const RECT client = Client();
-        GdiDrawing::FillRectColor(dc, client, Rgb(17, 19, 23));
-        GdiDrawing::DrawSharpFrame(dc, client, Rgb(17, 19, 23), Rgb(68, 76, 88));
-        {
-            ScopedFont titleFont(15, FW_SEMIBOLD);
-            const ScopedGdiObject selectedFont(dc, titleFont.handle);
-            Text(dc, Rect(kPad, 10, client.right - 58, 31), title_, Color(theme_.textPrimary));
-        }
-        Text(dc, Rect(kPad, 31, client.right - 58, 52), description_, Color(theme_.textSecondary));
-
         const RECT close = CloseButton();
-        GdiDrawing::DrawSharpFrame(dc, close, hoveredRow_ == -2 ? Rgb(43, 48, 56) : Rgb(27, 30, 35), hoveredRow_ == -2 ? Color(theme_.accent) : Rgb(74, 82, 94));
-        Text(dc, close, "x", hoveredRow_ == -2 ? Color(theme_.textPrimary) : Color(theme_.textSecondary), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        EditorDialogStyle::PaintSurface(dc, client, theme_);
+        EditorDialogStyle::PaintHeader(dc, theme_, EditorDialogHeaderDescriptor{
+            .bounds = Rect(client.left + 1, client.top + 1, client.right - 1, client.top + kListHeaderHeight),
+            .closeButton = close,
+            .title = title_,
+            .description = description_,
+            .icon = icon_,
+            .showIcon = true,
+            .closeHovered = hoveredRow_ == -2,
+        });
 
         const RECT viewport = TileGridViewportRect();
+        EditorDialogStyle::PaintListFrame(dc, viewport, theme_);
         const int selectedTile = SelectedTile();
         const int saved = SaveDC(dc);
         IntersectClipRect(dc, viewport.left, viewport.top, viewport.right - kScrollbarWidth, viewport.bottom);
@@ -982,47 +1121,58 @@ private:
             if (tile.bottom < viewport.top || tile.top > viewport.bottom) {
                 continue;
             }
+            if (!Intersects(tile, dirty)) continue;
             PaintTileGridItem(dc, tile, index, index == selectedTile, hoveredRow_ == index);
         }
         if (RowCount() == 0) {
             const char* message = tileKind_ == AssetPickerTileKind::Material
                 ? "No material assets found"
-                : "No mesh assets found";
+                : tileKind_ == AssetPickerTileKind::Particle
+                    ? "No particle effects found"
+                    : "No mesh assets found";
             Text(dc, Rect(viewport.left, viewport.top + 12, viewport.right, viewport.top + 40),
                 message, Color(theme_.textSecondary), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
         RestoreDC(dc, saved);
         PaintTileGridScrollbar(dc, viewport);
 
-        Text(dc, Rect(kPad, client.bottom - 32, client.right - kPad, client.bottom - 10), "Click to select. Double-click or Enter to assign. Esc closes.", Color(theme_.textSecondary));
+        const RECT footer{client.left + 1, client.bottom - kFooterHeight, client.right - 1, client.bottom - 1};
+        EditorDialogStyle::PaintFooter(dc, footer, theme_);
+        EditorDialogStyle::PaintText(
+            dc,
+            Rect(kPad, footer.top, client.right - kPad, footer.bottom),
+            tileKind_ == AssetPickerTileKind::Particle
+                ? "Click to select. Double-click to assign. Esc closes without changes."
+                : "Click to select. Double-click or Enter to assign. Esc closes.",
+            Color(theme_.textSecondary),
+            11);
     }
 
-    void Paint(HDC dc) const {
+    void Paint(HDC dc, const RECT& dirty) const {
         if (textureThumbnails_) {
             PaintTextureBrowser(dc);
             return;
         }
         if (tileKind_ != AssetPickerTileKind::None) {
-            PaintTileGrid(dc);
+            PaintTileGrid(dc, dirty);
             return;
         }
 
         const RECT client = Client();
-        GdiDrawing::FillRectColor(dc, client, Rgb(17, 19, 23));
-        GdiDrawing::DrawSharpFrame(dc, client, Rgb(17, 19, 23), Rgb(68, 76, 88));
-        {
-            ScopedFont titleFont(15, FW_SEMIBOLD);
-            const ScopedGdiObject selectedFont(dc, titleFont.handle);
-            Text(dc, Rect(kPad, 10, client.right - 58, 31), title_, Color(theme_.textPrimary));
-        }
-        Text(dc, Rect(kPad, 31, client.right - 58, 52), description_, Color(theme_.textSecondary));
-
         const RECT close = CloseButton();
-        GdiDrawing::DrawSharpFrame(dc, close, hoveredRow_ == -2 ? Rgb(43, 48, 56) : Rgb(27, 30, 35), hoveredRow_ == -2 ? Color(theme_.accent) : Rgb(74, 82, 94));
-        Text(dc, close, "x", hoveredRow_ == -2 ? Color(theme_.textPrimary) : Color(theme_.textSecondary), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        EditorDialogStyle::PaintSurface(dc, client, theme_);
+        EditorDialogStyle::PaintHeader(dc, theme_, EditorDialogHeaderDescriptor{
+            .bounds = Rect(client.left + 1, client.top + 1, client.right - 1, client.top + kListHeaderHeight),
+            .closeButton = close,
+            .title = title_,
+            .description = description_,
+            .icon = icon_,
+            .showIcon = true,
+            .closeHovered = hoveredRow_ == -2,
+        });
 
         const RECT list = ListRect();
-        GdiDrawing::DrawSharpFrame(dc, list, Rgb(20, 23, 27), Rgb(52, 58, 68));
+        EditorDialogStyle::PaintListFrame(dc, list, theme_);
         const int saved = SaveDC(dc);
         IntersectClipRect(dc, list.left + 1, list.top + 1, list.right - 1, list.bottom - 1);
         for (int row = 0; row < RowCount(); ++row) {
@@ -1034,35 +1184,27 @@ private:
             const kb::assets::AssetId rowAsset = row == 0 ? kb::assets::AssetId{} : rows_[static_cast<std::size_t>(row - 1)].assetId;
             const bool selected = rowAsset.value == currentAsset_.value;
             const bool hovered = hoveredRow_ == row;
-            GdiDrawing::FillRectColor(dc, rect, selected ? Rgb(35, 62, 78) : hovered ? Rgb(32, 37, 44) : (row % 2 == 0 ? Rgb(22, 25, 30) : Rgb(19, 22, 26)));
-
-            RECT icon = Rect(rect.left + 10, rect.top + 7, rect.left + 44, rect.top + 41);
-            bool drewTexturePreview = false;
-            if (textureThumbnails_ && row > 0 && assetManager_ != nullptr) {
-                const kb::assets::AssetMetadata* metadata = assetManager_->Registry().Find(rows_[static_cast<std::size_t>(row - 1)].assetId);
-                if (metadata != nullptr) {
-                    GdiDrawing::DrawSharpFrame(dc, icon, Rgb(12, 14, 17), selected ? Color(theme_.accent) : Rgb(68, 78, 94));
-                    if (const EditorTexturePreviewImage* preview = EditorTexturePreviewService::PreviewFor(*metadata); preview != nullptr) {
-                        EditorTexturePreviewService::DrawContain(dc, Rect(icon.left + 1, icon.top + 1, icon.right - 1, icon.bottom - 1), *preview, false);
-                        drewTexturePreview = true;
-                    }
-                }
-            }
-            if (!drewTexturePreview) {
-                HeroIconPainter::Draw(dc, icon, icon_, selected ? Color(theme_.accent) : Rgb(143, 158, 178), 2);
-            }
             const std::string name = row == 0 ? std::string{ "None" } : rows_[static_cast<std::size_t>(row - 1)].name;
             const std::string path = row == 0 ? clearDescription_ : rows_[static_cast<std::size_t>(row - 1)].path;
-            {
-                ScopedFont nameFont(12, FW_SEMIBOLD);
-                const ScopedGdiObject selectedFont(dc, nameFont.handle);
-                Text(dc, Rect(rect.left + 56, rect.top + 7, rect.right - 10, rect.top + 26), name, Color(theme_.textPrimary));
-            }
-            Text(dc, Rect(rect.left + 56, rect.top + 26, rect.right - 10, rect.bottom - 5), path, selected ? Rgb(170, 221, 238) : Color(theme_.textSecondary));
+            EditorDialogStyle::PaintListRow(dc, theme_, EditorDialogListRowDescriptor{
+                .bounds = rect,
+                .title = name,
+                .subtitle = path,
+                .icon = icon_,
+                .selected = selected,
+                .hovered = hovered,
+            });
         }
         RestoreDC(dc, saved);
         PaintScrollbar(dc, list);
-        Text(dc, Rect(kPad, client.bottom - 32, client.right - kPad, client.bottom - 10), "Esc closes. Click a row to assign it.", Color(theme_.textSecondary));
+        const RECT footer{client.left + 1, client.bottom - kFooterHeight, client.right - 1, client.bottom - 1};
+        EditorDialogStyle::PaintFooter(dc, footer, theme_);
+        EditorDialogStyle::PaintText(
+            dc,
+            Rect(kPad, footer.top, client.right - kPad, footer.bottom),
+            "Esc closes. Click a row to assign it.",
+            Color(theme_.textSecondary),
+            11);
     }
 
     void PaintScrollbar(HDC dc, RECT list) const {
@@ -1071,12 +1213,15 @@ private:
             return;
         }
         const RECT track = Rect(list.right - kScrollbarWidth, list.top + 4, list.right - 4, list.bottom - 4);
-        GdiDrawing::FillRectColor(dc, track, Rgb(14, 16, 19));
         const int contentHeight = RowCount() * kRowHeight;
         const int thumbHeight = std::clamp((RectHeight(track) * RectHeight(list)) / std::max(1, contentHeight), 28, RectHeight(track));
         const int travel = std::max(0, RectHeight(track) - thumbHeight);
         const int thumbTop = track.top + (travel * std::clamp(scrollOffset_, 0, maxScroll)) / std::max(1, maxScroll);
-        GdiDrawing::FillRectColor(dc, Rect(track.left + 1, thumbTop, track.right - 1, thumbTop + thumbHeight), Rgb(83, 96, 113));
+        EditorDialogStyle::PaintScrollbar(
+            dc,
+            track,
+            Rect(track.left + 1, thumbTop, track.right - 1, thumbTop + thumbHeight),
+            theme_);
     }
 
     void UpdateHover(int x, int y) {
@@ -1086,6 +1231,8 @@ private:
                 next = -3;
             } else if (Contains(TextureCancelRect(), x, y)) {
                 next = -4;
+            } else if (Contains(CloseButton(), x, y)) {
+                next = -2;
             } else if (Contains(TextureSearchRect(), x, y)) {
                 next = -5;
             } else {
@@ -1236,20 +1383,76 @@ private:
         if (window_ != nullptr && EditorMeshPreviewCache().PumpCompletedPreviews() > 0U) {
             InvalidateRect(window_, nullptr, FALSE);
         }
-        if (window_ == nullptr || sceneContext_ == nullptr || sceneViewport_ == nullptr) {
+        if (window_ == nullptr) {
             return;
         }
+        if (tileKind_ == AssetPickerTileKind::Particle) {
+            EditorParticleThumbnailService& thumbnails =
+                EditorParticleThumbnailCache();
+            particleAnimationSeconds_ = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() -
+                particleAnimationEpoch_).count();
+            const std::uint64_t revision = thumbnails.Revision();
+            const bool contentChanged =
+                revision != lastParticleThumbnailRevision_;
+            lastParticleThumbnailRevision_ = revision;
+            if (interactiveMove_ || assetManager_ == nullptr) return;
+
+            const RECT viewport = TileGridViewportRect();
+            for (int index = 0; index < RowCount(); ++index) {
+                const RECT tile = TileGridRect(viewport, index);
+                if (tile.bottom <= viewport.top ||
+                    tile.top >= viewport.bottom) {
+                    continue;
+                }
+                const AssetPickerRow* asset = AssetAtRow(index);
+                if (asset == nullptr) continue;
+                const kb::assets::AssetMetadata* metadata =
+                    assetManager_->Registry().Find(asset->assetId);
+                if (metadata == nullptr) continue;
+                const std::uint32_t frameCount =
+                    thumbnails.AnimationFrameCount(*metadata);
+                std::uint32_t frame = 0U;
+                if (frameCount > 1U) {
+                    const auto started =
+                        particleAnimationStartSeconds_.try_emplace(
+                            asset->assetId.value,
+                            particleAnimationSeconds_).first;
+                    frame = thumbnails.AnimationFrameForTime(
+                        *metadata,
+                        std::max(
+                            0.0,
+                            particleAnimationSeconds_ - started->second));
+                } else {
+                    particleAnimationStartSeconds_.erase(
+                        asset->assetId.value);
+                }
+                const auto previous = particleAnimationFrames_.find(
+                    asset->assetId.value);
+                const bool frameChanged =
+                    previous == particleAnimationFrames_.end() ||
+                    previous->second != frame;
+                particleAnimationFrames_[asset->assetId.value] = frame;
+                if (contentChanged || frameChanged) {
+                    const RECT preview = TileGridPreviewRect(
+                        viewport, index);
+                    InvalidateRect(window_, &preview, FALSE);
+                }
+            }
+            return;
+        }
+        const RECT client = Client();
+        const RECT staging{
+            std::max(client.left, client.right - 8),
+            std::max(client.top, client.bottom - 8),
+            client.right,
+            client.bottom,
+        };
+        if (sceneContext_ == nullptr || sceneViewport_ == nullptr) return;
         EditorMaterialThumbnailService& thumbnails = EditorMaterialThumbnailCache();
         if (thumbnails.HasPendingWork()) {
             static_cast<void>(sceneContext_->PumpMaterialGraphCookResults());
             sceneViewport_->SetGraphShaderCacheRoot(sceneContext_->GraphShaderCacheRoot());
-            const RECT client = Client();
-            const RECT staging{
-                std::max(client.left, client.right - 8),
-                std::max(client.top, client.bottom - 8),
-                client.right,
-                client.bottom,
-            };
             sceneViewport_->BeginPaintLayout(window_);
             thumbnails.Tick(*sceneContext_, *sceneViewport_, window_, staging);
             sceneViewport_->EndPaintLayout();
@@ -1271,26 +1474,47 @@ private:
         }
         case WM_ERASEBKGND:
             return 1;
-        case WM_PAINT: {
-            PAINTSTRUCT paint{};
-            HDC dc = BeginPaint(window, &paint);
-            if (picker != nullptr) {
-                // Double-buffer: render the whole dialog into an off-screen bitmap
-                // and blit once, so frequent hover repaints don't flicker.
-                RECT client{};
-                GetClientRect(window, &client);
-                const int width = client.right - client.left;
-                const int height = client.bottom - client.top;
-                HDC memDc = CreateCompatibleDC(dc);
-                HBITMAP memBitmap = CreateCompatibleBitmap(dc, width, height);
-                auto* oldBitmap = static_cast<HBITMAP>(SelectObject(memDc, memBitmap));
-                picker->Paint(memDc);
-                BitBlt(dc, 0, 0, width, height, memDc, 0, 0, SRCCOPY);
-                SelectObject(memDc, oldBitmap);
-                DeleteObject(memBitmap);
-                DeleteDC(memDc);
+        case WM_NCHITTEST:
+            if (picker != nullptr &&
+                picker->tileKind_ == AssetPickerTileKind::Particle) {
+                POINT point{
+                    GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+                if (ScreenToClient(window, &point) != 0) {
+                    const RECT client = picker->Client();
+                    if (point.y >= client.top &&
+                        point.y < client.top + kListHeaderHeight &&
+                        !Contains(
+                            picker->CloseButton(), point.x, point.y)) {
+                        return HTCAPTION;
+                    }
+                }
             }
-            EndPaint(window, &paint);
+            break;
+        case WM_ENTERSIZEMOVE:
+            if (picker != nullptr &&
+                picker->tileKind_ == AssetPickerTileKind::Particle) {
+                picker->interactiveMove_ = true;
+                return 0;
+            }
+            break;
+        case WM_EXITSIZEMOVE:
+            if (picker != nullptr &&
+                picker->tileKind_ == AssetPickerTileKind::Particle) {
+                picker->interactiveMove_ = false;
+                InvalidateRect(window, nullptr, FALSE);
+                return 0;
+            }
+            break;
+        case WM_PAINT: {
+            GdiBackBufferRenderer::Paint(
+                window,
+                [](const GdiBackBufferPaintContext& paint, void* context) {
+                    auto* target = static_cast<AssetPickerWindow*>(context);
+                    if (target != nullptr) {
+                        target->Paint(paint.dc, paint.dirty);
+                    }
+                },
+                picker);
             return 0;
         }
         case WM_MOUSEMOVE:
@@ -1351,7 +1575,8 @@ private:
             if (picker != nullptr && picker->HandleTextureKeyDown(wparam)) {
                 return 0;
             }
-            if (picker != nullptr && picker->tileKind_ != AssetPickerTileKind::None && wparam == VK_RETURN) {
+            if (picker != nullptr && picker->tileKind_ != AssetPickerTileKind::None &&
+                picker->tileKind_ != AssetPickerTileKind::Particle && wparam == VK_RETURN) {
                 picker->AcceptRow(picker->SelectedTile());
                 return 0;
             }
@@ -1382,6 +1607,14 @@ private:
             if (picker != nullptr && picker->window_ == window) {
                 KillTimer(window, kMaterialThumbnailTimerId);
                 picker->window_ = nullptr;
+            }
+            SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+            if (picker != nullptr && picker->deleteOnDestroy_) {
+                if (gModelessParticlePicker == picker) gModelessParticlePicker = nullptr;
+                EditorParticleThumbnailCache().CancelPendingWork(
+                    picker->sceneViewport_);
+                delete picker;
+                return 0;
             }
             break;
         default:
@@ -1417,6 +1650,18 @@ private:
     std::string textureQuery_;
     mutable std::unordered_map<std::uint64_t, ProjectFilesMaterialPreviewImage> materialPreviews_;
     std::uint64_t lastMaterialThumbnailRevision_ = 0U;
+    std::uint64_t lastParticleThumbnailRevision_ = 0U;
+    std::chrono::steady_clock::time_point particleAnimationEpoch_ =
+        std::chrono::steady_clock::now();
+    double particleAnimationSeconds_ = 0.0;
+    std::unordered_map<std::uint64_t, std::uint32_t>
+        particleAnimationFrames_;
+    std::unordered_map<std::uint64_t, double>
+        particleAnimationStartSeconds_;
+    EditorParticleEffectAssetPickerDialog::AcceptedCallback onAccepted_;
+    bool deleteOnDestroy_ = false;
+    bool acceptPending_ = false;
+    bool interactiveMove_ = false;
 };
 
 } // namespace
@@ -1489,6 +1734,38 @@ EditorAudioMixerAssetPickerDialog::Result EditorAudioMixerAssetPickerDialog::Sho
         .accepted = result.accepted,
         .assetId = result.assetId,
     };
+}
+
+bool EditorParticleEffectAssetPickerDialog::Open(
+    HWND owner,
+    const EditorTheme& theme,
+    EditorSceneContext& sceneContext,
+    EditorSceneBgfxViewport& sceneViewport,
+    kb::assets::AssetId currentEffect,
+    AcceptedCallback onAccepted) {
+    if (gModelessParticlePicker != nullptr) gModelessParticlePicker->Close();
+    kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    auto* window = new AssetPickerWindow{
+        theme,
+        BuildParticleEffectRows(sceneContext),
+        currentEffect,
+        "Select Particle Effect",
+        "Choose a Particle Effect asset to play on this object.",
+        "Clear Particle Effect",
+        HeroIconKind::Bolt,
+        &manager,
+        false,
+        AssetPickerTileKind::Particle,
+        true,
+        &sceneContext,
+        &sceneViewport,
+    };
+    if (!window->OpenModeless(owner, std::move(onAccepted))) {
+        delete window;
+        return false;
+    }
+    gModelessParticlePicker = window;
+    return true;
 }
 
 EditorAnimatorControllerAssetPickerDialog::Result EditorAnimatorControllerAssetPickerDialog::Show(

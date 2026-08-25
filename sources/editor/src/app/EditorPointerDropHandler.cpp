@@ -14,6 +14,7 @@
 #include "app/EditorMaterialAssetSceneDropHandler.hpp"
 #include "app/EditorMeshAssetInspectorDropHandler.hpp"
 #include "app/EditorMeshAssetSceneDropHandler.hpp"
+#include "app/EditorParticleAssetSceneDropHandler.hpp"
 #include "app/EditorPrefabAssetHierarchyDropHandler.hpp"
 #include "app/EditorPrefabAssetProjectFilesDropHandler.hpp"
 #include "app/EditorPrefabAssetSceneDropHandler.hpp"
@@ -347,6 +348,7 @@ bool EditorPointerDropHandler::Drop(
             || (drag.assetInstantiatesPrefab && EditorPrefabAssetHierarchyDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetPath, drag.assetVirtualPath))
             || (drag.assetCreatesMeshEntity && DropMeshOnMaterialEditorPreview(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetCreatesMeshEntity && EditorMeshAssetSceneDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
+            || (drag.assetCreatesParticleEffectEntity && EditorParticleAssetSceneDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetAddsBehaviour && EditorBehaviourAssetHierarchyDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetAddsBehaviour && EditorBehaviourAssetSceneDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetAddsBehaviour && EditorBehaviourAssetInspectorDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))

@@ -11,6 +11,7 @@
 #include "engine/platform/win32/Win32XInputHapticsBackend.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialPreviewViewportKeys.hpp"
@@ -23,6 +24,7 @@
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "rendering/ParticleEditorPanelRenderer.hpp"
 #include "rendering/EditorMaterialThumbnailService.hpp"
+#include "rendering/EditorParticleThumbnailService.hpp"
 #include "rendering/EditorMeshPreviewService.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/script_editor/ScriptEditorWindow.hpp"
@@ -31,6 +33,7 @@
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "app/scene_viewport/EditorTerrainViewportInteraction.hpp"
 #include "app/EditorWindowInvalidator.hpp"
+#include "app/EditorEditCommandPolicy.hpp"
 #include "scene/EditorTerrainService.hpp"
 #include "diagnostics/EditorLagTrace.hpp"
 
@@ -71,6 +74,7 @@ constexpr float kMaximumRuntimeDeltaSeconds = 1.0F / 15.0F;
 constexpr DWORD kPausedToolbarAnimationIntervalMs = 33;
 constexpr double kEditorTargetFrameRate = 60.0;
 constexpr DWORD kSceneToolbarRefreshIntervalMs = 250;
+constexpr DWORD kIdleMaintenanceIntervalMs = 1000;
 constexpr int kMaxMessagesPerPump = 128;
 
 [[nodiscard]] const char* MessageName(UINT message) noexcept {
@@ -224,6 +228,33 @@ constexpr int kMaxMessagesPerPump = 128;
         state.metrics.tabWidth,
         state.metrics.splitterSize,
         state.metrics.panelPadding);
+}
+
+[[nodiscard]] bool ParticleEditorPanelIsVisible(const EditorApplicationState& state) {
+    if (!state.sceneContext.HasParticleEditorAsset()) return false;
+    RECT client{};
+    GetClientRect(state.window, &client);
+    const DockLayout layout = state.dockModel.Queries().BuildLayout(
+        client.right - client.left,
+        client.bottom - client.top,
+        state.metrics.menuHeight,
+        state.metrics.toolbarHeight,
+        state.metrics.tabStripHeight,
+        state.metrics.tabMinWidth,
+        state.metrics.tabWidth,
+        state.metrics.splitterSize,
+        state.metrics.panelPadding);
+    for (const DockPanelLayout& panelLayout : layout.panels) {
+        if (!panelLayout.active) continue;
+        const DockPanel* panel = state.dockModel.Queries().FindPanel(panelLayout.panelId);
+        if (panel != nullptr && panel->kind == DockPanelKind::ParticleEditor) return true;
+    }
+    for (HWND window : state.floatingWindows.Queries().Windows()) {
+        if (window == nullptr || IsWindowVisible(window) == 0) continue;
+        const DockPanel* panel = state.dockModel.Queries().FindPanel(state.floatingWindows.Queries().PanelId(window));
+        if (panel != nullptr && panel->kind == DockPanelKind::ParticleEditor) return true;
+    }
+    return false;
 }
 
 void InvalidateSceneToolbar(HWND window, const RECT& content, const EditorViewportPreviewState& preview) noexcept {
@@ -395,11 +426,43 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
         state.floatingWindows,
         state.metrics);
     const std::optional<RECT>& thumbnailHost = assets.has_value() ? assets : inspector;
+    std::optional<RECT> particleThumbnailHost = thumbnailHost;
+    if (!particleThumbnailHost.has_value()) {
+        RECT client{};
+        if (GetClientRect(state.window, &client) != 0 &&
+            client.right > client.left && client.bottom > client.top) {
+            particleThumbnailHost = RECT{
+                std::max(client.left, client.right - 8),
+                std::max(client.top, client.bottom - 8),
+                client.right,
+                client.bottom,
+            };
+        }
+    }
+    if (particleThumbnailHost.has_value() &&
+        EditorParticleThumbnailCache().HasPendingWork()) {
+        const RECT staging{
+            particleThumbnailHost->left,
+            particleThumbnailHost->top,
+            std::min(
+                particleThumbnailHost->right,
+                particleThumbnailHost->left + 8),
+            std::min(
+                particleThumbnailHost->bottom,
+                particleThumbnailHost->top + 8),
+        };
+        static_cast<void>(EditorParticleThumbnailCache().TickWithinFrame(
+            state.sceneContext,
+            state.sceneViewport,
+            state.window,
+            staging));
+        thumbnailPresented = true;
+    }
     if (thumbnailHost.has_value() && EditorMaterialThumbnailCache().HasPendingWork()) {
         const RECT staging{
-            thumbnailHost->left,
-            thumbnailHost->top,
             thumbnailHost->left + 8,
+            thumbnailHost->top,
+            thumbnailHost->left + 16,
             thumbnailHost->top + 8,
         };
         const std::uint64_t revisionBefore = EditorMaterialThumbnailCache().Revision();
@@ -504,8 +567,11 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
     // intentionally time-driven preview and Play Mode advances the scene every tick.
     const bool playPresent = state.playMode.IsPlaying();
     const bool materialPresent = state.sceneContext.MaterialEditor().OpenAssetId().IsValid();
-    const bool thumbnailPresent = EditorMaterialThumbnailCache().HasPendingWork();
-    const bool continuousPresent = playPresent || materialPresent;
+    const bool particlePresent = ParticleEditorPanelIsVisible(state);
+    const bool thumbnailPresent =
+        EditorMaterialThumbnailCache().HasPendingWork() ||
+        EditorParticleThumbnailCache().HasPendingWork();
+    const bool continuousPresent = playPresent || materialPresent || particlePresent;
     // The toolbar refresh only repaints cached counters. It must not manufacture a GPU frame:
     // doing so submitted every visible viewport exactly four times per second while idle.
     if (continuousPresent || thumbnailPresent) {
@@ -633,11 +699,35 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         kb::input::InputHaptics::RegisterBackend(state.sceneContext.Scene(), hapticsBackend);
     }
     hapticsActive = true;
+    const auto tickStart = std::chrono::steady_clock::now();
     // Feed real device input to the runtime before systems tick (Input phase).
     kb::input::InputSubsystem& input = state.sceneContext.Scene().Input();
+    const auto pointerStart = std::chrono::steady_clock::now();
     ConfigurePlayModePointerViewport(state);
+    const auto collectStart = std::chrono::steady_clock::now();
     state.inputCollector.Collect(input.MutableDeviceState(), state.window);
-    if (!state.sceneContext.TickPlayModeSceneSession(deltaSeconds)) {
+    const auto runtimeStart = std::chrono::steady_clock::now();
+    const bool continuePlaying = state.sceneContext.TickPlayModeSceneSession(deltaSeconds);
+    const auto runtimeEnd = std::chrono::steady_clock::now();
+    const double totalMs = std::chrono::duration<double, std::milli>(runtimeEnd - tickStart).count();
+    if (totalMs >= 4.0) {
+        const kb::scene::SceneRuntimeHotPathReport hotPath =
+            state.sceneContext.Scene().Runtime().HotPathReport();
+        std::ostringstream detail;
+        detail << "pointer=" << std::chrono::duration<double, std::milli>(collectStart - pointerStart).count()
+               << "ms input=" << std::chrono::duration<double, std::milli>(runtimeStart - collectStart).count()
+               << "ms runtime=" << std::chrono::duration<double, std::milli>(runtimeEnd - runtimeStart).count()
+               << "ms transformInspected=" << hotPath.transformHierarchyInspectedCount
+               << " transformUpdated=" << hotPath.transformHierarchyUpdatedCount
+               << " transformProxyUpdates=" << hotPath.transformRenderProxyUpdateCount;
+        diagnostics::EditorLagTrace::Slow(
+            "play-mode-tick",
+            diagnostics::EditorLagTrace::NextEventId(),
+            totalMs,
+            detail.str(),
+            4.0);
+    }
+    if (!continuePlaying) {
         const bool previousPlayModeSceneActive = state.sceneContext.HasPlayModeSceneSession();
         state.playMode.Stop();
         static_cast<void>(state.sceneContext.RestorePlayModeSceneSession());
@@ -723,8 +813,13 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     if (animationPreviewCameraChanged || animationPreviewPlaybackChanged) {
         state.sceneViewport.RequestPresent();
     }
-    const bool particlePreviewChanged = state.sceneContext.TickParticleEditorPreview(deltaSeconds);
+    const bool particlePanelVisible = ParticleEditorPanelIsVisible(state);
+    const bool particlePreviewChanged =
+        particlePanelVisible && state.sceneContext.TickParticleEditorPreview(deltaSeconds);
     if (particlePreviewChanged) state.sceneViewport.RequestPresent();
+    const bool sceneParticlesChanged =
+        !state.playMode.IsPlaying() && state.sceneContext.TickEditorSceneParticles(deltaSeconds);
+    if (sceneParticlesChanged) state.sceneViewport.RequestPresent();
 
     const bool audioPreviewChanged = EditorAudioAssetPreview::Tick(state.sceneContext.Scene());
     if (audioPreviewChanged) {
@@ -755,7 +850,8 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
 
     const bool viewportsPresented = PresentVisibleViewports(state);
     return viewportsPresented || navigationChanged || gizmoChanged || focusChanged ||
-        animationPreviewCameraChanged || animationPreviewPlaybackChanged || particlePreviewChanged || scriptSaved ||
+        animationPreviewCameraChanged || animationPreviewPlaybackChanged || particlePreviewChanged ||
+        sceneParticlesChanged || scriptSaved ||
         audioPreviewChanged || addComponentSliding || disclosureSliding || skeletalMeshEditorOpenChanged ||
         EditorTerrainService::ToolState().strokeActive;
 }
@@ -839,12 +935,12 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
             DispatchMessageW(&message);
             const double dispatchMs = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - dispatchStart).count();
-            if (dispatchMs >= 8.0) {
+            if (dispatchMs >= 4.0) {
                 std::ostringstream detail;
                 detail << "message=" << MessageName(message.message)
                        << " id=0x" << std::hex << message.message
                        << " hwnd=0x" << reinterpret_cast<std::uintptr_t>(message.hwnd) << std::dec;
-                diagnostics::EditorLagTrace::Slow("dispatch", messageEventId, dispatchMs, detail.str());
+                diagnostics::EditorLagTrace::Slow("dispatch", messageEventId, dispatchMs, detail.str(), 4.0);
             }
             if (isPaint) {
                 paintMs += dispatchMs;
@@ -874,9 +970,16 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
             continue;
         }
 
+        const double wallDeltaSeconds = std::chrono::duration<double>(
+            currentTick - previousTick).count();
         const float deltaSeconds = RuntimeDeltaSeconds(previousTick, currentTick);
         previousTick = currentTick;
         const auto tickStart = std::chrono::steady_clock::now();
+        if (state.sceneContext.TickAutosave(
+                wallDeltaSeconds,
+                EditorEditCommandPolicy::CanExecute(state.sceneContext))) {
+            InvalidateRect(state.window, nullptr, FALSE);
+        }
         TickPlayMode(state, deltaSeconds);
         static_cast<void>(TickPointerDragFrame(state));
         const bool sceneFramePresented = TickEditorFrame(state, deltaSeconds);
@@ -901,15 +1004,24 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
             }
             static_cast<void>(MsgWaitForMultipleObjects(0, nullptr, FALSE, kPausedToolbarAnimationIntervalMs, QS_ALLINPUT));
         } else if (state.playMode.IsPlaying()) {
-            // Play advances a frame every loop iteration, but TickEditorFrame only
-            // presents the scene viewport (its own swapchain) — the GDI panels
-            // (Console, Hierarchy, Inspector) only redraw on WM_PAINT. Without
-            // invalidating here, live output produced during play (a script's
-            // Console log, the HUD, runtime stats) lands in panel state but is not
-            // drawn until the next input event forces a repaint. Invalidate each
-            // play frame — as the paused branch already does — so it shows live.
-            if (state.window != nullptr) {
-                InvalidateRect(state.window, nullptr, FALSE);
+            // The Scene surface owns its swapchain and was already presented by
+            // TickEditorFrame. Repaint data panels only when their source revision
+            // changes; periodic invalidations of left/right/bottom panels merge into
+            // an almost full-window WM_PAINT region and cause regular camera hitches.
+            const std::vector<EditorConsoleEntry>& entries = state.sceneContext.Console().Entries();
+            const std::uint64_t consoleSequence = entries.empty() ? 0U : entries.back().sequence;
+            const std::uint64_t consoleCount = static_cast<std::uint64_t>(entries.size());
+            if (consoleSequence != state.lastPlayConsoleEntrySequence ||
+                consoleCount != state.lastPlayConsoleEntryCount) {
+                state.lastPlayConsoleEntrySequence = consoleSequence;
+                state.lastPlayConsoleEntryCount = consoleCount;
+                InvalidatePanelKind(state, DockPanelKind::Console);
+            }
+            const std::uint64_t sceneRevision = state.sceneContext.SceneRenderRevision();
+            if (sceneRevision != state.lastPlaySceneRenderRevision) {
+                state.lastPlaySceneRenderRevision = sceneRevision;
+                InvalidatePanelKind(state, DockPanelKind::Hierarchy);
+                InvalidatePanelKind(state, DockPanelKind::Inspector);
             }
         } else if (!sceneFramePresented) {
             // Keep the loop paced (instead of parking in WaitMessage) while a material is open so
@@ -922,7 +1034,8 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
                 EditorMeshPreviewCache().HasPendingPreviewWork()) {
                 static_cast<void>(MsgWaitForMultipleObjects(0, nullptr, FALSE, FrameWaitMilliseconds(currentTick, nextEditorFrame), QS_ALLINPUT));
             } else {
-                WaitMessage();
+                static_cast<void>(MsgWaitForMultipleObjects(
+                    0, nullptr, FALSE, kIdleMaintenanceIntervalMs, QS_ALLINPUT));
             }
         }
     }

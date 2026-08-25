@@ -15,9 +15,12 @@
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/ParticleEffectAsset.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
+#include "engine/scene/ParticleEffectAssetValidation.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
 
@@ -25,6 +28,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -105,6 +109,20 @@ void TestDocumentHistorySavePointAndAtomicFailure() {
     Require(document.Apply(document.Asset()).status == kb::particle_editor::ParticleEditorStatus::NoChange,
         "canonical no-op edit polluted particle history");
 
+    auto coalesced = document.Asset();
+    coalesced.displayName = "Coalesced One";
+    Require(document.Apply(coalesced).Succeeded() && document.Asset().displayName == "Coalesced One",
+        "coalesced slider baseline apply failed");
+    coalesced.displayName = "Coalesced Two";
+    Require(document.ReplaceLatest(coalesced).Succeeded() && document.Asset().displayName == "Coalesced Two",
+        "replace latest did not overwrite the current history entry");
+    Require(document.Undo() && document.Asset().displayName == "Changed Preview Effect",
+        "replace latest created an extra undo step");
+    Require(document.Redo() && document.Asset().displayName == "Coalesced Two",
+        "replace latest redo did not restore the coalesced edit");
+    Require(document.Undo() && document.Asset().displayName == "Changed Preview Effect",
+        "coalesce coverage did not restore the surrounding document state");
+
     const std::filesystem::path failedPath = root / "CannotSave.kbvfx";
     const std::string oldBytes = "existing bytes remain";
     {
@@ -144,6 +162,38 @@ void TestDocumentHistorySavePointAndAtomicFailure() {
 
 void TestEmitterListCommandsAndAuthoredCompileOrder() {
     using namespace kb::particle_editor;
+    ParticleEditorDocument recipeDocument;
+    ParticleEditorWorkspaceState recipeWorkspace;
+    Require(recipeDocument.Create(MakeEffect()).Succeeded(), "recipe append fixture creation failed");
+    recipeWorkspace.Synchronize(recipeDocument.Asset());
+    auto recipe = MakeEffect();
+    recipe.emitters[0].emitterId = 21U;
+    recipe.emitters[0].authoringOrder = 0U;
+    recipe.emitters[0].name = "Recipe Source";
+    auto recipeTarget = recipe.emitters[0];
+    recipeTarget.emitterId = 22U;
+    recipeTarget.authoringOrder = 1U;
+    recipeTarget.name = "Recipe Target";
+    recipe.emitters.push_back(std::move(recipeTarget));
+    recipe.emitters[0].modules.push_back({.moduleId = 1U, .authoringOrder = 0U,
+        .type = kb::scene::ParticleModuleType::SubEmitter,
+        .payload = kb::scene::ParticleSubEmitterModule{.targetEmitterId = 22U}});
+    recipe.eventBindings.push_back({.sourceEmitterId = 21U,
+        .action = kb::scene::ParticleEventAction::EmitTargetEmitter, .targetEmitterId = 22U});
+    Require(ParticleEditorCommands::AppendRecipeEmitters(recipeDocument, recipeWorkspace, recipe).Succeeded() &&
+            recipeDocument.Asset().emitters.size() == 3U &&
+            recipeDocument.Asset().emitters[0].emitterId == 1U &&
+            recipeDocument.Asset().emitters[1].emitterId == 2U &&
+            recipeDocument.Asset().emitters[0].authoringOrder == 1U &&
+            recipeDocument.Asset().emitters[1].authoringOrder == 2U &&
+            std::get<kb::scene::ParticleSubEmitterModule>(recipeDocument.Asset().emitters[0].modules[0].payload)
+                .targetEmitterId == 2U &&
+            recipeDocument.Asset().eventBindings[0].sourceEmitterId == 1U &&
+            recipeDocument.Asset().eventBindings[0].targetEmitterId == 2U,
+        "recipe append did not preserve authored order or remap internal emitter links");
+    Require(kb::scene::ParticleEffectAssetValidator::ValidateStructure(recipeDocument.Asset()).Succeeded(),
+        "recipe append did not produce a structurally valid working document");
+
     ParticleEditorDocument limited;
     ParticleEditorWorkspaceState limitedWorkspace;
     Require(limited.Create(MakeEffect()).Succeeded(), "emitter command fixture creation failed");
@@ -300,7 +350,7 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
     const auto gradientRow = std::find_if(colorInspector.properties.begin(), colorInspector.properties.end(),
         [](const auto& row) { return row.label == "Gradient"; });
     Require(gradientRow != colorInspector.properties.end() && gradientRow->editable &&
-            gradientRow->value == "0,1,1,1,1;1,1,1,1,1",
+            gradientRow->value == "0,1,1,1,1;1,1,1,1,0",
         "ColorOverLife gradient property row was not editable or did not encode the default gradient");
     const auto sizeInspector =
         ParticleEmitterInspectorModel::Build(allTypesDocument.Asset(), 11U, sizeModuleId, nullptr, nullptr);
@@ -313,6 +363,30 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
         [](const auto& row) { return row.label == "Rate curve"; });
     Require(rateRow != rateInspector.properties.end() && rateRow->editable && rateRow->value == "0,60,0",
         "spawn rate curve property row was not editable or did not encode the authored curve");
+    const auto colorRow = std::find_if(rateInspector.properties.begin(), rateInspector.properties.end(),
+        [](const auto& row) { return row.property == ParticleEditorProperty::SpawnStartColor; });
+    Require(colorRow != rateInspector.properties.end() &&
+            colorRow->widget == ParticleEditorPropertyWidget::Color &&
+            colorRow->colorValue.r == 1.0F && colorRow->editable,
+        "start color was not exposed as an editable color property");
+    const kb::math::Color picked{128.0F / 255.0F, 0.0F, 1.0F, 1.0F};
+    kb::math::Color parsedColor{};
+    Require(ParticleEmitterInspectorModel::ParseColor(
+                ParticleEmitterInspectorModel::FormatColor(picked), parsedColor) &&
+            std::abs(parsedColor.r - picked.r) < 0.000001F && parsedColor.g == 0.0F &&
+            parsedColor.b == 1.0F && parsedColor.a == 1.0F,
+        "start color picker text did not round-trip through FormatColor/ParseColor");
+    kb::math::Gradient parsedGradient{};
+    Require(ParticleEmitterInspectorModel::ParseGradient(gradientRow->value, parsedGradient) &&
+            parsedGradient.stops.size() == 2U && parsedGradient.stops[0].color.r == 1.0F,
+        "ColorOverLife gradient text did not round-trip through ParseGradient");
+    auto tinted = allTypesDocument.Asset().emitters[0].spawn;
+    tinted.startColor = {0.2F, 0.4F, 0.8F, 1.0F};
+    tinted.startSize = 2.0F;
+    Require(ParticleEditorCommands::SetEmitterSpawn(allTypesDocument, allTypesWorkspace, 11U, tinted).Succeeded() &&
+            allTypesDocument.Asset().emitters[0].spawn.startColor.b == 0.8F &&
+            allTypesDocument.Asset().emitters[0].spawn.startSize == 2.0F,
+        "start color and start size did not persist through SetEmitterSpawn");
 
     auto editedGradient = std::get<kb::scene::ParticleColorOverLifeModule>(color->payload);
     editedGradient.gradient.stops.insert(editedGradient.gradient.stops.begin() + 1,
@@ -348,6 +422,51 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
     Require(ParticleEditorCommands::SetEmitterSpawn(allTypesDocument, allTypesWorkspace, 11U, editedSpawn).Succeeded() &&
             allTypesDocument.Asset().emitters[0].spawn.rateOverTime.keyframes.size() == 2U,
         "spawn rate curve keyframe insertion via SetEmitterSpawn did not persist a genuine two-key edit");
+
+    ParticleEditorDocument atlasDocument;
+    ParticleEditorWorkspaceState atlasWorkspace;
+    Require(atlasDocument.Create(MakeEffect()).Succeeded(), "atlas-column fixture creation failed");
+    atlasWorkspace.Synchronize(atlasDocument.Asset());
+    auto atlasOutput = atlasDocument.Asset().emitters[0].output;
+    auto* atlasBillboard = std::get_if<kb::scene::ParticleBillboardOutput>(&atlasOutput.payload);
+    Require(atlasBillboard != nullptr, "atlas-column fixture lost billboard output");
+    atlasBillboard->flipbook.columns = 4U;
+    const auto atlasColumns = ParticleEditorCommands::SetEmitterOutput(
+        atlasDocument, atlasWorkspace, 11U, atlasOutput);
+    Require(atlasColumns.Succeeded(),
+        atlasColumns.message.empty()
+            ? "atlas columns command failed without a message"
+            : atlasColumns.message.c_str());
+    Require(std::get<kb::scene::ParticleBillboardOutput>(
+                atlasDocument.Asset().emitters[0].output.payload).flipbook.columns == 4U,
+        "atlas columns did not persist on the working document");
+    const auto atlasValidation =
+        kb::scene::ParticleEffectAssetValidator::ValidateStructure(atlasDocument.Asset());
+    Require(atlasValidation.Succeeded(), "atlas columns left the particle effect structurally invalid");
+    Require(std::any_of(atlasValidation.diagnostics.begin(), atlasValidation.diagnostics.end(),
+                [](const auto& diagnostic) {
+                    return diagnostic.severity == kb::scene::ParticleEffectDiagnosticSeverity::Warning &&
+                           diagnostic.code == kb::scene::ParticleEffectDiagnosticCode::InvalidReference;
+                }),
+        "missing flipbook atlas did not remain a visible authoring warning");
+    kb::assets::AssetRegistry atlasRegistry;
+    Require(atlasRegistry.Upsert({.id = kb::assets::AssetId{80U}, .type = "RenderMaterial",
+                .virtualPath = "/Game/Materials/PreviewParticle.21kb", .contentHash = 1U}),
+        "atlas compiler material registration failed");
+    auto atlasCompilable = atlasDocument.Asset();
+    atlasCompilable.emitters[0].output.material = {
+        .assetId = 80U, .virtualPath = "/Game/Materials/PreviewParticle.21kb"};
+    atlasCompilable.emitters[0].spawn.startColor = {0.1F, 0.85F, 0.2F, 1.0F};
+    const kb::assets::AssetMetadata atlasOwner{.id = kb::assets::AssetId{81U},
+        .type = kb::scene::kParticleEffectAssetType,
+        .virtualPath = "/Game/Effects/AtlasColumns.kbvfx", .contentHash = 1U};
+    const auto atlasCompiled = kb::particle_plugin::ParticleEffectCompiler::Compile(
+        atlasCompilable, atlasOwner, atlasRegistry);
+    Require(atlasCompiled.Succeeded() && atlasCompiled.effect != nullptr &&
+            atlasCompiled.effect->emitters[0].colorOverLife.stopCount == 2U &&
+            atlasCompiled.effect->emitters[0].colorOverLife.stops[0].color.g > 0.8F &&
+            atlasCompiled.effect->emitters[0].colorOverLife.stops[0].color.r < 0.2F,
+        "flipbook atlas warning blocked compiled start color");
 
     ParticleEditorDocument document;
     ParticleEditorWorkspaceState workspace;
@@ -391,25 +510,24 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
         "compiler did not execute modules in persisted authoring order");
 
     auto unsupported = compilable;
-    unsupported.emitters[0].output.type = kb::scene::ParticleOutputType::Mesh;
-    unsupported.emitters[0].output.payload = kb::scene::ParticleMeshOutput{};
-    unsupported.emitters[0].output.mesh = {.assetId = 100U};
+    unsupported.emitters[0].output.type = kb::scene::ParticleOutputType::Volumetric;
+    unsupported.emitters[0].output.payload = kb::scene::ParticleVolumetricOutput{};
     unsupported.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualRequired;
     unsupported.eventBindings.push_back({.sourceEmitterId = 11U,
         .action = kb::scene::ParticleEventAction::EmitEffectAsset,
         .targetEffect = {.assetId = 200U}});
     const auto capabilityDiagnostics =
         kb::particle_plugin::ParticleEffectCompiler::ValidateCapabilities(unsupported);
-    Require(capabilityDiagnostics.size() == 3U &&
+    Require(capabilityDiagnostics.size() == 1U &&
             std::all_of(capabilityDiagnostics.begin(), capabilityDiagnostics.end(), [](const auto& diagnostic) {
                 return diagnostic.code == kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability;
-            }), "public capability validator did not aggregate GPU policy, external event, and output failures");
+            }), "public capability validator did not preserve the external-event failure");
     const auto inspector = ParticleEmitterInspectorModel::Build(unsupported, 11U, 2U, nullptr, nullptr);
-    Require(inspector.outputChoices.size() == 8U && !inspector.outputChoices[3].enabled &&
-            inspector.outputChoices[3].diagnostics.size() == 1U &&
+    Require(inspector.outputChoices.size() == 8U && inspector.outputChoices[7].enabled &&
+            inspector.outputChoices[7].diagnostics.empty() &&
             inspector.modules.size() == 3U && inspector.modules[2].selected &&
-            unsupported.emitters[0].output.type == kb::scene::ParticleOutputType::Mesh,
-        "inspector did not expose disabled capability diagnostics or preserve authored unsupported data");
+            unsupported.emitters[0].output.type == kb::scene::ParticleOutputType::Volumetric,
+        "inspector did not expose the supported volumetric output or preserve authored data");
     Require(ParticleEditorCommands::RemoveModule(document, workspace, 11U, 2U).Succeeded() &&
             document.Asset().emitters[0].modules.size() == 2U &&
             document.Asset().emitters[0].modules[0].authoringOrder == 1U &&
@@ -570,23 +688,83 @@ void TestProductionBakeCacheAndCapabilityGates() {
     Require(bake(effect).status == ParticleBakeStatus::Baked,
         "future compiled cache format was accepted instead of atomically rebuilt");
 
-    for (const kb::scene::ParticleOutputType unsupported : {kb::scene::ParticleOutputType::Mesh,
-             kb::scene::ParticleOutputType::Trail, kb::scene::ParticleOutputType::Ribbon,
-             kb::scene::ParticleOutputType::Beam, kb::scene::ParticleOutputType::Volumetric}) {
+    {
         auto candidate = effect;
-        candidate.emitters[0].output.type = unsupported;
-        candidate.emitters[0].output.payload = kb::scene::DefaultParticleOutputPayload(unsupported);
-        candidate.emitters[0].output.mesh = unsupported == kb::scene::ParticleOutputType::Mesh
-            ? kb::scene::ParticleAssetReference{.assetId = 73U} : kb::scene::ParticleAssetReference{};
-        const ParticleBakeResult rejected = bake(candidate);
+        candidate.emitters[0].output.type = kb::scene::ParticleOutputType::Volumetric;
+        candidate.emitters[0].output.payload = kb::scene::ParticleVolumetricOutput{};
+        kb::particle_plugin::ParticleCompilerCapabilities capabilities;
+        capabilities.volumetric = false;
+        const ParticleBakeResult rejected = ParticleBakeService::Bake({.workingAsset = candidate, .owner = owner,
+            .registry = registry, .cacheRoot = cacheRoot, .compile = {.capabilities = capabilities}});
         Require(rejected.status == ParticleBakeStatus::UnsupportedCapability && !rejected.diagnostics.empty() &&
                 rejected.diagnostics.front().code == kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability,
-            "unsupported output was silently downgraded by Bake");
+            "unsupported volumetric output was silently downgraded by Bake");
+    }
+    {
+        auto candidate = effect;
+        candidate.emitters[0].output.type = kb::scene::ParticleOutputType::Trail;
+        candidate.emitters[0].output.payload = kb::scene::ParticleTrailOutput{
+            .sampleIntervalSeconds = 0.125F, .minimumDistance = 0.5F, .maxSamplesPerParticle = 23U, .width = 0.75F};
+        kb::particle_plugin::ParticleCompilerCapabilities capabilities;
+        capabilities.trail = true;
+        const ParticleBakeResult accepted = ParticleBakeService::Bake({.workingAsset = candidate, .owner = owner,
+            .registry = registry, .cacheRoot = cacheRoot, .compile = {.capabilities = capabilities}});
+        Require(accepted.Succeeded() && accepted.effect->emitters[0].trailSampleIntervalSeconds == 0.125F &&
+                accepted.effect->emitters[0].trailMinimumDistance == 0.5F &&
+                accepted.effect->emitters[0].trailMaxSamplesPerParticle == 23U &&
+                accepted.effect->emitters[0].trailWidth == 0.75F,
+            "Trail Bake did not preserve the validated output contract in the compiled cache");
+    }
+    {
+        auto candidate = effect;
+        candidate.emitters[0].output.type = kb::scene::ParticleOutputType::Ribbon;
+        candidate.emitters[0].output.payload = kb::scene::ParticleRibbonOutput{
+            .maxSegments = 127U, .width = 0.625F, .breakOnDeath = false};
+        kb::particle_plugin::ParticleCompilerCapabilities capabilities;
+        capabilities.ribbon = true;
+        const ParticleBakeResult accepted = ParticleBakeService::Bake({.workingAsset = candidate, .owner = owner,
+            .registry = registry, .cacheRoot = cacheRoot, .compile = {.capabilities = capabilities}});
+        Require(accepted.Succeeded() && accepted.effect->emitters[0].ribbonMaxSegments == 127U &&
+                accepted.effect->emitters[0].ribbonWidth == 0.625F && !accepted.effect->emitters[0].ribbonBreakOnDeath,
+            "Ribbon Bake did not preserve the validated output contract in the compiled cache");
+    }
+    {
+        auto candidate = effect;
+        candidate.emitters[0].output.type = kb::scene::ParticleOutputType::Beam;
+        candidate.emitters[0].output.payload = kb::scene::ParticleBeamOutput{
+            .localEnd = {2.0F, 3.0F, 4.0F}, .segments = 19U, .width = 0.875F,
+            .noiseAmplitude = 0.25F, .noiseFrequency = 1.5F};
+        kb::particle_plugin::ParticleCompilerCapabilities capabilities;
+        capabilities.beam = true;
+        const ParticleBakeResult accepted = ParticleBakeService::Bake({.workingAsset = candidate, .owner = owner,
+            .registry = registry, .cacheRoot = cacheRoot, .compile = {.capabilities = capabilities}});
+        Require(accepted.Succeeded() && accepted.effect->emitters[0].beamLocalEnd.z == 4.0F &&
+                accepted.effect->emitters[0].beamSegments == 19U && accepted.effect->emitters[0].beamWidth == 0.875F &&
+                accepted.effect->emitters[0].beamNoiseAmplitude == 0.25F &&
+                accepted.effect->emitters[0].beamNoiseFrequency == 1.5F,
+            "Beam Bake did not preserve the validated output contract in the compiled cache");
+    }
+    {
+        auto candidate = effect;
+        candidate.emitters[0].output.type = kb::scene::ParticleOutputType::Volumetric;
+        candidate.emitters[0].output.payload = kb::scene::ParticleVolumetricOutput{
+            .density = 0.75F, .radiusScale = 1.25F, .lowQualitySteps = 8U, .highQualitySteps = 32U};
+        kb::particle_plugin::ParticleCompilerCapabilities capabilities;
+        capabilities.volumetric = true;
+        const ParticleBakeResult accepted = ParticleBakeService::Bake({.workingAsset = candidate, .owner = owner,
+            .registry = registry, .cacheRoot = cacheRoot, .compile = {.capabilities = capabilities}});
+        Require(accepted.Succeeded() && accepted.effect->emitters[0].volumetricDensity == 0.75F &&
+                accepted.effect->emitters[0].volumetricRadiusScale == 1.25F &&
+                accepted.effect->emitters[0].volumetricLowQualitySteps == 8U &&
+                accepted.effect->emitters[0].volumetricHighQualitySteps == 32U,
+            "Volumetric Bake did not preserve the validated output contract in the compiled cache");
     }
     auto gpuRequired = effect;
     gpuRequired.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualRequired;
-    Require(bake(gpuRequired).status == ParticleBakeStatus::UnsupportedCapability,
-        "GPU-required policy was silently downgraded by the current compiler");
+    const ParticleBakeResult gpuRequiredBake = bake(gpuRequired);
+    Require(gpuRequiredBake.Succeeded() &&
+            gpuRequiredBake.effect->backendPolicy == kb::scene::ParticleBackendPolicy::GpuVisualRequired,
+        "GPU-required policy was not retained for the runtime capability classifier");
 
     auto child = effect;
     child.effectId = 74U;
@@ -635,6 +813,15 @@ void TestIsolatedRuntimePreviewAndGpuRelease() {
                 .contentHash = 1U,
             }),
         "preview dependency metadata registration failed");
+    Require(sourceRegistry.Upsert({
+                .id = kb::assets::AssetId{73U},
+                .type = kb::scene::kParticleEffectAssetType,
+                .name = "Retargeted Preview",
+                .virtualPath = "/Game/Effects/RetargetedPreview.kbvfx",
+                .physicalPath = "RetargetedPreview.kbvfx",
+                .contentHash = 1U,
+            }),
+        "preview retarget metadata registration failed");
 
     kb::particle_editor::ParticlePreviewSession preview;
     const auto effect = MakeEffect();
@@ -647,6 +834,17 @@ void TestIsolatedRuntimePreviewAndGpuRelease() {
             preview.PreviewScene().Components().ParticleEffects().Has(preview.EffectEntity()) &&
             preview.PreviewScene().Components().Cameras().Has(preview.CameraEntity()),
         "preview did not own the required runtime scene, provider, component, and camera");
+    const auto cameraBefore = preview.PreviewScene().Transforms().Get(preview.CameraEntity());
+    Require(preview.OrbitCamera(90.0F, 0.0F) &&
+            preview.OrbitYawDegrees() == 90.0F &&
+            preview.PreviewScene().Transforms().Get(preview.CameraEntity()).localPosition.x >
+                cameraBefore.localPosition.x + 1.0F,
+        "particle preview orbit did not swing the camera around the effect");
+    Require(preview.ZoomCamera(0.5F) && preview.CameraDistance() < 5.0F,
+        "particle preview zoom did not dolly the camera");
+    Require(preview.BeginOrbit(100, 100) && preview.IsOrbiting() &&
+            preview.DragOrbit(160, 100) && preview.EndOrbit() && !preview.IsOrbiting(),
+        "particle preview orbit gesture did not begin, drag, and end");
 
     for (int frame = 0; frame < 4; ++frame) {
         Require(preview.Tick(1.0F / 60.0F).Succeeded(), "preview SceneRuntime update failed");
@@ -663,13 +861,62 @@ void TestIsolatedRuntimePreviewAndGpuRelease() {
 
     auto workingCopy = effect;
     workingCopy.displayName = "Unsaved Runtime Working Copy";
-    workingCopy.emitters.front().spawn.rateOverTime.keyframes.front().value = 120.0F;
+    workingCopy.emitters.front().spawn.mode = kb::scene::ParticleSpawnMode::Burst;
+    workingCopy.emitters.front().spawn.rateOverTime.keyframes.front().value = 0.0F;
+    workingCopy.emitters.front().spawn.bursts = {{.timeSeconds = 0.0F, .count = 24U}};
+    workingCopy.emitters.front().spawn.speedMin = 8.0F;
+    workingCopy.emitters.front().spawn.speedMax = 8.0F;
+    workingCopy.emitters.front().spawn.startColor = {1.0F, 0.25F, 0.05F, 1.0F};
+    workingCopy.emitters.front().spawn.startSize = 0.35F;
     Require(preview.PublishWorkingCopy(workingCopy).Succeeded(),
         "unsaved working copy was not published through AssetManager");
-    Require(preview.Tick(1.0F / 60.0F).Succeeded(),
-        "preview did not reconcile the unsaved runtime publication");
+    for (int frame = 0; frame < 4; ++frame) {
+        Require(preview.Tick(1.0F / 60.0F).Succeeded(),
+            "preview did not reconcile the unsaved runtime publication");
+    }
+    const auto tintedStates =
+        kb::particles::ParticlePlayback::LiveParticleStates(preview.PreviewScene(), instances.front());
+    Require(tintedStates.size() == 24U,
+        "preview did not restart into the published burst count");
+    const float speed = std::sqrt(tintedStates.front().velocity.x * tintedStates.front().velocity.x +
+        tintedStates.front().velocity.y * tintedStates.front().velocity.y +
+        tintedStates.front().velocity.z * tintedStates.front().velocity.z);
+    Require(tintedStates.front().color.r > 0.9F &&
+            tintedStates.front().color.g < 0.4F && tintedStates.front().color.b < 0.2F &&
+            std::abs(tintedStates.front().size - 0.35F) < 0.0001F &&
+            std::abs(speed - 8.0F) < 0.05F,
+        "preview did not apply the published start color, size, and speed to live particles");
     Require(!std::filesystem::exists(TestRoot() / "UnsavedPreview.kbvfx"),
         "publishing an unsaved preview working copy touched disk");
+
+    auto retargeted = effect;
+    retargeted.displayName = "Retargeted Preview";
+    retargeted.determinismSeed = 730073U;
+    Require(preview.RetargetWorkingCopy(
+                kb::assets::AssetId{73U},
+                "/Game/Effects/RetargetedPreview.kbvfx",
+                retargeted).Succeeded(),
+        "preview did not retarget to a different asset identity");
+    for (int frame = 0; frame < 4; ++frame) {
+        Require(preview.Tick(1.0F / 60.0F).Succeeded(),
+            "retargeted preview did not advance");
+    }
+    const auto retargetedInstances =
+        kb::particles::ParticlePlayback::LiveInstanceIds(
+            preview.PreviewScene());
+    const kb::scene::ParticleEffectComponent* retargetedComponent =
+        preview.PreviewScene().Components().ParticleEffects().TryGet(
+            preview.EffectEntity());
+    Require(retargetedInstances.size() == 1U &&
+            kb::particles::ParticlePlayback::Query(
+                preview.PreviewScene(), retargetedInstances.front())
+                    .assetId == 73U &&
+            retargetedComponent != nullptr &&
+            retargetedComponent->effectAssetId == 73U &&
+            retargetedComponent->deterministicSeed == 730073U &&
+            preview.PreviewScene().Assets().Manager().Registry().FindByPath(
+                "/Game/Effects/RetargetedPreview.kbvfx") != nullptr,
+        "preview retarget kept the previous asset id or deterministic seed");
 
     HeadlessSurface surface;
     kb::render::DisplayConfig display{};
@@ -688,6 +935,25 @@ void TestIsolatedRuntimePreviewAndGpuRelease() {
             snapshotLifetime.expired(),
         "preview release leaked its runtime scene, retained snapshot, or renderer-owned scene cache");
     renderer.Shutdown();
+
+    for (std::uint32_t cycle = 0U; cycle < 100U; ++cycle) {
+        kb::particle_editor::ParticlePreviewSession cyclePreview;
+        Require(cyclePreview.Start(project, sourceRegistry, kb::assets::AssetId{71U},
+                    "/Game/Effects/VolumetricLifecycle.kbvfx", effect).Succeeded(),
+            "preview lifecycle stress test did not reload the particle provider");
+        Require(cyclePreview.Tick(1.0F / 60.0F).Succeeded(),
+            "preview lifecycle stress test did not advance its isolated scene");
+
+        kb::render::Renderer cycleRenderer;
+        Require(cycleRenderer.Initialize(surface, &display) && cycleRenderer.BeginFrame() &&
+                cyclePreview.Submit(cycleRenderer),
+            "preview lifecycle stress test did not initialize, submit, and bind a renderer device");
+        cycleRenderer.EndFrame();
+        cyclePreview.Release(cycleRenderer);
+        Require(cycleRenderer.RuntimeResourceStats().renderSceneCount == 0U,
+            "preview lifecycle stress test retained a renderer scene after release");
+        cycleRenderer.Shutdown();
+    }
 }
 
 } // namespace

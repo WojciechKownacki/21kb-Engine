@@ -25,6 +25,7 @@ void SceneComponentMutationService::SetCamera(Scene& scene, SceneEntity entity, 
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.Cameras().Set(entity, camera);
         SetSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Camera);
+        MarkSceneRenderProxyDirty(state, entity);
         MarkScenePrefabNodeDirty(state, entity);
     }
 }
@@ -34,6 +35,7 @@ void SceneComponentMutationService::RemoveCamera(Scene& scene, SceneEntity entit
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.Cameras().Remove(entity);
         ClearSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Camera);
+        MarkSceneRenderProxyDirty(state, entity);
         MarkScenePrefabNodeDirty(state, entity);
     }
 }
@@ -42,6 +44,7 @@ void SceneComponentMutationService::MarkCameraModified(Scene& scene, SceneEntity
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.Cameras().MarkModified(entity);
+        MarkSceneRenderProxyDirty(state, entity);
         MarkScenePrefabNodeDirty(state, entity);
     }
 }

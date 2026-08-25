@@ -1,10 +1,12 @@
 #include "rendering/EditorSceneBgfxViewport.hpp"
 
 #if defined(_WIN32)
+#include "diagnostics/EditorLagTrace.hpp"
 #include "rendering/EditorSceneViewportGeometry.hpp"
 
 #include <algorithm>
 #include <memory>
+#include <sstream>
 
 namespace kb::editor {
 namespace {
@@ -112,15 +114,18 @@ void EditorSceneBgfxViewport::HostSurfaceStore::Hide(HostSurface& surface) noexc
     if (surface.clipWindow != nullptr && IsWindow(surface.clipWindow) != 0) {
         ShowWindow(surface.clipWindow, SW_HIDE);
     }
-    // A bgfx native-window framebuffer owns a multi-buffered swapchain. Keeping that swapchain
-    // alive while its dock tab is hidden lets unrelated viewport frames advance its back buffers
-    // without submitting this surface. When the tab is shown again, Windows can expose one of
-    // those undefined buffers for the first frame (the Scene grid appears duplicated/corrupted)
-    // and only the next mouse-driven present repairs it. Retire only the native presentation
-    // target here; the per-session scene/post-process targets and renderer scene resources remain
-    // alive, so reactivation recreates a clean swapchain without re-uploading the scene.
-    surface.presentTarget.Shutdown();
+    // Keep the native swapchain. Particle Editor and Scene share the center dock leaf, so tab
+    // switches hide one surface and show the other every click. Destroying the framebuffer here
+    // forced a full D3D swapchain recreate plus a black first frame that lasted seconds. Hidden
+    // HWNDs are not shown until ShowPresentedWindows after a real submit of the newly active tab,
+    // so the last valid back buffer stays off-screen until that present replaces it.
     if (wasVisible && surface.host != nullptr && IsWindow(surface.host) != 0 && RectWidth(surface.rect) > 0U && RectHeight(surface.rect) > 0U) {
+        std::ostringstream detail;
+        detail << "action=hide host=0x" << std::hex << reinterpret_cast<std::uintptr_t>(surface.host)
+               << std::dec << " key=" << surface.key
+               << " targetValid=" << (surface.presentTarget.IsValid() ? 1 : 0)
+               << " extent=" << RectWidth(surface.rect) << 'x' << RectHeight(surface.rect);
+        diagnostics::EditorLagTrace::Marker("viewport-surface", detail.str());
         InvalidateRect(surface.host, &surface.rect, FALSE);
     }
     surface.presentedInCurrentPaint = false;
@@ -216,6 +221,7 @@ void EditorSceneBgfxViewport::HostSurfaceStore::Show(HostSurface& surface) noexc
         IsWindow(surface.clipWindow) == 0 || IsWindow(surface.window) == 0) {
         return;
     }
+    const bool wasVisible = IsWindowVisible(surface.clipWindow) != 0 && IsWindowVisible(surface.window) != 0;
     UINT flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOREDRAW | SWP_SHOWWINDOW;
     if (!EditorSceneBgfxViewport::ShouldPreserveHostSurfaceBits(surface.key)) {
         flags |= SWP_NOCOPYBITS;
@@ -241,6 +247,14 @@ void EditorSceneBgfxViewport::HostSurfaceStore::Show(HostSurface& surface) noexc
             flags);
     }
     surface.textOverlay.Show();
+    if (!wasVisible) {
+        std::ostringstream detail;
+        detail << "action=show host=0x" << std::hex << reinterpret_cast<std::uintptr_t>(surface.host)
+               << std::dec << " key=" << surface.key
+               << " targetValid=" << (surface.presentTarget.IsValid() ? 1 : 0)
+               << " extent=" << RectWidth(surface.rect) << 'x' << RectHeight(surface.rect);
+        diagnostics::EditorLagTrace::Marker("viewport-surface", detail.str());
+    }
 }
 
 void EditorSceneBgfxViewport::HostSurfaceStore::ShowPresentedWindows() noexcept {

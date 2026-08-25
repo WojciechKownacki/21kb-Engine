@@ -27,14 +27,12 @@ void main()
             right = cross(cameraForward, up);
             if (dot(right, right) <= 0.0000000001) right = cameraRight;
             right = normalize(right);
-            up = normalize(cross(right, cameraForward));
         }
     } else if (alignment > 1.5 && alignment < 2.5) {
         up = vec3(0.0, 1.0, 0.0);
         right = cross(cameraForward, up);
         if (dot(right, right) <= 0.0000000001) right = cameraRight;
         right = normalize(right);
-        up = normalize(cross(right, cameraForward));
     } else if (alignment > 2.5) {
         float quaternionLength = dot(u_particleLocalBasis, u_particleLocalBasis);
         if (quaternionLength > 0.999 && quaternionLength < 1.001) {
@@ -62,5 +60,6 @@ void main()
     v_texcoord0 = (a_texcoord0 + cell) / vec2(columns, rows);
     v_color0 = i_data3;
     v_shadowPos = clip;
-    v_shadowFlags = vec4(abs(mul(u_view, vec4(world, 1.0)).z), 0.0, 0.0, 0.0);
+    v_shadowFlags = vec4(abs(mul(u_view, vec4(world, 1.0)).z), a_position.xy * 2.0,
+        i_data0.w * outputScale);
 }

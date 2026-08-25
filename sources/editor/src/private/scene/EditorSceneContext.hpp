@@ -26,6 +26,8 @@
 #include "scene/EditorScriptEditorState.hpp"
 #include "scene/EditorSceneObjectEditTypes.hpp"
 #include "scene/EditorSceneDocumentIdentity.hpp"
+#include "scene/EditorAutosaveState.hpp"
+#include "scene/EditorPlayModeSelectionSnapshot.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
 #include "scene/AnimationPreviewContext.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
@@ -249,6 +251,8 @@ public:
     [[nodiscard]] bool SceneRenderFullDirty() const noexcept;
     [[nodiscard]] const std::vector<std::uint64_t>& SceneRenderDirtyEntityIds() const noexcept;
     [[nodiscard]] bool SceneDocumentDirty() const noexcept;
+    [[nodiscard]] bool TickAutosave(double elapsedSeconds, bool saveEligible);
+    [[nodiscard]] const EditorAutosaveState& Autosave() const noexcept;
     void MarkSceneRenderDirty() noexcept;
     void MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity> entities);
     void AcknowledgeSceneRenderSubmitted() noexcept;
@@ -274,6 +278,7 @@ public:
     [[nodiscard]] bool TickPlayModeSceneSession(float deltaSeconds);
     [[nodiscard]] bool RestorePlayModeSceneSession();
     [[nodiscard]] bool HasPlayModeSceneSession() const noexcept;
+    [[nodiscard]] kb::scene::SceneEntity PlayCameraEntity() const noexcept;
     [[nodiscard]] bool ReloadSceneFromProject();
     [[nodiscard]] bool NewScene(EditorDirtySceneResolution dirtyResolution = EditorDirtySceneResolution::Save);
     [[nodiscard]] bool OpenDefaultScene();
@@ -428,6 +433,7 @@ public:
     [[nodiscard]] bool CreateInputAxisAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateAudioMixerAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool CreateParticleEffectAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialFunctionAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialGraphAsset(const std::filesystem::path& virtualFolder);
@@ -449,6 +455,11 @@ public:
     [[nodiscard]] const kb::scene::Scene* ParticleEditorPreviewScene() const noexcept;
     [[nodiscard]] std::uint64_t ParticleEditorPreviewRevision() const noexcept;
     [[nodiscard]] bool TickParticleEditorPreview(float deltaSeconds);
+    [[nodiscard]] bool TickEditorSceneParticles(float deltaSeconds);
+    [[nodiscard]] bool SetParticleEffectAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
+    [[nodiscard]] bool ToggleParticleEffectEnabled(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool ToggleParticleEffectAutoPlay(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool RemoveParticleEffectFromEntity(kb::scene::SceneEntity entity);
     [[nodiscard]] bool SaveParticleEditorAsset();
     [[nodiscard]] kb::particle_editor::ParticleBakeResult BakeParticleEditorAsset();
     [[nodiscard]] bool RevertParticleEditorAsset();
@@ -456,10 +467,12 @@ public:
     [[nodiscard]] const kb::scene::ParticleEffectAsset* ParticleEditorWorkingAsset() const noexcept;
     [[nodiscard]] std::vector<kb::particle_editor::ParticleEmitterListRow> ParticleEditorEmitterRows() const;
     [[nodiscard]] kb::particle_editor::ParticleEmitterInspectorView ParticleEditorInspector() const;
+    [[nodiscard]] std::vector<kb::assets::AssetMetadata> ParticleEditorRecipes() const;
     [[nodiscard]] const kb::particle_editor::ParticleEditorWorkspaceState& ParticleEditorWorkspace() const noexcept;
     void SetParticleEditorFocused(bool focused) noexcept;
     [[nodiscard]] bool SelectParticleEditorEmitter(kb::scene::ParticleStableId emitterId) noexcept;
     [[nodiscard]] bool AddParticleEditorEmitter(kb::assets::AssetId materialId);
+    [[nodiscard]] bool AppendParticleEditorRecipe(kb::assets::AssetId recipeId);
     [[nodiscard]] bool RenameParticleEditorEmitter(kb::scene::ParticleStableId emitterId, std::string name);
     [[nodiscard]] bool ToggleParticleEditorEmitter(kb::scene::ParticleStableId emitterId);
     [[nodiscard]] bool MoveParticleEditorEmitter(kb::scene::ParticleStableId emitterId, std::uint32_t targetOrder);
@@ -477,12 +490,17 @@ public:
     [[nodiscard]] bool RemoveParticleEditorModule(kb::scene::ParticleStableId moduleId);
     [[nodiscard]] bool SetParticleEditorOutputType(kb::scene::ParticleOutputType type);
     [[nodiscard]] bool SetParticleEditorOutputReference(kb::assets::AssetKind kind, kb::assets::AssetId id);
-    [[nodiscard]] bool SetParticleEditorSpawn(kb::scene::ParticleSpawnAsset spawn);
+    [[nodiscard]] bool SetParticleEditorSpawn(kb::scene::ParticleSpawnAsset spawn, bool coalesceLatest = false);
     [[nodiscard]] bool SetParticleEditorModulePayload(kb::scene::ParticleStableId moduleId,
-                                                     kb::scene::ParticleModulePayload payload);
+                                                     kb::scene::ParticleModulePayload payload,
+                                                     bool coalesceLatest = false);
     [[nodiscard]] bool FocusParticleEditorDiagnostic(std::size_t diagnosticIndex) noexcept;
     [[nodiscard]] bool NavigateParticleEditorDependency(std::size_t dependencyIndex);
-    [[nodiscard]] bool EditParticleEditorProperty(std::size_t propertyIndex, std::string_view value);
+    [[nodiscard]] bool EditParticleEditorProperty(std::size_t propertyIndex, std::string_view value,
+                                                 bool coalesceLatest = false);
+    void BeginParticleEditorPropertySlider(
+        std::size_t propertyIndex, std::uint32_t choice = 0xFFFFFFFFU) noexcept;
+    void EndParticleEditorPropertySlider() noexcept;
     [[nodiscard]] bool UndoParticleEditorCommand();
     [[nodiscard]] bool RedoParticleEditorCommand();
     [[nodiscard]] bool BeginParticleEditorEmitterRename(kb::scene::ParticleStableId emitterId);
@@ -495,12 +513,18 @@ public:
     [[nodiscard]] bool CommitParticleEditorEmitterDrag();
     void CancelParticleEditorEmitterDrag() noexcept;
     void SetParticleEditorComposerScrollOffset(int offset) noexcept;
+    void ToggleParticleEditorComposerSection(kb::particle_editor::ParticleEditorComposerSection section) noexcept;
     [[nodiscard]] kb::particle_editor::ParticleDocumentCloseResult RequestParticleEditorTransition(
         kb::particle_editor::ParticleDocumentTransition transition) noexcept;
     [[nodiscard]] kb::particle_editor::ParticleDocumentCloseResult ResolveParticleEditorTransition(
         kb::particle_editor::ParticleDocumentCloseDecision decision,
         std::optional<std::filesystem::path> savePath = std::nullopt);
     void CloseParticleEditorAsset();
+    [[nodiscard]] bool BeginParticlePreviewOrbit(int x, int y) noexcept;
+    [[nodiscard]] bool DragParticlePreviewOrbit(int x, int y);
+    [[nodiscard]] bool EndParticlePreviewOrbit() noexcept;
+    [[nodiscard]] bool IsParticlePreviewOrbiting() const noexcept;
+    [[nodiscard]] bool ZoomParticlePreviewCamera(float scale);
     void SetParticlePreviewReleaseHandler(std::function<void(const kb::scene::Scene&)> handler);
     [[nodiscard]] bool OpenAnimationClipEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] bool OpenAnimatorEditorAsset(kb::assets::AssetId id);
@@ -700,7 +724,7 @@ public:
     [[nodiscard]] std::uint64_t MaterialThumbnailSceneRevision() const noexcept;
     [[nodiscard]] const EditorMaterialPreviewSceneSettings& MaterialPreviewSceneSettings() const noexcept;
     [[nodiscard]] bool SetMaterialPreviewSceneSettings(EditorMaterialPreviewSceneSettings settings);
-    // Orbit (drag) and dolly (wheel) the material preview camera around the framed object, Unreal-style.
+    // Orbit (drag) and dolly (wheel) the material preview camera around the framed object.
     // Camera-only: no re-cook, no scene rebuild.
     [[nodiscard]] bool OrbitMaterialPreviewCamera(float deltaYawDegrees, float deltaPitchDegrees);
     [[nodiscard]] bool ZoomMaterialPreviewCamera(float scale);
@@ -1043,6 +1067,7 @@ public:
         const std::filesystem::path& virtualPath,
         kb::scene::Vec3 position);
     [[nodiscard]] kb::scene::SceneEntity CreateMeshAssetEntity(kb::assets::AssetId assetId);
+    [[nodiscard]] kb::scene::SceneEntity CreateParticleEffectEntity(kb::assets::AssetId assetId);
     [[nodiscard]] kb::scene::SceneEntity CreateMeshAssetEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation);
     [[nodiscard]] bool SetMeshRendererMeshAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
     [[nodiscard]] bool AddBehaviourAssetToEntity(kb::assets::AssetId assetId, kb::scene::SceneEntity entity);
@@ -1071,10 +1096,10 @@ public:
     // via its section-header "×". Undoable; false if the entity lacks that one.
     [[nodiscard]] bool RemovePhysicsComponent(kb::scene::SceneEntity entity, PhysicsComponentKind kind);
     // Whether the green collider wireframes are drawn in the Scene Viewport (the
-    // Unity-style "Gizmos" toggle). Default on so colliders are visible.
+    // Gizmo visibility toggle. Default on so colliders are visible.
     [[nodiscard]] bool ArePhysicsGizmosVisible() const noexcept { return physicsGizmosVisible_; }
     void SetPhysicsGizmosVisible(bool visible) noexcept { physicsGizmosVisible_ = visible; }
-    // Sizes the entity's Collider to enclose its Mesh Renderer mesh (Unity-style
+    // Sizes the entity's Collider to enclose its Mesh Renderer mesh (matching
     // "Fit to Mesh"): center + radius/box-size/height from the mesh bounds.
     // Undoable; false if the entity has no Collider or no loadable mesh.
     [[nodiscard]] bool FitColliderToMesh(kb::scene::SceneEntity entity);
@@ -1246,6 +1271,7 @@ private:
     std::unique_ptr<kb::particle_editor::ParticlePreviewSession> particlePreviewSession_;
     std::function<void(const kb::scene::Scene&)> particlePreviewReleaseHandler_;
     kb::assets::AssetId particleEditorAssetId_{};
+    double editorSceneParticleAccumulatorSeconds_ = 0.0;
     kb::assets::AssetId animatorEditorAssetId_{};
     kb::scene::SceneEntity animatorEditorDebugTarget_{};
     std::optional<kb::scene::AnimatorController> animatorEditorController_;
@@ -1411,7 +1437,12 @@ private:
     std::vector<std::uint64_t> sceneRenderDirtyEntityIds_;
     bool sceneRenderFullDirty_ = true;
     bool sceneDocumentDirty_ = false;
+    EditorAutosaveState autosave_;
     EditorPlayModeSceneSession playModeSceneSession_;
+    std::uint64_t playModeRenderTopologyVersion_ = 0U;
+    bool playModeRenderTopologyVersionInitialized_ = false;
+    EditorPlayModeSelectionSnapshot playModeSelectionSnapshot_;
+    kb::scene::SceneEntity playCameraEntity_{};
     int hierarchyScrollOffset_ = 0;
     int hierarchyScrollbarDragY_ = 0;
     int hierarchyScrollbarDragStartOffset_ = 0;

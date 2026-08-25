@@ -269,6 +269,7 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
     renderSceneSynchronizer_ = std::make_unique<EcsRenderSceneSynchronizer>();
     renderSceneSynchronizer_->SetSkinningPaletteAllocator(&sceneRenderer_->SkinningPalettes());
     particleRenderSynchronizer_ = std::make_unique<SceneParticleRenderSynchronizer>();
+    particleRenderSynchronizer_->SetGpuVisualAvailability(sceneRenderer_->ParticleGpuVisualAvailability());
     auxFrameRenderer_ = std::make_unique<AuxFrameRenderer>();
     screenCapture_ = std::make_unique<RendererScreenCapture>();
     ApplyRuntimeSceneResourceReserve();
@@ -405,6 +406,10 @@ void Renderer::EndFrame() {
     }
 
     lastCompletedFrame_ = context_->EndFrame();
+    if (screenCapture_ != nullptr) {
+        screenCapture_->Poll(
+            static_cast<std::uint32_t>(lastCompletedFrame_));
+    }
     if (sceneRenderer_ != nullptr) {
         sceneRenderer_->TickFrame();
         sceneRenderer_->AdvanceFrameTime(frameDeltaSeconds_);
@@ -656,7 +661,7 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
         }
     }
     frameState_ = stagedFrameState;
-    RendererViewConfigurator::ApplyViewOrder(frameState_.ViewOrder());
+    RendererViewConfigurator::ApplyViewOrder(frameState_.BgfxViewRemap());
 
     for (std::size_t index = 0; index < submitList.size(); ++index) {
         {
@@ -750,9 +755,12 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport RenderSceneFor end");
     const bool skinningAlreadySynchronized = std::ranges::find(
         skinningSynchronizedSceneIds_, scene.Id()) != skinningSynchronizedSceneIds_.end();
+    const std::uint64_t renderProxyUpdateRevision = scene.Runtime().RenderProxyUpdateRevision();
+    bool renderProxyUpdatesSynchronized = false;
     if (desc.synchronizeScene) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Sync full begin");
         renderSceneSynchronizer_->Sync(scene, renderScene);
+        renderProxySynchronizedRevisions_[scene.Id()] = renderProxyUpdateRevision;
         if (!skinningAlreadySynchronized) {
             skinningSynchronizedSceneIds_.push_back(scene.Id());
         }
@@ -791,12 +799,22 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             renderSceneSynchronizer_->SyncEntities(scene, renderScene, desc.dirtySceneEntityIds);
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncEntities end");
         }
-        if (!scene.Runtime().MeshRendererRenderProxyUpdateEntities().empty()) {
+        const auto synchronizedRevision = renderProxySynchronizedRevisions_.find(scene.Id());
+        if (!scene.Runtime().RenderProxyUpdateEntities().empty() &&
+            (synchronizedRevision == renderProxySynchronizedRevisions_.end() ||
+             synchronizedRevision->second != renderProxyUpdateRevision)) {
             std::ostringstream message;
-            message << "SubmitSceneToViewport SyncMeshRendererUpdates begin count=" << scene.Runtime().MeshRendererRenderProxyUpdateEntities().size();
+            message << "SubmitSceneToViewport SyncRenderProxyUpdates begin count=" << scene.Runtime().RenderProxyUpdateEntities().size();
             WriteRendererBreadcrumb("renderer", message.str());
-            renderSceneSynchronizer_->SyncMeshRendererUpdates(scene, renderScene);
-            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncMeshRendererUpdates end");
+            renderSceneSynchronizer_->SyncRenderProxyUpdates(scene, renderScene);
+            renderProxySynchronizedRevisions_[scene.Id()] = renderProxyUpdateRevision;
+            renderProxyUpdatesSynchronized = true;
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncRenderProxyUpdates end");
+        }
+        if (desc.transformAffineSync) {
+            const bool primaryCameraChanged = renderProxyUpdatesSynchronized ||
+                scene.Runtime().HotPathReport().transformRenderProxyCameraCount != 0U;
+            renderSceneSynchronizer_->SyncFacingPanelUpdates(scene, renderScene, primaryCameraChanged);
         }
         // Deformed proxies store frame-local palette handles. Even when the ECS scene and its
         // transforms are unchanged, a new renderer frame needs fresh palette uploads; retaining
@@ -814,8 +832,17 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     // Retain one view-independent, immutable simulation snapshot in renderer state.
     // GPU batching and alignment remain per-view work in the transparent pass.
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle sync begin");
+    particleRenderSynchronizer_->SetGpuVisualAvailability(sceneRenderer_->ParticleGpuVisualAvailability());
     particleRenderSynchronizer_->Sync(scene, renderScene);
     if (const auto& particleSnapshot = renderScene.ParticleRenderSnapshot(); particleSnapshot != nullptr) {
+        {
+            std::ostringstream message;
+            message << "SubmitSceneToViewport particle snapshot revision=" << particleSnapshot->Revision()
+                    << " fixedStep=" << particleSnapshot->FixedStepIndex()
+                    << " emitters=" << particleSnapshot->Emitters().size()
+                    << " particles=" << particleSnapshot->Particles().size();
+            WriteRendererBreadcrumb("renderer", message.str());
+        }
         for (const kb::particles::ParticleRenderEmitterRecord& emitter : particleSnapshot->Emitters()) {
             if (emitter.textureAtlasAssetId != 0U) {
                 frameReferences_.MarkTexture(RuntimeTextureAssetKey{
@@ -825,6 +852,8 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 });
             }
         }
+    } else {
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle snapshot unavailable");
     }
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport particle sync end");
     SceneRenderLightingConfig effectiveLightingConfig = ApplyAmbientRadiance(
@@ -864,6 +893,8 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         : effectiveLightingConfig.lightingPath == SceneRenderLightingPath::ClusteredForwardPlus
             ? RenderMaterialGraphShadingPath::ForwardPlus
             : RenderMaterialGraphShadingPath::Forward;
+    sceneRenderer_->SetParticleVolumetricLowQuality(
+        runtimeGraphContext.qualityLevel == RenderMaterialGraphQualityLevel::Low);
     runtimeMaterialResolver_.SetGraphBuildContext(std::move(runtimeGraphContext));
     if (!lastRuntimeMaterialLightingPath_.has_value() ||
         *lastRuntimeMaterialLightingPath_ != effectiveLightingConfig.lightingPath ||
@@ -954,15 +985,26 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 << " finalFb=" << HandleValue(desc.finalComposite.frameBuffer);
         WriteRendererBreadcrumb("renderer", message.str());
     }
-    // LIB-136: resolve the selected ECS camera's clear settings (if any - cameraOverride
-    // callers, e.g. the editor's fly camera, keep desc's own submission-level clear) BEFORE
-    // configuring the opaque view's clear state below. This is a cheap, matrix-free lookup
-    // (FindPrimaryCameraProxy, not the full BuildPrimaryCamera) so it does not duplicate the
-    // real camera resolution work done later in this function. GBuffer/deferred clearing is
-    // intentionally NOT affected - see CameraComponent.hpp's CameraClearMode doc comment.
+    // Resolve the effective camera's clear settings before configuring the
+    // opaque view. An explicit camera carries the same authored contract as a
+    // scene-resolved camera; editor fly cameras simply retain their defaults.
+    // GBuffer/deferred clearing is intentionally unaffected.
     std::uint16_t opaqueClearFlags = BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL;
     std::uint32_t opaqueClearRgba = desc.clearRgba;
-    if (!desc.cameraOverride.has_value()) {
+    if (desc.cameraOverride.has_value()) {
+        switch (desc.cameraOverride->clearMode) {
+        case SceneRenderCameraClearMode::SolidColor:
+            opaqueClearFlags = BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL;
+            break;
+        case SceneRenderCameraClearMode::DepthOnly:
+            opaqueClearFlags = BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL;
+            break;
+        case SceneRenderCameraClearMode::DontClear:
+            opaqueClearFlags = BGFX_CLEAR_NONE;
+            break;
+        }
+        opaqueClearRgba = PackOpaqueRgba(desc.cameraOverride->clearColor);
+    } else {
         const CameraRenderProxyDesc* clearCameraProxy = renderScene.FindPrimaryCameraProxy(desc.target.viewport.id.value);
         if (clearCameraProxy != nullptr) {
             switch (clearCameraProxy->clearMode) {
@@ -1880,9 +1922,11 @@ void Renderer::ReleaseScene(const kb::scene::Scene& scene) noexcept {
     }
     screenCapture_->ReleaseScene(mutableScene);
     particleRenderSynchronizer_->ReleaseScene(scene);
+    if (sceneRenderer_ != nullptr) sceneRenderer_->ReleaseParticleScene(scene.Id());
     kb::scene::SceneRenderFeedback::Clear(mutableScene);
     runtimeResourceCache_.ReleaseScene(mutableScene, sceneRenderer_.get());
     renderSceneStore_.Release(scene.Id());
+    renderProxySynchronizedRevisions_.erase(scene.Id());
     runtimeAssetDiscovery_.ReleaseScene(scene.Id());
 }
 
@@ -1892,7 +1936,9 @@ void Renderer::ReleaseAllScenes() noexcept {
     }
     screenCapture_->Shutdown();
     particleRenderSynchronizer_->Clear();
+    if (sceneRenderer_ != nullptr) sceneRenderer_->ReleaseAllParticleScenes();
     renderSceneStore_.ReleaseAll();
+    renderProxySynchronizedRevisions_.clear();
     runtimeResourceCache_.DestroyAll(sceneRenderer_.get());
     runtimeAssetDiscovery_.Clear();
 }

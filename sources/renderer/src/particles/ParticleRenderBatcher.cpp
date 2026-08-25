@@ -13,7 +13,8 @@ namespace {
 [[nodiscard]] bool SupportedOutput(kb::particles::ParticleRenderOutput output) noexcept {
     return output == kb::particles::ParticleRenderOutput::Billboard ||
         output == kb::particles::ParticleRenderOutput::StretchedBillboard ||
-        output == kb::particles::ParticleRenderOutput::PointSprite;
+        output == kb::particles::ParticleRenderOutput::PointSprite ||
+        output == kb::particles::ParticleRenderOutput::Volumetric;
 }
 
 [[nodiscard]] bool BatchCompatible(
@@ -23,10 +24,15 @@ namespace {
         lhs.textureAtlasAssetId == rhs.textureAtlasAssetId && lhs.output == rhs.output &&
         lhs.blend == rhs.blend && lhs.depth == rhs.depth && lhs.sort == rhs.sort &&
         lhs.alignment == rhs.alignment && lhs.flags == rhs.flags &&
+        lhs.backendPolicy == rhs.backendPolicy &&
         lhs.flipbookColumnsEncoded == rhs.flipbookColumnsEncoded &&
         lhs.flipbookRowsEncoded == rhs.flipbookRowsEncoded &&
         lhs.localBasisQuaternionSnorm == rhs.localBasisQuaternionSnorm &&
-        lhs.pointSpriteDiameter == rhs.pointSpriteDiameter;
+        lhs.pointSpriteDiameter == rhs.pointSpriteDiameter &&
+        lhs.volumetricDensity == rhs.volumetricDensity &&
+        lhs.volumetricRadiusScale == rhs.volumetricRadiusScale &&
+        lhs.volumetricLowQualitySteps == rhs.volumetricLowQualitySteps &&
+        lhs.volumetricHighQualitySteps == rhs.volumetricHighQualitySteps;
 }
 
 [[nodiscard]] std::array<float, 3> CameraPosition(const SceneRenderCamera& camera) noexcept {
@@ -127,8 +133,7 @@ ParticleRenderBatchBuildResult ParticleRenderBatcher::Build(
     const auto particles = snapshot.Particles();
     const auto emitters = snapshot.Emitters();
     if (particles.size() > capacity_) {
-        return {.status = ParticleRenderBatchStatus::CapacityExceeded,
-            .droppedParticleCount = static_cast<std::uint32_t>(particles.size() - capacity_)};
+        Warmup(std::max(capacity_ * 2U, static_cast<std::uint32_t>(particles.size())));
     }
 
     const std::array<float, 3> cameraPosition = CameraPosition(camera);
@@ -142,10 +147,13 @@ ParticleRenderBatchBuildResult ParticleRenderBatcher::Build(
             emitter.particleCount > particles.size() - emitter.firstParticle) {
             return {.status = ParticleRenderBatchStatus::InvalidSnapshot};
         }
-        if (emitter.output == kb::particles::ParticleRenderOutput::Mesh) {
-            // Handled by the separate mesh-instancing path (ParticleMeshBatchBuilder), which reuses
-            // the existing scene mesh pipeline rather than this quad/billboard instance format - not
-            // a drop, so it must not count against droppedParticleCount/unsupportedEmitterCount.
+        if (emitter.output == kb::particles::ParticleRenderOutput::Mesh ||
+            emitter.output == kb::particles::ParticleRenderOutput::Trail ||
+            emitter.output == kb::particles::ParticleRenderOutput::Ribbon ||
+            emitter.output == kb::particles::ParticleRenderOutput::Beam) {
+            // Mesh uses the mesh-instancing path and strip outputs use renderer-owned dynamic geometry;
+            // neither uses this quad/billboard instance format. They are not drops, so they must not
+            // count against droppedParticleCount or unsupportedEmitterCount.
             continue;
         }
         if (!SupportedOutput(emitter.output)) {
@@ -262,10 +270,9 @@ ParticleAlignmentBasis ResolveParticleAlignmentBasis(
         if (Dot(velocity, velocity) <= kParticleAlignmentEpsilon * kParticleAlignmentEpsilon) return result;
         result.up = NormalizeOr(velocity, cameraUp);
         result.right = NormalizeOr(Cross(cameraForward, result.up), cameraRight);
-        result.up = NormalizeOr(Cross(result.right, cameraForward), cameraUp);
     } else if (emitter.alignment == kb::particles::ParticleRenderAlignment::WorldUp) {
         result.right = NormalizeOr(Cross(cameraForward, {0.0F, 1.0F, 0.0F}), cameraRight);
-        result.up = NormalizeOr(Cross(result.right, cameraForward), cameraUp);
+        result.up = {0.0F, 1.0F, 0.0F};
     } else if (emitter.alignment == kb::particles::ParticleRenderAlignment::Local) {
         std::array<float, 4> quaternion{};
         float lengthSquared = 0.0F;

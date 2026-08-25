@@ -10,11 +10,13 @@
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
+#include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponentVisitors.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "engine/scene/SceneVisibilityResolution.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/overlay/EditorCameraWireframe.hpp"
@@ -118,6 +120,24 @@ struct SceneViewportRenderProfileDesc {
             camera.farClip,
             homogeneousDepth);
     }
+    renderCamera.cullingMask = camera.cullingMask;
+    switch (camera.clearMode) {
+    case kb::scene::CameraClearMode::DepthOnly:
+        renderCamera.clearMode = kb::render::SceneRenderCameraClearMode::DepthOnly;
+        break;
+    case kb::scene::CameraClearMode::DontClear:
+        renderCamera.clearMode = kb::render::SceneRenderCameraClearMode::DontClear;
+        break;
+    case kb::scene::CameraClearMode::SolidColor:
+    default:
+        renderCamera.clearMode = kb::render::SceneRenderCameraClearMode::SolidColor;
+        break;
+    }
+    renderCamera.clearColor = {
+        camera.clearColor.x,
+        camera.clearColor.y,
+        camera.clearColor.z,
+    };
     return renderCamera;
 }
 
@@ -414,6 +434,52 @@ struct LightWireframeBasis {
     return context.wireframes;
 }
 
+[[nodiscard]] std::vector<kb::render::EditorParticleIconDesc> BuildParticleIcons(
+    const EditorSceneContext& sceneContext,
+    const EditorViewportCameraState& viewportCamera,
+    const EditorViewportCameraAxes& viewportAxes,
+    std::uint32_t renderHeight) {
+    struct Context {
+        const EditorSceneContext* sceneContext = nullptr;
+        const EditorViewportCameraState* viewportCamera = nullptr;
+        const EditorViewportCameraAxes* viewportAxes = nullptr;
+        std::uint32_t renderHeight = 0U;
+        std::vector<kb::render::EditorParticleIconDesc> icons;
+    } context{
+        .sceneContext = &sceneContext,
+        .viewportCamera = &viewportCamera,
+        .viewportAxes = &viewportAxes,
+        .renderHeight = renderHeight,
+    };
+
+    sceneContext.Scene().Components().ParticleEffects().ForEach(
+        [](kb::scene::SceneEntity entity,
+           const kb::scene::ParticleEffectComponent&,
+           void* opaque) {
+            auto& context = *static_cast<Context*>(opaque);
+            if (!kb::scene::ResolveVisibility(
+                    context.sceneContext->Scene(), entity).visible) {
+                return;
+            }
+            const kb::scene::TransformComponent& transform =
+                context.sceneContext->Scene().Transforms().Get(entity);
+            const kb::scene::Vec3 position = ResolveWorldPosition(transform);
+            context.icons.push_back(kb::render::EditorParticleIconDesc{
+                .position = ToArray(position),
+                .iconRight = ToArray(context.viewportAxes->right),
+                .iconUp = ToArray(context.viewportAxes->up),
+                .iconWorldScale = GizmoScreenSpaceScale(
+                    *context.viewportCamera,
+                    *context.viewportAxes,
+                    position,
+                    context.renderHeight) * 0.30F,
+                .selected = IsSelectedEntity(*context.sceneContext, entity),
+            });
+        },
+        &context);
+    return context.icons;
+}
+
 // LIB-132: honest empty vector (zero cost beyond the IsEnabled check) whenever debug draw is
 // off - which it is by default, and which kb_standalone_player never turns on (it never calls
 // this function at all, see PhysicsDebugDraw.hpp's own "zero release-path impact" comment).
@@ -605,9 +671,14 @@ void AppendTerrainBrushRing(
     // aliasing, which reads as camera motion. Runtime play renders continuously, so temporal sampling
     // remains enabled there; edit mode uses deterministic FXAA when the project requests TAA.
     const bool continuousRuntimeFrames = sceneContext.HasPlayModeSceneSession();
+    const kb::scene::SceneEntity playCameraEntity =
+        sceneContext.PlayCameraEntity();
+    const bool primarySceneCameraAvailable = playCameraEntity.IsValid();
     const bool presentPrimarySceneCamera =
-        SceneViewportPresentationPolicy::CameraSource(continuousRuntimeFrames) == SceneViewportCameraSource::PrimaryScene;
-    const bool editorOverlaysEnabled = SceneViewportPresentationPolicy::EditorOverlaysEnabled(continuousRuntimeFrames);
+        SceneViewportPresentationPolicy::CameraSource(continuousRuntimeFrames, primarySceneCameraAvailable) ==
+            SceneViewportCameraSource::PrimaryScene;
+    const bool editorOverlaysEnabled = SceneViewportPresentationPolicy::EditorOverlaysEnabled(
+        continuousRuntimeFrames, primarySceneCameraAvailable);
     const bool requestedTemporalAntiAliasing = renderBackendSettings.TemporalAntiAliasingEnabled();
     kb::render::ScenePostProcessSettings postProcessSettings{};
     postProcessSettings.fxaaEnabled = renderBackendSettings.FxaaEnabled() ||
@@ -660,7 +731,26 @@ void AppendTerrainBrushRing(
         .fitMode = viewportState.FitMode(),
         .safeArea = profile.safeArea,
         .cameraOverride = presentPrimarySceneCamera
-            ? std::optional<kb::render::SceneRenderCamera>{}
+            ? std::optional<kb::render::SceneRenderCamera>{ BuildCamera(
+                  [&sceneContext, playCameraEntity]() {
+                      const kb::scene::TransformComponent& transform =
+                          sceneContext.Scene().Transforms().Get(playCameraEntity);
+                      const LightWireframeBasis basis = BasisFromQuat(
+                          ResolveWorldRotation(transform));
+                      return EditorViewportCameraAxes{
+                          .position = ResolveWorldPosition(transform),
+                          .forward = kb::scene::Vec3{
+                              basis.forward[0], basis.forward[1], basis.forward[2]},
+                          .right = kb::scene::Vec3{
+                              basis.right[0], basis.right[1], basis.right[2]},
+                          .up = kb::scene::Vec3{
+                              basis.up[0], basis.up[1], basis.up[2]},
+                      };
+                  }(),
+                  *sceneContext.Scene().Components().Cameras().TryGet(
+                      playCameraEntity),
+                  renderWidth,
+                  renderHeight) }
             : std::optional<kb::render::SceneRenderCamera>{ BuildEditorCamera(viewportCamera, renderWidth, renderHeight) },
         .selectedEntityIds = editorOverlaysEnabled ? SelectedEntityIds(sceneContext) : std::vector<std::uint64_t>{},
         .viewportKey = panelId,
@@ -673,6 +763,7 @@ void AppendTerrainBrushRing(
         .editorGizmo = editorOverlaysEnabled ? gizmo : kb::render::RenderSceneSubmitDesc::EditorGizmoDesc{},
         .editorCameraWireframes = editorOverlaysEnabled ? BuildCameraWireframes(sceneContext) : std::vector<kb::render::EditorCameraWireframeDesc>{},
         .editorLightWireframes = editorOverlaysEnabled ? BuildLightWireframes(sceneContext, viewportCamera, axes, renderHeight) : std::vector<kb::render::EditorLightWireframeDesc>{},
+        .editorParticleIcons = editorOverlaysEnabled ? BuildParticleIcons(sceneContext, viewportCamera, axes, renderHeight) : std::vector<kb::render::EditorParticleIconDesc>{},
         .physicsDebugLines = editorOverlaysEnabled ? BuildPhysicsDebugLines(sceneContext) : std::vector<kb::render::PhysicsDebugLine>{},
         .editorSelectionBox = editorOverlaysEnabled ? SelectionBoxDesc(sceneContext, panelId) : kb::render::RenderSceneSubmitDesc::EditorSelectionBoxDesc{},
         .meshPassMode = renderProfile.meshPassMode,
@@ -688,6 +779,7 @@ void AppendTerrainBrushRing(
         .sceneRevision = sceneContext.SceneRenderRevision(),
         .sceneDirtyBaseRevision = sceneContext.SceneRenderDirtyBaseRevision(),
         .sceneFullSyncRequired = sceneContext.SceneRenderFullDirty(),
+        .runtimeTransformSync = sceneContext.HasPlayModeSceneSession(),
         .dirtySceneEntityIds = sceneContext.SceneRenderDirtyEntityIds(),
     };
 }

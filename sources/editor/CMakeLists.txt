@@ -49,6 +49,7 @@ add_executable(kb_editor WIN32
     src/app/EditorMaterialAssetSceneDropHandler.cpp
     src/app/EditorMeshAssetInspectorDropHandler.cpp
     src/app/EditorMeshAssetSceneDropHandler.cpp
+    src/app/EditorParticleAssetSceneDropHandler.cpp
     src/app/EditorPrefabAssetSceneDropHandler.cpp
     src/app/EditorHierarchySearchInputHandler.cpp
     src/app/EditorSkeletalMeshTreeSearchInputHandler.cpp
@@ -319,6 +320,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorMaterialAssetSceneDropHandler.hpp
     src/private/app/EditorMeshAssetInspectorDropHandler.hpp
     src/private/app/EditorMeshAssetSceneDropHandler.hpp
+    src/private/app/EditorParticleAssetSceneDropHandler.hpp
     src/private/app/EditorPrefabAssetSceneDropHandler.hpp
     src/private/app/EditorHierarchySearchInputHandler.hpp
     src/private/app/EditorMouseWheelRouter.hpp
@@ -413,10 +415,14 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorTagNameDialog.hpp
     src/private/platform/win32/EditorMeshAssetPickerDialog.hpp
     src/private/platform/win32/EditorAudioMixerAssetPickerDialog.hpp
+    src/private/platform/win32/EditorChoiceDialog.hpp
     src/private/platform/win32/EditorDebugLogGate.hpp
     src/private/platform/win32/EditorModalMessageLoop.hpp
+    src/private/platform/win32/EditorTextEntryDialog.hpp
     src/private/platform/win32/EditorModalWindowScope.hpp
     src/private/rendering/EditorMaterialThumbnailService.hpp
+    src/private/rendering/EditorParticleThumbnailService.hpp
+    src/private/rendering/ParticleThumbnailTimeline.hpp
     src/private/rendering/MaterialPreviewAppearanceResolver.hpp
     src/private/rendering/MaterialPreviewTextureAverageColor.hpp
     src/private/platform/win32/EditorSceneDirtyPrompt.hpp
@@ -480,6 +486,10 @@ add_executable(kb_editor WIN32
     src/private/rendering/HierarchyPanelStyle.hpp
     src/private/rendering/HierarchyPanelToolbarRenderer.hpp
     src/private/rendering/HierarchyRowRenderer.hpp
+    src/private/rendering/components/CategoryHeader.hpp
+    src/private/rendering/components/DenseListRow.hpp
+    src/private/rendering/components/EditorDialogStyle.hpp
+    src/private/rendering/components/PropertyRow.hpp
     src/private/rendering/HeroIconCatalog.hpp
     src/private/rendering/HeroIconAssets.hpp
     src/private/rendering/HeroIconDrawFrame.hpp
@@ -555,6 +565,7 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorHierarchyMetrics.hpp
     src/private/scene/EditorHierarchyExpansionState.hpp
     src/private/scene/EditorHierarchySelectionNormalizer.hpp
+    src/private/scene/EditorPlayModeSelectionSnapshot.hpp
     src/private/scene/EditorHierarchyObjectFactory.hpp
     src/private/scene/EditorHierarchyRow.hpp
     src/private/scene/EditorHierarchyRowBuilder.hpp
@@ -628,8 +639,10 @@ add_executable(kb_editor WIN32
     src/platform/win32/EditorMainWindow.cpp
     src/platform/win32/EditorAssetImportDialog.cpp
     src/platform/win32/EditorMaterialColorPickerDialog.cpp
+    src/platform/win32/EditorChoiceDialog.cpp
     src/platform/win32/EditorMaterialParameterValueDialog.cpp
     src/platform/win32/EditorTagNameDialog.cpp
+    src/platform/win32/EditorTextEntryDialog.cpp
     src/platform/win32/EditorMeshAssetPickerDialog.cpp
     src/platform/win32/EditorSceneDirtyPrompt.cpp
     src/platform/win32/EditorSceneFileDialog.cpp
@@ -684,6 +697,8 @@ add_executable(kb_editor WIN32
     src/rendering/HierarchyPanelStyle.cpp
     src/rendering/HierarchyPanelToolbarRenderer.cpp
     src/rendering/HierarchyRowRenderer.cpp
+    src/rendering/EditorRowComponents.cpp
+    src/rendering/EditorDialogStyle.cpp
     src/rendering/HierarchyRowLayout.cpp
     src/rendering/HierarchyToolbarLayout.cpp
     src/rendering/HeroIconAssets.cpp
@@ -698,6 +713,7 @@ add_executable(kb_editor WIN32
     src/rendering/InspectorAddComponentOverlayWindow.cpp
     src/rendering/MaterialEditorPanelRenderer.cpp
     src/rendering/EditorMaterialThumbnailService.cpp
+    src/rendering/EditorParticleThumbnailService.cpp
     src/rendering/MaterialPreviewAppearanceResolver.cpp
     src/rendering/MaterialPreviewTextureAverageColor.cpp
     src/rendering/MaterialEditorPanelLayout.cpp
@@ -910,6 +926,9 @@ add_custom_command(TARGET kb_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Icons/SceneView/HEROICONS-LICENSE.txt"
         "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Icons/SceneView/HEROICONS-LICENSE.txt"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle/content"
+        "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/21kbParticle"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Fonts"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Fonts/DejaVuSans.ttf"
@@ -927,6 +946,9 @@ add_custom_command(TARGET kb_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Icons/SceneView/HEROICONS-LICENSE.txt"
         "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Icons/SceneView/HEROICONS-LICENSE.txt"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/sources/plugins/21kb_particle/content"
+        "$<TARGET_FILE_DIR:kb_editor>/Content/21kbParticle"
     VERBATIM
 )
 
@@ -1031,7 +1053,10 @@ if(TARGET kb_21kb_particle_plugin)
     else()
         set(KB_21KB_PARTICLE_EDITOR_PLUGIN_PATH "")
     endif()
-    target_compile_definitions(kb_editor PRIVATE "KB_21KB_PARTICLE_PLUGIN_PATH=\"${KB_21KB_PARTICLE_EDITOR_PLUGIN_PATH}\"")
+    target_compile_definitions(kb_editor PRIVATE
+        "KB_21KB_PARTICLE_PLUGIN_PATH=\"${KB_21KB_PARTICLE_EDITOR_PLUGIN_PATH}\""
+        "KB_21KB_PARTICLE_CONTENT_ROOT=\"$<TARGET_FILE_DIR:kb_editor>/Content/21kbParticle\""
+    )
 endif()
 
 kb_target_copy_bgfx_runtime_shaders(kb_editor)
@@ -1042,7 +1067,7 @@ if(BUILD_TESTING)
         tests/ParticleEditorAuthoringTests.cpp
         src/rendering/ParticleEditorPanelLayout.cpp
     )
-    target_include_directories(kb_editor_particle_authoring_tests PRIVATE src/private)
+    target_include_directories(kb_editor_particle_authoring_tests PRIVATE include src/private)
     target_link_libraries(kb_editor_particle_authoring_tests PRIVATE kb_21kb_particle_editor_core)
     add_test(NAME kb_editor_particle_authoring_tests
         COMMAND $<TARGET_FILE:kb_editor_particle_authoring_tests>)

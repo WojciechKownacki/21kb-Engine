@@ -1,6 +1,8 @@
 #include "app/EditorParticleDocumentLifecycle.hpp"
 
 #if defined(_WIN32)
+#include "platform/win32/EditorChoiceDialog.hpp"
+#include "rendering/script_editor/ScriptEditorTextEncoding.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include <string>
@@ -18,13 +20,20 @@ bool EditorParticleDocumentLifecycle::Resolve(
 
     std::wstring prompt = L"Save changes to the open 21kb Particle System document before ";
     prompt += action;
-    prompt += L"?\n\nYes = Save\nNo = Discard changes\nCancel = keep editing";
+    prompt += L"?";
     kb::particle_editor::ParticleDocumentCloseDecision decision;
-    switch (MessageBoxW(owner, prompt.c_str(), L"Unsaved Particle Effect",
-        MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1 | MB_APPLMODAL)) {
-    case IDYES: decision = kb::particle_editor::ParticleDocumentCloseDecision::Save; break;
-    case IDNO: decision = kb::particle_editor::ParticleDocumentCloseDecision::Discard; break;
-    case IDCANCEL:
+    switch (EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
+        .title = "Unsaved Particle Effect",
+        .message = ScriptEditorTextEncoding::Narrow(prompt),
+        .supportingText = "Choose whether to preserve the current effect changes.",
+        .primaryLabel = "Save",
+        .secondaryLabel = "Discard",
+        .cancelLabel = "Cancel",
+        .icon = HeroIconKind::Bolt,
+    })) {
+    case EditorChoiceDialogResult::Primary: decision = kb::particle_editor::ParticleDocumentCloseDecision::Save; break;
+    case EditorChoiceDialogResult::Secondary: decision = kb::particle_editor::ParticleDocumentCloseDecision::Discard; break;
+    case EditorChoiceDialogResult::Cancel:
     default: decision = kb::particle_editor::ParticleDocumentCloseDecision::Cancel; break;
     }
     return sceneContext.ResolveParticleEditorTransition(decision).state ==

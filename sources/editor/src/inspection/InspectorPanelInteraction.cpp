@@ -26,6 +26,7 @@
 #include "engine/scene/SpaceStrokeComponent.hpp"
 #include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
+#include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/RegionShapeComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -1376,6 +1377,29 @@ template <typename Integer>
         return true;
     }
     sceneContext.Inspector().EndTextEdit();
+    return true;
+}
+
+[[nodiscard]] bool HandleParticleEffectClick(
+    EditorSceneContext& sceneContext,
+    kb::scene::SceneEntity entity,
+    const InspectorPanelRenderer::Hit& hit) {
+    const kb::scene::ParticleEffectComponent* particleEffect =
+        sceneContext.Scene().Components().ParticleEffects().TryGet(entity);
+    if (particleEffect == nullptr) return false;
+    if (hit.property == InspectorPropertyId::ParticleEffectEnabled) {
+        sceneContext.Inspector().EndTextEdit();
+        return sceneContext.ToggleParticleEffectEnabled(entity);
+    }
+    if (hit.property == InspectorPropertyId::ParticleEffectAutoPlay) {
+        sceneContext.Inspector().EndTextEdit();
+        return sceneContext.ToggleParticleEffectAutoPlay(entity);
+    }
+    if (hit.property == InspectorPropertyId::ParticleEffectAsset ||
+        hit.property == InspectorPropertyId::ParticleEffectAssetPicker) {
+        sceneContext.Inspector().EndTextEdit();
+        return true;
+    }
     return true;
 }
 
@@ -2996,6 +3020,8 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
                 static_cast<void>(ApplyAudioMutation(sceneContext, label, [&]() {
                     return InspectorAudioComponentModel::RemoveComponent(sceneContext.Scene(), entity, hit.section);
                 }));
+            } else if (hit.section == InspectorSectionId::ParticleEffect) {
+                static_cast<void>(sceneContext.RemoveParticleEffectFromEntity(entity));
             } else if (hit.section == InspectorSectionId::Animator) {
                 static_cast<void>(sceneContext.RemoveAnimatorFromEntity(entity));
             } else if (hit.section == InspectorSectionId::SkeletonBinding) {
@@ -3213,6 +3239,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     if (hit.section == InspectorSectionId::Camera) {
         return HandleCameraClick(sceneContext, entity, hit);
     }
+    if (hit.section == InspectorSectionId::ParticleEffect) {
+        return HandleParticleEffectClick(sceneContext, entity, hit);
+    }
     if (hit.section == InspectorSectionId::Animator) {
         return HandleAnimatorClick(sceneContext, entity, hit);
     }
@@ -3287,6 +3316,8 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
             static_cast<void>(sceneContext.ToggleEntityVisibility(entity));
         } else if (hit.section == InspectorSectionId::AudioSource || hit.section == InspectorSectionId::AudioListener) {
             return ToggleAudioProperty(sceneContext, entity, hit.property);
+        } else if (hit.section == InspectorSectionId::ParticleEffect) {
+            return HandleParticleEffectClick(sceneContext, entity, hit);
         }
         return true;
     }

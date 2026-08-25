@@ -83,6 +83,10 @@ public:
 
     [[nodiscard]] bool RegisterLoader(std::unique_ptr<IAssetLoader> loader);
     [[nodiscard]] bool RegisterAsset(AssetMetadata metadata);
+    // Refreshes one already-registered asset after an atomic authoring write.
+    // Unlike DiscoverMountedAssets(), this hashes and re-analyses only the
+    // requested file while preserving registry and cache coherency.
+    [[nodiscard]] bool RefreshAsset(AssetId id);
     [[nodiscard]] std::size_t DiscoverMountedAssets();
     [[nodiscard]] std::vector<std::filesystem::path> VirtualFolders() const;
     [[nodiscard]] bool CreateFolder(const std::filesystem::path& virtualFolder);

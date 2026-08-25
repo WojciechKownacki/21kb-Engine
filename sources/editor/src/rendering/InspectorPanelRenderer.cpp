@@ -14,6 +14,7 @@
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/DrawD3DeformedGeometryComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
+#include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -60,6 +61,7 @@
 #include "rendering/HeroIconKind.hpp"
 #include "rendering/ProjectFilesMaterialPreviewThumbnailModel.hpp"
 #include "rendering/ProjectFilesPanelDrawing.hpp"
+#include "rendering/components/EditorDialogStyle.hpp"
 #include "rendering/gdi/ScopedBrush.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "rendering/gdi/ScopedPen.hpp"
@@ -165,7 +167,7 @@ constexpr int kMeshPreviewToolbarHeight = 30;
 constexpr int kMeshPreviewToolbarButtonSize = 22;
 constexpr int kMeshPreviewToolbarButtonGap = 4;
 constexpr int kAddComponentButtonHeight = 24;
-constexpr int kAddComponentBrowserWidth = 240;   // narrow, Unity-style popup width
+constexpr int kAddComponentBrowserWidth = 240;
 constexpr int kAddComponentBrowserMaxHeight = 300;
 constexpr int kAddComponentSearchHeight = 24;
 constexpr int kAddComponentRowHeight = 26;
@@ -187,6 +189,11 @@ struct InspectorRowDefinition {
     InspectorPropertyId property = InspectorPropertyId::None;
     InspectorRowValueKind kind = InspectorRowValueKind::Text;
 };
+
+constexpr std::array<InspectorRowDefinition, 2> kParticleEffectRows{ {
+    { InspectorPropertyId::ParticleEffectEnabled, InspectorRowValueKind::Bool },
+    { InspectorPropertyId::ParticleEffectAutoPlay, InspectorRowValueKind::Bool },
+} };
 
 constexpr std::array<InspectorRowDefinition, 3> kAnimatorRows{ {
     { InspectorPropertyId::AnimatorSpeed, InspectorRowValueKind::Float },
@@ -399,9 +406,8 @@ void DrawDivider(HDC dc, int left, int right, int y) {
 [[nodiscard]] RECT AddComponentBrowserRect(RECT content, int y) noexcept {
     const RECT button = AddComponentButtonRect(content, y);
     const int top = button.bottom + 8;
-    // Narrow, fixed-width popup (Unity-style) centred under the button. Always the
-    // full height: it is part of the scrollable inspector content (reserved by
-    // EntityContentHeight), so the viewport clip + scroll reveal it.
+    // The fixed-width popup remains part of the scrollable Inspector content, so
+    // the viewport clip and scroll position reveal it deterministically.
     const int panelWidth = static_cast<int>(content.right - content.left);
     const int width = std::min(kAddComponentBrowserWidth, std::max(160, panelWidth - 24));
     const int left = content.left + std::max(12, (panelWidth - width) / 2);
@@ -457,19 +463,8 @@ void DrawDivider(HDC dc, int left, int right, int y) {
     return inspector.EditedProperty() == InspectorPropertyId::AddComponentSearch ? std::string_view{ inspector.EditBuffer() } : std::string_view{};
 }
 
-// Draws one Add Component row: icon (HeroIconPainter, the tab/section icon
-// source) + label, a trailing "›" chevron for a category, blue highlight when
-// hovered — matching the Unity component picker.
 void DrawAddComponentBrowserRow(HDC dc, RECT row, const EditorTheme& theme, HeroIconKind icon, std::string_view label, bool isCategory, bool hovered) {
-    if (hovered) {
-        // The same subtle row-hover fill as the Project Files list.
-        GdiDrawing::FillRectColor(dc, row, BlendColor(Color(theme.strip), Color(theme.textSecondary), 12));
-    }
-    const int iconSize = 15;
-    const int iconTop = row.top + (static_cast<int>(row.bottom - row.top) - iconSize) / 2;
-    const RECT iconRect{ row.left + 8, iconTop, row.left + 8 + iconSize, iconTop + iconSize };
-    HeroIconPainter::Draw(dc, iconRect, icon, Color(theme.textPrimary), 1);
-    Text(dc, Rect(iconRect.right + 8, row.top, row.right - 18, row.bottom), label, Color(theme.textPrimary));
+    EditorDialogStyle::PaintMenuRow(dc, row, theme, label, icon, hovered);
     if (isCategory) {
         const int chevronSize = 12;
         const int chevronTop = row.top + (static_cast<int>(row.bottom - row.top) - chevronSize) / 2;
@@ -483,24 +478,24 @@ void DrawAddComponentBrowser(
     const EditorTheme& theme,
     const InspectorPanelState& inspector,
     const EditorSceneContext& sceneContext) {
-    DrawFrame(dc, browser, Rgb(30, 33, 38), Rgb(70, 78, 88));
-
-    {
-        ScopedFont titleFont(12, FW_SEMIBOLD);
-        const ScopedGdiObject selectedTitleFont(dc, titleFont.handle);
-        Text(dc, Rect(browser.left + 10, browser.top + 4, browser.right - 10, browser.top + 28), "Add Component", Color(theme.textPrimary), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    }
+    EditorDialogStyle::PaintSurface(dc, browser, theme);
+    EditorDialogStyle::PaintTitleBar(dc, theme, EditorDialogHeaderDescriptor{
+        .bounds = Rect(browser.left + 1, browser.top + 1, browser.right - 1, browser.top + 30),
+        .title = "Add Component",
+        .icon = HeroIconKind::Plus,
+        .showIcon = true,
+    });
 
     const RECT search = AddComponentSearchRect(browser);
     const bool searchFocused = inspector.EditedProperty() == InspectorPropertyId::AddComponentSearch;
-    DrawFrame(dc, search, Rgb(20, 22, 25), searchFocused ? Color(theme.accent) : Rgb(54, 60, 68));
     const std::string_view query = AddComponentQuery(inspector);
-    if (query.empty()) {
-        Text(dc, Shrink(search, 24, 0, 8, 0), "Search", Rgb(110, 118, 130));
-    } else {
-        Text(dc, Shrink(search, 8, 0, 8, 0), query, Color(theme.textPrimary));
-    }
+    EditorDialogStyle::PaintField(dc, search, theme, {}, searchFocused, false);
     HeroIconPainter::Draw(dc, Rect(search.left + 4, search.top + 5, search.left + 18, search.top + 19), HeroIconKind::MagnifyingGlass, Rgb(120, 128, 140), 1);
+    EditorDialogStyle::PaintText(
+        dc,
+        Rect(search.left + 24, search.top, search.right - 7, search.bottom),
+        query.empty() ? "Search" : query,
+        EditorDialogStyle::Color(query.empty() ? theme.textDisabled : theme.textPrimary));
 
     const std::string& category = inspector.AddComponentBrowserCategory();
     const bool showBack = query.empty() && !category.empty();
@@ -567,11 +562,9 @@ void DrawAddComponentBrowser(
 
     if (scrollable) {
         const RECT track = AddComponentScrollbarTrackRect(list);
-        DrawFrame(dc, track, Rgb(22, 24, 28), Rgb(40, 45, 52));
         const RECT thumb = AddComponentScrollbarThumbRect(list, rowCount, scroll);
-        if (thumb.bottom > thumb.top) {
-            DrawFrame(dc, thumb, inspector.IsAddComponentScrollbarDragging() ? Rgb(104, 116, 130) : Rgb(76, 86, 98), Rgb(94, 105, 118));
-        }
+        EditorDialogStyle::PaintScrollbar(
+            dc, track, thumb, theme, inspector.IsAddComponentScrollbarDragging());
     }
 }
 
@@ -1538,6 +1531,26 @@ void PaintAnimatorSection(
     section.Field("Speed", FormatFloat(animator.speed, 3), InspectorPropertyId::AnimatorSpeed);
     section.Bool("Enabled", animator.enabled, InspectorPropertyId::AnimatorEnabled);
     section.Field("Root Motion", rootMotionOwner, InspectorPropertyId::AnimatorRootMotionOwner);
+    y = section.Bottom() + kSectionGap;
+}
+
+void PaintParticleEffectSection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const EditorSceneContext& sceneContext,
+    const kb::scene::ParticleEffectComponent& particleEffect) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector,
+        InspectorSectionId::ParticleEffect, HeroIconKind::Bolt, "Particle Effect", true);
+    section.AssetField(
+        "Effect",
+        AssetDisplayName(sceneContext, particleEffect.effectAssetId),
+        InspectorPropertyId::ParticleEffectAsset,
+        InspectorPropertyId::ParticleEffectAssetPicker);
+    section.Bool("Enabled", particleEffect.enabled, InspectorPropertyId::ParticleEffectEnabled);
+    section.Bool("Auto Play", particleEffect.autoPlay, InspectorPropertyId::ParticleEffectAutoPlay);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -2941,6 +2954,16 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             y += h + kSectionGap;
         }
     }
+    if (const kb::scene::ParticleEffectComponent* particleEffect =
+            scene.Components().ParticleEffects().TryGet(selected);
+        particleEffect != nullptr) {
+        const int h = SectionHeight(inspector, InspectorSectionId::ParticleEffect, 3);
+        if (sectionVisible(y, h)) {
+            PaintParticleEffectSection(dc, content, y, theme, inspector, sceneContext, *particleEffect);
+        } else {
+            y += h + kSectionGap;
+        }
+    }
     if (const kb::scene::MeshRendererComponent* meshRenderer = scene.Components().MeshRenderers().TryGet(selected); meshRenderer != nullptr) {
         const bool isTerrain = EditorTerrainService::IsTerrainEntity(scene, selected);
         if (!isTerrain || sceneContext.IsProjectPluginEnabled("Editor.Terrain")) {
@@ -3200,6 +3223,9 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     }
     if (const kb::scene::LightComponent* light = scene.Components().Lights().TryGet(selected); light != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::Light, LightSectionRows(*light)) + kSectionGap;
+    }
+    if (scene.Components().ParticleEffects().TryGet(selected) != nullptr) {
+        height += SectionHeight(inspector, InspectorSectionId::ParticleEffect, 3) + kSectionGap;
     }
     if (const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(selected); renderer != nullptr) {
         const bool terrain = EditorTerrainService::IsTerrainEntity(scene, selected);
@@ -4001,13 +4027,11 @@ int InspectorPanelRenderer::ContentHeight(const RECT& content, const EditorScene
     }
 
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
-    if (InspectorSceneAudioModel::ShouldDisplay(
-            sceneContext.Scene(), assetBrowser.InspectorAsset(), selected)) {
-        return InspectorSceneAudioView::ContentHeight(
-            sceneContext.Inspector(), InspectorSceneAudioModel{ sceneContext.Scene() });
-    }
     if (sceneContext.SelectedHierarchyEntities().size() > 1U) {
         return MultiSelectionContentHeight(sceneContext);
+    }
+    if (!sceneContext.Scene().Entities().IsAlive(selected)) {
+        return RectHeight(content);
     }
     return EntityContentHeight(sceneContext, selected);
 }
@@ -4241,16 +4265,8 @@ void InspectorPanelRenderer::Paint(
     }
 
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
-    if (InspectorSceneAudioModel::ShouldDisplay(
-            sceneContext.Scene(), sceneContext.AssetBrowser().InspectorAsset(), selected)) {
-        const InspectorSceneAudioModel model{ sceneContext.Scene() };
-        InspectorSceneAudioView::Paint(
-            dc,
-            inner,
-            theme,
-            sceneContext.Inspector(),
-            sceneContext.SceneDocumentGeneration(),
-            model);
+    if (sceneContext.SelectedHierarchyEntities().size() > 1U) {
+        PaintMultiSelection(dc, inner, theme, sceneContext, selected);
         RestoreDC(dc, -1);
         if (scrollable) {
             const RECT track = ScrollbarTrackRect(content);
@@ -4262,15 +4278,8 @@ void InspectorPanelRenderer::Paint(
         return;
     }
 
-    if (sceneContext.SelectedHierarchyEntities().size() > 1U) {
-        PaintMultiSelection(dc, inner, theme, sceneContext, selected);
+    if (!sceneContext.Scene().Entities().IsAlive(selected)) {
         RestoreDC(dc, -1);
-        if (scrollable) {
-            const RECT track = ScrollbarTrackRect(content);
-            const RECT thumb = ScrollbarThumbRect(content, sceneContext);
-            DrawFrame(dc, track, Rgb(18, 20, 24), Rgb(38, 43, 50));
-            DrawFrame(dc, thumb, sceneContext.Inspector().IsScrollbarDragging() ? Rgb(104, 116, 130) : Rgb(76, 86, 98), Rgb(94, 105, 118));
-        }
         RestoreDC(dc, savedDc);
         return;
     }
@@ -4377,25 +4386,12 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     }
 
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
-    if (InspectorSceneAudioModel::ShouldDisplay(
-            sceneContext.Scene(), sceneContext.AssetBrowser().InspectorAsset(), selected)) {
-        const InspectorSceneAudioHit hit = InspectorSceneAudioView::HitTest(
-            viewport,
-            state,
-            InspectorSceneAudioModel{ sceneContext.Scene() },
-            x,
-            scrolledY);
-        return InspectorPanelRenderer::Hit{
-            .kind = hit.kind,
-            .section = hit.section,
-            .property = hit.property,
-            .index = hit.index,
-            .rect = hit.rect,
-        };
-    }
-
     if (sceneContext.SelectedHierarchyEntities().size() > 1U) {
         return HitTestMultiSelection(viewport, state, x, scrolledY, y);
+    }
+
+    if (!sceneContext.Scene().Entities().IsAlive(selected)) {
+        return {};
     }
 
     if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::General, x, scrolledY); hit.kind != InspectorHitKind::None) {
@@ -4817,6 +4813,29 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         }
         if (!state.IsCollapsed(InspectorSectionId::AudioListener)) {
             if (InspectorPanelRenderer::Hit hit = HitAudioRows(viewport, y, InspectorSectionId::AudioListener, InspectorAudioComponentModel::ListenerRows(), x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+        }
+        y += kSectionGap;
+    }
+
+    if (sceneContext.Scene().Components().ParticleEffects().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::ParticleEffect, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::ParticleEffect)) {
+            if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(
+                    RowRect(viewport, y),
+                    InspectorSectionId::ParticleEffect,
+                    InspectorPropertyId::ParticleEffectAsset,
+                    InspectorPropertyId::ParticleEffectAssetPicker,
+                    x,
+                    scrolledY);
+                hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitRows(viewport, y, InspectorSectionId::ParticleEffect, kParticleEffectRows, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
         }

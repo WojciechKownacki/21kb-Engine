@@ -8,6 +8,7 @@
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -25,10 +26,13 @@
 #include "rendering/SkeletalMeshEditorSceneLabelBuilder.hpp"
 #include "rendering/EditorTexturePreviewService.hpp"
 #include "rendering/SceneViewportPresentationPolicy.hpp"
+#include "rendering/SceneViewportSceneSyncPolicy.hpp"
+#include "rendering/ParticleThumbnailTimeline.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLabelFormat.hpp"
 #include "scene/EditorViewportCameraState.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
+#include "scene/EditorPlayCameraResolver.hpp"
 #include "scene/AnimationPreviewContext.hpp"
 #include "scene/EditorAnimationPreviewScene.hpp"
 
@@ -58,16 +62,22 @@ void RunSceneViewportPresentationPolicyTest() {
     using kb::editor::SceneViewportPresentationPolicy;
 
     kb::editor::tests::Require(
-        SceneViewportPresentationPolicy::CameraSource(false) == SceneViewportCameraSource::Editor,
+        SceneViewportPresentationPolicy::CameraSource(false, false) == SceneViewportCameraSource::Editor &&
+            SceneViewportPresentationPolicy::CameraSource(false, true) == SceneViewportCameraSource::Editor,
         "Stopped Scene View must use the editor fly camera");
     kb::editor::tests::Require(
-        SceneViewportPresentationPolicy::CameraSource(true) == SceneViewportCameraSource::PrimaryScene,
-        "Play mode Scene View must use the primary scene camera");
+        SceneViewportPresentationPolicy::CameraSource(true, true) == SceneViewportCameraSource::PrimaryScene,
+        "Play mode Scene View must use an available primary scene camera");
     kb::editor::tests::Require(
-        SceneViewportPresentationPolicy::EditorOverlaysEnabled(false),
+        SceneViewportPresentationPolicy::CameraSource(true, false) == SceneViewportCameraSource::Editor &&
+            SceneViewportPresentationPolicy::EditorOverlaysEnabled(true, false),
+        "Play mode Scene View must retain the editor camera when no primary scene camera exists");
+    kb::editor::tests::Require(
+        SceneViewportPresentationPolicy::EditorOverlaysEnabled(false, false) &&
+            SceneViewportPresentationPolicy::EditorOverlaysEnabled(false, true),
         "Stopped Scene View must retain authoring overlays");
     kb::editor::tests::Require(
-        !SceneViewportPresentationPolicy::EditorOverlaysEnabled(true),
+        !SceneViewportPresentationPolicy::EditorOverlaysEnabled(true, true),
         "Play mode Scene View must not draw editor overlays over the game camera");
     kb::editor::tests::Require(
         SceneViewportPresentationPolicy::RequiresPresent(false, true),
@@ -79,6 +89,149 @@ void RunSceneViewportPresentationPolicyTest() {
         !SceneViewportPresentationPolicy::RequiresPresent(true, true) &&
             !SceneViewportPresentationPolicy::RequiresPresent(false, false),
         "An unchanged Scene View camera mode must not manufacture a present");
+}
+
+void RunSceneViewportSceneSyncPolicyTest() {
+    using kb::editor::SceneViewportSceneSyncPolicy;
+
+    const auto initial = SceneViewportSceneSyncPolicy::Resolve(0U, 1U, 1U, false, false, true);
+    kb::editor::tests::Require(
+        initial.fullSync && !initial.incrementalEntitySync && !initial.runtimeTransformSync,
+        "The first viewport submission must establish one complete render scene");
+
+    const auto cameraFrame = SceneViewportSceneSyncPolicy::Resolve(7U, 7U, 7U, false, false, true);
+    kb::editor::tests::Require(
+        !cameraFrame.fullSync && !cameraFrame.incrementalEntitySync && cameraFrame.runtimeTransformSync,
+        "A Play camera frame must consume runtime transforms without rebuilding the scene");
+
+    const auto editedEntity = SceneViewportSceneSyncPolicy::Resolve(7U, 8U, 7U, false, true, false);
+    kb::editor::tests::Require(
+        !editedEntity.fullSync && editedEntity.incrementalEntitySync && !editedEntity.runtimeTransformSync,
+        "An authored entity edit must retain the incremental entity sync path");
+
+    const auto structuralRuntimeChange = SceneViewportSceneSyncPolicy::Resolve(7U, 8U, 8U, true, false, true);
+    kb::editor::tests::Require(
+        structuralRuntimeChange.fullSync && !structuralRuntimeChange.runtimeTransformSync,
+        "A runtime topology change must take precedence over affine-only synchronization");
+}
+
+void RunParticleThumbnailTimelineTest() {
+    using kb::editor::ParticleThumbnailTimeline;
+
+    const auto longLoop = ParticleThumbnailTimeline::Plan(6.0F, true);
+    kb::editor::tests::Require(
+        longLoop.simulationSteps == 360U &&
+            longLoop.frameCount == 144U,
+        "Particle thumbnail timeline did not preserve a full six-second lifecycle at 24 fps");
+    kb::editor::tests::Require(
+        ParticleThumbnailTimeline::CaptureStep(longLoop, 143U) >= 357U,
+        "Particle thumbnail timeline stopped before the end of a looping lifecycle");
+    kb::editor::tests::Require(
+        ParticleThumbnailTimeline::PosterFrame(longLoop) == 4U &&
+            ParticleThumbnailTimeline::CaptureStep(longLoop, 4U) <= 12U,
+        "Particle thumbnail poster did not stay inside the bounded fast-start window");
+    kb::editor::tests::Require(
+        ParticleThumbnailTimeline::FrameAtSeconds(longLoop, 0.19) == 4U &&
+            ParticleThumbnailTimeline::FrameAtSeconds(longLoop, 6.19) == 4U,
+        "Particle thumbnail timeline did not loop by authored duration");
+
+    const auto oneShot = ParticleThumbnailTimeline::Plan(1.1F, false);
+    kb::editor::tests::Require(
+        oneShot.simulationSteps == 66U && oneShot.frameCount == 27U &&
+            ParticleThumbnailTimeline::CaptureStep(
+                oneShot, oneShot.frameCount - 1U) ==
+                oneShot.simulationSteps,
+        "Particle thumbnail one-shot did not include its authored end frame");
+
+    const auto shortFlash = ParticleThumbnailTimeline::Plan(0.08F, false);
+    kb::editor::tests::Require(
+        shortFlash.frameCount == 2U &&
+            ParticleThumbnailTimeline::CaptureStep(shortFlash, 1U) == 5U &&
+            ParticleThumbnailTimeline::PosterFrame(shortFlash) == 0U,
+        "Particle thumbnail timeline did not keep a short one-shot bounded and complete");
+
+    kb::scene::ParticleEffectAsset drainingEffect;
+    drainingEffect.looping = false;
+    drainingEffect.durationSeconds = 1.0F;
+    drainingEffect.emitters.push_back(kb::scene::ParticleEmitterAsset{});
+    drainingEffect.emitters.back().spawn.mode =
+        kb::scene::ParticleSpawnMode::Continuous;
+    drainingEffect.emitters.back().spawn.lifetimeMin = 0.25F;
+    drainingEffect.emitters.back().spawn.lifetimeMax = 0.75F;
+    const auto draining = ParticleThumbnailTimeline::Plan(drainingEffect);
+    kb::editor::tests::Require(
+        draining.simulationSteps == 105U && draining.frameCount == 42U &&
+            std::fabs(draining.durationSeconds - 1.75F) <= 0.0001F,
+        "Particle thumbnail one-shot omitted the final emitted particles' drain interval");
+
+    const auto unbounded = ParticleThumbnailTimeline::Plan(0.0F, true);
+    const auto extreme = ParticleThumbnailTimeline::Plan(1000000.0F, true);
+    kb::editor::tests::Require(
+        unbounded.usesBoundedPreviewWindow &&
+            unbounded.simulationSteps == 300U &&
+            std::fabs(unbounded.durationSeconds - 5.0F) <= 0.0001F &&
+            extreme.usesBoundedPreviewWindow &&
+            extreme.simulationSteps == 600U &&
+            extreme.frameCount == 240U &&
+            std::fabs(extreme.durationSeconds - 10.0F) <= 0.0001F,
+        "Particle thumbnail timeline did not bound unending or pathological preview work");
+
+    kb::scene::ParticleEffectAsset cascadingEffect;
+    cascadingEffect.looping = false;
+    cascadingEffect.durationSeconds = 1.0F;
+    cascadingEffect.emitters.push_back(kb::scene::ParticleEmitterAsset{});
+    cascadingEffect.emitters.back().spawn.mode =
+        kb::scene::ParticleSpawnMode::Burst;
+    cascadingEffect.emitters.back().spawn.bursts = {
+        {.timeSeconds = 0.0F, .count = 1U},
+    };
+    cascadingEffect.emitters.back().spawn.lifetimeMin = 1.0F;
+    cascadingEffect.emitters.back().spawn.lifetimeMax = 1.0F;
+    cascadingEffect.eventBindings.push_back(
+        kb::scene::ParticleEventBindingAsset{.maxDepth = 2U});
+    const auto cascading = ParticleThumbnailTimeline::Plan(
+        cascadingEffect);
+    kb::editor::tests::Require(
+        cascading.simulationSteps == 180U &&
+            std::fabs(cascading.durationSeconds - 3.0F) <= 0.0001F,
+        "Particle thumbnail one-shot omitted a bounded event-spawn chain");
+}
+
+void RunPlayCameraHierarchySelectionTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity first = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "First Camera" });
+    const kb::scene::SceneEntity container = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Container" });
+    const kb::scene::SceneEntity last = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{
+            .name = "Last Camera",
+            .parent = scene.Entities().Object(container),
+        });
+    scene.Components().Cameras().Set(
+        first, kb::scene::CameraComponent{ .primary = true, .priority = 100 });
+    scene.Components().Cameras().Set(
+        last, kb::scene::CameraComponent{ .primary = true, .priority = -100 });
+
+    kb::editor::tests::Require(
+        kb::editor::EditorPlayCameraResolver::Resolve(scene) == last,
+        "Play camera must be the last active camera in visible Hierarchy order, independent of priority");
+
+    kb::scene::CameraComponent inactive =
+        *scene.Components().Cameras().TryGet(last);
+    inactive.primary = false;
+    scene.Components().Cameras().Set(last, inactive);
+    kb::editor::tests::Require(
+        kb::editor::EditorPlayCameraResolver::Resolve(scene) == first,
+        "An inactive camera must not replace the preceding active Play camera");
+
+    kb::scene::CameraComponent firstInactive =
+        *scene.Components().Cameras().TryGet(first);
+    firstInactive.primary = false;
+    scene.Components().Cameras().Set(first, firstInactive);
+    kb::editor::tests::Require(
+        !kb::editor::EditorPlayCameraResolver::Resolve(scene).IsValid(),
+        "A scene without an active camera must retain free Scene View during Play");
 }
 
 void RunProfileCycleAndResolutionTest() {
@@ -264,10 +417,10 @@ void RunSkeletalMeshSceneLabelBuilderTest() {
     RequireNear(labels.front().y, 360.0F, 0.001F,
         "A centered bone must project to the vertical viewport center");
     RequireNear(labels.front().pixelHeight, 10.0F, 0.001F,
-        "The reference camera distance must use Unreal's SmallFont size 10");
+        "The reference camera distance must use the established font size 10");
     kb::editor::tests::Require(
         labels.front().color == std::array<std::uint8_t, 4U>{ 255U, 255U, 255U, 255U },
-        "Unreal-style bone names must use a white foreground");
+        "Bone names must use a white foreground");
 
     const auto pixelHeightAtDepth = [&](float depth) {
         const kb::scene::Vec3 position = axes.position + axes.forward * depth;
@@ -1031,6 +1184,44 @@ void RunRenderBackendSettingsTest() {
     kb::editor::tests::Require(settings.Generation() == 3U, "Third render backend cycle should bump generation");
 }
 
+void RunViewportParticleIconPickerSelectsParticleEffectTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity particle = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Particle Icon" });
+    scene.Components().ParticleEffects().Set(
+        particle,
+        kb::scene::ParticleEffectComponent{
+            .effectAssetId = 99U,
+            .enabled = true,
+        });
+
+    const kb::editor::EditorViewportCameraState camera;
+    const kb::editor::EditorViewportCameraAxes axes = camera.Axes();
+    const kb::scene::Vec3 position = axes.position + axes.forward * 5.0F;
+    scene.Transforms().Set(
+        particle,
+        kb::scene::TransformComponent{ .localPosition = position });
+    const RECT renderArea{0, 0, 960, 540};
+    float screenX = 0.0F;
+    float screenY = 0.0F;
+    kb::editor::tests::Require(
+        kb::editor::EditorSceneViewportMath::WorldToScreen(
+            camera, renderArea, position, screenX, screenY),
+        "Particle icon test point should project into the viewport");
+
+    const kb::editor::EditorSceneViewportPickResult pick =
+        kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+            scene,
+            camera,
+            renderArea,
+            screenX + 12.0F,
+            screenY,
+            BuildViewportRay(camera, renderArea, screenX + 12.0F, screenY));
+    kb::editor::tests::Require(
+        pick.IsValid() && pick.entity == particle,
+        "Viewport picker should select the visible particle icon with the same forgiving target as light icons");
+}
+
 void RunEditorBackendSelectionTest() {
     constexpr std::array supported{
         bgfx::RendererType::Direct3D12,
@@ -1181,6 +1372,9 @@ namespace kb::editor::tests {
 
 void RunEditorViewportPreviewTests() {
     RunSceneViewportPresentationPolicyTest();
+    RunSceneViewportSceneSyncPolicyTest();
+    RunParticleThumbnailTimelineTest();
+    RunPlayCameraHierarchySelectionTest();
     RunViewportCameraNavigationBindingPolicyTest();
     RunSkeletalMeshSceneLabelBuilderTest();
     RunAnimationPreviewContextTracksSharedBindingTest();
@@ -1207,6 +1401,7 @@ void RunEditorViewportPreviewTests() {
     RunViewportMeshPickerNearestMeshRendererTest();
     RunViewportLightWireframePickerChoosesNestedInnerWireframeTest();
     RunViewportLightIconPickerSelectsLightIconsTest();
+    RunViewportParticleIconPickerSelectsParticleEffectTest();
     RunViewportMeshPickerWinsInsideLightWireframeVolumeTest();
     RunRenderBackendSettingsTest();
     RunEditorBackendSelectionTest();

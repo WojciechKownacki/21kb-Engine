@@ -4,6 +4,7 @@
 #include "engine/assets/AssetRegistry.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
+#include "engine/scene/AmbientRadianceComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/ParticleEffectComponent.hpp"
@@ -11,18 +12,27 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/SceneMode.hpp"
+#include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/TransformComponent.hpp"
+#include "engine/scene/WorldBackdropComponent.hpp"
 #include "kb/render/Renderer.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <utility>
 
 namespace kb::particle_editor {
 namespace {
+
+constexpr float kParticlePreviewMinDistance = 1.0F;
+constexpr float kParticlePreviewMaxDistance = 24.0F;
+constexpr float kParticlePreviewMaxPitchDegrees = 85.0F;
+constexpr float kParticlePreviewDegreesPerPixel = 0.4F;
 
 [[nodiscard]] ParticleEditorResult ValidatePreviewAsset(const kb::scene::ParticleEffectAsset& asset) {
     auto validation = kb::scene::ParticleEffectAssetValidator::ValidateStructure(asset);
@@ -92,22 +102,43 @@ ParticleEditorResult ParticlePreviewSession::Start(
         .restartOnActivate = true,
     });
     const kb::scene::SceneEntity cameraEntity = candidate->Entities().CreateEntity();
-    kb::scene::TransformComponent cameraTransform{};
-    cameraTransform.localPosition = {0.0F, 1.0F, -5.0F};
-    candidate->Transforms().Set(cameraEntity, cameraTransform);
     candidate->Components().Cameras().Set(cameraEntity, {
         .projection = kb::scene::CameraProjection::Perspective,
-        .verticalFovDegrees = 60.0F,
+        .verticalFovDegrees = 50.0F,
         .nearClip = 0.01F,
         .farClip = 1000.0F,
         .primary = true,
     });
+    const kb::scene::SceneEntity environment = candidate->Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{.name = "Particle Preview Environment"});
+    candidate->Components().WorldBackdrops().Set(environment, kb::scene::WorldBackdropComponent{
+        .mode = kb::scene::WorldBackdropMode::VerticalGradient,
+        .horizonColor = kb::scene::Vec3{0.018F, 0.020F, 0.026F},
+        .zenithColor = kb::scene::Vec3{0.045F, 0.050F, 0.068F},
+        .gradientExponent = 1.15F,
+        .priority = 100,
+        .enabled = true,
+    });
+    candidate->Components().AmbientRadiances().Set(environment, kb::scene::AmbientRadianceComponent{
+        .mode = kb::scene::AmbientRadianceMode::Gradient,
+        .horizonColor = kb::scene::Vec3{0.04F, 0.045F, 0.055F},
+        .zenithColor = kb::scene::Vec3{0.08F, 0.09F, 0.12F},
+        .intensity = 0.45F,
+        .priority = 100,
+        .enabled = true,
+    });
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(*candidate, true);
 
     scene_ = std::move(candidate);
     assetId_ = assetId;
     virtualPath_ = std::move(virtualPath);
     effectEntity_ = effectEntity;
     cameraEntity_ = cameraEntity;
+    orbitYawDegrees_ = 0.0F;
+    orbitPitchDegrees_ = 12.0F;
+    cameraDistance_ = 5.0F;
+    orbitDragging_ = false;
+    ApplyCamera();
     return {};
 }
 
@@ -131,6 +162,86 @@ ParticleEditorResult ParticlePreviewSession::PublishWorkingCopy(
             std::make_shared<kb::scene::ParticleEffectAsset>(asset))) {
         return { .status = ParticleEditorStatus::PublicationFailed,
                  .message = manager.LastError() };
+    }
+    // RefreshCompiledEffects runs on the fixed step. Restarting first would
+    // prewarm against the previous compiled revision, so spawn/burst/color
+    // edits would never land in the 3D preview.
+    if (!scene_->Runtime().Update(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds)) {
+        return { .status = ParticleEditorStatus::RuntimeFailure,
+                 .message = "particle preview could not compile the published working copy" };
+    }
+    for (const std::uint64_t instanceId : kb::particles::ParticlePlayback::LiveInstanceIds(*scene_)) {
+        const auto restarted = kb::particles::ParticlePlayback::Restart(*scene_, instanceId);
+        if (!restarted.Succeeded()) {
+            return { .status = ParticleEditorStatus::RuntimeFailure,
+                     .message = "particle preview could not restart after publishing the working copy" };
+        }
+    }
+    return {};
+}
+
+ParticleEditorResult ParticlePreviewSession::RetargetWorkingCopy(
+    kb::assets::AssetId assetId,
+    std::filesystem::path virtualPath,
+    const kb::scene::ParticleEffectAsset& asset) {
+    if (scene_ == nullptr || !assetId.IsValid() || virtualPath.empty()) {
+        return { .status = ParticleEditorStatus::RuntimeFailure,
+                 .message = "particle preview retarget requires an active session and stable asset identity" };
+    }
+    ParticleEditorResult validation = ValidatePreviewAsset(asset);
+    if (!validation.Succeeded()) return validation;
+
+    auto& manager = scene_->Assets().Manager();
+    kb::assets::AssetMetadata* metadata = manager.Registry().FindMutable(assetId);
+    if (metadata == nullptr) {
+        return { .status = ParticleEditorStatus::PublicationFailed,
+                 .message = "particle preview retarget metadata is missing" };
+    }
+    kb::assets::AssetMetadata replacementMetadata = *metadata;
+    replacementMetadata.name = asset.displayName;
+    replacementMetadata.virtualPath = virtualPath;
+    ++replacementMetadata.contentHash;
+    if (!manager.Registry().Upsert(std::move(replacementMetadata))) {
+        return { .status = ParticleEditorStatus::PublicationFailed,
+                 .message = "particle preview retarget metadata update failed" };
+    }
+    if (!manager.PublishRuntimeAsset(
+            assetId,
+            std::make_shared<kb::scene::ParticleEffectAsset>(asset))) {
+        return { .status = ParticleEditorStatus::PublicationFailed,
+                 .message = manager.LastError() };
+    }
+
+    const kb::scene::ParticleEffectComponent* current =
+        scene_->Components().ParticleEffects().TryGet(effectEntity_);
+    if (current == nullptr) {
+        return { .status = ParticleEditorStatus::RuntimeFailure,
+                 .message = "particle preview retarget component is missing" };
+    }
+    kb::scene::ParticleEffectComponent replacement = *current;
+    replacement.effectAssetId = assetId.value;
+    replacement.deterministicSeed = asset.determinismSeed;
+    scene_->Components().ParticleEffects().Set(effectEntity_, replacement);
+    assetId_ = assetId;
+    virtualPath_ = std::move(virtualPath);
+
+    // The fixed-step component reconciler releases the previous instance and
+    // creates the new asset instance with its own deterministic seed.
+    if (!scene_->Runtime().Update(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds)) {
+        return { .status = ParticleEditorStatus::RuntimeFailure,
+                 .message = "particle preview could not activate the retargeted working copy" };
+    }
+    for (const std::uint64_t instanceId :
+         kb::particles::ParticlePlayback::LiveInstanceIds(*scene_)) {
+        const kb::particles::ParticleRuntimeQueryResult query =
+            kb::particles::ParticlePlayback::Query(*scene_, instanceId);
+        if (query.assetId != assetId.value) continue;
+        const auto restarted = kb::particles::ParticlePlayback::Restart(
+            *scene_, instanceId);
+        if (!restarted.Succeeded()) {
+            return { .status = ParticleEditorStatus::RuntimeFailure,
+                     .message = "particle preview could not restart the retargeted working copy" };
+        }
     }
     return {};
 }
@@ -170,6 +281,7 @@ void ParticlePreviewSession::Release(
     virtualPath_.clear();
     effectEntity_ = {};
     cameraEntity_ = {};
+    orbitDragging_ = false;
 }
 
 bool ParticlePreviewSession::Active() const noexcept { return scene_ != nullptr; }
@@ -183,5 +295,77 @@ kb::scene::Scene& ParticlePreviewSession::PreviewScene() {
 }
 kb::scene::SceneEntity ParticlePreviewSession::EffectEntity() const noexcept { return effectEntity_; }
 kb::scene::SceneEntity ParticlePreviewSession::CameraEntity() const noexcept { return cameraEntity_; }
+
+void ParticlePreviewSession::ApplyCamera() {
+    if (scene_ == nullptr) return;
+    constexpr float degToRad = kb::math::kPi / 180.0F;
+    const float pitch = std::clamp(orbitPitchDegrees_, -kParticlePreviewMaxPitchDegrees,
+                                   kParticlePreviewMaxPitchDegrees) * degToRad;
+    const float yaw = orbitYawDegrees_ * degToRad;
+    const float cosPitch = std::cos(pitch);
+    const kb::math::Vec3 eye{
+        cameraDistance_ * cosPitch * std::sin(yaw),
+        cameraDistance_ * std::sin(pitch),
+        -cameraDistance_ * cosPitch * std::cos(yaw),
+    };
+    kb::scene::TransformComponent transform{};
+    transform.localPosition = eye;
+    const float lengthSquared = eye.x * eye.x + eye.y * eye.y + eye.z * eye.z;
+    if (lengthSquared > 0.000001F)
+        transform.localRotation = kb::math::LookRotation(kb::math::Normalize(kb::math::Vec3{-eye.x, -eye.y, -eye.z}),
+            kb::math::Vec3{0.0F, 1.0F, 0.0F});
+    scene_->Transforms().Set(cameraEntity_, transform);
+}
+
+bool ParticlePreviewSession::SetCameraOrbit(float yawDegrees, float pitchDegrees, float distance) {
+    if (scene_ == nullptr) return false;
+    const float yaw = yawDegrees;
+    const float pitch = std::clamp(pitchDegrees, -kParticlePreviewMaxPitchDegrees, kParticlePreviewMaxPitchDegrees);
+    const float clampedDistance = std::clamp(distance, kParticlePreviewMinDistance, kParticlePreviewMaxDistance);
+    if (yaw == orbitYawDegrees_ && pitch == orbitPitchDegrees_ && clampedDistance == cameraDistance_)
+        return false;
+    orbitYawDegrees_ = yaw;
+    orbitPitchDegrees_ = pitch;
+    cameraDistance_ = clampedDistance;
+    ApplyCamera();
+    return true;
+}
+
+bool ParticlePreviewSession::OrbitCamera(float deltaYawDegrees, float deltaPitchDegrees) {
+    return SetCameraOrbit(orbitYawDegrees_ + deltaYawDegrees, orbitPitchDegrees_ + deltaPitchDegrees, cameraDistance_);
+}
+
+bool ParticlePreviewSession::ZoomCamera(float scale) {
+    if (!std::isfinite(scale) || scale <= 0.0F) return false;
+    return SetCameraOrbit(orbitYawDegrees_, orbitPitchDegrees_, cameraDistance_ * scale);
+}
+
+bool ParticlePreviewSession::BeginOrbit(int x, int y) noexcept {
+    if (scene_ == nullptr) return false;
+    orbitDragging_ = true;
+    orbitLastX_ = x;
+    orbitLastY_ = y;
+    return true;
+}
+
+bool ParticlePreviewSession::DragOrbit(int x, int y) {
+    if (!orbitDragging_) return false;
+    const float deltaYaw = -static_cast<float>(x - orbitLastX_) * kParticlePreviewDegreesPerPixel;
+    const float deltaPitch = static_cast<float>(y - orbitLastY_) * kParticlePreviewDegreesPerPixel;
+    orbitLastX_ = x;
+    orbitLastY_ = y;
+    return OrbitCamera(deltaYaw, deltaPitch);
+}
+
+bool ParticlePreviewSession::EndOrbit() noexcept {
+    if (!orbitDragging_) return false;
+    orbitDragging_ = false;
+    return true;
+}
+
+bool ParticlePreviewSession::IsOrbiting() const noexcept { return orbitDragging_; }
+float ParticlePreviewSession::OrbitYawDegrees() const noexcept { return orbitYawDegrees_; }
+float ParticlePreviewSession::OrbitPitchDegrees() const noexcept { return orbitPitchDegrees_; }
+float ParticlePreviewSession::CameraDistance() const noexcept { return cameraDistance_; }
 
 } // namespace kb::particle_editor

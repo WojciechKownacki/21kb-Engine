@@ -1,23 +1,33 @@
 #include "scene/EditorSceneContext.hpp"
 #include "scene/ParticleEditorBakeHostCommand.hpp"
 
+#include "diagnostics/EditorLagTrace.hpp"
 #include "editor/ParticleEditorCommands.hpp"
 #include "engine/assets/AssetKind.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
+#include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneComponentQueries.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "project/EditorProjectPaths.hpp"
 
+#include <algorithm>
+#include <array>
+#include <chrono>
 #include <memory>
 #include <charconv>
 #include <cmath>
-#include <sstream>
-#include <locale>
-#include <type_traits>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
+#include <system_error>
+#include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace kb::editor {
 namespace {
@@ -64,80 +74,36 @@ template <typename T>
 }
 
 [[nodiscard]] bool ParseVec3(std::string_view text, kb::math::Vec3& value) {
-    std::istringstream input{std::string{text}};
-    input.imbue(std::locale::classic());
-    input >> value.x >> value.y >> value.z;
-    input >> std::ws;
-    return input && input.eof() && std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+    return kb::particle_editor::ParticleEmitterInspectorModel::ParseVec3(text, value);
 }
 
-// Compact single-line encoding for the shared value-edit dialog: keyframes/stops separated by
-// ';', fields within one keyframe/stop separated by ','. A single trailing ';' (a common fat-finger
-// on a hand-edited list) is tolerated; anything else malformed is rejected outright. The per-item
-// count is capped defensively here to bound work on a pathological paste - ordering, per-item
-// range, and the authoritative count limit still belong to
-// ParticleEffectAssetValidator::ValidateStructure (run by every ParticleEditorDocument::Apply),
-// the single source of truth for those constraints.
+[[nodiscard]] bool ParseColor(std::string_view text, kb::math::Color& value) {
+    return kb::particle_editor::ParticleEmitterInspectorModel::ParseColor(text, value);
+}
+
 [[nodiscard]] bool ParseCurve(std::string_view text, kb::math::Curve& value) {
-    if (text.size() > 1U && text.back() == ';') text.remove_suffix(1U);
-    std::vector<kb::math::CurveKeyframe> keyframes;
-    std::size_t start = 0U;
-    while (true) {
-        if (keyframes.size() >= kb::scene::kParticleEffectMaxCurveKeys) return false;
-        const std::size_t end = text.find(';', start);
-        const std::string_view token = text.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
-        std::istringstream input{std::string{token}};
-        input.imbue(std::locale::classic());
-        kb::math::CurveKeyframe keyframe;
-        long long easing = -1;
-        char separatorA = 0, separatorB = 0;
-        input >> keyframe.time >> separatorA >> keyframe.value >> separatorB >> easing;
-        input >> std::ws;
-        if (!input || !input.eof() || separatorA != ',' || separatorB != ',' ||
-            !std::isfinite(keyframe.time) || !std::isfinite(keyframe.value) ||
-            easing < 0 || easing > static_cast<long long>(kb::math::Easing::InOutBounce))
-            return false;
-        keyframe.easing = static_cast<kb::math::Easing>(easing);
-        keyframes.push_back(keyframe);
-        if (end == std::string_view::npos) break;
-        start = end + 1U;
-    }
-    if (keyframes.empty()) return false;
-    value.keyframes = std::move(keyframes);
-    return true;
+    return kb::particle_editor::ParticleEmitterInspectorModel::ParseCurve(text, value);
 }
 
 [[nodiscard]] bool ParseGradient(std::string_view text, kb::math::Gradient& value) {
-    if (text.size() > 1U && text.back() == ';') text.remove_suffix(1U);
-    std::vector<kb::math::GradientStop> stops;
-    std::size_t start = 0U;
-    while (true) {
-        if (stops.size() >= kb::scene::kParticleEffectMaxGradientStops) return false;
-        const std::size_t end = text.find(';', start);
-        const std::string_view token = text.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
-        std::istringstream input{std::string{token}};
-        input.imbue(std::locale::classic());
-        kb::math::GradientStop stop;
-        char separatorA = 0, separatorB = 0, separatorC = 0, separatorD = 0;
-        input >> stop.time >> separatorA >> stop.color.r >> separatorB >> stop.color.g >> separatorC >>
-            stop.color.b >> separatorD >> stop.color.a;
-        input >> std::ws;
-        if (!input || !input.eof() || separatorA != ',' || separatorB != ',' || separatorC != ',' || separatorD != ',' ||
-            !std::isfinite(stop.time) || !std::isfinite(stop.color.r) || !std::isfinite(stop.color.g) ||
-            !std::isfinite(stop.color.b) || !std::isfinite(stop.color.a))
-            return false;
-        stops.push_back(stop);
-        if (end == std::string_view::npos) break;
-        start = end + 1U;
-    }
-    if (stops.empty()) return false;
-    value.stops = std::move(stops);
-    return true;
+    return kb::particle_editor::ParticleEmitterInspectorModel::ParseGradient(text, value);
 }
 
 } // namespace
 
 bool EditorSceneContext::OpenParticleEditorAsset(kb::assets::AssetId id) {
+    const std::uint64_t traceEventId = diagnostics::EditorLagTrace::NextEventId();
+    const auto totalStarted = std::chrono::steady_clock::now();
+    const auto tracePhase = [traceEventId](
+        std::chrono::steady_clock::time_point started,
+        std::string_view detail) {
+        diagnostics::EditorLagTrace::Slow(
+            "particle-document-open",
+            traceEventId,
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - started).count(),
+            detail);
+    };
     if (!id.IsValid()) return false;
     kb::assets::AssetManager& manager = scene_->Assets().Manager();
     const kb::assets::AssetMetadata* metadata = manager.Registry().Find(id);
@@ -152,14 +118,18 @@ bool EditorSceneContext::OpenParticleEditorAsset(kb::assets::AssetId id) {
     }
 
     kb::particle_editor::ParticleEditorDocument candidateDocument;
+    auto phaseStarted = std::chrono::steady_clock::now();
     const auto opened = candidateDocument.Open(particleEditorGateway_, *path);
+    tracePhase(phaseStarted, "phase=document-read");
     if (!opened.Succeeded()) {
         console_.Error("Particles", opened.message);
         return false;
     }
     auto candidatePreview = std::make_unique<kb::particle_editor::ParticlePreviewSession>();
+    phaseStarted = std::chrono::steady_clock::now();
     const auto started = candidatePreview->Start(
         project_, manager.Registry(), id, metadata->virtualPath, candidateDocument.Asset());
+    tracePhase(phaseStarted, "phase=preview-start");
     if (!started.Succeeded()) {
         console_.Error("Particles", started.message);
         return false;
@@ -173,6 +143,7 @@ bool EditorSceneContext::OpenParticleEditorAsset(kb::assets::AssetId id) {
     particleEditorWorkspace_.Synchronize(particleEditorDocument_.Asset());
     particlePreviewSession_ = std::move(candidatePreview);
     particleEditorAssetId_ = id;
+    tracePhase(totalStarted, "phase=total");
     console_.Info("Particles", "Opened 21kb Particle System document: " + metadata->virtualPath.generic_string());
     return true;
 }
@@ -206,6 +177,163 @@ bool EditorSceneContext::TickParticleEditorPreview(float deltaSeconds) {
         return false;
     }
     return true;
+}
+
+bool EditorSceneContext::TickEditorSceneParticles(float deltaSeconds) {
+    if (scene_ == nullptr || !IsProjectPluginEnabled("Rendering.21kbParticle") ||
+        !kb::particles::ParticlePlayback::HasBackend(*scene_) ||
+        !std::isfinite(deltaSeconds) || deltaSeconds < 0.0F) {
+        editorSceneParticleAccumulatorSeconds_ = 0.0;
+        return false;
+    }
+    constexpr double fixedStepSeconds =
+        static_cast<double>(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds);
+    constexpr double maximumAccumulatedSeconds = fixedStepSeconds * 4.0;
+    const double wallDeltaSeconds = deltaSeconds > 0.0F
+        ? std::min(static_cast<double>(deltaSeconds), maximumAccumulatedSeconds)
+        : fixedStepSeconds;
+    editorSceneParticleAccumulatorSeconds_ = std::min(
+        editorSceneParticleAccumulatorSeconds_ + wallDeltaSeconds,
+        maximumAccumulatedSeconds);
+    if (editorSceneParticleAccumulatorSeconds_ + 0.000000001 < fixedStepSeconds) {
+        return false;
+    }
+
+    scene_->Runtime().SynchronizeTransforms();
+    const std::vector<std::uint64_t> liveIds = kb::particles::ParticlePlayback::LiveInstanceIds(*scene_);
+    struct PulseContext {
+        kb::scene::Scene* scene = nullptr;
+        const std::vector<std::uint64_t>* liveIds = nullptr;
+        std::array<std::uint64_t, kb::scene::kParticleEffectMaxInstancesPerScene> retained{};
+        std::size_t retainedCount = 0U;
+        bool any = false;
+    } context{scene_.get(), &liveIds};
+    const auto visit = [](kb::scene::SceneEntity entity, const kb::scene::ParticleEffectComponent& component, void* raw) {
+        auto* pulse = static_cast<PulseContext*>(raw);
+        if (!component.enabled || component.effectAssetId == 0U || pulse->scene == nullptr || pulse->liveIds == nullptr) {
+            return;
+        }
+        std::uint64_t instanceId = 0U;
+        bool instancePlaying = false;
+        for (const std::uint64_t liveId : *pulse->liveIds) {
+            const auto query = kb::particles::ParticlePlayback::Query(*pulse->scene, liveId);
+            if (query.owner != entity) continue;
+            if (query.assetId == component.effectAssetId) {
+                instanceId = liveId;
+                instancePlaying = query.state;
+                break;
+            }
+            static_cast<void>(kb::particles::ParticlePlayback::Release(*pulse->scene, liveId));
+        }
+        if (instanceId == 0U) {
+            const auto created = kb::particles::ParticlePlayback::Create(
+                *pulse->scene, component.effectAssetId, entity);
+            if (!created.Succeeded()) return;
+            instanceId = created.instanceId;
+        }
+        const kb::scene::TransformComponent* transform = pulse->scene->Transforms().TryGet(entity);
+        if (transform == nullptr ||
+            !kb::particles::ParticlePlayback::ConfigureComponent(
+                *pulse->scene,
+                instanceId,
+                component.rateMultiplier,
+                component.maxParticlesOverride,
+                component.followTransform,
+                transform->WorldPayload()).Succeeded()) {
+            return;
+        }
+        if (component.deterministicSeed != 0U) {
+            static_cast<void>(kb::particles::ParticlePlayback::SetSeed(
+                *pulse->scene, instanceId, component.deterministicSeed));
+        }
+        if (component.autoPlay && !instancePlaying) {
+            static_cast<void>(kb::particles::ParticlePlayback::Play(*pulse->scene, instanceId));
+        }
+        if (pulse->retainedCount < pulse->retained.size()) {
+            pulse->retained[pulse->retainedCount++] = instanceId;
+        }
+        pulse->any = true;
+    };
+    static_cast<const kb::scene::Scene&>(*scene_).Components().ParticleEffects().ForEach(visit, &context);
+    for (const std::uint64_t liveId : liveIds) {
+        bool retained = false;
+        for (std::size_t index = 0U; index < context.retainedCount; ++index) {
+            if (context.retained[index] == liveId) {
+                retained = true;
+                break;
+            }
+        }
+        if (!retained) {
+            static_cast<void>(kb::particles::ParticlePlayback::Release(*scene_, liveId));
+        }
+    }
+    if (!context.any) {
+        editorSceneParticleAccumulatorSeconds_ = 0.0;
+        return false;
+    }
+
+    bool advanced = false;
+    while (editorSceneParticleAccumulatorSeconds_ + 0.000000001 >= fixedStepSeconds) {
+        const auto simulated = kb::particles::ParticlePlayback::Simulate(
+            *scene_, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds);
+        if (!simulated.Succeeded()) {
+            diagnostics::EditorLagTrace::Marker(
+                "particle-editor-scene",
+                "fixed-step simulation rejected status=" +
+                    std::to_string(static_cast<unsigned>(simulated.status)));
+            editorSceneParticleAccumulatorSeconds_ = 0.0;
+            return false;
+        }
+        editorSceneParticleAccumulatorSeconds_ -= fixedStepSeconds;
+        advanced = true;
+    }
+    return advanced;
+}
+
+bool EditorSceneContext::SetParticleEffectAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {
+    if (!entity.IsValid() || scene_ == nullptr || !scene_->Components().ParticleEffects().Has(entity)) return false;
+    if (assetId.IsValid()) {
+        const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
+        if (metadata == nullptr || metadata->type != kb::scene::kParticleEffectAssetType) {
+            console_.Warning("Particles", "Particle Effect component requires a ParticleEffect asset.");
+            return false;
+        }
+    }
+    return ExecuteSceneCommand("Set Particle Effect Asset", [this, entity, assetId]() {
+        kb::scene::ParticleEffectComponent* component = scene_->Components().ParticleEffects().TryGet(entity);
+        if (component == nullptr) return false;
+        component->effectAssetId = assetId.value;
+        component->enabled = assetId.IsValid();
+        return true;
+    });
+}
+
+bool EditorSceneContext::ToggleParticleEffectEnabled(kb::scene::SceneEntity entity) {
+    if (!entity.IsValid() || scene_ == nullptr) return false;
+    return ExecuteSceneCommand("Toggle Particle Effect Enabled", [this, entity]() {
+        kb::scene::ParticleEffectComponent* component = scene_->Components().ParticleEffects().TryGet(entity);
+        if (component == nullptr) return false;
+        component->enabled = !component->enabled;
+        return true;
+    });
+}
+
+bool EditorSceneContext::ToggleParticleEffectAutoPlay(kb::scene::SceneEntity entity) {
+    if (!entity.IsValid() || scene_ == nullptr) return false;
+    return ExecuteSceneCommand("Toggle Particle Effect Auto Play", [this, entity]() {
+        kb::scene::ParticleEffectComponent* component = scene_->Components().ParticleEffects().TryGet(entity);
+        if (component == nullptr) return false;
+        component->autoPlay = !component->autoPlay;
+        return true;
+    });
+}
+
+bool EditorSceneContext::RemoveParticleEffectFromEntity(kb::scene::SceneEntity entity) {
+    if (!entity.IsValid() || scene_ == nullptr || !scene_->Components().ParticleEffects().Has(entity)) return false;
+    return ExecuteSceneCommand("Remove Particle Effect Component", [this, entity]() {
+        scene_->Components().ParticleEffects().Remove(entity);
+        return true;
+    });
 }
 
 bool EditorSceneContext::SaveParticleEditorAsset() {
@@ -289,6 +417,18 @@ kb::particle_editor::ParticleEmitterInspectorView EditorSceneContext::ParticleEd
         owner, &registry);
 }
 
+std::vector<kb::assets::AssetMetadata> EditorSceneContext::ParticleEditorRecipes() const {
+    const auto& registry = scene_->Assets().Manager().Registry();
+    std::vector<kb::assets::AssetMetadata> recipes = registry.ByType(kb::scene::kParticleEffectAssetType);
+    std::erase_if(recipes, [](const kb::assets::AssetMetadata& metadata) {
+        return metadata.virtualPath.parent_path().generic_string() != "/21kbParticle/Recipes";
+    });
+    std::sort(recipes.begin(), recipes.end(), [](const auto& left, const auto& right) {
+        return left.browseTag == right.browseTag ? left.name < right.name : left.browseTag < right.browseTag;
+    });
+    return recipes;
+}
+
 const kb::particle_editor::ParticleEditorWorkspaceState& EditorSceneContext::ParticleEditorWorkspace() const noexcept {
     return particleEditorWorkspace_;
 }
@@ -322,14 +462,40 @@ bool EditorSceneContext::FinalizeParticleEditorCommand(kb::particle_editor::Part
 bool EditorSceneContext::AddParticleEditorEmitter(kb::assets::AssetId materialId) {
     if (!HasParticleEditorAsset())
         return false;
-    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(materialId);
+    const kb::assets::AssetManager& manager = scene_->Assets().Manager();
+    const kb::assets::AssetMetadata* metadata = materialId.IsValid() ? manager.Registry().Find(materialId) :
+        manager.Registry().FindByPath("/21kbParticle/Materials/DefaultParticle.kbmat");
     if (metadata == nullptr || !kb::assets::AssetMatchesKind(*metadata, kb::assets::AssetKind::Material)) {
-        console_.Error("Particles", "Add Emitter requires a valid material selection.");
+        console_.Error("Particles", "The shared default particle material is unavailable.");
         return false;
     }
     return FinalizeParticleEditorCommand(kb::particle_editor::ParticleEditorCommands::AddEmitter(
         particleEditorDocument_, particleEditorWorkspace_,
         {.assetId = materialId.value, .virtualPath = metadata->virtualPath.generic_string()}));
+}
+
+bool EditorSceneContext::AppendParticleEditorRecipe(kb::assets::AssetId recipeId) {
+    if (!HasParticleEditorAsset() || !recipeId.IsValid())
+        return false;
+    const kb::assets::AssetManager& manager = scene_->Assets().Manager();
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(recipeId);
+    if (metadata == nullptr || metadata->type != kb::scene::kParticleEffectAssetType ||
+        metadata->virtualPath.parent_path().generic_string() != "/21kbParticle/Recipes") {
+        console_.Error("Particles", "The selected particle recipe is unavailable.");
+        return false;
+    }
+    const auto path = ResolveParticleAssetPath(*metadata, manager);
+    if (!path.has_value()) {
+        console_.Error("Particles", "The selected particle recipe could not be resolved.");
+        return false;
+    }
+    const auto loaded = particleEditorGateway_.Load(*path);
+    if (!loaded.result.Succeeded()) {
+        LogParticleResult(console_, loaded.result);
+        return false;
+    }
+    return FinalizeParticleEditorCommand(kb::particle_editor::ParticleEditorCommands::AppendRecipeEmitters(
+        particleEditorDocument_, particleEditorWorkspace_, *loaded.asset));
 }
 
 bool EditorSceneContext::RenameParticleEditorEmitter(
@@ -466,17 +632,19 @@ bool EditorSceneContext::SetParticleEditorOutputReference(kb::assets::AssetKind 
         particleEditorDocument_, particleEditorWorkspace_, emitter->emitterId, std::move(output)));
 }
 
-bool EditorSceneContext::SetParticleEditorSpawn(kb::scene::ParticleSpawnAsset spawn) {
+bool EditorSceneContext::SetParticleEditorSpawn(kb::scene::ParticleSpawnAsset spawn, bool coalesceLatest) {
     return HasParticleEditorAsset() && FinalizeParticleEditorCommand(
         kb::particle_editor::ParticleEditorCommands::SetEmitterSpawn(particleEditorDocument_,
-            particleEditorWorkspace_, particleEditorWorkspace_.SelectedEmitterId(), std::move(spawn)));
+            particleEditorWorkspace_, particleEditorWorkspace_.SelectedEmitterId(), std::move(spawn), coalesceLatest));
 }
 
 bool EditorSceneContext::SetParticleEditorModulePayload(kb::scene::ParticleStableId moduleId,
-                                                       kb::scene::ParticleModulePayload payload) {
+                                                       kb::scene::ParticleModulePayload payload,
+                                                       bool coalesceLatest) {
     return HasParticleEditorAsset() && FinalizeParticleEditorCommand(
         kb::particle_editor::ParticleEditorCommands::SetModulePayload(particleEditorDocument_,
-            particleEditorWorkspace_, particleEditorWorkspace_.SelectedEmitterId(), moduleId, std::move(payload)));
+            particleEditorWorkspace_, particleEditorWorkspace_.SelectedEmitterId(), moduleId, std::move(payload),
+            coalesceLatest));
 }
 
 bool EditorSceneContext::FocusParticleEditorDiagnostic(std::size_t diagnosticIndex) noexcept {
@@ -493,7 +661,16 @@ bool EditorSceneContext::NavigateParticleEditorDependency(std::size_t dependency
         assetBrowser_.SelectAsset(inspector.dependencies[dependencyIndex].assetId, scene_->Assets().Manager());
 }
 
-bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, std::string_view text) {
+void EditorSceneContext::BeginParticleEditorPropertySlider(
+    std::size_t propertyIndex, std::uint32_t choice) noexcept {
+    particleEditorWorkspace_.BeginPropertySlider(propertyIndex, choice);
+}
+
+void EditorSceneContext::EndParticleEditorPropertySlider() noexcept {
+    particleEditorWorkspace_.EndPropertySlider();
+}
+
+bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, std::string_view text, bool coalesceLatest) {
     const auto inspector = ParticleEditorInspector();
     if (propertyIndex >= inspector.properties.size() || !inspector.properties[propertyIndex].editable) return false;
     const auto& row = inspector.properties[propertyIndex];
@@ -513,10 +690,29 @@ bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, s
     bool editsSpawn = true;
     switch (row.property) {
     case kb::particle_editor::ParticleEditorProperty::SpawnRateCurve: parsed = ParseCurve(text, spawn.rateOverTime); break;
-    case kb::particle_editor::ParticleEditorProperty::SpawnLifetimeMin: parsed = setFloat(spawn.lifetimeMin); break;
-    case kb::particle_editor::ParticleEditorProperty::SpawnLifetimeMax: parsed = setFloat(spawn.lifetimeMax); break;
-    case kb::particle_editor::ParticleEditorProperty::SpawnSpeedMin: parsed = setFloat(spawn.speedMin); break;
-    case kb::particle_editor::ParticleEditorProperty::SpawnSpeedMax: parsed = setFloat(spawn.speedMax); break;
+    case kb::particle_editor::ParticleEditorProperty::SpawnLifetimeMin:
+        parsed = setFloat(spawn.lifetimeMin);
+        if (parsed && spawn.lifetimeMin > spawn.lifetimeMax) spawn.lifetimeMax = spawn.lifetimeMin;
+        break;
+    case kb::particle_editor::ParticleEditorProperty::SpawnLifetimeMax:
+        parsed = setFloat(spawn.lifetimeMax);
+        if (parsed && spawn.lifetimeMax < spawn.lifetimeMin) spawn.lifetimeMin = spawn.lifetimeMax;
+        break;
+    case kb::particle_editor::ParticleEditorProperty::SpawnStartColor: {
+        kb::math::Color color{};
+        parsed = ParseColor(text, color);
+        if (parsed) spawn.startColor = color;
+        break;
+    }
+    case kb::particle_editor::ParticleEditorProperty::SpawnStartSize: parsed = setFloat(spawn.startSize); break;
+    case kb::particle_editor::ParticleEditorProperty::SpawnSpeedMin:
+        parsed = setFloat(spawn.speedMin);
+        if (parsed && spawn.speedMin > spawn.speedMax) spawn.speedMax = spawn.speedMin;
+        break;
+    case kb::particle_editor::ParticleEditorProperty::SpawnSpeedMax:
+        parsed = setFloat(spawn.speedMax);
+        if (parsed && spawn.speedMax < spawn.speedMin) spawn.speedMin = spawn.speedMax;
+        break;
     case kb::particle_editor::ParticleEditorProperty::SpawnDirection:
         parsed = ParseVec3(text, vectorValue); if (parsed) spawn.direction = vectorValue; break;
     case kb::particle_editor::ParticleEditorProperty::SpawnSpreadDegrees: parsed = setFloat(spawn.spreadDegrees); break;
@@ -526,7 +722,7 @@ bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, s
     }
     if (editsSpawn) {
         if (!parsed) { console_.Error("Particles", "Particle property value is malformed."); return false; }
-        return SetParticleEditorSpawn(std::move(spawn));
+        return SetParticleEditorSpawn(std::move(spawn), coalesceLatest);
     }
     switch (row.property) {
     case kb::particle_editor::ParticleEditorProperty::OutputBlend:
@@ -575,9 +771,13 @@ bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, s
             using T = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<T, kb::scene::ParticleInitialVelocityModule>) {
                 if (row.payloadField == 0U) { parsed = ParseVec3(text, vectorValue); if (parsed) value.direction = vectorValue; }
-                else if (row.payloadField == 1U) parsed = setFloat(value.speedMin);
-                else if (row.payloadField == 2U) parsed = setFloat(value.speedMax);
-                else if (row.payloadField == 3U) parsed = setFloat(value.randomization);
+                else if (row.payloadField == 1U) {
+                    parsed = setFloat(value.speedMin);
+                    if (parsed && value.speedMin > value.speedMax) value.speedMax = value.speedMin;
+                } else if (row.payloadField == 2U) {
+                    parsed = setFloat(value.speedMax);
+                    if (parsed && value.speedMax < value.speedMin) value.speedMin = value.speedMax;
+                } else if (row.payloadField == 3U) parsed = setFloat(value.randomization);
                 else if (row.payloadField == 4U) parsed = setFloat(value.spreadDegrees);
             } else if constexpr (std::is_same_v<T, kb::scene::ParticleGravityModule>) {
                 if (row.payloadField == 0U) { parsed = ParseVec3(text, vectorValue); if (parsed) value.acceleration = vectorValue; }
@@ -603,13 +803,13 @@ bool EditorSceneContext::EditParticleEditorProperty(std::size_t propertyIndex, s
             }
         }, payload);
         if (!parsed) { console_.Error("Particles", "Particle module property value is malformed."); return false; }
-        return SetParticleEditorModulePayload(row.moduleId, std::move(payload));
+        return SetParticleEditorModulePayload(row.moduleId, std::move(payload), coalesceLatest);
     }
     default: break;
     }
     if (!parsed) { console_.Error("Particles", "Particle property value is malformed."); return false; }
     return FinalizeParticleEditorCommand(kb::particle_editor::ParticleEditorCommands::SetEmitterOutput(
-        particleEditorDocument_, particleEditorWorkspace_, emitter->emitterId, std::move(output)));
+        particleEditorDocument_, particleEditorWorkspace_, emitter->emitterId, std::move(output), coalesceLatest));
 }
 
 bool EditorSceneContext::UndoParticleEditorCommand() {
@@ -694,6 +894,12 @@ void EditorSceneContext::SetParticleEditorComposerScrollOffset(int offset) noexc
     particleEditorWorkspace_.SetComposerScrollOffset(offset);
 }
 
+void EditorSceneContext::ToggleParticleEditorComposerSection(
+    kb::particle_editor::ParticleEditorComposerSection section) noexcept {
+    particleEditorWorkspace_.ToggleComposerSection(section);
+    particleEditorWorkspace_.SetComposerScrollOffset(0);
+}
+
 kb::particle_editor::ParticleDocumentCloseResult EditorSceneContext::RequestParticleEditorTransition(
     kb::particle_editor::ParticleDocumentTransition transition) noexcept {
     return particleEditorCloseGuard_.Request(particleEditorDocument_, transition);
@@ -715,6 +921,26 @@ void EditorSceneContext::CloseParticleEditorAsset() {
     particleEditorWorkspace_ = {};
     particleEditorCloseGuard_ = {};
     particleEditorAssetId_ = {};
+}
+
+bool EditorSceneContext::BeginParticlePreviewOrbit(int x, int y) noexcept {
+    return particlePreviewSession_ != nullptr && particlePreviewSession_->BeginOrbit(x, y);
+}
+
+bool EditorSceneContext::DragParticlePreviewOrbit(int x, int y) {
+    return particlePreviewSession_ != nullptr && particlePreviewSession_->DragOrbit(x, y);
+}
+
+bool EditorSceneContext::EndParticlePreviewOrbit() noexcept {
+    return particlePreviewSession_ != nullptr && particlePreviewSession_->EndOrbit();
+}
+
+bool EditorSceneContext::IsParticlePreviewOrbiting() const noexcept {
+    return particlePreviewSession_ != nullptr && particlePreviewSession_->IsOrbiting();
+}
+
+bool EditorSceneContext::ZoomParticlePreviewCamera(float scale) {
+    return particlePreviewSession_ != nullptr && particlePreviewSession_->ZoomCamera(scale);
 }
 
 void EditorSceneContext::SetParticlePreviewReleaseHandler(

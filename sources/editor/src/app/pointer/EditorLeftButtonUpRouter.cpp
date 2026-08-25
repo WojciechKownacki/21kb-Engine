@@ -72,8 +72,12 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
     shellInteraction_.ClearPressedTransport();
 
     if (sceneContext_.ParticleEditorWorkspace().EmitterDragActive() ||
-        sceneContext_.ParticleEditorWorkspace().ModuleDragActive()) {
-        static_cast<void>(ParticleEditorPanelInteraction::CommitDrag(sceneContext_));
+        sceneContext_.ParticleEditorWorkspace().ModuleDragActive() ||
+        sceneContext_.ParticleEditorWorkspace().PropertySliderActive()) {
+        if (sceneContext_.ParticleEditorWorkspace().PropertySliderActive())
+            ParticleEditorPanelInteraction::EndPropertySlider(sceneContext_);
+        else
+            static_cast<void>(ParticleEditorPanelInteraction::CommitDrag(sceneContext_));
         ReleaseCapture();
         sceneViewport_.RequestPresent();
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
@@ -127,6 +131,13 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
         sceneContext_.EndHierarchyScrollbarDrag();
         ReleaseCapture();
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (sceneContext_.IsParticlePreviewOrbiting()) {
+        static_cast<void>(sceneContext_.EndParticlePreviewOrbit());
+        ReleaseCapture();
+        sceneViewport_.RequestPresent();
         return;
     }
 

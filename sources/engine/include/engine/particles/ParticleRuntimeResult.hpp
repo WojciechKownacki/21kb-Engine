@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/math/EngineMath.hpp"
+#include "engine/particles/ParticleRenderCapabilities.hpp"
 #include "engine/scene/SceneEntity.hpp"
 
 #include <cstdint>
@@ -26,9 +27,17 @@ enum class ParticleRuntimeStatus : std::uint8_t {
     StaleAfterInvalidReload,
 };
 
+enum class ParticleRuntimeExecutionPath : std::uint8_t {
+    CpuDeterministic,
+    CpuFallback,
+    GpuVisual,
+};
+
 struct ParticleRuntimeResult {
     ParticleRuntimeStatus status = ParticleRuntimeStatus::BackendUnavailable;
     std::uint64_t instanceId = 0U;
+    ParticleGpuVisualAvailability gpuVisualAvailability =
+        ParticleGpuVisualAvailability::RendererUnavailable;
 
     [[nodiscard]] constexpr bool Succeeded() const noexcept {
         return status == ParticleRuntimeStatus::Success;
@@ -40,7 +49,12 @@ struct ParticleRuntimeQueryResult {
     bool state = false;
     std::uint64_t assetId = 0U;
     std::uint64_t materialAssetId = 0U;
+    kb::scene::SceneEntity owner{};
     std::uint32_t liveParticleCount = 0U;
+    ParticleRuntimeExecutionPath executionPath = ParticleRuntimeExecutionPath::CpuDeterministic;
+    ParticleGpuVisualAvailability gpuVisualAvailability =
+        ParticleGpuVisualAvailability::RendererUnavailable;
+    bool requiresBackendRestart = false;
 
     [[nodiscard]] constexpr bool Succeeded() const noexcept {
         return status == ParticleRuntimeStatus::Success ||

@@ -239,7 +239,12 @@ bool InspectorSceneAudioModel::ShouldDisplay(
     const kb::scene::Scene& scene,
     kb::assets::AssetId selectedAsset,
     kb::scene::SceneEntity selectedEntity) noexcept {
-    return !selectedAsset.IsValid() && !scene.Entities().IsAlive(selectedEntity);
+    static_cast<void>(scene);
+    static_cast<void>(selectedAsset);
+    static_cast<void>(selectedEntity);
+    // Scene-global settings are not an implicit selection. An empty
+    // Hierarchy/Project Files selection must produce an empty Inspector.
+    return false;
 }
 
 } // namespace kb::editor

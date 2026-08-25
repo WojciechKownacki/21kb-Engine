@@ -30,10 +30,14 @@ add_library(kb_renderer STATIC
     include/kb/render/overlay/EditorCameraWireframe.hpp
     include/kb/render/overlay/SceneGizmoPass.hpp
     include/kb/render/overlay/EditorLightWireframe.hpp
+    include/kb/render/overlay/EditorParticleIcon.hpp
     include/kb/render/overlay/PhysicsDebugLine.hpp
     include/kb/render/overlay/SceneGridPass.hpp
     include/kb/render/overlay/SelectionOutlineCompositePass.hpp
     include/kb/render/particles/ParticleGpuRenderer.hpp
+    include/kb/render/particles/ParticleGpuVisualSimulation.hpp
+    include/kb/render/particles/ParticleStripGeometryBuilder.hpp
+    include/kb/render/particles/ParticleStripRenderer.hpp
     include/kb/render/particles/ParticleRenderBatcher.hpp
     include/kb/render/post/PostProcessChain.hpp
     include/kb/render/post/PostProcessRenderTarget.hpp
@@ -161,6 +165,9 @@ add_library(kb_renderer STATIC
     src/post/ScenePostProcessSubmitter.cpp
     src/post/ScenePostProcessTargets.cpp
     src/particles/ParticleGpuRenderer.cpp
+    src/particles/ParticleGpuVisualSimulation.cpp
+    src/particles/ParticleStripGeometryBuilder.cpp
+    src/particles/ParticleStripRenderer.cpp
     src/particles/ParticleMeshBatchBuilder.cpp
     src/particles/ParticleRenderBatcher.cpp
     src/resources/NativeWindowFramebuffer.cpp
@@ -342,6 +349,7 @@ set(KB_RENDERER_SHADER_MANIFEST
     cs_instance_cull.sc
     cs_instance_cull_clear.sc
     cs_instance_cull_finalize.sc
+    cs_particle_visual_integrate.sc
     cs_levg_meshlet_clear.sc
     cs_levg_meshlet_cull.sc
     cs_levg_meshlet_finalize.sc
@@ -456,6 +464,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_instance_cull_clear.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_instance_cull.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_instance_cull_finalize.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_particle_visual_integrate.sc
         VARYING_DEF ${KB_RENDERER_SHADER_VARYING_DEF}
         OUTPUT_DIR ${KB_RENDERER_GENERATED_SHADER_DIR}
         INCLUDE_DIRS

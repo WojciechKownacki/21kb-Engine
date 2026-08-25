@@ -1,0 +1,27 @@
+{
+  "schema": "21kb.editor-automation/v1",
+  "initial_plugins": ["Rendering.21kbParticle"],
+  "steps": [
+    {
+      "op": "write_file",
+      "path": "Assets/Vfx/ParticleSystemDemo.kbmat",
+      "content": "baseColor 1.0 0.35 0.05 1.0\nroughnessFactor 0.5\nmetallicFactor 0.0\n"
+    },
+    {
+      "op": "copy_fixture",
+      "source": "fixtures/ParticleSystemDemo.kbvfx",
+      "destination": "Assets/Vfx/ParticleSystemDemo.kbvfx"
+    },
+    { "op": "discover_assets" },
+    { "op": "assert_asset", "path": "/Game/Vfx/ParticleSystemDemo.kbvfx", "type": "ParticleEffect" },
+    { "op": "create_particle_effect_entity", "id": "particle_demo", "asset": "/Game/Vfx/ParticleSystemDemo.kbvfx" },
+    { "op": "assert_component", "entity": "particle_demo", "component": "Particle Effect" },
+    { "op": "assert_property", "entity": "particle_demo", "component": "Particle Effect", "property": "effectAssetId", "value": "15837256322917273770" },
+    { "op": "assert_property", "entity": "particle_demo", "component": "Particle Effect", "property": "enabled", "value": true },
+    { "op": "save_scene", "path": "Assets/Scenes/ParticleSystemDemo.21kbscene" },
+    { "op": "play" },
+    { "op": "step", "frames": 180, "dt": 0.016666667 },
+    { "op": "assert_no_errors" },
+    { "op": "stop" }
+  ]
+}

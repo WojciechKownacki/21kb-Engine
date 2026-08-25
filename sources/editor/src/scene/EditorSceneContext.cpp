@@ -32,6 +32,10 @@
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
+#include "engine/particles/ParticlePlayback.hpp"
+#include "engine/scene/ParticleEffectAssetIO.hpp"
+#include "engine/scene/ParticleEffectComponent.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
 #include "engine/scene/AnimationAssets.hpp"
 #include "engine/scene/SkeletonAssetIO.hpp"
@@ -59,6 +63,8 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/UIAssetIO.hpp"
 #include "engine/assets/AssetManager.hpp"
+#include "engine/assets/AssetKind.hpp"
+#include "engine/assets/AssetMetadata.hpp"
 #include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/input/InputSubsystem.hpp"
@@ -70,6 +76,7 @@
 #include "engine/script/ScriptModule.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
+#include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
@@ -1204,6 +1211,13 @@ EditorSceneContext::EditorSceneContext()
     } else {
         console_.Error("Project", AssetErrorOr(scene_->Assets().Manager(), "Project assets could not be mounted."));
     }
+#if defined(KB_21KB_PARTICLE_CONTENT_ROOT)
+    if (scene_->Assets().Manager().Mounts().Mount("21kbParticle", KB_21KB_PARTICLE_CONTENT_ROOT)) {
+        console_.Info("Particles", "Mounted 21kb Particle System content.");
+    } else {
+        console_.Error("Particles", "21kb Particle System content could not be mounted.");
+    }
+#endif
     RegisterEditorSceneDocumentAssetLoaders(*scene_);
     const std::size_t discovered = scene_->Assets().Discover();
     console_.Info("Assets", "Asset discovery completed. Found " + std::to_string(discovered) + " asset(s).");
@@ -1242,7 +1256,6 @@ EditorSceneContext::~EditorSceneContext() {
 
 void EditorSceneContext::EnsureScriptRuntime() {
     if (scriptModuleHost_ != nullptr) {
-        SurfaceScriptLibraryStartupReport();
         return;
     }
     EditorConsoleState* console = &console_;
@@ -1416,13 +1429,25 @@ bool EditorSceneContext::TickPlayModeSceneSession(float deltaSeconds) {
     if (!runtime.EcsProfilerEnabled()) {
         runtime.SetEcsProfilerEnabled(true);
     }
+    if (!playModeRenderTopologyVersionInitialized_) {
+        playModeRenderTopologyVersion_ = runtime.RenderTopologyVersion();
+        playModeRenderTopologyVersionInitialized_ = true;
+    }
     static_cast<void>(runtime.Update(deltaSeconds));
     for (const std::string& systemError :
          runtime.DrainSceneSystemErrors()) {
         console_.Error("Scripts", systemError);
     }
     SurfaceScriptDiagnostics();
-    MarkSceneRenderDirty();
+    // Transforms and render-proxy value edits are published by SceneRuntime as
+    // compact render-proxy update lists and are consumed directly by the
+    // renderer. Only a render hierarchy/topology change requires rebuilding
+    // the full proxy set (spawn, destroy, reparent, or a global render toggle).
+    const std::uint64_t topologyVersion = runtime.RenderTopologyVersion();
+    if (topologyVersion != playModeRenderTopologyVersion_) {
+        MarkSceneRenderDirty();
+    }
+    playModeRenderTopologyVersion_ = topologyVersion;
     return !runtime.ShouldQuit();
 }
 
@@ -1658,6 +1683,36 @@ bool EditorSceneContext::SceneDocumentDirty() const noexcept {
     return sceneDocumentDirty_;
 }
 
+bool EditorSceneContext::TickAutosave(
+    double elapsedSeconds,
+    bool saveEligible) {
+    const bool dirty = sceneDocumentDirty_ ||
+        HasDirtyMaterialAssetEdit() || ParticleEditorDirty();
+    const EditorAutosaveTickResult tick = autosave_.Tick(
+        elapsedSeconds,
+        saveEligible && !playModeSceneSession_.Active(),
+        dirty);
+    if (!tick.saveRequested) {
+        return tick.visualChanged;
+    }
+
+    const std::string documentName = currentScenePath_.filename().empty()
+        ? std::string{ "open documents" }
+        : currentScenePath_.filename().string();
+    const bool succeeded = SaveOpenDocuments();
+    autosave_.Complete(succeeded, documentName);
+    if (succeeded) {
+        console_.Info("Autosave", "Autosaved " + documentName + ".");
+    } else {
+        console_.Error("Autosave", "Autosave failed. Unsaved changes were retained.");
+    }
+    return true;
+}
+
+const EditorAutosaveState& EditorSceneContext::Autosave() const noexcept {
+    return autosave_;
+}
+
 void EditorSceneContext::MarkSceneRenderDirty() noexcept {
     ++sceneRenderRevision_;
     if (sceneRenderRevision_ == 0U) {
@@ -1744,9 +1799,13 @@ bool EditorSceneContext::SaveOpenDocuments() {
     }
     if (!sceneDocumentDirty_) {
         LogMaterialGraphDebug(console_, "save-open-documents-ok no dirty scene");
+        autosave_.ResetInterval();
         return true;
     }
     const bool savedScene = SaveCurrentScene();
+    if (savedScene) {
+        autosave_.ResetInterval();
+    }
     LogMaterialGraphDebug(console_, "save-open-documents-scene-save result=" + std::string{ savedScene ? "true" : "false" });
     return savedScene;
 }
@@ -3109,6 +3168,90 @@ bool EditorSceneContext::CreateInputMappingContextAsset(const std::filesystem::p
 
 bool EditorSceneContext::CreateAudioMixerAsset(const std::filesystem::path& virtualFolder) {
     return AudioMixerAuthoring().Create(virtualFolder);
+}
+
+bool EditorSceneContext::CreateParticleEffectAsset(const std::filesystem::path& virtualFolder) {
+    kb::assets::AssetManager& manager = scene_->Assets().Manager();
+    if (virtualFolder.empty()) {
+        console_.Error("Particles", "Could not resolve a destination folder for the new particle effect.");
+        return false;
+    }
+    const std::optional<std::filesystem::path> probe = manager.Mounts().Resolve(virtualFolder / "probe");
+    if (!probe.has_value()) {
+        console_.Error("Particles", "Could not resolve a physical folder for the new particle effect.");
+        return false;
+    }
+    const std::filesystem::path folder = probe->parent_path();
+    std::filesystem::path path = folder / (std::string{"NewParticleEffect"} + kb::scene::kParticleEffectAssetExtension);
+    std::uint32_t suffix = 1U;
+    while (std::filesystem::exists(path)) {
+        path = folder / (std::string{"NewParticleEffect"} + std::to_string(suffix) + kb::scene::kParticleEffectAssetExtension);
+        ++suffix;
+    }
+
+    kb::scene::ParticleEffectAsset effect;
+    effect.effectId = 1U;
+    effect.displayName = path.stem().string();
+    effect.recipeCategory = "General";
+    effect.determinismSeed = 0x6B62564150415254ULL;
+    effect.durationSeconds = 3.0F;
+    effect.looping = true;
+    kb::scene::ParticleEmitterAsset emitter;
+    emitter.emitterId = 1U;
+    emitter.authoringOrder = 0U;
+    emitter.name = "Emitter 1";
+    emitter.maxParticles = 512U;
+    emitter.spawn.rateOverTime.keyframes = {{.time = 0.0F, .value = 28.0F}};
+    emitter.spawn.lifetimeMin = 1.1F;
+    emitter.spawn.lifetimeMax = 1.8F;
+    emitter.spawn.speedMin = 1.4F;
+    emitter.spawn.speedMax = 3.2F;
+    emitter.spawn.spreadDegrees = 22.0F;
+    emitter.output.material = {.assetId = 0U, .virtualPath = "/21kbParticle/Materials/DefaultParticle.kbmat"};
+    emitter.output.blend = kb::scene::ParticleBlendMode::Add;
+    emitter.output.softParticles = true;
+    emitter.output.antiAliasing = true;
+    emitter.modules.push_back({
+        .moduleId = 1U,
+        .authoringOrder = 0U,
+        .type = kb::scene::ParticleModuleType::ColorOverLife,
+        .payload = kb::scene::ParticleColorOverLifeModule{.gradient = {.stops = {
+            {.time = 0.0F, .color = {1.0F, 0.78F, 0.32F, 1.0F}},
+            {.time = 0.45F, .color = {1.0F, 0.38F, 0.08F, 0.9F}},
+            {.time = 1.0F, .color = {0.28F, 0.05F, 0.01F, 0.0F}},
+        }}},
+    });
+    emitter.modules.push_back({
+        .moduleId = 2U,
+        .authoringOrder = 1U,
+        .type = kb::scene::ParticleModuleType::SizeOverLife,
+        .payload = kb::scene::ParticleSizeOverLifeModule{.curve = {.keyframes = {
+            {.time = 0.0F, .value = 1.0F},
+            {.time = 1.0F, .value = 0.18F},
+        }}},
+    });
+    effect.emitters.push_back(std::move(emitter));
+
+    const kb::particle_editor::ParticleEditorResult saved = particleEditorGateway_.Save(path, effect);
+    if (!saved.Succeeded()) {
+        console_.Error("Particles", "Particle effect could not be created: " + saved.message);
+        return false;
+    }
+    static_cast<void>(scene_->Assets().Discover());
+    const std::optional<std::filesystem::path> virtualPath = manager.Mounts().ToVirtual(path);
+    const kb::assets::AssetMetadata* metadata = virtualPath.has_value()
+        ? manager.Registry().FindByPath(*virtualPath) : nullptr;
+    if (metadata != nullptr && metadata->type == kb::scene::kParticleEffectAssetType
+        && assetBrowser_.SelectAsset(metadata->id, manager) && OpenParticleEditorAsset(metadata->id)) {
+        console_.Info("Particles", "Particle effect created: " + path.generic_string());
+        return true;
+    }
+
+    std::error_code removeError;
+    static_cast<void>(std::filesystem::remove(path, removeError));
+    static_cast<void>(scene_->Assets().Discover());
+    console_.Error("Particles", "Particle effect creation was rolled back because the asset could not be opened.");
+    return false;
 }
 
 bool EditorSceneContext::CreateMaterialAsset(const std::filesystem::path& virtualFolder) {
@@ -5074,7 +5217,7 @@ bool EditorSceneContext::DragMaterialPreviewOrbit(int x, int y) {
         return false;
     }
     // Screen-pixel drag to degrees: a horizontal drag swings yaw, vertical drag swings pitch. Dragging right
-    // rotates the object so its right side turns toward the viewer (yaw decreases), the Unreal convention -
+    // rotates the object so its right side turns toward the viewer (yaw decreases), the established convention -
     // the horizontal axis is negated so left/right feels like grabbing and turning the object.
     constexpr float degreesPerPixel = 0.4F;
     const float deltaYaw = -static_cast<float>(x - materialPreviewOrbitLastX_) * degreesPerPixel;
@@ -8108,6 +8251,58 @@ kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::Ass
     return CreateMeshAssetEntity(assetId, {}, true);
 }
 
+kb::scene::SceneEntity EditorSceneContext::CreateParticleEffectEntity(kb::assets::AssetId assetId) {
+    if (!assetId.IsValid()) {
+        console_.Warning("Particles", "Particle Effect entity creation ignored for invalid asset.");
+        return {};
+    }
+    if (!IsProjectPluginEnabled("Rendering.21kbParticle")) {
+        console_.Warning("Particles", "Enable 21kb Particle System in Edit > Plugins before placing an effect.");
+        return {};
+    }
+
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
+    if (metadata == nullptr || metadata->type != kb::scene::kParticleEffectAssetType) {
+        console_.Warning("Particles", "Only Particle Effect assets can be placed on the scene.");
+        return {};
+    }
+
+    kb::scene::SceneEntity entity{};
+    const bool created = ExecuteSceneCommand("Create Particle Effect Entity", [this, &entity, assetId, metadata]() {
+        entity = scene_->Entities().CreateEntity(kb::scene::SceneObjectDesc{.name = metadata->name});
+        if (!entity.IsValid()) {
+            return false;
+        }
+        scene_->Components().ParticleEffects().Set(entity, kb::scene::ParticleEffectComponent{
+            .effectAssetId = assetId.value,
+        });
+        if (kb::particles::ParticlePlayback::HasBackend(*scene_)) {
+            const auto created = kb::particles::ParticlePlayback::Create(*scene_, assetId.value, entity);
+            if (created.Succeeded()) {
+                if (const kb::scene::TransformComponent* transform = scene_->Transforms().TryGet(entity)) {
+                    static_cast<void>(kb::particles::ParticlePlayback::ConfigureComponent(
+                        *scene_,
+                        created.instanceId,
+                        1.0F,
+                        0U,
+                        true,
+                        transform->WorldPayload()));
+                }
+                static_cast<void>(kb::particles::ParticlePlayback::Play(*scene_, created.instanceId));
+            }
+        }
+        SelectEntity(entity);
+        return true;
+    });
+    if (!created || !entity.IsValid()) {
+        console_.Error("Particles", "Particle Effect entity could not be created: " + metadata->name);
+        return {};
+    }
+
+    console_.Info("Particles", "Particle Effect entity created: " + metadata->name);
+    return entity;
+}
+
 kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation) {
     if (!assetId.IsValid()) {
         console_.Warning("Assets", "Mesh entity creation ignored for invalid asset.");
@@ -8253,7 +8448,7 @@ bool EditorSceneContext::SetMeshRendererMeshAsset(kb::scene::SceneEntity entity,
         if (!EditorSceneMeshAssetActions::AssignMesh(*scene_, entity, assetId)) {
             return false;
         }
-        // Keep an existing Collider fitted to the new geometry (Unity-like: the
+        // Keep an existing Collider fitted to the new geometry (the
         // collision shape follows the mesh when you swap it). Skipped when the
         // mesh is being cleared.
         if (assetId.IsValid() && scene_->Components().Colliders().Has(entity)) {
@@ -8786,7 +8981,8 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
             return false;
         }
         return ExecuteSceneCommand("Add Camera Component", [this, entity]() {
-            scene_->Components().Cameras().Set(entity, kb::scene::CameraComponent{});
+            scene_->Components().Cameras().Set(
+                entity, kb::scene::CameraComponent{ .primary = true });
             return true;
         });
     }
@@ -8807,6 +9003,22 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
         }
         return ExecuteSceneCommand("Add Mesh Renderer Component", [this, entity]() {
             scene_->Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{});
+            return true;
+        });
+    }
+    if (componentId == "Particle Effect") {
+        if (!IsProjectPluginEnabled("Rendering.21kbParticle")) {
+            console_.Warning("Particles", "Enable 21kb Particle System in Edit > Plugins before adding the component.");
+            return false;
+        }
+        if (scene_->Components().ParticleEffects().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Particle Effect component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Particle Effect Component", [this, entity]() {
+            kb::scene::ParticleEffectComponent component{};
+            component.enabled = false;
+            scene_->Components().ParticleEffects().Set(entity, component);
             return true;
         });
     }
@@ -8866,7 +9078,7 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
             return false;
         }
         // Auto-fit the new collider to the entity's mesh so it matches the visible
-        // geometry out of the box (Unity-style), instead of a default 0.5 sphere.
+        // geometry out of the box, instead of a default 0.5 sphere.
         // Per-axis, so a plane/quad becomes a thin slab rather than a cube.
         EntityMeshBounds bounds;
         std::string reason;
@@ -11842,6 +12054,7 @@ void EditorSceneContext::ResetSceneEditState() {
     activeMaterialEditAsset_ = {};
     activeMaterialEditProperty_ = InspectorPropertyId::None;
     activeMaterialEditBefore_.reset();
+    editorSceneParticleAccumulatorSeconds_ = 0.0;
     CancelHierarchyRename();
     inspector_.EndTextEdit();
     MarkSceneRenderDirty();

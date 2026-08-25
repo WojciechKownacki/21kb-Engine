@@ -2,11 +2,22 @@
 
 #include "engine/scene/ParticleEffectAsset.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
 
 namespace kb::particle_editor {
+
+enum class ParticleEditorComposerSection : std::uint8_t {
+    Emitters,
+    Settings,
+    Recipes,
+    Modules,
+    Output,
+    Dependencies,
+    Diagnostics,
+};
 
 class ParticleEditorWorkspaceState final {
 public:
@@ -20,6 +31,8 @@ public:
 
     void SetComposerScrollOffset(int offset) noexcept;
     [[nodiscard]] int ComposerScrollOffset() const noexcept;
+    [[nodiscard]] bool ComposerSectionExpanded(ParticleEditorComposerSection section) const noexcept;
+    void ToggleComposerSection(ParticleEditorComposerSection section) noexcept;
 
     [[nodiscard]] bool BeginRename(const kb::scene::ParticleEffectAsset& asset,
                                    kb::scene::ParticleStableId emitterId);
@@ -55,10 +68,25 @@ public:
                          kb::scene::ParticleStableId moduleId) noexcept;
     [[nodiscard]] const std::string& FocusedPropertyPath() const noexcept;
 
+    void BeginPropertySlider(std::size_t propertyIndex, std::uint32_t choice = 0xFFFFFFFFU) noexcept;
+    void MarkPropertySliderHistory() noexcept;
+    void EndPropertySlider() noexcept;
+    [[nodiscard]] bool PropertySliderActive() const noexcept;
+    [[nodiscard]] std::size_t PropertySliderIndex() const noexcept;
+    [[nodiscard]] std::uint32_t PropertySliderChoice() const noexcept;
+    [[nodiscard]] bool PropertySliderHasHistory() const noexcept;
+
 private:
     kb::scene::ParticleStableId selectedEmitterId_ = 0U;
     bool focused_ = false;
     int composerScrollOffset_ = 0;
+    bool emittersExpanded_ = true;
+    bool settingsExpanded_ = true;
+    bool recipesExpanded_ = true;
+    bool modulesExpanded_ = true;
+    bool outputExpanded_ = true;
+    bool dependenciesExpanded_ = false;
+    bool diagnosticsExpanded_ = true;
     kb::scene::ParticleStableId renameEmitterId_ = 0U;
     std::string renameText_;
     kb::scene::ParticleStableId draggedEmitterId_ = 0U;
@@ -67,6 +95,10 @@ private:
     kb::scene::ParticleStableId draggedModuleId_ = 0U;
     std::uint32_t moduleDragTargetOrder_ = 0U;
     std::string focusedPropertyPath_;
+    bool propertySliderActive_ = false;
+    bool propertySliderHasHistory_ = false;
+    std::size_t propertySliderIndex_ = 0U;
+    std::uint32_t propertySliderChoice_ = 0xFFFFFFFFU;
 };
 
 } // namespace kb::particle_editor

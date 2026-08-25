@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserPointerHandler.hpp"
+#include "app/EditorCrashBreadcrumbs.hpp"
 #include "app/EditorPendingTextEditCommitter.hpp"
 #include "app/EditorParticleDocumentLifecycle.hpp"
 #include "app/ParticleEditorPanelInteraction.hpp"
@@ -25,6 +26,7 @@
 #include "diagnostics/EditorLagTrace.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneAudioMixerAccess.hpp"
@@ -44,18 +46,19 @@
 #include "platform/win32/EditorMeshAssetPickerDialog.hpp"
 #include "platform/win32/EditorMaterialParameterValueDialog.hpp"
 #include "platform/win32/EditorAnimatorControllerAssetPickerDialog.hpp"
+#include "platform/win32/EditorParticleEffectAssetPickerDialog.hpp"
 #include "platform/win32/EditorSkeletonAssetPickerDialog.hpp"
 #include "platform/win32/EditorSkeletalMeshAssetPickerDialog.hpp"
 #include "platform/win32/EditorMaterialColorPickerDialog.hpp"
-#include "platform/win32/EditorMaterialParameterValueDialog.hpp"
-#include "platform/win32/EditorMeshAssetPickerDialog.hpp"
 #include "platform/win32/EditorAudioMixerAssetPickerDialog.hpp"
+#include "platform/win32/EditorChoiceDialog.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
 #include "scene/EditorTerrainService.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <commdlg.h>
 #include <cstdint>
 #include <filesystem>
@@ -166,18 +169,22 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
     if (!sceneContext.HasDirtyMaterialAssetEdit()) {
         return true;
     }
-    const int result = MessageBoxW(
-        owner,
-        L"Save changes to the open material before closing the Material Editor?\n\nYes = Save\nNo = Discard changes\nCancel = keep editing",
-        L"Unsaved Material",
-        MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1 | MB_APPLMODAL);
+    const EditorChoiceDialogResult result = EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
+        .title = "Unsaved Material",
+        .message = "Save changes to the open material before closing the Material Editor?",
+        .supportingText = "Choose whether to preserve the current material changes.",
+        .primaryLabel = "Save",
+        .secondaryLabel = "Discard",
+        .cancelLabel = "Cancel",
+        .icon = HeroIconKind::RectangleGroup,
+    });
     const kb::assets::AssetId materialId = sceneContext.MaterialEditor().OpenAssetId();
     switch (result) {
-    case IDYES:
+    case EditorChoiceDialogResult::Primary:
         return sceneContext.SaveMaterialEditorAsset(materialId);
-    case IDNO:
+    case EditorChoiceDialogResult::Secondary:
         return sceneContext.RevertMaterialEditorAsset(materialId);
-    case IDCANCEL:
+    case EditorChoiceDialogResult::Cancel:
     default:
         return false;
     }
@@ -185,25 +192,33 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
 
 [[nodiscard]] bool ResolveDirtySkeletalMeshEditorTabClose(HWND owner, EditorSceneContext& sceneContext) {
     if (!sceneContext.HasDirtySkeletalMeshEditorAssetEdit()) return true;
-    const int result = MessageBoxW(
-        owner,
-        L"Save changes to the open skeletal assets before closing the editor?\n\nYes = Save\nNo = Discard changes\nCancel = keep editing",
-        L"Unsaved Skeletal Asset",
-        MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1 | MB_APPLMODAL);
-    if (result == IDYES) return sceneContext.SaveSkeletalMeshEditorAsset();
-    if (result == IDNO) return sceneContext.RevertSkeletalMeshEditorAsset();
+    const EditorChoiceDialogResult result = EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
+        .title = "Unsaved Skeletal Asset",
+        .message = "Save changes to the open skeletal assets before closing the editor?",
+        .supportingText = "Choose whether to preserve the current asset changes.",
+        .primaryLabel = "Save",
+        .secondaryLabel = "Discard",
+        .cancelLabel = "Cancel",
+        .icon = HeroIconKind::Skeleton,
+    });
+    if (result == EditorChoiceDialogResult::Primary) return sceneContext.SaveSkeletalMeshEditorAsset();
+    if (result == EditorChoiceDialogResult::Secondary) return sceneContext.RevertSkeletalMeshEditorAsset();
     return false;
 }
 
 [[nodiscard]] bool ResolveDirtyAnimatorEditorTabClose(HWND owner, EditorSceneContext& sceneContext) {
     if (!sceneContext.HasDirtyAnimatorEditorAssetEdit()) return true;
-    const int result = MessageBoxW(
-        owner,
-        L"Save changes to the open Animator Controller before closing the editor?\n\nYes = Save\nNo = Discard changes\nCancel = keep editing",
-        L"Unsaved Animator Controller",
-        MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1 | MB_APPLMODAL);
-    if (result == IDYES) return sceneContext.SaveAnimatorEditorAsset();
-    if (result == IDNO) return sceneContext.RevertAnimatorEditorAsset();
+    const EditorChoiceDialogResult result = EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
+        .title = "Unsaved Animator Controller",
+        .message = "Save changes to the open Animator Controller before closing the editor?",
+        .supportingText = "Choose whether to preserve the current controller changes.",
+        .primaryLabel = "Save",
+        .secondaryLabel = "Discard",
+        .cancelLabel = "Cancel",
+        .icon = HeroIconKind::Gamepad2,
+    });
+    if (result == EditorChoiceDialogResult::Primary) return sceneContext.SaveAnimatorEditorAsset();
+    if (result == EditorChoiceDialogResult::Secondary) return sceneContext.RevertAnimatorEditorAsset();
     return false;
 }
 
@@ -481,19 +496,15 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             return;
         const auto rows = sceneContext_.ParticleEditorEmitterRows();
         const auto inspector = sceneContext_.ParticleEditorInspector();
+        const auto recipes = sceneContext_.ParticleEditorRecipes();
         const ParticleEditorPanelLayout layout = ParticleEditorPanelLayoutResolver::Resolve(
             *particleEditorContent, rows,
-            sceneContext_.ParticleEditorWorkspace().ComposerScrollOffset(), GetDpiForWindow(messageWindow), &inspector);
+            sceneContext_.ParticleEditorWorkspace().ComposerScrollOffset(), GetDpiForWindow(messageWindow), &inspector,
+            recipes.size(), &sceneContext_.ParticleEditorWorkspace());
         ParticleEditorPanelHit hit = ParticleEditorPanelLayoutResolver::HitTest(layout, x, y);
         if (hit.action != ParticleEditorPanelAction::None) {
             kb::assets::AssetId selectedMaterial{};
             std::string editedValue;
-            if (hit.action == ParticleEditorPanelAction::AddEmitter) {
-                const auto selected = EditorMaterialAssetPickerDialog::Show(
-                    mainWindow_, MakeEditorDarkTheme(), sceneContext_, sceneViewport_, {}, false);
-                if (!selected.accepted) return;
-                selectedMaterial = selected.assetId;
-            }
             if (hit.action == ParticleEditorPanelAction::PickOutputMaterial) {
                 const auto selected = EditorMaterialAssetPickerDialog::Show(
                     mainWindow_, MakeEditorDarkTheme(), sceneContext_, sceneViewport_, {}, false);
@@ -542,19 +553,69 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     if (targetChoice < 200U || targetChoice >= 200U + targetCount) return;
                     hit.targetEmitterId = targetIds[targetChoice - 200U];
                 }
+            } else if (hit.action == ParticleEditorPanelAction::DragPropertySlider) {
+                if (ParticleEditorPanelInteraction::BeginPropertySlider(sceneContext_, layout, hit, x)) {
+                    SetCapture(messageWindow);
+                    sceneViewport_.RequestPresent();
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                }
+                return;
+            } else if (hit.action == ParticleEditorPanelAction::ToggleProperty) {
+                static_cast<void>(ParticleEditorPanelInteraction::Execute(sceneContext_, hit));
+                sceneViewport_.RequestPresent();
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return;
             } else if (hit.action == ParticleEditorPanelAction::EditProperty) {
                 if (hit.propertyIndex >= inspector.properties.size() || !inspector.properties[hit.propertyIndex].editable)
                     return;
                 const auto& property = inspector.properties[hit.propertyIndex];
-                const bool isGradient = property.label == "Gradient";
-                const bool isCurve = property.label == "Curve" || property.label == "Rate curve";
-                const auto edited = EditorMaterialParameterValueDialog::Show(
-                    mainWindow_, property.label, property.value,
-                    isGradient ? "Stops as time,r,g,b,a; separated by ';', e.g. 0,1,1,1,1;1,0,0,0,0"
-                    : isCurve ? "Keys as time,value,easing; separated by ';', e.g. 0,1,0;1,0.5,3"
-                    : "Use numbers like: 0.25 or 1 0 0 1");
-                if (!edited.has_value()) return;
-                editedValue = *edited;
+                if (hit.propertyChoice != 0xFFFFFFFFU) {
+                    editedValue = std::to_string(hit.propertyChoice);
+                } else if (property.widget == kb::particle_editor::ParticleEditorPropertyWidget::Color) {
+                    POINT screen{x, y};
+                    ClientToScreen(messageWindow, &screen);
+                    const auto picked = EditorMaterialColorPickerDialog::Show(
+                        mainWindow_, property.label,
+                        {property.colorValue.r, property.colorValue.g, property.colorValue.b, property.colorValue.a},
+                        &screen);
+                    if (!picked.has_value()) return;
+                    editedValue = kb::particle_editor::ParticleEmitterInspectorModel::FormatColor({
+                        (*picked)[0], (*picked)[1], (*picked)[2], (*picked)[3]});
+                } else if (property.widget == kb::particle_editor::ParticleEditorPropertyWidget::Gradient) {
+                    kb::math::Gradient gradient = property.gradient;
+                    if (gradient.stops.empty()) return;
+                    const RECT& preview = layout.propertyRows[hit.propertyIndex].curvePreview;
+                    const float width = static_cast<float>(std::max<LONG>(1, preview.right - preview.left));
+                    const float t = std::clamp(static_cast<float>(x - preview.left) / width, 0.0F, 1.0F);
+                    std::size_t nearest = 0U;
+                    float best = std::abs(gradient.stops[0].time - t);
+                    for (std::size_t index = 1U; index < gradient.stops.size(); ++index) {
+                        const float distance = std::abs(gradient.stops[index].time - t);
+                        if (distance < best) {
+                            best = distance;
+                            nearest = index;
+                        }
+                    }
+                    POINT screen{x, y};
+                    ClientToScreen(messageWindow, &screen);
+                    const auto& stop = gradient.stops[nearest];
+                    const auto picked = EditorMaterialColorPickerDialog::Show(
+                        mainWindow_, property.label,
+                        {stop.color.r, stop.color.g, stop.color.b, stop.color.a}, &screen);
+                    if (!picked.has_value()) return;
+                    gradient.stops[nearest].color = {
+                        (*picked)[0], (*picked)[1], (*picked)[2], (*picked)[3]};
+                    editedValue = kb::particle_editor::ParticleEmitterInspectorModel::FormatGradient(gradient);
+                } else {
+                    const bool isCurve = property.widget == kb::particle_editor::ParticleEditorPropertyWidget::Curve ||
+                        property.label == "Curve" || property.label == "Rate curve";
+                    const auto edited = EditorMaterialParameterValueDialog::Show(
+                        mainWindow_, property.label, property.value,
+                        isCurve ? "Keys as time,value,easing; separated by ';', e.g. 0,1,0;1,0.5,3"
+                        : "Use numbers like: 0.25 or 1 0 0 1");
+                    if (!edited.has_value()) return;
+                    editedValue = *edited;
+                }
             }
             if (ParticleEditorPanelInteraction::Execute(sceneContext_, hit, selectedMaterial, editedValue) &&
                 (hit.action == ParticleEditorPanelAction::BeginEmitterDrag ||
@@ -563,6 +624,12 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             }
             sceneViewport_.RequestPresent();
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+        if (PointInRect(layout.preview, x, y)) {
+            static_cast<void>(sceneContext_.BeginParticlePreviewOrbit(x, y));
+            SetCapture(messageWindow);
+            sceneViewport_.RequestPresent();
             return;
         }
     } else {
@@ -703,7 +770,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             return;
         }
         if (opaqueOverlay.kind == MaterialEditorOpaqueOverlayKind::Preview) {
-            // Drag the preview to orbit the object around it, Unreal-style. Capture so the drag continues
+            // Drag the preview to orbit the object around it. Capture so the drag continues
             // even as the cursor leaves the small overlay.
             static_cast<void>(sceneContext_.BeginMaterialPreviewOrbit(x, y));
             SetCapture(messageWindow);
@@ -1130,15 +1197,20 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 static_cast<void>(sceneContext_.RedoSkeletalMeshEditorAssetEdit());
                 break;
             case SkeletalAssetCommand::Reload:
-                if (!sceneContext_.HasDirtyActiveSkeletalMeshEditorDocument() || MessageBoxW(
-                        mainWindow_,
-                        sceneContext_.IsSkeletalMeshEditorSkeletonDocument()
-                            ? L"Reload will discard unsaved Skeleton edits. Continue?"
-                            : L"Reload will discard unsaved Skeletal Mesh edits. Continue?",
-                        sceneContext_.IsSkeletalMeshEditorSkeletonDocument()
-                            ? L"Reload Skeleton"
-                            : L"Reload Skeletal Mesh",
-                        MB_ICONWARNING | MB_YESNO | MB_DEFBUTTON2 | MB_APPLMODAL) == IDYES) {
+                if (!sceneContext_.HasDirtyActiveSkeletalMeshEditorDocument() || EditorChoiceDialog::Show(
+                        mainWindow_, EditorChoiceDialogDescriptor{
+                            .title = sceneContext_.IsSkeletalMeshEditorSkeletonDocument()
+                                ? "Reload Skeleton"
+                                : "Reload Skeletal Mesh",
+                            .message = sceneContext_.IsSkeletalMeshEditorSkeletonDocument()
+                                ? "Reload will discard unsaved Skeleton edits."
+                                : "Reload will discard unsaved Skeletal Mesh edits.",
+                            .supportingText = "This action cannot be undone.",
+                            .primaryLabel = "Reload",
+                            .secondaryLabel = "Keep Editing",
+                            .icon = HeroIconKind::Skeleton,
+                            .primaryTone = EditorDialogButtonTone::Destructive,
+                        }) == EditorChoiceDialogResult::Primary) {
                     static_cast<void>(sceneContext_.ReloadSkeletalMeshEditorAsset());
                 }
                 break;
@@ -1171,10 +1243,15 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 }
                 break;
             case SkeletalAssetCommand::DeleteSocket:
-                if (MessageBoxW(
-                        mainWindow_, L"Delete the selected socket from this Skeleton?",
-                        L"Delete Skeleton Socket",
-                        MB_ICONWARNING | MB_YESNO | MB_DEFBUTTON2 | MB_APPLMODAL) == IDYES) {
+                if (EditorChoiceDialog::Show(mainWindow_, EditorChoiceDialogDescriptor{
+                        .title = "Delete Skeleton Socket",
+                        .message = "Delete the selected socket from this Skeleton?",
+                        .supportingText = "This action cannot be undone.",
+                        .primaryLabel = "Delete",
+                        .secondaryLabel = "Cancel",
+                        .icon = HeroIconKind::XMark,
+                        .primaryTone = EditorDialogButtonTone::Destructive,
+                    }) == EditorChoiceDialogResult::Primary) {
                     static_cast<void>(sceneContext_.DeleteSkeletonEditorSocket());
                 }
                 break;
@@ -1247,8 +1324,13 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     if (value.has_value() && kb::render::ParseFiniteMaterialFloatToken(*value, parsed)) {
                         static_cast<void>(sceneContext_.SetSkeletalMeshEditorLodScreenCoverage(field.lodIndex, parsed));
                     } else if (value.has_value()) {
-                        MessageBoxW(mainWindow_, L"Enter a finite number from 0 to 1.",
-                            L"Invalid LOD Screen Coverage", MB_ICONWARNING | MB_OK | MB_APPLMODAL);
+                        static_cast<void>(EditorChoiceDialog::Show(mainWindow_, EditorChoiceDialogDescriptor{
+                            .title = "Invalid LOD Screen Coverage",
+                            .message = "Enter a finite number from 0 to 1.",
+                            .supportingText = "The previous value was not applied.",
+                            .primaryLabel = "OK",
+                            .icon = HeroIconKind::AdjustmentsHorizontal,
+                        }));
                     }
                     break;
                 }
@@ -1276,8 +1358,13 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                             extents ? std::nullopt : std::optional<kb::scene::Vec3>{ vector },
                             extents ? std::optional<kb::scene::Vec3>{ vector } : std::nullopt));
                     } else if (value.has_value()) {
-                        MessageBoxW(mainWindow_, L"Enter three finite values: X, Y, Z.",
-                            L"Invalid Fixed Bounds", MB_ICONWARNING | MB_OK | MB_APPLMODAL);
+                        static_cast<void>(EditorChoiceDialog::Show(mainWindow_, EditorChoiceDialogDescriptor{
+                            .title = "Invalid Fixed Bounds",
+                            .message = "Enter three finite values: X, Y, Z.",
+                            .supportingText = "The previous value was not applied.",
+                            .primaryLabel = "OK",
+                            .icon = HeroIconKind::AdjustmentsHorizontal,
+                        }));
                     }
                     break;
                 }
@@ -1541,6 +1628,45 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 }
             }
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+        if (hit.section == InspectorSectionId::ParticleEffect &&
+            (hit.property == InspectorPropertyId::ParticleEffectAsset ||
+             hit.property == InspectorPropertyId::ParticleEffectAssetPicker)) {
+            const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+            const kb::scene::ParticleEffectComponent* particleEffect =
+                sceneContext_.Scene().Components().ParticleEffects().TryGet(entity);
+            if (particleEffect != nullptr) {
+                EditorSceneContext* const persistentSceneContext = &sceneContext_;
+                EditorSceneBgfxViewport* const persistentSceneViewport = &sceneViewport_;
+                const HWND persistentMainWindow = mainWindow_;
+                EditorCrashBreadcrumbs::WriteValue(
+                    "particle_picker", "open entity", entity.Id());
+                static_cast<void>(EditorParticleEffectAssetPickerDialog::Open(
+                    mainWindow_,
+                    MakeEditorDarkTheme(),
+                    sceneContext_,
+                    sceneViewport_,
+                    kb::assets::AssetId{ particleEffect->effectAssetId },
+                    [persistentSceneContext, persistentSceneViewport,
+                     persistentMainWindow, entity](kb::assets::AssetId assetId) {
+                        EditorCrashBreadcrumbs::WriteValue(
+                            "particle_picker", "assign asset", assetId.value);
+                        if (persistentSceneContext->SetParticleEffectAsset(entity, assetId)) {
+                            EditorCrashBreadcrumbs::Write(
+                                "particle_picker", "assignment completed");
+                            persistentSceneViewport->RequestPresent();
+                            InvalidateRect(persistentMainWindow, nullptr, FALSE);
+                        } else {
+                            EditorCrashBreadcrumbs::Write(
+                                "particle_picker", "assignment rejected");
+                        }
+                    }));
+            }
+            EditorWindowInvalidator::InvalidateDockPanel(
+                mainWindow_, dockModel_, floatingWindows_, metrics_, DockPanelKind::Inspector);
+            EditorWindowInvalidator::InvalidateDockPanel(
+                mainWindow_, dockModel_, floatingWindows_, metrics_, DockPanelKind::Scene);
             return;
         }
         if (hit.section == InspectorSectionId::Animator &&

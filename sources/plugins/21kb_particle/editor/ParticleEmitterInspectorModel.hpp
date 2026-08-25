@@ -2,9 +2,12 @@
 
 #include "ParticleEffectCompiler.hpp"
 #include "engine/assets/AssetId.hpp"
+#include "engine/math/EngineMath.hpp"
 #include "engine/scene/ParticleEffectAssetValidation.hpp"
 
+#include <array>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace kb::assets {
@@ -16,11 +19,23 @@ namespace kb::particle_editor {
 
 enum class ParticleEditorProperty : std::uint16_t {
     SpawnRateCurve, SpawnBurstsSummary, SpawnLifetimeMin, SpawnLifetimeMax, SpawnSpeedMin, SpawnSpeedMax, SpawnDirection,
-    SpawnSpreadDegrees, SpawnRandomization, SpawnPrewarmSeconds,
+    SpawnSpreadDegrees, SpawnRandomization, SpawnPrewarmSeconds, SpawnStartColor, SpawnStartSize,
     OutputBlend, OutputSort, OutputDepthTest, OutputDepthWrite, OutputSoftParticles,
     OutputAntiAliasing, OutputAlignment, FlipbookColumns, FlipbookRows,
     FlipbookFramesPerSecond, FlipbookLooping, OutputVelocityScale, OutputMinimumLength,
     OutputPointDiameter, ModulePayload,
+};
+
+enum class ParticleEditorPropertyWidget : std::uint8_t {
+    Text,
+    Slider,
+    IntegerSlider,
+    Toggle,
+    Enum,
+    Vector,
+    Curve,
+    Gradient,
+    Color,
 };
 
 struct ParticleEditorPropertyRow {
@@ -30,7 +45,27 @@ struct ParticleEditorPropertyRow {
     std::string label;
     std::string value;
     bool editable = true;
+    ParticleEditorPropertyWidget widget = ParticleEditorPropertyWidget::Text;
+    float numericMin = 0.0F;
+    float numericMax = 1.0F;
+    float numericValue = 0.0F;
+    bool boolValue = false;
+    std::uint32_t enumValue = 0U;
+    std::array<const char*, 8> enumLabels{};
+    std::uint8_t enumCount = 0U;
+    kb::math::Vec3 vectorValue{};
+    kb::math::Curve curve{};
+    kb::math::Gradient gradient{};
+    kb::math::Color colorValue{};
 };
+
+[[nodiscard]] constexpr bool IsParticleEditorSpawnProperty(ParticleEditorProperty property) noexcept {
+    return property <= ParticleEditorProperty::SpawnStartSize;
+}
+
+[[nodiscard]] constexpr bool IsParticleEditorOutputProperty(ParticleEditorProperty property) noexcept {
+    return property >= ParticleEditorProperty::OutputBlend && property <= ParticleEditorProperty::OutputPointDiameter;
+}
 
 struct ParticleOutputChoiceRow {
     kb::scene::ParticleOutputType type = kb::scene::ParticleOutputType::Billboard;
@@ -66,6 +101,12 @@ struct ParticleEmitterInspectorView {
 class ParticleEmitterInspectorModel final {
 public:
     ParticleEmitterInspectorModel() = delete;
+    [[nodiscard]] static std::string FormatColor(const kb::math::Color& color);
+    [[nodiscard]] static std::string FormatGradient(const kb::math::Gradient& gradient);
+    [[nodiscard]] static bool ParseColor(std::string_view text, kb::math::Color& value) noexcept;
+    [[nodiscard]] static bool ParseVec3(std::string_view text, kb::math::Vec3& value) noexcept;
+    [[nodiscard]] static bool ParseCurve(std::string_view text, kb::math::Curve& value);
+    [[nodiscard]] static bool ParseGradient(std::string_view text, kb::math::Gradient& value);
     [[nodiscard]] static ParticleEmitterInspectorView Build(
         const kb::scene::ParticleEffectAsset& asset,
         kb::scene::ParticleStableId selectedEmitterId,

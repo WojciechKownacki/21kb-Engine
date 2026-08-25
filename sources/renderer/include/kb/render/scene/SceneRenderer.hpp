@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/particles/ParticleRenderCapabilities.hpp"
 #include "kb/render/MaterialProgramRegistry.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/RenderSkinningPaletteAllocator.hpp"
@@ -31,6 +32,8 @@ public:
 
     [[nodiscard]] bool Initialize();
     void Shutdown();
+    void ReleaseParticleScene(std::uint64_t sceneId) noexcept;
+    void ReleaseAllParticleScenes() noexcept;
     void Submit(bgfx::ViewId viewId, const RenderScene& renderScene, std::uint32_t viewportWidth, std::uint32_t viewportHeight, const SceneRenderCamera* cameraOverride = nullptr, SceneRenderDrawBudget drawBudget = {}, SceneRenderLightingConfig lightingConfig = {}) const;
     void SubmitMeshPass(
         bgfx::ViewId viewId,
@@ -80,6 +83,9 @@ public:
     [[nodiscard]] SceneRenderDiagnostics ValidateSceneDiagnostics(const RenderScene& renderScene) const;
     [[nodiscard]] SceneRenderDiagnostics ValidateSceneDiagnostics(const RenderScene& renderScene, MeshPassType pass) const;
     [[nodiscard]] SceneRenderSubmitStats LastSubmitStats() const noexcept;
+    [[nodiscard]] kb::particles::ParticleGpuVisualAvailability ParticleGpuVisualAvailability() const noexcept;
+    void SetParticleVolumetricLowQuality(bool lowQuality) noexcept;
+    [[nodiscard]] bool ParticleVolumetricLowQuality() const noexcept;
     [[nodiscard]] const SceneRenderDiagnostics& LastDiagnostics() const noexcept;
     [[nodiscard]] MaterialProgramRegistryStats MaterialProgramStats() const noexcept;
     // Draw-time, per-material graph render outcome for the last scene submit: the true GPU vs
@@ -114,6 +120,7 @@ private:
     float frameDeltaSeconds_ = 0.0F;
     std::uint32_t frameTimeIndex_ = 0U;
     std::array<float, 4> dynamicParameter_{};
+    bool particleVolumetricLowQuality_ = false;
     bool initialized_ = false;
 };
 

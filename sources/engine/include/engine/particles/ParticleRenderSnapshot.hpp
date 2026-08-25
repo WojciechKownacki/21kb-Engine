@@ -97,13 +97,15 @@ struct ParticleRenderRecord {
     kb::math::Vec3 velocity{};
     float stretch = 0.0F;
     std::uint64_t particleId = 0U;
+    std::uint64_t spawnOrdinal = 0U;
     std::uint32_t packedColor = 0xFFFFFFFFU;
+    std::uint32_t ribbonGroup = 0U;
     std::uint16_t frame = 0U;
     std::uint16_t normalizedAgeUnorm = 0U;
 };
 
-static_assert(sizeof(ParticleRenderRecord) >= 48U && sizeof(ParticleRenderRecord) <= 64U);
-static_assert(sizeof(ParticleRenderRecord) == 64U);
+static_assert(sizeof(ParticleRenderRecord) >= 48U && sizeof(ParticleRenderRecord) <= 80U);
+static_assert(sizeof(ParticleRenderRecord) == 80U);
 static_assert(std::is_trivially_copyable_v<ParticleRenderRecord>);
 
 struct ParticleRenderEmitterRecord {
@@ -129,6 +131,7 @@ struct ParticleRenderEmitterRecord {
     ParticleRenderDropReason droppedReason = ParticleRenderDropReason::None;
     ParticleRenderAlignment alignment = ParticleRenderAlignment::CameraFacing;
     ParticleRenderEmitterFlag flags = ParticleRenderEmitterFlag::None;
+    kb::scene::ParticleBackendPolicy backendPolicy = kb::scene::ParticleBackendPolicy::CpuDeterministic;
     // A zero encoded axis represents 256, preserving the authored 1..256 grid
     // without widening the renderer ABI for the common 1x1 case.
     std::uint8_t flipbookColumnsEncoded = 1U;
@@ -140,6 +143,24 @@ struct ParticleRenderEmitterRecord {
     // rounded to the nearest level once at compile time rather than carried as a float through
     // the tightly budgeted retained snapshot).
     std::int8_t meshLodLevel = 0;
+    float trailSampleIntervalSeconds = 1.0F / 60.0F;
+    float trailMinimumDistance = 0.0F;
+    std::uint32_t trailMaxSamplesPerParticle = 16U;
+    float trailWidth = 1.0F;
+    std::uint32_t ribbonMaxSegments = 256U;
+    float ribbonWidth = 1.0F;
+    bool ribbonBreakOnDeath = true;
+    kb::math::Vec3 beamLocalEnd{0.0F, 1.0F, 0.0F};
+    std::uint32_t beamSegments = 16U;
+    float beamWidth = 1.0F;
+    float beamNoiseAmplitude = 0.0F;
+    float beamNoiseFrequency = 1.0F;
+    float volumetricDensity = 1.0F;
+    float volumetricRadiusScale = 1.0F;
+    std::uint32_t volumetricLowQualitySteps = 8U;
+    std::uint32_t volumetricHighQualitySteps = 24U;
+    kb::math::Vec3 outputOrigin{};
+    kb::math::Vec3 beamEnd{};
     kb::math::Vec3 boundsMinimum{};
     kb::math::Vec3 boundsMaximum{};
 
@@ -153,7 +174,9 @@ struct ParticleRenderEmitterRecord {
 };
 
 static_assert(std::is_trivially_copyable_v<ParticleRenderEmitterRecord>);
-static_assert(sizeof(ParticleRenderEmitterRecord) <= 144U);
+// The bounded record carries all authored output contracts while remaining a
+// compact, fixed-stride GPU upload payload.
+static_assert(sizeof(ParticleRenderEmitterRecord) <= 240U);
 
 struct ParticleRenderSnapshotHeader {
     std::uint64_t revision = 0U;

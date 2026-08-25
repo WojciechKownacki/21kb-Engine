@@ -29,10 +29,15 @@ namespace {
     ParticleEditorDocument& document,
     ParticleEditorWorkspaceState& workspace,
     kb::scene::ParticleEffectAsset candidate,
-    kb::scene::ParticleStableId selectedEmitterId) {
-    ParticleEditorResult result = document.Apply(std::move(candidate));
+    kb::scene::ParticleStableId selectedEmitterId,
+    bool replaceLatest = false) {
+    ParticleEditorResult result = replaceLatest && workspace.PropertySliderHasHistory()
+        ? document.ReplaceLatest(std::move(candidate))
+        : document.Apply(std::move(candidate));
     if (!result.Succeeded())
         return result;
+    if (replaceLatest && result.status != ParticleEditorStatus::NoChange)
+        workspace.MarkPropertySliderHistory();
     workspace.Synchronize(document.Asset());
     if (selectedEmitterId != 0U)
         static_cast<void>(workspace.Select(document.Asset(), selectedEmitterId));
@@ -75,11 +80,82 @@ ParticleEditorResult ParticleEditorCommands::AddEmitter(
     emitter.authoringOrder = static_cast<std::uint32_t>(candidate.emitters.size());
     emitter.name = "Emitter " + std::to_string(candidate.emitters.size() + 1U);
     emitter.output.material = std::move(material);
+    emitter.output.blend = kb::scene::ParticleBlendMode::Add;
+    emitter.output.softParticles = true;
+    emitter.output.antiAliasing = true;
     candidate.emitters.insert(std::lower_bound(candidate.emitters.begin(), candidate.emitters.end(), nextId,
         [](const kb::scene::ParticleEmitterAsset& candidateEmitter, kb::scene::ParticleStableId id) {
             return candidateEmitter.emitterId < id;
         }), std::move(emitter));
     return Apply(document, workspace, std::move(candidate), nextId);
+}
+
+ParticleEditorResult ParticleEditorCommands::AppendRecipeEmitters(
+    ParticleEditorDocument& document,
+    ParticleEditorWorkspaceState& workspace,
+    const kb::scene::ParticleEffectAsset& recipe) {
+    const kb::scene::ParticleEffectAsset& current = document.Asset();
+    if (recipe.emitters.empty()) {
+        return CommandError(ParticleEditorStatus::InvalidAsset,
+            kb::scene::ParticleEffectDiagnosticCode::InvalidValue, "recipe.emitterCount",
+            "the selected recipe does not contain an emitter");
+    }
+    if (current.emitters.size() + recipe.emitters.size() > kb::scene::kParticleEffectMaxEmitters) {
+        return CommandError(ParticleEditorStatus::LimitExceeded,
+            kb::scene::ParticleEffectDiagnosticCode::LimitExceeded, "effect.emitterCount",
+            "the selected recipe exceeds the remaining emitter capacity");
+    }
+
+    kb::scene::ParticleEffectAsset candidate = current;
+    std::vector<kb::scene::ParticleEmitterAsset> appended = recipe.emitters;
+    std::sort(appended.begin(), appended.end(), [](const auto& left, const auto& right) {
+        return left.authoringOrder < right.authoringOrder;
+    });
+    std::vector<std::pair<kb::scene::ParticleStableId, kb::scene::ParticleStableId>> remap;
+    remap.reserve(appended.size());
+    kb::scene::ParticleStableId nextId = 1U;
+    const auto allocateId = [&candidate, &nextId]() noexcept {
+        while (std::any_of(candidate.emitters.begin(), candidate.emitters.end(), [nextId](const auto& emitter) {
+            return emitter.emitterId == nextId;
+        })) {
+            ++nextId;
+        }
+        return nextId++;
+    };
+    for (auto& emitter : appended) {
+        const kb::scene::ParticleStableId sourceId = emitter.emitterId;
+        const kb::scene::ParticleStableId assignedId = allocateId();
+        remap.emplace_back(sourceId, assignedId);
+        emitter.emitterId = assignedId;
+        emitter.authoringOrder = static_cast<std::uint32_t>(candidate.emitters.size());
+        candidate.emitters.push_back(std::move(emitter));
+    }
+    const auto mappedEmitterId = [&remap](kb::scene::ParticleStableId sourceId) noexcept {
+        const auto found = std::find_if(remap.begin(), remap.end(), [sourceId](const auto& value) {
+            return value.first == sourceId;
+        });
+        return found == remap.end() ? kb::scene::ParticleStableId{0U} : found->second;
+    };
+    const std::size_t firstAppended = candidate.emitters.size() - remap.size();
+    for (std::size_t index = firstAppended; index < candidate.emitters.size(); ++index) {
+        for (auto& module : candidate.emitters[index].modules) {
+            if (auto* subEmitter = std::get_if<kb::scene::ParticleSubEmitterModule>(&module.payload);
+                subEmitter != nullptr) {
+                subEmitter->targetEmitterId = mappedEmitterId(subEmitter->targetEmitterId);
+            }
+        }
+    }
+    for (auto binding : recipe.eventBindings) {
+        binding.sourceEmitterId = mappedEmitterId(binding.sourceEmitterId);
+        if (binding.action == kb::scene::ParticleEventAction::EmitTargetEmitter) {
+            binding.targetEmitterId = mappedEmitterId(binding.targetEmitterId);
+        }
+        candidate.eventBindings.push_back(std::move(binding));
+    }
+    std::sort(candidate.emitters.begin(), candidate.emitters.end(), [](const auto& left, const auto& right) {
+        return left.emitterId < right.emitterId;
+    });
+    return Apply(document, workspace, std::move(candidate), remap.front().second);
 }
 
 ParticleEditorResult ParticleEditorCommands::RenameEmitter(
@@ -183,7 +259,7 @@ ParticleEditorResult ParticleEditorCommands::RemoveEmitter(
 
 ParticleEditorResult ParticleEditorCommands::SetEmitterSpawn(
     ParticleEditorDocument& document, ParticleEditorWorkspaceState& workspace,
-    kb::scene::ParticleStableId emitterId, kb::scene::ParticleSpawnAsset spawn) {
+    kb::scene::ParticleStableId emitterId, kb::scene::ParticleSpawnAsset spawn, bool replaceLatest) {
     auto candidate = document.Asset();
     const auto emitter = FindMutable(candidate, emitterId);
     if (emitter == candidate.emitters.end())
@@ -191,12 +267,12 @@ ParticleEditorResult ParticleEditorCommands::SetEmitterSpawn(
             kb::scene::ParticleEffectDiagnosticCode::InvalidReference, "effect.emitter",
             "emitter does not exist", emitterId);
     emitter->spawn = std::move(spawn);
-    return Apply(document, workspace, std::move(candidate), emitterId);
+    return Apply(document, workspace, std::move(candidate), emitterId, replaceLatest);
 }
 
 ParticleEditorResult ParticleEditorCommands::SetEmitterOutput(
     ParticleEditorDocument& document, ParticleEditorWorkspaceState& workspace,
-    kb::scene::ParticleStableId emitterId, kb::scene::ParticleOutputAsset output) {
+    kb::scene::ParticleStableId emitterId, kb::scene::ParticleOutputAsset output, bool replaceLatest) {
     auto candidate = document.Asset();
     const auto emitter = FindMutable(candidate, emitterId);
     if (emitter == candidate.emitters.end())
@@ -204,7 +280,7 @@ ParticleEditorResult ParticleEditorCommands::SetEmitterOutput(
             kb::scene::ParticleEffectDiagnosticCode::InvalidReference, "effect.emitter",
             "emitter does not exist", emitterId);
     emitter->output = std::move(output);
-    return Apply(document, workspace, std::move(candidate), emitterId);
+    return Apply(document, workspace, std::move(candidate), emitterId, replaceLatest);
 }
 
 ParticleEditorResult ParticleEditorCommands::AddModule(
@@ -275,7 +351,7 @@ ParticleEditorResult ParticleEditorCommands::SetModuleEnabled(
 ParticleEditorResult ParticleEditorCommands::SetModulePayload(
     ParticleEditorDocument& document, ParticleEditorWorkspaceState& workspace,
     kb::scene::ParticleStableId emitterId, kb::scene::ParticleStableId moduleId,
-    kb::scene::ParticleModulePayload payload) {
+    kb::scene::ParticleModulePayload payload, bool replaceLatest) {
     auto candidate = document.Asset();
     const auto emitter = FindMutable(candidate, emitterId);
     if (emitter == candidate.emitters.end())
@@ -288,7 +364,7 @@ ParticleEditorResult ParticleEditorCommands::SetModulePayload(
             kb::scene::ParticleEffectDiagnosticCode::InvalidReference, "effect.emitter.module",
             "module does not exist", emitterId);
     module->payload = std::move(payload);
-    return Apply(document, workspace, std::move(candidate), emitterId);
+    return Apply(document, workspace, std::move(candidate), emitterId, replaceLatest);
 }
 
 ParticleEditorResult ParticleEditorCommands::ReorderModule(

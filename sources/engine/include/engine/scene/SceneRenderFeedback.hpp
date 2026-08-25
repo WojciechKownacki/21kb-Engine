@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -111,11 +112,27 @@ enum class SceneScreenCaptureStatus : std::uint8_t {
     Failed,
 };
 
+enum class SceneScreenCapturePixelFormat : std::uint8_t {
+    Rgba8,
+    Bgra8,
+    Rgba16,
+    Rgba16Float,
+};
+
+struct SceneScreenCapturePixels {
+    std::uint32_t width = 0U;
+    std::uint32_t height = 0U;
+    SceneScreenCapturePixelFormat format =
+        SceneScreenCapturePixelFormat::Rgba8;
+    std::vector<std::uint8_t> bytes;
+};
+
 // LIB-145: a pending screen-capture request as the renderer sees it. `id` is 0 when there
 // is nothing to take.
 struct SceneScreenCaptureRequest {
     std::uint64_t id = 0;
     std::string_view path{};
+    bool returnPixels = false;
 };
 
 // LIB-144: Renderer.IsVisible/GetBounds/TestFrustum's engine-side owner - the scene-held,
@@ -184,7 +201,13 @@ public:
     // never-stalling GPU readback pattern the auto-exposure meter uses - poll
     // ScreenCaptureStatus for the terminal result.
     [[nodiscard]] static std::uint64_t RequestScreenCapture(Scene& scene, std::string_view path);
+    // Requests the same asynchronous GPU readback without PNG encoding or a
+    // filesystem round-trip. The completed raw buffer is moved out exactly
+    // once through TakeScreenCapturePixels.
+    [[nodiscard]] static std::uint64_t RequestScreenCapturePixels(Scene& scene);
     [[nodiscard]] static SceneScreenCaptureStatus ScreenCaptureStatus(const Scene& scene, std::uint64_t id) noexcept;
+    [[nodiscard]] static std::optional<SceneScreenCapturePixels>
+        TakeScreenCapturePixels(Scene& scene, std::uint64_t id);
 
     // Renderer-facing half of the capture channel (called during SubmitScene through the
     // same scene-mutable-during-its-own-submit convention Publish uses). Peek returns the
@@ -194,6 +217,10 @@ public:
     [[nodiscard]] static SceneScreenCaptureRequest PeekScreenCaptureRequest(const Scene& scene) noexcept;
     static void ConsumeScreenCaptureRequest(Scene& scene, std::uint64_t id) noexcept;
     static void CompleteScreenCapture(Scene& scene, std::uint64_t id, bool succeeded) noexcept;
+    static void CompleteScreenCapturePixels(
+        Scene& scene,
+        std::uint64_t id,
+        SceneScreenCapturePixels pixels) noexcept;
 
 private:
     [[nodiscard]] static const SceneRenderVisibilityFrame* FindFrame(

@@ -2,6 +2,7 @@
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 
 #include <utility>
 
@@ -17,7 +18,11 @@ bool EditorPlayModeSceneSession::Begin(kb::scene::Scene& scene, std::string scen
     }
 
     snapshot_ = kb::scene::SceneDocumentService::Capture(scene, std::move(sceneName));
-    return snapshot_.has_value();
+    if (!snapshot_.has_value()) {
+        return false;
+    }
+    scene.Runtime().SetPlaying(true);
+    return true;
 }
 
 bool EditorPlayModeSceneSession::Restore(kb::scene::Scene& scene) {
@@ -25,7 +30,11 @@ bool EditorPlayModeSceneSession::Restore(kb::scene::Scene& scene) {
         return true;
     }
 
+    scene.Runtime().SetPlaying(false);
     const bool restored = kb::scene::SceneDocumentService::LoadIntoScene(scene, *snapshot_);
+    // Runtime mode is session state, not document state. Keep it stopped even if
+    // loading fails or a future document version starts carrying runtime fields.
+    scene.Runtime().SetPlaying(false);
     Clear();
     return restored;
 }

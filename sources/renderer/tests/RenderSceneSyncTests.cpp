@@ -29,6 +29,7 @@
 #include "engine/scene/HistoryRibbonComponent.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
 #include "kb/render/resources/BuiltInParticleQuadMesh.hpp"
+#include "kb/render/runtime/RuntimeRenderAssetDiscovery.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 #include "kb/render/scene/SceneParticleRenderSynchronizer.hpp"
 #include "kb/render/Renderer.hpp"
@@ -586,9 +587,9 @@ void RunMeshRendererModifiedRuntimeQueueInvalidatesMaterialProxyTest() {
     Require(renderer != nullptr, "KBMAT-UE-0012: setup lost the mesh renderer");
     renderer->materialAssetId = 30U;
     scene.Components().MeshRenderers().MarkModified(mesh);
-    Require(scene.Runtime().MeshRendererRenderProxyUpdateEntities().size() == 1U, "KBMAT-UE-0012: MeshRenderer::MarkModified did not enqueue a render proxy update");
+    Require(scene.Runtime().RenderProxyUpdateEntities().size() == 1U, "KBMAT-UE-0012: MeshRenderer::MarkModified did not enqueue a render proxy update");
 
-    synchronizer.SyncMeshRendererUpdates(scene, renderScene);
+    synchronizer.SyncRenderProxyUpdates(scene, renderScene);
     const MeshRenderProxy* proxy = renderScene.FindMeshByEntity(mesh.Id());
     Require(proxy != nullptr, "KBMAT-UE-0012: mesh renderer update sync lost the mesh proxy");
     Require(HasDirtyFlag(proxy->dirty, RenderProxyDirtyFlag::Material), "KBMAT-UE-0012: mesh renderer material change did not mark the render proxy Material dirty");
@@ -597,6 +598,93 @@ void RunMeshRendererModifiedRuntimeQueueInvalidatesMaterialProxyTest() {
 
     const std::vector<SceneRenderDrawGroup>& materialGroups = renderScene.DrawGroups();
     Require(materialGroups.size() == 1U && materialGroups[0].materialAssetId == 30U, "KBMAT-UE-0012: material dirty sync did not rebuild draw groups with the new material");
+}
+
+void RunRuntimeRenderProxyQueueSynchronizesCameraLightAndVisibilityTest() {
+    kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
+    const kb::scene::SceneEntity camera = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "RuntimeCamera" });
+    const kb::scene::SceneEntity light = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "RuntimeLight" });
+    const kb::scene::SceneEntity visibilityParent = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "RuntimeVisibilityParent" });
+    const kb::scene::SceneEntity mesh = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "RuntimeVisibleMesh" });
+    Require(scene.Hierarchy().SetParent(mesh, visibilityParent),
+        "Runtime render-proxy queue setup could not parent the mesh");
+    scene.Components().Cameras().Set(camera, kb::scene::CameraComponent{});
+    scene.Components().Lights().Set(light, kb::scene::LightComponent{});
+    scene.Components().MeshRenderers().Set(
+        mesh, kb::scene::MeshRendererComponent{ .meshAssetId = 41U });
+    scene.Components().Visibility().Set(mesh, kb::scene::VisibilityComponent{
+        .mode = kb::scene::VisibilityMode::Inherit,
+    });
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer synchronizer;
+    synchronizer.Sync(scene, renderScene);
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    const std::uint64_t topologyBeforeValueEdits = scene.Runtime().RenderTopologyVersion();
+    const std::uint64_t queueRevisionBefore = scene.Runtime().RenderProxyUpdateRevision();
+
+    kb::scene::CameraComponent* cameraComponent = scene.Components().Cameras().TryGet(camera);
+    kb::scene::LightComponent* lightComponent = scene.Components().Lights().TryGet(light);
+    kb::scene::VisibilityComponent* visibility = scene.Components().Visibility().TryGet(visibilityParent);
+    Require(cameraComponent != nullptr && lightComponent != nullptr && visibility != nullptr,
+        "Runtime render-proxy queue setup lost a component");
+    cameraComponent->verticalFovDegrees = 73.0F;
+    scene.Components().Cameras().MarkModified(camera);
+    lightComponent->intensity = 4.5F;
+    scene.Components().Lights().MarkModified(light);
+    visibility->mode = kb::scene::VisibilityMode::Hidden;
+    visibility->visible = false;
+    scene.Components().Visibility().MarkModified(visibilityParent);
+
+    Require(scene.Runtime().RenderProxyUpdateEntities().size() == 4U,
+        "Runtime render-proxy queue did not collect camera, light and inherited visibility changes");
+    Require(scene.Runtime().RenderProxyUpdateRevision() > queueRevisionBefore,
+        "Runtime render-proxy queue revision did not advance");
+    Require(scene.Runtime().RenderTopologyVersion() == topologyBeforeValueEdits,
+        "Render component value edits incorrectly changed render topology");
+    synchronizer.SyncRenderProxyUpdates(scene, renderScene);
+
+    const CameraRenderProxy* cameraProxy = renderScene.FindCameraByEntity(camera.Id());
+    const LightRenderProxy* lightProxy = renderScene.FindLightByEntity(light.Id());
+    const MeshRenderProxy* meshProxy = renderScene.FindMeshByEntity(mesh.Id());
+    Require(cameraProxy != nullptr && NearlyEqual(cameraProxy->desc.verticalFovDegrees, 73.0F),
+        "Runtime render-proxy queue did not synchronize the camera component");
+    Require(lightProxy != nullptr && NearlyEqual(lightProxy->desc.intensity, 4.5F),
+        "Runtime render-proxy queue did not synchronize the light component");
+    Require(meshProxy != nullptr && !meshProxy->desc.visible,
+        "Runtime render-proxy queue did not synchronize inherited visibility");
+    static_cast<void>(scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "RuntimeTopologyChange" }));
+    Require(scene.Runtime().RenderTopologyVersion() != topologyBeforeValueEdits,
+        "Entity creation did not advance render topology");
+}
+
+void RunRuntimeRenderProxyQueueRemovesDisabledProxyTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "RuntimeSwarm" });
+    kb::scene::GeometrySwarmComponent swarm{};
+    swarm.meshAssetId = 1U;
+    swarm.instanceCount = 1U;
+    swarm.enabled = true;
+    scene.Components().GeometrySwarms().Set(entity, swarm);
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer synchronizer;
+    synchronizer.Sync(scene, renderScene);
+    Require(renderScene.GeometrySwarmProxyCount() == 1U,
+        "Runtime disabled-proxy setup did not create the proxy");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+
+    swarm.enabled = false;
+    scene.Components().GeometrySwarms().Set(entity, swarm);
+    synchronizer.SyncRenderProxyUpdates(scene, renderScene);
+    Require(renderScene.GeometrySwarmProxyCount() == 0U,
+        "Incremental runtime sync retained a disabled proxy");
 }
 
 void RunSyncTransformUpdatesUsesRuntimeCacheTest() {
@@ -1719,6 +1807,17 @@ void RunRenderSceneAppliesFacingPanelModesWithoutMutatingEcsTransformTest() {
     Require(proxy != nullptr && proxy->desc.model[10] > 0.99F, "Facing Panel fixed mode did not preserve the authored orientation");
     const kb::scene::TransformComponent* canonicalTransform = scene.Transforms().TryGet(panelEntity);
     Require(canonicalTransform != nullptr && canonicalTransform->worldRotation.z == 0.0F && canonicalTransform->worldRotation.w == 1.0F, "Facing Panel renderer consumer mutated canonical ECS TransformComponent");
+
+    panel.mode = kb::scene::FacingPanelMode::View;
+    scene.Components().FacingPanels().Set(panelEntity, panel);
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    scene.Transforms().Set(camera, TransformAt(5.0F, 0.0F, -5.0F));
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    synchronizer.SyncRenderProxyUpdates(scene, renderScene);
+    synchronizer.SyncFacingPanelUpdates(scene, renderScene, true);
+    proxy = renderScene.FindMeshByEntity(panelEntity.Id());
+    Require(proxy != nullptr && proxy->desc.model[8] > 0.5F,
+        "Incremental camera movement did not refresh a view-facing panel");
 }
 
 void RunRenderSceneSyncsAllSurfaceEmitterKindsTest() {
@@ -2304,6 +2403,24 @@ void RunRendererStoresRuntimeAssetDiscoveryIntervalTest() {
     Require(renderer.RuntimeResourceStats().assetDiscoveryIntervalFrames == 0U, "Renderer runtime stats did not reflect the configured discovery interval");
 }
 
+void RunDisabledRuntimeAssetDiscoverySkipsFirstRefreshTest() {
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    const std::uint64_t revisionBefore = manager.Revision();
+
+    RuntimeRenderAssetDiscovery discovery;
+    discovery.SetDiscoveryEnabled(false);
+    discovery.Ensure(scene, 1U);
+
+    const RuntimeRenderAssetDiscoveryStats stats = discovery.Stats();
+    Require(manager.Revision() == revisionBefore,
+        "Disabled runtime asset discovery performed a mounted-asset scan on its first frame");
+    Require(stats.registeredSceneCount == 1U,
+        "Disabled runtime asset discovery did not register the scene loaders");
+    Require(stats.discoverySceneCount == 0U,
+        "Disabled runtime asset discovery retained first-frame refresh state");
+}
+
 void RunSceneRenderDiagnosticsAggregateFrameSubmissionsTest() {
     SceneRenderDiagnostics first{};
     first.events.push_back(SceneRenderDiagnosticEvent{
@@ -2464,6 +2581,12 @@ void RunSyncMeshWorldAffinesParallelTest() {
         scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{ .meshAssetId = 42U });
         entities.push_back(entity);
     }
+    const kb::scene::SceneEntity surfaceCastEntity = entities.back();
+    scene.Components().RegionShapes().Set(surfaceCastEntity, kb::scene::RegionShapeComponent{});
+    scene.Components().SurfaceCasts().Set(surfaceCastEntity, kb::scene::SurfaceCastComponent{
+        .materialAssetId = 9U,
+        .enabled = true,
+    });
 
     RenderScene renderScene;
     EcsRenderSceneSynchronizer synchronizer;
@@ -2496,6 +2619,10 @@ void RunSyncMeshWorldAffinesParallelTest() {
         Require(proxy != nullptr, "Parallel affine sync lost a mesh proxy");
         Require(NearlyEqual(proxy->desc.model[12], static_cast<float>(index)), "Parallel affine sync applied the wrong translation");
     }
+    const auto surfaceCast = renderScene.SurfaceCastProxies().find(surfaceCastEntity.Id());
+    Require(surfaceCast != renderScene.SurfaceCastProxies().end() &&
+            NearlyEqual(surfaceCast->second.desc.model[12], static_cast<float>(kCount - 1U)),
+        "Parallel affine sync did not update the Surface Cast transform");
 }
 
 void RunRenderBridgeTelemetryAggregatesBridgeStatsTest() {
@@ -2557,7 +2684,10 @@ void RunParticleReleaseBeforeSyncIsOwnershipNeutralTest() {
             capabilitiesAfter.gpuDrawing == capabilitiesBefore.gpuDrawing &&
             capabilitiesAfter.instancing == capabilitiesBefore.instancing &&
             capabilitiesAfter.softParticles == capabilitiesBefore.softParticles &&
-            capabilitiesAfter.subtractiveBlend == capabilitiesBefore.subtractiveBlend,
+            capabilitiesAfter.subtractiveBlend == capabilitiesBefore.subtractiveBlend &&
+            capabilitiesAfter.gpuVisualAvailability == capabilitiesBefore.gpuVisualAvailability &&
+            capabilitiesAfter.maxGpuVisualParticles == capabilitiesBefore.maxGpuVisualParticles &&
+            capabilitiesAfter.maxGpuResourceBytes == capabilitiesBefore.maxGpuResourceBytes,
         "particle release before sync mutated unowned renderer capabilities");
 }
 
@@ -2689,6 +2819,8 @@ void RunRenderSceneSyncTests() {
     RunTracksUpdatesWithoutReplacingProxyTest();
     RunSyncEntitiesUpdatesOnlyRequestedProxyTest();
     RunMeshRendererModifiedRuntimeQueueInvalidatesMaterialProxyTest();
+    RunRuntimeRenderProxyQueueSynchronizesCameraLightAndVisibilityTest();
+    RunRuntimeRenderProxyQueueRemovesDisabledProxyTest();
     RunSyncTransformUpdatesUsesRuntimeCacheTest();
     RunSyncEntitiesRemovesDestroyedProxyTest();
     RunVisibilityKeepsProxyButRemovesSnapshotInstanceTest();
@@ -2737,6 +2869,7 @@ void RunRenderSceneSyncTests() {
     RunSceneRendererReportsInvalidLightsSeparatelyFromBudgetSkipsTest();
     RunDirectionalShadowPlannerSkipsNonShadowCastingLightsTest();
     RunRendererStoresRuntimeAssetDiscoveryIntervalTest();
+    RunDisabledRuntimeAssetDiscoverySkipsFirstRefreshTest();
     RunSceneRenderDiagnosticsAggregateFrameSubmissionsTest();
     RunSyncUsesFreshLocalTransformsWithoutRuntimeUpdateTest();
     RunSyncComposesHierarchyWithoutRuntimeUpdateTest();

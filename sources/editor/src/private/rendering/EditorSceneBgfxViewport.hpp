@@ -54,6 +54,7 @@ public:
         render::RenderSceneSubmitDesc::EditorGizmoDesc editorGizmo{};
         std::vector<render::EditorCameraWireframeDesc> editorCameraWireframes;
         std::vector<render::EditorLightWireframeDesc> editorLightWireframes;
+        std::vector<render::EditorParticleIconDesc> editorParticleIcons;
         std::vector<render::PhysicsDebugLine> physicsDebugLines;
         std::vector<EditorSceneViewportTextLabel> viewportTextLabels;
         render::RenderSceneSubmitDesc::EditorSelectionBoxDesc editorSelectionBox{};
@@ -71,6 +72,10 @@ public:
         std::uint64_t sceneRevision = 1U;
         std::uint64_t sceneDirtyBaseRevision = 1U;
         bool sceneFullSyncRequired = true;
+        // Runtime transform propagation already publishes compact entity/affine
+        // columns. Consume those columns during Play instead of rebuilding every
+        // render proxy when the scene structure is unchanged.
+        bool runtimeTransformSync = false;
         std::vector<std::uint64_t> dirtySceneEntityIds;
     };
 
@@ -105,6 +110,11 @@ public:
     void SetAllHostSurfacesSuspended(bool suspended) noexcept;
     void NotifyHostDpiChanged(HWND host) noexcept;
     void ReleaseScene(const kb::scene::Scene& scene) noexcept;
+    [[nodiscard]] std::uint32_t RendererCompletedFrame() const noexcept;
+    // Advances renderer-owned asynchronous readbacks without rebuilding or
+    // submitting a scene. Used only when no visible viewport advanced the
+    // renderer since the previous poll.
+    [[nodiscard]] bool AdvanceAsyncReadbacks();
     void Shutdown();
     void BeginPaintLayout() noexcept;
     void BeginPaintLayout(HWND parent) noexcept;

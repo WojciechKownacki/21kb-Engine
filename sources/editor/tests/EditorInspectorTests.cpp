@@ -217,6 +217,9 @@ void RunAudioComponentCatalogTest() {
     kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::Find("Region Portal") != nullptr, "Region Portal component id should resolve");
     kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::Find("Secondary Frame") != nullptr, "Secondary Frame component id should resolve");
     kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::Find("TerrainEditor") != nullptr, "Terrain Editor component id should resolve");
+    const kb::editor::InspectorComponentTile* particleEffect = kb::editor::InspectorComponentCatalog::Find("Particle Effect");
+    kb::editor::tests::Require(particleEffect != nullptr && particleEffect->category == "Rendering", "Particle Effect component should be available in the Rendering catalog");
+    kb::editor::tests::Require(kb::editor::InspectorComponentCatalog::RequiredPluginId("Particle Effect") == "Rendering.21kbParticle", "Particle Effect component should require the particle provider");
 }
 
 void RunObjectClassificationCatalogTest() {
@@ -1510,7 +1513,7 @@ void RunMaterialAssignmentPathRenderSyncTest() {
     const kb::scene::MeshRendererComponent* allSlots = scene.Components().MeshRenderers().TryGet(entity);
     kb::editor::tests::Require(allSlots != nullptr && allSlots->materialAssetId == graphBackedMaterialId.value && allSlots->materialSlotOverrideCount == 0U,
         "KBMAT-GRAPH-0401: Graph-backed all-slots assignment should clear previous slot overrides");
-    synchronizer.SyncMeshRendererUpdates(scene, renderScene);
+    synchronizer.SyncRenderProxyUpdates(scene, renderScene);
     const kb::render::MeshRenderProxy* allSlotsProxy = renderScene.FindMeshByEntity(entity.Id());
     kb::editor::tests::Require(allSlotsProxy != nullptr && kb::render::HasDirtyFlag(allSlotsProxy->dirty, kb::render::RenderProxyDirtyFlag::Material),
         "KBMAT-UE-0013: All-slots assignment should dirty the render material proxy");
@@ -1540,7 +1543,7 @@ void RunMaterialAssignmentPathRenderSyncTest() {
     const kb::scene::MeshRendererComponent* slotAssigned = scene.Components().MeshRenderers().TryGet(slotEntity);
     kb::editor::tests::Require(slotAssigned != nullptr && slotAssigned->materialSlotOverrideCount == 2U && slotAssigned->materialSlotAssetIds[1] == graphBackedSlotMaterialId.value,
         "KBMAT-GRAPH-0401: Graph-backed slot assignment should store the slot override");
-    synchronizer.SyncMeshRendererUpdates(scene, renderScene);
+    synchronizer.SyncRenderProxyUpdates(scene, renderScene);
     const kb::render::MeshRenderProxy* slotProxy = renderScene.FindMeshByEntity(slotEntity.Id());
     kb::editor::tests::Require(slotProxy != nullptr && kb::render::HasDirtyFlag(slotProxy->dirty, kb::render::RenderProxyDirtyFlag::Material),
         "KBMAT-UE-0013: Slot assignment should dirty the render material proxy");

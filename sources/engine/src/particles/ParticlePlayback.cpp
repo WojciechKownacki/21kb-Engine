@@ -46,6 +46,7 @@ ParticleRuntimeResult ParticlePlayback::UnregisterBackend(kb::scene::Scene& scen
     state.particleSimulationBackend = nullptr;
     ++state.particleSimulationBackendEpoch;
     state.pendingParticleRuntimeEvents.clear();
+    state.particleGpuVisualSteps.Clear();
     return { .status = ParticleRuntimeStatus::Success };
 }
 
@@ -61,6 +62,7 @@ std::uint64_t ParticlePlayback::BackendEpoch(const kb::scene::Scene& scene) noex
 ParticleRenderSnapshotResult ParticlePlayback::WarmupRenderSnapshots(kb::scene::Scene& scene) noexcept {
     AssertOwnerThread(scene);
     kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);
+    state.particleGpuVisualSteps.Clear();
     state.lastParticleRenderSnapshotPublication = state.particleRenderSnapshots.Warmup(scene.Id());
     return state.lastParticleRenderSnapshotPublication;
 }
@@ -77,6 +79,17 @@ ParticleRenderSnapshotResult ParticlePlayback::PublishRenderSnapshot(
     }
     state.lastParticleRenderSnapshotPublication =
         state.particleRenderSnapshots.Publish(state.particleSimulationBackendEpoch, desc);
+    if (state.lastParticleRenderSnapshotPublication.Succeeded() &&
+        state.particleRenderConsumerId != 0U &&
+        state.particleRenderCapabilities.gpuVisualAvailability ==
+            ParticleGpuVisualAvailability::Ready) {
+        const ParticleGpuVisualStepJournalStatus journalStatus = state.particleGpuVisualSteps.Publish(
+            desc.revision, state.particleSimulationBackendEpoch, desc.fixedStepIndex);
+        if (journalStatus == ParticleGpuVisualStepJournalStatus::GpuCatchupOverflow) {
+            state.particleRenderCapabilities.gpuVisualAvailability =
+                ParticleGpuVisualAvailability::GpuCatchupOverflow;
+        }
+    }
     return state.lastParticleRenderSnapshotPublication;
 }
 
@@ -95,7 +108,9 @@ ParticleRenderCapabilityResult ParticlePlayback::PublishRenderCapabilities(
     kb::scene::Scene& scene,
     std::uint64_t consumerId,
     ParticleRenderCapabilities capabilities) noexcept {
-    AssertOwnerThread(scene);
+    // Renderer submission owns this consumer-side exchange. It may run on a
+    // different thread from fixed-step simulation, but the host keeps those
+    // phases ordered for one scene.
     if (consumerId == 0U || capabilities.capabilityEpoch == 0U) {
         return {ParticleRenderCapabilityStatus::InvalidConsumer};
     }
@@ -109,6 +124,9 @@ ParticleRenderCapabilityResult ParticlePlayback::PublishRenderCapabilities(
     }
     state.particleRenderConsumerId = consumerId;
     capabilities.lastConsumedFixedStep = state.particleRenderCapabilities.lastConsumedFixedStep;
+    if (state.particleGpuVisualSteps.Overflowed()) {
+        capabilities.gpuVisualAvailability = ParticleGpuVisualAvailability::GpuCatchupOverflow;
+    }
     state.particleRenderCapabilities = capabilities;
     return {ParticleRenderCapabilityStatus::Success};
 }
@@ -117,22 +135,34 @@ ParticleRenderCapabilityResult ParticlePlayback::AcknowledgeRenderedFixedStep(
     kb::scene::Scene& scene,
     std::uint64_t consumerId,
     std::uint64_t fixedStepIndex) noexcept {
-    AssertOwnerThread(scene);
     kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);
     if (consumerId == 0U || state.particleRenderConsumerId != consumerId) {
         return {state.particleRenderConsumerId == 0U
             ? ParticleRenderCapabilityStatus::InvalidConsumer
             : ParticleRenderCapabilityStatus::ConsumerConflict};
     }
-    state.particleRenderCapabilities.lastConsumedFixedStep =
-        std::max(state.particleRenderCapabilities.lastConsumedFixedStep, fixedStepIndex);
+    if (!state.particleGpuVisualSteps.Pending().empty() || state.particleGpuVisualSteps.Overflowed()) {
+        const ParticleGpuVisualStepJournalStatus journalStatus =
+            state.particleGpuVisualSteps.AcknowledgeThrough(fixedStepIndex);
+        if (journalStatus == ParticleGpuVisualStepJournalStatus::GpuCatchupOverflow) {
+            state.particleRenderCapabilities.gpuVisualAvailability =
+                ParticleGpuVisualAvailability::GpuCatchupOverflow;
+            return {ParticleRenderCapabilityStatus::GpuCatchupOverflow};
+        }
+        if (journalStatus != ParticleGpuVisualStepJournalStatus::Success) {
+            return {ParticleRenderCapabilityStatus::StaleFixedStep};
+        }
+    }
+    if (fixedStepIndex <= state.particleRenderCapabilities.lastConsumedFixedStep) {
+        return {ParticleRenderCapabilityStatus::StaleFixedStep};
+    }
+    state.particleRenderCapabilities.lastConsumedFixedStep = fixedStepIndex;
     return {ParticleRenderCapabilityStatus::Success};
 }
 
 ParticleRenderCapabilityResult ParticlePlayback::ClearRenderCapabilities(
     kb::scene::Scene& scene,
     std::uint64_t consumerId) noexcept {
-    AssertOwnerThread(scene);
     kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);
     if (consumerId == 0U || state.particleRenderConsumerId != consumerId) {
         return {state.particleRenderConsumerId == 0U
@@ -140,12 +170,21 @@ ParticleRenderCapabilityResult ParticlePlayback::ClearRenderCapabilities(
             : ParticleRenderCapabilityStatus::ConsumerConflict};
     }
     state.particleRenderCapabilities = {};
+    state.particleGpuVisualSteps.Clear();
     state.particleRenderConsumerId = 0U;
     return {ParticleRenderCapabilityStatus::Success};
 }
 
 ParticleRenderCapabilities ParticlePlayback::RenderCapabilities(const kb::scene::Scene& scene) noexcept {
     return kb::scene::SceneAccess::State(scene).particleRenderCapabilities;
+}
+
+std::span<const ParticleGpuVisualStep> ParticlePlayback::PendingGpuVisualSteps(
+    const kb::scene::Scene& scene,
+    std::uint64_t consumerId) noexcept {
+    const kb::scene::SceneState& state = kb::scene::SceneAccess::State(scene);
+    if (consumerId == 0U || state.particleRenderConsumerId != consumerId) return {};
+    return state.particleGpuVisualSteps.Pending();
 }
 
 #define KB_PARTICLE_FORWARD(Method, ...)                                                                                \
@@ -165,6 +204,18 @@ ParticleRuntimeResult ParticlePlayback::SetSeed(kb::scene::Scene& scene, std::ui
 ParticleRuntimeResult ParticlePlayback::SetParameterScalar(kb::scene::Scene& scene, std::uint64_t instanceId, std::string_view name, float value) noexcept { KB_PARTICLE_FORWARD(SetParameterScalar, instanceId, name, value); }
 ParticleRuntimeResult ParticlePlayback::ClearParameter(kb::scene::Scene& scene, std::uint64_t instanceId, std::string_view name) noexcept { KB_PARTICLE_FORWARD(ClearParameter, instanceId, name); }
 ParticleRuntimeResult ParticlePlayback::Emit(kb::scene::Scene& scene, std::uint64_t instanceId, std::uint32_t count) { KB_PARTICLE_FORWARD(Emit, instanceId, count); }
+ParticleRuntimeResult ParticlePlayback::Simulate(kb::scene::Scene& scene, float fixedDeltaSeconds) {
+    KB_PARTICLE_FORWARD(Simulate, fixedDeltaSeconds);
+}
+ParticleRuntimeResult ParticlePlayback::ConfigureComponent(
+    kb::scene::Scene& scene,
+    std::uint64_t instanceId,
+    float rateMultiplier,
+    std::uint32_t maxParticlesOverride,
+    bool followTransform,
+    const kb::scene::WorldTransform& ownerTransform) noexcept {
+    KB_PARTICLE_FORWARD(ConfigureComponent, instanceId, rateMultiplier, maxParticlesOverride, followTransform, ownerTransform);
+}
 
 #undef KB_PARTICLE_FORWARD
 

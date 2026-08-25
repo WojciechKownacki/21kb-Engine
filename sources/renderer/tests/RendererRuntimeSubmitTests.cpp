@@ -1,6 +1,7 @@
 #include "RendererTestSupport.hpp"
 
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/particles/ParticlePlayback.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AuxFrameComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
@@ -22,7 +23,9 @@
 #include "engine/scene/TransformComponent.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
+#include "kb/render/SceneRenderTarget.hpp"
 #include "kb/render/overlay/SceneGizmoPass.hpp"
+#include "kb/render/post/ScenePostProcessTargets.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
@@ -38,6 +41,7 @@
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 
 #include <bgfx/bgfx.h>
+#include <bx/math.h>
 
 #include <algorithm>
 #include <array>
@@ -49,6 +53,13 @@
 #include <span>
 #include <string_view>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
 
 namespace kb::render::tests {
 namespace {
@@ -69,6 +80,296 @@ public:
 
     [[nodiscard]] void* NativeDisplayHandle() const noexcept override {
         return nullptr;
+    }
+};
+
+#if defined(_WIN32)
+class NativeTestSurface final : public RenderSurface {
+public:
+    NativeTestSurface() {
+        window_ = CreateWindowExW(
+            0U,
+            L"STATIC",
+            L"KB Particle Mesh Readback",
+            WS_OVERLAPPEDWINDOW,
+            0,
+            0,
+            static_cast<int>(kExtent),
+            static_cast<int>(kExtent),
+            nullptr,
+            nullptr,
+            GetModuleHandleW(nullptr),
+            nullptr);
+    }
+
+    ~NativeTestSurface() override {
+        if (window_ != nullptr) {
+            DestroyWindow(window_);
+        }
+    }
+
+    NativeTestSurface(const NativeTestSurface&) = delete;
+    NativeTestSurface& operator=(const NativeTestSurface&) = delete;
+
+    [[nodiscard]] bool IsValid() const noexcept {
+        return window_ != nullptr;
+    }
+
+    [[nodiscard]] std::uint32_t Width() const noexcept override {
+        return kExtent;
+    }
+
+    [[nodiscard]] std::uint32_t Height() const noexcept override {
+        return kExtent;
+    }
+
+    [[nodiscard]] void* NativeWindowHandle() const noexcept override {
+        return window_;
+    }
+
+    [[nodiscard]] void* NativeDisplayHandle() const noexcept override {
+        return nullptr;
+    }
+
+    static constexpr std::uint16_t kExtent = 64U;
+
+private:
+    HWND window_ = nullptr;
+};
+
+class ParticleMeshReadbackTarget final {
+public:
+    ParticleMeshReadbackTarget() = default;
+
+    ~ParticleMeshReadbackTarget() {
+        Shutdown();
+    }
+
+    ParticleMeshReadbackTarget(const ParticleMeshReadbackTarget&) = delete;
+    ParticleMeshReadbackTarget& operator=(const ParticleMeshReadbackTarget&) = delete;
+
+    [[nodiscard]] bool Initialize() {
+        color_ = bgfx::createTexture2D(
+            NativeTestSurface::kExtent,
+            NativeTestSurface::kExtent,
+            false,
+            1U,
+            bgfx::TextureFormat::RGBA8,
+            BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST);
+        depth_ = bgfx::createTexture2D(
+            NativeTestSurface::kExtent,
+            NativeTestSurface::kExtent,
+            false,
+            1U,
+            bgfx::TextureFormat::D24S8,
+            BGFX_TEXTURE_RT);
+        readback_ = bgfx::createTexture2D(
+            NativeTestSurface::kExtent,
+            NativeTestSurface::kExtent,
+            false,
+            1U,
+            bgfx::TextureFormat::RGBA8,
+            BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST);
+        if (!bgfx::isValid(color_) || !bgfx::isValid(depth_) || !bgfx::isValid(readback_)) {
+            Shutdown();
+            return false;
+        }
+        const std::array attachments{color_, depth_};
+        frameBuffer_ = bgfx::createFrameBuffer(static_cast<std::uint8_t>(attachments.size()), attachments.data(), false);
+        if (!bgfx::isValid(frameBuffer_)) {
+            Shutdown();
+            return false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] RenderSceneTargetBinding Binding() const noexcept {
+        return RenderSceneTargetBinding{
+            .frameBuffer = frameBuffer_,
+            .colorTexture = color_,
+            .depthTexture = depth_,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{1U},
+                .extent = RenderExtent{NativeTestSurface::kExtent, NativeTestSurface::kExtent},
+                .viewportIndex = 0U,
+            },
+            .colorFormat = bgfx::TextureFormat::RGBA8,
+        };
+    }
+
+    [[nodiscard]] std::vector<std::uint8_t> ReadPixels() const {
+        bgfx::blit(kReadbackView, readback_, 0U, 0U, color_, 0U, 0U, NativeTestSurface::kExtent, NativeTestSurface::kExtent);
+        std::vector<std::uint8_t> pixels(static_cast<std::size_t>(NativeTestSurface::kExtent) * NativeTestSurface::kExtent * 4U);
+        const std::uint32_t readyFrame = bgfx::readTexture(readback_, pixels.data());
+        std::uint32_t frame = bgfx::frame();
+        for (std::uint32_t guard = 0U; frame < readyFrame && guard < 8U; ++guard) {
+            frame = bgfx::frame();
+        }
+        Require(frame >= readyFrame, "Particle mesh readback did not complete within the bounded frame wait");
+        return pixels;
+    }
+
+    void Shutdown() noexcept {
+        if (bgfx::isValid(frameBuffer_)) {
+            bgfx::destroy(frameBuffer_);
+            frameBuffer_ = BGFX_INVALID_HANDLE;
+        }
+        if (bgfx::isValid(readback_)) {
+            bgfx::destroy(readback_);
+            readback_ = BGFX_INVALID_HANDLE;
+        }
+        if (bgfx::isValid(depth_)) {
+            bgfx::destroy(depth_);
+            depth_ = BGFX_INVALID_HANDLE;
+        }
+        if (bgfx::isValid(color_)) {
+            bgfx::destroy(color_);
+            color_ = BGFX_INVALID_HANDLE;
+        }
+    }
+
+private:
+    static constexpr bgfx::ViewId kReadbackView = 250U;
+
+    bgfx::FrameBufferHandle frameBuffer_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle color_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle depth_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle readback_ = BGFX_INVALID_HANDLE;
+};
+
+class FinalCompositeReadbackTarget final {
+public:
+    ~FinalCompositeReadbackTarget() {
+        Shutdown();
+    }
+
+    FinalCompositeReadbackTarget() = default;
+    FinalCompositeReadbackTarget(const FinalCompositeReadbackTarget&) = delete;
+    FinalCompositeReadbackTarget& operator=(const FinalCompositeReadbackTarget&) = delete;
+
+    [[nodiscard]] bool Initialize() {
+        output_ = bgfx::createTexture2D(
+            NativeTestSurface::kExtent,
+            NativeTestSurface::kExtent,
+            false,
+            1U,
+            bgfx::TextureFormat::RGBA8,
+            BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST);
+        readback_ = bgfx::createTexture2D(
+            NativeTestSurface::kExtent,
+            NativeTestSurface::kExtent,
+            false,
+            1U,
+            bgfx::TextureFormat::RGBA8,
+            BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST);
+        if (!bgfx::isValid(output_) || !bgfx::isValid(readback_)) {
+            Shutdown();
+            return false;
+        }
+        frameBuffer_ = bgfx::createFrameBuffer(1U, &output_, false);
+        if (!bgfx::isValid(frameBuffer_)) {
+            Shutdown();
+            return false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] RenderFinalCompositeTargetBinding Binding() const noexcept {
+        return RenderFinalCompositeTargetBinding{
+            .frameBuffer = frameBuffer_,
+            .extent = RenderExtent{
+                NativeTestSurface::kExtent,
+                NativeTestSurface::kExtent,
+            },
+            .outputRect = RenderViewportRect{
+                .extent = RenderExtent{
+                    NativeTestSurface::kExtent,
+                    NativeTestSurface::kExtent,
+                },
+            },
+            .enabled = true,
+            .clearTarget = true,
+        };
+    }
+
+    [[nodiscard]] std::vector<std::uint8_t> ReadPixels() const {
+        bgfx::blit(
+            kReadbackView,
+            readback_,
+            0U,
+            0U,
+            output_,
+            0U,
+            0U,
+            NativeTestSurface::kExtent,
+            NativeTestSurface::kExtent);
+        std::vector<std::uint8_t> pixels(
+            static_cast<std::size_t>(NativeTestSurface::kExtent) *
+            NativeTestSurface::kExtent * 4U);
+        const std::uint32_t readyFrame =
+            bgfx::readTexture(readback_, pixels.data());
+        std::uint32_t frame = bgfx::frame();
+        for (std::uint32_t guard = 0U;
+             frame < readyFrame && guard < 8U;
+             ++guard) {
+            frame = bgfx::frame();
+        }
+        Require(
+            frame >= readyFrame,
+            "Detached viewport final-composite readback timed out");
+        return pixels;
+    }
+
+    void Shutdown() noexcept {
+        if (bgfx::isValid(frameBuffer_)) {
+            bgfx::destroy(frameBuffer_);
+            frameBuffer_ = BGFX_INVALID_HANDLE;
+        }
+        if (bgfx::isValid(readback_)) {
+            bgfx::destroy(readback_);
+            readback_ = BGFX_INVALID_HANDLE;
+        }
+        if (bgfx::isValid(output_)) {
+            bgfx::destroy(output_);
+            output_ = BGFX_INVALID_HANDLE;
+        }
+    }
+
+private:
+    static constexpr bgfx::ViewId kReadbackView = 250U;
+
+    bgfx::FrameBufferHandle frameBuffer_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle output_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle readback_ = BGFX_INVALID_HANDLE;
+};
+#endif
+
+class SnapshotBackend final : public kb::particles::IParticleSimulationBackend {
+public:
+    kb::particles::ParticleRuntimeResult Create(kb::scene::Scene&, std::uint64_t, kb::scene::SceneEntity) override { return Success(); }
+    kb::particles::ParticleRuntimeResult Release(kb::scene::Scene&, std::uint64_t) noexcept override { return Success(); }
+    kb::particles::ParticleRuntimeResult Play(kb::scene::Scene&, std::uint64_t) noexcept override { return Success(); }
+    kb::particles::ParticleRuntimeResult Pause(kb::scene::Scene&, std::uint64_t) noexcept override { return Success(); }
+    kb::particles::ParticleRuntimeResult Stop(kb::scene::Scene&, std::uint64_t) noexcept override { return Success(); }
+    kb::particles::ParticleRuntimeResult Restart(kb::scene::Scene&, std::uint64_t) noexcept override { return Success(); }
+    kb::particles::ParticleRuntimeResult SetSeed(kb::scene::Scene&, std::uint64_t, std::uint64_t) noexcept override { return Success(); }
+    kb::particles::ParticleRuntimeResult SetParameterScalar(
+        kb::scene::Scene&, std::uint64_t, std::string_view, float) noexcept override { return Success(); }
+    kb::particles::ParticleRuntimeResult ClearParameter(
+        kb::scene::Scene&, std::uint64_t, std::string_view) noexcept override { return Success(); }
+    kb::particles::ParticleRuntimeResult Emit(kb::scene::Scene&, std::uint64_t, std::uint32_t) override { return Success(); }
+    kb::particles::ParticleRuntimeQueryResult Query(const kb::scene::Scene&, std::uint64_t) const noexcept override {
+        return {.status = kb::particles::ParticleRuntimeStatus::Success};
+    }
+    std::size_t CopyLiveInstanceIds(const kb::scene::Scene&, std::span<std::uint64_t>) const noexcept override { return 0U; }
+    std::size_t CopyLiveParticleStates(
+        const kb::scene::Scene&, std::uint64_t, std::span<kb::particles::ParticleRuntimeState>) const noexcept override {
+        return 0U;
+    }
+
+private:
+    [[nodiscard]] static kb::particles::ParticleRuntimeResult Success() noexcept {
+        return {.status = kb::particles::ParticleRuntimeStatus::Success};
     }
 };
 
@@ -2200,6 +2501,543 @@ void SubmitLifecycleFrame(Renderer& renderer, const kb::scene::Scene& scene, con
     Require(renderer.SubmitScene(scene, desc), failure);
     renderer.EndFrame();
 }
+
+void RunRendererSubmitsParticleMeshSnapshotAsOneDrawTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_particle_mesh_submit";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    LifecycleSceneFixture fixture;
+    PrepareLifecycleScene(fixture, root);
+    fixture.scene.Components().MeshRenderers().Remove(fixture.entity);
+    kb::assets::AssetManager& manager = fixture.scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()),
+        "Particle mesh submit test could not register its material loader");
+    WriteMaterial(root / "particle.kbmat", 0U, 0U, 0U, 0U, 0U);
+    Require(manager.DiscoverMountedAssets() >= 2U,
+        "Particle mesh submit test could not discover its material asset");
+    const kb::assets::AssetMetadata* materialMetadata = manager.Registry().FindByPath("/Game/particle.kbmat");
+    Require(materialMetadata != nullptr && materialMetadata->type == "RenderMaterial",
+        "Particle mesh submit test discovered the wrong material metadata");
+
+    SnapshotBackend backend;
+    Require(kb::particles::ParticlePlayback::RegisterBackend(fixture.scene, backend).Succeeded() &&
+            kb::particles::ParticlePlayback::WarmupRenderSnapshots(fixture.scene).Succeeded(),
+        "Particle mesh submit test could not initialize its snapshot channel");
+    kb::particles::ParticleRenderEmitterRecord emitter{};
+    emitter.instanceId = 1U;
+    emitter.effectAssetId = 2U;
+    emitter.emitterId = 3U;
+    emitter.assetGeneration = 1U;
+    emitter.materialAssetId = 1U;
+    emitter.meshAssetId = fixture.meshAssetId;
+    emitter.materialAssetId = materialMetadata->id.value;
+    emitter.firstParticle = 0U;
+    emitter.particleCount = 3U;
+    emitter.liveParticleCount = 3U;
+    emitter.output = kb::particles::ParticleRenderOutput::Mesh;
+    emitter.status = kb::particles::ParticleRenderEmitterStatus::Playing;
+    emitter.flags = kb::particles::ParticleRenderEmitterFlag::CastsShadow |
+        kb::particles::ParticleRenderEmitterFlag::ReceivesShadow;
+    emitter.localBasisQuaternionSnorm = {0, 0, 0, 32'767};
+    emitter.boundsMinimum = {-1.0F, -1.0F, -1.0F};
+    emitter.boundsMaximum = {1.0F, 1.0F, 1.0F};
+    const std::array particles{
+        kb::particles::ParticleRenderRecord{.position = {-0.2F, 0.0F, 0.2F}, .size = 1.0F, .particleId = 11U, .packedColor = 0xFFFFFFFFU},
+        kb::particles::ParticleRenderRecord{.position = {0.0F, 0.0F, 0.3F}, .size = 1.0F, .particleId = 12U, .packedColor = 0xFFFFFFFFU},
+        kb::particles::ParticleRenderRecord{.position = {0.2F, 0.0F, 0.4F}, .size = 1.0F, .particleId = 13U, .packedColor = 0xFFFFFFFFU},
+    };
+    const std::array emitters{emitter};
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Particle mesh submit test renderer did not initialize");
+    for (std::uint64_t revision = 1U; revision <= 100U; ++revision) {
+        Require(kb::particles::ParticlePlayback::PublishRenderSnapshot(fixture.scene, backend, {
+                    .revision = revision, .fixedStepIndex = revision, .emitters = emitters, .particles = particles}).Succeeded(),
+            "Particle mesh submit test could not publish its Mesh snapshot");
+        SubmitLifecycleFrame(renderer, fixture.scene, LifecycleSubmitDesc(1U),
+            "Particle mesh submit test did not submit the snapshot");
+        const SceneRenderSubmitStats stats = renderer.LastSceneSubmitStats();
+        Require(stats.visibleMeshCount == 3U && stats.submittedMeshCount == 3U &&
+                stats.submittedDrawCallCount == 1U,
+            "Three Mesh-output particles with one mesh/material were not submitted as one draw");
+        Require(renderer.RuntimeResourceStats().cachedMeshCount == 1U,
+            "Particle mesh submit did not retain its referenced mesh resource");
+        renderer.ReleaseScene(fixture.scene);
+        Require(renderer.RuntimeResourceStats().cachedMeshCount == 0U,
+            "Releasing a particle-mesh scene retained a mesh resource reference");
+    }
+    renderer.Shutdown();
+    Require(kb::particles::ParticlePlayback::UnregisterBackend(fixture.scene, backend).Succeeded(),
+        "Particle mesh submit test could not unregister its snapshot backend");
+    std::filesystem::remove_all(root, error);
+}
+
+void RunRendererSubmitsParticleStripSnapshotsTest() {
+    kb::scene::Scene scene;
+    SnapshotBackend backend;
+    Require(kb::particles::ParticlePlayback::RegisterBackend(scene, backend).Succeeded() &&
+            kb::particles::ParticlePlayback::WarmupRenderSnapshots(scene).Succeeded(),
+        "Particle strip submit test could not initialize its snapshot channel");
+    kb::particles::ParticleRenderEmitterRecord emitter{};
+    emitter.instanceId = 1U;
+    emitter.effectAssetId = 2U;
+    emitter.emitterId = 3U;
+    emitter.assetGeneration = 1U;
+    emitter.materialAssetId = 1U;
+    emitter.firstParticle = 0U;
+    emitter.particleCount = 2U;
+    emitter.liveParticleCount = 2U;
+    emitter.status = kb::particles::ParticleRenderEmitterStatus::Playing;
+    emitter.blend = kb::particles::ParticleRenderBlendMode::Alpha;
+    emitter.depth = kb::particles::ParticleRenderDepthMode::ReadOnly;
+    emitter.trailSampleIntervalSeconds = 1.0F / 60.0F;
+    emitter.trailMaxSamplesPerParticle = 4U;
+    emitter.trailWidth = 0.25F;
+    emitter.ribbonMaxSegments = 4U;
+    emitter.ribbonWidth = 0.25F;
+    emitter.outputOrigin = {-0.5F, 0.0F, 0.0F};
+    emitter.beamEnd = {0.5F, 0.0F, 0.0F};
+    emitter.beamSegments = 3U;
+    emitter.beamWidth = 0.25F;
+    emitter.beamLocalEnd = {1.0F, 0.0F, 0.0F};
+    emitter.boundsMinimum = {-1.0F, -1.0F, -1.0F};
+    emitter.boundsMaximum = {1.0F, 1.0F, 1.0F};
+    std::array particles{
+        kb::particles::ParticleRenderRecord{.position = {-0.25F, 0.0F, 0.2F}, .particleId = 11U,
+            .spawnOrdinal = 1U, .packedColor = 0xFFFFFFFFU},
+        kb::particles::ParticleRenderRecord{.position = {0.25F, 0.0F, 0.2F}, .particleId = 12U,
+            .spawnOrdinal = 2U, .packedColor = 0xFFFFFFFFU},
+    };
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Particle strip submit test renderer did not initialize");
+    const auto submit = [&](std::uint64_t revision, kb::particles::ParticleRenderOutput output,
+                            std::span<const kb::particles::ParticleRenderRecord> records, bool expectDraw,
+                            bool releaseScene) {
+        emitter.output = output;
+        emitter.particleCount = static_cast<std::uint32_t>(records.size());
+        emitter.liveParticleCount = emitter.particleCount;
+        const std::array emitters{emitter};
+        const auto published = kb::particles::ParticlePlayback::PublishRenderSnapshot(scene, backend, {
+            .revision = revision, .fixedStepIndex = revision, .emitters = emitters, .particles = records});
+        if (!published.Succeeded()) {
+            throw std::runtime_error{"Particle strip submit test could not publish revision " + std::to_string(revision)};
+        }
+        SubmitLifecycleFrame(renderer, scene, LifecycleSubmitDesc(17U),
+            "Particle strip submit test did not submit the snapshot");
+        const SceneRenderSubmitStats stats = renderer.LastSceneSubmitStats();
+        if (expectDraw) {
+            Require(stats.submittedParticleDrawCallCount == 1U && stats.submittedParticleStripSegmentCount != 0U &&
+                    stats.failedParticleBatchCount == 0U && stats.failedParticleStripBatchCount == 0U,
+                "Particle strip snapshot was not submitted as one renderer-owned dynamic draw");
+        }
+        if (releaseScene) renderer.ReleaseScene(scene);
+    };
+    submit(1U, kb::particles::ParticleRenderOutput::Trail, particles, false, false);
+    particles[0].position.x += 0.1F;
+    particles[1].position.x += 0.1F;
+    submit(2U, kb::particles::ParticleRenderOutput::Trail, particles, true, true);
+    submit(3U, kb::particles::ParticleRenderOutput::Ribbon, particles, true, true);
+    submit(4U, kb::particles::ParticleRenderOutput::Beam, {}, true, true);
+    emitter.output = kb::particles::ParticleRenderOutput::Volumetric;
+    emitter.particleCount = 1U;
+    emitter.liveParticleCount = 1U;
+    emitter.volumetricDensity = 0.75F;
+    emitter.volumetricRadiusScale = 0.5F;
+    emitter.volumetricLowQualitySteps = 8U;
+    emitter.volumetricHighQualitySteps = 24U;
+    const std::array volumetricEmitters{emitter};
+    const std::array volumetricParticles{
+        kb::particles::ParticleRenderRecord{.position = {0.0F, 0.0F, 0.2F}, .size = 1.0F,
+            .particleId = 13U, .packedColor = 0xFFFFFFFFU}};
+    Require(kb::particles::ParticlePlayback::PublishRenderSnapshot(scene, backend, {
+                .revision = 5U, .fixedStepIndex = 5U, .emitters = volumetricEmitters,
+                .particles = volumetricParticles}).Succeeded(),
+        "Volumetric no-depth contract test could not publish its snapshot");
+    SubmitLifecycleFrame(renderer, scene, LifecycleSubmitDesc(17U),
+        "Volumetric no-depth contract test did not submit its scene");
+    const SceneRenderSubmitStats noDepthStats = renderer.LastSceneSubmitStats();
+    Require(noDepthStats.failedParticleBatchCount == 1U &&
+            noDepthStats.submittedVolumetricParticleCount == 0U &&
+            noDepthStats.volumetricParticleRaymarchStepCount == 0U,
+        "Volumetric particles fell back to a quad when the opaque depth texture was unavailable");
+    renderer.Shutdown();
+    Require(kb::particles::ParticlePlayback::UnregisterBackend(scene, backend).Succeeded(),
+        "Particle strip submit test could not unregister its snapshot backend");
+}
+
+#if defined(_WIN32)
+void RunRendererDrawsDetachedViewportFinalCompositePixelsTest() {
+    kb::scene::Scene scene;
+    NativeTestSurface surface;
+    Require(
+        surface.IsValid(),
+        "Detached viewport final-composite test could not create a hidden native surface");
+
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType =
+        static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(
+        renderer.Initialize(surface, &config),
+        "Detached viewport final-composite renderer did not initialize");
+
+    const RenderSceneSubmitDesc primaryDesc{
+        .target = RenderSceneTargetBinding{
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+        .editorSceneOverlaysEnabled = false,
+        .shadowPassEnabled = false,
+        .postProcessEnabled = false,
+        .selectionMaskEnabled = false,
+        .selectionOutlineEnabled = false,
+    };
+    SubmitLifecycleFrame(
+        renderer,
+        scene,
+        primaryDesc,
+        "Detached viewport final-composite test could not seed the primary viewport frame");
+
+    {
+        SceneRenderTarget sceneTarget;
+        ScenePostProcessTargets postProcessTargets;
+        FinalCompositeReadbackTarget finalTarget;
+        Require(
+            sceneTarget.Ensure(SceneRenderTargetDesc{
+                .extent = RenderExtent{ 64U, 64U },
+            }) &&
+                postProcessTargets.Ensure(ScenePostProcessTargetsDesc{
+                    .extent = RenderExtent{ 64U, 64U },
+                }) &&
+                finalTarget.Initialize(),
+            "Detached viewport final-composite test could not allocate render targets");
+
+        SceneRenderCamera camera{};
+        bx::mtxLookAt(
+            camera.view.data(),
+            bx::Vec3{ 4.0F, 3.0F, 4.0F },
+            bx::Vec3{ 0.0F, 0.0F, 0.0F });
+        SceneDepthPolicy::MakePerspective(
+            camera.projection.data(),
+            60.0F,
+            1.0F,
+            0.05F,
+            100.0F,
+            SceneDepthPolicy::HomogeneousDepth());
+
+        ScenePostProcessSettings postProcessSettings{};
+        postProcessSettings.temporalAntiAliasingEnabled = false;
+        postProcessSettings.temporalJitterEnabled = false;
+        postProcessSettings.outputTransform.autoExposure.enabled = false;
+        const bgfx::TextureHandle sampledDepth =
+            sceneTarget.DepthTextureSampled()
+            ? sceneTarget.DepthTexture()
+            : bgfx::TextureHandle{ bgfx::kInvalidHandle };
+        const RenderSceneSubmitDesc detachedDesc{
+            .target = RenderSceneTargetBinding{
+                .frameBuffer = sceneTarget.FrameBuffer(),
+                .colorTexture = sceneTarget.ColorTexture(),
+                .resolvedColorTexture = sceneTarget.ResolvedColorTexture(),
+                .depthTexture = sampledDepth,
+                .viewport = RenderViewportDesc{
+                    .id = RenderViewportId{ 2U },
+                    .extent = RenderExtent{ 64U, 64U },
+                    .viewportIndex = 1U,
+                },
+                .msaaSamples = sceneTarget.MsaaSamples(),
+                .colorFormat = sceneTarget.ColorSelection().format,
+            },
+            .postProcess = postProcessTargets.Binding(),
+            .finalComposite = finalTarget.Binding(),
+            .cameraOverride = camera,
+            .postProcessSettings = postProcessSettings,
+            .clearRgba = 0x000000FFU,
+            .editorSceneOverlaysEnabled = true,
+            .shadowPassEnabled = false,
+            .postProcessEnabled = true,
+            .selectionMaskEnabled = true,
+            .selectionOutlineEnabled = true,
+            .gpuDrivenRuntimeDispatchEnabled = false,
+        };
+        SubmitLifecycleFrame(
+            renderer,
+            scene,
+            detachedDesc,
+            "Detached viewport final-composite test could not submit viewport index 1");
+
+        const std::vector<std::uint8_t> pixels = finalTarget.ReadPixels();
+        const std::array<std::uint8_t, 3U> first{
+            pixels[0], pixels[1], pixels[2],
+        };
+        std::size_t variedPixelCount = 0U;
+        for (std::size_t offset = 4U; offset < pixels.size(); offset += 4U) {
+            if (pixels[offset] != first[0] ||
+                pixels[offset + 1U] != first[1] ||
+                pixels[offset + 2U] != first[2]) {
+                ++variedPixelCount;
+            }
+        }
+        Require(
+            variedPixelCount >= 32U,
+            "Detached viewport final composite stayed uniform after switching from viewport index 0");
+
+        postProcessTargets.Shutdown();
+        sceneTarget.Shutdown();
+    }
+    renderer.Shutdown();
+}
+
+void RunRendererDrawsParticleMeshSnapshotPixelsTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_particle_mesh_pixels";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    LifecycleSceneFixture fixture;
+    PrepareLifecycleScene(fixture, root);
+    fixture.scene.Components().MeshRenderers().Remove(fixture.entity);
+    kb::assets::AssetManager& manager = fixture.scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()),
+        "Particle mesh pixel test could not register its material loader");
+    WriteMaterial(root / "particle.kbmat", 0U, 0U, 0U, 0U, 0U);
+    {
+        std::ofstream output{root / "particle.kbmat", std::ios::app};
+        Require(output.is_open(), "Particle mesh pixel test could not make its material double-sided");
+        output << "doubleSided true\n";
+    }
+    Require(manager.DiscoverMountedAssets() >= 2U,
+        "Particle mesh pixel test could not discover its material asset");
+    const kb::assets::AssetMetadata* materialMetadata = manager.Registry().FindByPath("/Game/particle.kbmat");
+    Require(materialMetadata != nullptr && materialMetadata->type == "RenderMaterial",
+        "Particle mesh pixel test discovered the wrong material metadata");
+
+    SnapshotBackend backend;
+    Require(kb::particles::ParticlePlayback::RegisterBackend(fixture.scene, backend).Succeeded() &&
+            kb::particles::ParticlePlayback::WarmupRenderSnapshots(fixture.scene).Succeeded(),
+        "Particle mesh pixel test could not initialize its snapshot channel");
+    kb::particles::ParticleRenderEmitterRecord emitter{};
+    emitter.instanceId = 1U;
+    emitter.effectAssetId = 2U;
+    emitter.emitterId = 3U;
+    emitter.assetGeneration = 1U;
+    emitter.meshAssetId = fixture.meshAssetId;
+    emitter.materialAssetId = materialMetadata->id.value;
+    emitter.firstParticle = 0U;
+    emitter.particleCount = 3U;
+    emitter.liveParticleCount = 3U;
+    emitter.output = kb::particles::ParticleRenderOutput::Mesh;
+    emitter.status = kb::particles::ParticleRenderEmitterStatus::Playing;
+    emitter.flags = kb::particles::ParticleRenderEmitterFlag::CastsShadow |
+        kb::particles::ParticleRenderEmitterFlag::ReceivesShadow;
+    emitter.localBasisQuaternionSnorm = {0, 0, 0, 32'767};
+    emitter.boundsMinimum = {-1.0F, -1.0F, -1.0F};
+    emitter.boundsMaximum = {1.0F, 1.0F, 1.0F};
+    const std::array particles{
+        kb::particles::ParticleRenderRecord{.position = {-0.2F, 0.0F, 0.2F}, .size = 1.0F, .particleId = 11U, .packedColor = 0xFFFFFFFFU},
+        kb::particles::ParticleRenderRecord{.position = {0.0F, 0.0F, 0.3F}, .size = 1.0F, .particleId = 12U, .packedColor = 0xFFFFFFFFU},
+        kb::particles::ParticleRenderRecord{.position = {0.2F, 0.0F, 0.4F}, .size = 1.0F, .particleId = 13U, .packedColor = 0xFFFFFFFFU},
+    };
+    const std::array emitters{emitter};
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Particle mesh pixel test could not create a native render surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Particle mesh pixel test renderer did not initialize");
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(), "Particle mesh pixel test could not create its readback target");
+        Require(kb::particles::ParticlePlayback::PublishRenderSnapshot(fixture.scene, backend, {
+                    .revision = 1U, .fixedStepIndex = 1U, .emitters = emitters, .particles = particles}).Succeeded(),
+            "Particle mesh pixel test could not publish its Mesh snapshot");
+        const RenderSceneSubmitDesc desc{
+            .target = target.Binding(),
+            .cameraOverride = IdentityCamera(),
+            .clearRgba = 0x101820FFU,
+            .editorSceneOverlaysEnabled = false,
+            .postProcessEnabled = false,
+            .selectionMaskEnabled = false,
+            .selectionOutlineEnabled = false,
+        };
+        SubmitLifecycleFrame(renderer, fixture.scene, desc,
+            "Particle mesh pixel test did not submit the snapshot");
+        const SceneRenderSubmitStats stats = renderer.LastSceneSubmitStats();
+        Require(stats.visibleMeshCount == 3U && stats.submittedMeshCount == 3U &&
+                stats.submittedDrawCallCount == 1U,
+            "Particle mesh pixel test did not submit three Mesh particles as one draw");
+        const std::vector<std::uint8_t> pixels = target.ReadPixels();
+        const std::array<std::uint8_t, 3U> background{pixels[0], pixels[1], pixels[2]};
+        std::size_t geometryPixelCount = 0U;
+        for (std::size_t offset = 0U; offset < pixels.size(); offset += 4U) {
+            if (pixels[offset] != background[0] || pixels[offset + 1U] != background[1] ||
+                pixels[offset + 2U] != background[2]) {
+                ++geometryPixelCount;
+            }
+        }
+        Require(geometryPixelCount >= 32U,
+            "Particle mesh pixel test read back only the clear color instead of rendered mesh pixels");
+    }
+    renderer.Shutdown();
+    Require(kb::particles::ParticlePlayback::UnregisterBackend(fixture.scene, backend).Succeeded(),
+        "Particle mesh pixel test could not unregister its snapshot backend");
+    std::filesystem::remove_all(root, error);
+}
+
+void RunRendererDrawsParticleStripSnapshotPixelsTest() {
+    kb::scene::Scene scene;
+    SnapshotBackend backend;
+    Require(kb::particles::ParticlePlayback::RegisterBackend(scene, backend).Succeeded() &&
+            kb::particles::ParticlePlayback::WarmupRenderSnapshots(scene).Succeeded(),
+        "Particle strip pixel test could not initialize its snapshot channel");
+    kb::particles::ParticleRenderEmitterRecord emitter{};
+    emitter.instanceId = 1U;
+    emitter.effectAssetId = 2U;
+    emitter.emitterId = 3U;
+    emitter.assetGeneration = 1U;
+    emitter.materialAssetId = 1U;
+    emitter.output = kb::particles::ParticleRenderOutput::Beam;
+    emitter.status = kb::particles::ParticleRenderEmitterStatus::Playing;
+    emitter.beamLocalEnd = {1.0F, 0.0F, 0.0F};
+    emitter.outputOrigin = {-0.6F, 0.0F, 0.1F};
+    emitter.beamEnd = {0.6F, 0.0F, 0.1F};
+    emitter.beamSegments = 4U;
+    emitter.beamWidth = 0.25F;
+    emitter.boundsMinimum = {-1.0F, -1.0F, -1.0F};
+    emitter.boundsMaximum = {1.0F, 1.0F, 1.0F};
+    const std::array emitters{emitter};
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Particle strip pixel test could not create a native render surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Particle strip pixel test renderer did not initialize");
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(), "Particle strip pixel test could not create its readback target");
+        Require(kb::particles::ParticlePlayback::PublishRenderSnapshot(scene, backend, {
+                    .revision = 1U, .fixedStepIndex = 1U, .emitters = emitters,
+                    .particles = std::span<const kb::particles::ParticleRenderRecord>{}}).Succeeded(),
+            "Particle strip pixel test could not publish its Beam snapshot");
+        const RenderSceneSubmitDesc desc{
+            .target = target.Binding(), .cameraOverride = IdentityCamera(), .clearRgba = 0x101820FFU,
+            .editorSceneOverlaysEnabled = false, .postProcessEnabled = false,
+            .selectionMaskEnabled = false, .selectionOutlineEnabled = false,
+        };
+        SubmitLifecycleFrame(renderer, scene, desc, "Particle strip pixel test did not submit the snapshot");
+        const SceneRenderSubmitStats stats = renderer.LastSceneSubmitStats();
+        Require(stats.submittedParticleDrawCallCount == 1U && stats.submittedParticleStripSegmentCount == 4U,
+            "Particle strip pixel test did not submit the Beam's dynamic segments");
+        const std::vector<std::uint8_t> pixels = target.ReadPixels();
+        const std::array<std::uint8_t, 3U> background{pixels[0], pixels[1], pixels[2]};
+        std::size_t geometryPixelCount = 0U;
+        for (std::size_t offset = 0U; offset < pixels.size(); offset += 4U) {
+            if (pixels[offset] != background[0] || pixels[offset + 1U] != background[1] ||
+                pixels[offset + 2U] != background[2]) ++geometryPixelCount;
+        }
+        Require(geometryPixelCount >= 16U,
+            "Particle strip pixel test read back only the clear color instead of dynamic-strip pixels");
+    }
+    renderer.Shutdown();
+    Require(kb::particles::ParticlePlayback::UnregisterBackend(scene, backend).Succeeded(),
+        "Particle strip pixel test could not unregister its snapshot backend");
+}
+
+void RunRendererDrawsVolumetricParticleSnapshotPixelsTest() {
+    kb::scene::Scene scene;
+    SnapshotBackend backend;
+    Require(kb::particles::ParticlePlayback::RegisterBackend(scene, backend).Succeeded() &&
+            kb::particles::ParticlePlayback::WarmupRenderSnapshots(scene).Succeeded(),
+        "Volumetric pixel test could not initialize its snapshot channel");
+    kb::particles::ParticleRenderEmitterRecord emitter{};
+    emitter.instanceId = 1U;
+    emitter.effectAssetId = 2U;
+    emitter.emitterId = 3U;
+    emitter.assetGeneration = 1U;
+    emitter.materialAssetId = 1U;
+    emitter.firstParticle = 0U;
+    emitter.particleCount = 1U;
+    emitter.liveParticleCount = 1U;
+    emitter.output = kb::particles::ParticleRenderOutput::Volumetric;
+    emitter.status = kb::particles::ParticleRenderEmitterStatus::Playing;
+    emitter.volumetricDensity = 0.75F;
+    emitter.volumetricRadiusScale = 0.35F;
+    emitter.volumetricLowQualitySteps = 8U;
+    emitter.volumetricHighQualitySteps = 24U;
+    emitter.boundsMinimum = {-1.0F, -1.0F, -1.0F};
+    emitter.boundsMaximum = {1.0F, 1.0F, 1.0F};
+    const std::array emitters{emitter};
+    const std::array particles{
+        kb::particles::ParticleRenderRecord{.position = {0.0F, 0.0F, 0.2F}, .size = 1.0F,
+            .particleId = 11U, .packedColor = 0xFFFFFFFFU}};
+
+    NativeTestSurface surface;
+    Require(surface.IsValid(), "Volumetric pixel test could not create a native render surface");
+    DisplayConfig config{};
+    config.syncMode = DisplaySyncMode::Uncapped;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Direct3D11);
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Volumetric pixel test renderer did not initialize");
+    {
+        ParticleMeshReadbackTarget target;
+        Require(target.Initialize(), "Volumetric pixel test could not create its readback target");
+        Require(kb::particles::ParticlePlayback::PublishRenderSnapshot(scene, backend, {
+                    .revision = 1U, .fixedStepIndex = 1U, .emitters = emitters,
+                    .particles = particles}).Succeeded(),
+            "Volumetric pixel test could not publish its snapshot");
+        const RenderSceneSubmitDesc desc{
+            .target = target.Binding(),
+            .cameraOverride = IdentityCamera(),
+            .lightingConfig = SceneRenderLightingConfig{.lightingPath = SceneRenderLightingPath::Forward},
+            .clearRgba = 0x101820FFU,
+            .editorSceneOverlaysEnabled = false, .postProcessEnabled = false,
+            .selectionMaskEnabled = false, .selectionOutlineEnabled = false,
+        };
+        SubmitLifecycleFrame(renderer, scene, desc, "Volumetric pixel test did not submit its snapshot");
+        const SceneRenderSubmitStats stats = renderer.LastSceneSubmitStats();
+        Require(stats.submittedParticleDrawCallCount == 1U &&
+                stats.submittedVolumetricParticleCount == 1U &&
+                stats.volumetricParticleRaymarchStepCount == 24U &&
+                stats.failedParticleBatchCount == 0U,
+            "Volumetric pixel test did not submit the depth-aware high-quality raymarch path");
+        RenderSceneSubmitDesc lowQualityDesc = desc;
+        lowQualityDesc.materialGraphContext.qualityLevel = RenderMaterialGraphQualityLevel::Low;
+        SubmitLifecycleFrame(renderer, scene, lowQualityDesc,
+            "Volumetric pixel test did not submit its low-quality snapshot");
+        const SceneRenderSubmitStats lowQualityStats = renderer.LastSceneSubmitStats();
+        Require(lowQualityStats.submittedParticleDrawCallCount == 1U &&
+                lowQualityStats.submittedVolumetricParticleCount == 1U &&
+                lowQualityStats.volumetricParticleRaymarchStepCount == 8U &&
+                lowQualityStats.failedParticleBatchCount == 0U,
+            "Volumetric low quality changed more than the authored raymarch step budget");
+        const std::vector<std::uint8_t> pixels = target.ReadPixels();
+        const std::array<std::uint8_t, 3U> background{pixels[0], pixels[1], pixels[2]};
+        std::size_t geometryPixelCount = 0U;
+        for (std::size_t offset = 0U; offset < pixels.size(); offset += 4U) {
+            if (pixels[offset] != background[0] || pixels[offset + 1U] != background[1] ||
+                pixels[offset + 2U] != background[2]) ++geometryPixelCount;
+        }
+        Require(geometryPixelCount >= 16U,
+            "Volumetric pixel test read back only the clear color instead of the raymarched impostor");
+    }
+    renderer.Shutdown();
+    Require(kb::particles::ParticlePlayback::UnregisterBackend(scene, backend).Succeeded(),
+        "Volumetric pixel test could not unregister its snapshot backend");
+}
+#endif
 
 // LIB-146 (scene unload): Renderer::ReleaseScene must destroy exactly the released
 // scene's runtime GPU resources ({sceneId, assetId}-keyed isolation - a second live scene
@@ -4754,6 +5592,33 @@ void RunMaterialFrameTimeAdvanceTest() {
     Require(nearly(renderer.FrameDeltaSeconds(), 1.0F / 30.0F), "MAT-72: Renderer must retain the per-frame delta seconds");
 }
 
+void RunRendererParticleMeshSnapshotSubmitTest() {
+    RunRendererSubmitsParticleMeshSnapshotAsOneDrawTest();
+#if defined(_WIN32)
+    RunRendererDrawsParticleMeshSnapshotPixelsTest();
+#endif
+}
+
+void RunRendererParticleStripSnapshotSubmitTest() {
+    RunRendererSubmitsParticleStripSnapshotsTest();
+#if defined(_WIN32)
+    RunRendererDrawsParticleStripSnapshotPixelsTest();
+#endif
+}
+
+void RunRendererParticleVolumetricSnapshotSubmitTest() {
+    RunRendererSubmitsParticleStripSnapshotsTest();
+#if defined(_WIN32)
+    RunRendererDrawsVolumetricParticleSnapshotPixelsTest();
+#endif
+}
+
+void RunRendererDetachedViewportFinalCompositePixelsTest() {
+#if defined(_WIN32)
+    RunRendererDrawsDetachedViewportFinalCompositePixelsTest();
+#endif
+}
+
 void RunRendererRuntimeSubmitTests() {
     RunEditorCameraWireframesSubmitInHeadlessNoopTest();
     RunMaterialFrameTimeAdvanceTest();
@@ -4761,6 +5626,10 @@ void RunRendererRuntimeSubmitTests() {
     RunRuntimeMaterialResolverEvaluatesMaterialOutputTextureGraphTest();
     RunRuntimeMaterialResolverEvaluatesConstantAndMathGraphTest();
     RunRendererPublishesSceneVisibilityFeedbackTest();
+    RunRendererParticleMeshSnapshotSubmitTest();
+    RunRendererParticleStripSnapshotSubmitTest();
+    RunRendererParticleVolumetricSnapshotSubmitTest();
+    RunRendererDetachedViewportFinalCompositePixelsTest();
     RunRendererReleaseSceneDropsRuntimeResourcesTest();
     RunRendererPrunesUnreferencedResourcesAfterRetentionTest();
     RunRendererReloadsChangedRuntimeMeshAssetTest();

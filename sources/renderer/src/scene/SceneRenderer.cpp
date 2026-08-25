@@ -103,6 +103,8 @@ bool SceneRenderer::Initialize() {
         Shutdown();
         return false;
     }
+    particleRenderer_->SetVolumetricQuality(particleVolumetricLowQuality_
+        ? ParticleVolumetricQuality::Low : ParticleVolumetricQuality::High);
     if (!graphShaderCacheRoot_.empty()) {
         meshSubmitter_->SetGraphShaderCacheRoot(graphShaderCacheRoot_);
     }
@@ -125,6 +127,14 @@ void SceneRenderer::Shutdown() {
     resources_.Shutdown();
     skinningPalettes_.Shutdown();
     initialized_ = false;
+}
+
+void SceneRenderer::ReleaseParticleScene(std::uint64_t sceneId) noexcept {
+    if (particleRenderer_ != nullptr) particleRenderer_->ReleaseParticleScene(sceneId);
+}
+
+void SceneRenderer::ReleaseAllParticleScenes() noexcept {
+    if (particleRenderer_ != nullptr) particleRenderer_->ReleaseAllParticleScenes();
 }
 
 void SceneRenderer::Submit(bgfx::ViewId viewId, const RenderScene& renderScene, std::uint32_t viewportWidth, std::uint32_t viewportHeight, const SceneRenderCamera* cameraOverride, SceneRenderDrawBudget drawBudget, SceneRenderLightingConfig lightingConfig) const {
@@ -270,6 +280,11 @@ void SceneRenderer::SubmitMeshPass(
                 << " missingTextureBinding=" << lastSubmitStats_.missingTextureBindingCount
                 << " missingTextureResource=" << lastSubmitStats_.missingTextureResourceCount
                 << " textureDimensionMismatch=" << lastSubmitStats_.textureDimensionMismatchCount
+                << " submittedParticles=" << lastSubmitStats_.submittedParticleCount
+                << " particleDrawCalls=" << lastSubmitStats_.submittedParticleDrawCallCount
+                << " failedParticleBatches=" << lastSubmitStats_.failedParticleBatchCount
+                << " droppedParticles=" << lastSubmitStats_.droppedParticleCount
+                << " particleUploadBytes=" << lastSubmitStats_.particleInstanceUploadBytes
                 << " diagnostics=" << lastDiagnostics_.events.size()
                 << " instanceUploadBytes=" << lastSubmitStats_.instanceUploadBytes;
         WriteRendererDebugLog("scene_renderer", message.str());
@@ -421,6 +436,24 @@ SceneRenderDiagnostics SceneRenderer::ValidateSceneDiagnostics(const RenderScene
 
 SceneRenderSubmitStats SceneRenderer::LastSubmitStats() const noexcept {
     return lastSubmitStats_;
+}
+
+kb::particles::ParticleGpuVisualAvailability SceneRenderer::ParticleGpuVisualAvailability() const noexcept {
+    return particleRenderer_ == nullptr
+        ? kb::particles::ParticleGpuVisualAvailability::RendererUnavailable
+        : particleRenderer_->GpuVisualAvailability();
+}
+
+void SceneRenderer::SetParticleVolumetricLowQuality(bool lowQuality) noexcept {
+    particleVolumetricLowQuality_ = lowQuality;
+    if (particleRenderer_ != nullptr) {
+        particleRenderer_->SetVolumetricQuality(lowQuality
+            ? ParticleVolumetricQuality::Low : ParticleVolumetricQuality::High);
+    }
+}
+
+bool SceneRenderer::ParticleVolumetricLowQuality() const noexcept {
+    return particleVolumetricLowQuality_;
 }
 
 const SceneRenderDiagnostics& SceneRenderer::LastDiagnostics() const noexcept {

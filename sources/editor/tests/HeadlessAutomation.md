@@ -96,6 +96,7 @@ scenario-local aliases.
 | `assert_mesh_thumbnail` | `asset` alias or virtual path; renders the production 128x128 geometry thumbnail and requires non-empty mesh statistics |
 | `create_entity` | `id`; optional `name` |
 | `create_mesh_entity` | `id`, `asset` alias or virtual path |
+| `create_particle_effect_entity` | `id`, `asset` alias or virtual path |
 | `duplicate_entity` | `entity`, result `id`; optional `name` |
 | `delete_entity` | `entity` |
 | `rename_entity` | `entity`, `name`; uses the production Hierarchy rename transaction |
@@ -103,6 +104,7 @@ scenario-local aliases.
 | `create_prefab` | `entity`, project-relative `path` |
 | `instantiate_prefab` | result `id`, project-relative `path`, `virtual_path`; optional `parent` or complete `x`,`y`,`z`, and optional `name` |
 | `select_entity` | `entity` |
+| `assert_selected_entity` | `entity`; verifies the primary Hierarchy selection without mutating it |
   | `add_component` | `entity`, `component` |
   | `terrain_stamp` | Terrain `entity`, local `x`, `z`; optional `radius`, `strength`, `falloff`, `pressure`; commits one production Undo/Redo stroke |
   | `assert_terrain_height` | Terrain `entity`, local `x`, `z`, expected `value`; optional `tolerance` |
@@ -141,13 +143,14 @@ scenario-local aliases.
 | `activate_input_context` | `asset`; optional `priority` |
 | `set_project_input_enabled` | `enabled` |
 | `set_plugin`, `assert_plugin` | catalog plugin `id`, `enabled` |
-| `assert_backend` | `backend` (`physics`, `audio`, `haptics`, `basic_lighting`), `available`; checks the live scene, not only project configuration |
+| `assert_backend` | `backend` (`physics`, `audio`, `haptics`, `particles`, `basic_lighting`), `available`; checks the live scene, not only project configuration |
 | `attach_script` | `entity`, `asset` |
 | `open_asset` | `asset` alias or virtual path |
 | `new_scene`, `reload_scene` | none |
-| `save_scene`, `open_scene` | `path` |
+| `save_scene`, `open_scene` | optional `path`; `save_scene` also accepts a positive `max_ms` budget |
+| `advance_autosave` | positive `seconds`; advances the production autosave clock and requires a dirty scene to be persisted with a visible success notification |
 | `undo`, `redo` | optional `restore_entity` alias refreshed from the selected restored entity |
-| `play`, `stop` | none |
+| `play`, `pause`, `stop` | none; `pause` toggles pause/resume for an active Play session |
 | `key` | `key`, `down`; optional `gamepad` |
 | `analog` | `key`, `value`; optional `gamepad` |
 | `pointer` | `x`, `y` |
