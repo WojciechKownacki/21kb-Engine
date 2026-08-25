@@ -1040,6 +1040,8 @@ bool EditorHeadlessAutomation::VerifyParticlePickerInteraction() {
     bool draggableHeader = false;
     bool pickerCaptured = false;
     bool pickerAnimationCaptured = false;
+    std::size_t visiblePosterTicks = 0U;
+    bool visiblePostersReady = false;
     if (picker != nullptr) {
         RECT pickerBounds{};
         static_cast<void>(GetWindowRect(picker, &pickerBounds));
@@ -1056,8 +1058,7 @@ bool EditorHeadlessAutomation::VerifyParticlePickerInteraction() {
         // that the production message loop advances between paints.
         static_cast<void>(RedrawWindow(
             picker, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW));
-        const kb::assets::AssetMetadata* animationAsset = nullptr;
-        std::string animationAssetName;
+        std::vector<const kb::assets::AssetMetadata*> recipeAssets;
         for (const kb::assets::AssetMetadata& candidate :
              context_.Scene().Assets().Manager().Registry().All()) {
             if (candidate.type != kb::scene::kParticleEffectAssetType ||
@@ -1065,23 +1066,31 @@ bool EditorHeadlessAutomation::VerifyParticlePickerInteraction() {
                     "/21kbParticle/Recipes") {
                 continue;
             }
-            const std::string displayName = !candidate.name.empty()
-                ? candidate.name
-                : candidate.virtualPath.stem().string();
-            if (animationAsset == nullptr ||
-                displayName < animationAssetName ||
-                (displayName == animationAssetName &&
-                    candidate.id.value < animationAsset->id.value)) {
-                animationAsset = &candidate;
-                animationAssetName = displayName;
-            }
+            recipeAssets.push_back(&candidate);
         }
+        std::ranges::sort(
+            recipeAssets,
+            [](const kb::assets::AssetMetadata* left,
+               const kb::assets::AssetMetadata* right) {
+                const std::string leftName = !left->name.empty()
+                    ? left->name
+                    : left->virtualPath.stem().string();
+                const std::string rightName = !right->name.empty()
+                    ? right->name
+                    : right->virtualPath.stem().string();
+                return leftName != rightName
+                    ? leftName < rightName
+                    : left->id.value < right->id.value;
+            });
+        const kb::assets::AssetMetadata* animationAsset =
+            recipeAssets.empty() ? nullptr : recipeAssets.front();
         if (animationAsset != nullptr) {
             static_cast<void>(
                 EditorParticleThumbnailCache().ThumbnailForTime(
                     *animationAsset, 0.0));
         }
         constexpr RECT thumbnailStaging{632, 344, 640, 352};
+        constexpr std::size_t kVisibleRecipeProbeCount = 5U;
         for (int tick = 0;
              tick < 512 && animationAsset != nullptr &&
              EditorParticleThumbnailCache().AnimationFrameCount(
@@ -1092,6 +1101,17 @@ bool EditorHeadlessAutomation::VerifyParticlePickerInteraction() {
                 thumbnailStaging));
             static_cast<void>(SendMessageW(
                 picker, WM_TIMER, 1U, 0));
+            const std::size_t probeCount = std::min(
+                kVisibleRecipeProbeCount, recipeAssets.size());
+            visiblePostersReady = probeCount ==
+                kVisibleRecipeProbeCount;
+            for (std::size_t probe = 0U; probe < probeCount; ++probe) {
+                if (EditorParticleThumbnailCache().ThumbnailForTime(
+                        *recipeAssets[probe], 0.0) == nullptr) {
+                    visiblePostersReady = false;
+                }
+            }
+            if (!visiblePostersReady) ++visiblePosterTicks;
             Sleep(1U);
         }
         static_cast<void>(RedrawWindow(
@@ -1183,6 +1203,7 @@ bool EditorHeadlessAutomation::VerifyParticlePickerInteraction() {
             EditorParticleThumbnailCache().AnimationFrameForTime(
                 *animationAsset, 0.1);
         pickerAnimationCaptured = pickerCaptured && nextFrameCaptured &&
+            visiblePostersReady && visiblePosterTicks <= 128U &&
             timelineAdvanced &&
             fileHash(firstAnimationFrame) !=
                 fileHash(nextAnimationFrame);
@@ -1256,6 +1277,8 @@ bool EditorHeadlessAutomation::VerifyParticlePickerInteraction() {
            << ";floating=" << draggableHeader
            << ";captured=" << pickerCaptured
            << ";animated=" << pickerAnimationCaptured
+           << ";visible-posters=" << visiblePostersReady
+           << ";poster-ticks=" << visiblePosterTicks
            << ";single-select=" << singleClickDidNotAccept
            << ";double-accept=" << doubleClickAccepted
            << ";closed=" << (picker == nullptr || IsWindow(picker) == 0)
