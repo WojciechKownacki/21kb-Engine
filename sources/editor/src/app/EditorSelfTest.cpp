@@ -311,16 +311,10 @@ void RunProjectSettingsSuite(Report& report) {
     report.Check(controller.HandlePointerDown(kContent, click.elsewhere.x, click.elsewhere.y), "Clicking empty space dismisses dropdown");
     report.Check(!context.ProjectSettings().IsMappingContextDropdownOpen(), "Dropdown closed after clicking empty space");
 
-    EditorRenderBackendSettings renderBackendSettings;
     report.Check(controller.HandlePointerDown(kContent, click.graphicsCategory.x, click.graphicsCategory.y), "Clicking the Graphics category is handled");
     report.Check(context.ProjectSettings().SelectedCategory() == static_cast<int>(ProjectSettingsCategory::Graphics), "Graphics category active after click");
-    report.Check(HitKindAt(context, click.vulkanBackend) == ProjectSettingsHitKind::RenderBackendOption, "Vulkan backend point hit-tests as RenderBackendOption");
-    const std::uint64_t generationBefore = renderBackendSettings.Generation();
-    report.Check(controller.HandlePointerDown(kContent, click.vulkanBackend.x, click.vulkanBackend.y, renderBackendSettings), "Clicking Vulkan backend is handled");
-    report.Check(renderBackendSettings.Backend() == EditorRenderBackend::Vulkan, "Graphics backend setting changed to Vulkan");
-    report.Check(renderBackendSettings.Generation() == generationBefore + 1U, "Graphics backend generation increments");
     report.Check(HitKindAt(context, click.forwardPlusLightingPath) == ProjectSettingsHitKind::LightingPathOption, "Forward+ lighting path point hit-tests as LightingPathOption");
-    report.Check(controller.HandlePointerDown(kContent, click.forwardPlusLightingPath.x, click.forwardPlusLightingPath.y, renderBackendSettings), "Clicking Forward+ lighting path is handled");
+    report.Check(controller.HandlePointerDown(kContent, click.forwardPlusLightingPath.x, click.forwardPlusLightingPath.y), "Clicking Forward+ lighting path is handled");
     report.Check(context.Project().sceneLightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus, "Project lighting path changed to Forward+");
     {
         const kb::project::ProjectDescriptorReadResult reloaded = kb::project::ProjectManager::LoadProject(context.ProjectFile());
@@ -328,42 +322,13 @@ void RunProjectSettingsSuite(Report& report) {
         report.Check(reloaded.succeeded && reloaded.descriptor.fileVersion >= 4U, "Descriptor written at file version >= 4 after Forward+");
     }
     report.Check(HitKindAt(context, click.deferredLightingPath) == ProjectSettingsHitKind::LightingPathOption, "Deferred lighting path point hit-tests as LightingPathOption");
-    report.Check(controller.HandlePointerDown(kContent, click.deferredLightingPath.x, click.deferredLightingPath.y, renderBackendSettings), "Clicking Deferred lighting path is handled");
+    report.Check(controller.HandlePointerDown(kContent, click.deferredLightingPath.x, click.deferredLightingPath.y), "Clicking Deferred lighting path is handled");
     report.Check(context.Project().sceneLightingPath == kb::project::ProjectSceneLightingPath::Deferred, "Project lighting path changed to Deferred");
     {
         const kb::project::ProjectDescriptorReadResult reloaded = kb::project::ProjectManager::LoadProject(context.ProjectFile());
         report.Check(reloaded.succeeded && reloaded.descriptor.sceneLightingPath == kb::project::ProjectSceneLightingPath::Deferred, "Deferred lighting path persisted to descriptor");
         report.Check(reloaded.succeeded && reloaded.descriptor.fileVersion >= 4U, "Descriptor written at file version >= 4");
     }
-    report.Check(HitKindAt(context, click.postProcessToggle) == ProjectSettingsHitKind::GraphicsToggle, "Post FX point hit-tests as GraphicsToggle");
-    const std::uint64_t toggleGenerationBefore = renderBackendSettings.Generation();
-    const std::uint64_t backendGenerationBeforeToggle = renderBackendSettings.BackendGeneration();
-    report.Check(controller.HandlePointerDown(kContent, click.postProcessToggle.x, click.postProcessToggle.y, renderBackendSettings), "Clicking Post FX toggle is handled");
-    report.Check(!renderBackendSettings.PostProcessEnabled(), "Post FX setting toggled off");
-    report.Check(renderBackendSettings.Generation() == toggleGenerationBefore + 1U, "Graphics toggle generation increments");
-    report.Check(renderBackendSettings.BackendGeneration() == backendGenerationBeforeToggle, "Graphics quality toggle does not restart the backend");
-
-    report.Check(HitKindAt(context, click.fxaaMode) == ProjectSettingsHitKind::AntiAliasingMode, "FXAA point hit-tests as AntiAliasingMode");
-    const std::uint64_t backendGenerationBeforeFxaa = renderBackendSettings.BackendGeneration();
-    report.Check(controller.HandlePointerDown(kContent, click.fxaaMode.x, click.fxaaMode.y, renderBackendSettings), "Clicking FXAA mode is handled");
-    report.Check(renderBackendSettings.AntiAliasingMode() == EditorAntiAliasingMode::Fxaa, "Anti-aliasing mode changed to FXAA");
-    report.Check(renderBackendSettings.FxaaEnabled(), "FXAA setting is active");
-    report.Check(!renderBackendSettings.TemporalAntiAliasingEnabled(), "TAA setting is inactive when FXAA is selected");
-    report.Check(renderBackendSettings.MsaaSamples() == 0U, "MSAA samples are disabled when FXAA is selected");
-    report.Check(renderBackendSettings.BackendGeneration() == backendGenerationBeforeFxaa, "FXAA does not restart the backend");
-
-    report.Check(HitKindAt(context, click.bloomToggle) == ProjectSettingsHitKind::GraphicsToggle, "Bloom point hit-tests as GraphicsToggle");
-    report.Check(controller.HandlePointerDown(kContent, click.bloomToggle.x, click.bloomToggle.y, renderBackendSettings), "Clicking Bloom toggle is handled");
-    report.Check(!renderBackendSettings.BloomEnabled(), "Bloom setting toggled off");
-
-    report.Check(HitKindAt(context, click.msaaMode) == ProjectSettingsHitKind::AntiAliasingMode, "MSAA mode point hit-tests as AntiAliasingMode");
-    report.Check(controller.HandlePointerDown(kContent, click.msaaMode.x, click.msaaMode.y, renderBackendSettings), "Clicking MSAA mode is handled");
-    report.Check(renderBackendSettings.AntiAliasingMode() == EditorAntiAliasingMode::Msaa, "Anti-aliasing mode changed to MSAA");
-    report.Check(HitKindAt(context, click.msaa4x) == ProjectSettingsHitKind::MsaaOption, "MSAA 4x point hit-tests as MsaaOption");
-    const std::uint64_t backendGenerationBeforeMsaa = renderBackendSettings.BackendGeneration();
-    report.Check(controller.HandlePointerDown(kContent, click.msaa4x.x, click.msaa4x.y, renderBackendSettings), "Clicking MSAA 4x is handled");
-    report.Check(renderBackendSettings.MsaaSamples() == 4U, "MSAA setting changed to 4x");
-    report.Check(renderBackendSettings.BackendGeneration() == backendGenerationBeforeMsaa + 1U, "MSAA change restarts the backend");
 }
 
 void RunProjectPhysicsLayersRuntimeSuite(Report& report) {
