@@ -16,6 +16,7 @@ public:
     [[nodiscard]] static std::filesystem::path ScenesRoot();
     [[nodiscard]] static std::filesystem::path PrefabsRoot();
     [[nodiscard]] static std::filesystem::path DefaultScenePath();
+    [[nodiscard]] static std::filesystem::path EditorSettingsFile();
     [[nodiscard]] static std::filesystem::path UniquePrefabPath(std::string name);
     [[nodiscard]] static std::filesystem::path UniquePrefabPathInFolder(const std::filesystem::path& folder, std::string name);
     [[nodiscard]] static std::filesystem::path UniqueScenePath(std::string name);

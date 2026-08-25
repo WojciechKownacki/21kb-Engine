@@ -22,6 +22,7 @@ enum class DockPanelKind : std::uint8_t {
     Assets,
     Console,
     ProjectSettings,
+    EditorSettings,
     ScriptEditor,
     Plugins,
     MaterialEditor,

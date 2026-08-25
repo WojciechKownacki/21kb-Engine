@@ -81,6 +81,7 @@ add_executable(kb_editor WIN32
     src/app/project_files/EditorProjectFilesMouseWheelController.cpp
     src/app/project_files/EditorProjectFilesTransientUiController.cpp
     src/app/project_settings/EditorProjectSettingsPointerController.cpp
+    src/app/editor_settings/EditorSettingsPointerController.cpp
     src/app/scene_viewport/EditorSceneViewportCameraController.cpp
     src/app/scene_viewport/EditorSceneViewportGizmoDragSolver.cpp
     src/app/scene_viewport/EditorTerrainViewportInteraction.cpp
@@ -343,6 +344,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorPrefabAssetProjectFilesDropHandler.hpp
     src/private/app/panels/EditorPanelPointerHitContext.hpp
     src/private/app/project_settings/EditorProjectSettingsPointerController.hpp
+    src/private/app/editor_settings/EditorSettingsPointerController.hpp
     src/private/app/pointer/EditorLeftButtonDoubleClickRouter.hpp
     src/private/app/pointer/EditorLeftButtonDownRouter.hpp
     src/private/app/pointer/EditorLeftButtonUpRouter.hpp
@@ -578,6 +580,8 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorPluginCatalog.hpp
     src/private/scene/EditorPluginsState.hpp
     src/private/scene/EditorProjectSettingsState.hpp
+    src/private/settings/EditorSettingsState.hpp
+    src/private/settings/EditorSettingsStore.hpp
     src/private/scene/EditorScriptAssetGateway.hpp
     src/private/scene/EditorScriptEditorState.hpp
     src/private/scene/EditorSceneAssetBrowserCommands.hpp
@@ -749,6 +753,8 @@ add_executable(kb_editor WIN32
     src/rendering/PluginsPanelRenderer.cpp
     src/rendering/ProjectSettingsPanelLayout.cpp
     src/rendering/ProjectSettingsPanelRenderer.cpp
+    src/rendering/EditorSettingsPanelRenderer.cpp
+    src/private/rendering/EditorSettingsPanelRenderer.hpp
     src/rendering/EditorScriptEditorOverlay.cpp
     src/rendering/script_editor/LuaSyntaxHighlighter.cpp
     src/rendering/script_editor/ScriptEditorClipboard.cpp
@@ -832,6 +838,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorScenePrefabActions.cpp
     src/scene/EditorSceneSelectionPivot.cpp
     src/scene/EditorSceneViewportStateStore.cpp
+    src/settings/EditorSettingsStore.cpp
     src/scene/EditorViewportCameraState.cpp
     src/scene/EditorViewportPreviewState.cpp
     src/scene/material/EditorMaterialAssetAuthoring.cpp
@@ -1095,6 +1102,7 @@ if(BUILD_TESTING)
         tests/EditorMaterialGraphCookServiceTests.cpp
         tests/EditorDockingTests.cpp
         tests/EditorProjectTests.cpp
+        tests/EditorSettingsTests.cpp
         tests/EditorInspectorTests.cpp
         tests/EditorMaterialAssetAuthoringTests.cpp
         tests/EditorMaterialGraphCanvasTests.cpp
@@ -1150,6 +1158,7 @@ if(BUILD_TESTING)
         src/docking/EditorDockModelCommands.cpp
         src/docking/EditorDockModelQueries.cpp
         src/scene/ParticleEditorHostSessionStore.cpp
+        src/settings/EditorSettingsStore.cpp
         src/rendering/SvgPathArcMath.cpp
         src/rendering/SvgPathCursor.cpp
         src/assets/EditorAssetBrowserAssetRows.cpp

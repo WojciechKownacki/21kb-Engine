@@ -83,6 +83,16 @@ void ActivateProjectSettingsPanel(HWND mainWindow, EditorDockModel& dockModel) {
     }
 }
 
+void ActivateEditorSettingsPanel(HWND mainWindow, EditorDockModel& dockModel) {
+    for (const DockPanel& panel : dockModel.Queries().Panels()) {
+        if (panel.kind == DockPanelKind::EditorSettings) {
+            dockModel.Commands().ActivatePanel(panel.id);
+            InvalidateRect(mainWindow, nullptr, FALSE);
+            return;
+        }
+    }
+}
+
 void ActivatePluginsPanel(HWND mainWindow, EditorDockModel& dockModel) {
     for (const DockPanel& panel : dockModel.Queries().Panels()) {
         if (panel.kind == DockPanelKind::Plugins) {
@@ -166,6 +176,8 @@ void ActivatePluginsPanel(HWND mainWindow, EditorDockModel& dockModel) {
         } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Options) {
             if (*row == 2) {
                 ActivateProjectSettingsPanel(mainWindow, dockModel);
+            } else if (*row == 3) {
+                ActivateEditorSettingsPanel(mainWindow, dockModel);
             }
         }
         const EditorMenuCommand oldMenu = shellInteraction.OpenMenu();

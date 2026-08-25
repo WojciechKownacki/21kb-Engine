@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <string>
 #include <utility>
 
@@ -16,6 +17,15 @@ class EditorAutosaveState final {
 public:
     static constexpr double IntervalSeconds = 10.0 * 60.0;
     static constexpr double NotificationSeconds = 4.0;
+
+    void Configure(bool enabled, std::uint32_t intervalMinutes) noexcept {
+        enabled_ = enabled;
+        intervalSeconds_ = static_cast<double>(std::clamp(intervalMinutes, 1U, 120U)) * 60.0;
+        elapsedSinceSave_ = std::min(elapsedSinceSave_, intervalSeconds_);
+    }
+
+    [[nodiscard]] bool Enabled() const noexcept { return enabled_; }
+    [[nodiscard]] double ConfiguredIntervalSeconds() const noexcept { return intervalSeconds_; }
 
     [[nodiscard]] EditorAutosaveTickResult Tick(
         double elapsedSeconds,
@@ -35,10 +45,12 @@ public:
             }
         }
 
+        if (!enabled_) return result;
+
         elapsedSinceSave_ = std::min(
-            IntervalSeconds,
+            intervalSeconds_,
             elapsedSinceSave_ + elapsedSeconds);
-        if (elapsedSinceSave_ < IntervalSeconds || !saveEligible) {
+        if (elapsedSinceSave_ < intervalSeconds_ || !saveEligible) {
             return result;
         }
 
@@ -76,10 +88,12 @@ public:
     }
 
 private:
+    double intervalSeconds_ = IntervalSeconds;
     double elapsedSinceSave_ = 0.0;
     double notificationSecondsRemaining_ = 0.0;
     std::string notificationText_;
     bool notificationSucceeded_ = true;
+    bool enabled_ = true;
 };
 
 } // namespace kb::editor

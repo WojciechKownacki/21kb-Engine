@@ -272,6 +272,9 @@ FindInspectorHit(
     if (panel == "project_settings") {
         return DockPanelKind::ProjectSettings;
     }
+    if (panel == "editor_settings") {
+        return DockPanelKind::EditorSettings;
+    }
     if (panel == "script_editor") {
         return DockPanelKind::ScriptEditor;
     }

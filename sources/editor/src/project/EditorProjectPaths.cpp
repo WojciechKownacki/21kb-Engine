@@ -101,6 +101,10 @@ std::filesystem::path EditorProjectPaths::DefaultScenePath() {
     return ScenesRoot() / "Main.21kbscene";
 }
 
+std::filesystem::path EditorProjectPaths::EditorSettingsFile() {
+    return ProjectRoot() / ".21kb" / "EditorSettings.txt";
+}
+
 std::filesystem::path EditorProjectPaths::UniquePrefabPath(std::string name) {
     return UniquePrefabPathInFolder(PrefabsRoot(), std::move(name));
 }

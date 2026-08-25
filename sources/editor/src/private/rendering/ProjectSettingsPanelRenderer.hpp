@@ -1,7 +1,6 @@
 #pragma once
 
 #include "kb/editor/theme/EditorTheme.hpp"
-#include "rendering/EditorRenderBackendSettings.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #if defined(_WIN32)
@@ -15,9 +14,8 @@
 namespace kb::editor {
 
 #if defined(_WIN32)
-// Interactive controls exposed by the Project Settings panel. The panel is
-// intentionally minimal (UE "Project Settings > Input" feel): the active mapping
-// context is a project-wide setting, not a per-entity component.
+// Interactive controls exposed by the Project Settings panel. Values in this
+// surface are project-wide rather than per-entity or per-workstation.
 enum class ProjectSettingsHitKind : std::uint8_t {
     None,
     CategoryItem,         // A row in the left category sidebar (see Hit::index).
@@ -26,11 +24,7 @@ enum class ProjectSettingsHitKind : std::uint8_t {
     PhysicsLayersField,
     PhysicsLayersOption,
     EnabledCheckbox,
-    RenderBackendOption,
     LightingPathOption,
-    AntiAliasingMode,
-    GraphicsToggle,
-    MsaaOption,
 };
 
 // Categories shown in the left sidebar. Add entries here as the panel grows;
@@ -56,8 +50,7 @@ public:
         HDC dc,
         const RECT& content,
         const EditorTheme& theme,
-        const EditorSceneContext& sceneContext,
-        const EditorRenderBackendSettings& renderBackendSettings) const;
+        const EditorSceneContext& sceneContext) const;
     [[nodiscard]] static Hit HitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y);
     [[nodiscard]] static Hit TooltipHitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y);
 #endif

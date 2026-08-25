@@ -9,15 +9,7 @@ enum class ProjectSettingsTooltipKind : std::uint8_t {
     MappingContext,
     PhysicsLayers,
     InputEnabled,
-    RenderBackend,
     LightingPath,
-    PostProcess,
-    AntiAliasing,
-    MsaaSamples,
-    Bloom,
-    Shadows,
-    SelectionOutline,
-    GpuDriven,
 };
 
 // Transient UI state for the Project Settings panel: which category is selected

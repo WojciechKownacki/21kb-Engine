@@ -80,6 +80,13 @@ public:
     [[nodiscard]] const EditorViewportPreviewState& Preview() const noexcept;
     [[nodiscard]] EditorViewportPreviewState& Preview(std::uint64_t viewportKey) noexcept;
     [[nodiscard]] const EditorViewportPreviewState& Preview(std::uint64_t viewportKey) const noexcept;
+    [[nodiscard]] const EditorViewportPreviewState& PreviewDefaults() const noexcept { return previewDefaults_; }
+    void ConfigurePreviewDefaults(
+        bool gridVisible,
+        float gridSpacing,
+        bool snapEnabled,
+        float snapStep,
+        float rotationSnapDegrees) noexcept;
 
     [[nodiscard]] EditorViewportCameraState& Camera() noexcept;
     [[nodiscard]] const EditorViewportCameraState& Camera() const noexcept;
@@ -113,6 +120,7 @@ public:
 
 private:
     mutable std::unordered_map<std::uint64_t, EditorViewportPreviewState> previews_;
+    EditorViewportPreviewState previewDefaults_{};
     mutable std::unordered_map<std::uint64_t, EditorViewportCameraState> cameras_;
     EditorSceneGizmoState gizmo_;
     std::uint64_t activeCameraKey_ = 0U;
