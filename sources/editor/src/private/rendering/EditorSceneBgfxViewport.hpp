@@ -106,6 +106,11 @@ public:
     void SetAllHostSurfacesSuspended(bool suspended) noexcept;
     void NotifyHostDpiChanged(HWND host) noexcept;
     void ReleaseScene(const kb::scene::Scene& scene) noexcept;
+    [[nodiscard]] std::uint32_t RendererCompletedFrame() const noexcept;
+    // Advances renderer-owned asynchronous readbacks without rebuilding or
+    // submitting a scene. Used only when no visible viewport advanced the
+    // renderer since the previous poll.
+    [[nodiscard]] bool AdvanceAsyncReadbacks();
     void Shutdown();
     void BeginPaintLayout() noexcept;
     void BeginPaintLayout(HWND parent) noexcept;

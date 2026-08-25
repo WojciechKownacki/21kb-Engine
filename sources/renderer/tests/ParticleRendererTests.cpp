@@ -292,10 +292,45 @@ void TestAllBlendAndOutputContracts() {
             basis.up == std::array<float, 3>{0.0F, 1.0F, 0.0F} &&
             basis.forward == std::array<float, 3>{0.0F, 0.0F, 1.0F},
         "degenerate velocity alignment did not fall back to camera-facing at epsilon 1e-5");
+    particle.velocity = {0.0F, 1.0F, 1.0F};
+    const auto firstVelocityBasis =
+        kb::render::ResolveParticleAlignmentBasis(alignmentEmitter, particle, camera);
+    auto rotatedCamera = IdentityCamera();
+    rotatedCamera.view = {
+        0.0F, 0.0F, 1.0F, 0.0F,
+        0.0F, 1.0F, 0.0F, 0.0F,
+        -1.0F, 0.0F, 0.0F, 0.0F,
+        0.0F, 0.0F, 0.0F, 1.0F};
+    const auto rotatedVelocityBasis =
+        kb::render::ResolveParticleAlignmentBasis(
+            alignmentEmitter, particle, rotatedCamera);
+    Require(firstVelocityBasis.up == rotatedVelocityBasis.up &&
+            std::fabs(firstVelocityBasis.up[1] - 0.70710677F) < 0.0001F &&
+            std::fabs(firstVelocityBasis.up[2] - 0.70710677F) < 0.0001F,
+        "velocity-aligned particle axis changed with the camera instead of remaining in world space");
+
+    const std::array worldParticles{particle};
+    const std::array worldEmitters{alignmentEmitter};
+    const auto worldSnapshot = Snapshot(worldEmitters, worldParticles);
+    kb::render::ParticleRenderBatcher worldBatcher;
+    worldBatcher.Warmup(1U);
+    const auto firstWorldBuild = worldBatcher.Build(*worldSnapshot, camera);
+    Require(firstWorldBuild.Succeeded() && firstWorldBuild.instances.size() == 1U,
+        "world-space particle regression setup did not build an instance");
+    const auto firstWorldCenter = firstWorldBuild.instances.front().positionSize;
+    const auto rotatedWorldBuild = worldBatcher.Build(*worldSnapshot, rotatedCamera);
+    Require(rotatedWorldBuild.Succeeded() && rotatedWorldBuild.instances.size() == 1U &&
+            rotatedWorldBuild.instances.front().positionSize == firstWorldCenter,
+        "particle instance center changed when only the camera changed");
+
     alignmentEmitter.alignment = kb::particles::ParticleRenderAlignment::WorldUp;
     basis = kb::render::ResolveParticleAlignmentBasis(alignmentEmitter, particle, camera);
-    Require(std::fabs(basis.up[1] - 1.0F) < 0.0001F,
-        "world-up alignment was not orthonormalized against camera forward");
+    const auto rotatedWorldUpBasis =
+        kb::render::ResolveParticleAlignmentBasis(
+            alignmentEmitter, particle, rotatedCamera);
+    Require(basis.up == std::array<float, 3>{0.0F, 1.0F, 0.0F} &&
+            rotatedWorldUpBasis.up == basis.up,
+        "world-up particle axis changed with the camera");
     alignmentEmitter.alignment = kb::particles::ParticleRenderAlignment::Local;
     alignmentEmitter.localBasisQuaternionSnorm = {};
     basis = kb::render::ResolveParticleAlignmentBasis(alignmentEmitter, particle, camera);

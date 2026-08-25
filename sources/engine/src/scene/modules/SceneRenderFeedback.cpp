@@ -238,6 +238,18 @@ std::uint64_t SceneRenderFeedback::RequestScreenCapture(Scene& scene, std::strin
     const std::uint64_t id = state.nextScreenCaptureId++;
     state.pendingScreenCaptureId = id;
     state.pendingScreenCapturePath.assign(path);
+    state.pendingScreenCaptureReturnsPixels = false;
+    state.pendingScreenCaptureConsumed = false;
+    return id;
+}
+
+std::uint64_t SceneRenderFeedback::RequestScreenCapturePixels(Scene& scene) {
+    SceneState& state = SceneAccess::State(scene);
+    if (state.pendingScreenCaptureId != 0U) return 0U;
+    const std::uint64_t id = state.nextScreenCaptureId++;
+    state.pendingScreenCaptureId = id;
+    state.pendingScreenCapturePath.clear();
+    state.pendingScreenCaptureReturnsPixels = true;
     state.pendingScreenCaptureConsumed = false;
     return id;
 }
@@ -256,6 +268,21 @@ SceneScreenCaptureStatus SceneRenderFeedback::ScreenCaptureStatus(const Scene& s
     return SceneScreenCaptureStatus::Unknown;
 }
 
+std::optional<SceneScreenCapturePixels>
+SceneRenderFeedback::TakeScreenCapturePixels(
+    Scene& scene, std::uint64_t id) {
+    SceneState& state = SceneAccess::State(scene);
+    if (id == 0U || id != state.lastScreenCaptureId ||
+        !state.lastScreenCaptureSucceeded ||
+        !state.lastScreenCapturePixels.has_value()) {
+        return std::nullopt;
+    }
+    std::optional<SceneScreenCapturePixels> pixels{
+        std::move(*state.lastScreenCapturePixels)};
+    state.lastScreenCapturePixels.reset();
+    return pixels;
+}
+
 SceneScreenCaptureRequest SceneRenderFeedback::PeekScreenCaptureRequest(const Scene& scene) noexcept {
     const SceneState& state = SceneAccess::State(scene);
     if (state.pendingScreenCaptureId == 0U || state.pendingScreenCaptureConsumed) {
@@ -264,6 +291,7 @@ SceneScreenCaptureRequest SceneRenderFeedback::PeekScreenCaptureRequest(const Sc
     return SceneScreenCaptureRequest{
         .id = state.pendingScreenCaptureId,
         .path = state.pendingScreenCapturePath,
+        .returnPixels = state.pendingScreenCaptureReturnsPixels,
     };
 }
 
@@ -281,9 +309,33 @@ void SceneRenderFeedback::CompleteScreenCapture(Scene& scene, std::uint64_t id, 
     }
     state.pendingScreenCaptureId = 0U;
     state.pendingScreenCapturePath.clear();
+    state.pendingScreenCaptureReturnsPixels = false;
     state.pendingScreenCaptureConsumed = false;
     state.lastScreenCaptureId = id;
     state.lastScreenCaptureSucceeded = succeeded;
+    state.lastScreenCapturePixels.reset();
+}
+
+void SceneRenderFeedback::CompleteScreenCapturePixels(
+    Scene& scene,
+    std::uint64_t id,
+    SceneScreenCapturePixels pixels) noexcept {
+    SceneState& state = SceneAccess::State(scene);
+    if (id == 0U || id != state.pendingScreenCaptureId) {
+        return;
+    }
+    if (!state.pendingScreenCaptureReturnsPixels || pixels.width == 0U ||
+        pixels.height == 0U || pixels.bytes.empty()) {
+        CompleteScreenCapture(scene, id, false);
+        return;
+    }
+    state.pendingScreenCaptureId = 0U;
+    state.pendingScreenCapturePath.clear();
+    state.pendingScreenCaptureReturnsPixels = false;
+    state.pendingScreenCaptureConsumed = false;
+    state.lastScreenCaptureId = id;
+    state.lastScreenCaptureSucceeded = true;
+    state.lastScreenCapturePixels = std::move(pixels);
 }
 
 const SceneRenderVisibilityEntry* SceneRenderFeedback::FindEntry(const Scene& scene, SceneEntity entity) noexcept {
