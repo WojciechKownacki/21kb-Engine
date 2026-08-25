@@ -23,6 +23,7 @@
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "rendering/EditorTexturePreviewService.hpp"
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/GdiBackBufferRenderer.hpp"
 #include "rendering/HeroIconKind.hpp"
 #include "rendering/HeroIconPainter.hpp"
 #include "rendering/MaterialPreviewTextureAverageColor.hpp"
@@ -36,6 +37,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstring>
 #include <functional>
 #include <string>
@@ -75,7 +77,7 @@ constexpr int kAssetTileGap = 12;
 constexpr int kAssetTileColumns = 3;
 constexpr UINT_PTR kMaterialThumbnailTimerId = 1U;
 constexpr UINT kMaterialThumbnailTimerPeriodMs = 33U;
-constexpr std::uint64_t kParticleAnimationTicksPerFrame = 2U;
+constexpr UINT kParticleAnimationTimerPeriodMs = 16U;
 
 struct AssetPickerRow {
     kb::assets::AssetId assetId{};
@@ -395,6 +397,11 @@ void DrawRenderedMaterialThumbnail(
     DeleteDC(sourceDc);
 }
 
+[[nodiscard]] bool Intersects(const RECT& lhs, const RECT& rhs) noexcept {
+    return lhs.left < rhs.right && lhs.right > rhs.left &&
+        lhs.top < rhs.bottom && lhs.bottom > rhs.top;
+}
+
 void DrawParticleThumbnail(
     HDC dc,
     const RECT& target,
@@ -516,7 +523,10 @@ public:
         if (!EnsureWindow()) return false;
         deleteOnDestroy_ = true;
         lastParticleThumbnailRevision_ = EditorParticleThumbnailCache().Revision();
-        static_cast<void>(SetTimer(window_, kMaterialThumbnailTimerId, kMaterialThumbnailTimerPeriodMs, nullptr));
+        particleAnimationEpoch_ = std::chrono::steady_clock::now();
+        particleAnimationFrames_.clear();
+        particleAnimationStartSeconds_.clear();
+        static_cast<void>(SetTimer(window_, kMaterialThumbnailTimerId, kParticleAnimationTimerPeriodMs, nullptr));
         const RECT bounds = CenteredWindowRect(owner, DialogWidth(), DialogHeight());
         SetWindowPos(
             window_, HWND_TOP,
@@ -904,6 +914,17 @@ private:
         return Rect(left, top, left + kAssetTileWidth, top + kAssetTileHeight);
     }
 
+    [[nodiscard]] RECT TileGridPreviewRect(
+        const RECT& viewport,
+        int index) const noexcept {
+        const RECT tile = TileGridRect(viewport, index);
+        return Rect(
+            tile.left + 7,
+            tile.top + 7,
+            tile.right - 7,
+            tile.top + 5 + kAssetTilePreviewHeight);
+    }
+
     [[nodiscard]] int TileGridAt(int x, int y) const noexcept {
         const RECT viewport = TileGridViewportRect();
         if (!Contains(viewport, x, y)) {
@@ -1030,11 +1051,16 @@ private:
         if (asset != nullptr && tileKind_ == AssetPickerTileKind::Particle && assetManager_ != nullptr) {
             const kb::assets::AssetMetadata* metadata = assetManager_->Registry().Find(asset->assetId);
             if (metadata != nullptr) {
+                double assetElapsedSeconds = 0.0;
+                if (const auto started = particleAnimationStartSeconds_.find(
+                        asset->assetId.value);
+                    started != particleAnimationStartSeconds_.end()) {
+                    assetElapsedSeconds = std::max(
+                        0.0, particleAnimationSeconds_ - started->second);
+                }
                 const EditorParticleThumbnailImage* preview =
-                    EditorParticleThumbnailCache().ThumbnailFor(
-                        *metadata,
-                        particleAnimationTick_ /
-                            kParticleAnimationTicksPerFrame);
+                    EditorParticleThumbnailCache().ThumbnailForTime(
+                        *metadata, assetElapsedSeconds);
                 if (preview != nullptr) {
                     DrawParticleThumbnail(dc, GdiDrawing::Inset(image, 1), *preview);
                     drewPreview = true;
@@ -1071,7 +1097,7 @@ private:
             theme_);
     }
 
-    void PaintTileGrid(HDC dc) const {
+    void PaintTileGrid(HDC dc, const RECT& dirty) const {
         const RECT client = Client();
         const RECT close = CloseButton();
         EditorDialogStyle::PaintSurface(dc, client, theme_);
@@ -1095,6 +1121,7 @@ private:
             if (tile.bottom < viewport.top || tile.top > viewport.bottom) {
                 continue;
             }
+            if (!Intersects(tile, dirty)) continue;
             PaintTileGridItem(dc, tile, index, index == selectedTile, hoveredRow_ == index);
         }
         if (RowCount() == 0) {
@@ -1121,13 +1148,13 @@ private:
             11);
     }
 
-    void Paint(HDC dc) const {
+    void Paint(HDC dc, const RECT& dirty) const {
         if (textureThumbnails_) {
             PaintTextureBrowser(dc);
             return;
         }
         if (tileKind_ != AssetPickerTileKind::None) {
-            PaintTileGrid(dc);
+            PaintTileGrid(dc, dirty);
             return;
         }
 
@@ -1359,6 +1386,61 @@ private:
         if (window_ == nullptr) {
             return;
         }
+        if (tileKind_ == AssetPickerTileKind::Particle) {
+            EditorParticleThumbnailService& thumbnails =
+                EditorParticleThumbnailCache();
+            particleAnimationSeconds_ = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() -
+                particleAnimationEpoch_).count();
+            const std::uint64_t revision = thumbnails.Revision();
+            const bool contentChanged =
+                revision != lastParticleThumbnailRevision_;
+            lastParticleThumbnailRevision_ = revision;
+            if (interactiveMove_ || assetManager_ == nullptr) return;
+
+            const RECT viewport = TileGridViewportRect();
+            for (int index = 0; index < RowCount(); ++index) {
+                const RECT tile = TileGridRect(viewport, index);
+                if (tile.bottom <= viewport.top ||
+                    tile.top >= viewport.bottom) {
+                    continue;
+                }
+                const AssetPickerRow* asset = AssetAtRow(index);
+                if (asset == nullptr) continue;
+                const kb::assets::AssetMetadata* metadata =
+                    assetManager_->Registry().Find(asset->assetId);
+                if (metadata == nullptr) continue;
+                const std::uint32_t frameCount =
+                    thumbnails.AnimationFrameCount(*metadata);
+                std::uint32_t frame = 0U;
+                if (frameCount > 1U) {
+                    const auto started =
+                        particleAnimationStartSeconds_.try_emplace(
+                            asset->assetId.value,
+                            particleAnimationSeconds_).first;
+                    frame = thumbnails.AnimationFrameForTime(
+                        *metadata,
+                        std::max(
+                            0.0,
+                            particleAnimationSeconds_ - started->second));
+                } else {
+                    particleAnimationStartSeconds_.erase(
+                        asset->assetId.value);
+                }
+                const auto previous = particleAnimationFrames_.find(
+                    asset->assetId.value);
+                const bool frameChanged =
+                    previous == particleAnimationFrames_.end() ||
+                    previous->second != frame;
+                particleAnimationFrames_[asset->assetId.value] = frame;
+                if (contentChanged || frameChanged) {
+                    const RECT preview = TileGridPreviewRect(
+                        viewport, index);
+                    InvalidateRect(window_, &preview, FALSE);
+                }
+            }
+            return;
+        }
         const RECT client = Client();
         const RECT staging{
             std::max(client.left, client.right - 8),
@@ -1366,26 +1448,6 @@ private:
             client.right,
             client.bottom,
         };
-        if (tileKind_ == AssetPickerTileKind::Particle) {
-            if (sceneContext_ == nullptr || sceneViewport_ == nullptr) return;
-            EditorParticleThumbnailService& thumbnails =
-                EditorParticleThumbnailCache();
-            if (!interactiveMove_ && thumbnails.HasPendingWork()) {
-                sceneViewport_->SetGraphShaderCacheRoot(
-                    sceneContext_->GraphShaderCacheRoot());
-                static_cast<void>(thumbnails.Tick(
-                    *sceneContext_, *sceneViewport_, window_, staging));
-            }
-            ++particleAnimationTick_;
-            const std::uint64_t revision = thumbnails.Revision();
-            if (revision != lastParticleThumbnailRevision_ ||
-                (particleAnimationTick_ %
-                    kParticleAnimationTicksPerFrame) == 0U) {
-                lastParticleThumbnailRevision_ = revision;
-                InvalidateRect(window_, nullptr, FALSE);
-            }
-            return;
-        }
         if (sceneContext_ == nullptr || sceneViewport_ == nullptr) return;
         EditorMaterialThumbnailService& thumbnails = EditorMaterialThumbnailCache();
         if (thumbnails.HasPendingWork()) {
@@ -1439,29 +1501,20 @@ private:
             if (picker != nullptr &&
                 picker->tileKind_ == AssetPickerTileKind::Particle) {
                 picker->interactiveMove_ = false;
+                InvalidateRect(window, nullptr, FALSE);
                 return 0;
             }
             break;
         case WM_PAINT: {
-            PAINTSTRUCT paint{};
-            HDC dc = BeginPaint(window, &paint);
-            if (picker != nullptr) {
-                // Double-buffer: render the whole dialog into an off-screen bitmap
-                // and blit once, so frequent hover repaints don't flicker.
-                RECT client{};
-                GetClientRect(window, &client);
-                const int width = client.right - client.left;
-                const int height = client.bottom - client.top;
-                HDC memDc = CreateCompatibleDC(dc);
-                HBITMAP memBitmap = CreateCompatibleBitmap(dc, width, height);
-                auto* oldBitmap = static_cast<HBITMAP>(SelectObject(memDc, memBitmap));
-                picker->Paint(memDc);
-                BitBlt(dc, 0, 0, width, height, memDc, 0, 0, SRCCOPY);
-                SelectObject(memDc, oldBitmap);
-                DeleteObject(memBitmap);
-                DeleteDC(memDc);
-            }
-            EndPaint(window, &paint);
+            GdiBackBufferRenderer::Paint(
+                window,
+                [](const GdiBackBufferPaintContext& paint, void* context) {
+                    auto* target = static_cast<AssetPickerWindow*>(context);
+                    if (target != nullptr) {
+                        target->Paint(paint.dc, paint.dirty);
+                    }
+                },
+                picker);
             return 0;
         }
         case WM_MOUSEMOVE:
@@ -1598,7 +1651,13 @@ private:
     mutable std::unordered_map<std::uint64_t, ProjectFilesMaterialPreviewImage> materialPreviews_;
     std::uint64_t lastMaterialThumbnailRevision_ = 0U;
     std::uint64_t lastParticleThumbnailRevision_ = 0U;
-    std::uint64_t particleAnimationTick_ = 0U;
+    std::chrono::steady_clock::time_point particleAnimationEpoch_ =
+        std::chrono::steady_clock::now();
+    double particleAnimationSeconds_ = 0.0;
+    std::unordered_map<std::uint64_t, std::uint32_t>
+        particleAnimationFrames_;
+    std::unordered_map<std::uint64_t, double>
+        particleAnimationStartSeconds_;
     EditorParticleEffectAssetPickerDialog::AcceptedCallback onAccepted_;
     bool deleteOnDestroy_ = false;
     bool acceptPending_ = false;

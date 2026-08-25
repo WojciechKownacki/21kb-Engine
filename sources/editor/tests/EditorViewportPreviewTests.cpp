@@ -27,6 +27,7 @@
 #include "rendering/EditorTexturePreviewService.hpp"
 #include "rendering/SceneViewportPresentationPolicy.hpp"
 #include "rendering/SceneViewportSceneSyncPolicy.hpp"
+#include "rendering/ParticleThumbnailTimeline.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLabelFormat.hpp"
 #include "scene/EditorViewportCameraState.hpp"
@@ -112,6 +113,83 @@ void RunSceneViewportSceneSyncPolicyTest() {
     kb::editor::tests::Require(
         structuralRuntimeChange.fullSync && !structuralRuntimeChange.runtimeTransformSync,
         "A runtime topology change must take precedence over affine-only synchronization");
+}
+
+void RunParticleThumbnailTimelineTest() {
+    using kb::editor::ParticleThumbnailTimeline;
+
+    const auto longLoop = ParticleThumbnailTimeline::Plan(6.0F, true);
+    kb::editor::tests::Require(
+        longLoop.simulationSteps == 360U &&
+            longLoop.frameCount == 144U,
+        "Particle thumbnail timeline did not preserve a full six-second lifecycle at 24 fps");
+    kb::editor::tests::Require(
+        ParticleThumbnailTimeline::CaptureStep(longLoop, 143U) >= 357U,
+        "Particle thumbnail timeline stopped before the end of a looping lifecycle");
+    kb::editor::tests::Require(
+        ParticleThumbnailTimeline::FrameAtSeconds(longLoop, 0.19) == 4U &&
+            ParticleThumbnailTimeline::FrameAtSeconds(longLoop, 6.19) == 4U,
+        "Particle thumbnail timeline did not loop by authored duration");
+
+    const auto oneShot = ParticleThumbnailTimeline::Plan(1.1F, false);
+    kb::editor::tests::Require(
+        oneShot.simulationSteps == 66U && oneShot.frameCount == 27U &&
+            ParticleThumbnailTimeline::CaptureStep(
+                oneShot, oneShot.frameCount - 1U) ==
+                oneShot.simulationSteps,
+        "Particle thumbnail one-shot did not include its authored end frame");
+
+    const auto shortFlash = ParticleThumbnailTimeline::Plan(0.08F, false);
+    kb::editor::tests::Require(
+        shortFlash.frameCount == 2U &&
+            ParticleThumbnailTimeline::CaptureStep(shortFlash, 1U) == 5U,
+        "Particle thumbnail timeline did not keep a short one-shot bounded and complete");
+
+    kb::scene::ParticleEffectAsset drainingEffect;
+    drainingEffect.looping = false;
+    drainingEffect.durationSeconds = 1.0F;
+    drainingEffect.emitters.push_back(kb::scene::ParticleEmitterAsset{});
+    drainingEffect.emitters.back().spawn.mode =
+        kb::scene::ParticleSpawnMode::Continuous;
+    drainingEffect.emitters.back().spawn.lifetimeMin = 0.25F;
+    drainingEffect.emitters.back().spawn.lifetimeMax = 0.75F;
+    const auto draining = ParticleThumbnailTimeline::Plan(drainingEffect);
+    kb::editor::tests::Require(
+        draining.simulationSteps == 105U && draining.frameCount == 42U &&
+            std::fabs(draining.durationSeconds - 1.75F) <= 0.0001F,
+        "Particle thumbnail one-shot omitted the final emitted particles' drain interval");
+
+    const auto unbounded = ParticleThumbnailTimeline::Plan(0.0F, true);
+    const auto extreme = ParticleThumbnailTimeline::Plan(1000000.0F, true);
+    kb::editor::tests::Require(
+        unbounded.usesBoundedPreviewWindow &&
+            unbounded.simulationSteps == 300U &&
+            std::fabs(unbounded.durationSeconds - 5.0F) <= 0.0001F &&
+            extreme.usesBoundedPreviewWindow &&
+            extreme.simulationSteps == 600U &&
+            extreme.frameCount == 240U &&
+            std::fabs(extreme.durationSeconds - 10.0F) <= 0.0001F,
+        "Particle thumbnail timeline did not bound unending or pathological preview work");
+
+    kb::scene::ParticleEffectAsset cascadingEffect;
+    cascadingEffect.looping = false;
+    cascadingEffect.durationSeconds = 1.0F;
+    cascadingEffect.emitters.push_back(kb::scene::ParticleEmitterAsset{});
+    cascadingEffect.emitters.back().spawn.mode =
+        kb::scene::ParticleSpawnMode::Burst;
+    cascadingEffect.emitters.back().spawn.bursts = {
+        {.timeSeconds = 0.0F, .count = 1U},
+    };
+    cascadingEffect.emitters.back().spawn.lifetimeMin = 1.0F;
+    cascadingEffect.emitters.back().spawn.lifetimeMax = 1.0F;
+    cascadingEffect.eventBindings.push_back(
+        kb::scene::ParticleEventBindingAsset{.maxDepth = 2U});
+    const auto cascading = ParticleThumbnailTimeline::Plan(
+        cascadingEffect);
+    kb::editor::tests::Require(
+        cascading.simulationSteps == 180U &&
+            std::fabs(cascading.durationSeconds - 3.0F) <= 0.0001F,
+        "Particle thumbnail one-shot omitted a bounded event-spawn chain");
 }
 
 void RunPlayCameraHierarchySelectionTest() {
@@ -1290,6 +1368,7 @@ namespace kb::editor::tests {
 void RunEditorViewportPreviewTests() {
     RunSceneViewportPresentationPolicyTest();
     RunSceneViewportSceneSyncPolicyTest();
+    RunParticleThumbnailTimelineTest();
     RunPlayCameraHierarchySelectionTest();
     RunViewportCameraNavigationBindingPolicyTest();
     RunSkeletalMeshSceneLabelBuilderTest();

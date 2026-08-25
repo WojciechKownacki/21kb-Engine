@@ -13,6 +13,7 @@
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
 #include "rendering/EditorParticleThumbnailService.hpp"
+#include "rendering/ParticleThumbnailTimeline.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "rendering/FloatingEditorWindowRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
@@ -963,7 +964,20 @@ EditorHeadlessAutomation::VerifyParticleThumbnail(
             break;
         }
     }
-    result.succeeded = validStorage && result.animated &&
+    const std::optional<kb::scene::ParticleEffectAsset> effect =
+        kb::scene::ParticleEffectAssetIO::Load(metadata->physicalPath);
+    bool fullTimeline = false;
+    if (effect.has_value()) {
+        const ParticleThumbnailTimelinePlan expected =
+            ParticleThumbnailTimeline::Plan(*effect);
+        fullTimeline =
+            thumbnails.AnimationFrameCount(*metadata) ==
+                expected.frameCount &&
+            std::fabs(
+                thumbnails.AnimationDurationSeconds(*metadata) -
+                expected.durationSeconds) <= 0.0001F;
+    }
+    result.succeeded = validStorage && result.animated && fullTimeline &&
         !thumbnails.HasPendingWork();
     if (!result.succeeded) {
         thumbnails.CancelPendingWork(&impl_->viewport);
@@ -1036,16 +1050,49 @@ bool EditorHeadlessAutomation::VerifyParticlePickerInteraction() {
             picker, WM_NCHITTEST, 0U,
             MAKELPARAM(pickerBounds.right - 24, pickerBounds.top + 14));
         draggableHeader = headerHit == HTCAPTION && closeHit != HTCAPTION;
-        // The first paint queues only the visible recipes. Drive the same
-        // bounded timer path used by the interactive editor, then capture the
-        // resulting real previews instead of the loading icons.
+        // The first paint queues only the visible recipes. Automation runs
+        // inside the editor callback and therefore owns the main frame while
+        // this method is active; explicitly drive the same bounded scheduler
+        // that the production message loop advances between paints.
         static_cast<void>(RedrawWindow(
             picker, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW));
-        for (int tick = 0; tick < 128; ++tick) {
+        const kb::assets::AssetMetadata* animationAsset = nullptr;
+        std::string animationAssetName;
+        for (const kb::assets::AssetMetadata& candidate :
+             context_.Scene().Assets().Manager().Registry().All()) {
+            if (candidate.type != kb::scene::kParticleEffectAssetType ||
+                candidate.virtualPath.parent_path().generic_string() !=
+                    "/21kbParticle/Recipes") {
+                continue;
+            }
+            const std::string displayName = !candidate.name.empty()
+                ? candidate.name
+                : candidate.virtualPath.stem().string();
+            if (animationAsset == nullptr ||
+                displayName < animationAssetName ||
+                (displayName == animationAssetName &&
+                    candidate.id.value < animationAsset->id.value)) {
+                animationAsset = &candidate;
+                animationAssetName = displayName;
+            }
+        }
+        if (animationAsset != nullptr) {
+            static_cast<void>(
+                EditorParticleThumbnailCache().ThumbnailForTime(
+                    *animationAsset, 0.0));
+        }
+        constexpr RECT thumbnailStaging{632, 344, 640, 352};
+        for (int tick = 0;
+             tick < 512 && animationAsset != nullptr &&
+             EditorParticleThumbnailCache().AnimationFrameCount(
+                 *animationAsset) < 2U;
+             ++tick) {
+            static_cast<void>(EditorParticleThumbnailCache().Tick(
+                context_, impl_->viewport, impl_->window,
+                thumbnailStaging));
             static_cast<void>(SendMessageW(
                 picker, WM_TIMER, 1U, 0));
             Sleep(1U);
-            if (!EditorParticleThumbnailCache().HasPendingWork()) break;
         }
         static_cast<void>(RedrawWindow(
             picker, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW));
@@ -1067,19 +1114,59 @@ bool EditorHeadlessAutomation::VerifyParticlePickerInteraction() {
                        }) &&
                 printSucceeded;
         };
+        constexpr RECT firstAssetPreview{213, 79, 367, 207};
+        const auto capturePickerRegion = [picker](
+                const std::filesystem::path& path,
+                const RECT& region) {
+            bool printSucceeded = false;
+            return CaptureBitmap(
+                       path,
+                       ScreenshotDimensions{
+                           .logicalWidth = region.right - region.left,
+                           .logicalHeight = region.bottom - region.top,
+                           .dpi = 96,
+                       },
+                       [picker, region, &printSucceeded](HDC destination) {
+                           POINT previousOrigin{};
+                           SetViewportOrgEx(
+                               destination,
+                               -region.left,
+                               -region.top,
+                               &previousOrigin);
+                           printSucceeded = PrintWindow(
+                               picker, destination, PW_CLIENTONLY) != 0;
+                           SetViewportOrgEx(
+                               destination,
+                               previousOrigin.x,
+                               previousOrigin.y,
+                               nullptr);
+                       }) &&
+                printSucceeded;
+        };
         const std::filesystem::path firstFrame =
             artifactRoot_ / "screenshots" / "particle-picker.bmp";
-        const std::filesystem::path nextFrame =
-            artifactRoot_ / "screenshots" / "particle-picker-next.bmp";
-        pickerCaptured = capturePicker(firstFrame);
+        const std::filesystem::path firstAnimationFrame =
+            artifactRoot_ / "screenshots" /
+            "particle-picker-animation-first.bmp";
+        const std::filesystem::path nextAnimationFrame =
+            artifactRoot_ / "screenshots" /
+            "particle-picker-animation-next.bmp";
+        pickerCaptured = capturePicker(firstFrame) &&
+            capturePickerRegion(
+                firstAnimationFrame, firstAssetPreview);
         for (std::uint64_t tick = 0U;
              tick < kParticlePickerAnimationTimerTicks;
              ++tick) {
+            // Animation is wall-clock based so delayed UI messages cannot
+            // speed up or shorten a lifecycle. Let real time advance just as
+            // it does between production timer deliveries.
+            Sleep(50U);
             static_cast<void>(SendMessageW(picker, WM_TIMER, 1U, 0));
         }
         static_cast<void>(RedrawWindow(
             picker, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW));
-        const bool nextFrameCaptured = capturePicker(nextFrame);
+        const bool nextFrameCaptured = capturePickerRegion(
+            nextAnimationFrame, firstAssetPreview);
         const auto fileHash = [](const std::filesystem::path& path) {
             std::ifstream input{path, std::ios::binary};
             std::uint64_t hash = 1469598103934665603ULL;
@@ -1090,12 +1177,20 @@ bool EditorHeadlessAutomation::VerifyParticlePickerInteraction() {
             }
             return std::pair{input.eof(), hash};
         };
+        const bool timelineAdvanced = animationAsset != nullptr &&
+            EditorParticleThumbnailCache().AnimationFrameForTime(
+                *animationAsset, 0.0) !=
+            EditorParticleThumbnailCache().AnimationFrameForTime(
+                *animationAsset, 0.1);
         pickerAnimationCaptured = pickerCaptured && nextFrameCaptured &&
-            fileHash(firstFrame) != fileHash(nextFrame);
+            timelineAdvanced &&
+            fileHash(firstAnimationFrame) !=
+                fileHash(nextAnimationFrame);
     }
 
     bool singleClickDidNotAccept = false;
     bool doubleClickAccepted = false;
+    bool thumbnailWorkCancelled = false;
     if (picker != nullptr) {
         // Tile zero clears the field; tile one is the first real asset. The
         // crash regression must exercise the delayed valid-asset callback.
@@ -1124,6 +1219,18 @@ bool EditorHeadlessAutomation::VerifyParticlePickerInteraction() {
             static_cast<void>(SendMessageW(picker, WM_CLOSE, 0U, 0));
         }
     }
+    constexpr RECT cancellationStaging{632, 336, 640, 344};
+    for (int poll = 0;
+         poll < 128 &&
+         EditorParticleThumbnailCache().HasPendingWork();
+         ++poll) {
+        static_cast<void>(EditorParticleThumbnailCache().Tick(
+            context_, impl_->viewport, impl_->window,
+            cancellationStaging));
+        Sleep(1U);
+    }
+    thumbnailWorkCancelled =
+        !EditorParticleThumbnailCache().HasPendingWork();
 
     static_cast<void>(SetWindowPos(
         impl_->window, nullptr, originalBounds.left, originalBounds.top,
@@ -1140,7 +1247,8 @@ bool EditorHeadlessAutomation::VerifyParticlePickerInteraction() {
         ownerRemainedEnabled && draggableHeader && pickerCaptured &&
         pickerAnimationCaptured &&
         singleClickDidNotAccept && doubleClickAccepted &&
-        IsWindow(picker) == 0 && assignmentTargetRemoved;
+        IsWindow(picker) == 0 && thumbnailWorkCancelled &&
+        assignmentTargetRemoved;
     std::ostringstream detail;
     detail << "opened=" << opened
            << ";picker=" << (picker != nullptr)
@@ -1151,6 +1259,7 @@ bool EditorHeadlessAutomation::VerifyParticlePickerInteraction() {
            << ";single-select=" << singleClickDidNotAccept
            << ";double-accept=" << doubleClickAccepted
            << ";closed=" << (picker == nullptr || IsWindow(picker) == 0)
+           << ";cancelled=" << thumbnailWorkCancelled
            << ";cleanup=" << assignmentTargetRemoved;
     Trace("verify_particle_picker", succeeded, detail.str());
     return succeeded;

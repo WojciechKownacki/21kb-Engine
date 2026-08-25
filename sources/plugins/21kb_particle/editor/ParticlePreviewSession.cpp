@@ -180,6 +180,72 @@ ParticleEditorResult ParticlePreviewSession::PublishWorkingCopy(
     return {};
 }
 
+ParticleEditorResult ParticlePreviewSession::RetargetWorkingCopy(
+    kb::assets::AssetId assetId,
+    std::filesystem::path virtualPath,
+    const kb::scene::ParticleEffectAsset& asset) {
+    if (scene_ == nullptr || !assetId.IsValid() || virtualPath.empty()) {
+        return { .status = ParticleEditorStatus::RuntimeFailure,
+                 .message = "particle preview retarget requires an active session and stable asset identity" };
+    }
+    ParticleEditorResult validation = ValidatePreviewAsset(asset);
+    if (!validation.Succeeded()) return validation;
+
+    auto& manager = scene_->Assets().Manager();
+    kb::assets::AssetMetadata* metadata = manager.Registry().FindMutable(assetId);
+    if (metadata == nullptr) {
+        return { .status = ParticleEditorStatus::PublicationFailed,
+                 .message = "particle preview retarget metadata is missing" };
+    }
+    kb::assets::AssetMetadata replacementMetadata = *metadata;
+    replacementMetadata.name = asset.displayName;
+    replacementMetadata.virtualPath = virtualPath;
+    ++replacementMetadata.contentHash;
+    if (!manager.Registry().Upsert(std::move(replacementMetadata))) {
+        return { .status = ParticleEditorStatus::PublicationFailed,
+                 .message = "particle preview retarget metadata update failed" };
+    }
+    if (!manager.PublishRuntimeAsset(
+            assetId,
+            std::make_shared<kb::scene::ParticleEffectAsset>(asset))) {
+        return { .status = ParticleEditorStatus::PublicationFailed,
+                 .message = manager.LastError() };
+    }
+
+    const kb::scene::ParticleEffectComponent* current =
+        scene_->Components().ParticleEffects().TryGet(effectEntity_);
+    if (current == nullptr) {
+        return { .status = ParticleEditorStatus::RuntimeFailure,
+                 .message = "particle preview retarget component is missing" };
+    }
+    kb::scene::ParticleEffectComponent replacement = *current;
+    replacement.effectAssetId = assetId.value;
+    replacement.deterministicSeed = asset.determinismSeed;
+    scene_->Components().ParticleEffects().Set(effectEntity_, replacement);
+    assetId_ = assetId;
+    virtualPath_ = std::move(virtualPath);
+
+    // The fixed-step component reconciler releases the previous instance and
+    // creates the new asset instance with its own deterministic seed.
+    if (!scene_->Runtime().Update(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds)) {
+        return { .status = ParticleEditorStatus::RuntimeFailure,
+                 .message = "particle preview could not activate the retargeted working copy" };
+    }
+    for (const std::uint64_t instanceId :
+         kb::particles::ParticlePlayback::LiveInstanceIds(*scene_)) {
+        const kb::particles::ParticleRuntimeQueryResult query =
+            kb::particles::ParticlePlayback::Query(*scene_, instanceId);
+        if (query.assetId != assetId.value) continue;
+        const auto restarted = kb::particles::ParticlePlayback::Restart(
+            *scene_, instanceId);
+        if (!restarted.Succeeded()) {
+            return { .status = ParticleEditorStatus::RuntimeFailure,
+                     .message = "particle preview could not restart the retargeted working copy" };
+        }
+    }
+    return {};
+}
+
 ParticleEditorResult ParticlePreviewSession::Tick(float wallDeltaSeconds) {
     if (scene_ == nullptr || !std::isfinite(wallDeltaSeconds) || wallDeltaSeconds < 0.0F) {
         return { .status = ParticleEditorStatus::RuntimeFailure,
