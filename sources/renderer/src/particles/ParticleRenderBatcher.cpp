@@ -270,10 +270,9 @@ ParticleAlignmentBasis ResolveParticleAlignmentBasis(
         if (Dot(velocity, velocity) <= kParticleAlignmentEpsilon * kParticleAlignmentEpsilon) return result;
         result.up = NormalizeOr(velocity, cameraUp);
         result.right = NormalizeOr(Cross(cameraForward, result.up), cameraRight);
-        result.up = NormalizeOr(Cross(result.right, cameraForward), cameraUp);
     } else if (emitter.alignment == kb::particles::ParticleRenderAlignment::WorldUp) {
         result.right = NormalizeOr(Cross(cameraForward, {0.0F, 1.0F, 0.0F}), cameraRight);
-        result.up = NormalizeOr(Cross(result.right, cameraForward), cameraUp);
+        result.up = {0.0F, 1.0F, 0.0F};
     } else if (emitter.alignment == kb::particles::ParticleRenderAlignment::Local) {
         std::array<float, 4> quaternion{};
         float lengthSquared = 0.0F;

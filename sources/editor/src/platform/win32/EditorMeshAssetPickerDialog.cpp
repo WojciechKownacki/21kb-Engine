@@ -74,8 +74,8 @@ constexpr int kAssetTilePreviewHeight = 130;
 constexpr int kAssetTileGap = 12;
 constexpr int kAssetTileColumns = 3;
 constexpr UINT_PTR kMaterialThumbnailTimerId = 1U;
-constexpr UINT kMaterialThumbnailTimerPeriodMs = 16U;
-constexpr std::uint64_t kParticleAnimationTicksPerFrame = 4U;
+constexpr UINT kMaterialThumbnailTimerPeriodMs = 33U;
+constexpr std::uint64_t kParticleAnimationTicksPerFrame = 2U;
 
 struct AssetPickerRow {
     kb::assets::AssetId assetId{};
@@ -1370,13 +1370,11 @@ private:
             if (sceneContext_ == nullptr || sceneViewport_ == nullptr) return;
             EditorParticleThumbnailService& thumbnails =
                 EditorParticleThumbnailCache();
-            if (thumbnails.HasPendingWork()) {
+            if (!interactiveMove_ && thumbnails.HasPendingWork()) {
                 sceneViewport_->SetGraphShaderCacheRoot(
                     sceneContext_->GraphShaderCacheRoot());
-                sceneViewport_->BeginPaintLayout(window_);
                 static_cast<void>(thumbnails.Tick(
                     *sceneContext_, *sceneViewport_, window_, staging));
-                sceneViewport_->EndPaintLayout();
             }
             ++particleAnimationTick_;
             const std::uint64_t revision = thumbnails.Revision();
@@ -1428,6 +1426,20 @@ private:
                         return HTCAPTION;
                     }
                 }
+            }
+            break;
+        case WM_ENTERSIZEMOVE:
+            if (picker != nullptr &&
+                picker->tileKind_ == AssetPickerTileKind::Particle) {
+                picker->interactiveMove_ = true;
+                return 0;
+            }
+            break;
+        case WM_EXITSIZEMOVE:
+            if (picker != nullptr &&
+                picker->tileKind_ == AssetPickerTileKind::Particle) {
+                picker->interactiveMove_ = false;
+                return 0;
             }
             break;
         case WM_PAINT: {
@@ -1590,6 +1602,7 @@ private:
     EditorParticleEffectAssetPickerDialog::AcceptedCallback onAccepted_;
     bool deleteOnDestroy_ = false;
     bool acceptPending_ = false;
+    bool interactiveMove_ = false;
 };
 
 } // namespace
