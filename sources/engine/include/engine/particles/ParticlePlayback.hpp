@@ -3,6 +3,8 @@
 #include "engine/particles/IParticleSimulationBackend.hpp"
 #include "engine/particles/ParticleRenderCapabilities.hpp"
 #include "engine/particles/ParticleRenderSnapshot.hpp"
+#include "engine/particles/ParticleGpuVisualStepJournal.hpp"
+#include "engine/scene/TransformComponent.hpp"
 
 #include <cstdint>
 #include <span>
@@ -41,6 +43,9 @@ public:
         kb::scene::Scene& scene,
         std::uint64_t consumerId) noexcept;
     [[nodiscard]] static ParticleRenderCapabilities RenderCapabilities(const kb::scene::Scene& scene) noexcept;
+    [[nodiscard]] static std::span<const ParticleGpuVisualStep> PendingGpuVisualSteps(
+        const kb::scene::Scene& scene,
+        std::uint64_t consumerId) noexcept;
 
     [[nodiscard]] static ParticleRuntimeResult Create(kb::scene::Scene& scene, std::uint64_t effectAssetId, kb::scene::SceneEntity owner);
     [[nodiscard]] static ParticleRuntimeResult Release(kb::scene::Scene& scene, std::uint64_t instanceId) noexcept;
@@ -52,6 +57,14 @@ public:
     [[nodiscard]] static ParticleRuntimeResult SetParameterScalar(kb::scene::Scene& scene, std::uint64_t instanceId, std::string_view name, float value) noexcept;
     [[nodiscard]] static ParticleRuntimeResult ClearParameter(kb::scene::Scene& scene, std::uint64_t instanceId, std::string_view name) noexcept;
     [[nodiscard]] static ParticleRuntimeResult Emit(kb::scene::Scene& scene, std::uint64_t instanceId, std::uint32_t count);
+    [[nodiscard]] static ParticleRuntimeResult Simulate(kb::scene::Scene& scene, float fixedDeltaSeconds);
+    [[nodiscard]] static ParticleRuntimeResult ConfigureComponent(
+        kb::scene::Scene& scene,
+        std::uint64_t instanceId,
+        float rateMultiplier,
+        std::uint32_t maxParticlesOverride,
+        bool followTransform,
+        const kb::scene::WorldTransform& ownerTransform) noexcept;
     [[nodiscard]] static ParticleRuntimeQueryResult Query(const kb::scene::Scene& scene, std::uint64_t instanceId) noexcept;
     [[nodiscard]] static std::vector<std::uint64_t> LiveInstanceIds(const kb::scene::Scene& scene);
     [[nodiscard]] static std::span<const ParticleRuntimeState> LiveParticleStates(

@@ -25,6 +25,16 @@ jobs:
             sanitizer: "OFF"
             targets: "kb_engine_tests;kb_audio_runtime_tests;kb_engine_library_tests;kb_library_benchmarks;kb_library_safety_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_snapshot_scale_tests;kb_renderer_tests;kb_skeletal_animator_benchmarks;kb_terrain_editor_tests;kb_editor_tests;kb_editor_material_graph_canvas_tests;kb_standalone_player;kb_editor;kb_cli;kb_cli_tests"
             api_compat_check: "ON"
+            test_regex: ""
+          - name: Windows MSVC ASan
+            os: windows-2025-vs2026
+            generator: "Visual Studio 18 2026"
+            build_editor: "ON"
+            build_renderer: "ON"
+            sanitizer: "ON"
+            targets: "kb_21kb_particle_snapshot_tests;kb_21kb_particle_cpu_backend_tests;kb_21kb_particle_editor_tests;kb_21kb_particle_renderer_tests;kb_renderer_tests"
+            api_compat_check: "OFF"
+            test_regex: "^(kb_21kb_particle_snapshot_tests|kb_21kb_particle_cpu_backend_tests|kb_21kb_particle_editor_tests|kb_21kb_particle_renderer_tests|kb_renderer_tests)$"
           - name: Linux GCC ASan UBSan
             os: ubuntu-24.04
             generator: "Unix Makefiles"
@@ -33,6 +43,7 @@ jobs:
             sanitizer: "ON"
             targets: "kb_engine_tests;kb_audio_runtime_tests;kb_engine_library_tests;kb_library_benchmarks;kb_library_safety_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_snapshot_scale_tests;kb_cli_tests"
             api_compat_check: "OFF"
+            test_regex: ""
           - name: macOS Clang ASan UBSan
             os: macos-15
             generator: "Unix Makefiles"
@@ -41,6 +52,7 @@ jobs:
             sanitizer: "ON"
             targets: "kb_engine_tests;kb_audio_runtime_tests;kb_engine_library_tests;kb_library_benchmarks;kb_library_safety_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_snapshot_scale_tests;kb_cli_tests"
             api_compat_check: "OFF"
+            test_regex: ""
 
     steps:
       - name: Check out sources
@@ -104,6 +116,9 @@ jobs:
           # while the performance budget remains enforced by the unsanitized Windows job.
           if ("${{ matrix.sanitizer }}" -eq "ON") {
             $testArgs += @("--label-exclude", "performance")
+          }
+          if ("${{ matrix.test_regex }}") {
+            $testArgs += @("-R", "${{ matrix.test_regex }}")
           }
           ctest @testArgs
           if ($LASTEXITCODE -ne 0) {

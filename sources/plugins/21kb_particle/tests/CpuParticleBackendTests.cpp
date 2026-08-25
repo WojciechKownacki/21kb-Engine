@@ -507,6 +507,33 @@ void TestVisualModulesObservableGoldenAndDefaults() {
         "disabled visual modules changed opaque-white unit-size defaults");
 }
 
+void TestStartColorAndSizeWithoutModules() {
+    auto effect = Fixture::MakeEffect(0.0F, 4U);
+    effect.emitters[0].spawn.startColor = {0.25F, 0.5F, 0.75F, 0.8F};
+    effect.emitters[0].spawn.startSize = 2.5F;
+    effect.emitters[0].spawn.lifetimeMin = 1.0F;
+    effect.emitters[0].spawn.lifetimeMax = 1.0F;
+    effect.emitters[0].spawn.speedMin = 0.0F;
+    effect.emitters[0].spawn.speedMax = 0.0F;
+    Fixture fixture(std::move(effect));
+    kb::particle_plugin::CpuParticleBackend backend;
+    backend.Warmup();
+    const auto created = backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    Require(created.Succeeded() && backend.Play(fixture.scene, created.instanceId).Succeeded() &&
+            backend.Emit(fixture.scene, created.instanceId, 1U).Succeeded(),
+        "start color fixture setup failed");
+    Require(backend.Step(fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "start color step failed");
+    const auto states = CopyBackendStates(backend, fixture, created.instanceId);
+    Require(states.size() == 1U &&
+            std::abs(states.front().color.r - 0.25F) < 0.00001F &&
+            std::abs(states.front().color.g - 0.5F) < 0.00001F &&
+            std::abs(states.front().color.b - 0.75F) < 0.00001F &&
+            std::abs(states.front().color.a - 0.8F) < 0.00001F &&
+            std::abs(states.front().size - 2.5F) < 0.00001F,
+        "start color and start size were not applied without Color/Size Over Life modules");
+}
+
 void TestCollisionPlaneExecutionAndDisable() {
     const auto sample = [](bool enabled) {
         auto effect = Fixture::MakeEffect(0.0F, 4U);
@@ -1077,11 +1104,14 @@ void TestModuleOrderEnableAndGravityContracts() {
 }
 
 void TestModuleCompileRejection() {
-    const auto createStatus = [](kb::scene::ParticleEffectAsset effect) {
+    const auto createResult = [](kb::scene::ParticleEffectAsset effect) {
         Fixture fixture(std::move(effect));
         kb::particle_plugin::CpuParticleBackend backend;
         backend.Warmup();
-        return backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner).status;
+        return backend.Create(fixture.scene, fixture.effectAssetId, fixture.owner);
+    };
+    const auto createStatus = [&](kb::scene::ParticleEffectAsset effect) {
+        return createResult(std::move(effect)).status;
     };
 
     auto unsupportedExternalEffect = Fixture::MakeEffect();
@@ -1094,6 +1124,78 @@ void TestModuleCompileRejection() {
     Require(createStatus(std::move(unsupportedExternalEffect)) ==
             kb::particles::ParticleRuntimeStatus::UnsupportedOutput,
         "external effect event action was accepted by the internal-event compiler");
+
+    auto gpuRequired = Fixture::MakeEffect();
+    gpuRequired.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualRequired;
+    const kb::particles::ParticleRuntimeResult requiredResult = createResult(std::move(gpuRequired));
+    Require(requiredResult.status == kb::particles::ParticleRuntimeStatus::BackendUnavailable &&
+            requiredResult.gpuVisualAvailability ==
+                kb::particles::ParticleGpuVisualAvailability::RendererUnavailable,
+        "GPU-required effect silently created without a renderer-owned GPU visual pipeline");
+
+    Fixture preferredFixture(Fixture::MakeEffect());
+    kb::particle_plugin::CpuParticleBackend preferredBackend;
+    preferredBackend.Warmup();
+    auto preferredEffect = Fixture::MakeEffect();
+    preferredEffect.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualPreferred;
+    Require(preferredFixture.scene.Assets().Manager().PublishRuntimeAsset(
+                kb::assets::AssetId{preferredFixture.effectAssetId},
+                std::make_shared<kb::scene::ParticleEffectAsset>(std::move(preferredEffect))),
+        "GPU-preferred capability fixture could not publish its runtime asset");
+    const kb::particles::ParticleRuntimeResult preferredResult = preferredBackend.Create(
+        preferredFixture.scene, preferredFixture.effectAssetId, preferredFixture.owner);
+    Require(preferredResult.Succeeded(), "GPU-preferred effect did not explicitly select its CPU fallback");
+    const kb::particles::ParticleRuntimeQueryResult preferredQuery = preferredBackend.Query(
+        preferredFixture.scene, preferredResult.instanceId);
+    Require(preferredQuery.executionPath == kb::particles::ParticleRuntimeExecutionPath::CpuFallback &&
+            preferredQuery.gpuVisualAvailability ==
+                kb::particles::ParticleGpuVisualAvailability::RendererUnavailable,
+        "GPU-preferred effect did not report its CPU fallback reason");
+
+    Fixture deviceFaultFixture(Fixture::MakeEffect());
+    kb::particle_plugin::CpuParticleBackend deviceFaultBackend;
+    deviceFaultBackend.Warmup();
+    constexpr std::uint64_t gpuConsumer = 77U;
+    Require(kb::particles::ParticlePlayback::PublishRenderCapabilities(deviceFaultFixture.scene, gpuConsumer, {
+                .capabilityEpoch = 1U,
+                .gpuVisualAvailability = kb::particles::ParticleGpuVisualAvailability::Ready,
+            }).Succeeded(),
+        "GPU visual capability fixture could not publish its ready state");
+    auto requiredReady = Fixture::MakeEffect();
+    requiredReady.backendPolicy = kb::scene::ParticleBackendPolicy::GpuVisualRequired;
+    Require(deviceFaultFixture.scene.Assets().Manager().PublishRuntimeAsset(
+                kb::assets::AssetId{deviceFaultFixture.effectAssetId},
+                std::make_shared<kb::scene::ParticleEffectAsset>(std::move(requiredReady))),
+        "GPU-required device fault fixture could not publish its runtime asset");
+    const kb::particles::ParticleRuntimeResult visualResult = deviceFaultBackend.Create(
+        deviceFaultFixture.scene, deviceFaultFixture.effectAssetId, deviceFaultFixture.owner);
+    Require(visualResult.Succeeded() &&
+            kb::particles::ParticlePlayback::PublishRenderCapabilities(deviceFaultFixture.scene, gpuConsumer, {
+                .capabilityEpoch = 2U,
+                .gpuVisualAvailability = kb::particles::ParticleGpuVisualAvailability::DeviceFault,
+            }).Succeeded() &&
+            deviceFaultBackend.Step(deviceFaultFixture.scene,
+                kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "GPU visual device-fault fixture could not cross a fixed-step boundary");
+    const kb::particles::ParticleRuntimeQueryResult faultQuery = deviceFaultBackend.Query(
+        deviceFaultFixture.scene, visualResult.instanceId);
+    Require(faultQuery.executionPath == kb::particles::ParticleRuntimeExecutionPath::GpuVisual &&
+            faultQuery.gpuVisualAvailability == kb::particles::ParticleGpuVisualAvailability::DeviceFault &&
+            faultQuery.requiresBackendRestart &&
+            deviceFaultBackend.Play(deviceFaultFixture.scene, visualResult.instanceId).status ==
+                kb::particles::ParticleRuntimeStatus::BackendUnavailable &&
+            deviceFaultBackend.Restart(deviceFaultFixture.scene, visualResult.instanceId).status ==
+                kb::particles::ParticleRuntimeStatus::BackendUnavailable &&
+            kb::particles::ParticlePlayback::PublishRenderCapabilities(deviceFaultFixture.scene, gpuConsumer, {
+                .capabilityEpoch = 3U,
+                .gpuVisualAvailability = kb::particles::ParticleGpuVisualAvailability::Ready,
+            }).Succeeded() &&
+            deviceFaultBackend.Restart(deviceFaultFixture.scene, visualResult.instanceId).Succeeded() &&
+            !deviceFaultBackend.Query(deviceFaultFixture.scene, visualResult.instanceId).requiresBackendRestart,
+        "device fault silently changed the GPU visual backend instead of requiring restart");
+    Require(kb::particles::ParticlePlayback::ClearRenderCapabilities(
+                deviceFaultFixture.scene, gpuConsumer).Succeeded(),
+        "GPU visual device-fault fixture did not release its capability consumer");
 
     const auto addTargetAndBinding = [](kb::scene::ParticleEffectAsset& effect,
                                         kb::scene::ParticleEventTrigger trigger) {
@@ -2247,7 +2349,10 @@ void TestCpuPreviewRenderSnapshotPublicationAndLifecycle() {
             "first CPU preview snapshot header or grouping was incomplete");
         Require(first->Emitters()[0].emitterId == 1U && first->Emitters()[0].firstParticle == 0U &&
                 first->Emitters()[0].particleCount == 1U && first->Emitters()[0].materialAssetId == 72U &&
-                first->Emitters()[0].meshAssetId == 0U && first->Emitters()[0].assetGeneration != 0U &&
+                first->Emitters()[0].meshAssetId == 0U &&
+                first->Emitters()[0].assetGeneration ==
+                    fixture.scene.Assets().Manager().LoadGeneration(
+                        kb::assets::AssetId{fixture.effectAssetId}) + 1U &&
                 first->Emitters()[0].output == kb::particles::ParticleRenderOutput::PointSprite &&
                 first->Emitters()[0].depth == kb::particles::ParticleRenderDepthMode::ReadWrite &&
                 first->Emitters()[0].status == kb::particles::ParticleRenderEmitterStatus::Playing &&
@@ -2374,6 +2479,124 @@ void operator delete[](void* memory) noexcept { std::free(memory); }
 void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
 void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); }
 
+void TestEditorStyleScenePulseFollowsOwner() {
+    auto effect = Fixture::MakeEffect(60.0F, 4U);
+    effect.emitters[0].spawn.speedMin = 0.0F;
+    effect.emitters[0].spawn.speedMax = 0.0F;
+    effect.emitters[0].spawn.lifetimeMin = 10.0F;
+    effect.emitters[0].spawn.lifetimeMax = 10.0F;
+    Fixture fixture(std::move(effect));
+    kb::scene::TransformComponent transform = fixture.scene.Transforms().Get(fixture.owner);
+    transform.localPosition.x = 12.0F;
+    transform.worldPosition.x = 12.0F;
+    fixture.scene.Transforms().Set(fixture.owner, transform);
+
+    kb::particle_plugin::CpuParticleBackend backend;
+    backend.Warmup();
+    Require(kb::particles::ParticlePlayback::RegisterBackend(fixture.scene, backend).Succeeded(),
+        "editor-style playback backend registration failed");
+    Require(kb::particles::ParticlePlayback::WarmupRenderSnapshots(fixture.scene).Succeeded(),
+        "editor-style snapshot warmup failed");
+    const auto created = kb::particles::ParticlePlayback::Create(
+        fixture.scene, fixture.effectAssetId, fixture.owner);
+    Require(created.Succeeded(), "editor-style instance create failed");
+    Require(kb::particles::ParticlePlayback::ConfigureComponent(
+                fixture.scene,
+                created.instanceId,
+                1.0F,
+                0U,
+                true,
+                transform.WorldPayload()).Succeeded() &&
+            kb::particles::ParticlePlayback::Play(fixture.scene, created.instanceId).Succeeded() &&
+            kb::particles::ParticlePlayback::Simulate(
+                fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "editor-style Create/Configure/Play/Simulate pulse failed");
+    const auto states = kb::particles::ParticlePlayback::LiveParticleStates(fixture.scene, created.instanceId);
+    Require(!states.empty() &&
+            std::all_of(states.begin(), states.end(), [](const auto& state) { return state.position.x >= 11.5F; }),
+        "editor scene pulse spawned particles at the world origin instead of the entity");
+    Require(kb::particles::ParticlePlayback::UnregisterBackend(fixture.scene, backend).Succeeded(),
+        "editor-style playback backend unregister failed");
+}
+
+void TestEditorAndPlayModeShareRenderSnapshotRevision() {
+    auto effect = Fixture::MakeEffect(60.0F, 64U);
+    effect.emitters[0].spawn.lifetimeMin = 10.0F;
+    effect.emitters[0].spawn.lifetimeMax = 10.0F;
+    Fixture fixture(std::move(effect));
+    fixture.scene.Components().ParticleEffects().Set(fixture.owner, {
+        .effectAssetId = fixture.effectAssetId,
+    });
+
+    kb::particle_plugin::ParticleSceneSystem system;
+    kb::scene::SceneSystemContext context{
+        fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds};
+    system.OnCreate(context);
+
+    const auto created = kb::particles::ParticlePlayback::Create(
+        fixture.scene, fixture.effectAssetId, fixture.owner);
+    const kb::scene::TransformComponent& transform = fixture.scene.Transforms().Get(fixture.owner);
+    Require(created.Succeeded() &&
+            kb::particles::ParticlePlayback::ConfigureComponent(
+                fixture.scene, created.instanceId, 1.0F, 0U, true,
+                transform.WorldPayload()).Succeeded() &&
+            kb::particles::ParticlePlayback::Play(fixture.scene, created.instanceId).Succeeded(),
+        "editor-to-play snapshot fixture setup failed");
+    Require(kb::particles::ParticlePlayback::Simulate(
+                fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded() &&
+            kb::particles::ParticlePlayback::Simulate(
+                fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "editor preview pulses did not publish snapshots");
+    Require(kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene)->Revision() == 2U,
+        "editor preview snapshot revision was not monotonic");
+
+    system.OnFixedUpdate(context);
+    const auto playSnapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+    Require(playSnapshot && playSnapshot->Revision() == 3U && !playSnapshot->Particles().empty() &&
+            kb::particles::ParticlePlayback::LastRenderSnapshotPublicationResult(fixture.scene).Succeeded(),
+        "Play Mode reused a stale snapshot revision after editor preview simulation");
+
+    Require(kb::particles::ParticlePlayback::Simulate(
+                fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds).Succeeded(),
+        "editor preview did not resume after Play Mode simulation");
+    const auto resumedSnapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+    Require(resumedSnapshot && resumedSnapshot->Revision() == 4U && !resumedSnapshot->Particles().empty(),
+        "editor preview snapshot did not continue after Play Mode");
+    system.OnDestroy(context);
+}
+
+void TestPlayModeDiscoversComponentAddedAfterSystemCreation() {
+    auto effect = Fixture::MakeEffect(60.0F, 64U);
+    effect.emitters[0].spawn.lifetimeMin = 10.0F;
+    effect.emitters[0].spawn.lifetimeMax = 10.0F;
+    Fixture fixture(std::move(effect));
+
+    kb::particle_plugin::ParticleSceneSystem system;
+    kb::scene::SceneSystemContext context{
+        fixture.scene, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds};
+    system.OnCreate(context);
+    fixture.scene.Components().ParticleEffects().Set(fixture.owner, {
+        .effectAssetId = fixture.effectAssetId,
+    });
+    const auto editorCreated = kb::particles::ParticlePlayback::Create(
+        fixture.scene, fixture.effectAssetId, fixture.owner);
+    const kb::scene::TransformComponent& transform = fixture.scene.Transforms().Get(fixture.owner);
+    Require(editorCreated.Succeeded() &&
+            kb::particles::ParticlePlayback::ConfigureComponent(
+                fixture.scene, editorCreated.instanceId, 1.0F, 0U, true,
+                transform.WorldPayload()).Succeeded() &&
+            kb::particles::ParticlePlayback::Play(
+                fixture.scene, editorCreated.instanceId).Succeeded(),
+        "editor-created particle instance setup failed");
+
+    system.OnFixedUpdate(context);
+    const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(fixture.scene);
+    Require(snapshot && snapshot->Emitters().size() == 1U && !snapshot->Particles().empty() &&
+            kb::particles::ParticlePlayback::LastRenderSnapshotPublicationResult(fixture.scene).Succeeded(),
+        "Play Mode did not discover a Particle Effect component added after system creation");
+    system.OnDestroy(context);
+}
+
 int main() {
     try {
         TestSharedImmutableCompilerArtifact();
@@ -2387,6 +2610,7 @@ int main() {
         TestSharedFixedSchedulerDeterminism();
         TestUniformSolidAngleConeGolden();
         TestVisualModulesObservableGoldenAndDefaults();
+        TestStartColorAndSizeWithoutModules();
         TestCollisionPlaneExecutionAndDisable();
         TestInternalEventTriggersOrderingAndBounds();
         TestInternalEventBudgetsAndCollisionLocalLimit();
@@ -2400,6 +2624,9 @@ int main() {
         TestNoAllocationPerFixedStep();
         TestComponentReconciliationAndOwnerPolicies();
         TestComponentRateCapacityAndFollowTransformContracts();
+        TestEditorStyleScenePulseFollowsOwner();
+        TestEditorAndPlayModeShareRenderSnapshotRevision();
+        TestPlayModeDiscoversComponentAddedAfterSystemCreation();
         TestComponentBindingCapacityIsAtomic();
         TestComponentCreateFailureIsExplicitAndPreservesLiveInstance();
         TestActiveReloadContracts();

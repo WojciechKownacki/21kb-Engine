@@ -1,4 +1,6 @@
 #include <cstdlib>
+#include <cstdio>
+#include <exception>
 #include <string_view>
 
 namespace kb::render::tests {
@@ -13,6 +15,10 @@ void RunGraphShaderArtifactCookTests();
 void RunMaterialProgramRegistryTests();
 void RunSceneMeshPassProgramSelectionTests();
 void RunRendererRuntimeSubmitTests();
+void RunRendererParticleMeshSnapshotSubmitTest();
+void RunRendererParticleStripSnapshotSubmitTest();
+void RunRendererParticleVolumetricSnapshotSubmitTest();
+void RunRendererDetachedViewportFinalCompositePixelsTest();
 void RunRendererCapabilityReportTests();
 void RunMeshPipelineTests();
 void RunSceneDisplayCompositeTests();
@@ -26,6 +32,10 @@ void RunShaderPrewarmParseTests();
 }
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view{ argv[1] } == "frame-pipeline") {
+        kb::render::tests::RunRenderFramePipelineTests();
+        return EXIT_SUCCESS;
+    }
     if (argc == 2 && std::string_view{ argv[1] } == "resource-registry") {
         kb::render::tests::RunRenderResourceRegistryTests();
         return EXIT_SUCCESS;
@@ -49,6 +59,40 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string_view{ argv[1] } == "scene-sync") {
         kb::render::tests::RunRenderSceneSyncTests();
         return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "particle-mesh-submit") {
+        kb::render::tests::RunRendererParticleMeshSnapshotSubmitTest();
+        return EXIT_SUCCESS;
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "particle-strip-submit") {
+        try {
+            kb::render::tests::RunRendererParticleStripSnapshotSubmitTest();
+            return EXIT_SUCCESS;
+        } catch (const std::exception& error) {
+            std::fputs(error.what(), stderr);
+            std::fputc('\n', stderr);
+            return EXIT_FAILURE;
+        }
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "particle-volumetric-submit") {
+        try {
+            kb::render::tests::RunRendererParticleVolumetricSnapshotSubmitTest();
+            return EXIT_SUCCESS;
+        } catch (const std::exception& error) {
+            std::fputs(error.what(), stderr);
+            std::fputc('\n', stderr);
+            return EXIT_FAILURE;
+        }
+    }
+    if (argc == 2 && std::string_view{ argv[1] } == "detached-final-composite") {
+        try {
+            kb::render::tests::RunRendererDetachedViewportFinalCompositePixelsTest();
+            return EXIT_SUCCESS;
+        } catch (const std::exception& error) {
+            std::fputs(error.what(), stderr);
+            std::fputc('\n', stderr);
+            return EXIT_FAILURE;
+        }
     }
     if (argc != 1) {
         return EXIT_FAILURE;

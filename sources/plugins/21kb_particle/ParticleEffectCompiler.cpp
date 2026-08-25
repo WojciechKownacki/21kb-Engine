@@ -33,10 +33,10 @@ void Add(std::vector<kb::scene::ParticleEffectDiagnostic>& diagnostics,
     case kb::scene::ParticleOutputType::StretchedBillboard: return capabilities.stretchedBillboard;
     case kb::scene::ParticleOutputType::PointSprite: return capabilities.pointSprite;
     case kb::scene::ParticleOutputType::Mesh: return capabilities.mesh;
-    case kb::scene::ParticleOutputType::Trail:
-    case kb::scene::ParticleOutputType::Ribbon:
-    case kb::scene::ParticleOutputType::Beam:
-    case kb::scene::ParticleOutputType::Volumetric: return false;
+    case kb::scene::ParticleOutputType::Trail: return capabilities.trail;
+    case kb::scene::ParticleOutputType::Ribbon: return capabilities.ribbon;
+    case kb::scene::ParticleOutputType::Beam: return capabilities.beam;
+    case kb::scene::ParticleOutputType::Volumetric: return capabilities.volumetric;
     }
     return false;
 }
@@ -45,17 +45,14 @@ void Add(std::vector<kb::scene::ParticleEffectDiagnostic>& diagnostics,
 
 std::uint64_t ParticleCompilerCapabilities::StableKey() const noexcept {
     return (billboard ? 1ULL : 0ULL) | (stretchedBillboard ? 2ULL : 0ULL) | (pointSprite ? 4ULL : 0ULL) |
-        (mesh ? 8ULL : 0ULL);
+        (mesh ? 8ULL : 0ULL) | (trail ? 16ULL : 0ULL) | (ribbon ? 32ULL : 0ULL) |
+        (beam ? 64ULL : 0ULL) | (volumetric ? 128ULL : 0ULL);
 }
 
 std::vector<kb::scene::ParticleEffectDiagnostic> ParticleEffectCompiler::ValidateCapabilities(
     const kb::scene::ParticleEffectAsset& asset, const ParticleCompileRequest& request) {
     std::vector<kb::scene::ParticleEffectDiagnostic> diagnostics;
     diagnostics.reserve(1U + asset.emitters.size() + asset.eventBindings.size());
-    if (asset.backendPolicy == kb::scene::ParticleBackendPolicy::GpuVisualRequired) {
-        Add(diagnostics, kb::scene::ParticleEffectDiagnosticCode::UnsupportedCapability, "effect.backendPolicy",
-            "GPU-required effects are not executable by the current compiler capability set");
-    }
     for (std::size_t bindingIndex = 0U; bindingIndex < asset.eventBindings.size(); ++bindingIndex) {
         const auto& binding = asset.eventBindings[bindingIndex];
         if (binding.action == kb::scene::ParticleEventAction::EmitEffectAsset) {
@@ -97,22 +94,28 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
                                                       const kb::assets::AssetRegistry& registry,
                                                       const ParticleCompileRequest& request) {
     ParticleCompileResult result;
-    result.diagnostics = kb::scene::ParticleEffectAssetValidator::ValidateStructure(asset).diagnostics;
-    if (!result.diagnostics.empty()) return result;
+    const kb::scene::ParticleEffectValidationResult structure =
+        kb::scene::ParticleEffectAssetValidator::ValidateStructure(asset);
+    result.diagnostics = structure.diagnostics;
+    if (!structure.Succeeded()) return result;
 
-    result.diagnostics = ValidateCapabilities(asset, request);
-    if (!result.diagnostics.empty()) return result;
+    const std::vector<kb::scene::ParticleEffectDiagnostic> capabilities = ValidateCapabilities(asset, request);
+    result.diagnostics.insert(result.diagnostics.end(), capabilities.begin(), capabilities.end());
+    if (kb::scene::ParticleEffectDiagnosticsHaveErrors(capabilities)) return result;
 
     const kb::scene::ParticleEffectDependencyResult dependencies =
         kb::scene::ParticleEffectAssetValidator::ValidateDependencies(asset, owner, registry);
     result.transitiveDependencies = dependencies.transitiveDependencies;
-    result.diagnostics = dependencies.diagnostics;
-    if (!result.diagnostics.empty()) return result;
+    result.diagnostics.insert(result.diagnostics.end(), dependencies.diagnostics.begin(),
+        dependencies.diagnostics.end());
+    if (!dependencies.Succeeded()) return result;
 
     kb::particles::ParticleCompiledEffect compiled{};
     compiled.determinismSeed = asset.determinismSeed;
     compiled.durationSeconds = asset.durationSeconds;
     compiled.looping = asset.looping;
+    compiled.backendPolicy = asset.backendPolicy;
+    compiled.gpuCatchupPolicy = asset.gpuCatchupPolicy;
     compiled.emitterCount = static_cast<std::uint8_t>(asset.emitters.size());
     std::array<const kb::scene::ParticleEmitterAsset*, kb::scene::kParticleEffectMaxEmitters>
         emittersByAuthoringOrder{};
@@ -156,6 +159,30 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
             destination.meshLodBias = value.lodBias;
             destination.meshCastsShadow = value.castsShadow;
             destination.meshReceivesShadow = value.receivesShadow;
+        } else if (source.output.type == kb::scene::ParticleOutputType::Trail) {
+            const auto& value = std::get<kb::scene::ParticleTrailOutput>(source.output.payload);
+            destination.trailSampleIntervalSeconds = value.sampleIntervalSeconds;
+            destination.trailMinimumDistance = value.minimumDistance;
+            destination.trailMaxSamplesPerParticle = value.maxSamplesPerParticle;
+            destination.trailWidth = value.width;
+        } else if (source.output.type == kb::scene::ParticleOutputType::Ribbon) {
+            const auto& value = std::get<kb::scene::ParticleRibbonOutput>(source.output.payload);
+            destination.ribbonMaxSegments = value.maxSegments;
+            destination.ribbonWidth = value.width;
+            destination.ribbonBreakOnDeath = value.breakOnDeath;
+        } else if (source.output.type == kb::scene::ParticleOutputType::Beam) {
+            const auto& value = std::get<kb::scene::ParticleBeamOutput>(source.output.payload);
+            destination.beamLocalEnd = value.localEnd;
+            destination.beamSegments = value.segments;
+            destination.beamWidth = value.width;
+            destination.beamNoiseAmplitude = value.noiseAmplitude;
+            destination.beamNoiseFrequency = value.noiseFrequency;
+        } else if (source.output.type == kb::scene::ParticleOutputType::Volumetric) {
+            const auto& value = std::get<kb::scene::ParticleVolumetricOutput>(source.output.payload);
+            destination.volumetricDensity = value.density;
+            destination.volumetricRadiusScale = value.radiusScale;
+            destination.volumetricLowQualitySteps = value.lowQualitySteps;
+            destination.volumetricHighQualitySteps = value.highQualitySteps;
         }
         destination.simulationSpace = source.simulationSpace;
         destination.enabled = source.enabled;
@@ -182,6 +209,8 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
             modulesByAuthoringOrder{};
         for (const kb::scene::ParticleModuleAsset& module : source.modules)
             modulesByAuthoringOrder[module.authoringOrder] = &module;
+        bool colorOverLifeEnabled = false;
+        bool sizeOverLifeEnabled = false;
         for (std::size_t moduleIndex = 0U; moduleIndex < source.modules.size(); ++moduleIndex) {
             const auto& sourceModule = *modulesByAuthoringOrder[moduleIndex];
             auto& destinationModule = destination.modules[moduleIndex];
@@ -203,24 +232,32 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
             case kb::scene::ParticleModuleType::Drag:
                 destinationModule.payload = std::get<kb::scene::ParticleDragModule>(sourceModule.payload); break;
             case kb::scene::ParticleModuleType::ColorOverLife: {
+                if (!sourceModule.enabled) break;
                 const auto& gradient = std::get<kb::scene::ParticleColorOverLifeModule>(sourceModule.payload).gradient;
                 destination.colorOverLife.stopCount = static_cast<std::uint8_t>(gradient.stops.size());
                 for (std::size_t index = 0U; index < gradient.stops.size(); ++index)
                     destination.colorOverLife.stops[index] = {.time = gradient.stops[index].time,
                                                                .color = gradient.stops[index].color};
+                colorOverLifeEnabled = true;
                 break;
             }
-            case kb::scene::ParticleModuleType::SizeOverLife:
-            case kb::scene::ParticleModuleType::AlphaOverLife: {
-                const kb::math::Curve& curve = sourceModule.type == kb::scene::ParticleModuleType::SizeOverLife
-                    ? std::get<kb::scene::ParticleSizeOverLifeModule>(sourceModule.payload).curve
-                    : std::get<kb::scene::ParticleAlphaOverLifeModule>(sourceModule.payload).curve;
-                auto& output = sourceModule.type == kb::scene::ParticleModuleType::SizeOverLife
-                    ? destination.sizeOverLife : destination.alphaOverLife;
-                output.keyCount = static_cast<std::uint8_t>(curve.keyframes.size());
+            case kb::scene::ParticleModuleType::SizeOverLife: {
+                if (!sourceModule.enabled) break;
+                const kb::math::Curve& curve = std::get<kb::scene::ParticleSizeOverLifeModule>(sourceModule.payload).curve;
+                destination.sizeOverLife.keyCount = static_cast<std::uint8_t>(curve.keyframes.size());
                 for (std::size_t index = 0U; index < curve.keyframes.size(); ++index)
-                    output.keys[index] = {.time = curve.keyframes[index].time, .value = curve.keyframes[index].value,
-                                          .easing = curve.keyframes[index].easing};
+                    destination.sizeOverLife.keys[index] = {.time = curve.keyframes[index].time,
+                        .value = curve.keyframes[index].value, .easing = curve.keyframes[index].easing};
+                sizeOverLifeEnabled = true;
+                break;
+            }
+            case kb::scene::ParticleModuleType::AlphaOverLife: {
+                if (!sourceModule.enabled) break;
+                const kb::math::Curve& curve = std::get<kb::scene::ParticleAlphaOverLifeModule>(sourceModule.payload).curve;
+                destination.alphaOverLife.keyCount = static_cast<std::uint8_t>(curve.keyframes.size());
+                for (std::size_t index = 0U; index < curve.keyframes.size(); ++index)
+                    destination.alphaOverLife.keys[index] = {.time = curve.keyframes[index].time,
+                        .value = curve.keyframes[index].value, .easing = curve.keyframes[index].easing};
                 break;
             }
             case kb::scene::ParticleModuleType::CollisionPlane: {
@@ -234,6 +271,28 @@ ParticleCompileResult ParticleEffectCompiler::Compile(const kb::scene::ParticleE
             case kb::scene::ParticleModuleType::SubEmitter:
                 destinationModule.payload = std::get<kb::scene::ParticleSubEmitterModule>(sourceModule.payload); break;
             }
+        }
+        const kb::math::Color startColor = source.spawn.startColor;
+        if (!colorOverLifeEnabled) {
+            destination.colorOverLife.stopCount = 2U;
+            destination.colorOverLife.stops[0] = {.time = 0.0F, .color = startColor};
+            destination.colorOverLife.stops[1] = {.time = 1.0F, .color = startColor};
+        } else {
+            for (std::uint8_t index = 0U; index < destination.colorOverLife.stopCount; ++index) {
+                kb::math::Color& color = destination.colorOverLife.stops[index].color;
+                color.r *= startColor.r;
+                color.g *= startColor.g;
+                color.b *= startColor.b;
+                color.a *= startColor.a;
+            }
+        }
+        if (!sizeOverLifeEnabled) {
+            destination.sizeOverLife.keyCount = 1U;
+            destination.sizeOverLife.keys[0] = {.time = 0.0F, .value = source.spawn.startSize,
+                                                .easing = kb::math::Easing::Linear};
+        } else {
+            for (std::uint8_t index = 0U; index < destination.sizeOverLife.keyCount; ++index)
+                destination.sizeOverLife.keys[index].value *= source.spawn.startSize;
         }
     }
     compiled.eventBindingCount = static_cast<std::uint8_t>(asset.eventBindings.size());

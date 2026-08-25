@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/assets/AssetId.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputTouchPoint.hpp"
 #include "inspection/InspectorPhysicsModel.hpp"
@@ -21,6 +22,12 @@ class EditorSceneContext;
 // enters at InputDeviceState, immediately before the normal InputSubsystem.
 class EditorHeadlessAutomation final {
 public:
+    struct ParticleThumbnailVerification {
+        bool succeeded = false;
+        std::size_t ticks = 0U;
+        bool animated = false;
+    };
+
     EditorHeadlessAutomation(
         EditorSceneContext& context,
         std::filesystem::path artifactRoot);
@@ -43,6 +50,12 @@ public:
         std::uint8_t gamepadIndex, bool connected);
     [[nodiscard]] bool StepRuntime(
         std::size_t frames, float deltaSeconds);
+    [[nodiscard]] bool StepEditorParticles(
+        std::size_t frames, float deltaSeconds);
+    [[nodiscard]] bool VerifyParticlePickerInteraction();
+    [[nodiscard]] ParticleThumbnailVerification VerifyParticleThumbnail(
+        kb::assets::AssetId assetId,
+        std::size_t maximumTicks);
 
     [[nodiscard]] bool InspectorPointerDown(int x, int y);
     [[nodiscard]] bool InspectorPointerDrag(int x, int y);
@@ -57,6 +70,8 @@ public:
     [[nodiscard]] bool CapturePanelScreenshotMatrix(
         std::string_view panel, std::string_view checkpoint);
     [[nodiscard]] bool VerifyViewportHostLifecycle();
+    [[nodiscard]] bool VerifySceneRenderTargetAfterSecondary(
+        std::string_view checkpoint);
     [[nodiscard]] bool CaptureRuntime(
         std::string_view checkpoint,
         bool requireNonUniform = false);

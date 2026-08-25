@@ -38,6 +38,7 @@ void SceneComponentMutationService::SetVisibility(Scene& scene, SceneEntity enti
         } else {
             SetSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Hidden);
         }
+        MarkSceneRenderProxySubtreeDirty(state, entity);
         MarkScenePrefabNodeDirty(state, entity);
     }
 }
@@ -62,6 +63,7 @@ void SceneComponentMutationService::MarkVisibilityModified(Scene& scene, SceneEn
             SetSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Hidden);
         }
         state.componentStorage.Visibility().MarkModified(entity);
+        MarkSceneRenderProxySubtreeDirty(state, entity);
         MarkScenePrefabNodeDirty(state, entity);
     }
 }

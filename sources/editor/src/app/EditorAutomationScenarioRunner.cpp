@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "app/EditorCrashBreadcrumbs.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
+#include "app/EditorPlayModeState.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/audio/AudioPlayback.hpp"
@@ -33,9 +34,11 @@
 #include "engine/platform/PlatformServices.hpp"
 #include "engine/platform/PlatformAdapters.hpp"
 #include "engine/platform/SettingsTransaction.hpp"
+#include "engine/particles/ParticlePlayback.hpp"
 #include "engine/project/ProjectDescriptorWriter.hpp"
 #include "engine/scene/RegionPortalComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/platform/UserStorage.hpp"
 #include "engine/scene/PhysicsBackend.hpp"
 #include "engine/scene/PhysicsDebugDraw.hpp"
@@ -136,6 +139,7 @@ struct ScenarioState {
 
     EditorSceneContext& context;
     EditorHeadlessAutomation automation;
+    EditorPlayModeState playMode;
     std::filesystem::path fixtureRoot;
     std::unordered_map<std::string, EntityAlias> entities;
     std::unordered_map<std::string, kb::assets::AssetId> assets;
@@ -1644,6 +1648,29 @@ ReadScriptValue(
         return { true, *alias + '=' + std::to_string(entity.Id()) };
     }
 
+    if (*operation == "create_particle_effect_entity") {
+        const auto alias = StringMember(step, "id", error);
+        const auto asset = StringMember(step, "asset", error);
+        if (!alias || !asset) return { false, error };
+        if (state.entities.contains(*alias)) {
+            return { false, "entity alias already exists" };
+        }
+        const kb::assets::AssetId assetId = ResolveAsset(state, *asset);
+        if (!assetId.IsValid()) {
+            return { false, "particle effect asset was not found" };
+        }
+        const kb::scene::SceneEntity entity = state.context.CreateParticleEffectEntity(assetId);
+        if (!entity.IsValid()) {
+            return { false, "particle effect entity creation failed" };
+        }
+        state.entities.emplace(
+            *alias,
+            EntityAlias{
+                .entity = entity,
+                .name = state.context.Scene().Entities().Name(entity) });
+        return { true, *alias + '=' + std::to_string(entity.Id()) };
+    }
+
     if (*operation == "duplicate_entity") {
         const auto sourceAlias =
             StringMember(step, "entity", error);
@@ -1814,6 +1841,20 @@ ReadScriptValue(
         return { true, *alias };
     }
 
+    if (*operation == "assert_selected_entity") {
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return { false, error };
+        const kb::scene::SceneEntity expected = ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(expected)) {
+            return { false, "entity alias is not alive" };
+        }
+        const bool selected = state.context.SelectedEntity() == expected &&
+            state.context.IsHierarchyEntitySelected(expected);
+        return {
+            selected,
+            selected ? *alias : "selected hierarchy entity changed" };
+    }
+
     if (*operation == "assert_name") {
         const auto alias = StringMember(step, "entity", error);
         const auto expected = StringMember(step, "value", error);
@@ -1840,6 +1881,50 @@ ReadScriptValue(
         return {
             state.automation.AddComponent(*component),
             *component + " on " + *alias };
+    }
+
+    if (*operation == "set_particle_effect_asset") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto asset = StringMember(step, "asset", error);
+        if (!alias || !asset) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        const kb::assets::AssetId assetId = ResolveAsset(state, *asset);
+        if (!state.context.Scene().Entities().IsAlive(entity) ||
+            !assetId.IsValid()) {
+            return { false, "particle entity or asset was not found" };
+        }
+        return {
+            state.context.SetParticleEffectAsset(entity, assetId),
+            *asset + " on " + *alias };
+    }
+
+    if (*operation == "set_entity_position") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto x = NumberMember(step, "x", error);
+        const auto y = NumberMember(step, "y", error);
+        const auto z = NumberMember(step, "z", error);
+        if (!alias || !x || !y || !z) return { false, error };
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(entity)) {
+            return { false, "entity alias is not alive" };
+        }
+        state.context.SelectEntity(entity);
+        if (!state.context.BeginSelectedTransformEdit("Set Entity Position")) {
+            return { false, "transform edit did not begin" };
+        }
+        const kb::scene::Vec3 position{
+            static_cast<float>(*x),
+            static_cast<float>(*y),
+            static_cast<float>(*z) };
+        if (!state.context.ApplyActiveTransformEditPrimaryPosition(position) ||
+            !state.context.CommitActiveTransformEdit()) {
+            state.context.CancelActiveTransformEdit();
+            return { false, "transform edit did not commit" };
+        }
+        return {
+            true,
+            std::to_string(*x) + ',' + std::to_string(*y) + ',' +
+                std::to_string(*z) };
     }
 
     if (*operation == "remove_component") {
@@ -2517,6 +2602,8 @@ ReadScriptValue(
         } else if (*type == "material_type") {
             created =
                 state.context.CreateMaterialTypeAsset(virtualFolder);
+        } else if (*type == "particle_effect") {
+            created = state.context.CreateParticleEffectAsset(virtualFolder);
         } else {
             return { false, "unsupported asset type" };
         }
@@ -2529,7 +2616,7 @@ ReadScriptValue(
                 before, [&metadata](const auto& candidate) {
                     return candidate.id == metadata.id;
                 });
-            if (!existed) {
+            if (!existed && (*type != "particle_effect" || metadata.type == kb::scene::kParticleEffectAssetType)) {
                 createdId = metadata.id;
                 break;
             }
@@ -3073,6 +3160,7 @@ ReadScriptValue(
         const auto expected = BoolMember(step, "available", error);
         if (!backend || !expected) return { false, error };
         bool available = false;
+        std::string backendDetail;
         if (*backend == "physics") {
             available = kb::scene::PhysicsBackend::HasBackend(
                 state.context.Scene());
@@ -3082,6 +3170,26 @@ ReadScriptValue(
         } else if (*backend == "haptics") {
             available = kb::input::InputHaptics::HasBackend(
                 state.context.Scene());
+        } else if (*backend == "particles") {
+            available = kb::particles::ParticlePlayback::HasBackend(
+                state.context.Scene());
+            const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(
+                state.context.Scene());
+            const auto publication = kb::particles::ParticlePlayback::LastRenderSnapshotPublicationResult(
+                state.context.Scene());
+            const std::vector<std::uint64_t> liveInstances =
+                kb::particles::ParticlePlayback::LiveInstanceIds(state.context.Scene());
+            const auto firstInstance = liveInstances.empty()
+                ? kb::particles::ParticleRuntimeQueryResult{}
+                : kb::particles::ParticlePlayback::Query(state.context.Scene(), liveInstances.front());
+            backendDetail = std::string{available ? "available" : "unavailable"} +
+                ", playing=" + (state.context.Scene().Runtime().IsPlaying() ? "true" : "false") +
+                ", fixedStep=" + std::to_string(state.context.Scene().Runtime().FixedStepIndex()) +
+                ", liveInstances=" + std::to_string(liveInstances.size()) +
+                ", material=" + std::to_string(firstInstance.materialAssetId) +
+                ", liveParticles=" + std::to_string(firstInstance.liveParticleCount) +
+                ", snapshotRevision=" + std::to_string(snapshot ? snapshot->Revision() : 0U) +
+                ", publicationStatus=" + std::to_string(static_cast<unsigned>(publication.status));
         } else if (*backend == "basic_lighting") {
             available =
                 kb::scene::SceneLightingAccess::BasicLightingEnabled(
@@ -3091,7 +3199,53 @@ ReadScriptValue(
         }
         return {
             available == *expected,
-            available ? "available" : "unavailable" };
+            backendDetail.empty() ? (available ? "available" : "unavailable") : backendDetail };
+    }
+
+    if (*operation == "assert_particle_origin") {
+        const auto alias = StringMember(step, "entity", error);
+        const auto x = NumberMember(step, "x", error);
+        const auto y = NumberMember(step, "y", error);
+        const auto z = NumberMember(step, "z", error);
+        const double tolerance = NumberMember(
+            step, "tolerance", error, false).value_or(0.001);
+        if (!alias || !x || !y || !z || !error.empty() || tolerance < 0.0) {
+            return { false, error.empty() ? "invalid particle origin assertion" : error };
+        }
+        const kb::scene::SceneEntity entity = ResolveEntity(state, *alias);
+        std::uint64_t instanceId = 0U;
+        for (const std::uint64_t candidate :
+             kb::particles::ParticlePlayback::LiveInstanceIds(state.context.Scene())) {
+            if (kb::particles::ParticlePlayback::Query(
+                    state.context.Scene(), candidate).owner == entity) {
+                instanceId = candidate;
+                break;
+            }
+        }
+        const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(
+            state.context.Scene());
+        const kb::particles::ParticleRenderEmitterRecord* emitter = nullptr;
+        if (snapshot != nullptr) {
+            const auto emitters = snapshot->Emitters();
+            const auto found = std::ranges::find_if(
+                emitters,
+                [instanceId](const auto& candidate) {
+                    return candidate.instanceId == instanceId;
+                });
+            if (found != emitters.end()) emitter = &*found;
+        }
+        if (emitter == nullptr) {
+            return { false, "particle emitter snapshot was not found" };
+        }
+        const bool matched =
+            std::abs(static_cast<double>(emitter->outputOrigin.x) - *x) <= tolerance &&
+            std::abs(static_cast<double>(emitter->outputOrigin.y) - *y) <= tolerance &&
+            std::abs(static_cast<double>(emitter->outputOrigin.z) - *z) <= tolerance;
+        return {
+            matched,
+            "actual=" + std::to_string(emitter->outputOrigin.x) + ',' +
+                std::to_string(emitter->outputOrigin.y) + ',' +
+                std::to_string(emitter->outputOrigin.z) };
     }
 
     if (*operation == "attach_script") {
@@ -3206,17 +3360,55 @@ ReadScriptValue(
     }
 
     if (*operation == "save_scene") {
-        const auto path = StringMember(step, "path", error, false);
-        if (!path.has_value()) {
-            return {
-                state.context.SaveCurrentScene(),
-                state.context.CurrentScenePath().string() };
+        const auto maximumMilliseconds = NumberMember(
+            step, "max_ms", error, false);
+        if (!error.empty() ||
+            (maximumMilliseconds.has_value() && *maximumMilliseconds <= 0.0)) {
+            return { false, error.empty() ? "max_ms must be positive" : error };
         }
-        const auto resolved = ResolveProjectPath(*path, error);
-        if (!resolved) return { false, error };
+        const auto path = StringMember(step, "path", error, false);
+        if (!error.empty()) return { false, error };
+        const auto started = std::chrono::steady_clock::now();
+        bool saved = false;
+        std::filesystem::path savedPath;
+        if (!path.has_value()) {
+            saved = state.context.SaveCurrentScene();
+            savedPath = state.context.CurrentScenePath();
+        } else {
+            const auto resolved = ResolveProjectPath(*path, error);
+            if (!resolved) return { false, error };
+            saved = state.context.SaveCurrentSceneAs(*resolved);
+            savedPath = *resolved;
+        }
+
+        const double elapsedMilliseconds =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - started).count();
+        const bool withinBudget = !maximumMilliseconds.has_value() ||
+            elapsedMilliseconds <= *maximumMilliseconds;
         return {
-            state.context.SaveCurrentSceneAs(*resolved),
-            resolved->string() };
+            saved && withinBudget,
+            "scene save " + std::to_string(elapsedMilliseconds) +
+                " ms path=" + savedPath.string() };
+    }
+
+    if (*operation == "advance_autosave") {
+        const auto seconds = NumberMember(step, "seconds", error);
+        if (!seconds.has_value() || *seconds <= 0.0) {
+            return { false, error.empty() ? "seconds must be positive" : error };
+        }
+        const bool wasDirty = state.context.SceneDocumentDirty();
+        const bool visualChanged = state.context.TickAutosave(*seconds, true);
+        const EditorAutosaveState& autosave = state.context.Autosave();
+        const bool succeeded = wasDirty && visualChanged &&
+            !state.context.SceneDocumentDirty() &&
+            autosave.NotificationVisible() &&
+            autosave.NotificationSucceeded();
+        return {
+            succeeded,
+            autosave.NotificationText().empty()
+                ? std::string{ "no autosave notification" }
+                : autosave.NotificationText() };
     }
 
     if (*operation == "open_scene") {
@@ -3284,14 +3476,55 @@ ReadScriptValue(
     }
 
     if (*operation == "play") {
+        const auto maximumMilliseconds = NumberMember(
+            step, "max_ms", error, false);
+        if (!error.empty() ||
+            (maximumMilliseconds.has_value() && *maximumMilliseconds <= 0.0)) {
+            return { false, error.empty() ? "max_ms must be positive" : error };
+        }
+        if (state.playMode.Mode() != EditorPlayMode::Stopped) {
+            return { false, "play transport is not stopped" };
+        }
+        const auto started = std::chrono::steady_clock::now();
+        const bool entered = state.context.BeginPlayModeSceneSession();
+        const double elapsedMilliseconds =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - started).count();
+        const bool withinBudget = !maximumMilliseconds.has_value() ||
+            elapsedMilliseconds <= *maximumMilliseconds;
+        if (entered) {
+            state.playMode.Play();
+        }
         return {
-            state.context.BeginPlayModeSceneSession(),
-            "play mode started" };
+            entered && withinBudget,
+            "play transition " + std::to_string(elapsedMilliseconds) + " ms" };
+    }
+    if (*operation == "pause") {
+        if (state.playMode.IsPlaying()) {
+            state.playMode.Pause();
+            return { true, "paused" };
+        }
+        if (state.playMode.IsPaused()) {
+            state.playMode.Resume();
+            return { true, "resumed" };
+        }
+        return { false, "pause transport requires an active Play session" };
     }
     if (*operation == "stop") {
+        if (state.playMode.Mode() == EditorPlayMode::Stopped) {
+            return { false, "stop transport is already stopped" };
+        }
+        const auto started = std::chrono::steady_clock::now();
+        const bool restored = state.context.RestorePlayModeSceneSession();
+        const double elapsedMilliseconds =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - started).count();
+        if (restored) {
+            state.playMode.Stop();
+        }
         return {
-            state.context.RestorePlayModeSceneSession(),
-            "play mode stopped" };
+            restored,
+            "stop transition " + std::to_string(elapsedMilliseconds) + " ms" };
     }
 
     if (*operation == "key") {
@@ -3416,6 +3649,9 @@ ReadScriptValue(
     }
 
     if (*operation == "step") {
+        if (state.playMode.IsPaused()) {
+            return { false, "runtime step requested while transport is paused" };
+        }
         const auto frames = NumberMember(step, "frames", error);
         const auto delta =
             NumberMember(step, "dt", error, false)
@@ -3429,6 +3665,44 @@ ReadScriptValue(
                 static_cast<std::size_t>(*frames),
                 static_cast<float>(delta)),
             std::to_string(*frames) + " frame(s)" };
+    }
+
+    if (*operation == "step_editor_particles") {
+        const auto frames = NumberMember(step, "frames", error);
+        const auto delta = NumberMember(step, "dt", error, false)
+            .value_or(1.0 / 60.0);
+        if (!frames || *frames < 1.0 || std::floor(*frames) != *frames) {
+            return { false, "frames must be a positive integer" };
+        }
+        return {
+            state.automation.StepEditorParticles(
+                static_cast<std::size_t>(*frames),
+                static_cast<float>(delta)),
+            std::to_string(*frames) + " editor particle frame(s)" };
+    }
+
+    if (*operation == "verify_particle_picker") {
+        return {
+            state.automation.VerifyParticlePickerInteraction(),
+            "modeless selection contract" };
+    }
+
+    if (*operation == "assert_particle_thumbnail") {
+        const auto asset = StringMember(step, "asset", error);
+        const double maxTicksValue = NumberMember(
+            step, "max_ticks", error, false).value_or(64.0);
+        if (!asset || maxTicksValue < 1.0 || maxTicksValue > 1000.0 ||
+            std::floor(maxTicksValue) != maxTicksValue) {
+            return { false, error.empty() ? "invalid thumbnail assertion" : error };
+        }
+        const kb::assets::AssetId assetId = ResolveAsset(state, *asset);
+        const auto verification = state.automation.VerifyParticleThumbnail(
+            assetId, static_cast<std::size_t>(maxTicksValue));
+        return {
+            verification.succeeded,
+            std::to_string(verification.ticks) +
+                " renderer thumbnail tick(s), animated=" +
+                (verification.animated ? "true" : "false") };
     }
 
     if (*operation == "inspector_pointer") {
@@ -3521,6 +3795,16 @@ ReadScriptValue(
         return {
             state.automation.VerifyViewportHostLifecycle(),
             "minimize,deactivate,dpi,resize-move" };
+    }
+
+    if (*operation == "verify_scene_render_target_after_secondary") {
+        const auto checkpoint =
+            StringMember(step, "checkpoint", error);
+        if (!checkpoint) return { false, error };
+        return {
+            state.automation.VerifySceneRenderTargetAfterSecondary(
+                *checkpoint),
+            *checkpoint };
     }
 
     if (*operation == "snapshot") {

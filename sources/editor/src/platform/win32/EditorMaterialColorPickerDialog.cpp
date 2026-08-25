@@ -5,7 +5,7 @@
 #include "platform/win32/EditorModalMessageLoop.hpp"
 #include "platform/win32/EditorModalWindowScope.hpp"
 #include "rendering/GdiDrawing.hpp"
-#include "rendering/gdi/ScopedFont.hpp"
+#include "rendering/components/EditorDialogStyle.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "kb/render/resources/RenderMaterialNumericParsing.hpp"
 
@@ -33,8 +33,7 @@ namespace {
 constexpr wchar_t kColorPickerClassName[] = L"KBEditorMaterialColorPickerDialog";
 constexpr int kDialogWidth = 324;
 constexpr int kDialogHeight = 420;
-constexpr int kPad = 22;
-constexpr int kTitleHeight = 18;
+constexpr int kPad = 12;
 constexpr int kSquare = 216;
 constexpr int kHueWidth = 22;
 constexpr int kGap = 10;
@@ -224,12 +223,6 @@ struct HsvColor {
     return kb::render::ParseFiniteMaterialFloatSequence(text, values, 1U, 1U, false)
         ? std::optional<float>{ values.front() }
         : std::nullopt;
-}
-
-void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
-    SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, color);
-    DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, static_cast<int>(format | DT_NOPREFIX));
 }
 
 void DrawCheckerboard(HDC dc, RECT rect, int cell) {
@@ -536,7 +529,7 @@ private:
     }
 
     [[nodiscard]] RECT SaturationValueRect() const noexcept {
-        const int top = kPad + kTitleHeight + kGap;
+        const int top = EditorDialogStyle::TitleBarHeight + kGap;
         return Rect(kPad, top, kPad + kSquare, top + kSquare);
     }
 
@@ -548,10 +541,6 @@ private:
     [[nodiscard]] RECT AlphaRect() const noexcept {
         const RECT hue = HueRect();
         return Rect(hue.right + kGap, hue.top, hue.right + kGap + kHueWidth, hue.bottom);
-    }
-
-    [[nodiscard]] RECT TitleRect() const noexcept {
-        return Rect(kPad, kPad, kDialogWidth - kPad, kPad + kTitleHeight);
     }
 
     [[nodiscard]] RECT FieldsBounds() const noexcept {
@@ -748,18 +737,23 @@ private:
 
     void PaintContent(HDC dc) const {
         const RECT client = Client();
-        GdiDrawing::FillRectColor(dc, client, Rgb(20, 23, 29));
-        GdiDrawing::DrawSharpFrame(dc, client, Rgb(20, 23, 29), Rgb(50, 58, 70));
-        {
-            ScopedFont titleFont(12, FW_SEMIBOLD);
-            const ScopedGdiObject selectedFont(dc, titleFont.handle);
-            Text(dc, TitleRect(), "Color", Rgb(245, 248, 252));
-        }
+        const EditorTheme theme = MakeEditorDarkTheme();
+        EditorDialogStyle::PaintSurface(dc, client, theme);
+        EditorDialogStyle::PaintTitleBar(dc, theme, EditorDialogHeaderDescriptor{
+            .bounds = Rect(client.left + 1, client.top + 1, client.right - 1, client.top + EditorDialogStyle::TitleBarHeight),
+            .title = title_.empty() ? std::string_view{"Color"} : std::string_view{title_},
+            .icon = HeroIconKind::AdjustmentsHorizontal,
+            .showIcon = true,
+        });
 
         DrawSaturationValue(dc);
         DrawHue(dc);
         DrawAlpha(dc);
         DrawFields(dc);
+        EditorDialogStyle::PaintFooter(
+            dc,
+            Rect(client.left + 1, PreviewRect().top - 6, client.right - 1, client.bottom - 1),
+            theme);
         DrawPreview(dc);
         DrawButton(dc, CancelButtonRect(), "Cancel", false);
         DrawButton(dc, OkButtonRect(), "Apply", true);
@@ -862,7 +856,8 @@ private:
     }
 
     void DrawFields(HDC dc) const {
-        Text(dc, HexLabelRect(), "Hex", Rgb(190, 205, 224), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        const EditorTheme theme = MakeEditorDarkTheme();
+        EditorDialogStyle::PaintText(dc, HexLabelRect(), "Hex", EditorDialogStyle::Color(theme.textSecondary));
         DrawField(dc, PickerField::Hex, FieldText(PickerField::Hex));
         DrawField(dc, PickerField::Red, "R " + FieldText(PickerField::Red));
         DrawField(dc, PickerField::Green, "G " + FieldText(PickerField::Green));
@@ -871,18 +866,23 @@ private:
     }
 
     void DrawButton(HDC dc, RECT rect, std::string_view label, bool emphasized) const {
-        GdiDrawing::DrawSharpFrame(dc, rect, emphasized ? Rgb(245, 194, 50) : Rgb(17, 20, 27), emphasized ? Rgb(248, 211, 81) : Rgb(55, 65, 82));
-        Text(dc, rect, label, emphasized ? Rgb(22, 23, 26) : Rgb(235, 241, 249), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        const EditorTheme theme = MakeEditorDarkTheme();
+        EditorDialogStyle::PaintButton(
+            dc,
+            rect,
+            theme,
+            label,
+            emphasized ? EditorDialogButtonTone::Primary : EditorDialogButtonTone::Neutral);
     }
 
     void DrawField(HDC dc, PickerField field, std::string text) const {
         const RECT rect = FieldRect(field);
         const bool focused = focusedField_ == field;
-        GdiDrawing::DrawSharpFrame(dc, rect, focused ? Rgb(25, 34, 48) : Rgb(17, 20, 27), focused ? Rgb(111, 171, 235) : Rgb(55, 65, 82));
         if (focused) {
             text = FieldText(field) + "|";
         }
-        Text(dc, Rect(rect.left + 7, rect.top, rect.right - 7, rect.bottom), text, Rgb(236, 242, 250));
+        const EditorTheme theme = MakeEditorDarkTheme();
+        EditorDialogStyle::PaintField(dc, rect, theme, text, focused);
     }
 
     static void DrawMarker(HDC dc, int x, int y) {

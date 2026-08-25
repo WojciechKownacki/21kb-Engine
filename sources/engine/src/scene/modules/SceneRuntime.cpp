@@ -63,8 +63,20 @@ std::span<const WorldTransformAffine3x4> SceneRuntimeQueries::TransformRenderPro
     return SceneRuntimeService::TransformRenderProxyWorldAffine3x4(scene_);
 }
 
+std::span<const SceneEntity> SceneRuntimeQueries::RenderProxyUpdateEntities() const noexcept {
+    return SceneRuntimeService::RenderProxyUpdateEntities(scene_);
+}
+
+std::uint64_t SceneRuntimeQueries::RenderProxyUpdateRevision() const noexcept {
+    return SceneRuntimeService::RenderProxyUpdateRevision(scene_);
+}
+
+std::uint64_t SceneRuntimeQueries::RenderTopologyVersion() const noexcept {
+    return SceneRuntimeService::RenderTopologyVersion(scene_);
+}
+
 std::span<const SceneEntity> SceneRuntimeQueries::MeshRendererRenderProxyUpdateEntities() const noexcept {
-    return SceneRuntimeService::MeshRendererRenderProxyUpdateEntities(scene_);
+    return RenderProxyUpdateEntities();
 }
 
 std::uint64_t SceneRuntimeQueries::FrameIndex() const noexcept {
@@ -182,8 +194,20 @@ std::span<const WorldTransformAffine3x4> SceneRuntime::TransformRenderProxyWorld
     return SceneRuntimeService::TransformRenderProxyWorldAffine3x4(scene_);
 }
 
+std::span<const SceneEntity> SceneRuntime::RenderProxyUpdateEntities() const noexcept {
+    return SceneRuntimeService::RenderProxyUpdateEntities(scene_);
+}
+
+std::uint64_t SceneRuntime::RenderProxyUpdateRevision() const noexcept {
+    return SceneRuntimeService::RenderProxyUpdateRevision(scene_);
+}
+
+std::uint64_t SceneRuntime::RenderTopologyVersion() const noexcept {
+    return SceneRuntimeService::RenderTopologyVersion(scene_);
+}
+
 std::span<const SceneEntity> SceneRuntime::MeshRendererRenderProxyUpdateEntities() const noexcept {
-    return SceneRuntimeService::MeshRendererRenderProxyUpdateEntities(scene_);
+    return RenderProxyUpdateEntities();
 }
 
 bool SceneRuntime::Update(float deltaSeconds) {

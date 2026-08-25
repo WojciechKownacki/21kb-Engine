@@ -2,11 +2,16 @@
 
 #include "kb/render/runtime/RuntimeRenderAssetDiscovery.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
+#include "engine/scene/Scene.hpp"
 #include "runtime/RuntimeMaterialResourceEnsurer.hpp"
 #include "runtime/RuntimeMeshResourceEnsurer.hpp"
 #include "runtime/RuntimeRenderResourceLifecycle.hpp"
 #include "runtime/RuntimeRenderResourcePruner.hpp"
 #include "runtime/RuntimeTextureResourceEnsurer.hpp"
+#include "renderer/RendererDebugLog.hpp"
+
+#include <chrono>
+#include <sstream>
 
 namespace kb::render {
 
@@ -24,10 +29,38 @@ void RuntimeRenderResourceCache::Reserve(const RuntimeRenderResourceCacheReserve
 }
 
 void RuntimeRenderResourceCache::EnsureSceneResources(const RuntimeRenderResourceEnsureContext& context) {
+    const bool traceEnabled = RendererDebugLogEnabled("runtime_resources");
+    const auto started = traceEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     context.assetDiscovery.Ensure(context.scene, context.currentFrame);
+    const auto discoveryFinished = traceEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     EnsureMeshResources(context);
+    const auto meshesFinished = traceEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     EnsureMaterialResources(context);
+    const auto materialsFinished = traceEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     EnsureTextureResources(context);
+    if (traceEnabled) {
+        const auto finished = std::chrono::steady_clock::now();
+        const auto elapsedMs = [](auto begin, auto end) {
+            return std::chrono::duration<double, std::milli>(end - begin).count();
+        };
+        const RuntimeRenderResourceCacheStats stats = Stats();
+        std::ostringstream message;
+        message << "EnsureSceneResources"
+                << " scene=" << context.scene.Id()
+                << " frame=" << context.currentFrame
+                << " discoveryMs=" << elapsedMs(started, discoveryFinished)
+                << " meshMs=" << elapsedMs(discoveryFinished, meshesFinished)
+                << " materialMs=" << elapsedMs(meshesFinished, materialsFinished)
+                << " textureMs=" << elapsedMs(materialsFinished, finished)
+                << " totalMs=" << elapsedMs(started, finished)
+                << " meshes=" << stats.meshCount
+                << " materials=" << stats.materialCount
+                << " textures=" << stats.textureCount
+                << " loadedMaterials=" << context.materialLoadedCount
+                << " fallbackMaterials=" << context.materialFallbackCount
+                << " materialErrors=" << context.materialErrorCount;
+        WriteRendererDebugLog("runtime_resources", message.str());
+    }
 }
 
 void RuntimeRenderResourceCache::EnsureMeshResources(const RuntimeRenderResourceEnsureContext& context) {

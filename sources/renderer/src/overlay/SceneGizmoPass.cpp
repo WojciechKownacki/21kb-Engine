@@ -549,6 +549,97 @@ void AppendLightIcons(std::vector<Vertex>& output, std::span<const EditorLightWi
     }
 }
 
+void AppendParticleIconVertex(
+    std::vector<Vertex>& output,
+    const EditorParticleIconDesc& particle,
+    float x,
+    float y,
+    float scale,
+    std::array<float, 3> color,
+    float alpha) {
+    const std::array<float, 3> world = Add(
+        particle.position,
+        Add(Mul(particle.iconRight, x * scale), Mul(particle.iconUp, y * scale)));
+    output.push_back(Vertex{
+        .x = world[0],
+        .y = world[1],
+        .z = world[2],
+        .nx = 0.0F,
+        .ny = 0.0F,
+        .nz = 1.0F,
+        .r = color[0],
+        .g = color[1],
+        .b = color[2],
+        .alpha = alpha,
+    });
+}
+
+void AppendParticleTriangle(
+    std::vector<Vertex>& output,
+    const EditorParticleIconDesc& particle,
+    std::array<float, 2> a,
+    std::array<float, 2> b,
+    std::array<float, 2> c,
+    float scale,
+    std::array<float, 3> color,
+    float alpha) {
+    AppendParticleIconVertex(output, particle, a[0], a[1], scale, color, alpha);
+    AppendParticleIconVertex(output, particle, b[0], b[1], scale, color, alpha);
+    AppendParticleIconVertex(output, particle, c[0], c[1], scale, color, alpha);
+}
+
+void AppendParticleDiamond(
+    std::vector<Vertex>& output,
+    const EditorParticleIconDesc& particle,
+    float centerX,
+    float centerY,
+    float halfWidth,
+    float halfHeight,
+    float scale,
+    std::array<float, 3> color,
+    float alpha) {
+    const std::array<float, 2> center{centerX, centerY};
+    const std::array<float, 2> top{centerX, centerY + halfHeight};
+    const std::array<float, 2> right{centerX + halfWidth, centerY};
+    const std::array<float, 2> bottom{centerX, centerY - halfHeight};
+    const std::array<float, 2> left{centerX - halfWidth, centerY};
+    AppendParticleTriangle(output, particle, center, top, right, scale, color, alpha);
+    AppendParticleTriangle(output, particle, center, right, bottom, scale, color, alpha);
+    AppendParticleTriangle(output, particle, center, bottom, left, scale, color, alpha);
+    AppendParticleTriangle(output, particle, center, left, top, scale, color, alpha);
+}
+
+void AppendParticleIconLayer(
+    std::vector<Vertex>& output,
+    const EditorParticleIconDesc& particle,
+    float scale,
+    std::array<float, 3> color,
+    float alpha) {
+    AppendParticleDiamond(output, particle, 0.0F, 0.0F, 0.28F, 0.88F, scale, color, alpha);
+    AppendParticleDiamond(output, particle, -0.55F, 0.32F, 0.16F, 0.34F, scale, color, alpha);
+    AppendParticleDiamond(output, particle, 0.55F, 0.25F, 0.14F, 0.29F, scale, color, alpha);
+}
+
+void AppendParticleIcons(
+    std::vector<Vertex>& output,
+    std::span<const EditorParticleIconDesc> particles) {
+    output.reserve(output.size() + particles.size() * 72U);
+    for (const EditorParticleIconDesc& particle : particles) {
+        if (particle.iconWorldScale <= 0.0F) {
+            continue;
+        }
+        AppendParticleIconLayer(
+            output, particle, particle.iconWorldScale * 1.18F,
+            {0.0F, 0.0F, 0.0F}, 0.34F);
+        AppendParticleIconLayer(
+            output, particle, particle.iconWorldScale,
+            particle.selected
+                ? std::array<float, 3>{1.0F, 0.98F, 0.90F}
+                : std::array<float, 3>{0.74F, 0.38F, 1.0F},
+            0.97F);
+    }
+}
+
 void AppendCircle(
     std::vector<Vertex>& output,
     std::array<float, 3> center,
@@ -692,6 +783,7 @@ bool SceneGizmoPass::Submit(const SceneGizmoPassDesc& desc) const {
         ((!desc.visible || desc.worldScale <= 0.0F) &&
             desc.cameraWireframes.empty() &&
             desc.lightWireframes.empty() &&
+            desc.particleIcons.empty() &&
             desc.physicsDebugLines.empty())) {
         return false;
     }
@@ -705,7 +797,9 @@ bool SceneGizmoPass::Submit(const SceneGizmoPassDesc& desc) const {
     bool submitted = false;
     {
         std::vector<Vertex> drawVertices;
-        drawVertices.reserve(18000 + desc.lightWireframes.size() * 288U);
+        drawVertices.reserve(
+            18000 + desc.lightWireframes.size() * 288U +
+            desc.particleIcons.size() * 72U);
         for (const PassDesc& pass : passes) {
             if (desc.visible && desc.worldScale > 0.0F) {
                 for (const GizmoAxis axis : {GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z}) {
@@ -732,6 +826,7 @@ bool SceneGizmoPass::Submit(const SceneGizmoPassDesc& desc) const {
             }
         }
         AppendLightIcons(drawVertices, desc.lightWireframes);
+        AppendParticleIcons(drawVertices, desc.particleIcons);
 
         const std::uint32_t vertexCount = static_cast<std::uint32_t>(drawVertices.size());
         if (vertexCount != 0U && bgfx::getAvailTransientVertexBuffer(vertexCount, layout_) >= vertexCount) {

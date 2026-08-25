@@ -48,10 +48,48 @@ template <typename Enum>
             !std::isfinite(emitter.pointSpriteDiameter) || emitter.pointSpriteDiameter <= 0.0F ||
             ((emitter.droppedParticleCount == 0U) !=
                 (emitter.droppedReason == ParticleRenderDropReason::None)) ||
+            !IsFinite(emitter.outputOrigin) ||
             !IsFinite(emitter.boundsMinimum) || !IsFinite(emitter.boundsMaximum) ||
             emitter.boundsMinimum.x > emitter.boundsMaximum.x ||
             emitter.boundsMinimum.y > emitter.boundsMaximum.y ||
             emitter.boundsMinimum.z > emitter.boundsMaximum.z) {
+            return false;
+        }
+        if (emitter.output == ParticleRenderOutput::Trail &&
+            (!std::isfinite(emitter.trailSampleIntervalSeconds) || emitter.trailSampleIntervalSeconds <= 0.0F ||
+             !std::isfinite(emitter.trailMinimumDistance) || emitter.trailMinimumDistance < 0.0F ||
+             emitter.trailMaxSamplesPerParticle == 0U ||
+             emitter.trailMaxSamplesPerParticle > kb::scene::kParticleEffectMaxTrailSamplesPerParticle ||
+             !std::isfinite(emitter.trailWidth) || emitter.trailWidth <= 0.0F)) {
+            return false;
+        }
+        if (emitter.output == ParticleRenderOutput::Ribbon &&
+            (emitter.ribbonMaxSegments == 0U ||
+             emitter.ribbonMaxSegments > kb::scene::kParticleEffectMaxStripSegmentsPerEmitter ||
+             !std::isfinite(emitter.ribbonWidth) || emitter.ribbonWidth <= 0.0F)) {
+            return false;
+        }
+        if (emitter.output == ParticleRenderOutput::Beam &&
+            (!IsFinite(emitter.beamEnd) || !IsFinite(emitter.beamLocalEnd) ||
+             (emitter.beamEnd.x - emitter.outputOrigin.x) * (emitter.beamEnd.x - emitter.outputOrigin.x) +
+                     (emitter.beamEnd.y - emitter.outputOrigin.y) * (emitter.beamEnd.y - emitter.outputOrigin.y) +
+                     (emitter.beamEnd.z - emitter.outputOrigin.z) * (emitter.beamEnd.z - emitter.outputOrigin.z) <=
+                 0.000001F ||
+             emitter.beamLocalEnd.x * emitter.beamLocalEnd.x + emitter.beamLocalEnd.y * emitter.beamLocalEnd.y +
+                     emitter.beamLocalEnd.z * emitter.beamLocalEnd.z <=
+                 0.000001F ||
+             emitter.beamSegments == 0U || emitter.beamSegments > kb::scene::kParticleEffectMaxStripSegmentsPerEmitter ||
+             !std::isfinite(emitter.beamWidth) || emitter.beamWidth <= 0.0F ||
+             !std::isfinite(emitter.beamNoiseAmplitude) || emitter.beamNoiseAmplitude < 0.0F ||
+             !std::isfinite(emitter.beamNoiseFrequency) || emitter.beamNoiseFrequency < 0.0F)) {
+            return false;
+        }
+        if (emitter.output == ParticleRenderOutput::Volumetric &&
+            (!std::isfinite(emitter.volumetricDensity) || emitter.volumetricDensity <= 0.0F ||
+             !std::isfinite(emitter.volumetricRadiusScale) || emitter.volumetricRadiusScale <= 0.0F ||
+             emitter.volumetricLowQualitySteps == 0U ||
+             emitter.volumetricHighQualitySteps < emitter.volumetricLowQualitySteps ||
+             emitter.volumetricHighQualitySteps > 256U)) {
             return false;
         }
         if (emitter.particleCount > particleCount - expectedFirst) return false;

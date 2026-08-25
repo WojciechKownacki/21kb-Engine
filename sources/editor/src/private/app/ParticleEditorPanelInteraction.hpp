@@ -22,6 +22,14 @@ public:
                            const ParticleEditorPanelLayout& layout,
                            int y) noexcept;
     [[nodiscard]] static bool CommitDrag(EditorSceneContext& sceneContext);
+    [[nodiscard]] static bool BeginPropertySlider(EditorSceneContext& sceneContext,
+                                                  const ParticleEditorPanelLayout& layout,
+                                                  const ParticleEditorPanelHit& hit,
+                                                  int x);
+    [[nodiscard]] static bool UpdatePropertySlider(EditorSceneContext& sceneContext,
+                                                   const ParticleEditorPanelLayout& layout,
+                                                   int x);
+    static void EndPropertySlider(EditorSceneContext& sceneContext) noexcept;
     [[nodiscard]] static bool HandleCharacter(EditorSceneContext& sceneContext, wchar_t character);
     [[nodiscard]] static bool HandleKeyDown(EditorSceneContext& sceneContext, std::uintptr_t key);
 };

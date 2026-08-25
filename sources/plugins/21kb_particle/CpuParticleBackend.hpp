@@ -53,11 +53,12 @@ public:
         std::uint64_t instanceId,
         kb::scene::ParticleOwnerDeathPolicy policy) noexcept;
     [[nodiscard]] kb::particles::ParticleRuntimeResult ConfigureComponent(
+        kb::scene::Scene& scene,
         std::uint64_t instanceId,
         float rateMultiplier,
         std::uint32_t maxParticlesOverride,
         bool followTransform,
-        const kb::scene::WorldTransform& ownerTransform) noexcept;
+        const kb::scene::WorldTransform& ownerTransform) noexcept override;
     [[nodiscard]] kb::particles::ParticleRuntimeResult Step(
         kb::scene::Scene& scene,
         float fixedDeltaSeconds);
@@ -98,6 +99,9 @@ public:
         kb::scene::Scene& scene,
         std::uint64_t instanceId,
         std::uint32_t count) override;
+    [[nodiscard]] kb::particles::ParticleRuntimeResult Simulate(
+        kb::scene::Scene& scene,
+        float fixedDeltaSeconds) override;
     [[nodiscard]] kb::particles::ParticleRuntimeQueryResult Query(
         const kb::scene::Scene& scene,
         std::uint64_t instanceId) const noexcept override;
@@ -149,7 +153,7 @@ private:
     struct InstanceRuntime {
         std::uint32_t compiledEffectIndex = UINT32_MAX;
         std::uint64_t randomState = 0U;
-        std::uint64_t spawnOrdinal = 0U;
+        std::array<std::uint64_t, kb::scene::kParticleEffectMaxEmitters> spawnOrdinals{};
         std::array<float, kb::scene::kParticleEffectMaxEmitters> elapsedSeconds{};
         std::array<bool, kb::scene::kParticleEffectMaxEmitters> cycleStarted{};
         std::array<float, kb::scene::kParticleEffectMaxEmitters> emissionFractions{};
@@ -215,12 +219,10 @@ private:
     void CapturePreviousParticlePositions() noexcept;
     [[nodiscard]] kb::particles::ParticleRenderSnapshotResult PublishRenderSnapshot(
         kb::scene::Scene& scene,
-        std::uint64_t fixedStepIndex,
-        std::uint64_t revision) noexcept;
+        std::uint64_t fixedStepIndex) noexcept;
     [[nodiscard]] kb::particles::ParticleRenderSnapshotResult PublishRenderTombstone(
         kb::scene::Scene& scene,
-        std::uint64_t fixedStepIndex,
-        std::uint64_t revision) noexcept;
+        std::uint64_t fixedStepIndex) noexcept;
     [[nodiscard]] std::uint32_t InstanceParticleLimit(std::uint32_t denseIndex) const noexcept;
     [[nodiscard]] float EvaluateRate(const CompiledEmitter& emitter, float timeSeconds) const noexcept;
     [[nodiscard]] static float EvaluateCurve(const CompiledCurve& curve, float normalizedAge) noexcept;
@@ -246,6 +248,10 @@ private:
     std::vector<std::uint8_t> followTransforms_;
     std::vector<kb::scene::WorldTransform> ownerTransforms_;
     std::vector<std::uint8_t> reloadRestarted_;
+    std::vector<kb::particles::ParticleRuntimeExecutionPath> executionPaths_;
+    std::vector<kb::particles::ParticleGpuVisualAvailability> gpuVisualAvailability_;
+    std::vector<std::uint64_t> gpuVisualCapabilityEpochs_;
+    std::vector<std::uint8_t> gpuVisualRestartRequired_;
     std::vector<std::uint64_t> seeds_;
     std::vector<PlaybackState> playbackStates_;
     std::vector<InstanceRuntime> instanceRuntime_;
@@ -261,6 +267,8 @@ private:
 
     std::vector<std::uint64_t> particleInstanceIds_;
     std::vector<std::uint64_t> particleIds_;
+    std::vector<std::uint64_t> particleSpawnOrdinals_;
+    std::vector<std::uint32_t> particleRibbonGroups_;
     std::vector<std::uint8_t> particleEmitterIndices_;
     std::vector<kb::math::Vec3> particlePositions_;
     std::vector<kb::math::Vec3> particlePreviousPositions_;
@@ -292,6 +300,7 @@ private:
                                   kb::scene::kParticleEffectMaxEmitters>
         renderRejectedByEventBudget_{};
     std::uint64_t nextParticleId_ = 1U;
+    std::uint64_t renderSnapshotRevision_ = 0U;
     std::array<std::uint32_t, kb::scene::kParticleEffectMaxInstancesPerScene *
                                   kb::scene::kParticleEffectMaxEmitters *
                                   kb::scene::kParticleEffectMaxModulesPerEmitter>

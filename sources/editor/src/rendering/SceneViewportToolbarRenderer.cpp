@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconKind.hpp"
+#include "rendering/components/EditorDialogStyle.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarDrawing.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarInfoRenderer.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.hpp"
@@ -337,10 +338,15 @@ void SceneViewportToolbarRenderer::PaintTerrainPopup(
     const bool shapes = tool.brushShapeMenuOpen;
     if ((!tool.brushMenuOpen && !shapes) || bounds.right <= bounds.left || bounds.bottom <= bounds.top) return;
 
-    SceneViewportToolbarDrawing::FillRound(dc, bounds, RGB(20, 24, 30), RGB(72, 84, 99), 9);
+    EditorDialogStyle::PaintSurface(dc, bounds, theme);
     RECT title{bounds.left + 12, bounds.top + 7, bounds.right - 12, bounds.top + (shapes ? 34 : 30)};
-    DrawTextAt(dc, title, shapes ? "BRUSH TIP" : "TERRAIN OPERATION",
-        GdiDrawing::ToColorRef(theme.textSecondary), DT_LEFT | DT_VCENTER);
+    EditorDialogStyle::PaintText(
+        dc,
+        title,
+        shapes ? "Brush tip" : "Terrain operation",
+        EditorDialogStyle::Color(theme.textPrimary),
+        12,
+        FW_SEMIBOLD);
 
     const int headerHeight = shapes ? 38 : 34;
     const int itemHeight = shapes ? 72 : 55;
@@ -360,11 +366,19 @@ void SceneViewportToolbarRenderer::PaintTerrainPopup(
             ? static_cast<std::size_t>(tool.brush.shape) == index
             : static_cast<std::size_t>(tool.brush.mode) == index;
         const bool hovered = hoveredItem == static_cast<int>(index);
-        SceneViewportToolbarDrawing::FillRound(
-            dc, card,
-            selected ? RGB(31, 71, 88) : (hovered ? RGB(35, 43, 53) : RGB(24, 29, 36)),
-            selected ? RGB(81, 171, 203) : (hovered ? RGB(73, 88, 104) : RGB(43, 52, 63)),
-            7);
+        GdiDrawing::FillRectColor(
+            dc,
+            card,
+            selected
+                ? EditorDialogStyle::Blend(EditorDialogStyle::Color(theme.panel), EditorDialogStyle::Color(theme.accent), 18)
+                : EditorDialogStyle::Color(hovered ? theme.toolbarButton : theme.panel));
+        if (selected) {
+            GdiDrawing::FillRectColor(
+                dc,
+                RECT{card.left, card.top, card.left + 3, card.bottom},
+                EditorDialogStyle::Color(theme.accent));
+        }
+        EditorDialogStyle::PaintDivider(dc, RECT{card.left, card.bottom - 1, card.right, card.bottom}, theme);
         const RECT preview{card.left + 7, card.top + 7, card.left + (shapes ? 57 : 45), card.bottom - 7};
         if (shapes) {
             DrawBrushShapePreview(dc, preview, static_cast<kb::terrain_editor::TerrainBrushShape>(index));
@@ -373,14 +387,14 @@ void SceneViewportToolbarRenderer::PaintTerrainPopup(
         }
         RECT name{preview.right + 8, card.top + (shapes ? 11 : 7), card.right - 7, card.top + (shapes ? 31 : 26)};
         RECT description{preview.right + 8, name.bottom, card.right - 7, card.bottom - 6};
-        DrawTextAt(dc, name,
+        EditorDialogStyle::PaintText(dc, name,
             shapes ? TerrainBrushShapeLabel(static_cast<kb::terrain_editor::TerrainBrushShape>(index))
                    : TerrainBrushLabel(static_cast<kb::terrain_editor::TerrainBrushMode>(index)),
-            selected ? RGB(235, 250, 255) : GdiDrawing::ToColorRef(theme.textPrimary), DT_LEFT | DT_VCENTER);
-        DrawTextAt(dc, description,
+            EditorDialogStyle::Color(theme.textPrimary), 12, selected ? FW_SEMIBOLD : FW_NORMAL);
+        EditorDialogStyle::PaintText(dc, description,
             shapes ? TerrainBrushShapeDescription(static_cast<kb::terrain_editor::TerrainBrushShape>(index))
                    : TerrainBrushDescription(static_cast<kb::terrain_editor::TerrainBrushMode>(index)),
-            GdiDrawing::ToColorRef(theme.textSecondary), DT_LEFT | DT_VCENTER);
+            EditorDialogStyle::Color(theme.textSecondary), 11);
     }
 }
 

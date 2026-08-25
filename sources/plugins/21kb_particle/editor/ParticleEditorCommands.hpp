@@ -13,6 +13,10 @@ public:
         ParticleEditorDocument& document,
         ParticleEditorWorkspaceState& workspace,
         kb::scene::ParticleAssetReference material);
+    [[nodiscard]] static ParticleEditorResult AppendRecipeEmitters(
+        ParticleEditorDocument& document,
+        ParticleEditorWorkspaceState& workspace,
+        const kb::scene::ParticleEffectAsset& recipe);
     [[nodiscard]] static ParticleEditorResult RenameEmitter(
         ParticleEditorDocument& document,
         ParticleEditorWorkspaceState& workspace,
@@ -34,10 +38,12 @@ public:
         kb::scene::ParticleStableId emitterId);
     [[nodiscard]] static ParticleEditorResult SetEmitterSpawn(
         ParticleEditorDocument& document, ParticleEditorWorkspaceState& workspace,
-        kb::scene::ParticleStableId emitterId, kb::scene::ParticleSpawnAsset spawn);
+        kb::scene::ParticleStableId emitterId, kb::scene::ParticleSpawnAsset spawn,
+        bool replaceLatest = false);
     [[nodiscard]] static ParticleEditorResult SetEmitterOutput(
         ParticleEditorDocument& document, ParticleEditorWorkspaceState& workspace,
-        kb::scene::ParticleStableId emitterId, kb::scene::ParticleOutputAsset output);
+        kb::scene::ParticleStableId emitterId, kb::scene::ParticleOutputAsset output,
+        bool replaceLatest = false);
     [[nodiscard]] static ParticleEditorResult AddModule(
         ParticleEditorDocument& document, ParticleEditorWorkspaceState& workspace,
         kb::scene::ParticleStableId emitterId, kb::scene::ParticleModuleType type,
@@ -48,7 +54,7 @@ public:
     [[nodiscard]] static ParticleEditorResult SetModulePayload(
         ParticleEditorDocument& document, ParticleEditorWorkspaceState& workspace,
         kb::scene::ParticleStableId emitterId, kb::scene::ParticleStableId moduleId,
-        kb::scene::ParticleModulePayload payload);
+        kb::scene::ParticleModulePayload payload, bool replaceLatest = false);
     [[nodiscard]] static ParticleEditorResult ReorderModule(
         ParticleEditorDocument& document, ParticleEditorWorkspaceState& workspace,
         kb::scene::ParticleStableId emitterId, kb::scene::ParticleStableId moduleId,

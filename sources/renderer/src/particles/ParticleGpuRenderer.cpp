@@ -6,12 +6,70 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <vector>
 
 namespace kb::render {
 namespace {
 
 [[nodiscard]] float DecodeSnorm(std::int16_t value) noexcept {
     return std::max(-1.0F, static_cast<float>(value) / 32'767.0F);
+}
+
+enum class ParticleSpriteKind : std::uint8_t { EnergyGlow, VelocityStreak };
+
+[[nodiscard]] float HashNoise(float x, float y) noexcept {
+    const float n = std::sin(x * 127.1F + y * 311.7F) * 43758.5453F;
+    return n - std::floor(n);
+}
+
+void WriteParticleSprite(
+    std::vector<std::uint8_t>& pixels, std::uint16_t width, std::uint16_t height, ParticleSpriteKind kind) {
+    pixels.assign(static_cast<std::size_t>(width) * height * 4U, 0U);
+    for (std::uint16_t y = 0U; y < height; ++y) {
+        for (std::uint16_t x = 0U; x < width; ++x) {
+            const float u = (static_cast<float>(x) + 0.5F) / static_cast<float>(width);
+            const float v = (static_cast<float>(y) + 0.5F) / static_cast<float>(height);
+            const float dx = u * 2.0F - 1.0F;
+            const float dy = v * 2.0F - 1.0F;
+            const float radiusSquared = dx * dx + dy * dy;
+            const float radius = std::sqrt(radiusSquared);
+            float energy = 0.0F;
+            if (kind == ParticleSpriteKind::EnergyGlow) {
+                if (radiusSquared < 1.0F) {
+                    const float core = std::exp(-radiusSquared * 22.0F);
+                    const float bloom = std::exp(-radiusSquared * 5.2F);
+                    const float halo = std::exp(-radiusSquared * 1.35F) * std::max(0.0F, 1.0F - radius);
+                    const float arm = std::exp(-std::min(dx * dx, dy * dy) * 90.0F) *
+                        std::exp(-radiusSquared * 3.4F);
+                    const float grain = 0.04F * HashNoise(u * 17.0F, v * 19.0F) * halo;
+                    energy = core * 1.45F + bloom * 0.62F + halo * 0.28F + arm * 0.22F + grain;
+                }
+            } else if (radiusSquared < 1.35F) {
+                const float line = std::exp(-dx * dx * 36.0F) * std::max(0.0F, 1.0F - dy * dy);
+                const float glow = std::exp(-(dx * dx * 14.0F + dy * dy * 2.4F));
+                const float tip = std::exp(-dx * dx * 8.0F) * std::exp(-std::abs(dy) * 4.5F);
+                energy = line * 1.25F + glow * 0.7F + tip * 0.35F;
+            }
+            energy = std::clamp(energy, 0.0F, 1.0F);
+            const std::size_t pixel = (static_cast<std::size_t>(y) * width + x) * 4U;
+            const std::uint8_t byte = static_cast<std::uint8_t>(energy * 255.0F + 0.5F);
+            pixels[pixel] = byte;
+            pixels[pixel + 1U] = byte;
+            pixels[pixel + 2U] = byte;
+            pixels[pixel + 3U] = byte;
+        }
+    }
+}
+
+[[nodiscard]] bgfx::TextureHandle CreateParticleSprite(std::uint16_t width, std::uint16_t height, ParticleSpriteKind kind) {
+    std::vector<std::uint8_t> pixels;
+    WriteParticleSprite(pixels, width, height, kind);
+    constexpr std::uint64_t kSampler =
+        BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
+        BGFX_SAMPLER_MIN_ANISOTROPIC | BGFX_SAMPLER_MAG_ANISOTROPIC;
+    return bgfx::createTexture2D(width, height, false, 1U, bgfx::TextureFormat::RGBA8, kSampler,
+        bgfx::copy(pixels.data(), static_cast<std::uint32_t>(pixels.size())));
 }
 
 } // namespace
@@ -26,20 +84,29 @@ bool ParticleGpuRenderer::Initialize() {
     featureParamsUniform_ = bgfx::createUniform("u_particleFeatureParams", bgfx::UniformType::Vec4);
     localBasisUniform_ = bgfx::createUniform("u_particleLocalBasis", bgfx::UniformType::Vec4);
     depthParamsUniform_ = bgfx::createUniform("u_particleDepthParams", bgfx::UniformType::Vec4);
-    constexpr std::uint32_t white = 0xFFFFFFFFU;
-    whiteTexture_ = bgfx::createTexture2D(1U, 1U, false, 1U, bgfx::TextureFormat::RGBA8,
-        BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP, bgfx::copy(&white, sizeof(white)));
+    volumetricParamsUniform_ = bgfx::createUniform("u_particleVolumetricParams", bgfx::UniformType::Vec4);
+    whiteTexture_ = CreateParticleSprite(256U, 256U, ParticleSpriteKind::EnergyGlow);
+    streakTexture_ = CreateParticleSprite(256U, 256U, ParticleSpriteKind::VelocityStreak);
+    if (!stripRenderer_.Initialize()) {
+        Shutdown();
+        return false;
+    }
+    static_cast<void>(visualSimulation_.Initialize());
     if (!IsInitialized()) {
         Shutdown();
         return false;
     }
-    Warmup(static_cast<std::uint32_t>(kb::scene::kParticleEffectMaxCpuParticlesPerScene));
+    Warmup(4'096U);
     return true;
 }
 
 void ParticleGpuRenderer::Shutdown() noexcept {
+    visualSimulation_.Shutdown();
+    stripRenderer_.Shutdown();
+    if (bgfx::isValid(streakTexture_)) bgfx::destroy(streakTexture_);
     if (bgfx::isValid(whiteTexture_)) bgfx::destroy(whiteTexture_);
     if (bgfx::isValid(depthParamsUniform_)) bgfx::destroy(depthParamsUniform_);
+    if (bgfx::isValid(volumetricParamsUniform_)) bgfx::destroy(volumetricParamsUniform_);
     if (bgfx::isValid(localBasisUniform_)) bgfx::destroy(localBasisUniform_);
     if (bgfx::isValid(featureParamsUniform_)) bgfx::destroy(featureParamsUniform_);
     if (bgfx::isValid(emitterParamsUniform_)) bgfx::destroy(emitterParamsUniform_);
@@ -47,8 +114,10 @@ void ParticleGpuRenderer::Shutdown() noexcept {
     if (bgfx::isValid(sceneDepthSampler_)) bgfx::destroy(sceneDepthSampler_);
     if (bgfx::isValid(atlasSampler_)) bgfx::destroy(atlasSampler_);
     if (bgfx::isValid(program_)) bgfx::destroy(program_);
+    streakTexture_ = BGFX_INVALID_HANDLE;
     whiteTexture_ = BGFX_INVALID_HANDLE;
     depthParamsUniform_ = BGFX_INVALID_HANDLE;
+    volumetricParamsUniform_ = BGFX_INVALID_HANDLE;
     localBasisUniform_ = BGFX_INVALID_HANDLE;
     featureParamsUniform_ = BGFX_INVALID_HANDLE;
     emitterParamsUniform_ = BGFX_INVALID_HANDLE;
@@ -58,14 +127,17 @@ void ParticleGpuRenderer::Shutdown() noexcept {
     program_ = BGFX_INVALID_HANDLE;
 }
 
-void ParticleGpuRenderer::Warmup(std::uint32_t particleCapacity) { batcher_.Warmup(particleCapacity); }
+void ParticleGpuRenderer::Warmup(std::uint32_t particleCapacity) {
+    batcher_.Warmup(particleCapacity);
+    visualMaskScratch_.reserve(particleCapacity);
+}
 
 bool ParticleGpuRenderer::IsInitialized() const noexcept {
     return bgfx::isValid(program_) && bgfx::isValid(atlasSampler_) && bgfx::isValid(sceneDepthSampler_) &&
         bgfx::isValid(cameraBasisUniform_) && bgfx::isValid(emitterParamsUniform_) &&
         bgfx::isValid(featureParamsUniform_) && bgfx::isValid(localBasisUniform_) &&
-        bgfx::isValid(depthParamsUniform_) &&
-        bgfx::isValid(whiteTexture_);
+        bgfx::isValid(depthParamsUniform_) && bgfx::isValid(volumetricParamsUniform_) &&
+        bgfx::isValid(whiteTexture_) && bgfx::isValid(streakTexture_) && stripRenderer_.IsInitialized();
 }
 
 ParticleGpuSubmitResult ParticleGpuRenderer::Submit(
@@ -89,6 +161,8 @@ ParticleGpuSubmitResult ParticleGpuRenderer::Submit(
         result.succeeded = result.succeeded && batchResult.succeeded;
         result.drawCalls += batchResult.drawCalls;
         result.submittedParticles += batchResult.submittedParticles;
+        result.submittedVolumetricParticles += batchResult.submittedVolumetricParticles;
+        result.volumetricRaymarchSteps += batchResult.volumetricRaymarchSteps;
         result.droppedParticles += batchResult.droppedParticles;
     }
     return result;
@@ -99,6 +173,38 @@ const ParticleRenderBatchBuildResult& ParticleGpuRenderer::Build(
     const SceneRenderCamera& camera) noexcept {
     lastBuild_ = batcher_.Build(snapshot, camera);
     return lastBuild_;
+}
+
+kb::particles::ParticleGpuVisualAvailability ParticleGpuRenderer::GpuVisualAvailability() const noexcept {
+    return visualSimulation_.Availability();
+}
+
+void ParticleGpuRenderer::SetVolumetricQuality(ParticleVolumetricQuality quality) noexcept {
+    volumetricQuality_ = quality;
+}
+
+ParticleVolumetricQuality ParticleGpuRenderer::VolumetricQuality() const noexcept {
+    return volumetricQuality_;
+}
+
+bool ParticleGpuRenderer::PrepareVisualSimulation(
+    bgfx::ViewId viewId,
+    const kb::particles::ParticleRenderSnapshot& snapshot) noexcept {
+    if (!lastBuild_.Succeeded()) return false;
+    visualMaskScratch_.assign(lastBuild_.instances.size(), 0U);
+    bool hasVisualEmitter = false;
+    for (const ParticleRenderBatch& batch : lastBuild_.batches) {
+        const kb::particles::ParticleRenderEmitterRecord& emitter =
+        snapshot.Emitters()[batch.emitterRecordIndex];
+        if (emitter.backendPolicy == kb::scene::ParticleBackendPolicy::CpuDeterministic) continue;
+        hasVisualEmitter = true;
+        const std::uint32_t end = batch.firstInstance + batch.instanceCount;
+        if (end > visualMaskScratch_.size()) return false;
+        std::fill(visualMaskScratch_.begin() + batch.firstInstance, visualMaskScratch_.begin() + end, 1U);
+    }
+    if (!hasVisualEmitter) return false;
+    return visualSimulation_.Prepare(
+        viewId, snapshot.SceneId(), snapshot.FixedStepIndex(), lastBuild_.instances, visualMaskScratch_);
 }
 
 ParticleGpuSubmitResult ParticleGpuRenderer::SubmitBatch(
@@ -124,23 +230,34 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitBatch(
     bgfx::setUniform(cameraBasisUniform_, cameraBasis.data(), 3U);
     const ParticleRenderBatch& batch = lastBuild_.batches[batchIndex];
         const auto& emitter = snapshot.Emitters()[batch.emitterRecordIndex];
-        const std::uint32_t available = bgfx::getAvailInstanceDataBuffer(
-            batch.instanceCount, static_cast<std::uint16_t>(sizeof(ParticleGpuInstance)));
-        if (available == 0U) {
-            result.droppedParticles += batch.instanceCount;
-            return result;
+        if (emitter.output == kb::particles::ParticleRenderOutput::Volumetric &&
+            !bgfx::isValid(sceneDepthTexture)) return result;
+        const bool useVisualSimulation = visualSimulation_.HasPreparedView(
+            viewId, snapshot.SceneId(), snapshot.FixedStepIndex());
+        std::uint32_t available = batch.instanceCount;
+        if (useVisualSimulation) {
+            bgfx::setInstanceDataBuffer(visualSimulation_.InstanceBuffer(), batch.firstInstance, available);
+        } else {
+            available = bgfx::getAvailInstanceDataBuffer(
+                batch.instanceCount, static_cast<std::uint16_t>(sizeof(ParticleGpuInstance)));
+            if (available == 0U) {
+                result.droppedParticles += batch.instanceCount;
+                return result;
+            }
+            bgfx::InstanceDataBuffer buffer{};
+            bgfx::allocInstanceDataBuffer(&buffer, available, static_cast<std::uint16_t>(sizeof(ParticleGpuInstance)));
+            const auto source = lastBuild_.instances.subspan(batch.firstInstance, available);
+            std::copy(source.begin(), source.end(), reinterpret_cast<ParticleGpuInstance*>(buffer.data));
+            bgfx::setInstanceDataBuffer(&buffer, 0U, available);
         }
-        bgfx::InstanceDataBuffer buffer{};
-        bgfx::allocInstanceDataBuffer(&buffer, available, static_cast<std::uint16_t>(sizeof(ParticleGpuInstance)));
-        const auto source = lastBuild_.instances.subspan(batch.firstInstance, available);
-        std::copy(source.begin(), source.end(), reinterpret_cast<ParticleGpuInstance*>(buffer.data));
-        bgfx::setInstanceDataBuffer(&buffer, 0U, available);
         bgfx::setVertexBuffer(0U, quad->vertexBuffer);
         bgfx::setIndexBuffer(quad->indexBuffer);
 
         const std::array<float, 4> emitterParams{
             static_cast<float>(emitter.FlipbookColumns()), static_cast<float>(emitter.FlipbookRows()),
-            static_cast<float>(emitter.alignment), emitter.pointSpriteDiameter};
+            static_cast<float>(emitter.alignment),
+            emitter.output == kb::particles::ParticleRenderOutput::Volumetric
+                ? emitter.volumetricRadiusScale : emitter.pointSpriteDiameter};
         const std::array<float, 4> localBasis{
             DecodeSnorm(emitter.localBasisQuaternionSnorm[0]),
             DecodeSnorm(emitter.localBasisQuaternionSnorm[1]),
@@ -148,19 +265,30 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitBatch(
             DecodeSnorm(emitter.localBasisQuaternionSnorm[3])};
         const std::array<float, 4> depthParams{
             camera.projection[10], camera.projection[14], kParticleSoftFadeDistanceMeters,
-            kb::particles::HasParticleRenderEmitterFlag(
-                emitter.flags, kb::particles::ParticleRenderEmitterFlag::SoftParticles) &&
+            (kb::particles::HasParticleRenderEmitterFlag(
+                emitter.flags, kb::particles::ParticleRenderEmitterFlag::SoftParticles) ||
+                emitter.output == kb::particles::ParticleRenderOutput::Volumetric) &&
                 bgfx::isValid(sceneDepthTexture) ? 1.0F : 0.0F};
         const std::array<float, 4> featureParams{
             kb::particles::HasParticleRenderEmitterFlag(
                 emitter.flags, kb::particles::ParticleRenderEmitterFlag::AntiAliasing) ? 1.0F : 0.0F,
-            static_cast<float>(emitter.output), 0.0F, 0.0F};
+            static_cast<float>(emitter.output),
+            emitter.blend == kb::particles::ParticleRenderBlendMode::Add ? 1.0F : 0.0F, 0.0F};
         bgfx::setUniform(emitterParamsUniform_, emitterParams.data());
         bgfx::setUniform(featureParamsUniform_, featureParams.data());
+        const std::uint32_t volumetricSteps = volumetricQuality_ == ParticleVolumetricQuality::Low
+            ? emitter.volumetricLowQualitySteps : emitter.volumetricHighQualitySteps;
+        const std::array<float, 4> volumetricParams{
+            emitter.volumetricDensity, emitter.volumetricRadiusScale,
+            static_cast<float>(volumetricSteps), 0.0F};
+        bgfx::setUniform(volumetricParamsUniform_, volumetricParams.data());
         bgfx::setUniform(localBasisUniform_, localBasis.data());
         bgfx::setUniform(depthParamsUniform_, depthParams.data());
 
-        bgfx::TextureHandle atlas = whiteTexture_;
+        bgfx::TextureHandle atlas =
+            emitter.output == kb::particles::ParticleRenderOutput::StretchedBillboard &&
+                bgfx::isValid(streakTexture_)
+            ? streakTexture_ : whiteTexture_;
         if (emitter.textureAtlasAssetId != 0U) {
             const RenderTextureHandle atlasHandle = resourceMap.ResolveTexture(
                 emitter.textureAtlasAssetId, RenderTextureColorSpace::Srgb);
@@ -172,6 +300,10 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitBatch(
         bgfx::setState(ParticleBlendState(batch.blend, batch.depth));
         bgfx::submit(viewId, program_);
         result.submittedParticles += available;
+        if (emitter.output == kb::particles::ParticleRenderOutput::Volumetric) {
+            result.submittedVolumetricParticles += available;
+            result.volumetricRaymarchSteps += static_cast<std::uint64_t>(available) * volumetricSteps;
+        }
         result.droppedParticles += batch.instanceCount - available;
         ++result.drawCalls;
     result.succeeded = true;
@@ -179,5 +311,25 @@ ParticleGpuSubmitResult ParticleGpuRenderer::SubmitBatch(
 }
 
 const ParticleRenderBatchBuildResult& ParticleGpuRenderer::LastBuild() const noexcept { return lastBuild_; }
+
+const ParticleStripBuildResult& ParticleGpuRenderer::BuildStrips(
+    const kb::particles::ParticleRenderSnapshot& snapshot,
+    const SceneRenderCamera& camera) noexcept {
+    return stripRenderer_.Build(snapshot, camera);
+}
+
+ParticleStripSubmitResult ParticleGpuRenderer::SubmitStripDraw(bgfx::ViewId viewId, std::uint32_t drawIndex) noexcept {
+    return stripRenderer_.SubmitDraw(viewId, drawIndex);
+}
+
+void ParticleGpuRenderer::ReleaseParticleScene(std::uint64_t sceneId) noexcept {
+    visualSimulation_.ReleaseScene(sceneId);
+    stripRenderer_.ReleaseScene(sceneId);
+}
+
+void ParticleGpuRenderer::ReleaseAllParticleScenes() noexcept {
+    visualSimulation_.ReleaseAllScenes();
+    stripRenderer_.ReleaseAllScenes();
+}
 
 } // namespace kb::render

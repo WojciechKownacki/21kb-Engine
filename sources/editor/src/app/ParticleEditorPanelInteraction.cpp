@@ -3,7 +3,10 @@
 #include "scene/EditorSceneContext.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <cstdio>
 #include <string>
 
 namespace kb::editor {
@@ -15,7 +18,7 @@ bool ParticleEditorPanelInteraction::Execute(
     std::string_view editedValue) {
     switch (hit.action) {
     case ParticleEditorPanelAction::AddEmitter:
-        return selectedMaterial.IsValid() && sceneContext.AddParticleEditorEmitter(selectedMaterial);
+        return sceneContext.AddParticleEditorEmitter(selectedMaterial);
     case ParticleEditorPanelAction::SelectEmitter:
         return sceneContext.SelectParticleEditorEmitter(hit.emitterId);
     case ParticleEditorPanelAction::ToggleEmitter:
@@ -45,6 +48,14 @@ bool ParticleEditorPanelInteraction::Execute(
             sceneContext.SetParticleEditorOutputReference(kb::assets::AssetKind::Texture, selectedMaterial);
     case ParticleEditorPanelAction::EditProperty:
         return sceneContext.EditParticleEditorProperty(hit.propertyIndex, editedValue);
+    case ParticleEditorPanelAction::DragPropertySlider:
+        break;
+    case ParticleEditorPanelAction::ToggleProperty: {
+        const auto inspector = sceneContext.ParticleEditorInspector();
+        if (hit.propertyIndex >= inspector.properties.size()) return false;
+        const bool next = !inspector.properties[hit.propertyIndex].boolValue;
+        return sceneContext.EditParticleEditorProperty(hit.propertyIndex, next ? "true" : "false");
+    }
     case ParticleEditorPanelAction::AddModule:
         return sceneContext.AddParticleEditorModule(hit.moduleType, hit.targetEmitterId);
     case ParticleEditorPanelAction::SelectModule:
@@ -63,10 +74,18 @@ bool ParticleEditorPanelInteraction::Execute(
     }
     case ParticleEditorPanelAction::RemoveModule:
         return sceneContext.RemoveParticleEditorModule(hit.moduleId);
+    case ParticleEditorPanelAction::AppendRecipe: {
+        const auto recipes = sceneContext.ParticleEditorRecipes();
+        return hit.recipeIndex < recipes.size() &&
+            sceneContext.AppendParticleEditorRecipe(recipes[hit.recipeIndex].id);
+    }
     case ParticleEditorPanelAction::NavigateDiagnostic:
         return sceneContext.FocusParticleEditorDiagnostic(hit.diagnosticIndex);
     case ParticleEditorPanelAction::NavigateDependency:
         return sceneContext.NavigateParticleEditorDependency(hit.dependencyIndex);
+    case ParticleEditorPanelAction::ToggleComposerSection:
+        sceneContext.ToggleParticleEditorComposerSection(hit.composerSection);
+        return true;
     case ParticleEditorPanelAction::None:
         break;
     }
@@ -88,6 +107,60 @@ bool ParticleEditorPanelInteraction::CommitDrag(EditorSceneContext& sceneContext
     if (sceneContext.ParticleEditorWorkspace().ModuleDragActive())
         return sceneContext.CommitParticleEditorModuleDrag();
     return sceneContext.CommitParticleEditorEmitterDrag();
+}
+
+namespace {
+
+[[nodiscard]] std::string FormatSliderValue(const kb::particle_editor::ParticleEditorPropertyRow& property, float value) {
+    char buffer[32]{};
+    if (property.widget == kb::particle_editor::ParticleEditorPropertyWidget::IntegerSlider) {
+        const float rounded = std::round(std::clamp(value, property.numericMin, property.numericMax));
+        std::snprintf(buffer, sizeof(buffer), "%.0f", static_cast<double>(rounded));
+    } else {
+        const float clamped = std::clamp(value, property.numericMin, property.numericMax);
+        std::snprintf(buffer, sizeof(buffer), "%.5g", static_cast<double>(clamped));
+    }
+    return buffer;
+}
+
+} // namespace
+
+bool ParticleEditorPanelInteraction::BeginPropertySlider(
+    EditorSceneContext& sceneContext,
+    const ParticleEditorPanelLayout& layout,
+    const ParticleEditorPanelHit& hit,
+    int x) {
+    const auto inspector = sceneContext.ParticleEditorInspector();
+    if (hit.propertyIndex >= inspector.properties.size() || hit.propertyIndex >= layout.propertyRowCount)
+        return false;
+    const auto& property = inspector.properties[hit.propertyIndex];
+    if (!property.editable) return false;
+    const auto& row = layout.propertyRows[hit.propertyIndex];
+    if (!row.hasSlider) return false;
+    sceneContext.BeginParticleEditorPropertySlider(hit.propertyIndex);
+    const float value = ParticleEditorPanelLayoutResolver::SliderValueAt(
+        row.sliderTrack, x, property.numericMin, property.numericMax);
+    return sceneContext.EditParticleEditorProperty(hit.propertyIndex, FormatSliderValue(property, value), true);
+}
+
+bool ParticleEditorPanelInteraction::UpdatePropertySlider(
+    EditorSceneContext& sceneContext,
+    const ParticleEditorPanelLayout& layout,
+    int x) {
+    const auto& workspace = sceneContext.ParticleEditorWorkspace();
+    if (!workspace.PropertySliderActive()) return false;
+    const auto inspector = sceneContext.ParticleEditorInspector();
+    const std::size_t index = workspace.PropertySliderIndex();
+    if (index >= inspector.properties.size() || index >= layout.propertyRowCount) return false;
+    const auto& property = inspector.properties[index];
+    const auto& row = layout.propertyRows[index];
+    const float value = ParticleEditorPanelLayoutResolver::SliderValueAt(
+        row.sliderTrack, x, property.numericMin, property.numericMax);
+    return sceneContext.EditParticleEditorProperty(index, FormatSliderValue(property, value), true);
+}
+
+void ParticleEditorPanelInteraction::EndPropertySlider(EditorSceneContext& sceneContext) noexcept {
+    sceneContext.EndParticleEditorPropertySlider();
 }
 
 bool ParticleEditorPanelInteraction::HandleCharacter(

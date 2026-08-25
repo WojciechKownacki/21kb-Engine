@@ -21,6 +21,7 @@
 #include "scene/EditorHierarchySearchMatcher.hpp"
 #include "scene/EditorHierarchySelectionState.hpp"
 #include "scene/EditorHierarchySelectionNormalizer.hpp"
+#include "scene/EditorPlayModeSelectionSnapshot.hpp"
 #include "scene/EditorHierarchySearchState.hpp"
 #include "scene/EditorSceneSelectionPivot.hpp"
 
@@ -233,6 +234,45 @@ void RunHierarchySelectionNormalizerSelectsFirstVisibleWhenSelectionIsDeadTest()
     kb::editor::tests::Require(selection.Primary() == first.Entity(), "Selection normalizer should select the first visible row as fallback");
 }
 
+void RunPlayModeSelectionSnapshotRestoresHierarchyIdentityTest() {
+    kb::scene::Scene authored;
+    const kb::scene::SceneObject first = authored.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{ .name = "First" });
+    const kb::scene::SceneObject second = authored.Entities().CreateObject(
+        kb::scene::SceneObjectDesc{ .name = "Second" });
+    kb::editor::EditorHierarchySelectionState selection;
+    const std::array<kb::scene::SceneEntity, 2> selected{
+        second.Entity(), first.Entity() };
+    selection.SelectEntities(selected);
+
+    kb::editor::EditorPlayModeSelectionSnapshot snapshot;
+    snapshot.CaptureAuthoredHierarchy(authored);
+    snapshot.CaptureSelection(selection);
+
+    kb::scene::Scene restored;
+    const kb::scene::SceneObject restoredFirst =
+        restored.Entities().CreateObject(
+            kb::scene::SceneObjectDesc{ .name = "First" });
+    const kb::scene::SceneObject restoredSecond =
+        restored.Entities().CreateObject(
+            kb::scene::SceneObjectDesc{ .name = "Second" });
+    snapshot.Restore(restored, selection);
+
+    kb::editor::tests::Require(
+        selection.SelectedEntities().size() == 2U &&
+            selection.IsSelected(restoredSecond.Entity()) &&
+            selection.Primary() == restoredFirst.Entity(),
+        "Play restore must remap the complete selection and primary entity through hierarchy identity");
+
+    selection.Clear();
+    snapshot.CaptureSelection(selection);
+    selection.SelectEntity(restoredFirst.Entity());
+    snapshot.Restore(restored, selection);
+    kb::editor::tests::Require(
+        selection.SelectedEntities().empty() && !selection.Primary().IsValid(),
+        "Play restore must keep an empty selection empty");
+}
+
 void RunSceneSelectionPivotUsesTopLevelSelectionCenterTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneObject parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Parent" });
@@ -360,6 +400,7 @@ void RunEditorHierarchyTests() {
     RunHierarchySelectionModelTest();
     RunHierarchySelectionNormalizerKeepsAliveMultiSelectionTest();
     RunHierarchySelectionNormalizerSelectsFirstVisibleWhenSelectionIsDeadTest();
+    RunPlayModeSelectionSnapshotRestoresHierarchyIdentityTest();
     RunSceneSelectionPivotUsesTopLevelSelectionCenterTest();
     RunRowBuilderMarksOnlyPrefabRootsTest();
     RunDroppedPrefabAssetBuildsPrefabHierarchyRowsTest();

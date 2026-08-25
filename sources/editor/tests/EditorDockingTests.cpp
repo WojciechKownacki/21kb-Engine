@@ -6,6 +6,9 @@
 #include "rendering/EditorToolbarLayout.hpp"
 #include "rendering/SkeletalMeshEditorPanelLayout.hpp"
 #include "rendering/AnimatorEditorPanelRenderer.hpp"
+#include "rendering/components/CategoryHeader.hpp"
+#include "rendering/components/DenseListRow.hpp"
+#include "rendering/components/PropertyRow.hpp"
 #include "scene/SkeletalMeshEditorTreeState.hpp"
 #include "scene/SkeletalMeshEditorDetailsState.hpp"
 #include "scene/SkeletalMeshEditorPanelResizeState.hpp"
@@ -14,6 +17,7 @@
 #include "scene/AnimationClipTimelineState.hpp"
 #include "scene/AnimationClipEditorDocumentState.hpp"
 #include "scene/AnimatorEditorGraphDocumentState.hpp"
+#include "scene/EditorAutosaveState.hpp"
 #include "scene/ParticleEditorHostSessionStore.hpp"
 #include "windowing/FloatingWindowControlHitTester.hpp"
 #include "windowing/FloatingWindowControlLayout.hpp"
@@ -948,6 +952,84 @@ void RunAnimationClipEditorDocumentStateTest() {
         "Animation Clip document save should establish a clean history baseline");
 }
 
+void RunAutosaveStateTest() {
+    kb::editor::EditorAutosaveState autosave;
+    kb::editor::tests::Require(
+        !autosave.Tick(599.0, true, true).saveRequested,
+        "Autosave must not run before the ten-minute interval");
+    kb::editor::tests::Require(
+        autosave.Tick(1.0, true, true).saveRequested &&
+            autosave.ElapsedSinceSave() == 0.0,
+        "Autosave must request a dirty document save at ten minutes");
+
+    static_cast<void>(autosave.Tick(600.0, false, true));
+    kb::editor::tests::Require(
+        autosave.ElapsedSinceSave() == kb::editor::EditorAutosaveState::IntervalSeconds &&
+            autosave.Tick(0.1, true, true).saveRequested,
+        "Autosave must defer an elapsed save while editing is temporarily ineligible");
+
+    autosave.Complete(true, "Main.21kbscene");
+    kb::editor::tests::Require(
+        autosave.NotificationVisible() && autosave.NotificationSucceeded() &&
+            autosave.NotificationText().find("Main.21kbscene") != std::string::npos,
+        "A successful autosave must expose a named notification");
+    const kb::editor::EditorAutosaveTickResult expired =
+        autosave.Tick(kb::editor::EditorAutosaveState::NotificationSeconds + 0.1, true, false);
+    kb::editor::tests::Require(
+        expired.visualChanged && !autosave.NotificationVisible(),
+        "Autosave notification must expire and request one repaint");
+
+    autosave.Complete(false, {});
+    kb::editor::tests::Require(
+        autosave.NotificationVisible() && !autosave.NotificationSucceeded() &&
+            autosave.NotificationText() == "Autosave failed",
+        "A failed autosave must expose an explicit failure notification");
+}
+
+void RunSharedEditorRowComponentLayoutTest() {
+    const RECT bounds{10, 20, 410, 44};
+    const kb::editor::CategoryHeaderLayout category =
+        kb::editor::CategoryHeader::Resolve(bounds, true, true, true);
+    kb::editor::tests::Require(
+        category.disclosure.left >= bounds.left && category.icon.left > category.disclosure.left &&
+            category.title.left > category.icon.right && category.title.right < category.trailingText.left &&
+            category.trailingText.right < category.trailingAction.left && category.trailingAction.right <= bounds.right,
+        "CategoryHeader layout overlapped disclosure, title, count, or trailing action");
+
+    const kb::editor::DenseListRowLayout dense =
+        kb::editor::DenseListRow::Resolve(bounds, 28, 72, true);
+    kb::editor::tests::Require(
+        dense.icon.left == bounds.left + 28 && dense.text.left == dense.icon.right + kb::editor::DenseListRow::IconGap &&
+            dense.text.right == bounds.right - 72,
+        "DenseListRow layout did not preserve leading content and trailing action reservations");
+
+    const kb::editor::PropertyRowLayout property = kb::editor::PropertyRow::Resolve(bounds);
+    const int expectedSplit = bounds.left + (bounds.right - bounds.left) *
+        kb::editor::PropertyRow::LabelWidthPercent / 100;
+    kb::editor::tests::Require(
+        property.label.left == bounds.left + kb::editor::PropertyRow::HorizontalPadding &&
+            property.label.right == expectedSplit && property.value.left == expectedSplit &&
+            property.value.right == bounds.right - kb::editor::PropertyRow::HorizontalPadding &&
+            property.value.bottom - property.value.top == kb::editor::PropertyRow::ValueHeight,
+        "PropertyRow layout did not preserve the shared 36/64 field geometry");
+
+    const RECT narrowBounds{0, 0, 32, 12};
+    const kb::editor::CategoryHeaderLayout narrowCategory =
+        kb::editor::CategoryHeader::Resolve(narrowBounds, true, true, true);
+    const kb::editor::DenseListRowLayout narrowDense =
+        kb::editor::DenseListRow::Resolve(narrowBounds, 40, 40, true);
+    const kb::editor::PropertyRowLayout narrowProperty =
+        kb::editor::PropertyRow::Resolve(narrowBounds);
+    const auto valid = [](const RECT& rect) noexcept {
+        return rect.right >= rect.left && rect.bottom >= rect.top;
+    };
+    kb::editor::tests::Require(
+        valid(narrowCategory.title) && valid(narrowCategory.trailingText) &&
+            valid(narrowCategory.trailingAction) && valid(narrowDense.icon) &&
+            valid(narrowDense.text) && valid(narrowProperty.label) && valid(narrowProperty.value),
+        "Shared row layouts produced inverted rectangles in a narrow panel");
+}
+
 // A click on any tab — the active one or an inactive sibling — must hit-test as a
 // dock Tab. The pointer router relies on this: a dock hit means the click is a
 // layout action (switch tabs), so it must NOT clear the scene selection and blank
@@ -1014,6 +1096,8 @@ void RunEditorDockingTests() {
     RunSkeletonEditorDocumentStateTest();
     RunAnimationClipTimelineStateTest();
     RunAnimationClipEditorDocumentStateTest();
+    RunAutosaveStateTest();
+    RunSharedEditorRowComponentLayoutTest();
     RunTabClickIsDockInteractionTest();
 }
 

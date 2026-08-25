@@ -316,6 +316,7 @@ public:
     // instance slot). The caller applies invalidation/telemetry once per batch.
     [[nodiscard]] TransformUpdateOutcome ApplyMeshTransform(std::uint64_t entityId, const std::array<float, 16>& model);
     [[nodiscard]] bool ApplyGeometrySwarmTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
+    [[nodiscard]] bool ApplySurfaceCastTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
     [[nodiscard]] bool ApplySpaceStrokeTransform(std::uint64_t entityId, const std::array<float, 16>& model) noexcept;
     void InvalidateDrawGroupsIfFallback(TransformUpdateOutcome outcome) noexcept;
     void AddTransformUpdateCounts(std::uint64_t inPlace, std::uint64_t fallback) noexcept;

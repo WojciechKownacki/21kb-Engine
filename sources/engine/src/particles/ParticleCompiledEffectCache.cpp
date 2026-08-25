@@ -46,6 +46,8 @@ void WriteInitialVelocity(std::vector<std::uint8_t>& bytes, const kb::scene::Par
 
 void WriteEffect(std::vector<std::uint8_t>& bytes, const ParticleCompiledEffect& effect) {
     WriteUInt64(bytes, effect.determinismSeed); WriteFloat(bytes, effect.durationSeconds); WriteBool(bytes, effect.looping);
+    WriteUInt8(bytes, static_cast<std::uint8_t>(effect.backendPolicy));
+    WriteUInt8(bytes, static_cast<std::uint8_t>(effect.gpuCatchupPolicy));
     WriteUInt8(bytes, effect.emitterCount); WriteUInt8(bytes, effect.eventBindingCount);
     for (std::uint8_t emitterIndex = 0U; emitterIndex < effect.emitterCount; ++emitterIndex) {
         const auto& e = effect.emitters[emitterIndex];
@@ -57,7 +59,15 @@ void WriteEffect(std::vector<std::uint8_t>& bytes, const ParticleCompiledEffect&
         WriteBool(bytes, e.softParticles); WriteBool(bytes, e.antiAliasing); WriteUInt32(bytes, e.flipbookColumns);
         WriteUInt32(bytes, e.flipbookRows); WriteUInt32(bytes, e.flipbookFrameCount); WriteFloat(bytes, e.flipbookFramesPerSecond);
         WriteBool(bytes, e.flipbookLooping); WriteFloat(bytes, e.stretchVelocityScale); WriteFloat(bytes, e.stretchMinimumLength);
-        WriteFloat(bytes, e.pointSpriteDiameter); WriteUInt8(bytes, static_cast<std::uint8_t>(e.simulationSpace));
+        WriteFloat(bytes, e.pointSpriteDiameter);
+        WriteFloat(bytes, e.trailSampleIntervalSeconds); WriteFloat(bytes, e.trailMinimumDistance);
+        WriteUInt32(bytes, e.trailMaxSamplesPerParticle); WriteFloat(bytes, e.trailWidth);
+        WriteUInt32(bytes, e.ribbonMaxSegments); WriteFloat(bytes, e.ribbonWidth); WriteBool(bytes, e.ribbonBreakOnDeath);
+        WriteVec3(bytes, e.beamLocalEnd); WriteUInt32(bytes, e.beamSegments); WriteFloat(bytes, e.beamWidth);
+        WriteFloat(bytes, e.beamNoiseAmplitude); WriteFloat(bytes, e.beamNoiseFrequency);
+        WriteFloat(bytes, e.volumetricDensity); WriteFloat(bytes, e.volumetricRadiusScale);
+        WriteUInt32(bytes, e.volumetricLowQualitySteps); WriteUInt32(bytes, e.volumetricHighQualitySteps);
+        WriteUInt8(bytes, static_cast<std::uint8_t>(e.simulationSpace));
         WriteBool(bytes, e.enabled); WriteUInt8(bytes, static_cast<std::uint8_t>(e.mode)); WriteUInt32(bytes, e.maxParticles);
         WriteVec3(bytes, e.localPosition); WriteQuat(bytes, e.localRotation); WriteInitialVelocity(bytes, e.initialVelocity);
         WriteFloat(bytes, e.lifetimeMin); WriteFloat(bytes, e.lifetimeMax); WriteFloat(bytes, e.prewarmSeconds);
@@ -143,14 +153,19 @@ class Reader {
 };
 
 bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
+    std::uint8_t backendPolicy = 0U, gpuCatchupPolicy = 0U;
     if (!reader.U64(effect.determinismSeed) || !reader.F(effect.durationSeconds) || !reader.Bool(effect.looping) ||
+        !reader.U8(backendPolicy) || backendPolicy > static_cast<std::uint8_t>(kb::scene::ParticleBackendPolicy::GpuVisualRequired) ||
+        !reader.U8(gpuCatchupPolicy) || gpuCatchupPolicy > static_cast<std::uint8_t>(kb::scene::ParticleGpuCatchupPolicy::BoundedWarmup) ||
         !reader.U8(effect.emitterCount) || effect.emitterCount > kb::scene::kParticleEffectMaxEmitters ||
         !reader.U8(effect.eventBindingCount) || effect.eventBindingCount > kb::scene::kParticleEffectMaxEventBindings) return false;
+    effect.backendPolicy = static_cast<kb::scene::ParticleBackendPolicy>(backendPolicy);
+    effect.gpuCatchupPolicy = static_cast<kb::scene::ParticleGpuCatchupPolicy>(gpuCatchupPolicy);
     for (std::uint8_t emitterIndex = 0U; emitterIndex < effect.emitterCount; ++emitterIndex) {
         auto& e = effect.emitters[emitterIndex];
         std::uint8_t output = 0U, blend = 0U, sort = 0U, alignment = 0U, space = 0U, mode = 0U;
         std::uint32_t columns = 0U, rows = 0U;
-        if (!reader.U64(e.emitterId) || !reader.U8(output) || output > static_cast<std::uint8_t>(kb::scene::ParticleOutputType::Mesh) ||
+        if (!reader.U64(e.emitterId) || !reader.U8(output) || output > static_cast<std::uint8_t>(kb::scene::ParticleOutputType::Volumetric) ||
             !reader.U64(e.materialAssetId) || !reader.U64(e.meshAssetId) || !reader.U64(e.textureAtlasAssetId) ||
             !reader.F(e.meshLodBias) || !reader.Bool(e.meshCastsShadow) || !reader.Bool(e.meshReceivesShadow) ||
             !reader.U8(blend) || blend > static_cast<std::uint8_t>(kb::scene::ParticleBlendMode::Premultiplied) ||
@@ -160,6 +175,13 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
             !reader.Bool(e.antiAliasing) || !reader.U32(columns) || columns > UINT16_MAX || !reader.U32(rows) || rows > UINT16_MAX ||
             !reader.U32(e.flipbookFrameCount) || !reader.F(e.flipbookFramesPerSecond) || !reader.Bool(e.flipbookLooping) ||
             !reader.F(e.stretchVelocityScale) || !reader.F(e.stretchMinimumLength) || !reader.F(e.pointSpriteDiameter) ||
+            !reader.F(e.trailSampleIntervalSeconds) || !reader.F(e.trailMinimumDistance) ||
+            !reader.U32(e.trailMaxSamplesPerParticle) || !reader.F(e.trailWidth) ||
+            !reader.U32(e.ribbonMaxSegments) || !reader.F(e.ribbonWidth) || !reader.Bool(e.ribbonBreakOnDeath) ||
+            !reader.Vec3(e.beamLocalEnd) || !reader.U32(e.beamSegments) || !reader.F(e.beamWidth) ||
+            !reader.F(e.beamNoiseAmplitude) || !reader.F(e.beamNoiseFrequency) ||
+            !reader.F(e.volumetricDensity) || !reader.F(e.volumetricRadiusScale) ||
+            !reader.U32(e.volumetricLowQualitySteps) || !reader.U32(e.volumetricHighQualitySteps) ||
             !reader.U8(space) || space > static_cast<std::uint8_t>(kb::scene::ParticleSimulationSpace::World) ||
             !reader.Bool(e.enabled) || !reader.U8(mode) || mode > static_cast<std::uint8_t>(kb::scene::ParticleSpawnMode::Burst) ||
             !reader.U32(e.maxParticles) || !reader.Vec3(e.localPosition) || !reader.Quat(e.localRotation) ||
@@ -217,7 +239,20 @@ bool ReadEffect(Reader& reader, ParticleCompiledEffect& effect) {
             emitter.lifetimeMin <= 0.0F || emitter.lifetimeMax < emitter.lifetimeMin ||
             emitter.prewarmSeconds < 0.0F || emitter.prewarmSeconds > kb::scene::kParticleEffectMaxPrewarmSeconds ||
             emitter.flipbookColumns == 0U || emitter.flipbookRows == 0U || emitter.flipbookFrameCount == 0U ||
-            emitter.pointSpriteDiameter <= 0.0F)
+            emitter.pointSpriteDiameter <= 0.0F ||
+            emitter.trailSampleIntervalSeconds <= 0.0F || emitter.trailMinimumDistance < 0.0F ||
+            emitter.trailMaxSamplesPerParticle == 0U ||
+            emitter.trailMaxSamplesPerParticle > kb::scene::kParticleEffectMaxTrailSamplesPerParticle ||
+            emitter.trailWidth <= 0.0F || emitter.ribbonMaxSegments == 0U ||
+            emitter.ribbonMaxSegments > kb::scene::kParticleEffectMaxStripSegmentsPerEmitter ||
+            emitter.ribbonWidth <= 0.0F ||
+            kb::math::Dot(emitter.beamLocalEnd, emitter.beamLocalEnd) <= 0.000001F ||
+            emitter.beamSegments == 0U || emitter.beamSegments > kb::scene::kParticleEffectMaxStripSegmentsPerEmitter ||
+            emitter.beamWidth <= 0.0F || emitter.beamNoiseAmplitude < 0.0F || emitter.beamNoiseFrequency < 0.0F ||
+            emitter.volumetricDensity <= 0.0F || emitter.volumetricRadiusScale <= 0.0F ||
+            emitter.volumetricLowQualitySteps == 0U ||
+            emitter.volumetricHighQualitySteps < emitter.volumetricLowQualitySteps ||
+            emitter.volumetricHighQualitySteps > 256U)
             return false;
         previousEmitterId = emitter.emitterId;
         totalCapacity += emitter.maxParticles;

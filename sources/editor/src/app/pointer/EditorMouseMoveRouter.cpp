@@ -99,7 +99,8 @@ void InvalidateMaterialGraphPanel(
 
 void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftButtonDown, bool rightButtonDown) {
     if (sceneContext_.ParticleEditorWorkspace().EmitterDragActive() ||
-        sceneContext_.ParticleEditorWorkspace().ModuleDragActive()) {
+        sceneContext_.ParticleEditorWorkspace().ModuleDragActive() ||
+        sceneContext_.ParticleEditorWorkspace().PropertySliderActive()) {
         const std::optional<RECT> content = EditorPanelContentResolver::Resolve(
             DockPanelKind::ParticleEditor,
             messageWindow,
@@ -110,19 +111,37 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         if (!leftButtonDown || !content.has_value()) {
             sceneContext_.CancelParticleEditorEmitterDrag();
             sceneContext_.CancelParticleEditorModuleDrag();
+            ParticleEditorPanelInteraction::EndPropertySlider(sceneContext_);
             ReleaseCapture();
         } else {
             const std::vector<kb::particle_editor::ParticleEmitterListRow> rows =
                 sceneContext_.ParticleEditorEmitterRows();
             const auto inspector = sceneContext_.ParticleEditorInspector();
+            const auto recipes = sceneContext_.ParticleEditorRecipes();
             const ParticleEditorPanelLayout layout = ParticleEditorPanelLayoutResolver::Resolve(
                 *content,
                 rows,
                 sceneContext_.ParticleEditorWorkspace().ComposerScrollOffset(),
-                GetDpiForWindow(messageWindow), &inspector);
-            ParticleEditorPanelInteraction::UpdateDrag(sceneContext_, layout, y);
+                GetDpiForWindow(messageWindow), &inspector, recipes.size(), &sceneContext_.ParticleEditorWorkspace());
+            if (sceneContext_.ParticleEditorWorkspace().PropertySliderActive()) {
+                static_cast<void>(ParticleEditorPanelInteraction::UpdatePropertySlider(sceneContext_, layout, x));
+                sceneViewport_.RequestPresent();
+            } else {
+                ParticleEditorPanelInteraction::UpdateDrag(sceneContext_, layout, y);
+            }
             EditorWindowInvalidator::InvalidatePanel(messageWindow, *content);
         }
+        return;
+    }
+
+    if (sceneContext_.IsParticlePreviewOrbiting()) {
+        if (!leftButtonDown) {
+            static_cast<void>(sceneContext_.EndParticlePreviewOrbit());
+            ReleaseCapture();
+        } else {
+            static_cast<void>(sceneContext_.DragParticlePreviewOrbit(x, y));
+        }
+        sceneViewport_.RequestPresent();
         return;
     }
 

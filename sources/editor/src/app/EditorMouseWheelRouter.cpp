@@ -90,11 +90,12 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
         const std::vector<kb::particle_editor::ParticleEmitterListRow> rows =
             sceneContext_.ParticleEditorEmitterRows();
         const auto inspector = sceneContext_.ParticleEditorInspector();
+        const auto recipes = sceneContext_.ParticleEditorRecipes();
         const ParticleEditorPanelLayout layout = ParticleEditorPanelLayoutResolver::Resolve(
             *particleContent,
             rows,
             sceneContext_.ParticleEditorWorkspace().ComposerScrollOffset(),
-            GetDpiForWindow(messageWindow_), &inspector);
+            GetDpiForWindow(messageWindow_), &inspector, recipes.size(), &sceneContext_.ParticleEditorWorkspace());
         if (Contains(layout.composer, x, y)) {
             const int direction = wheelDelta > 0 ? -1 : 1;
             const int maximum = ParticleEditorPanelLayoutResolver::MaximumComposerScroll(
@@ -103,6 +104,11 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
                 sceneContext_.ParticleEditorWorkspace().ComposerScrollOffset() + direction * 108,
                 0,
                 maximum));
+            return true;
+        }
+        if (Contains(layout.preview, x, y) && sceneContext_.HasParticleEditorAsset()) {
+            const float scale = wheelDelta > 0 ? 0.9F : (wheelDelta < 0 ? 1.0F / 0.9F : 1.0F);
+            static_cast<void>(sceneContext_.ZoomParticlePreviewCamera(scale));
             return true;
         }
     }

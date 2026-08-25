@@ -54,6 +54,31 @@ void ParticleEditorWorkspaceState::SetComposerScrollOffset(int offset) noexcept 
 
 int ParticleEditorWorkspaceState::ComposerScrollOffset() const noexcept { return composerScrollOffset_; }
 
+bool ParticleEditorWorkspaceState::ComposerSectionExpanded(ParticleEditorComposerSection section) const noexcept {
+    switch (section) {
+    case ParticleEditorComposerSection::Emitters: return emittersExpanded_;
+    case ParticleEditorComposerSection::Settings: return settingsExpanded_;
+    case ParticleEditorComposerSection::Recipes: return recipesExpanded_;
+    case ParticleEditorComposerSection::Modules: return modulesExpanded_;
+    case ParticleEditorComposerSection::Output: return outputExpanded_;
+    case ParticleEditorComposerSection::Dependencies: return dependenciesExpanded_;
+    case ParticleEditorComposerSection::Diagnostics: return diagnosticsExpanded_;
+    }
+    return false;
+}
+
+void ParticleEditorWorkspaceState::ToggleComposerSection(ParticleEditorComposerSection section) noexcept {
+    switch (section) {
+    case ParticleEditorComposerSection::Emitters: emittersExpanded_ = !emittersExpanded_; break;
+    case ParticleEditorComposerSection::Settings: settingsExpanded_ = !settingsExpanded_; break;
+    case ParticleEditorComposerSection::Recipes: recipesExpanded_ = !recipesExpanded_; break;
+    case ParticleEditorComposerSection::Modules: modulesExpanded_ = !modulesExpanded_; break;
+    case ParticleEditorComposerSection::Output: outputExpanded_ = !outputExpanded_; break;
+    case ParticleEditorComposerSection::Dependencies: dependenciesExpanded_ = !dependenciesExpanded_; break;
+    case ParticleEditorComposerSection::Diagnostics: diagnosticsExpanded_ = !diagnosticsExpanded_; break;
+    }
+}
+
 bool ParticleEditorWorkspaceState::BeginRename(const kb::scene::ParticleEffectAsset& asset,
                                                kb::scene::ParticleStableId emitterId) {
     const kb::scene::ParticleEmitterAsset* emitter = ParticleEmitterListModel::Find(asset, emitterId);
@@ -185,5 +210,30 @@ void ParticleEditorWorkspaceState::FocusDiagnostic(std::string propertyPath,
 const std::string& ParticleEditorWorkspaceState::FocusedPropertyPath() const noexcept {
     return focusedPropertyPath_;
 }
+
+void ParticleEditorWorkspaceState::BeginPropertySlider(
+    std::size_t propertyIndex, std::uint32_t choice) noexcept {
+    propertySliderActive_ = true;
+    propertySliderHasHistory_ = false;
+    propertySliderIndex_ = propertyIndex;
+    propertySliderChoice_ = choice;
+}
+
+void ParticleEditorWorkspaceState::MarkPropertySliderHistory() noexcept {
+    if (propertySliderActive_)
+        propertySliderHasHistory_ = true;
+}
+
+void ParticleEditorWorkspaceState::EndPropertySlider() noexcept {
+    propertySliderActive_ = false;
+    propertySliderHasHistory_ = false;
+    propertySliderIndex_ = 0U;
+    propertySliderChoice_ = 0xFFFFFFFFU;
+}
+
+bool ParticleEditorWorkspaceState::PropertySliderActive() const noexcept { return propertySliderActive_; }
+std::size_t ParticleEditorWorkspaceState::PropertySliderIndex() const noexcept { return propertySliderIndex_; }
+std::uint32_t ParticleEditorWorkspaceState::PropertySliderChoice() const noexcept { return propertySliderChoice_; }
+bool ParticleEditorWorkspaceState::PropertySliderHasHistory() const noexcept { return propertySliderHasHistory_; }
 
 } // namespace kb::particle_editor

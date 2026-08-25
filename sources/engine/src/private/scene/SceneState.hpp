@@ -627,7 +627,11 @@ public:
     std::vector<std::size_t> transformRenderProxyVisibleMeshRendererIndices;
     std::vector<std::size_t> transformRenderProxyCameraIndices;
     std::vector<std::size_t> transformRenderProxyLightIndices;
-    std::vector<SceneEntity> meshRendererRenderProxyUpdateEntities;
+    std::vector<SceneEntity> renderProxyUpdateEntities;
+    std::unordered_set<SceneEntity::IdType> renderProxyUpdateEntityIds;
+    std::vector<SceneEntity> renderProxyDirtyTraversalScratch;
+    std::uint64_t renderProxyUpdateRevision = 1U;
+    std::uint64_t renderTopologyVersion = 1U;
     std::vector<std::size_t> transformRenderProxyIdentityAffineChunkCountsScratch;
     std::size_t lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
     std::unique_ptr<kb::ecs::WorkerPool> transformWorkerPool;
@@ -769,6 +773,7 @@ public:
     std::uint64_t particleSimulationBackendEpoch = 0U;
     kb::particles::ParticleRenderSnapshotChannel particleRenderSnapshots;
     kb::particles::ParticleRenderSnapshotResult lastParticleRenderSnapshotPublication{};
+    kb::particles::ParticleGpuVisualStepJournal particleGpuVisualSteps;
     kb::particles::ParticleRenderCapabilities particleRenderCapabilities{};
     std::uint64_t particleRenderConsumerId = 0U;
 #if !defined(NDEBUG)
@@ -799,9 +804,11 @@ public:
     std::uint64_t nextScreenCaptureId = 1U;
     std::uint64_t pendingScreenCaptureId = 0U;
     std::string pendingScreenCapturePath;
+    bool pendingScreenCaptureReturnsPixels = false;
     bool pendingScreenCaptureConsumed = false;
     std::uint64_t lastScreenCaptureId = 0U;
     bool lastScreenCaptureSucceeded = false;
+    std::optional<SceneScreenCapturePixels> lastScreenCapturePixels;
 };
 
 } // namespace kb::scene

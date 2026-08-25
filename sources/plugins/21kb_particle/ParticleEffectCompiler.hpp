@@ -18,6 +18,10 @@ struct ParticleCompilerCapabilities {
     bool stretchedBillboard = true;
     bool pointSprite = true;
     bool mesh = true;
+    bool trail = true;
+    bool ribbon = true;
+    bool beam = true;
+    bool volumetric = true;
 
     [[nodiscard]] std::uint64_t StableKey() const noexcept;
 };
@@ -32,7 +36,9 @@ struct ParticleCompileResult {
     std::vector<kb::assets::AssetId> transitiveDependencies;
     std::vector<kb::scene::ParticleEffectDiagnostic> diagnostics;
 
-    [[nodiscard]] bool Succeeded() const noexcept { return effect != nullptr && diagnostics.empty(); }
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return effect != nullptr && !kb::scene::ParticleEffectDiagnosticsHaveErrors(diagnostics);
+    }
 };
 
 class ParticleEffectCompiler final {

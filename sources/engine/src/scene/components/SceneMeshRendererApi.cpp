@@ -6,21 +6,7 @@
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
-#include <algorithm>
-
 namespace kb::scene {
-namespace {
-
-void MarkMeshRendererRenderProxyDirty(SceneState& state, SceneEntity entity) noexcept {
-    if (std::ranges::find(state.meshRendererRenderProxyUpdateEntities, entity) == state.meshRendererRenderProxyUpdateEntities.end()) {
-        try {
-            state.meshRendererRenderProxyUpdateEntities.push_back(entity);
-        } catch (...) {
-        }
-    }
-}
-
-} // namespace
 
 bool SceneComponentQueryService::HasMeshRenderer(const Scene& scene, SceneEntity entity) noexcept {
     return SceneEntityService::IsAlive(scene, entity) && SceneAccess::State(scene).componentStorage.MeshRenderers().Has(entity);
@@ -39,7 +25,7 @@ void SceneComponentMutationService::SetMeshRenderer(Scene& scene, SceneEntity en
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.MeshRenderers().Set(entity, renderer);
         SetSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::MeshRenderer);
-        MarkMeshRendererRenderProxyDirty(state, entity);
+        MarkSceneRenderProxyDirty(state, entity);
         MarkScenePrefabNodeDirty(state, entity);
     }
 }
@@ -49,7 +35,7 @@ void SceneComponentMutationService::RemoveMeshRenderer(Scene& scene, SceneEntity
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.MeshRenderers().Remove(entity);
         ClearSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::MeshRenderer);
-        MarkMeshRendererRenderProxyDirty(state, entity);
+        MarkSceneRenderProxyDirty(state, entity);
         MarkScenePrefabNodeDirty(state, entity);
     }
 }
@@ -58,7 +44,7 @@ void SceneComponentMutationService::MarkMeshRendererModified(Scene& scene, Scene
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
         state.componentStorage.MeshRenderers().MarkModified(entity);
-        MarkMeshRendererRenderProxyDirty(state, entity);
+        MarkSceneRenderProxyDirty(state, entity);
         MarkScenePrefabNodeDirty(state, entity);
     }
 }

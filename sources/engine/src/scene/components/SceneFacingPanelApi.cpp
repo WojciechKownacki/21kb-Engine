@@ -6,6 +6,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -14,9 +15,9 @@ namespace kb::scene {
 bool SceneComponentQueryService::HasFacingPanel(const Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) && SceneAccess::State(scene).componentStorage.FacingPanels().Has(entity); }
 const FacingPanelComponent* SceneComponentQueryService::TryGetFacingPanel(const Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.FacingPanels().TryGet(entity) : nullptr; }
 FacingPanelComponent* SceneComponentMutationService::TryGetFacingPanel(Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.FacingPanels().TryGet(entity) : nullptr; }
-void SceneComponentMutationService::SetFacingPanel(Scene& scene, SceneEntity entity, const FacingPanelComponent& component) { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.FacingPanels().Set(entity, component); MarkScenePrefabNodeDirty(state, entity); } }
-void SceneComponentMutationService::RemoveFacingPanel(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.FacingPanels().Remove(entity); MarkScenePrefabNodeDirty(state, entity); } }
-void SceneComponentMutationService::MarkFacingPanelModified(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.FacingPanels().MarkModified(entity); MarkScenePrefabNodeDirty(state, entity); } }
+void SceneComponentMutationService::SetFacingPanel(Scene& scene, SceneEntity entity, const FacingPanelComponent& component) { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.FacingPanels().Set(entity, component); MarkSceneRenderProxyDirty(state, entity); MarkScenePrefabNodeDirty(state, entity); } }
+void SceneComponentMutationService::RemoveFacingPanel(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.FacingPanels().Remove(entity); MarkSceneRenderProxyDirty(state, entity); MarkScenePrefabNodeDirty(state, entity); } }
+void SceneComponentMutationService::MarkFacingPanelModified(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.FacingPanels().MarkModified(entity); MarkSceneRenderProxyDirty(state, entity); MarkScenePrefabNodeDirty(state, entity); } }
 
 SceneFacingPanelComponentQueries::SceneFacingPanelComponentQueries(const Scene& scene) noexcept : scene_(scene) {}
 bool SceneFacingPanelComponentQueries::Has(SceneEntity entity) const noexcept { return SceneComponentQueryService::HasFacingPanel(scene_, entity); }

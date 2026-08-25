@@ -1,6 +1,9 @@
 #include "platform/win32/EditorSceneDirtyPrompt.hpp"
 
 #if defined(_WIN32)
+#include "platform/win32/EditorChoiceDialog.hpp"
+#include "rendering/script_editor/ScriptEditorTextEncoding.hpp"
+
 #include <string>
 
 namespace kb::editor {
@@ -19,7 +22,7 @@ namespace {
     text += SceneLabel(scenePath);
     text += L" before ";
     text += action;
-    text += L"?\n\nYes = Save\nNo = Don't Save\nCancel = keep editing";
+    text += L"?";
     return text;
 }
 
@@ -30,18 +33,20 @@ EditorSceneDirtyPromptResult EditorSceneDirtyPrompt::Confirm(
     const std::filesystem::path& scenePath,
     std::wstring_view action) {
     const std::wstring text = PromptText(scenePath, action);
-    const int result = MessageBoxW(
-        owner,
-        text.c_str(),
-        L"Unsaved Scene",
-        MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1 | MB_APPLMODAL);
-
-    switch (result) {
-    case IDYES:
+    switch (EditorChoiceDialog::Show(owner, EditorChoiceDialogDescriptor{
+        .title = "Unsaved Scene",
+        .message = ScriptEditorTextEncoding::Narrow(text),
+        .supportingText = "Choose whether to preserve the current scene changes.",
+        .primaryLabel = "Save",
+        .secondaryLabel = "Don't Save",
+        .cancelLabel = "Cancel",
+        .icon = HeroIconKind::DocumentText,
+    })) {
+    case EditorChoiceDialogResult::Primary:
         return EditorSceneDirtyPromptResult::Save;
-    case IDNO:
+    case EditorChoiceDialogResult::Secondary:
         return EditorSceneDirtyPromptResult::DontSave;
-    case IDCANCEL:
+    case EditorChoiceDialogResult::Cancel:
     default:
         return EditorSceneDirtyPromptResult::Cancel;
     }

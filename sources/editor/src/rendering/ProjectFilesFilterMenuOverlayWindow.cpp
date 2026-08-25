@@ -6,8 +6,7 @@
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconPainter.hpp"
 #include "rendering/ProjectFilesPanelDrawing.hpp"
-#include "rendering/gdi/ScopedFont.hpp"
-#include "rendering/gdi/ScopedGdiObject.hpp"
+#include "rendering/components/EditorDialogStyle.hpp"
 
 #include <windowsx.h>
 
@@ -36,24 +35,14 @@ constexpr int kCheckboxSize = 16;
 }
 
 void DrawCheckbox(HDC dc, RECT rect, const EditorTheme& theme, bool checked) {
-    GdiDrawing::DrawSharpFrame(dc, rect, Draw::Color(theme.chrome), Draw::Color(theme.borderPanel));
-    if (checked) {
-        ScopedFont markFont(10, FW_SEMIBOLD);
-        const ScopedGdiObject selectedFont(dc, markFont.handle);
-        RECT glyph = rect;
-        glyph.top -= 1;
-        glyph.bottom -= 1;
-        SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, Draw::Color(theme.textPrimary));
-        DrawTextW(dc, L"\u2714", 1, &glyph, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-    }
+    EditorDialogStyle::PaintCheckbox(dc, rect, theme, checked);
 }
 
 void DrawItem(HDC dc, RECT rect, const EditorTheme& theme, const char* label, HeroIconKind icon, bool checked, bool hovered) {
-    const COLORREF rowFill = hovered
-        ? Draw::Blend(Draw::Color(theme.strip), Draw::Color(theme.textSecondary), 12)
-        : Draw::Blend(Draw::Color(theme.strip), Draw::Color(theme.panel), 42);
-    GdiDrawing::FillRectColor(dc, rect, rowFill);
+    GdiDrawing::FillRectColor(
+        dc,
+        rect,
+        EditorDialogStyle::Color(hovered ? theme.toolbarButton : theme.strip));
 
     const int checkboxTop = rect.top + ((rect.bottom - rect.top) - kCheckboxSize) / 2;
     RECT checkbox{ rect.left + 8, checkboxTop, rect.left + 8 + kCheckboxSize, checkboxTop + kCheckboxSize };
@@ -63,7 +52,11 @@ void DrawItem(HDC dc, RECT rect, const EditorTheme& theme, const char* label, He
     HeroIconPainter::Draw(dc, iconRect, icon, icon == HeroIconKind::Folder ? Draw::FolderColor(false) : RGB(78, 150, 244), 1);
 
     RECT text{ rect.left + 52, rect.top, rect.right - 8, rect.bottom };
-    Draw::DrawLabel(dc, text, label, checked ? Draw::Color(theme.textPrimary) : Draw::Color(theme.textSecondary));
+    EditorDialogStyle::PaintText(
+        dc,
+        text,
+        label,
+        EditorDialogStyle::Color(checked || hovered ? theme.textPrimary : theme.textSecondary));
 }
 
 } // namespace
@@ -167,17 +160,13 @@ void ProjectFilesFilterMenuOverlayWindow::Paint(HDC dc) const {
 
     RECT client{};
     GetClientRect(window_, &client);
-    GdiDrawing::DrawSharpFrame(
-        dc,
-        client,
-        Draw::Blend(Draw::Color(theme_.strip), Draw::Color(theme_.panel), 22),
-        Draw::Blend(Draw::Color(theme_.borderPanel), Draw::Color(theme_.textSecondary), 16));
+    EditorDialogStyle::PaintSurface(dc, client, theme_);
 
     RECT first = EditorAssetBrowserLayout::ContextMenuItemRect(client, 0);
     RECT second = EditorAssetBrowserLayout::ContextMenuItemRect(client, 1);
     DrawItem(dc, first, theme_, "Folder", HeroIconKind::Folder, sceneContext_->AssetBrowser().ShowFolders(), hoveredIndex_ == 0);
     RECT separator{ client.left + 8, first.bottom + 3, client.right - 8, first.bottom + 4 };
-    Draw::DrawHairline(dc, separator, Draw::Color(theme_.borderPanel));
+    EditorDialogStyle::PaintDivider(dc, separator, theme_);
     DrawItem(dc, second, theme_, "Template", HeroIconKind::Cube, sceneContext_->AssetBrowser().ShowTemplates(), hoveredIndex_ == 1);
 }
 

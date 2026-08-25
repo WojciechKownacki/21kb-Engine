@@ -528,7 +528,8 @@ void RuntimeMeshResourceEnsurer::Ensure(
         for (const kb::particles::ParticleRenderEmitterRecord& emitter : snapshot->Emitters()) {
             requiresQuad = requiresQuad || emitter.output == kb::particles::ParticleRenderOutput::Billboard ||
                 emitter.output == kb::particles::ParticleRenderOutput::StretchedBillboard ||
-                emitter.output == kb::particles::ParticleRenderOutput::PointSprite;
+                emitter.output == kb::particles::ParticleRenderOutput::PointSprite ||
+                emitter.output == kb::particles::ParticleRenderOutput::Volumetric;
             if (emitter.output == kb::particles::ParticleRenderOutput::Mesh) ensureMesh(emitter.meshAssetId);
         }
         if (requiresQuad) ensureMesh(BuiltInParticleQuadMeshAssetId().value);
