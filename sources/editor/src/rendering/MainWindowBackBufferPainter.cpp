@@ -10,6 +10,8 @@
 #include "rendering/EditorSurfacePainter.hpp"
 #include "rendering/GdiBackBufferRenderer.hpp"
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/HeroIconKind.hpp"
+#include "rendering/HeroIconPainter.hpp"
 #include "rendering/InspectorAddComponentOverlayWindow.hpp"
 #include "rendering/ProjectFilesDeleteConfirmOverlayWindow.hpp"
 #include "rendering/ProjectFilesFilterMenuOverlayWindow.hpp"
@@ -105,6 +107,61 @@ struct SceneDropdownContent {
     return std::nullopt;
 }
 
+void PaintAutosaveNotification(
+    HDC dc,
+    const RECT& client,
+    const EditorTheme& theme,
+    const EditorAutosaveState& autosave) {
+    if (!autosave.NotificationVisible()) {
+        return;
+    }
+
+    constexpr LONG margin = 18;
+    constexpr LONG width = 320;
+    constexpr LONG height = 46;
+    const RECT card{
+        .left = std::max(client.left + 8, client.right - margin - width),
+        .top = std::max(client.top + 8, client.bottom - margin - height),
+        .right = client.right - margin,
+        .bottom = client.bottom - margin,
+    };
+    if (card.right <= card.left || card.bottom <= card.top) {
+        return;
+    }
+
+    const COLORREF statusColor = autosave.NotificationSucceeded()
+        ? GdiDrawing::ToColorRef(theme.accent)
+        : RGB(214, 92, 92);
+    GdiDrawing::DrawSharpFrame(
+        dc,
+        card,
+        GdiDrawing::ToColorRef(theme.chrome),
+        GdiDrawing::ToColorRef(theme.borderChrome));
+    GdiDrawing::FillRectColor(
+        dc,
+        RECT{ card.left, card.top, card.left + 3, card.bottom },
+        statusColor);
+    const RECT icon{
+        card.left + 14,
+        card.top + 12,
+        card.left + 36,
+        card.bottom - 12,
+    };
+    HeroIconPainter::Draw(
+        dc, icon, HeroIconKind::DocumentText, statusColor, 2);
+    const RECT text{
+        icon.right + 10,
+        card.top,
+        card.right - 12,
+        card.bottom,
+    };
+    GdiDrawing::DrawTabText(
+        dc,
+        text,
+        autosave.NotificationText().c_str(),
+        GdiDrawing::ToColorRef(theme.textPrimary));
+}
+
 void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     auto* paintContext = static_cast<MainWindowPaintContext*>(context);
     const DockLayout layout = paintContext->dockModel->Queries().BuildLayout(
@@ -161,6 +218,11 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
         *paintContext->shellInteraction,
         nullptr);
     EditorDragOverlayRenderer{}.Paint(paint.dc, *paintContext->drag, *paintContext->theme, *paintContext->sceneContext);
+    PaintAutosaveNotification(
+        paint.dc,
+        paint.client,
+        *paintContext->theme,
+        paintContext->sceneContext->Autosave());
 }
 
 [[nodiscard]] DockDropPreviewOverlayWindow& MainDropPreviewOverlay() {

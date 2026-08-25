@@ -557,6 +557,7 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorHierarchyMetrics.hpp
     src/private/scene/EditorHierarchyExpansionState.hpp
     src/private/scene/EditorHierarchySelectionNormalizer.hpp
+    src/private/scene/EditorPlayModeSelectionSnapshot.hpp
     src/private/scene/EditorHierarchyObjectFactory.hpp
     src/private/scene/EditorHierarchyRow.hpp
     src/private/scene/EditorHierarchyRowBuilder.hpp

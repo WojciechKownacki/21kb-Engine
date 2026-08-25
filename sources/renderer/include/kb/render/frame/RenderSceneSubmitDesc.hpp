@@ -4,6 +4,7 @@
 #include "kb/render/frame/RenderViewportDesc.hpp"
 #include "kb/render/overlay/EditorCameraWireframe.hpp"
 #include "kb/render/overlay/EditorLightWireframe.hpp"
+#include "kb/render/overlay/EditorParticleIcon.hpp"
 #include "kb/render/overlay/PhysicsDebugLine.hpp"
 #include "kb/render/post/ScenePostProcessSettings.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
@@ -175,6 +176,7 @@ struct RenderSceneSubmitDesc {
     std::span<const std::uint64_t> dirtySceneEntityIds{};
     std::span<const EditorCameraWireframeDesc> editorCameraWireframes{};
     std::span<const EditorLightWireframeDesc> editorLightWireframes{};
+    std::span<const EditorParticleIconDesc> editorParticleIcons{};
     std::span<const PhysicsDebugLine> physicsDebugLines{};
     bgfx::TextureHandle editorOverlayDepthTexture = BGFX_INVALID_HANDLE;
     std::uint32_t clearRgba = 0x000000FFU;

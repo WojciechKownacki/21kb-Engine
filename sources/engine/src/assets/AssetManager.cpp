@@ -10,6 +10,7 @@
 
 #include <string>
 #include <exception>
+#include <system_error>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -108,6 +109,82 @@ bool AssetManager::RegisterAsset(AssetMetadata metadata) {
         ++revision_;
     }
     return changed;
+}
+
+bool AssetManager::RefreshAsset(AssetId id) {
+    lastError_.clear();
+    const AssetMetadata* registered = registry_.Find(id);
+    if (!id.IsValid() || registered == nullptr) {
+        lastError_ = "Asset is not registered";
+        return false;
+    }
+
+    AssetMetadata refreshed = *registered;
+    refreshed.physicalPath = ResolvePhysicalPath(refreshed);
+    std::error_code fileError;
+    if (refreshed.physicalPath.empty() ||
+        !std::filesystem::is_regular_file(refreshed.physicalPath, fileError) ||
+        fileError) {
+        lastError_ = "Asset file is unavailable";
+        return false;
+    }
+
+    IAssetLoader* loader = LoaderForExtension(refreshed.physicalPath.extension());
+    if (loader == nullptr) {
+        lastError_ = "No loader registered for asset extension: " +
+            refreshed.physicalPath.extension().string();
+        return false;
+    }
+
+    const std::uint64_t contentHash = HashFile(refreshed.physicalPath);
+    if (contentHash == 0U) {
+        lastError_ = "Asset file could not be hashed";
+        return false;
+    }
+
+    try {
+        std::scoped_lock lock{ loaderExecutionMutex_ };
+        if (loader->Type() == refreshed.type) {
+            refreshed.browseTag = loader->DiscoverBrowseTag(refreshed.physicalPath);
+        }
+        refreshed.contentHash = contentHash;
+        refreshed.dependencies = loader->DiscoverDependencies(refreshed, registry_);
+    } catch (const std::exception& exception) {
+        lastError_ = "Asset metadata refresh failed: " +
+            std::string{ exception.what() };
+        return false;
+    } catch (...) {
+        lastError_ = "Asset metadata refresh failed";
+        return false;
+    }
+
+    std::unordered_set<std::uint64_t> invalidatedAssets{ id.value };
+    bool foundDependent = true;
+    while (foundDependent) {
+        foundDependent = false;
+        for (const AssetMetadata& metadata : registry_.All()) {
+            for (const AssetId dependency : metadata.dependencies) {
+                if (invalidatedAssets.contains(dependency.value) &&
+                    invalidatedAssets.insert(metadata.id.value).second) {
+                    foundDependent = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (!registry_.Upsert(std::move(refreshed))) {
+        lastError_ = "Asset registry could not be refreshed";
+        return false;
+    }
+    for (const std::uint64_t invalidatedId : invalidatedAssets) {
+        ++asyncLoadGenerations_[invalidatedId];
+        asyncLoads_.erase(invalidatedId);
+        asyncLoadErrors_.erase(invalidatedId);
+        cache_.erase(invalidatedId);
+    }
+    ++revision_;
+    return true;
 }
 
 std::size_t AssetManager::DiscoverMountedAssets() {

@@ -168,6 +168,40 @@ void RunAssetManagerDiscoveryCacheAndManifestTest() {
     kb::tests::Require(restoredMetadata->importCategory == metadata->importCategory, "Restored asset manifest did not preserve import category");
 }
 
+void RunSingleAssetRefreshTest() {
+    ResetTestRoot();
+
+    const std::filesystem::path assetsRoot = TestRoot() / "RefreshProject" / "Assets";
+    const std::filesystem::path assetPath = assetsRoot / "Text" / "Refresh.txt";
+    WriteTextFile(assetPath, "before");
+
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<TextAssetLoader>()),
+        "Single asset refresh loader registration failed");
+    kb::tests::Require(manager.Mounts().Mount("Game", assetsRoot),
+        "Single asset refresh mount failed");
+    kb::tests::Require(manager.DiscoverMountedAssets() == 1U,
+        "Single asset refresh discovery failed");
+    const kb::assets::AssetMetadata* before =
+        manager.Registry().FindByPath("/Game/Text/Refresh.txt");
+    kb::tests::Require(before != nullptr, "Single asset refresh fixture was not registered");
+    const kb::assets::AssetId id = before->id;
+    const std::uint64_t previousHash = before->contentHash;
+    kb::tests::Require(manager.Load<std::string>(id).IsLoaded(),
+        "Single asset refresh fixture did not enter the runtime cache");
+
+    WriteTextFile(assetPath, "after");
+    kb::tests::Require(manager.RefreshAsset(id), "Single asset refresh failed");
+    const kb::assets::AssetMetadata* after = manager.Registry().Find(id);
+    kb::tests::Require(after != nullptr && after->contentHash != previousHash,
+        "Single asset refresh did not update the content hash");
+    kb::tests::Require(!manager.IsLoaded(id),
+        "Single asset refresh did not invalidate the stale cached payload");
+    const kb::assets::AssetHandle<std::string> reloaded = manager.Load<std::string>(id);
+    kb::tests::Require(reloaded.IsLoaded() && *reloaded == "after",
+        "Single asset refresh did not expose the newly written payload");
+}
+
 void RunAssetManagerRuntimePublicationTest() {
     ResetTestRoot();
 
@@ -1069,6 +1103,7 @@ namespace kb::tests {
 
 void RunAssetRuntimeTests() {
     RunAssetManagerDiscoveryCacheAndManifestTest();
+    RunSingleAssetRefreshTest();
     RunAssetManagerRuntimePublicationTest();
     RunAssetManagerLoadOpaqueTest();
     RunAssetManagerTrueAsyncLoadTest();

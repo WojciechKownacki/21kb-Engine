@@ -30,6 +30,7 @@ add_library(kb_renderer STATIC
     include/kb/render/overlay/EditorCameraWireframe.hpp
     include/kb/render/overlay/SceneGizmoPass.hpp
     include/kb/render/overlay/EditorLightWireframe.hpp
+    include/kb/render/overlay/EditorParticleIcon.hpp
     include/kb/render/overlay/PhysicsDebugLine.hpp
     include/kb/render/overlay/SceneGridPass.hpp
     include/kb/render/overlay/SelectionOutlineCompositePass.hpp

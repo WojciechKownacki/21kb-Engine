@@ -24,11 +24,13 @@
 #include "kb/render/runtime/RuntimeMaterialParameterValidation.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "scene/EditorDefaultSceneFactory.hpp"
+#include "scene/EditorPlayCameraResolver.hpp"
 #include "scene/EditorSceneDocumentAssetLoaders.hpp"
 
 #include <chrono>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -68,6 +70,37 @@ private:
 
     std::uint64_t eventId_ = 0U;
     std::string_view totalDetail_;
+    std::chrono::steady_clock::time_point started_{};
+};
+
+class ScopedSceneSaveTrace final {
+public:
+    explicit ScopedSceneSaveTrace(std::string detail) noexcept
+        : eventId_(diagnostics::EditorLagTrace::NextEventId())
+        , detail_(std::move(detail))
+        , started_(std::chrono::steady_clock::now()) {}
+
+    ~ScopedSceneSaveTrace() {
+        diagnostics::EditorLagTrace::Slow(
+            "scene-save", eventId_, ElapsedMs(started_), detail_, 0.0);
+    }
+
+    void Phase(
+        std::chrono::steady_clock::time_point started,
+        std::string_view detail) const noexcept {
+        diagnostics::EditorLagTrace::Slow(
+            "scene-save", eventId_, ElapsedMs(started), detail, 0.0);
+    }
+
+private:
+    [[nodiscard]] static double ElapsedMs(
+        std::chrono::steady_clock::time_point started) noexcept {
+        return std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - started).count();
+    }
+
+    std::uint64_t eventId_ = 0U;
+    std::string detail_;
     std::chrono::steady_clock::time_point started_{};
 };
 
@@ -182,7 +215,9 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
 
     phaseStarted = std::chrono::steady_clock::now();
     const std::string name = currentScenePath_.stem().string().empty() ? std::string{ "Main" } : currentScenePath_.stem().string();
+    playModeSelectionSnapshot_.CaptureAuthoredHierarchy(*scene_);
     if (!playModeSceneSession_.Begin(*scene_, name)) {
+        playModeSelectionSnapshot_.Clear();
         console_.Error("Play Mode", "Scene snapshot could not be captured.");
         return false;
     }
@@ -204,6 +239,7 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
     }
     editorSceneParticleAccumulatorSeconds_ = 0.0;
     trace.Phase(phaseStarted, "transition=begin phase=script-runtime");
+    playCameraEntity_ = EditorPlayCameraResolver::Resolve(*scene_);
     console_.Info("Play Mode", "Captured editor scene snapshot.");
     return true;
 }
@@ -213,6 +249,7 @@ bool EditorSceneContext::RestorePlayModeSceneSession() {
     if (!playModeSceneSession_.Active()) {
         return true;
     }
+    playModeSelectionSnapshot_.CaptureSelection(hierarchySelection_);
     auto phaseStarted = std::chrono::steady_clock::now();
     // Fire each behaviour's shutdown hook while the play scene is still live,
     // before reverting to the snapshot. Surface handler errors to the Console.
@@ -225,6 +262,7 @@ bool EditorSceneContext::RestorePlayModeSceneSession() {
     kb::scene::SceneInputActivation::Clear(*scene_);
     phaseStarted = std::chrono::steady_clock::now();
     if (!playModeSceneSession_.Restore(*scene_)) {
+        playModeSelectionSnapshot_.Clear();
         console_.Error("Play Mode", "Editor scene snapshot could not be restored.");
         return false;
     }
@@ -232,9 +270,11 @@ bool EditorSceneContext::RestorePlayModeSceneSession() {
     phaseStarted = std::chrono::steady_clock::now();
     ReleaseRenderedSceneResources();
 
-    SelectFirstSceneEntityOrClear();
+    playModeSelectionSnapshot_.Restore(*scene_, hierarchySelection_);
+    playModeSelectionSnapshot_.Clear();
     ResetSceneEditState();
     ClearSceneDocumentDirty();
+    playCameraEntity_ = {};
     editorSceneParticleAccumulatorSeconds_ = 0.0;
     trace.Phase(phaseStarted, "transition=restore phase=editor-reset");
     console_.Info("Play Mode", "Restored editor scene snapshot.");
@@ -243,6 +283,19 @@ bool EditorSceneContext::RestorePlayModeSceneSession() {
 
 bool EditorSceneContext::HasPlayModeSceneSession() const noexcept {
     return playModeSceneSession_.Active();
+}
+
+kb::scene::SceneEntity EditorSceneContext::PlayCameraEntity() const noexcept {
+    if (!playModeSceneSession_.Active() ||
+        !scene_->Entities().IsAlive(playCameraEntity_)) {
+        return {};
+    }
+    const kb::scene::CameraComponent* camera =
+        scene_->Components().Cameras().TryGet(playCameraEntity_);
+    return camera != nullptr && camera->primary &&
+            kb::scene::ResolveVisibility(*scene_, playCameraEntity_).visible
+        ? playCameraEntity_
+        : kb::scene::SceneEntity{};
 }
 
 bool EditorSceneContext::ReloadSceneFromProject() {
@@ -375,6 +428,19 @@ bool EditorSceneContext::SaveCurrentSceneAs(const std::filesystem::path& path) {
 
 bool EditorSceneContext::SaveSceneToPath(const std::filesystem::path& path) {
     const std::filesystem::path scenePath = EnsureSceneDocumentExtension(path.empty() ? EditorProjectPaths::DefaultScenePath() : path);
+    ScopedSceneSaveTrace trace{
+        "phase=total path=" + scenePath.generic_string() };
+    kb::assets::AssetManager& assets = scene_->Assets().Manager();
+    const std::optional<std::filesystem::path> virtualPath =
+        assets.Mounts().ToVirtual(scenePath);
+    const kb::assets::AssetMetadata* existingMetadata = virtualPath.has_value()
+        ? assets.Registry().FindByPath(*virtualPath)
+        : nullptr;
+    const kb::assets::AssetId existingAssetId = existingMetadata == nullptr
+        ? kb::assets::AssetId{}
+        : existingMetadata->id;
+
+    auto phaseStarted = std::chrono::steady_clock::now();
     std::error_code error;
     if (!scenePath.parent_path().empty()) {
         std::filesystem::create_directories(scenePath.parent_path(), error);
@@ -383,16 +449,41 @@ bool EditorSceneContext::SaveSceneToPath(const std::filesystem::path& path) {
             return false;
         }
     }
+    trace.Phase(phaseStarted, "phase=create-directory");
 
     const std::string name = scenePath.stem().string().empty() ? std::string{ "Main" } : scenePath.stem().string();
+    phaseStarted = std::chrono::steady_clock::now();
     if (!kb::scene::SceneDocumentService::Save(*scene_, scenePath, name)) {
         console_.Error("Project", "Scene could not be saved: " + scenePath.generic_string());
         return false;
     }
+    trace.Phase(phaseStarted, "phase=atomic-document-write");
+
+    phaseStarted = std::chrono::steady_clock::now();
+    if (existingAssetId.IsValid()) {
+        if (!assets.RefreshAsset(existingAssetId)) {
+            console_.Error(
+                "Project",
+                "Saved scene metadata could not be refreshed: " +
+                    AssetErrorOr(assets, "unknown asset refresh error"));
+            return false;
+        }
+        trace.Phase(phaseStarted, "phase=single-asset-refresh");
+    } else if (virtualPath.has_value()) {
+        static_cast<void>(scene_->Assets().Discover());
+        if (assets.Registry().FindByPath(*virtualPath) == nullptr) {
+            console_.Error(
+                "Project",
+                "Saved scene could not be registered: " +
+                    scenePath.generic_string());
+            return false;
+        }
+        trace.Phase(phaseStarted, "phase=new-asset-discovery");
+    }
 
     currentScenePath_ = scenePath;
-    static_cast<void>(scene_->Assets().Discover());
     ClearSceneDocumentDirty();
+    autosave_.ResetInterval();
     console_.Info("Project", "Saved scene: " + currentScenePath_.generic_string());
     return true;
 }

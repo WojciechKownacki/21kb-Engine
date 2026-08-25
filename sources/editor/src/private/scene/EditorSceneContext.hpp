@@ -26,6 +26,8 @@
 #include "scene/EditorScriptEditorState.hpp"
 #include "scene/EditorSceneObjectEditTypes.hpp"
 #include "scene/EditorSceneDocumentIdentity.hpp"
+#include "scene/EditorAutosaveState.hpp"
+#include "scene/EditorPlayModeSelectionSnapshot.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
 #include "scene/AnimationPreviewContext.hpp"
 #include "scene/AnimationClipTimelineState.hpp"
@@ -249,6 +251,8 @@ public:
     [[nodiscard]] bool SceneRenderFullDirty() const noexcept;
     [[nodiscard]] const std::vector<std::uint64_t>& SceneRenderDirtyEntityIds() const noexcept;
     [[nodiscard]] bool SceneDocumentDirty() const noexcept;
+    [[nodiscard]] bool TickAutosave(double elapsedSeconds, bool saveEligible);
+    [[nodiscard]] const EditorAutosaveState& Autosave() const noexcept;
     void MarkSceneRenderDirty() noexcept;
     void MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity> entities);
     void AcknowledgeSceneRenderSubmitted() noexcept;
@@ -274,6 +278,7 @@ public:
     [[nodiscard]] bool TickPlayModeSceneSession(float deltaSeconds);
     [[nodiscard]] bool RestorePlayModeSceneSession();
     [[nodiscard]] bool HasPlayModeSceneSession() const noexcept;
+    [[nodiscard]] kb::scene::SceneEntity PlayCameraEntity() const noexcept;
     [[nodiscard]] bool ReloadSceneFromProject();
     [[nodiscard]] bool NewScene(EditorDirtySceneResolution dirtyResolution = EditorDirtySceneResolution::Save);
     [[nodiscard]] bool OpenDefaultScene();
@@ -1432,7 +1437,10 @@ private:
     std::vector<std::uint64_t> sceneRenderDirtyEntityIds_;
     bool sceneRenderFullDirty_ = true;
     bool sceneDocumentDirty_ = false;
+    EditorAutosaveState autosave_;
     EditorPlayModeSceneSession playModeSceneSession_;
+    EditorPlayModeSelectionSnapshot playModeSelectionSnapshot_;
+    kb::scene::SceneEntity playCameraEntity_{};
     int hierarchyScrollOffset_ = 0;
     int hierarchyScrollbarDragY_ = 0;
     int hierarchyScrollbarDragStartOffset_ = 0;

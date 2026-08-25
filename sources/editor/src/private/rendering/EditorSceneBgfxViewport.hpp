@@ -54,6 +54,7 @@ public:
         render::RenderSceneSubmitDesc::EditorGizmoDesc editorGizmo{};
         std::vector<render::EditorCameraWireframeDesc> editorCameraWireframes;
         std::vector<render::EditorLightWireframeDesc> editorLightWireframes;
+        std::vector<render::EditorParticleIconDesc> editorParticleIcons;
         std::vector<render::PhysicsDebugLine> physicsDebugLines;
         std::vector<EditorSceneViewportTextLabel> viewportTextLabels;
         render::RenderSceneSubmitDesc::EditorSelectionBoxDesc editorSelectionBox{};
