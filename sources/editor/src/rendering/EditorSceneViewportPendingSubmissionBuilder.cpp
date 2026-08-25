@@ -122,6 +122,7 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
         .dirtySceneEntityIds = dirtySceneEntityIds,
         .editorCameraWireframes = std::span<const render::EditorCameraWireframeDesc>{present.settings.editorCameraWireframes.data(), present.settings.editorCameraWireframes.size()},
         .editorLightWireframes = std::span<const render::EditorLightWireframeDesc>{present.settings.editorLightWireframes.data(), present.settings.editorLightWireframes.size()},
+        .editorParticleIcons = std::span<const render::EditorParticleIconDesc>{present.settings.editorParticleIcons.data(), present.settings.editorParticleIcons.size()},
         .physicsDebugLines = std::span<const render::PhysicsDebugLine>{present.settings.physicsDebugLines.data(), present.settings.physicsDebugLines.size()},
         .clearRgba = kSceneSubmitClearRgba,
         .editorSceneOverlaysEnabled = present.settings.editorSceneOverlaysEnabled,

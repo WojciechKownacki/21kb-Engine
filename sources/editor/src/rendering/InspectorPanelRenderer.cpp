@@ -4040,13 +4040,11 @@ int InspectorPanelRenderer::ContentHeight(const RECT& content, const EditorScene
     }
 
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
-    if (InspectorSceneAudioModel::ShouldDisplay(
-            sceneContext.Scene(), assetBrowser.InspectorAsset(), selected)) {
-        return InspectorSceneAudioView::ContentHeight(
-            sceneContext.Inspector(), InspectorSceneAudioModel{ sceneContext.Scene() });
-    }
     if (sceneContext.SelectedHierarchyEntities().size() > 1U) {
         return MultiSelectionContentHeight(sceneContext);
+    }
+    if (!sceneContext.Scene().Entities().IsAlive(selected)) {
+        return RectHeight(content);
     }
     return EntityContentHeight(sceneContext, selected);
 }
@@ -4280,16 +4278,8 @@ void InspectorPanelRenderer::Paint(
     }
 
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
-    if (InspectorSceneAudioModel::ShouldDisplay(
-            sceneContext.Scene(), sceneContext.AssetBrowser().InspectorAsset(), selected)) {
-        const InspectorSceneAudioModel model{ sceneContext.Scene() };
-        InspectorSceneAudioView::Paint(
-            dc,
-            inner,
-            theme,
-            sceneContext.Inspector(),
-            sceneContext.SceneDocumentGeneration(),
-            model);
+    if (sceneContext.SelectedHierarchyEntities().size() > 1U) {
+        PaintMultiSelection(dc, inner, theme, sceneContext, selected);
         RestoreDC(dc, -1);
         if (scrollable) {
             const RECT track = ScrollbarTrackRect(content);
@@ -4301,15 +4291,8 @@ void InspectorPanelRenderer::Paint(
         return;
     }
 
-    if (sceneContext.SelectedHierarchyEntities().size() > 1U) {
-        PaintMultiSelection(dc, inner, theme, sceneContext, selected);
+    if (!sceneContext.Scene().Entities().IsAlive(selected)) {
         RestoreDC(dc, -1);
-        if (scrollable) {
-            const RECT track = ScrollbarTrackRect(content);
-            const RECT thumb = ScrollbarThumbRect(content, sceneContext);
-            DrawFrame(dc, track, Rgb(18, 20, 24), Rgb(38, 43, 50));
-            DrawFrame(dc, thumb, sceneContext.Inspector().IsScrollbarDragging() ? Rgb(104, 116, 130) : Rgb(76, 86, 98), Rgb(94, 105, 118));
-        }
         RestoreDC(dc, savedDc);
         return;
     }
@@ -4416,25 +4399,12 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     }
 
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
-    if (InspectorSceneAudioModel::ShouldDisplay(
-            sceneContext.Scene(), sceneContext.AssetBrowser().InspectorAsset(), selected)) {
-        const InspectorSceneAudioHit hit = InspectorSceneAudioView::HitTest(
-            viewport,
-            state,
-            InspectorSceneAudioModel{ sceneContext.Scene() },
-            x,
-            scrolledY);
-        return InspectorPanelRenderer::Hit{
-            .kind = hit.kind,
-            .section = hit.section,
-            .property = hit.property,
-            .index = hit.index,
-            .rect = hit.rect,
-        };
-    }
-
     if (sceneContext.SelectedHierarchyEntities().size() > 1U) {
         return HitTestMultiSelection(viewport, state, x, scrolledY, y);
+    }
+
+    if (!sceneContext.Scene().Entities().IsAlive(selected)) {
+        return {};
     }
 
     if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::General, x, scrolledY); hit.kind != InspectorHitKind::None) {

@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "app/EditorCrashBreadcrumbs.hpp"
 #include "app/EditorHeadlessAutomation.hpp"
+#include "app/EditorPlayModeState.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/audio/AudioPlayback.hpp"
@@ -138,6 +139,7 @@ struct ScenarioState {
 
     EditorSceneContext& context;
     EditorHeadlessAutomation automation;
+    EditorPlayModeState playMode;
     std::filesystem::path fixtureRoot;
     std::unordered_map<std::string, EntityAlias> entities;
     std::unordered_map<std::string, kb::assets::AssetId> assets;
@@ -1839,6 +1841,20 @@ ReadScriptValue(
         return { true, *alias };
     }
 
+    if (*operation == "assert_selected_entity") {
+        const auto alias = StringMember(step, "entity", error);
+        if (!alias) return { false, error };
+        const kb::scene::SceneEntity expected = ResolveEntity(state, *alias);
+        if (!state.context.Scene().Entities().IsAlive(expected)) {
+            return { false, "entity alias is not alive" };
+        }
+        const bool selected = state.context.SelectedEntity() == expected &&
+            state.context.IsHierarchyEntitySelected(expected);
+        return {
+            selected,
+            selected ? *alias : "selected hierarchy entity changed" };
+    }
+
     if (*operation == "assert_name") {
         const auto alias = StringMember(step, "entity", error);
         const auto expected = StringMember(step, "value", error);
@@ -3344,17 +3360,55 @@ ReadScriptValue(
     }
 
     if (*operation == "save_scene") {
-        const auto path = StringMember(step, "path", error, false);
-        if (!path.has_value()) {
-            return {
-                state.context.SaveCurrentScene(),
-                state.context.CurrentScenePath().string() };
+        const auto maximumMilliseconds = NumberMember(
+            step, "max_ms", error, false);
+        if (!error.empty() ||
+            (maximumMilliseconds.has_value() && *maximumMilliseconds <= 0.0)) {
+            return { false, error.empty() ? "max_ms must be positive" : error };
         }
-        const auto resolved = ResolveProjectPath(*path, error);
-        if (!resolved) return { false, error };
+        const auto path = StringMember(step, "path", error, false);
+        if (!error.empty()) return { false, error };
+        const auto started = std::chrono::steady_clock::now();
+        bool saved = false;
+        std::filesystem::path savedPath;
+        if (!path.has_value()) {
+            saved = state.context.SaveCurrentScene();
+            savedPath = state.context.CurrentScenePath();
+        } else {
+            const auto resolved = ResolveProjectPath(*path, error);
+            if (!resolved) return { false, error };
+            saved = state.context.SaveCurrentSceneAs(*resolved);
+            savedPath = *resolved;
+        }
+
+        const double elapsedMilliseconds =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - started).count();
+        const bool withinBudget = !maximumMilliseconds.has_value() ||
+            elapsedMilliseconds <= *maximumMilliseconds;
         return {
-            state.context.SaveCurrentSceneAs(*resolved),
-            resolved->string() };
+            saved && withinBudget,
+            "scene save " + std::to_string(elapsedMilliseconds) +
+                " ms path=" + savedPath.string() };
+    }
+
+    if (*operation == "advance_autosave") {
+        const auto seconds = NumberMember(step, "seconds", error);
+        if (!seconds.has_value() || *seconds <= 0.0) {
+            return { false, error.empty() ? "seconds must be positive" : error };
+        }
+        const bool wasDirty = state.context.SceneDocumentDirty();
+        const bool visualChanged = state.context.TickAutosave(*seconds, true);
+        const EditorAutosaveState& autosave = state.context.Autosave();
+        const bool succeeded = wasDirty && visualChanged &&
+            !state.context.SceneDocumentDirty() &&
+            autosave.NotificationVisible() &&
+            autosave.NotificationSucceeded();
+        return {
+            succeeded,
+            autosave.NotificationText().empty()
+                ? std::string{ "no autosave notification" }
+                : autosave.NotificationText() };
     }
 
     if (*operation == "open_scene") {
@@ -3428,6 +3482,9 @@ ReadScriptValue(
             (maximumMilliseconds.has_value() && *maximumMilliseconds <= 0.0)) {
             return { false, error.empty() ? "max_ms must be positive" : error };
         }
+        if (state.playMode.Mode() != EditorPlayMode::Stopped) {
+            return { false, "play transport is not stopped" };
+        }
         const auto started = std::chrono::steady_clock::now();
         const bool entered = state.context.BeginPlayModeSceneSession();
         const double elapsedMilliseconds =
@@ -3435,16 +3492,36 @@ ReadScriptValue(
                 std::chrono::steady_clock::now() - started).count();
         const bool withinBudget = !maximumMilliseconds.has_value() ||
             elapsedMilliseconds <= *maximumMilliseconds;
+        if (entered) {
+            state.playMode.Play();
+        }
         return {
             entered && withinBudget,
             "play transition " + std::to_string(elapsedMilliseconds) + " ms" };
     }
+    if (*operation == "pause") {
+        if (state.playMode.IsPlaying()) {
+            state.playMode.Pause();
+            return { true, "paused" };
+        }
+        if (state.playMode.IsPaused()) {
+            state.playMode.Resume();
+            return { true, "resumed" };
+        }
+        return { false, "pause transport requires an active Play session" };
+    }
     if (*operation == "stop") {
+        if (state.playMode.Mode() == EditorPlayMode::Stopped) {
+            return { false, "stop transport is already stopped" };
+        }
         const auto started = std::chrono::steady_clock::now();
         const bool restored = state.context.RestorePlayModeSceneSession();
         const double elapsedMilliseconds =
             std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - started).count();
+        if (restored) {
+            state.playMode.Stop();
+        }
         return {
             restored,
             "stop transition " + std::to_string(elapsedMilliseconds) + " ms" };
@@ -3572,6 +3649,9 @@ ReadScriptValue(
     }
 
     if (*operation == "step") {
+        if (state.playMode.IsPaused()) {
+            return { false, "runtime step requested while transport is paused" };
+        }
         const auto frames = NumberMember(step, "frames", error);
         const auto delta =
             NumberMember(step, "dt", error, false)

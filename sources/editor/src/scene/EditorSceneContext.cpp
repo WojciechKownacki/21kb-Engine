@@ -1671,6 +1671,36 @@ bool EditorSceneContext::SceneDocumentDirty() const noexcept {
     return sceneDocumentDirty_;
 }
 
+bool EditorSceneContext::TickAutosave(
+    double elapsedSeconds,
+    bool saveEligible) {
+    const bool dirty = sceneDocumentDirty_ ||
+        HasDirtyMaterialAssetEdit() || ParticleEditorDirty();
+    const EditorAutosaveTickResult tick = autosave_.Tick(
+        elapsedSeconds,
+        saveEligible && !playModeSceneSession_.Active(),
+        dirty);
+    if (!tick.saveRequested) {
+        return tick.visualChanged;
+    }
+
+    const std::string documentName = currentScenePath_.filename().empty()
+        ? std::string{ "open documents" }
+        : currentScenePath_.filename().string();
+    const bool succeeded = SaveOpenDocuments();
+    autosave_.Complete(succeeded, documentName);
+    if (succeeded) {
+        console_.Info("Autosave", "Autosaved " + documentName + ".");
+    } else {
+        console_.Error("Autosave", "Autosave failed. Unsaved changes were retained.");
+    }
+    return true;
+}
+
+const EditorAutosaveState& EditorSceneContext::Autosave() const noexcept {
+    return autosave_;
+}
+
 void EditorSceneContext::MarkSceneRenderDirty() noexcept {
     ++sceneRenderRevision_;
     if (sceneRenderRevision_ == 0U) {
@@ -1757,9 +1787,13 @@ bool EditorSceneContext::SaveOpenDocuments() {
     }
     if (!sceneDocumentDirty_) {
         LogMaterialGraphDebug(console_, "save-open-documents-ok no dirty scene");
+        autosave_.ResetInterval();
         return true;
     }
     const bool savedScene = SaveCurrentScene();
+    if (savedScene) {
+        autosave_.ResetInterval();
+    }
     LogMaterialGraphDebug(console_, "save-open-documents-scene-save result=" + std::string{ savedScene ? "true" : "false" });
     return savedScene;
 }
@@ -8935,7 +8969,8 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
             return false;
         }
         return ExecuteSceneCommand("Add Camera Component", [this, entity]() {
-            scene_->Components().Cameras().Set(entity, kb::scene::CameraComponent{});
+            scene_->Components().Cameras().Set(
+                entity, kb::scene::CameraComponent{ .primary = true });
             return true;
         });
     }

@@ -14,6 +14,7 @@
 #include "scene/AnimationClipTimelineState.hpp"
 #include "scene/AnimationClipEditorDocumentState.hpp"
 #include "scene/AnimatorEditorGraphDocumentState.hpp"
+#include "scene/EditorAutosaveState.hpp"
 #include "scene/ParticleEditorHostSessionStore.hpp"
 #include "windowing/FloatingWindowControlHitTester.hpp"
 #include "windowing/FloatingWindowControlLayout.hpp"
@@ -948,6 +949,40 @@ void RunAnimationClipEditorDocumentStateTest() {
         "Animation Clip document save should establish a clean history baseline");
 }
 
+void RunAutosaveStateTest() {
+    kb::editor::EditorAutosaveState autosave;
+    kb::editor::tests::Require(
+        !autosave.Tick(599.0, true, true).saveRequested,
+        "Autosave must not run before the ten-minute interval");
+    kb::editor::tests::Require(
+        autosave.Tick(1.0, true, true).saveRequested &&
+            autosave.ElapsedSinceSave() == 0.0,
+        "Autosave must request a dirty document save at ten minutes");
+
+    static_cast<void>(autosave.Tick(600.0, false, true));
+    kb::editor::tests::Require(
+        autosave.ElapsedSinceSave() == kb::editor::EditorAutosaveState::IntervalSeconds &&
+            autosave.Tick(0.1, true, true).saveRequested,
+        "Autosave must defer an elapsed save while editing is temporarily ineligible");
+
+    autosave.Complete(true, "Main.21kbscene");
+    kb::editor::tests::Require(
+        autosave.NotificationVisible() && autosave.NotificationSucceeded() &&
+            autosave.NotificationText().find("Main.21kbscene") != std::string::npos,
+        "A successful autosave must expose a named notification");
+    const kb::editor::EditorAutosaveTickResult expired =
+        autosave.Tick(kb::editor::EditorAutosaveState::NotificationSeconds + 0.1, true, false);
+    kb::editor::tests::Require(
+        expired.visualChanged && !autosave.NotificationVisible(),
+        "Autosave notification must expire and request one repaint");
+
+    autosave.Complete(false, {});
+    kb::editor::tests::Require(
+        autosave.NotificationVisible() && !autosave.NotificationSucceeded() &&
+            autosave.NotificationText() == "Autosave failed",
+        "A failed autosave must expose an explicit failure notification");
+}
+
 // A click on any tab — the active one or an inactive sibling — must hit-test as a
 // dock Tab. The pointer router relies on this: a dock hit means the click is a
 // layout action (switch tabs), so it must NOT clear the scene selection and blank
@@ -1014,6 +1049,7 @@ void RunEditorDockingTests() {
     RunSkeletonEditorDocumentStateTest();
     RunAnimationClipTimelineStateTest();
     RunAnimationClipEditorDocumentStateTest();
+    RunAutosaveStateTest();
     RunTabClickIsDockInteractionTest();
 }
 

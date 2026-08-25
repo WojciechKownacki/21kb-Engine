@@ -2,6 +2,7 @@
 
 #include "kb/render/overlay/EditorCameraWireframe.hpp"
 #include "kb/render/overlay/EditorLightWireframe.hpp"
+#include "kb/render/overlay/EditorParticleIcon.hpp"
 #include "kb/render/overlay/PhysicsDebugLine.hpp"
 #include "kb/render/frame/RenderTargetDesc.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
@@ -28,6 +29,7 @@ struct SceneGizmoPassDesc {
     std::uint8_t mode = 0U;
     std::span<const EditorCameraWireframeDesc> cameraWireframes{};
     std::span<const EditorLightWireframeDesc> lightWireframes{};
+    std::span<const EditorParticleIconDesc> particleIcons{};
     std::span<const PhysicsDebugLine> physicsDebugLines{};
     bool visible = false;
 

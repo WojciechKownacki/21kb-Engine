@@ -31,6 +31,7 @@
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "app/scene_viewport/EditorTerrainViewportInteraction.hpp"
 #include "app/EditorWindowInvalidator.hpp"
+#include "app/EditorEditCommandPolicy.hpp"
 #include "scene/EditorTerrainService.hpp"
 #include "diagnostics/EditorLagTrace.hpp"
 
@@ -71,6 +72,7 @@ constexpr float kMaximumRuntimeDeltaSeconds = 1.0F / 15.0F;
 constexpr DWORD kPausedToolbarAnimationIntervalMs = 33;
 constexpr double kEditorTargetFrameRate = 60.0;
 constexpr DWORD kSceneToolbarRefreshIntervalMs = 250;
+constexpr DWORD kIdleMaintenanceIntervalMs = 1000;
 constexpr int kMaxMessagesPerPump = 128;
 
 [[nodiscard]] const char* MessageName(UINT message) noexcept {
@@ -908,9 +910,16 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
             continue;
         }
 
+        const double wallDeltaSeconds = std::chrono::duration<double>(
+            currentTick - previousTick).count();
         const float deltaSeconds = RuntimeDeltaSeconds(previousTick, currentTick);
         previousTick = currentTick;
         const auto tickStart = std::chrono::steady_clock::now();
+        if (state.sceneContext.TickAutosave(
+                wallDeltaSeconds,
+                EditorEditCommandPolicy::CanExecute(state.sceneContext))) {
+            InvalidateRect(state.window, nullptr, FALSE);
+        }
         TickPlayMode(state, deltaSeconds);
         static_cast<void>(TickPointerDragFrame(state));
         const bool sceneFramePresented = TickEditorFrame(state, deltaSeconds);
@@ -956,7 +965,8 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
                 EditorMeshPreviewCache().HasPendingPreviewWork()) {
                 static_cast<void>(MsgWaitForMultipleObjects(0, nullptr, FALSE, FrameWaitMilliseconds(currentTick, nextEditorFrame), QS_ALLINPUT));
             } else {
-                WaitMessage();
+                static_cast<void>(MsgWaitForMultipleObjects(
+                    0, nullptr, FALSE, kIdleMaintenanceIntervalMs, QS_ALLINPUT));
             }
         }
     }
