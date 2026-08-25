@@ -18,6 +18,7 @@
 #include "app/project_files/EditorProjectFilesDeleteConfirmOverlayController.hpp"
 #include "app/project_files/EditorProjectFilesTransientUiController.hpp"
 #include "app/project_settings/EditorProjectSettingsPointerController.hpp"
+#include "app/editor_settings/EditorSettingsPointerController.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp"
@@ -1839,7 +1840,16 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
 
     if (panelHit.inProjectSettingsPanel) {
         EditorProjectSettingsPointerController projectSettingsPointer(sceneContext_);
-        if (projectSettingsPointer.HandlePointerDown(*panelHit.projectSettingsContent, x, y, renderBackendSettings_)) {
+        if (projectSettingsPointer.HandlePointerDown(*panelHit.projectSettingsContent, x, y)) {
+            sceneViewport_.RequestPresent();
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (panelHit.inEditorSettingsPanel) {
+        EditorSettingsPointerController editorSettingsPointer(sceneContext_);
+        if (editorSettingsPointer.HandlePointerDown(*panelHit.editorSettingsContent, x, y, renderBackendSettings_)) {
             sceneViewport_.RequestPresent();
         }
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
