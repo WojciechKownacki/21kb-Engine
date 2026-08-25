@@ -779,6 +779,7 @@ void AppendTerrainBrushRing(
         .sceneRevision = sceneContext.SceneRenderRevision(),
         .sceneDirtyBaseRevision = sceneContext.SceneRenderDirtyBaseRevision(),
         .sceneFullSyncRequired = sceneContext.SceneRenderFullDirty(),
+        .runtimeTransformSync = sceneContext.HasPlayModeSceneSession(),
         .dirtySceneEntityIds = sceneContext.SceneRenderDirtyEntityIds(),
     };
 }

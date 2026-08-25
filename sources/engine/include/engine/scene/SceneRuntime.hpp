@@ -130,6 +130,10 @@ public:
     [[nodiscard]] std::optional<TransformComponent> InterpolatedTransform(SceneEntity entity) const noexcept;
     [[nodiscard]] std::span<const SceneEntity> TransformRenderProxyUpdateEntities() const noexcept;
     [[nodiscard]] std::span<const WorldTransformAffine3x4> TransformRenderProxyWorldAffine3x4() const noexcept;
+    [[nodiscard]] std::span<const SceneEntity> RenderProxyUpdateEntities() const noexcept;
+    [[nodiscard]] std::uint64_t RenderProxyUpdateRevision() const noexcept;
+    [[nodiscard]] std::uint64_t RenderTopologyVersion() const noexcept;
+    [[deprecated("Use RenderProxyUpdateEntities")]]
     [[nodiscard]] std::span<const SceneEntity> MeshRendererRenderProxyUpdateEntities() const noexcept;
     // LIB-065: FrameIndex/FixedStepIndex are monotonic (never reset,
     // unlike LastFixedStepCount above); IsPlaying defaults to true and is
@@ -224,6 +228,10 @@ public:
     [[nodiscard]] std::optional<TransformComponent> InterpolatedTransform(SceneEntity entity) const noexcept;
     [[nodiscard]] std::span<const SceneEntity> TransformRenderProxyUpdateEntities() const noexcept;
     [[nodiscard]] std::span<const WorldTransformAffine3x4> TransformRenderProxyWorldAffine3x4() const noexcept;
+    [[nodiscard]] std::span<const SceneEntity> RenderProxyUpdateEntities() const noexcept;
+    [[nodiscard]] std::uint64_t RenderProxyUpdateRevision() const noexcept;
+    [[nodiscard]] std::uint64_t RenderTopologyVersion() const noexcept;
+    [[deprecated("Use RenderProxyUpdateEntities")]]
     [[nodiscard]] std::span<const SceneEntity> MeshRendererRenderProxyUpdateEntities() const noexcept;
     // LIB-089: runs one frame. Calls SynchronizeTransforms() (see its own
     // doc comment above for the full per-consumer timing contract)

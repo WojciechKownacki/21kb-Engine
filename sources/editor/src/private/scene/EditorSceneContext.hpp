@@ -1439,6 +1439,8 @@ private:
     bool sceneDocumentDirty_ = false;
     EditorAutosaveState autosave_;
     EditorPlayModeSceneSession playModeSceneSession_;
+    std::uint64_t playModeRenderTopologyVersion_ = 0U;
+    bool playModeRenderTopologyVersionInitialized_ = false;
     EditorPlayModeSelectionSnapshot playModeSelectionSnapshot_;
     kb::scene::SceneEntity playCameraEntity_{};
     int hierarchyScrollOffset_ = 0;

@@ -76,7 +76,12 @@ public:
     void Sync(const kb::scene::Scene& scene, RenderScene& renderScene) const;
     void SyncEntities(const kb::scene::Scene& scene, RenderScene& renderScene, std::span<const std::uint64_t> entityIds) const;
     void SyncTransformUpdates(const kb::scene::Scene& scene, RenderScene& renderScene) const;
-    void SyncMeshRendererUpdates(const kb::scene::Scene& scene, RenderScene& renderScene) const;
+    void SyncRenderProxyUpdates(const kb::scene::Scene& scene, RenderScene& renderScene) const;
+    [[deprecated("Use SyncRenderProxyUpdates")]]
+    void SyncMeshRendererUpdates(const kb::scene::Scene& scene, RenderScene& renderScene) const {
+        SyncRenderProxyUpdates(scene, renderScene);
+    }
+    void SyncFacingPanelUpdates(const kb::scene::Scene& scene, RenderScene& renderScene, bool primaryCameraChanged) const;
     // Skinning palette handles address the renderer's current frame buffer and cannot be
     // retained in a render proxy across frames. Refresh only deformed mesh proxies on an
     // otherwise unchanged scene so camera-only presents keep their GPU skinning data alive.

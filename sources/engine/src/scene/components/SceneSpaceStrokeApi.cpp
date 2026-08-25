@@ -6,6 +6,7 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
@@ -14,9 +15,9 @@ namespace kb::scene {
 bool SceneComponentQueryService::HasSpaceStroke(const Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) && SceneAccess::State(scene).componentStorage.SpaceStrokes().Has(entity); }
 const SpaceStrokeComponent* SceneComponentQueryService::TryGetSpaceStroke(const Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.SpaceStrokes().TryGet(entity) : nullptr; }
 SpaceStrokeComponent* SceneComponentMutationService::TryGetSpaceStroke(Scene& scene, SceneEntity entity) noexcept { return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.SpaceStrokes().TryGet(entity) : nullptr; }
-void SceneComponentMutationService::SetSpaceStroke(Scene& scene, SceneEntity entity, const SpaceStrokeComponent& component) { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.SpaceStrokes().Set(entity, component); MarkScenePrefabNodeDirty(state, entity); } }
-void SceneComponentMutationService::RemoveSpaceStroke(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.SpaceStrokes().Remove(entity); MarkScenePrefabNodeDirty(state, entity); } }
-void SceneComponentMutationService::MarkSpaceStrokeModified(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.SpaceStrokes().MarkModified(entity); MarkScenePrefabNodeDirty(state, entity); } }
+void SceneComponentMutationService::SetSpaceStroke(Scene& scene, SceneEntity entity, const SpaceStrokeComponent& component) { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.SpaceStrokes().Set(entity, component); MarkSceneRenderProxyDirty(state, entity); MarkScenePrefabNodeDirty(state, entity); } }
+void SceneComponentMutationService::RemoveSpaceStroke(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.SpaceStrokes().Remove(entity); MarkSceneRenderProxyDirty(state, entity); MarkScenePrefabNodeDirty(state, entity); } }
+void SceneComponentMutationService::MarkSpaceStrokeModified(Scene& scene, SceneEntity entity) noexcept { if (SceneEntityService::IsAlive(scene, entity)) { SceneState& state = SceneAccess::State(scene); state.componentStorage.SpaceStrokes().MarkModified(entity); MarkSceneRenderProxyDirty(state, entity); MarkScenePrefabNodeDirty(state, entity); } }
 
 SceneSpaceStrokeComponentQueries::SceneSpaceStrokeComponentQueries(const Scene& scene) noexcept : scene_(scene) {}
 bool SceneSpaceStrokeComponentQueries::Has(SceneEntity entity) const noexcept { return SceneComponentQueryService::HasSpaceStroke(scene_, entity); }

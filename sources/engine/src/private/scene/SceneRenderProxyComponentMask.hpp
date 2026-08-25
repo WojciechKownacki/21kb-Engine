@@ -3,7 +3,9 @@
 #include "engine/ecs/Entity.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/hierarchy/SceneHierarchyCache.hpp"
 
+#include <cstddef>
 #include <cstdint>
 
 namespace kb::scene {
@@ -71,6 +73,31 @@ inline void ClearSceneRenderProxyComponentMask(SceneState& state, SceneEntity en
 
 [[nodiscard]] constexpr bool SceneRenderProxyMaskHas(std::uint8_t mask, SceneRenderProxyComponentMask bit) noexcept {
     return (mask & SceneRenderProxyMask(bit)) != 0U;
+}
+
+inline void MarkSceneRenderProxyDirty(SceneState& state, SceneEntity entity) noexcept {
+    ++state.renderProxyUpdateRevision;
+    if (state.renderProxyUpdateRevision == 0U) {
+        state.renderProxyUpdateRevision = 1U;
+    }
+    if (!state.renderProxyUpdateEntityIds.insert(entity.Id()).second) {
+        return;
+    }
+    state.renderProxyUpdateEntities.push_back(entity);
+}
+
+inline void MarkSceneRenderProxySubtreeDirty(SceneState& state, SceneEntity root) noexcept {
+    std::vector<SceneEntity>& traversal = state.renderProxyDirtyTraversalScratch;
+    traversal.clear();
+    traversal.push_back(root);
+    for (std::size_t index = 0U; index < traversal.size(); ++index) {
+        const SceneEntity entity = traversal[index];
+        MarkSceneRenderProxyDirty(state, entity);
+        const std::size_t childCount = SceneHierarchyCache::ChildCount(state, entity);
+        for (std::size_t childIndex = 0U; childIndex < childCount; ++childIndex) {
+            traversal.push_back(SceneHierarchyCache::ChildAt(state, entity, childIndex));
+        }
+    }
 }
 
 } // namespace kb::scene
