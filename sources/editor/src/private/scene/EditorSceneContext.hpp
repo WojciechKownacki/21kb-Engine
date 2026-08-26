@@ -109,8 +109,6 @@ struct TerrainLayerPaintSettings;
 
 namespace kb::editor {
 
-class EditorRenderBackendSettings;
-
 enum class PhysicsComponentKind; // inspection/InspectorPhysicsModel.hpp
 class EditorSceneCommandController;
 class EditorInputActionAuthoring;
@@ -258,11 +256,9 @@ public:
     [[nodiscard]] bool SceneDocumentDirty() const noexcept;
     [[nodiscard]] bool TickAutosave(double elapsedSeconds, bool saveEligible);
     [[nodiscard]] const EditorAutosaveState& Autosave() const noexcept;
-    [[nodiscard]] EditorWorkspacePreferences CaptureEditorWorkspacePreferences() const noexcept;
-    [[nodiscard]] bool LoadEditorSettings(EditorRenderBackendSettings& renderer);
-    [[nodiscard]] bool CommitEditorSettings(
-        const EditorWorkspacePreferences& preferences,
-        const EditorRenderBackendSettings& renderer);
+    [[nodiscard]] EditorSavingPreferences CaptureEditorSavingPreferences() const noexcept;
+    [[nodiscard]] bool LoadEditorSettings();
+    [[nodiscard]] bool CommitEditorSettings(const EditorSavingPreferences& preferences);
     void MarkSceneRenderDirty() noexcept;
     void MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity> entities);
     void AcknowledgeSceneRenderSubmitted() noexcept;

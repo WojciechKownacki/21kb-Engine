@@ -73,7 +73,6 @@
 #include "engine/modules/EngineModuleHost.hpp"
 #include "engine/project/ProjectDescriptorWriter.hpp"
 #include "project/EditorProjectPaths.hpp"
-#include "rendering/EditorRenderBackendSettings.hpp"
 #include "engine/script/ScriptApiCatalog.hpp"
 #include "engine/script/ScriptModule.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
@@ -1184,53 +1183,10 @@ void LogAssetImportReport(EditorConsoleState& console, const kb::assets::AssetIm
     }
 }
 
-[[nodiscard]] EditorRenderSettingsRecord CaptureRendererSettings(
-    const EditorRenderBackendSettings& renderer) noexcept {
-    return {
-        .renderBackend = renderer.Backend(),
-        .shadowsEnabled = renderer.ShadowsEnabled(),
-        .postProcessEnabled = renderer.PostProcessEnabled(),
-        .antiAliasingMode = renderer.AntiAliasingMode(),
-        .msaaSamples = renderer.MsaaSamples(),
-        .bloomEnabled = renderer.BloomEnabled(),
-        .selectionOutlineEnabled = renderer.SelectionOutlineEnabled(),
-        .gpuDrivenEnabled = renderer.GpuDrivenEnabled(),
-    };
-}
-
-void ApplyRendererSettings(
-    const EditorRenderSettingsRecord& settings,
-    EditorRenderBackendSettings& renderer) noexcept {
-    renderer.SetBackend(settings.renderBackend);
-    renderer.SetShadowsEnabled(settings.shadowsEnabled);
-    renderer.SetPostProcessEnabled(settings.postProcessEnabled);
-    renderer.SetAntiAliasingMode(settings.antiAliasingMode);
-    if (settings.antiAliasingMode == EditorAntiAliasingMode::Msaa) {
-        renderer.SetMsaaSamples(settings.msaaSamples);
-    }
-    renderer.SetBloomEnabled(settings.bloomEnabled);
-    renderer.SetSelectionOutlineEnabled(settings.selectionOutlineEnabled);
-    renderer.SetGpuDrivenEnabled(settings.gpuDrivenEnabled);
-}
-
-void ApplyWorkspacePreferences(
-    const EditorWorkspacePreferences& preferences,
-    EditorAutosaveState& autosave,
-    EditorSceneViewportStateStore& viewportState,
-    EditorAssetBrowserState& assetBrowser) noexcept {
+void ApplySavingPreferences(
+    const EditorSavingPreferences& preferences,
+    EditorAutosaveState& autosave) noexcept {
     autosave.Configure(preferences.autosaveEnabled, preferences.autosaveIntervalMinutes);
-    viewportState.ConfigurePreviewDefaults(
-        preferences.gridVisible,
-        preferences.gridSpacing,
-        preferences.snapEnabled,
-        preferences.snapStep,
-        preferences.rotationSnapDegrees);
-    assetBrowser.SetRecursive(preferences.assetBrowserRecursive);
-    assetBrowser.SetViewMode(preferences.assetViewMode);
-    assetBrowser.SetSortMode(preferences.assetSortMode);
-    if (assetBrowser.ShowFolders() != preferences.assetShowFolders) assetBrowser.ToggleShowFolders();
-    if (assetBrowser.ShowTemplates() != preferences.assetShowTemplates) assetBrowser.ToggleShowTemplates();
-    assetBrowser.SetThumbnailScale(preferences.assetThumbnailScale);
 }
 
 } // namespace
@@ -1772,51 +1728,33 @@ const EditorAutosaveState& EditorSceneContext::Autosave() const noexcept {
     return autosave_;
 }
 
-EditorWorkspacePreferences EditorSceneContext::CaptureEditorWorkspacePreferences() const noexcept {
-    const EditorViewportPreviewState& preview = viewportState_.PreviewDefaults();
+EditorSavingPreferences EditorSceneContext::CaptureEditorSavingPreferences() const noexcept {
     return {
         .autosaveEnabled = autosave_.Enabled(),
         .autosaveIntervalMinutes = static_cast<std::uint32_t>(std::clamp(
             std::lround(autosave_.ConfiguredIntervalSeconds() / 60.0), 1L, 120L)),
-        .gridVisible = preview.GridVisible(),
-        .gridSpacing = preview.GridSpacing(),
-        .snapEnabled = preview.SnapEnabled(),
-        .snapStep = preview.SnapStep(),
-        .rotationSnapDegrees = preview.RotationSnapDegrees(),
-        .assetBrowserRecursive = assetBrowser_.Recursive(),
-        .assetViewMode = assetBrowser_.ViewMode(),
-        .assetSortMode = assetBrowser_.SortMode(),
-        .assetShowFolders = assetBrowser_.ShowFolders(),
-        .assetShowTemplates = assetBrowser_.ShowTemplates(),
-        .assetThumbnailScale = assetBrowser_.ThumbnailScale(),
     };
 }
 
-bool EditorSceneContext::LoadEditorSettings(EditorRenderBackendSettings& renderer) {
+bool EditorSceneContext::LoadEditorSettings() {
     std::string error;
     EditorSettingsDocument settings;
     if (!editorSettings_.Load(EditorProjectPaths::EditorSettingsFile(), settings, error)) {
         console_.Warning("Editor Settings", error);
         return false;
     }
-    ApplyRendererSettings(settings.renderer, renderer);
-    ApplyWorkspacePreferences(settings.workspace, autosave_, viewportState_, assetBrowser_);
+    ApplySavingPreferences(settings.saving, autosave_);
     return true;
 }
 
-bool EditorSceneContext::CommitEditorSettings(
-    const EditorWorkspacePreferences& preferences,
-    const EditorRenderBackendSettings& renderer) {
+bool EditorSceneContext::CommitEditorSettings(const EditorSavingPreferences& preferences) {
     std::string error;
-    const EditorSettingsDocument settings{
-        .renderer = CaptureRendererSettings(renderer),
-        .workspace = preferences,
-    };
+    const EditorSettingsDocument settings{.saving = preferences};
     if (!editorSettings_.Commit(settings, error)) {
         if (!error.empty()) console_.Error("Editor Settings", error);
         return false;
     }
-    ApplyWorkspacePreferences(preferences, autosave_, viewportState_, assetBrowser_);
+    ApplySavingPreferences(preferences, autosave_);
     console_.Info("Editor Settings", "Editor settings saved.");
     return true;
 }

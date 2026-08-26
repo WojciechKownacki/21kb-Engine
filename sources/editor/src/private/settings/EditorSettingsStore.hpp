@@ -1,53 +1,23 @@
 #pragma once
 
-#include "kb/editor/assets/EditorAssetBrowserTypes.hpp"
-#include "rendering/EditorRenderBackendSettings.hpp"
-
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 
 namespace kb::editor {
 
-struct EditorRenderSettingsRecord {
-    EditorRenderBackend renderBackend = EditorRenderBackend::Auto;
-    bool shadowsEnabled = true;
-    bool postProcessEnabled = true;
-    EditorAntiAliasingMode antiAliasingMode = EditorAntiAliasingMode::Taa;
-    std::uint8_t msaaSamples = 0U;
-    bool bloomEnabled = true;
-    bool selectionOutlineEnabled = true;
-    bool gpuDrivenEnabled = true;
-
-    [[nodiscard]] bool operator==(const EditorRenderSettingsRecord&) const noexcept = default;
-};
-
-struct EditorWorkspacePreferences {
+struct EditorSavingPreferences {
     bool autosaveEnabled = true;
     std::uint32_t autosaveIntervalMinutes = 10U;
 
-    bool gridVisible = true;
-    float gridSpacing = 1.0F;
-    bool snapEnabled = false;
-    float snapStep = 1.0F;
-    float rotationSnapDegrees = 0.0F;
-
-    bool assetBrowserRecursive = false;
-    EditorAssetViewMode assetViewMode = EditorAssetViewMode::Tiles;
-    EditorAssetSortMode assetSortMode = EditorAssetSortMode::Name;
-    bool assetShowFolders = true;
-    bool assetShowTemplates = true;
-    float assetThumbnailScale = 1.0F;
-
-    [[nodiscard]] bool operator==(const EditorWorkspacePreferences&) const noexcept = default;
+    [[nodiscard]] bool operator==(const EditorSavingPreferences&) const noexcept = default;
 };
 
 struct EditorSettingsDocument {
-    static constexpr std::uint32_t CurrentFileVersion = 1U;
+    static constexpr std::uint32_t CurrentFileVersion = 2U;
 
-    EditorRenderSettingsRecord renderer{};
-    EditorWorkspacePreferences workspace{};
+    EditorSavingPreferences saving{};
 
     [[nodiscard]] bool operator==(const EditorSettingsDocument&) const noexcept = default;
 };

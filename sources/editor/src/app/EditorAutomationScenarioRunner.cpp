@@ -3248,6 +3248,24 @@ ReadScriptValue(
                 std::to_string(emitter->outputOrigin.z) };
     }
 
+    if (*operation == "assert_particle_scene_empty") {
+        const std::vector<std::uint64_t> liveInstances =
+            kb::particles::ParticlePlayback::LiveInstanceIds(state.context.Scene());
+        const auto snapshot = kb::particles::ParticlePlayback::ReadRenderSnapshot(
+            state.context.Scene());
+        const std::size_t emitterCount = snapshot == nullptr ? 0U : snapshot->Emitters().size();
+        const std::size_t particleCount = snapshot == nullptr ? 0U : snapshot->Particles().size();
+        const bool empty = liveInstances.empty() && snapshot != nullptr &&
+            emitterCount == 0U && particleCount == 0U;
+        return {
+            empty,
+            "liveInstances=" + std::to_string(liveInstances.size()) +
+                ", emitters=" + std::to_string(emitterCount) +
+                ", particles=" + std::to_string(particleCount) +
+                ", snapshotRevision=" +
+                std::to_string(snapshot == nullptr ? 0U : snapshot->Revision()) };
+    }
+
     if (*operation == "attach_script") {
         const auto entityAlias =
             StringMember(step, "entity", error);

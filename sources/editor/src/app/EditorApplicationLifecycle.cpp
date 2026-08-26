@@ -134,7 +134,7 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
     }
 
     EditorMainWindow::EnableDarkMode(state.window);
-    static_cast<void>(state.sceneContext.LoadEditorSettings(state.renderBackendSettings));
+    static_cast<void>(state.sceneContext.LoadEditorSettings());
     state.sceneViewport.Configure(state.instance, state.window, &state.renderBackendSettings);
     state.sceneViewport.SetErrorReporter([&state](std::string_view message) {
         state.sceneContext.Console().Error("Renderer", std::string{ message });
