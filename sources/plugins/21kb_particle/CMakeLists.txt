@@ -4,6 +4,9 @@ add_library(kb_21kb_particle_core STATIC
 )
 target_include_directories(kb_21kb_particle_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(kb_21kb_particle_core PUBLIC kb_engine)
+if(NOT WIN32)
+    set_target_properties(kb_21kb_particle_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
 kb_apply_quality_gates(kb_21kb_particle_core)
 
 set(KB_21KB_PARTICLE_PLUGIN_LIBRARY_TYPE STATIC)
