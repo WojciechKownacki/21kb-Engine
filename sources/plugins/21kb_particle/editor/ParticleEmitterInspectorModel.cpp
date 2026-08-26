@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/library/EngineLibraryParsing.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -205,8 +206,12 @@ namespace {
 
 [[nodiscard]] bool ParseFloatToken(std::string_view text, float& value) noexcept {
     if (text.empty()) return false;
-    const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
-    return result.ec == std::errc{} && result.ptr == text.data() + text.size() && std::isfinite(value);
+    double parsed = 0.0;
+    if (!kb::library::TryParseDouble(text, parsed) || !std::isfinite(parsed) ||
+        std::abs(parsed) > std::numeric_limits<float>::max())
+        return false;
+    value = static_cast<float>(parsed);
+    return true;
 }
 
 [[nodiscard]] bool ParseUIntToken(std::string_view text, std::uint32_t& value) noexcept {

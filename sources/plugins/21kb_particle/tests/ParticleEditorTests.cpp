@@ -376,6 +376,11 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
             std::abs(parsedColor.r - picked.r) < 0.000001F && parsedColor.g == 0.0F &&
             parsedColor.b == 1.0F && parsedColor.a == 1.0F,
         "start color picker text did not round-trip through FormatColor/ParseColor");
+    kb::math::Vec3 rejectedVector{};
+    Require(!ParticleEmitterInspectorModel::ParseVec3("0,5 0 0", rejectedVector) &&
+            !ParticleEmitterInspectorModel::ParseVec3("nan 0 0", rejectedVector) &&
+            !ParticleEmitterInspectorModel::ParseVec3("1e100 0 0", rejectedVector),
+        "particle inspector float parsing accepted locale-dependent, non-finite, or out-of-range text");
     kb::math::Gradient parsedGradient{};
     Require(ParticleEmitterInspectorModel::ParseGradient(gradientRow->value, parsedGradient) &&
             parsedGradient.stops.size() == 2U && parsedGradient.stops[0].color.r == 1.0F,
