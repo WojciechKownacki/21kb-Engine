@@ -2,9 +2,9 @@
 
 #include <cmath>
 #include <fstream>
-#include <iomanip>
 #include <locale>
 #include <sstream>
+#include <string_view>
 #include <system_error>
 
 #if defined(_WIN32)
@@ -16,7 +16,8 @@
 namespace kb::editor {
 namespace {
 
-constexpr std::string_view kHeader = "21kb Editor Settings 1";
+constexpr std::string_view kCurrentHeader = "21kb Editor Settings 2";
+constexpr std::string_view kLegacyHeader = "21kb Editor Settings 1";
 
 [[nodiscard]] bool Replace(const std::filesystem::path& source, const std::filesystem::path& target) noexcept {
 #if defined(_WIN32)
@@ -28,25 +29,104 @@ constexpr std::string_view kHeader = "21kb Editor Settings 1";
 #endif
 }
 
-[[nodiscard]] bool BoolValue(int value) noexcept { return value == 0 || value == 1; }
+[[nodiscard]] bool BoolValue(int value) noexcept {
+    return value == 0 || value == 1;
+}
 
 [[nodiscard]] bool Valid(const EditorSettingsDocument& value) noexcept {
-    const auto backend = static_cast<unsigned>(value.renderer.renderBackend);
-    const auto aa = static_cast<unsigned>(value.renderer.antiAliasingMode);
-    const auto view = static_cast<unsigned>(value.workspace.assetViewMode);
-    const auto sort = static_cast<unsigned>(value.workspace.assetSortMode);
-    const bool validSamples = value.renderer.msaaSamples == 0U || value.renderer.msaaSamples == 2U ||
-        value.renderer.msaaSamples == 4U || value.renderer.msaaSamples == 8U || value.renderer.msaaSamples == 16U;
-    return backend <= static_cast<unsigned>(EditorRenderBackend::Vulkan) &&
-        aa <= static_cast<unsigned>(EditorAntiAliasingMode::Msaa) &&
-        view <= static_cast<unsigned>(EditorAssetViewMode::Tiles) &&
-        sort <= static_cast<unsigned>(EditorAssetSortMode::Path) && validSamples &&
-        (value.renderer.antiAliasingMode != EditorAntiAliasingMode::Msaa || value.renderer.msaaSamples != 0U) &&
-        value.workspace.autosaveIntervalMinutes >= 1U && value.workspace.autosaveIntervalMinutes <= 120U &&
-        std::isfinite(value.workspace.gridSpacing) && value.workspace.gridSpacing >= 0.001F && value.workspace.gridSpacing <= 1000.0F &&
-        std::isfinite(value.workspace.snapStep) && value.workspace.snapStep >= 0.001F && value.workspace.snapStep <= 1000.0F &&
-        std::isfinite(value.workspace.rotationSnapDegrees) && value.workspace.rotationSnapDegrees >= 0.0F && value.workspace.rotationSnapDegrees <= 180.0F &&
-        std::isfinite(value.workspace.assetThumbnailScale) && value.workspace.assetThumbnailScale >= 0.65F && value.workspace.assetThumbnailScale <= 1.75F;
+    return value.saving.autosaveIntervalMinutes >= 1U &&
+        value.saving.autosaveIntervalMinutes <= 120U;
+}
+
+[[nodiscard]] bool AtEnd(std::istringstream& stream) {
+    stream >> std::ws;
+    return stream.eof();
+}
+
+[[nodiscard]] bool ParseCurrent(
+    std::istringstream& stream,
+    EditorSettingsDocument& value) {
+    std::string key;
+    int autosave = 0;
+    unsigned autosaveMinutes = 0U;
+    const bool parsed =
+        (stream >> key >> autosave) && key == "autosave" &&
+        (stream >> key >> autosaveMinutes) && key == "autosave_minutes";
+    if (!parsed || !AtEnd(stream) || !BoolValue(autosave)) return false;
+
+    value.saving.autosaveEnabled = autosave != 0;
+    value.saving.autosaveIntervalMinutes = autosaveMinutes;
+    return Valid(value);
+}
+
+[[nodiscard]] bool ParseLegacy(
+    std::istringstream& stream,
+    EditorSettingsDocument& value) {
+    std::string key;
+    unsigned backend = 0U;
+    unsigned antiAliasing = 0U;
+    unsigned samples = 0U;
+    unsigned autosaveMinutes = 0U;
+    unsigned viewMode = 0U;
+    unsigned sortMode = 0U;
+    int shadows = 0;
+    int postProcess = 0;
+    int bloom = 0;
+    int outline = 0;
+    int gpuDriven = 0;
+    int autosave = 0;
+    int grid = 0;
+    int snap = 0;
+    int recursive = 0;
+    int folders = 0;
+    int templates = 0;
+    float gridSpacing = 0.0F;
+    float snapStep = 0.0F;
+    float rotationSnap = 0.0F;
+    float thumbnailScale = 0.0F;
+
+    const bool parsed =
+        (stream >> key >> backend) && key == "render_backend" &&
+        (stream >> key >> shadows) && key == "shadows" &&
+        (stream >> key >> postProcess) && key == "post_process" &&
+        (stream >> key >> antiAliasing) && key == "anti_aliasing" &&
+        (stream >> key >> samples) && key == "msaa_samples" &&
+        (stream >> key >> bloom) && key == "bloom" &&
+        (stream >> key >> outline) && key == "selection_outline" &&
+        (stream >> key >> gpuDriven) && key == "gpu_driven" &&
+        (stream >> key >> autosave) && key == "autosave" &&
+        (stream >> key >> autosaveMinutes) && key == "autosave_minutes" &&
+        (stream >> key >> grid) && key == "grid" &&
+        (stream >> key >> gridSpacing) && key == "grid_spacing" &&
+        (stream >> key >> snap) && key == "snap" &&
+        (stream >> key >> snapStep) && key == "snap_step" &&
+        (stream >> key >> rotationSnap) && key == "rotation_snap" &&
+        (stream >> key >> recursive) && key == "asset_recursive" &&
+        (stream >> key >> viewMode) && key == "asset_view" &&
+        (stream >> key >> sortMode) && key == "asset_sort" &&
+        (stream >> key >> folders) && key == "asset_folders" &&
+        (stream >> key >> templates) && key == "asset_templates" &&
+        (stream >> key >> thumbnailScale) && key == "asset_thumbnail_scale";
+    const bool validSamples =
+        samples == 0U || samples == 2U || samples == 4U ||
+        samples == 8U || samples == 16U;
+    if (!parsed || !AtEnd(stream) ||
+        backend > 2U || antiAliasing > 3U || viewMode > 1U || sortMode > 2U ||
+        !validSamples || (antiAliasing == 3U && samples == 0U) ||
+        !BoolValue(shadows) || !BoolValue(postProcess) || !BoolValue(bloom) ||
+        !BoolValue(outline) || !BoolValue(gpuDriven) || !BoolValue(autosave) ||
+        !BoolValue(grid) || !BoolValue(snap) || !BoolValue(recursive) ||
+        !BoolValue(folders) || !BoolValue(templates) ||
+        !std::isfinite(gridSpacing) || gridSpacing < 0.001F || gridSpacing > 1000.0F ||
+        !std::isfinite(snapStep) || snapStep < 0.001F || snapStep > 1000.0F ||
+        !std::isfinite(rotationSnap) || rotationSnap < 0.0F || rotationSnap > 180.0F ||
+        !std::isfinite(thumbnailScale) || thumbnailScale < 0.65F || thumbnailScale > 1.75F) {
+        return false;
+    }
+
+    value.saving.autosaveEnabled = autosave != 0;
+    value.saving.autosaveIntervalMinutes = autosaveMinutes;
+    return Valid(value);
 }
 
 } // namespace
@@ -58,11 +138,13 @@ EditorSettingsLoadResult EditorSettingsStore::Load(const std::filesystem::path& 
         if (filesystemError) result.error = "Editor settings file could not be inspected.";
         return result;
     }
+
     const std::uintmax_t byteCount = std::filesystem::file_size(path, filesystemError);
     if (filesystemError || byteCount == 0U || byteCount > MaximumBytes) {
         result.error = "Editor settings file has an invalid size.";
         return result;
     }
+
     std::ifstream input{path, std::ios::binary};
     std::string source(static_cast<std::size_t>(byteCount), '\0');
     input.read(source.data(), static_cast<std::streamsize>(source.size()));
@@ -75,66 +157,17 @@ EditorSettingsLoadResult EditorSettingsStore::Load(const std::filesystem::path& 
     stream.imbue(std::locale::classic());
     std::string header;
     std::getline(stream, header);
+
     EditorSettingsDocument value;
-    std::string key;
-    unsigned backend = 0U;
-    unsigned aa = 0U;
-    unsigned samples = 0U;
-    unsigned autosaveMinutes = 0U;
-    unsigned viewMode = 0U;
-    unsigned sortMode = 0U;
-    int shadows = 0, postProcess = 0, bloom = 0, outline = 0, gpuDriven = 0;
-    int autosave = 0, grid = 0, snap = 0, recursive = 0, folders = 0, templates = 0;
-    const bool parsed = header == kHeader &&
-        (stream >> key >> backend) && key == "render_backend" &&
-        (stream >> key >> shadows) && key == "shadows" &&
-        (stream >> key >> postProcess) && key == "post_process" &&
-        (stream >> key >> aa) && key == "anti_aliasing" &&
-        (stream >> key >> samples) && key == "msaa_samples" &&
-        (stream >> key >> bloom) && key == "bloom" &&
-        (stream >> key >> outline) && key == "selection_outline" &&
-        (stream >> key >> gpuDriven) && key == "gpu_driven" &&
-        (stream >> key >> autosave) && key == "autosave" &&
-        (stream >> key >> autosaveMinutes) && key == "autosave_minutes" &&
-        (stream >> key >> grid) && key == "grid" &&
-        (stream >> key >> value.workspace.gridSpacing) && key == "grid_spacing" &&
-        (stream >> key >> snap) && key == "snap" &&
-        (stream >> key >> value.workspace.snapStep) && key == "snap_step" &&
-        (stream >> key >> value.workspace.rotationSnapDegrees) && key == "rotation_snap" &&
-        (stream >> key >> recursive) && key == "asset_recursive" &&
-        (stream >> key >> viewMode) && key == "asset_view" &&
-        (stream >> key >> sortMode) && key == "asset_sort" &&
-        (stream >> key >> folders) && key == "asset_folders" &&
-        (stream >> key >> templates) && key == "asset_templates" &&
-        (stream >> key >> value.workspace.assetThumbnailScale) && key == "asset_thumbnail_scale";
-    stream >> std::ws;
-    if (!parsed || !stream.eof() || !BoolValue(shadows) || !BoolValue(postProcess) ||
-        !BoolValue(bloom) || !BoolValue(outline) || !BoolValue(gpuDriven) || !BoolValue(autosave) ||
-        !BoolValue(grid) || !BoolValue(snap) || !BoolValue(recursive) || !BoolValue(folders) || !BoolValue(templates)) {
-        result.error = "Editor settings file is malformed.";
+    const bool parsed =
+        header == kCurrentHeader ? ParseCurrent(stream, value) :
+        header == kLegacyHeader ? ParseLegacy(stream, value) :
+        false;
+    if (!parsed) {
+        result.error = "Editor settings file is malformed or uses an unsupported version.";
         return result;
     }
-    value.renderer.renderBackend = static_cast<EditorRenderBackend>(backend);
-    value.renderer.shadowsEnabled = shadows != 0;
-    value.renderer.postProcessEnabled = postProcess != 0;
-    value.renderer.antiAliasingMode = static_cast<EditorAntiAliasingMode>(aa);
-    value.renderer.msaaSamples = static_cast<std::uint8_t>(samples);
-    value.renderer.bloomEnabled = bloom != 0;
-    value.renderer.selectionOutlineEnabled = outline != 0;
-    value.renderer.gpuDrivenEnabled = gpuDriven != 0;
-    value.workspace.autosaveEnabled = autosave != 0;
-    value.workspace.autosaveIntervalMinutes = autosaveMinutes;
-    value.workspace.gridVisible = grid != 0;
-    value.workspace.snapEnabled = snap != 0;
-    value.workspace.assetBrowserRecursive = recursive != 0;
-    value.workspace.assetViewMode = static_cast<EditorAssetViewMode>(viewMode);
-    value.workspace.assetSortMode = static_cast<EditorAssetSortMode>(sortMode);
-    value.workspace.assetShowFolders = folders != 0;
-    value.workspace.assetShowTemplates = templates != 0;
-    if (!Valid(value)) {
-        result.error = "Editor settings file contains unsupported values.";
-        return result;
-    }
+
     result.settings = value;
     result.found = true;
     return result;
@@ -149,41 +182,27 @@ bool EditorSettingsStore::Save(
         error = "Editor settings contain unsupported values.";
         return false;
     }
+
     std::ostringstream stream;
     stream.imbue(std::locale::classic());
-    stream << std::setprecision(9) << kHeader << '\n'
-           << "render_backend " << static_cast<unsigned>(settings.renderer.renderBackend) << '\n'
-           << "shadows " << settings.renderer.shadowsEnabled << '\n'
-           << "post_process " << settings.renderer.postProcessEnabled << '\n'
-           << "anti_aliasing " << static_cast<unsigned>(settings.renderer.antiAliasingMode) << '\n'
-           << "msaa_samples " << static_cast<unsigned>(settings.renderer.msaaSamples) << '\n'
-           << "bloom " << settings.renderer.bloomEnabled << '\n'
-           << "selection_outline " << settings.renderer.selectionOutlineEnabled << '\n'
-           << "gpu_driven " << settings.renderer.gpuDrivenEnabled << '\n'
-           << "autosave " << settings.workspace.autosaveEnabled << '\n'
-           << "autosave_minutes " << settings.workspace.autosaveIntervalMinutes << '\n'
-           << "grid " << settings.workspace.gridVisible << '\n'
-           << "grid_spacing " << settings.workspace.gridSpacing << '\n'
-           << "snap " << settings.workspace.snapEnabled << '\n'
-           << "snap_step " << settings.workspace.snapStep << '\n'
-           << "rotation_snap " << settings.workspace.rotationSnapDegrees << '\n'
-           << "asset_recursive " << settings.workspace.assetBrowserRecursive << '\n'
-           << "asset_view " << static_cast<unsigned>(settings.workspace.assetViewMode) << '\n'
-           << "asset_sort " << static_cast<unsigned>(settings.workspace.assetSortMode) << '\n'
-           << "asset_folders " << settings.workspace.assetShowFolders << '\n'
-           << "asset_templates " << settings.workspace.assetShowTemplates << '\n'
-           << "asset_thumbnail_scale " << settings.workspace.assetThumbnailScale << '\n';
+    stream << kCurrentHeader << '\n'
+           << "autosave " << settings.saving.autosaveEnabled << '\n'
+           << "autosave_minutes " << settings.saving.autosaveIntervalMinutes << '\n';
     const std::string bytes = stream.str();
     if (bytes.empty() || bytes.size() > MaximumBytes) {
         error = "Editor settings exceed their bounded size.";
         return false;
     }
+
     std::error_code filesystemError;
-    if (path.has_parent_path()) std::filesystem::create_directories(path.parent_path(), filesystemError);
+    if (path.has_parent_path()) {
+        std::filesystem::create_directories(path.parent_path(), filesystemError);
+    }
     if (filesystemError) {
         error = "Editor settings directory could not be created.";
         return false;
     }
+
     std::filesystem::path temporary = path;
     temporary += ".tmp";
     {
@@ -196,6 +215,7 @@ bool EditorSettingsStore::Save(
             return false;
         }
     }
+
     if (!Replace(temporary, path)) {
         std::filesystem::remove(temporary, filesystemError);
         error = "Editor settings atomic replacement failed.";

@@ -73,33 +73,9 @@ void InvalidateToolbar(HWND mainWindow, const DockLayout& layout) noexcept {
         metrics.panelPadding);
 }
 
-void ActivateProjectSettingsPanel(HWND mainWindow, EditorDockModel& dockModel) {
-    for (const DockPanel& panel : dockModel.Queries().Panels()) {
-        if (panel.kind == DockPanelKind::ProjectSettings) {
-            dockModel.Commands().ActivatePanel(panel.id);
-            InvalidateRect(mainWindow, nullptr, FALSE);
-            return;
-        }
-    }
-}
-
-void ActivateEditorSettingsPanel(HWND mainWindow, EditorDockModel& dockModel) {
-    for (const DockPanel& panel : dockModel.Queries().Panels()) {
-        if (panel.kind == DockPanelKind::EditorSettings) {
-            dockModel.Commands().ActivatePanel(panel.id);
-            InvalidateRect(mainWindow, nullptr, FALSE);
-            return;
-        }
-    }
-}
-
-void ActivatePluginsPanel(HWND mainWindow, EditorDockModel& dockModel) {
-    for (const DockPanel& panel : dockModel.Queries().Panels()) {
-        if (panel.kind == DockPanelKind::Plugins) {
-            dockModel.Commands().ActivatePanel(panel.id);
-            InvalidateRect(mainWindow, nullptr, FALSE);
-            return;
-        }
+void ActivateRightPanel(HWND mainWindow, EditorDockModel& dockModel, DockPanelKind kind) {
+    if (dockModel.Commands().ActivatePanelKind(kind, DockArea::Right)) {
+        InvalidateRect(mainWindow, nullptr, FALSE);
     }
 }
 
@@ -171,13 +147,13 @@ void ActivatePluginsPanel(HWND mainWindow, EditorDockModel& dockModel) {
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 3) {
-                ActivatePluginsPanel(mainWindow, dockModel);
+                ActivateRightPanel(mainWindow, dockModel, DockPanelKind::Plugins);
             }
         } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Options) {
             if (*row == 2) {
-                ActivateProjectSettingsPanel(mainWindow, dockModel);
+                ActivateRightPanel(mainWindow, dockModel, DockPanelKind::ProjectSettings);
             } else if (*row == 3) {
-                ActivateEditorSettingsPanel(mainWindow, dockModel);
+                ActivateRightPanel(mainWindow, dockModel, DockPanelKind::EditorSettings);
             }
         }
         const EditorMenuCommand oldMenu = shellInteraction.OpenMenu();

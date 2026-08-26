@@ -368,10 +368,10 @@ void PanelContentRenderer::Paint(
         ScenePanelContentRenderer{}.Paint(dc, content, panel, theme, sceneContext, renderBackendSettings, sceneViewport, sceneViewportHost);
         break;
     case DockPanelKind::ProjectSettings:
-        ProjectSettingsPanelRenderer{}.Paint(dc, content, theme, sceneContext);
+        ProjectSettingsPanelRenderer{}.Paint(dc, content, theme, sceneContext, renderBackendSettings);
         break;
     case DockPanelKind::EditorSettings:
-        EditorSettingsPanelRenderer{}.Paint(dc, content, theme, sceneContext, renderBackendSettings);
+        EditorSettingsPanelRenderer{}.Paint(dc, content, theme, sceneContext);
         break;
     case DockPanelKind::Plugins:
         PluginsPanelRenderer{}.Paint(dc, content, theme, sceneContext);

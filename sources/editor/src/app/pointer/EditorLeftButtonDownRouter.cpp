@@ -1840,7 +1840,11 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
 
     if (panelHit.inProjectSettingsPanel) {
         EditorProjectSettingsPointerController projectSettingsPointer(sceneContext_);
-        if (projectSettingsPointer.HandlePointerDown(*panelHit.projectSettingsContent, x, y)) {
+        if (projectSettingsPointer.HandlePointerDown(
+                *panelHit.projectSettingsContent,
+                x,
+                y,
+                renderBackendSettings_)) {
             sceneViewport_.RequestPresent();
         }
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
@@ -1849,7 +1853,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
 
     if (panelHit.inEditorSettingsPanel) {
         EditorSettingsPointerController editorSettingsPointer(sceneContext_);
-        if (editorSettingsPointer.HandlePointerDown(*panelHit.editorSettingsContent, x, y, renderBackendSettings_)) {
+        if (editorSettingsPointer.HandlePointerDown(*panelHit.editorSettingsContent, x, y)) {
             sceneViewport_.RequestPresent();
         }
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
