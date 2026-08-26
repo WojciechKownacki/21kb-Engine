@@ -3,7 +3,6 @@
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconPainter.hpp"
-#include "rendering/HierarchyPanelStyle.hpp"
 #include "rendering/HierarchyRowLayout.hpp"
 #include "rendering/components/DenseListRow.hpp"
 #include "rendering/gdi/ScopedBrush.hpp"
@@ -24,12 +23,12 @@ namespace {
     return rect;
 }
 
-void DrawVisibilityCell(HDC dc, const HierarchyRowLayoutRects& layout, bool visible) {
-    HeroIconPainter::Draw(dc, layout.visibilityIcon, HeroIconKind::Eye, visible ? HierarchyPanelStyle::MutedText() : HierarchyPanelStyle::RowTextHidden(), 1);
+void DrawVisibilityCell(HDC dc, const HierarchyRowLayoutRects& layout, const EditorTheme& theme, bool visible) {
+    HeroIconPainter::Draw(dc, layout.visibilityIcon, HeroIconKind::Eye, GdiDrawing::ToColorRef(visible ? theme.textSecondary : theme.textDisabled), 1);
 }
 
-void DrawExpander(HDC dc, const RECT& rect, bool expanded) {
-    const ScopedBrush brush(HierarchyPanelStyle::MutedText());
+void DrawExpander(HDC dc, const RECT& rect, const EditorTheme& theme, bool expanded) {
+    const ScopedBrush brush(GdiDrawing::ToColorRef(theme.textSecondary));
     const ScopedGdiObject selectedBrush(dc, brush.handle);
     const ScopedGdiObject selectedPen(dc, GetStockObject(NULL_PEN));
 
@@ -46,11 +45,11 @@ void DrawExpander(HDC dc, const RECT& rect, bool expanded) {
     Polygon(dc, points, 3);
 }
 
-void DrawRenameField(HDC dc, RECT labelRect, std::string_view value, bool selectingAll) {
+void DrawRenameField(HDC dc, RECT labelRect, const EditorTheme& theme, std::string_view value, bool selectingAll) {
     RECT field = labelRect;
     field.top -= 2;
     field.bottom -= 2;
-    GdiDrawing::DrawSharpFrame(dc, field, RGB(18, 20, 24), RGB(78, 86, 98));
+    GdiDrawing::DrawSharpFrame(dc, field, GdiDrawing::ToColorRef(theme.chrome), GdiDrawing::ToColorRef(theme.accent));
 
     RECT textRect = Shrink(field, 6, 0, 4, 0);
     if (selectingAll && !value.empty()) {
@@ -60,11 +59,11 @@ void DrawRenameField(HDC dc, RECT labelRect, std::string_view value, bool select
         selection.right = std::min(selection.right, selection.left + textWidth + 2);
         selection.top += 2;
         selection.bottom -= 2;
-        GdiDrawing::FillRectColor(dc, selection, RGB(48, 76, 122));
+        GdiDrawing::FillRectColor(dc, selection, GdiDrawing::ToColorRef(theme.tabActive));
     }
 
     SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, HierarchyPanelStyle::RowTextSelected());
+    SetTextColor(dc, GdiDrawing::ToColorRef(theme.textPrimary));
     DrawTextA(dc, value.data(), static_cast<int>(value.size()), &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 }
 
@@ -85,21 +84,21 @@ void HierarchyRowRenderer::Paint(HDC dc, const RECT& rowRect, const EditorTheme&
 
     ScopedFont font{ 12, FW_NORMAL };
     const ScopedGdiObject selectedFont(dc, font.handle);
-    DrawVisibilityCell(dc, layout, row.visible);
+    DrawVisibilityCell(dc, layout, theme, row.visible);
 
     if (row.hasChildren) {
-        DrawExpander(dc, layout.expanderIcon, row.expanded);
+        DrawExpander(dc, layout.expanderIcon, theme, row.expanded);
     }
 
-    const COLORREF entityIcon = row.prefabRoot ? HierarchyPanelStyle::PrefabCubeStroke() : HierarchyPanelStyle::CubeStroke();
+    const COLORREF entityIcon = GdiDrawing::ToColorRef(row.prefabRoot ? theme.accent : theme.textSecondary);
     HeroIconPainter::Draw(
         dc,
         layout.entityIcon,
         row.hasCamera ? HeroIconKind::Camera : HeroIconKind::Cube,
-        row.visible ? entityIcon : HierarchyPanelStyle::RowTextHidden(),
+        row.visible ? entityIcon : GdiDrawing::ToColorRef(theme.textDisabled),
         2);
     if (sceneContext.IsHierarchyRenaming(row.entity)) {
-        DrawRenameField(dc, layout.label, sceneContext.HierarchyRenameBuffer(), sceneContext.IsHierarchyRenameSelectingAll());
+        DrawRenameField(dc, layout.label, theme, sceneContext.HierarchyRenameBuffer(), sceneContext.IsHierarchyRenameSelectingAll());
     }
 }
 

@@ -25,7 +25,7 @@ using Draw = ProjectFilesPanelDrawing;
 }
 
 void DrawSortMenuItem(HDC dc, RECT rect, const EditorTheme& theme, const char* label, bool selected) {
-    GdiDrawing::DrawSharpFrame(dc, rect, selected ? Draw::Blend(Draw::Color(theme.panel), RGB(96, 108, 126), 34) : Draw::Color(theme.panel), Draw::Color(theme.borderPanel));
+    GdiDrawing::DrawSharpFrame(dc, rect, selected ? Draw::Blend(Draw::Color(theme.panel), Draw::Color(theme.accent), 16) : Draw::Color(theme.panel), selected ? Draw::Color(theme.accent) : Draw::Color(theme.borderPanel));
     Draw::DrawLabel(dc, Draw::Inset(rect, 8, 0), label, selected ? Draw::Color(theme.textPrimary) : Draw::Color(theme.textSecondary));
 }
 

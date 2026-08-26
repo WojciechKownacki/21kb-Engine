@@ -12,7 +12,6 @@ namespace kb::editor {
 namespace {
 
 void DrawScrollbar(HDC dc, const EditorAssetBrowserLayoutRects& layout, const EditorTheme& theme, const EditorAssetBrowserState& state, int contentHeight) {
-    static_cast<void>(theme);
     const RECT viewport = EditorAssetBrowserLayout::TreeViewportRect(layout);
     const int viewportHeight = static_cast<int>(viewport.bottom - viewport.top);
     if (contentHeight <= viewportHeight) {
@@ -21,9 +20,9 @@ void DrawScrollbar(HDC dc, const EditorAssetBrowserLayoutRects& layout, const Ed
     const RECT track = EditorAssetBrowserLayout::TreeScrollbarTrackRect(layout);
     const RECT thumb = EditorAssetBrowserLayout::ScrollbarThumbRect(track, viewportHeight, contentHeight, state.TreeScrollOffset());
     using Draw = ProjectFilesPanelDrawing;
-    GdiDrawing::DrawSharpFrame(dc, track, RGB(22, 24, 27), RGB(38, 42, 47));
-    const COLORREF thumbColor = state.IsTreeScrollbarDragging() ? RGB(104, 116, 130) : RGB(76, 86, 98);
-    const COLORREF thumbBorder = state.IsTreeScrollbarDragging() ? RGB(128, 142, 158) : RGB(94, 105, 118);
+    GdiDrawing::DrawSharpFrame(dc, track, Draw::Color(theme.chrome), Draw::Color(theme.borderChrome));
+    const COLORREF thumbColor = Draw::Color(state.IsTreeScrollbarDragging() ? theme.accent : theme.borderPanel);
+    const COLORREF thumbBorder = Draw::Color(state.IsTreeScrollbarDragging() ? theme.textSecondary : theme.borderPanel);
     GdiDrawing::DrawSharpFrame(dc, thumb, thumbColor, thumbBorder);
 }
 
@@ -61,7 +60,10 @@ void ProjectFilesTreeRenderer::Paint(
         }
 
         if (folders[index].selected) {
-            GdiDrawing::FillRectColor(dc, row, Draw::Blend(Draw::Color(theme.panel), RGB(94, 103, 118), state.IsSelectionFocused() ? 36 : 22));
+            GdiDrawing::FillRectColor(dc, row, Draw::Blend(Draw::Color(theme.panel), Draw::Color(theme.accent), state.IsSelectionFocused() ? 18 : 10));
+            if (state.IsSelectionFocused()) {
+                GdiDrawing::FillRectColor(dc, RECT{ row.left, row.top, row.left + 3, row.bottom }, Draw::Color(theme.accent));
+            }
         }
 
         const int indent = folders[index].depth * 14;

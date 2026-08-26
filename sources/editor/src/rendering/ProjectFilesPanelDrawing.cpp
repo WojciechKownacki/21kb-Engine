@@ -75,12 +75,12 @@ void ProjectFilesPanelDrawing::DrawHairline(HDC dc, RECT rect, COLORREF color) {
 }
 
 void ProjectFilesPanelDrawing::DrawEditField(HDC dc, RECT rect, const EditorTheme& theme, std::string_view value) {
-    GdiDrawing::DrawSharpFrame(dc, rect, RGB(18, 20, 24), Blend(Color(theme.borderPanel), Color(theme.textSecondary), 34));
+    GdiDrawing::DrawSharpFrame(dc, rect, Color(theme.chrome), Color(theme.accent));
     DrawTextWithFont(dc, Inset(rect, 6, 0), std::string{ value }.c_str(), Color(theme.textPrimary), std::clamp(RectHeight(rect) - 5, 8, 12), FW_NORMAL, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
 void ProjectFilesPanelDrawing::DrawCenteredEditField(HDC dc, RECT rect, const EditorTheme& theme, std::string_view value) {
-    GdiDrawing::DrawSharpFrame(dc, rect, RGB(18, 20, 24), Blend(Color(theme.borderPanel), Color(theme.textSecondary), 34));
+    GdiDrawing::DrawSharpFrame(dc, rect, Color(theme.chrome), Color(theme.accent));
     DrawTextWithFont(dc, Inset(rect, 5, 0), std::string{ value }.c_str(), Color(theme.textPrimary), std::clamp(RectHeight(rect) - 5, 8, 12), FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 

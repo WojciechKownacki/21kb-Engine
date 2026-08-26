@@ -650,7 +650,6 @@ void DrawNewFolderTile(HDC dc, RECT tile, const EditorTheme& theme, const Editor
 }
 
 void DrawScrollbar(HDC dc, const EditorAssetBrowserLayoutRects& layout, const EditorTheme& theme, const EditorAssetBrowserState& state, int contentHeight) {
-    static_cast<void>(theme);
     const RECT viewport = EditorAssetBrowserLayout::AssetViewportRect(layout);
     const int viewportHeight = static_cast<int>(viewport.bottom - viewport.top);
     if (contentHeight <= viewportHeight) {
@@ -658,9 +657,9 @@ void DrawScrollbar(HDC dc, const EditorAssetBrowserLayoutRects& layout, const Ed
     }
     const RECT track = EditorAssetBrowserLayout::AssetScrollbarTrackRect(layout);
     const RECT thumb = EditorAssetBrowserLayout::ScrollbarThumbRect(track, viewportHeight, contentHeight, state.ContentScrollOffset());
-    GdiDrawing::DrawSharpFrame(dc, track, RGB(22, 24, 27), RGB(38, 42, 47));
-    const COLORREF thumbColor = state.IsContentScrollbarDragging() ? RGB(104, 116, 130) : RGB(76, 86, 98);
-    const COLORREF thumbBorder = state.IsContentScrollbarDragging() ? RGB(128, 142, 158) : RGB(94, 105, 118);
+    GdiDrawing::DrawSharpFrame(dc, track, Draw::Color(theme.chrome), Draw::Color(theme.borderChrome));
+    const COLORREF thumbColor = Draw::Color(state.IsContentScrollbarDragging() ? theme.accent : theme.borderPanel);
+    const COLORREF thumbBorder = Draw::Color(state.IsContentScrollbarDragging() ? theme.textSecondary : theme.borderPanel);
     GdiDrawing::DrawSharpFrame(dc, thumb, thumbColor, thumbBorder);
 }
 

@@ -3,69 +3,78 @@
 #if defined(_WIN32)
 
 namespace kb::editor {
+namespace {
+
+[[nodiscard]] COLORREF Color(EditorColor color) noexcept {
+    return RGB(color.r, color.g, color.b);
+}
+
+constexpr EditorTheme kTheme = MakeEditorDarkTheme();
+
+} // namespace
 
 COLORREF HierarchyPanelStyle::PanelBackground() noexcept {
-    return RGB(25, 26, 28);
+    return Color(kTheme.panel);
 }
 
 COLORREF HierarchyPanelStyle::HeaderBackground() noexcept {
-    return RGB(22, 23, 25);
+    return Color(kTheme.strip);
 }
 
 COLORREF HierarchyPanelStyle::HeaderBorder() noexcept {
-    return RGB(58, 61, 66);
+    return Color(kTheme.borderChrome);
 }
 
 COLORREF HierarchyPanelStyle::SearchBackground() noexcept {
-    return RGB(30, 31, 34);
+    return Color(kTheme.chrome);
 }
 
 COLORREF HierarchyPanelStyle::SearchBorder() noexcept {
-    return RGB(72, 75, 81);
+    return Color(kTheme.borderPanel);
 }
 
 COLORREF HierarchyPanelStyle::SearchFocusedBorder() noexcept {
-    return RGB(140, 158, 190);
+    return Color(kTheme.accent);
 }
 
 COLORREF HierarchyPanelStyle::SearchPlaceholderText() noexcept {
-    return RGB(124, 128, 136);
+    return Color(kTheme.textDisabled);
 }
 
 COLORREF HierarchyPanelStyle::RowSelected() noexcept {
-    return RGB(60, 63, 68);
+    return Color(kTheme.tabActive);
 }
 
 COLORREF HierarchyPanelStyle::RowHover() noexcept {
-    return RGB(45, 47, 51);
+    return Color(kTheme.toolbarButton);
 }
 
 COLORREF HierarchyPanelStyle::RowText() noexcept {
-    return RGB(211, 216, 224);
+    return Color(kTheme.textSecondary);
 }
 
 COLORREF HierarchyPanelStyle::RowTextSelected() noexcept {
-    return RGB(245, 245, 245);
+    return Color(kTheme.textPrimary);
 }
 
 COLORREF HierarchyPanelStyle::RowTextHidden() noexcept {
-    return RGB(116, 121, 130);
+    return Color(kTheme.textDisabled);
 }
 
 COLORREF HierarchyPanelStyle::CubeStroke() noexcept {
-    return RGB(174, 184, 194);
+    return Color(kTheme.textSecondary);
 }
 
 COLORREF HierarchyPanelStyle::PrefabCubeStroke() noexcept {
-    return RGB(68, 145, 236);
+    return Color(kTheme.accent);
 }
 
 COLORREF HierarchyPanelStyle::CubeFill() noexcept {
-    return RGB(76, 85, 95);
+    return Color(kTheme.borderPanel);
 }
 
 COLORREF HierarchyPanelStyle::MutedText() noexcept {
-    return RGB(148, 154, 164);
+    return Color(kTheme.textSecondary);
 }
 
 } // namespace kb::editor

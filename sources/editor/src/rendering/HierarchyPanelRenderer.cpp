@@ -2,7 +2,6 @@
 
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
-#include "rendering/HierarchyPanelStyle.hpp"
 #include "rendering/HierarchyPanelToolbarRenderer.hpp"
 #include "rendering/HierarchyRowRenderer.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
@@ -42,7 +41,7 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
     return RECT{ track.left + 2, thumbTop, track.right - 2, thumbTop + thumbHeight };
 }
 
-void DrawScrollbar(HDC dc, const RECT& listContent, const EditorSceneContext& sceneContext, int contentHeight) {
+void DrawScrollbar(HDC dc, const RECT& listContent, const EditorTheme& theme, const EditorSceneContext& sceneContext, int contentHeight) {
     const int viewportHeight = RectHeight(listContent);
     if (contentHeight <= viewportHeight) {
         return;
@@ -50,9 +49,9 @@ void DrawScrollbar(HDC dc, const RECT& listContent, const EditorSceneContext& sc
 
     const RECT track = ScrollbarTrack(listContent);
     const RECT thumb = ScrollbarThumb(track, viewportHeight, contentHeight, sceneContext.HierarchyScrollOffset());
-    GdiDrawing::DrawSharpFrame(dc, track, RGB(22, 24, 27), RGB(38, 42, 47));
-    const COLORREF thumbColor = sceneContext.IsHierarchyScrollbarDragging() ? RGB(104, 116, 130) : RGB(76, 86, 98);
-    const COLORREF thumbBorder = sceneContext.IsHierarchyScrollbarDragging() ? RGB(128, 142, 158) : RGB(94, 105, 118);
+    GdiDrawing::DrawSharpFrame(dc, track, GdiDrawing::ToColorRef(theme.chrome), GdiDrawing::ToColorRef(theme.borderChrome));
+    const COLORREF thumbColor = GdiDrawing::ToColorRef(sceneContext.IsHierarchyScrollbarDragging() ? theme.accent : theme.borderPanel);
+    const COLORREF thumbBorder = GdiDrawing::ToColorRef(sceneContext.IsHierarchyScrollbarDragging() ? theme.textSecondary : theme.borderPanel);
     GdiDrawing::DrawSharpFrame(dc, thumb, thumbColor, thumbBorder);
 }
 
@@ -61,7 +60,7 @@ void DrawScrollbar(HDC dc, const RECT& listContent, const EditorSceneContext& sc
 void HierarchyPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext) const {
     const std::vector<EditorHierarchyRow>& rows = sceneContext.HierarchyRows();
 
-    GdiDrawing::FillRectColor(dc, content, HierarchyPanelStyle::PanelBackground());
+    GdiDrawing::FillRectColor(dc, content, GdiDrawing::ToColorRef(theme.panel));
     const RECT listContent = HierarchyPanelToolbarRenderer{}.Paint(dc, content, theme, sceneContext);
     const int contentHeight = static_cast<int>(rows.size()) * kHierarchyRowHeight;
     const int viewportHeight = RectHeight(listContent);
@@ -83,7 +82,7 @@ void HierarchyPanelRenderer::Paint(HDC dc, const RECT& content, const EditorThem
             y += kHierarchyRowHeight;
         }
     }
-    DrawScrollbar(dc, listContent, sceneContext, contentHeight);
+    DrawScrollbar(dc, listContent, theme, sceneContext, contentHeight);
 }
 
 } // namespace kb::editor
