@@ -596,14 +596,13 @@ void SkeletalMeshEditorPanelRenderer::Paint(
     const EditorSceneContext& sceneContext,
     const EditorRenderBackendSettings& renderBackendSettings,
     EditorSceneBgfxViewport* sceneViewport) const {
-    static_cast<void>(theme);
     if (!sceneContext.HasSkeletalMeshEditorAsset() ||
         sceneContext.SkeletalMeshEditorPreviewScene() == nullptr) {
-        GdiDrawing::FillRectColor(dc, content, RGB(27, 29, 33));
+        GdiDrawing::FillRectColor(dc, content, GdiDrawing::ToColorRef(theme.panel));
         const ScopedFont font{ 15, FW_NORMAL };
         const ScopedGdiObject selectedFont(dc, font.handle);
         SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, RGB(168, 178, 190));
+        SetTextColor(dc, GdiDrawing::ToColorRef(theme.textSecondary));
         RECT text = content;
         const bool skeletonDocument = sceneContext.IsSkeletalMeshEditorSkeletonDocument();
         const char* message = sceneContext.HasPendingSkeletalMeshEditorOpen()
@@ -619,8 +618,8 @@ void SkeletalMeshEditorPanelRenderer::Paint(
     PaintAdvancedPreview(dc, layout.toolbox, sceneContext);
     PaintTree(dc, layout.skeletonTree, sceneContext);
     PaintDetails(dc, layout.assetDetails, sceneContext);
-    const COLORREF splitterColor = RGB(58, 63, 71);
-    const COLORREF activeSplitterColor = RGB(77, 143, 204);
+    const COLORREF splitterColor = GdiDrawing::ToColorRef(theme.borderPanel);
+    const COLORREF activeSplitterColor = GdiDrawing::ToColorRef(theme.accent);
     GdiDrawing::FillRectColor(dc,
         RECT{ layout.toolbox.right - 1, layout.toolbox.top, layout.toolbox.right + 1, layout.toolbox.bottom },
         sceneContext.IsSkeletalMeshEditorToolboxWidthDragging()
