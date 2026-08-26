@@ -6,12 +6,19 @@
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/GdiResources.hpp"
+#include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "rendering/HeroIconKind.hpp"
 #include "rendering/HeroIconPainter.hpp"
 #include "rendering/ProjectFilesPanelDrawing.hpp"
 #include "rendering/components/CategoryHeader.hpp"
 #include "rendering/components/PropertyRow.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
+
+#pragma warning(push, 0)
+#include <objidl.h>
+#include <propidl.h>
+#include <gdiplus.h>
+#pragma warning(pop)
 
 #include <algorithm>
 #include <array>
@@ -26,6 +33,7 @@ namespace kb::editor::inspector_panel_rows {
 inline constexpr int kDisclosureRowHeight = 18;
 inline constexpr int kDisclosureTextOffset = 29;
 inline constexpr int kGroupRowHeight = 20;
+inline constexpr int kValueRightInset = 3;
 
 namespace {
 
@@ -41,7 +49,11 @@ constexpr int kLaneGap = 5;
 constexpr int kDividerHeight = 1;
 constexpr int kCheckboxSize = 16;
 constexpr int kTextBaselineOffsetY = 1;
-constexpr int kSectionCornerDiameter = 6;
+constexpr int kSectionDividerInset = 8;
+constexpr float kSectionCornerRadius = 7.0F;
+constexpr float kSectionOutlineWidth = 1.5F;
+constexpr float kInputCornerRadius = 3.0F;
+constexpr float kInputOutlineWidth = 1.0F;
 [[nodiscard]] inline COLORREF Color(EditorColor color) {
     return GdiDrawing::ToColorRef(color);
 }
@@ -107,33 +119,161 @@ inline void TextW(HDC dc, RECT rect, std::wstring_view text, COLORREF color, UIN
     DrawTextW(dc, text.data(), static_cast<int>(text.size()), &rect, format | DT_NOPREFIX);
 }
 
-inline void DrawFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border) {
-    GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
+[[nodiscard]] inline Gdiplus::Color GdiplusColor(COLORREF color) noexcept {
+    return Gdiplus::Color(
+        255,
+        GetRValue(color),
+        GetGValue(color),
+        GetBValue(color));
 }
 
-inline void DrawSectionCardOutline(HDC dc, RECT rect, const EditorTheme& theme) {
+inline void AddRoundedRectPath(
+    Gdiplus::GraphicsPath& path,
+    const Gdiplus::RectF& rect,
+    float radius) {
+    const float diameter = std::min(
+        std::min(rect.Width, rect.Height),
+        std::max(0.0F, radius * 2.0F));
+    if (diameter <= 1.0F) {
+        path.AddRectangle(rect);
+        return;
+    }
+    path.AddArc(rect.X, rect.Y, diameter, diameter, 180.0F, 90.0F);
+    path.AddArc(rect.X + rect.Width - diameter, rect.Y, diameter, diameter, 270.0F, 90.0F);
+    path.AddArc(rect.X + rect.Width - diameter, rect.Y + rect.Height - diameter, diameter, diameter, 0.0F, 90.0F);
+    path.AddArc(rect.X, rect.Y + rect.Height - diameter, diameter, diameter, 90.0F, 90.0F);
+    path.CloseFigure();
+}
+
+inline void AddTopRoundedRectPath(
+    Gdiplus::GraphicsPath& path,
+    const Gdiplus::RectF& rect,
+    float radius) {
+    const float diameter = std::min(
+        std::min(rect.Width, rect.Height * 2.0F),
+        std::max(0.0F, radius * 2.0F));
+    if (diameter <= 1.0F) {
+        path.AddRectangle(rect);
+        return;
+    }
+    path.AddArc(rect.X, rect.Y, diameter, diameter, 180.0F, 90.0F);
+    path.AddArc(rect.X + rect.Width - diameter, rect.Y, diameter, diameter, 270.0F, 90.0F);
+    path.AddLine(rect.X + rect.Width, rect.Y + diameter * 0.5F, rect.X + rect.Width, rect.Y + rect.Height);
+    path.AddLine(rect.X + rect.Width, rect.Y + rect.Height, rect.X, rect.Y + rect.Height);
+    path.AddLine(rect.X, rect.Y + rect.Height, rect.X, rect.Y + diameter * 0.5F);
+    path.CloseFigure();
+}
+
+inline void ConfigureSectionGraphics(Gdiplus::Graphics& graphics) {
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+}
+
+inline void DrawRoundedFrame(
+    HDC dc,
+    const RECT& rect,
+    COLORREF fill,
+    COLORREF border,
+    float cornerRadius,
+    float outlineWidth,
+    COLORREF accent = CLR_INVALID,
+    float accentWidth = 0.0F) {
     if (dc == nullptr || rect.right - rect.left <= 2 || rect.bottom - rect.top <= 2) {
         return;
     }
-    ++rect.left;
-    ++rect.top;
-    --rect.right;
-    --rect.bottom;
-    ScopedPen pen(1, Color(theme.borderPanel));
-    const ScopedGdiObject selectedPen(dc, pen.handle);
-    const ScopedGdiObject selectedBrush(dc, GetStockObject(NULL_BRUSH));
-    RoundRect(
-        dc,
-        rect.left,
-        rect.top,
-        rect.right,
-        rect.bottom,
-        kSectionCornerDiameter,
-        kSectionCornerDiameter);
+    HeroIconGdiplusRuntime::EnsureStarted();
+    Gdiplus::Graphics graphics(dc);
+    ConfigureSectionGraphics(graphics);
+    Gdiplus::GraphicsPath path;
+    AddRoundedRectPath(
+        path,
+        Gdiplus::RectF{
+            static_cast<Gdiplus::REAL>(rect.left) + 0.5F,
+            static_cast<Gdiplus::REAL>(rect.top) + 0.5F,
+            static_cast<Gdiplus::REAL>(rect.right - rect.left) - 1.0F,
+            static_cast<Gdiplus::REAL>(rect.bottom - rect.top) - 1.0F,
+        },
+        cornerRadius);
+    Gdiplus::SolidBrush brush(GdiplusColor(fill));
+    graphics.FillPath(&brush, &path);
+    if (accent != CLR_INVALID && accentWidth > 0.0F) {
+        const Gdiplus::GraphicsState state = graphics.Save();
+        graphics.SetClip(&path, Gdiplus::CombineModeIntersect);
+        Gdiplus::SolidBrush accentBrush(GdiplusColor(accent));
+        graphics.FillRectangle(
+            &accentBrush,
+            Gdiplus::RectF{
+                static_cast<Gdiplus::REAL>(rect.left) + 0.5F,
+                static_cast<Gdiplus::REAL>(rect.top) + 0.5F,
+                accentWidth,
+                static_cast<Gdiplus::REAL>(rect.bottom - rect.top) - 1.0F,
+            });
+        graphics.Restore(state);
+    }
+    Gdiplus::Pen pen(GdiplusColor(border), outlineWidth);
+    pen.SetLineJoin(Gdiplus::LineJoinRound);
+    graphics.DrawPath(&pen, &path);
+}
+
+inline void DrawInputFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border) {
+    DrawRoundedFrame(dc, rect, fill, border, kInputCornerRadius, kInputOutlineWidth);
+}
+
+inline void DrawSectionButtonFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border) {
+    DrawRoundedFrame(dc, rect, fill, border, kSectionCornerRadius, kSectionOutlineWidth);
+}
+
+inline void DrawSectionAccentFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border, COLORREF accent) {
+    DrawRoundedFrame(dc, rect, fill, border, kSectionCornerRadius, kSectionOutlineWidth, accent, 3.5F);
+}
+
+inline void FillSectionHeaderBackground(HDC dc, const RECT& rect, COLORREF fill) {
+    if (dc == nullptr || rect.right - rect.left <= 2 || rect.bottom - rect.top <= 2) {
+        return;
+    }
+    HeroIconGdiplusRuntime::EnsureStarted();
+    Gdiplus::Graphics graphics(dc);
+    ConfigureSectionGraphics(graphics);
+    Gdiplus::GraphicsPath path;
+    AddTopRoundedRectPath(
+        path,
+        Gdiplus::RectF{
+            static_cast<Gdiplus::REAL>(rect.left) + 1.0F,
+            static_cast<Gdiplus::REAL>(rect.top) + 1.0F,
+            static_cast<Gdiplus::REAL>(rect.right - rect.left) - 2.0F,
+            static_cast<Gdiplus::REAL>(rect.bottom - rect.top) - 1.0F,
+        },
+        kSectionCornerRadius);
+    Gdiplus::SolidBrush brush(GdiplusColor(fill));
+    graphics.FillPath(&brush, &path);
+}
+
+inline void DrawSectionCardOutline(HDC dc, const RECT& rect, const EditorTheme& theme) {
+    if (dc == nullptr || rect.right - rect.left <= 2 || rect.bottom - rect.top <= 2) {
+        return;
+    }
+    HeroIconGdiplusRuntime::EnsureStarted();
+    Gdiplus::Graphics graphics(dc);
+    ConfigureSectionGraphics(graphics);
+    Gdiplus::GraphicsPath path;
+    AddRoundedRectPath(
+        path,
+        Gdiplus::RectF{
+            static_cast<Gdiplus::REAL>(rect.left) + 1.0F,
+            static_cast<Gdiplus::REAL>(rect.top) + 1.0F,
+            static_cast<Gdiplus::REAL>(rect.right - rect.left) - 2.0F,
+            static_cast<Gdiplus::REAL>(rect.bottom - rect.top) - 2.0F,
+        },
+        kSectionCornerRadius);
+    Gdiplus::Pen pen(GdiplusColor(Color(theme.borderPanel)), kSectionOutlineWidth);
+    pen.SetLineJoin(Gdiplus::LineJoinRound);
+    graphics.DrawPath(&pen, &path);
 }
 
 inline void DrawDivider(HDC dc, const EditorTheme& theme, int left, int right, int y) {
-    GdiDrawing::FillRectColor(dc, Rect(left, y, right, y + kDividerHeight), Color(theme.borderChrome));
+    const int insetLeft = std::min(right, left + kSectionDividerInset);
+    const int insetRight = std::max(insetLeft, right - kSectionDividerInset);
+    GdiDrawing::FillRectColor(dc, Rect(insetLeft, y, insetRight, y + kDividerHeight), Color(theme.borderChrome));
 }
 
 inline void DrawTriangle(HDC dc, RECT rect, bool expanded, COLORREF color) {
@@ -178,9 +318,16 @@ inline void DrawSectionHeader(HDC dc, RECT rect, const EditorTheme& theme, const
     const bool actionHovered = removeButton &&
         state.IsHovered(InspectorHitKind::ComponentMenuButton, section, InspectorPropertyId::ComponentRemove);
     const CategoryHeaderLayout layout = CategoryHeader::Resolve(rect, true, removeButton, false);
-    GdiDrawing::FillRectColor(dc, rect, hovered ? HoverFill(theme) : Color(theme.strip));
+    FillSectionHeaderBackground(dc, rect, hovered ? HoverFill(theme) : Color(theme.strip));
     if (hovered) {
-        GdiDrawing::FillRectColor(dc, Rect(rect.left, rect.top, rect.left + 3, rect.bottom), Color(theme.accent));
+        GdiDrawing::FillRectColor(
+            dc,
+            Rect(
+                rect.left + 1,
+                rect.top + static_cast<int>(kSectionCornerRadius),
+                rect.left + 4,
+                rect.bottom),
+            Color(theme.accent));
     }
     DrawDivider(dc, theme, rect.left, rect.right, rect.bottom - 1);
     DrawTriangle(dc, Shrink(layout.disclosure, 4, 4, 4, 4), !state.IsCollapsed(section), Color(theme.textSecondary));
@@ -191,7 +338,7 @@ inline void DrawSectionHeader(HDC dc, RECT rect, const EditorTheme& theme, const
         Text(dc, layout.title, title, Color(theme.textPrimary));
     }
     if (removeButton) {
-        DrawFrame(
+        DrawInputFrame(
             dc,
             layout.trailingAction,
             actionHovered ? HoverFill(theme) : Color(theme.strip),
@@ -206,7 +353,7 @@ inline void DrawSectionHeader(HDC dc, RECT rect, const EditorTheme& theme, const
 }
 
 inline void DrawValueBox(HDC dc, RECT rect, const EditorTheme& theme, std::string_view value, bool hovered = false) {
-    DrawFrame(
+    DrawInputFrame(
         dc,
         rect,
         hovered ? HoverFill(theme) : Color(theme.chrome),
@@ -236,7 +383,7 @@ inline void DrawVec3Row(HDC dc, RECT row, const EditorTheme& theme, const Inspec
         GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
     }
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
-    const RECT valueRect = Rect(labelRect.right, row.top, row.right - kRowPadX, row.bottom);
+    const RECT valueRect = Rect(labelRect.right, row.top, row.right - kValueRightInset, row.bottom);
     ScopedFont labelFont(12, FW_SEMIBOLD);
     {
         const ScopedGdiObject selectedFont(dc, labelFont.handle);
@@ -259,7 +406,7 @@ inline void DrawRotationRow(HDC dc, RECT row, const EditorTheme& theme, const In
         GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
     }
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
-    const RECT valueRect = Rect(labelRect.right, row.top, row.right - kRowPadX, row.bottom);
+    const RECT valueRect = Rect(labelRect.right, row.top, row.right - kValueRightInset, row.bottom);
     ScopedFont labelFont(12, FW_SEMIBOLD);
     {
         const ScopedGdiObject selectedFont(dc, labelFont.handle);
@@ -293,7 +440,7 @@ inline void DrawFieldRow(HDC dc, RECT row, const EditorTheme& theme, const Inspe
     const bool rowHovered = RowHovered(state, property, editIndex) || passiveHovered;
     GdiDrawing::FillRectColor(dc, row, rowHovered ? HoverFill(theme) : Color(theme.panel));
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
-    const RECT valueRect = Rect(labelRect.right, CenteredY(row, kValueHeight), row.right - kRowPadX, CenteredY(row, kValueHeight) + kValueHeight);
+    const RECT valueRect = Rect(labelRect.right, CenteredY(row, kValueHeight), row.right - kValueRightInset, CenteredY(row, kValueHeight) + kValueHeight);
     {
         ScopedFont labelFont(12, FW_SEMIBOLD);
         const ScopedGdiObject selectedFont(dc, labelFont.handle);
@@ -349,7 +496,7 @@ inline void DrawPairRow(
         GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
     }
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
-    const RECT valueRect = Rect(labelRect.right, row.top, row.right - kRowPadX, row.bottom);
+    const RECT valueRect = Rect(labelRect.right, row.top, row.right - kValueRightInset, row.bottom);
     {
         ScopedFont labelFont(12, FW_SEMIBOLD);
         const ScopedGdiObject selectedFont(dc, labelFont.handle);
@@ -380,7 +527,7 @@ inline void DrawBoolPairRow(
         GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
     }
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
-    const RECT valueRect = Rect(labelRect.right, row.top, row.right - kRowPadX, row.bottom);
+    const RECT valueRect = Rect(labelRect.right, row.top, row.right - kValueRightInset, row.bottom);
     {
         ScopedFont labelFont(12, FW_SEMIBOLD);
         const ScopedGdiObject selectedFont(dc, labelFont.handle);
@@ -398,7 +545,7 @@ inline void DrawBoolPairRow(
         const RECT box = CenteredRect(lanes[index], lanes[index].right - kCheckboxSize, kCheckboxSize, kCheckboxSize);
         Text(dc, Rect(lanes[index].left, lanes[index].top, box.left - 5, lanes[index].bottom), labels[index], Color(theme.textDisabled), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
         const bool hovered = state.IsHovered(InspectorHitKind::BoolField, section, properties[index]);
-        DrawFrame(
+        DrawInputFrame(
             dc,
             box,
             values[index] ? Color(theme.accent) : (hovered ? HoverFill(theme) : Color(theme.chrome)),
@@ -432,8 +579,8 @@ inline void DrawActionRow(
     bool accent) {
     const bool hovered = state.IsHovered(InspectorHitKind::Row, section, property) ||
         state.IsHovered(InspectorHitKind::TextField, section, property);
-    const RECT button = Shrink(row, kRowPadX, 2, kRowPadX, 2);
-    DrawFrame(
+    const RECT button = Shrink(row, kRowPadX, 2, kValueRightInset, 2);
+    DrawInputFrame(
         dc, button,
         hovered ? HoverFill(theme) : Color(theme.chrome),
         accent || hovered ? Color(theme.accent) : Color(theme.borderPanel));
@@ -449,7 +596,7 @@ inline void DrawTagFieldRow(HDC dc, RECT row, const EditorTheme& theme, const In
         GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
     }
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
-    const RECT valueRect = Rect(labelRect.right, CenteredY(row, kValueHeight), row.right - kRowPadX, CenteredY(row, kValueHeight) + kValueHeight);
+    const RECT valueRect = Rect(labelRect.right, CenteredY(row, kValueHeight), row.right - kValueRightInset, CenteredY(row, kValueHeight) + kValueHeight);
     {
         ScopedFont labelFont(12, FW_SEMIBOLD);
         const ScopedGdiObject selectedFont(dc, labelFont.handle);
@@ -459,7 +606,7 @@ inline void DrawTagFieldRow(HDC dc, RECT row, const EditorTheme& theme, const In
     const bool hovered = FieldValueHovered(state, section, property);
     const bool classified = !value.empty();
     const bool open = state.IsTagsDropdownOpen();
-    DrawFrame(dc, valueRect, hovered || open ? HoverFill(theme) : Color(theme.chrome),
+    DrawInputFrame(dc, valueRect, hovered || open ? HoverFill(theme) : Color(theme.chrome),
         open ? Color(theme.textDisabled) : Color(theme.borderPanel));
     {
         ScopedFont valueFont(12, classified ? FW_SEMIBOLD : FW_NORMAL);
@@ -486,7 +633,7 @@ inline void DrawAssetFieldRow(HDC dc, RECT row, const EditorTheme& theme, const 
         GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
     }
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
-    const RECT valueRect = Rect(labelRect.right, CenteredY(row, kValueHeight), row.right - kRowPadX, CenteredY(row, kValueHeight) + kValueHeight);
+    const RECT valueRect = Rect(labelRect.right, CenteredY(row, kValueHeight), row.right - kValueRightInset, CenteredY(row, kValueHeight) + kValueHeight);
     const RECT textRect = AssetPickerTextRect(valueRect);
     const bool valueHovered = state.IsHovered(InspectorHitKind::TextField, section, property);
     const bool buttonHovered = state.IsHovered(InspectorHitKind::TextField, section, buttonProperty);
@@ -497,7 +644,7 @@ inline void DrawAssetFieldRow(HDC dc, RECT row, const EditorTheme& theme, const 
     }
     DrawValueBox(dc, textRect, theme, value, valueHovered);
     const RECT button = AssetPickerButtonRect(valueRect);
-    DrawFrame(dc, button, buttonHovered ? HoverFill(theme) : Color(theme.chrome), buttonHovered ? Color(theme.accent) : Color(theme.borderPanel));
+    DrawInputFrame(dc, button, buttonHovered ? HoverFill(theme) : Color(theme.chrome), buttonHovered ? Color(theme.accent) : Color(theme.borderPanel));
     HeroIconPainter::Draw(dc, Shrink(button, 3, 3, 3, 3), HeroIconKind::MagnifyingGlass, buttonHovered ? Color(theme.textPrimary) : Color(theme.textSecondary), 1);
 }
 
@@ -518,7 +665,7 @@ inline void DrawBoolRow(HDC dc, RECT row, const EditorTheme& theme, const Inspec
         Text(dc, labelRect, label, Color(theme.textSecondary));
     }
     const bool hovered = state.IsHovered(InspectorHitKind::BoolField, section, property, editIndex);
-    DrawFrame(
+    DrawInputFrame(
         dc,
         box,
         checked ? Color(theme.accent) : (hovered ? HoverFill(theme) : Color(theme.chrome)),

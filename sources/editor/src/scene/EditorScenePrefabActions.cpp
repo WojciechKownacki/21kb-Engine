@@ -49,8 +49,14 @@ std::optional<kb::scene::SceneEntity> EditorScenePrefabActions::InstantiateAsset
 }
 
 std::optional<kb::scene::SceneEntity> EditorScenePrefabActions::InstantiateAsset(kb::scene::Scene& scene, const std::filesystem::path& path, const std::filesystem::path& virtualPath, kb::scene::SceneEntity parent) {
-    static_cast<void>(scene.Assets().Discover());
-    const std::optional<std::filesystem::path> resolvedPath = ResolvePrefabPath(scene, path, virtualPath);
+    std::optional<std::filesystem::path> resolvedPath = ResolvePrefabPath(scene, path, virtualPath);
+    if (!resolvedPath.has_value()) {
+        // Drag-and-drop already carries a physical and a mounted virtual path.
+        // Keep the full registry scan off the interactive path and reserve it
+        // for stale external references that genuinely need rediscovery.
+        static_cast<void>(scene.Assets().Discover());
+        resolvedPath = ResolvePrefabPath(scene, path, virtualPath);
+    }
     if (!resolvedPath.has_value()) {
         return std::nullopt;
     }

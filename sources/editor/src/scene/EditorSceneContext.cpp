@@ -8268,29 +8268,44 @@ bool EditorSceneContext::InstantiatePrefabAssetAt(
     const std::filesystem::path& path,
     const std::filesystem::path& virtualPath,
     kb::scene::Vec3 position) {
+    return CreatePrefabAssetEntity(path, virtualPath, position, true).IsValid();
+}
+
+kb::scene::SceneEntity EditorSceneContext::CreatePrefabAssetEntity(
+    const std::filesystem::path& path,
+    const std::filesystem::path& virtualPath,
+    kb::scene::Vec3 position,
+    bool logCreation) {
     if (pendingSceneTransactionLabel_.has_value()) {
         console_.Warning("Edit", "Scene command ignored while another scene transaction is active.");
-        return false;
+        return {};
     }
 
     const std::optional<kb::scene::SceneEntity> root = EditorScenePrefabActions::InstantiateAsset(*scene_, path, virtualPath, {});
     if (!root.has_value() || !scene_->Entities().IsAlive(*root)) {
         console_.Error("Prefabs", "Prefab instantiation failed: " + (virtualPath.empty() ? path.generic_string() : virtualPath.generic_string()));
-        return false;
+        return {};
     }
 
     kb::scene::TransformComponent transform = scene_->Transforms().Get(*root);
     transform.localPosition = position;
     scene_->Transforms().Set(*root, transform);
+    scene_->Runtime().SynchronizeTransforms();
+    if (!logCreation) {
+        SelectEntity(*root);
+        MarkSceneRenderDirty();
+        return *root;
+    }
+
     const std::array<kb::scene::SceneEntity, 1U> created{ *root };
     if (!AdoptCreatedHierarchyEntities("Instantiate Prefab", created)) {
         scene_->Entities().Destroy(*root);
         console_.Error("Prefabs", "Prefab instantiation failed: " + (virtualPath.empty() ? path.generic_string() : virtualPath.generic_string()));
-        return false;
+        return {};
     }
 
     console_.Info("Prefabs", "Prefab instantiated: " + (virtualPath.empty() ? path.generic_string() : virtualPath.generic_string()));
-    return true;
+    return *root;
 }
 
 kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::AssetId assetId) {
@@ -8298,6 +8313,13 @@ kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::Ass
 }
 
 kb::scene::SceneEntity EditorSceneContext::CreateParticleEffectEntity(kb::assets::AssetId assetId) {
+    return CreateParticleEffectEntity(assetId, {}, true);
+}
+
+kb::scene::SceneEntity EditorSceneContext::CreateParticleEffectEntity(
+    kb::assets::AssetId assetId,
+    kb::scene::Vec3 position,
+    bool logCreation) {
     if (!assetId.IsValid()) {
         console_.Warning("Particles", "Particle Effect entity creation ignored for invalid asset.");
         return {};
@@ -8313,12 +8335,15 @@ kb::scene::SceneEntity EditorSceneContext::CreateParticleEffectEntity(kb::assets
         return {};
     }
 
-    kb::scene::SceneEntity entity{};
-    const bool created = ExecuteSceneCommand("Create Particle Effect Entity", [this, &entity, assetId, metadata]() {
-        entity = scene_->Entities().CreateEntity(kb::scene::SceneObjectDesc{.name = metadata->name});
+    const auto createEntity = [this, assetId, metadata, position]() {
+        const kb::scene::SceneEntity entity = scene_->Entities().CreateEntity(kb::scene::SceneObjectDesc{.name = metadata->name});
         if (!entity.IsValid()) {
-            return false;
+            return kb::scene::SceneEntity{};
         }
+        kb::scene::TransformComponent authoredTransform = scene_->Transforms().Get(entity);
+        authoredTransform.localPosition = position;
+        scene_->Transforms().Set(entity, authoredTransform);
+        scene_->Runtime().SynchronizeTransforms();
         scene_->Components().ParticleEffects().Set(entity, kb::scene::ParticleEffectComponent{
             .effectAssetId = assetId.value,
         });
@@ -8336,6 +8361,26 @@ kb::scene::SceneEntity EditorSceneContext::CreateParticleEffectEntity(kb::assets
                 }
                 static_cast<void>(kb::particles::ParticlePlayback::Play(*scene_, created.instanceId));
             }
+        }
+        return entity;
+    };
+
+    kb::scene::SceneEntity entity{};
+    if (!logCreation) {
+        entity = createEntity();
+        if (!entity.IsValid()) {
+            console_.Error("Particles", "Particle Effect entity could not be created: " + metadata->name);
+            return {};
+        }
+        SelectEntity(entity);
+        MarkSceneRenderDirty();
+        return entity;
+    }
+
+    const bool created = ExecuteSceneCommand("Create Particle Effect Entity", [this, &entity, &createEntity]() {
+        entity = createEntity();
+        if (!entity.IsValid()) {
+            return false;
         }
         SelectEntity(entity);
         return true;

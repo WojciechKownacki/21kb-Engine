@@ -1072,8 +1072,14 @@ public:
         const std::filesystem::path& path,
         const std::filesystem::path& virtualPath,
         kb::scene::Vec3 position);
+    [[nodiscard]] kb::scene::SceneEntity CreatePrefabAssetEntity(
+        const std::filesystem::path& path,
+        const std::filesystem::path& virtualPath,
+        kb::scene::Vec3 position,
+        bool logCreation);
     [[nodiscard]] kb::scene::SceneEntity CreateMeshAssetEntity(kb::assets::AssetId assetId);
     [[nodiscard]] kb::scene::SceneEntity CreateParticleEffectEntity(kb::assets::AssetId assetId);
+    [[nodiscard]] kb::scene::SceneEntity CreateParticleEffectEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation);
     [[nodiscard]] kb::scene::SceneEntity CreateMeshAssetEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation);
     [[nodiscard]] bool SetMeshRendererMeshAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
     [[nodiscard]] bool AddBehaviourAssetToEntity(kb::assets::AssetId assetId, kb::scene::SceneEntity entity);
