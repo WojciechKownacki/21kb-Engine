@@ -13,13 +13,11 @@
 
 namespace kb::editor {
 
-struct EditorMetrics;
-
 #if defined(_WIN32)
 
-class EditorSceneViewportMeshDragPreview {
+class EditorSceneViewportAssetDragPreview {
 public:
-    EditorSceneViewportMeshDragPreview() = delete;
+    EditorSceneViewportAssetDragPreview() = delete;
 
     [[nodiscard]] static bool Update(
         HWND sourceWindow,

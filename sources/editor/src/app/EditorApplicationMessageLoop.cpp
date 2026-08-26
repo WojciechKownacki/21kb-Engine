@@ -868,9 +868,9 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         sourceWindow = state.window;
     }
 
-    if (drag.assetCreatesMeshEntity && drag.meshPreviewUpdatePending) {
-        drag.meshPreviewUpdatePending = false;
-        if (EditorSceneViewportObjectInteraction::UpdateMeshDragPreview(
+    if (drag.CreatesScenePlacement() && drag.scenePlacementPreviewUpdatePending) {
+        drag.scenePlacementPreviewUpdatePending = false;
+        if (EditorSceneViewportObjectInteraction::UpdateScenePlacementPreview(
                 sourceWindow,
                 state.window,
                 drag.x,

@@ -8,6 +8,7 @@
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponentVisitors.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/SceneVisibilityResolution.hpp"
 
@@ -53,6 +54,7 @@ struct NearestPickContext {
 };
 
 struct RectPickContext {
+    const kb::scene::Scene* scene = nullptr;
     const EditorViewportCameraState* camera = nullptr;
     RECT renderArea{};
     RECT selectionRect{};
@@ -88,11 +90,11 @@ using kb::math::Normalize;
 using kb::math::Rotate;
 
 [[nodiscard]] kb::scene::Vec3 ResolveWorldPosition(const kb::scene::TransformComponent& transform) noexcept {
-    return transform.worldDirty ? transform.localPosition : transform.worldPosition;
+    return transform.worldPosition;
 }
 
 [[nodiscard]] kb::scene::Quat ResolveWorldRotation(const kb::scene::TransformComponent& transform) noexcept {
-    return Normalize(transform.worldDirty ? transform.localRotation : transform.worldRotation);
+    return Normalize(transform.worldRotation);
 }
 
 [[nodiscard]] float Distance(ScreenPoint lhs, ScreenPoint rhs) noexcept {
@@ -210,15 +212,16 @@ void ConsiderOverlayIconPick(NearestPickContext& pick, kb::scene::SceneEntity en
 
 [[nodiscard]] kb::scene::Vec3 BoxExtent(const kb::scene::TransformComponent& transform) noexcept {
     return kb::scene::Vec3{
-        std::max(kDefaultPickHalfExtent, std::abs(transform.localScale.x) * kDefaultPickHalfExtent),
-        std::max(kDefaultPickHalfExtent, std::abs(transform.localScale.y) * kDefaultPickHalfExtent),
-        std::max(kDefaultPickHalfExtent, std::abs(transform.localScale.z) * kDefaultPickHalfExtent),
+        std::max(kDefaultPickHalfExtent, std::abs(transform.worldScale.x) * kDefaultPickHalfExtent),
+        std::max(kDefaultPickHalfExtent, std::abs(transform.worldScale.y) * kDefaultPickHalfExtent),
+        std::max(kDefaultPickHalfExtent, std::abs(transform.worldScale.z) * kDefaultPickHalfExtent),
     };
 }
 
 [[nodiscard]] bool HitTransformBox(const EditorSceneViewportRay& ray, const kb::scene::TransformComponent& transform, float& distance) noexcept {
-    const kb::scene::Vec3 localOrigin = InverseRotate(transform.localRotation, EditorSceneViewportMath::Sub(ray.origin, transform.localPosition));
-    const kb::scene::Vec3 localDirection = InverseRotate(transform.localRotation, ray.direction);
+    const kb::scene::Quat worldRotation = ResolveWorldRotation(transform);
+    const kb::scene::Vec3 localOrigin = InverseRotate(worldRotation, EditorSceneViewportMath::Sub(ray.origin, transform.worldPosition));
+    const kb::scene::Vec3 localDirection = InverseRotate(worldRotation, ray.direction);
     const kb::scene::Vec3 extent = BoxExtent(transform);
 
     float nearDistance = 0.0F;
@@ -251,6 +254,9 @@ void ConsiderOverlayIconPick(NearestPickContext& pick, kb::scene::SceneEntity en
 void PickNearestVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::MeshRendererComponent& renderer, void* context) {
     static_cast<void>(renderer);
     auto& pick = *static_cast<NearestPickContext*>(context);
+    if (pick.scene != nullptr && !kb::scene::ResolveVisibility(*pick.scene, entity).visible) {
+        return;
+    }
     float distance = 0.0F;
     if (!HitTransformBox(pick.ray, transform, distance)) {
         return;
@@ -362,12 +368,16 @@ void PickNearestParticleVisitor(
         pick, entity, center, kLightIconPickRadiusPixels, cameraDistance);
 }
 
-void PickRectVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::MeshRendererComponent& renderer, void* context) {
-    static_cast<void>(renderer);
-    auto& pick = *static_cast<RectPickContext*>(context);
+void ConsiderRectTransform(
+    kb::scene::SceneEntity entity,
+    const kb::scene::TransformComponent& transform,
+    RectPickContext& pick) {
+    if (pick.scene == nullptr || !kb::scene::ResolveVisibility(*pick.scene, entity).visible) {
+        return;
+    }
     float screenX = 0.0F;
     float screenY = 0.0F;
-    if (!EditorSceneViewportMath::WorldToScreen(*pick.camera, pick.renderArea, transform.localPosition, screenX, screenY)) {
+    if (!EditorSceneViewportMath::WorldToScreen(*pick.camera, pick.renderArea, transform.worldPosition, screenX, screenY)) {
         return;
     }
 
@@ -376,21 +386,60 @@ void PickRectVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformCo
     }
 }
 
+void PickRectVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::MeshRendererComponent&, void* context) {
+    ConsiderRectTransform(entity, transform, *static_cast<RectPickContext*>(context));
+}
+
+void PickRectLightVisitor(
+    kb::scene::SceneEntity entity,
+    const kb::scene::TransformComponent& transform,
+    const kb::scene::LightComponent&,
+    void* context) {
+    ConsiderRectTransform(entity, transform, *static_cast<RectPickContext*>(context));
+}
+
+void PickRectParticleVisitor(
+    kb::scene::SceneEntity entity,
+    const kb::scene::ParticleEffectComponent&,
+    void* context) {
+    auto& pick = *static_cast<RectPickContext*>(context);
+    if (pick.scene == nullptr || !kb::scene::ResolveVisibility(*pick.scene, entity).visible) {
+        return;
+    }
+    const kb::scene::TransformComponent* transform = pick.scene->Transforms().TryGet(entity);
+    if (transform == nullptr) {
+        return;
+    }
+    float screenX = 0.0F;
+    float screenY = 0.0F;
+    if (EditorSceneViewportMath::WorldToScreen(*pick.camera, pick.renderArea, transform->worldPosition, screenX, screenY) &&
+        ContainsPoint(pick.selectionRect, screenX, screenY)) {
+        pick.entities.push_back(entity);
+    }
+}
+
+void Deduplicate(std::vector<kb::scene::SceneEntity>& entities) {
+    std::ranges::sort(entities, {}, &kb::scene::SceneEntity::Id);
+    entities.erase(std::ranges::unique(entities).begin(), entities.end());
+}
+
 } // namespace
 
-EditorSceneViewportPickResult EditorSceneViewportMeshPicker::PickNearest(const kb::scene::Scene& scene, const EditorSceneViewportRay& ray) {
-    NearestPickContext context{.ray = ray};
+EditorSceneViewportPickResult EditorSceneViewportMeshPicker::PickNearest(kb::scene::Scene& scene, const EditorSceneViewportRay& ray) {
+    scene.Runtime().SynchronizeTransforms();
+    NearestPickContext context{.ray = ray, .scene = &scene};
     scene.Components().Visitors().ForEachMeshRenderer(&PickNearestVisitor, &context);
     return context.result;
 }
 
 EditorSceneViewportPickResult EditorSceneViewportMeshPicker::PickNearest(
-    const kb::scene::Scene& scene,
+    kb::scene::Scene& scene,
     const EditorViewportCameraState& camera,
     const RECT& renderArea,
     float screenX,
     float screenY,
     const EditorSceneViewportRay& ray) {
+    scene.Runtime().SynchronizeTransforms();
     NearestPickContext context{
         .ray = ray,
         .scene = &scene,
@@ -400,7 +449,7 @@ EditorSceneViewportPickResult EditorSceneViewportMeshPicker::PickNearest(
     };
     scene.Components().Visitors().ForEachMeshRenderer(&PickNearestVisitor, &context);
     scene.Components().Visitors().ForEachLight(&PickNearestLightVisitor, &context);
-    scene.Components().ParticleEffects().ForEach(
+    static_cast<const kb::scene::Scene&>(scene).Components().ParticleEffects().ForEach(
         &PickNearestParticleVisitor, &context);
     if (context.overlayPick.IsValid() &&
         (context.overlayPick.blocksMesh || !context.result.IsValid())) {
@@ -413,16 +462,22 @@ EditorSceneViewportPickResult EditorSceneViewportMeshPicker::PickNearest(
 }
 
 std::vector<kb::scene::SceneEntity> EditorSceneViewportMeshPicker::PickInsideRect(
-    const kb::scene::Scene& scene,
+    kb::scene::Scene& scene,
     const EditorViewportCameraState& camera,
     const RECT& renderArea,
     const RECT& selectionRect) {
+    scene.Runtime().SynchronizeTransforms();
     RectPickContext context{
+        .scene = &scene,
         .camera = &camera,
         .renderArea = renderArea,
         .selectionRect = NormalizeRect(selectionRect),
     };
     scene.Components().Visitors().ForEachMeshRenderer(&PickRectVisitor, &context);
+    scene.Components().Visitors().ForEachLight(&PickRectLightVisitor, &context);
+    static_cast<const kb::scene::Scene&>(scene).Components().ParticleEffects().ForEach(
+        &PickRectParticleVisitor, &context);
+    Deduplicate(context.entities);
     return context.entities;
 }
 

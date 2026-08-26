@@ -976,6 +976,77 @@ void RunViewportMeshPickerNearestMeshRendererTest() {
     kb::editor::tests::Require(pick.entity == nearEntity, "Viewport mesh picker should choose the nearest Mesh Renderer under the ray");
 }
 
+void RunViewportMeshPickerUsesSynchronizedWorldTransformsTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity parent = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Moved Prefab Root" });
+    const kb::scene::SceneEntity child = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Nested Mesh" });
+    kb::editor::tests::Require(
+        scene.Hierarchy().SetParent(child, parent),
+        "Nested picker fixture should parent the mesh below the moved root");
+    scene.Components().MeshRenderers().Set(
+        child, kb::scene::MeshRendererComponent{ .meshAssetId = 404U });
+    scene.Transforms().Set(
+        parent,
+        kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 6.0F, 0.0F, 0.0F },
+        });
+    scene.Transforms().Set(
+        child,
+        kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 5.0F },
+        });
+
+    const kb::editor::EditorSceneViewportPickResult pick =
+        kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+            scene,
+            kb::editor::EditorSceneViewportRay{
+                .origin = kb::scene::Vec3{ 6.0F, 0.0F, -8.0F },
+                .direction = kb::scene::Vec3{ 0.0F, 0.0F, 1.0F },
+            });
+
+    kb::editor::tests::Require(
+        pick.IsValid() && pick.entity == child,
+        "Viewport picker should hit a nested mesh at its world position after its root moves");
+}
+
+void RunViewportMeshPickerSkipsHiddenMeshesTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity hidden = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Hidden Mesh" });
+    const kb::scene::SceneEntity visible = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Visible Mesh" });
+    scene.Components().MeshRenderers().Set(
+        hidden, kb::scene::MeshRendererComponent{ .meshAssetId = 405U });
+    scene.Components().MeshRenderers().Set(
+        visible, kb::scene::MeshRendererComponent{ .meshAssetId = 406U });
+    scene.Components().Visibility().Set(
+        hidden, kb::scene::VisibilityComponent{ .visible = false });
+    scene.Transforms().Set(
+        hidden,
+        kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F },
+        });
+    scene.Transforms().Set(
+        visible,
+        kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 5.0F },
+        });
+
+    const kb::editor::EditorSceneViewportPickResult pick =
+        kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+            scene,
+            kb::editor::EditorSceneViewportRay{
+                .origin = kb::scene::Vec3{ 0.0F, 0.0F, -8.0F },
+                .direction = kb::scene::Vec3{ 0.0F, 0.0F, 1.0F },
+            });
+
+    kb::editor::tests::Require(
+        pick.IsValid() && pick.entity == visible,
+        "Viewport picker should ignore a hidden mesh in front of a visible mesh");
+}
+
 kb::editor::EditorSceneViewportRay BuildViewportRay(
     const kb::editor::EditorViewportCameraState& camera,
     const RECT& renderArea,
@@ -1222,6 +1293,43 @@ void RunViewportParticleIconPickerSelectsParticleEffectTest() {
         "Viewport picker should select the visible particle icon with the same forgiving target as light icons");
 }
 
+void RunViewportBoxPickerIncludesVisibleComponentOverlaysTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity light = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Box Selected Light" });
+    const kb::scene::SceneEntity particle = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Box Selected Particle" });
+    scene.Components().Lights().Set(light, kb::scene::LightComponent{});
+    scene.Components().ParticleEffects().Set(
+        particle,
+        kb::scene::ParticleEffectComponent{ .effectAssetId = 100U });
+
+    const kb::editor::EditorViewportCameraState camera;
+    const kb::editor::EditorViewportCameraAxes axes = camera.Axes();
+    const kb::scene::Vec3 center = axes.position + axes.forward * 5.0F;
+    scene.Transforms().Set(
+        light,
+        kb::scene::TransformComponent{
+            .localPosition = center - axes.right * 0.5F,
+        });
+    scene.Transforms().Set(
+        particle,
+        kb::scene::TransformComponent{
+            .localPosition = center + axes.right * 0.5F,
+        });
+
+    const RECT renderArea{0, 0, 960, 540};
+    const std::vector<kb::scene::SceneEntity> picked =
+        kb::editor::EditorSceneViewportMeshPicker::PickInsideRect(
+            scene, camera, renderArea, RECT{400, 220, 560, 320});
+    kb::editor::tests::Require(
+        std::ranges::find(picked, light) != picked.end(),
+        "Viewport box picker should include a visible light overlay");
+    kb::editor::tests::Require(
+        std::ranges::find(picked, particle) != picked.end(),
+        "Viewport box picker should include a visible particle overlay");
+}
+
 void RunEditorBackendSelectionTest() {
     constexpr std::array supported{
         bgfx::RendererType::Direct3D12,
@@ -1399,9 +1507,12 @@ void RunEditorViewportPreviewTests() {
     RunViewportCameraOrbitTest();
     RunViewportCameraTrackDirectionTest();
     RunViewportMeshPickerNearestMeshRendererTest();
+    RunViewportMeshPickerUsesSynchronizedWorldTransformsTest();
+    RunViewportMeshPickerSkipsHiddenMeshesTest();
     RunViewportLightWireframePickerChoosesNestedInnerWireframeTest();
     RunViewportLightIconPickerSelectsLightIconsTest();
     RunViewportParticleIconPickerSelectsParticleEffectTest();
+    RunViewportBoxPickerIncludesVisibleComponentOverlaysTest();
     RunViewportMeshPickerWinsInsideLightWireframeVolumeTest();
     RunRenderBackendSettingsTest();
     RunEditorBackendSelectionTest();

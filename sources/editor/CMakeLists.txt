@@ -95,7 +95,7 @@ add_executable(kb_editor WIN32
     src/app/scene_viewport/gizmo/EditorSceneViewportGizmoToolBehavior.cpp
     src/app/scene_viewport/EditorSceneViewportHitResolver.cpp
     src/app/scene_viewport/EditorSceneViewportMath.cpp
-    src/app/scene_viewport/EditorSceneViewportMeshDragPreview.cpp
+    src/app/scene_viewport/EditorSceneViewportAssetDragPreview.cpp
     src/app/scene_viewport/EditorSceneViewportMeshPicker.cpp
     src/app/scene_viewport/EditorSceneViewportObjectInteraction.cpp
     src/app/scene_viewport/EditorSceneViewportSelectionController.cpp
@@ -366,7 +366,7 @@ add_executable(kb_editor WIN32
     src/private/app/scene_viewport/gizmo/EditorSceneViewportGizmoTargetResolver.hpp
     src/private/app/scene_viewport/gizmo/EditorSceneViewportGizmoToolBehavior.hpp
     src/private/app/scene_viewport/EditorSceneViewportHitResolver.hpp
-    src/private/app/scene_viewport/EditorSceneViewportMeshDragPreview.hpp
+    src/private/app/scene_viewport/EditorSceneViewportAssetDragPreview.hpp
     src/private/app/scene_viewport/EditorSceneViewportMeshPicker.hpp
     src/private/app/scene_viewport/EditorSceneViewportObjectInteraction.hpp
     src/private/app/scene_viewport/EditorSceneViewportSelectionController.hpp
