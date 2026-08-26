@@ -97,6 +97,7 @@ scenario-local aliases.
 | `create_entity` | `id`; optional `name` |
 | `create_mesh_entity` | `id`, `asset` alias or virtual path |
 | `create_particle_effect_entity` | `id`, `asset` alias or virtual path |
+| `assert_particle_scene_empty` | Verifies the editor scene has no live particle instances and its latest render snapshot contains no emitters or particles. |
 | `duplicate_entity` | `entity`, result `id`; optional `name` |
 | `delete_entity` | `entity` |
 | `rename_entity` | `entity`, `name`; uses the production Hierarchy rename transaction |

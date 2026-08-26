@@ -97,6 +97,7 @@ using inspector_panel_rows::DrawBoolRow;
 using inspector_panel_rows::DrawFieldRow;
 using inspector_panel_rows::DrawRotationRow;
 using inspector_panel_rows::DrawSectionHeader;
+using inspector_panel_rows::DrawSectionCardOutline;
 using inspector_panel_rows::DrawValueBox;
 using inspector_panel_rows::DrawVec3Row;
 using inspector_panel_rows::DisplayField;
@@ -840,11 +841,13 @@ void DrawMeshPreviewToolbar(HDC dc, RECT toolbar, const EditorTheme& theme, cons
         return y;
     }
 
+    const int sectionTop = y;
     const EditorTexturePreviewImage* image = EditorTexturePreviewService::PreviewFor(metadata);
     const RECT header = Rect(content.left, y, content.right, y + kSectionHeaderHeight);
     DrawSectionHeader(dc, header, theme, inspector, InspectorSectionId::Details, HeroIconKind::Eye, "Details");
     y += kSectionHeaderHeight;
     if (inspector.IsCollapsed(InspectorSectionId::Details)) {
+        DrawSectionCardOutline(dc, Rect(content.left, sectionTop, content.right, y), theme);
         return y + kSectionGap;
     }
 
@@ -861,7 +864,9 @@ void DrawMeshPreviewToolbar(HDC dc, RECT toolbar, const EditorTheme& theme, cons
         const ScopedGdiObject selectedFont(dc, font.handle);
         Text(dc, frame, "Texture preview unavailable", Color(theme.textDisabled), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
-    return frame.bottom + 10 + kSectionGap;
+    const int sectionBottom = frame.bottom + 10;
+    DrawSectionCardOutline(dc, Rect(content.left, sectionTop, content.right, sectionBottom), theme);
+    return sectionBottom + kSectionGap;
 }
 
 [[nodiscard]] std::string FormatValidationIssue(const EditorMeshValidationIssue& issue) {
@@ -1264,10 +1269,12 @@ void DrawTelemetryRow(
     const InspectorPanelState& inspector,
     const EditorSceneContext& sceneContext,
     const kb::assets::AssetMetadata& metadata) {
+    const int sectionTop = y;
     const EditorMaterialPreviewTelemetry telemetry = MaterialPreviewTelemetryFor(sceneContext, metadata);
     DrawSectionHeader(dc, Rect(content.left, y, content.right, y + kSectionHeaderHeight), theme, inspector, InspectorSectionId::MaterialPreview, HeroIconKind::Eye, "Preview");
     y += kSectionHeaderHeight;
     if (inspector.IsCollapsed(InspectorSectionId::MaterialPreview)) {
+        DrawSectionCardOutline(dc, Rect(content.left, sectionTop, content.right, y), theme);
         return y + kSectionGap;
     }
 
@@ -1302,6 +1309,7 @@ void DrawTelemetryRow(
     for (std::size_t index = 0; index < shown; ++index) {
         DrawTelemetryRow(dc, content, y, theme, inspector, index == 0U ? "Diagnostic" : "", telemetry.missingTextures[index]);
     }
+    DrawSectionCardOutline(dc, Rect(content.left, sectionTop, content.right, y), theme);
     return y + kSectionGap;
 }
 
