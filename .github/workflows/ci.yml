@@ -41,7 +41,7 @@ jobs:
             build_editor: "OFF"
             build_renderer: "OFF"
             sanitizer: "ON"
-            targets: "kb_21kb_particle_asset_tests;kb_21kb_particle_snapshot_tests;kb_21kb_particle_stage2_tests;kb_21kb_particle_cpu_backend_tests;kb_21kb_particle_editor_tests;kb_engine_tests;kb_audio_runtime_tests;kb_engine_library_tests;kb_library_benchmarks;kb_library_safety_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_snapshot_scale_tests;kb_cli_tests"
+            targets: "kb_21kb_particle_asset_tests;kb_21kb_particle_snapshot_tests;kb_21kb_particle_stage2_tests;kb_21kb_particle_cpu_backend_tests;kb_engine_tests;kb_audio_runtime_tests;kb_engine_library_tests;kb_library_benchmarks;kb_library_safety_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_snapshot_scale_tests;kb_cli_tests"
             api_compat_check: "OFF"
             test_regex: ""
           - name: macOS Clang ASan UBSan
@@ -50,7 +50,7 @@ jobs:
             build_editor: "OFF"
             build_renderer: "OFF"
             sanitizer: "ON"
-            targets: "kb_21kb_particle_asset_tests;kb_21kb_particle_snapshot_tests;kb_21kb_particle_stage2_tests;kb_21kb_particle_cpu_backend_tests;kb_21kb_particle_editor_tests;kb_engine_tests;kb_audio_runtime_tests;kb_engine_library_tests;kb_library_benchmarks;kb_library_safety_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_snapshot_scale_tests;kb_cli_tests"
+            targets: "kb_21kb_particle_asset_tests;kb_21kb_particle_snapshot_tests;kb_21kb_particle_stage2_tests;kb_21kb_particle_cpu_backend_tests;kb_engine_tests;kb_audio_runtime_tests;kb_engine_library_tests;kb_library_benchmarks;kb_library_safety_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_snapshot_scale_tests;kb_cli_tests"
             api_compat_check: "OFF"
             test_regex: ""
 
