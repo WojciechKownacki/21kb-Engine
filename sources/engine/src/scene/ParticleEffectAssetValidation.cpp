@@ -290,16 +290,18 @@ ParticleEffectValidationResult ParticleEffectAssetValidator::ValidateStructure(c
                         if (!Finite(payload.acceleration))
                             Add(result, ParticleEffectDiagnosticCode::InvalidValue, path + ".acceleration",
                                 "acceleration must be finite", emitter.emitterId, module.moduleId);
-                        if constexpr (std::is_same_v<T, ParticleGravityModule>)
-                            if (!Finite(payload.sceneGravityScale))
+                        if constexpr (std::is_same_v<T, ParticleGravityModule>) {
+                            if (!Finite(payload.sceneGravityScale)) {
                                 Add(result, ParticleEffectDiagnosticCode::InvalidValue, path + ".sceneGravityScale",
                                     "gravity scale must be finite", emitter.emitterId, module.moduleId);
-                            else if ((payload.acceleration.x != 0.0F || payload.acceleration.y != 0.0F ||
-                                      payload.acceleration.z != 0.0F) &&
-                                     payload.sceneGravityScale != 0.0F)
+                            } else if ((payload.acceleration.x != 0.0F || payload.acceleration.y != 0.0F ||
+                                       payload.acceleration.z != 0.0F) &&
+                                      payload.sceneGravityScale != 0.0F) {
                                 Add(result, ParticleEffectDiagnosticCode::InvalidValue, path + ".gravity",
                                     "custom acceleration and scene gravity scale are mutually exclusive",
                                     emitter.emitterId, module.moduleId);
+                            }
+                        }
                     } else if constexpr (std::is_same_v<T, ParticleDragModule>) {
                         if (!Finite(payload.coefficient) || payload.coefficient < 0.0F)
                             Add(result, ParticleEffectDiagnosticCode::InvalidValue, path + ".coefficient",
