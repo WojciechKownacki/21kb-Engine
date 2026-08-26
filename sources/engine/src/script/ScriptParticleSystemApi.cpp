@@ -47,7 +47,10 @@ ScriptFunctionCallResult Error(std::string message) {
     case kb::particles::ParticleRuntimeStatus::BackendAlreadyRegistered: return "particle simulation backend is already registered";
     case kb::particles::ParticleRuntimeStatus::UnsupportedOutput: return "particle effect output is unsupported";
     case kb::particles::ParticleRuntimeStatus::InvalidRequest: return "particle runtime request is invalid";
-    case kb::particles::ParticleRuntimeStatus::Success: break;
+    case kb::particles::ParticleRuntimeStatus::Success:
+    case kb::particles::ParticleRuntimeStatus::Restarted:
+    case kb::particles::ParticleRuntimeStatus::StaleAfterInvalidReload:
+        break;
     }
     return "particle runtime request failed";
 }
