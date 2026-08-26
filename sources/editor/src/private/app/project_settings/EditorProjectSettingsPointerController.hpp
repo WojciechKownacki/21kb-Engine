@@ -11,7 +11,6 @@
 namespace kb::editor {
 
 class EditorSceneContext;
-class EditorRenderBackendSettings;
 
 #if defined(_WIN32)
 // Routes clicks and hover inside the Project Settings panel content to the
@@ -22,7 +21,6 @@ public:
 
     // Returns true when the click mutated a setting and the panel should repaint.
     [[nodiscard]] bool HandlePointerDown(const RECT& content, int x, int y);
-    [[nodiscard]] bool HandlePointerDown(const RECT& content, int x, int y, EditorRenderBackendSettings& renderBackendSettings);
 
     // Hover tracking for the open dropdown list. Returns true when the hovered
     // option changed (so the caller can repaint).

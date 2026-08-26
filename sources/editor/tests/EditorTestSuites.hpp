@@ -13,6 +13,7 @@ void RunEditorViewportPreviewTests();
 void RunEditorMaterialGraphCookServiceTests();
 void RunEditorDockingTests();
 void RunEditorProjectTests();
+void RunEditorSettingsTests();
 void RunEditorInspectorTests();
 void RunEditorMaterialAssetAuthoringTests();
 void RunEditorMaterialGraphCanvasTests();

@@ -23,6 +23,7 @@
 #include "scene/EditorHierarchySelectionState.hpp"
 #include "scene/EditorPluginsState.hpp"
 #include "scene/EditorProjectSettingsState.hpp"
+#include "settings/EditorSettingsState.hpp"
 #include "scene/EditorScriptEditorState.hpp"
 #include "scene/EditorSceneObjectEditTypes.hpp"
 #include "scene/EditorSceneDocumentIdentity.hpp"
@@ -107,6 +108,8 @@ struct TerrainLayerPaintSettings;
 } // namespace kb::terrain_editor
 
 namespace kb::editor {
+
+class EditorRenderBackendSettings;
 
 enum class PhysicsComponentKind; // inspection/InspectorPhysicsModel.hpp
 class EditorSceneCommandController;
@@ -238,6 +241,8 @@ public:
     [[nodiscard]] const EditorSceneGizmoState& Gizmo() const noexcept;
     [[nodiscard]] EditorProjectSettingsState& ProjectSettings() noexcept;
     [[nodiscard]] const EditorProjectSettingsState& ProjectSettings() const noexcept;
+    [[nodiscard]] EditorSettingsState& EditorSettings() noexcept;
+    [[nodiscard]] const EditorSettingsState& EditorSettings() const noexcept;
     [[nodiscard]] EditorPluginsState& Plugins() noexcept;
     [[nodiscard]] const EditorPluginsState& Plugins() const noexcept;
     [[nodiscard]] EditorScriptEditorState& ScriptEditor() noexcept;
@@ -253,6 +258,11 @@ public:
     [[nodiscard]] bool SceneDocumentDirty() const noexcept;
     [[nodiscard]] bool TickAutosave(double elapsedSeconds, bool saveEligible);
     [[nodiscard]] const EditorAutosaveState& Autosave() const noexcept;
+    [[nodiscard]] EditorWorkspacePreferences CaptureEditorWorkspacePreferences() const noexcept;
+    [[nodiscard]] bool LoadEditorSettings(EditorRenderBackendSettings& renderer);
+    [[nodiscard]] bool CommitEditorSettings(
+        const EditorWorkspacePreferences& preferences,
+        const EditorRenderBackendSettings& renderer);
     void MarkSceneRenderDirty() noexcept;
     void MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity> entities);
     void AcknowledgeSceneRenderSubmitted() noexcept;
@@ -1299,6 +1309,7 @@ private:
     std::optional<kb::render::RenderMaterialAssetData> materialNodePreviewWorkingCopy_;
     bool materialPreviewNodePreviewEnabled_ = false;
     EditorProjectSettingsState projectSettings_;
+    EditorSettingsState editorSettings_;
     EditorPluginsState plugins_;
     bool particleProviderMigrationResolved_ = false;
     EditorScriptEditorState scriptEditor_;

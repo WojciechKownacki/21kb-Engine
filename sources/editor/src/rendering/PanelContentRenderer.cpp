@@ -15,6 +15,7 @@
 #include "rendering/PluginsPanelRenderer.hpp"
 #include "rendering/ProjectFilesPanelRenderer.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
+#include "rendering/EditorSettingsPanelRenderer.hpp"
 #include "rendering/ScriptEditorPanelRenderer.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
@@ -357,7 +358,10 @@ void PanelContentRenderer::Paint(
         ScenePanelContentRenderer{}.Paint(dc, content, panel, theme, sceneContext, renderBackendSettings, sceneViewport, sceneViewportHost);
         break;
     case DockPanelKind::ProjectSettings:
-        ProjectSettingsPanelRenderer{}.Paint(dc, content, theme, sceneContext, renderBackendSettings);
+        ProjectSettingsPanelRenderer{}.Paint(dc, content, theme, sceneContext);
+        break;
+    case DockPanelKind::EditorSettings:
+        EditorSettingsPanelRenderer{}.Paint(dc, content, theme, sceneContext, renderBackendSettings);
         break;
     case DockPanelKind::Plugins:
         PluginsPanelRenderer{}.Paint(dc, content, theme, sceneContext);
