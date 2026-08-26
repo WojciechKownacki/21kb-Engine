@@ -36,11 +36,14 @@ struct EditorPointerDragState {
     bool assetAssignsMaterial = false;
     bool assetAssignsMaterialGraph = false;
     bool assetAssignsTexture = false;
-    kb::scene::SceneEntity meshScenePreview{};
+    kb::scene::SceneEntity scenePlacementPreview{};
+    std::vector<kb::scene::SceneEntity> scenePlacementPreviousSelection{};
+    kb::assets::AssetId scenePlacementPreviousAssetSelection{};
     kb::assets::AssetId materialGraphAssetId{};
     MaterialEditorGraphMenuCommand materialGraphCommand = MaterialEditorGraphMenuCommand::None;
-    bool meshScenePreviewCommitted = false;
-    bool meshPreviewUpdatePending = false;
+    bool scenePlacementPreviousSelectionCaptured = false;
+    bool scenePlacementPreviewCommitted = false;
+    bool scenePlacementPreviewUpdatePending = false;
     void* dragSourceWindow = nullptr;
     bool overlayDirty = false;
     bool dragging = false;
@@ -55,6 +58,10 @@ struct EditorPointerDragState {
 
     [[nodiscard]] bool Potential() const noexcept {
         return kind != EditorPointerDragKind::None;
+    }
+
+    [[nodiscard]] bool CreatesScenePlacement() const noexcept {
+        return assetInstantiatesPrefab || assetCreatesMeshEntity || assetCreatesParticleEffectEntity;
     }
 
     void Clear() {
@@ -75,11 +82,14 @@ struct EditorPointerDragState {
         assetAssignsMaterial = false;
         assetAssignsMaterialGraph = false;
         assetAssignsTexture = false;
-        meshScenePreview = {};
+        scenePlacementPreview = {};
+        scenePlacementPreviousSelection.clear();
+        scenePlacementPreviousAssetSelection = {};
         materialGraphAssetId = {};
         materialGraphCommand = MaterialEditorGraphMenuCommand::None;
-        meshScenePreviewCommitted = false;
-        meshPreviewUpdatePending = false;
+        scenePlacementPreviousSelectionCaptured = false;
+        scenePlacementPreviewCommitted = false;
+        scenePlacementPreviewUpdatePending = false;
         dragSourceWindow = nullptr;
         overlayDirty = false;
         dragging = false;
