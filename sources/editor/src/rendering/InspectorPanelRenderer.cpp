@@ -142,15 +142,15 @@ using inspector_panel_rows::SectionWriter;
     }
 }
 
-constexpr int kHeaderHeight = 62;
-constexpr int kHeaderIcon = 36;
-constexpr int kHeaderPad = 8;
-constexpr int kPanelPadTop = 10;
+constexpr int kHeaderHeight = 72;
+constexpr int kHeaderIcon = 40;
+constexpr int kHeaderPad = 10;
+constexpr int kPanelPadTop = 12;
 constexpr int kSectionGap = 8;
-constexpr int kSectionHeaderHeight = 24;
-constexpr int kFieldRowHeight = 24;
-constexpr int kValueHeight = 20;
-constexpr int kRowPadX = 16;
+constexpr int kSectionHeaderHeight = 28;
+constexpr int kFieldRowHeight = 26;
+constexpr int kValueHeight = 22;
+constexpr int kRowPadX = 14;
 constexpr int kAxisLetterWidth = 11;
 constexpr int kAxisGap = 6;
 constexpr int kLaneGap = 5;
@@ -166,7 +166,7 @@ constexpr std::size_t kMaterialPreviewMaxMissingRows = 2U;
 constexpr int kMeshPreviewToolbarHeight = 30;
 constexpr int kMeshPreviewToolbarButtonSize = 22;
 constexpr int kMeshPreviewToolbarButtonGap = 4;
-constexpr int kAddComponentButtonHeight = 24;
+constexpr int kAddComponentButtonHeight = 34;
 constexpr int kAddComponentBrowserWidth = 240;
 constexpr int kAddComponentBrowserMaxHeight = 300;
 constexpr int kAddComponentSearchHeight = 24;
@@ -276,8 +276,14 @@ constexpr std::array<InspectorRowDefinition, 2> kUIDocumentRows{ {
 }
 
 [[nodiscard]] COLORREF HoverFill(const EditorTheme& theme) noexcept {
-    static_cast<void>(theme);
-    return Rgb(34, 38, 45);
+    const COLORREF panel = Color(theme.panel);
+    const COLORREF accent = Color(theme.accent);
+    constexpr int accentPercent = 9;
+    constexpr int panelPercent = 100 - accentPercent;
+    return RGB(
+        (GetRValue(panel) * panelPercent + GetRValue(accent) * accentPercent) / 100,
+        (GetGValue(panel) * panelPercent + GetGValue(accent) * accentPercent) / 100,
+        (GetBValue(panel) * panelPercent + GetBValue(accent) * accentPercent) / 100);
 }
 
 // COLORREF a mixed `percentB`% toward b — matches ProjectFilesPanelDrawing::Blend,
@@ -323,8 +329,13 @@ constexpr std::array<InspectorRowDefinition, 2> kUIDocumentRows{ {
 }
 
 [[nodiscard]] RECT ContentViewportRect(RECT content, bool reserveScrollbar) noexcept {
+    content.left += 8;
+    content.right -= 8;
     if (reserveScrollbar) {
         content.right -= kScrollbarWidth + 4;
+    }
+    if (content.right < content.left) {
+        content.right = content.left;
     }
     return content;
 }
@@ -398,9 +409,8 @@ void DrawDivider(HDC dc, int left, int right, int y) {
 }
 
 [[nodiscard]] RECT AddComponentButtonRect(RECT content, int y) noexcept {
-    const int width = std::min<int>(240, std::max<int>(120, static_cast<int>(content.right - content.left) - 32));
-    const int left = content.left + std::max(16, (static_cast<int>(content.right - content.left) - width) / 2);
-    return Rect(left, y, left + width, y + kAddComponentButtonHeight);
+    const int inset = std::min<int>(10, std::max<int>(0, static_cast<int>(content.right - content.left) / 8));
+    return Rect(content.left + inset, y, content.right - inset, y + kAddComponentButtonHeight);
 }
 
 [[nodiscard]] RECT AddComponentBrowserRect(RECT content, int y) noexcept {
@@ -572,10 +582,28 @@ void DrawAddComponent(HDC dc, RECT content, const EditorTheme& theme, const Insp
     const RECT button = AddComponentButtonRect(content, y);
     const bool buttonActive = inspector.IsAddComponentBrowserOpen() ||
         inspector.IsHovered(InspectorHitKind::TextField, InspectorSectionId::AddComponent, InspectorPropertyId::AddComponentButton);
-    DrawFrame(dc, button, buttonActive ? HoverFill(theme) : Color(theme.chrome), Color(theme.borderPanel));
-    ScopedFont font(12, FW_NORMAL);
+    DrawFrame(
+        dc,
+        button,
+        buttonActive ? HoverFill(theme) : Color(theme.chrome),
+        buttonActive ? Color(theme.accent) : Color(theme.borderPanel));
+    const int glyphWidth = 18;
+    const int textWidth = 108;
+    const int groupLeft = button.left + std::max(0, (RectWidth(button) - glyphWidth - textWidth) / 2);
+    HeroIconPainter::Draw(
+        dc,
+        Rect(groupLeft, CenteredY(button, glyphWidth), groupLeft + glyphWidth, CenteredY(button, glyphWidth) + glyphWidth),
+        HeroIconKind::Plus,
+        Color(buttonActive ? theme.textPrimary : theme.accent),
+        2);
+    ScopedFont font(12, FW_SEMIBOLD);
     const ScopedGdiObject selectedFont(dc, font.handle);
-    Text(dc, button, "Add Component", Color(theme.textPrimary), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    Text(
+        dc,
+        Rect(groupLeft + glyphWidth + 8, button.top, groupLeft + glyphWidth + 8 + textWidth, button.bottom),
+        "Add Component",
+        Color(buttonActive ? theme.textPrimary : theme.textSecondary),
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 }
 
 [[nodiscard]] std::optional<std::filesystem::path> ResolveAssetPhysicalPath(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata) {
@@ -851,13 +879,16 @@ void DrawMeshPreviewToolbar(HDC dc, RECT toolbar, const EditorTheme& theme, cons
 void DrawHeader(HDC dc, RECT content, const EditorTheme& theme, HeroIconKind icon, std::string_view title, std::string_view subtitle) {
     RECT header = Rect(content.left, content.top, content.right, content.top + kHeaderHeight);
     GdiDrawing::FillRectColor(dc, header, Color(theme.panel));
+    GdiDrawing::FillRectColor(dc, Rect(header.left, header.top, header.left + 3, header.bottom), Color(theme.accent));
+    GdiDrawing::FillRectColor(dc, Rect(header.left, header.bottom - 1, header.right, header.bottom), Color(theme.borderChrome));
 
     RECT iconCell = Rect(header.left + kHeaderPad, header.top + kHeaderPad, header.left + kHeaderPad + kHeaderIcon, header.top + kHeaderPad + kHeaderIcon);
-    HeroIconPainter::Draw(dc, Shrink(iconCell, 4, 4, 4, 4), icon, Color(theme.textPrimary), 2);
+    DrawFrame(dc, iconCell, Color(theme.chrome), Color(theme.borderPanel));
+    HeroIconPainter::Draw(dc, Shrink(iconCell, 8, 8, 8, 8), icon, Color(theme.textPrimary), 2);
 
-    RECT titleRect = Rect(iconCell.right + 10, header.top + 8, header.right - 12, header.top + 32);
-    RECT subtitleRect = Rect(iconCell.right + 10, titleRect.bottom, header.right - 12, header.bottom - 8);
-    ScopedFont titleFont(14, FW_SEMIBOLD);
+    RECT titleRect = Rect(iconCell.right + 12, header.top + 11, header.right - 12, header.top + 37);
+    RECT subtitleRect = Rect(iconCell.right + 12, titleRect.bottom, header.right - 12, header.bottom - 10);
+    ScopedFont titleFont(15, FW_SEMIBOLD);
     {
         const ScopedGdiObject selectedFont(dc, titleFont.handle);
         Text(dc, titleRect, title, Color(theme.textPrimary));
@@ -4240,7 +4271,7 @@ void InspectorPanelRenderer::Paint(
     const int savedDc = SaveDC(dc);
     IntersectClipRect(dc, content.left, content.top, content.right, content.bottom);
 
-    GdiDrawing::FillRectColor(dc, content, Color(theme.panel));
+    GdiDrawing::FillRectColor(dc, content, Color(theme.background));
     const int maxScroll = MaxScrollOffset(content, sceneContext);
     const bool scrollable = maxScroll > 0;
     const int scroll = std::clamp(sceneContext.Inspector().ScrollOffset(), 0, maxScroll);
@@ -4257,8 +4288,8 @@ void InspectorPanelRenderer::Paint(
         if (scrollable) {
             const RECT track = ScrollbarTrackRect(content);
             const RECT thumb = ScrollbarThumbRect(content, sceneContext);
-            DrawFrame(dc, track, Rgb(18, 20, 24), Rgb(38, 43, 50));
-            DrawFrame(dc, thumb, sceneContext.Inspector().IsScrollbarDragging() ? Rgb(104, 116, 130) : Rgb(76, 86, 98), Rgb(94, 105, 118));
+            DrawFrame(dc, track, Color(theme.chrome), Color(theme.borderChrome));
+            DrawFrame(dc, thumb, sceneContext.Inspector().IsScrollbarDragging() ? Color(theme.accent) : Color(theme.borderPanel), Color(theme.borderPanel));
         }
         RestoreDC(dc, savedDc);
         return;
@@ -4271,8 +4302,8 @@ void InspectorPanelRenderer::Paint(
         if (scrollable) {
             const RECT track = ScrollbarTrackRect(content);
             const RECT thumb = ScrollbarThumbRect(content, sceneContext);
-            DrawFrame(dc, track, Rgb(18, 20, 24), Rgb(38, 43, 50));
-            DrawFrame(dc, thumb, sceneContext.Inspector().IsScrollbarDragging() ? Rgb(104, 116, 130) : Rgb(76, 86, 98), Rgb(94, 105, 118));
+            DrawFrame(dc, track, Color(theme.chrome), Color(theme.borderChrome));
+            DrawFrame(dc, thumb, sceneContext.Inspector().IsScrollbarDragging() ? Color(theme.accent) : Color(theme.borderPanel), Color(theme.borderPanel));
         }
         RestoreDC(dc, savedDc);
         return;
@@ -4289,8 +4320,8 @@ void InspectorPanelRenderer::Paint(
     if (scrollable) {
         const RECT track = ScrollbarTrackRect(content);
         const RECT thumb = ScrollbarThumbRect(content, sceneContext);
-        DrawFrame(dc, track, Rgb(18, 20, 24), Rgb(38, 43, 50));
-        DrawFrame(dc, thumb, sceneContext.Inspector().IsScrollbarDragging() ? Rgb(104, 116, 130) : Rgb(76, 86, 98), Rgb(94, 105, 118));
+        DrawFrame(dc, track, Color(theme.chrome), Color(theme.borderChrome));
+        DrawFrame(dc, thumb, sceneContext.Inspector().IsScrollbarDragging() ? Color(theme.accent) : Color(theme.borderPanel), Color(theme.borderPanel));
     }
     RestoreDC(dc, savedDc);
 }

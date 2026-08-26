@@ -55,7 +55,7 @@ void DrawBreadcrumb(HDC dc, RECT rect, const EditorTheme& theme, const std::file
 
 void DrawSearch(HDC dc, RECT rect, const EditorTheme& theme, const EditorAssetBrowserState& state) {
     const COLORREF border = state.IsSearchFocused() ? Draw::Blend(Draw::Color(theme.textSecondary), Draw::Color(theme.accent), 28) : Draw::Color(theme.borderPanel);
-    GdiDrawing::DrawSharpFrame(dc, rect, RGB(18, 20, 24), border);
+    GdiDrawing::DrawSharpFrame(dc, rect, Draw::Color(theme.chrome), border);
     RECT accent{ rect.left + 1, rect.top + 5, rect.left + 3, rect.bottom - 5 };
     if (state.IsSearchFocused() || !state.SearchQuery().empty()) {
         GdiDrawing::FillRectColor(dc, accent, Draw::Color(theme.accent));
