@@ -214,6 +214,15 @@ void CpuParticleBackend::Warmup() {
     particlePrewarmGroups_.reserve(kb::scene::kParticleEffectMaxCpuParticlesPerScene);
     renderEmitterScratch_.resize(kb::particles::kParticleRenderSnapshotMaxEmitterRecords);
     renderParticleScratch_.reserve(4'096U);
+    constexpr std::size_t renderGroupCount = kb::scene::kParticleEffectMaxInstancesPerScene *
+        kb::scene::kParticleEffectMaxEmitters;
+    renderGroupCounts_.resize(renderGroupCount);
+    renderGroupWriteOffsets_.resize(renderGroupCount);
+    renderGroupRecordIndices_.resize(renderGroupCount);
+    renderRejectedByCapacity_.resize(renderGroupCount);
+    renderRejectedBySpawnBudget_.resize(renderGroupCount);
+    renderRejectedByEventBudget_.resize(renderGroupCount);
+    collisionEventsThisStep_.resize(renderGroupCount * kb::scene::kParticleEffectMaxModulesPerEmitter);
     warmedUp_ = true;
 }
 
@@ -577,9 +586,9 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Emit(
     }
     if (count == 0U) return Result(kb::particles::ParticleRuntimeStatus::InvalidRequest, instanceId);
     stepTelemetry_ = {};
-    renderRejectedByCapacity_.fill(0U);
-    renderRejectedBySpawnBudget_.fill(0U);
-    renderRejectedByEventBudget_.fill(0U);
+    std::fill(renderRejectedByCapacity_.begin(), renderRejectedByCapacity_.end(), 0U);
+    std::fill(renderRejectedBySpawnBudget_.begin(), renderRejectedBySpawnBudget_.end(), 0U);
+    std::fill(renderRejectedByEventBudget_.begin(), renderRejectedByEventBudget_.end(), 0U);
     eventQueueOverflowed_ = false;
     eventActionBudgetExceeded_ = false;
     stepTelemetry_.requestedSpawns = count;
@@ -626,9 +635,9 @@ kb::particles::ParticleRuntimeResult CpuParticleBackend::Step(
     RefreshCompiledEffects(scene);
     ProcessOwnerLifecycle(scene);
     stepTelemetry_ = {};
-    renderRejectedByCapacity_.fill(0U);
-    renderRejectedBySpawnBudget_.fill(0U);
-    renderRejectedByEventBudget_.fill(0U);
+    std::fill(renderRejectedByCapacity_.begin(), renderRejectedByCapacity_.end(), 0U);
+    std::fill(renderRejectedBySpawnBudget_.begin(), renderRejectedBySpawnBudget_.end(), 0U);
+    std::fill(renderRejectedByEventBudget_.begin(), renderRejectedByEventBudget_.end(), 0U);
     BeginEventStep();
     std::uint32_t remainingSpawnBudget = kb::scene::kParticleEffectMaxSpawnsPerStep;
     for (std::uint32_t denseIndex = 0U; denseIndex < denseInstanceCount_; ++denseIndex) {
@@ -1593,7 +1602,7 @@ void CpuParticleBackend::BeginEventStep() noexcept {
     }
     eventQueueOverflowed_ = false;
     eventActionBudgetExceeded_ = false;
-    collisionEventsThisStep_.fill(0U);
+    std::fill(collisionEventsThisStep_.begin(), collisionEventsThisStep_.end(), 0U);
     for (std::uint32_t denseIndex = 0U; denseIndex < denseInstanceCount_; ++denseIndex) {
         instanceRuntime_[denseIndex].bindingEventsThisStep.fill(0U);
     }
@@ -1647,7 +1656,7 @@ void CpuParticleBackend::CapturePreviousParticlePositions() noexcept {
 kb::particles::ParticleRenderSnapshotResult CpuParticleBackend::PublishRenderSnapshot(
     kb::scene::Scene& scene,
     std::uint64_t fixedStepIndex) noexcept {
-    renderGroupCounts_.fill(0U);
+    std::fill(renderGroupCounts_.begin(), renderGroupCounts_.end(), 0U);
     for (std::size_t particleIndex = 0U; particleIndex < particleInstanceIds_.size(); ++particleIndex) {
         const std::uint32_t denseIndex = ResolveDenseIndex(particleInstanceIds_[particleIndex]);
         if (denseIndex == kInvalidDenseIndex) {
