@@ -168,6 +168,15 @@ function(kb_apply_quality_gates target_name)
                 message(FATAL_ERROR "KB_ENABLE_SANITIZERS requires MSVC AddressSanitizer libraries and runtime DLL; set KB_MSVC_ASAN_RUNTIME_DIR, KB_MSVC_STL_ASAN_RUNTIME_DIR, and KB_MSVC_ASAN_DYNAMIC_RUNTIME.")
             endif()
             target_compile_options(${target_name} PRIVATE /fsanitize=address /Zi)
+            # The vendored bgfx/bimg archives are intentionally not rebuilt with
+            # project sanitizer flags. Keep the MSVC STL annotation ABI uniform
+            # across first-party and vendor objects while retaining ASan for the
+            # first-party code under test.
+            target_compile_definitions(${target_name} PRIVATE
+                _DISABLE_STRING_ANNOTATION
+                _DISABLE_VECTOR_ANNOTATION
+                _DISABLE_OPTIONAL_ANNOTATION
+            )
             target_link_options(${target_name} PRIVATE /INCREMENTAL:NO)
             target_link_directories(${target_name} PRIVATE "${KB_MSVC_ASAN_RUNTIME_DIR}")
             target_link_directories(${target_name} PRIVATE "${KB_MSVC_STL_ASAN_RUNTIME_DIR}")

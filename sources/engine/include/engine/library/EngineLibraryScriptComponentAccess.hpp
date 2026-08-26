@@ -28,6 +28,7 @@
 #include "engine/scene/FacingPanelComponent.hpp"
 #include "engine/scene/SpaceStrokeComponent.hpp"
 #include "engine/scene/HistoryRibbonComponent.hpp"
+#include "engine/scene/ParticleEffectComponent.hpp"
 #include "engine/scene/LensEchoComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
@@ -45,6 +46,7 @@
 #include "engine/scene/SceneFacingPanelComponents.hpp"
 #include "engine/scene/SceneSpaceStrokeComponents.hpp"
 #include "engine/scene/SceneHistoryRibbonComponents.hpp"
+#include "engine/scene/SceneParticleEffectComponents.hpp"
 #include "engine/scene/SceneLensEchoComponents.hpp"
 #include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
@@ -458,6 +460,14 @@ struct ScriptComponentAccess<kb::scene::HistoryRibbonComponent> {
     [[nodiscard]] static kb::scene::HistoryRibbonComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().HistoryRibbons().TryGet(entity); }
     static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::HistoryRibbonComponent& value) { scene.Components().HistoryRibbons().Set(entity, value); }
     [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().HistoryRibbons().Has(entity)) return false; scene.Components().HistoryRibbons().Remove(entity); return true; }
+};
+
+template <>
+struct ScriptComponentAccess<kb::scene::ParticleEffectComponent> {
+    [[nodiscard]] static const kb::scene::ParticleEffectComponent* TryGet(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().ParticleEffects().TryGet(entity); }
+    [[nodiscard]] static kb::scene::ParticleEffectComponent* TryGet(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { return scene.Components().ParticleEffects().TryGet(entity); }
+    static void Set(kb::scene::Scene& scene, kb::scene::SceneEntity entity, const kb::scene::ParticleEffectComponent& value) { scene.Components().ParticleEffects().Set(entity, value); }
+    [[nodiscard]] static bool Remove(kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept { if (!scene.Components().ParticleEffects().Has(entity)) return false; scene.Components().ParticleEffects().Remove(entity); return true; }
 };
 
 template <>
