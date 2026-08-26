@@ -281,30 +281,15 @@ private:
     std::vector<std::uint8_t> particlePrewarmGroups_;
     std::vector<kb::particles::ParticleRenderEmitterRecord> renderEmitterScratch_;
     std::vector<kb::particles::ParticleRenderRecord> renderParticleScratch_;
-    std::array<std::uint32_t, kb::scene::kParticleEffectMaxInstancesPerScene *
-                                  kb::scene::kParticleEffectMaxEmitters>
-        renderGroupCounts_{};
-    std::array<std::uint32_t, kb::scene::kParticleEffectMaxInstancesPerScene *
-                                  kb::scene::kParticleEffectMaxEmitters>
-        renderGroupWriteOffsets_{};
-    std::array<std::uint16_t, kb::scene::kParticleEffectMaxInstancesPerScene *
-                                  kb::scene::kParticleEffectMaxEmitters>
-        renderGroupRecordIndices_{};
-    std::array<std::uint32_t, kb::scene::kParticleEffectMaxInstancesPerScene *
-                                  kb::scene::kParticleEffectMaxEmitters>
-        renderRejectedByCapacity_{};
-    std::array<std::uint32_t, kb::scene::kParticleEffectMaxInstancesPerScene *
-                                  kb::scene::kParticleEffectMaxEmitters>
-        renderRejectedBySpawnBudget_{};
-    std::array<std::uint32_t, kb::scene::kParticleEffectMaxInstancesPerScene *
-                                  kb::scene::kParticleEffectMaxEmitters>
-        renderRejectedByEventBudget_{};
+    std::vector<std::uint32_t> renderGroupCounts_;
+    std::vector<std::uint32_t> renderGroupWriteOffsets_;
+    std::vector<std::uint16_t> renderGroupRecordIndices_;
+    std::vector<std::uint32_t> renderRejectedByCapacity_;
+    std::vector<std::uint32_t> renderRejectedBySpawnBudget_;
+    std::vector<std::uint32_t> renderRejectedByEventBudget_;
     std::uint64_t nextParticleId_ = 1U;
     std::uint64_t renderSnapshotRevision_ = 0U;
-    std::array<std::uint32_t, kb::scene::kParticleEffectMaxInstancesPerScene *
-                                  kb::scene::kParticleEffectMaxEmitters *
-                                  kb::scene::kParticleEffectMaxModulesPerEmitter>
-        collisionEventsThisStep_{};
+    std::vector<std::uint32_t> collisionEventsThisStep_;
     bool eventQueueOverflowed_ = false;
     bool eventActionBudgetExceeded_ = false;
     StepTelemetry stepTelemetry_{};
