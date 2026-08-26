@@ -207,6 +207,7 @@ bool EditorSceneContext::TickEditorSceneParticles(float deltaSeconds) {
         std::array<std::uint64_t, kb::scene::kParticleEffectMaxInstancesPerScene> retained{};
         std::size_t retainedCount = 0U;
         bool any = false;
+        bool releasedAny = false;
     } context{scene_.get(), &liveIds};
     const auto visit = [](kb::scene::SceneEntity entity, const kb::scene::ParticleEffectComponent& component, void* raw) {
         auto* pulse = static_cast<PulseContext*>(raw);
@@ -223,7 +224,9 @@ bool EditorSceneContext::TickEditorSceneParticles(float deltaSeconds) {
                 instancePlaying = query.state;
                 break;
             }
-            static_cast<void>(kb::particles::ParticlePlayback::Release(*pulse->scene, liveId));
+            pulse->releasedAny =
+                kb::particles::ParticlePlayback::Release(*pulse->scene, liveId).Succeeded() ||
+                pulse->releasedAny;
         }
         if (instanceId == 0U) {
             const auto created = kb::particles::ParticlePlayback::Create(
@@ -264,12 +267,24 @@ bool EditorSceneContext::TickEditorSceneParticles(float deltaSeconds) {
             }
         }
         if (!retained) {
-            static_cast<void>(kb::particles::ParticlePlayback::Release(*scene_, liveId));
+            context.releasedAny =
+                kb::particles::ParticlePlayback::Release(*scene_, liveId).Succeeded() ||
+                context.releasedAny;
         }
     }
     if (!context.any) {
         editorSceneParticleAccumulatorSeconds_ = 0.0;
-        return false;
+        if (!context.releasedAny) return false;
+        const auto simulated = kb::particles::ParticlePlayback::Simulate(
+            *scene_, kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds);
+        if (!simulated.Succeeded()) {
+            diagnostics::EditorLagTrace::Marker(
+                "particle-editor-scene",
+                "empty snapshot simulation rejected status=" +
+                    std::to_string(static_cast<unsigned>(simulated.status)));
+            return false;
+        }
+        return true;
     }
 
     bool advanced = false;

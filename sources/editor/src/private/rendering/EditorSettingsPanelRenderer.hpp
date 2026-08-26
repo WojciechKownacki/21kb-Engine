@@ -13,12 +13,9 @@
 namespace kb::editor {
 
 class EditorSceneContext;
-class EditorRenderBackendSettings;
-
 #if defined(_WIN32)
 enum class EditorSettingsHitKind : std::uint8_t {
     None,
-    Category,
     Toggle,
     Choice,
 };
@@ -37,11 +34,9 @@ public:
         HDC dc,
         const RECT& content,
         const EditorTheme& theme,
-        const EditorSceneContext& sceneContext,
-        const EditorRenderBackendSettings& renderer) const;
+        const EditorSceneContext& sceneContext) const;
     [[nodiscard]] static EditorSettingsHit HitTest(
         const RECT& content,
-        const EditorSceneContext& sceneContext,
         int x,
         int y) noexcept;
 #endif

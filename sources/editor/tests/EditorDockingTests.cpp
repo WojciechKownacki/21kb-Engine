@@ -618,6 +618,49 @@ void RunSkeletalMeshEditorDefaultLayoutTest() {
         "Skeletal Mesh Editor panel resizing should preserve the minimum viewport width");
 }
 
+void RunClosedUtilityPanelsReopenInRightDockTest() {
+    constexpr std::array utilityPanels{
+        kb::editor::DockPanelKind::ProjectSettings,
+        kb::editor::DockPanelKind::EditorSettings,
+        kb::editor::DockPanelKind::Plugins,
+    };
+
+    kb::editor::EditorDockModel model;
+    for (const kb::editor::DockPanelKind kind : utilityPanels) {
+        const auto panel = std::ranges::find_if(
+            model.Queries().Panels(),
+            [kind](const kb::editor::DockPanel& candidate) {
+                return candidate.kind == kind;
+            });
+        kb::editor::tests::Require(
+            panel != model.Queries().Panels().end(),
+            "Utility panel should be registered in the default workspace");
+        const std::uint32_t panelId = panel->id;
+
+        kb::editor::tests::Require(
+            model.Commands().ClosePanel(panelId),
+            "Utility panel should close before the reopen test");
+        kb::editor::tests::Require(
+            FindPanelLayout(BuildDefaultLayout(model), panelId) == nullptr,
+            "Closed utility panel should leave the dock layout");
+        kb::editor::tests::Require(
+            model.Commands().ActivatePanelKind(kind, kb::editor::DockArea::Right),
+            "Utility panel command should reopen a closed tab");
+
+        const kb::editor::DockLayout reopenedLayout = BuildDefaultLayout(model);
+        const kb::editor::DockPanelLayout* reopened =
+            FindPanelLayout(reopenedLayout, panelId);
+        const kb::editor::DockPanelLayout* inspector =
+            FindPanelLayout(reopenedLayout, 4U);
+        kb::editor::tests::Require(
+            reopened != nullptr && reopened->active,
+            "Reopened utility panel should become the active tab");
+        kb::editor::tests::Require(
+            inspector != nullptr && reopened->leafId == inspector->leafId,
+            "Reopened utility panel should return to the right dock group");
+    }
+}
+
 void RunParticleEditorWorkspaceAndSessionPersistenceTest() {
     kb::editor::EditorDockModel model;
     const kb::editor::DockPanel* panel = RequirePanel(model, 14U);
@@ -1083,6 +1126,7 @@ void RunEditorDockingTests() {
     RunDefaultWorkspaceRegistersMaterialEditorPanelTest();
     RunMaterialEditorPanelActivationTest();
     RunClosedMaterialEditorReopensInCenterDockTest();
+    RunClosedUtilityPanelsReopenInRightDockTest();
     RunSkeletalMeshEditorWorkspaceActivationTest();
     RunAnimationClipEditorWorkspaceActivationTest();
     RunAnimatorEditorWorkspaceActivationTest();

@@ -11,32 +11,11 @@ const EditorViewportPreviewState& EditorSceneViewportStateStore::Preview() const
 }
 
 EditorViewportPreviewState& EditorSceneViewportStateStore::Preview(std::uint64_t viewportKey) noexcept {
-    return previews_.try_emplace(viewportKey, previewDefaults_).first->second;
+    return previews_.try_emplace(viewportKey).first->second;
 }
 
 const EditorViewportPreviewState& EditorSceneViewportStateStore::Preview(std::uint64_t viewportKey) const noexcept {
-    return previews_.try_emplace(viewportKey, previewDefaults_).first->second;
-}
-
-void EditorSceneViewportStateStore::ConfigurePreviewDefaults(
-    bool gridVisible,
-    float gridSpacing,
-    bool snapEnabled,
-    float snapStep,
-    float rotationSnapDegrees) noexcept {
-    previewDefaults_.SetGridVisible(gridVisible);
-    previewDefaults_.SetGridSpacing(gridSpacing);
-    previewDefaults_.SetSnapEnabled(snapEnabled);
-    previewDefaults_.SetSnapStep(snapStep);
-    previewDefaults_.SetRotationSnapDegrees(rotationSnapDegrees);
-    for (auto& [key, preview] : previews_) {
-        static_cast<void>(key);
-        preview.SetGridVisible(gridVisible);
-        preview.SetGridSpacing(gridSpacing);
-        preview.SetSnapEnabled(snapEnabled);
-        preview.SetSnapStep(snapStep);
-        preview.SetRotationSnapDegrees(rotationSnapDegrees);
-    }
+    return previews_.try_emplace(viewportKey).first->second;
 }
 
 EditorViewportCameraState& EditorSceneViewportStateStore::Camera() noexcept {

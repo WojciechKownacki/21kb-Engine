@@ -41,6 +41,7 @@ constexpr int kLaneGap = 5;
 constexpr int kDividerHeight = 1;
 constexpr int kCheckboxSize = 16;
 constexpr int kTextBaselineOffsetY = 1;
+constexpr int kSectionCornerDiameter = 6;
 [[nodiscard]] inline COLORREF Color(EditorColor color) {
     return GdiDrawing::ToColorRef(color);
 }
@@ -108,6 +109,27 @@ inline void TextW(HDC dc, RECT rect, std::wstring_view text, COLORREF color, UIN
 
 inline void DrawFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border) {
     GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
+}
+
+inline void DrawSectionCardOutline(HDC dc, RECT rect, const EditorTheme& theme) {
+    if (dc == nullptr || rect.right - rect.left <= 2 || rect.bottom - rect.top <= 2) {
+        return;
+    }
+    ++rect.left;
+    ++rect.top;
+    --rect.right;
+    --rect.bottom;
+    ScopedPen pen(1, Color(theme.borderPanel));
+    const ScopedGdiObject selectedPen(dc, pen.handle);
+    const ScopedGdiObject selectedBrush(dc, GetStockObject(NULL_BRUSH));
+    RoundRect(
+        dc,
+        rect.left,
+        rect.top,
+        rect.right,
+        rect.bottom,
+        kSectionCornerDiameter,
+        kSectionCornerDiameter);
 }
 
 inline void DrawDivider(HDC dc, const EditorTheme& theme, int left, int right, int y) {
@@ -550,6 +572,13 @@ public:
             DrawDivider(dc_, theme_, bounds_.left, bounds_.right, y_);
             y_ += kDividerHeight;
         }
+    }
+
+    ~SectionWriter() {
+        DrawSectionCardOutline(
+            dc_,
+            Rect(bounds_.left, bounds_.top, bounds_.right, y_),
+            theme_);
     }
 
     void Field(std::string_view label, std::string_view value, InspectorPropertyId property = InspectorPropertyId::None, int editIndex = -1) { if (!collapsed_) { DrawFieldRow(dc_, Row(), theme_, state_, section_, property, label, value, editIndex); Advance(); } }

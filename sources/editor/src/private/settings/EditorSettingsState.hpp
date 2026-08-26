@@ -9,14 +9,6 @@ namespace kb::editor {
 
 class EditorSettingsState final {
 public:
-    [[nodiscard]] int SelectedCategory() const noexcept { return selectedCategory_; }
-
-    [[nodiscard]] bool SelectCategory(int category) noexcept {
-        if (category < 0 || category >= 4 || selectedCategory_ == category) return false;
-        selectedCategory_ = category;
-        return true;
-    }
-
     [[nodiscard]] bool Load(
         const std::filesystem::path& path,
         EditorSettingsDocument& settings,
@@ -37,7 +29,6 @@ public:
 
 private:
     std::filesystem::path path_;
-    int selectedCategory_ = 0;
 };
 
 } // namespace kb::editor
