@@ -1353,6 +1353,7 @@ if(BUILD_TESTING)
     target_link_libraries(kb_editor_material_graph_canvas_tests
         PRIVATE
             kb_renderer
+            kb_21kb_particle_editor_core
     )
 
     add_test(NAME kb_editor_material_graph_canvas_tests COMMAND $<TARGET_FILE:kb_editor_material_graph_canvas_tests>)
