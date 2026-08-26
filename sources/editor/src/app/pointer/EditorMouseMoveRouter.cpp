@@ -408,7 +408,9 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         if (!draggingMeshPreview) {
             sceneViewport_.RequestPresent();
         }
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        if (inspectorContent.has_value()) {
+            EditorWindowInvalidator::InvalidatePanel(messageWindow, *inspectorContent);
+        }
         return;
     }
 

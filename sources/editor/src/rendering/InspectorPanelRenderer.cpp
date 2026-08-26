@@ -96,14 +96,17 @@ using inspector_panel_rows::DrawAssetFieldRow;
 using inspector_panel_rows::DrawBoolRow;
 using inspector_panel_rows::DrawFieldRow;
 using inspector_panel_rows::DrawRotationRow;
+using inspector_panel_rows::DrawSectionAccentFrame;
 using inspector_panel_rows::DrawSectionHeader;
 using inspector_panel_rows::DrawSectionCardOutline;
+using inspector_panel_rows::DrawSectionButtonFrame;
 using inspector_panel_rows::DrawValueBox;
 using inspector_panel_rows::DrawVec3Row;
 using inspector_panel_rows::DisplayField;
 using inspector_panel_rows::kDisclosureRowHeight;
 using inspector_panel_rows::kDisclosureTextOffset;
 using inspector_panel_rows::kGroupRowHeight;
+using inspector_panel_rows::kValueRightInset;
 using inspector_panel_rows::SectionWriter;
 
 // Display/edit text for one exposed script variable's value (Bool rows use the
@@ -146,6 +149,7 @@ using inspector_panel_rows::SectionWriter;
 constexpr int kHeaderHeight = 72;
 constexpr int kHeaderIcon = 40;
 constexpr int kHeaderPad = 10;
+constexpr int kHeaderTopPadding = 8;
 constexpr int kPanelPadTop = 12;
 constexpr int kSectionGap = 8;
 constexpr int kSectionHeaderHeight = 28;
@@ -168,6 +172,8 @@ constexpr int kMeshPreviewToolbarHeight = 30;
 constexpr int kMeshPreviewToolbarButtonSize = 22;
 constexpr int kMeshPreviewToolbarButtonGap = 4;
 constexpr int kAddComponentButtonHeight = 34;
+constexpr int kAddComponentButtonWidthPercent = 60;
+constexpr int kAddComponentButtonMinimumWidth = 150;
 constexpr int kAddComponentBrowserWidth = 240;
 constexpr int kAddComponentBrowserMaxHeight = 300;
 constexpr int kAddComponentSearchHeight = 24;
@@ -300,6 +306,20 @@ constexpr std::array<InspectorRowDefinition, 2> kUIDocumentRows{ {
     return RECT{ left, top, right, bottom };
 }
 
+[[nodiscard]] RECT InspectorHeaderRect(RECT content) noexcept {
+    content.top += kHeaderTopPadding;
+    content.bottom = content.top + kHeaderHeight;
+    return content;
+}
+
+[[nodiscard]] int InspectorBodyTop(const RECT& content) noexcept {
+    return content.top + kHeaderTopPadding + kHeaderHeight + kPanelPadTop;
+}
+
+[[nodiscard]] constexpr int InspectorHeaderRegionHeight() noexcept {
+    return kHeaderTopPadding + kHeaderHeight + kPanelPadTop;
+}
+
 [[nodiscard]] RECT Shrink(RECT rect, int left, int top, int right, int bottom) noexcept {
     rect.left += left;
     rect.top += top;
@@ -411,7 +431,13 @@ void DrawDivider(HDC dc, int left, int right, int y) {
 
 [[nodiscard]] RECT AddComponentButtonRect(RECT content, int y) noexcept {
     const int inset = std::min<int>(10, std::max<int>(0, static_cast<int>(content.right - content.left) / 8));
-    return Rect(content.left + inset, y, content.right - inset, y + kAddComponentButtonHeight);
+    const int availableLeft = content.left + inset;
+    const int availableRight = content.right - inset;
+    const int availableWidth = std::max(0, availableRight - availableLeft);
+    const int preferredWidth = availableWidth * kAddComponentButtonWidthPercent / 100;
+    const int width = std::min(availableWidth, std::max(kAddComponentButtonMinimumWidth, preferredWidth));
+    const int left = availableLeft + (availableWidth - width) / 2;
+    return Rect(left, y, left + width, y + kAddComponentButtonHeight);
 }
 
 [[nodiscard]] RECT AddComponentBrowserRect(RECT content, int y) noexcept {
@@ -583,7 +609,7 @@ void DrawAddComponent(HDC dc, RECT content, const EditorTheme& theme, const Insp
     const RECT button = AddComponentButtonRect(content, y);
     const bool buttonActive = inspector.IsAddComponentBrowserOpen() ||
         inspector.IsHovered(InspectorHitKind::TextField, InspectorSectionId::AddComponent, InspectorPropertyId::AddComponentButton);
-    DrawFrame(
+    DrawSectionButtonFrame(
         dc,
         button,
         buttonActive ? HoverFill(theme) : Color(theme.chrome),
@@ -882,10 +908,8 @@ void DrawMeshPreviewToolbar(HDC dc, RECT toolbar, const EditorTheme& theme, cons
 }
 
 void DrawHeader(HDC dc, RECT content, const EditorTheme& theme, HeroIconKind icon, std::string_view title, std::string_view subtitle) {
-    RECT header = Rect(content.left, content.top, content.right, content.top + kHeaderHeight);
-    GdiDrawing::FillRectColor(dc, header, Color(theme.panel));
-    GdiDrawing::FillRectColor(dc, Rect(header.left, header.top, header.left + 3, header.bottom), Color(theme.accent));
-    GdiDrawing::FillRectColor(dc, Rect(header.left, header.bottom - 1, header.right, header.bottom), Color(theme.borderChrome));
+    const RECT header = InspectorHeaderRect(content);
+    DrawSectionAccentFrame(dc, header, Color(theme.panel), Color(theme.borderPanel), Color(theme.accent));
 
     RECT iconCell = Rect(header.left + kHeaderPad, header.top + kHeaderPad, header.left + kHeaderPad + kHeaderIcon, header.top + kHeaderPad + kHeaderIcon);
     DrawFrame(dc, iconCell, Color(theme.chrome), Color(theme.borderPanel));
@@ -1253,7 +1277,7 @@ void DrawTelemetryRow(
 // Paint and the live 3D surface must agree on one rect, so the geometry lives here and both use it.
 // Preview is the first section of a material asset, so its position follows from the header alone.
 [[nodiscard]] RECT MaterialPreviewFrameRect(const RECT& content) noexcept {
-    const int y = content.top + kHeaderHeight + kPanelPadTop + kSectionHeaderHeight + kDividerHeight;
+    const int y = InspectorBodyTop(content) + kSectionHeaderHeight + kDividerHeight;
     return Rect(
         content.left + kMaterialPreviewPadding,
         y + kMaterialPreviewGap,
@@ -1319,7 +1343,7 @@ constexpr std::array<std::string_view, kValueTypeOptionCount> kValueTypeLabels{ 
 
 [[nodiscard]] RECT ValueTypeRowRect(const RECT& content) noexcept {
     // The Input Action section is the first section; Value Type is its 2nd field.
-    const int top = content.top + kHeaderHeight + kPanelPadTop + kSectionHeaderHeight
+    const int top = InspectorBodyTop(content) + kSectionHeaderHeight
         + 2 * kDividerHeight + kFieldRowHeight;
     return Rect(content.left, top, content.right, top + kFieldRowHeight);
 }
@@ -1328,7 +1352,7 @@ constexpr std::array<std::string_view, kValueTypeOptionCount> kValueTypeLabels{ 
     const RECT row = ValueTypeRowRect(content);
     const int labelRight = row.left + ((row.right - row.left) * 36 / 100);
     const int top = row.bottom + index * kFieldRowHeight;
-    return Rect(labelRight, top, row.right - kRowPadX, top + kFieldRowHeight);
+    return Rect(labelRight, top, row.right - kValueRightInset, top + kFieldRowHeight);
 }
 
 void PaintValueTypeDropdown(HDC dc, const RECT& content, const EditorTheme& theme, const InspectorPanelState& inspector) {
@@ -1352,7 +1376,7 @@ void PaintInputActionAsset(HDC dc, RECT content, const EditorTheme& theme, const
     const kb::input::InputActionAsset action = sceneContext.ReadInputActionAsset(metadata.id).value_or(kb::input::InputActionAsset{});
 
     DrawHeader(dc, content, theme, HeroIconKind::Gamepad2, action.name.empty() ? metadata.name : action.name, "Input Action");
-    int y = content.top + kHeaderHeight + kPanelPadTop;
+    int y = InspectorBodyTop(content);
     {
         SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::InputAction, HeroIconKind::Gamepad2, "Input Action");
         section.Field("Name", action.name, InspectorPropertyId::InputActionName);
@@ -1374,7 +1398,7 @@ void PaintInputMappingContextAsset(HDC dc, RECT content, const EditorTheme& them
     const kb::input::InputMappingContextAsset context = sceneContext.ReadInputMappingContextAsset(metadata.id).value_or(kb::input::InputMappingContextAsset{});
 
     DrawHeader(dc, content, theme, HeroIconKind::Gamepad2, metadata.name.empty() ? metadata.virtualPath.filename().string() : metadata.name, "Input Mapping Context");
-    int y = content.top + kHeaderHeight + kPanelPadTop;
+    int y = InspectorBodyTop(content);
 
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::InputMappings, HeroIconKind::Gamepad2, "Mappings");
     for (std::size_t index = 0; index < context.mappings.size(); ++index) {
@@ -1400,7 +1424,7 @@ void PaintMaterialAsset(HDC dc, RECT content, const EditorTheme& theme, const Ed
     DrawHeader(dc, content, theme, HeroIconKind::Cube, metadata.name.empty() ? metadata.virtualPath.filename().string() : metadata.name, headerLabel);
     // A material is authored in the Material Editor, so its Inspector is the preview and nothing else:
     // the old Material and Asset sections only restated what the graph already owns.
-    static_cast<void>(DrawMaterialPreview(dc, content, content.top + kHeaderHeight + kPanelPadTop, theme, inspector, sceneContext, metadata));
+    static_cast<void>(DrawMaterialPreview(dc, content, InspectorBodyTop(content), theme, inspector, sceneContext, metadata));
 }
 
 
@@ -1442,7 +1466,7 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, EditorSceneConte
         }
 
         DrawHeader(dc, content, theme, HeroIconKind::Cube, metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name, metadata->type.empty() ? "Asset" : metadata->type);
-        y += kHeaderHeight + kPanelPadTop;
+        y = InspectorBodyTop(content);
         y = DrawTextureDetails(dc, content, y, theme, inspector, *metadata);
         y = DrawMeshPreview(dc, content, y, theme, inspector, manager, *metadata, deferMeshPreviewWork);
         SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Asset, HeroIconKind::Cube, "Asset");
@@ -2220,7 +2244,7 @@ void PaintMultiSelection(HDC dc, RECT content, const EditorTheme& theme, const E
     const std::string primaryName = scene.Entities().IsAlive(primary) ? scene.Entities().Name(primary) : std::string{ "(none)" };
 
     DrawHeader(dc, content, theme, HeroIconKind::ListBullet, "Selection (" + std::to_string(aliveCount) + ")", "Primary: " + primaryName);
-    int y = content.top + kHeaderHeight + kPanelPadTop;
+    int y = InspectorBodyTop(content);
 
     {
         SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::General, HeroIconKind::AdjustmentsHorizontal, "Selection");
@@ -2635,11 +2659,11 @@ void DrawTerrainMaterialLayers(
 }
 
 [[nodiscard]] RECT TagsDropdownAnchorRect(const RECT& content) noexcept {
-    const int tagsRowTop = content.top + kHeaderHeight + kPanelPadTop + kSectionHeaderHeight + kDividerHeight
+    const int tagsRowTop = InspectorBodyTop(content) + kSectionHeaderHeight + kDividerHeight
         + 2 * (kFieldRowHeight + kDividerHeight);
     const int labelRight = content.left + ((content.right - content.left) * 36 / 100);
     const int top = tagsRowTop + (kFieldRowHeight - kValueHeight) / 2;
-    return Rect(labelRight, top, content.right - kRowPadX, top + kValueHeight);
+    return Rect(labelRight, top, content.right - kValueRightInset, top + kValueHeight);
 }
 
 void PaintTerrainSection(
@@ -2846,7 +2870,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             : HeroIconKind::Cube,
         title,
         subtitle);
-    int y = content.top + kHeaderHeight + kPanelPadTop;
+    int y = InspectorBodyTop(content);
 
     // Virtualization: a section is only painted when its [y, y+height] band
     // intersects the visible viewport. The cursor advances by the section's
@@ -3164,7 +3188,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
 
 [[nodiscard]] int AssetContentHeight(const RECT& content, const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
     const InspectorPanelState& inspector = sceneContext.Inspector();
-    int height = kHeaderHeight + kPanelPadTop;
+    int height = InspectorHeaderRegionHeight();
     if (metadata.type == "InputAction") {
         height += SectionHeight(inspector, InspectorSectionId::InputAction, 3) + kSectionGap;
         height += SectionHeight(inspector, InspectorSectionId::Asset, 2);
@@ -3230,7 +3254,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
 [[nodiscard]] int EntityContentHeight(const EditorSceneContext& sceneContext, kb::scene::SceneEntity selected) {
     const InspectorPanelState& inspector = sceneContext.Inspector();
     const kb::scene::Scene& scene = sceneContext.Scene();
-    int height = kHeaderHeight + kPanelPadTop;
+    int height = InspectorHeaderRegionHeight();
     height += SectionHeight(inspector, InspectorSectionId::General, 3) + kSectionGap;
     height += SectionHeight(inspector, InspectorSectionId::Transform, 3) + kSectionGap;
     if (scene.Components().RegionShapes().Has(selected)) {
@@ -3316,13 +3340,13 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (const kb::scene::JointComponent* joint = scene.Components().Joints().TryGet(selected); joint != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::Joint, static_cast<int>(InspectorPhysicsModel::Fields(*joint).size())) + kSectionGap;
     }
-    height += kAddComponentButtonHeight;
+    height += kAddComponentButtonHeight + kSectionGap;
     return height;
 }
 
 [[nodiscard]] int MultiSelectionContentHeight(const EditorSceneContext& sceneContext) {
     const InspectorPanelState& inspector = sceneContext.Inspector();
-    return kHeaderHeight + kPanelPadTop
+    return InspectorHeaderRegionHeight()
         + SectionHeight(inspector, InspectorSectionId::General, 3) + kSectionGap
         + SectionHeight(inspector, InspectorSectionId::Transform, 3);
 }
@@ -3343,7 +3367,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
 [[nodiscard]] RECT ValueRectForRow(RECT row) noexcept {
     RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
     const int top = CenteredY(row, kValueHeight);
-    return Rect(labelRect.right, top, row.right - kRowPadX, top + kValueHeight);
+    return Rect(labelRect.right, top, row.right - kValueRightInset, top + kValueHeight);
 }
 
 void AdvanceRow(int& y) noexcept;
@@ -3415,7 +3439,7 @@ void AdvanceRow(int& y) noexcept;
 
 [[nodiscard]] InspectorPanelRenderer::Hit HitVec3(RECT row, InspectorSectionId section, InspectorPropertyId px, InspectorPropertyId py, InspectorPropertyId pz, int x, int y) noexcept {
     RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
-    RECT valueRect = Rect(labelRect.right, row.top, row.right - kRowPadX, row.bottom);
+    RECT valueRect = Rect(labelRect.right, row.top, row.right - kValueRightInset, row.bottom);
     const int valueWidth = static_cast<int>(valueRect.right - valueRect.left);
     const int available = std::max(0, valueWidth - (kLaneGap * 2));
     const int laneWidth = std::max<int>(44, available / 3);
@@ -3446,7 +3470,7 @@ void AdvanceRow(int& y) noexcept;
     int x,
     int y) noexcept {
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
-    const RECT valueRect = Rect(labelRect.right, row.top, row.right - kRowPadX, row.bottom);
+    const RECT valueRect = Rect(labelRect.right, row.top, row.right - kValueRightInset, row.bottom);
     const int laneWidth = std::max(66, (static_cast<int>(valueRect.right - valueRect.left) - kLaneGap) / 2);
     const std::array<RECT, 2U> lanes{
         Rect(valueRect.left, valueRect.top, valueRect.left + laneWidth, valueRect.bottom),
@@ -3475,7 +3499,7 @@ void AdvanceRow(int& y) noexcept;
     int x,
     int y) noexcept {
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
-    const RECT valueRect = Rect(labelRect.right, row.top, row.right - kRowPadX, row.bottom);
+    const RECT valueRect = Rect(labelRect.right, row.top, row.right - kValueRightInset, row.bottom);
     const int laneWidth = std::max(66, (static_cast<int>(valueRect.right - valueRect.left) - kLaneGap) / 2);
     const std::array<RECT, 2U> lanes{
         Rect(valueRect.left, valueRect.top, valueRect.left + laneWidth, valueRect.bottom),
@@ -3495,7 +3519,7 @@ void AdvanceRow(int& y) noexcept;
 
 [[nodiscard]] InspectorPanelRenderer::Hit HitRotation(RECT row, int x, int y) noexcept {
     RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
-    RECT valueRect = Rect(labelRect.right, row.top, row.right - kRowPadX, row.bottom);
+    RECT valueRect = Rect(labelRect.right, row.top, row.right - kValueRightInset, row.bottom);
     const int valueWidth = static_cast<int>(valueRect.right - valueRect.left);
     const int available = std::max(0, valueWidth - (kLaneGap * 2));
     const int laneWidth = std::max<int>(44, available / 3);
@@ -4355,7 +4379,7 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     const int scrolledY = yPoint + std::clamp(sceneContext.Inspector().ScrollOffset(), 0, maxScroll);
 
     const InspectorPanelState& state = sceneContext.Inspector();
-    int y = content.top + kHeaderHeight + kPanelPadTop;
+    int y = InspectorBodyTop(content);
 
     if (sceneContext.AssetBrowser().InspectorAsset().IsValid()) {
         const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();

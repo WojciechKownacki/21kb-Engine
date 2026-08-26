@@ -1,19 +1,11 @@
 #include "app/EditorParticleAssetSceneDropHandler.hpp"
 
 #if defined(_WIN32)
-#include "app/EditorDropPanelResolver.hpp"
+#include "app/scene_viewport/EditorSceneViewportHitResolver.hpp"
 
 #include <optional>
 
 namespace kb::editor {
-namespace {
-
-[[nodiscard]] bool Contains(const RECT& rect, int x, int y) noexcept {
-    return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
-}
-
-} // namespace
-
 bool EditorParticleAssetSceneDropHandler::Drop(
     HWND sourceWindow,
     HWND mainWindow,
@@ -24,13 +16,17 @@ bool EditorParticleAssetSceneDropHandler::Drop(
     const EditorMetrics& metrics,
     EditorSceneContext& sceneContext,
     kb::assets::AssetId assetId) {
-    const std::optional<RECT> scene = EditorDropPanelResolver::Resolve(
-        DockPanelKind::Scene, sourceWindow, mainWindow, dockModel, floatingWindows, metrics);
-    if (!scene.has_value() || !Contains(*scene, x, y)) {
+    const std::optional<EditorSceneViewportHit> hit =
+        EditorSceneViewportHitResolver::ResolveGroundHit(
+            sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext);
+    if (!hit.has_value()) {
         return false;
     }
 
-    return sceneContext.CreateParticleEffectEntity(assetId).IsValid();
+    return sceneContext.CreateParticleEffectEntity(
+        assetId,
+        sceneContext.ViewportPreview(hit->panelId).SnapGroundPosition(hit->groundPosition),
+        true).IsValid();
 }
 
 } // namespace kb::editor

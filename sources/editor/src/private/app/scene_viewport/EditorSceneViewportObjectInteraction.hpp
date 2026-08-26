@@ -19,7 +19,7 @@ class EditorSceneViewportObjectInteraction {
 public:
     EditorSceneViewportObjectInteraction() = delete;
 
-    [[nodiscard]] static bool UpdateMeshDragPreview(
+    [[nodiscard]] static bool UpdateScenePlacementPreview(
         HWND sourceWindow,
         HWND mainWindow,
         int x,
@@ -30,7 +30,7 @@ public:
         EditorSceneContext& sceneContext,
         EditorPointerDragState& drag);
 
-    [[nodiscard]] static bool CommitMeshDragPreview(
+    [[nodiscard]] static bool CommitScenePlacementPreview(
         HWND sourceWindow,
         HWND mainWindow,
         int x,
@@ -41,7 +41,7 @@ public:
         EditorSceneContext& sceneContext,
         EditorPointerDragState& drag);
 
-    static void CancelMeshDragPreview(EditorSceneContext& sceneContext, EditorPointerDragState& drag) noexcept;
+    static void CancelScenePlacementPreview(EditorSceneContext& sceneContext, EditorPointerDragState& drag) noexcept;
 
     [[nodiscard]] static bool BeginGizmoDrag(
         HWND sourceWindow,
