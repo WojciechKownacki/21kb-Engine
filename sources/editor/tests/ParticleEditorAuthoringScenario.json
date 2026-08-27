@@ -51,6 +51,7 @@
     { "op": "delete_entity", "entity": "particleEntity" },
     { "op": "step_editor_particles", "frames": 1, "dt": 0.019607843 },
     { "op": "assert_particle_scene_empty" },
+    { "op": "assert_particle_dependency_navigation" },
     { "op": "assert_no_errors" }
   ]
 }
