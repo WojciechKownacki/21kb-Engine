@@ -19,6 +19,13 @@ namespace {
         || metadata.type == "RenderMaterialType";
 }
 
+// Commands that only read. Everything else writes to disk, and outside the project's
+// own content there is nothing the editor may rewrite.
+[[nodiscard]] bool IsReadOnlyCommand(EditorAssetContextCommand command) noexcept {
+    return command == EditorAssetContextCommand::Open || command == EditorAssetContextCommand::FindReferences ||
+        command == EditorAssetContextCommand::Refresh;
+}
+
 [[nodiscard]] std::vector<EditorAssetContextMenuItem> MaterialContextMenuItems(const kb::assets::AssetMetadata& metadata) {
     std::vector<EditorAssetContextMenuItem> items;
     if (metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance" || metadata.type == "RenderMaterialGraph") {
@@ -47,9 +54,8 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserState::ContextMenuItem
     if (contextMenu_.TargetKind() == EditorAssetContextTargetKind::Asset) {
         const kb::assets::AssetMetadata* metadata = manager.Registry().Find(contextMenu_.TargetAsset());
         if (metadata != nullptr && IsMaterialAsset(*metadata)) {
-            return MaterialContextMenuItems(*metadata);
-        }
-        if (metadata != nullptr) {
+            items = MaterialContextMenuItems(*metadata);
+        } else if (metadata != nullptr) {
             items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Duplicate, .label = "Duplicate", .separatorAfter = true });
             if (EditorAssetOpenPolicy::CanOpen(*metadata)) {
                 items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Open, .label = "Open" });
@@ -66,7 +72,18 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserState::ContextMenuItem
             items.insert(refresh, EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::FindReferences, .label = "Find References", .separatorAfter = true });
         }
     }
+    if (!ContextMenuTargetIsProjectContent(manager)) {
+        std::erase_if(items, [](const EditorAssetContextMenuItem& item) { return !IsReadOnlyCommand(item.command); });
+    }
     return items;
+}
+
+bool EditorAssetBrowserState::ContextMenuTargetIsProjectContent(const kb::assets::AssetManager& manager) const {
+    if (contextMenu_.TargetKind() == EditorAssetContextTargetKind::Asset) {
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(contextMenu_.TargetAsset());
+        return metadata != nullptr && asset_browser::IsProjectContent(metadata->virtualPath);
+    }
+    return asset_browser::IsProjectContent(contextMenu_.TargetFolder());
 }
 
 void EditorAssetBrowserState::OpenContextMenuForBackground(int x, int y) {

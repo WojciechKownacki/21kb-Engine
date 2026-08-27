@@ -900,6 +900,48 @@ void RunAssetContextMenuExposesOpenAndDuplicateTest() {
         "The open policy must agree with the menu about what can be opened");
 }
 
+void RunContextMenuOffersNoWritesOutsideProjectContentTest() {
+    kb::assets::AssetManager manager;
+    static_cast<void>(manager.RegisterAsset(Metadata("Sparks", "ParticleEffect", "/Game/Vfx/Sparks.kbvfx")));
+    static_cast<void>(manager.RegisterAsset(Metadata("Explosion", "ParticleEffect", "/21kbParticle/Recipes/Explosion.kbvfx")));
+    static_cast<void>(manager.RegisterAsset(Metadata("ShippedPaint", "RenderMaterial", "/21kbParticle/Materials/ShippedPaint.kbmat")));
+    kb::editor::EditorAssetBrowserState state;
+
+    const auto writes = [](const std::vector<kb::editor::EditorAssetContextMenuItem>& items) {
+        return std::ranges::any_of(items, [](const kb::editor::EditorAssetContextMenuItem& item) {
+            return item.command != kb::editor::EditorAssetContextCommand::Open &&
+                item.command != kb::editor::EditorAssetContextCommand::FindReferences &&
+                item.command != kb::editor::EditorAssetContextCommand::Refresh;
+        });
+    };
+    const auto menuForAsset = [&](const char* virtualPath) {
+        const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath(virtualPath);
+        kb::editor::tests::Require(metadata != nullptr, "Project content menu test did not register its asset");
+        kb::editor::tests::Require(state.OpenContextMenuForAsset(220, 70, metadata->id, manager), "Asset browser should open the asset context menu");
+        return state.ContextMenuItems(manager);
+    };
+
+    kb::editor::tests::Require(writes(menuForAsset("/Game/Vfx/Sparks.kbvfx")),
+        "A project asset must keep the commands that write to it");
+
+    // Content mounted beside the executable is browsable but is not the user's to
+    // rewrite: a write there lands in a build output the next build replaces.
+    const std::vector<kb::editor::EditorAssetContextMenuItem> shippedEffect = menuForAsset("/21kbParticle/Recipes/Explosion.kbvfx");
+    kb::editor::tests::Require(!writes(shippedEffect), "A shipped asset must offer no command that writes");
+    kb::editor::tests::Require(std::ranges::any_of(shippedEffect, [](const kb::editor::EditorAssetContextMenuItem& item) {
+            return item.command == kb::editor::EditorAssetContextCommand::Open;
+        }),
+        "A shipped asset should still be openable");
+    kb::editor::tests::Require(!writes(menuForAsset("/21kbParticle/Materials/ShippedPaint.kbmat")),
+        "The material menu must respect the same boundary");
+
+    kb::editor::tests::Require(state.OpenContextMenuForFolder(220, 70, "/21kbParticle/Recipes", manager), "Asset browser should open a shipped folder context menu");
+    kb::editor::tests::Require(!writes(state.ContextMenuItems(manager)), "A shipped folder must offer no command that writes");
+    kb::editor::tests::Require(state.SelectFolder("/Game", manager), "Project content menu test could not select the project folder");
+    state.OpenContextMenuForBackground(220, 70);
+    kb::editor::tests::Require(writes(state.ContextMenuItems(manager)), "The project background menu must keep asset creation");
+}
+
 void RunParticleEffectContextMenuExposesFindReferencesTest() {
     kb::assets::AssetManager manager;
     static_cast<void>(manager.RegisterAsset(Metadata("Sparks", "ParticleEffect", "/Game/Vfx/Sparks.kbvfx")));
@@ -1205,6 +1247,7 @@ void RunEditorAssetBrowserTests() {
     RunMaterialContextMenuCommandTest();
     RunParticleEffectContextMenuExposesFindReferencesTest();
     RunAssetContextMenuExposesOpenAndDuplicateTest();
+    RunContextMenuOffersNoWritesOutsideProjectContentTest();
     RunMaterialAssetDoubleClickOpensMaterialEditorTest();
     RunMaterialAssetIconResolverRecognizesPreviewMaterialsTest();
     RunSkeletalMeshThumbnailUsesAssetGeometryTest();
