@@ -18,7 +18,7 @@ public:
 
     // owner is the window that owns any modal the command has to raise, such as the
     // unsaved-document guard on Open.
-    [[nodiscard]] static bool Execute(EditorAssetContextCommand command, EditorSceneContext& sceneContext, HWND owner = nullptr);
+    [[nodiscard]] static bool Execute(EditorAssetContextCommand command, EditorSceneContext& sceneContext, HWND owner);
 };
 
 } // namespace kb::editor
