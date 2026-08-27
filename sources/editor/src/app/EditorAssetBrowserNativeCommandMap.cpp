@@ -26,6 +26,8 @@ inline constexpr std::uint32_t kDelete = 2202U;
 inline constexpr std::uint32_t kRefresh = 2203U;
 inline constexpr std::uint32_t kExtractMaterials = 2301U;
 inline constexpr std::uint32_t kFindReferences = 2302U;
+inline constexpr std::uint32_t kOpen = 2303U;
+inline constexpr std::uint32_t kDuplicate = 2304U;
 
 } // namespace
 
@@ -48,14 +50,14 @@ std::uint32_t EditorAssetBrowserNativeCommandMap::Id(EditorAssetContextCommand c
     case EditorAssetContextCommand::NewParticleEffect: return kNewParticleEffect;
     case EditorAssetContextCommand::ExtractMaterials: return kExtractMaterials;
     case EditorAssetContextCommand::FindReferences: return kFindReferences;
+    case EditorAssetContextCommand::Open: return kOpen;
+    case EditorAssetContextCommand::Duplicate: return kDuplicate;
     case EditorAssetContextCommand::AddDirectionalLight: return kDirectionalLight;
     case EditorAssetContextCommand::AddPointLight: return kPointLight;
     case EditorAssetContextCommand::AddSpotLight: return kSpotLight;
     case EditorAssetContextCommand::Rename: return kRename;
     case EditorAssetContextCommand::Delete: return kDelete;
     case EditorAssetContextCommand::Refresh: return kRefresh;
-    case EditorAssetContextCommand::Open:
-    case EditorAssetContextCommand::Duplicate:
     case EditorAssetContextCommand::AddLighting:
     case EditorAssetContextCommand::None:
     default: return 0U;
@@ -81,6 +83,8 @@ EditorAssetContextCommand EditorAssetBrowserNativeCommandMap::Command(std::uint3
     case kNewParticleEffect: return EditorAssetContextCommand::NewParticleEffect;
     case kExtractMaterials: return EditorAssetContextCommand::ExtractMaterials;
     case kFindReferences: return EditorAssetContextCommand::FindReferences;
+    case kOpen: return EditorAssetContextCommand::Open;
+    case kDuplicate: return EditorAssetContextCommand::Duplicate;
     case kDirectionalLight: return EditorAssetContextCommand::AddDirectionalLight;
     case kPointLight: return EditorAssetContextCommand::AddPointLight;
     case kSpotLight: return EditorAssetContextCommand::AddSpotLight;

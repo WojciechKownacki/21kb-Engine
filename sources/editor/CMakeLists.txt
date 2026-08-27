@@ -735,6 +735,7 @@ add_executable(kb_editor WIN32
     src/rendering/AnimatorEditorPanelRenderer.cpp
     src/rendering/SkeletalMeshEditorPanelRenderer.cpp
     src/rendering/ProjectFilesAssetListRenderer.cpp
+    src/assets/EditorAssetOpenPolicy.cpp
     src/rendering/ProjectFilesAssetIconResolver.cpp
     src/rendering/ProjectFilesAssetTileFrameRenderer.cpp
     src/rendering/ProjectFilesAssetTileMetrics.cpp
@@ -1244,6 +1245,7 @@ if(BUILD_TESTING)
         src/rendering/EditorRenderBackendSettings.cpp
         src/rendering/EditorToolbarLayout.cpp
         src/rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.cpp
+        src/assets/EditorAssetOpenPolicy.cpp
         src/rendering/ProjectFilesAssetIconResolver.cpp
         src/rendering/ProjectFilesMaterialPreviewThumbnailModel.cpp
         src/rendering/EditorMeshPreviewRasterizer.cpp

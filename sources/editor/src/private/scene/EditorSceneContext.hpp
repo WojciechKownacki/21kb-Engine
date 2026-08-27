@@ -448,6 +448,7 @@ public:
     [[nodiscard]] bool CreateMaterialFromGraphAsset(kb::assets::AssetId graphAssetId);
     [[nodiscard]] bool CreateMaterialFromMaterialTypeAsset(kb::assets::AssetId materialTypeAssetId);
     [[nodiscard]] bool DuplicateMaterialAsset(kb::assets::AssetId materialAssetId);
+    [[nodiscard]] bool DuplicateAsset(kb::assets::AssetId assetId);
     [[nodiscard]] bool FindMaterialReferences(kb::assets::AssetId materialAssetId);
     [[nodiscard]] bool FindParticleEffectReferences(kb::assets::AssetId effectAssetId);
     [[nodiscard]] bool ExtractEmbeddedMaterials(kb::assets::AssetId meshAssetId);
