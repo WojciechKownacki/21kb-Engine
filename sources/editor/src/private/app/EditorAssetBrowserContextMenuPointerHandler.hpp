@@ -14,7 +14,7 @@ class EditorAssetBrowserContextMenuPointerHandler {
 public:
     EditorAssetBrowserContextMenuPointerHandler() = delete;
 
-    [[nodiscard]] static std::optional<bool> HandleOpenMenuPointerDown(const EditorAssetBrowserHit& hit, EditorSceneContext& sceneContext);
+    [[nodiscard]] static std::optional<bool> HandleOpenMenuPointerDown(HWND owner, const EditorAssetBrowserHit& hit, EditorSceneContext& sceneContext);
     [[nodiscard]] static bool HandleRightButtonDown(HWND window, const RECT& content, int x, int y,
                                                      EditorSceneContext& sceneContext);
     [[nodiscard]] static bool HandlePointerMove(const RECT& content, int x, int y, EditorSceneContext& sceneContext);

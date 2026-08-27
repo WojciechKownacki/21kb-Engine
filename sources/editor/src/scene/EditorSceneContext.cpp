@@ -3346,6 +3346,17 @@ bool EditorSceneContext::DuplicateMaterialAsset(kb::assets::AssetId materialAsse
     return true;
 }
 
+// Duplicating an asset is copying it back into its own folder: the shared copy
+// command already resolves a free name there and selects the result.
+bool EditorSceneContext::DuplicateAsset(kb::assets::AssetId assetId) {
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
+    if (metadata == nullptr) {
+        console_.Error("Assets", "Duplicate requires an existing asset.");
+        return false;
+    }
+    return CopyAssetToFolder(assetId, metadata->virtualPath.parent_path());
+}
+
 bool EditorSceneContext::FindMaterialReferences(kb::assets::AssetId materialAssetId) {
     const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(materialAssetId);
     if (metadata == nullptr || (metadata->type != "RenderMaterial" && metadata->type != "RenderMaterialInstance")) {

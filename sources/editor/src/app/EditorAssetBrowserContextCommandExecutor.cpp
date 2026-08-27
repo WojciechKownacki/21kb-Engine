@@ -1,5 +1,6 @@
 #include "app/EditorAssetBrowserContextCommandExecutor.hpp"
 
+#include "app/EditorAssetBrowserDoubleClickHandler.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/ParticleEffectAssetIO.hpp"
@@ -12,7 +13,7 @@
 
 namespace kb::editor {
 
-bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand command, EditorSceneContext& sceneContext) {
+bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand command, EditorSceneContext& sceneContext, HWND owner) {
     EditorAssetBrowserState& state = sceneContext.AssetBrowser();
     kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     const EditorAssetContextTargetKind targetKind = state.ContextMenuTargetKind();
@@ -22,7 +23,10 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
     switch (command) {
     case EditorAssetContextCommand::Open:
         if (targetKind == EditorAssetContextTargetKind::Asset) {
-            return sceneContext.OpenMaterialEditorAsset(targetAsset);
+            const kb::assets::AssetMetadata* metadata = manager.Registry().Find(targetAsset);
+            return metadata != nullptr &&
+                EditorAssetBrowserDoubleClickHandler::OpenAsset(owner, *metadata, sceneContext) !=
+                    EditorAssetBrowserDoubleClickResult::None;
         }
         return false;
     case EditorAssetContextCommand::Import: {
@@ -57,11 +61,18 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateMaterialTypeAsset(destinationFolder);
     }
-    case EditorAssetContextCommand::Duplicate:
-        if (targetKind == EditorAssetContextTargetKind::Asset) {
+    case EditorAssetContextCommand::Duplicate: {
+        if (targetKind != EditorAssetContextTargetKind::Asset) {
+            return false;
+        }
+        // Materials keep their gateway path, which rewrites the document rather than
+        // copying its bytes; everything else duplicates through the shared copy.
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(targetAsset);
+        if (metadata != nullptr && metadata->type == "RenderMaterial") {
             return sceneContext.DuplicateMaterialAsset(targetAsset);
         }
-        return false;
+        return sceneContext.DuplicateAsset(targetAsset);
+    }
     case EditorAssetContextCommand::CreateMaterialInstance:
         if (targetKind == EditorAssetContextTargetKind::Asset) {
             return sceneContext.CreateMaterialInstanceAsset(targetAsset);
