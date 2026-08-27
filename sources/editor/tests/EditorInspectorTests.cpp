@@ -50,6 +50,9 @@
 #include "scene/EditorSceneMaterialAssetActions.hpp"
 #include "scene/EditorSceneMeshAssetActions.hpp"
 #include "scene/material/EditorMaterialReferenceFinder.hpp"
+#include "scene/particle/EditorParticleEffectReferenceFinder.hpp"
+#include "engine/scene/ParticleEffectComponent.hpp"
+#include "engine/scene/SceneParticleEffectComponents.hpp"
 #include "scene/material_preview/EditorMaterialNodePreviewBuilder.hpp"
 #include "scene/material_preview/EditorMaterialPreviewMeshFactory.hpp"
 #include "scene/material_preview/EditorMaterialPreviewMeshLoader.hpp"
@@ -1139,6 +1142,34 @@ void RunMaterialReferenceFinderReportsMeshRendererUsageTest() {
         return reference.find("SlotMaterialMesh") != std::string::npos && reference.find("Slot 2") != std::string::npos;
     }), "Material reference finder missed slot override reference");
     kb::editor::tests::Require(kb::editor::EditorMaterialReferenceFinder::FindSceneReferences(scene, unusedMaterialId).empty(), "Material reference finder should not report unrelated material ids");
+}
+
+void RunParticleEffectReferenceFinderReportsComponentUsageTest() {
+    kb::scene::Scene scene;
+    const kb::assets::AssetId effectId{ 903U };
+    const kb::assets::AssetId unusedEffectId{ 904U };
+
+    const kb::scene::SceneObject emitter = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "TorchFlame" });
+    scene.Components().ParticleEffects().Set(emitter.Entity(), kb::scene::ParticleEffectComponent{
+        .effectAssetId = effectId.value,
+    });
+
+    const kb::scene::SceneObject otherEffect = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Smoke" });
+    scene.Components().ParticleEffects().Set(otherEffect.Entity(), kb::scene::ParticleEffectComponent{
+        .effectAssetId = unusedEffectId.value,
+    });
+
+    const std::vector<std::string> references =
+        kb::editor::EditorParticleEffectReferenceFinder::FindSceneReferences(scene, effectId);
+    kb::editor::tests::Require(references.size() == 1U, "Particle effect reference finder should report exactly the component using the effect");
+    kb::editor::tests::Require(references.front().find("TorchFlame") != std::string::npos,
+        "Particle effect reference finder should name the referencing entity");
+    kb::editor::tests::Require(
+        kb::editor::EditorParticleEffectReferenceFinder::FindSceneReferences(scene, unusedEffectId).size() == 1U,
+        "Particle effect reference finder should report the unrelated effect only for its own id");
+    kb::editor::tests::Require(
+        kb::editor::EditorParticleEffectReferenceFinder::FindSceneReferences(scene, kb::assets::AssetId{}).empty(),
+        "Particle effect reference finder must not match components against an invalid asset id");
 }
 
 void RunMaterialEditorStateIndependentFromInspectorSelectionTest() {
@@ -2928,6 +2959,7 @@ void RunEditorInspectorTests() {
     RunMaterialCreateAssignSaveReloadE2ETest();
     RunMaterialRenamePreservesMeshRendererAssignmentTest();
     RunMaterialReferenceFinderReportsMeshRendererUsageTest();
+    RunParticleEffectReferenceFinderReportsComponentUsageTest();
     RunMaterialEditorStateIndependentFromInspectorSelectionTest();
     RunMaterialEditorGraphBackedSchemaParameterModelTest();
     RunEditorMaterialSlotOverrideSyncTest();

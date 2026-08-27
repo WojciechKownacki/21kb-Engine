@@ -449,6 +449,7 @@ public:
     [[nodiscard]] bool CreateMaterialFromMaterialTypeAsset(kb::assets::AssetId materialTypeAssetId);
     [[nodiscard]] bool DuplicateMaterialAsset(kb::assets::AssetId materialAssetId);
     [[nodiscard]] bool FindMaterialReferences(kb::assets::AssetId materialAssetId);
+    [[nodiscard]] bool FindParticleEffectReferences(kb::assets::AssetId effectAssetId);
     [[nodiscard]] bool ExtractEmbeddedMaterials(kb::assets::AssetId meshAssetId);
     [[nodiscard]] bool CreateLuaScriptAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
