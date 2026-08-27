@@ -1,5 +1,6 @@
 #include "scene/EditorSceneContext.hpp"
 #include "scene/ParticleEditorBakeHostCommand.hpp"
+#include "scene/particle/EditorParticleEffectReferenceFinder.hpp"
 
 #include "diagnostics/EditorLagTrace.hpp"
 #include "editor/ParticleEditorCommands.hpp"
@@ -667,6 +668,28 @@ bool EditorSceneContext::FocusParticleEditorDiagnostic(std::size_t diagnosticInd
     if (diagnosticIndex >= inspector.diagnostics.size()) return false;
     const auto& diagnostic = inspector.diagnostics[diagnosticIndex];
     particleEditorWorkspace_.FocusDiagnostic(diagnostic.propertyPath, diagnostic.emitterId, diagnostic.moduleId);
+    return true;
+}
+
+bool EditorSceneContext::FindParticleEffectReferences(kb::assets::AssetId effectAssetId) {
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(effectAssetId);
+    if (metadata == nullptr || metadata->type != kb::scene::kParticleEffectAssetType) {
+        console_.Error("Particles", "Find References requires a particle effect asset.");
+        return false;
+    }
+
+    const std::vector<std::string> references =
+        EditorParticleEffectReferenceFinder::FindSceneReferences(*scene_, effectAssetId);
+    if (references.empty()) {
+        console_.Info("Particles", "No scene references found for: " + metadata->virtualPath.generic_string());
+        return true;
+    }
+
+    console_.Info("Particles",
+        "References for " + metadata->virtualPath.generic_string() + ": " + std::to_string(references.size()));
+    for (const std::string& reference : references) {
+        console_.Info("Particles", "  " + reference);
+    }
     return true;
 }
 
