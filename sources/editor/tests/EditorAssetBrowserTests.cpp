@@ -847,6 +847,41 @@ void RunMaterialContextMenuCommandTest() {
     kb::editor::tests::Require(!meshItems.empty() && meshItems.front().command == kb::editor::EditorAssetContextCommand::ExtractMaterials, "Mesh asset context menu should expose Extract Materials first");
 }
 
+void RunParticleEffectContextMenuExposesFindReferencesTest() {
+    kb::assets::AssetManager manager;
+    static_cast<void>(manager.RegisterAsset(Metadata("Sparks", "ParticleEffect", "/Game/Vfx/Sparks.kbvfx")));
+    static_cast<void>(manager.RegisterAsset(Metadata("Stone", "ScenePrefab", "/Game/Environment/Stone.kbprefab")));
+    kb::editor::EditorAssetBrowserState state;
+
+    const kb::assets::AssetMetadata* effect = manager.Registry().FindByPath("/Game/Vfx/Sparks.kbvfx");
+    kb::editor::tests::Require(effect != nullptr, "Particle effect context menu test did not register the effect asset");
+    kb::editor::tests::Require(state.OpenContextMenuForAsset(220, 70, effect->id, manager), "Asset browser should open a particle effect context menu");
+    const std::vector<kb::editor::EditorAssetContextMenuItem> effectItems = state.ContextMenuItems(manager);
+    const auto findReferences = std::ranges::find(effectItems, kb::editor::EditorAssetContextCommand::FindReferences,
+        &kb::editor::EditorAssetContextMenuItem::command);
+    kb::editor::tests::Require(findReferences != effectItems.end(), "Particle effect context menu should expose Find References");
+    const auto refresh = std::ranges::find(effectItems, kb::editor::EditorAssetContextCommand::Refresh,
+        &kb::editor::EditorAssetContextMenuItem::command);
+    kb::editor::tests::Require(refresh != effectItems.end() && findReferences < refresh,
+        "Find References should precede Refresh, matching the material context menu order");
+    // The right-click menu is the native Win32 popup, and its builder drops every item
+    // that has no native id, so the entry is only reachable once the map carries it.
+    const std::uint32_t findReferencesId = kb::editor::EditorAssetBrowserNativeCommandMap::Id(
+        kb::editor::EditorAssetContextCommand::FindReferences);
+    kb::editor::tests::Require(findReferencesId != 0U
+            && kb::editor::EditorAssetBrowserNativeCommandMap::Command(findReferencesId)
+                == kb::editor::EditorAssetContextCommand::FindReferences,
+        "Find References must round-trip through the native Project Files command map");
+
+    const kb::assets::AssetMetadata* prefab = manager.Registry().FindByPath("/Game/Environment/Stone.kbprefab");
+    kb::editor::tests::Require(prefab != nullptr, "Particle effect context menu test did not register the prefab asset");
+    kb::editor::tests::Require(state.OpenContextMenuForAsset(220, 70, prefab->id, manager), "Asset browser should open a prefab asset context menu");
+    kb::editor::tests::Require(std::ranges::none_of(state.ContextMenuItems(manager), [](const kb::editor::EditorAssetContextMenuItem& item) {
+            return item.command == kb::editor::EditorAssetContextCommand::FindReferences;
+        }),
+        "Find References must stay off assets whose scene usage cannot be queried");
+}
+
 void RunMaterialAssetDoubleClickOpensMaterialEditorTest() {
     kb::assets::AssetManager manager;
     static_cast<void>(manager.RegisterAsset(Metadata("PreviewMaterial", "RenderMaterial", "/Game/Materials/PreviewMaterial.kbmat")));
@@ -1115,6 +1150,7 @@ void RunEditorAssetBrowserTests() {
     RunContextMenuHitTestTest();
     RunImportCommandHitTestTest();
     RunMaterialContextMenuCommandTest();
+    RunParticleEffectContextMenuExposesFindReferencesTest();
     RunMaterialAssetDoubleClickOpensMaterialEditorTest();
     RunMaterialAssetIconResolverRecognizesPreviewMaterialsTest();
     RunSkeletalMeshThumbnailUsesAssetGeometryTest();

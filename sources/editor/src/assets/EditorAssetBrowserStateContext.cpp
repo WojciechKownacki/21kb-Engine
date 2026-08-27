@@ -2,6 +2,10 @@
 
 #include "assets/EditorAssetBrowserPathUtils.hpp"
 
+#include "engine/scene/ParticleEffectAssetIO.hpp"
+
+#include <algorithm>
+
 namespace kb::editor {
 namespace {
 
@@ -45,6 +49,13 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserState::ContextMenuItem
         }
         if (metadata != nullptr && (metadata->type == "RenderMesh" || metadata->importCategory == "Mesh")) {
             items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::ExtractMaterials, .label = "Extract Material Instances", .separatorAfter = true });
+        }
+        // Particle effects are the second asset kind whose scene usage can be
+        // queried, so they carry the same entry the material menu already has,
+        // in the same place: after Delete and before Refresh.
+        if (metadata != nullptr && metadata->type == kb::scene::kParticleEffectAssetType) {
+            const auto refresh = std::ranges::find(items, EditorAssetContextCommand::Refresh, &EditorAssetContextMenuItem::command);
+            items.insert(refresh, EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::FindReferences, .label = "Find References", .separatorAfter = true });
         }
     }
     return items;
