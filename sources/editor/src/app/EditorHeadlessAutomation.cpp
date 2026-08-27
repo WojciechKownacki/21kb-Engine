@@ -4,6 +4,8 @@
 #include "app/EditorPlayModeState.hpp"
 #include "app/EditorPointerDragState.hpp"
 #include "app/EditorShellInteractionState.hpp"
+#include "app/ParticleEditorPanelInteraction.hpp"
+#include "assets/EditorAssetBrowserState.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
@@ -19,6 +21,7 @@
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MainWindowBackBufferPainter.hpp"
 #include "rendering/PanelContentRenderer.hpp"
+#include "rendering/ParticleEditorPanelLayout.hpp"
 #include "rendering/ScriptEditorPanelRenderer.hpp"
 #include "rendering/script_editor/ScriptEditorWindow.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -985,6 +988,135 @@ EditorHeadlessAutomation::VerifyParticleThumbnail(
     if (!result.succeeded) {
         thumbnails.CancelPendingWork(&impl_->viewport);
     }
+    return result;
+}
+
+EditorHeadlessAutomation::ParticleDependencyNavigation
+EditorHeadlessAutomation::VerifyParticleDependencyNavigation() {
+    ParticleDependencyNavigation result{};
+    if (!context_.HasParticleEditorAsset()) {
+        Trace("assert_particle_dependency_navigation", false, "no-open-effect");
+        return result;
+    }
+
+    const auto inspector = context_.ParticleEditorInspector();
+    result.dependencyCount = inspector.dependencies.size();
+    if (inspector.dependencies.empty()) {
+        Trace("assert_particle_dependency_navigation", false, "no-dependencies");
+        return result;
+    }
+    result.expectedAsset = inspector.dependencies.front().assetId;
+
+    const auto rows = context_.ParticleEditorEmitterRows();
+    const auto recipes = context_.ParticleEditorRecipes();
+    const auto resolveLayout = [&]() {
+        return ParticleEditorPanelLayoutResolver::Resolve(
+            kInspectorContent, rows,
+            context_.ParticleEditorWorkspace().ComposerScrollOffset(), 96U,
+            &inspector, recipes.size(), &context_.ParticleEditorWorkspace());
+    };
+    const auto inside = [](const RECT& rect, int x, int y) {
+        return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+    };
+    // The composer is a scrolling stream and its hit test ignores anything outside the
+    // visible list, so reach a target the way an author does: scroll it into view first,
+    // in the same 108-pixel steps the production wheel router uses.
+    const auto scrollIntoView = [&](auto&& target) -> std::optional<ParticleEditorPanelLayout> {
+        for (int step = 0; step < 64; ++step) {
+            ParticleEditorPanelLayout layout = resolveLayout();
+            const RECT rect = target(layout);
+            if (inside(layout.emitterList, (rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2)) {
+                return layout;
+            }
+            const int maximum = ParticleEditorPanelLayoutResolver::MaximumComposerScroll(layout, 96U);
+            const int current = context_.ParticleEditorWorkspace().ComposerScrollOffset();
+            if (current >= maximum) {
+                return std::nullopt;
+            }
+            context_.SetParticleEditorComposerScrollOffset(std::min(maximum, current + 108));
+        }
+        return std::nullopt;
+    };
+    const auto clickCentre = [&](const ParticleEditorPanelLayout& layout, const RECT& target) {
+        return ParticleEditorPanelLayoutResolver::HitTest(
+            layout, (target.left + target.right) / 2, (target.top + target.bottom) / 2);
+    };
+
+    // An assertion must not leave the editor somewhere else than it found it: later steps
+    // read the live Asset Browser selection and composer state.
+    const kb::assets::AssetId originalAsset = context_.AssetBrowser().SelectedAsset();
+    const int originalScroll = context_.ParticleEditorWorkspace().ComposerScrollOffset();
+    const bool startedExpanded = context_.ParticleEditorWorkspace().ComposerSectionExpanded(
+        kb::particle_editor::ParticleEditorComposerSection::Dependencies);
+    const auto restore = [&]() {
+        if (context_.AssetBrowser().SelectedAsset() != originalAsset) {
+            context_.AssetBrowser().ClearSelection();
+            if (originalAsset.IsValid()) {
+                static_cast<void>(context_.AssetBrowser().SelectAsset(
+                    originalAsset, context_.Scene().Assets().Manager()));
+            }
+        }
+        if (!startedExpanded &&
+            context_.ParticleEditorWorkspace().ComposerSectionExpanded(
+                kb::particle_editor::ParticleEditorComposerSection::Dependencies)) {
+            context_.ToggleParticleEditorComposerSection(
+                kb::particle_editor::ParticleEditorComposerSection::Dependencies);
+        }
+        context_.SetParticleEditorComposerScrollOffset(originalScroll);
+    };
+
+    // The Dependencies section starts collapsed, so open it through the section header
+    // the panel actually draws rather than by poking workspace state.
+    if (!startedExpanded) {
+        const auto header = scrollIntoView(
+            [](const ParticleEditorPanelLayout& layout) { return layout.dependencyHeader; });
+        if (!header.has_value()) {
+            Trace("assert_particle_dependency_navigation", false, "dependency-header-unreachable");
+            restore();
+            return result;
+        }
+        const ParticleEditorPanelHit headerHit = clickCentre(*header, header->dependencyHeader);
+        if (headerHit.action != ParticleEditorPanelAction::ToggleComposerSection ||
+            headerHit.composerSection !=
+                kb::particle_editor::ParticleEditorComposerSection::Dependencies ||
+            !ParticleEditorPanelInteraction::Execute(context_, headerHit)) {
+            Trace("assert_particle_dependency_navigation", false, "section-toggle-failed");
+            restore();
+            return result;
+        }
+    }
+
+    if (resolveLayout().dependencyRowCount == 0U) {
+        Trace("assert_particle_dependency_navigation", false, "no-dependency-rows");
+        restore();
+        return result;
+    }
+    const auto rowLayout = scrollIntoView(
+        [](const ParticleEditorPanelLayout& layout) { return layout.dependencyRows[0]; });
+    if (!rowLayout.has_value()) {
+        Trace("assert_particle_dependency_navigation", false, "dependency-row-unreachable");
+        restore();
+        return result;
+    }
+
+    const ParticleEditorPanelHit hit = clickCentre(*rowLayout, rowLayout->dependencyRows[0]);
+    if (hit.action != ParticleEditorPanelAction::NavigateDependency || hit.dependencyIndex != 0U) {
+        Trace("assert_particle_dependency_navigation", false, "unexpected-row-action");
+        restore();
+        return result;
+    }
+
+    // Start from an empty Asset Browser selection so the assertion proves the navigation
+    // performed the reveal instead of reading a selection that was already there.
+    context_.AssetBrowser().ClearSelection();
+    const bool navigated = ParticleEditorPanelInteraction::Execute(context_, hit);
+    result.selectedAsset = context_.AssetBrowser().SelectedAsset();
+    result.succeeded = navigated && result.expectedAsset.IsValid() &&
+        result.selectedAsset == result.expectedAsset;
+    restore();
+    Trace("assert_particle_dependency_navigation", result.succeeded,
+        std::string{"navigated="} + (navigated ? "1" : "0") +
+            ", path=" + inspector.dependencies.front().virtualPath);
     return result;
 }
 
