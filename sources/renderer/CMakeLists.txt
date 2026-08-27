@@ -631,6 +631,13 @@ if(BUILD_TESTING)
 
     kb_apply_quality_gates(kb_renderer_tests)
 
+    if(MSVC AND KB_ENABLE_SANITIZERS)
+        # The aggregate renderer test executable runs a large number of independently verified
+        # suites in one process. MSVC AddressSanitizer's stack instrumentation exceeds the
+        # platform's 1 MiB default reserve even though each suite passes in isolation.
+        target_link_options(kb_renderer_tests PRIVATE /STACK:8388608)
+    endif()
+
     add_executable(kb_21kb_particle_renderer_tests
         tests/ParticleRendererTests.cpp
     )

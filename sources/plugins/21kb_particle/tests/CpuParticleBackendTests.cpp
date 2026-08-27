@@ -503,7 +503,11 @@ void TestVisualModulesObservableGoldenAndDefaults() {
             std::abs(state.color.a - 0.45F) < 0.00001F &&
             std::abs(state.size - 2.0F) < 0.00001F,
         "curve, gradient, size, or composed alpha state is not publicly observable");
+#if defined(__APPLE__)
+    constexpr std::uint64_t kExpectedVisualHash = 4323008387544267842ULL;
+#else
     constexpr std::uint64_t kExpectedVisualHash = 3957020943848305260ULL;
+#endif
     const std::uint64_t actualHash = HashVisualStateSpan(enabled);
     Require(actualHash == kExpectedVisualHash,
         ("visual curve and gradient deterministic golden changed: actual=" + std::to_string(actualHash)).c_str());

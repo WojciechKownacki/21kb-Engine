@@ -15,6 +15,7 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "cs_levg_meshlet_cull.sc", .stage = ShaderStage::Compute},
     ShaderManifestEntry{.name = "cs_levg_meshlet_finalize.sc", .stage = ShaderStage::Compute},
     ShaderManifestEntry{.name = "cs_massive_fill.sc", .stage = ShaderStage::Compute},
+    ShaderManifestEntry{.name = "cs_particle_visual_integrate.sc", .stage = ShaderStage::Compute},
     ShaderManifestEntry{.name = "fs_editor_gizmo.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_editor_gizmo_resolve.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_editor_grid.sc", .stage = ShaderStage::Fragment},
