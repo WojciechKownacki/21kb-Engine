@@ -50,6 +50,10 @@ bool StartsWithFolder(const std::filesystem::path& path, const std::filesystem::
     return pathText == folderText || (pathText.size() > folderText.size() && pathText.starts_with(folderText + "/"));
 }
 
+bool IsProjectContent(const std::filesystem::path& virtualPath) {
+    return StartsWithFolder(virtualPath, std::filesystem::path{ "/Game" });
+}
+
 std::set<std::string> AllFolderPaths(const kb::assets::AssetManager& manager) {
     std::set<std::string> folders;
     for (const std::filesystem::path& folder : manager.VirtualFolders()) {
