@@ -596,6 +596,7 @@ void WriteTriangleObj(const std::filesystem::path& path) {
     result.lodDisabledMilliseconds = lod.disabledMilliseconds;
 
     palettes.Shutdown();
+    renderer.ReleaseScene(scene);
     std::filesystem::remove_all(root, error);
     Require(!error, "SK-12.87 could not remove its dedicated fixture root");
     return result;
