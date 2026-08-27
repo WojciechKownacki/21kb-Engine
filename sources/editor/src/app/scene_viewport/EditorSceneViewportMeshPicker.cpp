@@ -24,6 +24,11 @@ constexpr float kRayAabbParallelEpsilon = 0.00001F;
 constexpr float kLightWirePickThresholdPixels = 16.0F;
 constexpr float kLightWirePickTieEpsilon = 0.25F;
 constexpr float kLightIconPickRadiusPixels = 30.0F;
+// An entity whose only components are non-visual (script, rigidbody, collider) or that
+// merely groups children draws no overlay, so its pick target is its projected origin.
+// Kept tighter than the drawn icons: it is an unmarked target, and a generous radius
+// would let empty space steal clicks.
+constexpr float kEntityOriginPickRadiusPixels = 18.0F;
 constexpr float kPi = 3.14159265358979323846F;
 
 struct ScreenPoint {
@@ -368,6 +373,53 @@ void PickNearestParticleVisitor(
         pick, entity, center, kLightIconPickRadiusPixels, cameraDistance);
 }
 
+[[nodiscard]] bool HasDedicatedPickRepresentation(const kb::scene::Scene& scene, kb::scene::SceneEntity entity) noexcept {
+    const kb::scene::SceneComponentQueries components = scene.Components();
+    return components.MeshRenderers().Has(entity) || components.Lights().Has(entity) ||
+        components.ParticleEffects().Has(entity);
+}
+
+void ConsiderEntityOriginPick(NearestPickContext& pick, kb::scene::SceneEntity entity, ScreenPoint center, float distance) {
+    const float score = Distance(pick.mouse, center);
+    if (score > kEntityOriginPickRadiusPixels || distance <= 0.0F) {
+        return;
+    }
+
+    OverlayPickCandidate candidate{
+        .entity = entity,
+        .distance = distance,
+        .score = score,
+        // Tie-break as the widest overlay so a drawn icon or wireframe of comparable score
+        // wins: a visible target is always the better answer to the same click.
+        .radius = kLightIconPickRadiusPixels,
+        // A mesh in front must keep the click, otherwise every parent or grouping node
+        // sharing a mesh origin would steal it.
+        .blocksMesh = false,
+    };
+    if (BetterOverlayPick(candidate, pick.overlayPick)) {
+        pick.overlayPick = candidate;
+    }
+}
+
+void PickNearestEntityVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, void* context) {
+    auto& pick = *static_cast<NearestPickContext*>(context);
+    if (pick.scene == nullptr || pick.camera == nullptr ||
+        HasDedicatedPickRepresentation(*pick.scene, entity) ||
+        !kb::scene::ResolveVisibility(*pick.scene, entity).visible) {
+        return;
+    }
+
+    const kb::scene::Vec3 position = ResolveWorldPosition(transform);
+    const EditorViewportCameraAxes cameraAxes = pick.camera->Axes();
+    const float cameraDistance = EditorSceneViewportMath::Dot(
+        EditorSceneViewportMath::Sub(position, cameraAxes.position), cameraAxes.forward);
+    ScreenPoint center{};
+    if (cameraDistance <= 0.0F || !Project(*pick.camera, pick.renderArea, position, center)) {
+        return;
+    }
+    ConsiderEntityOriginPick(pick, entity, center, cameraDistance);
+}
+
 void ConsiderRectTransform(
     kb::scene::SceneEntity entity,
     const kb::scene::TransformComponent& transform,
@@ -418,6 +470,14 @@ void PickRectParticleVisitor(
     }
 }
 
+void PickRectEntityVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, void* context) {
+    auto& pick = *static_cast<RectPickContext*>(context);
+    if (pick.scene == nullptr || HasDedicatedPickRepresentation(*pick.scene, entity)) {
+        return;
+    }
+    ConsiderRectTransform(entity, transform, pick);
+}
+
 void Deduplicate(std::vector<kb::scene::SceneEntity>& entities) {
     std::ranges::sort(entities, {}, &kb::scene::SceneEntity::Id);
     entities.erase(std::ranges::unique(entities).begin(), entities.end());
@@ -451,6 +511,7 @@ EditorSceneViewportPickResult EditorSceneViewportMeshPicker::PickNearest(
     scene.Components().Visitors().ForEachLight(&PickNearestLightVisitor, &context);
     static_cast<const kb::scene::Scene&>(scene).Components().ParticleEffects().ForEach(
         &PickNearestParticleVisitor, &context);
+    scene.Transforms().ForEach(&PickNearestEntityVisitor, &context);
     if (context.overlayPick.IsValid() &&
         (context.overlayPick.blocksMesh || !context.result.IsValid())) {
         return EditorSceneViewportPickResult{
@@ -477,6 +538,7 @@ std::vector<kb::scene::SceneEntity> EditorSceneViewportMeshPicker::PickInsideRec
     scene.Components().Visitors().ForEachLight(&PickRectLightVisitor, &context);
     static_cast<const kb::scene::Scene&>(scene).Components().ParticleEffects().ForEach(
         &PickRectParticleVisitor, &context);
+    scene.Transforms().ForEach(&PickRectEntityVisitor, &context);
     Deduplicate(context.entities);
     return context.entities;
 }
