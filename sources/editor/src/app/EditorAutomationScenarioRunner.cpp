@@ -3705,6 +3705,16 @@ ReadScriptValue(
             "modeless selection contract" };
     }
 
+    if (*operation == "assert_particle_dependency_navigation") {
+        const auto navigation =
+            state.automation.VerifyParticleDependencyNavigation();
+        return {
+            navigation.succeeded,
+            "dependencies=" + std::to_string(navigation.dependencyCount) +
+                ", expected=" + std::to_string(navigation.expectedAsset.value) +
+                ", selected=" + std::to_string(navigation.selectedAsset.value) };
+    }
+
     if (*operation == "assert_particle_thumbnail") {
         const auto asset = StringMember(step, "asset", error);
         const double maxTicksValue = NumberMember(
