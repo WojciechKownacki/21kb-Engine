@@ -2,6 +2,7 @@
 
 #include "assets/EditorAssetBrowserState.hpp"
 #include "engine/scene/LightComponent.hpp"
+#include "engine/scene/ParticleEffectAssetIO.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "platform/win32/EditorAssetImportDialog.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -123,11 +124,16 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
             return sceneContext.DeleteAssetBrowserFolder(targetFolder);
         }
         return sceneContext.DeleteSelectedAssetBrowserItem();
-    case EditorAssetContextCommand::FindReferences:
-        if (targetKind == EditorAssetContextTargetKind::Asset) {
-            return sceneContext.FindMaterialReferences(targetAsset);
+    case EditorAssetContextCommand::FindReferences: {
+        if (targetKind != EditorAssetContextTargetKind::Asset) {
+            return false;
         }
-        return false;
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(targetAsset);
+        if (metadata != nullptr && metadata->type == kb::scene::kParticleEffectAssetType) {
+            return sceneContext.FindParticleEffectReferences(targetAsset);
+        }
+        return sceneContext.FindMaterialReferences(targetAsset);
+    }
     case EditorAssetContextCommand::Refresh:
         static_cast<void>(sceneContext.Scene().Assets().Discover());
         return true;

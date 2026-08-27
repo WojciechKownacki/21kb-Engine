@@ -845,6 +845,7 @@ add_executable(kb_editor WIN32
     src/scene/material/EditorMaterialAssetEditCommand.cpp
     src/scene/material/EditorMaterialAssetGateway.cpp
     src/scene/material/EditorMaterialReferenceFinder.cpp
+    src/scene/particle/EditorParticleEffectReferenceFinder.cpp
     src/scene/material/EditorEmbeddedMaterialAssetWriter.cpp
     src/scene/material/EditorEmbeddedMaterialExtractor.cpp
     src/scene/material/EditorEmbeddedMaterialTextureResolver.cpp
@@ -1226,6 +1227,7 @@ if(BUILD_TESTING)
     src/scene/material/EditorMaterialAssetEditCommand.cpp
     src/scene/material/EditorMaterialAssetGateway.cpp
     src/scene/material/EditorMaterialReferenceFinder.cpp
+    src/scene/particle/EditorParticleEffectReferenceFinder.cpp
     src/scene/material/EditorEmbeddedMaterialAssetWriter.cpp
     src/scene/material/EditorEmbeddedMaterialExtractor.cpp
     src/scene/material/EditorEmbeddedMaterialTextureResolver.cpp
