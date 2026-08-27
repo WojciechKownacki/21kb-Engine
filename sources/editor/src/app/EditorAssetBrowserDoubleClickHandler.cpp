@@ -6,6 +6,7 @@
 #include "assets/EditorAssetBrowserHitPayloadResolver.hpp"
 #include "assets/EditorAssetBrowserHitTester.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
+#include "assets/EditorAssetOpenPolicy.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/AnimationAssetIO.hpp"
@@ -17,25 +18,11 @@
 #include "rendering/ProjectFilesAssetIconResolver.hpp"
 #include "scene/EditorSceneContext.hpp"
 
-#include <algorithm>
-#include <cctype>
 #include <filesystem>
 #include <optional>
-#include <string>
 
 namespace kb::editor {
 namespace {
-
-[[nodiscard]] std::string Lower(std::string text) {
-    std::ranges::transform(text, text.begin(), [](unsigned char value) {
-        return static_cast<char>(std::tolower(value));
-    });
-    return text;
-}
-
-[[nodiscard]] bool IsSceneDocumentAsset(const kb::assets::AssetMetadata& metadata) {
-    return metadata.type == "Scene" && Lower(metadata.virtualPath.extension().string()) == ".21kbscene";
-}
 
 [[nodiscard]] std::filesystem::path ResolveAssetPath(
     const kb::assets::AssetMetadata& metadata,
@@ -68,14 +55,28 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::Handle
     }
     case EditorAssetBrowserHitKind::Asset: {
         const std::optional<kb::assets::AssetMetadata> metadata = EditorAssetBrowserHitPayloadResolver::AssetMetadataAt(hit, state, manager);
-        if (!metadata.has_value()) {
-            return EditorAssetBrowserDoubleClickResult::None;
-        }
-        if (metadata->type == "LuaScript") {
-            return sceneContext.OpenLuaScript(metadata->id)
-                ? EditorAssetBrowserDoubleClickResult::ScriptEditorOpened
-                : EditorAssetBrowserDoubleClickResult::None;
-        }
+        return metadata.has_value() ? OpenAsset(owner, *metadata, sceneContext)
+                                    : EditorAssetBrowserDoubleClickResult::None;
+    }
+    default:
+        return EditorAssetBrowserDoubleClickResult::None;
+    }
+}
+
+// The single open route. Double-click and the Project Files Open command must not
+// drift apart, so both resolve the target asset and then land here.
+EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::OpenAsset(
+    HWND owner,
+    const kb::assets::AssetMetadata& metadataValue,
+    EditorSceneContext& sceneContext) {
+    EditorAssetBrowserState& state = sceneContext.AssetBrowser();
+    kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    const kb::assets::AssetMetadata* const metadata = &metadataValue;
+    if (metadata->type == "LuaScript") {
+        return sceneContext.OpenLuaScript(metadata->id)
+            ? EditorAssetBrowserDoubleClickResult::ScriptEditorOpened
+            : EditorAssetBrowserDoubleClickResult::None;
+    }
         // The Project Files glyph and its activation must classify the two
         // skeletal document kinds identically.
         if (ProjectFilesAssetIconResolver::IsSkeletalMesh(*metadata)) {
@@ -89,15 +90,15 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::Handle
                 : EditorAssetBrowserDoubleClickResult::None;
         }
         if (metadata->type == kb::scene::kAnimationClipAssetType) {
-            return sceneContext.OpenAnimationClipEditorAsset(metadata->id)
-                ? EditorAssetBrowserDoubleClickResult::AnimationClipEditorOpened
-                : EditorAssetBrowserDoubleClickResult::None;
-        }
-        if (metadata->type == kb::scene::kAnimatorControllerAssetType) {
+        return sceneContext.OpenAnimationClipEditorAsset(metadata->id)
+            ? EditorAssetBrowserDoubleClickResult::AnimationClipEditorOpened
+            : EditorAssetBrowserDoubleClickResult::None;
+    }
+    if (metadata->type == kb::scene::kAnimatorControllerAssetType) {
             return sceneContext.OpenAnimatorEditorAsset(metadata->id)
-                ? EditorAssetBrowserDoubleClickResult::AnimatorEditorOpened
-                : EditorAssetBrowserDoubleClickResult::None;
-        }
+            ? EditorAssetBrowserDoubleClickResult::AnimatorEditorOpened
+            : EditorAssetBrowserDoubleClickResult::None;
+    }
         if (metadata->type == kb::scene::kParticleEffectAssetType) {
             if (!EditorParticleDocumentLifecycle::Resolve(
                     owner, sceneContext,
@@ -110,31 +111,27 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::Handle
                 : EditorAssetBrowserDoubleClickResult::None;
         }
         if (metadata->type == kb::scene::kTimelineAssetType) {
-            return sceneContext.OpenAnimationAsset(metadata->id)
-                ? EditorAssetBrowserDoubleClickResult::ScriptEditorOpened
-                : EditorAssetBrowserDoubleClickResult::None;
-        }
-        if (metadata->type == "RenderMaterial" || metadata->type == "RenderMaterialInstance" || metadata->type == kb::render::kRenderMaterialGraphAssetType) {
-            if (!sceneContext.OpenMaterialEditorAsset(metadata->id)) {
-                return EditorAssetBrowserDoubleClickResult::None;
-            }
-            return HandleMaterialAssetDoubleClick(*metadata, state, manager);
-        }
-        if (!IsSceneDocumentAsset(*metadata)) {
-            return EditorAssetBrowserDoubleClickResult::None;
-        }
-        const std::optional<EditorDirtySceneResolution> resolution =
-            EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(owner, sceneContext, L"opening another scene");
-        if (!resolution.has_value()) {
-            return EditorAssetBrowserDoubleClickResult::None;
-        }
-        return sceneContext.OpenScene(ResolveAssetPath(*metadata, manager), *resolution)
-            ? EditorAssetBrowserDoubleClickResult::SceneOpened
+        return sceneContext.OpenAnimationAsset(metadata->id)
+            ? EditorAssetBrowserDoubleClickResult::ScriptEditorOpened
             : EditorAssetBrowserDoubleClickResult::None;
     }
-    default:
+    if (metadata->type == "RenderMaterial" || metadata->type == "RenderMaterialInstance" || metadata->type == kb::render::kRenderMaterialGraphAssetType) {
+        if (!sceneContext.OpenMaterialEditorAsset(metadata->id)) {
+            return EditorAssetBrowserDoubleClickResult::None;
+        }
+        return HandleMaterialAssetDoubleClick(*metadata, state, manager);
+    }
+    if (!EditorAssetOpenPolicy::IsSceneDocument(*metadata)) {
         return EditorAssetBrowserDoubleClickResult::None;
     }
+    const std::optional<EditorDirtySceneResolution> resolution =
+        EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(owner, sceneContext, L"opening another scene");
+    if (!resolution.has_value()) {
+        return EditorAssetBrowserDoubleClickResult::None;
+    }
+    return sceneContext.OpenScene(ResolveAssetPath(*metadata, manager), *resolution)
+        ? EditorAssetBrowserDoubleClickResult::SceneOpened
+        : EditorAssetBrowserDoubleClickResult::None;
 }
 
 } // namespace kb::editor

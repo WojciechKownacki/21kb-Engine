@@ -6,6 +6,7 @@
 #include "assets/EditorAssetBrowserState.hpp"
 #include "app/EditorAssetBrowserDoubleClickHandler.hpp"
 #include "app/EditorAssetBrowserNativeCommandMap.hpp"
+#include "assets/EditorAssetOpenPolicy.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -717,12 +718,17 @@ void RunContextMenuHitTestTest() {
     kb::editor::EditorAssetBrowserState state;
     kb::editor::tests::Require(state.OpenContextMenuForAsset(220, 70, id, manager), "Asset browser should open context menu for a registered asset");
     const RECT content{ 0, 0, 640, 240 };
-    const RECT menu = kb::editor::EditorAssetBrowserLayout::ContextMenuRect(content, state.ContextMenuX(), state.ContextMenuY(), static_cast<int>(state.ContextMenuItems(manager).size()));
-    const RECT rename = kb::editor::EditorAssetBrowserLayout::ContextMenuItemRect(menu, 0);
-    const kb::editor::EditorAssetBrowserHit hit = kb::editor::EditorAssetBrowserHitTester::HitTest(content, (rename.left + rename.right) / 2, (rename.top + rename.bottom) / 2, state, manager);
+    const std::vector<kb::editor::EditorAssetContextMenuItem> items = state.ContextMenuItems(manager);
+    const RECT menu = kb::editor::EditorAssetBrowserLayout::ContextMenuRect(content, state.ContextMenuX(), state.ContextMenuY(), static_cast<int>(items.size()));
+    const RECT firstRow = kb::editor::EditorAssetBrowserLayout::ContextMenuItemRect(menu, 0);
+    const kb::editor::EditorAssetBrowserHit hit = kb::editor::EditorAssetBrowserHitTester::HitTest(content, (firstRow.left + firstRow.right) / 2, (firstRow.top + firstRow.bottom) / 2, state, manager);
 
     kb::editor::tests::Require(hit.kind == kb::editor::EditorAssetBrowserHitKind::ContextMenuCommand, "Asset browser context menu row should be hit-testable");
-    kb::editor::tests::Require(hit.command == kb::editor::EditorAssetContextCommand::Rename, "Asset browser first asset context command should rename");
+    kb::editor::tests::Require(!items.empty() && hit.command == items.front().command, "Asset browser context menu row should resolve to the command the model puts there");
+    kb::editor::tests::Require(std::ranges::any_of(items, [](const kb::editor::EditorAssetContextMenuItem& item) {
+            return item.command == kb::editor::EditorAssetContextCommand::Rename;
+        }),
+        "Asset browser asset context menu should still offer Rename");
 }
 
 void RunImportCommandHitTestTest() {
@@ -845,6 +851,53 @@ void RunMaterialContextMenuCommandTest() {
     kb::editor::tests::Require(state.OpenContextMenuForAsset(220, 70, mesh->id, manager), "Asset browser should open a mesh asset context menu");
     const std::vector<kb::editor::EditorAssetContextMenuItem> meshItems = state.ContextMenuItems(manager);
     kb::editor::tests::Require(!meshItems.empty() && meshItems.front().command == kb::editor::EditorAssetContextCommand::ExtractMaterials, "Mesh asset context menu should expose Extract Materials first");
+}
+
+void RunAssetContextMenuExposesOpenAndDuplicateTest() {
+    kb::assets::AssetManager manager;
+    static_cast<void>(manager.RegisterAsset(Metadata("Sparks", "ParticleEffect", "/Game/Vfx/Sparks.kbvfx")));
+    static_cast<void>(manager.RegisterAsset(Metadata("Character", "RenderMesh", "/Game/Environment/Character.gltf")));
+    kb::editor::EditorAssetBrowserState state;
+
+    const auto commandsFor = [&](const char* virtualPath) {
+        const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath(virtualPath);
+        kb::editor::tests::Require(metadata != nullptr, "Open and Duplicate menu test did not register its asset");
+        kb::editor::tests::Require(state.OpenContextMenuForAsset(220, 70, metadata->id, manager), "Asset browser should open the asset context menu");
+        return state.ContextMenuItems(manager);
+    };
+    const auto has = [](const std::vector<kb::editor::EditorAssetContextMenuItem>& items, kb::editor::EditorAssetContextCommand command) {
+        return std::ranges::any_of(items, [command](const kb::editor::EditorAssetContextMenuItem& item) {
+            return item.command == command;
+        });
+    };
+
+    const std::vector<kb::editor::EditorAssetContextMenuItem> effectItems = commandsFor("/Game/Vfx/Sparks.kbvfx");
+    kb::editor::tests::Require(!effectItems.empty() && effectItems.front().command == kb::editor::EditorAssetContextCommand::Open,
+        "An openable asset should offer Open first in its context menu");
+    kb::editor::tests::Require(has(effectItems, kb::editor::EditorAssetContextCommand::Duplicate),
+        "Every asset context menu should offer Duplicate");
+
+    // A mesh has no editor behind the open route, so the entry must stay away rather
+    // than sit there declining every click.
+    const std::vector<kb::editor::EditorAssetContextMenuItem> meshItems = commandsFor("/Game/Environment/Character.gltf");
+    kb::editor::tests::Require(!has(meshItems, kb::editor::EditorAssetContextCommand::Open),
+        "Open must not be offered for an asset the open route cannot open");
+    kb::editor::tests::Require(has(meshItems, kb::editor::EditorAssetContextCommand::Duplicate),
+        "A mesh asset should still offer Duplicate");
+
+    for (const kb::editor::EditorAssetContextCommand command : {
+             kb::editor::EditorAssetContextCommand::Open,
+             kb::editor::EditorAssetContextCommand::Duplicate }) {
+        const std::uint32_t id = kb::editor::EditorAssetBrowserNativeCommandMap::Id(command);
+        kb::editor::tests::Require(id != 0U && kb::editor::EditorAssetBrowserNativeCommandMap::Command(id) == command,
+            "Open and Duplicate must round-trip through the native Project Files command map");
+    }
+
+    const kb::assets::AssetMetadata* effect = manager.Registry().FindByPath("/Game/Vfx/Sparks.kbvfx");
+    const kb::assets::AssetMetadata* mesh = manager.Registry().FindByPath("/Game/Environment/Character.gltf");
+    kb::editor::tests::Require(effect != nullptr && mesh != nullptr, "Open policy test lost its fixtures");
+    kb::editor::tests::Require(kb::editor::EditorAssetOpenPolicy::CanOpen(*effect) && !kb::editor::EditorAssetOpenPolicy::CanOpen(*mesh),
+        "The open policy must agree with the menu about what can be opened");
 }
 
 void RunParticleEffectContextMenuExposesFindReferencesTest() {
@@ -1151,6 +1204,7 @@ void RunEditorAssetBrowserTests() {
     RunImportCommandHitTestTest();
     RunMaterialContextMenuCommandTest();
     RunParticleEffectContextMenuExposesFindReferencesTest();
+    RunAssetContextMenuExposesOpenAndDuplicateTest();
     RunMaterialAssetDoubleClickOpensMaterialEditorTest();
     RunMaterialAssetIconResolverRecognizesPreviewMaterialsTest();
     RunSkeletalMeshThumbnailUsesAssetGeometryTest();
