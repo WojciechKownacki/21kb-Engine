@@ -1476,11 +1476,22 @@ struct StandaloneProjectRuntimeConfig {
         static_cast<const kb::scene::Scene&>(scene)
             .Particles()
             .LiveInstanceIds();
+    const kb::assets::AssetMetadata* runtimeParticleMetadata =
+        scene.Assets().Manager().Registry().FindByPath("/Game/runtime.kbvfx");
+    const bool scriptedParticleInstanceValid =
+        runtimeParticleMetadata != nullptr &&
+        std::any_of(
+            particleInstances.begin(), particleInstances.end(),
+            [&](std::uint64_t instanceId) {
+                const kb::particles::ParticleRuntimeQueryResult query =
+                    kb::particles::ParticlePlayback::Query(scene, instanceId);
+                return query.Succeeded() && query.state &&
+                    query.assetId == runtimeParticleMetadata->id.value &&
+                    query.liveParticleCount == 2U;
+            });
     const bool particleRuntimeValid =
-        !kb::particles::ParticlePlayback::HasBackend(scene) &&
-        scene.Particles().CreateDetailed(1U, {}).status ==
-            kb::particles::ParticleRuntimeStatus::BackendUnavailable &&
-        particleInstances.empty();
+        kb::particles::ParticlePlayback::HasBackend(scene) &&
+        scriptedParticleInstanceValid;
     const bool scriptHasRenderFrame = scriptHost != nullptr &&
         scriptHost->SharedState()
             .Get("runtimeHasRenderFrame")
