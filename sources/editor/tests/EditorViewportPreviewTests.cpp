@@ -9,6 +9,7 @@
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/ParticleEffectComponent.hpp"
+#include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAnimators.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -1293,13 +1294,98 @@ void RunViewportParticleIconPickerSelectsParticleEffectTest() {
         "Viewport picker should select the visible particle icon with the same forgiving target as light icons");
 }
 
+void RunViewportPickerSelectsEntityWithoutRenderableComponentTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity projectile = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Projectile" });
+    scene.Components().Rigidbodies().Set(projectile, kb::scene::RigidbodyComponent{});
+
+    const kb::editor::EditorViewportCameraState camera;
+    const kb::editor::EditorViewportCameraAxes axes = camera.Axes();
+    const kb::scene::Vec3 position = axes.position + axes.forward * 5.0F;
+    scene.Transforms().Set(
+        projectile,
+        kb::scene::TransformComponent{ .localPosition = position });
+
+    const RECT renderArea{0, 0, 960, 540};
+    float screenX = 0.0F;
+    float screenY = 0.0F;
+    kb::editor::tests::Require(
+        kb::editor::EditorSceneViewportMath::WorldToScreen(
+            camera, renderArea, position, screenX, screenY),
+        "Non-renderable entity test point should project into the viewport");
+
+    const kb::editor::EditorSceneViewportPickResult pick =
+        kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+            scene,
+            camera,
+            renderArea,
+            screenX + 8.0F,
+            screenY,
+            BuildViewportRay(camera, renderArea, screenX + 8.0F, screenY));
+    kb::editor::tests::Require(
+        pick.IsValid() && pick.entity == projectile,
+        "Viewport picker should select an entity that has no mesh, light, or particle component");
+
+    const kb::editor::EditorSceneViewportPickResult miss =
+        kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+            scene,
+            camera,
+            renderArea,
+            screenX + 40.0F,
+            screenY,
+            BuildViewportRay(camera, renderArea, screenX + 40.0F, screenY));
+    kb::editor::tests::Require(
+        !miss.IsValid(),
+        "The unmarked entity origin target must stay bounded instead of claiming distant clicks");
+}
+
+void RunViewportMeshWinsOverEntityOriginPickTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity group = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Group" });
+    const kb::scene::SceneEntity mesh = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Mesh At Group Origin" });
+    scene.Components().MeshRenderers().Set(
+        mesh, kb::scene::MeshRendererComponent{ .meshAssetId = 707U });
+
+    const kb::editor::EditorViewportCameraState camera;
+    const kb::editor::EditorViewportCameraAxes axes = camera.Axes();
+    const kb::scene::Vec3 position = axes.position + axes.forward * 5.0F;
+    scene.Transforms().Set(group, kb::scene::TransformComponent{ .localPosition = position });
+    scene.Transforms().Set(mesh, kb::scene::TransformComponent{ .localPosition = position });
+
+    const RECT renderArea{0, 0, 960, 540};
+    float screenX = 0.0F;
+    float screenY = 0.0F;
+    kb::editor::tests::Require(
+        kb::editor::EditorSceneViewportMath::WorldToScreen(
+            camera, renderArea, position, screenX, screenY),
+        "Shared origin test point should project into the viewport");
+
+    const kb::editor::EditorSceneViewportPickResult pick =
+        kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+            scene,
+            camera,
+            renderArea,
+            screenX,
+            screenY,
+            BuildViewportRay(camera, renderArea, screenX, screenY));
+    kb::editor::tests::Require(
+        pick.IsValid() && pick.entity == mesh,
+        "A mesh must keep the click against a grouping entity that shares its origin");
+}
+
 void RunViewportBoxPickerIncludesVisibleComponentOverlaysTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneEntity light = scene.Entities().CreateEntity(
         kb::scene::SceneObjectDesc{ .name = "Box Selected Light" });
     const kb::scene::SceneEntity particle = scene.Entities().CreateEntity(
         kb::scene::SceneObjectDesc{ .name = "Box Selected Particle" });
+    const kb::scene::SceneEntity projectile = scene.Entities().CreateEntity(
+        kb::scene::SceneObjectDesc{ .name = "Box Selected Projectile" });
     scene.Components().Lights().Set(light, kb::scene::LightComponent{});
+    scene.Components().Rigidbodies().Set(projectile, kb::scene::RigidbodyComponent{});
     scene.Components().ParticleEffects().Set(
         particle,
         kb::scene::ParticleEffectComponent{ .effectAssetId = 100U });
@@ -1317,6 +1403,9 @@ void RunViewportBoxPickerIncludesVisibleComponentOverlaysTest() {
         kb::scene::TransformComponent{
             .localPosition = center + axes.right * 0.5F,
         });
+    scene.Transforms().Set(
+        projectile,
+        kb::scene::TransformComponent{ .localPosition = center });
 
     const RECT renderArea{0, 0, 960, 540};
     const std::vector<kb::scene::SceneEntity> picked =
@@ -1328,6 +1417,9 @@ void RunViewportBoxPickerIncludesVisibleComponentOverlaysTest() {
     kb::editor::tests::Require(
         std::ranges::find(picked, particle) != picked.end(),
         "Viewport box picker should include a visible particle overlay");
+    kb::editor::tests::Require(
+        std::ranges::find(picked, projectile) != picked.end(),
+        "Viewport box picker should include an entity that has no renderable component");
 }
 
 void RunEditorBackendSelectionTest() {
@@ -1512,6 +1604,8 @@ void RunEditorViewportPreviewTests() {
     RunViewportLightWireframePickerChoosesNestedInnerWireframeTest();
     RunViewportLightIconPickerSelectsLightIconsTest();
     RunViewportParticleIconPickerSelectsParticleEffectTest();
+    RunViewportPickerSelectsEntityWithoutRenderableComponentTest();
+    RunViewportMeshWinsOverEntityOriginPickTest();
     RunViewportBoxPickerIncludesVisibleComponentOverlaysTest();
     RunViewportMeshPickerWinsInsideLightWireframeVolumeTest();
     RunRenderBackendSettingsTest();
