@@ -28,6 +28,13 @@ public:
         bool animated = false;
     };
 
+    struct ParticleDependencyNavigation {
+        bool succeeded = false;
+        std::size_t dependencyCount = 0U;
+        kb::assets::AssetId expectedAsset{};
+        kb::assets::AssetId selectedAsset{};
+    };
+
     EditorHeadlessAutomation(
         EditorSceneContext& context,
         std::filesystem::path artifactRoot);
@@ -56,6 +63,8 @@ public:
     [[nodiscard]] ParticleThumbnailVerification VerifyParticleThumbnail(
         kb::assets::AssetId assetId,
         std::size_t maximumTicks);
+    [[nodiscard]] ParticleDependencyNavigation
+        VerifyParticleDependencyNavigation();
 
     [[nodiscard]] bool InspectorPointerDown(int x, int y);
     [[nodiscard]] bool InspectorPointerDrag(int x, int y);
