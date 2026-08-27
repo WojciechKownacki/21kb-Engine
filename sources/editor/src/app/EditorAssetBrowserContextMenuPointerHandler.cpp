@@ -75,12 +75,12 @@ void AppendAddSubmenu(HMENU menu) {
     if (command == EditorAssetContextCommand::None) {
         return true;
     }
-    return EditorAssetBrowserContextCommandExecutor::Execute(command, sceneContext);
+    return EditorAssetBrowserContextCommandExecutor::Execute(command, sceneContext, window);
 }
 
 } // namespace
 
-std::optional<bool> EditorAssetBrowserContextMenuPointerHandler::HandleOpenMenuPointerDown(const EditorAssetBrowserHit& hit, EditorSceneContext& sceneContext) {
+std::optional<bool> EditorAssetBrowserContextMenuPointerHandler::HandleOpenMenuPointerDown(HWND owner, const EditorAssetBrowserHit& hit, EditorSceneContext& sceneContext) {
     EditorAssetBrowserState& state = sceneContext.AssetBrowser();
     if (!state.IsContextMenuOpen()) {
         return std::nullopt;
@@ -91,7 +91,7 @@ std::optional<bool> EditorAssetBrowserContextMenuPointerHandler::HandleOpenMenuP
             static_cast<void>(state.SetContextMenuHoveredCommand(EditorAssetContextCommand::AddLighting));
             return true;
         }
-        static_cast<void>(EditorAssetBrowserContextCommandExecutor::Execute(hit.command, sceneContext));
+        static_cast<void>(EditorAssetBrowserContextCommandExecutor::Execute(hit.command, sceneContext, owner));
         state.CloseContextMenu();
         return true;
     }

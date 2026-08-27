@@ -2,6 +2,8 @@
 
 #include "assets/EditorAssetBrowserPathUtils.hpp"
 
+#include "assets/EditorAssetOpenPolicy.hpp"
+
 #include "engine/scene/ParticleEffectAssetIO.hpp"
 
 #include <algorithm>
@@ -46,6 +48,12 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserState::ContextMenuItem
         const kb::assets::AssetMetadata* metadata = manager.Registry().Find(contextMenu_.TargetAsset());
         if (metadata != nullptr && IsMaterialAsset(*metadata)) {
             return MaterialContextMenuItems(*metadata);
+        }
+        if (metadata != nullptr) {
+            items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Duplicate, .label = "Duplicate", .separatorAfter = true });
+            if (EditorAssetOpenPolicy::CanOpen(*metadata)) {
+                items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Open, .label = "Open" });
+            }
         }
         if (metadata != nullptr && (metadata->type == "RenderMesh" || metadata->importCategory == "Mesh")) {
             items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::ExtractMaterials, .label = "Extract Material Instances", .separatorAfter = true });
