@@ -38,6 +38,7 @@ public:
         double inspectorPaintMs = 0.0;
         double inspectorHeightMs = 0.0;
         double inspectorRowPaintMs = 0.0;
+        double inspectorHitTestMs = 0.0;
         double scenePresentMs = 0.0;
     };
 

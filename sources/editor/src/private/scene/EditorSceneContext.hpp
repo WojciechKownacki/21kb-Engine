@@ -1149,6 +1149,10 @@ public:
         bool overridden = false;
     };
     [[nodiscard]] std::vector<EntityScriptVariable> EntityScriptExposedVariables(kb::scene::SceneEntity entity) const;
+    // How many rows the script section shows. The panel's height and its hit testing
+    // want only this, and building the values for it copied a script value and a name
+    // per variable on every repaint and every mouse move across the panel.
+    [[nodiscard]] std::size_t EntityScriptExposedVariableCount(kb::scene::SceneEntity entity) const;
     // Authors a per-instance override; if the value equals the script's declared
     // default the override is dropped instead (store-only-non-default). Undoable.
     [[nodiscard]] bool SetEntityScriptVariable(kb::scene::SceneEntity entity, std::string name, kb::script::ScriptValue value);
