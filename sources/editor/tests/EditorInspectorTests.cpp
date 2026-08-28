@@ -288,9 +288,9 @@ void RunMaterialTextureSlotDiagnosticTest() {
     kb::editor::tests::Require(kb::editor::InspectorMaterialTextureSlotFormatter::DisplayName(manager, 0U) == "None", "Material texture formatter should show empty slots as None");
     kb::editor::tests::Require(kb::editor::InspectorMaterialTextureSlotFormatter::DisplayName(manager, textureId.value) == "Albedo", "Material texture formatter should resolve texture asset names");
     kb::editor::tests::Require(!kb::editor::InspectorMaterialTextureSlotFormatter::IsMissing(manager, textureId.value), "Material texture formatter reported a registered texture as missing");
-    kb::editor::tests::Require(kb::editor::InspectorMaterialTextureSlotFormatter::IsMissing(manager, 999U), "KBMAT-UE-0014: Material texture formatter should diagnose unresolved texture asset ids");
-    kb::editor::tests::Require(kb::editor::InspectorMaterialTextureSlotFormatter::DisplayName(manager, 999U).find("Missing texture asset 999") != std::string::npos, "KBMAT-UE-0014: Material texture formatter should display missing texture ids");
-    kb::editor::tests::Require(kb::editor::InspectorMaterialTextureSlotFormatter::Diagnostic("Normal", 999U).find("Normal texture references missing asset 999") != std::string::npos, "KBMAT-UE-0014: Material texture formatter should create a slot-specific missing texture diagnostic");
+    kb::editor::tests::Require(kb::editor::InspectorMaterialTextureSlotFormatter::IsMissing(manager, 999U), "KBMAT-0014: Material texture formatter should diagnose unresolved texture asset ids");
+    kb::editor::tests::Require(kb::editor::InspectorMaterialTextureSlotFormatter::DisplayName(manager, 999U).find("Missing texture asset 999") != std::string::npos, "KBMAT-0014: Material texture formatter should display missing texture ids");
+    kb::editor::tests::Require(kb::editor::InspectorMaterialTextureSlotFormatter::Diagnostic("Normal", 999U).find("Normal texture references missing asset 999") != std::string::npos, "KBMAT-0014: Material texture formatter should create a slot-specific missing texture diagnostic");
 }
 
 void RunAudioAssetAssignmentTest() {
@@ -884,10 +884,10 @@ void RunMaterialAssetAssignmentSavesInSceneTest() {
     const kb::scene::MeshRendererComponent* cleared = source.Components().MeshRenderers().TryGet(entity);
     kb::editor::tests::Require(cleared != nullptr && cleared->materialSlotOverrideCount == 0U, "Material asset action did not trim cleared trailing slot overrides");
     kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::AssignMaterialSlotOverride(source, entity, 1U, kb::assets::AssetId{ 202U }), "Material asset action did not restore slot override before all-slots assignment");
-    kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::AssignMaterialToAllSlots(source, entity, kb::assets::AssetId{ 303U }), "KBMAT-UE-0009: Material all-slots action did not assign material");
+    kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::AssignMaterialToAllSlots(source, entity, kb::assets::AssetId{ 303U }), "KBMAT-0009: Material all-slots action did not assign material");
     const kb::scene::MeshRendererComponent* allSlots = source.Components().MeshRenderers().TryGet(entity);
     kb::editor::tests::Require(allSlots != nullptr && allSlots->materialAssetId == 303U && allSlots->materialSlotOverrideCount == 0U && allSlots->materialSlotAssetIds[1] == 0U,
-        "KBMAT-UE-0009: Material all-slots action should clear previous slot overrides");
+        "KBMAT-0009: Material all-slots action should clear previous slot overrides");
     kb::scene::MeshRendererComponent staleOverrides{};
     staleOverrides.materialSlotOverrideCount = 5U;
     staleOverrides.materialSlotAssetIds[0] = 101U;
@@ -898,7 +898,7 @@ void RunMaterialAssetAssignmentSavesInSceneTest() {
             staleOverrides.materialSlotAssetIds[0] == 101U &&
             staleOverrides.materialSlotAssetIds[2] == 0U &&
             staleOverrides.materialSlotAssetIds[4] == 0U,
-        "KBMAT-UE-0010: Material slot cleanup should remove overrides outside the mesh material slot count and trim trailing empty slots");
+        "KBMAT-0010: Material slot cleanup should remove overrides outside the mesh material slot count and trim trailing empty slots");
 
     std::filesystem::remove(sceneFile, cleanupError);
     std::filesystem::remove(sceneFile.string() + ".meta", cleanupError);
@@ -979,20 +979,20 @@ void RunMeshRendererMaterialSlotModelTest() {
     const std::vector<kb::editor::InspectorMeshRendererMaterialSlotRow> rows =
         kb::editor::InspectorMeshRendererMaterialSlotModel::Build(renderer, mesh, materialName, materialStatus);
     kb::editor::tests::Require(rows.size() == 2U, "Mesh Renderer material slot model should expose mesh material slots");
-    kb::editor::tests::Require(rows[0].slotName == "Body" && rows[0].importedSourceName == "Body", "KBMAT-UE-0011: Mesh Renderer material slot model should expose the slot name and imported source name");
-    kb::editor::tests::Require(rows[0].defaultMaterialName == "BodyDefault", "KBMAT-UE-0011: Mesh Renderer material slot model should expose the default material name");
+    kb::editor::tests::Require(rows[0].slotName == "Body" && rows[0].importedSourceName == "Body", "KBMAT-0011: Mesh Renderer material slot model should expose the slot name and imported source name");
+    kb::editor::tests::Require(rows[0].defaultMaterialName == "BodyDefault", "KBMAT-0011: Mesh Renderer material slot model should expose the default material name");
     kb::editor::tests::Require(rows[0].activeMaterialAssetId == 201U && rows[0].activeMaterialName == "BodyDefault", "KBMAT-GRAPH-0404: slot model should expose the active default material");
     kb::editor::tests::Require(rows[0].activeMaterialStatus == "Built-in PBR | runtime ready", "KBMAT-GRAPH-0404: slot model should expose built-in PBR material runtime status");
-    kb::editor::tests::Require(rows[0].sectionsUsingSlot == "0, 2" && rows[0].sectionIndices.size() == 2U, "KBMAT-UE-0011: Mesh Renderer material slot model should expose sections using a slot");
-    kb::editor::tests::Require(rows[0].label == "Slot 1 Override (Body)", "KBMAT-UE-0011: Mesh Renderer material slot model should label the primary slot override with its imported source name");
+    kb::editor::tests::Require(rows[0].sectionsUsingSlot == "0, 2" && rows[0].sectionIndices.size() == 2U, "KBMAT-0011: Mesh Renderer material slot model should expose sections using a slot");
+    kb::editor::tests::Require(rows[0].label == "Slot 1 Override (Body)", "KBMAT-0011: Mesh Renderer material slot model should label the primary slot override with its imported source name");
     kb::editor::tests::Require(rows[0].value == "None", "Mesh Renderer material slot model should show empty overrides as None");
     kb::editor::tests::Require(rows[1].hasOverride, "Mesh Renderer material slot model should mark explicit slot overrides");
-    kb::editor::tests::Require(rows[1].slotName == "Trim" && rows[1].defaultMaterialName == "TrimDefault", "KBMAT-UE-0011: Mesh Renderer material slot model should expose extra slot names and defaults");
+    kb::editor::tests::Require(rows[1].slotName == "Trim" && rows[1].defaultMaterialName == "TrimDefault", "KBMAT-0011: Mesh Renderer material slot model should expose extra slot names and defaults");
     kb::editor::tests::Require(rows[1].activeMaterialAssetId == 303U && rows[1].activeMaterialName == "TrimOverride", "KBMAT-GRAPH-0404: slot model should expose the active override material");
     kb::editor::tests::Require(
         rows[1].activeMaterialStatus.find("Graph-backed") != std::string::npos && rows[1].activeMaterialStatus.find("diagnostics error") != std::string::npos,
         "KBMAT-GRAPH-0404: slot model should expose graph-backed diagnostic status for active overrides");
-    kb::editor::tests::Require(rows[1].sectionsUsingSlot == "1", "KBMAT-UE-0011: Mesh Renderer material slot model should list the section using an extra slot");
+    kb::editor::tests::Require(rows[1].sectionsUsingSlot == "1", "KBMAT-0011: Mesh Renderer material slot model should list the section using an extra slot");
     kb::editor::tests::Require(rows[1].label.find("Slot 2 Override") != std::string::npos, "Mesh Renderer material slot model should keep extra material overrides readable");
     kb::editor::tests::Require(rows[1].value == "TrimOverride", "Mesh Renderer material slot model should show only the assigned override material");
 
@@ -1197,16 +1197,16 @@ void RunMaterialEditorStateIndependentFromInspectorSelectionTest() {
         return found == materialEditor.Parameters().end() ? nullptr : &*found;
     };
     const kb::editor::MaterialEditorParameter* roughnessParameter = findEditorParameter("roughnessFactor");
-    kb::editor::tests::Require(roughnessParameter != nullptr, "KBMAT-UE-0003: Material Editor parameter model should include roughnessFactor");
+    kb::editor::tests::Require(roughnessParameter != nullptr, "KBMAT-0003: Material Editor parameter model should include roughnessFactor");
     kb::editor::tests::Require(roughnessParameter->type == kb::render::RenderMaterialParameterType::Scalar &&
             roughnessParameter->group == kb::editor::MaterialEditorParameterGroup::Core &&
             roughnessParameter->value.kind == kb::editor::MaterialEditorParameterValueKind::Scalar &&
             roughnessParameter->defaultValue.kind == kb::editor::MaterialEditorParameterValueKind::Scalar,
-        "KBMAT-UE-0003: roughnessFactor parameter should expose type, group, value and default value");
+        "KBMAT-0003: roughnessFactor parameter should expose type, group, value and default value");
     kb::editor::tests::Require(roughnessParameter->range.has_value() && roughnessParameter->range->min == 0.0F && roughnessParameter->range->max == 1.0F,
-        "KBMAT-UE-0003: roughnessFactor parameter should expose schema range");
+        "KBMAT-0003: roughnessFactor parameter should expose schema range");
     kb::editor::tests::Require(roughnessParameter->enabled && roughnessParameter->overrideEnabled,
-        "KBMAT-UE-0003: supported source material parameters should be enabled and overrideable in the working model");
+        "KBMAT-0003: supported source material parameters should be enabled and overrideable in the working model");
     const kb::editor::MaterialEditorParameter* normalTextureParameter = findEditorParameter("normalTextureAssetId");
     kb::editor::tests::Require(normalTextureParameter != nullptr &&
             normalTextureParameter->type == kb::render::RenderMaterialParameterType::Texture &&
@@ -1214,10 +1214,10 @@ void RunMaterialEditorStateIndependentFromInspectorSelectionTest() {
             normalTextureParameter->value.kind == kb::editor::MaterialEditorParameterValueKind::TextureAsset &&
             normalTextureParameter->expectedTextureColorSpace == kb::render::RenderMaterialTextureColorSpace::Linear &&
             normalTextureParameter->enabled,
-        "KBMAT-UE-0003: Material Editor parameter model should expose supported texture slots");
+        "KBMAT-0003: Material Editor parameter model should expose supported texture slots");
     const kb::editor::MaterialEditorParameter* clearcoatParameter = findEditorParameter("clearcoatFactor");
     kb::editor::tests::Require(clearcoatParameter != nullptr && !clearcoatParameter->enabled,
-        "KBMAT-UE-0003: unsupported advanced parameters should remain visible but disabled");
+        "KBMAT-0003: unsupported advanced parameters should remain visible but disabled");
     kb::editor::tests::Require(!materialEditor.InfoPanelVisible(), "Material Editor info panel should be hidden by default");
     kb::editor::tests::Require(materialEditor.ToggleInfoPanel(), "Material Editor info panel toggle should report a state change");
     kb::editor::tests::Require(materialEditor.InfoPanelVisible(), "Material Editor info panel toggle should show schema details");
@@ -1262,9 +1262,9 @@ void RunMaterialEditorStateIndependentFromInspectorSelectionTest() {
     roughnessParameter = findEditorParameter("roughnessFactor");
     normalTextureParameter = findEditorParameter("normalTextureAssetId");
     kb::editor::tests::Require(roughnessParameter != nullptr && kb::editor::tests::NearlyEqual(roughnessParameter->value.numbers[0], 0.5F),
-        "KBMAT-UE-0003: Material Editor parameter model should refresh scalar values from the working copy");
+        "KBMAT-0003: Material Editor parameter model should refresh scalar values from the working copy");
     kb::editor::tests::Require(normalTextureParameter != nullptr && normalTextureParameter->value.assetId == 777U,
-        "KBMAT-UE-0003: Material Editor parameter model should refresh texture asset ids from the working copy");
+        "KBMAT-0003: Material Editor parameter model should refresh texture asset ids from the working copy");
     {
         const std::vector<std::string> diffRows = materialEditor.MaterialDiffRows();
         kb::editor::tests::Require(std::ranges::any_of(diffRows, [](const std::string& row) {
@@ -1476,7 +1476,7 @@ void RunMaterialAssignmentPathRenderSyncTest() {
     const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "AssignmentPathMesh" });
     const auto currentEntity = [&scene]() -> kb::scene::SceneEntity {
         const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
-        kb::editor::tests::Require(roots.size() == 1U, "KBMAT-UE-0013: Assignment path test expected one root entity");
+        kb::editor::tests::Require(roots.size() == 1U, "KBMAT-0013: Assignment path test expected one root entity");
         return roots.front();
     };
     scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
@@ -1513,7 +1513,7 @@ void RunMaterialAssignmentPathRenderSyncTest() {
             graphDropMessage.find(".kbmat") != std::string::npos,
         "KBMAT-GRAPH-0402: Raw Material Graph rejection should tell the user to create a .kbmat first");
     kb::editor::tests::Require(!kb::editor::EditorSceneMaterialAssetActions::IsMaterialAsset(kb::assets::AssetMetadata{ .type = "RenderTexture" }),
-        "KBMAT-UE-0013: Material assignment path should reject non-material asset metadata");
+        "KBMAT-0013: Material assignment path should reject non-material asset metadata");
     kb::editor::tests::Require(!kb::editor::EditorSceneMaterialAssetActions::AssignMaterial(scene, entity, rawGraphMetadata.id),
         "KBMAT-GRAPH-0506: Raw Material Graph asset id must not be saved as the primary Mesh Renderer material");
     kb::editor::tests::Require(!kb::editor::EditorSceneMaterialAssetActions::AssignMaterialSlotOverride(scene, entity, 1U, rawGraphMetadata.id),
@@ -1536,9 +1536,9 @@ void RunMaterialAssignmentPathRenderSyncTest() {
     static_cast<void>(scene.Runtime().Update(0.016F));
 
     kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::AssignMaterialSlotOverride(scene, entity, 1U, previousSlotMaterialId),
-        "KBMAT-UE-0013: Could not seed a slot override before all-slots assignment");
+        "KBMAT-0013: Could not seed a slot override before all-slots assignment");
     static_cast<void>(scene.Runtime().Update(0.016F));
-    kb::editor::tests::Require(scene.History().Record("Drop Material To All Slots"), "KBMAT-UE-0013: Could not record all-slots material assignment");
+    kb::editor::tests::Require(scene.History().Record("Drop Material To All Slots"), "KBMAT-0013: Could not record all-slots material assignment");
     kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::AssignMaterialToAllSlots(scene, entity, graphBackedMaterialId),
         "KBMAT-GRAPH-0401: Graph-backed .kbmat should assign as the primary Mesh Renderer material");
     const kb::scene::MeshRendererComponent* allSlots = scene.Components().MeshRenderers().TryGet(entity);
@@ -1547,19 +1547,19 @@ void RunMaterialAssignmentPathRenderSyncTest() {
     synchronizer.SyncRenderProxyUpdates(scene, renderScene);
     const kb::render::MeshRenderProxy* allSlotsProxy = renderScene.FindMeshByEntity(entity.Id());
     kb::editor::tests::Require(allSlotsProxy != nullptr && kb::render::HasDirtyFlag(allSlotsProxy->dirty, kb::render::RenderProxyDirtyFlag::Material),
-        "KBMAT-UE-0013: All-slots assignment should dirty the render material proxy");
+        "KBMAT-0013: All-slots assignment should dirty the render material proxy");
     std::vector<kb::render::SceneRenderDrawGroup> groups;
     renderScene.BuildDrawGroups(groups);
     kb::editor::tests::Require(groups.size() == 1U && groups[0].materialAssetId == graphBackedMaterialId.value,
         "KBMAT-GRAPH-0401: All-slots assignment should rebuild draw groups with the graph-backed material");
 
-    kb::editor::tests::Require(scene.History().Undo(), "KBMAT-UE-0013: Could not undo all-slots material assignment");
+    kb::editor::tests::Require(scene.History().Undo(), "KBMAT-0013: Could not undo all-slots material assignment");
     const kb::scene::MeshRendererComponent* allSlotsUndo = scene.Components().MeshRenderers().TryGet(currentEntity());
     kb::editor::tests::Require(allSlotsUndo != nullptr && allSlotsUndo->materialAssetId == builtInPbrMaterialId.value &&
             allSlotsUndo->materialSlotOverrideCount == 2U &&
             allSlotsUndo->materialSlotAssetIds[1] == previousSlotMaterialId.value,
-        "KBMAT-UE-0013: Undo should restore the previous primary material and slot override");
-    kb::editor::tests::Require(scene.History().Redo(), "KBMAT-UE-0013: Could not redo all-slots material assignment");
+        "KBMAT-0013: Undo should restore the previous primary material and slot override");
+    kb::editor::tests::Require(scene.History().Redo(), "KBMAT-0013: Could not redo all-slots material assignment");
     const kb::scene::MeshRendererComponent* allSlotsRedo = scene.Components().MeshRenderers().TryGet(currentEntity());
     kb::editor::tests::Require(allSlotsRedo != nullptr && allSlotsRedo->materialAssetId == graphBackedMaterialId.value && allSlotsRedo->materialSlotOverrideCount == 0U,
         "KBMAT-GRAPH-0401: Redo should reapply graph-backed all-slots assignment");
@@ -1568,7 +1568,7 @@ void RunMaterialAssignmentPathRenderSyncTest() {
     renderScene.ClearDirty();
     static_cast<void>(scene.Runtime().Update(0.016F));
     const kb::scene::SceneEntity slotEntity = currentEntity();
-    kb::editor::tests::Require(scene.History().Record("Drop Material To Slot"), "KBMAT-UE-0013: Could not record slot material assignment");
+    kb::editor::tests::Require(scene.History().Record("Drop Material To Slot"), "KBMAT-0013: Could not record slot material assignment");
     kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::AssignMaterialSlotOverride(scene, slotEntity, 1U, graphBackedSlotMaterialId),
         "KBMAT-GRAPH-0401: Graph-backed .kbmat should assign as a Mesh Renderer slot override");
     const kb::scene::MeshRendererComponent* slotAssigned = scene.Components().MeshRenderers().TryGet(slotEntity);
@@ -1577,7 +1577,7 @@ void RunMaterialAssignmentPathRenderSyncTest() {
     synchronizer.SyncRenderProxyUpdates(scene, renderScene);
     const kb::render::MeshRenderProxy* slotProxy = renderScene.FindMeshByEntity(slotEntity.Id());
     kb::editor::tests::Require(slotProxy != nullptr && kb::render::HasDirtyFlag(slotProxy->dirty, kb::render::RenderProxyDirtyFlag::Material),
-        "KBMAT-UE-0013: Slot assignment should dirty the render material proxy");
+        "KBMAT-0013: Slot assignment should dirty the render material proxy");
     groups.clear();
     renderScene.BuildDrawGroups(groups);
     kb::editor::tests::Require(groups.size() == 1U && groups[0].instances.size() == 1U &&
@@ -1668,9 +1668,9 @@ void RunMaterialPreviewMeshFactoryTest() {
     kb::editor::tests::Require(cylinder.desc.materialSlotCount == 1U && cylinder.bounds.radius > 0.0F, "KBMAT-PREVIEW-0001: Material preview cylinder should expose a slot and bounds");
 
     const kb::render::RenderMeshAssetData plane = kb::editor::EditorMaterialPreviewMeshFactory::BuildPlane();
-    kb::editor::tests::Require(plane.desc.vertexCount == 4U && plane.desc.indexCount == 6U, "KBMAT-UE-0008: Material preview plane should generate one quad");
+    kb::editor::tests::Require(plane.desc.vertexCount == 4U && plane.desc.indexCount == 6U, "KBMAT-0008: Material preview plane should generate one quad");
     kb::editor::tests::Require(plane.desc.vertexFormat == kb::render::RenderVertexFormat::P3N3T4UV2 && !plane.tangentVertices.empty(), "Material preview plane must provide tangents for the PBR shader");
-    kb::editor::tests::Require(plane.desc.materialSlotCount == 1U && plane.bounds.radius > 0.0F, "KBMAT-UE-0008: Material preview plane should expose a slot and bounds");
+    kb::editor::tests::Require(plane.desc.materialSlotCount == 1U && plane.bounds.radius > 0.0F, "KBMAT-0008: Material preview plane should expose a slot and bounds");
     const auto& planeA = plane.tangentVertices[plane.indices32[0U]];
     const auto& planeB = plane.tangentVertices[plane.indices32[1U]];
     const auto& planeC = plane.tangentVertices[plane.indices32[2U]];
@@ -1686,12 +1686,12 @@ void RunMaterialPreviewMeshFactoryTest() {
     const kb::editor::EditorMaterialPreviewPrimitivePolicy planePolicy = kb::editor::EditorMaterialPreviewPrimitivePolicy::Plane();
     const kb::editor::EditorMaterialPreviewPrimitivePolicy customPolicy = kb::editor::EditorMaterialPreviewPrimitivePolicy::CustomMesh(kb::assets::AssetId{ 0xC0570B1EC0570B1EULL });
     const kb::editor::EditorMaterialPreviewPrimitivePolicy fallbackPolicy = kb::editor::EditorMaterialPreviewPrimitivePolicy::CustomMesh({});
-    kb::editor::tests::Require(spherePolicy.meshAssetId == kb::editor::EditorMaterialPreviewMeshLoader::PreviewMeshAssetId(), "KBMAT-UE-0008: Sphere policy should keep the legacy preview mesh id");
+    kb::editor::tests::Require(spherePolicy.meshAssetId == kb::editor::EditorMaterialPreviewMeshLoader::PreviewMeshAssetId(), "KBMAT-0008: Sphere policy should keep the legacy preview mesh id");
     kb::editor::tests::Require(cylinderPolicy.meshAssetId.IsValid() && cylinderPolicy.meshAssetId != spherePolicy.meshAssetId, "KBMAT-PREVIEW-0001: Cylinder policy should use a distinct generated mesh id");
-    kb::editor::tests::Require(cubePolicy.meshAssetId.IsValid() && cubePolicy.meshAssetId != spherePolicy.meshAssetId, "KBMAT-UE-0008: Cube policy should use a distinct generated mesh id");
-    kb::editor::tests::Require(planePolicy.meshAssetId.IsValid() && planePolicy.meshAssetId != spherePolicy.meshAssetId, "KBMAT-UE-0008: Plane policy should use a distinct generated mesh id");
-    kb::editor::tests::Require(customPolicy.kind == kb::editor::EditorMaterialPreviewPrimitiveKind::CustomMesh && customPolicy.meshAssetId == customPolicy.customMeshAssetId, "KBMAT-UE-0008: Custom policy should preserve the selected mesh id");
-    kb::editor::tests::Require(fallbackPolicy.kind == kb::editor::EditorMaterialPreviewPrimitiveKind::Fallback && fallbackPolicy.meshAssetId.IsValid(), "KBMAT-UE-0008: Invalid custom policy should fall back to a generated mesh");
+    kb::editor::tests::Require(cubePolicy.meshAssetId.IsValid() && cubePolicy.meshAssetId != spherePolicy.meshAssetId, "KBMAT-0008: Cube policy should use a distinct generated mesh id");
+    kb::editor::tests::Require(planePolicy.meshAssetId.IsValid() && planePolicy.meshAssetId != spherePolicy.meshAssetId, "KBMAT-0008: Plane policy should use a distinct generated mesh id");
+    kb::editor::tests::Require(customPolicy.kind == kb::editor::EditorMaterialPreviewPrimitiveKind::CustomMesh && customPolicy.meshAssetId == customPolicy.customMeshAssetId, "KBMAT-0008: Custom policy should preserve the selected mesh id");
+    kb::editor::tests::Require(fallbackPolicy.kind == kb::editor::EditorMaterialPreviewPrimitiveKind::Fallback && fallbackPolicy.meshAssetId.IsValid(), "KBMAT-0008: Invalid custom policy should fall back to a generated mesh");
 }
 
 void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
@@ -1889,13 +1889,13 @@ void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
 
     kb::editor::EditorMaterialPreviewScene cubePreview;
     const kb::editor::EditorMaterialPreviewPrimitivePolicy cubePolicy = kb::editor::EditorMaterialPreviewPrimitivePolicy::Cube();
-    kb::editor::tests::Require(cubePreview.SetPrimitivePolicy(cubePolicy), "KBMAT-UE-0008: Material preview scene should accept cube primitive policy");
+    kb::editor::tests::Require(cubePreview.SetPrimitivePolicy(cubePolicy), "KBMAT-0008: Material preview scene should accept cube primitive policy");
     const kb::scene::Scene& cubePreviewScene = cubePreview.SceneFor(source, materialId);
     kb::render::RenderScene cubeRenderScene;
     kb::render::EcsRenderSceneSynchronizer{}.Sync(cubePreviewScene, cubeRenderScene);
     std::vector<kb::render::SceneRenderDrawGroup> cubeGroups;
     cubeRenderScene.BuildDrawGroups(cubeGroups);
-    kb::editor::tests::Require(cubeGroups.size() == 1U && cubeGroups[0].meshAssetId == cubePolicy.meshAssetId.value, "KBMAT-UE-0008: Material preview scene should use the selected primitive mesh id");
+    kb::editor::tests::Require(cubeGroups.size() == 1U && cubeGroups[0].meshAssetId == cubePolicy.meshAssetId.value, "KBMAT-0008: Material preview scene should use the selected primitive mesh id");
 
     kb::editor::EditorMaterialPreviewScene cylinderPreview;
     const kb::editor::EditorMaterialPreviewPrimitivePolicy cylinderPolicy = kb::editor::EditorMaterialPreviewPrimitivePolicy::Cylinder();
@@ -2892,7 +2892,7 @@ void RunInspectorHoverIndexTest() {
         "An index-blind query still matches the hovered property");
 }
 
-// The Unity-style Add Component menu model: two-level rows (categories ->
+// The Add Component menu model: two-level rows (categories ->
 // components), search override, and the scroll/virtualization arithmetic.
 void RunAddComponentBrowserModelTest() {
     using kb::editor::AddComponentRowKind;

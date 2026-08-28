@@ -43,8 +43,8 @@ struct InputCompositeSlot {
 };
 
 // Combines several discrete keys into one composite axis value (WASD -> Axis2D,
-// a "fly up/down" pair -> Axis1D, etc.), mirroring Unreal's 2D/3D Vector composite
-// input actions. Unlike separate InputKeyMappings that are summed independently
+// a "fly up/down" pair -> Axis1D, etc.) so the group behaves as one 2D/3D
+// vector action. Unlike separate InputKeyMappings that are summed independently
 // after their own modifier stacks run, a composite's modifier/trigger stack runs
 // once against the fully combined vector - so e.g. a single radial DeadZone shapes
 // the resultant direction instead of clipping each key's raw scalar alone.
@@ -59,7 +59,7 @@ struct InputCompositeBinding {
 };
 
 // An InputMappingContext is a prioritizable set of key->action bindings, pushed
-// onto the InputSubsystem stack at runtime. Mirrors Unreal's UInputMappingContext.
+// onto the InputSubsystem stack at runtime. It is pure data - no runtime state.
 struct InputMappingContextAsset {
     std::vector<InputKeyMapping> mappings;
     std::vector<InputCompositeBinding> composites;

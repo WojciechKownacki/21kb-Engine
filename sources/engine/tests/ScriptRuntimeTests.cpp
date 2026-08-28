@@ -7510,7 +7510,7 @@ void RunTransformHierarchyEdgeCaseTest() {
     // own implementation (ScriptTransformApi.cpp's SetParent) ONLY
     // back-solves the DIRECTLY reparented entity's own local pose — it
     // never touches a descendant's local transform (the same well-known
-    // limitation Unity's own Transform.SetParent(worldPositionStays) has).
+    // limitation any keepWorld reparent has).
     // A first version of this test wrongly asserted subtree preservation
     // across a SCALE-CHANGING reparent (case 1a's non-uniform-scale
     // parent) and correctly failed — that is not a bug, it is inherent to
@@ -15489,11 +15489,11 @@ void RunVisualGraphFilteredEventRuntimeTest() {
         "Visual Graph Events.EmitFiltered silently accepted an invalid player id or delivered it");
 }
 
-// Regression: stopping play must fire each behaviour's Destroyed hook (the Unity
-// OnDestroy-equivalent). ScriptRuntimeHost::DispatchShutdownLifecycle drives the
-// installed scene system's shutdown so the editor can tear scripts down before
-// it reverts the play snapshot; previously nothing called it on Stop and
-// Destroyed never ran.
+// Regression: stopping play must fire each behaviour's Destroyed hook (the
+// teardown counterpart of Created). ScriptRuntimeHost::DispatchShutdownLifecycle
+// drives the installed scene system's shutdown so the editor can tear scripts
+// down before it reverts the play snapshot; previously nothing called it on
+// Stop and Destroyed never ran.
 void RunHostShutdownLifecycleFiresDestroyedTest() {
     kb::scene::Scene scene;
     kb::script::ScriptRuntimeHost host{ scene };

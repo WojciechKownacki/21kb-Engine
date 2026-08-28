@@ -108,7 +108,7 @@ enum class RenderMaterialAlphaMode : std::uint8_t {
 };
 
 // Blend function applied when a material renders translucently (alphaMode == Blend) in the transparent
-// pass. Mirrors UE's translucent blend modes; opaque/masked materials ignore it (MAT-79).
+// pass. Covers the standard translucent blend modes; opaque/masked materials ignore it (MAT-79).
 enum class RenderMaterialTranslucencyBlend : std::uint8_t {
     Alpha,
     Additive,

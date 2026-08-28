@@ -14,7 +14,7 @@ class ScriptRuntimeHost;
 // (SetMesh/SetMaterial); LIB-138 (SetMaterialSlot/GetMaterialSlot/ClearMaterialSlot - slot
 // index N matches whichever mesh sections declare materialSlot==N; kb::scene has no mesh
 // section/slot-count query of its own, so a slot index unused by the current mesh is simply
-// a harmless no-op, exactly like Unity's MeshRenderer.materials array indexing).
+// a harmless no-op, exactly like indexing past the end of a material slot array).
 struct ScriptMeshRendererApi {
     [[nodiscard]] static bool Register(ScriptRuntimeHost& host);
 };

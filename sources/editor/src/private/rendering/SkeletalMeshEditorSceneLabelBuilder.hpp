@@ -13,9 +13,9 @@
 
 namespace kb::editor {
 
-// Projects scene labels into the transparent native overlay. Unreal Persona draws bone names
-// through FCanvasTextItem with GEngine::GetSmallFont(): Roboto Regular 10, white, one-pixel black
-// shadow. The overlay performs the actual font rasterization; this builder owns only projection,
+// Projects scene labels into the transparent native overlay. Bone names are drawn small,
+// white, with a one-pixel black shadow, so they stay readable over any mesh.
+// The overlay performs the actual font rasterization; this builder owns only projection,
 // distance scaling and semantic colors.
 class SkeletalMeshEditorSceneLabelBuilder {
 public:
@@ -35,7 +35,7 @@ public:
         if (!std::isfinite(halfFovTangent) || halfFovTangent <= 0.0F) return;
         const float aspect = static_cast<float>(viewportWidth) /
             static_cast<float>(viewportHeight);
-        constexpr float kUnrealSmallFontPixelHeight = 10.0F;
+        constexpr float kSmallFontPixelHeight = 10.0F;
         constexpr std::size_t kMaximumLabels = 1024U;
         output.reserve(output.size() + std::min(labels.size(), kMaximumLabels));
 
@@ -55,7 +55,7 @@ public:
             output.push_back(EditorSceneViewportTextLabel{
                 .x = (horizontal * 0.5F + 0.5F) * static_cast<float>(viewportWidth),
                 .y = (0.5F - vertical * 0.5F) * static_cast<float>(viewportHeight),
-                .pixelHeight = kUnrealSmallFontPixelHeight * referenceCameraDistance / depth,
+                .pixelHeight = kSmallFontPixelHeight * referenceCameraDistance / depth,
                 .text = label.text,
                 .color = LabelColor(label.kind),
             });
