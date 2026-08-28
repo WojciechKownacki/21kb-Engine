@@ -16,6 +16,7 @@ public:
     // strip and out to the frame's hairline. A panel torn off into its own window is
     // the same panel, so it is laid out from here too - anything else leaves it
     // sitting in a margin its docked twin does not have.
+    [[nodiscard]] static DockRect PanelTabStrip(const DockRect& frame, int tabStripHeight);
     [[nodiscard]] static DockRect PanelContent(const DockRect& frame, int tabStripHeight);
 };
 
