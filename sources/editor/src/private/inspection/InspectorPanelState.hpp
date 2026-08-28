@@ -600,6 +600,12 @@ struct InspectorPanelState {
     // the 3D scene, so the pointer route repaints just this.
     void BeginFloatDrag(InspectorPropertyId property, float startValue, int x, int y, InspectorRowBounds row) noexcept;
     [[nodiscard]] InspectorRowBounds DraggedRowBounds() const noexcept;
+    // The row the pointer is over, and the one it just left. Only those two rows
+    // change appearance when the hover moves, and repainting the whole panel for it
+    // costs several milliseconds per row crossed.
+    void SetHoveredRowBounds(InspectorRowBounds row) noexcept;
+    [[nodiscard]] InspectorRowBounds HoveredRowBounds() const noexcept;
+    [[nodiscard]] InspectorRowBounds PreviousHoveredRowBounds() const noexcept;
     void BeginIntegerDrag(InspectorPropertyId property, int x, int y) noexcept;
     void MarkFloatDragMoved() noexcept;
     void EndFloatDrag() noexcept;
@@ -674,6 +680,8 @@ private:
     InspectorAudioScrubState audioScrub_{};
     bool meshPreviewDragging_ = false;
     InspectorRowBounds draggedRowBounds_{};
+    InspectorRowBounds hoveredRowBounds_{};
+    InspectorRowBounds previousHoveredRowBounds_{};
     int meshPreviewDragStartX_ = 0;
     int meshPreviewDragStartY_ = 0;
     float meshPreviewYaw_ = -35.0F;

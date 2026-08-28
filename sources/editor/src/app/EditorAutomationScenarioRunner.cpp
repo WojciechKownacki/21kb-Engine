@@ -3729,6 +3729,7 @@ ReadScriptValue(
                << "ms inspectorPaint=" << profile.inspectorPaintMs
                << "ms inspectorHeight=" << profile.inspectorHeightMs
                << "ms inspectorRowPaint=" << profile.inspectorRowPaintMs
+               << "ms inspectorHitTest=" << profile.inspectorHitTestMs
                << "ms scenePresent=" << profile.scenePresentMs << "ms";
         return { profile.succeeded, detail.str() };
     }

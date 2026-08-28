@@ -3879,6 +3879,9 @@ bool InspectorPanelInteraction::UpdateHover(EditorSceneContext& sceneContext, co
     const int previousTagsDropdownHover = sceneContext.Inspector().TagsDropdownHover();
     sceneContext.Inspector().SetTagsDropdownHover(tagsDropdownHover);
     const bool hoverChanged = sceneContext.Inspector().SetHover(hit.kind, hit.section, hit.property, hit.index);
+    if (hoverChanged) {
+        sceneContext.Inspector().SetHoveredRowBounds(RowBounds(hit));
+    }
     return hoverChanged || previousDropdownHover != dropdownHover || previousTagsDropdownHover != tagsDropdownHover;
 }
 
