@@ -89,7 +89,7 @@ enum class RenderMaterialShadingModel : std::uint8_t {
 [[nodiscard]] RenderMaterialShadingModel ParseRenderMaterialShadingModel(std::string_view text) noexcept;
 [[nodiscard]] std::string_view RenderMaterialShadingModelName(RenderMaterialShadingModel model) noexcept;
 
-// MAT-38: material blend modes (the UE-style flat enum). Opaque/Masked are opaque-pass; the four
+// MAT-38: material blend modes (a single flat enum). Opaque/Masked are opaque-pass; the four
 // translucent modes resolve to real bgfx blend equations in MeshPipelinePassPolicy and to the
 // BaseTransparent cook. Every mode is implemented (real GPU state), so all are production.
 enum class RenderMaterialGraphBlendMode : std::uint8_t {

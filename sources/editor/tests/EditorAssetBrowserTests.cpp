@@ -572,7 +572,7 @@ void WritePreviewMaterial(const std::filesystem::path& path, float red, float gr
     material.desc.baseColor[3] = 1.0F;
     material.desc.roughnessFactor = 0.42F;
     material.desc.emissiveStrength = 0.0F;
-    kb::editor::tests::Require(kb::render::RenderMaterialAssetWriter::Save(path, material), "KBMAT-UE-0015: Could not write material thumbnail fixture");
+    kb::editor::tests::Require(kb::render::RenderMaterialAssetWriter::Save(path, material), "KBMAT-0015: Could not write material thumbnail fixture");
 }
 
 [[nodiscard]] bool HasVisiblePreviewPixels(const kb::editor::ProjectFilesMaterialPreviewImage& image) {
@@ -771,7 +771,7 @@ void RunMaterialContextMenuCommandTest() {
         return item.command == kb::editor::EditorAssetContextCommand::NewParticleEffect
             && std::string_view{item.label} == "New Particle Effect";
     });
-    // New Material is the single graph-backed material entry (UE-style: double-click opens the graph editor);
+    // New Material is the single graph-backed material entry (double-click opens the graph editor);
     // the standalone "New Material Graph" creation entry was removed to avoid a dead double-click.
     kb::editor::tests::Require(!backgroundHasMaterialGraph, "Asset browser background context menu must not expose the standalone New Material Graph creation entry");
     kb::editor::tests::Require(backgroundHasMaterialType, "Asset browser background context menu should expose Material Type creation");
@@ -1051,11 +1051,11 @@ void RunMaterialAssetIconResolverRecognizesPreviewMaterialsTest() {
         kb::editor::ProjectFilesMaterialPreviewThumbnailPolicy::Resolve(type);
     kb::editor::tests::Require(materialPolicy.usesPreviewScenePrimitive && materialPolicy.primitiveName == "sphere" &&
             materialPolicy.vertexCount > 0U && materialPolicy.triangleCount > 0U && materialPolicy.boundsRadius > 0.0F,
-        "KBMAT-UE-0007: Material thumbnails should use the real preview sphere primitive policy");
+        "KBMAT-0007: Material thumbnails should use the real preview sphere primitive policy");
     kb::editor::tests::Require(instancePolicy.usesPreviewScenePrimitive && instancePolicy.primitiveName == "sphere",
-        "KBMAT-UE-0007: Material instance thumbnails should use the material preview primitive policy");
+        "KBMAT-0007: Material instance thumbnails should use the material preview primitive policy");
     kb::editor::tests::Require(!meshPolicy.usesPreviewScenePrimitive,
-        "KBMAT-UE-0007: Non-material assets should not use the material preview primitive thumbnail policy");
+        "KBMAT-0007: Non-material assets should not use the material preview primitive thumbnail policy");
     kb::editor::tests::Require(!graphPolicy.usesPreviewScenePrimitive && !typePolicy.usesPreviewScenePrimitive,
         "KBMAT-GRAPH-0005: Raw Material Graph and Material Type assets should use metadata icons, not material preview thumbnails");
 }
@@ -1192,29 +1192,29 @@ void RunMaterialThumbnailPreviewRuntimeModelTest() {
     const kb::assets::AssetMetadata blueMaterial = MaterialMetadata("ThumbnailProbe", materialPath, 1U);
     const kb::editor::ProjectFilesMaterialPreviewStyle blueStyle =
         kb::editor::ProjectFilesMaterialPreviewThumbnailModel::StyleFromAsset(blueMaterial);
-    kb::editor::tests::Require(blueStyle.loadedFromAsset && !blueStyle.errorFallback, "KBMAT-UE-0015: Valid material thumbnail style should load from the .kbmat document");
+    kb::editor::tests::Require(blueStyle.loadedFromAsset && !blueStyle.errorFallback, "KBMAT-0015: Valid material thumbnail style should load from the .kbmat document");
     const kb::editor::ProjectFilesMaterialPreviewImage blueImage =
         kb::editor::ProjectFilesMaterialPreviewThumbnailModel::RenderImage(64, 64, blueStyle, false);
-    kb::editor::tests::Require(HasVisiblePreviewPixels(blueImage), "KBMAT-UE-0015: Material thumbnail should render non-empty preview pixels");
+    kb::editor::tests::Require(HasVisiblePreviewPixels(blueImage), "KBMAT-0015: Material thumbnail should render non-empty preview pixels");
 
     WritePreviewMaterial(materialPath, 0.88F, 0.20F, 0.12F);
     const kb::assets::AssetMetadata redMaterial = MaterialMetadata("ThumbnailProbe", materialPath, 2U);
     const kb::editor::ProjectFilesMaterialPreviewStyle redStyle =
         kb::editor::ProjectFilesMaterialPreviewThumbnailModel::StyleFromAsset(redMaterial);
-    kb::editor::tests::Require(redStyle.loadedFromAsset && !redStyle.errorFallback, "KBMAT-UE-0015: Material thumbnail should reload after the saved asset changes");
+    kb::editor::tests::Require(redStyle.loadedFromAsset && !redStyle.errorFallback, "KBMAT-0015: Material thumbnail should reload after the saved asset changes");
     const kb::editor::ProjectFilesMaterialPreviewImage redImage =
         kb::editor::ProjectFilesMaterialPreviewThumbnailModel::RenderImage(64, 64, redStyle, false);
-    kb::editor::tests::Require(redImage.bgra != blueImage.bgra, "KBMAT-UE-0015: Material thumbnail pixels should update after save/content hash change");
+    kb::editor::tests::Require(redImage.bgra != blueImage.bgra, "KBMAT-0015: Material thumbnail pixels should update after save/content hash change");
 
     WriteTextFile(materialPath, "materialType builtin.pbr\nbaseColor nope\n");
     const kb::assets::AssetMetadata invalidMaterial = MaterialMetadata("BrokenThumbnailProbe", materialPath, 3U);
     const kb::editor::ProjectFilesMaterialPreviewStyle errorStyle =
         kb::editor::ProjectFilesMaterialPreviewThumbnailModel::StyleFromAsset(invalidMaterial);
-    kb::editor::tests::Require(errorStyle.errorFallback && !errorStyle.loadedFromAsset, "KBMAT-UE-0015: Invalid material thumbnail should use the visible error material policy");
+    kb::editor::tests::Require(errorStyle.errorFallback && !errorStyle.loadedFromAsset, "KBMAT-0015: Invalid material thumbnail should use the visible error material policy");
     const kb::editor::ProjectFilesMaterialPreviewImage errorImage =
         kb::editor::ProjectFilesMaterialPreviewThumbnailModel::RenderImage(64, 64, errorStyle, false);
-    kb::editor::tests::Require(HasVisiblePreviewPixels(errorImage), "KBMAT-UE-0015: Error material thumbnail should still render visible preview pixels");
-    kb::editor::tests::Require(CountErrorTintPixels(errorImage) >= 48U, "KBMAT-UE-0015: Error material thumbnail should expose a visible magenta/red diagnostic tint");
+    kb::editor::tests::Require(HasVisiblePreviewPixels(errorImage), "KBMAT-0015: Error material thumbnail should still render visible preview pixels");
+    kb::editor::tests::Require(CountErrorTintPixels(errorImage) >= 48U, "KBMAT-0015: Error material thumbnail should expose a visible magenta/red diagnostic tint");
 }
 #endif
 

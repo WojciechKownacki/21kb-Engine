@@ -4235,7 +4235,7 @@ void RunMaterialGraphCommentEditingSuite(Report& report) {
 }
 
 // Finding 27 (a diagnostic jumps to its node): a node-tied diagnostic line is clickable and centres the graph
-// on the offending node, the way Unreal's error list focuses the node instead of leaving the user to hunt.
+// on the offending node, instead of leaving the user to hunt for it.
 void RunMaterialGraphDiagnosticJumpSuite(Report& report) {
     EditorSceneContext context;
     std::error_code error;
@@ -4302,7 +4302,7 @@ void RunMaterialGraphDiagnosticJumpSuite(Report& report) {
 }
 
 // Finding 28 (material preview camera control): the preview object was locked to one head-on angle. Drag now
-// orbits it and the wheel dollies in/out, the way Unreal's material-preview viewport reads.
+// orbits it and the wheel dollies in/out.
 void RunMaterialPreviewCameraControlSuite(Report& report) {
     EditorSceneContext context;
     std::error_code error;
@@ -4404,7 +4404,7 @@ void RunMaterialPreviewCameraControlSuite(Report& report) {
 
     // The heart of the lag fix: none of the orbit/zoom above bumped the preview revision, so the viewport
     // never re-synced the scene to the GPU for a camera move. The preview redraws from the per-frame present
-    // override alone - matching UE, where an orbit ends in Viewport->InvalidateDisplay() (viewport pixels
+    // override alone - an orbit ends in a viewport display invalidation (viewport pixels
     // only), not a scene rebuild.
     report.Check(context.MaterialPreviewRevision() == revisionBeforeCameraMoves,
         "Finding 28: orbiting and zooming never bump the preview revision (no per-frame GPU re-sync)");
@@ -5482,7 +5482,7 @@ void RunPluginsPanelSuite(Report& report) {
     report.Check(boxTransform.localPosition.y < 4.0F, "Jolt plugin loaded through editor reload moves a dynamic body");
     report.Check(boxTransform.localPosition.y > 0.35F, "Jolt plugin loaded through editor reload keeps the body above the floor");
 
-    // Unity-like: a Collider WITHOUT a Rigidbody is an implicit static body, so a
+    // A Collider WITHOUT a Rigidbody is an implicit static body, so a
     // dynamic body lands on it instead of tunneling through. Placed far from the
     // first floor so the two scenarios never interact.
     const kb::scene::SceneEntity colliderOnlyFloor = context.CreateHierarchyObject();
@@ -5675,7 +5675,7 @@ void RunMaterialGraphInteractionLifecycleSuite(Report& report) {
         "Finding 14: restore the link for the remaining checks");
 
     // Parked-menu regression (2026-07-22): a wire dropped on empty canvas parks the pin-connection menu but
-    // deliberately KEEPS the pending connection so a picked node connects to it (UE-style). The move router
+    // deliberately KEEPS the pending connection so a picked node connects to it. The move router
     // used to cancel that pending connection on the very first mouse move (its !leftButtonDown loose-wire
     // path), after which the pick created nothing - "selecting the list just cancels". The router now guards
     // that path with !IsMaterialGraphContextMenuOpen(); this models the exact predicate so a regression fails

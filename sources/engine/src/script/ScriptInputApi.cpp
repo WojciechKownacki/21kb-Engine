@@ -121,8 +121,8 @@ bool RegisterValueQuery(ScriptRuntimeHost& host, std::string name) {
 // Reads the action's raw/modified value as a bool (value.AsBool(), i.e. x != 0),
 // distinct from Held/Pressed/Released below: those reflect whether a *trigger*
 // fired (respecting deadzones, Hold thresholds, etc. - see InputMappingEvaluator),
-// while ActionBool reflects the value itself, mirroring Unreal's direct
-// FInputActionValue::Get<bool>() read versus binding to a trigger event.
+// while ActionBool reflects the value itself - a direct read of the resolved
+// action value as a bool, versus binding to a trigger event.
 bool RegisterActionBoolQuery(ScriptRuntimeHost& host, std::string name) {
     ScriptFunctionDesc desc;
     desc.signature.name = std::move(name);
@@ -489,7 +489,7 @@ bool RegisterPointerDelta(ScriptRuntimeHost& host) {
     return host.RegisterFunction(std::move(desc));
 }
 
-// 0=left, 1=right, 2=middle - the same convention as Unity's Input.GetMouseButton.
+// 0=left, 1=right, 2=middle - the conventional mouse-button index order.
 [[nodiscard]] kb::input::InputKey MouseButtonKey(int button) noexcept {
     switch (button) {
         case 1:

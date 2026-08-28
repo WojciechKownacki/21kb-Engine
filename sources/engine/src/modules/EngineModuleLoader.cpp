@@ -323,8 +323,8 @@ bool EngineModuleLoader::CopyForLoad(
     // The source DLL can be transiently locked with a sharing violation by an
     // antivirus real-time scan, the search indexer, or a build tool that just
     // wrote it — an inherent Windows condition, not a permanent failure. Retry
-    // with a short backoff (this is the standard shadow-copy behavior in .NET/
-    // Unity), and only report the failure if the lock genuinely persists.
+    // with a short backoff (the standard shadow-copy behavior for any host
+    // that copies plugins aside), and only report the failure if it persists.
     // Ride out only a brief transient lock (e.g. an antivirus glancing at a
     // freshly written DLL). Kept short on purpose: this runs on the caller's
     // thread, so a long spin would freeze the editor UI, and a genuinely

@@ -6,8 +6,8 @@
 
 namespace kb::input {
 
-// Modifiers transform a mapping's raw value before triggers evaluate it,
-// mirroring Unreal's UInputModifier hierarchy. Parameters are stored inline
+// Modifiers transform a mapping's raw value before triggers evaluate it;
+// the type selects which transform runs. Parameters are stored inline
 // (no per-modifier assets) to keep mapping contexts self-contained.
 enum class InputModifierType : std::uint8_t {
     Negate,                   // Flips sign per axis (params: bX, bY, bZ as 0/1).
