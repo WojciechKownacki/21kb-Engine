@@ -489,6 +489,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/gdi/GdiFramePainter.hpp
     src/private/rendering/gdi/GdiRect.hpp
     src/private/rendering/gdi/GdiRectPainter.hpp
+    src/private/rendering/gdi/EditorFontCache.hpp
     src/private/rendering/gdi/GdiTextPainter.hpp
     src/private/rendering/gdi/ScopedBitmap.hpp
     src/private/rendering/gdi/ScopedBrush.hpp
@@ -709,6 +710,7 @@ add_executable(kb_editor WIN32
     src/rendering/gdi/GdiFramePainter.cpp
     src/rendering/gdi/GdiRect.cpp
     src/rendering/gdi/GdiRectPainter.cpp
+    src/rendering/gdi/EditorFontCache.cpp
     src/rendering/gdi/GdiTextPainter.cpp
     src/rendering/HierarchyPanelRenderer.cpp
     src/rendering/HierarchyPanelStyle.cpp
@@ -1179,6 +1181,7 @@ if(BUILD_TESTING)
             src/settings/EditorConfigurationStore.cpp
             src/docking/EditorWorkspaceArrangement.cpp
             src/rendering/FloatingPanelGeometry.cpp
+            src/rendering/gdi/EditorFontCache.cpp
             src/settings/EditorLayoutLibrary.cpp
             src/settings/EditorLayoutMenuModel.cpp
             src/settings/EditorPanelSessionText.cpp

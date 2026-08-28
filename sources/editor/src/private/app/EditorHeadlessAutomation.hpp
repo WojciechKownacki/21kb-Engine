@@ -29,6 +29,18 @@ public:
         bool animated = false;
     };
 
+    // What one step of an Inspector drag actually costs, split by stage, so the
+    // stall a person feels can be attributed instead of guessed at.
+    struct InspectorDragProfile {
+        bool succeeded = false;
+        std::size_t steps = 0U;
+        double applyMs = 0.0;
+        double inspectorPaintMs = 0.0;
+        double inspectorHeightMs = 0.0;
+        double inspectorRowPaintMs = 0.0;
+        double scenePresentMs = 0.0;
+    };
+
     struct FloatingWindowFrame {
         bool succeeded = false;
         // Pixels of window height Windows keeps for itself, with the editor's frame
@@ -94,6 +106,7 @@ public:
         VerifyWorkspaceLayoutPersistence();
     [[nodiscard]] SavedLayoutRoundTrip VerifySavedLayoutRoundTrip();
     [[nodiscard]] FloatingWindowFrame VerifyFloatingWindowFrame();
+    [[nodiscard]] InspectorDragProfile ProfileInspectorTransformDrag(std::size_t steps);
 
     [[nodiscard]] bool InspectorPointerDown(int x, int y);
     [[nodiscard]] bool InspectorPointerDrag(int x, int y);
