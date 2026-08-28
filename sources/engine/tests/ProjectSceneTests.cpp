@@ -1,6 +1,7 @@
 #include "TestSupport.hpp"
 #include "TestSuites.hpp"
 
+#include "engine/config/IniDocument.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/assets/AssetHandle.hpp"
 #include "engine/assets/AssetMetadata.hpp"
@@ -106,6 +107,65 @@ public:
 private:
     SceneDocumentSystemProbe& probe_;
 };
+
+void RunIniDocumentRoundTripTest() {
+    CleanTempRoot();
+    const std::filesystem::path file = TempRoot() / "Config" / "Sample.ini";
+
+    kb::config::IniDocument written;
+    written.SetString("Project.Identity", "Name", "Sample Project");
+    written.SetString("Project.Identity", "GameName", "Sample Game");
+    written.SetInt("Project.Rendering", "MaxFps", 144);
+    written.SetBool("Project.Input", "Enabled", true);
+    std::string error;
+    Require(written.Save(file, error) && error.empty(), "Configuration file was not written");
+    Require(std::filesystem::is_regular_file(file), "Configuration file is missing after a successful save");
+    Require(!std::filesystem::exists(std::filesystem::path{file}.concat(".tmp")),
+        "Configuration save left its temporary file behind");
+
+    kb::config::IniDocument read;
+    Require(read.Load(file, error) && error.empty(), "Configuration file was not read back");
+    Require(read.GetString("Project.Identity", "Name") == "Sample Project", "Configuration lost a string value");
+    Require(read.GetString("Project.Identity", "GameName") == "Sample Game", "Configuration lost a second key of the same section");
+    Require(read.GetInt("Project.Rendering", "MaxFps") == 144, "Configuration lost an integer value");
+    Require(read.GetBool("Project.Input", "Enabled") == true, "Configuration lost a boolean value");
+    Require(!read.GetString("Project.Identity", "Missing").has_value(), "Configuration invented a missing key");
+    Require(!read.GetString("Absent.Section", "Name").has_value(), "Configuration invented a missing section");
+
+    Require(read.Remove("Project.Identity", "GameName"), "Configuration did not remove an existing key");
+    Require(!read.Remove("Project.Identity", "GameName"), "Configuration removed the same key twice");
+    Require(read.GetString("Project.Identity", "Name") == "Sample Project", "Removing one key dropped its neighbour");
+}
+
+void RunIniDocumentToleratesAuthoredTextTest() {
+    CleanTempRoot();
+    const std::filesystem::path file = TempRoot() / "Authored.ini";
+    {
+        std::ofstream output{file, std::ios::binary | std::ios::trunc};
+        output << "; a comment\r\n"
+               << "# another comment\r\n"
+               << "\r\n"
+               << "  [ Project.Maps ]  \r\n"
+               << "  DefaultMap = /Game/Scenes/Main.21kbscene  \r\n"
+               << "LastOpenMap=\r\n"
+               << "DefaultMap=/Game/Scenes/Second.21kbscene\r\n";
+    }
+
+    kb::config::IniDocument document;
+    std::string error;
+    Require(document.Load(file, error) && error.empty(), "An authored configuration file was rejected");
+    Require(document.GetString("Project.Maps", "DefaultMap") == "/Game/Scenes/Second.21kbscene",
+        "A repeated key must keep its last assignment");
+    Require(document.GetString("Project.Maps", "LastOpenMap") == "", "An empty value must read back as empty, not missing");
+    Require(!document.GetInt("Project.Maps", "DefaultMap").has_value(), "A non-numeric value must not parse as an integer");
+
+    {
+        std::ofstream output{file, std::ios::binary | std::ios::trunc};
+        output << "[Project.Maps\n";
+    }
+    Require(!document.Load(file, error) && !error.empty(), "A malformed section header must be reported, not guessed");
+    Require(document.Empty(), "A rejected configuration must not leave half-parsed values behind");
+}
 
 void RunProjectDescriptorRoundTripTest() {
     CleanTempRoot();
@@ -1293,6 +1353,8 @@ void RunSceneAssetRejectsChecksumMismatchTest() {
 } // namespace
 
 void RunProjectSceneTests() {
+    RunIniDocumentRoundTripTest();
+    RunIniDocumentToleratesAuthoredTextTest();
     RunProjectDescriptorRoundTripTest();
     RunProjectDescriptorRejectsChecksumMismatchTest();
     RunSceneDocumentRoundTripTest();
