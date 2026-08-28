@@ -14,6 +14,8 @@ class EditorDockModelCommands {
 public:
     EditorDockModelCommands(DockPanelCollection& panels, std::unique_ptr<DockNode>& root, std::uint32_t& nextNodeId, std::uint32_t& maximizedLeafId) noexcept;
 
+    // Puts the workspace back to the arrangement a new project starts with.
+    void ResetWorkspace();
     void ActivatePanel(std::uint32_t panelId);
     [[nodiscard]] bool ClosePanel(std::uint32_t panelId);
     void ResizeSplitter(std::uint32_t nodeId, int mouseX, int mouseY, const DockLayout& layout);

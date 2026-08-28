@@ -87,6 +87,7 @@ void ActivateRightPanel(HWND mainWindow, EditorDockModel& dockModel, DockPanelKi
     EditorDockModel& dockModel,
     EditorSceneContext& sceneContext,
     EditorSceneBgfxViewport& sceneViewport,
+    EditorRenderBackendSettings& renderBackendSettings,
     EditorShellInteractionState& shellInteraction) {
     const EditorMenuRects menu = EditorToolbarRenderer::ResolveMenu(ToRect(layout.menu), shellInteraction.OpenMenu());
     if (const EditorMenuCommand hitMenu = EditorToolbarRenderer::HitTestMenu(menu, x, y); hitMenu != EditorMenuCommand::None) {
@@ -150,7 +151,25 @@ void ActivateRightPanel(HWND mainWindow, EditorDockModel& dockModel, DockPanelKi
                 ActivateRightPanel(mainWindow, dockModel, DockPanelKind::Plugins);
             }
         } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Options) {
-            if (*row == 2) {
+            if (*row == 0) {
+                // Renderer: step to the next graphics backend. The viewport rebuilds on
+                // the settings generation, so the change lands on the next present.
+                renderBackendSettings.CycleBackend();
+                sceneContext.Console().Info("Renderer",
+                    std::string{"Render backend: "} +
+                        EditorRenderBackendLabel(renderBackendSettings.Backend()) +
+                        ". Reopen the editor to apply.");
+                sceneViewport.RequestPresent();
+            } else if (*row == 1) {
+                // Layout: back to the arrangement a new project starts with. The stored
+                // panel placements go with it, so the reset survives a restart.
+                dockModel.Commands().ResetWorkspace();
+                EditorConfiguration configuration = sceneContext.EditorConfig();
+                configuration.panels.clear();
+                static_cast<void>(sceneContext.SaveEditorConfig(std::move(configuration)));
+                sceneContext.Console().Info("Layout", "Workspace layout reset.");
+                sceneViewport.RequestPresent();
+            } else if (*row == 2) {
                 ActivateRightPanel(mainWindow, dockModel, DockPanelKind::ProjectSettings);
             } else if (*row == 3) {
                 ActivateRightPanel(mainWindow, dockModel, DockPanelKind::EditorSettings);
@@ -287,6 +306,7 @@ bool EditorWindowToolbarPointerHandler::HandleLeftButtonDown(
     EditorDockModel& dockModel,
     EditorSceneContext& sceneContext,
     EditorSceneBgfxViewport& sceneViewport,
+    EditorRenderBackendSettings& renderBackendSettings,
     EditorPlayModeState& playMode,
     EditorShellInteractionState& shellInteraction,
     const EditorMetrics& metrics) {
@@ -299,7 +319,7 @@ bool EditorWindowToolbarPointerHandler::HandleLeftButtonDown(
         return false;
     }
 
-    if (HandleMenuLeftButtonDown(mainWindow, x, y, *layout, dockModel, sceneContext, sceneViewport, shellInteraction)) {
+    if (HandleMenuLeftButtonDown(mainWindow, x, y, *layout, dockModel, sceneContext, sceneViewport, renderBackendSettings, shellInteraction)) {
         return true;
     }
 
