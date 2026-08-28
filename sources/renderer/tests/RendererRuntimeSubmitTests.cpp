@@ -3155,8 +3155,10 @@ void RunRendererReloadsChangedRuntimeMeshAssetTest() {
 
     SubmitLifecycleFrame(renderer, fixture.scene, desc, "LIB-146 mesh reload test did not submit the initial frame");
     const RenderMeshHandle firstHandle = renderer.SceneResourceMap()->ResolveMesh(fixture.meshAssetId);
-    Require(firstHandle.IsValid() && renderer.SceneResources()->FindMesh(firstHandle) != nullptr,
+    const RenderMeshResource* firstResource = renderer.SceneResources()->FindMesh(firstHandle);
+    Require(firstHandle.IsValid() && firstResource != nullptr,
         "LIB-146 mesh reload test initial submit did not bind a live mesh handle");
+    const float firstRadius = firstResource->bounds.radius;
 
     // Rewrite the mesh with different geometry -> new contentHash on rediscovery.
     {
@@ -3179,8 +3181,14 @@ void RunRendererReloadsChangedRuntimeMeshAssetTest() {
         "A changed mesh contentHash must rebuild the GPU mesh into a new handle on the next submit");
     Require(renderer.SceneResources()->FindMesh(firstHandle) == nullptr,
         "The replaced mesh's old handle must be honestly unresolvable after the reload");
-    Require(renderer.SceneResources()->FindMesh(secondHandle) != nullptr && renderer.RuntimeResourceStats().cachedMeshCount == 1U,
+    const RenderMeshResource* secondResource = renderer.SceneResources()->FindMesh(secondHandle);
+    Require(secondResource != nullptr && renderer.RuntimeResourceStats().cachedMeshCount == 1U,
         "The reloaded mesh must be live and cached exactly once");
+    // A new handle alone would still be satisfied by a rebuild that re-uploaded the OLD geometry, so
+    // assert the geometry itself moved: the rewritten triangle is three times larger, making the GPU
+    // resource's own bounds the honest witness that the bytes on disk actually reached the GPU.
+    Require(secondResource->bounds.radius > firstRadius * 2.0F,
+        "The rebuilt GPU mesh must carry the rewritten geometry, not a re-upload of the stale asset");
     Require(renderer.LastSceneSubmitStats().visibleMeshCount > 0U, "The reloaded mesh must keep rendering");
 
     renderer.Shutdown();
