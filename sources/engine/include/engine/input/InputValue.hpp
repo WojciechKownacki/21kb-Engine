@@ -7,8 +7,8 @@
 namespace kb::input {
 
 // The resolved value of an input action for the current frame.
-// Stores up to three axes plus the declared value type, mirroring
-// Unreal's FInputActionValue. Self-contained (no scene math dependency).
+// Stores up to three axes plus the declared value type, in one small
+// value struct. Self-contained (no scene math dependency).
 struct InputValue {
     float x = 0.0F;
     float y = 0.0F;

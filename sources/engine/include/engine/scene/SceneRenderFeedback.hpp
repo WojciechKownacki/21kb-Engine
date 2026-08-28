@@ -143,8 +143,8 @@ struct SceneScreenCaptureRequest {
 // during SubmitScene (reusing the exact frustum/bounds math its mesh pipeline culls with)
 // and publishes it here; scripts running the NEXT frame read the result. That one-frame
 // latency is inherent to any "was it rendered" query that avoids forcing GPU/pipeline
-// synchronization, and matches the industry-standard semantics of Unity's
-// Renderer.isVisible. Feedback is retained independently per local user so split-screen
+// synchronization, and matches the industry-standard semantics of a renderer-side
+// visibility flag. Feedback is retained independently per local user so split-screen
 // views cannot overwrite each other's active camera. Legacy overloads without a local-user
 // argument continue to address the most recently submitted view.
 //

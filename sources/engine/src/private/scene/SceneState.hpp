@@ -534,8 +534,8 @@ public:
     // Marking a NON-root entity persistent has no protective effect on its
     // own — ClearSceneRoots only ever evaluates roots, so a persistent
     // child still cascade-destroys if its non-persistent parent's root is
-    // cleared (mirrors Unity's DontDestroyOnLoad, which likewise only
-    // affects root-level GameObjects); this is an intentional, documented
+    // cleared (the same limit a "do not destroy on load" marking has, which
+    // likewise only applies at root level); this is an intentional, documented
     // scope limit, not an oversight.
     std::unordered_set<SceneEntity::IdType> persistentEntities;
     // LIB-071: content loaded via Scene.Load (additive or not). Each

@@ -4,8 +4,8 @@
 
 namespace kb::modules {
 
-// Order in which a module's lifecycle runs relative to other modules. Mirrors the
-// Unreal-style loading phases referenced by ProjectModuleDescriptor::loadingPhase.
+// Order in which a module's lifecycle runs relative to other modules. These are
+// the loading phases referenced by ProjectModuleDescriptor::loadingPhase.
 enum class EngineModuleLoadingPhase : std::uint8_t {
     EarliestPossible,
     PreDefault,

@@ -14,7 +14,7 @@ enum class CameraProjection {
 };
 
 // LIB-136: how much of a camera's own render target this camera's submission
-// touches before drawing - mirrors Unity's CameraClearFlags minus Skybox
+// touches before drawing - the usual set of clear flags minus Skybox
 // (this engine has no skybox pass). Deferred/GBuffer rendering always fully
 // clears regardless of this setting - that clear is a correctness
 // requirement for reconstructing lighting from the G-buffer, not a stylistic

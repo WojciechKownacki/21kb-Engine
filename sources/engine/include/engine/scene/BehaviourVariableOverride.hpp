@@ -7,7 +7,7 @@
 namespace kb::scene {
 
 // A per-instance override of a behaviour's exposed ("@expose") script variable,
-// authored in the editor Inspector. Following the Unity/Unreal/Godot/O3DE design
+// authored in the editor Inspector. Following the standard scene-authoring design
 // (delta-over-default serialization), only variables whose value DIFFERS from the
 // script's declared default are stored; a variable reset to its default drops its
 // override entirely. `name` is the exposed variable identifier; `value` is the

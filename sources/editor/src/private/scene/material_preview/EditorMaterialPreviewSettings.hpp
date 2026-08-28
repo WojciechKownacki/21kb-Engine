@@ -16,7 +16,7 @@ enum class EditorMaterialPreviewLightingPreset : std::uint8_t {
     HighContrast,
 };
 
-// Camera orbit limits, mirroring the feel of Unreal's material-preview viewport: the object stays framed
+// Camera orbit limits: the object stays framed
 // while the user swings the camera around it and dollies in/out with the wheel.
 inline constexpr float kEditorMaterialPreviewMinCameraDistance = 1.4F;
 inline constexpr float kEditorMaterialPreviewMaxCameraDistance = 18.0F;

@@ -44,7 +44,7 @@ public:
         const LONG buttonsBottom = std::max(buttonsTop, static_cast<LONG>(documentBarBottom - 5));
         const int buttonsWidth = static_cast<int>(buttonsRight - buttonsLeft);
         const int documentWidth = buttonsWidth / 2;
-        // Persona gives the Skeleton Tree enough horizontal room for deeply nested rig names.
+        // The Skeleton Tree needs enough horizontal room for deeply nested rig names.
         // Keep the toolbox compact and dedicate a wider, independently-sized right column to the
         // tree/details stack. On narrow windows preserve a usable viewport before shrinking either
         // sidebar.

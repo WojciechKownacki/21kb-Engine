@@ -16,7 +16,7 @@ namespace kb::editor {
 
 #if defined(_WIN32)
 // Interactive controls exposed by the Project Settings panel. The panel is
-// intentionally minimal (UE "Project Settings > Input" feel): the active mapping
+// intentionally minimal (a plain "Project Settings > Input" page): the active mapping
 // context is a project-wide setting, not a per-entity component.
 enum class ProjectSettingsHitKind : std::uint8_t {
     None,

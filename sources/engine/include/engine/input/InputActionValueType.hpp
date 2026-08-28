@@ -5,7 +5,7 @@
 
 namespace kb::input {
 
-// Number of axes an input action carries, mirroring Unreal's EInputActionValueType.
+// Number of axes an input action carries, and the shape of its value.
 enum class InputActionValueType : std::uint8_t {
     Bool,   // Digital on/off (1 axis, treated as 0/1).
     Axis1D, // Single analog axis.
