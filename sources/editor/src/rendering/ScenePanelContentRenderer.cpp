@@ -649,7 +649,7 @@ void AppendTerrainBrushRing(
         renderProfile.autoExposureEnabled && continuousRuntimeFrames;
     postProcessSettings.outputTransform.autoExposure.temporalAdaptationEnabled =
         renderProfile.autoExposureEnabled && continuousRuntimeFrames;
-    kb::render::SceneRenderLightingConfig lightingConfig = BuildViewportLightingConfig(renderProfile, sceneContext.Project().sceneLightingPath);
+    kb::render::SceneRenderLightingConfig lightingConfig = BuildViewportLightingConfig(renderProfile, sceneContext.ProjectConfiguration().lightingPath);
     // SceneGBuffer has no MSAA-attachment support, so a multisampled Deferred G-buffer isn't an
     // option today; falling back to Forward is the only way to honor the MSAA request. This is a
     // real cost (per-sample forward shading instead of a single per-pixel deferred resolve), not a

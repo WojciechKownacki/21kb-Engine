@@ -81,7 +81,7 @@ void RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest() {
     kb::editor::tests::Require(std::filesystem::is_regular_file(kb::editor::EditorProjectPaths::ProjectFile()), "Editor project descriptor file was not created");
     kb::editor::tests::Require(std::filesystem::is_directory(kb::editor::EditorProjectPaths::ScenesRoot()), "Editor project scenes folder was not created");
     kb::editor::tests::Require(std::filesystem::is_directory(kb::editor::EditorProjectPaths::PrefabsRoot()), "Editor project prefabs folder was not created");
-    kb::editor::tests::Require(created.descriptor.defaultScene == "/Game/Scenes/Main.21kbscene", "Editor project default scene virtual path is invalid");
+    kb::editor::tests::Require(created.settings.defaultMap == "/Game/Scenes/Main.21kbscene", "Editor project default map is invalid");
     kb::editor::tests::Require(HasEnabledPlugin(created.descriptor, "Physics.Jolt"), "Editor project default physics plugin was not configured");
     kb::editor::tests::Require(HasEnabledPlugin(created.descriptor, "Audio.Miniaudio"), "Editor project default audio plugin was not configured");
     kb::editor::tests::Require(HasEnabledPlugin(created.descriptor, "Rendering.BasicLighting"), "Editor project default lighting plugin was not configured");
@@ -91,7 +91,7 @@ void RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest() {
 
     const kb::project::ProjectDescriptorReadResult loaded = kb::project::ProjectManager::LoadProject(kb::editor::EditorProjectPaths::ProjectFile());
     kb::editor::tests::Require(loaded.succeeded, "Created editor project descriptor did not load");
-    kb::editor::tests::Require(loaded.descriptor.name == "Project", "Created editor project descriptor name is invalid");
+    kb::editor::tests::Require(created.settings.name == "Project", "Created editor project name is invalid");
     kb::editor::tests::Require(loaded.descriptor.contentRoot == "Assets", "Created editor project content root is invalid");
     kb::editor::tests::Require(HasEnabledPlugin(loaded.descriptor, "Physics.Jolt"), "Created editor project descriptor did not persist the default physics plugin");
     kb::editor::tests::Require(HasEnabledPlugin(loaded.descriptor, "Audio.Miniaudio"), "Created editor project descriptor did not persist the default audio plugin");
@@ -99,23 +99,26 @@ void RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest() {
     kb::editor::tests::Require(BinaryPathFor(loaded.descriptor, "Physics.Jolt") == kb::editor::EditorPluginCatalog::PersistentBinaryPath("Physics.Jolt"), "Persisted physics plugin path should stay config-agnostic");
     kb::editor::tests::Require(BinaryPathFor(loaded.descriptor, "Audio.Miniaudio") == kb::editor::EditorPluginCatalog::PersistentBinaryPath("Audio.Miniaudio"), "Persisted audio plugin path should stay config-agnostic");
     kb::editor::tests::Require(BinaryPathFor(loaded.descriptor, "Rendering.BasicLighting") == kb::editor::EditorPluginCatalog::PersistentBinaryPath("Rendering.BasicLighting"), "Persisted lighting plugin path should stay config-agnostic");
-    kb::editor::tests::Require(loaded.descriptor.sceneLightingPath == kb::project::ProjectSceneLightingPath::Forward, "Created editor project should default to Forward lighting path");
+    kb::editor::tests::Require(created.settings.lightingPath == kb::project::ProjectSceneLightingPath::Forward, "Created editor project should default to Forward lighting path");
+    kb::editor::tests::Require(loaded.descriptor.fileVersion == kb::project::ProjectDescriptor::CurrentFileVersion,
+        "Created editor project descriptor should be written at the current file version");
 
-    kb::project::ProjectDescriptor forwardPlusDescriptor = loaded.descriptor;
-    forwardPlusDescriptor.sceneLightingPath = kb::project::ProjectSceneLightingPath::ForwardPlus;
-    kb::editor::tests::Require(kb::project::ProjectDescriptorWriter::Write(kb::editor::EditorProjectPaths::ProjectFile(), forwardPlusDescriptor), "Editor project descriptor did not write Forward+ lighting path");
-    const kb::project::ProjectDescriptorReadResult forwardPlusLoaded = kb::project::ProjectManager::LoadProject(kb::editor::EditorProjectPaths::ProjectFile());
-    kb::editor::tests::Require(forwardPlusLoaded.succeeded, "Forward+ editor project descriptor did not reload");
-    kb::editor::tests::Require(forwardPlusLoaded.descriptor.sceneLightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus, "Forward+ lighting path did not roundtrip through project descriptor");
-    kb::editor::tests::Require(forwardPlusLoaded.descriptor.fileVersion >= 4U, "Forward+ lighting path descriptor should be version >= 4");
-
-    kb::project::ProjectDescriptor deferredDescriptor = forwardPlusLoaded.descriptor;
-    deferredDescriptor.sceneLightingPath = kb::project::ProjectSceneLightingPath::Deferred;
-    kb::editor::tests::Require(kb::project::ProjectDescriptorWriter::Write(kb::editor::EditorProjectPaths::ProjectFile(), deferredDescriptor), "Editor project descriptor did not write Deferred lighting path");
-    const kb::project::ProjectDescriptorReadResult deferredLoaded = kb::project::ProjectManager::LoadProject(kb::editor::EditorProjectPaths::ProjectFile());
-    kb::editor::tests::Require(deferredLoaded.succeeded, "Deferred editor project descriptor did not reload");
-    kb::editor::tests::Require(deferredLoaded.descriptor.sceneLightingPath == kb::project::ProjectSceneLightingPath::Deferred, "Deferred lighting path did not roundtrip through project descriptor");
-    kb::editor::tests::Require(deferredLoaded.descriptor.fileVersion >= 4U, "Deferred lighting path descriptor should be version >= 4");
+    // The lighting path is a setting now, so it round-trips through the settings file.
+    const std::filesystem::path settingsFile =
+        kb::project::ProjectSettingsStore::FilePath(kb::editor::EditorProjectPaths::ProjectRoot());
+    kb::editor::tests::Require(std::filesystem::is_regular_file(settingsFile), "Editor project settings file was not created");
+    for (const kb::project::ProjectSceneLightingPath path : {
+             kb::project::ProjectSceneLightingPath::ForwardPlus,
+             kb::project::ProjectSceneLightingPath::Deferred }) {
+        kb::project::ProjectSettings settings = created.settings;
+        settings.lightingPath = path;
+        std::string settingsError;
+        kb::editor::tests::Require(kb::project::ProjectSettingsStore::Save(settingsFile, settings, settingsError),
+            "Editor project settings did not write the lighting path");
+        const auto reloaded = kb::project::ProjectSettingsStore::Load(settingsFile);
+        kb::editor::tests::Require(reloaded.Succeeded() && reloaded.found && reloaded.settings.lightingPath == path,
+            "Lighting path did not roundtrip through the project settings file");
+    }
 
     const kb::editor::EditorProjectBootstrapResult reopened = kb::editor::EditorProjectBootstrap::BootstrapDefaultProject();
     kb::editor::tests::Require(reopened.succeeded, "Editor project bootstrap did not reopen an existing project descriptor");
@@ -138,11 +141,8 @@ void RunProjectPathsPreferRepositoryProjectWhenLaunchedFromBuildTreeTest() {
     WriteTextFile(repoRoot / "sources" / "editor" / "src" / "project" / "EditorProjectPaths.cpp", "// sentinel\n");
 
     kb::project::ProjectDescriptor repoDescriptor{};
-    repoDescriptor.name = "RepoProject";
     repoDescriptor.contentRoot = "Assets";
-    repoDescriptor.defaultScene = "/Game/Scenes/Main.21kbscene";
-    kb::project::ProjectDescriptor buildDescriptor = repoDescriptor;
-    buildDescriptor.name = "BuildProject";
+    const kb::project::ProjectDescriptor buildDescriptor = repoDescriptor;
     kb::editor::tests::Require(kb::project::ProjectManager::CreateProject(repoProject / "Project.21kbproject", repoDescriptor),
         "Editor project path test could not create repository project");
     kb::editor::tests::Require(kb::project::ProjectManager::CreateProject(buildProject / "Project.21kbproject", buildDescriptor),

@@ -15,8 +15,7 @@ using ProjectDescriptorBinaryIO::WriteUInt32;
 using ProjectDescriptorBinaryIO::WriteUInt64;
 
 [[nodiscard]] bool CanWrite(const ProjectDescriptorMeta& meta) {
-    return !meta.projectName.empty() &&
-        !meta.engineAssociation.empty() &&
+    return !meta.engineAssociation.empty() &&
         !meta.projectFile.empty() &&
         meta.byteSize != 0U &&
         meta.contentHashFnv1a64 != 0U &&
@@ -30,9 +29,7 @@ using ProjectDescriptorBinaryIO::WriteUInt64;
     output.reserve(160U);
     WriteRaw(output, ProjectDescriptorFormat::MetaMagic.data(), ProjectDescriptorFormat::MetaMagic.size());
     WriteUInt32(output, ProjectDescriptorMeta::CurrentFileVersion);
-    WriteString(output, meta.projectName);
     WriteString(output, meta.engineAssociation);
-    WriteString(output, meta.defaultScene);
     WriteString(output, meta.projectFile.generic_string());
     WriteUInt64(output, meta.byteSize);
     WriteUInt64(output, meta.contentHashFnv1a64);
