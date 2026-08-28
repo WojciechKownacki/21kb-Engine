@@ -13,10 +13,13 @@ namespace kb::editor {
 namespace {
 
 constexpr wchar_t kChoiceWindowClass[] = L"KBEditorChoiceDialog";
-constexpr int kDialogWidth = 480;
-constexpr int kDialogHeight = 220;
+constexpr int kDialogWidth = 468;
+constexpr int kDialogHeight = 208;
 constexpr int kButtonWidth = 104;
-constexpr int kButtonGap = 8;
+constexpr int kButtonGap = 10;
+constexpr int kButtonHeight = 32;
+constexpr int kEdgePadding = 22;
+constexpr int kFooterMargin = 18;
 
 enum class HoverTarget {
     None,
@@ -74,7 +77,8 @@ private:
 
     [[nodiscard]] RECT PrimaryRect() const noexcept {
         const RECT client = Client();
-        return Rect(client.right - kButtonWidth - 14, client.bottom - 34, client.right - 14, client.bottom - 8);
+        const int bottom = client.bottom - kFooterMargin;
+        return Rect(client.right - kButtonWidth - kEdgePadding, bottom - kButtonHeight, client.right - kEdgePadding, bottom);
     }
 
     [[nodiscard]] RECT SecondaryRect() const noexcept {
@@ -134,34 +138,34 @@ private:
             .closeHovered = hovered_ == HoverTarget::Close,
         });
 
-        const RECT context = Rect(client.left + 1, EditorDialogStyle::TitleBarHeight, client.right - 1, 62);
-        EditorDialogStyle::PaintToolbar(dc, context, theme);
+        // The question carries the dialog. The banner that used to shout ACTION
+        // REQUIRED above it only added a second horizontal rule and repeated what the
+        // title bar and the buttons already say.
+        const int bodyTop = EditorDialogStyle::TitleBarHeight + 28;
+        const RECT message = Rect(kEdgePadding, bodyTop, client.right - kEdgePadding, bodyTop + 46);
         EditorDialogStyle::PaintText(
             dc,
-            Rect(16, context.top, client.right - 16, context.bottom),
-            "ACTION REQUIRED",
-            EditorDialogStyle::Color(theme.accent),
-            9,
-            FW_SEMIBOLD);
-        EditorDialogStyle::PaintText(
-            dc,
-            Rect(16, 76, client.right - 16, 122),
+            message,
             descriptor_.message,
             EditorDialogStyle::Color(theme.textPrimary),
-            12,
+            15,
             FW_SEMIBOLD,
             DT_LEFT | DT_TOP | DT_WORDBREAK);
         EditorDialogStyle::PaintText(
             dc,
-            Rect(16, 126, client.right - 16, client.bottom - 48),
+            Rect(kEdgePadding, message.bottom + 6, client.right - kEdgePadding, PrimaryRect().top - 14),
             descriptor_.supportingText,
-            EditorDialogStyle::Color(theme.textDisabled),
-            10,
+            EditorDialogStyle::Color(theme.textSecondary),
+            11,
             FW_NORMAL,
             DT_LEFT | DT_TOP | DT_WORDBREAK);
 
-        const RECT footer = Rect(client.left + 1, client.bottom - 42, client.right - 1, client.bottom - 1);
-        EditorDialogStyle::PaintFooter(dc, footer, theme);
+        // A hairline instead of a filled footer band: the buttons sit on the dialog
+        // surface, so the eye follows the question straight down to the actions.
+        EditorDialogStyle::PaintDivider(
+            dc,
+            Rect(client.left + 1, PrimaryRect().top - 14, client.right - 1, PrimaryRect().top - 13),
+            theme);
         if (!descriptor_.cancelLabel.empty()) {
             EditorDialogStyle::PaintButton(
                 dc, CancelRect(), theme, descriptor_.cancelLabel, EditorDialogButtonTone::Neutral,
