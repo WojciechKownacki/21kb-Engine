@@ -12,7 +12,7 @@ namespace kb::editor {
 namespace {
 
 constexpr std::string_view kSaving = "Editor.Saving";
-constexpr std::string_view kParticleEditor = "Editor.ParticleEditor";
+constexpr std::string_view kPanels = "Editor.Panels";
 
 constexpr std::array<std::string_view, 5U> kAreaNames{
     "Left", "Center", "Right", "Bottom", "Floating",
@@ -69,6 +69,22 @@ constexpr std::array<std::string_view, 5U> kAreaNames{
     return true;
 }
 
+[[nodiscard]] bool ParsePanelId(std::string_view key, std::uint32_t& panelId) {
+    constexpr std::string_view prefix = "Panel.";
+    if (!key.starts_with(prefix)) {
+        return false;
+    }
+    const std::string_view digits = key.substr(prefix.size());
+    std::uint32_t parsed = 0U;
+    const std::from_chars_result result =
+        std::from_chars(digits.data(), digits.data() + digits.size(), parsed);
+    if (result.ec != std::errc{} || result.ptr != digits.data() + digits.size() || parsed == 0U) {
+        return false;
+    }
+    panelId = parsed;
+    return true;
+}
+
 [[nodiscard]] std::filesystem::path FromRelative(std::string_view text, const std::filesystem::path& projectRoot) {
     if (text.empty()) {
         return {};
@@ -77,7 +93,35 @@ constexpr std::array<std::string_view, 5U> kAreaNames{
     return stored.is_absolute() ? stored : projectRoot / stored;
 }
 
+// "<area> <visible> <x> <y> <w> <h> [document]"
+[[nodiscard]] bool ParsePanel(
+    std::string_view text,
+    const std::filesystem::path& projectRoot,
+    EditorPanelSession& session) {
+    std::istringstream stream{std::string{text}};
+    stream.imbue(std::locale::classic());
+    std::string area;
+    int visible = 0;
+    DockRect rect{};
+    stream >> area >> visible >> rect.x >> rect.y >> rect.width >> rect.height;
+    if (stream.fail() || rect.width <= 0 || rect.height <= 0) {
+        return false;
+    }
+    session.area = ParseArea(area, DockArea::Center);
+    session.visible = visible != 0;
+    session.floatingRect = rect;
+    std::string document;
+    stream >> document;
+    session.documentPath = FromRelative(document, projectRoot);
+    return true;
+}
+
 } // namespace
+
+const EditorPanelSession* EditorConfiguration::FindPanel(std::uint32_t id) const noexcept {
+    const auto entry = std::ranges::find(panels, id, &EditorPanelSession::panelId);
+    return entry == panels.end() ? nullptr : &*entry;
+}
 
 std::filesystem::path EditorConfigurationStore::FilePath(const std::filesystem::path& projectRoot) {
     return projectRoot / "Config" / "EditorSettings.ini";
@@ -107,17 +151,14 @@ EditorConfigurationLoadResult EditorConfigurationStore::Load(
     result.configuration.saving.autosaveIntervalMinutes =
         static_cast<std::uint32_t>(std::clamp<std::int64_t>(minutes, 1, 120));
 
-    result.configuration.particleEditor.visible =
-        document.GetBool(kParticleEditor, "Visible").value_or(defaults.particleEditor.visible);
-    if (const std::optional<std::string_view> area = document.GetString(kParticleEditor, "Area")) {
-        result.configuration.particleEditor.area = ParseArea(*area, defaults.particleEditor.area);
-    }
-    result.configuration.particleEditor.floatingRect = defaults.particleEditor.floatingRect;
-    if (const std::optional<std::string_view> rect = document.GetString(kParticleEditor, "Rect")) {
-        static_cast<void>(ParseRect(*rect, result.configuration.particleEditor.floatingRect));
-    }
-    if (const std::optional<std::string_view> document_ = document.GetString(kParticleEditor, "Document")) {
-        result.configuration.particleEditor.documentPath = FromRelative(*document_, projectRoot);
+    // One key per panel, named by its id, so a panel this build does not know about
+    // is simply not restored rather than dropped from the file.
+    for (const auto& [key, value] : document.SectionEntries(kPanels)) {
+        EditorPanelSession session;
+        if (!ParsePanelId(key, session.panelId) || !ParsePanel(value, projectRoot, session)) {
+            continue;
+        }
+        result.configuration.panels.push_back(std::move(session));
     }
 
     return result;
@@ -144,15 +185,24 @@ bool EditorConfigurationStore::Save(
     document.SetBool(kSaving, "Autosave", configuration.saving.autosaveEnabled);
     document.SetInt(kSaving, "AutosaveIntervalMinutes",
         static_cast<std::int64_t>(std::clamp<std::uint32_t>(configuration.saving.autosaveIntervalMinutes, 1U, 120U)));
-    document.SetBool(kParticleEditor, "Visible", configuration.particleEditor.visible);
-    document.SetString(kParticleEditor, "Area", std::string{AreaName(configuration.particleEditor.area)});
-    document.SetString(kParticleEditor, "Rect", FormatRect(configuration.particleEditor.floatingRect));
-    std::string relativeDocument;
-    if (!TryMakeRelative(configuration.particleEditor.documentPath, projectRoot, relativeDocument)) {
-        error = "Editor settings cannot record a document outside the project.";
-        return false;
+    for (const EditorPanelSession& session : configuration.panels) {
+        if (session.panelId == 0U) {
+            continue;
+        }
+        std::string relativeDocument;
+        if (!TryMakeRelative(session.documentPath, projectRoot, relativeDocument)) {
+            error = "Editor settings cannot record a document outside the project.";
+            return false;
+        }
+        std::ostringstream value;
+        value.imbue(std::locale::classic());
+        value << AreaName(session.area) << ' ' << (session.visible ? '1' : '0') << ' '
+              << FormatRect(session.floatingRect);
+        if (!relativeDocument.empty()) {
+            value << ' ' << relativeDocument;
+        }
+        document.SetString(kPanels, "Panel." + std::to_string(session.panelId), value.str());
     }
-    document.SetString(kParticleEditor, "Document", relativeDocument);
     return document.Save(path, error);
 }
 

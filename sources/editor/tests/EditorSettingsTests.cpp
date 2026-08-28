@@ -40,10 +40,14 @@ void RunConfigurationRoundTripTest() {
     kb::editor::EditorConfiguration written;
     written.saving.autosaveEnabled = false;
     written.saving.autosaveIntervalMinutes = 45U;
-    written.particleEditor.visible = false;
-    written.particleEditor.area = kb::editor::DockArea::Floating;
-    written.particleEditor.floatingRect = kb::editor::DockRect{ 12, 34, 940, 620 };
-    written.particleEditor.documentPath = root / "Assets" / "Open.kbvfx";
+    written.panels.push_back(kb::editor::EditorPanelSession{
+        .panelId = 14U,
+        .visible = false,
+        .area = kb::editor::DockArea::Floating,
+        .floatingRect = kb::editor::DockRect{ 12, 34, 940, 620 },
+        .documentPath = root / "Assets" / "Open.kbvfx",
+    });
+    written.panels.push_back(kb::editor::EditorPanelSession{ .panelId = 3U, .visible = true });
 
     std::string saveError;
     kb::editor::tests::Require(kb::editor::EditorConfigurationStore::Save(path, root, written, saveError),
@@ -55,17 +59,23 @@ void RunConfigurationRoundTripTest() {
     const auto loaded = kb::editor::EditorConfigurationStore::Load(path, root);
     kb::editor::tests::Require(loaded.Succeeded() && loaded.found, "Saved editor settings were not read back");
     const kb::editor::EditorConfiguration& read = loaded.configuration;
+    const kb::editor::EditorPanelSession* particle = read.FindPanel(14U);
+    const kb::editor::EditorPanelSession* hierarchy = read.FindPanel(3U);
+    kb::editor::tests::Require(read.saving == written.saving, "Editor saving preferences did not survive");
+    kb::editor::tests::Require(particle != nullptr && hierarchy != nullptr,
+        "Every stored panel should come back");
     kb::editor::tests::Require(
-        read.saving == written.saving &&
-            read.particleEditor.visible == written.particleEditor.visible &&
-            read.particleEditor.area == written.particleEditor.area &&
-            read.particleEditor.floatingRect.x == written.particleEditor.floatingRect.x &&
-            read.particleEditor.floatingRect.y == written.particleEditor.floatingRect.y &&
-            read.particleEditor.floatingRect.width == written.particleEditor.floatingRect.width &&
-            read.particleEditor.floatingRect.height == written.particleEditor.floatingRect.height &&
-            read.particleEditor.documentPath.lexically_normal() ==
-                written.particleEditor.documentPath.lexically_normal(),
-        "Editor settings did not survive a save and load unchanged");
+        particle->visible == written.panels.front().visible &&
+            particle->area == written.panels.front().area &&
+            particle->floatingRect.x == written.panels.front().floatingRect.x &&
+            particle->floatingRect.y == written.panels.front().floatingRect.y &&
+            particle->floatingRect.width == written.panels.front().floatingRect.width &&
+            particle->floatingRect.height == written.panels.front().floatingRect.height &&
+            particle->documentPath.lexically_normal() ==
+                written.panels.front().documentPath.lexically_normal(),
+        "A panel's placement did not survive a save and load unchanged");
+    kb::editor::tests::Require(hierarchy->documentPath.empty(),
+        "A panel without a document should come back without one");
 }
 
 void RunConfigurationKeepsForeignKeysTest() {
@@ -100,7 +110,10 @@ void RunConfigurationRejectsDocumentOutsideProjectTest() {
     std::filesystem::create_directories(root, error);
 
     kb::editor::EditorConfiguration configuration;
-    configuration.particleEditor.documentPath = root.parent_path() / "Outside.kbvfx";
+    configuration.panels.push_back(kb::editor::EditorPanelSession{
+        .panelId = 14U,
+        .documentPath = root.parent_path() / "Outside.kbvfx",
+    });
     std::string saveError;
     kb::editor::tests::Require(
         !kb::editor::EditorConfigurationStore::Save(

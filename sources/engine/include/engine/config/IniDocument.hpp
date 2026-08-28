@@ -39,6 +39,9 @@ public:
     // Removes one key, and the section with it when that key was its last.
     bool Remove(std::string_view section, std::string_view key);
 
+    // The entries of one section, in key order. Empty when the section is absent.
+    [[nodiscard]] const std::map<std::string, std::string, std::less<>>& SectionEntries(std::string_view section) const;
+
     [[nodiscard]] bool Empty() const noexcept { return sections_.empty(); }
     void Clear() noexcept { sections_.clear(); }
 

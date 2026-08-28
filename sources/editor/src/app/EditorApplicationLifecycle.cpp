@@ -25,8 +25,12 @@ constexpr int kInitialWindowHeight = 960;
 }
 
 void RestoreParticleEditorHostSession(EditorApplicationState& state) {
-    const EditorPanelSession& session = state.sceneContext.EditorConfig().particleEditor;
     constexpr std::uint32_t panelId = 14U;
+    const EditorPanelSession* stored = state.sceneContext.EditorConfig().FindPanel(panelId);
+    if (stored == nullptr) {
+        return;
+    }
+    const EditorPanelSession& session = *stored;
     if (!session.visible) {
         static_cast<void>(state.dockModel.Commands().ClosePanel(panelId));
         return;
@@ -84,17 +88,39 @@ void RestoreParticleEditorHostSession(EditorApplicationState& state) {
     }
 }
 
-void SaveParticleEditorHostSession(EditorApplicationState& state) {
-    EditorConfiguration configuration = state.sceneContext.EditorConfig();
-    EditorPanelSession& session = configuration.particleEditor;
-    if (const DockPanel* panel = state.dockModel.Queries().FindPanel(14U); panel != nullptr) {
-        session.visible = panel->visible;
-        session.area = panel->area;
-        session.floatingRect = panel->floatingRect;
+// Panels other than the particle editor need only their visibility restored: the
+// default workspace already places them, and their floating rect is theirs to keep.
+void RestoreEditorWorkspace(EditorApplicationState& state) {
+    for (const EditorPanelSession& session : state.sceneContext.EditorConfig().panels) {
+        if (session.panelId == 14U) {
+            continue;
+        }
+        const DockPanel* panel = state.dockModel.Queries().FindPanel(session.panelId);
+        if (panel == nullptr || panel->visible == session.visible) {
+            continue;
+        }
+        if (!session.visible) {
+            static_cast<void>(state.dockModel.Commands().ClosePanel(session.panelId));
+        }
     }
-    session.documentPath.clear();
-    if (state.sceneContext.ParticleEditorSessionPath().has_value()) {
-        session.documentPath = *state.sceneContext.ParticleEditorSessionPath();
+}
+
+// Every panel's placement, not only the one panel that used to remember itself, so
+// reopening a project puts the workspace back the way it was left.
+void SaveEditorWorkspace(EditorApplicationState& state) {
+    EditorConfiguration configuration = state.sceneContext.EditorConfig();
+    configuration.panels.clear();
+    for (const DockPanel& panel : state.dockModel.Queries().Panels()) {
+        EditorPanelSession session{
+            .panelId = panel.id,
+            .visible = panel.visible,
+            .area = panel.area,
+            .floatingRect = panel.floatingRect,
+        };
+        if (panel.id == 14U && state.sceneContext.ParticleEditorSessionPath().has_value()) {
+            session.documentPath = *state.sceneContext.ParticleEditorSessionPath();
+        }
+        configuration.panels.push_back(std::move(session));
     }
     static_cast<void>(state.sceneContext.SaveEditorConfig(std::move(configuration)));
 }
@@ -139,6 +165,7 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
         });
     state.floatingWindows.Lifecycle().Configure(state.instance, state.window, state.metrics);
     state.dockController.Configure(state.window, state.dockModel, state.floatingWindows, state.metrics);
+    RestoreEditorWorkspace(state);
     RestoreParticleEditorHostSession(state);
 
     ShowWindow(state.window, SW_SHOWMAXIMIZED);
@@ -151,7 +178,7 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
 void EditorApplicationLifecycle::Shutdown(EditorApplicationState& state) {
     static_cast<void>(state.sceneContext.RestorePlayModeSceneSession());
     static_cast<void>(state.sceneContext.SaveDirtySceneDocument("application shutdown"));
-    SaveParticleEditorHostSession(state);
+    SaveEditorWorkspace(state);
     if (state.sceneContext.HasParticleEditorAsset()) state.sceneContext.CloseParticleEditorAsset();
     state.sceneContext.SetParticlePreviewReleaseHandler({});
     state.sceneContext.SetRenderSceneReleaseHandler({});

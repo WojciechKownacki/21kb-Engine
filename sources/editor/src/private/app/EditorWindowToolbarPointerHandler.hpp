@@ -4,6 +4,7 @@
 #include "app/EditorShellInteractionState.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
+#include "rendering/EditorRenderBackendSettings.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "scene/EditorSceneContext.hpp"
 
@@ -28,6 +29,7 @@ public:
         EditorDockModel& dockModel,
         EditorSceneContext& sceneContext,
         EditorSceneBgfxViewport& sceneViewport,
+        EditorRenderBackendSettings& renderBackendSettings,
         EditorPlayModeState& playMode,
         EditorShellInteractionState& shellInteraction,
         const EditorMetrics& metrics);

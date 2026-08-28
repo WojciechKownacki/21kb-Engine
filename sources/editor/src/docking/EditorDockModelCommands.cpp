@@ -1,5 +1,6 @@
 #include "docking/EditorDockModelCommands.hpp"
 
+#include "docking/DefaultDockWorkspace.hpp"
 #include "docking/DockLeafPanelOrder.hpp"
 #include "docking/DockNodeFactory.hpp"
 #include "docking/DockNodeQuery.hpp"
@@ -30,6 +31,13 @@ EditorDockModelCommands::EditorDockModelCommands(DockPanelCollection& panels, st
     , root_(root)
     , nextNodeId_(nextNodeId)
     , maximizedLeafId_(maximizedLeafId) {}
+
+void EditorDockModelCommands::ResetWorkspace() {
+    panels_.Reset(DefaultDockWorkspace{}.CreatePanels());
+    nextNodeId_ = 1U;
+    root_ = DefaultDockWorkspace{}.CreateRoot(nextNodeId_);
+    maximizedLeafId_ = 0U;
+}
 
 void EditorDockModelCommands::ActivatePanel(std::uint32_t panelId) {
     DockLeafPanelOrder::Activate(root_.get(), panelId);
