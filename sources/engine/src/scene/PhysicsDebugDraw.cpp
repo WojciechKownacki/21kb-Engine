@@ -95,8 +95,8 @@ void AppendWireBox(std::vector<PhysicsDebugLineDesc>& lines, Vec3 center, Vec3 h
 }
 
 // LIB-132: cylinder body (2 equatorial circles + 4 side lines) plus two hemisphere caps (4
-// quarter-arcs each) - a standard, proportionate capsule wireframe (matches how Unity/Unreal
-// debug-draw a capsule), not full lat/long tessellation.
+// quarter-arcs each) - a standard, proportionate capsule wireframe (the conventional
+// capsule debug draw), not full lat/long tessellation.
 void AppendWireCapsule(std::vector<PhysicsDebugLineDesc>& lines, Vec3 center, float radius, float halfCylinder, Quat rotation, Vec3 color, float alpha) {
     const Vec3 up = Rotate(rotation, Vec3{0.0F, 1.0F, 0.0F});
     const Vec3 right = Rotate(rotation, Vec3{1.0F, 0.0F, 0.0F});

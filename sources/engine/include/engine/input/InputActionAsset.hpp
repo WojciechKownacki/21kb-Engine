@@ -8,7 +8,7 @@ namespace kb::input {
 
 // An InputAction is an abstract, named thing the player can do ("Jump", "Move").
 // Mapping contexts bind physical keys to actions; scripts query actions by name.
-// Mirrors Unreal's UInputAction (the lightweight, data-only subset).
+// A lightweight, data-only asset - identity and value shape only.
 struct InputActionAsset {
     std::string name;
     InputActionValueType valueType = InputActionValueType::Bool;

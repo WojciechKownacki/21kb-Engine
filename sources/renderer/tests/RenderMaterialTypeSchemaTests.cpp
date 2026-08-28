@@ -790,12 +790,12 @@ void RunBuiltInPbrSchemaParserUsesSchemaForUnsupportedFieldsTest() {
         "transmissionTexture Textures/transmission.kbtex\n"
     };
     const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
-    Require(result.asset.has_value(), "KBMAT-UE-0014: Asset should still be parsed with unsupported advanced PBR fields");
-    Require(result.Succeeded() && result.HasWarnings(), "KBMAT-UE-0014: Unsupported advanced PBR fields should keep the asset loadable and warning diagnostics visible");
-    Require(result.diagnostics.size() == 2U, "KBMAT-UE-0014: Should report 2 unsupported advanced PBR field diagnostics");
-    Require(result.diagnostics[0].code == RenderMaterialAssetParseDiagnosticCode::UnsupportedAdvancedField, "KBMAT-UE-0014: First diagnostic should be UnsupportedAdvancedField");
-    Require(result.diagnostics[0].field == "clearcoatFactor", "KBMAT-UE-0014: First diagnostic should be for clearcoatFactor");
-    Require(result.diagnostics[1].field == "transmissionTexture", "KBMAT-UE-0014: Second diagnostic should be for transmissionTexture");
+    Require(result.asset.has_value(), "KBMAT-0014: Asset should still be parsed with unsupported advanced PBR fields");
+    Require(result.Succeeded() && result.HasWarnings(), "KBMAT-0014: Unsupported advanced PBR fields should keep the asset loadable and warning diagnostics visible");
+    Require(result.diagnostics.size() == 2U, "KBMAT-0014: Should report 2 unsupported advanced PBR field diagnostics");
+    Require(result.diagnostics[0].code == RenderMaterialAssetParseDiagnosticCode::UnsupportedAdvancedField, "KBMAT-0014: First diagnostic should be UnsupportedAdvancedField");
+    Require(result.diagnostics[0].field == "clearcoatFactor", "KBMAT-0014: First diagnostic should be for clearcoatFactor");
+    Require(result.diagnostics[1].field == "transmissionTexture", "KBMAT-0014: Second diagnostic should be for transmissionTexture");
 }
 
 [[nodiscard]] std::string ActiveUnsupportedParameterLine(const RenderMaterialParameterSchema& parameter) {
@@ -1931,7 +1931,7 @@ void RunMaterialGraphMvpNodeKindsAndPinsTest() {
     Require(ParseRenderMaterialGraphNodeKind("Scalar") == RenderMaterialGraphNodeKind::ConstantScalar, "Material graph MVP should parse Scalar alias");
     Require(ParseRenderMaterialGraphNodeKind("ConstantBool") == RenderMaterialGraphNodeKind::ConstantBool, "Material graph MVP should parse ConstantBool node");
     Require(ParseRenderMaterialGraphNodeKind("Bool") == RenderMaterialGraphNodeKind::ConstantBool, "Material graph MVP should parse Bool alias");
-    Require(ParseRenderMaterialGraphNodeKind("Constant2Vector") == RenderMaterialGraphNodeKind::ConstantVector2, "Material graph MVP should parse UE Constant2Vector alias");
+    Require(ParseRenderMaterialGraphNodeKind("Constant2Vector") == RenderMaterialGraphNodeKind::ConstantVector2, "Material graph MVP should parse the Constant2Vector alias");
     Require(ParseRenderMaterialGraphNodeKind("XY") == RenderMaterialGraphNodeKind::ConstantVector2, "Material graph MVP should parse XY alias");
     Require(ParseRenderMaterialGraphNodeKind("Vector") == RenderMaterialGraphNodeKind::ConstantVector, "Material graph MVP should parse Vector alias");
     Require(ParseRenderMaterialGraphNodeKind("Color") == RenderMaterialGraphNodeKind::ConstantColor, "Material graph MVP should parse Color alias");
@@ -1997,7 +1997,7 @@ void RunMaterialGraphMvpNodeKindsAndPinsTest() {
     Require(ParseRenderMaterialGraphNodeKind("Sobol") == RenderMaterialGraphNodeKind::Sobol &&
             ParseRenderMaterialGraphNodeKind("Sobol2D") == RenderMaterialGraphNodeKind::Sobol &&
             ParseRenderMaterialGraphNodeKind("LowDiscrepancy") == RenderMaterialGraphNodeKind::Sobol,
-        "MAT-50 Sobol should parse its UE-style and low-discrepancy aliases");
+        "MAT-50 Sobol should parse its Sobol2D and low-discrepancy aliases");
     Require(RenderMaterialGraphNodeInputPinNames(RenderMaterialGraphNodeKind::Sobol) == std::vector<std::string>{ "cell", "index", "seed" } &&
             RenderMaterialGraphNodeOutputPinNames(RenderMaterialGraphNodeKind::Sobol) == std::vector<std::string>{ "value" },
         "MAT-50 Sobol should expose Cell/Index/Seed inputs and a value output");

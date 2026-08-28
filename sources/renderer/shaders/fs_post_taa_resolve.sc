@@ -108,7 +108,7 @@ void main()
     float currentLum = dot(current.rgb, vec3(0.2126, 0.7152, 0.0722));
     float historyLum = dot(historyRgb, vec3(0.2126, 0.7152, 0.0722));
 
-    // Karis inverse-luminance weighting (UE4 "High Quality Temporal Anti-Aliasing", 2014):
+    // Karis inverse-luminance weighting ("High Quality Temporal Anti-Aliasing", 2014):
     // weighting samples by 1/(1+luma) before averaging suppresses flicker from high-variance
     // neighborhoods without the aggressive blur a naive lerp needs to hide the same flicker.
     float currentWeight = (1.0 - blend) / (1.0 + currentLum);

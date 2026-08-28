@@ -225,7 +225,7 @@ Mat3 InverseTranspose(const Mat3& m) noexcept {
 }
 
 DampResult Damp(float current, float target, float velocity, float smoothTime, float deltaTime, float maxSpeed) noexcept {
-    // Guard against smoothTime <= 0 the same way Unity's Mathf.SmoothDamp
+    // Guard against smoothTime <= 0 the same way the canonical formulation
     // does: rather than dividing by zero, clamp to a tiny positive value so
     // the result still converges (extremely fast) instead of producing NaN.
     const float safeSmoothTime = smoothTime > 0.0001F ? smoothTime : 0.0001F;

@@ -1025,7 +1025,7 @@ inline MaterialEditorPanelDetailsRows MaterialEditorPanelRenderer::DetailsRowsFo
     rows.findFocused = sceneContext.MaterialEditor().IsFindFocused();
     rows.findResults = sceneContext.MaterialEditor().FindResults();
     // Material Diff (unsaved-change dump) and Debug Channels (resolved-descriptor dump) are developer
-    // diagnostics with no Unreal Details-panel counterpart - they were the bulk of the noise the panel used
+    // diagnostics with no place in an inspector - they were the bulk of the noise the panel used
     // to show. Off by default so the panel reads like a real Inspector; a developer opts back in with
     // KB_MATERIAL_EDITOR_DEBUG_DETAILS, and the flag is read once per process.
     static const bool showDebugDetails = EditorDebugLogVariableEnabled("KB_MATERIAL_EDITOR_DEBUG_DETAILS");
@@ -3688,7 +3688,7 @@ inline bool MaterialEditorGraphMenuCommandCreatesCanvasObject(MaterialEditorGrap
         haystack += " time delta time delta frame time timestep frame dt";
     }
     if (command == MaterialEditorGraphMenuCommand::CreateDynamicParameter) {
-        haystack += " dynamic parameters particle parameter runtime rgba channel cascade niagara";
+        haystack += " dynamic parameters particle parameter runtime rgba channel";
     }
     if (command == MaterialEditorGraphMenuCommand::CreatePixelPosition) {
         haystack += " pixel position viewport pixel screen pixel absolute coordinate coordinates fragcoord";

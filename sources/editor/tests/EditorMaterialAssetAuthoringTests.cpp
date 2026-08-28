@@ -1028,7 +1028,7 @@ void RunMaterialTextureSlotValidationTest() {
             rejection.find("Normal/linear") != std::string::npos &&
             rejection.find("Base Color") != std::string::npos &&
             rejection.find("sRGB") != std::string::npos,
-        "KBMAT-UE-0006: Material texture validation diagnostics should include inferred and expected color-space policy");
+        "KBMAT-0006: Material texture validation diagnostics should include inferred and expected color-space policy");
 
     const kb::editor::EditorMaterialTextureSlotValidationResult acceptedBaseColor =
         kb::editor::EditorMaterialTextureSlotValidation::Validate(baseColor, kb::editor::EditorMaterialTextureSlot::Albedo);
@@ -1038,23 +1038,23 @@ void RunMaterialTextureSlotValidationTest() {
     kb::editor::tests::Require(!rejectedBaseColorAsNormal.accepted &&
             rejectedBaseColorAsNormal.inferredColorSpace == kb::editor::EditorMaterialTextureColorSpace::Srgb &&
             rejectedBaseColorAsNormal.expectedColorSpace == kb::editor::EditorMaterialTextureColorSpace::Linear,
-        "KBMAT-UE-0014: Normal texture validation should reject sRGB-looking base-color textures because the slot is linear");
+        "KBMAT-0014: Normal texture validation should reject sRGB-looking base-color textures because the slot is linear");
     const kb::editor::EditorMaterialTextureSlotValidationResult rejectedBaseColorAsMetallicRoughness =
         kb::editor::EditorMaterialTextureSlotValidation::Validate(baseColor, kb::editor::EditorMaterialTextureSlot::MetallicRoughness);
     kb::editor::tests::Require(!rejectedBaseColorAsMetallicRoughness.accepted &&
             rejectedBaseColorAsMetallicRoughness.inferredColorSpace == kb::editor::EditorMaterialTextureColorSpace::Srgb &&
             rejectedBaseColorAsMetallicRoughness.expectedColorSpace == kb::editor::EditorMaterialTextureColorSpace::Linear,
-        "KBMAT-UE-0014: Metallic-Roughness texture validation should reject sRGB-looking base-color textures because the slot is linear");
+        "KBMAT-0014: Metallic-Roughness texture validation should reject sRGB-looking base-color textures because the slot is linear");
     const kb::editor::EditorMaterialTextureSlotValidationResult rejectedBaseColorAsOcclusion =
         kb::editor::EditorMaterialTextureSlotValidation::Validate(baseColor, kb::editor::EditorMaterialTextureSlot::Occlusion);
     kb::editor::tests::Require(!rejectedBaseColorAsOcclusion.accepted &&
             rejectedBaseColorAsOcclusion.inferredColorSpace == kb::editor::EditorMaterialTextureColorSpace::Srgb &&
             rejectedBaseColorAsOcclusion.expectedColorSpace == kb::editor::EditorMaterialTextureColorSpace::Linear,
-        "KBMAT-UE-0014: Occlusion texture validation should reject sRGB-looking base-color textures because the slot is linear");
+        "KBMAT-0014: Occlusion texture validation should reject sRGB-looking base-color textures because the slot is linear");
     kb::editor::tests::Require(kb::editor::EditorMaterialTextureSlotValidation::Validate(metallicRoughness, kb::editor::EditorMaterialTextureSlot::MetallicRoughness).accepted,
-        "KBMAT-UE-0014: Metallic-Roughness texture validation should accept metallic-roughness textures");
+        "KBMAT-0014: Metallic-Roughness texture validation should accept metallic-roughness textures");
     kb::editor::tests::Require(kb::editor::EditorMaterialTextureSlotValidation::Validate(occlusion, kb::editor::EditorMaterialTextureSlot::Occlusion).accepted,
-        "KBMAT-UE-0014: Occlusion texture validation should accept AO textures");
+        "KBMAT-0014: Occlusion texture validation should accept AO textures");
 
     const kb::editor::EditorMaterialTextureSlotValidationResult rejectedUnknown =
         kb::editor::EditorMaterialTextureSlotValidation::Validate(legacy, kb::editor::EditorMaterialTextureSlot::Occlusion);
@@ -1409,9 +1409,9 @@ void RunMaterialEditorWorkingCopySaveRevertUndoRedoTest() {
     kb::scene::Scene scene;
     kb::editor::EditorCommandStack commandStack;
     kb::editor::MaterialEditorState materialEditor;
-    kb::editor::tests::Require(scene.Assets().MountProject(TempRoot() / "Project"), "KBMAT-UE-0005: Working-copy test could not mount project assets");
+    kb::editor::tests::Require(scene.Assets().MountProject(TempRoot() / "Project"), "KBMAT-0005: Working-copy test could not mount project assets");
     kb::assets::AssetManager& manager = scene.Assets().Manager();
-    kb::editor::tests::Require(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()), "KBMAT-UE-0005: Working-copy test could not register material loader");
+    kb::editor::tests::Require(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()), "KBMAT-0005: Working-copy test could not register material loader");
     const std::filesystem::path materialPath = TempRoot() / "Project" / "Assets" / "Materials" / "WorkingCopy.kbmat";
     kb::render::RenderMaterialAssetData material{};
     material.desc.roughnessFactor = 0.2F;
@@ -1420,53 +1420,53 @@ void RunMaterialEditorWorkingCopySaveRevertUndoRedoTest() {
         kb::render::RenderMaterialAssetWriter::Write(output, material);
     }
 
-    kb::editor::tests::Require(scene.Assets().Discover() >= 1U, "KBMAT-UE-0005: Material working-copy test could not discover material asset");
+    kb::editor::tests::Require(scene.Assets().Discover() >= 1U, "KBMAT-0005: Material working-copy test could not discover material asset");
     const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath("/Game/Materials/WorkingCopy.kbmat");
-    kb::editor::tests::Require(metadata != nullptr && metadata->type == "RenderMaterial", "KBMAT-UE-0005: Material working-copy test discovered wrong metadata");
+    kb::editor::tests::Require(metadata != nullptr && metadata->type == "RenderMaterial", "KBMAT-0005: Material working-copy test discovered wrong metadata");
     const kb::assets::AssetId materialId = metadata->id;
 
     materialEditor.Open(materialId, kb::editor::EditorMaterialAssetGateway::Read(scene, materialId));
-    kb::editor::tests::Require(materialEditor.WorkingCopy().has_value() && !materialEditor.Dirty(), "KBMAT-UE-0005: Material Editor should open a clean working copy");
+    kb::editor::tests::Require(materialEditor.WorkingCopy().has_value() && !materialEditor.Dirty(), "KBMAT-0005: Material Editor should open a clean working copy");
 
     kb::render::RenderMaterialAssetData patched = *materialEditor.WorkingCopy();
     kb::editor::EditorMaterialRoughnessFactorEdit roughnessPatch{ 0.35F };
     roughnessPatch.Apply(patched);
     materialEditor.SetWorkingCopy(patched);
-    kb::editor::tests::Require(materialEditor.Dirty(), "KBMAT-UE-0005: Working-copy patch should mark the material dirty");
-    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(materialEditor.WorkingCopy()->desc.roughnessFactor, 0.35F), "KBMAT-UE-0005: Working copy did not receive the roughness patch");
+    kb::editor::tests::Require(materialEditor.Dirty(), "KBMAT-0005: Working-copy patch should mark the material dirty");
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(materialEditor.WorkingCopy()->desc.roughnessFactor, 0.35F), "KBMAT-0005: Working copy did not receive the roughness patch");
     std::optional<kb::render::RenderMaterialAssetData> onDisk = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
-    kb::editor::tests::Require(onDisk.has_value() && kb::editor::tests::NearlyEqual(onDisk->desc.roughnessFactor, 0.2F), "KBMAT-UE-0005: Working-copy patch wrote to disk before Save");
+    kb::editor::tests::Require(onDisk.has_value() && kb::editor::tests::NearlyEqual(onDisk->desc.roughnessFactor, 0.2F), "KBMAT-0005: Working-copy patch wrote to disk before Save");
 
     materialEditor.RevertToCleanSnapshot();
-    kb::editor::tests::Require(!materialEditor.Dirty() && kb::editor::tests::NearlyEqual(materialEditor.WorkingCopy()->desc.roughnessFactor, 0.2F), "KBMAT-UE-0005: Revert did not restore the clean snapshot");
+    kb::editor::tests::Require(!materialEditor.Dirty() && kb::editor::tests::NearlyEqual(materialEditor.WorkingCopy()->desc.roughnessFactor, 0.2F), "KBMAT-0005: Revert did not restore the clean snapshot");
 
     patched = *materialEditor.WorkingCopy();
     kb::editor::EditorMaterialRoughnessFactorEdit savePatch{ 0.5F };
     savePatch.Apply(patched);
     materialEditor.SetWorkingCopy(patched);
     kb::editor::tests::Require(commandStack.Execute(kb::editor::EditorMaterialAssetEditCommand::CreateRecorded(scene, materialId, "Save Material", *materialEditor.CleanSnapshot(), *materialEditor.WorkingCopy())),
-        "KBMAT-UE-0005: Save command did not copy the working material to the source asset");
+        "KBMAT-0005: Save command did not copy the working material to the source asset");
     kb::editor::tests::Require(commandStack.LastCompletedCommandAffectsOpenMaterialSource(), "KBMAT-GRAPH-0108: Source material save command should request Material Editor source reload on undo/redo");
     materialEditor.MarkSaved();
-    kb::editor::tests::Require(!materialEditor.Dirty(), "KBMAT-UE-0005: Save did not clear material dirty state");
+    kb::editor::tests::Require(!materialEditor.Dirty(), "KBMAT-0005: Save did not clear material dirty state");
     onDisk = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
-    kb::editor::tests::Require(onDisk.has_value() && kb::editor::tests::NearlyEqual(onDisk->desc.roughnessFactor, 0.5F), "KBMAT-UE-0005: Save did not persist the working roughness");
+    kb::editor::tests::Require(onDisk.has_value() && kb::editor::tests::NearlyEqual(onDisk->desc.roughnessFactor, 0.5F), "KBMAT-0005: Save did not persist the working roughness");
 
-    kb::editor::tests::Require(commandStack.Undo(), "KBMAT-UE-0005: Save command could not be undone");
+    kb::editor::tests::Require(commandStack.Undo(), "KBMAT-0005: Save command could not be undone");
     onDisk = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
-    kb::editor::tests::Require(onDisk.has_value() && kb::editor::tests::NearlyEqual(onDisk->desc.roughnessFactor, 0.2F), "KBMAT-UE-0005: Undo did not restore source material");
+    kb::editor::tests::Require(onDisk.has_value() && kb::editor::tests::NearlyEqual(onDisk->desc.roughnessFactor, 0.2F), "KBMAT-0005: Undo did not restore source material");
     materialEditor.SetWorkingCopy(*onDisk);
     materialEditor.MarkSaved();
     kb::editor::tests::Require(materialEditor.WorkingCopy().has_value() && kb::editor::tests::NearlyEqual(materialEditor.WorkingCopy()->desc.roughnessFactor, 0.2F) && !materialEditor.Dirty(),
-        "KBMAT-UE-0005: Undo did not refresh the Material Editor working copy");
+        "KBMAT-0005: Undo did not refresh the Material Editor working copy");
 
-    kb::editor::tests::Require(commandStack.Redo(), "KBMAT-UE-0005: Save command could not be redone");
+    kb::editor::tests::Require(commandStack.Redo(), "KBMAT-0005: Save command could not be redone");
     onDisk = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
-    kb::editor::tests::Require(onDisk.has_value() && kb::editor::tests::NearlyEqual(onDisk->desc.roughnessFactor, 0.5F), "KBMAT-UE-0005: Redo did not restore saved source material");
+    kb::editor::tests::Require(onDisk.has_value() && kb::editor::tests::NearlyEqual(onDisk->desc.roughnessFactor, 0.5F), "KBMAT-0005: Redo did not restore saved source material");
     materialEditor.SetWorkingCopy(*onDisk);
     materialEditor.MarkSaved();
     kb::editor::tests::Require(materialEditor.WorkingCopy().has_value() && kb::editor::tests::NearlyEqual(materialEditor.WorkingCopy()->desc.roughnessFactor, 0.5F) && !materialEditor.Dirty(),
-        "KBMAT-UE-0005: Redo did not refresh the Material Editor working copy");
+        "KBMAT-0005: Redo did not refresh the Material Editor working copy");
 
     std::error_code error;
     std::filesystem::remove_all(TempRoot(), error);

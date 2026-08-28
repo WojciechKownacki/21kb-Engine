@@ -44,7 +44,7 @@ Jesteś jedynym autorem zmian kodu, testów, shaderów, contentu i wymaganej dok
 
 ## Zakaz nazw i kopiowania
 
-Nazwy obcych silników i referencyjnego systemu są dozwolone wyłącznie w istniejącym kanonicznym audycie i w tej sekcji kontraktu. Nie mogą pojawić się w żadnym nowym ani zmodyfikowanym artefakcie implementacji, w szczególności w nazwach plików, katalogów, klas, symboli, namespace'ów, makr, komentarzy, UI, tooltipach, komunikatach błędów, logach, assetach, shaderach, testach, goldenach, dokumentacji, ledgerze ani przyszłych commit messages. Dotyczy to między innymi tokenów `Verth`, `Unity`, `Unreal`, `Niagara`, `Godot`, `CryEngine` i `Kanku`, bez względu na wielkość liter.
+Nazwy obcych silników i referencyjnego systemu są dozwolone wyłącznie w istniejącym kanonicznym audycie i w tej sekcji kontraktu. Nie mogą pojawić się w żadnym nowym ani zmodyfikowanym artefakcie implementacji, w szczególności w nazwach plików, katalogów, klas, symboli, namespace'ów, makr, komentarzy, UI, tooltipach, komunikatach błędów, logach, assetach, shaderach, testach, goldenach, dokumentacji, ledgerze ani przyszłych commit messages. Dotyczy to każdej nazwy obcego silnika i systemu referencyjnego, bez względu na wielkość liter.
 
 Używaj wyłącznie terminologii produktu: `21kb`, `Particle`, `ParticleEffect` oraz nazw domenowych wynikających z kodu. Nie kopiuj kodu, assetów, shaderów ani tekstów z repozytorium referencyjnego. Odtwórz wymagane zachowanie we własnej architekturze i z assetów o jednoznacznym prawie użycia.
 

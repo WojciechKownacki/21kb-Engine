@@ -6,8 +6,8 @@
 
 namespace kb::input {
 
-// Triggers decide when a mapping's (already modified) value counts as "firing",
-// mirroring Unreal's UInputTrigger hierarchy. Parameters are stored inline.
+// Triggers decide when a mapping's (already modified) value counts as "firing";
+// the type selects which rule applies. Parameters are stored inline.
 //
 // A mapping with no explicit triggers behaves as an implicit `Down` trigger.
 enum class InputTriggerType : std::uint8_t {
