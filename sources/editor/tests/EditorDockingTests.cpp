@@ -812,6 +812,10 @@ void RunSavedLayoutLibraryTest() {
             !kb::editor::EditorLayoutLibrary::Save(root, " Padded ", captured, saveError),
         "a layout name that could reach outside the layouts folder should be refused");
     kb::editor::tests::Require(
+        !kb::editor::EditorLayoutLibrary::Save(root, "CON", captured, saveError) &&
+            !kb::editor::EditorLayoutLibrary::Save(root, "lpt1", captured, saveError),
+        "a layout named after a device the system reserves should be refused with a reason");
+    kb::editor::tests::Require(
         !kb::editor::EditorLayoutLibrary::Save(root, "Empty", kb::editor::EditorLayoutPreset{}, saveError),
         "a workspace with no arrangement should not be saved as a layout");
 
