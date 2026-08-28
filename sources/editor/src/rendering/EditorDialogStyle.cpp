@@ -28,6 +28,18 @@ namespace {
     return rect;
 }
 
+void FillRound(HDC dc, const RECT& rect, COLORREF fill, COLORREF border, int radius) {
+    HBRUSH brush = CreateSolidBrush(fill);
+    HPEN pen = CreatePen(PS_SOLID, 1, border);
+    HGDIOBJ previousBrush = SelectObject(dc, brush);
+    HGDIOBJ previousPen = SelectObject(dc, pen);
+    RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius, radius);
+    SelectObject(dc, previousPen);
+    SelectObject(dc, previousBrush);
+    DeleteObject(pen);
+    DeleteObject(brush);
+}
+
 [[nodiscard]] RECT ClampRect(RECT rect, const RECT& bounds) noexcept {
     rect.left = std::clamp(rect.left, bounds.left, bounds.right);
     rect.right = std::clamp(rect.right, rect.left, bounds.right);
@@ -181,6 +193,11 @@ void EditorDialogStyle::PaintButton(
     EditorDialogButtonTone tone,
     bool hovered,
     bool enabled) {
+    // The primary action carries its weight by being filled, the way the rest of the
+    // shell marks a chosen state. It used to be a neutral button with an accent bar
+    // ruled along its bottom edge, which read as a stray underline rather than a
+    // default action.
+    const COLORREF accent = Color(theme.accent);
     COLORREF fill = Color(theme.chrome);
     COLORREF border = Color(theme.borderPanel);
     COLORREF ink = Color(theme.textPrimary);
@@ -189,8 +206,9 @@ void EditorDialogStyle::PaintButton(
         border = Color(theme.borderChrome);
         ink = Color(theme.textDisabled);
     } else if (tone == EditorDialogButtonTone::Primary) {
-        fill = Color(hovered ? theme.tabActive : theme.toolbarButton);
-        border = Color(theme.accent);
+        fill = hovered ? Blend(accent, RGB(255, 255, 255), 14) : accent;
+        border = Blend(accent, RGB(255, 255, 255), 22);
+        ink = RGB(250, 250, 255);
     } else if (tone == EditorDialogButtonTone::Destructive) {
         fill = hovered ? RGB(72, 39, 42) : RGB(55, 31, 34);
         border = hovered ? RGB(189, 91, 96) : RGB(126, 67, 72);
@@ -198,10 +216,7 @@ void EditorDialogStyle::PaintButton(
         fill = Color(theme.toolbarButton);
         border = Color(theme.textDisabled);
     }
-    GdiDrawing::DrawSharpFrame(dc, bounds, fill, border);
-    if (enabled && tone == EditorDialogButtonTone::Primary) {
-        GdiDrawing::FillRectColor(dc, RECT{bounds.left + 1, bounds.bottom - 3, bounds.right - 1, bounds.bottom - 1}, Color(theme.accent));
-    }
+    FillRound(dc, bounds, fill, border, ButtonRadius);
     PaintText(dc, Inset(bounds, 7, 0, 7, 0), label, ink, 11, FW_SEMIBOLD,
         DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
