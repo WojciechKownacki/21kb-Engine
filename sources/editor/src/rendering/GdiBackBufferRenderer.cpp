@@ -26,11 +26,15 @@ public:
         return window_;
     }
 
-    [[nodiscard]] HDC Ensure(HDC target, int width, int height) {
+    [[nodiscard]] HDC Ensure(HDC target, int width, int height, bool& recreated) {
+        recreated = false;
         if (dc_ != nullptr && bitmap_ != nullptr && width <= width_ && height <= height_) {
             return dc_;
         }
 
+        // A fresh bitmap holds undefined pixels, so this frame cannot rely on the
+        // retained copy and must repaint the whole client.
+        recreated = true;
         Reset();
         if (target == nullptr || width <= 0 || height <= 0) {
             return nullptr;
@@ -131,21 +135,23 @@ void GdiBackBufferRenderer::Paint(HWND window, GdiBackBufferPaintFn paint, void*
         return;
     }
 
-    HDC memoryDc = BackBufferFor(window).Ensure(targetDc, width, height);
+    bool bufferRecreated = false;
+    HDC memoryDc = BackBufferFor(window).Ensure(targetDc, width, height, bufferRecreated);
     if (memoryDc == nullptr) {
         return;
     }
+    const RECT dirtyRect = bufferRecreated ? client : paintRect;
 
     // Clip the painter to the dirty rect and blit only that region back: the retained buffer
     // already holds the last frame everywhere else. Partial invalidations then cost a partial
     // repaint instead of a full-window workspace redraw.
     const int savedClip = SaveDC(memoryDc);
-    IntersectClipRect(memoryDc, paintRect.left, paintRect.top, paintRect.right, paintRect.bottom);
+    IntersectClipRect(memoryDc, dirtyRect.left, dirtyRect.top, dirtyRect.right, dirtyRect.bottom);
     paint(
         GdiBackBufferPaintContext{
             .dc = memoryDc,
             .client = client,
-            .dirty = paintRect,
+            .dirty = dirtyRect,
             .width = width,
             .height = height,
         },
