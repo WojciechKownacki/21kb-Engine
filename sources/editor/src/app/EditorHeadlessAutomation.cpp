@@ -1,6 +1,7 @@
 #include "app/EditorHeadlessAutomation.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorWorkspaceSession.hpp"
 #include "app/EditorPlayModeState.hpp"
 #include "app/EditorPointerDragState.hpp"
 #include "app/EditorShellInteractionState.hpp"
@@ -26,6 +27,8 @@
 #include "rendering/script_editor/ScriptEditorWindow.hpp"
 #include "scene/EditorSceneContext.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
+#include "settings/EditorConfigurationStore.hpp"
+#include "project/EditorProjectPaths.hpp"
 
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputHaptics.hpp"
@@ -990,6 +993,74 @@ EditorHeadlessAutomation::VerifyParticleThumbnail(
     }
     return result;
 }
+
+EditorHeadlessAutomation::WorkspaceLayoutPersistence
+EditorHeadlessAutomation::VerifyWorkspaceLayoutPersistence() {
+    WorkspaceLayoutPersistence result{};
+
+    // Whatever the project is really set up with has to come back untouched, so the
+    // rest of the scenario keeps running against the workspace it started with.
+    const EditorConfiguration original = context_.EditorConfig();
+
+    EditorDockModel arranged;
+    std::uint32_t floatedPanel = 0U;
+    std::uint32_t closedPanel = 0U;
+    for (const DockPanel& panel : arranged.Queries().Panels()) {
+        if (!panel.visible || !panel.detachable || panel.id == 14U) {
+            continue;
+        }
+        if (floatedPanel == 0U) {
+            floatedPanel = panel.id;
+        } else if (closedPanel == 0U) {
+            closedPanel = panel.id;
+        }
+    }
+    if (floatedPanel == 0U || closedPanel == 0U) {
+        Trace("assert_workspace_layout_persistence", false, "no-rearrangeable-panels");
+        return result;
+    }
+    arranged.Commands().UndockPanel(floatedPanel, DockRect{ 220, 180, 900, 640 });
+    if (!arranged.Commands().ClosePanel(closedPanel)) {
+        Trace("assert_workspace_layout_persistence", false, "close-failed");
+        return result;
+    }
+
+    // A dragged splitter lives only in the dock tree - no per-panel session can carry
+    // it - so the arrangement proves the tree itself made the round trip.
+    const EditorMetrics metrics{};
+    const DockLayout layout = arranged.Queries().BuildLayout(
+        1600, 960, metrics.menuHeight, metrics.toolbarHeight, metrics.tabStripHeight,
+        metrics.tabMinWidth, metrics.tabWidth, metrics.splitterSize, metrics.panelPadding);
+    if (layout.splitters.empty()) {
+        Trace("assert_workspace_layout_persistence", false, "no-splitters");
+        return result;
+    }
+    const DockSplitterLayout& splitter = layout.splitters.front();
+    arranged.Commands().ResizeSplitter(splitter.nodeId, splitter.rect.x - 64, splitter.rect.y - 64, layout);
+    result.savedLayout = arranged.Commands().SerializeWorkspace();
+
+    EditorWorkspaceSession::Save(arranged, context_);
+    const auto stored = EditorConfigurationStore::Load(
+        EditorConfigurationStore::FilePath(EditorProjectPaths::ProjectRoot()),
+        EditorProjectPaths::ProjectRoot());
+    result.storedOnDisk = stored.Succeeded() && stored.found &&
+        stored.configuration.layout == result.savedLayout;
+
+    EditorDockModel reopened;
+    EditorWorkspaceSession::Restore(reopened, context_);
+    result.restoredLayout = reopened.Commands().SerializeWorkspace();
+    const DockPanel* floated = reopened.Queries().FindPanel(floatedPanel);
+    const DockPanel* closed = reopened.Queries().FindPanel(closedPanel);
+    result.succeeded = result.storedOnDisk && !result.savedLayout.empty() &&
+        result.restoredLayout == result.savedLayout && floated != nullptr && closed != nullptr &&
+        floated->visible && floated->area == DockArea::Floating &&
+        floated->floatingRect.width == 900 && !closed->visible;
+
+    static_cast<void>(context_.SaveEditorConfig(original));
+    Trace("assert_workspace_layout_persistence", result.succeeded, result.restoredLayout);
+    return result;
+}
+
 
 EditorHeadlessAutomation::ParticleDependencyNavigation
 EditorHeadlessAutomation::VerifyParticleDependencyNavigation() {
