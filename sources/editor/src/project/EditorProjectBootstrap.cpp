@@ -1,6 +1,7 @@
 #include "project/EditorProjectBootstrap.hpp"
 
 #include "engine/project/ProjectManager.hpp"
+#include "engine/project/ProjectSettings.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "scene/EditorPluginCatalog.hpp"
 
@@ -87,6 +88,34 @@ namespace {
     return !error;
 }
 
+// One read of the project's settings file, at the one moment a project is opened.
+// A project that predates the file gets it written from what the descriptor already
+// carried, so opening an old project neither loses its configuration nor asks the
+// author to restate it.
+void LoadOrSeedSettings(EditorProjectBootstrapResult& result) {
+    if (!result.succeeded) {
+        return;
+    }
+    const std::filesystem::path settingsFile =
+        kb::project::ProjectSettingsStore::FilePath(result.projectFile.parent_path());
+    kb::project::ProjectSettingsLoadResult loaded = kb::project::ProjectSettingsStore::Load(settingsFile);
+    if (!loaded.Succeeded()) {
+        result.settingsError = loaded.error;
+        result.settings = kb::project::ProjectSettingsStore::FromDescriptor(result.descriptor);
+        return;
+    }
+    if (loaded.found) {
+        result.settings = std::move(loaded.settings);
+        return;
+    }
+
+    result.settings = kb::project::ProjectSettingsStore::FromDescriptor(result.descriptor);
+    std::string error;
+    if (!kb::project::ProjectSettingsStore::Save(settingsFile, result.settings, error)) {
+        result.settingsError = error;
+    }
+}
+
 } // namespace
 
 EditorProjectBootstrapResult EditorProjectBootstrap::BootstrapDefaultProject() {
@@ -113,7 +142,7 @@ EditorProjectBootstrapResult EditorProjectBootstrap::BootstrapDefaultProject() {
         const kb::project::ParticleProjectPolicyResult particlePolicy = loaded.succeeded
             ? kb::project::ParticleProjectPolicy::Inspect(projectFile.parent_path(), loaded.descriptor)
             : kb::project::ParticleProjectPolicyResult{};
-        return EditorProjectBootstrapResult{
+        EditorProjectBootstrapResult result{
             .succeeded = loaded.succeeded,
             .descriptor = loaded.descriptor,
             .projectFile = projectFile,
@@ -121,6 +150,8 @@ EditorProjectBootstrapResult EditorProjectBootstrap::BootstrapDefaultProject() {
             .created = false,
             .particlePolicy = particlePolicy,
         };
+        LoadOrSeedSettings(result);
+        return result;
     }
 
     kb::project::ProjectDescriptor descriptor = DefaultDescriptor();
@@ -134,13 +165,15 @@ EditorProjectBootstrapResult EditorProjectBootstrap::BootstrapDefaultProject() {
         };
     }
 
-    return EditorProjectBootstrapResult{
+    EditorProjectBootstrapResult result{
         .succeeded = true,
         .descriptor = std::move(descriptor),
         .projectFile = projectFile,
         .error = {},
         .created = true,
     };
+    LoadOrSeedSettings(result);
+    return result;
 }
 
 bool EditorProjectBootstrap::AcceptParticleProvider(
