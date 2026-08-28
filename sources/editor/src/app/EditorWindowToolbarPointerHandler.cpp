@@ -85,6 +85,7 @@ void ActivateRightPanel(HWND mainWindow, EditorDockModel& dockModel, DockPanelKi
     int y,
     const DockLayout& layout,
     EditorDockModel& dockModel,
+    EditorFloatingWindowManager& floatingWindows,
     EditorSceneContext& sceneContext,
     EditorSceneBgfxViewport& sceneViewport,
     EditorRenderBackendSettings& renderBackendSettings,
@@ -161,11 +162,18 @@ void ActivateRightPanel(HWND mainWindow, EditorDockModel& dockModel, DockPanelKi
                         ". Reopen the editor to apply.");
                 sceneViewport.RequestPresent();
             } else if (*row == 1) {
-                // Layout: back to the arrangement a new project starts with. The stored
-                // panel placements go with it, so the reset survives a restart.
+                // Reset Layout: back to the arrangement a new project starts with. The
+                // torn-off windows close with it and the stored placements go too, so the
+                // reset survives a restart.
+                for (const DockPanel& panel : dockModel.Queries().Panels()) {
+                    if (panel.area == DockArea::Floating) {
+                        floatingWindows.Commands().Destroy(panel.id);
+                    }
+                }
                 dockModel.Commands().ResetWorkspace();
                 EditorConfiguration configuration = sceneContext.EditorConfig();
                 configuration.panels.clear();
+                configuration.layout.clear();
                 static_cast<void>(sceneContext.SaveEditorConfig(std::move(configuration)));
                 sceneContext.Console().Info("Layout", "Workspace layout reset.");
                 sceneViewport.RequestPresent();
@@ -304,6 +312,7 @@ bool EditorWindowToolbarPointerHandler::HandleLeftButtonDown(
     int x,
     int y,
     EditorDockModel& dockModel,
+    EditorFloatingWindowManager& floatingWindows,
     EditorSceneContext& sceneContext,
     EditorSceneBgfxViewport& sceneViewport,
     EditorRenderBackendSettings& renderBackendSettings,
@@ -319,7 +328,7 @@ bool EditorWindowToolbarPointerHandler::HandleLeftButtonDown(
         return false;
     }
 
-    if (HandleMenuLeftButtonDown(mainWindow, x, y, *layout, dockModel, sceneContext, sceneViewport, renderBackendSettings, shellInteraction)) {
+    if (HandleMenuLeftButtonDown(mainWindow, x, y, *layout, dockModel, floatingWindows, sceneContext, sceneViewport, renderBackendSettings, shellInteraction)) {
         return true;
     }
 

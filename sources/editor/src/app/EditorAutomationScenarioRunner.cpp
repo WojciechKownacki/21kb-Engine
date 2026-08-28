@@ -3715,6 +3715,15 @@ ReadScriptValue(
                 ", selected=" + std::to_string(navigation.selectedAsset.value) };
     }
 
+    if (*operation == "assert_workspace_layout_persistence") {
+        const auto workspace = state.automation.VerifyWorkspaceLayoutPersistence();
+        return {
+            workspace.succeeded,
+            std::string{ "stored=" } + (workspace.storedOnDisk ? "true" : "false") +
+                ", saved=" + workspace.savedLayout +
+                ", restored=" + workspace.restoredLayout };
+    }
+
     if (*operation == "assert_particle_thumbnail") {
         const auto asset = StringMember(step, "asset", error);
         const double maxTicksValue = NumberMember(
