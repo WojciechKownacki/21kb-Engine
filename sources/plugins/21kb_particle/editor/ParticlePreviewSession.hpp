@@ -29,7 +29,13 @@ public:
         kb::assets::AssetId assetId,
         std::filesystem::path virtualPath,
         const kb::scene::ParticleEffectAsset& asset);
-    [[nodiscard]] ParticleEditorResult PublishWorkingCopy(const kb::scene::ParticleEffectAsset& asset);
+    // restartLiveInstances is for edits a running simulation cannot show on its own -
+    // a burst that already fired, a prewarm that only applies at start. Everything else
+    // must keep its live particles: the backend swaps the compiled effect underneath
+    // them, and restarting would wipe the preview on every value the author touches.
+    [[nodiscard]] ParticleEditorResult PublishWorkingCopy(
+        const kb::scene::ParticleEffectAsset& asset,
+        bool restartLiveInstances);
     [[nodiscard]] ParticleEditorResult RetargetWorkingCopy(
         kb::assets::AssetId assetId,
         std::filesystem::path virtualPath,
