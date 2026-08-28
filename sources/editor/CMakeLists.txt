@@ -5,6 +5,7 @@ add_executable(kb_editor WIN32
     include/kb/editor/theme/EditorTheme.hpp
     src/app/EditorApplication.cpp
     src/app/EditorApplicationLifecycle.cpp
+    src/app/EditorWorkspaceSession.cpp
     src/app/EditorCrashBreadcrumbs.cpp
     src/app/EditorApplicationMessageDispatcher.cpp
     src/app/EditorApplicationMessageLoop.cpp
@@ -162,6 +163,7 @@ add_executable(kb_editor WIN32
     src/docking/DockCenterPanelInserter.cpp
     src/docking/DockLayoutBuilder.cpp
     src/docking/DockLeafLayoutBuilder.cpp
+    src/docking/DockLayoutSerializer.cpp
     src/docking/DockLeafPanelOrder.cpp
     src/docking/DockModelQueries.cpp
     src/docking/DockMainLayoutResolver.cpp
@@ -221,6 +223,7 @@ add_executable(kb_editor WIN32
     src/private/docking/DockLeafPanelOrder.hpp
     src/private/docking/DockModelQueries.hpp
     src/private/docking/DockMainLayoutResolver.hpp
+    src/private/docking/DockLayoutSerializer.hpp
     src/private/docking/DockNode.hpp
     src/private/docking/DockNodeFactory.hpp
     src/private/docking/DockNodeFinder.hpp
@@ -285,6 +288,7 @@ add_executable(kb_editor WIN32
     src/private/console/EditorConsoleLayout.hpp
     src/private/console/EditorConsoleState.hpp
     src/private/app/EditorApplicationLifecycle.hpp
+    src/private/app/EditorWorkspaceSession.hpp
     src/private/app/EditorApplicationMessageDispatcher.hpp
     src/private/app/EditorApplicationMessageLoop.hpp
     src/private/app/EditorApplicationState.hpp
@@ -1135,7 +1139,8 @@ if(BUILD_TESTING)
         src/docking/DockHitTester.cpp
         src/docking/DockLayoutBuilder.cpp
         src/docking/DockLeafLayoutBuilder.cpp
-        src/docking/DockLeafPanelOrder.cpp
+        src/docking/DockLayoutSerializer.cpp
+    src/docking/DockLeafPanelOrder.cpp
         src/docking/DockMainLayoutResolver.cpp
         src/docking/DockModelQueries.cpp
         src/docking/DockNodeFactory.cpp

@@ -252,6 +252,7 @@
     { "op": "assert_property", "entity": "player", "component": "Transform", "property": "localPosition.x", "value": 0.0, "tolerance": 0.0001 },
     { "op": "capture", "panel": "hierarchy", "checkpoint": "10-restored-hierarchy" },
     { "op": "open_scene", "path": "Assets/Scenes/UniversalScenario.21kbscene" },
-    { "op": "capture", "panel": "hierarchy", "checkpoint": "11-reloaded-scene" }
+    { "op": "capture", "panel": "hierarchy", "checkpoint": "11-reloaded-scene" },
+    { "op": "assert_workspace_layout_persistence" }
   ]
 }

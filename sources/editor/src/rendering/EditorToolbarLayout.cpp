@@ -29,7 +29,7 @@ constexpr std::array<EditorMenuDescriptor, 4> kMenus{{
 constexpr std::array<std::array<std::string_view, 4>, 4> kDropdownRows{{
     { "New Scene", "Open Scene...", "Save", "Save As..." },
     { "Undo", "Redo", "Duplicate", "Plugins" },
-    { "Renderer", "Layout", "Project Settings", "Editor Settings" },
+    { "Renderer", "Reset Layout", "Project Settings", "Editor Settings" },
     { "Documentation", "Report Issue", "Release Notes", "About" },
 }};
 
