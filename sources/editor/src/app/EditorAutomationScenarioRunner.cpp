@@ -3115,12 +3115,12 @@ ReadScriptValue(
     if (*operation == "set_project_input_enabled") {
         const auto enabled = BoolMember(step, "enabled", error);
         if (!enabled) return { false, error };
-        if (state.context.Project().inputEnabled != *enabled &&
+        if (state.context.ProjectConfiguration().inputEnabled != *enabled &&
             !state.context.ToggleProjectInputEnabled()) {
             return { false, "project input toggle failed" };
         }
         return {
-            state.context.Project().inputEnabled == *enabled,
+            state.context.ProjectConfiguration().inputEnabled == *enabled,
             *enabled ? "enabled" : "disabled" };
     }
 

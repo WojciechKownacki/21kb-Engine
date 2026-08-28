@@ -6,7 +6,6 @@
 #include "platform/win32/EditorMainWindow.hpp"
 #include "platform/win32/EditorWindowClassRegistry.hpp"
 #include "project/EditorProjectPaths.hpp"
-#include "scene/ParticleEditorHostSessionStore.hpp"
 
 #include <string>
 #include <string_view>
@@ -18,10 +17,6 @@ constexpr wchar_t kWindowTitle[] = L"21kb Engine";
 constexpr int kInitialWindowWidth = 1600;
 constexpr int kInitialWindowHeight = 960;
 
-[[nodiscard]] std::filesystem::path ParticleEditorSessionStatePath() {
-    return EditorProjectPaths::ProjectRoot() / ".21kb" / "ParticleEditorSession.txt";
-}
-
 [[nodiscard]] const DockPanelLayout* FindPanelLayout(const DockLayout& layout, std::uint32_t panelId) noexcept {
     for (const DockPanelLayout& candidate : layout.panels) {
         if (candidate.panelId == panelId) return &candidate;
@@ -30,22 +25,16 @@ constexpr int kInitialWindowHeight = 960;
 }
 
 void RestoreParticleEditorHostSession(EditorApplicationState& state) {
-    const auto loaded = ParticleEditorHostSessionStore::Load(
-        ParticleEditorSessionStatePath(), EditorProjectPaths::ProjectRoot());
-    if (!loaded.Succeeded()) {
-        state.sceneContext.Console().Warning("Particles", loaded.error);
-        return;
-    }
-    if (!loaded.found) return;
+    const EditorPanelSession& session = state.sceneContext.EditorConfig().particleEditor;
     constexpr std::uint32_t panelId = 14U;
-    if (!loaded.session.visible) {
+    if (!session.visible) {
         static_cast<void>(state.dockModel.Commands().ClosePanel(panelId));
         return;
     }
-    if (loaded.session.area == DockArea::Floating) {
-        state.dockModel.Commands().UndockPanel(panelId, loaded.session.floatingRect);
+    if (session.area == DockArea::Floating) {
+        state.dockModel.Commands().UndockPanel(panelId, session.floatingRect);
         static_cast<void>(state.floatingWindows.Commands().Create(
-            panelId, "21kb Particle System", loaded.session.floatingRect));
+            panelId, "21kb Particle System", session.floatingRect));
     } else {
         RECT client{};
         GetClientRect(state.window, &client);
@@ -55,7 +44,7 @@ void RestoreParticleEditorHostSession(EditorApplicationState& state) {
             state.metrics.splitterSize, state.metrics.panelPadding);
         const DockPanel* targetPanel = nullptr;
         for (const DockPanel& candidate : state.dockModel.Queries().Panels()) {
-            if (candidate.id != panelId && candidate.visible && candidate.area == loaded.session.area) {
+            if (candidate.id != panelId && candidate.visible && candidate.area == session.area) {
                 targetPanel = &candidate;
                 break;
             }
@@ -69,7 +58,7 @@ void RestoreParticleEditorHostSession(EditorApplicationState& state) {
             });
         }
     }
-    if (!loaded.session.documentPath.empty()) {
+    if (!session.documentPath.empty()) {
         kb::assets::AssetId assetId{};
         auto& manager = state.sceneContext.Scene().Assets().Manager();
         for (const auto& candidate : manager.Registry().All()) {
@@ -80,7 +69,7 @@ void RestoreParticleEditorHostSession(EditorApplicationState& state) {
             std::error_code pathError;
             const std::filesystem::path absoluteCandidate =
                 std::filesystem::absolute(candidatePath, pathError).lexically_normal();
-            if (!pathError && absoluteCandidate == loaded.session.documentPath.lexically_normal()) {
+            if (!pathError && absoluteCandidate == session.documentPath.lexically_normal()) {
                 assetId = candidate.id;
                 break;
             }
@@ -96,20 +85,18 @@ void RestoreParticleEditorHostSession(EditorApplicationState& state) {
 }
 
 void SaveParticleEditorHostSession(EditorApplicationState& state) {
-    ParticleEditorHostSession session;
+    EditorConfiguration configuration = state.sceneContext.EditorConfig();
+    EditorPanelSession& session = configuration.particleEditor;
     if (const DockPanel* panel = state.dockModel.Queries().FindPanel(14U); panel != nullptr) {
         session.visible = panel->visible;
         session.area = panel->area;
         session.floatingRect = panel->floatingRect;
     }
+    session.documentPath.clear();
     if (state.sceneContext.ParticleEditorSessionPath().has_value()) {
         session.documentPath = *state.sceneContext.ParticleEditorSessionPath();
     }
-    std::string error;
-    if (!ParticleEditorHostSessionStore::Save(
-            ParticleEditorSessionStatePath(), EditorProjectPaths::ProjectRoot(), session, error)) {
-        state.sceneContext.Console().Error("Particles", error);
-    }
+    static_cast<void>(state.sceneContext.SaveEditorConfig(std::move(configuration)));
 }
 
 } // namespace

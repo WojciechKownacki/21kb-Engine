@@ -13,6 +13,7 @@
 #include "engine/assets/AssetKind.hpp"
 #include "engine/script/ScriptValue.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
+#include "engine/project/ProjectSettings.hpp"
 #include "project/EditorProjectBootstrap.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
 #include "commands/EditorCommandStack.hpp"
@@ -23,7 +24,7 @@
 #include "scene/EditorHierarchySelectionState.hpp"
 #include "scene/EditorPluginsState.hpp"
 #include "scene/EditorProjectSettingsState.hpp"
-#include "settings/EditorSettingsState.hpp"
+#include "settings/EditorConfigurationStore.hpp"
 #include "scene/EditorScriptEditorState.hpp"
 #include "scene/EditorSceneObjectEditTypes.hpp"
 #include "scene/EditorSceneDocumentIdentity.hpp"
@@ -239,13 +240,19 @@ public:
     [[nodiscard]] const EditorSceneGizmoState& Gizmo() const noexcept;
     [[nodiscard]] EditorProjectSettingsState& ProjectSettings() noexcept;
     [[nodiscard]] const EditorProjectSettingsState& ProjectSettings() const noexcept;
-    [[nodiscard]] EditorSettingsState& EditorSettings() noexcept;
-    [[nodiscard]] const EditorSettingsState& EditorSettings() const noexcept;
+    // Everything the editor remembers about itself for this project, as loaded from
+    // Config/EditorSettings.ini. One reader and one writer, both here.
+    [[nodiscard]] const EditorConfiguration& EditorConfig() const noexcept;
+    [[nodiscard]] bool SaveEditorConfig(EditorConfiguration configuration);
     [[nodiscard]] EditorPluginsState& Plugins() noexcept;
     [[nodiscard]] const EditorPluginsState& Plugins() const noexcept;
     [[nodiscard]] EditorScriptEditorState& ScriptEditor() noexcept;
     [[nodiscard]] const EditorScriptEditorState& ScriptEditor() const noexcept;
     [[nodiscard]] const kb::project::ProjectDescriptor& Project() const noexcept;
+    // The project's settings as loaded from Config/ProjectSettings.ini. This is the
+    // surface the editor reads and edits; the descriptor carries a mirror of the same
+    // values for consumers that still read the project file, written only here.
+    [[nodiscard]] const kb::project::ProjectSettings& ProjectConfiguration() const noexcept;
     [[nodiscard]] const std::filesystem::path& ProjectFile() const noexcept;
     [[nodiscard]] const std::filesystem::path& CurrentScenePath() const noexcept;
     [[nodiscard]] std::uint64_t SceneDocumentGeneration() const noexcept;
@@ -1250,6 +1257,7 @@ private:
     void SurfaceScriptLibraryStartupReport();
     void ResetScriptRuntimeStateForPlayMode();
     [[nodiscard]] bool SaveProjectDescriptor();
+    [[nodiscard]] bool SaveProjectConfiguration();
     void ClearSceneDocumentDirty() noexcept;
     void ReleaseRenderedSceneResources();
     void InvalidateHierarchyRows() noexcept;
@@ -1266,6 +1274,7 @@ private:
     // scene wires its subsystems through the engine module host.
     EditorProjectBootstrapResult projectBootstrap_;
     kb::project::ProjectDescriptor project_;
+    kb::project::ProjectSettings projectConfig_;
     std::filesystem::path projectFile_;
     std::unique_ptr<kb::scene::Scene> scene_;
     std::function<void(const kb::scene::Scene&)> renderSceneReleaseHandler_;
@@ -1315,7 +1324,7 @@ private:
     std::optional<kb::render::RenderMaterialAssetData> materialNodePreviewWorkingCopy_;
     bool materialPreviewNodePreviewEnabled_ = false;
     EditorProjectSettingsState projectSettings_;
-    EditorSettingsState editorSettings_;
+    EditorConfiguration editorConfig_;
     EditorPluginsState plugins_;
     bool particleProviderMigrationResolved_ = false;
     EditorScriptEditorState scriptEditor_;

@@ -99,7 +99,7 @@ namespace {
         .viewportKey = viewportKey,
         .editorSceneOverlaysEnabled = false,
         .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueAndTransparent,
-        .lightingConfig = BuildMaterialPreviewLightingConfig(previewSettings, sceneContext.Project().sceneLightingPath),
+        .lightingConfig = BuildMaterialPreviewLightingConfig(previewSettings, sceneContext.ProjectConfiguration().lightingPath),
         .materialGraphContext = kb::render::RenderMaterialGraphBuildContext{
             .qualityLevel = previewSettings.qualityLevel,
             .variantUsage = previewSurface == EditorMaterialPreviewSurface::MaterialEditor &&

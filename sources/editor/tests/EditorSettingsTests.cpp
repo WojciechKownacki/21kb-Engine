@@ -1,11 +1,10 @@
 #include "EditorTestSupport.hpp"
 #include "EditorTestSuites.hpp"
 
-#include "settings/EditorSettingsStore.hpp"
+#include "settings/EditorConfigurationStore.hpp"
 
 #include <filesystem>
 #include <fstream>
-#include <iterator>
 #include <string>
 #include <system_error>
 
@@ -20,100 +19,113 @@ void ResetTempRoot() {
     std::filesystem::remove_all(TempRoot(), error);
 }
 
-void RunMissingSettingsUsesDefaultsTest() {
+void RunMissingConfigurationUsesDefaultsTest() {
     ResetTempRoot();
-    const auto result = kb::editor::EditorSettingsStore::Load(TempRoot() / "missing.txt");
-    kb::editor::tests::Require(result.Succeeded(), "Missing editor settings should not be an error");
-    kb::editor::tests::Require(!result.found, "Missing editor settings should report no stored profile");
-    kb::editor::tests::Require(result.settings.saving.autosaveEnabled, "Default editor settings should enable autosave");
-    kb::editor::tests::Require(result.settings.saving.autosaveIntervalMinutes == 10U, "Default autosave interval should be ten minutes");
+    const auto result = kb::editor::EditorConfigurationStore::Load(
+        kb::editor::EditorConfigurationStore::FilePath(TempRoot()), TempRoot());
+    kb::editor::tests::Require(result.Succeeded(), "A project without editor settings is not an error");
+    kb::editor::tests::Require(!result.found, "A project without editor settings should report nothing stored");
+    kb::editor::tests::Require(result.configuration.saving.autosaveEnabled, "Autosave should default to on");
+    kb::editor::tests::Require(result.configuration.saving.autosaveIntervalMinutes == 10U,
+        "The default autosave interval should be ten minutes");
+    kb::editor::tests::Require(result.configuration.layout.empty(), "A stored layout should default to none");
 }
 
-void RunSettingsRoundTripTest() {
+void RunConfigurationRoundTripTest() {
     ResetTempRoot();
-    kb::editor::EditorSettingsDocument expected;
-    expected.saving.autosaveEnabled = false;
-    expected.saving.autosaveIntervalMinutes = 30U;
+    const std::filesystem::path root = TempRoot();
+    const std::filesystem::path path = kb::editor::EditorConfigurationStore::FilePath(root);
+    std::error_code error;
+    std::filesystem::create_directories(root / "Assets", error);
+
+    kb::editor::EditorConfiguration written;
+    written.saving.autosaveEnabled = false;
+    written.saving.autosaveIntervalMinutes = 45U;
+    written.particleEditor.visible = false;
+    written.particleEditor.area = kb::editor::DockArea::Floating;
+    written.particleEditor.floatingRect = kb::editor::DockRect{ 12, 34, 940, 620 };
+    written.particleEditor.documentPath = root / "Assets" / "Open.kbvfx";
+    written.layout = "center:scene|right:inspector";
 
     std::string saveError;
-    const std::filesystem::path path = TempRoot() / ".21kb" / "EditorSettings.txt";
-    kb::editor::tests::Require(kb::editor::EditorSettingsStore::Save(path, expected, saveError), "Editor settings could not be saved");
-    const auto loaded = kb::editor::EditorSettingsStore::Load(path);
-    kb::editor::tests::Require(loaded.Succeeded() && loaded.found, "Saved editor settings could not be loaded");
-    kb::editor::tests::Require(loaded.settings == expected, "Editor settings round-trip changed values");
-    kb::editor::tests::Require(!std::filesystem::exists(path.string() + ".tmp"), "Atomic settings save left a temporary file");
+    kb::editor::tests::Require(kb::editor::EditorConfigurationStore::Save(path, root, written, saveError),
+        "Editor settings could not be saved");
+    kb::editor::tests::Require(saveError.empty(), "A successful save should report no error");
+    kb::editor::tests::Require(path.filename() == "EditorSettings.ini" && path.parent_path().filename() == "Config",
+        "Editor settings belong in the project's Config directory");
+
+    const auto loaded = kb::editor::EditorConfigurationStore::Load(path, root);
+    kb::editor::tests::Require(loaded.Succeeded() && loaded.found, "Saved editor settings were not read back");
+    const kb::editor::EditorConfiguration& read = loaded.configuration;
+    kb::editor::tests::Require(
+        read.saving == written.saving &&
+            read.particleEditor.visible == written.particleEditor.visible &&
+            read.particleEditor.area == written.particleEditor.area &&
+            read.particleEditor.floatingRect.x == written.particleEditor.floatingRect.x &&
+            read.particleEditor.floatingRect.y == written.particleEditor.floatingRect.y &&
+            read.particleEditor.floatingRect.width == written.particleEditor.floatingRect.width &&
+            read.particleEditor.floatingRect.height == written.particleEditor.floatingRect.height &&
+            read.particleEditor.documentPath.lexically_normal() ==
+                written.particleEditor.documentPath.lexically_normal() &&
+            read.layout == written.layout,
+        "Editor settings did not survive a save and load unchanged");
+}
+
+void RunConfigurationKeepsForeignKeysTest() {
+    ResetTempRoot();
+    const std::filesystem::path root = TempRoot();
+    const std::filesystem::path path = kb::editor::EditorConfigurationStore::FilePath(root);
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    {
+        std::ofstream output{path, std::ios::binary | std::ios::trunc};
+        output << "[Editor.Saving]\nAutosave=0\n\n[Editor.Future]\nSomethingNewerWrote=42\n";
+    }
+
+    kb::editor::EditorConfiguration configuration;
+    configuration.saving.autosaveEnabled = true;
+    std::string saveError;
+    kb::editor::tests::Require(kb::editor::EditorConfigurationStore::Save(path, root, configuration, saveError),
+        "Editor settings could not be rewritten");
 
     std::ifstream input{path, std::ios::binary};
-    const std::string bytes{
-        std::istreambuf_iterator<char>{input},
-        std::istreambuf_iterator<char>{}};
-    kb::editor::tests::Require(bytes.find("21kb Editor Settings 2") == 0U, "Editor settings did not use the saving-only file format");
-    kb::editor::tests::Require(bytes.find("render_backend") == std::string::npos, "Editor settings still persisted viewport rendering");
-    kb::editor::tests::Require(bytes.find("grid_spacing") == std::string::npos, "Editor settings still persisted viewport controls");
-    kb::editor::tests::Require(bytes.find("asset_view") == std::string::npos, "Editor settings still persisted Project Files controls");
+    const std::string contents{ std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{} };
+    kb::editor::tests::Require(contents.find("SomethingNewerWrote=42") != std::string::npos,
+        "A key this build does not know must survive being written by it");
+    kb::editor::tests::Require(contents.find("Autosave=1") != std::string::npos,
+        "The rewritten value should be the one that was saved");
 }
 
-void RunLegacySettingsMigrationTest() {
+void RunConfigurationRejectsDocumentOutsideProjectTest() {
     ResetTempRoot();
+    const std::filesystem::path root = TempRoot() / "Project";
     std::error_code error;
-    std::filesystem::create_directories(TempRoot(), error);
-    const std::filesystem::path path = TempRoot() / "EditorSettings.txt";
+    std::filesystem::create_directories(root, error);
+
+    kb::editor::EditorConfiguration configuration;
+    configuration.particleEditor.documentPath = root.parent_path() / "Outside.kbvfx";
+    std::string saveError;
+    kb::editor::tests::Require(
+        !kb::editor::EditorConfigurationStore::Save(
+            kb::editor::EditorConfigurationStore::FilePath(root), root, configuration, saveError),
+        "Editor settings must refuse a document that lives outside the project");
+    kb::editor::tests::Require(!saveError.empty(), "A refused save should say why");
+}
+
+void RunMalformedConfigurationRejectedTest() {
+    ResetTempRoot();
+    const std::filesystem::path root = TempRoot();
+    const std::filesystem::path path = kb::editor::EditorConfigurationStore::FilePath(root);
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
     {
         std::ofstream output{path, std::ios::binary | std::ios::trunc};
-        output
-            << "21kb Editor Settings 1\n"
-            << "render_backend 2\n"
-            << "shadows 0\n"
-            << "post_process 0\n"
-            << "anti_aliasing 3\n"
-            << "msaa_samples 8\n"
-            << "bloom 0\n"
-            << "selection_outline 0\n"
-            << "gpu_driven 0\n"
-            << "autosave 1\n"
-            << "autosave_minutes 30\n"
-            << "grid 0\n"
-            << "grid_spacing 5\n"
-            << "snap 1\n"
-            << "snap_step 0.5\n"
-            << "rotation_snap 15\n"
-            << "asset_recursive 1\n"
-            << "asset_view 0\n"
-            << "asset_sort 1\n"
-            << "asset_folders 0\n"
-            << "asset_templates 0\n"
-            << "asset_thumbnail_scale 1.35\n";
+        output << "[Editor.Saving\n";
     }
 
-    const auto loaded = kb::editor::EditorSettingsStore::Load(path);
-    kb::editor::tests::Require(loaded.Succeeded() && loaded.found, "Legacy editor settings could not be migrated");
-    kb::editor::tests::Require(loaded.settings.saving.autosaveEnabled, "Legacy autosave state was not migrated");
-    kb::editor::tests::Require(loaded.settings.saving.autosaveIntervalMinutes == 30U, "Legacy autosave interval was not migrated");
-}
-
-void RunMalformedSettingsRejectedTest() {
-    ResetTempRoot();
-    std::error_code error;
-    std::filesystem::create_directories(TempRoot(), error);
-    const std::filesystem::path path = TempRoot() / "EditorSettings.txt";
-    {
-        std::ofstream output{path, std::ios::binary | std::ios::trunc};
-        output << "21kb Editor Settings 99\nautosave 1\n";
-    }
-    const auto loaded = kb::editor::EditorSettingsStore::Load(path);
-    kb::editor::tests::Require(!loaded.Succeeded(), "Unsupported editor settings version should be rejected");
-    kb::editor::tests::Require(!loaded.found, "Malformed editor settings should not be exposed as loaded");
-}
-
-void RunInvalidSettingsAreNotWrittenTest() {
-    ResetTempRoot();
-    kb::editor::EditorSettingsDocument invalid;
-    invalid.saving.autosaveIntervalMinutes = 0U;
-    const std::filesystem::path path = TempRoot() / "invalid.txt";
-    std::string error;
-    kb::editor::tests::Require(!kb::editor::EditorSettingsStore::Save(path, invalid, error), "Invalid editor settings should not be saved");
-    kb::editor::tests::Require(!error.empty(), "Invalid editor settings save should explain the failure");
-    kb::editor::tests::Require(!std::filesystem::exists(path), "Invalid editor settings save should not create a file");
+    const auto loaded = kb::editor::EditorConfigurationStore::Load(path, root);
+    kb::editor::tests::Require(!loaded.Succeeded(), "A malformed settings file must be reported");
+    kb::editor::tests::Require(!loaded.error.empty(), "A rejected settings file should say why");
 }
 
 } // namespace
@@ -121,11 +133,12 @@ void RunInvalidSettingsAreNotWrittenTest() {
 namespace kb::editor::tests {
 
 void RunEditorSettingsTests() {
-    RunMissingSettingsUsesDefaultsTest();
-    RunSettingsRoundTripTest();
-    RunLegacySettingsMigrationTest();
-    RunMalformedSettingsRejectedTest();
-    RunInvalidSettingsAreNotWrittenTest();
+    RunMissingConfigurationUsesDefaultsTest();
+    RunConfigurationRoundTripTest();
+    RunConfigurationKeepsForeignKeysTest();
+    RunConfigurationRejectsDocumentOutsideProjectTest();
+    RunMalformedConfigurationRejectedTest();
+    ResetTempRoot();
 }
 
 } // namespace kb::editor::tests
