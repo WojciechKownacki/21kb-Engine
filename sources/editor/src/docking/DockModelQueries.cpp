@@ -15,9 +15,8 @@ DockLayout DockModelQueries::BuildLayout(
     int tabStripHeight,
     int tabMinWidth,
     int tabWidth,
-    int splitterSize,
-    int panelPadding) {
-    return DockLayoutBuilder{}.Build(root, clientWidth, clientHeight, menuHeight, toolbarHeight, tabStripHeight, tabMinWidth, tabWidth, splitterSize, panelPadding);
+    int splitterSize) {
+    return DockLayoutBuilder{}.Build(root, clientWidth, clientHeight, menuHeight, toolbarHeight, tabStripHeight, tabMinWidth, tabWidth, splitterSize);
 }
 
 DockHit DockModelQueries::HitTest(const DockLayout& layout, int x, int y) {

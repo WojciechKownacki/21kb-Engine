@@ -23,6 +23,14 @@ DockRect DockGeometry::MakeRect(int x, int y, int width, int height) {
     return DockRect{ .x = x, .y = y, .width = std::max(0, width), .height = std::max(0, height) };
 }
 
+DockRect DockGeometry::PanelContent(const DockRect& frame, int tabStripHeight) {
+    return MakeRect(
+        frame.x + 1,
+        frame.y + tabStripHeight + 1,
+        std::max(0, frame.width - 2),
+        std::max(0, frame.height - tabStripHeight - 2));
+}
+
 DockRect DockGeometry::Split(const DockRect& rect, DockDropZone zone, float ratio) {
     switch (zone) {
     case DockDropZone::Left:

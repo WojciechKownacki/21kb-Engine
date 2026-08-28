@@ -18,7 +18,10 @@
 #include "scene/AnimationClipEditorDocumentState.hpp"
 #include "scene/AnimatorEditorGraphDocumentState.hpp"
 #include "scene/EditorAutosaveState.hpp"
+#include "docking/DockLeafLayoutBuilder.hpp"
+#include "docking/DockLayoutBuildSettings.hpp"
 #include "docking/EditorWorkspaceArrangement.hpp"
+#include "rendering/FloatingPanelGeometry.hpp"
 #include "settings/EditorConfigurationStore.hpp"
 #include "settings/EditorLayoutLibrary.hpp"
 #include "settings/EditorLayoutMenuModel.hpp"
@@ -45,8 +48,7 @@ namespace {
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,
-        metrics.splitterSize,
-        metrics.panelPadding);
+        metrics.splitterSize);
 }
 
 [[nodiscard]] const kb::editor::DockPanelLayout* FindPanelLayout(const kb::editor::DockLayout& layout, std::uint32_t panelId) noexcept {
@@ -734,6 +736,47 @@ void RunWorkspaceLayoutPersistenceTest() {
     std::filesystem::remove_all(root, error);
 }
 
+void RunFloatingPanelContentMatchesDockedTest() {
+    const kb::editor::EditorMetrics metrics{};
+    const kb::editor::DockRect frame{ 40, 60, 900, 640 };
+
+    kb::editor::DockNode leaf;
+    leaf.id = 1U;
+    leaf.kind = kb::editor::DockNode::Kind::Leaf;
+    leaf.panels = { 5U };
+    leaf.activePanelId = 5U;
+    kb::editor::DockLayout layout;
+    kb::editor::DockLeafLayoutBuilder{}.Build(leaf, frame, layout, kb::editor::DockLayoutBuildSettings{
+        .tabStripHeight = metrics.tabStripHeight,
+        .tabMinWidth = metrics.tabMinWidth,
+        .tabWidth = metrics.tabWidth,
+        .splitterSize = metrics.splitterSize,
+    });
+    kb::editor::tests::Require(layout.leaves.size() == 1U, "a leaf should lay out exactly once");
+    const kb::editor::DockRect docked = layout.leaves.front().content;
+
+    const RECT client{ frame.x, frame.y, frame.x + frame.width, frame.y + frame.height };
+    const RECT floating = kb::editor::FloatingPanelGeometry::Content(client, metrics.tabStripHeight);
+    kb::editor::tests::Require(
+        floating.left == docked.x && floating.top == docked.y &&
+            (floating.right - floating.left) == docked.width &&
+            (floating.bottom - floating.top) == docked.height,
+        "a panel torn off into its own window should sit exactly where it sits when docked");
+    // Checked against the numbers rather than only against each other: both sides now
+    // come from one function, so comparing them alone would agree on a wrong answer.
+    kb::editor::tests::Require(
+        floating.left == frame.x + 1 &&
+            floating.top == frame.y + metrics.tabStripHeight + 1 &&
+            floating.right == frame.x + frame.width - 1 &&
+            floating.bottom == frame.y + frame.height - 1,
+        "a torn-off panel should start under its tab strip and reach every window edge");
+
+    // A window too small for a tab strip must not produce an upside-down rectangle.
+    const RECT tiny = kb::editor::FloatingPanelGeometry::Content(RECT{ 0, 0, 4, 4 }, metrics.tabStripHeight);
+    kb::editor::tests::Require(tiny.right >= tiny.left && tiny.bottom >= tiny.top,
+        "a window smaller than its own chrome should still resolve to an empty content area");
+}
+
 void RunSavedLayoutLibraryTest() {
     const std::filesystem::path root =
         std::filesystem::temp_directory_path() / "21kb_saved_layout_library";
@@ -1313,6 +1356,7 @@ void RunEditorDockingTests() {
     RunParticleEditorWorkspaceAndSessionPersistenceTest();
     RunWorkspaceLayoutPersistenceTest();
     RunSavedLayoutLibraryTest();
+    RunFloatingPanelContentMatchesDockedTest();
     RunLayoutMenuModelTest();
     RunAnimatorEditorDefaultLayoutTest();
     RunAnimatorEditorGraphDocumentStateTest();
