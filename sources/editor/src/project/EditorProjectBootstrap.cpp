@@ -5,6 +5,7 @@
 #include "project/EditorProjectPaths.hpp"
 #include "scene/EditorPluginCatalog.hpp"
 
+#include <string_view>
 #include <system_error>
 
 namespace kb::editor {
@@ -106,6 +107,11 @@ void LoadOrSeedSettings(EditorProjectBootstrapResult& result) {
     }
     if (loaded.found) {
         result.settings = std::move(loaded.settings);
+        // The settings file is the one people edit, so a hand-written change has to
+        // reach the descriptor the game and the hub still read. Without this the
+        // edit would sit in the file until something in the editor happened to save.
+        result.descriptorMirrorStale =
+            kb::project::ProjectSettingsStore::FromDescriptor(result.descriptor) != result.settings;
         return;
     }
 
@@ -113,6 +119,15 @@ void LoadOrSeedSettings(EditorProjectBootstrapResult& result) {
     std::string error;
     if (!kb::project::ProjectSettingsStore::Save(settingsFile, result.settings, error)) {
         result.settingsError = error;
+    }
+}
+
+// A project that predates this layout keeps its old state files around; they are
+// no longer read by anything, so they are removed rather than left to confuse.
+void RemoveRetiredStateFiles(const std::filesystem::path& projectRoot) {
+    std::error_code error;
+    for (const std::string_view name : { "EditorSettings.txt", "ParticleEditorSession.txt" }) {
+        std::filesystem::remove(projectRoot / ".21kb" / name, error);
     }
 }
 
@@ -151,6 +166,7 @@ EditorProjectBootstrapResult EditorProjectBootstrap::BootstrapDefaultProject() {
             .particlePolicy = particlePolicy,
         };
         LoadOrSeedSettings(result);
+        RemoveRetiredStateFiles(projectFile.parent_path());
         return result;
     }
 
@@ -173,6 +189,7 @@ EditorProjectBootstrapResult EditorProjectBootstrap::BootstrapDefaultProject() {
         .created = true,
     };
     LoadOrSeedSettings(result);
+    RemoveRetiredStateFiles(projectFile.parent_path());
     return result;
 }
 

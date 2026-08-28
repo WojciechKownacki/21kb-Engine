@@ -179,6 +179,7 @@
     { "op": "assert_file", "path": "Config/ProjectSettings.ini", "contains": "Enabled=0" },
     { "op": "set_project_input_enabled", "enabled": true },
     { "op": "assert_file", "path": "Config/ProjectSettings.ini", "contains": "Enabled=1" },
+    { "op": "assert_file", "path": "Config/ProjectSettings.ini", "contains": "LastOpenMap=/Game/Scenes/" },
     { "op": "set_plugin", "id": "Physics.Jolt", "enabled": true },
     { "op": "set_plugin", "id": "Audio.Miniaudio", "enabled": true },
     { "op": "set_plugin", "id": "Rendering.BasicLighting", "enabled": true },
