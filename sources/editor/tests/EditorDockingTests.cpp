@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace {
@@ -661,6 +662,75 @@ void RunClosedUtilityPanelsReopenInRightDockTest() {
     }
 }
 
+void RunWorkspaceLayoutPersistenceTest() {
+    kb::editor::EditorDockModel model;
+
+    std::uint32_t floatedPanel = 0U;
+    std::uint32_t closedPanel = 0U;
+    for (const kb::editor::DockPanel& panel : model.Queries().Panels()) {
+        if (!panel.visible || !panel.detachable || panel.id == 14U) {
+            continue;
+        }
+        if (floatedPanel == 0U) {
+            floatedPanel = panel.id;
+        } else if (closedPanel == 0U) {
+            closedPanel = panel.id;
+        }
+    }
+    kb::editor::tests::Require(floatedPanel != 0U && closedPanel != 0U,
+        "default workspace should offer two detachable panels to rearrange");
+
+    model.Commands().UndockPanel(floatedPanel, kb::editor::DockRect{ 220, 180, 900, 640 });
+    kb::editor::tests::Require(model.Commands().ClosePanel(closedPanel),
+        "a visible docked panel should be closable");
+    const std::string arranged = model.Commands().SerializeWorkspace();
+    kb::editor::tests::Require(!arranged.empty(), "an arranged workspace should serialize to text");
+
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_workspace_layout_persistence";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    kb::editor::EditorConfiguration configuration;
+    configuration.layout = arranged;
+    std::string saveError;
+    const std::filesystem::path statePath = kb::editor::EditorConfigurationStore::FilePath(root);
+    kb::editor::tests::Require(
+        kb::editor::EditorConfigurationStore::Save(statePath, root, configuration, saveError),
+        "editor configuration carrying a workspace layout could not be saved");
+    const auto loaded = kb::editor::EditorConfigurationStore::Load(statePath, root);
+    kb::editor::tests::Require(loaded.Succeeded() && loaded.found && loaded.configuration.layout == arranged,
+        "the workspace layout did not survive the settings file roundtrip");
+
+    kb::editor::EditorDockModel restored;
+    const std::string defaults = restored.Commands().SerializeWorkspace();
+    kb::editor::tests::Require(defaults != arranged,
+        "rearranging the workspace should produce a layout different from the default one");
+    kb::editor::tests::Require(restored.Commands().RestoreWorkspace(loaded.configuration.layout),
+        "a layout written by this build should be accepted on the next launch");
+    kb::editor::tests::Require(restored.Commands().SerializeWorkspace() == arranged,
+        "restoring a saved layout should reproduce the arrangement exactly");
+    const kb::editor::DockPanel* floated = restored.Queries().FindPanel(floatedPanel);
+    const kb::editor::DockPanel* closed = restored.Queries().FindPanel(closedPanel);
+    kb::editor::tests::Require(floated != nullptr && !floated->visible && closed != nullptr && !closed->visible,
+        "panels the saved layout does not place should be left out of the restored tree");
+
+    const std::string truncated = arranged.substr(0U, arranged.size() / 2U);
+    const std::string unknownPanel = arranged + " 4096";
+    kb::editor::tests::Require(!restored.Commands().RestoreWorkspace(truncated),
+        "a truncated layout should be refused rather than half-applied");
+    kb::editor::tests::Require(!restored.Commands().RestoreWorkspace(unknownPanel),
+        "a layout with trailing tokens should be refused");
+    kb::editor::tests::Require(!restored.Commands().RestoreWorkspace("L 1 2 4096 4097"),
+        "a layout naming panels this build does not have should be refused");
+    kb::editor::tests::Require(!restored.Commands().RestoreWorkspace("L 1 0"),
+        "a layout with an empty leaf should be refused");
+    kb::editor::tests::Require(!restored.Commands().RestoreWorkspace("S H 1.5 L 1 1 1 L 1 1 2"),
+        "a layout with an out-of-range split ratio should be refused");
+    kb::editor::tests::Require(restored.Commands().SerializeWorkspace() == arranged,
+        "a refused layout should leave the current workspace untouched");
+    std::filesystem::remove_all(root, error);
+}
+
 void RunParticleEditorWorkspaceAndSessionPersistenceTest() {
     kb::editor::EditorDockModel model;
     const kb::editor::DockPanel* panel = RequirePanel(model, 14U);
@@ -1135,6 +1205,7 @@ void RunEditorDockingTests() {
     RunAnimationClipEditorWorkspaceActivationTest();
     RunAnimatorEditorWorkspaceActivationTest();
     RunParticleEditorWorkspaceAndSessionPersistenceTest();
+    RunWorkspaceLayoutPersistenceTest();
     RunAnimatorEditorDefaultLayoutTest();
     RunAnimatorEditorGraphDocumentStateTest();
     RunSkeletalMeshEditorDefaultLayoutTest();

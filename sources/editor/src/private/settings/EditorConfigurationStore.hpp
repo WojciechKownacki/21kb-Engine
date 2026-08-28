@@ -35,6 +35,8 @@ struct EditorConfiguration {
     // workspace back the way it was left. Panels absent from the list keep the
     // default workspace's arrangement.
     std::vector<EditorPanelSession> panels;
+    // The dock tree, serialized. Empty means the default workspace.
+    std::string layout;
 
     [[nodiscard]] const EditorPanelSession* FindPanel(std::uint32_t panelId) const noexcept;
 };

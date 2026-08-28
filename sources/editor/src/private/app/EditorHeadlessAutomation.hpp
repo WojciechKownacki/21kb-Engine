@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <memory>
 #include <span>
+#include <string>
 #include <string_view>
 
 namespace kb::editor {
@@ -26,6 +27,13 @@ public:
         bool succeeded = false;
         std::size_t ticks = 0U;
         bool animated = false;
+    };
+
+    struct WorkspaceLayoutPersistence {
+        bool succeeded = false;
+        bool storedOnDisk = false;
+        std::string savedLayout;
+        std::string restoredLayout;
     };
 
     struct ParticleDependencyNavigation {
@@ -65,6 +73,8 @@ public:
         std::size_t maximumTicks);
     [[nodiscard]] ParticleDependencyNavigation
         VerifyParticleDependencyNavigation();
+    [[nodiscard]] WorkspaceLayoutPersistence
+        VerifyWorkspaceLayoutPersistence();
 
     [[nodiscard]] bool InspectorPointerDown(int x, int y);
     [[nodiscard]] bool InspectorPointerDrag(int x, int y);
