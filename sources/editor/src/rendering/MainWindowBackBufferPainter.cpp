@@ -205,6 +205,7 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     DockWorkspaceRenderer{}.Paint(
         paintContext->window,
         paint.dc,
+        paint.dirty,
         paint.width,
         paint.height,
         *paintContext->dockModel,
