@@ -279,7 +279,7 @@ void DrawGraphicsPage(
     DrawOptionButton(dc, rects.backendVulkanButton, theme, "Vulkan", backend == EditorRenderBackend::Vulkan);
 
     DrawText(dc, RECT{ rects.lightingPathLabel.left, rects.lightingPathLabel.top, rects.lightingPathLabel.right - 8, rects.lightingPathLabel.bottom }, "Lighting Path", Color(theme.textSecondary), 12);
-    const kb::project::ProjectSceneLightingPath lightingPath = sceneContext.Project().sceneLightingPath;
+    const kb::project::ProjectSceneLightingPath lightingPath = sceneContext.ProjectConfiguration().lightingPath;
     DrawOptionButton(dc, rects.lightingPathForwardButton, theme, "Forward", lightingPath == kb::project::ProjectSceneLightingPath::Forward);
     DrawOptionButton(dc, rects.lightingPathForwardPlusButton, theme, "Forward+", lightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus);
     DrawOptionButton(dc, rects.lightingPathDeferredButton, theme, "Deferred", lightingPath == kb::project::ProjectSceneLightingPath::Deferred);
