@@ -3120,40 +3120,36 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         }
     }
     if (const kb::scene::RigidbodyComponent* rigidbody = scene.Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
-        const std::vector<PhysicsField> fields = InspectorPhysicsModel::Fields(*rigidbody);
-        const int h = SectionHeight(inspector, InspectorSectionId::Rigidbody, static_cast<int>(fields.size()));
+        const int h = SectionHeight(inspector, InspectorSectionId::Rigidbody, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Rigidbody));
         if (sectionVisible(y, h)) {
-            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Rigidbody, "Rigidbody", InspectorPropertyId::RigidbodyField, fields, false, false);
+            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Rigidbody, "Rigidbody", InspectorPropertyId::RigidbodyField, InspectorPhysicsModel::Fields(*rigidbody), false, false);
         } else {
             y += h + kSectionGap;
         }
     }
     if (const kb::scene::ColliderComponent* collider = scene.Components().Colliders().TryGet(selected); collider != nullptr) {
-        const std::vector<PhysicsField> fields = InspectorPhysicsModel::Fields(*collider);
-        int h = SectionHeight(inspector, InspectorSectionId::Collider, static_cast<int>(fields.size()));
+        int h = SectionHeight(inspector, InspectorSectionId::Collider, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Collider));
         if (!inspector.IsCollapsed(InspectorSectionId::Collider)) {
             h += kFieldRowHeight + kDividerHeight; // the "Fit to Mesh" action button
         }
         if (sectionVisible(y, h)) {
-            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Collider, "Collider", InspectorPropertyId::ColliderField, fields, true, sceneContext.CanFitColliderToMesh(selected));
+            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Collider, "Collider", InspectorPropertyId::ColliderField, InspectorPhysicsModel::Fields(*collider), true, sceneContext.CanFitColliderToMesh(selected));
         } else {
             y += h + kSectionGap;
         }
     }
     if (const kb::scene::CharacterControllerComponent* character = scene.Components().CharacterControllers().TryGet(selected); character != nullptr) {
-        const std::vector<PhysicsField> fields = InspectorPhysicsModel::Fields(*character);
-        const int h = SectionHeight(inspector, InspectorSectionId::CharacterController, static_cast<int>(fields.size()));
+        const int h = SectionHeight(inspector, InspectorSectionId::CharacterController, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::CharacterController));
         if (sectionVisible(y, h)) {
-            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::CharacterController, "Character Controller", InspectorPropertyId::CharacterControllerField, fields, false, false);
+            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::CharacterController, "Character Controller", InspectorPropertyId::CharacterControllerField, InspectorPhysicsModel::Fields(*character), false, false);
         } else {
             y += h + kSectionGap;
         }
     }
     if (const kb::scene::JointComponent* joint = scene.Components().Joints().TryGet(selected); joint != nullptr) {
-        const std::vector<PhysicsField> fields = InspectorPhysicsModel::Fields(*joint);
-        const int h = SectionHeight(inspector, InspectorSectionId::Joint, static_cast<int>(fields.size()));
+        const int h = SectionHeight(inspector, InspectorSectionId::Joint, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Joint));
         if (sectionVisible(y, h)) {
-            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Joint, "Joint", InspectorPropertyId::JointField, fields, false, false);
+            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Joint, "Joint", InspectorPropertyId::JointField, InspectorPhysicsModel::Fields(*joint), false, false);
         } else {
             y += h + kSectionGap;
         }
@@ -3292,7 +3288,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     if (scene.Components().SpaceStrokes().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::SpaceStroke, 10) + kSectionGap;
     if (scene.Components().HistoryRibbons().Has(selected)) height += SectionHeight(inspector, InspectorSectionId::HistoryRibbon, 9) + kSectionGap;
     if (sceneContext.HasEntityScript(selected)) {
-        const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariables(selected).size());
+        const int scriptRows = 2 + static_cast<int>(sceneContext.EntityScriptExposedVariableCount(selected));
         height += SectionHeight(inspector, InspectorSectionId::Script, scriptRows) + kSectionGap;
     }
     if (scene.Components().Cameras().Has(selected)) {
@@ -3342,19 +3338,19 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         height += SectionHeight(inspector, InspectorSectionId::NavObstacle, 8) + kSectionGap;
     }
     if (const kb::scene::RigidbodyComponent* rigidbody = scene.Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
-        height += SectionHeight(inspector, InspectorSectionId::Rigidbody, static_cast<int>(InspectorPhysicsModel::Fields(*rigidbody).size())) + kSectionGap;
+        height += SectionHeight(inspector, InspectorSectionId::Rigidbody, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Rigidbody)) + kSectionGap;
     }
     if (const kb::scene::ColliderComponent* collider = scene.Components().Colliders().TryGet(selected); collider != nullptr) {
-        height += SectionHeight(inspector, InspectorSectionId::Collider, static_cast<int>(InspectorPhysicsModel::Fields(*collider).size())) + kSectionGap;
+        height += SectionHeight(inspector, InspectorSectionId::Collider, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Collider)) + kSectionGap;
         if (!inspector.IsCollapsed(InspectorSectionId::Collider)) {
             height += kFieldRowHeight + kDividerHeight; // the "Fit to Mesh" action button
         }
     }
     if (const kb::scene::CharacterControllerComponent* character = scene.Components().CharacterControllers().TryGet(selected); character != nullptr) {
-        height += SectionHeight(inspector, InspectorSectionId::CharacterController, static_cast<int>(InspectorPhysicsModel::Fields(*character).size())) + kSectionGap;
+        height += SectionHeight(inspector, InspectorSectionId::CharacterController, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::CharacterController)) + kSectionGap;
     }
     if (const kb::scene::JointComponent* joint = scene.Components().Joints().TryGet(selected); joint != nullptr) {
-        height += SectionHeight(inspector, InspectorSectionId::Joint, static_cast<int>(InspectorPhysicsModel::Fields(*joint).size())) + kSectionGap;
+        height += SectionHeight(inspector, InspectorSectionId::Joint, InspectorPhysicsModel::FieldCount(PhysicsComponentKind::Joint)) + kSectionGap;
     }
     height += kAddComponentButtonHeight + kSectionGap;
     return height;
@@ -3589,12 +3585,16 @@ void AdvanceGroup(int& y) noexcept {
 // Hit-tests a physics component section (header "×" + one row per field). Mirrors
 // the render order in PaintPhysicsSection: Bool fields are checkboxes, everything
 // else (Float, Enum) is a text row. The hit carries the field's row index.
+// Takes the component's kind, not its display list: the only thing hit testing needs
+// from a row is whether it is a checkbox, and that follows from the kind and the index.
+// Building the list here meant formatting every number in the section on every mouse
+// move across the panel.
 [[nodiscard]] InspectorPanelRenderer::Hit HitPhysicsSection(
     const RECT& content,
     const InspectorPanelState& state,
     InspectorSectionId section,
     InspectorPropertyId fieldProperty,
-    const std::vector<PhysicsField>& fields,
+    PhysicsComponentKind component,
     int x,
     int yPoint,
     int& y,
@@ -3605,9 +3605,10 @@ void AdvanceGroup(int& y) noexcept {
     if (state.IsCollapsed(section)) {
         return {};
     }
-    for (int i = 0; i < static_cast<int>(fields.size()); ++i) {
+    const int fieldCount = InspectorPhysicsModel::FieldCount(component);
+    for (int i = 0; i < fieldCount; ++i) {
         const RECT row = RowRect(content, y);
-        InspectorPanelRenderer::Hit hit = fields[static_cast<std::size_t>(i)].kind == PhysicsFieldKind::Bool
+        InspectorPanelRenderer::Hit hit = InspectorPhysicsModel::KindOf(component, i) == PhysicsFieldKind::Bool
             ? HitBool(row, section, fieldProperty, x, yPoint)
             : HitTextRow(row, section, fieldProperty, x, yPoint);
         if (hit.kind != InspectorHitKind::None) {
@@ -5062,25 +5063,25 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     }
 
     if (const kb::scene::RigidbodyComponent* rigidbody = sceneContext.Scene().Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
-        if (InspectorPanelRenderer::Hit hit = HitPhysicsSection(viewport, state, InspectorSectionId::Rigidbody, InspectorPropertyId::RigidbodyField, InspectorPhysicsModel::Fields(*rigidbody), x, scrolledY, y); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitPhysicsSection(viewport, state, InspectorSectionId::Rigidbody, InspectorPropertyId::RigidbodyField, PhysicsComponentKind::Rigidbody, x, scrolledY, y); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         y += kSectionGap;
     }
     if (const kb::scene::ColliderComponent* collider = sceneContext.Scene().Components().Colliders().TryGet(selected); collider != nullptr) {
-        if (InspectorPanelRenderer::Hit hit = HitPhysicsSection(viewport, state, InspectorSectionId::Collider, InspectorPropertyId::ColliderField, InspectorPhysicsModel::Fields(*collider), x, scrolledY, y, true); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitPhysicsSection(viewport, state, InspectorSectionId::Collider, InspectorPropertyId::ColliderField, PhysicsComponentKind::Collider, x, scrolledY, y, true); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         y += kSectionGap;
     }
     if (const kb::scene::CharacterControllerComponent* character = sceneContext.Scene().Components().CharacterControllers().TryGet(selected); character != nullptr) {
-        if (InspectorPanelRenderer::Hit hit = HitPhysicsSection(viewport, state, InspectorSectionId::CharacterController, InspectorPropertyId::CharacterControllerField, InspectorPhysicsModel::Fields(*character), x, scrolledY, y); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitPhysicsSection(viewport, state, InspectorSectionId::CharacterController, InspectorPropertyId::CharacterControllerField, PhysicsComponentKind::CharacterController, x, scrolledY, y); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         y += kSectionGap;
     }
     if (const kb::scene::JointComponent* joint = sceneContext.Scene().Components().Joints().TryGet(selected); joint != nullptr) {
-        if (InspectorPanelRenderer::Hit hit = HitPhysicsSection(viewport, state, InspectorSectionId::Joint, InspectorPropertyId::JointField, InspectorPhysicsModel::Fields(*joint), x, scrolledY, y); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitPhysicsSection(viewport, state, InspectorSectionId::Joint, InspectorPropertyId::JointField, PhysicsComponentKind::Joint, x, scrolledY, y); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         y += kSectionGap;
