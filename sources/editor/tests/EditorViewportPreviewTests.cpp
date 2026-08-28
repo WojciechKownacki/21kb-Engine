@@ -31,6 +31,7 @@
 #include "rendering/ParticleThumbnailTimeline.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLabelFormat.hpp"
+#include "rendering/scene_viewport_toolbar/SceneViewportToolbarState.hpp"
 #include "scene/EditorViewportCameraState.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
 #include "scene/EditorPlayCameraResolver.hpp"
@@ -42,6 +43,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -1481,8 +1483,55 @@ void RunToolbarHudLabelFormatTest() {
     using kb::editor::SceneViewportToolbarLabelFormat;
 
     std::array<char, 16> fpsBuffer{};
-    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::Fps(std::span<char>{ fpsBuffer }, 144) == "FPS 144", "FPS label must format a positive frame rate as \"FPS 144\"");
-    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::Fps(std::span<char>{ fpsBuffer }, 0) == "FPS --", "FPS label must fall back to \"FPS --\" for a non-positive frame rate");
+    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::Fps(std::span<char>{ fpsBuffer }, 144, true) == "FPS 144", "FPS label must format a positive frame rate as \"FPS 144\"");
+    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::Fps(std::span<char>{ fpsBuffer }, 0, true) == "FPS --", "FPS label must fall back to \"FPS --\" for a non-positive frame rate");
+    // A held reading must not be dressed as a live one. The editor draws on demand, so
+    // "no frames right now" is the normal state, not a fault - but the counter has to say
+    // it instead of leaving the last number standing as if it were current.
+    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::Fps(std::span<char>{ fpsBuffer }, 452, false) == "IDLE 452", "A held frame-rate reading must be labelled IDLE, not FPS");
+    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::Fps(std::span<char>{ fpsBuffer }, 0, false) == "FPS --", "With no measurement at all the counter must show \"FPS --\" whether idle or not");
+}
+
+// The scene-view FPS counter is fed by actual presents, and the editor presents only when
+// something asks it to. That is the right design - burning the GPU on an untouched viewport
+// would be worse - but it means the meter stops receiving samples the moment the user stops
+// interacting. This proves the meter reports that state instead of silently freezing: the
+// number is kept (it is still the honest cost of the last frame drawn) and marked not live,
+// and the live -> idle crossing is announced exactly once so the toolbar can be repainted
+// to show it.
+void RunToolbarFpsCounterIdleReportingTest() {
+    using kb::editor::SceneViewportToolbarState;
+
+    SceneViewportToolbarState::Reset();
+    const auto start = std::chrono::steady_clock::time_point{} + std::chrono::seconds{ 100 };
+
+    kb::editor::tests::Require(!SceneViewportToolbarState::CurrentReading(start).live, "A counter that has never seen a frame must not claim a live reading");
+    kb::editor::tests::Require(SceneViewportToolbarState::CurrentReading(start).fps == 0, "A counter that has never seen a frame must report no rate");
+    kb::editor::tests::Require(!SceneViewportToolbarState::ConsumeIdleTransition(start), "A counter with no samples at all has no live reading to lose");
+
+    // One 2 ms frame: 500 FPS, live.
+    SceneViewportToolbarState::RecordFrameMilliseconds(2.0, start);
+    kb::editor::tests::Require(SceneViewportToolbarState::CurrentReading(start).fps == 500, "A 2 ms frame must read as 500 FPS");
+    kb::editor::tests::Require(SceneViewportToolbarState::CurrentReading(start).live, "The reading must be live immediately after a frame");
+    kb::editor::tests::Require(!SceneViewportToolbarState::ConsumeIdleTransition(start), "A live counter must not announce an idle crossing");
+
+    // Still live just inside the window, so ordinary 60 Hz interaction never blinks.
+    const auto justInside = start + SceneViewportToolbarState::kLiveFor - std::chrono::milliseconds{ 1 };
+    kb::editor::tests::Require(SceneViewportToolbarState::CurrentReading(justInside).live, "A reading must stay live for the whole live window");
+
+    // Past the window the rate is kept but is no longer a current reading.
+    const auto afterIdle = start + SceneViewportToolbarState::kLiveFor + std::chrono::milliseconds{ 1 };
+    kb::editor::tests::Require(!SceneViewportToolbarState::CurrentReading(afterIdle).live, "A reading older than the live window must not be reported as live");
+    kb::editor::tests::Require(SceneViewportToolbarState::CurrentReading(afterIdle).fps == 500, "Going idle must keep the last measured cost, not zero the counter");
+    kb::editor::tests::Require(SceneViewportToolbarState::ConsumeIdleTransition(afterIdle), "The live -> idle crossing must be announced so the counter can be repainted");
+    kb::editor::tests::Require(!SceneViewportToolbarState::ConsumeIdleTransition(afterIdle + std::chrono::seconds{ 5 }), "The idle crossing must be announced once, not on every poll, so an idle editor stays idle");
+
+    // Drawing again re-arms both the reading and the crossing.
+    const auto resumed = afterIdle + std::chrono::seconds{ 5 };
+    SceneViewportToolbarState::RecordFrameMilliseconds(2.0, resumed);
+    kb::editor::tests::Require(SceneViewportToolbarState::CurrentReading(resumed).live, "A new frame must make the reading live again");
+    kb::editor::tests::Require(SceneViewportToolbarState::ConsumeIdleTransition(resumed + SceneViewportToolbarState::kLiveFor + std::chrono::milliseconds{ 1 }), "Each quiet spell must be announced, not only the first");
+    SceneViewportToolbarState::Reset();
 }
 
 // Guards the LockBits fast path in EditorTexturePreviewService::DecodeGdiplus, which replaced a
@@ -1578,6 +1627,7 @@ void RunEditorViewportPreviewTests() {
     RunTerrainToolbarAndStrokeTickPolicyTest();
     RunTexturePreviewLockBitsDecodeTest();
     RunToolbarHudLabelFormatTest();
+    RunToolbarFpsCounterIdleReportingTest();
     RunProfileCycleAndResolutionTest();
     RunFitCameraAndCustomTest();
     RunRenderProfileCycleTest();
