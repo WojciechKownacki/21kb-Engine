@@ -222,20 +222,8 @@ TerrainViewportToolbarRects SceneViewportToolbarRenderer::ResolveTerrainTools(co
     return SceneViewportToolbarLayout::ResolveTerrainTools(content);
 }
 
-void SceneViewportToolbarRenderer::RecordPresentedFrame() noexcept {
-    SceneViewportToolbarState::RecordPresentedFrame();
-}
-
-void SceneViewportToolbarRenderer::RecordRenderStats(SceneViewportToolbarRenderStats stats) noexcept {
-    SceneViewportToolbarState::RecordRenderStats(stats);
-}
-
-void SceneViewportToolbarRenderer::RecordEcsStats(SceneViewportToolbarEcsStats stats) {
-    SceneViewportToolbarState::RecordEcsStats(std::move(stats));
-}
-
-bool SceneViewportToolbarRenderer::UpdateInfoHover(const RECT& content, int x, int y) noexcept {
-    return SceneViewportToolbarState::UpdateInfoHover(content, x, y);
+void SceneViewportToolbarRenderer::RecordFrameMilliseconds(double milliseconds) noexcept {
+    SceneViewportToolbarState::RecordFrameMilliseconds(milliseconds);
 }
 
 void SceneViewportToolbarRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorViewportPreviewState& state) {
@@ -243,8 +231,6 @@ void SceneViewportToolbarRenderer::Paint(HDC dc, const RECT& content, const Edit
     GdiDrawing::FillRectColor(dc, rects.row, SceneViewportToolbarDrawing::ToolbarRowColor(theme));
 
     SceneViewportToolbarInfoRenderer::PaintFpsCounter(dc, rects.fpsCounter, theme);
-    SceneViewportToolbarInfoRenderer::PaintRenderStats(dc, rects.renderStats, theme);
-    SceneViewportToolbarInfoRenderer::PaintEcsStats(dc, rects.ecsStats, theme);
 
     SceneViewportToolbarDrawing::DrawValueButton(
         dc,
@@ -276,7 +262,6 @@ void SceneViewportToolbarRenderer::Paint(HDC dc, const RECT& content, const Edit
         theme,
         state.RotationSnapDegrees() > 0.0F);
 
-    SceneViewportToolbarInfoRenderer::PaintTooltip(dc, content, rects);
 }
 
 void SceneViewportToolbarRenderer::PaintTerrainTools(
