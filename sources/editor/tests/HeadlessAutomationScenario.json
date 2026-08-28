@@ -253,6 +253,8 @@
     { "op": "capture", "panel": "hierarchy", "checkpoint": "10-restored-hierarchy" },
     { "op": "open_scene", "path": "Assets/Scenes/UniversalScenario.21kbscene" },
     { "op": "capture", "panel": "hierarchy", "checkpoint": "11-reloaded-scene" },
+    { "op": "assert_floating_window_frame" },
+    { "op": "assert_saved_layout_roundtrip" },
     { "op": "assert_workspace_layout_persistence" }
   ]
 }
