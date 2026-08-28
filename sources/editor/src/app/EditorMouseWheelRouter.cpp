@@ -1,3 +1,4 @@
+#include "app/EditorWindowInvalidator.hpp"
 #include "app/EditorMouseWheelRouter.hpp"
 
 #if defined(_WIN32)
@@ -160,10 +161,7 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
                 wheelDelta,
                 MaterialEditorPanelRenderer::GraphTexturePickerMaxScroll(*materialEditorContent, sceneContext_));
             if (scrolled) {
-                InvalidateRect(messageWindow_, nullptr, FALSE);
-                if (messageWindow_ != mainWindow_) {
-                    InvalidateRect(mainWindow_, nullptr, FALSE);
-                }
+                EditorWindowInvalidator::InvalidatePanel(messageWindow_, *materialEditorContent);
             }
             return true;
         }
@@ -173,10 +171,7 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
                 wheelDelta,
                 MaterialEditorGraphContextMenuMaxScroll(sceneContext_));
             if (scrolled) {
-                InvalidateRect(messageWindow_, nullptr, FALSE);
-                if (messageWindow_ != mainWindow_) {
-                    InvalidateRect(mainWindow_, nullptr, FALSE);
-                }
+                EditorWindowInvalidator::InvalidatePanel(messageWindow_, *materialEditorContent);
             }
             return true;
         }
@@ -203,10 +198,7 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
                     sceneContext_.MaterialEditorDetailsScrollOffset());
                 const bool scrolled = sceneContext_.ScrollMaterialEditorDetails(wheelDelta, details.maxScroll);
                 if (scrolled) {
-                    InvalidateRect(messageWindow_, nullptr, FALSE);
-                    if (messageWindow_ != mainWindow_) {
-                        InvalidateRect(mainWindow_, nullptr, FALSE);
-                    }
+                    EditorWindowInvalidator::InvalidatePanel(messageWindow_, *materialEditorContent);
                 }
             }
             return true;
@@ -216,10 +208,7 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
         if (Contains(layout.previewFrame, x, y)) {
             const float scale = wheelDelta > 0 ? 0.9F : (wheelDelta < 0 ? 1.0F / 0.9F : 1.0F);
             if (sceneContext_.ZoomMaterialPreviewCamera(scale)) {
-                InvalidateRect(messageWindow_, nullptr, FALSE);
-                if (messageWindow_ != mainWindow_) {
-                    InvalidateRect(mainWindow_, nullptr, FALSE);
-                }
+                EditorWindowInvalidator::InvalidatePanel(messageWindow_, *materialEditorContent);
             }
             return true;
         }
@@ -265,20 +254,14 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
     const std::optional<RECT> inspectorContent = EditorPanelContentResolver::Resolve(DockPanelKind::Inspector, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
     EditorInspectorPointerController inspectorPointer(sceneContext_);
     if (inspectorContent.has_value() && inspectorPointer.HandleMouseWheel(*inspectorContent, x, y, wheelDelta)) {
-        InvalidateRect(messageWindow_, nullptr, FALSE);
-        if (messageWindow_ != mainWindow_) {
-            InvalidateRect(mainWindow_, nullptr, FALSE);
-        }
+        EditorWindowInvalidator::InvalidatePanel(messageWindow_, *inspectorContent);
         return true;
     }
 
     const std::optional<RECT> pluginsContent = EditorPanelContentResolver::Resolve(DockPanelKind::Plugins, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
     EditorPluginsPointerController pluginsPointer(sceneContext_);
     if (pluginsContent.has_value() && pluginsPointer.HandleMouseWheel(*pluginsContent, x, y, wheelDelta)) {
-        InvalidateRect(messageWindow_, nullptr, FALSE);
-        if (messageWindow_ != mainWindow_) {
-            InvalidateRect(mainWindow_, nullptr, FALSE);
-        }
+        EditorWindowInvalidator::InvalidatePanel(messageWindow_, *pluginsContent);
         return true;
     }
 
