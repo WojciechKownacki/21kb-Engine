@@ -694,26 +694,28 @@ void RunParticleEditorWorkspaceAndSessionPersistenceTest() {
     std::filesystem::remove_all(root, error);
     std::filesystem::create_directories(root / "Assets", error);
     kb::editor::EditorConfiguration configuration;
-    configuration.particleEditor = kb::editor::EditorPanelSession{
+    configuration.panels.push_back(kb::editor::EditorPanelSession{
+        .panelId = 14U,
         .visible = true,
         .area = panel->area,
         .floatingRect = panel->floatingRect,
         .documentPath = root / "Assets" / "Open.kbvfx",
-    };
+    });
     std::string saveError;
     const std::filesystem::path statePath = kb::editor::EditorConfigurationStore::FilePath(root);
     kb::editor::tests::Require(
         kb::editor::EditorConfigurationStore::Save(statePath, root, configuration, saveError),
         "editor configuration could not be saved atomically");
     const auto loaded = kb::editor::EditorConfigurationStore::Load(statePath, root);
+    const kb::editor::EditorPanelSession* restored = loaded.configuration.FindPanel(14U);
     kb::editor::tests::Require(
-        loaded.Succeeded() && loaded.found && loaded.configuration.particleEditor.visible &&
-            loaded.configuration.particleEditor.area == kb::editor::DockArea::Floating &&
-            loaded.configuration.particleEditor.floatingRect.width == 940 &&
-            loaded.configuration.particleEditor.documentPath.lexically_normal() ==
-                configuration.particleEditor.documentPath.lexically_normal(),
+        loaded.Succeeded() && loaded.found && restored != nullptr && restored->visible &&
+            restored->area == kb::editor::DockArea::Floating &&
+            restored->floatingRect.width == 940 &&
+            restored->documentPath.lexically_normal() ==
+                configuration.panels.front().documentPath.lexically_normal(),
         "particle editor layout/session path did not survive persistence roundtrip");
-    configuration.particleEditor.documentPath = root.parent_path() / "Outside.kbvfx";
+    configuration.panels.front().documentPath = root.parent_path() / "Outside.kbvfx";
     kb::editor::tests::Require(
         !kb::editor::EditorConfigurationStore::Save(statePath, root, configuration, saveError),
         "editor configuration accepted a document path outside the project");
