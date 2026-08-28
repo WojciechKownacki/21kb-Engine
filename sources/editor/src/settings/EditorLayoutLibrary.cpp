@@ -5,7 +5,9 @@
 #include "engine/config/IniDocument.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <string>
 #include <system_error>
 
 namespace kb::editor {
@@ -19,13 +21,29 @@ constexpr std::string_view kExtension = ".kblayout";
     return std::isalnum(value) != 0 || value == ' ' || value == '-' || value == '_';
 }
 
+// Windows refuses a file named after one of its devices whatever extension follows,
+// so a layout under such a name could never be written. Refused here, where the
+// reason can be said plainly, rather than as a failed write further down.
+[[nodiscard]] bool IsReservedDeviceName(std::string_view name) noexcept {
+    static constexpr std::array<std::string_view, 22U> reserved{
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    };
+    std::string upper{name};
+    std::ranges::transform(upper, upper.begin(), [](unsigned char value) {
+        return static_cast<char>(std::toupper(value));
+    });
+    return std::ranges::find(reserved, upper) != reserved.end();
+}
+
 } // namespace
 
 bool EditorLayoutLibrary::IsValidName(std::string_view name) noexcept {
     if (name.empty() || name.size() > MaximumNameLength) {
         return false;
     }
-    if (name.front() == ' ' || name.back() == ' ') {
+    if (name.front() == ' ' || name.back() == ' ' || IsReservedDeviceName(name)) {
         return false;
     }
     return std::ranges::all_of(name, [](char value) {
