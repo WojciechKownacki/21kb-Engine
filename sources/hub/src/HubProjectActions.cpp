@@ -1,6 +1,7 @@
 #include "HubProjectActions.hpp"
 
 #include "HubText.hpp"
+#include "engine/project/ProjectSettings.hpp"
 #include "engine/project/ProjectManager.hpp"
 
 #if defined(_WIN32)
@@ -234,6 +235,18 @@ HubCreateProjectResult HubProjectActions::CreateProjectFile(const std::filesyste
     if (!kb::project::ProjectManager::CreateProject(descriptorFile, descriptor)) {
         std::filesystem::remove_all(projectRoot / "Assets", error);
         return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Project descriptor could not be written." };
+    }
+
+    // A new project starts with the settings file the editor and the game both read,
+    // rather than waiting for the editor to seed it on first open.
+    std::string settingsError;
+    if (!kb::project::ProjectSettingsStore::Save(
+            kb::project::ProjectSettingsStore::FilePath(projectRoot),
+            kb::project::ProjectSettingsStore::FromDescriptor(descriptor),
+            settingsError)) {
+        std::filesystem::remove_all(projectRoot / "Assets", error);
+        std::filesystem::remove(descriptorFile, error);
+        return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Project settings could not be written." };
     }
 
     return HubCreateProjectResult{ .succeeded = true, .projectFile = descriptorFile, .error = {} };
