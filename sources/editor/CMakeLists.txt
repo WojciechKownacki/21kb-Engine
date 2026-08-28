@@ -470,6 +470,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/EditorToolbarLayout.hpp
     src/private/rendering/FloatingEditorWindowRenderer.hpp
     src/private/rendering/FloatingWindowBackBufferPainter.hpp
+    src/private/rendering/FloatingPanelGeometry.hpp
     src/private/rendering/FloatingWindowControlRenderer.hpp
     src/private/rendering/GdiBackBufferRenderer.hpp
     src/private/rendering/EditorGdiRenderer.hpp
@@ -700,6 +701,7 @@ add_executable(kb_editor WIN32
     src/rendering/ConsoleDetailTextOverlay.cpp
     src/rendering/FloatingEditorWindowRenderer.cpp
     src/rendering/FloatingWindowBackBufferPainter.cpp
+    src/rendering/FloatingPanelGeometry.cpp
     src/rendering/FloatingWindowControlRenderer.cpp
     src/rendering/GdiBackBufferRenderer.cpp
     src/rendering/GdiDrawing.cpp
@@ -1176,6 +1178,7 @@ if(BUILD_TESTING)
         src/docking/EditorDockModelQueries.cpp
             src/settings/EditorConfigurationStore.cpp
             src/docking/EditorWorkspaceArrangement.cpp
+            src/rendering/FloatingPanelGeometry.cpp
             src/settings/EditorLayoutLibrary.cpp
             src/settings/EditorLayoutMenuModel.cpp
             src/settings/EditorPanelSessionText.cpp

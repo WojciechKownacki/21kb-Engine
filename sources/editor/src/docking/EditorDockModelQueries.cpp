@@ -100,9 +100,8 @@ DockLayout EditorDockModelQueries::BuildLayout(
     int tabStripHeight,
     int tabMinWidth,
     int tabWidth,
-    int splitterSize,
-    int panelPadding) const {
-    DockLayout layout = DockModelQueries::BuildLayout(root_, clientWidth, clientHeight, menuHeight, toolbarHeight, tabStripHeight, tabMinWidth, tabWidth, splitterSize, panelPadding);
+    int splitterSize) const {
+    DockLayout layout = DockModelQueries::BuildLayout(root_, clientWidth, clientHeight, menuHeight, toolbarHeight, tabStripHeight, tabMinWidth, tabWidth, splitterSize);
     if (maximizedLeafId_ == 0) {
         return layout;
     }

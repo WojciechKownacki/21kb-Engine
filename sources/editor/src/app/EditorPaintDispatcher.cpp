@@ -200,8 +200,7 @@ void AppendMaterialPreviewLayout(
             metrics.tabStripHeight,
             metrics.tabMinWidth,
             metrics.tabWidth,
-            metrics.splitterSize,
-            metrics.panelPadding);
+            metrics.splitterSize);
         for (const DockPanelLayout& panelLayout : layout.panels) {
             if (!panelLayout.active) {
                 continue;
@@ -356,8 +355,7 @@ void AppendMaterialPreviewLayout(
             metrics.tabStripHeight,
             metrics.tabMinWidth,
             metrics.tabWidth,
-            metrics.splitterSize,
-            metrics.panelPadding);
+            metrics.splitterSize);
         for (const DockPanelLayout& panelLayout : layout.panels) {
             if (!panelLayout.active) {
                 continue;

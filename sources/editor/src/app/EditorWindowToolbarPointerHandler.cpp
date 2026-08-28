@@ -203,8 +203,7 @@ void InvalidateToolbar(HWND mainWindow, const DockLayout& layout) noexcept {
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,
-        metrics.splitterSize,
-        metrics.panelPadding);
+        metrics.splitterSize);
 }
 
 void ActivateRightPanel(HWND mainWindow, EditorDockModel& dockModel, DockPanelKind kind) {
