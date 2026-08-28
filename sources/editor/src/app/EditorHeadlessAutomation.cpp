@@ -1067,6 +1067,7 @@ EditorHeadlessAutomation::ProfileInspectorTransformDrag(std::size_t steps) {
     double paintTotal = 0.0;
     double heightTotal = 0.0;
     double rowPaintTotal = 0.0;
+    double hitTestTotal = 0.0;
     HDC screen = GetDC(nullptr);
     HDC memory = screen == nullptr ? nullptr : CreateCompatibleDC(screen);
     HBITMAP bitmap = memory == nullptr
@@ -1109,6 +1110,17 @@ EditorHeadlessAutomation::ProfileInspectorTransformDrag(std::size_t steps) {
     if (memory != nullptr) DeleteDC(memory);
     if (screen != nullptr) ReleaseDC(nullptr, screen);
 
+    // Moving the pointer across the panel without pressing anything asks where it is,
+    // once per mouse move. That answer is worked out by walking the whole panel.
+    const auto hitStart = std::chrono::steady_clock::now();
+    for (std::size_t step = 0U; step < steps; ++step) {
+        static_cast<void>(InspectorPanelRenderer::HitTest(
+            kInspectorContent, context_, kInspectorContent.left + 200,
+            kInspectorContent.top + 120 + static_cast<int>(step % 8U)));
+    }
+    hitTestTotal =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - hitStart).count();
+
     // And the scene has to be submitted again for the object to be seen moving.
     const auto sceneStart = std::chrono::steady_clock::now();
     std::size_t scenePresents = 0U;
@@ -1126,6 +1138,7 @@ EditorHeadlessAutomation::ProfileInspectorTransformDrag(std::size_t steps) {
     result.inspectorPaintMs = paintTotal / divisor;
     result.inspectorHeightMs = heightTotal / divisor;
     result.inspectorRowPaintMs = rowPaintTotal / divisor;
+    result.inspectorHitTestMs = hitTestTotal / divisor;
     result.scenePresentMs = sceneTotal / divisor;
     // Repainting one row of the Inspector must cost a fraction of repainting the whole
     // panel. That is what makes dragging a value cheap, and it only holds while the
