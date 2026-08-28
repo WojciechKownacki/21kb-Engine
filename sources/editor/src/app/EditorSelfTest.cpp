@@ -283,7 +283,7 @@ void RunProjectSettingsSuite(Report& report) {
     report.Check(HitKindAt(context, click.optionRow1) == ProjectSettingsHitKind::MappingContextOption, "Open-list row hit-tests as MappingContextOption");
     const std::string expected = options[1];
     report.Check(controller.HandlePointerDown(kContent, click.optionRow1.x, click.optionRow1.y), "Clicking option is handled");
-    report.Check(context.Project().inputMappingContext == expected, "Selected mapping context applied to project (" + expected + ")");
+    report.Check(context.ProjectConfiguration().inputMappingContext == expected, "Selected mapping context applied to project (" + expected + ")");
     report.Check(!context.ProjectSettings().IsMappingContextDropdownOpen(), "Dropdown closed after selection");
 
     // Persistence: reload the descriptor from disk.
@@ -295,10 +295,10 @@ void RunProjectSettingsSuite(Report& report) {
     }
 
     // Enabled checkbox toggles + persists.
-    const bool enabledBefore = context.Project().inputEnabled;
+    const bool enabledBefore = context.ProjectConfiguration().inputEnabled;
     report.Check(HitKindAt(context, click.checkbox) == ProjectSettingsHitKind::EnabledCheckbox, "Checkbox point hit-tests as EnabledCheckbox");
     report.Check(controller.HandlePointerDown(kContent, click.checkbox.x, click.checkbox.y), "Clicking checkbox is handled");
-    report.Check(context.Project().inputEnabled == !enabledBefore, "Enabled flag toggled");
+    report.Check(context.ProjectConfiguration().inputEnabled == !enabledBefore, "Enabled flag toggled");
     {
         const kb::project::ProjectDescriptorReadResult reloaded = kb::project::ProjectManager::LoadProject(context.ProjectFile());
         report.Check(reloaded.succeeded && reloaded.descriptor.inputEnabled == !enabledBefore, "Enabled flag persisted to descriptor");
@@ -315,7 +315,7 @@ void RunProjectSettingsSuite(Report& report) {
     report.Check(context.ProjectSettings().SelectedCategory() == static_cast<int>(ProjectSettingsCategory::Graphics), "Graphics category active after click");
     report.Check(HitKindAt(context, click.forwardPlusLightingPath) == ProjectSettingsHitKind::LightingPathOption, "Forward+ lighting path point hit-tests as LightingPathOption");
     report.Check(controller.HandlePointerDown(kContent, click.forwardPlusLightingPath.x, click.forwardPlusLightingPath.y), "Clicking Forward+ lighting path is handled");
-    report.Check(context.Project().sceneLightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus, "Project lighting path changed to Forward+");
+    report.Check(context.ProjectConfiguration().lightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus, "Project lighting path changed to Forward+");
     {
         const kb::project::ProjectDescriptorReadResult reloaded = kb::project::ProjectManager::LoadProject(context.ProjectFile());
         report.Check(reloaded.succeeded && reloaded.descriptor.sceneLightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus, "Forward+ lighting path persisted to descriptor");
@@ -323,7 +323,7 @@ void RunProjectSettingsSuite(Report& report) {
     }
     report.Check(HitKindAt(context, click.deferredLightingPath) == ProjectSettingsHitKind::LightingPathOption, "Deferred lighting path point hit-tests as LightingPathOption");
     report.Check(controller.HandlePointerDown(kContent, click.deferredLightingPath.x, click.deferredLightingPath.y), "Clicking Deferred lighting path is handled");
-    report.Check(context.Project().sceneLightingPath == kb::project::ProjectSceneLightingPath::Deferred, "Project lighting path changed to Deferred");
+    report.Check(context.ProjectConfiguration().lightingPath == kb::project::ProjectSceneLightingPath::Deferred, "Project lighting path changed to Deferred");
     {
         const kb::project::ProjectDescriptorReadResult reloaded = kb::project::ProjectManager::LoadProject(context.ProjectFile());
         report.Check(reloaded.succeeded && reloaded.descriptor.sceneLightingPath == kb::project::ProjectSceneLightingPath::Deferred, "Deferred lighting path persisted to descriptor");
@@ -395,7 +395,7 @@ void RunProjectPhysicsLayersRuntimeSuite(Report& report) {
         projectSettingsController.HandlePointerDown(kContent, projectSettingsClick.optionRow1.x, projectSettingsClick.optionRow1.y),
         "LIB-129 selecting collision layers asset through project settings is handled");
     report.Check(
-        !context.ProjectSettings().IsPhysicsLayersDropdownOpen() && context.Project().physicsLayersAsset == kLayersVirtualPath,
+        !context.ProjectSettings().IsPhysicsLayersDropdownOpen() && context.ProjectConfiguration().physicsLayersAsset == kLayersVirtualPath,
         "LIB-129 Physics project setting retains the selected collision layers asset");
 
     const auto createMatrixBody = [&context](

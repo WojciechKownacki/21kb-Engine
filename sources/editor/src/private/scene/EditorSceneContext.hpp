@@ -1258,6 +1258,8 @@ private:
     void ResetScriptRuntimeStateForPlayMode();
     [[nodiscard]] bool SaveProjectDescriptor();
     [[nodiscard]] bool SaveProjectConfiguration();
+    // Records the document the author has open, so reopening the project returns to it.
+    void RememberLastOpenMap();
     void ClearSceneDocumentDirty() noexcept;
     void ReleaseRenderedSceneResources();
     void InvalidateHierarchyRows() noexcept;

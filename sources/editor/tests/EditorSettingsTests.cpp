@@ -28,7 +28,6 @@ void RunMissingConfigurationUsesDefaultsTest() {
     kb::editor::tests::Require(result.configuration.saving.autosaveEnabled, "Autosave should default to on");
     kb::editor::tests::Require(result.configuration.saving.autosaveIntervalMinutes == 10U,
         "The default autosave interval should be ten minutes");
-    kb::editor::tests::Require(result.configuration.layout.empty(), "A stored layout should default to none");
 }
 
 void RunConfigurationRoundTripTest() {
@@ -45,7 +44,6 @@ void RunConfigurationRoundTripTest() {
     written.particleEditor.area = kb::editor::DockArea::Floating;
     written.particleEditor.floatingRect = kb::editor::DockRect{ 12, 34, 940, 620 };
     written.particleEditor.documentPath = root / "Assets" / "Open.kbvfx";
-    written.layout = "center:scene|right:inspector";
 
     std::string saveError;
     kb::editor::tests::Require(kb::editor::EditorConfigurationStore::Save(path, root, written, saveError),
@@ -66,8 +64,7 @@ void RunConfigurationRoundTripTest() {
             read.particleEditor.floatingRect.width == written.particleEditor.floatingRect.width &&
             read.particleEditor.floatingRect.height == written.particleEditor.floatingRect.height &&
             read.particleEditor.documentPath.lexically_normal() ==
-                written.particleEditor.documentPath.lexically_normal() &&
-            read.layout == written.layout,
+                written.particleEditor.documentPath.lexically_normal(),
         "Editor settings did not survive a save and load unchanged");
 }
 

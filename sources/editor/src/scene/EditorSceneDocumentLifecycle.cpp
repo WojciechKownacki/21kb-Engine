@@ -402,6 +402,7 @@ bool EditorSceneContext::OpenScene(const std::filesystem::path& path, EditorDirt
     ReleaseRenderedSceneResources();
 
     currentScenePath_ = scenePath;
+    RememberLastOpenMap();
     AdvanceSceneDocumentGeneration();
     SelectFirstSceneEntityOrClear();
     ResetSceneEditState();
@@ -490,6 +491,7 @@ bool EditorSceneContext::SaveSceneToPath(const std::filesystem::path& path) {
     }
 
     currentScenePath_ = scenePath;
+    RememberLastOpenMap();
     ClearSceneDocumentDirty();
     autosave_.ResetInterval();
     console_.Info("Project", "Saved scene: " + currentScenePath_.generic_string());
