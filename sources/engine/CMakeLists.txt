@@ -501,6 +501,7 @@ add_library(kb_engine STATIC
     src/project/ProjectDescriptorMetaWriter.cpp
     src/config/IniDocument.cpp
     src/project/ProjectDescriptorReader.cpp
+    src/project/ProjectSettingsStore.cpp
     src/project/ProjectDescriptorWriter.cpp
     src/project/ProjectManager.cpp
     src/ecs/ComponentRegistry.cpp
