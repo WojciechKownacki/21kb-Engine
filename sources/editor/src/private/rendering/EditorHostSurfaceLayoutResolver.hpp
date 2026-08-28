@@ -26,6 +26,14 @@ public:
         const EditorMetrics& metrics,
         const EditorSceneContext& sceneContext);
 
+    // Same answer from a layout the caller already has. A frame asks several questions of
+    // the same dock tree, and building it once per question is the difference between one
+    // tree walk per frame and one per question.
+    [[nodiscard]] static std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> ResolveMainWindow(
+        const DockLayout& layout,
+        const EditorDockModel& dockModel,
+        const EditorSceneContext& sceneContext);
+
     static void SyncMainWindow(
         HWND window,
         const EditorDockModel& dockModel,

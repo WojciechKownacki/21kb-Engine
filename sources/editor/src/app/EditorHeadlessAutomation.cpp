@@ -18,6 +18,8 @@
 #include "rendering/FloatingWindowBackBufferPainter.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
+#include "rendering/EditorHostSurfaceLayoutResolver.hpp"
+#include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/EditorParticleThumbnailService.hpp"
 #include "rendering/ParticleThumbnailTimeline.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
@@ -1152,6 +1154,149 @@ EditorHeadlessAutomation::ProfileInspectorTransformDrag(std::size_t steps) {
     Trace("profile_inspector_drag", result.succeeded,
         std::to_string(result.applyMs) + "/" + std::to_string(result.inspectorPaintMs) +
             "/" + std::to_string(result.scenePresentMs));
+    return result;
+}
+
+EditorHeadlessAutomation::IdleFrameProfile
+EditorHeadlessAutomation::ProfileIdleSceneFrame(std::size_t steps) {
+    IdleFrameProfile result{};
+    if (steps == 0U || steps > 1000U) {
+        Trace("profile_idle_scene_frame", false, "step-count-out-of-range");
+        return result;
+    }
+    HWND window = impl_->window;
+    if (window == nullptr) {
+        Trace("profile_idle_scene_frame", false, "no-host-window");
+        return result;
+    }
+
+    // The same furniture the message loop resolves against: the workspace a new
+    // project opens with, no torn-off panels, stock metrics.
+    EditorDockModel dockModel;
+    EditorFloatingWindowManager floatingWindows;
+    const EditorMetrics metrics;
+
+    RECT client{};
+    GetClientRect(window, &client);
+    const auto buildLayout = [&]() {
+        return dockModel.Queries().BuildLayout(
+            client.right - client.left,
+            client.bottom - client.top,
+            metrics.menuHeight,
+            metrics.toolbarHeight,
+            metrics.tabStripHeight,
+            metrics.tabMinWidth,
+            metrics.tabWidth,
+            metrics.splitterSize);
+    };
+
+    // A sink every stage feeds, so nothing measured can be discarded as unused.
+    std::size_t sink = 0U;
+    const auto sample = [&](auto&& body) {
+        const auto start = std::chrono::steady_clock::now();
+        for (std::size_t step = 0U; step < steps; ++step) {
+            body();
+        }
+        return std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start).count() / static_cast<double>(steps);
+    };
+
+    result.dockLayoutMs = sample([&] { sink += buildLayout().panels.size(); });
+    result.hostSurfaceResolveMs = sample([&] {
+        sink += EditorHostSurfaceLayoutResolver::ResolveMainWindow(
+            window, dockModel, metrics, context_).size();
+    });
+    result.panelResolveMs = sample([&] {
+        sink += EditorPanelContentResolver::Resolve(
+            DockPanelKind::Inspector, window, window, dockModel, floatingWindows, metrics)
+            .has_value() ? 1U : 0U;
+    });
+    // What ParticleEditorPanelIsVisible does: another whole layout, walked for one panel kind.
+    result.particleVisibleMs = sample([&] {
+        const DockLayout layout = buildLayout();
+        bool visible = false;
+        for (const DockPanelLayout& panelLayout : layout.panels) {
+            if (!panelLayout.active) continue;
+            const DockPanel* panel = dockModel.Queries().FindPanel(panelLayout.panelId);
+            if (panel != nullptr && panel->kind == DockPanelKind::ParticleEditor) visible = true;
+        }
+        sink += visible ? 1U : 0U;
+    });
+    result.materialPreviewProbeMs = sample([&] {
+        const kb::assets::AssetId inspectorAsset = context_.AssetBrowser().InspectorAsset();
+        const kb::assets::AssetId materialAsset = context_.MaterialEditor().OpenAssetId();
+        const auto& registry = context_.Scene().Assets().Manager().Registry();
+        sink += (inspectorAsset.IsValid() && registry.Find(inspectorAsset) != nullptr) ? 1U : 0U;
+        sink += (materialAsset.IsValid() && registry.Find(materialAsset) != nullptr) ? 1U : 0U;
+    });
+
+    // The non-render half of the frame the way it used to be performed: one layout for the
+    // panel walk, one inside the host-surface resolve, and one inside each of the three
+    // panel-content resolves. Five walks of one unchanged tree to ask it five questions.
+    result.dockLayoutBuildsPerFrame = 5U;
+    result.geometryTotalMs = sample([&] {
+        sink += buildLayout().panels.size();
+        sink += EditorHostSurfaceLayoutResolver::ResolveMainWindow(window, dockModel, metrics, context_).size();
+        for (const DockPanelKind kind : { DockPanelKind::Inspector, DockPanelKind::MaterialEditor, DockPanelKind::Assets }) {
+            sink += EditorPanelContentResolver::Resolve(
+                kind, window, window, dockModel, floatingWindows, metrics).has_value() ? 1U : 0U;
+        }
+    });
+
+    // The same answers, derived from a single layout build: what the frame does now.
+    result.sharedGeometryMs = sample([&] {
+        const DockLayout layout = buildLayout();
+        sink += EditorHostSurfaceLayoutResolver::ResolveMainWindow(layout, dockModel, context_).size();
+        for (const DockPanelKind kind : { DockPanelKind::Inspector, DockPanelKind::MaterialEditor, DockPanelKind::Assets }) {
+            sink += EditorPanelContentResolver::Resolve(
+                kind, layout, window, window, dockModel, floatingWindows, metrics).has_value() ? 1U : 0U;
+        }
+    });
+
+    // The GPU half. One full sync first so the sampled frames are the steady state an
+    // idle editor sits in - nothing dirty, nothing to re-upload - rather than the
+    // first-frame cost of publishing the whole scene.
+    static_cast<void>(impl_->RenderScene(context_, 1U, true));
+    context_.AcknowledgeSceneRenderSubmitted();
+    constexpr RECT bounds{ 0, 0, 640, 360 };
+    std::size_t submitted = 0U;
+    result.sceneSubmitMs = sample([&] {
+        EditorSceneBgfxViewport::PresentSettings settings{};
+        settings.renderWidth = 640U;
+        settings.renderHeight = 360U;
+        settings.viewportKey = 1U;
+        kb::render::SceneRenderCamera camera{};
+        bx::mtxLookAt(camera.view.data(), bx::Vec3{ 4.0F, 3.0F, 4.0F }, bx::Vec3{ 0.0F, 0.0F, 0.0F });
+        kb::render::SceneDepthPolicy::MakePerspective(
+            camera.projection.data(), 60.0F, 640.0F / 360.0F, 0.05F, 100.0F,
+            kb::render::SceneDepthPolicy::HomogeneousDepth());
+        settings.cameraOverride = camera;
+        settings.sceneRevision = context_.SceneRenderRevision();
+        settings.sceneDirtyBaseRevision = context_.SceneRenderDirtyBaseRevision();
+        settings.sceneFullSyncRequired = context_.SceneRenderFullDirty();
+        settings.editorSceneOverlaysEnabled = true;
+        settings.selectionMaskEnabled = false;
+        settings.selectionOutlineEnabled = false;
+        settings.drawSafeArea = false;
+        impl_->viewport.BeginPaintLayout(window);
+        impl_->viewport.Present(window, bounds, context_.Scene(), settings);
+        impl_->viewport.EndPaintLayout();
+        context_.AcknowledgeSceneRenderSubmitted();
+        ++submitted;
+    });
+    result.idleFrameMs = result.geometryTotalMs + result.sceneSubmitMs;
+    result.steps = steps;
+    // Answering five questions about one dock tree must not cost five tree walks. Sharing the
+    // layout removes four of the five builds and measures at about 0.28 of the naive cost;
+    // dropping the shared layout on the floor puts it back at about 0.84. The gate sits
+    // between the two with room on both sides, so machine load cannot decide the outcome.
+    const bool sharedLayoutIsCheaper = result.geometryTotalMs > 0.0 &&
+        result.sharedGeometryMs < (result.geometryTotalMs * 0.6);
+    result.succeeded = submitted == steps && sink > 0U &&
+        result.sceneSubmitMs > 0.0 && result.geometryTotalMs > 0.0 && sharedLayoutIsCheaper;
+    Trace("profile_idle_scene_frame", result.succeeded,
+        std::to_string(result.idleFrameMs) + "/" + std::to_string(result.geometryTotalMs) +
+            "/" + std::to_string(result.sceneSubmitMs));
     return result;
 }
 

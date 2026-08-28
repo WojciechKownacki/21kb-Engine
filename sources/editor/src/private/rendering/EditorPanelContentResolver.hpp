@@ -40,6 +40,26 @@ public:
         const EditorDockModel& dockModel,
         const EditorFloatingWindowManager& floatingWindows,
         const EditorMetrics& metrics);
+
+    // Same answers against a layout the caller already built. A torn-off panel is measured
+    // from its own window and ignores the layout, exactly as the building overloads do.
+    [[nodiscard]] static std::optional<RECT> Resolve(
+        DockPanelKind kind,
+        const DockLayout& mainLayout,
+        HWND sourceWindow,
+        HWND mainWindow,
+        const EditorDockModel& dockModel,
+        const EditorFloatingWindowManager& floatingWindows,
+        const EditorMetrics& metrics);
+
+    [[nodiscard]] static std::optional<EditorResolvedPanelContent> ResolvePanel(
+        DockPanelKind kind,
+        const DockLayout& mainLayout,
+        HWND sourceWindow,
+        HWND mainWindow,
+        const EditorDockModel& dockModel,
+        const EditorFloatingWindowManager& floatingWindows,
+        const EditorMetrics& metrics);
 };
 
 #endif
