@@ -2,6 +2,9 @@
 
 #if defined(_WIN32)
 #include "app/EditorWorkspaceSession.hpp"
+#include "docking/EditorWorkspaceArrangement.hpp"
+#include "windowing/EditorFloatingWindowFrame.hpp"
+#include "windowing/FloatingWindowFactory.hpp"
 #include "app/EditorPlayModeState.hpp"
 #include "app/EditorPointerDragState.hpp"
 #include "app/EditorShellInteractionState.hpp"
@@ -28,6 +31,7 @@
 #include "scene/EditorSceneContext.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
 #include "settings/EditorConfigurationStore.hpp"
+#include "settings/EditorLayoutLibrary.hpp"
 #include "project/EditorProjectPaths.hpp"
 
 #include "engine/input/InputDeviceState.hpp"
@@ -440,6 +444,41 @@ template <typename Paint>
         },
         reinterpret_cast<LPARAM>(&context));
     return context.found;
+}
+
+// A torn-off panel's window, built exactly as the editor builds one, so the frame
+// Windows keeps can be measured rather than guessed at.
+LRESULT CALLBACK FloatingFrameProbeProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+    if (message == WM_NCCALCSIZE) {
+        return EditorFloatingWindowFrame::HandleNonClientCalcSize(window, wparam, lparam);
+    }
+    return DefWindowProcW(window, message, wparam, lparam);
+}
+
+[[nodiscard]] int ReservedFrameHeight(HINSTANCE instance, const wchar_t* className, WNDPROC windowProc) {
+    WNDCLASSEXW windowClass{};
+    windowClass.cbSize = sizeof(windowClass);
+    windowClass.lpfnWndProc = windowProc;
+    windowClass.hInstance = instance;
+    windowClass.lpszClassName = className;
+    if (RegisterClassExW(&windowClass) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+        return -1;
+    }
+
+    int reserved = -1;
+    HWND window = CreateWindowExW(
+        FloatingWindowFactory::ExtendedStyle, className, L"", FloatingWindowFactory::Style,
+        0, 0, 900, 640, nullptr, nullptr, instance, nullptr);
+    if (window != nullptr) {
+        RECT frame{};
+        RECT client{};
+        if (GetWindowRect(window, &frame) != FALSE && GetClientRect(window, &client) != FALSE) {
+            reserved = static_cast<int>((frame.bottom - frame.top) - (client.bottom - client.top));
+        }
+        DestroyWindow(window);
+    }
+    UnregisterClassW(className, instance);
+    return reserved;
 }
 
 [[nodiscard]] HWND FindOwnedWindowByClass(
@@ -991,6 +1030,89 @@ EditorHeadlessAutomation::VerifyParticleThumbnail(
     if (!result.succeeded) {
         thumbnails.CancelPendingWork(&impl_->viewport);
     }
+    return result;
+}
+
+EditorHeadlessAutomation::FloatingWindowFrame
+EditorHeadlessAutomation::VerifyFloatingWindowFrame() {
+    FloatingWindowFrame result{};
+    HINSTANCE instance = GetModuleHandleW(nullptr);
+    result.reservedWithoutHandler =
+        ReservedFrameHeight(instance, L"21kbFloatingFrameDefault", &DefWindowProcW);
+    result.reservedWithHandler =
+        ReservedFrameHeight(instance, L"21kbFloatingFrameEditor", &FloatingFrameProbeProc);
+    // The editor draws the whole of a torn-off panel, so Windows must be left holding
+    // none of it. What it would otherwise keep is reported beside it.
+    result.succeeded = result.reservedWithHandler == 0;
+    Trace("assert_floating_window_frame", result.succeeded,
+        std::to_string(result.reservedWithHandler));
+    return result;
+}
+
+EditorHeadlessAutomation::SavedLayoutRoundTrip
+EditorHeadlessAutomation::VerifySavedLayoutRoundTrip() {
+    SavedLayoutRoundTrip result{};
+    const std::string name = "Headless Check";
+    const std::filesystem::path root = EditorProjectPaths::ProjectRoot();
+
+    // The project has to be handed back exactly as it was found: this runs inside a
+    // scenario, not in a sandbox of its own.
+    const EditorConfiguration original = context_.EditorConfig();
+
+    EditorDockModel arranged;
+    std::uint32_t floatedPanel = 0U;
+    std::uint32_t closedPanel = 0U;
+    for (const DockPanel& panel : arranged.Queries().Panels()) {
+        if (!panel.visible || !panel.detachable || panel.id == 14U) {
+            continue;
+        }
+        if (floatedPanel == 0U) {
+            floatedPanel = panel.id;
+        } else if (closedPanel == 0U) {
+            closedPanel = panel.id;
+        }
+    }
+    if (floatedPanel == 0U || closedPanel == 0U || !arranged.Commands().ClosePanel(closedPanel)) {
+        Trace("assert_saved_layout_roundtrip", false, "no-rearrangeable-panels");
+        return result;
+    }
+    arranged.Commands().UndockPanel(floatedPanel, DockRect{ 240, 200, 880, 620 });
+    const EditorLayoutPreset captured = EditorWorkspaceArrangement::Capture(arranged);
+    result.layout = captured.tree;
+
+    std::string error;
+    if (!EditorLayoutLibrary::Save(root, name, captured, error)) {
+        Trace("assert_saved_layout_roundtrip", false, error);
+        return result;
+    }
+    const std::vector<std::string> listed = EditorLayoutLibrary::List(root);
+    result.listed = std::ranges::find(listed, name) != listed.end();
+
+    // A layout is only worth anything if it can be put back on a workspace that is
+    // nothing like it, so this starts from the arrangement a new project gets.
+    EditorDockModel reopened;
+    const std::optional<EditorLayoutPreset> loaded = EditorLayoutLibrary::Load(root, name);
+    result.applied = loaded.has_value() &&
+        EditorWorkspaceArrangement::Apply(reopened, *loaded) &&
+        reopened.Commands().SerializeWorkspace() == captured.tree;
+    const DockPanel* floated = reopened.Queries().FindPanel(floatedPanel);
+    const DockPanel* closed = reopened.Queries().FindPanel(closedPanel);
+    result.applied = result.applied && floated != nullptr && closed != nullptr &&
+        floated->visible && floated->area == DockArea::Floating &&
+        floated->floatingRect.width == 880 && !closed->visible;
+
+    EditorWorkspaceSession::SaveAs(reopened, context_, name);
+    const auto stored = EditorConfigurationStore::Load(
+        EditorConfigurationStore::FilePath(root), root);
+    result.named = stored.Succeeded() && stored.found && stored.configuration.layoutName == name;
+
+    const std::vector<std::string> remaining =
+        (static_cast<void>(EditorLayoutLibrary::Delete(root, name)), EditorLayoutLibrary::List(root));
+    result.deleted = std::ranges::find(remaining, name) == remaining.end();
+
+    result.succeeded = result.listed && result.applied && result.named && result.deleted;
+    static_cast<void>(context_.SaveEditorConfig(original));
+    Trace("assert_saved_layout_roundtrip", result.succeeded, result.layout);
     return result;
 }
 

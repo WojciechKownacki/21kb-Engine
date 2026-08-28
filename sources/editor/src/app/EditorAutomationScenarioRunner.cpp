@@ -3715,6 +3715,25 @@ ReadScriptValue(
                 ", selected=" + std::to_string(navigation.selectedAsset.value) };
     }
 
+    if (*operation == "assert_floating_window_frame") {
+        const auto frame = state.automation.VerifyFloatingWindowFrame();
+        return {
+            frame.succeeded,
+            "reserved=" + std::to_string(frame.reservedWithHandler) +
+                ", default=" + std::to_string(frame.reservedWithoutHandler) };
+    }
+
+    if (*operation == "assert_saved_layout_roundtrip") {
+        const auto saved = state.automation.VerifySavedLayoutRoundTrip();
+        return {
+            saved.succeeded,
+            std::string{ "listed=" } + (saved.listed ? "true" : "false") +
+                ", applied=" + (saved.applied ? "true" : "false") +
+                ", named=" + (saved.named ? "true" : "false") +
+                ", deleted=" + (saved.deleted ? "true" : "false") +
+                ", layout=" + saved.layout };
+    }
+
     if (*operation == "assert_workspace_layout_persistence") {
         const auto workspace = state.automation.VerifyWorkspaceLayoutPersistence();
         return {

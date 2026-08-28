@@ -12,6 +12,7 @@ enum class HeroIconKind : std::uint8_t {
     Stop,
     TransportStop,
     XMark,
+    Check,
     Cube,
     Folder,
     Eye,
