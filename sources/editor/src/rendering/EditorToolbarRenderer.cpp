@@ -179,6 +179,27 @@ bool EditorToolbarRenderer::HitTestSave(const EditorToolbarRects& rects, int x, 
     return EditorToolbarLayout::HitTestSave(rects, x, y);
 }
 
+namespace {
+
+[[nodiscard]] HeroIconKind LayoutRowIcon(const EditorLayoutMenuRow& row) noexcept {
+    if (row.active) {
+        return HeroIconKind::Check;
+    }
+    switch (row.action) {
+    case EditorLayoutMenuAction::Save:
+        return HeroIconKind::Plus;
+    case EditorLayoutMenuAction::Delete:
+    case EditorLayoutMenuAction::Remove:
+        return HeroIconKind::XMark;
+    case EditorLayoutMenuAction::Default:
+    case EditorLayoutMenuAction::Apply:
+    default:
+        return HeroIconKind::RectangleGroup;
+    }
+}
+
+} // namespace
+
 void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorTheme& theme, const EditorShellInteractionState& interaction) const {
     EditorSurfacePainter::Fill(dc, rect, theme, EditorSurfaceKind::HeaderStrip);
     const EditorMenuRects menu =
@@ -221,15 +242,18 @@ void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorThem
             ? std::string_view{ layoutRow->label }
             : EditorToolbarLayout::DropdownLabel(interaction.OpenMenu(), row);
         const bool enabled = layoutRow == nullptr || layoutRow->enabled;
+        // Every row of the Layout menu carries an icon, the layout in use a tick.
+        // Giving one only to that row would indent its label alone and leave the list
+        // ragged, because the icon is what the label is measured from.
         EditorDialogStyle::PaintMenuRow(
             dc,
             RECT{ rowRect.left + 4, rowRect.top + 1, rowRect.right - 4, rowRect.bottom - 1 },
             theme,
             label,
-            layoutRow != nullptr && layoutRow->active ? HeroIconKind::Check : HeroIconKind::RectangleGroup,
+            layoutRow != nullptr ? LayoutRowIcon(*layoutRow) : HeroIconKind::RectangleGroup,
             hovered && enabled,
             enabled,
-            layoutRow != nullptr && layoutRow->active);
+            layoutRow != nullptr);
     }
 }
 
