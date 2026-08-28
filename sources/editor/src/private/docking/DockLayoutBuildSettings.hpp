@@ -7,7 +7,6 @@ struct DockLayoutBuildSettings {
     int tabMinWidth = 0;
     int tabWidth = 0;
     int splitterSize = 0;
-    int panelPadding = 0;
 };
 
 } // namespace kb::editor

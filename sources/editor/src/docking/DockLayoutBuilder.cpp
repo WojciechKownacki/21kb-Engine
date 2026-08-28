@@ -15,14 +15,12 @@ DockLayout DockLayoutBuilder::Build(
     int tabStripHeight,
     int tabMinWidth,
     int tabWidth,
-    int splitterSize,
-    int panelPadding) const {
+    int splitterSize) const {
     const DockLayoutBuildSettings settings{
         .tabStripHeight = tabStripHeight,
         .tabMinWidth = tabMinWidth,
         .tabWidth = tabWidth,
         .splitterSize = splitterSize,
-        .panelPadding = panelPadding,
     };
 
     DockLayout layout{};

@@ -31,8 +31,14 @@ HWND FloatingWindowFactory::Create(HINSTANCE instance, HWND owner, const wchar_t
 
     SetWindowLongPtrW(floating, GWLP_USERDATA, ownerApplication);
 
+    // DWMWA_USE_IMMERSIVE_DARK_MODE
     const BOOL darkMode = TRUE;
     DwmSetWindowAttribute(floating, 20, &darkMode, sizeof(darkMode));
+    // DWMWA_BORDER_COLOR / DWMWA_COLOR_NONE: the editor draws this window's outline
+    // itself, and the system's own border would sit on top of it as a lighter line
+    // along the top edge. Older builds do not know the attribute and simply say so.
+    const COLORREF noBorder = 0xFFFFFFFE;
+    static_cast<void>(DwmSetWindowAttribute(floating, 34, &noBorder, sizeof(noBorder)));
     return floating;
 }
 

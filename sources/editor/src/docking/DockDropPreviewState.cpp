@@ -31,8 +31,7 @@ DockLayout DockDropPreviewState::BuildMainLayout(HWND mainWindow, const EditorDo
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,
-        metrics.splitterSize,
-        metrics.panelPadding);
+        metrics.splitterSize);
 }
 
 bool DockDropPreviewState::SamePreview(const std::optional<DockDropPreview>& lhs, const std::optional<DockDropPreview>& rhs) noexcept {

@@ -19,8 +19,7 @@ void DockWorkspaceRenderer::Paint(HWND parent, HDC dc, const RECT& dirty, int wi
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,
-        metrics.splitterSize,
-        metrics.panelPadding);
+        metrics.splitterSize);
 
     EditorToolbarRenderer toolbarRenderer;
     toolbarRenderer.PaintToolbar(dc, GdiDrawing::ToRect(layout.toolbar), theme, sceneContext, playMode, shellInteraction);
