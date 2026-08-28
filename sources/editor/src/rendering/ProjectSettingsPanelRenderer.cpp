@@ -245,7 +245,7 @@ void DrawTooltip(HDC dc, const RECT& content, const EditorTheme& theme, const Ed
 }
 
 void DrawInputsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
-    const kb::project::ProjectDescriptor& project = sceneContext.Project();
+    const kb::project::ProjectSettings& settings = sceneContext.ProjectConfiguration();
     const bool dropdownOpen = sceneContext.ProjectSettings().IsMappingContextDropdownOpen();
 
     GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
@@ -253,13 +253,13 @@ void DrawInputsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const 
 
     // Enabled first so an open dropdown can overlap it.
     DrawText(dc, RECT{ rects.enabledLabel.left, rects.enabledLabel.top, rects.enabledLabel.right - 8, rects.enabledLabel.bottom }, "Enabled", Color(theme.textSecondary), 12);
-    DrawCheckbox(dc, rects.enabledCheckbox, theme, project.inputEnabled);
+    DrawCheckbox(dc, rects.enabledCheckbox, theme, settings.inputEnabled);
 
     DrawText(dc, RECT{ rects.mappingLabel.left, rects.mappingLabel.top, rects.mappingLabel.right - 8, rects.mappingLabel.bottom }, "Mapping Context", Color(theme.textSecondary), 12);
     const RECT fieldBox = ProjectSettingsPanelLayout::MappingFieldBox(rects);
-    DrawSelectorBox(dc, fieldBox, theme, MappingContextDisplayName(project.inputMappingContext), project.inputMappingContext.empty(), dropdownOpen);
+    DrawSelectorBox(dc, fieldBox, theme, MappingContextDisplayName(settings.inputMappingContext), settings.inputMappingContext.empty(), dropdownOpen);
     if (dropdownOpen) {
-        DrawDropdownList(dc, fieldBox, theme, sceneContext.ProjectInputMappingContextOptions(), project.inputMappingContext, sceneContext.ProjectSettings().HoveredOption());
+        DrawDropdownList(dc, fieldBox, theme, sceneContext.ProjectInputMappingContextOptions(), settings.inputMappingContext, sceneContext.ProjectSettings().HoveredOption());
     }
 }
 
@@ -310,16 +310,16 @@ void DrawGraphicsPage(
 }
 
 void DrawPhysicsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
-    const kb::project::ProjectDescriptor& project = sceneContext.Project();
+    const kb::project::ProjectSettings& settings = sceneContext.ProjectConfiguration();
     const bool dropdownOpen = sceneContext.ProjectSettings().IsPhysicsLayersDropdownOpen();
 
     GdiDrawing::FillRectColor(dc, rects.sectionHeader, Color(theme.strip));
     DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom }, "PHYSICS", Color(theme.textSecondary), 11, FW_SEMIBOLD);
     DrawText(dc, RECT{ rects.mappingLabel.left, rects.mappingLabel.top, rects.mappingLabel.right - 8, rects.mappingLabel.bottom }, "Collision Layers Asset", Color(theme.textSecondary), 12);
     const RECT fieldBox = ProjectSettingsPanelLayout::MappingFieldBox(rects);
-    DrawSelectorBox(dc, fieldBox, theme, MappingContextDisplayName(project.physicsLayersAsset), project.physicsLayersAsset.empty(), dropdownOpen);
+    DrawSelectorBox(dc, fieldBox, theme, MappingContextDisplayName(settings.physicsLayersAsset), settings.physicsLayersAsset.empty(), dropdownOpen);
     if (dropdownOpen) {
-        DrawDropdownList(dc, fieldBox, theme, sceneContext.ProjectPhysicsLayersAssetOptions(), project.physicsLayersAsset, sceneContext.ProjectSettings().HoveredOption());
+        DrawDropdownList(dc, fieldBox, theme, sceneContext.ProjectPhysicsLayersAssetOptions(), settings.physicsLayersAsset, sceneContext.ProjectSettings().HoveredOption());
     }
 }
 
