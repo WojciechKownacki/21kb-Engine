@@ -8797,6 +8797,16 @@ bool EditorSceneContext::EntityScriptEnabled(kb::scene::SceneEntity entity) cons
     return behaviour != nullptr && behaviour->enabled;
 }
 
+std::size_t EditorSceneContext::EntityScriptExposedVariableCount(kb::scene::SceneEntity entity) const {
+    const kb::scene::BehaviourComponent* behaviour = scene_->Components().Behaviours().TryGet(entity);
+    if (behaviour == nullptr) {
+        return 0U;
+    }
+    const kb::assets::AssetHandle<kb::script::LuaScriptAsset> asset =
+        scene_->Assets().Manager().Load<kb::script::LuaScriptAsset>(kb::assets::AssetId{ behaviour->behaviourAssetId });
+    return asset.IsLoaded() ? asset.Get()->exposedVariables.size() : 0U;
+}
+
 std::vector<EditorSceneContext::EntityScriptVariable> EditorSceneContext::EntityScriptExposedVariables(kb::scene::SceneEntity entity) const {
     std::vector<EntityScriptVariable> result;
     const kb::scene::BehaviourComponent* behaviour = scene_->Components().Behaviours().TryGet(entity);

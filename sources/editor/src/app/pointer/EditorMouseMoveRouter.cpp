@@ -34,6 +34,23 @@ namespace {
 
 // The row a value drag started on, clipped to the panel. Falls back to the whole
 // panel when the drag did not come from a row - a mesh preview orbit, say.
+// The two rows a hover change affects, clipped to the panel. Falls back to the whole
+// panel when either is unknown - leaving the panel entirely, say, where the row the
+// pointer left still has to lose its highlight.
+[[nodiscard]] RECT HoveredInspectorRowsRect(const EditorSceneContext& sceneContext, const RECT& panel) noexcept {
+    const InspectorRowBounds entered = sceneContext.Inspector().HoveredRowBounds();
+    const InspectorRowBounds left = sceneContext.Inspector().PreviousHoveredRowBounds();
+    if (entered.Empty() || left.Empty()) {
+        return panel;
+    }
+    const RECT enteredRect{ entered.left, entered.top, entered.right, entered.bottom };
+    const RECT leftRect{ left.left, left.top, left.right, left.bottom };
+    RECT both{};
+    UnionRect(&both, &enteredRect, &leftRect);
+    RECT clipped{};
+    return IntersectRect(&clipped, &both, &panel) != 0 ? clipped : panel;
+}
+
 [[nodiscard]] RECT DraggedInspectorRowRect(const EditorSceneContext& sceneContext, const RECT& panel) noexcept {
     const InspectorRowBounds row = sceneContext.Inspector().DraggedRowBounds();
     if (!sceneContext.Inspector().IsDraggingFloat() || row.Empty()) {
@@ -470,7 +487,11 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         return;
     }
     if (inspectorPointer.UpdateHoverOrClear(inspectorContent, x, y) && inspectorContent.has_value()) {
-        EditorWindowInvalidator::InvalidatePanel(messageWindow, *inspectorContent);
+        // Moving the pointer changes how two rows look: the one it left and the one it
+        // entered. Asking for the whole panel back per row crossed cost several
+        // milliseconds each time.
+        EditorWindowInvalidator::InvalidatePanel(
+            messageWindow, HoveredInspectorRowsRect(sceneContext_, *inspectorContent));
     }
     if (inspectorPointer.Contains(inspectorContent, x, y)) {
         return;
