@@ -2181,7 +2181,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         return "vec4(kbRgbToHsv((" + v + ").rgb), (" + v + ").a)";
     }
     case RenderMaterialGraphNodeKind::DeriveNormalZ: {
-        // Reconstruct the tangent-space normal's Z from its XY and renormalize (UE DeriveNormalZ).
+        // Reconstruct the tangent-space normal's Z from its XY and renormalize.
         const std::string v = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)");
         return "vec4(normalize(vec3((" + v + ").xy, sqrt(clamp(1.0 - dot((" + v + ").xy, (" + v + ").xy), 0.0, 1.0)))), 1.0)";
     }
@@ -2239,7 +2239,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
             CompileInputExpression(cg, node, "seed", RenderMaterialGraphPinType::Float2, "vec2(0.0, 0.0)") +
             ")";
     case RenderMaterialGraphNodeKind::AppendVector:
-        // MAT-50: concatenate a 3-component vector with a scalar into a float4 (UE's common rgb + a append).
+        // MAT-50: concatenate a 3-component vector with a scalar into a float4 (the common rgb + a append).
         return "vec4((" +
             CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)") +
             ").xyz, (" +
@@ -4060,7 +4060,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     }
 
     if (usesSobol) {
-        // MAT-50 tier2: deterministic 2D Sobol sample without UE's SobolSamplingTexture dependency.
+        // MAT-50 tier2: deterministic 2D Sobol sample computed in-shader, with no lookup texture.
         source += "float kbXor16(float a, float b) {\n";
         source += "    float result = 0.0;\n";
         source += "    float bitValue = 1.0;\n";
@@ -4122,7 +4122,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     std::string tangentOutputExpr;
 
     // MAT-36: when a single MaterialAttributes set is wired into MaterialOutput.attributes it drives the
-    // whole surface (UE's "Use Material Attributes" mode); the per-channel pins are bypassed entirely.
+    // whole surface (the "use material attributes" mode); the per-channel pins are bypassed entirely.
     if (useMaterialAttributes) {
         attributesExpr = compileOutput("attributes", RenderMaterialGraphPinType::MaterialAttributes, "");
     } else {

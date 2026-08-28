@@ -16,7 +16,7 @@ class ScriptRuntimeHost;
 // "entity?" convention - particles spawn at the owner's live world position/rotation every
 // emission, and the instance is auto-released the moment its owner dies or deactivates.
 // Emit is LIB-143's "event" verb: an immediate, on-demand burst independent of Play/Stop
-// state (Unity's ParticleSystem.Emit precedent), not an outbound completion notification -
+// state (the established Emit convention), not an outbound completion notification -
 // all five named verbs (play/stop/seed/parameter/event) are inbound instance control,
 // documented in others/_temp.md's LIB-143 scope notes.
 struct ScriptParticleSystemApi {

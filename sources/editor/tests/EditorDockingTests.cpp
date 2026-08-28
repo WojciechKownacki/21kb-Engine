@@ -963,12 +963,12 @@ void RunSkeletalMeshEditorTreeStateTest() {
             unfilteredRows[1].label == "Root Socket" && unfilteredRows[1].depth == 1U &&
             unfilteredRows[3].label == "Hand" && unfilteredRows[4].label == "Weapon" &&
             unfilteredRows[4].depth == 3U,
-        "Skeleton Tree should render sockets directly under their owning bones with UE-style indentation");
+        "Skeleton Tree should render sockets directly under their owning bones with nested indentation");
     kb::editor::tests::Require(
         unfilteredRows[0].hasChildren && unfilteredRows[0].expanded &&
             unfilteredRows[2].hasChildren && unfilteredRows[2].expanded &&
             unfilteredRows[3].hasChildren && unfilteredRows[3].expanded,
-        "Skeleton Tree should initially expand every hierarchy branch like UE Persona");
+        "Skeleton Tree should initially expand every hierarchy branch by default");
     kb::editor::tests::Require(tree.ToggleExpanded(20U) && !tree.IsExpanded(20U),
         "Skeleton Tree disclosure should retain an independent collapsed state per bone");
     const std::vector<kb::editor::SkeletalMeshEditorTreeRow> collapsedRows = tree.Rows();

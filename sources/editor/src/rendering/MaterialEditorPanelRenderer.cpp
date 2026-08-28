@@ -3415,7 +3415,7 @@ void DrawDiagnosticsPanel(HDC dc, const MaterialEditorPanelLayout& layout, const
             rowTop + static_cast<int>(index + 1U) * rowHeight,
         };
         // A diagnostic tied to a node is clickable (jumps to it); mark it with a leading arrow and a brighter
-        // colour so the affordance is visible, the way Unreal's error list reads as clickable.
+        // colour so the affordance is visible.
         const bool clickable = index < document.diagnosticNodeIds.size() && document.diagnosticNodeIds[index] != 0U;
         const std::string text = clickable ? "\xE2\x86\x92 " + document.diagnostics[index] : document.diagnostics[index];
         DrawText(dc, row, text.c_str(), clickable ? RGB(150, 197, 236) : RGB(224, 220, 211), 10);
