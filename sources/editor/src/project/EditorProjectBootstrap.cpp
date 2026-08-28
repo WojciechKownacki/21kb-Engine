@@ -37,12 +37,7 @@ namespace {
 
 [[nodiscard]] kb::project::ProjectDescriptor DefaultDescriptor() {
     kb::project::ProjectDescriptor descriptor;
-    const std::string projectName = EditorProjectPaths::ProjectFile().stem().string();
-    descriptor.name = projectName.empty() ? "Project" : projectName;
-    descriptor.category = "Game";
-    descriptor.description = "21kb editor project";
     descriptor.contentRoot = "Assets";
-    descriptor.defaultScene = "/Game/Scenes/Main.21kbscene";
     descriptor.targetPlatforms = { "Windows" };
     descriptor.plugins.push_back(kb::project::ProjectPluginReference{
         .name = "Physics.Jolt",
@@ -102,7 +97,8 @@ void LoadOrSeedSettings(EditorProjectBootstrapResult& result) {
     kb::project::ProjectSettingsLoadResult loaded = kb::project::ProjectSettingsStore::Load(settingsFile);
     if (!loaded.Succeeded()) {
         result.settingsError = loaded.error;
-        result.settings = kb::project::ProjectSettingsStore::FromDescriptor(result.descriptor);
+        result.settings = kb::project::ProjectSettingsStore::FromLegacy(
+            result.legacySettings, result.projectFile);
         return;
     }
     if (loaded.found) {
@@ -111,11 +107,14 @@ void LoadOrSeedSettings(EditorProjectBootstrapResult& result) {
         // reach the descriptor the game and the hub still read. Without this the
         // edit would sit in the file until something in the editor happened to save.
         result.descriptorMirrorStale =
-            kb::project::ProjectSettingsStore::FromDescriptor(result.descriptor) != result.settings;
+            result.legacySettings.present &&
+            kb::project::ProjectSettingsStore::FromLegacy(result.legacySettings, result.projectFile) !=
+                result.settings;
         return;
     }
 
-    result.settings = kb::project::ProjectSettingsStore::FromDescriptor(result.descriptor);
+    result.settings = kb::project::ProjectSettingsStore::FromLegacy(
+        result.legacySettings, result.projectFile);
     std::string error;
     if (!kb::project::ProjectSettingsStore::Save(settingsFile, result.settings, error)) {
         result.settingsError = error;
@@ -164,6 +163,7 @@ EditorProjectBootstrapResult EditorProjectBootstrap::BootstrapDefaultProject() {
             .error = loaded.error,
             .created = false,
             .particlePolicy = particlePolicy,
+            .legacySettings = loaded.legacySettings,
         };
         LoadOrSeedSettings(result);
         RemoveRetiredStateFiles(projectFile.parent_path());

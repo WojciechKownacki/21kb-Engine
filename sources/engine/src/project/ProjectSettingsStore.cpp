@@ -41,17 +41,27 @@ std::filesystem::path ProjectSettingsStore::FilePath(const std::filesystem::path
     return projectRoot / "Config" / "ProjectSettings.ini";
 }
 
-ProjectSettings ProjectSettingsStore::FromDescriptor(const ProjectDescriptor& descriptor) {
+ProjectSettings ProjectSettingsStore::FromLegacy(
+    const ProjectLegacySettings& legacy,
+    const std::filesystem::path& projectFile) {
     ProjectSettings settings;
-    settings.name = descriptor.name;
-    settings.gameName = descriptor.name;
-    settings.category = descriptor.category;
-    settings.description = descriptor.description;
-    settings.defaultMap = descriptor.defaultScene;
-    settings.lightingPath = descriptor.sceneLightingPath;
-    settings.inputEnabled = descriptor.inputEnabled;
-    settings.inputMappingContext = descriptor.inputMappingContext;
-    settings.physicsLayersAsset = descriptor.physicsLayersAsset;
+    if (!legacy.present) {
+        const std::string stem = projectFile.stem().string();
+        if (!stem.empty()) {
+            settings.name = stem;
+            settings.gameName = stem;
+        }
+        return settings;
+    }
+    settings.name = legacy.name;
+    settings.gameName = legacy.name;
+    settings.category = legacy.category;
+    settings.description = legacy.description;
+    settings.defaultMap = legacy.defaultScene;
+    settings.lightingPath = legacy.lightingPath;
+    settings.inputEnabled = legacy.inputEnabled;
+    settings.inputMappingContext = legacy.inputMappingContext;
+    settings.physicsLayersAsset = legacy.physicsLayersAsset;
     return settings;
 }
 

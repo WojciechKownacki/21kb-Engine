@@ -20,6 +20,9 @@ struct EditorProjectBootstrapResult {
     // there when the project does not have one yet.
     kb::project::ProjectSettings settings{};
     std::string settingsError;
+    // What an older project file still carried, so its configuration can be written
+    // into the settings file the first time it is opened.
+    kb::project::ProjectLegacySettings legacySettings{};
     // Set when the settings file was edited outside the editor, so the descriptor's
     // derived copy has to be rewritten before anything reads it.
     bool descriptorMirrorStale = false;

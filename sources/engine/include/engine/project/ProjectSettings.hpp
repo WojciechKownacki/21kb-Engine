@@ -22,8 +22,10 @@ struct ProjectSettings {
     std::string description;
 
     // Maps
-    // The scene the game starts from.
-    std::string defaultMap;
+    // The scene the game starts from. A new project points at the scene the editor
+    // creates for it, which is where the default used to live before the descriptor
+    // stopped carrying settings.
+    std::string defaultMap = "/Game/Scenes/Main.21kbscene";
     // The scene the editor had open when it was last closed. Deliberately separate
     // from defaultMap: where an author left off is not where the game begins.
     std::string lastOpenMap;
@@ -39,6 +41,19 @@ struct ProjectSettings {
     std::string physicsLayersAsset;
 
     [[nodiscard]] bool operator==(const ProjectSettings&) const noexcept = default;
+};
+
+// The settings an older project file carried before the settings file existed.
+struct ProjectLegacySettings {
+    bool present = false;
+    std::string name;
+    std::string category;
+    std::string description;
+    std::string defaultScene;
+    ProjectSceneLightingPath lightingPath = ProjectSceneLightingPath::Forward;
+    bool inputEnabled = true;
+    std::string inputMappingContext;
+    std::string physicsLayersAsset;
 };
 
 struct ProjectSettingsLoadResult {
@@ -65,8 +80,11 @@ public:
         std::string& error);
 
     // The settings a project carried before it had a settings file, so an existing
-    // project keeps its configuration when the file is first created.
-    [[nodiscard]] static ProjectSettings FromDescriptor(const ProjectDescriptor& descriptor);
+    // project keeps its configuration when the file is first created. A project with
+    // nothing to carry gets the defaults, named after its own file.
+    [[nodiscard]] static ProjectSettings FromLegacy(
+        const ProjectLegacySettings& legacy,
+        const std::filesystem::path& projectFile);
 };
 
 } // namespace kb::project

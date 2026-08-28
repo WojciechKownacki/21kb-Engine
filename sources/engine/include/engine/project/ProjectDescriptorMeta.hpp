@@ -6,13 +6,14 @@
 
 namespace kb::project {
 
+// The descriptor's integrity record. Version 2 dropped the project name and the
+// default scene: both are settings now, and a summary that repeats them would go
+// stale the moment someone edits the settings file.
 struct ProjectDescriptorMeta {
-    static constexpr std::uint32_t CurrentFileVersion = 1U;
+    static constexpr std::uint32_t CurrentFileVersion = 2U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
-    std::string projectName;
     std::string engineAssociation;
-    std::string defaultScene;
     std::filesystem::path projectFile;
     std::uint64_t byteSize = 0U;
     std::uint64_t contentHashFnv1a64 = 0U;
