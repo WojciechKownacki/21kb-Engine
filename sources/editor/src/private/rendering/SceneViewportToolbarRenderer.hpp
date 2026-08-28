@@ -24,8 +24,6 @@ struct SceneViewportToolbarRects {
     RECT toolbar{};
     RECT row{};
     RECT fpsCounter{};
-    RECT renderStats{};
-    RECT ecsStats{};
     RECT pipelineStats{};
     RECT renderProfileButton{};
     RECT gridToggleButton{};
@@ -58,39 +56,6 @@ struct TerrainViewportToolbarRects {
     std::array<RECT, 6U> brushShapeItems{};
 };
 
-struct SceneViewportToolbarRenderStats {
-    std::uint32_t submittedDrawCalls = 0;
-    std::uint32_t submittedMeshes = 0;
-    std::uint32_t gpuDispatches = 0;
-    std::uint8_t msaaSamples = 0;
-    bool gpuDrivenActive = false;
-    bool postProcessActive = false;
-    bool temporalAntiAliasingActive = false;
-    bool bloomActive = false;
-    bool finalCompositeActive = false;
-};
-
-struct SceneViewportToolbarEcsSystemStat {
-    std::string name;
-    std::uint64_t cpuTimeNanoseconds = 0;
-    std::uint64_t jobsCount = 0;
-    std::uint64_t entitiesProcessed = 0;
-    std::uint64_t bytesTouched = 0;
-};
-
-struct SceneViewportToolbarEcsStats {
-    std::uint64_t frameIndex = 0;
-    std::uint64_t frameDurationNanoseconds = 0;
-    std::uint64_t cpuTimeNanoseconds = 0;
-    std::uint64_t jobsCount = 0;
-    std::uint64_t entitiesProcessed = 0;
-    std::uint64_t bytesTouched = 0;
-    std::uint64_t systemCount = 0;
-    std::uint64_t workerCount = 0;
-    bool valid = false;
-    std::vector<SceneViewportToolbarEcsSystemStat> topSystems;
-};
-
 class SceneViewportToolbarRenderer {
 public:
     SceneViewportToolbarRenderer() = delete;
@@ -103,10 +68,7 @@ public:
         const EditorViewportPreviewState& state,
         const EditorSceneContext& sceneContext) noexcept;
     [[nodiscard]] static TerrainViewportToolbarRects ResolveTerrainTools(const RECT& content) noexcept;
-    static void RecordPresentedFrame() noexcept;
-    static void RecordRenderStats(SceneViewportToolbarRenderStats stats) noexcept;
-    static void RecordEcsStats(SceneViewportToolbarEcsStats stats);
-    [[nodiscard]] static bool UpdateInfoHover(const RECT& content, int x, int y) noexcept;
+    static void RecordFrameMilliseconds(double milliseconds) noexcept;
     static void Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorViewportPreviewState& state);
     static void PaintTerrainTools(
         HDC dc,
