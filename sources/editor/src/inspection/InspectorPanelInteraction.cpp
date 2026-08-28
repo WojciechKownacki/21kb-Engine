@@ -57,6 +57,14 @@
 namespace kb::editor {
 namespace {
 
+[[nodiscard]] InspectorRowBounds RowBounds(const InspectorPanelRenderer::Hit& hit) noexcept {
+    return InspectorRowBounds{ hit.rect.left, hit.rect.top, hit.rect.right, hit.rect.bottom };
+}
+
+} // namespace
+
+namespace {
+
 class SceneAudioMixerInspectorActions {
 public:
     explicit SceneAudioMixerInspectorActions(EditorSceneContext& context) noexcept
@@ -775,7 +783,7 @@ void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::Ass
         float value = 0.0F;
         if (material.has_value() && ReadMaterialFloat(*material, hit.property, value)) {
             if (sceneContext.BeginMaterialAssetFloatEdit(asset, hit.property)) {
-                sceneContext.Inspector().BeginFloatDrag(hit.property, value, x, y);
+                sceneContext.Inspector().BeginFloatDrag(hit.property, value, x, y, RowBounds(hit));
             } else {
                 sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(value));
             }
@@ -2924,7 +2932,7 @@ void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEnt
         if (scrub.integer) {
             inspector.BeginIntegerDrag(hit.property, x, y);
         } else {
-            inspector.BeginFloatDrag(hit.property, scrub.startFloat, x, y);
+            inspector.BeginFloatDrag(hit.property, scrub.startFloat, x, y, RowBounds(hit));
         }
         inspector.SetEditIndex(hit.index);
         return true;
@@ -2933,7 +2941,7 @@ void ApplyEntityFloatField(EditorSceneContext& sceneContext, kb::scene::SceneEnt
     if (!ReadEntityFloatField(sceneContext, entity, hit.property, hit.index, value)) {
         return false;
     }
-    sceneContext.Inspector().BeginFloatDrag(hit.property, value, x, y);
+    sceneContext.Inspector().BeginFloatDrag(hit.property, value, x, y, RowBounds(hit));
     sceneContext.Inspector().SetEditIndex(hit.index); // BeginFloatDrag ends text edit (resets index) first
     return true;
 }
@@ -3325,7 +3333,7 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         if (!sceneContext.BeginSelectedTransformEdit("Edit Transform")) {
             return true;
         }
-        sceneContext.Inspector().BeginFloatDrag(hit.property, sceneContext.ActiveTransformEditPropertyStart(hit.property), x, y);
+        sceneContext.Inspector().BeginFloatDrag(hit.property, sceneContext.ActiveTransformEditPropertyStart(hit.property), x, y, RowBounds(hit));
         return true;
     }
     return true;

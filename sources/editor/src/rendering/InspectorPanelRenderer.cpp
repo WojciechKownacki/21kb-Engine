@@ -2873,11 +2873,24 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
     int y = InspectorBodyTop(content);
 
     // Virtualization: a section is only painted when its [y, y+height] band
-    // intersects the visible viewport. The cursor advances by the section's
+    // intersects the band being repainted. The cursor advances by the section's
     // measured height whether or not it painted, so culling can never shift the
-    // layout — off-screen sections just skip their (clipped-away) GDI work.
-    const auto sectionVisible = [&viewport](int top, int height) noexcept {
-        return top < viewport.bottom && top + height > viewport.top;
+    // layout - off-screen sections just skip their GDI work.
+    //
+    // The band is the viewport narrowed to what this repaint was actually asked
+    // for. Dragging a value asks for one row, and a section outside it then costs
+    // nothing at all instead of building and drawing text the clip throws away.
+    RECT band = viewport;
+    if (RECT clip{}; GetClipBox(dc, &clip) != NULLREGION) {
+        RECT narrowed{};
+        if (IntersectRect(&narrowed, &viewport, &clip) != 0) {
+            band = narrowed;
+        } else {
+            band = RECT{ viewport.left, viewport.top, viewport.right, viewport.top };
+        }
+    }
+    const auto sectionVisible = [&band](int top, int height) noexcept {
+        return top < band.bottom && top + height > band.top;
     };
 
     const kb::scene::VisibilityComponent visibility = scene.Components().Visibility().Get(selected);
@@ -2982,8 +2995,7 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
             section.AssetField("Script", sceneContext.EntityScriptName(selected), InspectorPropertyId::ScriptName, InspectorPropertyId::ScriptPicker);
             section.Bool("Enabled", sceneContext.EntityScriptEnabled(selected), InspectorPropertyId::ScriptEnabled);
             // One editable row per exposed ("@expose") variable. A leading dot marks
-            // an overridden variable (its value differs from the script default) — the
-            // Godot/O3DE override affordance.
+            // an overridden variable: its value differs from the script default.
             for (int index = 0; index < static_cast<int>(scriptVariables.size()); ++index) {
                 const EditorSceneContext::EntityScriptVariable& variable = scriptVariables[static_cast<std::size_t>(index)];
                 const std::string label = (variable.overridden ? std::string{ "\xE2\x80\xA2 " } : std::string{}) + variable.name;
@@ -3108,36 +3120,40 @@ void PaintEntity(HDC dc, RECT content, const RECT& viewport, const EditorTheme& 
         }
     }
     if (const kb::scene::RigidbodyComponent* rigidbody = scene.Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
-        const int h = SectionHeight(inspector, InspectorSectionId::Rigidbody, static_cast<int>(InspectorPhysicsModel::Fields(*rigidbody).size()));
+        const std::vector<PhysicsField> fields = InspectorPhysicsModel::Fields(*rigidbody);
+        const int h = SectionHeight(inspector, InspectorSectionId::Rigidbody, static_cast<int>(fields.size()));
         if (sectionVisible(y, h)) {
-            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Rigidbody, "Rigidbody", InspectorPropertyId::RigidbodyField, InspectorPhysicsModel::Fields(*rigidbody), false, false);
+            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Rigidbody, "Rigidbody", InspectorPropertyId::RigidbodyField, fields, false, false);
         } else {
             y += h + kSectionGap;
         }
     }
     if (const kb::scene::ColliderComponent* collider = scene.Components().Colliders().TryGet(selected); collider != nullptr) {
-        int h = SectionHeight(inspector, InspectorSectionId::Collider, static_cast<int>(InspectorPhysicsModel::Fields(*collider).size()));
+        const std::vector<PhysicsField> fields = InspectorPhysicsModel::Fields(*collider);
+        int h = SectionHeight(inspector, InspectorSectionId::Collider, static_cast<int>(fields.size()));
         if (!inspector.IsCollapsed(InspectorSectionId::Collider)) {
             h += kFieldRowHeight + kDividerHeight; // the "Fit to Mesh" action button
         }
         if (sectionVisible(y, h)) {
-            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Collider, "Collider", InspectorPropertyId::ColliderField, InspectorPhysicsModel::Fields(*collider), true, sceneContext.CanFitColliderToMesh(selected));
+            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Collider, "Collider", InspectorPropertyId::ColliderField, fields, true, sceneContext.CanFitColliderToMesh(selected));
         } else {
             y += h + kSectionGap;
         }
     }
     if (const kb::scene::CharacterControllerComponent* character = scene.Components().CharacterControllers().TryGet(selected); character != nullptr) {
-        const int h = SectionHeight(inspector, InspectorSectionId::CharacterController, static_cast<int>(InspectorPhysicsModel::Fields(*character).size()));
+        const std::vector<PhysicsField> fields = InspectorPhysicsModel::Fields(*character);
+        const int h = SectionHeight(inspector, InspectorSectionId::CharacterController, static_cast<int>(fields.size()));
         if (sectionVisible(y, h)) {
-            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::CharacterController, "Character Controller", InspectorPropertyId::CharacterControllerField, InspectorPhysicsModel::Fields(*character), false, false);
+            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::CharacterController, "Character Controller", InspectorPropertyId::CharacterControllerField, fields, false, false);
         } else {
             y += h + kSectionGap;
         }
     }
     if (const kb::scene::JointComponent* joint = scene.Components().Joints().TryGet(selected); joint != nullptr) {
-        const int h = SectionHeight(inspector, InspectorSectionId::Joint, static_cast<int>(InspectorPhysicsModel::Fields(*joint).size()));
+        const std::vector<PhysicsField> fields = InspectorPhysicsModel::Fields(*joint);
+        const int h = SectionHeight(inspector, InspectorSectionId::Joint, static_cast<int>(fields.size()));
         if (sectionVisible(y, h)) {
-            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Joint, "Joint", InspectorPropertyId::JointField, InspectorPhysicsModel::Fields(*joint), false, false);
+            PaintPhysicsSection(dc, content, y, theme, inspector, InspectorSectionId::Joint, "Joint", InspectorPropertyId::JointField, fields, false, false);
         } else {
             y += h + kSectionGap;
         }
