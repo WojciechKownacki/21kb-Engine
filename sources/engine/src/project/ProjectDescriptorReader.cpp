@@ -86,20 +86,20 @@ using ProjectDescriptorBinaryIO::ReadAllBytes;
     return true;
 }
 
-[[nodiscard]] bool ReadSceneLightingPath(ByteReader& input, ProjectDescriptor& descriptor) {
+[[nodiscard]] bool ReadSceneLightingPath(ByteReader& input, ProjectLegacySettings& legacy) {
     std::uint32_t value = 0U;
     if (!input.ReadUInt32(value)) {
         return false;
     }
     switch (value) {
     case 0U:
-        descriptor.sceneLightingPath = ProjectSceneLightingPath::Forward;
+        legacy.lightingPath = ProjectSceneLightingPath::Forward;
         return true;
     case 1U:
-        descriptor.sceneLightingPath = ProjectSceneLightingPath::Deferred;
+        legacy.lightingPath = ProjectSceneLightingPath::Deferred;
         return true;
     case 2U:
-        descriptor.sceneLightingPath = ProjectSceneLightingPath::ForwardPlus;
+        legacy.lightingPath = ProjectSceneLightingPath::ForwardPlus;
         return true;
     default:
         return false;
@@ -119,9 +119,7 @@ using ProjectDescriptorBinaryIO::ReadAllBytes;
         meta.byteSize != integrity.byteSize) {
         return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor integrity does not match its .meta file." };
     }
-    if (meta.projectName != descriptor.name ||
-        meta.engineAssociation != descriptor.engineAssociation ||
-        meta.defaultScene != descriptor.defaultScene ||
+    if (meta.engineAssociation != descriptor.engineAssociation ||
         meta.targetPlatformCount != descriptor.targetPlatforms.size() ||
         meta.moduleCount != descriptor.modules.size() ||
         meta.pluginCount != descriptor.plugins.size()) {
@@ -153,13 +151,15 @@ ProjectDescriptorReadResult ProjectDescriptorReader::Read(const std::filesystem:
     }
 
     ProjectDescriptor descriptor;
+    ProjectLegacySettings legacy;
+    legacy.present = fileVersion < 6U;
     descriptor.fileVersion = fileVersion;
     if (!input.ReadString(descriptor.engineAssociation) ||
-        !input.ReadString(descriptor.name) ||
-        !input.ReadString(descriptor.category) ||
-        !input.ReadString(descriptor.description) ||
+        (legacy.present && !input.ReadString(legacy.name)) ||
+        (legacy.present && !input.ReadString(legacy.category)) ||
+        (legacy.present && !input.ReadString(legacy.description)) ||
         !input.ReadString(descriptor.contentRoot) ||
-        !input.ReadString(descriptor.defaultScene) ||
+        (legacy.present && !input.ReadString(legacy.defaultScene)) ||
         !input.ReadBool(descriptor.disableEnginePluginsByDefault) ||
         !ReadStringList(input, ProjectDescriptorFormat::MaxTargetPlatformCount, descriptor.targetPlatforms) ||
         !ReadModules(input, descriptor) ||
@@ -167,26 +167,25 @@ ProjectDescriptorReadResult ProjectDescriptorReader::Read(const std::filesystem:
         return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor fields are invalid." };
     }
 
-    // File version 2+: project-wide input settings (older files leave defaults).
-    if (fileVersion >= 2U) {
-        if (!input.ReadString(descriptor.inputMappingContext) || !input.ReadBool(descriptor.inputEnabled)) {
+    // Settings a file written before version 6 still carries. They are read so the
+    // project can hand them to its settings file, not so the descriptor keeps them.
+    if (fileVersion >= 2U && fileVersion < 6U) {
+        if (!input.ReadString(legacy.inputMappingContext) || !input.ReadBool(legacy.inputEnabled)) {
             return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor input settings are invalid." };
         }
     }
-    if (fileVersion >= 4U && !ReadSceneLightingPath(input, descriptor)) {
+    if (fileVersion >= 4U && fileVersion < 6U && !ReadSceneLightingPath(input, legacy)) {
         return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor scene lighting path is invalid." };
     }
-    if (fileVersion >= 5U && !input.ReadString(descriptor.physicsLayersAsset)) {
+    if (fileVersion >= 5U && fileVersion < 6U && !input.ReadString(legacy.physicsLayersAsset)) {
         return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor physics layers asset is invalid." };
     }
 
     if (!input.Exhausted()) {
         return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor contains trailing data." };
     }
-    if (descriptor.engineAssociation.empty() ||
-        descriptor.name.empty() ||
-        descriptor.contentRoot.empty() ||
-        descriptor.defaultScene.empty()) {
+    if (descriptor.engineAssociation.empty() || descriptor.contentRoot.empty() ||
+        (legacy.present && (legacy.name.empty() || legacy.defaultScene.empty()))) {
         return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor is missing required fields." };
     }
 
@@ -194,7 +193,12 @@ ProjectDescriptorReadResult ProjectDescriptorReader::Read(const std::filesystem:
     if (!metaValidation.succeeded) {
         return metaValidation;
     }
-    return ProjectDescriptorReadResult{ .succeeded = true, .descriptor = std::move(descriptor), .error = {} };
+    return ProjectDescriptorReadResult{
+        .succeeded = true,
+        .descriptor = std::move(descriptor),
+        .error = {},
+        .legacySettings = std::move(legacy),
+    };
 }
 
 } // namespace kb::project

@@ -8206,13 +8206,13 @@ void EditorSceneContext::ActivateProjectInput() {
 }
 
 bool EditorSceneContext::ActivateProjectPhysicsLayers(kb::scene::Scene& scene) {
-    if (project_.physicsLayersAsset.empty()) {
+    if (projectConfig_.physicsLayersAsset.empty()) {
         return true;
     }
-    if (kb::scene::PhysicsBackend::LoadAndConfigureLayers(scene, project_.physicsLayersAsset)) {
+    if (kb::scene::PhysicsBackend::LoadAndConfigureLayers(scene, projectConfig_.physicsLayersAsset)) {
         return true;
     }
-    std::string error = "Project physics layers could not be loaded and applied: " + project_.physicsLayersAsset;
+    std::string error = "Project physics layers could not be loaded and applied: " + projectConfig_.physicsLayersAsset;
     const std::string assetError = scene.Assets().Manager().LastError();
     if (!assetError.empty()) {
         error += " (" + assetError + ")";
@@ -8245,20 +8245,9 @@ void EditorSceneContext::RememberLastOpenMap() {
     static_cast<void>(SaveProjectConfiguration());
 }
 
-// The single writer of the project's settings. It persists them to the settings
-// file and mirrors the same values into the descriptor, which consumers outside the
-// editor still read; nothing else writes those descriptor fields, so the two cannot
-// drift apart.
+// The one writer of the project's settings, and now the only place they are
+// stored: the descriptor no longer keeps a copy to drift out of step.
 bool EditorSceneContext::SaveProjectConfiguration() {
-    project_.name = projectConfig_.name;
-    project_.category = projectConfig_.category;
-    project_.description = projectConfig_.description;
-    project_.defaultScene = projectConfig_.defaultMap;
-    project_.sceneLightingPath = projectConfig_.lightingPath;
-    project_.inputEnabled = projectConfig_.inputEnabled;
-    project_.inputMappingContext = projectConfig_.inputMappingContext;
-    project_.physicsLayersAsset = projectConfig_.physicsLayersAsset;
-
     std::string error;
     const std::filesystem::path settingsFile =
         kb::project::ProjectSettingsStore::FilePath(EditorProjectPaths::ProjectRoot());
@@ -12247,13 +12236,13 @@ void EditorSceneContext::RequestOpenMaterialSceneGraphCook() {
             << " graphNodes=" << material.graph.nodes.size()
             << " graphLinks=" << material.graph.links.size()
             << " outputNormalLinked=" << (MaterialGraphDebugOutputHasLink(material.graph, "normal") ? "true" : "false")
-            << " sceneLightingPath=" << static_cast<int>(project_.sceneLightingPath);
+            << " sceneLightingPath=" << static_cast<int>(projectConfig_.lightingPath);
         LogMaterialGraphDebug(console_, row.str());
     }
     static_cast<void>(materialGraphCookService_->RequestCook(
         openAsset,
         material,
-        SceneMaterialGraphBuildContext(openAsset, metadata, project_.sceneLightingPath)));
+        SceneMaterialGraphBuildContext(openAsset, metadata, projectConfig_.lightingPath)));
 }
 
 void EditorSceneContext::CookSceneGraphMaterials() {
@@ -12302,7 +12291,7 @@ void EditorSceneContext::CookSceneGraphMaterials() {
         static_cast<void>(materialGraphCookService_->RequestCook(
             id,
             *material,
-            SceneMaterialGraphBuildContext(id, metadata, project_.sceneLightingPath)));
+            SceneMaterialGraphBuildContext(id, metadata, projectConfig_.lightingPath)));
     }
 }
 

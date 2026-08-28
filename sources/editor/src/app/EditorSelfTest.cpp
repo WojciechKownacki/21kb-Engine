@@ -290,8 +290,10 @@ void RunProjectSettingsSuite(Report& report) {
     {
         const kb::project::ProjectDescriptorReadResult reloaded = kb::project::ProjectManager::LoadProject(context.ProjectFile());
         report.Check(reloaded.succeeded, "Project descriptor reloads from disk");
-        report.Check(reloaded.succeeded && reloaded.descriptor.inputMappingContext == expected, "Mapping context persisted to descriptor");
-        report.Check(reloaded.succeeded && reloaded.descriptor.fileVersion >= 2U, "Descriptor written at file version >= 2");
+        const auto stored = kb::project::ProjectSettingsStore::Load(
+            kb::project::ProjectSettingsStore::FilePath(context.ProjectFile().parent_path()));
+        report.Check(stored.Succeeded() && stored.found && stored.settings.inputMappingContext == expected,
+            "Mapping context persisted to the settings file");
     }
 
     // Enabled checkbox toggles + persists.
@@ -300,8 +302,10 @@ void RunProjectSettingsSuite(Report& report) {
     report.Check(controller.HandlePointerDown(kContent, click.checkbox.x, click.checkbox.y), "Clicking checkbox is handled");
     report.Check(context.ProjectConfiguration().inputEnabled == !enabledBefore, "Enabled flag toggled");
     {
-        const kb::project::ProjectDescriptorReadResult reloaded = kb::project::ProjectManager::LoadProject(context.ProjectFile());
-        report.Check(reloaded.succeeded && reloaded.descriptor.inputEnabled == !enabledBefore, "Enabled flag persisted to descriptor");
+        const auto stored = kb::project::ProjectSettingsStore::Load(
+            kb::project::ProjectSettingsStore::FilePath(context.ProjectFile().parent_path()));
+        report.Check(stored.Succeeded() && stored.found && stored.settings.inputEnabled == !enabledBefore,
+            "Enabled flag persisted to the settings file");
     }
 
     // Reopen the dropdown, then click empty panel space -> dismisses.
@@ -317,17 +321,21 @@ void RunProjectSettingsSuite(Report& report) {
     report.Check(controller.HandlePointerDown(kContent, click.forwardPlusLightingPath.x, click.forwardPlusLightingPath.y), "Clicking Forward+ lighting path is handled");
     report.Check(context.ProjectConfiguration().lightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus, "Project lighting path changed to Forward+");
     {
-        const kb::project::ProjectDescriptorReadResult reloaded = kb::project::ProjectManager::LoadProject(context.ProjectFile());
-        report.Check(reloaded.succeeded && reloaded.descriptor.sceneLightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus, "Forward+ lighting path persisted to descriptor");
-        report.Check(reloaded.succeeded && reloaded.descriptor.fileVersion >= 4U, "Descriptor written at file version >= 4 after Forward+");
+        const auto stored = kb::project::ProjectSettingsStore::Load(
+            kb::project::ProjectSettingsStore::FilePath(context.ProjectFile().parent_path()));
+        report.Check(stored.Succeeded() && stored.found &&
+                stored.settings.lightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus,
+            "Forward+ lighting path persisted to the settings file");
     }
     report.Check(HitKindAt(context, click.deferredLightingPath) == ProjectSettingsHitKind::LightingPathOption, "Deferred lighting path point hit-tests as LightingPathOption");
     report.Check(controller.HandlePointerDown(kContent, click.deferredLightingPath.x, click.deferredLightingPath.y), "Clicking Deferred lighting path is handled");
     report.Check(context.ProjectConfiguration().lightingPath == kb::project::ProjectSceneLightingPath::Deferred, "Project lighting path changed to Deferred");
     {
-        const kb::project::ProjectDescriptorReadResult reloaded = kb::project::ProjectManager::LoadProject(context.ProjectFile());
-        report.Check(reloaded.succeeded && reloaded.descriptor.sceneLightingPath == kb::project::ProjectSceneLightingPath::Deferred, "Deferred lighting path persisted to descriptor");
-        report.Check(reloaded.succeeded && reloaded.descriptor.fileVersion >= 4U, "Descriptor written at file version >= 4");
+        const auto stored = kb::project::ProjectSettingsStore::Load(
+            kb::project::ProjectSettingsStore::FilePath(context.ProjectFile().parent_path()));
+        report.Check(stored.Succeeded() && stored.found &&
+                stored.settings.lightingPath == kb::project::ProjectSceneLightingPath::Deferred,
+            "Deferred lighting path persisted to the settings file");
     }
 }
 
@@ -354,10 +362,14 @@ void RunProjectPhysicsLayersRuntimeSuite(Report& report) {
         kb::scene::WritePhysicsLayersAsset(layersPath, layers),
         "LIB-129 write editor project physics layers asset");
 
-    kb::project::ProjectDescriptor descriptor = bootstrap.descriptor;
-    descriptor.physicsLayersAsset = kLayersVirtualPath;
+    kb::project::ProjectSettings settings = bootstrap.settings;
+    settings.physicsLayersAsset = kLayersVirtualPath;
+    std::string settingsWriteError;
     report.Check(
-        kb::project::ProjectManager::SaveProject(bootstrap.projectFile, descriptor),
+        kb::project::ProjectSettingsStore::Save(
+            kb::project::ProjectSettingsStore::FilePath(bootstrap.projectFile.parent_path()),
+            settings,
+            settingsWriteError),
         "LIB-129 persist editor project physics layers reference");
 
     EditorSceneContext context;

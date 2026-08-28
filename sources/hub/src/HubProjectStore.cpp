@@ -217,7 +217,7 @@ HubProjectItem HubProjectStore::BuildProjectItem(const std::filesystem::path& pr
                     kb::project::ProjectSettingsStore::FilePath(item.projectRoot));
             const kb::project::ProjectSettings resolved = settings.found && settings.Succeeded()
                 ? settings.settings
-                : kb::project::ProjectSettingsStore::FromDescriptor(loaded.descriptor);
+                : kb::project::ProjectSettingsStore::FromLegacy(loaded.legacySettings, projectFile);
             item.name = HubText::Utf8ToWide(resolved.name);
             item.description = HubText::Utf8ToWide(resolved.description);
             item.category = HubText::Utf8ToWide(resolved.category);
