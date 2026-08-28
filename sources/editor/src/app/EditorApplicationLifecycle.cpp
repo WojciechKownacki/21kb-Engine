@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "app/EditorApplicationWindowProc.hpp"
 #include "app/EditorWorkspaceSession.hpp"
+#include "docking/EditorFloatingWindowSync.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "platform/win32/EditorMainWindow.hpp"
 #include "platform/win32/EditorWindowClassRegistry.hpp"
@@ -130,16 +131,11 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
     state.floatingWindows.Lifecycle().Configure(state.instance, state.window, state.metrics);
     state.dockController.Configure(state.window, state.dockModel, state.floatingWindows, state.metrics);
     EditorWorkspaceSession::Restore(state.dockModel, state.sceneContext);
-    // A panel the session left torn off needs its window back, or it would be neither
-    // in the dock tree nor on screen. The particle editor brings its own, below.
-    for (const DockPanel& panel : state.dockModel.Queries().Panels()) {
-        if (panel.id == 14U || panel.area != DockArea::Floating || !panel.visible) {
-            continue;
-        }
-        static_cast<void>(state.floatingWindows.Commands().Create(
-            panel.id, panel.title, panel.floatingRect));
-    }
     RestoreParticleEditorHostSession(state);
+    // A panel the session left torn off needs its window back, or it would be neither
+    // in the dock tree nor on screen. The particle editor has already made its own by
+    // now, and creating a window a panel already has is a no-op.
+    EditorFloatingWindowSync::Reconcile(state.dockModel, state.floatingWindows);
 
     ShowWindow(state.window, SW_SHOWMAXIMIZED);
     UpdateWindow(state.window);

@@ -20,6 +20,8 @@ HeroIconGlyph HeroIconCatalog::Glyph(HeroIconKind icon) noexcept {
         return HeroIconAssets::TransportStop();
     case HeroIconKind::XMark:
         return HeroIconAssets::XMark();
+    case HeroIconKind::Check:
+        return HeroIconAssets::Check();
     case HeroIconKind::Cube:
         return HeroIconAssets::Cube();
     case HeroIconKind::Folder:

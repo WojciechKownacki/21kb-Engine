@@ -18,7 +18,10 @@
 #include "scene/AnimationClipEditorDocumentState.hpp"
 #include "scene/AnimatorEditorGraphDocumentState.hpp"
 #include "scene/EditorAutosaveState.hpp"
+#include "docking/EditorWorkspaceArrangement.hpp"
 #include "settings/EditorConfigurationStore.hpp"
+#include "settings/EditorLayoutLibrary.hpp"
+#include "settings/EditorLayoutMenuModel.hpp"
 #include "windowing/FloatingWindowControlHitTester.hpp"
 #include "windowing/FloatingWindowControlLayout.hpp"
 
@@ -731,6 +734,109 @@ void RunWorkspaceLayoutPersistenceTest() {
     std::filesystem::remove_all(root, error);
 }
 
+void RunSavedLayoutLibraryTest() {
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() / "21kb_saved_layout_library";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+
+    kb::editor::tests::Require(
+        kb::editor::EditorLayoutLibrary::List(root).empty(),
+        "a project with no layouts folder should offer no layouts");
+
+    kb::editor::EditorDockModel model;
+    std::uint32_t floatedPanel = 0U;
+    for (const kb::editor::DockPanel& panel : model.Queries().Panels()) {
+        if (panel.visible && panel.detachable && panel.id != 14U) {
+            floatedPanel = panel.id;
+            break;
+        }
+    }
+    kb::editor::tests::Require(floatedPanel != 0U, "the default workspace should offer a detachable panel");
+    model.Commands().UndockPanel(floatedPanel, kb::editor::DockRect{ 240, 200, 880, 620 });
+    const kb::editor::EditorLayoutPreset captured = kb::editor::EditorWorkspaceArrangement::Capture(model);
+    kb::editor::tests::Require(!captured.tree.empty() && !captured.panels.empty(),
+        "capturing the workspace should yield both a dock tree and the panel placements");
+
+    std::string saveError;
+    kb::editor::tests::Require(
+        kb::editor::EditorLayoutLibrary::Save(root, "Animation Pass", captured, saveError),
+        "a layout with a plain name should be saved");
+    kb::editor::tests::Require(
+        !kb::editor::EditorLayoutLibrary::Save(root, "../Escape", captured, saveError) &&
+            !kb::editor::EditorLayoutLibrary::Save(root, "", captured, saveError) &&
+            !kb::editor::EditorLayoutLibrary::Save(root, " Padded ", captured, saveError),
+        "a layout name that could reach outside the layouts folder should be refused");
+    kb::editor::tests::Require(
+        !kb::editor::EditorLayoutLibrary::Save(root, "Empty", kb::editor::EditorLayoutPreset{}, saveError),
+        "a workspace with no arrangement should not be saved as a layout");
+
+    const std::vector<std::string> listed = kb::editor::EditorLayoutLibrary::List(root);
+    kb::editor::tests::Require(listed.size() == 1U && listed.front() == "Animation Pass",
+        "a saved layout should be the one and only entry the library lists");
+
+    const std::optional<kb::editor::EditorLayoutPreset> loaded =
+        kb::editor::EditorLayoutLibrary::Load(root, "Animation Pass");
+    kb::editor::tests::Require(loaded.has_value() && loaded->tree == captured.tree,
+        "a saved layout should come back with the arrangement it was saved from");
+    kb::editor::tests::Require(!kb::editor::EditorLayoutLibrary::Load(root, "Missing").has_value(),
+        "a layout that was never saved should not load");
+
+    kb::editor::EditorDockModel reopened;
+    kb::editor::tests::Require(kb::editor::EditorWorkspaceArrangement::Apply(reopened, *loaded),
+        "a layout saved by this build should apply to a fresh workspace");
+    kb::editor::tests::Require(
+        reopened.Commands().SerializeWorkspace() == captured.tree,
+        "applying a saved layout should reproduce its arrangement exactly");
+    const kb::editor::DockPanel* floated = reopened.Queries().FindPanel(floatedPanel);
+    kb::editor::tests::Require(
+        floated != nullptr && floated->visible && floated->area == kb::editor::DockArea::Floating &&
+            floated->floatingRect.width == 880,
+        "applying a saved layout should tear off the panels the layout had torn off");
+
+    kb::editor::tests::Require(kb::editor::EditorLayoutLibrary::Delete(root, "Animation Pass"),
+        "a saved layout should be deletable");
+    kb::editor::tests::Require(
+        kb::editor::EditorLayoutLibrary::List(root).empty() &&
+            !kb::editor::EditorLayoutLibrary::Delete(root, "Animation Pass"),
+        "deleting a layout twice should report the second attempt as nothing to delete");
+    std::filesystem::remove_all(root, error);
+}
+
+void RunLayoutMenuModelTest() {
+    kb::editor::EditorLayoutMenuModel model;
+    model.Rebuild({ "Animation", "Lighting" }, "Lighting");
+    const std::vector<kb::editor::EditorLayoutMenuRow>& rows = model.Rows();
+    kb::editor::tests::Require(rows.size() == 5U,
+        "the Layout menu should offer the default arrangement, every saved layout, and the two commands");
+    kb::editor::tests::Require(
+        rows[0].label == "Default" && rows[0].action == kb::editor::EditorLayoutMenuAction::Default &&
+            !rows[0].active,
+        "the default arrangement should lead the menu and lose its mark once a layout is in use");
+    kb::editor::tests::Require(
+        rows[1].label == "Animation" && rows[1].layoutName == "Animation" && !rows[1].active &&
+            rows[2].label == "Lighting" && rows[2].active,
+        "the layout in use should be the one marked in the menu");
+    kb::editor::tests::Require(
+        rows[3].action == kb::editor::EditorLayoutMenuAction::Save &&
+            rows[4].action == kb::editor::EditorLayoutMenuAction::Delete,
+        "saving and deleting should close the menu");
+
+    model.Rebuild({}, {});
+    kb::editor::tests::Require(model.Rows().size() == 3U && model.Rows().front().active,
+        "with no saved layouts the menu should be the default arrangement and the two commands");
+
+    model.RebuildForDelete({ "Animation", "Lighting" });
+    kb::editor::tests::Require(
+        model.Rows().size() == 3U && !model.Rows().front().enabled &&
+            model.Rows()[1].action == kb::editor::EditorLayoutMenuAction::Remove &&
+            model.Rows()[1].layoutName == "Animation",
+        "the delete list should be a caption over the layouts it can remove");
+    kb::editor::tests::Require(model.Row(-1) == nullptr && model.Row(9) == nullptr,
+        "a row outside the menu should resolve to nothing");
+}
+
 void RunParticleEditorWorkspaceAndSessionPersistenceTest() {
     kb::editor::EditorDockModel model;
     const kb::editor::DockPanel* panel = RequirePanel(model, 14U);
@@ -1206,6 +1312,8 @@ void RunEditorDockingTests() {
     RunAnimatorEditorWorkspaceActivationTest();
     RunParticleEditorWorkspaceAndSessionPersistenceTest();
     RunWorkspaceLayoutPersistenceTest();
+    RunSavedLayoutLibraryTest();
+    RunLayoutMenuModelTest();
     RunAnimatorEditorDefaultLayoutTest();
     RunAnimatorEditorGraphDocumentStateTest();
     RunSkeletalMeshEditorDefaultLayoutTest();

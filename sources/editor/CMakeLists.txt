@@ -164,6 +164,8 @@ add_executable(kb_editor WIN32
     src/docking/DockLayoutBuilder.cpp
     src/docking/DockLeafLayoutBuilder.cpp
     src/docking/DockLayoutSerializer.cpp
+    src/docking/EditorFloatingWindowSync.cpp
+    src/docking/EditorWorkspaceArrangement.cpp
     src/docking/DockLeafPanelOrder.cpp
     src/docking/DockModelQueries.cpp
     src/docking/DockMainLayoutResolver.cpp
@@ -224,6 +226,8 @@ add_executable(kb_editor WIN32
     src/private/docking/DockModelQueries.hpp
     src/private/docking/DockMainLayoutResolver.hpp
     src/private/docking/DockLayoutSerializer.hpp
+    src/private/docking/EditorFloatingWindowSync.hpp
+    src/private/docking/EditorWorkspaceArrangement.hpp
     src/private/docking/DockNode.hpp
     src/private/docking/DockNodeFactory.hpp
     src/private/docking/DockNodeFinder.hpp
@@ -440,6 +444,9 @@ add_executable(kb_editor WIN32
     src/private/project/EditorProjectBootstrap.hpp
     src/private/project/EditorProjectPanelHitTester.hpp
     src/private/settings/EditorConfigurationStore.hpp
+    src/private/settings/EditorLayoutLibrary.hpp
+    src/private/settings/EditorLayoutMenuModel.hpp
+    src/private/settings/EditorPanelSessionText.hpp
     src/private/project/EditorProjectPaths.hpp
     src/private/rendering/DockDropPreviewRenderer.hpp
     src/private/rendering/DockDropPreviewOverlayWindow.hpp
@@ -636,6 +643,7 @@ add_executable(kb_editor WIN32
     src/private/scene/audio/EditorAudioMixerAuthoring.hpp
     src/private/scene/audio/EditorSceneAudioSettingsService.hpp
     src/private/scene/EditorSceneDocumentIdentity.hpp
+    src/private/windowing/EditorFloatingWindowFrame.hpp
     src/private/windowing/FloatingWindowControlActions.hpp
     src/private/windowing/FloatingWindowControlHitTester.hpp
     src/private/windowing/FloatingWindowControlInteractor.hpp
@@ -842,6 +850,9 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneSelectionPivot.cpp
     src/scene/EditorSceneViewportStateStore.cpp
     src/settings/EditorConfigurationStore.cpp
+    src/settings/EditorLayoutLibrary.cpp
+    src/settings/EditorLayoutMenuModel.cpp
+    src/settings/EditorPanelSessionText.cpp
     src/scene/EditorViewportCameraState.cpp
     src/scene/EditorViewportPreviewState.cpp
     src/scene/material/EditorMaterialAssetAuthoring.cpp
@@ -872,6 +883,7 @@ add_executable(kb_editor WIN32
     src/scene/audio/EditorAudioMixerAssetGateway.cpp
     src/scene/audio/EditorAudioMixerAuthoring.cpp
     src/scene/audio/EditorSceneAudioSettingsService.cpp
+    src/windowing/EditorFloatingWindowFrame.cpp
     src/windowing/FloatingWindowControlActions.cpp
     src/windowing/FloatingWindowFactory.cpp
     src/windowing/FloatingWindowHitTestResolver.cpp
@@ -1163,6 +1175,10 @@ if(BUILD_TESTING)
         src/docking/EditorDockModelCommands.cpp
         src/docking/EditorDockModelQueries.cpp
             src/settings/EditorConfigurationStore.cpp
+            src/docking/EditorWorkspaceArrangement.cpp
+            src/settings/EditorLayoutLibrary.cpp
+            src/settings/EditorLayoutMenuModel.cpp
+            src/settings/EditorPanelSessionText.cpp
         src/rendering/SvgPathArcMath.cpp
         src/rendering/SvgPathCursor.cpp
         src/assets/EditorAssetBrowserAssetRows.cpp
