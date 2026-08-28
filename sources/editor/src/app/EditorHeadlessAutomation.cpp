@@ -1152,7 +1152,7 @@ EditorHeadlessAutomation::VerifyWorkspaceLayoutPersistence() {
     const EditorMetrics metrics{};
     const DockLayout layout = arranged.Queries().BuildLayout(
         1600, 960, metrics.menuHeight, metrics.toolbarHeight, metrics.tabStripHeight,
-        metrics.tabMinWidth, metrics.tabWidth, metrics.splitterSize, metrics.panelPadding);
+        metrics.tabMinWidth, metrics.tabWidth, metrics.splitterSize);
     if (layout.splitters.empty()) {
         Trace("assert_workspace_layout_persistence", false, "no-splitters");
         return result;

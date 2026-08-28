@@ -40,7 +40,6 @@ struct EditorMetrics {
     int tabMinWidth = 92;
     int tabWidth = 156;
     int splitterSize = 6;
-    int panelPadding = 18;
 };
 
 [[nodiscard]] constexpr EditorColor Color(float r, float g, float b) {

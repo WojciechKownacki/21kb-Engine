@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "rendering/DockPanelChromeRenderer.hpp"
 #include "rendering/EditorSurfacePainter.hpp"
+#include "rendering/FloatingPanelGeometry.hpp"
 #include "rendering/FloatingWindowControlRenderer.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/PanelContentRenderer.hpp"
@@ -25,9 +26,7 @@ void FloatingEditorWindowRenderer::Paint(HDC dc, HWND window, const RECT& client
     FloatingWindowControlRenderer{}.Paint(dc, client, theme, metrics);
 
     const ScopedGdiObject selectedBodyFont(dc, bodyFont.handle);
-    const bool viewportPanel = panel.kind == DockPanelKind::Scene;
-    RECT content = viewportPanel ? panelRect : GdiDrawing::Inset(panelRect, metrics.panelPadding);
-    content.top += metrics.tabStripHeight;
+    const RECT content = FloatingPanelGeometry::Content(client, metrics.tabStripHeight);
     PanelContentRenderer{}.Paint(dc, content, panelRect, content, client, panel, theme, metrics, sceneContext, renderBackendSettings, true, sceneViewport, window);
 }
 
