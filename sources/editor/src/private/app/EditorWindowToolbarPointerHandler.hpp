@@ -3,6 +3,7 @@
 #include "app/EditorPlayModeState.hpp"
 #include "app/EditorShellInteractionState.hpp"
 #include "docking/EditorDockModel.hpp"
+#include "docking/EditorFloatingWindowManager.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
@@ -27,6 +28,7 @@ public:
         int x,
         int y,
         EditorDockModel& dockModel,
+        EditorFloatingWindowManager& floatingWindows,
         EditorSceneContext& sceneContext,
         EditorSceneBgfxViewport& sceneViewport,
         EditorRenderBackendSettings& renderBackendSettings,

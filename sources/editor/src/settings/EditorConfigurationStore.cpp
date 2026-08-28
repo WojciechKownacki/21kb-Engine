@@ -13,6 +13,7 @@ namespace {
 
 constexpr std::string_view kSaving = "Editor.Saving";
 constexpr std::string_view kPanels = "Editor.Panels";
+constexpr std::string_view kLayout = "Editor.Layout";
 
 constexpr std::array<std::string_view, 5U> kAreaNames{
     "Left", "Center", "Right", "Bottom", "Floating",
@@ -160,6 +161,9 @@ EditorConfigurationLoadResult EditorConfigurationStore::Load(
         }
         result.configuration.panels.push_back(std::move(session));
     }
+    if (const std::optional<std::string_view> layout = document.GetString(kLayout, "Tree")) {
+        result.configuration.layout = std::string{*layout};
+    }
 
     return result;
 }
@@ -203,6 +207,7 @@ bool EditorConfigurationStore::Save(
         }
         document.SetString(kPanels, "Panel." + std::to_string(session.panelId), value.str());
     }
+    document.SetString(kLayout, "Tree", configuration.layout);
     return document.Save(path, error);
 }
 

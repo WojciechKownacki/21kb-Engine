@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace kb::editor {
 
@@ -16,6 +17,12 @@ public:
 
     // Puts the workspace back to the arrangement a new project starts with.
     void ResetWorkspace();
+    // Rebuilds the dock tree from a previously serialized workspace. Refuses a text
+    // that does not account for exactly the panels this build has, leaving the
+    // current arrangement untouched.
+    [[nodiscard]] bool RestoreWorkspace(std::string_view tree);
+    // The current dock tree as text, for storing alongside the project.
+    [[nodiscard]] std::string SerializeWorkspace() const;
     void ActivatePanel(std::uint32_t panelId);
     [[nodiscard]] bool ClosePanel(std::uint32_t panelId);
     void ResizeSplitter(std::uint32_t nodeId, int mouseX, int mouseY, const DockLayout& layout);
