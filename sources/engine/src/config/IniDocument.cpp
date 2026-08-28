@@ -172,6 +172,12 @@ std::optional<std::string_view> IniDocument::GetString(std::string_view section,
     return std::string_view{valueEntry->second};
 }
 
+const std::map<std::string, std::string, std::less<>>& IniDocument::SectionEntries(std::string_view section) const {
+    static const std::map<std::string, std::string, std::less<>> empty;
+    const auto entry = sections_.find(section);
+    return entry == sections_.end() ? empty : entry->second;
+}
+
 std::optional<std::int64_t> IniDocument::GetInt(std::string_view section, std::string_view key) const {
     const std::optional<std::string_view> text = GetString(section, key);
     if (!text.has_value() || text->empty()) {

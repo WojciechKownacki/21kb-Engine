@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace kb::editor {
 
@@ -16,6 +17,7 @@ struct EditorSavingPreferences {
 };
 
 struct EditorPanelSession {
+    std::uint32_t panelId = 0U;
     bool visible = true;
     DockArea area = DockArea::Center;
     DockRect floatingRect{148, 140, 900, 640};
@@ -29,7 +31,12 @@ struct EditorPanelSession {
 // ProjectSettings.ini and are read by the game, not just by the editor.
 struct EditorConfiguration {
     EditorSavingPreferences saving{};
-    EditorPanelSession particleEditor{};
+    // Where each panel was and whether it was open, so reopening a project puts the
+    // workspace back the way it was left. Panels absent from the list keep the
+    // default workspace's arrangement.
+    std::vector<EditorPanelSession> panels;
+
+    [[nodiscard]] const EditorPanelSession* FindPanel(std::uint32_t panelId) const noexcept;
 };
 
 struct EditorConfigurationLoadResult {
