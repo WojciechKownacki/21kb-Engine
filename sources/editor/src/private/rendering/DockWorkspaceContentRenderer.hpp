@@ -17,7 +17,10 @@ namespace kb::editor {
 class DockWorkspaceContentRenderer {
 public:
 #if defined(_WIN32)
-    void Paint(HWND parent, HDC dc, const DockLayout& layout, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings, EditorSceneBgfxViewport* sceneViewport) const;
+    // dirty is the region the paint may actually change. A panel outside it is skipped
+    // whole: the retained back buffer still holds its pixels, and its content renderer is
+    // the expensive half - it rebuilds rows, thumbnails and models before drawing.
+    void Paint(HWND parent, HDC dc, const RECT& dirty, const DockLayout& layout, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings, EditorSceneBgfxViewport* sceneViewport) const;
 #endif
 };
 

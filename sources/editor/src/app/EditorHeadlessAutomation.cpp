@@ -1715,8 +1715,10 @@ bool EditorHeadlessAutomation::CapturePanelScreenshotMatrix(
                     if (!floating) {
                         EditorPlayModeState playMode;
                         EditorShellInteractionState shellInteraction;
+                        const RECT fullSurface{
+                            0, 0, profile.dimensions.logicalWidth, profile.dimensions.logicalHeight };
                         DockWorkspaceRenderer{}.Paint(
-                            impl_->window, memory,
+                            impl_->window, memory, fullSurface,
                             profile.dimensions.logicalWidth,
                             profile.dimensions.logicalHeight, dockModel,
                             theme, metrics, context_, settings, nullptr,
