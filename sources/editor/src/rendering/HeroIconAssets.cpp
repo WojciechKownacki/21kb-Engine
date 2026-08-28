@@ -32,6 +32,9 @@ static constexpr std::array<HeroIconPath, 1> kTransportStop{
 static constexpr std::array<HeroIconPath, 1> kXMark{
     HeroIconPath{ "M6 18 18 6M6 6l12 12", false },
 };
+static constexpr std::array<HeroIconPath, 1> kCheck{
+    HeroIconPath{ "M4.5 12.75l6 6 9-13.5", false },
+};
 static constexpr std::array<HeroIconPath, 3> kCube{
     HeroIconPath{ "M12.3779 1.60217C12.1444 1.46594 11.8556 1.46594 11.6221 1.60217L3 6.63172L12 11.8817L21 6.63172L12.3779 1.60217Z", true },
     HeroIconPath{ "M21.75 7.93078L12.75 13.1808V22.1808L21.3779 17.1478C21.6083 17.0134 21.75 16.7668 21.75 16.5V7.93078Z", true },
@@ -143,6 +146,10 @@ HeroIconGlyph HeroIconAssets::TransportStop() noexcept {
 
 HeroIconGlyph HeroIconAssets::XMark() noexcept {
     return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kXMark } };
+}
+
+HeroIconGlyph HeroIconAssets::Check() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kCheck } };
 }
 
 HeroIconGlyph HeroIconAssets::Cube() noexcept {

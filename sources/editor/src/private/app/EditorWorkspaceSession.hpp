@@ -1,23 +1,26 @@
 #pragma once
 
+#include <string>
+
 namespace kb::editor {
 
 class EditorDockModel;
 class EditorSceneContext;
 
-// Reopening a project puts the workspace back the way it was left. The dock tree
-// stored in the editor settings file places every docked panel; the per-panel
-// sessions beside it settle what the tree cannot hold - which panels stayed closed,
-// and which ones were torn off into their own window.
-//
-// The particle editor panel is excluded from both directions: it carries an open
-// document and its own floating window, so its host restores it separately.
+// The editor settings file's half of the workspace: the arrangement a project was
+// last left in, and the name of the saved layout it came from. The arrangement
+// itself is moved in and out of the dock model by EditorWorkspaceArrangement.
 class EditorWorkspaceSession {
 public:
     EditorWorkspaceSession() = delete;
 
     static void Restore(EditorDockModel& dockModel, EditorSceneContext& context);
+    // Records the arrangement, open documents included, keeping the name of the
+    // layout it came from.
     static void Save(EditorDockModel& dockModel, EditorSceneContext& context);
+    // The same, but the arrangement is now that of the named layout. An empty name
+    // means the workspace is on an arrangement no saved layout owns.
+    static void SaveAs(EditorDockModel& dockModel, EditorSceneContext& context, std::string layoutName);
 };
 
 } // namespace kb::editor
