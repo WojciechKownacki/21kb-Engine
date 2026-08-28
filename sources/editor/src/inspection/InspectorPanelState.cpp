@@ -378,7 +378,12 @@ bool InspectorPanelState::FloatDragMoved() const noexcept {
     return floatDragMoved_;
 }
 
-void InspectorPanelState::BeginFloatDrag(InspectorPropertyId property, float startValue, int x, int y) noexcept {
+InspectorRowBounds InspectorPanelState::DraggedRowBounds() const noexcept {
+    return draggedRowBounds_;
+}
+
+void InspectorPanelState::BeginFloatDrag(InspectorPropertyId property, float startValue, int x, int y, InspectorRowBounds row) noexcept {
+    draggedRowBounds_ = row;
     draggedProperty_ = property;
     dragStartValue_ = startValue;
     dragStartX_ = x;
