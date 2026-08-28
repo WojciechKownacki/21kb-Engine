@@ -21,12 +21,18 @@ void SceneViewportToolbarInfoRenderer::PaintFpsCounter(HDC dc, RECT rect, const 
     SceneViewportToolbarDrawing::FillRound(dc, rect, fill, border, SceneViewportToolbarMetrics::ButtonRadius);
 
     std::array<char, 16> text{};
-    const std::string_view label = SceneViewportToolbarLabelFormat::Fps(std::span<char>{ text }, SceneViewportToolbarState::CurrentPresentedFps());
+    const SceneViewportToolbarState::FrameRateReading reading = SceneViewportToolbarState::CurrentReading();
+    const std::string_view label = SceneViewportToolbarLabelFormat::Fps(
+        std::span<char>{ text }, reading.fps, reading.live);
 
     ScopedFont font(11, FW_SEMIBOLD);
     const ScopedGdiObject selectedFont(dc, font.handle);
     const int previousBkMode = SetBkMode(dc, TRANSPARENT);
-    const COLORREF previousTextColor = SetTextColor(dc, GdiDrawing::ToColorRef(theme.textSecondary));
+    // A held reading is dimmed as well as relabelled: the chip should not look like it is
+    // still counting when it is not.
+    const COLORREF previousTextColor = SetTextColor(
+        dc,
+        GdiDrawing::ToColorRef(reading.live ? theme.textSecondary : theme.textDisabled));
     DrawTextA(dc, label.data(), static_cast<int>(label.size()), &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     SetTextColor(dc, previousTextColor);
     SetBkMode(dc, previousBkMode);
