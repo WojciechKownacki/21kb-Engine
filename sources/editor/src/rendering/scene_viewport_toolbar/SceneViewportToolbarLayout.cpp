@@ -74,8 +74,6 @@ SceneViewportToolbarRects SceneViewportToolbarLayout::Resolve(
 
     int cursor = rects.toolbar.left + SceneViewportToolbarMetrics::PaddingX;
     rects.fpsCounter = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::FpsCounterWidth);
-    rects.renderStats = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::RenderStatsWidth);
-    rects.ecsStats = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::EcsStatsWidth);
     AddGroupGap(cursor);
     rects.renderProfileButton = ButtonRect(rects.row, cursor, SceneViewportToolbarMetrics::ProfileButtonWidth);
     AddGroupGap(cursor);

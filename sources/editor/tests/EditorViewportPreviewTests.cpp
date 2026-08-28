@@ -1483,17 +1483,6 @@ void RunToolbarHudLabelFormatTest() {
     std::array<char, 16> fpsBuffer{};
     kb::editor::tests::Require(SceneViewportToolbarLabelFormat::Fps(std::span<char>{ fpsBuffer }, 144) == "FPS 144", "FPS label must format a positive frame rate as \"FPS 144\"");
     kb::editor::tests::Require(SceneViewportToolbarLabelFormat::Fps(std::span<char>{ fpsBuffer }, 0) == "FPS --", "FPS label must fall back to \"FPS --\" for a non-positive frame rate");
-
-    std::array<char, 16> dcBuffer{};
-    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::DrawCalls(std::span<char>{ dcBuffer }, 1234U) == "DC 1234", "Draw-call label must format as \"DC 1234\"");
-    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::DrawCalls(std::span<char>{ dcBuffer }, 0U) == "DC 0", "Draw-call label must format zero as \"DC 0\"");
-
-    std::array<char, 16> meshBuffer{};
-    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::Meshes(std::span<char>{ meshBuffer }, 57U) == "M 57", "Mesh label must format as \"M 57\"");
-
-    std::array<char, 32> ecsBuffer{};
-    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::EcsMilliseconds(std::span<char>{ ecsBuffer }, true, 3.14159) == "ECS 3.14 ms", "ECS label must format a valid frame time to two decimals as \"ECS 3.14 ms\"");
-    kb::editor::tests::Require(SceneViewportToolbarLabelFormat::EcsMilliseconds(std::span<char>{ ecsBuffer }, false, 0.0) == "ECS --", "ECS label must fall back to \"ECS --\" when no ECS frame is present");
 }
 
 // Guards the LockBits fast path in EditorTexturePreviewService::DecodeGdiplus, which replaced a

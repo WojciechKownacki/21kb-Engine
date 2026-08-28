@@ -152,6 +152,7 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions()
     if (viewport_.pendingSubmissions_.empty()) {
         return true;
     }
+    const auto frameStart = std::chrono::steady_clock::now();
     if (viewport_.backendSettings_ != nullptr) {
         render::ScenePostProcessSettings settings = viewport_.renderer_.DefaultPostProcessSettings();
         {
@@ -308,19 +309,8 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions()
                 << " autoExposure=" << BoolText(postProcessSettings.outputTransform.autoExposure.enabled);
         viewport_.ReportAaRouteTrace(message.str());
     }
-    SceneViewportToolbarRenderer::RecordRenderStats(SceneViewportToolbarRenderStats{
-        .submittedDrawCalls = stats.submittedDrawCallCount,
-        .submittedMeshes = stats.submittedMeshCount,
-        .gpuDispatches = stats.gpuCullingDispatchCount,
-        .msaaSamples = viewport_.rendererMsaaSamples_,
-        .gpuDrivenActive = stats.gpuDrivenFeatureState != render::SceneGpuDrivenFeatureState::Disabled &&
-            stats.gpuDrivenFeatureState != render::SceneGpuDrivenFeatureState::CpuValidationOnly,
-        .postProcessActive = postProcessActive,
-        .temporalAntiAliasingActive = postProcessActive && postProcessSettings.temporalAntiAliasingEnabled,
-        .bloomActive = postProcessActive && postProcessSettings.bloomEnabled && postProcessSettings.bloomStrength > 0.0F,
-        .finalCompositeActive = finalCompositeActive,
-    });
-    SceneViewportToolbarRenderer::RecordPresentedFrame();
+    SceneViewportToolbarRenderer::RecordFrameMilliseconds(
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frameStart).count());
     return true;
 }
 

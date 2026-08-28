@@ -145,12 +145,6 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         return;
     }
 
-    const std::optional<RECT> sceneContent = EditorPanelContentResolver::Resolve(DockPanelKind::Scene, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
-    if (SceneViewportToolbarRenderer::UpdateInfoHover(sceneContent.value_or(RECT{}), x, y) &&
-        sceneContent.has_value()) {
-        EditorWindowInvalidator::InvalidatePanel(messageWindow, *sceneContent);
-    }
-
     EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
     if (sceneCamera.HandlePointerMove(messageWindow, x, y)) {
         return;
