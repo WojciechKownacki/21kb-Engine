@@ -359,6 +359,7 @@ void TestModuleStackCommandsCapabilitiesAndAuthoredOrder() {
     Require(curveRow != sizeInspector.properties.end() && curveRow->editable && curveRow->value == "0,1,0",
         "SizeOverLife curve property row was not editable or did not encode the default curve");
     const auto rateInspector = ParticleEmitterInspectorModel::Build(allTypesDocument.Asset(), 11U, 0U, nullptr, nullptr);
+
     const auto rateRow = std::find_if(rateInspector.properties.begin(), rateInspector.properties.end(),
         [](const auto& row) { return row.label == "Rate curve"; });
     Require(rateRow != rateInspector.properties.end() && rateRow->editable && rateRow->value == "0,60,0",
@@ -873,7 +874,9 @@ void TestIsolatedRuntimePreviewAndGpuRelease() {
     workingCopy.emitters.front().spawn.speedMax = 8.0F;
     workingCopy.emitters.front().spawn.startColor = {1.0F, 0.25F, 0.05F, 1.0F};
     workingCopy.emitters.front().spawn.startSize = 0.35F;
-    Require(preview.PublishWorkingCopy(workingCopy).Succeeded(),
+    // The working copy switches to a burst, which a running simulation cannot show on
+    // its own, so this publication is one of the few that asks for a restart.
+    Require(preview.PublishWorkingCopy(workingCopy, true).Succeeded(),
         "unsaved working copy was not published through AssetManager");
     for (int frame = 0; frame < 4; ++frame) {
         Require(preview.Tick(1.0F / 60.0F).Succeeded(),
@@ -893,6 +896,21 @@ void TestIsolatedRuntimePreviewAndGpuRelease() {
         "preview did not apply the published start color, size, and speed to live particles");
     Require(!std::filesystem::exists(TestRoot() / "UnsavedPreview.kbvfx"),
         "publishing an unsaved preview working copy touched disk");
+
+    // Everything else must keep the preview running. An author dragging a colour must
+    // not watch the effect blink out and start over on every value it passes through.
+    const float ageBeforeTint = tintedStates.front().age;
+    auto recoloured = workingCopy;
+    recoloured.emitters.front().spawn.startColor = {0.1F, 0.9F, 0.2F, 1.0F};
+    Require(preview.PublishWorkingCopy(recoloured, false).Succeeded(),
+        "a colour-only working copy was not published");
+    Require(preview.Tick(1.0F / 60.0F).Succeeded(), "preview did not tick after a colour-only publication");
+    const auto survivors =
+        kb::particles::ParticlePlayback::LiveParticleStates(preview.PreviewScene(), instances.front());
+    Require(survivors.size() == tintedStates.size(),
+        "a colour-only publication wiped the live particles instead of keeping them");
+    Require(survivors.front().age > ageBeforeTint,
+        "a colour-only publication restarted the simulation instead of letting it run on");
 
     auto retargeted = effect;
     retargeted.displayName = "Retargeted Preview";
