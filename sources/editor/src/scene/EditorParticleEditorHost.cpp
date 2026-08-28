@@ -386,7 +386,7 @@ kb::particle_editor::ParticleBakeResult EditorSceneContext::BakeParticleEditorAs
 bool EditorSceneContext::RevertParticleEditorAsset() {
     if (!HasParticleEditorAsset() || !particleEditorDocument_.Revert()) return false;
     particleEditorWorkspace_.Synchronize(particleEditorDocument_.Asset());
-    const auto published = particlePreviewSession_->PublishWorkingCopy(particleEditorDocument_.Asset());
+    const auto published = particlePreviewSession_->PublishWorkingCopy(particleEditorDocument_.Asset(), true);
     if (!published.Succeeded()) {
         console_.Error("Particles", published.message);
         return false;
@@ -403,7 +403,7 @@ bool EditorSceneContext::ApplyParticleEditorWorkingCopy(kb::scene::ParticleEffec
     }
     if (applied.status == kb::particle_editor::ParticleEditorStatus::NoChange) return true;
     particleEditorWorkspace_.Synchronize(particleEditorDocument_.Asset());
-    const auto published = particlePreviewSession_->PublishWorkingCopy(particleEditorDocument_.Asset());
+    const auto published = particlePreviewSession_->PublishWorkingCopy(particleEditorDocument_.Asset(), false);
     if (!published.Succeeded()) {
         static_cast<void>(particleEditorDocument_.Undo());
         console_.Error("Particles", published.message);
@@ -458,14 +458,15 @@ bool EditorSceneContext::SelectParticleEditorEmitter(kb::scene::ParticleStableId
     return asset != nullptr && particleEditorWorkspace_.Select(*asset, emitterId);
 }
 
-bool EditorSceneContext::FinalizeParticleEditorCommand(kb::particle_editor::ParticleEditorResult result) {
+bool EditorSceneContext::FinalizeParticleEditorCommand(kb::particle_editor::ParticleEditorResult result,
+                                                       bool restartPreview) {
     if (!result.Succeeded()) {
         LogParticleResult(console_, result);
         return false;
     }
     if (result.status == kb::particle_editor::ParticleEditorStatus::NoChange)
         return true;
-    const auto published = particlePreviewSession_->PublishWorkingCopy(particleEditorDocument_.Asset());
+    const auto published = particlePreviewSession_->PublishWorkingCopy(particleEditorDocument_.Asset(), restartPreview);
     if (!published.Succeeded()) {
         static_cast<void>(particleEditorDocument_.Undo());
         particleEditorWorkspace_.Synchronize(particleEditorDocument_.Asset());
@@ -648,10 +649,40 @@ bool EditorSceneContext::SetParticleEditorOutputReference(kb::assets::AssetKind 
         particleEditorDocument_, particleEditorWorkspace_, emitter->emitterId, std::move(output)));
 }
 
+// A running simulation surfaces almost every spawn value by itself: the next particle
+// carries the new lifetime, speed, colour or size. Three cannot be surfaced, because
+// they only ever act at the start of a run - the spawn mode, a burst whose moment has
+// passed, and prewarm. Those alone are worth wiping the preview for.
+bool EditorSceneContext::SpawnEditRequiresPreviewRestart(const kb::scene::ParticleSpawnAsset& spawn) const {
+    const kb::scene::ParticleEffectAsset* asset = ParticleEditorWorkingAsset();
+    const auto* emitter = asset == nullptr ? nullptr
+        : kb::particle_editor::ParticleEmitterListModel::Find(*asset, particleEditorWorkspace_.SelectedEmitterId());
+    if (emitter == nullptr) {
+        return false;
+    }
+    const kb::scene::ParticleSpawnAsset& previous = emitter->spawn;
+    if (previous.mode != spawn.mode || previous.prewarmSeconds != spawn.prewarmSeconds ||
+        previous.bursts.size() != spawn.bursts.size()) {
+        return true;
+    }
+    for (std::size_t index = 0U; index < previous.bursts.size(); ++index) {
+        if (previous.bursts[index].timeSeconds != spawn.bursts[index].timeSeconds ||
+            previous.bursts[index].count != spawn.bursts[index].count) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool EditorSceneContext::SetParticleEditorSpawn(kb::scene::ParticleSpawnAsset spawn, bool coalesceLatest) {
-    return HasParticleEditorAsset() && FinalizeParticleEditorCommand(
+    if (!HasParticleEditorAsset()) {
+        return false;
+    }
+    const bool restartPreview = SpawnEditRequiresPreviewRestart(spawn);
+    return FinalizeParticleEditorCommand(
         kb::particle_editor::ParticleEditorCommands::SetEmitterSpawn(particleEditorDocument_,
-            particleEditorWorkspace_, particleEditorWorkspace_.SelectedEmitterId(), std::move(spawn), coalesceLatest));
+            particleEditorWorkspace_, particleEditorWorkspace_.SelectedEmitterId(), std::move(spawn), coalesceLatest),
+        restartPreview);
 }
 
 bool EditorSceneContext::SetParticleEditorModulePayload(kb::scene::ParticleStableId moduleId,
@@ -854,7 +885,7 @@ bool EditorSceneContext::UndoParticleEditorCommand() {
     if (!HasParticleEditorAsset() || !particleEditorDocument_.Undo())
         return false;
     particleEditorWorkspace_.Synchronize(particleEditorDocument_.Asset());
-    const auto published = particlePreviewSession_->PublishWorkingCopy(particleEditorDocument_.Asset());
+    const auto published = particlePreviewSession_->PublishWorkingCopy(particleEditorDocument_.Asset(), false);
     if (!published.Succeeded()) {
         static_cast<void>(particleEditorDocument_.Redo());
         particleEditorWorkspace_.Synchronize(particleEditorDocument_.Asset());
@@ -868,7 +899,7 @@ bool EditorSceneContext::RedoParticleEditorCommand() {
     if (!HasParticleEditorAsset() || !particleEditorDocument_.Redo())
         return false;
     particleEditorWorkspace_.Synchronize(particleEditorDocument_.Asset());
-    const auto published = particlePreviewSession_->PublishWorkingCopy(particleEditorDocument_.Asset());
+    const auto published = particlePreviewSession_->PublishWorkingCopy(particleEditorDocument_.Asset(), false);
     if (!published.Succeeded()) {
         static_cast<void>(particleEditorDocument_.Undo());
         particleEditorWorkspace_.Synchronize(particleEditorDocument_.Asset());
