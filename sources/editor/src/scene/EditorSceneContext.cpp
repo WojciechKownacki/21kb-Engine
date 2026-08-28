@@ -1196,6 +1196,7 @@ EditorSceneContext::EditorSceneContext()
     // scene's engine module host honours the project's enabled/disabled module set.
     : projectBootstrap_(EditorProjectBootstrap::BootstrapDefaultProject())
     , project_(projectBootstrap_.succeeded ? projectBootstrap_.descriptor : kb::project::ProjectDescriptor{})
+    , projectConfig_(projectBootstrap_.settings)
     , projectFile_(projectBootstrap_.succeeded ? projectBootstrap_.projectFile : EditorProjectPaths::ProjectFile())
     , scene_(std::make_unique<kb::scene::Scene>(project_))
     , inspectorMaterialPreviewScene_(std::make_unique<EditorMaterialPreviewScene>())
@@ -1205,6 +1206,9 @@ EditorSceneContext::EditorSceneContext()
     , materialGraphCookService_(std::make_unique<EditorMaterialGraphCookService>(EditorMaterialGraphCookConfig::Resolve(graphShaderCacheRoot_))) {
     if (projectBootstrap_.succeeded) {
         console_.Info("Project", projectBootstrap_.created ? "Created project descriptor." : "Loaded project descriptor.");
+        if (!projectBootstrap_.settingsError.empty()) {
+            console_.Error("Project", projectBootstrap_.settingsError);
+        }
         if (!projectBootstrap_.particlePolicy.IsRunnable()) {
             console_.Warning("Project", projectBootstrap_.particlePolicy.diagnostic +
                 " Choose Add Rendering.21kbParticle or Cancel before running the project.");
@@ -1622,12 +1626,19 @@ const EditorProjectSettingsState& EditorSceneContext::ProjectSettings() const no
     return projectSettings_;
 }
 
-EditorSettingsState& EditorSceneContext::EditorSettings() noexcept {
-    return editorSettings_;
+const EditorConfiguration& EditorSceneContext::EditorConfig() const noexcept {
+    return editorConfig_;
 }
 
-const EditorSettingsState& EditorSceneContext::EditorSettings() const noexcept {
-    return editorSettings_;
+bool EditorSceneContext::SaveEditorConfig(EditorConfiguration configuration) {
+    std::string error;
+    const std::filesystem::path path = EditorConfigurationStore::FilePath(EditorProjectPaths::ProjectRoot());
+    if (!EditorConfigurationStore::Save(path, EditorProjectPaths::ProjectRoot(), configuration, error)) {
+        console_.Error("Editor Settings", error.empty() ? "Editor settings could not be saved." : error);
+        return false;
+    }
+    editorConfig_ = std::move(configuration);
+    return true;
 }
 
 EditorPluginsState& EditorSceneContext::Plugins() noexcept {
@@ -1737,21 +1748,22 @@ EditorSavingPreferences EditorSceneContext::CaptureEditorSavingPreferences() con
 }
 
 bool EditorSceneContext::LoadEditorSettings() {
-    std::string error;
-    EditorSettingsDocument settings;
-    if (!editorSettings_.Load(EditorProjectPaths::EditorSettingsFile(), settings, error)) {
-        console_.Warning("Editor Settings", error);
+    const std::filesystem::path root = EditorProjectPaths::ProjectRoot();
+    EditorConfigurationLoadResult loaded = EditorConfigurationStore::Load(
+        EditorConfigurationStore::FilePath(root), root);
+    if (!loaded.Succeeded()) {
+        console_.Warning("Editor Settings", loaded.error);
         return false;
     }
-    ApplySavingPreferences(settings.saving, autosave_);
+    editorConfig_ = std::move(loaded.configuration);
+    ApplySavingPreferences(editorConfig_.saving, autosave_);
     return true;
 }
 
 bool EditorSceneContext::CommitEditorSettings(const EditorSavingPreferences& preferences) {
-    std::string error;
-    const EditorSettingsDocument settings{.saving = preferences};
-    if (!editorSettings_.Commit(settings, error)) {
-        if (!error.empty()) console_.Error("Editor Settings", error);
+    EditorConfiguration configuration = editorConfig_;
+    configuration.saving = preferences;
+    if (!SaveEditorConfig(std::move(configuration))) {
         return false;
     }
     ApplySavingPreferences(preferences, autosave_);
@@ -8013,8 +8025,8 @@ bool EditorSceneContext::HasActiveMaterialAssetEdit() const noexcept {
 }
 
 bool EditorSceneContext::ToggleProjectInputEnabled() {
-    project_.inputEnabled = !project_.inputEnabled;
-    return SaveProjectDescriptor();
+    projectConfig_.inputEnabled = !projectConfig_.inputEnabled;
+    return SaveProjectConfiguration();
 }
 
 std::vector<std::string> EditorSceneContext::ProjectInputMappingContextOptions() const {
@@ -8030,19 +8042,19 @@ std::vector<std::string> EditorSceneContext::ProjectInputMappingContextOptions()
 }
 
 bool EditorSceneContext::SetProjectInputMappingContext(std::string virtualPath) {
-    if (project_.inputMappingContext == virtualPath) {
+    if (projectConfig_.inputMappingContext == virtualPath) {
         return false;
     }
-    project_.inputMappingContext = std::move(virtualPath);
-    return SaveProjectDescriptor();
+    projectConfig_.inputMappingContext = std::move(virtualPath);
+    return SaveProjectConfiguration();
 }
 
 bool EditorSceneContext::SetProjectSceneLightingPath(kb::project::ProjectSceneLightingPath path) {
-    if (project_.sceneLightingPath == path) {
+    if (projectConfig_.lightingPath == path) {
         return false;
     }
-    project_.sceneLightingPath = path;
-    const bool saved = SaveProjectDescriptor();
+    projectConfig_.lightingPath = path;
+    const bool saved = SaveProjectConfiguration();
     if (saved) {
         sceneGraphCookPending_ = true;
         RequestOpenMaterialSceneGraphCook();
@@ -8110,11 +8122,11 @@ std::vector<std::string> EditorSceneContext::ProjectPhysicsLayersAssetOptions() 
 }
 
 bool EditorSceneContext::SetProjectPhysicsLayersAsset(std::string virtualPath) {
-    if (project_.physicsLayersAsset == virtualPath) {
+    if (projectConfig_.physicsLayersAsset == virtualPath) {
         return false;
     }
-    project_.physicsLayersAsset = std::move(virtualPath);
-    return SaveProjectDescriptor();
+    projectConfig_.physicsLayersAsset = std::move(virtualPath);
+    return SaveProjectConfiguration();
 }
 
 bool EditorSceneContext::CloseProjectSettingsDropdowns() noexcept {
@@ -8181,10 +8193,10 @@ bool EditorSceneContext::ToggleProjectPlugin(std::size_t catalogIndex) {
 }
 
 void EditorSceneContext::ActivateProjectInput() {
-    if (!project_.inputEnabled || project_.inputMappingContext.empty()) {
+    if (!projectConfig_.inputEnabled || projectConfig_.inputMappingContext.empty()) {
         return;
     }
-    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().FindByPath(project_.inputMappingContext);
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().FindByPath(projectConfig_.inputMappingContext);
     if (metadata != nullptr && metadata->type == "InputMappingContext") {
         static_cast<void>(scene_->Input().AddMappingContext(metadata->id.value, 0));
     }
@@ -8204,6 +8216,34 @@ bool EditorSceneContext::ActivateProjectPhysicsLayers(kb::scene::Scene& scene) {
     }
     console_.Error("Physics", error);
     return false;
+}
+
+const kb::project::ProjectSettings& EditorSceneContext::ProjectConfiguration() const noexcept {
+    return projectConfig_;
+}
+
+// The single writer of the project's settings. It persists them to the settings
+// file and mirrors the same values into the descriptor, which consumers outside the
+// editor still read; nothing else writes those descriptor fields, so the two cannot
+// drift apart.
+bool EditorSceneContext::SaveProjectConfiguration() {
+    project_.name = projectConfig_.name;
+    project_.category = projectConfig_.category;
+    project_.description = projectConfig_.description;
+    project_.defaultScene = projectConfig_.defaultMap;
+    project_.sceneLightingPath = projectConfig_.lightingPath;
+    project_.inputEnabled = projectConfig_.inputEnabled;
+    project_.inputMappingContext = projectConfig_.inputMappingContext;
+    project_.physicsLayersAsset = projectConfig_.physicsLayersAsset;
+
+    std::string error;
+    const std::filesystem::path settingsFile =
+        kb::project::ProjectSettingsStore::FilePath(EditorProjectPaths::ProjectRoot());
+    if (!kb::project::ProjectSettingsStore::Save(settingsFile, projectConfig_, error)) {
+        console_.Error("Project", error.empty() ? "Project settings could not be saved." : error);
+        return false;
+    }
+    return SaveProjectDescriptor();
 }
 
 bool EditorSceneContext::SaveProjectDescriptor() {
@@ -12263,9 +12303,9 @@ std::filesystem::path EditorSceneContext::ResolveProjectVirtualPath(const std::f
 }
 
 std::filesystem::path EditorSceneContext::ResolveDefaultScenePath() const {
-    const std::filesystem::path defaultScene = project_.defaultScene.empty()
+    const std::filesystem::path defaultScene = projectConfig_.defaultMap.empty()
         ? std::filesystem::path{ "/Game/Scenes/Main.21kbscene" }
-        : std::filesystem::path{ project_.defaultScene };
+        : std::filesystem::path{ projectConfig_.defaultMap };
     return ResolveProjectVirtualPath(defaultScene);
 }
 

@@ -435,6 +435,7 @@ add_executable(kb_editor WIN32
     src/private/project/EditorProjectAssetIndex.hpp
     src/private/project/EditorProjectBootstrap.hpp
     src/private/project/EditorProjectPanelHitTester.hpp
+    src/private/settings/EditorConfigurationStore.hpp
     src/private/project/EditorProjectPaths.hpp
     src/private/rendering/DockDropPreviewRenderer.hpp
     src/private/rendering/DockDropPreviewOverlayWindow.hpp
@@ -580,8 +581,6 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorPluginCatalog.hpp
     src/private/scene/EditorPluginsState.hpp
     src/private/scene/EditorProjectSettingsState.hpp
-    src/private/settings/EditorSettingsState.hpp
-    src/private/settings/EditorSettingsStore.hpp
     src/private/scene/EditorScriptAssetGateway.hpp
     src/private/scene/EditorScriptEditorState.hpp
     src/private/scene/EditorSceneAssetBrowserCommands.hpp
@@ -829,7 +828,6 @@ add_executable(kb_editor WIN32
     src/scene/EditorParticleEditorHost.cpp
     src/private/scene/ParticleEditorBakeHostCommand.hpp
     src/scene/ParticleEditorBakeHostCommand.cpp
-    src/scene/ParticleEditorHostSessionStore.cpp
     src/scene/EditorSceneDocumentLifecycle.cpp
     src/scene/EditorSceneHierarchyActions.cpp
     src/scene/EditorSceneMaterialAssetActions.cpp
@@ -839,7 +837,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorScenePrefabActions.cpp
     src/scene/EditorSceneSelectionPivot.cpp
     src/scene/EditorSceneViewportStateStore.cpp
-    src/settings/EditorSettingsStore.cpp
+    src/settings/EditorConfigurationStore.cpp
     src/scene/EditorViewportCameraState.cpp
     src/scene/EditorViewportPreviewState.cpp
     src/scene/material/EditorMaterialAssetAuthoring.cpp
@@ -1159,8 +1157,7 @@ if(BUILD_TESTING)
         src/docking/EditorDockModel.cpp
         src/docking/EditorDockModelCommands.cpp
         src/docking/EditorDockModelQueries.cpp
-        src/scene/ParticleEditorHostSessionStore.cpp
-        src/settings/EditorSettingsStore.cpp
+            src/settings/EditorConfigurationStore.cpp
         src/rendering/SvgPathArcMath.cpp
         src/rendering/SvgPathCursor.cpp
         src/assets/EditorAssetBrowserAssetRows.cpp

@@ -18,7 +18,7 @@
 #include "scene/AnimationClipEditorDocumentState.hpp"
 #include "scene/AnimatorEditorGraphDocumentState.hpp"
 #include "scene/EditorAutosaveState.hpp"
-#include "scene/ParticleEditorHostSessionStore.hpp"
+#include "settings/EditorConfigurationStore.hpp"
 #include "windowing/FloatingWindowControlHitTester.hpp"
 #include "windowing/FloatingWindowControlLayout.hpp"
 
@@ -693,28 +693,30 @@ void RunParticleEditorWorkspaceAndSessionPersistenceTest() {
     std::error_code error;
     std::filesystem::remove_all(root, error);
     std::filesystem::create_directories(root / "Assets", error);
-    kb::editor::ParticleEditorHostSession session{
+    kb::editor::EditorConfiguration configuration;
+    configuration.particleEditor = kb::editor::EditorPanelSession{
         .visible = true,
         .area = panel->area,
         .floatingRect = panel->floatingRect,
         .documentPath = root / "Assets" / "Open.kbvfx",
     };
     std::string saveError;
-    const std::filesystem::path statePath = root / ".21kb" / "ParticleEditorSession.txt";
+    const std::filesystem::path statePath = kb::editor::EditorConfigurationStore::FilePath(root);
     kb::editor::tests::Require(
-        kb::editor::ParticleEditorHostSessionStore::Save(statePath, root, session, saveError),
-        "particle editor host session could not be saved atomically");
-    const auto loaded = kb::editor::ParticleEditorHostSessionStore::Load(statePath, root);
+        kb::editor::EditorConfigurationStore::Save(statePath, root, configuration, saveError),
+        "editor configuration could not be saved atomically");
+    const auto loaded = kb::editor::EditorConfigurationStore::Load(statePath, root);
     kb::editor::tests::Require(
-        loaded.Succeeded() && loaded.found && loaded.session.visible &&
-            loaded.session.area == kb::editor::DockArea::Floating &&
-            loaded.session.floatingRect.width == 940 &&
-            loaded.session.documentPath.lexically_normal() == session.documentPath.lexically_normal(),
+        loaded.Succeeded() && loaded.found && loaded.configuration.particleEditor.visible &&
+            loaded.configuration.particleEditor.area == kb::editor::DockArea::Floating &&
+            loaded.configuration.particleEditor.floatingRect.width == 940 &&
+            loaded.configuration.particleEditor.documentPath.lexically_normal() ==
+                configuration.particleEditor.documentPath.lexically_normal(),
         "particle editor layout/session path did not survive persistence roundtrip");
-    session.documentPath = root.parent_path() / "Outside.kbvfx";
+    configuration.particleEditor.documentPath = root.parent_path() / "Outside.kbvfx";
     kb::editor::tests::Require(
-        !kb::editor::ParticleEditorHostSessionStore::Save(statePath, root, session, saveError),
-        "particle editor host session accepted a document path outside the project");
+        !kb::editor::EditorConfigurationStore::Save(statePath, root, configuration, saveError),
+        "editor configuration accepted a document path outside the project");
 }
 
 void RunSkeletalMeshEditorTreeStateTest() {
