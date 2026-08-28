@@ -32,6 +32,18 @@
 namespace kb::editor {
 namespace {
 
+// The row a value drag started on, clipped to the panel. Falls back to the whole
+// panel when the drag did not come from a row - a mesh preview orbit, say.
+[[nodiscard]] RECT DraggedInspectorRowRect(const EditorSceneContext& sceneContext, const RECT& panel) noexcept {
+    const InspectorRowBounds row = sceneContext.Inspector().DraggedRowBounds();
+    if (!sceneContext.Inspector().IsDraggingFloat() || row.Empty()) {
+        return panel;
+    }
+    const RECT bounds{ row.left, row.top, row.right, row.bottom };
+    RECT clipped{};
+    return IntersectRect(&clipped, &bounds, &panel) != 0 ? clipped : panel;
+}
+
 [[nodiscard]] int RectHeight(const RECT& rect) noexcept {
     return std::max(0L, rect.bottom - rect.top);
 }
@@ -318,9 +330,9 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         // NOT a GDI-drawn widget like the graph nodes. Orbiting therefore needs only a viewport present
         // - never a Material Editor panel repaint. Repainting the whole panel (graph nodes + chrome) on
         // every mouse pixel ran at the raw mouse-move rate and starved the preview's per-frame present:
-        // THAT was the orbit lag, not GPU re-sync. This mirrors UE exactly - FEditorViewportClient orbit
-        // ends in Invalidate(false, false) -> Viewport->InvalidateDisplay(), i.e. the viewport's display
-        // pixels only, leaving the surrounding editor UI (graph, details, toolbars) untouched.
+        // THAT was the orbit lag, not GPU re-sync. An orbit therefore ends in a viewport-only
+        // display invalidation - the preview surface's own pixels and nothing else -
+        // leaving the surrounding editor UI (graph, details, toolbars) untouched.
         sceneViewport_.RequestPresent();
         return;
     }
@@ -362,8 +374,8 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
     }
 
     // While the "what do you want to connect?" menu is parked open (a wire was dropped on empty canvas),
-    // the pending connection is deliberately kept so picking a node connects it - exactly like UE, where a
-    // pin drag-drop opens a filtered action menu that remembers the from-pin. It is NOT an active drag, so
+    // the pending connection is deliberately kept so picking a node connects it - a pin drag-drop
+    // opens a filtered action menu that remembers the from-pin. It is NOT an active drag, so
     // this branch must be skipped: otherwise the first mouse move toward the menu (button up) would hit the
     // !leftButtonDown path and cancel the pending connection, and the pick would then create nothing
     // (AddMaterialGraphNodeForPendingConnection finds no pending pin) - the "selecting just cancels" bug.
@@ -413,7 +425,12 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
             sceneViewport_.RequestPresent();
         }
         if (inspectorContent.has_value()) {
-            EditorWindowInvalidator::InvalidatePanel(messageWindow, *inspectorContent);
+            // Dragging a value changes one row's text. Asking for the whole panel back
+            // costs more than drawing the 3D scene, and the scene is what the person is
+            // watching, so only the row being dragged is repainted.
+            EditorWindowInvalidator::InvalidatePanel(
+                messageWindow,
+                DraggedInspectorRowRect(sceneContext_, *inspectorContent));
         }
         return;
     }

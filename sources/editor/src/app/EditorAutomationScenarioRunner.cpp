@@ -3715,6 +3715,24 @@ ReadScriptValue(
                 ", selected=" + std::to_string(navigation.selectedAsset.value) };
     }
 
+    if (*operation == "profile_inspector_drag") {
+        const auto steps = NumberMember(step, "steps", error, false).value_or(60.0);
+        if (steps < 1.0 || steps > 1000.0 || std::floor(steps) != steps) {
+            return { false, "steps must be a positive integer up to 1000" };
+        }
+        const auto profile = state.automation.ProfileInspectorTransformDrag(
+            static_cast<std::size_t>(steps));
+        std::ostringstream detail;
+        detail.imbue(std::locale::classic());
+        detail << "steps=" << profile.steps
+               << " apply=" << profile.applyMs
+               << "ms inspectorPaint=" << profile.inspectorPaintMs
+               << "ms inspectorHeight=" << profile.inspectorHeightMs
+               << "ms inspectorRowPaint=" << profile.inspectorRowPaintMs
+               << "ms scenePresent=" << profile.scenePresentMs << "ms";
+        return { profile.succeeded, detail.str() };
+    }
+
     if (*operation == "assert_floating_window_frame") {
         const auto frame = state.automation.VerifyFloatingWindowFrame();
         return {
