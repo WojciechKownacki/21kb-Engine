@@ -10,7 +10,7 @@ void DockLeafLayoutBuilder::Build(const DockNode& node, const DockRect& rect, Do
     DockLeafLayout leaf{
         .leafId = node.id,
         .frame = rect,
-        .tabStrip = DockGeometry::MakeRect(rect.x + 1, rect.y + 1, std::max(0, rect.width - 2), settings.tabStripHeight),
+        .tabStrip = DockGeometry::PanelTabStrip(rect, settings.tabStripHeight),
         .content = DockGeometry::PanelContent(rect, settings.tabStripHeight),
         .activePanelId = node.activePanelId,
     };
