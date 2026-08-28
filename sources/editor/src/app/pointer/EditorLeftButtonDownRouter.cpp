@@ -441,7 +441,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     if (pendingTextEdits.CommitPendingEdits()) {
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     }
-    if (EditorWindowToolbarPointerHandler::HandleLeftButtonDown(mainWindow_, messageWindow, x, y, dockModel_, sceneContext_, sceneViewport_, playMode_, shellInteraction_, metrics_)) {
+    if (EditorWindowToolbarPointerHandler::HandleLeftButtonDown(mainWindow_, messageWindow, x, y, dockModel_, sceneContext_, sceneViewport_, renderBackendSettings_, playMode_, shellInteraction_, metrics_)) {
         return;
     }
     if (messageWindow == mainWindow_) {
