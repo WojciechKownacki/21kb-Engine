@@ -19,6 +19,17 @@ namespace {
     return EditorSceneViewportGeometry::RectHeight(rect);
 }
 
+// The store owns exactly one piece of state per child HWND: its own WS_VISIBLE bit. IsWindowVisible()
+// answers a different question -- it walks the whole ancestor chain and reports 0 whenever the host
+// (or the host's parent) is hidden, even though this store already showed the child. Using it as the
+// "is it already shown?" test made Show() believe every surface was hidden for as long as the host was
+// not itself visible, so ShowPresentedWindows() re-issued SetWindowPos(SWP_SHOWWINDOW) on both child
+// windows on every single presented frame and logged a bogus hidden -> shown transition each time.
+[[nodiscard]] bool HasVisibleStyle(HWND window) noexcept {
+    return window != nullptr && IsWindow(window) != 0 &&
+        (GetWindowLongPtrW(window, GWL_STYLE) & WS_VISIBLE) != 0;
+}
+
 } // namespace
 
 void EditorSceneBgfxViewport::HostSurfaceStore::Clear() noexcept {
@@ -106,12 +117,12 @@ void EditorSceneBgfxViewport::HostSurfaceStore::Hide(HostSurface& surface) noexc
     // Only repaint the uncovered host area on the visible -> hidden transition.
     // Invalidating every call would busy-loop the editor frame while a non-Scene
     // tab is active (each hide would post a fresh WM_PAINT).
-    const bool wasVisible = surface.clipWindow != nullptr && IsWindow(surface.clipWindow) != 0 && IsWindowVisible(surface.clipWindow) != 0;
-    if (surface.window != nullptr && IsWindow(surface.window) != 0) {
+    const bool wasVisible = HasVisibleStyle(surface.clipWindow);
+    if (HasVisibleStyle(surface.window)) {
         ShowWindow(surface.window, SW_HIDE);
     }
     surface.textOverlay.Hide();
-    if (surface.clipWindow != nullptr && IsWindow(surface.clipWindow) != 0) {
+    if (wasVisible) {
         ShowWindow(surface.clipWindow, SW_HIDE);
     }
     // Keep the native swapchain. Particle Editor and Scene share the center dock leaf, so tab
@@ -221,12 +232,15 @@ void EditorSceneBgfxViewport::HostSurfaceStore::Show(HostSurface& surface) noexc
         IsWindow(surface.clipWindow) == 0 || IsWindow(surface.window) == 0) {
         return;
     }
-    const bool wasVisible = IsWindowVisible(surface.clipWindow) != 0 && IsWindowVisible(surface.window) != 0;
+    // Both windows keep their geometry from EnsureHostSurfaceWindow, which runs earlier in the same
+    // paint; the coordinates below only matter on the hidden -> shown transition.
+    const bool clipHidden = !HasVisibleStyle(surface.clipWindow);
+    const bool renderHidden = !HasVisibleStyle(surface.window);
     UINT flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOREDRAW | SWP_SHOWWINDOW;
     if (!EditorSceneBgfxViewport::ShouldPreserveHostSurfaceBits(surface.key)) {
         flags |= SWP_NOCOPYBITS;
     }
-    if (IsWindowVisible(surface.clipWindow) == 0) {
+    if (clipHidden) {
         SetWindowPos(
             surface.clipWindow,
             HWND_BOTTOM,
@@ -236,7 +250,7 @@ void EditorSceneBgfxViewport::HostSurfaceStore::Show(HostSurface& surface) noexc
             static_cast<int>(RectHeight(surface.rect)),
             flags);
     }
-    if (IsWindowVisible(surface.window) == 0) {
+    if (renderHidden) {
         SetWindowPos(
             surface.window,
             HWND_TOP,
@@ -247,7 +261,7 @@ void EditorSceneBgfxViewport::HostSurfaceStore::Show(HostSurface& surface) noexc
             flags);
     }
     surface.textOverlay.Show();
-    if (!wasVisible) {
+    if (clipHidden || renderHidden) {
         std::ostringstream detail;
         detail << "action=show host=0x" << std::hex << reinterpret_cast<std::uintptr_t>(surface.host)
                << std::dec << " key=" << surface.key
