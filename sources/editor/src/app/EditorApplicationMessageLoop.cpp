@@ -21,6 +21,7 @@
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/SceneViewportPresentationPolicy.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
+#include "rendering/scene_viewport_toolbar/SceneViewportToolbarState.hpp"
 #include "rendering/SkeletalMeshEditorPanelRenderer.hpp"
 #include "rendering/ParticleEditorPanelRenderer.hpp"
 #include "rendering/EditorMaterialThumbnailService.hpp"
@@ -215,7 +216,7 @@ constexpr int kMaxMessagesPerPump = 128;
     };
 }
 
-[[nodiscard]] DockLayout BuildMainLayout(EditorApplicationState& state) {
+[[nodiscard]] DockLayout BuildMainLayout(const EditorApplicationState& state) {
     RECT client{};
     GetClientRect(state.window, &client);
     return state.dockModel.Queries().BuildLayout(
@@ -229,19 +230,8 @@ constexpr int kMaxMessagesPerPump = 128;
         state.metrics.splitterSize);
 }
 
-[[nodiscard]] bool ParticleEditorPanelIsVisible(const EditorApplicationState& state) {
+[[nodiscard]] bool ParticleEditorPanelIsVisible(const EditorApplicationState& state, const DockLayout& layout) {
     if (!state.sceneContext.HasParticleEditorAsset()) return false;
-    RECT client{};
-    GetClientRect(state.window, &client);
-    const DockLayout layout = state.dockModel.Queries().BuildLayout(
-        client.right - client.left,
-        client.bottom - client.top,
-        state.metrics.menuHeight,
-        state.metrics.toolbarHeight,
-        state.metrics.tabStripHeight,
-        state.metrics.tabMinWidth,
-        state.metrics.tabWidth,
-        state.metrics.splitterSize);
     for (const DockPanelLayout& panelLayout : layout.panels) {
         if (!panelLayout.active) continue;
         const DockPanel* panel = state.dockModel.Queries().FindPanel(panelLayout.panelId);
@@ -255,9 +245,41 @@ constexpr int kMaxMessagesPerPump = 128;
     return false;
 }
 
+[[nodiscard]] bool ParticleEditorPanelIsVisible(const EditorApplicationState& state) {
+    if (!state.sceneContext.HasParticleEditorAsset()) return false;
+    return ParticleEditorPanelIsVisible(state, BuildMainLayout(state));
+}
+
 void InvalidateSceneToolbar(HWND window, const RECT& content, const EditorViewportPreviewState& preview) noexcept {
     const RECT toolbar = SceneViewportToolbarRenderer::Resolve(content, preview).toolbar;
     InvalidateRect(window, &toolbar, FALSE);
+}
+
+// Repaints the scene toolbars without asking for a GPU frame. A WM_PAINT on its own only
+// runs the GDI back-buffer painter - the viewport presents queued from it are never
+// submitted, because nothing brackets that paint with Begin/EndPaintLayout - so this is the
+// way to change what the toolbar says while the editor is deliberately not drawing.
+void InvalidateSceneToolbars(EditorApplicationState& state) {
+    const auto invalidate = [&state](HWND host) {
+        if (host == nullptr || IsWindow(host) == 0 || IsWindowVisible(host) == 0) {
+            return;
+        }
+        const std::optional<EditorResolvedPanelContent> panel = EditorPanelContentResolver::ResolvePanel(
+            DockPanelKind::Scene,
+            host,
+            state.window,
+            state.dockModel,
+            state.floatingWindows,
+            state.metrics);
+        if (!panel.has_value()) {
+            return;
+        }
+        InvalidateSceneToolbar(host, panel->content, state.sceneContext.ViewportPreview(panel->panelId));
+    };
+    invalidate(state.window);
+    for (HWND window : state.floatingWindows.Queries().Windows()) {
+        invalidate(window);
+    }
 }
 
 [[nodiscard]] bool ShouldRefreshSceneToolbars() noexcept {
@@ -363,12 +385,14 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
         return false;
     }
 
+    // One dock layout for the whole frame. Every question below used to build its own -
+    // the panel walk, the host-surface resolve and each panel-content resolve - which is
+    // five walks of the same unchanged tree to answer five questions about it.
     const DockLayout layout = BuildMainLayout(state);
     const std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> hostLayouts =
         EditorHostSurfaceLayoutResolver::ResolveMainWindow(
-            state.window,
+            layout,
             state.dockModel,
-            state.metrics,
             state.sceneContext);
     state.sceneViewport.SyncHostSurfaceLayouts(
         state.window,
@@ -398,6 +422,7 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
 
     const std::optional<RECT> inspector = EditorPanelContentResolver::Resolve(
         DockPanelKind::Inspector,
+        layout,
         state.window,
         state.window,
         state.dockModel,
@@ -405,6 +430,7 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
         state.metrics);
     const std::optional<RECT> materialEditor = EditorPanelContentResolver::Resolve(
         DockPanelKind::MaterialEditor,
+        layout,
         state.window,
         state.window,
         state.dockModel,
@@ -418,6 +444,7 @@ void InvalidateMeshPreviewPanels(EditorApplicationState& state) noexcept {
     bool thumbnailPresented = false;
     const std::optional<RECT> assets = EditorPanelContentResolver::Resolve(
         DockPanelKind::Assets,
+        layout,
         state.window,
         state.window,
         state.dockModel,
@@ -1022,6 +1049,16 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
                 InvalidatePanelKind(state, DockPanelKind::Inspector);
             }
         } else if (!sceneFramePresented) {
+            // The FPS counter is fed by real presents, and the toolbar that shows it is only
+            // repainted when something presents. Once the editor stops drawing, both stop:
+            // the last live number stays on the glass and reads as a current one. Repaint the
+            // toolbars once on that crossing so the counter can say it is holding a reading
+            // rather than reporting one. This costs a GDI repaint of a 66-pixel chip and no
+            // GPU frame at all - presenting on a timer to keep the number moving would be the
+            // expensive lie, not the fix.
+            if (SceneViewportToolbarState::ConsumeIdleTransition()) {
+                InvalidateSceneToolbars(state);
+            }
             // Keep the loop paced (instead of parking in WaitMessage) while a material is open so
             // async graph cook results keep pumping; time-driven preview animation (MAT-72) is
             // carried by the per-frame preview presents in TickEditorFrame.

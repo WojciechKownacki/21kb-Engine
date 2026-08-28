@@ -3734,6 +3734,29 @@ ReadScriptValue(
         return { profile.succeeded, detail.str() };
     }
 
+    if (*operation == "profile_idle_scene_frame") {
+        const auto steps = NumberMember(step, "steps", error, false).value_or(60.0);
+        if (steps < 1.0 || steps > 1000.0 || std::floor(steps) != steps) {
+            return { false, "steps must be a positive integer up to 1000" };
+        }
+        const auto profile = state.automation.ProfileIdleSceneFrame(
+            static_cast<std::size_t>(steps));
+        std::ostringstream detail;
+        detail.imbue(std::locale::classic());
+        detail << "steps=" << profile.steps
+               << " idleFrame=" << profile.idleFrameMs
+               << "ms geometry=" << profile.geometryTotalMs
+               << "ms sharedGeometry=" << profile.sharedGeometryMs
+               << "ms sceneSubmit=" << profile.sceneSubmitMs
+               << "ms dockLayout=" << profile.dockLayoutMs
+               << "ms(x" << profile.dockLayoutBuildsPerFrame
+               << ") hostSurfaceResolve=" << profile.hostSurfaceResolveMs
+               << "ms panelResolve=" << profile.panelResolveMs
+               << "ms particleVisible=" << profile.particleVisibleMs
+               << "ms materialPreviewProbe=" << profile.materialPreviewProbeMs << "ms";
+        return { profile.succeeded, detail.str() };
+    }
+
     if (*operation == "assert_floating_window_frame") {
         const auto frame = state.automation.VerifyFloatingWindowFrame();
         return {

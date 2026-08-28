@@ -23,10 +23,15 @@ namespace kb::editor {
 // returned view's size explicitly (the buffer is not null-terminated past
 // the logical length).
 struct SceneViewportToolbarLabelFormat {
-    [[nodiscard]] static std::string_view Fps(std::span<char> out, int fps) {
+    // `live` is whether the viewport has drawn a frame recently enough for `fps` to be a
+    // current reading. The editor draws on demand, so it frequently has not, and a bare
+    // number left standing then claims a rate nothing is achieving. "IDLE 452" keeps the
+    // measurement - the last frame really did cost 2.2 ms - while saying plainly that no
+    // frames are being produced right now.
+    [[nodiscard]] static std::string_view Fps(std::span<char> out, int fps, bool live) {
         kb::library::TextFormatBuffer buffer{ out };
         if (fps > 0) {
-            static_cast<void>(buffer.Append("FPS "));
+            static_cast<void>(buffer.Append(live ? "FPS " : "IDLE "));
             static_cast<void>(buffer.AppendInt(fps));
         } else {
             static_cast<void>(buffer.Append("FPS --"));

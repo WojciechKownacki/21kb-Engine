@@ -51,23 +51,31 @@ std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> EditorHostSurfaceLayoutR
     const EditorDockModel& dockModel,
     const EditorMetrics& metrics,
     const EditorSceneContext& sceneContext) {
-    std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> layouts;
     if (window == nullptr || IsWindow(window) == 0) {
-        return layouts;
+        return {};
     }
 
     RECT client{};
     GetClientRect(window, &client);
-    const DockLayout layout = dockModel.Queries().BuildLayout(
-        client.right - client.left,
-        client.bottom - client.top,
-        metrics.menuHeight,
-        metrics.toolbarHeight,
-        metrics.tabStripHeight,
-        metrics.tabMinWidth,
-        metrics.tabWidth,
-        metrics.splitterSize);
+    return ResolveMainWindow(
+        dockModel.Queries().BuildLayout(
+            client.right - client.left,
+            client.bottom - client.top,
+            metrics.menuHeight,
+            metrics.toolbarHeight,
+            metrics.tabStripHeight,
+            metrics.tabMinWidth,
+            metrics.tabWidth,
+            metrics.splitterSize),
+        dockModel,
+        sceneContext);
+}
 
+std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> EditorHostSurfaceLayoutResolver::ResolveMainWindow(
+    const DockLayout& layout,
+    const EditorDockModel& dockModel,
+    const EditorSceneContext& sceneContext) {
+    std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> layouts;
     for (const DockPanelLayout& panelLayout : layout.panels) {
         if (!panelLayout.active) {
             continue;
