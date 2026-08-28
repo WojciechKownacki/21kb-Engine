@@ -1,7 +1,8 @@
 #pragma once
 
-#include "engine/project/ProjectDescriptor.hpp"
 #include "engine/project/ParticleProjectPolicy.hpp"
+#include "engine/project/ProjectDescriptor.hpp"
+#include "engine/project/ProjectSettings.hpp"
 
 #include <filesystem>
 #include <string>
@@ -15,6 +16,10 @@ struct EditorProjectBootstrapResult {
     std::string error;
     bool created = false;
     kb::project::ParticleProjectPolicyResult particlePolicy{};
+    // Read from Config/ProjectSettings.ini, or seeded from the descriptor and written
+    // there when the project does not have one yet.
+    kb::project::ProjectSettings settings{};
+    std::string settingsError;
 };
 
 class EditorProjectBootstrap {
