@@ -146,8 +146,9 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
     }
 
     const std::optional<RECT> sceneContent = EditorPanelContentResolver::Resolve(DockPanelKind::Scene, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
-    if (SceneViewportToolbarRenderer::UpdateInfoHover(sceneContent.value_or(RECT{}), x, y)) {
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+    if (SceneViewportToolbarRenderer::UpdateInfoHover(sceneContent.value_or(RECT{}), x, y) &&
+        sceneContent.has_value()) {
+        EditorWindowInvalidator::InvalidatePanel(messageWindow, *sceneContent);
     }
 
     EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
@@ -264,7 +265,10 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
                 std::max(1, RectHeight(track) - RectHeight(thumb)),
                 SkeletalMeshEditorPanelRenderer::TreeMaxScroll(*skeletalMeshEditorContent, sceneContext_));
         }
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        if (const std::optional<RECT> skeletalMeshEditorPanel = EditorPanelContentResolver::Resolve(
+                DockPanelKind::SkeletalMeshEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_)) {
+            EditorWindowInvalidator::InvalidatePanel(messageWindow, *skeletalMeshEditorPanel);
+        }
         return;
     }
 
@@ -284,7 +288,10 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
                 std::max(1, RectHeight(track) - RectHeight(thumb)),
                 SkeletalMeshEditorPanelRenderer::DetailsMaxScroll(*skeletalMeshEditorContent, sceneContext_));
         }
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        if (const std::optional<RECT> skeletalMeshEditorPanel = EditorPanelContentResolver::Resolve(
+                DockPanelKind::SkeletalMeshEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_)) {
+            EditorWindowInvalidator::InvalidatePanel(messageWindow, *skeletalMeshEditorPanel);
+        }
         return;
     }
 
@@ -296,7 +303,10 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
             const RECT list = HierarchyToolbarLayout::Resolve(*hierarchyContent).listContent;
             sceneContext_.DragHierarchyScrollbar(y, std::max(1, RectHeight(list) - 24), HierarchyMaxScroll(*hierarchyContent, sceneContext_));
         }
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        if (const std::optional<RECT> hierarchyPanel = EditorPanelContentResolver::Resolve(
+                DockPanelKind::Hierarchy, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_)) {
+            EditorWindowInvalidator::InvalidatePanel(messageWindow, *hierarchyPanel);
+        }
         return;
     }
 
@@ -398,7 +408,7 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
             changed = sceneContext_.ClearMaterialGraphContextMenuHover();
         }
         if (changed) {
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            InvalidateMaterialGraphPanel(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         }
         return;
     }
@@ -431,20 +441,25 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
 
     const std::optional<RECT> consoleContent = EditorPanelContentResolver::Resolve(DockPanelKind::Console, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     EditorConsolePointerController consolePointer(messageWindow, sceneContext_);
-    if (consolePointer.UpdateHoverOrClear(consoleContent, x, y)) {
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+    if (consolePointer.UpdateHoverOrClear(consoleContent, x, y) && consoleContent.has_value()) {
+        EditorWindowInvalidator::InvalidatePanel(messageWindow, *consoleContent);
     }
     if (consolePointer.HandlePointerMove(consoleContent, y, leftButtonDown)) {
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        if (consoleContent.has_value()) {
+            EditorWindowInvalidator::InvalidatePanel(messageWindow, *consoleContent);
+        }
         return;
     }
 
     if (EditorAssetBrowserPointerHandler::HandlePointerMove(messageWindow, mainWindow_, x, y, leftButtonDown, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        if (const std::optional<RECT> assetsContent = EditorPanelContentResolver::Resolve(
+                DockPanelKind::Assets, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_)) {
+            EditorWindowInvalidator::InvalidatePanel(messageWindow, *assetsContent);
+        }
         return;
     }
-    if (inspectorPointer.UpdateHoverOrClear(inspectorContent, x, y)) {
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+    if (inspectorPointer.UpdateHoverOrClear(inspectorContent, x, y) && inspectorContent.has_value()) {
+        EditorWindowInvalidator::InvalidatePanel(messageWindow, *inspectorContent);
     }
     if (inspectorPointer.Contains(inspectorContent, x, y)) {
         return;
@@ -452,8 +467,9 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
 
     const std::optional<RECT> projectSettingsContent = EditorPanelContentResolver::Resolve(DockPanelKind::ProjectSettings, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     EditorProjectSettingsPointerController projectSettingsPointer(sceneContext_);
-    if (projectSettingsPointer.UpdateHoverOrClear(projectSettingsContent, x, y)) {
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+    if (projectSettingsPointer.UpdateHoverOrClear(projectSettingsContent, x, y) &&
+        projectSettingsContent.has_value()) {
+        EditorWindowInvalidator::InvalidatePanel(messageWindow, *projectSettingsContent);
     }
     if (projectSettingsPointer.Contains(projectSettingsContent, x, y)) {
         return;
@@ -462,7 +478,9 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
     const std::optional<RECT> pluginsContent = EditorPanelContentResolver::Resolve(DockPanelKind::Plugins, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     EditorPluginsPointerController pluginsPointer(sceneContext_);
     if (pluginsPointer.HandlePointerMove(pluginsContent, x, y, leftButtonDown)) {
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        if (pluginsContent.has_value()) {
+            EditorWindowInvalidator::InvalidatePanel(messageWindow, *pluginsContent);
+        }
         if (sceneContext_.Plugins().IsScrollbarDragging()) {
             return;
         }
