@@ -1033,6 +1033,115 @@ EditorHeadlessAutomation::VerifyParticleThumbnail(
     return result;
 }
 
+EditorHeadlessAutomation::InspectorDragProfile
+EditorHeadlessAutomation::ProfileInspectorTransformDrag(std::size_t steps) {
+    InspectorDragProfile result{};
+    if (steps == 0U || steps > 1000U) {
+        Trace("profile_inspector_drag", false, "step-count-out-of-range");
+        return result;
+    }
+    const kb::scene::SceneEntity entity = context_.SelectedEntity();
+    if (!context_.Scene().Entities().IsAlive(entity)) {
+        Trace("profile_inspector_drag", false, "no-selection");
+        return result;
+    }
+    if (!context_.BeginSelectedTransformEdit("Edit Transform")) {
+        Trace("profile_inspector_drag", false, "transform-edit-refused");
+        return result;
+    }
+
+    // Exactly what a held mouse button does: the same apply the pointer route calls,
+    // once per drag step.
+    const float start = context_.ActiveTransformEditPropertyStart(InspectorPropertyId::PositionX);
+    const auto applyStart = std::chrono::steady_clock::now();
+    for (std::size_t step = 0U; step < steps; ++step) {
+        static_cast<void>(context_.ApplyActiveTransformEditProperty(
+            InspectorPropertyId::PositionX, start + (static_cast<float>(step + 1U) * 0.01F)));
+    }
+    const double applyTotal =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - applyStart).count();
+    context_.CancelActiveTransformEdit();
+
+    // The Inspector panel repaints on every one of those steps, because that is the
+    // panel the pointer is over.
+    double paintTotal = 0.0;
+    double heightTotal = 0.0;
+    double rowPaintTotal = 0.0;
+    HDC screen = GetDC(nullptr);
+    HDC memory = screen == nullptr ? nullptr : CreateCompatibleDC(screen);
+    HBITMAP bitmap = memory == nullptr
+        ? nullptr
+        : CreateCompatibleBitmap(screen, kInspectorContent.right, kInspectorContent.bottom);
+    HGDIOBJ previous = bitmap == nullptr ? nullptr : SelectObject(memory, bitmap);
+    if (previous != nullptr) {
+        HeroIconGdiplusRuntime::EnsureStarted();
+        const EditorTheme theme = MakeEditorDarkTheme();
+        const auto paintStart = std::chrono::steady_clock::now();
+        for (std::size_t step = 0U; step < steps; ++step) {
+            InspectorPanelRenderer{}.Paint(memory, kInspectorContent, theme, context_);
+        }
+        paintTotal =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - paintStart).count();
+        // The same measurement of the panel's content, which the paint asks for before
+        // drawing anything: how much of a repaint is spent working out how tall the
+        // Inspector is rather than putting pixels down.
+        const auto heightStart = std::chrono::steady_clock::now();
+        for (std::size_t step = 0U; step < steps; ++step) {
+            static_cast<void>(InspectorPanelRenderer::MaxScrollOffset(kInspectorContent, context_));
+        }
+        heightTotal =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - heightStart).count();
+        // The same repaint with only one property row left unclipped: what a drag would
+        // cost if it asked for the row it is changing instead of the whole panel.
+        const auto rowStart = std::chrono::steady_clock::now();
+        for (std::size_t step = 0U; step < steps; ++step) {
+            const int saved = SaveDC(memory);
+            IntersectClipRect(memory, kInspectorContent.left, kInspectorContent.top + 120,
+                kInspectorContent.right, kInspectorContent.top + 148);
+            InspectorPanelRenderer{}.Paint(memory, kInspectorContent, theme, context_);
+            RestoreDC(memory, saved);
+        }
+        rowPaintTotal =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - rowStart).count();
+        SelectObject(memory, previous);
+    }
+    if (bitmap != nullptr) DeleteObject(bitmap);
+    if (memory != nullptr) DeleteDC(memory);
+    if (screen != nullptr) ReleaseDC(nullptr, screen);
+
+    // And the scene has to be submitted again for the object to be seen moving.
+    const auto sceneStart = std::chrono::steady_clock::now();
+    std::size_t scenePresents = 0U;
+    for (std::size_t step = 0U; step < steps; ++step) {
+        if (impl_->RenderScene(context_, 1U, true)) {
+            ++scenePresents;
+        }
+    }
+    const double sceneTotal =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sceneStart).count();
+
+    const auto divisor = static_cast<double>(steps);
+    result.steps = steps;
+    result.applyMs = applyTotal / divisor;
+    result.inspectorPaintMs = paintTotal / divisor;
+    result.inspectorHeightMs = heightTotal / divisor;
+    result.inspectorRowPaintMs = rowPaintTotal / divisor;
+    result.scenePresentMs = sceneTotal / divisor;
+    // Repainting one row of the Inspector must cost a fraction of repainting the whole
+    // panel. That is what makes dragging a value cheap, and it only holds while the
+    // panel skips the sections the repaint was not asked for; if that culling goes, the
+    // two costs converge and a drag drowns the scene again. The margin is wide enough
+    // that machine load cannot trip it: culled it costs about a fifth of a full
+    // repaint, and without the culling about a half.
+    const bool rowRepaintIsCheap = result.inspectorPaintMs > 0.0 &&
+        result.inspectorRowPaintMs < (result.inspectorPaintMs * 0.35);
+    result.succeeded = previous != nullptr && scenePresents == steps && rowRepaintIsCheap;
+    Trace("profile_inspector_drag", result.succeeded,
+        std::to_string(result.applyMs) + "/" + std::to_string(result.inspectorPaintMs) +
+            "/" + std::to_string(result.scenePresentMs));
+    return result;
+}
+
 EditorHeadlessAutomation::FloatingWindowFrame
 EditorHeadlessAutomation::VerifyFloatingWindowFrame() {
     FloatingWindowFrame result{};

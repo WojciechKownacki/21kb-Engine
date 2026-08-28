@@ -495,6 +495,16 @@ struct InspectorDynamicRowIdentity {
     [[nodiscard]] bool operator==(const InspectorDynamicRowIdentity&) const noexcept = default;
 };
 
+// A row of the Inspector in window coordinates, as the hit test reported it.
+struct InspectorRowBounds {
+    int left = 0;
+    int top = 0;
+    int right = 0;
+    int bottom = 0;
+
+    [[nodiscard]] bool Empty() const noexcept { return right <= left || bottom <= top; }
+};
+
 struct InspectorPanelState {
     [[nodiscard]] bool IsCollapsed(InspectorSectionId section) const noexcept;
     void ToggleCollapsed(InspectorSectionId section) noexcept;
@@ -508,7 +518,7 @@ struct InspectorPanelState {
     void ToggleAddComponentBrowser();
     void CloseAddComponentBrowser() noexcept;
 
-    // Add Component menu navigation (Unity-style two levels: category list ->
+    // Add Component menu navigation (two levels: category list ->
     // that category's components, with an animated horizontal slide between them).
     enum class AddComponentView : std::uint8_t { Categories, Components };
     [[nodiscard]] AddComponentView AddComponentBrowserView() const noexcept { return addComponentView_; }
@@ -585,7 +595,11 @@ struct InspectorPanelState {
     [[nodiscard]] int DragStartX() const noexcept;
     [[nodiscard]] int DragStartY() const noexcept;
     [[nodiscard]] bool FloatDragMoved() const noexcept;
-    void BeginFloatDrag(InspectorPropertyId property, float startValue, int x, int y) noexcept;
+    // The row the drag started on. Only that row's text changes while a value is
+    // being dragged, and repainting the whole panel for it costs more than drawing
+    // the 3D scene, so the pointer route repaints just this.
+    void BeginFloatDrag(InspectorPropertyId property, float startValue, int x, int y, InspectorRowBounds row) noexcept;
+    [[nodiscard]] InspectorRowBounds DraggedRowBounds() const noexcept;
     void BeginIntegerDrag(InspectorPropertyId property, int x, int y) noexcept;
     void MarkFloatDragMoved() noexcept;
     void EndFloatDrag() noexcept;
@@ -659,6 +673,7 @@ private:
     bool floatDragMoved_ = false;
     InspectorAudioScrubState audioScrub_{};
     bool meshPreviewDragging_ = false;
+    InspectorRowBounds draggedRowBounds_{};
     int meshPreviewDragStartX_ = 0;
     int meshPreviewDragStartY_ = 0;
     float meshPreviewYaw_ = -35.0F;
