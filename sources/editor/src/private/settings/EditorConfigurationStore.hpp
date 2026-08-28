@@ -30,8 +30,6 @@ struct EditorPanelSession {
 struct EditorConfiguration {
     EditorSavingPreferences saving{};
     EditorPanelSession particleEditor{};
-    // Serialized dock arrangement. Empty means the default workspace.
-    std::string layout;
 };
 
 struct EditorConfigurationLoadResult {

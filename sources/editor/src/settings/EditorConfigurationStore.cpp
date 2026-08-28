@@ -13,7 +13,6 @@ namespace {
 
 constexpr std::string_view kSaving = "Editor.Saving";
 constexpr std::string_view kParticleEditor = "Editor.ParticleEditor";
-constexpr std::string_view kLayout = "Editor.Layout";
 
 constexpr std::array<std::string_view, 5U> kAreaNames{
     "Left", "Center", "Right", "Bottom", "Floating",
@@ -121,9 +120,6 @@ EditorConfigurationLoadResult EditorConfigurationStore::Load(
         result.configuration.particleEditor.documentPath = FromRelative(*document_, projectRoot);
     }
 
-    if (const std::optional<std::string_view> layout = document.GetString(kLayout, "Current")) {
-        result.configuration.layout = std::string{*layout};
-    }
     return result;
 }
 
@@ -157,7 +153,6 @@ bool EditorConfigurationStore::Save(
         return false;
     }
     document.SetString(kParticleEditor, "Document", relativeDocument);
-    document.SetString(kLayout, "Current", configuration.layout);
     return document.Save(path, error);
 }
 

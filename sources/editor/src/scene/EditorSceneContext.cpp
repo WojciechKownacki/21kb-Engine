@@ -1209,6 +1209,9 @@ EditorSceneContext::EditorSceneContext()
         if (!projectBootstrap_.settingsError.empty()) {
             console_.Error("Project", projectBootstrap_.settingsError);
         }
+        if (projectBootstrap_.descriptorMirrorStale && SaveProjectConfiguration()) {
+            console_.Info("Project", "Applied project settings edited outside the editor.");
+        }
         if (!projectBootstrap_.particlePolicy.IsRunnable()) {
             console_.Warning("Project", projectBootstrap_.particlePolicy.diagnostic +
                 " Choose Add Rendering.21kbParticle or Cancel before running the project.");
@@ -8220,6 +8223,26 @@ bool EditorSceneContext::ActivateProjectPhysicsLayers(kb::scene::Scene& scene) {
 
 const kb::project::ProjectSettings& EditorSceneContext::ProjectConfiguration() const noexcept {
     return projectConfig_;
+}
+
+// Stored as the project-relative virtual path, matching how the default map is
+// written, so the value stays meaningful if the project folder moves.
+void EditorSceneContext::RememberLastOpenMap() {
+    std::string virtualPath;
+    if (!currentScenePath_.empty()) {
+        const auto* metadata = scene_->Assets().Manager().Registry().FindByPath(
+            scene_->Assets().Manager().Mounts().ToVirtual(currentScenePath_).value_or(std::filesystem::path{}));
+        if (metadata != nullptr) {
+            virtualPath = metadata->virtualPath.generic_string();
+        } else if (const auto mapped = scene_->Assets().Manager().Mounts().ToVirtual(currentScenePath_)) {
+            virtualPath = mapped->generic_string();
+        }
+    }
+    if (projectConfig_.lastOpenMap == virtualPath) {
+        return;
+    }
+    projectConfig_.lastOpenMap = std::move(virtualPath);
+    static_cast<void>(SaveProjectConfiguration());
 }
 
 // The single writer of the project's settings. It persists them to the settings
