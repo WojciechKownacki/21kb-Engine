@@ -9,7 +9,7 @@ namespace kb::input {
 // The numeric values are part of the serialized asset format, so existing entries
 // must never be renumbered. New entries append within their reserved range.
 //
-// Equivalent in spirit to Unreal's FKey, but a compact enum instead of a string.
+// A compact enum rather than a string name, so lookups stay allocation-free.
 enum class InputKey : std::uint16_t {
     None = 0,
 

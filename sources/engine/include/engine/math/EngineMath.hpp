@@ -406,7 +406,7 @@ constexpr Vec3 Max(Vec3 lhs, Vec3 rhs) noexcept {
 // `to`. `from` and `to` exactly opposite (180 degrees apart) is a
 // genuinely underdetermined case (infinitely many valid rotation axes) —
 // resolved by picking an arbitrary axis perpendicular to `from`, the same
-// resolution Ogre3D/Unity's equivalent functions use.
+// resolution the conventional implementation of this uses.
 [[nodiscard]] Quat FromToRotation(Vec3 from, Vec3 to) noexcept;
 
 // Rotates from `from` toward `to` by at most `maxDelta`, without
@@ -494,7 +494,7 @@ constexpr Vec3 Max(Vec3 lhs, Vec3 rhs) noexcept {
 }
 
 // Clamps t to [0,1] before interpolating (matches the game-engine
-// convention this API otherwise follows — e.g. Unity's Mathf.Lerp — so a
+// convention this API otherwise follows — clamped, not free — so a
 // caller can't overshoot past `b` by accident; Remap below is built on
 // this and inherits the same clamped behavior).
 [[nodiscard]] constexpr float Lerp(float a, float b, float t) noexcept {
@@ -528,7 +528,7 @@ constexpr Vec3 Max(Vec3 lhs, Vec3 rhs) noexcept {
 }
 
 // Moves current toward target by at most maxDelta, without overshooting
-// past target (Unity's Mathf.MoveTowards) — unlike Lerp, this is
+// past target (a constant step, not a ratio) — unlike Lerp, this is
 // frame-rate-independent when maxDelta = speed * deltaTime. LIB-054: a NaN
 // `target` (or `current`) is checked and propagated explicitly — without
 // that check, `difference < 0.0F` is false for a NaN difference, so the
@@ -551,8 +551,8 @@ struct DampResult {
     float velocity = 0.0F;
 };
 
-// Critically-damped spring smoothing (Unity's Mathf.SmoothDamp / Game
-// Programming Gems 4's "critically damped ease-in ease-out" formula).
+// Critically-damped spring smoothing (Game Programming Gems 4's
+// "critically damped ease-in ease-out" formula).
 // `velocity` is state the caller owns and threads back in every call
 // (there is no by-reference output across the script boundary — LIB-032
 // forbids that — so this returns {value, velocity} instead of taking

@@ -478,9 +478,9 @@ void ScriptRuntimeSceneSystem::DispatchPendingCollisionEvents(kb::scene::Scene& 
     // for, exactly like DispatchFiredTimers/DispatchCompletedTasks above).
     // The event name encodes both the Enter/Stay/Exit phase and whether
     // either collider involved is a trigger (kb::scene::PendingCollisionEvent::
-    // isTrigger) — the same six names Unity's own OnCollision*/OnTrigger*
-    // callbacks use, so existing Lua/Native/VisualGraph scripts written
-    // against that convention need no translation layer.
+    // isTrigger) — the six standard OnCollision*/OnTrigger* callback names,
+    // so existing Lua/Native/VisualGraph scripts written against that
+    // convention need no translation layer.
     for (const kb::scene::PendingCollisionEvent& pending : kb::scene::PhysicsBackend::DrainPendingCollisionEvents(scene)) {
         const char* name = nullptr;
         switch (pending.phase) {
@@ -677,8 +677,8 @@ void ScriptRuntimeSceneSystem::SyncBehaviourLifecycles(kb::scene::Scene& scene, 
             if (!tracked.created) {
                 // Seed editor-authored exposed-variable overrides into the backend
                 // BEFORE Created runs, so the very first lifecycle hook already
-                // observes the authored value (the Unity/Godot "apply overrides
-                // before _ready" timing). No-op for backends without exposed vars.
+                // observes the authored value (overrides are applied before the
+                // first lifecycle hook). No-op for backends without exposed vars.
                 if (IScriptBackend* backend = runtime_.FindBackend(tracked.behaviour.backend); backend != nullptr) {
                     backend->ApplyExposedVariableOverrides(
                         tracked.entity, tracked.behaviour, scene.Entities().BehaviourVariableOverrides(tracked.entity));

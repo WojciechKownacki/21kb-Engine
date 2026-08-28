@@ -133,7 +133,7 @@ public:
     // a mandatory parameter of the function signature itself, so there is
     // no allocating alternative to reach for by mistake in a Tick. Hits
     // beyond `results.Capacity()` are silently not written (the exact,
-    // long-established NonAlloc contract - see Unity's own RaycastNonAlloc);
+    // long-established contract for a caller-provided results buffer);
     // `results.Full()` after the call is the caller's signal that more may
     // exist. Cast/raycast results are ordered closest-first. Overlap results
     // are ordered deepest-first because a stationary overlap has no travel
