@@ -42,10 +42,8 @@ using ProjectDescriptorBinaryIO::WriteUInt32;
 }
 
 [[nodiscard]] bool CanWrite(const ProjectDescriptor& descriptor) {
-    if (descriptor.name.empty() ||
-        descriptor.engineAssociation.empty() ||
+    if (descriptor.engineAssociation.empty() ||
         descriptor.contentRoot.empty() ||
-        descriptor.defaultScene.empty() ||
         descriptor.targetPlatforms.size() > ProjectDescriptorFormat::MaxTargetPlatformCount ||
         descriptor.modules.size() > ProjectDescriptorFormat::MaxModuleCount ||
         descriptor.plugins.size() > ProjectDescriptorFormat::MaxPluginCount) {
@@ -53,13 +51,7 @@ using ProjectDescriptorBinaryIO::WriteUInt32;
     }
 
     if (!StringFits(descriptor.engineAssociation) ||
-        !StringFits(descriptor.name) ||
-        !StringFits(descriptor.category) ||
-        !StringFits(descriptor.description) ||
-        !StringFits(descriptor.contentRoot) ||
-        !StringFits(descriptor.defaultScene) ||
-        !StringFits(descriptor.inputMappingContext) ||
-        !StringFits(descriptor.physicsLayersAsset)) {
+        !StringFits(descriptor.contentRoot)) {
         return false;
     }
 
@@ -88,11 +80,7 @@ using ProjectDescriptorBinaryIO::WriteUInt32;
     WriteRaw(output, ProjectDescriptorFormat::Magic.data(), ProjectDescriptorFormat::Magic.size());
     WriteUInt32(output, ProjectDescriptor::CurrentFileVersion);
     WriteString(output, descriptor.engineAssociation);
-    WriteString(output, descriptor.name);
-    WriteString(output, descriptor.category);
-    WriteString(output, descriptor.description);
     WriteString(output, descriptor.contentRoot);
-    WriteString(output, descriptor.defaultScene);
     WriteBool(output, descriptor.disableEnginePluginsByDefault);
 
     WriteUInt32(output, static_cast<std::uint32_t>(descriptor.targetPlatforms.size()));
@@ -114,13 +102,6 @@ using ProjectDescriptorBinaryIO::WriteUInt32;
         WriteBool(output, plugin.enabled);
     }
 
-    // File version 2+: project-wide input settings.
-    WriteString(output, descriptor.inputMappingContext);
-    WriteBool(output, descriptor.inputEnabled);
-    // File version 4+: project-wide scene lighting path.
-    WriteUInt32(output, SceneLightingPathValue(descriptor.sceneLightingPath));
-    // File version 5+: project-wide physics layers asset (LIB-129).
-    WriteString(output, descriptor.physicsLayersAsset);
     return output;
 }
 
@@ -139,9 +120,7 @@ bool ProjectDescriptorWriter::Write(const std::filesystem::path& path, const Pro
     const ProjectDescriptorIntegrity integrity = ProjectDescriptorIntegrityService::ComputeFile(path);
     const ProjectDescriptorMeta meta{
         .fileVersion = ProjectDescriptorMeta::CurrentFileVersion,
-        .projectName = descriptor.name,
         .engineAssociation = descriptor.engineAssociation,
-        .defaultScene = descriptor.defaultScene,
         .projectFile = path.filename(),
         .byteSize = integrity.byteSize,
         .contentHashFnv1a64 = integrity.contentHashFnv1a64,
