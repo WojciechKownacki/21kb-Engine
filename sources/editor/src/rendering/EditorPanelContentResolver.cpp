@@ -1,6 +1,7 @@
 #include "rendering/EditorPanelContentResolver.hpp"
 
 #if defined(_WIN32)
+#include "rendering/FloatingPanelGeometry.hpp"
 #include "rendering/GdiDrawing.hpp"
 
 namespace kb::editor {
@@ -25,8 +26,7 @@ namespace {
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,
-        metrics.splitterSize,
-        metrics.panelPadding);
+        metrics.splitterSize);
 }
 
 } // namespace
@@ -61,13 +61,8 @@ std::optional<EditorResolvedPanelContent> EditorPanelContentResolver::ResolvePan
         }
         RECT client{};
         GetClientRect(sourceWindow, &client);
-        RECT panelRect = GdiDrawing::Inset(client, 1);
-        RECT content = panel->kind == DockPanelKind::Scene
-            ? panelRect
-            : GdiDrawing::Inset(panelRect, metrics.panelPadding);
-        content.top += metrics.tabStripHeight;
         return EditorResolvedPanelContent{
-            .content = content,
+            .content = FloatingPanelGeometry::Content(client, metrics.tabStripHeight),
             .panelId = panelId,
         };
     }

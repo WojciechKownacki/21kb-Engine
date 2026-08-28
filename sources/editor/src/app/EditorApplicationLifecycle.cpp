@@ -47,7 +47,7 @@ void RestoreParticleEditorHostSession(EditorApplicationState& state) {
         const DockLayout layout = state.dockModel.Queries().BuildLayout(
             client.right, client.bottom, state.metrics.menuHeight, state.metrics.toolbarHeight,
             state.metrics.tabStripHeight, state.metrics.tabMinWidth, state.metrics.tabWidth,
-            state.metrics.splitterSize, state.metrics.panelPadding);
+            state.metrics.splitterSize);
         const DockPanel* targetPanel = nullptr;
         for (const DockPanel& candidate : state.dockModel.Queries().Panels()) {
             if (candidate.id != panelId && candidate.visible && candidate.area == session.area) {
