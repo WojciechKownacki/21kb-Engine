@@ -1,6 +1,7 @@
 #include "HubProjectStore.hpp"
 
 #include "HubText.hpp"
+#include "engine/project/ProjectSettings.hpp"
 #include "engine/project/ProjectManager.hpp"
 
 #if defined(_WIN32)
@@ -209,10 +210,18 @@ HubProjectItem HubProjectStore::BuildProjectItem(const std::filesystem::path& pr
         const kb::project::ProjectDescriptorReadResult loaded = kb::project::ProjectManager::LoadProject(projectFile);
         item.valid = loaded.succeeded;
         if (loaded.succeeded) {
-            item.name = HubText::Utf8ToWide(loaded.descriptor.name);
-            item.description = HubText::Utf8ToWide(loaded.descriptor.description);
-            item.category = HubText::Utf8ToWide(loaded.descriptor.category);
-            item.defaultScene = HubText::Utf8ToWide(loaded.descriptor.defaultScene);
+            // What the list shows comes from the settings file, the same one the editor
+            // edits, so renaming a project there is reflected here without a rebuild.
+            const kb::project::ProjectSettingsLoadResult settings =
+                kb::project::ProjectSettingsStore::Load(
+                    kb::project::ProjectSettingsStore::FilePath(item.projectRoot));
+            const kb::project::ProjectSettings resolved = settings.found && settings.Succeeded()
+                ? settings.settings
+                : kb::project::ProjectSettingsStore::FromDescriptor(loaded.descriptor);
+            item.name = HubText::Utf8ToWide(resolved.name);
+            item.description = HubText::Utf8ToWide(resolved.description);
+            item.category = HubText::Utf8ToWide(resolved.category);
+            item.defaultScene = HubText::Utf8ToWide(resolved.defaultMap);
             item.validationMessage = L"Ready";
         } else {
             item.validationMessage = HubText::Utf8ToWide(loaded.error);
