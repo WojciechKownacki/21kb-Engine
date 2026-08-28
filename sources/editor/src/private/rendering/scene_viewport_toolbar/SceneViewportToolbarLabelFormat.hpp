@@ -9,8 +9,8 @@
 namespace kb::editor {
 
 // LIB-062: allocation-free formatting of the scene-viewport toolbar's
-// per-frame numeric HUD labels (FPS counter, draw-call/mesh chips, ECS
-// frame-time chip), built on kb::library::TextFormatBuffer over a
+// per-frame numeric HUD label (the FPS counter), built on
+// kb::library::TextFormatBuffer over a
 // caller-provided stack buffer. This is deliberately platform-independent
 // (no GDI/HDC) so the formatting — the part LIB-062 is about — is directly
 // unit-testable; the Win32 GDI renderer (SceneViewportToolbarInfoRenderer)
@@ -30,32 +30,6 @@ struct SceneViewportToolbarLabelFormat {
             static_cast<void>(buffer.AppendInt(fps));
         } else {
             static_cast<void>(buffer.Append("FPS --"));
-        }
-        return buffer.View();
-    }
-
-    [[nodiscard]] static std::string_view DrawCalls(std::span<char> out, std::uint32_t count) {
-        kb::library::TextFormatBuffer buffer{ out };
-        static_cast<void>(buffer.Append("DC "));
-        static_cast<void>(buffer.AppendUInt(count));
-        return buffer.View();
-    }
-
-    [[nodiscard]] static std::string_view Meshes(std::span<char> out, std::uint32_t count) {
-        kb::library::TextFormatBuffer buffer{ out };
-        static_cast<void>(buffer.Append("M "));
-        static_cast<void>(buffer.AppendUInt(count));
-        return buffer.View();
-    }
-
-    [[nodiscard]] static std::string_view EcsMilliseconds(std::span<char> out, bool valid, double milliseconds) {
-        kb::library::TextFormatBuffer buffer{ out };
-        if (valid) {
-            static_cast<void>(buffer.Append("ECS "));
-            static_cast<void>(buffer.AppendFloat(milliseconds, 2));
-            static_cast<void>(buffer.Append(" ms"));
-        } else {
-            static_cast<void>(buffer.Append("ECS --"));
         }
         return buffer.View();
     }
