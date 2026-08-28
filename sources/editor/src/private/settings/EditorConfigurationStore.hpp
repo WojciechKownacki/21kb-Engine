@@ -37,6 +37,10 @@ struct EditorConfiguration {
     std::vector<EditorPanelSession> panels;
     // The dock tree, serialized. Empty means the default workspace.
     std::string layout;
+    // Which saved layout the arrangement came from, so the Layout menu can show it as
+    // the current one. Empty while the workspace is on the default arrangement or on
+    // one that was never saved under a name.
+    std::string layoutName;
 
     [[nodiscard]] const EditorPanelSession* FindPanel(std::uint32_t panelId) const noexcept;
 };

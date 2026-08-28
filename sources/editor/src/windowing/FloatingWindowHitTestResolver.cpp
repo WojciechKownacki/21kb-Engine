@@ -17,7 +17,9 @@ LRESULT FloatingWindowHitTestResolver::Resolve(HWND window, LPARAM lparam, const
     const int y = screenPoint.y - frame.top;
     const int width = frame.right - frame.left;
     const int height = frame.bottom - frame.top;
-    const int border = metrics.floatingResizeBorder;
+    // A maximized panel fills the work area and has no edges to drag; leaving the
+    // border strip live there would only let a click near the screen edge resize it.
+    const int border = IsZoomed(window) != FALSE ? 0 : metrics.floatingResizeBorder;
 
     const bool left = x >= 0 && x < border;
     const bool right = x >= width - border && x < width;

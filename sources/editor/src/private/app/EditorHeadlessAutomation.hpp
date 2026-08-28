@@ -29,6 +29,23 @@ public:
         bool animated = false;
     };
 
+    struct FloatingWindowFrame {
+        bool succeeded = false;
+        // Pixels of window height Windows keeps for itself, with the editor's frame
+        // handling and without it.
+        int reservedWithHandler = -1;
+        int reservedWithoutHandler = -1;
+    };
+
+    struct SavedLayoutRoundTrip {
+        bool succeeded = false;
+        bool listed = false;
+        bool applied = false;
+        bool named = false;
+        bool deleted = false;
+        std::string layout;
+    };
+
     struct WorkspaceLayoutPersistence {
         bool succeeded = false;
         bool storedOnDisk = false;
@@ -75,6 +92,8 @@ public:
         VerifyParticleDependencyNavigation();
     [[nodiscard]] WorkspaceLayoutPersistence
         VerifyWorkspaceLayoutPersistence();
+    [[nodiscard]] SavedLayoutRoundTrip VerifySavedLayoutRoundTrip();
+    [[nodiscard]] FloatingWindowFrame VerifyFloatingWindowFrame();
 
     [[nodiscard]] bool InspectorPointerDown(int x, int y);
     [[nodiscard]] bool InspectorPointerDrag(int x, int y);
