@@ -254,6 +254,7 @@
     { "op": "open_scene", "path": "Assets/Scenes/UniversalScenario.21kbscene" },
     { "op": "capture", "panel": "hierarchy", "checkpoint": "11-reloaded-scene" },
     { "op": "profile_inspector_drag", "steps": 60 },
+    { "op": "profile_idle_scene_frame", "steps": 60 },
     { "op": "assert_floating_window_frame" },
     { "op": "assert_saved_layout_roundtrip" },
     { "op": "assert_workspace_layout_persistence" }
