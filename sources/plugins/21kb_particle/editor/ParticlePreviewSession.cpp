@@ -143,7 +143,8 @@ ParticleEditorResult ParticlePreviewSession::Start(
 }
 
 ParticleEditorResult ParticlePreviewSession::PublishWorkingCopy(
-    const kb::scene::ParticleEffectAsset& asset) {
+    const kb::scene::ParticleEffectAsset& asset,
+    bool restartLiveInstances) {
     if (scene_ == nullptr) {
         return { .status = ParticleEditorStatus::RuntimeFailure,
                  .message = "particle preview session is not active" };
@@ -163,12 +164,16 @@ ParticleEditorResult ParticlePreviewSession::PublishWorkingCopy(
         return { .status = ParticleEditorStatus::PublicationFailed,
                  .message = manager.LastError() };
     }
-    // RefreshCompiledEffects runs on the fixed step. Restarting first would
-    // prewarm against the previous compiled revision, so spawn/burst/color
-    // edits would never land in the 3D preview.
+    // RefreshCompiledEffects runs on the fixed step, and it already repoints live
+    // instances at the new compiled effect - resetting them only when the change is
+    // topologically incompatible. A restart here is therefore additional, and only
+    // warranted for edits the running simulation cannot surface by itself.
     if (!scene_->Runtime().Update(kb::scene::kSceneRuntimeDefaultFixedDeltaSeconds)) {
         return { .status = ParticleEditorStatus::RuntimeFailure,
                  .message = "particle preview could not compile the published working copy" };
+    }
+    if (!restartLiveInstances) {
+        return {};
     }
     for (const std::uint64_t instanceId : kb::particles::ParticlePlayback::LiveInstanceIds(*scene_)) {
         const auto restarted = kb::particles::ParticlePlayback::Restart(*scene_, instanceId);

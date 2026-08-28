@@ -1183,7 +1183,9 @@ public:
     [[nodiscard]] bool HasActiveTransformEdit() const noexcept;
 
 private:
-    [[nodiscard]] bool FinalizeParticleEditorCommand(kb::particle_editor::ParticleEditorResult result);
+    [[nodiscard]] bool SpawnEditRequiresPreviewRestart(const kb::scene::ParticleSpawnAsset& spawn) const;
+    [[nodiscard]] bool FinalizeParticleEditorCommand(kb::particle_editor::ParticleEditorResult result,
+                                                     bool restartPreview = false);
     [[nodiscard]] bool FinalizeLoadedSkeletalMeshEditorAsset(
         kb::assets::AssetId meshId,
         kb::assets::AssetId skeletonId,
