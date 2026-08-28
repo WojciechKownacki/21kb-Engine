@@ -273,6 +273,11 @@ bool EditorSceneViewportTextOverlay::Update(
 
 void EditorSceneViewportTextOverlay::Show() noexcept {
     if (!impl_->hasContent || impl_->window == nullptr || IsWindow(impl_->window) == 0) return;
+    // Ensure() already re-positions and re-sizes this popup every frame, so the only thing left for
+    // Show() is the hidden -> shown transition. Test the popup's own WS_VISIBLE bit rather than
+    // IsWindowVisible(), which reports 0 whenever the owner window is hidden and would make this
+    // re-issue a redundant SetWindowPos on every presented frame.
+    if ((GetWindowLongPtrW(impl_->window, GWL_STYLE) & WS_VISIBLE) != 0) return;
     SetWindowPos(impl_->window, HWND_TOP, 0, 0, static_cast<int>(impl_->width),
         static_cast<int>(impl_->height),
         SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
