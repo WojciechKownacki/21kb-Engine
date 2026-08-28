@@ -21,6 +21,7 @@
 #include "rendering/MainWindowBackBufferPainter.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "scene/EditorTerrainService.hpp"
+#include "windowing/EditorFloatingWindowFrame.hpp"
 
 #include <optional>
 #include <string>
@@ -661,6 +662,11 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
                 context_.sceneViewport,
             }.HandleTimer(messageWindow, wparam)) {
             return 0;
+        }
+        break;
+    case WM_NCCALCSIZE:
+        if (context_.floatingWindows.Queries().IsFloatingWindow(messageWindow)) {
+            return EditorFloatingWindowFrame::HandleNonClientCalcSize(messageWindow, wparam, lparam);
         }
         break;
     case WM_NCHITTEST:

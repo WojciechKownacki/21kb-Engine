@@ -30,20 +30,27 @@ struct EditorToolbarRects {
 
 struct EditorMenuRects {
 #if defined(_WIN32)
+    // The Layout menu is as long as the project has layouts, so the rows are a
+    // fixed-capacity run with a live count rather than a fixed four.
+    static constexpr std::size_t MaximumRows = 16U;
+
     RECT menuBar{};
     RECT file{};
     RECT edit{};
+    RECT layout{};
     RECT options{};
     RECT help{};
     RECT dropdown{};
-    std::array<RECT, 4> dropdownRows{};
+    std::array<RECT, MaximumRows> dropdownRows{};
+    int dropdownRowCount = 0;
 #endif
 };
 
 class EditorToolbarRenderer {
 public:
 #if defined(_WIN32)
-    [[nodiscard]] static EditorMenuRects ResolveMenu(const RECT& rect, EditorMenuCommand openMenu) noexcept;
+    [[nodiscard]] static EditorMenuRects ResolveMenu(
+        const RECT& rect, EditorMenuCommand openMenu, int rowCount) noexcept;
     [[nodiscard]] static EditorToolbarRects ResolveToolbar(const RECT& rect) noexcept;
     [[nodiscard]] static EditorMenuCommand HitTestMenu(const EditorMenuRects& rects, int x, int y) noexcept;
     [[nodiscard]] static std::optional<int> HitTestMenuRow(const EditorMenuRects& rects, int x, int y) noexcept;

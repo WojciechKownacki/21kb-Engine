@@ -1,5 +1,9 @@
 #include "app/EditorShellInteractionState.hpp"
 
+#include "rendering/EditorToolbarLayout.hpp"
+
+#include <utility>
+
 namespace kb::editor {
 
 bool EditorShellInteractionState::SetHoveredMenu(EditorMenuCommand menu) noexcept {
@@ -26,6 +30,21 @@ bool EditorShellInteractionState::SetHoveredMenuRow(std::optional<int> row) noex
     }
     hoveredMenuRow_ = row;
     return true;
+}
+
+void EditorShellInteractionState::SetLayoutMenu(EditorLayoutMenuModel menu) {
+    layoutMenu_ = std::move(menu);
+}
+
+const EditorLayoutMenuModel& EditorShellInteractionState::LayoutMenu() const noexcept {
+    return layoutMenu_;
+}
+
+int EditorShellInteractionState::MenuRowCount(EditorMenuCommand menu) const noexcept {
+    if (menu == EditorMenuCommand::Layout) {
+        return static_cast<int>(layoutMenu_.Rows().size());
+    }
+    return EditorToolbarLayout::FixedRowCount(menu);
 }
 
 bool EditorShellInteractionState::SetHoveredSave(bool hovered) noexcept {

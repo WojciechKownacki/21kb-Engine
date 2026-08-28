@@ -1,5 +1,7 @@
 #include "settings/EditorConfigurationStore.hpp"
 
+#include "settings/EditorPanelSessionText.hpp"
+
 #include "engine/config/IniDocument.hpp"
 
 #include <algorithm>
@@ -14,108 +16,6 @@ namespace {
 constexpr std::string_view kSaving = "Editor.Saving";
 constexpr std::string_view kPanels = "Editor.Panels";
 constexpr std::string_view kLayout = "Editor.Layout";
-
-constexpr std::array<std::string_view, 5U> kAreaNames{
-    "Left", "Center", "Right", "Bottom", "Floating",
-};
-
-[[nodiscard]] std::string_view AreaName(DockArea area) noexcept {
-    const auto index = static_cast<std::size_t>(area);
-    return index < kAreaNames.size() ? kAreaNames[index] : kAreaNames[1U];
-}
-
-[[nodiscard]] DockArea ParseArea(std::string_view name, DockArea fallback) noexcept {
-    const auto entry = std::ranges::find(kAreaNames, name);
-    return entry == kAreaNames.end()
-        ? fallback
-        : static_cast<DockArea>(std::distance(kAreaNames.begin(), entry));
-}
-
-[[nodiscard]] std::string FormatRect(const DockRect& rect) {
-    std::ostringstream stream;
-    stream.imbue(std::locale::classic());
-    stream << rect.x << ' ' << rect.y << ' ' << rect.width << ' ' << rect.height;
-    return stream.str();
-}
-
-[[nodiscard]] bool ParseRect(std::string_view text, DockRect& rect) {
-    std::istringstream stream{std::string{text}};
-    stream.imbue(std::locale::classic());
-    DockRect parsed{};
-    stream >> parsed.x >> parsed.y >> parsed.width >> parsed.height;
-    if (stream.fail() || parsed.width <= 0 || parsed.height <= 0) {
-        return false;
-    }
-    rect = parsed;
-    return true;
-}
-
-// Kept project-relative on disk so moving a project folder does not strand the
-// document a panel was showing. A path that leaves the project is refused rather
-// than stored absolute: this file records where work happened inside one project.
-[[nodiscard]] bool TryMakeRelative(
-    const std::filesystem::path& path,
-    const std::filesystem::path& projectRoot,
-    std::string& relative) {
-    relative.clear();
-    if (path.empty()) {
-        return true;
-    }
-    std::error_code error;
-    const std::filesystem::path result = std::filesystem::relative(path, projectRoot, error);
-    if (error || result.empty() || *result.begin() == "..") {
-        return false;
-    }
-    relative = result.generic_string();
-    return true;
-}
-
-[[nodiscard]] bool ParsePanelId(std::string_view key, std::uint32_t& panelId) {
-    constexpr std::string_view prefix = "Panel.";
-    if (!key.starts_with(prefix)) {
-        return false;
-    }
-    const std::string_view digits = key.substr(prefix.size());
-    std::uint32_t parsed = 0U;
-    const std::from_chars_result result =
-        std::from_chars(digits.data(), digits.data() + digits.size(), parsed);
-    if (result.ec != std::errc{} || result.ptr != digits.data() + digits.size() || parsed == 0U) {
-        return false;
-    }
-    panelId = parsed;
-    return true;
-}
-
-[[nodiscard]] std::filesystem::path FromRelative(std::string_view text, const std::filesystem::path& projectRoot) {
-    if (text.empty()) {
-        return {};
-    }
-    const std::filesystem::path stored{text};
-    return stored.is_absolute() ? stored : projectRoot / stored;
-}
-
-// "<area> <visible> <x> <y> <w> <h> [document]"
-[[nodiscard]] bool ParsePanel(
-    std::string_view text,
-    const std::filesystem::path& projectRoot,
-    EditorPanelSession& session) {
-    std::istringstream stream{std::string{text}};
-    stream.imbue(std::locale::classic());
-    std::string area;
-    int visible = 0;
-    DockRect rect{};
-    stream >> area >> visible >> rect.x >> rect.y >> rect.width >> rect.height;
-    if (stream.fail() || rect.width <= 0 || rect.height <= 0) {
-        return false;
-    }
-    session.area = ParseArea(area, DockArea::Center);
-    session.visible = visible != 0;
-    session.floatingRect = rect;
-    std::string document;
-    stream >> document;
-    session.documentPath = FromRelative(document, projectRoot);
-    return true;
-}
 
 } // namespace
 
@@ -156,13 +56,16 @@ EditorConfigurationLoadResult EditorConfigurationStore::Load(
     // is simply not restored rather than dropped from the file.
     for (const auto& [key, value] : document.SectionEntries(kPanels)) {
         EditorPanelSession session;
-        if (!ParsePanelId(key, session.panelId) || !ParsePanel(value, projectRoot, session)) {
+        if (!EditorPanelSessionText::Parse(key, value, projectRoot, session)) {
             continue;
         }
         result.configuration.panels.push_back(std::move(session));
     }
     if (const std::optional<std::string_view> layout = document.GetString(kLayout, "Tree")) {
         result.configuration.layout = std::string{*layout};
+    }
+    if (const std::optional<std::string_view> name = document.GetString(kLayout, "Name")) {
+        result.configuration.layoutName = std::string{*name};
     }
 
     return result;
@@ -193,21 +96,15 @@ bool EditorConfigurationStore::Save(
         if (session.panelId == 0U) {
             continue;
         }
-        std::string relativeDocument;
-        if (!TryMakeRelative(session.documentPath, projectRoot, relativeDocument)) {
+        std::string value;
+        if (!EditorPanelSessionText::Format(session, projectRoot, value)) {
             error = "Editor settings cannot record a document outside the project.";
             return false;
         }
-        std::ostringstream value;
-        value.imbue(std::locale::classic());
-        value << AreaName(session.area) << ' ' << (session.visible ? '1' : '0') << ' '
-              << FormatRect(session.floatingRect);
-        if (!relativeDocument.empty()) {
-            value << ' ' << relativeDocument;
-        }
-        document.SetString(kPanels, "Panel." + std::to_string(session.panelId), value.str());
+        document.SetString(kPanels, EditorPanelSessionText::Key(session.panelId), std::move(value));
     }
     document.SetString(kLayout, "Tree", configuration.layout);
+    document.SetString(kLayout, "Name", configuration.layoutName);
     return document.Save(path, error);
 }
 
