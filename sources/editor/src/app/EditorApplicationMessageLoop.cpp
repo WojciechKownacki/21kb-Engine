@@ -226,8 +226,7 @@ constexpr int kMaxMessagesPerPump = 128;
         state.metrics.tabStripHeight,
         state.metrics.tabMinWidth,
         state.metrics.tabWidth,
-        state.metrics.splitterSize,
-        state.metrics.panelPadding);
+        state.metrics.splitterSize);
 }
 
 [[nodiscard]] bool ParticleEditorPanelIsVisible(const EditorApplicationState& state) {
@@ -242,8 +241,7 @@ constexpr int kMaxMessagesPerPump = 128;
         state.metrics.tabStripHeight,
         state.metrics.tabMinWidth,
         state.metrics.tabWidth,
-        state.metrics.splitterSize,
-        state.metrics.panelPadding);
+        state.metrics.splitterSize);
     for (const DockPanelLayout& panelLayout : layout.panels) {
         if (!panelLayout.active) continue;
         const DockPanel* panel = state.dockModel.Queries().FindPanel(panelLayout.panelId);

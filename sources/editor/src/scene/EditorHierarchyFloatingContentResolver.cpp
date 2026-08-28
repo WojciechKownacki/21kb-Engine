@@ -1,6 +1,7 @@
 #include "scene/EditorHierarchyFloatingContentResolver.hpp"
 
 #if defined(_WIN32)
+#include "rendering/FloatingPanelGeometry.hpp"
 
 namespace kb::editor {
 
@@ -12,13 +13,7 @@ std::optional<RECT> EditorHierarchyFloatingContentResolver::Resolve(HWND sourceW
 
     RECT client{};
     GetClientRect(sourceWindow, &client);
-    const RECT panelRect{ client.left + 1, client.top + 1, client.right - 1, client.bottom - 1 };
-    return RECT{
-        panelRect.left + metrics.panelPadding,
-        panelRect.top + metrics.panelPadding + metrics.tabStripHeight,
-        panelRect.right - metrics.panelPadding,
-        panelRect.bottom - metrics.panelPadding,
-    };
+    return FloatingPanelGeometry::Content(client, metrics.tabStripHeight);
 }
 
 } // namespace kb::editor

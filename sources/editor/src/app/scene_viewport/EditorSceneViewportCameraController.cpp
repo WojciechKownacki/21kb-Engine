@@ -75,8 +75,7 @@ constexpr DWORD kToolbarFpsRefreshMs = 250U;
         metrics.tabStripHeight,
         metrics.tabMinWidth,
         metrics.tabWidth,
-        metrics.splitterSize,
-        metrics.panelPadding);
+        metrics.splitterSize);
     for (const DockPanelLayout& panelLayout : layout.panels) {
         if (!panelLayout.active || panelLayout.panelId != panelId) {
             continue;
