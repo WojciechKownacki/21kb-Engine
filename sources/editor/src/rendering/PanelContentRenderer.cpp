@@ -12,6 +12,7 @@
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/ParticleEditorPanelRenderer.hpp"
+#include "rendering/BuildGamePanelRenderer.hpp"
 #include "rendering/PluginsPanelRenderer.hpp"
 #include "rendering/ProjectFilesPanelRenderer.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
@@ -375,6 +376,9 @@ void PanelContentRenderer::Paint(
         break;
     case DockPanelKind::Plugins:
         PluginsPanelRenderer{}.Paint(dc, content, theme, sceneContext);
+        break;
+    case DockPanelKind::BuildGame:
+        BuildGamePanelRenderer{}.Paint(dc, content, theme, sceneContext);
         break;
     case DockPanelKind::ScriptEditor:
         ScriptEditorPanelRenderer{}.Paint(dc, content, theme, sceneContext, EditorScriptEditorOverlay::IsDirty(sceneViewportHost));

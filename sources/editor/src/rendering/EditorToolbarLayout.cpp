@@ -29,17 +29,17 @@ constexpr std::array<EditorMenuDescriptor, 5> kMenus{{
 
 // The Layout menu is missing here on purpose: its rows are the layouts a project
 // holds, so they are built when the menu opens rather than fixed by the build.
-constexpr std::array<std::array<std::string_view, 4>, 5> kDropdownRows{{
-    { "New Scene", "Open Scene...", "Save", "Save As..." },
-    { "Undo", "Redo", "Duplicate", "Plugins" },
-    { "", "", "", "" },
-    { "Renderer", "Project Settings", "Editor Settings", "" },
-    { "Documentation", "Report Issue", "Release Notes", "About" },
+constexpr std::array<std::array<std::string_view, 5>, 5> kDropdownRows{{
+    { "New Scene", "Open Scene...", "Save", "Save As...", "Build Game" },
+    { "Undo", "Redo", "Duplicate", "Plugins", "" },
+    { "", "", "", "", "" },
+    { "Renderer", "Project Settings", "Editor Settings", "", "" },
+    { "Documentation", "Report Issue", "Release Notes", "About", "" },
 }};
 
 // How many of those rows each menu actually shows. Layout counts zero here: its
 // length comes from the project, not from the build.
-constexpr std::array<int, 5> kDropdownRowCounts{ 4, 4, 0, 3, 4 };
+constexpr std::array<int, 5> kDropdownRowCounts{ 5, 4, 0, 3, 4 };
 
 // The Layout menu is the only one whose length the project decides, so the row
 // geometry has to have room for the longest one the menu model can produce.
