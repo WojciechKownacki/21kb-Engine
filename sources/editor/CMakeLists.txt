@@ -1272,6 +1272,12 @@ if(BUILD_TESTING)
         src/rendering/EditorToolbarLayout.cpp
         src/rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.cpp
         src/rendering/scene_viewport_toolbar/SceneViewportToolbarState.cpp
+        src/rendering/SvgGraphicsPathBuilder.cpp
+        src/rendering/SvgPathCursor.cpp
+        src/rendering/SvgPathFigureBuilder.cpp
+        src/rendering/SvgPathArcConverter.cpp
+        src/rendering/SvgPathArcMath.cpp
+        src/rendering/SvgPathArcSegment.cpp
         src/assets/EditorAssetOpenPolicy.cpp
         src/rendering/ProjectFilesAssetIconResolver.cpp
         src/rendering/ProjectFilesMaterialPreviewThumbnailModel.cpp
