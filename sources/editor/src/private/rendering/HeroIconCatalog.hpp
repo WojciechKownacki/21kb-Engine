@@ -2,6 +2,12 @@
 
 #include "rendering/HeroIconKind.hpp"
 
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <Windows.h>
+#endif
+
 #include <span>
 #include <string_view>
 
@@ -14,6 +20,9 @@ struct HeroIconPath {
     // fill-rule="evenodd", so that stays the default; a glyph whose subpaths are meant to
     // stack rather than punch holes in each other sets this false.
     bool evenOdd = true;
+    // A brand mark carries its own colours, so a path may name one. CLR_INVALID keeps the
+    // default: the glyph takes whatever colour the caller is drawing in.
+    COLORREF color = CLR_INVALID;
 };
 
 struct HeroIconGlyph {
