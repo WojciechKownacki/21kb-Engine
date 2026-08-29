@@ -206,10 +206,25 @@ void InvalidateToolbar(HWND mainWindow, const DockLayout& layout) noexcept {
         metrics.splitterSize);
 }
 
-void ActivateRightPanel(HWND mainWindow, EditorDockModel& dockModel, DockPanelKind kind) {
-    if (dockModel.Commands().ActivatePanelKind(kind, DockArea::Right)) {
-        InvalidateRect(mainWindow, nullptr, FALSE);
+// Brings a panel up wherever it belongs. A panel the saved workspace never heard of is
+// in the model but in no leaf, and ActivatePanelKind drops it into `fallbackArea` - which
+// is what lets a panel added after a layout was saved still be reachable from the menu.
+void ActivatePanel(
+    HWND mainWindow,
+    EditorDockModel& dockModel,
+    EditorSceneBgfxViewport& sceneViewport,
+    DockPanelKind kind,
+    DockArea fallbackArea) {
+    if (!dockModel.Commands().ActivatePanelKind(kind, fallbackArea)) {
+        return;
     }
+    InvalidateRect(mainWindow, nullptr, FALSE);
+    // The panel this one replaces may own a child render surface, and that surface is only
+    // taken down inside a present - EndPaintLayout hides every host surface the frame did
+    // not lay out. Repainting alone leaves the outgoing viewport's window sitting on top of
+    // the panel that just took its place, which is what a tab click avoids by asking for a
+    // present of its own.
+    sceneViewport.RequestPresent();
 }
 
 [[nodiscard]] bool HandleMenuLeftButtonDown(
@@ -274,6 +289,8 @@ void ActivateRightPanel(HWND mainWindow, EditorDockModel& dockModel, DockPanelKi
                 if (path.has_value() && sceneContext.SaveCurrentSceneAs(*path)) {
                     sceneViewport.RequestPresent();
                 }
+            } else if (*row == 4) {
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::BuildGame, DockArea::Center);
             }
         } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Edit) {
             // Through the policy's pointer route: these rows used to call the context directly and so did
@@ -292,7 +309,7 @@ void ActivateRightPanel(HWND mainWindow, EditorDockModel& dockModel, DockPanelKi
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 3) {
-                ActivateRightPanel(mainWindow, dockModel, DockPanelKind::Plugins);
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::Plugins, DockArea::Right);
             }
         } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Layout) {
             const EditorLayoutMenuRow* layoutRow = shellInteraction.LayoutMenu().Row(*row);
@@ -343,9 +360,9 @@ void ActivateRightPanel(HWND mainWindow, EditorDockModel& dockModel, DockPanelKi
                         ". Reopen the editor to apply.");
                 sceneViewport.RequestPresent();
             } else if (*row == 1) {
-                ActivateRightPanel(mainWindow, dockModel, DockPanelKind::ProjectSettings);
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::ProjectSettings, DockArea::Right);
             } else if (*row == 2) {
-                ActivateRightPanel(mainWindow, dockModel, DockPanelKind::EditorSettings);
+                ActivatePanel(mainWindow, dockModel, sceneViewport, DockPanelKind::EditorSettings, DockArea::Right);
             }
         }
         const EditorMenuCommand oldMenu = shellInteraction.OpenMenu();

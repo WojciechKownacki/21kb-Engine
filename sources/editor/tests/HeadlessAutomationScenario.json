@@ -173,6 +173,7 @@
     { "op": "capture", "panel": "project_settings", "checkpoint": "04-project-settings" },
     { "op": "capture", "panel": "editor_settings", "checkpoint": "04b-editor-settings" },
     { "op": "capture", "panel": "plugins", "checkpoint": "05-plugins" },
+    { "op": "capture", "panel": "build_game", "checkpoint": "05b-build-game" },
 
     { "op": "select_entity", "entity": "player" },
     { "op": "set_project_input_enabled", "enabled": false },

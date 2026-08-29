@@ -2452,6 +2452,19 @@ int EditorSceneContext::HierarchyScrollOffset() const noexcept {
     return hierarchyScrollOffset_;
 }
 
+int EditorSceneContext::BuildGameScrollOffset() const noexcept {
+    return buildGameScrollOffset_;
+}
+
+bool EditorSceneContext::SetBuildGameScrollOffset(int offset, int maxOffset) noexcept {
+    const int clamped = std::clamp(offset, 0, std::max(0, maxOffset));
+    if (buildGameScrollOffset_ == clamped) {
+        return false;
+    }
+    buildGameScrollOffset_ = clamped;
+    return true;
+}
+
 bool EditorSceneContext::IsHierarchyScrollbarDragging() const noexcept {
     return hierarchyScrollbarDragging_;
 }

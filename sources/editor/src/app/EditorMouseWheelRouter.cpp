@@ -5,6 +5,8 @@
 #include "app/console/EditorConsolePointerController.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
 #include "app/plugins/EditorPluginsPointerController.hpp"
+#include "rendering/BuildGamePanelLayout.hpp"
+#include "rendering/BuildGamePanelRenderer.hpp"
 #include "app/project_files/EditorProjectFilesMouseWheelController.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "assets/EditorAssetBrowserGeometry.hpp"
@@ -262,6 +264,22 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
     EditorPluginsPointerController pluginsPointer(sceneContext_);
     if (pluginsContent.has_value() && pluginsPointer.HandleMouseWheel(*pluginsContent, x, y, wheelDelta)) {
         EditorWindowInvalidator::InvalidatePanel(messageWindow_, *pluginsContent);
+        return true;
+    }
+
+    const std::optional<RECT> buildGameContent = EditorPanelContentResolver::Resolve(DockPanelKind::BuildGame, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    if (buildGameContent.has_value() &&
+        x >= buildGameContent->left && x < buildGameContent->right &&
+        y >= buildGameContent->top && y < buildGameContent->bottom) {
+        const BuildGamePanelLayoutRects rects = BuildGamePanelLayout::Resolve(*buildGameContent);
+        const int maxScroll = BuildGamePanelLayout::MaxScrollOffset(
+            rects.body, BuildGamePanelRenderer::SettingsContentHeight());
+        const int wheelDirection = wheelDelta > 0 ? 1 : -1;
+        if (sceneContext_.SetBuildGameScrollOffset(
+                sceneContext_.BuildGameScrollOffset() - wheelDirection * BuildGamePanelLayout::kOptionRowHeight * 3,
+                maxScroll)) {
+            EditorWindowInvalidator::InvalidatePanel(messageWindow_, *buildGameContent);
+        }
         return true;
     }
 
