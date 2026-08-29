@@ -80,6 +80,8 @@ HeroIconGlyph HeroIconCatalog::Glyph(HeroIconKind icon) noexcept {
         return HeroIconAssets::PlatformAndroid();
     case HeroIconKind::PlatformLinux:
         return HeroIconAssets::PlatformLinux();
+    case HeroIconKind::PlatformServer:
+        return HeroIconAssets::PlatformServer();
     case HeroIconKind::DisclosureCollapsed:
         return HeroIconAssets::DisclosureCollapsed();
     case HeroIconKind::DisclosureExpanded:
