@@ -20,46 +20,46 @@ void SvgGraphicsPathBuilder::Build(Gdiplus::GraphicsPath& path) {
         // A command this builder does not implement reads nothing, and the character after
         // it is not a command either - so without this the loop would sit on the same spot
         // forever. One malformed path must cost the rest of that path, not the editor.
-        const std::size_t before = cursor_.Position();
-        Execute(figure, command);
-        if (cursor_.Position() == before) {
+        // Progress is the wrong test for that: a close consumes nothing either, and using it
+        // stopped every icon at its first subpath.
+        if (!Execute(figure, command)) {
             break;
         }
     }
 }
 
-void SvgGraphicsPathBuilder::Execute(SvgPathFigureBuilder& figure, char command) {
+bool SvgGraphicsPathBuilder::Execute(SvgPathFigureBuilder& figure, char command) {
     switch (command) {
     case 'M':
     case 'm':
         ReadMove(figure, command == 'm');
-        return;
+        return true;
     case 'L':
     case 'l':
         ReadLines(figure, command == 'l');
-        return;
+        return true;
     case 'H':
     case 'h':
         ReadHorizontal(figure, command == 'h');
-        return;
+        return true;
     case 'V':
     case 'v':
         ReadVertical(figure, command == 'v');
-        return;
+        return true;
     case 'C':
     case 'c':
         ReadCubics(figure, command == 'c');
-        return;
+        return true;
     case 'A':
     case 'a':
         ReadArcs(figure, command == 'a');
-        return;
+        return true;
     case 'Z':
     case 'z':
         figure.Close();
-        return;
+        return true;
     default:
-        return;
+        return false;
     }
 }
 
