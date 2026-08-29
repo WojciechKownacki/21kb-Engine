@@ -31,6 +31,7 @@
 #include "rendering/ParticleThumbnailTimeline.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLabelFormat.hpp"
+#include "rendering/SvgGraphicsPathBuilder.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarState.hpp"
 #include "scene/EditorViewportCameraState.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
@@ -1532,6 +1533,63 @@ void RunToolbarFpsCounterIdleReportingTest() {
     kb::editor::tests::Require(SceneViewportToolbarState::CurrentReading(resumed).live, "A new frame must make the reading live again");
     kb::editor::tests::Require(SceneViewportToolbarState::ConsumeIdleTransition(resumed + SceneViewportToolbarState::kLiveFor + std::chrono::milliseconds{ 1 }), "Each quiet spell must be announced, not only the first");
     SceneViewportToolbarState::Reset();
+}
+
+// The brand marks are vendored artwork whose subpaths lean on parts of the path grammar the
+// hand-written glyphs never used: several coordinate pairs behind one command letter, and a
+// relative moveto straight after a close, which must start from the point the close returned
+// to. A pane silently landing in the wrong place - or not at all - is invisible in a build
+// log and easy to miss at row height, so the shape is checked here rather than by eye.
+void RunSvgPathMultiSubpathTest() {
+    // Four separate 10x10 squares: the second reached by an absolute move, the third and
+    // fourth by a relative move straight after a close.
+    constexpr std::string_view fourSquares =
+        "M0 0h10v10H0zM20 0h10v10H20zm-20 20h10v10H0zm20 0h10v10H20z";
+    Gdiplus::GraphicsPath path(Gdiplus::FillModeAlternate);
+    kb::editor::SvgGraphicsPathBuilder(fourSquares).Build(path);
+
+    Gdiplus::RectF bounds{};
+    kb::editor::tests::Require(path.GetBounds(&bounds) == Gdiplus::Ok,
+        "A four-square path must produce measurable bounds");
+    kb::editor::tests::Require(path.GetPointCount() > 0,
+        "A four-square path must produce points");
+    // All four squares span x 0..30 and y 0..30. If a relative moveto after a close starts
+    // from the wrong point, or a later subpath is dropped, the box shrinks.
+    kb::editor::tests::Require(bounds.X <= 0.5F && bounds.Y <= 0.5F,
+        "The path must start at the origin, so no subpath drifted off");
+    kb::editor::tests::Require(bounds.Width >= 29.0F && bounds.Height >= 29.0F,
+        "Every one of the four squares must be present: a 30x30 box, not one square's worth");
+
+    // The vendored Windows mark, which is four panes on a 128 viewBox reached the same way.
+    constexpr std::string_view windowsMark =
+        "M126 1.637l-67 9.834v49.831l67-.534zM1.647 66.709l.003 42.404 50.791 6.983-.04-49.057zm56.82.68l.094 49.465 67.376 9.509.016-58.863zM1.61 19.297l.047 42.383 50.791-.289-.023-49.016z";
+    Gdiplus::GraphicsPath mark(Gdiplus::FillModeAlternate);
+    kb::editor::SvgGraphicsPathBuilder(windowsMark).Build(mark);
+    Gdiplus::RectF markBounds{};
+    kb::editor::tests::Require(mark.GetBounds(&markBounds) == Gdiplus::Ok,
+        "The Windows mark must produce measurable bounds");
+    kb::editor::tests::Require(markBounds.Width >= 120.0F && markBounds.Height >= 120.0F,
+        "All four panes of the Windows mark must be present, filling its 128 viewBox");
+
+    // Bounds only prove the figures were added. What matters is what fills: a subpath can
+    // be in the path and still not be painted, which is how three of these four panes went
+    // missing on screen while every measurement above passed.
+    kb::editor::tests::Require(mark.IsVisible(90.0F, 30.0F),
+        "The top-right pane of the Windows mark must be filled");
+    kb::editor::tests::Require(mark.IsVisible(27.0F, 37.0F),
+        "The top-left pane of the Windows mark must be filled");
+    kb::editor::tests::Require(mark.IsVisible(27.0F, 92.0F),
+        "The bottom-left pane of the Windows mark must be filled");
+    kb::editor::tests::Require(mark.IsVisible(92.0F, 97.0F),
+        "The bottom-right pane of the Windows mark must be filled");
+
+    // And under the non-zero rule, which is what a source declaring no fill-rule asks for
+    // and what the editor actually draws this mark with.
+    Gdiplus::GraphicsPath winding(Gdiplus::FillModeWinding);
+    kb::editor::SvgGraphicsPathBuilder(windowsMark).Build(winding);
+    kb::editor::tests::Require(winding.IsVisible(90.0F, 30.0F) && winding.IsVisible(27.0F, 37.0F) &&
+            winding.IsVisible(27.0F, 92.0F) && winding.IsVisible(92.0F, 97.0F),
+        "All four panes must fill under the non-zero rule too");
 }
 
 // Guards the LockBits fast path in EditorTexturePreviewService::DecodeGdiplus, which replaced a
