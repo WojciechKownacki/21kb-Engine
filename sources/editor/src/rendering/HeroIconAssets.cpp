@@ -148,29 +148,53 @@ static constexpr std::array<HeroIconPath, 3> kSave{
     HeroIconPath{ "M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7", false },
     HeroIconPath{ "M7 3v4a1 1 0 0 0 1 1h7", false },
 };
-// Original editor glyph. No permissively licensed UI icon set ships brand marks, so the
-// platform glyphs below are drawn here rather than vendored: four panes on a 2x2 grid,
-// which is what the mark reduces to at row height anyway.
+// Platform marks, drawn here in the brand colours rather than vendored. No permissively
+// licensed icon set carries these - Simple Icons dropped the Microsoft ones over trademark
+// policy and ships the rest as single-colour silhouettes - and the official artwork comes
+// under brand guidelines, not a licence we could audit into third_party. So these are our
+// shapes wearing the official colours: recognisable at row height, and honestly ours.
+constexpr COLORREF kWindowsBlue = RGB(0, 120, 212);
+constexpr COLORREF kAndroidGreen = RGB(61, 220, 132);
+// Tux is black on white artwork. A black body disappears into a dark panel, so the body
+// carries the lightest shade that still reads as "dark bird" against it; the belly, beak
+// and feet keep their real colours, which is what actually makes the mark readable.
+constexpr COLORREF kTuxBody = RGB(63, 70, 84);
+constexpr COLORREF kTuxBelly = RGB(244, 246, 250);
+constexpr COLORREF kTuxBeak = RGB(247, 181, 41);
+constexpr COLORREF kServerChassis = RGB(104, 122, 152);
+constexpr COLORREF kServerFace = RGB(147, 165, 194);
+constexpr COLORREF kServerLed = RGB(74, 222, 128);
+
 static constexpr std::array<HeroIconPath, 4> kPlatformWindows{
-    HeroIconPath{ "M3 3.75h8.25V12H3V3.75Z", true },
-    HeroIconPath{ "M12.75 3.75H21V12h-8.25V3.75Z", true },
-    HeroIconPath{ "M3 13.5h8.25v6.75H3V13.5Z", true },
-    HeroIconPath{ "M12.75 13.5H21v6.75h-8.25V13.5Z", true },
+    HeroIconPath{ "M3 3.75h8.25V12H3V3.75Z", true, true, kWindowsBlue },
+    HeroIconPath{ "M12.75 3.75H21V12h-8.25V3.75Z", true, true, kWindowsBlue },
+    HeroIconPath{ "M3 13.5h8.25v6.75H3V13.5Z", true, true, kWindowsBlue },
+    HeroIconPath{ "M12.75 13.5H21v6.75h-8.25V13.5Z", true, true, kWindowsBlue },
 };
-// Original editor glyph: a robot reduced to dome, body, arms and antennae. The dome and
-// its two eyes are one path so the even-odd rule punches the eyes out of it.
+// The dome and its two eyes are one path so the even-odd rule punches the eyes out of it.
 static constexpr std::array<HeroIconPath, 4> kPlatformAndroid{
-    HeroIconPath{ "M7.1 3.1 8.6 5.6M16.9 3.1 15.4 5.6", false },
-    HeroIconPath{ "M4 11.4a8 8 0 0 1 16 0H4Zm5.1-2.6a.95.95 0 1 0 0-1.9.95.95 0 0 0 0 1.9Zm5.8 0a.95.95 0 1 0 0-1.9.95.95 0 0 0 0 1.9Z", true },
-    HeroIconPath{ "M4.6 12.8h14.8v6.4a2 2 0 0 1-2 2H6.6a2 2 0 0 1-2-2v-6.4Z", true },
-    HeroIconPath{ "M1.15 14.15a1.35 1.35 0 0 1 2.7 0v4.1a1.35 1.35 0 0 1-2.7 0v-4.1Zm19 0a1.35 1.35 0 0 1 2.7 0v4.1a1.35 1.35 0 0 1-2.7 0v-4.1Z", true },
+    HeroIconPath{ "M7.1 3.1 8.6 5.6M16.9 3.1 15.4 5.6", false, true, kAndroidGreen },
+    HeroIconPath{ "M4 11.4a8 8 0 0 1 16 0H4Zm5.1-2.6a.95.95 0 1 0 0-1.9.95.95 0 0 0 0 1.9Zm5.8 0a.95.95 0 1 0 0-1.9.95.95 0 0 0 0 1.9Z", true, true, kAndroidGreen },
+    HeroIconPath{ "M4.6 12.8h14.8v6.4a2 2 0 0 1-2 2H6.6a2 2 0 0 1-2-2v-6.4Z", true, true, kAndroidGreen },
+    HeroIconPath{ "M1.15 14.15a1.35 1.35 0 0 1 2.7 0v4.1a1.35 1.35 0 0 1-2.7 0v-4.1Zm19 0a1.35 1.35 0 0 1 2.7 0v4.1a1.35 1.35 0 0 1-2.7 0v-4.1Z", true, true, kAndroidGreen },
 };
-// Original editor glyph: a penguin silhouette. Body and eyes are one path so the even-odd
-// rule leaves the eyes open; the beak and feet are separate marks.
-static constexpr std::array<HeroIconPath, 3> kPlatformLinux{
-    HeroIconPath{ "M12 2.2c-2.6 0-4.4 2-4.4 4.6v2.1c0 1-.4 1.7-1 2.5C5.3 13 4.6 15 4.6 16.9c0 2.6 1.9 4.6 4.3 4.6h6.2c2.4 0 4.3-2 4.3-4.6 0-1.9-.7-3.9-2-5.5-.6-.8-1-1.5-1-2.5V6.8c0-2.6-1.8-4.6-4.4-4.6Zm-1.9 4.9a.85.85 0 1 1 0 1.7.85.85 0 0 1 0-1.7Zm3.8 0a.85.85 0 1 1 0 1.7.85.85 0 0 1 0-1.7Z", true },
-    HeroIconPath{ "M10.4 9.6h3.2L12 11.5 10.4 9.6Z", true },
-    HeroIconPath{ "M7.4 20.6c-.9.5-2 .8-2.9.6-.7-.2-.8-.9-.2-1.3l2.4-1.5 .7 2.2Zm9.2 0c.9.5 2 .8 2.9.6.7-.2.8-.9.2-1.3l-2.4-1.5-.7 2.2Z", true },
+// Body, then the white belly and face over it, then the pupils, beak and feet.
+static constexpr std::array<HeroIconPath, 6> kPlatformLinux{
+    HeroIconPath{ "M12 2.2c-2.6 0-4.4 2-4.4 4.6v2.1c0 1-.4 1.7-1 2.5C5.3 13 4.6 15 4.6 16.9c0 2.6 1.9 4.6 4.3 4.6h6.2c2.4 0 4.3-2 4.3-4.6 0-1.9-.7-3.9-2-5.5-.6-.8-1-1.5-1-2.5V6.8c0-2.6-1.8-4.6-4.4-4.6Z", true, true, kTuxBody },
+    HeroIconPath{ "M12 11.2c2.6 0 4.4 2.4 4.4 5.2 0 2.4-1.9 4.1-4.4 4.1-2.5 0-4.4-1.7-4.4-4.1 0-2.8 1.8-5.2 4.4-5.2Z", true, true, kTuxBelly },
+    HeroIconPath{ "M10.1 5.2a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Zm3.8 0a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Z", true, true, kTuxBelly },
+    HeroIconPath{ "M10.2 6a.75.75 0 1 1 0 1.5.75.75 0 0 1 0-1.5Zm3.6 0a.75.75 0 1 1 0 1.5.75.75 0 0 1 0-1.5Z", true, true, kTuxBody },
+    HeroIconPath{ "M10.4 8.6h3.2L12 10.5 10.4 8.6Z", true, true, kTuxBeak },
+    HeroIconPath{ "M7.4 20.6c-.9.5-2 .8-2.9.6-.7-.2-.8-.9-.2-1.3l2.4-1.5 .7 2.2Zm9.2 0c.9.5 2 .8 2.9.6.7-.2.8-.9.2-1.3l-2.4-1.5-.7 2.2Z", true, true, kTuxBeak },
+};
+// Original editor glyph: a two-unit rack. There is no brand mark for a dedicated server,
+// so this is a plain object drawn to sit beside the platform marks without competing.
+static constexpr std::array<HeroIconPath, 5> kPlatformServer{
+    HeroIconPath{ "M3.6 4h16.8A1.6 1.6 0 0 1 22 5.6v3.8a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 9.4V5.6A1.6 1.6 0 0 1 3.6 4Z", true, true, kServerChassis },
+    HeroIconPath{ "M3.6 13h16.8a1.6 1.6 0 0 1 1.6 1.6v3.8a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 18.4v-3.8A1.6 1.6 0 0 1 3.6 13Z", true, true, kServerChassis },
+    HeroIconPath{ "M4.8 6.8h7.4v1.4H4.8V6.8Z", true, true, kServerFace },
+    HeroIconPath{ "M4.8 15.8h7.4v1.4H4.8v-1.4Z", true, true, kServerFace },
+    HeroIconPath{ "M18.4 6.35a1.15 1.15 0 1 1 0 2.3 1.15 1.15 0 0 1 0-2.3Zm0 9a1.15 1.15 0 1 1 0 2.3 1.15 1.15 0 0 1 0-2.3Z", true, true, kServerLed },
 };
 
 // Original editor glyph: the disclosure caret. Heroicons and Lucide both carry chevrons
@@ -332,6 +356,10 @@ HeroIconGlyph HeroIconAssets::PlatformAndroid() noexcept {
 
 HeroIconGlyph HeroIconAssets::PlatformLinux() noexcept {
     return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kPlatformLinux } };
+}
+
+HeroIconGlyph HeroIconAssets::PlatformServer() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kPlatformServer } };
 }
 
 HeroIconGlyph HeroIconAssets::DisclosureCollapsed() noexcept {

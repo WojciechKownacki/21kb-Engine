@@ -42,6 +42,7 @@ enum class HeroIconKind : std::uint8_t {
     PlatformWindows,
     PlatformAndroid,
     PlatformLinux,
+    PlatformServer,
     DisclosureCollapsed,
     DisclosureExpanded,
 

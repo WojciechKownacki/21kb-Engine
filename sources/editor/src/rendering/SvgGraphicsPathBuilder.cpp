@@ -17,7 +17,14 @@ void SvgGraphicsPathBuilder::Build(Gdiplus::GraphicsPath& path) {
         if (command == '\0') {
             break;
         }
+        // A command this builder does not implement reads nothing, and the character after
+        // it is not a command either - so without this the loop would sit on the same spot
+        // forever. One malformed path must cost the rest of that path, not the editor.
+        const std::size_t before = cursor_.Position();
         Execute(figure, command);
+        if (cursor_.Position() == before) {
+            break;
+        }
     }
 }
 
