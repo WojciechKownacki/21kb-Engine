@@ -27,7 +27,25 @@ public:
 
     // Height of the settings column at full extent. The row table lives here, so the
     // wheel route asks the panel rather than restating the sections.
-    [[nodiscard]] static int SettingsContentHeight() noexcept;
+    [[nodiscard]] static int SettingsContentHeight(const EditorSceneContext& sceneContext) noexcept;
+
+    // Which section bar or option row sits under a point, in panel coordinates. Section -1
+    // means neither; row -1 means the section bar rather than one of its rows.
+    struct RowHit {
+        int section = -1;
+        int row = -1;
+    };
+    [[nodiscard]] static RowHit HitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y);
+
+    // Which left-column row sits under a point: a build target, a build profile, or
+    // neither. The two are exclusive, so -1 in both means the pointer missed the column.
+    struct SidebarHit {
+        int target = -1;
+        int profile = -1;
+    };
+    [[nodiscard]] static SidebarHit HitTestSidebar(const RECT& content, int x, int y);
+
+    [[nodiscard]] static int SectionCount() noexcept;
 };
 
 #endif

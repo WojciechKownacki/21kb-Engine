@@ -61,6 +61,8 @@ public:
     [[nodiscard]] static RECT OptionLabel(const RECT& row) noexcept;
     // The square icon box at the left edge of a row or header.
     [[nodiscard]] static RECT IconBox(const RECT& row, int size) noexcept;
+    // The disclosure caret, ahead of the section icon on a category bar.
+    [[nodiscard]] static RECT CaretBox(const RECT& header) noexcept;
 
     // How tall the settings column would be if nothing clipped it, and how far it can be
     // scrolled inside `body`. The panel lists more rows than a dock leaf is ever tall.
